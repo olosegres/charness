@@ -15,8 +15,9 @@ import type { SessionKey } from '../../../sessionKey';
 import { keyToString } from '../../../sessionKey';
 import { t } from '../../../i18n';
 import type { RecentWriters, SeenPerson, SeenSenders } from '../../../topicTalkerMemory';
-import { topicInviteTtlMs, type TopicGranter, type TopicTalkersEntry } from '../../../topicTalkers';
+import { normaliseUsername, topicInviteTtlMs, type TopicGranter, type TopicTalkersEntry } from '../../../topicTalkers';
 import { formatPersonLabel } from '../../../utils/personLabel';
+import { getTopicNameOrFolder } from '../../../utils/topicLabel';
 import {
   accessCallbackRe,
   buildAccessAddScreen,
@@ -26,6 +27,8 @@ import {
   buildAccessInvitedNotice,
   buildAccessListScreen,
   decideAccessAdd,
+  formatAccessRefusal,
+  getScopeWords,
   listAccessRows,
   parseAccessCallback,
   parseAccessCommand,
@@ -53,8 +56,12 @@ export interface TopicAccessPorts
   extends Pick<BotCore, 'bot' | 'command' | 'getState' | 'replyToThread' | 'editThreadMessageDetailed' | 'authoriseContext' | 'withThreadLocale' | 'checkIsGeneral'> {
   /** The ids of the group's admins (the admin cache): an admin is never added. */
   getAdminIds: () => Promise<ReadonlySet<string>>;
+  /** The admins' lowercase @usernames (the same cache): a typed @username names an admin whose id the bot has not seen. */
+  getAdminUsernames: () => Promise<ReadonlySet<string>>;
   /** This bot's own Telegram user id, once known. */
   getBotUserId: () => number | undefined;
+  /** This bot's own @username, once known. */
+  getBotUsername: () => string | undefined;
   /** The General topic of the group `key` is in: the key of the group-wide list. */
   getGroupGeneralKey: (key: SessionKey) => SessionKey;
   /** Whether `key` is the owner's private chat: it has no talkers. */
@@ -65,8 +72,22 @@ export interface TopicAccessPorts
   seenSenders: SeenSenders;
 }
 
-/** What a message-bound screen remembers: the people its buttons point at, or the add it waits to confirm. */
-type ScreenSnapshot = { id: number } & ({ kind: 'add'; writers: SeenPerson[] } | { kind: 'confirm'; pending: AccessPendingAdd });
+/** What the add screen remembers: the people its buttons point at. */
+interface AddScreenSnapshot {
+  id: number;
+  kind: 'add';
+  writers: SeenPerson[];
+}
+
+/** What a typed add's confirmation remembers: the add it waits to confirm. */
+interface ConfirmScreenSnapshot {
+  id: number;
+  kind: 'confirm';
+  pending: AccessPendingAdd;
+}
+
+/** What a message-bound screen remembers. */
+type ScreenSnapshot = AddScreenSnapshot | ConfirmScreenSnapshot;
 
 /** @description A Telegram user as an add's target: a bot (or the «Telegram» service user) is refused by the decision. */
 function getPersonTarget(user: User): AccessTarget {
@@ -100,14 +121,13 @@ function getTextMentionTarget(message: Message.TextMessage): AccessTarget | null
  * @description Build the `/access` screen over its ports: the command, its typed forms and its buttons.
  */
 export function createTopicAccess(ports: TopicAccessPorts) {
-  const { bot, command, getState, replyToThread, editThreadMessageDetailed, authoriseContext, withThreadLocale, checkIsGeneral, getAdminIds, getBotUserId, getGroupGeneralKey, checkIsDmKey, recentWriters, seenSenders } = ports;
+  const { bot, command, getState, replyToThread, editThreadMessageDetailed, authoriseContext, withThreadLocale, checkIsGeneral, getAdminIds, getAdminUsernames, getBotUserId, getBotUsername, getGroupGeneralKey, checkIsDmKey, recentWriters, seenSenders } = ports;
 
   /** Per MESSAGE, keyed by chat + message id (`buildMessageSnapshotKey`): a message id is unique only within one chat. */
   const screenSnapshots = new Map<string, ScreenSnapshot>();
   let lastSnapshotId = 0;
 
   const getScope = (key: SessionKey): AccessScope => (checkIsGeneral(key) ? 'general' : 'topic');
-  const getScopeWords = (scope: AccessScope): string => (scope === 'general' ? t('access.scopeEveryTopic') : t('access.scopeHere'));
   const toMarkup = (screen: AccessScreen) =>
     Markup.inlineKeyboard(screen.keyboard.map((row) => row.map((button) => Markup.button.callback(button.label, button.callbackData))));
 
@@ -115,7 +135,7 @@ export function createTopicAccess(ports: TopicAccessPorts) {
   function listTopicsWithTalkers(generalKey: SessionKey): { name: string; talkerCount: number }[] {
     return getState().getTopicTalkerCounts()
       .filter((topic) => keyToString(topic.key) !== keyToString(generalKey))
-      .map((topic) => ({ name: getState().getBinding(topic.key)?.topicName || `#${getTelegramThreadId(topic.key)}`, talkerCount: topic.talkerCount }));
+      .map((topic) => ({ name: getTopicNameOrFolder(getState().getBinding(topic.key)) ?? `#${getTelegramThreadId(topic.key)}`, talkerCount: topic.talkerCount }));
   }
 
   function buildListScreen(key: SessionKey, page: number, footerNote?: string): AccessScreen {
@@ -155,7 +175,9 @@ export function createTopicAccess(ports: TopicAccessPorts) {
     const scope = getScope(key);
     return {
       botUserId: getBotUserId()?.toString(),
+      botUsername: getBotUsername(),
       adminIds: await getAdminIds(),
+      adminUsernames: await getAdminUsernames(),
       ownEntry: getState().getTopicTalkers(key),
       generalEntry: scope === 'topic' ? getState().getTopicTalkers(getGroupGeneralKey(key)) : undefined,
       now: Date.now(),
@@ -167,20 +189,27 @@ export function createTopicAccess(ports: TopicAccessPorts) {
   /**
    * @description Make an add take effect, deciding AGAIN at this moment (the person may have become an admin, or been added by
    * another admin, since the screen was drawn): a granted person (or a waiting invitation) is written, flushed, and announced in
-   * the topic. Resolves the refusal line instead when the add no longer stands.
+   * the topic — only when the write was the one that added them: a tap that lost the race to another admin's (or a second tap
+   * on the same button) finds them listed and announces nothing. Resolves the refusal line instead when the add no longer stands.
    */
   async function applyAdd(key: SessionKey, pending: AccessPendingAdd, granter: TopicGranter): Promise<string | null> {
     const scope = getScope(key);
     const target: AccessTarget = pending.kind === 'person' ? { kind: 'person', ...pending.person, isBot: false } : { kind: 'username', username: pending.username };
     const decision = decideAccessAdd(target, await buildAddContext(key));
-    if (decision.kind === 'refused') return t(decision.refusalKey, { person: decision.person ?? '' });
+    if (decision.kind === 'refused') return formatAccessRefusal(decision, scope);
     if (decision.kind === 'person') {
-      await getState().addTopicTalker(key, decision.person, granter);
+      if ((await getState().addTopicTalker(key, decision.person, granter)) !== 'added') {
+        return formatAccessRefusal({ kind: 'refused', refusalKey: 'access.refuseListed', person: formatPersonLabel(decision.person) }, scope);
+      }
       recentWriters.forgetWriter(keyToString(key), decision.person.userId);
       await replyToThread(key, buildAccessGrantedNotice({ scope, person: decision.person, folder: getState().getBinding(key)?.subdir ?? null }));
       return null;
     }
-    await getState().addTopicInvite(key, decision.username, granter);
+    const inviteResult = await getState().addTopicInvite(key, decision.username, granter);
+    if (inviteResult !== 'added') {
+      const refusalKey = inviteResult === 'listed' ? 'access.refuseListed' : 'access.refuseInviteWaiting';
+      return formatAccessRefusal({ kind: 'refused', refusalKey, person: `@${decision.username}` }, scope);
+    }
     await replyToThread(key, buildAccessInvitedNotice({ scope, username: decision.username, expiresAt: Date.now() + topicInviteTtlMs }));
     return null;
   }
@@ -208,7 +237,7 @@ export function createTopicAccess(ports: TopicAccessPorts) {
     if (target === null) { await replyToThread(key, t('access.addUsage')); return; }
     if (target === 'badUsername') { await replyToThread(key, t('access.refuseBadUsername')); return; }
     const decision = decideAccessAdd(target, await buildAddContext(key));
-    if (decision.kind === 'refused') { await replyToThread(key, t(decision.refusalKey, { person: decision.person ?? '' })); return; }
+    if (decision.kind === 'refused') { await replyToThread(key, formatAccessRefusal(decision, getScope(key))); return; }
     const pending: AccessPendingAdd = decision;
     const snapshot: ScreenSnapshot = { id: ++lastSnapshotId, kind: 'confirm', pending };
     const screen = buildAccessConfirmScreen({ scope: getScope(key), snapshotId: snapshot.id, pending });
@@ -223,8 +252,8 @@ export function createTopicAccess(ports: TopicAccessPorts) {
     if (target.kind === 'chatIdentity') { await replyToThread(key, t('access.removeNotFound')); return; }
     const entry = getState().getTopicTalkers(key);
     const scopeWords = getScopeWords(getScope(key));
-    const lowercase = target.kind === 'username' ? target.username.toLowerCase() : (target.username ?? '').toLowerCase();
-    const talker = entry.talkers.find((candidate) => (target.kind === 'person' ? candidate.userId === target.userId : candidate.username?.toLowerCase() === lowercase));
+    const lowercase = normaliseUsername(target.username ?? '');
+    const talker = entry.talkers.find((candidate) => (target.kind === 'person' ? candidate.userId === target.userId : candidate.username !== undefined && normaliseUsername(candidate.username) === lowercase));
     if (talker) {
       await getState().removeTopicTalker(key, talker.userId);
       await replyToThread(key, t('access.removedNotice', { person: formatPersonLabel(talker), scope: scopeWords }));
@@ -254,10 +283,21 @@ export function createTopicAccess(ports: TopicAccessPorts) {
     await showList(key, tappedMessageId);
   }
 
-  function takeScreenSnapshot<TKind extends ScreenSnapshot['kind']>(key: SessionKey, messageId: number | null, snapshotId: number, kind: TKind): Extract<ScreenSnapshot, { kind: TKind }> | null {
+  /** What the screen on message `messageId` remembers, when `snapshotId` is the one its tapped button carries (an older screen's tap is not). */
+  function getScreenSnapshot(key: SessionKey, messageId: number | null, snapshotId: number): ScreenSnapshot | null {
     if (messageId === null) return null;
     const snapshot = screenSnapshots.get(buildMessageSnapshotKey(key, messageId));
-    return snapshot?.id === snapshotId && snapshot.kind === kind ? (snapshot as Extract<ScreenSnapshot, { kind: TKind }>) : null;
+    return snapshot?.id === snapshotId ? snapshot : null;
+  }
+
+  function getAddSnapshot(key: SessionKey, messageId: number | null, snapshotId: number): AddScreenSnapshot | null {
+    const snapshot = getScreenSnapshot(key, messageId, snapshotId);
+    return snapshot?.kind === 'add' ? snapshot : null;
+  }
+
+  function getConfirmSnapshot(key: SessionKey, messageId: number | null, snapshotId: number): ConfirmScreenSnapshot | null {
+    const snapshot = getScreenSnapshot(key, messageId, snapshotId);
+    return snapshot?.kind === 'confirm' ? snapshot : null;
   }
 
   async function handleAccessCallback(ctx: Context): Promise<void> {
@@ -298,7 +338,7 @@ export function createTopicAccess(ports: TopicAccessPorts) {
           return;
         }
         case 'writer': {
-          const snapshot = takeScreenSnapshot(key, messageId, callback.snapshotId, 'add');
+          const snapshot = getAddSnapshot(key, messageId, callback.snapshotId);
           const writer = snapshot?.writers[callback.index];
           if (!writer) { await answerStale(ctx, key, messageId); return; }
           const refusal = await applyAdd(key, { kind: 'person', person: writer }, getGranter(ctx.from));
@@ -312,7 +352,7 @@ export function createTopicAccess(ports: TopicAccessPorts) {
           return;
         }
         case 'confirm': {
-          const snapshot = takeScreenSnapshot(key, messageId, callback.snapshotId, 'confirm');
+          const snapshot = getConfirmSnapshot(key, messageId, callback.snapshotId);
           if (!snapshot) {
             await answerCallbackQuerySafely(ctx, t('access.confirmExpiredToast'));
             await showList(key, messageId);

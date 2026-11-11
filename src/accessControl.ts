@@ -42,6 +42,20 @@ export function getElevatedMemberIds(members: PlatformMember[]): string[] {
 }
 
 /**
+ * @description The @names, as the platform spells them, of the humans who hold elevated rights, for the places that only have a
+ * typed @name to go by (the id of someone the bot has not seen is unknown): the same people as {@link getElevatedMemberIds}, minus
+ * those with no @name. Kept free of the lists' own name matching (`normaliseUsername`): this module is loaded before any state is.
+ */
+export function getElevatedMemberHandles(members: PlatformMember[]): string[] {
+  const handles: string[] = [];
+  for (const member of members) {
+    if (!member.hasElevatedRights || member.isBot || !member.handle) continue;
+    handles.push(member.handle);
+  }
+  return handles;
+}
+
+/**
  * @name SenderRole
  * @description What a sender is to the bot in one conversation: an `admin` (the group's creator or an administrator —
  * everything, everywhere), a `talker` (an admin put them on this topic's list, or on General's: they talk to the agent
@@ -75,6 +89,11 @@ export interface AdminCacheDeps {
    * the platform's status vocabulary out of the policy entirely.
    */
   fetchElevatedMemberIds: () => Promise<string[]>;
+  /**
+   * Fetches the @names of those same members ({@link getElevatedMemberHandles}), refreshed together with the ids. Absent: the cache
+   * knows no names ({@link AdminCache.getAdminHandles} is empty). Their spelling is the fetcher's business: the cache keeps what it is given.
+   */
+  fetchElevatedMemberHandles?: () => Promise<string[]>;
   /** Cache lifetime; defaults to {@link ADMIN_CACHE_TTL_MS}. */
   ttlMs?: number;
   /** Backoff after a failed fetch; defaults to {@link ADMIN_CACHE_FAILURE_RETRY_MS}. */
@@ -93,11 +112,13 @@ export interface AdminCacheDeps {
  */
 export class AdminCache {
   private readonly fetchElevatedMemberIds: () => Promise<string[]>;
+  private readonly fetchElevatedMemberHandles: (() => Promise<string[]>) | undefined;
   private readonly ttlMs: number;
   private readonly failureRetryMs: number;
   private readonly now: () => number;
 
   private ids = new Set<string>();
+  private handles = new Set<string>();
   /** Timestamp of the last SUCCESSFUL fetch, or `null` if never fetched. */
   private fetchedAt: number | null = null;
   /** Timestamp of the last FAILED fetch, or `null`. */
@@ -106,6 +127,7 @@ export class AdminCache {
 
   constructor(deps: AdminCacheDeps) {
     this.fetchElevatedMemberIds = deps.fetchElevatedMemberIds;
+    this.fetchElevatedMemberHandles = deps.fetchElevatedMemberHandles;
     this.ttlMs = deps.ttlMs ?? ADMIN_CACHE_TTL_MS;
     this.failureRetryMs = deps.failureRetryMs ?? ADMIN_CACHE_FAILURE_RETRY_MS;
     this.now = deps.now ?? Date.now;
@@ -130,6 +152,15 @@ export class AdminCache {
   }
 
   /**
+   * The admins' @names, from the same refresh as {@link getAdminIds}: for deciding about a typed @name whose id the bot
+   * has not seen (an admin is never added, and no message of theirs would ever turn the invitation into a person).
+   */
+  async getAdminHandles(): Promise<ReadonlySet<string>> {
+    await this.getAdminIds();
+    return this.handles;
+  }
+
+  /**
    * The admin set as last fetched, WITHOUT fetching: for the synchronous marks that tell the operator's words from anyone
    * else's. Meaningful right after {@link getAdminIds} (every gated handler awaits it first); empty before the first
    * successful fetch.
@@ -146,7 +177,10 @@ export class AdminCache {
 
   private async refresh(): Promise<Set<string>> {
     try {
-      this.ids = new Set(await this.fetchElevatedMemberIds());
+      // Both are awaited before either is kept: a failure of either leaves the last-known ids AND names.
+      const [ids, handles] = await Promise.all([this.fetchElevatedMemberIds(), this.fetchElevatedMemberHandles?.() ?? []]);
+      this.ids = new Set(ids);
+      this.handles = new Set(handles);
       this.fetchedAt = this.now();
       this.lastFailAt = null;
       return this.ids;

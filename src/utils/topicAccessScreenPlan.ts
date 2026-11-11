@@ -185,7 +185,11 @@ export type AccessTarget =
 export interface AccessAddContext {
   /** This bot's own user id, so it is refused with its own line. */
   botUserId: string | undefined;
+  /** This bot's own @username: a typed one names it before any message of the bot's could be seen. */
+  botUsername: string | undefined;
   adminIds: ReadonlySet<string>;
+  /** The admins' lowercase @usernames: a typed one names an admin the bot has not seen write, whose id it does not know. */
+  adminUsernames: ReadonlySet<string>;
   /** The list being edited. */
   ownEntry: TopicTalkersEntry;
   /** General's list, for a topic's screen: someone on it already talks here. `undefined` on General's own screen. */
@@ -206,7 +210,8 @@ const hasUsername = (entry: TopicTalkersEntry | undefined, lowercase: string): b
 /**
  * @description Whether the add may go ahead and in what form. Refused, each with its own short line: a bot, this bot itself, a post
  * made as the group or a channel (no person), an admin (they talk everywhere already), somebody on the list already — or on
- * General's, for a topic — and an invitation that waits for the name already.
+ * General's, for a topic — and an invitation that waits for the name already. An @username is checked against the bot's own name
+ * and the admins' names too: no id is known for it, but the same people are refused.
  */
 export function decideAccessAdd(target: AccessTarget, context: AccessAddContext): AccessAddDecision {
   if (target.kind === 'chatIdentity') return { kind: 'refused', refusalKey: 'access.refuseChatIdentity' };
@@ -221,6 +226,10 @@ export function decideAccessAdd(target: AccessTarget, context: AccessAddContext)
   }
   const lowercase = normaliseUsername(target.username);
   const label = `@${target.username}`;
+  // An admin or this bot named by @username would wait for a message that never turns the invitation into a person (the
+  // sender tracking ignores admins and bots), a dead entry for a week.
+  if (context.botUsername !== undefined && normaliseUsername(context.botUsername) === lowercase) return { kind: 'refused', refusalKey: 'access.refuseSelf' };
+  if (context.adminUsernames.has(lowercase)) return { kind: 'refused', refusalKey: 'access.refuseAdmin', person: label };
   if (hasUsername(context.ownEntry, lowercase)) return { kind: 'refused', refusalKey: 'access.refuseListed', person: label };
   if (hasUsername(context.generalEntry, lowercase)) return { kind: 'refused', refusalKey: 'access.refuseListedInGeneral', person: label };
   const waiting = context.ownEntry.invites.find((invite) => invite.username === lowercase);
@@ -228,10 +237,15 @@ export function decideAccessAdd(target: AccessTarget, context: AccessAddContext)
   return { kind: 'invite', username: target.username };
 }
 
+/** @description The line of a refusal, in words that fit the scope it was made in («here» on a topic's screen, «in every topic» on General's). */
+export function formatAccessRefusal(refusal: Extract<AccessAddDecision, { kind: 'refused' }>, scope: AccessScope): string {
+  return t(refusal.refusalKey, { person: refusal.person ?? '', scope: getScopeWords(scope) });
+}
+
 // ─── the screens ────────────────────────────────────────────────────────
 
 /** @description The words of a scope inside a sentence: «here» for a topic, «in every topic» for General. */
-function getScopeWords(scope: AccessScope): string {
+export function getScopeWords(scope: AccessScope): string {
   return scope === 'general' ? t('access.scopeEveryTopic') : t('access.scopeHere');
 }
 

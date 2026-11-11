@@ -77,6 +77,7 @@ export const frDict: Record<string, string> = {
     '/runners — machines pour les tests et builds des agents\n' +
     '/todo — les listes de tâches des agents de chaque projet ; leurs réglages\n' +
     '/topic — ouvrir un autre fil sur un dossier\n' +
+    '/access — qui, en plus des admins, peut parler à l’agent dans tous les sujets\n' +
     '/whoami /version — débogage\n\n' +
     'Pour parler à un agent — ouvrez un fil thématique.',
   'help.thread_unbound':
@@ -100,6 +101,7 @@ export const frDict: Record<string, string> = {
     '/limits — usage de chaque compte et fournisseur ; touchez-en un pour y basculer ce sujet\n' +
     '/limits_autoswitch — bascule automatique de modèle en cas de limite d’usage (liste de secours, bascule, attente)\n' +
     '/accounts — comptes Claude et fournisseurs OpenCode (basculer, ajouter, reconnecter, retirer, connecter, déconnecter)\n' +
+    '/access — qui, en plus des admins, peut parler à l’agent dans ce sujet\n' +
     '/clear — supprimer les messages du fil\n' +
     '/interrupt (/esc) — interrompre le travail en cours ; le message suivant réoriente l\'agent\n' +
     '/c /y /n /enter /up /down /tab — touches TUI (Claude)\n' +
@@ -1336,7 +1338,7 @@ export const frDict: Record<string, string> = {
   'access.refuseSelf': 'Le bot lui-même ne peut pas être ajouté.',
   'access.refuseChatIdentity': 'Un message publié au nom du groupe ou d’un canal n’est pas une personne : répondez à un message de la personne.',
   'access.refuseAdmin': '{person} est déjà admin : elle peut parler dans tous les sujets.',
-  'access.refuseListed': '{person} peut déjà parler à l’agent ici.',
+  'access.refuseListed': '{person} peut déjà parler à l’agent {scope}.',
   'access.refuseListedInGeneral': '{person} parle déjà à l’agent dans tous les sujets (liste de General).',
   'access.refuseInviteWaiting': '{person} est déjà invité(e).',
   'access.refuseBadUsername': 'Ce n’est pas un @username valide : 5 à 32 lettres, chiffres et tirets bas, commençant par une lettre.',
@@ -1347,5 +1349,5 @@ export const frDict: Record<string, string> = {
   'access.removedNotice': '{person} ne peut plus parler à l’agent {scope}.',
   'access.inviteRemovedNotice': 'L’invitation de @{username} est annulée.',
   'access.dmHint': 'Qui peut parler à l’agent se règle par sujet : lancez /access dans un sujet (ou dans General, pour tous les sujets).',
-  'access.bindNote': 'Personnes qui peuvent parler à l’agent ici : {count} — elles l’atteignent désormais dans `{subdir}`.',
+  'access.bindNote': '• Personnes qui peuvent parler à l’agent ici : {count} (la liste du sujet, celle de General et les invitations en attente) — elles l’atteignent désormais dans `{subdir}`.',
 };

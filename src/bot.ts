@@ -869,6 +869,12 @@ const adminCache = new AdminCache({
     if (groupId === null) return Promise.resolve([]);
     return telegramInbound.listMembersWithElevatedRights(groupId.toString());
   },
+  // The admins' @usernames, refreshed with the ids: `/access add @name` refuses an admin it has not seen write.
+  fetchElevatedMemberHandles: () => {
+    const groupId = getAllowedGroupId();
+    if (groupId === null) return Promise.resolve([]);
+    return telegramInbound.listHandlesOfMembersWithElevatedRights(groupId.toString());
+  },
   ttlMs: ADMIN_CACHE_TTL_MS,
 });
 
@@ -7665,9 +7671,9 @@ async function sendBindingWelcome(key: SessionKey, subdir: string, notes: Bindin
     lines.push(t('binding.welcome.shared', { threads: formatSharedTopicList(notes.sharedWith ?? [], moreLabel) }));
   }
   // The list of people who may talk to the agent belongs to the TOPIC, not the folder: after a bind they reach the agent of the
-  // folder it is bound to now.
-  const talkerCount = state.getTopicTalkers(key).talkers.length;
-  if (talkerCount > 0) lines.push(t('access.bindNote', { count: talkerCount, subdir }));
+  // folder it is bound to now — those on the topic's own list, on General's (group-wide) and the invited who have not written yet.
+  const reachCount = state.getTopicReachCount(key, getGroupGeneralKey(key));
+  if (reachCount > 0) lines.push(t('access.bindNote', { count: reachCount, subdir }));
   lines.push('');
   lines.push(t('binding.welcome.start_prompt'));
 
@@ -8158,7 +8164,9 @@ registerBotSkillsCommands();
 const { registerTopicAccessCommands, registerTopicAccessCallbacks } = createTopicAccess({
   ...botCore,
   getAdminIds: () => adminCache.getAdminIds(),
+  getAdminUsernames: () => adminCache.getAdminHandles(),
   getBotUserId: () => bot.botInfo?.id,
+  getBotUsername: () => bot.botInfo?.username,
   getGroupGeneralKey,
   checkIsDmKey,
   recentWriters: recentTopicWriters,

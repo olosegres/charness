@@ -77,6 +77,7 @@ export const jaDict: Record<string, string> = {
     '/runners — エージェントのテストとビルド用マシン\n' +
     '/todo — 全プロジェクトのエージェントのタスクリストと設定\n' +
     '/topic — フォルダ上に別のトピックを開く\n' +
+    '/access — 管理者以外で、すべてのトピックでエージェントと話せる人\n' +
     '/whoami /version — デバッグ\n\n' +
     'エージェントと話すには — トピックスレッドを開いてください。',
   'help.thread_unbound':
@@ -100,6 +101,7 @@ export const jaDict: Record<string, string> = {
     '/limits — 各アカウントとプロバイダーの使用状況。タップするとこのトピックを切り替えます\n' +
     '/limits_autoswitch — 使用量上限でのモデル自動切り替え（予備リスト、切り替え、待機）\n' +
     '/accounts — Claude アカウントと OpenCode プロバイダー（切り替え、追加、再ログイン、削除、接続、切断）\n' +
+    '/access — 管理者以外で、このトピックでエージェントと話せる人\n' +
     '/clear — スレッドのメッセージを削除\n' +
     '/interrupt (/esc) — 実行中の作業を中断（次のメッセージで進む方向を修正）\n' +
     '/c /y /n /enter /up /down /tab — TUI キー（Claude）\n' +
@@ -1330,7 +1332,7 @@ export const jaDict: Record<string, string> = {
   'access.refuseSelf': 'このボット自身は追加できません。',
   'access.refuseChatIdentity': 'グループやチャンネルとしての投稿は人ではありません。本人のメッセージに返信してください。',
   'access.refuseAdmin': '{person} はすでに管理者で、どのトピックでも話せます。',
-  'access.refuseListed': '{person} はすでにここでエージェントと話せます。',
+  'access.refuseListed': '{person} はすでに{scope}エージェントと話せます。',
   'access.refuseListedInGeneral': '{person} はすでにすべてのトピックでエージェントと話せます（General のリスト）。',
   'access.refuseInviteWaiting': '{person} はすでに招待済みです。',
   'access.refuseBadUsername': '有効な @username ではありません。英字で始まる5〜32文字の英数字とアンダースコアです。',
@@ -1341,5 +1343,5 @@ export const jaDict: Record<string, string> = {
   'access.removedNotice': '{person} は{scope}エージェントと話せなくなりました。',
   'access.inviteRemovedNotice': '@{username} への招待を取り消しました。',
   'access.dmHint': 'エージェントと話せる人はトピックごとに設定します。トピック内で /access を実行してください（General ならすべてのトピック向け）。',
-  'access.bindNote': 'ここでエージェントと話せる人: {count}人 — 今後は `{subdir}` で話します。',
+  'access.bindNote': '• ここでエージェントと話せる人: {count}人（このトピックの一覧、General の一覧、待機中の招待）— 今後は `{subdir}` で話します。',
 };

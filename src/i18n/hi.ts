@@ -77,6 +77,7 @@ export const hiDict: Record<string, string> = {
     '/runners — एजेंटों के टेस्ट और बिल्ड की मशीनें\n' +
     '/todo — हर प्रोजेक्ट के एजेंटों की कार्य सूचियाँ; उनकी सेटिंग्स\n' +
     '/topic — किसी फ़ोल्डर पर एक और थ्रेड खोलें\n' +
+    '/access — एडमिन के अलावा कौन सभी टॉपिक में एजेंट से बात कर सकता है\n' +
     '/whoami /version — डिबग\n\n' +
     'एजेंट से बात करने के लिए — एक विषय-वस्तु थ्रेड खोलें।',
   'help.thread_unbound':
@@ -100,6 +101,7 @@ export const hiDict: Record<string, string> = {
     '/limits — हर खाते और प्रदाता का उपयोग; इस टॉपिक को बदलने के लिए किसी पर टैप करें\n' +
     '/limits_autoswitch — उपयोग-सीमा पर मॉडल का स्वचालित स्विच (वैकल्पिक सूची, स्विच, प्रतीक्षा)\n' +
     '/accounts — Claude खाते और OpenCode प्रदाता (स्विच, जोड़ें, फिर साइन इन, हटाएँ, कनेक्ट, डिस्कनेक्ट)\n' +
+    '/access — एडमिन के अलावा कौन इस टॉपिक में एजेंट से बात कर सकता है\n' +
     '/clear — थ्रेड संदेश हटाएँ\n' +
     '/interrupt (/esc) — चल रहे काम को रोकें; अगला संदेश उसे नई दिशा देता है\n' +
     '/c /y /n /enter /up /down /tab — TUI कुंजी (Claude)\n' +
@@ -1335,7 +1337,7 @@ export const hiDict: Record<string, string> = {
   'access.refuseSelf': 'इस बॉट को खुद नहीं जोड़ा जा सकता।',
   'access.refuseChatIdentity': 'ग्रुप या चैनल के नाम से किया गया पोस्ट कोई व्यक्ति नहीं है: व्यक्ति के संदेश का जवाब दें।',
   'access.refuseAdmin': '{person} पहले से एडमिन हैं: वे हर टॉपिक में बात कर सकते हैं।',
-  'access.refuseListed': '{person} यहाँ पहले से एजेंट से बात कर सकते हैं।',
+  'access.refuseListed': '{person} पहले से {scope} एजेंट से बात कर सकते हैं।',
   'access.refuseListedInGeneral': '{person} पहले से सभी टॉपिक में एजेंट से बात करते हैं (General की सूची)।',
   'access.refuseInviteWaiting': '{person} को पहले से निमंत्रित किया जा चुका है।',
   'access.refuseBadUsername': 'यह मान्य @username नहीं है: 5–32 अक्षर, अंक और अंडरस्कोर, अक्षर से शुरू।',
@@ -1346,5 +1348,5 @@ export const hiDict: Record<string, string> = {
   'access.removedNotice': '{person} अब {scope} एजेंट से बात नहीं कर सकते।',
   'access.inviteRemovedNotice': '@{username} का निमंत्रण रद्द कर दिया गया।',
   'access.dmHint': 'एजेंट से कौन बात कर सकता है यह टॉपिक के हिसाब से तय होता है: टॉपिक के अंदर /access चलाएँ (या General में, सभी टॉपिक के लिए)।',
-  'access.bindNote': 'यहाँ एजेंट से बात कर सकने वाले लोग: {count} — अब वे उससे `{subdir}` में बात करते हैं।',
+  'access.bindNote': '• यहाँ एजेंट से बात कर सकने वाले लोग: {count} (टॉपिक की सूची, General की सूची और प्रतीक्षा में आमंत्रण) — अब वे उससे `{subdir}` में बात करते हैं।',
 };

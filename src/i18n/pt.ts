@@ -77,6 +77,7 @@ export const ptDict: Record<string, string> = {
     '/runners — máquinas para testes e builds dos agentes\n' +
     '/todo — as listas de tarefas dos agentes de cada projeto; suas configurações\n' +
     '/topic — abrir outro tópico numa pasta\n' +
+    '/access — quem, além dos admins, pode falar com o agente em todos os tópicos\n' +
     '/whoami /version — depuração\n\n' +
     'Para falar com um agente — abre um tópico temático.',
   'help.thread_unbound':
@@ -100,6 +101,7 @@ export const ptDict: Record<string, string> = {
     '/limits — uso de cada conta e fornecedor; toca num para trocar este tópico\n' +
     '/limits_autoswitch — troca automática de modelo ao atingir um limite de uso (lista de reserva, troca, espera)\n' +
     '/accounts — contas Claude e fornecedores OpenCode (trocar, adicionar, reiniciar sessão, remover, ligar, desligar)\n' +
+    '/access — quem, além dos admins, pode falar com o agente neste tópico\n' +
     '/clear — apagar mensagens do tópico\n' +
     '/interrupt (/esc) — interromper o trabalho em curso; a próxima mensagem redireciona o agente\n' +
     '/c /y /n /enter /up /down /tab — teclas TUI (Claude)\n' +
@@ -1337,7 +1339,7 @@ export const ptDict: Record<string, string> = {
   'access.refuseSelf': 'O próprio bot não pode ser adicionado.',
   'access.refuseChatIdentity': 'Uma publicação feita como o grupo ou um canal não é uma pessoa: responda a uma mensagem da pessoa.',
   'access.refuseAdmin': '{person} já é administrador e pode falar em todos os tópicos.',
-  'access.refuseListed': '{person} já pode falar com o agente aqui.',
+  'access.refuseListed': '{person} já pode falar com o agente {scope}.',
   'access.refuseListedInGeneral': '{person} já fala com o agente em todos os tópicos (lista do General).',
   'access.refuseInviteWaiting': '{person} já foi convidado(a).',
   'access.refuseBadUsername': 'Esse não é um @username válido: 5–32 letras, números e sublinhados, começando com uma letra.',
@@ -1348,5 +1350,5 @@ export const ptDict: Record<string, string> = {
   'access.removedNotice': '{person} não pode mais falar com o agente {scope}.',
   'access.inviteRemovedNotice': 'O convite para @{username} foi cancelado.',
   'access.dmHint': 'Quem pode falar com o agente é definido por tópico: execute /access dentro de um tópico (ou no General, para todos os tópicos).',
-  'access.bindNote': 'Pessoas que podem falar com o agente aqui: {count} — agora o alcançam em `{subdir}`.',
+  'access.bindNote': '• Pessoas que podem falar com o agente aqui: {count} (a lista do tópico, a de General e os convites em espera) — agora o alcançam em `{subdir}`.',
 };

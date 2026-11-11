@@ -13,6 +13,7 @@ import type { TodoProject, TodoProjectOverride } from '../../../todos/projects';
 import type { TodoRegistry } from '../../../todos/registry';
 import type { TodoItem } from '../../../todos/types';
 import { formatLocalClock } from '../../../utils/localClock';
+import { getTopicNameOrFolder } from '../../../utils/topicLabel';
 import type { BotCore } from './botCore';
 import { buildMessageSnapshotKey, getCallbackMessageId, rememberBoundedSnapshot } from './callbackMessage';
 import { answerCallbackQuerySafely } from './callbackToast';
@@ -238,8 +239,7 @@ export function createTodo(ports: TodoPorts) {
 
   /** The name a topic's view is titled with: its topic name when the bot knows it, else its folder. */
   function getTopicLabel(key: SessionKey): string {
-    const binding = getState().getBinding(key);
-    return binding?.topicName ?? binding?.subdir ?? key.thread;
+    return getTopicNameOrFolder(getState().getBinding(key)) ?? key.thread;
   }
 
   /** `key`'s project as the topic view and the picker show it. */

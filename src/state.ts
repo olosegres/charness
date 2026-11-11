@@ -45,6 +45,7 @@ import {
   dropOtherSpacesFromMap,
   getEffectiveTalkerIdsInMap,
   getTalkerScopeInMap,
+  getTopicReachCountInMap,
   pruneExpiredInvitesInMap,
   refreshIdentityInMap,
   removeInviteFromMap,
@@ -1637,6 +1638,11 @@ export class StateStore {
   /** @description Ids that may talk in `key`: its own list and the group-wide list of `generalKey`. Cheap: read on every update of a non-admin. */
   getEffectiveTalkerIds(key: SessionKey, generalKey: SessionKey): Set<string> {
     return getEffectiveTalkerIdsInMap(this.state.topicTalkers ?? {}, keyToString(key), keyToString(generalKey));
+  }
+
+  /** @description How many people reach the folder `key` is bound to through its list, General's and the waiting invitations of both (the bind note). */
+  getTopicReachCount(key: SessionKey, generalKey: SessionKey, now: number = Date.now()): number {
+    return getTopicReachCountInMap(this.state.topicTalkers ?? {}, keyToString(key), keyToString(generalKey), now);
   }
 
   /** @description Where `userId`'s right to talk in `key` comes from (its own list or General's), `null` for nobody. */

@@ -77,6 +77,7 @@ export const zhDict: Record<string, string> = {
     '/runners — 智能体测试和构建用的机器\n' +
     '/todo — 所有项目中智能体的任务列表及其设置\n' +
     '/topic — 在某个文件夹上再开一个话题\n' +
+    '/access — 除管理员外，谁可以在所有话题与代理对话\n' +
     '/whoami /version — 调试\n\n' +
     '要与代理对话 — 打开一个主题话题。',
   'help.thread_unbound':
@@ -100,6 +101,7 @@ export const zhDict: Record<string, string> = {
     '/limits — 各账号和提供方的用量；点按其中一个即可切换此话题\n' +
     '/limits_autoswitch — 达到用量上限时自动切换模型（备用列表、切换、等待）\n' +
     '/accounts — Claude 账号与 OpenCode 提供商（切换、添加、重新登录、移除、连接、断开）\n' +
+    '/access — 除管理员外，谁可以在此话题与代理对话\n' +
     '/clear — 删除话题消息\n' +
     '/interrupt (/esc) — 中断正在进行的任务；下一条消息会改变其方向\n' +
     '/c /y /n /enter /up /down /tab — TUI 按键（Claude）\n' +
@@ -1330,7 +1332,7 @@ export const zhDict: Record<string, string> = {
   'access.refuseSelf': '不能添加机器人本身。',
   'access.refuseChatIdentity': '以群或频道名义发的帖子不是个人：请回复此人的消息。',
   'access.refuseAdmin': '{person} 已是管理员，可在所有话题中对话。',
-  'access.refuseListed': '{person} 已可在此话题与代理对话。',
+  'access.refuseListed': '{person} 已可{scope}与代理对话。',
   'access.refuseListedInGeneral': '{person} 已可在所有话题中与代理对话（General 名单）。',
   'access.refuseInviteWaiting': '{person} 已被邀请。',
   'access.refuseBadUsername': '这不是有效的 @username：5–32 个字母、数字和下划线，以字母开头。',
@@ -1341,5 +1343,5 @@ export const zhDict: Record<string, string> = {
   'access.removedNotice': '{person} 不能再{scope}与代理对话。',
   'access.inviteRemovedNotice': '已取消对 @{username} 的邀请。',
   'access.dmHint': '谁可以与代理对话按话题设置：请在话题内运行 /access（在 General 中则适用于所有话题）。',
-  'access.bindNote': '可在此与代理对话的人数：{count} — 他们现在通过 `{subdir}` 与之对话。',
+  'access.bindNote': '• 可在此与代理对话的人数：{count}（此话题的名单、General 的名单和等待中的邀请）— 他们现在通过 `{subdir}` 与之对话。',
 };

@@ -77,6 +77,7 @@ export const uzDict: Record<string, string> = {
     '/runners — agentlarning test va buildlari uchun mashinalar\n' +
     '/todo — barcha loyihalar agentlarining vazifa ro\'yxatlari; ularning sozlamalari\n' +
     '/topic — papkada yana bitta mavzu ochish\n' +
+    '/access — adminlardan tashqari kim barcha mavzularda agent bilan gaplasha oladi\n' +
     '/whoami /version — debugging\n\n' +
     'Agent bilan gaplashish uchun — mavzu mavzusini oching.',
   'help.thread_unbound':
@@ -100,6 +101,7 @@ export const uzDict: Record<string, string> = {
     '/limits — har bir hisob va provayderning sarfi; bu mavzuni almashtirish uchun birini bosing\n' +
     '/limits_autoswitch — foydalanish limitida modelni avtomatik almashtirish (zaxira ro‘yxat, almashtirish, kutish)\n' +
     '/accounts — Claude hisoblari va OpenCode provayderlari (almashtirish, qo‘shish, qayta kirish, olib tashlash, ulash, uzish)\n' +
+    '/access — adminlardan tashqari kim shu mavzuda agent bilan gaplasha oladi\n' +
     '/clear — mavzu xabarlarini o‘chirish\n' +
     '/interrupt (/esc) — davom etayotgan ishni to\'xtatish; keyingi xabar uni yo\'naltiradi\n' +
     '/c /y /n /enter /up /down /tab — TUI tugmalar (Claude)\n' +
@@ -1336,7 +1338,7 @@ export const uzDict: Record<string, string> = {
   'access.refuseSelf': 'Botning o‘zini qo‘shib bo‘lmaydi.',
   'access.refuseChatIdentity': 'Guruh yoki kanal nomidan qilingan post odam emas: odamning o‘zi yozgan xabarga javob bering.',
   'access.refuseAdmin': '{person} allaqachon admin: u har qanday mavzuda gaplasha oladi.',
-  'access.refuseListed': '{person} allaqachon shu yerda agent bilan gaplasha oladi.',
+  'access.refuseListed': '{person} allaqachon {scope} agent bilan gaplasha oladi.',
   'access.refuseListedInGeneral': '{person} allaqachon barcha mavzularda agent bilan gaplasha oladi (General ro‘yxati).',
   'access.refuseInviteWaiting': '{person} allaqachon taklif qilingan.',
   'access.refuseBadUsername': 'Bu yaroqli @username emas: 5–32 ta harf, raqam va pastki chiziq, harf bilan boshlanadi.',
@@ -1347,5 +1349,5 @@ export const uzDict: Record<string, string> = {
   'access.removedNotice': '{person} endi {scope} agent bilan gaplasha olmaydi.',
   'access.inviteRemovedNotice': '@{username} ga taklif bekor qilindi.',
   'access.dmHint': 'Agent bilan kim gaplasha olishi mavzular bo‘yicha belgilanadi: mavzu ichida /access ni ishga tushiring (yoki General da — barcha mavzular uchun).',
-  'access.bindNote': 'Bu yerda agent bilan gaplasha oladiganlar: {count} — ular endi unga `{subdir}` da yetib boradi.',
+  'access.bindNote': '• Bu yerda agent bilan gaplasha oladiganlar: {count} (mavzu ro‘yxati, General ro‘yxati va kutayotgan taklifnomalar) — ular endi unga `{subdir}` da yetib boradi.',
 };

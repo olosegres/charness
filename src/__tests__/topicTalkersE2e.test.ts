@@ -97,6 +97,8 @@ const danMember = { id: 545454, is_bot: false, first_name: 'Dan', last_name: 'Br
 const eveMember = { id: 555555, is_bot: false, first_name: 'Eve', last_name: 'Quiet' };
 const frankMember = { id: 565656, is_bot: false, first_name: 'Frank', last_name: 'Fresh', username: 'frank_f' };
 const halMember = { id: 575757, is_bot: false, first_name: 'Hal', last_name: 'Hall', username: 'hal_h' };
+/** A second admin who never writes in the flow: the bot has seen no message of theirs, so only their @username can tell them from anybody else. */
+const quietAdmin = { id: 585858, is_bot: false, first_name: 'Ada', last_name: 'Admin', username: 'ada_admin' };
 /** Telegram's service user, which a linked channel's post carries in `from`. */
 const telegramServiceUser = { id: 777000, is_bot: false, first_name: 'Telegram' };
 /** A member of the group nobody let in. */
@@ -261,7 +263,7 @@ describe('topic talkers end to end: built charness, fake Bot API, fake speech en
       }, null, 2)}\n`,
     );
 
-    fakeTelegram = new FakeTelegram({ botUser, operator, group });
+    fakeTelegram = new FakeTelegram({ botUser, operator, group, admins: [quietAdmin] });
     speechEngine = new FakeSpeechEngine((requestIndex) => ({ status: 200, text: spokenTranscripts[requestIndex] ?? 'unexpected extra voice note' }));
     const speechUrl = await speechEngine.start();
     fs.writeFileSync(path.join(path.dirname(layout.envFile), 'stt.json'), `${JSON.stringify({ engines: [{ id: 'u1', kind: 'url', url: speechUrl }] }, null, 2)}\n`);
@@ -665,7 +667,7 @@ describe('topic talkers end to end: built charness, fake Bot API, fake speech en
     assert.ok(!readStateFile().topicTalkers?.[keyToString(makeTelegramKey(group.id, apiThreadId))]?.talkers.some((talker) => talker.userId === stranger.id.toString()), 'Cancel grants nothing');
   });
 
-  it('refusals: an admin, this bot, somebody on General\'s list, somebody listed already, a bad @username — one line each, nothing to confirm', async () => {
+  it('refusals: an admin (also by a typed @username), this bot, somebody on General\'s list, somebody listed already, a bad @username — one line each, nothing to confirm', async () => {
     const expectLine = async (argsText: string, replyToMessageId: number | undefined, expected: string): Promise<void> => {
       const afterCommand = Math.max(0, ...apiTopic().listMessages().map((message) => message.message_id));
       fakeTelegram.pushOperatorMessage(apiThreadId, `/access ${argsText}`.trim(), replyToMessageId === undefined ? {} : { replyToMessageId });
@@ -682,6 +684,10 @@ describe('topic talkers end to end: built charness, fake Bot API, fake speech en
     const danMessageId = fakeTelegram.pushUserMessage(apiThreadId, 'dan says something', danMember);
     await expectLine('add', danMessageId, '@dan_b (Dan Brown) already may talk to the agent here.');
     await expectLine('add @abc', undefined, 'That is not a valid @username: 5–32 letters, digits and underscores, starting with a letter.');
+    // An admin who never wrote (no id to compare) and the bot itself, by typed @username — never a dead invitation.
+    await expectLine('add @Ada_Admin', undefined, '@Ada_Admin is already an admin: they can talk in every topic.');
+    await expectLine('add @Fake_Charness_Bot', undefined, 'The bot itself cannot be added.');
+    assert.deepEqual(readStateFile().topicTalkers?.[keyToString(makeTelegramKey(group.id, apiThreadId))]?.invites.map((invite) => invite.username) ?? [], [], 'no invitation was made for either');
   });
 
   it('a revoke is one tap: the person\'s menu, a toast, the list again with the read-access note — and they are ignored from then on', async () => {
@@ -737,17 +743,22 @@ describe('topic talkers end to end: built charness, fake Bot API, fake speech en
     assert.ok(readStateFile().topicTalkers?.[keyToString(makeTelegramKey(group.id, apiThreadId))]?.talkers.some((talker) => talker.userId === eveMember.id.toString()), 'Eve is still on the list');
   });
 
-  it('a bind says how many people may talk to the agent in the topic and where they now reach it', async () => {
+  it('a bind says how many people may talk to the agent in the topic — its own list, General\'s and the waiting invitations — and where they now reach it', async () => {
     const halMessageId = fakeTelegram.pushUserMessage(idleThreadId, 'hal writes in the idle topic', halMember);
     const afterHal = Math.max(0, ...idleTopic().listMessages().map((message) => message.message_id));
     fakeTelegram.pushOperatorMessage(idleThreadId, '/access add', { replyToMessageId: halMessageId });
     const confirmation = await waitForBotText(idleTopic(), afterHal, 'Add @hal_h (Hal Hall)?');
     await tapAccessButton(idleTopic(), confirmation, '✅ Add');
     await waitForBotText(idleTopic(), afterHal, '✅ @hal_h (Hal Hall) may now talk to the agent in this topic. They can make it run any command in «idle-proj».');
+    fakeTelegram.pushOperatorMessage(idleThreadId, '/access add @kim_k');
+    const inviteConfirmation = await waitForBotText(idleTopic(), afterHal, 'Add @kim_k as soon as they first write in this group?');
+    await tapAccessButton(idleTopic(), inviteConfirmation, '✅ Add');
+    await waitForBotText(idleTopic(), afterHal, '⏳ @kim_k may talk to the agent here as soon as they write anything in this group');
     const afterBind = Math.max(0, ...idleTopic().listMessages().map((message) => message.message_id));
     fakeTelegram.pushOperatorMessage(idleThreadId, `/bind ${apiFolder}`);
     const welcome = await waitForBotText(idleTopic(), afterBind, 'People who may talk to the agent here:');
-    assert.ok(welcome.text.includes(`People who may talk to the agent here: 1 — they now reach it in \`${apiFolder}\`.`), welcome.text);
+    // Hal (this topic's list) + General's Gus + the invitation still waiting for Kim.
+    assert.ok(welcome.text.includes(`• People who may talk to the agent here: 3 (this topic's list, General's and waiting invitations) — they now reach it in \`${apiFolder}\`.`), welcome.text);
   });
 
   it('a talker who leaves the group is dropped from every list at once and ignored from then on; the others stay', async () => {
@@ -772,7 +783,8 @@ describe('topic talkers end to end: built charness, fake Bot API, fake speech en
     const list = await openAccessList(generalTopic(), generalThreadId);
     assert.ok(list.text.startsWith("Who may talk to the agent in every topic (General's list)\nGroup admins talk in every topic and are not listed."), list.text);
     assert.ok(list.text.includes('Everyone in the group can READ every topic.'));
-    assert.ok(list.text.includes('Also in topics: ') && list.text.includes(`«#${apiThreadId}»`) && list.text.includes(`«#${docsThreadId}»`), list.text);
+    // The topics were bound with no name the bot ever learned: each is named by its folder (the idle topic was re-bound to the api folder).
+    assert.ok(list.text.includes(`Also in topics: «${docsFolder}» 1, «${apiFolder}» 1, «${apiFolder}» 1`), list.text);
     assert.deepEqual(listLabels(generalTopic(), list), ['@gus', '＋ Add']);
 
     await tapAccessButton(generalTopic(), list, '@gus');

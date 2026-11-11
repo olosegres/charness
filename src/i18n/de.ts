@@ -77,6 +77,7 @@ export const deDict: Record<string, string> = {
     '/runners — Maschinen für Tests und Builds der Agenten\n' +
     '/todo — die Aufgabenlisten der Agenten aller Projekte; ihre Einstellungen\n' +
     '/topic — weiteren Thread auf einem Ordner öffnen\n' +
+    '/access — wer außer den Admins in jedem Thema mit dem Agenten sprechen darf\n' +
     '/whoami /version — Debug\n\n' +
     'Um mit einem Agent zu sprechen — öffne einen thematischen Thread.',
   'help.thread_unbound':
@@ -100,6 +101,7 @@ export const deDict: Record<string, string> = {
     '/limits — Verbrauch aller Konten und Provider; tippe auf eines, um dieses Thema umzustellen\n' +
     '/limits_autoswitch — automatischer Modellwechsel bei Nutzungslimit (Ersatzliste, Wechsel, Warten)\n' +
     '/accounts — Claude-Konten und OpenCode-Provider (wechseln, hinzufügen, neu anmelden, entfernen, verbinden, trennen)\n' +
+    '/access — wer außer den Admins in diesem Thema mit dem Agenten sprechen darf\n' +
     '/clear — Thread-Nachrichten löschen\n' +
     '/interrupt (/esc) — laufende Arbeit des Agenten stoppen; die nächste Nachricht steuert ihn um\n' +
     '/c /y /n /enter /up /down /tab — TUI-Tasten (Claude)\n' +
@@ -1336,7 +1338,7 @@ export const deDict: Record<string, string> = {
   'access.refuseSelf': 'Der Bot selbst kann nicht hinzugefügt werden.',
   'access.refuseChatIdentity': 'Ein Beitrag im Namen der Gruppe oder eines Kanals ist keine Person: antworte auf eine Nachricht der Person.',
   'access.refuseAdmin': '{person} ist bereits Admin und darf in jedem Thema sprechen.',
-  'access.refuseListed': '{person} darf hier bereits mit dem Agenten sprechen.',
+  'access.refuseListed': '{person} darf bereits {scope} mit dem Agenten sprechen.',
   'access.refuseListedInGeneral': '{person} darf bereits in jedem Thema mit dem Agenten sprechen (Liste von General).',
   'access.refuseInviteWaiting': '{person} ist bereits eingeladen.',
   'access.refuseBadUsername': 'Das ist kein gültiger @username: 5–32 Buchstaben, Ziffern und Unterstriche, beginnend mit einem Buchstaben.',
@@ -1347,5 +1349,5 @@ export const deDict: Record<string, string> = {
   'access.removedNotice': '{person} darf {scope} nicht mehr mit dem Agenten sprechen.',
   'access.inviteRemovedNotice': 'Die Einladung für @{username} ist zurückgezogen.',
   'access.dmHint': 'Wer mit dem Agenten sprechen darf, wird pro Thema festgelegt: führe /access in einem Thema aus (oder in General für jedes Thema).',
-  'access.bindNote': 'Personen, die hier mit dem Agenten sprechen dürfen: {count} — sie erreichen ihn jetzt in `{subdir}`.',
+  'access.bindNote': '• Personen, die hier mit dem Agenten sprechen dürfen: {count} (Liste des Themas, die von General und wartende Einladungen) — sie erreichen ihn jetzt in `{subdir}`.',
 };

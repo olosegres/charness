@@ -16,6 +16,7 @@ import {
   dropOtherSpacesFromMap,
   getEffectiveTalkerIdsInMap,
   getTalkerScopeInMap,
+  getTopicReachCountInMap,
   normaliseUsername,
   pruneExpiredInvitesInMap,
   refreshIdentityInMap,
@@ -288,4 +289,27 @@ test('a person on both a topic list and General\'s reads as the topic\'s own ent
   assert.equal(getTalkerScopeInMap(map, designTopic, generalTopic, '101'), 'general');
   removeTalkerFromMap(map, generalTopic, '101');
   assert.equal(getTalkerScopeInMap(map, designTopic, generalTopic, '101'), null);
+});
+
+test('getTopicReachCountInMap: everyone who reaches a topic\'s folder — its own list, General\'s and the waiting invitations of both, each counted once', () => {
+  const map: TopicTalkersMap = {};
+  addTalkerToMap(map, designTopic, alice, admin, now);
+  addTalkerToMap(map, designTopic, bob, admin, now);
+  addTalkerToMap(map, generalTopic, { userId: '103', username: 'gus_g', name: 'Gus Guest' }, admin, now);
+  addTalkerToMap(map, generalTopic, alice, admin, now); // on both lists: one person
+  addInviteToMap(map, designTopic, 'carol_x', admin, now);
+  addInviteToMap(map, generalTopic, 'dave_y', admin, now);
+  addInviteToMap(map, generalTopic, 'carol_x', admin, now); // the same name on both lists: one invitation
+  assert.equal(getTopicReachCountInMap(map, designTopic, generalTopic, now), 3 + 2, 'alice, bob, gus + carol_x, dave_y');
+  assert.equal(getTopicReachCountInMap(map, docsTopic, generalTopic, now), 2 + 2, 'a topic without a list still gets General\'s people and invitations');
+  assert.equal(getTopicReachCountInMap(map, generalTopic, generalTopic, now), 2 + 2, 'in General itself the list is counted once');
+  assert.equal(getTopicReachCountInMap({}, docsTopic, generalTopic, now), 0);
+});
+
+test('getTopicReachCountInMap: an expired invitation reaches nobody, and an invitation for a name already listed is not a second person', () => {
+  const map: TopicTalkersMap = {};
+  addInviteToMap(map, designTopic, 'carol_x', admin, now - topicInviteTtlMs - 1);
+  addTalkerToMap(map, generalTopic, { userId: '103', username: 'Gus_G', name: 'Gus Guest' }, admin, now);
+  addInviteToMap(map, designTopic, 'gus_g', admin, now); // a different list than the one the person is on
+  assert.equal(getTopicReachCountInMap(map, designTopic, generalTopic, now), 1, 'gus once; the expired carol_x is nobody');
 });

@@ -176,7 +176,8 @@ test('an album a talker sends into a raw-shell topic is refused ONCE, through th
 test('/access is built over the shared core, the admin cache and the in-memory writers, registered with its commands and its callbacks, and listed as a bot command and in the menu', () => {
   const build = getSourceSlice('const { registerTopicAccessCommands, registerTopicAccessCallbacks } = createTopicAccess({', 'registerTopicAccessCommands();');
   assert.match(build, /\.\.\.botCore,/);
-  assert.match(build, /getAdminIds: \(\) => adminCache\.getAdminIds\(\),/);
+  assert.match(build, /getAdminIds: \(\) => adminCache\.getAdminIds\(\),\s*getAdminUsernames: \(\) => adminCache\.getAdminHandles\(\),/, 'an admin\'s @username is refused from the same cache as their id');
+  assert.match(build, /getBotUsername: \(\) => bot\.botInfo\?\.username,/);
   assert.match(build, /getGroupGeneralKey,/);
   assert.match(build, /recentWriters: recentTopicWriters,\s*seenSenders: seenGroupSenders,/, 'the memory the sender tracking feeds is the one the add screen reads');
   assert.match(botSource, /registerTopicAccessCallbacks\(\);/);
@@ -192,5 +193,11 @@ test('/access is admin-only by default: the command is registered with no talker
 
 test('a bind tells the topic how many people may talk to the agent there and where they now reach it — the list belongs to the topic, not the folder', () => {
   const welcome = getFunctionBody('sendBindingWelcome');
-  assert.match(welcome, /const talkerCount = state\.getTopicTalkers\(key\)\.talkers\.length;\s*if \(talkerCount > 0\) lines\.push\(t\('access\.bindNote', \{ count: talkerCount, subdir \}\)\);/);
+  assert.match(welcome, /const reachCount = state\.getTopicReachCount\(key, getGroupGeneralKey\(key\)\);\s*if \(reachCount > 0\) lines\.push\(t\('access\.bindNote', \{ count: reachCount, subdir \}\)\);/, 'General\'s list and the waiting invitations reach the new folder too');
+});
+
+test('the admin cache fetches the admins\' @usernames with their ids, through the connector\'s one membership path', () => {
+  const cache = getSourceSlice('const adminCache = new AdminCache({', 'ttlMs: ADMIN_CACHE_TTL_MS,');
+  assert.match(cache, /fetchElevatedMemberIds: \(\) => \{/);
+  assert.match(cache, /fetchElevatedMemberHandles: \(\) => \{[^}]*telegramInbound\.listHandlesOfMembersWithElevatedRights\(groupId\.toString\(\)\);/s);
 });

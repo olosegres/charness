@@ -24,7 +24,8 @@ import type {
   NormalizedAttachment,
   PlatformMember,
 } from '../../platform/inbound';
-import { getElevatedMemberIds, getSenderRole, type SenderRole } from '../../accessControl';
+import { getElevatedMemberHandles, getElevatedMemberIds, getSenderRole, type SenderRole } from '../../accessControl';
+import { normaliseUsername } from '../../topicTalkers';
 import { getTelegramFileMeta, type TelegramFileKind, type TelegramFileMeta } from './fileIntake';
 import {
   buildReplyQuoteBlock,
@@ -96,6 +97,7 @@ export function getPlatformMembers(members: ChatMember[]): PlatformMember[] {
     displayName: getDisplayName(member.user),
     isBot: member.user.is_bot,
     hasElevatedRights: checkHasElevatedRights(member.status),
+    ...(member.user.username !== undefined ? { handle: member.user.username } : {}),
   }));
 }
 
@@ -519,6 +521,11 @@ export interface TelegramInboundDeps {
  */
 export interface TelegramConnectorInbound extends ConnectorInbound {
   /**
+   * The lowercase @usernames (as the lists match them) of the humans {@link ConnectorInbound.listMembersWithElevatedRights} lists —
+   * the same roster, asked the same way (and rejecting a space that is no chat id), for `AdminCache` to refresh together with the ids.
+   */
+  listHandlesOfMembersWithElevatedRights(space: string): Promise<string[]>;
+  /**
    * Normalize one Telegram message and hand it to the registered core handler.
    * `raw` overrides the event's escape hatch — see {@link getInboundEvent}.
    */
@@ -530,6 +537,30 @@ export function createTelegramConnectorInbound(
 ): TelegramConnectorInbound {
   let onEvent: InboundEventHandler | null = null;
 
+  /** The roster being fetched per space: the ids and the @usernames asked together (one cache refresh) share ONE API call. */
+  const rostersInFlight = new Map<string, Promise<PlatformMember[]>>();
+
+  function listMembers(space: string): Promise<PlatformMember[]> {
+    const pending = rostersInFlight.get(space);
+    if (pending) return pending;
+    const roster = fetchMembers(space).finally(() => rostersInFlight.delete(space));
+    rostersInFlight.set(space, roster);
+    return roster;
+  }
+
+  async function fetchMembers(space: string): Promise<PlatformMember[]> {
+    // REJECT rather than resolve `[]`: an empty resolve is a SUCCESSFUL fetch
+    // to `AdminCache`, which would stamp it fresh and lock every admin out for
+    // the whole TTL with no retry and nothing logged. A rejection is the only
+    // answer that keeps the last-known set and re-tries on the failure backoff.
+    // Matched syntactically, not via `Number`, which turns `""` into a
+    // perfectly finite `0` and would hand `getChatAdministrators` a bogus id.
+    if (!telegramChatIdPattern.test(space)) {
+      throw new Error(`telegram: "${space}" is not a chat id, cannot list its members`);
+    }
+    return getPlatformMembers(await deps.listAdministrators(Number(space)));
+  }
+
   return {
     async start(handler: InboundEventHandler): Promise<void> {
       onEvent = handler;
@@ -540,17 +571,11 @@ export function createTelegramConnectorInbound(
     },
 
     async listMembersWithElevatedRights(space: string): Promise<string[]> {
-      // REJECT rather than resolve `[]`: an empty resolve is a SUCCESSFUL fetch
-      // to `AdminCache`, which would stamp it fresh and lock every admin out for
-      // the whole TTL with no retry and nothing logged. A rejection is the only
-      // answer that keeps the last-known set and re-tries on the failure backoff.
-      // Matched syntactically, not via `Number`, which turns `""` into a
-      // perfectly finite `0` and would hand `getChatAdministrators` a bogus id.
-      if (!telegramChatIdPattern.test(space)) {
-        throw new Error(`telegram: "${space}" is not a chat id, cannot list its members`);
-      }
-      const members = getPlatformMembers(await deps.listAdministrators(Number(space)));
-      return getElevatedMemberIds(members);
+      return getElevatedMemberIds(await listMembers(space));
+    },
+
+    async listHandlesOfMembersWithElevatedRights(space: string): Promise<string[]> {
+      return getElevatedMemberHandles(await listMembers(space)).map(normaliseUsername);
     },
 
     async deliver(message: Message, key: SessionKey, raw?: unknown): Promise<void> {

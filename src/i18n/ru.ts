@@ -81,6 +81,7 @@ export const ruDict: Record<string, string> = {
     '/runners — машины для тестов и сборок агентов\n' +
     '/todo — списки задач агентов всех проектов; их настройки\n' +
     '/topic — открыть ещё один тред на папке\n' +
+    '/access — кто, кроме админов, может писать агенту во всех топиках\n' +
     '/whoami /version — debug\n\n' +
     'Чтобы начать диалог с агентом — открой тематический тред.',
   'help.thread_unbound':
@@ -104,6 +105,7 @@ export const ruDict: Record<string, string> = {
     '/limits — расход по всем аккаунтам и провайдерам; нажми на один, чтобы переключить топик\n' +
     '/limits_autoswitch — автоматическое переключение модели при лимите (запасные модели, переключение, ожидание)\n' +
     '/accounts — аккаунты Claude и провайдеры OpenCode (переключить, добавить, войти заново, удалить, подключить, отключить)\n' +
+    '/access — кто, кроме админов, может писать агенту в этом топике\n' +
     '/clear — удалить сообщения треда\n' +
     '/interrupt (/esc) — прервать работу агента; следующее сообщение его перенаправит\n' +
     '/c /y /n /enter /up /down /tab — TUI-команды (Claude)\n' +
@@ -1340,7 +1342,7 @@ export const ruDict: Record<string, string> = {
   'access.refuseSelf': 'Самого бота добавить нельзя.',
   'access.refuseChatIdentity': 'Пост от имени группы или канала — не человек: ответьте на сообщение самого человека.',
   'access.refuseAdmin': '{person} уже админ: он(а) может писать в любом топике.',
-  'access.refuseListed': '{person} уже может писать агенту здесь.',
+  'access.refuseListed': '{person} уже может писать агенту {scope}.',
   'access.refuseListedInGeneral': '{person} уже может писать агенту во всех топиках (список General).',
   'access.refuseInviteWaiting': '{person} уже приглашён(а).',
   'access.refuseBadUsername': 'Это не похоже на @username: 5–32 символа — латинские буквы, цифры и подчёркивания, начинается с буквы.',
@@ -1351,5 +1353,5 @@ export const ruDict: Record<string, string> = {
   'access.removedNotice': '{person} больше не может писать агенту {scope}.',
   'access.inviteRemovedNotice': 'Приглашение для @{username} отменено.',
   'access.dmHint': 'Кто может писать агенту, задаётся по топикам: выполните /access внутри топика (или в General — для всех топиков).',
-  'access.bindNote': 'Могут писать агенту здесь: {count} — теперь они общаются с ним в `{subdir}`.',
+  'access.bindNote': '• Могут писать агенту здесь: {count} (список топика, список General и ждущие приглашения) — теперь они общаются с ним в `{subdir}`.',
 };

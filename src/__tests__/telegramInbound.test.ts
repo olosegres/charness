@@ -581,6 +581,43 @@ test('listMembersWithElevatedRights reduces the roster to elevated humans', asyn
   assert.deepEqual(chatIdsAsked, [-1001234567890]);
 });
 
+test('getPlatformMembers: a member\'s @username rides along as its handle, absent when they have none', () => {
+  const [named, unnamed] = getPlatformMembers([
+    { status: 'administrator', user: makeUser(1, { username: 'Sam_Admin' }) } as ChatMember,
+    { status: 'administrator', user: makeUser(2) } as ChatMember,
+  ]);
+  assert.equal(named?.handle, 'Sam_Admin');
+  assert.equal(unnamed?.handle, undefined);
+});
+
+test('listHandlesOfMembersWithElevatedRights: the lowercase @usernames of the elevated humans, asked the same way as the ids (and rejecting a space that is no chat id)', async () => {
+  const { connector, chatIdsAsked } = makeConnector([
+    { status: 'creator', user: makeUser(1, { username: 'Dee_Owner' }) } as ChatMember,
+    { status: 'administrator', user: makeUser(2) } as ChatMember,
+    { status: 'administrator', user: makeUser(3, { username: 'some_bot', is_bot: true }) } as ChatMember,
+    { status: 'member', user: makeUser(4, { username: 'plain_pat' }) } as ChatMember,
+  ]);
+  assert.deepEqual(await connector.listHandlesOfMembersWithElevatedRights('-1001234567890'), ['dee_owner']);
+  assert.deepEqual(chatIdsAsked, [-1001234567890]);
+  await assert.rejects(() => connector.listHandlesOfMembersWithElevatedRights('ABC-123'), /not a chat id/);
+});
+
+test('the ids and the @usernames asked together (the admin cache refreshes both at once) are ONE getChatAdministrators call — one roster, not two', async () => {
+  const { connector, chatIdsAsked } = makeConnector([
+    { status: 'creator', user: makeUser(1, { username: 'Dee_Owner' }) } as ChatMember,
+    makeChatMember('administrator', 2),
+  ]);
+  const [ids, handles] = await Promise.all([
+    connector.listMembersWithElevatedRights('-1001234567890'),
+    connector.listHandlesOfMembersWithElevatedRights('-1001234567890'),
+  ]);
+  assert.deepEqual(ids, ['1', '2']);
+  assert.deepEqual(handles, ['dee_owner']);
+  assert.deepEqual(chatIdsAsked, [-1001234567890]);
+  await connector.listMembersWithElevatedRights('-1001234567890');
+  assert.equal(chatIdsAsked.length, 2, 'a later lookup asks again: nothing is cached here (the admin cache is the cache)');
+});
+
 test('listMembersWithElevatedRights REJECTS a space that is not a chat id', async () => {
   // A foreign key reaching the Telegram connector is a wiring bug, not a
   // membership question. It must not call the API with NaN — and it must not

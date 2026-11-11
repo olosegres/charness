@@ -32,6 +32,7 @@ import {
   getAccessPageOfRow,
   getAccessRowLabel,
   getAccessShellWarning,
+  getScopeWords,
   listAccessRows,
   parseAccessCallback,
   parseAccessCommand,
@@ -145,7 +146,7 @@ test('parseAccessUsername: with or without the @, 5–32 letters, digits and und
 // ─── who may be added ───────────────────────────────────────────────────
 
 function makeContext(overrides: Partial<AccessAddContext> = {}): AccessAddContext {
-  return { botUserId: '7000', adminIds: new Set(['900']), ownEntry: makeEntry([]), generalEntry: makeEntry([]), now, ...overrides };
+  return { botUserId: '7000', botUsername: 'Charness_Bot', adminIds: new Set(['900']), adminUsernames: new Set(['sam_admin']), ownEntry: makeEntry([]), generalEntry: makeEntry([]), now, ...overrides };
 }
 const personTarget = { kind: 'person', userId: '101', username: 'alice_w', name: 'Alice Smith', isBot: false } as const;
 
@@ -179,6 +180,21 @@ test('decideAccessAdd: an @username that is a talker already (by the name stored
   const expired = { revision: 1, talkers: [], invites: [{ username: 'carol_x', addedAt: now - topicInviteTtlMs, addedBy: '900', addedByName: 'Sam' }] };
   assert.deepEqual(decideAccessAdd({ kind: 'username', username: 'carol_x' }, makeContext({ ownEntry: expired })), { kind: 'invite', username: 'carol_x' });
   assert.equal(decideAccessAdd({ kind: 'username', username: 'alice_w' }, makeContext({ generalEntry: { revision: 1, talkers: [alice], invites: [] } })).kind, 'refused');
+});
+
+test('decideAccessAdd: a typed @username that is an admin\'s (after a restart nothing was seen, so no id to compare) or the bot\'s own is refused — never a waiting invitation that could not resolve', () => {
+  assert.deepEqual(decideAccessAdd({ kind: 'username', username: 'Sam_Admin' }, makeContext()), { kind: 'refused', refusalKey: 'access.refuseAdmin', person: '@Sam_Admin' });
+  assert.deepEqual(decideAccessAdd({ kind: 'username', username: 'charness_bot' }, makeContext()), { kind: 'refused', refusalKey: 'access.refuseSelf' });
+  assert.equal(decideAccessAdd({ kind: 'username', username: 'sam_adminx' }, makeContext()).kind, 'invite', 'a different name is still an ordinary invitation');
+  assert.equal(decideAccessAdd({ kind: 'username', username: 'sam_admin' }, makeContext({ adminUsernames: new Set() })).kind, 'invite', 'no admin of that name: nothing to refuse');
+  assert.equal(decideAccessAdd({ kind: 'username', username: 'charness_bot' }, makeContext({ botUsername: undefined })).kind, 'invite', 'the bot\'s name not known yet: nothing to compare');
+});
+
+test('getScopeWords: «here» for a topic, «in every topic» for General — the words every scope-aware line takes', () => {
+  assert.equal(getScopeWords('topic'), 'here');
+  assert.equal(getScopeWords('general'), 'in every topic');
+  assert.equal(t('access.refuseListed', { person: '@dan', scope: getScopeWords('general') }), '@dan already may talk to the agent in every topic.');
+  assert.equal(t('access.refuseListed', { person: '@dan', scope: getScopeWords('topic') }), '@dan already may talk to the agent here.');
 });
 
 // ─── the screens ────────────────────────────────────────────────────────
@@ -293,7 +309,7 @@ test('the notices: a grant says plainly what they can make the agent do, in the 
     buildAccessInvitedNotice({ scope: 'topic', username: 'carol_x', expiresAt: Date.UTC(2026, 10, 18), options: { locale: 'en', timeZone: 'UTC' } }),
     '⏳ @carol_x may talk to the agent here as soon as they write anything in this group (until 18 Nov).',
   );
-  assert.equal(t('access.bindNote', { count: 2, subdir: 'docs' }), 'People who may talk to the agent here: 2 — they now reach it in `docs`.');
+  assert.equal(t('access.bindNote', { count: 2, subdir: 'docs' }), "• People who may talk to the agent here: 2 (this topic's list, General's and waiting invitations) — they now reach it in `docs`.");
 });
 
 test('a name with bracket or markdown characters needs no escaping: every screen is plain text', () => {

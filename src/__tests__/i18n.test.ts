@@ -614,6 +614,25 @@ test('/topic is named by the help of a bound topic and of General in every local
   }
 });
 
+test('/access is named by the help of a bound topic and of General in every locale, as a line of its own', () => {
+  for (const locale of localeCodes) {
+    for (const code of ['help.general', 'help.thread_bound']) {
+      assert.match(getKeyInLang(locale, code) ?? '', /(^|\n)\/access — /, `${code} in ${locale} does not name /access`);
+    }
+  }
+});
+
+test('the /access refusal that says where somebody may talk takes the scope words, and the bind note is a bullet of the welcome — in every locale', () => {
+  const placeholdersOf = (text: string): string[] => (text.match(/\{\w+\}/g) ?? []).sort();
+  for (const locale of localeCodes) {
+    const refusal = getKeyInLang(locale, 'access.refuseListed') ?? '';
+    assert.deepEqual(placeholdersOf(refusal), ['{person}', '{scope}'], `access.refuseListed in ${locale} must carry the person and the scope (General's list is «in every topic», not «here»)`);
+    const bindNote = getKeyInLang(locale, 'access.bindNote') ?? '';
+    assert.deepEqual(placeholdersOf(bindNote), ['{count}', '{subdir}'], `access.bindNote in ${locale}`);
+    assert.ok(bindNote.startsWith('• '), `access.bindNote in ${locale} is a bullet like its neighbours in the welcome`);
+  }
+});
+
 test('trace toggle keys exist in every locale', () => {
   for (const code of [
     'trace.onThisThreadReply',

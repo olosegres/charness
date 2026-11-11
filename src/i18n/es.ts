@@ -77,6 +77,7 @@ export const esDict: Record<string, string> = {
     '/runners — máquinas para las pruebas y builds de los agentes\n' +
     '/todo — las listas de tareas de los agentes de cada proyecto; sus ajustes\n' +
     '/topic — abrir otro hilo en una carpeta\n' +
+    '/access — quién, además de los administradores, puede hablar con el agente en todos los temas\n' +
     '/whoami /version — depuración\n\n' +
     'Para hablar con un agente — abre un hilo temático.',
   'help.thread_unbound':
@@ -100,6 +101,7 @@ export const esDict: Record<string, string> = {
     '/limits — uso de cada cuenta y proveedor; toca uno para cambiar este tema\n' +
     '/limits_autoswitch — cambio automático de modelo al alcanzar un límite de uso (lista de reserva, cambio, espera)\n' +
     '/accounts — cuentas de Claude y proveedores de OpenCode (cambiar, añadir, reiniciar sesión, quitar, conectar, desconectar)\n' +
+    '/access — quién, además de los administradores, puede hablar con el agente en este tema\n' +
     '/clear — eliminar mensajes del hilo\n' +
     '/interrupt (/esc) — interrumpir el trabajo en curso; el siguiente mensaje lo reorienta\n' +
     '/c /y /n /enter /up /down /tab — teclas TUI (Claude)\n' +
@@ -1336,7 +1338,7 @@ export const esDict: Record<string, string> = {
   'access.refuseSelf': 'El propio bot no se puede añadir.',
   'access.refuseChatIdentity': 'Un mensaje publicado como el grupo o un canal no es una persona: responde a un mensaje de la persona.',
   'access.refuseAdmin': '{person} ya es administrador y puede hablar en todos los temas.',
-  'access.refuseListed': '{person} ya puede hablar con el agente aquí.',
+  'access.refuseListed': '{person} ya puede hablar con el agente {scope}.',
   'access.refuseListedInGeneral': '{person} ya habla con el agente en todos los temas (lista de General).',
   'access.refuseInviteWaiting': '{person} ya está invitado.',
   'access.refuseBadUsername': 'Ese no es un @username válido: 5–32 letras, números y guiones bajos, empezando por una letra.',
@@ -1347,5 +1349,5 @@ export const esDict: Record<string, string> = {
   'access.removedNotice': '{person} ya no puede hablar con el agente {scope}.',
   'access.inviteRemovedNotice': 'La invitación para @{username} está cancelada.',
   'access.dmHint': 'Quién puede hablar con el agente se define por tema: ejecuta /access dentro de un tema (o en General, para todos los temas).',
-  'access.bindNote': 'Personas que pueden hablar aquí con el agente: {count} — ahora lo alcanzan en `{subdir}`.',
+  'access.bindNote': '• Personas que pueden hablar aquí con el agente: {count} (la lista del tema, la de General y las invitaciones en espera) — ahora lo alcanzan en `{subdir}`.',
 };

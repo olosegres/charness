@@ -15,7 +15,7 @@
 import { test } from 'node:test';
 import * as assert from 'node:assert/strict';
 import type { PlatformMember } from '../platform/inbound';
-import { getElevatedMemberIds, getSenderRole, AdminCache } from '../accessControl';
+import { getElevatedMemberHandles, getElevatedMemberIds, getSenderRole, AdminCache } from '../accessControl';
 
 function elevated(id: number, isBot = false): PlatformMember {
   return { id: id.toString(), displayName: `u${id}`, isBot, hasElevatedRights: true };
@@ -192,4 +192,56 @@ test('AdminCache.getCachedAdminIds: a stale cache keeps serving the last-known s
   assert.deepEqual([...cache.getCachedAdminIds()], ['1'], 'stale, but not re-fetched by the synchronous read');
   await cache.getAdminIds();
   assert.deepEqual([...cache.getCachedAdminIds()], ['2']);
+});
+
+// ─── the admins' @usernames ──────────────────────────────────────────────
+
+test('getElevatedMemberHandles: the @names of the elevated humans as spelled — not a bot\'s, not a plain member\'s, not of someone with no name', () => {
+  const members: PlatformMember[] = [
+    { ...elevated(1), handle: 'Sam_Admin' },
+    elevated(2),
+    { ...elevated(3, true), handle: 'some_bot' },
+    { ...member(4), handle: 'plain_pat' },
+    { ...elevated(5), handle: 'dee_owner' },
+  ];
+  assert.deepEqual(getElevatedMemberHandles(members).sort(), ['Sam_Admin', 'dee_owner']);
+});
+
+test('AdminCache.getAdminHandles: fetched with the ids, on the same lifetime — never a fetch of its own after a fresh one', async () => {
+  let idCalls = 0;
+  let handleCalls = 0;
+  let clock = 0;
+  let handles = ['Sam_Admin'];
+  const cache = new AdminCache({
+    fetchElevatedMemberIds: async () => { idCalls += 1; return ['1']; },
+    fetchElevatedMemberHandles: async () => { handleCalls += 1; return handles; },
+    ttlMs: 1000,
+    now: () => clock,
+  });
+  assert.deepEqual([...(await cache.getAdminHandles())], ['Sam_Admin']);
+  await cache.getAdminHandles();
+  await cache.getAdminIds();
+  assert.deepEqual([idCalls, handleCalls], [1, 1]);
+  handles = ['dee_owner'];
+  clock += 5000;
+  assert.deepEqual([...(await cache.getAdminHandles())], ['dee_owner'], 'a stale cache re-fetches both together');
+  assert.deepEqual([idCalls, handleCalls], [2, 2]);
+});
+
+test('AdminCache.getAdminHandles: a failed fetch keeps the last-known ids AND names; a cache built without the names serves none', async () => {
+  let isFailing = false;
+  let clock = 0;
+  const cache = new AdminCache({
+    fetchElevatedMemberIds: async () => { if (isFailing) throw new Error('boom'); return ['1']; },
+    fetchElevatedMemberHandles: async () => { if (isFailing) throw new Error('boom'); return ['sam_admin']; },
+    ttlMs: 1000,
+    now: () => clock,
+  });
+  await cache.getAdminIds();
+  isFailing = true;
+  clock += 5000;
+  assert.deepEqual([...(await cache.getAdminHandles())], ['sam_admin']);
+  assert.deepEqual([...cache.getCachedAdminIds()], ['1']);
+  const withoutNames = new AdminCache({ fetchElevatedMemberIds: async () => ['1'] });
+  assert.deepEqual([...(await withoutNames.getAdminHandles())], []);
 });

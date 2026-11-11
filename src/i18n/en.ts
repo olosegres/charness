@@ -81,6 +81,7 @@ export const enDict: Record<string, string> = {
     '/runners — machines for the agents\' tests and builds\n' +
     '/todo — the agents\' todo lists of every project; their settings\n' +
     '/topic — open another topic on a folder\n' +
+    '/access — who besides the admins may talk to the agent in every topic\n' +
     '/whoami /version — debug\n\n' +
     'To talk to an agent — open a topical thread.',
   'help.thread_unbound':
@@ -104,6 +105,7 @@ export const enDict: Record<string, string> = {
     '/limits — usage of every account and provider; tap one to switch this topic\n' +
     '/limits_autoswitch — automatic model switching on a usage limit (fallback list, switch, wait)\n' +
     '/accounts — Claude accounts and OpenCode providers (switch, add, re-login, remove, connect, disconnect)\n' +
+    '/access — who besides the admins may talk to the agent in this topic\n' +
     '/clear — delete thread messages\n' +
     '/interrupt (/esc) — stop the running turn; the next message steers it\n' +
     '/c /y /n /enter /up /down /tab — TUI keys (Claude)\n' +
@@ -1380,7 +1382,7 @@ export const enDict: Record<string, string> = {
   'access.refuseSelf': 'The bot itself cannot be added.',
   'access.refuseChatIdentity': 'A post made as the group or a channel is nobody to add: reply to a message of the person.',
   'access.refuseAdmin': '{person} is already an admin: they can talk in every topic.',
-  'access.refuseListed': '{person} already may talk to the agent here.',
+  'access.refuseListed': '{person} already may talk to the agent {scope}.',
   'access.refuseListedInGeneral': '{person} already talks to the agent in every topic (General\'s list).',
   'access.refuseInviteWaiting': '{person} is already invited.',
   'access.refuseBadUsername': 'That is not a valid @username: 5–32 letters, digits and underscores, starting with a letter.',
@@ -1391,5 +1393,5 @@ export const enDict: Record<string, string> = {
   'access.removedNotice': '{person} can no longer talk to the agent {scope}.',
   'access.inviteRemovedNotice': 'The invitation for @{username} is cancelled.',
   'access.dmHint': 'Who may talk to the agent is set per topic: run /access inside a topic (or in General, for every topic).',
-  'access.bindNote': 'People who may talk to the agent here: {count} — they now reach it in `{subdir}`.',
+  'access.bindNote': '• People who may talk to the agent here: {count} (this topic\'s list, General\'s and waiting invitations) — they now reach it in `{subdir}`.',
 };

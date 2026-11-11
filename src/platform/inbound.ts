@@ -128,6 +128,8 @@ export interface PlatformMember {
   displayName: string;
   isBot: boolean;
   hasElevatedRights: boolean;
+  /** The platform's @name for them, without the `@`, when they have one: how an admin is told from a typed @name. */
+  handle?: string;
 }
 
 /**

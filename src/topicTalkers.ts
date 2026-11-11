@@ -309,3 +309,27 @@ export function getTalkerScopeInMap(map: TopicTalkersMap, threadKey: string, gen
   if (threadKey !== generalKey && map[generalKey]?.talkers.some((talker) => talker.userId === userId)) return 'general';
   return null;
 }
+
+/**
+ * @description How many people reach the folder `threadKey` is bound to through the lists: its own talkers, General's, and — because
+ * a waiting invitation becomes a talker on the person's first message, in every topic at once — the live invitations of both.
+ * Each person (and each invited name) counts once, however many lists hold them.
+ */
+export function getTopicReachCountInMap(map: TopicTalkersMap, threadKey: string, generalKey: string, now: number): number {
+  const entries = threadKey === generalKey ? [map[threadKey]] : [map[threadKey], map[generalKey]];
+  const userIds = new Set<string>();
+  const listedUsernames = new Set<string>();
+  for (const entry of entries) {
+    for (const talker of entry?.talkers ?? []) {
+      userIds.add(talker.userId);
+      if (talker.username) listedUsernames.add(normaliseUsername(talker.username));
+    }
+  }
+  const waitingUsernames = new Set<string>();
+  for (const entry of entries) {
+    for (const invite of entry?.invites ?? []) {
+      if (now - invite.addedAt < topicInviteTtlMs && !listedUsernames.has(invite.username)) waitingUsernames.add(invite.username);
+    }
+  }
+  return userIds.size + waitingUsernames.size;
+}

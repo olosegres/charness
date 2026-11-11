@@ -27,8 +27,10 @@ let harness: CommandHarness;
 const recentWriters = createRecentWriters();
 const seenSenders = createSeenSenders();
 let adminIds = new Set<string>([harnessOperator.id.toString()]);
+let adminUsernames = new Set<string>();
 let isDmTopic = false;
 const botUserId = 7000000001;
+const botUsername = 'charness_test_bot';
 
 const dan = { userId: '201', username: 'dan_b', name: 'Dan Brown' };
 const eve = { userId: '202', name: 'Eve Quiet' };
@@ -86,7 +88,9 @@ describe('topicAccess: /access over its ports', () => {
     const topicAccess = createTopicAccess({
       ...harness.core,
       getAdminIds: async () => adminIds,
+      getAdminUsernames: async () => adminUsernames,
       getBotUserId: () => botUserId,
+      getBotUsername: () => botUsername,
       getGroupGeneralKey: (key) => (harness.isGeneral ? key : makeTelegramKey(Number(key.space), 1)),
       checkIsDmKey: () => isDmTopic,
       recentWriters,
@@ -115,6 +119,7 @@ describe('topicAccess: /access over its ports', () => {
     harness.isAuthorised = true;
     isDmTopic = false;
     adminIds = new Set([harnessOperator.id.toString()]);
+    adminUsernames = new Set();
     nextScreenMessageId += 1;
   });
 
@@ -155,6 +160,15 @@ describe('topicAccess: /access over its ports', () => {
       assert.ok(list.text.includes('Nobody besides the group admins may talk to the agent in every topic.'));
       assert.ok(list.text.includes('Also in topics: «Design» 2, «#333» 1'), list.text);
       assert.deepEqual(list.labels, [['＋ Add']], 'a topic\'s people are not General\'s');
+    });
+
+    it('General\'s summary names a topic the bot never learned the name of by its folder, and only a topic with no binding at all by its number', async () => {
+      const unnamedBoundTopic = makeTelegramKey(harnessGroup.id, 444);
+      await harness.state.setBinding(unnamedBoundTopic, 'ops-proj');
+      await harness.state.addTopicTalker(unnamedBoundTopic, dan, { userId: '900', name: 'Sam' });
+      harness.isGeneral = true;
+      const list = await openList();
+      assert.ok(list.text.includes('Also in topics: «ops-proj» 1'), list.text);
     });
 
     it('a list of more than eight people pages: the page tap redraws the same message at that page', async () => {
@@ -219,6 +233,41 @@ describe('topicAccess: /access over its ports', () => {
       await harness.tapButton(880, 'tlk_w_999999_0');
       assert.deepEqual(readList().talkers, []);
       assert.equal(lastToast(), 'The list changed: here it is again');
+    });
+
+    it('a grant another admin\'s tap landed between this one\'s decision and its write is not announced twice: the second says they are listed already', async () => {
+      recentWriters.noteIgnoredWriter(keyToString(harness.key), dan);
+      const list = await openList();
+      const add = await openAddScreen(list.messageId, list.data);
+      const addTopicTalker = harness.state.addTopicTalker.bind(harness.state);
+      harness.state.addTopicTalker = async (key, user, granter) => {
+        harness.state.addTopicTalker = addTopicTalker;
+        await addTopicTalker(key, user, { userId: '901', name: 'Other Admin' });
+        return addTopicTalker(key, user, granter);
+      };
+      const repliesBefore = harness.replies.length;
+      await harness.tapButton(list.messageId, add.data[0][0]);
+      assert.deepEqual(readList().talkers.map((talker) => talker.addedByName), ['Other Admin'], 'the first grant stands');
+      assert.equal(harness.replies.length, repliesBefore, 'no second «may now talk» notice from the write that found them listed');
+      assert.equal(lastToast(), '@dan_b (Dan Brown) already may talk to the agent here.');
+    });
+
+    it('the same race for an @username invitation: the write that finds the invitation waiting announces nothing', async () => {
+      await harness.runCommand('access', 'add @carol_x', 5);
+      const reply = lastReply();
+      assert.ok(reply.messageId !== null);
+      const [[confirm]] = harness.getKeyboardData(reply);
+      const addTopicInvite = harness.state.addTopicInvite.bind(harness.state);
+      harness.state.addTopicInvite = async (key, username, granter, now) => {
+        harness.state.addTopicInvite = addTopicInvite;
+        await addTopicInvite(key, username, { userId: '901', name: 'Other Admin' }, now);
+        return addTopicInvite(key, username, granter, now);
+      };
+      const repliesBefore = harness.replies.length;
+      await harness.tapButton(reply.messageId, confirm);
+      assert.deepEqual(readList().invites.map((invite) => invite.addedByName), ['Other Admin']);
+      assert.equal(harness.replies.length, repliesBefore, 'no second «invited» notice');
+      assert.equal(lastToast(), '@carol_x is already invited.');
     });
 
     it('a writer who became an admin since the screen was drawn is refused at the tap, with the line', async () => {
@@ -339,6 +388,14 @@ describe('topicAccess: /access over its ports', () => {
       assert.equal(await typed('add', replyTo(dan)), '@dan_b (Dan Brown) is already an admin: they can talk in every topic.');
     });
 
+    it('a typed @username of an admin (nothing seen since a restart, so there is no id to compare) or of this bot is refused — not left as an invitation that can never resolve', async () => {
+      adminUsernames.add('sam_admin');
+      assert.equal(await typed('add @Sam_Admin'), '@Sam_Admin is already an admin: they can talk in every topic.');
+      assert.equal(await typed(`add @${botUsername.toUpperCase()}`), 'The bot itself cannot be added.');
+      assert.deepEqual(readList().invites, [], 'no dead invitation was made');
+      assert.deepEqual(readList().talkers, []);
+    });
+
     it('somebody listed already, here or in General\'s list; an @username already invited', async () => {
       await harness.state.addTopicTalker(harness.key, dan, { userId: '900', name: 'Sam' });
       assert.equal(await typed('add', replyTo(dan)), '@dan_b (Dan Brown) already may talk to the agent here.');
@@ -347,6 +404,13 @@ describe('topicAccess: /access over its ports', () => {
       assert.equal(await typed('add @dan_b'), '@dan_b already may talk to the agent here.');
       await harness.state.addTopicInvite(harness.key, 'carol_x', { userId: '900', name: 'Sam' });
       assert.equal(await typed('add @carol_x'), '@carol_x is already invited.');
+    });
+
+    it('General\'s list says «in every topic» when it refuses somebody it already lists — «here» would be wrong there', async () => {
+      harness.isGeneral = true;
+      await harness.state.addTopicTalker(harness.key, dan, { userId: '900', name: 'Sam' });
+      assert.equal(await typed('add', replyTo(dan)), '@dan_b (Dan Brown) already may talk to the agent in every topic.');
+      assert.equal(await typed('add @dan_b'), '@dan_b already may talk to the agent in every topic.');
     });
 
     it('a bad @username, no target at all, a word that is no action', async () => {
