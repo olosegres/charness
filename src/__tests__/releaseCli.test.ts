@@ -949,31 +949,167 @@ describe('commit-release', () => {
     runGitIn(remoteDir, 'merge-base', '--is-ancestor', runGitIn(remoteDir, 'rev-parse', 'v3.3.0^{commit}'), mainHead);
   });
 
-  test('main that keeps moving fails after three attempts and publishes no tag', () => {
+  test('main that keeps moving fails after three attempts, pushes no tag and says npm has the version and how to finish', () => {
     applyRelease('3.3.0');
     installMovingMainHook(99);
     const result = runCli('commit-release', '3.3.0');
     assert.equal(result.status, 1);
-    assert.match(result.stderr, /failed 3 times because main kept moving; nothing was published/);
+    assert.match(result.stderr, /failed 3 times because main kept moving; npm has 3\.3\.0 already and the repository not yet \(no v3\.3\.0, main not bumped\): re-run this run's failed jobs/);
+    assert.match(result.stderr, /npm has a version the repository does not/);
     assert.equal(spawnSync('git', ['rev-parse', '-q', '--verify', 'refs/tags/v3.3.0'], { cwd: remoteDir, encoding: 'utf8' }).status, 1);
   });
 
-  test('a merge conflict fails the run, leaves no merge in progress and no tag on the remote', () => {
-    applyRelease('3.3.0');
-    // Someone adds an entry at the very spot the release rewrites.
-    const changelogPath = path.join(otherDir, 'CHANGELOG.md');
+  /** Main's CHANGELOG with `entry` added at the top of `## Unreleased` (the spot the release rewrites) or at its end, pushed from the other clone. */
+  function pushChangelogEntry(entry: string, where: 'top' | 'end'): void {
     runGitIn(otherDir, 'pull', '-q', '--rebase', 'origin', 'main');
-    fs.writeFileSync(changelogPath, fs.readFileSync(changelogPath, 'utf8').replace('## Unreleased\n', '## Unreleased\n\n**A newer entry.** Lands first.\n'));
+    const changelogPath = path.join(otherDir, 'CHANGELOG.md');
+    const text = fs.readFileSync(changelogPath, 'utf8');
+    fs.writeFileSync(changelogPath, where === 'top' ? text.replace('## Unreleased\n\n', `## Unreleased\n\n${entry}\n\n`) : text.replace('\n\n## 3.2.0', `\n\n${entry}\n\n## 3.2.0`));
     runGitIn(otherDir, 'add', '-A');
     runGitIn(otherDir, 'commit', '-q', '-m', 'docs(changelog): a newer entry');
     runGitIn(otherDir, 'push', '-q', 'origin', 'main');
+  }
 
+  /** Main with a released CHANGELOG entry reworded, pushed from the other clone: a change the release cannot merge by itself. */
+  function pushRewordedReleasedEntry(): void {
+    runGitIn(otherDir, 'pull', '-q', '--rebase', 'origin', 'main');
+    const changelogPath = path.join(otherDir, 'CHANGELOG.md');
+    fs.writeFileSync(changelogPath, fs.readFileSync(changelogPath, 'utf8').replace('**A change users see.** With its details.', '**A change users see.** With its details, reworded.'));
+    runGitIn(otherDir, 'add', '-A');
+    runGitIn(otherDir, 'commit', '-q', '-m', 'docs(changelog): reword');
+    runGitIn(otherDir, 'push', '-q', 'origin', 'main');
+  }
+
+  function checkHasRemoteTag(tag: string): boolean {
+    return spawnSync('git', ['rev-parse', '-q', '--verify', `refs/tags/${tag}`], { cwd: remoteDir, encoding: 'utf8' }).status === 0;
+  }
+
+  for (const where of ['top', 'end'] as const) {
+    test(`an entry added on main at the ${where} of Unreleased during the run: merged, it stays under Unreleased; the tag keeps the released CHANGELOG`, () => {
+      applyRelease('3.3.0');
+      const releasedChangelog = fs.readFileSync(path.join(repoDir, 'CHANGELOG.md'), 'utf8');
+      pushChangelogEntry('**A newer entry.** Lands during the run.', where);
+      const result = runCli('commit-release', '3.3.0');
+      assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+      const mainChangelog = runGitIn(remoteDir, 'show', 'refs/heads/main:CHANGELOG.md');
+      assert.match(mainChangelog, /## Unreleased\n\n\*\*A newer entry\.\*\* Lands during the run\.\n\n## 3\.3\.0 — \d{4}-\d{2}-\d{2}\n\n\*\*A change users see\.\*\* With its details\.\n\n## 3\.2\.0/);
+      assert.equal(`${runGitIn(remoteDir, 'show', 'v3.3.0:CHANGELOG.md')}\n`, releasedChangelog);
+    });
+  }
+
+  test('a released entry edited on main during the run is a real conflict: the run fails, no merge left, no tag on the remote', () => {
+    applyRelease('3.3.0');
+    pushRewordedReleasedEntry();
     const result = runCli('commit-release', '3.3.0');
     assert.equal(result.status, 1);
-    assert.match(result.stderr, /merging it into the release v3\.3\.0 conflicts; nothing was published/);
+    assert.match(result.stderr, /origin\/main moved during the run and merging it into the release conflicts in CHANGELOG\.md; npm has 3\.3\.0 already/);
     assert.equal(fs.existsSync(path.join(repoDir, '.git', 'MERGE_HEAD')), false);
-    assert.equal(spawnSync('git', ['rev-parse', '-q', '--verify', 'refs/tags/v3.3.0'], { cwd: remoteDir, encoding: 'utf8' }).status, 1);
-    assert.equal(runGitIn(remoteDir, 'log', '-1', '--format=%s', 'refs/heads/main'), 'docs(changelog): a newer entry');
+    assert.equal(checkHasRemoteTag('v3.3.0'), false);
+    assert.equal(runGitIn(remoteDir, 'log', '-1', '--format=%s', 'refs/heads/main'), 'docs(changelog): reword');
+  });
+
+  test('a dependency change on main during the run merges with the release\'s version bump — the shrinkwrap\'s version lines do not touch its dependencies', () => {
+    commitFile('npm-shrinkwrap.json', createFixtureShrinkwrap('3.2.0'), 'build: the shrinkwrap');
+    runGit('push', '-q', 'origin', 'main');
+    applyRelease('3.3.0');
+    runGitIn(otherDir, 'pull', '-q', '--rebase', 'origin', 'main');
+    const shrinkwrapPath = path.join(otherDir, 'npm-shrinkwrap.json');
+    const withDependency = fs.readFileSync(shrinkwrapPath, 'utf8')
+      .replace('"dependencies": {\n', '"dependencies": {\n        "abbrev": "^1.0.0",\n')
+      .replace('"node_modules/ms": {', '"node_modules/abbrev": {\n      "version": "1.1.1"\n    },\n    "node_modules/ms": {');
+    fs.writeFileSync(shrinkwrapPath, withDependency);
+    runGitIn(otherDir, 'add', '-A');
+    runGitIn(otherDir, 'commit', '-q', '-m', 'build(deps): add abbrev');
+    runGitIn(otherDir, 'push', '-q', 'origin', 'main');
+
+    const result = runCli('commit-release', '3.3.0');
+    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+    const merged = JSON.parse(runGitIn(remoteDir, 'show', 'refs/heads/main:npm-shrinkwrap.json'));
+    assert.deepEqual([merged.version, merged.packages[''].version, merged.packages[''].dependencies], ['3.3.0', '3.3.0', { abbrev: '^1.0.0', ms: '^2.0.0' }]);
+    assert.equal(`${runGitIn(remoteDir, 'show', 'v3.3.0:npm-shrinkwrap.json')}\n`, createFixtureShrinkwrap('3.3.0'));
+  });
+
+  test('--check commits and merges a moved main locally and pushes nothing: no tag, main untouched', () => {
+    applyRelease('3.3.0');
+    pushChangelogEntry('**A newer entry.** Lands during the run.', 'top');
+    const mainBefore = runGitIn(remoteDir, 'rev-parse', 'refs/heads/main');
+    const result = runCli('commit-release', '3.3.0', '--check');
+    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+    assert.match(result.stdout, /main moved during the run; the release merges into it\. Nothing pushed \(--check\)/);
+    assert.equal(runGitIn(remoteDir, 'rev-parse', 'refs/heads/main'), mainBefore);
+    assert.equal(checkHasRemoteTag('v3.3.0'), false);
+  });
+
+  test('--check finds a real conflict before anything is published: exit 1, nothing pushed', () => {
+    applyRelease('3.3.0');
+    pushRewordedReleasedEntry();
+    const result = runCli('commit-release', '3.3.0', '--check');
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /conflicts in CHANGELOG\.md; nothing is published or pushed\./);
+    assert.equal(checkHasRemoteTag('v3.3.0'), false);
+  });
+
+  /** The applied release packed the way npm packs it (its files under `package/`), the checkout back at the tested commit. */
+  function packReleaseAside(version: string): { tested: string; tarball: string } {
+    commitFile('npm-shrinkwrap.json', createFixtureShrinkwrap('3.2.0'), 'build: the shrinkwrap');
+    applyRelease(version);
+    const packageDir = path.join(sandboxDir, 'packed', 'package');
+    fs.mkdirSync(packageDir, { recursive: true });
+    for (const fileName of ['package.json', 'CHANGELOG.md', 'npm-shrinkwrap.json']) fs.copyFileSync(path.join(repoDir, fileName), path.join(packageDir, fileName));
+    const tarball = path.join(sandboxDir, `demo-package-${version}.tgz`);
+    const packed = spawnSync('tar', ['-czf', tarball, '-C', path.dirname(packageDir), 'package'], { encoding: 'utf8' });
+    assert.equal(packed.status, 0, packed.stderr);
+    runGit('checkout', '-q', '--', '.');
+    return { tested: runGit('rev-parse', 'HEAD'), tarball };
+  }
+
+  test('--tarball takes the release files out of the packed package, --base checks them against the tested commit; a re-run after the push finds the tag and pushes nothing', () => {
+    const { tested, tarball } = packReleaseAside('3.3.0');
+    const released = fs.readFileSync(path.join(sandboxDir, 'packed', 'package', 'npm-shrinkwrap.json'), 'utf8');
+    const result = runCli('commit-release', '3.3.0', '--tarball', tarball, '--base', tested);
+    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+    const releaseCommit = runGitIn(remoteDir, 'rev-parse', 'v3.3.0^{commit}');
+    assert.equal(runGitIn(remoteDir, 'rev-parse', `${releaseCommit}^`), tested, 'the tag is the tested commit plus its version bump');
+    assert.equal(`${runGitIn(remoteDir, 'show', 'v3.3.0:npm-shrinkwrap.json')}\n`, released);
+    assert.match(runGitIn(remoteDir, 'show', 'v3.3.0:package.json'), /"version": "3\.3\.0"/);
+
+    const mainAfter = runGitIn(remoteDir, 'rev-parse', 'refs/heads/main');
+    const rerun = runCli('commit-release', '3.3.0', '--tarball', tarball, '--base', tested);
+    assert.equal(rerun.status, 0, `${rerun.stdout}\n${rerun.stderr}`);
+    assert.match(rerun.stdout, /origin already holds v3\.3\.0 \(a re-run after the push went through\); nothing to push/);
+    assert.equal(runGitIn(remoteDir, 'rev-parse', 'refs/heads/main'), mainAfter);
+  });
+
+  test('a tag of that version on the remote that is not a release of the tested commit is refused', () => {
+    const { tested, tarball } = packReleaseAside('3.3.0');
+    runGitIn(otherDir, 'pull', '-q', '--rebase', 'origin', 'main');
+    runGitIn(otherDir, 'tag', '-a', 'v3.3.0', '-m', 'v3.3.0');
+    runGitIn(otherDir, 'push', '-q', 'origin', 'v3.3.0');
+    const result = runCli('commit-release', '3.3.0', '--tarball', tarball, '--base', tested);
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /origin already holds v3\.3\.0, on a commit that is not a release of the tested [0-9a-f]{7}; nothing is pushed/);
+  });
+
+  test('a tarball of another version, one without a release file, or a checkout that is more than the tested commit plus the bump commits nothing', () => {
+    const { tested, tarball } = packReleaseAside('3.3.0');
+    const wrongVersion = runCli('commit-release', '3.3.1', '--tarball', tarball, '--base', tested);
+    assert.equal(wrongVersion.status, 1);
+    assert.match(wrongVersion.stderr, /package\.json carries version 3\.3\.0, not 3\.3\.1: nothing is committed/);
+
+    const incomplete = path.join(sandboxDir, 'incomplete.tgz');
+    assert.equal(spawnSync('tar', ['-czf', incomplete, '-C', path.join(sandboxDir, 'packed'), 'package/package.json', 'package/CHANGELOG.md']).status, 0);
+    const missingFile = runCli('commit-release', '3.3.0', '--tarball', incomplete, '--base', tested);
+    assert.equal(missingFile.status, 1);
+    assert.match(missingFile.stderr, /does not hold the release's package\.json, CHANGELOG\.md, npm-shrinkwrap\.json; nothing is committed/);
+
+    runGit('checkout', '-q', '--', '.');
+    writeRepoFile('src/bot.ts', 'export const bot = 99;\n');
+    const extra = runCli('commit-release', '3.3.0', '--tarball', tarball, '--base', tested);
+    assert.equal(extra.status, 1);
+    assert.match(extra.stderr, /is not the tested commit [0-9a-f]{7} plus its version bump; nothing is committed/);
+    assert.match(extra.stderr, /src\/bot\.ts/);
+    assert.equal(runGit('rev-parse', 'HEAD'), tested);
+    assert.equal(checkHasRemoteTag('v3.3.0'), false);
   });
 
   test('a push refused for another reason (nothing to merge) fails at once with the git message', () => {
@@ -982,7 +1118,7 @@ describe('commit-release', () => {
     fs.writeFileSync(hookPath, '#!/bin/sh\necho "protected branch" >&2\nexit 1\n', { mode: 0o755 });
     const result = runCli('commit-release', '3.3.0');
     assert.equal(result.status, 1);
-    assert.match(result.stderr, /has nothing new to merge; nothing was published/);
+    assert.match(result.stderr, /has nothing new to merge; npm has 3\.3\.0 already/);
     assert.match(result.stderr, /protected branch/);
   });
 

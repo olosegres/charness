@@ -25,6 +25,7 @@ import {
   getReleaseDate,
   getReleaseNotes,
   getUnreleasedSection,
+  mergeReleaseChangelog,
   requiredPackFiles,
   type ChangelogFallback,
   type PackListing,
@@ -381,6 +382,63 @@ describe('the CHANGELOG rewrite', () => {
     assert.equal(getReleaseNotes(text, '3.2.0'), null);
     assert.equal(getReleaseNotes(text, '9.9.9'), null);
     assert.equal(getReleaseNotes(text, '3.3'), null);
+  });
+});
+
+describe('the CHANGELOG of a release merged with a main that moved during the run', () => {
+  const released = ['**A released change.** Its details.', '', '### Fixed', '- **A released fix.** Details.'];
+  const older = ['## 3.2.0 — 2026-10-16', '', '**Older.** Entry.', ''];
+  const createChangelog = (unreleased: string[], tail: string[] = older): string =>
+    ['# Changelog', '', '## Unreleased', '', ...(unreleased.length > 0 ? [...unreleased, ''] : []), ...tail].join('\n');
+  const base = createChangelog(released);
+  const release = createChangelogRelease(base, '3.3.0', '2026-10-23', noFallback).changelog;
+  const newEntry = ['**An entry added during the run.** Details.'];
+  const expected = createChangelog(newEntry, ['## 3.3.0 — 2026-10-23', '', ...released, '', ...older]);
+
+  test('an entry added at the top (git conflicts there) stays under Unreleased, above the released section', () => {
+    assert.equal(mergeReleaseChangelog({ base, release, branch: createChangelog([...newEntry, '', ...released]), version: '3.3.0' }), expected);
+  });
+
+  test('an entry added at the end (git files it under the version) stays under Unreleased too', () => {
+    const merged = mergeReleaseChangelog({ base, release, branch: createChangelog([...released, '', ...newEntry]), version: '3.3.0' });
+    assert.equal(merged, expected);
+    assert.equal(getReleaseNotes(merged ?? '', '3.3.0'), released.join('\n'), 'the version section is exactly what was released');
+  });
+
+  test('a change to an older section on main is kept', () => {
+    const editedOlder = ['## 3.2.0 — 2026-10-16', '', '**Older.** Entry, reworded.', ''];
+    const merged = mergeReleaseChangelog({ base, release, branch: createChangelog([...newEntry, '', ...released], editedOlder), version: '3.3.0' });
+    assert.equal(merged, createChangelog(newEntry, ['## 3.3.0 — 2026-10-23', '', ...released, '', ...editedOlder]));
+  });
+
+  test('a second merge of the same release (main moved again) keeps both rounds of new entries under Unreleased', () => {
+    const firstBranch = createChangelog([...newEntry, '', ...released]);
+    const firstMerge = mergeReleaseChangelog({ base, release, branch: firstBranch, version: '3.3.0' }) ?? '';
+    const laterEntry = ['**A later entry.** Details.'];
+    const merged = mergeReleaseChangelog({ base: firstBranch, release: firstMerge, branch: createChangelog([...laterEntry, '', ...newEntry, '', ...released]), version: '3.3.0' });
+    assert.equal(merged, createChangelog([...laterEntry, '', ...newEntry], ['## 3.3.0 — 2026-10-23', '', ...released, '', ...older]));
+  });
+
+  test('a release whose Unreleased was empty (its section listed the commits) leaves every branch entry under Unreleased', () => {
+    const emptyBase = createChangelog([]);
+    const fallbackRelease = createChangelogRelease(emptyBase, '3.2.1', '2026-10-23', noFallback).changelog;
+    const merged = mergeReleaseChangelog({ base: emptyBase, release: fallbackRelease, branch: createChangelog(newEntry), version: '3.2.1' });
+    assert.equal(getUnreleasedSection(merged ?? ''), newEntry.join('\n'));
+    assert.equal(getReleaseNotes(merged ?? '', '3.2.1'), getReleaseNotes(fallbackRelease, '3.2.1'));
+  });
+
+  test('a released entry edited or removed on main is not resolved here: a real conflict', () => {
+    const edited = createChangelog([...newEntry, '', '**A released change.** Its details, reworded.', '', '### Fixed', '- **A released fix.** Details.']);
+    assert.equal(mergeReleaseChangelog({ base, release, branch: edited, version: '3.3.0' }), null);
+    assert.equal(mergeReleaseChangelog({ base, release, branch: createChangelog(newEntry), version: '3.3.0' }), null);
+    const splitByNewEntry = createChangelog(['**A released change.** Its details.', '', ...newEntry, '', '### Fixed', '- **A released fix.** Details.']);
+    assert.equal(mergeReleaseChangelog({ base, release, branch: splitByNewEntry, version: '3.3.0' }), null);
+  });
+
+  test('a release side that changed more than the split, or a branch that has the version already, is not resolved here', () => {
+    assert.equal(mergeReleaseChangelog({ base, release: release.replace('**Older.** Entry.', '**Older.** Changed.'), branch: createChangelog([...newEntry, '', ...released]), version: '3.3.0' }), null);
+    assert.equal(mergeReleaseChangelog({ base, release, branch: release, version: '3.3.0' }), null);
+    assert.equal(mergeReleaseChangelog({ base, release: base, branch: createChangelog([...newEntry, '', ...released]), version: '3.3.0' }), null, 'no version section on the release side');
   });
 });
 

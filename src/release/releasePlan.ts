@@ -330,6 +330,86 @@ export function createChangelogRelease(
   return { changelog: `${rebuilt.join('\n').replace(/\n+$/, '')}\n`, notes: section.join('\n') };
 }
 
+/** CHANGELOG.md on the three sides of a merge of the branch into the release commit, as `git merge` sees them. */
+export interface ReleaseChangelogMerge {
+  /** At the merge base: the tested commit, or the branch as an earlier merge of the same release took it in. */
+  base: string;
+  /** The release side: the base with the end of `## Unreleased` (the released entries) moved into `## <version>`. */
+  release: string;
+  /** The branch that moved during the run. */
+  branch: string;
+  version: string;
+}
+
+interface ChangelogParts {
+  before: string[];
+  unreleased: string[];
+  after: string[];
+}
+
+function splitChangelog(text: string): ChangelogParts | null {
+  const lines = text.split('\n');
+  const range = findSectionRange(lines, checkIsUnreleasedHeading);
+  if (!range) return null;
+  return { before: lines.slice(0, range.start), unreleased: trimBlankLines(lines.slice(range.start + 1, range.end)), after: lines.slice(range.end) };
+}
+
+function checkAreLinesEqual(left: string[], right: string[]): boolean {
+  return left.length === right.length && left.every((line, index) => line === right[index]);
+}
+
+/** Where `block` (non-empty) occurs in `lines` as a contiguous run, when it occurs exactly once; null otherwise. */
+function findOnlyBlock(lines: string[], block: string[]): number | null {
+  const starts = lines
+    .map((_, index) => index)
+    .filter((index) => index + block.length <= lines.length && checkAreLinesEqual(lines.slice(index, index + block.length), block));
+  return starts.length === 1 ? starts[0] : null;
+}
+
+function joinEntryBlocks(above: string[], below: string[]): string[] {
+  const upper = trimBlankLines(above);
+  const lower = trimBlankLines(below);
+  return upper.length > 0 && lower.length > 0 ? [...upper, '', ...lower] : [...upper, ...lower];
+}
+
+/**
+ * @description The CHANGELOG of a merge of the branch into the release commit, where the branch changed the file during the run. The
+ * release took the released entries from the END of `## Unreleased` into `## <version>` and changed nothing else; when the branch kept
+ * those entries word for word (it added entries above or below them, and may have changed older sections), the result is the branch's
+ * file with the release's section where the release put it — what was added during the run stays under `## Unreleased`, for the next
+ * release. `git merge` alone conflicts on an entry added at the top (the spot the release rewrites) and files one added at the end under
+ * the version that did not ship it. Null when the change is anything else — the branch edited or removed a released entry, or the
+ * release side changed more —: git's own merge decides then.
+ */
+export function mergeReleaseChangelog({ base, release, branch, version }: ReleaseChangelogMerge): string | null {
+  const baseParts = splitChangelog(base);
+  const releaseParts = splitChangelog(release);
+  const branchParts = splitChangelog(branch);
+  if (!baseParts || !releaseParts || !branchParts) return null;
+  const releaseSection = findSectionRange(releaseParts.after, (line) => checkIsVersionHeading(line, version));
+  if (releaseSection?.start !== 0) return null;
+  if ([base, branch].some((text) => text.split('\n').some((line) => checkIsVersionHeading(line, version)))) return null;
+  // The release changed nothing outside `## Unreleased` and its own new section, and kept the top of `## Unreleased`.
+  if (!checkAreLinesEqual(releaseParts.before, baseParts.before)) return null;
+  if (!checkAreLinesEqual(releaseParts.after.slice(releaseSection.end), baseParts.after)) return null;
+  if (!checkAreLinesEqual(baseParts.unreleased.slice(0, releaseParts.unreleased.length), releaseParts.unreleased)) return null;
+  const released = trimBlankLines(baseParts.unreleased.slice(releaseParts.unreleased.length));
+  let unreleased = branchParts.unreleased;
+  if (released.length > 0) {
+    const releasedStart = findOnlyBlock(branchParts.unreleased, released);
+    if (releasedStart === null) return null;
+    unreleased = joinEntryBlocks(branchParts.unreleased.slice(0, releasedStart), branchParts.unreleased.slice(releasedStart + released.length));
+  }
+  return [
+    ...branchParts.before,
+    unreleasedHeading,
+    '',
+    ...(unreleased.length > 0 ? [...unreleased, ''] : []),
+    ...releaseParts.after.slice(0, releaseSection.end),
+    ...branchParts.after,
+  ].join('\n');
+}
+
 /** @description The body of the `## <version>` section — the GitHub Release text; null when it is missing or empty. */
 export function getReleaseNotes(changelogText: string, version: string): string | null {
   const lines = changelogText.split('\n');

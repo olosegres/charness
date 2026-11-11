@@ -1,4 +1,5 @@
 import * as fs from 'node:fs';
+import * as path from 'node:path';
 import { z } from 'zod';
 import {
   createLockPackageEntries,
@@ -106,22 +107,58 @@ export function listPinnedPackages(lock: NpmLockfile): Array<{ location: string;
 }
 
 const installedManifestSchema = z.object({ version: z.string() });
+const nodeModulesFolder = 'node_modules';
+const scopePrefix = '@';
+/** `.bin`, npm's hidden `.package-lock.json`: what npm keeps in a `node_modules` beside the packages. */
+const hiddenEntryPrefix = '.';
+
+function readInstalledVersion(manifestPath: string): string {
+  const installed = installedManifestSchema.safeParse(JSON.parse(fs.readFileSync(manifestPath, 'utf8')));
+  return installed.success ? installed.data.version : 'unreadable';
+}
+
+/** Every package folder an install put under `packageRoot` — nested `node_modules` included — by its location as a lock names it. */
+function listInstalledPackageLocations(packageRoot: string, parentLocation = ''): string[] {
+  const folderLocation = parentLocation === '' ? nodeModulesFolder : `${parentLocation}/${nodeModulesFolder}`;
+  const folder = path.join(packageRoot, folderLocation);
+  if (!fs.existsSync(folder)) return [];
+  const locations: string[] = [];
+  for (const entry of fs.readdirSync(folder, { withFileTypes: true })) {
+    if (entry.name.startsWith(hiddenEntryPrefix) || !(entry.isDirectory() || entry.isSymbolicLink())) continue;
+    const names = entry.name.startsWith(scopePrefix)
+      ? fs.readdirSync(path.join(folder, entry.name)).map((scopedName) => `${entry.name}/${scopedName}`)
+      : [entry.name];
+    for (const name of names) {
+      const location = `${folderLocation}/${name}`;
+      locations.push(location, ...listInstalledPackageLocations(packageRoot, location));
+    }
+  }
+  return locations;
+}
 
 /**
  * @description What an installed copy of the package (`packageRoot`, the folder holding its `package.json`) has that its shrinkwrap does
- * not pin: a pinned package missing, or at another version. Empty: npm installed exactly the locked tree.
+ * not pin: a pinned package missing or at another version, and a package the shrinkwrap does not hold at all (npm resolved it from a
+ * range — an optional dependency the lock leaves out, say). Empty: npm installed exactly the locked tree, nothing more.
  */
 export function getShrinkwrapDeviations(lock: NpmLockfile, packageRoot: string): string[] {
   const deviations: string[] = [];
-  for (const { location, version } of listPinnedPackages(lock)) {
-    const manifestPath = `${packageRoot}/${location}/package.json`;
+  const pinned = listPinnedPackages(lock);
+  for (const { location, version } of pinned) {
+    const manifestPath = path.join(packageRoot, location, 'package.json');
     if (!fs.existsSync(manifestPath)) {
       deviations.push(`${location} is not installed (the shrinkwrap pins ${version})`);
       continue;
     }
-    const installed = installedManifestSchema.safeParse(JSON.parse(fs.readFileSync(manifestPath, 'utf8')));
-    const installedVersion = installed.success ? installed.data.version : 'unreadable';
+    const installedVersion = readInstalledVersion(manifestPath);
     if (installedVersion !== version) deviations.push(`${location} is ${installedVersion}, the shrinkwrap pins ${version}`);
+  }
+  const pinnedLocations = new Set(pinned.map(({ location }) => location));
+  for (const location of listInstalledPackageLocations(packageRoot)) {
+    if (pinnedLocations.has(location)) continue;
+    const manifestPath = path.join(packageRoot, location, 'package.json');
+    const installedVersion = fs.existsSync(manifestPath) ? readInstalledVersion(manifestPath) : 'without a package.json';
+    deviations.push(`${location} (${installedVersion}) is installed, the shrinkwrap does not pin it`);
   }
   return deviations;
 }

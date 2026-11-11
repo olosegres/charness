@@ -170,6 +170,46 @@ describe('the hub\'s shrinkwrap', () => {
       fs.rmSync(installed, { recursive: true, force: true });
     }
   });
+
+  it('names a package installed beyond what the shrinkwrap pins — at the root, nested, scoped — and ignores npm\'s own .bin and hidden lock', () => {
+    const installed = fs.mkdtempSync(path.join(os.tmpdir(), 'charness-shrinkwrap-installed-'));
+    const writeInstalled = (location: string, version: string): void => {
+      fs.mkdirSync(path.join(installed, location), { recursive: true });
+      fs.writeFileSync(path.join(installed, location, 'package.json'), JSON.stringify({ version }));
+    };
+    try {
+      for (const [location, entry] of Object.entries(lock.packages)) {
+        if (location !== '') writeInstalled(location, entry.version ?? '');
+      }
+      writeInstalled('node_modules/native', '1.0.1');
+      writeInstalled('node_modules/app/node_modules/extra', '1.2.0');
+      writeInstalled('node_modules/@scope/stray', '0.1.0');
+      fs.mkdirSync(path.join(installed, 'node_modules/.bin'), { recursive: true });
+      fs.mkdirSync(path.join(installed, 'node_modules/plugin/node_modules/.bin'), { recursive: true });
+      fs.writeFileSync(path.join(installed, 'node_modules/.package-lock.json'), '{}');
+      assert.deepEqual(getShrinkwrapDeviations(lock, installed).sort(), [
+        'node_modules/@scope/stray (0.1.0) is installed, the shrinkwrap does not pin it',
+        'node_modules/app/node_modules/extra (1.2.0) is installed, the shrinkwrap does not pin it',
+        'node_modules/native (1.0.1) is installed, the shrinkwrap does not pin it',
+      ]);
+    } finally {
+      fs.rmSync(installed, { recursive: true, force: true });
+    }
+  });
+
+  it('finds nothing to name when the install is exactly the pinned tree', () => {
+    const installed = fs.mkdtempSync(path.join(os.tmpdir(), 'charness-shrinkwrap-installed-'));
+    try {
+      for (const [location, entry] of Object.entries(lock.packages)) {
+        if (location === '') continue;
+        fs.mkdirSync(path.join(installed, location), { recursive: true });
+        fs.writeFileSync(path.join(installed, location, 'package.json'), JSON.stringify({ version: entry.version }));
+      }
+      assert.deepEqual(getShrinkwrapDeviations(lock, installed), []);
+    } finally {
+      fs.rmSync(installed, { recursive: true, force: true });
+    }
+  });
 });
 
 describe('the committed shrinkwrap of this repository', () => {

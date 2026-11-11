@@ -14,7 +14,10 @@
  *                                                               the Tests workflow's result for the exact commit (a hand-pushed tag
  *                                                               also tries its parent); exits 1 on a refusal
  *   verify-delta --base <commit> [--head <rev>]                 the release commit is the tested one plus its version bump, or exit 1
- *   commit-release <version> [--remote origin] [--branch main]  commit, tag and push the applied release
+ *   commit-release <version> [--tarball <file>] [--base <commit>] [--check] [--remote origin] [--branch main]
+ *                                                               commit, tag and push the applied release (`--tarball`: its files out of
+ *                                                               the packed package; `--base`: refuse unless it is that commit plus its
+ *                                                               version bump; `--check`: commit and merge main locally, push nothing)
  */
 import { execFile, execFileSync, spawnSync } from 'node:child_process';
 import * as fs from 'node:fs';
@@ -32,6 +35,7 @@ import {
   getPublishDryRunProblems,
   getReleaseDate,
   getReleaseNotes,
+  mergeReleaseChangelog,
   releaseTagPrefix,
   type PackListing,
   type PackageManifest,
@@ -120,8 +124,12 @@ function checkIsHeadTagged(): boolean {
   return git('tag', '--points-at', 'HEAD', '--list', releaseTagGlob).trim() !== '';
 }
 
+function readFileAt(revision: string, filePath: string): string | null {
+  return tryGit('show', `${revision}:${filePath}`);
+}
+
 function readManifestAt(revision: string): PackageManifest | null {
-  const text = tryGit('show', `${revision}:${manifestFileName}`);
+  const text = readFileAt(revision, manifestFileName);
   return text === null ? null : JSON.parse(text);
 }
 
@@ -473,18 +481,26 @@ function getParentDeltaProblems(parentSha: string, sha: string): string[] {
 }
 
 /**
+ * Refuses (throws, `consequence` saying what is not done) unless `head` — the working tree when omitted — is `base` plus its version bump:
+ * package.json's version line, the shrinkwrap's two, CHANGELOG.md.
+ */
+function assertReleaseDelta(base: string, head: string | undefined, consequence: string): void {
+  const problems = getDeltaProblems(base, head);
+  if (problems.length > 0) {
+    throw new ReleaseError(
+      `The release is not the tested commit ${base.slice(0, shortShaLength)} plus its version bump; ${consequence}:\n${problems.map((line) => `  ${line}`).join('\n')}`,
+    );
+  }
+}
+
+/**
  * The release commit may differ from the commit the tests passed on ONLY in package.json's version line and CHANGELOG.md. `--head`
  * a revision, or none for the working tree (the applied release before it is committed).
  */
 function runVerifyDelta(args: string[]): number {
   const { values } = parseArgs({ args, options: { base: { type: 'string' }, head: { type: 'string' } } });
   if (!values.base) throw new ReleaseError('verify-delta needs --base <the tested commit>.');
-  const problems = getDeltaProblems(values.base, values.head);
-  if (problems.length > 0) {
-    throw new ReleaseError(
-      `The release is not the tested commit ${values.base.slice(0, shortShaLength)} plus its version bump; nothing is published:\n${problems.map((line) => `  ${line}`).join('\n')}`,
-    );
-  }
+  assertReleaseDelta(values.base, values.head, 'nothing is published');
   process.stdout.write(`The release differs from the tested commit ${values.base.slice(0, shortShaLength)} only in the version and the CHANGELOG.\n`);
   return 0;
 }
@@ -513,13 +529,55 @@ function runCheckPublish(): number {
 }
 
 /**
+ * Merges `remoteRef` (the branch that moved during the run) into the release commit: git's merge, with CHANGELOG.md taken through
+ * {@link mergeReleaseChangelog} whenever the branch changed it — what was added during the run stays under `## Unreleased` (git alone
+ * conflicts on an entry added at the top, and files one added at the end under the version that did not ship it). Any other conflict
+ * aborts the merge and throws, naming the files; `consequence` says what that leaves behind.
+ */
+function mergeBranchIntoRelease(remoteRef: string, version: string, consequence: string): void {
+  let mergeError: string | null = null;
+  try {
+    git(...releaseBotIdentity, 'merge', '--no-commit', '--no-ff', remoteRef);
+  } catch (error) {
+    mergeError = error instanceof Error ? error.message : String(error);
+  }
+  const conflicted = splitPaths(git('diff', '--name-only', '--diff-filter=U'));
+  if (mergeError !== null && conflicted.length === 0) {
+    tryGit('merge', '--abort');
+    throw new ReleaseError(`Merging ${remoteRef} into the release failed; ${consequence}\n${mergeError}`);
+  }
+  const base = readFileAt(git('merge-base', 'HEAD', 'MERGE_HEAD').trim(), changelogFileName);
+  const release = readFileAt('HEAD', changelogFileName);
+  const branch = readFileAt('MERGE_HEAD', changelogFileName);
+  const changelog = base !== null && release !== null && branch !== null && branch !== base ? mergeReleaseChangelog({ base, release, branch, version }) : null;
+  if (changelog !== null) {
+    fs.writeFileSync(changelogFileName, changelog);
+    git('add', changelogFileName);
+  }
+  const unresolved = conflicted.filter((filePath) => filePath !== changelogFileName || changelog === null);
+  if (unresolved.length > 0) {
+    git('merge', '--abort');
+    throw new ReleaseError(`${remoteRef} moved during the run and merging it into the release conflicts in ${unresolved.join(', ')}; ${consequence}`);
+  }
+  git(...releaseBotIdentity, 'commit', '--quiet', '--no-edit');
+}
+
+/** Fetches the branch; merges it into the release commit when it has commits the release lacks. True when it did. */
+function mergeMovedBranch(remote: string, branch: string, version: string, consequence: string): boolean {
+  git('fetch', '--quiet', remote, branch);
+  if (git('rev-list', '--count', `HEAD..${remote}/${branch}`).trim() === '0') return false;
+  mergeBranchIntoRelease(`${remote}/${branch}`, version, consequence);
+  return true;
+}
+
+/**
  * Pushes the release commit (or, after a merge, the merge) to the branch and the tag in ONE atomic push. A
  * refused push means the branch moved during the run: `<remote>/<branch>` is merged into the release commit —
- * the tag stays on the tested release commit, reachable from the branch through the merge — and the push is
- * retried, up to {@link pushAttemptLimit} times. A merge conflict, or a refusal with nothing to merge (not a
- * race: permissions, protection), fails the run; nothing is published then.
+ * the tag stays on the release commit, reachable from the branch through the merge — and the push is
+ * retried, up to {@link pushAttemptLimit} times. A real merge conflict, or a refusal with nothing to merge (not a
+ * race: permissions, protection), fails the run; `consequence` says what that leaves behind.
  */
-function pushReleaseWithMergeRetry(remote: string, branch: string, tag: string): void {
+function pushReleaseWithMergeRetry(remote: string, branch: string, tag: string, version: string, consequence: string): void {
   for (let attempt = 1; ; attempt += 1) {
     try {
       gitPush('--atomic', remote, `HEAD:refs/heads/${branch}`, `refs/tags/${tag}`);
@@ -527,37 +585,94 @@ function pushReleaseWithMergeRetry(remote: string, branch: string, tag: string):
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
       if (attempt >= pushAttemptLimit) {
-        throw new ReleaseError(`Pushing ${tag} failed ${attempt} times because ${branch} kept moving; nothing was published.\n${reason}`);
+        throw new ReleaseError(`Pushing ${tag} failed ${attempt} times because ${branch} kept moving; ${consequence}\n${reason}`);
       }
-      git('fetch', '--quiet', remote, branch);
-      if (git('rev-list', '--count', `HEAD..${remote}/${branch}`).trim() === '0') {
-        throw new ReleaseError(`The push of ${tag} was refused and ${remote}/${branch} has nothing new to merge; nothing was published.\n${reason}`);
-      }
-      try {
-        git(...releaseBotIdentity, 'merge', '--no-edit', `${remote}/${branch}`);
-      } catch {
-        git('merge', '--abort');
-        throw new ReleaseError(
-          `${branch} moved during the run and merging it into the release ${tag} conflicts; nothing was published.\n` +
-            'Resolve it by hand (the next daily run releases the new commits), or re-run the workflow.',
-        );
+      if (!mergeMovedBranch(remote, branch, version, consequence)) {
+        throw new ReleaseError(`The push of ${tag} was refused and ${remote}/${branch} has nothing new to merge; ${consequence}\n${reason}`);
       }
     }
   }
 }
 
+/** The files a release commit changes; the shrinkwrap only in a repository that has one. */
+function listReleaseFileNames(): string[] {
+  return [manifestFileName, changelogFileName, ...(fs.existsSync(shrinkwrapFileName) ? [shrinkwrapFileName] : [])];
+}
+
+/**
+ * `--tarball`: the release's files as the packed tarball holds them — the very bytes npm publishes (npm packs them unchanged) — into the
+ * checkout, so the release commit is made of what npm has.
+ */
+function copyReleaseFilesFromTarball(tarballPath: string): void {
+  const fileNames = listReleaseFileNames();
+  const unpackedDir = fs.mkdtempSync(path.join(os.tmpdir(), 'charness-release-files-'));
+  try {
+    try {
+      runCommand('tar', ['-xzf', tarballPath, '-C', unpackedDir, ...fileNames.map((fileName) => `${tarballRootFolder}/${fileName}`)], npmPackTimeoutMs);
+    } catch (error) {
+      throw new ReleaseError(`${tarballPath} does not hold the release's ${fileNames.join(', ')}; nothing is committed.\n${error instanceof Error ? error.message : String(error)}`);
+    }
+    for (const fileName of fileNames) fs.copyFileSync(path.join(unpackedDir, tarballRootFolder, fileName), fileName);
+  } finally {
+    fs.rmSync(unpackedDir, { recursive: true, force: true });
+  }
+}
+
+/**
+ * The tag a re-run finds on the remote already (the push went through, a later step did not): fine when it is this run's release — on a
+ * child of `base` —, refused when it is not. False when the remote has no such tag.
+ */
+function checkIsReleaseTagPushed(remote: string, tag: string, base: string | undefined): boolean {
+  if (git('ls-remote', '--tags', remote, `refs/tags/${tag}`).trim() === '') return false;
+  git('fetch', '--quiet', remote, 'tag', tag);
+  const parent = tryGit('rev-parse', '--verify', '--quiet', `${tag}^{commit}^`)?.trim();
+  if (base !== undefined && parent !== base) {
+    throw new ReleaseError(`${remote} already holds ${tag}, on a commit that is not a release of the tested ${base.slice(0, shortShaLength)}; nothing is pushed.`);
+  }
+  return true;
+}
+
+/**
+ * Commits the applied release (package.json, the shrinkwrap, CHANGELOG.md) as the bot, tags it and pushes both. In the release workflow
+ * it runs after npm has the version, on the files of the published tarball (`--tarball`), refusing anything but the tested
+ * commit plus its version bump (`--base`); `--check` (before the publish) does the same commit and the merge of a moved branch locally
+ * and pushes nothing — a conflict then fails the run before anything is published.
+ */
 function runCommitRelease(args: string[]): number {
   const { values, positionals } = parseArgs({
     args,
     allowPositionals: true,
-    options: { remote: { type: 'string' }, branch: { type: 'string' } },
+    options: { remote: { type: 'string' }, branch: { type: 'string' }, tarball: { type: 'string' }, base: { type: 'string' }, check: { type: 'boolean' } },
   });
   const version = requireVersionArgument(positionals);
   const tag = `${releaseTagPrefix}${version}`;
-  git('add', manifestFileName, changelogFileName, ...(fs.existsSync(shrinkwrapFileName) ? [shrinkwrapFileName] : []));
+  const remote = values.remote ?? defaultRemote;
+  const branch = values.branch ?? defaultBranch;
+  const isCheck = values.check === true;
+  if (values.tarball) copyReleaseFilesFromTarball(path.resolve(values.tarball));
+  const appliedVersion = readPackageVersion();
+  if (appliedVersion !== version) throw new ReleaseError(`${manifestFileName} carries version ${appliedVersion}, not ${version}: nothing is committed.`);
+  if (values.base) assertReleaseDelta(values.base, undefined, 'nothing is committed');
+  if (checkIsReleaseTagPushed(remote, tag, values.base)) {
+    if (!isCheck) writeGithubOutput('tag', tag);
+    process.stdout.write(`${remote} already holds ${tag} (a re-run after the push went through); nothing to push.\n`);
+    return 0;
+  }
+  git('add', ...listReleaseFileNames());
   git(...releaseBotIdentity, 'commit', '--quiet', '-m', `chore(release): ${version}`);
   git(...releaseBotIdentity, 'tag', '-a', tag, '-m', tag);
-  pushReleaseWithMergeRetry(values.remote ?? defaultRemote, values.branch ?? defaultBranch, tag);
+  if (isCheck) {
+    const isMerged = mergeMovedBranch(remote, branch, version, 'nothing is published or pushed.');
+    process.stdout.write(isMerged ? `${branch} moved during the run; the release merges into it. Nothing pushed (--check).\n` : `${branch} has not moved: the push will be a fast-forward. Nothing pushed (--check).\n`);
+    return 0;
+  }
+  pushReleaseWithMergeRetry(
+    remote,
+    branch,
+    tag,
+    version,
+    `npm has ${version} already and the repository not yet (no ${tag}, ${branch} not bumped): re-run this run's failed jobs once the cause is fixed, or finish the release by hand (DEVELOPMENT.md § Releases, "npm has a version the repository does not").`,
+  );
   writeGithubOutput('tag', tag);
   process.stdout.write(`Pushed ${tag}.\n`);
   return 0;

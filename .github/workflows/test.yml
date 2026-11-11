@@ -2,11 +2,13 @@ name: Tests
 
 # The full suite (typecheck, build, unit tests and the process-level flows) on every push to main. The release workflow looks up THIS
 # workflow's result for the exact commit it releases and does not run the suite again when that run is green
-# (src/release/testGate.ts, DEVELOPMENT.md § Releases). Keep the file name: the release looks the runs up by it.
+# (src/release/testGate.ts, DEVELOPMENT.md § Releases). Keep the file name: the release looks the runs up by it. When no run covers
+# the commit, the release calls this workflow itself (`workflow_call`), so its suite has the same tools.
 on:
   push:
     branches: [main]
   workflow_dispatch:
+  workflow_call:
 
 permissions:
   contents: read
@@ -16,10 +18,13 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # The suite runs every package's install script: the checkout keeps no credentials.
+          persist-credentials: false
       # corepack BEFORE setup-node: the repo pins Yarn 4 in `packageManager`, the runner's global Yarn is 1.x.
       - run: corepack enable
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
           cache: yarn

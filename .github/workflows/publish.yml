@@ -1,27 +1,33 @@
 name: Release to npm
 
 # One workflow, three ways in (see DEVELOPMENT.md § Releases):
-#   - the daily schedule: decides by itself whether anything shipped changed, tests, bumps, tags, publishes;
+#   - the daily schedule: decides by itself whether anything shipped changed, tests, packs, publishes, then commits the version and tags;
 #   - a manual dispatch (bump / force / dryRun inputs);
 #   - a `v*` tag pushed by hand (`npm version <level>` locally, then push main with the tag).
 # Publishing uses npm trusted publishing (OIDC, provenance, no npm token anywhere): the package's Trusted
 # Publisher on npmjs.com names this repository, this file name and the `release` environment.
 #
-# prepare, package, check-install and publish are jobs of ONE run on purpose: a tag pushed with GITHUB_TOKEN does not start
-# another workflow run, so the bot's own tag push cannot publish twice.
+# gate → test (only when no Tests run covers the commit) → package → check-install → publish → release. npm gets the version BEFORE
+# the repository does: until `publish`, nothing leaves the run — a red job publishes nothing, tags nothing, pushes nothing, and the next
+# run starts over. `release` (the release commit on the tested one, the tag, main, the GitHub Release) runs only once npm has the
+# version, and commits the files of the very tarball npm has. When `release` fails, npm has a version the repository does not: every
+# later run refuses to put another tarball under that version, until the release is finished (DEVELOPMENT.md § Releases).
 #
-# The right to publish (`id-token: write`, npm trusted publishing) is held by `publish` alone, and that job runs no code of the
-# repository and installs no package: it downloads the tarball `package` packed, checks its sha256 against the one `package` reported,
-# and publishes it. `package` (no publish right, no write right) installs from the lockfile with no install scripts, builds, checks and
-# packs; `check-install` (no publish right, no write right) installs that tarball the way a user does — from a registry, by its
-# npm-shrinkwrap.json — and checks npm installed exactly the pinned tree. npm itself is pinned, to an exact version, installed with no
-# scripts. A pull of an unpinned package with an install script can no longer happen where the publish token can be minted.
+# Rights: only `release` can write to the repository, only `publish` can mint the npm publish token. Every job but `test` installs from
+# the lockfile with no install scripts (`--mode=skip-build`) and nothing from a cache; `test` is the Tests workflow itself (every install
+# script, the suite), can neither write nor publish, and hands nothing on but its result. `publish` checks out nothing and installs
+# nothing but the pinned npm, with no scripts: it checks the tarball's sha256 and publishes THAT file. `release`'s checkout keeps no
+# credentials: the token reaches the push step and the Release step alone. npm is pinned to an exact version, every action to a commit.
+#
+# The jobs are ONE run on purpose: a tag pushed with GITHUB_TOKEN does not start another workflow run, so the release's own tag push
+# cannot publish twice.
 #
 # The suite is not run here when the exact commit already passed in the `Tests` workflow (test.yml, every push to main): the
 # release looks that run up by the commit's SHA. Passed → go on; no run at all → run the suite here; red or still running → the
-# daily run releases nothing that day (green, with the reason), a dispatch or a hand-pushed tag fails. The release commit itself may
-# differ from the tested one only in package.json's version line and CHANGELOG.md — checked before the tag and before the publish.
-# A hand-pushed tag is gated through its PARENT's run when the tag is only that bump (its own run is usually still going).
+# daily run releases nothing that day (green, with the reason), a dispatch or a hand-pushed tag fails. The release commit may
+# differ from the tested one only in package.json's version line, the shrinkwrap's two and CHANGELOG.md — checked before packing and
+# again before committing. A hand-pushed tag is gated through its PARENT's run when the tag is only that bump (its own run is
+# usually still going).
 on:
   schedule:
     # 09:17 Tbilisi, off the top of the hour: GitHub delays scheduled runs at :00.
@@ -39,7 +45,7 @@ on:
         type: boolean
         default: false
       dryRun:
-        description: 'Everything except the push, the npm publish and the GitHub Release; prints the plan, the CHANGELOG diff, the notes and the package check.'
+        description: 'Everything except the npm publish, the push and the GitHub Release; prints the plan, the CHANGELOG diff, the notes and the package and install checks.'
         type: boolean
         default: false
   push:
@@ -53,214 +59,195 @@ concurrency:
 permissions: {}
 
 jobs:
-  prepare:
-    # Decide, gate, version commit + tag on main. A tag pushed by hand skips this job: its commit is already tagged.
-    if: github.event_name != 'push'
+  gate:
+    # What this run releases, and whether the commit's tests passed. No write right, no install script: every later job goes by its
+    # outputs. The released commit is always the one the run started on (`github.sha`), never an output.
     runs-on: ubuntu-latest
-    timeout-minutes: 150
+    timeout-minutes: 20
     permissions:
-      contents: write
+      contents: read
       actions: read # the Tests workflow's runs
     outputs:
-      tag: ${{ steps.push.outputs.tag }}
-      tested: ${{ steps.gate.outputs.sha }}
+      tag: ${{ steps.release.outputs.tag }}
+      version: ${{ steps.release.outputs.version }}
+      proceed: ${{ steps.gate.outputs.proceed }}
+      runSuite: ${{ steps.gate.outputs.runSuite }}
     steps:
       - name: Release only from main
-        if: github.ref != 'refs/heads/main'
+        if: github.event_name != 'push' && github.ref != 'refs/heads/main'
         run: |
           echo "::error::Releases are cut from main only; this run is on ${GITHUB_REF}."
           exit 1
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          # The plan reads the commits since the last tag; a hand-pushed tag is gated through its parent.
           fetch-depth: 0
+          persist-credentials: false
       # corepack BEFORE setup-node: the repo pins Yarn 4 in `packageManager`, the runner's global Yarn is 1.x.
       - run: corepack enable
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
-          cache: yarn
-      # The same npm as the other jobs, pinned exactly and installed with no scripts: only npm >= 11.10 reports what it would drop from
-      # package.json (the dry run below); npm 12 would read no shrinkwrap and pack none (the package check refuses that).
-      - run: npm install -g --ignore-scripts 'npm@11.21.1'
-      - run: yarn install --immutable
+          package-manager-cache: false
+      # The release CLI only (tsx): the lockfile, no package's install script.
+      - run: yarn install --immutable --mode=skip-build
       - name: Plan the release
         id: plan
+        if: github.event_name != 'push'
         env:
           INPUT_BUMP: ${{ inputs.bump }}
           INPUT_FORCE: ${{ inputs.force }}
         run: yarn tsx src/release/cli.ts plan --bump "${INPUT_BUMP:-auto}" --force "${INPUT_FORCE:-false}"
-      # The exact commit this run releases: what the Tests workflow says about it decides everything below.
+      - name: The version and the tag
+        id: release
+        if: github.event_name == 'push' || steps.plan.outputs.kind == 'release'
+        env:
+          PLANNED: ${{ steps.plan.outputs.version }}
+        run: |
+          if [ "${GITHUB_EVENT_NAME}" = push ]; then
+            version="$(node -p "require('./package.json').version")"
+            if [ "${GITHUB_REF_NAME}" != "v${version}" ]; then
+              echo "::error::Tag ${GITHUB_REF_NAME} does not match package.json version ${version}."
+              exit 1
+            fi
+          else
+            version="${PLANNED}"
+          fi
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "tag=v${version}" >> "$GITHUB_OUTPUT"
+      # The exact commit this run releases: what the Tests workflow says about it decides everything below. A hand-pushed tag's commit was
+      # pushed this very moment, so its own Tests run is usually still going: when its PARENT passed and the tag differs from it only in
+      # the version and the CHANGELOG, the parent's run is the gate (otherwise the tagged commit's own run decides).
       - name: Tests of this commit (the Tests workflow's result)
         id: gate
-        if: steps.plan.outputs.kind == 'release'
+        if: steps.release.outcome == 'success'
         env:
           GITHUB_TOKEN: ${{ github.token }}
-        run: yarn tsx src/release/cli.ts test-gate
-      - name: Install tmux
-        if: steps.gate.outputs.runSuite == 'true'
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq tmux
-      - name: Typecheck
-        if: steps.gate.outputs.runSuite == 'true'
-        run: yarn typecheck
-      # The package check packs dist/, so the build runs whether or not the suite does.
-      - name: Build
-        if: steps.gate.outputs.proceed == 'true'
-        run: yarn build
-      - name: Test (unit and flows)
-        if: steps.gate.outputs.runSuite == 'true'
-        run: yarn test
-      - name: Apply the version (package.json, CHANGELOG.md)
-        if: steps.gate.outputs.proceed == 'true'
-        env:
-          VERSION: ${{ steps.plan.outputs.version }}
-        run: yarn tsx src/release/cli.ts apply "$VERSION"
-      - name: The release is the tested commit plus its version bump
-        if: steps.gate.outputs.proceed == 'true'
-        env:
-          TESTED: ${{ steps.gate.outputs.sha }}
-        run: yarn tsx src/release/cli.ts verify-delta --base "$TESTED"
-      # The contents, then an install of the packed tree from a loopback registry by its shrinkwrap (pinned versions, no fresh resolution).
-      - name: Package check
-        if: steps.gate.outputs.proceed == 'true'
-        env:
-          VERSION: ${{ steps.plan.outputs.version }}
-        run: yarn tsx src/release/cli.ts check-pack --version "$VERSION"
-      # npm >= 11.10 drops a bin path written "./dist/…" at publish and only warns (3.3.0 shipped without its command):
-      # refuse before the tag exists.
-      - name: npm publish dry run (refuses what npm would drop from package.json)
-        if: steps.gate.outputs.proceed == 'true'
-        run: yarn tsx src/release/cli.ts check-publish
-      - name: What the release changes
-        if: steps.gate.outputs.proceed == 'true'
-        env:
-          VERSION: ${{ steps.plan.outputs.version }}
-          BUMP: ${{ steps.plan.outputs.bump }}
         run: |
-          {
-            echo "### Release ${VERSION} (${BUMP})"
-            echo
-            echo '#### Release notes'
-            echo
-            yarn tsx src/release/cli.ts notes "$VERSION"
-            echo
-            echo '#### Version files'
-            echo
-            echo '```diff'
-            git diff -- package.json CHANGELOG.md
-            echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
-      - name: Commit, tag and push (not in a dry run)
-        id: push
-        if: steps.gate.outputs.proceed == 'true' && inputs.dryRun != true
-        env:
-          VERSION: ${{ steps.plan.outputs.version }}
-        run: yarn tsx src/release/cli.ts commit-release "$VERSION"
+          if [ "${GITHUB_EVENT_NAME}" = push ]; then
+            yarn tsx src/release/cli.ts test-gate --through-parent
+          else
+            yarn tsx src/release/cli.ts test-gate
+          fi
 
-  package:
-    # After prepare pushed a tag, or for a tag pushed by hand. Never in a dry run (no tag output), never after a red prepare.
-    # Builds, checks and packs the tagged commit; holds neither the publish right nor a write right.
-    needs: prepare
-    if: ${{ !cancelled() && (github.event_name == 'push' || (needs.prepare.result == 'success' && needs.prepare.outputs.tag != '')) }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 150
+  test:
+    # The suite, only when no Tests run covers the commit: the Tests workflow itself, so it has every tool its flows need. It installs
+    # with every package's install script (node-pty's build), can neither write nor publish, and hands on nothing but its result.
+    needs: gate
+    if: needs.gate.outputs.proceed == 'true' && needs.gate.outputs.runSuite == 'true'
     permissions:
       contents: read
-      actions: read # the Tests workflow's runs (a hand-pushed tag)
+    uses: ./.github/workflows/test.yml
+
+  package:
+    # The version applied, built, checked and packed: the tarball every later job installs, publishes and commits. No write right, no
+    # publish right, no install script, nothing from a cache.
+    needs: [gate, test]
+    if: ${{ !cancelled() && needs.gate.outputs.proceed == 'true' && (needs.test.result == 'success' || needs.test.result == 'skipped') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
     env:
-      TAG: ${{ needs.prepare.outputs.tag || github.ref_name }}
+      VERSION: ${{ needs.gate.outputs.version }}
     outputs:
       # The jobs after this one see only what it hands on (`needs` reaches direct dependencies only).
-      tag: ${{ env.TAG }}
-      name: ${{ steps.version.outputs.name }}
-      version: ${{ steps.version.outputs.version }}
+      name: ${{ steps.manifest.outputs.name }}
       tarball: ${{ steps.pack.outputs.tarball }}
       sha256: ${{ steps.pack.outputs.sha256 }}
+      integrity: ${{ steps.pack.outputs.integrity }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: refs/tags/${{ env.TAG }}
-          # The tagged commit and its parent: a hand-pushed tag is gated through the parent's Tests run (below).
-          fetch-depth: 2
+          # The CHANGELOG of a release with an empty `## Unreleased` lists the commits since the last tag.
+          fetch-depth: 0
           persist-credentials: false
       - run: corepack enable
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
           # What is packed here is published: nothing restored from a cache runs in it.
           package-manager-cache: false
+      # The same npm as the other jobs, pinned exactly and installed with no scripts: only npm >= 11.10 reports what it would drop from
+      # package.json (the dry run below); npm 12 would read no shrinkwrap and pack none (the package check refuses that).
       - run: npm install -g --ignore-scripts 'npm@11.21.1'
       # The lockfile only, and no package's install script: the build needs none (tsc), the tarball holds none of node_modules.
       - run: yarn install --immutable --mode=skip-build
-      - name: The tag is the version in package.json
-        id: version
+      - name: Apply the version (package.json, npm-shrinkwrap.json, CHANGELOG.md)
+        if: github.event_name != 'push'
+        run: yarn tsx src/release/cli.ts apply "$VERSION"
+      - name: The release is the tested commit plus its version bump
+        if: github.event_name != 'push'
+        run: yarn tsx src/release/cli.ts verify-delta --base "${GITHUB_SHA}"
+      - name: The package carries the release's version
+        id: manifest
         run: |
           version="$(node -p "require('./package.json').version")"
-          if [ "${TAG}" != "v${version}" ]; then
-            echo "::error::Tag ${TAG} does not match package.json version ${version}."
+          if [ "${version}" != "${VERSION}" ]; then
+            echo "::error::package.json carries ${version}, the release is ${VERSION}."
             exit 1
           fi
-          echo "VERSION=${version}" >> "$GITHUB_ENV"
-          echo "version=${version}" >> "$GITHUB_OUTPUT"
           echo "name=$(node -p "require('./package.json').name")" >> "$GITHUB_OUTPUT"
-      # prepare already gated the tested commit of a scheduled / dispatched release: the tag is that commit plus its version bump.
-      - name: The tag is the tested commit plus its version bump
-        if: needs.prepare.outputs.tested != ''
-        env:
-          TESTED: ${{ needs.prepare.outputs.tested }}
-        run: |
-          git fetch --no-tags --depth=1 origin "${TESTED}"
-          yarn tsx src/release/cli.ts verify-delta --base "${TESTED}" --head HEAD
-      # A hand-pushed tag has not been gated. Its commit was pushed this very moment, so its own Tests run is usually still going: when
-      # its PARENT passed and the tag differs from it only in the version and the CHANGELOG, the parent's run is the gate. Otherwise
-      # the tagged commit's own run decides (no run → the suite here; running or red → refused).
-      - name: Tests of the tagged commit (the Tests workflow's result, through its parent when the tag is only a version bump)
-        id: gate
-        if: github.event_name == 'push'
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-        run: yarn tsx src/release/cli.ts test-gate --through-parent
-      - name: Install tmux
-        if: steps.gate.outputs.runSuite == 'true'
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq tmux
-      # The suite needs the native builds (node-pty): only then, and in this job, which can neither publish nor push.
-      - name: Install with the builds the suite needs
-        if: steps.gate.outputs.runSuite == 'true'
-        run: yarn install --immutable
-      - name: Typecheck
-        if: steps.gate.outputs.runSuite == 'true'
-        run: yarn typecheck
       - name: Build
         run: yarn build
-      - name: Test (unit and flows)
-        if: steps.gate.outputs.runSuite == 'true'
-        run: yarn test
       - name: Release notes (read before publishing, so a missing section fails early)
         run: |
           mkdir -p "${RUNNER_TEMP}/release-package"
           yarn tsx src/release/cli.ts notes "$VERSION" > "${RUNNER_TEMP}/release-package/release-notes.md"
+      - name: What the release changes
+        if: github.event_name != 'push'
+        run: |
+          {
+            echo "### Release ${VERSION}"
+            echo
+            echo '#### Release notes'
+            echo
+            cat "${RUNNER_TEMP}/release-package/release-notes.md"
+            echo
+            echo '#### Version files'
+            echo
+            echo '```diff'
+            git diff -- package.json npm-shrinkwrap.json CHANGELOG.md
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
       - name: Package check (contents; the install is the next job's)
         run: yarn tsx src/release/cli.ts check-pack --version "$VERSION" --skip-install
-      # A re-run after the publish went through and a later step failed: the dry run of a version already on npm fails by itself.
-      - name: Already on npm?
-        id: published
-        run: |
-          if npm view "$(node -p "require('./package.json').name")@${VERSION}" version > /dev/null 2>&1; then
-            echo "isPublished=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "isPublished=false" >> "$GITHUB_OUTPUT"
-          fi
-      - name: npm publish dry run (refuses what npm would drop from package.json)
-        if: steps.published.outputs.isPublished != 'true'
-        run: yarn tsx src/release/cli.ts check-publish
       - name: Pack
         id: pack
         run: |
-          tarball="$(npm pack --ignore-scripts --pack-destination "${RUNNER_TEMP}/release-package" --json | node -e 'process.stdout.write(JSON.parse(require("fs").readFileSync(0, "utf8"))[0].filename)')"
+          npm pack --ignore-scripts --pack-destination "${RUNNER_TEMP}/release-package" --json > "${RUNNER_TEMP}/pack.json"
+          tarball="$(node -p 'require(process.argv[1])[0].filename' "${RUNNER_TEMP}/pack.json")"
+          integrity="$(node -p 'require(process.argv[1])[0].integrity' "${RUNNER_TEMP}/pack.json")"
           sha256="$(sha256sum "${RUNNER_TEMP}/release-package/${tarball}" | cut -d' ' -f1)"
-          echo "tarball=${tarball}" >> "$GITHUB_OUTPUT"
-          echo "sha256=${sha256}" >> "$GITHUB_OUTPUT"
+          {
+            echo "tarball=${tarball}"
+            echo "integrity=${integrity}"
+            echo "sha256=${sha256}"
+          } >> "$GITHUB_OUTPUT"
           echo "Packed ${tarball}, sha256 ${sha256}"
-      - uses: actions/upload-artifact@v7
+      # npm has this version already when an earlier attempt published it and did not finish: the same tarball (a re-run) goes on and
+      # is not published again; ANOTHER tarball under that version is refused — npm cannot take it, and tagging it would be a lie.
+      - name: Already on npm?
+        id: published
+        env:
+          NAME: ${{ steps.manifest.outputs.name }}
+          INTEGRITY: ${{ steps.pack.outputs.integrity }}
+        run: |
+          published="$(npm view "${NAME}@${VERSION}" dist.integrity 2> /dev/null || true)"
+          if [ -z "${published}" ]; then
+            echo "isPublished=false" >> "$GITHUB_OUTPUT"
+          elif [ "${published}" = "${INTEGRITY}" ]; then
+            echo "isPublished=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::${NAME}@${VERSION} is on npm already, exactly this tarball (an earlier attempt published it): it is not published again."
+          else
+            echo "::error title=npm has ${VERSION} from another run::${NAME}@${VERSION} is on npm already, from another tarball than this run's: an earlier release run published it and did not finish (the repository has no v${VERSION}). Finish THAT run (its page is linked from the version's provenance on npmjs.com) with Re-run failed jobs, or by hand: DEVELOPMENT.md § Releases, npm has a version the repository does not. This run publishes and pushes nothing."
+            exit 1
+          fi
+      # npm >= 11.10 drops a bin path written "./dist/…" at publish and only warns (3.3.0 shipped without its command): refuse first.
+      - name: npm publish dry run (refuses what npm would drop from package.json)
+        if: steps.published.outputs.isPublished != 'true'
+        run: yarn tsx src/release/cli.ts check-publish
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: release-package
           path: ${{ runner.temp }}/release-package
@@ -268,81 +255,137 @@ jobs:
           retention-days: 7
 
   check-install:
-    # The packed tarball installed the way a user installs the release: from a registry, by its shrinkwrap (npm then runs the install
-    # scripts of the pinned packages). No publish right, no write right.
-    needs: package
+    # Before anything is published: the release commit — the tested commit plus the tarball's version files — merged LOCALLY into main as
+    # it stands now (a conflict fails here, not after the publish), then the tarball installed the way a user installs the release: from
+    # a registry, by its shrinkwrap (npm then runs the install scripts of the pinned packages). No publish right, no write right.
+    needs: [gate, package]
     if: ${{ !cancelled() && needs.package.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
       contents: read
     env:
-      TAG: ${{ needs.package.outputs.tag }}
-      VERSION: ${{ needs.package.outputs.version }}
+      VERSION: ${{ needs.gate.outputs.version }}
       TARBALL: ${{ needs.package.outputs.tarball }}
       SHA256: ${{ needs.package.outputs.sha256 }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: refs/tags/${{ env.TAG }}
+          fetch-depth: 0 # the merge with main
           persist-credentials: false
       - run: corepack enable
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
           package-manager-cache: false
       - run: npm install -g --ignore-scripts 'npm@11.21.1'
       # The release CLI only (tsx): no package's install script.
       - run: yarn install --immutable --mode=skip-build
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: release-package
           path: ${{ runner.temp }}/release-package
       - name: The tarball is the one the package job packed
         run: echo "${SHA256}  ${RUNNER_TEMP}/release-package/${TARBALL}" | sha256sum -c -
+      - name: The release commit merges into main (here only; nothing is pushed)
+        if: github.event_name != 'push'
+        run: yarn tsx src/release/cli.ts commit-release "$VERSION" --check --tarball "${RUNNER_TEMP}/release-package/${TARBALL}" --base "${GITHUB_SHA}"
       - name: Install check
         run: yarn tsx src/release/cli.ts check-install --tarball "${RUNNER_TEMP}/release-package/${TARBALL}" --version "$VERSION"
 
   publish:
-    # Publishes the tarball the package job packed and the install check installed. The only job holding the publish right: it runs no
-    # repository code and installs nothing but the pinned npm, with no scripts.
-    needs: [package, check-install]
-    if: ${{ !cancelled() && needs.package.result == 'success' && needs.check-install.result == 'success' }}
+    # npm gets the version: the tarball the package job packed and the install check installed. The only job that can mint the publish
+    # token; it checks out nothing and installs nothing but the pinned npm, with no scripts. Not in a dry run.
+    needs: [gate, package, check-install]
+    if: ${{ !cancelled() && needs.check-install.result == 'success' && inputs.dryRun != true }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     environment: release
     permissions:
-      contents: write # the GitHub Release
       id-token: write # npm trusted publishing (OIDC)
     env:
-      TAG: ${{ needs.package.outputs.tag }}
       NAME: ${{ needs.package.outputs.name }}
-      VERSION: ${{ needs.package.outputs.version }}
+      VERSION: ${{ needs.gate.outputs.version }}
       TARBALL: ${{ needs.package.outputs.tarball }}
       SHA256: ${{ needs.package.outputs.sha256 }}
-      GH_REPO: ${{ github.repository }}
+      INTEGRITY: ${{ needs.package.outputs.integrity }}
     steps:
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
           registry-url: 'https://registry.npmjs.org'
           package-manager-cache: false
       # Trusted publishing needs npm >= 11.5.1 and Node >= 22.14; an exact version, with no scripts.
       - run: npm install -g --ignore-scripts 'npm@11.21.1'
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: release-package
           path: ${{ runner.temp }}/release-package
       - name: The tarball is the one the package job packed (and the install check installed)
         run: echo "${SHA256}  ${RUNNER_TEMP}/release-package/${TARBALL}" | sha256sum -c -
+      # A re-run after the publish went through finds the same tarball on npm and goes on; another tarball under the version is refused.
       - name: Publish to npm
         working-directory: ${{ runner.temp }}/release-package
         run: |
-          if npm view "${NAME}@${VERSION}" version > /dev/null 2>&1; then
-            echo "${NAME}@${VERSION} is already on npm; not publishing it again (a re-run after a later step failed)."
-          else
+          published="$(npm view "${NAME}@${VERSION}" dist.integrity 2> /dev/null || true)"
+          if [ -z "${published}" ]; then
             npm publish "./${TARBALL}" --provenance --access public
+          elif [ "${published}" = "${INTEGRITY}" ]; then
+            echo "${NAME}@${VERSION} is on npm already, exactly this tarball (a re-run after the publish went through): not published again."
+          else
+            echo "::error::${NAME}@${VERSION} is on npm already, from another tarball; nothing is published."
+            exit 1
           fi
+
+  release:
+    # Once npm has the version, the repository gets it: the release commit (the tested commit plus the version files out of the very
+    # tarball npm has), the tag, main, then the GitHub Release. The only job that can write; it runs no install script, its checkout keeps
+    # no credentials, and the token reaches only the push step and the Release step. A hand-pushed tag is in the repository already: only
+    # its GitHub Release is made here.
+    needs: [gate, package, publish]
+    if: ${{ !cancelled() && needs.publish.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write # the release commit, the tag, main, the GitHub Release
+    env:
+      TAG: ${{ needs.gate.outputs.tag }}
+      VERSION: ${{ needs.gate.outputs.version }}
+      TARBALL: ${{ needs.package.outputs.tarball }}
+      SHA256: ${{ needs.package.outputs.sha256 }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-package
+          path: ${{ runner.temp }}/release-package
+      - name: The tarball is the one npm has (the one the package job packed)
+        run: echo "${SHA256}  ${RUNNER_TEMP}/release-package/${TARBALL}" | sha256sum -c -
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: github.event_name != 'push'
+        with:
+          fetch-depth: 0 # the merge with main
+          persist-credentials: false
+      - if: github.event_name != 'push'
+        run: corepack enable
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        if: github.event_name != 'push'
+        with:
+          node-version: 22
+          package-manager-cache: false
+      # The release CLI only (tsx): the lockfile, no package's install script.
+      - if: github.event_name != 'push'
+        run: yarn install --immutable --mode=skip-build
+      # The push token reaches git through this step's environment only (an http header for github.com, masked); no file keeps it.
+      - name: Commit the version, tag it, push main and the tag
+        if: github.event_name != 'push'
+        env:
+          PUSH_TOKEN: ${{ github.token }}
+        run: |
+          basic="$(printf 'x-access-token:%s' "${PUSH_TOKEN}" | base64 -w0)"
+          echo "::add-mask::${basic}"
+          export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0="http.${GITHUB_SERVER_URL}/.extraheader" GIT_CONFIG_VALUE_0="AUTHORIZATION: basic ${basic}"
+          yarn tsx src/release/cli.ts commit-release "$VERSION" --tarball "${RUNNER_TEMP}/release-package/${TARBALL}" --base "${GITHUB_SHA}"
       - name: GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
