@@ -8,7 +8,7 @@ import type { OutboundHints } from '../platform/outbound';
 import type { SessionKey } from '../sessionKey';
 import { keyToString } from '../sessionKey';
 import { checkIsShortStatedReset, classifyAgentApiError, usageLimitDefaultMs } from '../apiErrorRetry';
-import { checkIsInstalled, defaultOpenCodeUrl, installTool, checkIsOpenCodeServerRunning, ensureOpenCodeServer, getOpenCodeChildEnv, getOpenCodeServerHealth, getToolCommand, getToolLaunch, onOpenCodeServerExit, readOpenCodeServerLaunch, restartOpenCodeServer } from '../installManager';
+import { checkIsInstalled, defaultOpenCodeUrl, installTool, checkIsOpenCodeServerRunning, ensureOpenCodeServer, getOpenCodeChildEnv, getOpenCodeServerAuthHeaders, getOpenCodeServerHealth, getToolCommand, getToolLaunch, onOpenCodeServerExit, readOpenCodeServerLaunch, restartOpenCodeServer } from '../installManager';
 import { resolveDataDir } from '../state';
 import { appendDiagLog } from '../diagLog';
 import { sleep } from '../utils';
@@ -1727,7 +1727,6 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
   private sseDropLogThrottle: Map<string, number> = new Map();
 
   private baseUrl: string;
-  private authHeader: string | null;
 
   /**
    * Grace period (ms) the fallback rename waits for opencode's native
@@ -1766,8 +1765,8 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
    * tests can fail attempts and shrink the pauses — production never changes them.
    */
   private serverRestartOps: OpenCodeServerRestartOps = defaultOpenCodeServerRestartOps;
-  /** The skills boot step said once why it leaves the running server alone (`activateAgentSkillsForServer`). */
-  private isAgentSkillsSkipAnnounced = false;
+  /** The boot step said once why it leaves the running server alone (`replaceMislaunchedServer`). */
+  private isMislaunchedServerSkipAnnounced = false;
   private serverRestartRetryDelaysMs: readonly number[] = openCodeServerRestartRetryDelaysMs;
   private serverRestartRetryBudgetMs = openCodeServerRestartRetryBudgetMs;
 
@@ -1844,14 +1843,6 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
     super();
     // Audit S7 / #34: SSRF guard on OPENCODE_URL before any fetch runs.
     this.baseUrl = validateOpenCodeUrl(process.env.OPENCODE_URL || defaultOpenCodeUrl);
-
-    const password = process.env.OPENCODE_PASSWORD;
-    if (password) {
-      const username = process.env.OPENCODE_USERNAME || 'opencode';
-      this.authHeader = 'Basic ' + Buffer.from(`${username}:${password}`).toString('base64');
-    } else {
-      this.authHeader = null;
-    }
 
     // Listen for unexpected server crashes (OOM kill, segfault, etc.)
     onOpenCodeServerExit((code, signal) => {
@@ -2054,15 +2045,13 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
     return this.restartServer(true);
   }
 
+  /** @description Read per request: every server generation the bot starts has a password of its own. */
   private getHeaders(): Record<string, string> {
-    const headers: Record<string, string> = {
+    return {
       'Content-Type': 'application/json',
       'Accept': 'application/json',
+      ...getOpenCodeServerAuthHeaders(),
     };
-    if (this.authHeader) {
-      headers['Authorization'] = this.authHeader;
-    }
-    return headers;
   }
 
   private async apiRequest<T>(
@@ -3695,29 +3684,40 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
   }
 
   /**
-   * @description Boot step for the skills the bot gives its agents (`utils/agentPlugin.ts`). OpenCode reads its
-   * `OPENCODE_CONFIG_DIR` once, at start, so a server started the other way than the instance's «Bot skills» switch says —
-   * without the bot's folder while the switch is ON (an older bot, adopted ever since; the switch turned on since), with it
-   * while the switch is OFF — keeps offering the wrong thing. Such a server is replaced through the controlled restart that
-   * restores the sessions, but only when the bot owns it (its process record) AND `/proc` shows it is an `opencode … serve`
-   * (a server the bot does not own, or a listener it cannot identify, is left as is — one log line per process), the folder
-   * it would get is ready, and no session is working: a busy directory, or a status it cannot read, leaves it for the next
-   * boot. Only the INSTANCE value counts: one server serves every topic. Best-effort, never rejects.
+   * @description Boot step that replaces a server started the wrong way, which a running server never corrects by itself:
+   *  - the skills the bot gives its agents (`utils/agentPlugin.ts`): OpenCode reads its `OPENCODE_CONFIG_DIR` once, at start,
+   *    so a server started the other way than the instance's «Bot skills» switch says — without the bot's folder while the
+   *    switch is ON (an older bot, adopted ever since; the switch turned on since), with it while the switch is OFF — keeps
+   *    offering the wrong thing; only the INSTANCE value counts: one server serves every topic;
+   *  - its password: a server started without `OPENCODE_SERVER_PASSWORD` (by a bot from before passwords) answers every
+   *    local account, and the bot keeps adopting it.
+   * Such a server is replaced through the controlled restart that restores the sessions, but only when the bot owns it (its
+   * process record) AND `/proc` shows it is an `opencode … serve` (a server the bot does not own, or a listener it cannot
+   * identify, is left as is — one log line per process), the skills folder it would get is ready (else the skills do not
+   * count), and no session is working: a busy directory, or a status it cannot read, leaves it for the next boot.
+   * Best-effort, never rejects.
    */
-  async activateAgentSkillsForServer(): Promise<void> {
+  async replaceMislaunchedServer(): Promise<void> {
     try {
       const expectation = getOpenCodeAgentSkillsExpectation(process.env, resolveDataDir(), checkIsBotSkillsEnabled(null));
-      const action = getOpenCodeAgentSkillsServerAction(await this.serverRestartOps.readServerLaunch(), expectation);
-      if (action === 'skipNotOwned' || action === 'skipUnidentified') {
-        if (!this.isAgentSkillsSkipAnnounced) {
-          this.isAgentSkillsSkipAnnounced = true;
-          const reason = action === 'skipNotOwned' ? 'is not owned by the bot' : 'cannot be identified as `opencode serve`';
-          console.log(`[OpenCode] the server ${reason}; it is left as is, and offers the bot's skills only if it was started with them`);
-        }
+      const launch = await this.serverRestartOps.readServerLaunch();
+      const skillsAction = getOpenCodeAgentSkillsServerAction(launch, expectation);
+      if (skillsAction === 'skipUnidentified') {
+        this.announceMislaunchedServerSkipOnce(`the server cannot be identified as \`opencode serve\`; it is left as is, and offers the bot's skills only if it was started with them`);
         return;
       }
-      if (action === 'none') return;
-      const startedWith = expectation.kind === 'offered' ? `without the bot's skills` : `with the bot's skills, which the instance switched off`;
+      if (launch.kind !== 'openCodeServe') return;
+      const faults: string[] = [];
+      if (skillsAction !== 'none') {
+        faults.push(expectation.kind === 'offered' ? `without the bot's skills` : `with the bot's skills, which the instance switched off`);
+      }
+      if (!launch.isPasswordProtected) faults.push('without a password (every local account can drive its agents)');
+      if (faults.length === 0) return;
+      const startedWith = faults.join(' and ');
+      if (!launch.isOwnedByBot) {
+        this.announceMislaunchedServerSkipOnce(`the server was started ${startedWith}, but it is not owned by the bot; it is left as is`);
+        return;
+      }
       if (!(await this.checkIsEveryActiveSessionIdle())) {
         console.log(`[OpenCode] the server was started ${startedWith}; a session is working, the next boot retries`);
         return;
@@ -3725,8 +3725,15 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
       console.log(`[OpenCode] the server was started ${startedWith}; replacing it`);
       await this.restartServer(true);
     } catch (e) {
-      console.warn(`[OpenCode] could not check the server for the bot's skills:`, e instanceof Error ? e.message : e);
+      console.warn(`[OpenCode] could not check how the server was started:`, e instanceof Error ? e.message : e);
     }
+  }
+
+  /** @description Say once per process why {@link replaceMislaunchedServer} leaves the running server alone. */
+  private announceMislaunchedServerSkipOnce(line: string): void {
+    if (this.isMislaunchedServerSkipAnnounced) return;
+    this.isMislaunchedServerSkipAnnounced = true;
+    console.log(`[OpenCode] ${line}`);
   }
 
   /**
@@ -4114,10 +4121,8 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
 
     const headers: Record<string, string> = {
       'Accept': 'text/event-stream',
+      ...getOpenCodeServerAuthHeaders(),
     };
-    if (this.authHeader) {
-      headers['Authorization'] = this.authHeader;
-    }
 
     // Audit S7 / #12: SSE was previously read with no abort path —
     // `await reader.read()` blocks until bytes arrive, so a teardown during a

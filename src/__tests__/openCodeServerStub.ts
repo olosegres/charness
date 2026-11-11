@@ -59,6 +59,14 @@ export interface StubbedOpenCodeServer {
   answerApiWith(handler: OpenCodeApiHandler): void;
   /** Answer the health probe of the CURRENT test with `handler` (dropped again after the test). */
   answerHealthWith(handler: OpenCodeHealthHandler): void;
+  /** The `Authorization` header of every request of the CURRENT test, health probes included, in order (`null`: none). */
+  getRequestAuthorizations(): readonly OpenCodeRequestAuthorization[];
+}
+
+/** @description The `Authorization` header one request carried, and which path it went to (query string included). */
+export interface OpenCodeRequestAuthorization {
+  urlPath: string;
+  authorization: string | null;
 }
 
 /** @description Register the stub around every test of the calling file. */
@@ -67,6 +75,7 @@ export function useStubbedOpenCodeServer(): StubbedOpenCodeServer {
   let originalOpenCodeBin: string | undefined;
   let apiHandler: OpenCodeApiHandler | null = null;
   let healthHandler: OpenCodeHealthHandler | null = null;
+  let requestAuthorizations: OpenCodeRequestAuthorization[] = [];
 
   const answerHealthRequest = async (): Promise<Response> => {
     if (!healthHandler) return new Response('ok', { status: okStatus });
@@ -109,6 +118,7 @@ export function useStubbedOpenCodeServer(): StubbedOpenCodeServer {
     process.env.OPENCODE_BIN = stubOpenCodeBinary;
     globalThis.fetch = async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
       const url = typeof input === 'string' ? input : input.toString();
+      requestAuthorizations.push({ urlPath: url.replace(urlOriginPattern, ''), authorization: new Headers(init?.headers).get('authorization') });
       if (url.endsWith(healthPath)) return rejectWhenAborted(answerHealthRequest(), init?.signal);
       return answerApiRequest(url, init);
     };
@@ -118,6 +128,7 @@ export function useStubbedOpenCodeServer(): StubbedOpenCodeServer {
     globalThis.fetch = originalFetch;
     apiHandler = null;
     healthHandler = null;
+    requestAuthorizations = [];
     if (originalOpenCodeBin === undefined) delete process.env.OPENCODE_BIN;
     else process.env.OPENCODE_BIN = originalOpenCodeBin;
   });
@@ -128,6 +139,9 @@ export function useStubbedOpenCodeServer(): StubbedOpenCodeServer {
     },
     answerHealthWith(handler) {
       healthHandler = handler;
+    },
+    getRequestAuthorizations() {
+      return requestAuthorizations;
     },
   };
 }

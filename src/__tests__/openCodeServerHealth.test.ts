@@ -5,6 +5,7 @@
  * was merely slow. So a timeout is asked again, a bounded number of times, and the probe says HOW it ended:
  *
  *   healthy      — 200
+ *   unauthorized — 401: a server protected by a password the bot does not hold (the probe sends the one it holds)
  *   unhealthy    — the server answered, not OK (a 503 while it is not ready): asking again would get the same answer
  *   unreachable  — nothing took the connection (refused, reset, no route): no server listens; asking again changes nothing
  *   unanswered   — the connection was taken, no answer came in time, on every attempt: busy, starved or hung
@@ -20,9 +21,10 @@
 
 import { afterEach, beforeEach, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import * as fs from 'node:fs';
 import * as http from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { getOpenCodeServerHealth, openCodeHealthAttemptTimeoutMs, openCodeHealthTimeoutRetries, probeOpenCodePort } from '../installManager';
+import { getOpenCodeServerCredentialFilePath, getOpenCodeServerHealth, openCodeHealthAttemptTimeoutMs, openCodeHealthTimeoutRetries, probeOpenCodePort } from '../installManager';
 import { startFullBacklogListener } from './fullBacklogListener';
 
 const testAttemptTimeoutMs = 100;
@@ -86,6 +88,35 @@ describe('getOpenCodeServerHealth', () => {
     const health = await getOpenCodeServerHealth({ attemptTimeoutMs: promptServerAttemptTimeoutMs });
     assert.deepEqual(health, { healthy: false, version: null, outcome: 'unhealthy' });
     assert.equal(healthRequestCount, 1);
+  });
+
+  it('a server that refuses the probe\'s password is unauthorized — not merely unhealthy — and is not asked again', async () => {
+    await startServer((_number, response) => response.writeHead(401, { 'www-authenticate': 'Basic realm="Secure Area"' }).end());
+    const health = await getOpenCodeServerHealth({ attemptTimeoutMs: promptServerAttemptTimeoutMs });
+    assert.deepEqual(health, { healthy: false, version: null, outcome: 'unauthorized' });
+    assert.equal(healthRequestCount, 1);
+  });
+
+  it('the probe sends the password the bot saved for this server, and only to this server', async () => {
+    const authorizations: (string | undefined)[] = [];
+    healthRequestCount = 0;
+    server = http.createServer((request, response) => {
+      authorizations.push(request.headers.authorization);
+      answerHealthy(response);
+    });
+    await new Promise<void>((resolve) => server!.listen(0, '127.0.0.1', resolve));
+    const serverUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    process.env.OPENCODE_URL = serverUrl;
+    const savedPassword = 'a-saved-generation-password';
+    fs.writeFileSync(getOpenCodeServerCredentialFilePath(), JSON.stringify({ endpoint: serverUrl, password: savedPassword }), { mode: 0o600 });
+    try {
+      await getOpenCodeServerHealth({ attemptTimeoutMs: promptServerAttemptTimeoutMs });
+      fs.writeFileSync(getOpenCodeServerCredentialFilePath(), JSON.stringify({ endpoint: 'http://127.0.0.1:1', password: savedPassword }), { mode: 0o600 });
+      await getOpenCodeServerHealth({ attemptTimeoutMs: promptServerAttemptTimeoutMs });
+    } finally {
+      fs.rmSync(getOpenCodeServerCredentialFilePath(), { force: true });
+    }
+    assert.deepEqual(authorizations, [`Basic ${Buffer.from(`opencode:${savedPassword}`).toString('base64')}`, undefined]);
   });
 
   it('a port nothing listens on is unreachable', async () => {

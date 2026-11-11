@@ -14951,13 +14951,13 @@ export async function startBot(): Promise<void> {
       // generation pointing at a now-dead port. Reconcile against the live MCP
       // status and force-refresh any directory that is not `connected`.
       // Fire-and-forget: boot must not block on opencode HTTP round-trips
-      // before `bot.launch()`. The skills step (a server started without the
-      // bot's skills folder is replaced) and the compaction-plugin step go FIRST:
+      // before `bot.launch()`. The launch step (a server started without the
+      // bot's skills folder or without a password is replaced) and the compaction-plugin step go FIRST:
       // a replaced server or a recreated directory instance drops the MCP
       // registration, which this same reconcile then restores.
       const openCodeAdapter = getAdapter('opencode');
       void (async () => {
-        await openCodeAdapter.activateAgentSkillsForServer?.();
+        await openCodeAdapter.replaceMislaunchedServer?.();
         await openCodeAdapter.activateCompactionPluginForActiveSessions?.();
         await openCodeAdapter.reconcileSchedulerMcpForActiveSessions?.();
       })().catch((e) =>

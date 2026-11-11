@@ -1,5 +1,6 @@
 import { execFileSync, exec, spawn, spawnSync } from 'child_process';
 import type { ChildProcess } from 'child_process';
+import { randomBytes } from 'crypto';
 import * as fs from 'fs';
 import * as net from 'net';
 import * as os from 'os';
@@ -7,7 +8,7 @@ import * as path from 'path';
 import { sleep } from './utils';
 import { installOpenCodeCompactPlugin } from './utils/openCodeCompactPlugin';
 import { checkIsBotSkillsEnabled } from './utils/botSkills';
-import { getOpenCodeAgentConfigEnv, getPidlessServerLaunchReading, parseOpenCodeServerLaunch, type OpenCodeServeProcessReading, type OpenCodeServerLaunchReading } from './utils/agentPlugin';
+import { getOpenCodeAgentConfigEnv, getPidlessServerLaunchReading, openCodeServerPasswordEnvName, parseOpenCodeServerLaunch, type OpenCodeServeProcessReading, type OpenCodeServerLaunchReading } from './utils/agentPlugin';
 import {
   hotReloadEnvName,
   openCodeProcessFileEnvName,
@@ -335,6 +336,117 @@ export function getOpenCodeChildEnv(
     delete childEnv[name.legacy];
   }
   return childEnv;
+}
+
+// ═══════════════════════════════════════════
+//  OpenCode server password
+// ═══════════════════════════════════════════
+
+/** OpenCode's variable naming the Basic-auth user of a protected server; unset it is {@link defaultOpenCodeUsername}. */
+const openCodeServerUsernameEnvName = 'OPENCODE_SERVER_USERNAME';
+const defaultOpenCodeUsername = 'opencode';
+/** The file in `DATA_DIR` that holds the password of the server generation the bot started last (mode 0600). */
+export const openCodeServerCredentialFileName = '.opencode-server-credential';
+/** 32 random bytes: 43 characters of base64url, which never contains the `:` Basic auth splits on. */
+const openCodeServerPasswordByteCount = 32;
+
+interface OpenCodeServerCredential {
+  /** The origin of the server the password belongs to: a credential is never sent to another endpoint. */
+  endpoint: string;
+  password: string;
+}
+
+let cachedOpenCodeServerCredential: { filePath: string; stamp: string; credential: OpenCodeServerCredential | null } | null = null;
+
+/**
+ * @description Where the credential of the bot's server lives: beside the ownership file the hot supervisor names (the
+ * supervisor and its workers resolve a relative `DATA_DIR` against different folders, the file path they share does not
+ * differ), else in `DATA_DIR` — a plain instance re-adopts its server after a cold restart (D5) and needs it there too.
+ */
+export function getOpenCodeServerCredentialFilePath(): string {
+  const ownershipFilePath = readOpenCodeOwnershipFilePath();
+  const directory = ownershipFilePath
+    ? path.dirname(ownershipFilePath)
+    : path.resolve(process.env.DATA_DIR || resolveDefaultDataDir());
+  return path.join(directory, openCodeServerCredentialFileName);
+}
+
+/** @description The operator's own password (`OPENCODE_PASSWORD`, for a server they protect themselves), or null. */
+function readOperatorOpenCodePassword(): string | null {
+  return process.env.OPENCODE_PASSWORD || null;
+}
+
+function getOpenCodeUsername(): string {
+  return process.env.OPENCODE_USERNAME || defaultOpenCodeUsername;
+}
+
+function checkIsOpenCodeServerCredential(value: unknown): value is OpenCodeServerCredential {
+  if (typeof value !== 'object' || value === null) return false;
+  const endpoint: unknown = Reflect.get(value, 'endpoint');
+  const password: unknown = Reflect.get(value, 'password');
+  return typeof endpoint === 'string' && typeof password === 'string' && password !== '';
+}
+
+/** @description The saved credential, re-read only when the file changed (it is read on every request to the server). */
+function readOpenCodeServerCredential(): OpenCodeServerCredential | null {
+  const filePath = getOpenCodeServerCredentialFilePath();
+  let stamp: string;
+  try {
+    const stats = fs.statSync(filePath, { throwIfNoEntry: false });
+    if (!stats) return null;
+    stamp = `${stats.ino}:${stats.size}:${stats.mtimeMs}`;
+  } catch {
+    return null;
+  }
+  if (cachedOpenCodeServerCredential?.filePath === filePath && cachedOpenCodeServerCredential.stamp === stamp) {
+    return cachedOpenCodeServerCredential.credential;
+  }
+  let credential: OpenCodeServerCredential | null = null;
+  try {
+    const parsed: unknown = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+    if (checkIsOpenCodeServerCredential(parsed)) credential = { endpoint: parsed.endpoint, password: parsed.password };
+    else console.warn(`[OpenCode] ${filePath} holds no server credential; the server is called without a password`);
+  } catch (error) {
+    console.warn(`[OpenCode] Failed to read ${filePath}:`, error instanceof Error ? error.message : error);
+  }
+  cachedOpenCodeServerCredential = { filePath, stamp, credential };
+  return credential;
+}
+
+/** @description Save the password of a server generation about to start, atomically, readable by the bot's user only. */
+function saveOpenCodeServerCredential(credential: OpenCodeServerCredential): void {
+  const filePath = getOpenCodeServerCredentialFilePath();
+  const temporaryPath = `${filePath}.tmp-${process.pid}`;
+  fs.mkdirSync(path.dirname(filePath), { recursive: true, mode: 0o700 });
+  fs.writeFileSync(temporaryPath, `${JSON.stringify(credential)}\n`, { mode: 0o600 });
+  fs.renameSync(temporaryPath, filePath);
+}
+
+/**
+ * @description The password a new server generation for `endpoint` is started with: the operator's `OPENCODE_PASSWORD` when
+ * set (their other clients keep working), else a fresh random one, saved BEFORE the start so the readiness probe, a hot
+ * worker that takes over and the next cold start can all authenticate.
+ */
+function prepareOpenCodeServerPassword(endpoint: string): string {
+  const operatorPassword = readOperatorOpenCodePassword();
+  if (operatorPassword) return operatorPassword;
+  const password = randomBytes(openCodeServerPasswordByteCount).toString('base64url');
+  saveOpenCodeServerCredential({ endpoint, password });
+  return password;
+}
+
+/**
+ * @description The `Authorization` header for every call to the OpenCode server at `OPENCODE_URL` (the adapter's API calls and
+ * event stream, the health probes): HTTP Basic with the operator's `OPENCODE_PASSWORD`, else with the password of the server
+ * generation the bot started there; empty when the bot holds neither (a server started before the bot set passwords answers
+ * without one).
+ */
+export function getOpenCodeServerAuthHeaders(): Record<string, string> {
+  const endpoint = new URL(process.env.OPENCODE_URL || defaultOpenCodeUrl).origin;
+  const savedCredential = readOpenCodeServerCredential();
+  const password = readOperatorOpenCodePassword() ?? (savedCredential?.endpoint === endpoint ? savedCredential.password : null);
+  if (!password) return {};
+  return { Authorization: `Basic ${Buffer.from(`${getOpenCodeUsername()}:${password}`).toString('base64')}` };
 }
 
 const externalProcessHostStartTimeoutMs = 5_000;
@@ -788,12 +900,15 @@ export async function checkIsOpenCodeServerRunning(): Promise<boolean> {
  * @name OpenCodeServerHealthOutcome
  * @description How a health probe ended — what the bot may conclude from it:
  *  - `healthy`     — answered 200;
+ *  - `unauthorized` — answered 401: a server protected by a password the bot does not hold ({@link getOpenCodeServerAuthHeaders});
  *  - `unhealthy`   — answered, but not OK (a 503 while the server is not ready): asking again would get the same answer;
  *  - `unreachable` — nothing took the connection (refused, reset, no route): no server listens, asking again changes nothing;
  *  - `unanswered`  — the connection was taken and no answer came in time, on every attempt: a server that is busy, starved of
  *    CPU or hung. NOT "no server": something holds the port.
  */
-export type OpenCodeServerHealthOutcome = 'healthy' | 'unhealthy' | 'unreachable' | 'unanswered';
+export type OpenCodeServerHealthOutcome = 'healthy' | 'unauthorized' | 'unhealthy' | 'unreachable' | 'unanswered';
+
+const unauthorizedStatus = 401;
 
 export interface OpenCodeServerHealth {
   healthy: boolean;
@@ -852,7 +967,8 @@ export async function getOpenCodeServerHealth(options: OpenCodeServerHealthOptio
   const timeoutRetries = options.timeoutRetries ?? openCodeHealthTimeoutRetries;
   for (let attempt = 0; ; attempt++) {
     try {
-      const response = await fetch(`${url}/global/health`, { signal: AbortSignal.timeout(attemptTimeoutMs) });
+      const response = await fetch(`${url}/global/health`, { headers: getOpenCodeServerAuthHeaders(), signal: AbortSignal.timeout(attemptTimeoutMs) });
+      if (response.status === unauthorizedStatus) return { healthy: false, version: null, outcome: 'unauthorized' };
       if (!response.ok) return { healthy: false, version: null, outcome: 'unhealthy' };
       const body = (await response.json().catch(() => null)) as { version?: string } | null;
       return { healthy: true, version: extractOpenCodeVersion(body?.version), outcome: 'healthy' };
@@ -925,9 +1041,11 @@ function describeNotFreeOpenCodePort(port: string, portProbe: OpenCodePortProbe,
   }
   const holder = health.outcome === 'unanswered'
     ? `by a process that did not answer its health probe (${1 + openCodeHealthTimeoutRetries} attempts of ${openCodeHealthAttemptTimeoutMs} ms)`
-    : health.outcome === 'unhealthy'
-      ? 'by a process whose health probe answers with an error'
-      : 'by a process that takes connections';
+    : health.outcome === 'unauthorized'
+      ? 'by a server that requires a password the bot does not hold'
+      : health.outcome === 'unhealthy'
+        ? 'by a process whose health probe answers with an error'
+        : 'by a process that takes connections';
   return `OpenCode server port ${port} is in use ${holder}, and the bot did not start it: it will not start another server on the port`;
 }
 
@@ -1164,6 +1282,10 @@ async function ensureOpenCodeServerUnlocked(): Promise<void> {
   const serverEnv: NodeJS.ProcessEnv = {
     ...getOpenCodeChildEnv(),
     PATH: getNpmGlobalSearchPath(),
+    // Every route requires this password (Basic auth): loopback is shared by every account of the machine, and the API
+    // drives agents that run as the bot's user. A new one per generation (or the operator's `OPENCODE_PASSWORD`).
+    [openCodeServerUsernameEnvName]: getOpenCodeUsername(),
+    [openCodeServerPasswordEnvName]: prepareOpenCodeServerPassword(endpoint),
     // Enable OpenCode's background-subagents (experimental in 1.17.11): lets the
     // bot detach a synchronous sub-agent that is blocking a session via
     // `POST /experimental/session/:id/background` so a new message can be
@@ -1286,7 +1408,7 @@ async function ensureOpenCodeServerUnlocked(): Promise<void> {
     for (let i = 0; i < 15; i++) {
       await sleep(1000);
       try {
-        const response = await fetch(healthUrl, { signal: AbortSignal.timeout(2000) });
+        const response = await fetch(healthUrl, { headers: getOpenCodeServerAuthHeaders(), signal: AbortSignal.timeout(2000) });
         if (response.ok) {
           if (!checkIsStartupProcessRunning()) {
             throw startupError ?? new Error('OpenCode server failed during readiness');

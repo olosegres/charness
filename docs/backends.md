@@ -64,7 +64,10 @@ agent's env, so usage bills to your Claude subscription rather than an API key.
 
 OpenCode runs as a local HTTP server (`opencode serve`) that the bot talks to on loopback: prompts go to its HTTP API and one
 SSE event stream carries the output of every topic. One server serves all topics; a topic's bound folder selects the server
-instance it works in. Nothing listens on a public port. The model is picked with [`/model`](commands.md#model) (the effort
+instance it works in. Nothing listens on a public port, and the server the bot starts requires a password on every request (a
+random one per start, or your `OPENCODE_PASSWORD`): loopback is open to every account of the machine, and the server runs the
+agents as the bot's user. A server left running by a bot from before passwords is still used, and replaced at a later start of
+the bot once no topic works in it (in hot mode; a plain instance replaces it the next time it restarts the server). The model is picked with [`/model`](commands.md#model) (the effort
 with [`/effort`](commands.md#effort), which OpenCode encodes as the model's variant), the providers are connected, switched
 and disconnected in [`/accounts`](commands.md#accounts), and a usage limit is handled by
 [`/limits_autoswitch`](commands.md#limits_autoswitch). How the server survives a bot restart is described in

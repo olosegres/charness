@@ -477,7 +477,7 @@ text the CLI injects goes into that one module; what makes a poor TITLE (a bare 
   child session is busy); OpenCode injects its result back when it finishes.
 - **The bot's skills.** The server is started with `OPENCODE_CONFIG_DIR=<DATA_DIR>/opencode-config`, whose `skills`
   links to `agent-plugin/skills` (`utils/agentPlugin.ts`; an operator's own variable is kept). OpenCode reads it once,
-  at start, so the boot step `activateAgentSkillsForServer` replaces a server started without it (the controlled
+  at start, so the boot step `replaceMislaunchedServer` replaces a server started without it (the controlled
   restart that restores the sessions) — only when the bot owns it (its process record for the endpoint), `/proc`
   shows the listener is an `opencode … serve` process, the folder it would get is prepared, and no session works; a
   server the bot does not own or cannot identify is left as is (one log line). The «Bot skills» switch (`utils/botSkills.ts`)
@@ -491,6 +491,18 @@ text the CLI injects goes into that one module; what makes a poor TITLE (a bare 
   alone). The supervisor loads `installManager.ts` and `utils/botSkills.ts` at ITS start, so it follows the file only after a
   full service restart. The bot MCP is registered with OpenCode once per folder and server run and its instructions are read
   at connect, so a topic's switch reaches an OpenCode agent's hint only when the server next restarts.
+- **The server's password.** Loopback is shared by every account of the machine and the API drives agents that run
+  as the bot's user, so every `opencode serve` the bot starts gets `OPENCODE_SERVER_PASSWORD` (OpenCode then requires
+  HTTP Basic auth, user `opencode`, on every route, `/global/health` included): a fresh random one per server
+  generation, or the operator's `OPENCODE_PASSWORD` when set. A generated one is saved BEFORE the spawn, mode 0600, in
+  `DATA_DIR/.opencode-server-credential` (beside the hot supervisor's ownership file, which names the folder both
+  processes agree on), keyed by the endpoint, so the readiness probe, a hot worker and the next cold start all
+  authenticate. Every caller reads it per request through `getOpenCodeServerAuthHeaders` (the adapter's API calls and
+  event stream, the health probes; OpenCode hands its plugins — the bot's compaction plugin — a client with the same
+  password itself). A health probe answered 401 is `unauthorized`: an owned server is replaced, any other holder of the
+  port is refused. A server started without a password (by a bot from before passwords) is still adopted, and the
+  same boot step `replaceMislaunchedServer` replaces it once nothing works in it, when the bot owns it; one it does not
+  own is left as is, with one log line.
 - **Naming.** Bot-created sessions get NO title, so OpenCode auto-titles them from the first prompt; a title
   passed at creation (`/opencode <args>`) counts as user-set and is never auto-renamed (`isAutoNamePending`).
 - **Effort** rides the prompt as `body.variant`, clamped to the model's variants; a thread with no pick of its own

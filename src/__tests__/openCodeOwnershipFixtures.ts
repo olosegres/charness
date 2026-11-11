@@ -1,12 +1,14 @@
 /**
  * @description Fixtures shared by the OpenCode server tests that run real fixture processes (`openCodeProcessOwnership.test.ts`,
- * `openCodeServerReadiness.test.ts`): the fake server script and the process, port, pid and health helpers around it. Imported by
- * both, run by neither.
+ * `openCodeServerReadiness.test.ts`, `openCodeServerPassword.test.ts`): the fake server script — which, like `opencode serve`,
+ * requires HTTP Basic auth when started with `OPENCODE_SERVER_PASSWORD` — and the process, port, pid and health helpers around it.
+ * Imported by those, run by none.
  */
 
 import * as fs from 'fs';
 import { createServer } from 'net';
 import { execFileSync } from 'child_process';
+import { getOpenCodeServerAuthHeaders } from '../installManager';
 
 export const persistentChildScript = 'setInterval(() => {}, 1000)';
 export const processExitPollMs = 25;
@@ -84,7 +86,19 @@ if (process.env.FAKE_OPENCODE_ENV_FILE) {
     process.env.TELEGRAMCODE_OPENCODE_PROCESS_FILE || '',
   ].join('|') + '\\n');
 }
+// Like \`opencode serve\` (its server/auth.ts): a password in the environment makes every route require HTTP Basic auth.
+const checkIsAuthorized = (request) => {
+  const password = process.env.OPENCODE_SERVER_PASSWORD;
+  if (!password) return true;
+  const username = process.env.OPENCODE_SERVER_USERNAME || 'opencode';
+  return request.headers.authorization === 'Basic ' + Buffer.from(username + ':' + password).toString('base64');
+};
 const server = http.createServer((request, response) => {
+  if (!checkIsAuthorized(request)) {
+    response.writeHead(401, { 'www-authenticate': 'Basic realm="Secure Area"' });
+    response.end();
+    return;
+  }
   if (request.url === '/global/health') {
     healthRequestCount += 1;
     if (process.env.FAKE_OPENCODE_HEALTH_LOG) {
@@ -196,11 +210,12 @@ export async function waitForTestProcessExit(pid: number): Promise<void> {
   }
 }
 
+/** A server the bot started requires its password; one a test started itself takes the header and ignores it. */
 export async function waitForTestServerHealth(url: string): Promise<void> {
   const deadline = Date.now() + eventWaitHangGuardMs;
   while (Date.now() < deadline) {
     try {
-      const response = await fetch(`${url}/global/health`);
+      const response = await fetch(`${url}/global/health`, { headers: getOpenCodeServerAuthHeaders() });
       if (response.ok) return;
     } catch {
       // The test server has not started listening yet.

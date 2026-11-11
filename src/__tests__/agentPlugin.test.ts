@@ -171,8 +171,14 @@ describe('reading a running server\'s launch', () => {
   const serveCmdline = env(['opencode', 'serve', '--hostname', '127.0.0.1', '--port', '4096']);
 
   test('an opencode serve process: the OPENCODE_CONFIG_DIR it was started with, or none', () => {
-    assert.deepEqual(parseOpenCodeServerLaunch(serveCmdline, env(['HOME=/home/user', 'OPENCODE_CONFIG_DIR=/home/user/.charness/opencode-config'])), { kind: 'openCodeServe', configDir: '/home/user/.charness/opencode-config' });
-    assert.deepEqual(parseOpenCodeServerLaunch(env(['/usr/lib/node_modules/opencode-ai/bin/opencode.exe', 'serve']), env(['HOME=/home/user'])), { kind: 'openCodeServe', configDir: null });
+    assert.deepEqual(parseOpenCodeServerLaunch(serveCmdline, env(['HOME=/home/user', 'OPENCODE_CONFIG_DIR=/home/user/.charness/opencode-config'])), { kind: 'openCodeServe', configDir: '/home/user/.charness/opencode-config', isPasswordProtected: false });
+    assert.deepEqual(parseOpenCodeServerLaunch(env(['/usr/lib/node_modules/opencode-ai/bin/opencode.exe', 'serve']), env(['HOME=/home/user'])), { kind: 'openCodeServe', configDir: null, isPasswordProtected: false });
+  });
+
+  test('an opencode serve process started with a password, or with an empty one — which OpenCode reads as none', () => {
+    assert.deepEqual(parseOpenCodeServerLaunch(serveCmdline, env(['HOME=/home/user', 'OPENCODE_SERVER_PASSWORD=a-generated-password'])), { kind: 'openCodeServe', configDir: null, isPasswordProtected: true });
+    assert.deepEqual(parseOpenCodeServerLaunch(serveCmdline, env(['OPENCODE_SERVER_PASSWORD='])), { kind: 'openCodeServe', configDir: null, isPasswordProtected: false });
+    assert.deepEqual(parseOpenCodeServerLaunch(serveCmdline, env(['XOPENCODE_SERVER_PASSWORD=not-this-one'])), { kind: 'openCodeServe', configDir: null, isPasswordProtected: false }, 'only the exact variable counts');
   });
 
   test('anything else is unknown: a test runner holding a stand-in server, a sleep, another tool', () => {
@@ -184,7 +190,7 @@ describe('reading a running server\'s launch', () => {
   test('the boot step replaces only an opencode serve the bot owns, started without the folder it now offers', () => {
     const botFolder = '/home/user/.charness/opencode-config';
     const offered = { kind: 'offered' as const, configDir: botFolder };
-    const started = (configDir: string | null, isOwnedByBot = true) => ({ kind: 'openCodeServe' as const, configDir, isOwnedByBot });
+    const started = (configDir: string | null, isOwnedByBot = true) => ({ kind: 'openCodeServe' as const, configDir, isPasswordProtected: true, isOwnedByBot });
     assert.equal(getOpenCodeAgentSkillsServerAction(started(null), offered), 'replace');
     assert.equal(getOpenCodeAgentSkillsServerAction(started('/old'), offered), 'replace');
     assert.equal(getOpenCodeAgentSkillsServerAction(started(botFolder), offered), 'none');
@@ -199,7 +205,7 @@ describe('reading a running server\'s launch', () => {
   test('with the instance\'s skills off, the boot step replaces an owned server that carries the bot\'s folder — and only that', () => {
     const botFolder = '/home/user/.charness/opencode-config';
     const withheld = { kind: 'withheld' as const, configDir: botFolder };
-    const started = (configDir: string | null, isOwnedByBot = true) => ({ kind: 'openCodeServe' as const, configDir, isOwnedByBot });
+    const started = (configDir: string | null, isOwnedByBot = true) => ({ kind: 'openCodeServe' as const, configDir, isPasswordProtected: true, isOwnedByBot });
     assert.equal(getOpenCodeAgentSkillsServerAction(started(botFolder), withheld), 'replace');
     assert.equal(getOpenCodeAgentSkillsServerAction(started(null), withheld), 'none', 'it already offers nothing');
     assert.equal(getOpenCodeAgentSkillsServerAction(started('/operator/own'), withheld), 'none', 'a folder of the operator\'s is not the bot\'s to take away');

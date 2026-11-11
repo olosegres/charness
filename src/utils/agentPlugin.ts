@@ -86,6 +86,11 @@ export async function getClaudeAgentPluginFlags(
 
 /** OpenCode's variable naming an extra config folder, searched like a project's `.opencode` (its `skills/` included). */
 export const openCodeConfigDirEnvName = 'OPENCODE_CONFIG_DIR';
+/**
+ * OpenCode's variable that makes `opencode serve` require HTTP Basic auth on every route (its `server/auth.ts`; the user
+ * name is `OPENCODE_SERVER_USERNAME`, default `opencode`). Unset, the server answers any local process.
+ */
+export const openCodeServerPasswordEnvName = 'OPENCODE_SERVER_PASSWORD';
 const openCodeAgentConfigDirName = 'opencode-config';
 
 /** @description The bot-owned OpenCode config folder in `DATA_DIR`. */
@@ -147,12 +152,13 @@ export function getOpenCodeAgentConfigEnv(env: NodeJS.ProcessEnv, dataDir: strin
  * endpoint (a Claude-only instance, OpenCode not started yet); `unknown` — a server answers but is not a process it
  * can identify as `opencode … serve` (a server elsewhere, a test's stand-in, no `/proc`, a listener whose PID it
  * cannot read — another user's, or no `lsof` / `ss`); otherwise the
- * `OPENCODE_CONFIG_DIR` it was started with (null: none) and whether the bot owns it (its process record).
+ * `OPENCODE_CONFIG_DIR` it was started with (null: none), whether it was started with a password
+ * (`OPENCODE_SERVER_PASSWORD`, not empty) and whether the bot owns it (its process record).
  */
 export type OpenCodeServerLaunchReading =
   | { kind: 'none' }
   | { kind: 'unknown' }
-  | { kind: 'openCodeServe'; configDir: string | null; isOwnedByBot: boolean };
+  | { kind: 'openCodeServe'; configDir: string | null; isPasswordProtected: boolean; isOwnedByBot: boolean };
 
 /**
  * @description The reading when no listener PID could be found: `none` only if no server answers its health check —
@@ -163,7 +169,7 @@ export function getPidlessServerLaunchReading(isServerAnswering: boolean): OpenC
 }
 
 /** @description What the `/proc` entries of a server's process say, before the bot's own record of who started it. */
-export type OpenCodeServeProcessReading = { kind: 'unknown' } | { kind: 'openCodeServe'; configDir: string | null };
+export type OpenCodeServeProcessReading = { kind: 'unknown' } | { kind: 'openCodeServe'; configDir: string | null; isPasswordProtected: boolean };
 
 const openCodeServeCommand = 'serve';
 const openCodeExecutableNamePrefix = 'opencode';
@@ -174,9 +180,18 @@ export function parseOpenCodeServerLaunch(cmdline: string, environ: string): Ope
   const argv = cmdline.split(procEntrySeparator).filter(Boolean);
   const isOpenCodeServe = path.basename(argv[0] ?? '').startsWith(openCodeExecutableNamePrefix) && argv.includes(openCodeServeCommand);
   if (!isOpenCodeServe) return { kind: 'unknown' };
-  const prefix = `${openCodeConfigDirEnvName}=`;
-  const entry = environ.split(procEntrySeparator).find((variable) => variable.startsWith(prefix));
-  return { kind: 'openCodeServe', configDir: entry === undefined ? null : entry.slice(prefix.length) };
+  const variables = environ.split(procEntrySeparator);
+  const readVariable = (name: string): string | null => {
+    const prefix = `${name}=`;
+    const entry = variables.find((variable) => variable.startsWith(prefix));
+    return entry === undefined ? null : entry.slice(prefix.length);
+  };
+  return {
+    kind: 'openCodeServe',
+    configDir: readVariable(openCodeConfigDirEnvName),
+    // OpenCode treats an empty password as none (`ServerAuth.required`).
+    isPasswordProtected: (readVariable(openCodeServerPasswordEnvName) ?? '') !== '',
+  };
 }
 
 /**
