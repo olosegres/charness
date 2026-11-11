@@ -40,9 +40,11 @@ import type { LastRunVersion, SelfUpdateRecord } from './selfUpdate/types';
 import {
   addInviteToMap,
   addTalkerToMap,
+  type AddInviteResult,
+  type AddTalkerResult,
   dropOtherSpacesFromMap,
-  getEffectiveTalkerIds as getEffectiveTalkerIdsFromMap,
-  getTalkerScope as getTalkerScopeFromMap,
+  getEffectiveTalkerIdsInMap,
+  getTalkerScopeInMap,
   pruneExpiredInvitesInMap,
   refreshIdentityInMap,
   removeInviteFromMap,
@@ -745,7 +747,7 @@ export interface StateV1 {
   /**
    * The per-topic talker lists (`/access`, `topicTalkers.ts`): who besides the group's admins may talk to the agent in a
    * topic, keyed by the topic's {@link SessionKey} string; General's list is group-wide. Each list carries a `revision`
-   * that never restarts (an emptied list stays as a tombstone). Every change is flushed at once — a revoke a crash could
+   * that never restarts (an emptied list, a re-pair's included, stays as a tombstone). Every change is flushed at once — a revoke a crash could
    * undo is a security hole. Optional so older state files stay valid; absent until somebody is added.
    */
   topicTalkers?: TopicTalkersMap;
@@ -1634,12 +1636,12 @@ export class StateStore {
 
   /** @description Ids that may talk in `key`: its own list and the group-wide list of `generalKey`. Cheap: read on every update of a non-admin. */
   getEffectiveTalkerIds(key: SessionKey, generalKey: SessionKey): Set<string> {
-    return getEffectiveTalkerIdsFromMap(this.state.topicTalkers ?? {}, keyToString(key), keyToString(generalKey));
+    return getEffectiveTalkerIdsInMap(this.state.topicTalkers ?? {}, keyToString(key), keyToString(generalKey));
   }
 
   /** @description Where `userId`'s right to talk in `key` comes from (its own list or General's), `null` for nobody. */
   getTalkerScope(key: SessionKey, generalKey: SessionKey, userId: string): TalkerScope | null {
-    return getTalkerScopeFromMap(this.state.topicTalkers ?? {}, keyToString(key), keyToString(generalKey), userId);
+    return getTalkerScopeInMap(this.state.topicTalkers ?? {}, keyToString(key), keyToString(generalKey), userId);
   }
 
   /** @description The topics that list at least one talker, with how many (General's own list included): the summary General's `/access` shows. */
@@ -1653,7 +1655,7 @@ export class StateStore {
   }
 
   /** @description Add a talker to a topic's list and flush. `already` when their id is listed. */
-  async addTopicTalker(key: SessionKey, user: TopicTalkerUser, granter: TopicGranter): Promise<'added' | 'already'> {
+  async addTopicTalker(key: SessionKey, user: TopicTalkerUser, granter: TopicGranter): Promise<AddTalkerResult> {
     const result = addTalkerToMap((this.state.topicTalkers ??= {}), keyToString(key), user, granter, Date.now());
     if (result === 'added') await this.flush();
     return result;
@@ -1667,9 +1669,9 @@ export class StateStore {
     return isRemoved;
   }
 
-  /** @description Add a username invitation (waits for the person's first message) and flush. */
-  async addTopicInvite(key: SessionKey, username: string, granter: TopicGranter): Promise<'added' | 'already' | 'listed'> {
-    const result = addInviteToMap((this.state.topicTalkers ??= {}), keyToString(key), username, granter, Date.now());
+  /** @description Add a username invitation (waits for the person's first message) and flush. `now` is for tests. */
+  async addTopicInvite(key: SessionKey, username: string, granter: TopicGranter, now: number = Date.now()): Promise<AddInviteResult> {
+    const result = addInviteToMap((this.state.topicTalkers ??= {}), keyToString(key), username, granter, now);
     if (result === 'added') await this.flush();
     return result;
   }
@@ -1693,10 +1695,13 @@ export class StateStore {
     return resolved;
   }
 
-  /** @description The person left the group or was banned: drop them from every topic's list, flushed. Returns the topics they were on. */
-  async removeUserFromAllTopics(userId: string): Promise<string[]> {
+  /**
+   * @description The person left the group or was banned: drop them and the invitations for their username from every
+   * topic's list, flushed. Returns the topics where anything was dropped.
+   */
+  async removeUserFromAllTopics(user: TopicTalkerUser): Promise<string[]> {
     if (!this.state.topicTalkers) return [];
-    const topics = removeUserFromMap(this.state.topicTalkers, userId);
+    const topics = removeUserFromMap(this.state.topicTalkers, user);
     if (topics.length > 0) await this.flush();
     return topics;
   }
@@ -1706,11 +1711,13 @@ export class StateStore {
     if (this.state.topicTalkers && refreshIdentityInMap(this.state.topicTalkers, user)) this.scheduleSave();
   }
 
-  /** @description The served group changed: drop the lists of every other chat, flushed; the field goes with its last list. */
+  /**
+   * @description The served group changed: empty the lists of every other chat, flushed. The emptied entries stay, so a
+   * revision never repeats if the bot is paired back to that group.
+   */
   async dropTopicTalkersOfOtherChats(chatId: number): Promise<void> {
     if (!this.state.topicTalkers) return;
     const dropped = dropOtherSpacesFromMap(this.state.topicTalkers, chatId.toString());
-    if (Object.keys(this.state.topicTalkers).length === 0) delete this.state.topicTalkers;
     if (dropped.length > 0) await this.flush();
   }
 

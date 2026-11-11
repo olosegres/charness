@@ -5,7 +5,7 @@ import { tryKeyFromString } from './sessionKey';
  *
  * Pure operations over the `topicTalkers` record that `state.json` persists (`StateStore` wraps them and decides when
  * to flush). Platform-neutral like `accessControl.ts`: a topic is its serialised `SessionKey`, a person is a string
- * id. The list of the General topic is group-wide — {@link getEffectiveTalkerIds} merges it into every topic's set.
+ * id. The list of the General topic is group-wide — {@link getEffectiveTalkerIdsInMap} merges it into every topic's set.
  */
 
 /** How long a username invitation («waits for the person's first message») stays valid. */
@@ -67,6 +67,15 @@ export interface ResolvedTopicInvite {
   addedByName: string;
 }
 
+/** The outcome of adding a talker: `already` when their id is listed (nothing changes). */
+export type AddTalkerResult = 'added' | 'already';
+
+/**
+ * The outcome of adding a username invitation: `already` when a live one waits for the name, `listed` when a person of
+ * that username is a talker of the topic already — in both nothing changes.
+ */
+export type AddInviteResult = AddTalkerResult | 'listed';
+
 /** Where a person's right to talk in a topic comes from. */
 export type TalkerScope = 'own' | 'general';
 
@@ -91,7 +100,7 @@ export function addTalkerToMap(
   user: TopicTalkerUser,
   granter: TopicGranter,
   now: number,
-): 'added' | 'already' {
+): AddTalkerResult {
   if (map[threadKey]?.talkers.some((talker) => talker.userId === user.userId)) return 'already';
   const entry = getOrCreateEntry(map, threadKey);
   const talker: TopicTalker = {
@@ -123,8 +132,8 @@ export function removeTalkerFromMap(map: TopicTalkersMap, threadKey: string, use
 }
 
 /**
- * @description Add a username invitation. `already` when one waits for the name, `listed` when a person of that
- * username is a talker of the topic already — in both nothing changes.
+ * @description Add a username invitation. An invitation past {@link topicInviteTtlMs} counts as missing even when nobody
+ * read the list since — it is replaced by a fresh one (new clock, new granter), never reported as «already».
  */
 export function addInviteToMap(
   map: TopicTalkersMap,
@@ -132,14 +141,16 @@ export function addInviteToMap(
   username: string,
   granter: TopicGranter,
   now: number,
-): 'added' | 'already' | 'listed' {
+): AddInviteResult {
   const lowercase = normaliseUsername(username);
   const existing = map[threadKey];
   if (existing?.talkers.some((talker) => talker.username !== undefined && normaliseUsername(talker.username) === lowercase)) {
     return 'listed';
   }
-  if (existing?.invites.some((invite) => invite.username === lowercase)) return 'already';
+  const waiting = existing?.invites.find((invite) => invite.username === lowercase);
+  if (waiting && now - waiting.addedAt < topicInviteTtlMs) return 'already';
   const entry = getOrCreateEntry(map, threadKey);
+  entry.invites = entry.invites.filter((invite) => invite !== waiting);
   entry.invites.push({ username: lowercase, addedAt: now, addedBy: granter.userId, addedByName: granter.name });
   markChanged(entry);
   return 'added';
@@ -207,11 +218,30 @@ export function resolveInvitesInMap(
   return { resolved, isChanged };
 }
 
-/** @description The person left the group (or was banned): drop their entries in every topic. Returns the topics they were on. */
-export function removeUserFromMap(map: TopicTalkersMap, userId: string): string[] {
+/**
+ * @description The person left the group (or was banned): drop their entries in every topic AND the waiting invitations for
+ * their username, so coming back needs a new grant — an invitation left behind would turn into one on their first
+ * message after rejoining. The username is the one the update carries plus the ones the lists stored for the id (the update
+ * may carry none). Returns the topics where anything was dropped.
+ */
+export function removeUserFromMap(map: TopicTalkersMap, user: TopicTalkerUser): string[] {
+  const usernames = new Set<string>();
+  if (user.username) usernames.add(normaliseUsername(user.username));
+  for (const entry of Object.values(map)) {
+    for (const talker of entry.talkers) {
+      if (talker.userId === user.userId && talker.username) usernames.add(normaliseUsername(talker.username));
+    }
+  }
   const topics: string[] = [];
-  for (const threadKey of Object.keys(map)) {
-    if (removeTalkerFromMap(map, threadKey, userId)) topics.push(threadKey);
+  for (const [threadKey, entry] of Object.entries(map)) {
+    const isTalkerRemoved = removeTalkerFromMap(map, threadKey, user.userId);
+    const remainingInvites = entry.invites.filter((invite) => !usernames.has(invite.username));
+    const isInviteRemoved = remainingInvites.length !== entry.invites.length;
+    if (isInviteRemoved) {
+      entry.invites = remainingInvites;
+      markChanged(entry);
+    }
+    if (isTalkerRemoved || isInviteRemoved) topics.push(threadKey);
   }
   return topics;
 }
@@ -241,22 +271,32 @@ export function refreshIdentityInMap(map: TopicTalkersMap, user: TopicTalkerUser
 }
 
 /**
- * @description The served group changed (a re-pair): lists of every other space are dropped, so nobody keeps a grant in a
- * chat the bot no longer serves. A key that no codec reads can never match a topic either and goes too. Returns the
- * dropped topics.
+ * @description The served group changed (a re-pair): the lists of every other space are emptied, so nobody keeps a grant in a
+ * chat the bot no longer serves. The emptied entries stay — their revisions must never restart, or pairing back to that
+ * group would let an old keyboard match a new list. A key no codec reads can never match a topic and is deleted. Returns the
+ * topics that were emptied or deleted.
  */
 export function dropOtherSpacesFromMap(map: TopicTalkersMap, spaceId: string): string[] {
   const dropped: string[] = [];
-  for (const threadKey of Object.keys(map)) {
-    if (tryKeyFromString(threadKey)?.space === spaceId) continue;
-    delete map[threadKey];
+  for (const [threadKey, entry] of Object.entries(map)) {
+    const key = tryKeyFromString(threadKey);
+    if (key?.space === spaceId) continue;
+    if (!key) {
+      delete map[threadKey];
+      dropped.push(threadKey);
+      continue;
+    }
+    if (entry.talkers.length === 0 && entry.invites.length === 0) continue;
+    entry.talkers = [];
+    entry.invites = [];
+    markChanged(entry);
     dropped.push(threadKey);
   }
   return dropped;
 }
 
 /** @description Ids allowed to talk in `threadKey`: its own list plus the group-wide list of the General topic. */
-export function getEffectiveTalkerIds(map: TopicTalkersMap, threadKey: string, generalKey: string): Set<string> {
+export function getEffectiveTalkerIdsInMap(map: TopicTalkersMap, threadKey: string, generalKey: string): Set<string> {
   const ids = new Set<string>();
   for (const talker of map[threadKey]?.talkers ?? []) ids.add(talker.userId);
   for (const talker of map[generalKey]?.talkers ?? []) ids.add(talker.userId);
@@ -264,7 +304,7 @@ export function getEffectiveTalkerIds(map: TopicTalkersMap, threadKey: string, g
 }
 
 /** @description How `userId` may talk in `threadKey`: from its own list (also General's, in General itself), from General's, or not at all. */
-export function getTalkerScope(map: TopicTalkersMap, threadKey: string, generalKey: string, userId: string): TalkerScope | null {
+export function getTalkerScopeInMap(map: TopicTalkersMap, threadKey: string, generalKey: string, userId: string): TalkerScope | null {
   if (map[threadKey]?.talkers.some((talker) => talker.userId === userId)) return 'own';
   if (threadKey !== generalKey && map[generalKey]?.talkers.some((talker) => talker.userId === userId)) return 'general';
   return null;

@@ -14,8 +14,8 @@ import {
   addInviteToMap,
   addTalkerToMap,
   dropOtherSpacesFromMap,
-  getEffectiveTalkerIds,
-  getTalkerScope,
+  getEffectiveTalkerIdsInMap,
+  getTalkerScopeInMap,
   normaliseUsername,
   pruneExpiredInvitesInMap,
   refreshIdentityInMap,
@@ -58,11 +58,11 @@ test('addTalkerToMap: a topic list is its own — the same person may talk in se
   const map: TopicTalkersMap = {};
   addTalkerToMap(map, designTopic, alice, admin, now);
   addTalkerToMap(map, docsTopic, alice, admin, now);
-  assert.equal(getTalkerScope(map, designTopic, generalTopic, '101'), 'own');
-  assert.equal(getTalkerScope(map, docsTopic, generalTopic, '101'), 'own');
+  assert.equal(getTalkerScopeInMap(map, designTopic, generalTopic, '101'), 'own');
+  assert.equal(getTalkerScopeInMap(map, docsTopic, generalTopic, '101'), 'own');
   removeTalkerFromMap(map, designTopic, '101');
-  assert.equal(getTalkerScope(map, designTopic, generalTopic, '101'), null);
-  assert.equal(getTalkerScope(map, docsTopic, generalTopic, '101'), 'own');
+  assert.equal(getTalkerScopeInMap(map, designTopic, generalTopic, '101'), null);
+  assert.equal(getTalkerScopeInMap(map, docsTopic, generalTopic, '101'), 'own');
 });
 
 test('removeTalkerFromMap: revokes one person; false for a stranger or an unknown topic', () => {
@@ -95,6 +95,22 @@ test('addInviteToMap: lowercase, once per name; refused when a person of that na
   addTalkerToMap(map, designTopic, alice, admin, now);
   assert.equal(addInviteToMap(map, designTopic, '@ALICE_w', admin, now), 'listed', 'matched on the lowercase username');
   assert.equal(map[designTopic].invites.length, 1);
+});
+
+test('addInviteToMap: an expired invitation nobody pruned does not block a fresh one (the list was never read in between)', () => {
+  const map: TopicTalkersMap = {};
+  addInviteToMap(map, designTopic, 'carol_x', admin, now);
+  const stillValid = now + topicInviteTtlMs - 1;
+  assert.equal(addInviteToMap(map, designTopic, 'carol_x', admin, stillValid), 'already', 'one ms before its expiry it is still waiting');
+  const revisionBefore = map[designTopic].revision;
+  const afterExpiry = now + topicInviteTtlMs + 1000;
+  assert.equal(addInviteToMap(map, designTopic, 'carol_x', { userId: '901', name: 'Pat Admin' }, afterExpiry), 'added');
+  assert.deepEqual(map[designTopic].invites, [
+    { username: 'carol_x', addedAt: afterExpiry, addedBy: '901', addedByName: 'Pat Admin' },
+  ], 'replaced, with a new clock and the new granter');
+  assert.ok(map[designTopic].revision > revisionBefore);
+  const { resolved } = resolveInvitesInMap(map, { userId: '103', username: 'carol_x', name: 'Carol' }, afterExpiry + 1000);
+  assert.deepEqual(resolved.map((entry) => entry.threadKey), [designTopic], 'and the renewed invitation really grants');
 });
 
 test('removeInviteFromMap: cancels a waiting invitation by name', () => {
@@ -179,10 +195,31 @@ test('removeUserFromMap: leaving the group drops the person from EVERY topic, an
   addTalkerToMap(map, docsTopic, alice, admin, now);
   addTalkerToMap(map, docsTopic, bob, admin, now);
   addTalkerToMap(map, generalTopic, alice, admin, now);
-  assert.deepEqual(removeUserFromMap(map, '101').sort(), [designTopic, docsTopic, generalTopic].sort());
+  assert.deepEqual(removeUserFromMap(map, alice).sort(), [designTopic, docsTopic, generalTopic].sort());
   assert.deepEqual(map[docsTopic].talkers.map((talker) => talker.userId), ['102']);
-  assert.deepEqual(removeUserFromMap(map, '101'), [], 'already gone');
-  assert.deepEqual(removeUserFromMap(map, '555'), []);
+  assert.deepEqual(removeUserFromMap(map, alice), [], 'already gone');
+  assert.deepEqual(removeUserFromMap(map, { userId: '555', name: 'Nobody' }), []);
+});
+
+test('removeUserFromMap: a waiting invitation for the leaver\'s username goes too — rejoining and writing must not turn it into a grant', () => {
+  const map: TopicTalkersMap = {};
+  addInviteToMap(map, designTopic, 'alice_w', admin, now);
+  addInviteToMap(map, docsTopic, '@ALICE_W', admin, now);
+  addInviteToMap(map, docsTopic, 'carol_x', admin, now);
+  const revisions = [map[designTopic].revision, map[docsTopic].revision];
+  assert.deepEqual(removeUserFromMap(map, alice).sort(), [designTopic, docsTopic].sort(), 'a topic where only an invitation went is reported too');
+  assert.deepEqual(map[designTopic].invites, []);
+  assert.deepEqual(map[docsTopic].invites.map((invite) => invite.username), ['carol_x'], 'another person\'s invitation stays');
+  assert.ok(map[designTopic].revision > revisions[0] && map[docsTopic].revision > revisions[1], 'a keyboard that still showed the invitation is told apart');
+  assert.deepEqual(resolveInvitesInMap(map, alice, now + 1000), { resolved: [], isChanged: false }, 'coming back needs a new grant');
+});
+
+test('removeUserFromMap: the username the lists stored for the person counts as well, when the leave update carries none', () => {
+  const map: TopicTalkersMap = {};
+  addTalkerToMap(map, designTopic, alice, admin, now);
+  addInviteToMap(map, docsTopic, 'alice_w', admin, now);
+  assert.deepEqual(removeUserFromMap(map, { userId: '101', name: 'Alice Smith' }).sort(), [designTopic, docsTopic].sort());
+  assert.deepEqual(map[docsTopic].invites, []);
 });
 
 test('refreshIdentityInMap: a rename and a changed or dropped @username reach every entry, without moving the revision', () => {
@@ -202,7 +239,7 @@ test('refreshIdentityInMap: a rename and a changed or dropped @username reach ev
   assert.equal(refreshIdentityInMap(map, { userId: '777', name: 'Nobody' }), false);
 });
 
-test('dropOtherSpacesFromMap: a re-pair keeps the lists of the new group only; a key no codec reads goes too', () => {
+test('dropOtherSpacesFromMap: a re-pair empties the lists of every other group; a key no codec reads goes entirely', () => {
   const otherGroupTopic = keyToString(makeTelegramKey(-1002222222222, 7));
   const map: TopicTalkersMap = {};
   addTalkerToMap(map, designTopic, alice, admin, now);
@@ -210,29 +247,45 @@ test('dropOtherSpacesFromMap: a re-pair keeps the lists of the new group only; a
   addInviteToMap(map, otherGroupTopic, 'carol_x', admin, now);
   map['not-a-session-key'] = { revision: 1, talkers: [], invites: [] };
   assert.deepEqual(dropOtherSpacesFromMap(map, groupId.toString()).sort(), [otherGroupTopic, 'not-a-session-key'].sort());
-  assert.deepEqual(Object.keys(map), [designTopic]);
+  assert.deepEqual(Object.keys(map).sort(), [designTopic, otherGroupTopic].sort());
+  assert.equal(map[designTopic].talkers.length, 1, 'the served group is untouched');
+  assert.deepEqual([map[otherGroupTopic].talkers, map[otherGroupTopic].invites], [[], []]);
+  assert.deepEqual(dropOtherSpacesFromMap(map, groupId.toString()), [], 'nothing left to drop');
+});
+
+test('dropOtherSpacesFromMap: pairing group A, then B, then A again never repeats a revision — an old /access keyboard of A stays stale', () => {
+  const groupA = keyToString(makeTelegramKey(-1003333333333, 5));
+  const groupAId = '-1003333333333';
+  const map: TopicTalkersMap = {};
+  addTalkerToMap(map, groupA, alice, admin, now);
+  const revisionOfTheOldKeyboard = map[groupA].revision;
+  dropOtherSpacesFromMap(map, '-1004444444444'); // paired to group B: A's list is emptied
+  assert.deepEqual(map[groupA].talkers, []);
+  dropOtherSpacesFromMap(map, groupAId); // paired back to A
+  addTalkerToMap(map, groupA, bob, admin, now); // an admin builds a new list in A
+  assert.ok(map[groupA].revision > revisionOfTheOldKeyboard, 'the keyboard drawn when Alice was listed cannot act on Bob');
 });
 
 test('General\'s list is group-wide: its talkers are effective in every topic, and a topic\'s own are not shared', () => {
   const map: TopicTalkersMap = {};
   addTalkerToMap(map, generalTopic, alice, admin, now);
   addTalkerToMap(map, designTopic, bob, admin, now);
-  assert.deepEqual([...getEffectiveTalkerIds(map, designTopic, generalTopic)].sort(), ['101', '102']);
-  assert.deepEqual([...getEffectiveTalkerIds(map, docsTopic, generalTopic)], ['101'], 'a topic without a list still gets General\'s');
-  assert.deepEqual([...getEffectiveTalkerIds(map, generalTopic, generalTopic)], ['101'], 'Bob\'s grant is for the design topic only');
-  assert.equal(getTalkerScope(map, docsTopic, generalTopic, '101'), 'general');
-  assert.equal(getTalkerScope(map, generalTopic, generalTopic, '101'), 'own', 'in General itself it is the own list');
-  assert.equal(getTalkerScope(map, docsTopic, generalTopic, '102'), null);
-  assert.deepEqual([...getEffectiveTalkerIds({}, designTopic, generalTopic)], [], 'no record at all: nobody');
+  assert.deepEqual([...getEffectiveTalkerIdsInMap(map, designTopic, generalTopic)].sort(), ['101', '102']);
+  assert.deepEqual([...getEffectiveTalkerIdsInMap(map, docsTopic, generalTopic)], ['101'], 'a topic without a list still gets General\'s');
+  assert.deepEqual([...getEffectiveTalkerIdsInMap(map, generalTopic, generalTopic)], ['101'], 'Bob\'s grant is for the design topic only');
+  assert.equal(getTalkerScopeInMap(map, docsTopic, generalTopic, '101'), 'general');
+  assert.equal(getTalkerScopeInMap(map, generalTopic, generalTopic, '101'), 'own', 'in General itself it is the own list');
+  assert.equal(getTalkerScopeInMap(map, docsTopic, generalTopic, '102'), null);
+  assert.deepEqual([...getEffectiveTalkerIdsInMap({}, designTopic, generalTopic)], [], 'no record at all: nobody');
 });
 
 test('a person on both a topic list and General\'s reads as the topic\'s own entry; revoking it leaves General\'s in force', () => {
   const map: TopicTalkersMap = {};
   addTalkerToMap(map, generalTopic, alice, admin, now);
   addTalkerToMap(map, designTopic, alice, admin, now);
-  assert.equal(getTalkerScope(map, designTopic, generalTopic, '101'), 'own');
+  assert.equal(getTalkerScopeInMap(map, designTopic, generalTopic, '101'), 'own');
   removeTalkerFromMap(map, designTopic, '101');
-  assert.equal(getTalkerScope(map, designTopic, generalTopic, '101'), 'general');
+  assert.equal(getTalkerScopeInMap(map, designTopic, generalTopic, '101'), 'general');
   removeTalkerFromMap(map, generalTopic, '101');
-  assert.equal(getTalkerScope(map, designTopic, generalTopic, '101'), null);
+  assert.equal(getTalkerScopeInMap(map, designTopic, generalTopic, '101'), null);
 });

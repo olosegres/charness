@@ -1268,7 +1268,7 @@ test('talkers: a fresh or pre-feature state file reads as nobody, and the file g
   assert.equal(store.getTalkerScope(key1, talkerGeneralKey, '101'), null);
   assert.deepEqual(store.getTopicTalkerCounts(), []);
   assert.equal(await store.removeTopicTalker(key1, '101'), false);
-  assert.deepEqual(await store.removeUserFromAllTopics('101'), []);
+  assert.deepEqual(await store.removeUserFromAllTopics(talkerAlice), []);
   await store.flush();
   assert.ok(!('topicTalkers' in readStateFileJson()), 'reading and refused writes leave the file alone');
 });
@@ -1368,11 +1368,34 @@ test('talkers: leaving the group drops the person from every list at once, flush
   await store.addTopicTalker(key1, talkerAlice, talkerAdmin);
   await store.addTopicTalker(key2, talkerAlice, talkerAdmin);
   await store.addTopicTalker(key2, talkerBob, talkerAdmin);
-  assert.deepEqual((await store.removeUserFromAllTopics('101')).sort(), [keyToString(key1), keyToString(key2)].sort());
+  assert.deepEqual((await store.removeUserFromAllTopics(talkerAlice)).sort(), [keyToString(key1), keyToString(key2)].sort());
   const onDisk = readStateFileJson().topicTalkers;
   assert.equal(onDisk?.[keyToString(key1)]?.talkers.length, 0);
   assert.equal(onDisk?.[keyToString(key2)]?.talkers.length, 1);
   assert.equal(store.getTalkerScope(key1, talkerGeneralKey, '101'), null);
+});
+
+test('talkers: leaving also cancels the waiting invitation for the person\'s username, so rejoining and writing grants nothing (flushed)', async () => {
+  const store = new StateStore(dataDir, { saveDebounceMs: 600_000 });
+  await store.init();
+  await store.addTopicInvite(key1, 'alice_w', talkerAdmin);
+  await store.addTopicTalker(key2, talkerAlice, talkerAdmin);
+  assert.deepEqual((await store.removeUserFromAllTopics(talkerAlice)).sort(), [keyToString(key1), keyToString(key2)].sort());
+  assert.equal(readStateFileJson().topicTalkers?.[keyToString(key1)]?.invites.length, 0, 'the cancellation is on disk');
+  assert.deepEqual(await store.resolveTopicInvites(talkerAlice), [], 'she writes after coming back: still nobody');
+  assert.equal(store.getTalkerScope(key1, talkerGeneralKey, '101'), null);
+});
+
+test('talkers: an expired invitation nobody read does not block a fresh one for the same name', async () => {
+  const store = new StateStore(dataDir, { saveDebounceMs: 20 });
+  await store.init();
+  await store.addTopicInvite(key1, 'carol_x', talkerAdmin);
+  const { addedAt } = store.getTopicTalkers(key1).invites[0];
+  const afterExpiry = addedAt + topicInviteTtlMs + 1;
+  assert.equal(await store.addTopicInvite(key1, 'carol_x', talkerAdmin, afterExpiry), 'added', 'not «already»: the old one is dead');
+  const [renewed] = store.getTopicTalkers(key1, afterExpiry).invites;
+  assert.equal(renewed.addedAt, afterExpiry);
+  assert.deepEqual((await store.resolveTopicInvites({ userId: '103', username: 'carol_x', name: 'Carol' }, afterExpiry + 1)).map((entry) => entry.threadKey), [keyToString(key1)]);
 });
 
 test('talkers: a rename or a new @username refreshes the entries, and only a real change schedules a write', async () => {
@@ -1395,18 +1418,22 @@ test('talkers: a rename or a new @username refreshes the entries, and only a rea
   assert.equal(readStateFileJson().topicTalkers?.[keyToString(key1)]?.talkers[0].username, 'alice_new');
 });
 
-test('talkers: a re-pair drops the lists of the old group, flushed; the field leaves with the last list', async () => {
+test('talkers: a re-pair empties the lists of the old group, flushed; the revisions stay so a later pair back never reuses one', async () => {
   const store = new StateStore(dataDir, { saveDebounceMs: 600_000 });
   await store.init();
   const otherGroupKey = makeTelegramKey(-1009999999999, 5);
   await store.addTopicTalker(key1, talkerAlice, talkerAdmin);
   await store.addTopicTalker(otherGroupKey, talkerBob, talkerAdmin);
+  const revisionOfTheOldKeyboard = store.getTopicTalkers(otherGroupKey).revision;
 
   await store.dropTopicTalkersOfOtherChats(getTelegramChatId(key1));
-  assert.deepEqual(Object.keys(readStateFileJson().topicTalkers ?? {}), [keyToString(key1)]);
   assert.equal(store.getTalkerScope(otherGroupKey, talkerGeneralKey, '102'), null);
+  assert.equal(readStateFileJson().topicTalkers?.[keyToString(otherGroupKey)]?.talkers.length, 0, 'the emptying is on disk');
+  assert.equal(readStateFileJson().topicTalkers?.[keyToString(key1)]?.talkers.length, 1, 'the served group is untouched');
 
-  await store.dropTopicTalkersOfOtherChats(-1008888888888);
-  assert.ok(!('topicTalkers' in readStateFileJson()), 'no list left, no field');
-  await store.dropTopicTalkersOfOtherChats(-1008888888888);
+  await store.dropTopicTalkersOfOtherChats(getTelegramChatId(otherGroupKey)); // paired to the other group...
+  await store.dropTopicTalkersOfOtherChats(getTelegramChatId(key1)); // ...and back
+  await store.addTopicTalker(otherGroupKey, talkerAlice, talkerAdmin);
+  assert.ok(store.getTopicTalkers(otherGroupKey).revision > revisionOfTheOldKeyboard + 1, 'an old keyboard of that group stays stale');
+  await store.dropTopicTalkersOfOtherChats(getTelegramChatId(key1));
 });
