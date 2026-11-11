@@ -30,6 +30,7 @@ import {
   formatClaudeUsageResetAt,
   getClaudeLaunchPick,
   getClaudeUsageBucketAsOf,
+  getClaudeUsagePercentAsOf,
   getRelevantClaudeUsageKinds,
   markClaudeUsageSnapshotStale,
   mergeClaudeUsageSnapshot,
@@ -533,7 +534,7 @@ describe('the launch pick (getClaudeLaunchPick)', () => {
       const frozenUsage: ClaudeUsageSnapshot = { ...usage({ session: 100, weekly: 100, weeklyResetsAt: hours(-3), sessionResetsAt: hours(-9), fable: 100 }), isStale: true, error: 'token expired' };
       const [entry] = buildClaudeProfilesReport([view('idle', frozenUsage)], 'fable', nowMs).profiles;
       assert.deepEqual(entry.buckets.map((bucket) => bucket.percent), [0, 0, 0]);
-      assert.ok(entry.buckets.every((bucket) => Date.parse(bucket.resetsAt ?? '') > nowMs), 'no reset left in the past');
+      assert.deepEqual(entry.buckets.map((bucket) => bucket.resetsAt), frozenUsage.buckets.map((bucket) => bucket.resetsAt), 'the instants stay as read: no estimated next reset is reported');
       assert.equal(entry.headroomPercent, 100);
       assert.equal(entry.isEligible, true);
       assert.equal(entry.isUsageStale, true, 'the report still says the figures were not re-read');
@@ -714,21 +715,20 @@ describe('the human formats', () => {
     assert.equal(formatClaudeUsageBucket(known, nowMs, { fallbackBucket: weeklyBucket }), '10% 🔄 in 1h', 'a known reset wins');
   });
 
-  it('a window whose reset has passed shows 0 % and a reset still ahead — never the read figure with «in 1m»', () => {
+  it('a window whose reset has passed shows a bare 0 % — no countdown: nothing says when its next period ends', () => {
     const minutesAgo = (minutes: number): string => new Date(nowMs - minutes * 60_000).toISOString();
     const frozenSession = { kind: 'session' as const, percent: 100, resetsAt: minutesAgo(1), scopeModel: null };
     const frozenWeekly = { kind: 'weekly_all' as const, percent: 100, resetsAt: minutesAgo(60), scopeModel: null };
-    assert.equal(formatClaudeUsageBucket(frozenSession, nowMs), '0% 🔄 in 5h', 'a fresh five-hour period lies ahead');
-    assert.equal(formatClaudeUsageBucket(frozenWeekly, nowMs), '0% 🔄 in 6d 23h', 'a fresh week lies ahead');
-    for (const bucket of [frozenSession, frozenWeekly, { ...frozenWeekly, resetsAt: minutesAgo(15 * 24 * 60) }]) {
-      assert.doesNotMatch(formatClaudeUsageBucket(bucket, nowMs), /in 1m|100%/);
+    for (const bucket of [frozenSession, frozenWeekly, { ...frozenWeekly, resetsAt: minutesAgo(15 * 24 * 60) }, { ...frozenSession, resetsAt: new Date(nowMs).toISOString() }]) {
+      assert.equal(formatClaudeUsageBucket(bucket, nowMs), '0%');
     }
   });
 
-  it('a stand-in reset that has passed rolls ahead too: an unknown 5h reset never borrows a weekly «in 1m»', () => {
+  it('an unknown 5h reset borrows the weekly one only while that is still ahead — a passed weekly reset is no countdown either', () => {
     const session = { kind: 'session' as const, percent: 100, resetsAt: null, scopeModel: null };
-    const frozenWeekly = { kind: 'weekly_all' as const, percent: 100, resetsAt: new Date(nowMs - 60_000).toISOString(), scopeModel: null };
-    assert.equal(formatClaudeUsageBucket(session, nowMs, { fallbackBucket: frozenWeekly }), '100% 🔄 in 7d');
+    const weekly = (resetsAt: string) => ({ kind: 'weekly_all' as const, percent: 100, resetsAt, scopeModel: null });
+    assert.equal(formatClaudeUsageBucket(session, nowMs, { fallbackBucket: weekly(new Date(nowMs + 2 * 86_400_000).toISOString()) }), '100% 🔄 in 2d');
+    assert.equal(formatClaudeUsageBucket(session, nowMs, { fallbackBucket: weekly(new Date(nowMs - 60_000).toISOString()) }), '100%');
   });
 });
 
@@ -751,7 +751,7 @@ describe('the claude-profiles CLI line', () => {
     assert.match(withFable, /week 40% 🔄 in 2d 1h · Fable 3% 🔄 in 2d 1h$/);
   });
 
-  it('a window read at 100 % whose reset has passed prints as 0 % — the line never says «100% 🔄 in 1m»', () => {
+  it('a window read at 100 % whose reset has passed prints as a bare 0 % — the line never says «100% 🔄 in 1m»', () => {
     const frozen = {
       name: 'idle', configDir: '/d/idle', email: 'i@example.com', kind: 'personal', subscriptionType: 'max', loggedIn: true,
       buckets: [
@@ -760,7 +760,7 @@ describe('the claude-profiles CLI line', () => {
       ],
       usageFetchedAt: null, isUsageStale: true, limitedUntil: null, creditExhaustedAt: null, billing: null, spentUsd: null, remainingEstimateUsd: null, expiresOn: null, probablyUsedUp: false, renewedAt: null, isEligible: true, chainExclusion: null, headroomPercent: 100, isRecommended: false,
     } as const;
-    assert.match(formatClaudeProfileCliLine({ ...frozen, buckets: [...frozen.buckets] }, nowMs), /5h 0% 🔄 in 5h · week 0% 🔄 in 6d 23h \(stale\)$/);
+    assert.match(formatClaudeProfileCliLine({ ...frozen, buckets: [...frozen.buckets] }, nowMs), /5h 0% · week 0% \(stale\)$/);
   });
 });
 
@@ -804,6 +804,19 @@ describe('getClaudeUsageBucketAsOf — a bucket against the clock', () => {
     assert.deepEqual(getClaudeUsageBucketAsOf(bucket('session', at(0)), nowMs), { ...bucket('session', at(300)), percent: 0 });
     assert.deepEqual(getClaudeUsageBucketAsOf(bucket('session', at(-301)), nowMs), { ...bucket('session', at(299)), percent: 0 }, 'five hours and a minute ago: one full period has run, the second started');
     assert.deepEqual(getClaudeUsageBucketAsOf(bucket('weekly_all', at(-60)), nowMs), { ...bucket('weekly_all', at(7 * 1440 - 60)), percent: 0 });
+  });
+});
+
+describe('getClaudeUsagePercentAsOf — the used percent against the clock', () => {
+  const at = (minutes: number): string => new Date(nowMs + minutes * 60_000).toISOString();
+  const bucket = (resetsAt: string | null) => ({ kind: 'weekly_all' as const, percent: 87, resetsAt, scopeModel: null });
+
+  it('a window whose reset has passed (the instant itself counts) is 0 %; one ahead, without a reset or with an unreadable one keeps the read figure', () => {
+    assert.equal(getClaudeUsagePercentAsOf(bucket(at(-1)), nowMs), 0);
+    assert.equal(getClaudeUsagePercentAsOf(bucket(at(0)), nowMs), 0);
+    assert.equal(getClaudeUsagePercentAsOf(bucket(at(1)), nowMs), 87);
+    assert.equal(getClaudeUsagePercentAsOf(bucket(null), nowMs), 87);
+    assert.equal(getClaudeUsagePercentAsOf(bucket('garbage'), nowMs), 87);
   });
 });
 

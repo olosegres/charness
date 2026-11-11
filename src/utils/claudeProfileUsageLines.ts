@@ -47,7 +47,7 @@ function getRelativeResetWords(): ClaudeRelativeResetWords {
 /**
  * @description The profile's usage as display lines: the windows as `used% 🔄 reset` — 5h and weekly always (`—`
  * for one the snapshot lacks), Fable only when the account HAS that window (a corporate seat has none: nothing
- * is written about it; a window whose reset has passed since it was read shows `0%`) — `(stale)` when the last poll could not refresh, and the limit mark while it holds, the
+ * is written about it; a window whose reset has passed since it was read shows a bare `0%`, no countdown) — `(stale)` when the last poll could not refresh, and the limit mark while it holds, the
  * reset instant in `timezone`, and the used-up-credits mark while it holds. An account billed to API credits has no
  * windows (its row already says it pays per use): what it spent through the bot and the one credit line
  * (`utils/claudeApiCredit.ts`: the spend of the credit period, the operator's figure when there is one, and the «probably

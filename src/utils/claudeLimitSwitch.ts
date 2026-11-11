@@ -30,8 +30,10 @@ export { resolveClaudeAutoSwitchOnLimitEnabled } from './autoContinueOnLimit';
  * the launch pick's: the account whose weekly window resets soonest first (`sortClaudeProfilesByLaunchRank`), the one
  * ranking a new agent's account too. A profile whose usage is unknown or stale is left out on purpose — the switch is sold
  * as "this one has room", and a guess could land the topic in a second limit — except a stale one whose every window has
- * since passed its reset: the clock proves those empty, and an idle account whose token expired (no CLI run renews it, no poll
- * can re-read it) would otherwise stay out for good. An account billed to API credits is never
+ * since passed its reset: only the old windows are known to be over (what the account has used since, through a login on
+ * another machine or host user, is not visible here), but an idle account whose token expired (no CLI run renews it, no poll
+ * can re-read it) would otherwise stay out for good; if it was used elsewhere in the meantime, the topic meets the limit
+ * again and the chain moves it on. An account billed to API credits is never
  * one of them: it has no windows to have room on, and only the operator decides to spend money (the chain's rung).
  */
 export function pickClaudeLimitSwitchCandidates(input: {

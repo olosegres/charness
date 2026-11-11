@@ -264,6 +264,33 @@ test('availability: a Claude rung needs a known, signed-in, unlimited profile wi
   assert.equal(status(claude('unknown')), 'available');
 });
 
+test('availability: a window frozen at 100 % whose reset has passed since it was read no longer makes a rung limited — a stale or a fresh snapshot alike; a window still ahead does, until its own reset', () => {
+  const frozenUsage = (input: { isStale: boolean; sessionResetsAt: string; weeklyResetsAt: string }): ClaudeUsageSnapshot => ({
+    fetchedAt: '2026-10-12T04:00:00.000Z',
+    source: 'api',
+    isStale: input.isStale,
+    buckets: [
+      { kind: 'session', percent: 100, resetsAt: input.sessionResetsAt, scopeModel: null },
+      { kind: 'weekly_all', percent: 100, resetsAt: input.weeklyResetsAt, scopeModel: null },
+    ],
+  });
+  const passed = '2026-10-12T09:00:00.000Z';
+  const ahead = '2026-10-15T00:00:00.000Z';
+  const detection = buildDetection({
+    claudeProfiles: [
+      buildProfile('staleReset', { usage: frozenUsage({ isStale: true, sessionResetsAt: passed, weeklyResetsAt: passed }) }),
+      buildProfile('freshReset', { usage: frozenUsage({ isStale: false, sessionResetsAt: passed, weeklyResetsAt: passed }) }),
+      buildProfile('staleWeekAhead', { usage: frozenUsage({ isStale: true, sessionResetsAt: passed, weeklyResetsAt: ahead }) }),
+      buildProfile('freshWeekAhead', { usage: frozenUsage({ isStale: false, sessionResetsAt: passed, weeklyResetsAt: ahead }) }),
+    ],
+  });
+  const availability = (profile: string) => getFallbackEntryAvailability(claude(profile), detection, nowMs);
+  assert.equal(availability('staleReset').status, 'available', 'both windows are over, the figures not re-read');
+  assert.equal(availability('freshReset').status, 'available', 'both windows are over, the figures just read');
+  assert.deepEqual(availability('staleWeekAhead'), { status: 'limited', until: ahead }, 'only the window still running names the instant — not the one that passed');
+  assert.deepEqual(availability('freshWeekAhead'), { status: 'limited', until: ahead });
+});
+
 test('availability: an OpenCode rung needs the live catalog and no limit mark ahead', () => {
   const detection = buildDetection({ openCodeLimits: { 'openai/gpt-5': '2026-10-12T11:00:00.000Z', 'google/gemini-2.5-pro': '2026-10-12T09:00:00.000Z' } });
   assert.deepEqual(getFallbackEntryAvailability(openCode('openai', 'gpt-5'), detection, nowMs), { status: 'limited', until: '2026-10-12T11:00:00.000Z' });

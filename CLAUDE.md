@@ -147,7 +147,7 @@ per-backend controls are optional methods the bot checks before calling.
   and every running session would change at once; a live switch is the `/model` re-spawn, deferred while the
   process works. Per-profile USAGE (`utils/claudeUsage.ts`, `claudeUsageRefresher.ts`): the OAuth usage
   endpoint with each profile's own token (expired token ⇒ stale mark, never refreshed by the bot; every reader reads a bucket
-  against the clock — `getClaudeUsageBucketAsOf`: a window whose reset passed is 0 %) plus the
+  against the clock — `getClaudeUsagePercentAsOf`: a window whose reset passed is 0 %, shown with no countdown) plus the
   json-stream `rate_limit_event` frames, cached on the record (`default` has a hidden one); shown under each
   `/accounts` row and on the `/limits` board, served to agents by the `claude_profiles` MCP tool and `charness claude-profiles`
   (`getClaudeLaunchPick`: the `/limits_autoswitch` list is the operator's word on which accounts an agent may use — once it holds any Claude rung only

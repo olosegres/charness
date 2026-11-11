@@ -19,7 +19,7 @@
  */
 
 import { checkIsValidClaudeProfileName, defaultClaudeProfileName } from './claudeProfiles';
-import { buildClaudeProfilesReport, formatClaudeUsageResetAt, getClaudeChainExclusion, getClaudeUsageBucket, getRelevantClaudeUsageKinds, type ClaudeLaunchChainScope, type ClaudeProfileUsageView } from './claudeUsage';
+import { buildClaudeProfilesReport, formatClaudeUsageResetAt, getClaudeChainExclusion, getClaudeUsageBucket, getClaudeUsageBucketAsOf, getRelevantClaudeUsageKinds, type ClaudeLaunchChainScope, type ClaudeProfileUsageView } from './claudeUsage';
 
 /**
  * One rung of the chain. A Claude entry with `model: null` keeps the topic's own model. `disabled: true`
@@ -427,14 +427,17 @@ export function formatOpenCodeModelLimitSuffix(label: string, limits: Readonly<R
   return ` ⛔ ${formatClaudeUsageResetAt(limitedUntil, timezone, nowMs)}`;
 }
 
-/** The latest reset among the windows a model drains that are at 100 % and still ahead; `null` when none names one. */
+/** The latest reset among the windows a model drains that are at 100 % and still ahead (read against the clock); `null` when none names one. */
 function getExhaustedWindowReset(profile: ClaudeProfileUsageView, model: string | null, nowMs: number): string | null {
   let latest: number | null = null;
   for (const kind of getRelevantClaudeUsageKinds(model)) {
     const bucket = getClaudeUsageBucket(profile.usage, kind);
-    if (!bucket || bucket.percent < 100 || bucket.resetsAt === null) continue;
-    const at = Date.parse(bucket.resetsAt);
-    if (Number.isFinite(at) && at > nowMs && (latest === null || at > latest)) latest = at;
+    if (!bucket) continue;
+    // A window whose reset has passed is read as empty (0 %) and skipped; one still at 100 % has its reset ahead or none.
+    const { percent, resetsAt } = getClaudeUsageBucketAsOf(bucket, nowMs);
+    if (percent < 100 || resetsAt === null) continue;
+    const at = Date.parse(resetsAt);
+    if (Number.isFinite(at) && (latest === null || at > latest)) latest = at;
   }
   return latest === null ? null : new Date(latest).toISOString();
 }

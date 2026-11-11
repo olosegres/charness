@@ -64,11 +64,11 @@ describe('formatClaudeProfileUsageLines', () => {
     );
   });
 
-  it('an account frozen by an expired token — figures read at 100 % before their resets passed — shows 0 % with the stale mark, never «100% 🔄 in 1m»', () => {
+  it('an account frozen by an expired token — figures read at 100 % before their resets passed — shows a bare 0 % with the stale mark, never «100% 🔄 in 1m»', () => {
     const minutesAgo = (minutes: number): string => new Date(nowMs - minutes * 60_000).toISOString();
     const frozen = buildSnapshot([session(100, minutesAgo(1)), weekly(100, minutesAgo(30)), fable(100, minutesAgo(30))], true);
     const [line] = formatClaudeProfileUsageLines({ usage: { ...frozen, error: 'token expired' } }, 'UTC', nowMs);
-    assert.equal(line, '    ⏱ 5h 0% 🔄 in 5h · week 0% 🔄 in 7d · Fable 0% 🔄 in 7d (stale)');
+    assert.equal(line, '    ⏱ 5h 0% · week 0% · Fable 0% (stale)');
     assert.doesNotMatch(line, /100%|in 1m/);
   });
 

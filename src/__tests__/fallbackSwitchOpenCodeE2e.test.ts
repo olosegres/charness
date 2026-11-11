@@ -33,7 +33,7 @@
  *   · a ChatGPT subscription's usage (a snapshot seeded into `state.json`; the instance's `auth.json` holds no `oauth`
  *     record, so nothing ever reaches chatgpt.com) shows on both screens;
  *   · an idle Claude account whose last reading is frozen (stale, 100 %, its resets already passed — the bot could not
- *     re-read it: no login token) shows as 0 % with the stale mark on both screens, never «100% 🔄 in 1m».
+ *     re-read it: no login token) shows as a bare 0 % (no countdown) with the stale mark on both screens, never «100% 🔄 in 1m».
  *
  * Nothing leaves the machine: every server is on loopback and every agent is a fake. Everything the test starts is
  * stopped in `after`.
@@ -633,7 +633,7 @@ describe('The usage-limit switch to and from OpenCode end to end: built charness
     assert.equal(usage?.openai?.usage?.buckets.length, 2, 'the poller left the seeded snapshot alone (auth.json lists no such provider)');
   });
 
-  it('an idle Claude account frozen at 100 % — stale, its resets already passed, no token to re-read it — shows 0 % with the stale mark on /limits and /accounts, never «100% 🔄 in 1m»', async () => {
+  it('an idle Claude account frozen at 100 % — stale, its resets already passed, no token to re-read it — shows a bare 0 % with the stale mark on /limits and /accounts, never «100% 🔄 in 1m»', async () => {
     const hoursAgo = (hours: number): string => new Date(Date.now() - hours * 3_600_000).toISOString();
     const frozenUsage = {
       fetchedAt: hoursAgo(6),
@@ -651,8 +651,8 @@ describe('The usage-limit switch to and from OpenCode end to end: built charness
       assert.ok(takeoverRecord, `the ${takeoverAccount} account is recorded by the earlier steps`);
       persisted.claudeProfiles = { ...persisted.claudeProfiles, [takeoverAccount]: { ...takeoverRecord, loggedIn: true, usage: frozenUsage } };
     });
-    // The next period lies ahead of a reset that passed an hour ago: five hours less that hour, a week less it.
-    const frozenLine = /⏱ 5h 0% 🔄 in 4h · week 0% 🔄 in 6d 23h · Fable 0% 🔄 in 6d 23h \(stale\)/;
+    // A window that reset an hour ago is over: a bare 0 %, no countdown — nothing says when its next period ends.
+    const frozenLine = /⏱ 5h 0% · week 0% · Fable 0% \(stale\)/;
 
     const board = await openLimitsBoard(fakeTelegram, claudeTopic, claudeToOpenCode.threadId);
     assert.match(board.message.text, new RegExp(`\\n${takeoverAccount} — ${frozenLine.source}\\n`), 'the account\'s windows are read against the clock, the stale mark stays');
