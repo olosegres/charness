@@ -22,6 +22,7 @@ import type { ChatMember, Message, User } from 'telegraf/typings/core/types/type
 import {
   checkHasLeftGroup,
   checkIsTelegramForward,
+  checkIsWrittenMessage,
   checkShouldInvalidateAdminCache,
   createTelegramConnectorInbound,
   getInboundEvent,
@@ -1001,4 +1002,27 @@ test('getTelegramTalkerContext: a talker who TAPPED a button gets the context a 
     nonOperatorSender: talkerDescription,
   });
   assert.equal(getTelegramTalkerContext(makeUser(12, { first_name: 'Nobody' })).block, '[Message from topic member "Nobody" · not the operator]');
+});
+
+test('checkIsWrittenMessage: text, captions, media and the like are somebody writing; a join, a leave, a topic created, a pin or a rename is the group acting on them', () => {
+  const base = { message_id: 5, date: 0, chat: { id: -1001234567890, type: 'supergroup', title: 'g' }, from: makeUser(9) };
+  const written: object[] = [
+    { text: 'hello' },
+    { photo: [{ file_id: 'p', file_unique_id: 'u', width: 1, height: 1 }], caption: 'look' },
+    { voice: { file_id: 'v', file_unique_id: 'u', duration: 1 } },
+    { sticker: { file_id: 's', file_unique_id: 'u', type: 'regular', width: 1, height: 1, is_animated: false, is_video: false } },
+    { document: { file_id: 'd', file_unique_id: 'u' } },
+    { contact: { phone_number: '1', first_name: 'x' } },
+    { poll: { id: '1', question: 'q', options: [], total_voter_count: 0 } },
+  ];
+  const service: object[] = [
+    { new_chat_members: [makeUser(9)] },
+    { left_chat_member: makeUser(9) },
+    { forum_topic_created: { name: 'T', icon_color: 0 } },
+    { forum_topic_closed: {} },
+    { new_chat_title: 'renamed' },
+    { pinned_message: { message_id: 1, date: 0, chat: { id: -1001234567890, type: 'supergroup', title: 'g' }, text: 'old' } },
+  ];
+  for (const fields of written) assert.equal(checkIsWrittenMessage({ ...base, ...fields } as Message), true, JSON.stringify(Object.keys(fields)));
+  for (const fields of service) assert.equal(checkIsWrittenMessage({ ...base, ...fields } as Message), false, JSON.stringify(Object.keys(fields)));
 });

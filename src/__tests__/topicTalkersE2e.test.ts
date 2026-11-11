@@ -101,6 +101,9 @@ const halMember = { id: 575757, is_bot: false, first_name: 'Hal', last_name: 'Ha
 const quietAdmin = { id: 585858, is_bot: false, first_name: 'Ada', last_name: 'Admin', username: 'ada_admin' };
 /** Telegram's service user, which a linked channel's post carries in `from`. */
 const telegramServiceUser = { id: 777000, is_bot: false, first_name: 'Telegram' };
+/** A member invited by @username who has only JOINED the group so far, and one who joins with no invitation at all. */
+const lateMember = { id: 595959, is_bot: false, first_name: 'Lena', last_name: 'Late', username: 'lena_l' };
+const moonMember = { id: 606060, is_bot: false, first_name: 'Mira', last_name: 'Moon', username: 'mira_m' };
 /** A member of the group nobody let in. */
 const stranger = { id: 313131, is_bot: false, first_name: 'Bob', last_name: 'Stone', username: 'bobby_s' };
 const botUser = { id: 7000000001, is_bot: true, first_name: 'Fake bot', username: 'fake_charness_bot' };
@@ -138,6 +141,7 @@ const accessWarning = "They will be able to make the agent run any command in th
 const answeredByTess = ' (answered by topic member "Tess Talker" (@tess), not the operator)';
 const answeredByGus = ' (answered by topic member "Gus Guest" (@gus), not the operator)';
 const carolMark = talkerMarkOf(invitedMember);
+const lenaMark = talkerMarkOf(lateMember);
 const gusMark = talkerMarkOf(generalTalker);
 
 let layout: IsolatedInstanceLayout | null = null;
@@ -824,5 +828,98 @@ describe('topic talkers end to end: built charness, fake Bot API, fake speech en
     const prompt = await waitForAgentPrompt('eve writes after the restart');
     assert.equal(prompt.pid, apiAgentPid);
     assert.ok(prompt.text.includes(`${eveMark}\n\neve writes after the restart`), prompt.text);
+  });
+
+  it('a talker\'s message that is REFUSED changes nothing: a usage-limit wait armed for the topic stays armed — only a message that becomes a prompt takes over', async () => {
+    const docsKey = keyToString(makeTelegramKey(group.id, docsThreadId));
+    const threeHoursMs = 3 * 60 * 60 * 1000;
+    charness = await restartCharnessWithState(getLayout(), fakeTelegram, getCharness(), (persisted) => {
+      persisted.apiRetries = { [docsKey]: { kind: 'usageLimit', attempt: 1, fireAt: Date.now() + threeHoursMs } };
+    });
+    const hasWait = (): boolean => JSON.parse(fs.readFileSync(path.join(getLayout().dataDir, stateFileName), 'utf8')).apiRetries?.[docsKey] !== undefined;
+    assert.ok(hasWait(), 'the wait is armed (the boot restored it from the state file)');
+    const afterRefusals = Math.max(0, ...docsTopic().listMessages().map((message) => message.message_id));
+    fakeTelegram.pushUserMessage(docsThreadId, '/context', invitedMember);
+    await waitForBotText(docsTopic(), afterRefusals, adminOnlyCommandRefusal);
+    // The cancel would be flushed within the state file's save debounce: look well past it.
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+    assert.ok(hasWait(), 'a refused slash text left the wait armed');
+    // The control that makes the look above mean something: a message that IS a prompt ends the wait, as any sender's does.
+    fakeTelegram.pushUserMessage(docsThreadId, 'carol takes over the waiting topic', invitedMember);
+    await waitForAgentPrompt('carol takes over the waiting topic');
+    await getCharness().waitFor('the wait to end with the talker\'s prompt', replyTimeoutMs, () => !hasWait());
+  });
+
+  it('an admin armed a key step (/stt → Add engine → Groq): a talker\'s text is NOT the key — not deleted, not saved — and the step still takes the admin\'s', async () => {
+    const sttFilePath = path.join(path.dirname(getLayout().envFile), 'stt.json');
+    const readSttFile = (): string => fs.readFileSync(sttFilePath, 'utf8');
+    const sttFileBefore = readSttFile();
+    const talkerKey = 'gsk_talker_pasted_key_0001';
+    const adminKey = 'gsk_admin_pasted_key_0002';
+    const afterArming = Math.max(0, ...idleTopic().listMessages().map((message) => message.message_id));
+    fakeTelegram.pushOperatorMessage(idleThreadId, '/stt');
+    const screen = await idleTopic().waitForMessage('the /stt screen', (message) => message.message_id > afterArming && message.reply_markup !== undefined);
+    await idleTopic().tapAndAwaitAnswer(screen, idleTopic().getButtonData(screen, '➕ Add engine'));
+    await idleTopic().waitForMessageText('the add-engine screen', screen, () => idleTopic().getKeyboardLabels(screen).flat().includes('Groq'));
+    await idleTopic().tapAndAwaitAnswer(screen, idleTopic().getButtonData(screen, 'Groq'));
+    await idleTopic().waitForMessageText('the key prompt', screen, (text) => text.includes('Paste the API key now'));
+
+    const afterPaste = Math.max(0, ...idleTopic().listMessages().map((message) => message.message_id));
+    const talkerMessageId = fakeTelegram.pushUserMessage(idleThreadId, talkerKey, halMember);
+    await waitForBotText(idleTopic(), afterPaste, noAgentForTalkerNotice);
+    assert.equal(fakeTelegram.getMessage(talkerMessageId)?.isDeleted, undefined, 'the talker\'s message is just a message: the key step did not take (and delete) it');
+    assert.equal(readSttFile(), sttFileBefore, 'no engine was saved from a talker\'s words');
+
+    const adminMessageId = fakeTelegram.pushOperatorMessage(idleThreadId, adminKey);
+    await getCharness().waitFor('the admin\'s key to be taken and its message deleted', replyTimeoutMs, () => fakeTelegram.getMessage(adminMessageId)?.isDeleted === true);
+    await getCharness().waitFor('the Groq engine to be saved', replyTimeoutMs, () => readSttFile().includes(adminKey));
+    assert.ok(!readSttFile().includes(talkerKey), 'the talker\'s words are nowhere in the settings');
+  });
+
+  it('a service message of a join is not «writing»: it spends no invitation, offers nobody as a recent writer — the first real message does both', async () => {
+    const docsKey = keyToString(makeTelegramKey(group.id, docsThreadId));
+    const afterInvite = Math.max(0, ...docsTopic().listMessages().map((message) => message.message_id));
+    fakeTelegram.pushOperatorMessage(docsThreadId, '/access add @lena_l');
+    const confirmation = await waitForBotText(docsTopic(), afterInvite, 'Add @lena_l as soon as they first write in this group?');
+    await tapAccessButton(docsTopic(), confirmation, '✅ Add');
+    await waitForBotText(docsTopic(), afterInvite, '⏳ @lena_l may talk to the agent here');
+
+    fakeTelegram.pushMembershipServiceMessage(lateMember, 'joined');
+    fakeTelegram.pushMembershipServiceMessage(moonMember, 'joined');
+    // Updates are handled in order: once the agent has read this, both service messages are behind us.
+    fakeTelegram.pushOperatorMessage(docsThreadId, 'the operator writes after the joins');
+    await waitForAgentPrompt('the operator writes after the joins');
+    const docsList = readStateFile().topicTalkers?.[docsKey];
+    assert.deepEqual(docsList?.invites.map((invite) => invite.username), ['lena_l'], 'the invitation still waits');
+    assert.ok(!docsList?.talkers.some((talker) => talker.userId === lateMember.id.toString()), 'joining made her no talker');
+    assert.deepEqual(listBotTextsAfter(docsTopic(), afterInvite).filter((text) => text.includes('may now talk')), [], 'no «may now talk» notice for a join');
+    const generalList = await openAccessList(generalTopic(), generalThreadId);
+    await tapAccessButton(generalTopic(), generalList, '＋ Add');
+    await generalTopic().waitForMessageText('General\'s add screen', generalList, (text) => text.startsWith('Who should talk to the agent in every topic?'));
+    assert.deepEqual(listLabels(generalTopic(), generalList), ['‹ Back'], 'nobody who only joined is offered as a writer');
+
+    // The controls: Lena's first REAL message spends the invitation; Mira's puts her on the add screen.
+    const afterLena = Math.max(0, ...docsTopic().listMessages().map((message) => message.message_id));
+    fakeTelegram.pushUserMessage(docsThreadId, 'lena writes at last', lateMember);
+    await waitForBotText(docsTopic(), afterLena, '✅ @lena_l (Lena Late) may now talk to the agent here.');
+    const prompt = await waitForAgentPrompt('lena writes at last');
+    assert.ok(prompt.text.includes(`${lenaMark}\n\nlena writes at last`), prompt.text);
+    fakeTelegram.pushUserMessage(generalThreadId, 'mira writes in General', moonMember);
+    const generalAgain = await openAccessList(generalTopic(), generalThreadId);
+    await tapAccessButton(generalTopic(), generalAgain, '＋ Add');
+    await generalTopic().waitForMessageText('General\'s add screen with Mira', generalAgain, () => listLabels(generalTopic(), generalAgain).includes('@mira_m (Mira Moon)'));
+  });
+
+  it('an admin replies to a TALKER\'s message: the agent reads the quote as from a topic member — named, not from the operator', async () => {
+    const quotedWords = 'carol asks the admin to look at the build';
+    const carolMessageId = fakeTelegram.pushUserMessage(docsThreadId, quotedWords, invitedMember);
+    await waitForAgentPrompt(quotedWords);
+    const adminReply = 'the admin answers carol';
+    fakeTelegram.pushOperatorMessage(docsThreadId, adminReply, { replyToMessageId: carolMessageId });
+    const prompt = await waitForAgentPrompt(adminReply);
+    assert.ok(
+      prompt.text.includes(`[Replying to an earlier message · from: topic member "Carol Newcomer" (@carol)]\n> ${quotedWords}\n\n${adminReply}`),
+      `a talker's words are quoted under their own name in:\n${prompt.text}`,
+    );
   });
 });

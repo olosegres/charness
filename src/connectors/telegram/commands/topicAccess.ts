@@ -251,18 +251,29 @@ export function createTopicAccess(ports: TopicAccessPorts) {
     if (target === 'badUsername') { await replyToThread(key, t('access.refuseBadUsername')); return; }
     if (target.kind === 'chatIdentity') { await replyToThread(key, t('access.removeNotFound')); return; }
     const entry = getState().getTopicTalkers(key);
-    const scopeWords = getScopeWords(getScope(key));
+    const scope = getScope(key);
     const lowercase = normaliseUsername(target.username ?? '');
-    const talker = entry.talkers.find((candidate) => (target.kind === 'person' ? candidate.userId === target.userId : candidate.username !== undefined && normaliseUsername(candidate.username) === lowercase));
+    const findTalker = (list: TopicTalkersEntry) => list.talkers.find((candidate) => (target.kind === 'person' ? candidate.userId === target.userId : candidate.username !== undefined && normaliseUsername(candidate.username) === lowercase));
+    const findInvite = (list: TopicTalkersEntry) => (lowercase === '' ? undefined : list.invites.find((candidate) => candidate.username === lowercase));
+    const talker = findTalker(entry);
     if (talker) {
       await getState().removeTopicTalker(key, talker.userId);
-      await replyToThread(key, t('access.removedNotice', { person: formatPersonLabel(talker), scope: scopeWords }));
+      await replyToThread(key, t('access.removedNotice', { person: formatPersonLabel(talker), scope: getScopeWords(scope) }));
       return;
     }
-    const invite = lowercase === '' ? undefined : entry.invites.find((candidate) => candidate.username === lowercase);
+    const invite = findInvite(entry);
     if (invite) {
       await getState().removeTopicInvite(key, invite.username);
       await replyToThread(key, t('access.inviteRemovedNotice', { username: invite.username }));
+      return;
+    }
+    // A topic's screen shows General's people in its «Also: everyone from General's list» line: say where they are removed, not that nobody is there.
+    const generalEntry = scope === 'topic' ? getState().getTopicTalkers(getGroupGeneralKey(key)) : undefined;
+    const generalTalker = generalEntry && findTalker(generalEntry);
+    const generalInvite = generalEntry && findInvite(generalEntry);
+    const generalLabel = generalTalker ? formatPersonLabel(generalTalker) : generalInvite ? `@${generalInvite.username}` : null;
+    if (generalLabel !== null) {
+      await replyToThread(key, t('access.removeInGeneralNotice', { person: generalLabel }));
       return;
     }
     await replyToThread(key, t('access.removeNotFound'));

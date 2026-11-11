@@ -630,6 +630,12 @@ test('the /access refusal that says where somebody may talk takes the scope word
     const bindNote = getKeyInLang(locale, 'access.bindNote') ?? '';
     assert.deepEqual(placeholdersOf(bindNote), ['{count}', '{subdir}'], `access.bindNote in ${locale}`);
     assert.ok(bindNote.startsWith('• '), `access.bindNote in ${locale} is a bullet like its neighbours in the welcome`);
+    assert.deepEqual(placeholdersOf(getKeyInLang(locale, 'access.removeInGeneralNotice') ?? ''), ['{person}'], `access.removeInGeneralNotice in ${locale}`);
+    assert.deepEqual(placeholdersOf(getKeyInLang(locale, 'access.loginPendingForTalkerNotice') ?? ''), [], `access.loginPendingForTalkerNotice in ${locale}`);
+    for (const code of ['access.removeInGeneralNotice', 'access.loginPendingForTalkerNotice']) {
+      assert.ok(checkKeyInAllLangs(code), `${code} missing in some locale`);
+      if (locale !== defaultLocale) assert.notEqual(getKeyInLang(locale, code), getKeyInLang(defaultLocale, code), `${code} in ${locale} still carries the English text`);
+    }
   }
 });
 

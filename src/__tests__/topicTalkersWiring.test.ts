@@ -173,6 +173,32 @@ test('an album a talker sends into a raw-shell topic is refused ONCE, through th
   assert.match(getFunctionBody('refuseTalkerInTerminalTopic'), /sendRefusal: \(text: string\) => Promise<unknown>/);
 });
 
+test('a talker\'s message that is refused changes nothing: the pending API-error retry is cancelled only when the message is going to be a prompt', () => {
+  const body = getFunctionBody('handleTalkerText');
+  const cancelAt = body.indexOf('cancelApiRetry(key);');
+  assert.notEqual(cancelAt, -1, 'a talker who takes over still ends a pending retry, as any sender');
+  assert.equal(body.indexOf('cancelApiRetry(key);', cancelAt + 1), -1, 'exactly once');
+  for (const refusal of ["t('access.adminOnlyCommandRefusal')", 'parseOAuthCallbackFromReply(text)', 'refuseTalkerInTerminalTopic(key)', "t('access.loginPendingForTalkerNotice')"]) {
+    const refusalAt = body.indexOf(refusal);
+    assert.notEqual(refusalAt, -1, refusal);
+    assert.ok(refusalAt < cancelAt, `${refusal} must come BEFORE the retry is cancelled: a refused message leaves a usage-limit wait armed`);
+  }
+  assert.ok(cancelAt < body.indexOf('startupPromptBuffer.checkIsStarting'), 'and before the prompt is buffered, delivered or resumed');
+});
+
+test('a talker\'s message is refused while an admin\'s tmux /login code box is open — a prompt would press Escape and end that sign-in', () => {
+  const body = getFunctionBody('handleTalkerText');
+  assert.match(body, /if \(adapter\.isLoginPastePending\?\.\(key\)\) \{\s*await replyToThread\(key, t\('access\.loginPendingForTalkerNotice'\)\);\s*return;\s*\}/);
+  assert.ok(body.indexOf('isLoginPastePending') < body.indexOf('deliverActivePrompt'), 'before any delivery');
+});
+
+test('what the sender tracking learns from comes only from a message somebody WROTE: a join or a leave service message neither spends an invitation nor makes a writer', () => {
+  const body = getFunctionBody('noteServedGroupSender');
+  assert.match(body, /if \(!checkIsWrittenMessage\(ctx\.message\)\) return;/);
+  assert.ok(body.indexOf('checkIsWrittenMessage') < body.indexOf('seenGroupSenders.noteSender'), 'before anything is remembered');
+  assert.ok(body.indexOf('checkIsWrittenMessage') < body.indexOf('state.resolveTopicInvites'), 'before an invitation is resolved');
+});
+
 test('/access is built over the shared core, the admin cache and the in-memory writers, registered with its commands and its callbacks, and listed as a bot command and in the menu', () => {
   const build = getSourceSlice('const { registerTopicAccessCommands, registerTopicAccessCallbacks } = createTopicAccess({', 'registerTopicAccessCommands();');
   assert.match(build, /\.\.\.botCore,/);

@@ -403,6 +403,24 @@ export class FakeTelegram {
   }
 
   /**
+   * @description The service message the group posts when `user` joined or left: no text, `from` is that person, and (as in a
+   * forum group) it carries no topic id — it lands in General. Nobody WROTE anything: a bot must not take it for a message. Resolves its id.
+   */
+  pushMembershipServiceMessage(user: TelegramUser, kind: 'joined' | 'left'): number {
+    const messageId = this.nextMessageId++;
+    this.pushUpdate({
+      message: {
+        message_id: messageId,
+        date: Math.floor(Date.now() / 1000),
+        chat: this.chat,
+        from: user,
+        ...(kind === 'joined' ? { new_chat_members: [user] } : { left_chat_member: user }),
+      },
+    });
+    return messageId;
+  }
+
+  /**
    * @description A membership change of `user` in the group, as the Bot API reports it to a bot that asked for `chat_member`
    * updates: a member who `left`, was `kicked`, or joined (`member`).
    */

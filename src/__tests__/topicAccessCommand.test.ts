@@ -510,6 +510,29 @@ describe('topicAccess: /access over its ports', () => {
       assert.deepEqual([readList().talkers, readList().invites], [[], []]);
     });
 
+    it('somebody who is on GENERAL\'s list (the topic\'s screen shows them in its «Also» line) is not «nobody»: the line says where to remove them, and nothing is removed', async () => {
+      await harness.state.addTopicTalker(groupGeneralKey, generalTalker, { userId: '900', name: 'Sam' });
+      await harness.state.addTopicInvite(groupGeneralKey, 'carol_x', { userId: '900', name: 'Sam' });
+      await harness.runCommand('access', 'remove @gus_g');
+      assert.equal(lastReply().text, "@gus_g (Gus Guest) is on General's list, not on this topic's: remove them there (run /access in General).");
+      await harness.runCommand('access', 'remove', 5, replyTo(generalTalker));
+      assert.equal(lastReply().text, "@gus_g (Gus Guest) is on General's list, not on this topic's: remove them there (run /access in General).");
+      await harness.runCommand('access', 'remove @Carol_X');
+      assert.equal(lastReply().text, "@carol_x is on General's list, not on this topic's: remove them there (run /access in General).");
+      assert.deepEqual(harness.state.getTopicTalkers(groupGeneralKey).talkers.map((talker) => talker.userId), ['203'], 'General\'s list is untouched');
+      assert.equal(harness.state.getTopicTalkers(groupGeneralKey).invites.length, 1);
+      await harness.runCommand('access', 'remove @nobody_here');
+      assert.equal(lastReply().text, 'Nobody with that name is on this list.', 'somebody on no list at all is still nobody');
+    });
+
+    it('on General\'s own screen only General\'s list counts: somebody who is on a TOPIC\'s list is nobody there', async () => {
+      const topicKey = makeTelegramKey(harnessGroup.id, 222);
+      await harness.state.addTopicTalker(topicKey, dan, { userId: '900', name: 'Sam' });
+      harness.isGeneral = true;
+      await harness.runCommand('access', 'remove @dan_b');
+      assert.equal(lastReply().text, 'Nobody with that name is on this list.');
+    });
+
     it('nobody by that name, a bad @username, and no target', async () => {
       await harness.runCommand('access', 'remove @nobody_here');
       assert.equal(lastReply().text, 'Nobody with that name is on this list.');

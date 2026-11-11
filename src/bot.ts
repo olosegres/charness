@@ -170,6 +170,7 @@ import {
   checkShouldInvalidateAdminCache,
   createTelegramConnectorInbound,
   checkIsTelegramForward,
+  checkIsWrittenMessage,
   getTelegramCommand,
   checkHasLeftGroup,
   getDisplayName,
@@ -3514,6 +3515,9 @@ async function noteServedGroupSender(ctx: Context): Promise<void> {
   // A post made as a channel or as the group (a linked channel's post carries Telegram's service user in `from`) is no person: it is
   // never remembered, never offered as a stranger to add, never an invitation's match.
   if (!ctx.message || !user || user.is_bot || ctx.message.sender_chat) return;
+  // A join or a leave is not writing: `from` of such a service message is a person who only came or went, and an invitation that
+  // waits for «the first message» must not be spent on it (nor the person offered as a writer, nor announced while leaving).
+  if (!checkIsWrittenMessage(ctx.message)) return;
   const groupSpeaker = await getGroupSpeakerRole(ctx);
   if (groupSpeaker === null) return;
   const person: SeenPerson = { userId: user.id.toString(), username: user.username, name: getDisplayName(user) };
@@ -9908,11 +9912,10 @@ const forwardedClearCommand = '/clear';
  * OAuth callback URL is deleted as a secret, whoever sent it; a raw-shell topic is refused; otherwise it is a prompt like any
  * other — buffered behind a session start, delivered to a live agent, or waking a sleeping conversation — and with no agent
  * at all the talker is told so (never offered the folder picker, never starting one). It never feeds an input step an admin
- * armed (a sign-in code, a key, a name, a reminder's text): those routes are not here.
+ * armed (a sign-in code, a key, a name, a reminder's text): those routes are not here — and while an admin's tmux `/login` code box
+ * is open the message is refused, since a prompt would end that sign-in. A message refused anywhere above changes nothing.
  */
 async function handleTalkerText(ctx: NarrowedContext<Context, Update.MessageUpdate<Message.TextMessage>>, key: SessionKey): Promise<void> {
-  // The talker took over before a pending API-error retry fired, as any sender does.
-  cancelApiRetry(key);
   const text = stripCommandBotMention(ctx.message.text.trim());
   // A FORWARDED message is content: its `/…` is words like any other. A slash the talker typed is refused.
   if (!checkIsTelegramForward(ctx.message) && text.startsWith('/')) {
@@ -9927,6 +9930,16 @@ async function handleTalkerText(ctx: NarrowedContext<Context, Update.MessageUpda
     return;
   }
   if (await refuseTalkerInTerminalTopic(key)) return;
+  const adapter = getThreadAdapter(key);
+  // An admin's tmux `/login` paste box is open: a prompt would press Escape first and end the sign-in the admin is in the middle of
+  // (the admin's own text is typed into the box instead — that route is not a talker's).
+  if (adapter.isLoginPastePending?.(key)) {
+    await replyToThread(key, t('access.loginPendingForTalkerNotice'));
+    return;
+  }
+  // The talker took over before a pending API-error retry fired, as any sender does — only now: a message that was refused above
+  // changed nothing, so a usage-limit wait armed for the topic is still armed (it would otherwise end without its resume).
+  cancelApiRetry(key);
   const messageContext = getMessageContext(key, ctx.message);
   const intake: TopicRequestIntake = { source: 'text', requesterId: getTopicRequesterId(ctx.from) };
   const sentAtMs = ctx.message.date * 1000;
@@ -9934,7 +9947,6 @@ async function handleTalkerText(ctx: NarrowedContext<Context, Update.MessageUpda
     await bufferPromptDuringStartup(key, text, intake, messageContext);
     return;
   }
-  const adapter = getThreadAdapter(key);
   if (adapter.checkIsActive(key)) {
     await deliverActivePrompt(key, adapter, text, intake, sentAtMs, messageContext);
     return;

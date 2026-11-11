@@ -80,6 +80,21 @@ export interface TelegramMessageAccess {
   talkerIds: ReadonlySet<string>;
 }
 
+/** The fields a message carries only when its sender wrote or sent something — a service message (a join, a leave, a topic created) has none. */
+const writtenContentFields = [
+  'text', 'caption', 'animation', 'audio', 'document', 'photo', 'sticker', 'video', 'video_note', 'voice', 'contact', 'dice', 'game', 'location', 'poll', 'venue',
+] as const;
+
+/**
+ * @description Whether `message` is something its sender wrote or sent (text, a caption, media, a contact, a poll …) and not a
+ * service message the group made about them (`new_chat_members`, `left_chat_member`, `forum_topic_created`, a pin …): `from` of
+ * those is a person who only joined, left or was acted on. A list of what counts rather than of what does not, so a service message
+ * type Telegram adds later is never taken for somebody writing.
+ */
+export function checkIsWrittenMessage(message: Message): boolean {
+  return writtenContentFields.some((field) => field in message);
+}
+
 /** A Telegram user's best available human-readable name. */
 export function getDisplayName(user: User): string {
   const full = [user.first_name, user.last_name].filter(Boolean).join(' ').trim();
