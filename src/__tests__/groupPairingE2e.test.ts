@@ -15,7 +15,9 @@
  *   → the first admin who writes in a group pairs it (the first pairing, as before)
  *   → a stranger's `/pair` in their own group is refused («only that group's creator»)
  *   → so is the `/pair` of an ADMIN of the served group who is not its creator, in a group they created
- *   → the creator of the served group moves it with `/pair` to another group of theirs.
+ *   → the creator of the served group moves it with `/pair` to another group of theirs
+ *   → that group is deleted: the creator's `/pair` elsewhere is refused — nothing moves — with a refusal that says the served
+ *     group cannot be read and what to set instead, never «you are not its creator».
  *
  * The rule itself, branch by branch, is `threadRouting.test.ts` (getPairingRefusal). Nothing leaves the machine; everything the
  * test starts is stopped in `after`.
@@ -68,6 +70,7 @@ const replyTimeoutMs = 20 * 1000;
 const pairedRe = /Group paired/;
 const notOwnerRe = /Only the bot's owner can pair it/;
 const notCurrentCreatorRe = /only that group's creator can move it/;
+const currentGroupUnreadableRe = /The group the bot serves can't be read/;
 
 /** One isolated instance of this flow: its layout, its fake Bot API and the running bot. */
 interface PairingInstance {
@@ -235,5 +238,13 @@ describe('group pairing without an owner: the first group pairs as before, only 
   it('the creator of the served group moves the bot with /pair to another group of theirs', async () => {
     await writeAndAwaitAnswer(getInstance(), secondOwnGroup.id, operator, '/pair', pairedRe);
     assert.equal(readPairedGroupId(getInstance()), secondOwnGroup.id);
+  });
+
+  it('once the served group cannot be read (deleted), its creator\'s /pair elsewhere is refused with what to do — not «you are not its creator»', async () => {
+    getInstance().fakeTelegram.deleteGroup(secondOwnGroup.id);
+    const answer = await writeAndAwaitAnswer(getInstance(), ownGroup.id, operator, '/pair', currentGroupUnreadableRe);
+    assert.doesNotMatch(answer.text, notCurrentCreatorRe);
+    assert.match(answer.text, /OWNER_USER_ID/);
+    assert.equal(readPairedGroupId(getInstance()), secondOwnGroup.id, 'fail-closed: nothing moved');
   });
 });

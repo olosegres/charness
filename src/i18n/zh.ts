@@ -181,6 +181,7 @@ export const zhDict: Record<string, string> = {
   'pair.not_admin': '❌ 只有群组管理员或创建者才能配对 bot。',
   'pair.not_owner': '❌ 只有 bot 的所有者才能将其与群组配对。',
   'pair.not_current_creator': '❌ bot 正在服务另一个群组；只有该群组的创建者才能把它移到这里。',
+  'pair.current_group_unreadable': '❌ 无法读取 bot 正在服务的群组（已删除，或 bot 已被移出），因此无法确认其创建者。请在 bot 的配置中设置 OWNER_USER_ID（或 ALLOWED_GROUP_ID）并重启 bot。',
   'pair.not_paired': '群组尚未配对（配对模式）',
   'pair.dm': "ℹ️ DM 模式下不需要 /pair — bot 服务于你的私聊。",
   'version.report':

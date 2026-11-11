@@ -181,6 +181,7 @@ export const jaDict: Record<string, string> = {
   'pair.not_admin': '❌ グループの管理者または作成者のみが Bot をペアリングできます。',
   'pair.not_owner': '❌ Bot をグループとペアリングできるのは Bot のオーナーだけです。',
   'pair.not_current_creator': '❌ Bot は別のグループで稼働中です。ここへ移せるのはそのグループの作成者だけです。',
+  'pair.current_group_unreadable': '❌ Bot が稼働中のグループを読み取れません（削除されたか、Bot が外されました）。そのため作成者を確認できません。Bot の設定で OWNER_USER_ID（または ALLOWED_GROUP_ID）を設定し、再起動してください。',
   'pair.not_paired': 'グループはまだペアリングされていません（ペアリングモード）',
   'pair.dm': "ℹ️ DM モードでは /pair は不要です — Bot はあなたのプライベートチャットを提供します。",
   'version.report':

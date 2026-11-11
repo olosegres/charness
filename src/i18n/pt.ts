@@ -181,6 +181,7 @@ export const ptDict: Record<string, string> = {
   'pair.not_admin': '❌ Apenas um administrador ou criador do grupo pode emparelhar o bot.',
   'pair.not_owner': '❌ Apenas o dono do bot pode emparelhá-lo com um grupo.',
   'pair.not_current_creator': '❌ O bot serve outro grupo; apenas o criador desse grupo pode trazê-lo para aqui.',
+  'pair.current_group_unreadable': '❌ Não é possível ler o grupo que o bot serve (apagado, ou o bot foi removido), por isso ninguém pode ser confirmado como o seu criador. Define OWNER_USER_ID (ou ALLOWED_GROUP_ID) na configuração do bot e reinicia-o.',
   'pair.not_paired': 'grupo ainda não emparelhado (modo pairing)',
   'pair.dm': "ℹ️ /pair não é necessário no modo DM — o bot serve o teu chat privado.",
   'version.report':

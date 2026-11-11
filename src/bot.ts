@@ -160,6 +160,7 @@ import {
   getPairingRefusal,
   checkIsChatMode,
   type PairingRefusal,
+  type CurrentGroupCreatorship,
   GENERAL_THREAD_ID,
   DM_GENERAL_THREAD_ID,
   type ChatMode,
@@ -552,7 +553,8 @@ function parseEnv() {
   // (without it the DM surface would have no access authority — any user can DM a
   // bot). For `both` it is OPTIONAL: set → the DM surface is active; unset → the
   // DM surface is INERT (group-only) and boot logs a notice, so default `both`
-  // stays backward-compatible with a bare group-only deploy. Ignored in `group`.
+  // stays backward-compatible with a bare group-only deploy. In `group` it only
+  // decides who may pair the bot with a group (`getPairingRefusal`).
   const ownerUserIdRaw = (process.env.OWNER_USER_ID ?? '').trim();
   let ownerUserId = NaN;
   if (ownerUserIdRaw) {
@@ -897,13 +899,22 @@ async function checkIsForumAdmin(chatId: number, userId: number): Promise<boolea
   }
 }
 
-/** @description Whether `userId` created group `chatId` (Telegram's `creator` status); `false` when it cannot be read. */
-async function checkIsGroupCreator(chatId: number, userId: number): Promise<boolean> {
+/**
+ * @description Whether `userId` created group `chatId` (Telegram's `creator` status). A member read that fails is told apart:
+ * the group itself not answering (deleted, the bot removed from it) is `unreadable`; a group that answers is `notCreator` —
+ * a sender who is no member at all reads that way too.
+ */
+async function readGroupCreatorship(chatId: number, userId: number): Promise<CurrentGroupCreatorship> {
   try {
-    return (await bot.telegram.getChatMember(chatId, userId)).status === 'creator';
-  } catch (e) {
-    console.warn(`[pair] getChatMember(${chatId}, ${userId}) failed:`, e instanceof Error ? e.message : e);
-    return false;
+    return (await bot.telegram.getChatMember(chatId, userId)).status === 'creator' ? 'creator' : 'notCreator';
+  } catch (memberError) {
+    try {
+      await bot.telegram.getChat(chatId);
+      return 'notCreator';
+    } catch (groupError) {
+      console.warn(`[pair] the served group ${chatId} cannot be read:`, groupError instanceof Error ? groupError.message : groupError, '— member read:', memberError instanceof Error ? memberError.message : memberError);
+      return 'unreadable';
+    }
   }
 }
 
@@ -918,7 +929,7 @@ function getPairingRefusalFor(senderId: number, targetGroupId: number): Promise<
     { ownerUserId: Number.isFinite(ownerUserId) ? ownerUserId : null, senderId, currentGroupId, targetGroupId },
     {
       checkIsTargetGroupAdmin: () => checkIsForumAdmin(targetGroupId, senderId),
-      checkIsCurrentGroupCreator: () => (currentGroupId === null ? Promise.resolve(false) : checkIsGroupCreator(currentGroupId, senderId)),
+      readCurrentGroupCreatorship: () => (currentGroupId === null ? Promise.resolve('notCreator') : readGroupCreatorship(currentGroupId, senderId)),
     },
   );
 }
@@ -927,6 +938,7 @@ function getPairingRefusalFor(senderId: number, targetGroupId: number): Promise<
 const pairingRefusalTextKeys: Record<PairingRefusal, string> = {
   notOwner: 'pair.not_owner',
   notCurrentCreator: 'pair.not_current_creator',
+  currentGroupUnreadable: 'pair.current_group_unreadable',
   notAdmin: 'pair.not_admin',
 };
 

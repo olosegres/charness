@@ -181,6 +181,7 @@ export const deDict: Record<string, string> = {
   'pair.not_admin': '❌ Nur ein Gruppen-Administrator oder Ersteller kann den Bot verknüpfen.',
   'pair.not_owner': '❌ Nur der Besitzer des Bots kann ihn mit einer Gruppe verknüpfen.',
   'pair.not_current_creator': '❌ Der Bot bedient eine andere Gruppe; nur deren Ersteller kann ihn hierher verlegen.',
+  'pair.current_group_unreadable': '❌ Die Gruppe, die der Bot bedient, ist nicht lesbar (gelöscht oder der Bot wurde entfernt), daher kann niemand als ihr Ersteller bestätigt werden. Setze OWNER_USER_ID (oder ALLOWED_GROUP_ID) in der Bot-Konfiguration und starte ihn neu.',
   'pair.not_paired': 'Gruppe noch nicht verknüpft (Pairing-Modus)',
   'pair.dm': "ℹ️ /pair ist im DM-Modus nicht nötig — der Bot bedient deinen privaten Chat.",
   'version.report':

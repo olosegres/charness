@@ -262,6 +262,14 @@ export class FakeTelegram {
     return this.groups.get(Number(payload.chat_id)) ?? this.ownGroup;
   }
 
+  /** The groups the fake answers for no more ({@link deleteGroup}). */
+  private readonly deletedGroupIds = new Set<number>();
+
+  /** @description Group `groupId` is gone (deleted, or the bot was removed from it): reads of it fail as the Bot API's do. */
+  deleteGroup(groupId: number): void {
+    this.deletedGroupIds.add(groupId);
+  }
+
   /** @description How many connections the fake has accepted so far. */
   get acceptedConnectionCount(): number {
     return this.acceptedConnections;
@@ -595,6 +603,7 @@ export class FakeTelegram {
   }
 
   private async dispatch(method: string, payload: Record<string, unknown>, socket: Socket): Promise<ApiOk | ApiError> {
+    if (this.deletedGroupIds.has(Number(payload.chat_id))) return { ok: false, error_code: 400, description: 'Bad Request: chat not found' };
     switch (method) {
       case 'getMe':
         return { ok: true, result: { ...this.options.botUser, can_join_groups: true, can_read_all_group_messages: true, supports_inline_queries: false } };

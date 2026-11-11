@@ -247,7 +247,7 @@ const currentGroupId = -1001111111111;
 const otherGroupId = -1002222222222;
 
 /** Probes that answer as given and record which ones the rule asked. */
-function createPairingProbes(answers: { isTargetAdmin: boolean; isCurrentCreator: boolean }): { probes: PairingAuthorityProbes; asked: string[] } {
+function createPairingProbes(answers: { isTargetAdmin: boolean; isCurrentCreator: boolean; isCurrentGroupUnreadable?: boolean }): { probes: PairingAuthorityProbes; asked: string[] } {
   const asked: string[] = [];
   return {
     asked,
@@ -256,9 +256,10 @@ function createPairingProbes(answers: { isTargetAdmin: boolean; isCurrentCreator
         asked.push('targetAdmin');
         return answers.isTargetAdmin;
       },
-      checkIsCurrentGroupCreator: async () => {
+      readCurrentGroupCreatorship: async () => {
         asked.push('currentCreator');
-        return answers.isCurrentCreator;
+        if (answers.isCurrentGroupUnreadable) return 'unreadable';
+        return answers.isCurrentCreator ? 'creator' : 'notCreator';
       },
     },
   };
@@ -290,6 +291,9 @@ test('pair authority without an owner: the first pairing by an admin of that gro
 
   const moveByCreatorNotAdmin = createPairingProbes({ isTargetAdmin: false, isCurrentCreator: true });
   assert.equal(await getPairingRefusal({ ownerUserId: null, senderId: ownerId, currentGroupId, targetGroupId: otherGroupId }, moveByCreatorNotAdmin.probes), 'notAdmin');
+
+  const servedGroupGone = createPairingProbes({ isTargetAdmin: true, isCurrentCreator: false, isCurrentGroupUnreadable: true });
+  assert.equal(await getPairingRefusal({ ownerUserId: null, senderId: ownerId, currentGroupId, targetGroupId: otherGroupId }, servedGroupGone.probes), 'currentGroupUnreadable', 'a served group that cannot be read moves for nobody — and says so, not «you are not its creator»');
 
   const sameGroup = createPairingProbes({ isTargetAdmin: true, isCurrentCreator: false });
   assert.equal(await getPairingRefusal({ ownerUserId: null, senderId: strangerId, currentGroupId, targetGroupId: currentGroupId }, sameGroup.probes), null, '/pair in the group served already moves nothing');

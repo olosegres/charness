@@ -250,9 +250,18 @@ export function resolvePairingCandidate(input: PairingInput): number | null {
  * @name PairingRefusal
  * @description Why a sender may not pair the bot with a group: `notOwner` — an owner is set (`OWNER_USER_ID`) and the sender
  * is not the owner; `notCurrentCreator` — no owner is set, the bot serves another group, and the sender did not create that
- * group; `notAdmin` — the sender does not administer the group to pair (the bot serves that group's administrators).
+ * group; `currentGroupUnreadable` — no owner is set and the group the bot serves cannot be read (deleted, or the bot was
+ * removed from it), so nobody can be told to be its creator; `notAdmin` — the sender does not administer the group to pair
+ * (the bot serves that group's administrators).
  */
-export type PairingRefusal = 'notOwner' | 'notCurrentCreator' | 'notAdmin';
+export type PairingRefusal = 'notOwner' | 'notCurrentCreator' | 'currentGroupUnreadable' | 'notAdmin';
+
+/**
+ * @name CurrentGroupCreatorship
+ * @description What the bot can tell about the sender and the group it serves now: `creator` — the sender created it;
+ * `notCreator` — the group answers and the sender did not create it; `unreadable` — the group itself does not answer.
+ */
+export type CurrentGroupCreatorship = 'creator' | 'notCreator' | 'unreadable';
 
 /** What {@link getPairingRefusal} decides from. */
 export interface PairingAuthorityInput {
@@ -269,8 +278,8 @@ export interface PairingAuthorityInput {
 export interface PairingAuthorityProbes {
   /** Whether the sender is an administrator or the creator of the group to pair. */
   checkIsTargetGroupAdmin(): Promise<boolean>;
-  /** Whether the sender is the creator of the group served now. */
-  checkIsCurrentGroupCreator(): Promise<boolean>;
+  /** Whether the sender created the group served now — or whether that group cannot be read at all. */
+  readCurrentGroupCreatorship(): Promise<CurrentGroupCreatorship>;
 }
 
 /**
@@ -280,14 +289,17 @@ export interface PairingAuthorityProbes {
  *  - with an owner (`OWNER_USER_ID`): the owner alone, the first pairing and every later one;
  *  - without one: the FIRST pairing by an administrator of that group (nothing better tells who installed the bot); once
  *    the bot serves a group, moving it only by the CREATOR of that group (`/pair` in the group it serves already changes
- *    nothing and stays open to its administrators).
+ *    nothing and stays open to its administrators). A served group that cannot be read (deleted, the bot removed) moves
+ *    for nobody — allowing it would reopen the takeover —, with its own refusal, which says what to do instead.
  * In every case the sender must administer the group to pair.
  */
 export async function getPairingRefusal(input: PairingAuthorityInput, probes: PairingAuthorityProbes): Promise<PairingRefusal | null> {
   if (input.ownerUserId !== null) {
     if (input.senderId !== input.ownerUserId) return 'notOwner';
   } else if (input.currentGroupId !== null && input.currentGroupId !== input.targetGroupId) {
-    if (!(await probes.checkIsCurrentGroupCreator())) return 'notCurrentCreator';
+    const creatorship = await probes.readCurrentGroupCreatorship();
+    if (creatorship === 'unreadable') return 'currentGroupUnreadable';
+    if (creatorship === 'notCreator') return 'notCurrentCreator';
   }
   if (!(await probes.checkIsTargetGroupAdmin())) return 'notAdmin';
   return null;

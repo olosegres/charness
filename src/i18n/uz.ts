@@ -181,6 +181,7 @@ export const uzDict: Record<string, string> = {
   'pair.not_admin': '❌ Faqat guruh administratori yoki yaratuvchisi Bot ni bog‘lay oladi.',
   'pair.not_owner': '❌ Bot ni guruhga faqat uning egasi bog‘lay oladi.',
   'pair.not_current_creator': '❌ Bot boshqa guruhga xizmat qilmoqda; uni bu yerga faqat o‘sha guruh yaratuvchisi ko‘chira oladi.',
+  'pair.current_group_unreadable': '❌ Bot xizmat qilayotgan guruhni o‘qib bo‘lmaydi (o‘chirilgan yoki Bot chiqarib yuborilgan), shuning uchun uning yaratuvchisini tasdiqlab bo‘lmaydi. Bot sozlamalarida OWNER_USER_ID (yoki ALLOWED_GROUP_ID) ni belgilang va uni qayta ishga tushiring.',
   'pair.not_paired': 'guruh hali bog‘lanmagan (pairing rejimi)',
   'pair.dm': "ℹ️ DM rejimida /pair kerak emas — Bot sizning shaxsiy chattingizga xizmat qiladi.",
   'version.report':

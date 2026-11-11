@@ -185,6 +185,7 @@ export const enDict: Record<string, string> = {
   'pair.not_admin': '❌ Only a group administrator or creator can pair the bot.',
   'pair.not_owner': '❌ Only the bot\'s owner can pair it with a group.',
   'pair.not_current_creator': '❌ The bot serves another group; only that group\'s creator can move it here.',
+  'pair.current_group_unreadable': '❌ The group the bot serves can\'t be read (deleted, or the bot was removed), so nobody can be confirmed as its creator. Set OWNER_USER_ID (or ALLOWED_GROUP_ID) in the bot\'s config and restart it.',
   'pair.not_paired': 'group not paired yet (pairing mode)',
   'pair.dm': "ℹ️ /pair isn't needed in DM mode — the bot serves your private chat.",
   'version.report':

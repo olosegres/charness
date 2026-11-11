@@ -916,8 +916,9 @@ and auto-pairing too waits for the owner's own message in a group. Without it, t
 that group (auto-pairing, or `/pair` there); after that only the **creator of the group the bot serves** can move it —
 anyone else gets «The bot serves another group; only that group's creator can move it here.» Being an administrator of
 the new group is never enough on its own (whoever makes a group is its creator), but it is required too: the bot serves
-that group's administrators. If the creator of the served group is gone, set `OWNER_USER_ID` (or `ALLOWED_GROUP_ID`) and
-restart.
+that group's administrators. If the served group cannot be read any more — you deleted it, or removed the bot from it —
+nobody can be confirmed as its creator, and `/pair` answers «The group the bot serves can't be read …»; then, as when its
+creator is gone, set `OWNER_USER_ID` (or `ALLOWED_GROUP_ID`) and restart.
 
 ## General-only
 

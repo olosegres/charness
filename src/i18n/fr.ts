@@ -181,6 +181,7 @@ export const frDict: Record<string, string> = {
   'pair.not_admin': '❌ Seul un administrateur ou créateur du groupe peut apparier le bot.',
   'pair.not_owner': '❌ Seul le propriétaire du bot peut l\'apparier à un groupe.',
   'pair.not_current_creator': '❌ Le bot sert un autre groupe ; seul le créateur de ce groupe peut le déplacer ici.',
+  'pair.current_group_unreadable': '❌ Le groupe que sert le bot est illisible (supprimé, ou le bot en a été retiré) : personne ne peut être confirmé comme son créateur. Définissez OWNER_USER_ID (ou ALLOWED_GROUP_ID) dans la configuration du bot et redémarrez-le.',
   'pair.not_paired': 'groupe non encore apparié (mode pairing)',
   'pair.dm': "ℹ️ /pair n'est pas nécessaire en mode DM — le bot sert votre chat privé.",
   'version.report':

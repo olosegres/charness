@@ -181,6 +181,7 @@ export const esDict: Record<string, string> = {
   'pair.not_admin': '❌ Solo un administrador o creador del grupo puede emparejar el bot.',
   'pair.not_owner': '❌ Solo el dueño del bot puede emparejarlo con un grupo.',
   'pair.not_current_creator': '❌ El bot atiende otro grupo; solo el creador de ese grupo puede traerlo aquí.',
+  'pair.current_group_unreadable': '❌ No se puede leer el grupo que atiende el bot (borrado, o el bot fue expulsado), así que nadie puede confirmarse como su creador. Define OWNER_USER_ID (o ALLOWED_GROUP_ID) en la configuración del bot y reinícialo.',
   'pair.not_paired': 'grupo aún no emparejado (modo pairing)',
   'pair.dm': "ℹ️ /pair no es necesario en modo DM — el bot sirve tu chat privado.",
   'version.report':
