@@ -179,6 +179,8 @@ export const uzDict: Record<string, string> = {
     'Guruhni o‘zgartirish uchun o‘zgaruvchini o‘zgartiring va Bot ni qayta ishga tushiring.',
   'pair.only_forum': '❌ /pair faqat forum supergruppada ishlaydi (Topics ni yoqing).',
   'pair.not_admin': '❌ Faqat guruh administratori yoki yaratuvchisi Bot ni bog‘lay oladi.',
+  'pair.not_owner': '❌ Bot ni guruhga faqat uning egasi bog‘lay oladi.',
+  'pair.not_current_creator': '❌ Bot boshqa guruhga xizmat qilmoqda; uni bu yerga faqat o‘sha guruh yaratuvchisi ko‘chira oladi.',
   'pair.not_paired': 'guruh hali bog‘lanmagan (pairing rejimi)',
   'pair.dm': "ℹ️ DM rejimida /pair kerak emas — Bot sizning shaxsiy chattingizga xizmat qiladi.",
   'version.report':

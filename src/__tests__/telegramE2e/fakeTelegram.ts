@@ -11,7 +11,9 @@
  * can restart the bot and keep pushing.
  *
  * Only what the flow needs is modelled: ONE forum supergroup with the operator
- * as its creator (plus any further admins a flow names, who may write too),
+ * as its creator (plus any further admins a flow names, who may write too) —
+ * and, for a flow about which group the bot serves, further forum supergroups,
+ * each with a creator and admins of its own —,
  * numbered topics, message ids in one sequence (operator and
  * bot messages alike, as on Telegram), the pin state of every message, and
  * every call in order. A method the fake does not model answers `true` and is
@@ -136,12 +138,29 @@ export interface FakeTelegramPinEvent {
   isSilent: boolean;
 }
 
+/** A group the fake knows: its chat, its creator and its further administrators. */
+interface FakeGroupMembers {
+  chat: TelegramChat;
+  creator: TelegramUser;
+  admins: TelegramUser[];
+}
+
+/** A forum supergroup besides the flow's own: who created it and who else administers it. */
+export interface FakeTelegramOtherGroup {
+  id: number;
+  title: string;
+  creator: TelegramUser;
+  admins?: TelegramUser[];
+}
+
 export interface FakeTelegramOptions {
   botUser: TelegramUser;
   operator: TelegramUser;
   /** Further group administrators (the bot serves every admin); the operator is always one. */
   admins?: TelegramUser[];
   group: { id: number; title: string };
+  /** Further forum supergroups the bot is a member of (a flow about which group it serves); the flow's own is `group`. */
+  otherGroups?: FakeTelegramOtherGroup[];
   /**
    * How long (ms) the fake keeps an idle keep-alive connection before it closes it, as the real Bot API does after a while
    * (Node adds about a second to this). 0, the default, never closes one by itself — a flow that is not about closing
@@ -225,9 +244,22 @@ export class FakeTelegram {
   private nextCallbackQueryId = 1;
   private server: http.Server | null = null;
   private readonly chat: TelegramChat;
+  /** Every group by id — the flow's own and the others —, with its creator and further admins. */
+  private readonly groups = new Map<number, FakeGroupMembers>();
+  private readonly ownGroup: FakeGroupMembers;
 
   constructor(private readonly options: FakeTelegramOptions) {
     this.chat = { id: options.group.id, type: 'supergroup', title: options.group.title, is_forum: true };
+    this.ownGroup = { chat: this.chat, creator: options.operator, admins: options.admins ?? [] };
+    this.groups.set(this.chat.id, this.ownGroup);
+    for (const other of options.otherGroups ?? []) {
+      this.groups.set(other.id, { chat: { id: other.id, type: 'supergroup', title: other.title, is_forum: true }, creator: other.creator, admins: other.admins ?? [] });
+    }
+  }
+
+  /** The group a request names (`chat_id`), the flow's own when it names none or one the fake does not know (the owner's DM, say). */
+  private getGroup(payload: Record<string, unknown>): FakeGroupMembers {
+    return this.groups.get(Number(payload.chat_id)) ?? this.ownGroup;
   }
 
   /** @description How many connections the fake has accepted so far. */
@@ -276,6 +308,15 @@ export class FakeTelegram {
   pushUserMessage(threadId: number, text: string, from: TelegramUser, options: FakeOperatorMessageOptions = {}): number {
     const message = this.storeMessage(threadId, text, from, { entities: getCommandEntities(text) });
     this.pushUpdate({ message: { ...message, ...this.getContext(options) } });
+    return message.message_id;
+  }
+
+  /** @description `from` writes `text` in topic `threadId` of the group `groupId` (one of `otherGroups`, or the flow's own); resolves the message id. */
+  pushGroupMessage(groupId: number, threadId: number, text: string, from: TelegramUser): number {
+    const group = this.groups.get(groupId);
+    if (!group) throw new Error(`no group ${groupId} in this fake`);
+    const message = this.storeMessage(threadId, text, from, { entities: getCommandEntities(text) }, group.chat);
+    this.pushUpdate({ message });
     return message.message_id;
   }
 
@@ -343,10 +384,10 @@ export class FakeTelegram {
 
   // ─── what the test reads back ─────────────────────────────────────
 
-  /** @description The bot's messages in topic `threadId` that are not deleted, oldest first, with their CURRENT text. */
-  listBotMessages(threadId: number): FakeTelegramMessage[] {
+  /** @description The bot's messages in topic `threadId` (of the group `groupId`, the flow's own by default) that are not deleted, oldest first, with their CURRENT text. */
+  listBotMessages(threadId: number, groupId: number = this.chat.id): FakeTelegramMessage[] {
     return [...this.messages.values()]
-      .filter((message) => message.message_thread_id === threadId && message.from.id === this.options.botUser.id && !message.isDeleted)
+      .filter((message) => message.chat.id === groupId && message.message_thread_id === threadId && message.from.id === this.options.botUser.id && !message.isDeleted)
       .sort((a, b) => a.message_id - b.message_id);
   }
 
@@ -399,12 +440,13 @@ export class FakeTelegram {
     text: string,
     from: TelegramUser,
     extra: Pick<FakeTelegramMessage, 'entities' | 'reply_markup' | 'isSilent' | 'parseMode' | 'voice'> = {},
+    chat: TelegramChat = this.chat,
   ): FakeTelegramMessage {
     const message: FakeTelegramMessage = {
       message_id: this.nextMessageId++,
       createdAtMs: Date.now(),
       date: Math.floor(Date.now() / 1000),
-      chat: this.chat,
+      chat,
       message_thread_id: threadId,
       is_topic_message: true,
       from,
@@ -558,16 +600,26 @@ export class FakeTelegram {
         return { ok: true, result: { ...this.options.botUser, can_join_groups: true, can_read_all_group_messages: true, supports_inline_queries: false } };
       case 'getUpdates':
         return { ok: true, result: await this.takeUpdates(Number(payload.limit ?? maxUpdatesPerPoll), socket) };
-      case 'getChatAdministrators':
+      case 'getChatAdministrators': {
+        const group = this.getGroup(payload);
         return {
           ok: true,
           result: [
-            { status: 'creator', user: this.options.operator, is_anonymous: false },
-            ...(this.options.admins ?? []).map((admin) => ({ status: 'administrator', user: admin, is_anonymous: false })),
+            { status: 'creator', user: group.creator, is_anonymous: false },
+            ...group.admins.map((admin) => ({ status: 'administrator', user: admin, is_anonymous: false })),
           ],
         };
+      }
+      case 'getChatMember': {
+        const group = this.getGroup(payload);
+        const userId = Number(payload.user_id);
+        const admin = group.admins.find((candidate) => candidate.id === userId);
+        if (group.creator.id === userId) return { ok: true, result: { status: 'creator', user: group.creator, is_anonymous: false } };
+        if (admin) return { ok: true, result: { status: 'administrator', user: admin, is_anonymous: false } };
+        return { ok: true, result: { status: 'member', user: { id: userId, is_bot: false, first_name: 'Member' } } };
+      }
       case 'getChat':
-        return { ok: true, result: this.chat };
+        return { ok: true, result: this.getGroup(payload).chat };
       case 'createForumTopic': {
         if (!this.canManageTopics) return { ok: false, error_code: 400, description: 'Bad Request: not enough rights to create a topic' };
         return { ok: true, result: this.createTopic(String(payload.name)) };
@@ -584,7 +636,7 @@ export class FakeTelegram {
           reply_markup: payload.reply_markup as FakeTelegramMessage['reply_markup'],
           isSilent: payload.disable_notification === true,
           ...(typeof payload.parse_mode === 'string' ? { parseMode: payload.parse_mode } : {}),
-        });
+        }, this.getGroup(payload).chat);
         return { ok: true, result: message };
       }
       case 'editMessageText': {

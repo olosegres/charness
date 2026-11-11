@@ -490,12 +490,18 @@ visible topic list, per-topic names/icons, quick agent switching — but it is
 </p>
 
 The group **id is automatic** — leave `ALLOWED_GROUP_ID` empty and the bot
-auto-pairs with the first forum supergroup an admin talks to it from (the
-`-100…` id is saved to `state.json`; re-point later with `/pair`). To pin a
-specific id by hand, set `ALLOWED_GROUP_ID` to the numeric value (a group
-**name** is not accepted) — that also disables auto-pairing. **Access control:**
-whoever is a creator/administrator of that group may drive the bot — there is no
-separate allow-list.
+auto-pairs with the first forum supergroup it is talked to from (the `-100…` id
+is saved to `state.json`; re-point later with `/pair`). Anyone can make a group,
+add your bot and be its creator, so who may pair is limited: with
+`OWNER_USER_ID` set, **only you** — the bot pairs a group only from your message
+there, and `/pair` from anyone else is refused; without it, the first group an
+admin talks to the bot from is paired, and after that only the **creator of the
+group it serves** can move it with `/pair`. To pin a specific id by hand, set
+`ALLOWED_GROUP_ID` to the numeric value (a group **name** is not accepted) —
+that also disables auto-pairing (the safest choice when the bot is reachable by
+others: BotFather's **Allow Groups** off does the same for every new group).
+**Access control:** whoever is a creator/administrator of that group may drive
+the bot — there is no separate allow-list.
 
 **To use the DM instead (or as well):** **[manual]** send `/start` to
 [@userinfobot](https://t.me/userinfobot) for your numeric user id, then add it
@@ -721,9 +727,9 @@ talk to the bot there.
 
 | Variable | Default | Description |
 |---|---|---|
-| `ALLOWED_GROUP_ID` | (auto-pair) | Numeric forum supergroup id (`-100…`). Leave empty to auto-pair with the first forum group a group **admin/creator** contacts the bot from (id is saved to `state.json`; re-point with `/pair`). A **name** is not accepted. A numeric value disables auto-pairing |
+| `ALLOWED_GROUP_ID` | (auto-pair) | Numeric forum supergroup id (`-100…`). Leave empty to auto-pair: with `OWNER_USER_ID` set, with the first forum group the **owner** writes in; without it, with the first forum group a group **admin/creator** contacts the bot from (id is saved to `state.json`; re-point with `/pair` — the owner only, or without one the creator of the group served now). A **name** is not accepted. A numeric value disables auto-pairing |
 | `CHAT_MODE` | `both` | Which surface(s) this instance serves: `group`, `dm`, or `both` — see [Two surfaces](docs/backends.md#two-surfaces-group-topics-bot-dm-or-both) |
-| `OWNER_USER_ID` | — | **Optional.** Numeric Telegram user id of the owner — leave it unset to run group-only (the DM surface stays inert; a group works fully without it). Set it only to enable the owner-DM surface; **required** solely for `CHAT_MODE=dm` |
+| `OWNER_USER_ID` | — | **Optional.** Numeric Telegram user id of the owner — leave it unset to run group-only (the DM surface stays inert; a group works fully without it). Set it to enable the owner-DM surface (**required** for `CHAT_MODE=dm`); with it set, the owner is also the only person who may pair the bot with a group (auto-pairing and `/pair`) |
 
 **Localized in 12 languages** — the bot UI (commands, buttons, notices) speaks
 中文, English, Français, ქართული, Deutsch, हिन्दी, 日本語, Português, Русский,

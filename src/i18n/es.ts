@@ -179,6 +179,8 @@ export const esDict: Record<string, string> = {
     'Para cambiar de grupo, modifica la variable y reinicia el bot.',
   'pair.only_forum': '❌ /pair solo funciona en un supergrupo foro (activa Topics).',
   'pair.not_admin': '❌ Solo un administrador o creador del grupo puede emparejar el bot.',
+  'pair.not_owner': '❌ Solo el dueño del bot puede emparejarlo con un grupo.',
+  'pair.not_current_creator': '❌ El bot atiende otro grupo; solo el creador de ese grupo puede traerlo aquí.',
   'pair.not_paired': 'grupo aún no emparejado (modo pairing)',
   'pair.dm': "ℹ️ /pair no es necesario en modo DM — el bot sirve tu chat privado.",
   'version.report':

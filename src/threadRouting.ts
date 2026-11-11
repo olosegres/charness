@@ -234,10 +234,9 @@ export interface PairingInput {
  *   2. No effective group id yet (`currentGroupId === null`).
  *   3. The chat is a forum supergroup (same gate as {@link resolveThreadKey}).
  *
- * The actor's authority — they must be a creator/administrator of the group, so
- * a random group can't hijack pairing — is verified separately and
- * asynchronously by the caller via `getChatAdministrators`; it can't live in a
- * pure helper.
+ * Who may pair is decided separately ({@link getPairingRefusal}): being an
+ * administrator of the candidate group proves nothing — whoever made the group
+ * is its creator.
  */
 export function resolvePairingCandidate(input: PairingInput): number | null {
   if (input.isEnvLocked) return null;
@@ -245,4 +244,51 @@ export function resolvePairingCandidate(input: PairingInput): number | null {
   const { chat } = input;
   if (!chat || chat.type !== 'supergroup' || !chat.is_forum) return null;
   return chat.id;
+}
+
+/**
+ * @name PairingRefusal
+ * @description Why a sender may not pair the bot with a group: `notOwner` — an owner is set (`OWNER_USER_ID`) and the sender
+ * is not the owner; `notCurrentCreator` — no owner is set, the bot serves another group, and the sender did not create that
+ * group; `notAdmin` — the sender does not administer the group to pair (the bot serves that group's administrators).
+ */
+export type PairingRefusal = 'notOwner' | 'notCurrentCreator' | 'notAdmin';
+
+/** What {@link getPairingRefusal} decides from. */
+export interface PairingAuthorityInput {
+  /** `OWNER_USER_ID`, or `null` when the instance has none. */
+  ownerUserId: number | null;
+  senderId: number;
+  /** The group the bot serves now, `null` while unpaired. */
+  currentGroupId: number | null;
+  /** The group the sender wants it to serve. */
+  targetGroupId: number;
+}
+
+/** The Telegram reads {@link getPairingRefusal} needs, asked only when the rule gets to them. */
+export interface PairingAuthorityProbes {
+  /** Whether the sender is an administrator or the creator of the group to pair. */
+  checkIsTargetGroupAdmin(): Promise<boolean>;
+  /** Whether the sender is the creator of the group served now. */
+  checkIsCurrentGroupCreator(): Promise<boolean>;
+}
+
+/**
+ * @description Who may pair the bot with a group — by auto-pairing or `/pair` alike — or why not (`null`: allowed). Anyone
+ * can make a group and add the bot to it, and is then that group's creator, so administering the group to pair is never
+ * enough on its own:
+ *  - with an owner (`OWNER_USER_ID`): the owner alone, the first pairing and every later one;
+ *  - without one: the FIRST pairing by an administrator of that group (nothing better tells who installed the bot); once
+ *    the bot serves a group, moving it only by the CREATOR of that group (`/pair` in the group it serves already changes
+ *    nothing and stays open to its administrators).
+ * In every case the sender must administer the group to pair.
+ */
+export async function getPairingRefusal(input: PairingAuthorityInput, probes: PairingAuthorityProbes): Promise<PairingRefusal | null> {
+  if (input.ownerUserId !== null) {
+    if (input.senderId !== input.ownerUserId) return 'notOwner';
+  } else if (input.currentGroupId !== null && input.currentGroupId !== input.targetGroupId) {
+    if (!(await probes.checkIsCurrentGroupCreator())) return 'notCurrentCreator';
+  }
+  if (!(await probes.checkIsTargetGroupAdmin())) return 'notAdmin';
+  return null;
 }

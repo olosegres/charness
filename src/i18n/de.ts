@@ -179,6 +179,8 @@ export const deDict: Record<string, string> = {
     'Um die Gruppe zu wechseln, ändere die Variable und starte den Bot neu.',
   'pair.only_forum': '❌ /pair funktioniert nur in einer Forum-Supergroup (Topics aktivieren).',
   'pair.not_admin': '❌ Nur ein Gruppen-Administrator oder Ersteller kann den Bot verknüpfen.',
+  'pair.not_owner': '❌ Nur der Besitzer des Bots kann ihn mit einer Gruppe verknüpfen.',
+  'pair.not_current_creator': '❌ Der Bot bedient eine andere Gruppe; nur deren Ersteller kann ihn hierher verlegen.',
   'pair.not_paired': 'Gruppe noch nicht verknüpft (Pairing-Modus)',
   'pair.dm': "ℹ️ /pair ist im DM-Modus nicht nötig — der Bot bedient deinen privaten Chat.",
   'version.report':

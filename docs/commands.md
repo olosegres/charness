@@ -911,6 +911,14 @@ it did before.
 
 Bind this forum supergroup to the bot (re-point auto-pairing) — works from any topic of the target group; a numeric `ALLOWED_GROUP_ID` env locks pairing.
 
+Who may pair: with `OWNER_USER_ID` set, the owner alone — anyone else gets «Only the bot's owner can pair it with a group.»,
+and auto-pairing too waits for the owner's own message in a group. Without it, the first group is paired by an admin of
+that group (auto-pairing, or `/pair` there); after that only the **creator of the group the bot serves** can move it —
+anyone else gets «The bot serves another group; only that group's creator can move it here.» Being an administrator of
+the new group is never enough on its own (whoever makes a group is its creator), but it is required too: the bot serves
+that group's administrators. If the creator of the served group is gone, set `OWNER_USER_ID` (or `ALLOWED_GROUP_ID`) and
+restart.
+
 ## General-only
 
 ### `/quitall`

@@ -157,7 +157,9 @@ import {
   resolveThreadKeyForMode,
   checkIsDmThreadKey,
   resolvePairingCandidate,
+  getPairingRefusal,
   checkIsChatMode,
+  type PairingRefusal,
   GENERAL_THREAD_ID,
   DM_GENERAL_THREAD_ID,
   type ChatMode,
@@ -894,6 +896,39 @@ async function checkIsForumAdmin(chatId: number, userId: number): Promise<boolea
     return false;
   }
 }
+
+/** @description Whether `userId` created group `chatId` (Telegram's `creator` status); `false` when it cannot be read. */
+async function checkIsGroupCreator(chatId: number, userId: number): Promise<boolean> {
+  try {
+    return (await bot.telegram.getChatMember(chatId, userId)).status === 'creator';
+  } catch (e) {
+    console.warn(`[pair] getChatMember(${chatId}, ${userId}) failed:`, e instanceof Error ? e.message : e);
+    return false;
+  }
+}
+
+/**
+ * @description Why `senderId` may not pair the bot with `targetGroupId` (`null`: allowed) — the rule is
+ * {@link getPairingRefusal}'s, fed with this instance's owner, the group served now and the Telegram reads it needs.
+ */
+function getPairingRefusalFor(senderId: number, targetGroupId: number): Promise<PairingRefusal | null> {
+  const ownerUserId = getOwnerUserId();
+  const currentGroupId = getAllowedGroupId();
+  return getPairingRefusal(
+    { ownerUserId: Number.isFinite(ownerUserId) ? ownerUserId : null, senderId, currentGroupId, targetGroupId },
+    {
+      checkIsTargetGroupAdmin: () => checkIsForumAdmin(targetGroupId, senderId),
+      checkIsCurrentGroupCreator: () => (currentGroupId === null ? Promise.resolve(false) : checkIsGroupCreator(currentGroupId, senderId)),
+    },
+  );
+}
+
+/** The refusal each {@link PairingRefusal} answers `/pair` with. */
+const pairingRefusalTextKeys: Record<PairingRefusal, string> = {
+  notOwner: 'pair.not_owner',
+  notCurrentCreator: 'pair.not_current_creator',
+  notAdmin: 'pair.not_admin',
+};
 
 // Telegraf builds a NEW `Telegram` client for every update (`ctx.telegram`, behind every `ctx.reply`, `ctx.answerCbQuery`
 // and `ctx.editMessageText`) from `bot.telegram.options`, so the wiring of `bot.telegram` does not reach it and an
@@ -3282,10 +3317,11 @@ async function tryAutoPair(ctx: Context): Promise<void> {
   const chat = getRouteChat(ctx);
 
   // While unpaired, log every incoming update so the operator can see
-  // exactly what reaches the bot. Without this, the three ways pairing
-  // can silently fail — privacy mode (no update at all), a non-forum chat,
-  // or a sender who isn't a group admin — are indistinguishable from "bot
-  // is broken". Gated to pairing mode so normal operation stays quiet.
+  // exactly what reaches the bot. Without this, the ways pairing can
+  // silently fail — privacy mode (no update at all), a non-forum chat, or a
+  // sender who may not pair (not the owner, not a group admin) — are
+  // indistinguishable from "bot is broken". Gated to pairing mode so normal
+  // operation stays quiet.
   if (!isGroupLockedByEnv && getAllowedGroupId() === null) {
     console.log(
       `[pair] incoming ${ctx.updateType} update: chat=${chat?.id} type=${chat?.type} ` +
@@ -3300,11 +3336,13 @@ async function tryAutoPair(ctx: Context): Promise<void> {
   });
   if (candidate === null) return;
 
-  // Authority probe: only a creator/administrator of the candidate group may
-  // pair the bot, so a random group the bot is added to can't hijack it.
+  // Who may pair (`getPairingRefusal`): with an owner set, the owner alone; without one, an administrator of the group —
+  // the first pairing only, which is all auto-pairing ever is. Administering the group alone proves nothing: anyone who
+  // makes a group and adds the bot is its creator.
   const userId = ctx.from?.id;
-  if (!userId || !(await checkIsForumAdmin(candidate, userId))) {
-    console.warn(`[pair] ignored pairing from chat ${candidate} user ${userId ?? '?'} (not a group admin)`);
+  const refusal = userId ? await getPairingRefusalFor(userId, candidate) : 'notAdmin';
+  if (refusal !== null) {
+    console.warn(`[pair] ignored pairing from chat ${candidate} user ${userId ?? '?'} (${refusal})`);
     return;
   }
 
@@ -7225,8 +7263,10 @@ command('whoami', async (ctx, key) => {
  * @description Re-point the bot to the forum supergroup this command was
  * sent in. Registered raw (not via the group-gated `command()` wrapper) so
  * it can switch the bot from one group to another. Refused when the id is
- * locked by `ALLOWED_GROUP_ID` env. Only a creator/administrator of the target
- * group may pair, so a random group can't hijack the binding.
+ * locked by `ALLOWED_GROUP_ID` env. Who may pair is `getPairingRefusal`'s rule:
+ * with an owner set, only the owner; without one, once a group is served,
+ * only that group's creator — never merely an administrator of the new group,
+ * which whoever made it is.
  */
 bot.command('pair', async (ctx, next) => {
   // A forwarded `/pair` is somebody else's words: it re-points the bot to no group, and it is not swallowed either —
@@ -7260,8 +7300,10 @@ bot.command('pair', async (ctx, next) => {
     await replyToThread(replyKey, t('pair.only_forum')).catch(() => {});
     return;
   }
-  if (!(await checkIsForumAdmin(routeChat.id, userId))) {
-    await replyToThread(replyKey, t('pair.not_admin')).catch(() => {});
+  const refusal = await getPairingRefusalFor(userId, routeChat.id);
+  if (refusal !== null) {
+    console.warn(`[pair] refused /pair from chat ${routeChat.id} user ${userId} (${refusal})`);
+    await replyToThread(replyKey, t(pairingRefusalTextKeys[refusal])).catch(() => {});
     return;
   }
 

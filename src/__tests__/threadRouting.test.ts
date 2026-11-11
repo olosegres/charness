@@ -27,6 +27,8 @@ import {
   resolveThreadKeyForMode,
   checkIsDmThreadKey,
   resolvePairingCandidate,
+  getPairingRefusal,
+  type PairingAuthorityProbes,
   checkIsGeneralTopic,
   checkIsChatMode,
   GENERAL_THREAD_ID,
@@ -233,6 +235,65 @@ test('pair: undefined chat is rejected (defensive)', () => {
     isEnvLocked: false,
   });
   assert.equal(id, null);
+});
+
+// ─── who may pair (getPairingRefusal) ───────────────────────────────────
+//
+// Anyone can make a group, add the bot and be that group's creator: administering the group to pair is never enough.
+
+const ownerId = 111;
+const strangerId = 222;
+const currentGroupId = -1001111111111;
+const otherGroupId = -1002222222222;
+
+/** Probes that answer as given and record which ones the rule asked. */
+function createPairingProbes(answers: { isTargetAdmin: boolean; isCurrentCreator: boolean }): { probes: PairingAuthorityProbes; asked: string[] } {
+  const asked: string[] = [];
+  return {
+    asked,
+    probes: {
+      checkIsTargetGroupAdmin: async () => {
+        asked.push('targetAdmin');
+        return answers.isTargetAdmin;
+      },
+      checkIsCurrentGroupCreator: async () => {
+        asked.push('currentCreator');
+        return answers.isCurrentCreator;
+      },
+    },
+  };
+}
+
+test('pair authority with an owner: the owner alone — a first pairing and a move alike; an admin of the new group is not enough', async () => {
+  const everything = { isTargetAdmin: true, isCurrentCreator: true };
+  for (const current of [null, currentGroupId]) {
+    const stranger = createPairingProbes(everything);
+    assert.equal(await getPairingRefusal({ ownerUserId: ownerId, senderId: strangerId, currentGroupId: current, targetGroupId: otherGroupId }, stranger.probes), 'notOwner');
+    assert.deepEqual(stranger.asked, [], 'decided before any Telegram read');
+    const owner = createPairingProbes(everything);
+    assert.equal(await getPairingRefusal({ ownerUserId: ownerId, senderId: ownerId, currentGroupId: current, targetGroupId: otherGroupId }, owner.probes), null);
+  }
+  const ownerNotAdmin = createPairingProbes({ isTargetAdmin: false, isCurrentCreator: true });
+  assert.equal(await getPairingRefusal({ ownerUserId: ownerId, senderId: ownerId, currentGroupId: null, targetGroupId: otherGroupId }, ownerNotAdmin.probes), 'notAdmin', 'the bot serves the admins of the group it pairs');
+});
+
+test('pair authority without an owner: the first pairing by an admin of that group; a move only by the creator of the group served now', async () => {
+  const firstByAdmin = createPairingProbes({ isTargetAdmin: true, isCurrentCreator: false });
+  assert.equal(await getPairingRefusal({ ownerUserId: null, senderId: strangerId, currentGroupId: null, targetGroupId: otherGroupId }, firstByAdmin.probes), null);
+  assert.deepEqual(firstByAdmin.asked, ['targetAdmin']);
+
+  const moveByStranger = createPairingProbes({ isTargetAdmin: true, isCurrentCreator: false });
+  assert.equal(await getPairingRefusal({ ownerUserId: null, senderId: strangerId, currentGroupId, targetGroupId: otherGroupId }, moveByStranger.probes), 'notCurrentCreator');
+
+  const moveByCreator = createPairingProbes({ isTargetAdmin: true, isCurrentCreator: true });
+  assert.equal(await getPairingRefusal({ ownerUserId: null, senderId: ownerId, currentGroupId, targetGroupId: otherGroupId }, moveByCreator.probes), null);
+
+  const moveByCreatorNotAdmin = createPairingProbes({ isTargetAdmin: false, isCurrentCreator: true });
+  assert.equal(await getPairingRefusal({ ownerUserId: null, senderId: ownerId, currentGroupId, targetGroupId: otherGroupId }, moveByCreatorNotAdmin.probes), 'notAdmin');
+
+  const sameGroup = createPairingProbes({ isTargetAdmin: true, isCurrentCreator: false });
+  assert.equal(await getPairingRefusal({ ownerUserId: null, senderId: strangerId, currentGroupId, targetGroupId: currentGroupId }, sameGroup.probes), null, '/pair in the group served already moves nothing');
+  assert.deepEqual(sameGroup.asked, ['targetAdmin']);
 });
 
 // ─── DM-mode key resolution (P1+P2 foundation) ──────────────────────────

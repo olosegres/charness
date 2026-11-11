@@ -179,6 +179,8 @@ export const zhDict: Record<string, string> = {
     '要切换群组，请更改变量并重启 bot。',
   'pair.only_forum': '❌ /pair 仅在论坛超级群组中有效（启用 Topics）。',
   'pair.not_admin': '❌ 只有群组管理员或创建者才能配对 bot。',
+  'pair.not_owner': '❌ 只有 bot 的所有者才能将其与群组配对。',
+  'pair.not_current_creator': '❌ bot 正在服务另一个群组；只有该群组的创建者才能把它移到这里。',
   'pair.not_paired': '群组尚未配对（配对模式）',
   'pair.dm': "ℹ️ DM 模式下不需要 /pair — bot 服务于你的私聊。",
   'version.report':

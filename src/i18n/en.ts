@@ -183,6 +183,8 @@ export const enDict: Record<string, string> = {
     'To switch groups, change the variable and restart the bot.',
   'pair.only_forum': '❌ /pair only works inside a forum supergroup (enable Topics).',
   'pair.not_admin': '❌ Only a group administrator or creator can pair the bot.',
+  'pair.not_owner': '❌ Only the bot\'s owner can pair it with a group.',
+  'pair.not_current_creator': '❌ The bot serves another group; only that group\'s creator can move it here.',
   'pair.not_paired': 'group not paired yet (pairing mode)',
   'pair.dm': "ℹ️ /pair isn't needed in DM mode — the bot serves your private chat.",
   'version.report':

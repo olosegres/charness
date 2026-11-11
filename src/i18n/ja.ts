@@ -179,6 +179,8 @@ export const jaDict: Record<string, string> = {
     'グループを切り替えるには変数を変更して Bot を再起動してください。',
   'pair.only_forum': '❌ /pair はフォーラムスーパーグループ内でのみ動作します（Topics を有効化）。',
   'pair.not_admin': '❌ グループの管理者または作成者のみが Bot をペアリングできます。',
+  'pair.not_owner': '❌ Bot をグループとペアリングできるのは Bot のオーナーだけです。',
+  'pair.not_current_creator': '❌ Bot は別のグループで稼働中です。ここへ移せるのはそのグループの作成者だけです。',
   'pair.not_paired': 'グループはまだペアリングされていません（ペアリングモード）',
   'pair.dm': "ℹ️ DM モードでは /pair は不要です — Bot はあなたのプライベートチャットを提供します。",
   'version.report':
