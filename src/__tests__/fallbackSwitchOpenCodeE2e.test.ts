@@ -31,7 +31,9 @@
  *   · the General board: a Claude row sets the instance default (the ✓ follows), an OpenCode row only says a model is picked
  *     inside a topic and changes nothing;
  *   · a ChatGPT subscription's usage (a snapshot seeded into `state.json`; the instance's `auth.json` holds no `oauth`
- *     record, so nothing ever reaches chatgpt.com) shows on both screens.
+ *     record, so nothing ever reaches chatgpt.com) shows on both screens;
+ *   · an idle Claude account whose last reading is frozen (stale, 100 %, its resets already passed — the bot could not
+ *     re-read it: no login token) shows as 0 % with the stale mark on both screens, never «100% 🔄 in 1m».
  *
  * Nothing leaves the machine: every server is on loopback and every agent is a fake. Everything the test starts is
  * stopped in `after`.
@@ -629,6 +631,41 @@ describe('The usage-limit switch to and from OpenCode end to end: built charness
     assert.match(picker.text, /✓ google — API key\n/);
     const usage = readPersistedState(getLayout()).openCodeProviderUsage as Record<string, { usage?: { buckets: unknown[] } }> | undefined;
     assert.equal(usage?.openai?.usage?.buckets.length, 2, 'the poller left the seeded snapshot alone (auth.json lists no such provider)');
+  });
+
+  it('an idle Claude account frozen at 100 % — stale, its resets already passed, no token to re-read it — shows 0 % with the stale mark on /limits and /accounts, never «100% 🔄 in 1m»', async () => {
+    const hoursAgo = (hours: number): string => new Date(Date.now() - hours * 3_600_000).toISOString();
+    const frozenUsage = {
+      fetchedAt: hoursAgo(6),
+      source: 'api' as const,
+      isStale: true,
+      error: 'token expired',
+      buckets: [
+        { kind: 'session' as const, percent: 100, resetsAt: hoursAgo(1), scopeModel: null },
+        { kind: 'weekly_all' as const, percent: 100, resetsAt: hoursAgo(1), scopeModel: null },
+        { kind: 'weekly_scoped' as const, percent: 100, resetsAt: hoursAgo(1), scopeModel: 'Fable' },
+      ],
+    };
+    await restartWithState((persisted) => {
+      const takeoverRecord = persisted.claudeProfiles?.[takeoverAccount];
+      assert.ok(takeoverRecord, `the ${takeoverAccount} account is recorded by the earlier steps`);
+      persisted.claudeProfiles = { ...persisted.claudeProfiles, [takeoverAccount]: { ...takeoverRecord, loggedIn: true, usage: frozenUsage } };
+    });
+    // The next period lies ahead of a reset that passed an hour ago: five hours less that hour, a week less it.
+    const frozenLine = /⏱ 5h 0% 🔄 in 4h · week 0% 🔄 in 6d 23h · Fable 0% 🔄 in 6d 23h \(stale\)/;
+
+    const board = await openLimitsBoard(fakeTelegram, claudeTopic, claudeToOpenCode.threadId);
+    assert.match(board.message.text, new RegExp(`\\n${takeoverAccount} — ${frozenLine.source}\\n`), 'the account\'s windows are read against the clock, the stale mark stays');
+    assert.ok(!/100%|in 1m/.test(board.message.text), 'no used-up window and no «in 1m» on the board');
+
+    const sentMessageId = fakeTelegram.pushOperatorMessage(claudeToOpenCode.threadId, '/accounts');
+    const picker = await claudeTopic.waitForMessage('the /accounts picker with the frozen account\'s usage', (message) => message.message_id > sentMessageId && frozenLine.test(message.text));
+    assert.ok(!/100%|in 1m/.test(picker.text), '/accounts says the same');
+
+    // The screens derive it: the poller had no token to re-read the account with, so the stored reading is untouched.
+    const stored = readPersistedState(getLayout()).claudeProfiles?.[takeoverAccount]?.usage;
+    assert.equal(stored?.isStale, true);
+    assert.deepEqual(stored?.buckets.map((bucket) => bucket.percent), [100, 100, 100]);
   });
 
   it('the General board: a Claude row sets the instance default and the ✓ follows; an OpenCode row only says a model is picked inside a topic and changes nothing', async () => {
