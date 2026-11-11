@@ -47,7 +47,7 @@ function getRelativeResetWords(): ClaudeRelativeResetWords {
 /**
  * @description The profile's usage as display lines: the windows as `used% 🔄 reset` — 5h and weekly always (`—`
  * for one the snapshot lacks), Fable only when the account HAS that window (a corporate seat has none: nothing
- * is written about it) — `(stale)` when the last poll could not refresh, and the limit mark while it holds, the
+ * is written about it; a window whose reset has passed since it was read shows `0%`) — `(stale)` when the last poll could not refresh, and the limit mark while it holds, the
  * reset instant in `timezone`, and the used-up-credits mark while it holds. An account billed to API credits has no
  * windows (its row already says it pays per use): what it spent through the bot and the one credit line
  * (`utils/claudeApiCredit.ts`: the spend of the credit period, the operator's figure when there is one, and the «probably
@@ -61,10 +61,10 @@ export function formatClaudeProfileUsageLines(source: ClaudeProfileUsageSource |
   if (usage && usage.buckets.length > 0) {
     const words = getRelativeResetWords();
     // An unknown 5h reset shows the weekly window's instead (with neither, the bare percent).
-    const weeklyReset = getClaudeUsageBucket(usage, 'weekly_all')?.resetsAt ?? null;
+    const weeklyBucket = getClaudeUsageBucket(usage, 'weekly_all');
     const read = (kind: ClaudeUsageBucketKind) => formatClaudeUsageBucket(getClaudeUsageBucket(usage, kind), nowMs, {
       words,
-      fallbackResetsAt: kind === 'session' ? weeklyReset : null,
+      fallbackBucket: kind === 'session' ? weeklyBucket : null,
     });
     const stale = usage.isStale ? t('account.row.usageStale') : '';
     const hasFable = getClaudeUsageBucket(usage, 'weekly_scoped') !== null;

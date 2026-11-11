@@ -120,6 +120,13 @@ test('candidates: a window whose reset has passed since the reading counts as em
   assert.deepEqual(pickClaudeLimitSwitchCandidates({ profiles, currentName: 'default', model: 'opus', nowMs }), ['rolledOver']);
 });
 
+test('candidates: a stale snapshot whose every window has reset since is a candidate — an idle account frozen by an expired token is no longer out for good', () => {
+  const frozen = { ...buildUsage({ session: 100, weekly: 100, fable: 100, resetsAt: '2026-10-12T09:00:00.000Z', weeklyResetsAt: '2026-10-12T09:30:00.000Z' }), isStale: true, error: 'token expired' };
+  const weekStillRunning = buildUsage({ session: 100, weekly: 40, isStale: true, resetsAt: '2026-10-12T09:00:00.000Z' });
+  const profiles = [buildProfile('default'), buildProfile('frozen', { usage: frozen }), buildProfile('weekRunning', { usage: weekStillRunning })];
+  assert.deepEqual(pickClaudeLimitSwitchCandidates({ profiles, currentName: 'default', model: 'opus', nowMs }), ['frozen'], 'the clock proves the first one empty; the second\'s week is still running, its figures unread');
+});
+
 test('candidates: signed out, marked limited, stale, unknown usage and no headroom are all out', () => {
   const candidates = pickClaudeLimitSwitchCandidates({
     profiles: [

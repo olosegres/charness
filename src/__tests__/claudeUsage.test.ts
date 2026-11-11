@@ -16,6 +16,7 @@ import {
   buildClaudeProfilesReport,
   checkClaudeUsageBucketsChanged,
   checkHasHeadroomForClaudeModel,
+  checkHaveClaudeUsageWindowsReset,
   checkIsClaudeUsageExhausted,
   checkIsClaudeModelClearOfLimit,
   checkIsClaudeProfileLaunchable,
@@ -28,6 +29,7 @@ import {
   formatClaudeUsageRelativeReset,
   formatClaudeUsageResetAt,
   getClaudeLaunchPick,
+  getClaudeUsageBucketAsOf,
   getRelevantClaudeUsageKinds,
   markClaudeUsageSnapshotStale,
   mergeClaudeUsageSnapshot,
@@ -517,13 +519,25 @@ describe('the launch pick (getClaudeLaunchPick)', () => {
       assert.equal(describeClaudeLaunchOutcome(buildClaudeProfilesReport([view('out', undefined, { loggedIn: false })], 'sonnet', nowMs), null), 'none usable — no account names a time it frees up');
     });
 
-    it('isEligible keeps its strict meaning: the figures as recorded, no ceiling, no roll-forward', () => {
+    it('isEligible reads the figures as of now and has no ceiling: a window whose reset has passed is empty again', () => {
       const ninetyFive = view('hot', usage({ session: 95, weekly: 10, weeklyResetsAt: days(1) }));
-      const stale = view('stale', usage({ session: 0, weekly: 100, weeklyResetsAt: hours(-1) }));
-      const report = buildClaudeProfilesReport([ninetyFive, stale], 'sonnet', nowMs);
-      assert.deepEqual(report.profiles.map((entry) => entry.isEligible), [true, false]);
+      const frozen = view('frozen', { ...usage({ session: 100, weekly: 100, weeklyResetsAt: hours(-1), sessionResetsAt: hours(-1) }), isStale: true, error: 'token expired' });
+      const stillFull = view('full', usage({ session: 0, weekly: 100, weeklyResetsAt: hours(1) }));
+      const report = buildClaudeProfilesReport([ninetyFive, frozen, stillFull], 'sonnet', nowMs);
+      assert.deepEqual(report.profiles.map((entry) => entry.isEligible), [true, true, false]);
       assert.equal(checkIsClaudeProfileLaunchable(ninetyFive, 'sonnet', nowMs), false, 'over the launch ceiling');
-      assert.equal(checkIsClaudeProfileLaunchable(stale, 'sonnet', nowMs), true, 'its week has rolled over since');
+      assert.equal(checkIsClaudeProfileLaunchable(frozen, 'sonnet', nowMs), true, 'its windows have reset since');
+    });
+
+    it('a stale snapshot frozen at 100 % whose resets have passed reports as empty — buckets, headroom, eligible — yet still says it was not re-read', () => {
+      const frozenUsage: ClaudeUsageSnapshot = { ...usage({ session: 100, weekly: 100, weeklyResetsAt: hours(-3), sessionResetsAt: hours(-9), fable: 100 }), isStale: true, error: 'token expired' };
+      const [entry] = buildClaudeProfilesReport([view('idle', frozenUsage)], 'fable', nowMs).profiles;
+      assert.deepEqual(entry.buckets.map((bucket) => bucket.percent), [0, 0, 0]);
+      assert.ok(entry.buckets.every((bucket) => Date.parse(bucket.resetsAt ?? '') > nowMs), 'no reset left in the past');
+      assert.equal(entry.headroomPercent, 100);
+      assert.equal(entry.isEligible, true);
+      assert.equal(entry.isUsageStale, true, 'the report still says the figures were not re-read');
+      assert.equal(entry.usageFetchedAt, frozenUsage.fetchedAt);
     });
   });
 });
@@ -692,12 +706,29 @@ describe('the human formats', () => {
   });
 
   it('an unknown reset takes the fallback (the weekly window for the 5h one)', () => {
-    const weekly = new Date(nowMs + 2 * 86_400_000).toISOString();
+    const weeklyBucket = { kind: 'weekly_all' as const, percent: 40, resetsAt: new Date(nowMs + 2 * 86_400_000).toISOString(), scopeModel: null };
     const session = { kind: 'session' as const, percent: 10, resetsAt: null, scopeModel: null };
-    assert.equal(formatClaudeUsageBucket(session, nowMs, { fallbackResetsAt: weekly }), '10% 🔄 in 2d');
+    assert.equal(formatClaudeUsageBucket(session, nowMs, { fallbackBucket: weeklyBucket }), '10% 🔄 in 2d');
     assert.equal(formatClaudeUsageBucket(session, nowMs), '10%', 'with no reset at all it is the bare percent, never a «?» after the number');
     const known = { ...session, resetsAt: new Date(nowMs + 3_600_000).toISOString() };
-    assert.equal(formatClaudeUsageBucket(known, nowMs, { fallbackResetsAt: weekly }), '10% 🔄 in 1h', 'a known reset wins');
+    assert.equal(formatClaudeUsageBucket(known, nowMs, { fallbackBucket: weeklyBucket }), '10% 🔄 in 1h', 'a known reset wins');
+  });
+
+  it('a window whose reset has passed shows 0 % and a reset still ahead — never the read figure with «in 1m»', () => {
+    const minutesAgo = (minutes: number): string => new Date(nowMs - minutes * 60_000).toISOString();
+    const frozenSession = { kind: 'session' as const, percent: 100, resetsAt: minutesAgo(1), scopeModel: null };
+    const frozenWeekly = { kind: 'weekly_all' as const, percent: 100, resetsAt: minutesAgo(60), scopeModel: null };
+    assert.equal(formatClaudeUsageBucket(frozenSession, nowMs), '0% 🔄 in 5h', 'a fresh five-hour period lies ahead');
+    assert.equal(formatClaudeUsageBucket(frozenWeekly, nowMs), '0% 🔄 in 6d 23h', 'a fresh week lies ahead');
+    for (const bucket of [frozenSession, frozenWeekly, { ...frozenWeekly, resetsAt: minutesAgo(15 * 24 * 60) }]) {
+      assert.doesNotMatch(formatClaudeUsageBucket(bucket, nowMs), /in 1m|100%/);
+    }
+  });
+
+  it('a stand-in reset that has passed rolls ahead too: an unknown 5h reset never borrows a weekly «in 1m»', () => {
+    const session = { kind: 'session' as const, percent: 100, resetsAt: null, scopeModel: null };
+    const frozenWeekly = { kind: 'weekly_all' as const, percent: 100, resetsAt: new Date(nowMs - 60_000).toISOString(), scopeModel: null };
+    assert.equal(formatClaudeUsageBucket(session, nowMs, { fallbackBucket: frozenWeekly }), '100% 🔄 in 7d');
   });
 });
 
@@ -718,6 +749,18 @@ describe('the claude-profiles CLI line', () => {
       buckets: [...entry.buckets, { kind: 'weekly_scoped', percent: 3, resetsAt: new Date(nowMs + 49 * 3_600_000).toISOString(), scopeModel: 'Fable' }],
     }, nowMs);
     assert.match(withFable, /week 40% 🔄 in 2d 1h · Fable 3% 🔄 in 2d 1h$/);
+  });
+
+  it('a window read at 100 % whose reset has passed prints as 0 % — the line never says «100% 🔄 in 1m»', () => {
+    const frozen = {
+      name: 'idle', configDir: '/d/idle', email: 'i@example.com', kind: 'personal', subscriptionType: 'max', loggedIn: true,
+      buckets: [
+        { kind: 'session', percent: 100, resetsAt: new Date(nowMs - 60_000).toISOString(), scopeModel: null },
+        { kind: 'weekly_all', percent: 100, resetsAt: new Date(nowMs - 3_600_000).toISOString(), scopeModel: null },
+      ],
+      usageFetchedAt: null, isUsageStale: true, limitedUntil: null, creditExhaustedAt: null, billing: null, spentUsd: null, remainingEstimateUsd: null, expiresOn: null, probablyUsedUp: false, renewedAt: null, isEligible: true, chainExclusion: null, headroomPercent: 100, isRecommended: false,
+    } as const;
+    assert.match(formatClaudeProfileCliLine({ ...frozen, buckets: [...frozen.buckets] }, nowMs), /5h 0% 🔄 in 5h · week 0% 🔄 in 6d 23h \(stale\)$/);
   });
 });
 
@@ -747,6 +790,52 @@ describe('checkIsClaudeUsageExhausted — does the reading SHOW a window at 100 
   });
 });
 
+describe('getClaudeUsageBucketAsOf — a bucket against the clock', () => {
+  const at = (minutes: number): string => new Date(nowMs + minutes * 60_000).toISOString();
+  const bucket = (kind: 'session' | 'weekly_all', resetsAt: string | null) => ({ kind, percent: 100, resetsAt, scopeModel: null });
+
+  it('a reset ahead, an unknown reset or an unreadable one leaves the bucket as read', () => {
+    for (const unchanged of [bucket('session', at(1)), bucket('session', null), bucket('weekly_all', 'garbage')]) {
+      assert.deepEqual(getClaudeUsageBucketAsOf(unchanged, nowMs), unchanged);
+    }
+  });
+
+  it('a passed reset (the instant itself counts) empties the bucket and rolls it by whole periods until it lies ahead', () => {
+    assert.deepEqual(getClaudeUsageBucketAsOf(bucket('session', at(0)), nowMs), { ...bucket('session', at(300)), percent: 0 });
+    assert.deepEqual(getClaudeUsageBucketAsOf(bucket('session', at(-301)), nowMs), { ...bucket('session', at(299)), percent: 0 }, 'five hours and a minute ago: one full period has run, the second started');
+    assert.deepEqual(getClaudeUsageBucketAsOf(bucket('weekly_all', at(-60)), nowMs), { ...bucket('weekly_all', at(7 * 1440 - 60)), percent: 0 });
+  });
+});
+
+describe('checkHaveClaudeUsageWindowsReset — does the clock alone say the figures are empty', () => {
+  const at = (hours: number): string => new Date(nowMs + hours * 3_600_000).toISOString();
+  const snapshotOf = (sessionResetsAt: string | null, weeklyResetsAt: string | null, fableResetsAt?: string): ClaudeUsageSnapshot => ({
+    fetchedAt: at(-30),
+    source: 'api',
+    isStale: true,
+    error: 'token expired',
+    buckets: [
+      { kind: 'session', percent: 100, resetsAt: sessionResetsAt, scopeModel: null },
+      { kind: 'weekly_all', percent: 100, resetsAt: weeklyResetsAt, scopeModel: null },
+      ...(fableResetsAt === undefined ? [] : [{ kind: 'weekly_scoped' as const, percent: 100, resetsAt: fableResetsAt, scopeModel: 'Fable' }]),
+    ],
+  });
+
+  it('true when every window the model drains has passed its reset; any window still ahead, without a reset, or no figures at all is not proof', () => {
+    assert.equal(checkHaveClaudeUsageWindowsReset(snapshotOf(at(-20), at(-1)), 'sonnet', nowMs), true);
+    assert.equal(checkHaveClaudeUsageWindowsReset(snapshotOf(at(-20), at(5)), 'sonnet', nowMs), false, 'the week is still running');
+    assert.equal(checkHaveClaudeUsageWindowsReset(snapshotOf(null, at(-1)), 'sonnet', nowMs), false, 'a window that names no reset');
+    assert.equal(checkHaveClaudeUsageWindowsReset(undefined, 'sonnet', nowMs), false);
+    assert.equal(checkHaveClaudeUsageWindowsReset({ ...snapshotOf(at(-20), at(-1)), buckets: [] }, 'sonnet', nowMs), false);
+  });
+
+  it('judges only the windows the model drains: Fable\'s own window counts for Fable alone', () => {
+    const fableAhead = snapshotOf(at(-20), at(-1), at(40));
+    assert.equal(checkHaveClaudeUsageWindowsReset(fableAhead, 'sonnet', nowMs), true);
+    assert.equal(checkHaveClaudeUsageWindowsReset(fableAhead, 'fable', nowMs), false);
+  });
+});
+
 describe('checkHasHeadroomForClaudeModel — is a model clear of an exhausted window', () => {
   const snapshotOf = (session: number, weekly: number, fable?: number): ClaudeUsageSnapshot => ({
     fetchedAt: '2026-10-12T09:59:00.000Z',
@@ -760,42 +849,52 @@ describe('checkHasHeadroomForClaudeModel — is a model clear of an exhausted wi
 
   it('a Fable-only weekly limit stops Fable but not sonnet or opus', () => {
     const fableLimited = snapshotOf(10, 20, 100);
-    assert.equal(checkHasHeadroomForClaudeModel(fableLimited, 'fable'), false);
-    assert.equal(checkHasHeadroomForClaudeModel(fableLimited, 'claude-fable-5-1'), false, 'the running id counts as Fable too');
-    assert.equal(checkHasHeadroomForClaudeModel(fableLimited, 'sonnet'), true);
-    assert.equal(checkHasHeadroomForClaudeModel(fableLimited, 'opus'), true);
+    assert.equal(checkHasHeadroomForClaudeModel(fableLimited, 'fable', nowMs), false);
+    assert.equal(checkHasHeadroomForClaudeModel(fableLimited, 'claude-fable-5-1', nowMs), false, 'the running id counts as Fable too');
+    assert.equal(checkHasHeadroomForClaudeModel(fableLimited, 'sonnet', nowMs), true);
+    assert.equal(checkHasHeadroomForClaudeModel(fableLimited, 'opus', nowMs), true);
   });
 
   it('an exhausted session or shared weekly window stops EVERY model, Fable included (Fable drains both)', () => {
     for (const model of ['fable', 'sonnet', 'opus']) {
-      assert.equal(checkHasHeadroomForClaudeModel(snapshotOf(100, 20, 10), model), false, `session, ${model}`);
-      assert.equal(checkHasHeadroomForClaudeModel(snapshotOf(10, 100, 10), model), false, `shared weekly, ${model}`);
+      assert.equal(checkHasHeadroomForClaudeModel(snapshotOf(100, 20, 10), model, nowMs), false, `session, ${model}`);
+      assert.equal(checkHasHeadroomForClaudeModel(snapshotOf(10, 100, 10), model, nowMs), false, `shared weekly, ${model}`);
     }
   });
 
   it('a window the snapshot lacks, or no snapshot, is unknown — and unknown is taken to be covered by the limit', () => {
-    assert.equal(checkHasHeadroomForClaudeModel(snapshotOf(10, 20), 'fable'), false, 'no Fable window recorded');
-    assert.equal(checkHasHeadroomForClaudeModel(undefined, 'sonnet'), false);
-    assert.equal(checkHasHeadroomForClaudeModel({ ...snapshotOf(10, 20), buckets: [] }, 'sonnet'), false);
+    assert.equal(checkHasHeadroomForClaudeModel(snapshotOf(10, 20), 'fable', nowMs), false, 'no Fable window recorded');
+    assert.equal(checkHasHeadroomForClaudeModel(undefined, 'sonnet', nowMs), false);
+    assert.equal(checkHasHeadroomForClaudeModel({ ...snapshotOf(10, 20), buckets: [] }, 'sonnet', nowMs), false);
   });
 
   it('a stale snapshot still counts: its last figures are the best there are', () => {
-    assert.equal(checkHasHeadroomForClaudeModel({ ...snapshotOf(10, 20, 100), isStale: true, error: 'token expired' }, 'sonnet'), true);
+    assert.equal(checkHasHeadroomForClaudeModel({ ...snapshotOf(10, 20, 100), isStale: true, error: 'token expired' }, 'sonnet', nowMs), true);
+  });
+
+  it('a window frozen at 100 % whose reset has passed since is empty again; one still ahead keeps the model out', () => {
+    const afterAllResets = Date.parse('2026-10-18T00:00:00.000Z');
+    const frozen = { ...snapshotOf(100, 100, 100), isStale: true, error: 'token expired' };
+    assert.equal(checkHasHeadroomForClaudeModel(frozen, 'sonnet', nowMs), false, 'before the resets');
+    assert.equal(checkHasHeadroomForClaudeModel(frozen, 'sonnet', afterAllResets), true);
+    assert.equal(checkHasHeadroomForClaudeModel(frozen, 'fable', afterAllResets), true);
+    assert.equal(checkIsClaudeModelClearOfLimit(frozen, 'claude-sonnet-4-5', 'opus', afterAllResets), false, 'a model on the same windows as the limited one stays covered by that limit');
+    assert.equal(checkIsClaudeModelClearOfLimit(frozen, 'claude-fable-5-1', 'sonnet', afterAllResets), true, 'a model on fewer windows is judged by the figures as of now');
   });
 
   it('a model draining the windows the limited one drains is covered by the limit, however far the figures lag behind it', () => {
     const lagging = snapshotOf(10, 20, 40);
-    assert.equal(checkIsClaudeModelClearOfLimit(lagging, 'claude-fable-5-1', 'fable'), false, 'the very model that hit the limit');
-    assert.equal(checkIsClaudeModelClearOfLimit(lagging, 'claude-sonnet-4-5', 'opus'), false, 'sonnet and opus drain the same windows');
-    assert.equal(checkIsClaudeModelClearOfLimit(lagging, 'claude-sonnet-4-5', 'fable'), false, 'Fable drains the windows sonnet ran out of too');
-    assert.equal(checkIsClaudeModelClearOfLimit(lagging, null, 'fable'), true, 'the limited model unknown: the figures decide');
+    assert.equal(checkIsClaudeModelClearOfLimit(lagging, 'claude-fable-5-1', 'fable', nowMs), false, 'the very model that hit the limit');
+    assert.equal(checkIsClaudeModelClearOfLimit(lagging, 'claude-sonnet-4-5', 'opus', nowMs), false, 'sonnet and opus drain the same windows');
+    assert.equal(checkIsClaudeModelClearOfLimit(lagging, 'claude-sonnet-4-5', 'fable', nowMs), false, 'Fable drains the windows sonnet ran out of too');
+    assert.equal(checkIsClaudeModelClearOfLimit(lagging, null, 'fable', nowMs), true, 'the limited model unknown: the figures decide');
   });
 
   it('a model draining FEWER windows than the limited one (a non-Fable model after Fable) is judged by the figures', () => {
-    assert.equal(checkIsClaudeModelClearOfLimit(snapshotOf(10, 20, 100), 'claude-fable-5-1', 'sonnet'), true, 'only Fable\'s own window ran out');
-    assert.equal(checkIsClaudeModelClearOfLimit(snapshotOf(10, 20, 40), 'claude-fable-5-1', 'sonnet'), true, 'figures lagging, but nothing says otherwise');
-    assert.equal(checkIsClaudeModelClearOfLimit(snapshotOf(100, 20, 100), 'claude-fable-5-1', 'opus'), false, 'the session window stops every model');
-    assert.equal(checkIsClaudeModelClearOfLimit(snapshotOf(10, 100, 40), 'claude-fable-5-1', 'opus'), false, 'so does the shared weekly window');
-    assert.equal(checkIsClaudeModelClearOfLimit(undefined, 'claude-fable-5-1', 'opus'), false, 'no figures: the limit is taken to cover it');
+    assert.equal(checkIsClaudeModelClearOfLimit(snapshotOf(10, 20, 100), 'claude-fable-5-1', 'sonnet', nowMs), true, 'only Fable\'s own window ran out');
+    assert.equal(checkIsClaudeModelClearOfLimit(snapshotOf(10, 20, 40), 'claude-fable-5-1', 'sonnet', nowMs), true, 'figures lagging, but nothing says otherwise');
+    assert.equal(checkIsClaudeModelClearOfLimit(snapshotOf(100, 20, 100), 'claude-fable-5-1', 'opus', nowMs), false, 'the session window stops every model');
+    assert.equal(checkIsClaudeModelClearOfLimit(snapshotOf(10, 100, 40), 'claude-fable-5-1', 'opus', nowMs), false, 'so does the shared weekly window');
+    assert.equal(checkIsClaudeModelClearOfLimit(undefined, 'claude-fable-5-1', 'opus', nowMs), false, 'no figures: the limit is taken to cover it');
   });
 });

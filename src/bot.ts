@@ -8728,7 +8728,7 @@ async function executeBackendSwitch(key: SessionKey, target: BackendSwitchTarget
 async function checkIsPickBeyondLimit(from: FallbackChainEntry | null, to: FallbackChainEntry): Promise<boolean> {
   if (from?.backend !== 'claude' || to.backend !== 'claude' || to.model === null || from.profile !== to.profile) return false;
   await refreshUsageWithinBudget((options) => claudeUsageRefresher.refreshAll(options));
-  return checkIsClaudeModelClearOfLimit(state.getClaudeProfileInfo(to.profile)?.usage, from.model, to.model);
+  return checkIsClaudeModelClearOfLimit(state.getClaudeProfileInfo(to.profile)?.usage, from.model, to.model, Date.now());
 }
 
 /** The rung as a manual switch's target: a picked Claude account (+ model alias), or an OpenCode model, both named in the question. */

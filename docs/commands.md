@@ -164,12 +164,17 @@ so one account's usage limit does not stop every topic.
   each profile's own login every 10 minutes, when `/accounts` or `/limits` opens and when an
   agent asks (the ChatGPT subscription of an OpenCode provider is read the same way, see [`/limits`](#limits)); a json-stream session's own rate-limit events keep them current
   between polls. A token the CLI has not renewed yet shows the last figures as
-  `(stale)`; a profile whose session was refused on a window is marked
+  `(stale)` — the bot never renews it itself, and re-reads the token at every poll, so the
+  first poll after the CLI ran on that account shows fresh figures again. Stale or not, a window
+  whose reset has passed since it was read is shown as `0%`, never as the old figure with a reset
+  «in 1m»: an account no CLI runs on (a used-up one waiting for its reset) has an expired token, so its
+  last reading would otherwise stay at 100 % for good; the recommendation, the `claude_profiles` figures and the
+  switch of a topic read the same way. A profile whose session was refused on a window is marked
   `⛔ at its limit until …` and is skipped by the recommendation below.
 - **Another account takes over on a limit.** When a topic's account hits a
   usage limit the bot looks at the [fallback chain](#limits_autoswitch);
   without one it moves the topic to the signed-in profile whose weekly limit resets
-  soonest (fresh figures, not marked limited, below 100 % on the windows the topic's model
+  soonest (fresh figures — or stale ones whose every window has passed its reset —, not marked limited, below 100 % on the windows the topic's model
   drains and with the five-hour window under 90 % — the order a new agent's account is picked in, see below). The limit
   notice carries «🔁 Switch to &lt;entry&gt;» buttons, best first: a tap moves the
   topic there (the running session is restarted under the new account with the

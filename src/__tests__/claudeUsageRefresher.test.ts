@@ -72,6 +72,26 @@ describe('refreshAll', () => {
     assert.deepEqual(h.snapshots.get('work')?.buckets, [session(10)], 'the last figures are kept');
   });
 
+  it('an expired token freezes nothing for good: the token is re-read every poll, so the poll after the CLI renewed it reads fresh figures', async () => {
+    const tokens: Record<string, { accessToken: string; expiresAtMs: number | null } | null> = { default: { accessToken: 'old', expiresAtMs: Date.parse('2026-10-12T09:00:00Z') } };
+    const h = createHarness({
+      profiles: [defaultProfile],
+      tokens,
+      snapshots: { default: { fetchedAt: '2026-10-11T09:00:00.000Z', source: 'api', buckets: [{ ...session(100), resetsAt: '2026-10-11T14:00:00.000Z' }] } },
+    });
+    await h.refresher.refreshAll({ maxAgeMs: 60_000 });
+    assert.deepEqual(h.fetched, [], 'nothing is sent with the expired token');
+    assert.equal(h.snapshots.get('default')?.isStale, true);
+    assert.equal(h.snapshots.get('default')?.buckets[0].percent, 100, 'the last figures stay as they were read — the display rolls them against the clock');
+    await h.refresher.refreshAll({ maxAgeMs: 60_000 });
+    assert.deepEqual(h.fetched, [], 'still the expired token on the next open of /limits: still no request');
+    tokens.default = { accessToken: 'renewed', expiresAtMs: Date.parse('2026-10-12T15:00:00Z') };
+    await h.refresher.refreshAll({ maxAgeMs: 60_000 });
+    assert.deepEqual(h.fetched, ['renewed']);
+    assert.equal(h.snapshots.get('default')?.isStale, undefined, 'fresh again');
+    assert.equal(h.snapshots.get('default')?.buckets[0].percent, 42);
+  });
+
   it('a failed fetch keeps the last buckets, marks them stale with the reason and logs one line', async () => {
     const h = createHarness({
       profiles: [defaultProfile],

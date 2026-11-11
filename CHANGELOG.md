@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+**`/limits` and `/accounts` no longer show an account that reset by itself as «100% 🔄 in 1m» — a window whose reset time has passed is shown as `0%`, and the account is offered again.**
+Before, the last reading of an account that ran out of its limit and was then left unused stayed on screen after the window had reset, printed with a reset «in 1m» that never came. Likely cause (the code path is certain, the token lifetime was measured at about eight hours on another account): an unused account's login token expires, the CLI renews tokens only when it runs on the account and the bot never does, so the bot had nothing to poll with and kept the old figures, marked `(stale)`. The same frozen figure also kept the account out of the eligible list of the `claude_profiles` answer, of the fallback chain's availability check and — being stale — of the topic's switch candidates. Now every screen and every pick reads a window against the clock: one whose reset has passed since it was read is `0%` (`(stale)` still says the figures were not re-read) and the account counts as free; the first poll after the CLI renewed the token shows fresh figures again.
+
 ## 3.12.0 — 2026-11-10
 
 **Jobs on a Mac runner no longer print «Killed: 9» lines into their output — a line like `runner.sh: line N: <pid> Killed: 9  ( sleep $limit_sec; kill -9 "$command_pid" )` that read like a failure after every step with a Simulator call.**

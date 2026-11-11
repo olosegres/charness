@@ -11,6 +11,7 @@
  */
 
 import {
+  checkHaveClaudeUsageWindowsReset,
   checkIsClaudeProfileLaunchable,
   getClaudeUsageBucket,
   getRelevantClaudeUsageKinds,
@@ -28,7 +29,9 @@ export { resolveClaudeAutoSwitchOnLimitEnabled } from './autoContinueOnLimit';
  * below the launch ceiling (`checkIsClaudeProfileLaunchable`) — and not the profile that just hit the limit. The order is
  * the launch pick's: the account whose weekly window resets soonest first (`sortClaudeProfilesByLaunchRank`), the one
  * ranking a new agent's account too. A profile whose usage is unknown or stale is left out on purpose — the switch is sold
- * as "this one has room", and a guess could land the topic in a second limit. An account billed to API credits is never
+ * as "this one has room", and a guess could land the topic in a second limit — except a stale one whose every window has
+ * since passed its reset: the clock proves those empty, and an idle account whose token expired (no CLI run renews it, no poll
+ * can re-read it) would otherwise stay out for good. An account billed to API credits is never
  * one of them: it has no windows to have room on, and only the operator decides to spend money (the chain's rung).
  */
 export function pickClaudeLimitSwitchCandidates(input: {
@@ -41,7 +44,7 @@ export function pickClaudeLimitSwitchCandidates(input: {
   const kinds = getRelevantClaudeUsageKinds(input.model);
   const candidates = input.profiles.filter((profile) => profile.name !== input.currentName
     && profile.loggedIn === true
-    && profile.usage?.isStale !== true
+    && (profile.usage?.isStale !== true || checkHaveClaudeUsageWindowsReset(profile.usage, input.model, input.nowMs))
     && kinds.some((kind) => getClaudeUsageBucket(profile.usage, kind) !== null)
     && checkIsClaudeProfileLaunchable(profile, input.model, input.nowMs));
   return sortClaudeProfilesByLaunchRank(candidates, input.model, input.nowMs).map((profile) => profile.name);

@@ -15,7 +15,10 @@
  *     — the last one IS the Fable window: same utilization and reset instant as the endpoint's scoped limit).
  *
  * Token refresh is the CLI's job: a token past its `expiresAt` is never used (nor refreshed here) — the
- * snapshot is marked stale and the next CLI run renews it. The token itself is never logged or returned.
+ * snapshot is marked stale and the next CLI run renews it (every poll re-reads the token file, so the poll after that run
+ * recovers by itself). An account no CLI runs on keeps that stale snapshot for as long as it sits idle, so every reader reads
+ * a bucket AGAINST THE CLOCK ({@link getClaudeUsageBucketAsOf}): a window whose reset has passed is empty, whatever was read.
+ * The token itself is never logged or returned.
  *
  * Pure except {@link readClaudeOAuthToken} (one file read) and {@link fetchClaudeUsage} (one GET through an
  * injectable `fetch`), so the rest is unit-tested without the network.
@@ -292,15 +295,16 @@ export function getRelevantClaudeUsageKinds(model: string | null): ClaudeUsageBu
 }
 
 /**
- * @description Whether every window a launch of `model` drains is KNOWN and below 100 % — the model is clear of an exhausted
- * window: a Fable-only weekly limit does not stop `sonnet`, while an exhausted session or shared weekly window stops every
- * model, Fable included. Unknown figures (no snapshot, a window the snapshot lacks) are `false`: a limit nobody can tell the
- * scope of is taken to cover the model. A stale snapshot still counts — its last figures are the best there are.
+ * @description Whether every window a launch of `model` drains is KNOWN and below 100 % at `nowMs` — the model is clear of an
+ * exhausted window: a Fable-only weekly limit does not stop `sonnet`, while an exhausted session or shared weekly window stops
+ * every model, Fable included. Unknown figures (no snapshot, a window the snapshot lacks) are `false`: a limit nobody can tell
+ * the scope of is taken to cover the model. A stale snapshot still counts — its last figures are the best there are — read
+ * against the clock ({@link getClaudeUsageBucketAsOf}): a window that has reset since is empty.
  */
-export function checkHasHeadroomForClaudeModel(usage: ClaudeUsageSnapshot | undefined, model: string | null): boolean {
+export function checkHasHeadroomForClaudeModel(usage: ClaudeUsageSnapshot | undefined, model: string | null, nowMs: number): boolean {
   return getRelevantClaudeUsageKinds(model).every((kind) => {
     const bucket = getClaudeUsageBucket(usage, kind);
-    return bucket !== null && bucket.percent < 100;
+    return bucket !== null && getClaudeUsageBucketAsOf(bucket, nowMs).percent < 100;
   });
 }
 
@@ -314,10 +318,19 @@ export function checkIsClaudeUsageExhausted(usage: ClaudeUsageSnapshot | undefin
   if (!usage || usage.isStale === true) return false;
   return getRelevantClaudeUsageKinds(model).some((kind) => {
     const bucket = getClaudeUsageBucket(usage, kind);
-    if (!bucket || bucket.percent < 100) return false;
-    const resetsAtMs = bucket.resetsAt === null ? Number.NaN : Date.parse(bucket.resetsAt);
-    return !(Number.isFinite(resetsAtMs) && resetsAtMs <= nowMs);
+    return bucket !== null && getClaudeUsageBucketAsOf(bucket, nowMs).percent >= 100;
   });
+}
+
+/**
+ * @description Whether every window a launch of `model` drains that the snapshot carries has passed its reset instant by
+ * `nowMs` — the clock alone proves those windows empty again, whether or not the snapshot could be re-read (an account no CLI
+ * runs on keeps an expired token and a stale snapshot for good). `false` for no figures, and for any window that is still
+ * running or names no reset.
+ */
+export function checkHaveClaudeUsageWindowsReset(usage: ClaudeUsageSnapshot | undefined, model: string | null, nowMs: number): boolean {
+  const buckets = getRelevantClaudeUsageBuckets(usage, model);
+  return buckets.length > 0 && buckets.every((bucket) => checkIsClaudeBucketResetPassed(bucket, nowMs));
 }
 
 /**
@@ -325,15 +338,15 @@ export function checkIsClaudeUsageExhausted(usage: ClaudeUsageSnapshot | undefin
  * limit. The window that stopped the limited model is one of the windows IT drains, so a picked model that drains all of them
  * (the same model, a model on the same windows, or Fable after any other model — Fable drains the shared windows too) is covered
  * by the limit however far the figures lag behind it. Only a model draining FEWER windows — a non-Fable model after Fable, which
- * may have stopped on its own weekly window alone — is judged by {@link checkHasHeadroomForClaudeModel}. An unknown
+ * may have stopped on its own weekly window alone — is judged by {@link checkHasHeadroomForClaudeModel} at `nowMs`. An unknown
  * `limitedModel` leaves it to the figures.
  */
-export function checkIsClaudeModelClearOfLimit(usage: ClaudeUsageSnapshot | undefined, limitedModel: string | null, pickedModel: string): boolean {
+export function checkIsClaudeModelClearOfLimit(usage: ClaudeUsageSnapshot | undefined, limitedModel: string | null, pickedModel: string, nowMs: number): boolean {
   if (limitedModel !== null) {
     const pickedKinds = getRelevantClaudeUsageKinds(pickedModel);
     if (getRelevantClaudeUsageKinds(limitedModel).every((kind) => pickedKinds.includes(kind))) return false;
   }
-  return checkHasHeadroomForClaudeModel(usage, pickedModel);
+  return checkHasHeadroomForClaudeModel(usage, pickedModel, nowMs);
 }
 
 /** What the ranking needs to know about one profile (the bot reads it off state, the CLI off state.json). */
@@ -379,8 +392,10 @@ export interface ClaudeProfileReportEntry {
   billing: ClaudeProfileBilling | null;
   /** `null` when never probed. */
   loggedIn: boolean | null;
+  /** The windows as of now ({@link getClaudeUsageBucketAsOf}): one whose reset has passed since it was read shows 0 %. */
   buckets: ClaudeUsageBucket[];
   usageFetchedAt: string | null;
+  /** The figures were not re-read at the last poll (an expired token, a failed fetch); `buckets` are the last known ones, rolled against the clock. */
   isUsageStale: boolean;
   limitedUntil: string | null;
   /** When its prepaid API credits were found used up (`null`: not marked). */
@@ -398,11 +413,11 @@ export interface ClaudeProfileReportEntry {
   probablyUsedUp: boolean;
   /** When the bot detected the credit was back (the current period starts there); `null` = never or superseded by a newer figure. */
   renewedAt: string | null;
-  /** Signed in, not limited, its API credits not used up, not at 100 % on a window the model drains — by the figures AS RECORDED — and not kept off agents by the `/limits` list (`chainExclusion`). */
+  /** Signed in, not limited, its API credits not used up, not at 100 % on a window the model drains — by the figures AS OF NOW (a window whose reset has passed is empty) — and not kept off agents by the `/limits` list (`chainExclusion`). */
   isEligible: boolean;
   /** Why the operator's `/limits` list keeps agents off this account ({@link ClaudeChainExclusion}); `null` = no objection (it has an enabled rung there, or the list names no Claude account at all). */
   chainExclusion: ClaudeChainExclusion | null;
-  /** `100 − max(relevant percent)`; `null` when the usage is unknown. Informational: the pick ranks by reset, not by headroom. */
+  /** `100 − max(relevant percent)` as of now; `null` when the usage is unknown. Informational: the pick ranks by reset, not by headroom. */
   headroomPercent: number | null;
   /** The profile {@link getClaudeLaunchPick} chose (the figures read as of now). */
   isRecommended: boolean;
@@ -516,20 +531,28 @@ function getRelevantClaudeUsageBuckets(usage: ClaudeUsageSnapshot | undefined, m
     .filter((bucket): bucket is ClaudeUsageBucket => bucket !== null);
 }
 
-/**
- * A bucket as it stands at `nowMs`: a window whose reset instant has passed since the figure was read is empty again
- * (0 %) and resets one window length per elapsed period later. A bucket without a usable reset stays as read.
- */
-function readClaudeBucketAsOf(bucket: ClaudeUsageBucket, nowMs: number): ClaudeUsageBucket {
+/** Whether the bucket names a reset instant that is no later than `nowMs`. */
+function checkIsClaudeBucketResetPassed(bucket: ClaudeUsageBucket, nowMs: number): boolean {
   const resetMs = getBucketResetMs(bucket);
-  if (!Number.isFinite(resetMs) || resetMs > nowMs) return bucket;
+  return Number.isFinite(resetMs) && resetMs <= nowMs;
+}
+
+/**
+ * @description A bucket as it stands at `nowMs` — THE one reading of a figure against the clock, shared by every display and
+ * every pick: a window whose reset instant has passed since the figure was read is empty again (0 %) and resets one window length
+ * per elapsed period later (an estimate: it is only known that the old window is over). A bucket without a usable reset stays as
+ * read. The snapshot's own stale mark is the reader's to show: nothing here says the figures were re-read.
+ */
+export function getClaudeUsageBucketAsOf(bucket: ClaudeUsageBucket, nowMs: number): ClaudeUsageBucket {
+  if (!checkIsClaudeBucketResetPassed(bucket, nowMs)) return bucket;
+  const resetMs = getBucketResetMs(bucket);
   const windowMs = bucket.kind === 'session' ? claudeSessionWindowMs : claudeWeeklyWindowMs;
   const rolledMs = resetMs + (Math.floor((nowMs - resetMs) / windowMs) + 1) * windowMs;
   return { ...bucket, percent: 0, resetsAt: new Date(rolledMs).toISOString() };
 }
 
 function getRelevantClaudeBucketsAsOf(profile: ClaudeProfileUsageView, model: string | null, nowMs: number): ClaudeUsageBucket[] {
-  return getRelevantClaudeUsageBuckets(profile.usage, model).map((bucket) => readClaudeBucketAsOf(bucket, nowMs));
+  return getRelevantClaudeUsageBuckets(profile.usage, model).map((bucket) => getClaudeUsageBucketAsOf(bucket, nowMs));
 }
 
 /**
@@ -632,7 +655,7 @@ function getClaudeProfileFreeAtMs(profile: ClaudeProfileUsageView, model: string
 /** When the profile's five-hour window resets (as of `nowMs`); `null` when the snapshot has none or names no reset. */
 function getSessionResetMs(profile: ClaudeProfileUsageView, nowMs: number): number | null {
   const session = getClaudeUsageBucket(profile.usage, 'session');
-  const resetMs = session === null ? Number.NaN : getBucketResetMs(readClaudeBucketAsOf(session, nowMs));
+  const resetMs = session === null ? Number.NaN : getBucketResetMs(getClaudeUsageBucketAsOf(session, nowMs));
   return Number.isFinite(resetMs) ? resetMs : null;
 }
 
@@ -823,10 +846,11 @@ const emptyClaudeProfileReportCredit: Pick<ClaudeProfileReportEntry, 'spentUsd' 
 
 /**
  * @description The report of every profile for a launch of `model`, with the pick of {@link getClaudeLaunchPick}
- * (`options`: the warm account, the limit stop, the `/limits` list). `isEligible` is the strict reading — signed in,
- * not marked limited, its API credits not used up, not at 100 % on a relevant window as recorded, not kept off agents by the
- * list (`chainExclusion`) — which the explicit fallback chain's availability reads (it passes no list); `recommended` is the
- * pick. The entries keep the input order.
+ * (`options`: the warm account, the limit stop, the `/limits` list). The figures of an entry are read as of `nowMs`
+ * ({@link getClaudeUsageBucketAsOf}: a window whose reset has passed since it was read is empty), its `isUsageStale` says
+ * they were not re-read. `isEligible` is the strict reading — signed in, not marked limited, its API credits not used up, not
+ * at 100 % on a relevant window, no five-hour ceiling, not kept off agents by the list (`chainExclusion`) — which the
+ * explicit fallback chain's availability reads (it passes no list); `recommended` is the pick. The entries keep the input order.
  *
  * The credit fields of the entries (`spentUsd`, `remainingEstimateUsd`, `expiresOn`, `probablyUsedUp`, `renewedAt`) are left
  * EMPTY here: this module is loaded by the connector guards, which may not reach the credit module. Anything that is shown to
@@ -836,7 +860,7 @@ const emptyClaudeProfileReportCredit: Pick<ClaudeProfileReportEntry, 'spentUsd' 
 export function buildClaudeProfilesReport(profiles: readonly ClaudeProfileUsageView[], model: string | null, nowMs: number, options: ClaudeLaunchPickOptions = {}): ClaudeProfilesReport {
   const relevantBuckets = getRelevantClaudeUsageKinds(model);
   const entries = profiles.map((profile): ClaudeProfileReportEntry => {
-    const relevant = getRelevantClaudeUsageBuckets(profile.usage, model);
+    const relevant = getRelevantClaudeBucketsAsOf(profile, model, nowMs);
     const maxPercent = relevant.length === 0 ? null : Math.max(...relevant.map((bucket) => bucket.percent));
     const chainExclusion = getClaudeChainExclusion(profile.name, options.chainScope);
     return {
@@ -847,7 +871,7 @@ export function buildClaudeProfilesReport(profiles: readonly ClaudeProfileUsageV
       subscriptionType: profile.subscriptionType,
       billing: profile.billing,
       loggedIn: profile.loggedIn ?? null,
-      buckets: profile.usage?.buckets ?? [],
+      buckets: (profile.usage?.buckets ?? []).map((bucket) => getClaudeUsageBucketAsOf(bucket, nowMs)),
       usageFetchedAt: profile.usage?.fetchedAt ?? null,
       isUsageStale: profile.usage?.isStale === true,
       limitedUntil: profile.limitedUntil,
@@ -913,8 +937,9 @@ export const englishRelativeResetWords: ClaudeRelativeResetWords = { pattern: '�
 /**
  * @description A reset instant as a time from now: `🔄 in 2d 1h`, `🔄 in 2h`, `🔄 in 30m`. The two largest
  * units at most, minutes only under an hour: from a day up it is days + hours (hours dropped when zero), from
- * an hour up whole hours (rounded), below that minutes (at least one). An instant already past reads as
- * `🔄 in 1m` (the window is about to roll over). `?` for a missing or unparseable instant.
+ * an hour up whole hours (rounded), below that minutes (at least one: the last seconds before a reset read `in 1m`).
+ * Pass an instant AHEAD — a past one is not a countdown ({@link formatClaudeUsageBucket} reads its bucket as of now
+ * first, so it never passes one). `?` for a missing or unparseable instant.
  */
 export function formatClaudeUsageRelativeReset(resetsAt: string | null, nowMs: number, words: ClaudeRelativeResetWords = englishRelativeResetWords): string {
   if (resetsAt === null) return '?';
@@ -937,20 +962,24 @@ export function formatClaudeUsageRelativeReset(resetsAt: string | null, nowMs: n
 }
 
 /**
- * @description `81% 🔄 in 2h` for a bucket, `—` for a missing one. A bucket whose reset is unknown shows
- * `fallbackResetsAt` instead (the session window's reset is often missing while the weekly one is known);
- * with neither it is the bare percent — a «?» after a number would read as a doubt about the number.
+ * @description `81% 🔄 in 2h` for a bucket, `—` for a missing one. The bucket is read as of `nowMs`
+ * ({@link getClaudeUsageBucketAsOf}): one whose reset has passed since it was read shows `0%` and the next period's reset, never
+ * the old figure with a reset «in 1m» — a snapshot nobody could re-read (an expired token) must not claim a used-up window
+ * for ever; its stale mark is the caller's. A bucket whose reset is unknown shows the reset of `fallbackBucket` instead (the
+ * session window's reset is often missing while the weekly one is known; read as of now too); with neither it is the bare
+ * percent — a «?» after a number would read as a doubt about the number.
  */
 export function formatClaudeUsageBucket(
   bucket: ClaudeUsageBucket | null,
   nowMs: number,
-  options: { fallbackResetsAt?: string | null; words?: ClaudeRelativeResetWords } = {},
+  options: { fallbackBucket?: ClaudeUsageBucket | null; words?: ClaudeRelativeResetWords } = {},
 ): string {
   if (bucket === null) return '—';
-  const known = bucket.resetsAt !== null && !Number.isNaN(Date.parse(bucket.resetsAt));
-  const resetsAt = known ? bucket.resetsAt : options.fallbackResetsAt ?? null;
-  if (resetsAt === null || Number.isNaN(Date.parse(resetsAt))) return `${bucket.percent}%`;
-  return `${bucket.percent}% ${formatClaudeUsageRelativeReset(resetsAt, nowMs, options.words)}`;
+  const current = getClaudeUsageBucketAsOf(bucket, nowMs);
+  const isOwnResetKnown = current.resetsAt !== null && !Number.isNaN(Date.parse(current.resetsAt));
+  const resetsAt = isOwnResetKnown ? current.resetsAt : options.fallbackBucket ? getClaudeUsageBucketAsOf(options.fallbackBucket, nowMs).resetsAt : null;
+  if (resetsAt === null || Number.isNaN(Date.parse(resetsAt))) return `${current.percent}%`;
+  return `${current.percent}% ${formatClaudeUsageRelativeReset(resetsAt, nowMs, options.words)}`;
 }
 
 // ── small readers ──
