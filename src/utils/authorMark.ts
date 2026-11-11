@@ -10,6 +10,7 @@
  */
 
 import { cleanThirdPartyText, quoteCleanText } from './forwardedMark';
+import { stripControlCharacters } from './stripControlCharacters';
 
 /** The two kinds of author who are not the operator: what each is called to the agent. */
 const authorKindLabels = {
@@ -53,4 +54,26 @@ export function describeMessageAuthor(kind: NonOperatorAuthorKind, source: Messa
  */
 export function buildMessageAuthorMark(kind: NonOperatorAuthorKind, source: MessageAuthorSource): string {
   return `[Message from ${describeMessageAuthor(kind, source)} · ${authorMarkTail}]`;
+}
+
+/**
+ * A line that opens with `[`, after any horizontal whitespace or invisible characters (zero-width spaces, a byte-order mark):
+ * the shape of every header the bot itself puts into a prompt (`[Request …]`, `[Replying to …]`, `[Telegram thread context]`,
+ * `[Held over …]`). The leading part is kept in group 1.
+ */
+const headerLookalikePattern = /^((?:[^\S\n]|[\u200b-\u200d\u2060\ufeff])*)\[/gm;
+
+/** The line breaks other than `\n` — a carriage return, NEL, the Unicode line and paragraph separators — which a reader takes for one. */
+const otherLineBreakPattern = /\r\n|[\r\u0085\u2028\u2029]/g;
+
+/**
+ * @description The words of somebody who is not the operator, made unable to pass for the bot's own lines. The bot's headers
+ * always open a line with `[`, and a message's words end only where the next such header begins — so a person's words must
+ * never hold a line that opens with `[`: a forged `[Request …]` or `[Replying to an earlier message · from: user]` would
+ * read as a separate message of the operator's in the same prompt. Every kind of line break becomes `\n` first (so a header
+ * after a carriage return is a line of its own to the pattern, as it is to a reader), the other control characters go, then
+ * each line-leading `[` is escaped as `\[` — still readable as what they wrote, never a header. Idempotent.
+ */
+export function neutraliseHeaderLookalikes(text: string): string {
+  return stripControlCharacters(text.replace(otherLineBreakPattern, '\n')).replace(headerLookalikePattern, '$1\\[');
 }

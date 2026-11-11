@@ -161,7 +161,7 @@ test('a FORWARDED text is content: the text handler never takes it for a command
 test('a FORWARDED voice note is content too: its transcript starts no agent', () => {
   assert.match(
     getFunctionBody('processVoiceJob'),
-    /if\s*\(messageContext\?\.isForwarded\s*!==\s*true\s*&&\s*!getThreadAdapter\(key\)\.checkIsActive\(key\)\)\s*\{\s*const startMatch\s*=\s*checkIsStartAgentPhrase\(transcript\)/,
+    /if\s*\(!checkIsForeignWords\(messageContext\)\s*&&\s*!getThreadAdapter\(key\)\.checkIsActive\(key\)\)\s*\{\s*const startMatch\s*=\s*checkIsStartAgentPhrase\(transcript\)/,
   );
 });
 
@@ -170,7 +170,7 @@ test('a FORWARDED message answers no pending question and wipes no context, what
   assert.match(active, /const\s+isForwarded\s*=\s*messageContext\?\.isForwarded\s*===\s*true/);
   assert.match(active, /intake\s*!==\s*null\s*&&\s*!isForwarded\s*&&\s*await\s+answerReAskedQuestionByNumber/);
   assert.match(active, /route\.kind\s*===\s*'answer'\s*&&\s*!isForwarded/);
-  assert.match(active, /text\s*===\s*forwardedClearCommand\s*&&\s*!isForwarded/);
+  assert.match(active, /text\s*===\s*forwardedClearCommand\s*&&\s*!checkIsForeignWords\(messageContext\)/, 'foreign words include the forwarded ones');
   assert.match(getFunctionBody('bufferPromptDuringStartup'), /messageContext\?\.isForwarded\s*!==\s*true\s*&&\s*await\s+answerReAskedQuestionByNumber/);
 });
 
@@ -185,4 +185,28 @@ test('a forwarded /pair re-points the bot to no group, and goes on to the text h
   const pairHandler = getSourceSlice("bot.command('pair', async (ctx, next) => {", 'const routeChat');
   assert.match(pairHandler, /if\s*\(checkIsTelegramForward\(ctx\.message\)\)\s*return\s+next\(\);/);
   assert.ok(pairHandler.indexOf('checkIsTelegramForward') < pairHandler.indexOf('const userId'), 'asked before anything else');
+});
+
+test('a topic member\'s words start no agent and wipe no context: the voice start phrase and the /clear purge ask the one foreign-words predicate', () => {
+  const voice = getFunctionBody('processVoiceJob');
+  assert.match(voice, /if\s*\(!checkIsForeignWords\(messageContext\)\s*&&\s*!getThreadAdapter\(key\)\.checkIsActive\(key\)\)\s*\{\s*const startMatch\s*=\s*checkIsStartAgentPhrase\(transcript\)/);
+  assert.doesNotMatch(voice, /messageContext\?\.isForwarded\s*!==\s*true\s*&&\s*!getThreadAdapter/, 'no forward-only start-phrase guard is left');
+  assert.match(getFunctionBody('deliverActivePrompt'), /text\s*===\s*forwardedClearCommand\s*&&\s*!checkIsForeignWords\(messageContext\)/);
+});
+
+test('the one thing a topic member\'s words may do in the shared prompt helpers is answer the agent\'s question with a bare number — those routes, and only those, ask `isForwarded` alone', () => {
+  const active = getFunctionBody('deliverActivePrompt');
+  const forwardOnlyGuards = active.match(/!isForwarded/g) ?? [];
+  assert.equal(forwardOnlyGuards.length, 2, 'the re-asked number and the pending-question digit — nothing else in deliverActivePrompt');
+  assert.match(active, /answerReAskedQuestionByNumber\(key,\s*text\)/);
+  assert.match(active, /route\.kind\s*===\s*'answer'\s*&&\s*!isForwarded/);
+  assert.match(active, /members may answer questions, the one thing foreign words may do here/, 'the carve-out says why');
+  const buffer = getFunctionBody('bufferPromptDuringStartup');
+  assert.match(buffer, /messageContext\?\.isForwarded\s*!==\s*true\s*&&\s*await\s+answerReAskedQuestionByNumber/);
+  assert.match(buffer, /the one thing foreign words may do here/, 'the carve-out says why');
+  // Every other control guard of the three prompt helpers asks the one predicate (or the slash test built on it): no forward-only
+  // test of a control action is left outside the two answer routes.
+  for (const name of ['processVoiceJob', 'forwardPromptToLiveAgent', 'openTopicRequest']) {
+    assert.doesNotMatch(getFunctionBody(name), /isForwarded\s*(!==|===)\s*(true|false)/, `${name} asks checkIsForeignWords, not isForwarded`);
+  }
 });

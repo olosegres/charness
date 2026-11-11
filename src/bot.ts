@@ -334,7 +334,7 @@ import {
   checkShouldSkipPreambleForText,
 } from './threadContextPreamble';
 import { getPinnedBannerSkipDecision } from './utils/pinnedBannerSkipDecision';
-import { checkIsSlashCommandPrompt, getPromptWithMessageContext, type MessageContext } from './utils/messageContext';
+import { checkIsForeignWords, checkIsSlashCommandPrompt, getPromptWithMessageContext, type MessageContext } from './utils/messageContext';
 import {
   getTelegramFileMeta,
   getMediaGroupId,
@@ -10220,8 +10220,8 @@ async function processVoiceJob(
       return;
     }
 
-    // A FORWARDED voice note saying «Claude» is somebody else's words, not the operator's order to start an agent.
-    if (messageContext?.isForwarded !== true && !getThreadAdapter(key).checkIsActive(key)) {
+    // A FORWARDED voice note saying «Claude», or a topic member's, is somebody else's words, not the operator's order to start an agent.
+    if (!checkIsForeignWords(messageContext) && !getThreadAdapter(key).checkIsActive(key)) {
       const startMatch = checkIsStartAgentPhrase(transcript);
       if (startMatch.isMatch && startMatch.adapterName) {
         if (checkIsGeneral(key)) {
@@ -11244,7 +11244,9 @@ async function bufferPromptDuringStartup(
   messageContext?: MessageContext,
 ): Promise<void> {
   // The same for a bare option number typed in that window: it answers the question asked again. A FORWARDED "1" is somebody
-  // else's words, not the operator's pick: it is delivered, marked, like any other message.
+  // else's words, not the operator's pick: it is delivered, marked, like any other message. A topic member's number DOES
+  // answer — the one thing foreign words may do here: members answer the agent's questions, and only that (every other
+  // control guard asks `checkIsForeignWords`).
   if (messageContext?.isForwarded !== true && await answerReAskedQuestionByNumber(key, text)) return;
   // A person wrote, in a window where the session is starting or being stopped: it counts like a message that reaches
   // `deliverActivePrompt` — the idle latch clears, and a question the idle compaction re-asked is closed (the idle fire
@@ -11282,6 +11284,9 @@ async function deliverActivePrompt(
   messageContext?: MessageContext,
 ): Promise<LatePromptOutcome | null> {
   // A FORWARDED message is content, never control input: it answers no question and purges no context, whatever its words are.
+  // A topic member's words are not the operator's either — but a bare option number of theirs DOES answer the agent's question
+  // (members may answer questions, the one thing foreign words may do here), so the two answer routes below ask `isForwarded`
+  // alone, while the context wipe asks `checkIsForeignWords`.
   const isForwarded = messageContext?.isForwarded === true;
   // A bare option number answers the question the idle compaction asked again (a tap's own label comes in with no intake).
   if (intake !== null && !isForwarded && await answerReAskedQuestionByNumber(key, text)) return null;
@@ -11313,7 +11318,7 @@ async function deliverActivePrompt(
   // before forwarding — the slash text itself never gets a preamble. The agent's
   // context is gone, so any intake files it might reference are now useless —
   // purge the thread's files dir in the same breath.
-  if (text === forwardedClearCommand && !isForwarded) {
+  if (text === forwardedClearCommand && !checkIsForeignWords(messageContext)) {
     clearThreadContextMarker(key);
     await purgeThreadFiles(getDataDir(), key).catch((e) =>
       console.warn(`[file] purge on /clear failed for ${keyToString(key)}:`, e),

@@ -13,6 +13,7 @@
  */
 
 import { checkShouldSkipPreambleForText } from '../threadContextPreamble';
+import { neutraliseHeaderLookalikes } from './authorMark';
 
 /** Separator between the context blocks, and between them and the prompt they lead. */
 const messageContextSeparator = '\n\n';
@@ -21,9 +22,10 @@ const messageContextSeparator = '\n\n';
  * @name MessageContext
  * @description What a Telegram message carries besides its words: the `block` that leads the prompt (the author mark, the reply
  * quote, the forwarded mark), whether the message was FORWARDED, and who sent it when that is not the operator.
- * A forwarded message is content and never control input: its text starting with `/` is not a slash command, a bare digit in
- * it is not an answer, a phrase in it does not start an agent — see {@link checkIsSlashCommandPrompt}. A message of another
- * person is content too: whatever it says, it is not the operator's command.
+ * Words that are somebody else's — a forwarded message's, a topic member's — are content and never control input: a text
+ * starting with `/` is not a slash command, a phrase in it does not start an agent, a `/clear` in it wipes nothing — see
+ * {@link checkIsForeignWords}. What a topic member MAY do with their words, answer the agent's question with a bare number, is
+ * decided where that route is (`deliverActivePrompt`), not here.
  */
 export interface MessageContext {
   block: string;
@@ -45,14 +47,22 @@ export function joinMessageContextBlocks(blocks: ReadonlyArray<string | null | u
 }
 
 /**
+ * @description Whether the words of a message are somebody else's: it was FORWARDED, or a person who is not the operator sent
+ * it. Such words are content, never control input — the ONE predicate every control guard asks (a slash command, a start
+ * phrase, a context wipe), so none of them can be missed for one kind of sender.
+ */
+export function checkIsForeignWords(context: MessageContext | undefined): boolean {
+  return context?.isForwarded === true || context?.nonOperatorSender !== undefined;
+}
+
+/**
  * @description Whether `text` is a slash command for the agent (`/compact`, `/clear`…): a control token that no block,
- * preamble or timestamp may be put ahead of. Never for a forwarded message, whose words are somebody else's: the mark
- * ahead of them is exactly what makes them plain text. Never for a message of a person who is not the operator either — a
- * backstop: such a slash text is refused before it gets here, and one that did slip through must reach the agent
- * marked, as plain words, never as the control token it would be unmarked.
+ * preamble or timestamp may be put ahead of. Never for foreign words ({@link checkIsForeignWords}): the mark ahead of
+ * them is exactly what makes them plain text. For a topic member's slash text this is a backstop — it is refused before it
+ * gets here, and one that did slip through reaches the agent marked, as plain words, never as the control token it would be unmarked.
  */
 export function checkIsSlashCommandPrompt(text: string, context: MessageContext | undefined): boolean {
-  return context?.isForwarded !== true && context?.nonOperatorSender === undefined && checkShouldSkipPreambleForText(text);
+  return !checkIsForeignWords(context) && checkShouldSkipPreambleForText(text);
 }
 
 /**
@@ -76,5 +86,7 @@ export function getPromptWithMessageContext(
 ): string {
   const { context } = options;
   if (!context || options.isShellInput || checkIsSlashCommandPrompt(prompt, context)) return prompt;
-  return `${context.block}${messageContextSeparator}${prompt}`;
+  // A person other than the operator wrote these words: they must not hold a line that passes for one of the bot's headers.
+  const words = context.nonOperatorSender === undefined ? prompt : neutraliseHeaderLookalikes(prompt);
+  return `${context.block}${messageContextSeparator}${words}`;
 }

@@ -1021,7 +1021,7 @@ The quote's header also says who wrote the quoted message, so the agent never ta
 | you, or another group admin | `from: user` |
 | anybody else — a group member who may not talk to the agent, an anonymous admin, a channel | `from: group member "Bob Stone" (@bob), not allowed to talk to you; untrusted text` |
 
-The name is quoted and cleaned like a forwarded message's origin. A reply to a message that was itself forwarded adds `forwarded from …` for its first author.
+The name is quoted and cleaned like a forwarded message's origin; a post made as the group (an anonymous admin) or as a channel is named by that chat's title. A reply to a message that was itself forwarded adds `forwarded from …` for its first author.
 
 ### Forwarded messages
 

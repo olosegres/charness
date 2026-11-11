@@ -242,11 +242,16 @@ function getUserRole(user: User | undefined, access: TelegramMessageAccess): Sen
   return getSenderRole({ userId: user.id.toString(), adminIds: access.adminIds, talkerIds: access.talkerIds });
 }
 
-/** Who wrote `message`: the person, or — for a post made as a group or a channel (an anonymous admin) — that chat's title. */
+/**
+ * Who wrote `message`: the chat it was posted as, when there is one — an anonymous admin posts as the group, a channel post
+ * as the channel, and Telegram's own `from` of such a message is only a service identity (`GroupAnonymousBot`, `Channel_Bot`,
+ * the «Telegram» user of an automatic forward) that names nobody — else the person.
+ */
 function getMessageAuthorSource(message: Message): { name: string; username?: string } {
-  if (message.from) return { name: getDisplayName(message.from), username: message.from.username };
   const senderChat = 'sender_chat' in message ? message.sender_chat : undefined;
-  return { name: senderChat ? getChatTitle(senderChat) : '' };
+  if (senderChat) return { name: getChatTitle(senderChat), username: 'username' in senderChat ? senderChat.username : undefined };
+  if (message.from) return { name: getDisplayName(message.from), username: message.from.username };
+  return { name: '' };
 }
 
 /**
