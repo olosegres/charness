@@ -61,10 +61,13 @@ printf '%s\n' "<uuid>" > "<run-dir>/session"
   ends; `BASH_MAX_TIMEOUT_MS` lets one foreground command run up to 2 hours. Longer work → split it.
 - Full privileges with deny rules, never a restricted allowlist: a refused ordinary command ends the worker's
   turn early.
-- A checkout below the folder that holds `.claude/skills` does not see those skills: add
+- A checkout below the folder that holds `.claude/skills` does not see those skills, nor does a worker started above
+  it (skills in a subfolder of the checkout, e.g. a repository root whose agents work in one of its folders): add
   `--add-dir "<that folder>"` and check that the `init` event's `skills` lists every skill the brief names.
 3. Check the PID: `ps -o args= -p "$(cat "<run-dir>/pid")"` must show `claude -p … <uuid>`. If it does not (the CLI
    handed over to a new process), take it from `pgrep -f "^claude -p .*<uuid>"` and write that into the pid file.
+   `$!` is often the wrapper shell that started it, gone a moment later: wait about 2 seconds after the launch, check,
+   and never arm the watch on a PID this check has not confirmed.
 4. Record the UUID (it is in `<run-dir>/session`), the profile name you launched on, the checkout and the run directory
    in the plan, then arm the watch check from `charness-orchestration` with this PID and run directory.
 
@@ -81,6 +84,9 @@ printf '%s\n' "<uuid>" > "<run-dir>/session"
 - Confirm the old PID is gone, then repeat the launch with `--resume "<uuid>"` instead of `--session-id`, a new
   brief and new log files (`events-2.jsonl`, …), `touch "<run-dir>/watch-armed"` (the run directory is reused, so the
   marker of the first run is old) and arm a new check. Never `--continue` or `--fork-session`.
+- Start it in the SAME checkout as the first run, in the same command: `cd "<checkout>" && setsid nohup …`. Your
+  shell's working folder may have been reset since, and elsewhere the CLI may not find the session or loads another
+  folder's rules. Check that the new `init` event's `cwd` is the checkout.
 - `<uuid>` comes only from `<run-dir>/session` or the `session_id` of the first (`system`/`init`) event of the first
   run's log — never from memory or a shortened prefix.
 - Keep the model, effort and flags of the first run.
