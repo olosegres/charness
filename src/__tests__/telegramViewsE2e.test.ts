@@ -95,6 +95,8 @@ const seededRunDelayMs = 3 * 1000;
 const seededRunPrompt = 'TOPIC-6 [fake:answer] <b>not markup</b> & more';
 /** The seeded reminder's text, which the bot posts and pins itself. */
 const seededReminderText = 'Take the evening pills';
+/** The tool the fake agent calls in the «Answers only» turn: a name no other turn uses, so that turn's frames can be told from the earlier turns'. */
+const answersOnlyToolName = 'ReadAnswersOnly';
 
 let layout: IsolatedInstanceLayout | null = null;
 let charness: IsolatedCharness | null = null;
@@ -616,20 +618,30 @@ describe('Telegram views end to end: built charness, fake Bot API, fake claude (
     return fakeTelegram.listCalls(method).filter((call) => getCallThreadId(call) === topicThreadId).length;
   }
 
+  /**
+   * How many calls of `method` for the test topic carry any of `markers` in their text: what a turn posted is told by what only
+   * that turn writes, not by a count of the topic's messages — the output the turn before still had in flight when the view
+   * switched (a view applies from the next message) may land at any moment, and is not the turn's.
+   */
+  function countTopicCallsMentioning(method: string, markers: readonly string[]): number {
+    return fakeTelegram.listCalls(method).filter((call) =>
+      getCallThreadId(call) === topicThreadId && markers.some((marker) => String(call.payload.text).includes(marker))).length;
+  }
+
   it('in «Answers only» a turn posts nothing but its pinned answer, while the typing indicator still runs', async () => {
     await sendAndAwaitReply('/verbosity answers', 'This topic shows: Answers only');
-    const sendsBefore = countTopicCalls('sendMessage');
-    const editsBefore = countTopicCalls('editMessageText');
     const typingBefore = countTopicCalls('sendChatAction');
 
-    fakeTelegram.pushOperatorMessage(topicThreadId, 'TOPIC-10 [fake:answer]');
+    // A tool name of its own: the frames of this turn (status, tool result) carry it, the text and thinking carry the label.
+    fakeTelegram.pushOperatorMessage(topicThreadId, `TOPIC-10 [tool-name:${answersOnlyToolName}] [fake:answer]`);
     await waitForFakeAnswer('TOPIC-10');
     const answer = await waitForTopicMessage('the pinned answer', (message) => message.text.includes('Fake final answer for TOPIC-10'));
     await getCharness().waitFor('the answer pinned', replyTimeoutMs, () => getPinKinds(answer.message_id).includes('pin'));
     // The fake streamed a status frame, a thinking block, a tool call with its result and answer text (`emitTurnActivity`)
-    // — none of it was posted or edited into the topic: the only new message is the answer.
-    assert.equal(countTopicCalls('sendMessage') - sendsBefore, 1, 'exactly one new message: the answer');
-    assert.equal(countTopicCalls('editMessageText') - editsBefore, 0, 'no status or thinking frame was edited');
+    // — none of it was posted or edited into the topic: the only message about this turn is the answer.
+    const turnMarkers = ['TOPIC-10', answersOnlyToolName];
+    assert.equal(countTopicCallsMentioning('sendMessage', turnMarkers), 1, 'exactly one message about this turn: the answer');
+    assert.equal(countTopicCallsMentioning('editMessageText', turnMarkers), 0, 'no status or thinking frame of this turn was edited');
     assert.ok(listTopicMessages().every((message) => !message.text.includes('Working on TOPIC-10')), 'the agent\'s text stayed out of the topic');
     assert.ok(countTopicCalls('sendChatAction') > typingBefore, 'the typing indicator still ran during the turn');
   });
