@@ -21,6 +21,15 @@ import type { InboundCommand, InboundEvent } from './inbound';
  */
 export type CommandHandler = (event: InboundEvent, command: InboundCommand) => Promise<void> | void;
 
+/**
+ * @description What a registration says about its command besides the handler. `isTalkerAllowed`: a person an admin let
+ * talk to the agent in one topic (not an admin) may run it there. Default-deny: a command without the flag is admin-only,
+ * so a new command is closed to them unless somebody opens it on purpose.
+ */
+export interface CommandRegistrationOptions {
+  isTalkerAllowed?: boolean;
+}
+
 export interface CommandRouter {
   /**
    * Bind one or more names to `handler`. Matching is EXACT, including case:
@@ -30,9 +39,13 @@ export interface CommandRouter {
    * case-insensitive normalises the name in its own recogniser, where that fact
    * belongs.
    */
-  register(names: string | string[], handler: CommandHandler): void;
+  register(names: string | string[], handler: CommandHandler, options?: CommandRegistrationOptions): void;
   /** Is any handler bound to this name? Used to decide fall-through. */
   checkIsRegistered(name: string): boolean;
+  /** May a talker (a non-admin let in to one topic) run this command? `false` for an unknown name. */
+  checkIsTalkerAllowed(name: string): boolean;
+  /** The names a talker may run, sorted — pinned by a test so the set cannot grow unnoticed. */
+  listTalkerAllowedNames(): string[];
   /**
    * Run the handler bound to `event.command`. Resolves `false` when the event
    * carries no command or no handler is bound — the caller then treats the
@@ -43,15 +56,27 @@ export interface CommandRouter {
 
 export function createCommandRouter(): CommandRouter {
   const handlers = new Map<string, CommandHandler>();
+  const talkerAllowedNames = new Set<string>();
 
-  function register(names: string | string[], handler: CommandHandler): void {
+  function register(names: string | string[], handler: CommandHandler, options: CommandRegistrationOptions = {}): void {
     for (const name of Array.isArray(names) ? names : [names]) {
       handlers.set(name, handler);
+      // A re-registration replaces the flag too: the last word on a name is its own.
+      if (options.isTalkerAllowed === true) talkerAllowedNames.add(name);
+      else talkerAllowedNames.delete(name);
     }
   }
 
   function checkIsRegistered(name: string): boolean {
     return handlers.has(name);
+  }
+
+  function checkIsTalkerAllowed(name: string): boolean {
+    return talkerAllowedNames.has(name);
+  }
+
+  function listTalkerAllowedNames(): string[] {
+    return [...talkerAllowedNames].sort();
   }
 
   async function dispatch(event: InboundEvent): Promise<boolean> {
@@ -63,7 +88,7 @@ export function createCommandRouter(): CommandRouter {
     return true;
   }
 
-  return { register, checkIsRegistered, dispatch };
+  return { register, checkIsRegistered, checkIsTalkerAllowed, listTalkerAllowedNames, dispatch };
 }
 
 /**

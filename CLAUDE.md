@@ -61,6 +61,14 @@ per-backend controls are optional methods the bot checks before calling.
 - **One topic ↔ one project folder ↔ one agent session; the bind is mandatory.** The folder is a subfolder
   of `WORK_ROOT` (unset → the launch `$PWD`); an unbound topic refuses every agent-facing action. Two topics
   may share a folder. For OpenCode the bind selects the server instance (`?directory=<workDir>`).
+- **Topic talkers** (`topicTalkers.ts`, `bot.ts` `authoriseTopicSpeaker`). An admin can let a group member talk to the agent in ONE topic (or, from
+  General's list, in every topic) without making them an admin. DEFAULT-DENY: `authoriseContext` stays the admin-only gate, so every command,
+  button and module keeps refusing a talker; only the routes that talk to the agent or answer its questions ask the speaker gate, and the router's
+  `isTalkerAllowed` flag opens `/esc` (+ aliases), `/status`, `/whoami`, `/help` (pinned by a test). A talker's text takes ONE early branch
+  (`handleTalkerText`: no armed input step, no start phrase, no folder picker, no raw shell); their words reach the agent under an author mark,
+  with line-leading `[` escaped so they can never pass for the bot's own headers (`utils/authorMark.ts`). Foreign words — forwarded or a
+  talker's — are content, never control (`checkIsForeignWords`), except answering the agent's question with a bare number. A talker can make
+  the agent run anything in that topic's folder: adding one is trusting them with the bot's OS account.
 - **Per-thread isolation.** Routing, sessions, prefs and history key on `SessionKey` `{platform, space,
   thread}`; each connector owns its serialisation (Telegram: the frozen `"<chatId>:<threadId>"`, which also
   names state fields, tmux sessions, `DATA_DIR` dirs). The core never parses a key.
@@ -210,7 +218,8 @@ per-backend controls are optional methods the bot checks before calling.
 | `connectors/telegram/commands/` | Slash commands + buttons decomposed out of `bot.ts`, one `create<Feature>(ports)` per file over the shared `BotCore` ports bag (`displayModes.ts`, `reminders.ts`, `modelProviders.ts`, `compaction.ts`, `autoContinueLimits.ts`, `botSkills.ts`, `taskAgents.ts`, `stt.ts`, `runners.ts`, …). README: registration-order and ports contract |
 | `state.ts` | `state.json` persistence (bindings, sessions, prefs, schedules, open requests); `resolveDataDir()` |
 | `sessionKey.ts`, `types.ts` | `SessionKey` + codec registry; shared types incl. the `AgentAdapter` contract |
-| `threadRouting.ts`, `accessControl.ts`, `validation.ts`, `folderName.ts` | Topic → folder binding; who may use the bot (`AdminCache` is the single authority); `/bind` validation (path-traversal/symlink safe, canonical `resolveBoundWorkDir`); new-folder-name gate |
+| `threadRouting.ts`, `accessControl.ts`, `validation.ts`, `folderName.ts` | Topic → folder binding; who may use the bot (`AdminCache` is the single authority; `getSenderRole`: admin / talker / none); `/bind` validation (path-traversal/symlink safe, canonical `resolveBoundWorkDir`); new-folder-name gate |
+| `topicTalkers.ts`, `topicTalkerMemory.ts` | Per-topic **talker** lists (people an admin let talk to the agent in ONE topic; General's list is group-wide): pure operations over `state.json`'s `topicTalkers` (flushed at once, revision never restarts, username invitations expire after 7 days) and the in-memory recent writers / seen @usernames behind adding one |
 | `mcpConfig.ts`, `i18n.ts`, `i18n/` | MCP hierarchy merge (non-Telegram sessions get `--strict-mcp-config`); `t(key, vars)` over 12 locales, `en` canonical |
 | `rateLimiter.ts` | Per-user limits, the global send pacer, `enqueueSend` / `sendUnpaced` (both refuse a foreign-platform key) |
 | `apiErrorRetry.ts`, `apiRetryKick.ts` | API-error classification + retry plan; the retry timer, its kick and boot restore |

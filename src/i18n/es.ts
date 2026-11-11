@@ -1287,4 +1287,12 @@ export const esDict: Record<string, string> = {
   'runners.pairingJobsAtOnceChosenToast': 'La máquina nueva ejecutará {count} a la vez.',
   'runners.pairedJobsAtOnceNote': 'Trabajos a la vez: {count} — se cambia en /runners.',
   'runners.pairingJobsAtOnceClosedToast': 'Esta línea de vinculación ya no está abierta — si la máquina se vinculó, ajusta su número en /runners.',
+  // Topic talkers: people an admin let talk to the agent in one topic (`/access`).
+  'access.adminOnlyCommandRefusal': 'Solo los administradores del grupo pueden usar este comando.',
+  'access.adminOnlyButtonToast': 'Solo los administradores del grupo pueden hacer esto.',
+  'access.noAgentForTalkerNotice': 'No hay ningún agente en este tema. Un administrador puede iniciar uno.',
+  'access.terminalTopicRefusal': 'Este tema es una shell sin procesar; solo los administradores pueden escribir en ella.',
+  'access.helpTalker': 'En este tema puedes hablar con el agente: escribe un mensaje o envía una nota de voz o un archivo.\n\nComandos para ti:\n/esc — detener el turno en curso\n/status — qué se ejecuta en este tema\n/whoami — quién eres para el bot\n/help — este texto\n\nTodo lo demás es para los administradores del grupo.',
+  'access.whoamiTalkerRole': 'puede hablar con el agente en este tema',
+  'access.inviteResolvedNotice': '✅ {person} ya puede hablar con el agente aquí.',
 };

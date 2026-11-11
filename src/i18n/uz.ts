@@ -1287,4 +1287,12 @@ export const uzDict: Record<string, string> = {
   'runners.pairingJobsAtOnceChosenToast': 'Yangi mashina bir vaqtda {count} ta ish bajaradi.',
   'runners.pairedJobsAtOnceNote': 'Bir vaqtda ishlar: {count} — /runners da o‘zgartiring.',
   'runners.pairingJobsAtOnceClosedToast': 'Bu ulanish qatori endi ochiq emas — mashina ulangan bo‘lsa, sonini /runners da belgilang.',
+  // Topic talkers: people an admin let talk to the agent in one topic (`/access`).
+  'access.adminOnlyCommandRefusal': 'Bu buyruqdan faqat guruh adminlari foydalana oladi.',
+  'access.adminOnlyButtonToast': 'Buni faqat guruh adminlari qila oladi.',
+  'access.noAgentForTalkerNotice': 'Bu mavzuda agent ishlamayapti. Admin uni ishga tushirishi mumkin.',
+  'access.terminalTopicRefusal': 'Bu mavzu oddiy shell; unga faqat adminlar yoza oladi.',
+  'access.helpTalker': 'Bu mavzuda siz agent bilan gaplasha olasiz: xabar yozing yoki ovozli xabar yoki fayl yuboring.\n\nSiz uchun buyruqlar:\n/esc — joriy bosqichni to‘xtatish\n/status — bu mavzuda nima ishlayapti\n/whoami — bot uchun siz kimsiz\n/help — shu matn\n\nQolgan hammasi faqat guruh adminlari uchun.',
+  'access.whoamiTalkerRole': 'bu mavzuda agent bilan gaplasha oladi',
+  'access.inviteResolvedNotice': '✅ {person} endi bu yerda agent bilan gaplasha oladi.',
 };

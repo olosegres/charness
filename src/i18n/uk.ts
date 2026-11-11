@@ -1293,4 +1293,12 @@ export const ukDict: Record<string, string> = {
   'runners.pairingJobsAtOnceChosenToast': 'Нова машина виконуватиме {count} одночасно.',
   'runners.pairedJobsAtOnceNote': 'Завдань одночасно: {count} — змінюється в /runners.',
   'runners.pairingJobsAtOnceClosedToast': 'Цей рядок підключення вже не відкритий — якщо машина підключилася, задайте число в /runners.',
+  // Topic talkers: people an admin let talk to the agent in one topic (`/access`).
+  'access.adminOnlyCommandRefusal': 'Цю команду можуть використовувати лише адміни групи.',
+  'access.adminOnlyButtonToast': 'Це можуть лише адміни групи.',
+  'access.noAgentForTalkerNotice': 'У цьому топіку не запущено агента. Адмін може його запустити.',
+  'access.terminalTopicRefusal': 'Цей топік — звичайна оболонка; друкувати в ній можуть лише адміни.',
+  'access.helpTalker': 'У цьому топіку ви можете спілкуватися з агентом: пишіть повідомлення, надсилайте голосові та файли.\n\nВам доступні команди:\n/esc — зупинити поточний хід\n/status — що працює в цьому топіку\n/whoami — хто ви для бота\n/help — цей текст\n\nУсе інше — лише для адмінів групи.',
+  'access.whoamiTalkerRole': 'може писати агенту в цьому топіку',
+  'access.inviteResolvedNotice': '✅ {person} тепер може писати агенту тут.',
 };

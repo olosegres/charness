@@ -1281,4 +1281,12 @@ export const zhDict: Record<string, string> = {
   'runners.pairingJobsAtOnceChosenToast': '新机器将同时运行 {count} 个任务。',
   'runners.pairedJobsAtOnceNote': '同时运行：{count} — 可在 /runners 中更改。',
   'runners.pairingJobsAtOnceClosedToast': '这行配对命令已不再有效 — 如果机器已配对，请在 /runners 中设置数量。',
+  // Topic talkers: people an admin let talk to the agent in one topic (`/access`).
+  'access.adminOnlyCommandRefusal': '只有群管理员可以使用此命令。',
+  'access.adminOnlyButtonToast': '只有群管理员可以执行此操作。',
+  'access.noAgentForTalkerNotice': '此话题中没有运行的代理。管理员可以启动一个。',
+  'access.terminalTopicRefusal': '此话题是原始 shell；只有管理员可以输入。',
+  'access.helpTalker': '在此话题中你可以与代理对话：发送消息、语音或文件。\n\n你可用的命令：\n/esc — 停止正在运行的回合\n/status — 此话题中正在运行的内容\n/whoami — 你对机器人而言是谁\n/help — 此文本\n\n其余均仅限群管理员。',
+  'access.whoamiTalkerRole': '可在此话题中与代理对话',
+  'access.inviteResolvedNotice': '✅ {person} 现在可以在此与代理对话。',
 };

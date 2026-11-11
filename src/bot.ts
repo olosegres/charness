@@ -165,17 +165,22 @@ import {
   DM_GENERAL_THREAD_ID,
   type ChatMode,
 } from './threadRouting';
-import { AdminCache, ADMIN_CACHE_TTL_MS } from './accessControl';
+import { AdminCache, ADMIN_CACHE_TTL_MS, getSenderRole, type SenderRole } from './accessControl';
 import {
   checkShouldInvalidateAdminCache,
   createTelegramConnectorInbound,
   checkIsTelegramForward,
   getTelegramCommand,
+  checkHasLeftGroup,
+  getDisplayName,
   getTelegramMessageContext,
   type TelegramMessageAccess,
 } from './connectors/telegram/inbound';
+import { createRecentWriters, createSeenSenders, type SeenPerson } from './topicTalkerMemory';
+import { checkIsTalkerCallback } from './utils/talkerAccess';
+import { formatPersonLabel } from './utils/personLabel';
 import { createTelegramConnectorOutbound } from './connectors/telegram/outbound';
-import { createCommandRouter } from './platform/commandRouter';
+import { createCommandRouter, type CommandRegistrationOptions } from './platform/commandRouter';
 import type { InboundCommand, InboundEvent } from './platform/inbound';
 import {
   getConnectorOutbound,
@@ -438,7 +443,7 @@ import {
   parseOAuthCallbackFromReply,
 } from './utils/openCodeAuthLogin';
 import { createAgentLogin, type ClaudeLoginProfile } from './agentLogin/agentLogin';
-import type { BotCore, CommandContext, ThreadMessageDeletion, ThreadMessageEdit } from './connectors/telegram/commands/botCore';
+import type { BotCore, CommandContext, ThreadMessageDeletion, ThreadMessageEdit, TopicSpeaker } from './connectors/telegram/commands/botCore';
 import { buildQuestionOptionsKeyboard, buildKeyboardExtra } from './connectors/telegram/questionKeyboards';
 import { createDisplayModes, formatTopicView } from './connectors/telegram/commands/displayModes';
 import { createReminders, type ReminderWizardSession } from './connectors/telegram/commands/reminders';
@@ -865,6 +870,13 @@ const adminCache = new AdminCache({
 });
 
 /**
+ * The people who wrote in a topic and were ignored, and the @usernames seen writing in the served group
+ * (`topicTalkerMemory.ts`): in memory only, a convenience for an admin adding a talker. Fed by `noteServedGroupSender`.
+ */
+const recentTopicWriters = createRecentWriters();
+const seenGroupSenders = createSeenSenders();
+
+/**
  * @description True iff the sender of `ctx` may use the bot — decided PER CHAT,
  * which is the single source of truth for access on each surface:
  *   - a DM chat (the owner's private chat) → the configured OWNER_USER_ID is the
@@ -1007,6 +1019,31 @@ bot.use(async (ctx, next) => runWithLocale(getLocaleForContext(ctx), () => next(
 // guarantee it precedes the module-scope handler registrations below.
 bot.use(async (ctx, next) => {
   await tryAutoPair(ctx);
+  return next();
+});
+
+// What the bot learns from every message of the served group, before any handler gates it: the sender's name and @username
+// (a talker's entries keep up with a rename), an invitation that waited for this person's first message turns into a grant — so
+// a message that comes with it is already a talker's — and a stranger's message is remembered for the add screen.
+bot.use(async (ctx, next) => {
+  try {
+    await noteServedGroupSender(ctx);
+  } catch (e) {
+    console.warn('[access] noting the sender of an update failed:', e instanceof Error ? e.message : e);
+  }
+  return next();
+});
+
+// Default-deny for talkers on buttons: a person an admin let talk to the agent here may tap only the agent's own question
+// buttons (`checkIsTalkerCallback`). Every other tap is refused with one toast, here, so no handler or module has to know a
+// talker exists — each of them keeps asking the admin gate.
+bot.use(async (ctx, next) => {
+  if (ctx.callbackQuery && (await checkIsTalkerTapRefused(ctx))) {
+    await ctx.answerCbQuery(t('access.adminOnlyButtonToast')).catch((e) => {
+      console.warn('[access] answering a refused tap failed:', e instanceof Error ? e.message : e);
+    });
+    return;
+  }
   return next();
 });
 
@@ -3362,6 +3399,7 @@ async function tryAutoPair(ctx: Context): Promise<void> {
 
   effectiveGroupId = candidate;
   await state.setPairedGroupId(candidate);
+  await state.dropTopicTalkersOfOtherChats(candidate);
   adminCache.invalidate();
   console.log(`[pair] auto-paired forum supergroup ${candidate} (persisted to state.json)`);
 
@@ -3394,15 +3432,91 @@ async function authoriseContext(ctx: Context): Promise<SessionKey | null> {
     }
     return null;
   }
-  // Refresh the group-title cache from this authorised update — supergroups
-  // always carry `chat.title`. Feeds the thread-context preamble (S2). Cheap,
-  // idempotent, and the only place every accepted update funnels through. A
-  // private chat (DM key) has no `title`, so there is nothing to cache (the
-  // preamble falls back to the bot name) — skip it explicitly.
+  noteGroupTitle(ctx, key);
+  return key;
+}
+
+/**
+ * Refresh the group-title cache from an accepted update — supergroups always carry `chat.title`. Feeds the thread-context
+ * preamble (S2). Cheap, idempotent, and the one place every accepted update funnels through. A private chat (DM key) has
+ * no `title`, so there is nothing to cache (the preamble falls back to the bot name) — skip it explicitly.
+ */
+function noteGroupTitle(ctx: Context, key: SessionKey): void {
   if (!checkIsDmKey(key) && ctx.chat && 'title' in ctx.chat && ctx.chat.title) {
     groupTitleCache.set(ctx.chat.id, ctx.chat.title);
   }
-  return key;
+}
+
+/** The General topic of the group `key` is in — the one whose talker list is group-wide. */
+function getGroupGeneralKey(key: SessionKey): SessionKey {
+  return makeTelegramKey(getTelegramChatId(key), GENERAL_THREAD_ID);
+}
+
+/**
+ * @description What the sender of a group update is to the bot in its topic — an admin, a talker, or nobody — with the
+ * topic's key; `null` outside a group topic (a foreign chat, no sender, the owner's DM, which has no talkers). The ONE place
+ * the role is computed: the speaker gate, the sender tracking and the button check all read it.
+ */
+async function getGroupSpeakerRole(ctx: Context): Promise<{ key: SessionKey; role: SenderRole } | null> {
+  const userId = ctx.from?.id;
+  if (userId === undefined) return null;
+  const key = getThreadKey(ctx);
+  if (key === null || checkIsDmKey(key)) return null;
+  const role = getSenderRole({
+    userId: userId.toString(),
+    adminIds: await adminCache.getAdminIds(),
+    talkerIds: state.getEffectiveTalkerIds(key, getGroupGeneralKey(key)),
+  });
+  return { key, role };
+}
+
+/**
+ * @description The speaker gate: an admin anywhere (the owner in the DM), or a talker in the group topic whose list — or
+ * General's — holds them; nobody else. It sits NEXT TO {@link authoriseContext}, which stays the admin-only gate: only the
+ * routes a talker may use call this one (talking to the agent: text, voice, files, albums; answering its questions), and the
+ * role travels from here as a value, so a route cannot ask «is this a talker?» a second way. Everything else keeps asking
+ * `authoriseContext` and so refuses a talker without knowing one exists.
+ */
+async function authoriseTopicSpeaker(ctx: Context): Promise<TopicSpeaker | null> {
+  const groupSpeaker = await getGroupSpeakerRole(ctx);
+  if (groupSpeaker?.role === 'talker') {
+    noteGroupTitle(ctx, groupSpeaker.key);
+    return { key: groupSpeaker.key, role: 'talker' };
+  }
+  const adminKey = await authoriseContext(ctx);
+  return adminKey === null ? null : { key: adminKey, role: 'admin' };
+}
+
+/** @description Whether a tap is a talker's on a button that is not the agent's own question — refused with a toast, never handled. */
+async function checkIsTalkerTapRefused(ctx: Context): Promise<boolean> {
+  const callbackData = ctx.callbackQuery && 'data' in ctx.callbackQuery ? ctx.callbackQuery.data : undefined;
+  if (checkIsTalkerCallback(callbackData)) return false;
+  return (await getGroupSpeakerRole(ctx))?.role === 'talker';
+}
+
+/**
+ * @description Learn from a message of the served group, whoever sent it and whatever the gates later decide: remember the
+ * @username (so `/access add @name` can name a person the Bot API cannot look up), keep a talker's entries in step with a
+ * rename, turn an invitation that waited for this person into a grant (announced in the topic that waited), and — for a
+ * stranger — remember the topic they wrote in. An admin is never invited and never offered as a stranger; a bot is nobody's talker.
+ */
+async function noteServedGroupSender(ctx: Context): Promise<void> {
+  const user = ctx.from;
+  if (!ctx.message || !user || user.is_bot) return;
+  const groupSpeaker = await getGroupSpeakerRole(ctx);
+  if (groupSpeaker === null) return;
+  const person: SeenPerson = { userId: user.id.toString(), username: user.username, name: getDisplayName(user) };
+  seenGroupSenders.noteSender(person);
+  state.updateTalkerIdentity(person);
+  if (groupSpeaker.role === 'admin') return;
+  const grants = await state.resolveTopicInvites(person);
+  for (const grant of grants) {
+    const topicKey = tryKeyFromString(grant.threadKey);
+    if (topicKey === null) continue;
+    await replyToThread(topicKey, withThreadLocale(topicKey, () => t('access.inviteResolvedNotice', { person: formatPersonLabel(person) })));
+  }
+  const wasGranted = grants.some((grant) => grant.threadKey === keyToString(groupSpeaker.key));
+  if (groupSpeaker.role === 'none' && !wasGranted) recentTopicWriters.noteIgnoredWriter(keyToString(groupSpeaker.key), person);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -6096,8 +6210,7 @@ function getMessageContext(key: SessionKey, message: Message): MessageContext | 
  */
 function getMessageAccess(key: SessionKey): TelegramMessageAccess {
   if (checkIsDmKey(key)) return { adminIds: new Set([getOwnerUserId().toString()]), talkerIds: new Set() };
-  const generalKey = makeTelegramKey(getTelegramChatId(key), GENERAL_THREAD_ID);
-  return { adminIds: adminCache.getCachedAdminIds(), talkerIds: state.getEffectiveTalkerIds(key, generalKey) };
+  return { adminIds: adminCache.getCachedAdminIds(), talkerIds: state.getEffectiveTalkerIds(key, getGroupGeneralKey(key)) };
 }
 
 /**
@@ -6195,9 +6308,11 @@ void telegramInbound.start(async (event) => {
 function command(
   name: string | string[],
   handler: (ctx: CommandContext, key: SessionKey, parsed: InboundCommand) => Promise<void> | void,
+  options?: CommandRegistrationOptions,
 ): void {
   commandRouter.register(name, (event, parsed) =>
     handler(event.raw as CommandContext, event.key, parsed),
+    options,
   );
 }
 
@@ -6216,6 +6331,7 @@ const botCore: BotCore = {
   deleteThreadMessage,
   deleteThreadMessageDetailed,
   authoriseContext,
+  authoriseSpeaker: authoriseTopicSpeaker,
   withThreadLocale,
   checkIsGeneral,
   updatePinnedStatus,
@@ -6278,6 +6394,14 @@ export function checkIsRoutedCommand(name: string): boolean {
   return commandRouter.checkIsRegistered(name);
 }
 
+/**
+ * The names a talker may run, sorted. Exported so a test pins the exact set against the REAL registration table: a new command
+ * is admin-only unless somebody flags it on purpose, and the flag cannot be added unnoticed.
+ */
+export function getTalkerAllowedCommandNames(): string[] {
+  return commandRouter.listTalkerAllowedNames();
+}
+
 /** `/esc` and its other names: the interrupt, which also cancels a pending sign-in or `/topic` prompt first. */
 const escapeCommandNames = ['esc', 'escape', 'interrupt'];
 
@@ -6325,8 +6449,12 @@ export interface RoutedCommandTriggerDeps<TContext> {
   getCommand: (message: Message.TextMessage) => InboundCommand | null;
   /** Is the name on the neutral router's table? `false` ⇒ fall through. */
   checkIsRegistered: (name: string) => boolean;
-  /** Resolve + gate the sender. `null` ⇒ not allowed here: drop, no fall-through. */
-  authorise: (ctx: TContext) => Promise<SessionKey | null>;
+  /** Resolve + gate the sender: an admin, or a talker of this topic. `null` ⇒ not allowed here: drop, no fall-through. */
+  authorise: (ctx: TContext) => Promise<TopicSpeaker | null>;
+  /** May a talker run this routed command? Default-deny: only the commands flagged for talkers. */
+  checkIsTalkerAllowed: (name: string) => boolean;
+  /** One line to a talker who sent a command only admins may run. */
+  refuseTalkerCommand: (key: SessionKey) => Promise<void>;
   /** Clear the single-purpose input modes an earlier command armed. */
   exitPendingInputModes: (key: SessionKey, messageText: string) => Promise<void>;
   /** Reset the compact-on-idle watchdog (F2) — any command is thread activity. */
@@ -6361,9 +6489,18 @@ export async function handleRoutedCommandMessage<TContext extends { message: Mes
 ): Promise<void> {
   const parsed = deps.getCommand(ctx.message);
   if (!parsed || !deps.checkIsRegistered(parsed.name)) return next();
-  const key = await deps.authorise(ctx);
-  if (!key) return;
-  await deps.exitPendingInputModes(key, ctx.message.text);
+  const speaker = await deps.authorise(ctx);
+  if (!speaker) return;
+  const { key } = speaker;
+  if (speaker.role === 'talker') {
+    if (!deps.checkIsTalkerAllowed(parsed.name)) {
+      await deps.refuseTalkerCommand(key);
+      return;
+    }
+    // A talker's command never ends an input step an admin armed: it is not the admin's own next word.
+  } else {
+    await deps.exitPendingInputModes(key, ctx.message.text);
+  }
   deps.noteActivity(key);
   await deps.deliverInbound(ctx, key);
 }
@@ -6395,7 +6532,11 @@ export function deliverRoutedCommand<TContext extends { message: Message.TextMes
 export const routedCommandTriggerDeps: RoutedCommandTriggerDeps<CommandContext> = {
   getCommand: (message) => getTelegramCommand(message, { username: bot.botInfo?.username }),
   checkIsRegistered: checkIsRoutedCommand,
-  authorise: authoriseContext,
+  authorise: authoriseTopicSpeaker,
+  checkIsTalkerAllowed: (name) => commandRouter.checkIsTalkerAllowed(name),
+  refuseTalkerCommand: async (key) => {
+    await replyToThread(key, t('access.adminOnlyCommandRefusal'));
+  },
   exitPendingInputModes,
   noteActivity: noteThreadActivity,
   deliverInbound: deliverRoutedCommand,
@@ -6515,7 +6656,7 @@ command('status', async (_ctx, key) => {
     timezone,
     timezoneNow: formatZoneNow(timezone, nowMs),
   }));
-});
+}, { isTalkerAllowed: true });
 
 /** The `/language` argument: the first token, lower-cased (locale codes are case-insensitive). */
 function getLanguageCommandArg(parsed: InboundCommand): string {
@@ -7270,9 +7411,11 @@ command('version', async (_ctx, key) => {
 command('whoami', async (ctx, key) => {
   const userId = ctx.from?.id ?? 0;
   // Per-chat authority is the single source of truth now (owner for a DM chat,
-  // the served group's admins for the group chat); `checkIsAllowedUser` already
-  // encodes the surface gate, so no extra group-id clause is needed.
-  const allowed = await checkIsAllowedUser(ctx);
+  // the served group's admins for the group chat); the speaker gate already
+  // encodes the surface gate, so no extra group-id clause is needed. A talker is
+  // told what they are here: allowed to talk in THIS topic, nothing more.
+  const speaker = await authoriseTopicSpeaker(ctx);
+  const allowed = speaker?.role === 'talker' ? t('access.whoamiTalkerRole') : speaker ? 'yes' : 'no';
   const binding = state.getBinding(key);
   await replyToThread(
     key,
@@ -7280,12 +7423,12 @@ command('whoami', async (ctx, key) => {
       userId,
       chatId: getTelegramChatId(key),
       threadId: getTelegramThreadId(key),
-      allowed: allowed ? 'yes' : 'no',
+      allowed,
       binding: binding ? `\`${binding.subdir}\`` : t('whoami.binding_unbound'),
     }),
     { parse_mode: 'Markdown' },
   );
-});
+}, { isTalkerAllowed: true });
 
 /**
  * @description Re-point the bot to the forum supergroup this command was
@@ -7337,13 +7480,19 @@ bot.command('pair', async (ctx, next) => {
 
   effectiveGroupId = routeChat.id;
   await state.setPairedGroupId(routeChat.id);
+  await state.dropTopicTalkersOfOtherChats(routeChat.id);
   adminCache.invalidate();
   console.log(`[pair] re-paired to forum supergroup ${routeChat.id} via /pair`);
   const key = getThreadKey(ctx) ?? makeTelegramKey(routeChat.id, GENERAL_THREAD_ID);
   await replyToThread(key, t('pair.success', { groupId: routeChat.id }));
 });
 
-command('help', async (_ctx, key) => {
+command('help', async (ctx, key) => {
+  // A talker is shown what they may do — talk to the agent and four commands — never the admin command list.
+  if ((await authoriseTopicSpeaker(ctx))?.role === 'talker') {
+    await replyToThread(key, t('access.helpTalker'));
+    return;
+  }
   if (checkIsGeneral(key)) {
     await replyToThread(key, t('help.general'), { parse_mode: 'Markdown' });
     return;
@@ -7363,7 +7512,7 @@ command('help', async (_ctx, key) => {
     t('help.thread_bound', { subdir: binding.subdir }),
     { parse_mode: 'Markdown' },
   );
-});
+}, { isTalkerAllowed: true });
 
 // ═══════════════════════════════════════════════════════════════════════════════
 //  Rich binding welcome (plan §20.5) — folder stats + start-agent keyboard
@@ -9376,19 +9525,23 @@ command('tab', async (_ctx, key) => {
   else await replyToThread(key, `Not supported for ${adapter.label}`);
 });
 
-command(escapeCommandNames, async (_ctx, key) => {
-  // A pending «Add account» name prompt, a pending sign-in (`/login`, `/connect` OAuth) and a `/topic` wizard take
-  // priority: the first /esc only cancels it, so the topic stops waiting for typed input.
-  if (cancelProfileNameCapture(key)) {
-    await replyToThread(key, t('account.askNameCancelled'));
-    return;
+command(escapeCommandNames, async (ctx, key) => {
+  // A talker's /esc only interrupts the running turn: the prompts below are an admin's (a sign-in, a name for an account or a
+  // topic), and ending one is the admin's own word.
+  if ((await authoriseTopicSpeaker(ctx))?.role !== 'talker') {
+    // A pending «Add account» name prompt, a pending sign-in (`/login`, `/connect` OAuth) and a `/topic` wizard take
+    // priority: the first /esc only cancels it, so the topic stops waiting for typed input.
+    if (cancelProfileNameCapture(key)) {
+      await replyToThread(key, t('account.askNameCancelled'));
+      return;
+    }
+    if (cancelPendingLogin(key)) {
+      await replyToThread(key, t('login.cancelled'));
+      return;
+    }
+    // A `/topic` wizard is ended at whatever step it waits (it says so itself).
+    if (await cancelTopicWizard(key)) return;
   }
-  if (cancelPendingLogin(key)) {
-    await replyToThread(key, t('login.cancelled'));
-    return;
-  }
-  // A `/topic` wizard is ended at whatever step it waits (it says so itself).
-  if (await cancelTopicWizard(key)) return;
   const adapter = getThreadAdapter(key);
   if (adapter.sendEscape) {
     // The operator interrupted the turn: its open request closes silently.
@@ -9403,7 +9556,7 @@ command(escapeCommandNames, async (_ctx, key) => {
   } else {
     await replyToThread(key, `Not supported for ${adapter.label}`);
   }
-});
+}, { isTalkerAllowed: true });
 
 command('output', async (_ctx, key) => {
   const adapter = getThreadAdapter(key);
@@ -9715,9 +9868,70 @@ const forwardedClearCommand = '/clear';
 //  Text message handler — main conversational entrypoint
 // ═══════════════════════════════════════════════════════════════════════════════
 
+/**
+ * @description A talker's text — the one early branch, so no armed step, command, start phrase or guide of the admin path
+ * can be reached by checks spread through the handler. What it does: it is refused if it is a slash text (agent slash
+ * commands control the conversation, and the commands the bot owns were decided before the message got here); a pasted
+ * OAuth callback URL is deleted as a secret, whoever sent it; a raw-shell topic is refused; otherwise it is a prompt like any
+ * other — buffered behind a session start, delivered to a live agent, or waking a sleeping conversation — and with no agent
+ * at all the talker is told so (never offered the folder picker, never starting one). It never feeds an input step an admin
+ * armed (a sign-in code, a key, a name, a reminder's text): those routes are not here.
+ */
+async function handleTalkerText(ctx: NarrowedContext<Context, Update.MessageUpdate<Message.TextMessage>>, key: SessionKey): Promise<void> {
+  // The talker took over before a pending API-error retry fired, as any sender does.
+  cancelApiRetry(key);
+  const text = stripCommandBotMention(ctx.message.text.trim());
+  // A FORWARDED message is content: its `/…` is words like any other. A slash the talker typed is refused.
+  if (!checkIsTelegramForward(ctx.message) && text.startsWith('/')) {
+    await replyToThread(key, t('access.adminOnlyCommandRefusal'));
+    return;
+  }
+  await state.pushMessageId(key, ctx.message.message_id);
+  // The safety net for a pasted OAuth callback URL holds for everybody: it is a secret, never a prompt.
+  if (parseOAuthCallbackFromReply(text)) {
+    await deleteThreadMessage(key, ctx.message.message_id);
+    await replyToThread(key, t('connect.oauth_callback_no_flow'));
+    return;
+  }
+  if (await refuseTalkerInTerminalTopic(key)) return;
+  const messageContext = getMessageContext(key, ctx.message);
+  const intake: TopicRequestIntake = { source: 'text', requesterId: getTopicRequesterId(ctx.from) };
+  const sentAtMs = ctx.message.date * 1000;
+  if (startupPromptBuffer.checkIsStarting(keyToString(key))) {
+    await bufferPromptDuringStartup(key, text, intake, messageContext);
+    return;
+  }
+  const adapter = getThreadAdapter(key);
+  if (adapter.checkIsActive(key)) {
+    await deliverActivePrompt(key, adapter, text, intake, sentAtMs, messageContext);
+    return;
+  }
+  // A sleeping conversation is resumed by the message itself, as for anybody (L-D4).
+  if (await resumeSleepingSessionForPrompt(key)) {
+    await deliverActivePrompt(key, getThreadAdapter(key), text, intake, sentAtMs, messageContext);
+    return;
+  }
+  await replyToThread(key, t('access.noAgentForTalkerNotice'));
+}
+
+/**
+ * @description A raw-shell topic takes no talker: what is typed into a shell reaches it with no label, so none of the marks
+ * and guards that tell the agent whose words these are can apply. Posts the refusal and answers `true` for such a topic.
+ */
+async function refuseTalkerInTerminalTopic(key: SessionKey): Promise<boolean> {
+  if (getThreadAdapter(key).name !== 'terminal') return false;
+  await replyToThread(key, t('access.terminalTopicRefusal'));
+  return true;
+}
+
 bot.on(message('text'), async (ctx) => {
-  const key = await authoriseContext(ctx);
-  if (!key) return;
+  const speaker = await authoriseTopicSpeaker(ctx);
+  if (!speaker) return;
+  const { key } = speaker;
+  if (speaker.role === 'talker') {
+    await handleTalkerText(ctx, key);
+    return;
+  }
 
   // User took over before a pending API-error retry fired → cancel it silently
   // (no give-up notice). Fires for EVERY authorised inbound text — a plain
@@ -10084,8 +10298,11 @@ bot.on(message('text'), async (ctx) => {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 bot.on(message('voice'), async (ctx) => {
-  const key = await authoriseContext(ctx);
-  if (!key) return;
+  const speaker = await authoriseTopicSpeaker(ctx);
+  if (!speaker) return;
+  const { key } = speaker;
+  // A talker's voice note goes to the agent like their text does — marked as theirs — but never into a raw shell.
+  if (speaker.role === 'talker' && await refuseTalkerInTerminalTopic(key)) return;
 
   // User took over (voice note) before a pending API-error retry fired → cancel
   // it silently, like the text handler.
@@ -10250,18 +10467,7 @@ async function processVoiceJob(
     }
     // A voice prompt wakes a sleeping conversation like a text one does (L-D4).
     if (!getThreadAdapter(key).checkIsActive(key) && !(await resumeSleepingSessionForPrompt(key))) {
-      if (checkIsGeneral(key)) {
-        await replyToThread(key, t('thread.general_no_agent'));
-        return;
-      }
-      const binding = state.getBinding(key);
-      if (!binding) {
-        const subdirs = listAvailableSubdirs(ENV.workRoot);
-        const extra = buildBindKeyboard(subdirs, 0, BIND_PAGE_SIZE, !!state.getBinding(key));
-        await replyToThread(key, t('thread.no_binding'), extra);
-        return;
-      }
-      await replyToThread(key, t('thread.no_agent_with_binding', { subdir: binding.subdir }));
+      await sendNoAgentGuidance(key, messageContext?.nonOperatorSender !== undefined, (text, extra) => replyToThread(key, text, extra));
       return;
     }
 
@@ -10306,6 +10512,34 @@ function checkIsFileTooBigApiError(err: unknown): boolean {
  * and nothing hits disk, per the locked decision.
  */
 /**
+ * @description What a message gets when no agent works or sleeps in its topic: General is no place for an agent; an unbound topic is
+ * offered the folder picker, a bound one the hint to start an agent. A TALKER gets one line — an admin starts the agent —
+ * and never the picker: they bind and start nothing. `sendHint` is how the line is sent (an album sends it once).
+ */
+async function sendNoAgentGuidance(
+  key: SessionKey,
+  isFromTalker: boolean,
+  sendHint: (text: string, extra?: SendExtra) => Promise<unknown>,
+): Promise<void> {
+  if (isFromTalker) {
+    await sendHint(t('access.noAgentForTalkerNotice'));
+    return;
+  }
+  if (checkIsGeneral(key)) {
+    await sendHint(t('thread.general_no_agent'));
+    return;
+  }
+  const binding = state.getBinding(key);
+  if (!binding) {
+    const subdirs = listAvailableSubdirs(ENV.workRoot);
+    const extra = buildBindKeyboard(subdirs, 0, BIND_PAGE_SIZE, !!state.getBinding(key));
+    await sendHint(t('thread.no_binding'), extra);
+    return;
+  }
+  await sendHint(t('thread.no_agent_with_binding', { subdir: binding.subdir }));
+}
+
+/**
  * @description Evaluate the file-intake gate for a thread: an idle thread (no
  * active agent and not mid-startup) gets the same friendly guidance as the text
  * path and nothing hits disk. Returns `true` when intake may proceed.
@@ -10318,24 +10552,14 @@ async function checkFileIntakeGatePassed(
   key: SessionKey,
   isStarting: boolean,
   sendHint: (text: string, extra?: SendExtra) => Promise<unknown>,
+  isFromTalker: boolean,
 ): Promise<boolean> {
   const adapter = getThreadAdapter(key);
   if (isStarting || adapter.checkIsActive(key)) return true;
   // A file sent to a sleeping conversation wakes it (L-D4) and is taken in by the resumed session.
   if (await resumeSleepingSessionForPrompt(key, sendHint)) return true;
 
-  if (checkIsGeneral(key)) {
-    await sendHint(t('thread.general_no_agent'));
-    return false;
-  }
-  const binding = state.getBinding(key);
-  if (!binding) {
-    const subdirs = listAvailableSubdirs(ENV.workRoot);
-    const extra = buildBindKeyboard(subdirs, 0, BIND_PAGE_SIZE, !!state.getBinding(key));
-    await sendHint(t('thread.no_binding'), extra);
-    return false;
-  }
-  await sendHint(t('thread.no_agent_with_binding', { subdir: binding.subdir }));
+  await sendNoAgentGuidance(key, isFromTalker, sendHint);
   return false;
 }
 
@@ -10511,6 +10735,7 @@ async function handleAlbumFile(
   key: SessionKey,
   meta: TelegramFileMeta,
   mediaGroupId: string,
+  isFromTalker: boolean,
 ): Promise<void> {
   const groupKey = buildAlbumGroupKey(key, mediaGroupId);
   const isStarting = startupPromptBuffer.checkIsStarting(keyToString(key));
@@ -10521,7 +10746,7 @@ async function handleAlbumFile(
     if (albumCollector.checkShouldAnnounceOnce(groupKey)) {
       await replyToThread(key, text, extra);
     }
-  });
+  }, isFromTalker);
   if (!gatePassed) return;
 
   const savedPath = await downloadIncomingFile(ctx, key, meta, async (text) => {
@@ -10543,6 +10768,7 @@ async function handleAlbumFile(
 async function handleIncomingFile(
   ctx: NarrowedContext<Context, Update.MessageUpdate>,
   key: SessionKey,
+  isFromTalker: boolean,
 ): Promise<void> {
   const meta = getTelegramFileMeta(ctx.message);
   if (!meta) return; // Not one of the six kinds (e.g. sticker) — ignore.
@@ -10554,7 +10780,7 @@ async function handleIncomingFile(
   // combined prompt instead of N prompts that abort each other.
   const mediaGroupId = getMediaGroupId(ctx.message);
   if (mediaGroupId) {
-    await handleAlbumFile(ctx, key, meta, mediaGroupId);
+    await handleAlbumFile(ctx, key, meta, mediaGroupId, isFromTalker);
     return;
   }
 
@@ -10562,6 +10788,7 @@ async function handleIncomingFile(
 
   const gatePassed = await checkFileIntakeGatePassed(key, isStarting, (text, extra) =>
     replyToThread(key, text, extra),
+    isFromTalker,
   );
   if (!gatePassed) return;
 
@@ -10588,10 +10815,14 @@ bot.on(
   // incomingFileMessageFilter).
   incomingFileMessageFilter,
   async (ctx) => {
-    const key = await authoriseContext(ctx);
-    if (!key) return;
+    const speaker = await authoriseTopicSpeaker(ctx);
+    if (!speaker) return;
+    const { key } = speaker;
+    const isFromTalker = speaker.role === 'talker';
+    // A talker's file goes to the agent like their text does — marked as theirs — but never into a raw shell.
+    if (isFromTalker && await refuseTalkerInTerminalTopic(key)) return;
     try {
-      await handleIncomingFile(ctx, key);
+      await handleIncomingFile(ctx, key, isFromTalker);
     } catch (err) {
       console.error('[Bot] File handling error:', err);
       await replyToThread(key, t('file.download_failed'));
@@ -10604,8 +10835,9 @@ bot.on(
 // ═══════════════════════════════════════════════════════════════════════════════
 
 bot.on('edited_message', async (ctx) => {
-  const key = await authoriseContext(ctx);
-  if (!key) return;
+  const speaker = await authoriseTopicSpeaker(ctx);
+  if (!speaker) return;
+  const { key } = speaker;
   // Reply once per edit so the user isn't left wondering. The bot does NOT
   // treat the edit as a re-prompt to the agent (plan §16.3, E6).
   await replyToThread(key, t('edited.hint'));
@@ -10661,9 +10893,15 @@ bot.on('my_chat_member', async (ctx) => {
  * (`checkShouldInvalidateAdminCache`). Requires `chat_member` in
  * `allowed_updates` (NOT in Telegram's default set — see `botAllowedUpdates`).
  */
-bot.on('chat_member', (ctx) => {
+bot.on('chat_member', async (ctx) => {
   if (ctx.chat?.id !== getAllowedGroupId()) return;
   const { old_chat_member, new_chat_member } = ctx.update.chat_member;
+  // A person who left, was removed or banned loses every talker entry and waiting invitation: coming back needs a new grant.
+  if (checkHasLeftGroup(new_chat_member)) {
+    const { user } = new_chat_member;
+    await state.removeUserFromAllTopics({ userId: user.id.toString(), username: user.username, name: getDisplayName(user) })
+      .catch((e) => console.warn('[access] dropping the talker entries of a member who left failed:', e instanceof Error ? e.message : e));
+  }
   if (!checkShouldInvalidateAdminCache(old_chat_member.status, new_chat_member.status)) return;
   adminCache.invalidate();
 });
@@ -11182,9 +11420,12 @@ bot.action(/^resume_(\d+)$/, async (ctx) => {
   if (result !== null) await replyToThread(key, result);
 });
 
+// The agent's own question buttons (`opt_`, `qa_`, and `reask_` in the compaction module) are the taps a talker may make: they
+// answer the agent, so they ask the speaker gate; every other button keeps asking the admin gate.
 bot.action(/^opt_(\d+)$/, async (ctx) => {
-  const key = await authoriseContext(ctx);
-  if (!key) { await ctx.answerCbQuery(t('cb.access_denied')); return; }
+  const speaker = await authoriseTopicSpeaker(ctx);
+  if (!speaker) { await ctx.answerCbQuery(t('cb.access_denied')); return; }
+  const { key } = speaker;
   const optNum = ctx.match[1];
   const adapter = getThreadAdapter(key);
   if (adapter.checkIsActive(key)) {
@@ -11197,8 +11438,9 @@ bot.action(/^opt_(\d+)$/, async (ctx) => {
 });
 
 bot.action(/^qa_(\d+)_(\d+)$/, async (ctx) => {
-  const key = await authoriseContext(ctx);
-  if (!key) { await ctx.answerCbQuery(t('cb.access_denied')); return; }
+  const speaker = await authoriseTopicSpeaker(ctx);
+  if (!speaker) { await ctx.answerCbQuery(t('cb.access_denied')); return; }
+  const { key } = speaker;
   const qIdx = parseInt(ctx.match[1], 10);
   const optIdx = parseInt(ctx.match[2], 10);
   const kStr = keyToString(key);

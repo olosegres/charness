@@ -19,31 +19,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import * as fs from 'node:fs';
-import * as path from 'node:path';
-
-const botSource = fs.readFileSync(
-  path.join(__dirname, '..', 'bot.ts'),
-  'utf8',
-);
-
-/** The source from `startMarker` up to (not including) the next `endMarker`. */
-function getSourceSlice(startMarker: string, endMarker: string): string {
-  const startIdx = botSource.indexOf(startMarker);
-  assert.notEqual(startIdx, -1, `${startMarker} must exist in bot.ts`);
-  const endIdx = botSource.indexOf(endMarker, startIdx + startMarker.length);
-  assert.notEqual(endIdx, -1, `${endMarker} must follow ${startMarker} in bot.ts`);
-  return botSource.slice(startIdx, endIdx);
-}
-
-/** A top-level function's body — up to the next top-level declaration. */
-function getFunctionBody(name: string): string {
-  const startIdx = botSource.search(new RegExp(`\\n(?:async )?function ${name}\\(`));
-  assert.notEqual(startIdx, -1, `${name} must exist in bot.ts`);
-  const after = botSource.slice(startIdx + 1);
-  const nextDeclMatch = after.search(/\n(?:async function|function) /);
-  return after.slice(0, nextDeclMatch === -1 ? undefined : nextDeclMatch);
-}
+import { botSource, getFunctionBody, getSourceSlice } from './botSource';
 
 test('the voice handler reads the message-context block off the voice message and hands it to the job', () => {
   const handler = getSourceSlice("bot.on(message('voice')", 'async function processVoiceJob(');
@@ -69,8 +45,8 @@ test('the bot reads a message\'s context WITH the access of its conversation —
   );
   const access = getFunctionBody('getMessageAccess');
   assert.match(access, /if\s*\(checkIsDmKey\(key\)\)\s*return\s*\{\s*adminIds:\s*new Set\(\[getOwnerUserId\(\)\.toString\(\)\]\)\s*,\s*talkerIds:\s*new Set\(\)\s*\}/, 'the DM surface: the owner is the operator, nobody talks');
-  assert.match(access, /makeTelegramKey\(getTelegramChatId\(key\),\s*GENERAL_THREAD_ID\)/, 'General\'s list is group-wide');
-  assert.match(access, /adminIds:\s*adminCache\.getCachedAdminIds\(\)\s*,\s*talkerIds:\s*state\.getEffectiveTalkerIds\(key,\s*generalKey\)/);
+  assert.match(access, /adminIds:\s*adminCache\.getCachedAdminIds\(\)\s*,\s*talkerIds:\s*state\.getEffectiveTalkerIds\(key,\s*getGroupGeneralKey\(key\)\)/, 'General\'s list is group-wide');
+  assert.match(getFunctionBody('getGroupGeneralKey'), /makeTelegramKey\(getTelegramChatId\(key\),\s*GENERAL_THREAD_ID\)/);
 });
 
 test('the thread-context preamble learns whether the topic has talkers, from the same access that marks their messages', () => {

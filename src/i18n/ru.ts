@@ -1291,4 +1291,12 @@ export const ruDict: Record<string, string> = {
   'runners.pairingJobsAtOnceChosenToast': 'Новая машина будет выполнять {count} одновременно.',
   'runners.pairedJobsAtOnceNote': 'Задач одновременно: {count} — меняется в /runners.',
   'runners.pairingJobsAtOnceClosedToast': 'Эта строка подключения больше не открыта — если машина подключилась, задайте число в /runners.',
+  // Topic talkers: people an admin let talk to the agent in one topic (`/access`).
+  'access.adminOnlyCommandRefusal': 'Эта команда доступна только админам группы.',
+  'access.adminOnlyButtonToast': 'Это могут только админы группы.',
+  'access.noAgentForTalkerNotice': 'В этом топике не запущен агент. Админ может его запустить.',
+  'access.terminalTopicRefusal': 'Этот топик — обычная оболочка; печатать в неё могут только админы.',
+  'access.helpTalker': 'В этом топике вы можете общаться с агентом: пишите сообщения, отправляйте голосовые и файлы.\n\nВам доступны команды:\n/esc — остановить текущий ход\n/status — что работает в этом топике\n/whoami — кто вы для бота\n/help — этот текст\n\nВсё остальное — только для админов группы.',
+  'access.whoamiTalkerRole': 'может писать агенту в этом топике',
+  'access.inviteResolvedNotice': '✅ {person} теперь может писать агенту здесь.',
 };

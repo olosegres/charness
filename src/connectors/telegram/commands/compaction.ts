@@ -186,7 +186,7 @@ function buildCompactOnIdleKeyboard(picker: CompactOnIdlePickerState) {
 export interface CompactionPorts
   extends Pick<
     BotCore,
-    'bot' | 'command' | 'getState' | 'replyToThread' | 'editThreadKeyboard' | 'authoriseContext' | 'withThreadLocale' | 'checkIsGeneral' | 'wakeSleepingSession'
+    'bot' | 'command' | 'getState' | 'replyToThread' | 'editThreadKeyboard' | 'authoriseContext' | 'authoriseSpeaker' | 'withThreadLocale' | 'checkIsGeneral' | 'wakeSleepingSession'
   > {
   startTypingLoader: (key: SessionKey) => void;
   forwardPromptToAgent: (key: SessionKey, adapter: AgentAdapter, text: string) => Promise<void>;
@@ -239,7 +239,7 @@ export interface CompactionPorts
  * state the typing loop and the request probe read, and the `register…()` calls.
  */
 export function createCompaction(ports: CompactionPorts) {
-  const { startTypingLoader, forwardPromptToAgent, pendingQuestions, clearPendingQuestion, closeQuestionMessage, idleWindowMs, checkIsLimitWaitArmed, suspendThreadSession, resumeSleepingSessionForCompaction, getThreadAdapter, deliverLabel, resumeSleepingSessionForPrompt, checkIsStarting, closeOrphanQuestionMessage, notePersonActivity, compactSelfReviewFlagDirs, bot, command, getState, replyToThread, editThreadKeyboard, authoriseContext, withThreadLocale, checkIsGeneral, wakeSleepingSession } = ports;
+  const { startTypingLoader, forwardPromptToAgent, pendingQuestions, clearPendingQuestion, closeQuestionMessage, idleWindowMs, checkIsLimitWaitArmed, suspendThreadSession, resumeSleepingSessionForCompaction, getThreadAdapter, deliverLabel, resumeSleepingSessionForPrompt, checkIsStarting, closeOrphanQuestionMessage, notePersonActivity, compactSelfReviewFlagDirs, bot, command, getState, replyToThread, editThreadKeyboard, authoriseContext, authoriseSpeaker, withThreadLocale, checkIsGeneral, wakeSleepingSession } = ports;
 
   /**
    * @description Resolve the `/compact` route for a thread's current backend — the
@@ -1170,8 +1170,10 @@ export function createCompaction(ports: CompactionPorts) {
    * the chosen answer in place of the buttons.
    */
   async function handleReAskedQuestionTap(ctx: Context, optionIndex: number): Promise<void> {
-    const key = await authoriseContext(ctx);
-    if (!key) { await ctx.answerCbQuery(t('cb.access_denied')); return; }
+    // A topic member may answer the agent's question: this tap is one of the few they may make (the speaker gate, not the admin one).
+    const speaker = await authoriseSpeaker(ctx);
+    if (!speaker) { await ctx.answerCbQuery(t('cb.access_denied')); return; }
+    const { key } = speaker;
     const tappedMessageId = getCallbackMessageId(ctx);
     const reAsked = peekReAskedQuestion(key);
     // A re-ask whose send has not returned has no message id, and when the old message has none either there is nothing to tell

@@ -34,9 +34,11 @@ import type { Message } from 'telegraf/typings/core/types/typegram';
 
 import {
   checkIsRoutedCommand,
+  getTalkerAllowedCommandNames,
   handleRoutedCommandMessage,
   type RoutedCommandTriggerDeps,
 } from '../bot';
+import type { TopicSpeaker } from '../connectors/telegram/commands/botCore';
 import { getTelegramCommand } from '../connectors/telegram/inbound';
 import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
 import type { SessionKey } from '../sessionKey';
@@ -85,8 +87,8 @@ interface TriggerRun {
   calls: string[];
 }
 
-/** `authorisedAs: null` = the sender was rejected by the access policy. */
-function makeRun(authorisedAs: SessionKey | null): TriggerRun {
+/** `authorisedAs: null` = the sender was rejected by the access policy; otherwise who they are in the topic. */
+function makeRun(authorisedAs: SessionKey | null, role: TopicSpeaker['role'] = 'admin'): TriggerRun {
   const calls: string[] = [];
   return {
     calls,
@@ -98,7 +100,12 @@ function makeRun(authorisedAs: SessionKey | null): TriggerRun {
       checkIsRegistered: checkIsRoutedCommand,
       authorise: async () => {
         calls.push('authorise');
-        return authorisedAs;
+        return authorisedAs === null ? null : { key: authorisedAs, role };
+      },
+      // The REAL flags the bot registered, so the test proves what production decides.
+      checkIsTalkerAllowed: (name) => getTalkerAllowedCommandNames().includes(name),
+      refuseTalkerCommand: async () => {
+        calls.push('refuseTalkerCommand');
       },
       exitPendingInputModes: async () => {
         calls.push('exitPendingInputModes');
@@ -192,4 +199,58 @@ test('the pending-input-mode reset sees the raw message text', async () => {
   await handleRoutedCommandMessage(makeCommandContext('/connect openai sk-secret'), run.next, deps);
 
   assert.deepEqual(seenTexts, ['/connect openai sk-secret']);
+});
+
+// ─── talkers: a person an admin let talk to the agent in one topic ───────────────────
+
+/** The commands a talker may run — the plan's set, and nothing else. A new command is admin-only until somebody flags it on purpose. */
+const talkerCommandNames = ['esc', 'escape', 'help', 'interrupt', 'status', 'whoami'];
+
+test('the commands a talker may run are EXACTLY the interrupt family, /status, /whoami and /help — a new command is admin-only until flagged on purpose', () => {
+  assert.deepEqual(getTalkerAllowedCommandNames(), talkerCommandNames);
+});
+
+test('a talker runs each command flagged for talkers — the chain WITHOUT the input-mode reset: a talker\'s command never ends a step an admin armed', async () => {
+  for (const name of talkerCommandNames) {
+    const run = makeRun(authorisedKey, 'talker');
+    await handleRoutedCommandMessage(makeCommandContext(`/${name}`), run.next, run.deps);
+    assert.deepEqual(run.calls, ['authorise', 'noteActivity', 'deliverInbound'], `/${name}`);
+  }
+});
+
+test('a talker\'s admin-only command gets the one refusal line and reaches nothing: no input-mode reset, no activity, no handler', async () => {
+  // Every command of the plan\'s admin-only list that the router owns (the unowned ones are the text handler\'s: see its test).
+  const adminOnly = [
+    'claude', 'opencode', 'terminal', 'new', 'quit', 'sessions', 'model', 'effort', 'claude_mode', 'accounts', 'limits', 'limits_autoswitch',
+    'thinking', 'tool_results', 'subagent', 'verbosity', 'compact', 'compact_on_idle', 'compact_summary', 'compact_self_review',
+    'clear_messages', 'bind', 'topic', 'mcp', 'schedule', 'reminders', 'todo', 'stt', 'language', 'timezone', 'timestamps', 'trace',
+    'output', 'c', 'y', 'n', 'enter', 'up', 'down', 'tab', 'ls', 'list', 'doctor', 'version', 'update', 'bot_skills', 'task_agents',
+    'runners', 'quitall', 'start',
+  ].filter((name) => checkIsRoutedCommand(name));
+  assert.ok(adminOnly.length >= 40, `the list of commands the router owns shrank to ${adminOnly.length}`);
+  for (const name of adminOnly) {
+    const run = makeRun(authorisedKey, 'talker');
+    await handleRoutedCommandMessage(makeCommandContext(`/${name} some argument`), run.next, run.deps);
+    assert.deepEqual(run.calls, ['authorise', 'refuseTalkerCommand'], `/${name}`);
+  }
+});
+
+test('an admin still runs every command — flagged for talkers or not — through the full chain', async () => {
+  for (const name of ['model', 'status', 'bind']) {
+    const run = makeRun(authorisedKey, 'admin');
+    await handleRoutedCommandMessage(makeCommandContext(`/${name}`), run.next, run.deps);
+    assert.deepEqual(run.calls, ['authorise', 'exitPendingInputModes', 'noteActivity', 'deliverInbound'], `/${name}`);
+  }
+});
+
+test('a talker\'s command the router does not own falls through to the text handler (which refuses it) BEFORE any gate — like anybody\'s', async () => {
+  const run = makeRun(authorisedKey, 'talker');
+  await handleRoutedCommandMessage(makeCommandContext('/context'), run.next, run.deps);
+  assert.deepEqual(run.calls, ['next']);
+});
+
+test('a stranger\'s routed command is dropped exactly as before, talkers or not', async () => {
+  const run = makeRun(null, 'talker');
+  await handleRoutedCommandMessage(makeCommandContext('/status'), run.next, run.deps);
+  assert.deepEqual(run.calls, ['authorise']);
 });

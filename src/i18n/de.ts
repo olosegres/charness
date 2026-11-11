@@ -1287,4 +1287,12 @@ export const deDict: Record<string, string> = {
   'runners.pairingJobsAtOnceChosenToast': 'Die neue Maschine führt {count} Jobs gleichzeitig aus.',
   'runners.pairedJobsAtOnceNote': 'Jobs gleichzeitig: {count} — änderbar in /runners.',
   'runners.pairingJobsAtOnceClosedToast': 'Diese Kopplungszeile ist nicht mehr offen — falls die Maschine gekoppelt wurde, die Zahl in /runners einstellen.',
+  // Topic talkers: people an admin let talk to the agent in one topic (`/access`).
+  'access.adminOnlyCommandRefusal': 'Diesen Befehl können nur Gruppen-Admins nutzen.',
+  'access.adminOnlyButtonToast': 'Das können nur Gruppen-Admins.',
+  'access.noAgentForTalkerNotice': 'In diesem Thema läuft kein Agent. Ein Admin kann einen starten.',
+  'access.terminalTopicRefusal': 'Dieses Thema ist eine rohe Shell; nur Admins können dort tippen.',
+  'access.helpTalker': 'In diesem Thema kannst du mit dem Agenten sprechen: schreibe eine Nachricht oder sende eine Sprachnachricht oder Datei.\n\nBefehle für dich:\n/esc — den laufenden Zug stoppen\n/status — was in diesem Thema läuft\n/whoami — wer du für den Bot bist\n/help — dieser Text\n\nAlles andere ist für Gruppen-Admins.',
+  'access.whoamiTalkerRole': 'darf in diesem Thema mit dem Agenten sprechen',
+  'access.inviteResolvedNotice': '✅ {person} darf jetzt hier mit dem Agenten sprechen.',
 };

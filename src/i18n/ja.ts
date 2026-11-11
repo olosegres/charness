@@ -1281,4 +1281,12 @@ export const jaDict: Record<string, string> = {
   'runners.pairingJobsAtOnceChosenToast': '新しいマシンは同時に {count} 個のジョブを実行します。',
   'runners.pairedJobsAtOnceNote': '同時ジョブ数: {count} — /runners で変更できます。',
   'runners.pairingJobsAtOnceClosedToast': 'このペアリング行はもう有効ではありません。マシンがペアリング済みなら、/runners で数を設定してください。',
+  // Topic talkers: people an admin let talk to the agent in one topic (`/access`).
+  'access.adminOnlyCommandRefusal': 'このコマンドはグループ管理者のみ使えます。',
+  'access.adminOnlyButtonToast': 'これはグループ管理者のみ可能です。',
+  'access.noAgentForTalkerNotice': 'このトピックではエージェントが動いていません。管理者が起動できます。',
+  'access.terminalTopicRefusal': 'このトピックは生のシェルです。入力できるのは管理者のみです。',
+  'access.helpTalker': 'このトピックではエージェントと話せます。メッセージ、ボイスメッセージ、ファイルを送ってください。\n\n使えるコマンド:\n/esc — 実行中のターンを止める\n/status — このトピックで動いているもの\n/whoami — ボットから見たあなた\n/help — このテキスト\n\nそれ以外はグループ管理者のみです。',
+  'access.whoamiTalkerRole': 'このトピックでエージェントと話せる',
+  'access.inviteResolvedNotice': '✅ {person} がここでエージェントと話せるようになりました。',
 };

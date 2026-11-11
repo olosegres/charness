@@ -1331,4 +1331,12 @@ export const enDict: Record<string, string> = {
   'runners.pairingJobsAtOnceChosenToast': 'The new machine will run {count} at once.',
   'runners.pairedJobsAtOnceNote': 'Jobs at once: {count} — change it in /runners.',
   'runners.pairingJobsAtOnceClosedToast': 'This pairing line is no longer open — if the machine paired, set its number in /runners.',
+  // Topic talkers: people an admin let talk to the agent in one topic (`/access`).
+  'access.adminOnlyCommandRefusal': 'Only group admins can use this command.',
+  'access.adminOnlyButtonToast': 'Only group admins can do this.',
+  'access.noAgentForTalkerNotice': 'No agent is running in this topic. An admin can start one.',
+  'access.terminalTopicRefusal': 'This topic is a raw shell; only admins can type into it.',
+  'access.helpTalker': 'You can talk to the agent in this topic: write a message, or send a voice note or a file.\n\nCommands for you:\n/esc — stop the running turn\n/status — what runs in this topic\n/whoami — who you are to the bot\n/help — this text\n\nEverything else is for group admins.',
+  'access.whoamiTalkerRole': 'talker in this topic',
+  'access.inviteResolvedNotice': '✅ {person} may now talk to the agent here.',
 };

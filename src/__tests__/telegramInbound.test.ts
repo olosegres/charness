@@ -20,6 +20,7 @@ import { test } from 'node:test';
 import * as assert from 'node:assert/strict';
 import type { ChatMember, Message, User } from 'telegraf/typings/core/types/typegram';
 import {
+  checkHasLeftGroup,
   checkIsTelegramForward,
   checkShouldInvalidateAdminCache,
   createTelegramConnectorInbound,
@@ -941,4 +942,16 @@ test('getTelegramReplyQuoteBlock: a talker listed only in General\'s group-wide 
 test('getInboundEvent: the neutral reply still says only whether the assistant wrote the quoted message', () => {
   const reply = makeTopicTextFrom(makeUser(7), 'hm', makeEarlierMessageFrom(strangerUser, 'x'));
   assert.equal(getInboundEvent(reply, makeTelegramKey(-1001234567890, topicRootId), identity).replyTo?.isFromAssistant, false);
+});
+
+// ─── leaving the group ──────────────────────────────────────────────────
+
+test('checkHasLeftGroup: left, removed and banned members are gone; a restricted one only when it is no longer a member', () => {
+  const user = makeUser(9);
+  const asMember = (fields: Record<string, unknown>): ChatMember => ({ user, ...fields } as ChatMember);
+  assert.equal(checkHasLeftGroup(asMember({ status: 'left' })), true);
+  assert.equal(checkHasLeftGroup(asMember({ status: 'kicked', until_date: 0 })), true);
+  assert.equal(checkHasLeftGroup(asMember({ status: 'restricted', is_member: false })), true, 'muted, then left');
+  assert.equal(checkHasLeftGroup(asMember({ status: 'restricted', is_member: true })), false, 'muted but still in the group');
+  for (const status of ['member', 'administrator', 'creator']) assert.equal(checkHasLeftGroup(asMember({ status })), false, status);
 });

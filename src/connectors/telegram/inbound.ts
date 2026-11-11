@@ -80,7 +80,7 @@ export interface TelegramMessageAccess {
 }
 
 /** A Telegram user's best available human-readable name. */
-function getDisplayName(user: User): string {
+export function getDisplayName(user: User): string {
   const full = [user.first_name, user.last_name].filter(Boolean).join(' ').trim();
   return full || user.username || user.id.toString();
 }
@@ -114,6 +114,16 @@ export function checkShouldInvalidateAdminCache(
   newStatus: ChatMember['status'],
 ): boolean {
   return checkHasElevatedRights(oldStatus) || checkHasElevatedRights(newStatus);
+}
+
+/**
+ * @description Whether this membership change means the person is no longer IN the group: they left, were removed or banned,
+ * or were restricted after leaving (`restricted` carries an `is_member` flag). Their talker entries go with them — coming back
+ * needs a new grant.
+ */
+export function checkHasLeftGroup(member: ChatMember): boolean {
+  if (member.status === 'left' || member.status === 'kicked') return true;
+  return member.status === 'restricted' && !member.is_member;
 }
 
 /**

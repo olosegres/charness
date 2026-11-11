@@ -1288,4 +1288,12 @@ export const ptDict: Record<string, string> = {
   'runners.pairingJobsAtOnceChosenToast': 'A nova máquina executará {count} ao mesmo tempo.',
   'runners.pairedJobsAtOnceNote': 'Jobs ao mesmo tempo: {count} — mude em /runners.',
   'runners.pairingJobsAtOnceClosedToast': 'Esta linha de emparelhamento não está mais aberta — se a máquina emparelhou, defina o número dela em /runners.',
+  // Topic talkers: people an admin let talk to the agent in one topic (`/access`).
+  'access.adminOnlyCommandRefusal': 'Somente os administradores do grupo podem usar este comando.',
+  'access.adminOnlyButtonToast': 'Somente os administradores do grupo podem fazer isso.',
+  'access.noAgentForTalkerNotice': 'Nenhum agente está em execução neste tópico. Um administrador pode iniciar um.',
+  'access.terminalTopicRefusal': 'Este tópico é um shell bruto; somente administradores podem digitar nele.',
+  'access.helpTalker': 'Neste tópico você pode falar com o agente: escreva uma mensagem ou envie uma nota de voz ou um arquivo.\n\nComandos para você:\n/esc — parar o turno em andamento\n/status — o que está rodando neste tópico\n/whoami — quem você é para o bot\n/help — este texto\n\nTudo o mais é só para administradores do grupo.',
+  'access.whoamiTalkerRole': 'pode falar com o agente neste tópico',
+  'access.inviteResolvedNotice': '✅ {person} agora pode falar com o agente aqui.',
 };

@@ -1287,4 +1287,12 @@ export const kaDict: Record<string, string> = {
   'runners.pairingJobsAtOnceChosenToast': 'ახალი მანქანა ერთდროულად {count} ამოცანას შეასრულებს.',
   'runners.pairedJobsAtOnceNote': 'ერთდროულად ამოცანები: {count} — შეცვალეთ /runners-ში.',
   'runners.pairingJobsAtOnceClosedToast': 'ეს დაწყვილების სტრიქონი აღარ არის ღია — თუ მანქანა დაწყვილდა, რიცხვი /runners-ში დააყენეთ.',
+  // Topic talkers: people an admin let talk to the agent in one topic (`/access`).
+  'access.adminOnlyCommandRefusal': 'ეს ბრძანება მხოლოდ ჯგუფის ადმინებს შეუძლიათ.',
+  'access.adminOnlyButtonToast': 'ამის გაკეთება მხოლოდ ჯგუფის ადმინებს შეუძლიათ.',
+  'access.noAgentForTalkerNotice': 'ამ თემაში აგენტი არ მუშაობს. ადმინს შეუძლია გაუშვას.',
+  'access.terminalTopicRefusal': 'ეს თემა ნედლი ჭურვია (shell); მასში ბეჭდვა მხოლოდ ადმინებს შეუძლიათ.',
+  'access.helpTalker': 'ამ თემაში აგენტს ესაუბრებით: დაწერეთ შეტყობინება ან გაგზავნეთ ხმოვანი შეტყობინება ან ფაილი.\n\nთქვენთვის ხელმისაწვდომი ბრძანებები:\n/esc — მიმდინარე სვლის გაჩერება\n/status — რა მუშაობს ამ თემაში\n/whoami — ვინ ხართ ბოტისთვის\n/help — ეს ტექსტი\n\nსხვა ყველაფერი მხოლოდ ჯგუფის ადმინებისთვისაა.',
+  'access.whoamiTalkerRole': 'შეუძლია ესაუბროს აგენტს ამ თემაში',
+  'access.inviteResolvedNotice': '✅ {person} ახლა შეუძლია აგენტს აქ ესაუბროს.',
 };

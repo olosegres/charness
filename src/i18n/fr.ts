@@ -1287,4 +1287,12 @@ export const frDict: Record<string, string> = {
   'runners.pairingJobsAtOnceChosenToast': 'La nouvelle machine exécutera {count} jobs en parallèle.',
   'runners.pairedJobsAtOnceNote': 'Jobs en parallèle : {count} — modifiable dans /runners.',
   'runners.pairingJobsAtOnceClosedToast': 'Cette ligne d’association n’est plus ouverte — si la machine est associée, réglez son nombre dans /runners.',
+  // Topic talkers: people an admin let talk to the agent in one topic (`/access`).
+  'access.adminOnlyCommandRefusal': 'Seuls les admins du groupe peuvent utiliser cette commande.',
+  'access.adminOnlyButtonToast': 'Seuls les admins du groupe peuvent faire ça.',
+  'access.noAgentForTalkerNotice': 'Aucun agent ne tourne dans ce sujet. Un admin peut en démarrer un.',
+  'access.terminalTopicRefusal': 'Ce sujet est un shell brut ; seuls les admins peuvent y taper.',
+  'access.helpTalker': 'Dans ce sujet, vous pouvez parler à l’agent : écrivez un message, ou envoyez une note vocale ou un fichier.\n\nCommandes pour vous :\n/esc — arrêter le tour en cours\n/status — ce qui tourne dans ce sujet\n/whoami — qui vous êtes pour le bot\n/help — ce texte\n\nTout le reste est réservé aux admins du groupe.',
+  'access.whoamiTalkerRole': 'peut parler à l’agent dans ce sujet',
+  'access.inviteResolvedNotice': '✅ {person} peut maintenant parler à l’agent ici.',
 };

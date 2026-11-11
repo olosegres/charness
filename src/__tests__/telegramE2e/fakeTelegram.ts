@@ -109,6 +109,8 @@ export type FakeForwardOrigin =
 
 /** How the operator's message arrives besides its content: as a reply to a message already in the topic, and/or forwarded from elsewhere. */
 export interface FakeOperatorMessageOptions {
+  /** Who sends it: the operator by default; another person (an admin, a talker, a stranger) when set. */
+  from?: TelegramUser;
   /** The id of the message in the topic this one replies to (the bot's or a person's). */
   replyToMessageId?: number;
   /** Where the message was first written. */
@@ -309,7 +311,7 @@ export class FakeTelegram {
 
   /** @description The operator writes `text` in topic `threadId` (as a reply or a forward, when `options` say so); resolves the message id. */
   pushOperatorMessage(threadId: number, text: string, options: FakeOperatorMessageOptions = {}): number {
-    return this.pushUserMessage(threadId, text, this.options.operator, options);
+    return this.pushUserMessage(threadId, text, options.from ?? this.options.operator, options);
   }
 
   /** @description `from` writes `text` in topic `threadId` (another admin, say); resolves the message id. */
@@ -350,7 +352,7 @@ export class FakeTelegram {
   pushOperatorVoice(threadId: number, fileId: string, durationSeconds: number, options: FakeOperatorMessageOptions = {}): number {
     if (!this.files.has(fileId)) throw new Error(`register the voice file ${fileId} first`);
     const voice: FakeTelegramVoice = { file_id: fileId, file_unique_id: `unique-${fileId}`, duration: durationSeconds, mime_type: 'audio/ogg' };
-    const message = this.storeMessage(threadId, '', this.options.operator, { voice });
+    const message = this.storeMessage(threadId, '', options.from ?? this.options.operator, { voice });
     // On the wire a voice note has no `text` at all; an empty one would still match the bot's text handler.
     const { text: _text, ...wireMessage } = message;
     this.pushUpdate({ message: { ...wireMessage, ...this.getContext(options) } });
@@ -365,7 +367,7 @@ export class FakeTelegram {
   pushOperatorFile(threadId: number, kind: 'document' | 'photo', fileId: string, options: FakeOperatorMessageOptions & { caption?: string; fileName?: string } = {}): number {
     const file = this.files.get(fileId);
     if (!file) throw new Error(`register the file ${fileId} first`);
-    const message = this.storeMessage(threadId, '', this.options.operator);
+    const message = this.storeMessage(threadId, '', options.from ?? this.options.operator);
     // On the wire a file message has no `text`, only its file and its caption.
     const { text: _text, ...wireMessage } = message;
     const fileFields = kind === 'document'
@@ -375,17 +377,34 @@ export class FakeTelegram {
     return message.message_id;
   }
 
-  /** @description The operator taps the button carrying `callbackData` on the bot's message `messageId`. */
-  pushCallback(messageId: number, callbackData: string): void {
+  /** @description `from` (the operator by default) taps the button carrying `callbackData` on the bot's message `messageId`. */
+  pushCallback(messageId: number, callbackData: string, from: TelegramUser = this.options.operator): void {
     const message = this.messages.get(messageId);
     if (!message) throw new Error(`no message ${messageId} to tap a button on`);
     this.pushUpdate({
       callback_query: {
         id: (this.nextCallbackQueryId++).toString(),
-        from: this.options.operator,
+        from,
         message,
         chat_instance: 'fake-chat-instance',
         data: callbackData,
+      },
+    });
+  }
+
+  /**
+   * @description A membership change of `user` in the group, as the Bot API reports it to a bot that asked for `chat_member`
+   * updates: a member who `left`, was `kicked`, or joined (`member`).
+   */
+  pushChatMember(user: TelegramUser, oldStatus: 'member' | 'left' | 'kicked', newStatus: 'member' | 'left' | 'kicked'): void {
+    const asMember = (status: 'member' | 'left' | 'kicked') => ({ status, user, ...(status === 'kicked' ? { until_date: 0 } : {}) });
+    this.pushUpdate({
+      chat_member: {
+        chat: this.chat,
+        from: this.options.operator,
+        date: Math.floor(Date.now() / 1000),
+        old_chat_member: asMember(oldStatus),
+        new_chat_member: asMember(newStatus),
       },
     });
   }

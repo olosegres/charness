@@ -1286,4 +1286,12 @@ export const hiDict: Record<string, string> = {
   'runners.pairingJobsAtOnceChosenToast': 'नई मशीन एक साथ {count} जॉब चलाएगी।',
   'runners.pairedJobsAtOnceNote': 'एक साथ जॉब: {count} — /runners में बदलें।',
   'runners.pairingJobsAtOnceClosedToast': 'यह जोड़ने वाली लाइन अब खुली नहीं है — अगर मशीन जुड़ चुकी है, तो उसकी संख्या /runners में तय करें।',
+  // Topic talkers: people an admin let talk to the agent in one topic (`/access`).
+  'access.adminOnlyCommandRefusal': 'यह कमांड केवल ग्रुप एडमिन उपयोग कर सकते हैं।',
+  'access.adminOnlyButtonToast': 'यह केवल ग्रुप एडमिन कर सकते हैं।',
+  'access.noAgentForTalkerNotice': 'इस टॉपिक में कोई एजेंट नहीं चल रहा। एडमिन एक शुरू कर सकता है।',
+  'access.terminalTopicRefusal': 'यह टॉपिक एक रॉ शेल है; इसमें केवल एडमिन टाइप कर सकते हैं।',
+  'access.helpTalker': 'इस टॉपिक में आप एजेंट से बात कर सकते हैं: संदेश लिखें, या वॉइस नोट या फ़ाइल भेजें।\n\nआपके लिए कमांड:\n/esc — चल रहा टर्न रोकें\n/status — इस टॉपिक में क्या चल रहा है\n/whoami — बॉट के लिए आप कौन हैं\n/help — यह टेक्स्ट\n\nबाकी सब केवल ग्रुप एडमिन के लिए है।',
+  'access.whoamiTalkerRole': 'इस टॉपिक में एजेंट से बात कर सकते हैं',
+  'access.inviteResolvedNotice': '✅ {person} अब यहाँ एजेंट से बात कर सकते हैं।',
 };

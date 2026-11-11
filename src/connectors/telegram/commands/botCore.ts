@@ -6,17 +6,30 @@
 import type { Context, NarrowedContext, Telegraf } from 'telegraf';
 import type { InlineKeyboardMarkup, Message, Update } from 'telegraf/typings/core/types/typegram';
 import type { InboundCommand } from '../../../platform/inbound';
+import type { CommandRegistrationOptions } from '../../../platform/commandRouter';
+import type { SenderRole } from '../../../accessControl';
 import type { SessionKey } from '../../../sessionKey';
 import type { StateStore } from '../../../state';
 
 /** The Telegram context a command handler receives — a text message, always. */
 export type CommandContext = NarrowedContext<Context, Update.MessageUpdate<Message.TextMessage>>;
 
-/** Register a command handler on the neutral router. */
+/** Register a command handler on the neutral router; `options.isTalkerAllowed` opens it to a talker (default-deny). */
 export type RegisterCommand = (
   name: string | string[],
   handler: (ctx: CommandContext, key: SessionKey, parsed: InboundCommand) => Promise<void> | void,
+  options?: CommandRegistrationOptions,
 ) => void;
+
+/**
+ * @name TopicSpeaker
+ * @description Who is writing to a topic and what they are there: the topic's key and the {@link SenderRole} the speaker gate
+ * gave them — `admin` (everything) or `talker` (an admin let them talk to the agent in this topic, or in General).
+ */
+export interface TopicSpeaker {
+  key: SessionKey;
+  role: Exclude<SenderRole, 'none'>;
+}
 
 /**
  * @description How an edit of a thread message ended: `edited` (a no-change edit counts); `gone` — the message is not there (the
@@ -60,6 +73,12 @@ export interface BotCore {
   deleteThreadMessageDetailed: (key: SessionKey, messageId: number) => Promise<ThreadMessageDeletion>;
   /** Gate a callback or message to an admin of the served group; the topic's key, or `null` when it is refused. */
   authoriseContext: (ctx: Context) => Promise<SessionKey | null>;
+  /**
+   * The speaker gate: an admin anywhere, or a talker in a topic whose list (or General's) holds them; `null` for anybody else.
+   * ONLY the routes a talker may use ask this — talking to the agent and answering its questions; everything else asks
+   * {@link BotCore.authoriseContext}, which refuses a talker.
+   */
+  authoriseSpeaker: (ctx: Context) => Promise<TopicSpeaker | null>;
   /** Run `fn` with the topic's resolved locale for `t(…)`. */
   withThreadLocale: <TResult>(key: SessionKey, fn: () => TResult) => TResult;
   checkIsGeneral: (key: SessionKey) => boolean;
