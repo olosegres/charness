@@ -8,7 +8,6 @@ import { getAdapter } from '../adapters/createAdapter';
 import type { SessionKey } from '../sessionKey';
 import { keyToString } from '../sessionKey';
 import { getOpenCodeChildEnv } from '../installManager';
-import { getChildProcessEnvironment } from '../utils/agentEnvironment';
 import { t } from '../i18n';
 import { type IPty, spawn as spawnPty } from 'node-pty';
 import { resolveClaudeBinary, resolveOpenCodeBinary } from '../utils/resolveBinary';
@@ -19,8 +18,8 @@ import {
 } from '../utils/claudeAuthLogin';
 import {
   checkIsAnthropicSecretLike,
-  claudeConfigDirVariableName,
   extractAnthropicApiKey,
+  getClaudeAuthCommandEnvironment,
   parseClaudeAuthStatus,
   readProcessErrorStdout,
   type ClaudeAuthStatus,
@@ -245,26 +244,13 @@ export function createAgentLogin(ports: AgentLoginPorts) {
     }
   }
 
-  /**
-   * @description The environment a `claude auth …` process runs with: the bot's own minus its secrets and
-   * `ANTHROPIC_API_KEY` (the subscription login, never the metered console path), plus the profile's
-   * `CLAUDE_CONFIG_DIR` when one is signed in — the login must land in THAT directory, and the status probe must
-   * read the same one.
-   */
-  function buildClaudeAuthEnv(configDir: string | null): Record<string, string | undefined> {
-    const env: Record<string, string | undefined> = getChildProcessEnvironment();
-    delete env.ANTHROPIC_API_KEY;
-    if (configDir !== null) env[claudeConfigDirVariableName] = configDir;
-    return env;
-  }
-
   /** Read `claude auth status --json` under `configDir`, or `null` if the probe fails or prints something else. */
   async function readAuthLoginStatus(configDir: string | null): Promise<ClaudeAuthStatus | null> {
     try {
       const { stdout } = await execFileAsync(
         resolveClaudeBinary(),
         ['auth', 'status', '--json'],
-        { timeout: authStatusProbeTimeoutMs, env: buildClaudeAuthEnv(configDir) },
+        { timeout: authStatusProbeTimeoutMs, env: getClaudeAuthCommandEnvironment(configDir) },
       );
       return parseClaudeAuthStatus(stdout);
     } catch (e) {
@@ -300,7 +286,7 @@ export function createAgentLogin(ports: AgentLoginPorts) {
         cols: authLoginPtyCols,
         rows: authLoginPtyRows,
         cwd: process.cwd(),
-        env: buildClaudeAuthEnv(profile?.configDir ?? null),
+        env: getClaudeAuthCommandEnvironment(profile?.configDir ?? null),
       });
     } catch (e) {
       console.warn(`[login] ${k} pty spawn failed:`, e);

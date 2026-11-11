@@ -270,18 +270,25 @@ describe('the default tmux server the agents and terminals run on holds none of 
       isTmuxAvailable = false;
     }
     for (const name of touchedNames) savedValues[name] = process.env[name];
-    // The DEFAULT socket of a private folder: the path a Telegram instance's tmux calls take, never the real default server.
-    socketDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-env-default-tmux-'));
     delete process.env.TMUX_SOCKET_NAME;
     delete process.env.TMUX;
     delete process.env.TMUX_PANE;
-    process.env.TMUX_TMPDIR = socketDir;
     Object.assign(process.env, createBotEnvironment({}));
+  });
+
+  // The DEFAULT socket of a private folder — the path a Telegram instance's tmux calls take, never the real default server —
+  // and a fresh folder per case: a server killed by the case before may still be leaving its socket when the next starts one.
+  beforeEach(() => {
+    socketDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-env-default-tmux-'));
+    process.env.TMUX_TMPDIR = socketDir;
+    // tmux makes this folder itself only for a server it finds through TMUX_TMPDIR, not for one named with `-S`.
+    fs.mkdirSync(path.dirname(getSocketPath()), { mode: 0o700 });
   });
 
   afterEach(async () => {
     const { TMUX: _userTmuxServer, TMUX_PANE: _userTmuxPane, ...envWithoutTmux } = process.env;
     await execFileAsync('tmux', ['-S', getSocketPath(), 'kill-server'], { env: envWithoutTmux }).catch(() => {});
+    fs.rmSync(socketDir, { recursive: true, force: true });
   });
 
   after(() => {
@@ -289,7 +296,6 @@ describe('the default tmux server the agents and terminals run on holds none of 
       if (savedValues[name] === undefined) delete process.env[name];
       else process.env[name] = savedValues[name];
     }
-    fs.rmSync(socketDir, { recursive: true, force: true });
   });
 
   async function readGlobalNames(): Promise<string[]> {

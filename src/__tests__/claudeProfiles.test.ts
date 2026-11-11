@@ -16,6 +16,8 @@ import * as path from 'node:path';
 import {
   checkIsSameClaudeConfigDir,
   checkClaudeProfileDirExists,
+  claudeConfigDirVariableName,
+  getClaudeAuthCommandEnvironment,
   checkIsValidClaudeProfileName,
   claudeProfileNameMaxLength,
   createClaudeProfileLayout,
@@ -152,6 +154,28 @@ describe('claude auth status', () => {
     assert.equal(getClaudeAccountKind('enterprise'), 'corporate');
     assert.equal(getClaudeAccountKind(null), 'unknown');
     assert.equal(getClaudeAccountKind('something-new'), 'unknown');
+  });
+});
+
+describe('getClaudeAuthCommandEnvironment', () => {
+  it('a sign-in or status probe runs without the bot\'s secrets and ANTHROPIC_API_KEY, under the profile\'s directory', () => {
+    const names = ['TELEGRAM_BOT_TOKEN', 'OPENCODE_PASSWORD', 'ANTHROPIC_API_KEY', 'CHARNESS_TEST_USER_TOOL_TOKEN', claudeConfigDirVariableName];
+    const saved = Object.fromEntries(names.map((name) => [name, process.env[name]]));
+    try {
+      for (const name of ['TELEGRAM_BOT_TOKEN', 'OPENCODE_PASSWORD', 'ANTHROPIC_API_KEY']) process.env[name] = 'placeholder-secret';
+      process.env.CHARNESS_TEST_USER_TOOL_TOKEN = 'placeholder-user-value';
+      delete process.env[claudeConfigDirVariableName];
+      const profileEnvironment = getClaudeAuthCommandEnvironment('/data/dir/claude-profiles/work');
+      for (const name of ['TELEGRAM_BOT_TOKEN', 'OPENCODE_PASSWORD', 'ANTHROPIC_API_KEY']) assert.equal(profileEnvironment[name], undefined, name);
+      assert.equal(profileEnvironment.CHARNESS_TEST_USER_TOOL_TOKEN, 'placeholder-user-value');
+      assert.equal(profileEnvironment[claudeConfigDirVariableName], '/data/dir/claude-profiles/work');
+      assert.equal(getClaudeAuthCommandEnvironment(null)[claudeConfigDirVariableName], undefined, 'the default profile is ~/.claude');
+    } finally {
+      for (const [name, value] of Object.entries(saved)) {
+        if (value === undefined) delete process.env[name];
+        else process.env[name] = value;
+      }
+    }
   });
 });
 

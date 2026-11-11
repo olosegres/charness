@@ -62,7 +62,9 @@ agent's env, so usage bills to your Claude subscription rather than an API key.
 
 No agent gets the bot's own secrets (`TELEGRAM_BOT_TOKEN`, `OPENCODE_PASSWORD`): the tmux server the agents and terminals
 run on is started without them and cleared of them before each new session (a server an older bot started still had
-them), and the agent's command starts under `env -u` for them as well; the OpenCode server is started without them.
+them — without `TMUX_SOCKET_NAME` that is your default tmux server), and the agent's command starts under `env -u` for
+them as well; the OpenCode server is started without them. This keeps them out of what agents print and log; agents run
+as the bot's own user, so it is not a wall against one that goes looking for them.
 
 ## OpenCode
 

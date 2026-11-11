@@ -247,10 +247,14 @@ stopped; this is not confirmed on current WSL. If the bot stops after you log in
 These settings apply to every surface. The Telegram ones — the bot token, the group and the DM, voice — are listed
 under [Telegram environment variables](#telegram-environment-variables).
 
-The agents (Claude, OpenCode, a terminal), a scheduled check, a sign-in and an install or update the bot runs get the
-bot's environment WITHOUT its own secrets — `TELEGRAM_BOT_TOKEN` and `OPENCODE_PASSWORD`: an agent reaches Telegram only
-through the bot's tools. Your other variables (provider keys, tool tokens your agents use for their work) reach them as
-before.
+The agents (Claude, OpenCode, a terminal), a scheduled check, git in a bound folder, a sign-in and an install or update
+the bot runs get the bot's environment WITHOUT its own secrets — `TELEGRAM_BOT_TOKEN` and `OPENCODE_PASSWORD`: an agent
+reaches Telegram only through the bot's tools. Your other variables (provider keys, tool tokens your agents use for their
+work) reach them as before. This keeps the two out of what agents print, log and install; it is no barrier against a
+process that looks for them, since the agents run as the bot's own user, who can read its config file. Without
+`TMUX_SOCKET_NAME` the agents run on your default tmux server, and the bot removes the two from that server's environment
+before each agent session: a window or session you open there afterwards no longer inherits them (one already open keeps
+what it has).
 
 #### External Optional
 

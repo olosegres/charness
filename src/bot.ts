@@ -364,8 +364,9 @@ import {
 } from './utils/jsonStreamHost';
 import { RunLedger } from './scheduler/runLedger';
 import { createScheduleDelivery, unboundDeliveryError, type ScheduleDeliveryDeps } from './scheduler/delivery';
-import { buildCheckEnv, runCheckCommand } from './scheduler/checkRun';
+import { runCheckCommand } from './scheduler/checkRun';
 import { getChildProcessEnvironment } from './utils/agentEnvironment';
+import { runGitInAgentFolder } from './utils/folderGit';
 import { checkIsCheckStatusShown } from './scheduler/checkStatus';
 import { readWorkerActivity } from './scheduler/workerActivity';
 import { createSchedulerEngine, maxTimeoutMs, type SchedulerEngine } from './scheduler/engine';
@@ -453,7 +454,7 @@ import { applyRunnerGroups } from './runners/runnerGroups';
 import { probeRunnersOverview, readRunnersOverview } from './runners/runnersOverview';
 import { getRemoteRunCacheDir } from './remoteRun/ssh';
 import { createClaudeAccounts, type ClaudeProfileApplyOutcome } from './connectors/telegram/commands/claudeAccounts';
-import { checkIsSameClaudeConfigDir, claudeConfigDirVariableName, defaultClaudeProfileName, getProcessFailureReason, parseClaudeAuthStatus, readClaudeProfileApiKey, readDefaultClaudeProfileApiKey, readProcessErrorStdout, resolveClaudeProfileDir, resolveClaudeProfilesRoot, type ClaudeAuthStatus } from './utils/claudeProfiles';
+import { checkIsSameClaudeConfigDir, defaultClaudeProfileName, getClaudeAuthCommandEnvironment, getProcessFailureReason, parseClaudeAuthStatus, readClaudeProfileApiKey, readDefaultClaudeProfileApiKey, readProcessErrorStdout, resolveClaudeProfileDir, resolveClaudeProfilesRoot, type ClaudeAuthStatus } from './utils/claudeProfiles';
 import { checkIsClaudeModelClearOfLimit, checkIsClaudeUsageExhausted, fetchClaudeUsage, readClaudeOAuthToken, type ClaudeProfilesReport, type ClaudeProfileUsageView } from './utils/claudeUsage';
 import { claudeUsageOnDemandMaxAgeMs, createClaudeUsageRefresher, refreshClaudeUsageForLaunch } from './utils/claudeUsageRefresher';
 import { createOpenCodeUsagePoller, readOpenCodeCredentials } from './utils/openCodeUsage';
@@ -7311,6 +7312,9 @@ function formatBytes(n: number): string {
   return `${(n / (1024 * 1024)).toFixed(1)} MB`;
 }
 
+/** How long one git read of the bind's welcome may take: a slow repository only loses its row. */
+const bindingGitTimeoutMs = 1500;
+
 /**
  * @description Collect a short factual summary of a bound project folder for
  * the welcome message — what onboarding context Claude would actually pick
@@ -7347,19 +7351,10 @@ async function getBindingStats(workDir: string): Promise<BindingStats> {
     fs.accessSync(path.join(workDir, '.git'));
   } catch { return out; }
 
-  try {
-    const { stdout } = await execFileAsync('git', ['symbolic-ref', '--short', 'HEAD'], {
-      cwd: workDir, timeout: 1500,
-    });
-    out.gitBranch = stdout.trim() || 'HEAD';
-  } catch { out.gitBranch = 'HEAD'; }
-
-  try {
-    const { stdout } = await execFileAsync('git', ['status', '--porcelain'], {
-      cwd: workDir, timeout: 1500,
-    });
-    out.gitClean = stdout.trim().length === 0;
-  } catch { /* keep null = unknown */ }
+  // The folder's git configuration is the agent's to write: `runGitInAgentFolder` runs git without the bot's secrets.
+  out.gitBranch = (await runGitInAgentFolder(workDir, ['symbolic-ref', '--short', 'HEAD'], bindingGitTimeoutMs)) || 'HEAD';
+  const status = await runGitInAgentFolder(workDir, ['status', '--porcelain'], bindingGitTimeoutMs);
+  if (status !== null) out.gitClean = status.length === 0;
 
   return out;
 }
@@ -7992,9 +7987,7 @@ function resolveThreadClaudeConfigDir(key: SessionKey): string | null {
  * the probe fails.
  */
 async function readClaudeAuthStatusUnder(configDir: string | null): Promise<ClaudeAuthStatus | null> {
-  const env: NodeJS.ProcessEnv = getChildProcessEnvironment();
-  delete env.ANTHROPIC_API_KEY;
-  if (configDir !== null) env[claudeConfigDirVariableName] = configDir;
+  const env = getClaudeAuthCommandEnvironment(configDir);
   try {
     const args = [...buildClaudeAuthProbeSettingsArgs(configDir), 'auth', 'status', '--json'];
     const { stdout } = await execFileAsync(resolveClaudeBinary(), args, { timeout: claudeAuthStatusProbeTimeoutMs, env });
@@ -14178,7 +14171,8 @@ function wireScheduler(wiring: SchedulerWiringDeps): SchedulerMcpHandle {
     runCheck: async (threadKeyStr, command, timeoutMs) => {
       const decision = resolveBoundWorkDir(ENV.workRoot, state.getBinding(keyFromString(threadKeyStr)));
       if (decision.kind !== 'proceed') return null;
-      return runCheckCommand({ command, cwd: decision.workDir, timeoutMs, env: buildCheckEnv(process.env) });
+      // A check runs what an agent wrote, and its output is posted into the topic: never with the bot's own secrets.
+      return runCheckCommand({ command, cwd: decision.workDir, timeoutMs, env: getChildProcessEnvironment() });
     },
     setCheckFailing: async (jobId, isFailing) => {
       const record = state.getSchedules()[jobId];

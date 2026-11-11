@@ -1,9 +1,8 @@
-import { execFile } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
-import { promisify } from 'util';
 import { z } from 'zod';
 import { writeJsonFileAtomically } from '../configDirFile';
+import { runGitInAgentFolder } from '../utils/folderGit';
 
 /**
  * @description Which conversations share a project board (D15, D16, D57) — automatic by repository:
@@ -67,17 +66,8 @@ export interface TodoProject {
 /** @description Run git in `workDir` within `timeoutMs`; its trimmed stdout, or `null` when it failed or ran too long. */
 export type RunGit = (workDir: string, args: readonly string[], timeoutMs: number) => Promise<string | null>;
 
-const execFileAsync = promisify(execFile);
-
-/** @description The real git. */
-export const runGitInFolder: RunGit = async (workDir, args, timeoutMs) => {
-  try {
-    const { stdout } = await execFileAsync('git', ['-C', workDir, ...args], { timeout: timeoutMs, encoding: 'utf8' });
-    return stdout.trim();
-  } catch {
-    return null;
-  }
-};
+/** @description The real git — run as for any folder an agent works in (`utils/folderGit.ts`). */
+export const runGitInFolder: RunGit = runGitInAgentFolder;
 
 /** @description The repository's own folder name from git's common dir (`…/repo/.git`, a submodule's `…/modules/repo`, a bare `repo.git`). */
 export function getRepositoryNameFromCommonDir(commonDir: string): string {

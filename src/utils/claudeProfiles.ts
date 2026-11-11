@@ -23,6 +23,7 @@
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import { getChildProcessEnvironment } from './agentEnvironment';
 
 /** The profile that is `~/.claude` itself (no `CLAUDE_CONFIG_DIR`). */
 export const defaultClaudeProfileName = 'default';
@@ -404,6 +405,19 @@ export function getClaudeAccountKind(subscriptionType: string | null): ClaudeAcc
 // ── the spawn-side variable ──
 
 export const claudeConfigDirVariableName = 'CLAUDE_CONFIG_DIR';
+
+/**
+ * @description The environment a `claude auth …` process runs with (a sign-in, an auth-status probe): the bot's own
+ * without its secrets and without `ANTHROPIC_API_KEY` (the subscription login, never the metered console path), plus
+ * `CLAUDE_CONFIG_DIR` for a profile's directory (`null` = `~/.claude`) — the login must land in THAT directory, and the
+ * status probe must read the same one.
+ */
+export function getClaudeAuthCommandEnvironment(configDir: string | null): NodeJS.ProcessEnv {
+  const environment = getChildProcessEnvironment();
+  delete environment.ANTHROPIC_API_KEY;
+  if (configDir !== null) environment[claudeConfigDirVariableName] = configDir;
+  return environment;
+}
 
 /**
  * @description Whether two `CLAUDE_CONFIG_DIR` values name the same directory: equal strings, or paths that

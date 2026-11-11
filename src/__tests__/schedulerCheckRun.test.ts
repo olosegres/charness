@@ -12,7 +12,6 @@ import os from 'os';
 import path from 'path';
 
 import {
-  buildCheckEnv,
   buildCheckFailurePrompt,
   checkIsCheckPassing,
   checkOutputMaxChars,
@@ -23,6 +22,7 @@ import {
   type CheckRunResult,
 } from '../scheduler/checkRun';
 import { checkIsPidAlive } from '../utils/jsonStreamHost';
+import { getChildProcessEnvironment } from '../utils/agentEnvironment';
 import {
   getWorkerWatchEnd,
   workerWatchArmedFileName,
@@ -139,12 +139,7 @@ test('getOutputTail: short text is untouched, long text keeps its end', () => {
   assert.equal(getOutputTail('abcdefgh', 5), '…efgh');
 });
 
-test('buildCheckEnv: the bot\'s own secrets never reach a check (its output is posted to the topic); the user\'s variables do', () => {
-  const env = buildCheckEnv({ TELEGRAM_BOT_TOKEN: 'secret', OPENCODE_PASSWORD: 'secret', PATH: '/usr/bin', CHARNESS_TEST_USER_TOOL_TOKEN: 'user' });
-  assert.deepEqual(env, { PATH: '/usr/bin', CHARNESS_TEST_USER_TOOL_TOKEN: 'user' });
-});
-
-test('a check run for real prints no bot secret from its environment', async () => {
+test('a check run for real with the child environment prints no bot secret — the user\'s variables it does', async () => {
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'check-env-'));
   try {
     const result = await runCheckCommand({
@@ -152,7 +147,7 @@ test('a check run for real prints no bot secret from its environment', async () 
       command: "env | grep -E '^(CHARNESS_TEST_USER_TOOL_TOKEN|TELEGRAM_BOT_TOKEN|OPENCODE_PASSWORD)='",
       cwd,
       timeoutMs: 30_000,
-      env: buildCheckEnv({ ...process.env, TELEGRAM_BOT_TOKEN: 'placeholder-bot-secret', OPENCODE_PASSWORD: 'placeholder-bot-secret', CHARNESS_TEST_USER_TOOL_TOKEN: 'user' }),
+      env: getChildProcessEnvironment({ ...process.env, TELEGRAM_BOT_TOKEN: 'placeholder-bot-secret', OPENCODE_PASSWORD: 'placeholder-bot-secret', CHARNESS_TEST_USER_TOOL_TOKEN: 'user' }),
     });
     assert.equal(result.exitCode, 0);
     assert.ok(result.output.includes('CHARNESS_TEST_USER_TOOL_TOKEN=user'), 'the environment was printed');

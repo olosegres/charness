@@ -1,5 +1,4 @@
 import { spawn } from 'node:child_process';
-import { getChildProcessEnvironment } from '../utils/agentEnvironment';
 
 /**
  * @description The `'check'` delivery kind: a watchdog the agent creates with
@@ -40,7 +39,6 @@ export const checkAlertOutputMaxChars = 1500;
 
 /** Pause between SIGTERM and SIGKILL for a check that outlived its timeout. */
 const checkKillGraceMs = 5000;
-
 
 /**
  * @name CheckRunResult
@@ -119,11 +117,6 @@ export function buildCheckFailurePrompt(input: {
     '',
     input.prompt,
   ].join('\n');
-}
-
-/** @description The bot's environment without its own secrets: a check runs what an agent wrote, and its output is posted into the topic. */
-export function buildCheckEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
-  return getChildProcessEnvironment(env);
 }
 
 /**
