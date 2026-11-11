@@ -27,6 +27,9 @@ const forwardedMark = '[Forwarded message · from: channel "Ops" · originally s
 /** What a typed reply carries, and what a forward carries. */
 const replyContext: MessageContext = { block: assistantBlock, isForwarded: false };
 const forwardContext: MessageContext = { block: forwardedMark, isForwarded: true };
+/** A message of a topic member (not the operator): its mark leads, and it is flagged as somebody else's. */
+const talkerMark = '[Message from topic member "Alice Smith" (@alice) · not the operator]';
+const talkerContext: MessageContext = { block: talkerMark, isForwarded: false, nonOperatorSender: 'topic member "Alice Smith" (@alice)' };
 
 /** An agent prompt — not a terminal's shell line. */
 const agentPrompt = { isShellInput: false };
@@ -87,4 +90,18 @@ test('checkIsSlashCommandPrompt: a typed slash is a command, the same words forw
   assert.equal(checkIsSlashCommandPrompt('/compact', replyContext), true);
   assert.equal(checkIsSlashCommandPrompt('/compact', forwardContext), false);
   assert.equal(checkIsSlashCommandPrompt('compact', undefined), false);
+});
+
+test('getPromptWithMessageContext: a topic member\'s message is led by the author mark', () => {
+  assert.equal(getPromptWithMessageContext('please run the tests', { ...agentPrompt, context: talkerContext }), `${talkerMark}\n\nplease run the tests`);
+});
+
+test('getPromptWithMessageContext: a topic member\'s slash text is never a control token — it reaches the agent marked, as plain words (a backstop for a route that missed the refusal)', () => {
+  assert.equal(checkIsSlashCommandPrompt('/compact', talkerContext), false);
+  assert.equal(getPromptWithMessageContext('/compact', { ...agentPrompt, context: talkerContext }), `${talkerMark}\n\n/compact`);
+  assert.equal(checkIsSlashCommandPrompt('/compact', replyContext), true, 'the operator\'s own reply with a slash text still is one');
+});
+
+test('getPromptWithMessageContext: even a topic member\'s message stays out of a terminal', () => {
+  assert.equal(getPromptWithMessageContext('ls', { context: talkerContext, isShellInput: true }), 'ls');
 });

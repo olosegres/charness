@@ -171,3 +171,25 @@ test('getSenderRole: admin wins over a list entry, and the entry applies again a
 test('getSenderRole: ids are strings, so a numeric-looking id never matches by coercion', () => {
   assert.equal(getSenderRole({ userId: '10', adminIds: new Set(['1']), talkerIds: new Set(['1']) }), 'none');
 });
+
+test('AdminCache.getCachedAdminIds: the set as last fetched, never a fetch of its own', async () => {
+  let calls = 0;
+  const cache = new AdminCache({ fetchElevatedMemberIds: async () => { calls += 1; return ['1', '2']; }, ttlMs: 1000 });
+  assert.deepEqual([...cache.getCachedAdminIds()], [], 'before the first fetch: nobody');
+  assert.equal(calls, 0, 'reading the cache fetched nothing');
+  await cache.getAdminIds();
+  assert.deepEqual([...cache.getCachedAdminIds()].sort(), ['1', '2']);
+  assert.equal(calls, 1);
+});
+
+test('AdminCache.getCachedAdminIds: a stale cache keeps serving the last-known set until a gated read refreshes it', async () => {
+  let clock = 0;
+  let roster = ['1'];
+  const cache = new AdminCache({ fetchElevatedMemberIds: async () => roster, ttlMs: 1000, now: () => clock });
+  await cache.getAdminIds();
+  roster = ['2'];
+  clock += 5000;
+  assert.deepEqual([...cache.getCachedAdminIds()], ['1'], 'stale, but not re-fetched by the synchronous read');
+  await cache.getAdminIds();
+  assert.deepEqual([...cache.getCachedAdminIds()], ['2']);
+});

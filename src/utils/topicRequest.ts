@@ -83,27 +83,30 @@ export function getTopicRequestOrigin(intake: TopicRequestIntake): RequestOrigin
  * view the agent is told its plain text and thinking are not shown; in the stream
  * views they are.
  * `supersededRequestIds` are the requester's still-open requests this one
- * replaced — the header asks for only what this one adds.
+ * replaced — the header asks for only what this one adds. `sender` names the person
+ * who wrote the message when that is not the operator (`topic member "Alice Smith"
+ * (@alice)`, from `MessageContext.nonOperatorSender`), so the request is never
+ * read as the operator's own.
  */
 export function buildTopicRequestHeader(
   requestId: string,
   source: TopicRequestSource,
   view: TopicView,
   supersededRequestIds: readonly string[] = [],
+  sender?: string,
 ): string {
   return buildRequestHeader({
     requestId,
-    originDescription: topicRequestOriginDescriptions[source],
+    originDescription: `${topicRequestOriginDescriptions[source]}${sender ? ` from ${sender}` : ''}`,
     isPlainTextHidden: !checkIsStreamShown(view),
     supersededRequestIds,
   });
 }
 
 /**
- * @description The prompt a topic request keeps in the ledger (R21) — the one the bot posts AGAIN when the session never took
- * the first post in: after a failed post, a restart, a usage-limit wait. `promptBody` is the message's text with its message
+ * @description The prompt a topic request keeps in the ledger (R21) — the one the bot posts AGAIN when the session never took the first post in: after a failed post, a restart, a usage-limit wait. `promptBody` is the message's text with its message
  * context already folded in (reply quote, forwarded mark): a body kept raw would be replayed without them, and a forwarded
- * message would come back as the operator's own words.
+ * message would come back as the operator's own words. `sender` is as in {@link buildTopicRequestHeader}.
  */
 export function buildTopicRequestPrompt(input: {
   requestId: string;
@@ -111,6 +114,7 @@ export function buildTopicRequestPrompt(input: {
   view: TopicView;
   supersededRequestIds: readonly string[];
   promptBody: string;
+  sender?: string;
 }): string {
-  return `${buildTopicRequestHeader(input.requestId, input.source, input.view, input.supersededRequestIds)}${input.promptBody}`;
+  return `${buildTopicRequestHeader(input.requestId, input.source, input.view, input.supersededRequestIds, input.sender)}${input.promptBody}`;
 }

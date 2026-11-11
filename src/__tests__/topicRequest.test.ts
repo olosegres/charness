@@ -102,6 +102,19 @@ describe('buildTopicRequestHeader', () => {
     assert.doesNotMatch(buildTopicRequestHeader('req_c', 'text', 'streamAnswers'), /replaces/);
   });
 
+  it('names a sender who is not the operator, after the entry point: the request is never read as the operator\'s own', () => {
+    const sender = 'topic member "Alice Smith" (@alice)';
+    assert.match(buildTopicRequestHeader('req_abc', 'text', 'streamAnswers', [], sender), /^\[Request req_abc · from: a message in this topic from topic member "Alice Smith" \(@alice\)\]\n/);
+    assert.match(buildTopicRequestHeader('req_abc', 'voice', 'streamAnswers', [], sender), /from: a voice message in this topic from topic member/);
+    assert.match(buildTopicRequestHeader('req_abc', 'file', 'streamAnswers', [], sender), /from: a file sent to this topic from topic member/);
+    assert.match(buildTopicRequestHeader('req_abc', 'album', 'streamAnswers', [], sender), /from: an album sent to this topic from topic member/);
+  });
+
+  it('the operator\'s own request has no sender part', () => {
+    assert.equal(buildTopicRequestHeader('req_abc', 'text', 'streamAnswers', [], undefined), buildTopicRequestHeader('req_abc', 'text', 'streamAnswers'));
+    assert.doesNotMatch(buildTopicRequestHeader('req_abc', 'text', 'streamAnswers'), / from topic member| from group member/);
+  });
+
   it('every entry point has its own description', () => {
     const descriptions = new Set(sources.map((source) => /from: ([^\]]+)\]/.exec(buildTopicRequestHeader('req_abc', source, 'answers'))?.[1]));
     assert.equal(descriptions.size, sources.length);
@@ -131,6 +144,15 @@ describe('the prompt a topic request keeps', () => {
   it('is the header ahead of the body, and the body is exactly what is posted', () => {
     const prompt = buildTopicRequestPrompt({ requestId: 'req_abc', source: 'text', view: 'streamAnswers', supersededRequestIds: ['req_a'], promptBody: 'hello' });
     assert.equal(prompt, `${buildTopicRequestHeader('req_abc', 'text', 'streamAnswers', ['req_a'])}hello`);
+  });
+
+  it('a topic member\'s request kept in the ledger names them in its header too, ahead of the marked words', () => {
+    const sender = 'topic member "Alice Smith" (@alice)';
+    const mark = `[Message from ${sender} · not the operator]`;
+    const body = getPromptWithMessageContext('please run the tests', { context: { block: mark, isForwarded: false, nonOperatorSender: sender }, isShellInput: false });
+    const prompt = buildTopicRequestPrompt({ requestId: 'req_abc', source: 'text', view: 'streamAnswers', supersededRequestIds: [], promptBody: body, sender });
+    assert.equal(prompt, `${buildTopicRequestHeader('req_abc', 'text', 'streamAnswers', [], sender)}${mark}\n\nplease run the tests`);
+    assert.match(prompt, /from: a message in this topic from topic member "Alice Smith" \(@alice\)\]/);
   });
 
   it('a forwarded message re-posted from the ledger still carries its mark — a replay never turns it into the operator\'s own words', () => {

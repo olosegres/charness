@@ -58,12 +58,12 @@ const unknownOriginName = 'unknown';
  * that cannot take part in the mark's own syntax: control and bidirectional characters out, whitespace flattened, and the square brackets that
  * close the header turned into parentheses.
  */
-function cleanThirdPartyText(value: string): string {
+export function cleanThirdPartyText(value: string): string {
   return stripControlCharacters(value).replace(/\s+/g, ' ').trim().replace(/\[/g, '(').replace(/\]/g, ')');
 }
 
 /** A cleaned text as a quoted token: what a stranger wrote reads as DATA, whatever it says (`"` and `\` are escaped). */
-function quoteCleanText(cleanText: string): string {
+export function quoteCleanText(cleanText: string): string {
   return JSON.stringify(cleanText);
 }
 

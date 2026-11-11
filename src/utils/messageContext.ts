@@ -1,7 +1,8 @@
 /**
  * @description Pure helpers for the MESSAGE CONTEXT of a prompt — the agent-facing
  * blocks the bot glues ahead of the operator's text because of how the Telegram
- * message arrived: the reply-quote block (`replyQuote.ts`, the message it
+ * message arrived: the author mark (`authorMark.ts`, who wrote it when that is not the
+ * operator), the reply-quote block (`replyQuote.ts`, the message it
  * answers) and the forwarded mark (`forwardedMark.ts`, who first wrote it).
  *
  * The blocks ride the per-message body (like the `/timestamps` line), NOT the
@@ -18,14 +19,20 @@ const messageContextSeparator = '\n\n';
 
 /**
  * @name MessageContext
- * @description What a Telegram message carries besides its words: the `block` that leads the prompt (the reply quote,
- * the forwarded mark) and whether the message was FORWARDED. A forwarded message is content and never control input:
- * its text starting with `/` is not a slash command, a bare digit in it is not an answer, a phrase in it does not start
- * an agent — see {@link checkIsSlashCommandPrompt}.
+ * @description What a Telegram message carries besides its words: the `block` that leads the prompt (the author mark, the reply
+ * quote, the forwarded mark), whether the message was FORWARDED, and who sent it when that is not the operator.
+ * A forwarded message is content and never control input: its text starting with `/` is not a slash command, a bare digit in
+ * it is not an answer, a phrase in it does not start an agent — see {@link checkIsSlashCommandPrompt}. A message of another
+ * person is content too: whatever it says, it is not the operator's command.
  */
 export interface MessageContext {
   block: string;
   isForwarded: boolean;
+  /**
+   * Who sent the message, as the agent reads it (`topic member "Alice Smith" (@alice)`), when the sender is not the operator;
+   * absent for the operator's own messages. The request header names it too.
+   */
+  nonOperatorSender?: string;
 }
 
 /**
@@ -40,10 +47,12 @@ export function joinMessageContextBlocks(blocks: ReadonlyArray<string | null | u
 /**
  * @description Whether `text` is a slash command for the agent (`/compact`, `/clear`…): a control token that no block,
  * preamble or timestamp may be put ahead of. Never for a forwarded message, whose words are somebody else's: the mark
- * ahead of them is exactly what makes them plain text.
+ * ahead of them is exactly what makes them plain text. Never for a message of a person who is not the operator either — a
+ * backstop: such a slash text is refused before it gets here, and one that did slip through must reach the agent
+ * marked, as plain words, never as the control token it would be unmarked.
  */
 export function checkIsSlashCommandPrompt(text: string, context: MessageContext | undefined): boolean {
-  return context?.isForwarded !== true && checkShouldSkipPreambleForText(text);
+  return context?.isForwarded !== true && context?.nonOperatorSender === undefined && checkShouldSkipPreambleForText(text);
 }
 
 /**

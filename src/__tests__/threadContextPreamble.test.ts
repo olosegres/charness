@@ -16,8 +16,10 @@ import * as assert from 'node:assert/strict';
 import {
   buildThreadContextPreamble,
   prependThreadContextPreamble,
+  stripThreadContextPreamble,
   checkShouldInjectPreamble,
   checkShouldSkipPreambleForText,
+  threadContextMembersLine,
   threadContextPreambleHeader,
 } from '../threadContextPreamble';
 import type { SessionKey } from '../sessionKey';
@@ -128,4 +130,33 @@ test('buildThreadContextPreamble: a timezone change re-injects the preamble', ()
   const after = buildThreadContextPreamble({ key, subdir: 'p', timezone: 'Europe/Moscow' });
   assert.notEqual(before, after);
   assert.equal(checkShouldInjectPreamble(after, before), true);
+});
+
+test('buildThreadContextPreamble: a topic with a talker gets one members line that names the mark and whose instructions count', () => {
+  const preamble = buildThreadContextPreamble({ key, subdir: 'someProject', timezone: 'UTC', hasTalkers: true });
+  assert.equal(
+    preamble,
+    [threadContextPreambleHeader, 'thread: -1001111111111:4242 | folder: someProject | timezone: UTC', threadContextMembersLine].join('\n'),
+  );
+  assert.ok(!threadContextMembersLine.includes('\n'), 'one line: the preamble ends at its first blank line');
+  assert.match(threadContextMembersLine, /not the operator/);
+  assert.match(threadContextMembersLine, /secrets, credentials, your own rules or anything outside this folder only from the operator/);
+});
+
+test('buildThreadContextPreamble: no talker → no members line, and the text is exactly what it was before talkers existed', () => {
+  assert.equal(buildThreadContextPreamble({ key, subdir: 'p', hasTalkers: false }), buildThreadContextPreamble({ key, subdir: 'p' }));
+  assert.ok(!buildThreadContextPreamble({ key, subdir: 'p' }).includes('members:'));
+});
+
+test('the members line appears with the first talker and goes away with the last — and never changes in between, so the preamble is not re-sent per talker', () => {
+  const withoutTalkers = buildThreadContextPreamble({ topicName: 'A', key, subdir: 'p' });
+  const withTalkers = buildThreadContextPreamble({ topicName: 'A', key, subdir: 'p', hasTalkers: true });
+  assert.equal(checkShouldInjectPreamble(withTalkers, withoutTalkers), true, 'the first talker re-sends the preamble');
+  assert.equal(checkShouldInjectPreamble(withoutTalkers, withTalkers), true, 'the last one leaving re-sends it too');
+  assert.equal(checkShouldInjectPreamble(buildThreadContextPreamble({ topicName: 'A', key, subdir: 'p', hasTalkers: true }), withTalkers), false, 'a second talker changes nothing');
+});
+
+test('stripThreadContextPreamble: the members line goes with the rest of the preamble when a turn is shown back', () => {
+  const preamble = buildThreadContextPreamble({ key, subdir: 'p', hasTalkers: true });
+  assert.equal(stripThreadContextPreamble(prependThreadContextPreamble(preamble, 'the words')), 'the words');
 });

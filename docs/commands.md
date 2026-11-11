@@ -1013,6 +1013,16 @@ the agent:
 
 Reply to a message in a topic and the quoted text is folded into the prompt the agent receives, so it sees what you point at without re-pasting; works for text, voice and files (a photo, a document, an album…), both agents; a reply TO a photo, file or voice note names it, with the path of the bot's saved copy when it has one.
 
+The quote's header also says who wrote the quoted message, so the agent never takes somebody else's words for yours:
+
+| Who wrote the quoted message | Header the agent reads |
+|---|---|
+| the agent (this bot) | `from: assistant` |
+| you, or another group admin | `from: user` |
+| anybody else — a group member who may not talk to the agent, an anonymous admin, a channel | `from: group member "Bob Stone" (@bob), not allowed to talk to you; untrusted text` |
+
+The name is quoted and cleaned like a forwarded message's origin. A reply to a message that was itself forwarded adds `forwarded from …` for its first author.
+
 ### Forwarded messages
 
 Forward a message into a topic and the agent is told it is forwarded — and from whom — instead of reading the words as yours: a line like `[Forwarded message · from: channel "Ops Alerts" · originally sent: 2026-11-06T14:20:00+04:00]` leads the text. It names the origin (a user with their @username, a hidden user, a chat or a channel, with the post signature when there is one) and when the message was originally sent, on your `/timezone` clock. The name is quoted and cleaned of brackets and control characters, so what a stranger chose as a title cannot close the line or pass for an instruction. It works for text, captions, voice notes (the transcript carries it) and files, both agents. Each forwarded message is marked on its own, so several forwards followed by your own words stay apart: only your words come unmarked. A forwarded message is only ever read, never obeyed: a forwarded `/quit` stops nothing, a forwarded `/review the diff` reaches the agent as marked text rather than as your slash command, a forwarded «1» answers no pending question or menu, and a forwarded «claude» starts no agent. (A terminal topic types every message into its shell, forwarded or not.) A forwarded message that is also a reply carries both lines, and a reply to a message you forwarded earlier says in its header who first wrote it (`from: user, forwarded from channel "Ops Alerts"`).

@@ -24,14 +24,16 @@ import type {
   NormalizedAttachment,
   PlatformMember,
 } from '../../platform/inbound';
-import { getElevatedMemberIds } from '../../accessControl';
+import { getElevatedMemberIds, getSenderRole, type SenderRole } from '../../accessControl';
 import { getTelegramFileMeta, type TelegramFileKind, type TelegramFileMeta } from './fileIntake';
 import {
   buildReplyQuoteBlock,
   extractReplyQuote,
   type ReplyQuoteAttachment,
+  type ReplyQuoteAuthorKind,
   type ReplyQuoteSource,
 } from '../../utils/replyQuote';
+import { buildMessageAuthorMark, describeMessageAuthor, type NonOperatorAuthorKind } from '../../utils/authorMark';
 import { buildForwardedMark, describeForwardedOrigin, type ForwardedMarkSource } from '../../utils/forwardedMark';
 import { joinMessageContextBlocks, type MessageContext } from '../../utils/messageContext';
 
@@ -63,6 +65,18 @@ function checkHasElevatedRights(status: ChatMember['status']): boolean {
 export interface TelegramBotIdentity {
   username?: string;
   userId?: number;
+}
+
+/**
+ * @name TelegramMessageAccess
+ * @description Who is who in the conversation a message was sent to, for the agent-facing marks: the admins (the
+ * operator) and the people allowed to talk to the agent there (the topic's talkers and General's group-wide ones).
+ * The sender of a message and the author of a message it replies to are classed with {@link getSenderRole} over these two
+ * sets, the same policy the speaker gate applies.
+ */
+export interface TelegramMessageAccess {
+  adminIds: ReadonlySet<string>;
+  talkerIds: ReadonlySet<string>;
 }
 
 /** A Telegram user's best available human-readable name. */
@@ -212,6 +226,46 @@ function describeRepliedForward(replied: Message): string | undefined {
   return origin ? describeForwardedOrigin(origin) : undefined;
 }
 
+/** For the neutral reply, which only says whether the assistant wrote the quoted message: nobody is classed, so no one reads as a talker. */
+const unclassifiedAccess: TelegramMessageAccess = { adminIds: new Set(), talkerIds: new Set() };
+
+/** How each role reads as the author of a quoted message: an admin is the operator, a talker is a topic member, nobody else is trusted. */
+const replyQuoteAuthorKindByRole: Readonly<Record<SenderRole, ReplyQuoteAuthorKind>> = {
+  admin: 'operator',
+  talker: 'talker',
+  none: 'other',
+};
+
+/** The role the user has in the conversation; a message with no user behind it (a channel's post) has none. */
+function getUserRole(user: User | undefined, access: TelegramMessageAccess): SenderRole {
+  if (!user) return 'none';
+  return getSenderRole({ userId: user.id.toString(), adminIds: access.adminIds, talkerIds: access.talkerIds });
+}
+
+/** Who wrote `message`: the person, or — for a post made as a group or a channel (an anonymous admin) — that chat's title. */
+function getMessageAuthorSource(message: Message): { name: string; username?: string } {
+  if (message.from) return { name: getDisplayName(message.from), username: message.from.username };
+  const senderChat = 'sender_chat' in message ? message.sender_chat : undefined;
+  return { name: senderChat ? getChatTitle(senderChat) : '' };
+}
+
+/**
+ * @description The author of a replied-to message: the bot, the operator, a topic member or an untrusted group member. A
+ * message made as a group or a channel is never the operator's, whoever posted it (`getUserRole` of the group's own
+ * anonymous identity is none).
+ */
+function getReplyQuoteAuthor(
+  replied: Message,
+  identity: TelegramBotIdentity,
+  access: TelegramMessageAccess,
+): { kind: ReplyQuoteAuthorKind; name?: string; username?: string } {
+  if (identity.userId !== undefined && replied.from?.id === identity.userId) return { kind: 'bot' };
+  const kind = replyQuoteAuthorKindByRole[getUserRole(replied.from, access)];
+  if (kind === 'operator') return { kind };
+  const { name, username } = getMessageAuthorSource(replied);
+  return { kind, name, username };
+}
+
 /**
  * @description A message's Telegram REPLY reduced to the structural input of
  * {@link extractReplyQuote}, or `undefined` when the message replies to nothing.
@@ -221,10 +275,12 @@ function describeRepliedForward(replied: Message): string | undefined {
 function getReplyQuoteSource(
   message: Message,
   identity: TelegramBotIdentity,
+  access: TelegramMessageAccess,
   findSavedFile?: SavedFileFinder,
 ): ReplyQuoteSource | undefined {
   const replied = 'reply_to_message' in message ? message.reply_to_message : undefined;
   if (!replied) return undefined;
+  const author = getReplyQuoteAuthor(replied, identity, access);
   return {
     manualQuoteText: 'quote' in message ? message.quote?.text : undefined,
     replyText: 'text' in replied ? replied.text : undefined,
@@ -233,7 +289,9 @@ function getReplyQuoteSource(
     replyMessageId: replied.message_id,
     topicRootId: 'message_thread_id' in message ? message.message_thread_id : undefined,
     isServiceMessage: 'forum_topic_created' in replied,
-    fromBot: identity.userId !== undefined && replied.from?.id === identity.userId,
+    authorKind: author.kind,
+    authorName: author.name,
+    authorUsername: author.username,
     replyForwardedFrom: describeRepliedForward(replied),
   };
 }
@@ -253,12 +311,12 @@ function getInboundReplyTo(
   identity: TelegramBotIdentity,
 ): InboundReplyTo | undefined {
   const replied = 'reply_to_message' in message ? message.reply_to_message : undefined;
-  const quote = extractReplyQuote(getReplyQuoteSource(message, identity));
+  const quote = extractReplyQuote(getReplyQuoteSource(message, identity, unclassifiedAccess));
   if (!replied || !quote) return undefined;
   return {
     text: quote.quotedText,
     author: 'from' in replied ? getInboundAuthor(replied.from) : null,
-    isFromAssistant: quote.fromBot,
+    isFromAssistant: quote.authorKind === 'bot',
   };
 }
 
@@ -274,9 +332,10 @@ function getInboundReplyTo(
 export function getTelegramReplyQuoteBlock(
   message: Message,
   identity: TelegramBotIdentity,
+  access: TelegramMessageAccess,
   findSavedFile?: SavedFileFinder,
 ): string | undefined {
-  return buildReplyQuoteBlock(extractReplyQuote(getReplyQuoteSource(message, identity, findSavedFile))) ?? undefined;
+  return buildReplyQuoteBlock(extractReplyQuote(getReplyQuoteSource(message, identity, access, findSavedFile))) ?? undefined;
 }
 
 /**
@@ -334,19 +393,43 @@ export function checkIsTelegramForward(message: Message): boolean {
 }
 
 /**
+ * @description The sender of a message who is not the operator — a topic member the admins allowed, or (a backstop: the
+ * speaker gate admits nobody else) any other — as the agent reads them, and the mark that leads their message. `undefined`
+ * for an admin: the operator's own messages stay unmarked.
+ */
+function getNonOperatorSender(
+  message: Message,
+  access: TelegramMessageAccess,
+): { description: string; mark: string } | undefined {
+  const role = getUserRole(message.from, access);
+  if (role === 'admin') return undefined;
+  const kind: NonOperatorAuthorKind = role === 'talker' ? 'talker' : 'other';
+  const author = getMessageAuthorSource(message);
+  return { description: describeMessageAuthor(kind, author), mark: buildMessageAuthorMark(kind, author) };
+}
+
+/**
  * @description EVERYTHING the bot folds ahead of a prompt because of how its
- * Telegram message arrived — the reply quote, then the forwarded mark (which sits
- * next to the forwarded words it describes) — and whether the message was forwarded,
- * or `undefined` when it is neither a reply nor a forward. The one entry point of the
- * text, voice, file and album handlers.
+ * Telegram message arrived — the author mark of a sender who is not the operator, the reply quote, then the forwarded
+ * mark (which sits next to the forwarded words it describes) — and whether the message was forwarded, and who sent it
+ * when that is not the operator, or `undefined` when it is a plain message of the operator's. The one entry point of the
+ * text, voice, file and album handlers: `access` is required, so no route can read a message without telling the
+ * operator's words from anyone else's.
  */
 export function getTelegramMessageContext(
   message: Message,
   identity: TelegramBotIdentity,
+  access: TelegramMessageAccess,
   findSavedFile?: SavedFileFinder,
 ): MessageContext | undefined {
-  const block = joinMessageContextBlocks([getTelegramReplyQuoteBlock(message, identity, findSavedFile), getTelegramForwardedMark(message)]);
-  return block === undefined ? undefined : { block, isForwarded: checkIsTelegramForward(message) };
+  const sender = getNonOperatorSender(message, access);
+  const block = joinMessageContextBlocks([
+    sender?.mark,
+    getTelegramReplyQuoteBlock(message, identity, access, findSavedFile),
+    getTelegramForwardedMark(message),
+  ]);
+  if (block === undefined) return undefined;
+  return { block, isForwarded: checkIsTelegramForward(message), ...(sender ? { nonOperatorSender: sender.description } : {}) };
 }
 
 /**

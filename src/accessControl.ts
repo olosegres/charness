@@ -129,6 +129,15 @@ export class AdminCache {
     }
   }
 
+  /**
+   * The admin set as last fetched, WITHOUT fetching: for the synchronous marks that tell the operator's words from anyone
+   * else's. Meaningful right after {@link getAdminIds} (every gated handler awaits it first); empty before the first
+   * successful fetch.
+   */
+  getCachedAdminIds(): ReadonlySet<string> {
+    return this.ids;
+  }
+
   /** Drop freshness so the next {@link getAdminIds} re-fetches (used on re-pair). */
   invalidate(): void {
     this.fetchedAt = null;

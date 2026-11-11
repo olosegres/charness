@@ -62,6 +62,27 @@ test('the bot reads a message\'s context with the connector\'s one reader — th
   );
 });
 
+test('the bot reads a message\'s context WITH the access of its conversation — no route can read it without telling the operator\'s words from anyone else\'s', () => {
+  assert.match(
+    getFunctionBody('getMessageContext'),
+    /getTelegramMessageContext\(\s*message\s*,\s*\{\s*userId:\s*bot\.botInfo\?\.id\s*\}\s*,\s*getMessageAccess\(\s*key\s*\)\s*,/,
+  );
+  const access = getFunctionBody('getMessageAccess');
+  assert.match(access, /if\s*\(checkIsDmKey\(key\)\)\s*return\s*\{\s*adminIds:\s*new Set\(\[getOwnerUserId\(\)\.toString\(\)\]\)\s*,\s*talkerIds:\s*new Set\(\)\s*\}/, 'the DM surface: the owner is the operator, nobody talks');
+  assert.match(access, /makeTelegramKey\(getTelegramChatId\(key\),\s*GENERAL_THREAD_ID\)/, 'General\'s list is group-wide');
+  assert.match(access, /adminIds:\s*adminCache\.getCachedAdminIds\(\)\s*,\s*talkerIds:\s*state\.getEffectiveTalkerIds\(key,\s*generalKey\)/);
+});
+
+test('the thread-context preamble learns whether the topic has talkers, from the same access that marks their messages', () => {
+  assert.match(getFunctionBody('getPromptWithThreadContext'), /hasTalkers:\s*checkIsTelegramKey\(key\)\s*&&\s*getMessageAccess\(key\)\.talkerIds\.size\s*>\s*0/);
+});
+
+test('a request names who sent the message, and keeps that name in the prompt it stores', () => {
+  const opener = getFunctionBody('openTopicRequest');
+  assert.match(opener, /buildTopicRequestPrompt\(\{[^}]*\bsender:\s*messageContext\?\.nonOperatorSender\b[^}]*\}\)/);
+  assert.match(opener, /buildTopicRequestHeader\([^)]*,\s*messageContext\?\.nonOperatorSender\s*\)/);
+});
+
 test('a voice transcript buffered behind a session start keeps its reply quote', () => {
   assert.match(
     getFunctionBody('processVoiceJob'),

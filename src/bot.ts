@@ -172,6 +172,7 @@ import {
   checkIsTelegramForward,
   getTelegramCommand,
   getTelegramMessageContext,
+  type TelegramMessageAccess,
 } from './connectors/telegram/inbound';
 import { createTelegramConnectorOutbound } from './connectors/telegram/outbound';
 import { createCommandRouter } from './platform/commandRouter';
@@ -1205,9 +1206,10 @@ async function openTopicRequest(
   // AGAIN when the session never took it in; the raw text would come back without the forwarded mark or the quote.
   const promptBody = getPromptWithThreadMessageContext(key, text, messageContext);
   const request = await topicRequestLedger.createRequest(key, getTopicRequestOrigin(intake), {
-    createPrompt: (requestId, supersededRequestIds) => buildTopicRequestPrompt({ requestId, source: intake.source, view, supersededRequestIds, promptBody }),
+    createPrompt: (requestId, supersededRequestIds) =>
+      buildTopicRequestPrompt({ requestId, source: intake.source, view, supersededRequestIds, promptBody, sender: messageContext?.nonOperatorSender }),
   });
-  return { header: buildTopicRequestHeader(request.id, intake.source, view, request.supersededRequestIds), requestId: request.id };
+  return { header: buildTopicRequestHeader(request.id, intake.source, view, request.supersededRequestIds, messageContext?.nonOperatorSender), requestId: request.id };
 }
 
 /**
@@ -6059,6 +6061,7 @@ function getPromptWithThreadContext(key: SessionKey, text: string): string {
       key,
       subdir,
       timezone: getCurrentTimezone(),
+      hasTalkers: checkIsTelegramKey(key) && getMessageAccess(key).talkerIds.size > 0,
     });
 
   const kStr = keyToString(key);
@@ -6081,7 +6084,20 @@ function getPromptWithThreadContext(key: SessionKey, text: string): string {
  * is looked up among the files this thread took in.
  */
 function getMessageContext(key: SessionKey, message: Message): MessageContext | undefined {
-  return getTelegramMessageContext(message, { userId: bot.botInfo?.id }, (meta) => findThreadSavedFile(key, meta));
+  return getTelegramMessageContext(message, { userId: bot.botInfo?.id }, getMessageAccess(key), (meta) => findThreadSavedFile(key, meta));
+}
+
+/**
+ * @description Who is the operator and who may talk in the conversation `key`: the two sets the agent-facing marks tell the
+ * operator's words from anyone else's by (a talker's message, a reply to a stranger's). Read synchronously off the admin cache
+ * the gate refreshed a moment ago and the talker lists, so a route cannot be handed a role that disagrees with the gate's, and
+ * none can forget to ask. The DM surface is the owner's private chat: the owner is the operator and nobody else writes there.
+ * In a group the talkers are the topic's own list plus General's, which is group-wide.
+ */
+function getMessageAccess(key: SessionKey): TelegramMessageAccess {
+  if (checkIsDmKey(key)) return { adminIds: new Set([getOwnerUserId().toString()]), talkerIds: new Set() };
+  const generalKey = makeTelegramKey(getTelegramChatId(key), GENERAL_THREAD_ID);
+  return { adminIds: adminCache.getCachedAdminIds(), talkerIds: state.getEffectiveTalkerIds(key, generalKey) };
 }
 
 /**

@@ -108,7 +108,7 @@ per-backend controls are optional methods the bot checks before calling.
 - **One instance-wide timezone** (`/timezone`) applied through `process.env.TZ`. After a zone change never
   re-arm schedules with the engine's `rearmAll()` (the boot replay would fire bogus catch-ups).
 - **Prompt decoration** happens at ONE choke point, `forwardPromptToAgent`: the `[Telegram thread context]`
-  preamble (only when it changed), the message-context block (the reply quote, the forwarded mark), the optional `/timestamps` line. Files sent to a
+  preamble (only when it changed), the message-context block (the author mark of a sender who is not the operator, the reply quote with who wrote it, the forwarded mark), the optional `/timestamps` line. Files sent to a
   topic land in `DATA_DIR/files/…` (never inside the project folder); albums are batched into one prompt.
 - **Auto-retry on provider errors** (`apiErrorRetry.ts`, `apiRetryKick.ts`): transient → backoff retry;
   usage limit → wait for the reset and resume by itself (`/limits_autoswitch`, the wait setting); auth → never retried,
