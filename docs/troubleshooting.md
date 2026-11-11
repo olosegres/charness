@@ -55,3 +55,11 @@ did not answer its health probe … it will not start another server on the port
 that dies on the busy port. Only a refused connection proves a port free: a port that does not answer a connect
 at all (a hung listener with a full accept queue) gets "port N is not known to be free" and no new server either. A server the bot started itself that stays silent on all three tries is stopped
 and replaced. Pick a different port for the second instance (e.g. `4097`), or stop what holds the port.
+
+"port N is in use by a server that requires a password the bot does not hold" means the server on the port answers 401
+to the password the bot sends: the one saved in `DATA_DIR/.opencode-server-credential` for the server it started there
+last, else your `OPENCODE_PASSWORD`. In hot mode a server the bot started itself is replaced instead, so this is one it
+does not know as its own: another instance's, one you run with another password, or — without hot mode, where the server
+outlives the bot — the bot's own after the credential file was deleted. Stop that server (`lsof -iTCP:N -sTCP:LISTEN` names it) and
+the bot starts its own with a fresh password; or, for a server you run yourself, set `OPENCODE_PASSWORD` to its password
+and delete the credential file, which is sent first.

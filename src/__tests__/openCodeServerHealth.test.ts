@@ -108,10 +108,10 @@ describe('getOpenCodeServerHealth', () => {
     const serverUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
     process.env.OPENCODE_URL = serverUrl;
     const savedPassword = 'a-saved-generation-password';
-    fs.writeFileSync(getOpenCodeServerCredentialFilePath(), JSON.stringify({ endpoint: serverUrl, password: savedPassword }), { mode: 0o600 });
+    fs.writeFileSync(getOpenCodeServerCredentialFilePath(), JSON.stringify({ endpoint: serverUrl, username: 'opencode', password: savedPassword }), { mode: 0o600 });
     try {
       await getOpenCodeServerHealth({ attemptTimeoutMs: promptServerAttemptTimeoutMs });
-      fs.writeFileSync(getOpenCodeServerCredentialFilePath(), JSON.stringify({ endpoint: 'http://127.0.0.1:1', password: savedPassword }), { mode: 0o600 });
+      fs.writeFileSync(getOpenCodeServerCredentialFilePath(), JSON.stringify({ endpoint: 'http://127.0.0.1:1', username: 'opencode', password: savedPassword }), { mode: 0o600 });
       await getOpenCodeServerHealth({ attemptTimeoutMs: promptServerAttemptTimeoutMs });
     } finally {
       fs.rmSync(getOpenCodeServerCredentialFilePath(), { force: true });

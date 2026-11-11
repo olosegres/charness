@@ -174,6 +174,7 @@ function scriptServerRestart(
       if (error) throw error;
     },
     readServerLaunch: async () => ({ kind: 'unknown' }),
+    readServerExposure: async () => 'protected',
   };
   adapter['serverRestartOps'] = ops;
   adapter['serverRestartRetryDelaysMs'] = testRetryDelaysMs;

@@ -1,9 +1,9 @@
 /**
  * @description Every call the OpenCode adapter makes to the server carries the server's password: its API requests and
  * its one event stream, read per request — each server generation the bot starts has a password of its own, so a header
- * fixed when the adapter was built would be refused after the first restart. The password is the one the bot saved for
- * the server at `OPENCODE_URL` (never one saved for another endpoint); the operator's `OPENCODE_PASSWORD` (user
- * `OPENCODE_USERNAME`) wins over it.
+ * fixed when the adapter was built would be refused after the first restart. The credential is the one the bot saved for
+ * the server at `OPENCODE_URL` — what that server was started with — never one saved for another endpoint; the operator's
+ * `OPENCODE_PASSWORD` (user `OPENCODE_USERNAME`) only reaches a server the bot saved nothing for (one the operator runs).
  *
  * Test case: N/A - Charness has no Jira tracker.
  */
@@ -26,7 +26,7 @@ function createBasicAuthorization(username: string, password: string): string {
 }
 
 function saveGenerationPassword(endpoint: string, password: string): void {
-  fs.writeFileSync(getOpenCodeServerCredentialFilePath(), JSON.stringify({ endpoint, password }), { mode: 0o600 });
+  fs.writeFileSync(getOpenCodeServerCredentialFilePath(), JSON.stringify({ endpoint, username: 'opencode', password }), { mode: 0o600 });
 }
 
 /** @description Open the adapter's event stream once: the stubbed server refuses it and the stream is closed, so it never reconnects. */
@@ -88,11 +88,22 @@ describe('the OpenCode adapter authenticates to the server', () => {
     assert.deepEqual(server.getRequestAuthorizations(), [{ urlPath: '/config', authorization: null }]);
   });
 
-  it('sends the operator\'s OPENCODE_PASSWORD, as OPENCODE_USERNAME, over a saved one', async () => {
+  it('sends the saved credential of the running server over an OPENCODE_PASSWORD set since — that one waits for the next start', async () => {
+    process.env.OPENCODE_PASSWORD = 'set-after-the-server-started';
+    const adapter = new OpenCodeAdapter();
+    saveGenerationPassword(serverUrl, 'the-running-servers');
+    server.answerApiWith(() => ({}));
+    await adapter['apiRequest']('GET', '/config');
+    assert.deepEqual(server.getRequestAuthorizations(), [
+      { urlPath: '/config', authorization: createBasicAuthorization('opencode', 'the-running-servers') },
+    ]);
+  });
+
+  it('sends the operator\'s OPENCODE_PASSWORD, as OPENCODE_USERNAME, to a server the bot saved nothing for — one the operator runs', async () => {
     process.env.OPENCODE_PASSWORD = 'operator-chosen';
     process.env.OPENCODE_USERNAME = 'operator';
     const adapter = new OpenCodeAdapter();
-    saveGenerationPassword(serverUrl, 'generated');
+    saveGenerationPassword('http://127.0.0.1:4096', 'another-instances-server');
     server.answerApiWith(() => ({}));
     await adapter['apiRequest']('GET', '/config');
     await openEventStreamOnce(adapter);

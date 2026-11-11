@@ -499,10 +499,16 @@ text the CLI injects goes into that one module; what makes a poor TITLE (a bare 
   processes agree on), keyed by the endpoint, so the readiness probe, a hot worker and the next cold start all
   authenticate. Every caller reads it per request through `getOpenCodeServerAuthHeaders` (the adapter's API calls and
   event stream, the health probes; OpenCode hands its plugins — the bot's compaction plugin — a client with the same
-  password itself). A health probe answered 401 is `unauthorized`: an owned server is replaced, any other holder of the
-  port is refused. A server started without a password (by a bot from before passwords) is still adopted, and the
-  same boot step `replaceMislaunchedServer` replaces it once nothing works in it, when the bot owns it; one it does not
-  own is left as is, with one log line.
+  password itself). The file always holds what the RUNNING generation was started with — the operator's password too —
+  and is sent before `OPENCODE_PASSWORD` (that one only reaches a server the bot never started), so an operator who adds,
+  changes or removes it gets it at the next server start, never a lockout of a plain instance, whose server outlives the
+  bot. A health probe answered 401 is `unauthorized`: an owned server is replaced, any other holder of the port is refused.
+  A server started without a password (by a bot from before passwords) is still adopted; the boot step
+  `replaceMislaunchedServer` reads its exposure the way another account would — one health request WITHOUT the header
+  (`readOpenCodeServerExposure`, every platform) — and replaces it once nothing works in it (looking again every 10 min
+  while a session works), owned or not, like a stale version, as long as its listener is an `opencode … serve` of the
+  bot's user (`/proc` on Linux, `ps` elsewhere; Windows cannot be read): a test's stand-in or another account's process is
+  left as is, with one log line.
 - **Naming.** Bot-created sessions get NO title, so OpenCode auto-titles them from the first prompt; a title
   passed at creation (`/opencode <args>`) counts as user-set and is never auto-renamed (`isAutoNamePending`).
 - **Effort** rides the prompt as `body.variant`, clamped to the model's variants; a thread with no pick of its own

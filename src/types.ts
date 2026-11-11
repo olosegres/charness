@@ -905,10 +905,10 @@ export interface AgentAdapter extends EventEmitter {
   activateCompactionPluginForActiveSessions?(): Promise<void>;
 
   /**
-   * Boot step (OpenCode): replace a server the bot owns that was started the wrong way — against the instance's «Bot
-   * skills» switch (`utils/agentPlugin.ts`), or without a password — once nothing works in it, before
-   * {@link activateCompactionPluginForActiveSessions}, whose reconcile then restores what a replacement drops.
-   * Best-effort, never rejects; busy → the next boot retries.
+   * Boot step (OpenCode): replace a server started the wrong way — one the bot owns against the instance's «Bot skills»
+   * switch (`utils/agentPlugin.ts`), or any `opencode serve` it may stop that answers without a password — once nothing
+   * works in it, before {@link activateCompactionPluginForActiveSessions}, whose reconcile then restores what a replacement
+   * drops. Best-effort, never rejects; busy → it looks again later, and at the next boot.
    */
   replaceMislaunchedServer?(): Promise<void>;
 

@@ -8,7 +8,7 @@ import * as path from 'path';
 import { sleep } from './utils';
 import { installOpenCodeCompactPlugin } from './utils/openCodeCompactPlugin';
 import { checkIsBotSkillsEnabled } from './utils/botSkills';
-import { getOpenCodeAgentConfigEnv, getPidlessServerLaunchReading, openCodeServerPasswordEnvName, parseOpenCodeServerLaunch, type OpenCodeServeProcessReading, type OpenCodeServerLaunchReading } from './utils/agentPlugin';
+import { checkIsOpenCodeServeCommand, getOpenCodeAgentConfigEnv, getPidlessServerLaunchReading, parseOpenCodeServerLaunch, type OpenCodeServeProcessReading, type OpenCodeServerLaunchReading } from './utils/agentPlugin';
 import {
   hotReloadEnvName,
   openCodeProcessFileEnvName,
@@ -342,10 +342,14 @@ export function getOpenCodeChildEnv(
 //  OpenCode server password
 // ═══════════════════════════════════════════
 
-/** OpenCode's variable naming the Basic-auth user of a protected server; unset it is {@link defaultOpenCodeUsername}. */
+/**
+ * OpenCode's variables that make `opencode serve` require HTTP Basic auth on every route, `/global/health` included (its
+ * `server/auth.ts`); an empty password is none, an unset user name is {@link defaultOpenCodeUsername}.
+ */
+const openCodeServerPasswordEnvName = 'OPENCODE_SERVER_PASSWORD';
 const openCodeServerUsernameEnvName = 'OPENCODE_SERVER_USERNAME';
 const defaultOpenCodeUsername = 'opencode';
-/** The file in `DATA_DIR` that holds the password of the server generation the bot started last (mode 0600). */
+/** The file in `DATA_DIR` that holds the user name and password of the server generation the bot started last (mode 0600). */
 export const openCodeServerCredentialFileName = '.opencode-server-credential';
 /** 32 random bytes: 43 characters of base64url, which never contains the `:` Basic auth splits on. */
 const openCodeServerPasswordByteCount = 32;
@@ -353,6 +357,7 @@ const openCodeServerPasswordByteCount = 32;
 interface OpenCodeServerCredential {
   /** The origin of the server the password belongs to: a credential is never sent to another endpoint. */
   endpoint: string;
+  username: string;
   password: string;
 }
 
@@ -371,20 +376,19 @@ export function getOpenCodeServerCredentialFilePath(): string {
   return path.join(directory, openCodeServerCredentialFileName);
 }
 
-/** @description The operator's own password (`OPENCODE_PASSWORD`, for a server they protect themselves), or null. */
-function readOperatorOpenCodePassword(): string | null {
-  return process.env.OPENCODE_PASSWORD || null;
-}
-
-function getOpenCodeUsername(): string {
-  return process.env.OPENCODE_USERNAME || defaultOpenCodeUsername;
+/** @description The operator's own credential (`OPENCODE_PASSWORD`, user `OPENCODE_USERNAME`), or null when no password is set. */
+function readOperatorOpenCodeCredential(): Omit<OpenCodeServerCredential, 'endpoint'> | null {
+  const password = process.env.OPENCODE_PASSWORD;
+  if (!password) return null;
+  return { username: process.env.OPENCODE_USERNAME || defaultOpenCodeUsername, password };
 }
 
 function checkIsOpenCodeServerCredential(value: unknown): value is OpenCodeServerCredential {
   if (typeof value !== 'object' || value === null) return false;
   const endpoint: unknown = Reflect.get(value, 'endpoint');
+  const username: unknown = Reflect.get(value, 'username');
   const password: unknown = Reflect.get(value, 'password');
-  return typeof endpoint === 'string' && typeof password === 'string' && password !== '';
+  return typeof endpoint === 'string' && typeof username === 'string' && username !== '' && typeof password === 'string' && password !== '';
 }
 
 /** @description The saved credential, re-read only when the file changed (it is read on every request to the server). */
@@ -404,8 +408,8 @@ function readOpenCodeServerCredential(): OpenCodeServerCredential | null {
   let credential: OpenCodeServerCredential | null = null;
   try {
     const parsed: unknown = JSON.parse(fs.readFileSync(filePath, 'utf8'));
-    if (checkIsOpenCodeServerCredential(parsed)) credential = { endpoint: parsed.endpoint, password: parsed.password };
-    else console.warn(`[OpenCode] ${filePath} holds no server credential; the server is called without a password`);
+    if (checkIsOpenCodeServerCredential(parsed)) credential = { endpoint: parsed.endpoint, username: parsed.username, password: parsed.password };
+    else console.warn(`[OpenCode] ${filePath} holds no server credential; it is not sent`);
   } catch (error) {
     console.warn(`[OpenCode] Failed to read ${filePath}:`, error instanceof Error ? error.message : error);
   }
@@ -413,7 +417,7 @@ function readOpenCodeServerCredential(): OpenCodeServerCredential | null {
   return credential;
 }
 
-/** @description Save the password of a server generation about to start, atomically, readable by the bot's user only. */
+/** @description Save the credential of a server generation about to start, atomically, readable by the bot's user only. */
 function saveOpenCodeServerCredential(credential: OpenCodeServerCredential): void {
   const filePath = getOpenCodeServerCredentialFilePath();
   const temporaryPath = `${filePath}.tmp-${process.pid}`;
@@ -423,30 +427,35 @@ function saveOpenCodeServerCredential(credential: OpenCodeServerCredential): voi
 }
 
 /**
- * @description The password a new server generation for `endpoint` is started with: the operator's `OPENCODE_PASSWORD` when
- * set (their other clients keep working), else a fresh random one, saved BEFORE the start so the readiness probe, a hot
- * worker that takes over and the next cold start can all authenticate.
+ * @description The credential a new server generation for `endpoint` is started with — the operator's `OPENCODE_PASSWORD` when
+ * set (their other clients keep working), else a fresh random password — saved BEFORE the start, the operator's too: the
+ * readiness probe, a hot worker that takes over and the next cold start all send what the RUNNING server was started with,
+ * so an `OPENCODE_PASSWORD` added, changed or removed later takes effect at the next server start, never as a lockout.
  */
-function prepareOpenCodeServerPassword(endpoint: string): string {
-  const operatorPassword = readOperatorOpenCodePassword();
-  if (operatorPassword) return operatorPassword;
-  const password = randomBytes(openCodeServerPasswordByteCount).toString('base64url');
-  saveOpenCodeServerCredential({ endpoint, password });
-  return password;
+function prepareOpenCodeServerCredential(endpoint: string): OpenCodeServerCredential {
+  const credential = {
+    endpoint,
+    ...(readOperatorOpenCodeCredential() ?? {
+      username: defaultOpenCodeUsername,
+      password: randomBytes(openCodeServerPasswordByteCount).toString('base64url'),
+    }),
+  };
+  saveOpenCodeServerCredential(credential);
+  return credential;
 }
 
 /**
  * @description The `Authorization` header for every call to the OpenCode server at `OPENCODE_URL` (the adapter's API calls and
- * event stream, the health probes): HTTP Basic with the operator's `OPENCODE_PASSWORD`, else with the password of the server
- * generation the bot started there; empty when the bot holds neither (a server started before the bot set passwords answers
- * without one).
+ * event stream, the health probes): HTTP Basic with the credential of the server generation the bot started there, else —
+ * a server the bot never started, the operator's own — with `OPENCODE_PASSWORD`; empty when there is neither (a server
+ * started before the bot set passwords answers without one).
  */
 export function getOpenCodeServerAuthHeaders(): Record<string, string> {
   const endpoint = new URL(process.env.OPENCODE_URL || defaultOpenCodeUrl).origin;
   const savedCredential = readOpenCodeServerCredential();
-  const password = readOperatorOpenCodePassword() ?? (savedCredential?.endpoint === endpoint ? savedCredential.password : null);
-  if (!password) return {};
-  return { Authorization: `Basic ${Buffer.from(`${getOpenCodeUsername()}:${password}`).toString('base64')}` };
+  const credential = savedCredential?.endpoint === endpoint ? savedCredential : readOperatorOpenCodeCredential();
+  if (!credential) return {};
+  return { Authorization: `Basic ${Buffer.from(`${credential.username}:${credential.password}`).toString('base64')}` };
 }
 
 const externalProcessHostStartTimeoutMs = 5_000;
@@ -908,6 +917,7 @@ export async function checkIsOpenCodeServerRunning(): Promise<boolean> {
  */
 export type OpenCodeServerHealthOutcome = 'healthy' | 'unauthorized' | 'unhealthy' | 'unreachable' | 'unanswered';
 
+const okStatus = 200;
 const unauthorizedStatus = 401;
 
 export interface OpenCodeServerHealth {
@@ -1115,6 +1125,65 @@ export async function readOpenCodeServerLaunch(): Promise<OpenCodeServerLaunchRe
   return { ...processReading, isOwnedByBot };
 }
 
+/**
+ * @name OpenCodeServerExposure
+ * @description Whether the server at `OPENCODE_URL` answers a caller that sends no password — read the way another account of
+ * the machine would, with one health request without the header, so it holds on every platform (not from `/proc`):
+ *  - `none`            — no server answers that request with a verdict (down, starting, an error): nothing to judge;
+ *  - `protected`       — it refuses the request (401);
+ *  - `openStoppable`   — it answers it, and its listener on the loopback endpoint is an `opencode … serve` process the bot may
+ *    signal (its own user's): one the bot can stop and start again with a password;
+ *  - `openUnstoppable` — it answers it, but the bot cannot tell its listener is such a process, or may not signal it (a test's
+ *    stand-in, a runner holding a fixture server, another account's process, a remote server, a platform whose listeners the
+ *    bot cannot read — Windows): never stopped.
+ */
+export type OpenCodeServerExposure = 'none' | 'protected' | 'openStoppable' | 'openUnstoppable';
+
+/** @description {@link OpenCodeServerExposure} of the server at `OPENCODE_URL`. */
+export async function readOpenCodeServerExposure(): Promise<OpenCodeServerExposure> {
+  const url = process.env.OPENCODE_URL || defaultOpenCodeUrl;
+  let status: number;
+  try {
+    const response = await fetch(`${url}/global/health`, { signal: AbortSignal.timeout(openCodeHealthAttemptTimeoutMs) });
+    await response.body?.cancel();
+    status = response.status;
+  } catch {
+    return 'none';
+  }
+  if (status === unauthorizedStatus) return 'protected';
+  if (status !== okStatus) return 'none';
+  return checkCanStopOpenCodeServeListener(new URL(url)) ? 'openStoppable' : 'openUnstoppable';
+}
+
+/** @description The argv of process `pid` (`/proc` on Linux, `ps` elsewhere off Windows), or null when it cannot be read. */
+function readProcessArgv(pid: number): string[] | null {
+  try {
+    if (process.platform === 'linux') return fs.readFileSync(`/proc/${pid}/cmdline`, 'utf8').split('\0').filter(Boolean);
+    if (process.platform === 'win32') return null;
+    // `ps` joins argv with spaces: a path with a space reads as another name, so such a process is not identified (never stopped).
+    const command = execFileSync('ps', ['-o', 'command=', '-p', pid.toString()], { encoding: 'utf8', timeout: 3000 }).trim();
+    return command ? command.split(/\s+/) : null;
+  } catch {
+    return null;
+  }
+}
+
+/** @description Whether the listener of a loopback `serverUrl` is an `opencode … serve` process the bot may signal (its own user's). */
+function checkCanStopOpenCodeServeListener(serverUrl: URL): boolean {
+  if (!loopbackHostnames.has(serverUrl.hostname)) return false;
+  const pid = getPidListeningOnEndpoint(serverUrl.hostname, getOpenCodePort(serverUrl));
+  if (pid === null) return false;
+  const argv = readProcessArgv(pid);
+  if (!argv || !checkIsOpenCodeServeCommand(argv)) return false;
+  try {
+    // Signal 0 only asks the kernel whether a signal would be allowed: another account's process answers EPERM.
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /** Find the PID LISTENING on one endpoint (lsof, with an ss fallback). */
 function getPidListeningOnEndpoint(hostname: string, port: string): number | null {
   const normalizedHostname = hostname.replace(/^\[|\]$/g, '');
@@ -1279,13 +1348,14 @@ async function ensureOpenCodeServerUnlocked(): Promise<void> {
   console.log(`[OpenCode] Starting server on port ${port}... (${opencodeCmd})`);
 
   const serverLaunch = getToolLaunch(opencodeCmd, ['serve', '--hostname', '127.0.0.1', '--port', port]);
+  const serverCredential = prepareOpenCodeServerCredential(endpoint);
   const serverEnv: NodeJS.ProcessEnv = {
     ...getOpenCodeChildEnv(),
     PATH: getNpmGlobalSearchPath(),
     // Every route requires this password (Basic auth): loopback is shared by every account of the machine, and the API
     // drives agents that run as the bot's user. A new one per generation (or the operator's `OPENCODE_PASSWORD`).
-    [openCodeServerUsernameEnvName]: getOpenCodeUsername(),
-    [openCodeServerPasswordEnvName]: prepareOpenCodeServerPassword(endpoint),
+    [openCodeServerUsernameEnvName]: serverCredential.username,
+    [openCodeServerPasswordEnvName]: serverCredential.password,
     // Enable OpenCode's background-subagents (experimental in 1.17.11): lets the
     // bot detach a synchronous sub-agent that is blocking a session via
     // `POST /experimental/session/:id/background` so a new message can be

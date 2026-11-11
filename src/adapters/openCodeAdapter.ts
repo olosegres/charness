@@ -8,7 +8,7 @@ import type { OutboundHints } from '../platform/outbound';
 import type { SessionKey } from '../sessionKey';
 import { keyToString } from '../sessionKey';
 import { checkIsShortStatedReset, classifyAgentApiError, usageLimitDefaultMs } from '../apiErrorRetry';
-import { checkIsInstalled, defaultOpenCodeUrl, installTool, checkIsOpenCodeServerRunning, ensureOpenCodeServer, getOpenCodeChildEnv, getOpenCodeServerAuthHeaders, getOpenCodeServerHealth, getToolCommand, getToolLaunch, onOpenCodeServerExit, readOpenCodeServerLaunch, restartOpenCodeServer } from '../installManager';
+import { checkIsInstalled, defaultOpenCodeUrl, installTool, checkIsOpenCodeServerRunning, ensureOpenCodeServer, getOpenCodeChildEnv, getOpenCodeServerAuthHeaders, getOpenCodeServerHealth, getToolCommand, getToolLaunch, onOpenCodeServerExit, readOpenCodeServerExposure, readOpenCodeServerLaunch, restartOpenCodeServer, type OpenCodeServerExposure } from '../installManager';
 import { resolveDataDir } from '../state';
 import { appendDiagLog } from '../diagLog';
 import { sleep } from '../utils';
@@ -1451,6 +1451,13 @@ export const openCodeServerRestartRetryDelaysMs: readonly number[] = [2_000, 5_0
 export const openCodeServerRestartRetryBudgetMs = 60_000;
 
 /**
+ * How long {@link OpenCodeAdapter.replaceMislaunchedServer} waits before it looks again at a server it must replace while a
+ * session works in it: a plain instance boots rarely, so "the next boot" alone could leave a server without a password open
+ * for days.
+ */
+export const mislaunchedServerRecheckDelayMs = 10 * 60_000;
+
+/**
  * @description The pause before retry number `retryIndex` (0-based), or
  * `null` once the pauses are used up or the retry would start past `budgetMs`
  * after the first attempt began (`elapsedMs` ago).
@@ -1482,6 +1489,8 @@ export interface OpenCodeServerRestartOps {
   restartServer(): Promise<void>;
   /** How the running server was launched — whether it carries the bot's skills folder. */
   readServerLaunch(): Promise<OpenCodeServerLaunchReading>;
+  /** Whether the running server answers a caller without the password, and whether the bot could stop it. */
+  readServerExposure(): Promise<OpenCodeServerExposure>;
 }
 
 const defaultOpenCodeServerRestartOps: OpenCodeServerRestartOps = {
@@ -1491,6 +1500,7 @@ const defaultOpenCodeServerRestartOps: OpenCodeServerRestartOps = {
   ensureServer: ensureOpenCodeServer,
   restartServer: restartOpenCodeServer,
   readServerLaunch: readOpenCodeServerLaunch,
+  readServerExposure: readOpenCodeServerExposure,
 };
 
 /**
@@ -1767,6 +1777,10 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
   private serverRestartOps: OpenCodeServerRestartOps = defaultOpenCodeServerRestartOps;
   /** The boot step said once why it leaves the running server alone (`replaceMislaunchedServer`). */
   private isMislaunchedServerSkipAnnounced = false;
+  /** The pending look again of {@link replaceMislaunchedServer} at a server a working session kept it from replacing. */
+  private mislaunchedServerRecheckTimer: NodeJS.Timeout | null = null;
+  /** Instance field only so a test can shorten it; production keeps {@link mislaunchedServerRecheckDelayMs}. */
+  private mislaunchedServerRecheckDelayMs = mislaunchedServerRecheckDelayMs;
   private serverRestartRetryDelaysMs: readonly number[] = openCodeServerRestartRetryDelaysMs;
   private serverRestartRetryBudgetMs = openCodeServerRestartRetryBudgetMs;
 
@@ -3688,38 +3702,38 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
    *  - the skills the bot gives its agents (`utils/agentPlugin.ts`): OpenCode reads its `OPENCODE_CONFIG_DIR` once, at start,
    *    so a server started the other way than the instance's «Bot skills» switch says — without the bot's folder while the
    *    switch is ON (an older bot, adopted ever since; the switch turned on since), with it while the switch is OFF — keeps
-   *    offering the wrong thing; only the INSTANCE value counts: one server serves every topic;
-   *  - its password: a server started without `OPENCODE_SERVER_PASSWORD` (by a bot from before passwords) answers every
-   *    local account, and the bot keeps adopting it.
-   * Such a server is replaced through the controlled restart that restores the sessions, but only when the bot owns it (its
-   * process record) AND `/proc` shows it is an `opencode … serve` (a server the bot does not own, or a listener it cannot
-   * identify, is left as is — one log line per process), the skills folder it would get is ready (else the skills do not
-   * count), and no session is working: a busy directory, or a status it cannot read, leaves it for the next boot.
-   * Best-effort, never rejects.
+   *    offering the wrong thing; only the INSTANCE value counts: one server serves every topic. Replaced only when the bot
+   *    owns it (its process record) AND `/proc` shows it is an `opencode … serve`, and the folder it would get is ready;
+   *  - its password: a server that answers a request without one (started by a bot from before passwords) lets every local
+   *    account drive its agents. Read the way such an account would, on every platform ({@link OpenCodeServerExposure}), and
+   *    replaced whether the bot owns it or not — like a stale version — as long as it is an `opencode … serve` the bot may
+   *    stop; a test's stand-in or another account's process never is.
+   * The replacement is the controlled restart that restores the sessions, and only when no session is working: a busy
+   * directory, or a status it cannot read, makes it look again after {@link mislaunchedServerRecheckDelayMs} (and at the
+   * next boot). A server it leaves for another reason gets one log line per process. Best-effort, never rejects.
    */
   async replaceMislaunchedServer(): Promise<void> {
     try {
       const expectation = getOpenCodeAgentSkillsExpectation(process.env, resolveDataDir(), checkIsBotSkillsEnabled(null));
-      const launch = await this.serverRestartOps.readServerLaunch();
-      const skillsAction = getOpenCodeAgentSkillsServerAction(launch, expectation);
-      if (skillsAction === 'skipUnidentified') {
-        this.announceMislaunchedServerSkipOnce(`the server cannot be identified as \`opencode serve\`; it is left as is, and offers the bot's skills only if it was started with them`);
-        return;
-      }
-      if (launch.kind !== 'openCodeServe') return;
+      const skillsAction = getOpenCodeAgentSkillsServerAction(await this.serverRestartOps.readServerLaunch(), expectation);
+      const exposure = await this.serverRestartOps.readServerExposure();
       const faults: string[] = [];
-      if (skillsAction !== 'none') {
+      if (skillsAction === 'replace') {
         faults.push(expectation.kind === 'offered' ? `without the bot's skills` : `with the bot's skills, which the instance switched off`);
       }
-      if (!launch.isPasswordProtected) faults.push('without a password (every local account can drive its agents)');
-      if (faults.length === 0) return;
-      const startedWith = faults.join(' and ');
-      if (!launch.isOwnedByBot) {
-        this.announceMislaunchedServerSkipOnce(`the server was started ${startedWith}, but it is not owned by the bot; it is left as is`);
+      if (exposure === 'openStoppable') faults.push('without a password (every local account can drive its agents)');
+      if (faults.length === 0) {
+        const reasonsLeft: string[] = [];
+        if (skillsAction === 'skipNotOwned') reasonsLeft.push(`is not owned by the bot, and offers the bot's skills only if it was started with them`);
+        if (skillsAction === 'skipUnidentified') reasonsLeft.push(`cannot be identified as \`opencode serve\`, and offers the bot's skills only if it was started with them`);
+        if (exposure === 'openUnstoppable') reasonsLeft.push('answers without a password, and is not an `opencode serve` of the bot\'s user it may stop');
+        if (reasonsLeft.length > 0) this.announceMislaunchedServerSkipOnce(`the server ${reasonsLeft.join('; it ')}; it is left as is`);
         return;
       }
+      const startedWith = faults.join(' and ');
       if (!(await this.checkIsEveryActiveSessionIdle())) {
-        console.log(`[OpenCode] the server was started ${startedWith}; a session is working, the next boot retries`);
+        console.log(`[OpenCode] the server was started ${startedWith}; a session is working, looking again in ${Math.round(this.mislaunchedServerRecheckDelayMs / 60_000)} min`);
+        this.scheduleMislaunchedServerRecheck();
         return;
       }
       console.log(`[OpenCode] the server was started ${startedWith}; replacing it`);
@@ -3727,6 +3741,16 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
     } catch (e) {
       console.warn(`[OpenCode] could not check how the server was started:`, e instanceof Error ? e.message : e);
     }
+  }
+
+  /** @description Look again at the server once the delay is over; one pending look at a time, never holding the process open. */
+  private scheduleMislaunchedServerRecheck(): void {
+    if (this.mislaunchedServerRecheckTimer) return;
+    this.mislaunchedServerRecheckTimer = setTimeout(() => {
+      this.mislaunchedServerRecheckTimer = null;
+      void this.replaceMislaunchedServer();
+    }, this.mislaunchedServerRecheckDelayMs);
+    this.mislaunchedServerRecheckTimer.unref();
   }
 
   /** @description Say once per process why {@link replaceMislaunchedServer} leaves the running server alone. */

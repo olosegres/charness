@@ -8,22 +8,30 @@
  *     the bot's header; the password is saved readable by the bot's user only, beside the hot supervisor's ownership file
  *     (or in `DATA_DIR`), so the next `ensure` adopts the server instead of starting another;
  *   - every generation gets a password of its own: after a restart the old one is refused;
- *   - the operator's `OPENCODE_PASSWORD` is used instead of a generated one, and nothing is saved for it;
+ *   - the operator's `OPENCODE_PASSWORD` is used instead of a generated one, and saved as the running server's: what the bot
+ *     sends is what the RUNNING server was started with, so a plain instance (its server outlives it) that restarts with the
+ *     variable added still opens its server;
+ *   - a hot worker whose saved password no longer opens its own server replaces it;
  *   - a port held by a server that requires a password the bot does not hold is never started over, and the holder is left alone;
- *   - a server started before the bot set passwords (none in its environment) is still adopted, whatever an older credential says.
+ *   - a server started before the bot set passwords is still adopted, whatever an older credential says — and the boot step
+ *     replaces it, read by a request without the password, owned or not, as long as it is an `opencode serve` the bot may
+ *     stop: never a test's stand-in.
  *
  * Test case: N/A - Charness has no Jira tracker.
  */
 
 import { test } from 'node:test';
 import * as assert from 'node:assert/strict';
+import { spawn } from 'child_process';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import { OpenCodeAdapter } from '../adapters/openCodeAdapter';
 import {
   ensureOpenCodeServer,
   getOpenCodeServerAuthHeaders,
   getOpenCodeServerCredentialFilePath,
+  readOpenCodeServerExposure,
   openCodeExternalHostEnvName,
   openCodeExternalHostEnvValue,
   openCodeOwnershipFileEnvName,
@@ -56,6 +64,14 @@ interface PasswordFixture {
   spawnLogPath: string;
   /** Start a fixture server the way a test (or an older bot) does: with the given extra environment, not through `ensure`. */
   startForeignServer(extraEnv: Record<string, string>): ReturnType<typeof startExternallyParentedProcess>;
+  /**
+   * Start a server without a password, the way a bot from before passwords left one running: an `opencode … serve` process
+   * (its argv[0] is named `opencode`, as `/proc` and `ps` show it) of this user, which no process record names.
+   * `isNamedOpenCode: false` starts it under the interpreter's own name — what a test's stand-in looks like.
+   */
+  startUnprotectedServer(options: { isNamedOpenCode: boolean }): number;
+  /** Run `ensureOpenCodeServer` in a separate process that then exits — what a plain instance's previous run did. */
+  ensureServerInAnotherProcess(): Promise<void>;
 }
 
 /** @description What one health request with `headers` gets from the server at `serverUrl`. */
@@ -63,6 +79,28 @@ async function getHealthStatus(serverUrl: string, headers: Record<string, string
   const response = await fetch(`${serverUrl}/global/health`, { headers });
   await response.body?.cancel();
   return response.status;
+}
+
+/** @description Run `node <args>` from the checkout to its end: a child that hangs fails the test by its own deadline. */
+function runNodeScript(args: string[]): Promise<{ status: number | null; stderr: string }> {
+  return new Promise((resolve) => {
+    const child = spawn(process.execPath, args, { cwd: path.join(__dirname, '..', '..'), env: process.env, stdio: ['ignore', 'ignore', 'pipe'] });
+    let stderr = '';
+    child.stderr.on('data', (chunk: Buffer) => {
+      stderr += chunk.toString();
+    });
+    const deadline = setTimeout(() => child.kill('SIGKILL'), eventWaitHangGuardMs);
+    child.once('close', (status) => {
+      clearTimeout(deadline);
+      resolve({ status, stderr });
+    });
+  });
+}
+
+/** @description Wait until process `pid` is gone (a stopped server), bounded by the shared hang guard. */
+async function waitForProcessGone(pid: number): Promise<void> {
+  const deadline = Date.now() + eventWaitHangGuardMs;
+  while (checkIsTestProcessAlive(pid) && Date.now() < deadline) await new Promise<void>((resolve) => setTimeout(resolve, processExitPollMs));
 }
 
 function createBasicAuthHeaders(username: string, password: string): Record<string, string> {
@@ -113,6 +151,23 @@ async function runWithPasswordFixture(
         ['serve', '--hostname', '127.0.0.1', '--port', port.toString()],
         { ...process.env, ...extraEnv },
       ),
+      startUnprotectedServer: ({ isNamedOpenCode }) => {
+        const child = spawn(process.execPath, [fakeBinaryPath, 'serve', '--hostname', '127.0.0.1', '--port', port.toString()], {
+          argv0: isNamedOpenCode ? path.join(testDirectory, 'opencode') : process.execPath,
+          env: process.env,
+          detached: true,
+          stdio: 'ignore',
+        });
+        child.unref();
+        assert.ok(child.pid);
+        return child.pid;
+      },
+      ensureServerInAnotherProcess: async () => {
+        const installManagerPath = path.join(__dirname, '..', 'installManager.ts');
+        const script = `require(${JSON.stringify(installManagerPath)}).ensureOpenCodeServer().then(() => process.exit(0), (e) => { console.error(e); process.exit(1); })`;
+        const { status, stderr } = await runNodeScript(['--import', 'tsx', '-e', script]);
+        assert.equal(status, 0, stderr);
+      },
     });
   } finally {
     stopOpenCodeServer();
@@ -122,12 +177,17 @@ async function runWithPasswordFixture(
   }
 }
 
-function readSavedPassword(): string {
+function readSavedCredential(): { username: string; password: string } {
   const saved: unknown = JSON.parse(fs.readFileSync(getOpenCodeServerCredentialFilePath(), 'utf8'));
   assert.ok(typeof saved === 'object' && saved !== null);
+  const username: unknown = Reflect.get(saved, 'username');
   const password: unknown = Reflect.get(saved, 'password');
-  assert.equal(typeof password, 'string');
-  return `${password}`;
+  assert.ok(typeof username === 'string' && typeof password === 'string');
+  return { username, password };
+}
+
+function readSavedPassword(): string {
+  return readSavedCredential().password;
 }
 
 test(
@@ -187,7 +247,7 @@ test(
 );
 
 test(
-  'the operator\'s OPENCODE_PASSWORD protects the bot\'s server instead of a generated one, and nothing is saved for it',
+  'the operator\'s OPENCODE_PASSWORD protects the bot\'s server instead of a generated one, and is saved as the running server\'s',
   { skip: process.platform === 'win32' },
   async () => {
     const operatorPassword = 'operator-chosen-password';
@@ -197,7 +257,7 @@ test(
       assert.equal(await getHealthStatus(fixture.serverUrl, {}), unauthorizedStatus);
       assert.equal(await getHealthStatus(fixture.serverUrl, createBasicAuthHeaders('operator', operatorPassword)), okStatus);
       assert.deepEqual(getOpenCodeServerAuthHeaders(), createBasicAuthHeaders('operator', operatorPassword));
-      assert.equal(fs.existsSync(getOpenCodeServerCredentialFilePath()), false);
+      assert.deepEqual(readSavedCredential(), { username: 'operator', password: operatorPassword }, 'saved like a generated one');
     });
   },
 );
@@ -225,7 +285,7 @@ test(
     await runWithPasswordFixture({ isHotWorker: true }, async (fixture) => {
       fs.writeFileSync(
         path.join(fixture.testDirectory, openCodeServerCredentialFileName),
-        JSON.stringify({ endpoint: new URL(fixture.serverUrl).origin, password: 'an-older-generations-password' }),
+        JSON.stringify({ endpoint: new URL(fixture.serverUrl).origin, username: 'opencode', password: 'an-older-generations-password' }),
         { mode: ownerOnlyFileMode },
       );
       const unprotectedServer = await fixture.startForeignServer({});
@@ -238,6 +298,116 @@ test(
     });
   },
 );
+
+test(
+  'a hot worker whose saved password no longer opens its own server (the file overwritten, then deleted) replaces that server',
+  { skip: process.platform === 'win32' },
+  async () => {
+    await runWithPasswordFixture({ isHotWorker: true }, async (fixture) => {
+      await ensureOpenCodeServer();
+      const firstPassword = readSavedPassword();
+      fs.writeFileSync(getOpenCodeServerCredentialFilePath(), JSON.stringify({ endpoint: new URL(fixture.serverUrl).origin, username: 'opencode', password: 'not-the-servers-password' }));
+
+      await ensureOpenCodeServer();
+
+      const [firstPid, secondPid] = getSpawnedPids(fixture.spawnLogPath);
+      assert.ok(secondPid, 'a new generation was started');
+      await waitForProcessGone(firstPid);
+      assert.equal(checkIsTestProcessAlive(firstPid), false, 'the server the bot could no longer open was stopped');
+      assert.notEqual(readSavedPassword(), firstPassword);
+      assert.equal(await getHealthStatus(fixture.serverUrl, getOpenCodeServerAuthHeaders()), okStatus);
+
+      fs.rmSync(getOpenCodeServerCredentialFilePath());
+      await ensureOpenCodeServer();
+
+      assert.equal(getSpawnedPids(fixture.spawnLogPath).length, 3, 'and again once the file is gone');
+      assert.equal(await getHealthStatus(fixture.serverUrl, getOpenCodeServerAuthHeaders()), okStatus);
+    });
+  },
+);
+
+test(
+  'a plain instance that restarts with OPENCODE_PASSWORD added still opens the server its last run left: the saved one is sent first',
+  { skip: process.platform === 'win32' },
+  async () => {
+    await runWithPasswordFixture({ isHotWorker: false }, async (fixture) => {
+      await fixture.ensureServerInAnotherProcess();
+      const [serverPid] = getSpawnedPids(fixture.spawnLogPath);
+      const generated = readSavedCredential();
+      process.env.OPENCODE_PASSWORD = 'added-to-env-since';
+
+      await ensureOpenCodeServer();
+
+      assert.deepEqual(getSpawnedPids(fixture.spawnLogPath), [serverPid], 'adopted, not refused as a stranger\'s server');
+      assert.deepEqual(getOpenCodeServerAuthHeaders(), createBasicAuthHeaders(generated.username, generated.password));
+      assert.equal(await getHealthStatus(fixture.serverUrl, getOpenCodeServerAuthHeaders()), okStatus);
+    });
+  },
+);
+
+test(
+  'the exposure of the server is read with a request that sends no password: protected, open and stoppable, or open but not the bot\'s to stop',
+  { skip: process.platform === 'win32' },
+  async () => {
+    await runWithPasswordFixture({ isHotWorker: false }, async () => {
+      assert.equal(await readOpenCodeServerExposure(), 'none', 'no server');
+      await ensureOpenCodeServer();
+      assert.equal(await readOpenCodeServerExposure(), 'protected', 'the bot\'s own, although the bot holds its password');
+    });
+    await runWithPasswordFixture({ isHotWorker: false }, async (fixture) => {
+      fixture.startUnprotectedServer({ isNamedOpenCode: true });
+      await waitForTestServerHealth(fixture.serverUrl);
+      assert.equal(await readOpenCodeServerExposure(), 'openStoppable');
+    });
+    await runWithPasswordFixture({ isHotWorker: false }, async (fixture) => {
+      fixture.startUnprotectedServer({ isNamedOpenCode: false });
+      await waitForTestServerHealth(fixture.serverUrl);
+      assert.equal(await readOpenCodeServerExposure(), 'openUnstoppable', 'not an opencode serve: a stand-in');
+    });
+  },
+);
+
+test(
+  'the boot step of a plain instance replaces a server an older bot left without a password — and never a stand-in',
+  { skip: process.platform === 'win32' },
+  async () => {
+    await runWithPasswordFixture({ isHotWorker: false }, async (fixture) => {
+      const oldServerPid = fixture.startUnprotectedServer({ isNamedOpenCode: true });
+      await waitForTestServerHealth(fixture.serverUrl);
+      await ensureOpenCodeServer();
+      assert.deepEqual(getSpawnedPids(fixture.spawnLogPath), [oldServerPid], 'adopted first');
+
+      await runQuietly(() => new OpenCodeAdapter().replaceMislaunchedServer());
+
+      await waitForProcessGone(oldServerPid);
+      assert.equal(checkIsTestProcessAlive(oldServerPid), false, 'the server without a password was stopped');
+      assert.equal(getSpawnedPids(fixture.spawnLogPath).length, 2, 'and the bot started its own');
+      assert.equal(await getHealthStatus(fixture.serverUrl, {}), unauthorizedStatus);
+      assert.equal(await getHealthStatus(fixture.serverUrl, getOpenCodeServerAuthHeaders()), okStatus);
+    });
+    await runWithPasswordFixture({ isHotWorker: false }, async (fixture) => {
+      const standInPid = fixture.startUnprotectedServer({ isNamedOpenCode: false });
+      await waitForTestServerHealth(fixture.serverUrl);
+      await ensureOpenCodeServer();
+
+      await runQuietly(() => new OpenCodeAdapter().replaceMislaunchedServer());
+
+      assert.equal(checkIsTestProcessAlive(standInPid), true, 'a stand-in is never stopped');
+      assert.deepEqual(getSpawnedPids(fixture.spawnLogPath), [standInPid]);
+    });
+  },
+);
+
+/** @description Run `step` with the bot's log lines held back (the boot step narrates what it does). */
+async function runQuietly(step: () => Promise<void>): Promise<void> {
+  const originalLog = console.log;
+  console.log = () => {};
+  try {
+    await step();
+  } finally {
+    console.log = originalLog;
+  }
+}
 
 /** @description Wait until the server at `serverUrl` answers a request without credentials with `status`. */
 async function waitForTestServerStatus(serverUrl: string, status: number): Promise<void> {
