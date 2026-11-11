@@ -6,6 +6,7 @@ import * as net from 'net';
 import * as os from 'os';
 import * as path from 'path';
 import { sleep } from './utils';
+import { getChildProcessEnvironment } from './utils/agentEnvironment';
 import { installOpenCodeCompactPlugin } from './utils/openCodeCompactPlugin';
 import { checkIsBotSkillsEnabled } from './utils/botSkills';
 import { checkIsOpenCodeServeCommand, getOpenCodeAgentConfigEnv, getPidlessServerLaunchReading, parseOpenCodeServerLaunch, type OpenCodeServeProcessReading, type OpenCodeServerLaunchReading } from './utils/agentPlugin';
@@ -241,7 +242,8 @@ export async function installTool(toolName: string): Promise<void> {
     exec(
       `npm install -g ${packageName}`,
       // The prefix rides the environment: a `NAME=value command` prefix is POSIX shell syntax, which Windows' cmd lacks.
-      { timeout: 120000, encoding: 'utf-8', env: { ...process.env, NPM_CONFIG_PREFIX: npmPrefix } },
+      // The package's install scripts are not the bot's code: they never see its secrets.
+      { timeout: 120000, encoding: 'utf-8', env: { ...getChildProcessEnvironment(), NPM_CONFIG_PREFIX: npmPrefix } },
       (error, stdout, stderr) => {
         if (error) {
           console.error(`[Install] Failed to install ${toolName}:`, stderr);
@@ -327,10 +329,15 @@ export function setOpenCodeOwnershipFileEnv(filePath: string, env: NodeJS.Proces
   env[openCodeProcessFileEnvName.legacy] = filePath;
 }
 
+/**
+ * @description The environment of every OpenCode process the bot starts (the server, `--version`, `models`, a sign-in):
+ * `baseEnv` without the bot's own secrets ({@link getChildProcessEnvironment}) — the server runs the agents' tools — and
+ * without the hot-mode handshake, which belongs to the bot's own processes.
+ */
 export function getOpenCodeChildEnv(
   baseEnv: NodeJS.ProcessEnv = process.env,
 ): NodeJS.ProcessEnv {
-  const childEnv = { ...baseEnv };
+  const childEnv = getChildProcessEnvironment(baseEnv);
   for (const name of [hotReloadEnvName, openCodeProcessFileEnvName]) {
     delete childEnv[name.current];
     delete childEnv[name.legacy];

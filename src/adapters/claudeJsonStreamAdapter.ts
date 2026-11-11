@@ -70,7 +70,7 @@ import {
   type McpReconnectControlRequest,
   type McpStatusControlRequest,
 } from '../utils/claudeMcpHeal';
-import { execFilePromise, getTmuxSessionTarget, tmuxAsync, tmuxOrThrowAsync } from '../utils/tmuxExec';
+import { execFilePromise, getTmuxSessionTarget, startAgentTmuxSession, tmuxAsync } from '../utils/tmuxExec';
 import { basePollIntervalMs, getNextPollDelay } from '../utils/pollBackoff';
 import { readClaudeRuntimeInfo } from '../utils/claudeRuntimeInfo';
 import { prepareClaudeSessionLaunch, readClaudeTranscriptRestoredCostUsd } from '../utils/claudeTranscriptContent';
@@ -636,7 +636,7 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
       // A stale same-name tmux session (crashed bot / pre-adopt build) would make
       // `new-session` fail — and must not keep running unowned next to ours.
       await tmuxAsync('kill-session', '-t', getTmuxSessionTarget(tmuxName));
-      await tmuxOrThrowAsync('new-session', '-d', '-s', tmuxName, paths.wrapperFile);
+      await startAgentTmuxSession('new-session', '-d', '-s', tmuxName, paths.wrapperFile);
       const pidRead = await waitForPidFile(paths.pidFile);
       if (pidRead === null) throw new Error(`claude never wrote its pid file${describeSpawnFailure(paths)}`);
       pid = pidRead;

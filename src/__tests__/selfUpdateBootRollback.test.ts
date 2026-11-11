@@ -68,6 +68,34 @@ describe('the way back, by install kind', () => {
     assert.ok(lines.includes('git reset --keep a1b2c3d'));
   });
 
+  test('neither way back hands its installs and builds the bot\'s own secrets — the user\'s variables stay', async () => {
+    const saved = { TELEGRAM_BOT_TOKEN: process.env.TELEGRAM_BOT_TOKEN, OPENCODE_PASSWORD: process.env.OPENCODE_PASSWORD, CHARNESS_TEST_USER_TOOL_TOKEN: process.env.CHARNESS_TEST_USER_TOOL_TOKEN };
+    process.env.TELEGRAM_BOT_TOKEN = 'placeholder-bot-secret';
+    process.env.OPENCODE_PASSWORD = 'placeholder-bot-secret';
+    process.env.CHARNESS_TEST_USER_TOOL_TOKEN = 'placeholder-user-value';
+    try {
+      const environments: (NodeJS.ProcessEnv | undefined)[] = [];
+      const runCommand: CommandRunner = async (_file, args, options) => {
+        environments.push(options.env);
+        return { ok: true, exitCode: 0, stdout: args[0] === 'diff' ? 'src/a.ts\nyarn.lock\n' : '', stderr: '', isTimedOut: false };
+      };
+      await createBootRollback({ packageRoot: npmGlobalRoot, execPath: '/n/bin/node', platform: 'linux', hasExecve: true, isHotWorker: false, runCommand, filesystem: writablePrefixFs })(createMarker('npm'));
+      await createBootRollback({ packageRoot: '/srv/charness', execPath: '/n/bin/node', platform: 'linux', hasExecve: true, isHotWorker: false, runCommand, filesystem: checkoutFs })(createMarker('git'));
+      assert.equal(environments.length, 5);
+      for (const environment of environments) {
+        assert.ok(environment);
+        assert.equal(environment.TELEGRAM_BOT_TOKEN, undefined);
+        assert.equal(environment.OPENCODE_PASSWORD, undefined);
+        assert.equal(environment.CHARNESS_TEST_USER_TOOL_TOKEN, 'placeholder-user-value');
+      }
+    } finally {
+      for (const [name, value] of Object.entries(saved)) {
+        if (value === undefined) delete process.env[name];
+        else process.env[name] = value;
+      }
+    }
+  });
+
   test('an install that is no longer what the marker says, or a marker without commits, cannot be rolled back — and says so', async () => {
     const { runCommand } = createRecorder();
     const asCheckout = createBootRollback({ packageRoot: '/srv/charness', execPath: '/n/bin/node', platform: 'linux', hasExecve: true, isHotWorker: false, runCommand, filesystem: checkoutFs });

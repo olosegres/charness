@@ -1,6 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { getProcessIdentity } from '../installManager';
+import { getChildProcessEnvironment } from '../utils/agentEnvironment';
 import { getOutputTail, runCommand as defaultRunCommand, type CommandRunner } from './commandRunner';
 import { queryTimeoutMs, selfCheckTimeoutMs } from './constants';
 import { createGitSource } from './gitSource';
@@ -119,8 +120,10 @@ export async function createUpdateRuntime(options: UpdateRuntimeOptions): Promis
     runningNode: options.nodeVersion,
     installKind,
     isHotMode: options.isHotMode,
-    npm: isCheckoutLike || installKind.kind === 'ephemeral' ? null : createNpmSource({ runCommand, execPath: options.execPath, prefix: npmPrefix }),
-    git: installKind.kind === 'checkout' ? createGitSource({ runCommand, root: installKind.root }) : null,
+    // An install runs the new release's and its dependencies' scripts, the self-check imports the new code: none of it
+    // is the running bot's, so none of it sees the bot's secrets. The restart onto it keeps the launch environment.
+    npm: isCheckoutLike || installKind.kind === 'ephemeral' ? null : createNpmSource({ runCommand, execPath: options.execPath, prefix: npmPrefix, env: getChildProcessEnvironment() }),
+    git: installKind.kind === 'checkout' ? createGitSource({ runCommand, root: installKind.root, env: getChildProcessEnvironment() }) : null,
     hostLock: installKind.kind === 'npmGlobal' ? { acquire: () => acquireHostLock(getHostLockPath(installKind.prefix)) } : null,
     readInstalledVersion: () => readVersionOrNull(packageRoot),
     readInstalledChangelog: () => readTextOrNull(path.join(packageRoot, changelogFileName)),
@@ -131,7 +134,7 @@ export async function createUpdateRuntime(options: UpdateRuntimeOptions): Promis
     },
     async runSelfCheck(expectVersion) {
       const args = [cliPath, 'self-check', ...(expectVersion === null ? [] : ['--expect', expectVersion])];
-      const result = await runCommand(options.execPath, args, { cwd: packageRoot, timeoutMs: selfCheckTimeoutMs });
+      const result = await runCommand(options.execPath, args, { cwd: packageRoot, env: getChildProcessEnvironment(), timeoutMs: selfCheckTimeoutMs });
       return { ok: result.ok, detail: result.ok ? '' : result.isTimedOut ? 'the self-check did not finish in time' : getOutputTail(result, 3) };
     },
     reexecTarget: getReexecTarget({ execPath: options.execPath, packageRoot, argv: options.argv }),

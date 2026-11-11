@@ -8,6 +8,7 @@ import { getAdapter } from '../adapters/createAdapter';
 import type { SessionKey } from '../sessionKey';
 import { keyToString } from '../sessionKey';
 import { getOpenCodeChildEnv } from '../installManager';
+import { getChildProcessEnvironment } from '../utils/agentEnvironment';
 import { t } from '../i18n';
 import { type IPty, spawn as spawnPty } from 'node-pty';
 import { resolveClaudeBinary, resolveOpenCodeBinary } from '../utils/resolveBinary';
@@ -245,12 +246,13 @@ export function createAgentLogin(ports: AgentLoginPorts) {
   }
 
   /**
-   * @description The environment a `claude auth …` process runs with: the bot's own minus `ANTHROPIC_API_KEY`
-   * (the subscription login, never the metered console path), plus the profile's `CLAUDE_CONFIG_DIR` when one
-   * is signed in — the login must land in THAT directory, and the status probe must read the same one.
+   * @description The environment a `claude auth …` process runs with: the bot's own minus its secrets and
+   * `ANTHROPIC_API_KEY` (the subscription login, never the metered console path), plus the profile's
+   * `CLAUDE_CONFIG_DIR` when one is signed in — the login must land in THAT directory, and the status probe must
+   * read the same one.
    */
   function buildClaudeAuthEnv(configDir: string | null): Record<string, string | undefined> {
-    const env: Record<string, string | undefined> = { ...process.env };
+    const env: Record<string, string | undefined> = getChildProcessEnvironment();
     delete env.ANTHROPIC_API_KEY;
     if (configDir !== null) env[claudeConfigDirVariableName] = configDir;
     return env;

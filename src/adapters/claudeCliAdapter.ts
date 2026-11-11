@@ -77,12 +77,13 @@ import { getClaudeAvailableLevels, checkIsClaudeEffortLevel, getInstanceDefaultE
 import { getNextPollDelay, basePollIntervalMs } from '../utils/pollBackoff';
 import {
   tmuxAsync,
-  tmuxOrThrowAsync,
   checkArgsAreSafe,
   getTmuxPaneTarget,
   getTmuxSessionTarget,
   shellSingleQuote,
+  startAgentTmuxSession,
 } from '../utils/tmuxExec';
+import { getBotSecretUnsetArguments } from '../utils/agentEnvironment';
 import { convertAnsiToMarkdown, cleanOutput } from '../utils/ansiClean';
 import { getNewPaneContent, type NewPaneContent } from '../utils/paneDiff';
 import { getPaneResizeGuardDecision, parsePaneSize } from '../utils/paneResizeGuard';
@@ -3465,8 +3466,10 @@ export class ClaudeCliAdapter extends EventEmitter implements AgentAdapter {
     const mcpFlagsArr = await prepareMcpFlags({ key, dataDir: resolveDataDir() });
     const configDir = this.resolveConfigDir(key);
     const claudeArgv: string[] = [
-      // A non-default account profile: `env CLAUDE_CONFIG_DIR=<dir>` in front (the pane's shell
-      // runs it, so a child claude the agent starts inherits the same account).
+      // The bot's own secrets never reach claude, whoever started the tmux server; a non-default account
+      // profile adds `env CLAUDE_CONFIG_DIR=<dir>` (the pane's shell runs it, so a child claude the agent
+      // starts inherits the same account).
+      'env', ...getBotSecretUnsetArguments(),
       ...buildConfigDirEnvPrefix(configDir),
       claudePath,
       // Followed by an option on purpose: `--disallowedTools` takes several values.
@@ -3484,7 +3487,7 @@ export class ClaudeCliAdapter extends EventEmitter implements AgentAdapter {
     try {
       // `-c <workDir>` sets the new session's start directory, avoiding a
       // preceding `cd && …` chain (which would have to be shell-quoted too).
-      await tmuxOrThrowAsync(
+      await startAgentTmuxSession(
         'new-session',
         '-d',
         '-s', sessionName,
@@ -4134,6 +4137,8 @@ export class ClaudeCliAdapter extends EventEmitter implements AgentAdapter {
     const mcpFlagsArr = await prepareMcpFlags({ key, dataDir: resolveDataDir() });
     const configDir = this.resolveConfigDir(key);
     const claudeArgv: string[] = [
+      // As `startSession`: the bot's own secrets never reach claude.
+      'env', ...getBotSecretUnsetArguments(),
       ...buildConfigDirEnvPrefix(configDir),
       claudePath,
       // Followed by an option on purpose: `--disallowedTools` takes several values.
@@ -4148,7 +4153,7 @@ export class ClaudeCliAdapter extends EventEmitter implements AgentAdapter {
     const claudeShellCmd = claudeArgv.map(shellSingleQuote).join(' ');
 
     try {
-      await tmuxOrThrowAsync(
+      await startAgentTmuxSession(
         'new-session',
         '-d',
         '-s', sessionName,

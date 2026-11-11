@@ -1,6 +1,6 @@
 import { execFile } from 'child_process';
 import { promisify } from 'util';
-import { getAgentEnvironment } from './agentEnvironment';
+import { botSecretEnvironmentNames, getAgentEnvironment, getChildProcessEnvironment } from './agentEnvironment';
 
 export const execFilePromise = promisify(execFile);
 
@@ -37,17 +37,26 @@ export function getTmuxBaseArgs(): string[] {
 }
 
 /**
- * @description The environment a tmux call runs with. On a PRIVATE server
- * (`TMUX_SOCKET_NAME`) only the agent allowlist plus where its socket lives
- * (R32): the call that starts the server hands it its global environment, which
- * every session inherits and any process on the server can read back — a
- * tracker instance's secrets must not be in it. The default server (a Telegram
- * instance) keeps the bot's own environment, as before.
+ * @description The environment a tmux call runs with: the call that starts the server hands it its global environment,
+ * which every session inherits and any process on the server can read back (`show-environment -g`). On a PRIVATE server
+ * (`TMUX_SOCKET_NAME`) only the agent allowlist plus where its socket lives (R32) — a tracker instance's secrets must not
+ * be in it. The default server (a Telegram instance) gets the bot's environment without the bot's own secrets
+ * ({@link getChildProcessEnvironment}): the user's variables reach the agents, the bot token does not.
  */
-export function getTmuxExecEnv(): NodeJS.ProcessEnv | undefined {
-  if (!process.env.TMUX_SOCKET_NAME) return undefined;
+export function getTmuxExecEnv(): NodeJS.ProcessEnv {
+  if (!process.env.TMUX_SOCKET_NAME) return getChildProcessEnvironment();
   const socketDir = process.env.TMUX_TMPDIR;
   return { ...getAgentEnvironment(), ...(socketDir ? { TMUX_TMPDIR: socketDir } : {}) };
+}
+
+/**
+ * @description Drop the bot's own secrets from the global environment of the tmux server the bot's agents run on, before
+ * an agent's session is made there: a server another process started — an older bot, a shell that exported the token —
+ * holds what that process had, and every new session would inherit it. Best-effort: with no server running there is
+ * nothing to drop (and nothing is started).
+ */
+export async function removeBotSecretsFromTmuxServer(): Promise<void> {
+  for (const name of botSecretEnvironmentNames) await tmuxAsync('set-environment', '-g', '-u', name);
 }
 
 /** Best-effort tmux call: returns stdout on success, empty string on any error. */
@@ -78,6 +87,16 @@ export async function tmuxOrThrowAsync(...args: string[]): Promise<string> {
     env: getTmuxExecEnv(),
   });
   return stdout.toString().trim();
+}
+
+/**
+ * @description Make the tmux session an agent or a terminal runs in (`newSessionArgs` begins with `new-session`): the
+ * server's global environment is cleared of the bot's own secrets first ({@link removeBotSecretsFromTmuxServer}), so
+ * the session cannot inherit them. Strict, like {@link tmuxOrThrowAsync}.
+ */
+export async function startAgentTmuxSession(...newSessionArgs: string[]): Promise<string> {
+  await removeBotSecretsFromTmuxServer();
+  return tmuxOrThrowAsync(...newSessionArgs);
 }
 
 /**

@@ -365,6 +365,7 @@ import {
 import { RunLedger } from './scheduler/runLedger';
 import { createScheduleDelivery, unboundDeliveryError, type ScheduleDeliveryDeps } from './scheduler/delivery';
 import { buildCheckEnv, runCheckCommand } from './scheduler/checkRun';
+import { getChildProcessEnvironment } from './utils/agentEnvironment';
 import { checkIsCheckStatusShown } from './scheduler/checkStatus';
 import { readWorkerActivity } from './scheduler/workerActivity';
 import { createSchedulerEngine, maxTimeoutMs, type SchedulerEngine } from './scheduler/engine';
@@ -7991,7 +7992,7 @@ function resolveThreadClaudeConfigDir(key: SessionKey): string | null {
  * the probe fails.
  */
 async function readClaudeAuthStatusUnder(configDir: string | null): Promise<ClaudeAuthStatus | null> {
-  const env: NodeJS.ProcessEnv = { ...process.env };
+  const env: NodeJS.ProcessEnv = getChildProcessEnvironment();
   delete env.ANTHROPIC_API_KEY;
   if (configDir !== null) env[claudeConfigDirVariableName] = configDir;
   try {

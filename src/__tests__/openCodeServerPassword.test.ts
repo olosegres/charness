@@ -398,6 +398,22 @@ test(
   },
 );
 
+test(
+  'the server the bot starts runs its agents\' tools without the bot\'s own secrets, with the user\'s variables',
+  { skip: process.platform !== 'linux' },
+  async () => {
+    const extraEnv = { TELEGRAM_BOT_TOKEN: 'placeholder-bot-secret', CHARNESS_TEST_USER_TOOL_TOKEN: 'placeholder-user-value' };
+    await runWithPasswordFixture({ isHotWorker: true, extraEnv }, async (fixture) => {
+      await ensureOpenCodeServer();
+      const [serverPid] = getSpawnedPids(fixture.spawnLogPath);
+      const names = fs.readFileSync(`/proc/${serverPid}/environ`, 'utf8').split('\0').map((entry) => entry.slice(0, entry.indexOf('=')));
+      assert.ok(names.includes('CHARNESS_TEST_USER_TOOL_TOKEN'), 'the server\'s environment was read');
+      assert.ok(!names.includes('TELEGRAM_BOT_TOKEN'));
+      assert.ok(names.includes('OPENCODE_SERVER_PASSWORD'), 'its own password it does get');
+    });
+  },
+);
+
 /** @description Run `step` with the bot's log lines held back (the boot step narrates what it does). */
 async function runQuietly(step: () => Promise<void>): Promise<void> {
   const originalLog = console.log;

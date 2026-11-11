@@ -60,6 +60,10 @@ conversation resumes on the other backend. The pick persists per topic
 Billing note: the json-stream backends strip `ANTHROPIC_API_KEY` from the
 agent's env, so usage bills to your Claude subscription rather than an API key.
 
+No agent gets the bot's own secrets (`TELEGRAM_BOT_TOKEN`, `OPENCODE_PASSWORD`): the tmux server the agents and terminals
+run on is started without them and cleared of them before each new session (a server an older bot started still had
+them), and the agent's command starts under `env -u` for them as well; the OpenCode server is started without them.
+
 ## OpenCode
 
 OpenCode runs as a local HTTP server (`opencode serve`) that the bot talks to on loopback: prompts go to its HTTP API and one

@@ -124,7 +124,7 @@ describe('buildWrapperScript', () => {
       script,
       `#!/bin/sh
 cd '/work/my dir' || exit ${wrapperCdFailExitCode}
-env -u ANTHROPIC_API_KEY 'CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS=1' '/opt/bin/claude' '-p' '--session-id' 'u-u-i-d' \\
+env -u ANTHROPIC_API_KEY -u TELEGRAM_BOT_TOKEN -u OPENCODE_PASSWORD 'CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS=1' '/opt/bin/claude' '-p' '--session-id' 'u-u-i-d' \\
   0<> '/data/dir/jsonstream/-100_1/stdin.fifo' >> '/data/dir/jsonstream/-100_1/stdout.jsonl' 2>> '/data/dir/jsonstream/-100_1/stderr.log' &
 CHILD=$!
 echo $CHILD > '/data/dir/jsonstream/-100_1/pid'
@@ -139,11 +139,11 @@ describe('buildWrapperScript with a Claude account profile', () => {
   it('adds CLAUDE_CONFIG_DIR to the env call only for a non-default profile, and the value reads back from the script', () => {
     const paths = getJsonStreamSessionPaths('/data/dir/jsonstream/-100_1');
     const defaultScript = buildWrapperScript('/opt/bin/claude', ['-p'], '/work', paths, null, null);
-    assert.match(defaultScript, /^env -u ANTHROPIC_API_KEY 'CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS=1' '\/opt\/bin\/claude' '-p' \\$/m);
+    assert.match(defaultScript, /^env -u ANTHROPIC_API_KEY -u TELEGRAM_BOT_TOKEN -u OPENCODE_PASSWORD 'CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS=1' '\/opt\/bin\/claude' '-p' \\$/m);
     assert.equal(readWrapperScriptConfigDirFromText(defaultScript), null);
 
     const profileScript = buildWrapperScript('/opt/bin/claude', ['-p'], '/work', paths, null, "/data/dir/claude-profiles/it's-work");
-    assert.match(profileScript, /^env -u ANTHROPIC_API_KEY 'CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS=1' 'CLAUDE_CONFIG_DIR=\/data\/dir\/claude-profiles\/it'\\''s-work' '\/opt\/bin\/claude' '-p' \\$/m);
+    assert.match(profileScript, /^env -u ANTHROPIC_API_KEY -u TELEGRAM_BOT_TOKEN -u OPENCODE_PASSWORD 'CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS=1' 'CLAUDE_CONFIG_DIR=\/data\/dir\/claude-profiles\/it'\\''s-work' '\/opt\/bin\/claude' '-p' \\$/m);
     assert.equal(readWrapperScriptConfigDirFromText(profileScript), "/data/dir/claude-profiles/it's-work");
 
     const trackerScript = buildWrapperScript('/opt/bin/claude', ['-p'], '/work', paths, { HOME: '/home/user' }, '/data/dir/claude-profiles/work');

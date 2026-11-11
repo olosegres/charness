@@ -35,6 +35,7 @@ import { keyToSlug, tryKeyFromSlug, type SessionKey } from '../sessionKey';
 import { checkIsJsonStreamBackend } from '../adapters/adapterNames';
 import type { JsonStreamTailOffset } from '../types';
 import { buildTmuxSessionName, parseTmuxSessionName } from './tmuxSessionName';
+import { getBotSecretUnsetArguments } from './agentEnvironment';
 import { shellSingleQuote } from './tmuxExec';
 import { claudeConfigDirVariableName, parseClaudeConfigDirFromCommand } from './claudeProfiles';
 
@@ -159,7 +160,8 @@ export const claudeSessionStateEventsVariableName = 'CLAUDE_CODE_EMIT_SESSION_ST
  * stdin FIFO READ-WRITE on fd 0 — the load-bearing trick: claude itself holds a
  * read end open, so the bot (a plain writer) can die and reconnect freely.
  * `env -u ANTHROPIC_API_KEY` keeps subscription billing (`apiKeySource:"none"`)
- * even if the tmux server environment carries a key. With an `environment`
+ * even if the tmux server environment carries a key, and the bot's own secrets
+ * (`getBotSecretUnsetArguments`) never reach claude, whoever started that server. With an `environment`
  * (a tracker conversation, R32) claude gets exactly those variables instead —
  * `env -i`, so nothing of the tmux server's environment reaches it (no API key
  * either). A non-default Claude account profile adds `CLAUDE_CONFIG_DIR=<dir>` to
@@ -181,7 +183,7 @@ export function buildWrapperScript(
   const configDirAssignment = configDir === null ? [] : [shellSingleQuote(`${claudeConfigDirVariableName}=${configDir}`)];
   const ownAssignments = [shellSingleQuote(`${claudeSessionStateEventsVariableName}=1`), ...configDirAssignment];
   const envCommand = environment === null
-    ? ['env', '-u', 'ANTHROPIC_API_KEY', ...ownAssignments].join(' ')
+    ? ['env', '-u', 'ANTHROPIC_API_KEY', ...getBotSecretUnsetArguments(), ...ownAssignments].join(' ')
     : ['env', '-i', ...Object.entries(environment).map(([name, value]) => shellSingleQuote(`${name}=${value}`)), ...ownAssignments].join(' ');
   return `#!/bin/sh
 cd ${shellSingleQuote(workDir)} || exit ${wrapperCdFailExitCode}

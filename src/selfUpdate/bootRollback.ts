@@ -1,4 +1,5 @@
 import * as fs from 'fs';
+import { getChildProcessEnvironment } from '../utils/agentEnvironment';
 import { runCommand as defaultRunCommand, type CommandRunner } from './commandRunner';
 import { createGitSource } from './gitSource';
 import { detectInstallKind, type InstallKindFs } from './installKind';
@@ -49,11 +50,11 @@ export function createBootRollback(options: BootRollbackOptions): (marker: Updat
     });
     if (marker.kind === 'npm') {
       if (installKind.kind !== 'npmGlobal') throw new UpdateSourceError(`this install is not an npm global one any more (${installKind.kind})`);
-      await createNpmSource({ runCommand, execPath: options.execPath, prefix: installKind.prefix }).install(marker.from.version, { isRollback: true });
+      await createNpmSource({ runCommand, execPath: options.execPath, prefix: installKind.prefix, env: getChildProcessEnvironment() }).install(marker.from.version, { isRollback: true });
       return;
     }
     if (installKind.kind !== 'checkout') throw new UpdateSourceError(`this install is not a git checkout any more (${installKind.kind})`);
     if (marker.from.commit === null || marker.to.commit === null) throw new UpdateSourceError('the marker names no commit to go back to');
-    await createGitSource({ runCommand, root: installKind.root }).rollback({ from: marker.from.commit, to: marker.to.commit, isHot: options.isHotWorker });
+    await createGitSource({ runCommand, root: installKind.root, env: getChildProcessEnvironment() }).rollback({ from: marker.from.commit, to: marker.to.commit, isHot: options.isHotWorker });
   };
 }

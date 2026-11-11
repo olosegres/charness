@@ -6,7 +6,12 @@
  * environment; and tmux calls on a PRIVATE server start it with that set, so its
  * global environment — inherited by every session, readable by any process on
  * the server — carries no secret (a real tmux server on a private socket in a
- * temp `TMUX_TMPDIR`, killed at the end).
+ * temp `TMUX_TMPDIR`, killed at the end). And for every surface: the bot's own
+ * secrets (`TELEGRAM_BOT_TOKEN`, `OPENCODE_PASSWORD`) reach no child it starts
+ * for an agent — not a Telegram topic's json-stream claude (run for real), not
+ * an OpenCode process, not the default tmux server the bot starts or one an
+ * older bot started with them (cleared before a terminal opens on it; the
+ * terminal's shell, read for real, has none) — while the user's variables do.
  */
 
 /** Test case: N/A — Charness has no Jira tracker. */
@@ -19,11 +24,13 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { promisify } from 'node:util';
-import { addEnvFileVariableNames, agentEnvironmentNames, getAgentEnvironment, resetEnvFileVariableNamesForTests } from '../utils/agentEnvironment';
+import { addEnvFileVariableNames, agentEnvironmentNames, botSecretEnvironmentNames, getAgentEnvironment, getChildProcessEnvironment, resetEnvFileVariableNamesForTests } from '../utils/agentEnvironment';
+import { getOpenCodeChildEnv } from '../installManager';
+import { TerminalAdapter } from '../adapters/terminalAdapter';
 import { loadEnvFiles } from '../cli/envLoader';
 import { getClaudePlatformEnvironment } from '../adapters/claudePlatformFlags';
 import { buildWrapperScript, claudeSessionStateEventsVariableName, getJsonStreamSessionPaths } from '../utils/jsonStreamHost';
-import { getTmuxExecEnv, tmuxOrThrowAsync } from '../utils/tmuxExec';
+import { getTmuxExecEnv, getTmuxPaneTarget, removeBotSecretsFromTmuxServer, startAgentTmuxSession, tmuxAsync, tmuxOrThrowAsync } from '../utils/tmuxExec';
 import { makeJiraKey } from '../connectors/jira/sessionKeyCodec';
 import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
 
@@ -177,11 +184,11 @@ describe('tmux on a private server starts it clean', () => {
     fs.rmSync(socketDir, { recursive: true, force: true });
   });
 
-  it('a call on a private server runs with the allowlist and the socket folder only; the default server keeps the bot\'s environment', () => {
+  it('a call on a private server runs with the allowlist and the socket folder only; the default server gets the bot\'s environment without its secrets', () => {
     assert.deepEqual(getTmuxExecEnv(), { ...getAgentEnvironment(), TMUX_TMPDIR: socketDir });
     const socketNameSaved = process.env.TMUX_SOCKET_NAME;
     delete process.env.TMUX_SOCKET_NAME;
-    assert.equal(getTmuxExecEnv(), undefined);
+    assert.deepEqual(getTmuxExecEnv(), getChildProcessEnvironment());
     process.env.TMUX_SOCKET_NAME = socketNameSaved;
   });
 
@@ -197,5 +204,149 @@ describe('tmux on a private server starts it clean', () => {
     const sessionEnvironment = await tmuxOrThrowAsync('show-environment', '-t', '=probe');
     assert.ok(!sessionEnvironment.includes(instanceSecretValue));
     assert.ok(fs.existsSync(path.join(socketDir, `tmux-${process.getuid?.() ?? 0}`, socketName)), 'the server is the private one');
+  });
+});
+
+const userToolVariableName = 'CHARNESS_TEST_USER_TOOL_TOKEN';
+const userToolVariableValue = 'placeholder-user-value';
+const botSecretValue = 'placeholder-bot-secret';
+
+/** @description An environment that holds the bot's own secrets, the key a json-stream wrapper drops, and a variable of the user's. */
+function createBotEnvironment(base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  return {
+    ...base,
+    ...Object.fromEntries(botSecretEnvironmentNames.map((name) => [name, botSecretValue])),
+    ANTHROPIC_API_KEY: 'placeholder-key',
+    [userToolVariableName]: userToolVariableValue,
+  };
+}
+
+describe('the bot\'s own secrets never reach a child it starts for an agent', () => {
+  it('names the Telegram bot token and the operator\'s OpenCode password — and drops only them', () => {
+    assert.deepEqual([...botSecretEnvironmentNames].sort(), ['OPENCODE_PASSWORD', 'TELEGRAM_BOT_TOKEN']);
+    const childEnvironment = getChildProcessEnvironment(createBotEnvironment({ PATH: '/usr/bin' }));
+    assert.deepEqual(childEnvironment, { PATH: '/usr/bin', ANTHROPIC_API_KEY: 'placeholder-key', [userToolVariableName]: userToolVariableValue });
+  });
+
+  it('an OpenCode process gets neither them nor the hot-mode handshake; the user\'s variables stay', () => {
+    const childEnvironment = getOpenCodeChildEnv({ ...createBotEnvironment({ PATH: '/usr/bin' }), CHARNESS_HOT_RELOAD: '1' });
+    for (const name of botSecretEnvironmentNames) assert.equal(childEnvironment[name], undefined, name);
+    assert.equal(childEnvironment.CHARNESS_HOT_RELOAD, undefined);
+    assert.equal(childEnvironment[userToolVariableName], userToolVariableValue);
+  });
+
+  it('a Telegram topic\'s json-stream claude, run for real from a shell that holds them, sees neither them nor the API key', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-env-telegram-wrapper-'));
+    try {
+      const paths = getJsonStreamSessionPaths(dir);
+      execFileSync('mkfifo', [paths.stdinFifo]);
+      // `env` stands in for claude: it prints the environment it was started with.
+      fs.writeFileSync(paths.wrapperFile, buildWrapperScript('/usr/bin/env', [], dir, paths), { mode: 0o755 });
+      await execFileAsync(paths.wrapperFile, [], { env: createBotEnvironment() });
+      const names = getEnvNames(fs.readFileSync(paths.stdoutFile, 'utf8'));
+      for (const name of [...botSecretEnvironmentNames, 'ANTHROPIC_API_KEY']) assert.ok(!names.includes(name), name);
+      assert.ok(names.includes(userToolVariableName), 'the user\'s own variables reach the agent');
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('the default tmux server the agents and terminals run on holds none of the bot\'s secrets', () => {
+  let socketDir: string;
+  let isTmuxAvailable = false;
+  const touchedNames = ['TMUX_SOCKET_NAME', 'TMUX_TMPDIR', 'TMUX', 'TMUX_PANE', userToolVariableName, ...botSecretEnvironmentNames];
+  const savedValues: Record<string, string | undefined> = {};
+
+  const getSocketPath = (): string => path.join(socketDir, `tmux-${process.getuid?.() ?? 0}`, 'default');
+  /** tmux on this test's own default socket, run with `environment` — what an older bot, or a shell, would start the server with. */
+  const runTmuxAs = (environment: NodeJS.ProcessEnv, ...args: string[]) => execFileAsync('tmux', ['-S', getSocketPath(), ...args], { env: environment });
+
+  before(async () => {
+    try {
+      await execFileAsync('tmux', ['-V']);
+      isTmuxAvailable = true;
+    } catch {
+      isTmuxAvailable = false;
+    }
+    for (const name of touchedNames) savedValues[name] = process.env[name];
+    // The DEFAULT socket of a private folder: the path a Telegram instance's tmux calls take, never the real default server.
+    socketDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-env-default-tmux-'));
+    delete process.env.TMUX_SOCKET_NAME;
+    delete process.env.TMUX;
+    delete process.env.TMUX_PANE;
+    process.env.TMUX_TMPDIR = socketDir;
+    Object.assign(process.env, createBotEnvironment({}));
+  });
+
+  afterEach(async () => {
+    const { TMUX: _userTmuxServer, TMUX_PANE: _userTmuxPane, ...envWithoutTmux } = process.env;
+    await execFileAsync('tmux', ['-S', getSocketPath(), 'kill-server'], { env: envWithoutTmux }).catch(() => {});
+  });
+
+  after(() => {
+    for (const name of touchedNames) {
+      if (savedValues[name] === undefined) delete process.env[name];
+      else process.env[name] = savedValues[name];
+    }
+    fs.rmSync(socketDir, { recursive: true, force: true });
+  });
+
+  async function readGlobalNames(): Promise<string[]> {
+    return getEnvNames((await runTmuxAs(getChildProcessEnvironment(), 'show-environment', '-g')).stdout);
+  }
+
+  it('with no server running, dropping them starts none', async (context) => {
+    if (!isTmuxAvailable) {
+      context.skip('tmux is not installed');
+      return;
+    }
+    await removeBotSecretsFromTmuxServer();
+    assert.equal(fs.existsSync(getSocketPath()), false);
+  });
+
+  it('a server the bot starts for an agent\'s session gets the user\'s variables, not the bot\'s secrets', async (context) => {
+    if (!isTmuxAvailable) {
+      context.skip('tmux is not installed');
+      return;
+    }
+    await startAgentTmuxSession('new-session', '-d', '-s', 'probe', 'sleep 60');
+    const names = await readGlobalNames();
+    assert.ok(names.includes(userToolVariableName), 'the server environment was read');
+    for (const name of botSecretEnvironmentNames) assert.ok(!names.includes(name), name);
+  });
+
+  it('a server an older bot started with them loses them before a terminal is opened on it, and the terminal\'s shell has none', async (context) => {
+    if (!isTmuxAvailable) {
+      context.skip('tmux is not installed');
+      return;
+    }
+    await runTmuxAs(createBotEnvironment(), 'new-session', '-d', '-s', 'older-bot', 'sleep 60');
+    assert.ok((await readGlobalNames()).includes('TELEGRAM_BOT_TOKEN'), 'precondition: the server holds the token');
+
+    const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-env-terminal-'));
+    const terminal = new TerminalAdapter();
+    const key = makeTelegramKey(-1001111111111, 77);
+    const dumpPath = path.join(workDir, 'shell-env.txt');
+    try {
+      await terminal.startSession(key, workDir);
+      const sessionName = (await tmuxAsync('list-sessions', '-F', '#{session_name}')).split('\n').find((name) => name !== 'older-bot');
+      assert.ok(sessionName, 'the terminal session exists');
+      // The second guard, for a server whose environment could not be cleared: the shell itself starts under `env -u`.
+      const startCommand = await tmuxAsync('display-message', '-p', '-t', getTmuxPaneTarget(sessionName), '#{pane_start_command}');
+      for (const name of botSecretEnvironmentNames) assert.ok(startCommand.includes(`'-u' '${name}'`), `the shell starts without ${name}: ${startCommand}`);
+      await tmuxAsync('send-keys', '-t', getTmuxPaneTarget(sessionName), `env > ${dumpPath}`, 'Enter');
+      const deadline = Date.now() + 30_000;
+      while (!(fs.existsSync(dumpPath) && fs.readFileSync(dumpPath, 'utf8').includes(`${userToolVariableName}=`)) && Date.now() < deadline) {
+        await new Promise<void>((resolve) => setTimeout(resolve, 50));
+      }
+      const shellNames = getEnvNames(fs.readFileSync(dumpPath, 'utf8'));
+      assert.ok(shellNames.includes(userToolVariableName), 'the shell\'s environment was read');
+      for (const name of botSecretEnvironmentNames) assert.ok(!shellNames.includes(name), `the shell: ${name}`);
+      for (const name of botSecretEnvironmentNames) assert.ok(!(await readGlobalNames()).includes(name), `the server: ${name}`);
+    } finally {
+      await terminal.stopSession(key);
+      fs.rmSync(workDir, { recursive: true, force: true });
+    }
   });
 });

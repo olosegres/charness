@@ -78,6 +78,38 @@ export function getAgentEnvironment(env: NodeJS.ProcessEnv = process.env): Recor
   return environment;
 }
 
+/**
+ * The bot's own secrets in its environment — what it reads for ITS connections, which no child it starts needs: the
+ * Telegram bot token (an agent reaches Telegram only through the bot's MCP server, whose per-session token rides the MCP
+ * config, not the environment) and the operator's OpenCode server password (the bot starts its server with
+ * `OPENCODE_SERVER_PASSWORD` and sends the password itself). Anything a child runs could print or send them: a
+ * dependency's install script, a test, an agent's `env`. The tracker's credentials live in `jira.json` and the bot MCP's
+ * signing secret in `state.json`, never in the environment. The user's other variables — provider keys, tool tokens a
+ * shell gives the agents for their work — are not the bot's and stay.
+ */
+export const botSecretEnvironmentNames = ['TELEGRAM_BOT_TOKEN', 'OPENCODE_PASSWORD'] as const;
+
+/**
+ * @description `env` without the bot's own secrets ({@link botSecretEnvironmentNames}): the environment of every child the
+ * bot starts for an agent or for code it does not own — the tmux server its agents and terminals run on, the OpenCode
+ * server, a scheduled check, a sign-in, an install or update. Only the bot's own processes keep it (the hot worker, a
+ * restart in place).
+ */
+export function getChildProcessEnvironment(env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  const childEnvironment = { ...env };
+  for (const name of botSecretEnvironmentNames) delete childEnvironment[name];
+  return childEnvironment;
+}
+
+/**
+ * @description `-u <name>` for each of the bot's secrets — for the `env` a command run by a tmux server starts with (an
+ * agent's process, a terminal's shell): that server's environment is not the bot's to choose when another process
+ * started it, and tmux cannot unset a variable for one session.
+ */
+export function getBotSecretUnsetArguments(): string[] {
+  return botSecretEnvironmentNames.flatMap((name) => ['-u', name]);
+}
+
 /** What a shell searches when the environment holds no PATH of its own. */
 const defaultAgentPath = '/usr/local/bin:/usr/bin:/bin';
 

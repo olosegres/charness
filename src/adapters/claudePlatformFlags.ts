@@ -34,9 +34,10 @@ export function getClaudePlatformFlags(key: SessionKey): string[] {
  * outside Telegram only the agent allowlist (R32 — never the instance's own
  * variables, its tracker token among them), with the tool folder of the connector's `agentBinaries` first on
  * its PATH; `null` — a Telegram topic's wrapper
- * keeps `env -u ANTHROPIC_API_KEY` and inherits the tmux session environment:
- * the bot's own on the default server, the minimal server environment of
- * `getTmuxExecEnv` on a private one (every instance that serves Jira).
+ * keeps `env -u ANTHROPIC_API_KEY` (and the bot's own secrets) and inherits the
+ * tmux session environment: the bot's own without its secrets on the default
+ * server, the minimal server environment of `getTmuxExecEnv` on a private one
+ * (every instance that serves Jira).
  */
 export function getClaudePlatformEnvironment(key: SessionKey): Record<string, string> | null {
   return checkIsTelegramKey(key) ? null : addAgentBinDirToPath(getAgentEnvironment());

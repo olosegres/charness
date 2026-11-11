@@ -6,12 +6,13 @@ import { createSerialQueue, type SerialQueue } from '../utils/serialQueue';
 import { getNextPollDelay, basePollIntervalMs } from '../utils/pollBackoff';
 import {
   tmuxAsync,
-  tmuxOrThrowAsync,
   checkArgsAreSafe,
   getTmuxPaneTarget,
   getTmuxSessionTarget,
   shellSingleQuote,
+  startAgentTmuxSession,
 } from '../utils/tmuxExec';
+import { getBotSecretUnsetArguments } from '../utils/agentEnvironment';
 import { cleanOutput } from '../utils/ansiClean';
 import { getNewPaneContent } from '../utils/paneDiff';
 import {
@@ -130,10 +131,11 @@ export class TerminalAdapter extends EventEmitter implements AgentAdapter {
 
     // tmux execs the trailing shell-command via `$SHELL -c`. Single-quote the
     // shell path (defence-in-depth — same idiom as the Claude command line)
-    // even though `$SHELL` is operator-controlled, not user input.
-    const shellCommand = shellSingleQuote(defaultShell);
+    // even though `$SHELL` is operator-controlled, not user input. `env -u` keeps
+    // the bot's own secrets out of the shell whoever started the tmux server.
+    const shellCommand = ['env', ...getBotSecretUnsetArguments(), defaultShell].map(shellSingleQuote).join(' ');
     try {
-      await tmuxOrThrowAsync(
+      await startAgentTmuxSession(
         ...buildTerminalNewSessionArgs({
           sessionName,
           workDir,

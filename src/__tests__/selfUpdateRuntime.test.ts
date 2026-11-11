@@ -152,6 +152,56 @@ describe('an npm global install', () => {
   });
 });
 
+describe('what an update runs never sees the bot\'s own secrets', () => {
+  const secretNames = ['TELEGRAM_BOT_TOKEN', 'OPENCODE_PASSWORD'];
+  const userVariableName = 'CHARNESS_TEST_USER_TOOL_TOKEN';
+  let savedValues: Record<string, string | undefined> = {};
+
+  beforeEach(() => {
+    savedValues = Object.fromEntries([...secretNames, userVariableName].map((name) => [name, process.env[name]]));
+    for (const name of secretNames) process.env[name] = 'placeholder-bot-secret';
+    process.env[userVariableName] = 'placeholder-user-value';
+  });
+
+  afterEach(() => {
+    for (const [name, value] of Object.entries(savedValues)) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+  });
+
+  function assertWithoutBotSecrets(options: CommandOptions, what: string): void {
+    assert.ok(options.env, `${what} runs with an environment of its own`);
+    for (const name of secretNames) assert.equal(options.env[name], undefined, `${what}: ${name}`);
+    assert.equal(options.env[userVariableName], 'placeholder-user-value', `${what} keeps the user's variables`);
+  }
+
+  test('an npm install (its packages\' scripts) and the self-check of the new install (its code)', async () => {
+    const { packageRoot } = createNpmGlobalInstall('3.4.0');
+    const { runCommand, calls } = createRunner();
+    const runtime = await createUpdateRuntime(createOptions(packageRoot, { runCommand }));
+    await runtime.npm?.install('3.5.0');
+    await runtime.runSelfCheck('3.5.0');
+    assert.equal(calls.length, 2);
+    assertWithoutBotSecrets(calls[0].options, 'npm install');
+    assertWithoutBotSecrets(calls[1].options, 'the self-check');
+  });
+
+  test('a checkout\'s update script (git, yarn install and its scripts, the build)', async () => {
+    const root = path.join(sandbox, 'charness');
+    write(path.join(root, 'package.json'), JSON.stringify({ name: 'charness', version: '3.4.0' }));
+    write(path.join(root, 'scripts', 'self-update.sh'), '#!/bin/sh\n');
+    fs.mkdirSync(path.join(root, '.git'));
+    const { runCommand, calls } = createRunner({ 'git rev-parse': { stdout: 'a1b2c3d\n' } });
+    const runtime = await createUpdateRuntime(createOptions(root, { runCommand }));
+    await runtime.git?.check().catch(() => undefined);
+    await runtime.git?.apply({ holdBreaking: false }).catch(() => undefined);
+    const updateCalls = calls.slice(1);
+    assert.ok(updateCalls.length > 0, 'the update ran something');
+    for (const call of updateCalls) assertWithoutBotSecrets(call.options, `${call.file} ${call.args.join(' ')}`);
+  });
+});
+
 describe('a git checkout', () => {
   function createCheckout(): string {
     const root = path.join(sandbox, 'charness');
