@@ -258,7 +258,8 @@ async function compactWhenIdle(threadId: number): Promise<void> {
 
 /**
  * The instance's `git` (its bin folder is first on its PATH): the real one, except that a history walk
- * (`rev-list`) waits while the hold file exists, and is logged when it starts and ends.
+ * (`rev-list`) waits while the hold file exists, and is logged — with the folder its `-C` names, wherever the bot puts it among
+ * the options (`-c core.fsmonitor=false -C <folder> rev-list …`) — when it starts and ends.
  */
 function writeHoldingGit(instance: IsolatedInstanceLayout): void {
   const realGit = execFileSync('sh', ['-c', 'command -v git'], { encoding: 'utf8' }).trim();
@@ -266,8 +267,10 @@ function writeHoldingGit(instance: IsolatedInstanceLayout): void {
   const logPath = path.join(instance.testRoot, gitWalkLogFileName);
   fs.writeFileSync(path.join(instance.binDir, 'git'), [
     '#!/bin/sh',
+    "folder=''; previous=''",
+    'for argument in "$@"; do [ "$previous" = -C ] && folder=$argument; previous=$argument; done',
     'case " $* " in',
-    `  *" rev-list "*) echo "start $2" >> '${logPath}'; while [ -e '${holdPath}' ]; do sleep 0.1; done; '${realGit}' "$@"; status=$?; echo "end $2" >> '${logPath}'; exit $status;;`,
+    `  *" rev-list "*) echo "start $folder" >> '${logPath}'; while [ -e '${holdPath}' ]; do sleep 0.1; done; '${realGit}' "$@"; status=$?; echo "end $folder" >> '${logPath}'; exit $status;;`,
     'esac',
     `exec '${realGit}' "$@"`,
     '',
