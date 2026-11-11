@@ -119,8 +119,9 @@ jobs:
           fi
           echo "version=${version}" >> "$GITHUB_OUTPUT"
           echo "tag=v${version}" >> "$GITHUB_OUTPUT"
-      # npm holding a version newer than every release tag but this run's own means a release published and did not finish: releasing
-      # another version now would lose that one for good (its bump moves package.json past it). The run stops until it is finished.
+      # npm holding a version (not this run's) newer than the newest one both tagged and on npm means a release published and did not
+      # finish: releasing another version now would lose that one for good (its bump moves package.json past it). The run stops until
+      # it is finished.
       - name: No unfinished release on npm
         if: steps.release.outcome == 'success'
         env:

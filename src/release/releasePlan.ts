@@ -219,35 +219,35 @@ function compareVersionParts(left: [number, number, number], right: [number, num
 export interface RegistryReleaseState {
   /** Every version of the package the registry holds. */
   registryVersions: string[];
-  /** The versions of the repository's release tags (`vX.Y.Z` → `X.Y.Z`). */
+  /** The versions of the repository's release tags (`vX.Y.Z` → `X.Y.Z`); prereleases and other tags are never a baseline. */
   tagVersions: string[];
   /** The version this run releases. */
   version: string;
 }
 
 /**
- * @description The versions the registry holds that are newer than every release tag of the repository other than this run's own:
- * what a release run published and could not finish (its tag and version commit never reached the repository). A run that
- * released another version now would leave such a version without its tag, release commit and CHANGELOG section for good — the
- * next version's bump moves `package.json` past it —, so the release refuses while there is one. This run's own version is not one
- * (npm holding it already is a re-run: the package job compares the tarballs); neither is an older untagged version (published
- * before the tags) or a prerelease. Ascending.
+ * @description The versions the registry holds that are newer than the newest version both tagged in the repository AND on the
+ * registry (this run's own aside): what a release published and could not finish (its tag and version commit never reached the
+ * repository), or what reached npm from outside the workflow. A run that released another version now would leave such a version
+ * without its tag, release commit and CHANGELOG section for good — the next version's bump moves `package.json` past it —, so the
+ * release refuses while there is one. The baseline must be on the registry too: a tag npm never got (a hand-pushed one that was
+ * refused) would otherwise hide the version below it from every later run. This run's own version is not one (npm holding it
+ * already is a re-run: the package job compares the tarballs); neither is a version older than the baseline (published before the
+ * tags) or a prerelease; with no version both tagged and published there is no baseline and nothing to name. Ascending.
  */
 export function getUnfinishedReleaseVersions({ registryVersions, tagVersions, version }: RegistryReleaseState): string[] {
-  const newestTag = tagVersions
-    .filter((tagVersion) => tagVersion !== version)
-    .flatMap((tagVersion) => {
-      const parts = parsePlainVersion(tagVersion);
-      return parts === null ? [] : [parts];
-    })
+  const published = registryVersions.flatMap((registryVersion) => {
+    const parts = parsePlainVersion(registryVersion);
+    return parts === null || registryVersion === version ? [] : [{ registryVersion, parts }];
+  });
+  const baseline = published
+    .filter(({ registryVersion }) => tagVersions.includes(registryVersion))
+    .map(({ parts }) => parts)
     .sort(compareVersionParts)
     .at(-1);
-  if (newestTag === undefined) return [];
-  return registryVersions
-    .flatMap((registryVersion) => {
-      const parts = parsePlainVersion(registryVersion);
-      return parts !== null && registryVersion !== version && compareVersionParts(parts, newestTag) > 0 ? [{ registryVersion, parts }] : [];
-    })
+  if (baseline === undefined) return [];
+  return published
+    .filter(({ parts }) => compareVersionParts(parts, baseline) > 0)
     .sort((left, right) => compareVersionParts(left.parts, right.parts))
     .map(({ registryVersion }) => registryVersion);
 }

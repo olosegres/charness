@@ -264,9 +264,17 @@ describe('a published version the repository never got (a release that did not f
 
   test('versions compare as numbers, prereleases and non-release tags are left out, the list is ascending', () => {
     assert.deepEqual(
-      getUnfinishedReleaseVersions({ registryVersions: ['3.10.0', '3.10.0-beta.1', '3.9.1'], tagVersions: ['3.9.0', 'next', '3.8.5'], version: '3.11.0' }),
+      getUnfinishedReleaseVersions({ registryVersions: ['3.10.0', '3.10.0-beta.1', '3.9.1', '3.9.0', '3.8.5'], tagVersions: ['3.9.0', 'next', '3.8.5', '3.10.0-beta.1'], version: '3.11.0' }),
       ['3.9.1', '3.10.0'],
     );
+  });
+
+  test('a tag npm never got (a hand-pushed tag that was refused) does not hide the unfinished version below it from the runs after it', () => {
+    assert.deepEqual(getUnfinishedReleaseVersions({ registryVersions: ['3.4.0', '3.5.0', '3.5.1'], tagVersions: [...tagVersions, '3.6.0'], version: '3.6.1' }), ['3.5.1']);
+  });
+
+  test('no version both tagged and on npm (tags of an older package name): no baseline, nothing named', () => {
+    assert.deepEqual(getUnfinishedReleaseVersions({ registryVersions: ['3.0.0', '3.1.0'], tagVersions: ['2.0.2', '2.0.3'], version: '3.1.1' }), []);
   });
 });
 

@@ -14,8 +14,8 @@
  *                                                               the Tests workflow's result for the exact commit (a hand-pushed tag
  *                                                               also tries its parent); exits 1 on a refusal
  *   verify-delta --base <commit> [--head <rev>]                 the release commit is the tested one plus its version bump, or exit 1
- *   check-registry --version X.Y.Z [--registry <url>]          refuses while npm holds a version newer than every release tag but this
- *                                                               run's own (a release that published and did not finish)
+ *   check-registry --version X.Y.Z [--registry <url>]          refuses while npm holds a version (not this run's) newer than the newest
+ *                                                               one both tagged and on npm (a release that published and did not finish)
  *   commit-release <version> [--tarball <file>] [--base <commit>] [--check | --prepare] [--remote origin] [--branch main]
  *                                                               commit, tag and push the applied release (`--tarball`: its files out of
  *                                                               the packed package; `--base`: refuse unless it is that commit plus its
@@ -96,6 +96,10 @@ const registryReadTimeoutMs = 60_000;
 /** The abbreviated packument: the versions without their whole manifests. */
 const registryPackumentAccept = 'application/vnd.npm.install-v1+json; q=1.0, application/json; q=0.8';
 const notFoundStatus = 404;
+const tooManyRequestsStatus = 429;
+const firstServerErrorStatus = 500;
+/** The pauses before the second and third read: a blip of the network or the registry does not cost the day's release. */
+const registryReadRetryDelaysMs = [1_000, 3_000];
 const registryPackumentSchema = z.object({ versions: z.record(z.string(), z.object({})) });
 /** A commit has a handful of runs; one page is all of them. */
 const workflowRunsPageSize = 100;
@@ -515,9 +519,10 @@ function runVerifyDelta(args: string[]): number {
   return 0;
 }
 
-/** Every version of `name` the registry holds; none for a package it does not know (never published). Throws when it cannot tell. */
-async function fetchRegistryVersions(registry: string, name: string): Promise<string[]> {
-  const cannotRead = `Cannot read the versions the registry holds of ${name}`;
+/** One read of the registry: the versions, none for a package it does not know, or why it could not tell and whether a retry may help. */
+type RegistryRead = { kind: 'versions'; versions: string[] } | { kind: 'failed'; reason: string; isTransient: boolean };
+
+async function readRegistryVersionsOnce(registry: string, name: string): Promise<RegistryRead> {
   let response: Response;
   try {
     response = await fetch(`${registry.replace(/\/+$/, '')}/${name.replace('/', '%2F')}`, {
@@ -525,19 +530,40 @@ async function fetchRegistryVersions(registry: string, name: string): Promise<st
       signal: AbortSignal.timeout(registryReadTimeoutMs),
     });
   } catch (error) {
-    throw new ReleaseError(`${cannotRead}: ${error instanceof Error ? error.message : String(error)}; nothing is published.`);
+    return { kind: 'failed', reason: error instanceof Error ? error.message : String(error), isTransient: true };
   }
-  if (response.status === notFoundStatus) return [];
-  if (!response.ok) throw new ReleaseError(`${cannotRead}: the registry answered ${response.status}; nothing is published.`);
+  if (response.status === notFoundStatus) return { kind: 'versions', versions: [] };
+  if (!response.ok) {
+    await response.body?.cancel();
+    return { kind: 'failed', reason: `the registry answered ${response.status}`, isTransient: response.status === tooManyRequestsStatus || response.status >= firstServerErrorStatus };
+  }
   const packument = registryPackumentSchema.safeParse(await response.json());
-  if (!packument.success) throw new ReleaseError(`${cannotRead}: the registry's answer has no versions; nothing is published.`);
-  return Object.keys(packument.data.versions);
+  if (!packument.success) return { kind: 'failed', reason: 'the registry\'s answer has no versions', isTransient: false };
+  return { kind: 'versions', versions: Object.keys(packument.data.versions) };
 }
 
 /**
- * Refuses while the registry holds a version newer than every release tag of the repository but this run's own: a release that
- * published and did not finish ({@link getUnfinishedReleaseVersions}). Releasing past it would lose it for good, so the run stops
- * before anything else happens — the version's own run (or the by-hand path) finishes it first.
+ * Every version of `name` the registry holds; none for a package it does not know (never published). A network error, a 429 or a 5xx
+ * is read again after each of {@link registryReadRetryDelaysMs}; throws when it still cannot tell.
+ */
+async function fetchRegistryVersions(registry: string, name: string): Promise<string[]> {
+  for (let attempt = 0; ; attempt += 1) {
+    const read = await readRegistryVersionsOnce(registry, name);
+    if (read.kind === 'versions') return read.versions;
+    const delayMs = registryReadRetryDelaysMs[attempt];
+    if (!read.isTransient || delayMs === undefined) {
+      throw new ReleaseError(`Cannot read the versions the registry holds of ${name}: ${read.reason}${read.isTransient ? ` (${attempt + 1} tries)` : ''}; nothing is published.`);
+    }
+    process.stdout.write(`The registry could not be read (${read.reason}); trying again in ${delayMs / 1000} s.\n`);
+    await new Promise((resolve) => setTimeout(resolve, delayMs));
+  }
+}
+
+/**
+ * Refuses while the registry holds a version (not this run's) newer than the newest one both tagged in the repository and on the
+ * registry: a release that published and did not finish, or a version npm got from outside the workflow
+ * ({@link getUnfinishedReleaseVersions}). Releasing past it would lose it for good, so the run stops before anything else happens —
+ * the version's own run (or the by-hand path, or pushing its tag) finishes it first.
  */
 async function runCheckRegistry(args: string[]): Promise<number> {
   const { values } = parseArgs({ args, options: { version: { type: 'string' }, registry: { type: 'string' } } });
@@ -551,7 +577,8 @@ async function runCheckRegistry(args: string[]): Promise<number> {
     throw new ReleaseError(
       `npm holds ${name} ${list}, which no release tag of the repository has: a release run published it and did not finish (its tag and version commit never reached the repository). ` +
         `Releasing ${version} now would leave ${list} without a tag, a release commit and a CHANGELOG section for good. ` +
-        `Finish ${list} first: "Re-run failed jobs" on the run that published it (the version's provenance on npmjs.com links the run), or by hand — DEVELOPMENT.md § Releases, "When a release fails". Nothing is published or pushed.`,
+        `Finish ${list} first: "Re-run failed jobs" on the run that published it (the version's provenance on npmjs.com links the run), or by hand — DEVELOPMENT.md § Releases, "When a release fails". ` +
+        `A version with no release run (published by hand, or its tag only on another remote): push its ${releaseTagPrefix}X.Y.Z tag to GitHub. Nothing is published or pushed.`,
     );
   }
   process.stdout.write(`npm holds no ${name} version newer than the release tags but ${version} itself.\n`);
@@ -719,7 +746,7 @@ function runCommitRelease(args: string[]): number {
   if (appliedVersion !== version) throw new ReleaseError(`${manifestFileName} carries version ${appliedVersion}, not ${version}: nothing is committed.`);
   if (values.base) assertReleaseDelta(values.base, undefined, 'nothing is committed');
   if (checkIsReleaseTagPushed(remote, tag, values.base)) {
-    if (!values.check) writeGithubOutput('tag', tag);
+    if (!values.check && !values.prepare) writeGithubOutput('tag', tag);
     if (values.prepare) writeGithubOutput('isPushed', 'true');
     process.stdout.write(`${remote} already holds ${tag} (a re-run after the push went through); nothing to push.\n`);
     return 0;

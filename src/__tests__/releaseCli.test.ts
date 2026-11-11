@@ -791,14 +791,18 @@ describe('check-registry', () => {
   let registryUrl: string;
   let registryRequests: { url: string; accept: string | undefined }[];
   let registryAnswer: { status: number; versions: string[] };
+  /** How many requests get a 503 before the registry answers with {@link registryAnswer}. */
+  let registryFailuresBeforeAnswer: number;
 
   beforeEach(async () => {
     registryRequests = [];
     registryAnswer = { status: 200, versions: [] };
+    registryFailuresBeforeAnswer = 0;
     registryServer = http.createServer((request, response) => {
       registryRequests.push({ url: request.url ?? '', accept: request.headers.accept });
-      response.writeHead(registryAnswer.status, { 'Content-Type': 'application/json' });
-      response.end(JSON.stringify(registryAnswer.status === 200 ? { name: initialPackage.name, versions: Object.fromEntries(registryAnswer.versions.map((version) => [version, { version }])) } : { error: 'Not found' }));
+      const status = registryRequests.length <= registryFailuresBeforeAnswer ? 503 : registryAnswer.status;
+      response.writeHead(status, { 'Content-Type': 'application/json' });
+      response.end(JSON.stringify(status === 200 ? { name: initialPackage.name, versions: Object.fromEntries(registryAnswer.versions.map((version) => [version, { version }])) } : { error: 'Not found' }));
     });
     await new Promise<void>((resolve) => registryServer.listen(0, '127.0.0.1', resolve));
     const address = registryServer.address();
@@ -828,7 +832,8 @@ describe('check-registry', () => {
     assert.equal(result.status, 1, result.stdout);
     assert.match(result.stderr, /npm holds demo-package 3\.2\.1, which no release tag of the repository has/);
     assert.match(result.stderr, /Releasing 3\.3\.0 now would leave 3\.2\.1 without a tag, a release commit and a CHANGELOG section for good/);
-    assert.match(result.stderr, /Re-run failed jobs.*Nothing is published or pushed\./);
+    assert.match(result.stderr, /Re-run failed jobs/);
+    assert.match(result.stderr, /A version with no release run \(published by hand, or its tag only on another remote\): push its vX\.Y\.Z tag to GitHub\. Nothing is published or pushed\./);
     assert.deepEqual(registryRequests.map(({ url }) => url), ['/demo-package']);
     assert.match(registryRequests[0].accept ?? '', /application\/vnd\.npm\.install-v1\+json/);
   });
@@ -852,11 +857,38 @@ describe('check-registry', () => {
     assert.match(result.stderr, /npm holds demo-package 3\.2\.1/);
   });
 
-  test('a registry that cannot be read stops the run: nothing is published', async () => {
+  test('a registry that answers 503 is read again after a pause, and the next answer decides', async () => {
+    registryFailuresBeforeAnswer = 1;
+    registryAnswer = { status: 200, versions: ['3.2.0', '3.2.1'] };
+    const result = await runRegistryCheck('3.3.0');
+    assert.equal(result.status, 1, result.stdout);
+    assert.match(result.stderr, /npm holds demo-package 3\.2\.1/);
+    assert.equal(registryRequests.length, 2);
+    assert.match(result.stdout, /The registry could not be read \(the registry answered 503\); trying again in 1 s\./);
+  });
+
+  test('a registry that cannot be read after three tries stops the run; a refusal that is not transient (403) is not read again', async () => {
     registryAnswer = { status: 500, versions: [] };
     const result = await runRegistryCheck('3.3.0');
     assert.equal(result.status, 1);
-    assert.match(result.stderr, /Cannot read the versions the registry holds of demo-package: the registry answered 500; nothing is published\./);
+    assert.match(result.stderr, /Cannot read the versions the registry holds of demo-package: the registry answered 500 \(3 tries\); nothing is published\./);
+    assert.equal(registryRequests.length, 3);
+
+    registryRequests = [];
+    registryAnswer = { status: 403, versions: [] };
+    const forbidden = await runRegistryCheck('3.3.0');
+    assert.equal(forbidden.status, 1);
+    assert.match(forbidden.stderr, /the registry answered 403; nothing is published\./);
+    assert.equal(registryRequests.length, 1);
+  });
+
+  test('a tag that npm never got does not hide the unfinished version below it on the next run', async () => {
+    commitFile('src/bot.ts', 'export const bot = 2;\n', 'fix: a');
+    runGit('tag', '-a', 'v3.3.0', '-m', 'v3.3.0');
+    registryAnswer = { status: 200, versions: ['3.2.0', '3.2.1'] };
+    const result = await runRegistryCheck('3.3.1');
+    assert.equal(result.status, 1, result.stdout);
+    assert.match(result.stderr, /npm holds demo-package 3\.2\.1/);
   });
 });
 
@@ -1142,7 +1174,7 @@ describe('commit-release', () => {
     fs.rmSync(githubOutputPath);
     const rerun = runCli('commit-release', '3.3.0', '--prepare');
     assert.equal(rerun.status, 0, `${rerun.stdout}\n${rerun.stderr}`);
-    assert.equal(readGithubOutput().isPushed, 'true');
+    assert.deepEqual(readGithubOutput(), { isPushed: 'true' }, 'no `tag` output: the workflow takes the tag from the gate');
   });
 
   test('--prepare that hits a real conflict says npm has the version already and how to finish', () => {

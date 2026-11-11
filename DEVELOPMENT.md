@@ -239,8 +239,9 @@ publish, no tag, no push, the run is red; the next day's run tries again by itse
     between the merge and the push —, a conflict with a commit that landed on `main` after `check-install`): **npm has a version
     the repository does not** (no tag, `main` still on the old version). Every later run then stops before publishing anything,
     naming the version, until the release is finished: in `gate` when it would release ANOTHER version (`check-registry`: npm
-    holds a version newer than every release tag but the run's own — releasing past it would lose it for good, its bump moving
-    `package.json` beyond it), in `package` when it packs another tarball of THAT version (npm cannot take it, and tagging it
+    holds a version, not the run's own, newer than the newest one both tagged and on npm — a tag npm never got does not count —;
+    releasing past it would lose it for good, its bump moving `package.json` beyond it; a registry that does not answer is read
+    again after 1 s and 3 s), in `package` when it packs another tarball of THAT version (npm cannot take it, and tagging it
     would be wrong); a run that packs the very same tarball goes on and finishes the release. To finish it:
     1. "Re-run failed jobs" on THAT run (within 7 days, the artifact's life; the version's provenance on npmjs.com links the run)
        — not "Re-run all jobs", which packs anew and, on another day, is refused: `publish` sees npm holds exactly its tarball
@@ -252,6 +253,8 @@ publish, no tag, no push, the run is red; the next day's run tries again by itse
        — it commits that commit plus the tarball's version files and nothing else, merges `main` and pushes; a real conflict
        with `main` is resolved by hand, then push `main` and the tag —, and `yarn tsx src/release/cli.ts notes X.Y.Z > notes.md`,
        `gh release create vX.Y.Z --verify-tag --title vX.Y.Z --notes-file notes.md`.
+  - A version with no release run — published by hand, or its tag only on another remote (a clone whose `origin` is not
+    GitHub) — stops the runs the same way: push its `vX.Y.Z` tag to GitHub.
   - A hand-pushed tag is in the repository before its publish: when that fails, "Re-run failed jobs" on its run.
 - **The shrinkwrap:** `npm-shrinkwrap.json` (`src/release/hubShrinkwrap.ts`) pins the package's whole run-time tree as
   `yarn.lock` resolved it — every tarball by its sha512, `hasInstallScript` where the registry says so (or npm would not
