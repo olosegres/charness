@@ -37,6 +37,25 @@ import { requestGroupKeyToString, type RequestGroupKey } from './requests/reques
 import type { Locale } from './i18n';
 import type { LimitHeldPrompt } from './utils/limitHeldPrompts';
 import type { LastRunVersion, SelfUpdateRecord } from './selfUpdate/types';
+import {
+  addInviteToMap,
+  addTalkerToMap,
+  dropOtherSpacesFromMap,
+  getEffectiveTalkerIds as getEffectiveTalkerIdsFromMap,
+  getTalkerScope as getTalkerScopeFromMap,
+  pruneExpiredInvitesInMap,
+  refreshIdentityInMap,
+  removeInviteFromMap,
+  removeTalkerFromMap,
+  removeUserFromMap,
+  resolveInvitesInMap,
+  type ResolvedTopicInvite,
+  type TalkerScope,
+  type TopicGranter,
+  type TopicTalkersEntry,
+  type TopicTalkersMap,
+  type TopicTalkerUser,
+} from './topicTalkers';
 
 /**
  * @description On-disk state for the multi-thread telegram bot.
@@ -723,6 +742,13 @@ export interface StateV1 {
    * key so an idle bot leaves a clean `state.json`.
    */
   transientFrames?: Record<string, number[]>;
+  /**
+   * The per-topic talker lists (`/access`, `topicTalkers.ts`): who besides the group's admins may talk to the agent in a
+   * topic, keyed by the topic's {@link SessionKey} string; General's list is group-wide. Each list carries a `revision`
+   * that never restarts (an emptied list stays as a tombstone). Every change is flushed at once — a revoke a crash could
+   * undo is a security hole. Optional so older state files stay valid; absent until somebody is added.
+   */
+  topicTalkers?: TopicTalkersMap;
 }
 
 /** Empty state used both for fresh installs and after a corruption-archive event. */
@@ -1587,6 +1613,105 @@ export class StateStore {
   async setPairedGroupId(groupId: number): Promise<void> {
     this.state.pairedGroupId = groupId;
     await this.flush();
+  }
+
+  // ── per-topic talkers (`/access`) ──
+
+  /**
+   * @description The talker list of one topic (a copy), after dropping its expired invitations — an expiry bumps the
+   * revision like any change. An empty list when the topic never had one.
+   */
+  getTopicTalkers(key: SessionKey, now: number = Date.now()): TopicTalkersEntry {
+    if (this.state.topicTalkers && pruneExpiredInvitesInMap(this.state.topicTalkers, now)) this.scheduleSave();
+    const entry = this.state.topicTalkers?.[keyToString(key)];
+    if (!entry) return { revision: 0, talkers: [], invites: [] };
+    return {
+      revision: entry.revision,
+      talkers: entry.talkers.map((talker) => ({ ...talker })),
+      invites: entry.invites.map((invite) => ({ ...invite })),
+    };
+  }
+
+  /** @description Ids that may talk in `key`: its own list and the group-wide list of `generalKey`. Cheap: read on every update of a non-admin. */
+  getEffectiveTalkerIds(key: SessionKey, generalKey: SessionKey): Set<string> {
+    return getEffectiveTalkerIdsFromMap(this.state.topicTalkers ?? {}, keyToString(key), keyToString(generalKey));
+  }
+
+  /** @description Where `userId`'s right to talk in `key` comes from (its own list or General's), `null` for nobody. */
+  getTalkerScope(key: SessionKey, generalKey: SessionKey, userId: string): TalkerScope | null {
+    return getTalkerScopeFromMap(this.state.topicTalkers ?? {}, keyToString(key), keyToString(generalKey), userId);
+  }
+
+  /** @description The topics that list at least one talker, with how many (General's own list included): the summary General's `/access` shows. */
+  getTopicTalkerCounts(): { key: SessionKey; talkerCount: number }[] {
+    const counts: { key: SessionKey; talkerCount: number }[] = [];
+    for (const [threadKey, entry] of Object.entries(this.state.topicTalkers ?? {})) {
+      const key = tryKeyFromString(threadKey);
+      if (key && entry.talkers.length > 0) counts.push({ key, talkerCount: entry.talkers.length });
+    }
+    return counts;
+  }
+
+  /** @description Add a talker to a topic's list and flush. `already` when their id is listed. */
+  async addTopicTalker(key: SessionKey, user: TopicTalkerUser, granter: TopicGranter): Promise<'added' | 'already'> {
+    const result = addTalkerToMap((this.state.topicTalkers ??= {}), keyToString(key), user, granter, Date.now());
+    if (result === 'added') await this.flush();
+    return result;
+  }
+
+  /** @description Take a talker off a topic's list and flush. `false` when they were not on it. */
+  async removeTopicTalker(key: SessionKey, userId: string): Promise<boolean> {
+    if (!this.state.topicTalkers) return false;
+    const isRemoved = removeTalkerFromMap(this.state.topicTalkers, keyToString(key), userId);
+    if (isRemoved) await this.flush();
+    return isRemoved;
+  }
+
+  /** @description Add a username invitation (waits for the person's first message) and flush. */
+  async addTopicInvite(key: SessionKey, username: string, granter: TopicGranter): Promise<'added' | 'already' | 'listed'> {
+    const result = addInviteToMap((this.state.topicTalkers ??= {}), keyToString(key), username, granter, Date.now());
+    if (result === 'added') await this.flush();
+    return result;
+  }
+
+  /** @description Cancel a waiting invitation and flush. `false` when none waits for the name. */
+  async removeTopicInvite(key: SessionKey, username: string): Promise<boolean> {
+    if (!this.state.topicTalkers) return false;
+    const isRemoved = removeInviteFromMap(this.state.topicTalkers, keyToString(key), username);
+    if (isRemoved) await this.flush();
+    return isRemoved;
+  }
+
+  /**
+   * @description `user` wrote: every invitation that waits for their username becomes an entry by their id (all topics at
+   * once), flushed. Returns the topics newly listing them so the caller can announce each grant. Cheap when nobody waits.
+   */
+  async resolveTopicInvites(user: TopicTalkerUser, now: number = Date.now()): Promise<ResolvedTopicInvite[]> {
+    if (!user.username || !this.state.topicTalkers) return [];
+    const { resolved, isChanged } = resolveInvitesInMap(this.state.topicTalkers, user, now);
+    if (isChanged) await this.flush();
+    return resolved;
+  }
+
+  /** @description The person left the group or was banned: drop them from every topic's list, flushed. Returns the topics they were on. */
+  async removeUserFromAllTopics(userId: string): Promise<string[]> {
+    if (!this.state.topicTalkers) return [];
+    const topics = removeUserFromMap(this.state.topicTalkers, userId);
+    if (topics.length > 0) await this.flush();
+    return topics;
+  }
+
+  /** @description Refresh the name and @username the lists show of a person the bot just saw write. Writes (debounced) only on a change. */
+  updateTalkerIdentity(user: TopicTalkerUser): void {
+    if (this.state.topicTalkers && refreshIdentityInMap(this.state.topicTalkers, user)) this.scheduleSave();
+  }
+
+  /** @description The served group changed: drop the lists of every other chat, flushed; the field goes with its last list. */
+  async dropTopicTalkersOfOtherChats(chatId: number): Promise<void> {
+    if (!this.state.topicTalkers) return;
+    const dropped = dropOtherSpacesFromMap(this.state.topicTalkers, chatId.toString());
+    if (Object.keys(this.state.topicTalkers).length === 0) delete this.state.topicTalkers;
+    if (dropped.length > 0) await this.flush();
   }
 
   // ── output-trace toggle (`/trace`) ──

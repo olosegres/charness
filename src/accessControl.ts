@@ -41,6 +41,32 @@ export function getElevatedMemberIds(members: PlatformMember[]): string[] {
   return ids;
 }
 
+/**
+ * @name SenderRole
+ * @description What a sender is to the bot in one conversation: an `admin` (the group's creator or an administrator —
+ * everything, everywhere), a `talker` (an admin put them on this topic's list, or on General's: they talk to the agent
+ * there and may use only the commands flagged for talkers) or `none` (ignored, silently).
+ */
+export type SenderRole = 'admin' | 'talker' | 'none';
+
+export interface SenderRoleInput {
+  userId: string;
+  /** The admin set ({@link AdminCache}). */
+  adminIds: ReadonlySet<string>;
+  /** The ids that may talk in THIS conversation — its own list and General's group-wide one (`getEffectiveTalkerIds`). */
+  talkerIds: ReadonlySet<string>;
+}
+
+/**
+ * @description The sender's role. Admin wins: a talker who is later made an admin keeps their list entries, and they
+ * stay harmless while the person is an admin and apply again after a demotion.
+ */
+export function getSenderRole({ userId, adminIds, talkerIds }: SenderRoleInput): SenderRole {
+  if (adminIds.has(userId)) return 'admin';
+  if (talkerIds.has(userId)) return 'talker';
+  return 'none';
+}
+
 export interface AdminCacheDeps {
   /**
    * Fetches the ids currently holding elevated rights in the served space —

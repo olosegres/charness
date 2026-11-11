@@ -23,6 +23,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import { StateStore } from '../state';
+import { topicInviteTtlMs } from '../topicTalkers';
 import { keyToString, type SessionKey } from '../sessionKey';
 import { getTelegramChatId, makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
 
@@ -1243,4 +1244,169 @@ test('the task-agent wait list: empty by default, kept in order across a restart
   reloaded.setTaskAgentWaitList([]);
   await reloaded.flush();
   assert.ok(!('taskAgentWaitList' in JSON.parse(fs.readFileSync(path.join(dataDir, 'state.json'), 'utf8'))), 'an idle bot leaves a clean state.json');
+});
+
+// ─── per-topic talker lists (`/access`) ──────────────────────────────
+
+const talkerAdmin = { userId: '900', name: 'Sam Admin' };
+const talkerAlice = { userId: '101', username: 'alice_w', name: 'Alice Smith' };
+const talkerBob = { userId: '102', name: 'Bob Stone' };
+const talkerGeneralKey: SessionKey = makeTelegramKey(-1001234567890, 1);
+
+function readStateFileJson(): {
+  topicTalkers?: Record<string, { revision: number; talkers: { username?: string; name: string }[]; invites: unknown[] }>;
+} {
+  return JSON.parse(fs.readFileSync(path.join(dataDir, 'state.json'), 'utf8'));
+}
+
+test('talkers: a fresh or pre-feature state file reads as nobody, and the file gets no field until somebody is added', async () => {
+  fs.writeFileSync(path.join(dataDir, 'state.json'), JSON.stringify({ version: 1, bindings: {}, agents: {}, messages: {} }));
+  const store = new StateStore(dataDir, { saveDebounceMs: 20 });
+  await store.init();
+  assert.deepEqual(store.getTopicTalkers(key1), { revision: 0, talkers: [], invites: [] });
+  assert.deepEqual([...store.getEffectiveTalkerIds(key1, talkerGeneralKey)], []);
+  assert.equal(store.getTalkerScope(key1, talkerGeneralKey, '101'), null);
+  assert.deepEqual(store.getTopicTalkerCounts(), []);
+  assert.equal(await store.removeTopicTalker(key1, '101'), false);
+  assert.deepEqual(await store.removeUserFromAllTopics('101'), []);
+  await store.flush();
+  assert.ok(!('topicTalkers' in readStateFileJson()), 'reading and refused writes leave the file alone');
+});
+
+test('talkers: an add and a revoke reach the disk BEFORE the call returns (a crash cannot undo a revoke)', async () => {
+  // A debounce far longer than the test proves the write is the call's own flush, not the background timer.
+  const store = new StateStore(dataDir, { saveDebounceMs: 600_000 });
+  await store.init();
+  assert.equal(await store.addTopicTalker(key1, talkerAlice, talkerAdmin), 'added');
+  assert.equal(readStateFileJson().topicTalkers?.[keyToString(key1)]?.talkers.length, 1);
+  assert.equal(await store.addTopicTalker(key1, talkerAlice, talkerAdmin), 'already');
+  assert.equal(await store.removeTopicTalker(key1, '101'), true);
+  assert.equal(readStateFileJson().topicTalkers?.[keyToString(key1)]?.talkers.length, 0, 'the revoke is on disk');
+  assert.equal(await store.addTopicInvite(key1, '@Carol_X', talkerAdmin), 'added');
+  assert.equal(readStateFileJson().topicTalkers?.[keyToString(key1)]?.invites.length, 1);
+  assert.equal(await store.removeTopicInvite(key1, 'carol_x'), true);
+  assert.equal(readStateFileJson().topicTalkers?.[keyToString(key1)]?.invites.length, 0);
+});
+
+test('talkers: the lists, their revisions and the waiting invitations survive a restart', async () => {
+  const store = new StateStore(dataDir, { saveDebounceMs: 20 });
+  await store.init();
+  await store.addTopicTalker(key1, talkerAlice, talkerAdmin);
+  await store.addTopicTalker(key1, talkerBob, talkerAdmin);
+  await store.addTopicInvite(key2, 'carol_x', talkerAdmin);
+  const before = store.getTopicTalkers(key1);
+
+  const reloaded = new StateStore(dataDir, { saveDebounceMs: 20 });
+  await reloaded.init();
+  assert.deepEqual(reloaded.getTopicTalkers(key1), before);
+  assert.equal(before.revision, 2);
+  assert.deepEqual(reloaded.getTopicTalkers(key2).invites.map((invite) => invite.username), ['carol_x']);
+  assert.equal(reloaded.getTalkerScope(key1, talkerGeneralKey, '101'), 'own');
+  assert.equal(reloaded.getTalkerScope(key2, talkerGeneralKey, '101'), null, 'a list belongs to its topic');
+});
+
+test('talkers: a read is a copy', async () => {
+  const store = new StateStore(dataDir, { saveDebounceMs: 20 });
+  await store.init();
+  await store.addTopicTalker(key1, talkerAlice, talkerAdmin);
+  const view = store.getTopicTalkers(key1);
+  view.talkers[0].name = 'Changed';
+  view.talkers.length = 0;
+  assert.equal(store.getTopicTalkers(key1).talkers[0].name, 'Alice Smith');
+});
+
+test('talkers: General\'s list is group-wide, and the counts summarise the topics that have talkers', async () => {
+  const store = new StateStore(dataDir, { saveDebounceMs: 20 });
+  await store.init();
+  await store.addTopicTalker(talkerGeneralKey, talkerAlice, talkerAdmin);
+  await store.addTopicTalker(key1, talkerBob, talkerAdmin);
+  await store.addTopicTalker(key2, talkerBob, talkerAdmin);
+  await store.removeTopicTalker(key2, '102');
+  assert.deepEqual([...store.getEffectiveTalkerIds(key1, talkerGeneralKey)].sort(), ['101', '102']);
+  assert.deepEqual([...store.getEffectiveTalkerIds(key2, talkerGeneralKey)], ['101']);
+  assert.equal(store.getTalkerScope(key2, talkerGeneralKey, '101'), 'general');
+  assert.deepEqual(
+    store.getTopicTalkerCounts().map((entry) => [keyToString(entry.key), entry.talkerCount]).sort(),
+    [[keyToString(talkerGeneralKey), 1], [keyToString(key1), 1]].sort(),
+    'an emptied list is left out',
+  );
+});
+
+test('talkers: a username invitation resolves on the first message of its person, across topics, and the grant is on disk', async () => {
+  const store = new StateStore(dataDir, { saveDebounceMs: 600_000 });
+  await store.init();
+  await store.addTopicInvite(key1, 'alice_w', talkerAdmin);
+  await store.addTopicInvite(key2, 'Alice_W', talkerAdmin);
+  assert.deepEqual(await store.resolveTopicInvites(talkerBob), [], 'a stranger resolves nothing');
+  const resolved = await store.resolveTopicInvites(talkerAlice);
+  assert.deepEqual(resolved.map((entry) => entry.threadKey).sort(), [keyToString(key1), keyToString(key2)].sort());
+  assert.equal(store.getTalkerScope(key1, talkerGeneralKey, '101'), 'own');
+  assert.equal(store.getTalkerScope(key2, talkerGeneralKey, '101'), 'own');
+  const onDisk = readStateFileJson().topicTalkers;
+  assert.equal(onDisk?.[keyToString(key1)]?.talkers.length, 1, 'flushed by the call');
+  assert.equal(onDisk?.[keyToString(key1)]?.invites.length, 0);
+  assert.deepEqual(await store.resolveTopicInvites(talkerAlice), [], 'nothing waits any more');
+});
+
+test('talkers: a waiting invitation expires after 7 days — on read it is gone and the revision moved', async () => {
+  const store = new StateStore(dataDir, { saveDebounceMs: 20 });
+  await store.init();
+  await store.addTopicInvite(key1, 'carol_x', talkerAdmin);
+  const fresh = store.getTopicTalkers(key1);
+  assert.equal(fresh.invites.length, 1);
+  const { addedAt } = fresh.invites[0];
+  assert.equal(store.getTopicTalkers(key1, addedAt + topicInviteTtlMs - 1).invites.length, 1);
+  const expired = store.getTopicTalkers(key1, addedAt + topicInviteTtlMs);
+  assert.equal(expired.invites.length, 0);
+  assert.equal(expired.revision, fresh.revision + 1, 'a stale keyboard of the list that still showed the invitation is told apart');
+  assert.deepEqual(await store.resolveTopicInvites({ userId: '103', username: 'carol_x', name: 'Carol' }, addedAt + 8 * 24 * 3600_000), []);
+});
+
+test('talkers: leaving the group drops the person from every list at once, flushed', async () => {
+  const store = new StateStore(dataDir, { saveDebounceMs: 600_000 });
+  await store.init();
+  await store.addTopicTalker(key1, talkerAlice, talkerAdmin);
+  await store.addTopicTalker(key2, talkerAlice, talkerAdmin);
+  await store.addTopicTalker(key2, talkerBob, talkerAdmin);
+  assert.deepEqual((await store.removeUserFromAllTopics('101')).sort(), [keyToString(key1), keyToString(key2)].sort());
+  const onDisk = readStateFileJson().topicTalkers;
+  assert.equal(onDisk?.[keyToString(key1)]?.talkers.length, 0);
+  assert.equal(onDisk?.[keyToString(key2)]?.talkers.length, 1);
+  assert.equal(store.getTalkerScope(key1, talkerGeneralKey, '101'), null);
+});
+
+test('talkers: a rename or a new @username refreshes the entries, and only a real change schedules a write', async () => {
+  const store = new StateStore(dataDir, { saveDebounceMs: 20 });
+  await store.init();
+  await store.addTopicTalker(key1, talkerAlice, talkerAdmin);
+  await store.flush();
+  const statePath = path.join(dataDir, 'state.json');
+  const writtenAt = fs.statSync(statePath).mtimeMs;
+
+  store.updateTalkerIdentity(talkerAlice);
+  store.updateTalkerIdentity({ userId: '555', name: 'Nobody' });
+  await new Promise((resolve) => setTimeout(resolve, 80));
+  assert.equal(fs.statSync(statePath).mtimeMs, writtenAt, 'an unchanged identity writes nothing');
+
+  store.updateTalkerIdentity({ userId: '101', username: 'alice_new', name: 'Alice Jones' });
+  assert.equal(store.getTopicTalkers(key1).talkers[0].name, 'Alice Jones');
+  assert.equal(store.getTopicTalkers(key1).revision, 1, 'a name never moves the revision');
+  await store.flush();
+  assert.equal(readStateFileJson().topicTalkers?.[keyToString(key1)]?.talkers[0].username, 'alice_new');
+});
+
+test('talkers: a re-pair drops the lists of the old group, flushed; the field leaves with the last list', async () => {
+  const store = new StateStore(dataDir, { saveDebounceMs: 600_000 });
+  await store.init();
+  const otherGroupKey = makeTelegramKey(-1009999999999, 5);
+  await store.addTopicTalker(key1, talkerAlice, talkerAdmin);
+  await store.addTopicTalker(otherGroupKey, talkerBob, talkerAdmin);
+
+  await store.dropTopicTalkersOfOtherChats(getTelegramChatId(key1));
+  assert.deepEqual(Object.keys(readStateFileJson().topicTalkers ?? {}), [keyToString(key1)]);
+  assert.equal(store.getTalkerScope(otherGroupKey, talkerGeneralKey, '102'), null);
+
+  await store.dropTopicTalkersOfOtherChats(-1008888888888);
+  assert.ok(!('topicTalkers' in readStateFileJson()), 'no list left, no field');
+  await store.dropTopicTalkersOfOtherChats(-1008888888888);
 });

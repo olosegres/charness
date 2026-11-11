@@ -15,7 +15,7 @@
 import { test } from 'node:test';
 import * as assert from 'node:assert/strict';
 import type { PlatformMember } from '../platform/inbound';
-import { getElevatedMemberIds, AdminCache } from '../accessControl';
+import { getElevatedMemberIds, getSenderRole, AdminCache } from '../accessControl';
 
 function elevated(id: number, isBot = false): PlatformMember {
   return { id: id.toString(), displayName: `u${id}`, isBot, hasElevatedRights: true };
@@ -150,4 +150,24 @@ test('AdminCache: invalidate() forces the next read to re-fetch', async () => {
   cache.invalidate();
   await cache.getAdminIds();
   assert.equal(calls, 2); // forced refresh
+});
+
+// ─── getSenderRole ──────────────────────────────────────────────────────
+
+test('getSenderRole: an admin, a talker and a stranger', () => {
+  const adminIds = new Set(['1']);
+  const talkerIds = new Set(['2']);
+  assert.equal(getSenderRole({ userId: '1', adminIds, talkerIds }), 'admin');
+  assert.equal(getSenderRole({ userId: '2', adminIds, talkerIds }), 'talker');
+  assert.equal(getSenderRole({ userId: '3', adminIds, talkerIds }), 'none');
+});
+
+test('getSenderRole: admin wins over a list entry, and the entry applies again after a demotion', () => {
+  const talkerIds = new Set(['2']);
+  assert.equal(getSenderRole({ userId: '2', adminIds: new Set(['2']), talkerIds }), 'admin');
+  assert.equal(getSenderRole({ userId: '2', adminIds: new Set<string>(), talkerIds }), 'talker');
+});
+
+test('getSenderRole: ids are strings, so a numeric-looking id never matches by coercion', () => {
+  assert.equal(getSenderRole({ userId: '10', adminIds: new Set(['1']), talkerIds: new Set(['1']) }), 'none');
 });
