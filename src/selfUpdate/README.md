@@ -27,7 +27,9 @@ throws, a result the caller words):
 
 - `npmSource.ts` — `npm view charness@latest version engines deprecated --json`; `npm install -g --prefix <prefix>
   charness@X` with the npm NEXT TO the running `node` (nvm-safe, the user's `.npmrc` honoured), scripts on (node-pty builds);
-  a rollback adds `--prefer-offline`. Never sudo.
+  a rollback adds `--prefer-offline`. Never sudo. npm installs by the package's `npm-shrinkwrap.json` (npm ≤ 11: every
+  dependency at its tested version, `src/release/hubShrinkwrap.ts`); the install runs without the bot's own secrets
+  (`getChildProcessEnvironment`).
 - `hostLock.ts` — one installer per host: `<prefix>/lib/node_modules/.charness-update.lock` (created exclusively, pid + start
   time; taken over when its pid is dead or it is older than 30 min). The others find the new version on disk and restart onto it.
 - `gitSource.ts` — drives `scripts/self-update.sh`: `--check` (fetch only → `status=behind|upToDate|skip`, `reason`, `from`,

@@ -7,8 +7,15 @@ name: Release to npm
 # Publishing uses npm trusted publishing (OIDC, provenance, no npm token anywhere): the package's Trusted
 # Publisher on npmjs.com names this repository, this file name and the `release` environment.
 #
-# prepare and publish are two jobs of ONE run on purpose: a tag pushed with GITHUB_TOKEN does not start
+# prepare, package, check-install and publish are jobs of ONE run on purpose: a tag pushed with GITHUB_TOKEN does not start
 # another workflow run, so the bot's own tag push cannot publish twice.
+#
+# The right to publish (`id-token: write`, npm trusted publishing) is held by `publish` alone, and that job runs no code of the
+# repository and installs no package: it downloads the tarball `package` packed, checks its sha256 against the one `package` reported,
+# and publishes it. `package` (no publish right, no write right) installs from the lockfile with no install scripts, builds, checks and
+# packs; `check-install` (no publish right, no write right) installs that tarball the way a user does — from a registry, by its
+# npm-shrinkwrap.json — and checks npm installed exactly the pinned tree. npm itself is pinned, to an exact version, installed with no
+# scripts. A pull of an unpinned package with an install script can no longer happen where the publish token can be minted.
 #
 # The suite is not run here when the exact commit already passed in the `Tests` workflow (test.yml, every push to main): the
 # release looks that run up by the commit's SHA. Passed → go on; no run at all → run the suite here; red or still running → the
@@ -72,8 +79,9 @@ jobs:
         with:
           node-version: 22
           cache: yarn
-      # The same npm as the publish job: only npm >= 11.10 reports what it would drop from package.json (the dry run below).
-      - run: npm install -g 'npm@^11.5.1'
+      # The same npm as the other jobs, pinned exactly and installed with no scripts: only npm >= 11.10 reports what it would drop from
+      # package.json (the dry run below); npm 12 would read no shrinkwrap and pack none (the package check refuses that).
+      - run: npm install -g --ignore-scripts 'npm@11.21.1'
       - run: yarn install --immutable
       - name: Plan the release
         id: plan
@@ -111,6 +119,7 @@ jobs:
         env:
           TESTED: ${{ steps.gate.outputs.sha }}
         run: yarn tsx src/release/cli.ts verify-delta --base "$TESTED"
+      # The contents, then an install of the packed tree from a loopback registry by its shrinkwrap (pinned versions, no fresh resolution).
       - name: Package check
         if: steps.gate.outputs.proceed == 'true'
         env:
@@ -147,20 +156,25 @@ jobs:
           VERSION: ${{ steps.plan.outputs.version }}
         run: yarn tsx src/release/cli.ts commit-release "$VERSION"
 
-  publish:
+  package:
     # After prepare pushed a tag, or for a tag pushed by hand. Never in a dry run (no tag output), never after a red prepare.
+    # Builds, checks and packs the tagged commit; holds neither the publish right nor a write right.
     needs: prepare
     if: ${{ !cancelled() && (github.event_name == 'push' || (needs.prepare.result == 'success' && needs.prepare.outputs.tag != '')) }}
     runs-on: ubuntu-latest
-    timeout-minutes: 120
-    environment: release
+    timeout-minutes: 150
     permissions:
-      contents: write # the GitHub Release
-      id-token: write # npm trusted publishing (OIDC)
+      contents: read
       actions: read # the Tests workflow's runs (a hand-pushed tag)
     env:
       TAG: ${{ needs.prepare.outputs.tag || github.ref_name }}
-      GH_REPO: ${{ github.repository }}
+    outputs:
+      # The jobs after this one see only what it hands on (`needs` reaches direct dependencies only).
+      tag: ${{ env.TAG }}
+      name: ${{ steps.version.outputs.name }}
+      version: ${{ steps.version.outputs.version }}
+      tarball: ${{ steps.pack.outputs.tarball }}
+      sha256: ${{ steps.pack.outputs.sha256 }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -172,13 +186,13 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: 22
-          registry-url: 'https://registry.npmjs.org'
-          # This job holds the OIDC publish right: nothing restored from a cache runs in it.
+          # What is packed here is published: nothing restored from a cache runs in it.
           package-manager-cache: false
-      # Trusted publishing needs npm >= 11.5.1 and Node >= 22.14; ^11 stays on a major that supports Node 22.
-      - run: npm install -g 'npm@^11.5.1'
-      - run: yarn install --immutable
+      - run: npm install -g --ignore-scripts 'npm@11.21.1'
+      # The lockfile only, and no package's install script: the build needs none (tsc), the tarball holds none of node_modules.
+      - run: yarn install --immutable --mode=skip-build
       - name: The tag is the version in package.json
+        id: version
         run: |
           version="$(node -p "require('./package.json').version")"
           if [ "${TAG}" != "v${version}" ]; then
@@ -186,8 +200,8 @@ jobs:
             exit 1
           fi
           echo "VERSION=${version}" >> "$GITHUB_ENV"
-      - name: Build
-        run: yarn build
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "name=$(node -p "require('./package.json').name")" >> "$GITHUB_OUTPUT"
       # prepare already gated the tested commit of a scheduled / dispatched release: the tag is that commit plus its version bump.
       - name: The tag is the tested commit plus its version bump
         if: needs.prepare.outputs.tested != ''
@@ -208,31 +222,134 @@ jobs:
       - name: Install tmux
         if: steps.gate.outputs.runSuite == 'true'
         run: sudo apt-get update -qq && sudo apt-get install -y -qq tmux
+      # The suite needs the native builds (node-pty): only then, and in this job, which can neither publish nor push.
+      - name: Install with the builds the suite needs
+        if: steps.gate.outputs.runSuite == 'true'
+        run: yarn install --immutable
       - name: Typecheck
         if: steps.gate.outputs.runSuite == 'true'
         run: yarn typecheck
+      - name: Build
+        run: yarn build
       - name: Test (unit and flows)
         if: steps.gate.outputs.runSuite == 'true'
         run: yarn test
       - name: Release notes (read before publishing, so a missing section fails early)
-        run: yarn tsx src/release/cli.ts notes "$VERSION" > "${RUNNER_TEMP}/release-notes.md"
-      - name: Package check
-        run: yarn tsx src/release/cli.ts check-pack --version "$VERSION"
-      - name: Publish to npm
         run: |
-          name="$(node -p "require('./package.json').name")"
-          if npm view "${name}@${VERSION}" version > /dev/null 2>&1; then
-            echo "${name}@${VERSION} is already on npm; not publishing it again (a re-run after a later step failed)."
+          mkdir -p "${RUNNER_TEMP}/release-package"
+          yarn tsx src/release/cli.ts notes "$VERSION" > "${RUNNER_TEMP}/release-package/release-notes.md"
+      - name: Package check (contents; the install is the next job's)
+        run: yarn tsx src/release/cli.ts check-pack --version "$VERSION" --skip-install
+      # A re-run after the publish went through and a later step failed: the dry run of a version already on npm fails by itself.
+      - name: Already on npm?
+        id: published
+        run: |
+          if npm view "$(node -p "require('./package.json').name")@${VERSION}" version > /dev/null 2>&1; then
+            echo "isPublished=true" >> "$GITHUB_OUTPUT"
           else
-            yarn tsx src/release/cli.ts check-publish
-            npm publish --provenance --access public
+            echo "isPublished=false" >> "$GITHUB_OUTPUT"
+          fi
+      - name: npm publish dry run (refuses what npm would drop from package.json)
+        if: steps.published.outputs.isPublished != 'true'
+        run: yarn tsx src/release/cli.ts check-publish
+      - name: Pack
+        id: pack
+        run: |
+          tarball="$(npm pack --ignore-scripts --pack-destination "${RUNNER_TEMP}/release-package" --json | node -e 'process.stdout.write(JSON.parse(require("fs").readFileSync(0, "utf8"))[0].filename)')"
+          sha256="$(sha256sum "${RUNNER_TEMP}/release-package/${tarball}" | cut -d' ' -f1)"
+          echo "tarball=${tarball}" >> "$GITHUB_OUTPUT"
+          echo "sha256=${sha256}" >> "$GITHUB_OUTPUT"
+          echo "Packed ${tarball}, sha256 ${sha256}"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: release-package
+          path: ${{ runner.temp }}/release-package
+          if-no-files-found: error
+          retention-days: 7
+
+  check-install:
+    # The packed tarball installed the way a user installs the release: from a registry, by its shrinkwrap (npm then runs the install
+    # scripts of the pinned packages). No publish right, no write right.
+    needs: package
+    if: ${{ !cancelled() && needs.package.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    env:
+      TAG: ${{ needs.package.outputs.tag }}
+      VERSION: ${{ needs.package.outputs.version }}
+      TARBALL: ${{ needs.package.outputs.tarball }}
+      SHA256: ${{ needs.package.outputs.sha256 }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: refs/tags/${{ env.TAG }}
+          persist-credentials: false
+      - run: corepack enable
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          package-manager-cache: false
+      - run: npm install -g --ignore-scripts 'npm@11.21.1'
+      # The release CLI only (tsx): no package's install script.
+      - run: yarn install --immutable --mode=skip-build
+      - uses: actions/download-artifact@v8
+        with:
+          name: release-package
+          path: ${{ runner.temp }}/release-package
+      - name: The tarball is the one the package job packed
+        run: echo "${SHA256}  ${RUNNER_TEMP}/release-package/${TARBALL}" | sha256sum -c -
+      - name: Install check
+        run: yarn tsx src/release/cli.ts check-install --tarball "${RUNNER_TEMP}/release-package/${TARBALL}" --version "$VERSION"
+
+  publish:
+    # Publishes the tarball the package job packed and the install check installed. The only job holding the publish right: it runs no
+    # repository code and installs nothing but the pinned npm, with no scripts.
+    needs: [package, check-install]
+    if: ${{ !cancelled() && needs.package.result == 'success' && needs.check-install.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: release
+    permissions:
+      contents: write # the GitHub Release
+      id-token: write # npm trusted publishing (OIDC)
+    env:
+      TAG: ${{ needs.package.outputs.tag }}
+      NAME: ${{ needs.package.outputs.name }}
+      VERSION: ${{ needs.package.outputs.version }}
+      TARBALL: ${{ needs.package.outputs.tarball }}
+      SHA256: ${{ needs.package.outputs.sha256 }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          registry-url: 'https://registry.npmjs.org'
+          package-manager-cache: false
+      # Trusted publishing needs npm >= 11.5.1 and Node >= 22.14; an exact version, with no scripts.
+      - run: npm install -g --ignore-scripts 'npm@11.21.1'
+      - uses: actions/download-artifact@v8
+        with:
+          name: release-package
+          path: ${{ runner.temp }}/release-package
+      - name: The tarball is the one the package job packed (and the install check installed)
+        run: echo "${SHA256}  ${RUNNER_TEMP}/release-package/${TARBALL}" | sha256sum -c -
+      - name: Publish to npm
+        working-directory: ${{ runner.temp }}/release-package
+        run: |
+          if npm view "${NAME}@${VERSION}" version > /dev/null 2>&1; then
+            echo "${NAME}@${VERSION} is already on npm; not publishing it again (a re-run after a later step failed)."
+          else
+            npm publish "./${TARBALL}" --provenance --access public
           fi
       - name: GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          notes="${RUNNER_TEMP}/release-package/release-notes.md"
           if gh release view "${TAG}" > /dev/null 2>&1; then
-            gh release edit "${TAG}" --notes-file "${RUNNER_TEMP}/release-notes.md"
+            gh release edit "${TAG}" --notes-file "${notes}"
           else
-            gh release create "${TAG}" --verify-tag --title "${TAG}" --notes-file "${RUNNER_TEMP}/release-notes.md"
+            gh release create "${TAG}" --verify-tag --title "${TAG}" --notes-file "${notes}"
           fi

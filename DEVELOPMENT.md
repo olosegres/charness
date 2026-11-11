@@ -211,13 +211,29 @@ the GitHub Release from the CHANGELOG section. Red anywhere → no tag, no publi
 again by itself. The logic is in `src/release/` (pure `releasePlan.ts` and `testGate.ts` + the `cli.ts` wrapper, run by
 `tsx`, never built into `dist/`).
 
+- **Jobs and rights:** `prepare` (write: the release commit and tag) → `package` (read only: installs from `yarn.lock` with
+  no install scripts — `--mode=skip-build` —, builds, checks the contents and the publish dry run, packs, uploads the tarball
+  and reports its sha256) → `check-install` (read only: installs that tarball the way a user does, below) → `publish` (the
+  only job with `id-token: write`: it checks out nothing and installs nothing but the pinned npm with no scripts — it checks
+  the tarball's sha256 against `package`'s and publishes THAT file, `npm publish <tarball> --provenance`, then the GitHub
+  Release). npm is pinned to an exact version in every job (`npm@11.21.1`, installed with `--ignore-scripts`); npm 12 reads no
+  shrinkwrap and packs none — move past 11 only together with another lock (the package check refuses a tarball without
+  `npm-shrinkwrap.json`). A hand-pushed tag's gate (and its suite, when no run covers it) runs in `package`.
+- **The shrinkwrap:** `npm-shrinkwrap.json` (`src/release/hubShrinkwrap.ts`) pins the package's whole run-time tree as
+  `yarn.lock` resolved it — every tarball by its sha512, `hasInstallScript` where the registry says so (or npm would not
+  run `node-pty`'s install script from it) —, so `npm install -g charness` and the npm self-update install what was tested,
+  with npm 11 and older (npm 12 resolves the ranges again). Run `yarn shrinkwrap` after every dependency change, beside
+  `yarn runner-lock` (`releaseHubShrinkwrap.test.ts` fails until you do; it asks the registry only about packages it does not
+  know yet). Its version is the package's: `apply` writes it, as `npm version` does, and `verify-delta` lets it differ from
+  the tested commit in exactly those two lines.
+
 - **Tests gate:** the release does not run the suite again when the exact commit already passed. It asks GitHub for the
   `Tests` workflow's runs of that commit's SHA (the newest run of the commit decides): **passed** → go on; **no run at all**
   (a manual dispatch before CI ran) → the release runs the suite itself; **failed or still running** → the daily run
   releases nothing that day and ends green with the reason (a red head is not skipped over to an older green commit), a
   manual dispatch or a hand-pushed tag fails with it. The release commit may differ from the tested one ONLY in
-  `package.json`'s `"version"` line and `CHANGELOG.md`: `verify-delta` checks the diff before the tag and again in the publish
-  job (the tag against the tested SHA) and refuses otherwise. A hand-pushed tag (`npm version`, then push `main` with the tag) is gated through its
+  `package.json`'s `"version"` line, the two version lines of `npm-shrinkwrap.json` and `CHANGELOG.md`: `verify-delta` checks
+  the diff before the tag and again in the package job (the tag against the tested SHA) and refuses otherwise. A hand-pushed tag (`npm version`, then push `main` with the tag) is gated through its
   PARENT: when the commit before the tag has a green `Tests` run and the tag differs from it only in the version and the CHANGELOG,
   that run is the gate — the tag's own run, started by the same push, is not waited for. When the parent is not green or the tag
   carries more than the bump, the tagged commit's own run decides (still running → refused: re-run the release once it is green).
@@ -241,12 +257,15 @@ again by itself. The logic is in `src/release/` (pure `releasePlan.ts` and `test
   paragraph or `- ` bullet, in any `###` subsection — starts with a bold first sentence (`**…**`); the run fails,
   quoting the line, otherwise (`changelogFormat.test.ts` fails first on a commit that breaks it). An empty
   `## Unreleased` is filled with the `feat` / `fix` subjects.
-- **Package check** before any tag: the tarball holds `dist/cli.js`, `stt/gigaam_sidecar.py`, `CHANGELOG.md`,
-  `README.md`, `LICENSE` and no `src/` or tests, and `charness --version` of it, installed into a temp prefix, prints
-  the new version (`yarn tsx src/release/cli.ts check-pack`, after `yarn build`). `bin` paths are written
+- **Package check** before any tag: the tarball holds `dist/cli.js`, `stt/gigaam_sidecar.py`, `npm-shrinkwrap.json`,
+  `CHANGELOG.md`, `README.md`, `LICENSE` and no `src/` or tests, and installed the way a user installs it — `npm install -g`
+  from a loopback registry that serves the tarball and marks its shrinkwrap, as the npm registry does (an install of the
+  tarball FILE ignores the shrinkwrap), dependencies passed on to the real registry — `charness --version` prints the new
+  version and every package sits at the version the shrinkwrap pins (`yarn tsx src/release/cli.ts check-pack`, after
+  `yarn build`; the `check-install` job runs the same install on the tarball `package` packed: `check-install --tarball`). `bin` paths are written
   `dist/cli.js`, never `./dist/cli.js`: npm >= 11.10 silently drops a "./" entry from the manifest it publishes (3.3.0
   reached the registry without its commands), so `check-pack` and `packageManifest.test.ts` refuse one, and
-  `check-publish` (`npm publish --dry-run`, run before the tag and again right before the publish) refuses a package.json
+  `check-publish` (`npm publish --dry-run`, run before the tag and again in the package job) refuses a package.json
   that npm reports it would drop or rewrite anything from.
 - **After a release** the clone is one commit behind `main`: `git pull --rebase` before pushing. A new CHANGELOG entry
   goes under `## Unreleased` (a push that races the release can conflict there; the run then fails with nothing

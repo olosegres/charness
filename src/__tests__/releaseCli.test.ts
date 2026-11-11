@@ -53,6 +53,33 @@ const initialChangelog = [
   '',
 ].join('\n');
 
+/** A dependency the shrinkwrap pins BELOW the newest version its range allows (^2.0.0 resolves to 2.1.x): which one npm installed tells whether it read the shrinkwrap. */
+const pinnedDependency = {
+  name: 'ms',
+  range: '^2.0.0',
+  version: '2.0.0',
+  integrity: 'sha512-Tpp60P6IUJDTuOq/5Z8cdskzJujfwqfOTkrwIwj7IRISpnkJnT6SyJ4PCPnGMoFjC9ddhal5KVIYtAt97ix05A==',
+};
+
+/** The shrinkwrap of the fixture package at `version`, pinning {@link pinnedDependency}, as `hubShrinkwrap.ts` writes it. */
+function createFixtureShrinkwrap(version: string): string {
+  const shrinkwrap = {
+    name: initialPackage.name,
+    version,
+    lockfileVersion: 3,
+    requires: true,
+    packages: {
+      '': { name: initialPackage.name, version, dependencies: { [pinnedDependency.name]: pinnedDependency.range } },
+      [`node_modules/${pinnedDependency.name}`]: {
+        version: pinnedDependency.version,
+        resolved: `https://registry.npmjs.org/${pinnedDependency.name}/-/${pinnedDependency.name}-${pinnedDependency.version}.tgz`,
+        integrity: pinnedDependency.integrity,
+      },
+    },
+  };
+  return `${JSON.stringify(shrinkwrap, null, 2)}\n`;
+}
+
 let transpiledDir: string;
 let transpiledCliPath: string;
 let sandboxDir: string;
@@ -87,10 +114,14 @@ function transpileReleaseCli(): void {
   transpiledCliPath = getTranspiledPath(releaseCliPath);
 }
 
+/** Where the transpiled CLI finds its packages (`zod`, through the runner's lock module): it runs from a folder outside the checkout. */
+const checkoutNodeModulesPath = path.resolve(sourceRootDir, '..', 'node_modules');
+
 /** The environment of the CLI under test: no git identity, so the identity the CLI itself sets is what a commit shows. */
 function createChildEnv(): NodeJS.ProcessEnv {
   return {
     PATH: process.env.PATH,
+    NODE_PATH: checkoutNodeModulesPath,
     HOME: homeDir,
     GIT_CONFIG_GLOBAL: os.devNull,
     GIT_CONFIG_SYSTEM: os.devNull,
@@ -324,6 +355,15 @@ describe('apply and changelog', () => {
     assert.ok(dates.includes(date), `${date} is not today in Tbilisi (${dates.join(' / ')})`);
   });
 
+  test('apply writes the version into npm-shrinkwrap.json too — its own and its root entry\'s, as npm version does —, and the result is the tested commit plus its release', () => {
+    commitFile('npm-shrinkwrap.json', createFixtureShrinkwrap('3.2.0'), 'build: the shrinkwrap');
+    const tested = runGit('rev-parse', 'HEAD');
+    assert.equal(runCli('apply', '3.2.1').status, 0);
+    assert.equal(fs.readFileSync(path.join(repoDir, 'npm-shrinkwrap.json'), 'utf8'), createFixtureShrinkwrap('3.2.1'));
+    const delta = runCli('verify-delta', '--base', tested);
+    assert.equal(delta.status, 0, `${delta.stdout}\n${delta.stderr}`);
+  });
+
   test('apply fills an empty Unreleased from the feat / fix subjects since the tag', () => {
     writeRepoFile('CHANGELOG.md', initialChangelog.replace('**A change users see.** With its details.\n\n', ''));
     runGit('add', '-A');
@@ -367,6 +407,8 @@ describe('check-pack', () => {
   const sidecarPath = 'stt/gigaam_sidecar.py';
 
   function writePackableFiles(): void {
+    writeRepoFile('package.json', `${JSON.stringify({ ...initialPackage, files: [...initialPackage.files, 'npm-shrinkwrap.json'], dependencies: { [pinnedDependency.name]: pinnedDependency.range } }, null, 2)}\n`);
+    writeRepoFile('npm-shrinkwrap.json', createFixtureShrinkwrap(initialPackage.version));
     writeRepoFile('dist/cli.js', '#!/usr/bin/env node\nprocess.stdout.write(`${require("../package.json").version}\\n`);\n');
     fs.chmodSync(path.join(repoDir, 'dist', 'cli.js'), 0o755);
     writeRepoFile(sidecarPath, '# sidecar\n');
@@ -379,12 +421,36 @@ describe('check-pack', () => {
     writeRepoFile('LICENSE', 'MIT\n');
   }
 
-  test('a sound package passes the listing check and installs from its tarball printing the new version', () => {
+  test('a sound package passes the listing check and installs the way a user installs it — from a registry, by its shrinkwrap — printing the new version', () => {
     writePackableFiles();
     const result = runCli('check-pack', '--version', '3.2.0');
     assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
     assert.match(result.stdout, /Package contents ok/);
-    assert.match(result.stdout, /charness --version prints 3\.2\.0/);
+    assert.match(result.stdout, /charness --version prints 3\.2\.0, and npm installed the tree npm-shrinkwrap\.json pins/);
+  });
+
+  test('check-install installs a tarball packed elsewhere (the release\'s own job) and checks npm took the pinned version, not the newest of the range', () => {
+    writePackableFiles();
+    const packDir = path.join(sandboxDir, 'packed');
+    fs.mkdirSync(packDir);
+    const packed = spawnSync('npm', ['pack', '--ignore-scripts', '--pack-destination', packDir], { cwd: repoDir, env: createChildEnv(), encoding: 'utf8', timeout: cliTimeoutMs });
+    assert.equal(packed.status, 0, packed.stderr);
+    const tarballPath = path.join(packDir, `${initialPackage.name}-${initialPackage.version}.tgz`);
+    const result = runCli('check-install', '--tarball', tarballPath, '--version', '3.2.0');
+    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+    assert.match(result.stdout, /npm installed the tree npm-shrinkwrap\.json pins/);
+    const wrongVersion = runCli('check-install', '--tarball', tarballPath, '--version', '9.9.9');
+    assert.equal(wrongVersion.status, 1);
+    assert.match(wrongVersion.stderr, /prints version 3\.2\.0, expected 9\.9\.9/);
+    assert.match(runCli('check-install').stderr, /check-install needs --tarball/);
+  });
+
+  test('a package without its shrinkwrap is not fit to publish', () => {
+    writePackableFiles();
+    fs.rmSync(path.join(repoDir, 'npm-shrinkwrap.json'));
+    const result = runCli('check-pack', '--skip-install');
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /missing from the package: npm-shrinkwrap\.json/);
   });
 
   test('the version the package prints must be the expected one', () => {
@@ -741,6 +807,24 @@ describe('the manual `npm version` path', () => {
     assert.deepEqual(runGit('show', '--name-only', '--format=', 'HEAD').split('\n').sort(), ['CHANGELOG.md', 'package.json']);
     assert.match(runGit('show', 'HEAD:CHANGELOG.md'), /## Unreleased\n\n## 3\.3\.0 — \d{4}-\d{2}-\d{2}\n\n\*\*A change users see\./);
   });
+
+  test('with a shrinkwrap, `npm version` bumps it too — and the tag is still its parent plus only the version bump (the gate of a hand-pushed tag)', () => {
+    const realManifest: { scripts: { version: string } } = JSON.parse(fs.readFileSync(path.join(repoRoot, 'package.json'), 'utf8'));
+    const versionScript = realManifest.scripts.version.replace('tsx src/release/cli.ts', `node ${tsxCliPath} ${releaseCliPath}`);
+    writeRepoFile('package.json', `${JSON.stringify({ ...initialPackage, scripts: { version: versionScript } }, null, 2)}\n`);
+    writeRepoFile('npm-shrinkwrap.json', createFixtureShrinkwrap(initialPackage.version));
+    fs.copyFileSync(path.join(repoRoot, '.npmrc'), path.join(repoDir, '.npmrc'));
+    runGit('add', '-A');
+    runGit('commit', '-q', '-m', 'chore: the version script and the shrinkwrap');
+
+    const result = spawnSync('npm', ['version', 'minor'], { cwd: repoDir, env: createGitEnv(), encoding: 'utf8', timeout: cliTimeoutMs });
+    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+
+    assert.deepEqual(runGit('show', '--name-only', '--format=', 'HEAD').split('\n').sort(), ['CHANGELOG.md', 'npm-shrinkwrap.json', 'package.json']);
+    assert.equal(runGit('show', 'HEAD:npm-shrinkwrap.json'), createFixtureShrinkwrap('3.3.0').trimEnd(), 'the same file the release\'s apply writes');
+    const delta = runCli('verify-delta', '--base', runGit('rev-parse', 'HEAD^'), '--head', 'HEAD');
+    assert.equal(delta.status, 0, `${delta.stdout}\n${delta.stderr}`);
+  });
 });
 
 describe('commit-release', () => {
@@ -811,6 +895,15 @@ describe('commit-release', () => {
     assert.equal(readGithubOutput().tag, 'v3.3.0');
     assert.ok(fs.existsSync(path.join(repoDir, 'stray.txt')));
     assert.match(runGit('status', '--porcelain'), /\?\? stray\.txt/);
+  });
+
+  test('with a shrinkwrap, the release commit carries it too: package.json, npm-shrinkwrap.json and CHANGELOG.md', () => {
+    commitFile('npm-shrinkwrap.json', createFixtureShrinkwrap('3.2.0'), 'build: the shrinkwrap');
+    applyRelease('3.3.0');
+    const result = runCli('commit-release', '3.3.0');
+    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+    assert.deepEqual(runGit('show', '--name-only', '--format=', 'HEAD').split('\n').sort(), ['CHANGELOG.md', 'npm-shrinkwrap.json', 'package.json']);
+    assert.equal(runGit('status', '--porcelain'), '');
   });
 
   test('the next plan starts from the new tag: HEAD tagged → skip; a later fix → 3.3.1', () => {

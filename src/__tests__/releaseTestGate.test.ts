@@ -156,13 +156,13 @@ describe('getReleaseDeltaProblems', () => {
   ].join('\n');
 
   test('only the version line of package.json and the CHANGELOG differ → no problem', () => {
-    assert.deepEqual(getReleaseDeltaProblems({ changedPaths: ['CHANGELOG.md', 'package.json'], manifestDiff: versionBump }), []);
-    assert.deepEqual(getReleaseDeltaProblems({ changedPaths: ['CHANGELOG.md'], manifestDiff: '' }), []);
-    assert.deepEqual(getReleaseDeltaProblems({ changedPaths: [], manifestDiff: '' }), []);
+    assert.deepEqual(getReleaseDeltaProblems({ changedPaths: ['CHANGELOG.md', 'package.json'], manifestDiff: versionBump, shrinkwrapDiff: '' }), []);
+    assert.deepEqual(getReleaseDeltaProblems({ changedPaths: ['CHANGELOG.md'], manifestDiff: '', shrinkwrapDiff: '' }), []);
+    assert.deepEqual(getReleaseDeltaProblems({ changedPaths: [], manifestDiff: '', shrinkwrapDiff: '' }), []);
   });
 
   test('any other path is named', () => {
-    assert.deepEqual(getReleaseDeltaProblems({ changedPaths: ['CHANGELOG.md', 'package.json', 'src/bot.ts', 'yarn.lock'], manifestDiff: versionBump }), [
+    assert.deepEqual(getReleaseDeltaProblems({ changedPaths: ['CHANGELOG.md', 'package.json', 'src/bot.ts', 'yarn.lock'], manifestDiff: versionBump, shrinkwrapDiff: '' }), [
       'src/bot.ts differs from the tested commit',
       'yarn.lock differs from the tested commit',
     ]);
@@ -173,15 +173,40 @@ describe('getReleaseDeltaProblems', () => {
     const dependencyOnly = ['--- a/package.json', '+++ b/package.json', '@@ -9 +9 @@', '-    "left": "^1.0.0",', '+    "left": "^2.0.0",'].join('\n');
     const versionRemovedOnly = ['--- a/package.json', '+++ b/package.json', '@@ -3 +0,0 @@', '-  "version": "3.3.2",'].join('\n');
     for (const manifestDiff of [withDependency, dependencyOnly, versionRemovedOnly]) {
-      assert.deepEqual(getReleaseDeltaProblems({ changedPaths: ['package.json'], manifestDiff }), ['package.json differs from the tested commit in more than its "version" line']);
+      assert.deepEqual(getReleaseDeltaProblems({ changedPaths: ['package.json'], manifestDiff, shrinkwrapDiff: '' }), ['package.json differs from the tested commit in more than its "version" line']);
     }
+  });
+
+  const shrinkwrapBump = [
+    'diff --git a/npm-shrinkwrap.json b/npm-shrinkwrap.json',
+    '--- a/npm-shrinkwrap.json',
+    '+++ b/npm-shrinkwrap.json',
+    '@@ -3 +3 @@',
+    '-  "version": "3.3.2",',
+    '+  "version": "3.4.0",',
+    '@@ -9 +9 @@',
+    '-      "version": "3.3.2",',
+    '+      "version": "3.4.0",',
+  ].join('\n');
+
+  test('the shrinkwrap may differ in its two version lines, to the version package.json bumps to — and in nothing else', () => {
+    assert.deepEqual(getReleaseDeltaProblems({ changedPaths: ['CHANGELOG.md', 'npm-shrinkwrap.json', 'package.json'], manifestDiff: versionBump, shrinkwrapDiff: shrinkwrapBump }), []);
+    const refused = ['npm-shrinkwrap.json differs from the tested commit in more than the package\'s version'];
+    const withDependency = `${shrinkwrapBump}\n@@ -40 +40 @@\n-      "version": "4.17.1",\n+      "version": "4.17.2",`;
+    const pinnedDependencyOnly = ['--- a/npm-shrinkwrap.json', '+++ b/npm-shrinkwrap.json', '@@ -40 +40 @@', '-      "version": "3.3.2",', '+      "version": "3.4.0",'].join('\n');
+    const otherVersion = shrinkwrapBump.replaceAll('3.4.0', '3.5.0');
+    const integrityChanged = `${shrinkwrapBump}\n@@ -41 +41 @@\n-      "integrity": "sha512-old==",\n+      "integrity": "sha512-new==",`;
+    for (const shrinkwrapDiff of [withDependency, pinnedDependencyOnly, otherVersion, integrityChanged]) {
+      assert.deepEqual(getReleaseDeltaProblems({ changedPaths: ['npm-shrinkwrap.json', 'package.json'], manifestDiff: versionBump, shrinkwrapDiff }), refused, shrinkwrapDiff);
+    }
+    assert.deepEqual(getReleaseDeltaProblems({ changedPaths: ['npm-shrinkwrap.json'], manifestDiff: '', shrinkwrapDiff: shrinkwrapBump }), refused, 'without the package.json bump it bumps to nothing');
   });
 
   test('a version line "changed" to the same version, or to something that is not X.Y.Z, is not a bump', () => {
     const same = versionBump.replace('3.4.0', '3.3.2');
     const notSemver = versionBump.replace('3.4.0', '3.4.0-evil');
     for (const manifestDiff of [same, notSemver]) {
-      assert.equal(getReleaseDeltaProblems({ changedPaths: ['package.json'], manifestDiff }).length, 1);
+      assert.equal(getReleaseDeltaProblems({ changedPaths: ['package.json'], manifestDiff, shrinkwrapDiff: '' }).length, 1);
     }
   });
 });

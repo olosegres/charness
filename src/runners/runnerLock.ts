@@ -36,7 +36,7 @@ const rootEntryKey = '';
 /** The version the committed lock carries for the package itself: the hub's real one changes with every release, and the packer writes it in ({@link renderRunnerLockForPackage}). */
 export const committedLockVersion = '0.0.0';
 
-/** One entry of `yarn.lock`: what the runner's lock needs of it. */
+/** One entry of `yarn.lock`: what the runner's lock (and the hub's shrinkwrap) needs of it. */
 export interface YarnLockEntry {
   version: string;
   /** `name@npm:version` for a package of the registry; anything else (a workspace, a patch, a git repository) is not one. */
@@ -46,6 +46,9 @@ export interface YarnLockEntry {
   /** The names of dependencies that are optional. */
   optionalDependencyNames: string[];
   hasPeerDependencies: boolean;
+  /** The names of its peer dependencies; those `peerDependenciesMeta` marks optional are in {@link optionalPeerDependencyNames} too. */
+  peerDependencyNames: string[];
+  optionalPeerDependencyNames: string[];
 }
 
 const stringRecordSchema = z.record(z.string(), z.string());
@@ -57,6 +60,8 @@ const npmLockPackageSchema = z.object({
   integrity: z.string().optional(),
   dependencies: stringRecordSchema.optional(),
   engines: stringRecordSchema.optional(),
+  /** npm runs a package's install scripts from a lock only when its entry says it has some (the hub's shrinkwrap; the runner builds nothing). */
+  hasInstallScript: z.boolean().optional(),
 });
 
 /** @name NpmLockPackage @description One `packages` entry of an npm lockfile as the runner's lock writes it. */
@@ -141,7 +146,7 @@ export function parseYarnLock(text: string): Map<string, YarnLockEntry> {
       continue;
     }
     const descriptors = splitDescriptors(unquote(header.slice(0, -1)));
-    const entry: YarnLockEntry = { version: '', resolution: '', dependencies: {}, optionalDependencyNames: [], hasPeerDependencies: false };
+    const entry: YarnLockEntry = { version: '', resolution: '', dependencies: {}, optionalDependencyNames: [], hasPeerDependencies: false, peerDependencyNames: [], optionalPeerDependencyNames: [] };
     index += 1;
     let block: string | null = null;
     let metaName: string | null = null;
@@ -157,10 +162,14 @@ export function parseYarnLock(text: string): Map<string, YarnLockEntry> {
         if (key === 'peerDependencies') entry.hasPeerDependencies = true;
       } else if (indent === nestedIndent && block === 'dependencies') {
         entry.dependencies[key] = value;
-      } else if (indent === nestedIndent && block === 'dependenciesMeta') {
+      } else if (indent === nestedIndent && block === 'peerDependencies') {
+        entry.peerDependencyNames.push(key);
+      } else if (indent === nestedIndent && (block === 'dependenciesMeta' || block === 'peerDependenciesMeta')) {
         metaName = key;
       } else if (indent === deepIndent && block === 'dependenciesMeta' && metaName !== null && key === 'optional' && value === 'true') {
         entry.optionalDependencyNames.push(metaName);
+      } else if (indent === deepIndent && block === 'peerDependenciesMeta' && metaName !== null && key === 'optional' && value === 'true') {
+        entry.optionalPeerDependencyNames.push(metaName);
       }
     }
     for (const descriptor of descriptors) entries.set(descriptor, entry);
@@ -191,6 +200,74 @@ export interface BuildRunnerLockInputs {
   integrities?: Readonly<Record<string, string>>;
 }
 
+/** @description One package the walk of {@link walkYarnTree} placed: its name, the version `yarn.lock` resolved, the dependencies it needs (as ranges). */
+export interface PlacedPackage {
+  name: string;
+  version: string;
+  dependencies: Record<string, string>;
+}
+
+/** @description How {@link walkYarnTree} may lay the tree out. */
+export interface WalkYarnTreeOptions {
+  /** A package needed in a second version goes under the package that needs it (npm's nesting); refused when false — the runner's flat lock. */
+  isNestingAllowed: boolean;
+  /** A package with peer dependencies is accepted — an optional peer is left out, a required one must be in the tree by the end; refused when false. */
+  isPeerAllowed: boolean;
+}
+
+const nodeModulesSegment = 'node_modules';
+const nestedNodeModulesSeparator = `/${nodeModulesSegment}/`;
+
+/** The `node_modules` path a package at `location` finds `name` at, nearest first, the way Node resolves it (`''` is the root). */
+function getLookupLocations(location: string, name: string): string[] {
+  const locations: string[] = [];
+  for (let current = location; ; ) {
+    locations.push(current === '' ? path.posix.join(nodeModulesSegment, name) : `${current}${nestedNodeModulesSeparator}${name}`);
+    if (current === '') return locations;
+    const separatorIndex = current.lastIndexOf(nestedNodeModulesSeparator);
+    current = separatorIndex < 0 ? '' : current.slice(0, separatorIndex);
+  }
+}
+
+/**
+ * @description Lay out the tree `yarn.lock` resolved for `rootDependencies` the way npm would install it, by location
+ * (`node_modules/a`, `node_modules/a/node_modules/b`): each package at the version `yarn.lock` resolved, from the registry; first
+ * come, highest place (the root deps first, then theirs, each in name order — the same tree for the same input). OPTIONAL
+ * dependencies are left out, and so is the `node-gyp` Yarn adds by itself to packages with a `binding.gyp`. Throws, saying what is
+ * wrong, for a package that is not on the registry, a missing entry, and what `options` refuse.
+ */
+export function walkYarnTree(entries: Map<string, YarnLockEntry>, rootDependencies: Record<string, string>, options: WalkYarnTreeOptions): Map<string, PlacedPackage> {
+  const placed = new Map<string, PlacedPackage>();
+  const queue: Array<{ location: string; name: string; range: string; requiredBy: string }> = Object.entries(sortRecord(rootDependencies)).map(([name, range]) => ({ location: rootEntryKey, name, range, requiredBy: 'package.json' }));
+  const requiredPeers: Array<{ location: string; owner: string; peerName: string }> = [];
+  for (let position = 0; position < queue.length; position += 1) {
+    const { location, name, range, requiredBy } = queue[position];
+    const descriptor = `${name}@${npmRangePrefix}${stripNpmPrefix(range)}`;
+    const entry = entries.get(descriptor);
+    if (entry === undefined) throw new Error(`yarn.lock has no entry for ${descriptor} (needed by ${requiredBy}): run \`yarn install\``);
+    if (entry.resolution !== `${name}@${npmRangePrefix}${entry.version}`) throw new Error(`${descriptor} is not a package of the npm registry (${entry.resolution}): the runner's lock cannot hold it`);
+    if (entry.hasPeerDependencies && !options.isPeerAllowed) throw new Error(`${descriptor} has peer dependencies, which the runner's lock does not resolve`);
+    const found = getLookupLocations(location, name).map((candidate) => ({ candidate, existing: placed.get(candidate) })).find(({ existing }) => existing !== undefined);
+    if (found?.existing?.version === entry.version) continue;
+    if (found?.existing !== undefined && !options.isNestingAllowed) {
+      throw new Error(`the runner needs ${name} in two versions (${found.existing.version} and ${entry.version}): its lock is flat and cannot nest`);
+    }
+    // Not found anywhere: the root's node_modules. Found in another version: under the package that needs this one.
+    const placeAt = found === undefined ? path.posix.join(nodeModulesSegment, name) : `${location}${nestedNodeModulesSeparator}${name}`;
+    const required = Object.entries(sortRecord(entry.dependencies)).filter(([dependencyName, dependencyRange]) => !entry.optionalDependencyNames.includes(dependencyName) && !(dependencyName === yarnImplicitDependencyName && dependencyRange === yarnImplicitDependencyRange));
+    placed.set(placeAt, { name, version: entry.version, dependencies: Object.fromEntries(required.map(([dependencyName, dependencyRange]) => [dependencyName, stripNpmPrefix(dependencyRange)])) });
+    for (const [dependencyName, dependencyRange] of required) queue.push({ location: placeAt, name: dependencyName, range: dependencyRange, requiredBy: `${name}@${entry.version}` });
+    for (const peerName of entry.peerDependencyNames) {
+      if (!entry.optionalPeerDependencyNames.includes(peerName)) requiredPeers.push({ location: placeAt, owner: `${name}@${entry.version}`, peerName });
+    }
+  }
+  // A required peer is not installed for the package that names it: something else must bring it, where the package finds it.
+  for (const { location, owner, peerName } of requiredPeers) {
+    if (!getLookupLocations(location, peerName).some((candidate) => placed.has(candidate))) throw new Error(`${owner} needs its peer ${peerName}, which no package of the tree brings where it can find it`);
+  }
+  return placed;
+}
+
 /** @description The runner's npm lockfile for `inputs`: see the head of the file. Throws, saying what is wrong, when the tree cannot be written flat. */
 export function buildRunnerLock(inputs: BuildRunnerLockInputs): NpmLockfile {
   const { rootPackageJson } = inputs;
@@ -202,41 +279,37 @@ export function buildRunnerLock(inputs: BuildRunnerLockInputs): NpmLockfile {
     if (range === undefined) throw new Error(`package.json has no dependency «${name}»: the runner needs it`);
     rootDependencies[name] = range;
   }
-  const resolved = new Map<string, { version: string; dependencies: Record<string, string> }>();
-  const queue: Array<{ name: string; range: string; requiredBy: string }> = Object.entries(rootDependencies).map(([name, range]) => ({ name, range, requiredBy: 'package.json' }));
-  for (let position = 0; position < queue.length; position += 1) {
-    const { name, range, requiredBy } = queue[position];
-    const descriptor = `${name}@${npmRangePrefix}${stripNpmPrefix(range)}`;
-    const entry = entries.get(descriptor);
-    if (entry === undefined) throw new Error(`yarn.lock has no entry for ${descriptor} (needed by ${requiredBy}): run \`yarn install\``);
-    if (entry.resolution !== `${name}@${npmRangePrefix}${entry.version}`) throw new Error(`${descriptor} is not a package of the npm registry (${entry.resolution}): the runner's lock cannot hold it`);
-    if (entry.hasPeerDependencies) throw new Error(`${descriptor} has peer dependencies, which the runner's lock does not resolve`);
-    const known = resolved.get(name);
-    if (known !== undefined) {
-      if (known.version !== entry.version) throw new Error(`the runner needs ${name} in two versions (${known.version} and ${entry.version}): its lock is flat and cannot nest`);
-      continue;
-    }
-    const required = Object.entries(entry.dependencies).filter(([dependencyName, dependencyRange]) => !entry.optionalDependencyNames.includes(dependencyName) && !(dependencyName === yarnImplicitDependencyName && dependencyRange === yarnImplicitDependencyRange));
-    resolved.set(name, { version: entry.version, dependencies: Object.fromEntries(required.map(([dependencyName, dependencyRange]) => [dependencyName, stripNpmPrefix(dependencyRange)])) });
-    for (const [dependencyName, dependencyRange] of required) queue.push({ name: dependencyName, range: dependencyRange, requiredBy: `${name}@${entry.version}` });
-  }
+  const placed = walkYarnTree(entries, rootDependencies, { isNestingAllowed: false, isPeerAllowed: false });
   const packages: Record<string, NpmLockPackage> = {
     [rootEntryKey]: { name: rootPackageJson.name, version: committedLockVersion, dependencies: sortRecord(rootDependencies), ...(rootPackageJson.engines === undefined ? {} : { engines: rootPackageJson.engines }) },
+    ...createLockPackageEntries(placed, inputs.integrities ?? {}, {}),
   };
-  for (const name of [...resolved.keys()].sort()) {
-    const { version, dependencies } = resolved.get(name) ?? { version: '', dependencies: {} };
-    const integrity = inputs.integrities?.[getIntegrityKey(name, version)];
-    packages[path.posix.join('node_modules', name)] = {
+  return { name: rootPackageJson.name, version: committedLockVersion, lockfileVersion, requires: true, packages };
+}
+
+/**
+ * @description The `packages` entries of a lockfile for the packages {@link walkYarnTree} placed, by location in sorted order: the
+ * registry tarball, the integrity where `integrities` knows it, the dependencies, and `hasInstallScript` for those `installScriptKeys`
+ * names (by {@link getIntegrityKey}) — npm runs a package's install scripts from a lock only when its entry says so.
+ */
+export function createLockPackageEntries(placed: Map<string, PlacedPackage>, integrities: Readonly<Record<string, string>>, installScriptKeys: Readonly<Record<string, boolean>>): Record<string, NpmLockPackage> {
+  const packages: Record<string, NpmLockPackage> = {};
+  for (const location of [...placed.keys()].sort()) {
+    const { name, version, dependencies } = placed.get(location) ?? { name: '', version: '', dependencies: {} };
+    const key = getIntegrityKey(name, version);
+    const integrity = integrities[key];
+    packages[location] = {
       version,
       resolved: getRegistryTarballUrl(name, version),
       ...(integrity === undefined ? {} : { integrity }),
       ...(Object.keys(dependencies).length === 0 ? {} : { dependencies: sortRecord(dependencies) }),
+      ...(installScriptKeys[key] === true ? { hasInstallScript: true } : {}),
     };
   }
-  return { name: rootPackageJson.name, version: committedLockVersion, lockfileVersion, requires: true, packages };
+  return packages;
 }
 
-function sortRecord(record: Record<string, string>): Record<string, string> {
+export function sortRecord(record: Record<string, string>): Record<string, string> {
   return Object.fromEntries(Object.entries(record).sort(([left], [right]) => (left < right ? -1 : 1)));
 }
 
@@ -255,9 +328,14 @@ export function readLockIntegrities(lock: NpmLockfile): Record<string, string> {
   const integrities: Record<string, string> = {};
   for (const [key, entry] of Object.entries(lock.packages)) {
     if (key === rootEntryKey || entry.version === undefined || entry.integrity === undefined) continue;
-    integrities[getIntegrityKey(key.slice(key.lastIndexOf('node_modules/') + 'node_modules/'.length), entry.version)] = entry.integrity;
+    integrities[getIntegrityKey(getLockEntryPackageName(key), entry.version)] = entry.integrity;
   }
   return integrities;
+}
+
+/** @description The package name of a lock entry's location (`node_modules/a/node_modules/@s/b` → `@s/b`). */
+export function getLockEntryPackageName(location: string): string {
+  return location.slice(location.lastIndexOf(`${nodeModulesSegment}/`) + `${nodeModulesSegment}/`.length);
 }
 
 /**

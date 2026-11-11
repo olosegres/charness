@@ -96,32 +96,58 @@ export type ReleaseDelta = {
   changedPaths: string[];
   /** `git diff -U0` of `package.json` between the two (empty when it did not change). */
   manifestDiff: string;
+  /** `git diff -U0` of `npm-shrinkwrap.json` between the two (empty when it did not change). */
+  shrinkwrapDiff: string;
 };
 
 const manifestPath = 'package.json';
 const changelogPath = 'CHANGELOG.md';
-const allowedDeltaPaths = [manifestPath, changelogPath];
+const shrinkwrapPath = 'npm-shrinkwrap.json';
+const allowedDeltaPaths = [manifestPath, changelogPath, shrinkwrapPath];
+/** The shrinkwrap names the package's version twice: its own `version` and that of its root entry (`packages[""]`). */
+const shrinkwrapVersionLineCount = 2;
 const versionLinePattern = /^(?<sign>[-+])\s*"version"\s*:\s*"(?<version>\d+\.\d+\.\d+)"\s*,?\s*$/;
 const diffFileHeaderPattern = /^(---|\+\+\+) /;
 const diffHunkHeaderPattern = /^@@ /;
 const changedLinePattern = /^[-+]/;
 
-/**
- * @description Why the release commit is NOT "the tested commit plus its version bump": a path other than `package.json` /
- * `CHANGELOG.md` changed, or `package.json` changed in anything but its `"version"` line. Empty: it is.
- */
-export function getReleaseDeltaProblems(delta: ReleaseDelta): string[] {
-  const problems = delta.changedPaths.filter((filePath) => !allowedDeltaPaths.includes(filePath)).map((filePath) => `${filePath} differs from the tested commit`);
-  if (!delta.changedPaths.includes(manifestPath)) return problems;
-  const changedLines = delta.manifestDiff
+/** @description The version change a `git diff -U0` shows when its only changed lines are `"version"` lines, each one from `from` to `to`; null otherwise. */
+function getVersionOnlyChange(diff: string): { from: string; to: string; lineCount: number } | null {
+  const changedLines = diff
     .split('\n')
     .filter((line) => changedLinePattern.test(line) && !diffFileHeaderPattern.test(line) && !diffHunkHeaderPattern.test(line));
   const versionLines = changedLines.map((line) => versionLinePattern.exec(line)?.groups);
-  const isOnlyVersionBump =
-    changedLines.length === 2 &&
-    versionLines[0]?.sign === '-' &&
-    versionLines[1]?.sign === '+' &&
-    versionLines[0].version !== versionLines[1].version;
-  if (!isOnlyVersionBump) problems.push(`${manifestPath} differs from the tested commit in more than its "version" line`);
+  const removed = versionLines.filter((groups) => groups?.sign === '-').map((groups) => groups?.version);
+  const added = versionLines.filter((groups) => groups?.sign === '+').map((groups) => groups?.version);
+  const from = removed[0];
+  const to = added[0];
+  const isVersionOnly = changedLines.length > 0 &&
+    versionLines.every((groups) => groups !== undefined) &&
+    removed.length === added.length &&
+    removed.every((version) => version === from) &&
+    added.every((version) => version === to);
+  if (!isVersionOnly || from === undefined || to === undefined || from === to) return null;
+  return { from, to, lineCount: removed.length };
+}
+
+/**
+ * @description Why the release commit is NOT "the tested commit plus its version bump": a path other than `package.json` /
+ * `CHANGELOG.md` / `npm-shrinkwrap.json` changed, `package.json` changed in anything but its `"version"` line, or the shrinkwrap in
+ * anything but its two version lines — to the same version as `package.json`. Empty: it is.
+ */
+export function getReleaseDeltaProblems(delta: ReleaseDelta): string[] {
+  const problems = delta.changedPaths.filter((filePath) => !allowedDeltaPaths.includes(filePath)).map((filePath) => `${filePath} differs from the tested commit`);
+  const manifestChange = delta.changedPaths.includes(manifestPath) ? getVersionOnlyChange(delta.manifestDiff) : null;
+  if (delta.changedPaths.includes(manifestPath) && (manifestChange === null || manifestChange.lineCount !== 1)) {
+    problems.push(`${manifestPath} differs from the tested commit in more than its "version" line`);
+  }
+  if (delta.changedPaths.includes(shrinkwrapPath)) {
+    const shrinkwrapChange = getVersionOnlyChange(delta.shrinkwrapDiff);
+    const isReleaseVersionBump = shrinkwrapChange !== null &&
+      shrinkwrapChange.lineCount === shrinkwrapVersionLineCount &&
+      shrinkwrapChange.from === manifestChange?.from &&
+      shrinkwrapChange.to === manifestChange?.to;
+    if (!isReleaseVersionBump) problems.push(`${shrinkwrapPath} differs from the tested commit in more than the package's version`);
+  }
   return problems;
 }

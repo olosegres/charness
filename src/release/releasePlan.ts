@@ -17,6 +17,8 @@ export const requiredPackFiles = [
   'dist/cli.js',
   'stt/gigaam_sidecar.py',
   'remoteRun/runner-package-lock.json',
+  // The lock an `npm install -g` installs the package's tree by (`hubShrinkwrap.ts`); npm 12 would pack none — the release refuses that.
+  'npm-shrinkwrap.json',
   'remoteRun/ensureNode.sh',
   'agent-plugin/.claude-plugin/plugin.json',
   'agent-plugin/skills/charness-orchestration/SKILL.md',
@@ -33,7 +35,8 @@ const droppedManifestMarkers = ['was invalid and removed', 'auto-corrected some 
 const shippedSourceRoot = 'src/';
 const shippedSourceExtension = '.ts';
 const unshippedSourcePrefixes = ['src/__tests__/', 'src/release/'];
-const shippedExtraPaths = ['stt/gigaam_sidecar.py'];
+/** Files that ship besides the compiled source: the speech sidecar, and the shrinkwrap — a change to it changes what an install gets. */
+const shippedExtraPaths = ['stt/gigaam_sidecar.py', 'npm-shrinkwrap.json'];
 /** Folders shipped as they are: the skills the bot gives its agents. */
 const shippedExtraPrefixes = ['agent-plugin/'];
 const shippedManifestFields = ['dependencies', 'bin', 'engines', 'files', 'main'] as const;

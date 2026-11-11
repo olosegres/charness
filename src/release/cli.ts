@@ -8,6 +8,7 @@
  *   changelog                                                   CHANGELOG only, version from package.json
  *   notes <version>                                             print the version's CHANGELOG section
  *   check-pack [--version X.Y.Z] [--skip-install]               package contents + bin paths + install smoke test
+ *   check-install --tarball <file> [--version X.Y.Z]            the install smoke test of a packed tarball (the release's own job)
  *   check-publish                                               `npm publish --dry-run`: refuses what npm would drop from package.json
  *   test-gate [--sha <commit>] [--event <name>] [--through-parent]
  *                                                               the Tests workflow's result for the exact commit (a hand-pushed tag
@@ -15,7 +16,7 @@
  *   verify-delta --base <commit> [--head <rev>]                 the release commit is the tested one plus its version bump, or exit 1
  *   commit-release <version> [--remote origin] [--branch main]  commit, tag and push the applied release
  */
-import { execFileSync, spawnSync } from 'node:child_process';
+import { execFile, execFileSync, spawnSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -48,6 +49,9 @@ import {
   type TestGateState,
   type WorkflowRun,
 } from './testGate';
+import { getShrinkwrapDeviations, setShrinkwrapVersion, shrinkwrapFileName } from './hubShrinkwrap';
+import { startLocalRegistry, type LocalRegistryManifest } from './localRegistry';
+import { parseRunnerLock } from '../runners/runnerLock';
 
 const shortShaLength = 7;
 const gitTimeoutMs = 60_000;
@@ -250,12 +254,20 @@ function requireVersionArgument(positionals: string[]): string {
   return version;
 }
 
+/** The shrinkwrap carries the package's version too (as `npm version` writes it); a repository without one has nothing to write. */
+function writeShrinkwrapVersion(version: string): boolean {
+  if (!fs.existsSync(shrinkwrapFileName)) return false;
+  fs.writeFileSync(shrinkwrapFileName, setShrinkwrapVersion(fs.readFileSync(shrinkwrapFileName, 'utf8'), version));
+  return true;
+}
+
 function runApply(args: string[]): number {
   const { positionals } = parseArgs({ args, allowPositionals: true });
   const version = requireVersionArgument(positionals);
   writePackageVersion(version);
+  const hasShrinkwrap = writeShrinkwrapVersion(version);
   writeChangelogRelease(version);
-  process.stdout.write(`Applied ${version}: ${manifestFileName} and ${changelogFileName} updated.\n`);
+  process.stdout.write(`Applied ${version}: ${[manifestFileName, ...(hasShrinkwrap ? [shrinkwrapFileName] : []), changelogFileName].join(', ')} updated.\n`);
   return 0;
 }
 
@@ -276,29 +288,84 @@ function runNotes(args: string[]): number {
   return 0;
 }
 
-/** Packs the tarball, installs it into a throwaway prefix and runs its `charness --version`. */
-function runInstallSmokeTest(expectedVersion: string): void {
-  const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'charness-pack-'));
+/** The path inside a packed tarball under which npm puts every file. */
+const tarballRootFolder = 'package';
+
+/** `npm install` as an async child: the local registry serving it runs in this process, so a blocking call would starve it. */
+function runCommandAsync(command: string, args: string[], timeoutMs: number): Promise<string> {
+  return new Promise((resolve, reject) => {
+    execFile(command, args, { encoding: 'utf8', timeout: timeoutMs, maxBuffer: gitMaxBufferBytes }, (error, stdout, stderr) => {
+      if (error) reject(new ReleaseError(`${command} ${args.join(' ')} failed: ${error.message}\n${`${stdout}${stderr}`.slice(-outputTailChars)}`));
+      else resolve(stdout);
+    });
+  });
+}
+
+/**
+ * Installs a packed tarball the way a user installs the release — `npm install -g <name>@<version>` from a registry, through a
+ * loopback one that serves the tarball and marks its shrinkwrap as the npm registry does (npm reads a package's shrinkwrap only then:
+ * an install of the tarball FILE resolves the open ranges) — into a throwaway prefix with a cache of its own, runs its
+ * `charness --version`, and checks that npm installed exactly the tree the shrinkwrap pins.
+ */
+async function runInstallSmokeTest(tarballPath: string, expectedVersion: string): Promise<void> {
+  const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'charness-install-'));
   try {
-    const [packed]: { filename: string }[] = JSON.parse(
-      runCommand('npm', ['pack', '--json', '--ignore-scripts', '--pack-destination', workDir], npmPackTimeoutMs),
-    );
+    const unpackedDir = path.join(workDir, 'unpacked');
+    fs.mkdirSync(unpackedDir);
+    runCommand('tar', ['-xzf', tarballPath, '-C', unpackedDir], npmPackTimeoutMs);
+    const unpackedRoot = path.join(unpackedDir, tarballRootFolder);
+    const manifest: LocalRegistryManifest = JSON.parse(fs.readFileSync(path.join(unpackedRoot, manifestFileName), 'utf8'));
+    const shrinkwrapPath = path.join(unpackedRoot, shrinkwrapFileName);
+    const hasShrinkwrap = fs.existsSync(shrinkwrapPath);
+    const registry = await startLocalRegistry({ manifest, tarballPath, hasShrinkwrap });
     const prefix = path.join(workDir, 'prefix');
-    runCommand(
-      'npm',
-      ['install', '--prefix', prefix, '--no-audit', '--no-fund', path.join(workDir, packed.filename)],
-      npmInstallTimeoutMs,
-    );
-    const installedVersion = runCommand(path.join(prefix, 'node_modules', '.bin', 'charness'), ['--version'], smokeTestTimeoutMs).trim();
+    try {
+      await runCommandAsync(
+        'npm',
+        ['install', '--global', '--prefix', prefix, '--registry', registry.url, '--cache', path.join(workDir, 'npm-cache'), '--no-audit', '--no-fund', `${manifest.name}@${manifest.version}`],
+        npmInstallTimeoutMs,
+      );
+    } finally {
+      await registry.stop();
+    }
+    const installedVersion = runCommand(path.join(prefix, 'bin', 'charness'), ['--version'], smokeTestTimeoutMs).trim();
     if (installedVersion !== expectedVersion) {
       throw new ReleaseError(`The installed tarball prints version ${installedVersion}, expected ${expectedVersion}.`);
+    }
+    if (!hasShrinkwrap) return;
+    const deviations = getShrinkwrapDeviations(parseRunnerLock(fs.readFileSync(shrinkwrapPath, 'utf8')), path.join(prefix, 'lib', 'node_modules', manifest.name));
+    if (deviations.length > 0) {
+      throw new ReleaseError(`npm did not install the tree ${shrinkwrapFileName} pins:\n${deviations.map((line) => `  ${line}`).join('\n')}`);
     }
   } finally {
     fs.rmSync(workDir, { recursive: true, force: true });
   }
 }
 
-function runCheckPack(args: string[]): number {
+/** Packs the working tree into a throwaway folder and runs {@link runInstallSmokeTest} on the tarball. */
+async function runPackedInstallSmokeTest(expectedVersion: string): Promise<void> {
+  const packDir = fs.mkdtempSync(path.join(os.tmpdir(), 'charness-pack-'));
+  try {
+    const [packed]: { filename: string }[] = JSON.parse(
+      runCommand('npm', ['pack', '--json', '--ignore-scripts', '--pack-destination', packDir], npmPackTimeoutMs),
+    );
+    await runInstallSmokeTest(path.join(packDir, packed.filename), expectedVersion);
+  } finally {
+    fs.rmSync(packDir, { recursive: true, force: true });
+  }
+}
+
+/** The install smoke test of a tarball packed by an earlier job (`--tarball`), for the version it must print (`--version`, default package.json's). */
+async function runCheckInstall(args: string[]): Promise<number> {
+  const { values } = parseArgs({ args, options: { tarball: { type: 'string' }, version: { type: 'string' } } });
+  if (!values.tarball) throw new ReleaseError('check-install needs --tarball <the packed package>.');
+  const version = values.version ?? readPackageVersion();
+  await runInstallSmokeTest(path.resolve(values.tarball), version);
+  process.stdout.write(`Installed ${path.basename(values.tarball)} from a registry: charness --version prints ${version}, and npm installed the tree ${shrinkwrapFileName} pins.\n`);
+  return 0;
+}
+
+async function runCheckPack(args: string[]): Promise<number> {
   const { values } = parseArgs({ args, options: { version: { type: 'string' }, 'skip-install': { type: 'boolean' } } });
   const version = values.version ?? readPackageVersion();
   const invalidBinPaths = getInvalidBinPaths(readPackageManifest().bin);
@@ -314,8 +381,8 @@ function runCheckPack(args: string[]): number {
   }
   process.stdout.write(`Package contents ok (${listing.files.length} files, version ${version}).\n`);
   if (!values['skip-install']) {
-    runInstallSmokeTest(version);
-    process.stdout.write(`Installed from the tarball: charness --version prints ${version}.\n`);
+    await runPackedInstallSmokeTest(version);
+    process.stdout.write(`Installed from the tarball: charness --version prints ${version}, and npm installed the tree ${shrinkwrapFileName} pins.\n`);
   }
   return 0;
 }
@@ -392,6 +459,7 @@ function getDeltaProblems(base: string, head?: string): string[] {
   return getReleaseDeltaProblems({
     changedPaths: splitPaths(git('diff', '--name-only', '--no-renames', ...revisions)),
     manifestDiff: git('diff', '-U0', '--no-color', '--no-renames', ...revisions, '--', manifestFileName),
+    shrinkwrapDiff: git('diff', '-U0', '--no-color', '--no-renames', ...revisions, '--', shrinkwrapFileName),
   });
 }
 
@@ -486,7 +554,7 @@ function runCommitRelease(args: string[]): number {
   });
   const version = requireVersionArgument(positionals);
   const tag = `${releaseTagPrefix}${version}`;
-  git('add', manifestFileName, changelogFileName);
+  git('add', manifestFileName, changelogFileName, ...(fs.existsSync(shrinkwrapFileName) ? [shrinkwrapFileName] : []));
   git(...releaseBotIdentity, 'commit', '--quiet', '-m', `chore(release): ${version}`);
   git(...releaseBotIdentity, 'tag', '-a', tag, '-m', tag);
   pushReleaseWithMergeRetry(values.remote ?? defaultRemote, values.branch ?? defaultBranch, tag);
@@ -508,6 +576,8 @@ async function main(argv: string[]): Promise<number> {
       return runNotes(args);
     case 'check-pack':
       return runCheckPack(args);
+    case 'check-install':
+      return runCheckInstall(args);
     case 'check-publish':
       return runCheckPublish();
     case 'commit-release':
@@ -517,7 +587,7 @@ async function main(argv: string[]): Promise<number> {
     case 'verify-delta':
       return runVerifyDelta(args);
     default:
-      throw new ReleaseError(`Unknown subcommand "${subcommand}". Use plan | apply | changelog | notes | check-pack | check-publish | test-gate | verify-delta | commit-release.`);
+      throw new ReleaseError(`Unknown subcommand "${subcommand}". Use plan | apply | changelog | notes | check-pack | check-install | check-publish | test-gate | verify-delta | commit-release.`);
   }
 }
 

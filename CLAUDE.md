@@ -281,6 +281,7 @@ must guard against a foreign (Jira) key. Details: `src/platform/README.md`.
   be imported ahead of it, and a settings value is never a new env var.
 - **Before a manual release:** run `yarn install --immutable` and `npm publish --dry-run` locally — a `package.json` change needs
   `yarn.lock` refreshed, and `bin` paths are written `dist/cli.js` without "./" (npm >= 11.10 silently drops a "./" entry).
+  A dependency change also needs `yarn runner-lock` and `yarn shrinkwrap` (the locks the package ships; their tests fail until run).
 - **Secrets:** never log or echo a token/key; a pasted secret (`/login` code, `/connect` key) is deleted from
   the topic and redacted from the trace preview.
 
