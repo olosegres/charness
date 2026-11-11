@@ -454,6 +454,7 @@ import { answerCallbackWithFittedText, answerCallbackWithWholeText } from './con
 import { createCompaction } from './connectors/telegram/commands/compaction';
 import { createAutoContinueLimits, appendAutoContinueLimitsHint } from './connectors/telegram/commands/autoContinueLimits';
 import { createBotSkills } from './connectors/telegram/commands/botSkills';
+import { createTopicAccess } from './connectors/telegram/commands/topicAccess';
 import { createTaskAgents } from './connectors/telegram/commands/taskAgents';
 import { createRunners } from './connectors/telegram/commands/runners';
 import { ensureGateWrapper } from './runners/gateWrapper';
@@ -7663,6 +7664,10 @@ async function sendBindingWelcome(key: SessionKey, subdir: string, notes: Bindin
     const moreLabel = sharedMore > 0 ? t('binding.welcome.sharedMore', { count: sharedMore }) : null;
     lines.push(t('binding.welcome.shared', { threads: formatSharedTopicList(notes.sharedWith ?? [], moreLabel) }));
   }
+  // The list of people who may talk to the agent belongs to the TOPIC, not the folder: after a bind they reach the agent of the
+  // folder it is bound to now.
+  const talkerCount = state.getTopicTalkers(key).talkers.length;
+  if (talkerCount > 0) lines.push(t('access.bindNote', { count: talkerCount, subdir }));
   lines.push('');
   lines.push(t('binding.welcome.start_prompt'));
 
@@ -8148,6 +8153,19 @@ const { registerBotSkillsCommands, registerBotSkillsCallbacks } = createBotSkill
 });
 
 registerBotSkillsCommands();
+
+// ── Who may talk to the agent in a topic (`/access`): `connectors/telegram/commands/topicAccess.ts`, `topicTalkers.ts` ──
+const { registerTopicAccessCommands, registerTopicAccessCallbacks } = createTopicAccess({
+  ...botCore,
+  getAdminIds: () => adminCache.getAdminIds(),
+  getBotUserId: () => bot.botInfo?.id,
+  getGroupGeneralKey,
+  checkIsDmKey,
+  recentWriters: recentTopicWriters,
+  seenSenders: seenGroupSenders,
+});
+
+registerTopicAccessCommands();
 
 // ── The cap on tracker task agents (`/task_agents`): `connectors/telegram/commands/taskAgents.ts`, `trackers/` ──
 const { registerTaskAgentsCommands, registerTaskAgentsCallbacks } = createTaskAgents({
@@ -9860,7 +9878,7 @@ const botCommands = new Set([
   'disconnect', 'stop', 'stopall', 'stop-all', 'quit-all', 'status', 'c', 'y', 'n', 'enter', 'up', 'down', 'tab', 'esc', 'escape', 'interrupt', 'output', 'clear_messages',
   'bind', 'topic', 'unbind', 'where', 'ls', 'list', 'new', 'whoami', 'version', 'help', 'language', 'lang',
   'doctor', 'mcp', 'rename_session', 'compact', 'compact_on_idle', 'compact_summary', 'compact_self_review', 'bot_skills', 'task_agents', 'runners', 'auto_continue_limits', 'limits', 'limits_autoswitch', 'trace', 'timestamps', 'timezone', 'schedule', 'reminders', 'todo', 'thinking', 'tool_results',
-  'subagent', 'claude_mode', 'effort', 'verbosity', 'quit', 'q', 'quitall', 'pair', 'account', 'accounts', 'fallback', 'stt', 'voice', 'speech', 'update',
+  'subagent', 'claude_mode', 'effort', 'verbosity', 'quit', 'q', 'quitall', 'pair', 'account', 'accounts', 'fallback', 'stt', 'voice', 'speech', 'update', 'access',
 ]);
 
 /**
@@ -11323,6 +11341,7 @@ registerCompactionCallbacks();
 
 registerAutoContinueLimitsCallbacks();
 registerBotSkillsCallbacks();
+registerTopicAccessCallbacks();
 registerTaskAgentsCallbacks();
 registerRunnersCallbacks();
 registerBackendSwitchCallbacks();
@@ -13278,6 +13297,7 @@ export const COMMANDS_MENU = [
   { command: 'timestamps', description: '🕒 Prepend send time to forwarded prompts' },
   { command: 'language', description: '🌐 Bot language for this chat/group' },
   { command: 'timezone', description: '🌍 Timezone for schedules and time context' },
+  { command: 'access', description: '🔑 Who may talk to the agent in this topic (without being an admin)' },
   { command: 'whoami', description: '🪪 Show debug ids' },
   { command: 'pair', description: '🔗 Bind this group to the bot' },
   { command: 'version', description: 'ℹ️ Versions of bot + CLI tools' },

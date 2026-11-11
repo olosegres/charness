@@ -73,7 +73,7 @@ export interface FakeTelegramMessage {
   is_topic_message: true;
   from: TelegramUser;
   text: string;
-  entities?: Array<{ type: 'bot_command'; offset: number; length: number }>;
+  entities?: Array<{ type: 'bot_command'; offset: number; length: number } | { type: 'text_mention'; offset: number; length: number; user: TelegramUser }>;
   /** A voice note: its message carries no `text` on the wire (the stored `text` is just ''). */
   voice?: FakeTelegramVoice;
   reply_markup?: { inline_keyboard: Array<Array<FakeTelegramInlineButton>> };
@@ -98,6 +98,7 @@ export type FakeRepliedMessage = Omit<FakeTelegramMessage, 'text'> & { text?: st
 interface OperatorMessageContext {
   reply_to_message?: FakeRepliedMessage;
   forward_origin?: FakeForwardOrigin;
+  sender_chat?: { id: number; type: 'channel' | 'supergroup'; title: string };
 }
 
 /** The origin of a forwarded message, in the four shapes the Bot API reports (`date` is the original send time, unix seconds). */
@@ -113,6 +114,10 @@ export interface FakeOperatorMessageOptions {
   from?: TelegramUser;
   /** The album this message is one item of (`media_group_id`): files sent together share one. */
   mediaGroupId?: string;
+  /** A person picked from the member list inside the text: Telegram sends a `text_mention` entity that carries the user. */
+  textMention?: { user: TelegramUser; offset: number; length: number };
+  /** The message is a post made AS a chat (a linked channel's, an anonymous admin's): `from` is then only a service user. */
+  senderChat?: { id: number; type: 'channel' | 'supergroup'; title: string };
   /** The id of the message in the topic this one replies to (the bot's or a person's). */
   replyToMessageId?: number;
   /** Where the message was first written. */
@@ -318,7 +323,10 @@ export class FakeTelegram {
 
   /** @description `from` writes `text` in topic `threadId` (another admin, say); resolves the message id. */
   pushUserMessage(threadId: number, text: string, from: TelegramUser, options: FakeOperatorMessageOptions = {}): number {
-    const message = this.storeMessage(threadId, text, from, { entities: getCommandEntities(text) });
+    const commandEntities = getCommandEntities(text) ?? [];
+    const mentionEntities = options.textMention ? [{ type: 'text_mention' as const, offset: options.textMention.offset, length: options.textMention.length, user: options.textMention.user }] : [];
+    const entities = [...commandEntities, ...mentionEntities];
+    const message = this.storeMessage(threadId, text, from, { ...(entities.length > 0 ? { entities } : {}) });
     this.pushUpdate({ message: { ...message, ...this.getContext(options) } });
     return message.message_id;
   }
@@ -461,6 +469,7 @@ export class FakeTelegram {
     return {
       ...(replied ? { reply_to_message: embedAsReplied(replied) } : {}),
       ...(options.forwardOrigin ? { forward_origin: options.forwardOrigin } : {}),
+      ...(options.senderChat ? { sender_chat: options.senderChat } : {}),
     };
   }
 

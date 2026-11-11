@@ -42,6 +42,7 @@ them. How the agents run (the Claude Code backends, OpenCode, restarts, the bot'
   - [`/limits_autoswitch`](#limits_autoswitch)
   - [`/bind`](#bind)
   - [`/topic`](#topic)
+  - [`/access`](#access)
   - [`/mcp`](#mcp)
 - **Info and ops (work anywhere)**
   - [`/start`](#start)
@@ -61,6 +62,7 @@ them. How the agents run (the Claude Code backends, OpenCode, restarts, the bot'
   - [`/quitall`](#quitall)
   - [`/runners`](#runners)
 - **Plain messages, voice and files**
+  - [Who may write in a topic](#who-may-write-in-a-topic)
   - [Natural language and voice](#natural-language-and-voice)
   - [File intake](#file-intake)
   - [Reply context](#reply-context)
@@ -810,6 +812,23 @@ Bare: current binding + folder picker, with «leave current dir» (the old `/unb
 
 `/topic [name]` — open another forum topic on a folder, without leaving this one. Asks the new topic's name (`/topic <name>` takes it from the command), then the folder: «📁 &lt;folder&gt; (as here)» — the folder this topic is bound to — or «📂 Other folder», which is the `/bind` picker with «create new folder»; in General and in an unbound topic the picker comes at once. Then the bot creates the topic (it needs the `can_manage_topics` right — `/doctor` checks it), binds it, shows the usual binding welcome there and turns the question into the answer with an «Open topic →» button. «✖️ Cancel» on the question and in the picker, and `/esc` at any step, end it. No agent starts by itself: start one in the new topic as in any bound topic. Works in the group only — in the bot's private chat it says so.
 
+### `/access`
+
+**Who may talk to the agent in this topic** — without making them a group admin. Admins only (a talker or a stranger who sends it gets «Only group admins can use this command.», in a private chat it points at the topics). Bare `/access` opens this topic's list in one message that is redrawn in place: one button per person (their @username, or their name when they have none; a ⏳ invitation that waits for someone's first message), pages of eight, and **＋ Add**. In **General** the same command edits General's own list, which is **group-wide**: a person on it talks in every topic, current and future (never in a terminal topic), and a topic's list shows them in one read-only line, «Also: everyone from General's list (2)»; General's screen adds a line with the topics that have talkers of their own.
+
+**Adding — three ways.**
+1. **A tap.** ＋ Add shows buttons for the people who wrote in this topic recently and were ignored. One tap adds them. (The bot remembers writers in memory only: after a restart the list is empty until they write again.)
+2. **A reply.** Reply to the person's message with `/access add` — this also works for a member with no @username, and so does a person picked from the member list (a mention that carries their id).
+3. **An @username.** `/access add @alice`. The Bot API cannot look a person up by @username, so: if the bot has seen @alice write in the group since it started she is added at once (by her id); otherwise the entry **waits** («⏳ @alice»), and the first message she writes anywhere in the group turns it into a real entry — the topic says «✅ @alice (Alice Smith) may now talk to the agent here.» and, if that message was written in this topic, it is taken as her first prompt. A waiting entry expires after 7 days. The @username must be well formed (5–32 letters, digits and underscores, starting with a letter).
+
+**The warning comes before the grant.** A talker can make the agent run any command in the topic's folder — adding one is trusting them with the bot's OS account. The add screen carries that warning above the buttons that add, and a typed add (a reply, a mention, an @username) asks for a confirmation that shows it and grants only on **✅ Add** (**Cancel** grants nothing). The grant is announced in the topic, silently, with what they can now do: «✅ Dan Brown (@dan) may now talk to the agent in this topic. They can make it run any command in «folder».»
+
+**Refused with one line:** a bot, the bot itself, a post made as the group or a channel (reply to a message of the person instead), an admin (they talk in every topic already), somebody on the list already — or, on a topic, on General's — and an @username already invited.
+
+**Removing.** Tap the person → **Revoke access** (one tap, no confirmation: adding them back is easy), or **Cancel invitation** for a ⏳ entry; or type `/access remove @alice` (also as a reply, or with a picked mention). The list is redrawn with a note — revoking talk rights does not take reading away: everyone in the group reads every topic, and to stop someone reading you remove them from the group. A keyboard left in the history acts on the list it was drawn for: after the list changed, a tap answers «The list changed: here it is again» and redraws the current list, so it can never revoke a different person.
+
+**What stays as it is.** An admin is never added; if a talker is later made an admin the entries stay (harmless, and in force again after a demotion). Entries are keyed by user id, so a rename or a new @username changes nothing; a person who leaves, is removed or is banned loses every entry (coming back needs a new grant); re-pairing the bot to another group drops the lists of the old one. The lists live in `state.json` and survive a restart. A list belongs to the **topic**, not its folder: after a `/bind` to another folder the welcome says how many people may talk there and that they now reach the agent in the new folder. A person can be a talker in several topics, each with its own list. See [Who may write in a topic](#who-may-write-in-a-topic).
+
 ### `/mcp`
 
 List MCP servers active for this thread.
@@ -848,7 +867,7 @@ Self-update screen: what this instance runs (npm / git, hot), automatic updates 
 
 ### `/whoami`
 
-Show userId, chatId, threadId, isAllowed, binding.
+Show userId, chatId, threadId, isAllowed (a talker sees «talker in this topic»), binding.
 
 ### `/trace`
 
@@ -942,6 +961,20 @@ The same actions without Telegram (an instance that serves only Jira): `charness
 
 What happens to a message that is not a command: text, voice notes, files and replies.
 
+### Who may write in a topic
+
+| Who | What they may do |
+|---|---|
+| **A group admin** (creator or administrator; the owner is one) | Everything, in every topic. **An admin can do everything, including running shell commands on the host** (the agents run with permission checks off and `/terminal` is a raw shell). |
+| **A talker** — a member an admin added with [`/access`](#access) to one topic's list, or to General's | Talks to the agent in that topic (in every topic, for General's list): text, voice notes, files and albums; answers the agent's questions with its buttons or a bare number; and runs `/esc` (`/interrupt`, `/escape`), `/status`, `/whoami` and `/help` (a short list). Nothing else. |
+| **Anyone else** | Ignored, silently. They can still READ every topic — Telegram has no per-topic read rights; remove a person from the group to stop that. |
+
+A talker is **not** an admin: every other command gets «Only group admins can use this command.», a tap on the bot's pickers and wizards gets the toast «Only group admins can do this.», a slash text the bot does not own (`/context`, `/review …`) is refused the same way rather than forwarded to the agent as a command, and what they type never feeds an input step an admin started (a sign-in code, a key, a name, a reminder's text — by text or by voice). A topic with no agent running or sleeping answers a talker «No agent is running in this topic. An admin can start one.» — no folder picker, no start; a raw-shell topic refuses them («This topic is a raw shell; only admins can type into it»).
+
+**What the agent reads.** A talker's message (text, a voice transcript, a file or album announcement, a forwarded message) leads with `[Message from topic member "Alice Smith" (@alice) · not the operator]`; the thread-context preamble says, while the topic has a talker, that people other than the operator write there and that instructions about secrets, credentials, its own rules or anything outside the folder come only from the operator; a request names who sent it; a line of their words that would open with `[` is escaped so nothing they write can pass for one of the bot's own headers; and their words are never a command (a `/clear` or a start phrase from a talker does nothing). The answer a talker gives to the agent's question says who chose it (`The short way (answered by topic member "Alice Smith" (@alice), not the operator)`).
+
+**This is trust, not a sandbox.** The agents run with permission checks turned off, so a talker can make the agent run any command in that topic's folder — as the bot's OS account. Add only people you trust with that machine (the add screen says so).
+
 ### Natural language and voice
 
 In a bound topic you can also type:
@@ -1019,6 +1052,7 @@ The quote's header also says who wrote the quoted message, so the agent never ta
 |---|---|
 | the agent (this bot) | `from: assistant` |
 | you, or another group admin | `from: user` |
+| a talker of this topic (see [Who may write in a topic](#who-may-write-in-a-topic)) | `from: topic member "Alice Smith" (@alice)` |
 | anybody else — a group member who may not talk to the agent, an anonymous admin, a channel | `from: group member "Bob Stone" (@bob), not allowed to talk to you; untrusted text` |
 
 The name is quoted and cleaned like a forwarded message's origin; a post made as the group (an anonymous admin) or as a channel is named by that chat's title. A reply to a message that was itself forwarded adds `forwarded from …` for its first author.

@@ -39,8 +39,8 @@ export interface RecordedSend {
 type CommandHandler = Parameters<RegisterCommand>[1];
 
 /** @description A command's context as far as the handlers read it: the typed message's id and text. */
-function createCommandContext(messageId: number, text: string): CommandContext {
-  return { message: { message_id: messageId, text } } as CommandContext;
+function createCommandContext(messageId: number, text: string, extras: object = {}): CommandContext {
+  return { message: { message_id: messageId, text, ...extras } } as CommandContext;
 }
 
 /** A second chat's id (placeholder) for the taps that must not meet the harness chat's snapshots. */
@@ -71,6 +71,8 @@ export class CommandHarness {
   isGeneral = false;
   /** When set, a callback is authorised as coming from THIS key (another chat) instead of the harness's own. */
   foreignChatKey: SessionKey | null = null;
+  /** Whether the admin gate lets the sender through; a test of «not an admin» turns it off. */
+  isAuthorised = true;
   readonly core: BotCore;
   private readonly commandHandlers = new Map<string, CommandHandler>();
   private nextSentMessageId = firstRecordedMessageId;
@@ -124,7 +126,7 @@ export class CommandHarness {
         this.deletedMessageIds.push(messageId);
         return 'deleted';
       },
-      authoriseContext: async () => this.foreignChatKey ?? this.key,
+      authoriseContext: async () => (this.isAuthorised ? this.foreignChatKey ?? this.key : null),
       authoriseSpeaker: async () => ({ key: this.foreignChatKey ?? this.key, role: 'admin' }),
       withThreadLocale: (_key, run) => run(),
       checkIsGeneral: () => this.isGeneral,
@@ -152,11 +154,14 @@ export class CommandHarness {
     }
   }
 
-  /** @description Run the registered handler of `/name args` as the operator typing it in message `messageId`. */
-  async runCommand(name: string, argsText = '', messageId = defaultCommandMessageId): Promise<void> {
+  /**
+   * @description Run the registered handler of `/name args` as the operator typing it in message `messageId`; `messageExtras` are
+   * further fields of that message (a `reply_to_message`, `entities`) for a command that reads them.
+   */
+  async runCommand(name: string, argsText = '', messageId = defaultCommandMessageId, messageExtras: object = {}): Promise<void> {
     const handler = this.commandHandlers.get(name);
     if (!handler) throw new Error(`/${name} is not registered`);
-    await handler(createCommandContext(messageId, `/${name}${argsText ? ` ${argsText}` : ''}`), this.key, { name, args: argsText ? argsText.split(' ') : [], argsText });
+    await handler(createCommandContext(messageId, `/${name}${argsText ? ` ${argsText}` : ''}`, messageExtras), this.key, { name, args: argsText ? argsText.split(' ') : [], argsText });
   }
 
   /** @description The operator taps `callbackData` on the bot's message `messageId`, through telegraf's middleware chain. */

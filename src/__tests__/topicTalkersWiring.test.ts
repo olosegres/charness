@@ -172,3 +172,25 @@ test('an album a talker sends into a raw-shell topic is refused ONCE, through th
   assert.match(handler, /refuseTalkerInTerminalTopic\(key, async \(text\) => \{\s*if \(!mediaGroupId \|\| albumCollector\.checkShouldAnnounceOnce\(buildAlbumGroupKey\(key, mediaGroupId\)\)\) await replyToThread\(key, text\);/);
   assert.match(getFunctionBody('refuseTalkerInTerminalTopic'), /sendRefusal: \(text: string\) => Promise<unknown>/);
 });
+
+test('/access is built over the shared core, the admin cache and the in-memory writers, registered with its commands and its callbacks, and listed as a bot command and in the menu', () => {
+  const build = getSourceSlice('const { registerTopicAccessCommands, registerTopicAccessCallbacks } = createTopicAccess({', 'registerTopicAccessCommands();');
+  assert.match(build, /\.\.\.botCore,/);
+  assert.match(build, /getAdminIds: \(\) => adminCache\.getAdminIds\(\),/);
+  assert.match(build, /getGroupGeneralKey,/);
+  assert.match(build, /recentWriters: recentTopicWriters,\s*seenSenders: seenGroupSenders,/, 'the memory the sender tracking feeds is the one the add screen reads');
+  assert.match(botSource, /registerTopicAccessCallbacks\(\);/);
+  assert.match(botSource, /const botCommands = new Set\(\[[^\]]*'update', 'access',\s*\]\);/, 'a slash text must not be re-forwarded to the agent');
+  assert.match(botSource, /\{ command: 'access', description: '[^']*' \}/);
+});
+
+test('/access is admin-only by default: the command is registered with no talker flag', () => {
+  const module = fs.readFileSync(path.join(__dirname, '..', 'connectors', 'telegram', 'commands', 'topicAccess.ts'), 'utf8');
+  assert.match(module, /command\('access', async \(ctx, key, parsed\) => \{/);
+  assert.doesNotMatch(module, /isTalkerAllowed/);
+});
+
+test('a bind tells the topic how many people may talk to the agent there and where they now reach it — the list belongs to the topic, not the folder', () => {
+  const welcome = getFunctionBody('sendBindingWelcome');
+  assert.match(welcome, /const talkerCount = state\.getTopicTalkers\(key\)\.talkers\.length;\s*if \(talkerCount > 0\) lines\.push\(t\('access\.bindNote', \{ count: talkerCount, subdir \}\)\);/);
+});

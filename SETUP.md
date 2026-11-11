@@ -716,12 +716,25 @@ can't be matched from their messages, so post non-anonymously. The DM surface
 (when enabled) is gated separately: only the configured `OWNER_USER_ID` may
 talk to the bot there.
 
-> **Security model — group admin (or the DM owner) ⇒ shell on the host.** The agents run with
-> permission checks disabled (`--dangerously-skip-permissions` for Claude,
+**Who is who.**
+
+| Role | Who | What they may do |
+|---|---|---|
+| **Owner** | `OWNER_USER_ID` | The DM surface. In the group the owner is an admin like any other. |
+| **Admin** | Creator or administrator of the served group | Everything, in every topic — **including shell commands on the host** (below). Manages talkers with `/access`. |
+| **Talker** | A member an admin added to ONE topic's list (or to General's, which is group-wide) | Talks to the agent in that topic only: text, voice notes, files, albums, answers to the agent's questions, and `/esc`, `/status`, `/whoami`, `/help`. Every other command, picker and wizard is refused. |
+| **Anyone else** | Other members, strangers | Ignored, silently. |
+
+**Letting someone talk in one topic without making them an admin** is `/access` (admins only, see [the command](docs/commands.md#access)): tap someone who wrote in the topic, reply to their message with `/access add`, or `/access add @username` — each grant shows the warning below before it takes effect. The lists live in `state.json`; a person who leaves the group loses every entry. A talker is **not** a read restriction: everyone in the group still READS every topic (Telegram has no per-topic read rights) — remove a person from the group to stop that.
+
+> **Security model — group admin (or the DM owner) ⇒ shell on the host; a talker ⇒ the same, in their topic's folder.**
+> The agents run with permission checks disabled (`--dangerously-skip-permissions` for Claude,
 > auto-approve for OpenCode) and `/terminal` opens a raw `$SHELL` in the bound
 > folder, so anyone who can talk to the bot can execute arbitrary commands as
-> the bot's OS user. Only promote people you would trust with SSH access to
-> that machine, and keep the served group itself private.
+> the bot's OS user. **An admin can do everything.** **A talker can make the agent run any command in that
+> topic's folder** (never in a raw-shell topic, and their words reach the agent marked as theirs, so the agent
+> can tell them from you — but that is a guard, not a sandbox). Only promote or add people you would trust with SSH
+> access to that machine, and keep the served group itself private.
 
 #### External Optional (Telegram)
 

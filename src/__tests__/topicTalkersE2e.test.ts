@@ -30,6 +30,14 @@
  *   → the raw-shell topic refuses a talker — a text, a voice note, an album once — and the shell reads nothing of theirs
  *   → a talker who leaves the group is dropped from every list and ignored from then on.
  *
+ * The second half is `/access`, which makes the lists (the first half only seeds them): in the «api» topic an admin adds a person
+ * with a tap on someone who wrote there and was ignored (a linked channel's post is never offered), with a reply and with an
+ * @username — every typed add through a confirmation that shows the shell-access warning and grants only on «Add» — an invitation
+ * for an @username nobody has seen waits and is turned into a grant by that person's first message; refusals say why; a revoke is
+ * one tap; a keyboard that went stale acts on nobody; a talker's or a stranger's tap on the list is refused; a bind says how many
+ * may talk to the agent there; General's list is group-wide (a talker of it talks in two topics, and revoked there is ignored in
+ * both) and shows the topics with talkers of their own; and the lists and a waiting invitation survive a restart.
+ *
  * What the unit tests cover instead: the role policy, the store, the marks and their cleaning, the command set a talker may
  * run, the wiring (`accessControl.test.ts`, `state.test.ts`, `topicTalkers.test.ts`, `messageContext.test.ts`,
  * `routedCommandTrigger.test.ts`, `topicTalkersWiring.test.ts`).
@@ -64,7 +72,7 @@ import {
   writeInstanceEnvFile,
   type IsolatedInstanceLayout,
 } from './e2e/isolatedCharness';
-import { startCharnessOnInstance } from './e2e/fallbackFlowKit';
+import { restartCharnessWithState, startCharnessOnInstance } from './e2e/fallbackFlowKit';
 import { getTelegramFlowTestTimingsEnv } from './telegramE2e/telegramFlowTimings';
 import { keyToString } from '../sessionKey';
 import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
@@ -84,8 +92,15 @@ const topicTalker = { id: 515151, is_bot: false, first_name: 'Tess', last_name: 
 const generalTalker = { id: 525252, is_bot: false, first_name: 'Gus', last_name: 'Guest', username: 'gus' };
 /** A member an admin invited by @username before she had written anywhere: her first message turns the invitation into a grant. */
 const invitedMember = { id: 535353, is_bot: false, first_name: 'Carol', last_name: 'Newcomer', username: 'carol' };
+/** People the `/access` steps add: by a tap, by a reply (no @username), by an @username nobody had seen, by a bind note. */
+const danMember = { id: 545454, is_bot: false, first_name: 'Dan', last_name: 'Brown', username: 'dan_b' };
+const eveMember = { id: 555555, is_bot: false, first_name: 'Eve', last_name: 'Quiet' };
+const frankMember = { id: 565656, is_bot: false, first_name: 'Frank', last_name: 'Fresh', username: 'frank_f' };
+const halMember = { id: 575757, is_bot: false, first_name: 'Hal', last_name: 'Hall', username: 'hal_h' };
+/** Telegram's service user, which a linked channel's post carries in `from`. */
+const telegramServiceUser = { id: 777000, is_bot: false, first_name: 'Telegram' };
 /** A member of the group nobody let in. */
-const stranger = { id: 313131, is_bot: false, first_name: 'Bob', last_name: 'Stone', username: 'bob' };
+const stranger = { id: 313131, is_bot: false, first_name: 'Bob', last_name: 'Stone', username: 'bobby_s' };
 const botUser = { id: 7000000001, is_bot: true, first_name: 'Fake bot', username: 'fake_charness_bot' };
 /** Not a Telegram token: the fake Bot API accepts any `/bot<token>/` path, and the real host is never contacted. */
 const fakeBotToken = '1000000001:fake-token-for-the-loopback-bot-api';
@@ -113,6 +128,10 @@ const terminalTopicRefusal = 'This topic is a raw shell; only admins can type in
 const talkerMarkOf = (person: { first_name: string; last_name: string; username: string }): string =>
   `[Message from topic member "${person.first_name} ${person.last_name}" (@${person.username}) · not the operator]`;
 const tessMark = talkerMarkOf(topicTalker);
+const danMark = talkerMarkOf(danMember);
+const eveMark = '[Message from topic member "Eve Quiet" · not the operator]';
+const frankMark = talkerMarkOf(frankMember);
+const accessWarning = "They will be able to make the agent run any command in this topic's folder. Add only people you trust with this machine.";
 /** What an answer the agent reads says when a person other than the operator chose it. */
 const answeredByTess = ' (answered by topic member "Tess Talker" (@tess), not the operator)';
 const answeredByGus = ' (answered by topic member "Gus Guest" (@gus), not the operator)';
@@ -146,6 +165,7 @@ const apiTopic = () => new TopicDriver(fakeTelegram, getCharness, apiThreadId, r
 const idleTopic = () => new TopicDriver(fakeTelegram, getCharness, idleThreadId, replyTimeoutMs);
 const shellTopic = () => new TopicDriver(fakeTelegram, getCharness, shellThreadId, replyTimeoutMs);
 const newTopic = () => new TopicDriver(fakeTelegram, getCharness, newThreadId, replyTimeoutMs);
+const generalTopic = () => new TopicDriver(fakeTelegram, getCharness, generalThreadId, replyTimeoutMs);
 
 /** Every user message the fake agent read so far, oldest first, with its whole text. */
 function readAgentPrompts(): FakeClaudePrompt[] {
@@ -188,8 +208,25 @@ async function waitForBotText(topic: TopicDriver, afterMessageId: number, expect
   return topic.waitForMessage(`«${expectedText}»`, (message) => message.message_id > afterMessageId && message.text.includes(expectedText));
 }
 
+/** The operator types `/access` in the topic; resolves the list message the bot answers with. */
+async function openAccessList(topic: TopicDriver, threadId: number): Promise<FakeTelegramMessage> {
+  const sentMessageId = fakeTelegram.pushOperatorMessage(threadId, '/access');
+  return topic.waitForMessage('the /access list', (message) => message.message_id > sentMessageId && message.text.startsWith('Who may talk to the agent') && message.reply_markup !== undefined);
+}
+
+/** The operator taps the button captioned `label` on `message`; resolves the toast the tap was answered with. */
+async function tapAccessButton(topic: TopicDriver, message: FakeTelegramMessage, label: string, from?: typeof topicTalker): Promise<string> {
+  const answersBefore = fakeTelegram.callbackAnswers.length;
+  fakeTelegram.pushCallback(message.message_id, topic.getButtonData(message, label), from);
+  await getCharness().waitFor(`the tap on «${label}» to be answered`, replyTimeoutMs, () => fakeTelegram.callbackAnswers.length > answersBefore);
+  return fakeTelegram.callbackAnswers[answersBefore];
+}
+
+/** The button captions of a message, flat. */
+const listLabels = (topic: TopicDriver, message: FakeTelegramMessage): string[] => topic.getKeyboardLabels(message).flat();
+
 /** The state file the bot keeps in its data dir. */
-function readStateFile(): { topicTalkers?: Record<string, { talkers: { userId: string }[]; invites: unknown[] }> } {
+function readStateFile(): { topicTalkers?: Record<string, { talkers: { userId: string }[]; invites: { username: string }[] }> } {
   return JSON.parse(fs.readFileSync(path.join(getLayout().dataDir, stateFileName), 'utf8'));
 }
 
@@ -545,6 +582,174 @@ describe('topic talkers end to end: built charness, fake Bot API, fake speech en
     assert.equal(listBotTextsAfter(shellTopic(), afterAlbum).filter((text) => text === terminalTopicRefusal).length, 1, 'three album items, one refusal');
   });
 
+  it('/access in a topic whose only talkers come from General: an empty list, General\'s talkers in one read-only line, Add', async () => {
+    const list = await openAccessList(apiTopic(), apiThreadId);
+    assert.ok(list.text.startsWith('Who may talk to the agent in this topic\nGroup admins talk in every topic and are not listed.'), list.text);
+    assert.ok(list.text.includes('Everyone in the group can READ this topic. To take reading away, remove the person from the group.'));
+    assert.ok(list.text.includes('Nobody besides the group admins may talk to the agent here.'));
+    assert.ok(list.text.includes("Also: everyone from General's list (1)."));
+    assert.deepEqual(listLabels(apiTopic(), list), ['＋ Add']);
+  });
+
+  it('the add screen offers who wrote here and was ignored (never a linked channel\'s post) under the warning; one tap grants, announces, and the person is heard', async () => {
+    fakeTelegram.pushUserMessage(apiThreadId, 'dan asks something before he is added', danMember);
+    fakeTelegram.pushUserMessage(apiThreadId, 'a post of the linked channel, copied into the group', telegramServiceUser, { senderChat: { id: -1005550000009, type: 'channel', title: 'Ops Alerts' } });
+    const list = await openAccessList(apiTopic(), apiThreadId);
+    await tapAccessButton(apiTopic(), list, '＋ Add');
+    await apiTopic().waitForMessageText('the add screen', list, (text) => text.startsWith('Who should talk to the agent here?'));
+    assert.ok(list.text.includes(accessWarning), 'the warning is on the screen BEFORE any button grants');
+    // Tess wrote in this topic earlier (step 4) and was ignored here, so she is offered too — an admin sees her. Not the channel's
+    // service user, not Gus (a talker already), not Bob (he wrote in another topic).
+    assert.deepEqual(listLabels(apiTopic(), list), ['@dan_b (Dan Brown)', '@tess (Tess Talker)', '‹ Back']);
+    assert.deepEqual(listAgentPromptsWith('dan asks something before he is added'), [], 'he was ignored until now');
+
+    const afterTap = Math.max(0, ...apiTopic().listMessages().map((message) => message.message_id));
+    await tapAccessButton(apiTopic(), list, '@dan_b (Dan Brown)');
+    await waitForBotText(apiTopic(), afterTap, '✅ @dan_b (Dan Brown) may now talk to the agent in this topic. They can make it run any command in «api-proj».');
+    await apiTopic().waitForMessageText('the list with Dan', list, (text) => text.startsWith('Who may talk to the agent in this topic') && listLabels(apiTopic(), list).includes('@dan_b'));
+    assert.deepEqual(listLabels(apiTopic(), list), ['@dan_b', '＋ Add']);
+    assert.deepEqual(readStateFile().topicTalkers?.[keyToString(makeTelegramKey(group.id, apiThreadId))]?.talkers.map((talker) => talker.userId), [danMember.id.toString()], 'on disk the moment he was added');
+
+    fakeTelegram.pushUserMessage(apiThreadId, 'dan asks after he is added', danMember);
+    const prompt = await waitForAgentPrompt('dan asks after he is added');
+    assert.equal(prompt.pid, apiAgentPid);
+    assert.ok(prompt.text.includes(`${danMark}\n\ndan asks after he is added`), prompt.text);
+  });
+
+  it('a reply with /access add (a member with no @username): a confirmation carries the warning, and nothing is granted until «Add»', async () => {
+    const eveMessageId = fakeTelegram.pushUserMessage(apiThreadId, 'eve writes first', eveMember);
+    const afterEve = Math.max(0, ...apiTopic().listMessages().map((message) => message.message_id));
+    fakeTelegram.pushOperatorMessage(apiThreadId, '/access add', { replyToMessageId: eveMessageId });
+    const confirmation = await waitForBotText(apiTopic(), afterEve, 'Add Eve Quiet?');
+    assert.equal(confirmation.text, `Add Eve Quiet?\n\n${accessWarning}`);
+    assert.deepEqual(listLabels(apiTopic(), confirmation), ['✅ Add', 'Cancel']);
+    fakeTelegram.pushUserMessage(apiThreadId, 'eve writes before the confirmation', eveMember);
+    fakeTelegram.pushOperatorMessage(apiThreadId, 'the operator waits for the confirmation');
+    await waitForAgentPrompt('the operator waits for the confirmation');
+    assert.deepEqual(listAgentPromptsWith('eve writes before the confirmation'), [], 'the warning is read BEFORE the grant takes effect');
+
+    const afterConfirm = Math.max(0, ...apiTopic().listMessages().map((message) => message.message_id));
+    await tapAccessButton(apiTopic(), confirmation, '✅ Add');
+    await waitForBotText(apiTopic(), afterConfirm, '✅ Eve Quiet may now talk to the agent in this topic. They can make it run any command in «api-proj».');
+    fakeTelegram.pushUserMessage(apiThreadId, 'eve writes after the confirmation', eveMember);
+    const prompt = await waitForAgentPrompt('eve writes after the confirmation');
+    assert.ok(prompt.text.includes(`${eveMark}\n\neve writes after the confirmation`), prompt.text);
+  });
+
+  it('an @username nobody has seen waits as a ⏳ invitation; the first message of that person turns it into a grant — and is taken as their first prompt; one seen is added by id', async () => {
+    const afterAdd = Math.max(0, ...apiTopic().listMessages().map((message) => message.message_id));
+    fakeTelegram.pushOperatorMessage(apiThreadId, '/access add @Frank_F');
+    const confirmation = await waitForBotText(apiTopic(), afterAdd, 'Add @Frank_F as soon as they first write in this group?');
+    assert.ok(confirmation.text.includes(accessWarning));
+    assert.deepEqual(readStateFile().topicTalkers?.[keyToString(makeTelegramKey(group.id, apiThreadId))]?.invites, [], 'nothing waits before «Add»');
+    const afterConfirm = Math.max(0, ...apiTopic().listMessages().map((message) => message.message_id));
+    await tapAccessButton(apiTopic(), confirmation, '✅ Add');
+    const invited = await waitForBotText(apiTopic(), afterConfirm, '⏳ @Frank_F may talk to the agent here as soon as they write anything in this group');
+    assert.match(invited.text, /\(until \d+ \w+\)\.$/);
+    assert.deepEqual(readStateFile().topicTalkers?.[keyToString(makeTelegramKey(group.id, apiThreadId))]?.invites.map((invite) => invite.username), ['frank_f'], 'stored lowercase, on disk');
+
+    const afterFrank = Math.max(0, ...apiTopic().listMessages().map((message) => message.message_id));
+    fakeTelegram.pushUserMessage(apiThreadId, 'frank writes his first message', frankMember);
+    await waitForBotText(apiTopic(), afterFrank, '✅ @frank_f (Frank Fresh) may now talk to the agent here.');
+    const prompt = await waitForAgentPrompt('frank writes his first message');
+    assert.equal(prompt.pid, apiAgentPid);
+    assert.ok(prompt.text.includes(`${frankMark}\n\nfrank writes his first message`), prompt.text);
+    assert.deepEqual(readStateFile().topicTalkers?.[keyToString(makeTelegramKey(group.id, apiThreadId))]?.invites, [], 'the invitation became an entry');
+
+    // Bob wrote in the group earlier (he was ignored): the bot has SEEN his @username, so «Add» would add him by id — Cancel adds nobody.
+    const afterBob = Math.max(0, ...apiTopic().listMessages().map((message) => message.message_id));
+    fakeTelegram.pushOperatorMessage(apiThreadId, '/access add @Bobby_S');
+    const bobConfirmation = await waitForBotText(apiTopic(), afterBob, 'Add @bobby_s (Bob Stone)?');
+    await tapAccessButton(apiTopic(), bobConfirmation, 'Cancel');
+    await apiTopic().waitForMessageText('the confirmation turned back into the list', bobConfirmation, (text) => text.startsWith('Who may talk to the agent in this topic'));
+    assert.ok(!readStateFile().topicTalkers?.[keyToString(makeTelegramKey(group.id, apiThreadId))]?.talkers.some((talker) => talker.userId === stranger.id.toString()), 'Cancel grants nothing');
+  });
+
+  it('refusals: an admin, this bot, somebody on General\'s list, somebody listed already, a bad @username — one line each, nothing to confirm', async () => {
+    const expectLine = async (argsText: string, replyToMessageId: number | undefined, expected: string): Promise<void> => {
+      const afterCommand = Math.max(0, ...apiTopic().listMessages().map((message) => message.message_id));
+      fakeTelegram.pushOperatorMessage(apiThreadId, `/access ${argsText}`.trim(), replyToMessageId === undefined ? {} : { replyToMessageId });
+      const line = await waitForBotText(apiTopic(), afterCommand, expected);
+      assert.equal(line.text, expected);
+      assert.equal(line.reply_markup, undefined, 'a refusal has no buttons');
+    };
+    const operatorMessageId = fakeTelegram.pushOperatorMessage(apiThreadId, 'a message of an admin');
+    await expectLine('add', operatorMessageId, 'Operator is already an admin: they can talk in every topic.');
+    const botMessage = [...apiTopic().listMessages()].reverse()[0];
+    await expectLine('add', botMessage.message_id, 'The bot itself cannot be added.');
+    const gusMessageId = fakeTelegram.pushUserMessage(apiThreadId, 'gus says something', generalTalker);
+    await expectLine('add', gusMessageId, "@gus (Gus Guest) already talks to the agent in every topic (General's list).");
+    const danMessageId = fakeTelegram.pushUserMessage(apiThreadId, 'dan says something', danMember);
+    await expectLine('add', danMessageId, '@dan_b (Dan Brown) already may talk to the agent here.');
+    await expectLine('add @abc', undefined, 'That is not a valid @username: 5–32 letters, digits and underscores, starting with a letter.');
+  });
+
+  it('a revoke is one tap: the person\'s menu, a toast, the list again with the read-access note — and they are ignored from then on', async () => {
+    const list = await openAccessList(apiTopic(), apiThreadId);
+    assert.deepEqual(listLabels(apiTopic(), list), ['@dan_b', 'Eve Quiet', '@frank_f', '＋ Add']);
+    await tapAccessButton(apiTopic(), list, '@dan_b');
+    await apiTopic().waitForMessageText('Dan\'s menu', list, (text) => text.startsWith('@dan_b (Dan Brown)\nMay talk to the agent here since '));
+    assert.deepEqual(listLabels(apiTopic(), list), ['Revoke access', '‹ Back']);
+    const toast = await tapAccessButton(apiTopic(), list, 'Revoke access');
+    assert.equal(toast, '@dan_b (Dan Brown) can no longer talk to the agent here');
+    await apiTopic().waitForMessageText('the list again', list, (text) => text.endsWith('@dan_b (Dan Brown) still reads the group. To take reading away, remove them from the group.'));
+    assert.deepEqual(listLabels(apiTopic(), list), ['Eve Quiet', '@frank_f', '＋ Add']);
+    assert.ok(!readStateFile().topicTalkers?.[keyToString(makeTelegramKey(group.id, apiThreadId))]?.talkers.some((talker) => talker.userId === danMember.id.toString()), 'gone from disk at once');
+    fakeTelegram.pushUserMessage(apiThreadId, 'dan writes after the revoke', danMember);
+    fakeTelegram.pushOperatorMessage(apiThreadId, 'the operator follows the revoked member');
+    await waitForAgentPrompt('the operator follows the revoked member');
+    assert.deepEqual(listAgentPromptsWith('dan writes after the revoke'), [], 'ignored again');
+  });
+
+  it('a keyboard that went stale acts on nobody: a menu opened from an OLD list, after the list changed, says so and shows the list as it is', async () => {
+    const oldList = await openAccessList(apiTopic(), apiThreadId);
+    const afterRemove = Math.max(0, ...apiTopic().listMessages().map((message) => message.message_id));
+    fakeTelegram.pushOperatorMessage(apiThreadId, '/access remove @frank_f');
+    await waitForBotText(apiTopic(), afterRemove, '@frank_f (Frank Fresh) can no longer talk to the agent here.');
+    const toast = await tapAccessButton(apiTopic(), oldList, 'Eve Quiet');
+    assert.equal(toast, 'The list changed: here it is again');
+    await apiTopic().waitForMessageText('the current list', oldList, (text) => text.startsWith('Who may talk to the agent') && !listLabels(apiTopic(), oldList).includes('@frank_f'));
+    assert.deepEqual(listLabels(apiTopic(), oldList), ['Eve Quiet', '＋ Add'], 'Frank is gone, Eve was revoked by nobody');
+  });
+
+  it('an invitation can be cancelled from the list: its menu, Cancel invitation, a toast', async () => {
+    const afterAdd = Math.max(0, ...apiTopic().listMessages().map((message) => message.message_id));
+    fakeTelegram.pushOperatorMessage(apiThreadId, '/access add @gina_g');
+    const confirmation = await waitForBotText(apiTopic(), afterAdd, 'Add @gina_g as soon as they first write in this group?');
+    await tapAccessButton(apiTopic(), confirmation, '✅ Add');
+    const list = await openAccessList(apiTopic(), apiThreadId);
+    assert.deepEqual(listLabels(apiTopic(), list), ['Eve Quiet', '⏳ @gina_g', '＋ Add']);
+    await tapAccessButton(apiTopic(), list, '⏳ @gina_g');
+    await apiTopic().waitForMessageText('the invitation\'s menu', list, (text) => text.startsWith("Waits for @gina_g's first message (until "));
+    assert.equal(await tapAccessButton(apiTopic(), list, 'Cancel invitation'), 'The invitation for @gina_g is cancelled');
+    await apiTopic().waitForMessageText('the list again', list, (text) => text.startsWith('Who may talk to the agent') && !listLabels(apiTopic(), list).includes('⏳ @gina_g'));
+  });
+
+  it('only admins use /access: a talker\'s command gets the refusal line, a talker\'s and a stranger\'s tap on the list the toast, and the list does not change', async () => {
+    const list = await openAccessList(apiTopic(), apiThreadId);
+    const labelsBefore = listLabels(apiTopic(), list);
+    const afterCommand = Math.max(0, ...apiTopic().listMessages().map((message) => message.message_id));
+    fakeTelegram.pushUserMessage(apiThreadId, '/access', generalTalker);
+    await waitForBotText(apiTopic(), afterCommand, adminOnlyCommandRefusal);
+    assert.equal(await tapAccessButton(apiTopic(), list, 'Eve Quiet', generalTalker), adminOnlyButtonToast);
+    assert.equal(await tapAccessButton(apiTopic(), list, '＋ Add', stranger), adminOnlyButtonToast);
+    assert.deepEqual(listLabels(apiTopic(), list), labelsBefore);
+    assert.ok(readStateFile().topicTalkers?.[keyToString(makeTelegramKey(group.id, apiThreadId))]?.talkers.some((talker) => talker.userId === eveMember.id.toString()), 'Eve is still on the list');
+  });
+
+  it('a bind says how many people may talk to the agent in the topic and where they now reach it', async () => {
+    const halMessageId = fakeTelegram.pushUserMessage(idleThreadId, 'hal writes in the idle topic', halMember);
+    const afterHal = Math.max(0, ...idleTopic().listMessages().map((message) => message.message_id));
+    fakeTelegram.pushOperatorMessage(idleThreadId, '/access add', { replyToMessageId: halMessageId });
+    const confirmation = await waitForBotText(idleTopic(), afterHal, 'Add @hal_h (Hal Hall)?');
+    await tapAccessButton(idleTopic(), confirmation, '✅ Add');
+    await waitForBotText(idleTopic(), afterHal, '✅ @hal_h (Hal Hall) may now talk to the agent in this topic. They can make it run any command in «idle-proj».');
+    const afterBind = Math.max(0, ...idleTopic().listMessages().map((message) => message.message_id));
+    fakeTelegram.pushOperatorMessage(idleThreadId, `/bind ${apiFolder}`);
+    const welcome = await waitForBotText(idleTopic(), afterBind, 'People who may talk to the agent here:');
+    assert.ok(welcome.text.includes(`People who may talk to the agent here: 1 — they now reach it in \`${apiFolder}\`.`), welcome.text);
+  });
+
   it('a talker who leaves the group is dropped from every list at once and ignored from then on; the others stay', async () => {
     const docsKey = keyToString(makeTelegramKey(group.id, docsThreadId));
     const listDocsTalkerIds = (): string[] => (readStateFile().topicTalkers?.[docsKey]?.talkers ?? []).map((talker) => talker.userId).sort();
@@ -561,5 +766,51 @@ describe('topic talkers end to end: built charness, fake Bot API, fake speech en
     assert.equal(readStateFile().topicTalkers?.[keyToString(makeTelegramKey(group.id, generalThreadId))]?.talkers.length, 1);
     fakeTelegram.pushUserMessage(docsThreadId, 'carol is still a talker', invitedMember);
     await waitForAgentPrompt('carol is still a talker');
+  });
+
+  it('General\'s /access is the group-wide list, with the topics that have talkers of their own; revoked there, the person is ignored in EVERY topic', async () => {
+    const list = await openAccessList(generalTopic(), generalThreadId);
+    assert.ok(list.text.startsWith("Who may talk to the agent in every topic (General's list)\nGroup admins talk in every topic and are not listed."), list.text);
+    assert.ok(list.text.includes('Everyone in the group can READ every topic.'));
+    assert.ok(list.text.includes('Also in topics: ') && list.text.includes(`«#${apiThreadId}»`) && list.text.includes(`«#${docsThreadId}»`), list.text);
+    assert.deepEqual(listLabels(generalTopic(), list), ['@gus', '＋ Add']);
+
+    await tapAccessButton(generalTopic(), list, '@gus');
+    await generalTopic().waitForMessageText('Gus\'s menu', list, (text) => text.startsWith('@gus (Gus Guest)\nMay talk to the agent in every topic since '));
+    assert.equal(await tapAccessButton(generalTopic(), list, 'Revoke access'), '@gus (Gus Guest) can no longer talk to the agent in every topic');
+    await generalTopic().waitForMessageText('the list without Gus', list, (text) => text.includes('still reads the group') && !listLabels(generalTopic(), list).includes('@gus'));
+    assert.equal(readStateFile().topicTalkers?.[keyToString(makeTelegramKey(group.id, generalThreadId))]?.talkers.length, 0, 'gone from disk at once');
+
+    fakeTelegram.pushUserMessage(apiThreadId, 'gus tries the api topic after the revoke', generalTalker);
+    fakeTelegram.pushUserMessage(docsThreadId, 'gus tries the docs topic after the revoke', generalTalker);
+    fakeTelegram.pushOperatorMessage(apiThreadId, 'the operator follows gus in api');
+    fakeTelegram.pushOperatorMessage(docsThreadId, 'the operator follows gus in docs');
+    await waitForAgentPrompt('the operator follows gus in api');
+    await waitForAgentPrompt('the operator follows gus in docs');
+    assert.deepEqual(listAgentPromptsWith('after the revoke').filter((prompt) => prompt.text.includes('gus tries')), [], 'ignored in both');
+  });
+
+  it('the lists and a waiting invitation survive a restart; what the bot only remembered in memory (the seen @usernames) does not, and an @username falls back to waiting', async () => {
+    const afterAdd = Math.max(0, ...apiTopic().listMessages().map((message) => message.message_id));
+    fakeTelegram.pushOperatorMessage(apiThreadId, '/access add @ivy_i');
+    const confirmation = await waitForBotText(apiTopic(), afterAdd, 'Add @ivy_i as soon as they first write in this group?');
+    await tapAccessButton(apiTopic(), confirmation, '✅ Add');
+    await getCharness().waitFor('the invitation on disk', replyTimeoutMs, () => readStateFile().topicTalkers?.[keyToString(makeTelegramKey(group.id, apiThreadId))]?.invites.length === 1);
+
+    charness = await restartCharnessWithState(getLayout(), fakeTelegram, getCharness(), () => {});
+    const list = await openAccessList(apiTopic(), apiThreadId);
+    assert.deepEqual(listLabels(apiTopic(), list), ['Eve Quiet', '⏳ @ivy_i', '＋ Add'], 'the people and the waiting invitation are back');
+    const general = await openAccessList(generalTopic(), generalThreadId);
+    assert.deepEqual(listLabels(generalTopic(), general), ['＋ Add'], 'General\'s revoke is still in force');
+
+    // Hal wrote in the idle topic before the restart, so the bot had seen him; now it has not.
+    const afterHal = Math.max(0, ...apiTopic().listMessages().map((message) => message.message_id));
+    fakeTelegram.pushOperatorMessage(apiThreadId, '/access add @hal_h');
+    await waitForBotText(apiTopic(), afterHal, 'Add @hal_h as soon as they first write in this group?');
+    // The agent is the same process: a restart does not stop it.
+    fakeTelegram.pushUserMessage(apiThreadId, 'eve writes after the restart', eveMember);
+    const prompt = await waitForAgentPrompt('eve writes after the restart');
+    assert.equal(prompt.pid, apiAgentPid);
+    assert.ok(prompt.text.includes(`${eveMark}\n\neve writes after the restart`), prompt.text);
   });
 });

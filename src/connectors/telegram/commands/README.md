@@ -49,6 +49,19 @@ functions where the handlers used to be registered. A module never imports `bot.
 answers the callback and re-renders the picker's keyboard so the ✓ follows; a view with requests off (`stream`)
 closes the topic's open request. `/status` renders the view through `formatTopicView`.
 
+## `topicAccess.ts`
+
+`/access` — who may talk to the agent in a topic (`../../../topicTalkers.ts`; General's own list is group-wide) — and its one `tlk_*`
+pattern. Admins only: the command carries no `isTalkerAllowed` flag and every tap asks `authoriseContext` (a talker's tap is refused
+earlier, by `bot.ts`'s button middleware, with its own toast). Pure half: `utils/topicAccessScreenPlan.ts` (screens, the typed
+forms, the add decision and its refusals, the button codec — a list button bakes the list's REVISION, an add / confirm button the id
+of its message's snapshot). The module owns the per-MESSAGE snapshots (the add screen's writers, a typed add waiting for «Add»),
+keyed by chat + message id and bounded. The people who wrote and were ignored and the @usernames seen come from `bot.ts` through
+`topicTalkerMemory.ts` (memory only). **The warning that a talker can make the agent run any command in the folder comes BEFORE a
+grant takes effect:** on the add screen, and in the confirmation every typed add goes through — a grant is decided AGAIN at the
+moment of «Add» (the person may have become an admin or been added since). A grant, a revoke and an invitation are flushed by the
+store before the call returns.
+
 ## `reminders.ts`
 
 `/reminders` and its seven buttons (add, hub, close, list page, card, delete, the wizard's own). A reminder is
