@@ -156,9 +156,9 @@ export function getReleaseBump(commits: ReleaseCommit[]): ReleaseBumpDecision {
 
 /** @description `3.2.0` + minor → `3.3.0`; null when the version is not plain `X.Y.Z`. */
 export function getNextVersion(version: string, level: ReleaseBumpLevel): string | null {
-  const match = versionPattern.exec(version);
-  if (!match) return null;
-  const [major, minor, patch] = [Number(match[1]), Number(match[2]), Number(match[3])];
+  const parts = parsePlainVersion(version);
+  if (!parts) return null;
+  const [major, minor, patch] = parts;
   if (level === 'major') return `${major + 1}.0.0`;
   if (level === 'minor') return `${major}.${minor + 1}.0`;
   return `${major}.${minor}.${patch + 1}`;
@@ -203,6 +203,53 @@ export function createReleasePlan({ lastTag, commitsSinceTag, netDiff, isHeadTag
   const version = getNextVersion(lastTag.slice(releaseTagPrefix.length), level);
   if (version === null) return { kind: 'fail', message: `The last release tag ${lastTag} is not ${releaseTagPrefix}X.Y.Z — cannot compute the next version.` };
   return { kind: 'release', version, bump: level };
+}
+
+/** `X.Y.Z` as numbers, or null for anything else (a prerelease, a tag that is not a release). */
+function parsePlainVersion(version: string): [number, number, number] | null {
+  const match = versionPattern.exec(version);
+  return match ? [Number(match[1]), Number(match[2]), Number(match[3])] : null;
+}
+
+function compareVersionParts(left: [number, number, number], right: [number, number, number]): number {
+  return left[0] - right[0] || left[1] - right[1] || left[2] - right[2];
+}
+
+/** What the registry and the repository hold, for {@link getUnfinishedReleaseVersions}. */
+export interface RegistryReleaseState {
+  /** Every version of the package the registry holds. */
+  registryVersions: string[];
+  /** The versions of the repository's release tags (`vX.Y.Z` → `X.Y.Z`). */
+  tagVersions: string[];
+  /** The version this run releases. */
+  version: string;
+}
+
+/**
+ * @description The versions the registry holds that are newer than every release tag of the repository other than this run's own:
+ * what a release run published and could not finish (its tag and version commit never reached the repository). A run that
+ * released another version now would leave such a version without its tag, release commit and CHANGELOG section for good — the
+ * next version's bump moves `package.json` past it —, so the release refuses while there is one. This run's own version is not one
+ * (npm holding it already is a re-run: the package job compares the tarballs); neither is an older untagged version (published
+ * before the tags) or a prerelease. Ascending.
+ */
+export function getUnfinishedReleaseVersions({ registryVersions, tagVersions, version }: RegistryReleaseState): string[] {
+  const newestTag = tagVersions
+    .filter((tagVersion) => tagVersion !== version)
+    .flatMap((tagVersion) => {
+      const parts = parsePlainVersion(tagVersion);
+      return parts === null ? [] : [parts];
+    })
+    .sort(compareVersionParts)
+    .at(-1);
+  if (newestTag === undefined) return [];
+  return registryVersions
+    .flatMap((registryVersion) => {
+      const parts = parsePlainVersion(registryVersion);
+      return parts !== null && registryVersion !== version && compareVersionParts(parts, newestTag) > 0 ? [{ registryVersion, parts }] : [];
+    })
+    .sort((left, right) => compareVersionParts(left.parts, right.parts))
+    .map(({ registryVersion }) => registryVersion);
 }
 
 /** @description The release date as `YYYY-MM-DD` on the Tbilisi calendar — never the runner's UTC date. */

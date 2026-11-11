@@ -177,9 +177,9 @@ export function checkIsOpenCodeServeCommand(argv: readonly string[]): boolean {
   return path.basename(argv[0] ?? '').startsWith(openCodeExecutableNamePrefix) && argv.includes(openCodeServeCommand);
 }
 
-/** @description Read a server's launch from its `/proc/<pid>/cmdline` and `/proc/<pid>/environ` contents. */
-export function parseOpenCodeServerLaunch(cmdline: string, environ: string): OpenCodeServeProcessReading {
-  if (!checkIsOpenCodeServeCommand(cmdline.split(procEntrySeparator).filter(Boolean))) return { kind: 'unknown' };
+/** @description Read a server's launch from its argv and its `/proc/<pid>/environ` contents. */
+export function parseOpenCodeServerLaunch(argv: readonly string[], environ: string): OpenCodeServeProcessReading {
+  if (!checkIsOpenCodeServeCommand(argv)) return { kind: 'unknown' };
   const prefix = `${openCodeConfigDirEnvName}=`;
   const entry = environ.split(procEntrySeparator).find((variable) => variable.startsWith(prefix));
   return { kind: 'openCodeServe', configDir: entry === undefined ? null : entry.slice(prefix.length) };

@@ -9,7 +9,7 @@ import { sleep } from './utils';
 import { getChildProcessEnvironment } from './utils/agentEnvironment';
 import { installOpenCodeCompactPlugin } from './utils/openCodeCompactPlugin';
 import { checkIsBotSkillsEnabled } from './utils/botSkills';
-import { checkIsOpenCodeServeCommand, getOpenCodeAgentConfigEnv, getPidlessServerLaunchReading, parseOpenCodeServerLaunch, type OpenCodeServeProcessReading, type OpenCodeServerLaunchReading } from './utils/agentPlugin';
+import { checkIsOpenCodeServeCommand, getOpenCodeAgentConfigEnv, getPidlessServerLaunchReading, parseOpenCodeServerLaunch, type OpenCodeServerLaunchReading } from './utils/agentPlugin';
 import {
   hotReloadEnvName,
   openCodeProcessFileEnvName,
@@ -467,6 +467,8 @@ export function getOpenCodeServerAuthHeaders(): Record<string, string> {
 
 const externalProcessHostStartTimeoutMs = 5_000;
 const externalProcessHostAbortTimeoutMs = 2_000;
+/** How long a `ps` / `lsof` / `ss` / PowerShell probe of a process or a port may take. */
+const processProbeTimeoutMs = 3_000;
 const externalProcessHostScript = `
 const { spawn } = require('node:child_process');
 const command = process.argv[1];
@@ -792,13 +794,13 @@ function getProcessStartToken(pid: number): string | null {
           '-Command',
           `(Get-Process -Id ${pid} -ErrorAction Stop).StartTime.ToUniversalTime().Ticks`,
         ],
-        { encoding: 'utf8', timeout: 3000 },
+        { encoding: 'utf8', timeout: processProbeTimeoutMs },
       );
       return output.trim() || null;
     }
     const output = execFileSync('ps', ['-o', 'lstart=', '-o', 'command=', '-p', pid.toString()], {
       encoding: 'utf8',
-      timeout: 3000,
+      timeout: processProbeTimeoutMs,
     });
     return output.trim() || null;
   } catch {
@@ -1121,12 +1123,15 @@ export async function readOpenCodeServerLaunch(): Promise<OpenCodeServerLaunchRe
   if (!loopbackHostnames.has(serverUrl.hostname)) return { kind: 'unknown' };
   const pid = getPidListeningOnEndpoint(serverUrl.hostname, getOpenCodePort(serverUrl));
   if (pid === null) return getPidlessServerLaunchReading(await checkIsOpenCodeServerRunning());
-  let processReading: OpenCodeServeProcessReading;
+  let environ: string;
   try {
-    processReading = parseOpenCodeServerLaunch(fs.readFileSync(`/proc/${pid}/cmdline`, 'utf8'), fs.readFileSync(`/proc/${pid}/environ`, 'utf8'));
+    environ = fs.readFileSync(`/proc/${pid}/environ`, 'utf8');
   } catch {
     return { kind: 'unknown' };
   }
+  const argv = readProcessArgv(pid);
+  if (argv === null) return { kind: 'unknown' };
+  const processReading = parseOpenCodeServerLaunch(argv, environ);
   if (processReading.kind === 'unknown') return processReading;
   const isOwnedByBot = checkHasOwnedOpenCodeProcess(serverUrl.origin);
   return { ...processReading, isOwnedByBot };
@@ -1168,7 +1173,7 @@ function readProcessArgv(pid: number): string[] | null {
     if (process.platform === 'linux') return fs.readFileSync(`/proc/${pid}/cmdline`, 'utf8').split('\0').filter(Boolean);
     if (process.platform === 'win32') return null;
     // `ps` joins argv with spaces: a path with a space reads as another name, so such a process is not identified (never stopped).
-    const command = execFileSync('ps', ['-o', 'command=', '-p', pid.toString()], { encoding: 'utf8', timeout: 3000 }).trim();
+    const command = execFileSync('ps', ['-o', 'command=', '-p', pid.toString()], { encoding: 'utf8', timeout: processProbeTimeoutMs }).trim();
     return command ? command.split(/\s+/) : null;
   } catch {
     return null;
@@ -1205,7 +1210,7 @@ function getPidListeningOnEndpoint(hostname: string, port: string): number | nul
       const output = execFileSync(
         'lsof',
         ['-nP', `-iTCP@${lsofAddress}:${port}`, '-sTCP:LISTEN', '-t'],
-        { encoding: 'utf8', timeout: 3000, stdio: ['ignore', 'pipe', 'ignore'] },
+        { encoding: 'utf8', timeout: processProbeTimeoutMs, stdio: ['ignore', 'pipe', 'ignore'] },
       ).trim();
       const pid = Number.parseInt(output.split('\n')[0], 10);
       if (Number.isFinite(pid)) return pid;
@@ -1216,7 +1221,7 @@ function getPidListeningOnEndpoint(hostname: string, port: string): number | nul
   try {
     const output = execFileSync('ss', ['-ltnpH', `sport = :${port}`], {
       encoding: 'utf8',
-      timeout: 3000,
+      timeout: processProbeTimeoutMs,
     });
     for (const line of output.split('\n')) {
       const isExpectedAddress = listenerAddresses.some((listenerAddress) =>

@@ -24,6 +24,7 @@ import {
   getReleaseBump,
   getReleaseDate,
   getReleaseNotes,
+  getUnfinishedReleaseVersions,
   getUnreleasedSection,
   mergeReleaseChangelog,
   requiredPackFiles,
@@ -236,6 +237,36 @@ describe('the plan of a run', () => {
   test('no release tag in the history, or one that is not X.Y.Z → fail', () => {
     assert.equal(plan([createCommit('fix: a')], { lastTag: null }).kind, 'fail');
     assert.equal(plan([createCommit('fix: a')], { lastTag: 'v3.2' }).kind, 'fail');
+  });
+});
+
+describe('a published version the repository never got (a release that did not finish)', () => {
+  const tagVersions = ['3.4.0', '3.5.0'];
+
+  test('3.5.1 is on npm with no tag, the next run would release 3.6.0: 3.5.1 is named', () => {
+    assert.deepEqual(getUnfinishedReleaseVersions({ registryVersions: ['3.4.0', '3.5.0', '3.5.1'], tagVersions, version: '3.6.0' }), ['3.5.1']);
+    assert.deepEqual(getUnfinishedReleaseVersions({ registryVersions: ['3.5.0', '3.6.0'], tagVersions, version: '3.5.1' }), ['3.6.0'], 'newer than the planned version too');
+  });
+
+  test('the run\'s own version on npm is a re-run (the package job compares the tarballs), not an unfinished release', () => {
+    assert.deepEqual(getUnfinishedReleaseVersions({ registryVersions: ['3.5.0', '3.5.1'], tagVersions, version: '3.5.1' }), []);
+  });
+
+  test('a hand-pushed tag counts the tags without its own: an unfinished version below it is still named', () => {
+    assert.deepEqual(getUnfinishedReleaseVersions({ registryVersions: ['3.5.0', '3.5.1'], tagVersions: [...tagVersions, '3.6.0'], version: '3.6.0' }), ['3.5.1']);
+  });
+
+  test('every version npm holds is tagged, or older than the newest tag (published before the tags): nothing', () => {
+    assert.deepEqual(getUnfinishedReleaseVersions({ registryVersions: ['2.0.3', '3.0.0', '3.4.0', '3.5.0'], tagVersions, version: '3.5.1' }), []);
+    assert.deepEqual(getUnfinishedReleaseVersions({ registryVersions: [], tagVersions, version: '3.5.1' }), []);
+    assert.deepEqual(getUnfinishedReleaseVersions({ registryVersions: ['3.9.0'], tagVersions: [], version: '3.5.1' }), [], 'no release tag at all: the plan fails on that by itself');
+  });
+
+  test('versions compare as numbers, prereleases and non-release tags are left out, the list is ascending', () => {
+    assert.deepEqual(
+      getUnfinishedReleaseVersions({ registryVersions: ['3.10.0', '3.10.0-beta.1', '3.9.1'], tagVersions: ['3.9.0', 'next', '3.8.5'], version: '3.11.0' }),
+      ['3.9.1', '3.10.0'],
+    );
   });
 });
 

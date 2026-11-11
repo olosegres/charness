@@ -786,6 +786,80 @@ describe('test-gate', () => {
   });
 });
 
+describe('check-registry', () => {
+  let registryServer: http.Server;
+  let registryUrl: string;
+  let registryRequests: { url: string; accept: string | undefined }[];
+  let registryAnswer: { status: number; versions: string[] };
+
+  beforeEach(async () => {
+    registryRequests = [];
+    registryAnswer = { status: 200, versions: [] };
+    registryServer = http.createServer((request, response) => {
+      registryRequests.push({ url: request.url ?? '', accept: request.headers.accept });
+      response.writeHead(registryAnswer.status, { 'Content-Type': 'application/json' });
+      response.end(JSON.stringify(registryAnswer.status === 200 ? { name: initialPackage.name, versions: Object.fromEntries(registryAnswer.versions.map((version) => [version, { version }])) } : { error: 'Not found' }));
+    });
+    await new Promise<void>((resolve) => registryServer.listen(0, '127.0.0.1', resolve));
+    const address = registryServer.address();
+    assert.ok(address && typeof address !== 'string');
+    registryUrl = `http://127.0.0.1:${address.port}/`;
+  });
+
+  afterEach(async () => {
+    await new Promise<void>((resolve) => registryServer.close(() => resolve()));
+  });
+
+  /** The fake registry answers from THIS process: the CLI runs as an async child. */
+  function runRegistryCheck(version: string): Promise<{ status: number | null; stdout: string; stderr: string }> {
+    return new Promise((resolve) => {
+      const child = spawn(process.execPath, [transpiledCliPath, 'check-registry', '--version', version, '--registry', registryUrl], { cwd: repoDir, env: createChildEnv(), stdio: ['ignore', 'pipe', 'pipe'] });
+      let stdout = '';
+      let stderr = '';
+      child.stdout.on('data', (chunk: Buffer) => { stdout += chunk.toString('utf8'); });
+      child.stderr.on('data', (chunk: Buffer) => { stderr += chunk.toString('utf8'); });
+      child.on('close', (status) => resolve({ status, stdout, stderr }));
+    });
+  }
+
+  test('npm holds 3.2.1, which no tag has (a release that did not finish): releasing 3.3.0 is refused, naming it', async () => {
+    registryAnswer = { status: 200, versions: ['3.1.0', '3.2.0', '3.2.1'] };
+    const result = await runRegistryCheck('3.3.0');
+    assert.equal(result.status, 1, result.stdout);
+    assert.match(result.stderr, /npm holds demo-package 3\.2\.1, which no release tag of the repository has/);
+    assert.match(result.stderr, /Releasing 3\.3\.0 now would leave 3\.2\.1 without a tag, a release commit and a CHANGELOG section for good/);
+    assert.match(result.stderr, /Re-run failed jobs.*Nothing is published or pushed\./);
+    assert.deepEqual(registryRequests.map(({ url }) => url), ['/demo-package']);
+    assert.match(registryRequests[0].accept ?? '', /application\/vnd\.npm\.install-v1\+json/);
+  });
+
+  test('only tagged versions, or this run\'s own (a re-run), or a package npm does not know: it goes on', async () => {
+    registryAnswer = { status: 200, versions: ['3.1.0', '3.2.0', '3.3.0'] };
+    const ownVersion = await runRegistryCheck('3.3.0');
+    assert.equal(ownVersion.status, 0, ownVersion.stderr);
+    assert.match(ownVersion.stdout, /npm holds no demo-package version newer than the release tags but 3\.3\.0 itself/);
+    registryAnswer = { status: 404, versions: [] };
+    const unknown = await runRegistryCheck('3.3.0');
+    assert.equal(unknown.status, 0, unknown.stderr);
+  });
+
+  test('a hand-pushed tag: the tag of the version itself does not hide an unfinished version below it', async () => {
+    commitFile('src/bot.ts', 'export const bot = 2;\n', 'fix: a');
+    runGit('tag', '-a', 'v3.3.0', '-m', 'v3.3.0');
+    registryAnswer = { status: 200, versions: ['3.2.0', '3.2.1'] };
+    const result = await runRegistryCheck('3.3.0');
+    assert.equal(result.status, 1, result.stdout);
+    assert.match(result.stderr, /npm holds demo-package 3\.2\.1/);
+  });
+
+  test('a registry that cannot be read stops the run: nothing is published', async () => {
+    registryAnswer = { status: 500, versions: [] };
+    const result = await runRegistryCheck('3.3.0');
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /Cannot read the versions the registry holds of demo-package: the registry answered 500; nothing is published\./);
+  });
+});
+
 describe('the manual `npm version` path', () => {
   const repoRoot = path.resolve(__dirname, '..', '..');
 
@@ -1047,6 +1121,38 @@ describe('commit-release', () => {
     assert.equal(result.status, 1);
     assert.match(result.stderr, /conflicts in CHANGELOG\.md; nothing is published or pushed\./);
     assert.equal(checkHasRemoteTag('v3.3.0'), false);
+  });
+
+  test('--prepare (after the publish) commits, tags and merges a moved main without pushing; the plain push that follows lands it; a re-run finds it pushed', () => {
+    applyRelease('3.3.0');
+    pushChangelogEntry('**A newer entry.** Lands during the run.', 'top');
+    const mainBefore = runGitIn(remoteDir, 'rev-parse', 'refs/heads/main');
+    const prepared = runCli('commit-release', '3.3.0', '--prepare');
+    assert.equal(prepared.status, 0, `${prepared.stdout}\n${prepared.stderr}`);
+    assert.equal(readGithubOutput().isPushed, 'false');
+    assert.match(prepared.stdout, /main moved during the run; the release merges into it\. Nothing pushed yet \(--prepare\): push HEAD to main and v3\.3\.0/);
+    assert.equal(runGitIn(remoteDir, 'rev-parse', 'refs/heads/main'), mainBefore, 'nothing pushed by --prepare');
+    assert.equal(checkHasRemoteTag('v3.3.0'), false);
+
+    // The workflow's push step: plain git, nothing else.
+    runGit('push', '-q', '--atomic', 'origin', 'HEAD:refs/heads/main', 'refs/tags/v3.3.0');
+    assert.match(runGitIn(remoteDir, 'show', 'refs/heads/main:CHANGELOG.md'), /## Unreleased\n\n\*\*A newer entry\.\*\* Lands during the run\.\n\n## 3\.3\.0 — /);
+    assert.equal(runGitIn(remoteDir, 'log', '-1', '--format=%s', 'v3.3.0^{commit}'), 'chore(release): 3.3.0');
+
+    fs.rmSync(githubOutputPath);
+    const rerun = runCli('commit-release', '3.3.0', '--prepare');
+    assert.equal(rerun.status, 0, `${rerun.stdout}\n${rerun.stderr}`);
+    assert.equal(readGithubOutput().isPushed, 'true');
+  });
+
+  test('--prepare that hits a real conflict says npm has the version already and how to finish', () => {
+    applyRelease('3.3.0');
+    pushRewordedReleasedEntry();
+    const result = runCli('commit-release', '3.3.0', '--prepare');
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /conflicts in CHANGELOG\.md; npm has 3\.3\.0 already and the repository not yet/);
+    assert.equal(checkHasRemoteTag('v3.3.0'), false);
+    assert.equal(runCli('commit-release', '3.3.0', '--check', '--prepare').status, 1, '--check and --prepare together are refused');
   });
 
   /** The applied release packed the way npm packs it (its files under `package/`), the checkout back at the tested commit. */

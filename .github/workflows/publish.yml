@@ -11,13 +11,17 @@ name: Release to npm
 # the repository does: until `publish`, nothing leaves the run — a red job publishes nothing, tags nothing, pushes nothing, and the next
 # run starts over. `release` (the release commit on the tested one, the tag, main, the GitHub Release) runs only once npm has the
 # version, and commits the files of the very tarball npm has. When `release` fails, npm has a version the repository does not: every
-# later run refuses to put another tarball under that version, until the release is finished (DEVELOPMENT.md § Releases).
+# later run refuses until the release is finished — `gate` when it would release another version, `package` when it packs another
+# tarball of that one (DEVELOPMENT.md § Releases).
 #
 # Rights: only `release` can write to the repository, only `publish` can mint the npm publish token. Every job but `test` installs from
 # the lockfile with no install scripts (`--mode=skip-build`) and nothing from a cache; `test` is the Tests workflow itself (every install
 # script, the suite), can neither write nor publish, and hands nothing on but its result. `publish` checks out nothing and installs
-# nothing but the pinned npm, with no scripts: it checks the tarball's sha256 and publishes THAT file. `release`'s checkout keeps no
-# credentials: the token reaches the push step and the Release step alone. npm is pinned to an exact version, every action to a commit.
+# nothing but the pinned npm, with no scripts: it checks the tarball's sha256 and publishes THAT file. In `release` the token is in the
+# environment of two steps only — the push (plain git) and the GitHub Release (`gh`) —; the release CLI that makes the commit runs in a
+# step of its own, without it. What runs in that job is pinned by hash (Yarn by `packageManager`, its packages by `yarn.lock`, the
+# actions by commit), but a process an earlier step left behind runs as the same user and could still read a later step's token: the
+# job is the boundary, not the step. npm is pinned to an exact version.
 #
 # The jobs are ONE run on purpose: a tag pushed with GITHUB_TOKEN does not start another workflow run, so the release's own tag push
 # cannot publish twice.
@@ -115,6 +119,13 @@ jobs:
           fi
           echo "version=${version}" >> "$GITHUB_OUTPUT"
           echo "tag=v${version}" >> "$GITHUB_OUTPUT"
+      # npm holding a version newer than every release tag but this run's own means a release published and did not finish: releasing
+      # another version now would lose that one for good (its bump moves package.json past it). The run stops until it is finished.
+      - name: No unfinished release on npm
+        if: steps.release.outcome == 'success'
+        env:
+          VERSION: ${{ steps.release.outputs.version }}
+        run: yarn tsx src/release/cli.ts check-registry --version "${VERSION}"
       # The exact commit this run releases: what the Tests workflow says about it decides everything below. A hand-pushed tag's commit was
       # pushed this very moment, so its own Tests run is usually still going: when its PARENT passed and the tag differs from it only in
       # the version and the CHANGELOG, the parent's run is the gate (otherwise the tagged commit's own run decides).
@@ -340,8 +351,8 @@ jobs:
   release:
     # Once npm has the version, the repository gets it: the release commit (the tested commit plus the version files out of the very
     # tarball npm has), the tag, main, then the GitHub Release. The only job that can write; it runs no install script, its checkout keeps
-    # no credentials, and the token reaches only the push step and the Release step. A hand-pushed tag is in the repository already: only
-    # its GitHub Release is made here.
+    # no credentials, and the token is in the environment of the plain-git push step and the Release step only. A hand-pushed tag is in
+    # the repository already: only its GitHub Release is made here.
     needs: [gate, package, publish]
     if: ${{ !cancelled() && needs.publish.result == 'success' }}
     runs-on: ubuntu-latest
@@ -376,16 +387,26 @@ jobs:
       # The release CLI only (tsx): the lockfile, no package's install script.
       - if: github.event_name != 'push'
         run: yarn install --immutable --mode=skip-build
-      # The push token reaches git through this step's environment only (an http header for github.com, masked); no file keeps it.
-      - name: Commit the version, tag it, push main and the tag
+      # No token here: the release CLI (tsx, esbuild, zod, Yarn — each pinned by hash) makes the commit and the tag and merges a moved
+      # main, all locally; it says whether a re-run finds the tag pushed already.
+      - name: Commit the version, tag it, merge main if it moved (locally, no token)
+        id: prepare
         if: github.event_name != 'push'
+        run: yarn tsx src/release/cli.ts commit-release "$VERSION" --prepare --tarball "${RUNNER_TEMP}/release-package/${TARBALL}" --base "${GITHUB_SHA}"
+      # The only step with the push token: plain git, no package's code. The token reaches git as an http header through this step's
+      # environment (masked); no file keeps it. A push refused because main moved in the seconds since the merge: re-run failed jobs.
+      - name: Push main and the tag
+        if: github.event_name != 'push' && steps.prepare.outputs.isPushed != 'true'
         env:
           PUSH_TOKEN: ${{ github.token }}
         run: |
           basic="$(printf 'x-access-token:%s' "${PUSH_TOKEN}" | base64 -w0)"
           echo "::add-mask::${basic}"
           export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0="http.${GITHUB_SERVER_URL}/.extraheader" GIT_CONFIG_VALUE_0="AUTHORIZATION: basic ${basic}"
-          yarn tsx src/release/cli.ts commit-release "$VERSION" --tarball "${RUNNER_TEMP}/release-package/${TARBALL}" --base "${GITHUB_SHA}"
+          if ! git push --atomic origin HEAD:refs/heads/main "refs/tags/${TAG}"; then
+            echo "::error title=npm has ${VERSION}, the repository not yet::The push of ${TAG} was refused. npm has ${VERSION} already: re-run this run's failed jobs (the release job merges main again and pushes), or finish by hand (DEVELOPMENT.md § Releases, npm has a version the repository does not)."
+            exit 1
+          fi
       - name: GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}

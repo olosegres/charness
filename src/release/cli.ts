@@ -14,16 +14,20 @@
  *                                                               the Tests workflow's result for the exact commit (a hand-pushed tag
  *                                                               also tries its parent); exits 1 on a refusal
  *   verify-delta --base <commit> [--head <rev>]                 the release commit is the tested one plus its version bump, or exit 1
- *   commit-release <version> [--tarball <file>] [--base <commit>] [--check] [--remote origin] [--branch main]
+ *   check-registry --version X.Y.Z [--registry <url>]          refuses while npm holds a version newer than every release tag but this
+ *                                                               run's own (a release that published and did not finish)
+ *   commit-release <version> [--tarball <file>] [--base <commit>] [--check | --prepare] [--remote origin] [--branch main]
  *                                                               commit, tag and push the applied release (`--tarball`: its files out of
  *                                                               the packed package; `--base`: refuse unless it is that commit plus its
- *                                                               version bump; `--check`: commit and merge main locally, push nothing)
+ *                                                               version bump; `--check` / `--prepare`: commit and merge main locally,
+ *                                                               push nothing — before / after the publish)
  */
 import { execFile, execFileSync, spawnSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { parseArgs } from 'node:util';
+import { z } from 'zod';
 import {
   ReleaseError,
   checkIsShippedManifestChange,
@@ -35,6 +39,7 @@ import {
   getPublishDryRunProblems,
   getReleaseDate,
   getReleaseNotes,
+  getUnfinishedReleaseVersions,
   mergeReleaseChangelog,
   releaseTagPrefix,
   type PackListing,
@@ -55,7 +60,7 @@ import {
 } from './testGate';
 import { getShrinkwrapDeviations, setShrinkwrapVersion, shrinkwrapFileName } from './hubShrinkwrap';
 import { startLocalRegistry, type LocalRegistryManifest } from './localRegistry';
-import { parseRunnerLock } from '../runners/runnerLock';
+import { parseRunnerLock, registryUrl } from '../runners/runnerLock';
 
 const shortShaLength = 7;
 const gitTimeoutMs = 60_000;
@@ -87,6 +92,11 @@ const annotationNewline = '%0A';
 const defaultGithubApiUrl = 'https://api.github.com';
 const githubApiVersion = '2022-11-28';
 const githubApiTimeoutMs = 60_000;
+const registryReadTimeoutMs = 60_000;
+/** The abbreviated packument: the versions without their whole manifests. */
+const registryPackumentAccept = 'application/vnd.npm.install-v1+json; q=1.0, application/json; q=0.8';
+const notFoundStatus = 404;
+const registryPackumentSchema = z.object({ versions: z.record(z.string(), z.object({})) });
 /** A commit has a handful of runs; one page is all of them. */
 const workflowRunsPageSize = 100;
 
@@ -161,7 +171,7 @@ function getNetDiff(tag: string): { paths: string[]; changesShippedManifest: boo
   return { paths, changesShippedManifest };
 }
 
-function readPackageManifest(): PackageManifest & { version: string } {
+function readPackageManifest(): PackageManifest & { name: string; version: string } {
   return JSON.parse(fs.readFileSync(manifestFileName, 'utf8'));
 }
 
@@ -505,6 +515,49 @@ function runVerifyDelta(args: string[]): number {
   return 0;
 }
 
+/** Every version of `name` the registry holds; none for a package it does not know (never published). Throws when it cannot tell. */
+async function fetchRegistryVersions(registry: string, name: string): Promise<string[]> {
+  const cannotRead = `Cannot read the versions the registry holds of ${name}`;
+  let response: Response;
+  try {
+    response = await fetch(`${registry.replace(/\/+$/, '')}/${name.replace('/', '%2F')}`, {
+      headers: { accept: registryPackumentAccept },
+      signal: AbortSignal.timeout(registryReadTimeoutMs),
+    });
+  } catch (error) {
+    throw new ReleaseError(`${cannotRead}: ${error instanceof Error ? error.message : String(error)}; nothing is published.`);
+  }
+  if (response.status === notFoundStatus) return [];
+  if (!response.ok) throw new ReleaseError(`${cannotRead}: the registry answered ${response.status}; nothing is published.`);
+  const packument = registryPackumentSchema.safeParse(await response.json());
+  if (!packument.success) throw new ReleaseError(`${cannotRead}: the registry's answer has no versions; nothing is published.`);
+  return Object.keys(packument.data.versions);
+}
+
+/**
+ * Refuses while the registry holds a version newer than every release tag of the repository but this run's own: a release that
+ * published and did not finish ({@link getUnfinishedReleaseVersions}). Releasing past it would lose it for good, so the run stops
+ * before anything else happens — the version's own run (or the by-hand path) finishes it first.
+ */
+async function runCheckRegistry(args: string[]): Promise<number> {
+  const { values } = parseArgs({ args, options: { version: { type: 'string' }, registry: { type: 'string' } } });
+  const version = values.version ?? '';
+  if (!releaseVersionPattern.test(version)) throw new ReleaseError(`check-registry needs --version X.Y.Z, got "${version}".`);
+  const { name } = readPackageManifest();
+  const tagVersions = splitPaths(git('tag', '--list', releaseTagGlob)).map((tag) => tag.slice(releaseTagPrefix.length));
+  const unfinished = getUnfinishedReleaseVersions({ registryVersions: await fetchRegistryVersions(values.registry ?? registryUrl, name), tagVersions, version });
+  if (unfinished.length > 0) {
+    const list = unfinished.join(', ');
+    throw new ReleaseError(
+      `npm holds ${name} ${list}, which no release tag of the repository has: a release run published it and did not finish (its tag and version commit never reached the repository). ` +
+        `Releasing ${version} now would leave ${list} without a tag, a release commit and a CHANGELOG section for good. ` +
+        `Finish ${list} first: "Re-run failed jobs" on the run that published it (the version's provenance on npmjs.com links the run), or by hand — DEVELOPMENT.md § Releases, "When a release fails". Nothing is published or pushed.`,
+    );
+  }
+  process.stdout.write(`npm holds no ${name} version newer than the release tags but ${version} itself.\n`);
+  return 0;
+}
+
 /**
  * `npm publish --dry-run` exits 0 while it drops a field of `package.json` from the manifest it would send to the registry
  * (a warning); the release refuses that. A dry run that fails itself (a version already on npm, the registry unreachable) fails
@@ -633,46 +686,55 @@ function checkIsReleaseTagPushed(remote: string, tag: string, base: string | und
 }
 
 /**
- * Commits the applied release (package.json, the shrinkwrap, CHANGELOG.md) as the bot, tags it and pushes both. In the release workflow
- * it runs after npm has the version, on the files of the published tarball (`--tarball`), refusing anything but the tested
- * commit plus its version bump (`--base`); `--check` (before the publish) does the same commit and the merge of a moved branch locally
- * and pushes nothing — a conflict then fails the run before anything is published.
+ * Commits the applied release (package.json, the shrinkwrap, CHANGELOG.md) as the bot and tags it, then:
+ *  - by default (finishing a release by hand) pushes both, merging a branch that moved ({@link pushReleaseWithMergeRetry});
+ *  - `--check` (the release workflow, BEFORE the publish): merges a moved branch locally and pushes nothing — a conflict fails the
+ *    run before anything is published;
+ *  - `--prepare` (the workflow, AFTER the publish): the same, and says in `$GITHUB_OUTPUT` (`isPushed`) whether the remote holds
+ *    the tag already; the push itself is the next step's, plain git, the only one that gets the push token — no package's code runs
+ *    while the token is in a process's environment.
+ * `--tarball` takes the files out of the published tarball; `--base` refuses anything but the tested commit plus its version bump.
  */
 function runCommitRelease(args: string[]): number {
   const { values, positionals } = parseArgs({
     args,
     allowPositionals: true,
-    options: { remote: { type: 'string' }, branch: { type: 'string' }, tarball: { type: 'string' }, base: { type: 'string' }, check: { type: 'boolean' } },
+    options: {
+      remote: { type: 'string' },
+      branch: { type: 'string' },
+      tarball: { type: 'string' },
+      base: { type: 'string' },
+      check: { type: 'boolean' },
+      prepare: { type: 'boolean' },
+    },
   });
   const version = requireVersionArgument(positionals);
+  if (values.check && values.prepare) throw new ReleaseError('commit-release takes --check (before the publish) or --prepare (after it), not both.');
   const tag = `${releaseTagPrefix}${version}`;
   const remote = values.remote ?? defaultRemote;
   const branch = values.branch ?? defaultBranch;
-  const isCheck = values.check === true;
+  const afterPublish = `npm has ${version} already and the repository not yet (no ${tag}, ${branch} not bumped): re-run this run's failed jobs once the cause is fixed, or finish the release by hand (DEVELOPMENT.md § Releases, "npm has a version the repository does not").`;
   if (values.tarball) copyReleaseFilesFromTarball(path.resolve(values.tarball));
   const appliedVersion = readPackageVersion();
   if (appliedVersion !== version) throw new ReleaseError(`${manifestFileName} carries version ${appliedVersion}, not ${version}: nothing is committed.`);
   if (values.base) assertReleaseDelta(values.base, undefined, 'nothing is committed');
   if (checkIsReleaseTagPushed(remote, tag, values.base)) {
-    if (!isCheck) writeGithubOutput('tag', tag);
+    if (!values.check) writeGithubOutput('tag', tag);
+    if (values.prepare) writeGithubOutput('isPushed', 'true');
     process.stdout.write(`${remote} already holds ${tag} (a re-run after the push went through); nothing to push.\n`);
     return 0;
   }
   git('add', ...listReleaseFileNames());
   git(...releaseBotIdentity, 'commit', '--quiet', '-m', `chore(release): ${version}`);
   git(...releaseBotIdentity, 'tag', '-a', tag, '-m', tag);
-  if (isCheck) {
-    const isMerged = mergeMovedBranch(remote, branch, version, 'nothing is published or pushed.');
-    process.stdout.write(isMerged ? `${branch} moved during the run; the release merges into it. Nothing pushed (--check).\n` : `${branch} has not moved: the push will be a fast-forward. Nothing pushed (--check).\n`);
+  if (values.check || values.prepare) {
+    const isMerged = mergeMovedBranch(remote, branch, version, values.check ? 'nothing is published or pushed.' : afterPublish);
+    if (values.prepare) writeGithubOutput('isPushed', 'false');
+    const nextStep = values.check ? 'Nothing pushed (--check).' : `Nothing pushed yet (--prepare): push HEAD to ${branch} and ${tag}.`;
+    process.stdout.write(isMerged ? `${branch} moved during the run; the release merges into it. ${nextStep}\n` : `${branch} has not moved: the push will be a fast-forward. ${nextStep}\n`);
     return 0;
   }
-  pushReleaseWithMergeRetry(
-    remote,
-    branch,
-    tag,
-    version,
-    `npm has ${version} already and the repository not yet (no ${tag}, ${branch} not bumped): re-run this run's failed jobs once the cause is fixed, or finish the release by hand (DEVELOPMENT.md § Releases, "npm has a version the repository does not").`,
-  );
+  pushReleaseWithMergeRetry(remote, branch, tag, version, afterPublish);
   writeGithubOutput('tag', tag);
   process.stdout.write(`Pushed ${tag}.\n`);
   return 0;
@@ -701,8 +763,10 @@ async function main(argv: string[]): Promise<number> {
       return runTestGate(args);
     case 'verify-delta':
       return runVerifyDelta(args);
+    case 'check-registry':
+      return runCheckRegistry(args);
     default:
-      throw new ReleaseError(`Unknown subcommand "${subcommand}". Use plan | apply | changelog | notes | check-pack | check-install | check-publish | test-gate | verify-delta | commit-release.`);
+      throw new ReleaseError(`Unknown subcommand "${subcommand}". Use plan | apply | changelog | notes | check-pack | check-install | check-publish | test-gate | verify-delta | check-registry | commit-release.`);
   }
 }
 

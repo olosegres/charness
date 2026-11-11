@@ -3704,10 +3704,12 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
    *    switch is ON (an older bot, adopted ever since; the switch turned on since), with it while the switch is OFF — keeps
    *    offering the wrong thing; only the INSTANCE value counts: one server serves every topic. Replaced only when the bot
    *    owns it (its process record) AND `/proc` shows it is an `opencode … serve`, and the folder it would get is ready;
-   *  - its password: a server that answers a request without one (started by a bot from before passwords) lets every local
-   *    account drive its agents. Read the way such an account would, on every platform ({@link OpenCodeServerExposure}), and
-   *    replaced whether the bot owns it or not — like a stale version — as long as it is an `opencode … serve` the bot may
-   *    stop; a test's stand-in or another account's process never is.
+   *  - its password: a server that answers a request without one lets every local account drive its agents. Read the way such
+   *    an account would, on every platform ({@link OpenCodeServerExposure}), and replaced whether the bot owns it or not — like a
+   *    stale version — as long as it is an `opencode … serve` the bot may stop: one a bot from before passwords left running,
+   *    and also one the operator runs on the bot's port (the idle check sees only the bot's sessions, so a turn of the
+   *    operator's own in it ends; the docs tell them to start such a server with `OPENCODE_SERVER_PASSWORD`). A test's
+   *    stand-in or another account's process never is.
    * The replacement is the controlled restart that restores the sessions, and only when no session is working: a busy
    * directory, or a status it cannot read, makes it look again after {@link mislaunchedServerRecheckDelayMs} (and at the
    * next boot). A server it leaves for another reason gets one log line per process. Best-effort, never rejects.

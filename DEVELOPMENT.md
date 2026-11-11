@@ -211,17 +211,21 @@ tags `vX.Y.Z`, pushes `main` and creates the GitHub Release from the CHANGELOG s
 publish, no tag, no push, the run is red; the next day's run tries again by itself. The logic is in `src/release/` (pure
 `releasePlan.ts` and `testGate.ts` + the `cli.ts` wrapper, run by `tsx`, never built into `dist/`).
 
-- **Jobs and rights**, in order: `gate` (the plan and the `Tests` gate, below; its outputs — the version, the tag, go or not —
-  are what every later job goes by; the released commit is always the run's own `github.sha`) → `test` (only when no `Tests`
+- **Jobs and rights**, in order: `gate` (the plan, the unfinished-release check below and the `Tests` gate; its outputs — the
+  version, the tag, go or not — are what every later job goes by; the released commit is always the run's own `github.sha`) → `test` (only when no `Tests`
   run covers the commit: `test.yml` itself, called, with every install script; it hands on nothing but its result) →
   `package` (applies the version, checks the release is the tested commit plus its bump, builds, checks the contents and the
   publish dry run, packs; reports the tarball's sha256 and integrity) → `check-install` (the release commit merged LOCALLY into
   `main` as it stands — a conflict fails here, before the publish — and the tarball installed the way a user does, below) →
   `publish` (the only job with `id-token: write`: it checks out nothing and installs nothing but the pinned npm with no scripts —
   it checks the tarball's sha256 and publishes THAT file, `npm publish <tarball> --provenance`) → `release` (the only job that can
-  write: the release commit — the tested commit plus `package.json`, `npm-shrinkwrap.json` and `CHANGELOG.md` taken out of the
-  very tarball npm has (npm packs them byte for byte), `commit-release --tarball` —, the tag, `main`, the GitHub Release; its
-  checkout keeps no credentials and the token reaches only the push step and the Release step). Every job but `test` installs
+  write: `commit-release --prepare --tarball` makes the release commit — the tested commit plus `package.json`,
+  `npm-shrinkwrap.json` and `CHANGELOG.md` taken out of the very tarball npm has (npm packs them byte for byte) —, the tag and
+  the merge with a moved `main`, locally and without the token; then a plain `git push --atomic` of `main` and the tag, and the
+  GitHub Release. Its checkout keeps no credentials; the token is in the environment of the push step (git only) and the Release
+  step (`gh`) alone. A step is not a boundary against code that ran earlier in the same job — such a process runs as the same
+  user and could read a later step's environment —, so what runs there is pinned by hash: Yarn by `packageManager`
+  (`yarn@4.9.2+sha512.…`, which corepack checks), its packages by `yarn.lock`, the actions by commit). Every job but `test` installs
   from `yarn.lock` with no install scripts (`--mode=skip-build`) and nothing from a cache. npm is pinned to an exact version in
   every job (`npm@11.21.1`, installed with `--ignore-scripts`); npm 12 reads no shrinkwrap and packs none — move past 11 only
   together with another lock (the package check refuses a tarball without `npm-shrinkwrap.json`). Every action is pinned to a
@@ -231,17 +235,20 @@ publish, no tag, no push, the run is red; the next day's run tries again by itse
   - anything up to and including `publish` (the gate, the suite, a package or install check, a conflict with `main` that the
     `check-install` merge finds, the npm publish itself — OIDC, provenance, the registry): nothing is published, tagged or
     pushed; the next daily run (or a dispatch, or "Re-run failed jobs") starts that version over;
-  - `publish` reached npm but its job failed, or `release` failed (a push refused, a conflict with a commit that landed on `main`
-    after `check-install`): **npm has a version the repository does not** (no tag, `main` still on the old version). Every later
-    run then stops in `package` before publishing anything, naming the version (npm cannot take another tarball under it, and
-    tagging another one would be wrong; a run that packs the very same tarball goes on and finishes the release) — until the
-    release is finished:
+  - `publish` reached npm but its job failed, or `release` failed (a push refused — also by a `main` that moved in the seconds
+    between the merge and the push —, a conflict with a commit that landed on `main` after `check-install`): **npm has a version
+    the repository does not** (no tag, `main` still on the old version). Every later run then stops before publishing anything,
+    naming the version, until the release is finished: in `gate` when it would release ANOTHER version (`check-registry`: npm
+    holds a version newer than every release tag but the run's own — releasing past it would lose it for good, its bump moving
+    `package.json` beyond it), in `package` when it packs another tarball of THAT version (npm cannot take it, and tagging it
+    would be wrong); a run that packs the very same tarball goes on and finishes the release. To finish it:
     1. "Re-run failed jobs" on THAT run (within 7 days, the artifact's life; the version's provenance on npmjs.com links the run)
        — not "Re-run all jobs", which packs anew and, on another day, is refused: `publish` sees npm holds exactly its tarball
        and goes on, `release` commits, tags, pushes and makes the Release; a re-run after the push went through finds the tag
        and only makes the Release;
     2. by hand, when the re-run cannot finish it: on a checkout of the run's commit (the tested SHA, in the provenance),
        `npm pack charness@X.Y.Z`, then `yarn tsx src/release/cli.ts commit-release X.Y.Z --tarball charness-X.Y.Z.tgz --base <SHA>`
+       (`--remote <name>` when GitHub is not your `origin`)
        — it commits that commit plus the tarball's version files and nothing else, merges `main` and pushes; a real conflict
        with `main` is resolved by hand, then push `main` and the tag —, and `yarn tsx src/release/cli.ts notes X.Y.Z > notes.md`,
        `gh release create vX.Y.Z --verify-tag --title vX.Y.Z --notes-file notes.md`.

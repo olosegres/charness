@@ -168,16 +168,16 @@ describe('the OpenCode config folder', () => {
 
 describe('reading a running server\'s launch', () => {
   const env = (entries: string[]): string => `${entries.join('\0')}\0`;
-  const serveCmdline = env(['opencode', 'serve', '--hostname', '127.0.0.1', '--port', '4096']);
+  const serveArgv = ['opencode', 'serve', '--hostname', '127.0.0.1', '--port', '4096'];
 
   test('an opencode serve process: the OPENCODE_CONFIG_DIR it was started with, or none', () => {
-    assert.deepEqual(parseOpenCodeServerLaunch(serveCmdline, env(['HOME=/home/user', 'OPENCODE_CONFIG_DIR=/home/user/.charness/opencode-config'])), { kind: 'openCodeServe', configDir: '/home/user/.charness/opencode-config' });
-    assert.deepEqual(parseOpenCodeServerLaunch(env(['/usr/lib/node_modules/opencode-ai/bin/opencode.exe', 'serve']), env(['HOME=/home/user'])), { kind: 'openCodeServe', configDir: null });
+    assert.deepEqual(parseOpenCodeServerLaunch(serveArgv, env(['HOME=/home/user', 'OPENCODE_CONFIG_DIR=/home/user/.charness/opencode-config'])), { kind: 'openCodeServe', configDir: '/home/user/.charness/opencode-config' });
+    assert.deepEqual(parseOpenCodeServerLaunch(['/usr/lib/node_modules/opencode-ai/bin/opencode.exe', 'serve'], env(['HOME=/home/user'])), { kind: 'openCodeServe', configDir: null });
   });
 
   test('anything else is unknown: a test runner holding a stand-in server, a sleep, another tool', () => {
-    for (const cmdline of [env(['node', '--test', 'fakeOpenCodeServer.ts']), env(['sleep', '3600']), env(['python3', '-m', 'http.server', 'serve']), '']) {
-      assert.deepEqual(parseOpenCodeServerLaunch(cmdline, env(['OPENCODE_CONFIG_DIR=/x'])), { kind: 'unknown' }, cmdline);
+    for (const argv of [['node', '--test', 'fakeOpenCodeServer.ts'], ['sleep', '3600'], ['python3', '-m', 'http.server', 'serve'], []]) {
+      assert.deepEqual(parseOpenCodeServerLaunch(argv, env(['OPENCODE_CONFIG_DIR=/x'])), { kind: 'unknown' }, argv.join(' '));
     }
   });
 
