@@ -121,6 +121,12 @@ export const fakeClaudeCompactionSummaryFileName = 'compaction-summary';
  * provider wording a flow needs — and is removed by that turn.
  */
 export const fakeClaudeApiErrorOnceFileName = 'api-error-once';
+/**
+ * A file in the fake's state dir that makes the fake's `mcp_status` control answer list MCP servers: `[{ "name": …, "status": … }]`, as
+ * the real CLI's `mcpServers` do. No file: the answer lists none (a heal finds nothing to act on). An `mcp_reconnect` of a listed
+ * server rewrites its status to `connected`, as a reconnect that lands does — and is logged in `mcp-reconnects.jsonl`.
+ */
+export const fakeClaudeMcpServersFileName = 'mcp-servers.json';
 /** The file the fake's `auth login` writes into `CLAUDE_CONFIG_DIR` (`{ method: 'console' | 'claudeai' }`) — its stand-in for a stored login. */
 export const fakeClaudeLoginFileName = 'fake-login.json';
 /** The link the fake's `auth login` prints (the bot relays it into the topic). */
@@ -258,6 +264,8 @@ export const fakeClaudeLogFileNames = {
    * the instruction the real CLI appends to the compaction's — `{ sessionId, pid, trigger, instruction }`.
    */
   preCompactHooks: 'pre-compact-hooks.jsonl',
+  /** One record per `mcp_reconnect` control request the bot sent the fake: `{ pid, serverName }`. */
+  mcpReconnects: 'mcp-reconnects.jsonl',
 } as const;
 
 /**
@@ -362,6 +370,12 @@ export function getFlagValues(argv: readonly string[], name: string): string[] {
 }
 
 /** One server of an `--mcp-config` file, as the fake and the process-level tests read it. */
+/** One server of the fake's `mcp_status` answer (see {@link fakeClaudeMcpServersFileName}). */
+export interface FakeClaudeMcpServer {
+  name: string;
+  status: string;
+}
+
 export interface McpServerConfig {
   type?: string;
   url?: string;

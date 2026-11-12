@@ -43,7 +43,8 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { FakeTelegram, generalTopicThreadId, type FakeTelegramMessage } from './telegramE2e/fakeTelegram';
-import { fakeClaudeBackgroundReleaseFileName, fakeClaudeLogFileNames, type FakeClaudeHookContext } from './jiraE2e/fakeClaudeContract';
+import { fakeClaudeBackgroundReleaseFileName, fakeClaudeLogFileNames, fakeClaudeMcpServersFileName, type FakeClaudeHookContext } from './jiraE2e/fakeClaudeContract';
+import { legacySchedulerMcpServerName } from '../legacyNames';
 import {
   assertMcpListeningOn,
   builtCliPath,
@@ -389,6 +390,23 @@ describe('Shared todo registry end to end: built charness, fake Bot API, fake cl
     await startCharness();
     const view = await sendAndAwaitReply(topicAThreadId, '/todo', '📋 Todo —');
     assert.match(view.text, /▷ Queue\n {3}1\. Bump tsx\n\n✓ Done today\n {3}Speed up limits flow tests/);
+  });
+
+  it('a restart repairs the bot server of an agent started before the rename, under the name that agent still holds', async () => {
+    // An agent launched by the bot before the rename holds its bot server as the old name, and the CLI never retries one that failed
+    // (the bot was down): its status names the old server `failed`, and nothing is listed under the current name.
+    fs.writeFileSync(path.join(getLayout().fakeStateDir, fakeClaudeMcpServersFileName), JSON.stringify([{ name: legacySchedulerMcpServerName, status: 'failed' }]));
+    const outputStart = getCharness().output.length;
+    await getCharness().stop();
+    await startCharness();
+
+    await waitForLogLine('the boot repair of the old-name server', outputStart, new RegExp(
+      `\\[scheduler\\] MCP heal: reconnected ${legacySchedulerMcpServerName} in ${group.id}:${topicAThreadId} — the agent started before the rename`,
+    ));
+    const reconnects = readJsonLines<{ pid: number; serverName: string }>(path.join(getLayout().fakeLogDir, fakeClaudeLogFileNames.mcpReconnects));
+    assert.ok(reconnects.length > 0, 'the bot asked an agent to reconnect');
+    assert.deepEqual([...new Set(reconnects.map((reconnect) => reconnect.serverName))], [legacySchedulerMcpServerName], 'under the name the agent holds, never the current one');
+    assert.doesNotMatch(getCharness().output.slice(outputStart), /MCP heal: reconnected charness /, 'nothing was reported repaired under a name no agent listed');
   });
 
   // ── S2 — the staleness reminder ───────────────────────────────────────

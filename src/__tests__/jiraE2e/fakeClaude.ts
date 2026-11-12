@@ -53,6 +53,7 @@ import {
   requiredJiraSessionFlags,
   sessionViolationExitCode,
   fakeClaudeBackgroundGapMsFileName,
+  fakeClaudeMcpServersFileName,
   fakeClaudeBackgroundReleaseFileName,
   fakeClaudeHoldReleaseFileName,
   fakeNotificationTurnLatencyMs,
@@ -66,6 +67,7 @@ import {
   fakeStatusWatchTargetFileName,
   fakeWatchJobName,
   getBotMcpServer,
+  type FakeClaudeMcpServer,
   type FakeStatusWatchTarget,
   type McpServerConfig,
 } from './fakeClaudeContract';
@@ -451,7 +453,7 @@ type AnswerRequestArgs = {
 interface StdinFrame {
   type?: string;
   request_id?: string;
-  request?: { subtype?: string };
+  request?: { subtype?: string; serverName?: string };
   message?: { content?: string };
   /** A `control_response` the bot wrote: the verdict on a `can_use_tool` request, with the answers an `AskUserQuestion` collected. */
   response?: { request_id?: string; response?: { behavior?: string; updatedInput?: { answers?: Record<string, string> } } };
@@ -465,6 +467,32 @@ function appendJsonLine(fileName: string, record: object): void {
 
 function writeStdout(frame: object): void {
   process.stdout.write(`${JSON.stringify(frame)}\n`);
+}
+
+/** The servers the fake's `mcp_status` lists: the ones a flow wrote to its state dir, none otherwise. */
+function readMcpServers(): FakeClaudeMcpServer[] {
+  const filePath = path.join(getStateDir(), fakeClaudeMcpServersFileName);
+  return fs.existsSync(filePath) ? JSON.parse(fs.readFileSync(filePath, 'utf8')) : [];
+}
+
+/**
+ * The inner record of the fake's reply to a control request: `mcp_status` lists the servers of {@link readMcpServers}, and an
+ * `mcp_reconnect` is logged and, for a server it lists, leaves it `connected`; every other request (the `initialize` handshake) gets an empty one.
+ */
+function answerControlRequest(frame: StdinFrame): object {
+  if (frame.request?.subtype === 'mcp_status') return { mcpServers: readMcpServers() };
+  if (frame.request?.subtype === 'mcp_reconnect' && frame.request.serverName !== undefined) {
+    const serverName = frame.request.serverName;
+    appendJsonLine(fakeClaudeLogFileNames.mcpReconnects, { pid: process.pid, serverName });
+    const servers = readMcpServers();
+    if (servers.some((server) => server.name === serverName)) {
+      fs.writeFileSync(
+        path.join(getStateDir(), fakeClaudeMcpServersFileName),
+        JSON.stringify(servers.map((server) => (server.name === serverName ? { ...server, status: 'connected' } : server))),
+      );
+    }
+  }
+  return {};
 }
 
 function getStateDir(): string {
@@ -1212,7 +1240,7 @@ async function main(): Promise<void> {
       return;
     }
     if (frame.type === 'control_request') {
-      writeStdout({ type: 'control_response', response: { subtype: 'success', request_id: frame.request_id, response: {} } });
+      writeStdout({ type: 'control_response', response: { subtype: 'success', request_id: frame.request_id, response: answerControlRequest(frame) } });
       return;
     }
     if (frame.type === 'control_response') {
