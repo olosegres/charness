@@ -827,9 +827,12 @@ connector behaves is described in [`src/connectors/jira/README.md`](src/connecto
    integrations) that can relay text written by outsiders into an issue, so with the key set an app is trusted
    only when its id is listed — being a member of the group is not enough — and any other app is treated exactly
    like a person outside the group: its text is withheld, its hand-over starts nothing, its mention is ignored.
-   `[]` trusts no app. Each app that is not listed is written to the log once, with its name and account id
-   (`[jira] app "<name>" (account id "<id>") is not in trustedApps: …`), so you can copy the ids to trust from
-   there. Absent, every app is trusted as before, and the start logs one warning that names the key; with no
+   `[]` trusts no app. Each app that is not listed is written to the log once, the first time it acts on an issue,
+   with its name and account id (`[jira] app "<name>" (account id "<id>") is not in trustedApps: …`), so you can
+   copy the ids to trust from there. To find an app's id beforehand, search the site's users by the app's name
+   (`GET /rest/api/3/user/search?query=<name>` answers each match's `accountId` and `accountType`, an app's is
+   `app`) or look it up in the admin user list; `GET /rest/api/3/user?accountId=<id>` confirms an id you hold.
+   Absent, every app is trusted as before, and the start logs one warning that names the key; with no
    `trustedGroup` the key is refused — without a group everyone is trusted anyway. A listed id adds no trust
    to a person's account: people stay trusted by membership alone.
 

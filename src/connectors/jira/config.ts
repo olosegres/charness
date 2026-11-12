@@ -62,7 +62,7 @@ const folderErrorTexts: Record<BindErrorCode, string> = {
 };
 /** A tool's name on the agent's PATH: ONE file name (never `.` or `..`, never a path). */
 const agentBinaryNameRe = /^(?!\.{1,2}$)[A-Za-z0-9._-]+$/;
-/** An account id as Jira Cloud writes it (`5b10ac8d82e05b22cc7d4ef5`, `712020:…`): one word. */
+/** An account id as Jira Cloud writes it (`5b10…`, `712020:…`): one word. */
 const accountIdRe = /^\S+$/;
 /** Hosts the test-only `baseUrl` override may point at. */
 const loopbackHosts = new Set(['127.0.0.1', 'localhost', '[::1]']);

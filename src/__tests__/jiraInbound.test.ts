@@ -1203,11 +1203,16 @@ describe('JiraInbound', () => {
       };
     }
 
-    const createTrust = (memberAccountIds: string[] = [member.accountId, colleague.accountId, owner.accountId]): JiraTrust => createJiraTrust({
+    const createTrust = (
+      memberAccountIds: string[] = [member.accountId, colleague.accountId, owner.accountId],
+      trustedApps: string[] | null = null,
+    ): JiraTrust => createJiraTrust({
       client: { getGroupByName: async () => null, getGroupMembers: async () => [] },
       snapshot: { groupName: 'ai-trusted', groupId: 'group-1', memberAccountIds: new Set(memberAccountIds), readAtMs: nowMs },
       aiAccountId,
+      trustedAppAccountIds: trustedApps === null ? null : new Set(trustedApps),
       now: () => nowMs,
+      log: () => {},
     });
     const createMentionInbound = (overrides: Partial<JiraInboundDeps> = {}): JiraInbound => createInbound({
       client: createMentionClient(() => [createUnhandedIssue(issueKey)]),
@@ -1595,6 +1600,36 @@ describe('JiraInbound', () => {
       comments = [createMentionComment('10240', automation)];
       assert.deepEqual([...await createMentionInbound().pollOnce()], [[issueKey, 'notMatching'], [`${issueKey}#mention:10240`, 'request']]);
       assert.equal(recorded.origins[0].attributes.requester, automation.accountId);
+    });
+
+    it('with trustedApps a listed app\'s mention wakes it, an unlisted app\'s — a group member too — is ignored like an outsider\'s: recorded, one log line, nothing posted', async () => {
+      const unlistedApp: JiraAccount = { accountId: 'unlisted-app', accountType: 'app', displayName: 'Unlisted App' };
+      const trust = createTrust([member.accountId, owner.accountId, unlistedApp.accountId], [automation.accountId]);
+      comments = [createMentionComment('10240', unlistedApp, { minutesAgo: 2 }), createMentionComment('10241', automation, { minutesAgo: 1 })];
+      const logs = mock.method(console, 'log', () => {});
+      try {
+        const inbound = createMentionInbound({ trust });
+        assert.deepEqual(
+          [...await inbound.pollOnce()],
+          [[issueKey, 'notMatching'], [`${issueKey}#mention:10240`, 'untrusted'], [`${issueKey}#mention:10241`, 'request']],
+        );
+        const lines = logs.mock.calls.map((call) => String(call.arguments[0])).filter((line) => line.includes('is ignored'));
+        assert.deepEqual(lines, [`[jira] ${issueKey}: the mention in comment 10240 is ignored: its author or last editor is outside the trusted group`]);
+      } finally {
+        logs.mock.restore();
+      }
+      await flushPosts();
+      assert.equal(requestCount, 1, 'only the listed app\'s mention opened a request');
+      assert.equal(recorded.origins[0].attributes.requester, automation.accountId);
+      assert.deepEqual(recorded.untrusted, [], 'no notice, no hand-back: an unlisted app gets no answer');
+      assert.equal(triggerLog.checkIsSeen(issueKey, 'mention:10240'), true);
+      // An app that last EDITED a member's comment counts as its editor: the same rule.
+      issueUpdated = 'updated-2';
+      comments = [createMentionComment('10242', member, { minutesAgo: 3, editedMinutesAgo: 1, editor: unlistedApp })];
+      assert.deepEqual(
+        [...await createMentionInbound({ trust }).pollOnce()],
+        [[issueKey, 'notMatching'], [`${issueKey}#mention:10242`, 'untrusted']],
+      );
     });
 
     it('the AI account\'s own comment never wakes it, even with its own mention in it', async () => {

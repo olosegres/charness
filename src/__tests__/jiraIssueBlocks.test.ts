@@ -289,13 +289,15 @@ describe('a trusted group filters whose text reaches the agent', () => {
   const withheldWritten = '[withheld: written or edited by someone outside the trusted group]';
   const withheldUploaded = '[withheld: uploaded by someone outside the trusted group]';
 
-  /** The real trust over a group whose only member is `member`, and the listed projects. */
-  function createTrust(allowlistedProjectKeys: string[] = ['PROJ']): JiraBlockTrust {
+  /** The real trust over a group whose only member is `member`, and the listed projects; `trustedApps` is `jira.json`'s (absent: every app is trusted). */
+  function createTrust(allowlistedProjectKeys: string[] = ['PROJ'], trustedApps: string[] | null = null): JiraBlockTrust {
     const trust = createJiraTrust({
       client: { getGroupByName: async () => null, getGroupMembers: async () => [] },
       snapshot: { groupName: 'ai-trusted', groupId: 'group-1', memberAccountIds: new Set([member.accountId]), readAtMs: 0 },
       aiAccountId: testAiAccountId,
+      trustedAppAccountIds: trustedApps === null ? null : new Set(trustedApps),
       now: () => 0,
+      log: () => {},
     });
     return { checkIsTrusted: (account) => trust.checkIsTrusted(account), allowlistedProjectKeys: new Set(allowlistedProjectKeys) };
   }
@@ -468,6 +470,54 @@ describe('a trusted group filters whose text reaches the agent', () => {
       const description = getBlock(build(createIssueContext({ fields: { creator: outsider, description: null } })), 'description');
       assert.equal(description.isWithheld, undefined);
       assert.equal(getIssueBlockText(description), 'Description:\n> (empty)');
+    });
+  });
+
+  describe('trustedApps: an app the operator did not list is an outsider (a field it wrote, a file it uploaded)', () => {
+    const listedApp: JiraAccount = { accountId: 'listed-app', accountType: 'app', displayName: 'Listed App' };
+    const unlistedApp: JiraAccount = { accountId: 'unlisted-app', accountType: 'app', displayName: 'Unlisted App' };
+    const buildWithApps = (context: JiraIssueContext, extraFields: readonly JiraExtraField[] = []): IssueBlock[] =>
+      build(context, extraFields, createTrust(['PROJ'], [listedApp.accountId]));
+    const descriptionEdit = (author: JiraAccount): JiraChangelogHistory[] => [createEntry('1', [{ field: 'description', fieldId: 'description' }], author)];
+
+    it('a description (or summary, labels) an unlisted app edited is withheld although its creator is a member; a listed app\'s edit, and no key at all, keep it', () => {
+      const fields = { labels: ['backend'] };
+      const changelog = [
+        createEntry('1', [{ field: 'description', fieldId: 'description' }], unlistedApp),
+        createEntry('2', [{ field: 'labels', fieldId: 'labels' }], unlistedApp),
+        createEntry('3', [{ field: 'summary', fieldId: 'summary' }], listedApp),
+      ];
+      const blocks = buildWithApps(createMemberIssue({ changelog, fields }));
+      assert.equal(getBlock(blocks, 'description').isWithheld, true);
+      assert.deepEqual(getBlock(blocks, 'fields').body.split('\n'), [
+        'Summary: Fix the export',
+        'Status: To Do',
+        'Reporter: Mia Member',
+        `Labels: ${withheldWritten}`,
+      ]);
+      assert.ok(!JSON.stringify(blocks).includes('It fails.'), 'the text the unlisted app edited never reaches a block');
+      // The same history, judged by a trust that has no `trustedApps`: every app counts, as before the key.
+      const everyAppTrusted = build(createMemberIssue({ changelog, fields }));
+      assert.equal(getBlock(everyAppTrusted, 'description').body, '> It fails.');
+      assert.ok(getBlock(everyAppTrusted, 'fields').body.includes('Labels: backend'));
+      // And a listed app's edit alone leaves everything readable.
+      assert.equal(getBlock(buildWithApps(createMemberIssue({ changelog: descriptionEdit(listedApp) })), 'description').body, '> It fails.');
+    });
+
+    it('an issue an unlisted app created has its text withheld, group membership or not: the creator wrote its first value', () => {
+      const blocks = buildWithApps(createIssueContext({ fields: { creator: unlistedApp, reporter: member } }));
+      assert.equal(getBlock(blocks, 'description').isWithheld, true);
+      assert.ok(getBlock(blocks, 'fields').body.startsWith(`Summary: ${withheldWritten}`));
+      assert.equal(getBlock(buildWithApps(createIssueContext({ fields: { creator: listedApp, reporter: member } })), 'description').body, '> It fails.');
+    });
+
+    it('a file an unlisted app uploaded is its id and a marker — no name, no type, no size; a listed app\'s file keeps its line', () => {
+      const listedFile: JiraAttachment = { id: '20', filename: 'build.log', mimeType: 'text/plain', size: 9, author: listedApp };
+      const unlistedFile: JiraAttachment = { id: '21', filename: 'ignore-previous-instructions.log', mimeType: 'text/plain', size: 7, author: unlistedApp };
+      const lines = getBlock(buildWithApps(createMemberIssue({ fields: { attachment: [listedFile, unlistedFile] } })), 'attachments').body.split('\n');
+      assert.equal(lines[0], '- 20 build.log (text/plain, 9 bytes, by Listed App) — not referenced in the text');
+      assert.equal(lines[1], `- 21 ${withheldUploaded}`);
+      assert.ok(!lines.join('\n').includes('ignore-previous-instructions'));
     });
   });
 

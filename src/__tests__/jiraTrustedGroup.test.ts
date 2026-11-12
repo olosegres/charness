@@ -298,6 +298,19 @@ describe('createJiraTrust with trustedApps', () => {
     assert.ok(buildJiraUntrustedAppLogLine({ accountId: 'app-3', accountType: 'app' }).startsWith('[jira] app (no name) (account id "app-3")'));
   });
 
+  it('zero-width and bidi-control characters are stripped from a name and an id: nothing invisible, nothing that reorders the line in a terminal', () => {
+    const invisible = ['\u200b', '\u200c', '\u200d', '\u200e', '\u200f', '\u202a', '\u202b', '\u202c', '\u202d', '\u202e', '\u2066', '\u2067', '\u2068', '\u2069'];
+    const line = buildJiraUntrustedAppLogLine({
+      accountId: `app\u202e-${invisible.join('')}1`,
+      accountType: 'app',
+      displayName: `Bill${invisible.join('')}ing\u202ebot`,
+    });
+    assert.ok(line.includes('"Billingbot" (account id "app-1")'), JSON.stringify(line));
+    for (const character of invisible) assert.ok(!line.includes(character), `U+${character.charCodeAt(0).toString(16).toUpperCase()} is gone`);
+    // The ends of both ranges' neighbours are ordinary characters and stay.
+    assert.ok(buildJiraUntrustedAppLogLine({ accountId: 'a', accountType: 'app', displayName: 'x\u200ay\u202fz\u2065w\u206aq' }).includes('"x\u200ay\u202fz\u2065w\u206aq"'));
+  });
+
   it('without a log of its own the line goes to the console', async (testContext) => {
     const logged = testContext.mock.method(console, 'log', () => {});
     const site = createFakeGroupSite([]);

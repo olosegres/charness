@@ -135,11 +135,14 @@ describe('fetchIssueAttachment (C10)', () => {
         return memberAccountIds.map((accountId) => ({ accountId }));
       },
     };
-    const createTrust = (): JiraTrust => createJiraTrust({
+    /** `trustedApps` is `jira.json`'s account ids of the apps to trust; absent, every app is trusted. */
+    const createTrust = (trustedApps: string[] | null = null): JiraTrust => createJiraTrust({
       client: groupClient,
       snapshot: { groupName: 'ai-trusted', groupId: 'group-1', memberAccountIds: new Set(memberAccountIds), readAtMs: nowMs },
       aiAccountId: 'ai-account',
+      trustedAppAccountIds: trustedApps === null ? null : new Set(trustedApps),
       now: () => nowMs,
+      log: () => {},
     });
     const serveAttachment = (author?: { accountId: string; accountType?: string }): void => {
       served.attachments = [{ id: '10234', filename: 'login-error.png', mimeType: 'image/png', size: bytes.length, ...(author ? { author } : {}) }];
@@ -174,6 +177,25 @@ describe('fetchIssueAttachment (C10)', () => {
       const contentRequestsBefore = contentRequests().length;
       assert.deepEqual(await fetchAttachment('10234', createTrust()), outsiderRefusal);
       assert.equal(contentRequests().length, contentRequestsBefore, 'nothing downloaded for an unnamed uploader');
+    });
+
+    it('with trustedApps: a file a listed app uploaded is saved; one an unlisted app uploaded — a group member too — is refused with the fixed text, before any download', async () => {
+      memberAccountIds = ['member', 'unlisted-app'];
+      const listedApp = { accountId: 'listed-app', accountType: 'app' };
+      const unlistedApp = { accountId: 'unlisted-app', accountType: 'app' };
+      serveAttachment(listedApp);
+      const fetched = await fetchAttachment('10234', createTrust([listedApp.accountId]));
+      assert.ok(fetched.ok, JSON.stringify(fetched));
+      assert.equal(contentRequests().length, 1);
+      fs.rmSync(downloadDir, { recursive: true, force: true });
+
+      serveAttachment(unlistedApp);
+      assert.deepEqual(await fetchAttachment('10234', createTrust([listedApp.accountId])), outsiderRefusal);
+      assert.deepEqual(await fetchAttachment('10234', createTrust([])), outsiderRefusal, 'an empty list trusts no app');
+      assert.equal(contentRequests().length, 1, 'nothing was downloaded for the unlisted app');
+      assert.deepEqual(listDownloadDir(), []);
+      // No key at all: every app is trusted, as before it existed.
+      assert.ok((await fetchAttachment('10234', createTrust())).ok);
     });
 
     it('a file already on disk is not served to an outsider\'s id either: the uploader is judged first', async () => {

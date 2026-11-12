@@ -62,10 +62,12 @@ export type JiraTrustClient = Pick<JiraClient, 'getGroupByName' | 'getGroupMembe
 const loggedAppNameMaxLength = 80;
 /** Control and line-separator characters: a name or id with one would split or forge a log line. */
 const logUnsafeCharsRe = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/g;
+/** Zero-width and bidi-control characters (U+200B–U+200F, U+202A–U+202E, U+2066–U+2069): invisible, and a terminal may reorder the line around them. */
+const logInvisibleCharsRe = /[\u200b-\u200f\u202a-\u202e\u2066-\u2069]/g;
 
 /** One value of an untrusted app (its name, its id) as a single quoted, capped word of a log line. */
 function quoteForLog(value: string): string {
-  const flat = value.replace(logUnsafeCharsRe, ' ').trim();
+  const flat = value.replace(logInvisibleCharsRe, '').replace(logUnsafeCharsRe, ' ').trim();
   return JSON.stringify(flat.length > loggedAppNameMaxLength ? `${flat.slice(0, loggedAppNameMaxLength)}…` : flat);
 }
 
