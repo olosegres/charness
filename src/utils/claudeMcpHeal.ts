@@ -18,7 +18,7 @@
  * Pure: no IO, no timers, no adapter imports.
  */
 
-import { checkIsStreamRecord } from './claudeStreamJson';
+import { checkIsRecord } from './checkIsRecord';
 
 /**
  * @description How long to wait for ONE control round-trip before treating the
@@ -92,7 +92,7 @@ export function getMcpServerStatus(payload: Record<string, unknown> | null, serv
   const servers = payload.mcpServers;
   if (!Array.isArray(servers)) return null;
   for (const entry of servers) {
-    if (!checkIsStreamRecord(entry) || entry.name !== serverName) continue;
+    if (!checkIsRecord(entry) || entry.name !== serverName) continue;
     return typeof entry.status === 'string' ? entry.status : null;
   }
   return null;

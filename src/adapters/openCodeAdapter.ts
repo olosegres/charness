@@ -28,6 +28,7 @@ import { formatResumeContext, resumeContextTurnLimit } from '../resumeContext';
 import { stripThreadContextPreamble } from '../threadContextPreamble';
 import { getOpenQuestionForSession } from '../openCodeOpenQuestion';
 import { buildOpenCodeSchedulerMcpRegistration, schedulerMcpServerName } from '../scheduler/injection';
+import { checkIsRecord } from '../utils/checkIsRecord';
 import {
   buildSessionTitleSnippet,
   checkIsMeaningfulPrompt,
@@ -1311,9 +1312,7 @@ export function checkIsValidProviderId(providerId: string): boolean {
   return providerIdRe.test(providerId);
 }
 
-function checkIsOpenCodeRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
+const checkIsOpenCodeRecord = checkIsRecord;
 
 function checkIsOpenCodeTokenCount(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value) && Number.isInteger(value) && value >= 0;

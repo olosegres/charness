@@ -16,12 +16,10 @@
  */
 
 import type { ScheduledWakeupSource } from './claudeScheduledJobs';
+import { checkIsRecord } from './checkIsRecord';
 
-/** Narrow an untyped `JSON.parse` result to a plain object (parse-boundary
- *  pattern for untrusted process output; mirrors `checkIsRecord` elsewhere). */
-export function checkIsStreamRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
+/** The parse-boundary guard for untrusted process output — the shared {@link checkIsRecord}, under the name this module's readers use. */
+export const checkIsStreamRecord = checkIsRecord;
 
 /**
  * @description Newline-delimited-JSON reader with partial-line buffering. The

@@ -33,7 +33,7 @@ import * as path from 'path';
 import type { SessionKey } from './sessionKey';
 import { keyToString } from './sessionKey';
 import { buildClaudeSchedulerMcpConfig, schedulerMcpServerName } from './scheduler/injection';
-import { checkIsStreamRecord } from './utils/claudeStreamJson';
+import { checkIsRecord } from './utils/checkIsRecord';
 
 /** The platform whose sessions keep the user's and project's own MCP servers. */
 const telegramPlatform = 'telegram';
@@ -79,17 +79,26 @@ export function expandEnvVars<T>(node: T): T {
 }
 
 /**
+ * The files whose entry of the bot's name was already reported: every session start reads the operator's files again, and one line
+ * per file for the life of the process is enough to tell the operator to rename the server.
+ */
+const reportedBotNameFiles = new Set<string>();
+
+/**
  * @description The bot owns the MCP server name {@link schedulerMcpServerName}: an operator's entry of that name is left out of the
  * copy handed to Claude, so the bot's own registration is the only one the agent sees whatever order the CLI merges the files in.
- * The warning names the file and the server, never a value of the entry (it may hold a token).
+ * The warning (once per file per process) names the file and the server, never a value of the entry (it may hold a token).
  */
 function getWithoutBotServer(config: unknown, sourcePath: string): unknown {
-  if (!checkIsStreamRecord(config) || !checkIsStreamRecord(config.mcpServers) || !(schedulerMcpServerName in config.mcpServers)) {
+  if (!checkIsRecord(config) || !checkIsRecord(config.mcpServers) || !(schedulerMcpServerName in config.mcpServers)) {
     return config;
   }
-  console.warn(
-    `[mcp] ${sourcePath}: the server name "${schedulerMcpServerName}" belongs to the bot, so that entry is left out — rename it to keep your server`,
-  );
+  if (!reportedBotNameFiles.has(sourcePath)) {
+    reportedBotNameFiles.add(sourcePath);
+    console.warn(
+      `[mcp] ${sourcePath}: the server name "${schedulerMcpServerName}" belongs to the bot, so that entry is left out — rename it to keep your server`,
+    );
+  }
   const otherServers = Object.fromEntries(Object.entries(config.mcpServers).filter(([name]) => name !== schedulerMcpServerName));
   return { ...config, mcpServers: otherServers };
 }

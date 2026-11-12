@@ -134,14 +134,31 @@ describe('prepareMcpFlags — an operator server named like the bot\'s own', () 
     assert.notDeepEqual(botServer, operatorBotNamedServer);
   });
 
-  it('is reported once per file by name, never by value', async () => {
+  it('is reported by name, never by value', async () => {
     fs.writeFileSync(path.join(dataDir, 'mcp.json'), JSON.stringify({ mcpServers: { [schedulerMcpServerName]: operatorBotNamedServer } }));
 
     await prepareMcpFlags({ key, dataDir });
 
     assert.equal(warnings.length, 1);
     assert.match(warnings[0], new RegExp(`"${schedulerMcpServerName}" belongs to the bot`));
+    assert.match(warnings[0], /mcp\.json/, 'the file is named');
     assert.ok(!warnings[0].includes('operator-placeholder') && !warnings[0].includes('operator.invalid'), 'no value of the entry in the log');
+  });
+
+  it('is reported once per file while the process runs, however many sessions start', async () => {
+    const operatorServers = { mcpServers: { [schedulerMcpServerName]: operatorBotNamedServer } };
+    fs.writeFileSync(path.join(dataDir, 'mcp.json'), JSON.stringify(operatorServers));
+    fs.mkdirSync(path.join(dataDir, 'threads'), { recursive: true });
+    fs.writeFileSync(path.join(dataDir, 'threads', `${keyString}.json`), JSON.stringify(operatorServers));
+
+    await prepareMcpFlags({ key, dataDir });
+    await prepareMcpFlags({ key, dataDir });
+    await prepareMcpFlags({ key: makeTelegramKey(-1001234567890, 12), dataDir });
+
+    // Three starts read the group file three times and this thread's file twice (the other thread has no file of its own).
+    assert.equal(warnings.length, 2);
+    assert.equal(warnings.filter((warning) => warning.includes('mcp.json')).length, 1, 'the group file');
+    assert.equal(warnings.filter((warning) => warning.includes(`${keyString}.json`)).length, 1, 'this thread\'s file');
   });
 
   it('leaves a file with no such server byte-for-byte as the operator wrote it, with no warning', async () => {
