@@ -253,24 +253,37 @@ describe('the bot-MCP tool digest (lifecycle plan L4)', () => {
     assert.ok(offered.has('schedule_create') && offered.has('claude_profiles'), 'the tools the manager leans on');
   });
 
-  it('the text an agent reads names a bot tool bare, or with the server prefix `mcp__charness__` — never under another server name', () => {
+  it('the text an agent reads names a bot tool bare, or under the server name `charness` in either CLI\'s form — never under another server', () => {
     const deps: SchedulerMcpDeps = {
       ...createDigestDeps(),
       fetchJiraAttachment: async () => ({ ok: false, error: 'unused' }),
       listClaudeProfiles: async ({ model }) => ({ model, relevantBuckets: [], recommended: null, pickReason: 'none', nextAvailable: null, profiles: [] }),
     };
     const offered: OptionalBotTools = { isJiraAttachmentToolOffered: true, isTodoToolOffered: true, remoteRunRunnerLines: [] };
-    const foreignServerPrefix = /mcp__(?!charness__)/;
+    const toolNames = new Set((['telegram', 'jira', null] as const).flatMap((platform) => getBotMcpToolDefinitions(deps, platform).map((definition) => definition.name)));
+    // Claude Code's form is `mcp__<server>__<tool>`, OpenCode's `<server>_<tool>`; the server is any identifier without an underscore.
+    const claudeForm = /mcp__(?!charness__)/;
+    const openCodeForm = new RegExp(`\\b(?!charness_)[A-Za-z][A-Za-z0-9]*_(?:${[...toolNames].join('|')})\\b`);
+    const assertNamesToolsRightly = (text: string, where: string): void => {
+      assert.doesNotMatch(text, claudeForm, `${where}: a Claude Code tool name under another server`);
+      assert.doesNotMatch(text, openCodeForm, `${where}: an OpenCode tool name under another server`);
+    };
     for (const platform of ['telegram', 'jira', null] as const) {
-      assert.doesNotMatch(buildMcpServerInstructions(platform, offered, true), foreignServerPrefix, `${platform ?? 'neutral'} instructions`);
+      assertNamesToolsRightly(buildMcpServerInstructions(platform, offered, true), `${platform ?? 'neutral'} instructions`);
       for (const definition of getBotMcpToolDefinitions(deps, platform)) {
-        assert.doesNotMatch(definition.description ?? '', foreignServerPrefix, `${platform ?? 'neutral'} ${definition.name} description`);
+        assertNamesToolsRightly(definition.description ?? '', `${platform ?? 'neutral'} ${definition.name} description`);
       }
     }
     const skillsDir = path.join(__dirname, '..', '..', 'agent-plugin', 'skills');
     for (const folder of fs.readdirSync(skillsDir)) {
-      assert.doesNotMatch(fs.readFileSync(path.join(skillsDir, folder, 'SKILL.md'), 'utf8'), foreignServerPrefix, `${folder} skill`);
+      assertNamesToolsRightly(fs.readFileSync(path.join(skillsDir, folder, 'SKILL.md'), 'utf8'), `${folder} skill`);
     }
+    // The rule itself: the two forms are told apart from a bare name and from `charness`.
+    assert.match('x_schedule_create', openCodeForm);
+    assert.match('someServer_answer_request', openCodeForm);
+    assert.match('mcp__someServer__schedule_create', claudeForm);
+    assert.doesNotMatch('schedule_create and charness_schedule_create and mcp__charness__todo_update', openCodeForm);
+    assert.doesNotMatch('schedule_create and charness_schedule_create and mcp__charness__todo_update', claudeForm);
   });
 
   it('every claude_profiles input the shipped skills name is one the tool takes', () => {
