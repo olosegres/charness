@@ -369,13 +369,13 @@ export function getFlagValues(argv: readonly string[], name: string): string[] {
   return argv.flatMap((arg, index) => (arg === name && index + 1 < argv.length ? [argv[index + 1]] : []));
 }
 
-/** One server of an `--mcp-config` file, as the fake and the process-level tests read it. */
 /** One server of the fake's `mcp_status` answer (see {@link fakeClaudeMcpServersFileName}). */
 export interface FakeClaudeMcpServer {
   name: string;
   status: string;
 }
 
+/** One server of an `--mcp-config` file, as the fake and the process-level tests read it. */
 export interface McpServerConfig {
   type?: string;
   url?: string;
