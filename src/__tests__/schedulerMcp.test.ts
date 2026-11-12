@@ -261,9 +261,15 @@ describe('the bot-MCP tool digest (lifecycle plan L4)', () => {
     };
     const offered: OptionalBotTools = { isJiraAttachmentToolOffered: true, isTodoToolOffered: true, remoteRunRunnerLines: [] };
     const toolNames = new Set((['telegram', 'jira', null] as const).flatMap((platform) => getBotMcpToolDefinitions(deps, platform).map((definition) => definition.name)));
-    // Claude Code's form is `mcp__<server>__<tool>`, OpenCode's `<server>_<tool>`; the server is any identifier without an underscore.
+    // Claude Code's form is `mcp__<server>__<tool>`, OpenCode's `<server>_<tool>`. The OpenCode pattern starts at the start of an
+    // identifier (not inside one) and takes everything up to `_<tool>` as the server, underscores included — so `some_server_<tool>`
+    // is caught — except `charness_<tool>` exactly and the Claude Code form of `charness`, which the first pattern judges.
     const claudeForm = /mcp__(?!charness__)/;
-    const openCodeForm = new RegExp(`\\b(?!charness_)[A-Za-z][A-Za-z0-9]*_(?:${[...toolNames].join('|')})\\b`);
+    const toolPattern = [...toolNames].join('|');
+    const notIdentifier = '(?![A-Za-z0-9_])';
+    const openCodeForm = new RegExp(
+      `(?<![A-Za-z0-9_])(?!charness_(?:${toolPattern})${notIdentifier})(?!mcp__charness__)[A-Za-z][A-Za-z0-9_]*?_(?:${toolPattern})${notIdentifier}`,
+    );
     const assertNamesToolsRightly = (text: string, where: string): void => {
       assert.doesNotMatch(text, claudeForm, `${where}: a Claude Code tool name under another server`);
       assert.doesNotMatch(text, openCodeForm, `${where}: an OpenCode tool name under another server`);
@@ -281,8 +287,11 @@ describe('the bot-MCP tool digest (lifecycle plan L4)', () => {
     // The rule itself: the two forms are told apart from a bare name and from `charness`.
     assert.match('x_schedule_create', openCodeForm);
     assert.match('someServer_answer_request', openCodeForm);
+    assert.match('some_server_answer_request', openCodeForm, 'a server name with underscores');
+    assert.match('use my_charness_schedule_create', openCodeForm, 'another server whose name ends in charness');
+    assert.match('charness_extra_schedule_create', openCodeForm, 'another server whose name starts with charness_');
     assert.match('mcp__someServer__schedule_create', claudeForm);
-    assert.doesNotMatch('schedule_create and charness_schedule_create and mcp__charness__todo_update', openCodeForm);
+    assert.doesNotMatch('send_file_to_user and schedule_create and charness_schedule_create and mcp__charness__todo_update', openCodeForm);
     assert.doesNotMatch('schedule_create and charness_schedule_create and mcp__charness__todo_update', claudeForm);
   });
 
