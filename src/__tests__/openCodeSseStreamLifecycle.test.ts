@@ -29,6 +29,7 @@ import {
   OpenCodeAdapter,
   checkNeedsLegacySchedulerMcpDisconnect,
   checkNeedsSchedulerMcpReregister,
+  getOpenCodeConfigMcpLookup,
   getSchedulerMcpRetryDelayMs,
   schedulerMcpRetryDelaysMs,
   type OpenCodeSession,
@@ -398,14 +399,17 @@ describe('a registration left under the pre-rename server name is disconnected, 
   const originalLog = console.log;
   const originalWarn = console.warn;
   const registerUrl = `/mcp?directory=${encodeURIComponent(sharedDir)}`;
+  const configUrl = `/config?directory=${encodeURIComponent(sharedDir)}`;
   const disconnectUrl = `/mcp/${encodeURIComponent(legacySchedulerMcpServerName)}/disconnect?directory=${encodeURIComponent(sharedDir)}`;
   const connected = { status: 'connected' };
+  let warnings: string[];
 
   beforeEach(() => {
     configureSchedulerMcpInjection({ getSecret: async () => secret, port });
     mock.timers.enable({ apis: ['setTimeout'] });
+    warnings = [];
     console.log = () => {};
-    console.warn = () => {};
+    console.warn = (...args: Parameters<typeof console.warn>) => { warnings.push(args.map((arg) => String(arg)).join(' ')); };
   });
   afterEach(() => {
     mock.timers.reset();
@@ -425,14 +429,25 @@ describe('a registration left under the pre-rename server name is disconnected, 
     return { adapter, keyA };
   }
 
-  /** The server: `GET /mcp` answers `liveStatus`, a registration answers `statusAfterRegister`; every call is recorded in order. */
-  function stubServer(adapter: OpenCodeAdapter, liveStatus: unknown, statusAfterRegister: unknown = undefined, failOn?: string): string[] {
+  /** What the stubbed OpenCode server answers: `GET /mcp` the live status, `GET /config` the folder's config, a registration its status map. */
+  interface StubbedServer {
+    liveStatus: unknown;
+    /** What `GET /config` answers: a config with no `mcp` unless a case says otherwise. */
+    config?: unknown;
+    statusAfterRegister?: unknown;
+    /** A URL whose request fails. */
+    failOn?: string;
+  }
+
+  /** Stub the server; every call is recorded, in order, as `<method> <url>`. */
+  function stubServer(adapter: OpenCodeAdapter, server: StubbedServer): string[] {
     const calls: string[] = [];
+    const hasConfig = 'config' in server;
     adapter['apiRequest'] = (async (method: string, url: string) => {
       calls.push(`${method} ${url}`);
-      if (failOn === url) throw new Error('server sick');
-      if (method === 'GET') return liveStatus;
-      return url === registerUrl ? statusAfterRegister : undefined;
+      if (server.failOn === url) throw new Error('server sick');
+      if (method === 'GET') return url === configUrl ? (hasConfig ? server.config : {}) : server.liveStatus;
+      return url === registerUrl ? server.statusAfterRegister : undefined;
     }) as OpenCodeAdapter['apiRequest'];
     return calls;
   }
@@ -447,45 +462,113 @@ describe('a registration left under the pre-rename server name is disconnected, 
     assert.equal(checkNeedsLegacySchedulerMcpDisconnect('nope'), false);
   });
 
+  it('the config lookup: only a config that lists the name defines it; an answer that is not a config decides nothing', () => {
+    assert.equal(getOpenCodeConfigMcpLookup({ mcp: { [legacySchedulerMcpServerName]: { type: 'remote' } } }, legacySchedulerMcpServerName), 'defined');
+    assert.equal(getOpenCodeConfigMcpLookup({ mcp: { other: { type: 'remote' } } }, legacySchedulerMcpServerName), 'absent');
+    assert.equal(getOpenCodeConfigMcpLookup({ plugin: [] }, legacySchedulerMcpServerName), 'absent', 'a config with no mcp section');
+    assert.equal(getOpenCodeConfigMcpLookup({ mcp: [legacySchedulerMcpServerName] }, legacySchedulerMcpServerName), 'absent', 'an array is not a table of servers');
+    for (const notAConfig of [undefined, null, 'nope', 3, []]) {
+      assert.equal(getOpenCodeConfigMcpLookup(notAConfig, legacySchedulerMcpServerName), 'unreadable', JSON.stringify(notAConfig) ?? 'undefined');
+    }
+  });
+
   it('reconcile with charness connected: the leftover legacy registration is disconnected, once', async () => {
     const { adapter } = createAdapterWithSession();
-    const calls = stubServer(adapter, { [schedulerMcpServerName]: connected, [legacySchedulerMcpServerName]: connected });
+    const calls = stubServer(adapter, { liveStatus: { [schedulerMcpServerName]: connected, [legacySchedulerMcpServerName]: connected } });
 
     await adapter.reconcileSchedulerMcpForActiveSessions();
-    assert.deepEqual(calls, [`GET /mcp?directory=${encodeURIComponent(sharedDir)}`, `POST ${disconnectUrl}`]);
+    assert.deepEqual(calls, [`GET /mcp?directory=${encodeURIComponent(sharedDir)}`, `GET ${configUrl}`, `POST ${disconnectUrl}`]);
 
     // The next boot finds it disabled and leaves it.
-    const nextBootCalls = stubServer(adapter, { [schedulerMcpServerName]: connected, [legacySchedulerMcpServerName]: { status: 'disabled' } });
+    const nextBootCalls = stubServer(adapter, { liveStatus: { [schedulerMcpServerName]: connected, [legacySchedulerMcpServerName]: { status: 'disabled' } } });
     await adapter.reconcileSchedulerMcpForActiveSessions();
     assert.deepEqual(nextBootCalls, [`GET /mcp?directory=${encodeURIComponent(sharedDir)}`], 'no second disconnect');
   });
 
-  it('reconcile with charness missing: it registers charness FIRST, then disconnects the legacy one named in the registration answer', async () => {
+  it('an old-name server the operator defined in their own OpenCode config is left alone', async () => {
     const { adapter } = createAdapterWithSession();
-    const calls = stubServer(
-      adapter,
-      { [legacySchedulerMcpServerName]: connected },
-      { [legacySchedulerMcpServerName]: connected, [schedulerMcpServerName]: connected },
-    );
+    const calls = stubServer(adapter, {
+      liveStatus: { [schedulerMcpServerName]: connected, [legacySchedulerMcpServerName]: connected },
+      config: { mcp: { [legacySchedulerMcpServerName]: { type: 'remote', url: 'http://operator.invalid/mcp' } } },
+    });
 
     await adapter.reconcileSchedulerMcpForActiveSessions();
 
-    assert.deepEqual(calls, [`GET /mcp?directory=${encodeURIComponent(sharedDir)}`, `POST ${registerUrl}`, `POST ${disconnectUrl}`]);
+    assert.deepEqual(calls, [`GET /mcp?directory=${encodeURIComponent(sharedDir)}`, `GET ${configUrl}`], 'asked whose it is, and sent no disconnect');
+    assert.equal(adapter['schedulerMcpRetries'].size, 0, 'nothing is pending: leaving it alone is the finished answer');
   });
 
-  it('a session start registers charness and disconnects the legacy registration the server lists in its answer', async () => {
+  it('an old-name server the operator defined in their config is left alone on a session start too', async () => {
     const { adapter, keyA } = createAdapterWithSession();
-    const calls = stubServer(adapter, {}, { [legacySchedulerMcpServerName]: connected, [schedulerMcpServerName]: connected });
+    const calls = stubServer(adapter, {
+      liveStatus: {},
+      statusAfterRegister: { [legacySchedulerMcpServerName]: connected, [schedulerMcpServerName]: connected },
+      config: { mcp: { [legacySchedulerMcpServerName]: { type: 'remote' } } },
+    });
 
     adapter['connectSse'](keyA);
     await settle();
 
-    assert.deepEqual(calls, [`POST ${registerUrl}`, `POST ${disconnectUrl}`]);
+    assert.deepEqual(calls, [`POST ${registerUrl}`, `GET ${configUrl}`]);
+  });
+
+  it('when the config cannot be read, nothing is disconnected and the step is retried, a bounded number of times', async () => {
+    const { adapter } = createAdapterWithSession();
+    const calls = stubServer(adapter, {
+      liveStatus: { [schedulerMcpServerName]: connected, [legacySchedulerMcpServerName]: connected },
+      failOn: configUrl,
+    });
+
+    await assert.doesNotReject(adapter.reconcileSchedulerMcpForActiveSessions());
+    assert.equal(adapter['schedulerMcpRetries'].size, 1, 'a retry is pending');
+    for (const pause of schedulerMcpRetryDelaysMs) {
+      mock.timers.tick(pause);
+      await settle();
+    }
+
+    assert.ok(!calls.includes(`POST ${disconnectUrl}`), 'a failed lookup never turns into a disconnect');
+    assert.equal(calls.filter((call) => call === `GET ${configUrl}`).length, 1 + schedulerMcpRetryDelaysMs.length);
+    assert.equal(adapter['schedulerMcpRetries'].size, 0, 'it stops after the last pause');
+  });
+
+  it('a config answer that is not a config is treated as a failed lookup, not as "not defined"', async () => {
+    const { adapter } = createAdapterWithSession();
+    const calls = stubServer(adapter, {
+      liveStatus: { [schedulerMcpServerName]: connected, [legacySchedulerMcpServerName]: connected },
+      config: undefined,
+    });
+
+    await adapter.reconcileSchedulerMcpForActiveSessions();
+
+    assert.ok(!calls.includes(`POST ${disconnectUrl}`), calls.join(' | '));
+    assert.equal(adapter['schedulerMcpRetries'].size, 1);
+  });
+
+  it('reconcile with charness missing: it registers charness FIRST, then disconnects the legacy one named in the registration answer', async () => {
+    const { adapter } = createAdapterWithSession();
+    const calls = stubServer(adapter, {
+      liveStatus: { [legacySchedulerMcpServerName]: connected },
+      statusAfterRegister: { [legacySchedulerMcpServerName]: connected, [schedulerMcpServerName]: connected },
+    });
+
+    await adapter.reconcileSchedulerMcpForActiveSessions();
+
+    assert.deepEqual(calls, [`GET /mcp?directory=${encodeURIComponent(sharedDir)}`, `POST ${registerUrl}`, `GET ${configUrl}`, `POST ${disconnectUrl}`]);
+  });
+
+  it('a session start registers charness and disconnects the legacy registration the server lists in its answer', async () => {
+    const { adapter, keyA } = createAdapterWithSession();
+    const calls = stubServer(adapter, { liveStatus: {}, statusAfterRegister: { [legacySchedulerMcpServerName]: connected, [schedulerMcpServerName]: connected } });
+
+    adapter['connectSse'](keyA);
+    await settle();
+
+    assert.deepEqual(calls, [`POST ${registerUrl}`, `GET ${configUrl}`, `POST ${disconnectUrl}`]);
   });
 
   it('a registration that fails leaves the legacy one connected: the agent keeps SOME bot tools', async () => {
     const { adapter } = createAdapterWithSession();
-    const calls = stubServer(adapter, { [legacySchedulerMcpServerName]: connected }, undefined, registerUrl);
+    const calls = stubServer(adapter, { liveStatus: { [legacySchedulerMcpServerName]: connected }, failOn: registerUrl });
 
     await adapter.reconcileSchedulerMcpForActiveSessions();
 
@@ -493,9 +576,9 @@ describe('a registration left under the pre-rename server name is disconnected, 
     assert.equal(adapter['schedulerMcpRetries'].size, 1, 'the registration retry is armed as before');
   });
 
-  it('a disconnect that fails is retried like a failed registration, a bounded number of times', async () => {
+  it('a disconnect that fails is retried like a failed registration, a bounded number of times, and the last log line says WHICH is standing', async () => {
     const { adapter } = createAdapterWithSession();
-    const calls = stubServer(adapter, { [schedulerMcpServerName]: connected, [legacySchedulerMcpServerName]: connected }, undefined, disconnectUrl);
+    const calls = stubServer(adapter, { liveStatus: { [schedulerMcpServerName]: connected, [legacySchedulerMcpServerName]: connected }, failOn: disconnectUrl });
 
     await assert.doesNotReject(adapter.reconcileSchedulerMcpForActiveSessions());
     assert.equal(adapter['schedulerMcpRetries'].size, 1, 'a retry is pending');
@@ -507,11 +590,31 @@ describe('a registration left under the pre-rename server name is disconnected, 
     const disconnects = calls.filter((call) => call === `POST ${disconnectUrl}`).length;
     assert.equal(disconnects, 1 + schedulerMcpRetryDelaysMs.length, 'the boot try and one per pause, then it stops');
     assert.equal(adapter['schedulerMcpRetries'].size, 0, 'nothing left pending');
+
+    const giveUp = warnings.at(-1) ?? '';
+    assert.ok(giveUp.includes(legacySchedulerMcpServerName) && giveUp.includes('still connected'), giveUp);
+    assert.ok(!giveUp.includes('not registered'), 'charness IS registered here — the line must not say it is not');
   });
 
-  it('a folder with no legacy registration gets no disconnect', async () => {
+  it('when the registration is what keeps failing, the last log line still says the scheduler MCP is not registered', async () => {
+    const { adapter, keyA } = createAdapterWithSession();
+    adapter['apiRequest'] = (async () => { throw new Error('server sick'); }) as OpenCodeAdapter['apiRequest'];
+
+    adapter['connectSse'](keyA);
+    await settle();
+    for (const pause of schedulerMcpRetryDelaysMs) {
+      mock.timers.tick(pause);
+      await settle();
+    }
+
+    const giveUp = warnings.at(-1) ?? '';
+    assert.ok(giveUp.includes('is still not registered'), giveUp);
+    assert.ok(!giveUp.includes(legacySchedulerMcpServerName), 'and says nothing about the old name');
+  });
+
+  it('a folder with no legacy registration gets no config lookup and no disconnect', async () => {
     const { adapter } = createAdapterWithSession();
-    const calls = stubServer(adapter, { [schedulerMcpServerName]: connected, 'telegram-mcp': connected });
+    const calls = stubServer(adapter, { liveStatus: { [schedulerMcpServerName]: connected, 'telegram-mcp': connected } });
 
     await adapter.reconcileSchedulerMcpForActiveSessions();
 

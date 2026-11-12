@@ -106,7 +106,11 @@ constants in the code; this README keeps what the code cannot say.
   holds its server under it. The json-stream heal also looks for it when `charness` is not listed and reconnects under the name it
   finds (`healedLegacy`); the OpenCode reconcile and every successful registration disconnect a registration left under it
   (`POST /mcp/<name>/disconnect`, read from the status map the server returns, never on a guess: an unknown name is a 404), only
-  AFTER `charness` is registered, so a failed registration never costs the agent its remaining tools. Nothing registers under it.
+  AFTER `charness` is registered, so a failed registration never costs the agent its remaining tools. The status map also lists
+  the operator's own servers, so the folder's `GET /config` is asked first: a server of that name the operator's `opencode.json`
+  defines is theirs and stays (runtime registrations never show up in `/config`), and a lookup that fails or answers no config
+  disconnects nothing. A disconnect that keeps failing is retried through the registration retry and the last log line says
+  the old name is still connected, not that charness is unregistered. Nothing registers under it.
 - MCP cancellation is a separate HTTP notification while every transport is fresh, so the server correlates by
   verified token + a bounded client id (injected per registration) + the typed request id, and keeps a
   short-lived cancellation-before-registration tombstone set.

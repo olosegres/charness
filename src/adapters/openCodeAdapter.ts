@@ -1430,6 +1430,30 @@ export function checkNeedsLegacySchedulerMcpDisconnect(mcpStatus: unknown): bool
 }
 
 /**
+ * @name OpenCodeConfigMcpLookup
+ * @description What a folder's `GET /config` says about one MCP server name: `defined` — the operator's own `opencode.json` (or the
+ * global one) lists it; `absent` — it lists no such server; `unreadable` — the answer is not a config at all, which decides nothing.
+ */
+export type OpenCodeConfigMcpLookup = 'defined' | 'absent' | 'unreadable';
+
+/**
+ * @description Whether the operator's OpenCode config defines the MCP server `serverName`. The status map (`GET /mcp`) lists both the
+ * servers the operator's config defines and the ones registered at runtime, so a name found there says nothing about who made it;
+ * `GET /config` lists only the config's — measured against a live server: runtime registrations never show up in it.
+ */
+export function getOpenCodeConfigMcpLookup(config: unknown, serverName: string): OpenCodeConfigMcpLookup {
+  if (!checkIsRecord(config)) return 'unreadable';
+  return checkIsRecord(config.mcp) && serverName in config.mcp ? 'defined' : 'absent';
+}
+
+/**
+ * @name SchedulerMcpPending
+ * @description What a scheduler-MCP retry is for: the bot's own registration, or the disconnect of the registration an older bot left
+ * under the pre-rename name. The retry's log lines say which, so an operator knows which of the two is still standing.
+ */
+type SchedulerMcpPending = 'registration' | 'legacyDisconnect';
+
+/**
  * Pauses before each retry of a failed scheduler-MCP registration. A server that
  * was just (re)started can take longer than the request timeout to create a
  * folder's instance — live, the first POST after a restart timed out at 30 s and
@@ -3888,14 +3912,17 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
    * covers a second failure, and one that fires after the folder's last session
    * ended does nothing.
    */
-  private scheduleSchedulerMcpRetry(directory: string): void {
+  private scheduleSchedulerMcpRetry(directory: string, pending: SchedulerMcpPending = 'registration'): void {
     const retry = this.schedulerMcpRetries.get(directory) ?? { attempt: 0, timer: null };
     if (retry.timer) return;
     const delayMs = getSchedulerMcpRetryDelayMs(retry.attempt);
     if (delayMs === null) {
       this.schedulerMcpRetries.delete(directory);
       console.warn(
-        `[OpenCode] scheduler MCP for ${directory} is still not registered; the next session start or bot boot retries`,
+        pending === 'registration'
+          ? `[OpenCode] scheduler MCP for ${directory} is still not registered; the next session start or bot boot retries`
+          : `[OpenCode] ${directory}: the MCP server registered under the pre-rename name ${legacySchedulerMcpServerName} is still ` +
+              `connected, next to ${schedulerMcpServerName} (its disconnect kept failing); the next session start or bot boot retries`,
       );
       return;
     }
@@ -3914,8 +3941,8 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
     retry.timer.unref?.();
     this.schedulerMcpRetries.set(directory, retry);
     console.log(
-      `[OpenCode] retrying the scheduler MCP registration for ${directory} in ${Math.round(delayMs / 1000)}s ` +
-        `(${retry.attempt}/${schedulerMcpRetryDelaysMs.length})`,
+      `[OpenCode] retrying ${pending === 'registration' ? 'the scheduler MCP registration' : 'the disconnect of the pre-rename MCP registration'} ` +
+        `for ${directory} in ${Math.round(delayMs / 1000)}s (${retry.attempt}/${schedulerMcpRetryDelaysMs.length})`,
     );
   }
 
@@ -4050,6 +4077,17 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
   private async retireLegacySchedulerMcp(directory: string, mcpStatus: unknown): Promise<boolean> {
     if (!checkNeedsLegacySchedulerMcpDisconnect(mcpStatus)) return true;
     try {
+      // The status map lists the operator's own servers too: one that carries the old name in the operator's config is theirs, and
+      // an answer that cannot be read leaves the question open — either way nothing is disconnected on a guess.
+      const configLookup = getOpenCodeConfigMcpLookup(
+        await this.apiRequest<unknown>('GET', buildDirectoryScopedPath('/config', directory)),
+        legacySchedulerMcpServerName,
+      );
+      if (configLookup === 'defined') {
+        console.log(`[OpenCode] ${directory}: the MCP server named ${legacySchedulerMcpServerName} is defined in the OpenCode config, so it is left alone`);
+        return true;
+      }
+      if (configLookup === 'unreadable') throw new Error('GET /config did not answer a config');
       await this.apiRequest(
         'POST',
         buildDirectoryScopedPath(`/mcp/${encodeURIComponent(legacySchedulerMcpServerName)}/disconnect`, directory),
@@ -4065,7 +4103,7 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
         `[OpenCode] disconnecting the pre-rename MCP registration failed for ${directory}:`,
         e instanceof Error ? e.message : e,
       );
-      this.scheduleSchedulerMcpRetry(directory);
+      this.scheduleSchedulerMcpRetry(directory, 'legacyDisconnect');
       return false;
     }
   }
