@@ -391,6 +391,7 @@ import {
   type SchedulerMcpHandle,
 } from './scheduler/mcpSurface';
 import { schedulerMcpServerName } from './scheduler/injection';
+import { legacySchedulerMcpServerName } from './legacyNames';
 import { runSessionBootPhase, startSchedulerMcpForBoot } from './scheduler/mcpBoot';
 import { RequestLedger } from './requests/requestLedger';
 import { answerRequest } from './requests/answerRequest';
@@ -14102,10 +14103,15 @@ function healSchedulerMcpForActiveSessions(): void {
     catch { continue; } // unknown adapter in state — already reported by reattach
     if (!adapter.healMcpServer || !adapter.checkIsActive(key)) continue;
     const keyStr = keyToString(key);
-    void adapter.healMcpServer(key, schedulerMcpServerName).then(
+    void adapter.healMcpServer(key, schedulerMcpServerName, legacySchedulerMcpServerName).then(
       (outcome) => {
         if (outcome === 'healed') {
           console.log(`[scheduler] MCP heal: reconnected ${schedulerMcpServerName} in ${keyStr}`);
+        } else if (outcome === 'healedLegacy') {
+          console.log(
+            `[scheduler] MCP heal: reconnected ${legacySchedulerMcpServerName} in ${keyStr} — the agent started before the rename to ` +
+              `${schedulerMcpServerName} and keeps the old tool names until it restarts`,
+          );
         } else if (outcome === 'unavailable') {
           console.warn(`[scheduler] MCP heal: ${keyStr} left unhealed — its status ask went unanswered, or the reconnect was refused`);
         }

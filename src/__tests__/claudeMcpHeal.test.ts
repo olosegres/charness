@@ -22,10 +22,12 @@ import {
   buildMcpReconnectControlRequest,
   buildMcpStatusControlRequest,
   decideMcpHeal,
+  findListedMcpServer,
   getMcpServerStatus,
   mcpControlRequestTimeoutMs,
 } from '../utils/claudeMcpHeal';
 import { schedulerMcpServerName } from '../scheduler/injection';
+import { legacySchedulerMcpServerName } from '../legacyNames';
 
 describe('buildMcpStatusControlRequest / buildMcpReconnectControlRequest', () => {
   it('builds the exact measured mcp_status frame', () => {
@@ -109,6 +111,36 @@ describe('getMcpServerStatus', () => {
       getMcpServerStatus({ mcpServers: [null, 'charness', { name: 'charness', status: 'failed' }] }, 'charness'),
       'failed',
     );
+  });
+});
+
+describe('findListedMcpServer — the current name first, then the pre-rename one', () => {
+  const serverNames = [schedulerMcpServerName, legacySchedulerMcpServerName];
+
+  it('finds the server under the current name', () => {
+    const payload = { mcpServers: [{ name: schedulerMcpServerName, status: 'failed' }] };
+    assert.deepEqual(findListedMcpServer(payload, serverNames), { name: schedulerMcpServerName, status: 'failed' });
+  });
+
+  it('finds an agent started before the rename by the name its launch config carried', () => {
+    const payload = { mcpServers: [{ name: 'someOtherServer', status: 'connected' }, { name: legacySchedulerMcpServerName, status: 'failed' }] };
+    assert.deepEqual(findListedMcpServer(payload, serverNames), { name: legacySchedulerMcpServerName, status: 'failed' });
+  });
+
+  it('prefers the current name when both are listed', () => {
+    const payload = { mcpServers: [{ name: legacySchedulerMcpServerName, status: 'failed' }, { name: schedulerMcpServerName, status: 'connected' }] };
+    assert.deepEqual(findListedMcpServer(payload, serverNames), { name: schedulerMcpServerName, status: 'connected' });
+  });
+
+  it('is null when neither name is listed or the payload cannot be read — what makes the decision refuse to act', () => {
+    assert.equal(findListedMcpServer({ mcpServers: [{ name: 'someOtherServer', status: 'connected' }] }, serverNames), null);
+    assert.equal(findListedMcpServer({}, serverNames), null);
+    assert.equal(findListedMcpServer(null, serverNames), null);
+  });
+
+  it('looks only for the names it is given: the pre-rename name is not assumed', () => {
+    const payload = { mcpServers: [{ name: legacySchedulerMcpServerName, status: 'failed' }] };
+    assert.equal(findListedMcpServer(payload, [schedulerMcpServerName]), null);
   });
 });
 

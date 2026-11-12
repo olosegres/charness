@@ -57,11 +57,14 @@ export type McpHealDecision = 'reconnect' | 'healthy' | 'skip';
  *  - `healthy` — nothing was wrong, no frame written beyond the status ask.
  *  - `skipped` — the status says a reconnect is not the right move
  *    ({@link decideMcpHeal}).
+ *  - `healedLegacy` — as `healed`, but it was the server's pre-rename name that
+ *    was listed and reconnected: an agent started before the rename (see
+ *    `legacySchedulerMcpServerName`).
  *  - `unavailable` — the heal could not be completed: no live session, the CLI
  *    never answered (or refused) the status ask, or the reconnect itself was
  *    refused. In every case the server is still whatever it was.
  */
-export type McpHealOutcome = 'healed' | 'healthy' | 'skipped' | 'unavailable';
+export type McpHealOutcome = 'healed' | 'healedLegacy' | 'healthy' | 'skipped' | 'unavailable';
 
 /** The status of a server that completed its handshake — nothing to do. */
 const mcpStatusConnected = 'connected';
@@ -94,6 +97,26 @@ export function getMcpServerStatus(payload: Record<string, unknown> | null, serv
   for (const entry of servers) {
     if (!checkIsRecord(entry) || entry.name !== serverName) continue;
     return typeof entry.status === 'string' ? entry.status : null;
+  }
+  return null;
+}
+
+/** One server a status payload lists, under the name it was found by. */
+export interface ListedMcpServer {
+  name: string;
+  status: string;
+}
+
+/**
+ * @description The first of `serverNames` that the status payload lists with a readable status. The caller gives the current name
+ * first and the pre-rename one after it: an agent started before the rename still holds its server under the old name, and the
+ * decision must not read its absence under the new one as "nothing to repair". `null` when none is listed — "unknown", which
+ * {@link decideMcpHeal} deliberately refuses to act on.
+ */
+export function findListedMcpServer(payload: Record<string, unknown> | null, serverNames: readonly string[]): ListedMcpServer | null {
+  for (const name of serverNames) {
+    const status = getMcpServerStatus(payload, name);
+    if (status !== null) return { name, status };
   }
   return null;
 }

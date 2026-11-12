@@ -102,6 +102,11 @@ constants in the code; this README keeps what the code cannot say.
   missing or not `connected` — OpenCode does not reconnect a remote MCP dropped in the restart gap); json-stream
   `healSchedulerMcpForActiveSessions` → `healMcpServer` (`mcp_status` / `mcp_reconnect` over the control
   channel, only for a `failed` entry).
+- **The pre-rename server name** (`legacySchedulerMcpServerName` in `legacyNames.ts`; one release): an agent started before the rename
+  holds its server under it. The json-stream heal also looks for it when `charness` is not listed and reconnects under the name it
+  finds (`healedLegacy`); the OpenCode reconcile and every successful registration disconnect a registration left under it
+  (`POST /mcp/<name>/disconnect`, read from the status map the server returns, never on a guess: an unknown name is a 404), only
+  AFTER `charness` is registered, so a failed registration never costs the agent its remaining tools. Nothing registers under it.
 - MCP cancellation is a separate HTTP notification while every transport is fresh, so the server correlates by
   verified token + a bounded client id (injected per registration) + the typed request id, and keeps a
   short-lived cancellation-before-registration tombstone set.

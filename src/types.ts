@@ -920,12 +920,14 @@ export interface AgentAdapter extends EventEmitter {
    * retries a server it once failed to reach, so without this the bot's own
    * tools stay gone for the rest of that session. The resolved
    * {@link McpHealOutcome} says what actually happened, so a caller can log only
-   * the sessions it really repaired.
+   * the sessions it really repaired. `legacyServerName`, when given, is the name an
+   * agent started before a rename still holds the server under: it is looked for
+   * when `serverName` is not listed, and the repair runs under the name found.
    *
    * Optional (optional-method pattern, like {@link compactContext}): only the
    * json-stream Claude backend has a control channel to ask over.
    */
-  healMcpServer?(key: SessionKey, serverName: string): Promise<McpHealOutcome>;
+  healMcpServer?(key: SessionKey, serverName: string, legacyServerName?: string): Promise<McpHealOutcome>;
 
   // — Input —
 

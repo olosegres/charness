@@ -27,6 +27,7 @@ import os from 'os';
 import path from 'path';
 import {
   OpenCodeAdapter,
+  checkNeedsLegacySchedulerMcpDisconnect,
   checkNeedsSchedulerMcpReregister,
   getSchedulerMcpRetryDelayMs,
   schedulerMcpRetryDelaysMs,
@@ -40,6 +41,7 @@ import {
   schedulerMcpServerName,
 } from '../scheduler/injection';
 import { verifySchedulerMcpToken } from '../scheduler/mcpSurface';
+import { legacySchedulerMcpServerName } from '../legacyNames';
 import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
 import { createOpenCodeSessionFixture } from './openCodeSessionFixture';
 
@@ -387,6 +389,133 @@ describe('scheduler MCP registration per directory on session start (plan 2026-0
 
     assert.equal(gets.length, 1, 'a shared folder is reconciled once, not once per thread');
     assert.equal(posts.length, 0, 'a connected dir is not re-registered');
+  });
+});
+
+describe('a registration left under the pre-rename server name is disconnected, so the tools are not doubled', () => {
+  const secret = 'a'.repeat(64);
+  const port = 4097;
+  const originalLog = console.log;
+  const originalWarn = console.warn;
+  const registerUrl = `/mcp?directory=${encodeURIComponent(sharedDir)}`;
+  const disconnectUrl = `/mcp/${encodeURIComponent(legacySchedulerMcpServerName)}/disconnect?directory=${encodeURIComponent(sharedDir)}`;
+  const connected = { status: 'connected' };
+
+  beforeEach(() => {
+    configureSchedulerMcpInjection({ getSecret: async () => secret, port });
+    mock.timers.enable({ apis: ['setTimeout'] });
+    console.log = () => {};
+    console.warn = () => {};
+  });
+  afterEach(() => {
+    mock.timers.reset();
+    resetSchedulerMcpInjection();
+    console.log = originalLog;
+    console.warn = originalWarn;
+  });
+
+  async function settle(): Promise<void> {
+    for (let i = 0; i < 5; i += 1) await new Promise((resolve) => setImmediate(resolve));
+  }
+
+  function createAdapterWithSession() {
+    const adapter = createAdapter();
+    const keyA: SessionKey = makeTelegramKey(-100, 1);
+    adapter['sessions'].set(keyToString(keyA), makeSession(keyA, 'ses_A', sharedDir));
+    return { adapter, keyA };
+  }
+
+  /** The server: `GET /mcp` answers `liveStatus`, a registration answers `statusAfterRegister`; every call is recorded in order. */
+  function stubServer(adapter: OpenCodeAdapter, liveStatus: unknown, statusAfterRegister: unknown = undefined, failOn?: string): string[] {
+    const calls: string[] = [];
+    adapter['apiRequest'] = (async (method: string, url: string) => {
+      calls.push(`${method} ${url}`);
+      if (failOn === url) throw new Error('server sick');
+      if (method === 'GET') return liveStatus;
+      return url === registerUrl ? statusAfterRegister : undefined;
+    }) as OpenCodeAdapter['apiRequest'];
+    return calls;
+  }
+
+  it('the decision: a legacy entry that is not already disabled needs disconnecting; nothing else does', () => {
+    assert.equal(checkNeedsLegacySchedulerMcpDisconnect({ [legacySchedulerMcpServerName]: connected }), true);
+    assert.equal(checkNeedsLegacySchedulerMcpDisconnect({ [legacySchedulerMcpServerName]: { status: 'failed', error: 'x' } }), true);
+    assert.equal(checkNeedsLegacySchedulerMcpDisconnect({ [legacySchedulerMcpServerName]: { status: 'disabled' } }), false, 'already disconnected: do it once');
+    assert.equal(checkNeedsLegacySchedulerMcpDisconnect({ [schedulerMcpServerName]: connected }), false);
+    assert.equal(checkNeedsLegacySchedulerMcpDisconnect({}), false);
+    assert.equal(checkNeedsLegacySchedulerMcpDisconnect(undefined), false, 'a malformed answer must not send a disconnect: a name the server never had is a 404');
+    assert.equal(checkNeedsLegacySchedulerMcpDisconnect('nope'), false);
+  });
+
+  it('reconcile with charness connected: the leftover legacy registration is disconnected, once', async () => {
+    const { adapter } = createAdapterWithSession();
+    const calls = stubServer(adapter, { [schedulerMcpServerName]: connected, [legacySchedulerMcpServerName]: connected });
+
+    await adapter.reconcileSchedulerMcpForActiveSessions();
+    assert.deepEqual(calls, [`GET /mcp?directory=${encodeURIComponent(sharedDir)}`, `POST ${disconnectUrl}`]);
+
+    // The next boot finds it disabled and leaves it.
+    const nextBootCalls = stubServer(adapter, { [schedulerMcpServerName]: connected, [legacySchedulerMcpServerName]: { status: 'disabled' } });
+    await adapter.reconcileSchedulerMcpForActiveSessions();
+    assert.deepEqual(nextBootCalls, [`GET /mcp?directory=${encodeURIComponent(sharedDir)}`], 'no second disconnect');
+  });
+
+  it('reconcile with charness missing: it registers charness FIRST, then disconnects the legacy one named in the registration answer', async () => {
+    const { adapter } = createAdapterWithSession();
+    const calls = stubServer(
+      adapter,
+      { [legacySchedulerMcpServerName]: connected },
+      { [legacySchedulerMcpServerName]: connected, [schedulerMcpServerName]: connected },
+    );
+
+    await adapter.reconcileSchedulerMcpForActiveSessions();
+
+    assert.deepEqual(calls, [`GET /mcp?directory=${encodeURIComponent(sharedDir)}`, `POST ${registerUrl}`, `POST ${disconnectUrl}`]);
+  });
+
+  it('a session start registers charness and disconnects the legacy registration the server lists in its answer', async () => {
+    const { adapter, keyA } = createAdapterWithSession();
+    const calls = stubServer(adapter, {}, { [legacySchedulerMcpServerName]: connected, [schedulerMcpServerName]: connected });
+
+    adapter['connectSse'](keyA);
+    await settle();
+
+    assert.deepEqual(calls, [`POST ${registerUrl}`, `POST ${disconnectUrl}`]);
+  });
+
+  it('a registration that fails leaves the legacy one connected: the agent keeps SOME bot tools', async () => {
+    const { adapter } = createAdapterWithSession();
+    const calls = stubServer(adapter, { [legacySchedulerMcpServerName]: connected }, undefined, registerUrl);
+
+    await adapter.reconcileSchedulerMcpForActiveSessions();
+
+    assert.ok(!calls.includes(`POST ${disconnectUrl}`), calls.join(' | '));
+    assert.equal(adapter['schedulerMcpRetries'].size, 1, 'the registration retry is armed as before');
+  });
+
+  it('a disconnect that fails is retried like a failed registration, a bounded number of times', async () => {
+    const { adapter } = createAdapterWithSession();
+    const calls = stubServer(adapter, { [schedulerMcpServerName]: connected, [legacySchedulerMcpServerName]: connected }, undefined, disconnectUrl);
+
+    await assert.doesNotReject(adapter.reconcileSchedulerMcpForActiveSessions());
+    assert.equal(adapter['schedulerMcpRetries'].size, 1, 'a retry is pending');
+
+    for (const pause of schedulerMcpRetryDelaysMs) {
+      mock.timers.tick(pause);
+      await settle();
+    }
+    const disconnects = calls.filter((call) => call === `POST ${disconnectUrl}`).length;
+    assert.equal(disconnects, 1 + schedulerMcpRetryDelaysMs.length, 'the boot try and one per pause, then it stops');
+    assert.equal(adapter['schedulerMcpRetries'].size, 0, 'nothing left pending');
+  });
+
+  it('a folder with no legacy registration gets no disconnect', async () => {
+    const { adapter } = createAdapterWithSession();
+    const calls = stubServer(adapter, { [schedulerMcpServerName]: connected, 'telegram-mcp': connected });
+
+    await adapter.reconcileSchedulerMcpForActiveSessions();
+
+    assert.deepEqual(calls, [`GET /mcp?directory=${encodeURIComponent(sharedDir)}`]);
   });
 });
 

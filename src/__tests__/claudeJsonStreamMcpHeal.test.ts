@@ -35,6 +35,7 @@ import * as path from 'path';
 import { ClaudeJsonStreamAdapter, type StreamSession } from '../adapters/claudeJsonStreamAdapter';
 import { getJsonStreamSessionPaths } from '../utils/jsonStreamHost';
 import { schedulerMcpServerName } from '../scheduler/injection';
+import { legacySchedulerMcpServerName } from '../legacyNames';
 import { keyToString, type SessionKey } from '../sessionKey';
 import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
 import { createStreamSessionFixture } from './claudeJsonStreamSessionFixture';
@@ -86,14 +87,14 @@ async function settleTicks(): Promise<void> {
   for (let tick = 0; tick < 3; tick += 1) await new Promise((resolve) => setTimeout(resolve, 5));
 }
 
-/** The measured `mcp_status` reply: an inner record listing the servers. */
-function buildStatusResponseLine(requestId: string, status: string): string {
+/** The measured `mcp_status` reply: an inner record listing the servers (the bot's own, under `serverName`). */
+function buildStatusResponseLine(requestId: string, status: string, serverName: string = schedulerMcpServerName): string {
   return JSON.stringify({
     type: 'control_response',
     response: {
       subtype: 'success',
       request_id: requestId,
-      response: { mcpServers: [{ name: schedulerMcpServerName, status }] },
+      response: { mcpServers: [{ name: serverName, status }] },
     },
   }) + '\n';
 }
@@ -156,6 +157,74 @@ describe('json-stream adapter — healMcpServer round-trip', () => {
 
     started.adapter['onStdout'](started.session, buildAckLine(reconnectFrame.request_id as string));
     assert.equal(await healPromise, 'healed');
+  });
+
+  it('a failed server of an agent started before the rename is reconnected under the name it still has', async () => {
+    const started = start('jsonstream-heal-legacy-failed-');
+    const healPromise = started.adapter.healMcpServer(key, schedulerMcpServerName, legacySchedulerMcpServerName);
+
+    const [statusFrame] = await waitForStdinFrames(started.session.paths.stdinFifo, 1);
+    started.adapter['onStdout'](
+      started.session,
+      buildStatusResponseLine(statusFrame.request_id as string, 'failed', legacySchedulerMcpServerName),
+    );
+    const frames = await waitForStdinFrames(started.session.paths.stdinFifo, 2);
+    assert.equal(readRequestSubtype(frames[1]), 'mcp_reconnect');
+    assert.equal((frames[1].request as Record<string, unknown>).serverName, legacySchedulerMcpServerName);
+
+    started.adapter['onStdout'](started.session, buildAckLine(frames[1].request_id as string));
+    assert.equal(await healPromise, 'healedLegacy', 'the caller is told it was the pre-rename name that came back');
+  });
+
+  it('a connected server of an agent started before the rename is left alone too', async () => {
+    const started = start('jsonstream-heal-legacy-connected-');
+    const healPromise = started.adapter.healMcpServer(key, schedulerMcpServerName, legacySchedulerMcpServerName);
+
+    const [statusFrame] = await waitForStdinFrames(started.session.paths.stdinFifo, 1);
+    started.adapter['onStdout'](
+      started.session,
+      buildStatusResponseLine(statusFrame.request_id as string, 'connected', legacySchedulerMcpServerName),
+    );
+
+    assert.equal(await healPromise, 'healthy');
+    assert.equal(readStdinFrames(started.session.paths.stdinFifo).length, 1);
+  });
+
+  it('a session that lists both names is repaired under the current one', async () => {
+    const started = start('jsonstream-heal-both-names-');
+    const healPromise = started.adapter.healMcpServer(key, schedulerMcpServerName, legacySchedulerMcpServerName);
+
+    const [statusFrame] = await waitForStdinFrames(started.session.paths.stdinFifo, 1);
+    started.adapter['onStdout'](started.session, JSON.stringify({
+      type: 'control_response',
+      response: {
+        subtype: 'success',
+        request_id: statusFrame.request_id,
+        response: { mcpServers: [
+          { name: legacySchedulerMcpServerName, status: 'failed' },
+          { name: schedulerMcpServerName, status: 'failed' },
+        ] },
+      },
+    }) + '\n');
+    const frames = await waitForStdinFrames(started.session.paths.stdinFifo, 2);
+    assert.equal((frames[1].request as Record<string, unknown>).serverName, schedulerMcpServerName);
+
+    started.adapter['onStdout'](started.session, buildAckLine(frames[1].request_id as string));
+    assert.equal(await healPromise, 'healed');
+  });
+
+  it('a session listing only the pre-rename name is skipped when the caller names no legacy name', async () => {
+    const started = start('jsonstream-heal-legacy-not-asked-');
+    const healPromise = started.adapter.healMcpServer(key, schedulerMcpServerName);
+
+    const [statusFrame] = await waitForStdinFrames(started.session.paths.stdinFifo, 1);
+    started.adapter['onStdout'](
+      started.session,
+      buildStatusResponseLine(statusFrame.request_id as string, 'failed', legacySchedulerMcpServerName),
+    );
+
+    assert.equal(await healPromise, 'skipped');
+    assert.equal(readStdinFrames(started.session.paths.stdinFifo).length, 1);
   });
 
   it('a failed server whose reconnect answers `error` is NOT reported healed', async () => {

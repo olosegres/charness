@@ -340,7 +340,8 @@ matched on `request_id`: the `initialize` handshake above, and the MCP heal's
 `{subtype:"mcp_status"}` (returns `response.mcpServers[]` with a `status` per
 server) / `{subtype:"mcp_reconnect", serverName}` (a bare success ack) — shapes in
 `../utils/claudeMcpHeal.ts`, used to un-latch a `failed` `charness` in a
-session that outlived a bot restart.
+session that outlived a bot restart (a session started before the rename holds it under its old name,
+`legacySchedulerMcpServerName`: `healMcpServer` takes it as a second name to look for).
 
 The adapter maps a `can_use_tool` request onto the bot's existing `question`
 event (identical shape to OpenCode's), so the pin + one-at-a-time + inline-button

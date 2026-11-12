@@ -7,7 +7,8 @@
  *   • `GET /global/event` — the one multiplexed SSE stream: a `server.connected` frame, then a heartbeat;
  *   • `GET /config` (also `?directory=`) — the default model and the plugin list (with the bot's compaction plugin,
  *     so the bot does not recreate the folder's instance); `GET /config/providers` — the models and their variants;
- *   • `GET|POST /mcp?directory=` — the runtime MCP table (the bot registers its `charness` server there);
+ *   • `GET|POST /mcp?directory=` — the runtime MCP table (the bot registers its `charness` server there); `POST /mcp/:name/disconnect` leaves
+ *     an entry `disabled` (`seedMcpServer` gives an instance a server it held before the bot registered anything);
  *   • `POST /session?directory=`, `GET /session/:id`, `GET /session?directory=`, `GET /session/:id/message` (the prompts it received, as stored user messages),
  *     `GET /session/status`, `GET /question?directory=` (the pending questions: none), `PATCH /session/:id`,
  *     `POST /session/:id/abort`, `POST /session/:id/prompt_async`, `POST /session/:id/summarize`,
@@ -122,6 +123,12 @@ export class FakeOpenCodeServer {
   private readonly childParents = new Map<string, string>();
   /** Per instance directory, the MCP servers registered with `POST /mcp`. */
   readonly mcpRegistrations = new Map<string, string[]>();
+  /** The MCP servers a flow disconnected with `POST /mcp/<name>/disconnect`, oldest first. */
+  readonly mcpDisconnects: Array<{ directory: string; name: string }> = [];
+  /** Per instance directory, the MCP servers the instance already held before the bot registered anything (see {@link seedMcpServer}). */
+  private readonly seededMcpServers = new Map<string, string[]>();
+  /** The servers a disconnect left `disabled`, as `<directory>\n<name>`. */
+  private readonly disabledMcpServers = new Set<string>();
   private readonly server: http.Server;
   private readonly eventStreams = new Set<http.ServerResponse>();
   /** The sessions a flow marked busy and has not let go idle: the turns an abort ends. */
@@ -418,6 +425,8 @@ export class FakeOpenCodeServer {
     if (method === 'GET' && record.path === '/config/providers') return reply(this.buildProviders());
     if (method === 'GET' && record.path === '/mcp') return reply(this.buildMcpStatus(record.directory));
     if (method === 'POST' && record.path === '/mcp') return reply(this.registerMcp(record));
+    const mcpDisconnectMatch = method === 'POST' ? /^\/mcp\/([^/]+)\/disconnect$/.exec(record.path) : null;
+    if (mcpDisconnectMatch) return this.disconnectMcp(record, decodeURIComponent(mcpDisconnectMatch[1]), response);
     if (method === 'GET' && record.path === '/question') return reply([]);
     if (method === 'GET' && record.path === '/session/status') return reply({});
     if (method === 'GET' && record.path === '/session') return reply([...this.sessions.values()].filter((session) => session.directory === record.directory).map(toApiSession));
@@ -482,8 +491,33 @@ export class FakeOpenCodeServer {
     return { providers: [...byProvider].map(([id, models]) => ({ id, models })) };
   }
 
+  /**
+   * @description An instance that already holds the MCP server `name` — as an OpenCode server that outlived a bot update holds the
+   * registration an older bot made. Listed in the status map like a registered one, but not in {@link mcpRegistrations}, which
+   * stays what the CURRENT bot registered.
+   */
+  seedMcpServer(directory: string, name: string): void {
+    this.seededMcpServers.set(directory, [...(this.seededMcpServers.get(directory) ?? []), name]);
+  }
+
   private buildMcpStatus(directory: string | null): Record<string, { status: string }> {
-    return Object.fromEntries((this.mcpRegistrations.get(directory ?? '') ?? []).map((name) => [name, { status: 'connected' }]));
+    const instance = directory ?? '';
+    const names = [...(this.seededMcpServers.get(instance) ?? []), ...(this.mcpRegistrations.get(instance) ?? [])];
+    return Object.fromEntries(names.map((name) => [name, { status: this.disabledMcpServers.has(`${instance}\n${name}`) ? 'disabled' : 'connected' }]));
+  }
+
+  /** `POST /mcp/<name>/disconnect`: the real server answers `true` and leaves the entry `disabled`, and a name it never had a 404. */
+  private disconnectMcp(record: FakeOpenCodeRequest, name: string, response: http.ServerResponse): void {
+    const instance = record.directory ?? '';
+    if (!(name in this.buildMcpStatus(instance))) {
+      response.writeHead(404, { 'content-type': jsonContentType });
+      response.end(JSON.stringify({ _tag: 'McpServerNotFoundError', name, message: `MCP server not found: ${name}` }));
+      return;
+    }
+    this.disabledMcpServers.add(`${instance}\n${name}`);
+    this.mcpDisconnects.push({ directory: instance, name });
+    response.writeHead(okStatus, { 'content-type': jsonContentType });
+    response.end('true');
   }
 
   private registerMcp(record: FakeOpenCodeRequest): Record<string, { status: string }> {

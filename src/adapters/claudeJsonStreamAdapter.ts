@@ -64,7 +64,7 @@ import {
   buildMcpReconnectControlRequest,
   buildMcpStatusControlRequest,
   decideMcpHeal,
-  getMcpServerStatus,
+  findListedMcpServer,
   mcpControlRequestTimeoutMs,
   type McpHealOutcome,
   type McpReconnectControlRequest,
@@ -1598,7 +1598,7 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
    * success), and after a successful one an IMMEDIATELY following `mcp_status`
    * already reads `connected`. Do not re-litigate this as a missing verification.
    */
-  async healMcpServer(key: SessionKey, serverName: string): Promise<McpHealOutcome> {
+  async healMcpServer(key: SessionKey, serverName: string, legacyServerName?: string): Promise<McpHealOutcome> {
     const session = this.sessions.get(keyToString(key));
     if (!session?.isActive) return 'unavailable';
     const statusRequestId = 'mcp_status_' + randomUUID();
@@ -1606,14 +1606,16 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
     // No answer (timeout) or an `error` verdict: nothing is known about the
     // server, so nothing may be done to it.
     if (!status?.isSuccess) return 'unavailable';
-    const decision = decideMcpHeal(getMcpServerStatus(status.payload, serverName));
+    const listedServer = findListedMcpServer(status.payload, legacyServerName === undefined ? [serverName] : [serverName, legacyServerName]);
+    const decision = decideMcpHeal(listedServer?.status ?? null);
     if (decision === 'healthy') return 'healthy';
-    if (decision === 'skip') return 'skipped';
+    if (decision === 'skip' || listedServer === null) return 'skipped';
     const reconnectRequestId = 'mcp_reconnect_' + randomUUID();
-    const reconnect = await this.requestControl(session, reconnectRequestId, buildMcpReconnectControlRequest(reconnectRequestId, serverName));
+    const reconnect = await this.requestControl(session, reconnectRequestId, buildMcpReconnectControlRequest(reconnectRequestId, listedServer.name));
     // `mcp_reconnect` answers a bare success ack (no inner record); anything
     // else means the reconnect did not land, so the server is still broken.
-    return reconnect?.isSuccess === true ? 'healed' : 'unavailable';
+    if (reconnect?.isSuccess !== true) return 'unavailable';
+    return listedServer.name === serverName ? 'healed' : 'healedLegacy';
   }
 
   private applyAction(session: StreamSession, action: ClaudeStreamAction): void {

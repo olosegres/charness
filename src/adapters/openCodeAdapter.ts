@@ -28,6 +28,7 @@ import { formatResumeContext, resumeContextTurnLimit } from '../resumeContext';
 import { stripThreadContextPreamble } from '../threadContextPreamble';
 import { getOpenQuestionForSession } from '../openCodeOpenQuestion';
 import { buildOpenCodeSchedulerMcpRegistration, schedulerMcpServerName } from '../scheduler/injection';
+import { legacySchedulerMcpServerName } from '../legacyNames';
 import { checkIsRecord } from '../utils/checkIsRecord';
 import {
   buildSessionTitleSnippet,
@@ -1416,6 +1417,18 @@ export function checkNeedsSchedulerMcpReregister(mcpStatus: unknown): boolean {
   const entry = (mcpStatus as Record<string, unknown>)[schedulerMcpServerName];
   if (!entry || typeof entry !== 'object') return true;
   return (entry as Record<string, unknown>).status !== 'connected';
+}
+
+/**
+ * @description Pure decision for the migration from the pre-rename server name: given the same status map, is a registration still
+ * standing under `legacySchedulerMcpServerName` that must be disconnected so its tools do not double the bot's? True for an entry
+ * in any state but `disabled` (disconnecting is what makes it `disabled`, so a second boot does nothing). False for no entry and for
+ * a malformed answer: a name the server never had is answered with a 404, so nothing is sent on a guess.
+ */
+export function checkNeedsLegacySchedulerMcpDisconnect(mcpStatus: unknown): boolean {
+  if (!checkIsOpenCodeRecord(mcpStatus)) return false;
+  const entry = mcpStatus[legacySchedulerMcpServerName];
+  return checkIsOpenCodeRecord(entry) && entry.status !== 'disabled';
 }
 
 /**
@@ -3851,8 +3864,9 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
         buildDirectoryScopedPath('/mcp', directory),
       );
       if (!checkNeedsSchedulerMcpReregister(mcpStatus)) {
-        // A registration that timed out can still have landed on the server.
-        this.clearSchedulerMcpRetry(directory);
+        // A registration that timed out can still have landed on the server. The retry stays armed while the
+        // pre-rename registration could not be disconnected, so that failure is retried a bounded number of times too.
+        if (await this.retireLegacySchedulerMcp(directory, mcpStatus)) this.clearSchedulerMcpRetry(directory);
         return;
       }
       // The live server contradicts the Set gate (stale entry from a prior
@@ -4004,8 +4018,10 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
     const registration = await buildOpenCodeSchedulerMcpRegistration(directory);
     if (!registration) return;
     if (this.registeredSchedulerMcpDirs.has(directory)) return;
+    let mcpStatus: unknown;
     try {
-      await this.apiRequest(
+      // The server answers with its whole status map, the one the pre-rename registration is read from below.
+      mcpStatus = await this.apiRequest<unknown>(
         'POST',
         buildDirectoryScopedPath('/mcp', directory),
         registration,
@@ -4019,6 +4035,40 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
         e instanceof Error ? e.message : e,
       );
       this.scheduleSchedulerMcpRetry(directory);
+      return;
+    }
+    // Only after `charness` is registered: a failed registration must not also take the agent's remaining bot tools away.
+    await this.retireLegacySchedulerMcp(directory, mcpStatus);
+  }
+
+  /**
+   * @description Disconnect the registration a pre-rename bot left in `directory`'s instance under
+   * `legacySchedulerMcpServerName` (`POST /mcp/<name>/disconnect`, which leaves the entry `disabled`), so an agent does not see the
+   * bot's tools twice — an instance keeps its runtime registrations until its server restarts (measured against a live server), and the old one
+   * is likely still connected to the bot: its port and token survive an update.
+   * `mcpStatus` is a status map the server just gave. Best-effort: a failure is logged and retried through the registration retry
+   * (bounded), never thrown. Returns false when the disconnect failed.
+   */
+  private async retireLegacySchedulerMcp(directory: string, mcpStatus: unknown): Promise<boolean> {
+    if (!checkNeedsLegacySchedulerMcpDisconnect(mcpStatus)) return true;
+    try {
+      await this.apiRequest(
+        'POST',
+        buildDirectoryScopedPath(`/mcp/${encodeURIComponent(legacySchedulerMcpServerName)}/disconnect`, directory),
+      );
+      console.log(
+        `[OpenCode] ${directory}: disconnected the MCP server registered under the pre-rename name ${legacySchedulerMcpServerName}; ` +
+          `the bot's tools are served as ${schedulerMcpServerName}`,
+      );
+      appendDiagLog(`scheduler mcp legacy disconnected dir=${directory}`);
+      return true;
+    } catch (e) {
+      console.warn(
+        `[OpenCode] disconnecting the pre-rename MCP registration failed for ${directory}:`,
+        e instanceof Error ? e.message : e,
+      );
+      this.scheduleSchedulerMcpRetry(directory);
+      return false;
     }
   }
 

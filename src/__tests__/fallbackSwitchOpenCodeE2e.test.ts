@@ -78,6 +78,7 @@ import {
   type PersistedState,
 } from './e2e/fallbackFlowKit';
 import { createClaudeProfileLayout } from '../utils/claudeProfiles';
+import { legacySchedulerMcpServerName } from '../legacyNames';
 import { enDict } from '../i18n/en';
 import { claudeJsonStreamAdapterName, openCodeAdapterName } from '../adapters/adapterNames';
 import { getTelegramFlowTestTimingsEnv } from './telegramE2e/telegramFlowTimings';
@@ -292,6 +293,8 @@ describe('The usage-limit switch to and from OpenCode end to end: built charness
       persisted.claudeProfiles = { ...persisted.claudeProfiles, [takeoverAccount]: { createdAt: new Date().toISOString(), loggedIn: true, email: 'work@example.com', subscriptionType: 'max' } };
       persisted.fallbackChain = [{ backend: 'opencode', providerId: 'openai', modelId: 'gpt-5' }];
     });
+    // An OpenCode server that outlived the bot's update still holds the registration the old bot made, under the old name.
+    fakeOpenCode.seedMcpServer(path.join(getLayout().workRoot, claudeToOpenCode.folder), legacySchedulerMcpServerName);
 
     await claudeTopic.sendAndAwaitReply('/claude', 'ready in');
     claudeSessionId = getLaunchSessionId(getSessionLaunches(getLayout()).at(-1)?.argv ?? []) ?? '';
@@ -325,7 +328,12 @@ describe('The usage-limit switch to and from OpenCode end to end: built charness
       'the bridge carries the compaction summary under its own heading',
     );
     assert.ok(!bridge.text.includes(`User:\n${compactionSummaryStart}`), 'the summary is not told as a user turn');
-    assert.deepEqual(fakeOpenCode.mcpRegistrations.get(path.join(getLayout().workRoot, claudeToOpenCode.folder)), ['charness'], 'the bot registered its MCP server, named charness, in the folder\'s instance');
+    const openCodeFolder = path.join(getLayout().workRoot, claudeToOpenCode.folder);
+    assert.deepEqual(fakeOpenCode.mcpRegistrations.get(openCodeFolder), ['charness'], 'the bot registered its MCP server, named charness, in the folder\'s instance');
+    // The old registration is disconnected AFTER charness is registered, so the agent never has fewer bot tools than before and never both sets.
+    assert.deepEqual(fakeOpenCode.mcpDisconnects, [{ directory: openCodeFolder, name: legacySchedulerMcpServerName }], 'the registration left under the pre-rename name was disconnected, once');
+    const mcpCalls = fakeOpenCode.requests.filter((request) => request.directory === openCodeFolder && request.path.startsWith('/mcp') && request.method === 'POST');
+    assert.deepEqual(mcpCalls.map((request) => request.path), ['/mcp', `/mcp/${legacySchedulerMcpServerName}/disconnect`], 'registered first, disconnected second');
 
     await getCharness().waitFor('the switch to reach state.json', replyTimeoutMs, () => readAgent(claudeToOpenCode.threadId)?.name === openCodeAdapterName);
     const parked = readPersistedState(getLayout()).parkedSessions?.[getTopicKey(claudeToOpenCode.threadId)];

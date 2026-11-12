@@ -33,6 +33,15 @@ export const legacyDefaultDataDirName = '.telegramCode';
 export const configDirName = 'charness';
 export const legacyConfigDirNames: readonly string[] = ['telegramcode', 'telegram-code'];
 
+/**
+ * The bot's MCP server was called `telegramBot` until it was renamed `charness` (`scheduler/injection.ts`). A running agent keeps the
+ * server name its launch config carried: a Claude process lives until its idle stop and an OpenCode server's instance until the
+ * server restarts, so for one release the boot repair of a Claude session also looks for this name (`claudeMcpHeal.ts`) and the OpenCode
+ * reconcile disconnects a registration left under it (`openCodeAdapter.ts`), instead of letting its failed tools or its twin tool set
+ * stand. Nothing registers under this name any more.
+ */
+export const legacySchedulerMcpServerName = 'telegramBot';
+
 /** A renamed environment variable: the current name and the one earlier releases used. */
 export interface RenamedEnvName {
   current: string;
