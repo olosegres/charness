@@ -253,8 +253,10 @@ project's `.mcp.json`; inspect what's active in a thread with `/mcp`.)
 The name `charness` belongs to the bot. An entry of that name in `DATA_DIR/mcp.json` or
 `DATA_DIR/threads/<key>.json` is left out of the copy Claude is given (the bot logs a warning
 naming the file), so the bot's own registration is the only `charness` an agent sees; rename
-your server to keep it. A server named `charness` in your own Claude or OpenCode configuration
-(`~/.claude.json`, a project's `.mcp.json`, `opencode.json`) is not the bot's to filter: rename it too.
+your server to keep it. A server named `charness` in your own Claude configuration (`~/.claude.json`, a project's `.mcp.json`) is not
+the bot's to filter: rename it too. In OpenCode the bot registers its own `charness` over a same-named server of your `opencode.json`
+in each folder's instance (a recreated instance brings yours back, so the bot registers again at every boot) and logs one warning per
+folder: rename yours to keep it.
 A custom permission allow-list that names the bot's tools uses the prefix `mcp__charness__`.
 
 Third-party OpenCode MCP servers, including a separate `telegram-mcp`, belong to

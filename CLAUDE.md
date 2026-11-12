@@ -92,7 +92,7 @@ per-backend controls are optional methods the bot checks before calling.
   per chat off the `SessionKey`; `OWNER_USER_ID` required for `dm`, optional for `both`).
 - **Bot-injected MCP server `charness`** (HTTP, loopback, per-session HMAC tokens scoped `thread:` /
   `dir:`; the one constant `schedulerMcpServerName`, so the tools read `mcp__charness__<tool>` in Claude Code and `charness_<tool>` in OpenCode;
-  the name is the bot's: `mcpConfig.ts` drops an operator's entry of it from the copies it hands Claude) goes into EVERY bot-started session: `schedule_*`, `compact_conversation`, `answer_request`,
+  the name is the bot's: `mcpConfig.ts` drops an operator's entry of it from the copies it hands Claude, the OpenCode adapter registers its own over a config-defined one) goes into EVERY bot-started session: `schedule_*`, `compact_conversation`, `answer_request`,
   `send_file_to_user`, `send_messages_to_user` (a non-Telegram session sees only `answer_request` +
   `compact_conversation`, plus `jira_get_attachment` for a Jira one). It is bot plumbing, separate from the user-editable MCP hierarchy (mostly dormant,
   undocumented). Clients cache `instructions` and tool descriptions at connect: a running agent sees an edit

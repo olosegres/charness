@@ -253,13 +253,17 @@ describe('scheduler MCP registration per directory on session start (plan 2026-0
     const calls: { method: string; url: string; body: unknown }[] = [];
     adapter['apiRequest'] = (async (method: string, url: string, body: unknown) => {
       calls.push({ method, url, body });
+      return url.startsWith('/config') ? {} : undefined;
     }) as OpenCodeAdapter['apiRequest'];
 
     adapter['connectSse'](keyA);
     // Registration is fire-and-forget (async); let the microtask settle.
     await new Promise((resolve) => setImmediate(resolve));
 
-    assert.equal(calls.length, 1, 'exactly one registration POST');
+    assert.deepEqual(calls.map((call) => `${call.method} ${call.url}`), [
+      `POST /mcp?directory=${encodeURIComponent(sharedDir)}`,
+      `GET /config?directory=${encodeURIComponent(sharedDir)}`,
+    ], 'exactly one registration POST, then the one read of the folder\'s config');
     assert.equal(calls[0].method, 'POST');
     assert.equal(calls[0].url, `/mcp?directory=${encodeURIComponent(sharedDir)}`);
 
@@ -278,7 +282,7 @@ describe('scheduler MCP registration per directory on session start (plan 2026-0
     // Latched: a second connect for a session in the SAME dir does not re-POST.
     adapter['connectSse'](keyA);
     await new Promise((resolve) => setImmediate(resolve));
-    assert.equal(calls.length, 1, 'idempotent — the dir Set prevents a re-POST');
+    assert.equal(calls.length, 2, 'idempotent — the dir Set prevents a re-POST, and the config is not read again');
   });
 
   it('registers reattached sessions after scheduler injection becomes available', async () => {
@@ -288,6 +292,7 @@ describe('scheduler MCP registration per directory on session start (plan 2026-0
     const calls: string[] = [];
     adapter['apiRequest'] = (async (_method: string, url: string) => {
       calls.push(url);
+      return url.startsWith('/config') ? {} : undefined;
     }) as OpenCodeAdapter['apiRequest'];
 
     // A session that connected while injection was still inert.
@@ -299,7 +304,7 @@ describe('scheduler MCP registration per directory on session start (plan 2026-0
     adapter.registerSchedulerMcpForActiveSessions();
     await new Promise((resolve) => setImmediate(resolve));
 
-    assert.deepEqual(calls, [`/mcp?directory=${encodeURIComponent(sharedDir)}`]);
+    assert.deepEqual(calls, [`/mcp?directory=${encodeURIComponent(sharedDir)}`, `/config?directory=${encodeURIComponent(sharedDir)}`]);
   });
 
   it('clearing the dir Set (what restartServer does) makes the next connect re-register (S4)', async () => {
@@ -310,18 +315,21 @@ describe('scheduler MCP registration per directory on session start (plan 2026-0
     const calls: string[] = [];
     adapter['apiRequest'] = (async (_method: string, url: string) => {
       calls.push(url);
+      return url.startsWith('/config') ? {} : undefined;
     }) as OpenCodeAdapter['apiRequest'];
 
     adapter['connectSse'](keyA);
     await new Promise((resolve) => setImmediate(resolve));
-    assert.equal(calls.length, 1, 'registered once on first connect');
+    assert.equal(calls.filter((url) => url.startsWith('/mcp')).length, 1, 'registered once on first connect');
 
-    // restartServer wipes the server's MCP table, so it clears the gate; the
-    // resume path then re-runs connectSse for each still-active session.
+    // restartServer wipes the server's MCP table, so it clears the gate (and the answers about the folder's config, which the new
+    // server reads afresh); the resume path then re-runs connectSse for each still-active session.
     adapter['registeredSchedulerMcpDirs'].clear();
+    adapter['configDefinedMcpNames'].clear();
     adapter['connectSse'](keyA);
     await new Promise((resolve) => setImmediate(resolve));
-    assert.equal(calls.length, 2, 're-registered after the Set was cleared on restart');
+    assert.equal(calls.filter((url) => url.startsWith('/mcp')).length, 2, 're-registered after the Set was cleared on restart');
+    assert.equal(calls.filter((url) => url.startsWith('/config')).length, 2, 'and the config read again for the new server');
     assert.equal(adapter['registeredSchedulerMcpDirs'].has(sharedDir), true, 'dir re-latched');
   });
 
@@ -388,7 +396,7 @@ describe('scheduler MCP registration per directory on session start (plan 2026-0
 
     await adapter.reconcileSchedulerMcpForActiveSessions();
 
-    assert.equal(gets.length, 1, 'a shared folder is reconciled once, not once per thread');
+    assert.deepEqual(gets, [`/mcp?directory=${encodeURIComponent(sharedDir)}`, `/config?directory=${encodeURIComponent(sharedDir)}`], 'a shared folder is reconciled once, not once per thread: its status and its config read once');
     assert.equal(posts.length, 0, 'a connected dir is not re-registered');
   });
 });
@@ -612,13 +620,110 @@ describe('a registration left under the pre-rename server name is disconnected, 
     assert.ok(!giveUp.includes(legacySchedulerMcpServerName), 'and says nothing about the old name');
   });
 
-  it('a folder with no legacy registration gets no config lookup and no disconnect', async () => {
+  it('an operator\'s own server named charness is not taken for the bot\'s: the bot registers its own over it, and warns once', async () => {
+    const { adapter } = createAdapterWithSession();
+    // A recreated instance dropped the bot's runtime registration and brought the operator's back — a healthy server, `connected`.
+    const calls = stubServer(adapter, {
+      liveStatus: { [schedulerMcpServerName]: connected },
+      config: { mcp: { [schedulerMcpServerName]: { type: 'remote', url: 'http://operator.invalid/mcp' } } },
+    });
+
+    await adapter.reconcileSchedulerMcpForActiveSessions();
+
+    assert.deepEqual(calls, [`GET /mcp?directory=${encodeURIComponent(sharedDir)}`, `GET ${configUrl}`, `POST ${registerUrl}`], 'registered although the status says connected');
+    assert.equal(warnings.length, 1);
+    assert.match(warnings[0], new RegExp(`defines an MCP server named ${schedulerMcpServerName} — that name belongs to the bot`));
+    assert.ok(!warnings[0].includes('operator.invalid'), 'the entry\'s url is not logged');
+    assert.equal(adapter['registeredSchedulerMcpDirs'].has(sharedDir), true);
+  });
+
+  it('what the config says about a folder is read once however often it reconciles; the bot\'s own server is registered each time', async () => {
+    const { adapter } = createAdapterWithSession();
+    const calls = stubServer(adapter, {
+      liveStatus: { [schedulerMcpServerName]: connected },
+      config: { mcp: { [schedulerMcpServerName]: { type: 'remote' }, [legacySchedulerMcpServerName]: { type: 'remote' } } },
+    });
+
+    await adapter.reconcileSchedulerMcpForActiveSessions();
+    await adapter.reconcileSchedulerMcpForActiveSessions();
+    await adapter.reconcileSchedulerMcpForActiveSessions();
+
+    assert.equal(calls.filter((call) => call === `GET ${configUrl}`).length, 1, 'one GET /config for the folder');
+    assert.equal(warnings.length, 1, 'one warning for the folder');
+    assert.equal(calls.filter((call) => call === `POST ${registerUrl}`).length, 3, 'the bot\'s own is registered at every reconcile: idempotent, and the only way to be sure');
+  });
+
+  it('a session start in a folder whose config defines the bot\'s name warns too', async () => {
+    const { adapter, keyA } = createAdapterWithSession();
+    stubServer(adapter, { liveStatus: {}, config: { mcp: { [schedulerMcpServerName]: { type: 'remote' } } } });
+
+    adapter['connectSse'](keyA);
+    await settle();
+
+    assert.equal(adapter['registeredSchedulerMcpDirs'].has(sharedDir), true, 'registered');
+    assert.equal(warnings.length, 1);
+    assert.match(warnings[0], /belongs to the bot/);
+  });
+
+  it('when the config cannot be read, a connected charness is left as it is (the status is all there is) and the failure is logged', async () => {
+    const { adapter } = createAdapterWithSession();
+    const calls = stubServer(adapter, { liveStatus: { [schedulerMcpServerName]: connected }, failOn: configUrl });
+
+    await assert.doesNotReject(adapter.reconcileSchedulerMcpForActiveSessions());
+
+    assert.ok(!calls.includes(`POST ${registerUrl}`), calls.join(' | '));
+    assert.equal(warnings.length, 1);
+    assert.match(warnings[0], /reading the OpenCode config of .* failed/);
+  });
+
+  it('a folder whose config defines only the OLD name asks for the config once however often it reconciles', async () => {
+    const { adapter } = createAdapterWithSession();
+    const calls = stubServer(adapter, {
+      liveStatus: { [schedulerMcpServerName]: connected, [legacySchedulerMcpServerName]: connected },
+      config: { mcp: { [legacySchedulerMcpServerName]: { type: 'remote' } } },
+    });
+
+    await adapter.reconcileSchedulerMcpForActiveSessions();
+    await adapter.reconcileSchedulerMcpForActiveSessions();
+
+    assert.equal(calls.filter((call) => call === `GET ${configUrl}`).length, 1);
+    assert.ok(!calls.includes(`POST ${disconnectUrl}`));
+    assert.deepEqual(warnings, [], 'the old name in the operator\'s config is not a warning: it is theirs and it is left alone');
+  });
+
+  it('the retry keeps saying what is pending: a disconnect that failed stays "the old name is still connected" while the status reads fail', async () => {
+    const { adapter } = createAdapterWithSession();
+    let statusReads = 0;
+    adapter['apiRequest'] = (async (method: string, url: string) => {
+      if (method === 'POST' && url === disconnectUrl) throw new Error('server sick');
+      if (method === 'GET' && url === configUrl) return {};
+      if (method === 'GET') {
+        statusReads += 1;
+        if (statusReads > 1) throw new Error('server sick');
+        return { [schedulerMcpServerName]: connected, [legacySchedulerMcpServerName]: connected };
+      }
+      return undefined;
+    }) as OpenCodeAdapter['apiRequest'];
+
+    await adapter.reconcileSchedulerMcpForActiveSessions();
+    for (const pause of schedulerMcpRetryDelaysMs) {
+      mock.timers.tick(pause);
+      await settle();
+    }
+
+    assert.equal(adapter['schedulerMcpRetries'].size, 0, 'it gave up');
+    const giveUp = warnings.at(-1) ?? '';
+    assert.ok(giveUp.includes(legacySchedulerMcpServerName) && giveUp.includes('still connected'), giveUp);
+    assert.ok(!giveUp.includes('not registered'), 'the reconcile\'s own failed status reads did not turn it into a registration problem');
+  });
+
+  it('a folder with no legacy registration gets its config read once and no disconnect', async () => {
     const { adapter } = createAdapterWithSession();
     const calls = stubServer(adapter, { liveStatus: { [schedulerMcpServerName]: connected, 'telegram-mcp': connected } });
 
     await adapter.reconcileSchedulerMcpForActiveSessions();
 
-    assert.deepEqual(calls, [`GET /mcp?directory=${encodeURIComponent(sharedDir)}`]);
+    assert.deepEqual(calls, [`GET /mcp?directory=${encodeURIComponent(sharedDir)}`, `GET ${configUrl}`]);
   });
 });
 
@@ -671,7 +776,7 @@ describe('scheduler MCP registration retry after a failure', () => {
 
     mock.timers.tick(schedulerMcpRetryDelaysMs[0]);
     await settle();
-    assert.deepEqual(calls, ['POST', 'GET', 'POST'], 'the retry read the live status, then registered');
+    assert.deepEqual(calls, ['POST', 'GET', 'POST', 'GET'], 'the retry read the live status, registered, then read the folder\'s config');
     assert.equal(adapter['registeredSchedulerMcpDirs'].has(sharedDir), true);
     assert.equal(adapter['schedulerMcpRetries'].size, 0, 'nothing left pending');
   });
@@ -690,7 +795,7 @@ describe('scheduler MCP registration retry after a failure', () => {
     mock.timers.tick(schedulerMcpRetryDelaysMs[0]);
     await settle();
 
-    assert.deepEqual(calls, ['POST', 'GET'], 'the server already lists it as connected');
+    assert.deepEqual(calls, ['POST', 'GET', 'GET'], 'the server already lists it as connected: only the folder\'s config is read besides');
     assert.equal(adapter['schedulerMcpRetries'].size, 0);
   });
 
@@ -779,6 +884,9 @@ describe('compaction plugin activation at boot', () => {
     adapter['sessions'].set('-100:3', makeSession(makeTelegramKey(-100, 3), 'ses_3', loadedDir));
     adapter['registeredSchedulerMcpDirs'].add(idleDir);
     adapter['registeredSchedulerMcpDirs'].add(busyDir);
+    // What the bot learned about each folder's own OpenCode config: a recreated instance reads the config afresh.
+    adapter['configDefinedMcpNames'].set(idleDir, { isBotNameDefined: false, isLegacyNameDefined: false });
+    adapter['configDefinedMcpNames'].set(busyDir, { isBotNameDefined: false, isLegacyNameDefined: false });
     const posts = stubServer(adapter, {
       [idleDir]: { plugin: ['opencode-pty'], status: {} },
       [busyDir]: { plugin: ['opencode-pty'], status: { ses_2: { type: 'busy' } } },
@@ -806,6 +914,8 @@ describe('compaction plugin activation at boot', () => {
       'the recreated directory lost its MCP registration, so the reconcile must re-POST it',
     );
     assert.equal(adapter['registeredSchedulerMcpDirs'].has(busyDir), true, 'an untouched directory keeps its gate');
+    assert.equal(adapter['configDefinedMcpNames'].has(idleDir), false, 'the recreated instance\'s config is read afresh');
+    assert.equal(adapter['configDefinedMcpNames'].has(busyDir), true, 'an untouched directory keeps what was learned');
   });
 
   it('an idle directory whose instance loaded an OLDER plugin text is recreated as well; a busy one is left alone', async () => {
@@ -870,8 +980,13 @@ describe('checkNeedsSchedulerMcpReregister', () => {
   });
   it('treats a malformed/empty response as needing a register', () => {
     assert.equal(checkNeedsSchedulerMcpReregister(null), true);
+    assert.equal(checkNeedsSchedulerMcpReregister(undefined), true);
     assert.equal(checkNeedsSchedulerMcpReregister('nope'), true);
+    assert.equal(checkNeedsSchedulerMcpReregister([]), true);
     assert.equal(checkNeedsSchedulerMcpReregister({}), true);
+    assert.equal(checkNeedsSchedulerMcpReregister({ charness: null }), true);
+    assert.equal(checkNeedsSchedulerMcpReregister({ charness: ['connected'] }), true, 'an entry that is not a record');
+    assert.equal(checkNeedsSchedulerMcpReregister({ charness: { status: 3 } }), true);
   });
 });
 

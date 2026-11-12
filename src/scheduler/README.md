@@ -111,6 +111,13 @@ constants in the code; this README keeps what the code cannot say.
   defines is theirs and stays (runtime registrations never show up in `/config`), and a lookup that fails or answers no config
   disconnects nothing. A disconnect that keeps failing is retried through the registration retry and the last log line says
   the old name is still connected, not that charness is unregistered. Nothing registers under it.
+- **An operator's own server named `charness`** (in their `opencode.json`): a runtime `POST /mcp` of the name replaces it, and a
+  recreated instance (`POST /instance/dispose`) drops that registration and brings the operator's back — healthy, so `connected`,
+  and the status map cannot tell it from the bot's. The folder's `GET /config` can (runtime registrations never show up in it): read
+  once per folder and server generation (`readConfigDefinedMcpNames`, dropped on a server restart and an instance recreate), and
+  where it defines the bot's name the reconcile registers the bot's own whatever the status says, with one warning per folder. Why
+  registering anyway: the alternative leaves every agent of the folder without `answer_request` and the other bot tools, silently,
+  while the cost is the operator's same-named server in that instance, which the warning explains and renaming restores.
 - MCP cancellation is a separate HTTP notification while every transport is fresh, so the server correlates by
   verified token + a bounded client id (injected per registration) + the typed request id, and keeps a
   short-lived cancellation-before-registration tombstone set.
