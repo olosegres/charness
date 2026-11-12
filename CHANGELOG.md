@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 3.13.0 — 2026-11-12
+
 **A Jira instance with a `trustedGroup` can now trust only the apps and automations you list: the new `jira.json` key `trustedApps` names their account ids, and any other app is treated like a person outside the group.**
 Before, `trustedGroup` trusted its members, the AI account and EVERY app or automation account (`accountType` `app`): the text any of them wrote reached the agent and any of their hand-overs started it. On a real site the group holds dozens of app users — chat, mail, error-tracking and help-desk integrations — that can relay text written by outsiders into an issue, so an outsider's words could steer the agent through one of them. Now, with `"trustedApps": ["<account id>", …]` set (even `[]`), an app is trusted only when its id is listed — membership in the group is not enough for an app — and every other app gets what a person outside the group gets: its text is withheld, its hand-over opens no request (the usual notice, the issue goes back to the requester), its @-mention is ignored. Each app that is not listed is logged once — the first time it acts on an issue, not at the start — with its name and account id, so you can copy the ids to trust. A listed id adds no trust to a person's account.
 Nothing changes for an instance that does not set the key — every app stays trusted — except one warning at the start that names `trustedApps` (it is not logged without a `trustedGroup`). `trustedApps` without a `trustedGroup` refuses the start: without a group everyone is trusted anyway. See SETUP.md, «Jira setup».
