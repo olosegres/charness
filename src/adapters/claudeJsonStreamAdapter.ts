@@ -1216,6 +1216,15 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
     return session?.isActive === true;
   }
 
+  flushPendingOutput(key: SessionKey): void {
+    const session = this.sessions.get(keyToString(key));
+    if (!session?.isActive) return;
+    // The text the process wrote an instant before its tool call may not have been polled yet (the poll lags by its backoff):
+    // read it first, or the batch flushed below would miss it and the answer would still overtake it.
+    this.refreshWorkingState(key);
+    this.flushAnswer(session, false);
+  }
+
   checkIsBusy(key: SessionKey): boolean {
     return this.sessions.get(keyToString(key))?.isBusy === true;
   }

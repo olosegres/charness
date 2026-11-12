@@ -245,7 +245,7 @@ import { renderAgentFrame, renderAgentHtml, type AgentFrame } from './connectors
 import { splitMessage, MAX_MESSAGE_LEN } from './connectors/telegram/messageSplit';
 import { buildFoldedMessage } from './connectors/telegram/foldedMessage';
 import { unpinMessagesReportingRetryable } from './connectors/telegram/unpinMessages';
-import { addPendingOutput, checkHasPendingOutput, getOutputFlushPlan, getUnsentRemainder, requeueUnsentRemainder, takePendingOutput, type PendingOutputBuffer } from './connectors/telegram/outputFlushPlan';
+import { addPendingOutput, checkHasPendingOutput, getOutputFlushPlan, getUnsentRemainder, requeueUnsentRemainder, takePendingOutput } from './connectors/telegram/outputFlushPlan';
 import { glueBacklogFrames } from './connectors/telegram/outputBacklogGlue';
 import { checkShouldKeepTyping as checkShouldKeepTypingDecision } from './utils/typingActive';
 import { checkIsTypingStuckByLeak } from './utils/typingLoopBackstop';
@@ -265,7 +265,7 @@ import { installLinkPreviewSuppression } from './utils/linkPreviewSuppression';
 import { pruneExpiredBuckets, retentionMs as logBucketRetentionMs } from './utils/rotatingLogFile';
 import { consoleFileBase, consoleFileExt } from './utils/consoleFileTap';
 import { clearThreadOutputQueues } from './utils/clearThreadOutputQueues';
-import { getGroupFinalizePlan } from './utils/groupFinalizePlan';
+import { landGroupOutput, markFlushInFlight, type GroupFinalizeQueue } from './utils/groupFinalizePlan';
 import { persistAdapterSessionIds } from './utils/persistAdapterSessionIds';
 import { checkIsConversationRecorded, getEnsureSessionPlan, getPersistedSessionIdForAdapter, getResumeFailureAction, type ResumeFailureKind } from './utils/ensureSessionPlan';
 import { AgentBackendUnavailableError } from './adapters/backendUnavailableError';
@@ -1694,9 +1694,8 @@ interface ThreadMessageState {
   undeletedMessageIds: number[];
 }
 
-interface OutputQueueState extends PendingOutputBuffer {
+interface OutputQueueState extends GroupFinalizeQueue {
   isProcessing: boolean;
-  debounceTimer: NodeJS.Timeout | null;
 }
 
 /**
@@ -3163,7 +3162,7 @@ function getOutputQueueState(key: SessionKey): OutputQueueState {
   const k = keyToString(key);
   let s = outputQueues.get(k);
   if (!s) {
-    s = { pendingSegments: [], isProcessing: false, debounceTimer: null };
+    s = { pendingSegments: [], isProcessing: false, debounceTimer: null, flushSettled: null };
     outputQueues.set(k, s);
   }
   return s;
@@ -4620,6 +4619,8 @@ async function processOutputQueue(key: SessionKey): Promise<void> {
   const q = getOutputQueueState(key);
   if (q.isProcessing || !checkHasPendingOutput(q)) return;
   q.isProcessing = true;
+  // Landing the thread's output ahead of an answer waits for this send (`landGroupOutput`).
+  const endFlushInFlight = markFlushInFlight(q);
   try {
     const flush = takePendingOutput(q);
     if (!flush) return;
@@ -4634,6 +4635,7 @@ async function processOutputQueue(key: SessionKey): Promise<void> {
     if (unsentRemainder) requeueUnsentRemainder(q, unsentRemainder);
   } finally {
     q.isProcessing = false;
+    endFlushInFlight();
     if (checkHasPendingOutput(q)) {
       // Audit S13 / #30: the re-trigger `setTimeout` used to be a bare
       // call whose handle was never stored. A `queueOutput` call between
@@ -4662,6 +4664,12 @@ async function processOutputQueue(key: SessionKey): Promise<void> {
  * under a sustained 429 the settled final answer could vanish with only a
  * `console.error`. This drains the buffer FIRST.
  *
+ * The same drain keeps the order of a topic: a question posted, or an answer
+ * delivered through `answer_request`, goes straight to the topic and would
+ * otherwise overtake the text the agent streamed before it, which still waits out
+ * the debounce. {@link landGroupOutput} lands that text (and any flush already
+ * sending) first.
+ *
  * Captures + nulls the buffer SYNCHRONOUSLY before its await, so the
  * immediately-following `clearThreadOutputQueues` finds nothing to discard and
  * the drain is never double-sent (mirrors `processOutputQueue`'s snapshot
@@ -4673,26 +4681,13 @@ async function processOutputQueue(key: SessionKey): Promise<void> {
 async function finalizeGroupOutput(key: SessionKey): Promise<void> {
   const q = outputQueues.get(keyToString(key));
   if (!q) return;
-  const plan = getGroupFinalizePlan(q);
-  if (plan.action === 'noop') return; // fully delivered → no-op, no dupe.
-  // Snapshot is captured by the plan; empty the buffer SYNCHRONOUSLY before the
-  // await so the immediately-following clear / a concurrent flush can't re-send it.
-  q.pendingSegments = [];
-  if (q.debounceTimer) {
-    clearTimeout(q.debounceTimer);
-    q.debounceTimer = null;
-  }
-  for (const segment of plan.segments) {
-    const { unsentRemainder } = await sendOutputImmediate(key, segment.output, segment.isContinuation, segment.startsNewMessage);
-    // A remainder that still 429'd at teardown is dropped (the buffer is being
-    // torn down anyway — unchanged from the pre-S2 discard), and so is everything behind it. Do NOT re-queue: the
-    // queue is about to be cleared, and re-queuing would race that clear. At 1/2s
-    // global pacing a 429 here is essentially impossible.
-    if (unsentRemainder) {
-      console.warn(`[send] ${keyToString(key)} finalize remainder 429'd and was dropped at teardown`);
-      return;
-    }
-  }
+  const { isRemainderDropped } = await landGroupOutput(q, (segment) =>
+    sendOutputImmediate(key, segment.output, segment.isContinuation, segment.startsNewMessage));
+  // A remainder that still 429'd at teardown is dropped (the buffer is being
+  // torn down anyway — unchanged from the pre-S2 discard), and so is everything behind it. Do NOT re-queue: the
+  // queue is about to be cleared, and re-queuing would race that clear. At 1/2s
+  // global pacing a 429 here is essentially impossible.
+  if (isRemainderDropped) console.warn(`[send] ${keyToString(key)} finalize remainder 429'd and was dropped at teardown`);
 }
 
 /**
@@ -14393,6 +14388,12 @@ function createAnswerSinks(jiraAnswerSink: AnswerSink | null): AnswerSinks {
   const sinks = new Map<PlatformId, AnswerSink>([
     ['telegram', createTelegramAnswerSink({
       sendMessages: sendMessagesToThread,
+      landStreamedOutput: async (key) => {
+        // The text the agent streamed just before its answer may still sit in the adapter's own batch window: it has to reach
+        // the output queue before that queue is landed.
+        getThreadAdapter(key).flushPendingOutput?.(key);
+        await getOutboundFor(key).finalize(key);
+      },
       postAlert: (key, requestId, reason) =>
         withThreadLocale(key, () => replyToThread(key, t(requestAlertTextKeys[reason], { requestId }))),
       // An answer's pin and the alert's pin must notify: the operator runs topics muted and a pin is what pierces that.

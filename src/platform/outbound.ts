@@ -218,7 +218,9 @@ export interface ConnectorOutbound {
   setActivity(key: SessionKey, activity: ActivityState): void;
   /**
    * Land anything still in flight for the conversation as permanent content, so
-   * a teardown can never discard the agent's final answer. Idempotent.
+   * a teardown can never discard the agent's final answer, and so content posted
+   * straight afterwards (a question, an `answer_request` answer) lands below what
+   * the agent streamed before it. Idempotent.
    */
   finalize(key: SessionKey): Promise<void>;
   /** Drop per-conversation delivery state on a full teardown. Called AFTER {@link finalize}. */
