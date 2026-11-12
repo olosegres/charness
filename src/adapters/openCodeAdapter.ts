@@ -1447,10 +1447,37 @@ export function getOpenCodeConfigMcpLookup(config: unknown, serverName: string):
 
 /**
  * @name SchedulerMcpPending
- * @description What a scheduler-MCP retry is for: the bot's own registration, or the disconnect of the registration an older bot left
- * under the pre-rename name. The retry's log lines say which, so an operator knows which of the two is still standing.
+ * @description What a scheduler-MCP retry is for: the bot's own registration, the disconnect of the registration an older bot left under
+ * the pre-rename name, or the read of the folder's OpenCode config that tells whether a `connected` charness is the bot's. The retry's
+ * log lines say which, so an operator knows what is still open — and above all that the bot's tools are NOT missing when only the
+ * config read is.
  */
-type SchedulerMcpPending = 'registration' | 'legacyDisconnect';
+type SchedulerMcpPending = 'registration' | 'legacyDisconnect' | 'configRead';
+
+/** The wording of a retry's two log lines: what it is retrying, and what stands when the last pause is over. */
+function describeSchedulerMcpPending(pending: SchedulerMcpPending, directory: string): { retrying: string; gaveUp: string } {
+  switch (pending) {
+    case 'registration':
+      return {
+        retrying: `the scheduler MCP registration for ${directory}`,
+        gaveUp: `[OpenCode] scheduler MCP for ${directory} is still not registered; the next session start or bot boot retries`,
+      };
+    case 'legacyDisconnect':
+      return {
+        retrying: `the disconnect of the pre-rename MCP registration for ${directory}`,
+        gaveUp:
+          `[OpenCode] ${directory}: the MCP server registered under the pre-rename name ${legacySchedulerMcpServerName} is still ` +
+          `connected, next to ${schedulerMcpServerName} (its disconnect kept failing); the next session start or bot boot retries`,
+      };
+    case 'configRead':
+      return {
+        retrying: `the read of the OpenCode config of ${directory}`,
+        gaveUp:
+          `[OpenCode] ${directory}: the OpenCode config could not be read, so it is not known whether the connected ${schedulerMcpServerName} ` +
+          `is the bot's or one the operator defined; the next session start or bot boot retries`,
+      };
+  }
+}
 
 /**
  * @name ConfigDefinedMcpNames
@@ -1758,9 +1785,11 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
   private registeredSchedulerMcpDirs: Set<string> = new Set();
 
   /**
-   * Directories whose scheduler-MCP registration failed and is waiting for a
-   * retry: the number of retries already scheduled, and the pending timer (null
-   * while the retry itself runs). Cleared by a registration that succeeds.
+   * Directories whose scheduler-MCP job — the bot's registration and the disconnect of the pre-rename one that goes with it — is
+   * waiting for a retry: the number of retries already scheduled, the pending timer (null while the retry itself runs) and what is
+   * pending (the wording of its log lines). Forgotten only when the WHOLE job is done (`registerSchedulerMcpForDirectory`, the
+   * reconcile's `connected` branch), never by the registration POST alone: a step that fails after it keeps the entry and its count,
+   * so the retries stay bounded.
    */
   private schedulerMcpRetries: Map<string, { attempt: number; timer: NodeJS.Timeout | null; pending: SchedulerMcpPending }> = new Map();
 
@@ -3908,12 +3937,15 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
         const definedNames = await this.readConfigDefinedMcpNames(directory);
         if (definedNames === null) {
           // Whose the connected server is stays unknown until the config is read: try again rather than leave the folder on a guess
-          // that, when wrong, leaves its agents without the bot's tools until the next boot.
-          this.scheduleSchedulerMcpRetry(directory, 'registration');
+          // that, when wrong, leaves its agents without the bot's tools until the next boot. The bot's own is most likely in place,
+          // and the retry's lines say it is the READ that is pending, not the registration.
+          this.scheduleSchedulerMcpRetry(directory, 'configRead');
           return;
         }
-        if (definedNames.isBotNameDefined) {
-          this.registeredSchedulerMcpDirs.delete(directory);
+        // Register the bot's own only when the gate shows no registration in this server generation: one that is there replaced the
+        // operator's server and is still in place, and a second POST would replace the live connection under an agent's running call.
+        // A server restart and an instance recreate drop the gate with the registration, and a fresh process starts with it empty.
+        if (definedNames.isBotNameDefined && !this.registeredSchedulerMcpDirs.has(directory)) {
           await this.registerSchedulerMcpForDirectory(directory);
           return;
         }
@@ -3952,12 +3984,7 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
     const delayMs = getSchedulerMcpRetryDelayMs(retry.attempt);
     if (delayMs === null) {
       this.schedulerMcpRetries.delete(directory);
-      console.warn(
-        retry.pending === 'registration'
-          ? `[OpenCode] scheduler MCP for ${directory} is still not registered; the next session start or bot boot retries`
-          : `[OpenCode] ${directory}: the MCP server registered under the pre-rename name ${legacySchedulerMcpServerName} is still ` +
-              `connected, next to ${schedulerMcpServerName} (its disconnect kept failing); the next session start or bot boot retries`,
-      );
+      console.warn(describeSchedulerMcpPending(retry.pending, directory).gaveUp);
       return;
     }
     retry.attempt += 1;
@@ -3975,12 +4002,15 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
     retry.timer.unref?.();
     this.schedulerMcpRetries.set(directory, retry);
     console.log(
-      `[OpenCode] retrying ${retry.pending === 'registration' ? 'the scheduler MCP registration' : 'the disconnect of the pre-rename MCP registration'} ` +
-        `for ${directory} in ${Math.round(delayMs / 1000)}s (${retry.attempt}/${schedulerMcpRetryDelaysMs.length})`,
+      `[OpenCode] retrying ${describeSchedulerMcpPending(retry.pending, directory).retrying} ` +
+        `in ${Math.round(delayMs / 1000)}s (${retry.attempt}/${schedulerMcpRetryDelaysMs.length})`,
     );
   }
 
-  /** @description Forget `directory`'s pending registration retry: it is registered now. */
+  /**
+   * @description Forget `directory`'s pending retry: the job it was for is done — `charness` is in place and the pre-rename
+   * registration, if one was left, is disconnected. Not for a registration alone (see {@link schedulerMcpRetries}).
+   */
   private clearSchedulerMcpRetry(directory: string): void {
     const retry = this.schedulerMcpRetries.get(directory);
     if (!retry) return;

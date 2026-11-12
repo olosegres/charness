@@ -115,12 +115,15 @@ constants in the code; this README keeps what the code cannot say.
   recreated instance (`POST /instance/dispose`) drops that registration and brings the operator's back — healthy, so `connected`,
   and the status map cannot tell it from the bot's. The folder's `GET /config` can (runtime registrations never show up in it): read
   once per folder and server generation (`readConfigDefinedMcpNames`, dropped on a server restart and an instance recreate), and
-  where it defines the bot's name the reconcile registers the bot's own whatever the status says, with one warning per folder. Why
-  registering anyway: the alternative leaves every agent of the folder without `answer_request` and the other bot tools, silently,
-  while the cost is the operator's same-named server in that instance, which the warning explains and renaming restores. A config
-  that cannot be read arms the same bounded retry (the connected server stays unknown, not assumed the bot's), and the retry count is
-  forgotten only when a registration AND the old-name disconnect it comes with are done — a reconcile that registers at every boot
-  would otherwise restart the count each time.
+  where it defines the bot's name the reconcile registers the bot's own whatever the status says, with one warning per folder — once
+  per server generation: the registration gate (`registeredSchedulerMcpDirs`, empty in a fresh process and dropped by a server restart
+  and an instance recreate) shows that this generation already has the bot's own, and a second POST would replace the live connection
+  under an agent's running call. Why registering anyway: the alternative leaves every agent of the folder without `answer_request`
+  and the other bot tools, silently, while the cost is the operator's same-named server in that instance, which the warning explains
+  and renaming restores. A config that cannot be read arms a bounded retry of its own kind (`configRead`: the connected server stays
+  unknown, not assumed the bot's), whose log lines say the READ is what is pending — the bot's tools are then most likely in place, so
+  they never say "not registered". The retry count is forgotten only when a registration AND the old-name disconnect it comes with are
+  done.
 - MCP cancellation is a separate HTTP notification while every transport is fresh, so the server correlates by
   verified token + a bounded client id (injected per registration) + the typed request id, and keeps a
   short-lived cancellation-before-registration tombstone set.

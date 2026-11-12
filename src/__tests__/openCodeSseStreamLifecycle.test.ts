@@ -411,12 +411,14 @@ describe('a registration left under the pre-rename server name is disconnected, 
   const disconnectUrl = `/mcp/${encodeURIComponent(legacySchedulerMcpServerName)}/disconnect?directory=${encodeURIComponent(sharedDir)}`;
   const connected = { status: 'connected' };
   let warnings: string[];
+  let logLines: string[];
 
   beforeEach(() => {
     configureSchedulerMcpInjection({ getSecret: async () => secret, port });
     mock.timers.enable({ apis: ['setTimeout'] });
     warnings = [];
-    console.log = () => {};
+    logLines = [];
+    console.log = (...args: Parameters<typeof console.log>) => { logLines.push(args.map((arg) => String(arg)).join(' ')); };
     console.warn = (...args: Parameters<typeof console.warn>) => { warnings.push(args.map((arg) => String(arg)).join(' ')); };
   });
   afterEach(() => {
@@ -637,7 +639,7 @@ describe('a registration left under the pre-rename server name is disconnected, 
     assert.equal(adapter['registeredSchedulerMcpDirs'].has(sharedDir), true);
   });
 
-  it('what the config says about a folder is read once however often it reconciles; the bot\'s own server is registered each time', async () => {
+  it('what the config says about a folder is read once however often it reconciles; the bot\'s own server is registered once per server generation', async () => {
     const { adapter } = createAdapterWithSession();
     const calls = stubServer(adapter, {
       liveStatus: { [schedulerMcpServerName]: connected },
@@ -650,7 +652,29 @@ describe('a registration left under the pre-rename server name is disconnected, 
 
     assert.equal(calls.filter((call) => call === `GET ${configUrl}`).length, 1, 'one GET /config for the folder');
     assert.equal(warnings.length, 1, 'one warning for the folder');
-    assert.equal(calls.filter((call) => call === `POST ${registerUrl}`).length, 3, 'the bot\'s own is registered at every reconcile: idempotent, and the only way to be sure');
+    assert.equal(
+      calls.filter((call) => call === `POST ${registerUrl}`).length,
+      1,
+      'registered once: the gate shows this server generation already has the bot\'s own, and a second registration would cut the live connection',
+    );
+
+    // An instance recreate (or a server restart) drops the gate with the registration: the operator's server is back, so register again.
+    adapter['registeredSchedulerMcpDirs'].delete(sharedDir);
+    await adapter.reconcileSchedulerMcpForActiveSessions();
+    assert.equal(calls.filter((call) => call === `POST ${registerUrl}`).length, 2, 'registered again once the gate was dropped');
+  });
+
+  it('a fresh bot process registers over the operator\'s charness at boot: its gate is empty, whatever the last process did', async () => {
+    const { adapter } = createAdapterWithSession();
+    const calls = stubServer(adapter, {
+      liveStatus: { [schedulerMcpServerName]: connected },
+      config: { mcp: { [schedulerMcpServerName]: { type: 'remote' } } },
+    });
+    assert.equal(adapter['registeredSchedulerMcpDirs'].has(sharedDir), false);
+
+    await adapter.reconcileSchedulerMcpForActiveSessions();
+
+    assert.ok(calls.includes(`POST ${registerUrl}`));
   });
 
   it('a session start in a folder whose config defines the bot\'s name warns too', async () => {
@@ -681,7 +705,12 @@ describe('a registration left under the pre-rename server name is disconnected, 
     assert.equal(calls.filter((call) => call === `GET ${configUrl}`).length, 1 + schedulerMcpRetryDelaysMs.length, 'the boot read and one per pause');
     assert.ok(!calls.includes(`POST ${registerUrl}`), 'nothing is registered on a guess');
     assert.equal(adapter['schedulerMcpRetries'].size, 0, 'it stops after the last pause');
-    assert.match(warnings.at(-1) ?? '', /is still not registered/);
+    // The bot's own charness is most likely in place and working: the line must not claim it is missing, only that it is not known.
+    const giveUp = warnings.at(-1) ?? '';
+    assert.match(giveUp, /could not be read, so it is not known whether the connected charness is the bot's/);
+    assert.ok(!giveUp.includes('not registered') && !giveUp.includes('still connected'), giveUp);
+    assert.ok(logLines.some((line) => line.includes('retrying the read of the OpenCode config')), `the retry lines say what is retried: ${logLines.join(' | ')}`);
+    assert.ok(!logLines.some((line) => line.includes('retrying the scheduler MCP registration')), 'and never call it a registration');
   });
 
   it('when the config is read at a later try, the retry registers the bot\'s own over the operator\'s charness', async () => {
@@ -728,7 +757,7 @@ describe('a registration left under the pre-rename server name is disconnected, 
     }
 
     assert.equal(calls.filter((call) => call === `POST ${disconnectUrl}`).length, 1 + schedulerMcpRetryDelaysMs.length, 'the boot try and one per pause, then it stops');
-    assert.equal(calls.filter((call) => call === `POST ${registerUrl}`).length, 1 + schedulerMcpRetryDelaysMs.length, 'and so does the registration it comes with');
+    assert.equal(calls.filter((call) => call === `POST ${registerUrl}`).length, 1, 'while the registration is sent once: the retries do not cut a live connection each time');
     assert.equal(adapter['schedulerMcpRetries'].size, 0, 'nothing left pending');
     const giveUp = warnings.at(-1) ?? '';
     assert.ok(giveUp.includes(legacySchedulerMcpServerName) && giveUp.includes('still connected'), giveUp);
