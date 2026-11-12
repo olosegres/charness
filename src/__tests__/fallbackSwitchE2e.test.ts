@@ -600,7 +600,10 @@ describe('The usage-limit switch notice end to end: built charness, fake Bot API
 
   it('a prompt sent while the previous turn\'s last text is still on its Bot API round trip: the reply is a message of its own, not an edit of the previous turn\'s', async () => {
     await fifthTopic.sendAndAwaitReply(`/bind ${fifthFolder}`, `Bound to \`${fifthFolder}\``);
-    await fifthTopic.sendAndAwaitReply('/verbosity stream_answers', 'This topic shows: Stream + answers');
+    // The plain stream: no request, so the turn ends with its text. A turn that answers through `answer_request` ends only after
+    // its answer — posted below the turn's last text, which therefore has landed by then — so its last text could never still be
+    // on its round trip when the next prompt goes out.
+    await fifthTopic.sendAndAwaitReply('/verbosity stream', 'This topic shows: Stream only');
     await fifthTopic.sendAndAwaitReply('/claude', 'ready in');
 
     // From the first held send on, every later send to the topic waits behind it (one send at a time per topic): so nothing
@@ -609,7 +612,8 @@ describe('The usage-limit switch notice end to end: built charness, fake Bot API
     fakeTelegram.holdNextResponse('sendMessage', firstTextGate.whenOpen, (payload) => String(payload.text) === firstTurnText);
     fakeTelegram.pushOperatorMessage(fifthTopicThreadId, 'SLOW-1 first question');
     const isStatusFrameOfTopic = (payload: Record<string, unknown>): boolean => payload.message_thread_id === fifthTopicThreadId && String(payload.text).startsWith('🔧');
-    await getCharness().waitFor('the first turn\'s status frame', agentStartTimeoutMs, () => fakeTelegram.listCalls('sendMessage').some((call) => isStatusFrameOfTopic(call.payload)));
+    // No wait for the turn's «🔧» status frame: in the plain stream the turn's text ends the turn in the same read of the CLI's
+    // output, and a status line that text replaced before it was shown is never created.
     // The turn has ended and its last text is ON the round trip — the call reached the Bot API, whose response is held —
     // before the next prompt goes out: that send finishing after the prompt is what used to spend the prompt's mark.
     await getCharness().waitFor('the first turn\'s last text on its Bot API round trip', agentStartTimeoutMs, () => fakeTelegram.listCalls('sendMessage').some((call) => call.payload.message_thread_id === fifthTopicThreadId && String(call.payload.text) === firstTurnText));
