@@ -276,6 +276,17 @@ export const fakeClaudeLogFileNames = {
   preCompactHooks: 'pre-compact-hooks.jsonl',
   /** One record per `mcp_reconnect` control request the bot sent the fake: `{ pid, serverName }`. */
   mcpReconnects: 'mcp-reconnects.jsonl',
+  /**
+   * One record per compaction: what the launch's `SessionStart` hooks for the `compact` source gave as `additionalContext`,
+   * in the order the fake took them (the real CLI's is the order they finished) — `{ sessionId, pid, trigger, contexts }`.
+   */
+  sessionStartHooks: 'session-start-hooks.jsonl',
+  /**
+   * One record per model request the fake makes at a turn's start, and at the continuation after its own mid-turn
+   * compaction: the hook contexts of the last compaction its transcript holds — what the real CLI sends the model with
+   * every request after a compaction — `{ sessionId, pid, phase, contexts }`.
+   */
+  restoreContexts: 'restore-contexts.jsonl',
 } as const;
 
 /**
@@ -419,6 +430,23 @@ export interface FakeClaudePreCompactHookRun {
   pid: number;
   trigger: 'auto' | 'manual';
   instruction: string;
+}
+
+/** @name FakeClaudeSessionStartHookRun @description One line of the fake's `session-start-hooks.jsonl`: what the `SessionStart` `compact` hooks gave after a compaction. */
+export interface FakeClaudeSessionStartHookRun {
+  sessionId: string;
+  pid: number;
+  trigger: 'auto' | 'manual';
+  contexts: string[];
+}
+
+/** @name FakeClaudeRestoreContext @description One line of the fake's `restore-contexts.jsonl`: the hook contexts a model request of the fake holds. */
+export interface FakeClaudeRestoreContext {
+  sessionId: string;
+  pid: number;
+  /** `turn`: a turn's first request; `continuation`: the request after the CLI's own mid-turn compaction. */
+  phase: 'turn' | 'continuation';
+  contexts: string[];
 }
 
 /** @name FakeClaudeHookContext @description One line of the fake's `hooks.jsonl`: what a `PostToolUse` hook gave the agent. */

@@ -29,6 +29,14 @@
  * The same launch settings carry the shared todo lists' `PostToolUse` hook
  * (`todos/midTurn.ts`): it prints the session's inbox — the project board's
  * changes — after a tool call, and nothing when there is none.
+ *
+ * A json-stream / per-turn launch also carries the skills restore: {@link skillsRestoreSlotCount} `SessionStart` hooks with
+ * the matcher `compact`, each printing one part of the skills the session had loaded (`hooks/claudeSkillsRestoreHook.ts`).
+ * Measured on Claude Code 2.1.322 (`-p`, stream-json): a `SessionStart` `compact` hook runs after EVERY compaction — the
+ * CLI's own mid-turn ones and a `/compact` turn — and what it gives as `additionalContext` is in the very next model request,
+ * the same turn's when the agent goes on alone; the CLI stores it in the transcript (`hook_additional_context`), so a
+ * resumed session (a stopped process, a restarted bot) still sends it. The tmux backend is frozen and gets none: a
+ * compaction there keeps asking the agent to load its skills again.
  */
 
 import fs from 'fs';
@@ -41,16 +49,29 @@ import {
 } from './compactOnIdle';
 import { getClaudeCompactSelfReviewOffDir } from './compactSelfReviewFlags';
 import { shellSingleQuote } from './tmuxExec';
-import { checkHasClaudeProfileApiKey, claudeProfileLaunchSettingsFileName } from './claudeProfiles';
+import { checkHasClaudeProfileApiKey, claudeProfileLaunchSettingsFileName, claudeProfileSkillsRestoreSettingsFileNames } from './claudeProfiles';
 import { buildClaudeApiKeyHelperSettings } from './claudeApiKeyHelper';
 import { buildTodoInboxHookCommand, getTodoInboxDir } from '../todos/midTurn';
+import { skillsRestoreSlotCount } from './skillsRestore';
 
 /**
- * Name of the hook settings file inside `DATA_DIR`. ONE file shared by every
- * session: its content is the same for all of them, and a session that outlives
- * the bot (json-stream) must never find it deleted under it.
+ * Names of the hook settings files inside `DATA_DIR`, one per kind of launch: ONE file shared by every session of that kind
+ * (its content is the same for all of them, and a session that outlives the bot must never find it deleted under it), and a
+ * file per kind, so two sessions starting at once never read each other's hooks. The tmux backend's file keeps its name and
+ * content (no skills restore); a json-stream launch takes the one that matches whether it loads the bot's skills.
  */
 export const claudeCompactHookSettingsFileName = 'claude-compact-hook.json';
+export const claudeSkillsRestoreHookSettingsFileNames = {
+  withBotSkills: 'claude-launch-hooks.json',
+  withoutBotSkills: 'claude-launch-hooks-without-bot-skills.json',
+} as const;
+
+/**
+ * Where the restore hook is: `dist/hooks/claudeSkillsRestoreHook.js`, beside this module's `dist/utils/`. Run by the bot's own
+ * `node` (written at every launch, as the todo hook's); the hook command checks the file first, so a launch from the sources
+ * (the test runner, where it is `.ts`) simply has no restore.
+ */
+export const claudeSkillsRestoreHookPath = path.join(__dirname, '..', 'hooks', 'claudeSkillsRestoreHook.js');
 
 /**
  * @description The instruction the hook adds to a compaction the bot did not
@@ -97,38 +118,70 @@ export function buildPreCompactHookCommand(input: {
   ].join('; ');
 }
 
-/** One command hook with no matcher (every compaction, every tool). */
-type CommandHookGroups = Array<{ hooks: Array<{ type: 'command'; command: string }> }>;
+/**
+ * @description The shell commands of the restore's `SessionStart` hook slots: slot `i` (1-based) runs `nodePath hookPath i
+ * slotCount [unavailableSkillsDir]` and prints part `i` of the restore, or nothing. A missing hook file (a launch from the
+ * sources) prints nothing; every command reads its input whole (the CLI must never write into a closed pipe) and exits 0 —
+ * a hook failure must never stop the agent.
+ */
+export function buildSkillsRestoreHookCommands(input: { nodePath: string; hookPath: string; slotCount: number; unavailableSkillsDir: string | null }): string[] {
+  const hook = shellSingleQuote(input.hookPath);
+  const unavailableArgument = input.unavailableSkillsDir === null ? '' : ` ${shellSingleQuote(input.unavailableSkillsDir)}`;
+  return Array.from({ length: input.slotCount }, (_unused, index) => [
+    `[ -f ${hook} ] || { cat > /dev/null; exit 0; }`,
+    `${shellSingleQuote(input.nodePath)} ${hook} ${index + 1} ${input.slotCount}${unavailableArgument}`,
+    'exit 0',
+  ].join('; '));
+}
+
+/** Command hooks under one matcher (none: every compaction, every tool). */
+type CommandHookGroups = Array<{ matcher?: string; hooks: Array<{ type: 'command'; command: string }> }>;
+
+/** The `SessionStart` source of a compaction, auto or manual: the matcher of the restore's hooks. */
+const sessionStartCompactMatcher = 'compact';
 
 /**
- * @description The `--settings` payload: the `PreCompact` command hook (auto AND manual compactions) and the shared
+ * @description The `--settings` payload: the `PreCompact` command hook (auto AND manual compactions), the shared
  * todo lists' `PostToolUse` inbox hook (every tool: the project board's changes reach a working agent with its next
- * tool result, `todos/midTurn.ts`).
+ * tool result, `todos/midTurn.ts`) and, when there are any, the restore's `SessionStart` hooks for the `compact` source.
  */
-export function buildClaudeLaunchHookSettings(commands: { preCompact: string; postToolUse: string }): {
-  hooks: { PreCompact: CommandHookGroups; PostToolUse: CommandHookGroups };
+export function buildClaudeLaunchHookSettings(commands: { preCompact: string; postToolUse: string; sessionStartCompact: readonly string[] }): {
+  hooks: { PreCompact: CommandHookGroups; PostToolUse: CommandHookGroups; SessionStart?: CommandHookGroups };
 } {
-  return {
-    hooks: {
-      PreCompact: [{ hooks: [{ type: 'command', command: commands.preCompact }] }],
-      PostToolUse: [{ hooks: [{ type: 'command', command: commands.postToolUse }] }],
-    },
+  const hooks: { PreCompact: CommandHookGroups; PostToolUse: CommandHookGroups; SessionStart?: CommandHookGroups } = {
+    PreCompact: [{ hooks: [{ type: 'command', command: commands.preCompact }] }],
+    PostToolUse: [{ hooks: [{ type: 'command', command: commands.postToolUse }] }],
   };
+  if (commands.sessionStartCompact.length > 0) {
+    hooks.SessionStart = [{ matcher: sessionStartCompactMatcher, hooks: commands.sessionStartCompact.map((command) => ({ type: 'command' as const, command })) }];
+  }
+  return { hooks };
+}
+
+/** What a launch's hooks include besides the compaction guidance and the todo inbox. */
+export interface ClaudeLaunchHookOptions {
+  /**
+   * The skills restore (json-stream and per-turn launches) — `null` for none (the tmux backend, frozen). `unavailableSkillsDir`:
+   * the folder of the bot's own skills when this launch does NOT load them (switched off, or a CLI too old for `--plugin-dir`),
+   * so the restore calls them "not available now" instead of handing their text to a session that cannot load them.
+   */
+  skillsRestore: { unavailableSkillsDir: string | null } | null;
 }
 
 /**
  * @description Write the launch settings file and return the `--settings <path>` argument pair for a Claude
  * launch under `configDir` (the account profile's directory, `null` = `~/.claude`). Rewritten on every launch
  * (atomic rename, so a concurrently starting session never reads a half-written file) so a changed guidance
- * reaches the next session.
+ * reaches the next session. Each kind of launch ({@link ClaudeLaunchHookOptions}) has a file of its own.
  *
  * Only the LAST `--settings` a launch carries counts (probed on 2.1.304), so a profile that holds a pasted API key
- * (`utils/claudeProfiles.ts`) gets ONE file of its own, in its directory: the hook plus the `apiKeyHelper` that
+ * (`utils/claudeProfiles.ts`) gets ONE file of its own per kind, in its directory: the hooks plus the `apiKeyHelper` that
  * reads the key. Every other launch shares the hook file in `dataDir`. A write failure of the shared file returns
- * `[]` and only logs (the hook improves a summary, it must never stop an agent from starting); for a key profile
+ * `[]` and only logs (the hooks improve a summary, they must never stop an agent from starting); for a key profile
  * the same settings go inline instead, so the account never loses its key to a full disk.
  */
-export function prepareClaudeCompactHookFlags(dataDir: string, configDir: string | null = null): string[] {
+export function prepareClaudeCompactHookFlags(dataDir: string, configDir: string | null, options: ClaudeLaunchHookOptions): string[] {
+  const { skillsRestore } = options;
   const hookSettings = buildClaudeLaunchHookSettings({
     preCompact: buildPreCompactHookCommand({
       instruction: getHookCompactionInstruction(true),
@@ -137,13 +190,23 @@ export function prepareClaudeCompactHookFlags(dataDir: string, configDir: string
       offFlagDir: getClaudeCompactSelfReviewOffDir(dataDir),
     }),
     postToolUse: buildTodoInboxHookCommand(getTodoInboxDir(dataDir)),
+    sessionStartCompact: skillsRestore === null
+      ? []
+      : buildSkillsRestoreHookCommands({ nodePath: process.execPath, hookPath: claudeSkillsRestoreHookPath, slotCount: skillsRestoreSlotCount, unavailableSkillsDir: skillsRestore.unavailableSkillsDir }),
   });
+  const isWithBotSkills = skillsRestore?.unavailableSkillsDir === null;
   if (configDir !== null && checkHasClaudeProfileApiKey(configDir)) {
     const settings = { ...hookSettings, ...buildClaudeApiKeyHelperSettings(configDir) };
-    const written = writeLaunchSettingsFile(configDir, path.join(configDir, claudeProfileLaunchSettingsFileName), settings);
+    const fileName = skillsRestore === null
+      ? claudeProfileLaunchSettingsFileName
+      : claudeProfileSkillsRestoreSettingsFileNames[isWithBotSkills ? 'withBotSkills' : 'withoutBotSkills'];
+    const written = writeLaunchSettingsFile(configDir, path.join(configDir, fileName), settings);
     return ['--settings', written ?? JSON.stringify(settings)];
   }
-  const written = writeLaunchSettingsFile(dataDir, path.join(dataDir, claudeCompactHookSettingsFileName), hookSettings);
+  const fileName = skillsRestore === null
+    ? claudeCompactHookSettingsFileName
+    : claudeSkillsRestoreHookSettingsFileNames[isWithBotSkills ? 'withBotSkills' : 'withoutBotSkills'];
+  const written = writeLaunchSettingsFile(dataDir, path.join(dataDir, fileName), hookSettings);
   return written === null ? [] : ['--settings', written];
 }
 

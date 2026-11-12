@@ -495,3 +495,22 @@ describe('compaction frames — /compact outcome (F3)', () => {
     assert.deepEqual(classify({ type: 'system', subtype: 'status', status: 'compacting' }), []);
   });
 });
+
+describe('hook frames — the skills restore never reaches the topic (measured on 2.1.322)', () => {
+  // What `-p --output-format stream-json --verbose --include-partial-messages --replay-user-messages` printed after a
+  // compaction: one `hook_started` and one `hook_response` per `SessionStart` hook, the response carrying the hook's whole
+  // stdout — the restored skills' text. The bot must drop both, or that text would be posted to the topic.
+  const restoreText = '[Charness: skills restored after compaction]\n## Skill: test-guru\nBase directory for this skill: /home/user/x';
+  const hookOutput = JSON.stringify({ hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: restoreText } });
+
+  it('a hook_response frame carrying the restore classifies to nothing', () => {
+    assert.deepEqual(classify({
+      type: 'system', subtype: 'hook_response', hook_id: 'h-1', hook_name: 'SessionStart:compact', hook_event: 'SessionStart',
+      output: hookOutput, stdout: hookOutput, stderr: '', exit_code: 0, outcome: 'success', uuid: 'u-1', session_id: 's-1',
+    }), []);
+  });
+
+  it('a hook_started frame classifies to nothing', () => {
+    assert.deepEqual(classify({ type: 'system', subtype: 'hook_started', hook_id: 'h-1', hook_name: 'SessionStart:compact', hook_event: 'SessionStart', uuid: 'u-2', session_id: 's-1' }), []);
+  });
+});

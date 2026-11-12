@@ -15,10 +15,14 @@ import path from 'path';
 import {
   buildClaudeLaunchHookSettings,
   buildPreCompactHookCommand,
+  buildSkillsRestoreHookCommands,
   claudeCompactHookSettingsFileName,
+  claudeSkillsRestoreHookPath,
+  claudeSkillsRestoreHookSettingsFileNames,
   getHookCompactionInstruction,
   prepareClaudeCompactHookFlags,
 } from '../utils/claudeCompactHook';
+import { skillsRestoreSlotCount } from '../utils/skillsRestore';
 import {
   buildCompactionInstruction,
   compactionChecklistGuidance,
@@ -199,8 +203,8 @@ test('the resume guidance, with the section and without: JSON leaves each unesca
   assert.ok(compactionResumeGuidance.endsWith(compactionResumeGuidanceWithoutGaps), 'the marker is a contiguous part of the full text');
 });
 
-test('buildClaudeLaunchHookSettings: one PreCompact and one PostToolUse command hook, neither with a matcher', () => {
-  assert.deepEqual(buildClaudeLaunchHookSettings({ preCompact: 'echo hi', postToolUse: 'echo tool' }), {
+test('buildClaudeLaunchHookSettings: one PreCompact and one PostToolUse command hook, neither with a matcher; no restore, no SessionStart', () => {
+  assert.deepEqual(buildClaudeLaunchHookSettings({ preCompact: 'echo hi', postToolUse: 'echo tool', sessionStartCompact: [] }), {
     hooks: {
       PreCompact: [{ hooks: [{ type: 'command', command: 'echo hi' }] }],
       PostToolUse: [{ hooks: [{ type: 'command', command: 'echo tool' }] }],
@@ -208,10 +212,59 @@ test('buildClaudeLaunchHookSettings: one PreCompact and one PostToolUse command 
   });
 });
 
+test('buildClaudeLaunchHookSettings: the restore\'s slots are SessionStart command hooks under the `compact` matcher', () => {
+  const settings = buildClaudeLaunchHookSettings({ preCompact: 'echo hi', postToolUse: 'echo tool', sessionStartCompact: ['echo 1', 'echo 2'] });
+  assert.deepEqual(settings.hooks.SessionStart, [{ matcher: 'compact', hooks: [{ type: 'command', command: 'echo 1' }, { type: 'command', command: 'echo 2' }] }]);
+});
+
+test('buildSkillsRestoreHookCommands: slot i runs the hook with its number, the slot count and the unavailable folder — read through a real sh', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'restore-hook-commands-'));
+  try {
+    // A stand-in hook that prints its arguments and what it read, so the command line is checked as the shell builds it.
+    const hookPath = path.join(dir, "it's a hook.js");
+    fs.writeFileSync(hookPath, 'let input = ""; process.stdin.on("data", (c) => { input += c; }).on("end", () => process.stdout.write(JSON.stringify({ argv: process.argv.slice(2), input })));');
+    const unavailableSkillsDir = "/opt/it's charness/agent-plugin/skills";
+    const commands = buildSkillsRestoreHookCommands({ nodePath: process.execPath, hookPath, slotCount: 3, unavailableSkillsDir });
+    assert.equal(commands.length, 3);
+    assert.deepEqual(JSON.parse(runHook(commands[1], { source: 'compact' })), { argv: ['2', '3', unavailableSkillsDir], input: JSON.stringify({ source: 'compact' }) });
+    const withBotSkills = buildSkillsRestoreHookCommands({ nodePath: process.execPath, hookPath, slotCount: 3, unavailableSkillsDir: null });
+    assert.deepEqual(JSON.parse(runHook(withBotSkills[0], {})).argv, ['1', '3']);
+    // No hook file (a launch from the sources): nothing printed, exit 0, the input read whole.
+    const missing = buildSkillsRestoreHookCommands({ nodePath: process.execPath, hookPath: path.join(dir, 'missing.js'), slotCount: 1, unavailableSkillsDir: null });
+    assert.equal(runHook(missing[0], { source: 'compact', padding: 'x'.repeat(200_000) }), '');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('prepareClaudeCompactHookFlags: a json-stream launch gets the restore\'s 24 SessionStart slots in a file of its kind; the tmux launch\'s file has none', () => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'compact-hook-kinds-'));
+  try {
+    const tmux = prepareClaudeCompactHookFlags(dataDir, null, { skillsRestore: null });
+    const withBotSkills = prepareClaudeCompactHookFlags(dataDir, null, { skillsRestore: { unavailableSkillsDir: null } });
+    const withoutBotSkills = prepareClaudeCompactHookFlags(dataDir, null, { skillsRestore: { unavailableSkillsDir: '/opt/charness/agent-plugin/skills' } });
+    assert.deepEqual([tmux[1], withBotSkills[1], withoutBotSkills[1]], [
+      path.join(dataDir, claudeCompactHookSettingsFileName),
+      path.join(dataDir, claudeSkillsRestoreHookSettingsFileNames.withBotSkills),
+      path.join(dataDir, claudeSkillsRestoreHookSettingsFileNames.withoutBotSkills),
+    ]);
+    const readHooks = (settingsPath: string): { SessionStart?: Array<{ matcher: string; hooks: Array<{ command: string }> }>; PreCompact: Array<{ hooks: Array<{ command: string }> }> } => JSON.parse(fs.readFileSync(settingsPath, 'utf-8')).hooks;
+    assert.equal(readHooks(tmux[1]).SessionStart, undefined, 'the frozen tmux backend gets no restore');
+    const restoreHooks = readHooks(withBotSkills[1]).SessionStart?.[0];
+    assert.equal(restoreHooks?.matcher, 'compact');
+    assert.equal(restoreHooks?.hooks.length, skillsRestoreSlotCount);
+    assert.deepEqual(restoreHooks?.hooks.map((hook) => hook.command), buildSkillsRestoreHookCommands({ nodePath: process.execPath, hookPath: claudeSkillsRestoreHookPath, slotCount: skillsRestoreSlotCount, unavailableSkillsDir: null }));
+    assert.ok(readHooks(withoutBotSkills[1]).SessionStart?.[0].hooks[0].command.endsWith(" 1 24 '/opt/charness/agent-plugin/skills'; exit 0"), 'the unavailable folder rides the command');
+    assert.equal(readHooks(withBotSkills[1]).PreCompact.length, 1, 'the compaction guidance stays');
+  } finally {
+    fs.rmSync(dataDir, { recursive: true, force: true });
+  }
+});
+
 test('prepareClaudeCompactHookFlags: writes the settings file and returns the --settings pair', () => {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'compact-hook-'));
   try {
-    const flags = prepareClaudeCompactHookFlags(dataDir);
+    const flags = prepareClaudeCompactHookFlags(dataDir, null, { skillsRestore: null });
     const settingsPath = path.join(dataDir, claudeCompactHookSettingsFileName);
     assert.deepEqual(flags, ['--settings', settingsPath]);
     const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf-8'));
@@ -249,7 +302,7 @@ test('prepareClaudeCompactHookFlags with a relative DATA_DIR: the settings path 
   try {
     process.chdir(botFolder);
     process.env.DATA_DIR = 'data';
-    const flags = prepareClaudeCompactHookFlags(resolveDataDir());
+    const flags = prepareClaudeCompactHookFlags(resolveDataDir(), null, { skillsRestore: { unavailableSkillsDir: null } });
     assert.ok(path.isAbsolute(flags[1]), `the --settings path is absolute: ${flags[1]}`);
     const command: string = JSON.parse(fs.readFileSync(flags[1], 'utf-8')).hooks.PreCompact[0].hooks[0].command;
     const flagDir = getClaudeCompactSelfReviewOffDir(resolveDataDir());
@@ -277,7 +330,7 @@ test('prepareClaudeCompactHookFlags: an unwritable DATA_DIR yields no flags inst
   const originalWarn = console.warn;
   console.warn = () => {};
   try {
-    assert.deepEqual(prepareClaudeCompactHookFlags(path.join(blocker, 'data')), []);
+    assert.deepEqual(prepareClaudeCompactHookFlags(path.join(blocker, 'data'), null, { skillsRestore: { unavailableSkillsDir: null } }), []);
   } finally {
     console.warn = originalWarn;
     fs.rmSync(path.dirname(blocker), { recursive: true, force: true });
