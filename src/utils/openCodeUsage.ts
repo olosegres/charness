@@ -16,6 +16,7 @@
  */
 
 import * as fs from 'fs';
+import { checkIsRecord } from './checkIsRecord';
 import {
   fetchUsageBuckets,
   markClaudeUsageSnapshotStale,
@@ -57,10 +58,6 @@ export interface OpenCodeProviderCredential {
   /** Epoch ms; `null` when the record carries none. */
   expiresAtMs: number | null;
   accountId: string | null;
-}
-
-function checkIsRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 function readAuthKind(type: unknown): OpenCodeAuthKind {

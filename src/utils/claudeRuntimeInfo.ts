@@ -1,13 +1,10 @@
 import * as fs from 'fs';
 import type { AgentRuntimeInfo } from '../types';
+import { checkIsRecord } from './checkIsRecord';
 
 const claude45ContextWindowTokens = 200_000;
 const claude46AndLaterContextWindowTokens = 1_000_000;
 export const claudeRuntimeInfoTailBytes = 128 * 1024;
-
-function checkIsRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
 
 function checkIsTokenCount(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value) && Number.isInteger(value) && value >= 0;

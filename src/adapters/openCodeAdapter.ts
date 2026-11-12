@@ -1313,19 +1313,17 @@ export function checkIsValidProviderId(providerId: string): boolean {
   return providerIdRe.test(providerId);
 }
 
-const checkIsOpenCodeRecord = checkIsRecord;
-
 function checkIsOpenCodeTokenCount(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value) && Number.isInteger(value) && value >= 0;
 }
 
 function getOpenCodeContextUsedTokens(usage: unknown): number | null {
-  if (!checkIsOpenCodeRecord(usage) || !checkIsOpenCodeTokenCount(usage.input)) return null;
+  if (!checkIsRecord(usage) || !checkIsOpenCodeTokenCount(usage.input)) return null;
   const outputTokens = usage.output;
   const cache = usage.cache;
   if (
     (outputTokens !== undefined && !checkIsOpenCodeTokenCount(outputTokens)) ||
-    (cache !== undefined && !checkIsOpenCodeRecord(cache))
+    (cache !== undefined && !checkIsRecord(cache))
   ) {
     return null;
   }
@@ -1369,7 +1367,7 @@ export function getLatestOpenCodeParentAssistantContext(
   if (!Array.isArray(records)) return null;
   let latestContext: OpenCodeParentAssistantContext | null = null;
   for (const record of records) {
-    if (!checkIsOpenCodeRecord(record) || !checkIsOpenCodeRecord(record.info)) continue;
+    if (!checkIsRecord(record) || !checkIsRecord(record.info)) continue;
     const info = record.info;
     if (info.role !== 'assistant' || typeof info.id !== 'string' || !info.id.trim()) continue;
     if (info.sessionID !== undefined && info.sessionID !== sessionId) continue;
@@ -1389,12 +1387,12 @@ export function getLatestOpenCodeParentAssistantContext(
 
 function getOpenCodeModelVariants(model: Record<string, unknown>): string[] {
   const variants = model.variants;
-  return checkIsOpenCodeRecord(variants) ? Object.keys(variants) : [];
+  return checkIsRecord(variants) ? Object.keys(variants) : [];
 }
 
 function getOpenCodeModelContextWindowTokens(model: Record<string, unknown>): number | null {
   const limit = model.limit;
-  if (!checkIsOpenCodeRecord(limit) || !checkIsOpenCodeTokenCount(limit.context)) return null;
+  if (!checkIsRecord(limit) || !checkIsOpenCodeTokenCount(limit.context)) return null;
   return limit.context;
 }
 
@@ -1426,9 +1424,9 @@ export function checkNeedsSchedulerMcpReregister(mcpStatus: unknown): boolean {
  * a malformed answer: a name the server never had is answered with a 404, so nothing is sent on a guess.
  */
 export function checkNeedsLegacySchedulerMcpDisconnect(mcpStatus: unknown): boolean {
-  if (!checkIsOpenCodeRecord(mcpStatus)) return false;
+  if (!checkIsRecord(mcpStatus)) return false;
   const entry = mcpStatus[legacySchedulerMcpServerName];
-  return checkIsOpenCodeRecord(entry) && entry.status !== 'disabled';
+  return checkIsRecord(entry) && entry.status !== 'disabled';
 }
 
 /**
@@ -1562,17 +1560,17 @@ function getFreshProvidersConfig(now = Date.now()): ParsedProvidersConfig | null
 
 export function parseProvidersResponse(raw: unknown): ParsedProvidersConfig {
   const out: ParsedProvidersConfig = { providers: new Map() };
-  if (!checkIsOpenCodeRecord(raw)) return out;
+  if (!checkIsRecord(raw)) return out;
 
   // Two shapes seen in the wild: `{ providers: [...] }` (array, opencode
   // 1.15.x) and `{ providers: { <id>: {...} } }` (older bundles). Parse
   // both into the same flat (providerId → modelId → model config) map so
   // the rest of the code doesn't care which shape the server sent.
   const collect = (providerId: string, providerObj: unknown): void => {
-    if (!checkIsOpenCodeRecord(providerObj) || !checkIsOpenCodeRecord(providerObj.models)) return;
+    if (!checkIsRecord(providerObj) || !checkIsRecord(providerObj.models)) return;
     const modelMap = new Map<string, OpenCodeProviderModel>();
     for (const [modelId, modelObj] of Object.entries(providerObj.models)) {
-      if (!checkIsOpenCodeRecord(modelObj)) {
+      if (!checkIsRecord(modelObj)) {
         modelMap.set(modelId, { variants: [], contextWindowTokens: null });
         continue;
       }
@@ -1587,9 +1585,9 @@ export function parseProvidersResponse(raw: unknown): ParsedProvidersConfig {
   const providersField = raw.providers;
   if (Array.isArray(providersField)) {
     for (const item of providersField) {
-      if (checkIsOpenCodeRecord(item) && typeof item.id === 'string') collect(item.id, item);
+      if (checkIsRecord(item) && typeof item.id === 'string') collect(item.id, item);
     }
-  } else if (checkIsOpenCodeRecord(providersField)) {
+  } else if (checkIsRecord(providersField)) {
     for (const [id, value] of Object.entries(providersField)) {
       collect(id, value);
     }

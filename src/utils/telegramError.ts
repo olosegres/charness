@@ -1,3 +1,5 @@
+import { checkIsRecord } from './checkIsRecord';
+
 interface TelegramErrorLike {
   response?: {
     error_code?: number;
@@ -6,10 +8,6 @@ interface TelegramErrorLike {
   on?: {
     method?: string;
   };
-}
-
-function checkIsRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null;
 }
 
 export function checkIsStaleAnswerCallbackQueryError(err: unknown): boolean {

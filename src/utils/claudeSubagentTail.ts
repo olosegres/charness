@@ -22,6 +22,7 @@
  *   OpenCode sub-agent matrix in `subagentRender.ts`).
  */
 import type { DisplayVerbosityMode } from '../types';
+import { checkIsRecord } from './checkIsRecord';
 
 /** Claude's sub-agent transcript filename shape (`agent-<agentId>.jsonl`).
  * The sibling `agent-<agentId>.meta.json` files must NOT match. */
@@ -77,15 +78,6 @@ export function createSubagentTailState(): SubagentTailState {
  */
 export function checkIsSubagentTranscriptName(fileName: string): boolean {
   return subagentTranscriptNamePattern.test(fileName);
-}
-
-/**
- * @description Narrow an untyped `JSON.parse` result to a plain object so its
- * fields can be read with `typeof` guards instead of casts (parse-boundary
- * pattern for untrusted on-disk data; mirrors `isRecord` in `state.ts`).
- */
-function checkIsRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 /**

@@ -32,6 +32,7 @@ import type { ClaudeProfileRecord } from '../state';
 import { getClaudeAccountKind, resolveHomeClaudeDir, type ClaudeAccountKind, type ClaudeProfileBilling } from './claudeProfiles';
 import type { ClaudeApiSpend } from './claudeApiSpend';
 import type { ClaudeApiCreditAnchor, ClaudeApiCreditSpend } from './claudeApiCredit';
+import { checkIsRecord } from './checkIsRecord';
 
 export const claudeUsageEndpoint = 'https://api.anthropic.com/api/oauth/usage';
 
@@ -999,10 +1000,6 @@ export function formatClaudeUsageBucket(
 }
 
 // ── small readers ──
-
-function checkIsRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
 
 function readIso(value: unknown): string | null {
   if (typeof value !== 'string') return null;

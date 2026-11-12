@@ -93,6 +93,7 @@ import {
 } from '../utils/tmuxSessionName';
 import { getEffortStartupKeystroke } from '../utils/effortStartupKeystroke';
 import { readClaudeRuntimeInfo } from '../utils/claudeRuntimeInfo';
+import { checkIsRecord } from '../utils/checkIsRecord';
 import { getDefaultDisplayPrefs } from '../utils/displayVerbosity';
 import {
   checkIsSubagentTranscriptName,
@@ -2132,15 +2133,6 @@ interface ParsedTranscript {
    */
   firstMeaningfulPrompt: string | null;
   firstTimestamp: string | null;
-}
-
-/**
- * @description Narrow an untyped `JSON.parse` result to a plain object so its
- * fields can be read with `typeof` guards instead of casts (parse-boundary
- * pattern for untrusted on-disk data; mirrors `isRecord` in `state.ts`).
- */
-function checkIsRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 /**
