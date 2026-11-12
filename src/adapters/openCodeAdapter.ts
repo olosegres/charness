@@ -2005,11 +2005,9 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
       // stale reader would only self-heal later via the stall watchdog —
       // closing here makes recovery deterministic and tied to the restart.
       this.closeGlobalStream();
-      // The restarted server has a fresh, empty MCP table, so every directory's
-      // scheduler-MCP registration died with the old generation. Clear the gate
-      // so connectSse re-registers each still-active directory on resume.
-      this.registeredSchedulerMcpDirs.clear();
-      this.configDefinedMcpNames.clear();
+      // The restarted server has a fresh, empty MCP table, so every directory's scheduler-MCP registration died with the old
+      // generation: `ensureServerWithRetries` has dropped the gate (see `dropServerGenerationState`), so connectSse re-registers each
+      // still-active directory on resume.
 
       // OpenCode persists sessions to disk, so the restarted server still
       // knows the previous session ids — that's the basis of this recovery.
@@ -2095,6 +2093,7 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
         if (mode === 'replace') await this.serverRestartOps.restartServer();
         else await this.serverRestartOps.ensureServer();
         console.log(`[OpenCode] Server is up`);
+        this.dropServerGenerationState();
         return;
       } catch (e) {
         const delayMs = getOpenCodeServerRestartRetryDelayMs(
@@ -2114,6 +2113,18 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
         await sleep(delayMs);
       }
     }
+  }
+
+  /**
+   * @description Forget what the bot learned about the previous OpenCode server: its runtime MCP registrations (the gate) and its
+   * folders' configs. Called wherever a server was actually brought up — a restart, a session start or resume that found it down, the
+   * provider sign-in — because each of those can start a new generation with an EMPTY MCP table, and a gate that still says "registered"
+   * would leave every folder it names without the bot's tools until the next worker start. (A server that was already running is used
+   * as it is and nothing is dropped; a fresh worker process starts with both empty.)
+   */
+  private dropServerGenerationState(): void {
+    this.registeredSchedulerMcpDirs.clear();
+    this.configDefinedMcpNames.clear();
   }
 
   /**
@@ -3758,7 +3769,11 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
    * threads), read the LIVE `GET /mcp` status and, when the `charness` entry
    * is missing or not `connected`, drop the Set gate and force a fresh POST (the
    * server overwrites a same-name registration with the current port). A dir
-   * already `connected` is left untouched. Best-effort per directory: a read /
+   * already `connected` is left alone with two exceptions: a registration an older
+   * bot left under the pre-rename name is disconnected, and a folder whose OpenCode
+   * config itself defines `charness` — the `connected` may be the operator's server —
+   * gets the bot's own registered over it, once per server generation (the gate).
+   * Best-effort per directory: a read /
    * registration error is logged and swallowed — it must never throw out of
    * boot. Supersedes {@link registerSchedulerMcpForActiveSessions} at the boot
    * call site (a not-yet-registered dir has no entry → treated as needing one).
@@ -3921,7 +3936,11 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
   /**
    * @description Reconcile ONE directory: read the live `GET /mcp` status and,
    * when `charness` is missing or not `connected`, drop the Set gate and
-   * force a fresh POST. Best-effort — a read/registration error is logged,
+   * force a fresh POST. A `connected` one is not simply trusted: the folder's
+   * config is read ({@link readConfigDefinedMcpNames}); where it defines `charness`
+   * the bot's own is registered over it unless the gate shows this server generation
+   * already has it, a config that cannot be read arms a `configRead` retry, and an
+   * old-name registration left in the folder is disconnected. Best-effort — a read/registration error is logged,
    * scheduled for a retry, and swallowed so it never rejects out of
    * {@link reconcileSchedulerMcpForActiveSessions}.
    */

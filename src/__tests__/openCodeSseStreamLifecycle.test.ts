@@ -307,7 +307,7 @@ describe('scheduler MCP registration per directory on session start (plan 2026-0
     assert.deepEqual(calls, [`/mcp?directory=${encodeURIComponent(sharedDir)}`, `/config?directory=${encodeURIComponent(sharedDir)}`]);
   });
 
-  it('clearing the dir Set (what restartServer does) makes the next connect re-register (S4)', async () => {
+  it('a server brought up again (a restart replacing it) drops what was learned about the old one, so the next connect re-registers (S4)', async () => {
     configureSchedulerMcpInjection({ getSecret: async () => secret, port });
     const adapter = createAdapter();
     const keyA: SessionKey = makeTelegramKey(-100, 1);
@@ -322,15 +322,99 @@ describe('scheduler MCP registration per directory on session start (plan 2026-0
     await new Promise((resolve) => setImmediate(resolve));
     assert.equal(calls.filter((url) => url.startsWith('/mcp')).length, 1, 'registered once on first connect');
 
-    // restartServer wipes the server's MCP table, so it clears the gate (and the answers about the folder's config, which the new
-    // server reads afresh); the resume path then re-runs connectSse for each still-active session.
-    adapter['registeredSchedulerMcpDirs'].clear();
-    adapter['configDefinedMcpNames'].clear();
+    // A restart wipes the server's MCP table, so bringing the new server up drops the gate (and the answers about the folder's config,
+    // which the new server reads afresh); the resume path then re-runs connectSse for each still-active session. The server's start is
+    // scripted: the default one would start a REAL OpenCode server from the test.
+    const server = scriptServerStart(adapter, true);
+    await adapter['ensureServerWithRetries']('replace');
+    assert.equal(server.starts(), 1, 'the replacement server was started');
+    assert.equal(adapter['registeredSchedulerMcpDirs'].size, 0);
     adapter['connectSse'](keyA);
     await new Promise((resolve) => setImmediate(resolve));
     assert.equal(calls.filter((url) => url.startsWith('/mcp')).length, 2, 're-registered after the Set was cleared on restart');
     assert.equal(calls.filter((url) => url.startsWith('/config')).length, 2, 'and the config read again for the new server');
     assert.equal(adapter['registeredSchedulerMcpDirs'].has(sharedDir), true, 'dir re-latched');
+  });
+
+  /** The server's start, scripted: `isServerUp` is what its health probe answers, `starts` counts the servers brought up. */
+  function scriptServerStart(adapter: OpenCodeAdapter, isServerUp: boolean): { starts: () => number; setServerUp: (isUp: boolean) => void } {
+    let isUp = isServerUp;
+    let starts = 0;
+    adapter['serverRestartOps'] = {
+      checkIsInstalled: () => true,
+      installTool: async () => {},
+      checkIsServerRunning: async () => isUp,
+      ensureServer: async () => { starts += 1; isUp = true; },
+      restartServer: async () => { starts += 1; isUp = true; },
+      readServerLaunch: async () => ({ kind: 'unknown' }),
+      readServerExposure: async () => 'protected',
+    };
+    return { starts: () => starts, setServerUp: (isUpNow) => { isUp = isUpNow; } };
+  }
+
+  it('a session start that finds the server DOWN and starts a new one re-registers the folders the old one held (not only a restart does)', async () => {
+    configureSchedulerMcpInjection({ getSecret: async () => secret, port });
+    const adapter = createAdapter();
+    const keyA: SessionKey = makeTelegramKey(-100, 1);
+    adapter['sessions'].set(keyToString(keyA), makeSession(keyA, 'ses_A', sharedDir));
+    const calls: string[] = [];
+    adapter['apiRequest'] = (async (_method: string, url: string) => {
+      calls.push(url);
+      return url.startsWith('/config') ? {} : undefined;
+    }) as OpenCodeAdapter['apiRequest'];
+    const server = scriptServerStart(adapter, true);
+
+    adapter['connectSse'](keyA);
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(calls.filter((url) => url.startsWith('/mcp')).length, 1, 'registered while the first server ran');
+    assert.equal(adapter['registeredSchedulerMcpDirs'].has(sharedDir), true);
+
+    // The adopted server dies with no stream left to notice (the folder's last session ended), and a new session starts the next one.
+    server.setServerUp(false);
+    await adapter['ensureServerForSession'](keyA);
+    assert.equal(server.starts(), 1, 'a new server was started');
+    assert.equal(adapter['registeredSchedulerMcpDirs'].size, 0, 'the gate describes the old server and is dropped with it');
+    assert.equal(adapter['configDefinedMcpNames'].size, 0, 'and so are the answers about its folders\' configs');
+
+    adapter['connectSse'](keyA);
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(calls.filter((url) => url.startsWith('/mcp')).length, 2, 'the new server\'s empty table got the registration: the folder\'s agents have the bot\'s tools');
+  });
+
+  it('a session start that finds the server UP uses it as it is: what was learned about it stays', async () => {
+    const adapter = createAdapter();
+    const keyA: SessionKey = makeTelegramKey(-100, 1);
+    adapter['sessions'].set(keyToString(keyA), makeSession(keyA, 'ses_A', sharedDir));
+    adapter['registeredSchedulerMcpDirs'].add(sharedDir);
+    adapter['configDefinedMcpNames'].set(sharedDir, { isBotNameDefined: false, isLegacyNameDefined: false });
+    const server = scriptServerStart(adapter, true);
+
+    await adapter['ensureServerForSession'](keyA);
+
+    assert.equal(server.starts(), 0);
+    assert.equal(adapter['registeredSchedulerMcpDirs'].has(sharedDir), true);
+    assert.equal(adapter['configDefinedMcpNames'].has(sharedDir), true);
+  });
+
+  it('the provider sign-in\'s server start drops it too, and a server that failed to start drops nothing', async () => {
+    const adapter = createAdapter();
+    adapter['registeredSchedulerMcpDirs'].add(sharedDir);
+    adapter['serverRestartRetryDelaysMs'] = [];
+    adapter['serverRestartRetryBudgetMs'] = 0;
+    const server = scriptServerStart(adapter, false);
+    adapter['serverRestartOps'] = { ...adapter['serverRestartOps'], ensureServer: async () => { throw new Error('spawn failed'); } };
+    const originalError = console.error;
+    console.error = () => {};
+    try {
+      await assert.rejects(adapter['ensureServerWithRetries']('ifDown'));
+    } finally {
+      console.error = originalError;
+    }
+    assert.equal(adapter['registeredSchedulerMcpDirs'].has(sharedDir), true, 'no new server came up: the old one\'s registrations are all there is');
+
+    adapter['serverRestartOps'] = { ...adapter['serverRestartOps'], ensureServer: async () => { server.setServerUp(true); } };
+    await adapter['ensureServerWithRetries']('ifDown');
+    assert.equal(adapter['registeredSchedulerMcpDirs'].size, 0);
   });
 
   it('registration failure is swallowed (the dir is not latched, so a later connect retries)', async () => {
