@@ -53,7 +53,6 @@ import {
 } from './claudeCliAdapter';
 import {
   ClaudeStreamLineReader,
-  checkIsStreamRecord,
   parseStreamJsonLine,
   classifyClaudeStreamMessage,
   buildCanUseToolAllow,
@@ -73,6 +72,7 @@ import {
 import { execFilePromise, getTmuxSessionTarget, startAgentTmuxSession, tmuxAsync } from '../utils/tmuxExec';
 import { basePollIntervalMs, getNextPollDelay } from '../utils/pollBackoff';
 import { readClaudeRuntimeInfo } from '../utils/claudeRuntimeInfo';
+import { checkIsRecord } from '../utils/checkIsRecord';
 import { prepareClaudeSessionLaunch, readClaudeTranscriptRestoredCostUsd } from '../utils/claudeTranscriptContent';
 import {
   busyIdleWatchdogMs,
@@ -1073,10 +1073,10 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
     } catch {
       return null; // absent (the common case) or corrupt
     }
-    if (!checkIsStreamRecord(parsed)) return null;
+    if (!checkIsRecord(parsed)) return null;
     const { requestId, toolUseId, rawInput, questions } = parsed;
     if (typeof requestId !== 'string' || typeof toolUseId !== 'string') return null;
-    if (!checkIsStreamRecord(rawInput) || !Array.isArray(questions)) return null;
+    if (!checkIsRecord(rawInput) || !Array.isArray(questions)) return null;
     const revalidated = this.parseQuestions({ questions });
     if (revalidated.length === 0) return null;
     return { requestId, toolUseId, rawInput, questions: revalidated };

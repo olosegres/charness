@@ -5,7 +5,7 @@
  */
 
 import * as fs from 'fs';
-import { checkIsStreamRecord } from './claudeStreamJson';
+import { checkIsRecord } from './checkIsRecord';
 
 /**
  * The key a line must carry to be a compaction summary. Checked on the raw line BEFORE `JSON.parse`: a transcript can be
@@ -33,15 +33,15 @@ export function readLatestCompactSummaryFromTranscript(filePath: string): string
     if (!line.includes(compactSummaryKey)) continue;
     let obj: unknown;
     try { obj = JSON.parse(line.trim()); } catch { continue; }
-    if (!checkIsStreamRecord(obj) || obj.isCompactSummary !== true) continue;
-    const message = checkIsStreamRecord(obj.message) ? obj.message : null;
+    if (!checkIsRecord(obj) || obj.isCompactSummary !== true) continue;
+    const message = checkIsRecord(obj.message) ? obj.message : null;
     const content = message?.content;
     if (typeof content === 'string' && content.trim()) {
       summary = content;
     } else if (Array.isArray(content)) {
       const chunks: string[] = [];
       for (const block of content) {
-        if (checkIsStreamRecord(block) && block.type === 'text' && typeof block.text === 'string') {
+        if (checkIsRecord(block) && block.type === 'text' && typeof block.text === 'string') {
           chunks.push(block.text);
         }
       }

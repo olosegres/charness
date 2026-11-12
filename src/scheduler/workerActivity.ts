@@ -2,6 +2,7 @@ import { open, readdir, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { z } from 'zod';
 import { formatCheckStatusActivity } from './checkStatus';
+import { checkIsRecord } from '../utils/checkIsRecord';
 
 /**
  * @description The «now» of a worker's status line: what a detached worker (a `claude -p --output-format stream-json` or an
@@ -111,7 +112,7 @@ function parseEventLine(line: string): object | null {
   if (line.trim() === '') return null;
   try {
     const parsed: object | null = JSON.parse(line);
-    return typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed) ? parsed : null;
+    return checkIsRecord(parsed) ? parsed : null;
   } catch {
     return null; // a line the worker is still writing
   }

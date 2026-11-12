@@ -18,9 +18,6 @@
 import type { ScheduledWakeupSource } from './claudeScheduledJobs';
 import { checkIsRecord } from './checkIsRecord';
 
-/** The parse-boundary guard for untrusted process output — the shared {@link checkIsRecord}, under the name this module's readers use. */
-export const checkIsStreamRecord = checkIsRecord;
-
 /**
  * @description Newline-delimited-JSON reader with partial-line buffering. The
  * CLI writes one JSON object per line, but a stdout chunk can split a line at
@@ -64,7 +61,7 @@ export function parseStreamJsonLine(line: string): Record<string, unknown> | nul
   } catch {
     return null;
   }
-  return checkIsStreamRecord(parsed) ? parsed : null;
+  return checkIsRecord(parsed) ? parsed : null;
 }
 
 /**
@@ -205,7 +202,7 @@ function readTokenCount(rec: Record<string, unknown>, key: string): number | nul
 /** Parse `result.usage`; `null` when absent or when any present count is malformed
  *  (a half-read accounting would mislead the cache check — better no line). */
 function readResultUsage(usage: unknown): ClaudeTurnUsage | null {
-  if (!checkIsStreamRecord(usage)) return null;
+  if (!checkIsRecord(usage)) return null;
   const inputTokens = readTokenCount(usage, 'input_tokens');
   const cacheReadTokens = readTokenCount(usage, 'cache_read_input_tokens');
   const cacheWriteTokens = readTokenCount(usage, 'cache_creation_input_tokens');
@@ -216,10 +213,10 @@ function readResultUsage(usage: unknown): ClaudeTurnUsage | null {
 
 /** The turn's total over `result.modelUsage` (one entry per model used); `null` when absent or any entry is malformed. */
 function readModelUsageTotal(modelUsage: unknown): ClaudeTurnUsage | null {
-  if (!checkIsStreamRecord(modelUsage)) return null;
+  if (!checkIsRecord(modelUsage)) return null;
   const total: ClaudeTurnUsage = { inputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, outputTokens: 0 };
   for (const entry of Object.values(modelUsage)) {
-    if (!checkIsStreamRecord(entry)) return null;
+    if (!checkIsRecord(entry)) return null;
     const inputTokens = readTokenCount(entry, 'inputTokens');
     const cacheReadTokens = readTokenCount(entry, 'cacheReadInputTokens');
     const cacheWriteTokens = readTokenCount(entry, 'cacheCreationInputTokens');
@@ -256,7 +253,7 @@ function readBackgroundTasks(tasks: unknown): ClaudeBackgroundTask[] {
   if (!Array.isArray(tasks)) return [];
   const backgroundTasks: ClaudeBackgroundTask[] = [];
   for (const task of tasks) {
-    if (checkIsStreamRecord(task) && typeof task.task_id === 'string') {
+    if (checkIsRecord(task) && typeof task.task_id === 'string') {
       backgroundTasks.push({ taskId: task.task_id, description: readString(task, 'description') ?? '' });
     }
   }
@@ -289,7 +286,7 @@ function extractToolResultOutput(content: unknown): string {
   const parts: string[] = [];
   for (const block of content) {
     if (typeof block === 'string') { parts.push(block); continue; }
-    if (checkIsStreamRecord(block) && typeof block.text === 'string') parts.push(block.text);
+    if (checkIsRecord(block) && typeof block.text === 'string') parts.push(block.text);
   }
   return parts.join('');
 }
@@ -344,7 +341,7 @@ export function classifyClaudeStreamMessage(msg: Record<string, unknown>): Claud
   }
 
   if (type === 'system' && msg.subtype === 'compact_boundary') {
-    const meta = checkIsStreamRecord(msg.compact_metadata) ? msg.compact_metadata : {};
+    const meta = checkIsRecord(msg.compact_metadata) ? msg.compact_metadata : {};
     return [{
       kind: 'compactBoundary',
       trigger: readString(meta, 'trigger'),
@@ -360,13 +357,13 @@ export function classifyClaudeStreamMessage(msg: Record<string, unknown>): Claud
   }
 
   if (type === 'rate_limit_event') {
-    const info = checkIsStreamRecord(msg.rate_limit_info) ? msg.rate_limit_info : {};
+    const info = checkIsRecord(msg.rate_limit_info) ? msg.rate_limit_info : {};
     // `resetsAt` is epoch SECONDS on the frame (measured 2026-10: `1791202200`).
     const readResetMs = (value: unknown): number | null => (typeof value === 'number' && Number.isFinite(value) ? value * 1000 : null);
     const windows: Array<{ name: string; utilization: number; resetsAtMs: number | null }> = [];
-    if (checkIsStreamRecord(info.unifiedWindows)) {
+    if (checkIsRecord(info.unifiedWindows)) {
       for (const [name, window] of Object.entries(info.unifiedWindows)) {
-        if (!checkIsStreamRecord(window) || typeof window.utilization !== 'number') continue;
+        if (!checkIsRecord(window) || typeof window.utilization !== 'number') continue;
         windows.push({ name, utilization: window.utilization, resetsAtMs: readResetMs(window.resetsAt) });
       }
     }
@@ -381,9 +378,9 @@ export function classifyClaudeStreamMessage(msg: Record<string, unknown>): Claud
   }
 
   if (type === 'stream_event') {
-    const event = checkIsStreamRecord(msg.event) ? msg.event : null;
+    const event = checkIsRecord(msg.event) ? msg.event : null;
     if (!event || event.type !== 'content_block_delta') return [];
-    const delta = checkIsStreamRecord(event.delta) ? event.delta : null;
+    const delta = checkIsRecord(event.delta) ? event.delta : null;
     if (!delta) return [];
     if (delta.type === 'text_delta' && typeof delta.text === 'string') {
       return delta.text ? [{ kind: 'textDelta', text: delta.text, isSubagent }] : [];
@@ -397,11 +394,11 @@ export function classifyClaudeStreamMessage(msg: Record<string, unknown>): Claud
   if (type === 'assistant') {
     // The settled assistant message. Text/thinking already streamed via deltas;
     // here we only surface tool_use blocks (transient tool status).
-    const message = checkIsStreamRecord(msg.message) ? msg.message : null;
+    const message = checkIsRecord(msg.message) ? msg.message : null;
     const content = message && Array.isArray(message.content) ? message.content : [];
     const actions: ClaudeStreamAction[] = [];
     for (const block of content) {
-      if (!checkIsStreamRecord(block)) continue;
+      if (!checkIsRecord(block)) continue;
       if (block.type === 'tool_use' && typeof block.name === 'string' && typeof block.id === 'string') {
         actions.push({ kind: 'toolUse', tool: block.name, toolUseId: block.id, isSubagent });
       }
@@ -411,12 +408,12 @@ export function classifyClaudeStreamMessage(msg: Record<string, unknown>): Claud
 
   if (type === 'user') {
     // Either a `--replay-user-messages` echo OR a tool_result fed back to the model.
-    const message = checkIsStreamRecord(msg.message) ? msg.message : null;
+    const message = checkIsRecord(msg.message) ? msg.message : null;
     const content = message ? message.content : undefined;
     if (Array.isArray(content)) {
       const actions: ClaudeStreamAction[] = [];
       for (const block of content) {
-        if (checkIsStreamRecord(block) && block.type === 'tool_result' && typeof block.tool_use_id === 'string') {
+        if (checkIsRecord(block) && block.type === 'tool_result' && typeof block.tool_use_id === 'string') {
           actions.push({ kind: 'toolResult', toolUseId: block.tool_use_id, output: extractToolResultOutput(block.content), isSubagent });
         }
       }
@@ -437,14 +434,14 @@ export function classifyClaudeStreamMessage(msg: Record<string, unknown>): Claud
   }
 
   if (type === 'control_request') {
-    const request = checkIsStreamRecord(msg.request) ? msg.request : null;
+    const request = checkIsRecord(msg.request) ? msg.request : null;
     const requestId = readString(msg, 'request_id');
     const subtype = request ? readString(request, 'subtype') : null;
     if (!request || !requestId || !subtype) return [];
     const action: Extract<ClaudeStreamAction, { kind: 'controlRequest' }> = { kind: 'controlRequest', requestId, subtype };
     const toolName = readString(request, 'tool_name');
     if (toolName) action.toolName = toolName;
-    if (checkIsStreamRecord(request.input)) action.input = request.input;
+    if (checkIsRecord(request.input)) action.input = request.input;
     const toolUseId = readString(request, 'tool_use_id');
     if (toolUseId) action.toolUseId = toolUseId;
     const dialogKind = readString(request, 'dialog_kind');
@@ -459,14 +456,14 @@ export function classifyClaudeStreamMessage(msg: Record<string, unknown>): Claud
     // ABSENT for a plain `mcp_reconnect` ack). Without a `request_id` the frame
     // cannot be matched to the request it answers, so it is not actionable —
     // same defensive rule as the `control_request` branch above.
-    const response = checkIsStreamRecord(msg.response) ? msg.response : null;
+    const response = checkIsRecord(msg.response) ? msg.response : null;
     const requestId = response ? readString(response, 'request_id') : null;
     if (!response || !requestId) return [];
     return [{
       kind: 'controlResponse',
       requestId,
       isSuccess: readString(response, 'subtype') === 'success',
-      payload: checkIsStreamRecord(response.response) ? response.response : null,
+      payload: checkIsRecord(response.response) ? response.response : null,
     }];
   }
 

@@ -6,6 +6,7 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
+import { checkIsRecord } from './utils/checkIsRecord';
 
 export const stateFileName = 'state.json';
 
@@ -17,5 +18,5 @@ export function readStateFileObject(dataDir: string): Record<string, unknown> {
   } catch {
     return {};
   }
-  return typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed) ? Object.fromEntries(Object.entries(parsed)) : {};
+  return checkIsRecord(parsed) ? parsed : {};
 }
