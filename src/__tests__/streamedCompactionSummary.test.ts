@@ -14,6 +14,8 @@ import {
   compactionGapsEndMarker,
   compactionGapsStartMarker,
   compactionNoGapsLine,
+  compactionSkillsBlockEndMarker,
+  compactionSkillsBlockStartMarker,
   formatCompactionSummaryForTopic,
 } from '../utils/compactOnIdle';
 import {
@@ -58,6 +60,27 @@ test('createStreamedSummaryDisplay: however the tails cut the lines, what is sho
       assert.equal(shown.trim(), expected, `tails of ${size} characters, section ${JSON.stringify(sectionBody.slice(0, 12))}`);
       assert.ok(!shown.includes('<<<') && !shown.includes(compactionNoGapsLine), `no scaffolding reaches the topic (tails of ${size})`);
     }
+  }
+});
+
+test('createStreamedSummaryDisplay: the loaded-skills block never reaches the topic, however the tails cut its markers and its names', () => {
+  const summary = [
+    '## Goals',
+    compactionSkillsBlockStartMarker,
+    'test-guru',
+    'charness:charness-orchestration',
+    compactionSkillsBlockEndMarker,
+    '1. skills restored by Charness: test-guru, charness:charness-orchestration',
+    '2. run the suite',
+  ].join('\n');
+  const expected = formatCompactionSummaryForTopic(summary, gapsHeader);
+  assert.ok(!expected.includes('\ntest-guru\n'), 'the whole-summary filter drops the names');
+  for (const size of [1, 2, 3, 5, 7, 11, 25, 64, summary.length]) {
+    const display = createStreamedSummaryDisplay(gapsHeader);
+    const shown = sliceEvery(summary, size).map((tail) => display.push(tail)).join('');
+    assert.equal(shown.trim(), expected, `tails of ${size} characters`);
+    // A name is held until its line is complete: shown in part, the rest of its line would go out unfiltered.
+    assert.ok(!shown.includes('<<<') && !shown.includes('LOADED_SKILLS') && !shown.includes('test-guru\n'), `no marker, half marker or name (tails of ${size})`);
   }
 });
 

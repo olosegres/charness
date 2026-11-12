@@ -21,6 +21,14 @@ import {
   buildCompactionInstruction,
   compactionSummaryGuidance,
   compactionSkillsGuidance,
+  compactionSkillsBlockGuidance,
+  compactionSkillsBlockStartMarker,
+  compactionSkillsBlockEndMarker,
+  compactionSkillsBlockMaxNameLength,
+  skillsRestoreHeader,
+  parseCompactionLoadedSkills,
+  parseSkillsBlock,
+  readSkillsBlockLineName,
   compactionChecklistGuidance,
   compactionGapsGuidance,
   compactionGapsStartMarker,
@@ -424,15 +432,30 @@ test('buildCompactionInstruction: nothing to append → undefined', () => {
   );
 });
 
-test('compactionSkillsGuidance: names the loaded skills and says to load them again', () => {
-  assert.match(compactionSkillsGuidance, /skill/);
-  assert.match(compactionSkillsGuidance, /exact name/);
-  assert.match(compactionSkillsGuidance, /MUST load each of these skills again and follow it/);
+test('compactionSkillsBlockGuidance: one exact name per line between its own two marker lines, before the checklist and any closing section', () => {
+  assert.ok(compactionSkillsBlockGuidance.includes(`a line containing only ${compactionSkillsBlockStartMarker} and a line containing only ${compactionSkillsBlockEndMarker}`), 'the exact marker lines');
+  assert.match(compactionSkillsBlockGuidance, /exact name of every skill that was loaded \(invoked\) in this session, never translated or shortened/);
+  assert.match(compactionSkillsBlockGuidance, /namespaced name such as plugin:skill stays whole/);
+  assert.match(compactionSkillsBlockGuidance, /one name per line with nothing else on it/);
+  assert.match(compactionSkillsBlockGuidance, /placed before the numbered checklist and before any closing section/);
+  assert.match(compactionSkillsBlockGuidance, /If no skill was loaded, leave the block out/);
+  // Distinct from the other sections' markers, so no reader takes one block for another.
+  for (const marker of [compactionGapsStartMarker, compactionGapsEndMarker, compactionClosingStartMarker, compactionClosingEndMarker]) {
+    assert.ok(!compactionSkillsBlockStartMarker.startsWith(marker) && !marker.startsWith(compactionSkillsBlockStartMarker), marker);
+    assert.ok(!compactionSkillsBlockEndMarker.startsWith(marker) && !marker.startsWith(compactionSkillsBlockEndMarker), marker);
+  }
+});
+
+test('compactionSkillsGuidance: the skills stay in force — restored when the restore header follows the summary, loaded again when it does not', () => {
+  assert.ok(compactionSkillsGuidance.includes(`when the context right after this summary holds ${skillsRestoreHeader}, Charness has restored them and the continuing session must NOT load them again`));
+  assert.match(compactionSkillsGuidance, /without it, the continuing session MUST load each of them again and follow it before resuming the work/);
+  assert.ok(!compactionSkillsGuidance.includes('MUST load each of these skills again and follow it before resuming the work: a skill'), 'the unconditional reload is gone');
 });
 
 test('compactionChecklistGuidance: a skills-first numbered next-steps list that ends the summary, with no invented steps', () => {
   assert.match(compactionChecklistGuidance, /numbered checklist \(1\., 2\., 3\., one short item per line\) of what the continuing session does next, as the very LAST thing/);
-  assert.match(compactionChecklistGuidance, /Item 1 is 'load these skills' followed by the exact name of every skill that was loaded/);
+  assert.ok(compactionChecklistGuidance.includes(`Item 1 is 'skills restored by Charness (load them again only if no ${skillsRestoreHeader} follows this summary):' followed by the exact name of every skill in that block`));
+  assert.ok(!compactionChecklistGuidance.includes(`'load these skills'`), 'item 1 no longer says to load the skills unconditionally');
   assert.match(compactionChecklistGuidance, /if none was loaded, leave that item out/);
   assert.match(compactionChecklistGuidance, /next steps this summary already records, in order: invent no new steps/);
   assert.match(compactionChecklistGuidance, /closing section between two marker lines, the checklist is the last part of that section, right before its end marker/);
@@ -461,12 +484,13 @@ test('compactionGapsGuidance: its markers are distinct from the closing section\
   assert.ok(!compactionGapsGuidance.includes(compactionClosingStartMarker) && !compactionGapsGuidance.includes(compactionClosingEndMarker));
 });
 
-test('compactionResumeGuidance: the self-review section, then the skills sentence, then the checklist — the one text every compaction path carries', () => {
-  // The older text was `${skills} ${checklist}` and a process started under it keeps a PreCompact hook that skips a
-  // compaction by finding exactly that as a substring: the new sentence goes AHEAD of it, so the old text stays whole.
-  assert.equal(compactionResumeGuidance, `${compactionGapsGuidance} ${compactionSkillsGuidance} ${compactionChecklistGuidance}`);
-  assert.ok(compactionResumeGuidance.includes(`${compactionSkillsGuidance} ${compactionChecklistGuidance}`), 'the previous resume guidance is still a contiguous substring');
+test('compactionResumeGuidance: the self-review section, the skills block, the skills sentence, then the checklist — the one text every compaction path carries', () => {
+  assert.equal(compactionResumeGuidanceWithoutGaps, `${compactionSkillsBlockGuidance} ${compactionSkillsGuidance} ${compactionChecklistGuidance}`);
+  assert.equal(compactionResumeGuidance, `${compactionGapsGuidance} ${compactionResumeGuidanceWithoutGaps}`);
+  // The hook of the current text skips a compaction by finding the part every variant carries.
+  assert.ok(compactionResumeGuidance.includes(compactionResumeGuidanceWithoutGaps), 'the variant without the section is a contiguous substring');
   assert.ok(compactionResumeGuidance.endsWith(compactionChecklistGuidance), 'the checklist closes the guidance');
+  assert.equal(JSON.stringify(compactionResumeGuidanceWithoutGaps), `"${compactionResumeGuidanceWithoutGaps}"`);
   // The `PreCompact` hook matches it as a fixed string in the raw JSON on stdin: one line, nothing JSON would escape.
   assert.equal(JSON.stringify(compactionResumeGuidance), `"${compactionResumeGuidance}"`);
   assert.match(compactionResumeGuidance, /^[\x20-\x7e]+$/);
@@ -645,6 +669,104 @@ test('createCompactionSummaryLineFilter: a second section gets its own header, a
   filter.pushLine(compactionGapsEndMarker);
   filter.pushLine(compactionGapsStartMarker);
   assert.deepEqual(filter.pushLine('second'), [gapsHeader, 'second']);
+});
+
+// ── the loaded-skills block (read by the OpenCode plugin, hidden from the topic whole) ──
+
+/** A summary with a body, the skills block (namespaced names included) and the checklist that names them for the person. */
+const skillsBlockSummary = [
+  '## Objective',
+  'Ship it.',
+  compactionSkillsBlockStartMarker,
+  'test-guru',
+  'charness:charness-orchestration',
+  compactionSkillsBlockEndMarker,
+  '1. skills restored by Charness: test-guru, charness:charness-orchestration',
+  '2. run the suite',
+].join('\n');
+
+test('parseCompactionLoadedSkills: the names of the block in order, namespaced names whole; no block is null', () => {
+  assert.deepEqual(parseCompactionLoadedSkills(skillsBlockSummary), ['test-guru', 'charness:charness-orchestration']);
+  assert.equal(parseCompactionLoadedSkills('## Objective\nShip it.'), null, 'no block');
+  assert.deepEqual(parseCompactionLoadedSkills(`${compactionSkillsBlockStartMarker}\n${compactionSkillsBlockEndMarker}`), [], 'an empty block is a block with no names');
+});
+
+test('parseCompactionLoadedSkills: a broken block — no end marker, no start marker, or the end before the start — is null', () => {
+  assert.equal(parseCompactionLoadedSkills(`${compactionSkillsBlockStartMarker}\ntest-guru`), null, 'never closed');
+  assert.equal(parseCompactionLoadedSkills(`test-guru\n${compactionSkillsBlockEndMarker}`), null, 'never opened');
+  assert.equal(parseCompactionLoadedSkills(`${compactionSkillsBlockEndMarker}\ntest-guru\n${compactionSkillsBlockStartMarker}`), null, 'end before start');
+});
+
+test('parseCompactionLoadedSkills: the LAST complete pair wins — a model that restates its block means the later one', () => {
+  const restated = [compactionSkillsBlockStartMarker, 'old-skill', compactionSkillsBlockEndMarker, 'prose', compactionSkillsBlockStartMarker, 'commit', compactionSkillsBlockEndMarker].join('\n');
+  assert.deepEqual(parseCompactionLoadedSkills(restated), ['commit']);
+  // A later start marker that is never closed does not hide the complete block before it.
+  assert.deepEqual(parseCompactionLoadedSkills(`${restated}\n${compactionSkillsBlockStartMarker}\nhalf`), ['commit']);
+});
+
+test('parseCompactionLoadedSkills: a marker counts only ALONE on its line — prose quoting the instruction holds no block', () => {
+  const quoted = `The block goes between ${compactionSkillsBlockStartMarker} and ${compactionSkillsBlockEndMarker} lines.\ntest-guru`;
+  assert.equal(parseCompactionLoadedSkills(quoted), null);
+  // Leading and trailing blanks, CRLF lines: still alone on the line.
+  assert.deepEqual(parseCompactionLoadedSkills(`  ${compactionSkillsBlockStartMarker}  \r\ncommit\r\n${compactionSkillsBlockEndMarker} `), ['commit']);
+});
+
+test('parseCompactionLoadedSkills: garbage lines are dropped, names trimmed and de-duplicated, a bullet or backticks forgiven', () => {
+  const block = [
+    compactionSkillsBlockStartMarker,
+    '  commit  ',
+    '',
+    '- review',
+    '* `test-guru`',
+    'commit',
+    'load these skills again',
+    'x'.repeat(compactionSkillsBlockMaxNameLength + 1),
+    'y'.repeat(compactionSkillsBlockMaxNameLength),
+    compactionSkillsBlockEndMarker,
+  ].join('\n');
+  assert.deepEqual(parseCompactionLoadedSkills(block), ['commit', 'review', 'test-guru', 'y'.repeat(compactionSkillsBlockMaxNameLength)]);
+});
+
+test('readSkillsBlockLineName / parseSkillsBlock: self-contained — they work from their own source alone, as the OpenCode plugin embeds them', () => {
+  // The plugin embeds the source text of both functions, so neither may read anything outside its parameters.
+  // `__name`: the helper the test runner's transform injects into function bodies (the built `dist/` has none).
+  const embedded: typeof parseSkillsBlock = new Function(`const __name = (target) => target; ${readSkillsBlockLineName.toString()}; ${parseSkillsBlock.toString()}; return parseSkillsBlock;`)();
+  for (const summary of [skillsBlockSummary, 'no block', `${compactionSkillsBlockStartMarker}\n- a\nb c\n${compactionSkillsBlockEndMarker}`]) {
+    assert.deepEqual(
+      embedded(summary, compactionSkillsBlockStartMarker, compactionSkillsBlockEndMarker, compactionSkillsBlockMaxNameLength),
+      parseCompactionLoadedSkills(summary),
+      summary,
+    );
+  }
+});
+
+test('formatCompactionSummaryForTopic: the skills block goes WHOLE — markers and names — and the checklist that names the skills stays', () => {
+  assert.equal(
+    formatCompactionSummaryForTopic(skillsBlockSummary, gapsHeader),
+    ['## Objective', 'Ship it.', '1. skills restored by Charness: test-guru, charness:charness-orchestration', '2. run the suite'].join('\n'),
+  );
+  // Names on the start marker's own line are block content too; prose after the end marker on its line stays.
+  const glued = ['a', `${compactionSkillsBlockStartMarker} commit`, 'review', `${compactionSkillsBlockEndMarker} then prose`, 'b'].join('\n');
+  assert.equal(formatCompactionSummaryForTopic(glued, gapsHeader), ['a', 'then prose', 'b'].join('\n'));
+});
+
+test('formatCompactionSummaryForTopic: a block whose end marker never came hides its names only — the first line that is no name shows again', () => {
+  const unclosed = ['## Objective', compactionSkillsBlockStartMarker, 'commit', '', 'review', '1. run the suite', 'single'].join('\n');
+  assert.equal(formatCompactionSummaryForTopic(unclosed, gapsHeader), ['## Objective', '1. run the suite', 'single'].join('\n'));
+});
+
+test('createCompactionSummaryLineFilter: says when it is inside the skills block, so a streamed unfinished line there is held', () => {
+  const filter = createCompactionSummaryLineFilter(gapsHeader);
+  assert.equal(filter.checkIsInHiddenBlock(), false);
+  filter.pushLine(compactionSkillsBlockStartMarker);
+  assert.equal(filter.checkIsInHiddenBlock(), true);
+  assert.deepEqual(filter.pushLine('commit'), []);
+  assert.equal(filter.checkIsInHiddenBlock(), true);
+  filter.pushLine(compactionSkillsBlockEndMarker);
+  assert.equal(filter.checkIsInHiddenBlock(), false);
+  // The self-review section next to it keeps its header and content.
+  filter.pushLine(compactionGapsStartMarker);
+  assert.deepEqual(filter.pushLine('1. Mistake: a.'), [gapsHeader, '1. Mistake: a.']);
 });
 
 // ── extractCompactionInstructionGaps (the section the bot posts even when the summary is hidden) ──
