@@ -1,4 +1,5 @@
 import { checkIsAbortError } from '../utils';
+import { landStreamedOutputWithinLimit } from './streamedOutputLanding';
 import type { SendFilesToThread, SendFilesToThreadResult } from './fileSendService';
 import { formatSentKinds, type SentKind } from './sentKindsSummary';
 
@@ -110,7 +111,8 @@ export interface SendMessagesToThreadDeps<TTarget> {
    * Land what the agent streamed before this call into the topic — the text its backend still batches and the output the topic
    * still debounces or is sending — so the messages of this call are posted BELOW it. The agent writes its text, then calls the
    * tool: without this the text, held back for a moment, would appear under the messages it led up to. A landing that fails is
-   * logged and never holds the messages back.
+   * logged and never holds the messages back, and one that does not end within `streamedOutputLandingLimitMs` is given up on:
+   * a send that hangs must not hold the agent's tool call.
    */
   landStreamedOutput(target: TTarget): Promise<void>;
 }
@@ -214,11 +216,7 @@ export function createSendMessagesToThread<TTarget>(
     const resolved = deps.resolveTarget(threadKey);
     if (!resolved.ok) return { ok: false, error: resolved.error };
     const { target } = resolved;
-    try {
-      await deps.landStreamedOutput(target);
-    } catch (error) {
-      console.error(`[send] the streamed text of ${threadKey} could not be landed before its messages:`, error instanceof Error ? error.message : error);
-    }
+    await landStreamedOutputWithinLimit(() => deps.landStreamedOutput(target), threadKey);
 
     let attempted = 0;
     let landed = 0;

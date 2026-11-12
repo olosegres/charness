@@ -28,6 +28,7 @@ import type {
 } from '../utils/fileSendService';
 import { classifyFileSendKind } from '../utils/fileSendPlan';
 import { getAbortError } from '../utils';
+import { streamedOutputLandingLimitMs } from '../utils/streamedOutputLanding';
 
 interface FileCall {
   threadKey: string;
@@ -481,6 +482,28 @@ test('a landing that fails is logged and the messages are still posted', async (
     assert.match(String(logged.mock.calls[0].arguments.join(' ')), /the send path is down/);
   } finally {
     logged.mock.restore();
+  }
+});
+
+test('a landing that never ends is given up on after the limit: the messages are posted anyway, so a hung send cannot hold the agent\'s tool call', async () => {
+  mock.timers.enable({ apis: ['setTimeout'] });
+  const warned = mock.method(console, 'warn', () => {});
+  try {
+    const { service, recorder } = createService({ landStreamedOutput: () => new Promise<void>(() => {}) });
+
+    const posting = service('-100:1', { messages: ['posted'] });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.deepEqual(recorder.sent, [], 'nothing is posted while the landing may still end');
+
+    mock.timers.tick(streamedOutputLandingLimitMs);
+    const result = await posting;
+
+    assert.equal(result.ok && result.summary, 'Delivered 1 message: 1 text.');
+    assert.deepEqual(recorder.sent, ['posted']);
+    assert.equal(warned.mock.callCount(), 1, 'the give-up is reported');
+  } finally {
+    warned.mock.restore();
+    mock.timers.reset();
   }
 });
 

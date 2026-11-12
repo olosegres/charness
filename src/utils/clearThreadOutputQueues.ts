@@ -9,6 +9,13 @@ import type { PendingOutputSegment } from '../connectors/telegram/outputFlushPla
 export interface ClearableOutputQueue {
   /** Coalesced, not-yet-sent agent output, oldest first. Empty = nothing queued. */
   pendingSegments: PendingOutputSegment[];
+  /** The text a 429 kept from landing, waiting for the retry. `null` = none. */
+  requeuedRemainder: string | null;
+  /**
+   * How many times the queue was cleared: a landing that started before a clear sees the count move and puts nothing back —
+   * a stop leaves nothing to be posted after it.
+   */
+  clearCount: number;
   /** Armed debounce timer that would flush the pending segments. `null` = none. */
   debounceTimer: NodeJS.Timeout | null;
 }
@@ -49,6 +56,8 @@ export function clearThreadOutputQueues(
 ): void {
   if (queue) {
     queue.pendingSegments = [];
+    queue.requeuedRemainder = null;
+    queue.clearCount += 1;
     if (queue.debounceTimer) {
       clearTimeout(queue.debounceTimer);
       queue.debounceTimer = null;

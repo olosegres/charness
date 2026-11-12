@@ -318,6 +318,21 @@ describe('A question the agent asks stays in the topic however it ends, end to e
     await bootBindAndStartAgent();
   });
 
+  it('the text the agent streamed an instant before its question reaches the topic BEFORE the question, which is posted once and stays where it is', async () => {
+    // The fake streams `Working on <label>.` and puts the question within milliseconds: the text is still unread by the bot's tail
+    // poll or in the adapter's batch window when the question event comes, so the question would overtake it.
+    const question = await askQuestion(topic, 'KEPTORDER-1');
+    await waitForPinned(question);
+    const sentTexts = fakeTelegram.listCalls('sendMessage').map((call) => String(call.payload.text));
+    const streamTextIndex = sentTexts.findIndex((text) => text.includes('Working on KEPTORDER-1'));
+    const questionIndex = sentTexts.findIndex((text) => text.includes(fakeAskQuestion.question));
+    assert.ok(streamTextIndex >= 0, 'the stream text was sent');
+    assert.ok(questionIndex > streamTextIndex, `the question (send ${questionIndex}) was sent after the stream text (send ${streamTextIndex})`);
+    assert.equal(sentTexts.filter((text) => text.includes(fakeAskQuestion.question)).length, 1, 'the question was posted once: nothing had to put it back below the text');
+    await topic.tapAndAwaitAnswer(question, 'qa_0_0');
+    await getCharness().waitFor('the agent to get the answer', agentStartTimeoutMs, () => getGivenAnswers().length > 0);
+  });
+
   it('a tap on an option: the question message stays with its options, the chosen answer stands in place of the buttons, the pin is gone, the agent gets the answer', async () => {
     const question = await askQuestion(topic, 'KEPT-TAP');
     await waitForPinned(question);

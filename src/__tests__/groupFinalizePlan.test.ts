@@ -14,13 +14,15 @@
  * Landing the output ahead of what is posted next (`landGroupOutput`, `flushNextPendingOutput`, `runInSendChain`): the text the
  * debounce still holds, a flush already sending and a landing already sending must all reach the topic BEFORE it — every send of
  * a topic's output runs one after the other, in the order it was started (the segments in order; an older send first; the 429
- * leftover of a flush ahead of what a landing took) — and the queue must be emptied before anything is awaited, because a
- * teardown clears it right after.
+ * leftover of a flush ahead of what a landing took, and never mixed up with text written after it) — a 429 that stops a landing
+ * puts what it could not send back for a retry, unless the queue was cleared meanwhile (a stop) — and the queue must be emptied
+ * before anything is awaited, because a teardown clears it right after.
  */
 
 import { describe, test, it, mock } from 'node:test';
 import * as assert from 'node:assert/strict';
 import { createGroupFinalizeQueue, flushNextPendingOutput, getGroupFinalizePlan, landGroupOutput, runInSendChain, type GroupFinalizeQueue } from '../utils/groupFinalizePlan';
+import { clearThreadOutputQueues } from '../utils/clearThreadOutputQueues';
 import type { PendingOutputSegment } from '../connectors/telegram/outputFlushPlan';
 
 function createSegment(output: string, flags: Partial<Omit<PendingOutputSegment, 'output'>> = {}): PendingOutputSegment {
@@ -98,7 +100,7 @@ describe('runInSendChain', () => {
 });
 
 describe('landGroupOutput', () => {
-  it('sends the pending segments in order and reports nothing dropped', async () => {
+  it('sends the pending segments in order and reports them landed', async () => {
     const first = createSegment('the first text');
     const second = createSegment('the next turn\'s text', { isContinuation: true, startsNewMessage: true });
     const queue = createQueue([first, second]);
@@ -107,7 +109,7 @@ describe('landGroupOutput', () => {
     const outcome = await landGroupOutput(queue, async (segment) => { sent.push(segment); return { unsentRemainder: null }; });
 
     assert.deepEqual(sent, [first, second]);
-    assert.deepEqual(outcome, { isRemainderDropped: false });
+    assert.equal(outcome, 'landed');
     assert.deepEqual(queue.pendingSegments, []);
   });
 
@@ -211,42 +213,61 @@ describe('landGroupOutput', () => {
     assert.deepEqual(events, ['landing sends: taken by the landing', 'flush sends: queued after the landing took its text']);
   });
 
-  it('the 429 leftover of the flush it waited for goes out FIRST: it is older than what the landing took', async () => {
-    const queue = createQueue([createSegment('the flush\'s text'), createSegment('what the landing takes', { startsNewMessage: true })]);
+  it('the 429 leftover of the flush it waited for goes out FIRST, and text written after the landing took its own stays pending, in order', async () => {
+    // Flush F is sending A and hits a 429; the landing L takes B and waits behind it; the agent writes C meanwhile.
+    const queue = createQueue([createSegment('A'), createSegment('B', { startsNewMessage: true })]);
     const flushGate = createDeferred();
     const sentTexts: string[] = [];
     const flush = runInSendChain(queue, () => flushNextPendingOutput(queue, async () => {
       await flushGate.promise;
-      return { unsentRemainder: 'the part a 429 kept back' };
+      return { unsentRemainder: 'A-prime' };
     }));
     await settleReactions();
     const landing = landGroupOutput(queue, async (segment) => { sentTexts.push(segment.output); return { unsentRemainder: null }; });
+    queue.pendingSegments.push(createSegment('C', { startsNewMessage: true }));
 
     flushGate.resolve();
     await Promise.all([flush, landing]);
 
-    assert.deepEqual(sentTexts, ['the part a 429 kept back', 'what the landing takes']);
-    assert.deepEqual(queue.pendingSegments, [], 'the leftover is not sent a second time by the debounce');
-    assert.equal(queue.isRemainderRequeued, false);
+    assert.deepEqual(sentTexts, ['A-prime', 'B'], 'the leftover, then what the landing took — not C, which is newer than B');
+    assert.deepEqual(queue.pendingSegments.map((segment) => segment.output), ['C']);
+    assert.equal(queue.requeuedRemainder, null);
   });
 
-  it('a segment a 429 kept from landing ends the run: everything behind it is dropped and the caller is told', async () => {
-    const queue = createQueue([createSegment('landed'), createSegment('dropped by a 429'), createSegment('behind the dropped one')]);
+  it('a segment a 429 kept from landing is put back for the retry — its text at the head, the segments behind it after it, before newer text', async () => {
+    const queue = createQueue([createSegment('landed'), createSegment('hit by a 429'), createSegment('behind it', { startsNewMessage: true })]);
     const attempted: string[] = [];
-
-    const outcome = await landGroupOutput(queue, async (segment) => {
+    const landing = landGroupOutput(queue, async (segment) => {
       attempted.push(segment.output);
-      return { unsentRemainder: segment.output === 'dropped by a 429' ? segment.output : null };
+      return { unsentRemainder: segment.output === 'hit by a 429' ? 'the part a 429 kept back' : null };
+    });
+    queue.pendingSegments.push(createSegment('newer', { startsNewMessage: true }));
+
+    const outcome = await landing;
+
+    assert.deepEqual(attempted, ['landed', 'hit by a 429'], 'the run ends at the failure');
+    assert.equal(outcome, 'restoredForRetry');
+    assert.equal(queue.requeuedRemainder, 'the part a 429 kept back');
+    assert.deepEqual(queue.pendingSegments.map((segment) => segment.output), ['behind it', 'newer']);
+  });
+
+  it('a segment a 429 kept from landing is dropped when the queue was cleared meanwhile: a stop leaves nothing to post after it', async () => {
+    const queue = createQueue([createSegment('hit by a 429'), createSegment('behind it')]);
+
+    const outcome = await landGroupOutput(queue, async () => {
+      clearThreadOutputQueues(queue, undefined);
+      return { unsentRemainder: 'the part a 429 kept back' };
     });
 
-    assert.deepEqual(attempted, ['landed', 'dropped by a 429']);
-    assert.deepEqual(outcome, { isRemainderDropped: true });
+    assert.equal(outcome, 'dropped');
+    assert.equal(queue.requeuedRemainder, null);
+    assert.deepEqual(queue.pendingSegments, []);
   });
 
   it('with only blank segments pending it sends nothing and returns at once', async () => {
     const queue = createQueue([createSegment('  ')]);
 
-    assert.deepEqual(await landGroupOutput(queue, async () => { assert.fail('a blank segment is never sent'); }), { isRemainderDropped: false });
+    assert.equal(await landGroupOutput(queue, async () => { assert.fail('a blank segment is never sent'); }), 'landed');
   });
 });
 
@@ -267,21 +288,24 @@ describe('flushNextPendingOutput', () => {
     await flushNextPendingOutput(createQueue([]), async () => { assert.fail('there is nothing to send'); });
   });
 
-  it('puts the text a 429 kept from landing back at the FRONT of the buffer and notes it, so a landing can send it first', async () => {
+  it('keeps the text a 429 kept from landing apart from the pending segments, for the next flush or landing to send first', async () => {
     const queue = createQueue([createSegment('the flush\'s text'), createSegment('queued behind it', { startsNewMessage: true })]);
 
     await flushNextPendingOutput(queue, async () => ({ unsentRemainder: 'the kept part' }));
 
-    assert.deepEqual(queue.pendingSegments.map((segment) => segment.output), ['the kept part', 'queued behind it']);
-    assert.equal(queue.isRemainderRequeued, true);
+    assert.equal(queue.requeuedRemainder, 'the kept part');
+    assert.deepEqual(queue.pendingSegments.map((segment) => segment.output), ['queued behind it']);
   });
 
-  it('a flush that sends everything clears the note: the leftover is not an older text any more', async () => {
-    const queue = createQueue([createSegment('the kept part')]);
-    queue.isRemainderRequeued = true;
+  it('the next flush sends the leftover first, and not twice', async () => {
+    const queue = createQueue([createSegment('the next turn\'s text', { startsNewMessage: true })]);
+    queue.requeuedRemainder = 'the kept part';
+    const sent: string[] = [];
 
-    await flushNextPendingOutput(queue, async () => ({ unsentRemainder: null }));
+    await flushNextPendingOutput(queue, async (segment) => { sent.push(segment.output); return { unsentRemainder: null }; });
+    await flushNextPendingOutput(queue, async (segment) => { sent.push(segment.output); return { unsentRemainder: null }; });
 
-    assert.equal(queue.isRemainderRequeued, false);
+    assert.deepEqual(sent, ['the kept part', 'the next turn\'s text']);
+    assert.equal(queue.requeuedRemainder, null);
   });
 });

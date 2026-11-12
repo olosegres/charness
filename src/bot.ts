@@ -266,6 +266,7 @@ import { pruneExpiredBuckets, retentionMs as logBucketRetentionMs } from './util
 import { consoleFileBase, consoleFileExt } from './utils/consoleFileTap';
 import { clearThreadOutputQueues } from './utils/clearThreadOutputQueues';
 import { createGroupFinalizeQueue, flushNextPendingOutput, landGroupOutput, runInSendChain, type GroupFinalizeQueue } from './utils/groupFinalizePlan';
+import { landStreamedOutputWithinLimit } from './utils/streamedOutputLanding';
 import { persistAdapterSessionIds } from './utils/persistAdapterSessionIds';
 import { checkIsConversationRecorded, getEnsureSessionPlan, getPersistedSessionIdForAdapter, getResumeFailureAction, type ResumeFailureKind } from './utils/ensureSessionPlan';
 import { AgentBackendUnavailableError } from './adapters/backendUnavailableError';
@@ -4627,20 +4628,26 @@ async function processOutputQueue(key: SessionKey): Promise<void> {
       sendOutputImmediate(key, segment.output, segment.isContinuation, segment.startsNewMessage)));
   } finally {
     q.isProcessing = false;
-    if (checkHasPendingOutput(q)) {
-      // Audit S13 / #30: the re-trigger `setTimeout` used to be a bare
-      // call whose handle was never stored. A `queueOutput` call between
-      // here and the timer firing would `clearTimeout(null)` and
-      // schedule a duplicate timer, leaving one orphan callback alive.
-      // Routing through `queueOutput`-equivalent code keeps `q.debounceTimer`
-      // authoritative.
-      if (q.debounceTimer) clearTimeout(q.debounceTimer);
-      q.debounceTimer = setTimeout(() => {
-        q.debounceTimer = null;
-        processOutputQueue(key);
-      }, q.pendingSegments.length > 1 ? 0 : getOutputDelay(getTelegramChatId(key)));
-    }
+    if (checkHasPendingOutput(q)) armOutputRetry(key, q);
   }
+}
+
+/**
+ * @description Arm the timer that flushes what a flush or a landing left pending (text a 429 kept from landing, or queued while
+ * it was sending). Several segments flush at once; one waits out the debounce, stretched while the chat is in a 429 cooldown.
+ */
+function armOutputRetry(key: SessionKey, q: OutputQueueState): void {
+  // Audit S13 / #30: the re-trigger `setTimeout` used to be a bare
+  // call whose handle was never stored. A `queueOutput` call between
+  // here and the timer firing would `clearTimeout(null)` and
+  // schedule a duplicate timer, leaving one orphan callback alive.
+  // Routing through `queueOutput`-equivalent code keeps `q.debounceTimer`
+  // authoritative.
+  if (q.debounceTimer) clearTimeout(q.debounceTimer);
+  q.debounceTimer = setTimeout(() => {
+    q.debounceTimer = null;
+    processOutputQueue(key);
+  }, q.pendingSegments.length > 1 ? 0 : getOutputDelay(getTelegramChatId(key)));
 }
 
 /**
@@ -4672,13 +4679,17 @@ async function processOutputQueue(key: SessionKey): Promise<void> {
 async function finalizeGroupOutput(key: SessionKey): Promise<void> {
   const q = outputQueues.get(keyToString(key));
   if (!q) return;
-  const { isRemainderDropped } = await landGroupOutput(q, (segment) =>
+  const outcome = await landGroupOutput(q, (segment) =>
     sendOutputImmediate(key, segment.output, segment.isContinuation, segment.startsNewMessage));
-  // A remainder that still 429'd at teardown is dropped (the buffer is being
-  // torn down anyway — unchanged from the pre-S2 discard), and so is everything behind it. Do NOT re-queue: the
-  // queue is about to be cleared, and re-queuing would race that clear. At 1/2s
-  // global pacing a 429 here is essentially impossible.
-  if (isRemainderDropped) console.warn(`[send] ${keyToString(key)} finalize remainder 429'd and was dropped at teardown`);
+  // A remainder that 429'd after the queue was cleared (a stop, a teardown) is dropped, and so is everything behind it: the
+  // buffer was torn down anyway — unchanged from the pre-S2 discard — and re-queuing would post after the stop. Mid-turn (an
+  // answer, a tool call's status frame, a question) it was put back, and the retry is armed. At 1/2s global pacing a 429
+  // here is essentially impossible.
+  if (outcome === 'dropped') console.warn(`[send] ${keyToString(key)} finalize remainder 429'd and was dropped at teardown`);
+  if (outcome === 'restoredForRetry') {
+    console.warn(`[send] ${keyToString(key)} landing remainder 429'd and was put back for a retry`);
+    armOutputRetry(key, q);
+  }
 }
 
 /**
@@ -12889,9 +12900,10 @@ function handleAgentQuestion(key: SessionKey, questionData: OpenCodePendingQuest
   // the live draft so its already-accumulated text lands as a permanent message
   // above the prompt, not dropped; the finalize IS the persistence — no parallel
   // queueOutput in DM. Group: drain any coalesced-but-unsent output so the answer
-  // lands above the prompt rather than behind it, S2). Fire-and-forget; a
-  // fully-delivered turn is a no-op for both.
-  void getOutboundFor(key).finalize(key);
+  // lands above the prompt rather than behind it, S2). Started HERE, so the text is
+  // taken before anything else moves; the question is posted once it has landed (or
+  // after `streamedOutputLandingLimitMs`). A fully-delivered turn is a no-op for both.
+  const streamedOutputLanding = landStreamedOutputWithinLimit(() => landStreamedOutputOfThread(key), keyToString(key));
   // The question UI replaces the "working" cue — stop the typing loader.
   getOutboundFor(key).setActivity(key, 'idle');
 
@@ -12914,7 +12926,10 @@ function handleAgentQuestion(key: SessionKey, questionData: OpenCodePendingQuest
     currentIndex: 0,
   });
 
-  void runQuestionLifecycleOp(key, () => postPendingQuestionAt(key));
+  void runQuestionLifecycleOp(key, async () => {
+    await streamedOutputLanding;
+    await postPendingQuestionAt(key);
+  });
 }
 
 /**
@@ -14293,6 +14308,18 @@ const sendFilesToThread = createSendFilesToThread<SessionKey>({
 });
 
 /**
+ * @description Land what the agent streamed before a call it just made — the text its backend still batches (or has written and
+ * the bot has not read yet) and the output the topic still debounces or is sending — so what the call posts lands BELOW it.
+ * The sender of `answer_request` and `send_messages_to_user` and the question path run it first.
+ */
+async function landStreamedOutputOfThread(key: SessionKey): Promise<void> {
+  // The text may still sit in the adapter's own batch window (or unread in its output log): it has to reach the output queue
+  // before that queue is landed.
+  getThreadAdapter(key).flushPendingOutput?.(key);
+  await getOutboundFor(key).finalize(key);
+}
+
+/**
  * Discrete-message sender behind `send_messages_to_user`. Each message is sent as
  * its OWN permanent message through `replyChunkWithFallback` (HTML-first with a
  * plain-text fallback), which paces via the global `enqueueSend` and records the
@@ -14315,12 +14342,7 @@ const sendMessagesToThread = createSendMessagesToThread<SessionKey>({
   splitMessage,
   maxMessageLength: MAX_MESSAGE_LEN,
   measureRendered: (chunk) => renderAgentHtml(chunk).length,
-  landStreamedOutput: async (key) => {
-    // The text the agent streamed just before this call may still sit in the adapter's own batch window (or unread in its
-    // output log): it has to reach the output queue before that queue is landed.
-    getThreadAdapter(key).flushPendingOutput?.(key);
-    await getOutboundFor(key).finalize(key);
-  },
+  landStreamedOutput: landStreamedOutputOfThread,
 });
 
 // ═══════════════════════════════════════════════════════════════════════════════

@@ -257,9 +257,11 @@ restarts — every hot reload — never touch it. Per-thread host dir
   emits what its batch holds (an error-ended turn's text too, ahead of its error), so
   a finished turn leaves the offset at the end of the log. `flushPendingOutput` (optional
   on `AgentAdapter`, also OpenCode's) does the same mid-turn on demand: it reads the tail
-  (the poll lags the process) and emits the batch, so the bot can land the text the agent
-  streamed before it posts its `answer_request` answer or its `send_messages_to_user` messages
-  (`utils/messageSendService.ts`).
+  (the poll lags the process; not from inside the handling of a chunk, as a question event asks,
+  nor from an adopted tail the boot still holds — its replay waits for `releaseAdoptedTails`)
+  and emits the batch, so the bot can land the text the agent streamed before it posts its
+  `answer_request` answer, its `send_messages_to_user` messages (`utils/messageSendService.ts`) or
+  its question (`handleAgentQuestion`).
   The record also carries the background-task list (ids, and `backgroundTasks`
   with descriptions), a turn-in-flight flag, the outstanding tool calls, the
   pending notification turn, the hold's start, the `CronCreate` jobs and a

@@ -238,7 +238,7 @@ describe('getGroupDeltaContinuation (S3 — Claude edit-in-place in group mode)'
 });
 
 function createEmptyBuffer(): PendingOutputBuffer {
-  return { pendingSegments: [] };
+  return { pendingSegments: [], requeuedRemainder: null };
 }
 
 const midReplyBatch = { isContinuation: true, startsNewParagraph: false };
@@ -344,22 +344,32 @@ describe('addPendingOutput / takePendingOutput (the new-message mark belongs to 
     assert.equal(takePendingOutput(buffer), null);
   });
 
-  it('an unsent remainder goes back to the front as a fresh message and joins the next segment; a segment after a boundary stays apart', () => {
+  it('an unsent remainder is kept apart from the pending segments, and the next take hands it over FIRST as a fresh message — joined to the next segment unless a boundary was marked before that one', () => {
     const alone = createEmptyBuffer();
     requeueUnsentRemainder(alone, 'the part that hit a 429');
-    assert.deepEqual(alone.pendingSegments, [{ output: 'the part that hit a 429', isContinuation: false, startsNewMessage: false }]);
+    assert.deepEqual(alone.pendingSegments, [], 'never mixed into the pending text, which may be newer than what a landing took');
+    assert.equal(checkHasPendingOutput(alone), true, 'it still waits to be sent');
+    assert.deepEqual(takePendingOutput(alone), { output: 'the part that hit a 429', isContinuation: false, startsNewMessage: false });
+    assert.equal(checkHasPendingOutput(alone), false);
 
     const queuedMeanwhile = createEmptyBuffer();
     addPendingOutput(queuedMeanwhile, { needsNewMessage: false }, { output: 'newer', ...midReplyBatch });
     requeueUnsentRemainder(queuedMeanwhile, 'older');
-    assert.deepEqual(queuedMeanwhile.pendingSegments, [{ output: 'older\nnewer', isContinuation: false, startsNewMessage: false }]);
+    assert.deepEqual(queuedMeanwhile.pendingSegments, [{ output: 'newer', isContinuation: true, startsNewMessage: false }]);
+    assert.deepEqual(takePendingOutput(queuedMeanwhile), { output: 'older\nnewer', isContinuation: false, startsNewMessage: false });
+    assert.equal(checkHasPendingOutput(queuedMeanwhile), false);
 
     const behindBoundary = createEmptyBuffer();
     addPendingOutput(behindBoundary, { needsNewMessage: true }, { output: 'the next turn', ...midReplyBatch });
     requeueUnsentRemainder(behindBoundary, 'the previous turn\'s part');
-    assert.deepEqual(behindBoundary.pendingSegments, [
-      { output: 'the previous turn\'s part', isContinuation: false, startsNewMessage: false },
-      { output: 'the next turn', isContinuation: true, startsNewMessage: true },
-    ]);
+    assert.deepEqual(takePendingOutput(behindBoundary), { output: 'the previous turn\'s part', isContinuation: false, startsNewMessage: false });
+    assert.deepEqual(takePendingOutput(behindBoundary), { output: 'the next turn', isContinuation: true, startsNewMessage: true });
+  });
+
+  it('a second unsent remainder before the first one went out is joined to it, oldest first, not lost', () => {
+    const buffer = createEmptyBuffer();
+    requeueUnsentRemainder(buffer, 'first');
+    requeueUnsentRemainder(buffer, 'second');
+    assert.deepEqual(takePendingOutput(buffer), { output: 'first\n\nsecond', isContinuation: false, startsNewMessage: false });
   });
 });

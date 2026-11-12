@@ -47,25 +47,22 @@ export function getGroupFinalizePlan(input: GroupFinalizeInput): GroupFinalizePl
 
 /**
  * @name GroupFinalizeQueue
- * @description The part of `bot.ts`'s `OutputQueueState` the sending of a thread's output touches: the pending segments, the
- * debounce timer that would flush them later, the chain every send of this output runs in ({@link runInSendChain}) and the note
- * that a flush put a 429 leftover back.
+ * @description The part of `bot.ts`'s `OutputQueueState` the sending of a thread's output touches: the pending segments (and the
+ * text a 429 kept from landing, kept apart from them), the debounce timer that would flush them later, the chain every send of
+ * this output runs in ({@link runInSendChain}) and the count of clears.
  */
 export interface GroupFinalizeQueue extends PendingOutputBuffer {
   /** The armed debounce timer that would flush the pending segments. `null` = none. */
   debounceTimer: NodeJS.Timeout | null;
   /** Settles when the last send started in the chain is over, however it ended; never rejects. */
   sendChainTail: Promise<void>;
-  /**
-   * A flush put the text a 429 kept from landing back at the front of the buffer, and nothing has sent it yet: it is OLDER than
-   * what a landing that started meanwhile took, so that landing sends it first.
-   */
-  isRemainderRequeued: boolean;
+  /** How many times the queue was cleared (a stop, a teardown): see `ClearableOutputQueue`. */
+  clearCount: number;
 }
 
 /** @description An empty output queue of a thread: nothing pending, no timer, nothing sending. */
 export function createGroupFinalizeQueue(): GroupFinalizeQueue {
-  return { pendingSegments: [], debounceTimer: null, sendChainTail: Promise.resolve(), isRemainderRequeued: false };
+  return { pendingSegments: [], requeuedRemainder: null, debounceTimer: null, sendChainTail: Promise.resolve(), clearCount: 0 };
 }
 
 /**
@@ -82,28 +79,28 @@ export function runInSendChain<TResult>(queue: Pick<GroupFinalizeQueue, 'sendCha
 }
 
 /**
- * @description The body of one debounce flush, to run in the chain: send the OLDEST pending segment.
+ * @description The body of one debounce flush, to run in the chain: send the OLDEST pending text — the leftover of a 429 first.
  *
- * No silent drop: a chunk dropped on a 429 after the retry-after wait comes back as `unsentRemainder`. It is put BACK at the
- * FRONT of the buffer (it is older than anything that arrived during the await) so the re-trigger flush retries it — never
- * lost. Landed chunks are excluded by `getUnsentRemainder`, so this never re-sends what already reached Telegram. The remainder
- * restarts a fresh message (its predecessors landed / edited in place already), so it is NOT a continuation. The note on the
- * queue tells a landing that runs next that this text is older than what it took.
+ * No silent drop: a chunk dropped on a 429 after the retry-after wait comes back as `unsentRemainder`. It is kept (apart from
+ * the pending segments, see `requeueUnsentRemainder`) so the re-trigger flush retries it — never lost. Landed chunks are
+ * excluded by `getUnsentRemainder`, so this never re-sends what already reached Telegram.
  */
 export async function flushNextPendingOutput(
   queue: GroupFinalizeQueue,
   sendSegment: (segment: PendingOutputSegment) => Promise<{ unsentRemainder: string | null }>,
 ): Promise<void> {
-  // This flush takes whatever is oldest, a leftover included: nothing is left over for a landing to send first.
-  queue.isRemainderRequeued = false;
   const segment = takePendingOutput(queue);
   if (!segment) return;
   const { unsentRemainder } = await sendSegment(segment);
-  if (unsentRemainder) {
-    requeueUnsentRemainder(queue, unsentRemainder);
-    queue.isRemainderRequeued = true;
-  }
+  if (unsentRemainder) requeueUnsentRemainder(queue, unsentRemainder);
 }
+
+/**
+ * @description How a landing ended: `landed` — everything it took is out; `restoredForRetry` — a 429 kept some of it from
+ * landing and it was put back for the debounce flush to retry (the caller arms the retry); `dropped` — the same, but the queue
+ * was cleared meanwhile (a stop, a teardown): nothing may be posted after that, so the rest is dropped.
+ */
+export type GroupLandingOutcome = 'landed' | 'restoredForRetry' | 'dropped';
 
 /**
  * @description Land everything the thread's output queue still holds — the segments waiting for their debounce, and every send
@@ -114,14 +111,17 @@ export async function flushNextPendingOutput(
  * The pending segments are taken and the debounce timer cleared SYNCHRONOUSLY, before anything is awaited: a teardown clears
  * the queue right after it starts this, and would otherwise find the segments gone twice or not at all. Their sending, and the
  * return of this call, wait their turn in {@link runInSendChain}, so a flush or a landing already sending lands first. The 429
- * leftover such a flush put back is older than the segments taken: it goes out ahead of them.
- * `sendSegment` sends one segment; it reports the text a 429 kept from landing, which ends the run: everything behind it is
- * dropped (the caller warns), as the teardown drain always treated it.
+ * leftover such a flush kept is older than the segments taken: it goes out ahead of them, and text queued after they were taken
+ * stays pending for the next flush.
+ * `sendSegment` sends one segment; it reports the text a 429 kept from landing, which ends the run. What was not sent goes
+ * back for the retry — the kept text apart, the segments behind it ahead of what is pending now — unless the queue was cleared
+ * since this call started: then a stop or a teardown has the word and the rest is dropped (the caller warns).
  */
 export function landGroupOutput(
   queue: GroupFinalizeQueue,
   sendSegment: (segment: PendingOutputSegment) => Promise<{ unsentRemainder: string | null }>,
-): Promise<{ isRemainderDropped: boolean }> {
+): Promise<GroupLandingOutcome> {
+  const clearCountAtStart = queue.clearCount;
   const plan = getGroupFinalizePlan(queue);
   if (plan.action === 'send') {
     // Snapshot is captured by the plan; empty the buffer SYNCHRONOUSLY before the await so the immediately-following
@@ -135,24 +135,23 @@ export function landGroupOutput(
   // Fully delivered → nothing taken: no-op, no dupe.
   const takenSegments = plan.action === 'send' ? plan.segments : [];
   return runInSendChain(queue, async () => {
-    for (const segment of [...takeRequeuedRemainder(queue), ...takenSegments]) {
+    const segments = [...takeRequeuedRemainder(queue), ...takenSegments];
+    for (const [index, segment] of segments.entries()) {
       const { unsentRemainder } = await sendSegment(segment);
-      if (unsentRemainder) return { isRemainderDropped: true };
+      if (!unsentRemainder) continue;
+      if (queue.clearCount !== clearCountAtStart) return 'dropped';
+      queue.pendingSegments = [...segments.slice(index + 1), ...queue.pendingSegments];
+      requeueUnsentRemainder(queue, unsentRemainder);
+      return 'restoredForRetry';
     }
-    return { isRemainderDropped: false };
+    return 'landed';
   });
 }
 
-/** @description The segments a flush that has just ended put back after a 429 (the whole buffer: the leftover is joined to what followed it), taken out for a landing. Empty when none did. */
+/** @description The text a flush that has just ended kept after a 429, as the segment to send first, taken out of the queue. Empty when there is none. */
 function takeRequeuedRemainder(queue: GroupFinalizeQueue): PendingOutputSegment[] {
-  if (!queue.isRemainderRequeued) return [];
-  queue.isRemainderRequeued = false;
-  const plan = getGroupFinalizePlan(queue);
-  if (plan.action === 'noop') return [];
-  queue.pendingSegments = [];
-  if (queue.debounceTimer) {
-    clearTimeout(queue.debounceTimer);
-    queue.debounceTimer = null;
-  }
-  return plan.segments;
+  const remainder = queue.requeuedRemainder;
+  if (remainder === null) return [];
+  queue.requeuedRemainder = null;
+  return [{ output: remainder, isContinuation: false, startsNewMessage: false }];
 }

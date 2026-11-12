@@ -20,6 +20,8 @@ describe('clearThreadOutputQueues', () => {
     let timerFired = false;
     const queue: ClearableOutputQueue = {
       pendingSegments: [createSegment('queued delta that must not post after stop')],
+      requeuedRemainder: 'the part a 429 kept back, which must not post after stop either',
+      clearCount: 0,
       // A real armed timer: if clearThreadOutputQueues does NOT cancel it,
       // `timerFired` flips to true and the assertion below fails — this is
       // the load-bearing check (not a synthetic marker).
@@ -34,6 +36,8 @@ describe('clearThreadOutputQueues', () => {
     clearThreadOutputQueues(queue, coalescer);
 
     assert.deepEqual(queue.pendingSegments, [], 'the pending segments must be dropped');
+    assert.equal(queue.requeuedRemainder, null, 'the text a 429 kept back is dropped with them');
+    assert.equal(queue.clearCount, 1, 'the clear is counted: a landing that started before it sees it and puts nothing back');
     assert.equal(queue.debounceTimer, null, 'debounceTimer handle must be nulled');
     assert.equal(coalescer.pendingText, null, 'status pendingText must be dropped');
 
@@ -63,7 +67,7 @@ describe('clearThreadOutputQueues', () => {
   });
 
   it('is a no-op on an already-empty queue and coalescer', () => {
-    const queue: ClearableOutputQueue = { pendingSegments: [], debounceTimer: null };
+    const queue: ClearableOutputQueue = { pendingSegments: [], requeuedRemainder: null, clearCount: 0, debounceTimer: null };
     const coalescer: ClearableStatusCoalescer = { pendingText: null };
 
     clearThreadOutputQueues(queue, coalescer);
@@ -83,6 +87,8 @@ describe('clearThreadOutputQueues', () => {
   it('clears the output queue even when only the queue exists', () => {
     const queue: ClearableOutputQueue = {
       pendingSegments: [createSegment('tail')],
+      requeuedRemainder: null,
+      clearCount: 0,
       debounceTimer: null,
     };
 

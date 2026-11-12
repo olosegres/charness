@@ -87,6 +87,36 @@ describe('claude-json-stream flushPendingOutput', () => {
     assert.equal(outputs.length, 1, 'the text goes out once');
   });
 
+  it('called from inside the adapter\'s own handling of a chunk it emits the batch but does not read the tail again: the lines behind the chunk must not be handled ahead of its own', () => {
+    // The question event is handled while the tail's chunk is applied; the bot lands the text before the question from there.
+    const { adapter, session, outputs } = createAdapterWithSession(dir);
+    adapter['appendAnswerDelta'](session, 'Text before the question. ');
+    fs.writeFileSync(session.paths.stdoutFile, buildTextDeltaLine('A line behind the chunk being applied.'));
+    session.applyingChunk = { isPersistDeferred: false };
+
+    adapter.flushPendingOutput(key);
+
+    assert.deepEqual(outputs.map((output) => output.text), ['Text before the question. '], 'the batch is emitted, the file is not read');
+    assert.equal(session.tail.consumedBytes, 0, 'nothing was consumed from the log');
+  });
+
+  it('an adopted session the boot still holds is not read: its downtime replay waits for the boot\'s release, and the flush logs nothing', () => {
+    // The boot reads an adopted tail only once it restored what the replay is read against (`releaseAdoptedTails`); an agent
+    // that answers during the boot gets its answer posted without its held text landed first, and that is no fault to warn of.
+    const { adapter, session, outputs } = createAdapterWithSession(dir);
+    fs.writeFileSync(session.paths.stdoutFile, buildTextDeltaLine('Written while the bot was down.'));
+    session.isTailHeld = true;
+    const warnings = mock.method(console, 'warn', () => {});
+    try {
+      adapter.flushPendingOutput(key);
+      assert.equal(warnings.mock.callCount(), 0, 'no warning: the flush decides nothing on the held state');
+    } finally {
+      warnings.mock.restore();
+    }
+    assert.equal(session.tail.consumedBytes, 0, 'nothing was read from the held tail');
+    assert.deepEqual(outputs, []);
+  });
+
   it('with no text pending, or no session, it emits nothing', () => {
     const { adapter, session, outputs } = createAdapterWithSession(dir);
     adapter.flushPendingOutput(key);

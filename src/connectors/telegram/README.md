@@ -24,9 +24,13 @@ Chosen once at boot by `CHAT_MODE` — an internal detail of this connector, not
   coalesced-but-unsent buffer to a permanent message on settle or teardown, so the final answer is never
   discarded under a 429. Every send of a topic's output — the debounce flush and every drain — runs in ONE
   chain, in the order it was started (`utils/groupFinalizePlan.ts` `runInSendChain`, `landGroupOutput`;
-  the 429 leftover of a flush goes ahead of what a drain took), and a question, a tool call's status frame,
-  an `answer_request` answer and the messages of `send_messages_to_user`, which are posted straight to the
-  topic, run the drain first so they land BELOW the text the agent streamed before them.
+  the 429 leftover of a flush is kept apart from the pending text (`requeuedRemainder`) and goes ahead of
+  what a drain took; a drain a 429 stopped puts the rest back for a retry unless the topic was cleared
+  meanwhile, a stop), and a question, a tool call's status frame, an `answer_request` answer and the messages
+  of `send_messages_to_user`, which are posted straight to the topic, run the drain first so they land BELOW
+  the text the agent streamed before them. A question and the two tool posts WAIT for it, for at most
+  `streamedOutputLandingLimitMs` (60 s, `utils/streamedOutputLanding.ts`): a send that never finishes must
+  not hold the agent's tool call or its question, so after the limit they are posted anyway.
 - **dm** — a live "cursor": ONE accumulating native `sendMessageDraft` holds the whole current reply and is
   FINALIZED to a permanent `sendMessage` on boundaries (idle, 4096 overflow, `isFinal`, a new response, status,
   teardown). Claude's scrape adapter emits deltas with no continuation meta, so the transport synthesises it
@@ -150,8 +154,8 @@ maintainer must not break (`fileSendGateway.ts` with `../../utils/fileSendServic
   separate records. An answer is the LAST message of its turn: the shared message sender
   (`utils/messageSendService.ts`, also behind `send_messages_to_user`) lands the text the agent streamed ahead of
   it — still unread in the CLI's output, in the adapter's batch window (`flushPendingOutput`), in the 3 s output
-  debounce or already going out — before it posts (`landStreamedOutput`); a landing that fails never holds the
-  messages back.
+  debounce or already going out — before it posts (`landStreamedOutput`); a landing that fails, or that has not
+  ended after `streamedOutputLandingLimitMs`, never holds the messages back.
 
 ## Testing against a fake Bot API
 

@@ -137,10 +137,13 @@ export interface PendingOutputSegment {
 /**
  * @name PendingOutputBuffer
  * @description What a thread's output queue holds until its debounce ends, oldest segment first: `bot.ts`'s
- * `OutputQueueState` carries it and the helpers below keep it consistent.
+ * `OutputQueueState` carries it and the helpers below keep it consistent. `requeuedRemainder` is the text a 429 kept from
+ * landing, older than everything pending and kept APART from it: a landing that started meanwhile took text that is newer than
+ * the leftover but older than what was queued after it, so the leftover must never be mixed into the pending segments.
  */
 export interface PendingOutputBuffer {
   pendingSegments: PendingOutputSegment[];
+  requeuedRemainder: string | null;
 }
 
 /** @description The thread's mark that the next output opens a new message (a prompt forwarded, a session started, a question posted, a status frame shown). */
@@ -175,26 +178,33 @@ export function addPendingOutput(
 
 /** @description Whether anything waits to be sent. */
 export function checkHasPendingOutput(buffer: PendingOutputBuffer): boolean {
-  return buffer.pendingSegments.length > 0;
-}
-
-/** @description Take the oldest segment out for a flush. `null` when nothing is pending. */
-export function takePendingOutput(buffer: PendingOutputBuffer): PendingOutputSegment | null {
-  return buffer.pendingSegments.shift() ?? null;
+  return buffer.pendingSegments.length > 0 || buffer.requeuedRemainder !== null;
 }
 
 /**
- * @description Put the text a flush could not send (see {@link getUnsentRemainder}) back at the FRONT of the buffer: it is
- * older than anything queued during the send. It restarts a fresh message (its predecessors landed or were edited in
- * place already), so it is not a continuation; it joins the next segment unless a boundary was marked before that one.
+ * @description Take the oldest text out for a flush. `null` when nothing is pending. The text a 429 kept from landing (see
+ * {@link requeueUnsentRemainder}) is the oldest: it restarts a fresh message (its predecessors landed or were edited in place
+ * already), so it is not a continuation, and it joins the next pending segment unless a boundary was marked before that one.
  */
-export function requeueUnsentRemainder(buffer: PendingOutputBuffer, unsentRemainder: string): void {
+export function takePendingOutput(buffer: PendingOutputBuffer): PendingOutputSegment | null {
+  const remainder = buffer.requeuedRemainder;
+  if (remainder === null) return buffer.pendingSegments.shift() ?? null;
+  buffer.requeuedRemainder = null;
   const [next, ...later] = buffer.pendingSegments;
   if (next && !next.startsNewMessage) {
-    buffer.pendingSegments = [{ output: appendPendingOutput(unsentRemainder, next.output, false), isContinuation: false, startsNewMessage: false }, ...later];
-    return;
+    buffer.pendingSegments = later;
+    return { output: appendPendingOutput(remainder, next.output, false), isContinuation: false, startsNewMessage: false };
   }
-  buffer.pendingSegments = [{ output: unsentRemainder, isContinuation: false, startsNewMessage: false }, ...buffer.pendingSegments];
+  return { output: remainder, isContinuation: false, startsNewMessage: false };
+}
+
+/**
+ * @description Keep the text a flush could not send (see {@link getUnsentRemainder}) for the retry, apart from the pending
+ * segments: it is older than anything queued during the send. A second one before the first went out (it cannot arise while
+ * every send runs in one chain) is joined behind it, so no text is lost.
+ */
+export function requeueUnsentRemainder(buffer: PendingOutputBuffer, unsentRemainder: string): void {
+  buffer.requeuedRemainder = buffer.requeuedRemainder === null ? unsentRemainder : `${buffer.requeuedRemainder}\n\n${unsentRemainder}`;
 }
 
 /** Separator used to re-join un-sent chunks before re-enqueueing them (S2). The

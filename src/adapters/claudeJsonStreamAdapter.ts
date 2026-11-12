@@ -1220,8 +1220,11 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
     const session = this.sessions.get(keyToString(key));
     if (!session?.isActive) return;
     // The text the process wrote an instant before its tool call may not have been polled yet (the poll lags by its backoff):
-    // read it first, or the batch flushed below would miss it and the answer would still overtake it.
-    this.refreshWorkingState(key);
+    // read it first, or the batch flushed below would miss it and the answer would still overtake it. Not from inside the
+    // handling of a chunk (a question event asks for it): that read is going on right now, and a second one would handle the
+    // lines behind the chunk ahead of the rest of it. Nor from an adopted tail the boot still holds: its replay is read only
+    // from the boot's release on (`releaseAdoptedTails`), and what it holds lands after the answer — nothing to warn of.
+    if (!session.applyingChunk && !session.isTailHeld) this.refreshWorkingState(key);
     this.flushAnswer(session, false);
   }
 
