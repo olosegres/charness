@@ -7,7 +7,7 @@
  *   • `GET /global/event` — the one multiplexed SSE stream: a `server.connected` frame, then a heartbeat;
  *   • `GET /config` (also `?directory=`) — the default model and the plugin list (with the bot's compaction plugin,
  *     so the bot does not recreate the folder's instance); `GET /config/providers` — the models and their variants;
- *   • `GET|POST /mcp?directory=` — the runtime MCP table (the bot registers its `telegramBot` server there);
+ *   • `GET|POST /mcp?directory=` — the runtime MCP table (the bot registers its `charness` server there);
  *   • `POST /session?directory=`, `GET /session/:id`, `GET /session?directory=`, `GET /session/:id/message` (the prompts it received, as stored user messages),
  *     `GET /session/status`, `GET /question?directory=` (the pending questions: none), `PATCH /session/:id`,
  *     `POST /session/:id/abort`, `POST /session/:id/prompt_async`, `POST /session/:id/summarize`,

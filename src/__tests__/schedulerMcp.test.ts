@@ -56,6 +56,7 @@ import {
   schedulerMcpPendingCancellationMax,
   schedulerMcpPendingCancellationTtlMs,
   type ClaudeProfilesQuery,
+  type OptionalBotTools,
   type SchedulerScope,
   type SchedulerMcpHandle,
   type SchedulerMcpDeps,
@@ -250,6 +251,26 @@ describe('the bot-MCP tool digest (lifecycle plan L4)', () => {
       }
     }
     assert.ok(offered.has('schedule_create') && offered.has('claude_profiles'), 'the tools the manager leans on');
+  });
+
+  it('the text an agent reads names a bot tool bare, or with the server prefix `mcp__charness__` — never under another server name', () => {
+    const deps: SchedulerMcpDeps = {
+      ...createDigestDeps(),
+      fetchJiraAttachment: async () => ({ ok: false, error: 'unused' }),
+      listClaudeProfiles: async ({ model }) => ({ model, relevantBuckets: [], recommended: null, pickReason: 'none', nextAvailable: null, profiles: [] }),
+    };
+    const offered: OptionalBotTools = { isJiraAttachmentToolOffered: true, isTodoToolOffered: true, remoteRunRunnerLines: [] };
+    const foreignServerPrefix = /mcp__(?!charness__)/;
+    for (const platform of ['telegram', 'jira', null] as const) {
+      assert.doesNotMatch(buildMcpServerInstructions(platform, offered, true), foreignServerPrefix, `${platform ?? 'neutral'} instructions`);
+      for (const definition of getBotMcpToolDefinitions(deps, platform)) {
+        assert.doesNotMatch(definition.description ?? '', foreignServerPrefix, `${platform ?? 'neutral'} ${definition.name} description`);
+      }
+    }
+    const skillsDir = path.join(__dirname, '..', '..', 'agent-plugin', 'skills');
+    for (const folder of fs.readdirSync(skillsDir)) {
+      assert.doesNotMatch(fs.readFileSync(path.join(skillsDir, folder, 'SKILL.md'), 'utf8'), foreignServerPrefix, `${folder} skill`);
+    }
   });
 
   it('every claude_profiles input the shipped skills name is one the tool takes', () => {

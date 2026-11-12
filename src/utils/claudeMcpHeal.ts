@@ -1,11 +1,11 @@
 /**
  * @description The wire shapes + the decision behind healing a `claude` session
- * whose bot-injected MCP server (`telegramBot`) has latched `failed`.
+ * whose bot-injected MCP server (`charness`) has latched `failed`.
  *
  * WHY this exists: a json-stream session is an EXTERNAL process, so it survives
  * every bot restart — but the MCP client inside it does not retry a server it
  * once failed to reach. A session that was alive across a restart therefore kept
- * reporting `{name:'telegramBot', status:'failed'}` for the rest of its life and
+ * reporting `{name:'charness', status:'failed'}` for the rest of its life and
  * lost `schedule_*` / `compact_conversation` / `send_file_to_user` /
  * `send_messages_to_user` with nothing short of replacing the session to bring
  * them back. The CLI answers `mcp_status` / `mcp_reconnect` on the SAME stdio

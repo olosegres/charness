@@ -205,8 +205,8 @@ so one account's usage limit does not stop every topic.
   the notice says so); only a tmux Claude session with nothing to resume yet is
   left to the end of its turn.
 - **Which account for a child process.** An agent that launches a detached
-  `claude` (a worker, a reviewer) asks the bot's `telegramBot` MCP tool
-  `claude_profiles` — optionally with the model it will run — and gets every
+  `claude` (a worker, a reviewer) asks the bot's `claude_profiles` MCP tool
+  — optionally with the model it will run — and gets every
   profile with its windows plus `recommended`. **Your `/limits_autoswitch` list says
   which accounts an agent may be pointed at:** once it holds any Claude account, only
   the accounts with an enabled entry there are recommended (to a new worker and to a

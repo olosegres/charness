@@ -1,6 +1,6 @@
 /**
  * @description Coverage for `scheduler/injection.ts` (plan S6) — the single
- * source of the bot-owned `telegramBot` MCP entry injected into both backends.
+ * source of the bot-owned `charness` MCP entry injected into both backends.
  *
  *   - INERT until configured: both builders return `null` so the call sites add
  *     nothing (byte-identical pre-scheduler behavior; S8 not wired).
@@ -65,6 +65,28 @@ describe('scheduler MCP injection — inert (unconfigured)', () => {
     resetSchedulerMcpInjection();
     assert.equal(await buildClaudeSchedulerMcpConfig(threadKey), null);
     assert.equal(await buildOpenCodeSchedulerMcpRegistration(directory), null);
+  });
+});
+
+describe('scheduler MCP injection — the server name', () => {
+  // Every bot tool reads `mcp__charness__<tool>` in the agent: renaming the server renames them all, so the name is pinned in plain text.
+  const botServerName = 'charness';
+
+  it('is charness, in one constant', () => {
+    assert.equal(schedulerMcpServerName, botServerName);
+  });
+
+  it('is the ONLY server of the Claude config, with no alias under an old name', async () => {
+    configureSchedulerMcpInjection({ getSecret: async () => secret, port });
+    const config = await buildClaudeSchedulerMcpConfig(threadKey);
+    assert.ok(config);
+    assert.deepEqual(Object.keys(config.mcpServers), [botServerName]);
+  });
+
+  it('is the name OpenCode registers the server under', async () => {
+    configureSchedulerMcpInjection({ getSecret: async () => secret, port });
+    const registration = await buildOpenCodeSchedulerMcpRegistration(directory);
+    assert.equal(registration?.name, botServerName);
   });
 });
 

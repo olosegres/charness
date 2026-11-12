@@ -14084,7 +14084,7 @@ function recoverLimitEpisodesFromDisk(): void {
  * side — the mirror of OpenCode's `reconcileSchedulerMcpForActiveSessions`. A
  * json-stream session survives every bot restart, but its MCP client never
  * retries a server it once failed to reach, so a session that was alive across
- * the restart can hold a permanently-`failed` `telegramBot` entry and lose
+ * the restart can hold a permanently-`failed` `charness` entry and lose
  * `schedule_*` / `compact_conversation` / `send_file_to_user` /
  * `send_messages_to_user` for the rest of its life. Ask every live session whose
  * backend exposes `healMcpServer` and reconnect the ones that report `failed`.
@@ -14650,7 +14650,7 @@ function wireScheduler(wiring: SchedulerWiringDeps): SchedulerMcpHandle {
     whenSessionsRestored: wiring.whenSessionsRestored,
     getSecret: () => state.getSchedulerMcpSecret(),
     // Reuse the port persisted from a prior boot (env override wins) so the
-    // `telegramBot` registrations injected into agent sessions keep pointing at
+    // `charness` registrations injected into agent sessions keep pointing at
     // a live port across restarts instead of orphaning on a fresh ephemeral one.
     port: resolveSchedulerMcpPort(getSchedulerMcpPort(), state.getPersistedSchedulerMcpPort()),
   });
@@ -15320,7 +15320,7 @@ export async function startBot(): Promise<void> {
     },
     healActiveSessions: () => {
       // When this boot ADOPTED an already-running opencode, that server may
-      // still hold a `telegramBot` registration from the previous bot
+      // still hold a `charness` registration from the previous bot
       // generation pointing at a now-dead port. Reconcile against the live MCP
       // status and force-refresh any directory that is not `connected`.
       // Fire-and-forget: boot must not block on opencode HTTP round-trips
@@ -15337,7 +15337,7 @@ export async function startBot(): Promise<void> {
         console.warn('[scheduler] MCP reconcile failed:', e instanceof Error ? e.message : e),
       );
       // Same class of self-heal on the Claude side: a json-stream session that
-      // SURVIVED this restart can hold a `telegramBot` entry latched `failed`,
+      // SURVIVED this restart can hold a `charness` entry latched `failed`,
       // and the CLI never retries a failed MCP server. Fire-and-forget.
       healSchedulerMcpForActiveSessions();
     },

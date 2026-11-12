@@ -2,7 +2,7 @@
  * @description Boot-order contract of the bot MCP server (`scheduler/mcpBoot.ts`).
  *
  *   - A session (re)spawned in the boot window — while sessions are re-attached —
- *     is born WITH the bot's `telegramBot` server: the `--mcp-config` the Claude
+ *     is born WITH the bot's `charness` server: the `--mcp-config` the Claude
  *     backends build at spawn (`prepareMcpFlags`) names the bound port, and an MCP
  *     client using exactly that entry reaches the live server and lists its tools.
  *   - The heals run only after reattach and only when the server is up; the

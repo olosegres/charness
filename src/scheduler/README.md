@@ -98,7 +98,7 @@ constants in the code; this README keeps what the code cannot say.
   standalone SSE stream that carried nothing and died with every hot reload, and a client that then spent its
   ~15 s reconnect budget latched the whole server `failed`, stranding the bot's tools in a session built to
   survive the restart.
-- **Heals** at boot: OpenCode `reconcileSchedulerMcpForActiveSessions` (re-registers a `telegramBot` that is
+- **Heals** at boot: OpenCode `reconcileSchedulerMcpForActiveSessions` (re-registers a `charness` that is
   missing or not `connected` — OpenCode does not reconnect a remote MCP dropped in the restart gap); json-stream
   `healSchedulerMcpForActiveSessions` → `healMcpServer` (`mcp_status` / `mcp_reconnect` over the control
   channel, only for a `failed` entry).

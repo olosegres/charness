@@ -90,8 +90,8 @@ per-backend controls are optional methods the bot checks before calling.
   voice acks are unpaced — agent output never is. HOW output reaches a topic is chosen
   once at boot by `CHAT_MODE`: `group` (edit-in-place), `dm` (native draft cursor), `both` (DEFAULT, decided
   per chat off the `SessionKey`; `OWNER_USER_ID` required for `dm`, optional for `both`).
-- **Bot-injected MCP server `telegramBot`** (HTTP, loopback, per-session HMAC tokens scoped `thread:` /
-  `dir:`) goes into EVERY bot-started session: `schedule_*`, `compact_conversation`, `answer_request`,
+- **Bot-injected MCP server `charness`** (HTTP, loopback, per-session HMAC tokens scoped `thread:` /
+  `dir:`; the one constant `schedulerMcpServerName`, so the tools read `mcp__charness__<tool>` in Claude Code and `charness_<tool>` in OpenCode) goes into EVERY bot-started session: `schedule_*`, `compact_conversation`, `answer_request`,
   `send_file_to_user`, `send_messages_to_user` (a non-Telegram session sees only `answer_request` +
   `compact_conversation`, plus `jira_get_attachment` for a Jira one). It is bot plumbing, separate from the user-editable MCP hierarchy (mostly dormant,
   undocumented). Clients cache `instructions` and tool descriptions at connect: a running agent sees an edit
@@ -145,7 +145,7 @@ per-backend controls are optional methods the bot checks before calling.
   OpenCode through a bot-installed global plugin (`utils/openCodeCompactPlugin.ts`; its file name carries a hash of its
   text, so an instance that loaded an older text does not count as loaded and is recreated); at boot
   `activateCompactionPluginForActiveSessions` recreates idle directory instances that lack it BEFORE the
-  scheduler-MCP reconcile (recreating drops the runtime MCP registration). A `telegramBot` registration or
+  scheduler-MCP reconcile (recreating drops the runtime MCP registration). A `charness` registration or
   reconcile that fails on OpenCode is retried (`schedulerMcpRetryDelaysMs`), reading `GET /mcp` first.
 - **Claude account profiles** (`/accounts` — also the OpenCode providers' switch / connect / disconnect entry; hidden aliases `/account`, `/connect`, `/disconnect`; `utils/claudeProfiles.ts`, `commands/claudeAccounts.ts`). Several
   subscription logins kept side by side: a profile is a config directory under `DATA_DIR/claude-profiles/<name>/`

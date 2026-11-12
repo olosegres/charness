@@ -339,7 +339,7 @@ The same channel carries the bot's OWN requests, answered by a `control_response
 matched on `request_id`: the `initialize` handshake above, and the MCP heal's
 `{subtype:"mcp_status"}` (returns `response.mcpServers[]` with a `status` per
 server) / `{subtype:"mcp_reconnect", serverName}` (a bare success ack) — shapes in
-`../utils/claudeMcpHeal.ts`, used to un-latch a `failed` `telegramBot` in a
+`../utils/claudeMcpHeal.ts`, used to un-latch a `failed` `charness` in a
 session that outlived a bot restart.
 
 The adapter maps a `can_use_tool` request onto the bot's existing `question`

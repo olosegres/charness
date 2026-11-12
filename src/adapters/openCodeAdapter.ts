@@ -1405,7 +1405,7 @@ export function buildProviderAuthPath(providerId: string): string {
 /**
  * @description Pure decision for the boot self-heal: given opencode's live
  * `GET /mcp` status map (`{ <serverName>: { status, error? }, … }`), does the
- * bot-owned `telegramBot` server need a (re)registration? True when the entry is
+ * bot-owned `charness` server need a (re)registration? True when the entry is
  * ABSENT (never registered on this server generation) or its `status` is
  * anything other than `connected` (e.g. `failed` — a stale registration to a
  * dead port left by a previous bot generation). A malformed/empty response is
@@ -3672,11 +3672,11 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
   /**
    * @description Boot self-heal for the adopt path. When the bot restarts and
    * ADOPTS an already-running opencode (the server outlived the bot), that
-   * server still holds the PREVIOUS bot generation's `telegramBot` registration
+   * server still holds the PREVIOUS bot generation's `charness` registration
    * pointing at a now-dead ephemeral port — so every session in the directory
    * reports the MCP `failed` and loses its scheduling / file-send tools. For
    * each active session's directory (de-duped — a folder can host several
-   * threads), read the LIVE `GET /mcp` status and, when the `telegramBot` entry
+   * threads), read the LIVE `GET /mcp` status and, when the `charness` entry
    * is missing or not `connected`, drop the Set gate and force a fresh POST (the
    * server overwrites a same-name registration with the current port). A dir
    * already `connected` is left untouched. Best-effort per directory: a read /
@@ -3790,7 +3790,7 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
    * older version keeps the older text. Installs the file, then per directory
    * (de-duped, concurrently) recreates the instance when it lacks the current
    * plugin and nothing in it is running. A recreated directory loses
-   * its runtime `telegramBot` registration, so its Set gate is dropped here and
+   * its runtime `charness` registration, so its Set gate is dropped here and
    * the boot caller reconciles the MCP right after.
    */
   async activateCompactionPluginForActiveSessions(): Promise<void> {
@@ -3840,7 +3840,7 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
 
   /**
    * @description Reconcile ONE directory: read the live `GET /mcp` status and,
-   * when `telegramBot` is missing or not `connected`, drop the Set gate and
+   * when `charness` is missing or not `connected`, drop the Set gate and
    * force a fresh POST. Best-effort — a read/registration error is logged,
    * scheduled for a retry, and swallowed so it never rejects out of
    * {@link reconcileSchedulerMcpForActiveSessions}.

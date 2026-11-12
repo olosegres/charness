@@ -160,7 +160,7 @@ const agentIdleMinutesMax = 5;
 const telegramTokenEnvName = 'TELEGRAM_BOT_TOKEN';
 const atlassianEnvPrefix = 'ATLASSIAN_';
 /** The bot's own MCP server — the only one a Jira session may load (R8). */
-const botMcpServerName = 'telegramBot';
+const botMcpServerName = 'charness';
 
 const bootTimeoutMs = 90 * 1000;
 /** A poll, a real agent's session start and a short turn. */

@@ -887,7 +887,7 @@ export interface AgentAdapter extends EventEmitter {
   /**
    * Reconcile the bot-owned scheduler MCP registration for active OpenCode
    * directories against the server's LIVE status: force a re-registration for
-   * any directory whose `telegramBot` entry is missing or not `connected`. Used
+   * any directory whose `charness` entry is missing or not `connected`. Used
    * at boot when the bot adopts an already-running opencode that may still hold
    * a stale registration (dead port) from a previous bot generation.
    */

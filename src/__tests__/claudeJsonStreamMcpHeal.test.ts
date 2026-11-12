@@ -1,7 +1,7 @@
 /**
  * @description The json-stream adapter's MCP heal round-trip
  * (`healMcpServer`): a session that survived a bot restart keeps its injected
- * `telegramBot` server latched `failed` (the CLI never retries one), so the bot
+ * `charness` server latched `failed` (the CLI never retries one), so the bot
  * asks `mcp_status` over the stdio control channel and reconnects only what is
  * really broken.
  *

@@ -342,7 +342,7 @@ describe('scheduler MCP registration per directory on session start (plan 2026-0
     );
   });
 
-  it('reconcile: force re-registers a directory whose telegramBot is not connected (adopt path)', async () => {
+  it('reconcile: force re-registers a directory whose charness is not connected (adopt path)', async () => {
     configureSchedulerMcpInjection({ getSecret: async () => secret, port });
     const adapter = createAdapter();
     const keyA: SessionKey = makeTelegramKey(-100, 1);
@@ -352,7 +352,7 @@ describe('scheduler MCP registration per directory on session start (plan 2026-0
     adapter['registeredSchedulerMcpDirs'].add(sharedDir);
     const posts: string[] = [];
     adapter['apiRequest'] = (async (method: string, url: string) => {
-      if (method === 'GET') return { telegramBot: { status: 'failed', error: 'Unable to connect' } };
+      if (method === 'GET') return { charness: { status: 'failed', error: 'Unable to connect' } };
       if (method === 'POST') posts.push(url);
       return undefined;
     }) as OpenCodeAdapter['apiRequest'];
@@ -378,7 +378,7 @@ describe('scheduler MCP registration per directory on session start (plan 2026-0
     const gets: string[] = [];
     const posts: string[] = [];
     adapter['apiRequest'] = (async (method: string, url: string) => {
-      if (method === 'GET') { gets.push(url); return { telegramBot: { status: 'connected' } }; }
+      if (method === 'GET') { gets.push(url); return { charness: { status: 'connected' } }; }
       if (method === 'POST') posts.push(url);
       return undefined;
     }) as OpenCodeAdapter['apiRequest'];
@@ -627,14 +627,14 @@ describe('compaction plugin activation at boot', () => {
 });
 
 describe('checkNeedsSchedulerMcpReregister', () => {
-  it('needs a register when telegramBot is absent from the status map', () => {
+  it('needs a register when charness is absent from the status map', () => {
     assert.equal(checkNeedsSchedulerMcpReregister({ 'telegram-mcp': { status: 'connected' } }), true);
   });
-  it('needs a register when telegramBot is failed', () => {
-    assert.equal(checkNeedsSchedulerMcpReregister({ telegramBot: { status: 'failed', error: 'x' } }), true);
+  it('needs a register when charness is failed', () => {
+    assert.equal(checkNeedsSchedulerMcpReregister({ charness: { status: 'failed', error: 'x' } }), true);
   });
-  it('does NOT need a register when telegramBot is connected', () => {
-    assert.equal(checkNeedsSchedulerMcpReregister({ telegramBot: { status: 'connected' } }), false);
+  it('does NOT need a register when charness is connected', () => {
+    assert.equal(checkNeedsSchedulerMcpReregister({ charness: { status: 'connected' } }), false);
   });
   it('treats a malformed/empty response as needing a register', () => {
     assert.equal(checkNeedsSchedulerMcpReregister(null), true);

@@ -1,7 +1,7 @@
 /**
  * @description The single source of the scheduler MCP server entry injected into
  * every bot-started agent session (plan S6). Both backends get the SAME bot-owned
- * `telegramBot` server, just shaped for their respective MCP-config formats:
+ * `charness` server, just shaped for their respective MCP-config formats:
  *   - Claude reads a `--mcp-config` file with a streamable-HTTP `mcpServers` entry
  *     (thread-scoped token).
  *   - OpenCode is registered at runtime via `POST /mcp?directory=` with a `remote`
@@ -27,8 +27,11 @@ import {
   type SchedulerScope,
 } from './mcpSurface';
 
-/** The fixed MCP server name both backends register the injected entry under. */
-export const schedulerMcpServerName = 'telegramBot';
+/**
+ * The fixed MCP server name both backends register the injected entry under. It is also the prefix of every bot tool in the agent
+ * (`mcp__charness__<tool>` in Claude Code, `charness_<tool>` in OpenCode).
+ */
+export const schedulerMcpServerName = 'charness';
 
 /**
  * @name SchedulerInjectionConfig

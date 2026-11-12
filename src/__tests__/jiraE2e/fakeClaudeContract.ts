@@ -368,12 +368,18 @@ export interface McpServerConfig {
   headers?: Record<string, string>;
 }
 
-/** The bot MCP server: the `http` entry of the `--mcp-config` files of a launch's `argv`. */
+/**
+ * The name an agent's CLI sees the bot's MCP server under, written out here on purpose and not imported from the product: the
+ * agent's tools read `mcp__charness__<tool>`, so a name that moves must break every flow that reaches the bot's tools.
+ */
+export const botMcpServerName = 'charness';
+
+/** The bot MCP server: the entry named {@link botMcpServerName} of the `--mcp-config` files of a launch's `argv`. */
 export function getBotMcpServer(argv: readonly string[]): McpServerConfig | null {
   for (const configPath of getFlagValues(argv, '--mcp-config')) {
     const config: { mcpServers?: Record<string, McpServerConfig> } = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-    const server = Object.values(config.mcpServers ?? {}).find((candidate) => candidate.type === 'http' && candidate.url);
-    if (server) return server;
+    const server = config.mcpServers?.[botMcpServerName];
+    if (server?.type === 'http' && server.url) return server;
   }
   return null;
 }

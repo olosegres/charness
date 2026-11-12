@@ -616,7 +616,7 @@ export interface StateV1 {
    * The loopback port the bot's scheduler MCP server bound on a prior boot (see
    * `scheduler/mcpSurface.ts`). The listen port is EPHEMERAL by default (`0` →
    * an OS-assigned port), which changes on every restart; persisting the bound
-   * port lets a later boot reuse it so the `telegramBot` registrations injected
+   * port lets a later boot reuse it so the `charness` registrations injected
    * into agent sessions (which embed `http://127.0.0.1:<port>/mcp`) stay valid
    * across restarts instead of pointing at a dead port. Not written when the
    * operator fixes the port via `SCHEDULER_MCP_PORT`. Optional so older state

@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+**The bot's MCP server is now named `charness` instead of `telegramBot`, so an agent's tools read `mcp__charness__schedule_create`, `mcp__charness__answer_request`, … in Claude Code (`charness_answer_request` in OpenCode) — the bot serves Jira too, not only Telegram.**
+Before, a tool carried the Telegram name (`mcp__telegramBot__schedule_create`) even in a Jira conversation. The bot's skills, instructions and tool descriptions already name the tools bare (`schedule_create`), so they read right under either name.
+What to do: a permission allow-list of your own that names `mcp__telegramBot__…` must be renamed to `mcp__charness__…` (the bot writes no such list itself). There is NO alias under the old name — a second registration would double every tool in an agent's context — so a Claude agent that was already running keeps the old names until the bot stops it on idle (about an hour), and an OpenCode folder keeps both names until its OpenCode server is restarted.
+
 ## 3.13.0 — 2026-11-12
 
 **A Jira instance with a `trustedGroup` can now trust only the apps and automations you list: the new `jira.json` key `trustedApps` names their account ids, and any other app is treated like a person outside the group.**

@@ -325,7 +325,7 @@ describe('The usage-limit switch to and from OpenCode end to end: built charness
       'the bridge carries the compaction summary under its own heading',
     );
     assert.ok(!bridge.text.includes(`User:\n${compactionSummaryStart}`), 'the summary is not told as a user turn');
-    assert.deepEqual(fakeOpenCode.mcpRegistrations.get(path.join(getLayout().workRoot, claudeToOpenCode.folder)), ['telegramBot'], 'the bot registered its MCP server in the folder\'s instance');
+    assert.deepEqual(fakeOpenCode.mcpRegistrations.get(path.join(getLayout().workRoot, claudeToOpenCode.folder)), ['charness'], 'the bot registered its MCP server, named charness, in the folder\'s instance');
 
     await getCharness().waitFor('the switch to reach state.json', replyTimeoutMs, () => readAgent(claudeToOpenCode.threadId)?.name === openCodeAdapterName);
     const parked = readPersistedState(getLayout()).parkedSessions?.[getTopicKey(claudeToOpenCode.threadId)];

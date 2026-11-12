@@ -40,7 +40,7 @@ describe('buildMcpStatusControlRequest / buildMcpReconnectControlRequest', () =>
     assert.deepEqual(buildMcpReconnectControlRequest('mcp_reconnect_59e1646e', schedulerMcpServerName), {
       type: 'control_request',
       request_id: 'mcp_reconnect_59e1646e',
-      request: { subtype: 'mcp_reconnect', serverName: 'telegramBot' },
+      request: { subtype: 'mcp_reconnect', serverName: 'charness' },
     });
   });
 
@@ -52,8 +52,8 @@ describe('buildMcpStatusControlRequest / buildMcpReconnectControlRequest', () =>
       '{"type":"control_request","request_id":"mcp_status_720b9e6d","request":{"subtype":"mcp_status"}}',
     );
     assert.equal(
-      JSON.stringify(buildMcpReconnectControlRequest('mcp_reconnect_59e1646e', 'telegramBot')),
-      '{"type":"control_request","request_id":"mcp_reconnect_59e1646e","request":{"subtype":"mcp_reconnect","serverName":"telegramBot"}}',
+      JSON.stringify(buildMcpReconnectControlRequest('mcp_reconnect_59e1646e', 'charness')),
+      '{"type":"control_request","request_id":"mcp_reconnect_59e1646e","request":{"subtype":"mcp_reconnect","serverName":"charness"}}',
     );
   });
 
@@ -69,7 +69,7 @@ describe('getMcpServerStatus', () => {
     mcpServers: [
       { name: 'someOtherServer', status: 'connected', serverInfo: { name: 'other', version: '1.0.0' } },
       {
-        name: 'telegramBot',
+        name: 'charness',
         status: 'failed',
         error: 'ECONNREFUSED: Unable to connect. Is the computer able to access the url?',
         config: { type: 'http', url: 'http://127.0.0.1:12345/mcp' },
@@ -78,15 +78,15 @@ describe('getMcpServerStatus', () => {
   };
 
   it('returns the named server status, not the first entry in the list', () => {
-    assert.equal(getMcpServerStatus(payload, 'telegramBot'), 'failed');
+    assert.equal(getMcpServerStatus(payload, 'charness'), 'failed');
     assert.equal(getMcpServerStatus(payload, 'someOtherServer'), 'connected');
   });
 
-  it('reads a connected telegramBot (the post-reconnect payload)', () => {
+  it('reads a connected charness (the post-reconnect payload)', () => {
     const healed = {
-      mcpServers: [{ name: 'telegramBot', status: 'connected', serverInfo: { name: 'telegram-bot-scheduler', version: '1.0.0' } }],
+      mcpServers: [{ name: 'charness', status: 'connected', serverInfo: { name: 'charness', version: '1.0.0' } }],
     };
-    assert.equal(getMcpServerStatus(healed, 'telegramBot'), 'connected');
+    assert.equal(getMcpServerStatus(healed, 'charness'), 'connected');
   });
 
   it('returns null when no entry carries that name', () => {
@@ -94,19 +94,19 @@ describe('getMcpServerStatus', () => {
   });
 
   it('returns null for a payload with no / non-array mcpServers, and for a null payload', () => {
-    assert.equal(getMcpServerStatus({}, 'telegramBot'), null);
-    assert.equal(getMcpServerStatus({ mcpServers: 'telegramBot' }, 'telegramBot'), null);
-    assert.equal(getMcpServerStatus(null, 'telegramBot'), null);
+    assert.equal(getMcpServerStatus({}, 'charness'), null);
+    assert.equal(getMcpServerStatus({ mcpServers: 'charness' }, 'charness'), null);
+    assert.equal(getMcpServerStatus(null, 'charness'), null);
   });
 
   it('returns null when the matching entry has no string status', () => {
-    assert.equal(getMcpServerStatus({ mcpServers: [{ name: 'telegramBot' }] }, 'telegramBot'), null);
-    assert.equal(getMcpServerStatus({ mcpServers: [{ name: 'telegramBot', status: 3 }] }, 'telegramBot'), null);
+    assert.equal(getMcpServerStatus({ mcpServers: [{ name: 'charness' }] }, 'charness'), null);
+    assert.equal(getMcpServerStatus({ mcpServers: [{ name: 'charness', status: 3 }] }, 'charness'), null);
   });
 
   it('skips non-record entries instead of throwing on them', () => {
     assert.equal(
-      getMcpServerStatus({ mcpServers: [null, 'telegramBot', { name: 'telegramBot', status: 'failed' }] }, 'telegramBot'),
+      getMcpServerStatus({ mcpServers: [null, 'charness', { name: 'charness', status: 'failed' }] }, 'charness'),
       'failed',
     );
   });

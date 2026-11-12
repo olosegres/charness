@@ -140,7 +140,7 @@ const schedulerMcpClientIdMaxLength = 128;
 const schedulerMcpClientIdPattern = /^[A-Za-z0-9._:-]+$/;
 
 /** Server identity reported in the MCP `initialize` handshake. */
-const mcpServerName = 'telegram-bot-scheduler';
+const mcpServerName = 'charness';
 const mcpServerVersion = '1.0.0';
 
 /**

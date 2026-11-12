@@ -372,7 +372,7 @@ describe('classifyClaudeStreamMessage — control_response (the CLI answering OU
       response: {
         subtype: 'success',
         request_id: 'mcp_status_720b9e6d',
-        response: { mcpServers: [{ name: 'telegramBot', status: 'failed', error: 'ECONNREFUSED: Unable to connect.' }] },
+        response: { mcpServers: [{ name: 'charness', status: 'failed', error: 'ECONNREFUSED: Unable to connect.' }] },
       },
     });
     assert.equal(out.length, 1);
@@ -381,7 +381,7 @@ describe('classifyClaudeStreamMessage — control_response (the CLI answering OU
     assert.equal(cr.requestId, 'mcp_status_720b9e6d');
     assert.equal(cr.isSuccess, true);
     assert.deepEqual(cr.payload, {
-      mcpServers: [{ name: 'telegramBot', status: 'failed', error: 'ECONNREFUSED: Unable to connect.' }],
+      mcpServers: [{ name: 'charness', status: 'failed', error: 'ECONNREFUSED: Unable to connect.' }],
     });
   });
 

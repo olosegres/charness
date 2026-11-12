@@ -180,9 +180,10 @@ sessions alive; use `/quit` or `/quitall` when you want to terminate them.
 
 ## Bot-injected agent tools
 
-The bot injects its own `telegramBot` MCP server into every bot-started session
+The bot injects its own MCP server, named `charness`, into every bot-started session
 — for Claude via a generated `--mcp-config`, for OpenCode via runtime
-registration. It is loopback-only (`127.0.0.1`, on an OS-chosen free port unless
+registration. The agent sees its tools as `mcp__charness__<tool>` in Claude Code
+(`mcp__charness__schedule_create`) and `charness_<tool>` in OpenCode. It is loopback-only (`127.0.0.1`, on an OS-chosen free port unless
 `SCHEDULER_MCP_PORT` explicitly pins one) and authenticated with per-session
 HMAC bearer tokens scoped to the thread / directory. Every generated registration
 also carries a unique client identity, so cancellation affects only the originating
@@ -248,6 +249,8 @@ This server is bot-owned plumbing; if its port fails to bind, the bot still
 boots — only these agent-facing tools go inert. (Your own MCP servers still work
 independently: Claude auto-loads them from `~/.claude/settings.json` and a
 project's `.mcp.json`; inspect what's active in a thread with `/mcp`.)
+
+A custom permission allow-list that names the bot's tools uses the prefix `mcp__charness__`.
 
 Third-party OpenCode MCP servers, including a separate `telegram-mcp`, belong to
 the OpenCode configuration of the Linux user that runs the bot. They are not
