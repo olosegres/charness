@@ -665,15 +665,100 @@ describe('a registration left under the pre-rename server name is disconnected, 
     assert.match(warnings[0], /belongs to the bot/);
   });
 
-  it('when the config cannot be read, a connected charness is left as it is (the status is all there is) and the failure is logged', async () => {
+  it('when the config cannot be read, a connected charness is not taken for the bot\'s: the read is retried, a bounded number of times, then the last line says so', async () => {
     const { adapter } = createAdapterWithSession();
     const calls = stubServer(adapter, { liveStatus: { [schedulerMcpServerName]: connected }, failOn: configUrl });
 
     await assert.doesNotReject(adapter.reconcileSchedulerMcpForActiveSessions());
-
-    assert.ok(!calls.includes(`POST ${registerUrl}`), calls.join(' | '));
-    assert.equal(warnings.length, 1);
+    assert.equal(adapter['schedulerMcpRetries'].size, 1, 'a retry is armed: whose the connected server is stays unknown until the config is read');
     assert.match(warnings[0], /reading the OpenCode config of .* failed/);
+
+    for (const pause of schedulerMcpRetryDelaysMs) {
+      mock.timers.tick(pause);
+      await settle();
+    }
+
+    assert.equal(calls.filter((call) => call === `GET ${configUrl}`).length, 1 + schedulerMcpRetryDelaysMs.length, 'the boot read and one per pause');
+    assert.ok(!calls.includes(`POST ${registerUrl}`), 'nothing is registered on a guess');
+    assert.equal(adapter['schedulerMcpRetries'].size, 0, 'it stops after the last pause');
+    assert.match(warnings.at(-1) ?? '', /is still not registered/);
+  });
+
+  it('when the config is read at a later try, the retry registers the bot\'s own over the operator\'s charness', async () => {
+    const { adapter } = createAdapterWithSession();
+    let configReads = 0;
+    const calls: string[] = [];
+    adapter['apiRequest'] = (async (method: string, url: string) => {
+      calls.push(`${method} ${url}`);
+      if (method === 'GET' && url === configUrl) {
+        configReads += 1;
+        if (configReads === 1) throw new Error('server sick');
+        return { mcp: { [schedulerMcpServerName]: { type: 'remote' } } };
+      }
+      if (method === 'GET') return { [schedulerMcpServerName]: connected };
+      return url === registerUrl ? { [schedulerMcpServerName]: connected } : undefined;
+    }) as OpenCodeAdapter['apiRequest'];
+
+    await adapter.reconcileSchedulerMcpForActiveSessions();
+    assert.ok(!calls.includes(`POST ${registerUrl}`));
+    mock.timers.tick(schedulerMcpRetryDelaysMs[0]);
+    await settle();
+
+    assert.ok(calls.includes(`POST ${registerUrl}`), 'registered once the config said the name is the operator\'s');
+    assert.equal(adapter['schedulerMcpRetries'].size, 0, 'nothing left pending');
+  });
+
+  it('an operator-defined charness with an old-name disconnect that keeps failing is retried a bounded number of times, not forever', async () => {
+    const { adapter } = createAdapterWithSession();
+    const calls: string[] = [];
+    adapter['apiRequest'] = (async (method: string, url: string) => {
+      calls.push(`${method} ${url}`);
+      if (method === 'POST' && url === disconnectUrl) throw new Error('server sick');
+      if (method === 'GET' && url === configUrl) return { mcp: { [schedulerMcpServerName]: { type: 'remote' } } };
+      if (method === 'GET') return { [schedulerMcpServerName]: connected, [legacySchedulerMcpServerName]: connected };
+      return url === registerUrl ? { [schedulerMcpServerName]: connected, [legacySchedulerMcpServerName]: connected } : undefined;
+    }) as OpenCodeAdapter['apiRequest'];
+
+    await adapter.reconcileSchedulerMcpForActiveSessions();
+    assert.equal(adapter['schedulerMcpRetries'].size, 1, 'a retry is pending');
+    // Run well past the last pause: with the count reset by every registration the loop would never end.
+    for (let round = 0; round < schedulerMcpRetryDelaysMs.length + 3; round += 1) {
+      mock.timers.tick(schedulerMcpRetryDelaysMs[schedulerMcpRetryDelaysMs.length - 1]);
+      await settle();
+    }
+
+    assert.equal(calls.filter((call) => call === `POST ${disconnectUrl}`).length, 1 + schedulerMcpRetryDelaysMs.length, 'the boot try and one per pause, then it stops');
+    assert.equal(calls.filter((call) => call === `POST ${registerUrl}`).length, 1 + schedulerMcpRetryDelaysMs.length, 'and so does the registration it comes with');
+    assert.equal(adapter['schedulerMcpRetries'].size, 0, 'nothing left pending');
+    const giveUp = warnings.at(-1) ?? '';
+    assert.ok(giveUp.includes(legacySchedulerMcpServerName) && giveUp.includes('still connected'), giveUp);
+  });
+
+  it('a registration that fails while a disconnect retry is pending turns the pending kind into "not registered"', async () => {
+    const { adapter } = createAdapterWithSession();
+    let statusReads = 0;
+    adapter['apiRequest'] = (async (method: string, url: string) => {
+      if (method === 'POST' && url === disconnectUrl) throw new Error('server sick');
+      if (method === 'POST' && url === registerUrl) throw new Error('server sick');
+      if (method === 'GET' && url === configUrl) return {};
+      if (method === 'GET') {
+        statusReads += 1;
+        // The first read: charness is in place and the old name is not disconnectable. Later reads: charness is gone.
+        return statusReads === 1 ? { [schedulerMcpServerName]: connected, [legacySchedulerMcpServerName]: connected } : { [legacySchedulerMcpServerName]: connected };
+      }
+      return undefined;
+    }) as OpenCodeAdapter['apiRequest'];
+
+    await adapter.reconcileSchedulerMcpForActiveSessions();
+    for (const pause of schedulerMcpRetryDelaysMs) {
+      mock.timers.tick(pause);
+      await settle();
+    }
+
+    assert.equal(adapter['schedulerMcpRetries'].size, 0, 'it gave up');
+    const giveUp = warnings.at(-1) ?? '';
+    assert.ok(giveUp.includes('is still not registered'), giveUp);
+    assert.ok(!giveUp.includes('still connected'), 'charness is what is missing here, not the old name that is in the way');
   });
 
   it('a folder whose config defines only the OLD name asks for the config once however often it reconciles', async () => {

@@ -3906,7 +3906,13 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
         // `connected` may be the operator's own server of the bot's name — a recreated instance brings the config's back and drops the
         // bot's runtime registration, and the status cannot tell the two apart. Where the config defines the name, register the bot's own.
         const definedNames = await this.readConfigDefinedMcpNames(directory);
-        if (definedNames?.isBotNameDefined) {
+        if (definedNames === null) {
+          // Whose the connected server is stays unknown until the config is read: try again rather than leave the folder on a guess
+          // that, when wrong, leaves its agents without the bot's tools until the next boot.
+          this.scheduleSchedulerMcpRetry(directory, 'registration');
+          return;
+        }
+        if (definedNames.isBotNameDefined) {
           this.registeredSchedulerMcpDirs.delete(directory);
           await this.registerSchedulerMcpForDirectory(directory);
           return;
@@ -4080,21 +4086,23 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
         registration,
       );
       this.registeredSchedulerMcpDirs.add(directory);
-      this.clearSchedulerMcpRetry(directory);
       appendDiagLog(`scheduler mcp registered dir=${directory}`);
     } catch (e) {
       console.warn(
         `[OpenCode] scheduler MCP registration failed for ${directory}:`,
         e instanceof Error ? e.message : e,
       );
-      this.scheduleSchedulerMcpRetry(directory);
+      this.scheduleSchedulerMcpRetry(directory, 'registration');
       return;
     }
     // The registration replaced a server of the same name that the operator's own config defines (measured against a live server); the
     // read warns, once per folder, when there is one.
     const definedNames = await this.readConfigDefinedMcpNames(directory);
-    // Only after `charness` is registered: a failed registration must not also take the agent's remaining bot tools away.
-    await this.retireLegacySchedulerMcp(directory, mcpStatus, definedNames);
+    // Only after `charness` is registered: a failed registration must not also take the agent's remaining bot tools away. The pending
+    // retry is forgotten only when this whole job is done: a disconnect that fails keeps the entry and its count, so the retries it
+    // brings stay bounded (clearing it here would restart the count at every registration, and a reconcile that registers every time
+    // — where the operator's config defines the bot's name — would then retry for ever).
+    if (await this.retireLegacySchedulerMcp(directory, mcpStatus, definedNames)) this.clearSchedulerMcpRetry(directory);
   }
 
   /**

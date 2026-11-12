@@ -117,7 +117,10 @@ constants in the code; this README keeps what the code cannot say.
   once per folder and server generation (`readConfigDefinedMcpNames`, dropped on a server restart and an instance recreate), and
   where it defines the bot's name the reconcile registers the bot's own whatever the status says, with one warning per folder. Why
   registering anyway: the alternative leaves every agent of the folder without `answer_request` and the other bot tools, silently,
-  while the cost is the operator's same-named server in that instance, which the warning explains and renaming restores.
+  while the cost is the operator's same-named server in that instance, which the warning explains and renaming restores. A config
+  that cannot be read arms the same bounded retry (the connected server stays unknown, not assumed the bot's), and the retry count is
+  forgotten only when a registration AND the old-name disconnect it comes with are done — a reconcile that registers at every boot
+  would otherwise restart the count each time.
 - MCP cancellation is a separate HTTP notification while every transport is fresh, so the server correlates by
   verified token + a bounded client id (injected per registration) + the typed request id, and keeps a
   short-lived cancellation-before-registration tombstone set.
