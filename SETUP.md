@@ -771,8 +771,8 @@ connector behaves is described in [`src/connectors/jira/README.md`](src/connecto
 1. Create a Jira account for the AI (its API token is the instance's only secret) and note its account id.
 2. Recommended: create or choose a Jira group of the people whose words may steer the AI (for example
    `ai-trusted`), and give the AI account the *Browse users and groups* global permission so that it can read
-   the group. Then the agent reads only the text and files of its members and of Jira's apps and automations,
-   and only their hand-overs start it.
+   the group. Then the agent reads only the text and files of its members and of the apps you list in
+   `trustedApps` (step 4), and only their hand-overs start it.
 3. An instance of its own: a `DATA_DIR`, a `WORK_ROOT` with one folder per project, a private tmux server, and
    an env file that is the ONLY configuration it reads:
 
@@ -799,6 +799,7 @@ connector behaves is described in [`src/connectors/jira/README.md`](src/connecto
        "PROJ": { "folder": "proj", "triggerStatuses": ["In Progress"], "extraFields": ["customfield_10042"] }
      },
      "trustedGroup": "ai-trusted",
+     "trustedApps": ["<an app account's id>"],
      "wakeOnMention": true,
      "pollIntervalSeconds": 30,
      "runBudgetPer24h": 5,
@@ -813,11 +814,24 @@ connector behaves is described in [`src/connectors/jira/README.md`](src/connecto
    members again whenever its last read is older than 5 minutes: a removed member loses the AI's trust within
    that time. List only projects where only your team can write, and where no automation acts on text or
    actions from outside it — an e-mail handler, a portal form, a copy from another project, a rule that
-   hands an issue to the AI when someone outside the team acts: an app's or automation's text and hand-over
-   are trusted, so such a rule brings that outside text, or that person's hand-over, to the agent. Nor list a
+   hands an issue to the AI when someone outside the team acts: the text and hand-over of an app or automation
+   you trust (see `trustedApps` below) are trusted, so such a rule brings that outside text, or that person's
+   hand-over, to the agent. Nor list a
    project where anyone outside the team holds the *Edit all comments* permission: Jira Cloud keeps no history
    of a comment's edits, so a comment is judged by its author and its LAST editor only — an outsider's edit of a
    member's comment, followed by a member's own edit, reads as trusted.
+
+   `trustedApps` (optional, needs `trustedGroup`) is a list of Jira **account ids of app accounts** — the
+   integrations and automations (`accountType` `app`) whose text may steer the agent and whose hand-over may
+   start it. The group of a site often holds dozens of app users (chat, mail, error-tracking and help-desk
+   integrations) that can relay text written by outsiders into an issue, so with the key set an app is trusted
+   only when its id is listed — being a member of the group is not enough — and any other app is treated exactly
+   like a person outside the group: its text is withheld, its hand-over starts nothing, its mention is ignored.
+   `[]` trusts no app. Each app that is not listed is written to the log once, with its name and account id
+   (`[jira] app "<name>" (account id "<id>") is not in trustedApps: …`), so you can copy the ids to trust from
+   there. Absent, every app is trusted as before, and the start logs one warning that names the key; with no
+   `trustedGroup` the key is refused — without a group everyone is trusted anyway. A listed id adds no trust
+   to a person's account: people stay trusted by membership alone.
 
    `wakeOnMention` (optional) decides whether an @-mention of the AI account in a comment wakes it to answer
    only, without the issue being handed over; absent, it is on exactly when `trustedGroup` is set, and `true`
@@ -857,7 +871,7 @@ connector behaves is described in [`src/connectors/jira/README.md`](src/connecto
    The start refuses a missing `ENV_FILE`, `TMUX_SOCKET_NAME` or `jira.json`, an `OPENCODE_URL` on the default
    port, a `TELEGRAM_BOT_TOKEN` or any `ATLASSIAN_*` variable when Telegram is off, a token that belongs to
    another account, an unknown project or status, a `trustedGroup` the site does not have or the AI account
-   may not read, and a `DATA_DIR` holding another surface's state. An unreachable Jira does not refuse the start —
+   may not read, a `trustedApps` without a `trustedGroup`, and a `DATA_DIR` holding another surface's state. An unreachable Jira does not refuse the start —
    polling backs off and resumes.
 
 The agent sessions of a Jira instance run without the user-level Claude settings, hooks and skills, with the

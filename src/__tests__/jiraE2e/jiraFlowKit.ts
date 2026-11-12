@@ -70,6 +70,8 @@ export const colleague = { accountId: 'colleague-account', accountType: 'atlassi
 /** The trusted group's members are the requester and the colleague; this person and the automation are not in it. */
 export const outsider = { accountId: 'outsider-account', accountType: 'atlassian', displayName: 'Outsider' };
 export const automation = { accountId: 'rule-account', accountType: 'app', displayName: 'Automation' };
+/** A second app account — a member of the trusted group like any app user of a real site, but never named in a flow's `trustedApps`. */
+export const unlistedApp = { accountId: 'unlisted-app-account', accountType: 'app', displayName: 'Unlisted App' };
 export const trustedGroupName = 'ai-trusted';
 const inProgress = { id: '10001', name: 'In Progress' };
 export const toDo = { id: '10000', name: 'To Do' };
@@ -322,8 +324,16 @@ let jiraBaseUrl = '';
 /** The repository names the flow's project lists (`repos`, the shared todo boards); `null` = none, as most flows boot. */
 let projectRepositoryNames: string[] | null = null;
 
-/** Write `jira.json` for the instance; `adapter` is the json-stream lifecycle its sessions run on, `trustedGroup` the group that filters whose text counts. */
-export function writeJiraConfig(adapter: 'claude-json-stream' | 'claude-per-turn', trustedGroup?: string, pollSeconds: number = pollIntervalSeconds): void {
+/**
+ * Write `jira.json` for the instance; `adapter` is the json-stream lifecycle its sessions run on, `trustedGroup` the group that
+ * filters whose text counts, `trustedApps` the account ids of the apps that count with it (absent: every app does).
+ */
+export function writeJiraConfig(
+  adapter: 'claude-json-stream' | 'claude-per-turn',
+  trustedGroup?: string,
+  pollSeconds: number = pollIntervalSeconds,
+  trustedApps?: string[],
+): void {
   fs.writeFileSync(path.join(getLayout().dataDir, 'jira.json'), JSON.stringify({
     site: 'example.atlassian.net',
     baseUrl: jiraBaseUrl,
@@ -334,6 +344,7 @@ export function writeJiraConfig(adapter: 'claude-json-stream' | 'claude-per-turn
     pollIntervalSeconds: pollSeconds,
     adapter,
     ...(trustedGroup === undefined ? {} : { trustedGroup }),
+    ...(trustedApps === undefined ? {} : { trustedApps }),
     // E9: a name found on no PATH of the box, mapped to a stub; the agents must find it by name.
     agentBinaries: { [probeToolName]: getProbeToolPath() },
   }, null, 2));
@@ -343,6 +354,8 @@ export function writeJiraConfig(adapter: 'claude-json-stream' | 'claude-per-turn
 export interface JiraFlowConfig {
   adapter: 'claude-json-stream' | 'claude-per-turn';
   trustedGroup?: string;
+  /** `jira.json` `trustedApps` (needs `trustedGroup`); absent = the key is not written, every app is trusted. */
+  trustedApps?: string[];
   /** The project's `repos` (the shared todo boards, D57); absent = none. */
   repos?: string[];
   /** Windows the flow shortens beyond the ones every Jira flow does (`CHARNESS_TEST_TIMINGS`). */
@@ -361,7 +374,7 @@ function writeInstanceFiles(ports: InstancePorts, config: JiraFlowConfig, pollSe
   const instance = getLayout();
   instanceFiles = { ports, config };
   projectRepositoryNames = config.repos ?? null;
-  writeJiraConfig(config.adapter, config.trustedGroup, pollSeconds ?? pollIntervalSeconds);
+  writeJiraConfig(config.adapter, config.trustedGroup, pollSeconds ?? pollIntervalSeconds, config.trustedApps);
 
   const claudeBin = writeFakeClaudeLauncher(instance, 'jira', { slowTurnMs, queuedWaitMaxMs });
   writeInstanceEnvFile(instance, {

@@ -14,6 +14,7 @@ import * as os from 'os';
 import * as path from 'path';
 import {
   getOpenCodeIsolationError,
+  trustedAppsNeedsGroupError,
   wakeOnMentionNeedsGroupError,
   jiraDefaultEffort,
   jiraDefaultModel,
@@ -120,6 +121,47 @@ describe('validateJiraConfig', () => {
     it('an empty name is refused, naming the key', () => {
       const errors = getErrors(createConfig({ trustedGroup: '' }));
       assert.deepEqual(errors.map((error) => error.split(':')[0]), ['jira.json trustedGroup']);
+    });
+  });
+
+  describe('trustedApps (the apps and automations that count as trusted)', () => {
+    const getTrustedApps = (overrides: Record<string, string | string[]>): ReadonlySet<string> | null => {
+      const result = validateJiraConfig(createConfig(overrides), { workRoot, openCodeUrl: isolatedOpenCodeUrl });
+      assert.ok(result.ok, result.ok ? '' : result.errors.join('\n'));
+      return result.config.trustedAppAccountIds;
+    };
+
+    it('absent → null: every app stays trusted, today\'s behaviour — with or without a group', () => {
+      assert.equal(getTrustedApps({ trustedGroup: 'ai-trusted' }), null);
+      assert.equal(getTrustedApps({}), null);
+    });
+
+    it('a list of account ids is taken as a set (a repeated id once), in the config\'s own words', () => {
+      const trustedApps = getTrustedApps({ trustedGroup: 'ai-trusted', trustedApps: ['712020:app-one', '712020:app-two', '712020:app-one'] });
+      assert.deepEqual([...(trustedApps ?? [])], ['712020:app-one', '712020:app-two']);
+    });
+
+    it('an empty list is kept as set — it trusts no app, which is not the same as absent', () => {
+      const trustedApps = getTrustedApps({ trustedGroup: 'ai-trusted', trustedApps: [] });
+      assert.notEqual(trustedApps, null);
+      assert.equal(trustedApps?.size, 0);
+    });
+
+    it('without a trusted group the config is refused with the one named reason — even an empty list', () => {
+      assert.deepEqual(getErrors(createConfig({ trustedApps: ['712020:app-one'] })), [trustedAppsNeedsGroupError]);
+      assert.deepEqual(getErrors(createConfig({ trustedApps: [] })), [trustedAppsNeedsGroupError]);
+      assert.equal(
+        trustedAppsNeedsGroupError,
+        'jira.json trustedApps needs trustedGroup: without a group everyone is trusted anyway, so a list of apps would narrow nothing',
+      );
+    });
+
+    it('anything but a list of one-word ids is refused naming the field and the position, never the value', () => {
+      assert.deepEqual(getErrors(createConfig({ trustedGroup: 'ai-trusted', trustedApps: 'app-one' })).map((error) => error.split(':')[0]), ['jira.json trustedApps']);
+      assert.deepEqual(getErrors(createConfig({ trustedGroup: 'ai-trusted', trustedApps: [''] })).map((error) => error.split(':')[0]), ['jira.json trustedApps.0']);
+      const spaced = getErrors(createConfig({ trustedGroup: 'ai-trusted', trustedApps: ['fine', 'two words-secret'] }));
+      assert.deepEqual(spaced.map((error) => error.split(':')[0]), ['jira.json trustedApps.1']);
+      assert.ok(!spaced.join('\n').includes('secret'), 'the value is never echoed');
     });
   });
 

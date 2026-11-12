@@ -19,7 +19,7 @@ import { getItemField } from './trigger';
  *
  * With a trusted group (`trust` set) a piece of the issue's own text reaches the
  * agent only when EVERYONE who wrote it is trusted — a member, the AI account or
- * an app; an author Jira does not name counts as untrusted. Text that does not
+ * an app `trustedApps` allows; an author Jira does not name counts as untrusted. Text that does not
  * is replaced IN PLACE by a marker (`[withheld: …]`) before the blocks are
  * hashed, fitted or spilled, so it never reaches a prompt, a delta or a file.
  */

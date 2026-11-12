@@ -18,14 +18,15 @@ import {
   jiraMentionWakeNoGroupLogLine,
   jiraMentionWakeOffLogLine,
   jiraMentionWakeOnLogLine,
+  jiraNoTrustedAppsWarning,
   jiraNoTrustedGroupLogLine,
   jiraPollJqlLogPrefix,
   JiraConnectorStartError,
   prepareJiraConnector,
   type JiraConnector,
 } from '../connectors/jira/connector';
-import { wakeOnMentionNeedsGroupError } from '../connectors/jira/config';
-import { jiraTrustedGroupMaxAgeMs } from '../connectors/jira/trustedGroup';
+import { trustedAppsNeedsGroupError, wakeOnMentionNeedsGroupError } from '../connectors/jira/config';
+import { buildJiraUntrustedAppLogLine, jiraTrustedGroupMaxAgeMs } from '../connectors/jira/trustedGroup';
 import { JiraAuthError, JiraHttpError } from '../connectors/jira/client';
 import { getJiraConfigPath } from '../connectors/jira/configFile';
 import { keyToString } from '../sessionKey';
@@ -556,6 +557,104 @@ describe('prepareJiraConnector', () => {
       } finally {
         logs.mock.restore();
       }
+    });
+
+    describe('apps and automations (trustedApps)', () => {
+      const relayApp = { accountId: 'relay-app-account', accountType: 'app', displayName: 'Relay App' };
+      const memberAccount = { accountId: 'a-member', accountType: 'atlassian' };
+      const originalHandOverAuthor = issue.changelog.histories[0].author;
+      /** Boots with `config` over a group that holds a member AND the app — as a site's product-access group holds its app users. */
+      const bootWithAppHandOver = async (config: object): Promise<{ posted: string[]; warnings: string[]; logs: string[] }> => {
+        writeConfig({ trustedGroup: trustedGroupName, ...config });
+        siteGroups = [{ name: trustedGroupName, groupId: 'group-1' }];
+        groupMembers = [memberAccount, relayApp];
+        issue.changelog.histories[0].author = relayApp;
+        const warn = mock.method(console, 'warn', () => {});
+        const log = mock.method(console, 'log', () => {});
+        try {
+          connector = await prepare();
+          const posted = await startAndWaitForSearch();
+          await waitUntil(() => posted.length > 0 || requestPaths.includes('PUT /rest/api/3/issue/PROJ-1/assignee'));
+          return {
+            posted,
+            warnings: warn.mock.calls.map((call) => String(call.arguments[0])),
+            logs: log.mock.calls.map((call) => String(call.arguments[0])),
+          };
+        } finally {
+          warn.mock.restore();
+          log.mock.restore();
+          issue.changelog.histories[0].author = originalHandOverAuthor;
+        }
+      };
+      const untrustedAppLine = buildJiraUntrustedAppLogLine(relayApp);
+
+      it('a trusted group and no trustedApps: ONE boot warning names the key, and the app\'s hand-over starts the agent as before', async () => {
+        const { posted, warnings, logs } = await bootWithAppHandOver({});
+        assert.deepEqual(warnings.filter((line) => line.includes('trustedApps')), [jiraNoTrustedAppsWarning]);
+        assert.match(jiraNoTrustedAppsWarning, /^\[jira\] no trustedApps: every app and automation account is trusted/);
+        assert.equal(posted.length, 1, 'the hand-over by the app started the agent');
+        assert.ok(!logs.includes(untrustedAppLine));
+        assert.deepEqual(postedCommentTexts, []);
+      });
+
+      it('trustedApps listing the app: no warning, the app\'s hand-over starts the agent', async () => {
+        const { posted, warnings, logs } = await bootWithAppHandOver({ trustedApps: [relayApp.accountId] });
+        assert.deepEqual(warnings.filter((line) => line.includes('trustedApps')), []);
+        assert.equal(posted.length, 1);
+        assert.ok(!logs.includes(untrustedAppLine));
+        assert.deepEqual(postedCommentTexts, []);
+      });
+
+      for (const [description, trustedApps] of [['an empty list', []], ['a list without it', ['another-app-account']]] as const) {
+        it(`trustedApps as ${description}: the app\'s hand-over starts nothing — the fixed notice, the issue goes back to its requester, the app is logged once`, async () => {
+          const { posted, warnings, logs } = await bootWithAppHandOver({ trustedApps });
+          await waitForHandBack();
+          assert.deepEqual(posted, [], 'no agent for an app that is not listed, though it is a member of the group');
+          assert.deepEqual(warnings.filter((line) => line.includes('trustedApps')), []);
+          assert.deepEqual(postedCommentTexts, [
+            'Only members of the AI\'s trusted group (ai-trusted) can hand it work, so nothing was started. Ask a member to hand it over.',
+          ]);
+          assert.equal(assigneeRequests.at(-1), 'reporter-account', 'an app cannot take the issue back: it goes to the nearest person');
+          assert.equal(logs.filter((line) => line === untrustedAppLine).length, 1);
+          assert.ok(untrustedAppLine.includes('"Relay App"') && untrustedAppLine.includes('"relay-app-account"'));
+        });
+      }
+
+      it('without a trusted group there is no trustedApps warning — the no-group line already says nobody filters', async () => {
+        writeConfig();
+        const warn = mock.method(console, 'warn', () => {});
+        try {
+          connector = await prepare();
+          assert.ok(!warn.mock.calls.some((call) => String(call.arguments[0]).includes('trustedApps')));
+        } finally {
+          warn.mock.restore();
+        }
+      });
+
+      it('trustedApps without a trusted group stops the start with that one reason — an empty list too', async () => {
+        for (const trustedApps of [[relayApp.accountId], []]) {
+          writeConfig({ trustedApps });
+          await assert.rejects(prepare(), (error: unknown) =>
+            error instanceof JiraConnectorStartError && error.reasons.length === 1 && error.reasons[0] === trustedAppsNeedsGroupError);
+        }
+      });
+
+      it('an empty group boots with the warning naming who can still hand the AI work: the apps listed in trustedApps when the key is set', async () => {
+        writeConfig({ trustedGroup: trustedGroupName, trustedApps: [relayApp.accountId] });
+        siteGroups = [{ name: trustedGroupName, groupId: 'group-1' }];
+        const warn = mock.method(console, 'warn', () => {});
+        try {
+          connector = await prepare();
+          await startAndWaitForSearch();
+          await waitForHandBack();
+          assert.deepEqual(
+            warn.mock.calls.map((call) => String(call.arguments[0])).filter((line) => line.includes('trusted group')),
+            ['[jira] the trusted group "ai-trusted" has no members: only the apps listed in trustedApps can hand the AI work'],
+          );
+        } finally {
+          warn.mock.restore();
+        }
+      });
     });
 
     describe('mentions of the AI account (T8, T9)', () => {

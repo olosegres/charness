@@ -32,6 +32,10 @@ export const jiraDefaultEffort: ClaudeEffortLevel = 'high';
 export const wakeOnMentionNeedsGroupError =
   'jira.json wakeOnMention needs trustedGroup: without a group, anyone who can comment could start the AI';
 
+/** The refusal of `trustedApps` without a `trustedGroup`. */
+export const trustedAppsNeedsGroupError =
+  'jira.json trustedApps needs trustedGroup: without a group everyone is trusted anyway, so a list of apps would narrow nothing';
+
 /** The backend a Jira session runs on by default (D16, R14); `claude-per-turn` is the other allowed one (L-D12). */
 const jiraAdapterName = claudeJsonStreamAdapterName;
 /** The json-stream host, under either lifecycle — no TUI trust dialog (R14). */
@@ -58,6 +62,8 @@ const folderErrorTexts: Record<BindErrorCode, string> = {
 };
 /** A tool's name on the agent's PATH: ONE file name (never `.` or `..`, never a path). */
 const agentBinaryNameRe = /^(?!\.{1,2}$)[A-Za-z0-9._-]+$/;
+/** An account id as Jira Cloud writes it (`5b10ac8d82e05b22cc7d4ef5`, `712020:…`): one word. */
+const accountIdRe = /^\S+$/;
 /** Hosts the test-only `baseUrl` override may point at. */
 const loopbackHosts = new Set(['127.0.0.1', 'localhost', '[::1]']);
 
@@ -83,6 +89,10 @@ const rawConfigSchema = z.strictObject({
   runBudgetPer24h: z.number().int().min(1).optional(),
   // The NAME of one Jira group: only its members' text steers the agent (see `trustedGroup.ts`); absent → everyone's does.
   trustedGroup: z.string().min(1).optional(),
+  // The account ids of the app and automation accounts (`accountType` `app`) that count as trusted, beside the group's
+  // members: an app NOT listed is treated like an outsider. Absent → every app is trusted (the boot warns); `[]` → none is.
+  // Needs a `trustedGroup`: without one everyone is trusted anyway.
+  trustedApps: z.array(z.string().regex(accountIdRe, 'must be one account id, without spaces')).optional(),
   // An @-mention of the AI account in a comment wakes it (answer only). Absent → on with a `trustedGroup`, off without;
   // `true` without a group is refused: anyone who can comment could start the agent.
   wakeOnMention: z.boolean().optional(),
@@ -121,6 +131,11 @@ export interface JiraConfig {
   runBudgetPer24h: number;
   /** The trusted group's name as `jira.json` gives it; `null` → no filter, the text of everyone who can edit or comment reaches the agents. */
   trustedGroupName: string | null;
+  /**
+   * The account ids `trustedApps` lists (an app account is trusted only when its id is in it); `null` when absent: every app
+   * is trusted. Only ever set together with {@link trustedGroupName}.
+   */
+  trustedAppAccountIds: ReadonlySet<string> | null;
   /**
    * Whether an @-mention of the AI account in a comment starts a request (it answers only, nothing is handed
    * over). `wakeOnMention` from `jira.json`; absent → on exactly when `trustedGroup` is set.
@@ -232,6 +247,7 @@ export function validateJiraConfig(
   const openCodeError = getOpenCodeIsolationError(context.openCodeUrl);
   if (openCodeError) errors.push(openCodeError);
   if (raw.wakeOnMention === true && raw.trustedGroup === undefined) errors.push(wakeOnMentionNeedsGroupError);
+  if (raw.trustedApps !== undefined && raw.trustedGroup === undefined) errors.push(trustedAppsNeedsGroupError);
 
   const agentBinaries = new Map<string, string>();
   for (const [name, binaryPath] of Object.entries(raw.agentBinaries ?? {})) {
@@ -277,6 +293,7 @@ export function validateJiraConfig(
       pollIntervalMs: (raw.pollIntervalSeconds ?? jiraPollIntervalDefaultSeconds) * 1000,
       runBudgetPer24h: raw.runBudgetPer24h ?? jiraRunBudgetDefault,
       trustedGroupName: raw.trustedGroup ?? null,
+      trustedAppAccountIds: raw.trustedApps === undefined ? null : new Set(raw.trustedApps),
       isMentionWakeOn: raw.trustedGroup !== undefined && (raw.wakeOnMention ?? true),
       wakeOnMentionSetting: raw.wakeOnMention ?? null,
       adapter: adapterName === claudePerTurnAdapterName ? claudePerTurnAdapterName : jiraAdapterName,

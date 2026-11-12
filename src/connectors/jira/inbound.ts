@@ -367,9 +367,10 @@ export class JiraInbound {
       this.recordOrWarn({ issueKey: issue.key, triggerId: trigger.triggerId, outcome: 'selfAuthored', at });
       return 'selfAuthored';
     }
-    // The HAND-OVER decides: the account that made the change — an app or automation is trusted, so what it hands
-    // over starts the agent whoever the requester turns out to be. A change Jira names no one for falls back to the
-    // requester, and no account at all is untrusted (fail closed).
+    // The HAND-OVER decides: the account that made the change — a trusted app or automation (`trustedApps`: every app
+    // while the key is absent, else the listed ones) starts the agent whoever the requester turns out to be, an app that is
+    // not listed is refused like an outsider. A change Jira names no one for falls back to the requester, and no account
+    // at all is untrusted (fail closed).
     if (deps.trust && !deps.trust.checkIsTrusted(trigger.author ?? requester)) {
       // Recorded first, as a park: the notice is posted at most once per trigger, never again by a failed or repeated poll.
       if (!this.recordOrWarn({ issueKey: issue.key, triggerId: trigger.triggerId, outcome: 'untrusted', at })) return 'failed';

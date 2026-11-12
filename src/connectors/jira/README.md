@@ -58,13 +58,16 @@ Operator-facing setup steps: the public `SETUP.md` § "Jira setup".
    header names the request it replaced.
    **The hand-over gate** (only with `trustedGroup`, `inbound.ts` `getDecision`): the gate looks at the account
    that made the triggering change — the trigger's author (it assigned the issue to the AI account or moved it into
-   a trigger status), or, for an issue created already matching, its creator (else its reporter). A member, an
-   app or an automation → go on; any other person, a service-desk customer or an account without `accountType` →
-   `untrusted`. When Jira names no one for the change, the requester stands in (fail closed: no account at all is
-   untrusted). The requester — who gets the answer and the hand-back — keeps its own rule (step 4), so an
-   automation's hand-over answers to the person whose action came before it, who may be outside the group: the gate
-   trusted the automation, and the requester is not a second gate (the operator's project rule — no automation
-   that acts on outside text or actions in a listed project — keeps such a person inside the team). `untrusted`
+   a trigger status), or, for an issue created already matching, its creator (else its reporter). A member, or an
+   app or an automation `trustedApps` allows (see «The trusted group») → go on; any other person, an app that
+   `trustedApps` does not list, a service-desk customer or an account without `accountType` → `untrusted`. When
+   Jira names no one for the change, the requester stands in (fail closed: no account at all is untrusted). The
+   requester — who gets the answer and the hand-back — keeps its own rule (step 4), so a trusted automation's
+   hand-over answers to the person whose action came before it, who may be outside the group: the gate trusted the
+   automation, and the requester is not a second gate (the operator's project rule — no automation that acts on
+   outside text or actions in a listed project — keeps such a person inside the team). An untrusted app's
+   hand-over is refused like an outsider's — the same notice, the issue goes back to the requester that step 4
+   names (an app is never the requester) — and the app is logged once (its name and id). `untrusted`
    is a recorded decision like `parked` (written BEFORE the notice, so a failed or repeated poll never posts it
    twice; not counted against the run budget; the log line `[jira] poll: PROJ-1 untrusted`), and nothing of the
    issue is fetched for it.
@@ -148,7 +151,7 @@ with the instance's rights.
 - **Who may wake it.** The comment's author AND its last editor must be trusted (`checkIsCommentTrusted`, the same
   rule that decides whether the comment's text reaches the agent). Otherwise it is `untrusted`: recorded, one log
   line (`[jira] PROJ-1: the mention in comment 10240 is ignored: …`), nothing posted — an outsider gets no
-  request and no notice. An app's or automation's mention is trusted.
+  request and no notice. An app's or automation's mention is trusted only as `trustedApps` allows.
 - **Covered.** The requester of an OPEN hand-over request of the issue who mentions the AI gets no request of
   their own (`covered`): it would supersede the hand-over request — same requester — and strip its hand-back. The
   comment reaches that run in its next prompt. An open hand-over request with NO requester covers every mention
@@ -194,9 +197,20 @@ another platform's state.
   account serves one team; a team with several trust circles runs a second instance. The name is resolved at boot to
   the group's id (`GET /rest/api/3/group/bulk?groupName=…`, the exact name) and the id is followed afterwards, so a
   group renamed while the bot runs keeps working (the next boot needs the new name). Trusted accounts: an active
-  member of the group (`GET /rest/api/3/group/member?groupId=…&includeInactiveUsers=false`, pages of 50), the AI
-  account itself, and every app or automation (`accountType` `app`). Not trusted without membership: any other
-  person, a service-desk customer (`customer`) and an account whose `accountType` is missing (read as a person).
+  member of the group (`GET /rest/api/3/group/member?groupId=…&includeInactiveUsers=false`, pages of 50) and the AI
+  account itself. An app or automation (`accountType` `app`) is judged by the OPTIONAL `jira.json` `trustedApps`
+  instead of by membership, because the product-access group of a site holds the app users of its chat, mail,
+  error-tracking and help-desk integrations, which can relay text written by outsiders: with the key ABSENT every
+  app is trusted (as before the key existed; the boot warns once, naming the key, and only when a group is set); with
+  it set — even `[]` — an app is trusted only when its Jira account id is listed, and one that is not, a member of
+  the group or not, is treated exactly like a person outside it (text withheld, hand-over refused, mention ignored).
+  The list names app accounts: a listed person's id adds no trust (membership stays their rule). Each untrusted
+  app is logged ONCE per process (`[jira] app "<name>" (account id "<id>") is not in trustedApps: …`; the name is
+  flattened to one line and cut at 80 characters — the one place a display name is logged) so an operator can find
+  the id to list. The key needs a `trustedGroup`: without one everyone is trusted anyway, so the config is refused
+  (`jira.json trustedApps needs trustedGroup: …`), like `wakeOnMention: true` without a group. Not trusted without
+  membership: any other person, a service-desk customer (`customer`) and an account whose `accountType` is missing
+  (read as a person).
   Membership is read at boot (part of the setup check) and before a poll's search — before every page of it —
   whenever the last read is older than 5 minutes (`jiraTrustedGroupMaxAgeMs`): a removed member loses trust within
   5 minutes plus one poll. The list is never served past its age: a refresh that fails (no answer, 5xx, 429) fails
@@ -205,7 +219,7 @@ another platform's state.
   "…"`), or the AI account may not read it (403: the *Browse users and groups* permission). A group deleted while
   the bot runs (404 on a refresh) stops polling with one loud line, like a refused token — a setup fault does not
   fix itself; the process stays up — and so does a withdrawn permission (403). An empty group boots, with one
-  warning (only apps and automations can hand the AI work).
+  warning (only apps and automations — with `trustedApps` set, only the listed apps — can hand the AI work).
 - `config.ts`: an unknown key is an error; `${VAR}` placeholders expand from the env file; every message names
   the field (and an unset placeholder's variable), never a value.
 - Lazy load: Jira code loads through a dynamic `import()` only when the connector is on, and nothing
@@ -281,7 +295,7 @@ context preamble tells the agent the tool exists and carries the standing rule: 
   links; a site with issue linking switched off answers the remote-link read with 403, read as no links), `attachments` (one line each: id, name, type, size, author, date, where it is used), then EVERY comment
   oldest first. The comments come from the comments endpoint (the issue's own `comment` field holds at most 100).
 - **With `trustedGroup`, only trusted text is in it** (`issueBlocks.ts`): a piece of the issue's own text reaches the
-  agent only when EVERYONE who wrote it is trusted — a member, the AI account or an app or automation (for a
+  agent only when EVERYONE who wrote it is trusted — a member, the AI account or an app or automation `trustedApps` allows (for a
   comment: its author and its last editor, see below); an author Jira does not name counts as untrusted. Withheld text is replaced IN PLACE by a marker, before the blocks are
   hashed, fitted or spilled, so it never reaches a prompt, a delta or a spill file:
 
@@ -363,18 +377,20 @@ context preamble tells the agent the tool exists and carries the standing rule: 
 - Each comment must fit BOTH counts — its Markdown and its serialized ADF (which runs several times longer);
   which one Jira enforces is not documented.
 - The issue's own text is anyone's who can edit or comment — and, when `trustedGroup` is set, anyone's in the
-  trusted group, and any Jira app or automation's: the prompt marks it as information, never instructions, and
+  trusted group, and the apps' and automations' that `trustedApps` allows (every one without the key): the prompt marks it as information, never instructions, and
   quotes it line by line so none of it can start a line as a bot block. Where an answer goes never comes from
   it — the conversation and requester are fixed when the request opens.
 
 ## Tests
 
 `jiraConfig.test.ts`, `jiraTrustedGroup.test.ts`, `jiraIssueBlocks.test.ts` and `jiraMediaPlaceholders.test.ts` (over the recorded fixture),
-`jiraPromptSpill.test.ts`, `jiraPrompt.test.ts`, `connectorGuards*.test.ts`, `jiraLazyLoad.test.ts`; three flows boot a
+`jiraPromptSpill.test.ts`, `jiraPrompt.test.ts`, `connectorGuards*.test.ts`, `jiraLazyLoad.test.ts`; flows boot a
 real Jira-only instance each (`scripts/run-isolated.sh`) against `__tests__/jiraE2e/fakeJira.ts` (which also serves
 groups and their members) and `fakeClaude.ts`: `jiraConnectorE2e.test.ts` (requests and the session lifecycle),
-`jiraPromptE2e.test.ts` (what the prompts carry) and `jiraTrustE2e.test.ts` (with a `trustedGroup`: the filter, the
-notice, an automation's hand-over and mentions), sharing `__tests__/jiraE2e/jiraFlowKit.ts`;
+`jiraPromptE2e.test.ts` (what the prompts carry), `jiraTrustE2e.test.ts` (with a `trustedGroup` and no `trustedApps`: the
+filter, the notice, an automation's hand-over and mentions) and `jiraTrustedAppsE2e.test.ts` (with a `trustedApps`: a listed
+app starts the agent, an unlisted one — a group member — is refused and its text withheld), sharing
+`__tests__/jiraE2e/jiraFlowKit.ts`;
 `live/jiraLive.test.ts` runs the loop against a real site and is skipped unless its env variables are set; its
 prompt-context steps (media through the attachment tool, a delta, a requested compaction, the default model and
 effort) also need `JIRA_LIVE_MEDIA_ISSUE` and an instance `jira.json` that maps `ffmpeg` in `agentBinaries` and names

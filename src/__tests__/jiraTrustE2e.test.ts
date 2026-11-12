@@ -1,9 +1,11 @@
 /**
  * @description The Jira connector end to end, at PROCESS level (Jira connector plan J7, T1–T12): the trusted group and
- * mentions. The BUILT charness serving Jira only with a `trustedGroup` in `jira.json`, on the per-turn lifecycle,
+ * mentions. The BUILT charness serving Jira only with a `trustedGroup` and NO `trustedApps` in `jira.json` (every app
+ * is trusted, as before the key existed; `jiraTrustedAppsE2e.test.ts` runs the key), on the per-turn lifecycle,
  * against the fake Jira and the fake `claude` (`jiraE2e/jiraFlowKit.ts`). One flow, in order:
  *
- *   isolation checked before the boot; the boot resolves the group and reads its members
+ *   isolation checked before the boot; the boot resolves the group, reads its members and warns once that no
+ *   `trustedApps` narrows the apps
  *   → a member's hand-over of an issue carrying an outsider's comment and file and an automation's comment reaches the
  *     agent with markers for the outsider's and the automation's text in full, and the file tool refuses the outsider's
  *     file; an outsider's hand-over opens no request — one fixed notice, the issue goes back to them; an automation's
@@ -28,6 +30,7 @@ import * as path from 'path';
 import { fakeJiraSearchRequest } from './jiraE2e/fakeJira';
 import { getPolledDecisions, getPolledRequestIssueKeys } from './jiraE2e/charnessLog';
 import { getAdfText, getMentionedAccountIds } from '../connectors/jira/adf';
+import { jiraNoTrustedAppsWarning } from '../connectors/jira/connector';
 import { resolveThreadFilesDir } from '../botFileStorage';
 import { makeJiraKey } from '../connectors/jira/sessionKeyCodec';
 import { requestRequesterAttribute } from '../requests/requestGroup';
@@ -77,6 +80,11 @@ describe('Jira connector end to end — the trusted group and mentions: built ch
     fakeJira.addGroup(trustedGroupName, [requester, colleague]);
     await bootJiraOnly();
     assert.ok(!getCharness().output.includes('no trustedGroup'), 'the group is set: no "nothing filters" line');
+    assert.equal(
+      getCharness().output.split('\n').filter((line) => line.includes(jiraNoTrustedAppsWarning)).length,
+      1,
+      'a group without trustedApps: one boot warning that names the key',
+    );
     assert.ok(fakeJira.requestLog.includes('GET /rest/api/3/group/bulk') && fakeJira.requestLog.includes('GET /rest/api/3/group/member'), 'the group was resolved and its members read at boot');
   });
 
@@ -139,7 +147,8 @@ describe('Jira connector end to end — the trusted group and mentions: built ch
     assert.equal(getCharness().output.split('\n').filter((line) => line.includes(`${refusedKey} untrusted`)).length, 1, 'one untrusted decision in the poll log');
     assert.equal(countAssigneeChanges(refusedKey), 1, 'handed back once');
 
-    // (c) An automation hands an issue over after an outsider's change: the agent starts; the answer goes to that person.
+    // (c) With no `trustedApps` every app is trusted: an automation hands an issue over after an outsider's change, the agent
+    // starts, and the answer goes to that person (the key, when set, narrows this: `jiraTrustedAppsE2e.test.ts`).
     const automatedKey = 'PROJ-22';
     createIssue(automatedKey, 'answer');
     fakeJira.assignIssue(automatedKey, outsider, outsider);
@@ -152,6 +161,7 @@ describe('Jira connector end to end — the trusted group and mentions: built ch
     const [automatedPrompt] = getPrompts(automatedKey);
     assert.ok(automatedPrompt.text.includes(`${automatedKey} assigned to you by Automation`), automatedPrompt.text);
     assert.ok(automatedPrompt.text.includes('Requester (your answers go to them): Outsider'), automatedPrompt.text);
+    assert.ok(!getCharness().output.includes('is not in trustedApps'), 'no app was judged untrusted');
   });
 
   it('M1: an @-mention of the AI wakes it on an issue that is not handed over — it answers by a comment, the issue stays where it is', async () => {

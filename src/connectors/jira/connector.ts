@@ -181,6 +181,19 @@ export const jiraSpillDirName = 'text';
 /** Logged at boot when `jira.json` has no `trustedGroup`: nothing filters whose text reaches the agents. */
 export const jiraNoTrustedGroupLogLine = '[jira] no trustedGroup: the text of everyone who can edit or comment reaches the agents';
 
+/** Warned at boot when `jira.json` has a `trustedGroup` but no `trustedApps`: every app and automation account is trusted. */
+export const jiraNoTrustedAppsWarning =
+  '[jira] no trustedApps: every app and automation account is trusted, so text an app relays into an issue reaches the agent and an app\'s hand-over starts it; '
+  + 'list the account ids of the apps to trust in jira.json trustedApps (an empty list trusts none)';
+
+/**
+ * @description The boot warning about apps, or `null` when there is nothing to say: `trustedApps` is set, or there is no
+ * `trustedGroup` (then nothing filters anyone, the no-group line says so, and `trustedApps` is refused without a group).
+ */
+export function getJiraTrustedAppsWarning(config: Pick<JiraConfig, 'trustedGroupName' | 'trustedAppAccountIds'>): string | null {
+  return config.trustedGroupName !== null && config.trustedAppAccountIds === null ? jiraNoTrustedAppsWarning : null;
+}
+
 /** Logged at boot: what an @-mention of the AI account does on this instance. */
 export const jiraMentionWakeOnLogLine = '[jira] mentions of the AI account in a comment wake it (answer only)';
 export const jiraMentionWakeNoGroupLogLine = '[jira] no trustedGroup: mentions of the AI account do not wake it';
@@ -223,6 +236,8 @@ export async function prepareJiraConnector(context: {
   if (firstCheck.kind === 'refused') throw new JiraConnectorStartError(firstCheck.reasons);
   if (firstCheck.kind === 'unreachable') console.warn(`[jira] Jira unreachable at start (${firstCheck.detail}); polling starts once it answers`);
   if (config.trustedGroupName === null) console.log(jiraNoTrustedGroupLogLine);
+  const trustedAppsWarning = getJiraTrustedAppsWarning(config);
+  if (trustedAppsWarning !== null) console.warn(trustedAppsWarning);
   console.log(getJiraMentionWakeLogLine(config));
 
   const triggerLog = JiraTriggerLog.createForDataDir(path.join(context.dataDir, jiraTriggerLogFileName));
@@ -252,7 +267,9 @@ export async function prepareJiraConnector(context: {
   const shownSummaries = new Map<string, string | null>();
   const adoptTrustedGroup = (ready: Extract<JiraSetupCheck, { kind: 'ready' }>): void => {
     const { trustedGroup } = ready;
-    trust = trustedGroup ? createJiraTrust({ client, snapshot: trustedGroup, aiAccountId: config.accountId, now }) : null;
+    trust = trustedGroup
+      ? createJiraTrust({ client, snapshot: trustedGroup, aiAccountId: config.accountId, trustedAppAccountIds: config.trustedAppAccountIds, now })
+      : null;
   };
   if (firstCheck.kind === 'ready') adoptTrustedGroup(firstCheck);
   /** Why the setup check that retried after an unreachable start came out refused — polling never began; `null` while none did. */
@@ -267,7 +284,8 @@ export async function prepareJiraConnector(context: {
       console.warn(`[jira] ${projectKey}: extraFields the site does not list are left out of every prompt: ${fieldIds.join(', ')}`);
     }
     if (trustedGroup && trustedGroup.memberAccountIds.size === 0) {
-      console.warn(`[jira] the trusted group "${trustedGroup.groupName}" has no members: only apps and automations can hand the AI work`);
+      const handOverAccounts = config.trustedAppAccountIds === null ? 'apps and automations' : 'the apps listed in trustedApps';
+      console.warn(`[jira] the trusted group "${trustedGroup.groupName}" has no members: only ${handOverAccounts} can hand the AI work`);
     }
     inbound = new JiraInbound({
       ...deps,

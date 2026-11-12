@@ -78,7 +78,7 @@ const accountSchema = z.object({
   accountId: z.string(),
   /** `atlassian` for a person, `app` for an app or automation, `customer` for a service-desk customer. */
   accountType: z.string().optional(),
-  /** Runtime data for the agent's prompt only — never logged or stored. */
+  /** Runtime data for the agent's prompt only — never stored, and logged only for an app that `trustedApps` does not list (`trustedGroup.ts`), so an operator can find its id. */
   displayName: z.string().optional(),
 });
 
