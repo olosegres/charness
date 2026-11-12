@@ -9,7 +9,7 @@
 
 /** Test case: N/A — Charness has no Jira tracker. */
 
-import { describe, it, mock } from 'node:test';
+import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { keyToString } from '../sessionKey';
 import { createTelegramAnswerSink, type TelegramAnswerSinkDeps } from '../connectors/telegram/answerSink';
@@ -24,7 +24,6 @@ const alertMessageId = 555;
 function createDeps(overrides: Partial<TelegramAnswerSinkDeps>): TelegramAnswerSinkDeps {
   return {
     sendMessages: async () => ({ ok: true, summary: 'unused', undeliveredCount: 0, sentMessageIds: [] }),
-    landStreamedOutput: async () => {},
     postAlert: async () => null,
     pinMessage: async () => false,
     unpinMessage: async () => {},
@@ -79,59 +78,6 @@ describe('createTelegramAnswerSink', () => {
 
     assert.deepEqual(await sink.deliverAnswer(topicKey, delivery), { ok: true });
     assert.deepEqual(calls, [{ threadKey: keyToString(topicKey), options: { messages: ['**Done.**'] } }]);
-  });
-
-  it('lands the text the agent streamed before the answer FIRST, so the answer is posted below it', async () => {
-    const events: string[] = [];
-    const sink = createTelegramAnswerSink(createDeps({
-      // A landing that takes a round trip, as the real flush does: the answer must still wait for it.
-      landStreamedOutput: async (key) => {
-        await new Promise<void>((resolve) => setImmediate(resolve));
-        events.push(`landed ${keyToString(key)}`);
-      },
-      sendMessages: async (threadKey) => {
-        events.push(`sent ${threadKey}`);
-        return { ok: true, summary: 'Delivered 1 message.', undeliveredCount: 0, sentMessageIds: [101] };
-      },
-    }));
-
-    assert.deepEqual(await sink.deliverAnswer(topicKey, delivery), { ok: true });
-    assert.deepEqual(events, [`landed ${keyToString(topicKey)}`, `sent ${keyToString(topicKey)}`]);
-  });
-
-  it('an answer to a closed request lands the streamed text first too (every answer is posted the same way)', async () => {
-    const events: string[] = [];
-    const sink = createTelegramAnswerSink(createDeps({
-      landStreamedOutput: async () => { events.push('landed'); },
-      sendMessages: async () => {
-        events.push('sent');
-        return { ok: true, summary: 'Delivered 1 message.', undeliveredCount: 0, sentMessageIds: [101] };
-      },
-    }));
-
-    await sink.deliverAnswer(topicKey, { ...delivery, kind: 'progress', isRequestOpen: false });
-    assert.deepEqual(events, ['landed', 'sent']);
-  });
-
-  it('a landing that fails never holds the answer back: it is logged and the answer is still delivered', async () => {
-    const logged = mock.method(console, 'error', () => {});
-    try {
-      const sentBodies: string[] = [];
-      const sink = createTelegramAnswerSink(createDeps({
-        landStreamedOutput: async () => { throw new Error('the send path is down'); },
-        sendMessages: async (_threadKey, options) => {
-          sentBodies.push(...options.messages.map((message) => (typeof message === 'string' ? message : message.text ?? '')));
-          return { ok: true, summary: 'Delivered 1 message.', undeliveredCount: 0, sentMessageIds: [101] };
-        },
-      }));
-
-      assert.deepEqual(await sink.deliverAnswer(topicKey, delivery), { ok: true });
-      assert.deepEqual(sentBodies, ['**Done.**']);
-      assert.equal(logged.mock.callCount(), 1, 'the failure is reported, not swallowed');
-      assert.match(String(logged.mock.calls[0].arguments.join(' ')), /the send path is down/);
-    } finally {
-      logged.mock.restore();
-    }
   });
 
   it('reports a partial delivery as a success with a warning, so the agent knows part is missing', async () => {

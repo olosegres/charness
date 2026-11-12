@@ -246,6 +246,16 @@ export function getFakeBackgroundTaskFinishedText(issueKey: string): string {
   return `Background task for ${issueKey} finished.`;
 }
 
+/** The sentence a `[text-chars:<n>]` turn's streamed text ENDS with: a test finds the LAST message of a long text by it. */
+export function getFakeStreamTextEnd(label: string): string {
+  return `End of the text of ${label}.`;
+}
+
+/** The one message the `send-messages` mode sends through `send_messages_to_user`. */
+export function getFakeDigestMessageText(label: string): string {
+  return `Fake digest message for ${label}.`;
+}
+
 export const fakeClaudeLogFileNames = {
   /** One record per user message the fake READ, the crashing ones too: `{ pid, issueKey, requestId, text }`. */
   prompts: 'prompts.jsonl',

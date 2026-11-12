@@ -7,13 +7,15 @@
  * and — the attachment extension — an item with a `path` routes
  * through the injected file-send pipeline (caption/asFile/authorizedWorkDir
  * threaded), mixed batches preserve order, an all-empty object is rejected, and
- * a file `deliveryUnknown` terminates the batch without inviting a retry.
+ * a file `deliveryUnknown` terminates the batch without inviting a retry, and the
+ * agent's streamed text is landed BEFORE anything is posted (a landing that fails never
+ * holds the messages back, a call that resolves no target lands nothing).
  */
 
 /** Test case: N/A — Charness has no Jira tracker. */
 
 import { splitMessage } from '../connectors/telegram/messageSplit';
-import { test } from 'node:test';
+import { mock, test } from 'node:test';
 import * as assert from 'node:assert/strict';
 import {
   createSendMessagesToThread,
@@ -66,6 +68,7 @@ function createService(
     splitMessage,
     maxMessageLength: 10,
     measureRendered: (chunk) => chunk.length,
+    landStreamedOutput: async () => {},
     ...overrides,
   });
   return { service, recorder };
@@ -173,6 +176,7 @@ test('cancellation between messages stops further delivery', async () => {
     splitMessage,
     maxMessageLength: 10,
     measureRendered: (chunk) => chunk.length,
+    landStreamedOutput: async () => {},
   });
   const result = await service('-100:1', {
     messages: ['first', 'second'],
@@ -435,4 +439,59 @@ test('cancellation stops a following attachment send', async () => {
   assert.equal(recorder.fileCalls.length, 0);
   assert.equal(result.ok, false);
   assert.equal(!result.ok && result.error, 'cancelled after delivering 1 message');
+});
+
+test('lands the text the agent streamed FIRST, so every message is posted below it', async () => {
+  const landedTargets: string[] = [];
+  const { service, recorder } = createService({
+    // A landing that takes a round trip, as the real flush does: the messages must still wait for it.
+    landStreamedOutput: async (target) => {
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      landedTargets.push(target);
+      recorder.events.push('landed');
+    },
+  });
+
+  await service('-100:1', { messages: ['first', 'second'] });
+
+  assert.deepEqual(recorder.events, ['landed', 'text:first', 'text:second']);
+  assert.deepEqual(landedTargets, ['-100:1']);
+});
+
+test('lands once per call, before an attachment as before a text', async () => {
+  const { service, recorder } = createService({ landStreamedOutput: async () => { recorder.events.push('landed'); } });
+
+  await service('-100:1', { messages: [{ path: 'a.png' }, 'tail'] });
+
+  assert.deepEqual(recorder.events, ['landed', 'file:a.png', 'text:tail']);
+});
+
+test('a landing that fails is logged and the messages are still posted', async () => {
+  const logged = mock.method(console, 'error', () => {});
+  try {
+    const { service, recorder } = createService({
+      landStreamedOutput: async () => { throw new Error('the send path is down'); },
+    });
+
+    const result = await service('-100:1', { messages: ['still here'] });
+
+    assert.equal(result.ok && result.summary, 'Delivered 1 message: 1 text.');
+    assert.deepEqual(recorder.sent, ['still here']);
+    assert.equal(logged.mock.callCount(), 1, 'the failure is reported, not swallowed');
+    assert.match(String(logged.mock.calls[0].arguments.join(' ')), /the send path is down/);
+  } finally {
+    logged.mock.restore();
+  }
+});
+
+test('lands nothing for a call that posts nothing: an invalid item or an unresolvable target', async () => {
+  const { service, recorder } = createService({
+    landStreamedOutput: async () => { recorder.events.push('landed'); },
+    resolveTarget: (threadKey) => (threadKey === '-100:1' ? { ok: true, target: threadKey } : { ok: false, error: 'no such topic' }),
+  });
+
+  assert.equal((await service('-100:1', { messages: [{}] })).ok, false);
+  assert.equal((await service('-100:2', { messages: ['x'] })).ok, false);
+
+  assert.deepEqual(recorder.events, []);
 });

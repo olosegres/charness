@@ -10,13 +10,10 @@ import type { SendMessagesToThread } from '../../utils/messageSendService';
  * localized alert text and resolves its message id (`null` when the send
  * failed); the pin helpers swallow their own failures and `pinMessage` pins WITH
  * a notification; the answer-pin store remembers the latest pinned answer per
- * conversation across restarts. `landStreamedOutput` lands the agent's streamed text
- * that still waits out the output debounce (or is being sent), so it is posted
- * before the answer and not under it.
+ * conversation across restarts.
  */
 export interface TelegramAnswerSinkDeps {
   sendMessages: SendMessagesToThread;
-  landStreamedOutput: (key: SessionKey) => Promise<void>;
   postAlert: (key: SessionKey, requestId: string, reason: RequestAlertReason) => Promise<number | null>;
   pinMessage: (key: SessionKey, messageId: number) => Promise<boolean>;
   unpinMessage: (key: SessionKey, messageId: number) => Promise<void>;
@@ -44,10 +41,10 @@ export interface TelegramAnswerSinkDeps {
  * (parallel `answer_request` calls) would otherwise both read the same previous
  * pin and leave the earlier of them pinned for good.
  *
- * The answer is the last thing of its turn in the topic: the text the agent
- * streamed before calling `answer_request` is held back by the per-topic output
- * debounce while the answer is posted at once, so the sink lands that text first.
- * A landing that fails never holds the answer back.
+ * The answer is the last thing of its turn in the topic: the shared message sender
+ * lands the text the agent streamed before calling `answer_request` (held back for
+ * a moment by the adapter and the per-topic output debounce) before it posts the
+ * answer.
  *
  * The wake-up alert (core S4) is a bot message naming the request, PINNED with a
  * notification and unpinned when that request closes. Its message id is the
@@ -68,17 +65,8 @@ export function createTelegramAnswerSink(deps: TelegramAnswerSinkDeps): AnswerSi
     });
   }
 
-  async function landStreamedOutputSafely(key: SessionKey): Promise<void> {
-    try {
-      await deps.landStreamedOutput(key);
-    } catch (e) {
-      console.error(`[answer] the streamed text of ${keyToString(key)} could not be landed before its answer:`, e instanceof Error ? e.message : e);
-    }
-  }
-
   return {
     async deliverAnswer(key, delivery) {
-      await landStreamedOutputSafely(key);
       const result = await deps.sendMessages(keyToString(key), { messages: [delivery.body] });
       if (!result.ok) return { ok: false, error: result.error };
       const [firstMessageId] = result.sentMessageIds;

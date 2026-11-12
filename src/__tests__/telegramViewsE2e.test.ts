@@ -33,7 +33,9 @@
  *     runs; back in «Stream + answers» the same turn shows its stream again
  *   → the text the agent streamed before its answer lands ABOVE the pinned answer, whether
  *     it was streamed an instant before (not yet read from the CLI's output) or sits in
- *     the 3 s output debounce when the answer comes
+ *     the 3 s output debounce when the answer comes (a long one, sent as several messages,
+ *     with the CLI's tool call for the answer already read); the same above the messages
+ *     it sends through `send_messages_to_user`
  *   → Telegram refusing the markup of a «🔧 tool» status frame: it is created again as
  *     plain text; a status frame that its own turn's text outran while it waited behind
  *     earlier unposted text is never posted at all
@@ -50,7 +52,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { FakeTelegram, type FakeTelegramCall, type FakeTelegramMessage } from './telegramE2e/fakeTelegram';
-import { fakeClaudeLogFileNames, type FakeClaudeAnswer, type FakeClaudeTurn } from './jiraE2e/fakeClaudeContract';
+import { fakeClaudeLogFileNames, getFakeDigestMessageText, getFakeStreamTextEnd, type FakeClaudeAnswer, type FakeClaudeTurn } from './jiraE2e/fakeClaudeContract';
 import type { ClosedRequestRecord, OpenRequestState } from '../requests/types';
 import type { ScheduleRecord } from '../scheduler/types';
 import {
@@ -110,8 +112,13 @@ const answersOnlyToolName = 'ReadAnswersOnly';
 /** The labels of the two turns whose stream text must land above their answer: words no other turn uses (`ANSWERSONLY-1` is another's). */
 const answerOrderBatchTurnLabel = 'ANSWERORDER-1';
 const answerOrderDebounceTurnLabel = 'ANSWERORDER-2';
-/** How long after its text the second turn answers: past the adapter's 350 ms batch window, inside the bot's 3 s output debounce. */
+const sendMessagesOrderTurnLabel = 'ANSWERORDER-3';
+/** How long after its text a turn answers: past the adapter's 350 ms batch window, inside the bot's 3 s output debounce. */
 const answerAfterStreamedTextMs = 1000;
+/** How long a turn works before it answers when its tool status frame must be sent on its own, not replaced by the answer's: past the bot's 300 ms tail poll. */
+const toolStatusFrameSettleMs = 1500;
+/** A streamed text of three Telegram messages (the cap is 4096 characters each). */
+const longStreamTextChars = 9000;
 
 let layout: IsolatedInstanceLayout | null = null;
 let charness: IsolatedCharness | null = null;
@@ -679,36 +686,54 @@ describe('Telegram views end to end: built charness, fake Bot API, fake claude (
   });
 
   /**
-   * The turn `label` streams `Working on <label>.` and answers through `answer_request` (after the `[work-ms:…]` token's silent
-   * work, when there is one): the text must reach the topic ABOVE the answer. What the turn writes AFTER its answer (the fake's
-   * `result` repeats the answer's body, which the adapter emits as output) is rightly below it and is not looked at.
+   * A turn `label` streams its text (`Working on <label>.`, or a long one of several messages ending with
+   * `getFakeStreamTextEnd(label)` when `tokens` carry `[text-chars:…]`) and then posts something straight to the topic — its
+   * answer through `answer_request`, or the digest of `send-messages` — with the CLI's `tool_use` line ahead of the call. The LAST
+   * message of the text must be above what the turn posted. What the turn writes AFTER that (the fake's `result` repeats the
+   * answer's body, which the adapter emits as output; the tool's result) is rightly below it and is not looked at.
    */
-  async function assertStreamTextLandsAboveAnswer(label: string, workToken?: string): Promise<void> {
-    fakeTelegram.pushOperatorMessage(topicThreadId, [label, workToken, '[fake:answer]'].filter(Boolean).join(' '));
+  async function assertStreamTextLandsAbove(label: string, tokens: readonly string[], isTextLong: boolean, findPostedMessage: () => FakeTelegramMessage | undefined): Promise<void> {
+    fakeTelegram.pushOperatorMessage(topicThreadId, [label, ...tokens].join(' '));
     await waitForFakeAnswer(label);
-    // The answer is the pinned message (the echo of its body, which may be in the topic too, never is). Both it and the text are
-    // waited for before the order is read: a text posted after the answer is below it by the time it exists.
-    let answer: FakeTelegramMessage | undefined;
-    let streamText: FakeTelegramMessage | undefined;
-    await getCharness().waitFor(`the pinned answer and the stream text of ${label}`, replyTimeoutMs, () => {
-      answer = listTopicMessages().find((message) => message.text.includes(`Fake final answer for ${label}`) && getPinKinds(message.message_id).includes('pin'));
-      streamText = listTopicMessages().find((message) => message.text.includes(`Working on ${label}`));
-      return answer !== undefined && streamText !== undefined;
+    const lastTextMarker = isTextLong ? getFakeStreamTextEnd(label) : `Working on ${label}`;
+    // Both are waited for before the order is read: a text posted after the message is below it by the time it exists.
+    let posted: FakeTelegramMessage | undefined;
+    let lastTextMessage: FakeTelegramMessage | undefined;
+    await getCharness().waitFor(`the posted message and the last of the stream text of ${label}`, replyTimeoutMs, () => {
+      posted = findPostedMessage();
+      lastTextMessage = listTopicMessages().find((message) => message.text.includes(lastTextMarker));
+      return posted !== undefined && lastTextMessage !== undefined;
     });
-    assert.ok(answer && streamText, 'the answer and the stream text are in the topic');
-    assert.ok(streamText.message_id < answer.message_id, `the stream text (message ${streamText.message_id}) is above the answer (message ${answer.message_id})`);
+    assert.ok(posted && lastTextMessage, 'the posted message and the stream text are in the topic');
+    assert.ok(lastTextMessage.message_id < posted.message_id, `the last of the stream text (message ${lastTextMessage.message_id}) is above the posted message (message ${posted.message_id})`);
+  }
+
+  /** The turn's answer is the pinned message (the echo of its body, which may be in the topic too, never is). */
+  function findPinnedAnswer(label: string): FakeTelegramMessage | undefined {
+    return listTopicMessages().find((message) => message.text.includes(`Fake final answer for ${label}`) && getPinKinds(message.message_id).includes('pin'));
   }
 
   it('the stream text lands above the pinned answer: text the agent streamed an instant before it, not yet read from the CLI\'s output', async () => {
     // The fake streams `Working on <label>.` and calls `answer_request` within milliseconds: the bot's tail poll has not even
     // read the text yet, let alone the adapter's 350 ms batch window or the bot's 3 s output debounce passed it on.
-    await assertStreamTextLandsAboveAnswer(answerOrderBatchTurnLabel);
+    await assertStreamTextLandsAbove(answerOrderBatchTurnLabel, ['[fake:answer]'], false, () => findPinnedAnswer(answerOrderBatchTurnLabel));
   });
 
-  it('the stream text lands above the pinned answer: text the output debounce still holds when the agent answers', async () => {
+  it('the stream text lands above the pinned answer: a long text the output debounce still holds when the agent\'s tool call for the answer shows up', async () => {
     // The answer comes after the adapter's batch window (the text is in the bot's queue) and well inside the 3 s debounce that
-    // holds it there.
-    await assertStreamTextLandsAboveAnswer(answerOrderDebounceTurnLabel, `[work-ms:${answerAfterStreamedTextMs}]`);
+    // holds it there. The CLI writes the tool call before it makes it, so the bot lands the text for the tool's status frame —
+    // and the answer must not pass that landing while it is still sending: a text past Telegram's 4096 characters goes out as
+    // several messages, one send after the other, and the answer's own send would slip in between them.
+    await assertStreamTextLandsAbove(answerOrderDebounceTurnLabel, [`[work-ms:${answerAfterStreamedTextMs}]`, `[text-chars:${longStreamTextChars}]`, '[fake:answer]'], true, () => findPinnedAnswer(answerOrderDebounceTurnLabel));
+  });
+
+  it('the stream text lands above the messages the agent sends through send_messages_to_user, as above its answer', async () => {
+    await assertStreamTextLandsAbove(
+      sendMessagesOrderTurnLabel,
+      [`[work-ms:${answerAfterStreamedTextMs}]`, `[text-chars:${longStreamTextChars}]`, '[fake:send-messages]'],
+      true,
+      () => listTopicMessages().find((message) => message.text.includes(getFakeDigestMessageText(sendMessagesOrderTurnLabel))),
+    );
   });
 
   it('Telegram refusing the markup of the «🔧 tool» status frame: it is created again as plain text — the tool name as written, no entity shown', async () => {
@@ -721,7 +746,9 @@ describe('Telegram views end to end: built charness, fake Bot API, fake claude (
       'Bad Request: can\'t parse entities: Unsupported start tag "x" at byte offset 0',
       (payload) => payload.parse_mode === 'HTML' && payload.text === statusHtml,
     );
-    fakeTelegram.pushOperatorMessage(topicThreadId, 'TOPIC-14 [tool-name:Read<&>] [fake:answer]');
+    // The turn works a moment before it answers: the answer's own tool call writes a status frame of its own, and one that
+    // follows within the poll that reads the `Read<&>` frame replaces it (the latest status wins) — as it does for a real agent.
+    fakeTelegram.pushOperatorMessage(topicThreadId, `TOPIC-14 [tool-name:Read<&>] [work-ms:${toolStatusFrameSettleMs}] [fake:answer]`);
     await waitForFakeAnswer('TOPIC-14');
     // The status frame is transient (the stream text that follows replaces it), so its sends are read from the calls, not the topic.
     await getCharness().waitFor('the status frame to be sent as plain text after the refusal', replyTimeoutMs, () => fakeTelegram.listCalls('sendMessage').some((call) => call.payload.text === statusPlain));

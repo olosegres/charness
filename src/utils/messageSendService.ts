@@ -106,6 +106,13 @@ export interface SendMessagesToThreadDeps<TTarget> {
   maxMessageLength: number;
   /** Rendered-length measure so an over-cap RENDERED message is split like normal output. */
   measureRendered(chunk: string): number;
+  /**
+   * Land what the agent streamed before this call into the topic — the text its backend still batches and the output the topic
+   * still debounces or is sending — so the messages of this call are posted BELOW it. The agent writes its text, then calls the
+   * tool: without this the text, held back for a moment, would appear under the messages it led up to. A landing that fails is
+   * logged and never holds the messages back.
+   */
+  landStreamedOutput(target: TTarget): Promise<void>;
 }
 
 /**
@@ -179,6 +186,9 @@ function buildCancelledResult(landed: number): SendMessagesToThreadResult {
  * and letting that escape hid how many messages had already landed (the agent's
  * natural retry then posted them twice).
  *
+ * The agent's streamed text lands first ({@link SendMessagesToThreadDeps.landStreamedOutput}): the messages are the last thing the
+ * agent has written when they are posted, so they are posted last — the answer of `answer_request` rides this sender too.
+ *
  * Items are validated up front (an all-empty object → error, nothing sent) so
  * the service mirrors the MCP schema's all-or-nothing rejection. Failure is NOT
  * swallowed: if every send failed the result is an ERROR (with any attachment
@@ -204,6 +214,11 @@ export function createSendMessagesToThread<TTarget>(
     const resolved = deps.resolveTarget(threadKey);
     if (!resolved.ok) return { ok: false, error: resolved.error };
     const { target } = resolved;
+    try {
+      await deps.landStreamedOutput(target);
+    } catch (error) {
+      console.error(`[send] the streamed text of ${threadKey} could not be landed before its messages:`, error instanceof Error ? error.message : error);
+    }
 
     let attempted = 0;
     let landed = 0;

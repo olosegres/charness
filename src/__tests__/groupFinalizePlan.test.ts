@@ -11,14 +11,16 @@
  * (the pending segments), so the remainder IS the pending segments — these tests pin that a
  * pending buffer drains exactly once, segment by segment as it was queued, and a delivered turn is a no-op.
  *
- * Landing the output ahead of an answer (`landGroupOutput`, `markFlushInFlight`): the text the debounce still holds, and a flush
- * already sending, must reach the topic BEFORE whatever the caller posts next — the segments sent in order, the older flush
- * first — and the queue must be emptied before anything is awaited, because a teardown clears it right after.
+ * Landing the output ahead of what is posted next (`landGroupOutput`, `flushNextPendingOutput`, `runInSendChain`): the text the
+ * debounce still holds, a flush already sending and a landing already sending must all reach the topic BEFORE it — every send of
+ * a topic's output runs one after the other, in the order it was started (the segments in order; an older send first; the 429
+ * leftover of a flush ahead of what a landing took) — and the queue must be emptied before anything is awaited, because a
+ * teardown clears it right after.
  */
 
 import { describe, test, it, mock } from 'node:test';
 import * as assert from 'node:assert/strict';
-import { getGroupFinalizePlan, landGroupOutput, markFlushInFlight, type GroupFinalizeQueue } from '../utils/groupFinalizePlan';
+import { createGroupFinalizeQueue, flushNextPendingOutput, getGroupFinalizePlan, landGroupOutput, runInSendChain, type GroupFinalizeQueue } from '../utils/groupFinalizePlan';
 import type { PendingOutputSegment } from '../connectors/telegram/outputFlushPlan';
 
 function createSegment(output: string, flags: Partial<Omit<PendingOutputSegment, 'output'>> = {}): PendingOutputSegment {
@@ -52,17 +54,48 @@ test('text queued on both sides of a turn boundary drains as two segments, in or
   );
 });
 
-/** A queue as `bot.ts` keeps it: pending segments, an armed debounce timer and no flush sending. */
+/** A queue as `bot.ts` keeps it, with the given pending segments and an armed debounce timer, if any. */
 function createQueue(pendingSegments: PendingOutputSegment[], debounceTimer: NodeJS.Timeout | null = null): GroupFinalizeQueue {
-  return { pendingSegments, debounceTimer, flushSettled: null };
+  return { ...createGroupFinalizeQueue(), pendingSegments, debounceTimer };
 }
 
-/** A promise settled by hand, for a flush the test holds open. */
+/** A promise settled by hand, for a send the test holds open. */
 function createDeferred(): { promise: Promise<void>; resolve: () => void } {
   let resolve = (): void => {};
   const promise = new Promise<void>((resolvePromise) => { resolve = resolvePromise; });
   return { promise, resolve };
 }
+
+/** Let every promise reaction already queued run. */
+function settleReactions(): Promise<void> {
+  return new Promise<void>((resolve) => setImmediate(resolve));
+}
+
+describe('runInSendChain', () => {
+  it('runs the sends one after the other, in the order they were asked for, whatever each takes', async () => {
+    const queue = createQueue([]);
+    const firstGate = createDeferred();
+    const events: string[] = [];
+
+    const first = runInSendChain(queue, async () => { events.push('first starts'); await firstGate.promise; events.push('first ends'); });
+    const second = runInSendChain(queue, async () => { events.push('second starts'); events.push('second ends'); });
+    await settleReactions();
+    assert.deepEqual(events, ['first starts'], 'the second waits for the first');
+
+    firstGate.resolve();
+    await Promise.all([first, second]);
+    assert.deepEqual(events, ['first starts', 'first ends', 'second starts', 'second ends']);
+  });
+
+  it('a send that fails reaches only its own caller: the sends behind it still run', async () => {
+    const queue = createQueue([]);
+    const failed = runInSendChain(queue, async () => { throw new Error('the send path is down'); });
+    const later = runInSendChain(queue, async () => 'ran');
+
+    await assert.rejects(failed, /the send path is down/);
+    assert.equal(await later, 'ran');
+  });
+});
 
 describe('landGroupOutput', () => {
   it('sends the pending segments in order and reports nothing dropped', async () => {
@@ -106,38 +139,95 @@ describe('landGroupOutput', () => {
   });
 
   it('waits for the flush that is already sending before it sends its segments: the older text lands first', async () => {
-    const queue = createQueue([createSegment('queued while the flush was sending')]);
-    const endFlush = markFlushInFlight(queue);
+    const queue = createQueue([createSegment('the debounce flush\'s text'), createSegment('queued while it was sending', { startsNewMessage: true })]);
+    const flushGate = createDeferred();
     const events: string[] = [];
+    const flush = runInSendChain(queue, () => flushNextPendingOutput(queue, async (segment) => {
+      events.push(`flush sends: ${segment.output}`);
+      await flushGate.promise;
+      return { unsentRemainder: null };
+    }));
+    await settleReactions();
 
-    const landing = landGroupOutput(queue, async (segment) => { events.push(`sent: ${segment.output}`); return { unsentRemainder: null }; });
-    await new Promise<void>((resolve) => setImmediate(resolve));
-    assert.equal(events.length, 0, 'nothing is sent while the older flush is still sending');
+    const landing = landGroupOutput(queue, async (segment) => { events.push(`landing sends: ${segment.output}`); return { unsentRemainder: null }; });
+    await settleReactions();
+    assert.deepEqual(events, ['flush sends: the debounce flush\'s text'], 'nothing is sent while the older flush is still sending');
 
-    events.push('the older flush landed');
-    endFlush();
-    await landing;
-    assert.deepEqual(events, ['the older flush landed', 'sent: queued while the flush was sending']);
+    flushGate.resolve();
+    await Promise.all([flush, landing]);
+    assert.deepEqual(events, ['flush sends: the debounce flush\'s text', 'landing sends: queued while it was sending']);
   });
 
-  it('with nothing pending it still waits for the flush that is sending: the text that flush took must land above what follows', async () => {
+  it('with nothing pending it still waits for a send that is going out: the text it carries must land above what follows', async () => {
     const queue = createQueue([]);
-    const endFlush = markFlushInFlight(queue);
+    const sendGate = createDeferred();
+    const earlierSend = runInSendChain(queue, () => sendGate.promise);
     let isLanded = false;
 
     const landing = landGroupOutput(queue, async () => { assert.fail('there is nothing to send'); }).then(() => { isLanded = true; });
-    await new Promise<void>((resolve) => setImmediate(resolve));
-    assert.equal(isLanded, false, 'the landing is not over while the flush is sending');
+    await settleReactions();
+    assert.equal(isLanded, false, 'the landing is not over while that send is going out');
 
-    endFlush();
-    await landing;
+    sendGate.resolve();
+    await Promise.all([earlierSend, landing]);
     assert.equal(isLanded, true);
   });
 
-  it('with nothing pending and no flush sending it returns at once and sends nothing', async () => {
-    const queue = createQueue([createSegment('  ')]);
+  it('two landings at once are one after the other: the second does not end — nor start sending — before the first one\'s sends have landed', async () => {
+    // A tool call's status frame lands the text, and the tool's own request lands what the adapter had not emitted yet: both
+    // are landings, and the answer behind the second one must not pass the first one's still-sending segments.
+    const queue = createQueue([createSegment('the text the status frame lands')]);
+    const firstGate = createDeferred();
+    const events: string[] = [];
+    const firstLanding = landGroupOutput(queue, async (segment) => {
+      events.push(`first sends: ${segment.output}`);
+      await firstGate.promise;
+      events.push('first sent');
+      return { unsentRemainder: null };
+    });
+    queue.pendingSegments.push(createSegment('the text the request lands', { startsNewMessage: true }));
+    const secondLanding = landGroupOutput(queue, async (segment) => { events.push(`second sends: ${segment.output}`); return { unsentRemainder: null }; }).then(() => { events.push('second ended'); });
+    await settleReactions();
+    assert.deepEqual(events, ['first sends: the text the status frame lands'], 'the second landing waits for the first');
 
-    assert.deepEqual(await landGroupOutput(queue, async () => { assert.fail('a blank segment is never sent'); }), { isRemainderDropped: false });
+    firstGate.resolve();
+    await Promise.all([firstLanding, secondLanding]);
+    assert.deepEqual(events, ['first sends: the text the status frame lands', 'first sent', 'second sends: the text the request lands', 'second ended']);
+  });
+
+  it('a debounce flush that starts while a landing is sending waits for it: the landing\'s text is older', async () => {
+    const queue = createQueue([createSegment('taken by the landing')]);
+    const landingGate = createDeferred();
+    const events: string[] = [];
+    const landing = landGroupOutput(queue, async (segment) => { events.push(`landing sends: ${segment.output}`); await landingGate.promise; return { unsentRemainder: null }; });
+    queue.pendingSegments.push(createSegment('queued after the landing took its text', { startsNewMessage: true }));
+
+    const flush = runInSendChain(queue, () => flushNextPendingOutput(queue, async (segment) => { events.push(`flush sends: ${segment.output}`); return { unsentRemainder: null }; }));
+    await settleReactions();
+    assert.deepEqual(events, ['landing sends: taken by the landing']);
+
+    landingGate.resolve();
+    await Promise.all([landing, flush]);
+    assert.deepEqual(events, ['landing sends: taken by the landing', 'flush sends: queued after the landing took its text']);
+  });
+
+  it('the 429 leftover of the flush it waited for goes out FIRST: it is older than what the landing took', async () => {
+    const queue = createQueue([createSegment('the flush\'s text'), createSegment('what the landing takes', { startsNewMessage: true })]);
+    const flushGate = createDeferred();
+    const sentTexts: string[] = [];
+    const flush = runInSendChain(queue, () => flushNextPendingOutput(queue, async () => {
+      await flushGate.promise;
+      return { unsentRemainder: 'the part a 429 kept back' };
+    }));
+    await settleReactions();
+    const landing = landGroupOutput(queue, async (segment) => { sentTexts.push(segment.output); return { unsentRemainder: null }; });
+
+    flushGate.resolve();
+    await Promise.all([flush, landing]);
+
+    assert.deepEqual(sentTexts, ['the part a 429 kept back', 'what the landing takes']);
+    assert.deepEqual(queue.pendingSegments, [], 'the leftover is not sent a second time by the debounce');
+    assert.equal(queue.isRemainderRequeued, false);
   });
 
   it('a segment a 429 kept from landing ends the run: everything behind it is dropped and the caller is told', async () => {
@@ -152,19 +242,46 @@ describe('landGroupOutput', () => {
     assert.deepEqual(attempted, ['landed', 'dropped by a 429']);
     assert.deepEqual(outcome, { isRemainderDropped: true });
   });
+
+  it('with only blank segments pending it sends nothing and returns at once', async () => {
+    const queue = createQueue([createSegment('  ')]);
+
+    assert.deepEqual(await landGroupOutput(queue, async () => { assert.fail('a blank segment is never sent'); }), { isRemainderDropped: false });
+  });
 });
 
-describe('markFlushInFlight', () => {
-  it('holds a promise while the flush sends and clears it, resolved, when the flush ends', async () => {
-    const queue = createQueue([]);
-    assert.equal(queue.flushSettled, null);
+describe('flushNextPendingOutput', () => {
+  it('sends the oldest segment only and leaves the rest for the next flush', async () => {
+    const oldest = createSegment('the oldest');
+    const next = createSegment('the next', { startsNewMessage: true });
+    const queue = createQueue([oldest, next]);
+    const sent: PendingOutputSegment[] = [];
 
-    const endFlush = markFlushInFlight(queue);
-    const settled = queue.flushSettled;
-    assert.ok(settled, 'a flush is recorded as sending');
+    await flushNextPendingOutput(queue, async (segment) => { sent.push(segment); return { unsentRemainder: null }; });
 
-    endFlush();
-    assert.equal(queue.flushSettled, null);
-    await settled;
+    assert.deepEqual(sent, [oldest]);
+    assert.deepEqual(queue.pendingSegments, [next]);
+  });
+
+  it('with nothing pending it sends nothing', async () => {
+    await flushNextPendingOutput(createQueue([]), async () => { assert.fail('there is nothing to send'); });
+  });
+
+  it('puts the text a 429 kept from landing back at the FRONT of the buffer and notes it, so a landing can send it first', async () => {
+    const queue = createQueue([createSegment('the flush\'s text'), createSegment('queued behind it', { startsNewMessage: true })]);
+
+    await flushNextPendingOutput(queue, async () => ({ unsentRemainder: 'the kept part' }));
+
+    assert.deepEqual(queue.pendingSegments.map((segment) => segment.output), ['the kept part', 'queued behind it']);
+    assert.equal(queue.isRemainderRequeued, true);
+  });
+
+  it('a flush that sends everything clears the note: the leftover is not an older text any more', async () => {
+    const queue = createQueue([createSegment('the kept part')]);
+    queue.isRemainderRequeued = true;
+
+    await flushNextPendingOutput(queue, async () => ({ unsentRemainder: null }));
+
+    assert.equal(queue.isRemainderRequeued, false);
   });
 });

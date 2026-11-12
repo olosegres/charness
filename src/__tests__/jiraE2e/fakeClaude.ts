@@ -67,6 +67,8 @@ import {
   fakeStatusWatchTargetFileName,
   fakeWatchJobName,
   getBotMcpServer,
+  getFakeDigestMessageText,
+  getFakeStreamTextEnd,
   type FakeClaudeMcpServer,
   type FakeStatusWatchTarget,
   type McpServerConfig,
@@ -160,6 +162,9 @@ import { claudeSessionStateEventsVariableName } from '../../utils/jsonStreamHost
  *    after the other); the outcome logged is the two answers joined by `fakeAskTwoOutcomeSeparator`;
  *  - `ask-long`    — the same question, each option with a `fakeAskLongDescription`: it fits one Telegram message, but not
  *    with an answer note under it;
+ *  - `send-messages` — calls `send_messages_to_user` with ONE message, `getFakeDigestMessageText(<label>)`, between the
+ *    streamed text and its `final` answer (with the `tool_use` / `tool_result` lines around the call, as for every bot tool it
+ *    calls for the user), and logs the outcome to `tool-calls.jsonl`;
  *  - an `apiKeyHelper` in the launch's `--settings` (a file path or inline JSON; only the LAST `--settings` counts,
  *    as in the real CLI) is run through `/bin/sh` the way the CLI runs it: a plausible API key out of it makes the
  *    session report `apiKeySource: "apiKeyHelper"` in its init frames (else `"none"`, the subscription login) and a
@@ -193,7 +198,11 @@ import { claudeSessionStateEventsVariableName } from '../../utils/jsonStreamHost
  * adds an item, `[todo-id:<id>:<status>]` changes one, `[todo-touch]` confirms the list — sent as ONE `todo_update`
  * call before the turn answers, its outcome logged to `tool-calls.jsonl` (the shared todo registry, as a real agent
  * publishes). A `[tool-name:<name>]` token names the tool call every turn streams before its answer (default `Read`), so the bot's
- * `🔧 <name>` status line can carry markup characters. A `[work-ms:<n>]` token makes a turn that gets that far work n ms (busy, silent) before it answers; a
+ * `🔧 <name>` status line can carry markup characters. A `[text-chars:<n>]` token makes the text every turn streams about n
+ * characters long (it ends with `getFakeStreamTextEnd(<label>)`, so a test finds its LAST message): a text past Telegram's
+ * 4096 reaches the topic as several messages. Around `answer_request` and `send_messages_to_user` the fake writes what the real
+ * CLI writes — the assistant's `tool_use` line BEFORE it calls the tool, the `tool_result` line after it — so the bot sees a
+ * tool call (its status frame, the landing of the text ahead of it) before the tool's own request arrives. A `[work-ms:<n>]` token makes a turn that gets that far work n ms (busy, silent) before it answers; a
  * `[tool-after-ms:<n>]` token makes one more tool call n ms later, after which the launch's `PostToolUse` hooks (its
  * last `--settings`) run as the real CLI runs them — what one gives the agent as `additionalContext` is logged to
  * `hooks.jsonl`.
@@ -217,8 +226,8 @@ import { claudeSessionStateEventsVariableName } from '../../utils/jsonStreamHost
  * `FAKE_CLAUDE_STATE_DIR` (per-request turn counts, the conversations held).
  */
 
-export type FakeClaudeMode = 'answer' | 'silent-once' | 'silent' | 'hang-once' | 'hold-once' | 'slow-once' | 'progress' | 'finish-together' | 'answer-after-queued' | 'background' | 'background-notify' | 'compact' | 'overflow' | 'fetch-attachment' | 'run-tool' | 'reply-to' | 'usage-limit-once' | 'ask' | 'ask-two' | 'ask-long';
-const fakeModes: readonly FakeClaudeMode[] = ['answer', 'silent-once', 'silent', 'hang-once', 'hold-once', 'slow-once', 'progress', 'finish-together', 'answer-after-queued', 'background', 'background-notify', 'compact', 'overflow', 'fetch-attachment', 'run-tool', 'reply-to', 'usage-limit-once', 'ask', 'ask-two', 'ask-long'];
+export type FakeClaudeMode = 'answer' | 'silent-once' | 'silent' | 'hang-once' | 'hold-once' | 'slow-once' | 'progress' | 'finish-together' | 'answer-after-queued' | 'background' | 'background-notify' | 'compact' | 'overflow' | 'fetch-attachment' | 'run-tool' | 'reply-to' | 'usage-limit-once' | 'ask' | 'ask-two' | 'ask-long' | 'send-messages';
+const fakeModes: readonly FakeClaudeMode[] = ['answer', 'silent-once', 'silent', 'hang-once', 'hold-once', 'slow-once', 'progress', 'finish-together', 'answer-after-queued', 'background', 'background-notify', 'compact', 'overflow', 'fetch-attachment', 'run-tool', 'reply-to', 'usage-limit-once', 'ask', 'ask-two', 'ask-long', 'send-messages'];
 /**
  * How long an `answer-after-queued` turn waits for the next message before it answers anyway: four polls of the 10 s
  * floor, or what the launcher sets (`fakeClaudeQueuedWaitMaxMsEnvName`) for the instance's own poll.
@@ -257,6 +266,12 @@ const todoPatchRe = /\[todo-id:(t\d+):(queued|inWork|done|dropped)\]/g;
 const todoTouchToken = '[todo-touch]';
 const workMsRe = /\[work-ms:(\d+)\]/;
 const toolAfterMsRe = /\[tool-after-ms:(\d+)\]/;
+const textCharsRe = /\[text-chars:(\d+)\]/;
+/** What pads a `[text-chars:<n>]` text out: ordinary words, so the bot's splitter finds boundaries to cut at. */
+const streamTextFiller = ' lorem ipsum dolor sit amet consectetur';
+/** The name prefix of a bot MCP tool in a `tool_use` line (the real CLI names it `mcp__<server>__<tool>`); the server's own name is not the flows' concern. */
+const botToolNamePrefix = 'mcp__bot__';
+const sendMessagesToolName = 'send_messages_to_user';
 /** `[tool-name:<name>]`: the tool call of the turn's activity carries this name (default `Read`) — the bot's `🔧 <name>` status line shows it. */
 const toolNameRe = /\[tool-name:([^\]]+)\]/;
 const defaultTurnToolName = 'Read';
@@ -739,8 +754,31 @@ async function runWatchMode(server: McpServerConfig, mode: 'arm-watch' | 'arm-st
   if (jobId) logToolCall('schedule_cancel', { id: jobId }, await callBotTool(server, 'schedule_cancel', { id: jobId }));
 }
 
-function callAnswerRequest(server: McpServerConfig, args: AnswerRequestArgs): Promise<string> {
-  return callBotTool(server, answerToolName, args);
+/**
+ * @description Call a bot MCP tool the way the real CLI does: the assistant's `tool_use` line is written BEFORE the call (the bot
+ * reads it as a tool call and shows its status frame while the tool's own request is still on its way), the user's `tool_result`
+ * line after it.
+ */
+async function callBotToolAsAgent(server: McpServerConfig, sessionId: string, toolName: string, args: Record<string, unknown>): Promise<string> {
+  const toolUseId = `toolu_${randomUUID()}`;
+  writeStdout({
+    type: 'assistant',
+    message: { role: 'assistant', content: [{ type: 'tool_use', id: toolUseId, name: `${botToolNamePrefix}${toolName}`, input: args }] },
+    parent_tool_use_id: null,
+    session_id: sessionId,
+  });
+  const outcome = await callBotTool(server, toolName, args);
+  writeStdout({
+    type: 'user',
+    message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: toolUseId, content: outcome }] },
+    parent_tool_use_id: null,
+    session_id: sessionId,
+  });
+  return outcome;
+}
+
+function callAnswerRequest(server: McpServerConfig, sessionId: string, args: AnswerRequestArgs): Promise<string> {
+  return callBotToolAsAgent(server, sessionId, answerToolName, args);
 }
 
 /**
@@ -775,7 +813,17 @@ function emitTurnActivity(sessionId: string, issueKey: string, content: string =
     parent_tool_use_id: null,
     session_id: sessionId,
   });
-  writeStdout({ type: 'stream_event', event: { type: 'content_block_delta', index: 1, delta: { type: 'text_delta', text: `Working on ${issueKey}.` } } });
+  writeStdout({ type: 'stream_event', event: { type: 'content_block_delta', index: 1, delta: { type: 'text_delta', text: buildStreamText(issueKey, content) } } });
+}
+
+/** The text a turn streams: `Working on <label>.`, padded out to a `[text-chars:<n>]` token's length and ended by {@link getFakeStreamTextEnd}. */
+function buildStreamText(issueKey: string, content: string): string {
+  const text = `Working on ${issueKey}.`;
+  const length = Number(textCharsRe.exec(content)?.[1] ?? '0');
+  if (length <= 0) return text;
+  const end = getFakeStreamTextEnd(issueKey);
+  const fillerCount = Math.max(0, Math.ceil((length - text.length - end.length) / streamTextFiller.length));
+  return `${text}${streamTextFiller.repeat(fillerCount)} ${end}`;
 }
 
 /**
@@ -1029,7 +1077,7 @@ async function runTurn(argv: readonly string[], sessionId: string, content: stri
     emitTurnActivity(sessionId, watchIssueKey);
     const server = getBotMcpServer(argv);
     if (server) await runWatchMode(server, watchMode, watchIssueKey);
-    if (requestId && server) await callAnswerRequest(server, { requestId, kind: 'final', body: `Watch ${watchMode} done.` });
+    if (requestId && server) await callAnswerRequest(server, sessionId, { requestId, kind: 'final', body: `Watch ${watchMode} done.` });
     endTurn(sessionId, `Watch ${watchMode} done.`);
     return;
   }
@@ -1097,7 +1145,7 @@ async function runTurn(argv: readonly string[], sessionId: string, content: stri
   const replyToCommentIds = state.mode === 'reply-to' ? (replyToIdsRe.exec(content)?.[1] ?? '').split(',').filter(Boolean) : [];
   const answer = async (answeredRequestId: string, kind: string, turnCount: number, body = `Fake ${kind} answer for ${state.issueKey} (${state.mode}, turn ${turnCount}).`): Promise<string> => {
     const outcome = server
-      ? await callAnswerRequest(server, { requestId: answeredRequestId, kind, body, ...(replyToCommentIds.length > 0 ? { replyToCommentIds } : {}) })
+      ? await callAnswerRequest(server, sessionId, { requestId: answeredRequestId, kind, body, ...(replyToCommentIds.length > 0 ? { replyToCommentIds } : {}) })
       : 'error: no bot MCP server in --mcp-config';
     appendJsonLine(fakeClaudeLogFileNames.answers, { requestId: answeredRequestId, issueKey: state.issueKey, kind, outcome });
     return body;
@@ -1139,6 +1187,10 @@ async function runTurn(argv: readonly string[], sessionId: string, content: stri
     for (const attachmentId of (fetchIdsRe.exec(content)?.[1] ?? '').split(',').filter(Boolean)) {
       logToolCall(attachmentToolName, { attachmentId }, await callBotTool(server, attachmentToolName, { attachmentId }));
     }
+  }
+  if (state.mode === 'send-messages' && server) {
+    const args = { messages: [getFakeDigestMessageText(state.issueKey)] };
+    logToolCall(sendMessagesToolName, { messages: args.messages.join(' | ') }, await callBotToolAsAgent(server, sessionId, sendMessagesToolName, args));
   }
   const askVariant = fakeAskVariantByMode[state.mode];
   if (askVariant) {

@@ -22,9 +22,11 @@ Chosen once at boot by `CHAT_MODE` — an internal detail of this connector, not
   FULL accumulated text is re-rendered (so `**` / `` ` `` pairs split across flushes re-pair) and edited in
   place, spilling into a new message past the cap (`outputFlushPlan.ts`). `finalizeInFlight` drains the
   coalesced-but-unsent buffer to a permanent message on settle or teardown, so the final answer is never
-  discarded under a 429; it also waits for the flush already sending (`utils/groupFinalizePlan.ts`
-  `landGroupOutput`), and a question or an `answer_request` answer, which are posted straight to the
-  topic, run it first so they land BELOW the text the agent streamed before them.
+  discarded under a 429. Every send of a topic's output — the debounce flush and every drain — runs in ONE
+  chain, in the order it was started (`utils/groupFinalizePlan.ts` `runInSendChain`, `landGroupOutput`;
+  the 429 leftover of a flush goes ahead of what a drain took), and a question, a tool call's status frame,
+  an `answer_request` answer and the messages of `send_messages_to_user`, which are posted straight to the
+  topic, run the drain first so they land BELOW the text the agent streamed before them.
 - **dm** — a live "cursor": ONE accumulating native `sendMessageDraft` holds the whole current reply and is
   FINALIZED to a permanent `sendMessage` on boundaries (idle, 4096 overflow, `isFinal`, a new response, status,
   teardown). Claude's scrape adapter emits deltas with no continuation meta, so the transport synthesises it
@@ -145,9 +147,11 @@ maintainer must not break (`fileSendGateway.ts` with `../../utils/fileSendServic
   notification; only the latest answer of a topic stays pinned — the previous one is unpinned silently (its
   message stays), and the record of the pinned answer is persisted (`state.json` `answerPins`) so a restart
   does not leave two pinned. A failed pin changes nothing. Native question pins and scheduled-run pins are
-  separate records. An answer is the LAST message of its turn: before it is posted, the text the agent streamed
-  ahead of it — still unread in the CLI's output, in the adapter's batch window (`flushPendingOutput`) or in
-  the 3 s output debounce — is landed first (`landStreamedOutput`); a landing that fails never holds the answer back.
+  separate records. An answer is the LAST message of its turn: the shared message sender
+  (`utils/messageSendService.ts`, also behind `send_messages_to_user`) lands the text the agent streamed ahead of
+  it — still unread in the CLI's output, in the adapter's batch window (`flushPendingOutput`), in the 3 s output
+  debounce or already going out — before it posts (`landStreamedOutput`); a landing that fails never holds the
+  messages back.
 
 ## Testing against a fake Bot API
 
