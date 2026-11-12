@@ -29,7 +29,8 @@ import {
 
 /**
  * The fixed MCP server name both backends register the injected entry under. It is also the prefix of every bot tool in the agent
- * (`mcp__charness__<tool>` in Claude Code, `charness_<tool>` in OpenCode).
+ * (`mcp__charness__<tool>` in Claude Code, `charness_<tool>` in OpenCode): the name is the bot's, and `mcpConfig.ts` keeps an operator's
+ * entry of it out of the configs the bot generates.
  */
 export const schedulerMcpServerName = 'charness';
 

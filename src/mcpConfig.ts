@@ -13,12 +13,15 @@
  *
  * Plan §19.1 / §19.7 / D25-D33.
  *
- * This module owns two responsibilities:
+ * This module owns three responsibilities:
  *   - **`${VAR}` expansion**. Claude CLI does NOT shell-expand placeholders
  *     inside `--mcp-config` JSON (plan §13.18, T2), so the bot resolves
  *     them itself against `process.env` and writes the expanded copy to a
  *     short-lived tmp file (mode 0600) before passing the tmp path to
  *     Claude.
+ *   - **The bot's own server name**. The bot's MCP server is registered as
+ *     `charness` ({@link schedulerMcpServerName}); an operator entry of that name
+ *     in the group or thread file is left out of the copy Claude gets.
  *   - **Lifecycle**. Tmp files are stable per SessionKey (one for group
  *     scope, one for thread scope), so multiple `startSession` calls don't
  *     pile up junk. `cleanupMcpTempFiles` is called from
@@ -29,7 +32,8 @@ import * as fs from 'fs';
 import * as path from 'path';
 import type { SessionKey } from './sessionKey';
 import { keyToString } from './sessionKey';
-import { buildClaudeSchedulerMcpConfig } from './scheduler/injection';
+import { buildClaudeSchedulerMcpConfig, schedulerMcpServerName } from './scheduler/injection';
+import { checkIsStreamRecord } from './utils/claudeStreamJson';
 
 /** The platform whose sessions keep the user's and project's own MCP servers. */
 const telegramPlatform = 'telegram';
@@ -75,6 +79,22 @@ export function expandEnvVars<T>(node: T): T {
 }
 
 /**
+ * @description The bot owns the MCP server name {@link schedulerMcpServerName}: an operator's entry of that name is left out of the
+ * copy handed to Claude, so the bot's own registration is the only one the agent sees whatever order the CLI merges the files in.
+ * The warning names the file and the server, never a value of the entry (it may hold a token).
+ */
+function getWithoutBotServer(config: unknown, sourcePath: string): unknown {
+  if (!checkIsStreamRecord(config) || !checkIsStreamRecord(config.mcpServers) || !(schedulerMcpServerName in config.mcpServers)) {
+    return config;
+  }
+  console.warn(
+    `[mcp] ${sourcePath}: the server name "${schedulerMcpServerName}" belongs to the bot, so that entry is left out — rename it to keep your server`,
+  );
+  const otherServers = Object.fromEntries(Object.entries(config.mcpServers).filter(([name]) => name !== schedulerMcpServerName));
+  return { ...config, mcpServers: otherServers };
+}
+
+/**
  * @description Read a JSON file, apply `${VAR}` expansion and write the
  * expanded copy to a sibling tmp path with `0600` perms. The tmp directory
  * is created with `0700` so other users on the same host can't sniff
@@ -103,7 +123,7 @@ function writeExpandedTmp(sourcePath: string, tmpPath: string): string | null {
     return null;
   }
 
-  const expanded = expandEnvVars(parsed);
+  const expanded = getWithoutBotServer(expandEnvVars(parsed), sourcePath);
   fs.mkdirSync(path.dirname(tmpPath), { recursive: true, mode: 0o700 });
   // Truncating write into a fixed per-key path: one tmp file per (key,
   // scope) means a second startSession overwrites the previous one rather

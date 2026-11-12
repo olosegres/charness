@@ -93,6 +93,70 @@ describe('prepareMcpFlags — strict MCP config per platform (Jira connector pla
   });
 });
 
+describe('prepareMcpFlags — an operator server named like the bot\'s own', () => {
+  /** An operator's own server that happens to carry the bot's name; its url and header must never reach the agent. */
+  const operatorBotNamedServer = { type: 'http', url: 'http://operator.invalid/own-mcp', headers: { Authorization: 'Bearer operator-placeholder' } };
+  const operatorOtherServer = { type: 'http', url: 'http://operator.invalid/other-mcp' };
+
+  /** The servers of the generated copy of the operator's group file, read back from the tmp the flags point at. */
+  function readGeneratedServers(flags: string[], tmpSuffix: string): Record<string, unknown> {
+    const generatedPath = configPaths(flags).find((candidate) => candidate.endsWith(tmpSuffix));
+    assert.ok(generatedPath, `a ${tmpSuffix} config flag is present`);
+    return JSON.parse(fs.readFileSync(generatedPath, 'utf8')).mcpServers;
+  }
+
+  let warnings: string[];
+  let originalWarn: typeof console.warn;
+
+  beforeEach(() => {
+    configureSchedulerMcpInjection({ getSecret: async () => secret, port });
+    warnings = [];
+    originalWarn = console.warn;
+    console.warn = (...args: Parameters<typeof console.warn>) => { warnings.push(args.map((arg) => String(arg)).join(' ')); };
+  });
+
+  afterEach(() => {
+    console.warn = originalWarn;
+  });
+
+  it('is left out of the group copy and the thread copy, the operator\'s other servers stay, and the bot\'s own is the only one by that name', async () => {
+    const operatorServers = { mcpServers: { [schedulerMcpServerName]: operatorBotNamedServer, mine: operatorOtherServer } };
+    fs.writeFileSync(path.join(dataDir, 'mcp.json'), JSON.stringify(operatorServers));
+    fs.mkdirSync(path.join(dataDir, 'threads'), { recursive: true });
+    fs.writeFileSync(path.join(dataDir, 'threads', `${keyString}.json`), JSON.stringify(operatorServers));
+
+    const flags = await prepareMcpFlags({ key, dataDir });
+
+    assert.deepEqual(readGeneratedServers(flags, '-group.json'), { mine: operatorOtherServer });
+    assert.deepEqual(readGeneratedServers(flags, '-thread.json'), { mine: operatorOtherServer });
+    const botServer = readGeneratedServers(flags, '-scheduler.json')[schedulerMcpServerName];
+    assert.ok(botServer, 'the bot\'s own entry is registered');
+    assert.notDeepEqual(botServer, operatorBotNamedServer);
+  });
+
+  it('is reported once per file by name, never by value', async () => {
+    fs.writeFileSync(path.join(dataDir, 'mcp.json'), JSON.stringify({ mcpServers: { [schedulerMcpServerName]: operatorBotNamedServer } }));
+
+    await prepareMcpFlags({ key, dataDir });
+
+    assert.equal(warnings.length, 1);
+    assert.match(warnings[0], new RegExp(`"${schedulerMcpServerName}" belongs to the bot`));
+    assert.ok(!warnings[0].includes('operator-placeholder') && !warnings[0].includes('operator.invalid'), 'no value of the entry in the log');
+  });
+
+  it('leaves a file with no such server byte-for-byte as the operator wrote it, with no warning', async () => {
+    const operatorServers = { mcpServers: { mine: operatorOtherServer }, other: { kept: true } };
+    fs.writeFileSync(path.join(dataDir, 'mcp.json'), JSON.stringify(operatorServers));
+
+    const flags = await prepareMcpFlags({ key, dataDir });
+
+    const groupPath = configPaths(flags).find((candidate) => candidate.endsWith('-group.json'));
+    assert.ok(groupPath);
+    assert.deepEqual(JSON.parse(fs.readFileSync(groupPath, 'utf8')), operatorServers);
+    assert.deepEqual(warnings, []);
+  });
+});
+
 describe('prepareMcpFlags — scheduler injection configured', () => {
   beforeEach(() => {
     configureSchedulerMcpInjection({ getSecret: async () => secret, port });
