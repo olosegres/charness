@@ -683,3 +683,46 @@ test('installed plugin: a block that disagrees with the history is written to th
     assert.match(calls.logs[0], /names \[from-block\] the history does not show, the history shows \[review\] the block leaves out/);
   });
 });
+
+test('installed plugin: the compaction\'s message is replaced by a copy whose id carries the restore\'s revision — the same restore, the same id; a rebuilt one, a new id', async () => {
+  await withTempDir(async (dir) => {
+    const session = buildCompactedSession('msg_sum11', 'Summary.');
+    const answers: Parameters<typeof createRestoreClient>[0] = { history: session.history, skills: 'fail' };
+    const hook = await loadInstalledTransformHook(dir, createRestoreClient(answers).client);
+    const getTaggedId = async (): Promise<{ id: string; isOriginalUntouched: boolean }> => {
+      const list = session.list();
+      const original = list[0];
+      await hook({}, { messages: list });
+      return { id: list[0].info.id, isOriginalUntouched: original.info.id === 'msg_sum11_user' && !original.parts.some((part) => part.id === 'prt_charness_skills_restore') };
+    };
+    const partial = await getTaggedId();
+    assert.match(partial.id, /^msg_sum11_user_charness_skills_[0-9a-f]{8}$/);
+    assert.ok(partial.isOriginalUntouched, 'the stored message object keeps its id and parts');
+    assert.equal((await getTaggedId()).id, partial.id, 'the same partial restore: the same id (the fork keeps reusing its conversion)');
+    answers.skills = [reviewSkill];
+    const whole = await getTaggedId();
+    assert.notEqual(whole.id, partial.id, 'the restore rebuilt whole: a new id, so the fork converts the list again');
+    assert.equal((await getTaggedId()).id, whole.id, 'and it stays');
+  });
+});
+
+test('installed plugin: the marks that keep a fallback logged once per summary are bounded like the cache — the oldest goes first', async () => {
+  await withTempDir(async (dir) => {
+    const { calls, client } = createRestoreClient({ history: 'fail', skills: 'fail' });
+    const hook = await loadInstalledTransformHook(dir, client);
+    const failOnce = async (summaryId: string): Promise<void> => {
+      await hook({}, { messages: buildCompactedSession(summaryId, 'Summary.').list() });
+    };
+    const countFallbackLogs = (): number => calls.logs.filter((line) => line.includes('did not answer')).length;
+    await failOnce('msg_bound_0');
+    await failOnce('msg_bound_0');
+    assert.equal(countFallbackLogs(), 1, 'one line per summary while its mark is kept');
+    // 64 more summaries fail: the first one's mark is the oldest and goes.
+    for (let index = 1; index <= 64; index += 1) await failOnce(`msg_bound_${index}`);
+    assert.equal(countFallbackLogs(), 65);
+    await failOnce('msg_bound_0');
+    assert.equal(countFallbackLogs(), 66, 'the evicted mark: the first summary is logged again');
+    await failOnce('msg_bound_64');
+    assert.equal(countFallbackLogs(), 66, 'a kept mark: no second line');
+  });
+});

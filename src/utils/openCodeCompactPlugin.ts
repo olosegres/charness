@@ -49,9 +49,12 @@
  * server restart all carried the part it added) and over the in-memory list only — nothing it adds is stored, sent over SSE
  * or shown. Once the list holds a finished summary it adds ONE synthetic text part, the restore ({@link
  * buildOpenCodeCompactPluginSource}), to the compaction's own user message — right before the summary, a fixed place, so
- * every later request starts the same and the prompt cache holds. Within one loop the fork converts a message once and
- * reuses it (`appendOnlyModelMessages`), so the part must be there from the first request that sees the summary — it is,
- * since a compaction changes the list and the conversion starts over. The compaction's own request runs the hook too, but
+ * every later request starts the same and the prompt cache holds. Within one turn the fork converts a message once and
+ * reuses that while the message IDS stay an unchanged prefix (`appendOnlyModelMessages`, verified in the fork's
+ * `session/prompt.ts`: the snapshot starts over only on a compaction, a sub-task and an overflow): a restore rebuilt in the
+ * same turn — the lookups of the first one did not answer in time — would never reach the provider. So the message the part
+ * rides on carries an id tagged with the restore's revision (in memory only; the provider never sees message ids): a new
+ * text, a new id, a fresh conversion; the same text, the same id, the same prefix. The compaction's own request runs the hook too, but
  * the fork hides the earlier summaries from it (measured on the first and on a second compaction), so it holds none and is
  * left as it is.
  */
@@ -297,21 +300,35 @@ export function buildOpenCodeCompactPluginSource(input: { context: string; conte
     '  const loaded = getOpenCodeLoadedSkills(history ?? messages);',
     '  const isWhole = history !== null && available !== null;',
     '  const cacheKey = `${sessionID}:${summary.info.id}`;',
-    '  if (isWhole) logBlockMismatch(client, sessionID, blockNames, loaded);',
-    '  else if (!loggedFallbackKeys.has(cacheKey)) {',
+    // A summary whose lookups recovered no longer needs its fallback mark; the marks are bounded like the cache.
+    '  if (isWhole) {',
+    '    loggedFallbackKeys.delete(cacheKey);',
+    '    logBlockMismatch(client, sessionID, blockNames, loaded);',
+    '  } else if (!loggedFallbackKeys.has(cacheKey)) {',
     '    loggedFallbackKeys.add(cacheKey);',
+    '    if (loggedFallbackKeys.size > maxCachedRestores) loggedFallbackKeys.delete(loggedFallbackKeys.values().next().value);',
     '    const missing = [history === null ? "the history" : null, available === null ? "the skill list" : null].filter(Boolean).join(" and ");',
     '    logToServer(client, `skills restore of ${sessionID}: ${missing} did not answer; this request gets what is known, the next one asks again`);',
     '  }',
     '  const entries = planOpenCodeSkillsRestore({ loaded, blockNames, inContextNames, available, isHistoryKnown: history !== null });',
     '  return { text: buildSkillsRestoreText(entries, restoreTexts, restoreToolName), isWhole };',
     '};',
+    // A short, stable revision of a restore text (FNV-1a): the same text, the same revision.
+    'const getRestoreRevision = (text) => {',
+    '  let hash = 0x811c9dc5;',
+    '  for (let index = 0; index < text.length; index += 1) {',
+    '    hash ^= text.charCodeAt(index);',
+    '    hash = Math.imul(hash, 0x01000193);',
+    '  }',
+    '  return (hash >>> 0).toString(16).padStart(8, "0");',
+    '};',
     'const restoreSkills = async (pluginContext, messages) => {',
     '  if (!Array.isArray(messages)) return;',
     '  const summaryIndex = findFinishedSummaryIndex(messages);',
     '  if (summaryIndex < 0) return;',
     '  const summary = messages[summaryIndex];',
-    '  const target = messages.find((message) => message?.info?.role === "user" && message.info.id === summary.info.parentID);',
+    '  const targetIndex = messages.findIndex((message) => message?.info?.role === "user" && message.info.id === summary.info.parentID);',
+    '  const target = messages[targetIndex];',
     '  if (!target || !Array.isArray(target.parts) || target.parts.some((part) => part?.id === restorePartId)) return;',
     '  const cacheKey = `${summary.info.sessionID}:${summary.info.id}`;',
     '  let text = restoreCache.get(cacheKey);',
@@ -324,7 +341,16 @@ export function buildOpenCodeCompactPluginSource(input: { context: string; conte
     '    }',
     '  }',
     '  if (text === "") return;',
-    '  target.parts.push({ id: restorePartId, sessionID: summary.info.sessionID, messageID: target.info.id, type: "text", synthetic: true, text });',
+    // A COPY of the compaction's message, its id tagged with the restore's revision: the fork keeps a turn's conversion and
+    // reuses it while the message ids stay an unchanged prefix, so a restore rebuilt in the same turn (a lookup that answered
+    // late) must change an id to reach the provider; the same restore keeps the same id (and the prompt cache). A copy, so the
+    // message object the loop may hold elsewhere keeps its stored id.
+    '  const revisedID = `${target.info.id}_charness_skills_${getRestoreRevision(text)}`;',
+    '  messages[targetIndex] = {',
+    '    ...target,',
+    '    info: { ...target.info, id: revisedID },',
+    '    parts: [...target.parts, { id: restorePartId, sessionID: summary.info.sessionID, messageID: revisedID, type: "text", synthetic: true, text }],',
+    '  };',
     '};',
     'export default {',
     `  id: ${JSON.stringify(openCodeCompactPluginId)},`,

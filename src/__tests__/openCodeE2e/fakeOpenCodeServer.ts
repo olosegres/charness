@@ -32,6 +32,12 @@
  * does, and the restore part it added is kept in {@link FakeOpenCodeServer.modelRequests}.
  * {@link FakeOpenCodeServer.restartPluginInstance} loads the plugin anew, as a restarted server does.
  *
+ * What the provider gets is modelled on the fork the bot runs (`appendOnlyModelMessages`, `session/prompt.ts` of the build
+ * 0.0.0-custom-202610200827): within one turn the conversion of the messages to the provider's is kept, and at a later step
+ * only the messages after the kept ones are converted while the message IDS of the kept ones stay an unchanged prefix — a
+ * change of a kept message's content never reaches the provider. A new prompt (a new turn) and a compaction start it over.
+ * {@link FakeOpenCodeServer.continueTurn} runs one more step of the same turn.
+ *
  * Every request is recorded; one that is none of these is answered `404` AND listed in `unhandled`, so a flow can
  * assert the bot asked for nothing the fake does not model. A prompt is recorded with its text and model, and never
  * answered by itself — a flow decides what the "model" does next: {@link FakeOpenCodeServer.emitUsageLimit} makes the
@@ -50,6 +56,7 @@ import * as http from 'http';
 import * as path from 'path';
 import { pathToFileURL } from 'url';
 import type * as openCodeCompactPluginModule from '../../utils/openCodeCompactPlugin';
+import { skillsRestoreHeader } from '../../utils/skillsRestore';
 
 /** The repository root, where the built bot lives (`dist/`). */
 const repoRoot = path.resolve(__dirname, '..', '..', '..');
@@ -116,15 +123,29 @@ export interface FakeOpenCodeSkill {
   content: string;
 }
 
-/** One simulated model request of a session: what the bot's plugin added to it. */
+/** One simulated model request of a session: what the bot's plugin added to it, and what the provider got. */
 export interface FakeOpenCodeModelRequest {
   sessionId: string;
-  /** `prompt`: the bot's prompt; `continuation`: the server's own "Continue…" after its overflow compaction. */
-  phase: 'prompt' | 'continuation';
+  /**
+   * `prompt`: the first step of a turn the bot's prompt starts; `continuation`: the server's own "Continue…" after its overflow
+   * compaction; `toolStep`: a later step of the SAME turn (after a tool call), {@link FakeOpenCodeServer.continueTurn}.
+   */
+  phase: 'prompt' | 'continuation' | 'toolStep';
   /** The id of the latest summary in the list, `null` before any compaction. */
   summaryId: string | null;
-  /** The text of the restore part the plugin added, `null` for none. */
+  /** The text of the restore part the plugin added to the list this step, `null` for none. */
   restoreText: string | null;
+  /**
+   * The restore as the PROVIDER got it this step, `null` for none: what the fork's conversion made of the list, which within a
+   * turn reuses what it converted at an earlier step ({@link FakeOpenCodeServer} header) — not necessarily {@link restoreText}.
+   */
+  providerRestoreText: string | null;
+}
+
+/** What the fork's conversion keeps between the steps of one turn (`appendOnlyModelMessages`): the ids it converted, and what it made of them. */
+interface ConvertedSnapshot {
+  messageIds: string[];
+  providerTexts: string[];
 }
 
 /** A message of the session's stored history, the shape `GET /session/:id/message` serves. */
@@ -191,6 +212,8 @@ export class FakeOpenCodeServer {
   private readonly timelines = new Map<string, StoredMessage[]>();
   /** The sessions a flow recorded a skill call in: their history is served from {@link timelines}. */
   private readonly sessionsWithSkillCalls = new Set<string>();
+  /** Per session, what the current turn's conversion kept (see the header); none at a turn's start or after a compaction. */
+  private readonly convertedSnapshots = new Map<string, ConvertedSnapshot>();
   /** Bumped by {@link restartPluginInstance}: the plugin module is imported anew under another URL. */
   private pluginGeneration = 0;
   private url = '';
@@ -355,6 +378,8 @@ export class FakeOpenCodeServer {
   async emitCompactionSummary(sessionId: string, summary: FakeCompactionSummary, options: { beforeIdle?: () => Promise<void>; isFinishDropped?: boolean; isContinued?: boolean } = {}): Promise<void> {
     const session = this.getSessionOrThrow(sessionId);
     const compactionUserId = `${summary.messageId}_compaction`;
+    // A compaction starts the conversion over (the fork resets its snapshot for it).
+    this.convertedSnapshots.delete(sessionId);
     this.pushStoredMessage(sessionId, { info: { id: compactionUserId, sessionID: sessionId, role: 'user' }, parts: [{ type: 'compaction' }] });
     await this.runCompactionPlugin(sessionId);
     const gapMs = summary.chunkGapMs ?? defaultSummaryChunkGapMs;
@@ -391,6 +416,18 @@ export class FakeOpenCodeServer {
     this.pushStoredMessage(sessionId, { info: { id: messageId, sessionID: sessionId, role: 'assistant', finish: 'tool-calls' }, parts: [{ id: `${messageId}_skill`, type: 'tool', tool: 'skill', state }] });
     this.broadcastAssistantMessage(sessionId, messageId, session.directory);
     this.broadcast({ type: 'message.part.updated', properties: { part: { id: `${messageId}_skill`, messageID: messageId, sessionID: sessionId, type: 'tool', tool: 'skill', state: { status: 'completed', title: `Loaded skill: ${name}`, input: { name } } } } }, session.directory);
+  }
+
+  /**
+   * @description One more step of the session's CURRENT turn — the model called a tool and is asked again — with nothing new
+   * from the person: what the conversion kept at the turn's earlier steps is reused. Resolves the step's model request.
+   */
+  async continueTurn(sessionId: string): Promise<FakeOpenCodeModelRequest> {
+    const requestsBefore = this.modelRequests.length;
+    await this.simulateModelRequest(sessionId, 'toolStep');
+    const request = this.modelRequests[requestsBefore];
+    if (!request) throw new Error('no model request was simulated: the fake needs a plugin folder and `isModelRequestSimulated`');
+    return request;
   }
 
   /** @description A restarted server: the next model request loads the plugin anew, with nothing kept from before. */
@@ -449,7 +486,24 @@ export class FakeOpenCodeServer {
     await hooks['experimental.chat.messages.transform']({}, { messages });
     const restoreParts = messages.flatMap((message) => message.parts.filter((part) => part.id === skillsRestorePartId));
     const summaryId = messages.find((message) => message.info.summary === true)?.info.id ?? null;
-    this.modelRequests.push({ sessionId, phase, summaryId, restoreText: restoreParts[0]?.text ?? null });
+    const providerText = this.convertForProvider(sessionId, messages).find((text) => text.includes(skillsRestoreHeader));
+    const providerRestoreText = providerText === undefined ? null : providerText.slice(providerText.indexOf(skillsRestoreHeader));
+    this.modelRequests.push({ sessionId, phase, summaryId, restoreText: restoreParts[0]?.text ?? null, providerRestoreText });
+  }
+
+  /**
+   * The fork's conversion of the list for the provider (`appendOnlyModelMessages`): the texts of each message's text parts,
+   * synthetic ones included; when the turn's kept conversion covers an unchanged prefix of the message IDS, its texts are
+   * reused for that prefix and only the rest is converted.
+   */
+  private convertForProvider(sessionId: string, messages: readonly StoredMessage[]): string[] {
+    const messageIds = messages.map((message) => message.info.id);
+    const kept = this.convertedSnapshots.get(sessionId);
+    const isAppend = kept !== undefined && kept.messageIds.length <= messageIds.length && kept.messageIds.every((id, index) => messageIds[index] === id);
+    const convert = (message: StoredMessage): string => message.parts.flatMap((part) => (part.type === 'text' && part.text ? [part.text] : [])).join('\n');
+    const providerTexts = isAppend ? [...kept.providerTexts, ...messages.slice(kept.messageIds.length).map(convert)] : messages.map(convert);
+    this.convertedSnapshots.set(sessionId, { messageIds, providerTexts });
+    return providerTexts;
   }
 
   /**
@@ -714,6 +768,8 @@ export class FakeOpenCodeServer {
     const model = body?.model?.providerID && body.model.modelID ? `${body.model.providerID}/${body.model.modelID}` : null;
     this.prompts.push({ sessionId: session.id, directory: session.directory, text, model });
     this.pushStoredMessage(session.id, { info: { id: `msg_${session.id}_prompt_${this.prompts.length}`, sessionID: session.id, role: 'user' }, parts: [{ type: 'text', text }] });
+    // A prompt starts a new turn: the fork's loop begins with nothing converted.
+    this.convertedSnapshots.delete(session.id);
     // The model request that answers the prompt; a flow waits for it in `modelRequests`.
     this.simulateModelRequest(session.id, 'prompt').catch((error: Error) => this.pluginLogs.push(`the simulated model request failed: ${error.message}`));
   }

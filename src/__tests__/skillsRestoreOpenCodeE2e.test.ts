@@ -12,7 +12,8 @@
  *     summary is only named — and the summary streamed to the topic carries no skills block
  *   → the server restarts (a new plugin instance, nothing kept): the same restore is rebuilt from the stored history
  *   → `GET /skill` hangs: the request still comes within the lookup timeout, the skills named with load lines; the next
- *     request, with the server answering again, gets the whole restore (a partial one is never kept)
+ *     STEP of the same turn, with the server answering again, gets the whole restore — the provider too, although the turn's
+ *     conversion of the earlier messages is reused (the fork's `appendOnlyModelMessages`) — and so does a new turn
  *   → NOTHING of the restore reached the topic, in any message or edit
  *
  * The plugin's own branches (no summary, the retained tail, the cache, refusals, the log line) are pinned in
@@ -167,6 +168,7 @@ async function compactByServerAndContinue(messageId: string): Promise<FakeOpenCo
 function assertReviewRestored(request: FakeOpenCodeModelRequest, description: string): string {
   const text = request.restoreText;
   assert.ok(text, `${description}: the restore is in the request`);
+  assert.equal(request.providerRestoreText, text, `${description}: and the provider got it as it is`);
   assert.ok(text.startsWith(skillsRestoreHeader), description);
   assert.ok(text.includes(`- ${reviewSkillName}: its current full text is below (base directory: ${getSkillDir(reviewSkillName)})`), `${description}: listed as restored`);
   assert.ok(text.includes(`${claudeSkillBaseDirPrefix}${getSkillDir(reviewSkillName)}`) && text.includes(reviewBodyMarker), `${description}: the skill whole`);
@@ -273,7 +275,7 @@ describe('The skills restore after a compaction on OpenCode: built charness, fak
     assert.equal(request.restoreText, before, 'the same text: the prompt cache still holds');
   });
 
-  it('`GET /skill` hangs: the request still comes within the lookup timeout, every skill named with a load line — and once the server answers again, the next request gets the whole restore', async () => {
+  it('`GET /skill` hangs: the request still comes within the lookup timeout, every skill named with a load line — and once the server answers again, the next step of the SAME turn gets the whole restore, at the provider too', async () => {
     let releaseSkillList: (status: number | null) => void = () => {};
     fakeOpenCode.holdNextRequest('GET', /^\/skill$/, new Promise((resolve) => { releaseSkillList = resolve; }));
     const startedAt = Date.now();
@@ -286,7 +288,19 @@ describe('The skills restore after a compaction on OpenCode: built charness, fak
     assert.ok(text.includes(`- ${commitSkillName}: not restored here: load it with the skill tool`));
     assert.ok(!text.includes(reviewBodyMarker), 'no text it could not get');
 
-    // That restore was not whole, so it was not kept: the next request asks the server again.
+    assert.equal(request.providerRestoreText, text, 'the provider got that partial restore');
+
+    // The agent goes on in the SAME turn (a tool call, the model asked again) and the server answers by now: that restore was
+    // not whole, so it was not kept and is built again — and the provider must get the whole one, although the turn's
+    // conversion of the messages before is kept and reused.
+    const sameTurnStep = await fakeOpenCode.continueTurn(getTopicSessionId());
+    assert.equal(sameTurnStep.summaryId, 'msg_summary_3');
+    assert.ok((sameTurnStep.providerRestoreText ?? '').includes(reviewBodyMarker), `the provider gets the repaired restore within the same turn: ${sameTurnStep.providerRestoreText}`);
+    assertReviewRestored(sameTurnStep, 'the next step of the same turn');
+    // A later step with nothing changed keeps it.
+    assertReviewRestored(await fakeOpenCode.continueTurn(getTopicSessionId()), 'one more step of the same turn');
+
+    // A new turn gets it too.
     const next = await sendPromptAndAnswer('OCR-4');
     assert.equal(next.summaryId, 'msg_summary_3');
     assertReviewRestored(next, 'the request after the server answers again');
