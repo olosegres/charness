@@ -6,15 +6,20 @@
  *
  *   1. the agent loads both skills with the Skill tool → `/compact` → asked, with no tool, for the marker on the LAST line of
  *      the big skill: it can only answer from the restore (Claude Code's own re-attach cuts that skill at 20,000 characters);
- *      the transcript holds the restore (`hook_additional_context`, what a resumed process sends again) with BOTH skills
- *      whole, and no stdout frame that carries it reaches the bot's classifier as anything;
+ *      then for the full path of the big skill's file, which only the restore's `Skill file:` line gives; the transcript holds
+ *      the restore (`hook_additional_context`, what a resumed process sends again) with BOTH skills whole, its parts (at least
+ *      three) strictly by number, and no stdout frame that carries it reaches the bot's classifier as anything;
  *   2. the RESUME case — what the per-turn backend does every turn and json-stream after every idle stop or bot restart: the
  *      skills are loaded, the process stops, a NEW process `--resume`s the conversation and compacts. MEASURED: whether
  *      Claude Code's own re-attach of that compaction (`invoked_skills`) still holds the skills the earlier process loaded
  *      (printed as a `[measure]` diagnostic, never failed on); ASSERTED: the bot's restore gives both skills whole anyway, so
  *      the agent reads the last line of each. Measured on 2026-11-13 (Claude Code 2.1.323, the default account): the resumed
  *      process's re-attach held NONE of them ([] of [live-small, live-big]) — why the restore gives every skill in full
- *      (`planClaudeSkillsRestore`).
+ *      (`planClaudeSkillsRestore`). Its parts too arrive strictly by number.
+ *
+ * Each compaction's part order and the moments the CLI took the parts (`hook_response` frames) are printed as `[measure]`
+ * diagnostics. Measured on 2026-11-13 (2.1.323) BEFORE the slots were chained: five parts reached the transcript as
+ * [5, 2, 1, 3, 4] and [4, 1, 2, 3, 5].
  *
  * Skipped unless `SKILLS_RESTORE_LIVE_CLAUDE_BIN` names the `claude` binary, so `yarn test` never runs it. It spends a few
  * turns of the account the inherited `CLAUDE_CONFIG_DIR` (or `~/.claude`) is signed in to — use a subscription login, never an
@@ -25,7 +30,7 @@
 
 /** Test case: N/A — Charness has no Jira tracker. */
 
-import { after, describe, test } from 'node:test';
+import { after, describe, test, type TestContext } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'child_process';
 import { randomUUID } from 'crypto';
@@ -59,6 +64,8 @@ function buildProbeEnvironment(): NodeJS.ProcessEnv {
 /** A `claude -p` stream-json session: user turns in, every stdout frame kept, each turn awaited to its `result`. */
 interface ProbeSession {
   frames: Array<Record<string, unknown>>;
+  /** When each frame arrived (`Date.now()`), by its index in `frames`. */
+  frameTimes: number[];
   sendTurn(text: string): Promise<Record<string, unknown>>;
   /** Stop the process and wait for it to end (what the bot's idle stop or per-turn lifecycle does). */
   stop(): Promise<void>;
@@ -73,6 +80,7 @@ function startProbeSession(workDir: string, settingsPath: string, extraArgs: rea
     '--dangerously-skip-permissions', '--permission-mode', 'bypassPermissions', '--settings', settingsPath, '--model', model, ...extraArgs,
   ], { cwd: workDir, env: buildProbeEnvironment(), stdio: ['pipe', 'pipe', 'inherit'] });
   const frames: Array<Record<string, unknown>> = [];
+  const frameTimes: number[] = [];
   let pending = '';
   let onResult: ((frame: Record<string, unknown>) => void) | null = null;
   child.stdout.setEncoding('utf8').on('data', (chunk: string) => {
@@ -89,11 +97,13 @@ function startProbeSession(workDir: string, settingsPath: string, extraArgs: rea
         continue;
       }
       frames.push(frame);
+      frameTimes.push(Date.now());
       if (frame.type === 'result' && onResult) onResult(frame);
     }
   });
   return {
     frames,
+    frameTimes,
     sendTurn(text: string): Promise<Record<string, unknown>> {
       return new Promise((resolve, reject) => {
         const timer = setTimeout(() => reject(new Error(`no result within ${turnTimeoutMs} ms for: ${text.slice(0, 60)}`)), turnTimeoutMs);
@@ -159,6 +169,43 @@ function readRestoreTexts(records: readonly TranscriptRecord[]): string {
     .join('\n');
 }
 
+/** The part number a restore text opens with (`(part i of n)`), `1` for a restore in one part. */
+function readRestorePartNumber(text: string): number {
+  const label = new RegExp(`^${skillsRestoreHeader.replace(/[[\]]/g, '\\$&')}(?: \\(part (\\d+) of \\d+\\))?\n`).exec(text);
+  assert.ok(label, `a restore part opens with its label: ${text.slice(0, 120)}`);
+  return label[1] === undefined ? 1 : Number(label[1]);
+}
+
+/**
+ * @description The order the restore's parts took: in the transcript (the LAST `hook_additional_context` that holds the
+ * restore — what every later model request sends) and on stdout, where each hook's `hook_response` frame arrives as the CLI
+ * takes its output (with the milliseconds since the first `SessionStart` hook started), printed as a `[measure]` diagnostic.
+ */
+function measureRestoreOrder(session: ProbeSession, records: readonly TranscriptRecord[], label: string, context: TestContext): number[] {
+  const restoreRecord = records.filter((record) => record.type === 'attachment' && record.attachment?.type === 'hook_additional_context' && (record.attachment.content ?? []).some((text) => text.startsWith(skillsRestoreHeader))).at(-1);
+  const transcriptOrder = (restoreRecord?.attachment?.content ?? []).filter((text) => text.startsWith(skillsRestoreHeader)).map(readRestorePartNumber);
+  const startedAt = session.frames.findIndex((frame) => frame.type === 'system' && frame.subtype === 'hook_started' && String(frame.hook_name).startsWith('SessionStart'));
+  const firstStartMs = startedAt < 0 ? 0 : session.frameTimes[startedAt];
+  const responses = session.frames.flatMap((frame, index) => {
+    if (frame.type !== 'system' || frame.subtype !== 'hook_response' || !String(frame.stdout ?? '').includes(skillsRestoreHeader)) return [];
+    const additionalContext: unknown = JSON.parse(String(frame.stdout)).hookSpecificOutput?.additionalContext;
+    return typeof additionalContext === 'string' ? [`part ${readRestorePartNumber(additionalContext)} @ ${session.frameTimes[index] - firstStartMs} ms`] : [];
+  });
+  const measurement = `[measure] ${label}: the transcript holds the parts in the order [${transcriptOrder.join(', ')}]; hook responses after the first SessionStart hook started: ${responses.join(', ')}`;
+  context.diagnostic(measurement);
+  console.log(measurement);
+  return transcriptOrder;
+}
+
+/** Whether `order` is 1..n with at least `minimumParts` parts. */
+function assertRestoreInOrder(order: readonly number[], minimumParts: number, label: string): void {
+  assert.ok(order.length >= minimumParts, `${label}: at least ${minimumParts} parts (${order.length})`);
+  assert.deepEqual(order, Array.from({ length: order.length }, (_value, index) => index + 1), `${label}: the parts reach the transcript strictly by number`);
+}
+
+/** How many parts the probe's restore takes at least: the big skill alone fills three. */
+const probeMinimumParts = 3;
+
 /** A throwaway project with a small skill and one past Claude Code's own 20,000-character re-attach, and the bot's restore hooks. */
 function createProbeProject(root: string, name: string): { workDir: string; settingsPath: string; smallTail: string; bigTail: string } {
   const workDir = path.join(root, name);
@@ -169,18 +216,20 @@ function createProbeProject(root: string, name: string): { workDir: string; sett
     fs.writeFileSync(path.join(workDir, '.claude', 'skills', skillName, 'SKILL.md'), `---\nname: ${skillName}\ndescription: A probe skill. Load it when asked to load ${skillName}.\n---\n\n${body}`);
   };
   writeSkill('live-small', `# live-small\n\nKeep the counter 4242.\n${smallTail}\n`);
-  writeSkill('live-big', `# live-big\n\n${Array.from({ length: 800 }, (_value, index) => `Rule ${index}: a rule of the big probe skill.`).join('\n')}\n${bigTail}\n`);
+  writeSkill('live-big', `# live-big\n\n${Array.from({ length: 900 }, (_value, index) => `Rule ${index}: a rule of the big probe skill.`).join('\n')}\n${bigTail}\n`);
   const settingsPath = path.join(root, `${name}-settings.json`);
   fs.writeFileSync(settingsPath, JSON.stringify(buildClaudeLaunchHookSettings({
     preCompact: 'cat > /dev/null',
     postToolUse: 'cat > /dev/null',
-    sessionStartCompact: buildSkillsRestoreHookCommands({ nodePath: process.execPath, hookPath: builtHookPath, slotCount: skillsRestoreSlotCount, unavailableSkillsDir: null }),
+    sessionStartCompact: buildSkillsRestoreHookCommands({ nodePath: process.execPath, hookPath: builtHookPath, slotCount: skillsRestoreSlotCount, unavailableSkillsDir: null, orderDir: path.join(root, `${name}-order`) }),
   })));
   return { workDir, settingsPath, smallTail, bigTail };
 }
 
 const loadBothSkillsPrompt = 'Use the Skill tool twice: load the skill live-small, then live-big. Then reply only LOADED.';
 const askTailsPrompt = 'Without using any tool: what are the exact markers on the very last line of the live-small skill (it starts with LIVE-SMALL-TAIL) and of the live-big skill (it starts with LIVE-BIG-TAIL)? Reply with the two markers only.';
+
+const askSkillFilePrompt = 'Without using any tool: what is the full path of the skill file of the live-big skill, as the restored skills in your context state it? Reply with the path only.';
 
 function getSessionId(session: ProbeSession): string {
   const sessionId = session.frames.find((frame) => frame.type === 'system' && frame.subtype === 'init')?.session_id;
@@ -192,7 +241,7 @@ describe('the skills restore against the real Claude Code CLI (live)', { skip: s
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'skills-restore-live-'));
   after(() => fs.rmSync(root, { recursive: true, force: true }));
 
-  test('after /compact the agent reads the LAST line of both skills — from the restore, which the transcript keeps', { timeout: 4 * turnTimeoutMs }, async () => {
+  test('after /compact the agent reads the LAST line of both skills — from the restore, which the transcript keeps, its parts strictly by number', { timeout: 4 * turnTimeoutMs }, async (context) => {
     assert.ok(fs.existsSync(builtHookPath), `the built hook is missing (${builtHookPath}): run \`yarn build\``);
     const project = createProbeProject(root, 'one-process');
     const session = startProbeSession(project.workDir, project.settingsPath);
@@ -201,9 +250,14 @@ describe('the skills restore against the real Claude Code CLI (live)', { skip: s
       await session.sendTurn('/compact');
       const answer = String((await session.sendTurn(askTailsPrompt)).result ?? '');
       assert.ok(answer.includes(project.smallTail) && answer.includes(project.bigTail), `the agent reads the end of both skills after the compaction: ${answer}`);
+      const bigSkillFile = path.join(project.workDir, '.claude', 'skills', 'live-big', 'SKILL.md');
+      const fileAnswer = String((await session.sendTurn(askSkillFilePrompt)).result ?? '');
+      assert.ok(fileAnswer.includes(bigSkillFile), `the agent reads the skill file's full path from the restore: ${fileAnswer}`);
 
-      const restore = readRestoreTexts(readTranscriptRecords(getSessionId(session)));
+      const records = readTranscriptRecords(getSessionId(session));
+      const restore = readRestoreTexts(records);
       assert.ok(restore.includes(project.bigTail) && restore.includes(project.smallTail), 'the transcript keeps the restore with both skills whole — a resumed process sends it again');
+      assertRestoreInOrder(measureRestoreOrder(session, records, 'one process, /compact', context), probeMinimumParts, 'one process');
       for (const skillName of ['live-small', 'live-big']) {
         const skillFile = path.join(project.workDir, '.claude', 'skills', skillName, 'SKILL.md');
         assert.ok(restore.includes(`Skill file: ${skillFile}\n`), `${skillName}: the restore names the full path of its skill file`);
@@ -242,6 +296,7 @@ describe('the skills restore against the real Claude Code CLI (live)', { skip: s
 
       const restore = readRestoreTexts(lastEpoch);
       assert.ok(restore.includes(project.smallTail) && restore.includes(project.bigTail), 'the bot\'s restore gives both skills whole after a resume');
+      assertRestoreInOrder(measureRestoreOrder(resumed, lastEpoch, 'resumed process, /compact', context), probeMinimumParts, 'resumed process');
       const answer = String((await resumed.sendTurn(askTailsPrompt)).result ?? '');
       assert.ok(answer.includes(project.smallTail) && answer.includes(project.bigTail), `the resumed agent reads the end of both skills: ${answer}`);
     } finally {

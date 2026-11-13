@@ -144,8 +144,13 @@ which the part names under the base directory as `Skill file: <path>` (`utils/sk
 re-attach is not relied on — a `--resume`d process re-attaches none of the skills an earlier process loaded, measured by the
 live probe on 2.1.323). Measured on 2.1.322: they run after EVERY
 compaction (the CLI's own mid-turn ones too) BEFORE the new boundary and summary reach the transcript, all parts reach the
-next model request whole and in random order, and the CLI keeps them in the transcript (`hook_additional_context`), so a
-resumed process sends them again. Each kind of launch has its own settings file, so concurrent launches never read each
+next model request whole, and the CLI keeps them in the transcript (`hook_additional_context`), so a resumed process sends
+them again. The CLI runs the hooks in parallel and takes each one's output when its process ends, so unchained parts landed
+shuffled (2.1.323: [5, 2, 1, 3, 4]); the slots form a CHAIN instead: slot i prints only once slot i-1 has left its
+done-marker in `DATA_DIR/skills-restore-order/` (named after the compaction: a hash of the transcript's last epoch, so an
+earlier compaction's marker never counts) and its process is gone — 3 s per missing step, 20 s at most, so a broken slot
+never holds the rest — and the slot with the last part clears the compaction's markers. Live: every part in order, the last
+one 1.1–1.3 s after the first hook started. Each kind of launch has its own settings file, so concurrent launches never read each
 other's hooks; a launch without the bot's skills passes their folder, which the restore then calls unavailable.
 
 Every COMPLETED compaction is told as `contextCompacted` (key, trigger): a bot-issued one on its one success

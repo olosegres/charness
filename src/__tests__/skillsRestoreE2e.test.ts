@@ -4,7 +4,8 @@
  * `telegramE2e/fakeTelegram.ts`, with the fake `claude` (`jiraE2e/fakeClaude.ts`) loading the project's skills when a turn
  * says `[skill:<name>]` and running the launch's `SessionStart` `compact` hooks after every compaction the way the real CLI
  * 2.1.322 was measured to (before the compaction reaches the transcript; the hook text stored in the transcript and held by
- * every later model request). One flow, in order:
+ * every later model request; the fake takes the hooks' outputs in the order they finish, as the real CLI does, starting them
+ * last slot first). One flow, in order — every restore below arrives with its parts strictly in order 1..n:
  *
  *   boot → a topic is bound, the agent loads a small skill and a big one (Claude's own re-attach keeps a skill whole only
  *     up to 20,000 characters) — nothing to restore yet
@@ -17,6 +18,7 @@
  *   → per-turn: a compaction in a turn, the process stops after it, the bot restarts, the next message starts a NEW process
  *     that resumes the conversation — and holds the restore, from the transcript
  *   → the small skill's folder is deleted: the next compaction calls it "not available now" and still restores the big one
+ *   → the slots' chain left no marker behind in `DATA_DIR`
  *   → NOTHING of the restore reached the topic, in any message or edit
  *
  * The tmux backend's launches carry no restore (`claudeTmuxUsageWarningE2e.test.ts`); the hook itself, the parts and the
@@ -62,7 +64,7 @@ import { getTelegramFlowTestTimingsEnv } from './telegramE2e/telegramFlowTimings
 import { claudeJsonStreamUsageLogPrefix } from '../adapters/claudeJsonStreamAdapter';
 import { enDict } from '../i18n/en';
 import { compactionChecklistSkillsItem, compactionSkillsBlockEndMarker, compactionSkillsBlockStartMarker } from '../utils/compactOnIdle';
-import { claudeSkillsRestoreHookSettingsFileNames } from '../utils/claudeCompactHook';
+import { claudeSkillsRestoreHookSettingsFileNames, getSkillsRestoreOrderDir } from '../utils/claudeCompactHook';
 import { claudeSkillBaseDirPrefix, skillsRestoreHeader, skillsRestorePartMaxChars, skillsRestoreSlotCount } from '../utils/skillsRestore';
 
 const group = { id: -1001111111111, title: 'ExampleGroup' };
@@ -163,10 +165,18 @@ function getRestoreContextAfter(recordsBefore: number, phase: FakeClaudeRestoreC
   return record;
 }
 
-/** A restore that brings both skills back whole — the small one too, whatever Claude's own re-attach does. */
+/**
+ * A restore that brings both skills back whole — the small one too, whatever Claude's own re-attach does — its parts strictly
+ * by number (the fake starts the hooks last slot first and takes them as they finish, as the real CLI takes them).
+ */
 function assertRestored(contexts: readonly string[], description: string): void {
-  assert.ok(contexts.length > 1, `${description}: the big skill takes several parts (${contexts.length})`);
-  assert.ok(contexts.every((context) => context.startsWith(skillsRestoreHeader) && context.length <= skillsRestorePartMaxChars), `${description}: every part is labelled and fits a hook's cap`);
+  assert.ok(contexts.length > 2, `${description}: the big skill takes several parts (${contexts.length})`);
+  assert.ok(contexts.every((context) => context.length <= skillsRestorePartMaxChars), `${description}: every part fits a hook's cap`);
+  assert.deepEqual(
+    contexts.map((context) => context.split('\n')[0]),
+    contexts.map((_context, index) => `${skillsRestoreHeader} (part ${index + 1} of ${contexts.length})`),
+    `${description}: the parts arrive in order 1..${contexts.length}`,
+  );
   const joined = contexts.join('\n');
   assert.ok(joined.includes(`- ${bigSkillName}: its current full text is below (skill file: ${getSkillFile(bigSkillName)})`), `${description}: the big skill is listed as restored, with its skill file`);
   assert.ok(joined.includes(`- ${smallSkillName}: its current full text is below (skill file: ${getSkillFile(smallSkillName)})`), `${description}: the small one too`);
@@ -328,6 +338,12 @@ describe('The skills restore after a compaction (Claude json-stream and per-turn
     assert.ok(joined.includes(`- ${smallSkillName}: was loaded before but is not available now (skill file: ${getSkillFile(smallSkillName)})`), 'the gone skill is named as not available, with the file it was read from');
     assert.ok(!joined.includes(smallSkillMarker));
     assert.ok(joined.includes(bigSkillHeadMarker) && joined.includes(bigSkillTailMarker), 'the big skill still comes back whole');
+  });
+
+  it('the chain left no marker behind: the slot with the last part cleared its compaction\'s', () => {
+    const orderDir = getSkillsRestoreOrderDir(getLayout().dataDir);
+    assert.ok(fs.existsSync(orderDir), 'the slots chained through the order folder');
+    assert.deepEqual(fs.readdirSync(orderDir), [], 'nothing left after the compactions');
   });
 
   it('nothing of the restore reached the topic — in no message and no edit', () => {

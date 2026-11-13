@@ -150,7 +150,8 @@ per-backend controls are optional methods the bot checks before calling.
   reconcile that fails on OpenCode is retried (`schedulerMcpRetryDelaysMs`), reading `GET /mcp` first.
   After EVERY compaction the loaded skills come back by themselves, in full and hidden from the topic
   (`utils/skillsRestore.ts`): Claude through 24 `SessionStart` `compact` hooks in the launch settings
-  (`hooks/claudeSkillsRestoreHook.ts`; json-stream and per-turn, never tmux), OpenCode through the same plugin's
+  (`hooks/claudeSkillsRestoreHook.ts`; json-stream and per-turn, never tmux; chained through markers in
+  `DATA_DIR/skills-restore-order/` so the parts land by number), OpenCode through the same plugin's
   `experimental.chat.messages.transform` (one synthetic part on the compaction's own message).
 - **Claude account profiles** (`/accounts` — also the OpenCode providers' switch / connect / disconnect entry; hidden aliases `/account`, `/connect`, `/disconnect`; `utils/claudeProfiles.ts`, `commands/claudeAccounts.ts`). Several
   subscription logins kept side by side: a profile is a config directory under `DATA_DIR/claude-profiles/<name>/`

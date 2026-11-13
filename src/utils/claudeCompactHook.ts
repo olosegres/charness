@@ -31,7 +31,8 @@
  * changes — after a tool call, and nothing when there is none.
  *
  * A json-stream / per-turn launch also carries the skills restore: {@link skillsRestoreSlotCount} `SessionStart` hooks with
- * the matcher `compact`, each printing one part of the skills the session had loaded (`hooks/claudeSkillsRestoreHook.ts`).
+ * the matcher `compact`, each printing one part of the skills the session had loaded (`hooks/claudeSkillsRestoreHook.ts`),
+ * chained so the parts land by number.
  * Measured on Claude Code 2.1.322 (`-p`, stream-json): a `SessionStart` `compact` hook runs after EVERY compaction — the
  * CLI's own mid-turn ones and a `/compact` turn — and what it gives as `additionalContext` is in the very next model request,
  * the same turn's when the agent goes on alone; the CLI stores it in the transcript (`hook_additional_context`), so a
@@ -72,6 +73,15 @@ export const claudeSkillsRestoreHookSettingsFileNames = {
  * (the test runner, where it is `.ts`) simply has no restore.
  */
 export const claudeSkillsRestoreHookPath = path.join(__dirname, '..', 'hooks', 'claudeSkillsRestoreHook.js');
+
+/**
+ * @description The folder inside `DATA_DIR` where the restore's slots of one compaction leave their done-markers, so the parts
+ * land strictly by number (`hooks/claudeSkillsRestoreHook.ts`). Shared by every session: a marker is named after its
+ * compaction, and old ones are swept by the slots themselves.
+ */
+export function getSkillsRestoreOrderDir(dataDir: string): string {
+  return path.join(dataDir, 'skills-restore-order');
+}
 
 /**
  * @description The instruction the hook adds to a compaction the bot did not
@@ -120,16 +130,18 @@ export function buildPreCompactHookCommand(input: {
 
 /**
  * @description The shell commands of the restore's `SessionStart` hook slots: slot `i` (1-based) runs `nodePath hookPath i
- * slotCount [unavailableSkillsDir]` and prints part `i` of the restore, or nothing. A missing hook file (a launch from the
- * sources) prints nothing; every command reads its input whole (the CLI must never write into a closed pipe) and exits 0 —
- * a hook failure must never stop the agent.
+ * slotCount <unavailableSkillsDir or ''> orderDir` and prints part `i` of the restore, or nothing, in turn after slot `i - 1`
+ * (the chain's markers go to `orderDir`). The folders come after the numbers, an empty argument for none, so a hook of either
+ * age reads a command line of either age (an older one ignores the chain's folder; a newer one without it runs no chain). A
+ * missing hook file (a launch from the sources) prints nothing; every command reads its input whole (the CLI must never
+ * write into a closed pipe) and exits 0 — a hook failure must never stop the agent.
  */
-export function buildSkillsRestoreHookCommands(input: { nodePath: string; hookPath: string; slotCount: number; unavailableSkillsDir: string | null }): string[] {
+export function buildSkillsRestoreHookCommands(input: { nodePath: string; hookPath: string; slotCount: number; unavailableSkillsDir: string | null; orderDir: string }): string[] {
   const hook = shellSingleQuote(input.hookPath);
-  const unavailableArgument = input.unavailableSkillsDir === null ? '' : ` ${shellSingleQuote(input.unavailableSkillsDir)}`;
+  const folderArguments = `${shellSingleQuote(input.unavailableSkillsDir ?? '')} ${shellSingleQuote(input.orderDir)}`;
   return Array.from({ length: input.slotCount }, (_unused, index) => [
     `[ -f ${hook} ] || { cat > /dev/null; exit 0; }`,
-    `${shellSingleQuote(input.nodePath)} ${hook} ${index + 1} ${input.slotCount}${unavailableArgument}`,
+    `${shellSingleQuote(input.nodePath)} ${hook} ${index + 1} ${input.slotCount} ${folderArguments}`,
     'exit 0',
   ].join('; '));
 }
@@ -142,8 +154,9 @@ const sessionStartCompactMatcher = 'compact';
 
 /**
  * How long the CLI lets one restore slot run, in seconds. The CLI holds the compaction — and so the agent — until its hooks
- * end, and its default is far longer than this work needs (read one transcript epoch and a few files); a slot cut off
- * prints nothing, which every slot already does on any failure.
+ * end, and its default is far longer than this work needs (read one transcript epoch and a few files, then wait for the
+ * slots before it — the chain gives up by itself well inside this, `skillsRestoreSlotChainTimings`); a slot cut off prints
+ * nothing, which every slot already does on any failure.
  */
 export const skillsRestoreHookTimeoutSeconds = 30;
 
@@ -202,7 +215,13 @@ export function prepareClaudeCompactHookFlags(dataDir: string, configDir: string
     postToolUse: buildTodoInboxHookCommand(getTodoInboxDir(dataDir)),
     sessionStartCompact: skillsRestore === null
       ? []
-      : buildSkillsRestoreHookCommands({ nodePath: process.execPath, hookPath: claudeSkillsRestoreHookPath, slotCount: skillsRestoreSlotCount, unavailableSkillsDir: skillsRestore.unavailableSkillsDir }),
+      : buildSkillsRestoreHookCommands({
+        nodePath: process.execPath,
+        hookPath: claudeSkillsRestoreHookPath,
+        slotCount: skillsRestoreSlotCount,
+        unavailableSkillsDir: skillsRestore.unavailableSkillsDir,
+        orderDir: getSkillsRestoreOrderDir(dataDir),
+      }),
   });
   const isWithBotSkills = skillsRestore?.unavailableSkillsDir === null;
   if (configDir !== null && checkHasClaudeProfileApiKey(configDir)) {

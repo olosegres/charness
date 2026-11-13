@@ -351,7 +351,7 @@ function getPreCompactHookCommands(argv: readonly string[]): string[] {
   return (settings?.hooks?.PreCompact ?? []).flatMap((group) => (group.hooks ?? []).flatMap((hook) => (hook.type === 'command' && typeof hook.command === 'string' ? [hook.command] : [])));
 }
 
-/** How long a hook command may run, as the real CLI bounds it (it waits up to a minute; the fake's are quick). */
+/** How long a hook command with no `timeout` of its own may run (the real CLI waits up to a minute; the fake's are quick). */
 const hookTimeoutMs = 10_000;
 
 /**
@@ -367,29 +367,48 @@ function runPreCompactHooks(argv: readonly string[], sessionId: string, trigger:
   appendJsonLine(fakeClaudeLogFileNames.preCompactHooks, { sessionId, pid: process.pid, trigger, instruction });
 }
 
+/** A command hook of the launch's settings, with how long it may run: its own `timeout` (seconds), as the real CLI bounds it. */
+interface FakeCommandHook {
+  command: string;
+  timeoutMs: number;
+}
+
 /** The `SessionStart` command hooks of the launch's settings that fire for a compaction: no matcher, or the `compact` one. */
-function getSessionStartCompactHookCommands(argv: readonly string[]): string[] {
-  const settings = readLaunchSettings(argv) as { hooks?: { SessionStart?: Array<{ matcher?: string; hooks?: Array<{ type?: string; command?: string }> }> } } | null;
+function getSessionStartCompactHooks(argv: readonly string[]): FakeCommandHook[] {
+  const settings = readLaunchSettings(argv) as { hooks?: { SessionStart?: Array<{ matcher?: string; hooks?: Array<{ type?: string; command?: string; timeout?: number }> }> } } | null;
   return (settings?.hooks?.SessionStart ?? [])
     .filter((group) => group.matcher === undefined || group.matcher === '' || group.matcher === 'compact')
-    .flatMap((group) => (group.hooks ?? []).flatMap((hook) => (hook.type === 'command' && typeof hook.command === 'string' ? [hook.command] : [])));
+    .flatMap((group) => (group.hooks ?? []).flatMap((hook): FakeCommandHook[] => (hook.type === 'command' && typeof hook.command === 'string'
+      ? [{ command: hook.command, timeoutMs: typeof hook.timeout === 'number' ? hook.timeout * 1000 : hookTimeoutMs }]
+      : [])));
 }
 
 /**
- * The launch's `SessionStart` hooks after a compaction, the way the real CLI runs them: all at once, without blocking the
+ * How far apart the fake starts the `SessionStart` hooks, LAST slot first: the real CLI starts them all at once and the
+ * machine runs them in any order; the fake makes that order the worst one, so hooks that did not wait for each other would
+ * finish backwards.
+ */
+const sessionStartHookStaggerMs = 50;
+
+/**
+ * The launch's `SessionStart` hooks after a compaction, the way the real CLI runs them: all of them, without blocking the
  * process (stdin and control frames are still read meanwhile), the hook input on stdin (source `compact`), a `hook_started`
  * frame each and a `hook_response` as each ends on stdout (the response carries the hook's stdout, as the real one's does —
- * the bot must drop it), and the `additionalContext` of each hook's JSON collected. The real CLI takes them in the order they
- * finish; the fake takes them in REVERSE slot order, so nothing may rest on the order. Logged to `session-start-hooks.jsonl`.
+ * the bot must drop it), and the `additionalContext` of each hook's JSON collected in the order the hooks FINISH, as the real
+ * CLI takes them (measured on Claude Code 2.1.323). They start in REVERSE slot order, {@link sessionStartHookStaggerMs} apart:
+ * only hooks that keep their order themselves end by number. Logged to `session-start-hooks.jsonl`.
  */
 async function runSessionStartCompactHooks(argv: readonly string[], sessionId: string, trigger: 'auto' | 'manual'): Promise<string[]> {
   const input = JSON.stringify({ session_id: sessionId, transcript_path: getTranscriptPath(sessionId), cwd: process.cwd(), hook_event_name: 'SessionStart', source: 'compact', model: getReportedModel(argv) });
-  const outputs = await Promise.all(getSessionStartCompactHookCommands(argv).map(async (command) => {
+  const hooks = getSessionStartCompactHooks(argv);
+  const outputs: string[] = [];
+  await Promise.all(hooks.map(async (hook, index) => {
+    await new Promise((resolve) => { setTimeout(resolve, (hooks.length - 1 - index) * sessionStartHookStaggerMs); });
     const hookId = randomUUID();
     writeStdout({ type: 'system', subtype: 'hook_started', hook_id: hookId, hook_name: 'SessionStart:compact', hook_event: 'SessionStart', session_id: sessionId });
-    const output = await runHookCommand(command, input, hookTimeoutMs);
+    const output = await runHookCommand(hook.command, input, hook.timeoutMs);
     writeStdout({ type: 'system', subtype: 'hook_response', hook_id: hookId, hook_name: 'SessionStart:compact', hook_event: 'SessionStart', output, stdout: output, stderr: '', exit_code: 0, outcome: 'success', session_id: sessionId });
-    return output;
+    outputs.push(output);
   }));
   const contexts = outputs.flatMap((output): string[] => {
     if (output.trim() === '') return [];
@@ -400,7 +419,7 @@ async function runSessionStartCompactHooks(argv: readonly string[], sessionId: s
       // Not hook JSON: the real CLI adds plain stdout as context too, but the bot's hooks print JSON.
       return [];
     }
-  }).reverse();
+  });
   appendJsonLine(fakeClaudeLogFileNames.sessionStartHooks, { sessionId, pid: process.pid, trigger, contexts });
   return contexts;
 }

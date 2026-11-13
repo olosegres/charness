@@ -20,6 +20,7 @@ import {
   claudeSkillsRestoreHookPath,
   claudeSkillsRestoreHookSettingsFileNames,
   getHookCompactionInstruction,
+  getSkillsRestoreOrderDir,
   prepareClaudeCompactHookFlags,
   skillsRestoreHookTimeoutSeconds,
 } from '../utils/claudeCompactHook';
@@ -220,20 +221,21 @@ test('buildClaudeLaunchHookSettings: the restore\'s slots are SessionStart comma
   assert.equal(skillsRestoreHookTimeoutSeconds, 30);
 });
 
-test('buildSkillsRestoreHookCommands: slot i runs the hook with its number, the slot count and the unavailable folder — read through a real sh', () => {
+test('buildSkillsRestoreHookCommands: slot i runs the hook with its number, the slot count, the unavailable folder (empty for none) and the chain\'s folder — read through a real sh', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'restore-hook-commands-'));
   try {
     // A stand-in hook that prints its arguments and what it read, so the command line is checked as the shell builds it.
     const hookPath = path.join(dir, "it's a hook.js");
     fs.writeFileSync(hookPath, 'let input = ""; process.stdin.on("data", (c) => { input += c; }).on("end", () => process.stdout.write(JSON.stringify({ argv: process.argv.slice(2), input })));');
     const unavailableSkillsDir = "/opt/it's charness/agent-plugin/skills";
-    const commands = buildSkillsRestoreHookCommands({ nodePath: process.execPath, hookPath, slotCount: 3, unavailableSkillsDir });
+    const orderDir = "/home/user/it's charness/data/skills-restore-order";
+    const commands = buildSkillsRestoreHookCommands({ nodePath: process.execPath, hookPath, slotCount: 3, unavailableSkillsDir, orderDir });
     assert.equal(commands.length, 3);
-    assert.deepEqual(JSON.parse(runHook(commands[1], { source: 'compact' })), { argv: ['2', '3', unavailableSkillsDir], input: JSON.stringify({ source: 'compact' }) });
-    const withBotSkills = buildSkillsRestoreHookCommands({ nodePath: process.execPath, hookPath, slotCount: 3, unavailableSkillsDir: null });
-    assert.deepEqual(JSON.parse(runHook(withBotSkills[0], {})).argv, ['1', '3']);
+    assert.deepEqual(JSON.parse(runHook(commands[1], { source: 'compact' })), { argv: ['2', '3', unavailableSkillsDir, orderDir], input: JSON.stringify({ source: 'compact' }) });
+    const withBotSkills = buildSkillsRestoreHookCommands({ nodePath: process.execPath, hookPath, slotCount: 3, unavailableSkillsDir: null, orderDir });
+    assert.deepEqual(JSON.parse(runHook(withBotSkills[0], {})).argv, ['1', '3', '', orderDir], 'an empty argument keeps the chain\'s folder fourth');
     // No hook file (a launch from the sources): nothing printed, exit 0, the input read whole.
-    const missing = buildSkillsRestoreHookCommands({ nodePath: process.execPath, hookPath: path.join(dir, 'missing.js'), slotCount: 1, unavailableSkillsDir: null });
+    const missing = buildSkillsRestoreHookCommands({ nodePath: process.execPath, hookPath: path.join(dir, 'missing.js'), slotCount: 1, unavailableSkillsDir: null, orderDir });
     assert.equal(runHook(missing[0], { source: 'compact', padding: 'x'.repeat(200_000) }), '');
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
@@ -256,8 +258,10 @@ test('prepareClaudeCompactHookFlags: a json-stream launch gets the restore\'s 24
     const restoreHooks = readHooks(withBotSkills[1]).SessionStart?.[0];
     assert.equal(restoreHooks?.matcher, 'compact');
     assert.equal(restoreHooks?.hooks.length, skillsRestoreSlotCount);
-    assert.deepEqual(restoreHooks?.hooks.map((hook) => hook.command), buildSkillsRestoreHookCommands({ nodePath: process.execPath, hookPath: claudeSkillsRestoreHookPath, slotCount: skillsRestoreSlotCount, unavailableSkillsDir: null }));
-    assert.ok(readHooks(withoutBotSkills[1]).SessionStart?.[0].hooks[0].command.endsWith(" 1 24 '/opt/charness/agent-plugin/skills'; exit 0"), 'the unavailable folder rides the command');
+    const orderDir = getSkillsRestoreOrderDir(dataDir);
+    assert.deepEqual(restoreHooks?.hooks.map((hook) => hook.command), buildSkillsRestoreHookCommands({ nodePath: process.execPath, hookPath: claudeSkillsRestoreHookPath, slotCount: skillsRestoreSlotCount, unavailableSkillsDir: null, orderDir }));
+    assert.ok(readHooks(withoutBotSkills[1]).SessionStart?.[0].hooks[0].command.endsWith(` 1 24 '/opt/charness/agent-plugin/skills' '${orderDir}'; exit 0`), 'the unavailable folder and the chain\'s folder in DATA_DIR ride the command');
+    assert.equal(orderDir, path.join(dataDir, 'skills-restore-order'));
     assert.equal(readHooks(withBotSkills[1]).PreCompact.length, 1, 'the compaction guidance stays');
   } finally {
     fs.rmSync(dataDir, { recursive: true, force: true });
