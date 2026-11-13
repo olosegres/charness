@@ -12,8 +12,9 @@ export const adoptReplayGateMaxWaitMs = 30_000;
 /**
  * @description The wait before a prompt is forwarded to a session: an adopted one first replays what its process wrote
  * while the bot was down. A prompt written meanwhile resets the answer and the error slot the replayed frames still use,
- * so the replayed text would join the new reply's message and a replayed error would take the new turn's slot. Settles at
- * once for a session that was not adopted and for an adapter that never adopts. `maxWaitMs` is a test seam.
+ * so the replayed text would join the new reply's message and a replayed error would take the new turn's slot. An adopted
+ * session waits for the boot's release of its output too. Settles at once for a session that was not adopted and for an
+ * adapter that never adopts. `maxWaitMs` is a test seam.
  */
 export async function waitForAdoptedReplay(
   adapter: Pick<AgentAdapter, 'whenAdoptReplayed'>,

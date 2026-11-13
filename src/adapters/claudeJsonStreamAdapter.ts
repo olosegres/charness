@@ -369,7 +369,7 @@ export interface StreamSession {
    * (busy, tasks, input) is trustworthy — see {@link ClaudeJsonStreamAdapter.whenAdoptReplayed}.
    */
   adoptCatchUpOffset: number | null;
-  /** Waiters of {@link ClaudeJsonStreamAdapter.whenAdoptReplayed}, settled when the catch-up offset is reached or the session ends. */
+  /** Waiters of {@link ClaudeJsonStreamAdapter.whenAdoptReplayed}, settled once the tail is released and the catch-up offset reached, or the session ends. */
   adoptCatchUpResolvers: Array<() => void>;
   /**
    * An ADOPTED session whose stdout is not read yet: the boot has not restored what its replayed frames are read against
@@ -389,6 +389,16 @@ export interface StreamSession {
  * file was removed while the conversation slept, and the resume fails like on a stub.
  */
 type SpawnConversation = 'new' | 'resume' | 'resumeOrRestart';
+
+/** Whether an adopted session's live state is not rebuilt yet: held until the boot's release, or replaying its downtime tail. */
+function checkIsSessionReplayPending(session: StreamSession): boolean {
+  return session.isTailHeld || session.adoptCatchUpOffset !== null;
+}
+
+/** Let go of everyone waiting for an adopted session's replay ({@link ClaudeJsonStreamAdapter.whenAdoptReplayed}). */
+function resolveAdoptReplayWaiters(session: StreamSession): void {
+  for (const resolve of session.adoptCatchUpResolvers.splice(0)) resolve();
+}
 
 /**
  * @description SECOND Claude backend: drives the `claude` CLI over its
@@ -1052,39 +1062,49 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
     for (const session of this.sessions.values()) {
       if (!session.isTailHeld) continue;
       session.isTailHeld = false;
+      // Nothing was behind the tail: the state is the persisted one, current as soon as it may be read.
+      if (session.adoptCatchUpOffset === null) resolveAdoptReplayWaiters(session);
       this.schedulePoll(session, firstReadDelayMs);
     }
   }
 
-  /** Whether an adopted session's tail still has downtime frames to replay — {@link whenAdoptReplayed} would wait. */
+  /**
+   * Whether an adopted session's live state is not rebuilt yet: its tail is held until the boot releases it, or still has
+   * downtime frames to replay — {@link whenAdoptReplayed} would wait.
+   */
   checkIsAdoptReplayPending(key: SessionKey): boolean {
     const session = this.sessions.get(keyToString(key));
-    return session !== undefined && session.adoptCatchUpOffset !== null;
+    return session !== undefined && checkIsSessionReplayPending(session);
   }
 
   /**
-   * @description Resolves once an ADOPTED session's tail has consumed what its
-   * stdout held at the adopt — the replayed frames have rebuilt the live state
-   * (busy, tasks, input) — or once the session is gone. Immediate for a session
-   * that was not adopted or whose tail already sat at EOF. The stale-tool-list
-   * stop (L4) looks only after this: a look before it would read a turn in flight
-   * as idle.
+   * @description Resolves once an ADOPTED session's tail is released by the boot
+   * ({@link releaseAdoptedTails}) and has consumed what its stdout held at the
+   * adopt — the replayed frames have rebuilt the live state (busy, tasks, input)
+   * — or once the session is gone. Immediate for a session that was not adopted.
+   * The stale-tool-list stop (L4) and the idle fire look only after this: a look
+   * before it would read a turn in flight as idle.
    */
   whenAdoptReplayed(key: SessionKey): Promise<void> {
     const session = this.sessions.get(keyToString(key));
-    if (!session || session.adoptCatchUpOffset === null) return Promise.resolve();
+    if (!session || !checkIsSessionReplayPending(session)) return Promise.resolve();
     return new Promise((resolve) => { session.adoptCatchUpResolvers.push(resolve); });
   }
 
   /** Settle the adopt catch-up once the tail consumed up to the adopt-time EOF (or the session ended). */
   private settleAdoptCatchUp(session: StreamSession, isSessionGone: boolean): void {
-    if (session.adoptCatchUpOffset === null) return;
-    if (!isSessionGone && session.tail.consumedBytes < session.adoptCatchUpOffset) return;
+    if (isSessionGone) {
+      // A session that ends while held, or with nothing behind its tail, still has waiters to let go.
+      session.adoptCatchUpOffset = null;
+      session.isTailHeld = false;
+      resolveAdoptReplayWaiters(session);
+      return;
+    }
+    if (session.adoptCatchUpOffset === null || session.tail.consumedBytes < session.adoptCatchUpOffset) return;
     session.adoptCatchUpOffset = null;
-    const resolvers = session.adoptCatchUpResolvers.splice(0);
-    for (const resolve of resolvers) resolve();
+    resolveAdoptReplayWaiters(session);
     // A switch the user picked before the reload, whose turn ended meanwhile, applies now that the state is current.
-    if (!isSessionGone) this.applyPendingConfigDirSwitch(session);
+    this.applyPendingConfigDirSwitch(session);
   }
 
   /** Restore a pending question persisted by a previous bot life (see
@@ -1245,6 +1265,11 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
   refreshWorkingState(key: SessionKey): void {
     const session = this.sessions.get(keyToString(key));
     if (!session?.isActive) return;
+    // A held tail is read only from the boot's release on; a caller that decides on the state waits for `whenAdoptReplayed`.
+    if (session.isTailHeld) {
+      console.warn(`[ClaudeJson] ${keyToString(key)}: the working state was asked for before the boot released the adopted session; its output is not read yet`);
+      return;
+    }
     try {
       this.drainStdoutTail(session);
     } catch (e) {

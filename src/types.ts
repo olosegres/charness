@@ -767,11 +767,12 @@ export interface AgentAdapter extends EventEmitter {
   stopSessionAndWait?(key: SessionKey): Promise<void>;
   /**
    * @description Resolves once an ADOPTED session (one that outlived a bot restart) has replayed what its process wrote
-   * while the bot was down — at once for any other session. A prompt forwarded before that would reset the answer and
-   * error state the replayed frames still use. Optional: only the json-stream Claude backend adopts a process and replays.
+   * while the bot was down — it is read only once the boot has restored its state — and at once for any other session. A
+   * prompt forwarded before that would reset the answer and error state the replayed frames still use; an idle fire would
+   * judge the process on the state the restart left. Optional: only the json-stream Claude backend adopts and replays.
    */
   whenAdoptReplayed?(key: SessionKey): Promise<void>;
-  /** Whether an adopted session is still replaying the downtime tail — {@link whenAdoptReplayed} would wait. */
+  /** Whether an adopted session is not read yet or still replaying the downtime tail — {@link whenAdoptReplayed} would wait. */
   checkIsAdoptReplayPending?(key: SessionKey): boolean;
   checkIsActive(key: SessionKey): boolean;
 
@@ -851,8 +852,8 @@ export interface AgentAdapter extends EventEmitter {
 
   /**
    * Bring the in-memory working state up to what the process wrote so far (the json-stream tail is polled with a
-   * backoff). An automatic stop calls it right before its last look. Optional: a backend whose state is current
-   * omits it.
+   * backoff). An automatic stop calls it right before its last look. An adopted session the boot has not released yet is
+   * not read — its caller waits for {@link whenAdoptReplayed} first. Optional: a backend whose state is current omits it.
    */
   refreshWorkingState?(key: SessionKey): void;
 

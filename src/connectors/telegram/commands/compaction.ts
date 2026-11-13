@@ -38,6 +38,7 @@ import { getTelegramTalkerContext } from '../inbound';
 import type { MessageContext } from '../../../utils/messageContext';
 import { getQuestionReplyRoute, type QuestionEnd } from '../../../openCodeQuestionFlow';
 import type { LatePromptOutcome } from '../../../utils/promptDelivery';
+import { waitForAdoptedReplay } from '../../../utils/adoptReplayGate';
 import { getCallbackMessageId, getCallbackMessageText } from './callbackMessage';
 import { answerCallbackWithFittedText } from './callbackToast';
 
@@ -703,6 +704,17 @@ export function createCompaction(ports: CompactionPorts) {
   async function onIdleCompactionTimerFired(key: SessionKey): Promise<void> {
     const kStr = keyToString(key);
     const adapter = getThreadAdapter(key);
+    // A session adopted at this boot is read only once the boot has restored its state, and its live state is rebuilt only
+    // by the replay of what it wrote while the bot was down: decide on that — whether it works, a compaction written to
+    // it, its stop — never on the state the restart left. Output the replay brings arms the countdown again, and then this
+    // fire is no longer the topic's.
+    if (adapter.checkIsAdoptReplayPending?.(key)) {
+      await waitForAdoptedReplay(adapter, key);
+      if (getThreadCompactionState(kStr).idleTimer !== null) {
+        console.log(`[compact-on-idle] ${kStr} the fire gave way: the replay of the downtime armed the countdown again`);
+        return;
+      }
+    }
     // L-D7: a sleeping per-turn session is resumed for its compaction; the stop below puts it back to sleep.
     if (!adapter.checkIsActive(key) && adapter.name === claudePerTurnAdapterName && checkIsCompactionDue(key)) {
       if (!(await resumeSleepingSessionForCompaction(key))) {

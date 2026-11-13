@@ -280,7 +280,10 @@ only once the boot's restore step is done — `releaseAdoptedTails`, the
 `releaseAdoptedSessions` step of `runSessionBootPhase` — because the replay is
 read against what that step restores: read during a slow reattach, a limit error
 that ended a turn before the boot was handled as a live one ahead of the boot
-recovery, and a retry it armed was armed twice; only a turn in
+recovery, and a retry it armed was armed twice. Until then `whenAdoptReplayed`
+waits and `refreshWorkingState` reads nothing; the idle fire waits for the
+replay before it judges, compacts or stops the process (and gives way when the
+replay's output armed the countdown again); only a turn in
 flight at the restart is replayed — a finished one is not; a prompt forwarded
 meanwhile waits for the replay — `forwardPromptToAgent` →
 `utils/adoptReplayGate.ts`, bounded — or it would reset the answer/error state
