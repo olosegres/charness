@@ -541,7 +541,8 @@ test('installed plugin, after a compaction: ONE synthetic part on the compaction
     assert.ok(text, 'the restore is added');
     assert.ok(list[0].parts.some((part) => part.id === 'prt_charness_skills_restore' && part.synthetic === true), 'on the compaction\'s own user message, right before the summary');
     assert.ok(text.startsWith(skillsRestoreHeader));
-    assert.ok(text.includes('- review: its current full text is below (base directory: /x/skills/review)'));
+    assert.ok(text.includes('- review: its current full text is below (skill file: /x/skills/review/SKILL.md)'));
+    assert.ok(text.includes('Base directory for this skill: /x/skills/review\nSkill file: /x/skills/review/SKILL.md\n'), 'the location GET /skill reports, as the skill file');
     assert.ok(text.includes('REVIEW-BODY-MARK'), 'the history\'s skill, whole');
     assert.ok(text.includes('- from-block: not restored here: load it with the skill tool'), 'the history answered: a name only the block holds is no proof of a load');
     assert.ok(!text.includes('BLOCK-ONLY-BODY-MARK') && !text.includes('COMMIT-BODY-MARK'), 'no text for a skill the history does not show');

@@ -62,11 +62,15 @@ test('a compaction: slot 1 prints the header and the list; a skill Claude cuts c
   assert.ok(outputs.slice(printed.length).every((output) => output === null), 'every slot past the last part prints nothing');
   assert.ok(printed.every((part) => part.startsWith(skillsRestoreHeader) && part.length <= skillsRestorePartMaxChars));
   const list = printed[0];
-  assert.ok(list.includes(`- big: its current full text is below (base directory: ${skillDir('big')})`));
-  assert.ok(list.includes(`- small: its current full text is below (base directory: ${skillDir('small')})`), 'the small one too: Claude Code\'s own re-attach is not relied on');
+  assert.ok(list.includes(`- big: its current full text is below (skill file: ${skillDir('big')}/SKILL.md)`));
+  assert.ok(list.includes(`- small: its current full text is below (skill file: ${skillDir('small')}/SKILL.md)`), 'the small one too: Claude Code\'s own re-attach is not relied on');
   const joined = printed.join('\n');
   for (const rule of ['Rule 0: a rule of the big skill.', 'Rule 799: a rule of the big skill.']) assert.ok(joined.includes(rule), rule);
   assert.ok(joined.includes('## Skill: small'), 'the small one is given whole');
+  // The full path of the file each text was read from, right under its base directory.
+  for (const name of ['big', 'small']) {
+    assert.ok(joined.includes(`${claudeSkillBaseDirPrefix}${skillDir(name)}\nSkill file: ${skillDir(name)}/SKILL.md\n`), `${name}: its skill file`);
+  }
 });
 
 test('the bot\'s skills of a process started without them are not available now', () => {

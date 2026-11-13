@@ -139,7 +139,8 @@ same tmux name and host dir per conversation:
 compaction), the todo lists' `PostToolUse` inbox hook and — json-stream and per-turn only, never the frozen tmux backend —
 the skills restore: 24 `SessionStart` hooks with the matcher `compact` (`hooks/claudeSkillsRestoreHook.ts`, run by the
 bot's own `node`, 30 s `timeout` each), each printing one labelled part (≤ 9,500 characters) of the skills the transcript
-shows were loaded since the previous compaction, every one with its current text (`utils/skillsRestore.ts`; Claude's own
+shows were loaded since the previous compaction, every one with its current text read from `<base directory>/SKILL.md`,
+which the part names under the base directory as `Skill file: <path>` (`utils/skillsRestore.ts`; Claude's own
 re-attach is not relied on — a `--resume`d process re-attaches none of the skills an earlier process loaded, measured by the
 live probe on 2.1.323). Measured on 2.1.322: they run after EVERY
 compaction (the CLI's own mid-turn ones too) BEFORE the new boundary and summary reach the transcript, all parts reach the

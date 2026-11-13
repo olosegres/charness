@@ -132,10 +132,10 @@ test('collectClaudeEpochSkills: Claude\'s re-attach of the previous compaction c
 
 test('collectClaudeEpochSkills: the bot\'s previous restore is counted — its list, not the lines of the skill texts after it', () => {
   const entries: SkillsRestoreEntry[] = [
-    { name: 'test-guru', status: 'text', baseDir: getSkillDir('test-guru'), body: '# test-guru\n\n- not-a-skill: a list line inside a skill\n' },
-    { name: 'commit', status: 'inContext', baseDir: getSkillDir('commit'), body: null },
-    { name: 'gone', status: 'unavailable', baseDir: getSkillDir('gone'), body: null },
-    { name: 'no-dir', status: 'loadWithTool', baseDir: null, body: null },
+    { name: 'test-guru', status: 'text', baseDir: getSkillDir('test-guru'), skillFile: `${getSkillDir('test-guru')}/SKILL.md`, body: '# test-guru\n\n- not-a-skill: a list line inside a skill\n' },
+    { name: 'commit', status: 'inContext', baseDir: getSkillDir('commit'), skillFile: `${getSkillDir('commit')}/SKILL.md`, body: null },
+    { name: 'gone', status: 'unavailable', baseDir: getSkillDir('gone'), skillFile: `${getSkillDir('gone')}/SKILL.md`, body: null },
+    { name: 'no-dir', status: 'loadWithTool', baseDir: null, skillFile: null, body: null },
   ];
   const parts = buildClaudeSkillsRestoreParts(entries, skillsRestoreTexts, skillsRestoreSlotCount, skillsRestorePartMaxChars);
   // The hook's texts reach the transcript in the order the hooks finished, so the list's part need not come first.
@@ -150,8 +150,9 @@ test('collectClaudeEpochSkills: the bot\'s previous restore is counted — its l
 
 // ── planClaudeSkillsRestore (the resolver) ──
 
+/** The skill files on "disk", by their full path: the planner reads exactly the path it shows. */
 function createFolders(files: Record<string, string>): SkillFolderReader {
-  return { readSkillFile: (baseDir) => files[`${baseDir}/SKILL.md`] ?? null };
+  return { readSkillFile: (skillFile) => files[skillFile] ?? null };
 }
 
 const frontmatter = '---\nname: x\ndescription: y\n---\n\n';
@@ -171,9 +172,9 @@ test('planClaudeSkillsRestore: every skill on disk comes back with its CURRENT t
     [`${getSkillDir('commit')}/SKILL.md`]: `${frontmatter}${commitBody}`,
   });
   assert.deepEqual(planClaudeSkillsRestore(epoch, folders, null), [
-    { name: 'review', status: 'text', baseDir: getSkillDir('review'), body: reviewBody },
-    { name: 'commit', status: 'text', baseDir: getSkillDir('commit'), body: commitBody },
-    { name: 'gone', status: 'unavailable', baseDir: getSkillDir('gone'), body: null },
+    { name: 'review', status: 'text', baseDir: getSkillDir('review'), skillFile: `${getSkillDir('review')}/SKILL.md`, body: reviewBody },
+    { name: 'commit', status: 'text', baseDir: getSkillDir('commit'), skillFile: `${getSkillDir('commit')}/SKILL.md`, body: commitBody },
+    { name: 'gone', status: 'unavailable', baseDir: getSkillDir('gone'), skillFile: `${getSkillDir('gone')}/SKILL.md`, body: null },
   ]);
 });
 
@@ -204,8 +205,8 @@ test('planClaudeSkillsRestore: skills the previous restore carried come back aga
   };
   const folders = createFolders({ [`${getSkillDir('test-guru')}/SKILL.md`]: `${frontmatter}# test-guru\n` });
   assert.deepEqual(planClaudeSkillsRestore(epoch, folders, null), [
-    { name: 'test-guru', status: 'text', baseDir: getSkillDir('test-guru'), body: '# test-guru\n' },
-    { name: 'mystery', status: 'loadWithTool', baseDir: null, body: null },
+    { name: 'test-guru', status: 'text', baseDir: getSkillDir('test-guru'), skillFile: `${getSkillDir('test-guru')}/SKILL.md`, body: '# test-guru\n' },
+    { name: 'mystery', status: 'loadWithTool', baseDir: null, skillFile: null, body: null },
   ]);
 });
 
@@ -226,18 +227,21 @@ test('stripSkillFrontmatter: the body as the CLI loads it — no frontmatter, no
 
 test('buildSkillsRestoreText (OpenCode, one text): the header, every skill with where its text is, then each restored skill whole', () => {
   const entries: SkillsRestoreEntry[] = [
-    { name: 'review', status: 'text', baseDir: getSkillDir('review'), body: reviewBody },
-    { name: 'commit', status: 'inContext', baseDir: getSkillDir('commit'), body: null },
-    { name: 'gone', status: 'unavailable', baseDir: null, body: null },
-    { name: 'later', status: 'loadWithTool', baseDir: null, body: null },
+    { name: 'review', status: 'text', baseDir: getSkillDir('review'), skillFile: `${getSkillDir('review')}/SKILL.md`, body: reviewBody },
+    { name: 'commit', status: 'inContext', baseDir: getSkillDir('commit'), skillFile: `${getSkillDir('commit')}/SKILL.md`, body: null },
+    { name: 'gone', status: 'unavailable', baseDir: '/x/gone', skillFile: null, body: null },
+    { name: 'later', status: 'loadWithTool', baseDir: null, skillFile: null, body: null },
   ];
   const text = buildSkillsRestoreText(entries, skillsRestoreTexts, 'skill');
   assert.ok(text.startsWith(`${skillsRestoreHeader}\n`));
-  assert.ok(text.includes(`- review: its current full text is below (base directory: ${getSkillDir('review')})`));
-  assert.ok(text.includes(`- commit: its full text is already in your context (base directory: ${getSkillDir('commit')})`));
-  assert.ok(text.includes('- gone: was loaded before but is not available now'));
-  assert.ok(text.includes('- later: not restored here: load it with the skill tool'));
-  assert.ok(text.includes(`## Skill: review\n${claudeSkillBaseDirPrefix}${getSkillDir('review')}\n\n${reviewBody}`), 'the skill whole, with its base directory');
+  assert.ok(text.includes(`- review: its current full text is below (skill file: ${getSkillDir('review')}/SKILL.md)`), 'the list names the skill FILE');
+  assert.ok(text.includes(`- commit: its full text is already in your context (skill file: ${getSkillDir('commit')}/SKILL.md)`));
+  assert.ok(text.includes('- gone: was loaded before but is not available now (base directory: /x/gone)'), 'no file known: the folder');
+  assert.ok(text.includes('- later: not restored here: load it with the skill tool\n') || text.endsWith('- later: not restored here: load it with the skill tool'));
+  assert.ok(
+    text.includes(`## Skill: review\n${claudeSkillBaseDirPrefix}${getSkillDir('review')}\nSkill file: ${getSkillDir('review')}/SKILL.md\n\n${reviewBody}`),
+    `the skill whole, its base directory and right under it the full path of its skill file: ${text}`,
+  );
   assert.ok(!text.includes('## Skill: commit'), 'a skill already in the context is only named');
   assert.ok(!text.includes('(part'), 'one text has no part labels');
 });
@@ -250,8 +254,8 @@ function reassembleParts(parts: readonly string[]): string {
 test('buildClaudeSkillsRestoreParts: every part fits a hook\'s cap, carries its label, and every skill comes back WHOLE — one too long for a part goes on over several', () => {
   const longLines = Array.from({ length: 600 }, (_value, index) => `Rule ${index}: a line of the long skill that keeps the counter ${index}.`);
   const entries: SkillsRestoreEntry[] = [
-    { name: 'test-guru', status: 'text', baseDir: getSkillDir('test-guru'), body: longLines.join('\n') },
-    { name: 'review', status: 'text', baseDir: getSkillDir('review'), body: reviewBody },
+    { name: 'test-guru', status: 'text', baseDir: getSkillDir('test-guru'), skillFile: `${getSkillDir('test-guru')}/SKILL.md`, body: longLines.join('\n') },
+    { name: 'review', status: 'text', baseDir: getSkillDir('review'), skillFile: `${getSkillDir('review')}/SKILL.md`, body: reviewBody },
   ];
   const parts = buildClaudeSkillsRestoreParts(entries, skillsRestoreTexts, skillsRestoreSlotCount, skillsRestorePartMaxChars);
   assert.ok(parts.length > 3, `the long skill needs several parts: ${parts.length}`);
@@ -264,28 +268,30 @@ test('buildClaudeSkillsRestoreParts: every part fits a hook\'s cap, carries its 
   // Every line of the long skill is there, in order, each whole — only the "continued" headings come between parts.
   const withoutContinued = joined.split('\n').filter((line) => !line.startsWith('## Skill: test-guru (continued from part ')).join('\n');
   assert.ok(withoutContinued.includes(longLines.join('\n')), 'the long skill is whole across its parts');
-  assert.ok(joined.includes(`## Skill: review\n${claudeSkillBaseDirPrefix}${getSkillDir('review')}\n\n${reviewBody}`));
+  // Each skill names its skill file right under its base directory; the part caps above count that line too.
+  assert.ok(joined.includes(`## Skill: test-guru\n${claudeSkillBaseDirPrefix}${getSkillDir('test-guru')}\nSkill file: ${getSkillDir('test-guru')}/SKILL.md\n\nRule 0:`));
+  assert.ok(joined.includes(`## Skill: review\n${claudeSkillBaseDirPrefix}${getSkillDir('review')}\nSkill file: ${getSkillDir('review')}/SKILL.md\n\n${reviewBody}`));
   assert.ok(parts.slice(1).every((part) => part.split('\n')[1].startsWith('## Skill: ')), 'a part after the first opens with a skill heading');
 });
 
 test('buildClaudeSkillsRestoreParts: one part needs no label and no note', () => {
-  const parts = buildClaudeSkillsRestoreParts([{ name: 'review', status: 'text', baseDir: getSkillDir('review'), body: reviewBody }], skillsRestoreTexts, skillsRestoreSlotCount, skillsRestorePartMaxChars);
+  const parts = buildClaudeSkillsRestoreParts([{ name: 'review', status: 'text', baseDir: getSkillDir('review'), skillFile: `${getSkillDir('review')}/SKILL.md`, body: reviewBody }], skillsRestoreTexts, skillsRestoreSlotCount, skillsRestorePartMaxChars);
   assert.equal(parts.length, 1);
-  assert.equal(parts[0], buildSkillsRestoreText([{ name: 'review', status: 'text', baseDir: getSkillDir('review'), body: reviewBody }], skillsRestoreTexts, 'Skill'));
+  assert.equal(parts[0], buildSkillsRestoreText([{ name: 'review', status: 'text', baseDir: getSkillDir('review'), skillFile: `${getSkillDir('review')}/SKILL.md`, body: reviewBody }], skillsRestoreTexts, 'Skill'));
 });
 
 test('buildClaudeSkillsRestoreParts: a line too long for a part of its own is cut where the part ends, and nothing of it is lost', () => {
   const hugeLine = 'x'.repeat(skillsRestorePartMaxChars * 2);
-  const parts = buildClaudeSkillsRestoreParts([{ name: 'minified', status: 'text', baseDir: getSkillDir('minified'), body: hugeLine }], skillsRestoreTexts, skillsRestoreSlotCount, skillsRestorePartMaxChars);
+  const parts = buildClaudeSkillsRestoreParts([{ name: 'minified', status: 'text', baseDir: getSkillDir('minified'), skillFile: `${getSkillDir('minified')}/SKILL.md`, body: hugeLine }], skillsRestoreTexts, skillsRestoreSlotCount, skillsRestorePartMaxChars);
   assert.ok(parts.every((part) => part.length <= skillsRestorePartMaxChars));
   const joined = reassembleParts(parts);
-  const section = joined.slice(joined.indexOf(`${claudeSkillBaseDirPrefix}${getSkillDir('minified')}\n\n`)).split('\n\n')[1];
+  const section = joined.slice(joined.indexOf(`${claudeSkillBaseDirPrefix}${getSkillDir('minified')}\nSkill file: ${getSkillDir('minified')}/SKILL.md\n\n`)).split('\n\n')[1];
   assert.equal(section.replace(/\n## Skill: minified \(continued from part \d+\)\n/g, ''), hugeLine);
 });
 
 test('buildClaudeSkillsRestoreParts: a skill that no longer fits the slots gets the load line — the newer skills keep their text', () => {
   const partBody = (seed: string): string => Array.from({ length: 120 }, (_value, index) => `${seed} line ${index} of a skill that fills about a part.`).join('\n');
-  const entries: SkillsRestoreEntry[] = ['newest', 'middle', 'oldest'].map((name) => ({ name, status: 'text', baseDir: getSkillDir(name), body: partBody(name) }));
+  const entries: SkillsRestoreEntry[] = ['newest', 'middle', 'oldest'].map((name) => ({ name, status: 'text', baseDir: getSkillDir(name), skillFile: `${getSkillDir(name)}/SKILL.md`, body: partBody(name) }));
   const slotCount = 2;
   const parts = buildClaudeSkillsRestoreParts(entries, skillsRestoreTexts, slotCount, skillsRestorePartMaxChars);
   assert.ok(parts.length <= slotCount);
@@ -295,10 +301,21 @@ test('buildClaudeSkillsRestoreParts: a skill that no longer fits the slots gets 
   assert.ok(!joined.includes('## Skill: oldest'));
 });
 
+test('parseSkillsRestoreList: an earlier restore in either wording — the skill file (current) or the base directory (before it) — gives the folder back', () => {
+  const restoreOf = (lines: readonly string[]): string => [skillsRestoreHeader, 'intro', '', skillsRestoreTexts.listHeading, ...lines, ''].join('\n');
+  assert.deepEqual(parseSkillsRestoreList([restoreOf(['- a: its current full text is below (skill file: /x/a/SKILL.md)', '- b: was loaded before but is not available now (base directory: /x/b)', '- c: not restored here: load it with the Skill tool'])]), [
+    { name: 'a', baseDir: '/x/a' },
+    { name: 'b', baseDir: '/x/b' },
+    { name: 'c', baseDir: null },
+  ]);
+  // A restore written before the skill file was named: the base directory only.
+  assert.deepEqual(parseSkillsRestoreList([restoreOf(['- old: its current full text is below (base directory: /home/user/project/.claude/skills/old)'])]), [{ name: 'old', baseDir: '/home/user/project/.claude/skills/old' }]);
+});
+
 test('parseSkillsRestoreList: reads the names back from the parts in any order, never from a skill\'s own text', () => {
   const entries: SkillsRestoreEntry[] = [
-    { name: 'a', status: 'text', baseDir: '/x/a', body: '- b: looks like a list line\n' },
-    { name: 'c', status: 'inContext', baseDir: '/x/c', body: null },
+    { name: 'a', status: 'text', baseDir: '/x/a', skillFile: '/x/a/SKILL.md', body: '- b: looks like a list line\n' },
+    { name: 'c', status: 'inContext', baseDir: '/x/c', skillFile: '/x/c/SKILL.md', body: null },
   ];
   const parts = buildClaudeSkillsRestoreParts(entries, skillsRestoreTexts, skillsRestoreSlotCount, skillsRestorePartMaxChars);
   assert.deepEqual(parseSkillsRestoreList([...parts].reverse()), [{ name: 'a', baseDir: '/x/a' }, { name: 'c', baseDir: '/x/c' }]);
@@ -343,13 +360,13 @@ test('planOpenCodeSkillsRestore: the server\'s CURRENT text; a skill already aft
     available: offeredSkills,
   };
   assert.deepEqual(planOpenCodeSkillsRestore({ ...input, isHistoryKnown: true }), [
-    { name: 'review', status: 'text', baseDir: '/x/review', body: reviewBody },
-    { name: 'commit', status: 'inContext', baseDir: '/x/commit', body: null },
-    { name: 'gone', status: 'unavailable', baseDir: '/x/gone', body: null },
-    { name: 'from-block', status: 'loadWithTool', baseDir: '/x/from-block', body: null },
+    { name: 'review', status: 'text', baseDir: '/x/review', skillFile: '/x/review/SKILL.md', body: reviewBody },
+    { name: 'commit', status: 'inContext', baseDir: '/x/commit', skillFile: '/x/commit/SKILL.md', body: null },
+    { name: 'gone', status: 'unavailable', baseDir: '/x/gone', skillFile: null, body: null },
+    { name: 'from-block', status: 'loadWithTool', baseDir: '/x/from-block', skillFile: '/x/from-block/SKILL.md', body: null },
   ]);
   // Without the history the block is the best record there is: its names come back whole.
-  assert.deepEqual(planOpenCodeSkillsRestore({ ...input, isHistoryKnown: false }).at(-1), { name: 'from-block', status: 'text', baseDir: '/x/from-block', body: '# from block\n' });
+  assert.deepEqual(planOpenCodeSkillsRestore({ ...input, isHistoryKnown: false }).at(-1), { name: 'from-block', status: 'text', baseDir: '/x/from-block', skillFile: '/x/from-block/SKILL.md', body: '# from block\n' });
 });
 
 test('planOpenCodeSkillsRestore: no answer from the server — every skill not in the context gets the load line; nothing loaded → nothing', () => {

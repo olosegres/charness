@@ -32,8 +32,13 @@ export type SkillsRestoreStatus = 'text' | 'inContext' | 'unavailable' | 'loadWi
 export interface SkillsRestoreEntry {
   name: string;
   status: SkillsRestoreStatus;
-  /** The folder of its `SKILL.md`, when known. */
+  /** The folder of its `SKILL.md`, when known: relative paths in the skill resolve from it. */
   baseDir: string | null;
+  /**
+   * The full path of the `SKILL.md` its text is read from, when known (Claude: `<baseDir>/SKILL.md`; OpenCode: the location
+   * the server reports) — the file an agent told to change the skill must edit.
+   */
+  skillFile: string | null;
   /** The skill's current text (frontmatter stripped), for {@link SkillsRestoreStatus} `text` only. */
   body: string | null;
 }
@@ -52,15 +57,20 @@ export interface SkillsRestoreTexts {
   listHeading: string;
   listContinuedHeading: string;
   statuses: Record<SkillsRestoreStatus, string>;
+  /** After a list line whose skill file is known. */
+  skillFileSuffix: string;
+  /** After a list line that knows only the folder (and in the restores written before the skill file was named). */
   baseDirSuffix: string;
   sectionHeading: string;
   sectionContinued: string;
   baseDirLine: string;
+  skillFileLine: string;
 }
 
 /**
- * The words of the restore. `{tool}` is the backend's skill tool (`Skill` / `skill`), `{dir}` a base directory, `{name}` a
- * skill, `{i}` / `{n}` a part's number and the count, `{previous}` the part a long skill continues from.
+ * The words of the restore. `{tool}` is the backend's skill tool (`Skill` / `skill`), `{dir}` a base directory, `{file}` the
+ * full path of a skill's `SKILL.md`, `{name}` a skill, `{i}` / `{n}` a part's number and the count, `{previous}` the part a
+ * long skill continues from.
  */
 export const skillsRestoreTexts: SkillsRestoreTexts = {
   header: skillsRestoreHeader,
@@ -75,11 +85,16 @@ export const skillsRestoreTexts: SkillsRestoreTexts = {
     unavailable: 'was loaded before but is not available now',
     loadWithTool: 'not restored here: load it with the {tool} tool',
   },
+  skillFileSuffix: ' (skill file: {file})',
   baseDirSuffix: ' (base directory: {dir})',
   sectionHeading: '## Skill: {name}',
   sectionContinued: '## Skill: {name} (continued from part {previous})',
   baseDirLine: 'Base directory for this skill: {dir}',
+  skillFileLine: 'Skill file: {file}',
 };
+
+/** The file a Claude skill's text is in, inside its base directory. */
+export const claudeSkillFileName = 'SKILL.md';
 
 /** The name of the skill tool of each backend, as the restore tells the agent to use it. */
 export const claudeSkillToolName = 'Skill';
@@ -87,13 +102,16 @@ export const openCodeSkillToolName = 'skill';
 
 /**
  * @description The lines of the restore's list — the intro and every skill with where its text is — before any skill text.
- * Self-contained (it reads nothing outside its parameters): the OpenCode plugin embeds its source.
+ * A skill's line ends with its skill file when known (the file to edit), else with its folder. Self-contained (it reads
+ * nothing outside its parameters): the OpenCode plugin embeds its source.
  */
 export function renderSkillsRestoreList(entries: readonly SkillsRestoreEntry[], texts: SkillsRestoreTexts, toolName: string): string[] {
   const lines = [texts.intro.split('{tool}').join(toolName), '', texts.listHeading];
   for (const entry of entries) {
     const status = texts.statuses[entry.status].split('{tool}').join(toolName);
-    const suffix = entry.baseDir === null ? '' : texts.baseDirSuffix.split('{dir}').join(entry.baseDir);
+    let suffix = '';
+    if (entry.skillFile !== null) suffix = texts.skillFileSuffix.split('{file}').join(entry.skillFile);
+    else if (entry.baseDir !== null) suffix = texts.baseDirSuffix.split('{dir}').join(entry.baseDir);
     lines.push(`- ${entry.name}: ${status}${suffix}`);
   }
   return lines;
@@ -101,11 +119,13 @@ export function renderSkillsRestoreList(entries: readonly SkillsRestoreEntry[], 
 
 /**
  * @description The lines of one restored skill: its heading, its base directory (the line Claude's own skill message opens
- * with, so relative paths in the skill resolve as they did) and its text. Self-contained, as {@link renderSkillsRestoreList}.
+ * with, so relative paths in the skill resolve as they did), right under it the full path of its skill file (so an agent told
+ * to change the skill edits the right file), and its text. Self-contained, as {@link renderSkillsRestoreList}.
  */
 export function renderSkillsRestoreSection(entry: SkillsRestoreEntry, texts: SkillsRestoreTexts): string[] {
   const lines = [texts.sectionHeading.split('{name}').join(entry.name)];
   if (entry.baseDir !== null) lines.push(texts.baseDirLine.split('{dir}').join(entry.baseDir));
+  if (entry.skillFile !== null) lines.push(texts.skillFileLine.split('{file}').join(entry.skillFile));
   lines.push('');
   return lines.concat((entry.body ?? '').split('\n'));
 }
@@ -304,14 +324,26 @@ function normalizeSkillName(name: string): string {
 }
 
 /**
+ * @description The path a list line's suffix holds — `suffix` is the line's wording with `placeholder` where the path goes
+ * — or `null` when the line ends otherwise.
+ */
+function readListLineSuffix(line: string, nameEnd: number, suffix: string, placeholder: string): string | null {
+  const [before, after] = suffix.split(placeholder);
+  const suffixAt = line.lastIndexOf(before);
+  if (suffixAt <= nameEnd || !line.endsWith(after)) return null;
+  const value = line.slice(suffixAt + before.length, line.length - after.length);
+  return value === '' ? null : value;
+}
+
+/**
  * @description The skills named by the list of a restore the bot wrote earlier ({@link renderSkillsRestoreList}), from the
  * texts the hook gave (`hook_additional_context`): every `- <name>: …` line under the list's heading, with its base directory
- * when the line gives one. Lines of a skill's text never count — they come after the list. `[]` for texts that hold no
- * restore of ours.
+ * when the line gives one — the folder of its skill file (the current wording), or the folder itself (the wording of the
+ * restores written before the skill file was named). Lines of a skill's text never count — they come after the list. `[]`
+ * for texts that hold no restore of ours.
  */
 export function parseSkillsRestoreList(contextTexts: readonly string[], texts: SkillsRestoreTexts = skillsRestoreTexts): RestoredSkillMention[] {
   const mentions: RestoredSkillMention[] = [];
-  const suffixParts = texts.baseDirSuffix.split('{dir}');
   for (const contextText of contextTexts) {
     if (!contextText.startsWith(texts.header)) continue;
     const lines = contextText.split('\n');
@@ -330,9 +362,9 @@ export function parseSkillsRestoreList(contextTexts: readonly string[], texts: S
       if (nameEnd < 0) continue;
       const name = line.slice(2, nameEnd);
       if (name === '' || /\s/.test(name) || mentions.some((mention) => mention.name === name)) continue;
-      const suffixAt = line.lastIndexOf(suffixParts[0]);
-      const baseDir = suffixAt > nameEnd && line.endsWith(suffixParts[1]) ? line.slice(suffixAt + suffixParts[0].length, line.length - suffixParts[1].length) : null;
-      mentions.push({ name, baseDir: baseDir === '' ? null : baseDir });
+      const skillFile = readListLineSuffix(line, nameEnd, texts.skillFileSuffix, '{file}');
+      const baseDir = skillFile === null ? readListLineSuffix(line, nameEnd, texts.baseDirSuffix, '{dir}') : path.dirname(skillFile);
+      mentions.push({ name, baseDir });
     }
   }
   return mentions;
@@ -428,10 +460,10 @@ export function stripSkillFrontmatter(fileText: string): string {
   return afterClosing < 0 ? '' : text.slice(afterClosing + 1).replace(/^\n+/, '');
 }
 
-/** What the hook can learn about a skill's folder now. */
+/** How the hook reads a skill's file now. */
 export interface SkillFolderReader {
-  /** The `SKILL.md` of `baseDir`, or `null` when it is gone or unreadable. */
-  readSkillFile(baseDir: string): string | null;
+  /** The text of the skill file at `skillFile` (a full path), or `null` when it is gone or unreadable. */
+  readSkillFile(skillFile: string): string | null;
 }
 
 /**
@@ -458,11 +490,13 @@ export function planClaudeSkillsRestore(epoch: ClaudeEpochSkills, folders: Skill
   }
   return candidates.map((candidate): SkillsRestoreEntry => {
     const { name, baseDir } = candidate;
-    if (baseDir === null) return { name, status: 'loadWithTool', baseDir: null, body: null };
+    if (baseDir === null) return { name, status: 'loadWithTool', baseDir: null, skillFile: null, body: null };
+    // The text below is read from exactly the file the restore names.
+    const skillFile = path.join(baseDir, claudeSkillFileName);
     const isInUnavailableDir = unavailableDir !== null && (baseDir === unavailableDir || baseDir.startsWith(`${unavailableDir}${path.sep}`));
-    const fileText = isInUnavailableDir ? null : folders.readSkillFile(baseDir);
-    if (fileText === null) return { name, status: 'unavailable', baseDir, body: null };
-    return { name, status: 'text', baseDir, body: stripSkillFrontmatter(fileText) };
+    const fileText = isInUnavailableDir ? null : folders.readSkillFile(skillFile);
+    if (fileText === null) return { name, status: 'unavailable', baseDir, skillFile, body: null };
+    return { name, status: 'text', baseDir, skillFile, body: stripSkillFrontmatter(fileText) };
   });
 }
 
@@ -481,7 +515,7 @@ export interface OpenCodeRestoreMessage {
   parts?: OpenCodeRestorePart[];
 }
 
-/** A skill the OpenCode server offers now (`GET /skill`): its name, the path of its `SKILL.md`, its body. */
+/** A skill the OpenCode server offers now (`GET /skill`): its name, the full path of its `SKILL.md`, its body. */
 export interface OpenCodeAvailableSkill {
   name: string;
   location: string;
@@ -543,12 +577,15 @@ export function planOpenCodeSkillsRestore(input: {
   }
   return mentions.map((mention): SkillsRestoreEntry => {
     const offered = input.available === null ? undefined : input.available.find((skill) => skill.name === mention.name);
-    const offeredDir = offered === undefined ? null : offered.location.slice(0, Math.max(offered.location.lastIndexOf('/'), 0)) || null;
+    // The skill file is the one the server reads the skill from: only a skill it offers now has one.
+    const skillFile = offered === undefined || offered.location === '' ? null : offered.location;
+    const offeredDir = skillFile === null ? null : skillFile.slice(0, Math.max(skillFile.lastIndexOf('/'), 0)) || null;
     const baseDir = offeredDir ?? mention.baseDir;
-    if (input.inContextNames.includes(mention.name)) return { name: mention.name, status: 'inContext', baseDir, body: null };
-    if (input.available === null) return { name: mention.name, status: 'loadWithTool', baseDir, body: null };
-    if (offered === undefined) return { name: mention.name, status: 'unavailable', baseDir, body: null };
-    if (input.isHistoryKnown && blockOnlyNames.includes(mention.name)) return { name: mention.name, status: 'loadWithTool', baseDir, body: null };
-    return { name: mention.name, status: 'text', baseDir, body: offered.content };
+    const located = { name: mention.name, baseDir, skillFile };
+    if (input.inContextNames.includes(mention.name)) return { ...located, status: 'inContext', body: null };
+    if (input.available === null) return { ...located, status: 'loadWithTool', body: null };
+    if (offered === undefined) return { ...located, status: 'unavailable', body: null };
+    if (input.isHistoryKnown && blockOnlyNames.includes(mention.name)) return { ...located, status: 'loadWithTool', body: null };
+    return { ...located, status: 'text', body: offered.content };
   });
 }

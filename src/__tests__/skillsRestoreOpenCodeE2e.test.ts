@@ -170,7 +170,9 @@ function assertReviewRestored(request: FakeOpenCodeModelRequest, description: st
   assert.ok(text, `${description}: the restore is in the request`);
   assert.equal(request.providerRestoreText, text, `${description}: and the provider got it as it is`);
   assert.ok(text.startsWith(skillsRestoreHeader), description);
-  assert.ok(text.includes(`- ${reviewSkillName}: its current full text is below (base directory: ${getSkillDir(reviewSkillName)})`), `${description}: listed as restored`);
+  const skillFile = path.join(getSkillDir(reviewSkillName), 'SKILL.md');
+  assert.ok(text.includes(`- ${reviewSkillName}: its current full text is below (skill file: ${skillFile})`), `${description}: listed as restored, with its skill file`);
+  assert.ok(text.includes(`${claudeSkillBaseDirPrefix}${getSkillDir(reviewSkillName)}\nSkill file: ${skillFile}\n`), `${description}: the skill file the server reports, right under the base directory`);
   assert.ok(text.includes(`${claudeSkillBaseDirPrefix}${getSkillDir(reviewSkillName)}`) && text.includes(reviewBodyMarker), `${description}: the skill whole`);
   return text;
 }

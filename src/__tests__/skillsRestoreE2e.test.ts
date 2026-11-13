@@ -49,7 +49,7 @@ import {
   exitOnSignal,
   getFlowDeadlineMs,
   getFreeFixedPort,
-  getFreePort,
+  getUnservedPort,
   IsolatedCharness,
   listTmuxSessions,
   readJsonLines,
@@ -117,6 +117,11 @@ function getSkillDir(name: string): string {
   return path.join(getLayout().workRoot, projectFolder, '.claude', 'skills', name);
 }
 
+/** The full path of a skill's `SKILL.md`: what the restore names. */
+function getSkillFile(name: string): string {
+  return path.join(getSkillDir(name), 'SKILL.md');
+}
+
 function writeSkill(name: string, body: string): void {
   fs.mkdirSync(getSkillDir(name), { recursive: true });
   fs.writeFileSync(path.join(getSkillDir(name), 'SKILL.md'), `---\nname: ${name}\ndescription: A skill of the restore flow.\n---\n\n${body}`);
@@ -163,8 +168,11 @@ function assertRestored(contexts: readonly string[], description: string): void 
   assert.ok(contexts.length > 1, `${description}: the big skill takes several parts (${contexts.length})`);
   assert.ok(contexts.every((context) => context.startsWith(skillsRestoreHeader) && context.length <= skillsRestorePartMaxChars), `${description}: every part is labelled and fits a hook's cap`);
   const joined = contexts.join('\n');
-  assert.ok(joined.includes(`- ${bigSkillName}: its current full text is below (base directory: ${getSkillDir(bigSkillName)})`), `${description}: the big skill is listed as restored`);
-  assert.ok(joined.includes(`- ${smallSkillName}: its current full text is below (base directory: ${getSkillDir(smallSkillName)})`), `${description}: the small one too`);
+  assert.ok(joined.includes(`- ${bigSkillName}: its current full text is below (skill file: ${getSkillFile(bigSkillName)})`), `${description}: the big skill is listed as restored, with its skill file`);
+  assert.ok(joined.includes(`- ${smallSkillName}: its current full text is below (skill file: ${getSkillFile(smallSkillName)})`), `${description}: the small one too`);
+  for (const name of [bigSkillName, smallSkillName]) {
+    assert.ok(joined.includes(`${claudeSkillBaseDirPrefix}${getSkillDir(name)}\nSkill file: ${getSkillFile(name)}\n`), `${description}: ${name} names the full path of its skill file`);
+  }
   for (const marker of [bigSkillHeadMarker, 'Rule 450: follow the big skill', bigSkillTailMarker]) assert.ok(joined.includes(marker), `${description}: the big skill comes back whole (${marker})`);
   assert.ok(joined.includes(`${claudeSkillBaseDirPrefix}${getSkillDir(bigSkillName)}`), `${description}: with its base directory`);
   assert.ok(joined.includes(smallSkillMarker), `${description}: the small skill's text is given`);
@@ -227,7 +235,7 @@ describe('The skills restore after a compaction (Claude json-stream and per-turn
       TMUX_TMPDIR: layout.tmuxTmpDir,
       CLAUDE_BIN: writeFakeClaudeLauncher(layout, null),
       // A free port nothing listens on: the boot's OpenCode pre-start finds no server and no binary, and gives up.
-      OPENCODE_URL: `http://127.0.0.1:${await getFreePort()}`,
+      OPENCODE_URL: `http://127.0.0.1:${await getUnservedPort()}`,
       SCHEDULER_MCP_PORT: (await getFreeFixedPort()).toString(),
       ...getTelegramFlowTestTimingsEnv(),
     });
@@ -317,7 +325,7 @@ describe('The skills restore after a compaction (Claude json-stream and per-turn
     const recordsBefore = listRestoreContexts().length;
     await runAgentTurn('SR-7', '[fake:overflow] go on');
     const joined = getRestoreContextAfter(recordsBefore, 'continuation').contexts.join('\n');
-    assert.ok(joined.includes(`- ${smallSkillName}: was loaded before but is not available now (base directory: ${getSkillDir(smallSkillName)})`), 'the gone skill is named as not available');
+    assert.ok(joined.includes(`- ${smallSkillName}: was loaded before but is not available now (skill file: ${getSkillFile(smallSkillName)})`), 'the gone skill is named as not available, with the file it was read from');
     assert.ok(!joined.includes(smallSkillMarker));
     assert.ok(joined.includes(bigSkillHeadMarker) && joined.includes(bigSkillTailMarker), 'the big skill still comes back whole');
   });

@@ -204,6 +204,10 @@ describe('the skills restore against the real Claude Code CLI (live)', { skip: s
 
       const restore = readRestoreTexts(readTranscriptRecords(getSessionId(session)));
       assert.ok(restore.includes(project.bigTail) && restore.includes(project.smallTail), 'the transcript keeps the restore with both skills whole — a resumed process sends it again');
+      for (const skillName of ['live-small', 'live-big']) {
+        const skillFile = path.join(project.workDir, '.claude', 'skills', skillName, 'SKILL.md');
+        assert.ok(restore.includes(`Skill file: ${skillFile}\n`), `${skillName}: the restore names the full path of its skill file`);
+      }
 
       const carryingFrames = session.frames.filter((frame) => JSON.stringify(frame).includes(skillsRestoreHeader));
       assert.ok(carryingFrames.length > 0, 'the CLI streams the hooks\' output (hook_response frames)');

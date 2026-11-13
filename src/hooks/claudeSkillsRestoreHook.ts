@@ -16,7 +16,6 @@
  */
 
 import fs from 'fs';
-import path from 'path';
 import { readClaudeTranscriptEpochLines } from '../utils/claudeTranscriptEpoch';
 import { checkIsRecord } from '../utils/checkIsRecord';
 import {
@@ -30,7 +29,6 @@ import {
 
 /** The `SessionStart` source of a compaction. */
 const compactSource = 'compact';
-const skillFileName = 'SKILL.md';
 
 /** The hook's command line: its slot (1-based), the slot count of the launch, and the folder of skills it cannot load. */
 interface SkillsRestoreHookArguments {
@@ -48,10 +46,10 @@ function readHookArguments(argv: readonly string[]): SkillsRestoreHookArguments 
   return { slot, slotCount, unavailableSkillsDir: unavailableSkillsDir === undefined || unavailableSkillsDir === '' ? null : unavailableSkillsDir };
 }
 
-/** @description The `SKILL.md` of a folder, `null` when it is gone or unreadable. */
-function readSkillFile(baseDir: string): string | null {
+/** @description The text of a skill file (its full path), `null` when it is gone or unreadable. */
+function readSkillFile(skillFile: string): string | null {
   try {
-    return fs.readFileSync(path.join(baseDir, skillFileName), 'utf8');
+    return fs.readFileSync(skillFile, 'utf8');
   } catch {
     return null;
   }
