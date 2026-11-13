@@ -16,6 +16,12 @@ import { defaultSchedulerMcpPort, type SchedulerMcpHandle } from './mcpSurface';
  * The heals stay AFTER reattach: they walk only ACTIVE sessions, so run before
  * it they would heal nothing. The schedule re-arm stays after reattach too — a
  * catch-up fire needs the re-attached adapters.
+ *
+ * An adopted session's output is read only once the restore step is done: what
+ * its process wrote while the bot was down replays through the live handlers,
+ * which read it against the state that step brings back (an armed retry, the
+ * parked limit episode the boot recovery takes over). Read during the reattach,
+ * a limit error that ended a turn before the boot was handled as a live one.
  */
 
 /**
@@ -76,7 +82,9 @@ export async function startSchedulerMcpForBoot(deps: SchedulerMcpBootDeps): Prom
  * @description The boot steps whose relative order {@link runSessionBootPhase}
  * owns. `restoreAfterReattach` is the per-thread state that needs to know which
  * sessions came back (pending questions, armed retries, limit episodes, orphaned
- * status frames); `onSessionsRestored` opens the gate the session-reading MCP
+ * status frames); `releaseAdoptedSessions` then starts reading the adopted
+ * sessions' output — also when the restore throws, or they would never be read;
+ * `onSessionsRestored` opens the gate the session-reading MCP
  * tools wait on (the server already serves, a surviving session may call in);
  * `healActiveSessions` runs only when the server is up and is best-effort — a
  * throw is logged and never aborts the boot.
@@ -85,6 +93,7 @@ export interface SessionBootPhaseSteps {
   startBotMcp: () => Promise<boolean>;
   reattachSessions: () => Promise<void>;
   restoreAfterReattach: () => void;
+  releaseAdoptedSessions: () => void;
   onSessionsRestored: () => void;
   healActiveSessions: () => void;
   rearmSchedules: () => Promise<void>;
@@ -97,7 +106,11 @@ export interface SessionBootPhaseSteps {
 export async function runSessionBootPhase(steps: SessionBootPhaseSteps): Promise<boolean> {
   const isBotMcpStarted = await steps.startBotMcp();
   await steps.reattachSessions();
-  steps.restoreAfterReattach();
+  try {
+    steps.restoreAfterReattach();
+  } finally {
+    steps.releaseAdoptedSessions();
+  }
   steps.onSessionsRestored();
   if (isBotMcpStarted) {
     try {

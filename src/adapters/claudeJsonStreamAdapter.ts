@@ -371,6 +371,12 @@ export interface StreamSession {
   adoptCatchUpOffset: number | null;
   /** Waiters of {@link ClaudeJsonStreamAdapter.whenAdoptReplayed}, settled when the catch-up offset is reached or the session ends. */
   adoptCatchUpResolvers: Array<() => void>;
+  /**
+   * An ADOPTED session whose stdout is not read yet: the boot has not restored what its replayed frames are read against
+   * (armed retries, the limit episode the boot recovery owns, pending questions). No poll is armed until
+   * {@link ClaudeJsonStreamAdapter.releaseAdoptedTails}; `false` for a spawned session.
+   */
+  isTailHeld: boolean;
 }
 
 /**
@@ -672,7 +678,7 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
       lastWatermarkOffset: -1,
       backgroundTasks: new Map(), notificationTurnPendingSince: null, lastTurnEndedAt: Date.now(), isCompactionResultPending: false, scheduledJobs: new Map(),
       claudeCodeVersion: null, applyingChunk: null,
-      adoptCatchUpOffset: null, adoptCatchUpResolvers: [],
+      adoptCatchUpOffset: null, adoptCatchUpResolvers: [], isTailHeld: false,
     };
     this.sessions.set(keyToString(key), session);
     // A fresh spawn starts a fresh stdout file — reset the persisted tail offset
@@ -704,7 +710,8 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
   /** Arm the next tail poll (single-flight `setTimeout` chain, mirroring the
    *  scrape backend's `schedulePoll` — never overlapping ticks). */
   private schedulePoll(session: StreamSession, delayMs: number): void {
-    if (!session.isActive) return;
+    // A held tail is read only from its release: a stdin write (the snap) must not start the replay early either.
+    if (!session.isActive || session.isTailHeld) return;
     if (session.pollTimer) clearTimeout(session.pollTimer);
     session.pollDelayMs = delayMs;
     session.pollTimer = setTimeout(() => {
@@ -932,7 +939,9 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
    * adopt). An unknown / foreign-session offset seeds to the CURRENT EOF (no
    * backlog flood — the first-migration case). No initialize handshake — the
    * surviving process completed it at spawn; a pending question is restored
-   * from the sidecar so its buttons stay answerable. Returns `false` — after
+   * from the sidecar so its buttons stay answerable. The tail is NOT read yet:
+   * it waits for {@link releaseAdoptedTails}, which the boot calls once it has
+   * restored the state the replay is read against. Returns `false` — after
    * killing the leftovers — when the process is dead (exitcode present / pid
    * gone / FIFO unheld): the caller falls back to the dead-process `--resume`
    * reopen.
@@ -1018,6 +1027,8 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
       claudeCodeVersion, applyingChunk: null,
       // Nothing to catch up on when the tail already sits at EOF.
       adoptCatchUpOffset: startOffset < size ? size : null, adoptCatchUpResolvers: [],
+      // Read from `releaseAdoptedTails` on: the boot restores its state first.
+      isTailHeld: true,
     };
     if (session.pendingQuestion) {
       // The external process is still blocked on this question — busy, and the
@@ -1026,9 +1037,23 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
       session.questionToolUseIds.add(session.pendingQuestion.toolUseId);
     }
     this.sessions.set(k, session);
-    this.schedulePoll(session, basePollIntervalMs);
     this.emit('started', key);
     return true;
+  }
+
+  /**
+   * @description Start reading the stdout of every session adopted since the last release — the boot calls it once its
+   * restore step is done (`runSessionBootPhase`). An adopted tail replays what the process wrote while the bot was down,
+   * and the bot reads those frames against state the boot restores AFTER the adopts: a limit error read before the boot
+   * recovery had armed that episode was handled as a live one (a «usage limit» notice for a window already over), and a
+   * retry it armed was armed a second time by the restore. The first read comes `firstReadDelayMs` after the release.
+   */
+  releaseAdoptedTails(firstReadDelayMs: number = basePollIntervalMs): void {
+    for (const session of this.sessions.values()) {
+      if (!session.isTailHeld) continue;
+      session.isTailHeld = false;
+      this.schedulePoll(session, firstReadDelayMs);
+    }
   }
 
   /** Whether an adopted session's tail still has downtime frames to replay — {@link whenAdoptReplayed} would wait. */

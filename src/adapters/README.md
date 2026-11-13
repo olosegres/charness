@@ -275,7 +275,12 @@ restarts — every hot reload — never touch it. Per-thread host dir
 
 On boot, reattach ADOPTS a live `cjson-*` session (reopen fifo + resume the
 tail from the persisted offset → the downtime gap replays through the normal
-pipeline, in-flight turn delivered end-to-end, no recap posted; only a turn in
+pipeline, in-flight turn delivered end-to-end, no recap posted; the tail is read
+only once the boot's restore step is done — `releaseAdoptedTails`, the
+`releaseAdoptedSessions` step of `runSessionBootPhase` — because the replay is
+read against what that step restores: read during a slow reattach, a limit error
+that ended a turn before the boot was handled as a live one ahead of the boot
+recovery, and a retry it armed was armed twice; only a turn in
 flight at the restart is replayed — a finished one is not; a prompt forwarded
 meanwhile waits for the replay — `forwardPromptToAgent` →
 `utils/adoptReplayGate.ts`, bounded — or it would reset the answer/error state

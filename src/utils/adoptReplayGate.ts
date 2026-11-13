@@ -2,9 +2,10 @@ import { keyToString, type SessionKey } from '../sessionKey';
 import type { AgentAdapter } from '../types';
 
 /**
- * How long a forward waits for an adopted session's replay before it goes out anyway. The first poll after an adopt
- * comes in 300 ms and reads the whole downtime tail at once; this only bounds a tail that cannot be read, so a prompt is
- * never held for good behind a session that never settles.
+ * How long a forward waits for an adopted session's replay before it goes out anyway. The first read of an adopted
+ * session comes 300 ms after the boot releases it (once its restore step is done) and reads the whole downtime tail at
+ * once; this only bounds a tail that cannot be read, so a prompt is never held for good behind a session that never
+ * settles.
  */
 export const adoptReplayGateMaxWaitMs = 30_000;
 

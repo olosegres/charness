@@ -139,6 +139,7 @@ describe('runSessionBootPhase', () => {
         spawnedEntry = await getSpawnedBotMcpEntry(reattachedKey);
       },
       restoreAfterReattach: () => {},
+      releaseAdoptedSessions: () => {},
       onSessionsRestored: () => {},
       healActiveSessions: () => {},
       rearmSchedules: async () => {},
@@ -161,12 +162,13 @@ describe('runSessionBootPhase', () => {
     }
   });
 
-  it('heals after reattach when the server is up, and re-arms schedules last', async () => {
+  it('heals after reattach when the server is up, the adopted sessions are read only after the restore, and schedules are re-armed last', async () => {
     const order: string[] = [];
     const isStarted = await runSessionBootPhase({
       startBotMcp: async () => { order.push('startBotMcp'); return true; },
       reattachSessions: async () => { order.push('reattachSessions'); },
       restoreAfterReattach: () => { order.push('restoreAfterReattach'); },
+      releaseAdoptedSessions: () => { order.push('releaseAdoptedSessions'); },
       onSessionsRestored: () => { order.push('onSessionsRestored'); },
       healActiveSessions: () => { order.push('healActiveSessions'); },
       rearmSchedules: async () => { order.push('rearmSchedules'); },
@@ -176,6 +178,7 @@ describe('runSessionBootPhase', () => {
       'startBotMcp',
       'reattachSessions',
       'restoreAfterReattach',
+      'releaseAdoptedSessions',
       'onSessionsRestored',
       'healActiveSessions',
       'rearmSchedules',
@@ -188,12 +191,27 @@ describe('runSessionBootPhase', () => {
       startBotMcp: async () => { order.push('startBotMcp'); return false; },
       reattachSessions: async () => { order.push('reattachSessions'); },
       restoreAfterReattach: () => { order.push('restoreAfterReattach'); },
+      releaseAdoptedSessions: () => { order.push('releaseAdoptedSessions'); },
       onSessionsRestored: () => { order.push('onSessionsRestored'); },
       healActiveSessions: () => { order.push('healActiveSessions'); },
       rearmSchedules: async () => { order.push('rearmSchedules'); },
     });
     assert.equal(isStarted, false);
-    assert.deepEqual(order, ['startBotMcp', 'reattachSessions', 'restoreAfterReattach', 'onSessionsRestored', 'rearmSchedules']);
+    assert.deepEqual(order, ['startBotMcp', 'reattachSessions', 'restoreAfterReattach', 'releaseAdoptedSessions', 'onSessionsRestored', 'rearmSchedules']);
+  });
+
+  it('a throwing restore still releases the adopted sessions — never left unread — and the boot fails with its error', async () => {
+    const order: string[] = [];
+    await assert.rejects(runSessionBootPhase({
+      startBotMcp: async () => true,
+      reattachSessions: async () => {},
+      restoreAfterReattach: () => { throw new Error('state unreadable'); },
+      releaseAdoptedSessions: () => { order.push('releaseAdoptedSessions'); },
+      onSessionsRestored: () => { order.push('onSessionsRestored'); },
+      healActiveSessions: () => {},
+      rearmSchedules: async () => {},
+    }), /state unreadable/);
+    assert.deepEqual(order, ['releaseAdoptedSessions']);
   });
 
   it('a throwing heal does not abort the boot: schedules are still re-armed', async () => {
@@ -202,6 +220,7 @@ describe('runSessionBootPhase', () => {
       startBotMcp: async () => true,
       reattachSessions: async () => {},
       restoreAfterReattach: () => {},
+      releaseAdoptedSessions: () => {},
       onSessionsRestored: () => {},
       healActiveSessions: () => { throw new Error('bindings unreadable'); },
       rearmSchedules: async () => { order.push('rearmSchedules'); },

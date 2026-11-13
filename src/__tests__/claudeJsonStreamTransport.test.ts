@@ -490,6 +490,39 @@ describe('json-stream error-ended turn — the text it streamed goes out before 
     assert.deepEqual(errors.map((error) => error.isReplayed === true), [true, false]);
   });
 
+  it('an adopted session\'s tail is read only from the boot\'s release: nothing arms a read before it — a stdin write neither — and the release reads the replay', async () => {
+    // Read during the reattach, a replayed limit error reached the bot before the boot recovery had taken that episode over:
+    // it was handled as a live one (a notice for a window already over), and the restore armed its retry a second time.
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'jsonstream-heldtail-'));
+    const adapter = new ClaudeJsonStreamAdapter();
+    const session = createSessionInDir(adapter, dir);
+    // Alive: the read finds a running process, not an exit.
+    session.pid = process.pid;
+    session.isTailHeld = true;
+    const errors: Array<{ isReplayed?: boolean }> = [];
+    adapter.on('apiError', (_k: SessionKey, error: { isReplayed?: boolean }) => errors.push(error));
+    fs.writeFileSync(session.paths.stdoutFile, usageLimitResultLine);
+    session.adoptCatchUpOffset = Buffer.byteLength(usageLimitResultLine);
+
+    try {
+      adapter['snapPollToBase'](session);
+      assert.equal(session.pollTimer, null, 'a write before the release arms no read');
+
+      adapter.releaseAdoptedTails(1);
+      assert.equal(session.isTailHeld, false);
+      assert.notEqual(session.pollTimer, null, 'the release arms the first read');
+      assert.equal(errors.length, 0, 'nothing is read in the release itself: the boot finishes its step first');
+      await adapter.whenAdoptReplayed(key);
+      assert.deepEqual(errors.map((error) => error.isReplayed === true), [true], 'the replay, read after the release');
+
+      const timerAfterReplay = session.pollTimer;
+      adapter.releaseAdoptedTails(1);
+      assert.equal(session.pollTimer, timerAfterReplay, 'a released session is not released again');
+    } finally {
+      adapter['clearTimers'](session);
+    }
+  });
+
   it('a replayed clock-only reset is read against the moment the error was written (the transcript\'s time), a live one against now', () => {
     // "resets 10:20am" is the NEXT occurrence of that clock. Written an hour ago with the clock half an hour behind us, the
     // window is over; read against the replay's clock the same words name tomorrow — the account stayed limited for a day.

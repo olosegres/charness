@@ -89,6 +89,7 @@ export function createStreamSessionFixture(overrides: Partial<StreamSession> = {
     applyingChunk: null,
     adoptCatchUpOffset: null,
     adoptCatchUpResolvers: [],
+    isTailHeld: false,
     ...overrides,
   };
 }

@@ -13623,9 +13623,11 @@ async function reattachExistingSessions(
   //     reopen the FIFO writer and resume the stdout tail from the persisted
   //     line-boundary offset, so everything produced during the downtime
   //     replays through the normal pipeline (which is why an adopt posts NO
-  //     recap — the replay IS the delivery). A session whose thread released
-  //     its persisted id (`/quit`, `/new`) or isn't a json-stream thread is an
-  //     orphan and is killed, never adopted (locked decision). A bound
+  //     recap — the replay IS the delivery) — read only from the boot's
+  //     `releaseAdoptedSessions` step on, once the restored state is back. A
+  //     session whose thread released its persisted id (`/quit`, `/new`) or
+  //     isn't a json-stream thread is an orphan and is killed, never adopted
+  //     (locked decision). A bound
   //     json-stream thread with a persisted id but no live process SLEEPS
   //     (lifecycle plan L4): it is NOT re-spawned — its next trigger resumes it
   //     — and it gets the downtime recap read from the transcript alone. An
@@ -13983,7 +13985,8 @@ function readParkedErrorWrittenAtMs(key: SessionKey, claudeSessionId: string, er
 
 /**
  * @description The threads whose limit episode the boot recovery armed and whose adopt is still replaying the downtime tail
- * ({@link handleApiError} leaves the replay's copy of that error alone). An entry lives until the replay is over.
+ * ({@link handleApiError} leaves the replay's copy of that error alone). An entry lives until the replay is over. The replay
+ * cannot come first: an adopted session's output is read only after the boot's restore step (`releaseAdoptedSessions`).
  */
 const limitEpisodesOwnedByRecovery = new Set<string>();
 
@@ -14070,8 +14073,8 @@ function recoverLimitEpisodesFromDisk(): void {
     void state
       .setLimitEpisodeRecovered(key, log)
       .catch(e => console.error('[limitRecovery] marker persist failed:', e));
-    // This episode is the recovery's alone: the adopt replays the same error a moment later (the tail was read from the
-    // saved offset), and `handleApiError` leaves that copy out until the replay is over.
+    // This episode is the recovery's alone: the adopt replays the same error once the boot releases its output (after this
+    // step), and `handleApiError` leaves that copy out until the replay is over.
     limitEpisodesOwnedByRecovery.add(keyStr);
     void (getAdapter(agent.name).whenAdoptReplayed?.(key) ?? Promise.resolve()).then(() => limitEpisodesOwnedByRecovery.delete(keyStr));
     void withThreadLocale(key, () => handleApiError(key, decision.cls, { isRecoveredEpisode: true }));
@@ -15314,6 +15317,14 @@ export async function startBot(): Promise<void> {
       // is normally a no-op. Uses the pre-reattach snapshot (the setters clobber
       // the live persisted set during reattach).
       void reconcileTransientFrames(orphanedTransientFrames).catch((error) => console.error('[reattach] transient frame cleanup failed:', error));
+    },
+    // Only now is an adopted json-stream session's output read: its downtime replay is handled against the state restored
+    // above — the limit episode the recovery took over stays the recovery's, an armed retry is not armed twice.
+    releaseAdoptedSessions: () => {
+      for (const name of [claudeJsonStreamAdapterName, claudePerTurnAdapterName]) {
+        const adapter = getAdapter(name);
+        if (adapter instanceof ClaudeJsonStreamAdapter) adapter.releaseAdoptedTails(ENV.testTimings.adoptedTailFirstReadMs);
+      }
     },
     // The bot MCP tools that read session state (compact_conversation) wait
     // for this: until now a surviving session would read as not running.

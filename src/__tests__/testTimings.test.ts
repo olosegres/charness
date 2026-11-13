@@ -26,6 +26,7 @@ import { unwatchedSweepMs, watchedTurnPollMs } from '../requests/wakeUpEngine';
 import { postRetryDelaysMs } from '../requests/wakeUpRules';
 import { DEFAULT_SAVE_DEBOUNCE_MS } from '../state';
 import { pendingWorkHoldDefaultMs } from '../utils/jsonStreamPendingWork';
+import { basePollIntervalMs } from '../utils/pollBackoff';
 import { todoReminderDefaultMinutes } from '../todos/nag';
 import { todoReminderPollMs } from '../todos/reminderEngine';
 import { claudeApiCreditRecheckIntervalMs, claudeApiCreditRecheckPollMs } from '../utils/claudeApiCreditRecheck';
@@ -48,6 +49,7 @@ const productionWindowsMs: Array<[keyof TestTimings, number]> = [
   ['stateSaveDebounceMs', DEFAULT_SAVE_DEBOUNCE_MS],
   ['openCodeServerUpBudgetMs', openCodeServerRestartRetryBudgetMs],
   ['backgroundHoldMaxMs', pendingWorkHoldDefaultMs],
+  ['adoptedTailFirstReadMs', basePollIntervalMs],
   ['todoReminderPollMs', todoReminderPollMs],
   ['todoReminderIntervalMs', todoReminderDefaultMinutes * 60 * 1000],
   ['creditRecheckIntervalMs', claudeApiCreditRecheckIntervalMs],

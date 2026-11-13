@@ -20,12 +20,17 @@
  *     adopt's replay of the same error stays out of it — one resume notice, one "Continue" prompt, and no "usage limit
  *     reached" notice for a window that is over (the replayed error used to be handled again as a live one: the notice for
  *     the finished window, a second resume, a second prompt). Both for a reset named as an instant and for a clock-only
- *     reset (`resets 10:20am (UTC)`), which only the error's own time — not the replay's — reads as already over.
+ *     reset (`resets 10:20am (UTC)`), which only the error's own time — not the replay's — reads as already over. These
+ *     restarts read an adopted session 1 ms (not 300 ms) after the boot lets it be read. When the adopt itself started the
+ *     reading, a reattach that took longer than the first read (a loaded host, many topics) let the replay in ahead of the
+ *     boot recovery: the notice for the finished window, and the recovery skipped the episode as already armed.
  *
  *   → a per-turn process that outlived the bot is stopped the way the backend promises, in the three shapes an adopt meets: idle
  *     with its CLI version known (stopped as soon as the adopt has replayed), idle before any turn (the version is unknown, so
  *     it is kept and the stop comes at the end of its next turn), and in the middle of a turn (the turn is delivered through
  *     the adopt, the stop follows its end). Each stop is read off the instance's private tmux server, not off the bot's log.
+ *     The turn that ended while the bot was down is replayed right behind the boot's restore step too: read inside the
+ *     reattach, its end stopped the process before the boot's MCP heal had asked it.
  *
  * Nothing leaves the machine: the Bot API is on loopback and the agent is a fake. Everything the test starts is stopped in
  * `after`.
@@ -122,6 +127,10 @@ let limitsOffTopic: TopicDriver;
 let adoptedStopTopic: TopicDriver;
 let knownVersionTopic: TopicDriver;
 let defaultTmuxSessionsBefore: string[] = [];
+/** The instance's env file as `before` writes it; a restart that needs a test timing more writes it back once started. */
+let instanceEnv: Record<string, string> = {};
+/** How soon an adopted session is first read once the boot lets it be read, in the restarts that land its replay right there. */
+const replayRightAfterReleaseMs = 1;
 
 function getLayout(): IsolatedInstanceLayout {
   if (!layout) throw new Error('the instance layout is not created yet');
@@ -213,6 +222,22 @@ async function runLimitedTurnWhileBotIsDown(label: string, resetClause: string, 
   }
 }
 
+/**
+ * Start the bot with an adopted session read {@link replayRightAfterReleaseMs} after the boot lets it be read (300 ms in
+ * production), so the downtime replay comes right behind the boot's restore step; a stdin write meanwhile (the boot's MCP
+ * heal) re-arms the read at the base cadence. Were the adopt itself to start the reading, the replay would come 1 ms after
+ * it, inside the reattach — where a slow reattach (a loaded host, many topics) put it before the boot recovery had run.
+ * The env file is back to the flow's own once the bot is up.
+ */
+async function startCharnessReadingAdoptedSessionsAtOnce(): Promise<IsolatedCharness> {
+  writeInstanceEnvFile(getLayout(), { ...instanceEnv, ...getTelegramFlowTestTimingsEnv({ adoptedTailFirstReadMs: replayRightAfterReleaseMs }) });
+  try {
+    return await startCharnessOnInstance(getLayout(), fakeTelegram);
+  } finally {
+    writeInstanceEnvFile(getLayout(), instanceEnv);
+  }
+}
+
 describe('A prompt forwarded to an adopted session waits for the replay of its downtime tail: built charness, fake Bot API, fake claude', () => {
   before(async () => {
     if (!fs.existsSync(builtCliPath)) throw new Error('Built CLI is missing. Run `yarn build` before `yarn test`.');
@@ -231,7 +256,7 @@ describe('A prompt forwarded to an adopted session waits for the replay of its d
     adoptedStopTopic = new TopicDriver(fakeTelegram, getCharness, adoptedStopThreadId, agentStartTimeoutMs);
     knownVersionTopic = new TopicDriver(fakeTelegram, getCharness, knownVersionThreadId, agentStartTimeoutMs);
     const apiRoot = await fakeTelegram.start();
-    writeInstanceEnvFile(layout, {
+    instanceEnv = {
       TELEGRAM_BOT_TOKEN: fakeBotToken,
       TELEGRAM_API_ROOT: apiRoot,
       ALLOWED_GROUP_ID: group.id.toString(),
@@ -244,7 +269,8 @@ describe('A prompt forwarded to an adopted session waits for the replay of its d
       OPENCODE_URL: `http://127.0.0.1:${await getUnservedPort()}`,
       SCHEDULER_MCP_PORT: (await getFreeFixedPort()).toString(),
       ...getTelegramFlowTestTimingsEnv({}),
-    });
+    };
+    writeInstanceEnvFile(layout, instanceEnv);
   });
 
   after(async () => {
@@ -285,11 +311,12 @@ describe('A prompt forwarded to an adopted session waits for the replay of its d
    * Restart the bot over a limited turn that ended while it was down and count what the topic and the agent got. The count is
    * taken after a sentinel prompt has been answered: everything the replay of the limit error sets in motion (a notice, a
    * retry, a second "Continue") is only a few async hops, a sentinel is a whole Telegram → bot → agent → bot → Telegram round
-   * trip, so nothing from the replay can still be on its way once the sentinel is answered.
+   * trip, so nothing from the replay can still be on its way once the sentinel is answered. The replay comes right behind
+   * the boot's restore step ({@link startCharnessReadingAdoptedSessionsAtOnce}).
    */
   async function restartAndCountWhatTheLimitedTurnCaused(sentinelLabel: string): Promise<{ limitNotices: number; resumeNotices: number; continuePrompts: number }> {
     const before = { limitNotices: countSentToTopic((text) => text.startsWith(limitNoticeMark)), resumeNotices: countSentToTopic((text) => text.includes(resumedNoticeText)), continuePrompts: listResumePrompts().length };
-    charness = await startCharnessOnInstance(getLayout(), fakeTelegram);
+    charness = await startCharnessReadingAdoptedSessionsAtOnce();
     await getCharness().waitFor('the agent to take the resume prompt', agentStartTimeoutMs, () => listResumePrompts().length > before.continuePrompts);
     fakeTelegram.pushOperatorMessage(topicThreadId, `${sentinelLabel} did anything else happen?`);
     await topic.waitForMessage('the sentinel\'s answer', (message) => message.text.includes(`Working on ${sentinelLabel}.`));
@@ -417,7 +444,9 @@ describe('A prompt forwarded to an adopted session waits for the replay of its d
     });
     assert.equal(checkIsAgentProcessAlive(adoptedStopTopicSpec), true, 'the process outlives the bot with its turn done and not yet stopped');
 
-    charness = await startCharnessOnInstance(getLayout(), fakeTelegram);
+    // The replay right behind the boot's restore step: read inside the reattach, the replayed turn end stopped the process
+    // before the boot's MCP heal asked it, and the ask went unanswered.
+    charness = await startCharnessReadingAdoptedSessionsAtOnce();
     const usageLine = `${claudeJsonStreamUsageLogPrefix}${group.id}:${adoptedStopThreadId}:`;
     await getCharness().waitFor('the finished turn replayed by the restarted bot', agentStartTimeoutMs, () => getCharness().output.includes(usageLine));
     await getCharness().waitFor('the adopted process stopped', replyTimeoutMs, () => !checkIsAgentProcessAlive(adoptedStopTopicSpec));

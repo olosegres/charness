@@ -9,6 +9,7 @@ import { unwatchedSweepMs, watchedTurnPollMs } from './requests/wakeUpEngine';
 import { postRetryDelaysMs } from './requests/wakeUpRules';
 import { DEFAULT_SAVE_DEBOUNCE_MS } from './state';
 import { pendingWorkHoldDefaultMs } from './utils/jsonStreamPendingWork';
+import { basePollIntervalMs } from './utils/pollBackoff';
 import { claudeApiCreditRecheckIntervalMs, claudeApiCreditRecheckPollMs } from './utils/claudeApiCreditRecheck';
 import { todoReminderDefaultMinutes } from './todos/nag';
 import { todoReminderPollMs } from './todos/reminderEngine';
@@ -26,7 +27,7 @@ import { runnerWaitPollMinMs, runnerWaitPollMs } from './remoteRun/runnerWaitTim
  * @description The ONE test-only timing seam: `CHARNESS_TEST_TIMINGS`, a JSON object of named overrides for the
  * production windows the process-level flows would otherwise wait out in real time (the Telegram send pacer's 2 s, the
  * Jira poll's 10 s floor, the wake-up engine's 10 s turn poll and its sweep's minute, the first re-post retry's minute, the two-minute probe of an
- * unconfirmed usage limit, `state.json`'s save debounce, the OpenCode server's 60 s of retries, the 6 h pending-work hold, the 15-minute gap of a passing check's status lines, the
+ * unconfirmed usage limit, `state.json`'s save debounce, the OpenCode server's 60 s of retries, the 6 h pending-work hold, the 300 ms to the first read of an adopted json-stream session's output, the 15-minute gap of a passing check's status lines, the
  * todo reminder's 10 s poll and its interval, the 24 h between two rechecks of a used-up API credit and the 30 min poll that finds one due, the 45 s heartbeat lease of a foreground `charness remote-run` and its 10 s poll while it waits for a paired runner, and — a count, not a window —
  * the 200 `/bind` picker claims). It is NOT a setting: no
  * operator sets it and it is documented only for developers (DEVELOPMENT.md); settings live in `settings.json`.
@@ -74,6 +75,12 @@ const testTimingsSchema = z.strictObject({
    * last turn (production: `pendingWorkHoldDefaultMs`, 6 h).
    */
   backgroundHoldMaxMs: createShorterWindowSchema(pendingWorkHoldDefaultMs).optional(),
+  /**
+   * How long after the boot releases an adopted json-stream session its stdout is first read (production:
+   * `basePollIntervalMs`, 300 ms; a write to the session meanwhile re-arms the read at that cadence). A flow reads it at
+   * once to land the downtime replay right behind the boot's restore step.
+   */
+  adoptedTailFirstReadMs: createShorterWindowSchema(basePollIntervalMs).optional(),
   /** How often the todo reminder polls the sessions for their work and turn ends (production: `todoReminderPollMs`, 10 s). */
   todoReminderPollMs: createShorterWindowSchema(todoReminderPollMs).optional(),
   /** The todo reminder's interval, in place of the `settings.json` one (production default: 60 min; off stays off). */

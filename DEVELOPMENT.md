@@ -183,7 +183,8 @@ of named overrides (`src/testTimings.ts`: `telegramSendIntervalMs` — the globa
 below the 10 s floor of `jira.json`, `requestTurnPollMs` — the wake-up engine's 10 s poll of the turns it watches,
 `requestSweepIntervalMs` and `requestFirstPostRetryDelayMs` — the wake-up engine's minutes, `limitProbeDelayMs` — the two-minute probe of an unconfirmed usage limit, `stateSaveDebounceMs` — `state.json`'s
 500 ms save debounce, `openCodeServerUpBudgetMs` — the OpenCode server's 60 s of retries, `backgroundHoldMaxMs` — the 6 h the
-agent's own pending work holds a json-stream process, `todoReminderPollMs` and `todoReminderIntervalMs` — the todo
+agent's own pending work holds a json-stream process, `adoptedTailFirstReadMs` — the 300 ms from the boot's release of an
+adopted json-stream session to the first read of its output, `todoReminderPollMs` and `todoReminderIntervalMs` — the todo
 reminder's 10 s poll and the interval `settings.json` sets, `creditRecheckIntervalMs` and `creditRecheckPollMs` — the 24 h between two rechecks of a used-up API credit and the 30 min poll that finds one due, `scheduleMinFireIntervalMs` — the 5 min minimum between cron fires, `checkStatusIntervalMs` — the 15 min gap between a passing check's status lines, `bindPickerClaimLimit` — how many `/bind` picker claims are kept (a count: 200), `remoteRunLeaseMs`, `remoteRunRunnerPollMs` and `remoteRunProbeDeadlineMs` — the 45 s heartbeat lease, the 10 s poll of the wait for a paired runner and the 20 s deadline of the probe of the runners in `charness remote-run`, `tscWatchCheckIntervalMs` and `tscWatchStaleGraceMs` — the
 hot supervisor's 30 s check of its `tsc -w` and the minute a source may stay newer than its output; the supervisor reads these last two, the remote-run CLI the three before them (the bot's `/runners` probe reads `remoteRunProbeDeadlineMs` too), the bot the rest).
 It is the ONE test-only timing seam,
