@@ -245,6 +245,7 @@ export const enDict: Record<string, string> = {
   'agent.ready': '{label} ready in `{subdir}`{argsSuffix}\n{infoBlock}Send a message:',
   'agent.ready_model': '🧠 Model: {model}',
   'agent.no_session': 'No agent running. /claude or /opencode to start.',
+  'agent.prompt_not_delivered': '⚠️ The agent did not get your last message: writing it into the agent\'s input failed ({error}). Send it again.',
   'agent.session_ended': '{label}: session ended',
   'lostWork.line.resumed': '⚠️ The agent\'s process {reason} while its own work was pending — {work}. I resumed it and asked it to check that work again.',
   'lostWork.line.held': '⚠️ The agent\'s process {reason} while its own work was pending — {work}. Your next message resumes it and tells it what was lost.',

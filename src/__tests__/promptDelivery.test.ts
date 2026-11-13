@@ -215,7 +215,8 @@ describe('the bot buffers a prompt for a starting session through it, in one pla
     const sites: Array<{ name: string; call: string; count: number }> = [
       { name: '/schedule', call: 'deliverPromptOrBuffer(key, `${opening.header}${wrappedPrompt}`, isStarting)', count: 1 },
       { name: 'an album and a file', call: 'deliverPromptOrBuffer(key, `${opening.header}${quotedPrompt}`, isStarting)', count: 2 },
-      { name: 'a scheduled run', call: 'deliverPromptOrBuffer(key, `${opening.header}${text}`, startupPromptBuffer.checkIsStarting(conversationKey))', count: 1 },
+      // A session post waits for the buffered prompt's replay as well (it must not count a prompt that never arrived): `buffered.settle`.
+      { name: 'a scheduled run', call: 'deliverPromptOrBuffer(key, `${opening.header}${text}`, startupPromptBuffer.checkIsStarting(conversationKey), buffered.settle)', count: 1 },
       { name: 'free text that cancels a pending question', call: 'cancelPendingQuestionAndForward(key, adapter, text, sentAtMs, messageContext, opening.header)', count: 1 },
     ];
     for (const { name, call, count } of sites) {

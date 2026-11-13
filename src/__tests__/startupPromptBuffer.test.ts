@@ -91,8 +91,8 @@ test('threads are isolated — one thread\'s buffer never leaks into another', a
 });
 
 // A prompt may ask to hear how its wait ended (the API-error retry's nudge: its saved record means "armed" until
-// the nudge reaches a session). `replayed` = handed to the session — a failed forward is logged and not retried,
-// so it counts: nobody re-delivers it. `dropped` = it can never reach one.
+// the nudge reaches a session; a tracker's post, which must not count an undelivered prompt as delivered). `replayed`
+// = handed to the session. `dropped` = it never reached the agent: no session, or a forward that threw.
 
 test('a settle callback hears `replayed` once the prompt has been forwarded — each prompt its own, in order', async () => {
   const buffer = new StartupPromptBuffer();
@@ -107,7 +107,7 @@ test('a settle callback hears `replayed` once the prompt has been forwarded — 
   assert.deepEqual(log, ['forward first', 'settled first replayed', 'forward plain', 'forward third', 'settled third replayed'], 'after its own forward, never before');
 });
 
-test('a forward that throws is logged and does not stop the rest; its prompt still settles as replayed', async () => {
+test('a forward that throws (its write into the agent failed) is logged and does not stop the rest; its prompt settles as DROPPED — never counted as delivered', async () => {
   const buffer = new StartupPromptBuffer();
   const outcomes: BufferedPromptOutcome[] = [];
   const forwarded: string[] = [];
@@ -128,7 +128,7 @@ test('a forward that throws is logged and does not stop the rest; its prompt sti
     logged.mock.restore();
   }
   assert.deepEqual(forwarded, ['fine']);
-  assert.deepEqual(outcomes, ['replayed', 'replayed']);
+  assert.deepEqual(outcomes, ['dropped', 'replayed']);
 });
 
 test('replay into a session that is not active forwards nothing and settles every prompt as dropped', async () => {

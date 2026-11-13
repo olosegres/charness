@@ -247,6 +247,7 @@ export const ukDict: Record<string, string> = {
   'agent.ready': '{label} готовий у `{subdir}`{argsSuffix}\n{infoBlock}Надішли повідомлення:',
   'agent.ready_model': '🧠 Модель: {model}',
   'agent.no_session': 'Агент не запущений. /claude або /opencode — щоб запустити.',
+  'agent.prompt_not_delivered': '⚠️ Агент не отримав ваше останнє повідомлення: не вдалося записати його у ввід агента ({error}). Надішліть його ще раз.',
   'agent.session_ended': '{label}: сесію завершено',
   'lostWork.line.resumed': '⚠️ Процес агента {reason}; його незавершена робота — {work}. Я відновив його й попросив заново перевірити цю роботу.',
   'lostWork.line.held': '⚠️ Процес агента {reason}; його незавершена робота — {work}. Ваше наступне повідомлення відновить його й розповість, що втрачено.',

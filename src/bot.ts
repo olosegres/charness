@@ -242,7 +242,7 @@ import {
 } from './sendErrorClassifier';
 import { formatPinnedStatus } from './pinnedStatus';
 import { checkIsProgressChunk, collapseProgressChunk } from './progressLine';
-import { StartupPromptBuffer, type BufferedPromptSettled } from './startupPromptBuffer';
+import { StartupPromptBuffer, type BufferedPromptOutcome, type BufferedPromptSettled } from './startupPromptBuffer';
 import { renderAgentFrame, renderAgentHtml, type AgentFrame } from './connectors/telegram/renderAgentHtml';
 import { splitMessage, MAX_MESSAGE_LEN } from './connectors/telegram/messageSplit';
 import { buildFoldedMessage } from './connectors/telegram/foldedMessage';
@@ -6143,9 +6143,26 @@ async function forwardPromptToLiveAgent(
   // choke point (user text, voice, scheduled run, api-retry continue, buffered
   // replay), so every path that makes Claude busy now raises the working frame.
   startClaudeLiveness(key, 'busyOnset');
-  await written;
   // Told only once the prompt carrying the note reached a live session: a forward that failed keeps it for the next.
-  if (lostWorkRecord && adapter.checkIsActive(key)) void state.clearLostWork(key);
+  const noteToldIfDelivered = (): void => {
+    if (lostWorkRecord && adapter.checkIsActive(key)) void state.clearLostWork(key);
+  };
+  // A topic's prompt never holds the topic's update queue on its write — a CLI that stops reading its input would keep
+  // `/esc` and every tap behind it for minutes —: the person is told when it failed. A tracker's post and a wake-up await
+  // it: a prompt that never arrived is retried.
+  if (checkIsTelegramKey(key)) {
+    void written.then(noteToldIfDelivered, (error: unknown) => reportUndeliveredTopicPrompt(key, error));
+    return;
+  }
+  await written;
+  noteToldIfDelivered();
+}
+
+/** @description A topic's prompt whose write into the agent failed (the forward did not wait for it): one line says so. */
+function reportUndeliveredTopicPrompt(key: SessionKey, error: unknown): void {
+  const message = error instanceof Error ? error.message : String(error);
+  console.warn(`[forward] ${keyToString(key)}: the prompt did not reach the agent: ${message}`);
+  void withThreadLocale(key, () => replyToThread(key, t('agent.prompt_not_delivered', { error: message }))).catch(() => {});
 }
 
 /**
@@ -10751,8 +10768,9 @@ const albumCollector = createMediaGroupCollector<AlbumCollectorItem>({
         const delivery = await deliverPromptOrBuffer(key, `${opening.header}${quotedPrompt}`, isStarting);
         await settleTopicRequestAfterDelivery(key, opening, delivery);
       } catch (err) {
+        // The files were downloaded already (each item before the flush): what failed is the album's prompt.
         console.error('[Bot] album flush failed:', err);
-        await replyToThread(key, t('file.download_failed')).catch(() => {});
+        await replyToThread(key, t('agent.prompt_not_delivered', { error: err instanceof Error ? err.message : String(err) })).catch(() => {});
       }
     });
   },
@@ -13194,7 +13212,27 @@ function createLostWorkPostDeps(): PostToSessionDeps {
   return {
     ...createSessionPostDeps(),
     forwardPrompt: async (conversationKey, text) => {
-      await deliverPromptOrBuffer(keyFromString(conversationKey), text, startupPromptBuffer.checkIsStarting(conversationKey));
+      const buffered = createBufferedOutcome();
+      const delivery = await deliverPromptOrBuffer(keyFromString(conversationKey), text, startupPromptBuffer.checkIsStarting(conversationKey), buffered.settle);
+      if (delivery === 'buffered') await buffered.assertReplayed();
+    },
+  };
+}
+
+/**
+ * @description How a prompt that waited in the startup buffer ended, for a post that must know it reached the session:
+ * `settle` is the buffer's callback, `assertReplayed` resolves once it was replayed into the session and rejects when it
+ * was dropped — the start failed, or its write did not reach the agent.
+ */
+function createBufferedOutcome(): { settle: BufferedPromptSettled; assertReplayed: () => Promise<void> } {
+  let settle: BufferedPromptSettled = () => {};
+  const outcome = new Promise<BufferedPromptOutcome>((resolve) => {
+    settle = resolve;
+  });
+  return {
+    settle: (result) => settle(result),
+    assertReplayed: async () => {
+      if ((await outcome) !== 'replayed') throw new Error('the prompt waited for the session to start and never reached the agent');
     },
   };
 }
@@ -14576,8 +14614,11 @@ function createSessionPostDeps(): PostToSessionDeps {
       // A scheduled run in a topic with requests on is a request (S7); a tracker's
       // post arrives with its request already open and its header in the text.
       const opening = await openTopicRequest(key, text, { source: 'scheduledRun', requesterId: scheduledRunRequester });
-      const delivery = await deliverPromptOrBuffer(key, `${opening.header}${text}`, startupPromptBuffer.checkIsStarting(conversationKey));
+      const buffered = createBufferedOutcome();
+      const delivery = await deliverPromptOrBuffer(key, `${opening.header}${text}`, startupPromptBuffer.checkIsStarting(conversationKey), buffered.settle);
       await settleTopicRequestAfterDelivery(key, opening, delivery);
+      // A prompt that waited for the session's start counts only once it reached it: a replay whose write failed is a failed post.
+      if (delivery === 'buffered') await buffered.assertReplayed();
     },
     now: () => Date.now(),
     sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),

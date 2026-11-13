@@ -276,12 +276,20 @@ restarts — every hot reload — never touch it. Per-thread host dir
   seen meeting `EAGAIN` for the old 5 s budget) for as long as the reader takes
   bytes: `writeFifoText` gives up only after `fifoWriteStallTimeoutMs` (2 min)
   without one, and says how much it wrote. A user turn's write is the forward's
-  outcome (`sendInputAndWait`, which the bot's forward awaits): one that failed
-  rejects the forward — a tracker post then gets its post retry instead of a
-  prompt believed delivered — and takes back the turn-start state. A frame left
-  half-written breaks the stream (`isStdinBroken`): nothing more is written into
-  it and the process is suspended, so the next trigger resumes the conversation
-  in a fresh process.
+  outcome (`sendInputAndWait`): for a tracker's post or a wake-up the bot's forward
+  awaits it, and one that failed rejects the forward — a tracker post then gets its
+  post retry instead of a prompt believed delivered; a Telegram topic's prompt is not
+  awaited (a CLI that stops reading would hold the topic's update queue, `/esc`
+  included) and a failed write is told in the topic (`agent.prompt_not_delivered`).
+  A failed write takes back the turn-start state. A user turn is held until the CLI
+  shows it reads (`isReadingInput`: it answered the initialize handshake, or wrote
+  any output — a resumed CLI was seen reading nothing for over 20 s, past the 15 s
+  handshake timeout); after the stall budget it is written anyway, logged, so a CLI
+  that never answers the handshake still gets its prompts. A frame left half-written
+  breaks the stream (`isStdinBroken`): nothing more is written into it and the
+  process is suspended (killed when the suspend fails), so the next trigger resumes
+  the conversation in a fresh process; the same prompt torn a second time is logged
+  loudly (it stays pending with its request's retries).
 - `stdout.jsonl` — append-only event log replacing the stdout pipe. The
   adapter TAILS it (adaptive 300ms→1.5s cadence) and feeds the same line
   reader/classifier; deltas keep landing while the bot is down. The consumed

@@ -1,9 +1,9 @@
 /**
  * @name BufferedPromptOutcome
  * @description How a buffered prompt's wait ended. `replayed`: it was handed to the
- * session — a forward that threw is logged and not retried, so it counts, since
- * nobody re-delivers it. `dropped`: it can never reach a session (the start failed,
- * or the session is not active once the window closes).
+ * session. `dropped`: it never reached the agent — the start failed, the session is
+ * not active once the window closes, or its forward threw (its write into the agent
+ * failed): a sender that keeps something until the prompt arrived keeps it.
  */
 export type BufferedPromptOutcome = 'replayed' | 'dropped';
 
@@ -114,8 +114,8 @@ export class StartupPromptBuffer {
    * prompt able to slip into a second buffer.
    *
    * With no active session nothing is forwarded and every prompt is `dropped`;
-   * otherwise each is forwarded in turn (one that throws is logged, the rest still
-   * go) and settles as `replayed` after its own forward.
+   * otherwise each is forwarded in turn and settles as `replayed` after its own
+   * forward — or `dropped` when that forward threw (logged; the rest still go).
    */
   async replayPrompts(threadId: string, options: ReplayPromptsOptions): Promise<void> {
     const prompts = this.takePrompts(threadId);
@@ -129,6 +129,8 @@ export class StartupPromptBuffer {
         await options.forward(prompt.text);
       } catch (err) {
         console.error('[replayBufferedPrompts] forward failed:', err);
+        settleBufferedPrompt(prompt, 'dropped');
+        continue;
       }
       settleBufferedPrompt(prompt, 'replayed');
     }

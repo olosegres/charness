@@ -19,11 +19,15 @@
  * Test case: N/A — Charness has no Jira tracker.
  */
 
-import { afterEach, describe, it } from 'node:test';
+import { afterEach, describe, it, mock } from 'node:test';
 import assert from 'node:assert/strict';
+import { execFileSync, spawn, type ChildProcess } from 'node:child_process';
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
 
 import { ClaudeJsonStreamAdapter, type StreamSession } from '../adapters/claudeJsonStreamAdapter';
-import { FifoWriteError, type FifoWriteOptions } from '../utils/jsonStreamHost';
+import { FifoWriteError, openFifoWriterNonBlocking, type FifoWriteOptions } from '../utils/jsonStreamHost';
 import { keyToString, type SessionKey } from '../sessionKey';
 import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
 import { createStreamSessionFixture } from './claudeJsonStreamSessionFixture';
@@ -142,5 +146,168 @@ describe('json-stream adapter — a user turn that does not reach the CLI fails 
     await settleTicks();
     assert.equal(session.isStdinBroken, false);
     assert.deepEqual(suspended, []);
+  });
+});
+
+describe('json-stream adapter — frames keep their order, and a big one lands whole', () => {
+  it('a second frame queued while the first is still being written starts only after the first resolved', async () => {
+    const events: string[] = [];
+    let releaseFirst: () => void = () => {};
+    const firstHeld = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    const adapter = new ClaudeJsonStreamAdapter({
+      lifecycle: 'idle',
+      writeFifo: async (_fd: number, text: string) => {
+        const content = (JSON.parse(text) as { message: { content: string } }).message.content;
+        events.push(`start ${content}`);
+        if (content === 'first') await firstHeld;
+        events.push(`end ${content}`);
+      },
+    });
+    addSession(adapter);
+    const first = adapter.sendInputAndWait(key, 'first');
+    const second = adapter.sendInputAndWait(key, 'second');
+    await settleTicks();
+    assert.deepEqual(events, ['start first'], 'the second waits while the first is unfinished');
+    releaseFirst();
+    await Promise.all([first, second]);
+    assert.deepEqual(events, ['start first', 'end first', 'start second', 'end second']);
+  });
+
+  describe('a real FIFO whose reader starts late (a CLI still starting)', () => {
+    let dir = '';
+    let holder: ChildProcess | null = null;
+    let fd: number | null = null;
+
+    afterEach(() => {
+      if (holder && holder.exitCode === null) holder.kill('SIGKILL');
+      holder = null;
+      if (fd !== null) fs.closeSync(fd);
+      fd = null;
+      fs.rmSync(dir, { recursive: true, force: true });
+    });
+
+    it('a 300 KB prompt and the prompt after it reach the reader as exactly two whole JSON lines, in order', async () => {
+      dir = fs.mkdtempSync(path.join(os.tmpdir(), 'jsonstream-big-frame-'));
+      const fifoPath = path.join(dir, 'stdin.fifo');
+      const outPath = path.join(dir, 'read.jsonl');
+      execFileSync('mkfifo', [fifoPath]);
+      // Holds the FIFO read-write from the start (as the wrapper's `0<>` does), reads nothing for 1.5 s, then drains it.
+      holder = spawn('sh', ['-c', 'exec 3<>"$1"; sleep 1.5; exec cat <&3 > "$2"', 'sh', fifoPath, outPath], { stdio: 'ignore' });
+      fd = await openFifoWriterNonBlocking(fifoPath);
+      assert.notEqual(fd, null, 'the held FIFO opens');
+      const adapter = new ClaudeJsonStreamAdapter({ lifecycle: 'idle' });
+      addSession(adapter, { fifoFd: fd ?? -1 });
+      const big = 'x'.repeat(300 * 1024);
+      const startedAt = Date.now();
+      await Promise.all([adapter.sendInputAndWait(key, big), adapter.sendInputAndWait(key, 'the next prompt')]);
+      assert.ok(Date.now() - startedAt >= 1000, 'the writes waited for the late reader (a 64 KB pipe holds a fifth of the frame)');
+      let lines: string[] = [];
+      for (let attempt = 0; attempt < 100 && lines.length < 2; attempt += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        lines = fs.existsSync(outPath) ? fs.readFileSync(outPath, 'utf8').split('\n').filter((line, index, all) => line !== '' || index < all.length - 1) : [];
+      }
+      const text = fs.readFileSync(outPath, 'utf8');
+      assert.ok(text.endsWith('\n'), 'the last line is complete');
+      const read = text.slice(0, -1).split('\n').map((line) => JSON.parse(line) as { type: string; message: { content: string } });
+      assert.equal(read.length, 2, 'two lines: nothing torn, nothing interleaved');
+      assert.equal(read[0].message.content, big);
+      assert.equal(read[1].message.content, 'the next prompt');
+    });
+  });
+});
+
+describe('json-stream adapter — a user turn waits for a CLI that reads (a resumed CLI may read nothing for a while)', () => {
+  it('held until the CLI answers the initialize handshake, then written', async () => {
+    const { adapter, written } = createAdapter([]);
+    const session = addSession(adapter, { isReadingInput: false, initRequestId: 'init_1', pendingInitResolve: () => {} });
+    const sent = adapter.sendInputAndWait(key, 'please handle PROJ-1');
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    assert.deepEqual(written, [], 'nothing is written into a FIFO nobody reads');
+    adapter['applyStdoutLines'](session, [JSON.stringify({ type: 'control_response', response: { subtype: 'success', request_id: 'init_1' } })]);
+    await sent;
+    assert.equal(written.length, 1);
+    assert.equal(session.isReadingInput, true);
+  });
+
+  it('any output of the CLI counts as reading too', async () => {
+    const { adapter, written } = createAdapter([]);
+    const session = addSession(adapter, { isReadingInput: false });
+    const sent = adapter.sendInputAndWait(key, 'hello');
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    assert.deepEqual(written, []);
+    adapter['applyStdoutLines'](session, [JSON.stringify({ type: 'system', subtype: 'status', status: 'requesting', session_id: 'sess-fixture' })]);
+    await sent;
+    assert.equal(written.length, 1);
+  });
+
+  it('a CLI that never shows it reads still gets the prompt once the stall budget is over (it may not answer the handshake at all) — logged', async () => {
+    const written: string[] = [];
+    const adapter = new ClaudeJsonStreamAdapter({ lifecycle: 'idle', stdinStallTimeoutMs: 300, writeFifo: async (_fd: number, text: string) => { written.push(text); } });
+    addSession(adapter, { isReadingInput: false });
+    const warn = mock.method(console, 'warn', () => {});
+    try {
+      await adapter.sendInputAndWait(key, 'hello');
+      assert.equal(written.length, 1);
+      assert.ok(warn.mock.calls.some((call) => String(call.arguments[0]).includes('showed no sign of reading its input for 0 s')), 'one line says so');
+    } finally {
+      warn.mock.restore();
+    }
+  });
+
+  it('a stop that begins while the turn waits ends the wait: nothing is written', async () => {
+    const { adapter, written } = createAdapter([]);
+    const session = addSession(adapter, { isReadingInput: false });
+    const sent = adapter.sendInputAndWait(key, 'too late');
+    session.isStopping = true;
+    await assert.rejects(sent, /abandoned/);
+    assert.deepEqual(written, []);
+  });
+
+  it('the SAME prompt torn a second time is said loudly — it stays pending (the forward rejects), it does not loop silently', async () => {
+    const torn = (): FifoWriteError => new FifoWriteError('EAGAIN: the reader took nothing for 120 s (64 of 100 bytes written)', 64, 100);
+    const { adapter, calls } = createAdapter([torn(), torn()]);
+    const errors = mock.method(console, 'error', () => {});
+    try {
+      addSession(adapter);
+      await assert.rejects(adapter.sendInputAndWait(key, 'a long hand-over prompt'));
+      await settleTicks();
+      assert.ok(!errors.mock.calls.some((call) => String(call.arguments[0]).includes('the SAME prompt')), 'one tear is the usual suspend');
+      // The retry reaches the fresh process the suspend leads to — and tears again.
+      adapter['sessions'].delete(keyToString(key));
+      addSession(adapter);
+      await assert.rejects(adapter.sendInputAndWait(key, 'a long hand-over prompt'));
+      await settleTicks();
+      assert.equal(calls(), 2);
+      assert.ok(errors.mock.calls.some((call) => String(call.arguments[0]).includes('the SAME prompt (23 chars) was left half-written 2 times')), 'said loudly');
+    } finally {
+      errors.mock.restore();
+    }
+  });
+
+  it('a suspend that fails after a tear kills the process: a live process nobody can write to is never left behind', async () => {
+    const torn = new FifoWriteError('EAGAIN: the reader took nothing for 120 s (10 of 100 bytes written)', 10, 100);
+    const { adapter } = createAdapter([torn]);
+    adapter.suspendSession = async () => {
+      throw new Error('tmux is gone');
+    };
+    const killed: Array<[number, string | number | undefined]> = [];
+    const kill = mock.method(process, 'kill', (pid: number, signal?: string | number) => {
+      killed.push([pid, signal]);
+      return true;
+    });
+    const warn = mock.method(console, 'warn', () => {});
+    const errors = mock.method(console, 'error', () => {});
+    try {
+      addSession(adapter, { pid: 4_000_000 });
+      await assert.rejects(adapter.sendInputAndWait(key, 'prompt'));
+      for (let tick = 0; tick < 10; tick += 1) await new Promise((resolve) => setImmediate(resolve));
+      assert.deepEqual(killed, [[4_000_000, 'SIGKILL']]);
+    } finally {
+      kill.mock.restore();
+      warn.mock.restore();
+      errors.mock.restore();
+    }
   });
 });

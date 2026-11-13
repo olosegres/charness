@@ -241,6 +241,7 @@ export const zhDict: Record<string, string> = {
   'agent.ready': '{label} 已就绪，在 `{subdir}`{argsSuffix}\n{infoBlock}发送消息：',
   'agent.ready_model': '🧠 模型：{model}',
   'agent.no_session': '没有运行中的代理。运行 /claude 或 /opencode 启动。',
+  'agent.prompt_not_delivered': '⚠️ 代理没有收到你的上一条消息：写入代理输入失败（{error}）。请再发送一次。',
   'agent.session_ended': '{label}：会话已结束',
   'lostWork.line.resumed': '⚠️ 代理的进程{reason}，当时它自己的工作还没完成 — {work}。我已恢复它，并让它重新检查这些工作。',
   'lostWork.line.held': '⚠️ 代理的进程{reason}，当时它自己的工作还没完成 — {work}。你的下一条消息会恢复它，并告诉它丢失了什么。',

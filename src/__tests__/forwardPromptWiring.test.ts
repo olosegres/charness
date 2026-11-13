@@ -21,7 +21,7 @@ const botSource = fs.readFileSync(path.join(__dirname, '..', 'bot.ts'), 'utf8');
 
 /** A top-level function's body — up to the next top-level declaration. */
 function getFunctionBody(name: string): string {
-  const startIdx = botSource.search(new RegExp(`\\nasync function ${name}\\(`));
+  const startIdx = botSource.search(new RegExp(`\\n(?:async )?function ${name}\\(`));
   assert.notEqual(startIdx, -1, `${name} must exist in bot.ts`);
   const nextIdx = botSource.slice(startIdx + 1).search(/\n(?:async function|function|interface|const|\/\*\*)/);
   return botSource.slice(startIdx, nextIdx === -1 ? undefined : startIdx + 1 + nextIdx);
@@ -65,14 +65,25 @@ test('the live forward awaits nothing between its start and the write to the age
   assert.deepEqual(awaited, ['await adapter.interruptAndWaitIdle(key);', 'await adapter.detachRunningSubagents(key);']);
 });
 
-test('the live forward awaits the write\'s outcome: a write that failed rejects the forward, and the lost-work note is told only after it landed', () => {
+test('the live forward awaits the write\'s outcome for a tracker (a failed write rejects the forward); a topic\'s prompt never holds its queue on it — a failed write is told in the topic', () => {
   // A json-stream stdin write that failed was only logged once, and a hand-over prompt counted as delivered was never read.
   const body = getFunctionBody('forwardPromptToLiveAgent');
   assert.match(body, /const written = adapter\.sendInputAndWait \? adapter\.sendInputAndWait\(key, promptText\) : \(adapter\.sendInput\(key, promptText\), Promise\.resolve\(\)\);/);
+  const topicBranch = body.indexOf('if (checkIsTelegramKey(key)) {');
   const awaitWritten = body.indexOf('await written;');
-  assert.ok(awaitWritten > body.indexOf('const written ='), 'the outcome is awaited after the write was handed over');
-  assert.ok(body.indexOf('void state.clearLostWork(key);') > awaitWritten, 'the note counts as told only after the write');
-  assert.ok(body.indexOf("startClaudeLiveness(key, 'busyOnset');") < awaitWritten, 'the busy-onset arm still starts at the write, not after its outcome');
+  assert.ok(topicBranch > body.indexOf('const written ='), 'the write is handed over first');
+  assert.match(body.slice(topicBranch), /^if \(checkIsTelegramKey\(key\)\) \{\n\s*void written\.then\(noteToldIfDelivered, \(error: unknown\) => reportUndeliveredTopicPrompt\(key, error\)\);\n\s*return;\n\s*\}/, 'a topic: not awaited, the person told on failure');
+  assert.ok(awaitWritten > topicBranch, 'a tracker\'s prompt awaits it');
+  assert.ok(body.indexOf('noteToldIfDelivered();') > awaitWritten, 'the note counts as told only after the write');
+  assert.ok(body.indexOf("startClaudeLiveness(key, 'busyOnset');") < topicBranch, 'the busy-onset arm still starts at the write, not after its outcome');
+  assert.match(getFunctionBody('reportUndeliveredTopicPrompt'), /replyToThread\(key, t\('agent\.prompt_not_delivered', \{ error: message \}\)\)/);
+});
+
+test('a session post (a tracker\'s request or update, a scheduled run, the lost-work note) whose prompt waited for the session start counts only once it was replayed', () => {
+  const postDeps = botSource.slice(botSource.indexOf('function createSessionPostDeps('), botSource.indexOf('function createSessionPostDeps(') + 3000);
+  assert.match(postDeps, /if \(delivery === 'buffered'\) await buffered\.assertReplayed\(\);/);
+  const lostWork = getFunctionBody('createLostWorkPostDeps');
+  assert.match(lostWork, /if \(delivery === 'buffered'\) await buffered\.assertReplayed\(\);/);
 });
 
 test('an untold lost-work note rides a request\'s reminder too (the restart wake of a tracker request), never a slash command, a technical prompt or a shell line', () => {

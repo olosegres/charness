@@ -241,6 +241,7 @@ export const ptDict: Record<string, string> = {
   'agent.ready': '{label} pronto em `{subdir}`{argsSuffix}\n{infoBlock}Envia uma mensagem:',
   'agent.ready_model': '🧠 Modelo: {model}',
   'agent.no_session': 'Sem agente em execução. /claude ou /opencode para iniciar.',
+  'agent.prompt_not_delivered': '⚠️ O agente não recebeu a tua última mensagem: a escrita na entrada do agente falhou ({error}). Envia-a de novo.',
   'agent.session_ended': '{label}: sessão terminada',
   'lostWork.line.resumed': '⚠️ O processo do agente {reason} enquanto o seu próprio trabalho estava pendente — {work}. Retomei-o e pedi que verifique esse trabalho de novo.',
   'lostWork.line.held': '⚠️ O processo do agente {reason} enquanto o seu próprio trabalho estava pendente — {work}. A sua próxima mensagem retoma-o e diz-lhe o que se perdeu.',

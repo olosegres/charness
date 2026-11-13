@@ -241,6 +241,7 @@ export const kaDict: Record<string, string> = {
   'agent.ready': '{label} მზადაა `{subdir}`{argsSuffix}-ში\n{infoBlock}გამოგვიგზავნეთ შეტყობინება:',
   'agent.ready_model': '🧠 მოდელი: {model}',
   'agent.no_session': 'აგენტი არ არის გაშვებული. /claude ან /opencode გასაშვებად.',
+  'agent.prompt_not_delivered': '⚠️ აგენტმა თქვენი ბოლო შეტყობინება ვერ მიიღო: მისი აგენტის შესასვლელში ჩაწერა ვერ მოხერხდა ({error}). გაგზავნეთ ხელახლა.',
   'agent.session_ended': '{label}: სესია დასრულდა',
   'lostWork.line.resumed': '⚠️ აგენტის პროცესი {reason}, სანამ მისი საკუთარი სამუშაო ჯერ არ დასრულებულა — {work}. განვაახლე და ვთხოვე ეს სამუშაო თავიდან შეამოწმოს.',
   'lostWork.line.held': '⚠️ აგენტის პროცესი {reason}, სანამ მისი საკუთარი სამუშაო ჯერ არ დასრულებულა — {work}. თქვენი შემდეგი შეტყობინება მას განაახლებს და ეტყვის, რა დაიკარგა.',

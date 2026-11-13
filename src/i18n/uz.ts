@@ -241,6 +241,7 @@ export const uzDict: Record<string, string> = {
   'agent.ready': '{label} `{subdir}`{argsSuffix} da tayyor\n{infoBlock}Xabar yuboring:',
   'agent.ready_model': '🧠 Model: {model}',
   'agent.no_session': 'Agent ishlamayapti. /claude yoki /opencode bilan boshlang.',
+  'agent.prompt_not_delivered': '⚠️ Agent oxirgi xabaringizni olmadi: uni agent kirishiga yozib bo\'lmadi ({error}). Qaytadan yuboring.',
   'agent.session_ended': '{label}: seans tugadi',
   'lostWork.line.resumed': '⚠️ Agent jarayoni {reason}, uning o\'z ishi hali tugamagan edi — {work}. Uni qayta ishga tushirdim va bu ishni qaytadan tekshirishni so\'radim.',
   'lostWork.line.held': '⚠️ Agent jarayoni {reason}, uning o\'z ishi hali tugamagan edi — {work}. Keyingi xabaringiz uni qayta ishga tushiradi va nima yo\'qolganini aytadi.',

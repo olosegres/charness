@@ -241,6 +241,7 @@ export const hiDict: Record<string, string> = {
   'agent.ready': '{label} `{subdir}`{argsSuffix} में तैयार\n{infoBlock}एक संदेश भेजें:',
   'agent.ready_model': '🧠 मॉडल: {model}',
   'agent.no_session': 'कोई एजेंट नहीं चल रहा। /claude या /opencode से शुरू करें।',
+  'agent.prompt_not_delivered': '⚠️ एजेंट को आपका पिछला संदेश नहीं मिला: उसे एजेंट के इनपुट में लिखना विफल रहा ({error})। इसे फिर से भेजें।',
   'agent.session_ended': '{label}: सत्र समाप्त',
   'lostWork.line.resumed': '⚠️ एजेंट की प्रक्रिया {reason}, जबकि उसका अपना काम अभी बाकी था — {work}। मैंने उसे फिर से शुरू किया और उस काम को दोबारा जाँचने को कहा।',
   'lostWork.line.held': '⚠️ एजेंट की प्रक्रिया {reason}, जबकि उसका अपना काम अभी बाकी था — {work}। आपका अगला संदेश उसे फिर से शुरू करेगा और बताएगा कि क्या खो गया।',
