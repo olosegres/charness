@@ -547,8 +547,11 @@ describe('Shared todo registry end to end: built charness, fake Bot API, fake cl
     const joinIndex = labels.flat().filter((label) => label.startsWith('Join the project of')).indexOf('Join the project of #topic 111 (proj-a)');
     assert.ok(joinIndex >= 0, JSON.stringify(labels));
     await tapAndAwaitRerender(view, `todo_prj_join_${joinIndex}`, 'Now: proj-a — joined by hand · topics: 3', '✅ Project: proj-a');
-    const persisted = JSON.parse(fs.readFileSync(path.join(getLayout().dataDir, 'state.json'), 'utf8')) as { todoProjectOverrides?: Record<string, unknown> };
-    assert.deepEqual(persisted.todoProjectOverrides, { [`${group.id}:${topicCThreadId}`]: { kind: 'join', conversationKey: `${group.id}:${topicAThreadId}` } });
+    // The picker re-renders as soon as the handler ran; `state.json` follows with the bot's debounced save, so it is waited for.
+    const readPersistedOverrides = (): Record<string, unknown> | undefined => (JSON.parse(fs.readFileSync(path.join(getLayout().dataDir, 'state.json'), 'utf8')) as { todoProjectOverrides?: Record<string, unknown> }).todoProjectOverrides;
+    const expectedOverrides = { [`${group.id}:${topicCThreadId}`]: { kind: 'join', conversationKey: `${group.id}:${topicAThreadId}` } };
+    await getCharness().waitFor('the join persisted', replyTimeoutMs, () => JSON.stringify(readPersistedOverrides()) === JSON.stringify(expectedOverrides));
+    assert.deepEqual(readPersistedOverrides(), expectedOverrides);
   });
 
   it('General\'s /todo lists the project with its topics', async () => {
