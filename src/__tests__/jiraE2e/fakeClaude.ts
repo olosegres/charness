@@ -2,7 +2,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import * as readline from 'readline';
-import { spawn, spawnSync } from 'child_process';
+import { spawnSync } from 'child_process';
 import { randomUUID } from 'crypto';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
@@ -73,6 +73,7 @@ import {
   type FakeStatusWatchTarget,
   type McpServerConfig,
 } from './fakeClaudeContract';
+import { runHookCommand } from './fakeHookRunner';
 import { workerWatchArmedFileName, workerWatchCheckCommand, workerWatchStatusArguments } from '../../scheduler/workerWatch';
 import { readClaudeTranscriptContent } from '../../utils/claudeTranscriptContent';
 import { claudeSessionStateEventsVariableName } from '../../utils/jsonStreamHost';
@@ -374,21 +375,6 @@ function getSessionStartCompactHookCommands(argv: readonly string[]): string[] {
     .flatMap((group) => (group.hooks ?? []).flatMap((hook) => (hook.type === 'command' && typeof hook.command === 'string' ? [hook.command] : [])));
 }
 
-/** One hook command run without blocking the fake: the input on stdin, what it printed (nothing when it failed or ran too long). */
-function runHookCommand(command: string, input: string): Promise<string> {
-  return new Promise((resolve) => {
-    const child = spawn('/bin/sh', ['-c', command], { stdio: ['pipe', 'pipe', 'ignore'] });
-    let output = '';
-    const timer = setTimeout(() => child.kill('SIGKILL'), hookTimeoutMs);
-    child.stdout.setEncoding('utf8').on('data', (chunk: string) => { output += chunk; });
-    child.on('close', () => { clearTimeout(timer); resolve(output); });
-    child.on('error', () => { clearTimeout(timer); resolve(''); });
-    // A hook that exits without reading its input must not crash the fake.
-    child.stdin.on('error', () => {});
-    child.stdin.end(input);
-  });
-}
-
 /**
  * The launch's `SessionStart` hooks after a compaction, the way the real CLI runs them: all at once, without blocking the
  * process (stdin and control frames are still read meanwhile), the hook input on stdin (source `compact`), a `hook_started`
@@ -401,7 +387,7 @@ async function runSessionStartCompactHooks(argv: readonly string[], sessionId: s
   const outputs = await Promise.all(getSessionStartCompactHookCommands(argv).map(async (command) => {
     const hookId = randomUUID();
     writeStdout({ type: 'system', subtype: 'hook_started', hook_id: hookId, hook_name: 'SessionStart:compact', hook_event: 'SessionStart', session_id: sessionId });
-    const output = await runHookCommand(command, input);
+    const output = await runHookCommand(command, input, hookTimeoutMs);
     writeStdout({ type: 'system', subtype: 'hook_response', hook_id: hookId, hook_name: 'SessionStart:compact', hook_event: 'SessionStart', output, stdout: output, stderr: '', exit_code: 0, outcome: 'success', session_id: sessionId });
     return output;
   }));
