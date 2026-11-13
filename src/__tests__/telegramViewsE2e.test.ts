@@ -736,24 +736,36 @@ describe('Telegram views end to end: built charness, fake Bot API, fake claude (
     );
   });
 
-  it('Telegram refusing the markup of the «🔧 tool» status frame: it is created again as plain text — the tool name as written, no entity shown', async () => {
+  it('Telegram refusing the markup of the «🔧 tool» status frame: it is shown again as plain text — the tool name as written, no entity shown', async () => {
     // A tool name with markup characters, so the HTML (`Read&lt;&amp;&gt;`) and the plain twin (`Read<&>`) differ. Only the status
     // frame itself is refused (the tool's result message carries the name too, and goes through).
     const statusHtml = '🔧 Read&lt;&amp;&gt;';
     const statusPlain = '🔧 Read<&>';
-    fakeTelegram.failNextCall(
-      'sendMessage',
-      'Bad Request: can\'t parse entities: Unsupported start tag "x" at byte offset 0',
-      (payload) => payload.parse_mode === 'HTML' && payload.text === statusHtml,
-    );
+    // The previous turn's last status frame stays on screen until the next output (nothing removes it on a timer), so this turn's
+    // first frame is either CREATED (a send) or EDITED into that frame (an edit): both paths fall back to the plain twin, and
+    // which one runs depends on what the earlier turns left. The refusal is armed for both; the checks below read the sequence.
+    for (const method of ['sendMessage', 'editMessageText']) {
+      fakeTelegram.failNextCall(
+        method,
+        'Bad Request: can\'t parse entities: Unsupported start tag "x" at byte offset 0',
+        (payload) => payload.parse_mode === 'HTML' && payload.text === statusHtml,
+      );
+    }
     // The turn works a moment before it answers: the answer's own tool call writes a status frame of its own, and one that
     // follows within the poll that reads the `Read<&>` frame replaces it (the latest status wins) — as it does for a real agent.
     fakeTelegram.pushOperatorMessage(topicThreadId, `TOPIC-14 [tool-name:Read<&>] [work-ms:${toolStatusFrameSettleMs}] [fake:answer]`);
     await waitForFakeAnswer('TOPIC-14');
-    // The status frame is transient (the stream text that follows replaces it), so its sends are read from the calls, not the topic.
-    await getCharness().waitFor('the status frame to be sent as plain text after the refusal', replyTimeoutMs, () => fakeTelegram.listCalls('sendMessage').some((call) => call.payload.text === statusPlain));
-    const statusSends = fakeTelegram.listCalls('sendMessage').filter((call) => call.payload.text === statusHtml || call.payload.text === statusPlain);
-    assert.deepEqual(statusSends.map((call) => [call.payload.text, call.payload.parse_mode]), [[statusHtml, 'HTML'], [statusPlain, undefined]], 'the HTML send was refused once, then the plain twin — the tool name as written — went through');
+    // The status frame is transient (the stream text that follows replaces it), so its sends and edits are read from the calls, not the topic.
+    const listStatusAttempts = (): FakeTelegramCall[] => ['sendMessage', 'editMessageText']
+      .flatMap((method) => fakeTelegram.listCalls(method))
+      .filter((call) => call.payload.text === statusHtml || call.payload.text === statusPlain)
+      .sort((first, second) => first.receivedAtMs - second.receivedAtMs);
+    await getCharness().waitFor('the status frame to be shown as plain text after the refusal', replyTimeoutMs, () => listStatusAttempts().some((call) => call.payload.text === statusPlain));
+    const attempts = listStatusAttempts();
+    assert.deepEqual(attempts.map((call) => [call.method, call.payload.text, call.payload.parse_mode]), [
+      [attempts[0]?.method, statusHtml, 'HTML'],
+      [attempts[0]?.method, statusPlain, undefined],
+    ], 'the HTML attempt was refused once, then the plain twin — the tool name as written — went through the same way (a send or an edit)');
   });
 
   it('a tool status frame that its own turn\'s text outran while it waited behind the earlier turns\' unposted text is never posted — no «🔧» line is left under the finished turn', async () => {
