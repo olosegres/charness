@@ -247,7 +247,10 @@ import { renderAgentFrame, renderAgentHtml, type AgentFrame } from './connectors
 import { splitMessage, MAX_MESSAGE_LEN } from './connectors/telegram/messageSplit';
 import { buildFoldedMessage } from './connectors/telegram/foldedMessage';
 import { unpinMessagesReportingRetryable } from './connectors/telegram/unpinMessages';
-import { addPendingOutput, checkHasPendingOutput, getNewestPendingSeq, getOutputFlushPlan, getUnsentRemainder } from './connectors/telegram/outputFlushPlan';
+import { addPendingOutput, checkHasPendingOutput, getNewestPendingSeq, getOutputFlushPlan } from './connectors/telegram/outputFlushPlan';
+import { getCallerEditResult, sendOutputChunks, type ThreadEditOutcome, type ThreadSendOutcome } from './connectors/telegram/sendOutcome';
+import { checkIsTelegramFailureRetryable } from './connectors/telegram/telegramFailureRetry';
+import { releasePinnedNoticeSlot, surfacePinnedNotice, type PinnedNoticePorts, type PinnedNoticeSlots } from './connectors/telegram/pinnedNoticeSlot';
 import { glueBacklogFrames } from './connectors/telegram/outputBacklogGlue';
 import { checkShouldKeepTyping as checkShouldKeepTypingDecision } from './utils/typingActive';
 import { checkIsTypingStuckByLeak } from './utils/typingLoopBackstop';
@@ -267,7 +270,7 @@ import { installLinkPreviewSuppression } from './utils/linkPreviewSuppression';
 import { pruneExpiredBuckets, retentionMs as logBucketRetentionMs } from './utils/rotatingLogFile';
 import { consoleFileBase, consoleFileExt } from './utils/consoleFileTap';
 import { clearStatusCoalescer } from './utils/clearStatusCoalescer';
-import { createGroupOutputBacklog, drainGroupOutput, landGroupOutput, startFinalGroupOutputAttempt, type GroupOutputBacklog, type GroupOutputDrainDeps } from './utils/groupOutputBacklog';
+import { createGroupOutputBacklog, drainGroupOutput, landGroupOutput, startFinalGroupOutputAttempt, type GroupOutputBacklog, type GroupOutputDrainDeps, type GroupOutputSendResult } from './utils/groupOutputBacklog';
 import { landStreamedOutputWithinLimit } from './utils/streamedOutputLanding';
 import { persistAdapterSessionIds } from './utils/persistAdapterSessionIds';
 import { checkIsConversationRecorded, getEnsureSessionPlan, getPersistedSessionIdForAdapter, getResumeFailureAction, type ResumeFailureKind } from './utils/ensureSessionPlan';
@@ -1789,14 +1792,6 @@ const pendingQuestions = new Map<string, PendingQuestionState>();
  */
 const questionPinnedMessageId = new Map<string, number>();
 /**
- * @description Placeholder stored in a pinned-notice map ({@link
- * authNoticePinnedMessageId}, {@link limitResumeNoticePinnedMessageId}) between
- * reserving the one-notice slot and the pin landing, so a burst of events can't
- * race two notices out. A real Telegram message id is always positive, so `-1` can
- * never collide with one.
- */
-const pinnedNoticePendingSentinel = -1;
-/**
  * @description Per-thread id of the PINNED "logged-out" notice (in-memory). Its
  * presence is ALSO the one-notice-per-logout-episode guard: while set, a repeat
  * `apiError('auth')` is a no-op. Deliberately SEPARATE from
@@ -1807,7 +1802,7 @@ const pinnedNoticePendingSentinel = -1;
  * NOT at the user-takeover {@link cancelApiRetry} sites, which must not
  * re-notify (see the NOTE in {@link cancelApiRetry}).
  */
-const authNoticePinnedMessageId = new Map<string, number>();
+const authNoticePinnedMessageId: PinnedNoticeSlots = new Map();
 /**
  * @description Per-thread id of the PINNED "the limit reset, work resumed" notice
  * (in-memory). A limit wait can run for hours in a MUTED topic, so the one message
@@ -1817,7 +1812,7 @@ const authNoticePinnedMessageId = new Map<string, number>();
  * thread's next genuine user message and at every session-end / teardown site, so
  * pins never accumulate one per episode.
  */
-const limitResumeNoticePinnedMessageId = new Map<string, number>();
+const limitResumeNoticePinnedMessageId: PinnedNoticeSlots = new Map();
 /**
  * @description Threads that already got the "auto-continue is OFF for this topic"
  * notice for the CURRENT limit episode. Without it every repeated limit frame
@@ -2836,32 +2831,28 @@ async function handleNoResponseWithLocale(key: SessionKey): Promise<void> {
  * (a pin pierces the muted topic → a Telegram notification), backend-aware
  * (Claude → re-`/login`; OpenCode → restart the server). No timer, no persisted
  * retry record — a wait never recovers auth. Deduped to exactly one notice per
- * logout episode via {@link authNoticePinnedMessageId}; the slot is reserved with
- * {@link pinnedNoticePendingSentinel} BEFORE the awaits so a burst of `apiError`
- * frames can't race two notices out. The pin is removed on recovery — the first
+ * logout episode via {@link authNoticePinnedMessageId} ({@link surfacePinnedNotice}:
+ * the slot is reserved BEFORE the post so a burst of `apiError` frames can't race
+ * two notices out, and a post of unknown outcome is never repeated). The pin is removed on recovery — the first
  * real output after re-login ({@link clearAuthNotice}, wired in
  * {@link handleAgentOutput}) — and at the session-end / teardown sites (NOT the
  * user-takeover {@link cancelApiRetry} sites; see its NOTE).
  */
 async function surfaceLoggedOutNotice(key: SessionKey): Promise<void> {
-  const k = keyToString(key);
-  if (authNoticePinnedMessageId.has(k)) return; // already surfaced this episode
-  authNoticePinnedMessageId.set(k, pinnedNoticePendingSentinel);
-
   const messageKey =
     getThreadAdapterNameRaw(key) === openCodeAdapterName ? 'apiRetry.loggedOutOpenCode' : 'apiRetry.loggedOutClaude';
-  const id = await replyToThread(key, t(messageKey));
-  if (id === null) {
-    // Send failed — release the reservation so a later error can retry surfacing.
-    if (authNoticePinnedMessageId.get(k) === pinnedNoticePendingSentinel) authNoticePinnedMessageId.delete(k);
-    return;
-  }
-  // A concurrent teardown (clearAuthNotice) may have dropped the reservation
-  // mid-send; don't resurrect it — leave the message unpinned in that case.
-  if (!authNoticePinnedMessageId.has(k)) return;
-  authNoticePinnedMessageId.set(k, id);
-  // First pin of the episode notifies (disableNotification: false).
-  await pinMessageQuiet(key, id, { disableNotification: false });
+  await surfacePinnedNotice(authNoticePinnedMessageId, keyToString(key), getPinnedNoticePorts(key, t(messageKey)));
+}
+
+/** @description The post and the notifying pin of a pinned notice of `key`'s topic ({@link surfacePinnedNotice}). */
+function getPinnedNoticePorts(key: SessionKey, text: string): PinnedNoticePorts {
+  return {
+    send: () => replyToThreadDetailed(key, text),
+    // The pin of the episode's one notice notifies (disableNotification: false).
+    pin: async (messageId) => {
+      await pinMessageQuiet(key, messageId, { disableNotification: false });
+    },
+  };
 }
 
 /**
@@ -2872,38 +2863,21 @@ async function surfaceLoggedOutNotice(key: SessionKey): Promise<void> {
  * {@link cancelApiRetry} — see its NOTE). No-op when none is active.
  */
 function clearAuthNotice(key: SessionKey): void {
-  const k = keyToString(key);
-  const pinnedId = authNoticePinnedMessageId.get(k);
-  if (pinnedId === undefined) return;
-  authNoticePinnedMessageId.delete(k);
-  if (pinnedId !== pinnedNoticePendingSentinel) void unpinMessageQuiet(key, pinnedId);
+  const pinnedId = releasePinnedNoticeSlot(authNoticePinnedMessageId, keyToString(key));
+  if (pinnedId !== null) void unpinMessageQuiet(key, pinnedId);
 }
 
 /**
  * @description Announce that a usage/session-limit window reset and work is moving
  * again, as ONE PINNED, NOTIFYING message. A limit wait runs for up to an hour per
  * attempt in a topic the operator keeps muted, so a plain line would go unseen —
- * the pin is what fires the Telegram notification. Reserves its slot with
- * {@link pinnedNoticePendingSentinel} BEFORE the awaits (same discipline as
- * {@link surfaceLoggedOutNotice}) so a burst can't pin twice, and refuses to
- * resurrect a reservation a concurrent teardown dropped mid-send.
+ * the pin is what fires the Telegram notification. Posted through
+ * {@link surfacePinnedNotice}, as {@link surfaceLoggedOutNotice} is: one notice per
+ * episode, never repeated after a post of unknown outcome, and never pinned after a
+ * concurrent teardown dropped its slot mid-send.
  */
 async function surfaceLimitResumedNotice(key: SessionKey): Promise<void> {
-  const k = keyToString(key);
-  if (limitResumeNoticePinnedMessageId.has(k)) return; // already pinned this episode
-  limitResumeNoticePinnedMessageId.set(k, pinnedNoticePendingSentinel);
-
-  const id = await replyToThread(key, t('apiRetry.limitResetResuming'));
-  if (id === null) {
-    // Send failed — release the reservation so a later fire can retry surfacing.
-    if (limitResumeNoticePinnedMessageId.get(k) === pinnedNoticePendingSentinel) {
-      limitResumeNoticePinnedMessageId.delete(k);
-    }
-    return;
-  }
-  if (!limitResumeNoticePinnedMessageId.has(k)) return;
-  limitResumeNoticePinnedMessageId.set(k, id);
-  await pinMessageQuiet(key, id, { disableNotification: false });
+  await surfacePinnedNotice(limitResumeNoticePinnedMessageId, keyToString(key), getPinnedNoticePorts(key, t('apiRetry.limitResetResuming')));
 }
 
 /**
@@ -2915,11 +2889,8 @@ async function surfaceLimitResumedNotice(key: SessionKey): Promise<void> {
  * none is active.
  */
 function clearLimitResumeNotice(key: SessionKey): void {
-  const k = keyToString(key);
-  const pinnedId = limitResumeNoticePinnedMessageId.get(k);
-  if (pinnedId === undefined) return;
-  limitResumeNoticePinnedMessageId.delete(k);
-  if (pinnedId !== pinnedNoticePendingSentinel) void unpinMessageQuiet(key, pinnedId);
+  const pinnedId = releasePinnedNoticeSlot(limitResumeNoticePinnedMessageId, keyToString(key));
+  if (pinnedId !== null) void unpinMessageQuiet(key, pinnedId);
 }
 
 /**
@@ -4118,13 +4089,6 @@ interface ReplyToThreadOptions {
   plainFallbackText?: string;
 }
 
-/**
- * @description How a send to a thread ended: `sent` with the message id; `failed` — it did not land; `unknown` — the Bot API
- * did not answer within the send queue's deadline, the message may or may not be in the topic, and it must NOT be sent again
- * (`rateLimiter.ts` `SendOutcomeUnknownError`).
- */
-type ThreadSendOutcome = { kind: 'sent'; messageId: number } | { kind: 'failed' } | { kind: 'unknown' };
-
 async function replyToThread(
   key: SessionKey,
   text: string,
@@ -4135,14 +4099,17 @@ async function replyToThread(
   return outcome.kind === 'sent' ? outcome.messageId : null;
 }
 
-/** @description {@link replyToThread} telling a send whose outcome is unknown from one that failed — see {@link ThreadSendOutcome}. */
+/**
+ * @description {@link replyToThread} telling a send whose outcome is unknown from one that failed, and a failure worth another
+ * try later from a refusal for good — see {@link ThreadSendOutcome}.
+ */
 async function replyToThreadDetailed(
   key: SessionKey,
   text: string,
   extra: SendExtra = {},
   options: ReplyToThreadOptions = {},
 ): Promise<ThreadSendOutcome> {
-  if (!checkIsTelegramPrimitiveKey(key, 'replyToThread')) return { kind: 'failed' };
+  if (!checkIsTelegramPrimitiveKey(key, 'replyToThread')) return { kind: 'failed', isRetryable: false };
   const sendOnce = (sendExtra: Record<string, unknown>, sentText: string = text) => {
     const send = () =>
       bot.telegram.sendMessage(
@@ -4171,7 +4138,7 @@ async function replyToThreadDetailed(
   try {
     return await trackSent(await sendOnce(buildSendExtra(key, extra)));
   } catch (e) {
-    if (options.signal?.aborted && checkIsAbortError(e)) return { kind: 'failed' };
+    if (options.signal?.aborted && checkIsAbortError(e)) return { kind: 'failed', isRetryable: false };
     if (checkIsSendOutcomeUnknownError(e)) return reportUnknown();
     // Markdown parse failure fallback. Several `t(...)` templates interpolate
     // user-controlled content (subdir names, branch names, error strings)
@@ -4195,7 +4162,7 @@ async function replyToThreadDetailed(
       } catch (e2) {
         if (checkIsSendOutcomeUnknownError(e2)) return reportUnknown();
         await handleSendError(key, e2);
-        return { kind: 'failed' };
+        return { kind: 'failed', isRetryable: checkIsTelegramFailureRetryable(e2) };
       }
     }
 
@@ -4205,7 +4172,7 @@ async function replyToThreadDetailed(
     // re-arm a bounded redelivery (its late re-send was the OUT-OF-ORDER cause
     // the user reported) — the rare 429 is just logged via handleSendError.
     await handleSendError(key, e);
-    return { kind: 'failed' };
+    return { kind: 'failed', isRetryable: checkIsTelegramFailureRetryable(e) };
   } finally {
     releaseSecret?.();
   }
@@ -4214,9 +4181,10 @@ async function replyToThreadDetailed(
 /**
  * @description Edit an existing assistant message in the thread.
  *
- * Returns `true` on success, `false` if the edit failed for any reason —
- * caller decides whether to fall back to a new `replyToThread`. We don't
- * track edits as new ids (the original was already tracked).
+ * Returns `true` on success — or when the outcome is unknown, see
+ * {@link editThreadMessageDetailed} — and `false` if the edit failed for any
+ * other reason — caller decides whether to fall back to a new `replyToThread`.
+ * We don't track edits as new ids (the original was already tracked).
  *
  * `plainFallbackText`: the text for the retry without `parse_mode` when Telegram cannot parse the Markdown one — the
  * same text when absent, which shows a Markdown render's escape marks as they are; a caller that has a real plain
@@ -4234,7 +4202,8 @@ async function editThreadMessage(
 
 /**
  * @description {@link editThreadMessage} telling a message that is not there (deleted by hand: «message to edit not found») from any
- * other failure — see {@link ThreadMessageEdit}. The failure is logged either way, as before.
+ * other failure — see {@link ThreadMessageEdit}. The failure is logged either way, as before. An edit whose outcome is unknown
+ * counts as made ({@link getCallerEditResult}): a caller answers a failed edit by posting the content anew, which could show it twice.
  */
 async function editThreadMessageDetailed(
   key: SessionKey,
@@ -4243,15 +4212,12 @@ async function editThreadMessageDetailed(
   extra: SendExtra = {},
   plainFallbackText: string = text,
 ): Promise<ThreadMessageEdit> {
-  const outcome = await editThreadMessageWithOutcome(key, messageId, text, extra, plainFallbackText);
-  // An edit whose outcome is unknown may simply be made again (it cannot post anything twice): the shared contract's `failed`.
-  return outcome === 'unknown' ? 'failed' : outcome;
+  return getCallerEditResult(await editThreadMessageWithOutcome(key, messageId, text, extra, plainFallbackText));
 }
 
 /**
  * @description {@link editThreadMessageDetailed}, plus `unknown`: the Bot API did not answer within the send queue's deadline, the
- * edit may or may not be applied. The output flush needs it apart from `failed`, since its answer to a failed edit is to send the
- * text FRESH, which would post it twice.
+ * edit may or may not be applied. The output flush reads it through `sendOutputChunks`, which counts it as made.
  */
 async function editThreadMessageWithOutcome(
   key: SessionKey,
@@ -4259,7 +4225,7 @@ async function editThreadMessageWithOutcome(
   text: string,
   extra: SendExtra = {},
   plainFallbackText: string = text,
-): Promise<ThreadMessageEdit | 'unknown'> {
+): Promise<ThreadEditOutcome> {
   if (!checkIsTelegramPrimitiveKey(key, 'editThreadMessage')) return 'failed';
   const editOnce = (editText: string, editExtra: Record<string, unknown>) =>
     enqueueSend(key, () =>
@@ -4666,18 +4632,20 @@ function flushGroupOutput(key: SessionKey, q: OutputQueueState): void {
 }
 
 /**
- * @description What the send loop of a topic's backlog does through the bot: the send itself, the retry a 429 leftover needs,
- * and the log of what a stop dropped or a send threw.
+ * @description What the send loop of a topic's backlog does through the bot: the send itself, the retry a leftover that failed
+ * for now needs (a 429, the network), and the log of what was dropped (refused for good, or failed at a stop) or a send threw.
  */
 function getGroupOutputDrainDeps(key: SessionKey, q: OutputQueueState): GroupOutputDrainDeps {
   return {
     sendSegment: (segment) => sendOutputImmediate(key, segment.output, segment.isContinuation, segment.startsNewMessage),
     onStalled: () => {
-      console.warn(`[send] ${keyToString(key)} output remainder 429'd and was put back at the head for a retry`);
+      console.warn(`[send] ${keyToString(key)} output remainder failed for now (a 429 or the network) and was put back at the head for a retry`);
       armOutputRetry(key, q);
     },
-    onDropped: (segment) => {
-      console.warn(`[send] ${keyToString(key)} output remainder 429'd on its final attempt at a stop and was dropped`);
+    onDropped: (segment, unsentRemainder, reason) => {
+      const remainderSize = `${unsentRemainder.length} chars`;
+      if (reason === 'refused') console.warn(`[send] ${keyToString(key)} output remainder (${remainderSize}) was refused by Telegram for good and was dropped`);
+      else console.warn(`[send] ${keyToString(key)} output remainder (${remainderSize}) failed on its final attempt at a stop and was dropped`);
       // Text that took the new-message mark and is dropped leaves the mark with the thread again.
       if (segment.startsNewMessage) markNeedsNewMessage(key);
     },
@@ -4686,8 +4654,8 @@ function getGroupOutputDrainDeps(key: SessionKey, q: OutputQueueState): GroupOut
 }
 
 /**
- * @description Arm the timer that sends again what a 429 put back at the head of the backlog. Several segments go at once; one
- * waits out the debounce, stretched while the chat is in a 429 cooldown.
+ * @description Arm the timer that sends again what a failure for now (a 429, the network) put back at the head of the backlog.
+ * Several segments go at once; one waits out the debounce, stretched while the chat is in a 429 cooldown.
  */
 function armOutputRetry(key: SessionKey, q: OutputQueueState): void {
   // Audit S13 / #30: the re-trigger `setTimeout` used to be a bare
@@ -4739,14 +4707,15 @@ async function finalizeGroupOutput(key: SessionKey): Promise<void> {
  * On Markdown rejection by Telegram we fall back to plain text (`parse_mode`
  * unset) — the message lands either way. If the in-place edit fails (message
  * deleted / API hiccup) we send every chunk fresh so the full combined text
- * still reaches the user.
+ * still reaches the user ({@link sendOutputChunks}, which also keeps a call of
+ * unknown outcome from being made twice).
  */
 async function sendOutputImmediate(
   key: SessionKey,
   output: string,
   isContinuation = false,
   startsNewMessage = false,
-): Promise<{ unsentRemainder: string | null }> {
+): Promise<GroupOutputSendResult> {
   // The typing loader is stopped upstream in `handleAgentOutput` (the shared
   // onOutput entry for BOTH transports), so it's not repeated here.
   await deleteStatusMessage(key);
@@ -4769,50 +4738,19 @@ async function sendOutputImmediate(
     ? planChunks
     : glueBacklogFrames(planChunks, MAX_MESSAGE_LEN, (chunk) => renderAgentHtml(chunk).length);
 
-  let startIndex = 0;
-  if (shouldEditFirstChunk) {
-    // An edit whose outcome is unknown counts as made: sending the text fresh could post it twice, while the next continuation's
-    // edit rewrites the whole message anyway.
-    const editOutcome = chunks[0] === msgState.lastMessageText
-      ? 'edited'
-      : await editThreadMessageWithOutcome(key, msgState.lastMessageId!, renderAgentHtml(chunks[0]), { parse_mode: 'HTML' }, chunks[0]);
-    if (editOutcome === 'edited' || editOutcome === 'unknown') {
-      msgState.lastMessageText = chunks[0];
-      startIndex = 1;
-    }
-    // Edit failed (message deleted / API hiccup): fall through and send every
-    // chunk fresh — the full combined text still reaches the user.
-  }
-
-  // No silent drop: track how many chunks actually landed, counting from the
-  // FRONT. `startIndex` already covers a successful in-place edit of chunks[0];
-  // when that edit failed it is 0 and every chunk re-sends fresh below. A
-  // chunk that FAILED (dropped on a 429 after the retry-after wait) STOPS the
-  // run (the cooldown would drop the rest of this synchronous flush too) and the
-  // un-sent remainder is reported so the caller puts it back for the next flush.
-  // A chunk whose outcome is UNKNOWN (no answer within the send queue's
-  // deadline) counts as sent — it may be in the topic, so it is never sent
-  // again — and the next text opens a message of its own: there is no known
-  // message to append to.
-  let sentCount = startIndex;
-  for (let i = startIndex; i < chunks.length; i++) {
-    const outcome = await replyChunkDetailed(key, renderAgentHtml(chunks[i]), chunks[i]);
-    if (outcome.kind === 'failed') break;
-    if (outcome.kind === 'sent') {
-      msgState.lastMessageId = outcome.messageId;
-      msgState.lastMessageText = chunks[i];
-    } else {
-      msgState.lastMessageId = null;
-      msgState.lastMessageText = null;
-    }
-    sentCount = i + 1;
-  }
+  // An edit whose outcome is unknown counts as made, and a chunk whose outcome is unknown as sent: sent (again) they could show
+  // twice. A chunk that FAILED stops the run; the rest is the remainder the backlog puts back, or drops when Telegram refused it
+  // for good. The cursor is the thread's own message state.
+  const result = await sendOutputChunks(chunks, shouldEditFirstChunk, msgState, {
+    editLastMessage: (messageId, chunk) => editThreadMessageWithOutcome(key, messageId, renderAgentHtml(chunk), { parse_mode: 'HTML' }, chunk),
+    sendChunk: (chunk) => replyChunkDetailed(key, renderAgentHtml(chunk), chunk),
+  });
 
   // S3: output just landed below any pending question — bring the question back
   // to the bottom (debounced; no-op when no question is pending).
   onThreadActivityWhileQuestionPending(key);
 
-  return { unsentRemainder: getUnsentRemainder(chunks, sentCount) };
+  return result;
 }
 
 /**
@@ -4839,7 +4777,7 @@ async function replyChunkDetailed(
   plainFallback: string,
   replyMarkup?: InlineKeyboardMarkup,
 ): Promise<ThreadSendOutcome> {
-  if (!checkIsTelegramPrimitiveKey(key, 'replyChunkWithFallback')) return { kind: 'failed' };
+  if (!checkIsTelegramPrimitiveKey(key, 'replyChunkWithFallback')) return { kind: 'failed', isRetryable: false };
   const markupExtra = replyMarkup ? { reply_markup: replyMarkup } : {};
   // Telegram refusing the markup is answered INSIDE replyToThread, with the plain twin — without it the retry would show the tags.
   const outcome = await replyToThreadDetailed(key, renderedHtml, { parse_mode: 'HTML', ...markupExtra }, { plainFallbackText: plainFallback });
@@ -6396,6 +6334,7 @@ const botCore: BotCore = {
   command,
   getState: () => state,
   replyToThread,
+  replyToThreadDetailed,
   editThreadMessage,
   editThreadMessageDetailed,
   editThreadKeyboard,
@@ -12107,7 +12046,9 @@ async function handleAgentStatus(key: SessionKey, status: string): Promise<void>
   // resumes the stale status is removed and the next status re-posts below again.
   // Group mode now drains any coalesced-but-unsent output here too (S2), so the
   // status likewise lands below content rather than above a still-buffered chunk;
-  // a fully-delivered turn is a no-op.
+  // a fully-delivered turn is a no-op. The wait is capped like that of every post
+  // after the streamed text: a landing that never ends must not keep the tool's
+  // frame off the topic for ever.
   //
   // That drain waits for the buffered content's paced Bot API sends, and the agent's next text can
   // arrive meanwhile. Parked after the wait, this frame would still be created — below the text
@@ -12117,7 +12058,7 @@ async function handleAgentStatus(key: SessionKey, status: string): Promise<void>
   // dropped — and so is one whose coalescer a teardown replaced during the wait.
   const c = getStatusCoalesceState(key);
   const supersedeCountAtArrival = c.supersedeCount;
-  await getOutboundFor(key).finalize(key);
+  await landStreamedOutputWithinLimit(() => getOutboundFor(key).finalize(key), keyToString(key));
   if (statusCoalescers.get(keyToString(key)) !== c || c.supersedeCount !== supersedeCountAtArrival) return;
   c.pendingText = status;
   // Don't start a flush while one is already running OR while a deferred
@@ -13034,19 +12975,21 @@ async function postPendingQuestionAt(key: SessionKey): Promise<void> {
     : undefined;
 
   try {
-    let messageId = await replyToThread(
+    let outcome = await replyToThreadDetailed(
       key,
       buildQuestionBodyLines(question, escapeMarkdown).join('\n'),
       buildKeyboardExtra(keyboard, { parse_mode: 'Markdown' }),
     );
-    if (!messageId) {
-      // Markdown rejected — retry plain.
-      messageId = await replyToThread(
+    // Markdown rejected — retry plain. Only a post that FAILED: one whose outcome is unknown may already be in the topic, and a
+    // second copy of the question would be posted under it (its id stays unknown; its buttons still answer it).
+    if (outcome.kind === 'failed') {
+      outcome = await replyToThreadDetailed(
         key,
         buildQuestionBodyLinesPlain(question).join('\n'),
         buildKeyboardExtra(keyboard),
       );
     }
+    const messageId = outcome.kind === 'sent' ? outcome.messageId : null;
 
     if (messageId !== null) {
       // Patch the messageId on the existing entry (it may already have been
@@ -13097,9 +13040,10 @@ function handleQuestionGone(key: SessionKey): void {
 function handleAgentClosed(key: SessionKey): void {
   // What the process held that died with it (its own background work), taken before the cleanup below.
   const lostWork = takeLostWorkOf(key);
-  // Session is gone — drop any not-yet-sent output AND status frame so they
-  // don't surface after the "session ended" notice (the trailing-output bug:
-  // a 429 backlog could let queued deltas land seconds after the close).
+  // Session is gone — the not-yet-sent output gets its ONE final attempt (a 429
+  // drops what it keeps, nothing is retried after the stop), so the agent's last
+  // words may still land just after the "session ended" notice; the pending status
+  // frame is dropped.
   clearThreadQueues(key);
   // Session gone — stop the liveness loop so it can't recreate a frame after
   // the close (it would otherwise outlive the session via its self-re-arm).
@@ -13262,8 +13206,8 @@ function handleAgentStarted(key: SessionKey): void {
 /**
  * @description The Telegram frames a process that is GONE leaves behind — shared
  * by an explicit stop ({@link handleAgentStopped}) and the idle stop
- * ({@link handleAgentSuspended}). Drop the thread's queued-but-unsent output so
- * nothing coalesced before the stop posts afterwards; stop the liveness loop and
+ * ({@link handleAgentSuspended}). Give the thread's queued-but-unsent output its ONE
+ * final attempt ({@link clearThreadQueues}: never retried after the stop); stop the liveness loop and
  * remove its frame (a gone process is idle, a lingering "working…" indicator would
  * be a stuck spinner — the timer first, so it cannot recreate the frame right after
  * the delete); the "thinking …" frame and the sub-agent status for the same reason;

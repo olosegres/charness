@@ -778,8 +778,12 @@ describe('Telegram views end to end: built charness, fake Bot API, fake claude (
         .sort((first, second) => first.receivedAtMs - second.receivedAtMs);
       const heldCall = textCalls[0];
       assert.ok(heldCall, 'the text was sent');
-      // Sent again, it would be a fresh message (an edit after it re-renders the whole message, as any continuation does).
-      assert.ok(textCalls.filter((call) => call.method === 'sendMessage').length <= 1, 'the text whose call got no answer was not sent again as a new message');
+      // Sent again, it would be a fresh message (an edit after it re-renders the whole message, as any continuation does). An
+      // edit of unknown outcome counts as made — the text is NOT sent fresh, as after a failed edit; a send of unknown outcome
+      // counts as sent.
+      const freshSends = textCalls.filter((call) => call.method === 'sendMessage');
+      if (heldCall.method === 'editMessageText') assert.equal(freshSends.length, 0, 'the edit whose call got no answer was not followed by a fresh send of its text');
+      else assert.equal(freshSends.length, 1, 'the text whose send got no answer was not sent again as a new message');
       const answerSend = fakeTelegram.listCalls('sendMessage').find((call) => String(call.payload.text).includes('Fake final answer for HUNGSEND-1'));
       assert.ok(answerSend && answerSend.receivedAtMs >= heldCall.receivedAtMs + sendOperationDeadlineMs, 'the answer waited for the held call to settle — it did not pass it');
     } finally {

@@ -48,7 +48,7 @@ function settleReactions(): Promise<void> {
  * Drain deps that record what was sent and what happened, in one ordered event list. `remainders` maps a text to what a 429
  * keeps of it (its first send only); `gates` hold the send of a text until opened; `throwing` texts make the send throw.
  */
-function createRecorder(options: { remainders?: Record<string, string>; gates?: Record<string, Promise<void>>; throwing?: string[] } = {}) {
+function createRecorder(options: { remainders?: Record<string, string>; gates?: Record<string, Promise<void>>; throwing?: string[]; refused?: string[] } = {}) {
   const events: string[] = [];
   const remainders = { ...options.remainders };
   let stallCount = 0;
@@ -58,11 +58,15 @@ function createRecorder(options: { remainders?: Record<string, string>; gates?: 
       const gate = options.gates?.[segment.output];
       if (gate) await gate;
       if (options.throwing?.includes(segment.output)) throw new Error(`the send of ${segment.output} threw`);
+      if (options.refused?.includes(segment.output)) {
+        events.push(`refused ${segment.output}`);
+        return { unsentRemainder: segment.output, isRetryable: false };
+      }
       const remainder = remainders[segment.output];
       if (remainder !== undefined) {
         delete remainders[segment.output];
         events.push(`429 keeps ${remainder}`);
-        return { unsentRemainder: remainder };
+        return { unsentRemainder: remainder, isRetryable: true };
       }
       return { unsentRemainder: null };
     },
@@ -70,7 +74,7 @@ function createRecorder(options: { remainders?: Record<string, string>; gates?: 
       stallCount += 1;
       events.push('stalled');
     },
-    onDropped: (_segment, unsentRemainder) => { events.push(`dropped ${unsentRemainder}`); },
+    onDropped: (_segment, unsentRemainder, reason) => { events.push(reason === 'refused' ? `dropped as refused ${unsentRemainder}` : `dropped ${unsentRemainder}`); },
     onSendError: (error) => { events.push(`error ${error.message}`); },
   };
   return { deps, events, getStallCount: () => stallCount };
@@ -249,6 +253,21 @@ describe('drainGroupOutput (the debounce flush and its retry)', () => {
     retry(backlog, recorder.deps);
     await landGroupOutput(backlog, recorder.deps);
     assert.deepEqual(recorder.events, ['send A', '429 keeps A-prime', 'stalled', 'send A-prime', 'send B']);
+  });
+});
+
+describe('a send Telegram refused for good (a closed topic, a 4xx that is not a 429)', () => {
+  it('is dropped with its own reason — not put back, not retried — and the loop goes on with the next text', async () => {
+    const backlog = createGroupOutputBacklog();
+    queueText(backlog, 'A');
+    queueNewMessageText(backlog, 'B');
+    const recorder = createRecorder({ refused: ['A'] });
+
+    await landGroupOutput(backlog, recorder.deps);
+
+    assert.deepEqual(recorder.events, ['send A', 'refused A', 'dropped as refused A', 'send B']);
+    assert.equal(recorder.getStallCount(), 0, 'no retry armed');
+    assert.deepEqual(backlog.pendingSegments, []);
   });
 });
 

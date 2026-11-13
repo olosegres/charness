@@ -85,6 +85,7 @@ import { enDict } from '../i18n/en';
 import { bindCreateFolderCallback, bindLeaveCurrentCallback } from '../connectors/telegram/bindPicker';
 import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
 import { keyToString } from '../sessionKey';
+import { claudeJsonStreamUsageLogPrefix } from '../adapters/claudeJsonStreamAdapter';
 import { buildJsonStreamTmuxSessionName } from '../utils/jsonStreamHost';
 import {
   builtCliPath,
@@ -128,6 +129,16 @@ const idleStopLine = 'process stopped; the session sleeps';
 const idleStopStartLine = 'stopping the idle process';
 /** The line the bot logs at boot for the persisted questions it brought back and the ones it dropped. */
 const droppedQuestionLogLine = '[reattach] pending questions: restored 0, dropped 1';
+
+/**
+ * The first flow's deadline of one Bot API call of the topic's send queue (production: 30 s): a call the fake never answers
+ * settles as «outcome unknown» this long after it started. Its holds that end at an observed state are far shorter.
+ */
+const sendOperationDeadlineMs = 15_000;
+/** The bot's log line for a send whose outcome is unknown (`bot.ts` `replyToThreadDetailed`). */
+const unknownSendLogLine = 'got no answer from the Bot API in time';
+/** The bot's log line of a json-stream turn's end (its `result`): one per turn. */
+const turnEndLogLine = claudeJsonStreamUsageLogPrefix;
 
 /** The text the fake streams under a pending question (`fakeClaudeOutputWhileAskedFileName`). */
 const outputWhileAskedText = 'A branch of the agent keeps working while the question waits.';
@@ -309,7 +320,7 @@ async function waitForQuestionAfter(driver: TopicDriver, description: string, af
 
 describe('A question the agent asks stays in the topic however it ends, end to end: built charness, fake Bot API', () => {
   before(async () => {
-    await setUpInstance('charness-qkept-', replyTimeoutMs, {});
+    await setUpInstance('charness-qkept-', replyTimeoutMs, getTelegramFlowTestTimingsEnv({ telegramSendOperationDeadlineMs: sendOperationDeadlineMs }));
   });
 
   after(tearDownInstance);
@@ -318,12 +329,39 @@ describe('A question the agent asks stays in the topic however it ends, end to e
     await bootBindAndStartAgent();
   });
 
+  it('a question whose post Telegram never answers is NOT posted again as plain text: it may already be in the topic', async () => {
+    // The fake Bot API takes the question's post and never answers it; at the send queue's deadline its outcome is unknown.
+    const neverAnswered = createRelease();
+    fakeTelegram.holdNextResponse('sendMessage', neverAnswered.promise, (payload) => String(payload.text).includes(fakeAskQuestion.question));
+    try {
+      const unknownLinesBefore = getCharness().output.split(unknownSendLogLine).length;
+      const sendsBefore = fakeTelegram.listCalls('sendMessage').length;
+      const question = await askQuestion(topic, 'KEPTHUNG-1');
+      await getCharness().waitFor('the question\'s post to time out', sendOperationDeadlineMs + replyTimeoutMs, () => getCharness().output.split(unknownSendLogLine).length > unknownLinesBefore);
+      // A barrier: the reply to a command comes after every send queued before it — a plain copy would be among them.
+      await topic.sendAndAwaitReply('/status', 'Folder:');
+      const questionPosts = fakeTelegram.listCalls('sendMessage').slice(sendsBefore).filter((call) => String(call.payload.text).includes(fakeAskQuestion.question));
+      assert.equal(questionPosts.length, 1, 'the question was posted once — no plain copy after the post whose outcome was unknown');
+
+      // The question stands with its buttons and still answers.
+      const turnEndsBefore = getCharness().output.split(turnEndLogLine).length;
+      await topic.tapAndAwaitAnswer(question, 'qa_0_0');
+      await getCharness().waitFor('the agent to get the answer', agentStartTimeoutMs, () => getGivenAnswers().includes(fakeAskQuestion.shortOptionLabel));
+      // The turn's end, waited for: the next step's prompt must not reach the agent while this turn still ends, or what this
+      // turn says last would be the start of the next one's message.
+      await getCharness().waitFor('the end of the turn', agentStartTimeoutMs, () => getCharness().output.split(turnEndLogLine).length > turnEndsBefore);
+    } finally {
+      neverAnswered.release();
+    }
+  });
+
   it('the text the agent streamed an instant before its question reaches the topic BEFORE the question, which is posted once and stays where it is', async () => {
     // The fake streams `Working on <label>.` and puts the question within milliseconds: the text is still unread by the bot's tail
     // poll or in the adapter's batch window when the question event comes, so the question would overtake it.
+    const sendsBefore = fakeTelegram.listCalls('sendMessage').length;
     const question = await askQuestion(topic, 'KEPTORDER-1');
     await waitForPinned(question);
-    const sentTexts = fakeTelegram.listCalls('sendMessage').map((call) => String(call.payload.text));
+    const sentTexts = fakeTelegram.listCalls('sendMessage').slice(sendsBefore).map((call) => String(call.payload.text));
     const streamTextIndex = sentTexts.findIndex((text) => text.includes('Working on KEPTORDER-1'));
     const questionIndex = sentTexts.findIndex((text) => text.includes(fakeAskQuestion.question));
     assert.ok(streamTextIndex >= 0, 'the stream text was sent');

@@ -538,6 +538,7 @@ test('a text message whose outcome is unknown ends the batch as deliveryUnknown,
   assert.match(!result.ok ? result.error : '', /^Delivered 1 message before a message's delivery outcome became unknown/);
   assert.deepEqual(recorder.sent, ['first'], 'the third is not sent after the second\'s unknown fate');
   assert.equal(calls, 2, 'the second is not sent again');
+  assert.deepEqual(!result.ok && 'kind' in result ? result.sentMessageIds : null, [1], 'the ids of the messages that did land are handed back');
 });
 
 test('any other error of a text send still propagates', async () => {

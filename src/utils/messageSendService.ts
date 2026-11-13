@@ -43,12 +43,14 @@ export type DiscreteMessageItem =
  * attempted but did not land (a partial delivery stays `ok`), so a caller can
  * tell a partial delivery from a full one without parsing `summary`.
  * `sentMessageIds` are the TEXT messages that landed, in order — what a caller
- * pins or edits afterwards (an answer's pin, S8); attachments are not listed.
+ * pins or edits afterwards (an answer's pin, S8); attachments are not listed. A
+ * batch that ended on a delivery of unknown outcome (`deliveryUnknown`) lists the
+ * ones that landed before it.
  */
 export type SendMessagesToThreadResult =
   | { ok: true; summary: string; undeliveredCount: number; sentMessageIds: number[] }
   | { ok: false; error: string }
-  | { ok: false; kind: 'deliveryUnknown'; error: string };
+  | { ok: false; kind: 'deliveryUnknown'; error: string; sentMessageIds: number[] };
 
 export type SendMessagesToThread = (
   threadKey: string,
@@ -273,6 +275,7 @@ export function createSendMessagesToThread<TTarget>(
             error:
               `Delivered ${formatMessageCount(landed)} before an attachment's delivery ` +
               `outcome became unknown: ${fileResult.error}`,
+            sentMessageIds,
           };
         } else {
           attachmentErrors.push(fileResult.error);
@@ -293,6 +296,7 @@ export function createSendMessagesToThread<TTarget>(
             ok: false,
             kind: 'deliveryUnknown',
             error: `Delivered ${formatMessageCount(landed)} before a message's delivery outcome became unknown: ${error.message}`,
+            sentMessageIds,
           };
         }
         if (messageId === null) continue;

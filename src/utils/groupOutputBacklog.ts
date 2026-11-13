@@ -5,9 +5,11 @@
  *
  *  1. Every piece of text is queued once, in the order the agent produced it, and leaves the backlog only to be sent, from the
  *     head, one send at a time ({@link drainGroupOutput}).
- *  2. A piece is sent at most once. A 429 that kept part of it from landing puts that part back at the HEAD (it is older than
- *     everything still queued) for the retry; a send whose outcome is unknown (the Bot API did not answer within its
- *     deadline, `rateLimiter.ts`) counts as sent and is never sent again — the send reports it as landed.
+ *  2. A piece is sent at most once. A 429 (or a failure of the network) that kept part of it from landing puts that part back
+ *     at the HEAD (it is older than everything still queued) for the retry; a refusal for good (a closed topic, another 4xx)
+ *     drops it, logged — a retry would fail the same way and hold all newer text behind it for ever; a send whose outcome is
+ *     unknown (the Bot API did not answer within its deadline, `rateLimiter.ts`) counts as sent and is never sent again — the
+ *     send reports it as landed.
  *  3. A post that must come after the text — an answer, the messages of `send_messages_to_user`, a question, a tool status
  *     frame — waits until every piece queued before it has settled: landed, dropped by a stop, or of unknown outcome
  *     ({@link landGroupOutput}). It does not capture text: it marks a number and waits for it, so two landings, a 429 leftover
@@ -43,14 +45,22 @@ interface GroupOutputSettleWaiter {
   resolve: () => void;
 }
 
+/**
+ * @description What one send of a segment left: nothing (all of it landed, or its outcome is unknown), or the text it could not
+ * land and whether trying it again may help — a 429 or a network failure, as opposed to a refusal for good.
+ */
+export type GroupOutputSendResult = { unsentRemainder: null } | { unsentRemainder: string; isRetryable: boolean };
+
+/** Why the send loop dropped text: a stop's final attempt failed, or Telegram refused it for good. */
+export type GroupOutputDropReason = 'finalAttempt' | 'refused';
+
 /** @description What the send loop needs from the bot: the send itself and what to do when it cannot go on. */
 export interface GroupOutputDrainDeps {
-  /** Send one segment; resolves the text a 429 kept from landing, `null` when all of it landed or its outcome is unknown. */
-  sendSegment: (segment: PendingOutputSegment) => Promise<{ unsentRemainder: string | null }>;
-  /** A 429 put text back at the head and the loop stopped: arm the retry. */
+  sendSegment: (segment: PendingOutputSegment) => Promise<GroupOutputSendResult>;
+  /** A retryable failure put text back at the head and the loop stopped: arm the retry. */
   onStalled: () => void;
-  /** A stop's final attempt could not land `unsentRemainder` of `segment`: it is dropped. */
-  onDropped: (segment: PendingOutputSegment, unsentRemainder: string) => void;
+  /** `unsentRemainder` of `segment` is dropped, for `reason`. */
+  onDropped: (segment: PendingOutputSegment, unsentRemainder: string, reason: GroupOutputDropReason) => void;
   /** A send threw instead of resolving: the segment counts as sent (never sent again) and the loop goes on. */
   onSendError: (error: Error) => void;
 }
@@ -119,14 +129,17 @@ async function runDrainLoop(backlog: GroupOutputBacklog, deps: GroupOutputDrainD
     while (backlog.pendingSegments.length > 0 && backlog.firstSeq <= backlog.sealedThroughSeq) {
       const taken = takePendingOutput(backlog);
       if (!taken) return;
-      const unsentRemainder = await sendSegmentOnce(taken.segment, deps);
-      if (unsentRemainder !== null) {
-        if (taken.seq > backlog.finalAttemptThroughSeq) {
-          requeueUnsentRemainder(backlog, unsentRemainder);
+      const result = await sendSegmentOnce(taken.segment, deps);
+      if (result.unsentRemainder !== null) {
+        if (!result.isRetryable) {
+          deps.onDropped(taken.segment, result.unsentRemainder, 'refused');
+        } else if (taken.seq > backlog.finalAttemptThroughSeq) {
+          requeueUnsentRemainder(backlog, result.unsentRemainder);
           deps.onStalled();
           return;
+        } else {
+          deps.onDropped(taken.segment, result.unsentRemainder, 'finalAttempt');
         }
-        deps.onDropped(taken.segment, unsentRemainder);
       }
       settleGroupOutputThrough(backlog, taken.seq);
     }
@@ -136,13 +149,13 @@ async function runDrainLoop(backlog: GroupOutputBacklog, deps: GroupOutputDrainD
 }
 
 /** A blank segment would only earn a Telegram error and is no text: it settles without a send. */
-async function sendSegmentOnce(segment: PendingOutputSegment, deps: GroupOutputDrainDeps): Promise<string | null> {
-  if (segment.output.trim() === '') return null;
+async function sendSegmentOnce(segment: PendingOutputSegment, deps: GroupOutputDrainDeps): Promise<GroupOutputSendResult> {
+  if (segment.output.trim() === '') return { unsentRemainder: null };
   try {
-    return (await deps.sendSegment(segment)).unsentRemainder;
+    return await deps.sendSegment(segment);
   } catch (error) {
     deps.onSendError(error instanceof Error ? error : new Error(String(error)));
-    return null;
+    return { unsentRemainder: null };
   }
 }
 
