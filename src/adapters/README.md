@@ -140,8 +140,8 @@ compaction), the todo lists' `PostToolUse` inbox hook and — json-stream and pe
 the skills restore: 24 `SessionStart` hooks with the matcher `compact` (`hooks/claudeSkillsRestoreHook.ts`, run by the
 bot's own `node`, 30 s `timeout` each), each printing one labelled part (≤ 9,500 characters) of the skills the transcript
 shows were loaded since the previous compaction, every one with its current text (`utils/skillsRestore.ts`; Claude's own
-re-attach is not relied on — whether a `--resume`d process still knows an earlier process's skills is unmeasured, see the
-live probe). Measured on 2.1.322: they run after EVERY
+re-attach is not relied on — a `--resume`d process re-attaches none of the skills an earlier process loaded, measured by the
+live probe on 2.1.323). Measured on 2.1.322: they run after EVERY
 compaction (the CLI's own mid-turn ones too) BEFORE the new boundary and summary reach the transcript, all parts reach the
 next model request whole and in random order, and the CLI keeps them in the transcript (`hook_additional_context`), so a
 resumed process sends them again. Each kind of launch has its own settings file, so concurrent launches never read each

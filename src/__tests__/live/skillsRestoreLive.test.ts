@@ -12,8 +12,9 @@
  *      skills are loaded, the process stops, a NEW process `--resume`s the conversation and compacts. MEASURED: whether
  *      Claude Code's own re-attach of that compaction (`invoked_skills`) still holds the skills the earlier process loaded
  *      (printed as a `[measure]` diagnostic, never failed on); ASSERTED: the bot's restore gives both skills whole anyway, so
- *      the agent reads the last line of each. Until this measurement says the CLI does rebuild the list, the restore gives
- *      every skill in full (`planClaudeSkillsRestore`).
+ *      the agent reads the last line of each. Measured on 2026-11-13 (Claude Code 2.1.323, the default account): the resumed
+ *      process's re-attach held NONE of them ([] of [live-small, live-big]) — why the restore gives every skill in full
+ *      (`planClaudeSkillsRestore`).
  *
  * Skipped unless `SKILLS_RESTORE_LIVE_CLAUDE_BIN` names the `claude` binary, so `yarn test` never runs it. It spends a few
  * turns of the account the inherited `CLAUDE_CONFIG_DIR` (or `~/.claude`) is signed in to — use a subscription login, never an

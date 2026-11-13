@@ -441,11 +441,13 @@ export interface SkillFolderReader {
  * "load it with the tool" line; EVERY other skill comes back with its CURRENT text.
  *
  * Also a skill Claude Code's own re-attach may carry whole. Measured on ONE process of Claude Code 2.1.322, that re-attach
- * keeps a skill's message whole up to 20,000 characters and about 100,000 in all, newest first; whether a process started
- * with `--resume` — every per-turn turn, every json-stream process after an idle stop or a bot restart — still knows the
- * skills an earlier process loaded is NOT measured (the live probe's resume case measures it). Were a skill only named here
- * and not re-attached, it would be lost until the next compaction while the agent is told not to load it; giving it costs a
- * second copy of a skill under 20,000 characters, once per compaction.
+ * keeps a skill's message whole up to 20,000 characters and about 100,000 in all, newest first. But a process started with
+ * `--resume` — every per-turn turn, every json-stream process after an idle stop or a bot restart — re-attaches NONE of the
+ * skills an earlier process loaded: measured by the live probe's resume case on 2026-11-13 (the installed Claude Code,
+ * 2.1.323, the default account): skills loaded, the process stopped, `--resume`, `/compact` — its `invoked_skills` held []
+ * of [live-small, live-big]. A skill only named here would be lost until the next compaction while the agent is told not to
+ * load it; giving every one costs a second copy of a short skill only in a process that loaded it itself, once per
+ * compaction.
  */
 export function planClaudeSkillsRestore(epoch: ClaudeEpochSkills, folders: SkillFolderReader, unavailableDir: string | null): SkillsRestoreEntry[] {
   const candidates: RestoredSkillMention[] = [];
