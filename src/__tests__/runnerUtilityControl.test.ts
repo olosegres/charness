@@ -91,6 +91,12 @@ function createServiceDeps(commands: string[]): ServiceDeps {
 }
 
 /** A Pueue with one running task that `reset --force` ends: `status --json` shows it until the reset, an empty queue after. */
+/**
+ * What the pueue client really says when no daemon listens on the account's queue: `readPueueView` takes nothing else for "no daemon" — a
+ * failure in other words is "no answer", which counts as busy (and gets the reset when the jobs are stopped).
+ */
+const noDaemonStderr = 'Error: \n   0: I/O error at path "/x/run/pueue.socket" while connecting to daemon. Did you start it?:\n      No such file or directory (os error 2)';
+
 function createBusyQueueRunner(commands: string[]): CommandRunner {
   let isReset = false;
   const answer = (isOk: boolean, stdout = ''): Awaited<ReturnType<CommandRunner>> => ({ ok: isOk, exitCode: isOk ? 0 : 1, stdout, stderr: '', isTimedOut: false });
@@ -105,12 +111,12 @@ function createBusyQueueRunner(commands: string[]): CommandRunner {
   };
 }
 
-/** The unpair command's collaborators: the service manager and the queue record their commands; no process is running. */
+/** The unpair command's collaborators: the service manager and the queue record their commands; no process is running, and no Pueue daemon. */
 function createUnpairDeps(commands: string[], overrides: Partial<UnpairDeps> = {}): UnpairDeps {
   const idleProcess: ProcessControl = { checkIsAlive: () => false, readCommand: () => null, signal: () => undefined, terminateGraceMs: 50, killGraceMs: 50 };
   const queueRunner: CommandRunner = async (file, args) => {
     commands.push(`${file} ${args.join(' ')}`);
-    return { ok: false, exitCode: 1, stdout: '', stderr: '', isTimedOut: false };
+    return { ok: false, exitCode: 1, stdout: '', stderr: noDaemonStderr, isTimedOut: false };
   };
   return { service: createServiceDeps(commands), process: idleProcess, queueRunner, ...overrides };
 }
@@ -378,8 +384,7 @@ describe('pairing an account that is already paired', () => {
 describe('the service command', () => {
   it('the account\'s side of the always-on install answers in one JSON line the admin step reads — its exit code says whether it may go on', async () => {
     // No Pueue daemon answers on this account's queue.
-    // In the words the pueue client really uses when there is no daemon (`readPueueView` takes nothing else for "no daemon": a failure in other words is "no answer", which counts as busy).
-    const noQueue: CommandRunner = async () => ({ ok: false, exitCode: 1, stdout: '', stderr: 'Error: \n   0: I/O error at path "/x/run/pueue.socket" while connecting to daemon. Did you start it?:\n      No such file or directory (os error 2)', isTimedOut: false });
+    const noQueue: CommandRunner = async () => ({ ok: false, exitCode: 1, stdout: '', stderr: noDaemonStderr, isTimedOut: false });
     const asAccount = { ...createServiceDeps([]), runner: noQueue, platform: 'darwin' as const, uid: 501, homeDir: home };
     assert.equal(await runService(['system-step', 'prepare'], io, asAccount), 1);
     assert.deepEqual(JSON.parse(output.trim()), { ok: false, lines: ['This account is not paired yet: run the line from /runners on this machine first, then install the service.'] });
