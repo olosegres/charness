@@ -110,6 +110,7 @@ import {
   stdoutOversizeWarnBytes,
   waitForPidFile,
   writeFifoText,
+  FifoWriteError,
   type JsonStreamSessionPaths,
   type StdoutTailState,
 } from '../utils/jsonStreamHost';
@@ -212,6 +213,12 @@ export interface StreamSession {
   fifoFd: number;
   /** Serialises FIFO writes so control frames and user turns keep wire order. */
   stdinWriteChain: Promise<void>;
+  /**
+   * A frame was left half-written in the stdin FIFO (its reader stopped taking bytes mid-frame): whatever is written
+   * after it would be read as the rest of that line, so nothing is — every later write fails at once, and the process
+   * is suspended so the conversation's next trigger resumes it in a fresh one.
+   */
+  isStdinBroken: boolean;
   /** `stdout.jsonl` tail bookkeeping (byte offsets + stateful utf8 decode). */
   tail: StdoutTailState;
   pollTimer: NodeJS.Timeout | null;
@@ -446,10 +453,15 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
   /** How long the agent's own pending work holds the process after its last turn (`utils/jsonStreamPendingWork.ts`). */
   private pendingWorkHoldMs: number;
 
-  constructor(options: { lifecycle: JsonStreamLifecycle; backgroundHoldMs?: number } = { lifecycle: 'idle' }) {
+  /**
+   * `writeFifo` replaces the stdin FIFO write (tests only: a reader that stalls or stops mid-frame cannot be made
+   * portably with a real pipe).
+   */
+  constructor(options: { lifecycle: JsonStreamLifecycle; backgroundHoldMs?: number; writeFifo?: typeof writeFifoText } = { lifecycle: 'idle' }) {
     super();
     this.lifecycle = options.lifecycle;
     this.pendingWorkHoldMs = options.backgroundHoldMs ?? pendingWorkHoldDefaultMs;
+    this.writeFifo = options.writeFifo ?? writeFifoText;
     this.name = options.lifecycle === 'perTurn' ? claudePerTurnAdapterName : claudeJsonStreamAdapterName;
     this.label = options.lifecycle === 'perTurn' ? 'Claude Code (per-turn)' : 'Claude Code (stream)';
   }
@@ -461,6 +473,7 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
 
   private readonly sessions = new Map<string, StreamSession>();
   private readonly claudePath = resolveClaudeBinary();
+  private readonly writeFifo: typeof writeFifoText;
 
   private displayPrefsReader: DisplayPrefsReader | null = null;
   private seenWatermarkWriter: SeenWatermarkWriter | null = null;
@@ -671,7 +684,7 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
     const session: StreamSession = {
       key, workDir, sessionId,
       pid, paths, fifoFd,
-      stdinWriteChain: Promise.resolve(),
+      stdinWriteChain: Promise.resolve(), isStdinBroken: false,
       tail: createStdoutTailState(0),
       pollTimer: null, pollDelayMs: basePollIntervalMs, unchangedStreak: 0,
       isOversizeWarned: false, lastPersistedTailOffset: 0,
@@ -1000,7 +1013,7 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
     const session: StreamSession = {
       key, workDir, sessionId: claudeSessionId,
       pid, paths, fifoFd,
-      stdinWriteChain: Promise.resolve(),
+      stdinWriteChain: Promise.resolve(), isStdinBroken: false,
       tail: createStdoutTailState(startOffset),
       pollTimer: null, pollDelayMs: basePollIntervalMs, unchangedStreak: 0,
       isOversizeWarned: false, lastPersistedTailOffset: startOffset,
@@ -1481,11 +1494,24 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
   // ─────────────────────────────────────────────────────────────────────────
 
   sendInput(key: SessionKey, input: string): void {
+    // A failed write is logged by the write itself; a caller that must know awaits `sendInputAndWait`.
+    void this.sendInputAndWait(key, input).catch(() => {});
+  }
+
+  /**
+   * @description {@link sendInput} that resolves once the user turn is written WHOLE into the CLI's stdin, and rejects
+   * when it could not be (`EAGAIN` past the stall budget, a dead reader, a broken stream): the prompt never reached the
+   * agent, and its caller is told so instead of believing it delivered. The state a turn start sets is set before the
+   * first await, as `sendInput` always did; a write that failed takes back its unconsumed-input count, and the busy flag
+   * when nothing of the CLI was seen since. A session that is not active drops the input, as before (logged).
+   */
+  sendInputAndWait(key: SessionKey, input: string): Promise<void> {
     const session = this.sessions.get(keyToString(key));
     if (!session?.isActive) {
       console.warn(`[ClaudeJson] sendInput to inactive session ${keyToString(key)} dropped`);
-      return;
+      return Promise.resolve();
     }
+    const wasBusy = session.isBusy;
     // A fresh user turn begins → reset the answer cursor so its first tail is a
     // new message (the bot also flips `needsNewMessage` for delta adapters).
     session.currentResponseText = '';
@@ -1495,11 +1521,17 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
     // A fresh turn resets the idle-watchdog clock: without this a session that
     // sat idle for minutes (busy=false, clock stale) would trip the watchdog on
     // its very next poll — before claude has a chance to emit the first token.
-    session.lastStdoutActivityAt = Date.now();
+    const turnStartedAt = Date.now();
+    session.lastStdoutActivityAt = turnStartedAt;
     // The turn in flight is persisted at once (same offset, flipped flag): a restart
     // during a long, silent tool call finds no frame after the offset to rebuild it.
     this.jsonStreamTailWriter?.(key, buildTailRecord(session, session.lastPersistedTailOffset));
-    this.writeUserMessage(session, input);
+    return this.writeUserMessage(session, input).catch((error: unknown) => {
+      // Nothing of this turn reached the CLI: it is not owed an echo, and — unless the CLI showed life since — it is as busy as it was.
+      session.unconsumedInputCount = Math.max(0, session.unconsumedInputCount - 1);
+      if (session.lastStdoutActivityAt === turnStartedAt) session.isBusy = wasBusy;
+      throw error;
+    });
   }
 
   sendSignal(key: SessionKey, _signal: string): void {
@@ -1533,22 +1565,41 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
     session.swallowNextAbortError = true;
   }
 
-  /** Write one user turn, counting it until Claude echoes it back (it has read it). */
-  private writeUserMessage(session: StreamSession, content: string): void {
+  /** Write one user turn, counting it until Claude echoes it back (it has read it); settles as its write does. */
+  private writeUserMessage(session: StreamSession, content: string): Promise<void> {
     session.unconsumedInputCount += 1;
-    this.writeStdin(session, { type: 'user', message: { role: 'user', content } });
+    return this.writeStdin(session, { type: 'user', message: { role: 'user', content } });
   }
 
-  /** Enqueue one stream-json frame onto the stdin FIFO. Fire-and-forget for
-   *  callers (sync signature preserved); the per-session chain keeps wire
-   *  order and absorbs transient `EAGAIN` (see `writeFifoText`). */
-  private writeStdin(session: StreamSession, obj: unknown): void {
+  /**
+   * Enqueue one stream-json frame onto the stdin FIFO. The per-session chain keeps wire order and waits out a full
+   * buffer (see `writeFifoText`); the returned promise is THIS frame's write — it resolves once the frame is written
+   * whole and rejects when it is not (logged here, so a caller may leave it: the chain's own handler keeps it from being
+   * an unhandled rejection). A frame left half-written breaks the stream: see {@link StreamSession.isStdinBroken}.
+   */
+  private writeStdin(session: StreamSession, obj: unknown): Promise<void> {
     const line = JSON.stringify(obj) + '\n';
-    session.stdinWriteChain = session.stdinWriteChain
-      .then(() => writeFifoText(session.fifoFd, line))
-      .catch((e) => console.error(`[ClaudeJson] stdin write failed for ${keyToString(session.key)}:`, e instanceof Error ? e.message : e));
+    const write = session.stdinWriteChain.then(() => {
+      if (session.isStdinBroken) throw new Error('the stdin stream is broken: a frame before this one was left half-written');
+      return this.writeFifo(session.fifoFd, line, { checkIsAbandoned: () => session.isStopping || !session.isActive });
+    });
+    session.stdinWriteChain = write.catch((e) => {
+      console.error(`[ClaudeJson] stdin write failed for ${keyToString(session.key)}:`, e instanceof Error ? e.message : e);
+      if (e instanceof FifoWriteError && e.isTorn && !session.isStopping && session.isActive) this.breakStdin(session);
+    });
     // New input → output expected shortly; snap the tail poll back to base.
     this.snapPollToBase(session);
+    return write;
+  }
+
+  /**
+   * A frame was left half-written: nothing more is written into the stream, and the process is suspended — the
+   * conversation keeps its id and its next trigger resumes it in a fresh process, with a stdin of its own.
+   */
+  private breakStdin(session: StreamSession): void {
+    session.isStdinBroken = true;
+    console.error(`[ClaudeJson] ${keyToString(session.key)}: a stdin frame was left half-written; nothing more is written to this process, it is suspended and its next prompt resumes the conversation`);
+    void this.suspendSession(session.key).catch((e) => console.warn(`[ClaudeJson] suspending ${keyToString(session.key)} after its broken stdin failed:`, e instanceof Error ? e.message : e));
   }
 
   // ─────────────────────────────────────────────────────────────────────────

@@ -692,7 +692,7 @@ describe('json-stream /esc on a pending AskUserQuestion', () => {
       questions: [{ question: 'Which lexer?', options: [{ label: 'hand-written' }] }],
     };
     const frames: Array<Record<string, unknown>> = [];
-    adapter['writeStdin'] = (_session: StreamSession, frame: Record<string, unknown>) => {
+    adapter['writeStdin'] = async (_session: StreamSession, frame: Record<string, unknown>) => {
       frames.push(frame);
     };
 
@@ -713,7 +713,7 @@ describe('json-stream /esc on a pending AskUserQuestion', () => {
     const adapter = new ClaudeJsonStreamAdapter();
     const session = createSessionInDir(adapter, dir);
     const frames: Array<Record<string, unknown>> = [];
-    adapter['writeStdin'] = (_session: StreamSession, frame: Record<string, unknown>) => {
+    adapter['writeStdin'] = async (_session: StreamSession, frame: Record<string, unknown>) => {
       frames.push(frame);
     };
 

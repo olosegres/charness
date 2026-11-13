@@ -65,6 +65,16 @@ test('the live forward awaits nothing between its start and the write to the age
   assert.deepEqual(awaited, ['await adapter.interruptAndWaitIdle(key);', 'await adapter.detachRunningSubagents(key);']);
 });
 
+test('the live forward awaits the write\'s outcome: a write that failed rejects the forward, and the lost-work note is told only after it landed', () => {
+  // A json-stream stdin write that failed was only logged once, and a hand-over prompt counted as delivered was never read.
+  const body = getFunctionBody('forwardPromptToLiveAgent');
+  assert.match(body, /const written = adapter\.sendInputAndWait \? adapter\.sendInputAndWait\(key, promptText\) : \(adapter\.sendInput\(key, promptText\), Promise\.resolve\(\)\);/);
+  const awaitWritten = body.indexOf('await written;');
+  assert.ok(awaitWritten > body.indexOf('const written ='), 'the outcome is awaited after the write was handed over');
+  assert.ok(body.indexOf('void state.clearLostWork(key);') > awaitWritten, 'the note counts as told only after the write');
+  assert.ok(body.indexOf("startClaudeLiveness(key, 'busyOnset');") < awaitWritten, 'the busy-onset arm still starts at the write, not after its outcome');
+});
+
 test('a prompt that finds no session after the wait is answered with the no-session reply, unless the wake already said why', () => {
   const body = getFunctionBody('forwardPromptToAgent');
   const report = body.slice(body.indexOf('reportNoSession: async (isAlreadyTold) => {'));

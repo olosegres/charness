@@ -54,6 +54,8 @@ import {
   waitForPidExitOrKill,
   wrapperCdFailExitCode,
   writeFifoText,
+  FifoWriteError,
+  fifoWriteStallTimeoutMs,
 } from '../utils/jsonStreamHost';
 import { parseClaudeConfigDirFromCommand } from '../utils/claudeProfiles';
 import { claudeJsonStreamAdapterName, claudePerTurnAdapterName } from '../adapters/adapterNames';
@@ -330,6 +332,108 @@ describe('openFifoWriterNonBlocking (real fifo)', () => {
     fs.closeSync(fd);
     // Writer death must not kill the holder (the isolation property itself).
     assert.equal(holder.exitCode, null, 'holder survives the writer closing');
+  });
+});
+
+describe('writeFifoText — waits for a slow reader, never gives up on one that takes bytes, and says how much it wrote', () => {
+  /** A FIFO stand-in: each call takes what `takes` says (a number of bytes, or `EAGAIN`) — then the rest, once it runs out. */
+  function createReader(takes: Array<number | 'EAGAIN' | 'EPIPE'>): { writeSync: (fd: number, buffer: Buffer, offset: number, length: number) => number; received: Buffer[] } {
+    const received: Buffer[] = [];
+    let call = 0;
+    return {
+      received,
+      writeSync: (_fd, buffer, offset, length) => {
+        const take = call < takes.length ? takes[call] : length;
+        call += 1;
+        if (take === 'EAGAIN' || take === 'EPIPE') throw Object.assign(new Error(`${take}: write`), { code: take });
+        const count = Math.min(take, length);
+        received.push(Buffer.from(buffer.subarray(offset, offset + count)));
+        return count;
+      },
+    };
+  }
+
+  /** A clock that moves only when the write waits. */
+  function createClock(): { now: () => number; sleep: (ms: number) => Promise<void>; waits: number[] } {
+    let nowMs = 0;
+    const waits: number[] = [];
+    return {
+      now: () => nowMs,
+      sleep: async (ms) => {
+        waits.push(ms);
+        nowMs += ms;
+      },
+      waits,
+    };
+  }
+
+  it('a CLI still starting (a full buffer for 20 s — four times the old 5 s budget) gets the whole frame once it reads', async () => {
+    const clock = createClock();
+    // 20 s of EAGAIN at the capped one-second wait, then the reader drains.
+    const reader = createReader([...Array.from({ length: 26 }, (): 'EAGAIN' => 'EAGAIN')]);
+    await writeFifoText(7, '{"type":"user"}\n', { writeSync: reader.writeSync, sleep: clock.sleep, now: clock.now });
+    assert.equal(Buffer.concat(reader.received).toString('utf8'), '{"type":"user"}\n');
+    assert.ok(clock.now() >= 20_000, `it waited ${clock.now()} ms`);
+    assert.deepEqual(clock.waits.slice(0, 6), [50, 100, 200, 400, 800, 1000], 'the wait doubles, up to a second');
+  });
+
+  it('a reader that takes NOTHING for the stall budget fails it — nothing written, so the stream is intact and the frame can be sent again', async () => {
+    const clock = createClock();
+    const reader = createReader(Array.from({ length: 1000 }, (): 'EAGAIN' => 'EAGAIN'));
+    const failure = await writeFifoText(7, 'frame\n', { writeSync: reader.writeSync, sleep: clock.sleep, now: clock.now }).catch((e: unknown) => e);
+    assert.ok(failure instanceof FifoWriteError, String(failure));
+    assert.equal(failure.writtenBytes, 0);
+    assert.equal(failure.isTorn, false);
+    assert.match(failure.message, /^EAGAIN: the reader took nothing for 120 s \(0 of 6 bytes written\)$/);
+    assert.ok(clock.now() >= fifoWriteStallTimeoutMs && clock.now() < fifoWriteStallTimeoutMs + 2000, `gave up at ${clock.now()} ms`);
+  });
+
+  it('every byte the reader takes starts the stall clock again: a slow reader is waited for past the budget, the frame lands whole', async () => {
+    const clock = createClock();
+    // A byte, then 100 s of EAGAIN (under the 120 s budget), five times over: 500 s in all, never a stall of 120 s.
+    const stall = Array.from({ length: 101 }, (): 'EAGAIN' => 'EAGAIN');
+    const reader = createReader([1, ...stall, 1, ...stall, 1, ...stall, 1, ...stall, 1, ...stall]);
+    await writeFifoText(7, 'abcdefgh', { writeSync: reader.writeSync, sleep: clock.sleep, now: clock.now });
+    assert.equal(Buffer.concat(reader.received).toString('utf8'), 'abcdefgh');
+    assert.ok(clock.now() > 400_000, `it waited ${clock.now()} ms`);
+  });
+
+  it('a reader that stops mid-frame for the whole budget leaves the frame TORN, and the error says how much it holds', async () => {
+    const clock = createClock();
+    const reader = createReader([4, ...Array.from({ length: 1000 }, (): 'EAGAIN' => 'EAGAIN')]);
+    const failure = await writeFifoText(7, 'abcdefgh', { writeSync: reader.writeSync, sleep: clock.sleep, now: clock.now }).catch((e: unknown) => e);
+    assert.ok(failure instanceof FifoWriteError);
+    assert.equal(failure.writtenBytes, 4);
+    assert.equal(failure.totalBytes, 8);
+    assert.equal(failure.isTorn, true);
+  });
+
+  it('the caller abandons the wait (the process is being stopped): it ends at the next wait, without the budget', async () => {
+    const clock = createClock();
+    let isStopping = false;
+    const reader = createReader(['EAGAIN', 'EAGAIN', 'EAGAIN']);
+    const write = writeFifoText(7, 'frame\n', {
+      writeSync: reader.writeSync,
+      sleep: async (ms) => {
+        await clock.sleep(ms);
+        isStopping = true;
+      },
+      now: clock.now,
+      checkIsAbandoned: () => isStopping,
+    });
+    const failure = await write.catch((e: unknown) => e);
+    assert.ok(failure instanceof FifoWriteError);
+    assert.match(failure.message, /abandoned/);
+    assert.equal(clock.waits.length, 1, 'one wait, then the abandon');
+  });
+
+  it('anything but EAGAIN (a reader that is gone) fails at once, with no wait', async () => {
+    const clock = createClock();
+    const reader = createReader(['EPIPE']);
+    const failure = await writeFifoText(7, 'frame\n', { writeSync: reader.writeSync, sleep: clock.sleep, now: clock.now }).catch((e: unknown) => e);
+    assert.ok(failure instanceof FifoWriteError);
+    assert.match(failure.message, /^EPIPE: write \(0 of 6 bytes written\)$/);
+    assert.deepEqual(clock.waits, []);
   });
 });
 

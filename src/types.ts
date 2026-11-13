@@ -933,6 +933,13 @@ export interface AgentAdapter extends EventEmitter {
   // — Input —
 
   sendInput(key: SessionKey, input: string, options?: SendInputOptions): void;
+  /**
+   * {@link sendInput} for a prompt whose caller must know it reached the agent: resolves once the backend has the
+   * input and rejects when it could not be handed over — the json-stream host's write into the CLI's stdin that failed
+   * (`EAGAIN` past its stall budget, a reader that is gone), so a prompt is never believed delivered when it was not.
+   * Optional (optional-method pattern): a backend without it takes its input at once through `sendInput`.
+   */
+  sendInputAndWait?(key: SessionKey, input: string): Promise<void>;
   sendSignal(key: SessionKey, signal: string): void;
 
   // — Session history —

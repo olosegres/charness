@@ -268,7 +268,18 @@ restarts — every hot reload — never touch it. Per-thread host dir
   fifo **`0<>` (read-write on fd 0)**, so a writer (bot) dying never EOFs its
   stdin. The bot's write-open is `O_WRONLY|O_NONBLOCK` with an `ENXIO` retry
   loop — a plain blocking open on a reader-less fifo hangs forever (probe-
-  proven); persistent `ENXIO` = the process is dead.
+  proven); persistent `ENXIO` = the process is dead. Writes are serialised per
+  session and wait out `EAGAIN` (a full buffer: a CLI still starting reads
+  nothing for a while — a resume whose 15 s initialize handshake timed out was
+  seen meeting `EAGAIN` for the old 5 s budget) for as long as the reader takes
+  bytes: `writeFifoText` gives up only after `fifoWriteStallTimeoutMs` (2 min)
+  without one, and says how much it wrote. A user turn's write is the forward's
+  outcome (`sendInputAndWait`, which the bot's forward awaits): one that failed
+  rejects the forward — a tracker post then gets its post retry instead of a
+  prompt believed delivered — and takes back the turn-start state. A frame left
+  half-written breaks the stream (`isStdinBroken`): nothing more is written into
+  it and the process is suspended, so the next trigger resumes the conversation
+  in a fresh process.
 - `stdout.jsonl` — append-only event log replacing the stdout pipe. The
   adapter TAILS it (adaptive 300ms→1.5s cadence) and feeds the same line
   reader/classifier; deltas keep landing while the bot is down. The consumed

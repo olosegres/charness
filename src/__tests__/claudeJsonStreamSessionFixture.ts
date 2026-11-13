@@ -35,6 +35,7 @@ export function createStreamSessionFixture(overrides: Partial<StreamSession> = {
     paths: getJsonStreamSessionPaths(path.join(os.tmpdir(), 'jsonstream-fixture-nonexistent')),
     fifoFd: -1,
     stdinWriteChain: Promise.resolve(),
+    isStdinBroken: false,
     tail: createStdoutTailState(0),
     pollTimer: null,
     pollDelayMs: 300,

@@ -6129,9 +6129,10 @@ async function forwardPromptToLiveAgent(
   if (adapter.detachRunningSubagents && !isTechnicalPrompt) {
     await adapter.detachRunningSubagents(key);
   }
-  adapter.sendInput(key, promptText);
-  // Told only once the prompt carrying the note reached a live session: a forward that failed keeps it for the next.
-  if (lostWorkRecord && adapter.checkIsActive(key)) void state.clearLostWork(key);
+  // A backend that can tell whether the prompt reached the agent (the json-stream host's stdin write) is asked to: a
+  // write that failed rejects this forward, so its caller — a tracker post, a wake-up — knows the prompt never arrived
+  // and retries, instead of believing it delivered. The input is handed over synchronously either way; only its outcome is awaited.
+  const written = adapter.sendInputAndWait ? adapter.sendInputAndWait(key, promptText) : (adapter.sendInput(key, promptText), Promise.resolve());
   // S2 busy-onset arm: start the Claude liveness loop the moment the prompt is
   // forwarded — driven by `checkIsBusy`, not by waiting for an opportunistic
   // scrape emit that may never come during a long quiet think. The arming grace
@@ -6140,6 +6141,9 @@ async function forwardPromptToLiveAgent(
   // choke point (user text, voice, scheduled run, api-retry continue, buffered
   // replay), so every path that makes Claude busy now raises the working frame.
   startClaudeLiveness(key, 'busyOnset');
+  await written;
+  // Told only once the prompt carrying the note reached a live session: a forward that failed keeps it for the next.
+  if (lostWorkRecord && adapter.checkIsActive(key)) void state.clearLostWork(key);
 }
 
 /**

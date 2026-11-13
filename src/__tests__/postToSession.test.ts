@@ -104,6 +104,20 @@ describe('postToSession', () => {
     assert.deepEqual(calls, ['ensure k -', 'forward k p']);
   });
 
+  it('a forward that rejects — the agent never got the prompt (a stdin write that failed) — is `forward-failed` with its message, never a delivered post', async () => {
+    const calls: string[] = [];
+    const deps = createDeps(calls, {
+      forwardPrompt: async () => {
+        throw new Error('EAGAIN: the reader took nothing for 120 s (0 of 9 bytes written)');
+      },
+    });
+    assert.deepEqual(await postToSession(deps, 'k', 'p'), {
+      ok: false,
+      reason: 'forward-failed',
+      error: 'EAGAIN: the reader took nothing for 120 s (0 of 9 bytes written)',
+    });
+  });
+
   describe('a session that changed while the post waited for the busy turn', () => {
     it('is ensured again before the forward: the per-turn stop that follows the turn ended its process, and a forward now would be dropped', async () => {
       const calls: string[] = [];
