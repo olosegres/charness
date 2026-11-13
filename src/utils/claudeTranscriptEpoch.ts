@@ -11,14 +11,14 @@ import { checkIsRecord } from './checkIsRecord';
 /** How much of the file one read takes. */
 const readChunkBytes = 1024 * 1024;
 const newlineByte = 0x0a;
-/** The key a line must carry to be a compaction boundary: checked on the raw line before `JSON.parse`. */
-const compactBoundaryKey = '"compact_boundary"';
+/** The key a line must carry to be a compaction boundary: checked on the raw bytes before anything is decoded. */
+const compactBoundaryKey = Buffer.from('"compact_boundary"');
 
-/** @description Whether a raw transcript line is a compaction boundary record. */
-function checkIsCompactBoundaryLine(line: string): boolean {
-  if (!line.includes(compactBoundaryKey)) return false;
+/** @description Whether the bytes of a transcript line are a compaction boundary record. */
+function checkIsCompactBoundaryLine(lineBytes: Buffer): boolean {
+  if (lineBytes.indexOf(compactBoundaryKey) < 0) return false;
   try {
-    const record: unknown = JSON.parse(line);
+    const record: unknown = JSON.parse(lineBytes.toString('utf8'));
     return checkIsRecord(record) && record.type === 'system' && record.subtype === 'compact_boundary';
   } catch {
     return false;
@@ -27,11 +27,13 @@ function checkIsCompactBoundaryLine(line: string): boolean {
 
 /**
  * @description The lines of `transcriptPath` after its LAST `compact_boundary` record (the whole file when there is none),
- * oldest first, keeping only those `checkIsWanted` accepts (raw text, before any parse) — so the reader holds the lines that
- * matter, not the epoch. A line is split only at newline bytes (never inside a UTF-8 character); a last line without a newline
- * is kept as it is (a reader that parses it skips it if it is half written). `[]` for a file that cannot be read.
+ * oldest first, keeping only those that hold one of `wantedKeys` — matched on the RAW bytes, so a line that holds none is never
+ * decoded and the reader holds the lines that matter, not the epoch (every slot of the Claude restore runs this at once). A
+ * line is split only at newline bytes (never inside a UTF-8 character); a last line without a newline is kept as it is (a
+ * reader that parses it skips it if it is half written). `[]` for a file that cannot be read.
  */
-export function readClaudeTranscriptEpochLines(transcriptPath: string, checkIsWanted: (line: string) => boolean): string[] {
+export function readClaudeTranscriptEpochLines(transcriptPath: string, wantedKeys: readonly string[]): string[] {
+  const wantedKeyBytes = wantedKeys.map((key) => Buffer.from(key));
   let fd: number;
   try {
     fd = fs.openSync(transcriptPath, 'r');
@@ -43,10 +45,9 @@ export function readClaudeTranscriptEpochLines(transcriptPath: string, checkIsWa
     let position = fs.fstatSync(fd).size;
     /** The bytes of a line whose start is in a chunk not read yet. */
     let carry = Buffer.alloc(0);
-    const takeLine = (bytes: Buffer): boolean => {
-      const line = bytes.toString('utf8');
-      if (checkIsCompactBoundaryLine(line)) return true;
-      if (line !== '' && checkIsWanted(line)) newestFirst.push(line);
+    const takeLine = (lineBytes: Buffer): boolean => {
+      if (checkIsCompactBoundaryLine(lineBytes)) return true;
+      if (lineBytes.length > 0 && wantedKeyBytes.some((key) => lineBytes.indexOf(key) >= 0)) newestFirst.push(lineBytes.toString('utf8'));
       return false;
     };
     while (position > 0) {

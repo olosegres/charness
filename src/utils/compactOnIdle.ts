@@ -322,15 +322,6 @@ export const compactionSkillsBlockEndMarker = '<<<END_LOADED_SKILLS>>>';
 export const compactionSkillsBlockMaxNameLength = 128;
 
 /**
- * What opens the context the bot's hook (Claude, `hooks/claudeSkillsRestoreHook.ts`) and plugin (OpenCode,
- * `openCodeCompactPlugin.ts`) add after a compaction with the full text of the skills that were loaded before it
- * (`utils/skillsRestore.ts`). The summary guidance names it, so the continuing session can tell a restored session (the
- * header is in its context: load nothing again) from one nobody restores (the tmux backend, a process or an OpenCode
- * instance started before the restore existed: load the skills again).
- */
-export const skillsRestoreHeader = '[Charness: skills restored after compaction]';
-
-/**
  * @description The loaded-skills block guidance: the summary names every skill that was loaded, one exact name per line
  * between {@link compactionSkillsBlockStartMarker} and {@link compactionSkillsBlockEndMarker}. The bot hides the block from the
  * topic ({@link createCompactionSummaryLineFilter}) and the OpenCode plugin reads it. ONE line of printable ASCII with no double
@@ -342,20 +333,21 @@ export const compactionSkillsBlockGuidance =
 /**
  * @description The loaded-skills guidance. A skill is loaded on demand mid-session (a tool call whose result carries its
  * instructions), so — unlike CLAUDE.md / AGENTS.md — the summary drops its text. Where the bot can, it puts the text back
- * itself after the compaction, under {@link skillsRestoreHeader}; where it cannot (the frozen tmux backend, a process started
+ * itself right after the compaction (`utils/skillsRestore.ts`); where it cannot (the frozen tmux backend, a process started
  * before the restore existed, an OpenCode instance that has not loaded the current plugin yet), the continuing session must
  * load the skills again. The bot-issued instruction cannot know which case a compaction is in, so the summary says both, and
- * the header in the continuing session's own context decides. It travels with {@link compactionChecklistGuidance} as
- * {@link compactionResumeGuidance}.
+ * what the continuing session finds in its own context decides. Worded without the restore's header and without saying
+ * WHERE the restore sits: the summary is shown to the person (`/compact_summary`), who must see nothing of the restore, and
+ * the restore comes before the summary on OpenCode and after it on Claude. It travels with {@link compactionChecklistGuidance}
+ * as {@link compactionResumeGuidance}.
  */
 export const compactionSkillsGuidance =
-  `Then state in plain words that these skills stay in force for the continuing session: when the context right after this summary holds ${skillsRestoreHeader}, Charness has restored them and the continuing session must NOT load them again; without it, the continuing session MUST load each of them again and follow it before resuming the work, since this summary does not carry a skill's instructions. If no skill was loaded, omit this.`;
+  'Then state in plain words that these skills stay in force for the continuing session: it must load each of them again and follow it before resuming the work, unless their full text was restored to it right after the compaction (then it must NOT load them again), since this summary does not carry the instructions of a skill. If no skill was loaded, omit this.';
 
 /**
  * @description The "what to do next" checklist every compaction summary ends with.
- * Item 1 names the skills of the block (exactly, so the continuing session cannot
- * paraphrase a name into one that does not load) and says when they are already
- * restored; the rest are the next steps the summary already records, in order —
+ * Item 1 ({@link compactionChecklistSkillsItem}) names the skills of the block (exactly, so the continuing session cannot
+ * paraphrase a name into one that does not load) and says when they need no loading; the rest are the next steps the summary already records, in order —
  * never invented ones. With a closing section requested, the list is that section's
  * last part, right before its end marker, so "write nothing after the end marker"
  * still holds; otherwise it ends the summary. A code constant for the same reason as
@@ -363,8 +355,11 @@ export const compactionSkillsGuidance =
  * ONE line of printable ASCII with no double quote or backslash, because the
  * `PreCompact` hook matches it as a fixed string in the raw JSON it reads on stdin.
  */
+/** What checklist item 1 opens with, before the skills' names: the text the summary shows the person, so a test copies it as is. */
+export const compactionChecklistSkillsItem = 'skills in force (load them again only if their full text was not restored to you right after the compaction):';
+
 export const compactionChecklistGuidance =
-  `End the summary with a numbered checklist (1., 2., 3., one short item per line) of what the continuing session does next, as the very LAST thing in it. Item 1 is 'skills restored by Charness (load them again only if no ${skillsRestoreHeader} follows this summary):' followed by the exact name of every skill in that block, never translated or shortened; if none was loaded, leave that item out. The other items are the next steps this summary already records, in order: invent no new steps. If you are also asked to write a closing section between two marker lines, the checklist is the last part of that section, right before its end marker.`;
+  `End the summary with a numbered checklist (1., 2., 3., one short item per line) of what the continuing session does next, as the very LAST thing in it. Item 1 is '${compactionChecklistSkillsItem}' followed by the exact name of every skill in that block, never translated or shortened; if none was loaded, leave that item out. The other items are the next steps this summary already records, in order: invent no new steps. If you are also asked to write a closing section between two marker lines, the checklist is the last part of that section, right before its end marker.`;
 
 /**
  * FIXED (English, locale-independent) sentinel markers the self-review section is wrapped in, and the one line

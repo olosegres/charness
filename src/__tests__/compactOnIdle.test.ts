@@ -7,6 +7,7 @@
 
 import { test } from 'node:test';
 import * as assert from 'node:assert/strict';
+import { skillsRestoreHeader } from '../utils/skillsRestore';
 
 import {
   idleCompactMs,
@@ -25,7 +26,7 @@ import {
   compactionSkillsBlockStartMarker,
   compactionSkillsBlockEndMarker,
   compactionSkillsBlockMaxNameLength,
-  skillsRestoreHeader,
+  compactionChecklistSkillsItem,
   parseCompactionLoadedSkills,
   parseSkillsBlock,
   readSkillsBlockLineName,
@@ -446,15 +447,23 @@ test('compactionSkillsBlockGuidance: one exact name per line between its own two
   }
 });
 
-test('compactionSkillsGuidance: the skills stay in force — restored when the restore header follows the summary, loaded again when it does not', () => {
-  assert.ok(compactionSkillsGuidance.includes(`when the context right after this summary holds ${skillsRestoreHeader}, Charness has restored them and the continuing session must NOT load them again`));
-  assert.match(compactionSkillsGuidance, /without it, the continuing session MUST load each of them again and follow it before resuming the work/);
+test('compactionSkillsGuidance: the skills stay in force — loaded again unless their full text was restored right after the compaction', () => {
+  assert.match(compactionSkillsGuidance, /these skills stay in force for the continuing session: it must load each of them again and follow it before resuming the work, unless their full text was restored to it right after the compaction \(then it must NOT load them again\)/);
   assert.ok(!compactionSkillsGuidance.includes('MUST load each of these skills again and follow it before resuming the work: a skill'), 'the unconditional reload is gone');
+});
+
+test('the summary guidance never puts the restore in front of the person: no restore header, and no claim WHERE the restore sits', () => {
+  // The person reads the summary (`/compact_summary`); the restore comes before the summary on OpenCode, after it on Claude.
+  for (const guidance of [compactionSkillsGuidance, compactionChecklistGuidance, compactionSkillsBlockGuidance, compactionResumeGuidance]) {
+    assert.ok(!guidance.includes(skillsRestoreHeader) && !guidance.includes('Charness: skills restored'), guidance.slice(0, 60));
+    assert.ok(!/\bfollows? this summary\b|\bafter this summary\b|right after this summary/.test(guidance), guidance.slice(0, 60));
+  }
 });
 
 test('compactionChecklistGuidance: a skills-first numbered next-steps list that ends the summary, with no invented steps', () => {
   assert.match(compactionChecklistGuidance, /numbered checklist \(1\., 2\., 3\., one short item per line\) of what the continuing session does next, as the very LAST thing/);
-  assert.ok(compactionChecklistGuidance.includes(`Item 1 is 'skills restored by Charness (load them again only if no ${skillsRestoreHeader} follows this summary):' followed by the exact name of every skill in that block`));
+  assert.equal(compactionChecklistSkillsItem, 'skills in force (load them again only if their full text was not restored to you right after the compaction):');
+  assert.ok(compactionChecklistGuidance.includes(`Item 1 is '${compactionChecklistSkillsItem}' followed by the exact name of every skill in that block`));
   assert.ok(!compactionChecklistGuidance.includes(`'load these skills'`), 'item 1 no longer says to load the skills unconditionally');
   assert.match(compactionChecklistGuidance, /if none was loaded, leave that item out/);
   assert.match(compactionChecklistGuidance, /next steps this summary already records, in order: invent no new steps/);

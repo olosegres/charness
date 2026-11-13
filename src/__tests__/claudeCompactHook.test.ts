@@ -21,6 +21,7 @@ import {
   claudeSkillsRestoreHookSettingsFileNames,
   getHookCompactionInstruction,
   prepareClaudeCompactHookFlags,
+  skillsRestoreHookTimeoutSeconds,
 } from '../utils/claudeCompactHook';
 import { skillsRestoreSlotCount } from '../utils/skillsRestore';
 import {
@@ -214,7 +215,9 @@ test('buildClaudeLaunchHookSettings: one PreCompact and one PostToolUse command 
 
 test('buildClaudeLaunchHookSettings: the restore\'s slots are SessionStart command hooks under the `compact` matcher', () => {
   const settings = buildClaudeLaunchHookSettings({ preCompact: 'echo hi', postToolUse: 'echo tool', sessionStartCompact: ['echo 1', 'echo 2'] });
-  assert.deepEqual(settings.hooks.SessionStart, [{ matcher: 'compact', hooks: [{ type: 'command', command: 'echo 1' }, { type: 'command', command: 'echo 2' }] }]);
+  // Each with a timeout of its own: a slot stuck on a slow disk must not hold the compaction for the CLI's long default.
+  assert.deepEqual(settings.hooks.SessionStart, [{ matcher: 'compact', hooks: [{ type: 'command', command: 'echo 1', timeout: skillsRestoreHookTimeoutSeconds }, { type: 'command', command: 'echo 2', timeout: skillsRestoreHookTimeoutSeconds }] }]);
+  assert.equal(skillsRestoreHookTimeoutSeconds, 30);
 });
 
 test('buildSkillsRestoreHookCommands: slot i runs the hook with its number, the slot count and the unavailable folder — read through a real sh', () => {

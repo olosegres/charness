@@ -8,8 +8,9 @@
  *
  *   boot → a topic is bound, the agent loads a small skill and a big one (Claude's own re-attach keeps a skill whole only
  *     up to 20,000 characters) — nothing to restore yet
- *   → the CLI compacts by itself MID-TURN and the agent goes on alone: that continuation already holds the restore —
- *     the big skill's whole current text, the small one named (Claude re-attaches it whole)
+ *   → the CLI compacts by itself MID-TURN and the agent goes on alone: that continuation already holds the restore — the
+ *     whole current text of both skills (Claude's own re-attach of the small one is not relied on: a resumed process may not
+ *     know it)
  *   → `/compact` with the summary SHOWN, then a message: that message's request holds the restore; the posted summary has no
  *     skills block, no marker
  *   → `/compact` with the summary HIDDEN, then a message: the same
@@ -60,9 +61,9 @@ import {
 import { getTelegramFlowTestTimingsEnv } from './telegramE2e/telegramFlowTimings';
 import { claudeJsonStreamUsageLogPrefix } from '../adapters/claudeJsonStreamAdapter';
 import { enDict } from '../i18n/en';
-import { compactionSkillsBlockEndMarker, compactionSkillsBlockStartMarker, skillsRestoreHeader } from '../utils/compactOnIdle';
+import { compactionChecklistSkillsItem, compactionSkillsBlockEndMarker, compactionSkillsBlockStartMarker } from '../utils/compactOnIdle';
 import { claudeSkillsRestoreHookSettingsFileNames } from '../utils/claudeCompactHook';
-import { claudeSkillBaseDirPrefix, skillsRestorePartMaxChars, skillsRestoreSlotCount } from '../utils/skillsRestore';
+import { claudeSkillBaseDirPrefix, skillsRestoreHeader, skillsRestorePartMaxChars, skillsRestoreSlotCount } from '../utils/skillsRestore';
 
 const group = { id: -1001111111111, title: 'ExampleGroup' };
 const topicThreadId = 111;
@@ -89,7 +90,8 @@ const bigSkillBody = [bigSkillHeadMarker, ...Array.from({ length: 900 }, (_value
 const smallSkillBody = `# small\n\n${smallSkillMarker}: keep the counter 4242.\n`;
 
 const summaryBody = 'SR-SUMMARY-BODY: the refactor is half done.';
-const checklistLine = `1. skills restored by Charness: ${bigSkillName}, ${smallSkillName}`;
+/** Item 1 as a model writes it when it follows the guidance: the guidance's own text, then the names. */
+const checklistLine = `1. ${compactionChecklistSkillsItem} ${bigSkillName}, ${smallSkillName}`;
 
 let layout: IsolatedInstanceLayout | null = null;
 let charness: IsolatedCharness | null = null;
@@ -156,16 +158,16 @@ function getRestoreContextAfter(recordsBefore: number, phase: FakeClaudeRestoreC
   return record;
 }
 
-/** A restore that brings the big skill back whole and names the small one, which Claude's own re-attach carries. */
+/** A restore that brings both skills back whole — the small one too, whatever Claude's own re-attach does. */
 function assertRestored(contexts: readonly string[], description: string): void {
   assert.ok(contexts.length > 1, `${description}: the big skill takes several parts (${contexts.length})`);
   assert.ok(contexts.every((context) => context.startsWith(skillsRestoreHeader) && context.length <= skillsRestorePartMaxChars), `${description}: every part is labelled and fits a hook's cap`);
   const joined = contexts.join('\n');
   assert.ok(joined.includes(`- ${bigSkillName}: its current full text is below (base directory: ${getSkillDir(bigSkillName)})`), `${description}: the big skill is listed as restored`);
-  assert.ok(joined.includes(`- ${smallSkillName}: its full text is already in your context (base directory: ${getSkillDir(smallSkillName)})`), `${description}: the small one is named`);
+  assert.ok(joined.includes(`- ${smallSkillName}: its current full text is below (base directory: ${getSkillDir(smallSkillName)})`), `${description}: the small one too`);
   for (const marker of [bigSkillHeadMarker, 'Rule 450: follow the big skill', bigSkillTailMarker]) assert.ok(joined.includes(marker), `${description}: the big skill comes back whole (${marker})`);
   assert.ok(joined.includes(`${claudeSkillBaseDirPrefix}${getSkillDir(bigSkillName)}`), `${description}: with its base directory`);
-  assert.ok(!joined.includes(smallSkillMarker), `${description}: the small skill's text is not given twice`);
+  assert.ok(joined.includes(smallSkillMarker), `${description}: the small skill's text is given`);
 }
 
 /** The summary the fake leaves in its transcript at every compaction: a body, the skills block, the checklist. */

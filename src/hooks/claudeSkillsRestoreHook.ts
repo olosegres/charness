@@ -21,7 +21,7 @@ import { readClaudeTranscriptEpochLines } from '../utils/claudeTranscriptEpoch';
 import { checkIsRecord } from '../utils/checkIsRecord';
 import {
   buildClaudeSkillsRestoreParts,
-  checkIsClaudeSkillRecordLine,
+  claudeSkillRecordKeys,
   collectClaudeEpochSkills,
   planClaudeSkillsRestore,
   skillsRestorePartMaxChars,
@@ -69,7 +69,7 @@ export function getSkillsRestoreHookOutput(inputText: string, hookArguments: Ski
     return null;
   }
   if (!checkIsRecord(input) || 'agent_id' in input || input.source !== compactSource || typeof input.transcript_path !== 'string') return null;
-  const epoch = collectClaudeEpochSkills(readClaudeTranscriptEpochLines(input.transcript_path, checkIsClaudeSkillRecordLine));
+  const epoch = collectClaudeEpochSkills(readClaudeTranscriptEpochLines(input.transcript_path, claudeSkillRecordKeys));
   const entries = planClaudeSkillsRestore(epoch, { readSkillFile }, hookArguments.unavailableSkillsDir);
   const part = buildClaudeSkillsRestoreParts(entries, skillsRestoreTexts, hookArguments.slotCount, skillsRestorePartMaxChars)[hookArguments.slot - 1];
   if (part === undefined) return null;

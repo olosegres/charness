@@ -132,6 +132,12 @@ const skillsRestorePartId = 'prt_charness_skills_restore';
 const maxCachedSkillsRestores = 64;
 
 /**
+ * How long the restore waits for the session's stored history: longer than the other lookups, since a long session's whole
+ * history is a big answer and the read runs once per compaction (a whole restore is kept for the summary's later requests).
+ */
+export const openCodeHistoryLookupTimeoutMs = 10_000;
+
+/**
  * The functions of the restore the plugin carries as source (`toString()`): the bot's own, written self-contained so that
  * the plugin and the bot can never disagree on the block, the skills or the words. `__name` is a no-op stand-in for the
  * helper the test runner's transform injects into function bodies; the built `dist/` needs none.
@@ -162,10 +168,13 @@ const embeddedSkillsRestoreFunctions = [
  * summary: the skills of the session's stored history (`client.session.messages`, every compaction so far) and of the
  * summary's block, the server's current text of each (`GET /skill`; the plugin's client is the v1 SDK, which has no method for
  * it, so the request goes through its inner client, which carries the folder and the password — measured on the fork build),
- * a skill whose call is already after the summary only named. Built once per summary and kept, so every request of it gets
- * the same text. Each lookup has {@link openCodeAncestryLookupTimeoutMs}: a history that does not come is replaced by the
- * calls the list itself holds, a skill list that does not come leaves "load it with the skill tool" lines. Nothing ever
- * throws out of it or holds the request longer.
+ * a skill whose call is already after the summary only named, a name only the block holds (with the history known) given a
+ * "load it" line. A restore whose lookups both answered is kept for the summary, so every later request gets the same text;
+ * one that is not whole (a lookup failed or timed out) serves its request only, is logged to the server log once per summary,
+ * and the next request asks again. The history waits up to {@link openCodeHistoryLookupTimeoutMs}, the skill list up to
+ * {@link openCodeAncestryLookupTimeoutMs}: a history that does not come is replaced by the calls the list itself holds, a
+ * skill list that does not come leaves "load it with the skill tool" lines. Should the SDK's inner client be gone, the skill
+ * list is fetched from the server directly (logged once). Nothing ever throws out of it or holds the request longer.
  */
 export function buildOpenCodeCompactPluginSource(input: { context: string; contextWithoutInstructionGaps: string }): string {
   return [
@@ -212,40 +221,60 @@ export function buildOpenCodeCompactPluginSource(input: { context: string; conte
     `const skillsBlockMarkers = ${JSON.stringify({ start: compactionSkillsBlockStartMarker, end: compactionSkillsBlockEndMarker, maxNameLength: compactionSkillsBlockMaxNameLength })};`,
     `const restorePartId = ${JSON.stringify(skillsRestorePartId)};`,
     `const maxCachedRestores = ${maxCachedSkillsRestores};`,
+    `const historyLookupTimeoutMs = ${openCodeHistoryLookupTimeoutMs};`,
     'const restoreCache = new Map();',
+    'const loggedFallbackKeys = new Set();',
+    'let isInnerClientMissingLogged = false;',
     // A server answer, or a rejection when it does not come in time (the timer is always cleared; a late answer is ignored).
-    'const askServer = async (request) => {',
+    'const askServer = async (request, timeoutMs) => {',
     '  let timer;',
     '  try {',
-    '    const timeout = new Promise((_resolve, reject) => { timer = setTimeout(() => reject(new Error("the server did not answer in time")), lookupTimeoutMs); });',
+    '    const timeout = new Promise((_resolve, reject) => { timer = setTimeout(() => reject(new Error("the server did not answer in time")), timeoutMs); });',
     '    return await Promise.race([request(), timeout]);',
     '  } finally {',
     '    clearTimeout(timer);',
     '  }',
     '};',
+    'const logToServer = (client, message) => {',
+    '  try { Promise.resolve(client?.app?.log?.({ body: { service: "charness-compaction", level: "info", message } })).catch(() => {}); } catch {}',
+    '};',
     'const readHistory = async (client, sessionID) => {',
     '  try {',
-    '    const answer = await askServer(() => client.session.messages({ path: { id: sessionID } }));',
+    '    const answer = await askServer(() => client.session.messages({ path: { id: sessionID } }), historyLookupTimeoutMs);',
     '    return Array.isArray(answer?.data) ? answer.data : null;',
     '  } catch { return null; }',
     '};',
-    'const readAvailableSkills = async (client) => {',
-    '  if (typeof client?._client?.get !== "function") return null;',
+    // The server itself, asked the way its own client asks it: the folder, and the password the server was started with.
+    'const fetchSkillsDirectly = async (pluginContext) => {',
+    '  const url = new URL("/skill", pluginContext.serverUrl);',
+    '  if (typeof pluginContext.directory === "string") url.searchParams.set("directory", pluginContext.directory);',
+    '  const password = process.env.OPENCODE_SERVER_PASSWORD;',
+    '  const headers = password ? { Authorization: `Basic ${Buffer.from(`${process.env.OPENCODE_SERVER_USERNAME || "opencode"}:${password}`).toString("base64")}` } : {};',
+    '  const response = await fetch(url, { headers });',
+    '  if (!response.ok) throw new Error(`GET /skill answered ${response.status}`);',
+    '  return { data: await response.json() };',
+    '};',
+    'const readAvailableSkills = async (pluginContext) => {',
+    '  const client = pluginContext?.client;',
+    '  const hasInnerClient = typeof client?._client?.get === "function";',
+    '  if (!hasInnerClient && !isInnerClientMissingLogged) {',
+    '    isInnerClientMissingLogged = true;',
+    '    logToServer(client, "skills restore: the plugin client has no inner client for GET /skill (an SDK change?); asking the server directly");',
+    '  }',
     '  try {',
-    '    const answer = await askServer(() => client._client.get({ url: "/skill" }));',
+    '    const answer = await askServer(() => (hasInnerClient ? client._client.get({ url: "/skill" }) : fetchSkillsDirectly(pluginContext)), lookupTimeoutMs);',
     '    if (!Array.isArray(answer?.data)) return null;',
     '    return answer.data.filter((skill) => typeof skill?.name === "string" && typeof skill.location === "string" && typeof skill.content === "string");',
     '  } catch { return null; }',
     '};',
     // A summary whose block and the session's history disagree is worth a line in the server log (the model forgot or mangled a
-    // name, or a skill was loaded in a way the history does not show); the restore takes both either way.
+    // name, or listed skills it could load); the restore goes by the history then.
     'const logBlockMismatch = (client, sessionID, blockNames, loaded) => {',
     '  if (loaded === null || blockNames.length === 0) return;',
     '  const blockOnly = blockNames.filter((name) => !loaded.some((mention) => mention.name === name));',
     '  const historyOnly = loaded.map((mention) => mention.name).filter((name) => !blockNames.includes(name));',
     '  if (blockOnly.length === 0 && historyOnly.length === 0) return;',
-    '  const message = `skills restore of ${sessionID}: the summary block names [${blockOnly.join(", ")}] the history does not show, the history shows [${historyOnly.join(", ")}] the block leaves out`;',
-    '  try { Promise.resolve(client?.app?.log?.({ body: { service: "charness-compaction", level: "info", message } })).catch(() => {}); } catch {}',
+    '  logToServer(client, `skills restore of ${sessionID}: the summary block names [${blockOnly.join(", ")}] the history does not show, the history shows [${historyOnly.join(", ")}] the block leaves out`);',
     '};',
     'const findFinishedSummaryIndex = (messages) => {',
     '  for (let index = messages.length - 1; index >= 0; index -= 1) {',
@@ -254,18 +283,28 @@ export function buildOpenCodeCompactPluginSource(input: { context: string; conte
     '  }',
     '  return -1;',
     '};',
-    'const buildRestore = async (client, messages, summaryIndex) => {',
+    // The restore and whether it is whole: both lookups answered. Only a whole one is kept for the summary's later requests.
+    'const buildRestore = async (pluginContext, messages, summaryIndex) => {',
+    '  const client = pluginContext?.client;',
     '  const summary = messages[summaryIndex];',
+    '  const sessionID = summary.info.sessionID;',
     '  const summaryText = (summary.parts ?? []).filter((part) => part?.type === "text" && typeof part.text === "string").map((part) => part.text).join("\\n");',
     '  const blockNames = parseSkillsBlock(summaryText, skillsBlockMarkers.start, skillsBlockMarkers.end, skillsBlockMarkers.maxNameLength) ?? [];',
     '  const inContextNames = getOpenCodeLoadedSkills(messages.slice(summaryIndex + 1)).map((mention) => mention.name);',
-    '  const [history, available] = await Promise.all([readHistory(client, summary.info.sessionID), readAvailableSkills(client)]);',
+    '  const [history, available] = await Promise.all([readHistory(client, sessionID), readAvailableSkills(pluginContext)]);',
     '  const loaded = getOpenCodeLoadedSkills(history ?? messages);',
-    '  logBlockMismatch(client, summary.info.sessionID, blockNames, history === null ? null : loaded);',
-    '  const entries = planOpenCodeSkillsRestore({ loaded, blockNames, inContextNames, available });',
-    '  return buildSkillsRestoreText(entries, restoreTexts, restoreToolName);',
+    '  const isWhole = history !== null && available !== null;',
+    '  const cacheKey = `${sessionID}:${summary.info.id}`;',
+    '  if (isWhole) logBlockMismatch(client, sessionID, blockNames, loaded);',
+    '  else if (!loggedFallbackKeys.has(cacheKey)) {',
+    '    loggedFallbackKeys.add(cacheKey);',
+    '    const missing = [history === null ? "the history" : null, available === null ? "the skill list" : null].filter(Boolean).join(" and ");',
+    '    logToServer(client, `skills restore of ${sessionID}: ${missing} did not answer; this request gets what is known, the next one asks again`);',
+    '  }',
+    '  const entries = planOpenCodeSkillsRestore({ loaded, blockNames, inContextNames, available, isHistoryKnown: history !== null });',
+    '  return { text: buildSkillsRestoreText(entries, restoreTexts, restoreToolName), isWhole };',
     '};',
-    'const restoreSkills = async (client, messages) => {',
+    'const restoreSkills = async (pluginContext, messages) => {',
     '  if (!Array.isArray(messages)) return;',
     '  const summaryIndex = findFinishedSummaryIndex(messages);',
     '  if (summaryIndex < 0) return;',
@@ -275,9 +314,12 @@ export function buildOpenCodeCompactPluginSource(input: { context: string; conte
     '  const cacheKey = `${summary.info.sessionID}:${summary.info.id}`;',
     '  let text = restoreCache.get(cacheKey);',
     '  if (text === undefined) {',
-    '    text = await buildRestore(client, messages, summaryIndex);',
-    '    restoreCache.set(cacheKey, text);',
-    '    if (restoreCache.size > maxCachedRestores) restoreCache.delete(restoreCache.keys().next().value);',
+    '    const restore = await buildRestore(pluginContext, messages, summaryIndex);',
+    '    text = restore.text;',
+    '    if (restore.isWhole) {',
+    '      restoreCache.set(cacheKey, text);',
+    '      if (restoreCache.size > maxCachedRestores) restoreCache.delete(restoreCache.keys().next().value);',
+    '    }',
     '  }',
     '  if (text === "") return;',
     '  target.parts.push({ id: restorePartId, sessionID: summary.info.sessionID, messageID: target.info.id, type: "text", synthetic: true, text });',
@@ -289,7 +331,7 @@ export function buildOpenCodeCompactPluginSource(input: { context: string; conte
     '      output.context.push((await checkIsSelfReviewOff(pluginContext?.client, input?.sessionID)) ? contextWithoutInstructionGaps : context);',
     '    },',
     '    "experimental.chat.messages.transform": async (_input, output) => {',
-    '      try { await restoreSkills(pluginContext?.client, output?.messages); } catch {}',
+    '      try { await restoreSkills(pluginContext, output?.messages); } catch {}',
     '    },',
     '  }),',
     '};',

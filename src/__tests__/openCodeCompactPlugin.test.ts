@@ -10,6 +10,7 @@
 import { test } from 'node:test';
 import * as assert from 'node:assert/strict';
 import fs from 'fs';
+import http from 'http';
 import os from 'os';
 import path from 'path';
 import { pathToFileURL } from 'url';
@@ -25,11 +26,13 @@ import {
   legacyOpenCodeCompactPluginId,
   openCodeCompactPluginFileName,
   openCodeAncestryLookupTimeoutMs,
+  openCodeHistoryLookupTimeoutMs,
   openCodeCompactPluginId,
   resolveOpenCodeGlobalPluginDir,
 } from '../utils/openCodeCompactPlugin';
 import { resetLegacyNameState } from '../legacyNames';
-import { compactionChecklistGuidance, compactionGapsGuidance, compactionResumeGuidance, compactionResumeGuidanceWithoutGaps, compactionSkillsBlockEndMarker, compactionSkillsBlockStartMarker, skillsRestoreHeader } from '../utils/compactOnIdle';
+import { compactionChecklistGuidance, compactionGapsGuidance, compactionResumeGuidance, compactionResumeGuidanceWithoutGaps, compactionSkillsBlockEndMarker, compactionSkillsBlockStartMarker } from '../utils/compactOnIdle';
+import { skillsRestoreHeader } from '../utils/skillsRestore';
 import { getOpenCodeCompactSelfReviewOffDir, applyCompactSelfReviewOffFlag } from '../utils/compactSelfReviewFlags';
 
 type CompactingHook = (input: { sessionID: string }, output: { context: string[]; prompt?: string }) => Promise<void>;
@@ -450,8 +453,11 @@ type TransformHook = (input: object, output: { messages: PluginMessage[] }) => P
 /** What the fake server answers: a value, a refusal, or no answer at all. */
 type FakeAnswer<T> = T | 'fail' | 'hang';
 
-/** The slice of the SDK client the restore uses, with a count of its calls. */
-function createRestoreClient(answers: { history: FakeAnswer<PluginMessage[]>; skills: FakeAnswer<Array<{ name: string; location: string; content: string }>> }): {
+/**
+ * The slice of the SDK client the restore uses, with a count of its calls. `answers` is read at every call, so a test can
+ * change what the server answers between two requests; `isInnerClientGone` drops the SDK's inner client (an SDK change).
+ */
+function createRestoreClient(answers: { history: FakeAnswer<PluginMessage[]>; skills: FakeAnswer<Array<{ name: string; location: string; content: string }>> }, isInnerClientGone = false): {
   calls: { history: number; skills: number; logs: string[] };
   client: object;
 } {
@@ -468,17 +474,17 @@ function createRestoreClient(answers: { history: FakeAnswer<PluginMessage[]>; sk
         messages: async () => { calls.history += 1; return answer(answers.history); },
         get: async () => ({ data: {} }),
       },
-      _client: { get: async (request: { url: string }) => { calls.skills += 1; assert.equal(request.url, '/skill'); return answer(answers.skills); } },
+      ...(isInnerClientGone ? {} : { _client: { get: async (request: { url: string }) => { calls.skills += 1; assert.equal(request.url, '/skill'); return answer(answers.skills); } } }),
       app: { log: async (request: { body: { message: string } }) => { calls.logs.push(request.body.message); } },
     },
   };
 }
 
-async function loadInstalledTransformHook(dir: string, client: object): Promise<TransformHook> {
+async function loadInstalledTransformHook(dir: string, client: object, serverContext: { serverUrl?: URL; directory?: string } = {}): Promise<TransformHook> {
   const pluginDir = path.join(dir, 'opencode', 'plugins');
   assert.notEqual(installOpenCodeCompactPlugin(pluginDir), 'failed');
   const mod = await import(pathToFileURL(path.join(pluginDir, openCodeCompactPluginFileName)).href);
-  const hooks = await mod.default.server({ client }, undefined);
+  const hooks = await mod.default.server({ client, ...serverContext }, undefined);
   return hooks['experimental.chat.messages.transform'] as TransformHook;
 }
 
@@ -523,7 +529,7 @@ test('installed plugin, no summary in the list: nothing is added — and the com
   });
 });
 
-test('installed plugin, after a compaction: ONE synthetic part on the compaction\'s own message — every skill of the history and the block, with the server\'s CURRENT text', async () => {
+test('installed plugin, after a compaction: ONE synthetic part on the compaction\'s own message — every skill of the history with the server\'s CURRENT text, a name only the block holds with a load line', async () => {
   await withTempDir(async (dir) => {
     const summaryText = `Summary.\n${compactionSkillsBlockStartMarker}\nreview\nfrom-block\n${compactionSkillsBlockEndMarker}\n1. skills restored by Charness: review, from-block`;
     const session = buildCompactedSession('msg_sum1', summaryText);
@@ -536,9 +542,9 @@ test('installed plugin, after a compaction: ONE synthetic part on the compaction
     assert.ok(list[0].parts.some((part) => part.id === 'prt_charness_skills_restore' && part.synthetic === true), 'on the compaction\'s own user message, right before the summary');
     assert.ok(text.startsWith(skillsRestoreHeader));
     assert.ok(text.includes('- review: its current full text is below (base directory: /x/skills/review)'));
-    assert.ok(text.includes('REVIEW-BODY-MARK') && text.includes('BLOCK-ONLY-BODY-MARK'), 'the history\'s skill and the block-only one, whole');
-    assert.ok(!text.includes('COMMIT-BODY-MARK'), 'a skill the session never loaded is not given');
-    assert.ok(text.includes('load it with the skill tool') === false);
+    assert.ok(text.includes('REVIEW-BODY-MARK'), 'the history\'s skill, whole');
+    assert.ok(text.includes('- from-block: not restored here: load it with the skill tool'), 'the history answered: a name only the block holds is no proof of a load');
+    assert.ok(!text.includes('BLOCK-ONLY-BODY-MARK') && !text.includes('COMMIT-BODY-MARK'), 'no text for a skill the history does not show');
   });
 });
 
@@ -575,20 +581,73 @@ test('installed plugin: built once per summary — every later request gets the 
   });
 });
 
-test('installed plugin: lookups that never answer cost at most their timeout — the calls in the list stand in for the history, the skills get load lines', async () => {
+test('installed plugin: lookups that never answer cost at most the history\'s deadline — the calls in the list stand in, the skills get load lines — and the next request asks again', async () => {
   await withTempDir(async (dir) => {
     const session = buildCompactedSession('msg_sum5', `${compactionSkillsBlockStartMarker}\nfrom-block\n${compactionSkillsBlockEndMarker}`, [buildSkillCall('msg_tail', 'commit')]);
-    const { client } = createRestoreClient({ history: 'hang', skills: 'hang' });
+    const answers: Parameters<typeof createRestoreClient>[0] = { history: 'hang', skills: 'hang' };
+    const { calls, client } = createRestoreClient(answers);
     const hook = await loadInstalledTransformHook(dir, client);
     const list = session.list();
     const startedAt = Date.now();
     await hook({}, { messages: list });
     const elapsedMs = Date.now() - startedAt;
-    assert.ok(elapsedMs < openCodeAncestryLookupTimeoutMs + 1500, `the request waited ${elapsedMs} ms`);
+    assert.ok(elapsedMs >= openCodeHistoryLookupTimeoutMs - 100 && elapsedMs < openCodeHistoryLookupTimeoutMs + 1500, `the request waited ${elapsedMs} ms`);
     const text = getRestorePart(list) ?? '';
     assert.ok(text.includes('- commit: its full text is already in your context'), 'the call in the list is still known');
     assert.ok(text.includes('- from-block: not restored here: load it with the skill tool'), 'the block\'s name, with no text to give: the load line');
     assert.ok(!text.includes('review'), 'what only the history held is unknown while it does not answer');
+    assert.equal(calls.logs.filter((line) => line.includes('the history and the skill list did not answer')).length, 1, 'the fallback is logged');
+
+    // The server answers again: the restore that was not whole was not kept, so the next request gets the whole one.
+    answers.history = session.history;
+    answers.skills = [reviewSkill, commitSkill];
+    const nextList = session.list();
+    await hook({}, { messages: nextList });
+    const nextText = getRestorePart(nextList) ?? '';
+    assert.ok(nextText.includes('REVIEW-BODY-MARK'), `the next request gets the whole restore: ${nextText}`);
+    assert.deepEqual([calls.history, calls.skills], [2, 2], 'asked again');
+    const thirdList = session.list();
+    await hook({}, { messages: thirdList });
+    assert.equal(getRestorePart(thirdList), nextText, 'a whole restore is kept');
+    assert.deepEqual([calls.history, calls.skills], [2, 2], 'and asks nothing more');
+  });
+});
+
+test('installed plugin: with no inner client in the SDK it asks the server itself — its folder and its password — and says so once in the log', async () => {
+  await withTempDir(async (dir) => {
+    const password = 'example-server-password';
+    const seen: Array<{ authorization: string | undefined; directory: string | null }> = [];
+    const server = http.createServer((request, response) => {
+      const url = new URL(request.url ?? '/', 'http://127.0.0.1');
+      seen.push({ authorization: request.headers.authorization, directory: url.searchParams.get('directory') });
+      if (url.pathname !== '/skill' || request.headers.authorization !== `Basic ${Buffer.from(`opencode:${password}`).toString('base64')}`) {
+        response.writeHead(401);
+        response.end();
+        return;
+      }
+      response.writeHead(200, { 'content-type': 'application/json' });
+      response.end(JSON.stringify([reviewSkill]));
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const address = server.address();
+    const port = typeof address === 'object' && address !== null ? address.port : 0;
+    const previousPassword = process.env.OPENCODE_SERVER_PASSWORD;
+    process.env.OPENCODE_SERVER_PASSWORD = password;
+    try {
+      const session = buildCompactedSession('msg_sum10', 'Summary.');
+      const { calls, client } = createRestoreClient({ history: session.history, skills: 'fail' }, true);
+      const hook = await loadInstalledTransformHook(dir, client, { serverUrl: new URL(`http://127.0.0.1:${port}`), directory: '/x/project' });
+      for (const list of [session.list(), session.list()]) {
+        await hook({}, { messages: list });
+        assert.ok((getRestorePart(list) ?? '').includes('REVIEW-BODY-MARK'), 'the skill list came from the server itself');
+      }
+      assert.deepEqual(seen, [{ authorization: `Basic ${Buffer.from(`opencode:${password}`).toString('base64')}`, directory: '/x/project' }], 'once: the whole restore is kept');
+      assert.equal(calls.logs.filter((line) => line.includes('no inner client for GET /skill')).length, 1);
+    } finally {
+      if (previousPassword === undefined) delete process.env.OPENCODE_SERVER_PASSWORD;
+      else process.env.OPENCODE_SERVER_PASSWORD = previousPassword;
+      server.close();
+    }
   });
 });
 

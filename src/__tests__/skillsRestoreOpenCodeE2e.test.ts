@@ -11,7 +11,8 @@
  *   → `/compact` with the summary SHOWN, then a message: the message's request holds the restore — a skill loaded after the
  *     summary is only named — and the summary streamed to the topic carries no skills block
  *   → the server restarts (a new plugin instance, nothing kept): the same restore is rebuilt from the stored history
- *   → `GET /skill` hangs: the request still comes within the lookup timeout, the skills named with load lines
+ *   → `GET /skill` hangs: the request still comes within the lookup timeout, the skills named with load lines; the next
+ *     request, with the server answering again, gets the whole restore (a partial one is never kept)
  *   → NOTHING of the restore reached the topic, in any message or edit
  *
  * The plugin's own branches (no summary, the retained tail, the cache, refusals, the log line) are pinned in
@@ -47,9 +48,9 @@ import {
 import { startCharnessOnInstance } from './e2e/fallbackFlowKit';
 import { enDict } from '../i18n/en';
 import { getTelegramFlowTestTimingsEnv } from './telegramE2e/telegramFlowTimings';
-import { compactionSkillsBlockEndMarker, compactionSkillsBlockStartMarker, skillsRestoreHeader } from '../utils/compactOnIdle';
+import { compactionChecklistSkillsItem, compactionSkillsBlockEndMarker, compactionSkillsBlockStartMarker } from '../utils/compactOnIdle';
 import { installOpenCodeCompactPlugin, openCodeAncestryLookupTimeoutMs } from '../utils/openCodeCompactPlugin';
-import { claudeSkillBaseDirPrefix } from '../utils/skillsRestore';
+import { claudeSkillBaseDirPrefix, skillsRestoreHeader } from '../utils/skillsRestore';
 
 const group = { id: -1001111111111, title: 'ExampleGroup' };
 const operator = { id: 424242, is_bot: false, first_name: 'Operator' };
@@ -67,7 +68,8 @@ const commitSkillName = 'oc-commit';
 const reviewBodyMarker = 'OC-REVIEW-BODY-MARK';
 const commitBodyMarker = 'OC-COMMIT-BODY-MARK';
 const summaryBody = 'OC-SUMMARY-BODY: the parser is half read.';
-const checklistLine = `1. skills restored by Charness: ${reviewSkillName}`;
+/** Item 1 as a model writes it when it follows the guidance: the guidance's own text, then the names. */
+const checklistLine = `1. ${compactionChecklistSkillsItem} ${reviewSkillName}`;
 
 let layout: IsolatedInstanceLayout | null = null;
 let charness: IsolatedCharness | null = null;
@@ -270,7 +272,7 @@ describe('The skills restore after a compaction on OpenCode: built charness, fak
     assert.equal(request.restoreText, before, 'the same text: the prompt cache still holds');
   });
 
-  it('`GET /skill` hangs: the request still comes within the lookup timeout, every skill named with a load line', async () => {
+  it('`GET /skill` hangs: the request still comes within the lookup timeout, every skill named with a load line — and once the server answers again, the next request gets the whole restore', async () => {
     let releaseSkillList: (status: number | null) => void = () => {};
     fakeOpenCode.holdNextRequest('GET', /^\/skill$/, new Promise((resolve) => { releaseSkillList = resolve; }));
     const startedAt = Date.now();
@@ -282,6 +284,11 @@ describe('The skills restore after a compaction on OpenCode: built charness, fak
     assert.ok(text.includes(`- ${reviewSkillName}: not restored here: load it with the skill tool`), `the load line: ${text}`);
     assert.ok(text.includes(`- ${commitSkillName}: not restored here: load it with the skill tool`));
     assert.ok(!text.includes(reviewBodyMarker), 'no text it could not get');
+
+    // That restore was not whole, so it was not kept: the next request asks the server again.
+    const next = await sendPromptAndAnswer('OCR-4');
+    assert.equal(next.summaryId, 'msg_summary_3');
+    assertReviewRestored(next, 'the request after the server answers again');
   });
 
   it('nothing of the restore reached the topic — in no message and no edit', () => {

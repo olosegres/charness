@@ -14,8 +14,7 @@ import os from 'os';
 import path from 'path';
 
 import { getSkillsRestoreHookOutput } from '../hooks/claudeSkillsRestoreHook';
-import { claudeSkillBaseDirPrefix, skillsRestorePartMaxChars } from '../utils/skillsRestore';
-import { skillsRestoreHeader } from '../utils/compactOnIdle';
+import { claudeSkillBaseDirPrefix, skillsRestoreHeader, skillsRestorePartMaxChars } from '../utils/skillsRestore';
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'skills-restore-hook-'));
 after(() => fs.rmSync(root, { recursive: true, force: true }));
@@ -64,10 +63,10 @@ test('a compaction: slot 1 prints the header and the list; a skill Claude cuts c
   assert.ok(printed.every((part) => part.startsWith(skillsRestoreHeader) && part.length <= skillsRestorePartMaxChars));
   const list = printed[0];
   assert.ok(list.includes(`- big: its current full text is below (base directory: ${skillDir('big')})`));
-  assert.ok(list.includes(`- small: its full text is already in your context (base directory: ${skillDir('small')})`), 'Claude re-attaches the small one whole');
+  assert.ok(list.includes(`- small: its current full text is below (base directory: ${skillDir('small')})`), 'the small one too: Claude Code\'s own re-attach is not relied on');
   const joined = printed.join('\n');
   for (const rule of ['Rule 0: a rule of the big skill.', 'Rule 799: a rule of the big skill.']) assert.ok(joined.includes(rule), rule);
-  assert.ok(!joined.includes('## Skill: small'), 'the small one is only named');
+  assert.ok(joined.includes('## Skill: small'), 'the small one is given whole');
 });
 
 test('the bot\'s skills of a process started without them are not available now', () => {

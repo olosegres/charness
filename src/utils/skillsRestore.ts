@@ -12,12 +12,18 @@
  * Claude: the transcript records, read back to the previous compaction — a skill loaded with the Skill tool or a slash
  * command (its `Base directory for this skill: <dir>` message), Claude's own re-attach of the previous compaction
  * (`invoked_skills`, which carries older epochs) and the bot's previous restore (which carries what Claude's re-attach
- * dropped). A skill Claude re-attaches whole and current is only named (its text is in the context already).
+ * dropped). Every skill comes back whole, also one Claude may re-attach itself ({@link planClaudeSkillsRestore} says why).
+ * OpenCode: a skill whose call is already after the summary is only named.
  */
 
 import path from 'path';
-import { skillsRestoreHeader } from './compactOnIdle';
 import { checkIsRecord } from './checkIsRecord';
+
+/**
+ * What opens the context the bot's hook (Claude, `hooks/claudeSkillsRestoreHook.ts`) and plugin (OpenCode,
+ * `openCodeCompactPlugin.ts`) add after a compaction. Agent-facing only: the summary the person may see never names it.
+ */
+export const skillsRestoreHeader = '[Charness: skills restored after compaction]';
 
 /** How a skill comes back. */
 export type SkillsRestoreStatus = 'text' | 'inContext' | 'unavailable' | 'loadWithTool';
@@ -243,31 +249,10 @@ export function buildClaudeSkillsRestoreParts(entries: readonly SkillsRestoreEnt
 /** The line Claude's own skill message opens with (and the content of its re-attach). */
 export const claudeSkillBaseDirPrefix = 'Base directory for this skill: ';
 
-/**
- * What Claude's own re-attach writes in place of the rest of a skill it cut. Measured on Claude Code 2.1.322: a
- * 23,890-character skill was re-attached as its first 20,000 characters ending in
- * `\n\n[... skill content truncated for compaction; use Read on the skill path if you need the full text]`.
- */
-const claudeReattachTruncationNotice = '[... skill content truncated for compaction';
-
-/**
- * Claude Code's own re-attach after a compaction ({@link https://code.claude.com/docs/en/skills#skill-content-lifecycle}:
- * "keeping the first 5,000 tokens of each", "a combined budget of 25,000 tokens", "starting from the most recently invoked
- * skill"), measured in characters on Claude Code 2.1.322: a skill's message (the `Base directory…` line and the body) of
- * 13,838 characters came back whole and one of 23,890 was cut to 20,000; of six 18,798-character skills the five newest came
- * back (93,990 characters) and the oldest was dropped. The bot's estimate: whole up to 20,000 characters each, newest first,
- * while the running sum (a cut skill counted at 20,000) stays within 100,000 — and it stops at the first that does not fit,
- * so a skill the estimate is unsure of gets its full text from the bot rather than none.
- */
-export const claudeReattachSkillMaxChars = 20_000;
-export const claudeReattachBudgetChars = 100_000;
-
-/** One load of a skill the transcript shows: its name, folder, and the text the session holds for it. */
+/** One load of a skill the transcript shows: its name and its folder. */
 export interface ClaudeSkillLoad {
   name: string;
   baseDir: string;
-  /** Claude's skill message: the `Base directory…` line, a blank line and the body — whole, or cut by a re-attach. */
-  heldContent: string;
 }
 
 /** A skill the bot's previous restore named. */
@@ -290,7 +275,7 @@ export interface ClaudeEpochSkills {
  * The keys a transcript line must carry to matter to {@link collectClaudeEpochSkills} — checked on the raw line before
  * `JSON.parse`, as a transcript can be a hundred megabytes and almost none of it is about skills.
  */
-const claudeSkillRecordKeys = ['"Skill"', claudeSkillBaseDirPrefix, '<command-name>', '"invoked_skills"', '"hook_additional_context"'];
+export const claudeSkillRecordKeys: readonly string[] = ['"Skill"', claudeSkillBaseDirPrefix, '<command-name>', '"invoked_skills"', '"hook_additional_context"'];
 
 /** @description Whether a raw transcript line can matter to {@link collectClaudeEpochSkills}. */
 export function checkIsClaudeSkillRecordLine(line: string): boolean {
@@ -311,12 +296,6 @@ export function readSkillMessageBaseDir(text: string): string | null {
   if (!text.startsWith(claudeSkillBaseDirPrefix)) return null;
   const firstLine = text.slice(claudeSkillBaseDirPrefix.length).split('\n')[0].trim();
   return firstLine === '' ? null : firstLine;
-}
-
-/** @description The body of a skill message: what follows its `Base directory…` line and the blank line after it. */
-export function readSkillMessageBody(text: string): string {
-  const newlineAt = text.indexOf('\n');
-  return newlineAt < 0 ? '' : text.slice(newlineAt + 1).replace(/^\n+/, '');
 }
 
 /** A skill name as the CLI writes it in a slash command or the Skill tool's input: without the leading slash. */
@@ -359,15 +338,8 @@ export function parseSkillsRestoreList(contextTexts: readonly string[], texts: S
   return mentions;
 }
 
-/** A load collected in the order the records come, before the newest-first ordering. */
-interface OrderedLoad {
-  name: string;
-  baseDir: string;
-  heldContent: string;
-}
-
 /** @description Keep the LAST load of each name (the records come oldest first) and order them newest first. */
-function getNewestFirstLoads(orderedLoads: readonly OrderedLoad[]): ClaudeSkillLoad[] {
+function getNewestFirstLoads(orderedLoads: readonly ClaudeSkillLoad[]): ClaudeSkillLoad[] {
   const seen = new Set<string>();
   const newestFirst: ClaudeSkillLoad[] = [];
   for (let index = orderedLoads.length - 1; index >= 0; index -= 1) {
@@ -389,7 +361,7 @@ function getNewestFirstLoads(orderedLoads: readonly OrderedLoad[]): ClaudeSkillL
  */
 export function collectClaudeEpochSkills(epochLines: readonly string[]): ClaudeEpochSkills {
   const toolSkillNames = new Map<string, string>();
-  const loads: OrderedLoad[] = [];
+  const loads: ClaudeSkillLoad[] = [];
   let reattached: ClaudeSkillLoad[] = [];
   let previousRestore: RestoredSkillMention[] = [];
   /** The slash command each user record holds, by the record's `uuid`: what a skill message's `parentUuid` points at. */
@@ -418,7 +390,7 @@ export function collectClaudeEpochSkills(epochLines: readonly string[]): ClaudeE
       if (baseDir !== null) {
         const toolName = typeof record.sourceToolUseID === 'string' ? toolSkillNames.get(record.sourceToolUseID) : undefined;
         const commandName = typeof record.parentUuid === 'string' ? commandNamesByUuid.get(record.parentUuid) : undefined;
-        loads.push({ name: toolName ?? commandName ?? path.basename(baseDir), baseDir, heldContent: text });
+        loads.push({ name: toolName ?? commandName ?? path.basename(baseDir), baseDir });
         continue;
       }
       const commandName = record.isMeta === true ? undefined : commandNameRe.exec(text)?.[1];
@@ -430,10 +402,10 @@ export function collectClaudeEpochSkills(epochLines: readonly string[]): ClaudeE
     if (attachment.type === 'invoked_skills' && Array.isArray(attachment.skills)) {
       reattached = getNewestFirstLoads(
         attachment.skills
-          .flatMap((skill): OrderedLoad[] => {
+          .flatMap((skill): ClaudeSkillLoad[] => {
             if (!checkIsRecord(skill) || typeof skill.name !== 'string' || typeof skill.content !== 'string') return [];
             const skillBaseDir = readSkillMessageBaseDir(skill.content);
-            return skillBaseDir === null ? [] : [{ name: normalizeSkillName(skill.name), baseDir: skillBaseDir, heldContent: skill.content }];
+            return skillBaseDir === null ? [] : [{ name: normalizeSkillName(skill.name), baseDir: skillBaseDir }];
           })
           .reverse(),
       );
@@ -444,30 +416,6 @@ export function collectClaudeEpochSkills(epochLines: readonly string[]): ClaudeE
     }
   }
   return { loads: getNewestFirstLoads(loads), reattached, previousRestore };
-}
-
-/** @description Whether Claude's re-attach cut this skill message. */
-function checkIsReattachCut(heldContent: string): boolean {
-  return heldContent.includes(claudeReattachTruncationNotice);
-}
-
-/**
- * @description The skills Claude's own re-attach will carry WHOLE after this compaction, by the measured rule
- * ({@link claudeReattachSkillMaxChars}, {@link claudeReattachBudgetChars}): the most recent load of each skill — this epoch's,
- * then the previous re-attach's — newest first, until the first that does not fit. Name → the text Claude holds for it.
- */
-export function getClaudeReattachedWholeSkills(epoch: ClaudeEpochSkills): Map<string, string> {
-  const whole = new Map<string, string>();
-  const seen = new Set<string>();
-  let usedChars = 0;
-  for (const load of [...epoch.loads, ...epoch.reattached]) {
-    if (seen.has(load.name)) continue;
-    seen.add(load.name);
-    usedChars += Math.min(load.heldContent.length, claudeReattachSkillMaxChars);
-    if (usedChars > claudeReattachBudgetChars) break;
-    if (load.heldContent.length <= claudeReattachSkillMaxChars && !checkIsReattachCut(load.heldContent)) whole.set(load.name, load.heldContent);
-  }
-  return whole;
 }
 
 /** @description A `SKILL.md`'s body as the CLI loads it: the frontmatter (between the first two `---` lines) and the blank lines after it dropped. */
@@ -489,12 +437,17 @@ export interface SkillFolderReader {
 /**
  * @description The Claude restore's entries, newest first: every skill this epoch loaded, Claude's previous re-attach carried
  * and the bot's previous restore named. A skill whose folder is inside `unavailableDir` (the bot's own skills, when this
- * process was started without them) or whose `SKILL.md` is gone is "not available now"; one Claude re-attaches whole with the
- * text that is on disk now is only named; any other comes back with its CURRENT text; a name with no known folder gets the
- * "load it with the tool" line.
+ * process was started without them) or whose `SKILL.md` is gone is "not available now"; a name with no known folder gets the
+ * "load it with the tool" line; EVERY other skill comes back with its CURRENT text.
+ *
+ * Also a skill Claude Code's own re-attach may carry whole. Measured on ONE process of Claude Code 2.1.322, that re-attach
+ * keeps a skill's message whole up to 20,000 characters and about 100,000 in all, newest first; whether a process started
+ * with `--resume` — every per-turn turn, every json-stream process after an idle stop or a bot restart — still knows the
+ * skills an earlier process loaded is NOT measured (the live probe's resume case measures it). Were a skill only named here
+ * and not re-attached, it would be lost until the next compaction while the agent is told not to load it; giving it costs a
+ * second copy of a skill under 20,000 characters, once per compaction.
  */
 export function planClaudeSkillsRestore(epoch: ClaudeEpochSkills, folders: SkillFolderReader, unavailableDir: string | null): SkillsRestoreEntry[] {
-  const reattachedWhole = getClaudeReattachedWholeSkills(epoch);
   const candidates: RestoredSkillMention[] = [];
   for (const mention of [...epoch.loads, ...epoch.reattached, ...epoch.previousRestore]) {
     const known = candidates.find((candidate) => candidate.name === mention.name);
@@ -507,10 +460,7 @@ export function planClaudeSkillsRestore(epoch: ClaudeEpochSkills, folders: Skill
     const isInUnavailableDir = unavailableDir !== null && (baseDir === unavailableDir || baseDir.startsWith(`${unavailableDir}${path.sep}`));
     const fileText = isInUnavailableDir ? null : folders.readSkillFile(baseDir);
     if (fileText === null) return { name, status: 'unavailable', baseDir, body: null };
-    const body = stripSkillFrontmatter(fileText);
-    const held = reattachedWhole.get(name);
-    if (held !== undefined && readSkillMessageBody(held).trim() === body.trim()) return { name, status: 'inContext', baseDir, body: null };
-    return { name, status: 'text', baseDir, body };
+    return { name, status: 'text', baseDir, body: stripSkillFrontmatter(fileText) };
   });
 }
 
@@ -568,17 +518,26 @@ export function getOpenCodeLoadedSkills(messages: readonly OpenCodeRestoreMessag
  * summary's block names. A skill whose call is already in what the model sees after the summary (the compaction's retained
  * tail, or loaded again since) is only named; one the server offers now comes back with its CURRENT text; one it does not
  * offer is "not available now"; with no answer from the server (`available` `null`) every other skill gets the "load it with
- * the tool" line. Self-contained, as {@link getOpenCodeLoadedSkills}.
+ * the tool" line.
+ *
+ * A name ONLY the block holds gets its text only while the history is unknown (`isHistoryKnown` false: the block is then the
+ * best record there is); with the history known it gets the "load it with the tool" line — the history shows every completed
+ * skill call, so a block-only name is most likely the model listing the skills it COULD load, and each would put 10–25 KB into
+ * every request of the epoch. Self-contained, as {@link getOpenCodeLoadedSkills}.
  */
 export function planOpenCodeSkillsRestore(input: {
   loaded: readonly LoadedSkillMention[];
   blockNames: readonly string[];
   inContextNames: readonly string[];
   available: readonly OpenCodeAvailableSkill[] | null;
+  isHistoryKnown: boolean;
 }): SkillsRestoreEntry[] {
   const mentions: LoadedSkillMention[] = input.loaded.slice();
+  const blockOnlyNames: string[] = [];
   for (const name of input.blockNames) {
-    if (!mentions.some((mention) => mention.name === name)) mentions.push({ name, baseDir: null });
+    if (mentions.some((mention) => mention.name === name)) continue;
+    mentions.push({ name, baseDir: null });
+    blockOnlyNames.push(name);
   }
   return mentions.map((mention): SkillsRestoreEntry => {
     const offered = input.available === null ? undefined : input.available.find((skill) => skill.name === mention.name);
@@ -587,6 +546,7 @@ export function planOpenCodeSkillsRestore(input: {
     if (input.inContextNames.includes(mention.name)) return { name: mention.name, status: 'inContext', baseDir, body: null };
     if (input.available === null) return { name: mention.name, status: 'loadWithTool', baseDir, body: null };
     if (offered === undefined) return { name: mention.name, status: 'unavailable', baseDir, body: null };
+    if (input.isHistoryKnown && blockOnlyNames.includes(mention.name)) return { name: mention.name, status: 'loadWithTool', baseDir, body: null };
     return { name: mention.name, status: 'text', baseDir, body: offered.content };
   });
 }

@@ -2,7 +2,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import * as readline from 'readline';
-import { spawnSync } from 'child_process';
+import { spawn, spawnSync } from 'child_process';
 import { randomUUID } from 'crypto';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
@@ -363,29 +363,47 @@ function getSessionStartCompactHookCommands(argv: readonly string[]): string[] {
     .flatMap((group) => (group.hooks ?? []).flatMap((hook) => (hook.type === 'command' && typeof hook.command === 'string' ? [hook.command] : [])));
 }
 
+/** One hook command run without blocking the fake: the input on stdin, what it printed (nothing when it failed or ran too long). */
+function runHookCommand(command: string, input: string): Promise<string> {
+  return new Promise((resolve) => {
+    const child = spawn('/bin/sh', ['-c', command], { stdio: ['pipe', 'pipe', 'ignore'] });
+    let output = '';
+    const timer = setTimeout(() => child.kill('SIGKILL'), hookTimeoutMs);
+    child.stdout.setEncoding('utf8').on('data', (chunk: string) => { output += chunk; });
+    child.on('close', () => { clearTimeout(timer); resolve(output); });
+    child.on('error', () => { clearTimeout(timer); resolve(''); });
+    // A hook that exits without reading its input must not crash the fake.
+    child.stdin.on('error', () => {});
+    child.stdin.end(input);
+  });
+}
+
 /**
- * The launch's `SessionStart` hooks after a compaction, the way the real CLI runs them: the hook input on stdin (source
- * `compact`), a `hook_started` / `hook_response` frame each on stdout (the response carries the hook's stdout, as the real
- * one's does — the bot must drop it), and the `additionalContext` of each hook's JSON collected. The real CLI runs them in
- * parallel and takes them in the order they finish; the fake takes them in REVERSE slot order, so nothing may rest on the
- * order. Logged to `session-start-hooks.jsonl`.
+ * The launch's `SessionStart` hooks after a compaction, the way the real CLI runs them: all at once, without blocking the
+ * process (stdin and control frames are still read meanwhile), the hook input on stdin (source `compact`), a `hook_started`
+ * frame each and a `hook_response` as each ends on stdout (the response carries the hook's stdout, as the real one's does —
+ * the bot must drop it), and the `additionalContext` of each hook's JSON collected. The real CLI takes them in the order they
+ * finish; the fake takes them in REVERSE slot order, so nothing may rest on the order. Logged to `session-start-hooks.jsonl`.
  */
-function runSessionStartCompactHooks(argv: readonly string[], sessionId: string, trigger: 'auto' | 'manual'): string[] {
+async function runSessionStartCompactHooks(argv: readonly string[], sessionId: string, trigger: 'auto' | 'manual'): Promise<string[]> {
   const input = JSON.stringify({ session_id: sessionId, transcript_path: getTranscriptPath(sessionId), cwd: process.cwd(), hook_event_name: 'SessionStart', source: 'compact', model: getReportedModel(argv) });
-  const contexts: string[] = [];
-  for (const command of getSessionStartCompactHookCommands(argv)) {
+  const outputs = await Promise.all(getSessionStartCompactHookCommands(argv).map(async (command) => {
     const hookId = randomUUID();
     writeStdout({ type: 'system', subtype: 'hook_started', hook_id: hookId, hook_name: 'SessionStart:compact', hook_event: 'SessionStart', session_id: sessionId });
-    const output = spawnSync('/bin/sh', ['-c', command], { input, encoding: 'utf8', timeout: hookTimeoutMs }).stdout ?? '';
+    const output = await runHookCommand(command, input);
     writeStdout({ type: 'system', subtype: 'hook_response', hook_id: hookId, hook_name: 'SessionStart:compact', hook_event: 'SessionStart', output, stdout: output, stderr: '', exit_code: 0, outcome: 'success', session_id: sessionId });
-    if (output.trim() === '') continue;
+    return output;
+  }));
+  const contexts = outputs.flatMap((output): string[] => {
+    if (output.trim() === '') return [];
     try {
       const additionalContext = (JSON.parse(output) as { hookSpecificOutput?: { additionalContext?: unknown } }).hookSpecificOutput?.additionalContext;
-      if (typeof additionalContext === 'string') contexts.unshift(additionalContext);
+      return typeof additionalContext === 'string' ? [additionalContext] : [];
     } catch {
       // Not hook JSON: the real CLI adds plain stdout as context too, but the bot's hooks print JSON.
+      return [];
     }
-  }
+  }).reverse();
   appendJsonLine(fakeClaudeLogFileNames.sessionStartHooks, { sessionId, pid: process.pid, trigger, contexts });
   return contexts;
 }
@@ -1176,27 +1194,27 @@ function runSkillLoads(sessionId: string, content: string): void {
 }
 
 /** A compaction's tail as the real CLI runs it: the `SessionStart` hooks first, then the records in the transcript. */
-function finishCompaction(argv: readonly string[], sessionId: string, trigger: 'auto' | 'manual'): void {
-  recordCompactionInTranscript(sessionId, trigger, runSessionStartCompactHooks(argv, sessionId, trigger));
+async function finishCompaction(argv: readonly string[], sessionId: string, trigger: 'auto' | 'manual'): Promise<void> {
+  recordCompactionInTranscript(sessionId, trigger, await runSessionStartCompactHooks(argv, sessionId, trigger));
 }
 
 /**
  * The CLI's own compaction at a context overflow: nobody asked for it, and no `/compact` turn is running. The turn then goes
  * on with a new model request, which holds what the compaction's hooks gave.
  */
-function emitOverflowCompaction(argv: readonly string[], sessionId: string): void {
+async function emitOverflowCompaction(argv: readonly string[], sessionId: string): Promise<void> {
   runPreCompactHooks(argv, sessionId, 'auto', null);
-  finishCompaction(argv, sessionId, 'auto');
+  await finishCompaction(argv, sessionId, 'auto');
   writeStdout({ type: 'system', subtype: 'compact_boundary', compact_metadata: { trigger: 'auto', pre_tokens: 190_000, post_tokens: 9_000 }, session_id: sessionId });
   logRestoreContext(sessionId, 'continuation');
 }
 
 /** The real CLI's answer to a `/compact` turn: status, boundary with token counts, result. `instruction` is what followed `/compact` (the bot's summary guidance), recorded for the flows. */
-function runCompactionTurn(argv: readonly string[], sessionId: string, instruction: string): void {
+async function runCompactionTurn(argv: readonly string[], sessionId: string, instruction: string): Promise<void> {
   writeStdout({ type: 'system', subtype: 'init', session_id: sessionId, model: 'fake-model', apiKeySource: launchApiKeySource, tools: [], mcp_servers: [], claude_code_version: getReportedClaudeCodeVersion() });
   writeStdout({ type: 'system', subtype: 'status', status: 'compacting', session_id: sessionId });
   runPreCompactHooks(argv, sessionId, 'manual', instruction === '' ? null : instruction);
-  finishCompaction(argv, sessionId, 'manual');
+  await finishCompaction(argv, sessionId, 'manual');
   writeStdout({ type: 'system', subtype: 'status', compact_result: 'success', session_id: sessionId });
   writeStdout({ type: 'system', subtype: 'compact_boundary', compact_metadata: { trigger: 'manual', pre_tokens: 25_600, post_tokens: 2_800 }, session_id: sessionId });
   appendJsonLine(fakeClaudeLogFileNames.compactions, { sessionId, pid: process.pid, instruction });
@@ -1256,7 +1274,7 @@ async function runTurn(argv: readonly string[], sessionId: string, content: stri
     // to be put to the user), `usage-limit-once` (a limit needs none to stop the turn; the bot's later "continue"
     // nudge carries no token, so it is answered — the "once") and `overflow` (the CLI's own compaction needs none).
     const noRequestMode = modeRe.exec(content)?.[1];
-    if (noRequestMode === 'overflow') emitOverflowCompaction(argv, sessionId);
+    if (noRequestMode === 'overflow') await emitOverflowCompaction(argv, sessionId);
     if (noRequestMode === 'usage-limit-once') {
       endTurnOnUsageLimit(sessionId, limitResetsRe.exec(content)?.[1] ?? 'in 1h');
       return;
@@ -1345,7 +1363,7 @@ async function runTurn(argv: readonly string[], sessionId: string, content: stri
   if (state.mode === 'compact' && server) {
     logToolCall(compactToolName, { reason: 'a person asked' }, await callBotTool(server, compactToolName, { reason: 'a person asked' }));
   }
-  if (state.mode === 'overflow') emitOverflowCompaction(argv, sessionId);
+  if (state.mode === 'overflow') await emitOverflowCompaction(argv, sessionId);
   if (state.mode === 'fetch-attachment' && server) {
     for (const attachmentId of (fetchIdsRe.exec(content)?.[1] ?? '').split(',').filter(Boolean)) {
       logToolCall(attachmentToolName, { attachmentId }, await callBotTool(server, attachmentToolName, { attachmentId }));

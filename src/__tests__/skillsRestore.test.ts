@@ -13,17 +13,15 @@ import * as assert from 'node:assert/strict';
 import {
   buildClaudeSkillsRestoreParts,
   buildSkillsRestoreText,
-  claudeReattachBudgetChars,
-  claudeReattachSkillMaxChars,
   claudeSkillBaseDirPrefix,
   collectClaudeEpochSkills,
-  getClaudeReattachedWholeSkills,
   getOpenCodeLoadedSkills,
   parseSkillsRestoreList,
   planClaudeSkillsRestore,
   planOpenCodeSkillsRestore,
   renderSkillsRestoreList,
   renderSkillsRestoreSection,
+  skillsRestoreHeader,
   skillsRestorePartMaxChars,
   skillsRestoreSlotCount,
   skillsRestoreTexts,
@@ -33,7 +31,6 @@ import {
   type SkillFolderReader,
   type SkillsRestoreEntry,
 } from '../utils/skillsRestore';
-import { skillsRestoreHeader } from '../utils/compactOnIdle';
 
 const skillsRoot = '/home/user/project/.claude/skills';
 const pluginSkillsRoot = '/home/user/charness/agent-plugin/skills';
@@ -90,7 +87,6 @@ test('collectClaudeEpochSkills: a Skill tool load is named by the call, newest f
   ];
   const epoch = collectClaudeEpochSkills(lines);
   assert.deepEqual(epoch.loads.map((load) => load.name), ['review', 'charness:charness-orchestration'], 'the namespaced name stays whole; review once, as its newest load');
-  assert.equal(epoch.loads[0].heldContent, buildSkillMessage(getSkillDir('review'), `${reviewBody}v2\n`));
   assert.equal(epoch.loads[1].baseDir, `${pluginSkillsRoot}/charness-orchestration`);
 });
 
@@ -152,47 +148,6 @@ test('collectClaudeEpochSkills: the bot\'s previous restore is counted — its l
   ], 'a later hook text that holds no restore does not wipe the restore before it');
 });
 
-// ── getClaudeReattachedWholeSkills (the measured rule of Claude's own re-attach) ──
-
-/** A skill message of exactly `size` characters. */
-function buildSizedMessage(name: string, size: number): string {
-  const head = buildSkillMessage(getSkillDir(name), '');
-  return `${head}${'r'.repeat(size - head.length)}`;
-}
-
-test('getClaudeReattachedWholeSkills: whole up to 20,000 characters; a longer one, or one already cut, is not', () => {
-  const epoch: ClaudeEpochSkills = {
-    loads: [
-      { name: 'small', baseDir: getSkillDir('small'), heldContent: buildSizedMessage('small', 13_838) },
-      { name: 'edge', baseDir: getSkillDir('edge'), heldContent: buildSizedMessage('edge', claudeReattachSkillMaxChars) },
-      { name: 'big', baseDir: getSkillDir('big'), heldContent: buildSizedMessage('big', 23_890) },
-    ],
-    reattached: [{ name: 'cut', baseDir: getSkillDir('cut'), heldContent: `${buildSizedMessage('cut', 19_000)}\n\n[... skill content truncated for compaction; use Read on the skill path if you need the full text]` }],
-    previousRestore: [],
-  };
-  assert.deepEqual([...getClaudeReattachedWholeSkills(epoch).keys()], ['small', 'edge']);
-});
-
-test('getClaudeReattachedWholeSkills: newest first within the 100,000-character budget — of six 18,798-character skills the oldest drops (measured)', () => {
-  const names = ['s6', 's5', 's4', 's3', 's2', 's1'];
-  const epoch: ClaudeEpochSkills = {
-    loads: names.map((name) => ({ name, baseDir: getSkillDir(name), heldContent: buildSizedMessage(name, 18_798) })),
-    reattached: [],
-    previousRestore: [],
-  };
-  assert.ok(5 * 18_798 <= claudeReattachBudgetChars && 6 * 18_798 > claudeReattachBudgetChars);
-  assert.deepEqual([...getClaudeReattachedWholeSkills(epoch).keys()], ['s6', 's5', 's4', 's3', 's2']);
-});
-
-test('getClaudeReattachedWholeSkills: this epoch\'s load of a skill wins over the previous re-attach of it', () => {
-  const epoch: ClaudeEpochSkills = {
-    loads: [{ name: 'review', baseDir: getSkillDir('review'), heldContent: buildSkillMessage(getSkillDir('review'), 'new') }],
-    reattached: [{ name: 'review', baseDir: getSkillDir('review'), heldContent: buildSkillMessage(getSkillDir('review'), 'old') }],
-    previousRestore: [],
-  };
-  assert.equal(getClaudeReattachedWholeSkills(epoch).get('review'), buildSkillMessage(getSkillDir('review'), 'new'));
-});
-
 // ── planClaudeSkillsRestore (the resolver) ──
 
 function createFolders(files: Record<string, string>): SkillFolderReader {
@@ -201,12 +156,12 @@ function createFolders(files: Record<string, string>): SkillFolderReader {
 
 const frontmatter = '---\nname: x\ndescription: y\n---\n\n';
 
-test('planClaudeSkillsRestore: Claude carries it whole and current → only named; changed on disk → its CURRENT text; gone → not available now', () => {
+test('planClaudeSkillsRestore: every skill on disk comes back with its CURRENT text — also a small one Claude Code may re-attach itself; gone → not available now', () => {
   const epoch: ClaudeEpochSkills = {
     loads: [
-      { name: 'review', baseDir: getSkillDir('review'), heldContent: buildSkillMessage(getSkillDir('review'), reviewBody) },
-      { name: 'commit', baseDir: getSkillDir('commit'), heldContent: buildSkillMessage(getSkillDir('commit'), 'the old text\n') },
-      { name: 'gone', baseDir: getSkillDir('gone'), heldContent: buildSkillMessage(getSkillDir('gone'), 'x') },
+      { name: 'review', baseDir: getSkillDir('review') },
+      { name: 'commit', baseDir: getSkillDir('commit') },
+      { name: 'gone', baseDir: getSkillDir('gone') },
     ],
     reattached: [],
     previousRestore: [],
@@ -216,7 +171,7 @@ test('planClaudeSkillsRestore: Claude carries it whole and current → only name
     [`${getSkillDir('commit')}/SKILL.md`]: `${frontmatter}${commitBody}`,
   });
   assert.deepEqual(planClaudeSkillsRestore(epoch, folders, null), [
-    { name: 'review', status: 'inContext', baseDir: getSkillDir('review'), body: null },
+    { name: 'review', status: 'text', baseDir: getSkillDir('review'), body: reviewBody },
     { name: 'commit', status: 'text', baseDir: getSkillDir('commit'), body: commitBody },
     { name: 'gone', status: 'unavailable', baseDir: getSkillDir('gone'), body: null },
   ]);
@@ -226,8 +181,8 @@ test('planClaudeSkillsRestore: a skill Claude cuts comes back whole; the bot\'s 
   const bigBody = 'b'.repeat(30_000);
   const epoch: ClaudeEpochSkills = {
     loads: [
-      { name: 'big', baseDir: getSkillDir('big'), heldContent: buildSkillMessage(getSkillDir('big'), bigBody) },
-      { name: 'charness:charness-orchestration', baseDir: `${pluginSkillsRoot}/charness-orchestration`, heldContent: buildSkillMessage(`${pluginSkillsRoot}/charness-orchestration`, 'o') },
+      { name: 'big', baseDir: getSkillDir('big') },
+      { name: 'charness:charness-orchestration', baseDir: `${pluginSkillsRoot}/charness-orchestration` },
     ],
     reattached: [],
     previousRestore: [],
@@ -237,8 +192,8 @@ test('planClaudeSkillsRestore: a skill Claude cuts comes back whole; the bot\'s 
     ['big', 'text', 30_000],
     ['charness:charness-orchestration', 'unavailable', null],
   ]);
-  // The same process WITH the bot's skills: available — and small and current, so Claude's own re-attach carries it.
-  assert.equal(planClaudeSkillsRestore(epoch, folders, null)[1].status, 'inContext');
+  // The same process WITH the bot's skills: available, and given whole (Claude's own re-attach is not relied on).
+  assert.equal(planClaudeSkillsRestore(epoch, folders, null)[1].status, 'text');
 });
 
 test('planClaudeSkillsRestore: skills the previous restore carried come back again; a name with no known folder gets the load line', () => {
@@ -380,27 +335,29 @@ const offeredSkills = [
   { name: 'from-block', location: '/x/from-block/SKILL.md', content: '# from block\n' },
 ];
 
-test('planOpenCodeSkillsRestore: the server\'s CURRENT text; a skill already after the summary only named; the block adds what the history misses; gone → not available now', () => {
-  const entries = planOpenCodeSkillsRestore({
+test('planOpenCodeSkillsRestore: the server\'s CURRENT text; a skill already after the summary only named; gone → not available now; a name ONLY the block holds gets a load line while the history is known', () => {
+  const input = {
     loaded: [{ name: 'review', baseDir: '/old/review' }, { name: 'commit', baseDir: '/x/commit' }, { name: 'gone', baseDir: '/x/gone' }],
     blockNames: ['commit', 'from-block'],
     inContextNames: ['commit'],
     available: offeredSkills,
-  });
-  assert.deepEqual(entries, [
+  };
+  assert.deepEqual(planOpenCodeSkillsRestore({ ...input, isHistoryKnown: true }), [
     { name: 'review', status: 'text', baseDir: '/x/review', body: reviewBody },
     { name: 'commit', status: 'inContext', baseDir: '/x/commit', body: null },
     { name: 'gone', status: 'unavailable', baseDir: '/x/gone', body: null },
-    { name: 'from-block', status: 'text', baseDir: '/x/from-block', body: '# from block\n' },
+    { name: 'from-block', status: 'loadWithTool', baseDir: '/x/from-block', body: null },
   ]);
+  // Without the history the block is the best record there is: its names come back whole.
+  assert.deepEqual(planOpenCodeSkillsRestore({ ...input, isHistoryKnown: false }).at(-1), { name: 'from-block', status: 'text', baseDir: '/x/from-block', body: '# from block\n' });
 });
 
 test('planOpenCodeSkillsRestore: no answer from the server — every skill not in the context gets the load line; nothing loaded → nothing', () => {
   assert.deepEqual(
-    planOpenCodeSkillsRestore({ loaded: [{ name: 'review', baseDir: '/x/review' }], blockNames: ['commit'], inContextNames: [], available: null }).map((entry) => [entry.name, entry.status]),
+    planOpenCodeSkillsRestore({ loaded: [{ name: 'review', baseDir: '/x/review' }], blockNames: ['commit'], inContextNames: [], available: null, isHistoryKnown: true }).map((entry) => [entry.name, entry.status]),
     [['review', 'loadWithTool'], ['commit', 'loadWithTool']],
   );
-  assert.deepEqual(planOpenCodeSkillsRestore({ loaded: [], blockNames: [], inContextNames: [], available: offeredSkills }), []);
+  assert.deepEqual(planOpenCodeSkillsRestore({ loaded: [], blockNames: [], inContextNames: [], available: offeredSkills, isHistoryKnown: true }), []);
 });
 
 test('the OpenCode functions are self-contained — they work from their own source alone, as the plugin embeds them', () => {
@@ -408,7 +365,7 @@ test('the OpenCode functions are self-contained — they work from their own sou
   // `__name`: the helper the test runner's transform injects into function bodies (the built `dist/` has none).
   const embedded: { build: typeof buildSkillsRestoreText; plan: typeof planOpenCodeSkillsRestore; loaded: typeof getOpenCodeLoadedSkills } = new Function(`const __name = (target) => target; ${sources}; return { build: buildSkillsRestoreText, plan: planOpenCodeSkillsRestore, loaded: getOpenCodeLoadedSkills };`)();
   const history = [buildSkillCall('review', 'completed', '/x/review')];
-  const input = { loaded: embedded.loaded(history), blockNames: ['from-block'], inContextNames: [], available: offeredSkills };
+  const input = { loaded: embedded.loaded(history), blockNames: ['from-block'], inContextNames: [], available: offeredSkills, isHistoryKnown: false };
   assert.equal(
     embedded.build(embedded.plan(input), skillsRestoreTexts, 'skill'),
     buildSkillsRestoreText(planOpenCodeSkillsRestore({ ...input, loaded: getOpenCodeLoadedSkills(history) }), skillsRestoreTexts, 'skill'),

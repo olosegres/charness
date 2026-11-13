@@ -15,7 +15,8 @@ import path from 'path';
 import { readClaudeTranscriptEpochLines } from '../utils/claudeTranscriptEpoch';
 
 const boundaryLine = JSON.stringify({ type: 'system', subtype: 'compact_boundary', content: 'Conversation compacted', compactMetadata: { trigger: 'auto' } });
-const acceptAll = (): boolean => true;
+/** A key every test line holds: the reader keeps them all. */
+const acceptAll = [''];
 
 function writeTranscript(lines: readonly string[], isNewlineAtEnd = true): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'transcript-epoch-'));
@@ -40,9 +41,11 @@ test('readClaudeTranscriptEpochLines: a line that merely MENTIONS the boundary i
   assert.deepEqual(readClaudeTranscriptEpochLines(filePath, acceptAll), [mention, 'last-without-newline']);
 });
 
-test('readClaudeTranscriptEpochLines: only the lines the filter accepts are kept (raw text, before any parse)', () => {
-  const filePath = writeTranscript(['keep 1', 'drop', boundaryLine, 'keep 2', 'drop', 'keep 3']);
-  assert.deepEqual(readClaudeTranscriptEpochLines(filePath, (line) => line.startsWith('keep')), ['keep 2', 'keep 3']);
+test('readClaudeTranscriptEpochLines: only the lines that hold one of the keys are kept (matched on the raw bytes, multi-byte keys too)', () => {
+  const filePath = writeTranscript(['keep 1', 'drop', boundaryLine, 'keep 2', 'drop', 'с ключом ✓', 'keep 3']);
+  assert.deepEqual(readClaudeTranscriptEpochLines(filePath, ['keep']), ['keep 2', 'keep 3']);
+  assert.deepEqual(readClaudeTranscriptEpochLines(filePath, ['keep', 'ключом ✓']), ['keep 2', 'с ключом ✓', 'keep 3']);
+  assert.deepEqual(readClaudeTranscriptEpochLines(filePath, []), [], 'no key: nothing is kept');
 });
 
 test('readClaudeTranscriptEpochLines: over several read chunks, with multi-byte characters cut by a chunk\'s edge, every line comes back whole', () => {

@@ -134,11 +134,18 @@ export function buildSkillsRestoreHookCommands(input: { nodePath: string; hookPa
   ].join('; '));
 }
 
-/** Command hooks under one matcher (none: every compaction, every tool). */
-type CommandHookGroups = Array<{ matcher?: string; hooks: Array<{ type: 'command'; command: string }> }>;
+/** Command hooks under one matcher (none: every compaction, every tool); `timeout` in seconds (none: the CLI's default). */
+type CommandHookGroups = Array<{ matcher?: string; hooks: Array<{ type: 'command'; command: string; timeout?: number }> }>;
 
 /** The `SessionStart` source of a compaction, auto or manual: the matcher of the restore's hooks. */
 const sessionStartCompactMatcher = 'compact';
+
+/**
+ * How long the CLI lets one restore slot run, in seconds. The CLI holds the compaction — and so the agent — until its hooks
+ * end, and its default is far longer than this work needs (read one transcript epoch and a few files); a slot cut off
+ * prints nothing, which every slot already does on any failure.
+ */
+export const skillsRestoreHookTimeoutSeconds = 30;
 
 /**
  * @description The `--settings` payload: the `PreCompact` command hook (auto AND manual compactions), the shared
@@ -153,7 +160,10 @@ export function buildClaudeLaunchHookSettings(commands: { preCompact: string; po
     PostToolUse: [{ hooks: [{ type: 'command', command: commands.postToolUse }] }],
   };
   if (commands.sessionStartCompact.length > 0) {
-    hooks.SessionStart = [{ matcher: sessionStartCompactMatcher, hooks: commands.sessionStartCompact.map((command) => ({ type: 'command' as const, command })) }];
+    hooks.SessionStart = [{
+      matcher: sessionStartCompactMatcher,
+      hooks: commands.sessionStartCompact.map((command) => ({ type: 'command' as const, command, timeout: skillsRestoreHookTimeoutSeconds })),
+    }];
   }
   return { hooks };
 }
