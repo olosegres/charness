@@ -64,7 +64,7 @@ import {
   exitOnSignal,
   getFlowDeadlineMs,
   getFreeFixedPort,
-  getFreePort,
+  getUnservedPort,
   IsolatedCharness,
   listTmuxSessions,
   readJsonLines,
@@ -227,7 +227,7 @@ describe('The agent\'s own background work is never cut off by an automatic stop
       AGENT_IDLE_MINUTES: idleWindowMinutes,
       ...getTelegramFlowTestTimingsEnv({ backgroundHoldMaxMs: backgroundHoldMs }),
       // A free port nothing listens on: the boot's OpenCode pre-start finds no server and no binary, and gives up.
-      OPENCODE_URL: `http://127.0.0.1:${await getFreePort()}`,
+      OPENCODE_URL: `http://127.0.0.1:${await getUnservedPort()}`,
       SCHEDULER_MCP_PORT: (await getFreeFixedPort()).toString(),
     });
   });

@@ -36,6 +36,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { pathToFileURL } from 'url';
 import { fakeClaudeLogFileNames, fakeClaudePlatformEnvName, fakeClaudeQueuedWaitMaxMsEnvName, fakeClaudeSlowTurnMsEnvName, fakeClaudeTuiLaunchesEnvName, type FakeClaudePlatform } from '../jiraE2e/fakeClaudeContract';
+import { probeOpenCodePort } from '../../installManager';
 import type { ClosedRequestRecord } from '../../requests/types';
 
 const repoRoot = path.resolve(__dirname, '..', '..', '..');
@@ -324,7 +325,12 @@ export function getFlowDeadlineMs(
   return processStartMs + Math.max(fileTimeoutMs - flowTeardownReserveMs, 0);
 }
 
-/** An OS-chosen free port — from the EPHEMERAL range, the one every outgoing connection on the host is given too. */
+/**
+ * @description An OS-chosen free port — from the EPHEMERAL range, the one every outgoing connection on the host and every
+ * other flow's `listen(0)` is given too. It is released at once, so it is only for a caller that binds it RIGHT AWAY (a
+ * server it starts next): kept as an address, it is anyone's next port — see {@link getUnservedPort} for an address that
+ * stays dead and {@link getFreeFixedPort} for a port bound again after a gap.
+ */
 export async function getFreePort(): Promise<number> {
   const server = net.createServer();
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
@@ -337,10 +343,10 @@ export async function getFreePort(): Promise<number> {
 /** Where Linux starts handing ports to outgoing connections when `ip_local_port_range` cannot be read (the kernel default). */
 const defaultEphemeralPortFloor = 32768;
 /** The fixed ports are drawn from [this, the ephemeral floor): above the well-known services, below every client socket. */
-const fixedPortRangeStart = 20000;
+export const fixedPortRangeStart = 20000;
 const fixedPortProbeAttempts = 50;
 
-function getEphemeralPortFloor(): number {
+export function getEphemeralPortFloor(): number {
   try {
     const floor = Number(fs.readFileSync('/proc/sys/net/ipv4/ip_local_port_range', 'utf8').trim().split(/\s+/)[0]);
     return Number.isInteger(floor) && floor > fixedPortRangeStart ? floor : defaultEphemeralPortFloor;
@@ -410,6 +416,35 @@ export async function getFreeFixedPort(): Promise<number> {
     if (await checkIsPortFree(port)) return port;
   }
   throw new Error(`no free port below the ephemeral range after ${fixedPortProbeAttempts} tries`);
+}
+
+/** The unserved ports are drawn from [this, the fixed range): below every port the kit or the kernel hands to a listener. */
+const unservedPortRangeStart = 10000;
+const unservedPortProbeAttempts = 50;
+
+function drawUnservedPortCandidate(): number {
+  return randomInt(unservedPortRangeStart, fixedPortRangeStart);
+}
+
+/**
+ * @description The port of an address that must STAY dead — the `OPENCODE_URL` of an instance with no OpenCode server, which
+ * the bot probes at every boot. Nothing listens there and nothing ever will: the port lies below the fixed range, so neither
+ * the kernel (it hands `listen(0)` and outgoing connections only ephemeral ports) nor any allocation of this kit
+ * ({@link getFreePort}, {@link getFreeFixedPort}) can give it to a listener of another flow. A port from {@link getFreePort}
+ * kept as such an address is released to the kernel: the next `listen(0)` of a parallel flow can be handed it, and that
+ * flow's fake server then receives this instance's `GET /global/health` among its own requests.
+ *
+ * The port refuses connections rather than being held by a listener the kit keeps: the boot starts an OpenCode server only
+ * onto a port it reads as FREE, and a listener — whatever it does with the connection — reads as in use.
+ *
+ * @param drawPort the candidates (test seam); a candidate the bot's own probe does not read as free is skipped.
+ */
+export async function getUnservedPort(drawPort: () => number = drawUnservedPortCandidate): Promise<number> {
+  for (let attempt = 0; attempt < unservedPortProbeAttempts; attempt += 1) {
+    const port = drawPort();
+    if ((await probeOpenCodePort(port.toString())).state === 'free') return port;
+  }
+  throw new Error(`no unserved port in [${unservedPortRangeStart}, ${fixedPortRangeStart}) after ${unservedPortProbeAttempts} tries`);
 }
 
 /**

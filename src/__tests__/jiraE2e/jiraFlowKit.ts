@@ -24,10 +24,10 @@ import {
   exitOnSignal,
   getFlowDeadlineMs,
   getFreeFixedPort,
-  getFreePort,
   getInstanceEnvNames,
   getProcessEnvNames,
   getTmuxEnv,
+  getUnservedPort,
   IsolatedCharness,
   isolatedLaunchEnvNames,
   listTmuxServerSocketNames,
@@ -423,7 +423,7 @@ export function registerJiraFlowHooks(options: { layoutPrefix: string; config: J
 
     jiraBaseUrl = await fakeJira.start();
     botMcpPort = await getFreeFixedPort();
-    writeInstanceFiles({ openCode: await getFreePort(), botMcp: botMcpPort }, options.config);
+    writeInstanceFiles({ openCode: await getUnservedPort(), botMcp: botMcpPort }, options.config);
   });
 
   after(async () => {

@@ -40,7 +40,6 @@ import {
   exitOnSignal,
   getFlowDeadlineMs,
   getFreeFixedPort,
-  getFreePort,
   getProcessStartTicks,
   IsolatedCharness,
   listTmuxSessions,
@@ -176,7 +175,8 @@ describe('Automatic updates, git checkout (hot mode): the real supervisor, tsc -
     const apiRoot = await fakeTelegram.start();
     // The OpenCode server the supervisor owns: the fake binary's `serve` only records its pid and waits; the flow answers on its port.
     servePidFile = path.join(getLayout().fakeLogDir, 'opencode-serve.pids');
-    openCodePort = await getFreePort();
+    // Bound only after the supervisor has started, so a port of the ephemeral range could be handed to another flow in between.
+    openCodePort = await getFreeFixedPort();
     fakeOpenCode = new FakeOpenCodeServer({ version: fakeOpenCodeVersion, models: [defaultOpenCodeModel], defaultModel: defaultOpenCodeModel });
     writeFakeOpenCodeBinary(getLayout().binDir, { version: fakeOpenCodeVersion, models: [defaultOpenCodeModel], servePidFile });
     writeInstanceEnvFile(getLayout(), {

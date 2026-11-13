@@ -28,8 +28,8 @@ import {
   exitOnSignal,
   getFlowDeadlineMs,
   getFreeFixedPort,
-  getFreePort,
   getProcessStartTicks,
+  getUnservedPort,
   IsolatedCharness,
   listTmuxSessions,
   removeIsolatedInstanceSync,
@@ -117,7 +117,7 @@ describe('Automatic updates, git checkout (plain mode): a checkout, a bare remot
       WORK_ROOT: getLayout().workRoot,
       TMUX_TMPDIR: getLayout().tmuxTmpDir,
       CLAUDE_BIN: writeFakeClaudeLauncher(getLayout(), null),
-      OPENCODE_URL: `http://127.0.0.1:${await getFreePort()}`,
+      OPENCODE_URL: `http://127.0.0.1:${await getUnservedPort()}`,
       SCHEDULER_MCP_PORT: (await getFreeFixedPort()).toString(),
       ...getTelegramFlowTestTimingsEnv(),
     });

@@ -41,7 +41,7 @@ import {
   exitOnSignal,
   getFlowDeadlineMs,
   getFreeFixedPort,
-  getFreePort,
+  getUnservedPort,
   IsolatedCharness,
   listTmuxSessions,
   removeIsolatedInstanceSync,
@@ -168,7 +168,7 @@ describe('/topic end to end: built charness, fake Bot API', () => {
       TMUX_TMPDIR: layout.tmuxTmpDir,
       CLAUDE_BIN: writeFakeClaudeLauncher(layout, null),
       // A free port nothing listens on: the boot's OpenCode pre-start finds no server and no binary, and gives up.
-      OPENCODE_URL: `http://127.0.0.1:${await getFreePort()}`,
+      OPENCODE_URL: `http://127.0.0.1:${await getUnservedPort()}`,
       SCHEDULER_MCP_PORT: (await getFreeFixedPort()).toString(),
       ...getTelegramFlowTestTimingsEnv(),
     });

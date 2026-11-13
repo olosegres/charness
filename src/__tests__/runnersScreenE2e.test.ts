@@ -66,7 +66,7 @@ import {
   exitOnSignal,
   getFlowDeadlineMs,
   getFreeFixedPort,
-  getFreePort,
+  getUnservedPort,
   IsolatedCharness,
   listTmuxSessions,
   removeIsolatedInstanceSync,
@@ -365,7 +365,7 @@ describe('/runners end to end: built charness, fake Bot API, loopback sshd, a ru
       TMUX_TMPDIR: layout.tmuxTmpDir,
       CLAUDE_BIN: writeFakeClaudeLauncher(layout, null),
       // A free port nothing listens on: the boot's OpenCode pre-start finds no server and no binary, and gives up.
-      OPENCODE_URL: `http://127.0.0.1:${await getFreePort()}`,
+      OPENCODE_URL: `http://127.0.0.1:${await getUnservedPort()}`,
       SCHEDULER_MCP_PORT: (await getFreeFixedPort()).toString(),
       XDG_CACHE_HOME: getBotCacheHome(),
     };
@@ -415,7 +415,7 @@ describe('/runners end to end: built charness, fake Bot API, loopback sshd, a ru
     await general.tapAndAwaitAnswer(step, 'rnr_adother');
     await general.waitForMessage('the question for the address', (message) => message.text === 'Send the address runners will dial, as host or host:port.');
 
-    const deadPort = await getFreePort();
+    const deadPort = await getUnservedPort();
     await general.sendAndAwaitReply(`127.0.0.1:${deadPort}`, `⚠️ nothing answers with an ssh host key at 127.0.0.1:${deadPort}`);
     assert.equal(readSettingsRunnerHost(), undefined, 'a refused address is not kept');
   });
