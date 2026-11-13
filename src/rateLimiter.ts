@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from 'async_hooks';
 import { getAbortError, sleep } from './utils';
 import type { SessionKey } from './sessionKey';
 import { keyToString } from './sessionKey';
@@ -192,6 +193,92 @@ export function __setGlobalPacerForTest(pacer: GlobalSendPacer): void {
 export const rateLimiterConstants = {
   globalSendIntervalMs,
 } as const;
+
+/**
+ * @description The longest one Bot API call of a topic's send queue may take: a send, an edit, a pin, a delete. A call answers
+ * in well under a second; the HTTP client's own bound is minutes (Telegraf waits 500 s for a response), and while one call
+ * waits every later send of the topic waits behind it — the agent's answer and its question too. Past the deadline the call
+ * is aborted and settles as {@link SendOutcomeUnknownError}. It covers the call only: the global pacer's wait and a 429's
+ * retry-after wait are not counted. A file upload has its own bounds and opts out (`hasOperationDeadline: false`).
+ */
+export const telegramSendOperationDeadlineMs = 30_000;
+
+/** The deadline in force: {@link telegramSendOperationDeadlineMs}, or a test instance's shorter one (`testTimings.ts`). */
+let sendOperationDeadlineMs = telegramSendOperationDeadlineMs;
+
+/** @description Set the send queue's per-call deadline — a test instance's `CHARNESS_TEST_TIMINGS` override, at boot. */
+export function configureSendOperationDeadline(deadlineMs: number): void {
+  sendOperationDeadlineMs = deadlineMs;
+}
+
+/**
+ * @description A Bot API call of the send queue that did not answer within its deadline: it was aborted, but Telegram may have
+ * received it and applied it — the message may or may not be in the topic. A caller must NOT send it again (that could post it
+ * twice): it reports the outcome as unknown.
+ */
+export class SendOutcomeUnknownError extends Error {
+  constructor(deadlineMs: number) {
+    super(`the Bot API did not answer within ${deadlineMs} ms; the call was aborted and its outcome is unknown`);
+    this.name = 'SendOutcomeUnknownError';
+  }
+}
+
+export function checkIsSendOutcomeUnknownError(error: unknown): error is SendOutcomeUnknownError {
+  return error instanceof SendOutcomeUnknownError;
+}
+
+/**
+ * The abort signal of the send-queue call running in the current async context: the Bot API client passes it to its request
+ * (`connectors/telegram/botApiConnection.ts`), so the deadline aborts the request itself, not just the wait for it.
+ */
+const sendOperationSignalStorage = new AsyncLocalStorage<AbortSignal>();
+
+/** @description The abort signal of the send-queue call this code runs inside, `undefined` outside one. */
+export function getSendOperationSignal(): AbortSignal | undefined {
+  return sendOperationSignalStorage.getStore();
+}
+
+/**
+ * @description Run one call of the send queue with the deadline in force: it gets an abort signal (see
+ * {@link getSendOperationSignal}) that fires at the deadline, and the call settles then as {@link SendOutcomeUnknownError} —
+ * also when it ignores the signal, so the queue never waits past the deadline. A call that ignored the abort and SUCCEEDED
+ * after its deadline is logged: its message landed after the topic gave up on it.
+ */
+function runWithSendOperationDeadline<T>(operation: () => Promise<T>): Promise<T> {
+  const deadlineMs = sendOperationDeadlineMs;
+  const controller = new AbortController();
+  return new Promise<T>((resolve, reject) => {
+    let isTimedOut = false;
+    const timer = setTimeout(() => {
+      isTimedOut = true;
+      controller.abort();
+      reject(new SendOutcomeUnknownError(deadlineMs));
+    }, deadlineMs);
+    const reportLateSuccess = (): void => {
+      if (isTimedOut) console.warn(`[send] a Bot API call that had timed out after ${deadlineMs} ms succeeded later: its message landed after the topic gave up on it`);
+    };
+    let started: Promise<T>;
+    try {
+      started = sendOperationSignalStorage.run(controller.signal, operation);
+    } catch (error) {
+      clearTimeout(timer);
+      reject(error);
+      return;
+    }
+    started.then(
+      (value) => {
+        clearTimeout(timer);
+        reportLateSuccess();
+        resolve(value);
+      },
+      (error) => {
+        clearTimeout(timer);
+        // After the deadline this changes nothing: the call already settled as outcome unknown (its abort ends here).
+        reject(error);
+      },
+    );
+  });
+}
 
 /**
  * @description Always-on per-chat outbound send-rate instrumentation
@@ -573,6 +660,9 @@ function waitForQueuedExecution<T>(
  * - **Serialised per thread**: the next send for the same `SessionKey` only runs
  *   after this one settles (success or failure). Sends for *different* threads
  *   run concurrently, gated only by the global pacer.
+ * - **Bounded**: each call settles within {@link telegramSendOperationDeadlineMs}
+ *   (aborted, as {@link SendOutcomeUnknownError}), so one hung call never holds
+ *   the thread's later sends.
  * - **Paced globally**: {@link GlobalSendPacer} releases ≤1 send /
  *   {@link globalSendIntervalMs} across all chats, FCFS. Permits are granted on
  *   a clock, so a slow send never blocks another thread's permit.
@@ -590,16 +680,27 @@ export function enqueueSend<T>(
   key: SessionKey,
   fn: () => Promise<T>,
   signal?: AbortSignal,
+  options: EnqueueSendOptions = {},
 ): Promise<T> {
   // Not `async`: an async function would wrap the handled refusal in a NEW, unhandled promise.
   if (!checkIsTelegramSendKey(key, 'enqueueSend')) return getForeignKeySendRefusal(key);
-  return enqueueTelegramSend(key, fn, signal);
+  return enqueueTelegramSend(key, fn, signal, options);
+}
+
+/** @description How {@link enqueueSend} runs one call. */
+export interface EnqueueSendOptions {
+  /**
+   * `false` exempts the call from {@link telegramSendOperationDeadlineMs}: a file upload, which may take long by its size and
+   * bounds its wait for Telegram's answer itself. Default `true`.
+   */
+  hasOperationDeadline?: boolean;
 }
 
 async function enqueueTelegramSend<T>(
   key: SessionKey,
   fn: () => Promise<T>,
-  signal?: AbortSignal,
+  signal: AbortSignal | undefined,
+  options: EnqueueSendOptions,
 ): Promise<T> {
   if (signal?.aborted) throw getAbortError(signal);
   const queueKey = keyToString(key);
@@ -612,7 +713,8 @@ async function enqueueTelegramSend<T>(
       key,
       () => {
         isOperationStarted = true;
-        return fn();
+        // Each attempt (a 429's retry is a second one) has its own deadline, so a hung call never holds the topic's queue.
+        return options.hasOperationDeadline === false ? fn() : runWithSendOperationDeadline(fn);
       },
       signal,
     );

@@ -18,6 +18,8 @@ import { Readable } from 'stream';
 import { AbortController } from 'abort-controller';
 import { Telegram } from 'telegraf';
 import { runBotApiClientProbe } from './telegramE2e/runBotApiClientProbe';
+import { checkIsSendOutcomeUnknownError, configureSendOperationDeadline, enqueueSend, telegramSendOperationDeadlineMs } from '../rateLimiter';
+import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
 import {
   botApiFreeSocketTimeoutMs,
   createBotApiHttpAgent,
@@ -334,6 +336,28 @@ describe('the client Telegraf builds for one update (ctx.telegram)', () => {
     assert.deepEqual(api.appliedLabels, ['first', 'second']);
     assert.deepEqual(api.attempts.map((attempt) => attempt.isReusedConnection), [false, true, false]);
     assert.equal(warnings.mock.calls.length, 1);
+  });
+});
+
+describe('a call of the topic\'s send queue that Telegram never answers', () => {
+  it('is aborted at the queue\'s deadline — the request itself, its connection closed — and the next send of the topic goes out', async () => {
+    configureSendOperationDeadline(150);
+    try {
+      const agent = createAgent();
+      const { api, apiRoot } = await startApi(({ attemptNumber }) => (attemptNumber === 1 ? 'hold' : 'answer'));
+      const telegram = createClient(apiRoot, agent);
+      const key = makeTelegramKey(chatId, 9);
+
+      const held = enqueueSend(key, () => telegram.sendMessage(chatId, 'held'));
+      const answer = enqueueSend(key, () => telegram.sendMessage(chatId, 'answer'));
+
+      await assert.rejects(held, (error) => checkIsSendOutcomeUnknownError(error));
+      await answer;
+      assert.deepEqual(api.appliedLabels, ['answer'], 'the next send of the topic went out');
+      await waitUntil('the held request\'s connection to be closed by the client', 2000, () => api.getOpenConnectionCount() <= 1);
+    } finally {
+      configureSendOperationDeadline(telegramSendOperationDeadlineMs);
+    }
   });
 });
 

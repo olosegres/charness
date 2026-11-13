@@ -41,6 +41,10 @@ export interface TelegramAnswerSinkDeps {
  * (parallel `answer_request` calls) would otherwise both read the same previous
  * pin and leave the earlier of them pinned for good.
  *
+ * An answer whose delivery outcome is unknown (Telegram did not answer within the send
+ * queue's deadline) is reported delivered with a warning, never as an error: the agent
+ * would send it again, and the topic could get it twice.
+ *
  * The answer is the last thing of its turn in the topic: the shared message sender
  * lands the text the agent streamed before calling `answer_request` (held back for
  * a moment by the adapter and the per-topic output debounce) before it posts the
@@ -50,6 +54,10 @@ export interface TelegramAnswerSinkDeps {
  * notification and unpinned when that request closes. Its message id is the
  * alert handle.
  */
+/** What the agent is told when Telegram did not confirm its answer in time. */
+export const answerDeliveryUnknownWarning =
+  'Telegram did not confirm this answer in time: it may or may not be in the topic, and it is not pinned. Do not send it again.';
+
 export function createTelegramAnswerSink(deps: TelegramAnswerSinkDeps): AnswerSink {
   const answerPinLock = new KeyLock();
 
@@ -68,6 +76,9 @@ export function createTelegramAnswerSink(deps: TelegramAnswerSinkDeps): AnswerSi
   return {
     async deliverAnswer(key, delivery) {
       const result = await deps.sendMessages(keyToString(key), { messages: [delivery.body] });
+      // The answer may be in the topic: reported as delivered, so the agent does not send it again (a duplicate pinned answer),
+      // with a warning; it cannot be pinned — its message id is not known.
+      if (!result.ok && 'kind' in result && result.kind === 'deliveryUnknown') return { ok: true, warning: answerDeliveryUnknownWarning };
       if (!result.ok) return { ok: false, error: result.error };
       const [firstMessageId] = result.sentMessageIds;
       if (firstMessageId !== undefined) await pinLatestAnswer(key, firstMessageId);

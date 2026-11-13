@@ -136,14 +136,18 @@ export interface PendingOutputSegment {
 
 /**
  * @name PendingOutputBuffer
- * @description What a thread's output queue holds until its debounce ends, oldest segment first: `bot.ts`'s
- * `OutputQueueState` carries it and the helpers below keep it consistent. `requeuedRemainder` is the text a 429 kept from
- * landing, older than everything pending and kept APART from it: a landing that started meanwhile took text that is newer than
- * the leftover but older than what was queued after it, so the leftover must never be mixed into the pending segments.
+ * @description The thread's ONE ordered backlog of unsent agent text, oldest segment first: `bot.ts`'s `OutputQueueState` carries
+ * it and the helpers below keep it consistent. Every segment has a number, in the order it was queued: the oldest pending one
+ * is `firstSeq`, the next `firstSeq + 1`, and so on. Taking the oldest out moves `firstSeq` on; a 429 leftover put back at the
+ * head takes its number back. A landing waits for a number to settle (`utils/groupOutputBacklog.ts`): it SEALS the segments
+ * up to `sealedThroughSeq`, so text queued after it never joins text it waits for.
  */
 export interface PendingOutputBuffer {
   pendingSegments: PendingOutputSegment[];
-  requeuedRemainder: string | null;
+  /** The number of `pendingSegments[0]`; one past the newest segment ever queued while nothing is pending. */
+  firstSeq: number;
+  /** Segments numbered up to here take no more text: a batch queued after them starts a segment of its own. */
+  sealedThroughSeq: number;
 }
 
 /** @description The thread's mark that the next output opens a new message (a prompt forwarded, a session started, a question posted, a status frame shown). */
@@ -151,11 +155,18 @@ export interface NewMessageMark {
   needsNewMessage: boolean;
 }
 
+/** @description The number of the newest segment queued so far (pending, or already taken out to be sent). */
+export function getNewestPendingSeq(buffer: PendingOutputBuffer): number {
+  return buffer.firstSeq + buffer.pendingSegments.length - 1;
+}
+
 /**
  * @description Queue one batch of agent output. Without a mark set it joins the newest segment (or starts the first one). With
  * the mark set it starts a segment of its own and spends the mark — also when an earlier segment is still waiting: that
  * text belongs to the turn before the boundary, so it flushes where it was going (as a continuation of the message it
- * extends) and the batch after the boundary opens a new message.
+ * extends) and the batch after the boundary opens a new message. A SEALED newest segment (a landing waits for it) takes no
+ * more text either: the batch starts a segment of its own, as a continuation when it is one — so it extends the message
+ * the sealed text lands in, as it would after any flush.
  *
  * The mark belongs to the first text queued AFTER it, not to whichever send completes next: a send already under way when the
  * boundary was marked (the previous turn's text on a slow Bot API round trip) would otherwise spend it, and the new turn's
@@ -168,7 +179,7 @@ export function addPendingOutput(
 ): void {
   if (batch.output === '') return;
   const newest = buffer.pendingSegments.at(-1);
-  if (newest && !mark.needsNewMessage) {
+  if (newest && !mark.needsNewMessage && getNewestPendingSeq(buffer) > buffer.sealedThroughSeq) {
     newest.output = appendPendingOutput(newest.output, batch.output, batch.isContinuation, batch.startsNewParagraph);
     return;
   }
@@ -178,33 +189,27 @@ export function addPendingOutput(
 
 /** @description Whether anything waits to be sent. */
 export function checkHasPendingOutput(buffer: PendingOutputBuffer): boolean {
-  return buffer.pendingSegments.length > 0 || buffer.requeuedRemainder !== null;
+  return buffer.pendingSegments.length > 0;
+}
+
+/** @description Take the oldest segment out to send it, with its number. `null` when nothing is pending. */
+export function takePendingOutput(buffer: PendingOutputBuffer): { segment: PendingOutputSegment; seq: number } | null {
+  const segment = buffer.pendingSegments.shift();
+  if (!segment) return null;
+  const seq = buffer.firstSeq;
+  buffer.firstSeq += 1;
+  return { segment, seq };
 }
 
 /**
- * @description Take the oldest text out for a flush. `null` when nothing is pending. The text a 429 kept from landing (see
- * {@link requeueUnsentRemainder}) is the oldest: it restarts a fresh message (its predecessors landed or were edited in place
- * already), so it is not a continuation, and it joins the next pending segment unless a boundary was marked before that one.
- */
-export function takePendingOutput(buffer: PendingOutputBuffer): PendingOutputSegment | null {
-  const remainder = buffer.requeuedRemainder;
-  if (remainder === null) return buffer.pendingSegments.shift() ?? null;
-  buffer.requeuedRemainder = null;
-  const [next, ...later] = buffer.pendingSegments;
-  if (next && !next.startsNewMessage) {
-    buffer.pendingSegments = later;
-    return { output: appendPendingOutput(remainder, next.output, false), isContinuation: false, startsNewMessage: false };
-  }
-  return { output: remainder, isContinuation: false, startsNewMessage: false };
-}
-
-/**
- * @description Keep the text a flush could not send (see {@link getUnsentRemainder}) for the retry, apart from the pending
- * segments: it is older than anything queued during the send. A second one before the first went out (it cannot arise while
- * every send runs in one chain) is joined behind it, so no text is lost.
+ * @description Put the text a send could not land (see {@link getUnsentRemainder}) back at the HEAD of the backlog, under the
+ * number of the segment it came from: it is older than everything still pending, and nothing was taken out since that segment
+ * (one send at a time). It restarts a fresh message (its predecessors landed or were edited in place already), so it is not a
+ * continuation, and it stays a segment of its own — never mixed with the newer text behind it.
  */
 export function requeueUnsentRemainder(buffer: PendingOutputBuffer, unsentRemainder: string): void {
-  buffer.requeuedRemainder = buffer.requeuedRemainder === null ? unsentRemainder : `${buffer.requeuedRemainder}\n\n${unsentRemainder}`;
+  buffer.pendingSegments.unshift({ output: unsentRemainder, isContinuation: false, startsNewMessage: false });
+  buffer.firstSeq -= 1;
 }
 
 /** Separator used to re-join un-sent chunks before re-enqueueing them (S2). The

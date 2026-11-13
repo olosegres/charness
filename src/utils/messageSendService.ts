@@ -80,6 +80,17 @@ export interface SendMessagesToThreadOptions {
  */
 export const maxDiscreteMessages = 50;
 
+/**
+ * @description A text message whose delivery outcome is unknown: the platform did not answer within its deadline, so it may or
+ * may not be in the topic. `sendChunk` throws it; the batch ends as `deliveryUnknown`, and the message is never sent again.
+ */
+export class MessageDeliveryUnknownError extends Error {
+  constructor() {
+    super('the platform did not confirm the message in time; it may or may not be in the topic');
+    this.name = 'MessageDeliveryUnknownError';
+  }
+}
+
 export interface SendMessagesToThreadDeps<TTarget> {
   /** Map the scope-resolved thread key string to the concrete send target. */
   resolveTarget(threadKey: string): { ok: true; target: TTarget } | { ok: false; error: string };
@@ -87,7 +98,8 @@ export interface SendMessagesToThreadDeps<TTarget> {
    * Send ONE already-split chunk as its own permanent message; resolves the sent
    * message id, `null` when it did not land. The caller wires this to the bot's
    * paced HTML-with-plain-fallback send so ordering / rate-limiting / `/clear`
-   * tracking are reused.
+   * tracking are reused. Throws {@link MessageDeliveryUnknownError} when the
+   * outcome is unknown (it must not be sent again).
    */
   sendChunk(target: TTarget, chunk: string, signal?: AbortSignal): Promise<number | null>;
   /**
@@ -200,7 +212,8 @@ function buildCancelledResult(landed: number): SendMessagesToThreadResult {
  * attachment kinds taken from what the file pipeline reports it SENT, never from
  * the extension. An attachment whose delivery outcome is unknown terminates the
  * batch with a `deliveryUnknown` result so the agent does not blindly retry
- * (mirrors `send_file_to_user`).
+ * (mirrors `send_file_to_user`); so does a text message whose outcome is unknown
+ * ({@link MessageDeliveryUnknownError}).
  */
 export function createSendMessagesToThread<TTarget>(
   deps: SendMessagesToThreadDeps<TTarget>,
@@ -270,7 +283,18 @@ export function createSendMessagesToThread<TTarget>(
       const chunks = deps.splitMessage(item.text, deps.maxMessageLength, deps.measureRendered);
       for (const chunk of chunks) {
         attempted += 1;
-        const messageId = await deps.sendChunk(target, chunk, signal);
+        let messageId: number | null;
+        try {
+          messageId = await deps.sendChunk(target, chunk, signal);
+        } catch (error) {
+          if (!(error instanceof MessageDeliveryUnknownError)) throw error;
+          // Like an attachment of unknown fate: the batch ends here, and the caller is told not to send it again.
+          return {
+            ok: false,
+            kind: 'deliveryUnknown',
+            error: `Delivered ${formatMessageCount(landed)} before a message's delivery outcome became unknown: ${error.message}`,
+          };
+        }
         if (messageId === null) continue;
         landed += 1;
         deliveredKinds.push('text');

@@ -3,7 +3,7 @@
  * the status-coalescer flush loop in `bot.ts` consults per frame (B1 part 3).
  * Extracted so the dedup + cooldown-defer rule is testable without the
  * Telegraf / token-bucket machinery (same pattern as
- * `clearThreadOutputQueues.test.ts`).
+ * `clearStatusCoalescer.test.ts`).
  */
 
 import { test } from 'node:test';

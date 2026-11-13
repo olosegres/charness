@@ -19,6 +19,7 @@ import { mock, test } from 'node:test';
 import * as assert from 'node:assert/strict';
 import {
   createSendMessagesToThread,
+  MessageDeliveryUnknownError,
   type SendMessagesToThreadDeps,
 } from '../utils/messageSendService';
 import type {
@@ -517,4 +518,29 @@ test('lands nothing for a call that posts nothing: an invalid item or an unresol
   assert.equal((await service('-100:2', { messages: ['x'] })).ok, false);
 
   assert.deepEqual(recorder.events, []);
+});
+
+test('a text message whose outcome is unknown ends the batch as deliveryUnknown, naming what landed — it is never sent again', async () => {
+  let calls = 0;
+  const { service, recorder } = createService({
+    sendChunk: async (_target, chunk) => {
+      calls += 1;
+      if (chunk === 'second') throw new MessageDeliveryUnknownError();
+      recorder.sent.push(chunk);
+      return calls;
+    },
+  });
+
+  const result = await service('-100:1', { messages: ['first', 'second', 'third'] });
+
+  assert.equal(result.ok, false);
+  assert.equal('kind' in result && result.kind, 'deliveryUnknown');
+  assert.match(!result.ok ? result.error : '', /^Delivered 1 message before a message's delivery outcome became unknown/);
+  assert.deepEqual(recorder.sent, ['first'], 'the third is not sent after the second\'s unknown fate');
+  assert.equal(calls, 2, 'the second is not sent again');
+});
+
+test('any other error of a text send still propagates', async () => {
+  const { service } = createService({ sendChunk: async () => { throw new Error('a bug'); } });
+  await assert.rejects(service('-100:1', { messages: ['x'] }), /a bug/);
 });

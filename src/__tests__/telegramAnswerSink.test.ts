@@ -12,7 +12,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { keyToString } from '../sessionKey';
-import { createTelegramAnswerSink, type TelegramAnswerSinkDeps } from '../connectors/telegram/answerSink';
+import { answerDeliveryUnknownWarning, createTelegramAnswerSink, type TelegramAnswerSinkDeps } from '../connectors/telegram/answerSink';
 import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
 import { releaseRequestAlert, type AnswerSinks, type RequestAnswerDelivery } from '../platform/answerSink';
 import type { SendMessagesToThreadOptions, SendMessagesToThreadResult } from '../utils/messageSendService';
@@ -149,6 +149,18 @@ describe('createTelegramAnswerSink', () => {
 
     assert.deepEqual(pins.events, []);
     assert.equal(pins.getRemembered(), 77);
+  });
+
+  it('an answer whose delivery outcome is unknown is reported delivered with a warning — not an error the agent would answer by sending it again — and is not pinned', async () => {
+    const pins = createPinRecorder(77);
+    const sink = createTelegramAnswerSink(createDeps({
+      sendMessages: async () => ({ ok: false, kind: 'deliveryUnknown', error: 'Delivered 0 messages before a message\'s delivery outcome became unknown' }),
+      ...pins.deps,
+    }));
+
+    assert.deepEqual(await sink.deliverAnswer(topicKey, delivery), { ok: true, warning: answerDeliveryUnknownWarning });
+    assert.match(answerDeliveryUnknownWarning, /Do not send it again/);
+    assert.deepEqual(pins.events, [], 'no message id to pin; the previous answer keeps its pin');
   });
 
   it('reports a failed send as an error', async () => {

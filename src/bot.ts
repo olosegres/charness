@@ -82,6 +82,8 @@ import {
   drainPendingSends,
   shutdownDrainMaxMs,
   configureGlobalSendInterval,
+  configureSendOperationDeadline,
+  checkIsSendOutcomeUnknownError,
   type ShutdownDrainVerdict,
 } from './rateLimiter';
 import { formatTestTimingsBootLine, parseTestTimings, testTimingsEnvName } from './testTimings';
@@ -245,7 +247,7 @@ import { renderAgentFrame, renderAgentHtml, type AgentFrame } from './connectors
 import { splitMessage, MAX_MESSAGE_LEN } from './connectors/telegram/messageSplit';
 import { buildFoldedMessage } from './connectors/telegram/foldedMessage';
 import { unpinMessagesReportingRetryable } from './connectors/telegram/unpinMessages';
-import { addPendingOutput, checkHasPendingOutput, getOutputFlushPlan, getUnsentRemainder } from './connectors/telegram/outputFlushPlan';
+import { addPendingOutput, checkHasPendingOutput, getNewestPendingSeq, getOutputFlushPlan, getUnsentRemainder } from './connectors/telegram/outputFlushPlan';
 import { glueBacklogFrames } from './connectors/telegram/outputBacklogGlue';
 import { checkShouldKeepTyping as checkShouldKeepTypingDecision } from './utils/typingActive';
 import { checkIsTypingStuckByLeak } from './utils/typingLoopBackstop';
@@ -264,8 +266,8 @@ import {
 import { installLinkPreviewSuppression } from './utils/linkPreviewSuppression';
 import { pruneExpiredBuckets, retentionMs as logBucketRetentionMs } from './utils/rotatingLogFile';
 import { consoleFileBase, consoleFileExt } from './utils/consoleFileTap';
-import { clearThreadOutputQueues } from './utils/clearThreadOutputQueues';
-import { createGroupFinalizeQueue, flushNextPendingOutput, landGroupOutput, runInSendChain, type GroupFinalizeQueue } from './utils/groupFinalizePlan';
+import { clearStatusCoalescer } from './utils/clearStatusCoalescer';
+import { createGroupOutputBacklog, drainGroupOutput, landGroupOutput, startFinalGroupOutputAttempt, type GroupOutputBacklog, type GroupOutputDrainDeps } from './utils/groupOutputBacklog';
 import { landStreamedOutputWithinLimit } from './utils/streamedOutputLanding';
 import { persistAdapterSessionIds } from './utils/persistAdapterSessionIds';
 import { checkIsConversationRecorded, getEnsureSessionPlan, getPersistedSessionIdForAdapter, getResumeFailureAction, type ResumeFailureKind } from './utils/ensureSessionPlan';
@@ -279,7 +281,7 @@ import { getAgentIdleMs } from './utils/compactOnIdle';
 import { getCompactSelfReviewFlagDirs } from './utils/compactSelfReviewFlags';
 import { resolveOpenCodeGlobalPluginDir } from './utils/openCodeCompactPlugin';
 import { createSendFilesToThread } from './utils/fileSendService';
-import { createSendMessagesToThread } from './utils/messageSendService';
+import { createSendMessagesToThread, MessageDeliveryUnknownError } from './utils/messageSendService';
 import { createTelegramFileSendGateway } from './connectors/telegram/fileSendGateway';
 import { getStatusFlushAction } from './utils/statusFlushDecision';
 import { getThreadStatusModel, getThreadStatusReport, type ThreadStatusAccount, type ThreadStatusAccountSource } from './utils/threadStatusReport';
@@ -639,6 +641,7 @@ const ENV = parseEnv();
 const testTimingsBootLine = formatTestTimingsBootLine(ENV.testTimings);
 if (testTimingsBootLine !== null) console.log(testTimingsBootLine);
 if (ENV.testTimings.telegramSendIntervalMs !== undefined) configureGlobalSendInterval(ENV.testTimings.telegramSendIntervalMs);
+if (ENV.testTimings.telegramSendOperationDeadlineMs !== undefined) configureSendOperationDeadline(ENV.testTimings.telegramSendOperationDeadlineMs);
 if (ENV.testTimings.backgroundHoldMaxMs !== undefined) registerPendingWorkHoldMs(ENV.testTimings.backgroundHoldMaxMs);
 if (ENV.testTimings.scheduleMinFireIntervalMs !== undefined) registerMinFireIntervalMs(ENV.testTimings.scheduleMinFireIntervalMs);
 /** The short retry that probes an unconfirmed usage limit (a test instance may shorten it). */
@@ -1695,9 +1698,8 @@ interface ThreadMessageState {
   undeletedMessageIds: number[];
 }
 
-interface OutputQueueState extends GroupFinalizeQueue {
-  isProcessing: boolean;
-}
+/** A topic's group-mode output: its ordered backlog of unsent text and the loop that sends it (`utils/groupOutputBacklog.ts`). */
+type OutputQueueState = GroupOutputBacklog;
 
 /**
  * @description Per-thread coalescer for `status` (thinking / spinner) events.
@@ -3163,7 +3165,7 @@ function getOutputQueueState(key: SessionKey): OutputQueueState {
   const k = keyToString(key);
   let s = outputQueues.get(k);
   if (!s) {
-    s = { ...createGroupFinalizeQueue(), isProcessing: false };
+    s = createGroupOutputBacklog();
     outputQueues.set(k, s);
   }
   return s;
@@ -3183,7 +3185,7 @@ function checkIsOutputStreaming(key: SessionKey): boolean {
   if (getOutboundFor(key).checkIsDelivering(key)) return true;
   const q = outputQueues.get(keyToString(key));
   if (!q) return false;
-  return checkHasPendingOutput(q) || q.isProcessing || q.debounceTimer !== null;
+  return checkHasPendingOutput(q) || q.isDraining || q.debounceTimer !== null;
 }
 
 function getStatusCoalesceState(key: SessionKey): StatusCoalesceState {
@@ -3244,30 +3246,22 @@ function clearThinkingMessage(key: SessionKey): void {
 }
 
 /**
- * @description Drop a thread's bot-side queued-but-unsent agent output on
- * stop, so nothing coalesced *before* the stop posts *after* the "stopped"
- * confirmation (live repro: a 429 backlog let trailing outputs land seconds
- * later). Looks the existing state up with `.get()` — no lazy creation, since
- * clearing a thread that never queued anything is a no-op. The pure clear
- * logic lives in `utils/clearThreadOutputQueues` for unit testing.
+ * @description A stop's handling of a thread's not-yet-sent output: the agent's text gets ONE final attempt (never dropped up
+ * front — S2), the pending status frame is dropped so no stale frame appears after the stop. Looks the existing state up with
+ * `.get()` — no lazy creation, since a thread that never queued anything has nothing to land. The pure parts live in
+ * `utils/groupOutputBacklog.ts` and `utils/clearStatusCoalescer.ts` for unit testing.
  */
 function clearThreadQueues(key: SessionKey): void {
   const k = keyToString(key);
-  // A teardown that clears queued output must FIRST finalize any in-flight
-  // content so the agent's final answer lands instead of being discarded (DM:
-  // the live draft → a permanent message; group: the coalesced-but-unsent
-  // output buffer → a permanent message, S2). This is the convergence point for
-  // `/quit` release, session `closed`/`stopped`, `/unbind`, and topic-delete —
-  // all route through here. CRITICAL ORDER: finalize BEFORE
-  // `clearThreadOutputQueues`, because the group finalize drains
-  // the pending segments and the clear would otherwise drop them first (S2). Both
-  // transports capture + reset their in-flight state SYNCHRONOUSLY before any
-  // await, so the clear below can't race the drain. Fire-and-forget.
-  void getOutboundFor(key).finalize(key);
+  // A teardown never discards the agent's last words (S2). This is the convergence point for `/quit` release, session
+  // `closed`/`stopped`, `/unbind`, and topic-delete — all route through here. The group backlog (also the one of a DM topic
+  // on an adapter without a draft) gives everything queued so far ONE final attempt, in order after the send under way; a
+  // 429 then drops what it keeps, logged, and nothing is retried after the stop. The DM transport turns its live draft into
+  // a permanent message. Fire-and-forget.
   const queue = outputQueues.get(k);
-  // Text that took the new-message mark and is dropped unsent leaves the mark with the thread again.
-  if (queue?.pendingSegments.some((segment) => segment.startsNewMessage)) markNeedsNewMessage(key);
-  clearThreadOutputQueues(queue, statusCoalescers.get(k));
+  if (queue) void startFinalGroupOutputAttempt(queue, getGroupOutputDrainDeps(key, queue));
+  void getOutboundFor(key).finalize(key);
+  clearStatusCoalescer(statusCoalescers.get(k));
   // A new session starts with empty context — forget the last-sent outputs so
   // the identical-output backstop can't suppress a legitimate repeat across a
   // session boundary (the same convergence point that clears the other
@@ -4124,13 +4118,31 @@ interface ReplyToThreadOptions {
   plainFallbackText?: string;
 }
 
+/**
+ * @description How a send to a thread ended: `sent` with the message id; `failed` — it did not land; `unknown` — the Bot API
+ * did not answer within the send queue's deadline, the message may or may not be in the topic, and it must NOT be sent again
+ * (`rateLimiter.ts` `SendOutcomeUnknownError`).
+ */
+type ThreadSendOutcome = { kind: 'sent'; messageId: number } | { kind: 'failed' } | { kind: 'unknown' };
+
 async function replyToThread(
   key: SessionKey,
   text: string,
   extra: SendExtra = {},
   options: ReplyToThreadOptions = {},
 ): Promise<number | null> {
-  if (!checkIsTelegramPrimitiveKey(key, 'replyToThread')) return null;
+  const outcome = await replyToThreadDetailed(key, text, extra, options);
+  return outcome.kind === 'sent' ? outcome.messageId : null;
+}
+
+/** @description {@link replyToThread} telling a send whose outcome is unknown from one that failed — see {@link ThreadSendOutcome}. */
+async function replyToThreadDetailed(
+  key: SessionKey,
+  text: string,
+  extra: SendExtra = {},
+  options: ReplyToThreadOptions = {},
+): Promise<ThreadSendOutcome> {
+  if (!checkIsTelegramPrimitiveKey(key, 'replyToThread')) return { kind: 'failed' };
   const sendOnce = (sendExtra: Record<string, unknown>, sentText: string = text) => {
     const send = () =>
       bot.telegram.sendMessage(
@@ -4142,11 +4154,16 @@ async function replyToThread(
   };
 
   // A sent message is tracked for `/clear_messages`, and a `/bind` picker is remembered to be closed by the next bind or leave.
-  const trackSent = async (sent: unknown): Promise<number> => {
+  const trackSent = async (sent: unknown): Promise<ThreadSendOutcome> => {
     const messageId = (sent as { message_id: number }).message_id;
     await state.pushMessageId(key, messageId);
     if (checkIsBindPickerExtra(extra)) openBindMessages.remember(keyToString(key), messageId, Date.now());
-    return messageId;
+    return { kind: 'sent', messageId };
+  };
+  // A send the Bot API did not answer in time may have landed: it is reported, never sent again (no plain retry either).
+  const reportUnknown = (): ThreadSendOutcome => {
+    console.warn(`[send] ${keyToString(key)} a message got no answer from the Bot API in time; it may or may not be in the topic, and is not sent again`);
+    return { kind: 'unknown' };
   };
 
   // The plain twin goes out in place of `text` when Telegram refuses the markup: it is as much a secret, and the trace must not quote it.
@@ -4154,7 +4171,8 @@ async function replyToThread(
   try {
     return await trackSent(await sendOnce(buildSendExtra(key, extra)));
   } catch (e) {
-    if (options.signal?.aborted && checkIsAbortError(e)) return null;
+    if (options.signal?.aborted && checkIsAbortError(e)) return { kind: 'failed' };
+    if (checkIsSendOutcomeUnknownError(e)) return reportUnknown();
     // Markdown parse failure fallback. Several `t(...)` templates interpolate
     // user-controlled content (subdir names, branch names, error strings)
     // into Markdown body — a backtick or stray `*` inside the content
@@ -4175,8 +4193,9 @@ async function replyToThread(
       try {
         return await trackSent(await sendOnce(buildSendExtra(key, plainExtra), options.plainFallbackText ?? text));
       } catch (e2) {
+        if (checkIsSendOutcomeUnknownError(e2)) return reportUnknown();
         await handleSendError(key, e2);
-        return null;
+        return { kind: 'failed' };
       }
     }
 
@@ -4186,7 +4205,7 @@ async function replyToThread(
     // re-arm a bounded redelivery (its late re-send was the OUT-OF-ORDER cause
     // the user reported) — the rare 429 is just logged via handleSendError.
     await handleSendError(key, e);
-    return null;
+    return { kind: 'failed' };
   } finally {
     releaseSecret?.();
   }
@@ -4224,6 +4243,23 @@ async function editThreadMessageDetailed(
   extra: SendExtra = {},
   plainFallbackText: string = text,
 ): Promise<ThreadMessageEdit> {
+  const outcome = await editThreadMessageWithOutcome(key, messageId, text, extra, plainFallbackText);
+  // An edit whose outcome is unknown may simply be made again (it cannot post anything twice): the shared contract's `failed`.
+  return outcome === 'unknown' ? 'failed' : outcome;
+}
+
+/**
+ * @description {@link editThreadMessageDetailed}, plus `unknown`: the Bot API did not answer within the send queue's deadline, the
+ * edit may or may not be applied. The output flush needs it apart from `failed`, since its answer to a failed edit is to send the
+ * text FRESH, which would post it twice.
+ */
+async function editThreadMessageWithOutcome(
+  key: SessionKey,
+  messageId: number,
+  text: string,
+  extra: SendExtra = {},
+  plainFallbackText: string = text,
+): Promise<ThreadMessageEdit | 'unknown'> {
   if (!checkIsTelegramPrimitiveKey(key, 'editThreadMessage')) return 'failed';
   const editOnce = (editText: string, editExtra: Record<string, unknown>) =>
     enqueueSend(key, () =>
@@ -4237,6 +4273,7 @@ async function editThreadMessageDetailed(
     await editOnce(text, extra as Record<string, unknown>);
     return 'edited';
   } catch (e) {
+    if (checkIsSendOutcomeUnknownError(e)) return reportUnknownEdit(key, messageId);
     const desc = checkIsApiError(e) ? getErrorDescription(e) : '';
     if (/message is not modified/i.test(desc)) return 'edited'; // benign
     if (
@@ -4260,6 +4297,7 @@ async function editThreadMessageDetailed(
         await editOnce(plainFallbackText, plainExtra);
         return 'edited';
       } catch (e2) {
+        if (checkIsSendOutcomeUnknownError(e2)) return reportUnknownEdit(key, messageId);
         const desc2 = checkIsApiError(e2) ? getErrorDescription(e2) : '';
         if (/message is not modified/i.test(desc2)) return 'edited';
         console.error(`[edit] ${keyToString(key)}#${messageId} retry failed:`, desc2 || e2);
@@ -4269,6 +4307,11 @@ async function editThreadMessageDetailed(
     console.error(`[edit] ${keyToString(key)}#${messageId}:`, desc || e);
     return checkIsMessageNotFoundError(e) ? 'gone' : 'failed';
   }
+}
+
+function reportUnknownEdit(key: SessionKey, messageId: number): 'unknown' {
+  console.warn(`[edit] ${keyToString(key)}#${messageId} got no answer from the Bot API in time; it may or may not be applied`);
+  return 'unknown';
 }
 
 /**
@@ -4435,7 +4478,7 @@ function startTypingLoader(key: SessionKey): void {
         `[typing] ${keyToString(key)} force-stop: kept alive by leaked output-queue state — ` +
         `isOutputStreaming=${checkIsOutputStreaming(key)} isAdapterBusy=${checkIsAdapterBusy(key)} ` +
         `pendingOutput=${q !== undefined && checkHasPendingOutput(q)} ` +
-        `isProcessing=${q?.isProcessing === true} debounceTimer=${q?.debounceTimer !== null && q?.debounceTimer !== undefined}`,
+        `isDraining=${q?.isDraining === true} debounceTimer=${q?.debounceTimer !== null && q?.debounceTimer !== undefined}`,
       );
       if (q?.debounceTimer) { clearTimeout(q.debounceTimer); q.debounceTimer = null; }
       stopTypingLoader(key);
@@ -4461,7 +4504,7 @@ function checkIsTypingLoopStuck(key: SessionKey): boolean {
     isCompacting: checkIsThreadCompacting(key),
     isTransportStreaming: getOutboundFor(key).checkIsDelivering(key),
     hasPendingOutput: q !== undefined && checkHasPendingOutput(q),
-    isProcessing: q?.isProcessing === true,
+    isProcessing: q?.isDraining === true,
     hasDebounceTimer: q?.debounceTimer != null,
   });
 }
@@ -4602,39 +4645,49 @@ function queueOutput(
     // S3: scale the in-cooldown debounce to the live remaining cooldown.
     remainingCooldownMs: getRateLimitRemainingMs(getTelegramChatId(key)),
   });
-  // An earlier segment, sealed by a boundary, has nothing more to wait for: its turn is over.
-  if (timing === 'now' || q.pendingSegments.length > 1) {
-    // Final frame: flush immediately. `processOutputQueue` already guards
-    // `isProcessing`, so this is idempotent if a flush is mid-flight (the
-    // pending frame will be picked up by the re-trigger timer it arms).
-    void processOutputQueue(key);
+  const newestSeq = getNewestPendingSeq(q);
+  // Final frame: send everything now. The send loop runs once per topic, so a call while it sends only moves its target on.
+  if (timing === 'now') {
+    drainGroupOutput(q, newestSeq, getGroupOutputDrainDeps(key, q));
     return;
   }
+  // An earlier segment, sealed by a boundary, has nothing more to wait for: its turn is over. The newest one still grows and
+  // waits out the debounce.
+  if (q.pendingSegments.length > 1) drainGroupOutput(q, newestSeq - 1, getGroupOutputDrainDeps(key, q));
   q.debounceTimer = setTimeout(() => {
     q.debounceTimer = null;
-    processOutputQueue(key);
+    flushGroupOutput(key, q);
   }, timing);
 }
 
-async function processOutputQueue(key: SessionKey): Promise<void> {
-  const q = getOutputQueueState(key);
-  if (q.isProcessing || !checkHasPendingOutput(q)) return;
-  q.isProcessing = true;
-  try {
-    // One send at a time per topic, in the order they were started: a landing ahead of an answer (`landGroupOutput`) that is
-    // sending goes first, and one that starts while this flush is sending waits for it. What a 429 kept from landing is put
-    // back at the front of the buffer by `flushNextPendingOutput` so the re-trigger flush below retries it — never lost.
-    await runInSendChain(q, () => flushNextPendingOutput(q, (segment) =>
-      sendOutputImmediate(key, segment.output, segment.isContinuation, segment.startsNewMessage)));
-  } finally {
-    q.isProcessing = false;
-    if (checkHasPendingOutput(q)) armOutputRetry(key, q);
-  }
+/** @description Send everything the topic's backlog holds — the debounce flush and its retry. */
+function flushGroupOutput(key: SessionKey, q: OutputQueueState): void {
+  drainGroupOutput(q, getNewestPendingSeq(q), getGroupOutputDrainDeps(key, q));
 }
 
 /**
- * @description Arm the timer that flushes what a flush or a landing left pending (text a 429 kept from landing, or queued while
- * it was sending). Several segments flush at once; one waits out the debounce, stretched while the chat is in a 429 cooldown.
+ * @description What the send loop of a topic's backlog does through the bot: the send itself, the retry a 429 leftover needs,
+ * and the log of what a stop dropped or a send threw.
+ */
+function getGroupOutputDrainDeps(key: SessionKey, q: OutputQueueState): GroupOutputDrainDeps {
+  return {
+    sendSegment: (segment) => sendOutputImmediate(key, segment.output, segment.isContinuation, segment.startsNewMessage),
+    onStalled: () => {
+      console.warn(`[send] ${keyToString(key)} output remainder 429'd and was put back at the head for a retry`);
+      armOutputRetry(key, q);
+    },
+    onDropped: (segment) => {
+      console.warn(`[send] ${keyToString(key)} output remainder 429'd on its final attempt at a stop and was dropped`);
+      // Text that took the new-message mark and is dropped leaves the mark with the thread again.
+      if (segment.startsNewMessage) markNeedsNewMessage(key);
+    },
+    onSendError: (error) => console.error(`[send] ${keyToString(key)} output send failed; it is not sent again:`, error.message),
+  };
+}
+
+/**
+ * @description Arm the timer that sends again what a 429 put back at the head of the backlog. Several segments go at once; one
+ * waits out the debounce, stretched while the chat is in a 429 cooldown.
  */
 function armOutputRetry(key: SessionKey, q: OutputQueueState): void {
   // Audit S13 / #30: the re-trigger `setTimeout` used to be a bare
@@ -4646,50 +4699,22 @@ function armOutputRetry(key: SessionKey, q: OutputQueueState): void {
   if (q.debounceTimer) clearTimeout(q.debounceTimer);
   q.debounceTimer = setTimeout(() => {
     q.debounceTimer = null;
-    processOutputQueue(key);
+    flushGroupOutput(key, q);
   }, q.pendingSegments.length > 1 ? 0 : getOutputDelay(getTelegramChatId(key)));
 }
 
 /**
- * @description Group-path `finalizeInFlight`: reconcile the thread's
- * coalesced-but-unsent output against what actually landed, and force-send the
- * remainder so the agent's FINAL answer is never discarded on teardown (S2).
- *
- * Today the group output queue coalesces into `q.pendingSegments` and the
- * (possibly 429-stretched) debounce flushes it later; a teardown
- * (`idle`/`isFinal` → `handleAgentStopped`, `/new`, `/quit`, `/unbind`,
- * topic-delete) runs `clearThreadOutputQueues` which DISCARDS that buffer — so
- * under a sustained 429 the settled final answer could vanish with only a
- * `console.error`. This drains the buffer FIRST.
- *
- * The same drain keeps the order of a topic: a question posted, a tool call's status
- * frame, an answer delivered through `answer_request` or the messages of
- * `send_messages_to_user` go straight to the topic and would otherwise overtake the
- * text the agent streamed before them, which still waits out the debounce.
- * {@link landGroupOutput} lands that text (and every send already going out) first.
- *
- * Captures + nulls the buffer SYNCHRONOUSLY before its await, so the
- * immediately-following `clearThreadOutputQueues` finds nothing to discard and
- * the drain is never double-sent (mirrors `processOutputQueue`'s snapshot
- * discipline + the DM `finalizeDraft` reset-before-await). Idempotent + runs
- * exactly once per turn: an empty buffer (a fully-delivered turn) is a no-op,
- * so no duplicate post. The drain just sends the remainder once; the global 1/2s
- * send pacer (S1) makes a 429 at this point essentially impossible.
+ * @description Group-path `finalizeInFlight`: land everything the topic's backlog holds — and the send under way — before the
+ * caller posts what must come after it: a tool call's status frame, a question, an answer of `answer_request`, the messages of
+ * `send_messages_to_user` (`landStreamedOutputOfThread`). Those go straight to the topic and would otherwise overtake the
+ * text the agent streamed before them, which still waits out the debounce. Resolves once that text has settled
+ * ({@link landGroupOutput}); a 429 leftover goes back to the head and the wait goes on until its retry lands it. A stop gives
+ * the backlog its final attempt separately (`clearThreadQueues`).
  */
 async function finalizeGroupOutput(key: SessionKey): Promise<void> {
   const q = outputQueues.get(keyToString(key));
   if (!q) return;
-  const outcome = await landGroupOutput(q, (segment) =>
-    sendOutputImmediate(key, segment.output, segment.isContinuation, segment.startsNewMessage));
-  // A remainder that 429'd after the queue was cleared (a stop, a teardown) is dropped, and so is everything behind it: the
-  // buffer was torn down anyway — unchanged from the pre-S2 discard — and re-queuing would post after the stop. Mid-turn (an
-  // answer, a tool call's status frame, a question) it was put back, and the retry is armed. At 1/2s global pacing a 429
-  // here is essentially impossible.
-  if (outcome === 'dropped') console.warn(`[send] ${keyToString(key)} finalize remainder 429'd and was dropped at teardown`);
-  if (outcome === 'restoredForRetry') {
-    console.warn(`[send] ${keyToString(key)} landing remainder 429'd and was put back for a retry`);
-    armOutputRetry(key, q);
-  }
+  await landGroupOutput(q, getGroupOutputDrainDeps(key, q));
 }
 
 /**
@@ -4746,10 +4771,12 @@ async function sendOutputImmediate(
 
   let startIndex = 0;
   if (shouldEditFirstChunk) {
-    const editedOk =
-      chunks[0] === msgState.lastMessageText ||
-      (await editThreadMessage(key, msgState.lastMessageId!, renderAgentHtml(chunks[0]), { parse_mode: 'HTML' }, chunks[0]));
-    if (editedOk) {
+    // An edit whose outcome is unknown counts as made: sending the text fresh could post it twice, while the next continuation's
+    // edit rewrites the whole message anyway.
+    const editOutcome = chunks[0] === msgState.lastMessageText
+      ? 'edited'
+      : await editThreadMessageWithOutcome(key, msgState.lastMessageId!, renderAgentHtml(chunks[0]), { parse_mode: 'HTML' }, chunks[0]);
+    if (editOutcome === 'edited' || editOutcome === 'unknown') {
       msgState.lastMessageText = chunks[0];
       startIndex = 1;
     }
@@ -4760,16 +4787,24 @@ async function sendOutputImmediate(
   // No silent drop: track how many chunks actually landed, counting from the
   // FRONT. `startIndex` already covers a successful in-place edit of chunks[0];
   // when that edit failed it is 0 and every chunk re-sends fresh below. A
-  // `replyChunkWithFallback` that returns null means the chunk was dropped on a
-  // 429 after the retry-after wait — STOP the run (the cooldown would drop the
-  // rest of this synchronous flush too) and report the un-sent remainder so the
-  // caller re-enqueues it for the next flush.
+  // chunk that FAILED (dropped on a 429 after the retry-after wait) STOPS the
+  // run (the cooldown would drop the rest of this synchronous flush too) and the
+  // un-sent remainder is reported so the caller puts it back for the next flush.
+  // A chunk whose outcome is UNKNOWN (no answer within the send queue's
+  // deadline) counts as sent — it may be in the topic, so it is never sent
+  // again — and the next text opens a message of its own: there is no known
+  // message to append to.
   let sentCount = startIndex;
   for (let i = startIndex; i < chunks.length; i++) {
-    const id = await replyChunkWithFallback(key, renderAgentHtml(chunks[i]), chunks[i]);
-    if (!id) break;
-    msgState.lastMessageId = id;
-    msgState.lastMessageText = chunks[i];
+    const outcome = await replyChunkDetailed(key, renderAgentHtml(chunks[i]), chunks[i]);
+    if (outcome.kind === 'failed') break;
+    if (outcome.kind === 'sent') {
+      msgState.lastMessageId = outcome.messageId;
+      msgState.lastMessageText = chunks[i];
+    } else {
+      msgState.lastMessageId = null;
+      msgState.lastMessageText = null;
+    }
     sentCount = i + 1;
   }
 
@@ -4790,12 +4825,26 @@ async function replyChunkWithFallback(
   plainFallback: string,
   replyMarkup?: InlineKeyboardMarkup,
 ): Promise<number | null> {
-  if (!checkIsTelegramPrimitiveKey(key, 'replyChunkWithFallback')) return null;
+  const outcome = await replyChunkDetailed(key, renderedHtml, plainFallback, replyMarkup);
+  return outcome.kind === 'sent' ? outcome.messageId : null;
+}
+
+/**
+ * @description {@link replyChunkWithFallback} telling an unknown outcome from a failure: a chunk whose send got no answer in time
+ * is NOT sent again as plain text — it may already be in the topic.
+ */
+async function replyChunkDetailed(
+  key: SessionKey,
+  renderedHtml: string,
+  plainFallback: string,
+  replyMarkup?: InlineKeyboardMarkup,
+): Promise<ThreadSendOutcome> {
+  if (!checkIsTelegramPrimitiveKey(key, 'replyChunkWithFallback')) return { kind: 'failed' };
   const markupExtra = replyMarkup ? { reply_markup: replyMarkup } : {};
   // Telegram refusing the markup is answered INSIDE replyToThread, with the plain twin — without it the retry would show the tags.
-  const id = await replyToThread(key, renderedHtml, { parse_mode: 'HTML', ...markupExtra }, { plainFallbackText: plainFallback });
-  if (id) return id;
-  return replyToThread(key, plainFallback, markupExtra);
+  const outcome = await replyToThreadDetailed(key, renderedHtml, { parse_mode: 'HTML', ...markupExtra }, { plainFallbackText: plainFallback });
+  if (outcome.kind !== 'failed') return outcome;
+  return replyToThreadDetailed(key, plainFallback, markupExtra);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -4953,11 +5002,10 @@ const shutdownOutputFlushMaxMs = shutdownDrainMaxMs + 1000;
  * already-emitted answer chunks died in the send pipeline with the
  * process and were never re-sent). Two buffers drain, in order:
  *
- *  [A] per-thread COALESCE state — the group/baseline `q.pendingSegments`
- *      buffers (enumerated here from {@link outputQueues}) and the DM
- *      transport's active drafts (enumerated via `getInFlightThreadKeys`) —
- *      each finalized to a permanent message via the transport's
- *      `finalizeInFlight`;
+ *  [A] per-thread COALESCE state — the group backlogs (enumerated here from
+ *      {@link outputQueues}; each gets its final attempt, as at a stop) and the
+ *      DM transport's active drafts (enumerated via `listUnfinalizedKeys`), each
+ *      finalized to a permanent message;
  *  [B] the per-thread send FIFOs already parked on the global pacer — drained
  *      by `drainPendingSends` after `enterShutdownDrain()` flips the pacer to
  *      immediate release (at 1 send/2s a 5-message backlog alone outlives any
@@ -4979,39 +5027,30 @@ async function finalizePendingOutputOnShutdown(): Promise<void> {
   let flushedCount = 0;
   const flushWork = (async (): Promise<ShutdownDrainVerdict> => {
     enterShutdownDrain();
-    // [A] union of threads with pending coalesced output: the bot-owned output
-    // queues + the connector's own unfinalized content (deduped by serialised key).
-    const pendingKeys = new Map<string, SessionKey>();
+    // [A] every group backlog with text queued or being sent — the group topics', and the DM topics' on an adapter without
+    // a draft (they coalesce there too) — gets its final attempt; the connectors land their own unfinalized content (the
+    // DM drafts). Deduped by serialised key for the count.
+    const flushedKeys = new Set<string>();
+    const landings: Promise<void>[] = [];
     for (const [keyStr, q] of outputQueues) {
-      if (!checkHasPendingOutput(q)) continue;
+      if (!checkHasPendingOutput(q) && !q.isDraining) continue;
+      let key: SessionKey;
       try {
-        pendingKeys.set(keyStr, keyFromString(keyStr));
+        key = keyFromString(keyStr);
       } catch {
-        /* malformed key — nothing to flush for it */
+        continue; // malformed key — nothing to flush for it
       }
+      flushedKeys.add(keyStr);
+      landings.push(startFinalGroupOutputAttempt(q, getGroupOutputDrainDeps(key, q)));
     }
     for (const outbound of connectorOutbounds.values()) {
-      for (const key of outbound.listUnfinalizedKeys()) pendingKeys.set(keyToString(key), key);
-    }
-    flushedCount = pendingKeys.size;
-    await Promise.allSettled(
-      [...pendingKeys.values()].map((key) => getOutboundFor(key).finalize(key)),
-    );
-    // A DM-surface thread on a non-draft adapter (e.g. terminal) coalesces via
-    // the group `queueOutput` path, but its transport finalize handled only the
-    // draft — drain any such leftover buffer directly. Group keys were already
-    // drained above (their finalize empties the pending segments synchronously), so
-    // this is a no-op for them.
-    const leftoverDrains: Promise<void>[] = [];
-    for (const [keyStr, q] of outputQueues) {
-      if (!checkHasPendingOutput(q)) continue;
-      try {
-        leftoverDrains.push(finalizeGroupOutput(keyFromString(keyStr)));
-      } catch {
-        /* malformed key */
+      for (const key of outbound.listUnfinalizedKeys()) {
+        flushedKeys.add(keyToString(key));
+        landings.push(outbound.finalize(key));
       }
     }
-    await Promise.allSettled(leftoverDrains);
+    flushedCount = flushedKeys.size;
+    await Promise.allSettled(landings);
     // [B] wait for the released FIFOs to empty, bounded by what is left of the
     // shared drain budget.
     return drainPendingSends(Math.max(drainDeadlineMs - Date.now(), 0));
@@ -14248,7 +14287,8 @@ const sendFilesToThread = createSendFilesToThread<SessionKey>({
       ? { ok: true, target: key, workDir: decision.workDir }
       : { ok: false, error: decision.message };
   },
-  executeDelivery: (key, delivery, signal) => enqueueSend(key, delivery, signal),
+  // An upload may take long by its size and bounds its wait for Telegram's answer itself (`fileSendGateway.ts`).
+  executeDelivery: (key, delivery, signal) => enqueueSend(key, delivery, signal, { hasOperationDeadline: false }),
   gateway: createTelegramFileSendGateway({
     sendPhoto: (key, input, caption, signal) =>
       bot.telegram.callApi(
@@ -14335,7 +14375,11 @@ const sendMessagesToThread = createSendMessagesToThread<SessionKey>({
       return { ok: false, error: `invalid threadKey "${threadKeyStr}"` };
     }
   },
-  sendChunk: (key, chunk) => replyChunkWithFallback(key, renderAgentHtml(chunk), chunk),
+  sendChunk: async (key, chunk) => {
+    const outcome = await replyChunkDetailed(key, renderAgentHtml(chunk), chunk);
+    if (outcome.kind === 'unknown') throw new MessageDeliveryUnknownError();
+    return outcome.kind === 'sent' ? outcome.messageId : null;
+  },
   // Reuse the SAME secure file-send pipeline as `send_file_to_user` for an
   // attachment item — no second pipeline, no duplicated path-safety.
   sendFiles: sendFilesToThread,

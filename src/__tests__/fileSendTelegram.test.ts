@@ -1158,7 +1158,8 @@ test('bot file-send composition uses the runtime-tested gateway factory and reco
   assert.match(compositionSource, /gateway: createTelegramFileSendGateway/);
   assert.match(
     compositionSource,
-    /executeDelivery:\s*\(key,\s*delivery,\s*signal\)\s*=>\s*enqueueSend\(key,\s*delivery,\s*signal\)/,
+    /executeDelivery:\s*\(key,\s*delivery,\s*signal\)\s*=>\s*enqueueSend\(key,\s*delivery,\s*signal,\s*\{\s*hasOperationDeadline:\s*false\s*\}\)/,
+    'an upload rides the topic\'s send queue, exempt from its per-call deadline (it bounds its own wait for Telegram\'s answer)',
   );
   assert.equal(
     compositionSource.match(/\{ signal \}/g)?.length,

@@ -36,9 +36,11 @@
  *     the 3 s output debounce when the answer comes (a long one, sent as several messages,
  *     with the CLI's tool call for the answer already read); the same above the messages
  *     it sends through `send_messages_to_user`
- *   → Telegram refusing the markup of a «🔧 tool» status frame: it is created again as
- *     plain text; a status frame that its own turn's text outran while it waited behind
- *     earlier unposted text is never posted at all
+ *   → a Bot API call that never answers (the send of the turn's text) is aborted at the send queue's
+ *     deadline: the text is sent once, never again, and the answer queued behind it still goes out
+ *   → Telegram refusing the markup of a «🔧 tool» status frame: after a restart (no frame on
+ *     screen) the frame is created again as plain text; a status frame that its own turn's text
+ *     outran while it waited behind earlier unposted text is never posted at all
  *
  * Nothing leaves the machine: the Bot API and the bot MCP are on loopback, the
  * agent is the fake. Everything the test starts is stopped in `after`.
@@ -79,6 +81,7 @@ import {
   type IsolatedInstanceLayout,
 } from './e2e/isolatedCharness';
 import { getTelegramFlowTestTimingsEnv } from './telegramE2e/telegramFlowTimings';
+import { telegramSendOperationDeadlineMs } from '../rateLimiter';
 
 /** The repo's placeholder group and a topic in it; the operator is its creator. */
 const group = { id: -1001111111111, title: 'ExampleGroup' };
@@ -115,6 +118,14 @@ const answerOrderDebounceTurnLabel = 'ANSWERORDER-2';
 const sendMessagesOrderTurnLabel = 'ANSWERORDER-3';
 /** How long after its text a turn answers: past the adapter's 350 ms batch window, inside the bot's 3 s output debounce. */
 const answerAfterStreamedTextMs = 1000;
+/**
+ * The deadline of one Bot API call of the topic's send queue: a call the fake Bot API never answers settles as «outcome unknown»
+ * this long after it started. The production one, not a shorter test window: the status step holds a send on purpose while two
+ * more agent turns run behind it, and on a loaded machine that may take longer than a short window — the hold must outlast it.
+ */
+const sendOperationDeadlineMs = telegramSendOperationDeadlineMs;
+/** A tool status frame as the topic shows it: `🔧 <tool name>` alone on its line, with no result (`→`) under it. */
+const toolStatusFrameRe = /^🔧 [^\n→]*$/;
 /** How long a turn works before it answers when its tool status frame must be sent on its own, not replaced by the answer's: past the bot's 300 ms tail poll. */
 const toolStatusFrameSettleMs = 1500;
 /** A streamed text of three Telegram messages (the cap is 4096 characters each). */
@@ -217,6 +228,13 @@ function listPersistedOpenTopicRequests(): OpenRequestState[] {
     .filter(([groupKey]) => groupKey.startsWith(`${group.id}:${topicThreadId}`))
     .map(([, request]) => request)
     .sort((a, b) => a.createdAt - b.createdAt);
+}
+
+/** A promise the test opens itself: the moment a held Bot API response is let go. */
+function createGate(): { whenOpen: Promise<void>; open: () => void } {
+  let open: () => void = () => {};
+  const whenOpen = new Promise<void>((resolve) => { open = resolve; });
+  return { whenOpen, open };
 }
 
 function removeInstanceSync(): void {
@@ -736,36 +754,71 @@ describe('Telegram views end to end: built charness, fake Bot API, fake claude (
     );
   });
 
-  it('Telegram refusing the markup of the «🔧 tool» status frame: it is shown again as plain text — the tool name as written, no entity shown', async () => {
+  it('a Bot API call that never answers holds nothing for ever: the text it carried is sent once, never again, and the agent\'s answer still goes out after it', async () => {
+    // The fake Bot API takes the send of the turn's streamed text and never answers it. The send queue's deadline aborts the
+    // call; its outcome is unknown, so it is not sent again — and the answer queued behind it in the topic's queue goes out.
+    const heldText = 'Working on HUNGSEND-1.';
+    const neverAnswered = createGate();
+    // The text goes out as a message of its own or appended by edit to the message before it: whichever call carries it is held.
+    const checkIsHeldTextCall = (payload: Record<string, unknown>): boolean => String(payload.text).includes(heldText);
+    fakeTelegram.holdNextResponse('sendMessage', neverAnswered.whenOpen, checkIsHeldTextCall);
+    fakeTelegram.holdNextResponse('editMessageText', neverAnswered.whenOpen, checkIsHeldTextCall);
+    try {
+      fakeTelegram.pushOperatorMessage(topicThreadId, `HUNGSEND-1 [work-ms:${answerAfterStreamedTextMs}] [fake:answer]`);
+      await waitForFakeAnswer('HUNGSEND-1');
+      let answer: FakeTelegramMessage | undefined;
+      await getCharness().waitFor('the pinned answer', answerTimeoutMs, () => {
+        answer = findPinnedAnswer('HUNGSEND-1');
+        return answer !== undefined;
+      });
+      assert.ok(getAnswers('HUNGSEND-1')[0].outcome.startsWith('Delivered'), getAnswers('HUNGSEND-1')[0].outcome);
+      const textCalls = ['sendMessage', 'editMessageText']
+        .flatMap((method) => fakeTelegram.listCalls(method))
+        .filter((call) => checkIsHeldTextCall(call.payload))
+        .sort((first, second) => first.receivedAtMs - second.receivedAtMs);
+      const heldCall = textCalls[0];
+      assert.ok(heldCall, 'the text was sent');
+      // Sent again, it would be a fresh message (an edit after it re-renders the whole message, as any continuation does).
+      assert.ok(textCalls.filter((call) => call.method === 'sendMessage').length <= 1, 'the text whose call got no answer was not sent again as a new message');
+      const answerSend = fakeTelegram.listCalls('sendMessage').find((call) => String(call.payload.text).includes('Fake final answer for HUNGSEND-1'));
+      assert.ok(answerSend && answerSend.receivedAtMs >= heldCall.receivedAtMs + sendOperationDeadlineMs, 'the answer waited for the held call to settle — it did not pass it');
+    } finally {
+      neverAnswered.open();
+    }
+  });
+
+  it('Telegram refusing the markup of the «🔧 tool» status frame: it is created again as plain text — the tool name as written, no entity shown', async () => {
     // A tool name with markup characters, so the HTML (`Read&lt;&amp;&gt;`) and the plain twin (`Read<&>`) differ. Only the status
     // frame itself is refused (the tool's result message carries the name too, and goes through).
     const statusHtml = '🔧 Read&lt;&amp;&gt;';
     const statusPlain = '🔧 Read<&>';
-    // The previous turn's last status frame stays on screen until the next output (nothing removes it on a timer), so this turn's
-    // first frame is either CREATED (a send) or EDITED into that frame (an edit): both paths fall back to the plain twin, and
-    // which one runs depends on what the earlier turns left. The refusal is armed for both; the checks below read the sequence.
-    for (const method of ['sendMessage', 'editMessageText']) {
-      fakeTelegram.failNextCall(
-        method,
-        'Bad Request: can\'t parse entities: Unsupported start tag "x" at byte offset 0',
-        (payload) => payload.parse_mode === 'HTML' && payload.text === statusHtml,
-      );
-    }
+    // The step is about CREATING a status frame. A turn's last tool status frame may stay on screen until the next output, and
+    // then the next turn's first frame is an edit of it: the bot is restarted first, which sweeps every transient frame off the
+    // topic and starts with none on record, so this turn's first frame is created.
+    await getCharness().stop();
+    await startCharness();
+    await getCharness().waitFor('no tool status frame on screen after the restart', replyTimeoutMs, () => listTopicMessages().every((message) => !toolStatusFrameRe.test(message.text)));
+    const stepStartedAtMs = Date.now();
+    fakeTelegram.failNextCall(
+      'sendMessage',
+      'Bad Request: can\'t parse entities: Unsupported start tag "x" at byte offset 0',
+      (payload) => payload.parse_mode === 'HTML' && payload.text === statusHtml,
+    );
     // The turn works a moment before it answers: the answer's own tool call writes a status frame of its own, and one that
     // follows within the poll that reads the `Read<&>` frame replaces it (the latest status wins) — as it does for a real agent.
     fakeTelegram.pushOperatorMessage(topicThreadId, `TOPIC-14 [tool-name:Read<&>] [work-ms:${toolStatusFrameSettleMs}] [fake:answer]`);
     await waitForFakeAnswer('TOPIC-14');
     // The status frame is transient (the stream text that follows replaces it), so its sends and edits are read from the calls, not the topic.
-    const listStatusAttempts = (): FakeTelegramCall[] => ['sendMessage', 'editMessageText']
+    const listStatusAttempts = (): Array<[string, string, unknown]> => ['sendMessage', 'editMessageText']
       .flatMap((method) => fakeTelegram.listCalls(method))
-      .filter((call) => call.payload.text === statusHtml || call.payload.text === statusPlain)
-      .sort((first, second) => first.receivedAtMs - second.receivedAtMs);
-    await getCharness().waitFor('the status frame to be shown as plain text after the refusal', replyTimeoutMs, () => listStatusAttempts().some((call) => call.payload.text === statusPlain));
-    const attempts = listStatusAttempts();
-    assert.deepEqual(attempts.map((call) => [call.method, call.payload.text, call.payload.parse_mode]), [
-      [attempts[0]?.method, statusHtml, 'HTML'],
-      [attempts[0]?.method, statusPlain, undefined],
-    ], 'the HTML attempt was refused once, then the plain twin — the tool name as written — went through the same way (a send or an edit)');
+      .filter((call) => call.receivedAtMs >= stepStartedAtMs && (call.payload.text === statusHtml || call.payload.text === statusPlain))
+      .sort((first, second) => first.receivedAtMs - second.receivedAtMs)
+      .map((call) => [call.method, String(call.payload.text), call.payload.parse_mode]);
+    await getCharness().waitFor('the status frame to be sent as plain text after the refusal', replyTimeoutMs, () => listStatusAttempts().some(([, text]) => text === statusPlain));
+    assert.deepEqual(listStatusAttempts(), [
+      ['sendMessage', statusHtml, 'HTML'],
+      ['sendMessage', statusPlain, undefined],
+    ], 'the HTML send was refused once, then the plain twin — the tool name as written — went through, as a new frame');
   });
 
   it('a tool status frame that its own turn\'s text outran while it waited behind the earlier turns\' unposted text is never posted — no «🔧» line is left under the finished turn', async () => {

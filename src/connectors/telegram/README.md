@@ -20,17 +20,15 @@ Chosen once at boot by `CHAT_MODE` — an internal detail of this connector, not
 
 - **group** — the `queueOutput` edit-in-place path. A continuation appends to the message being rendered: the
   FULL accumulated text is re-rendered (so `**` / `` ` `` pairs split across flushes re-pair) and edited in
-  place, spilling into a new message past the cap (`outputFlushPlan.ts`). `finalizeInFlight` drains the
-  coalesced-but-unsent buffer to a permanent message on settle or teardown, so the final answer is never
-  discarded under a 429. Every send of a topic's output — the debounce flush and every drain — runs in ONE
-  chain, in the order it was started (`utils/groupFinalizePlan.ts` `runInSendChain`, `landGroupOutput`;
-  the 429 leftover of a flush is kept apart from the pending text (`requeuedRemainder`) and goes ahead of
-  what a drain took; a drain a 429 stopped puts the rest back for a retry unless the topic was cleared
-  meanwhile, a stop), and a question, a tool call's status frame, an `answer_request` answer and the messages
-  of `send_messages_to_user`, which are posted straight to the topic, run the drain first so they land BELOW
-  the text the agent streamed before them. A question and the two tool posts WAIT for it, for at most
-  `streamedOutputLandingLimitMs` (60 s, `utils/streamedOutputLanding.ts`): a send that never finishes must
-  not hold the agent's tool call or its question, so after the limit they are posted anyway.
+  place, spilling into a new message past the cap (`outputFlushPlan.ts`). A topic's unsent text is ONE ordered,
+  numbered backlog sent by ONE loop from its head (`utils/groupOutputBacklog.ts`, whose header lists what it
+  keeps): a 429 leftover goes back to the head, a send whose outcome is unknown is never sent again, and nothing
+  captures a slice of it. `finalizeInFlight` is a landing: it seals the newest segment and waits until every
+  segment up to it has settled, so a question, a tool call's status frame, an `answer_request` answer and the
+  messages of `send_messages_to_user` — posted straight to the topic — land BELOW the text the agent streamed
+  before them. A question and the two tool posts wait for at most `streamedOutputLandingLimitMs` (60 s,
+  `utils/streamedOutputLanding.ts`), then post anyway. A stop gives the backlog ONE final attempt (a 429 then
+  drops what it keeps, logged) and drops only the pending status frame (`utils/clearStatusCoalescer.ts`).
 - **dm** — a live "cursor": ONE accumulating native `sendMessageDraft` holds the whole current reply and is
   FINALIZED to a permanent `sendMessage` on boundaries (idle, 4096 overflow, `isFinal`, a new response, status,
   teardown). Claude's scrape adapter emits deltas with no continuation meta, so the transport synthesises it
@@ -46,7 +44,12 @@ first-come-first-served, CLOCK-based and non-blocking (a slow send never head-of
 topic coalesces its own stream with a 3 s output debounce; when a topic backs up
 (`backlogGlueThreshold`) the flush glues the backlog into the fewest messages (`outputBacklogGlue.ts`).
 Cancelling rejects a send still parked in the queues; once a send has started, the caller awaits it and its
-cleanup.
+cleanup. Each Bot API call of a topic's queue is bounded by `telegramSendOperationDeadlineMs` (30 s; the pacer's
+and a 429's waits do not count): at the deadline the request is aborted — the client passes the queue's abort signal
+to it (`botApiConnection.ts`) — and settles as `SendOutcomeUnknownError`, so one hung call never holds the topic's
+later sends. Its outcome is unknown, so no caller sends it again: an output chunk counts as sent (the next text opens
+a new message), an output edit as made, an `answer_request` answer is reported delivered with a warning and no pin,
+and a `send_messages_to_user` batch ends as `deliveryUnknown`. A file upload opts out (it bounds its own wait).
 
 - **Unpaced on purpose** (`sendUnpaced`: 429 retry kept, no pacer permit, no per-thread FIFO): the typing
   indicator (not a message, yet it ate ~60% of the budget) and the voice acks (the transcript echo and the
