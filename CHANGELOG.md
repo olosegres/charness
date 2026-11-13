@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 3.14.0 — 2026-11-13
+
 **The bot's MCP server is now named `charness` instead of `telegramBot`, so an agent's tools read `mcp__charness__schedule_create`, `mcp__charness__answer_request`, … in Claude Code (`charness_answer_request` in OpenCode) — the bot serves Jira too, not only Telegram.**
 Before, a tool carried the Telegram name (`mcp__telegramBot__schedule_create`) even in a Jira conversation. The bot's skills, instructions and tool descriptions already name the tools bare (`schedule_create`), so they read right under either name.
 What to do: a permission allow-list of your own that names `mcp__telegramBot__…` must be renamed to `mcp__charness__…` (the bot writes no such list itself). There is NO alias under the old name — a second registration would double every tool in an agent's context. A Claude agent that was already running keeps the old tool names until the bot stops it on idle (about an hour); for this release the bot still repairs its tools under the old name if a restart of the bot cut them (they would otherwise stay gone until the agent restarts). In OpenCode the bot disconnects the registration left under the old name the first time it starts after the update, so no folder ends up with the tools twice (a server of that name that you defined yourself in `opencode.json` is not the bot's and is left alone).
