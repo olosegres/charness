@@ -303,14 +303,14 @@ export function buildJiraDeltaPrompt(input: JiraRequestPromptBase & { delta: Iss
 
 /**
  * @name JiraUpdatePromptBase
- * @description What an issue update says before the issue: the hand-over request it belongs to (`target`, as it stands
- * when the text is built — `isOpen: false` once that request was finished and no other hand-over is open), the hand-over
- * requests open then, and the new comments.
+ * @description What an issue update says before the issue: the request it belongs to (`target`, as it stands when the
+ * text is built — a hand-over, or a mention that may act (`isMention`); `isOpen: false` once that request was finished and
+ * none other is open), the requests open then, and the new comments.
  */
 export interface JiraUpdatePromptBase {
   issueKey: string;
   issueUrl: string;
-  target: JiraOpenHandOver & { isOpen: boolean };
+  target: JiraOpenHandOver & { isOpen: boolean; isMention?: boolean };
   openHandOvers: readonly JiraOpenHandOver[];
   comments: readonly JiraNewComment[];
   isTextFiltered?: boolean;
@@ -320,7 +320,8 @@ export interface JiraUpdatePromptBase {
 function getUpdateHeader(input: JiraUpdatePromptBase): string {
   const { target } = input;
   const requestId = getSingleLineText(target.requestId);
-  const handedBy = target.requester ? ` (handed over by ${getAccountName(target.requester)})` : '';
+  let handedBy = target.requester ? ` (handed over by ${getAccountName(target.requester)})` : '';
+  if (target.isMention) handedBy = target.requester ? ` (asked by ${getAccountName(target.requester)} in a mention)` : ' (asked in a mention)';
   const commentsText = getNewCommentsText(input.comments);
   const notifyText = 'To notify the person who wrote a comment, put its id in replyToCommentIds.';
   const lines = target.isOpen
@@ -328,7 +329,7 @@ function getUpdateHeader(input: JiraUpdatePromptBase): string {
       `[Issue update · request ${requestId} is open]`,
       `New on ${input.issueKey} while you work on request ${requestId}${handedBy}: ${commentsText}. ` +
         'It is part of that work: read it below; if it asks for something, do it as your rules allow, and say in your answer what you did about it. ' +
-        (input.openHandOvers.length > 1 ? `The hand-over ${getOpenHandOverText(input.openHandOvers)} are open in this conversation. ` : '') +
+        (input.openHandOvers.length > 1 ? `The ${getOpenHandOverText(input.openHandOvers)} are open in this conversation. ` : '') +
         `Answer request ${requestId} with answer_request as usual (requestId "${requestId}"). ${notifyText}`,
     ]
     : [

@@ -436,7 +436,7 @@ describe('an issue update (a trusted person\'s comment while a hand-over request
       ...base({ openHandOvers: [{ requestId: 'req_build', requester: owner }, { requestId: 'req_qa', requester: member }] }),
       blocks,
     });
-    assert.ok(update.includes('The hand-over requests req_build of Build Owner and req_qa of Member are open in this conversation. '), update);
+    assert.ok(update.includes('The requests req_build of Build Owner and req_qa of Member are open in this conversation. '), update);
     assert.ok(update.split('\n').includes('Jira issue PROJ-12'), 'the whole issue');
     assert.ok(update.includes('Comments (1, oldest first):'), update);
   });
@@ -449,6 +449,12 @@ describe('an issue update (a trusted person\'s comment while a hand-over request
       'New on PROJ-12, written while you worked on request req_build (handed over by Build Owner), which is finished now (you gave its final answer, or asked a question): comment 10240 by Member. ' +
       'Read it below; if it asks for something, do it as your rules allow. ' +
       'Answer it with answer_request (requestId "req_build"): your answer becomes a comment on the issue and hands nothing back. To notify the person who wrote a comment, put its id in replyToCommentIds.');
+  });
+
+  it('the request it belongs to may be a mention that acts: it is named as asked in a mention, not handed over', () => {
+    const update = buildJiraUpdatePrompt({ ...base({ target: { requestId: 'req_ask', requester: owner, isOpen: true, isMention: true } }), delta: getIssueDelta(blocks, {}) });
+    assert.ok(update.includes('while you work on request req_ask (asked by Build Owner in a mention): comment 10240 by Member.'), update);
+    assert.ok(!update.includes('handed over by'), update);
   });
 
   it('a display name of several lines cannot forge a block: only the update\'s own header opens a line with a bracket', () => {

@@ -130,7 +130,11 @@ requester was recorded `covered` with nothing posted — so people unassigned an
   (`comment:<id>`, nor `mention:<id>` from the mention scan).
 - **Who may wake it.** The comment's author AND last editor trusted (`checkIsCommentTrusted`); otherwise it is
   `untrusted`: recorded, one log line, nothing posted — and its text stays withheld in every prompt.
-- **A hand-over request is open** (one the wake-up engine has not given up on): ONE **issue update** carries every new
+- **The requests an update belongs to** (`listUpdateTargetRequests`): the conversation's open hand-overs and its open
+  mentions that may act (`mayAct`: that is the work it does on the issue), none the wake-up engine gave up on; on an
+  issue the AI account handed to itself (its seen hand-over is self-authored: an acting mention's «take up the work»),
+  any open request — the one that took it up is still working on it, so a comment never opens a second agent there.
+- **Such a request is open**: ONE **issue update** carries every new
   trusted comment of the poll (`buildJiraUpdatePrompt`: `[Issue update · request req_… is open]`, then the issue's delta —
   the whole issue for a session that does not know it). It is NOT a request: no request is opened, because a new one would
   supersede the hand-over (same requester) and strip its hand-back, or hand the issue to the commenter on its first final
@@ -143,8 +147,18 @@ requester was recorded `covered` with nothing posted — so people unassigned an
   comment whenever the hand-back left the issue no longer handed. The comments are recorded `update` once the post
   settled; an update that did not reach the session is decided again after a backoff (the poll interval doubled per
   failure, up to 15 minutes), so a session that cannot be started is not started at every poll.
-- **No hand-over request is open but the issue is still handed** (a hand-back that failed, a hand-over with no
-  requester, the AI that assigned itself): the comments open ONE request of their own — origin `trackerEvent`, trigger
+- **The cap.** An issue gets at most `jiraIssueUpdatesPer24hMax` (20) updates in a rolling 24 h (one per post, counted
+  off the trigger log's `update` lines). An account of the trusted group that comments as the agent's own tooling would
+  otherwise loop — each comment the next poll's update, each answer another comment —; past the cap the comments are
+  recorded `parked`, never delivered, with one log line per issue per day. The agent must comment only as the AI account.
+- **An issue that leaves the handed state gets one last scan** (`scanIssuesThatLeftHanded`): the poller remembers the
+  handed issues whose hand-over it saw, with the request an update would go to. One that a later poll finds no longer
+  handed (its final answer handed it back, someone took it) — read by its key when the search no longer returns it — has
+  its comments read once more: those written before the changelog entry that ended the hand-over (`findLeftHandedAt`)
+  and not delivered yet reach that request as the "finished" update (or a request still open). The gap between a
+  hand-back and the next poll no longer loses a comment. In memory: a restart forgets what was handed.
+- **No request is open but the issue is still handed** (a hand-back that failed, a hand-over with no
+  requester): the comments open ONE request of their own — origin `trackerEvent`, trigger
   `comment:<newest id>` (`commented`; `from: KEY: <name> commented (comment <id>)`), the newest comment's author its
   requester — through the run budget (over it: parked with the hand-over's notice and hand-back) and a task-agent slot (a
   place in the list, told once, decided again at every poll); its note says the comment starts work like a hand-over. The

@@ -106,7 +106,8 @@ describe('Jira connector end to end — comments on a handed issue, an acting me
 
     releaseHeldTurn();
     const issue = fakeJira.getIssue(issueKey);
-    await waitFor(`${issueKey}: answered and handed back`, answerTimeoutMs, () => issue.assignee?.accountId === requester.accountId);
+    // The sink hands the issue back before the tool's result reaches the agent, which logs its answer only then: wait for both.
+    await waitFor(`${issueKey}: answered and handed back`, answerTimeoutMs, () => issue.assignee?.accountId === requester.accountId && getAnswers(issueKey).length === 2);
     const turns = getTurns(issueKey);
     assert.equal(turns.length, 2);
     assert.equal(turns[1].requestId, firstTurn.requestId, 'the update\'s turn belongs to the same request');

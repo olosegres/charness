@@ -59,6 +59,8 @@ export class JiraTriggerLog {
   private readonly requestTimesByIssue = new Map<string, number[]>();
   private readonly mentionParkNoticeTimesByIssue = new Map<string, number[]>();
   private readonly newestCommentIdByIssue = new Map<string, string>();
+  /** Per issue, when each issue update was posted (its comments share the time). */
+  private readonly updateTimesByIssue = new Map<string, Set<number>>();
   private readonly lastDecidedAtByIssue = new Map<string, number>();
 
   constructor(private readonly file: RotatingJsonlFile<JiraTriggerRecord>) {}
@@ -86,6 +88,11 @@ export class JiraTriggerLog {
       noticeTimes.push(record.at);
       this.mentionParkNoticeTimesByIssue.set(record.issueKey, noticeTimes);
     }
+    if (record.outcome === 'update') {
+      const updateTimes = this.updateTimesByIssue.get(record.issueKey) ?? new Set<number>();
+      updateTimes.add(record.at);
+      this.updateTimesByIssue.set(record.issueKey, updateTimes);
+    }
     if (record.outcome !== 'request') return;
     const times = this.requestTimesByIssue.get(record.issueKey) ?? [];
     times.push(record.at);
@@ -112,6 +119,14 @@ export class JiraTriggerLog {
   /** @description When the newest decision on the issue was made (epoch ms), or `null` when none is recorded. */
   getLastDecidedAt(issueKey: string): number | null {
     return this.lastDecidedAtByIssue.get(issueKey) ?? null;
+  }
+
+  /**
+   * @description Issue updates posted on the issue in the rolling 24 h before `nowMs` — one per post, however many comments
+   * it carried (they are recorded with its time) — for the cap on updates.
+   */
+  getUpdateCountLastDay(issueKey: string, nowMs: number): number {
+    return [...(this.updateTimesByIssue.get(issueKey) ?? [])].filter((at) => at > nowMs - msPerDay).length;
   }
 
   /** @description Was a mention park notice posted on the issue in the rolling 24 h before `nowMs`? */

@@ -13,6 +13,7 @@ import {
   createMentionTrigger,
   findNewestTrigger,
   getIssueTrigger,
+  getItemField,
   getRequester,
   mentionTriggerIdPrefix,
   type JiraIssueTrigger,
@@ -22,7 +23,7 @@ import { buildIssueBlocks, checkIsCommentTrusted, getShownIssueSummary, type Jir
 import { fetchJiraIssueContext, findAccountInContext, type JiraIssueContext } from './issueContext';
 import { buildJiraDeltaPrompt, buildJiraRequestPrompt, buildJiraUpdatePrompt, type JiraNewComment, type JiraOpenHandOver, type JiraUpdatePromptBase } from './prompt';
 import type { JiraMentionMode } from './config';
-import { actingMentionAttribute } from '../../trackers/taskAgentSlots';
+import { actingMentionAttribute, checkIsSlotHoldingOrigin } from '../../trackers/taskAgentSlots';
 import { getIssueDelta } from './issueDelta';
 import type { JiraContextLedger } from './contextLedger';
 import type { SessionPromptText } from '../../postToSession';
@@ -89,6 +90,13 @@ export const jiraMentionWindowMinMs = 5 * 60 * 1000;
 /** How many of an issue's newest comments a mention scan reads — more than a window of activity holds. */
 export const jiraMentionScanCommentCount = 100;
 const msPerMinute = 60 * 1000;
+const msPerDay = 24 * 60 * msPerMinute;
+/**
+ * The issue updates one issue may get in a rolling 24 h. A person's comment is one; an account that comments as the agent's
+ * own tooling would loop (each comment the next poll's update), and the cap ends that: past it, comments are recorded
+ * `parked` with one log line.
+ */
+export const jiraIssueUpdatesPer24hMax = 20;
 /** Separates an issue key from a trigger id in the key a mention decision has in the poll's result and log line. */
 const mentionDecisionKeySeparator = '#';
 
@@ -232,6 +240,14 @@ export function buildJiraTriggerJql(projects: ReadonlyMap<string, JiraProjectTri
 /** What {@link getNewestCommentId} says of an issue with no comment yet: below every real id, so any later comment is newer. */
 const noCommentId = '0';
 
+/** A request an issue update can belong to: who asked (as the issue's data names them, and by account id), and whether it is a mention's. */
+interface JiraUpdateTarget {
+  requestId: string;
+  requester: JiraAccount | null;
+  requesterAccountId: string;
+  isMention: boolean;
+}
+
 /** The newest of `comments` by id — a prompt built from them carried every comment up to it — or {@link noCommentId} for none. */
 function getNewestCommentId(comments: readonly JiraComment[]): string {
   return comments.reduce((newest, comment) => (compareJiraCommentIds(comment.id, newest) > 0 ? comment.id : newest), noCommentId);
@@ -258,6 +274,17 @@ export class JiraInbound {
   private readonly lastUpdatedByIssue = new Map<string, string>();
   /** Per issue, the issue updates in a row that did not reach the session, and when the next may be tried — in memory only. */
   private readonly updateRetries = new Map<string, { failureCount: number; retryAt: number }>();
+  /** Issues whose seen hand-over the AI account made itself (it took the issue up) — in memory, refreshed by every poll. */
+  private readonly selfAssignedIssueKeys = new Set<string>();
+  /** Per issue, when the update cap was last logged: one line per issue per day. */
+  private readonly updateCapLoggedAtByIssue = new Map<string, number>();
+  /**
+   * The issues handed to the AI account (their hand-over seen) at the last poll, each with the request its last update went
+   * to or would have gone to — in memory only. One that leaves the handed state gets one last comment scan.
+   */
+  private readonly handedIssues = new Map<string, Omit<JiraUpdateTarget, 'requester'> | null>();
+  /** The issues the poll under way found handed to the AI account (whatever their decision). */
+  private readonly handedThisPoll = new Set<string>();
   /**
    * The mention requests whose stored prompt can be rebuilt with the hand-over requests that are open NOW, by request id —
    * in memory only (a restart leaves the stored text, whose wording holds on its own) and bounded: an entry of a request
@@ -338,9 +365,11 @@ export class JiraInbound {
    */
   async pollOnce(): Promise<Map<string, JiraIssueDecision>> {
     const decisions = new Map<string, JiraIssueDecision>();
+    this.handedThisPoll.clear();
     const mentionWindowMs = this.getMentionWindowMs();
     const jql = buildJiraTriggerJql(this.deps.projects, mentionWindowMs);
     const returnedIssueKeys = new Set<string>();
+    const returnedIssues = new Map<string, JiraIssue>();
     let nextPageToken: string | undefined;
     do {
       // Before every page, not only the first: deciding a long page takes time, and the list must not age out under it.
@@ -354,10 +383,12 @@ export class JiraInbound {
       });
       for (const issue of page.issues) {
         returnedIssueKeys.add(issue.key);
+        returnedIssues.set(issue.key, issue);
         for (const [decisionKey, decision] of await this.decideIssue(issue, mentionWindowMs)) decisions.set(decisionKey, decision);
       }
       nextPageToken = page.isLast ? undefined : (page.nextPageToken ?? undefined);
     } while (nextPageToken);
+    for (const [decisionKey, decision] of await this.scanIssuesThatLeftHanded(returnedIssues)) decisions.set(decisionKey, decision);
     // An acting mention that waits for a slot may be older than the search's window by now: its issue is read by its key.
     for (const { issueKey } of this.listWaitingMentions()) {
       if (returnedIssueKeys.has(issueKey)) continue;
@@ -411,9 +442,13 @@ export class JiraInbound {
     if (decision === 'notAllowed' || !project) return decisions;
     const key = makeJiraKey(issue.key);
     if (this.checkIsCommentWakeOn() && this.checkIsHanded(issue, project)) {
+      this.handedThisPoll.add(issue.key);
       // A mention on a handed issue is a comment like any other: a mention still waiting for a slot gives its place up.
       this.deps.slots.dropWaiting(key, (triggerId) => triggerId.startsWith(mentionTriggerIdPrefix));
-      if (decision === 'seen') for (const [decisionKey, commentDecision] of await this.getCommentDecisionsSafely(issue, project)) decisions.set(decisionKey, commentDecision);
+      if (decision === 'seen') {
+        for (const [decisionKey, commentDecision] of await this.getCommentDecisionsSafely(issue, project)) decisions.set(decisionKey, commentDecision);
+        this.noteHanded(key);
+      }
       return decisions;
     }
     if (mentionWindowMs !== null) {
@@ -423,6 +458,100 @@ export class JiraInbound {
       this.deps.slots.dropWaiting(key, (triggerId) => triggerId.startsWith(mentionTriggerIdPrefix));
     }
     return decisions;
+  }
+
+  /** A handed issue whose hand-over is seen: remembered with the request an update would go to now (kept when none is open). */
+  private noteHanded(key: SessionKey): void {
+    const targets = this.listUpdateTargetRequests(key);
+    const newest = targets[targets.length - 1];
+    const target = newest
+      ? { requestId: newest.id, requesterAccountId: getRequestRequester(newest.origin), isMention: newest.origin.kind === 'trackerMention' }
+      : (this.handedIssues.get(key.thread) ?? null);
+    this.handedIssues.set(key.thread, target);
+  }
+
+  /**
+   * @description One last comment scan of each issue that was handed to the AI account at an earlier poll and is not now
+   * (handed back, unassigned, moved on): a comment written while it was handed — before the change that ended that —
+   * which the agent never got (its final answer came first) is delivered as the "finished" update of the request it was
+   * working on, or to a request still open. An issue the search no longer returns is read by its key. Kept for the next
+   * poll while a post of it is in flight, its read fails, or an update of it is still to land.
+   */
+  private async scanIssuesThatLeftHanded(returnedIssues: ReadonlyMap<string, JiraIssue>): Promise<Map<string, JiraIssueDecision>> {
+    const decisions = new Map<string, JiraIssueDecision>();
+    if (!this.checkIsCommentWakeOn()) {
+      this.handedIssues.clear();
+      return decisions;
+    }
+    for (const [issueKey, lastTarget] of [...this.handedIssues]) {
+      if (this.handedThisPoll.has(issueKey) || this.postingIssueKeys.has(issueKey) || this.checkIsUpdateRetryPending(issueKey)) continue;
+      const issue = returnedIssues.get(issueKey) ?? await this.readIssueThatLeft(issueKey);
+      if (issue === null) continue;
+      const project = issue === 'gone' ? undefined : this.getAllowlistedProject(issue);
+      if (issue === 'gone' || !project) {
+        this.handedIssues.delete(issueKey);
+        continue;
+      }
+      if (this.checkIsHanded(issue, project)) continue;
+      const scanned = await this.runOrWarn(issueKey, 'last comment scan: ', () => this.getLastCommentDecisions(issue, project, lastTarget), null);
+      if (scanned === null) continue;
+      for (const [decisionKey, decision] of scanned.decisions) decisions.set(decisionKey, decision);
+      if (!scanned.isPosting) this.handedIssues.delete(issueKey);
+    }
+    return decisions;
+  }
+
+  /** An issue that left the handed state, read by its key; `'gone'` when Jira no longer has it, `null` when the read failed. */
+  private async readIssueThatLeft(issueKey: string): Promise<JiraIssue | 'gone' | null> {
+    try {
+      return await this.deps.client.getIssue(issueKey, jiraSearchFields);
+    } catch (error) {
+      if (error instanceof JiraAuthError) throw error;
+      if (error instanceof JiraHttpError && error.status === 404) return 'gone';
+      console.warn(`[jira] ${issueKey}: the issue that left the AI account could not be read for its last comment scan: ${error instanceof Error ? error.message : String(error)}`);
+      return null;
+    }
+  }
+
+  /** When the issue stopped being handed: the newest changelog entry that assigned it away from the AI account or moved it out of a trigger status; `null` when none is found. */
+  private async findLeftHandedAt(issue: JiraIssue, project: JiraProjectTrigger): Promise<number | null> {
+    const { aiAccountId } = this.deps;
+    for await (const page of this.getChangelogNewestPagesFirst(issue)) {
+      const newestFirst = [...page].sort((left, right) => Date.parse(right.created) - Date.parse(left.created));
+      const left = newestFirst.find((history) => history.items.some((item) => {
+        const field = getItemField(item);
+        return (field === 'assignee' && item.to !== aiAccountId) || (field === 'status' && (item.to === null || item.to === undefined || !project.triggerStatusIds.has(item.to)));
+      }));
+      if (left) return Date.parse(left.created);
+    }
+    return null;
+  }
+
+  /** The last comment scan of an issue that left the handed state (see {@link scanIssuesThatLeftHanded}). */
+  private async getLastCommentDecisions(
+    issue: JiraIssue,
+    project: JiraProjectTrigger,
+    lastTarget: Omit<JiraUpdateTarget, 'requester'> | null,
+  ): Promise<{ decisions: Map<string, JiraIssueDecision>; isPosting: boolean }> {
+    const { deps } = this;
+    const decisions = new Map<string, JiraIssueDecision>();
+    const { trust } = deps;
+    if (!trust) return { decisions, isPosting: false };
+    const leftAt = (await this.findLeftHandedAt(issue, project)) ?? deps.now();
+    const comments = await deps.client.getRecentComments(issue.key, jiraMentionScanCommentCount);
+    const at = deps.now();
+    const written = this.listNewComments(issue.key, comments).filter((comment) => Date.parse(comment.created) <= leftAt);
+    const { counted } = this.partitionTrustedComments(issue.key, written, trust, at, decisions);
+    if (counted.length === 0) return { decisions, isPosting: false };
+    const key = makeJiraKey(issue.key);
+    if (this.listUpdateTargetRequests(key).length === 0 && !lastTarget) {
+      console.log(`[jira] ${issue.key}: comments ${counted.map((comment) => comment.id).join(', ')} came while it was handed to the AI, but no request of it is known any more to bring them to`);
+      return { decisions, isPosting: false };
+    }
+    const newest = counted[counted.length - 1];
+    const decision = await this.postIssueUpdate(issue, project, counted, commentTriggerIdPrefix, at, lastTarget);
+    decisions.set(`${issue.key}${mentionDecisionKeySeparator}${commentTriggerIdPrefix}${newest.id}`, decision);
+    return { decisions, isPosting: decision === 'update' };
   }
 
   /** The acting mentions that wait for a task-agent slot, oldest first: each issue's key and its `mention:<id>` trigger. */
@@ -492,7 +621,13 @@ export class JiraInbound {
     }
     if (this.postingIssueKeys.has(issue.key)) return 'posting';
     const found = await this.findTrigger(issue, project);
-    if (found === 'seen') return 'seen';
+    if ('seen' in found) {
+      // The AI account handed the issue to itself (an acting mention's "take up the work"): its comments go to the open
+      // request that did so, never into a request of their own.
+      if (found.seen.author?.accountId === deps.aiAccountId) this.selfAssignedIssueKeys.add(issue.key);
+      else this.selfAssignedIssueKeys.delete(issue.key);
+      return 'seen';
+    }
     const { trigger, requester } = found;
     const at = deps.now();
     if (trigger.author?.accountId === deps.aiAccountId) {
@@ -696,28 +831,9 @@ export class JiraInbound {
     if (this.postingIssueKeys.has(issue.key) || this.checkIsUpdateRetryPending(issue.key)) return decisions;
     const comments = await deps.client.getRecentComments(issue.key, jiraMentionScanCommentCount);
     const at = deps.now();
-    const newComments = comments
-      .filter((comment) => comment.author?.accountId !== deps.aiAccountId
-        && this.checkIsCommentNewToConversation(issue.key, comment)
-        && !deps.triggerLog.checkIsSeen(issue.key, `${commentTriggerIdPrefix}${comment.id}`)
-        && !deps.triggerLog.checkIsSeen(issue.key, `${mentionTriggerIdPrefix}${comment.id}`))
-      .sort((left, right) => compareJiraCommentIds(left.id, right.id));
-    const counted: JiraComment[] = [];
-    let isEveryCommentDecided = true;
-    for (const comment of newComments) {
-      // An app's or an automation's comment (a pipeline notice, a rule) wakes nothing: it rides the next prompt.
-      if (!comment.author || !checkIsPersonAccount(comment.author)) continue;
-      const decisionKey = `${issue.key}${mentionDecisionKeySeparator}${commentTriggerIdPrefix}${comment.id}`;
-      // The same rule as for the comment's text: its author AND its last editor. Recorded, logged once, nothing posted.
-      if (!checkIsCommentTrusted(comment, trust)) {
-        const isRecorded = this.recordOrWarn({ issueKey: issue.key, triggerId: `${commentTriggerIdPrefix}${comment.id}`, outcome: 'untrusted', at });
-        if (isRecorded) console.log(`[jira] ${issue.key}: comment ${comment.id} does not wake the AI: its author or last editor is outside the trusted group`);
-        else isEveryCommentDecided = false;
-        decisions.set(decisionKey, isRecorded ? 'untrusted' : 'failed');
-        continue;
-      }
-      counted.push(comment);
-    }
+    const partition = this.partitionTrustedComments(issue.key, this.listNewComments(issue.key, comments), trust, at, decisions);
+    const { counted } = partition;
+    let { isEveryCommentDecided } = partition;
     if (counted.length > 0) {
       const newest = counted[counted.length - 1];
       const decision = await this.runOrWarn(issue.key, `comments ${counted.map((comment) => comment.id).join(', ')}: `, () => this.deliverComments(issue, project, counted, at), 'failed');
@@ -726,6 +842,47 @@ export class JiraInbound {
     }
     if (isEveryCommentDecided && updated !== undefined) this.lastUpdatedByIssue.set(issue.key, updated);
     return decisions;
+  }
+
+  /** The comments of `comments` new to the issue's conversation and not decided yet (none the AI account wrote), oldest first. */
+  private listNewComments(issueKey: string, comments: readonly JiraComment[]): JiraComment[] {
+    const { deps } = this;
+    return comments
+      .filter((comment) => comment.author?.accountId !== deps.aiAccountId
+        && this.checkIsCommentNewToConversation(issueKey, comment)
+        && !deps.triggerLog.checkIsSeen(issueKey, `${commentTriggerIdPrefix}${comment.id}`)
+        && !deps.triggerLog.checkIsSeen(issueKey, `${mentionTriggerIdPrefix}${comment.id}`))
+      .sort((left, right) => compareJiraCommentIds(left.id, right.id));
+  }
+
+  /**
+   * The people's comments of `comments` that may reach the agent (`counted`): an app's or an automation's (a pipeline notice,
+   * a rule) wakes nothing — it rides the next prompt — and one whose author or last editor is not trusted is recorded
+   * `untrusted` (one log line, nothing posted; its decision goes into `decisions`).
+   */
+  private partitionTrustedComments(
+    issueKey: string,
+    comments: readonly JiraComment[],
+    trust: JiraTrust,
+    at: number,
+    decisions: Map<string, JiraIssueDecision>,
+  ): { counted: JiraComment[]; isEveryCommentDecided: boolean } {
+    const counted: JiraComment[] = [];
+    let isEveryCommentDecided = true;
+    for (const comment of comments) {
+      if (!comment.author || !checkIsPersonAccount(comment.author)) continue;
+      const decisionKey = `${issueKey}${mentionDecisionKeySeparator}${commentTriggerIdPrefix}${comment.id}`;
+      // The same rule as for the comment's text: its author AND its last editor.
+      if (!checkIsCommentTrusted(comment, trust)) {
+        const isRecorded = this.recordOrWarn({ issueKey, triggerId: `${commentTriggerIdPrefix}${comment.id}`, outcome: 'untrusted', at });
+        if (isRecorded) console.log(`[jira] ${issueKey}: comment ${comment.id} does not wake the AI: its author or last editor is outside the trusted group`);
+        else isEveryCommentDecided = false;
+        decisions.set(decisionKey, isRecorded ? 'untrusted' : 'failed');
+        continue;
+      }
+      counted.push(comment);
+    }
+    return { counted, isEveryCommentDecided };
   }
 
   /**
@@ -742,9 +899,16 @@ export class JiraInbound {
     return lastDecidedAt !== null && Date.parse(comment.created) > lastDecidedAt;
   }
 
-  /** The hand-over requests of the conversation that are open and not given up — what an update can belong to. */
-  private listOpenHandOverRequests(key: SessionKey): Array<Pick<OpenRequestState, 'id' | 'origin'>> {
-    return this.deps.listOpenRequests(key).filter((request) => request.origin.kind === 'trackerEvent' && !request.isWakeStopped);
+  /**
+   * The requests of the conversation an update can belong to, open and not given up: its hand-overs and its mentions that
+   * may act (the work it is doing on the issue) — and, on an issue the AI account handed to itself, any open request: the
+   * one that made it take the issue up is still working on it.
+   */
+  private listUpdateTargetRequests(key: SessionKey): Array<Pick<OpenRequestState, 'id' | 'origin'>> {
+    const open = this.deps.listOpenRequests(key).filter((request) => !request.isWakeStopped);
+    const working = open.filter((request) => checkIsSlotHoldingOrigin(request.origin));
+    if (working.length > 0 || !this.selfAssignedIssueKeys.has(key.thread)) return working;
+    return open.filter((request) => request.origin.kind === 'trackerMention');
   }
 
   /**
@@ -754,7 +918,7 @@ export class JiraInbound {
   private async deliverComments(issue: JiraIssue, project: JiraProjectTrigger, counted: readonly JiraComment[], at: number): Promise<JiraIssueDecision> {
     const { deps } = this;
     const key = makeJiraKey(issue.key);
-    if (this.listOpenHandOverRequests(key).length > 0) {
+    if (this.listUpdateTargetRequests(key).length > 0) {
       // A comment's request that waited for a slot is no longer needed: the hand-over that opened since carries it.
       deps.slots.dropWaiting(key, (triggerId) => triggerId.startsWith(commentTriggerIdPrefix));
       return this.postIssueUpdate(issue, project, counted, commentTriggerIdPrefix, at);
@@ -788,9 +952,28 @@ export class JiraInbound {
    * issue's delta (or the whole issue for a session that does not know it). Recorded once the post settled; a post that
    * failed is decided again after a backoff. Not awaited: the issue is skipped until the post settles.
    */
-  private async postIssueUpdate(issue: JiraIssue, project: JiraProjectTrigger, comments: readonly JiraComment[], prefix: string, at: number): Promise<JiraIssueDecision> {
+  private async postIssueUpdate(
+    issue: JiraIssue,
+    project: JiraProjectTrigger,
+    comments: readonly JiraComment[],
+    prefix: string,
+    at: number,
+    finishedTarget: Omit<JiraUpdateTarget, 'requester'> | null = null,
+  ): Promise<JiraIssueDecision> {
     const { deps } = this;
     const { trust } = deps;
+    // A trusted account that is not the AI account may write as the agent's own tooling (an operator token in its MCP
+    // config): every comment it writes would be the next poll's update, one turn per poll for ever. Updates are capped.
+    if (deps.triggerLog.getUpdateCountLastDay(issue.key, at) >= jiraIssueUpdatesPer24hMax) {
+      const records = comments.map((comment): JiraTriggerRecord => ({ issueKey: issue.key, triggerId: `${prefix}${comment.id}`, outcome: 'parked', at }));
+      if (!records.every((record) => this.recordOrWarn(record))) return 'failed';
+      const loggedAt = this.updateCapLoggedAtByIssue.get(issue.key);
+      if (loggedAt === undefined || at - loggedAt >= msPerDay) {
+        this.updateCapLoggedAtByIssue.set(issue.key, at);
+        console.warn(`[jira] ${issue.key}: ${jiraIssueUpdatesPer24hMax} issue updates in 24 h, the cap: comments ${comments.map((comment) => comment.id).join(', ')} and later ones are recorded and not delivered until the day is over. Does the agent comment under a person's account instead of the AI account?`);
+      }
+      return 'parked';
+    }
     const context = await fetchJiraIssueContext(deps.client, issue.key, project.extraFields.map((extraField) => extraField.id), trust !== null);
     const blockTrust: JiraBlockTrust | null = trust && {
       checkIsTrusted: (account) => trust.checkIsTrusted(account),
@@ -801,20 +984,22 @@ export class JiraInbound {
     const key = makeJiraKey(issue.key);
     const commenterAccountId = comments[comments.length - 1].author?.accountId;
     const newComments: JiraNewComment[] = comments.map((comment) => ({ commentId: comment.id, author: comment.author ?? null }));
-    /** The hand-overs open now and not given up, named from the issue's data. */
-    const getActiveHandOvers = (): JiraOpenHandOver[] => {
-      const activeIds = new Set(this.listOpenHandOverRequests(key).map((request) => request.id));
-      return this.getOpenHandOvers(key, context).filter((handOver) => activeIds.has(handOver.requestId));
+    /** The requests the update can belong to now, named from the issue's data (a mention's marked as one). */
+    const getTargets = (): JiraUpdateTarget[] => this.listUpdateTargetRequests(key).map((request) => ({
+      requestId: request.id,
+      requester: findAccountInContext(context, getRequestRequester(request.origin)),
+      requesterAccountId: getRequestRequester(request.origin),
+      isMention: request.origin.kind === 'trackerMention',
+    }));
+    const pickTarget = (): JiraUpdateTarget | null => {
+      const targets = getTargets();
+      return targets.find((target) => target.requesterAccountId === commenterAccountId)
+        ?? targets.find((target) => target.requesterAccountId === emptyRequester)
+        ?? targets[targets.length - 1]
+        ?? null;
     };
-    const pickTarget = (): JiraOpenHandOver | null => {
-      const requests = this.listOpenHandOverRequests(key);
-      const handOvers = getActiveHandOvers();
-      const findBy = (requesterId: string | undefined): JiraOpenHandOver | undefined =>
-        handOvers.find((handOver) => requests.some((request) => request.id === handOver.requestId && getRequestRequester(request.origin) === requesterId));
-      return findBy(commenterAccountId) ?? findBy(emptyRequester) ?? handOvers[handOvers.length - 1] ?? null;
-    };
-    const firstTarget = pickTarget();
-    if (!firstTarget) throw new Error('no hand-over request is open for the update');
+    const firstTarget = pickTarget() ?? (finishedTarget ? { ...finishedTarget, requester: findAccountInContext(context, finishedTarget.requesterAccountId) } : null);
+    if (!firstTarget) throw new Error('no request is open for the update');
     let target = firstTarget;
     const getBase = (): JiraUpdatePromptBase => {
       const now = pickTarget();
@@ -822,8 +1007,8 @@ export class JiraInbound {
       return {
         issueKey: issue.key,
         issueUrl: `${deps.siteUrl.replace(/\/+$/, '')}/browse/${issue.key}`,
-        target: { ...target, isOpen: now !== null },
-        openHandOvers: getActiveHandOvers(),
+        target: { requestId: target.requestId, requester: target.requester, isMention: target.isMention, isOpen: now !== null },
+        openHandOvers: getTargets().map((open) => ({ requestId: open.requestId, requester: open.requester })),
         comments: newComments,
         isTextFiltered: trust !== null,
       };
@@ -1073,7 +1258,7 @@ export class JiraInbound {
    * so a long-lived issue costs one page a poll — and older pages are read only
    * while an app's trigger still needs the nearest earlier person (R24).
    */
-  private async findTrigger(issue: JiraIssue, project: JiraProjectTrigger): Promise<'seen' | { trigger: JiraIssueTrigger; requester: JiraAccount | null }> {
+  private async findTrigger(issue: JiraIssue, project: JiraProjectTrigger): Promise<{ seen: JiraIssueTrigger } | { trigger: JiraIssueTrigger; requester: JiraAccount | null }> {
     const { deps } = this;
     const match = { aiAccountId: deps.aiAccountId, triggerStatusIds: project.triggerStatusIds };
     const reporter = issue.fields.reporter ?? null;
@@ -1082,13 +1267,13 @@ export class JiraInbound {
       histories.push(...page);
       const trigger = findNewestTrigger(histories, match);
       if (!trigger) continue;
-      if (deps.triggerLog.checkIsSeen(issue.key, trigger.triggerId)) return 'seen';
+      if (deps.triggerLog.checkIsSeen(issue.key, trigger.triggerId)) return { seen: trigger };
       const isRequesterKnown = trigger.author?.accountId === deps.aiAccountId
         || getRequester(trigger, histories, null, deps.aiAccountId) !== null;
       if (isRequesterKnown) return { trigger, requester: getRequester(trigger, histories, reporter, deps.aiAccountId) };
     }
     const trigger = getIssueTrigger(histories, match, issue.fields.creator ?? reporter);
-    if (deps.triggerLog.checkIsSeen(issue.key, trigger.triggerId)) return 'seen';
+    if (deps.triggerLog.checkIsSeen(issue.key, trigger.triggerId)) return { seen: trigger };
     return { trigger, requester: getRequester(trigger, histories, reporter, deps.aiAccountId) };
   }
 
