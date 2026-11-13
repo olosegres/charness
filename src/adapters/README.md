@@ -57,8 +57,8 @@ claude -p --input-format stream-json --output-format stream-json \
   an account billed to API credits (`utils/claudeProfiles.ts`, `billing: 'api'`):
   its key is a console login's in its own `CLAUDE_CONFIG_DIR`, or a pasted key its
   launch settings' `apiKeyHelper` reads (`prepareClaudeCompactHookFlags(dataDir,
-  configDir)` — only the LAST `--settings` counts, so hook and helper share one
-  file) — still never `ANTHROPIC_API_KEY` (`apiKeySource` then reads
+  configDir, options)` — only the LAST `--settings` counts, so hooks and helper share one
+  file per kind of launch) — still never `ANTHROPIC_API_KEY` (`apiKeySource` then reads
   `/login managed key` or `apiKeyHelper`), and only there `total_cost_usd` is money.
 
 ### Output events (documented, stable)
@@ -97,6 +97,9 @@ Newline-delimited JSON, one object per line, parsed in
   `idle`, emitted only under `CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS`, which every
   wrapper sets. `running` marks a turn at its start; `idle` is ignored (it fires
   after every `result`, while a background task still runs).
+- `system` `subtype:"hook_started"` / `"hook_response"` — one each per hook the CLI runs; the response carries the hook's
+  whole stdout (`output`, `stdout`), the skills restore's text included. Dropped by the classifier (pinned by a test): it
+  must never reach the topic.
 - `command_lifecycle` `state:"started"` — a session-only job fired and starts a
   turn; it names its source, not the job: `wakeup_source:"schedule_wakeup"` for a
   `CronCreate` job, `"loop_wakeup"` for the `ScheduleWakeup` (`/loop`) one (both
@@ -131,6 +134,16 @@ same tmux name and host dir per conversation:
   each terminal `result`), unless a deferred compaction is armed or the process
   still works. stdin is never closed while a task runs: EOF kills background
   tasks ~5 s later (probe 2026-10-04).
+
+**Launch hooks** (`--settings`, `utils/claudeCompactHook.ts`): a `PreCompact` hook (the summary guidance for the CLI's own
+compaction), the todo lists' `PostToolUse` inbox hook and — json-stream and per-turn only, never the frozen tmux backend —
+the skills restore: 24 `SessionStart` hooks with the matcher `compact` (`hooks/claudeSkillsRestoreHook.ts`, run by the
+bot's own `node`), each printing one labelled part (≤ 9,500 characters) of the skills the transcript shows were loaded since
+the previous compaction, with their current text (`utils/skillsRestore.ts`). Measured on 2.1.322: they run after EVERY
+compaction (the CLI's own mid-turn ones too) BEFORE the new boundary and summary reach the transcript, all parts reach the
+next model request whole and in random order, and the CLI keeps them in the transcript (`hook_additional_context`), so a
+resumed process sends them again. Each kind of launch has its own settings file, so concurrent launches never read each
+other's hooks; a launch without the bot's skills passes their folder, which the restore then calls unavailable.
 
 Every COMPLETED compaction is told as `contextCompacted` (key, trigger): a bot-issued one on its one success
 path (`resolveCompaction`), and the CLI's own overflow compaction — a `compact_boundary` nobody waited for, live
