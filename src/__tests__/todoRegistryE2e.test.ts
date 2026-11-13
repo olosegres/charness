@@ -284,6 +284,18 @@ function listInboxFiles(): string[] {
   return fs.existsSync(inboxDir) ? fs.readdirSync(inboxDir) : [];
 }
 
+/**
+ * The repositories whose first commit the bot has taken from a finished walk, by git common dir: it stores the answer in
+ * `DATA_DIR/todos/repositories.json` in the same step as it starts using it (`todos/projects.ts`). The fake git's log says
+ * only that git printed it — the bot may not have read it yet.
+ */
+function readStoredRepositoryDirs(): string[] {
+  const filePath = path.join(getLayout().dataDir, 'todos', 'repositories.json');
+  if (!fs.existsSync(filePath)) return [];
+  const stored: { rootCommits: Record<string, string> } = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+  return Object.keys(stored.rootCommits);
+}
+
 function readGitWalkLog(): string {
   const logPath = path.join(getLayout().testRoot, gitWalkLogFileName);
   return fs.existsSync(logPath) ? fs.readFileSync(logPath, 'utf8') : '';
@@ -623,6 +635,7 @@ describe('Shared todo registry end to end: built charness, fake Bot API, fake cl
     assert.match(getPromptOf('TODO-43'), /\n\nYour published todo list:\n▶ in work:\n {2}t1 Fix the footer/);
     fs.rmSync(holdPath);
     await getCharness().waitFor('git answered', turnTimeoutMs, () => readGitWalkLog().includes(`end ${folderPathD}`));
+    await getCharness().waitFor('the bot took git\'s answer', turnTimeoutMs, () => readStoredRepositoryDirs().some((repositoryDir) => repositoryDir.endsWith(`${path.sep}${folderD}${path.sep}.git`)));
     fakeTelegram.pushOperatorMessage(topicDThreadId, 'TODO-42');
     await getCharness().waitFor('D\'s next prompt', turnTimeoutMs, () => readPrompts().some((prompt) => /\bTODO-42\b/.test(prompt.text)));
     assert.match(getPromptOf('TODO-42'), /\[Project board · proj-a · 2 other topics\]/, 'nothing was marked seen: the whole board');
