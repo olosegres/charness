@@ -106,7 +106,9 @@ Numeric bounds are named constants in the files below; this README says only wha
   connector's first poll can supersede what it re-opens before anything is woken. A wake counts against the cap;
   one that cannot reach a session is left to the backstop, no alert. The lost-work cooldown (10 min, persisted)
   guards it: a conversation woken so within it is left to the backstop, so a crash loop is no wake loop.
-  A Telegram topic keeps its own lost-work resume and is never woken this way.
+  A Telegram topic keeps its own lost-work resume and is never woken this way. NOT covered: a tracker process that
+  crashes while the bot keeps running, with no work of its own pending (no lost-work note) — its watched turn reads
+  `sessionGone` and the request still waits for the backstop.
 - A request whose prompt could not be posted is retried on `postRetryDelaysMs`, OUTSIDE the wake-up cap
   (`notePostFailed`); a message forwarded any other way drops a pending retry.
 - A failure in one conversation is logged and never stops the others or rejects a timer tick — an unhandled
