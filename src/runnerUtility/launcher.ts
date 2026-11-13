@@ -12,9 +12,16 @@ import type { RunnerHomePaths } from './runnerHome';
  * job all start this one file, so an update needs no service reinstall. `node` is the one that made the file (the runner's own Node.js,
  * `managedNode.ts`); if it has moved, the `node` on PATH is tried. Exit code {@link nodeMovedExitCode} means the file itself was rewritten (the link
  * moved to its own Node): the script starts the new file in its place.
+ *
+ * A trapped signal ends the script's `wait` early, with a status above 128 that is not the app's: after one, the script waits for the app
+ * again, which returns the app's own status — also when the app has ended and the shell has reaped it in between (dash and bash both keep the
+ * status of a background job until it is waited for). Looking whether the app still runs was not enough: a shell slowed down after it passed
+ * the signal on (a loaded host) found the app gone and ended with the signal's 143 instead of the app's code.
  */
 
 const launcherMode = 0o755;
+/** What a shell's `wait` returns when a trapped signal ends it early, and a process ended by a signal reports: 128 + the signal's number. */
+const signalExitCodeBase = 128;
 
 export function renderLauncher(paths: Pick<RunnerHomePaths, 'currentApp'>, nodePath: string): string {
   const cli = `${paths.currentApp}/dist/runnerUtility/runnerCli.js`;
@@ -24,12 +31,13 @@ export function renderLauncher(paths: Pick<RunnerHomePaths, 'currentApp'>, nodeP
     `NODE=${shellSingleQuote(nodePath)}`,
     '[ -x "$NODE" ] || NODE=node',
     'child=',
-    'trap \'[ -n "$child" ] && kill -TERM "$child" 2>/dev/null\' TERM INT HUP',
+    'trap \'signalled=1; [ -n "$child" ] && kill -TERM "$child" 2>/dev/null\' TERM INT HUP',
     'while :; do',
+    '  signalled=',
     `  "$NODE" ${shellSingleQuote(cli)} "$@" &`,
     '  child=$!',
-    '  code=0',
-    '  while kill -0 "$child" 2>/dev/null; do wait "$child"; code=$?; done',
+    '  wait "$child"; code=$?',
+    `  while [ -n "$signalled" ] && [ "$code" -gt ${signalExitCodeBase} ]; do signalled=; wait "$child"; code=$?; done`,
     `  [ "$code" = ${restartExitCode} ] && continue`,
     `  [ "$code" = ${nodeMovedExitCode} ] && [ -x "$0" ] && exec "$0" "$@"`,
     '  exit "$code"',

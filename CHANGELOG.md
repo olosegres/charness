@@ -10,6 +10,9 @@ The name is the bot's: an entry called `charness` in `DATA_DIR/mcp.json` or `DAT
 **A Claude topic whose turn ran into a usage limit while the bot was down no longer gets a «usage limit reached» notice after the restart for a limit that is already over — the bot just says the work resumed.**
 This happened when the bot took a while to come back up (a busy machine, or many topics with running agents). It read a running agent's output from the downtime too early, before it had worked out that the limit was already over. The same early read could also set up the retry twice, or stop a per-turn agent before the bot reconnected its own tools to it, which left the warning «MCP heal … left unhealed» in the log. Now the bot reads a running agent's output only once it has restored everything it had before the restart.
 
+**A runner whose service is stopped now ends with its program's own exit code, not with 143, also on a busy machine.**
+The `charness-runner` launcher passes the stop signal on to the runner program and waits for it. On a busy machine the program could end before the launcher checked on it again, and the launcher then reported the signal's 143 instead of the program's clean exit. A service manager reads 143 as a stop by a signal. The launcher now always waits for the program's own exit status. A runner writes the new launcher when it updates, and uses it from the next start of its service.
+
 ## 3.13.0 — 2026-11-12
 
 **A Jira instance with a `trustedGroup` can now trust only the apps and automations you list: the new `jira.json` key `trustedApps` names their account ids, and any other app is treated like a person outside the group.**

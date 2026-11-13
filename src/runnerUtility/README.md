@@ -117,7 +117,8 @@ account never clashes with this one.
 
 `KillMode=process` (systemd) and `AbandonProcessGroup` (launchd) keep a stop of the link from killing what it started: the commands it
 served see their pipes close and finish by themselves (phase 1's lease watcher kills its job on the closed stream). For that to be
-enough the launcher passes TERM / INT / HUP on to the app. Pueue runs at `nice`, never `taskpolicy -b` (on Apple Silicon that pins jobs
+enough the launcher passes TERM / INT / HUP on to the app, and then waits for the app's own exit status (the signal ends its `wait`
+early with 143; a launcher that only looked whether the app still ran ended with that 143 when the app was gone first). Pueue runs at `nice`, never `taskpolicy -b` (on Apple Silicon that pins jobs
 to the efficiency cores). One kind at a time: installing one while the other's files exist is refused with the command that removes it.
 
 **The admin line** (`runners/bootstrapLine.ts`, `buildAdminBootstrapLine`) does the always-on install, and the guarantee it keeps is: **root never

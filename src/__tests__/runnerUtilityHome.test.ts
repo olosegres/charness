@@ -163,6 +163,9 @@ describe('installed copies', () => {
   });
 });
 
+/** The most rounds a held trap spins while it waits for the app to be gone (a few hundred are needed). */
+const trapHoldMaxRounds = 5_000_000;
+
 describe('launcher', () => {
   it('starts the app current points at and starts it again only on the restart code', () => {
     const text = renderLauncher(paths, '/opt/node/bin/node');
@@ -214,25 +217,49 @@ describe('launcher', () => {
     assert.equal(fs.readFileSync(counter, 'utf8'), '3', 'two restarts, then the last run');
   });
 
-  it('passes TERM on to the app and ends with it — the launcher is the process a service manager signals', async () => {
+  /**
+   * Install an app that ends with 0 on TERM, start `launcher` (the file `ensureLauncher` wrote, or a variant of it), TERM it once the
+   * app listens for the signal, and check what it ended with. The app writes its pid only AFTER its TERM handler is in place: a TERM
+   * that reached it before would end it by the signal (143), which the launcher rightly passes on.
+   */
+  async function checkLauncherPassesTermOn(launcher: string): Promise<void> {
     const appDir = path.join(paths.currentApp, 'dist', 'runnerUtility');
     fs.mkdirSync(appDir, { recursive: true });
     const gotTerm = path.join(home, 'got-term');
     const appPid = path.join(home, 'app-pid');
     fs.writeFileSync(path.join(appDir, 'runnerCli.js'), [
       `const fs = require('fs');`,
-      `fs.writeFileSync(${JSON.stringify(appPid)}, String(process.pid));`,
       `process.on('SIGTERM', () => { fs.writeFileSync(${JSON.stringify(gotTerm)}, '1'); process.exit(0); });`,
+      `fs.writeFileSync(${JSON.stringify(appPid)}, String(process.pid));`,
       `setInterval(() => undefined, 1000);`,
     ].join('\n'));
-    const launcher = ensureLauncher(paths, process.execPath);
     const child = spawn(launcher, ['run'], { stdio: 'ignore' });
     const exited = new Promise<number | null>((resolve) => { child.once('exit', (code) => resolve(code)); });
-    await waitUntil(() => fs.existsSync(appPid), 'the app to start');
+    await waitUntil(() => fs.existsSync(appPid) && fs.readFileSync(appPid, 'utf8') !== '', 'the app to listen for TERM');
     child.kill('SIGTERM');
     assert.equal(await exited, 0, 'the launcher ends with the app\'s exit code');
     assert.equal(fs.existsSync(gotTerm), true, 'the app received the TERM');
     assert.throws(() => process.kill(Number(fs.readFileSync(appPid, 'utf8')), 0), 'the app is gone: nothing is left running unsupervised');
+  }
+
+  it('passes TERM on to the app and ends with it — the launcher is the process a service manager signals', async () => {
+    await checkLauncherPassesTermOn(ensureLauncher(paths, process.execPath));
+  });
+
+  it('ends with the app\'s code also when the app is gone by the time the launcher looks again — a launcher slowed down after it passed the TERM on (a loaded host)', async () => {
+    // The trap holds the shell (builtins only, as a descheduled shell would be held) until the app has ended and the shell has
+    // reaped it. The launcher then has only the interrupted wait's 143 in hand unless it waits for the app's own status.
+    const launcher = ensureLauncher(paths, process.execPath);
+    const trapEnd = `' TERM INT HUP`;
+    const lines = fs.readFileSync(launcher, 'utf8').split('\n');
+    const trapLineIndex = lines.findIndex((line) => line.startsWith(`trap '`) && line.endsWith(trapEnd));
+    assert.notEqual(trapLineIndex, -1, 'the launcher has its trap line');
+    // Bounded, so a shell that never reaped the app could not hold the test for good: it ends in tens of ms on dash and bash.
+    const holdUntilAppGone = `i=0; while kill -0 "$child" 2>/dev/null && [ $i -lt ${trapHoldMaxRounds} ]; do i=$((i+1)); done`;
+    lines[trapLineIndex] = `${lines[trapLineIndex].slice(0, -trapEnd.length)}; ${holdUntilAppGone}${trapEnd}`;
+    const slowLauncher = path.join(paths.binDir, 'charness-runner-slow');
+    fs.writeFileSync(slowLauncher, lines.join('\n'), { mode: 0o755 });
+    await checkLauncherPassesTermOn(slowLauncher);
   });
 
   it('names the Node it starts, and that name can be read back — also a path with a quote in it — and is nothing when there is no launcher', () => {
