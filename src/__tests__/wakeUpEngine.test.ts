@@ -15,13 +15,14 @@ import * as path from 'path';
 import { StateStore } from '../state';
 import { keyToString, type SessionKey } from '../sessionKey';
 import { RequestLedger, requestHistoryMaxBytes } from '../requests/requestLedger';
-import { RequestWakeUpEngine, unwatchedSweepMs } from '../requests/wakeUpEngine';
+import { RequestWakeUpEngine, restartWakeStaggerMs, unwatchedSweepMs } from '../requests/wakeUpEngine';
 import { createSessionTurnProbe } from '../requests/sessionTurnProbe';
-import { progressFollowUpDelayMs, type SessionTurnProbe } from '../requests/wakeUpRules';
+import { maxWakeUpsPerRequest, progressFollowUpDelayMs, type SessionTurnProbe } from '../requests/wakeUpRules';
 import type { OpenRequestState, RequestAlertReason, RequestWakeUpReason } from '../requests/types';
 import { RotatingJsonlFile } from '../utils/rotatingJsonlFile';
 import type { WakeUpMessage } from '../requests/requestHeader';
 import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
+import { makeJiraKey } from '../connectors/jira/sessionKeyCodec';
 
 const topicKey: SessionKey = makeTelegramKey(-1001234567890, 42);
 const backstopMs = 90 * 60 * 1000;
@@ -68,6 +69,8 @@ const recordWakeUp = async (_key: SessionKey, request: OpenRequestState, message
 interface EngineTimings {
   sweepIntervalMs?: number;
   firstPostRetryDelayMs?: number;
+  restartWakeStaggerMs?: number;
+  noteRestartWakeDelivered?: (key: SessionKey) => void;
 }
 
 function createEngine(ledger: RequestLedger, timings: EngineTimings = {}): RequestWakeUpEngine {
@@ -1153,6 +1156,133 @@ describe('the sweep timer', () => {
       mock.timers.tick(unwatchedSweepMs - testSweepIntervalMs);
       await settleSweep();
       assert.deepEqual(listWakeUpsOf(defaultRequest.id), [{ requestId: defaultRequest.id, reason: 'backstop' }], 'the production minute swept the other');
+    } finally {
+      for (const engine of engines) engine.stop();
+      mock.timers.reset();
+    }
+  });
+});
+
+describe('the restart wake: a tracker conversation whose process was found gone resumes its open requests at once, not at the backstop', () => {
+  const issueKey = makeJiraKey('PROJ-1');
+  const otherIssueKey = makeJiraKey('PROJ-2');
+  const handOver = (requester: string) => ({ kind: 'trackerEvent' as const, attributes: { issueKey: 'PROJ-1', triggerId: '100', requester } });
+  /** The session as a boot leaves it: the process gone, the conversation asleep. */
+  const goneProbe: SessionTurnProbe = { isActive: false, isBusy: false, hasUnconsumedInput: null, isTurnEndBlocked: false };
+
+  it('a request whose prompt was taken in gets the restarted reminder; one that never was gets its prompt again (R21) — in ONE forward, every request watched', async () => {
+    const ledger = await createLedger();
+    const engine = createEngine(ledger);
+    probe = goneProbe;
+    const takenIn = await ledger.createRequest(issueKey, handOver('ann'), { createPrompt: (id) => `[Request ${id} · from: PROJ-1 assigned to you by Ann]` });
+    await ledger.updateOpenRequest(takenIn.id, { isPromptTakenIn: true });
+    const neverRead = await ledger.createRequest(issueKey, handOver('bob'), { createPrompt: (id) => `[Request ${id} · from: PROJ-1 assigned to you by Bob]` });
+    await engine.wakeAfterRestart(issueKey);
+    assert.equal(wakeUpMessages.length, 1, 'one forward for the conversation');
+    const [message] = wakeUpMessages;
+    assert.equal(message.reason, 'restarted');
+    assert.ok(message.text.includes(`[Reminder · request ${takenIn.id} is still open]`), message.text);
+    assert.ok(message.text.includes('Your session ended and was resumed while you were working on it (the bot or your process restarted); carry on.'), message.text);
+    assert.ok(message.text.includes(`[Request ${neverRead.id} · from: PROJ-1 assigned to you by Bob]`), 'the unread prompt again, not a reminder of it');
+    assert.equal(message.isRequestPrompt, true, 'a request prompt rides it, so a session may be started for it');
+    assert.deepEqual(preparedFor.map((prepared) => prepared.reason), ['restarted']);
+    for (const request of ledger.listOpenRequestsOf(issueKey)) {
+      assert.equal(request.wakeCount, 1, 'it counts against the cap');
+      assert.equal(request.lastTurnActivityAt, nowMs, 'the backstop counts from now');
+    }
+    // The one turn it starts is watched for both: a silent end wakes both, at once.
+    await endTurnSilently(engine);
+    assert.deepEqual(wakeUps.slice(1).map((wakeUp) => [wakeUp.requestId, wakeUp.reason]).sort(), [[takenIn.id, 'silentTurn'], [neverRead.id, 'silentTurn']].sort());
+  });
+
+  it('leaves alone a request with its own next step or none at all: a post retry, a progress follow-up, a give-up, a limit stop — and a session that works or is blocked', async () => {
+    const ledger = await createLedger();
+    const engine = createEngine(ledger);
+    const request = await ledger.createRequest(issueKey, handOver('ann'));
+    probe = goneProbe;
+    for (const update of [{ nextPostRetryAt: nowMs + 60_000 }, { nextWakeAt: nowMs + progressFollowUpDelayMs }, { isWakeStopped: true }, { isLimitStopped: true }]) {
+      await ledger.updateOpenRequest(request.id, update);
+      await engine.wakeAfterRestart(issueKey);
+      assert.deepEqual(wakeUps, [], JSON.stringify(update));
+      await ledger.updateOpenRequest(request.id, { nextPostRetryAt: undefined, nextWakeAt: undefined, isWakeStopped: false, isLimitStopped: undefined });
+    }
+    for (const working of [{ ...goneProbe, isActive: true, isBusy: true }, { ...goneProbe, isTurnEndBlocked: true }]) {
+      probe = working;
+      await engine.wakeAfterRestart(issueKey);
+      assert.deepEqual(wakeUps, [], JSON.stringify(working));
+    }
+    probe = goneProbe;
+    await engine.wakeAfterRestart(issueKey);
+    assert.deepEqual(wakeUps.map((wakeUp) => wakeUp.reason), ['restarted'], 'with nothing of its own, it is woken');
+  });
+
+  it('a request the engine already watches (a prompt that reached the session meanwhile) is not woken again', async () => {
+    const ledger = await createLedger();
+    const engine = createEngine(ledger);
+    const request = await ledger.createRequest(issueKey, handOver('ann'));
+    await engine.trackForwardedTurn(issueKey, request.id, { isRequestPrompt: true });
+    probe = { isActive: true, isBusy: false, hasUnconsumedInput: true, isTurnEndBlocked: false };
+    await engine.wakeAfterRestart(issueKey);
+    assert.deepEqual(wakeUps, []);
+  });
+
+  it('it counts toward the cap: a request at its last wake gets the cap alert, not an eleventh wake', async () => {
+    const ledger = await createLedger();
+    const engine = createEngine(ledger);
+    const request = await ledger.createRequest(issueKey, handOver('ann'));
+    await ledger.updateOpenRequest(request.id, { wakeCount: maxWakeUpsPerRequest });
+    probe = goneProbe;
+    await engine.wakeAfterRestart(issueKey);
+    assert.deepEqual(wakeUps, []);
+    assert.deepEqual(alerts, [{ requestId: request.id, reason: 'wakeCap' }]);
+  });
+
+  it('a resume that fails, or a request answered while the session came up, forwards nothing — and raises no alert: the backstop takes it', async () => {
+    const ledger = await createLedger();
+    const engine = createEngine(ledger);
+    const request = await ledger.createRequest(issueKey, handOver('ann'));
+    probe = goneProbe;
+    isWakeUpDeliverable = false;
+    await engine.wakeAfterRestart(issueKey);
+    assert.deepEqual(wakeUps, []);
+    assert.deepEqual(alerts, []);
+    assert.equal(ledger.getOpenRequestById(request.id)?.request.isWakeStopped, false, 'still wakeable by the backstop');
+
+    isWakeUpDeliverable = true;
+    duringWakeUpResume = async () => {
+      await ledger.closeRequest(request.id, 'final');
+    };
+    nowMs += restartWakeStaggerMs;
+    await engine.wakeAfterRestart(issueKey);
+    assert.deepEqual(wakeUps, [], 'answered meanwhile: nothing to remind');
+  });
+
+  it('scheduled per conversation, a stagger apart and the first a stagger after the boot; a second call while one waits changes nothing; the delivery is noted', async () => {
+    mock.timers.enable({ apis: ['setTimeout', 'Date'], now: nowMs });
+    const delivered: string[] = [];
+    const engines: RequestWakeUpEngine[] = [];
+    try {
+      const ledger = await createLedger();
+      const engine = createEngine(ledger, { restartWakeStaggerMs: 30_000, noteRestartWakeDelivered: (key) => delivered.push(keyToString(key)) });
+      engines.push(engine);
+      await ledger.createRequest(issueKey, handOver('ann'));
+      await ledger.createRequest(otherIssueKey, { kind: 'trackerEvent', attributes: { issueKey: 'PROJ-2', triggerId: '200', requester: 'ann' } });
+      probe = goneProbe;
+      assert.equal(engine.scheduleRestartWake(issueKey), true);
+      assert.equal(engine.scheduleRestartWake(otherIssueKey), true);
+      assert.equal(engine.scheduleRestartWake(issueKey), false, 'one wake per conversation at a time');
+
+      mock.timers.tick(29_999);
+      await new Promise((resolve) => setImmediate(resolve));
+      assert.deepEqual(wakeUps, [], 'nothing before the first stagger: the connector\'s first poll goes first');
+      mock.timers.tick(1);
+      for (let round = 0; round < 10; round += 1) await new Promise((resolve) => setImmediate(resolve));
+      assert.equal(wakeUps.length, 1, 'the first conversation, alone');
+      assert.deepEqual(delivered, ['jira:PROJ:PROJ-1']);
+      mock.timers.tick(30_000);
+      for (let round = 0; round < 10; round += 1) await new Promise((resolve) => setImmediate(resolve));
+      assert.equal(wakeUps.length, 2, 'the second, a stagger later');
+      assert.deepEqual(delivered, ['jira:PROJ:PROJ-1', 'jira:PROJ:PROJ-2']);
     } finally {
       for (const engine of engines) engine.stop();
       mock.timers.reset();

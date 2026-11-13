@@ -12,6 +12,7 @@ import assert from 'node:assert/strict';
 import type { OpenRequestState } from '../requests/types';
 import {
   checkIsWatchedTurnStale,
+  decideRestartWake,
   decideTurnEnd,
   decideUnwatchedRequest,
   defaultRequestBackstopMs,
@@ -99,6 +100,35 @@ describe('decideTurnEnd', () => {
 
   it('nothing happens while a limit stop holds', () => {
     assert.deepEqual(decideTurnEnd(createRequest({ isLimitStopped: true }), 0, nowMs), { kind: 'none' });
+  });
+});
+
+describe('decideRestartWake — a tracker request whose process was found gone', () => {
+  const goneProbe: SessionTurnProbe = { isActive: false, isBusy: false, hasUnconsumedInput: null, isTurnEndBlocked: false };
+
+  it('wakes at once — long before the backstop — and counts the wake and the activity', () => {
+    assert.deepEqual(decideRestartWake(createRequest({ wakeCount: 2, lastTurnActivityAt: nowMs - 60_000 }), goneProbe, nowMs), {
+      kind: 'wake',
+      reason: 'restarted',
+      update: { lastTurnActivityAt: nowMs, wakeCount: 3, nextWakeAt: undefined },
+    });
+  });
+
+  it('never wakes what has its own next step or may not be woken: a post retry, a follow-up, a give-up, a limit stop', () => {
+    for (const overrides of [{ nextPostRetryAt: nowMs + 1 }, { nextWakeAt: nowMs + 1 }, { isWakeStopped: true }, { isLimitStopped: true }]) {
+      assert.deepEqual(decideRestartWake(createRequest(overrides), goneProbe, nowMs), { kind: 'none' }, JSON.stringify(overrides));
+    }
+  });
+
+  it('never wakes a session that works or is blocked (a pending question, an armed retry or limit wait, a start under way)', () => {
+    assert.deepEqual(decideRestartWake(createRequest(), { ...goneProbe, isActive: true, isBusy: true }, nowMs), { kind: 'none' });
+    assert.deepEqual(decideRestartWake(createRequest(), { ...goneProbe, isTurnEndBlocked: true }, nowMs), { kind: 'none' });
+  });
+
+  it('past the cap it alerts like any wake (a crash loop never wakes forever)', () => {
+    const decision = decideRestartWake(createRequest({ wakeCount: maxWakeUpsPerRequest }), goneProbe, nowMs);
+    assert.equal(decision.kind, 'alert');
+    assert.ok(decision.kind === 'alert' && decision.reason === 'wakeCap');
   });
 });
 

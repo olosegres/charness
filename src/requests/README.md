@@ -96,6 +96,17 @@ Numeric bounds are named constants in the files below; this README says only wha
 - A silent turn wakes the agent at once; the second silent turn in a row alerts and stops; a `progress` note
   resets the counter and schedules a follow-up; every wake passes `maxWakeUpsPerRequest`. Requests nobody
   watches get a backstop wake (`getRequestBackstopMs`).
+- **A tracker conversation whose process is gone is woken at once, not at the backstop** (`restarted`,
+  `decideRestartWake`, `scheduleRestartWake`): at a boot that did not find its process (not adopted, the
+  conversation sleeps) while it holds an open request that waits for nothing of its own (no post retry, no
+  progress follow-up, no armed usage-limit wait, not given up), and when its process ended with its own work
+  pending (`utils/lostWork.ts`; the lost-work note rides the wake). One wake per conversation covers all its open
+  requests in ONE forward — each request's prompt again when the session never took it in (R21), else its
+  reminder — and one watched turn; the wakes are `restartWakeStaggerMs` (30 s) apart, the first one too, so a
+  connector's first poll can supersede what it re-opens before anything is woken. A wake counts against the cap;
+  one that cannot reach a session is left to the backstop, no alert. The lost-work cooldown (10 min, persisted)
+  guards it: a conversation woken so within it is left to the backstop, so a crash loop is no wake loop.
+  A Telegram topic keeps its own lost-work resume and is never woken this way.
 - A request whose prompt could not be posted is retried on `postRetryDelaysMs`, OUTSIDE the wake-up cap
   (`notePostFailed`); a message forwarded any other way drops a pending retry.
 - A failure in one conversation is logged and never stops the others or rejects a timer tick — an unhandled

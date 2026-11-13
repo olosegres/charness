@@ -75,6 +75,12 @@ test('the live forward awaits the write\'s outcome: a write that failed rejects 
   assert.ok(body.indexOf("startClaudeLiveness(key, 'busyOnset');") < awaitWritten, 'the busy-onset arm still starts at the write, not after its outcome');
 });
 
+test('an untold lost-work note rides a request\'s reminder too (the restart wake of a tracker request), never a slash command, a technical prompt or a shell line', () => {
+  const body = getFunctionBody('forwardPromptToLiveAgent');
+  assert.match(body, /const isLostWorkNoteCarried = \(isReplayable \|\| options\.isRequestReminder === true\) && adapter\.name !== 'terminal';/);
+  assert.match(body, /const lostWorkRecord = isLostWorkNoteCarried \? state\.getLostWork\(key\) : undefined;/);
+});
+
 test('a prompt that finds no session after the wait is answered with the no-session reply, unless the wake already said why', () => {
   const body = getFunctionBody('forwardPromptToAgent');
   const report = body.slice(body.indexOf('reportNoSession: async (isAlreadyTold) => {'));

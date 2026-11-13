@@ -278,7 +278,7 @@ import { AgentBackendUnavailableError } from './adapters/backendUnavailableError
 import { getPerTurnRefusedVersion, minAutoStopClaudeCodeVersion } from './utils/claudeCodeVersion';
 import { KeyedTransitionQueue } from './utils/keyedTransitionQueue';
 import { checkIsAdoptedToolListStale } from './utils/adoptedToolList';
-import { buildLostWorkNote, checkHasLostBackgroundWork, checkHasLostWork, type LostWorkRecord, formatLostWorkTopicLine, getHeldLostWorkPlan, getLostWorkFromTailRecord, getLostWorkPlan, getTailRecordWithoutPendingWork, mergeLostWorkRecords, type LostWork, type LostWorkReason } from './utils/lostWork';
+import { buildLostWorkNote, checkHasLostBackgroundWork, checkHasLostWork, type LostWorkRecord, formatLostWorkTopicLine, getHeldLostWorkPlan, getLostWorkFromTailRecord, getLostWorkPlan, getTailRecordWithoutPendingWork, lostWorkResumeCooldownMs, mergeLostWorkRecords, type LostWork, type LostWorkReason } from './utils/lostWork';
 import { pendingWorkHoldDefaultMs } from './utils/jsonStreamPendingWork';
 import { getAgentIdleMs } from './utils/compactOnIdle';
 import { getCompactSelfReviewFlagDirs } from './utils/compactSelfReviewFlags';
@@ -423,7 +423,7 @@ import {
 } from './requests/limitWaitAnswer';
 import { formatLocalClockWithDateIfNotToday } from './utils/localClock';
 import { RequestWakeUpEngine } from './requests/wakeUpEngine';
-import { getRequestBackstopMs } from './requests/wakeUpRules';
+import { checkIsWakingStopped, getRequestBackstopMs } from './requests/wakeUpRules';
 import { joinPromptsNotTakenIn, type WakeUpMessage } from './requests/requestHeader';
 import type { OpenRequestState, RequestAlertReason, RequestPromptOutcome } from './requests/types';
 import { getThreadKeysForDirectory } from './scheduler/directoryThreads';
@@ -6066,8 +6066,10 @@ async function forwardPromptToLiveAgent(
   // The request header (S7) leads the per-message body, like the message context and
   // unlike the once-per-change thread preamble: it names THIS message's request.
   const messageBody = options.requestHeader ? `${options.requestHeader}${quotedBody}` : quotedBody;
-  // A loss the agent was not told about yet (`utils/lostWork.ts`) rides the first real prompt, once, ahead of it.
-  const lostWorkRecord = isReplayable && adapter.name !== 'terminal' ? state.getLostWork(key) : undefined;
+  // A loss the agent was not told about yet (`utils/lostWork.ts`) rides the first real prompt, once, ahead of it — a
+  // request's reminder included: the wake of a tracker request whose process a restart left behind is how its agent hears.
+  const isLostWorkNoteCarried = (isReplayable || options.isRequestReminder === true) && adapter.name !== 'terminal';
+  const lostWorkRecord = isLostWorkNoteCarried ? state.getLostWork(key) : undefined;
   const body = lostWorkRecord ? `${buildLostWorkNote(lostWorkRecord, getLocaleEndonym(getActiveLang()))}\n\n${messageBody}` : messageBody;
   // Cache the (reply-folded) prompt so a wedged OpenCode session can be recovered
   // by restarting fresh and replaying it — replaying WITH the quote is correct.
@@ -13122,10 +13124,14 @@ async function noteLostWork(key: SessionKey, lostWork: LostWork | null, reason: 
     reason,
     isLimitWaitArmed,
     msSinceLastAutoResume: lastAutoResumeAt === undefined ? null : now - lastAutoResumeAt,
-    // A tracker issue's agent answers only through a request: a bare note would have nowhere to answer.
+    // A tracker issue's agent answers only through a request: a bare note would have nowhere to answer — its open request is woken instead.
     isRequestRequired: !checkIsTelegramKey(key),
+    hasOpenRequest: (topicRequestLedger?.listOpenRequestsOf(key).length ?? 0) > 0,
   });
-  console.log(`[lost-work] ${kStr}: the process ended (${reason}) with the agent's own work pending (${record.backgroundTasks.length} background task(s), ${record.scheduledJobCount} scheduled job(s)${record.hasUnreadTaskResult ? ', an unread task result' : ''}${record.wasTurnInFlight ? ', a cut-off turn' : ''}); ${plan.isAutoResume ? 'resuming it with a note' : 'the note rides the next prompt'}`);
+  let planText = plan.isAutoResume ? 'resuming it with a note' : 'the note rides the next prompt';
+  if (plan.isRequestWake) planText = 'its open request is woken, and the note rides that wake';
+  console.log(`[lost-work] ${kStr}: the process ended (${reason}) with the agent's own work pending (${record.backgroundTasks.length} background task(s), ${record.scheduledJobCount} scheduled job(s)${record.hasUnreadTaskResult ? ', an unread task result' : ''}${record.wasTurnInFlight ? ', a cut-off turn' : ''}); ${planText}`);
+  if (plan.isRequestWake) scheduleTrackerRestartWake(key, `its process ended (${reason}) with its own work pending`);
   let linePlan = plan;
   if (plan.isAutoResume) {
     await state.setLostWorkResumedAt(key, now);
@@ -13133,6 +13139,39 @@ async function noteLostWork(key: SessionKey, lostWork: LostWork | null, reason: 
     if (!(await resumeConversationForLostWork(key))) linePlan = getHeldLostWorkPlan({ reason, isLimitWaitArmed });
   }
   if (checkIsTelegramKey(key)) replyToThread(key, formatLostWorkTopicLine(record, linePlan, pendingWorkHoldHours, t)).catch(() => {});
+}
+
+/**
+ * @description Wake the open requests of a tracker conversation whose process is gone — `restarted`, staggered by the
+ * wake-up engine — instead of leaving them to the 90-minute backstop. A Telegram topic resumes through its own
+ * lost-work path and is never woken here. The lost-work cooldown guards it as well: a conversation woken
+ * automatically within it is left to the backstop, so a crash loop is no wake loop.
+ */
+function scheduleTrackerRestartWake(key: SessionKey, why: string): void {
+  if (checkIsTelegramKey(key) || !requestWakeUpEngine) return;
+  const lastAutoResumeAt = state.getLostWorkResumedAt(key);
+  if (lastAutoResumeAt !== undefined && Date.now() - lastAutoResumeAt < lostWorkResumeCooldownMs) {
+    console.log(`[requests] ${keyToString(key)}: ${why}; it was woken automatically less than ${lostWorkResumeCooldownMs / 60_000} min ago, so the backstop takes it`);
+    return;
+  }
+  if (requestWakeUpEngine.scheduleRestartWake(key)) console.log(`[requests] ${keyToString(key)}: ${why}; its open request is woken shortly`);
+}
+
+/**
+ * @description The boot's pass over the open requests of tracker conversations: one whose process did not come back
+ * with the boot (not adopted — the conversation sleeps) and that waits for nothing of its own — no post retry, no
+ * progress follow-up, no armed usage-limit wait, not given up — is woken `restarted` ({@link scheduleTrackerRestartWake}).
+ * A process that died with its own work pending is in it too: its lost-work note rides the same wake.
+ */
+function scheduleRestartWakesAtBoot(requestLedger: RequestLedger): void {
+  const keys = new Map<string, SessionKey>();
+  for (const { key, request } of requestLedger.listOpenRequests()) {
+    if (checkIsTelegramKey(key) || keys.has(keyToString(key))) continue;
+    if (checkIsWakingStopped(request) || request.nextPostRetryAt !== undefined || request.nextWakeAt !== undefined) continue;
+    if (getThreadAdapter(key).checkIsActive(key) || getArmedApiRetry(key)?.kind === 'usageLimit') continue;
+    keys.set(keyToString(key), key);
+  }
+  for (const key of keys.values()) scheduleTrackerRestartWake(key, 'its session did not come back with the boot while a request was open');
 }
 
 /**
@@ -15061,6 +15100,11 @@ export async function startBot(): Promise<void> {
       return result.ok ? (result.alertRef ?? null) : null;
     },
     backstopMs: getRequestBackstopMs(process.env.REQUEST_BACKSTOP_MINUTES),
+    restartWakeStaggerMs: ENV.testTimings.requestRestartWakeStaggerMs,
+    // The stamp of the lost-work cooldown: a conversation woken after a restart is not woken so again within it.
+    noteRestartWakeDelivered: (key) => {
+      void state.setLostWorkResumedAt(key, Date.now());
+    },
     pollIntervalMs: ENV.testTimings.requestTurnPollMs,
     sweepIntervalMs: ENV.testTimings.requestSweepIntervalMs,
     firstPostRetryDelayMs: ENV.testTimings.requestFirstPostRetryDelayMs,
@@ -15365,6 +15409,8 @@ export async function startBot(): Promise<void> {
       markSessionsRestored();
       // From here the engine can tell a live turn from a dead session.
       requestWakeUpEngine?.start();
+      // A tracker conversation whose process did not survive the downtime resumes its open request now, not at the backstop.
+      scheduleRestartWakesAtBoot(requestLedger);
       todoReminderEngine?.start();
       jiraConnector?.start(createJiraSessionDeps(requestLedger, slots, jiraConnector.adapterName));
     },

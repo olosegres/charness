@@ -226,8 +226,10 @@ reads only what died while the bot was away. The bot (`utils/lostWork.ts`) keeps
 it in `state.json` (`lostWork`) until the agent is told: one plain line in a
 topic, and an automatic resume with the note as its prompt — or the note rides the
 next prompt (a spent hold, an armed limit wait, a second loss within 10 min of an
-automatic resume — that stamp is persisted, so a restart keeps it —, a tracker
-issue, whose agent answers only through a request). The line is posted after the
+automatic resume — that stamp is persisted, so a restart keeps it). A tracker
+issue, whose agent answers only through a request, is not resumed by the note:
+its open request is woken (`restarted`, `requests/README.md`) and the note rides
+that wake — none open, the note waits for the next request. The line is posted after the
 resume, so it never claims a resume that failed.
 A move that sends its own first prompt folds the note into it, with no line of its
 own: a usage-limit account switch (its notice says the background work stopped;

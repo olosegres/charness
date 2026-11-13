@@ -62,6 +62,7 @@ const wakeUpReasonLines: Readonly<Record<RequestWakeUpReason, string>> = {
   progressFollowUp: 'Some time has passed since your last progress note on it.',
   backstop: 'Nothing has been seen working on it for a long time (the session may have restarted).',
   postRetry: 'It could not be delivered to you earlier.',
+  restarted: 'Your session ended and was resumed while you were working on it (the bot or your process restarted); carry on.',
 };
 
 /**
