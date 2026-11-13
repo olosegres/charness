@@ -14986,6 +14986,13 @@ function createJiraSessionDeps(requestLedger: RequestLedger, slots: TaskAgentSlo
       // A held request is tracked when the wait's resume, or else its next wake-up, posts its prompt (R21).
       if (!posted.isHeld) await requestWakeUpEngine?.trackForwardedTurn(key, requestId, { isRequestPrompt: true });
     },
+    // An issue update (a comment for an open hand-over request) opens no request: the turn it starts is that request's.
+    postUpdate: async (key, prompt, getTargetRequestId) => {
+      notePersonActivity(key);
+      const posted = await postToSession(sessionPostDeps, keyToString(key), prompt, adapterName);
+      if (!posted.ok) throw new Error(posted.reason === 'forward-failed' ? posted.error : `session ${posted.reason}`);
+      if (!posted.isHeld) await requestWakeUpEngine?.trackForwardedTurn(key, getTargetRequestId());
+    },
   };
 }
 

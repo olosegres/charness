@@ -10,7 +10,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { keyToString } from '../sessionKey';
 import type { ClosedRequestRecord, RequestCloseReason, RequestOriginKind } from '../requests/types';
-import { taskAgentStartFailureLimit } from '../trackers/taskAgentSlots';
+import { actingMentionAttribute, checkIsSlotHoldingOrigin, taskAgentStartFailureLimit } from '../trackers/taskAgentSlots';
 import { createJiraConversationKey, createTestSlots, createWaitEntry } from './taskAgentSlotsTestKit';
 
 const first = createJiraConversationKey('PROJ-1');
@@ -64,6 +64,18 @@ describe('TaskAgentSlots', () => {
       kit.setOpenRequests([{ key: first, kind: 'trackerMention' }]);
       assert.equal(kit.slots.getStatus().runningCount, 0);
       assert.deepEqual(await kit.slots.checkIn(second, 'trigger'), { kind: 'granted' });
+    });
+
+    it('a mention request that may ACT (mentionMode "act": it may start a build) holds a slot like a hand-over; the attribute is what tells', async () => {
+      const kit = createTestSlots({ maxConcurrent: 1 });
+      kit.setOpenRequests([{ key: first, kind: 'trackerMention', attributes: { [actingMentionAttribute]: 'true' } }]);
+      assert.equal(kit.slots.getStatus().runningCount, 1);
+      assert.equal((await kit.slots.checkIn(second, 'mention:10240')).kind, 'queued');
+      assert.equal(actingMentionAttribute, 'mayAct');
+      assert.equal(checkIsSlotHoldingOrigin({ kind: 'trackerMention', attributes: {} }), false);
+      assert.equal(checkIsSlotHoldingOrigin({ kind: 'trackerMention', attributes: { mayAct: 'false' } }), false);
+      assert.equal(checkIsSlotHoldingOrigin({ kind: 'trackerEvent', attributes: {} }), true);
+      assert.equal(checkIsSlotHoldingOrigin({ kind: 'message', attributes: { mayAct: 'true' } }), false);
     });
 
     it('a request a message or a schedule opened in a Telegram topic holds no slot', async () => {
@@ -314,6 +326,21 @@ describe('TaskAgentSlots', () => {
       assert.deepEqual(kit.getWaitList().map((entry) => entry.conversationKey), [keyToString(second)]);
     });
 
+    it('dropWaiting with a trigger filter drops only a place waiting with such a trigger (a hand-over\'s decision never takes a comment\'s or a mention\'s place)', () => {
+      const kit = createTestSlots({ maxConcurrent: 1, waitList: [createWaitEntry('PROJ-1', 1, 'comment:10240'), createWaitEntry('PROJ-2', 2, '300')] });
+      kit.slots.dropWaiting(first, (triggerId) => !triggerId.startsWith('comment:'));
+      kit.slots.dropWaiting(second, (triggerId) => triggerId.startsWith('mention:'));
+      assert.deepEqual(kit.getWaitList().map((entry) => entry.triggerId), ['comment:10240', '300'], 'nothing matched');
+      kit.slots.dropWaiting(first, (triggerId) => triggerId.startsWith('comment:'));
+      assert.deepEqual(kit.getWaitList().map((entry) => entry.triggerId), ['300']);
+    });
+
+    it('listWaiting names one connector\'s places in order, with their triggers', () => {
+      const foreign = { conversationKey: '-1001111111111:7', triggerId: 'x', queuedAt: 1 };
+      const kit = createTestSlots({ maxConcurrent: 1, waitList: [createWaitEntry('PROJ-2', 1, 'mention:10240'), foreign, createWaitEntry('PROJ-1', 2, '300')] });
+      assert.deepEqual(kit.slots.listWaiting('jira').map((entry) => [keyToString(entry.key), entry.triggerId]), [[keyToString(second), 'mention:10240'], [keyToString(first), '300']]);
+    });
+
     it('pruneWaiting drops the places a connector no longer vouches for, and only that connector\'s', () => {
       const foreign = { conversationKey: '-1001111111111:7', triggerId: 'x', queuedAt: 1 };
       const kit = createTestSlots({ maxConcurrent: 1, waitList: [createWaitEntry('PROJ-1', 1), foreign, createWaitEntry('PROJ-2', 2)] });
@@ -359,6 +386,17 @@ describe('TaskAgentSlots', () => {
       kit.slots.noteRequestClosed(createClosedRecord('trackerMention', 'final'));
       kit.slots.noteRequestClosed(createClosedRecord('message', 'final'));
       assert.equal(wakes, 0);
+    });
+
+    it('an acting mention that closed frees its slot: it wakes them like a hand-over', () => {
+      const kit = createTestSlots({ maxConcurrent: 1, waitList: [createWaitEntry('PROJ-2', 1)] });
+      let wakes = 0;
+      kit.slots.onSlotFreed(() => {
+        wakes += 1;
+      });
+      kit.slots.noteRequestClosed({ ...createClosedRecord('trackerMention', 'final'), origin: { kind: 'trackerMention', attributes: { [actingMentionAttribute]: 'true' } } });
+      kit.slots.noteRequestWakeStopped({ origin: { kind: 'trackerMention', attributes: { [actingMentionAttribute]: 'true' } } });
+      assert.equal(wakes, 2);
     });
 
     it('the wake-up engine giving up on a hand-over wakes them while somebody waits — a mention, a Telegram request or nobody waiting does not', () => {

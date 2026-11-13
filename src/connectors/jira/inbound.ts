@@ -1,14 +1,28 @@
 import type { SessionKey } from '../../sessionKey';
 import type { OpenRequestState, RequestOrigin } from '../../requests/types';
 import { emptyRequester, getRequestRequester, requestRequesterAttribute } from '../../requests/requestGroup';
-import { JiraAuthError, jiraChangelogPageSize, type JiraAccount, type JiraChangelogHistory, type JiraClient, type JiraComment, type JiraIssue } from './client';
+import { JiraAuthError, JiraHttpError, jiraChangelogPageSize, type JiraAccount, type JiraChangelogHistory, type JiraClient, type JiraComment, type JiraIssue } from './client';
 import { getMentionedAccountIds } from './adf';
 import { getJiraIssueProjectKey, makeJiraKey } from './sessionKeyCodec';
-import { createMentionTrigger, findNewestTrigger, getIssueTrigger, getRequester, mentionTriggerIdPrefix, type JiraIssueTrigger } from './trigger';
+import {
+  checkIsHandOverTriggerId,
+  checkIsPersonAccount,
+  commentTriggerIdPrefix,
+  compareJiraCommentIds,
+  createCommentTrigger,
+  createMentionTrigger,
+  findNewestTrigger,
+  getIssueTrigger,
+  getRequester,
+  mentionTriggerIdPrefix,
+  type JiraIssueTrigger,
+} from './trigger';
 import type { JiraTriggerLog, JiraTriggerRecord } from './triggerLog';
 import { buildIssueBlocks, checkIsCommentTrusted, getShownIssueSummary, type JiraBlockTrust, type JiraExtraField } from './issueBlocks';
 import { fetchJiraIssueContext, findAccountInContext, type JiraIssueContext } from './issueContext';
-import { buildJiraDeltaPrompt, buildJiraRequestPrompt, type JiraOpenHandOver } from './prompt';
+import { buildJiraDeltaPrompt, buildJiraRequestPrompt, buildJiraUpdatePrompt, type JiraNewComment, type JiraOpenHandOver, type JiraUpdatePromptBase } from './prompt';
+import type { JiraMentionMode } from './config';
+import { actingMentionAttribute } from '../../trackers/taskAgentSlots';
 import { getIssueDelta } from './issueDelta';
 import type { JiraContextLedger } from './contextLedger';
 import type { SessionPromptText } from '../../postToSession';
@@ -38,16 +52,33 @@ import type { TaskAgentSlotDecision, TaskAgentSlots } from '../../trackers/taskA
  * first in the list and a slot is free (`trackers/taskAgentSlots.ts`; a slot freeing wakes the poll at once, `pollSoon`).
  * A Jira event never cancels an armed usage-limit wait — the ledger's create hook tells the new request about it (core S5).
  *
- * With mention wakes on (a trusted group is set), the same poll also finds a comment that @-mentions the AI
- * account — on an issue that is NOT handed to it — and opens a request that answers only:
+ * With comment wakes on (a trusted group is set), a trusted person's comment on an issue HANDED to the AI account —
+ * assigned to it in a trigger status, its hand-over seen — reaches its agent; a mention there is a comment like any other:
+ *
+ *   `updated` moved since this process last read it → its newest comments: a person's (not the AI account's, not an app's
+ *   or an automation's — those ride the next prompt), newer than every comment a recorded prompt of the issue was built
+ *   from (the trigger log's `newestCommentId`: no window, so a comment made while the bot was down is not lost), whose
+ *   `comment:<id>` (and `mention:<id>`) is not seen →
+ *     author and last editor trusted (else `untrusted`, silent) →
+ *       a hand-over request of the conversation open → an ISSUE UPDATE posted for it: no request is opened (a new one
+ *         would supersede the hand-over, or hand the issue to the commenter on its first final answer)
+ *       none open → run budget → a free task-agent slot → a request of its own (`commented`, the commenter its requester)
+ *     → RECORD every comment once its post settled (an update that failed is decided again, after a backoff)
+ *
+ * With mention wakes on, the same poll also finds a comment that @-mentions the AI account — on an issue that is NOT
+ * handed to it (with comment wakes off: on any issue) — and opens a request:
  *
  *   issue returned and its `updated` moved since this process last read it → its newest comments, those
  *   created or edited within the mention window that mention the AI account (the ADF mention node's id) and
  *   whose trigger id `mention:<commentId>` is not seen →
- *     author and last editor trusted → not covered by an open hand-over request of the same person
- *     → run budget → open a request (no hand-back; the answer sink knows by the origin kind)
+ *     author and last editor trusted → by the requester of an open hand-over request: an issue update for that
+ *     request (with comment wakes off: `covered`, nothing posted) → run budget → with `mentionMode: "act"` a free
+ *     task-agent slot (an acting mention may start a build) → open a request (no hand-back; the answer sink knows by
+ *     the origin kind)
  *
- * One decision per comment, recorded in the same trigger log: an edit of a decided comment wakes nothing.
+ * One decision per comment, recorded in the same trigger log: an edit of a decided comment wakes nothing. An acting
+ * mention that waits for a slot keeps its place across polls and restarts: its comment is decided again outside the
+ * window, and its issue is read by its key once the search no longer returns it.
  */
 
 export const jiraSearchPageSize = 50;
@@ -99,23 +130,27 @@ export interface JiraProjectTrigger {
  *  - `seen`        — its trigger was decided before.
  *  - `queued`      — no task-agent slot was free: it joined the bot's wait list and was told so (once). `waiting` — it is
  *    still in the list (skipped; nothing is posted again).
- *  - `selfAuthored`, `parked`, `untrusted`, `covered`, `request` — the recorded outcomes; `untrusted` — the
+ *  - `selfAuthored`, `parked`, `untrusted`, `covered`, `update`, `request` — the recorded outcomes; `untrusted` — the
  *    hand-over was made by someone the trusted group does not back (a notice and the hand-back, no request; for
- *    a mention: silent, nothing posted); `covered` — a mention by the requester of the issue's open hand-over
- *    request, which that run already carries (no request).
+ *    a mention or a comment: silent, nothing posted); `covered` — with comment wakes off, a mention by the requester of
+ *    the issue's open hand-over request (no request, nothing posted); `update` — the comment went to the agent as an
+ *    issue update for an open hand-over request (no request).
  *  - `failed`      — an error stopped it; the next poll tries again.
  */
 export type JiraIssueDecision =
-  | 'notAllowed' | 'notMatching' | 'posting' | 'seen' | 'selfAuthored' | 'parked' | 'untrusted' | 'covered' | 'queued' | 'waiting' | 'request' | 'failed';
+  | 'notAllowed' | 'notMatching' | 'posting' | 'seen' | 'selfAuthored' | 'parked' | 'untrusted' | 'covered' | 'update' | 'queued' | 'waiting' | 'request' | 'failed';
 
 /** Decisions that change nothing, left out of the poll's log line. */
 const quietDecisions: ReadonlySet<JiraIssueDecision> = new Set(['notMatching', 'posting', 'seen', 'waiting']);
 
 /**
- * Decisions that end an issue's wait for a slot: its hand-over is gone, was refused or was handled without one. `notAllowed` is not
+ * Decisions that end a hand-over's wait for a slot: its hand-over is gone, was refused or was handled without one. `notAllowed` is not
  * one: that issue never waited, and its key may not even be an issue key (`makeJiraKey` would throw).
  */
 const waitEndingDecisions: ReadonlySet<JiraIssueDecision> = new Set(['notMatching', 'seen', 'selfAuthored', 'parked', 'untrusted']);
+
+/** The decisions of a mention or a comment that leave it to the next poll: it is not decided yet. */
+const undecidedDecisions: ReadonlySet<JiraIssueDecision> = new Set(['queued', 'waiting', 'failed']);
 
 export interface JiraInboundDeps {
   client: Pick<JiraClient, 'searchIssues' | 'getChangelogPage' | 'getIssue' | 'getComments' | 'getRecentComments' | 'getRemoteLinks'>;
@@ -132,8 +167,12 @@ export interface JiraInboundDeps {
   trust: JiraTrust | null;
   /** An @-mention of the AI account wakes it (`config.isMentionWakeOn`); never without {@link trust} — nobody could be judged. */
   isMentionWakeOn: boolean;
-  /** The open requests of an issue's conversation — a hand-over's requester who mentions the AI is already served (D9). */
-  listOpenRequests: (key: SessionKey) => ReadonlyArray<Pick<OpenRequestState, 'id' | 'origin'>>;
+  /** What a mention asks of the agent (`config.mentionMode`): `act` — an explicit ask is carried out, and the request takes a task-agent slot. */
+  mentionMode: JiraMentionMode;
+  /** A trusted person's comment on an issue handed to the AI account reaches its agent (`config.isCommentWakeOn`); never without {@link trust}. */
+  isCommentWakeOn: boolean;
+  /** The open requests of an issue's conversation — the hand-over a comment or a mention belongs to (D9). */
+  listOpenRequests: (key: SessionKey) => ReadonlyArray<Pick<OpenRequestState, 'id' | 'origin' | 'isWakeStopped'>>;
   now: () => number;
   /** Bind the issue's conversation to its project's folder. */
   bindConversation: (key: SessionKey, folder: string) => Promise<void>;
@@ -152,8 +191,14 @@ export interface JiraInboundDeps {
    * makes the delta for a session that already knows the issue (C5).
    */
   postRequest: (key: SessionKey, requestId: string, prompt: SessionPromptText) => Promise<void>;
-  /** What each issue's conversation was already told (C4). */
-  contextLedger: Pick<JiraContextLedger, 'getSnapshot' | 'recordBuild'>;
+  /**
+   * Post an issue update into the issue's session — no request is opened: it belongs to the open hand-over request its text
+   * names. `prompt.buildText` runs right before the forward and settles which request that is; `getTargetRequestId` then
+   * answers it (the turn is watched for that request). Rejects when the update did not reach the session.
+   */
+  postUpdate: (key: SessionKey, prompt: SessionPromptText, getTargetRequestId: () => string) => Promise<void>;
+  /** What each issue's conversation was already told (C4), and shown (a comment before its prompt recorded its newest one). */
+  contextLedger: Pick<JiraContextLedger, 'getSnapshot' | 'recordBuild' | 'getShownBlock'>;
   /** Over the run budget: the park notice and the hand-back (the answer side, J6). */
   parkIssue: (issueKey: string, requester: JiraAccount | null) => Promise<void>;
   /** The summary a request's prompt shows of its issue — `null` when withheld (D55: the todo boards name the issue by it). */
@@ -162,8 +207,8 @@ export interface JiraInboundDeps {
   refuseUntrusted: (issueKey: string, requester: JiraAccount | null, groupName: string) => Promise<void>;
   /** A mention over the run budget: the park notice, no hand-back (the answer side). */
   parkMention: (issueKey: string) => Promise<void>;
-  /** The bot's one cap on task agents and its wait list; a mention request bypasses it. */
-  slots: Pick<TaskAgentSlots, 'checkIn' | 'noteStarted' | 'noteStartFailed' | 'dropWaiting' | 'pruneWaiting' | 'onSlotFreed'>;
+  /** The bot's one cap on task agents and its wait list; a mention request that answers only bypasses it. */
+  slots: Pick<TaskAgentSlots, 'checkIn' | 'noteStarted' | 'noteStartFailed' | 'dropWaiting' | 'listWaiting' | 'pruneWaiting' | 'onSlotFreed'>;
   /** A hand-over that has to wait for a slot: the short comment saying so (the answer side). Never rejects. */
   postQueuedNotice: (issueKey: string, queue: Extract<TaskAgentSlotDecision, { kind: 'queued' }>) => Promise<void>;
 }
@@ -184,6 +229,14 @@ export function buildJiraTriggerJql(projects: ReadonlyMap<string, JiraProjectTri
   return `project in (${projectKeys}) AND ((${assignedBranch}) OR (comment ~ currentUser() AND updated >= -${windowMinutes}m)) ORDER BY created ASC`;
 }
 
+/** What {@link getNewestCommentId} says of an issue with no comment yet: below every real id, so any later comment is newer. */
+const noCommentId = '0';
+
+/** The newest of `comments` by id — a prompt built from them carried every comment up to it — or {@link noCommentId} for none. */
+function getNewestCommentId(comments: readonly JiraComment[]): string {
+  return comments.reduce((newest, comment) => (compareJiraCommentIds(comment.id, newest) > 0 ? comment.id : newest), noCommentId);
+}
+
 /** The first line of a stored request prompt names its request: `[Request req_… · from: …]`. */
 const storedPromptRequestIdPattern = /^\[Request (req_[A-Za-z0-9_-]+) · /;
 /** How many mention prompts can be rebuilt at delivery at once (each keeps its issue in memory). */
@@ -201,8 +254,10 @@ export class JiraInbound {
   private failureCount = 0;
   /** Issues whose last request's post has not settled yet. */
   private readonly postingIssueKeys = new Set<string>();
-  /** Per issue, its `updated` as of the last mention scan that decided every comment — in memory only: a restart scans once more. */
+  /** Per issue, its `updated` as of the last comment or mention scan that decided every comment — in memory only: a restart scans once more. */
   private readonly lastUpdatedByIssue = new Map<string, string>();
+  /** Per issue, the issue updates in a row that did not reach the session, and when the next may be tried — in memory only. */
+  private readonly updateRetries = new Map<string, { failureCount: number; retryAt: number }>();
   /**
    * The mention requests whose stored prompt can be rebuilt with the hand-over requests that are open NOW, by request id —
    * in memory only (a restart leaves the stored text, whose wording holds on its own) and bounded: an entry of a request
@@ -299,14 +354,18 @@ export class JiraInbound {
       });
       for (const issue of page.issues) {
         returnedIssueKeys.add(issue.key);
-        const decision = await this.getDecisionSafely(issue);
-        decisions.set(issue.key, decision);
-        if (mentionWindowMs !== null && decision !== 'notAllowed') {
-          for (const [decisionKey, mentionDecision] of await this.getMentionDecisionsSafely(issue)) decisions.set(decisionKey, mentionDecision);
-        }
+        for (const [decisionKey, decision] of await this.decideIssue(issue, mentionWindowMs)) decisions.set(decisionKey, decision);
       }
       nextPageToken = page.isLast ? undefined : (page.nextPageToken ?? undefined);
     } while (nextPageToken);
+    // An acting mention that waits for a slot may be older than the search's window by now: its issue is read by its key.
+    for (const { issueKey } of this.listWaitingMentions()) {
+      if (returnedIssueKeys.has(issueKey)) continue;
+      // Kept in the list even when the read fails: a Jira hiccup must not cost the place.
+      returnedIssueKeys.add(issueKey);
+      const issue = await this.readWaitingIssue(issueKey);
+      if (issue) for (const [decisionKey, decision] of await this.decideIssue(issue, mentionWindowMs)) decisions.set(decisionKey, decision);
+    }
     // An issue that left the results is read from scratch if it comes back; the seen-log keeps that from waking twice.
     for (const issueKey of this.lastUpdatedByIssue.keys()) {
       if (!returnedIssueKeys.has(issueKey)) this.lastUpdatedByIssue.delete(issueKey);
@@ -329,6 +388,74 @@ export class JiraInbound {
     return this.deps.isMentionWakeOn && this.deps.trust !== null ? getJiraMentionWindowMs(this.deps.pollIntervalMs) : null;
   }
 
+  /** Comment wakes are on and can judge someone (a trusted group read). */
+  private checkIsCommentWakeOn(): boolean {
+    return this.deps.isCommentWakeOn && this.deps.trust !== null;
+  }
+
+  /** Handed to the AI account: assigned to it, in one of its project's trigger statuses. */
+  private checkIsHanded(issue: JiraIssue, project: JiraProjectTrigger): boolean {
+    const statusId = issue.fields.status?.id;
+    return issue.fields.assignee?.accountId === this.deps.aiAccountId && statusId !== undefined && project.triggerStatusIds.has(statusId);
+  }
+
+  /**
+   * Every decision one returned issue gets in a poll: the hand-over's, then — with comment wakes on and the issue handed
+   * to the AI, once its hand-over is seen — its new comments', else — with mention wakes on — its mentions'.
+   */
+  private async decideIssue(issue: JiraIssue, mentionWindowMs: number | null): Promise<Map<string, JiraIssueDecision>> {
+    const decisions = new Map<string, JiraIssueDecision>();
+    const decision = await this.getDecisionSafely(issue);
+    decisions.set(issue.key, decision);
+    const project = this.getAllowlistedProject(issue);
+    if (decision === 'notAllowed' || !project) return decisions;
+    const key = makeJiraKey(issue.key);
+    if (this.checkIsCommentWakeOn() && this.checkIsHanded(issue, project)) {
+      // A mention on a handed issue is a comment like any other: a mention still waiting for a slot gives its place up.
+      this.deps.slots.dropWaiting(key, (triggerId) => triggerId.startsWith(mentionTriggerIdPrefix));
+      if (decision === 'seen') for (const [decisionKey, commentDecision] of await this.getCommentDecisionsSafely(issue, project)) decisions.set(decisionKey, commentDecision);
+      return decisions;
+    }
+    if (mentionWindowMs !== null) {
+      for (const [decisionKey, mentionDecision] of await this.getMentionDecisionsSafely(issue)) decisions.set(decisionKey, mentionDecision);
+    } else {
+      // Mention wakes went off (a restart with another jira.json): a mention that waited for a slot can never start.
+      this.deps.slots.dropWaiting(key, (triggerId) => triggerId.startsWith(mentionTriggerIdPrefix));
+    }
+    return decisions;
+  }
+
+  /** The acting mentions that wait for a task-agent slot, oldest first: each issue's key and its `mention:<id>` trigger. */
+  private listWaitingMentions(): Array<{ issueKey: string; triggerId: string }> {
+    return this.deps.slots.listWaiting('jira')
+      .filter((entry) => entry.triggerId.startsWith(mentionTriggerIdPrefix))
+      .map((entry) => ({ issueKey: entry.key.thread, triggerId: entry.triggerId }));
+  }
+
+  /** The trigger `key`'s conversation waits for a slot with, when it starts with `prefix`; else `null`. */
+  private getWaitingTriggerId(key: SessionKey, prefix: string): string | null {
+    return this.deps.slots.listWaiting('jira').find((entry) => entry.key.thread === key.thread && entry.triggerId.startsWith(prefix))?.triggerId ?? null;
+  }
+
+  /**
+   * The issue of a waiting acting mention, read by its key with the search's fields; `null` when it could not be read. An
+   * issue Jira no longer has (deleted, or moved out of reach) gives its place up.
+   */
+  private async readWaitingIssue(issueKey: string): Promise<JiraIssue | null> {
+    try {
+      return await this.deps.client.getIssue(issueKey, jiraSearchFields);
+    } catch (error) {
+      if (error instanceof JiraAuthError) throw error;
+      if (error instanceof JiraHttpError && error.status === 404) {
+        console.log(`[jira] ${issueKey}: the issue of a mention waiting for a slot is gone; its place is dropped`);
+        this.deps.slots.dropWaiting(makeJiraKey(issueKey), (triggerId) => triggerId.startsWith(mentionTriggerIdPrefix));
+        return null;
+      }
+      console.warn(`[jira] ${issueKey}: the issue of a mention waiting for a slot could not be read: ${error instanceof Error ? error.message : String(error)}`);
+      return null;
+    }
+  }
+
   /**
    * Runs `run`: a refused token propagates (it stops polling); any other failure is one warning naming the issue and
    * `what` failed, and the answer is `fallback` — the next poll tries again.
@@ -345,7 +472,12 @@ export class JiraInbound {
 
   private async getDecisionSafely(issue: JiraIssue): Promise<JiraIssueDecision> {
     const decision = await this.runOrWarn(issue.key, '', () => this.getDecision(issue), 'failed');
-    if (waitEndingDecisions.has(decision)) this.deps.slots.dropWaiting(makeJiraKey(issue.key));
+    // A hand-over's place: its own decision ends it. A comment's request waits only while the issue is handed; a mention's
+    // place is its own scan's to end.
+    if (waitEndingDecisions.has(decision)) {
+      this.deps.slots.dropWaiting(makeJiraKey(issue.key), (triggerId) =>
+        checkIsHandOverTriggerId(triggerId) || (decision === 'notMatching' && triggerId.startsWith(commentTriggerIdPrefix)));
+    }
     return decision;
   }
 
@@ -410,7 +542,8 @@ export class JiraInbound {
   /**
    * @description The comments of `issue` that mention the AI account and were not decided yet, each decided once
    * (oldest first). Skipped altogether while the issue's `updated` is what the last complete scan saw, and while
-   * a request of the issue is being posted (the next poll takes the rest: one request is posted at a time).
+   * a request of the issue is being posted (the next poll takes the rest: one request is posted at a time). A mention
+   * waiting for a task-agent slot is scanned at every poll and stays in, outside the window too, until it is decided.
    */
   private async getMentionDecisions(issue: JiraIssue): Promise<Map<string, JiraIssueDecision>> {
     const { deps } = this;
@@ -418,18 +551,29 @@ export class JiraInbound {
     const project = this.getAllowlistedProject(issue);
     const { trust } = deps;
     if (!project || !trust) return decisions;
+    const key = makeJiraKey(issue.key);
+    const waitingTriggerId = this.getWaitingTriggerId(key, mentionTriggerIdPrefix);
     const { updated } = issue.fields;
-    if (updated !== undefined && this.lastUpdatedByIssue.get(issue.key) === updated) return decisions;
+    const isRescanDue = waitingTriggerId !== null || this.updateRetries.has(issue.key);
+    if (!isRescanDue && updated !== undefined && this.lastUpdatedByIssue.get(issue.key) === updated) return decisions;
     if (this.postingIssueKeys.has(issue.key)) return decisions;
+    if (this.checkIsUpdateRetryPending(issue.key)) return decisions;
     const comments = await deps.client.getRecentComments(issue.key, jiraMentionScanCommentCount);
     // The whole window every time, not "since the last scan": a comment that became visible a moment after a scan
     // is still inside it, and the seen-log makes the overlap harmless.
     const windowStartMs = deps.now() - getJiraMentionWindowMs(deps.pollIntervalMs);
+    const checkIsDecided = (comment: JiraComment): boolean => deps.triggerLog.checkIsSeen(issue.key, `${mentionTriggerIdPrefix}${comment.id}`)
+      || deps.triggerLog.checkIsSeen(issue.key, `${commentTriggerIdPrefix}${comment.id}`);
+    // A waiting mention whose comment is gone, or was decided meanwhile, waits no more.
+    if (waitingTriggerId !== null && !comments.some((comment) => `${mentionTriggerIdPrefix}${comment.id}` === waitingTriggerId && !checkIsDecided(comment))) {
+      deps.slots.dropWaiting(key, (triggerId) => triggerId === waitingTriggerId);
+    }
     const undecidedMentions = comments
       .filter((comment) => comment.author?.accountId !== deps.aiAccountId
-        && Math.max(Date.parse(comment.created), Date.parse(comment.updated ?? comment.created)) >= windowStartMs
+        && (Math.max(Date.parse(comment.created), Date.parse(comment.updated ?? comment.created)) >= windowStartMs
+          || `${mentionTriggerIdPrefix}${comment.id}` === waitingTriggerId)
         && getMentionedAccountIds(comment.body).includes(deps.aiAccountId)
-        && !deps.triggerLog.checkIsSeen(issue.key, `${mentionTriggerIdPrefix}${comment.id}`))
+        && !checkIsDecided(comment))
       .sort((left, right) => Date.parse(left.created) - Date.parse(right.created));
     let isEveryMentionDecided = true;
     for (const comment of undecidedMentions) {
@@ -439,15 +583,21 @@ export class JiraInbound {
       }
       const decision = await this.getMentionDecisionSafely(issue, project, comment, trust);
       decisions.set(`${issue.key}${mentionDecisionKeySeparator}${mentionTriggerIdPrefix}${comment.id}`, decision);
-      if (decision === 'failed') isEveryMentionDecided = false;
+      if (undecidedDecisions.has(decision)) isEveryMentionDecided = false;
     }
     if (isEveryMentionDecided && updated !== undefined) this.lastUpdatedByIssue.set(issue.key, updated);
     return decisions;
   }
 
-  /** One comment failing (the issue could not be read for its prompt, say) leaves the others' decisions standing; the next poll retries it. */
-  private getMentionDecisionSafely(issue: JiraIssue, project: JiraProjectTrigger, comment: JiraComment, trust: JiraTrust): Promise<JiraIssueDecision> {
-    return this.runOrWarn(issue.key, `mention in comment ${comment.id}: `, () => this.getMentionDecision(issue, project, comment, trust), 'failed');
+  /**
+   * One comment failing (the issue could not be read for its prompt, say) leaves the others' decisions standing; the next poll
+   * retries it. A mention that waited for a slot and is decided now — started, or refused, parked or turned into an update —
+   * gives its place up.
+   */
+  private async getMentionDecisionSafely(issue: JiraIssue, project: JiraProjectTrigger, comment: JiraComment, trust: JiraTrust): Promise<JiraIssueDecision> {
+    const decision = await this.runOrWarn(issue.key, `mention in comment ${comment.id}: `, () => this.getMentionDecision(issue, project, comment, trust), 'failed');
+    if (!undecidedDecisions.has(decision)) this.deps.slots.dropWaiting(makeJiraKey(issue.key), (triggerId) => triggerId === `${mentionTriggerIdPrefix}${comment.id}`);
+    return decision;
   }
 
   private async getMentionDecision(
@@ -468,16 +618,17 @@ export class JiraInbound {
       console.log(`[jira] ${issue.key}: the mention in comment ${comment.id} is ignored: its author or last editor is outside the trusted group`);
       return 'untrusted';
     }
-    // D9: the requester of an open hand-over request already has the agent on this issue; their comment reaches that
-    // run (a delta, or the news). A request of their own would supersede it and strip its hand-back. A hand-over
-    // request with NO requester is superseded by ANY next request of the conversation (`requestLedger.ts`), so while
-    // one is open every mention is covered by it.
+    // D9: the requester of an open hand-over request already has the agent on this issue; a request of their own would
+    // supersede it and strip its hand-back. A hand-over request with NO requester is superseded by ANY next request of
+    // the conversation (`requestLedger.ts`), so while one is open every mention belongs to it. With comment wakes on the
+    // comment reaches that run as an issue update; with them off it is `covered`: recorded, nothing posted.
     const requesterAccountId = comment.author?.accountId;
     const isCovered = deps.listOpenRequests(makeJiraKey(issue.key)).some((request) => {
       const openRequester = getRequestRequester(request.origin);
-      return request.origin.kind === 'trackerEvent' && (openRequester === requesterAccountId || openRequester === emptyRequester);
+      return request.origin.kind === 'trackerEvent' && !request.isWakeStopped && (openRequester === requesterAccountId || openRequester === emptyRequester);
     });
-    if (isCovered) return record('covered') ? 'covered' : 'failed';
+    if (isCovered && !this.checkIsCommentWakeOn()) return record('covered') ? 'covered' : 'failed';
+    if (isCovered) return this.postIssueUpdate(issue, project, [comment], mentionTriggerIdPrefix, at);
     if (deps.triggerLog.getRequestCountLastDay(issue.key, at) >= deps.runBudgetPer24h) {
       // D10: the notice is posted at most once per issue per rolling 24 h; later over-budget mentions are recorded silently.
       const isNoticeDue = !deps.triggerLog.checkIsMentionParkNoticePostedLastDay(issue.key, at);
@@ -485,7 +636,256 @@ export class JiraInbound {
       if (isNoticeDue) await deps.parkMention(issue.key);
       return 'parked';
     }
+    // An acting mention may start a build: it takes a task-agent slot like a hand-over (and waits for one past the cap).
+    if (deps.mentionMode === 'act') return this.openRequestInSlot(issue, project, trigger, comment.author ?? null, at);
     return this.openRequest(issue, project, trigger, comment.author ?? null, at);
+  }
+
+  /**
+   * Open the request of `trigger` in a free task-agent slot; past the cap the conversation joins the bot's wait list — told
+   * once with the queued notice, its trigger unrecorded, decided again by every poll until it is first in the list.
+   */
+  private async openRequestInSlot(
+    issue: JiraIssue,
+    project: JiraProjectTrigger,
+    trigger: JiraIssueTrigger,
+    requester: JiraAccount | null,
+    at: number,
+    extraRecords: readonly JiraTriggerRecord[] = [],
+  ): Promise<JiraIssueDecision> {
+    const { deps } = this;
+    const key = makeJiraKey(issue.key);
+    const slot = await deps.slots.checkIn(key, trigger.triggerId);
+    if (slot.kind === 'queued') {
+      if (!slot.isNewlyQueued) return 'waiting';
+      await deps.postQueuedNotice(issue.key, slot);
+      return 'queued';
+    }
+    try {
+      const decision = await this.openRequest(issue, project, trigger, requester, at, extraRecords);
+      deps.slots.noteStarted(key);
+      return decision;
+    } catch (error) {
+      deps.slots.noteStartFailed(key);
+      throw error;
+    }
+  }
+
+  private getCommentDecisionsSafely(issue: JiraIssue, project: JiraProjectTrigger): Promise<Map<string, JiraIssueDecision>> {
+    const failed = new Map<string, JiraIssueDecision>([[`${issue.key}${mentionDecisionKeySeparator}comment`, 'failed']]);
+    return this.runOrWarn(issue.key, 'comment scan: ', () => this.getCommentDecisions(issue, project), failed);
+  }
+
+  /**
+   * @description The new comments of an issue HANDED to the AI account (its hand-over seen), decided in one go: the trusted
+   * people's reach its agent — as ONE issue update of the open hand-over request, else as ONE request of their own —
+   * the others are recorded `untrusted` (silent), and an app's or an automation's ride the next prompt. Skipped while the
+   * issue's `updated` is what the last complete scan saw (unless a comment's request waits for a slot: then every poll
+   * decides it again), while a post of the issue is in flight, and while a failed update waits for its retry.
+   */
+  private async getCommentDecisions(issue: JiraIssue, project: JiraProjectTrigger): Promise<Map<string, JiraIssueDecision>> {
+    const { deps } = this;
+    const decisions = new Map<string, JiraIssueDecision>();
+    const { trust } = deps;
+    if (!trust) return decisions;
+    const key = makeJiraKey(issue.key);
+    // Read again whatever `updated` says while a comment's request waits for a slot, or a failed update waits for its retry.
+    const isRescanDue = this.getWaitingTriggerId(key, commentTriggerIdPrefix) !== null || this.updateRetries.has(issue.key);
+    const { updated } = issue.fields;
+    if (!isRescanDue && updated !== undefined && this.lastUpdatedByIssue.get(issue.key) === updated) return decisions;
+    if (this.postingIssueKeys.has(issue.key) || this.checkIsUpdateRetryPending(issue.key)) return decisions;
+    const comments = await deps.client.getRecentComments(issue.key, jiraMentionScanCommentCount);
+    const at = deps.now();
+    const newComments = comments
+      .filter((comment) => comment.author?.accountId !== deps.aiAccountId
+        && this.checkIsCommentNewToConversation(issue.key, comment)
+        && !deps.triggerLog.checkIsSeen(issue.key, `${commentTriggerIdPrefix}${comment.id}`)
+        && !deps.triggerLog.checkIsSeen(issue.key, `${mentionTriggerIdPrefix}${comment.id}`))
+      .sort((left, right) => compareJiraCommentIds(left.id, right.id));
+    const counted: JiraComment[] = [];
+    let isEveryCommentDecided = true;
+    for (const comment of newComments) {
+      // An app's or an automation's comment (a pipeline notice, a rule) wakes nothing: it rides the next prompt.
+      if (!comment.author || !checkIsPersonAccount(comment.author)) continue;
+      const decisionKey = `${issue.key}${mentionDecisionKeySeparator}${commentTriggerIdPrefix}${comment.id}`;
+      // The same rule as for the comment's text: its author AND its last editor. Recorded, logged once, nothing posted.
+      if (!checkIsCommentTrusted(comment, trust)) {
+        const isRecorded = this.recordOrWarn({ issueKey: issue.key, triggerId: `${commentTriggerIdPrefix}${comment.id}`, outcome: 'untrusted', at });
+        if (isRecorded) console.log(`[jira] ${issue.key}: comment ${comment.id} does not wake the AI: its author or last editor is outside the trusted group`);
+        else isEveryCommentDecided = false;
+        decisions.set(decisionKey, isRecorded ? 'untrusted' : 'failed');
+        continue;
+      }
+      counted.push(comment);
+    }
+    if (counted.length > 0) {
+      const newest = counted[counted.length - 1];
+      const decision = await this.runOrWarn(issue.key, `comments ${counted.map((comment) => comment.id).join(', ')}: `, () => this.deliverComments(issue, project, counted, at), 'failed');
+      decisions.set(`${issue.key}${mentionDecisionKeySeparator}${commentTriggerIdPrefix}${newest.id}`, decision);
+      if (undecidedDecisions.has(decision)) isEveryCommentDecided = false;
+    }
+    if (isEveryCommentDecided && updated !== undefined) this.lastUpdatedByIssue.set(issue.key, updated);
+    return decisions;
+  }
+
+  /**
+   * Is `comment` new to the issue's conversation? Newer than every comment a recorded prompt of the issue was built from
+   * (the trigger log's watermark — it survives a restart, a compaction and a fresh session) or the conversation was shown.
+   * With neither (decisions recorded before the watermark was): not shown, and written after the issue's last decision.
+   */
+  private checkIsCommentNewToConversation(issueKey: string, comment: JiraComment): boolean {
+    const { deps } = this;
+    const recordedId = deps.triggerLog.getNewestShownCommentId(issueKey);
+    if (recordedId !== null) return compareJiraCommentIds(comment.id, recordedId) > 0;
+    if (deps.contextLedger.getShownBlock(issueKey, `${commentTriggerIdPrefix}${comment.id}`)) return false;
+    const lastDecidedAt = deps.triggerLog.getLastDecidedAt(issueKey);
+    return lastDecidedAt !== null && Date.parse(comment.created) > lastDecidedAt;
+  }
+
+  /** The hand-over requests of the conversation that are open and not given up — what an update can belong to. */
+  private listOpenHandOverRequests(key: SessionKey): Array<Pick<OpenRequestState, 'id' | 'origin'>> {
+    return this.deps.listOpenRequests(key).filter((request) => request.origin.kind === 'trackerEvent' && !request.isWakeStopped);
+  }
+
+  /**
+   * The trusted comments `counted` (oldest first) of a handed issue: an issue update when a hand-over request is open, else
+   * a request of their own — the newest comment's trigger, its author the requester — through the run budget and a slot.
+   */
+  private async deliverComments(issue: JiraIssue, project: JiraProjectTrigger, counted: readonly JiraComment[], at: number): Promise<JiraIssueDecision> {
+    const { deps } = this;
+    const key = makeJiraKey(issue.key);
+    if (this.listOpenHandOverRequests(key).length > 0) {
+      // A comment's request that waited for a slot is no longer needed: the hand-over that opened since carries it.
+      deps.slots.dropWaiting(key, (triggerId) => triggerId.startsWith(commentTriggerIdPrefix));
+      return this.postIssueUpdate(issue, project, counted, commentTriggerIdPrefix, at);
+    }
+    const newest = counted[counted.length - 1];
+    const trigger = createCommentTrigger(counted.map((comment) => comment.id), newest.author ?? null);
+    const requester = newest.author ?? null;
+    const olderRecords = counted.slice(0, -1).map((comment): JiraTriggerRecord => ({ issueKey: issue.key, triggerId: `${commentTriggerIdPrefix}${comment.id}`, outcome: 'update', at }));
+    if (deps.triggerLog.getRequestCountLastDay(issue.key, at) >= deps.runBudgetPer24h) {
+      // Recorded first, as a hand-over's park: the notice and the hand-back go out at most once.
+      const records = [...olderRecords.map((record) => ({ ...record, outcome: 'parked' as const })), { issueKey: issue.key, triggerId: trigger.triggerId, outcome: 'parked' as const, at }];
+      if (!records.every((record) => this.recordOrWarn(record))) return 'failed';
+      await deps.parkIssue(issue.key, requester);
+      return 'parked';
+    }
+    return this.openRequestInSlot(issue, project, trigger, requester, at, olderRecords);
+  }
+
+  /** A failed issue update of the issue waits for its retry. */
+  private checkIsUpdateRetryPending(issueKey: string): boolean {
+    const retry = this.updateRetries.get(issueKey);
+    return retry !== undefined && this.deps.now() < retry.retryAt;
+  }
+
+  /**
+   * @description Post an ISSUE UPDATE: the comments `comments` (trigger ids `prefix` + id: a comment's, or a mention's)
+   * reach the agent inside an open hand-over request of the conversation — no request is opened. Which request is
+   * settled right before the forward (the post may have waited behind a running turn): the commenter's own open one,
+   * else one with no requester, else the newest; when every hand-over finished meanwhile, the one the update was meant
+   * for, named as finished — the comment still reaches the agent, and its answer becomes a comment. The text is the
+   * issue's delta (or the whole issue for a session that does not know it). Recorded once the post settled; a post that
+   * failed is decided again after a backoff. Not awaited: the issue is skipped until the post settles.
+   */
+  private async postIssueUpdate(issue: JiraIssue, project: JiraProjectTrigger, comments: readonly JiraComment[], prefix: string, at: number): Promise<JiraIssueDecision> {
+    const { deps } = this;
+    const { trust } = deps;
+    const context = await fetchJiraIssueContext(deps.client, issue.key, project.extraFields.map((extraField) => extraField.id), trust !== null);
+    const blockTrust: JiraBlockTrust | null = trust && {
+      checkIsTrusted: (account) => trust.checkIsTrusted(account),
+      allowlistedProjectKeys: new Set(deps.projects.keys()),
+    };
+    const blocks = buildIssueBlocks(context, project.extraFields, deps.aiAccountId, blockTrust);
+    deps.noteShownSummary?.(issue.key, getShownIssueSummary(context, blockTrust));
+    const key = makeJiraKey(issue.key);
+    const commenterAccountId = comments[comments.length - 1].author?.accountId;
+    const newComments: JiraNewComment[] = comments.map((comment) => ({ commentId: comment.id, author: comment.author ?? null }));
+    /** The hand-overs open now and not given up, named from the issue's data. */
+    const getActiveHandOvers = (): JiraOpenHandOver[] => {
+      const activeIds = new Set(this.listOpenHandOverRequests(key).map((request) => request.id));
+      return this.getOpenHandOvers(key, context).filter((handOver) => activeIds.has(handOver.requestId));
+    };
+    const pickTarget = (): JiraOpenHandOver | null => {
+      const requests = this.listOpenHandOverRequests(key);
+      const handOvers = getActiveHandOvers();
+      const findBy = (requesterId: string | undefined): JiraOpenHandOver | undefined =>
+        handOvers.find((handOver) => requests.some((request) => request.id === handOver.requestId && getRequestRequester(request.origin) === requesterId));
+      return findBy(commenterAccountId) ?? findBy(emptyRequester) ?? handOvers[handOvers.length - 1] ?? null;
+    };
+    const firstTarget = pickTarget();
+    if (!firstTarget) throw new Error('no hand-over request is open for the update');
+    let target = firstTarget;
+    const getBase = (): JiraUpdatePromptBase => {
+      const now = pickTarget();
+      if (now) target = now;
+      return {
+        issueKey: issue.key,
+        issueUrl: `${deps.siteUrl.replace(/\/+$/, '')}/browse/${issue.key}`,
+        target: { ...target, isOpen: now !== null },
+        openHandOvers: getActiveHandOvers(),
+        comments: newComments,
+        isTextFiltered: trust !== null,
+      };
+    };
+    const fitted = await fitBlocksToPrompt({
+      blocks,
+      textDir: deps.getSpillDir(key),
+      measure: (candidate) => buildJiraUpdatePrompt({ ...getBase(), ...candidate }).length,
+    });
+    const newestCommentId = getNewestCommentId(context.comments);
+    const prompt: SessionPromptText = {
+      fullText: buildJiraUpdatePrompt({ ...getBase(), ...fitted }),
+      buildText: ({ isFresh }) => {
+        const base = getBase();
+        const snapshot = deps.contextLedger.getSnapshot(issue.key);
+        const isWhole = isFresh || Object.keys(snapshot.sent).length === 0;
+        const delta = getIssueDelta(fitted.blocks, isWhole ? {} : snapshot.sent);
+        // Counted as sent once the request it belongs to takes it in, or is closed by its answer (C4).
+        deps.contextLedger.recordBuild(issue.key, base.target.requestId, snapshot.generation, delta.sent);
+        return isWhole ? buildJiraUpdatePrompt({ ...base, ...fitted }) : buildJiraUpdatePrompt({ ...base, delta });
+      },
+    };
+    this.postingIssueKeys.add(issue.key);
+    void this.postUpdateAndRecord(key, issue.key, prompt, () => target.requestId, (requestId) => comments.map((comment) => ({
+      issueKey: issue.key,
+      triggerId: `${prefix}${comment.id}`,
+      outcome: 'update',
+      at,
+      requestId,
+      newestCommentId,
+    })));
+    return 'update';
+  }
+
+  /**
+   * Post the update, then record its comments — only when it reached the session (or a usage-limit wait holds it): an
+   * update that failed is decided again by a later poll, after a backoff (the session could not be started, say, and a
+   * start per poll would hammer it). Never rejects.
+   */
+  private async postUpdateAndRecord(
+    key: SessionKey,
+    issueKey: string,
+    prompt: SessionPromptText,
+    getTargetRequestId: () => string,
+    createRecords: (requestId: string) => JiraTriggerRecord[],
+  ): Promise<void> {
+    try {
+      await this.deps.postUpdate(key, prompt, getTargetRequestId);
+    } catch (error) {
+      const failureCount = (this.updateRetries.get(issueKey)?.failureCount ?? 0) + 1;
+      const delayMs = getJiraRetryDelayMs(this.deps.pollIntervalMs, failureCount);
+      // Kept until an update of the issue reaches the session: while it is, the issue is scanned again once the wait is over.
+      this.updateRetries.set(issueKey, { failureCount, retryAt: this.deps.now() + delayMs });
+      this.postingIssueKeys.delete(issueKey);
+      console.warn(`[jira] ${issueKey}: an issue update for request ${getTargetRequestId()} was not posted (${error instanceof Error ? error.message : String(error)}); tried again in ${Math.round(delayMs / 1000)} s`);
+      return;
+    }
+    this.updateRetries.delete(issueKey);
+    for (const record of createRecords(getTargetRequestId())) {
+      if (!this.recordOrWarn(record)) this.deps.triggerLog.remember(record);
+    }
+    this.postingIssueKeys.delete(issueKey);
   }
 
   /**
@@ -535,12 +935,17 @@ export class JiraInbound {
     return entry.rebuild();
   };
 
+  /**
+   * Open the request of `trigger` and post it (not awaited); `extraRecords` are recorded with its trigger once the post
+   * settled (the older comments a comment's request carries). Every record names the newest comment the prompt was built from.
+   */
   private async openRequest(
     issue: JiraIssue,
     project: JiraProjectTrigger,
     trigger: JiraIssueTrigger,
     requester: JiraAccount | null,
     at: number,
+    extraRecords: readonly JiraTriggerRecord[] = [],
   ): Promise<JiraIssueDecision> {
     const { deps } = this;
     const { trust } = deps;
@@ -556,6 +961,11 @@ export class JiraInbound {
     const key = makeJiraKey(issue.key);
     const statusId = context.issue.fields.status?.id;
     const isMention = trigger.kind === 'mentioned';
+    const isActingMention = isMention && deps.mentionMode === 'act';
+    const newComments: JiraNewComment[] = (trigger.commentIds ?? []).map((commentId) => ({
+      commentId,
+      author: context.comments.find((comment) => comment.id === commentId)?.author ?? null,
+    }));
     const promptInput = {
       issueKey: issue.key,
       statusName: context.issue.fields.status?.name,
@@ -570,6 +980,8 @@ export class JiraInbound {
       openHandOvers: isMention ? this.getOpenHandOvers(key, context) : [],
       triggerStatusNames: project.triggerStatusNames,
       isTextFiltered: trust !== null,
+      mentionMode: deps.mentionMode,
+      newComments,
     };
     // Rendered and written BEFORE the request opens: the ledger builds the prompt inside its own synchronous update.
     const fitted = await fitBlocksToPrompt({
@@ -588,9 +1000,15 @@ export class JiraInbound {
     // R34: the requester is part of the request's group key — a second person's trigger on the same
     // issue opens a request of its own instead of superseding the first (`requests/requestGroup.ts`).
     const request = await deps.createRequest(key, {
-      // A mention hands nothing over, so its answer never hands anything back: the origin kind is what the sink reads.
-      kind: trigger.kind === 'mentioned' ? 'trackerMention' : 'trackerEvent',
-      attributes: { issueKey: issue.key, triggerId: trigger.triggerId, [requestRequesterAttribute]: requester?.accountId ?? emptyRequester },
+      // A mention hands nothing over, so its answer never hands anything back: the origin kind is what the sink reads. An
+      // acting mention says so in its origin: it holds a task-agent slot like a hand-over.
+      kind: isMention ? 'trackerMention' : 'trackerEvent',
+      attributes: {
+        issueKey: issue.key,
+        triggerId: trigger.triggerId,
+        [requestRequesterAttribute]: requester?.accountId ?? emptyRequester,
+        ...(isActingMention ? { [actingMentionAttribute]: 'true' } : {}),
+      },
     }, createPrompt);
     const supersededRequestIds = request.supersededRequestIds ?? [];
     const fullText = createPrompt(request.id, supersededRequestIds);
@@ -614,7 +1032,11 @@ export class JiraInbound {
     // Not awaited: a busy session may take minutes to take the prompt, and the rest of
     // the poll must not wait for it; until the post settles, the issue is skipped.
     this.postingIssueKeys.add(issue.key);
-    void this.postAndRecord(key, request.id, prompt, { issueKey: issue.key, triggerId: trigger.triggerId, outcome: 'request', at, requestId: request.id });
+    const newestCommentId = getNewestCommentId(context.comments);
+    void this.postAndRecord(key, request.id, prompt, [
+      { issueKey: issue.key, triggerId: trigger.triggerId, outcome: 'request', at, requestId: request.id, newestCommentId },
+      ...extraRecords.map((record) => ({ ...record, requestId: request.id, newestCommentId })),
+    ]);
     return 'request';
   }
 
@@ -625,14 +1047,17 @@ export class JiraInbound {
    * A record that cannot be written is still remembered for this process, so the
    * posted request is never posted again before a restart. Never rejects.
    */
-  private async postAndRecord(key: SessionKey, requestId: string, prompt: SessionPromptText, record: JiraTriggerRecord): Promise<void> {
+  private async postAndRecord(key: SessionKey, requestId: string, prompt: SessionPromptText, records: readonly JiraTriggerRecord[]): Promise<void> {
+    const { issueKey } = records[0];
     try {
       await this.deps.postRequest(key, requestId, prompt);
     } catch (error) {
-      console.warn(`[jira] ${record.issueKey}: request ${requestId} not posted: ${error instanceof Error ? error.message : String(error)}`);
+      console.warn(`[jira] ${issueKey}: request ${requestId} not posted: ${error instanceof Error ? error.message : String(error)}`);
     }
-    if (!this.recordOrWarn(record)) this.deps.triggerLog.remember(record);
-    this.postingIssueKeys.delete(record.issueKey);
+    for (const record of records) {
+      if (!this.recordOrWarn(record)) this.deps.triggerLog.remember(record);
+    }
+    this.postingIssueKeys.delete(issueKey);
   }
 
   private recordOrWarn(record: JiraTriggerRecord): boolean {

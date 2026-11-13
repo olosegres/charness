@@ -1,6 +1,6 @@
 import { keyToString, tryKeyFromString, type PlatformId, type SessionKey } from '../sessionKey';
 import type { RequestLedger } from '../requests/requestLedger';
-import type { ClosedRequestRecord, OpenRequestState, RequestOriginKind } from '../requests/types';
+import type { ClosedRequestRecord, OpenRequestState, RequestOrigin } from '../requests/types';
 import type { StateStore } from '../state';
 import { checkIsTaskAgentLimitRaised, taskAgentsNoLimit } from './taskAgentLimit';
 import type { TaskAgentWaitEntry } from './types';
@@ -10,8 +10,9 @@ import type { TaskAgentWaitEntry } from './types';
  * conversations are working on a hand-over at once, and ONE persisted FIFO list of those that wait for a slot. The cap
  * itself is `taskAgentLimit.ts`; this module is the bookkeeping behind it.
  *
- * A slot is a tracker CONVERSATION with an OPEN hand-over request (origin `trackerEvent`) — one agent, however many people's
- * hand-overs it holds at once; a mention request (answer only) never takes one. The slots in use are read off the request
+ * A slot is a tracker CONVERSATION with an OPEN hand-over request (origin `trackerEvent`), or an open mention request that may
+ * act ({@link actingMentionAttribute}: it may start a build like a hand-over) — one agent, however many people's requests it
+ * holds at once; a mention request that answers only never takes one. The slots in use are read off the request
  * ledger on every question, so nothing about them is stored: a request that closes — an answer, a cancel — frees its slot at
  * once, and a restart cannot get the count wrong. A request the wake-up engine gave up on (`isWakeStopped`: the alert is out
  * and the issue handed back) is not an agent at work and holds no slot either.
@@ -28,8 +29,16 @@ import type { TaskAgentWaitEntry } from './types';
  * moves to the end of the list.
  */
 
-/** The request origin that holds a slot. */
-const slotHoldingOriginKind: RequestOriginKind = 'trackerEvent';
+/**
+ * The origin attribute that marks a tracker mention request (`trackerMention`) whose agent may act on the comment — set to
+ * `'true'` by the connector — so it holds a slot like a hand-over (`trackerEvent`); without it a mention answers only.
+ */
+export const actingMentionAttribute = 'mayAct';
+
+/** @description Whether a request of `origin` holds a task-agent slot: a hand-over, or a mention that may act. */
+export function checkIsSlotHoldingOrigin(origin: Pick<RequestOrigin, 'kind' | 'attributes'>): boolean {
+  return origin.kind === 'trackerEvent' || (origin.kind === 'trackerMention' && origin.attributes[actingMentionAttribute] === 'true');
+}
 
 /** How many starts of one waiting issue may fail in a row before it moves to the end of the wait list. */
 export const taskAgentStartFailureLimit = 3;
@@ -80,7 +89,7 @@ export class TaskAgentSlots {
   private getOccupiedConversationKeys(): Set<string> {
     const occupied = new Set(this.reservedConversationKeys);
     for (const { key, request } of this.deps.ledger.listOpenRequests()) {
-      if (request.origin.kind === slotHoldingOriginKind && !request.isWakeStopped) occupied.add(keyToString(key));
+      if (checkIsSlotHoldingOrigin(request.origin) && !request.isWakeStopped) occupied.add(keyToString(key));
     }
     return occupied;
   }
@@ -155,10 +164,22 @@ export class TaskAgentSlots {
     console.warn(`[tasks] ${conversationKey} failed to start ${taskAgentStartFailureLimit} times in a row; it moves to the end of the wait list`);
   }
 
-  /** @description The conversation no longer waits (its hand-over was withdrawn, refused or handled another way): drop its place. */
-  dropWaiting(key: SessionKey): void {
+  /**
+   * @description The conversation no longer waits (its hand-over was withdrawn, refused or handled another way): drop its place.
+   * `checkIsDropped` narrows it to the waiting trigger it is about (a connector that waits for a slot on more than one kind of
+   * trigger drops only the kind it decided on); absent — whatever waits.
+   */
+  dropWaiting(key: SessionKey, checkIsDropped: (triggerId: string) => boolean = () => true): void {
     const conversationKey = keyToString(key);
-    this.removeWaiting((entry) => entry.conversationKey === conversationKey);
+    this.removeWaiting((entry) => entry.conversationKey === conversationKey && checkIsDropped(entry.triggerId));
+  }
+
+  /** @description The places of `platform`'s conversations in the list, in order: each conversation's key and its waiting trigger. */
+  listWaiting(platform: PlatformId): Array<{ key: SessionKey; triggerId: string }> {
+    return this.deps.store.getTaskAgentWaitList().flatMap((entry) => {
+      const key = tryKeyFromString(entry.conversationKey);
+      return key !== null && key.platform === platform ? [{ key, triggerId: entry.triggerId }] : [];
+    });
   }
 
   /**
@@ -237,7 +258,7 @@ export class TaskAgentSlots {
    * close, so the listeners get the news, not the state: they act after the close completed.
    */
   noteRequestClosed(closed: ClosedRequestRecord): void {
-    if (closed.origin.kind !== slotHoldingOriginKind || closed.closeReason === 'superseded') return;
+    if (!checkIsSlotHoldingOrigin(closed.origin) || closed.closeReason === 'superseded') return;
     this.wakeListenersWhileWaiting();
   }
 
@@ -246,7 +267,7 @@ export class TaskAgentSlots {
    * the same wake-up as a close.
    */
   noteRequestWakeStopped(request: Pick<OpenRequestState, 'origin'>): void {
-    if (request.origin.kind !== slotHoldingOriginKind) return;
+    if (!checkIsSlotHoldingOrigin(request.origin)) return;
     this.wakeListenersWhileWaiting();
   }
 

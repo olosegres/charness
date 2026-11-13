@@ -32,7 +32,7 @@ export class JiraConnectorStartError extends Error {
 }
 
 /** What the connector needs from the core to open and post requests. */
-export type JiraConnectorSessionDeps = Pick<JiraInboundDeps, 'bindConversation' | 'createRequest' | 'postRequest' | 'listOpenRequests' | 'slots'>;
+export type JiraConnectorSessionDeps = Pick<JiraInboundDeps, 'bindConversation' | 'createRequest' | 'postRequest' | 'postUpdate' | 'listOpenRequests' | 'slots'>;
 
 export interface JiraConnector {
   /** The backend Jira sessions run on (D16, R14). */
@@ -196,14 +196,27 @@ export function getJiraTrustedAppsWarning(config: Pick<JiraConfig, 'trustedGroup
 
 /** Logged at boot: what an @-mention of the AI account does on this instance. */
 export const jiraMentionWakeOnLogLine = '[jira] mentions of the AI account in a comment wake it (answer only)';
+export const jiraMentionWakeActLogLine = '[jira] mentions of the AI account in a comment wake it (act on explicit asks)';
 export const jiraMentionWakeNoGroupLogLine = '[jira] no trustedGroup: mentions of the AI account do not wake it';
 export const jiraMentionWakeOffLogLine = '[jira] wakeOnMention is off: mentions of the AI account do not wake it';
 
-/** @description The boot line that says whether mentions wake the AI on this instance, and why not when they do not. */
-export function getJiraMentionWakeLogLine(config: Pick<JiraConfig, 'isMentionWakeOn' | 'trustedGroupName' | 'wakeOnMentionSetting'>): string {
-  if (config.isMentionWakeOn) return jiraMentionWakeOnLogLine;
+/** @description The boot line that says whether mentions wake the AI on this instance (and what they ask of it), and why not when they do not. */
+export function getJiraMentionWakeLogLine(config: Pick<JiraConfig, 'isMentionWakeOn' | 'trustedGroupName' | 'wakeOnMentionSetting' | 'mentionMode'>): string {
+  if (config.isMentionWakeOn) return config.mentionMode === 'act' ? jiraMentionWakeActLogLine : jiraMentionWakeOnLogLine;
   if (config.wakeOnMentionSetting === false) return jiraMentionWakeOffLogLine;
   return config.trustedGroupName === null ? jiraMentionWakeNoGroupLogLine : jiraMentionWakeOffLogLine;
+}
+
+/** Logged at boot: whether a comment on an issue handed to the AI account reaches its agent on this instance. */
+export const jiraCommentWakeOnLogLine = '[jira] a trusted person\'s comment on an issue handed to the AI account reaches its agent';
+export const jiraCommentWakeNoGroupLogLine = '[jira] no trustedGroup: a comment on an issue handed to the AI account does not wake it';
+export const jiraCommentWakeOffLogLine = '[jira] wakeOnComment is off: a comment on an issue handed to the AI account waits for its next request';
+
+/** @description The boot line that says whether comments on a handed issue reach its agent, and why not when they do not. */
+export function getJiraCommentWakeLogLine(config: Pick<JiraConfig, 'isCommentWakeOn' | 'trustedGroupName' | 'wakeOnCommentSetting'>): string {
+  if (config.isCommentWakeOn) return jiraCommentWakeOnLogLine;
+  if (config.wakeOnCommentSetting === false) return jiraCommentWakeOffLogLine;
+  return config.trustedGroupName === null ? jiraCommentWakeNoGroupLogLine : jiraCommentWakeOffLogLine;
 }
 
 /** The start-of-polling log line that carries the poll's JQL. */
@@ -239,6 +252,7 @@ export async function prepareJiraConnector(context: {
   const trustedAppsWarning = getJiraTrustedAppsWarning(config);
   if (trustedAppsWarning !== null) console.warn(trustedAppsWarning);
   console.log(getJiraMentionWakeLogLine(config));
+  console.log(getJiraCommentWakeLogLine(config));
 
   const triggerLog = JiraTriggerLog.createForDataDir(path.join(context.dataDir, jiraTriggerLogFileName));
   await triggerLog.load();
@@ -300,6 +314,8 @@ export async function prepareJiraConnector(context: {
       triggerLog,
       trust,
       isMentionWakeOn: config.isMentionWakeOn,
+      mentionMode: config.mentionMode,
+      isCommentWakeOn: config.isCommentWakeOn,
       now,
       parkIssue: (issueKey, requester) => answerSink.parkIssue(issueKey, requester),
       refuseUntrusted: (issueKey, requester, groupName) => answerSink.refuseUntrusted(issueKey, requester, groupName),

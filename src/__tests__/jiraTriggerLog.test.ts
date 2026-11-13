@@ -13,6 +13,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { JiraTriggerLog, jiraTriggerLogFileName } from '../connectors/jira/triggerLog';
+import { compareJiraCommentIds } from '../connectors/jira/trigger';
 
 const hourMs = 60 * 60 * 1000;
 const nowMs = Date.parse('2026-10-03T12:00:00Z');
@@ -54,6 +55,39 @@ describe('JiraTriggerLog', () => {
     log.record({ issueKey: 'PROJ-13', triggerId: '5', outcome: 'request', at: nowMs - hourMs });
     assert.equal(log.getRequestCountLastDay('PROJ-12', nowMs), 1);
     assert.equal((await createLoadedLog()).getRequestCountLastDay('PROJ-12', nowMs), 1, 'the same after a reload');
+  });
+
+  it('a comment delivered as an issue update is seen and counts for nothing; a `covered` line of an older log still reads', async () => {
+    fs.writeFileSync(logPath, `${JSON.stringify({ issueKey: 'PROJ-12', triggerId: 'mention:10239', outcome: 'covered', at: nowMs - hourMs })}\n`);
+    const log = await createLoadedLog();
+    assert.equal(log.record({ issueKey: 'PROJ-12', triggerId: 'comment:10240', outcome: 'update', at: nowMs, requestId: 'req_1', newestCommentId: '10240' }), true);
+    const reloaded = await createLoadedLog();
+    assert.equal(reloaded.checkIsSeen('PROJ-12', 'comment:10240'), true);
+    assert.equal(reloaded.checkIsSeen('PROJ-12', 'mention:10239'), true);
+    assert.equal(reloaded.getRequestCountLastDay('PROJ-12', nowMs), 0);
+  });
+
+  it('the newest comment a recorded prompt was built from: the greatest id of the issue\'s lines (by number, not text), kept across a restart; none recorded — null', async () => {
+    const log = await createLoadedLog();
+    assert.equal(log.getNewestShownCommentId('PROJ-12'), null);
+    assert.equal(log.getLastDecidedAt('PROJ-12'), null);
+    log.record({ issueKey: 'PROJ-12', triggerId: '100', outcome: 'request', at: nowMs - hourMs, newestCommentId: '9990' });
+    log.record({ issueKey: 'PROJ-12', triggerId: 'comment:10240', outcome: 'update', at: nowMs, newestCommentId: '10240' });
+    // A line recorded later but built from an older fetch (a slow post) never moves the mark back.
+    log.record({ issueKey: 'PROJ-12', triggerId: 'mention:10100', outcome: 'request', at: nowMs - 2 * hourMs, newestCommentId: '10100' });
+    log.record({ issueKey: 'PROJ-13', triggerId: '200', outcome: 'request', at: nowMs, newestCommentId: '0' });
+    const reloaded = await createLoadedLog();
+    assert.equal(reloaded.getNewestShownCommentId('PROJ-12'), '10240', '10240 > 10100 > 9990 although "9990" > "10240" as text');
+    assert.equal(reloaded.getNewestShownCommentId('PROJ-13'), '0', 'a prompt of an issue with no comment yet: any comment is newer');
+    assert.equal(reloaded.getLastDecidedAt('PROJ-12'), nowMs);
+  });
+
+  it('comment ids compare as numbers of any length', () => {
+    assert.ok(compareJiraCommentIds('10240', '9990') > 0);
+    assert.ok(compareJiraCommentIds('9990', '10240') < 0);
+    assert.equal(compareJiraCommentIds('10240', '10240'), 0);
+    assert.ok(compareJiraCommentIds('5001', '0') > 0);
+    assert.ok(compareJiraCommentIds('123456789012345678901', '99999999999999999999') > 0, 'beyond what a number holds exactly');
   });
 
   it('an untrusted trigger is seen — after a restart too — and never counts against the budget', async () => {

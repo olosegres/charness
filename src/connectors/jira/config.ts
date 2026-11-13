@@ -32,6 +32,18 @@ export const jiraDefaultEffort: ClaudeEffortLevel = 'high';
 export const wakeOnMentionNeedsGroupError =
   'jira.json wakeOnMention needs trustedGroup: without a group, anyone who can comment could start the AI';
 
+/** The refusal of `wakeOnComment: true` without a `trustedGroup`. */
+export const wakeOnCommentNeedsGroupError =
+  'jira.json wakeOnComment needs trustedGroup: without a group, anyone who can comment on an issue handed to the AI could steer its work';
+
+/** The refusal of `mentionMode: "act"` without a `trustedGroup`. */
+export const mentionActNeedsGroupError =
+  'jira.json mentionMode "act" needs trustedGroup: without a group, anyone who can comment could make the AI change things';
+
+/** What an @-mention of the AI account asks of it: `answer` — an answer only, it changes nothing; `act` — an explicit ask is carried out. */
+export const jiraMentionModes = ['answer', 'act'] as const;
+export type JiraMentionMode = typeof jiraMentionModes[number];
+
 /** The refusal of `trustedApps` without a `trustedGroup`. */
 export const trustedAppsNeedsGroupError =
   'jira.json trustedApps needs trustedGroup: without a group everyone is trusted anyway, so a list of apps would narrow nothing';
@@ -93,9 +105,15 @@ const rawConfigSchema = z.strictObject({
   // members: an app NOT listed is treated like an outsider. Absent → every app is trusted (the boot warns); `[]` → none is.
   // Needs a `trustedGroup`: without one everyone is trusted anyway.
   trustedApps: z.array(z.string().regex(accountIdRe, 'must be one account id, without spaces')).optional(),
-  // An @-mention of the AI account in a comment wakes it (answer only). Absent → on with a `trustedGroup`, off without;
+  // An @-mention of the AI account in a comment wakes it. Absent → on with a `trustedGroup`, off without;
   // `true` without a group is refused: anyone who can comment could start the agent.
   wakeOnMention: z.boolean().optional(),
+  // What a mention asks of the agent: "answer" (absent) — an answer that changes nothing; "act" — a trusted person's explicit
+  // ask is carried out (it takes a task-agent slot and still hands nothing back). "act" without a group is refused.
+  mentionMode: z.enum(jiraMentionModes).optional(),
+  // A trusted person's comment on an issue handed to the AI (assigned to it in a trigger status) reaches its agent: into
+  // the open hand-over request, else as a new request. Absent → on with a `trustedGroup`, off without; `true` without one is refused.
+  wakeOnComment: z.boolean().optional(),
   adapter: z.string().min(1).optional(),
   // R15: user settings no longer apply in a Jira session, so its model and effort come from here.
   model: z.string().max(claudeModelMaxLength).regex(claudeModelRe, 'must be a model name like opus or claude-opus-5-5').optional(),
@@ -143,6 +161,15 @@ export interface JiraConfig {
   isMentionWakeOn: boolean;
   /** `wakeOnMention` as `jira.json` gives it, `null` when absent: the boot line tells a deliberate "off" from "no group". */
   wakeOnMentionSetting: boolean | null;
+  /** What a mention asks of the agent (`mentionMode`; absent → `answer`). Only ever `act` together with {@link trustedGroupName}. */
+  mentionMode: JiraMentionMode;
+  /**
+   * Whether a trusted person's comment on an issue handed to the AI account reaches its agent. `wakeOnComment` from
+   * `jira.json`; absent → on exactly when `trustedGroup` is set.
+   */
+  isCommentWakeOn: boolean;
+  /** `wakeOnComment` as `jira.json` gives it, `null` when absent: the boot line tells a deliberate "off" from "no group". */
+  wakeOnCommentSetting: boolean | null;
   adapter: JiraAdapterName;
   /** The sessions' model; absent from `jira.json` → {@link jiraDefaultModel}. */
   model: string;
@@ -247,6 +274,8 @@ export function validateJiraConfig(
   const openCodeError = getOpenCodeIsolationError(context.openCodeUrl);
   if (openCodeError) errors.push(openCodeError);
   if (raw.wakeOnMention === true && raw.trustedGroup === undefined) errors.push(wakeOnMentionNeedsGroupError);
+  if (raw.wakeOnComment === true && raw.trustedGroup === undefined) errors.push(wakeOnCommentNeedsGroupError);
+  if (raw.mentionMode === 'act' && raw.trustedGroup === undefined) errors.push(mentionActNeedsGroupError);
   if (raw.trustedApps !== undefined && raw.trustedGroup === undefined) errors.push(trustedAppsNeedsGroupError);
 
   const agentBinaries = new Map<string, string>();
@@ -296,6 +325,9 @@ export function validateJiraConfig(
       trustedAppAccountIds: raw.trustedApps === undefined ? null : new Set(raw.trustedApps),
       isMentionWakeOn: raw.trustedGroup !== undefined && (raw.wakeOnMention ?? true),
       wakeOnMentionSetting: raw.wakeOnMention ?? null,
+      mentionMode: raw.mentionMode ?? 'answer',
+      isCommentWakeOn: raw.trustedGroup !== undefined && (raw.wakeOnComment ?? true),
+      wakeOnCommentSetting: raw.wakeOnComment ?? null,
       adapter: adapterName === claudePerTurnAdapterName ? claudePerTurnAdapterName : jiraAdapterName,
       model: raw.model ?? jiraDefaultModel,
       effort: raw.effort ?? jiraDefaultEffort,

@@ -13,10 +13,11 @@ next hand-over with no restart.
 
 ## The slots and the wait list (`taskAgentSlots.ts`)
 
-- **A slot is a tracker conversation with an open hand-over request** (origin `trackerEvent`), counted off the request ledger on every
-  question — nothing about the running agents is stored, so a restart cannot get the count wrong. One conversation holds ONE slot however
-  many hand-overs it has open; a mention request (`trackerMention`) holds none; a request the wake-up engine gave up on
-  (`isWakeStopped`) holds none (its alert is out and the issue handed back).
+- **A slot is a tracker conversation with an open hand-over request** (origin `trackerEvent`) — or an open mention request that may
+  act (`trackerMention` whose origin carries `actingMentionAttribute`, `mayAct: 'true'`: it may start a build like a hand-over;
+  `checkIsSlotHoldingOrigin`) — counted off the request ledger on every question — nothing about the running agents is stored, so a
+  restart cannot get the count wrong. One conversation holds ONE slot however many requests it has open; a mention request that
+  answers only holds none; a request the wake-up engine gave up on (`isWakeStopped`) holds none (its alert is out and the issue handed back).
 - **`checkIn(key, triggerId)`** → `granted` (the conversation holds a slot already, or it is within the free slots counted from the head of
   the list) or `queued` (it joins the list; `isNewlyQueued` is true once — the moment to say so). A grant is a RESERVATION until
   `noteStarted` (the request is open: the ledger counts it) or `noteStartFailed` (opening it failed), so two connectors polling at once
@@ -26,8 +27,10 @@ next hand-over with no restart.
   every place a fresh start.
 - **The list is ONE FIFO for every connector**, `state.json` `taskAgentWaitList` (`TaskAgentWaitEntry`: conversation key, the waiting
   trigger id, when it joined), flushed when it changes — a restart keeps the order. A place whose conversation holds a slot already does not
-  count; `pruneWaiting(platform, …)` and `dropWaiting` take out what a connector no longer vouches for; `dropUnserved` takes out the places of
-  a connector this process does not serve (they could never start and would hold up the others).
+  count; `pruneWaiting(platform, …)` and `dropWaiting` take out what a connector no longer vouches for (`dropWaiting`'s optional filter on
+  the waiting trigger id lets a connector that waits on several kinds of trigger — a hand-over, a comment, a mention — drop only the kind it
+  decided on); `dropUnserved` takes out the places of a connector this process does not serve (they could never start and would hold up the
+  others). `listWaiting(platform)` names a connector's places with their triggers, in order.
 - **`onSlotFreed`** wakes the listeners — a connector polls at once instead of at its next interval — while somebody waits, when a slot may
   have freed or room appeared: the ledger's `onRequestClosed` (through `noteRequestClosed`: a hand-over closes for good; one merely replaced
   by a newer one of its conversation frees nothing), the ledger's `onRequestWakeStopped` (through `noteRequestWakeStopped`: the wake-up engine

@@ -151,6 +151,8 @@ export class FakeJira {
   private lastUpdatedMs = 0;
   /** `METHOD path` of every request, in order. */
   readonly requestLog: string[] = [];
+  /** Issues whose assignee the connector may not change (Jira refuses, as for a person who cannot be assigned there): a hand-back fails. */
+  readonly refusedAssigneeIssueKeys = new Set<string>();
 
   constructor(private readonly options: FakeJiraOptions) {
     this.server = http.createServer((request, response) => {
@@ -418,6 +420,10 @@ export class FakeJira {
     } else if (method === 'GET' && subresource === 'remotelink') {
       send(200, []);
     } else if (method === 'PUT' && subresource === 'assignee') {
+      if (this.refusedAssigneeIssueKeys.has(issue.key)) {
+        send(400, { errorMessages: [], errors: { assignee: 'This user cannot be assigned issues in this project.' } });
+        return;
+      }
       const accountId = requestBody.accountId;
       if (typeof accountId !== 'string') {
         send(400, { errorMessages: ['accountId is required'] });

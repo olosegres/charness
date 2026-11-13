@@ -1,5 +1,7 @@
 import { buildRequestHeader } from '../../requests/requestHeader';
+import { answerStyleInstruction } from '../../requests/answerStyle';
 import type { JiraAccount } from './client';
+import type { JiraMentionMode } from './config';
 import { getIssueBlockText, type IssueBlock } from './issueBlocks';
 import { getSpillNoticeText, type CommentsFile } from './promptSpill';
 import type { IssueDelta } from './issueDelta';
@@ -47,7 +49,20 @@ export function getJiraOriginDescription(issueKey: string, trigger: JiraIssueTri
       return `${issueKey} created assigned to you by ${by}`;
     case 'mentioned':
       return `${issueKey}: you were mentioned by ${by} in comment ${getSingleLineText(trigger.commentId ?? '')}`;
+    case 'commented': {
+      const commentIds = (trigger.commentIds ?? [trigger.commentId ?? '']).map(getSingleLineText);
+      return commentIds.length > 1
+        ? `${issueKey}: new comments ${commentIds.join(', ')}, the newest by ${by}`
+        : `${issueKey}: ${by} commented (comment ${commentIds[0]})`;
+    }
   }
+}
+
+/** `comment 10240 by Ann`, `comments 10240 by Ann and 10241 by Bob` — the new comments an update or a comment's request is about. */
+function getNewCommentsText(comments: readonly JiraNewComment[]): string {
+  const names = comments.map((comment) => `${getSingleLineText(comment.commentId)} by ${getAccountName(comment.author)}`);
+  const list = names.length > 1 ? `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}` : names[0];
+  return `${names.length > 1 ? 'comments' : 'comment'} ${list}`;
 }
 
 /** `request req_1 of Ann`, `requests req_1 of Ann and req_2` — the open hand-over requests the way the mention notes name them. */
@@ -69,6 +84,7 @@ function getOpenHandOverText(openHandOvers: readonly JiraOpenHandOver[]): string
  * whose final answer the agent has already given is finished.
  */
 function getMentionNote(input: JiraRequestPromptBase, commentId: string): string {
+  if (input.mentionMode === 'act') return getActingMentionNote(input, commentId);
   const assigneeName = input.assignee ? getAccountName(input.assignee) : 'nobody';
   const statusName = getSingleLineText(input.statusName ?? '') || 'unknown';
   const workStatuses = (input.triggerStatusNames ?? []).map((name) => `"${getSingleLineText(name)}"`).join(', ');
@@ -126,6 +142,51 @@ function getMentionNote(input: JiraRequestPromptBase, commentId: string): string
     answerText;
 }
 
+/**
+ * The mention note of `mentionMode: "act"`: whatever the issue's assignee and status, an explicit ask in a trusted
+ * person's comment is carried out as the agent's rules allow, and a question only is answered without a change. The issue
+ * as it stands is still named — the agent's rules may depend on it — and so is every hand-over request that was open:
+ * acting on the comment never stops or ends that work. The answer is a comment and hands nothing back (the origin kind
+ * says so: nothing was handed over).
+ */
+function getActingMentionNote(input: JiraRequestPromptBase, commentId: string): string {
+  const assigneeName = input.assignee ? getAccountName(input.assignee) : 'nobody';
+  const statusName = getSingleLineText(input.statusName ?? '') || 'unknown';
+  const workStatuses = (input.triggerStatusNames ?? []).map((name) => `"${getSingleLineText(name)}"`).join(', ');
+  const workStatusText = workStatuses ? ` (in this project: ${workStatuses})` : '';
+  const openHandOvers = input.openHandOvers ?? [];
+  const isPlural = openHandOvers.length > 1;
+  let issueText = `The issue is not handed to you (assignee: ${assigneeName}, status: ${statusName}). `;
+  if (input.isAssignedToYou) {
+    issueText = input.isInWorkStatus
+      ? `The issue is assigned to you and its status (${statusName}) is one you work in${workStatusText}. `
+      : `The issue is assigned to you, but its status (${statusName}) is not one you work in${workStatusText}. `;
+  }
+  // A hand-over request open beside this mention is work in its own right: acting on the comment must not end it.
+  const openRequestText = openHandOvers.length > 0
+    ? `The hand-over ${getOpenHandOverText(openHandOvers)} ${isPlural ? 'were' : 'was'} open when this comment came in; it goes on unless the comment changes it — do not stop, drop or end it because of this mention, and ${isPlural ? 'if you have already given the final answer of one of them, that one is finished — do not resume it' : 'if you have already given its final answer, it is finished — do not resume it'}. `
+    : '';
+  return `You were mentioned in comment ${getSingleLineText(commentId)} by ${getAccountName(input.trigger.author)}, a trusted account. ` +
+    issueText +
+    'If the comment explicitly asks you to do something — create or split issues, take a transition, change the assignee, take up the work — ' +
+    'do it as your rules allow; if it only asks a question, answer it and change nothing. ' +
+    openRequestText +
+    'Your answer becomes a comment on the issue; it hands nothing back.';
+}
+
+/**
+ * What the request a comment opens adds after the requester line: the issue is handed to the agent and no hand-over request
+ * of it was open, so the comment starts work like a hand-over — its explicit ask carried out as the agent's rules allow, a
+ * question only answered.
+ */
+function getCommentRequestNote(input: JiraRequestPromptBase): string {
+  const statusName = getSingleLineText(input.statusName ?? '') || 'unknown';
+  return `The issue is handed to you — assigned to you, its status (${statusName}) one you work in — and no request of yours was open on it when ` +
+    `${getNewCommentsText(input.newComments ?? [])} came in, so this request is that comment's. ` +
+    'Read it in the issue below: if it asks you to do something, do it as your rules allow; if it only asks a question, answer it. ' +
+    'Answer as any request: your final answer, or a question, hands the issue back to the requester.';
+}
+
 /** An open hand-over request (`trackerEvent`) of the conversation, as a mention note names it. */
 export interface JiraOpenHandOver {
   requestId: string;
@@ -157,6 +218,16 @@ export interface JiraRequestPromptBase {
   supersededRequestIds?: readonly string[];
   /** A trusted group filters the issue's text (`jira.json` `trustedGroup`): the note then says what a `[withheld: …]` marker is. */
   isTextFiltered?: boolean;
+  /** A mention request: what it asks of the agent (`jira.json` `mentionMode`); absent → `answer`. */
+  mentionMode?: JiraMentionMode;
+  /** A request a comment opened (`commented`): the new comments it carries, oldest first. */
+  newComments?: readonly JiraNewComment[];
+}
+
+/** A comment an issue update, or the request a comment opened, brings the agent: its id and who wrote it. */
+export interface JiraNewComment {
+  commentId: string;
+  author: JiraAccount | null;
 }
 
 export interface JiraRequestPromptInput extends JiraRequestPromptBase {
@@ -183,23 +254,36 @@ function getPromptStart(input: JiraRequestPromptBase, title: string): string[] {
     ...(input.trigger.kind === 'mentioned' && input.trigger.commentId !== undefined
       ? ['', getMentionNote(input, input.trigger.commentId)]
       : []),
+    ...(input.trigger.kind === 'commented' ? ['', getCommentRequestNote(input)] : []),
   ];
 }
 
-/** @description The whole issue: the prompt of a conversation that does not know the issue yet (or no longer does). */
-export function buildJiraRequestPrompt(input: JiraRequestPromptInput): string {
+/** The issue as its blocks: the non-comment blocks, then every comment oldest first (or the one file they were spilled to). */
+function getWholeIssueLines(input: Pick<JiraRequestPromptInput, 'blocks' | 'commentsFile'>): string[] {
   const issueBlocks = input.blocks.filter((block) => block.kind !== 'comment');
   const commentBlocks = input.blocks.filter((block) => block.kind === 'comment');
   let commentLines: string[];
   if (commentBlocks.length === 0) commentLines = ['Comments: none'];
   else if (input.commentsFile) commentLines = [`Comments (${commentBlocks.length}, oldest first): ${getSpillNoticeText(input.commentsFile.path, input.commentsFile.chars)}`];
   else commentLines = [`Comments (${commentBlocks.length}, oldest first):`, commentBlocks.map((block) => getIssueBlockText(block)).join('\n\n')];
+  return [...issueBlocks.flatMap((block) => ['', getIssueBlockText(block)]), '', ...commentLines];
+}
+
+/** What changed since the conversation's last prompt: the new and changed blocks, the deleted comments, what was left out. */
+function getDeltaLines(delta: IssueDelta): string[] {
+  const unchangedText = getUnchangedText(delta);
+  const isUnchanged = delta.entries.length === 0 && delta.deletedCommentLabels.length === 0;
   return [
-    ...getPromptStart(input, `Jira issue ${input.issueKey}`),
-    ...issueBlocks.flatMap((block) => ['', getIssueBlockText(block)]),
-    '',
-    ...commentLines,
-  ].join('\n');
+    ...delta.entries.flatMap((entry) => ['', getIssueBlockText(entry.block, entry.stateNote)]),
+    ...(delta.deletedCommentLabels.length > 0 ? ['', ...delta.deletedCommentLabels.map((label) => `${label} was deleted`)] : []),
+    ...(isUnchanged ? ['', 'Nothing in the issue changed since your last prompt.'] : []),
+    ...(unchangedText ? ['', `Unchanged since your last prompt: ${unchangedText}.`] : []),
+  ];
+}
+
+/** @description The whole issue: the prompt of a conversation that does not know the issue yet (or no longer does). */
+export function buildJiraRequestPrompt(input: JiraRequestPromptInput): string {
+  return [...getPromptStart(input, `Jira issue ${input.issueKey}`), ...getWholeIssueLines(input)].join('\n');
 }
 
 /** `fields, hierarchy, 7 comments`: what a delta left out. */
@@ -214,14 +298,62 @@ function getUnchangedText(delta: IssueDelta): string {
  * one line naming what was left out, so the agent knows nothing was dropped.
  */
 export function buildJiraDeltaPrompt(input: JiraRequestPromptBase & { delta: IssueDelta }): string {
-  const { delta } = input;
-  const unchangedText = getUnchangedText(delta);
-  const isUnchanged = delta.entries.length === 0 && delta.deletedCommentLabels.length === 0;
+  return [...getPromptStart(input, `Jira issue ${input.issueKey} — what changed since your last prompt:`), ...getDeltaLines(input.delta)].join('\n');
+}
+
+/**
+ * @name JiraUpdatePromptBase
+ * @description What an issue update says before the issue: the hand-over request it belongs to (`target`, as it stands
+ * when the text is built — `isOpen: false` once that request was finished and no other hand-over is open), the hand-over
+ * requests open then, and the new comments.
+ */
+export interface JiraUpdatePromptBase {
+  issueKey: string;
+  issueUrl: string;
+  target: JiraOpenHandOver & { isOpen: boolean };
+  openHandOvers: readonly JiraOpenHandOver[];
+  comments: readonly JiraNewComment[];
+  isTextFiltered?: boolean;
+}
+
+/** The update's header block: which request it belongs to, what came in, what to do — ending with a blank line. */
+function getUpdateHeader(input: JiraUpdatePromptBase): string {
+  const { target } = input;
+  const requestId = getSingleLineText(target.requestId);
+  const handedBy = target.requester ? ` (handed over by ${getAccountName(target.requester)})` : '';
+  const commentsText = getNewCommentsText(input.comments);
+  const notifyText = 'To notify the person who wrote a comment, put its id in replyToCommentIds.';
+  const lines = target.isOpen
+    ? [
+      `[Issue update · request ${requestId} is open]`,
+      `New on ${input.issueKey} while you work on request ${requestId}${handedBy}: ${commentsText}. ` +
+        'It is part of that work: read it below; if it asks for something, do it as your rules allow, and say in your answer what you did about it. ' +
+        (input.openHandOvers.length > 1 ? `The hand-over ${getOpenHandOverText(input.openHandOvers)} are open in this conversation. ` : '') +
+        `Answer request ${requestId} with answer_request as usual (requestId "${requestId}"). ${notifyText}`,
+    ]
+    : [
+      `[Issue update · request ${requestId} is finished]`,
+      `New on ${input.issueKey}, written while you worked on request ${requestId}${handedBy}, which is finished now (you gave its final answer, or asked a question): ${commentsText}. ` +
+        'Read it below; if it asks for something, do it as your rules allow. ' +
+        `Answer it with answer_request (requestId "${requestId}"): your answer becomes a comment on the issue and hands nothing back. ${notifyText}`,
+    ];
+  lines.push(answerStyleInstruction, 'The requester does not see your plain text output or your thinking — only what you send through answer_request reaches them.');
+  return `${lines.join('\n')}\n\n`;
+}
+
+/**
+ * @description An issue update (a trusted person's comment on an issue handed to the agent while a hand-over request of
+ * it is open): NOT a request — no new request is opened, the comment belongs to the work of `target` — then the issue,
+ * whole (`blocks`, a session that does not know it) or only what changed (`delta`). Agent-facing, so English; the
+ * issue's text is quoted and marked as the request prompts' is.
+ */
+export function buildJiraUpdatePrompt(input: JiraUpdatePromptBase & ({ blocks: readonly IssueBlock[]; commentsFile?: CommentsFile | null } | { delta: IssueDelta })): string {
+  const isDelta = 'delta' in input;
   return [
-    ...getPromptStart(input, `Jira issue ${input.issueKey} — what changed since your last prompt:`),
-    ...delta.entries.flatMap((entry) => ['', getIssueBlockText(entry.block, entry.stateNote)]),
-    ...(delta.deletedCommentLabels.length > 0 ? ['', ...delta.deletedCommentLabels.map((label) => `${label} was deleted`)] : []),
-    ...(isUnchanged ? ['', 'Nothing in the issue changed since your last prompt.'] : []),
-    ...(unchangedText ? ['', `Unchanged since your last prompt: ${unchangedText}.`] : []),
+    `${getUpdateHeader(input)}${issueTextNote}${input.isTextFiltered ? ` ${withheldTextNote}` : ''}`,
+    '',
+    isDelta ? `Jira issue ${input.issueKey} — what changed since your last prompt:` : `Jira issue ${input.issueKey}`,
+    `Link: ${input.issueUrl}`,
+    ...(isDelta ? getDeltaLines(input.delta) : getWholeIssueLines(input)),
   ].join('\n');
 }

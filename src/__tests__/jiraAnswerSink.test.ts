@@ -482,6 +482,16 @@ describe('a mention request answers only — nothing is handed over, so nothing 
     assert.deepEqual(jira.calls, ['comment PROJ-12']);
     assert.deepEqual(jira.postedTexts, [buildJiraAlertText('req_2', 'silentTurns')]);
   });
+
+  it('an ACTING mention (mentionMode "act") hands nothing back either: its final answer and its alert are comments, the issue stays where it is', async () => {
+    const actingOrigin: RequestOrigin = { kind: 'trackerMention', attributes: { ...mentionOrigin.attributes, mayAct: 'true' } };
+    // The issue is the AI's (it assigned itself to take up the work): a final answer must still not hand it anywhere.
+    assert.equal(jira.assignee, aiAccountId);
+    assert.deepEqual(await sink().deliverAnswer(key, { requestId: 'req_2', kind: 'final', body: 'Split into PROJ-13 and PROJ-14.', origin: actingOrigin, isRequestOpen: true }), { ok: true });
+    assert.deepEqual(await sink().deliverAlert(key, { requestId: 'req_2', reason: 'wakeCap', origin: actingOrigin }), { ok: true });
+    assert.deepEqual(jira.calls, [`getComment PROJ-12 ${requesterCommentId}`, 'comment PROJ-12', 'comment PROJ-12']);
+    assert.deepEqual(jira.postedTexts[0], '@Requester\nSplit into PROJ-13 and PROJ-14.');
+  });
 });
 
 describe('a hand-over question tells the requester how to let the agent go on (T7)', () => {

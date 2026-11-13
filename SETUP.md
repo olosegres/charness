@@ -801,6 +801,8 @@ connector behaves is described in [`src/connectors/jira/README.md`](src/connecto
      "trustedGroup": "ai-trusted",
      "trustedApps": ["<an app account's id>"],
      "wakeOnMention": true,
+     "mentionMode": "answer",
+     "wakeOnComment": true,
      "pollIntervalSeconds": 30,
      "runBudgetPer24h": 5,
      "model": "opus",
@@ -836,9 +838,23 @@ connector behaves is described in [`src/connectors/jira/README.md`](src/connecto
    `trustedGroup` the key is refused — without a group everyone is trusted anyway. A listed id adds no trust
    to a person's account: people stay trusted by membership alone.
 
-   `wakeOnMention` (optional) decides whether an @-mention of the AI account in a comment wakes it to answer
-   only, without the issue being handed over; absent, it is on exactly when `trustedGroup` is set, and `true`
-   without a group is refused — without one, anyone who can comment could start the AI.
+   `wakeOnMention` (optional) decides whether an @-mention of the AI account in a comment wakes it, without the
+   issue being handed over; absent, it is on exactly when `trustedGroup` is set, and `true` without a group is
+   refused — without one, anyone who can comment could start the AI.
+
+   `mentionMode` (optional, needs `trustedGroup` for `"act"`) decides what such a mention asks of the agent:
+   `"answer"` (the default) — an answer only, it changes nothing; `"act"` — when a trusted person's comment
+   explicitly asks it to do something (create or split issues, take a transition, change the assignee, take up the
+   work), it does it as its own rules allow, whatever the issue's status and assignee, and a question is still only
+   answered. An acting mention counts as a task agent (see below) and still hands nothing back. The agent's rules
+   (its project's `CLAUDE.md`) decide what it may do; the start logs which mode is on.
+
+   `wakeOnComment` (optional) decides whether a comment on an issue HANDED to the AI — assigned to it in one of its
+   trigger statuses — reaches the agent: a comment by a trusted person (not an app's or an automation's) while the
+   AI works on the issue is added to that work at the end of its current step, and one written after it finished,
+   while the issue is still assigned to it, starts a new request. Absent, it is on exactly when `trustedGroup` is set;
+   `true` without a group is refused; `false` keeps the old behaviour, where such a comment reached the agent only
+   with its next hand-over. The start logs which.
 
    `projects` maps each served project key to its folder under `WORK_ROOT` and the status names in which an
    assigned issue is a request; the agent loads that folder's project memory (`CLAUDE.md`, `.claude/`, … in it
@@ -860,8 +876,9 @@ connector behaves is described in [`src/connectors/jira/README.md`](src/connecto
    **How many agents run at once.** The AI works on at most 5 issues at the same time, all projects together — set
    `taskAgents.maxConcurrent` in [`settings.json`](#instance-settings-settingsjson) (`0` = no limit; read without a
    restart). An issue handed over beyond that gets one comment saying it is queued, stays assigned to the AI and starts by
-   itself when an agent hands its issue back, the one that waited longest first — also across a restart. An @-mention
-   (answer only) is never held back, and a lower number never stops an agent that is already working.
+   itself when an agent hands its issue back, the one that waited longest first — also across a restart. A comment that
+   starts a request and an acting mention (`mentionMode: "act"`) wait the same way; an @-mention that only answers is never
+   held back, and a lower number never stops an agent that is already working.
 
 5. Start it with a clean environment, so nothing of the calling shell reaches it:
 
@@ -874,7 +891,8 @@ connector behaves is described in [`src/connectors/jira/README.md`](src/connecto
    The start refuses a missing `ENV_FILE`, `TMUX_SOCKET_NAME` or `jira.json`, an `OPENCODE_URL` on the default
    port, a `TELEGRAM_BOT_TOKEN` or any `ATLASSIAN_*` variable when Telegram is off, a token that belongs to
    another account, an unknown project or status, a `trustedGroup` the site does not have or the AI account
-   may not read, a `trustedApps` without a `trustedGroup`, and a `DATA_DIR` holding another surface's state. An unreachable Jira does not refuse the start —
+   may not read, a `trustedApps`, a `wakeOnComment: true` or a `mentionMode: "act"` without a `trustedGroup`, and a
+   `DATA_DIR` holding another surface's state. An unreachable Jira does not refuse the start —
    polling backs off and resumes.
 
 The agent sessions of a Jira instance run without the user-level Claude settings, hooks and skills, with the

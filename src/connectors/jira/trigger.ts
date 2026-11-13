@@ -17,27 +17,55 @@ const personAccountType = 'atlassian';
 /** Jira's `accountType` of an app or automation. */
 const appAccountType = 'app';
 
-export type JiraTriggerKind = 'assigned' | 'statusChanged' | 'created' | 'mentioned';
+export type JiraTriggerKind = 'assigned' | 'statusChanged' | 'created' | 'mentioned' | 'commented';
 
 /** The trigger id of a comment that mentioned the AI account is this prefix and the comment's id (a changelog id is numeric: no clash). */
 export const mentionTriggerIdPrefix = 'mention:';
+/** The trigger id of a comment on an issue handed to the AI account (its comment scan) is this prefix and the comment's id. */
+export const commentTriggerIdPrefix = 'comment:';
 
 /**
  * @name JiraIssueTrigger
- * @description `author` is `null` when Jira names no one (an automation without an actor); for a mention it is the
- * comment's author. `commentId` is set for a `mentioned` trigger only.
+ * @description `author` is `null` when Jira names no one (an automation without an actor); for a mention or a comment it
+ * is the comment's author. `commentId` is set for a `mentioned` and a `commented` trigger only (for a `commented` one, the
+ * newest of its `commentIds`, oldest first: one request carries every new comment a poll found).
  */
 export interface JiraIssueTrigger {
-  /** The changelog history id, {@link createdTriggerId}, or {@link mentionTriggerIdPrefix} and a comment id. */
+  /** The changelog history id, {@link createdTriggerId}, or {@link mentionTriggerIdPrefix} / {@link commentTriggerIdPrefix} and a comment id. */
   triggerId: string;
   kind: JiraTriggerKind;
   author: JiraAccount | null;
   commentId?: string;
+  commentIds?: readonly string[];
 }
 
 /** @description The trigger of the comment `commentId`, written by `author`, that mentions the AI account. */
 export function createMentionTrigger(commentId: string, author: JiraAccount | null): JiraIssueTrigger {
   return { triggerId: `${mentionTriggerIdPrefix}${commentId}`, kind: 'mentioned', author, commentId };
+}
+
+/**
+ * @description The trigger of the new comments `commentIds` (oldest first) on an issue handed to the AI account while no
+ * hand-over request of it is open: the newest one names it, and its author (`author`) is the requester.
+ */
+export function createCommentTrigger(commentIds: readonly string[], author: JiraAccount | null): JiraIssueTrigger {
+  const commentId = commentIds[commentIds.length - 1];
+  return { triggerId: `${commentTriggerIdPrefix}${commentId}`, kind: 'commented', author, commentId, commentIds };
+}
+
+/** @description A hand-over's trigger (a changelog entry, a creation) — not a comment's or a mention's. */
+export function checkIsHandOverTriggerId(triggerId: string): boolean {
+  return !triggerId.startsWith(mentionTriggerIdPrefix) && !triggerId.startsWith(commentTriggerIdPrefix);
+}
+
+/**
+ * @description Order two Jira comment ids: they are numbers that grow with every comment of the site, so a later comment
+ * has the greater id. Compared as digit strings (any length); an id that is not one falls back to a text compare.
+ */
+export function compareJiraCommentIds(left: string, right: string): number {
+  const isNumeric = /^\d+$/.test(left) && /^\d+$/.test(right);
+  if (isNumeric && left.length !== right.length) return left.length - right.length;
+  return left < right ? -1 : left > right ? 1 : 0;
 }
 
 export interface JiraTriggerMatch {

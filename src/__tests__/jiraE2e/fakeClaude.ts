@@ -120,6 +120,8 @@ import { claudeSessionStateEventsVariableName } from '../../utils/jsonStreamHost
  *    test kills the process), answers in the next turn;
  *  - `hold-once`   — starts working on the first turn of the issue's FIRST request and keeps working until the test
  *    writes `fakeClaudeHoldReleaseFileName`, then answers; later turns, and later requests, answer at once;
+ *  - `hold-progress-once` — like `hold-once`, but the held turn ends with a `progress` note (the request stays open, as
+ *    after a long build step); the next turn — what was written meanwhile — answers `final`;
  *  - `slow-once`   — its first turn works in SILENCE (a long tool call: no frame)
  *    for 45 s, then answers; later turns answer at once;
  *  - `progress`    — sends a `progress` note and ends the turn;
@@ -237,8 +239,8 @@ import { claudeSessionStateEventsVariableName } from '../../utils/jsonStreamHost
  * `FAKE_CLAUDE_STATE_DIR` (per-request turn counts, the conversations held).
  */
 
-export type FakeClaudeMode = 'answer' | 'silent-once' | 'silent' | 'hang-once' | 'hold-once' | 'slow-once' | 'progress' | 'finish-together' | 'answer-after-queued' | 'background' | 'background-notify' | 'compact' | 'overflow' | 'fetch-attachment' | 'run-tool' | 'reply-to' | 'usage-limit-once' | 'ask' | 'ask-two' | 'ask-long' | 'send-messages';
-const fakeModes: readonly FakeClaudeMode[] = ['answer', 'silent-once', 'silent', 'hang-once', 'hold-once', 'slow-once', 'progress', 'finish-together', 'answer-after-queued', 'background', 'background-notify', 'compact', 'overflow', 'fetch-attachment', 'run-tool', 'reply-to', 'usage-limit-once', 'ask', 'ask-two', 'ask-long', 'send-messages'];
+export type FakeClaudeMode = 'answer' | 'silent-once' | 'silent' | 'hang-once' | 'hold-once' | 'hold-progress-once' | 'slow-once' | 'progress' | 'finish-together' | 'answer-after-queued' | 'background' | 'background-notify' | 'compact' | 'overflow' | 'fetch-attachment' | 'run-tool' | 'reply-to' | 'usage-limit-once' | 'ask' | 'ask-two' | 'ask-long' | 'send-messages';
+const fakeModes: readonly FakeClaudeMode[] = ['answer', 'silent-once', 'silent', 'hang-once', 'hold-once', 'hold-progress-once', 'slow-once', 'progress', 'finish-together', 'answer-after-queued', 'background', 'background-notify', 'compact', 'overflow', 'fetch-attachment', 'run-tool', 'reply-to', 'usage-limit-once', 'ask', 'ask-two', 'ask-long', 'send-messages'];
 /**
  * How long an `answer-after-queued` turn waits for the next message before it answers anyway: four polls of the 10 s
  * floor, or what the launcher sets (`fakeClaudeQueuedWaitMaxMsEnvName`) for the instance's own poll.
@@ -1329,7 +1331,7 @@ async function runTurn(argv: readonly string[], sessionId: string, content: stri
   if (state.mode === 'hang-once' && isFirstTurn) {
     await new Promise<never>(() => {});
   }
-  if (state.mode === 'hold-once' && isFirstTurn && listKnownRequests(state.issueKey).length === 1) {
+  if ((state.mode === 'hold-once' || state.mode === 'hold-progress-once') && isFirstTurn && listKnownRequests(state.issueKey).length === 1) {
     await waitForHoldRelease();
   }
   if (state.mode === 'slow-once' && isFirstTurn) {
@@ -1397,7 +1399,7 @@ async function runTurn(argv: readonly string[], sessionId: string, content: stri
     const ran = spawnSync(probeToolName, [], { encoding: 'utf8' });
     logToolCall(probeToolName, {}, ran.error ? `error: ${ran.error.message}` : ran.stdout.trim());
   }
-  const kind = state.mode === 'progress' ? 'progress' : 'final';
+  const kind = state.mode === 'progress' || (state.mode === 'hold-progress-once' && isFirstTurn) ? 'progress' : 'final';
   endTurn(sessionId, await answer(requestId, kind, state.turnCount));
   if (state.mode === 'background') {
     // Reported AFTER the result, as the CLI does for a task the turn left running.
