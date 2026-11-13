@@ -308,8 +308,14 @@ export function buildJiraDeltaPrompt(input: JiraRequestPromptBase & { delta: Iss
  * none other is open), the requests open then, and the new comments.
  */
 export interface JiraUpdatePromptBase {
+  /** The issue the comments are on. */
   issueKey: string;
   issueUrl: string;
+  /**
+   * Set when the request is on ANOTHER issue (an issue the agent created or took up in that request's run, linked to it):
+   * the header names both, and the update carries only the new comments.
+   */
+  requestIssueKey?: string;
   target: JiraOpenHandOver & { isOpen: boolean; isMention?: boolean };
   openHandOvers: readonly JiraOpenHandOver[];
   comments: readonly JiraNewComment[];
@@ -323,18 +329,19 @@ function getUpdateHeader(input: JiraUpdatePromptBase): string {
   let handedBy = target.requester ? ` (handed over by ${getAccountName(target.requester)})` : '';
   if (target.isMention) handedBy = target.requester ? ` (asked by ${getAccountName(target.requester)} in a mention)` : ' (asked in a mention)';
   const commentsText = getNewCommentsText(input.comments);
+  const issueText = input.requestIssueKey ? `${input.issueKey} (an issue linked to ${getSingleLineText(input.requestIssueKey)}, which that request is on)` : input.issueKey;
   const notifyText = 'To notify the person who wrote a comment, put its id in replyToCommentIds.';
   const lines = target.isOpen
     ? [
       `[Issue update · request ${requestId} is open]`,
-      `New on ${input.issueKey} while you work on request ${requestId}${handedBy}: ${commentsText}. ` +
+      `New on ${issueText} while you work on request ${requestId}${handedBy}: ${commentsText}. ` +
         'It is part of that work: read it below; if it asks for something, do it as your rules allow, and say in your answer what you did about it. ' +
         (input.openHandOvers.length > 1 ? `The ${getOpenHandOverText(input.openHandOvers)} are open in this conversation. ` : '') +
         `Answer request ${requestId} with answer_request as usual (requestId "${requestId}"). ${notifyText}`,
     ]
     : [
       `[Issue update · request ${requestId} is finished]`,
-      `New on ${input.issueKey}, written while you worked on request ${requestId}${handedBy}, which is finished now (you gave its final answer, or asked a question): ${commentsText}. ` +
+      `New on ${issueText}, written while you worked on request ${requestId}${handedBy}, which is finished now (you gave its final answer, or asked a question): ${commentsText}. ` +
         'Read it below; if it asks for something, do it as your rules allow. ' +
         `Answer it with answer_request (requestId "${requestId}"): your answer becomes a comment on the issue and hands nothing back. ${notifyText}`,
     ];
@@ -353,7 +360,7 @@ export function buildJiraUpdatePrompt(input: JiraUpdatePromptBase & ({ blocks: r
   return [
     `${getUpdateHeader(input)}${issueTextNote}${input.isTextFiltered ? ` ${withheldTextNote}` : ''}`,
     '',
-    isDelta ? `Jira issue ${input.issueKey} — what changed since your last prompt:` : `Jira issue ${input.issueKey}`,
+    input.requestIssueKey ? `Jira issue ${input.issueKey} — its new comments:` : (isDelta ? `Jira issue ${input.issueKey} — what changed since your last prompt:` : `Jira issue ${input.issueKey}`),
     `Link: ${input.issueUrl}`,
     ...(isDelta ? getDeltaLines(input.delta) : getWholeIssueLines(input)),
   ].join('\n');

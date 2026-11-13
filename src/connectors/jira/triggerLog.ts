@@ -129,6 +129,15 @@ export class JiraTriggerLog {
     return [...(this.updateTimesByIssue.get(issueKey) ?? [])].filter((at) => at > nowMs - msPerDay).length;
   }
 
+  /**
+   * @description When the oldest issue update of the rolling 24 h before `nowMs` leaves that window — the moment a capped
+   * issue may get an update again — or `null` when there is none.
+   */
+  getUpdateWindowEnd(issueKey: string, nowMs: number): number | null {
+    const inWindow = [...(this.updateTimesByIssue.get(issueKey) ?? [])].filter((at) => at > nowMs - msPerDay);
+    return inWindow.length === 0 ? null : Math.min(...inWindow) + msPerDay;
+  }
+
   /** @description Was a mention park notice posted on the issue in the rolling 24 h before `nowMs`? */
   checkIsMentionParkNoticePostedLastDay(issueKey: string, nowMs: number): boolean {
     return (this.mentionParkNoticeTimesByIssue.get(issueKey) ?? []).some((at) => at > nowMs - msPerDay);

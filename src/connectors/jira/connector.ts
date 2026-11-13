@@ -3,7 +3,7 @@ import { resolveThreadFilesDir } from '../../botFileStorage';
 import { createJiraClient, JiraAuthError, JiraHttpError, type JiraClient, type JiraFieldDefinition } from './client';
 import { createJiraAnswerSink, type JiraAnswerSink } from './answerSink';
 import { loadJiraConfig, resolveExtraFields, resolveTriggerStatusIds, type JiraConfig } from './config';
-import { buildJiraTriggerJql, getJiraMentionWindowMs, getJiraRetryDelayMs, JiraInbound, type JiraInboundDeps, type JiraProjectTrigger } from './inbound';
+import { buildJiraTriggerJql, getJiraMentionWindowMs, getJiraRetryDelayMs, JiraInbound, jiraIssueUpdatesPer24hMax, type JiraInboundDeps, type JiraProjectTrigger } from './inbound';
 import { JiraTriggerLog, jiraTriggerLogFileName } from './triggerLog';
 import { JiraContextLedger } from './contextLedger';
 import { createJiraTrust, readJiraTrustedGroup, type JiraTrust, type JiraTrustedGroupSnapshot } from './trustedGroup';
@@ -320,6 +320,7 @@ export async function prepareJiraConnector(context: {
       parkIssue: (issueKey, requester) => answerSink.parkIssue(issueKey, requester),
       refuseUntrusted: (issueKey, requester, groupName) => answerSink.refuseUntrusted(issueKey, requester, groupName),
       parkMention: (issueKey) => answerSink.parkMention(issueKey),
+      postUpdatesPausedNotice: (issueKey, untilMs) => answerSink.postUpdatesPausedNotice(issueKey, jiraIssueUpdatesPer24hMax, untilMs),
       postQueuedNotice: (issueKey, queue) => answerSink.postQueuedNotice(issueKey, queue),
       noteShownSummary: (issueKey, summary) => shownSummaries.set(issueKey, summary),
     });

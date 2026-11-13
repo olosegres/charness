@@ -133,7 +133,15 @@ requester was recorded `covered` with nothing posted — so people unassigned an
 - **The requests an update belongs to** (`listUpdateTargetRequests`): the conversation's open hand-overs and its open
   mentions that may act (`mayAct`: that is the work it does on the issue), none the wake-up engine gave up on; on an
   issue the AI account handed to itself (its seen hand-over is self-authored: an acting mention's «take up the work»),
-  any open request — the one that took it up is still working on it, so a comment never opens a second agent there.
+  any open request — the one that took it up is still working on it, so a comment never opens a second agent there. When
+  its own conversation has none, a request holding a task-agent slot in the conversation of an issue LINKED to it (its
+  parent, a sub-task or child, either end of an issue link — `findLinkedWorkingRequest`; the agent created the issue and
+  builds it in that run, say) gets the comments: an update of that request in that conversation whose header names the
+  commented issue ("New on PROJ-2 (an issue linked to PROJ-1, which that request is on) …") and carries only its new
+  comments (that conversation's context ledger is its own issue's) — recorded on the commented issue. Only when nothing
+  linked works on it does a comment open the issue's own request. On an issue NOT handed to the AI the comment scan does
+  not run: there, only an @-mention reaches it, and a follow-up mention by the requester of an open acting mention goes into
+  that work as an update (`isCovered` counts every slot-holding request with comment wakes on).
 - **Such a request is open**: ONE **issue update** carries every new
   trusted comment of the poll (`buildJiraUpdatePrompt`: `[Issue update · request req_… is open]`, then the issue's delta —
   the whole issue for a session that does not know it). It is NOT a request: no request is opened, because a new one would
@@ -149,14 +157,20 @@ requester was recorded `covered` with nothing posted — so people unassigned an
   failure, up to 15 minutes), so a session that cannot be started is not started at every poll.
 - **The cap.** An issue gets at most `jiraIssueUpdatesPer24hMax` (20) updates in a rolling 24 h (one per post, counted
   off the trigger log's `update` lines). An account of the trusted group that comments as the agent's own tooling would
-  otherwise loop — each comment the next poll's update, each answer another comment —; past the cap the comments are
-  recorded `parked`, never delivered, with one log line per issue per day. The agent must comment only as the AI account.
+  otherwise loop — each comment the next poll's update, each answer another comment —; past the cap the comments stay
+  undecided (`waiting`) and the issue is not scanned until the oldest counted update leaves the window
+  (`getUpdateWindowEnd`); then they are delivered in one update. Each pause gets ONE comment by the AI account
+  (`buildJiraUpdatesPausedText`: until when, nothing lost; recorded under `updates-paused:<end>`, so a restart does not
+  repeat it — the AI account's own comments are never delivered, so it starts no loop) and one log line. The agent must
+  comment only as the AI account.
 - **An issue that leaves the handed state gets one last scan** (`scanIssuesThatLeftHanded`): the poller remembers the
   handed issues whose hand-over it saw, with the request an update would go to. One that a later poll finds no longer
   handed (its final answer handed it back, someone took it) — read by its key when the search no longer returns it — has
   its comments read once more: those written before the changelog entry that ended the hand-over (`findLeftHandedAt`)
   and not delivered yet reach that request as the "finished" update (or a request still open). The gap between a
-  hand-back and the next poll no longer loses a comment. In memory: a restart forgets what was handed.
+  hand-back and the next poll no longer loses a comment. In memory: a restart forgets what was handed, and a request that
+  opens and is answered between two polls is never seen handed, so a comment inside that short window gets no last scan
+  (it still rides the issue's next prompt).
 - **No request is open but the issue is still handed** (a hand-back that failed, a hand-over with no
   requester): the comments open ONE request of their own — origin `trackerEvent`, trigger
   `comment:<newest id>` (`commented`; `from: KEY: <name> commented (comment <id>)`), the newest comment's author its

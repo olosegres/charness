@@ -24,7 +24,7 @@ import { fetchJiraIssueContext, findAccountInContext, type JiraIssueContext } fr
 import { buildJiraDeltaPrompt, buildJiraRequestPrompt, buildJiraUpdatePrompt, type JiraNewComment, type JiraOpenHandOver, type JiraUpdatePromptBase } from './prompt';
 import type { JiraMentionMode } from './config';
 import { actingMentionAttribute, checkIsSlotHoldingOrigin } from '../../trackers/taskAgentSlots';
-import { getIssueDelta } from './issueDelta';
+import { getIssueDelta, newBlockNote } from './issueDelta';
 import type { JiraContextLedger } from './contextLedger';
 import type { SessionPromptText } from '../../postToSession';
 import { clearStoredPromptRefresher, setStoredPromptRefresher } from '../../requests/storedPromptRefresh';
@@ -97,6 +97,8 @@ const msPerDay = 24 * 60 * msPerMinute;
  * `parked` with one log line.
  */
 export const jiraIssueUpdatesPer24hMax = 20;
+/** The trigger id of the one "updates are paused" comment of a pause: this prefix and the pause's end (epoch ms). */
+const updatesPausedTriggerIdPrefix = 'updates-paused:';
 /** Separates an issue key from a trigger id in the key a mention decision has in the poll's result and log line. */
 const mentionDecisionKeySeparator = '#';
 
@@ -215,6 +217,8 @@ export interface JiraInboundDeps {
   refuseUntrusted: (issueKey: string, requester: JiraAccount | null, groupName: string) => Promise<void>;
   /** A mention over the run budget: the park notice, no hand-back (the answer side). */
   parkMention: (issueKey: string) => Promise<void>;
+  /** The issue reached the cap on updates: one comment saying they are paused until `untilMs` (the answer side). Never rejects. */
+  postUpdatesPausedNotice: (issueKey: string, untilMs: number) => Promise<void>;
   /** The bot's one cap on task agents and its wait list; a mention request that answers only bypasses it. */
   slots: Pick<TaskAgentSlots, 'checkIn' | 'noteStarted' | 'noteStartFailed' | 'dropWaiting' | 'listWaiting' | 'pruneWaiting' | 'onSlotFreed'>;
   /** A hand-over that has to wait for a slot: the short comment saying so (the answer side). Never rejects. */
@@ -239,6 +243,17 @@ export function buildJiraTriggerJql(projects: ReadonlyMap<string, JiraProjectTri
 
 /** What {@link getNewestCommentId} says of an issue with no comment yet: below every real id, so any later comment is newer. */
 const noCommentId = '0';
+
+/** The open request working on an issue linked to a commented one, and what was read of the commented issue to find it. */
+interface JiraLinkedWork {
+  /** The linked issue the request is on. */
+  issueKey: string;
+  requestId: string;
+  origin: RequestOrigin;
+  /** The COMMENTED issue's context. */
+  context: JiraIssueContext;
+  project: JiraProjectTrigger;
+}
 
 /** A request an issue update can belong to: who asked (as the issue's data names them, and by account id), and whether it is a mention's. */
 interface JiraUpdateTarget {
@@ -276,8 +291,6 @@ export class JiraInbound {
   private readonly updateRetries = new Map<string, { failureCount: number; retryAt: number }>();
   /** Issues whose seen hand-over the AI account made itself (it took the issue up) — in memory, refreshed by every poll. */
   private readonly selfAssignedIssueKeys = new Set<string>();
-  /** Per issue, when the update cap was last logged: one line per issue per day. */
-  private readonly updateCapLoggedAtByIssue = new Map<string, number>();
   /**
    * The issues handed to the AI account (their hand-over seen) at the last poll, each with the request its last update went
    * to or would have gone to — in memory only. One that leaves the handed state gets one last comment scan.
@@ -551,7 +564,8 @@ export class JiraInbound {
     const newest = counted[counted.length - 1];
     const decision = await this.postIssueUpdate(issue, project, counted, commentTriggerIdPrefix, at, lastTarget);
     decisions.set(`${issue.key}${mentionDecisionKeySeparator}${commentTriggerIdPrefix}${newest.id}`, decision);
-    return { decisions, isPosting: decision === 'update' };
+    // Posted (it may still fail and be retried), or waiting out the cap on updates: either way the issue is scanned again.
+    return { decisions, isPosting: decision === 'update' || decision === 'waiting' };
   }
 
   /** The acting mentions that wait for a task-agent slot, oldest first: each issue's key and its `mention:<id>` trigger. */
@@ -757,12 +771,16 @@ export class JiraInbound {
     // supersede it and strip its hand-back. A hand-over request with NO requester is superseded by ANY next request of
     // the conversation (`requestLedger.ts`), so while one is open every mention belongs to it. With comment wakes on the
     // comment reaches that run as an issue update; with them off it is `covered`: recorded, nothing posted.
+    // With comment wakes on, the same holds for an open mention that acts: a follow-up mention by its requester (on an issue
+    // not handed to the AI, where a plain comment never arrives) goes into that work, not into a second mention request.
     const requesterAccountId = comment.author?.accountId;
+    const isCommentWakeOn = this.checkIsCommentWakeOn();
     const isCovered = deps.listOpenRequests(makeJiraKey(issue.key)).some((request) => {
       const openRequester = getRequestRequester(request.origin);
-      return request.origin.kind === 'trackerEvent' && !request.isWakeStopped && (openRequester === requesterAccountId || openRequester === emptyRequester);
+      const isCoveringKind = isCommentWakeOn ? checkIsSlotHoldingOrigin(request.origin) : request.origin.kind === 'trackerEvent';
+      return isCoveringKind && !request.isWakeStopped && (openRequester === requesterAccountId || openRequester === emptyRequester);
     });
-    if (isCovered && !this.checkIsCommentWakeOn()) return record('covered') ? 'covered' : 'failed';
+    if (isCovered && !isCommentWakeOn) return record('covered') ? 'covered' : 'failed';
     if (isCovered) return this.postIssueUpdate(issue, project, [comment], mentionTriggerIdPrefix, at);
     if (deps.triggerLog.getRequestCountLastDay(issue.key, at) >= deps.runBudgetPer24h) {
       // D10: the notice is posted at most once per issue per rolling 24 h; later over-budget mentions are recorded silently.
@@ -923,6 +941,12 @@ export class JiraInbound {
       deps.slots.dropWaiting(key, (triggerId) => triggerId.startsWith(commentTriggerIdPrefix));
       return this.postIssueUpdate(issue, project, counted, commentTriggerIdPrefix, at);
     }
+    // An issue the AI account handed to itself while ANOTHER issue's request works on it (it created the issue, or took it up,
+    // in that run): the comment goes to that request — a request of its own would be a second agent on the same work.
+    if (this.selfAssignedIssueKeys.has(issue.key)) {
+      const linked = await this.findLinkedWorkingRequest(issue, project);
+      if (linked) return this.postLinkedIssueUpdate(issue, counted, at, linked);
+    }
     const newest = counted[counted.length - 1];
     const trigger = createCommentTrigger(counted.map((comment) => comment.id), newest.author ?? null);
     const requester = newest.author ?? null;
@@ -935,6 +959,94 @@ export class JiraInbound {
       return 'parked';
     }
     return this.openRequestInSlot(issue, project, trigger, requester, at, olderRecords);
+  }
+
+  /**
+   * The open request that works on an issue linked to `issue` — its parent, a sub-task or child, either end of an issue link,
+   * in an allowlisted project — and holds a task-agent slot (a hand-over, or a mention that may act); `null` when none does.
+   * Read with the issue's context, which the update then quotes.
+   */
+  private async findLinkedWorkingRequest(issue: JiraIssue, project: JiraProjectTrigger): Promise<JiraLinkedWork | null> {
+    const { deps } = this;
+    const context = await fetchJiraIssueContext(deps.client, issue.key, project.extraFields.map((extraField) => extraField.id), deps.trust !== null);
+    const { fields } = context.issue;
+    const linkedKeys = [
+      fields.parent?.key,
+      ...(fields.issuelinks ?? []).flatMap((link) => [link.outwardIssue?.key, link.inwardIssue?.key]),
+      ...(fields.subtasks ?? []).map((subtask) => subtask.key),
+      ...context.children.map((child) => child.key),
+    ].filter((linkedKey): linkedKey is string => linkedKey !== undefined && linkedKey !== issue.key && getJiraIssueProjectKey(linkedKey) !== null && deps.projects.has(getJiraIssueProjectKey(linkedKey) ?? ''));
+    for (const linkedKey of new Set(linkedKeys)) {
+      const request = deps.listOpenRequests(makeJiraKey(linkedKey)).find((open) => checkIsSlotHoldingOrigin(open.origin) && !open.isWakeStopped);
+      if (request) return { issueKey: linkedKey, requestId: request.id, origin: request.origin, context, project };
+    }
+    return null;
+  }
+
+  /**
+   * @description Post the comments of a self-handed issue into the conversation of the linked issue whose request works on it:
+   * an issue update of THAT request whose header names the issue the comments are on, carrying only the new comments (that
+   * conversation's context ledger is its own issue's). Recorded on the commented issue once posted, like any update.
+   */
+  private async postLinkedIssueUpdate(issue: JiraIssue, comments: readonly JiraComment[], at: number, linked: JiraLinkedWork): Promise<JiraIssueDecision> {
+    const { deps } = this;
+    const { trust } = deps;
+    if (deps.triggerLog.getUpdateCountLastDay(issue.key, at) >= jiraIssueUpdatesPer24hMax) return this.pauseUpdates(issue.key, comments);
+    const blockTrust: JiraBlockTrust | null = trust && {
+      checkIsTrusted: (account) => trust.checkIsTrusted(account),
+      allowlistedProjectKeys: new Set(deps.projects.keys()),
+    };
+    const commentKeys = new Set(comments.map((comment) => `${commentTriggerIdPrefix}${comment.id}`));
+    const commentBlocks = buildIssueBlocks(linked.context, linked.project.extraFields, deps.aiAccountId, blockTrust).filter((block) => commentKeys.has(block.key));
+    const requesterAccountId = getRequestRequester(linked.origin);
+    const targetKey = makeJiraKey(linked.issueKey);
+    const buildText = (): string => buildJiraUpdatePrompt({
+      issueKey: issue.key,
+      issueUrl: `${deps.siteUrl.replace(/\/+$/, '')}/browse/${issue.key}`,
+      requestIssueKey: linked.issueKey,
+      target: {
+        requestId: linked.requestId,
+        requester: findAccountInContext(linked.context, requesterAccountId),
+        isMention: linked.origin.kind === 'trackerMention',
+        isOpen: deps.listOpenRequests(targetKey).some((open) => open.id === linked.requestId),
+      },
+      openHandOvers: [],
+      comments: comments.map((comment) => ({ commentId: comment.id, author: comment.author ?? null })),
+      isTextFiltered: trust !== null,
+      delta: { entries: commentBlocks.map((block) => ({ block, stateNote: newBlockNote })), unchangedKinds: [], unchangedCommentCount: 0, deletedCommentLabels: [], sent: {} },
+    });
+    const prompt: SessionPromptText = { fullText: buildText(), buildText };
+    const newestCommentId = getNewestCommentId(linked.context.comments);
+    this.postingIssueKeys.add(issue.key);
+    void this.postUpdateAndRecord(targetKey, issue.key, prompt, () => linked.requestId, (requestId) => comments.map((comment) => ({
+      issueKey: issue.key,
+      triggerId: `${commentTriggerIdPrefix}${comment.id}`,
+      outcome: 'update',
+      at,
+      requestId,
+      newestCommentId,
+    })));
+    return 'update';
+  }
+
+  /**
+   * Past the cap on issue updates: the comments stay undecided and are delivered once the oldest update of the last 24 h
+   * leaves that window (the scan waits until then). The issue gets ONE comment by the AI account per pause saying so — the
+   * AI account's own comments are never delivered, so it starts no loop — with one log line.
+   */
+  private async pauseUpdates(issueKey: string, comments: readonly JiraComment[]): Promise<JiraIssueDecision> {
+    const { deps } = this;
+    const at = deps.now();
+    const until = deps.triggerLog.getUpdateWindowEnd(issueKey, at) ?? at + msPerDay;
+    this.updateRetries.set(issueKey, { failureCount: 0, retryAt: until });
+    const noticeTriggerId = `${updatesPausedTriggerIdPrefix}${until}`;
+    if (!deps.triggerLog.checkIsSeen(issueKey, noticeTriggerId)) {
+      // Recorded first, as a park notice: one per pause, never again after a failed post or a restart.
+      if (!this.recordOrWarn({ issueKey, triggerId: noticeTriggerId, outcome: 'parked', at })) return 'failed';
+      console.warn(`[jira] ${issueKey}: ${jiraIssueUpdatesPer24hMax} issue updates in 24 h, the cap: comments ${comments.map((comment) => comment.id).join(', ')} and later ones wait until ${new Date(until).toISOString()} and are delivered then; the issue says so in one comment. Does the agent comment under a person's account instead of the AI account?`);
+      await deps.postUpdatesPausedNotice(issueKey, until);
+    }
+    return 'waiting';
   }
 
   /** A failed issue update of the issue waits for its retry. */
@@ -964,16 +1076,7 @@ export class JiraInbound {
     const { trust } = deps;
     // A trusted account that is not the AI account may write as the agent's own tooling (an operator token in its MCP
     // config): every comment it writes would be the next poll's update, one turn per poll for ever. Updates are capped.
-    if (deps.triggerLog.getUpdateCountLastDay(issue.key, at) >= jiraIssueUpdatesPer24hMax) {
-      const records = comments.map((comment): JiraTriggerRecord => ({ issueKey: issue.key, triggerId: `${prefix}${comment.id}`, outcome: 'parked', at }));
-      if (!records.every((record) => this.recordOrWarn(record))) return 'failed';
-      const loggedAt = this.updateCapLoggedAtByIssue.get(issue.key);
-      if (loggedAt === undefined || at - loggedAt >= msPerDay) {
-        this.updateCapLoggedAtByIssue.set(issue.key, at);
-        console.warn(`[jira] ${issue.key}: ${jiraIssueUpdatesPer24hMax} issue updates in 24 h, the cap: comments ${comments.map((comment) => comment.id).join(', ')} and later ones are recorded and not delivered until the day is over. Does the agent comment under a person's account instead of the AI account?`);
-      }
-      return 'parked';
-    }
+    if (deps.triggerLog.getUpdateCountLastDay(issue.key, at) >= jiraIssueUpdatesPer24hMax) return this.pauseUpdates(issue.key, comments);
     const context = await fetchJiraIssueContext(deps.client, issue.key, project.extraFields.map((extraField) => extraField.id), trust !== null);
     const blockTrust: JiraBlockTrust | null = trust && {
       checkIsTrusted: (account) => trust.checkIsTrusted(account),

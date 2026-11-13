@@ -858,8 +858,8 @@ connector behaves is described in [`src/connectors/jira/README.md`](src/connecto
    reached the agent only with its next hand-over. The start logs which. **The agent must comment only as the AI
    account** (the `answer_request` tool does): a comment it writes in Jira under any other account of the trusted group —
    an operator's token in its own tools, say — comes back to it as a person's comment, and then its answer, and so on.
-   As a guard, an issue gets at most 20 such updates in 24 hours; past that its comments are recorded and not delivered,
-   with one line in the log.
+   As a guard, an issue gets at most 20 such updates in 24 hours; past that, new comments wait until the oldest update
+   is a day old and reach the agent then, the issue gets one comment from the AI saying so, and one line goes to the log.
 
    `projects` maps each served project key to its folder under `WORK_ROOT` and the status names in which an
    assigned issue is a request; the agent loads that folder's project memory (`CLAUDE.md`, `.claude/`, … in it
