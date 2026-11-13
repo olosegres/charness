@@ -140,7 +140,9 @@ export const openCodeHistoryLookupTimeoutMs = 10_000;
 /**
  * The functions of the restore the plugin carries as source (`toString()`): the bot's own, written self-contained so that
  * the plugin and the bot can never disagree on the block, the skills or the words. `__name` is a no-op stand-in for the
- * helper the test runner's transform injects into function bodies; the built `dist/` needs none.
+ * helper the test runner's transform injects into function bodies; the built `dist/` needs none. Their text is the COMPILED
+ * one, so the plugin's source — and its hashed file name — follows the compiler: a process run through `tsx` names another
+ * file than the built bot (a test that hands the built bot a plugin name takes it from `dist/`).
  */
 const embeddedSkillsRestoreFunctions = [
   readSkillsBlockLineName,

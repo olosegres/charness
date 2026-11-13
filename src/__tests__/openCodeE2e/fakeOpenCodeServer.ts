@@ -49,7 +49,21 @@ import * as fs from 'fs';
 import * as http from 'http';
 import * as path from 'path';
 import { pathToFileURL } from 'url';
-import { openCodeCompactPluginFileName } from '../../utils/openCodeCompactPlugin';
+import type * as openCodeCompactPluginModule from '../../utils/openCodeCompactPlugin';
+
+/** The repository root, where the built bot lives (`dist/`). */
+const repoRoot = path.resolve(__dirname, '..', '..', '..');
+
+/**
+ * @description The BUILT compaction plugin module (`dist/utils/openCodeCompactPlugin.js`): what the bot under test installs and
+ * names. The plugin's file name carries a hash of its source, and part of that source is the compiled text of the bot's own
+ * functions it embeds (the skills restore), so the test runner's copy of the module (`tsx`) names another file than the built
+ * bot does — a fake that reported the runner's name would make the bot take its plugin for a missing one. Needs `yarn build`,
+ * as every flow does.
+ */
+export function loadBuiltOpenCodeCompactPlugin(): typeof openCodeCompactPluginModule {
+  return require(path.join(repoRoot, 'dist', 'utils', 'openCodeCompactPlugin.js'));
+}
 
 /** How often the event stream sends a heartbeat (the bot's stall watchdog allows four missed 10 s beats). */
 const heartbeatIntervalMs = 5_000;
@@ -621,7 +635,7 @@ export class FakeOpenCodeServer {
 
   private buildConfig(): { defaultModel: { providerID: string; modelID: string }; plugin: string[] } {
     const [providerID, ...rest] = this.options.defaultModel.split('/');
-    return { defaultModel: { providerID, modelID: rest.join('/') }, plugin: [`file:///fake-opencode/plugins/${openCodeCompactPluginFileName}`] };
+    return { defaultModel: { providerID, modelID: rest.join('/') }, plugin: [`file:///fake-opencode/plugins/${loadBuiltOpenCodeCompactPlugin().openCodeCompactPluginFileName}`] };
   }
 
   private buildProviders(): { providers: Array<{ id: string; models: Record<string, { variants: Record<string, object> }> }> } {

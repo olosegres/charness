@@ -261,6 +261,17 @@ const holdReleasePollMs = 100;
 
 const requestIdRe = /req_[A-Za-z0-9_-]+/;
 const issueKeyRe = /\b([A-Z][A-Z0-9]+-\d+)\b/;
+/** Every request id of a prompt (its header names one, and the ones it replaced). */
+const requestIdsRe = /req_[A-Za-z0-9_-]+/g;
+
+/**
+ * @description The label a prompt names (`KEY-n`: an issue key, or the label a test puts in its message): the first such token
+ * once the request ids are taken out. A request id is 8 random base64url characters after `req_` and stands in the header,
+ * ahead of the message, so one that happened to end like `-RT-2` used to be read as the label.
+ */
+function getPromptIssueKey(content: string): string | undefined {
+  return issueKeyRe.exec(content.replace(requestIdsRe, ' '))?.[1];
+}
 const modeRe = /\[fake:([a-z-]+)\]/;
 const answerToolName = 'answer_request';
 const compactToolName = 'compact_conversation';
@@ -1238,7 +1249,7 @@ async function runTurn(argv: readonly string[], sessionId: string, content: stri
   if (fs.existsSync(apiErrorOncePath)) {
     const errorText = fs.readFileSync(apiErrorOncePath, 'utf8').trim();
     fs.rmSync(apiErrorOncePath, { force: true });
-    appendJsonLine(fakeClaudeLogFileNames.turns, { requestId: null, issueKey: issueKeyRe.exec(content)?.[1] ?? 'unknown', isRequestPrompt: false, isPlainTextHidden: false, supersededRequestIds: [], turnCount: 1, pid: process.pid });
+    appendJsonLine(fakeClaudeLogFileNames.turns, { requestId: null, issueKey: getPromptIssueKey(content) ?? 'unknown', isRequestPrompt: false, isPlainTextHidden: false, supersededRequestIds: [], turnCount: 1, pid: process.pid });
     const apiErrorDelayPath = path.join(getStateDir(), fakeClaudeApiErrorDelayFileName);
     if (fs.existsSync(apiErrorDelayPath)) await new Promise((resolve) => setTimeout(resolve, Number(fs.readFileSync(apiErrorDelayPath, 'utf8').trim())));
     writeStdout({ type: 'result', subtype: 'success', is_error: true, result: errorText, session_id: sessionId, usage: fakeTurnUsage, total_cost_usd: addConversationCost(0) });
@@ -1246,14 +1257,14 @@ async function runTurn(argv: readonly string[], sessionId: string, content: stri
   }
   const alwaysUsageLimitPath = path.join(getStateDir(), fakeClaudeAlwaysUsageLimitFileName);
   if (fs.existsSync(alwaysUsageLimitPath)) {
-    appendJsonLine(fakeClaudeLogFileNames.turns, { requestId: null, issueKey: issueKeyRe.exec(content)?.[1] ?? 'unknown', isRequestPrompt: false, isPlainTextHidden: false, supersededRequestIds: [], turnCount: 1, pid: process.pid });
+    appendJsonLine(fakeClaudeLogFileNames.turns, { requestId: null, issueKey: getPromptIssueKey(content) ?? 'unknown', isRequestPrompt: false, isPlainTextHidden: false, supersededRequestIds: [], turnCount: 1, pid: process.pid });
     endTurnOnUsageLimit(sessionId, fs.readFileSync(alwaysUsageLimitPath, 'utf8').trim());
     return;
   }
   const requestId = requestIdRe.exec(content)?.[0];
   const watchMode = modeRe.exec(content)?.[1];
   if (watchMode === 'arm-watch' || watchMode === 'arm-status-watch' || watchMode === 'cancel-watch') {
-    const watchIssueKey = issueKeyRe.exec(content)?.[1] ?? 'unknown';
+    const watchIssueKey = getPromptIssueKey(content) ?? 'unknown';
     appendJsonLine(fakeClaudeLogFileNames.turns, { requestId: requestId ?? null, issueKey: watchIssueKey, isRequestPrompt: false, isPlainTextHidden: false, supersededRequestIds: [], turnCount: 1, pid: process.pid });
     emitTurnActivity(sessionId, watchIssueKey);
     const server = getBotMcpServer(argv);
@@ -1264,8 +1275,8 @@ async function runTurn(argv: readonly string[], sessionId: string, content: stri
   }
   if (!requestId) {
     // A turn without a request (a topic whose view has requests off): logged, so a test can prove none was opened.
-    appendJsonLine(fakeClaudeLogFileNames.turns, { requestId: null, issueKey: issueKeyRe.exec(content)?.[1] ?? 'unknown', isRequestPrompt: false, isPlainTextHidden: false, supersededRequestIds: [], turnCount: 1, pid: process.pid });
-    const noRequestIssueKey = issueKeyRe.exec(content)?.[1] ?? 'unknown';
+    appendJsonLine(fakeClaudeLogFileNames.turns, { requestId: null, issueKey: getPromptIssueKey(content) ?? 'unknown', isRequestPrompt: false, isPlainTextHidden: false, supersededRequestIds: [], turnCount: 1, pid: process.pid });
+    const noRequestIssueKey = getPromptIssueKey(content) ?? 'unknown';
     emitTurnActivity(sessionId, noRequestIssueKey, content);
     await runTodoTokens(getBotMcpServer(argv), content, noRequestIssueKey);
     await waitTurnWork(content);
@@ -1294,7 +1305,7 @@ async function runTurn(argv: readonly string[], sessionId: string, content: stri
   const isPlainTextHidden = content.includes(requesterDoesNotSeePlainTextPhrase);
   const supersededRequestIds = supersededRequestsLineRe.exec(content)?.[1].split(', ') ?? [];
   const previous = readRequestState(requestId);
-  const issueKey = issueKeyRe.exec(content)?.[1] ?? 'unknown';
+  const issueKey = getPromptIssueKey(content) ?? 'unknown';
   const state: RequestTurnState = previous ?? { mode: getMode(content, issueKey), issueKey, turnCount: 0, firstTurnAt: Date.now() };
   state.turnCount += 1;
   writeRequestState(requestId, state);
@@ -1491,7 +1502,7 @@ async function main(): Promise<void> {
       turnChain = turnChain.then(() => runCompactionTurn(argv, sessionId, content.trim().slice(compactCommandText.length).trim()));
       return;
     }
-    const promptIssueKey = issueKeyRe.exec(content)?.[1] ?? 'unknown';
+    const promptIssueKey = getPromptIssueKey(content) ?? 'unknown';
     appendJsonLine(fakeClaudeLogFileNames.prompts, { readAt: Date.now(), pid: process.pid, issueKey: promptIssueKey, requestId: requestIdRe.exec(content)?.[0] ?? null, text: content });
     if (fs.existsSync(path.join(getStateDir(), fakeClaudeCrashOnPromptFileName))) {
       // The message was read and neither echoed nor answered: the prompt never gets taken in.

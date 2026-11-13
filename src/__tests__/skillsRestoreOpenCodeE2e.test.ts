@@ -30,7 +30,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { FakeTelegram } from './telegramE2e/fakeTelegram';
 import { TopicDriver } from './telegramE2e/topicDriver';
-import { FakeOpenCodeServer, writeFakeOpenCodeBinary, type FakeOpenCodeModelRequest } from './openCodeE2e/fakeOpenCodeServer';
+import { FakeOpenCodeServer, loadBuiltOpenCodeCompactPlugin, writeFakeOpenCodeBinary, type FakeOpenCodeModelRequest } from './openCodeE2e/fakeOpenCodeServer';
 import {
   builtCliPath,
   createIsolatedInstanceLayout,
@@ -49,7 +49,7 @@ import { startCharnessOnInstance } from './e2e/fallbackFlowKit';
 import { enDict } from '../i18n/en';
 import { getTelegramFlowTestTimingsEnv } from './telegramE2e/telegramFlowTimings';
 import { compactionChecklistSkillsItem, compactionSkillsBlockEndMarker, compactionSkillsBlockStartMarker } from '../utils/compactOnIdle';
-import { installOpenCodeCompactPlugin, openCodeAncestryLookupTimeoutMs } from '../utils/openCodeCompactPlugin';
+import { openCodeAncestryLookupTimeoutMs } from '../utils/openCodeCompactPlugin';
 import { claudeSkillBaseDirPrefix, skillsRestoreHeader } from '../utils/skillsRestore';
 
 const group = { id: -1001111111111, title: 'ExampleGroup' };
@@ -192,7 +192,8 @@ describe('The skills restore after a compaction on OpenCode: built charness, fak
     topic = new TopicDriver(fakeTelegram, getCharness, openCodeTopic.threadId, replyTimeoutMs);
     const apiRoot = await fakeTelegram.start();
     const pluginDir = getInstancePluginDir();
-    assert.equal(installOpenCodeCompactPlugin(pluginDir), 'written');
+    // The built bot's plugin, as the bot installs it (the runner's copy of the module would name another file).
+    assert.equal(loadBuiltOpenCodeCompactPlugin().installOpenCodeCompactPlugin(pluginDir), 'written');
     const skills = [
       { name: reviewSkillName, location: path.join(getSkillDir(reviewSkillName), 'SKILL.md'), content: `# review\n\n${reviewBodyMarker}: read the diff line by line.\n` },
       { name: commitSkillName, location: path.join(getSkillDir(commitSkillName), 'SKILL.md'), content: `# commit\n\n${commitBodyMarker}\n` },
