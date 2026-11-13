@@ -29,7 +29,7 @@ import {
   resolveOpenCodeGlobalPluginDir,
 } from '../utils/openCodeCompactPlugin';
 import { resetLegacyNameState } from '../legacyNames';
-import { compactionChecklistGuidance, compactionGapsGuidance, compactionResumeGuidance, compactionResumeGuidanceWithoutGaps } from '../utils/compactOnIdle';
+import { compactionChecklistGuidance, compactionGapsGuidance, compactionResumeGuidance, compactionResumeGuidanceWithoutGaps, compactionSkillsBlockEndMarker, compactionSkillsBlockStartMarker, skillsRestoreHeader } from '../utils/compactOnIdle';
 import { getOpenCodeCompactSelfReviewOffDir, applyCompactSelfReviewOffFlag } from '../utils/compactSelfReviewFlags';
 
 type CompactingHook = (input: { sessionID: string }, output: { context: string[]; prompt?: string }) => Promise<void>;
@@ -435,4 +435,192 @@ test('checkHasOpenCodeCompactPlugin: an instance that loaded the pre-rename file
     'recreate',
     'recreated so that it loads the current plugin',
   );
+});
+
+// ── the skills restore (`experimental.chat.messages.transform`) ──
+
+/** A message as OpenCode hands the transform hook its list, as far as the restore reads it. */
+interface PluginMessage {
+  info: { id: string; sessionID: string; role: 'user' | 'assistant'; parentID?: string; summary?: boolean; finish?: string };
+  parts: Array<{ id?: string; type: string; text?: string; synthetic?: boolean; tool?: string; state?: { status: string; input?: { name: string }; metadata?: { name: string; dir: string } } }>;
+}
+
+type TransformHook = (input: object, output: { messages: PluginMessage[] }) => Promise<void>;
+
+/** What the fake server answers: a value, a refusal, or no answer at all. */
+type FakeAnswer<T> = T | 'fail' | 'hang';
+
+/** The slice of the SDK client the restore uses, with a count of its calls. */
+function createRestoreClient(answers: { history: FakeAnswer<PluginMessage[]>; skills: FakeAnswer<Array<{ name: string; location: string; content: string }>> }): {
+  calls: { history: number; skills: number; logs: string[] };
+  client: object;
+} {
+  const calls = { history: 0, skills: 0, logs: [] as string[] };
+  const answer = async <T>(value: FakeAnswer<T>): Promise<{ data: T }> => {
+    if (value === 'hang') return new Promise<never>(() => {});
+    if (value === 'fail') throw new Error('the server refused');
+    return { data: value };
+  };
+  return {
+    calls,
+    client: {
+      session: {
+        messages: async () => { calls.history += 1; return answer(answers.history); },
+        get: async () => ({ data: {} }),
+      },
+      _client: { get: async (request: { url: string }) => { calls.skills += 1; assert.equal(request.url, '/skill'); return answer(answers.skills); } },
+      app: { log: async (request: { body: { message: string } }) => { calls.logs.push(request.body.message); } },
+    },
+  };
+}
+
+async function loadInstalledTransformHook(dir: string, client: object): Promise<TransformHook> {
+  const pluginDir = path.join(dir, 'opencode', 'plugins');
+  assert.notEqual(installOpenCodeCompactPlugin(pluginDir), 'failed');
+  const mod = await import(pathToFileURL(path.join(pluginDir, openCodeCompactPluginFileName)).href);
+  const hooks = await mod.default.server({ client }, undefined);
+  return hooks['experimental.chat.messages.transform'] as TransformHook;
+}
+
+const sessionId = 'ses_restore';
+const reviewSkill = { name: 'review', location: '/x/skills/review/SKILL.md', content: '# review\n\nREVIEW-BODY-MARK: read the diff.\n' };
+const commitSkill = { name: 'commit', location: '/x/skills/commit/SKILL.md', content: '# commit\n\nCOMMIT-BODY-MARK\n' };
+const blockSkill = { name: 'from-block', location: '/x/skills/from-block/SKILL.md', content: 'BLOCK-ONLY-BODY-MARK\n' };
+
+function buildSkillCall(id: string, name: string): PluginMessage {
+  return { info: { id, sessionID: sessionId, role: 'assistant', finish: 'tool-calls' }, parts: [{ type: 'tool', tool: 'skill', state: { status: 'completed', input: { name }, metadata: { name, dir: `/x/skills/${name}` } } }] };
+}
+
+/** A session that loaded `review`, was compacted (summary `summaryId`) and goes on; the history and the list the model sees. */
+function buildCompactedSession(summaryId: string, summaryText: string, tail: PluginMessage[] = []): { history: PluginMessage[]; list: () => PluginMessage[] } {
+  const compactionUser: PluginMessage = { info: { id: `${summaryId}_user`, sessionID: sessionId, role: 'user' }, parts: [{ type: 'compaction' }] };
+  const summary: PluginMessage = { info: { id: summaryId, sessionID: sessionId, role: 'assistant', summary: true, finish: 'stop', parentID: `${summaryId}_user` }, parts: [{ type: 'text', text: summaryText }] };
+  const continueUser: PluginMessage = { info: { id: `${summaryId}_continue`, sessionID: sessionId, role: 'user' }, parts: [{ type: 'text', text: 'Continue if you have next steps', synthetic: true }] };
+  const history = [{ info: { id: 'msg_first', sessionID: sessionId, role: 'user' as const }, parts: [{ type: 'text', text: 'load review' }] }, buildSkillCall('msg_call', 'review'), compactionUser, summary, ...tail, continueUser];
+  // The list is built anew for every request, as the fork rebuilds it from storage (`filterCompacted`).
+  return { history, list: () => structuredClone([compactionUser, summary, ...tail, continueUser]) };
+}
+
+function getRestorePart(messages: PluginMessage[]): string | null {
+  const parts = messages.flatMap((message) => message.parts.filter((part) => part.id === 'prt_charness_skills_restore'));
+  assert.ok(parts.length <= 1, 'one restore part at most');
+  return parts[0]?.text ?? null;
+}
+
+test('installed plugin, no summary in the list: nothing is added — and the compaction\'s own request (no finished summary) is left as it is', async () => {
+  await withTempDir(async (dir) => {
+    const { calls, client } = createRestoreClient({ history: [], skills: [reviewSkill] });
+    const hook = await loadInstalledTransformHook(dir, client);
+    const plain: PluginMessage[] = [{ info: { id: 'msg_1', sessionID: sessionId, role: 'user' }, parts: [{ type: 'text', text: 'hi' }] }, buildSkillCall('msg_2', 'review')];
+    const before = structuredClone(plain);
+    await hook({}, { messages: plain });
+    assert.deepEqual(plain, before);
+    // A summary still being written (no `finish`) is no summary yet.
+    const writing: PluginMessage[] = [...plain, { info: { id: 'msg_s', sessionID: sessionId, role: 'assistant', summary: true, parentID: 'msg_1' }, parts: [{ type: 'text', text: 'half' }] }];
+    await hook({}, { messages: writing });
+    assert.equal(getRestorePart(writing), null);
+    assert.deepEqual(calls, { history: 0, skills: 0, logs: [] }, 'no lookup without a summary');
+  });
+});
+
+test('installed plugin, after a compaction: ONE synthetic part on the compaction\'s own message — every skill of the history and the block, with the server\'s CURRENT text', async () => {
+  await withTempDir(async (dir) => {
+    const summaryText = `Summary.\n${compactionSkillsBlockStartMarker}\nreview\nfrom-block\n${compactionSkillsBlockEndMarker}\n1. skills restored by Charness: review, from-block`;
+    const session = buildCompactedSession('msg_sum1', summaryText);
+    const { client } = createRestoreClient({ history: session.history, skills: [reviewSkill, commitSkill, blockSkill] });
+    const hook = await loadInstalledTransformHook(dir, client);
+    const list = session.list();
+    await hook({}, { messages: list });
+    const text = getRestorePart(list);
+    assert.ok(text, 'the restore is added');
+    assert.ok(list[0].parts.some((part) => part.id === 'prt_charness_skills_restore' && part.synthetic === true), 'on the compaction\'s own user message, right before the summary');
+    assert.ok(text.startsWith(skillsRestoreHeader));
+    assert.ok(text.includes('- review: its current full text is below (base directory: /x/skills/review)'));
+    assert.ok(text.includes('REVIEW-BODY-MARK') && text.includes('BLOCK-ONLY-BODY-MARK'), 'the history\'s skill and the block-only one, whole');
+    assert.ok(!text.includes('COMMIT-BODY-MARK'), 'a skill the session never loaded is not given');
+    assert.ok(text.includes('load it with the skill tool') === false);
+  });
+});
+
+test('installed plugin: a skill whose call is already after the summary (the retained tail) is only named, not given twice', async () => {
+  await withTempDir(async (dir) => {
+    const session = buildCompactedSession('msg_sum2', 'Summary.', [buildSkillCall('msg_tail', 'commit')]);
+    const { client } = createRestoreClient({ history: session.history, skills: [reviewSkill, commitSkill] });
+    const hook = await loadInstalledTransformHook(dir, client);
+    const list = session.list();
+    await hook({}, { messages: list });
+    const text = getRestorePart(list) ?? '';
+    assert.ok(text.includes('- commit: its full text is already in your context'));
+    assert.ok(!text.includes('COMMIT-BODY-MARK'));
+    assert.ok(text.includes('REVIEW-BODY-MARK'));
+  });
+});
+
+test('installed plugin: built once per summary — every later request gets the same text with no lookup; the next summary builds anew', async () => {
+  await withTempDir(async (dir) => {
+    const first = buildCompactedSession('msg_sum3', 'Summary.');
+    const answers = { history: first.history, skills: [reviewSkill] };
+    const { calls, client } = createRestoreClient(answers);
+    const hook = await loadInstalledTransformHook(dir, client);
+    const lists = [first.list(), first.list()];
+    for (const list of lists) await hook({}, { messages: list });
+    assert.equal(getRestorePart(lists[0]), getRestorePart(lists[1]), 'the same text for every request of the summary (the prompt cache holds)');
+    assert.deepEqual([calls.history, calls.skills], [1, 1]);
+    // The same list objects handed over twice get one part.
+    await hook({}, { messages: lists[0] });
+    assert.ok(getRestorePart(lists[0]));
+    const second = buildCompactedSession('msg_sum4', 'Summary.');
+    await hook({}, { messages: second.list() });
+    assert.deepEqual([calls.history, calls.skills], [2, 2], 'a new compaction looks again');
+  });
+});
+
+test('installed plugin: lookups that never answer cost at most their timeout — the calls in the list stand in for the history, the skills get load lines', async () => {
+  await withTempDir(async (dir) => {
+    const session = buildCompactedSession('msg_sum5', `${compactionSkillsBlockStartMarker}\nfrom-block\n${compactionSkillsBlockEndMarker}`, [buildSkillCall('msg_tail', 'commit')]);
+    const { client } = createRestoreClient({ history: 'hang', skills: 'hang' });
+    const hook = await loadInstalledTransformHook(dir, client);
+    const list = session.list();
+    const startedAt = Date.now();
+    await hook({}, { messages: list });
+    const elapsedMs = Date.now() - startedAt;
+    assert.ok(elapsedMs < openCodeAncestryLookupTimeoutMs + 1500, `the request waited ${elapsedMs} ms`);
+    const text = getRestorePart(list) ?? '';
+    assert.ok(text.includes('- commit: its full text is already in your context'), 'the call in the list is still known');
+    assert.ok(text.includes('- from-block: not restored here: load it with the skill tool'), 'the block\'s name, with no text to give: the load line');
+    assert.ok(!text.includes('review'), 'what only the history held is unknown while it does not answer');
+  });
+});
+
+test('installed plugin: a refused skill list gives load lines; a skill the server no longer offers is not available now; nothing loaded adds nothing', async () => {
+  await withTempDir(async (dir) => {
+    const refused = buildCompactedSession('msg_sum6', 'Summary.');
+    const refusing = createRestoreClient({ history: refused.history, skills: 'fail' });
+    const refusedList = refused.list();
+    await (await loadInstalledTransformHook(path.join(dir, 'a'), refusing.client))({}, { messages: refusedList });
+    assert.ok((getRestorePart(refusedList) ?? '').includes('- review: not restored here: load it with the skill tool'));
+
+    const gone = buildCompactedSession('msg_sum7', 'Summary.');
+    const goneList = gone.list();
+    await (await loadInstalledTransformHook(path.join(dir, 'b'), createRestoreClient({ history: gone.history, skills: [commitSkill] }).client))({}, { messages: goneList });
+    assert.ok((getRestorePart(goneList) ?? '').includes('- review: was loaded before but is not available now'));
+
+    const none = buildCompactedSession('msg_sum8', 'Summary.');
+    const noneList = none.list();
+    const noSkillsHistory = none.history.filter((message) => message.info.id !== 'msg_call');
+    await (await loadInstalledTransformHook(path.join(dir, 'c'), createRestoreClient({ history: noSkillsHistory, skills: [reviewSkill] }).client))({}, { messages: noneList });
+    assert.equal(getRestorePart(noneList), null, 'no skill was ever loaded: zero tokens');
+  });
+});
+
+test('installed plugin: a block that disagrees with the history is written to the server log once per summary', async () => {
+  await withTempDir(async (dir) => {
+    const session = buildCompactedSession('msg_sum9', `${compactionSkillsBlockStartMarker}\nfrom-block\n${compactionSkillsBlockEndMarker}`);
+    const { calls, client } = createRestoreClient({ history: session.history, skills: [reviewSkill, blockSkill] });
+    const hook = await loadInstalledTransformHook(dir, client);
+    await hook({}, { messages: session.list() });
+    await hook({}, { messages: session.list() });
+    assert.equal(calls.logs.length, 1);
+    assert.match(calls.logs[0], /names \[from-block\] the history does not show, the history shows \[review\] the block leaves out/);
+  });
 });

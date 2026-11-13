@@ -22,6 +22,16 @@
  * — the bot's `/compact` and the server's own — first runs the plugin's `experimental.session.compacting` hook the way the real
  * server does, and what it pushed into the compaction prompt is kept in {@link FakeOpenCodeServer.pluginContexts}.
  *
+ * The skills restore: a flow records the agent's skill calls ({@link FakeOpenCodeServer.recordSkillCall}) and the skills the
+ * server offers (`GET /skill`, {@link FakeOpenCodeOptions.skills}); from then on the session's stored history is served in the
+ * order it happened, the compaction's own user message included. With {@link FakeOpenCodeOptions.isModelRequestSimulated}, every
+ * prompt the bot sends, and the server's own "Continue…" after an overflow compaction ({@link FakeOpenCodeServer.emitCompactionSummary}
+ * `isContinued`), is a simulated model request:
+ * the list the fork would send (`filterCompacted`: the compaction's user message, the summary, what came after) goes through the
+ * plugin's `experimental.chat.messages.transform` hook with a client that asks this server over HTTP, as the real plugin's
+ * does, and the restore part it added is kept in {@link FakeOpenCodeServer.modelRequests}.
+ * {@link FakeOpenCodeServer.restartPluginInstance} loads the plugin anew, as a restarted server does.
+ *
  * Every request is recorded; one that is none of these is answered `404` AND listed in `unhandled`, so a flow can
  * assert the bot asked for nothing the fake does not model. A prompt is recorded with its text and model, and never
  * answered by itself — a flow decides what the "model" does next: {@link FakeOpenCodeServer.emitUsageLimit} makes the
@@ -85,6 +95,36 @@ export interface FakeCompactionSummary {
 /** What the fake waits between the pieces of a summary unless a flow says otherwise: past the adapter's 500 ms debounce. */
 const defaultSummaryChunkGapMs = 650;
 
+/** A skill the fake server offers on `GET /skill`: its name, the path of its `SKILL.md`, its body. */
+export interface FakeOpenCodeSkill {
+  name: string;
+  location: string;
+  content: string;
+}
+
+/** One simulated model request of a session: what the bot's plugin added to it. */
+export interface FakeOpenCodeModelRequest {
+  sessionId: string;
+  /** `prompt`: the bot's prompt; `continuation`: the server's own "Continue…" after its overflow compaction. */
+  phase: 'prompt' | 'continuation';
+  /** The id of the latest summary in the list, `null` before any compaction. */
+  summaryId: string | null;
+  /** The text of the restore part the plugin added, `null` for none. */
+  restoreText: string | null;
+}
+
+/** A message of the session's stored history, the shape `GET /session/:id/message` serves. */
+interface StoredMessage {
+  info: { id: string; sessionID: string; role: 'user' | 'assistant'; summary?: true; finish?: string; parentID?: string };
+  parts: Array<{ id?: string; type: string; text?: string; synthetic?: boolean; tool?: string; state?: { status: string; input: { name: string }; metadata: { name: string; dir: string } } }>;
+}
+
+/** The text of the server's own user message after its overflow compaction (the fork's `compaction.ts`). */
+const syntheticContinueText = 'Continue if you have next steps, or stop and ask for clarification if you are unsure how to proceed.';
+
+/** The id of the part the bot's plugin adds with the restore (`openCodeCompactPlugin.ts`). */
+const skillsRestorePartId = 'prt_charness_skills_restore';
+
 export interface FakeOpenCodeOptions {
   /** What `GET /global/health` and `opencode --version` report. */
   version: string;
@@ -94,10 +134,20 @@ export interface FakeOpenCodeOptions {
   defaultModel: string;
   /** Where the bot's compaction plugin is installed: set, every compaction runs its hook (see the header). */
   pluginDir?: string;
+  /** The skills `GET /skill` lists; unset: none. */
+  skills?: readonly FakeOpenCodeSkill[];
+  /**
+   * Every prompt and the server's own continuation is a simulated model request through the plugin's transform (see the
+   * header). Off by default: the plugin's own lookups would add requests the other flows do not expect.
+   */
+  isModelRequestSimulated?: boolean;
 }
 
 /** What the plugin's `experimental.session.compacting` hook takes and fills, as OpenCode calls it. */
 type CompactingHook = (input: { sessionID: string }, output: { context: string[] }) => Promise<void>;
+
+/** The plugin's `experimental.chat.messages.transform` hook, as OpenCode calls it before a model request. */
+type TransformHook = (input: object, output: { messages: StoredMessage[] }) => Promise<void>;
 
 /** The slice of the SDK client OpenCode hands a plugin that the bot's plugin uses: the session lookup, `parentID` included. */
 interface PluginSessionClient {
@@ -119,6 +169,17 @@ export class FakeOpenCodeServer {
   readonly sessions = new Map<string, FakeOpenCodeSession>();
   /** What the bot's compaction plugin pushed into the prompt of each compaction, oldest first (only with `pluginDir`). */
   readonly pluginContexts: Array<{ sessionId: string; context: string[] }> = [];
+  /** Every simulated model request, oldest first (only with `pluginDir`): what the plugin's transform added (see the header). */
+  readonly modelRequests: FakeOpenCodeModelRequest[] = [];
+  /** What the plugin wrote to the server log (`client.app.log`), oldest first. */
+  readonly pluginLogs: string[] = [];
+  /** The sessions' stored history in the order it happened, once a flow recorded a skill call in them. */
+  private readonly timelines = new Map<string, StoredMessage[]>();
+  /** The sessions a flow recorded a skill call in: their history is served from {@link timelines}. */
+  private readonly sessionsWithSkillCalls = new Set<string>();
+  /** Bumped by {@link restartPluginInstance}: the plugin module is imported anew under another URL. */
+  private pluginGeneration = 0;
+  private url = '';
   /** The sub-agent (Task) sessions of {@link addChildSession}, by id → the parent's: what the session lookup a plugin gets answers with. */
   private readonly childParents = new Map<string, string>();
   /** Per instance directory, the MCP servers registered with `POST /mcp`. */
@@ -155,7 +216,8 @@ export class FakeOpenCodeServer {
   async start(port: number): Promise<string> {
     await new Promise<void>((resolve) => this.server.listen(port, '127.0.0.1', resolve));
     this.heartbeatTimer = setInterval(() => this.broadcast({ type: 'server.heartbeat', properties: {} }), heartbeatIntervalMs);
-    return `http://127.0.0.1:${port}`;
+    this.url = `http://127.0.0.1:${port}`;
+    return this.url;
   }
 
   async stop(): Promise<void> {
@@ -276,8 +338,10 @@ export class FakeOpenCodeServer {
    * a safety net for a dropped `finish`): nothing then ends the summary's text before the next message's.
    * Resolves when the last piece and the idle are out.
    */
-  async emitCompactionSummary(sessionId: string, summary: FakeCompactionSummary, options: { beforeIdle?: () => Promise<void>; isFinishDropped?: boolean } = {}): Promise<void> {
+  async emitCompactionSummary(sessionId: string, summary: FakeCompactionSummary, options: { beforeIdle?: () => Promise<void>; isFinishDropped?: boolean; isContinued?: boolean } = {}): Promise<void> {
     const session = this.getSessionOrThrow(sessionId);
+    const compactionUserId = `${summary.messageId}_compaction`;
+    this.pushStoredMessage(sessionId, { info: { id: compactionUserId, sessionID: sessionId, role: 'user' }, parts: [{ type: 'compaction' }] });
     await this.runCompactionPlugin(sessionId);
     const gapMs = summary.chunkGapMs ?? defaultSummaryChunkGapMs;
     this.runningTurns.add(sessionId);
@@ -289,10 +353,89 @@ export class FakeOpenCodeServer {
       if (index < summary.chunks.length - 1) await new Promise<void>((resolve) => setTimeout(resolve, gapMs));
     }
     this.storedSummaries.set(sessionId, [...(this.storedSummaries.get(sessionId) ?? []), { messageId: summary.messageId, text: summary.chunks.join('') }]);
+    this.pushStoredMessage(sessionId, { info: { id: summary.messageId, sessionID: sessionId, role: 'assistant', summary: true, finish: 'stop', parentID: compactionUserId }, parts: [{ type: 'text', text: summary.chunks.join('') }] });
     await new Promise<void>((resolve) => setTimeout(resolve, gapMs));
     if (!options.isFinishDropped) this.broadcast({ type: 'message.updated', properties: { info: { ...info, finish: 'stop' } } }, session.directory);
+    // An overflow compaction goes on by itself: the server's own "Continue…" message and the model request that answers it.
+    if (options.isContinued) {
+      this.pushStoredMessage(sessionId, { info: { id: `${summary.messageId}_continue`, sessionID: sessionId, role: 'user' }, parts: [{ type: 'text', text: syntheticContinueText, synthetic: true }] });
+      await this.simulateModelRequest(sessionId, 'continuation');
+    }
     await options.beforeIdle?.();
     this.emitSessionIdle(sessionId);
+  }
+
+  /**
+   * @description The agent loading a skill with the `skill` tool: the completed call stored in the session's history (with the
+   * name and folder the real tool records) and announced on the event stream. From then on the history is served in order.
+   */
+  recordSkillCall(sessionId: string, name: string, dir: string): void {
+    const session = this.getSessionOrThrow(sessionId);
+    this.sessionsWithSkillCalls.add(sessionId);
+    const messageId = `msg_skill_${this.requests.length}_${name}`;
+    const state = { status: 'completed', input: { name }, metadata: { name, dir } };
+    this.pushStoredMessage(sessionId, { info: { id: messageId, sessionID: sessionId, role: 'assistant', finish: 'tool-calls' }, parts: [{ id: `${messageId}_skill`, type: 'tool', tool: 'skill', state }] });
+    this.broadcastAssistantMessage(sessionId, messageId, session.directory);
+    this.broadcast({ type: 'message.part.updated', properties: { part: { id: `${messageId}_skill`, messageID: messageId, sessionID: sessionId, type: 'tool', tool: 'skill', state: { status: 'completed', title: `Loaded skill: ${name}`, input: { name } } } } }, session.directory);
+  }
+
+  /** @description A restarted server: the next model request loads the plugin anew, with nothing kept from before. */
+  restartPluginInstance(): void {
+    this.pluginGeneration += 1;
+  }
+
+  private pushStoredMessage(sessionId: string, message: StoredMessage): void {
+    this.timelines.set(sessionId, [...(this.timelines.get(sessionId) ?? []), message]);
+  }
+
+  /**
+   * The list the fork sends the model (`filterCompacted`): after a compaction the compaction's own user message, the summary
+   * and what came after it; before one, the whole history. A copy: the plugin's transform changes it in place.
+   */
+  private buildModelList(sessionId: string): StoredMessage[] {
+    const timeline = this.timelines.get(sessionId) ?? [];
+    const summaryIndex = timeline.map((message) => message.info.summary === true).lastIndexOf(true);
+    if (summaryIndex < 0) return structuredClone(timeline);
+    const summary = timeline[summaryIndex];
+    const compactionUser = timeline.find((message) => message.info.id === summary.info.parentID);
+    return structuredClone([...(compactionUser ? [compactionUser] : []), ...timeline.slice(summaryIndex)]);
+  }
+
+  /** The client OpenCode hands a plugin, as far as the bot's plugin uses it: every lookup asks THIS server over HTTP. */
+  private buildPluginClient(directory: string | null): object {
+    const query = directory === null ? '' : `?directory=${encodeURIComponent(directory)}`;
+    const get = async (requestPath: string): Promise<{ data: unknown }> => {
+      const response = await fetch(`${this.url}${requestPath}${query}`);
+      if (!response.ok) throw new Error(`the fake OpenCode answered ${response.status}`);
+      return { data: await response.json() };
+    };
+    return {
+      session: {
+        get: async ({ path: { id } }: { path: { id: string } }) => ({ data: { parentID: this.childParents.get(id) } }),
+        messages: async ({ path: { id } }: { path: { id: string } }) => get(`/session/${id}/message`),
+      },
+      _client: { get: async ({ url }: { url: string }) => get(url) },
+      app: { log: async ({ body }: { body: { message: string } }) => { this.pluginLogs.push(body.message); return { data: true }; } },
+    };
+  }
+
+  /**
+   * A model request of the session: the list goes through the plugin's `experimental.chat.messages.transform` hook, and the
+   * restore part it added is recorded in {@link modelRequests}. Without a plugin folder nothing is simulated.
+   */
+  private async simulateModelRequest(sessionId: string, phase: FakeOpenCodeModelRequest['phase']): Promise<void> {
+    const { pluginDir, isModelRequestSimulated } = this.options;
+    if (!pluginDir || isModelRequestSimulated !== true) return;
+    const fileName = fs.readdirSync(pluginDir).find((name) => compactionPluginFileNamePattern.test(name));
+    if (!fileName) throw new Error(`no compaction plugin is installed in ${pluginDir}`);
+    const pluginUrl = `${pathToFileURL(path.join(pluginDir, fileName)).href}?generation=${this.pluginGeneration}`;
+    const pluginModule: { default: { server: (context: { client: object }) => Promise<Record<string, TransformHook>> } } = await import(pluginUrl);
+    const hooks = await pluginModule.default.server({ client: this.buildPluginClient(this.getSessionOrThrow(sessionId).directory) });
+    const messages = this.buildModelList(sessionId);
+    await hooks['experimental.chat.messages.transform']({}, { messages });
+    const restoreParts = messages.flatMap((message) => message.parts.filter((part) => part.id === skillsRestorePartId));
+    const summaryId = messages.find((message) => message.info.summary === true)?.info.id ?? null;
+    this.modelRequests.push({ sessionId, phase, summaryId, restoreText: restoreParts[0]?.text ?? null });
   }
 
   /**
@@ -428,6 +571,7 @@ export class FakeOpenCodeServer {
     const mcpDisconnectMatch = method === 'POST' ? /^\/mcp\/([^/]+)\/disconnect$/.exec(record.path) : null;
     if (mcpDisconnectMatch) return this.disconnectMcp(record, decodeURIComponent(mcpDisconnectMatch[1]), response);
     if (method === 'GET' && record.path === '/question') return reply([]);
+    if (method === 'GET' && record.path === '/skill') return reply(this.options.skills ?? []);
     if (method === 'GET' && record.path === '/session/status') return reply({});
     if (method === 'GET' && record.path === '/session') return reply([...this.sessions.values()].filter((session) => session.directory === record.directory).map(toApiSession));
     if (method === 'POST' && record.path === '/session') return reply(toApiSession(this.createSession(record)));
@@ -537,8 +681,12 @@ export class FakeOpenCodeServer {
     return session;
   }
 
-  /** What `GET /session/:id/message` returns: the prompts the bot sent into the session, as stored user messages, then the compaction summaries. */
-  private buildStoredMessages(session: FakeOpenCodeSession): Array<{ info: { id: string; role: 'user' | 'assistant'; summary?: true }; parts: Array<{ type: 'text'; text: string }> }> {
+  /**
+   * What `GET /session/:id/message` returns: the prompts the bot sent into the session, as stored user messages, then the
+   * compaction summaries — or, once a flow recorded a skill call in the session, its whole history in the order it happened.
+   */
+  private buildStoredMessages(session: FakeOpenCodeSession): Array<{ info: { id: string; role: 'user' | 'assistant'; summary?: true }; parts: Array<{ type: string; text?: string }> }> {
+    if (this.sessionsWithSkillCalls.has(session.id)) return this.timelines.get(session.id) ?? [];
     const prompts = this.prompts
       .filter((prompt) => prompt.sessionId === session.id)
       .map((prompt, index) => ({ info: { id: `msg_${session.id}_${index}`, role: 'user' as const }, parts: [{ type: 'text' as const, text: prompt.text }] }));
@@ -551,6 +699,9 @@ export class FakeOpenCodeServer {
     const text = (body?.parts ?? []).filter((part) => part.type === 'text').map((part) => part.text ?? '').join('\n');
     const model = body?.model?.providerID && body.model.modelID ? `${body.model.providerID}/${body.model.modelID}` : null;
     this.prompts.push({ sessionId: session.id, directory: session.directory, text, model });
+    this.pushStoredMessage(session.id, { info: { id: `msg_${session.id}_prompt_${this.prompts.length}`, sessionID: session.id, role: 'user' }, parts: [{ type: 'text', text }] });
+    // The model request that answers the prompt; a flow waits for it in `modelRequests`.
+    this.simulateModelRequest(session.id, 'prompt').catch((error: Error) => this.pluginLogs.push(`the simulated model request failed: ${error.message}`));
   }
 }
 

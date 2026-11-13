@@ -41,13 +41,42 @@
  * therefore leaves the resume guidance out of its instruction when the folder's
  * instance has the CURRENT plugin ({@link checkHasOpenCodeCompactPlugin} over
  * `GET /config`), and keeps it otherwise.
+ *
+ * The same plugin gives a session its skills back after every compaction (plan `2026-11-12-skills-reload-after-compaction`,
+ * S4): nothing reloads a skill there by itself, so the summary used to drop its text entirely. Its
+ * `experimental.chat.messages.transform` hook runs before every model request of the session's loop (measured on the fork
+ * build: the overflow compaction's synthetic "Continue…" request, the first request after a manual compaction and after a
+ * server restart all carried the part it added) and over the in-memory list only — nothing it adds is stored, sent over SSE
+ * or shown. Once the list holds a finished summary it adds ONE synthetic text part, the restore ({@link
+ * buildOpenCodeCompactPluginSource}), to the compaction's own user message — right before the summary, a fixed place, so
+ * every later request starts the same and the prompt cache holds. Within one loop the fork converts a message once and
+ * reuses it (`appendOnlyModelMessages`), so the part must be there from the first request that sees the summary — it is,
+ * since a compaction changes the list and the conversion starts over. The compaction's own request runs the hook too, but
+ * the fork hides the earlier summaries from it (measured on the first and on a second compaction), so it holds none and is
+ * left as it is.
  */
 
 import crypto from 'crypto';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { getCompactionResumeGuidance } from './compactOnIdle';
+import {
+  compactionSkillsBlockEndMarker,
+  compactionSkillsBlockMaxNameLength,
+  compactionSkillsBlockStartMarker,
+  getCompactionResumeGuidance,
+  parseSkillsBlock,
+  readSkillsBlockLineName,
+} from './compactOnIdle';
+import {
+  buildSkillsRestoreText,
+  getOpenCodeLoadedSkills,
+  openCodeSkillToolName,
+  planOpenCodeSkillsRestore,
+  renderSkillsRestoreList,
+  renderSkillsRestoreSection,
+  skillsRestoreTexts,
+} from './skillsRestore';
 import { flagSessionIdPattern, openCodeCompactSelfReviewOffDirName } from './compactSelfReviewFlags';
 import { formatDeprecation, warnLegacyNameOnce } from '../legacyNames';
 
@@ -96,6 +125,27 @@ const maxSessionAncestryDepth = 8;
  */
 export const openCodeAncestryLookupTimeoutMs = 2000;
 
+/** The id of the part the restore adds: one per message, so a list the hook sees twice never gets two. */
+const skillsRestorePartId = 'prt_charness_skills_restore';
+
+/** How many sessions' restores a plugin instance keeps (one per summary): a long-lived server must not grow without end. */
+const maxCachedSkillsRestores = 64;
+
+/**
+ * The functions of the restore the plugin carries as source (`toString()`): the bot's own, written self-contained so that
+ * the plugin and the bot can never disagree on the block, the skills or the words. `__name` is a no-op stand-in for the
+ * helper the test runner's transform injects into function bodies; the built `dist/` needs none.
+ */
+const embeddedSkillsRestoreFunctions = [
+  readSkillsBlockLineName,
+  parseSkillsBlock,
+  getOpenCodeLoadedSkills,
+  planOpenCodeSkillsRestore,
+  renderSkillsRestoreList,
+  renderSkillsRestoreSection,
+  buildSkillsRestoreText,
+];
+
 /**
  * @description The plugin module source: a v1 plugin (`default` export with `id` + `server`). Before a compaction it looks for
  * the flag the bot keeps for the session (`utils/compactSelfReviewFlags.ts`): present ⇒ `/compact_self_review` is off for the
@@ -107,6 +157,15 @@ export const openCodeAncestryLookupTimeoutMs = 2000;
  * {@link maxSessionAncestryDepth} levels: a topic's sub-agents follow the topic. A folder with no flag in it at all costs no
  * request. A session id that is not a plain id, a lookup that fails or is not answered within
  * {@link openCodeAncestryLookupTimeoutMs}, or any read failure means ON: the section is asked for, as before the switch.
+ *
+ * Before every model request (`experimental.chat.messages.transform`) it gives the skills back once the list holds a finished
+ * summary: the skills of the session's stored history (`client.session.messages`, every compaction so far) and of the
+ * summary's block, the server's current text of each (`GET /skill`; the plugin's client is the v1 SDK, which has no method for
+ * it, so the request goes through its inner client, which carries the folder and the password — measured on the fork build),
+ * a skill whose call is already after the summary only named. Built once per summary and kept, so every request of it gets
+ * the same text. Each lookup has {@link openCodeAncestryLookupTimeoutMs}: a history that does not come is replaced by the
+ * calls the list itself holds, a skill list that does not come leaves "load it with the skill tool" lines. Nothing ever
+ * throws out of it or holds the request longer.
  */
 export function buildOpenCodeCompactPluginSource(input: { context: string; contextWithoutInstructionGaps: string }): string {
   return [
@@ -145,11 +204,92 @@ export function buildOpenCodeCompactPluginSource(input: { context: string; conte
     '  }',
     '  return false;',
     '};',
+    // The skills restore: the bot's own functions, then the hook's glue.
+    'const __name = (target) => target;',
+    ...embeddedSkillsRestoreFunctions.map((restoreFunction) => restoreFunction.toString()),
+    `const restoreTexts = ${JSON.stringify(skillsRestoreTexts)};`,
+    `const restoreToolName = ${JSON.stringify(openCodeSkillToolName)};`,
+    `const skillsBlockMarkers = ${JSON.stringify({ start: compactionSkillsBlockStartMarker, end: compactionSkillsBlockEndMarker, maxNameLength: compactionSkillsBlockMaxNameLength })};`,
+    `const restorePartId = ${JSON.stringify(skillsRestorePartId)};`,
+    `const maxCachedRestores = ${maxCachedSkillsRestores};`,
+    'const restoreCache = new Map();',
+    // A server answer, or a rejection when it does not come in time (the timer is always cleared; a late answer is ignored).
+    'const askServer = async (request) => {',
+    '  let timer;',
+    '  try {',
+    '    const timeout = new Promise((_resolve, reject) => { timer = setTimeout(() => reject(new Error("the server did not answer in time")), lookupTimeoutMs); });',
+    '    return await Promise.race([request(), timeout]);',
+    '  } finally {',
+    '    clearTimeout(timer);',
+    '  }',
+    '};',
+    'const readHistory = async (client, sessionID) => {',
+    '  try {',
+    '    const answer = await askServer(() => client.session.messages({ path: { id: sessionID } }));',
+    '    return Array.isArray(answer?.data) ? answer.data : null;',
+    '  } catch { return null; }',
+    '};',
+    'const readAvailableSkills = async (client) => {',
+    '  if (typeof client?._client?.get !== "function") return null;',
+    '  try {',
+    '    const answer = await askServer(() => client._client.get({ url: "/skill" }));',
+    '    if (!Array.isArray(answer?.data)) return null;',
+    '    return answer.data.filter((skill) => typeof skill?.name === "string" && typeof skill.location === "string" && typeof skill.content === "string");',
+    '  } catch { return null; }',
+    '};',
+    // A summary whose block and the session's history disagree is worth a line in the server log (the model forgot or mangled a
+    // name, or a skill was loaded in a way the history does not show); the restore takes both either way.
+    'const logBlockMismatch = (client, sessionID, blockNames, loaded) => {',
+    '  if (loaded === null || blockNames.length === 0) return;',
+    '  const blockOnly = blockNames.filter((name) => !loaded.some((mention) => mention.name === name));',
+    '  const historyOnly = loaded.map((mention) => mention.name).filter((name) => !blockNames.includes(name));',
+    '  if (blockOnly.length === 0 && historyOnly.length === 0) return;',
+    '  const message = `skills restore of ${sessionID}: the summary block names [${blockOnly.join(", ")}] the history does not show, the history shows [${historyOnly.join(", ")}] the block leaves out`;',
+    '  try { Promise.resolve(client?.app?.log?.({ body: { service: "charness-compaction", level: "info", message } })).catch(() => {}); } catch {}',
+    '};',
+    'const findFinishedSummaryIndex = (messages) => {',
+    '  for (let index = messages.length - 1; index >= 0; index -= 1) {',
+    '    const info = messages[index]?.info;',
+    '    if (info?.role === "assistant" && info.summary === true && info.finish && !info.error) return index;',
+    '  }',
+    '  return -1;',
+    '};',
+    'const buildRestore = async (client, messages, summaryIndex) => {',
+    '  const summary = messages[summaryIndex];',
+    '  const summaryText = (summary.parts ?? []).filter((part) => part?.type === "text" && typeof part.text === "string").map((part) => part.text).join("\\n");',
+    '  const blockNames = parseSkillsBlock(summaryText, skillsBlockMarkers.start, skillsBlockMarkers.end, skillsBlockMarkers.maxNameLength) ?? [];',
+    '  const inContextNames = getOpenCodeLoadedSkills(messages.slice(summaryIndex + 1)).map((mention) => mention.name);',
+    '  const [history, available] = await Promise.all([readHistory(client, summary.info.sessionID), readAvailableSkills(client)]);',
+    '  const loaded = getOpenCodeLoadedSkills(history ?? messages);',
+    '  logBlockMismatch(client, summary.info.sessionID, blockNames, history === null ? null : loaded);',
+    '  const entries = planOpenCodeSkillsRestore({ loaded, blockNames, inContextNames, available });',
+    '  return buildSkillsRestoreText(entries, restoreTexts, restoreToolName);',
+    '};',
+    'const restoreSkills = async (client, messages) => {',
+    '  if (!Array.isArray(messages)) return;',
+    '  const summaryIndex = findFinishedSummaryIndex(messages);',
+    '  if (summaryIndex < 0) return;',
+    '  const summary = messages[summaryIndex];',
+    '  const target = messages.find((message) => message?.info?.role === "user" && message.info.id === summary.info.parentID);',
+    '  if (!target || !Array.isArray(target.parts) || target.parts.some((part) => part?.id === restorePartId)) return;',
+    '  const cacheKey = `${summary.info.sessionID}:${summary.info.id}`;',
+    '  let text = restoreCache.get(cacheKey);',
+    '  if (text === undefined) {',
+    '    text = await buildRestore(client, messages, summaryIndex);',
+    '    restoreCache.set(cacheKey, text);',
+    '    if (restoreCache.size > maxCachedRestores) restoreCache.delete(restoreCache.keys().next().value);',
+    '  }',
+    '  if (text === "") return;',
+    '  target.parts.push({ id: restorePartId, sessionID: summary.info.sessionID, messageID: target.info.id, type: "text", synthetic: true, text });',
+    '};',
     'export default {',
     `  id: ${JSON.stringify(openCodeCompactPluginId)},`,
     '  server: async (pluginContext) => ({',
     '    "experimental.session.compacting": async (input, output) => {',
     '      output.context.push((await checkIsSelfReviewOff(pluginContext?.client, input?.sessionID)) ? contextWithoutInstructionGaps : context);',
+    '    },',
+    '    "experimental.chat.messages.transform": async (_input, output) => {',
+    '      try { await restoreSkills(pluginContext?.client, output?.messages); } catch {}',
     '    },',
     '  }),',
     '};',
