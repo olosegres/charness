@@ -239,3 +239,13 @@ test('checkIsAnyPending: a thread mid-startup, or any prompt still waiting, make
   buffer.closeWindow(KEY_B);
   assert.equal(buffer.checkIsAnyPending(), false);
 });
+
+test('a prompt buffered as a person\'s own is replayed as one, a bot-made one as not: the replay knows whether to wait for its write', async () => {
+  const buffer = new StartupPromptBuffer();
+  const forwarded: Array<[string, boolean]> = [];
+  buffer.markStarting(KEY_A);
+  buffer.addPrompt(KEY_A, 'typed', undefined, true);
+  buffer.addPrompt(KEY_A, 'a wake-up');
+  await buffer.replayPrompts(KEY_A, { isSessionActive: true, forward: async (text, isPersonInput) => { forwarded.push([text, isPersonInput]); } });
+  assert.deepEqual(forwarded, [['typed', true], ['a wake-up', false]]);
+});

@@ -265,22 +265,44 @@ describe('json-stream adapter — a user turn waits for a CLI that reads (a resu
     assert.deepEqual(written, []);
   });
 
-  it('the SAME prompt torn a second time is said loudly — it stays pending (the forward rejects), it does not loop silently', async () => {
+  it('the SAME request\'s prompt torn a second time is said loudly — even rebuilt with other text for its re-post — it stays pending (the forward rejects), it does not loop silently', async () => {
     const torn = (): FifoWriteError => new FifoWriteError('EAGAIN: the reader took nothing for 120 s (64 of 100 bytes written)', 64, 100);
     const { adapter, calls } = createAdapter([torn(), torn()]);
     const errors = mock.method(console, 'error', () => {});
     try {
       addSession(adapter);
-      await assert.rejects(adapter.sendInputAndWait(key, 'a long hand-over prompt'));
+      await assert.rejects(adapter.sendInputAndWait(key, '[Request req_AbC1 · from: PROJ-1] the whole issue'));
       await settleTicks();
       assert.ok(!errors.mock.calls.some((call) => String(call.arguments[0]).includes('the SAME prompt')), 'one tear is the usual suspend');
-      // The retry reaches the fresh process the suspend leads to — and tears again.
+      // The re-post reaches the fresh process the suspend leads to — rebuilt as a delta — and tears again.
       adapter['sessions'].delete(keyToString(key));
       addSession(adapter);
-      await assert.rejects(adapter.sendInputAndWait(key, 'a long hand-over prompt'));
+      await assert.rejects(adapter.sendInputAndWait(key, '[Request req_AbC1 · from: PROJ-1] what changed'));
       await settleTicks();
       assert.equal(calls(), 2);
-      assert.ok(errors.mock.calls.some((call) => String(call.arguments[0]).includes('the SAME prompt (23 chars) was left half-written 2 times')), 'said loudly');
+      assert.ok(errors.mock.calls.some((call) => String(call.arguments[0]).includes('was left half-written 2 times')), 'said loudly');
+    } finally {
+      errors.mock.restore();
+    }
+  });
+
+  it('a write of the request\'s prompt that lands forgets its tears: a later tear is the first again', async () => {
+    const torn = (): FifoWriteError => new FifoWriteError('EAGAIN: the reader took nothing for 120 s (64 of 100 bytes written)', 64, 100);
+    const { adapter } = createAdapter([torn(), 'written', torn()]);
+    const errors = mock.method(console, 'error', () => {});
+    try {
+      addSession(adapter);
+      await assert.rejects(adapter.sendInputAndWait(key, '[Request req_AbC1 · x] prompt'));
+      adapter['sessions'].delete(keyToString(key));
+      addSession(adapter);
+      await adapter.sendInputAndWait(key, '[Request req_AbC1 · x] prompt');
+      await settleTicks();
+      adapter['sessions'].delete(keyToString(key));
+      addSession(adapter);
+      await assert.rejects(adapter.sendInputAndWait(key, '[Request req_AbC1 · x] prompt'));
+      await settleTicks();
+      assert.ok(!errors.mock.calls.some((call) => String(call.arguments[0]).includes('half-written 2 times')), 'pruned by the write that landed');
+      assert.equal(adapter['tornPromptCounts'].size, 1);
     } finally {
       errors.mock.restore();
     }

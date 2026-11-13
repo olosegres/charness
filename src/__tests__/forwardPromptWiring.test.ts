@@ -65,18 +65,37 @@ test('the live forward awaits nothing between its start and the write to the age
   assert.deepEqual(awaited, ['await adapter.interruptAndWaitIdle(key);', 'await adapter.detachRunningSubagents(key);']);
 });
 
-test('the live forward awaits the write\'s outcome for a tracker (a failed write rejects the forward); a topic\'s prompt never holds its queue on it — a failed write is told in the topic', () => {
+test('the live forward awaits the write\'s outcome — except for a person\'s own message, whose write never holds the topic\'s queue and whose failure is told in the topic', () => {
   // A json-stream stdin write that failed was only logged once, and a hand-over prompt counted as delivered was never read.
   const body = getFunctionBody('forwardPromptToLiveAgent');
   assert.match(body, /const written = adapter\.sendInputAndWait \? adapter\.sendInputAndWait\(key, promptText\) : \(adapter\.sendInput\(key, promptText\), Promise\.resolve\(\)\);/);
-  const topicBranch = body.indexOf('if (checkIsTelegramKey(key)) {');
+  const personBranch = body.indexOf('if (options.isPersonInput === true) {');
   const awaitWritten = body.indexOf('await written;');
-  assert.ok(topicBranch > body.indexOf('const written ='), 'the write is handed over first');
-  assert.match(body.slice(topicBranch), /^if \(checkIsTelegramKey\(key\)\) \{\n\s*void written\.then\(noteToldIfDelivered, \(error: unknown\) => reportUndeliveredTopicPrompt\(key, error\)\);\n\s*return;\n\s*\}/, 'a topic: not awaited, the person told on failure');
-  assert.ok(awaitWritten > topicBranch, 'a tracker\'s prompt awaits it');
+  assert.ok(personBranch > body.indexOf('const written ='), 'the write is handed over first');
+  assert.match(body.slice(personBranch), /^if \(options\.isPersonInput === true\) \{\n\s*void written\.then\(noteToldIfDelivered, \(error: unknown\) => reportUndeliveredTopicPrompt\(key, error\)\);\n\s*return;\n\s*\}/, 'a person\'s message: not awaited, the person told on failure');
+  assert.ok(!body.includes('checkIsTelegramKey(key)'), 'decided by who wrote the prompt, never by the platform: a wake-up, a scheduled run, a retry\'s nudge in a topic await it');
+  assert.ok(awaitWritten > personBranch, 'every other prompt awaits it');
   assert.ok(body.indexOf('noteToldIfDelivered();') > awaitWritten, 'the note counts as told only after the write');
-  assert.ok(body.indexOf("startClaudeLiveness(key, 'busyOnset');") < topicBranch, 'the busy-onset arm still starts at the write, not after its outcome');
+  assert.ok(body.indexOf("startClaudeLiveness(key, 'busyOnset');") < personBranch, 'the busy-onset arm still starts at the write, not after its outcome');
   assert.match(getFunctionBody('reportUndeliveredTopicPrompt'), /replyToThread\(key, t\('agent\.prompt_not_delivered', \{ error: message \}\)\)/);
+});
+
+test('only a person\'s own prompts are marked as such: the text, voice and label path, the buffered startup prompt, a file, an album and /schedule — a wake-up, a nudge or a reminder is not', () => {
+  assert.match(getFunctionBody('deliverActivePrompt'), /forward: \(\) => forwardPromptToAgent\(key, getThreadAdapter\(key\), text, sentAtMs, \{ messageContext, requestHeader: opening\.header, isPersonInput: true \}\),/);
+  assert.match(getFunctionBody('deliverActivePrompt'), /, true, undefined, \{ isPersonInput: true \}\);/, 'and its buffered twin');
+  assert.match(getFunctionBody('bufferPromptDuringStartup'), /, true, undefined, \{ isPersonInput: true \}\);/);
+  assert.match(getFunctionBody('cancelPendingQuestionAndForward'), /isPersonInput: true \}\);/);
+  for (const name of ['forwardRequestWakeUp', 'remindAnswerTail', 'postTodoReminder']) {
+    assert.ok(!getFunctionBody(name).includes('isPersonInput'), `${name} awaits its write`);
+  }
+  // A buffered prompt replays with the flag it was buffered with.
+  assert.ok(botSource.includes('forward: async (prompt, isPersonInput) => { await forwardPromptToAgent(key, adapter, prompt, undefined, { isPersonInput }); },'));
+});
+
+test('a bot-made prompt that waits for an adopt replay behind a start counts only once replayed', () => {
+  const body = getFunctionBody('forwardPromptToAgent');
+  const buffer = body.slice(body.indexOf('buffer: async () => {'));
+  assert.match(buffer, /const buffered = createBufferedOutcome\(\);\n\s*await deliverPromptOrBuffer\([^\n]*, true, buffered\.settle, \{ isPersonInput: options\.isPersonInput \}\);\n\s*if \(options\.isPersonInput !== true\) await buffered\.assertReplayed\(\);/);
 });
 
 test('a session post (a tracker\'s request or update, a scheduled run, the lost-work note) whose prompt waited for the session start counts only once it was replayed', () => {

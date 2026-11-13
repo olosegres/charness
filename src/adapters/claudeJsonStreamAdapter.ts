@@ -160,6 +160,15 @@ export const claudeJsonStreamUsageLogPrefix = '[ClaudeJson] usage ';
 /** How long to wait for the `initialize` control-response handshake before
  *  proceeding without the interactive control channel (questions unavailable). */
 const initializeHandshakeTimeoutMs = 15000;
+/** The first request id a prompt names (its header, or a reminder's): what a re-post with rebuilt text has in common. */
+const promptRequestIdRe = /\breq_[A-Za-z0-9_-]+/;
+
+/** The key of a prompt in the torn-prompt counts: its conversation and the request it names, else its text. */
+function getTornPromptKey(session: Pick<StreamSession, 'key'>, text: string): string {
+  const requestId = promptRequestIdRe.exec(text)?.[0];
+  return `${keyToString(session.key)}\u0000${requestId ?? createHash('sha256').update(text).digest('hex')}`;
+}
+
 /** How often a user turn held for a CLI that does not read yet looks again (`waitForReadingInput`). */
 const readingInputPollMs = 100;
 
@@ -487,7 +496,10 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
   private readonly writeFifo: typeof writeFifoText;
   /** How long a user turn waits for a CLI that reads nothing, and a write for a reader that takes nothing (tests shorten it). */
   private readonly stdinStallTimeoutMs: number;
-  /** How often each user prompt (conversation and text) was left half-written: a second tear of the same prompt is logged loudly. */
+  /**
+   * How often each user prompt was left half-written, by conversation and the request it names (else its text): a second tear
+   * of the same request's prompt — a re-post may be rebuilt with other text — is logged loudly. Dropped once one of its writes lands.
+   */
   private readonly tornPromptCounts = new Map<string, number>();
 
   private displayPrefsReader: DisplayPrefsReader | null = null;
@@ -1601,6 +1613,10 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
       if (options.userText !== undefined) await this.waitForReadingInput(session, checkIsAbandoned);
       return this.writeFifo(session.fifoFd, line, { checkIsAbandoned, stallTimeoutMs: this.stdinStallTimeoutMs });
     });
+    if (options.userText !== undefined) {
+      const promptKey = getTornPromptKey(session, options.userText);
+      void write.then(() => this.tornPromptCounts.delete(promptKey), () => {});
+    }
     session.stdinWriteChain = write.catch((e) => {
       console.error(`[ClaudeJson] stdin write failed for ${keyToString(session.key)}:`, e instanceof Error ? e.message : e);
       if (e instanceof FifoWriteError && e.isTorn && !session.isStopping && session.isActive) {
@@ -1635,7 +1651,7 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
    * keeps stopping mid-prompt on every retry — said loudly, while the prompt stays pending with its request's retries.
    */
   private noteTornPrompt(session: StreamSession, text: string): void {
-    const promptKey = `${keyToString(session.key)}\u0000${createHash('sha256').update(text).digest('hex')}`;
+    const promptKey = getTornPromptKey(session, text);
     const count = (this.tornPromptCounts.get(promptKey) ?? 0) + 1;
     this.tornPromptCounts.set(promptKey, count);
     if (count >= 2) {

@@ -209,7 +209,7 @@ import { postToIdleSession, postToSession, type PostToSessionDeps } from './post
 import { getLimitResumeMessage } from './utils/limitHeldPrompts';
 import { waitForAdoptedReplay } from './utils/adoptReplayGate';
 import { createTopicRequestSettler } from './requests/topicRequestSettle';
-import { deliverLatePrompt, deliverPromptOrBuffer as deliverPromptWithDeps, type LatePromptOutcome, type LateWakeResult, type PromptDelivery, type PromptDeliveryDeps } from './utils/promptDelivery';
+import { deliverLatePrompt, deliverPromptOrBuffer as deliverPromptWithDeps, type LatePromptOutcome, type LateWakeResult, type PromptDelivery, type PromptDeliveryDeps, type PromptDeliveryOptions } from './utils/promptDelivery';
 import { restoreApiRetryTimers, restoreFiredLimitProbes, runApiRetryKick, type ApiRetryKickDeps, type ApiRetryTimerEntry } from './apiRetryKick';
 import { LimitHeldPromptQueue } from './utils/limitHeldPromptQueue';
 import type { JiraConnector } from './connectors/jira/connector';
@@ -5934,7 +5934,7 @@ async function replayBufferedPrompts(key: SessionKey): Promise<void> {
   // like the API-error retry's nudge, hears whether it reached the session).
   await startupPromptBuffer.replayPrompts(keyToString(key), {
     isSessionActive,
-    forward: async (prompt) => { await forwardPromptToAgent(key, adapter, prompt); },
+    forward: async (prompt, isPersonInput) => { await forwardPromptToAgent(key, adapter, prompt, undefined, { isPersonInput }); },
   });
   if (!isSessionActive) return;
   // R23: prompts held during a usage-limit wait that ended with the previous
@@ -5997,7 +5997,10 @@ async function forwardPromptToAgent(
     checkIsWindowOpen: () => startupPromptBuffer.checkIsStarting(keyToString(key)),
     checkIsSessionActive: () => adapter.checkIsActive(key) && !(isTechnicalPrompt && (adapter.checkIsBusy?.(key) ?? false)),
     buffer: async () => {
-      await deliverPromptOrBuffer(key, `${options.requestHeader ?? ''}${getPromptWithThreadMessageContext(key, text, options.messageContext)}`, true);
+      // A bot-made prompt (a wake-up) that waits here counts only once its replay reached the agent, as at any other buffer.
+      const buffered = createBufferedOutcome();
+      await deliverPromptOrBuffer(key, `${options.requestHeader ?? ''}${getPromptWithThreadMessageContext(key, text, options.messageContext)}`, true, buffered.settle, { isPersonInput: options.isPersonInput });
+      if (options.isPersonInput !== true) await buffered.assertReplayed();
     },
     wake: () => wakeSleepingSessionForPrompt(key),
     forward: async () => {
@@ -6015,6 +6018,11 @@ async function forwardPromptToAgent(
 
 /** What a forward may carry besides the text (see {@link forwardPromptToAgent}). */
 interface PromptForwardOptions {
+  /**
+   * A person typed, spoke or sent it (`PromptDeliveryOptions.isPersonInput`): the forward does not wait for the write into the
+   * agent, and a write that fails is told in the topic. Every other prompt waits for it.
+   */
+  isPersonInput?: boolean;
   isRecoveryReplay?: boolean;
   isRequestReminder?: boolean;
   isTechnicalPrompt?: boolean;
@@ -6147,10 +6155,10 @@ async function forwardPromptToLiveAgent(
   const noteToldIfDelivered = (): void => {
     if (lostWorkRecord && adapter.checkIsActive(key)) void state.clearLostWork(key);
   };
-  // A topic's prompt never holds the topic's update queue on its write — a CLI that stops reading its input would keep
-  // `/esc` and every tap behind it for minutes —: the person is told when it failed. A tracker's post and a wake-up await
-  // it: a prompt that never arrived is retried.
-  if (checkIsTelegramKey(key)) {
+  // A person's own message never holds the topic's update queue on its write — a CLI that stops reading its input would
+  // keep `/esc` and every tap behind it for minutes —: they are told when it failed. Every other prompt (a tracker's post,
+  // a wake-up, a scheduled run, a retry's nudge, the todo reminder) awaits it: one that never arrived is retried.
+  if (options.isPersonInput === true) {
     void written.then(noteToldIfDelivered, (error: unknown) => reportUndeliveredTopicPrompt(key, error));
     return;
   }
@@ -9799,7 +9807,7 @@ command('schedule', async (ctx, key, parsed) => {
 
   const isStarting = startupPromptBuffer.checkIsStarting(keyToString(key));
   const opening = await openTopicRequest(key, wrappedPrompt, { source: 'schedule', requesterId: getTopicRequesterId(ctx.from) });
-  const delivery = await deliverPromptOrBuffer(key, `${opening.header}${wrappedPrompt}`, isStarting);
+  const delivery = await deliverPromptOrBuffer(key, `${opening.header}${wrappedPrompt}`, isStarting, undefined, { isPersonInput: true });
   await settleTopicRequestAfterDelivery(key, opening, delivery);
 });
 
@@ -10694,7 +10702,7 @@ async function downloadIncomingFile(
  */
 const promptDeliveryDeps: PromptDeliveryDeps = {
   startupBuffer: startupPromptBuffer,
-  forwardPrompt: (key, text) => forwardPromptToAgent(key, getThreadAdapter(key), text),
+  forwardPrompt: (key, text, options) => forwardPromptToAgent(key, getThreadAdapter(key), text, undefined, { isPersonInput: options.isPersonInput }),
   announceQueued: async (key) => {
     await replyToThread(key, t('agent.queued_starting', { label: getThreadAdapter(key).label }));
   },
@@ -10705,8 +10713,9 @@ function deliverPromptOrBuffer(
   promptText: string,
   isStarting: boolean,
   onBufferedSettled?: BufferedPromptSettled,
+  options: PromptDeliveryOptions = {},
 ): Promise<PromptDelivery> {
-  return deliverPromptWithDeps(promptDeliveryDeps, key, promptText, isStarting, onBufferedSettled);
+  return deliverPromptWithDeps(promptDeliveryDeps, key, promptText, isStarting, onBufferedSettled, options);
 }
 
 /**
@@ -10765,7 +10774,7 @@ const albumCollector = createMediaGroupCollector<AlbumCollectorItem>({
       try {
         const opening = await openTopicRequest(key, promptText, { source: 'album', requesterId: orderedItems[0].requesterId }, messageContext);
         const quotedPrompt = getPromptWithThreadMessageContext(key, promptText, messageContext);
-        const delivery = await deliverPromptOrBuffer(key, `${opening.header}${quotedPrompt}`, isStarting);
+        const delivery = await deliverPromptOrBuffer(key, `${opening.header}${quotedPrompt}`, isStarting, undefined, { isPersonInput: true });
         await settleTopicRequestAfterDelivery(key, opening, delivery);
       } catch (err) {
         // The files were downloaded already (each item before the flush): what failed is the album's prompt.
@@ -10871,7 +10880,7 @@ async function handleIncomingFile(
   const messageContext = getMessageContext(key, ctx.message);
   const opening = await openTopicRequest(key, promptText, { source: 'file', requesterId: getTopicRequesterId(ctx.from) }, messageContext);
   const quotedPrompt = getPromptWithThreadMessageContext(key, promptText, messageContext);
-  const delivery = await deliverPromptOrBuffer(key, `${opening.header}${quotedPrompt}`, isStarting);
+  const delivery = await deliverPromptOrBuffer(key, `${opening.header}${quotedPrompt}`, isStarting, undefined, { isPersonInput: true });
   await settleTopicRequestAfterDelivery(key, opening, delivery);
 }
 
@@ -11569,7 +11578,7 @@ async function bufferPromptDuringStartup(
   notePersonActivity(key);
   const opening = await openTopicRequest(key, text, intake, messageContext);
   const quotedText = getPromptWithThreadMessageContext(key, text, messageContext);
-  await deliverPromptOrBuffer(key, `${opening.header}${quotedText}`, true);
+  await deliverPromptOrBuffer(key, `${opening.header}${quotedText}`, true, undefined, { isPersonInput: true });
   trackTopicRequestTurn(key, opening);
 }
 
@@ -11663,10 +11672,10 @@ async function deliverActivePrompt(
     checkIsWindowOpen: () => startupPromptBuffer.checkIsStarting(keyToString(key)),
     checkIsSessionActive: () => adapter.checkIsActive(key),
     buffer: async () => {
-      await deliverPromptOrBuffer(key, `${opening.header}${getPromptWithThreadMessageContext(key, text, messageContext)}`, true);
+      await deliverPromptOrBuffer(key, `${opening.header}${getPromptWithThreadMessageContext(key, text, messageContext)}`, true, undefined, { isPersonInput: true });
     },
     wake: () => wakeSleepingSessionForPrompt(key),
-    forward: () => forwardPromptToAgent(key, getThreadAdapter(key), text, sentAtMs, { messageContext, requestHeader: opening.header }),
+    forward: () => forwardPromptToAgent(key, getThreadAdapter(key), text, sentAtMs, { messageContext, requestHeader: opening.header, isPersonInput: true }),
     reportNoSession: async (isAlreadyTold) => {
       if (!isAlreadyTold) await replyToThread(key, t('agent.no_session'));
     },
@@ -11747,7 +11756,7 @@ async function cancelPendingQuestionAndForward(
   if (!didLabelQuestionMessage) {
     await replyToThread(key, t('agent.question_cancelled_for_prompt'));
   }
-  return forwardPromptToAgent(key, adapter, text, sentAtMs, { messageContext, requestHeader });
+  return forwardPromptToAgent(key, adapter, text, sentAtMs, { messageContext, requestHeader, isPersonInput: true });
 }
 
 /**

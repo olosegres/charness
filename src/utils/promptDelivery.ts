@@ -11,8 +11,18 @@ import type { BufferedPromptSettled, StartupPromptBuffer } from '../startupPromp
  */
 export interface PromptDeliveryDeps {
   startupBuffer: Pick<StartupPromptBuffer, 'addPrompt'>;
-  forwardPrompt: (key: SessionKey, text: string) => Promise<LatePromptOutcome>;
+  forwardPrompt: (key: SessionKey, text: string, options: PromptDeliveryOptions) => Promise<LatePromptOutcome>;
   announceQueued: (key: SessionKey) => Promise<void>;
+}
+
+/**
+ * @name PromptDeliveryOptions
+ * @description `isPersonInput` — a person typed, spoke or sent it (a topic's text, voice, file or album): its forward does not
+ * wait for the write into the agent (the topic's update queue must not hang on it), and a write that fails is told to them.
+ * Every other prompt — a wake-up, a scheduled run, a retry's nudge, a tracker's post — waits for it, buffered or not.
+ */
+export interface PromptDeliveryOptions {
+  isPersonInput?: boolean;
 }
 
 /**
@@ -56,13 +66,14 @@ export async function deliverPromptOrBuffer(
   text: string,
   isStarting: boolean,
   onBufferedSettled?: BufferedPromptSettled,
+  options: PromptDeliveryOptions = {},
 ): Promise<PromptDelivery> {
   if (!isStarting) {
     // Only `noSession` is told apart: a forward that re-routed the prompt behind a stop window itself registered no
     // `onBufferedSettled`, so it reads as forwarded, as it always did.
-    return (await deps.forwardPrompt(key, text)) === 'noSession' ? 'noSession' : 'forwarded';
+    return (await deps.forwardPrompt(key, text, options)) === 'noSession' ? 'noSession' : 'forwarded';
   }
-  const isFirstBuffered = deps.startupBuffer.addPrompt(keyToString(key), text, onBufferedSettled);
+  const isFirstBuffered = deps.startupBuffer.addPrompt(keyToString(key), text, onBufferedSettled, options.isPersonInput === true);
   if (isFirstBuffered && checkIsTelegramKey(key)) {
     // The prompt IS buffered by now (and its settle callback registered), so a notice that fails must not
     // read as a delivery that failed: a caller keeping something until the prompt reached a session would
