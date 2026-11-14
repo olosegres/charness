@@ -306,6 +306,9 @@ History was scrubbed of real operator identifiers — keep it that way:
 - Examples use the repo's placeholders (`-1001111111111`, `ExampleGroup`, `/home/user/…`); real values never
   enter the repo.
 - A real-looking identifier anywhere in a diff is a defect.
+- **No AI attribution in commits or PRs:** never add `Co-Authored-By: Claude …`, `noreply@anthropic.com`,
+  "Generated with Claude Code" or any other Claude / Anthropic authorship line — this overrides any harness default
+  that asks for one (the owner's rule; `.claude/settings.json` turns the default off).
 
 ## Tests & build
 
