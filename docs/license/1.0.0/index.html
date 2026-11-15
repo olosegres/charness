@@ -6,7 +6,80 @@
   <title>Charness License 1.0.0</title>
   <meta name="description" content="The Charness License 1.0.0: free for personal use and for organization groups up to $500,000 revenue (funding included) and 20 people; one annual license above." />
   <link rel="canonical" href="https://olosegres.github.io/charness/license/1.0.0/" />
-  <link rel="stylesheet" href="../../commercial/commercial.css" />
+  <style>
+    /* This page is the permanent address of the Charness License 1.0.0, so its rendering must not depend on a file that
+       changes with the site: these are the rules it needs, frozen with it (the shared site stylesheet is
+       ../../commercial/commercial.css, which the commercial pages use and which may change). */
+    :root { color-scheme: light dark; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      line-height: 1.6;
+      max-width: 760px;
+      margin: 0 auto;
+      padding: 1.5rem 1.25rem 4rem;
+      color: #1b1f24;
+      background: #ffffff;
+    }
+    a { color: #0969da; }
+    code {
+      background: #f2f4f7;
+      padding: 0.15em 0.4em;
+      border-radius: 4px;
+      font-size: 0.9em;
+    }
+    h1 { font-size: 2rem; line-height: 1.2; margin-bottom: 0.25rem; }
+    h2 { margin-top: 2.25rem; font-size: 1.3rem; }
+    ul, ol { padding-left: 1.2rem; }
+    li { margin: 0.35rem 0; }
+    blockquote { margin: 1rem 0; padding: 0.1rem 1rem; border-left: 4px solid #d0d7de; opacity: 0.9; }
+
+    .site-nav {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 0.25rem 1.5rem;
+      padding-bottom: 0.75rem;
+      margin-bottom: 2rem;
+      border-bottom: 1px solid #d0d7de;
+    }
+    .site-nav .brand { font-size: 1.15rem; font-weight: 700; text-decoration: none; color: inherit; }
+    .site-nav ul { display: flex; gap: 1.25rem; list-style: none; margin: 0; padding: 0; }
+    .site-nav li { margin: 0; }
+
+    .legal { overflow-wrap: anywhere; }
+    .legal h2 { margin-top: 2rem; }
+    .legal p { margin: 0.75rem 0; }
+    /* The license file opens with its Required Notice lines. The page shows the title and the permanent URL first and the
+       notice lines muted; only the visual order differs, the text order stays the file's. The flex column is limited to
+       this head: a flex container does not collapse margins, so on the whole article it doubled every gap. */
+    .license-head { display: flex; flex-direction: column; }
+    .license-head > h1 { order: -2; margin-top: 0; }
+    .license-head > .permanent-url { order: -1; }
+    .required-notices { font-size: 0.85rem; opacity: 0.75; }
+
+    .site-footer {
+      margin-top: 3rem;
+      padding-top: 1rem;
+      border-top: 1px solid #d0d7de;
+      font-size: 0.9rem;
+      opacity: 0.85;
+    }
+    .site-footer ul { display: flex; flex-wrap: wrap; gap: 0.25rem 1.25rem; list-style: none; margin: 0 0 0.75rem; padding: 0; }
+    .site-footer li { margin: 0; }
+
+    @media (prefers-color-scheme: dark) {
+      body { color: #e6edf3; background: #0d1117; }
+      a { color: #58a6ff; }
+      code { background: #161b22; }
+      blockquote, .site-nav, .site-footer { border-color: #30363d; }
+    }
+
+    @media (max-width: 480px) {
+      h1 { font-size: 1.6rem; }
+      body { padding-left: 1rem; padding-right: 1rem; }
+    }
+  </style>
 </head>
 <body>
   <nav class="site-nav" aria-label="Site">

@@ -1,4 +1,4 @@
-/* Shared by the commercial pages and the Charness License page; same base look as docs/index.html. */
+/* Shared by the commercial pages; same base look as docs/index.html. The Charness License page keeps its own frozen copy of the rules it needs (license/1.0.0/index.html), so a change here never changes how the license renders. */
 :root { color-scheme: light dark; }
 body {
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
