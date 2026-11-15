@@ -3,7 +3,7 @@
 <p align="center">
   <a href="https://www.npmjs.com/package/charness"><img src="https://img.shields.io/npm/v/charness?logo=npm" alt="npm version"></a>
   <a href="https://www.npmjs.com/package/charness"><img src="https://img.shields.io/node/v/charness?logo=node.js" alt="Node.js version"></a>
-  <a href="https://github.com/olosegres/charness/blob/main/LICENSE"><img src="https://img.shields.io/npm/l/charness" alt="license"></a>
+  <a href="https://github.com/olosegres/charness/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-Charness%20License-blue" alt="license: Charness License"></a>
 </p>
 
 <h2 align="center">Harness for running Claude Code / OpenCode agents in the cloud or on your laptop, controlled from Telegram or Jira.</h2>
@@ -79,6 +79,9 @@ Yes. Send a voice message to a topic and it is transcribed (by Groq, OpenAI or y
 **Can agents work in the background or on a schedule?**
 Yes. `/schedule` arms cron, one-shot or N-times jobs per topic, so a scheduled agent can do recurring tasks — a nightly review, a morning digest, a weekly report — while you are away, and the agent can schedule itself. A scheduled check watches a service and wakes the agent only when it fails. Jobs survive a bot restart, and a run missed while the bot was down fires once as a catch-up.
 
+**Is Charness free?**
+Yes for personal use and for organizations with up to $500,000 revenue (funding included) and up to 20 people; above that, one annual license per organization from $500, with unlimited users and agents ([licensing FAQ](docs/licensing-faq.md), [commercial page](https://olosegres.github.io/charness/commercial/)). Every release before 4.0 stays MIT.
+
 ## Reference
 
 ### Features
@@ -138,6 +141,8 @@ Think **OpenClaw for vibe coding**, driven entirely from Telegram: no complex se
 - **[DEVELOPMENT.md](DEVELOPMENT.md)** — architecture and local development (build, test, hot-reload, Docker dev loop).
 - **[MIGRATION_1_TO_2.md](MIGRATION_1_TO_2.md)** — upgrading a 1.x install to 2.0.
 - **[MIGRATION_RENAME_TO_CHARNESS.md](MIGRATION_RENAME_TO_CHARNESS.md)** — upgrading an install that still uses the TelegramCode names.
+- **[MIGRATION_3_TO_4.md](MIGRATION_3_TO_4.md)** — moving from 3.x to 4.0: the license change, who pays, how to stay on 3.x.
+- **[docs/licensing-faq.md](docs/licensing-faq.md)** — who pays and how much: prices, what counts as revenue and as people, freelancers and consultants, the trial and transitions, education, OEM and hosting, refunds.
 
 ## The story behind it
 
@@ -151,4 +156,9 @@ Full write-up: [Vibe-coding by voice, from my phone](https://dev.to/olosegres/vi
 
 ## License
 
-MIT
+**Charness 4.0 and later is source-available under the [Charness License 1.0.0](LICENSE)** — not open source:
+
+- **Free** for personal use and for any organization group with revenue plus funding up to $500,000 and up to 20 people; also for education, charities and public bodies' core work, and a 32-day evaluation.
+- **One annual license per organization group above that** — from $500 to $60,000 by the higher of its revenue band and its people band, with unlimited users, agents and machines and no seats. Buy by e-mail: [commercial page](https://olosegres.github.io/charness/commercial/), [commercial terms](COMMERCIAL-LICENSE.md).
+- Every release before 4.0 was published under MIT and stays MIT.
+- Questions and examples: [licensing FAQ](docs/licensing-faq.md); moving from 3.x: [MIGRATION_3_TO_4.md](MIGRATION_3_TO_4.md).
