@@ -1,7 +1,7 @@
 {
   "name": "charness",
   "version": "3.14.0",
-  "license": "MIT",
+  "license": "SEE LICENSE IN LICENSE",
   "author": "Sergei Solo",
   "description": "Harness for running Claude Code / OpenCode agents in the cloud or on your laptop, controlled from Telegram or Jira.",
   "keywords": [
@@ -42,7 +42,9 @@
     "SETUP.md",
     "MIGRATION_1_TO_2.md",
     "MIGRATION_RENAME_TO_CHARNESS.md",
+    "MIGRATION_3_TO_4.md",
     "LICENSE",
+    "COMMERCIAL-LICENSE.md",
     ".env.example",
     "examples/"
   ],
