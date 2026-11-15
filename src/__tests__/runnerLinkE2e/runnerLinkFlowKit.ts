@@ -64,6 +64,8 @@ function copyBuiltCharness(destination: string): void {
     filter: (source) => !/(\.d\.ts|\.d\.ts\.map|\.js\.map)$/.test(source) && !source.includes(`${path.sep}__tests__`),
   });
   fs.copyFileSync(path.join(repoRoot, 'package.json'), path.join(destination, 'package.json'));
+  // The package the hub packs for a runner carries the license text, and is refused without it (`runners/hubPackage.ts`).
+  fs.copyFileSync(path.join(repoRoot, 'LICENSE'), path.join(destination, 'LICENSE'));
   fs.mkdirSync(path.join(destination, 'remoteRun'));
   fs.copyFileSync(path.join(repoRoot, 'remoteRun', 'runner.sh'), path.join(destination, 'remoteRun', 'runner.sh'));
   writeNodeInstallerStandIn(path.join(destination, ensureNodeScriptRelativePath));

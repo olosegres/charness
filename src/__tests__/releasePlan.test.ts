@@ -75,6 +75,10 @@ describe('what ships', () => {
     assert.equal(checkIsShippedPath('stt/gigaam_sidecar.py'), true);
     assert.equal(checkIsShippedPath('agent-plugin/skills/charness-orchestration/SKILL.md'), true, 'a skill-only change is a release change');
     assert.equal(checkIsShippedPath('agent-plugin/.claude-plugin/plugin.json'), true);
+    assert.equal(checkIsShippedPath('LICENSE'), true, 'a change of the license is a release change');
+    assert.equal(checkIsShippedPath('COMMERCIAL-LICENSE.md'), true);
+    assert.equal(checkIsShippedPath('docs/commercial/index.html'), false, 'the commercial pages are the site, not the package');
+    assert.equal(checkIsShippedPath('docs/license/1.0.0/index.html'), false);
     assert.equal(checkIsShippedPath('src/__tests__/bot.test.ts'), false);
     assert.equal(checkIsShippedPath('src/release/releasePlan.ts'), false);
     assert.equal(checkIsShippedPath('src/platform/README.md'), false);
@@ -86,14 +90,16 @@ describe('what ships', () => {
     assert.equal(checkIsShippedPath('.github/workflows/publish.yml'), false);
   });
 
-  test('package.json ships only when dependencies, bin, engines, files or main differ', () => {
-    const base = { dependencies: { zod: '^4.0.0' }, bin: { charness: './dist/cli.js' }, engines: { node: '>=22' }, files: ['dist/'], main: 'dist/cli.js' };
+  test('package.json ships only when dependencies, bin, engines, files, main or license differ', () => {
+    const base = { dependencies: { zod: '^4.0.0' }, bin: { charness: './dist/cli.js' }, engines: { node: '>=22' }, files: ['dist/'], main: 'dist/cli.js', license: 'MIT' };
     assert.equal(checkIsShippedManifestChange(base, { ...base }), false);
     assert.equal(checkIsShippedManifestChange(base, { ...base, dependencies: { zod: '^4.1.0' } }), true);
     assert.equal(checkIsShippedManifestChange(base, { ...base, bin: { charness: './dist/other.js' } }), true);
     assert.equal(checkIsShippedManifestChange(base, { ...base, engines: { node: '>=24' } }), true);
     assert.equal(checkIsShippedManifestChange(base, { ...base, files: ['dist/', 'CHANGELOG.md'] }), true);
     assert.equal(checkIsShippedManifestChange(base, { ...base, main: 'dist/index.js' }), true);
+    assert.equal(checkIsShippedManifestChange(base, { ...base, license: 'SEE LICENSE IN LICENSE' }), true, 'the terms of a copy are part of what an install gets');
+    assert.equal(checkIsShippedManifestChange(base, { ...base, license: undefined }), true);
     assert.equal(checkIsShippedManifestChange(base, null), true);
   });
 
@@ -102,6 +108,8 @@ describe('what ships', () => {
     assert.equal(checkHasShippedChange(createNetDiff(['README.md', 'src/bot.ts'])), true);
     assert.equal(checkHasShippedChange(createNetDiff(['package.json'], true)), true);
     assert.equal(checkHasShippedChange(createNetDiff(['package.json'], false)), false);
+    assert.equal(checkHasShippedChange(createNetDiff(['README.md', 'LICENSE'])), true);
+    assert.equal(checkHasShippedChange(createNetDiff(['COMMERCIAL-LICENSE.md'])), true);
   });
 });
 
@@ -169,6 +177,27 @@ describe('the plan of a run', () => {
     const result = plan(commits);
     assert.equal(result.kind, 'skip');
     assert.match(result.kind === 'skip' ? result.reason : '', /Nothing shipped changed since v3\.2\.0/);
+  });
+
+  test('a commit that changes only the license text or the license field is released — it is not "nothing shipped"', () => {
+    const textOnly = createCommit('docs(license): reword a clause', ['LICENSE']);
+    assert.deepEqual(plan([textOnly]), { kind: 'release', version: '3.2.1', bump: 'patch' });
+    const commercialOnly = createCommit('docs(license): reword the commercial terms', ['COMMERCIAL-LICENSE.md']);
+    assert.deepEqual(plan([commercialOnly]), { kind: 'release', version: '3.2.1', bump: 'patch' });
+    const fieldOnly = createCommit('chore: the license field', ['package.json'], { changesShippedManifest: true });
+    assert.deepEqual(plan([fieldOnly], { netDiff: createNetDiff(['package.json'], true) }), { kind: 'release', version: '3.2.1', bump: 'patch' });
+  });
+
+  test('the license switch itself — a commit with a BREAKING CHANGE footer over the license files — is never an automatic release', () => {
+    const switchCommit = createCommit('feat(license)!: free for small organizations', ['LICENSE', 'COMMERCIAL-LICENSE.md', 'package.json'], {
+      body: 'The reason.\n\nBREAKING CHANGE: Charness 4.0 and later are released under the Charness License 1.0.0.',
+      changesShippedManifest: true,
+    });
+    const automatic = plan([switchCommit], { netDiff: createNetDiff(['LICENSE', 'COMMERCIAL-LICENSE.md', 'package.json'], true) });
+    assert.equal(automatic.kind, 'fail');
+    assert.ok((automatic.kind === 'fail' ? automatic.message : '').includes('bump=major'));
+    const dispatched = plan([switchCommit], { netDiff: createNetDiff(['LICENSE', 'COMMERCIAL-LICENSE.md', 'package.json'], true), input: { bump: 'major', force: false } });
+    assert.deepEqual(dispatched, { kind: 'release', version: '4.0.0', bump: 'major' });
   });
 
   test('a change and its revert leave an empty net diff → skip', () => {
@@ -490,6 +519,13 @@ describe('the pack check', () => {
 
   test('a sound package has no violations', () => {
     assert.deepEqual(getPackViolations(createListing(goodFiles), '3.3.0'), []);
+  });
+
+  test('the license files are required: a package without LICENSE or COMMERCIAL-LICENSE.md is refused', () => {
+    assert.ok(requiredPackFiles.includes('LICENSE'));
+    assert.ok(requiredPackFiles.includes('COMMERCIAL-LICENSE.md'));
+    assert.deepEqual(getPackViolations(createListing(goodFiles.filter((path) => path !== 'COMMERCIAL-LICENSE.md')), '3.3.0'), ['missing from the package: COMMERCIAL-LICENSE.md']);
+    assert.deepEqual(getPackViolations(createListing(goodFiles.filter((path) => path !== 'LICENSE')), '3.3.0'), ['missing from the package: LICENSE']);
   });
 
   test('every missing required file is named', () => {

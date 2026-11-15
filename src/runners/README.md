@@ -204,7 +204,7 @@ is not connected» on stderr and exit 255 (ssh's own «connection failed»).
 
 ## The package (`hubPackage.ts`)
 
-The hub's own `remoteRun/runner.sh` and `dist/` (no tests, `.d.ts`, source maps), a `package.json` CUT DOWN to the runner's own runtime
+The hub's own `remoteRun/runner.sh`, `LICENSE` (its Notices clause wants the text with every copy) and `dist/` (no tests, `.d.ts`, source maps), a `package.json` CUT DOWN to the runner's own runtime
 dependencies (`ssh2`, `zod`: `runnerRuntimePackages`; the hub's name, version, licence and engines) and the `package-lock.json` that pins them, as a
 deterministic tar (`tarArchive.ts`: fixed times and order) in a gzip. The lock (`runnerLock.ts`) is made from `yarn.lock` for exactly that closure
 (six packages: `ssh2`, its three runtime dependencies, `tweetnacl`, `zod`; optional native add-ons and Yarn's implicit `node-gyp` are left out), pins

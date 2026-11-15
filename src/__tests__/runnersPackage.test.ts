@@ -63,11 +63,18 @@ describe('hub package', () => {
     fixture.cleanup();
   });
 
-  it('holds package.json, its lock, the runner script and dist — without tests, declarations or source maps', () => {
+  it('holds package.json, its lock, the LICENSE, the runner script and dist — without tests, declarations or source maps', () => {
     const hubPackage = getHubPackage(fixture.ctx);
     assert.match(hubPackage.id, /^[0-9a-f]{16}$/);
     const names = runTar(gunzipSync(fs.readFileSync(hubPackage.filePath)), ['-tf', '-']).trim().split('\n');
-    assert.deepEqual(names, ['package.json', 'package-lock.json', 'remoteRun/runner.sh', 'remoteRun/ensureNode.sh', 'dist/cli.js', 'dist/runners/example.js']);
+    assert.deepEqual(names, ['package.json', 'package-lock.json', 'LICENSE', 'remoteRun/runner.sh', 'remoteRun/ensureNode.sh', 'dist/cli.js', 'dist/runners/example.js']);
+  });
+
+  it('carries the hub\'s LICENSE as it is — the license wants its text with every copy of the software, a runner\'s included — and its package.json names that file', () => {
+    const archive = gunzipSync(fs.readFileSync(getHubPackage(fixture.ctx).filePath));
+    const hubLicense = fs.readFileSync(path.join(fixture.ctx.packageRoot, 'LICENSE'), 'utf8');
+    assert.equal(runTar(archive, ['-xOf', '-', 'LICENSE']), hubLicense);
+    assert.equal(JSON.parse(runTar(archive, ['-xOf', '-', 'package.json'])).license, 'SEE LICENSE IN LICENSE');
   });
 
   it('gives the runner a package.json cut down to the dependencies the runner needs — the hub\'s name, version and engines, none of its other dependencies or scripts', () => {
@@ -75,7 +82,7 @@ describe('hub package', () => {
     assert.deepEqual(JSON.parse(runTar(archive, ['-xOf', '-', 'package.json'])), {
       name: 'charness',
       version: '0.0.0-test',
-      license: 'MIT',
+      license: 'SEE LICENSE IN LICENSE',
       engines: { node: '>=22.12' },
       dependencies: { ssh2: '^1.17.0', zod: '^4.4.3' },
     });
@@ -204,6 +211,17 @@ describe('hub package', () => {
     } finally {
       other.cleanup();
     }
+  });
+
+  it('a package root without a LICENSE is an error, not a package that would ship without its license', () => {
+    fs.rmSync(path.join(fixture.ctx.packageRoot, 'LICENSE'));
+    assert.throws(() => getHubPackage(fixture.ctx), /ENOENT/);
+  });
+
+  it('is a different package — a different id — when only the LICENSE changes', () => {
+    const before = getHubPackage(fixture.ctx).id;
+    fs.writeFileSync(path.join(fixture.ctx.packageRoot, 'LICENSE'), 'Charness License (changed fixture)\n');
+    assert.notEqual(getHubPackage(fixture.ctx).id, before);
   });
 
   it('a package root without dist is an error, not an empty package', () => {

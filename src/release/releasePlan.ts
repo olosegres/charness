@@ -25,6 +25,8 @@ export const requiredPackFiles = [
   'CHANGELOG.md',
   'README.md',
   'LICENSE',
+  // The paid terms the license points to: a package without them would send a buyer to a file that is not there.
+  'COMMERCIAL-LICENSE.md',
 ];
 const forbiddenPackPathPrefixes = ['src/', 'dist/release/'];
 const forbiddenPackPathFragment = '__tests__';
@@ -35,11 +37,15 @@ const droppedManifestMarkers = ['was invalid and removed', 'auto-corrected some 
 const shippedSourceRoot = 'src/';
 const shippedSourceExtension = '.ts';
 const unshippedSourcePrefixes = ['src/__tests__/', 'src/release/'];
-/** Files that ship besides the compiled source: the speech sidecar, and the shrinkwrap — a change to it changes what an install gets. */
-const shippedExtraPaths = ['stt/gigaam_sidecar.py', 'npm-shrinkwrap.json'];
+/**
+ * Files that ship besides the compiled source: the speech sidecar, the shrinkwrap — a change to it changes what an install gets — and the
+ * license texts: a change to the terms a copy is under is a change to what an install gets, and without it a license-only commit would
+ * count as "nothing shipped" and never be released.
+ */
+const shippedExtraPaths = ['stt/gigaam_sidecar.py', 'npm-shrinkwrap.json', 'LICENSE', 'COMMERCIAL-LICENSE.md'];
 /** Folders shipped as they are: the skills the bot gives its agents. */
 const shippedExtraPrefixes = ['agent-plugin/'];
-const shippedManifestFields = ['dependencies', 'bin', 'engines', 'files', 'main'] as const;
+const shippedManifestFields = ['dependencies', 'bin', 'engines', 'files', 'main', 'license'] as const;
 
 const featCommitType = 'feat';
 const fixCommitType = 'fix';
@@ -61,6 +67,7 @@ export type PackageManifest = {
   engines?: Record<string, string>;
   files?: string[];
   main?: string;
+  license?: string;
 };
 
 /** What a diff touched: the changed paths, and whether `package.json` changed in a field that ships. */

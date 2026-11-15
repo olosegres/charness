@@ -32,7 +32,7 @@ const cliTimeoutMs = 90_000;
 const initialPackage = {
   name: 'demo-package',
   version: '3.2.0',
-  files: ['dist/', 'stt/gigaam_sidecar.py', 'remoteRun/runner-package-lock.json', 'remoteRun/ensureNode.sh', 'agent-plugin/', 'README.md', 'LICENSE', 'CHANGELOG.md'],
+  files: ['dist/', 'stt/gigaam_sidecar.py', 'remoteRun/runner-package-lock.json', 'remoteRun/ensureNode.sh', 'agent-plugin/', 'README.md', 'LICENSE', 'COMMERCIAL-LICENSE.md', 'CHANGELOG.md'],
   // No "./": npm >= 11.10 drops a "./dist/…" bin entry at publish, and check-pack refuses it.
   bin: { charness: 'dist/cli.js' },
   scripts: { version: 'tsx src/release/cli.ts changelog && git add CHANGELOG.md', test: 'node --test' },
@@ -419,6 +419,7 @@ describe('check-pack', () => {
     writeRepoFile('agent-plugin/.claude-plugin/plugin.json', '{ "name": "charness" }\n');
     writeRepoFile('agent-plugin/skills/charness-orchestration/SKILL.md', '---\nname: charness-orchestration\ndescription: d\n---\n');
     writeRepoFile('LICENSE', 'MIT\n');
+    writeRepoFile('COMMERCIAL-LICENSE.md', '# Commercial terms\n');
   }
 
   test('a sound package passes the listing check and installs the way a user installs it — from a registry, by its shrinkwrap — printing the new version', () => {

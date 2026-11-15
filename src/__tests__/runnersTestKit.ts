@@ -24,7 +24,7 @@ export interface HubFixture {
 export const fixturePackageJson = {
   name: 'charness',
   version: '0.0.0-test',
-  license: 'MIT',
+  license: 'SEE LICENSE IN LICENSE',
   engines: { node: '>=22.12' },
   scripts: { build: 'tsc' },
   dependencies: { ssh2: '^1.17.0', telegraf: '^4.16.3', zod: '^4.4.3' },
@@ -53,6 +53,7 @@ export function createHubFixture(): HubFixture {
   fs.mkdirSync(path.join(packageRoot, 'remoteRun'), { recursive: true });
   fs.writeFileSync(path.join(packageRoot, 'package.json'), `${JSON.stringify(fixturePackageJson, null, 2)}\n`);
   fs.writeFileSync(path.join(packageRoot, 'remoteRun', 'runner-package-lock.json'), `${JSON.stringify(fixtureRunnerLock, null, 2)}\n`);
+  fs.writeFileSync(path.join(packageRoot, 'LICENSE'), 'Charness License (test fixture)\n');
   fs.writeFileSync(path.join(packageRoot, 'remoteRun', 'runner.sh'), '#!/usr/bin/env bash\necho runner\n', { mode: 0o755 });
   fs.writeFileSync(path.join(packageRoot, ensureNodeScriptRelativePath), '#!/bin/sh\necho picked\n', { mode: 0o755 });
   fs.writeFileSync(path.join(packageRoot, 'dist', 'cli.js'), 'console.log("cli");\n', { mode: 0o755 });
