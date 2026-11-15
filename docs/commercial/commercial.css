@@ -76,10 +76,11 @@ dl.faq dd { margin: 0.15rem 0 0; }
 .legal h2 { margin-top: 2rem; }
 .legal p { margin: 0.75rem 0; }
 /* The license file opens with its Required Notice lines. The page shows the title and the permanent URL first and the
-   notice lines muted; only the visual order differs, the text order stays the file's. */
-.license { display: flex; flex-direction: column; }
-.license > h1 { order: -2; margin-top: 0; }
-.license > .permanent-url { order: -1; }
+   notice lines muted; only the visual order differs, the text order stays the file's. The flex column is limited to
+   this head: a flex container does not collapse margins, so on the whole article it doubled every gap. */
+.license-head { display: flex; flex-direction: column; }
+.license-head > h1 { order: -2; margin-top: 0; }
+.license-head > .permanent-url { order: -1; }
 .required-notices { font-size: 0.85rem; opacity: 0.75; }
 
 .site-footer {
