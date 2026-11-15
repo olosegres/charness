@@ -284,9 +284,10 @@ publish, no tag, no push, the run is red; the next day's run tries again by itse
   major is released only by dispatching the workflow with `bump=major`.
 - **Nothing to release** (green, nothing tagged): no commits since the last tag, `HEAD` already tagged, or no shipped
   path in the net diff from the tag — `src/**/*.ts` outside `src/__tests__` and `src/release`, `stt/gigaam_sidecar.py`,
-  and `package.json` only when `dependencies`, `bin`, `engines`, `files` or `main` differ. A docs-only or tests-only
-  day, or a change and its revert, publishes nothing; README / SETUP changes reach the npm page with the next code
-  release.
+  `npm-shrinkwrap.json`, `LICENSE`, `COMMERCIAL-LICENSE.md`, everything under `agent-plugin/`, and `package.json` only when
+  `dependencies`, `bin`, `engines`, `files`, `main` or `license` differ. A docs-only or tests-only day, or a change and its
+  revert, publishes nothing; README / SETUP changes reach the npm page with the next code release. A change to the license
+  texts or the `license` field does count: it is a release (`releasePlan.ts` is the source of truth for both lists).
 - **Manual run** (Actions → Release to npm → Run workflow): `bump` `auto|patch|minor|major`; `force` releases even when
   the skip rules say skip (never past the breaking-change guard of `auto`); `dryRun` does everything but the publish, the
   push and the GitHub Release — it runs `package` and `check-install` (the install and the merge with `main`) — and prints the
@@ -299,8 +300,9 @@ publish, no tag, no push, the run is red; the next day's run tries again by itse
   paragraph or `- ` bullet, in any `###` subsection — starts with a bold first sentence (`**…**`); the run fails,
   quoting the line, otherwise (`changelogFormat.test.ts` fails first on a commit that breaks it). An empty
   `## Unreleased` is filled with the `feat` / `fix` subjects.
-- **Package check** before anything is published: the tarball holds `dist/cli.js`, `stt/gigaam_sidecar.py`, `npm-shrinkwrap.json`,
-  `CHANGELOG.md`, `README.md`, `LICENSE` and no `src/` or tests, and installed the way a user installs it — `npm install -g`
+- **Package check** before anything is published: the tarball holds `package.json`, `dist/cli.js`, `stt/gigaam_sidecar.py`,
+  `remoteRun/runner-package-lock.json`, `remoteRun/ensureNode.sh`, `npm-shrinkwrap.json`, the agent plugin's manifest and
+  orchestration skill, `CHANGELOG.md`, `README.md`, `LICENSE`, `COMMERCIAL-LICENSE.md` (`requiredPackFiles`) and no `src/` or tests, and installed the way a user installs it — `npm install -g`
   from a loopback registry that serves the tarball and marks its shrinkwrap, as the npm registry does (an install of the
   tarball FILE ignores the shrinkwrap), dependencies passed on to the real registry — `charness --version` prints the new
   version and every package sits at the version the shrinkwrap pins (`yarn tsx src/release/cli.ts check-pack`, after
