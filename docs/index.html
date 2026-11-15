@@ -21,6 +21,7 @@
       body { color: #e6edf3; background: #0d1117; }
       a { color: #58a6ff; }
       code { background: #161b22; }
+      .site-nav { border-bottom-color: #30363d; }
     }
     h1 { font-size: 2rem; line-height: 1.2; margin-bottom: 0.25rem; }
     .tagline { font-size: 1.15rem; opacity: 0.85; margin-top: 0; }
@@ -36,9 +37,25 @@
     li { margin: 0.35rem 0; }
     .cta { margin-top: 1.5rem; }
     footer { margin-top: 3rem; opacity: 0.7; font-size: 0.9rem; }
+    .site-nav { padding-bottom: 0.75rem; margin-bottom: 2rem; border-bottom: 1px solid #d0d7de; }
+    .site-nav ul, footer ul { display: flex; flex-wrap: wrap; gap: 0.25rem 1.25rem; list-style: none; margin: 0; padding: 0; }
+    footer ul { margin-bottom: 0.75rem; }
+    .site-nav li, footer li { margin: 0; }
+    .site-nav a[aria-current="page"] { color: inherit; font-weight: 700; text-decoration: none; }
   </style>
 </head>
 <body>
+  <nav class="site-nav" aria-label="Site">
+    <ul>
+      <li><a href="index.html" aria-current="page">Home</a></li>
+      <li><a href="commercial/index.html">Licensing</a></li>
+      <li><a href="commercial/terms.html">Terms</a></li>
+      <li><a href="license/1.0.0/index.html">License text</a></li>
+      <li><a href="commercial/index.html#faq">FAQ</a></li>
+      <li><a href="https://github.com/olosegres/charness">GitHub</a></li>
+    </ul>
+  </nav>
+
   <h1>Charness</h1>
   <p class="tagline">Run OpenCode and Claude Code coding agents on your own machine or VPS, driven from Telegram on your phone.</p>
 
@@ -82,6 +99,19 @@
     <li><a href="https://github.com/olosegres/charness/discussions">Discussions</a></li>
   </ul>
 
-  <footer>Source-available, free for small organizations. Built to be driven from a phone.</footer>
+  <footer>
+    <ul>
+      <li><a href="index.html">Home</a></li>
+      <li><a href="commercial/index.html">Licensing</a></li>
+      <li><a href="commercial/terms.html">Terms</a></li>
+      <li><a href="license/1.0.0/index.html">License text</a></li>
+      <li><a href="commercial/index.html#faq">FAQ</a></li>
+      <li><a href="commercial/refunds.html">Refunds</a></li>
+      <li><a href="commercial/privacy.html">Privacy</a></li>
+      <li><a href="https://github.com/olosegres/charness">GitHub</a></li>
+      <li><a href="mailto:charnesshub@gmail.com">Contact</a></li>
+    </ul>
+    <p>Source-available, free for small organizations. Built to be driven from a phone.</p>
+  </footer>
 </body>
 </html>

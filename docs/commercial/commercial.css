@@ -26,18 +26,13 @@ blockquote { margin: 1rem 0; padding: 0.1rem 1rem; border-left: 4px solid #d0d7d
 .fine { font-size: 0.9rem; opacity: 0.75; }
 
 .site-nav {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 0.25rem 1.5rem;
   padding-bottom: 0.75rem;
   margin-bottom: 2rem;
   border-bottom: 1px solid #d0d7de;
 }
-.site-nav .brand { font-size: 1.15rem; font-weight: 700; text-decoration: none; color: inherit; }
-.site-nav ul { display: flex; gap: 1.25rem; list-style: none; margin: 0; padding: 0; }
+.site-nav ul { display: flex; flex-wrap: wrap; gap: 0.25rem 1.25rem; list-style: none; margin: 0; padding: 0; }
 .site-nav li { margin: 0; }
+.site-nav a[aria-current="page"] { color: inherit; font-weight: 700; text-decoration: none; }
 
 .buttons { display: flex; flex-wrap: wrap; gap: 0.75rem; margin: 1.5rem 0 0.5rem; }
 .button {
