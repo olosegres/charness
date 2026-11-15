@@ -42,17 +42,23 @@
     footer ul { margin-bottom: 0.75rem; }
     .site-nav li, footer li { margin: 0; }
     .site-nav a[aria-current="page"] { color: inherit; font-weight: 700; text-decoration: none; }
+    @media (max-width: 480px) {
+      .site-nav ul { gap: 0.3rem 0.8rem; font-size: 0.9rem; }
+    }
   </style>
 </head>
 <body>
   <nav class="site-nav" aria-label="Site">
     <ul>
       <li><a href="index.html" aria-current="page">Home</a></li>
+      <li><a href="https://github.com/olosegres/charness/blob/main/SETUP.md">Setup</a></li>
+      <li><a href="https://github.com/olosegres/charness/blob/main/docs/commands.md">Commands</a></li>
       <li><a href="commercial/index.html">Licensing</a></li>
       <li><a href="commercial/terms.html">Terms</a></li>
       <li><a href="license/1.0.0/index.html">License text</a></li>
       <li><a href="commercial/index.html#faq">FAQ</a></li>
       <li><a href="https://github.com/olosegres/charness">GitHub</a></li>
+      <li><a href="https://www.npmjs.com/package/charness">npm</a></li>
     </ul>
   </nav>
 
@@ -102,6 +108,8 @@
   <footer>
     <ul>
       <li><a href="index.html">Home</a></li>
+      <li><a href="https://github.com/olosegres/charness/blob/main/SETUP.md">Setup</a></li>
+      <li><a href="https://github.com/olosegres/charness/blob/main/docs/commands.md">Commands</a></li>
       <li><a href="commercial/index.html">Licensing</a></li>
       <li><a href="commercial/terms.html">Terms</a></li>
       <li><a href="license/1.0.0/index.html">License text</a></li>
@@ -109,6 +117,7 @@
       <li><a href="commercial/refunds.html">Refunds</a></li>
       <li><a href="commercial/privacy.html">Privacy</a></li>
       <li><a href="https://github.com/olosegres/charness">GitHub</a></li>
+      <li><a href="https://www.npmjs.com/package/charness">npm</a></li>
       <li><a href="mailto:charnesshub@gmail.com">Contact</a></li>
     </ul>
     <p>Source-available, free for small organizations. Built to be driven from a phone.</p>

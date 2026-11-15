@@ -125,6 +125,7 @@ dl.faq dd { margin: 0.15rem 0 0; }
 @media (max-width: 480px) {
   h1 { font-size: 1.6rem; }
   .button { width: 100%; text-align: center; }
+  .site-nav ul { gap: 0.3rem 0.8rem; font-size: 0.9rem; }
   body { padding-left: 1rem; padding-right: 1rem; }
   table { font-size: 0.8rem; }
   th, td { padding: 0.35rem 0.3rem; }
