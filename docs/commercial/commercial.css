@@ -1,0 +1,104 @@
+/* Shared by the commercial pages and the Charness License page; same base look as docs/index.html. */
+:root { color-scheme: light dark; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  line-height: 1.6;
+  max-width: 760px;
+  margin: 0 auto;
+  padding: 1.5rem 1.25rem 4rem;
+  color: #1b1f24;
+  background: #ffffff;
+}
+a { color: #0969da; }
+code {
+  background: #f2f4f7;
+  padding: 0.15em 0.4em;
+  border-radius: 4px;
+  font-size: 0.9em;
+}
+h1 { font-size: 2rem; line-height: 1.2; margin-bottom: 0.25rem; }
+h2 { margin-top: 2.25rem; font-size: 1.3rem; }
+h3 { margin-top: 1.5rem; margin-bottom: 0.25rem; font-size: 1.05rem; }
+ul, ol { padding-left: 1.2rem; }
+li { margin: 0.35rem 0; }
+blockquote { margin: 1rem 0; padding: 0.1rem 1rem; border-left: 4px solid #d0d7de; opacity: 0.9; }
+.tagline { font-size: 1.15rem; opacity: 0.85; margin-top: 0; }
+.fine { font-size: 0.9rem; opacity: 0.75; }
+
+.site-nav {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.25rem 1.5rem;
+  padding-bottom: 0.75rem;
+  margin-bottom: 2rem;
+  border-bottom: 1px solid #d0d7de;
+}
+.site-nav .brand { font-size: 1.15rem; font-weight: 700; text-decoration: none; color: inherit; }
+.site-nav ul { display: flex; gap: 1.25rem; list-style: none; margin: 0; padding: 0; }
+.site-nav li { margin: 0; }
+
+.buttons { display: flex; flex-wrap: wrap; gap: 0.75rem; margin: 1.5rem 0 0.5rem; }
+.button {
+  display: inline-block;
+  min-height: 2.75rem;
+  box-sizing: border-box;
+  padding: 0.65rem 1.1rem;
+  border: 2px solid #0969da;
+  border-radius: 6px;
+  background: #0969da;
+  color: #ffffff;
+  font-weight: 600;
+  line-height: 1.3;
+  text-decoration: none;
+}
+.button.secondary { background: transparent; color: #0969da; }
+
+.table-wrap { overflow-x: auto; margin: 1rem 0; }
+table { border-collapse: collapse; width: 100%; font-size: 0.95rem; }
+th, td { padding: 0.5rem 0.65rem; border: 1px solid #d0d7de; text-align: left; vertical-align: top; }
+th { background: #f6f8fa; }
+td[align="right"], th[align="right"], .price { text-align: right; white-space: nowrap; }
+/* a people range such as 1,001–5,000 must not break across lines */
+td.people { white-space: nowrap; }
+tr.free-row td { background: #eaf7ee; }
+
+.note { margin: 1rem 0; padding: 0.5rem 1rem; border-left: 4px solid #0969da; background: #f6f8fa; font-size: 0.95rem; }
+.placeholder { padding: 0 0.25em; border-radius: 3px; background: #fff3b0; color: #1b1f24; }
+
+dl.faq dt { margin-top: 1rem; font-weight: 700; }
+dl.faq dd { margin: 0.15rem 0 0; }
+
+.legal h2 { margin-top: 2rem; }
+.legal p { margin: 0.75rem 0; }
+
+.site-footer {
+  margin-top: 3rem;
+  padding-top: 1rem;
+  border-top: 1px solid #d0d7de;
+  font-size: 0.9rem;
+  opacity: 0.85;
+}
+.site-footer ul { display: flex; flex-wrap: wrap; gap: 0.25rem 1.25rem; list-style: none; margin: 0 0 0.75rem; padding: 0; }
+.site-footer li { margin: 0; }
+
+@media (prefers-color-scheme: dark) {
+  body { color: #e6edf3; background: #0d1117; }
+  a { color: #58a6ff; }
+  code { background: #161b22; }
+  blockquote, .site-nav, .site-footer, th, td { border-color: #30363d; }
+  th, .note { background: #161b22; }
+  tr.free-row td { background: #12261a; }
+  .button { border-color: #1f6feb; background: #1f6feb; color: #ffffff; }
+  .button.secondary { background: transparent; color: #58a6ff; border-color: #58a6ff; }
+  .placeholder { background: #5c4a00; color: #fff8dc; }
+}
+
+@media (max-width: 480px) {
+  h1 { font-size: 1.6rem; }
+  .button { width: 100%; text-align: center; }
+  body { padding-left: 1rem; padding-right: 1rem; }
+  table { font-size: 0.8rem; }
+  th, td { padding: 0.35rem 0.3rem; }
+}
