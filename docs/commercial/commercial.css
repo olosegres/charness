@@ -68,7 +68,6 @@ td[align="right"], td.price { white-space: nowrap; }
 tr.free-row td { background: #eaf7ee; }
 
 .note { margin: 1rem 0; padding: 0.5rem 1rem; border-left: 4px solid #0969da; background: #f6f8fa; font-size: 0.95rem; }
-.placeholder { padding: 0 0.25em; border-radius: 3px; background: #fff3b0; color: #1b1f24; }
 
 dl.faq dt { margin-top: 1rem; font-weight: 700; }
 dl.faq dd { margin: 0.15rem 0 0; }
@@ -104,7 +103,6 @@ dl.faq dd { margin: 0.15rem 0 0; }
   .button.secondary { background: transparent; color: #58a6ff; border-color: #58a6ff; }
   .button:hover { border-color: #388bfd; background: #388bfd; }
   .button.secondary:hover { background: #1c2d41; }
-  .placeholder { background: #5c4a00; color: #fff8dc; }
 }
 
 /* A band table is four columns wide and does not fit a phone: each band becomes a card (label + value lines). */
