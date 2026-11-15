@@ -9,9 +9,9 @@
 </head>
 <body>
   <nav class="site-nav" aria-label="Site">
-    <a class="brand" href="index.html">Charness</a>
+    <a class="brand" href="../index.html">Charness</a>
     <ul>
-      <li><a href="../index.html">Docs</a></li>
+      <li><a href="index.html">Licensing</a></li>
       <li><a href="https://github.com/olosegres/charness">GitHub</a></li>
     </ul>
   </nav>
@@ -27,7 +27,7 @@
 <h2 id="section-2">2. Definitions and schedule</h2>
 <p>2.1. Software means Charness released by the licensor under the Charness License. Organization group, Control, Group people (H), Revenue and funding (R), Measurement date/period, Commercial operation and C have exactly the meanings in the fixed public License 1.0.0 incorporated in the order, including institutional separation. In particular, R includes investment and commercial-grant funding received in the measurement period, including equity, convertible notes and SAFEs; ordinary bank loans do not count. The entire group&#39;s workforce counts, not just Charness operators. Users, agents and instances are not billable quantities.</p>
 <p>2.2. Assess each column independently and choose the higher band. Free ordinary use requires BOTH free-column conditions. Prices are USD per group per year, excluding applicable taxes. Every upper revenue boundary belongs to the lower band.</p>
-<div class="table-wrap"><table>
+<div class="table-wrap"><table class="bands">
 <thead>
 <tr>
 <th>Band</th>
@@ -36,47 +36,47 @@
 <th align="right">Annual group fee</th>
 </tr>
 </thead>
-<tbody><tr>
+<tbody><tr class="free-row">
 <td>Free</td>
-<td>R ≤ $500,000</td>
-<td>H ≤ 20</td>
-<td align="right">$0</td>
+<td data-label="Revenue + funding">R ≤ $500,000</td>
+<td data-label="People">H ≤ 20</td>
+<td data-label="Annual fee" align="right">$0</td>
 </tr>
 <tr>
 <td>Small</td>
-<td>$500,000 &lt; R ≤ $2,000,000</td>
-<td>21-50</td>
-<td align="right">$500</td>
+<td data-label="Revenue + funding">$500,000 &lt; R ≤ $2,000,000</td>
+<td data-label="People">21–50</td>
+<td data-label="Annual fee" align="right">$500</td>
 </tr>
 <tr>
 <td>Growing</td>
-<td>$2,000,000 &lt; R ≤ $10,000,000</td>
-<td>51-250</td>
-<td align="right">$2,000</td>
+<td data-label="Revenue + funding">$2,000,000 &lt; R ≤ $10,000,000</td>
+<td data-label="People">51–250</td>
+<td data-label="Annual fee" align="right">$2,000</td>
 </tr>
 <tr>
 <td>Established</td>
-<td>$10,000,000 &lt; R ≤ $50,000,000</td>
-<td>251-1,000</td>
-<td align="right">$6,000</td>
+<td data-label="Revenue + funding">$10,000,000 &lt; R ≤ $50,000,000</td>
+<td data-label="People">251–1,000</td>
+<td data-label="Annual fee" align="right">$6,000</td>
 </tr>
 <tr>
 <td>Large</td>
-<td>$50,000,000 &lt; R ≤ $250,000,000</td>
-<td>1,001-5,000</td>
-<td align="right">$15,000</td>
+<td data-label="Revenue + funding">$50,000,000 &lt; R ≤ $250,000,000</td>
+<td data-label="People">1,001–5,000</td>
+<td data-label="Annual fee" align="right">$15,000</td>
 </tr>
 <tr>
 <td>Very large</td>
-<td>$250,000,000 &lt; R ≤ $1,000,000,000</td>
-<td>5,001-10,000</td>
-<td align="right">$30,000</td>
+<td data-label="Revenue + funding">$250,000,000 &lt; R ≤ $1,000,000,000</td>
+<td data-label="People">5,001–10,000</td>
+<td data-label="Annual fee" align="right">$30,000</td>
 </tr>
 <tr>
 <td>Global</td>
-<td>R &gt; $1,000,000,000</td>
-<td>H &gt; 10,000</td>
-<td align="right">$60,000</td>
+<td data-label="Revenue + funding">R &gt; $1,000,000,000</td>
+<td data-label="People">H &gt; 10,000</td>
+<td data-label="Annual fee" align="right">$60,000</td>
 </tr>
 </tbody></table></div>
 <p>2.3. The Term is the period stated in the paid order: one year, or two or three consecutive years when prepaid under section 2.4(b). Each consecutive year from the start date is a <strong>Term year</strong>. A new paid renewal grants another Term. One designated licensee buys once for the group, not once per affiliate, installation or user. Purpose-exempt institutions follow the public license&#39;s special C trigger and commercial-operation scope; the ordinary H trigger applies from the start to separate for-profit spin-offs and government trading companies.</p>
@@ -124,7 +124,7 @@
 <h2 id="section-17">17. OEM addendum terms (separate written activation required)</h2>
 <p>17.1. A signed OEM addendum identifying the supplier group, covered product families, permitted on-premises/hosted architectures, product-specific agent tasks and Term dates (one year, or a prepaid 2- or 3-year Term) must expressly incorporate this section before onward distribution or hosted product launch. It is required even at a $0 fee. It grants the supplier, for that term, the right to embed, copy, modify and distribute the Software in those products, or operate the identified hosted products, and to grant customers the limited runtime permission in section 17.4. These explicit rights supplement the public license&#39;s no-sublicensing default; no general-purpose Charness resale is granted.</p>
 <p>17.2. P is aggregate external revenue over the same measurement period from all of the group&#39;s Charness-embedded product families, including related renamed SKUs. Count the whole relevant product, not an estimated Charness contribution. Include subscriptions, software licenses and mandatory bundled charges, less actual refunds and sales taxes but not reseller commissions. Exclude separately priced genuinely optional consulting, installation and training; allocate bundles by consistent standalone selling prices, not token product prices hiding compulsory setup. Investment/funding is not product-sales P; it remains in ordinary group R. Unrelated product revenue affects R but not P.</p>
-<div class="table-wrap"><table>
+<div class="table-wrap"><table class="oem">
 <thead>
 <tr>
 <th>Embedded-product revenue P</th>

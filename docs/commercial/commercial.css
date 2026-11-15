@@ -54,14 +54,17 @@ blockquote { margin: 1rem 0; padding: 0.1rem 1rem; border-left: 4px solid #d0d7d
   text-decoration: none;
 }
 .button.secondary { background: transparent; color: #0969da; }
+.button:hover { border-color: #0757ba; background: #0757ba; }
+.button.secondary:hover { background: #ddf4ff; }
 
 .table-wrap { overflow-x: auto; margin: 1rem 0; }
 table { border-collapse: collapse; width: 100%; font-size: 0.95rem; }
 th, td { padding: 0.5rem 0.65rem; border: 1px solid #d0d7de; text-align: left; vertical-align: top; }
 th { background: #f6f8fa; }
-td[align="right"], th[align="right"], .price { text-align: right; white-space: nowrap; }
-/* a people range such as 1,001–5,000 must not break across lines */
-td.people { white-space: nowrap; }
+td[align="right"], th[align="right"], .price { text-align: right; }
+td[align="right"], td.price { white-space: nowrap; }
+/* an amount or range such as $10,000,000 < R ≤ $50,000,000 or 1,001–5,000 must not break across lines */
+.bands td, .oem td { white-space: nowrap; }
 tr.free-row td { background: #eaf7ee; }
 
 .note { margin: 1rem 0; padding: 0.5rem 1rem; border-left: 4px solid #0969da; background: #f6f8fa; font-size: 0.95rem; }
@@ -70,8 +73,15 @@ tr.free-row td { background: #eaf7ee; }
 dl.faq dt { margin-top: 1rem; font-weight: 700; }
 dl.faq dd { margin: 0.15rem 0 0; }
 
+.legal { overflow-wrap: anywhere; }
 .legal h2 { margin-top: 2rem; }
 .legal p { margin: 0.75rem 0; }
+/* The license file opens with its Required Notice lines. The page shows the title and the permanent URL first and the
+   notice lines muted; only the visual order differs, the text order stays the file's. */
+.license { display: flex; flex-direction: column; }
+.license > h1 { order: -2; margin-top: 0; }
+.license > .permanent-url { order: -1; }
+.required-notices { font-size: 0.85rem; opacity: 0.75; }
 
 .site-footer {
   margin-top: 3rem;
@@ -92,7 +102,30 @@ dl.faq dd { margin: 0.15rem 0 0; }
   tr.free-row td { background: #12261a; }
   .button { border-color: #1f6feb; background: #1f6feb; color: #ffffff; }
   .button.secondary { background: transparent; color: #58a6ff; border-color: #58a6ff; }
+  .button:hover { border-color: #388bfd; background: #388bfd; }
+  .button.secondary:hover { background: #1c2d41; }
   .placeholder { background: #5c4a00; color: #fff8dc; }
+}
+
+/* A band table is four columns wide and does not fit a phone: each band becomes a card (label + value lines). */
+@media (max-width: 680px) {
+  .bands thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+  .bands, .bands tbody, .bands tr { display: block; }
+  .bands tr { margin: 0 0 0.6rem; border: 1px solid #d0d7de; border-radius: 6px; overflow: hidden; }
+  .bands td {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: space-between;
+    column-gap: 0.75rem;
+    padding: 0.3rem 0.65rem;
+    border: 0;
+  }
+  .bands td::before { content: attr(data-label); font-weight: 600; }
+  .bands td:first-child { border-bottom: 1px solid #d0d7de; font-weight: 700; }
+  .bands td:first-child::before { content: none; }
+}
+@media (max-width: 680px) and (prefers-color-scheme: dark) {
+  .bands tr, .bands td:first-child { border-color: #30363d; }
 }
 
 @media (max-width: 480px) {
