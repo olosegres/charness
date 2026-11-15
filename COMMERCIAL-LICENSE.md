@@ -21,11 +21,11 @@ These terms are between **Sergei Solo** (licensor; the details of the licensor's
 | Band | R: trailing-12-month revenue plus counted funding | H: group people | Annual group fee |
 |---|---|---|---:|
 | Free | R <= $500,000 | H <= 20 | $0 |
-| Small | $500,000 < R <= $2,000,000 | 21-50 | $500 |
-| Growing | $2,000,000 < R <= $10,000,000 | 51-250 | $2,000 |
-| Established | $10,000,000 < R <= $50,000,000 | 251-1,000 | $6,000 |
-| Large | $50,000,000 < R <= $250,000,000 | 1,001-5,000 | $15,000 |
-| Very large | $250,000,000 < R <= $1,000,000,000 | 5,001-10,000 | $30,000 |
+| Small | $500,000 < R <= $2,000,000 | 21–50 | $500 |
+| Growing | $2,000,000 < R <= $10,000,000 | 51–250 | $2,000 |
+| Established | $10,000,000 < R <= $50,000,000 | 251–1,000 | $6,000 |
+| Large | $50,000,000 < R <= $250,000,000 | 1,001–5,000 | $15,000 |
+| Very large | $250,000,000 < R <= $1,000,000,000 | 5,001–10,000 | $30,000 |
 | Global | R > $1,000,000,000 | H > 10,000 | $60,000 |
 
 2.3. The Term is the period stated in the paid order: one year, or two or three consecutive years when prepaid under section 2.4(b). Each consecutive year from the start date is a **Term year**. A new paid renewal grants another Term. One designated licensee buys once for the group, not once per affiliate, installation or user. Purpose-exempt institutions follow the public license's special C trigger and commercial-operation scope; the ordinary H trigger applies from the start to separate for-profit spin-offs and government trading companies.

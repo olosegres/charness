@@ -15,7 +15,7 @@
 
 *In Telegram it may literally become your J.A.R.V.I.S. 😄 You talk — Charness does the rest. Send a voice note from the street — and an agent on your server opens the browser, calls your APIs, writes code, edits a video, drafts a post, generates an image, answers your email or messages someone for you, and sends you the result. It never sleeps: it keeps working while you do. Plug in a tool — and that becomes one more thing it can do.*
 
-<p align="center">It runs fine on your laptop. But it is called a <b>c</b>loud <b>harness</b> for a reason — put it on a VPS or VDS and your agents keep working while the laptop sleeps. Give an agent a cron schedule and it takes on a recurring task by itself, in the background, while you do something else.</p>
+<p align="center">It runs fine on your laptop. Put it on a VPS or VDS and your agents keep working while the laptop sleeps. Give an agent a cron schedule and it takes on a recurring task by itself, in the background, while you do something else.</p>
 
 <p align="center">
   <img src="docs/images/hero-v2.png" alt="Charness — all your agents in Telegram; chat, code, ship; powerful slash commands" width="900" />
