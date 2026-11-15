@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 4.0.0 — 2026-11-16
+
 **Charness 4.0 is free for personal use and for organizations with up to $500,000 revenue (funding included) and up to 20 people; larger organizations pay one annual license from $500, with unlimited users and agents; every release before 4.0 stays MIT.**
 From 4.0 the license is the [Charness License 1.0.0](LICENSE) — source-available, not open source. Who pays: an organization group whose revenue plus the funding it raised in the last 12 months is above $500,000, or that has more than 20 people (everyone working for the group, not only the people who use Charness). The fee is the higher of the revenue band and the people band — $500, $2,000, $6,000, $15,000, $30,000 or $60,000 a year for the whole group, no seats — with 20% off for a "Powered by Charness" mark and 15% off for prepaying 2 or 3 years. Personal use, education, charities and public bodies' core work are free, and so is one 32-day evaluation.
 What to do: nothing for personal use or a free group. An organization that already runs MIT Charness gets one 90-day transition from the first day it uses a 4.x release. Buying is by e-mail (charnesshub@gmail.com), with no license keys, no telemetry and no prompt inside the bot. Every release before 4.0 stays MIT, and an install is never moved to 4.0 by itself: General announces it and waits for your tap. Details: [licensing FAQ](docs/licensing-faq.md), [MIGRATION_3_TO_4.md](MIGRATION_3_TO_4.md), [commercial page](https://olosegres.github.io/charness/commercial/).
