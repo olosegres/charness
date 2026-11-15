@@ -19,6 +19,8 @@ effort per role); this one wins on the launch, the account, detaching and the wa
   and a prompt that stands on its own (plan path, scope, what to launch), then end the turn. If `nextAvailable` is
   null too, no account names a time it frees up: ask the user a native question (nothing can run, no time known) and
   `schedule_create` a one-off retry about 30 minutes ahead, with such a prompt.
+- Before a launch or resume look at the account's five-hour window; a worker that only waits for a shared lane is
+  not kept running: resume it when the lane frees.
 - Confirm the login under that directory: `env -u ANTHROPIC_API_KEY claude auth status --text`.
 - The first `system`/`init` event must name the requested model; on a mismatch stop the worker and tell the user.
 

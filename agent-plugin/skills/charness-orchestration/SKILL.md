@@ -103,6 +103,11 @@ kill -0 <pid> 2>/dev/null || { echo "worker <pid> exited"; exit 1; }; [ -n "$(fi
 - Work the user wants later → `schedule_create` with `onceAt` and a prompt that stands on its own.
 - Write for a non-technical reader: the status, then the next steps as a short numbered list of who does what.
 
+## Talking to peers
+
+- A peer session's name changes on every resume: address it by the `from=` of its latest message, or look it up
+  with ListAgents first.
+
 ## A tracker conversation (Jira)
 
 There are no `schedule_*` tools and nothing will wake you. Do not end your turn while a worker runs: wait in the
