@@ -6,7 +6,8 @@
  * boot and the invariants after the last step. Matches neither runner glob.
  *
  * The flows are independent journeys, one file each (`jiraConnectorE2e` — requests and the session lifecycle,
- * `jiraPromptE2e` — what the prompts carry, `jiraTrustE2e` — the trusted group and mentions), so they run in parallel.
+ * `jiraPromptE2e` — what the prompts carry, `jiraTrustE2e` — the trusted group and mentions, `jiraCommentWakeE2e` — a
+ * comment on a handed issue, an acting mention, the resume after a restart), so they run in parallel.
  * Each runs in a process of its own: the state below (the layout, the started charness, the fake Jira) is that flow's.
  */
 
@@ -333,6 +334,7 @@ export function writeJiraConfig(
   trustedGroup?: string,
   pollSeconds: number = pollIntervalSeconds,
   trustedApps?: string[],
+  mentionMode?: 'answer' | 'act',
 ): void {
   fs.writeFileSync(path.join(getLayout().dataDir, 'jira.json'), JSON.stringify({
     site: 'example.atlassian.net',
@@ -345,6 +347,7 @@ export function writeJiraConfig(
     adapter,
     ...(trustedGroup === undefined ? {} : { trustedGroup }),
     ...(trustedApps === undefined ? {} : { trustedApps }),
+    ...(mentionMode === undefined ? {} : { mentionMode }),
     // E9: a name found on no PATH of the box, mapped to a stub; the agents must find it by name.
     agentBinaries: { [probeToolName]: getProbeToolPath() },
   }, null, 2));
@@ -358,6 +361,10 @@ export interface JiraFlowConfig {
   trustedApps?: string[];
   /** The project's `repos` (the shared todo boards, D57); absent = none. */
   repos?: string[];
+  /** `jira.json` `mentionMode` (needs `trustedGroup`); absent = the key is not written (answer only). */
+  mentionMode?: 'answer' | 'act';
+  /** `REQUEST_BACKSTOP_MINUTES`; absent = the kit's 0.1 (a killed agent's request is taken up by the first sweep after it). */
+  backstopMinutes?: string;
   /** Windows the flow shortens beyond the ones every Jira flow does (`CHARNESS_TEST_TIMINGS`). */
   extraTimings?: TestTimings;
 }
@@ -374,7 +381,7 @@ function writeInstanceFiles(ports: InstancePorts, config: JiraFlowConfig, pollSe
   const instance = getLayout();
   instanceFiles = { ports, config };
   projectRepositoryNames = config.repos ?? null;
-  writeJiraConfig(config.adapter, config.trustedGroup, pollSeconds ?? pollIntervalSeconds, config.trustedApps);
+  writeJiraConfig(config.adapter, config.trustedGroup, pollSeconds ?? pollIntervalSeconds, config.trustedApps, config.mentionMode);
 
   const claudeBin = writeFakeClaudeLauncher(instance, 'jira', { slowTurnMs, queuedWaitMaxMs });
   writeInstanceEnvFile(instance, {
@@ -386,7 +393,7 @@ function writeInstanceFiles(ports: InstancePorts, config: JiraFlowConfig, pollSe
     CLAUDE_BIN: claudeBin,
     OPENCODE_URL: `http://127.0.0.1:${ports.openCode}`,
     SCHEDULER_MCP_PORT: ports.botMcp.toString(),
-    REQUEST_BACKSTOP_MINUTES: backstopMinutes,
+    REQUEST_BACKSTOP_MINUTES: config.backstopMinutes ?? backstopMinutes,
     AGENT_IDLE_MINUTES: idleMinutes,
     [testTimingsEnvName]: JSON.stringify(getFlowTestTimings(config.extraTimings, pollSeconds)),
     [instanceTokenEnvName]: aiCredentials.apiToken,

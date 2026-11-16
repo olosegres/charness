@@ -241,6 +241,7 @@ export const jaDict: Record<string, string> = {
   'agent.ready': '{label} が `{subdir}`{argsSuffix} で準備完了\n{infoBlock}メッセージを送信:',
   'agent.ready_model': '🧠 モデル: {model}',
   'agent.no_session': 'エージェントが実行中ではありません。/claude または /opencode で起動。',
+  'agent.prompt_not_delivered': '⚠️ エージェントは最後のメッセージを受け取っていません: エージェントの入力への書き込みに失敗しました（{error}）。もう一度送ってください。',
   'agent.session_ended': '{label}: セッション終了',
   'lostWork.line.resumed': '⚠️ エージェントのプロセスが{reason}。そのとき自分の作業がまだ残っていました — {work}。再開して、その作業をもう一度確認するよう頼みました。',
   'lostWork.line.held': '⚠️ エージェントのプロセスが{reason}。そのとき自分の作業がまだ残っていました — {work}。次のメッセージで再開し、失われたものを伝えます。',

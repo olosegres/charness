@@ -209,7 +209,7 @@ import { postToIdleSession, postToSession, type PostToSessionDeps } from './post
 import { getLimitResumeMessage } from './utils/limitHeldPrompts';
 import { waitForAdoptedReplay } from './utils/adoptReplayGate';
 import { createTopicRequestSettler } from './requests/topicRequestSettle';
-import { deliverLatePrompt, deliverPromptOrBuffer as deliverPromptWithDeps, type LatePromptOutcome, type LateWakeResult, type PromptDelivery, type PromptDeliveryDeps } from './utils/promptDelivery';
+import { deliverLatePrompt, deliverPromptOrBuffer as deliverPromptWithDeps, type LatePromptOutcome, type LateWakeResult, type PromptDelivery, type PromptDeliveryDeps, type PromptDeliveryOptions } from './utils/promptDelivery';
 import { restoreApiRetryTimers, restoreFiredLimitProbes, runApiRetryKick, type ApiRetryKickDeps, type ApiRetryTimerEntry } from './apiRetryKick';
 import { LimitHeldPromptQueue } from './utils/limitHeldPromptQueue';
 import type { JiraConnector } from './connectors/jira/connector';
@@ -242,7 +242,7 @@ import {
 } from './sendErrorClassifier';
 import { formatPinnedStatus } from './pinnedStatus';
 import { checkIsProgressChunk, collapseProgressChunk } from './progressLine';
-import { StartupPromptBuffer, type BufferedPromptSettled } from './startupPromptBuffer';
+import { StartupPromptBuffer, type BufferedPromptOutcome, type BufferedPromptSettled } from './startupPromptBuffer';
 import { renderAgentFrame, renderAgentHtml, type AgentFrame } from './connectors/telegram/renderAgentHtml';
 import { splitMessage, MAX_MESSAGE_LEN } from './connectors/telegram/messageSplit';
 import { buildFoldedMessage } from './connectors/telegram/foldedMessage';
@@ -278,7 +278,7 @@ import { AgentBackendUnavailableError } from './adapters/backendUnavailableError
 import { getPerTurnRefusedVersion, minAutoStopClaudeCodeVersion } from './utils/claudeCodeVersion';
 import { KeyedTransitionQueue } from './utils/keyedTransitionQueue';
 import { checkIsAdoptedToolListStale } from './utils/adoptedToolList';
-import { buildLostWorkNote, checkHasLostBackgroundWork, checkHasLostWork, type LostWorkRecord, formatLostWorkTopicLine, getHeldLostWorkPlan, getLostWorkFromTailRecord, getLostWorkPlan, getTailRecordWithoutPendingWork, mergeLostWorkRecords, type LostWork, type LostWorkReason } from './utils/lostWork';
+import { buildLostWorkNote, checkHasLostBackgroundWork, checkHasLostWork, type LostWorkRecord, formatLostWorkTopicLine, getHeldLostWorkPlan, getLostWorkFromTailRecord, getLostWorkPlan, getTailRecordWithoutPendingWork, lostWorkResumeCooldownMs, mergeLostWorkRecords, type LostWork, type LostWorkReason } from './utils/lostWork';
 import { pendingWorkHoldDefaultMs } from './utils/jsonStreamPendingWork';
 import { getAgentIdleMs } from './utils/compactOnIdle';
 import { getCompactSelfReviewFlagDirs } from './utils/compactSelfReviewFlags';
@@ -423,7 +423,7 @@ import {
 } from './requests/limitWaitAnswer';
 import { formatLocalClockWithDateIfNotToday } from './utils/localClock';
 import { RequestWakeUpEngine } from './requests/wakeUpEngine';
-import { getRequestBackstopMs } from './requests/wakeUpRules';
+import { checkIsWakingStopped, getRequestBackstopMs } from './requests/wakeUpRules';
 import { joinPromptsNotTakenIn, type WakeUpMessage } from './requests/requestHeader';
 import type { OpenRequestState, RequestAlertReason, RequestPromptOutcome } from './requests/types';
 import { getThreadKeysForDirectory } from './scheduler/directoryThreads';
@@ -5934,15 +5934,17 @@ async function replayBufferedPrompts(key: SessionKey): Promise<void> {
   // like the API-error retry's nudge, hears whether it reached the session).
   await startupPromptBuffer.replayPrompts(keyToString(key), {
     isSessionActive,
-    forward: async (prompt) => { await forwardPromptToAgent(key, adapter, prompt); },
+    forward: async (prompt, isPersonInput) => { await forwardPromptToAgent(key, adapter, prompt, undefined, { isPersonInput }); },
   });
   if (!isSessionActive) return;
   // R23: prompts held during a usage-limit wait that ended with the previous
-  // session go to this one — on their own when nothing above carried them.
+  // session go to this one — on their own when nothing above carried them. They
+  // are what people asked for meanwhile: a write that fails is told in the topic
+  // like a person's own message, never only logged.
   const heldText = limitHeldPrompts.releaseAll(key);
   if (heldText === null) return;
   try {
-    await forwardPromptToAgent(key, adapter, heldText);
+    await forwardPromptToAgent(key, adapter, heldText, undefined, { isPersonInput: true });
   } catch (err) {
     console.error('[replayBufferedPrompts] forwarding the held prompts failed:', err);
   }
@@ -5997,7 +5999,10 @@ async function forwardPromptToAgent(
     checkIsWindowOpen: () => startupPromptBuffer.checkIsStarting(keyToString(key)),
     checkIsSessionActive: () => adapter.checkIsActive(key) && !(isTechnicalPrompt && (adapter.checkIsBusy?.(key) ?? false)),
     buffer: async () => {
-      await deliverPromptOrBuffer(key, `${options.requestHeader ?? ''}${getPromptWithThreadMessageContext(key, text, options.messageContext)}`, true);
+      // A bot-made prompt (a wake-up) that waits here counts only once its replay reached the agent, as at any other buffer.
+      const buffered = createBufferedOutcome();
+      await deliverPromptOrBuffer(key, `${options.requestHeader ?? ''}${getPromptWithThreadMessageContext(key, text, options.messageContext)}`, true, buffered.settle, { isPersonInput: options.isPersonInput });
+      if (options.isPersonInput !== true) await buffered.assertReplayed();
     },
     wake: () => wakeSleepingSessionForPrompt(key),
     forward: async () => {
@@ -6015,6 +6020,11 @@ async function forwardPromptToAgent(
 
 /** What a forward may carry besides the text (see {@link forwardPromptToAgent}). */
 interface PromptForwardOptions {
+  /**
+   * A person typed, spoke or sent it (`PromptDeliveryOptions.isPersonInput`): the forward does not wait for the write into the
+   * agent, and a write that fails is told in the topic. Every other prompt waits for it.
+   */
+  isPersonInput?: boolean;
   isRecoveryReplay?: boolean;
   isRequestReminder?: boolean;
   isTechnicalPrompt?: boolean;
@@ -6066,8 +6076,10 @@ async function forwardPromptToLiveAgent(
   // The request header (S7) leads the per-message body, like the message context and
   // unlike the once-per-change thread preamble: it names THIS message's request.
   const messageBody = options.requestHeader ? `${options.requestHeader}${quotedBody}` : quotedBody;
-  // A loss the agent was not told about yet (`utils/lostWork.ts`) rides the first real prompt, once, ahead of it.
-  const lostWorkRecord = isReplayable && adapter.name !== 'terminal' ? state.getLostWork(key) : undefined;
+  // A loss the agent was not told about yet (`utils/lostWork.ts`) rides the first real prompt, once, ahead of it — a
+  // request's reminder included: the wake of a tracker request whose process a restart left behind is how its agent hears.
+  const isLostWorkNoteCarried = (isReplayable || options.isRequestReminder === true) && adapter.name !== 'terminal';
+  const lostWorkRecord = isLostWorkNoteCarried ? state.getLostWork(key) : undefined;
   const body = lostWorkRecord ? `${buildLostWorkNote(lostWorkRecord, getLocaleEndonym(getActiveLang()))}\n\n${messageBody}` : messageBody;
   // Cache the (reply-folded) prompt so a wedged OpenCode session can be recovered
   // by restarting fresh and replaying it — replaying WITH the quote is correct.
@@ -6129,9 +6141,10 @@ async function forwardPromptToLiveAgent(
   if (adapter.detachRunningSubagents && !isTechnicalPrompt) {
     await adapter.detachRunningSubagents(key);
   }
-  adapter.sendInput(key, promptText);
-  // Told only once the prompt carrying the note reached a live session: a forward that failed keeps it for the next.
-  if (lostWorkRecord && adapter.checkIsActive(key)) void state.clearLostWork(key);
+  // A backend that can tell whether the prompt reached the agent (the json-stream host's stdin write) is asked to: a
+  // write that failed rejects this forward, so its caller — a tracker post, a wake-up — knows the prompt never arrived
+  // and retries, instead of believing it delivered. The input is handed over synchronously either way; only its outcome is awaited.
+  const written = adapter.sendInputAndWait ? adapter.sendInputAndWait(key, promptText) : (adapter.sendInput(key, promptText), Promise.resolve());
   // S2 busy-onset arm: start the Claude liveness loop the moment the prompt is
   // forwarded — driven by `checkIsBusy`, not by waiting for an opportunistic
   // scrape emit that may never come during a long quiet think. The arming grace
@@ -6140,6 +6153,26 @@ async function forwardPromptToLiveAgent(
   // choke point (user text, voice, scheduled run, api-retry continue, buffered
   // replay), so every path that makes Claude busy now raises the working frame.
   startClaudeLiveness(key, 'busyOnset');
+  // Told only once the prompt carrying the note reached a live session: a forward that failed keeps it for the next.
+  const noteToldIfDelivered = (): void => {
+    if (lostWorkRecord && adapter.checkIsActive(key)) void state.clearLostWork(key);
+  };
+  // A person's own message never holds the topic's update queue on its write — a CLI that stops reading its input would
+  // keep `/esc` and every tap behind it for minutes —: they are told when it failed. Every other prompt (a tracker's post,
+  // a wake-up, a scheduled run, a retry's nudge, the todo reminder) awaits it: one that never arrived is retried.
+  if (options.isPersonInput === true) {
+    void written.then(noteToldIfDelivered, (error: unknown) => reportUndeliveredTopicPrompt(key, error));
+    return;
+  }
+  await written;
+  noteToldIfDelivered();
+}
+
+/** @description A topic's prompt whose write into the agent failed (the forward did not wait for it): one line says so. */
+function reportUndeliveredTopicPrompt(key: SessionKey, error: unknown): void {
+  const message = error instanceof Error ? error.message : String(error);
+  console.warn(`[forward] ${keyToString(key)}: the prompt did not reach the agent: ${message}`);
+  void withThreadLocale(key, () => replyToThread(key, t('agent.prompt_not_delivered', { error: message }))).catch(() => {});
 }
 
 /**
@@ -9776,7 +9809,7 @@ command('schedule', async (ctx, key, parsed) => {
 
   const isStarting = startupPromptBuffer.checkIsStarting(keyToString(key));
   const opening = await openTopicRequest(key, wrappedPrompt, { source: 'schedule', requesterId: getTopicRequesterId(ctx.from) });
-  const delivery = await deliverPromptOrBuffer(key, `${opening.header}${wrappedPrompt}`, isStarting);
+  const delivery = await deliverPromptOrBuffer(key, `${opening.header}${wrappedPrompt}`, isStarting, undefined, { isPersonInput: true });
   await settleTopicRequestAfterDelivery(key, opening, delivery);
 });
 
@@ -10671,7 +10704,7 @@ async function downloadIncomingFile(
  */
 const promptDeliveryDeps: PromptDeliveryDeps = {
   startupBuffer: startupPromptBuffer,
-  forwardPrompt: (key, text) => forwardPromptToAgent(key, getThreadAdapter(key), text),
+  forwardPrompt: (key, text, options) => forwardPromptToAgent(key, getThreadAdapter(key), text, undefined, { isPersonInput: options.isPersonInput }),
   announceQueued: async (key) => {
     await replyToThread(key, t('agent.queued_starting', { label: getThreadAdapter(key).label }));
   },
@@ -10682,8 +10715,9 @@ function deliverPromptOrBuffer(
   promptText: string,
   isStarting: boolean,
   onBufferedSettled?: BufferedPromptSettled,
+  options: PromptDeliveryOptions = {},
 ): Promise<PromptDelivery> {
-  return deliverPromptWithDeps(promptDeliveryDeps, key, promptText, isStarting, onBufferedSettled);
+  return deliverPromptWithDeps(promptDeliveryDeps, key, promptText, isStarting, onBufferedSettled, options);
 }
 
 /**
@@ -10742,11 +10776,12 @@ const albumCollector = createMediaGroupCollector<AlbumCollectorItem>({
       try {
         const opening = await openTopicRequest(key, promptText, { source: 'album', requesterId: orderedItems[0].requesterId }, messageContext);
         const quotedPrompt = getPromptWithThreadMessageContext(key, promptText, messageContext);
-        const delivery = await deliverPromptOrBuffer(key, `${opening.header}${quotedPrompt}`, isStarting);
+        const delivery = await deliverPromptOrBuffer(key, `${opening.header}${quotedPrompt}`, isStarting, undefined, { isPersonInput: true });
         await settleTopicRequestAfterDelivery(key, opening, delivery);
       } catch (err) {
+        // The files were downloaded already (each item before the flush): what failed is the album's prompt.
         console.error('[Bot] album flush failed:', err);
-        await replyToThread(key, t('file.download_failed')).catch(() => {});
+        await replyToThread(key, t('agent.prompt_not_delivered', { error: err instanceof Error ? err.message : String(err) })).catch(() => {});
       }
     });
   },
@@ -10847,7 +10882,7 @@ async function handleIncomingFile(
   const messageContext = getMessageContext(key, ctx.message);
   const opening = await openTopicRequest(key, promptText, { source: 'file', requesterId: getTopicRequesterId(ctx.from) }, messageContext);
   const quotedPrompt = getPromptWithThreadMessageContext(key, promptText, messageContext);
-  const delivery = await deliverPromptOrBuffer(key, `${opening.header}${quotedPrompt}`, isStarting);
+  const delivery = await deliverPromptOrBuffer(key, `${opening.header}${quotedPrompt}`, isStarting, undefined, { isPersonInput: true });
   await settleTopicRequestAfterDelivery(key, opening, delivery);
 }
 
@@ -11545,7 +11580,7 @@ async function bufferPromptDuringStartup(
   notePersonActivity(key);
   const opening = await openTopicRequest(key, text, intake, messageContext);
   const quotedText = getPromptWithThreadMessageContext(key, text, messageContext);
-  await deliverPromptOrBuffer(key, `${opening.header}${quotedText}`, true);
+  await deliverPromptOrBuffer(key, `${opening.header}${quotedText}`, true, undefined, { isPersonInput: true });
   trackTopicRequestTurn(key, opening);
 }
 
@@ -11639,10 +11674,10 @@ async function deliverActivePrompt(
     checkIsWindowOpen: () => startupPromptBuffer.checkIsStarting(keyToString(key)),
     checkIsSessionActive: () => adapter.checkIsActive(key),
     buffer: async () => {
-      await deliverPromptOrBuffer(key, `${opening.header}${getPromptWithThreadMessageContext(key, text, messageContext)}`, true);
+      await deliverPromptOrBuffer(key, `${opening.header}${getPromptWithThreadMessageContext(key, text, messageContext)}`, true, undefined, { isPersonInput: true });
     },
     wake: () => wakeSleepingSessionForPrompt(key),
-    forward: () => forwardPromptToAgent(key, getThreadAdapter(key), text, sentAtMs, { messageContext, requestHeader: opening.header }),
+    forward: () => forwardPromptToAgent(key, getThreadAdapter(key), text, sentAtMs, { messageContext, requestHeader: opening.header, isPersonInput: true }),
     reportNoSession: async (isAlreadyTold) => {
       if (!isAlreadyTold) await replyToThread(key, t('agent.no_session'));
     },
@@ -11723,7 +11758,7 @@ async function cancelPendingQuestionAndForward(
   if (!didLabelQuestionMessage) {
     await replyToThread(key, t('agent.question_cancelled_for_prompt'));
   }
-  return forwardPromptToAgent(key, adapter, text, sentAtMs, { messageContext, requestHeader });
+  return forwardPromptToAgent(key, adapter, text, sentAtMs, { messageContext, requestHeader, isPersonInput: true });
 }
 
 /**
@@ -13118,10 +13153,14 @@ async function noteLostWork(key: SessionKey, lostWork: LostWork | null, reason: 
     reason,
     isLimitWaitArmed,
     msSinceLastAutoResume: lastAutoResumeAt === undefined ? null : now - lastAutoResumeAt,
-    // A tracker issue's agent answers only through a request: a bare note would have nowhere to answer.
+    // A tracker issue's agent answers only through a request: a bare note would have nowhere to answer — its open request is woken instead.
     isRequestRequired: !checkIsTelegramKey(key),
+    hasOpenRequest: (topicRequestLedger?.listOpenRequestsOf(key).length ?? 0) > 0,
   });
-  console.log(`[lost-work] ${kStr}: the process ended (${reason}) with the agent's own work pending (${record.backgroundTasks.length} background task(s), ${record.scheduledJobCount} scheduled job(s)${record.hasUnreadTaskResult ? ', an unread task result' : ''}${record.wasTurnInFlight ? ', a cut-off turn' : ''}); ${plan.isAutoResume ? 'resuming it with a note' : 'the note rides the next prompt'}`);
+  let planText = plan.isAutoResume ? 'resuming it with a note' : 'the note rides the next prompt';
+  if (plan.isRequestWake) planText = 'its open request is woken, and the note rides that wake';
+  console.log(`[lost-work] ${kStr}: the process ended (${reason}) with the agent's own work pending (${record.backgroundTasks.length} background task(s), ${record.scheduledJobCount} scheduled job(s)${record.hasUnreadTaskResult ? ', an unread task result' : ''}${record.wasTurnInFlight ? ', a cut-off turn' : ''}); ${planText}`);
+  if (plan.isRequestWake) scheduleTrackerRestartWake(key, `its process ended (${reason}) with its own work pending`);
   let linePlan = plan;
   if (plan.isAutoResume) {
     await state.setLostWorkResumedAt(key, now);
@@ -13129,6 +13168,39 @@ async function noteLostWork(key: SessionKey, lostWork: LostWork | null, reason: 
     if (!(await resumeConversationForLostWork(key))) linePlan = getHeldLostWorkPlan({ reason, isLimitWaitArmed });
   }
   if (checkIsTelegramKey(key)) replyToThread(key, formatLostWorkTopicLine(record, linePlan, pendingWorkHoldHours, t)).catch(() => {});
+}
+
+/**
+ * @description Wake the open requests of a tracker conversation whose process is gone — `restarted`, staggered by the
+ * wake-up engine — instead of leaving them to the 90-minute backstop. A Telegram topic resumes through its own
+ * lost-work path and is never woken here. The lost-work cooldown guards it as well: a conversation woken
+ * automatically within it is left to the backstop, so a crash loop is no wake loop.
+ */
+function scheduleTrackerRestartWake(key: SessionKey, why: string): void {
+  if (checkIsTelegramKey(key) || !requestWakeUpEngine) return;
+  const lastAutoResumeAt = state.getLostWorkResumedAt(key);
+  if (lastAutoResumeAt !== undefined && Date.now() - lastAutoResumeAt < lostWorkResumeCooldownMs) {
+    console.log(`[requests] ${keyToString(key)}: ${why}; it was woken automatically less than ${lostWorkResumeCooldownMs / 60_000} min ago, so the backstop takes it`);
+    return;
+  }
+  if (requestWakeUpEngine.scheduleRestartWake(key)) console.log(`[requests] ${keyToString(key)}: ${why}; its open request is woken shortly`);
+}
+
+/**
+ * @description The boot's pass over the open requests of tracker conversations: one whose process did not come back
+ * with the boot (not adopted — the conversation sleeps) and that waits for nothing of its own — no post retry, no
+ * progress follow-up, no armed usage-limit wait, not given up — is woken `restarted` ({@link scheduleTrackerRestartWake}).
+ * A process that died with its own work pending is in it too: its lost-work note rides the same wake.
+ */
+function scheduleRestartWakesAtBoot(requestLedger: RequestLedger): void {
+  const keys = new Map<string, SessionKey>();
+  for (const { key, request } of requestLedger.listOpenRequests()) {
+    if (checkIsTelegramKey(key) || keys.has(keyToString(key))) continue;
+    if (checkIsWakingStopped(request) || request.nextPostRetryAt !== undefined || request.nextWakeAt !== undefined) continue;
+    if (getThreadAdapter(key).checkIsActive(key) || getArmedApiRetry(key)?.kind === 'usageLimit') continue;
+    keys.set(keyToString(key), key);
+  }
+  for (const key of keys.values()) scheduleTrackerRestartWake(key, 'its session did not come back with the boot while a request was open');
 }
 
 /**
@@ -13151,7 +13223,27 @@ function createLostWorkPostDeps(): PostToSessionDeps {
   return {
     ...createSessionPostDeps(),
     forwardPrompt: async (conversationKey, text) => {
-      await deliverPromptOrBuffer(keyFromString(conversationKey), text, startupPromptBuffer.checkIsStarting(conversationKey));
+      const buffered = createBufferedOutcome();
+      const delivery = await deliverPromptOrBuffer(keyFromString(conversationKey), text, startupPromptBuffer.checkIsStarting(conversationKey), buffered.settle);
+      if (delivery === 'buffered') await buffered.assertReplayed();
+    },
+  };
+}
+
+/**
+ * @description How a prompt that waited in the startup buffer ended, for a post that must know it reached the session:
+ * `settle` is the buffer's callback, `assertReplayed` resolves once it was replayed into the session and rejects when it
+ * was dropped — the start failed, or its write did not reach the agent.
+ */
+function createBufferedOutcome(): { settle: BufferedPromptSettled; assertReplayed: () => Promise<void> } {
+  let settle: BufferedPromptSettled = () => {};
+  const outcome = new Promise<BufferedPromptOutcome>((resolve) => {
+    settle = resolve;
+  });
+  return {
+    settle: (result) => settle(result),
+    assertReplayed: async () => {
+      if ((await outcome) !== 'replayed') throw new Error('the prompt waited for the session to start and never reached the agent');
     },
   };
 }
@@ -14533,8 +14625,11 @@ function createSessionPostDeps(): PostToSessionDeps {
       // A scheduled run in a topic with requests on is a request (S7); a tracker's
       // post arrives with its request already open and its header in the text.
       const opening = await openTopicRequest(key, text, { source: 'scheduledRun', requesterId: scheduledRunRequester });
-      const delivery = await deliverPromptOrBuffer(key, `${opening.header}${text}`, startupPromptBuffer.checkIsStarting(conversationKey));
+      const buffered = createBufferedOutcome();
+      const delivery = await deliverPromptOrBuffer(key, `${opening.header}${text}`, startupPromptBuffer.checkIsStarting(conversationKey), buffered.settle);
       await settleTopicRequestAfterDelivery(key, opening, delivery);
+      // A prompt that waited for the session's start counts only once it reached it: a replay whose write failed is a failed post.
+      if (delivery === 'buffered') await buffered.assertReplayed();
     },
     now: () => Date.now(),
     sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
@@ -14943,6 +15038,13 @@ function createJiraSessionDeps(requestLedger: RequestLedger, slots: TaskAgentSlo
       // A held request is tracked when the wait's resume, or else its next wake-up, posts its prompt (R21).
       if (!posted.isHeld) await requestWakeUpEngine?.trackForwardedTurn(key, requestId, { isRequestPrompt: true });
     },
+    // An issue update (a comment for an open hand-over request) opens no request: the turn it starts is that request's.
+    postUpdate: async (key, prompt, getTargetRequestId) => {
+      notePersonActivity(key);
+      const posted = await postToSession(sessionPostDeps, keyToString(key), prompt, adapterName);
+      if (!posted.ok) throw new Error(posted.reason === 'forward-failed' ? posted.error : `session ${posted.reason}`);
+      if (!posted.isHeld) await requestWakeUpEngine?.trackForwardedTurn(key, getTargetRequestId());
+    },
   };
 }
 
@@ -15057,6 +15159,11 @@ export async function startBot(): Promise<void> {
       return result.ok ? (result.alertRef ?? null) : null;
     },
     backstopMs: getRequestBackstopMs(process.env.REQUEST_BACKSTOP_MINUTES),
+    restartWakeStaggerMs: ENV.testTimings.requestRestartWakeStaggerMs,
+    // The stamp of the lost-work cooldown: a conversation woken after a restart is not woken so again within it.
+    noteRestartWakeDelivered: (key) => {
+      void state.setLostWorkResumedAt(key, Date.now());
+    },
     pollIntervalMs: ENV.testTimings.requestTurnPollMs,
     sweepIntervalMs: ENV.testTimings.requestSweepIntervalMs,
     firstPostRetryDelayMs: ENV.testTimings.requestFirstPostRetryDelayMs,
@@ -15361,6 +15468,8 @@ export async function startBot(): Promise<void> {
       markSessionsRestored();
       // From here the engine can tell a live turn from a dead session.
       requestWakeUpEngine?.start();
+      // A tracker conversation whose process did not survive the downtime resumes its open request now, not at the backstop.
+      scheduleRestartWakesAtBoot(requestLedger);
       todoReminderEngine?.start();
       jiraConnector?.start(createJiraSessionDeps(requestLedger, slots, jiraConnector.adapterName));
     },

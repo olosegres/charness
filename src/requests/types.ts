@@ -181,8 +181,11 @@ export type RequestAnswerKind = 'progress' | 'question' | 'final';
  *    process, or tracking lost across a restart).
  *  - `postRetry` — the request's prompt could not be posted; tried again soon
  *    (Jira plan R28).
+ *  - `restarted` — a tracker conversation's process was found gone (the bot came
+ *    back without it, or it died with its own work pending) while the request was
+ *    open: woken at once instead of at the backstop.
  */
-export type RequestWakeUpReason = 'silentTurn' | 'progressFollowUp' | 'backstop' | 'postRetry';
+export type RequestWakeUpReason = 'silentTurn' | 'progressFollowUp' | 'backstop' | 'postRetry' | 'restarted';
 
 /**
  * @name RequestAlertReason

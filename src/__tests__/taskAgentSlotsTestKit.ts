@@ -17,6 +17,8 @@ export interface TestOpenRequest {
   key: SessionKey;
   kind: RequestOriginKind;
   isWakeStopped?: boolean;
+  /** The origin's attributes (an acting mention's `mayAct`); none by default. */
+  attributes?: Record<string, string>;
 }
 
 export interface TestSlots {
@@ -36,8 +38,8 @@ export function createJiraConversationKey(issueKey: string): SessionKey {
   return makeJiraKey(issueKey);
 }
 
-function createOpenRequestState(kind: RequestOriginKind, isWakeStopped: boolean): OpenRequestState {
-  return { id: 'req_test', origin: { kind, attributes: {} }, createdAt: 0, progressAnswerCount: 0, silentTurnCount: 0, wakeCount: 0, isWakeStopped };
+function createOpenRequestState(kind: RequestOriginKind, isWakeStopped: boolean, attributes: Record<string, string> = {}): OpenRequestState {
+  return { id: 'req_test', origin: { kind, attributes }, createdAt: 0, progressAnswerCount: 0, silentTurnCount: 0, wakeCount: 0, isWakeStopped };
 }
 
 export function createTestSlots(options: { maxConcurrent?: number; waitList?: TaskAgentWaitEntry[]; now?: () => number } = {}): TestSlots {
@@ -48,10 +50,10 @@ export function createTestSlots(options: { maxConcurrent?: number; waitList?: Ta
   const slots = new TaskAgentSlots({
     getMaxConcurrent: () => maxConcurrent,
     ledger: {
-      listOpenRequests: () => openRequests.map(({ key, kind, isWakeStopped }) => ({
+      listOpenRequests: () => openRequests.map(({ key, kind, isWakeStopped, attributes }) => ({
         key,
         group: { conversation: key, requester: emptyRequester },
-        request: createOpenRequestState(kind, isWakeStopped === true),
+        request: createOpenRequestState(kind, isWakeStopped === true, attributes),
       })),
     },
     store: {

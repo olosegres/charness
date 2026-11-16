@@ -5,7 +5,7 @@ import { tscWatchCheckIntervalMs, tscWatchStaleGraceMs } from './cli/tscWatchGua
 import { jiraPollIntervalMinSeconds } from './connectors/jira/config';
 import { bindPickerClaimLimit } from './connectors/telegram/bindPickerClaims';
 import { globalSendIntervalMs, telegramSendOperationDeadlineMs } from './rateLimiter';
-import { unwatchedSweepMs, watchedTurnPollMs } from './requests/wakeUpEngine';
+import { restartWakeStaggerMs, unwatchedSweepMs, watchedTurnPollMs } from './requests/wakeUpEngine';
 import { postRetryDelaysMs } from './requests/wakeUpRules';
 import { DEFAULT_SAVE_DEBOUNCE_MS } from './state';
 import { pendingWorkHoldDefaultMs } from './utils/jsonStreamPendingWork';
@@ -27,7 +27,7 @@ import { runnerWaitPollMinMs, runnerWaitPollMs } from './remoteRun/runnerWaitTim
  * @description The ONE test-only timing seam: `CHARNESS_TEST_TIMINGS`, a JSON object of named overrides for the
  * production windows the process-level flows would otherwise wait out in real time (the Telegram send pacer's 2 s, a send
  * queue call's 30 s deadline, the
- * Jira poll's 10 s floor, the wake-up engine's 10 s turn poll and its sweep's minute, the first re-post retry's minute, the two-minute probe of an
+ * Jira poll's 10 s floor, the wake-up engine's 10 s turn poll and its sweep's minute, the first re-post retry's minute, the 30 s stagger of the wakes after a restart, the two-minute probe of an
  * unconfirmed usage limit, `state.json`'s save debounce, the OpenCode server's 60 s of retries, the 6 h pending-work hold, the 300 ms to the first read of an adopted json-stream session's output, the 15-minute gap of a passing check's status lines, the
  * todo reminder's 10 s poll and its interval, the 24 h between two rechecks of a used-up API credit and the 30 min poll that finds one due, the 45 s heartbeat lease of a foreground `charness remote-run` and its 10 s poll while it waits for a paired runner, and — a count, not a window —
  * the 200 `/bind` picker claims). It is NOT a setting: no
@@ -64,6 +64,8 @@ const testTimingsSchema = z.strictObject({
   requestSweepIntervalMs: createShorterWindowSchema(unwatchedSweepMs).optional(),
   /** The first retry of a request whose prompt could not be posted (production: `postRetryDelaysMs[0]`, 1 min). */
   requestFirstPostRetryDelayMs: createShorterWindowSchema(postRetryDelaysMs[0]).optional(),
+  /** The gap between two wakes of tracker requests whose process was found gone, and before the first (production: `restartWakeStaggerMs`, 30 s). */
+  requestRestartWakeStaggerMs: createShorterWindowSchema(restartWakeStaggerMs).optional(),
   /** The short retry that probes an unconfirmed usage limit (production: `unconfirmedLimitProbeDelayMs`, 2 min). */
   limitProbeDelayMs: createShorterWindowSchema(unconfirmedLimitProbeDelayMs).optional(),
   /**

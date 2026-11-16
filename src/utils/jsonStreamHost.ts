@@ -67,10 +67,14 @@ export const pidKillWaitTimeoutMs = 2000;
 export const fifoOpenMaxTries = 10;
 export const fifoOpenRetryDelayMs = 500;
 
-/** A full FIFO buffer raises `EAGAIN` on a non-blocking write — transient,
- *  claude drains it. Bounded so a truly wedged reader can't spin forever. */
-export const fifoWriteMaxRetries = 100;
+/** A full FIFO buffer raises `EAGAIN` on a non-blocking write — transient: claude drains it, but a CLI that is still
+ *  starting reads nothing for a while (a resume whose initialize handshake times out after 15 s, then more). A write
+ *  waits as long as the reader keeps taking bytes and gives up only after this long without a single byte taken, so
+ *  a truly wedged reader can't hold the write forever. */
+export const fifoWriteStallTimeoutMs = 2 * 60 * 1000;
+/** The first wait after an `EAGAIN`; it doubles up to {@link fifoWriteRetryMaxDelayMs}, and starts again after progress. */
 export const fifoWriteRetryDelayMs = 50;
+export const fifoWriteRetryMaxDelayMs = 1000;
 
 /** No rotation in v1 (locked decision): the file is per-session and deleted on
  *  stop/release. Past this size we log ONE warning, never rotate. */
@@ -266,24 +270,69 @@ export async function openFifoWriterNonBlocking(
 }
 
 /**
- * @description Write `text` to a non-blocking FIFO fd, retrying transient
- * `EAGAIN` (buffer full — claude drains it) with a bounded backoff and
- * continuing partial writes (a payload larger than the FIFO buffer lands in
- * chunks). Anything else (`EPIPE` after claude died, `EBADF` after close)
- * propagates to the caller's per-session write chain, which logs it.
+ * @name FifoWriteError
+ * @description A FIFO write that did not complete. `writtenBytes` of the payload's `totalBytes` reached the reader:
+ * none — the stream is intact and the payload can be sent again; some — the reader holds the start of a line whose
+ * rest never comes ({@link FifoWriteError.isTorn}), so anything written after it would be read as part of that line.
  */
-export async function writeFifoText(fd: number, text: string): Promise<void> {
+export class FifoWriteError extends Error {
+  constructor(message: string, readonly writtenBytes: number, readonly totalBytes: number) {
+    super(message);
+    this.name = 'FifoWriteError';
+  }
+
+  get isTorn(): boolean {
+    return this.writtenBytes > 0 && this.writtenBytes < this.totalBytes;
+  }
+}
+
+/** @name FifoWriteOptions @description How {@link writeFifoText} waits; the I/O and the clock are injectable for tests. */
+export interface FifoWriteOptions {
+  /** Asked before every wait: `true` — stop waiting (the process is being stopped; nobody will read the rest). */
+  checkIsAbandoned?: () => boolean;
+  /** How long the reader may take nothing before the write gives up; absent: {@link fifoWriteStallTimeoutMs}. */
+  stallTimeoutMs?: number;
+  writeSync?: (fd: number, buffer: Buffer, offset: number, length: number) => number;
+  sleep?: (ms: number) => Promise<void>;
+  now?: () => number;
+}
+
+/**
+ * @description Write `text` to a non-blocking FIFO fd, continuing partial writes (a payload larger than the FIFO buffer
+ * lands in chunks) and waiting out `EAGAIN` (buffer full — claude drains it) for as long as the reader keeps taking
+ * bytes: the stall clock starts again with every byte taken, and the write gives up after `stallTimeoutMs` without one.
+ * Every failure is a {@link FifoWriteError} that says how much of the payload was written — `EAGAIN` past the stall,
+ * the caller's abandon, and at once anything else (`EPIPE` after claude died, `EBADF` after close).
+ */
+export async function writeFifoText(fd: number, text: string, options: FifoWriteOptions = {}): Promise<void> {
   const payload = Buffer.from(text, 'utf8');
+  const write = options.writeSync ?? fs.writeSync;
+  const wait = options.sleep ?? sleep;
+  const now = options.now ?? Date.now;
+  const stallTimeoutMs = options.stallTimeoutMs ?? fifoWriteStallTimeoutMs;
   let written = 0;
-  let retries = 0;
+  let delayMs = fifoWriteRetryDelayMs;
+  let lastProgressAt = now();
+  const fail = (reason: string): FifoWriteError => new FifoWriteError(`${reason} (${written} of ${payload.length} bytes written)`, written, payload.length);
   while (written < payload.length) {
+    let count = 0;
     try {
-      written += fs.writeSync(fd, payload, written, payload.length - written);
+      count = write(fd, payload, written, payload.length - written);
     } catch (e) {
-      if ((e as NodeJS.ErrnoException).code !== 'EAGAIN' || retries >= fifoWriteMaxRetries) throw e;
-      retries += 1;
-      await sleep(fifoWriteRetryDelayMs);
+      const code = (e as NodeJS.ErrnoException).code;
+      if (code !== 'EAGAIN') throw fail(e instanceof Error ? e.message : String(e));
     }
+    if (count > 0) {
+      written += count;
+      lastProgressAt = now();
+      delayMs = fifoWriteRetryDelayMs;
+      continue;
+    }
+    // EAGAIN (a full buffer), or a write that took nothing: wait for the reader.
+    if (options.checkIsAbandoned?.()) throw fail('the write was abandoned: the process is being stopped');
+    if (now() - lastProgressAt >= stallTimeoutMs) throw fail(`EAGAIN: the reader took nothing for ${Math.round(stallTimeoutMs / 1000)} s`);
+    await wait(delayMs);
+    delayMs = Math.min(delayMs * 2, fifoWriteRetryMaxDelayMs);
   }
 }
 

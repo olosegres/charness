@@ -44,7 +44,7 @@ describe('Claude json-stream: unconsumed input', () => {
     const session = createStreamSessionFixture({ key, workDir: '/tmp/json-unconsumed', sessionId: 'sess-unconsumed' });
     adapter['sessions'].set(keyToString(key), session);
     // The FIFO write is the transport, not what is under test.
-    adapter['writeStdin'] = () => {};
+    adapter['writeStdin'] = async () => {};
     return { adapter, session };
   }
 

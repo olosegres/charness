@@ -15,6 +15,10 @@ import * as path from 'path';
 import type { AddressInfo } from 'net';
 import {
   checkIsTransientJiraFailure,
+  jiraCommentWakeNoGroupLogLine,
+  jiraCommentWakeOffLogLine,
+  jiraCommentWakeOnLogLine,
+  jiraMentionWakeActLogLine,
   jiraMentionWakeNoGroupLogLine,
   jiraMentionWakeOffLogLine,
   jiraMentionWakeOnLogLine,
@@ -25,7 +29,7 @@ import {
   prepareJiraConnector,
   type JiraConnector,
 } from '../connectors/jira/connector';
-import { trustedAppsNeedsGroupError, wakeOnMentionNeedsGroupError } from '../connectors/jira/config';
+import { mentionActNeedsGroupError, trustedAppsNeedsGroupError, wakeOnCommentNeedsGroupError, wakeOnMentionNeedsGroupError } from '../connectors/jira/config';
 import { buildJiraUntrustedAppLogLine, jiraTrustedGroupMaxAgeMs } from '../connectors/jira/trustedGroup';
 import { JiraAuthError, JiraHttpError } from '../connectors/jira/client';
 import { getJiraConfigPath } from '../connectors/jira/configFile';
@@ -244,6 +248,7 @@ describe('prepareJiraConnector', () => {
       bindConversation: async () => {},
       createRequest: async () => ({ id: 'req_1' }),
       listOpenRequests: () => [],
+      postUpdate: async () => {},
       slots: unlimitedSlots,
       postRequest: async (_key, _requestId, prompt) => {
         prompts.push(prompt.buildText({ isFresh: true }));
@@ -259,6 +264,7 @@ describe('prepareJiraConnector', () => {
       bindConversation: async () => {},
       createRequest: async () => ({ id: 'req_1' }),
       listOpenRequests: () => [],
+      postUpdate: async () => {},
       slots: unlimitedSlots,
       postRequest: async (_key, _requestId, prompt) => resolve(prompt.buildText({ isFresh: true })),
     });
@@ -276,6 +282,7 @@ describe('prepareJiraConnector', () => {
         },
         createRequest: async () => ({ id: 'req_1' }),
         listOpenRequests: () => [],
+        postUpdate: async () => {},
         slots: unlimitedSlots,
         postRequest: async (key, requestId, prompt) => resolve(`${keyToString(key)} ${requestId} ${prompt.fullText.split('\n')[0]}`),
       });
@@ -483,7 +490,7 @@ describe('prepareJiraConnector', () => {
         warnings.mock.restore();
       }
       const isPosted = new Promise<boolean>((resolve) => {
-        connector?.start({ bindConversation: async () => {}, createRequest: async () => ({ id: 'req_1' }), listOpenRequests: () => [], slots: unlimitedSlots, postRequest: async () => resolve(true) });
+        connector?.start({ bindConversation: async () => {}, createRequest: async () => ({ id: 'req_1' }), listOpenRequests: () => [], postUpdate: async () => {}, slots: unlimitedSlots, postRequest: async () => resolve(true) });
         setTimeout(() => {
           groupMemberStatus = 200;
         }, 50);
@@ -514,16 +521,15 @@ describe('prepareJiraConnector', () => {
       connector = await prepare();
       const posted = await startAndWaitForSearch();
       await waitForHandBack();
-      // Mention wakes are on with a group: once the hand-over is decided, the issue's comments are read for a mention.
-      await waitUntil(() => requestPaths.slice(requestPaths.indexOf('POST /rest/api/3/search/jql')).includes('GET /rest/api/3/issue/PROJ-1/comment'));
       assert.deepEqual(posted, []);
+      // The issue came back handed to the AI: with comment wakes on (a group), its comments are the comment scan's, which
+      // reads them only once a hand-over is seen — and this one was refused and handed back. Nothing of it is read.
       const afterSearch = requestPaths.slice(requestPaths.indexOf('POST /rest/api/3/search/jql'));
       assert.deepEqual(afterSearch.filter((entry) => !entry.includes('/changelog')), [
         'POST /rest/api/3/search/jql',
         'POST /rest/api/3/issue/PROJ-1/comment',
         'GET /rest/api/3/issue/PROJ-1',
         'PUT /rest/api/3/issue/PROJ-1/assignee',
-        'GET /rest/api/3/issue/PROJ-1/comment',
       ]);
       assert.equal(postedCommentTexts.length, 1);
       assert.equal(
@@ -706,6 +712,34 @@ describe('prepareJiraConnector', () => {
         await assert.rejects(prepare(), (error: unknown) =>
           error instanceof JiraConnectorStartError && error.reasons.length === 1 && error.reasons[0] === wakeOnMentionNeedsGroupError);
       });
+
+      it('mentionMode "act": the boot line says mentions act on explicit asks; "act" without a group stops the start with that one reason', async () => {
+        const lines = await bootAndGetLines({ trustedGroup: trustedGroupName, mentionMode: 'act' });
+        assert.equal(lines.filter((line) => line === jiraMentionWakeActLogLine).length, 1);
+        assert.equal(jiraMentionWakeActLogLine, '[jira] mentions of the AI account in a comment wake it (act on explicit asks)');
+        assert.ok(!lines.includes(jiraMentionWakeOnLogLine));
+        connector?.stop();
+        writeConfig({ mentionMode: 'act' });
+        await assert.rejects(prepare(), (error: unknown) =>
+          error instanceof JiraConnectorStartError && error.reasons.length === 1 && error.reasons[0] === mentionActNeedsGroupError);
+      });
+
+      it('wakeOnComment: one boot line says whether a comment on a handed issue reaches its agent — on with a group, a deliberate off, none without a group', async () => {
+        assert.equal(jiraCommentWakeOnLogLine, '[jira] a trusted person\'s comment on an issue handed to the AI account reaches its agent');
+        let lines = await bootAndGetLines({ trustedGroup: trustedGroupName });
+        assert.equal(lines.filter((line) => line === jiraCommentWakeOnLogLine).length, 1);
+        connector?.stop();
+        lines = await bootAndGetLines({ trustedGroup: trustedGroupName, wakeOnComment: false });
+        assert.equal(lines.filter((line) => line === jiraCommentWakeOffLogLine).length, 1);
+        assert.equal(jiraCommentWakeOffLogLine, '[jira] wakeOnComment is off: a comment on an issue handed to the AI account waits for its next request');
+        connector?.stop();
+        lines = await bootAndGetLines({});
+        assert.equal(lines.filter((line) => line === jiraCommentWakeNoGroupLogLine).length, 1);
+        connector?.stop();
+        writeConfig({ wakeOnComment: true });
+        await assert.rejects(prepare(), (error: unknown) =>
+          error instanceof JiraConnectorStartError && error.reasons.length === 1 && error.reasons[0] === wakeOnCommentNeedsGroupError);
+      });
     });
 
     it('C10 with a group: the tool serves a member\'s file and refuses an outsider\'s, naming the group; the issue\'s own rule (its id list) still holds', async () => {
@@ -769,7 +803,7 @@ describe('prepareJiraConnector', () => {
         // Meanwhile the group is deleted: the next check reaches Jira and comes back refused.
         siteGroups = [];
         groupMemberStatus = 200;
-        connector.start({ bindConversation: async () => {}, createRequest: async () => ({ id: 'req_1' }), listOpenRequests: () => [], slots: unlimitedSlots, postRequest: async () => {} });
+        connector.start({ bindConversation: async () => {}, createRequest: async () => ({ id: 'req_1' }), listOpenRequests: () => [], postUpdate: async () => {}, slots: unlimitedSlots, postRequest: async () => {} });
         await waitUntil(() => errors.mock.calls.some((call) => String(call.arguments[0]).startsWith('[jira] polling NOT started:')));
         const refusedReason = 'jira.json trustedGroup: the site has no group named "ai-trusted"';
         assert.deepEqual(errors.mock.calls.map((call) => String(call.arguments[0])), [`[jira] polling NOT started: ${refusedReason}`]);
@@ -819,7 +853,7 @@ describe('prepareJiraConnector', () => {
         const errors = mock.method(console, 'error', () => {});
         try {
           let isPosted = false;
-          connector.start({ bindConversation: async () => {}, createRequest: async () => ({ id: 'req_1' }), listOpenRequests: () => [], slots: unlimitedSlots, postRequest: async () => { isPosted = true; } });
+          connector.start({ bindConversation: async () => {}, createRequest: async () => ({ id: 'req_1' }), listOpenRequests: () => [], postUpdate: async () => {}, slots: unlimitedSlots, postRequest: async () => { isPosted = true; } });
           await new Promise((resolve) => setTimeout(resolve, 150));
           assert.deepEqual(errors.mock.calls.map((call) => String(call.arguments[0])), [
             '[jira] polling STOPPED: the trusted group "ai-trusted" no longer exists on the site',
@@ -842,7 +876,7 @@ describe('prepareJiraConnector', () => {
         groupMemberStatus = 503;
         const warnings = mock.method(console, 'warn', () => {});
         try {
-          connector.start({ bindConversation: async () => {}, createRequest: async () => ({ id: 'req_1' }), listOpenRequests: () => [], slots: unlimitedSlots, postRequest: async () => {} });
+          connector.start({ bindConversation: async () => {}, createRequest: async () => ({ id: 'req_1' }), listOpenRequests: () => [], postUpdate: async () => {}, slots: unlimitedSlots, postRequest: async () => {} });
           await new Promise((resolve) => setTimeout(resolve, 200));
           assert.ok(warnings.mock.calls.some((call) => String(call.arguments[0]).startsWith('[jira] poll failed (1 in a row)')));
           assert.ok(!requestPaths.includes('POST /rest/api/3/search/jql'), 'nothing was searched on the stale list');
@@ -889,6 +923,7 @@ describe('prepareJiraConnector', () => {
         bindConversation: async () => {},
         createRequest: async () => ({ id: 'req_1' }),
         listOpenRequests: () => [],
+        postUpdate: async () => {},
         slots: unlimitedSlots,
         postRequest: async () => resolve(true),
       });
@@ -961,6 +996,16 @@ describe('bot.ts wires the Jira connector (J5)', () => {
     const post = deps.indexOf('await postToSession(sessionPostDeps, keyToString(key), prompt, adapterName);');
     const watch = deps.indexOf('if (!posted.isHeld) await requestWakeUpEngine?.trackForwardedTurn(key, requestId, { isRequestPrompt: true });');
     assert.ok(post > 0 && watch > post);
+  });
+
+  it('an issue update opens no request: it is posted like a request\'s prompt, then the turn it starts is watched for the request its text named', () => {
+    const deps = botSource.slice(botSource.indexOf('function createJiraSessionDeps('), botSource.indexOf('export async function startBot('));
+    const update = deps.slice(deps.indexOf('postUpdate: async (key, prompt, getTargetRequestId) => {'));
+    const post = update.indexOf('const posted = await postToSession(sessionPostDeps, keyToString(key), prompt, adapterName);');
+    const failed = update.indexOf("if (!posted.ok) throw new Error(posted.reason === 'forward-failed' ? posted.error : `session ${posted.reason}`);");
+    const watch = update.indexOf('if (!posted.isHeld) await requestWakeUpEngine?.trackForwardedTurn(key, getTargetRequestId());');
+    assert.ok(post > 0 && failed > post && watch > failed, 'posted, a failure thrown back to the connector (it decides the comment again), then watched');
+    assert.ok(!update.slice(0, watch).includes('createRequest'), 'no request is opened for it');
   });
 
   it('a mention is judged against the ledger: the connector lists the open requests of an issue\'s conversation from it', () => {

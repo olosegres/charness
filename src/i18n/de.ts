@@ -241,6 +241,7 @@ export const deDict: Record<string, string> = {
   'agent.ready': '{label} bereit in `{subdir}`{argsSuffix}\n{infoBlock}Sende eine Nachricht:',
   'agent.ready_model': '🧠 Modell: {model}',
   'agent.no_session': 'Kein Agent läuft. /claude oder /opencode zum Starten.',
+  'agent.prompt_not_delivered': '⚠️ Der Agent hat deine letzte Nachricht nicht erhalten: Sie ließ sich nicht in seine Eingabe schreiben ({error}). Sende sie noch einmal.',
   'agent.session_ended': '{label}: Session beendet',
   'lostWork.line.resumed': '⚠️ Der Prozess des Agenten {reason}, während seine eigene Arbeit noch lief — {work}. Ich habe ihn fortgesetzt und gebeten, diese Arbeit erneut zu prüfen.',
   'lostWork.line.held': '⚠️ Der Prozess des Agenten {reason}, während seine eigene Arbeit noch lief — {work}. Ihre nächste Nachricht setzt ihn fort und sagt ihm, was verloren ging.',

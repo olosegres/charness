@@ -14,6 +14,7 @@ import {
   checkIsTurnInputConsumed,
   checkIsWakingStopped,
   checkIsWatchedTurnStale,
+  decideRestartWake,
   decideTurnEnd,
   decideUnwatchedRequest,
   getPostRetryUpdate,
@@ -49,6 +50,12 @@ export const watchedTurnPollMs = 10_000;
 export const unwatchedSweepMs = 60_000;
 /** A live turn's activity is persisted at most this often (it pushes the backstop back). */
 export const turnActivityPersistStepMs = 60_000;
+/**
+ * The gap between two `restarted` wakes, and before the first: a boot that finds several tracker sessions gone does not
+ * start their agents in the same second, and a connector's first poll — which opens a fresh request for a hand-over
+ * whose post never settled, superseding the old one — has the time to run before anything is woken.
+ */
+export const restartWakeStaggerMs = 30_000;
 
 /**
  * @name RequestWakeUpEngineDeps
@@ -74,6 +81,10 @@ export interface RequestWakeUpEngineDeps {
   pollIntervalMs?: number;
   /** The first retry of a prompt that could not be posted; absent: `postRetryDelaysMs[0]` (a test instance shortens it). */
   firstPostRetryDelayMs?: number;
+  /** The gap between two `restarted` wakes, and before the first; absent: {@link restartWakeStaggerMs} (a test instance shortens it). */
+  restartWakeStaggerMs?: number;
+  /** A `restarted` wake reached the conversation's session (the bot keeps the stamp its crash-loop guard reads). */
+  noteRestartWakeDelivered?: (key: SessionKey) => void;
   /** Whether the conversation's view hides the agent's stream: only then is a final answer's tail followed. Absent: never. */
   checkIsAnswerTailWatched?: (key: SessionKey) => boolean;
   /** Bring the session up (resume only) and forward the answer-tail reminder; `false` when it could not be reached. */
@@ -107,6 +118,10 @@ export class RequestWakeUpEngine {
   private sweepTimer: NodeJS.Timeout | null = null;
   private isPolling = false;
   private isSweeping = false;
+  /** The `restarted` wakes waiting for their turn, by serialized conversation key (one per conversation). */
+  private readonly restartWakeTimers = new Map<string, NodeJS.Timeout>();
+  /** When the last scheduled `restarted` wake is due: the next one is a stagger after it. */
+  private lastRestartWakeDueAt = 0;
 
   constructor(deps: RequestWakeUpEngineDeps) {
     this.deps = deps;
@@ -129,12 +144,88 @@ export class RequestWakeUpEngine {
     this.sweepTimer.unref?.();
   }
 
-  /** @description Stop both timers (shutdown). The persisted request times survive. */
+  /** @description Stop the timers (shutdown). The persisted request times survive; a `restarted` wake not yet due is dropped. */
   stop(): void {
     if (this.pollTimer) clearInterval(this.pollTimer);
     if (this.sweepTimer) clearInterval(this.sweepTimer);
     this.pollTimer = null;
     this.sweepTimer = null;
+    for (const timer of this.restartWakeTimers.values()) clearTimeout(timer);
+    this.restartWakeTimers.clear();
+  }
+
+  /**
+   * @description The conversation's process is gone while it holds open requests (a boot that did not find it, or a
+   * process that died with its own work pending): wake them `restarted`, a stagger after the last wake scheduled so,
+   * instead of at the backstop. One wake per conversation at a time — a second call while one waits changes nothing.
+   * Whether the requests still need it is decided when it is due (`decideRestartWake`). Returns `false` when one
+   * was already waiting. The timer is unref'd: it never keeps the process alive.
+   */
+  scheduleRestartWake(key: SessionKey): boolean {
+    const conversationKey = keyToString(key);
+    if (this.restartWakeTimers.has(conversationKey)) return false;
+    const staggerMs = this.deps.restartWakeStaggerMs ?? restartWakeStaggerMs;
+    const dueAt = Math.max(this.now(), this.lastRestartWakeDueAt) + staggerMs;
+    this.lastRestartWakeDueAt = dueAt;
+    const timer = setTimeout(() => {
+      this.restartWakeTimers.delete(conversationKey);
+      void this.wakeAfterRestart(key).catch((e) => logWakeUpFailure(`the restart wake of ${conversationKey}`, e));
+    }, dueAt - this.now());
+    timer.unref?.();
+    this.restartWakeTimers.set(conversationKey, timer);
+    return true;
+  }
+
+  /**
+   * @description The `restarted` wake of `key`'s conversation, now: every open request nobody watches that the rule
+   * lets be woken gets its wake-up counted, and ONE forward carries them all — the prompt of each request the session
+   * never took in (R21), else its reminder — so one resumed session turn is watched for every one of them, as a
+   * continuation nudge's turn is. A request at the cap gets its alert instead. A delivery that fails is logged and
+   * left to the backstop (counted from now): no alert of its own. Exported for tests (the timer calls it).
+   */
+  async wakeAfterRestart(key: SessionKey): Promise<void> {
+    const probe = this.deps.probeTurn(key);
+    const nowMs = this.now();
+    const woken: OpenRequestState[] = [];
+    for (const request of this.deps.ledger.listOpenRequestsOf(key)) {
+      if (this.watched.has(request.id)) continue;
+      const decision = decideRestartWake(request, probe, nowMs);
+      if (decision.kind === 'alert') {
+        await this.applyDecision(key, request, decision);
+        continue;
+      }
+      if (decision.kind !== 'wake') continue;
+      let isStoppedMeanwhile = false;
+      const updated = await this.deps.ledger.updateOpenRequest(request.id, (current) => {
+        isStoppedMeanwhile = checkIsWakingStopped(current);
+        return isStoppedMeanwhile ? {} : decision.update;
+      });
+      if (updated && !isStoppedMeanwhile) woken.push(updated);
+    }
+    if (woken.length === 0) return;
+    const buildMessage = (requests: readonly OpenRequestState[]): WakeUpMessage => {
+      const messages = requests.map((request) => getWakeUpMessage(request, 'restarted'));
+      return { reason: 'restarted', text: messages.map((message) => message.text).join('\n\n'), isRequestPrompt: messages.some((message) => message.isRequestPrompt) };
+    };
+    try {
+      if (!(await this.deps.prepareWakeUpSession(key, buildMessage(woken)))) {
+        console.warn(`[requests] the restart wake of ${keyToString(key)} could not reach a session; the backstop takes it`);
+        return;
+      }
+      // The resume took a while: only what is still open and wakeable is forwarded.
+      const current = woken
+        .map((request) => this.getOpenRequestOf(key, request.id))
+        .filter((request): request is OpenRequestState => request !== undefined && !checkIsWakingStopped(request));
+      if (current.length === 0) return;
+      await this.deps.forwardWakeUp(key, current[0], buildMessage(current));
+      this.deps.noteRestartWakeDelivered?.(key);
+      console.log(`[requests] ${keyToString(key)}: woken after a restart for ${current.map((request) => request.id).join(', ')}`);
+      for (const request of current) {
+        await this.trackForwardedTurn(key, request.id, { isRequestPrompt: getWakeUpMessage(request, 'restarted').isRequestPrompt });
+      }
+    } catch (e) {
+      logWakeUpFailure(`delivering the restart wake for ${keyToString(key)}`, e);
+    }
   }
 
   /** The open request `requestId` when it belongs to `key`'s conversation, else `undefined`. */

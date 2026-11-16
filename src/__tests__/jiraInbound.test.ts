@@ -18,6 +18,7 @@ import {
   getJiraMentionWindowMs,
   getJiraRetryDelayMs,
   JiraInbound,
+  jiraIssueUpdatesPer24hMax,
   jiraMentionScanCommentCount,
   jiraRetryBackoffCapMs,
   type JiraInboundDeps,
@@ -98,6 +99,10 @@ interface Recorded {
   mentionParked: string[];
   /** Each hand-over that waits for a task-agent slot and got its queued notice. */
   queued: Array<{ issueKey: string; aheadCount: number; maxConcurrent: number }>;
+  /** Each issue update posted: the text built right before the forward, and the request it went to. */
+  updates: Array<{ text: string; requestId: string }>;
+  /** Each "updates are paused" notice: the issue and until when. */
+  pausedNotices: Array<{ issueKey: string; untilMs: number }>;
 }
 
 describe('JiraInbound', () => {
@@ -118,7 +123,7 @@ describe('JiraInbound', () => {
 
   beforeEach(async () => {
     dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'jira-inbound-'));
-    recorded = { calls: [], searches: [], issueReads: [], origins: [], prompts: [], storedPrompts: [], parked: [], untrusted: [], mentionParked: [], queued: [] };
+    recorded = { calls: [], searches: [], issueReads: [], origins: [], prompts: [], storedPrompts: [], parked: [], untrusted: [], mentionParked: [], queued: [], updates: [], pausedNotices: [] };
     searchPages = [];
     changelogPages = new Map();
     triggerLog = await createLoadedTriggerLog();
@@ -201,10 +206,23 @@ describe('JiraInbound', () => {
       contextLedger,
       trust: null,
       isMentionWakeOn: false,
-      listOpenRequests: (key) => (openRequestOrigins.get(key.thread) ?? []).map((origin, index) => ({ id: origin.attributes.testRequestId ?? `req_open_${index + 1}`, origin })),
+      // Today's behaviour unless a test turns them on: no comment scan, mentions answer only.
+      isCommentWakeOn: false,
+      mentionMode: 'answer',
+      postUpdate: async (key, prompt, getTargetRequestId) => {
+        // As the session post does: the text is built right before the forward; the request it names is read after.
+        const text = prompt.buildText({ isFresh: isNextSessionFresh });
+        recorded.calls.push(`update ${keyToString(key)} ${getTargetRequestId()}`);
+        recorded.updates.push({ text, requestId: getTargetRequestId() });
+        if (isPostFailing) throw new Error('session start failed');
+      },
+      listOpenRequests: (key) => (openRequestOrigins.get(key.thread) ?? []).map((origin, index) => ({ id: origin.attributes.testRequestId ?? `req_open_${index + 1}`, origin, isWakeStopped: origin.attributes.testWakeStopped === 'true' })),
       parkMention: async (issueKey) => {
         recorded.calls.push(`parkMention ${issueKey}`);
         recorded.mentionParked.push(issueKey);
+      },
+      postUpdatesPausedNotice: async (issueKey, untilMs) => {
+        recorded.pausedNotices.push({ issueKey, untilMs });
       },
       parkIssue: async (issueKey, parkedRequester) => {
         recorded.calls.push(`park ${issueKey}`);
@@ -1654,7 +1672,7 @@ describe('JiraInbound', () => {
       assert.equal(requestCount, 0);
     });
 
-    it('D9: the requester of an open hand-over request who mentions the AI is covered — no request, recorded, not counted', async () => {
+    it('D9, comment wakes off: the requester of an open hand-over request who mentions the AI is covered — no request, recorded, not counted', async () => {
       openRequestOrigins.set(issueKey, [{ kind: 'trackerEvent', attributes: { issueKey, triggerId: '100', requester: member.accountId } }]);
       comments = [createMentionComment('10240', member)];
       assert.deepEqual([...await createMentionInbound().pollOnce()], [[issueKey, 'notMatching'], [`${issueKey}#mention:10240`, 'covered']]);
@@ -1663,11 +1681,120 @@ describe('JiraInbound', () => {
       assert.equal(triggerLog.getRequestCountLastDay(issueKey, nowMs), 0);
     });
 
-    it('D9: an open hand-over request with NO requester covers anyone\'s mention — a mention request would supersede it', async () => {
+    it('D9, comment wakes off: an open hand-over request with NO requester covers anyone\'s mention — a mention request would supersede it', async () => {
       openRequestOrigins.set(issueKey, [{ kind: 'trackerEvent', attributes: { issueKey, triggerId: '100', requester: '' } }]);
       comments = [createMentionComment('10240', colleague)];
       assert.deepEqual([...await createMentionInbound().pollOnce()], [[issueKey, 'notMatching'], [`${issueKey}#mention:10240`, 'covered']]);
       assert.equal(requestCount, 0);
+    });
+
+    it('a follow-up mention by the requester of an open ACTING mention, on an issue not handed to the AI, goes into that work as an update — not a second mention request; with comment wakes off it opens one as before', async () => {
+      openRequestOrigins.set(issueKey, [{ kind: 'trackerMention', attributes: { issueKey, triggerId: 'mention:10200', requester: member.accountId, mayAct: 'true' } }]);
+      comments = [createMentionComment('10240', member)];
+      assert.deepEqual([...await createMentionInbound({ isCommentWakeOn: true }).pollOnce()], [[issueKey, 'notMatching'], [`${issueKey}#mention:10240`, 'update']]);
+      await flushPosts();
+      assert.equal(requestCount, 0);
+      assert.equal(recorded.updates[0].requestId, 'req_open_1');
+      assert.ok(recorded.updates[0].text.includes('(asked by Member in a mention)'), recorded.updates[0].text);
+      issueUpdated = 'updated-2';
+      comments = [createMentionComment('10240', member), createMentionComment('10241', member)];
+      assert.deepEqual([...await createMentionInbound({ isCommentWakeOn: false }).pollOnce()], [[issueKey, 'notMatching'], [`${issueKey}#mention:10241`, 'request']]);
+    });
+
+    describe('a follow-up mention held back from its update is kept until it is delivered (charness NIT 1)', () => {
+      const openActingMention = (): void => {
+        openRequestOrigins.set(issueKey, [{ kind: 'trackerMention', attributes: { issueKey, triggerId: 'mention:10200', requester: member.accountId, mayAct: 'true' } }]);
+      };
+
+      it('past the cap: held — outside the mention window, across a restart, its issue read by its key once the search no longer returns it, never read during the pause — and delivered when the pause ends', async () => {
+        openActingMention();
+        for (let index = 0; index < jiraIssueUpdatesPer24hMax; index += 1) {
+          triggerLog.record({ issueKey, triggerId: `mention:${9000 + index}`, outcome: 'update', at: nowMs - (index + 1) * minuteMs, requestId: 'req_open_1' });
+        }
+        const pausedUntil = nowMs - jiraIssueUpdatesPer24hMax * minuteMs + 24 * 60 * minuteMs;
+        let clockMs = nowMs;
+        let isSearched = true;
+        comments = [createMentionComment('10240', member)];
+        const client = createMentionClient(() => (isSearched ? [createUnhandedIssue(issueKey)] : []));
+        const warn = mock.method(console, 'warn', () => {});
+        try {
+          const inbound = createMentionInbound({ isCommentWakeOn: true, client, now: () => clockMs });
+          assert.deepEqual([...await inbound.pollOnce()], [[issueKey, 'notMatching'], [`${issueKey}#mention:10240`, 'waiting']]);
+          assert.deepEqual(triggerLog.listHeldMentionIds(issueKey, clockMs), ['10240']);
+          assert.equal(recorded.pausedNotices.length, 1);
+
+          // The search no longer returns the issue (its mention is older than the window), and during the pause it is not read either.
+          isSearched = false;
+          clockMs = nowMs + 60 * minuteMs;
+          assert.deepEqual([...await inbound.pollOnce()], []);
+          assert.ok(!recorded.calls.includes(`getIssue ${issueKey}`), recorded.calls.join('\n'));
+
+          // A restart, then the pause ends: the held mention is in the log, its issue is read by its key, the mention delivered.
+          triggerLog = await createLoadedTriggerLog();
+          clockMs = pausedUntil;
+          const restarted = createMentionInbound({ isCommentWakeOn: true, client, now: () => clockMs });
+          assert.deepEqual([...await restarted.pollOnce()], [[issueKey, 'notMatching'], [`${issueKey}#mention:10240`, 'update']]);
+          await flushPosts();
+          assert.ok(recorded.calls.includes(`getIssue ${issueKey}`));
+          assert.deepEqual(recorded.updates.map((update) => update.requestId), ['req_open_1']);
+          assert.equal(triggerLog.checkIsSeen(issueKey, 'mention:10240'), true);
+          assert.deepEqual(triggerLog.listHeldMentionIds(issueKey, clockMs), [], 'delivered: held no more');
+          assert.deepEqual([...await restarted.pollOnce()], [], 'and its issue is not read by its key any more');
+        } finally {
+          warn.mock.restore();
+        }
+      });
+
+      it('an update that did not reach the session: held too — retried after the backoff, past the mention window and the search', async () => {
+        openActingMention();
+        let clockMs = nowMs;
+        let isSearched = true;
+        comments = [createMentionComment('10240', member)];
+        const client = createMentionClient(() => (isSearched ? [createUnhandedIssue(issueKey)] : []));
+        const warn = mock.method(console, 'warn', () => {});
+        try {
+          const inbound = createMentionInbound({ isCommentWakeOn: true, client, now: () => clockMs });
+          isPostFailing = true;
+          assert.deepEqual([...await inbound.pollOnce()], [[issueKey, 'notMatching'], [`${issueKey}#mention:10240`, 'update']]);
+          await flushPosts();
+          assert.equal(triggerLog.checkIsSeen(issueKey, 'mention:10240'), false);
+          assert.deepEqual(triggerLog.listHeldMentionIds(issueKey, clockMs), ['10240']);
+
+          isPostFailing = false;
+          isSearched = false;
+          clockMs = nowMs + 60 * minuteMs;
+          assert.deepEqual([...await inbound.pollOnce()], [[issueKey, 'notMatching'], [`${issueKey}#mention:10240`, 'update']]);
+          await flushPosts();
+          assert.equal(triggerLog.checkIsSeen(issueKey, 'mention:10240'), true);
+          assert.deepEqual(triggerLog.listHeldMentionIds(issueKey, clockMs), []);
+        } finally {
+          warn.mock.restore();
+        }
+      });
+
+      it('a held mention whose comment is gone is kept no more, and its issue is not read again', async () => {
+        triggerLog.record({ issueKey, triggerId: 'held-mention:10240', outcome: 'parked', at: nowMs - 60 * minuteMs });
+        comments = [];
+        const inbound = createMentionInbound({ isCommentWakeOn: true, client: createMentionClient(() => []) });
+        assert.deepEqual([...await inbound.pollOnce()], [[issueKey, 'notMatching']]);
+        assert.deepEqual(triggerLog.listHeldMentionIds(issueKey, nowMs), []);
+        const reads = recorded.calls.filter((call) => call === `getIssue ${issueKey}`).length;
+        await inbound.pollOnce();
+        assert.equal(recorded.calls.filter((call) => call === `getIssue ${issueKey}`).length, reads);
+      });
+
+      it('a held mention that a prompt of the issue carried since (the watermark passed it) is not delivered a second time', async () => {
+        openActingMention();
+        triggerLog.record({ issueKey, triggerId: 'held-mention:10240', outcome: 'parked', at: nowMs - 60 * minuteMs });
+        // The issue was handed meanwhile, and its hand-over's prompt showed every comment up to 10250.
+        triggerLog.record({ issueKey, triggerId: '300', outcome: 'request', at: nowMs - 30 * minuteMs, requestId: 'req_9', newestCommentId: '10250' });
+        comments = [createMentionComment('10240', member, { minutesAgo: 90 })];
+        const inbound = createMentionInbound({ isCommentWakeOn: true, client: createMentionClient(() => []) });
+        assert.deepEqual([...await inbound.pollOnce()], [[issueKey, 'notMatching']]);
+        assert.deepEqual(recorded.updates, []);
+        assert.equal(requestCount, 0);
+        assert.deepEqual(triggerLog.listHeldMentionIds(issueKey, nowMs), []);
+      });
     });
 
     it('a DIFFERENT person\'s mention during an open hand-over request opens a request of its own — its requester is the mentioner', async () => {
@@ -1729,7 +1856,7 @@ describe('JiraInbound', () => {
       assert.equal(requestCount, 2);
     });
 
-    it('a hand-over opened in the same poll holds the mention until its post settled; the requester\'s own mention is then covered', async () => {
+    it('a hand-over opened in the same poll holds the mention until its post settled; with comment wakes off the requester\'s own mention is then covered', async () => {
       const handedOver = (): JiraIssue => ({
         ...createIssue(issueKey, { histories: [createHistory('300', 30, [{ field: 'assignee', to: aiAccountId }], member)] }),
         fields: { ...createIssue(issueKey).fields, updated: issueUpdated },
@@ -1809,6 +1936,614 @@ describe('JiraInbound', () => {
       const inbound = createMentionInbound({ client: createMentionClient(() => [createUnhandedIssue('OTHER-1')]) });
       assert.deepEqual([...await inbound.pollOnce()], [['OTHER-1', 'notAllowed']]);
       assert.equal(countCommentReads(), 0);
+    });
+
+    describe('a comment on an issue HANDED to the AI reaches its agent (wakeOnComment)', () => {
+      /** The comments a recorded prompt of the issue was built from end here: a later one is new to the conversation. */
+      const shownUpToId = '10200';
+      const handOverRequestId = 'req_open_1';
+      const handedIssue = (): JiraIssue => createAiAssignedIssue(issueKey, '10001', 'To Do');
+      /** The hand-over the issue's conversation has: its trigger seen, its prompt built from the comments up to {@link shownUpToId}. */
+      function recordHandOver(): void {
+        triggerLog.record({ issueKey, triggerId: '100', outcome: 'request', at: nowMs - 30 * minuteMs, requestId: handOverRequestId, newestCommentId: shownUpToId });
+      }
+      const openHandOver = (requesterAccountId: string = colleague.accountId): void => {
+        openRequestOrigins.set(issueKey, [{ kind: 'trackerEvent', attributes: { issueKey, triggerId: '100', requester: requesterAccountId } }]);
+      };
+      const createCommentInbound = (overrides: Partial<JiraInboundDeps> = {}): JiraInbound => createInbound({
+        client: createMentionClient(() => [handedIssue()], handedIssue),
+        trust: createTrust(),
+        isMentionWakeOn: true,
+        isCommentWakeOn: true,
+        ...overrides,
+      });
+      const plain = (id: string, author: JiraAccount, options: { minutesAgo?: number; editor?: JiraAccount } = {}): JiraComment =>
+        createMentionComment(id, author, { isMentioning: false, minutesAgo: options.minutesAgo, ...(options.editor ? { editedMinutesAgo: 0, editor: options.editor } : {}) });
+
+      beforeEach(() => {
+        recordHandOver();
+      });
+
+      it('(1) a member\'s plain comment while the hand-over is open: ONE issue update for that request — no request opened, the hand-over neither replaced nor stripped of its hand-back', async () => {
+        openHandOver();
+        comments = [plain('10150', member, { minutesAgo: 40 }), plain('10240', member)];
+        assert.deepEqual([...await createCommentInbound().pollOnce()], [[issueKey, 'seen'], [`${issueKey}#comment:10240`, 'update']]);
+        await flushPosts();
+        assert.equal(requestCount, 0, 'no request: a new one would supersede the hand-over or take its hand-back');
+        assert.deepEqual(recorded.updates.map((update) => update.requestId), [handOverRequestId]);
+        const [{ text }] = recorded.updates;
+        assert.match(text, /^\[Issue update · request req_open_1 is open\]\n/);
+        assert.ok(text.includes('New on PROJ-30 while you work on request req_open_1 (handed over by Colleague): comment 10240 by Member. It is part of that work:'), text);
+        assert.ok(text.includes('Answer request req_open_1 with answer_request as usual (requestId "req_open_1").'), text);
+        assert.ok(!text.includes('[Request '), 'not a request header: the wake-up engine and the agent read it as the open request\'s work');
+        assert.ok(text.includes('> why does the export fail on empty rows?'), 'the comment itself, quoted as the issue\'s text');
+        assert.equal(triggerLog.checkIsSeen(issueKey, 'comment:10240'), true, 'recorded once the post settled');
+        assert.equal(triggerLog.checkIsSeen(issueKey, 'comment:10150'), false, 'a comment the hand-over prompt carried is no decision of its own');
+        assert.equal(triggerLog.getRequestCountLastDay(issueKey, nowMs), 1, 'the update counts for nothing: the hand-over is the one request');
+        assert.equal(triggerLog.getNewestShownCommentId(issueKey), '10240', 'the update moved the watermark');
+        assert.ok(recorded.calls.includes(`update jira:PROJ:${issueKey} ${handOverRequestId}`));
+      });
+
+      it('(2) a MENTION by the hand-over\'s own requester is a comment like any other: the same update, never `covered`', async () => {
+        openHandOver(member.accountId);
+        comments = [createMentionComment('10240', member)];
+        assert.deepEqual([...await createCommentInbound().pollOnce()], [[issueKey, 'seen'], [`${issueKey}#comment:10240`, 'update']]);
+        await flushPosts();
+        assert.equal(triggerLog.checkIsSeen(issueKey, 'mention:10240'), false, 'the mention scan never ran on the handed issue');
+        assert.equal(requestCount, 0);
+        assert.equal(recorded.updates[0].requestId, handOverRequestId);
+        assert.ok(recorded.updates[0].text.includes('while you work on request req_open_1 (handed over by Member): comment 10240 by Member.'), recorded.updates[0].text);
+      });
+
+      it('several new comments in one poll: ONE update carrying them all, each recorded; with several hand-overs open it goes to the commenter\'s own and names them all', async () => {
+        openRequestOrigins.set(issueKey, [
+          { kind: 'trackerEvent', attributes: { issueKey, triggerId: '100', requester: colleague.accountId } },
+          { kind: 'trackerEvent', attributes: { issueKey, triggerId: '110', requester: member.accountId, testRequestId: 'req_member' } },
+        ]);
+        comments = [plain('10240', colleague, { minutesAgo: 2 }), plain('10241', member)];
+        assert.deepEqual([...await createCommentInbound().pollOnce()], [[issueKey, 'seen'], [`${issueKey}#comment:10241`, 'update']]);
+        await flushPosts();
+        assert.equal(recorded.updates.length, 1);
+        assert.equal(recorded.updates[0].requestId, 'req_member', 'the newest comment\'s author has a hand-over of their own');
+        assert.ok(recorded.updates[0].text.includes('comments 10240 by Colleague and 10241 by Member'), recorded.updates[0].text);
+        assert.ok(recorded.updates[0].text.includes('The requests req_open_1 of Colleague and req_member of Member are open in this conversation.'), recorded.updates[0].text);
+        assert.equal(triggerLog.checkIsSeen(issueKey, 'comment:10240') && triggerLog.checkIsSeen(issueKey, 'comment:10241'), true);
+      });
+
+      it('(3) no hand-over request open but the issue still handed: a request of its own — trackerEvent, the commenter its requester — through the run budget', async () => {
+        comments = [plain('10240', member)];
+        assert.deepEqual([...await createCommentInbound().pollOnce()], [[issueKey, 'seen'], [`${issueKey}#comment:10240`, 'request']]);
+        await flushPosts();
+        assert.deepEqual(recorded.origins, [{ kind: 'trackerEvent', attributes: { issueKey, triggerId: 'comment:10240', requester: member.accountId } }]);
+        assert.match(recorded.prompts[0], /^\[Request req_1 · from: PROJ-30: Member commented \(comment 10240\)\]/);
+        assert.ok(recorded.prompts[0].includes('no request of yours was open on it when comment 10240 by Member came in, so this request is that comment\'s.'), recorded.prompts[0]);
+        assert.equal(triggerLog.getRequestCountLastDay(issueKey, nowMs), 2, 'it is a run: it counts in the budget');
+        assert.equal(triggerLog.getNewestShownCommentId(issueKey), '10240');
+
+        // Over the budget: parked like a hand-over — the notice and the hand-back to the commenter.
+        triggerLog.record({ issueKey, triggerId: 'x', outcome: 'request', at: nowMs - minuteMs });
+        issueUpdated = 'updated-2';
+        comments = [plain('10240', member), plain('10241', colleague)];
+        assert.deepEqual([...await createCommentInbound().pollOnce()], [[issueKey, 'seen'], [`${issueKey}#comment:10241`, 'parked']]);
+        assert.deepEqual(recorded.parked, [{ issueKey, requester: colleague }]);
+        assert.equal(triggerLog.checkIsSeen(issueKey, 'comment:10241'), true);
+      });
+
+      it('(3) a comment\'s request takes a task-agent slot: past the cap it waits — told once, decided again at every poll, started when a slot frees', async () => {
+        const busySlots = createTestSlots({ maxConcurrent: 1 });
+        busySlots.setOpenRequests([{ key: createJiraConversationKey('PROJ-77'), kind: 'trackerEvent' }]);
+        comments = [plain('10240', member)];
+        const inbound = createCommentInbound({ slots: busySlots.slots });
+        assert.deepEqual([...await inbound.pollOnce()], [[issueKey, 'seen'], [`${issueKey}#comment:10240`, 'queued']]);
+        assert.deepEqual(recorded.queued.map((queued) => queued.issueKey), [issueKey]);
+        assert.deepEqual(busySlots.getWaitList().map((entry) => entry.triggerId), ['comment:10240']);
+        // `updated` did not move: the comment is read again all the same, and stays waiting without a second notice.
+        assert.deepEqual([...await inbound.pollOnce()], [[issueKey, 'seen'], [`${issueKey}#comment:10240`, 'waiting']]);
+        assert.equal(recorded.queued.length, 1);
+        assert.deepEqual(busySlots.getWaitList().map((entry) => entry.triggerId), ['comment:10240'], 'the hand-over\'s `seen` does not drop a comment\'s place');
+        busySlots.setOpenRequests([]);
+        assert.deepEqual([...await inbound.pollOnce()], [[issueKey, 'seen'], [`${issueKey}#comment:10240`, 'request']]);
+        assert.deepEqual(busySlots.getWaitList(), []);
+      });
+
+      it('(4) a comment the conversation already has — up to the newest comment a recorded prompt was built from — wakes nothing', async () => {
+        openHandOver();
+        // Written seconds before the hand-over, which carried it in its prompt.
+        comments = [plain('10199', member, { minutesAgo: 31 }), plain('10200', member, { minutesAgo: 30 })];
+        assert.deepEqual([...await createCommentInbound().pollOnce()], [[issueKey, 'seen']]);
+        assert.deepEqual(recorded.updates, []);
+        assert.equal(requestCount, 0);
+      });
+
+      it('(4) with no recorded watermark (decisions older than it): a comment the conversation was shown wakes nothing, nor one older than the last decision', async () => {
+        // A fresh log: the hand-over recorded without the watermark, as every decision before it was.
+        fs.rmSync(path.join(dataDir, jiraTriggerLogFileName), { force: true });
+        triggerLog = await createLoadedTriggerLog();
+        triggerLog.record({ issueKey, triggerId: '100', outcome: 'request', at: nowMs - 30 * minuteMs, requestId: handOverRequestId });
+        openHandOver();
+        contextLedger.recordBuild(issueKey, handOverRequestId, contextLedger.getSnapshot(issueKey).generation, { 'comment:10240': { hash: 'h' } });
+        contextLedger.commit(issueKey, handOverRequestId);
+        comments = [plain('10100', member, { minutesAgo: 60 }), plain('10240', member)];
+        assert.deepEqual([...await createCommentInbound().pollOnce()], [[issueKey, 'seen']]);
+        comments = [...comments, plain('10241', member)];
+        issueUpdated = 'updated-2';
+        assert.deepEqual([...await createCommentInbound().pollOnce()], [[issueKey, 'seen'], [`${issueKey}#comment:10241`, 'update']]);
+      });
+
+      it('(5) an outsider\'s comment, or a member\'s last edited by one, is recorded untrusted — one log line, nothing posted', async () => {
+        openHandOver();
+        comments = [plain('10240', outsider), plain('10241', member, { editor: outsider })];
+        const log = mock.method(console, 'log', () => {});
+        try {
+          assert.deepEqual([...await createCommentInbound().pollOnce()], [[issueKey, 'seen'], [`${issueKey}#comment:10240`, 'untrusted'], [`${issueKey}#comment:10241`, 'untrusted']]);
+          assert.ok(log.mock.calls.some((call) => String(call.arguments[0]) === `[jira] ${issueKey}: comment 10240 does not wake the AI: its author or last editor is outside the trusted group`));
+        } finally {
+          log.mock.restore();
+        }
+        assert.deepEqual(recorded.updates, []);
+        assert.equal(requestCount, 0);
+      });
+
+      it('(6) the AI account\'s own comment and an app\'s or an automation\'s wake nothing — and are not decided: they ride the next prompt', async () => {
+        openHandOver();
+        comments = [plain('10240', { accountId: aiAccountId, accountType: 'atlassian', displayName: 'AI' }), plain('10241', automation)];
+        assert.deepEqual([...await createCommentInbound().pollOnce()], [[issueKey, 'seen']]);
+        assert.deepEqual(recorded.updates, []);
+        assert.equal(triggerLog.checkIsSeen(issueKey, 'comment:10241'), false);
+      });
+
+      it('(7) a post in flight holds the scan: the comment that came meanwhile is taken by the next poll', async () => {
+        openHandOver();
+        let release: () => void = () => {};
+        const gate = new Promise<void>((resolve) => {
+          release = resolve;
+        });
+        const inbound = createCommentInbound({
+          postUpdate: async (_key, prompt, getTargetRequestId) => {
+            await gate;
+            recorded.updates.push({ text: prompt.buildText({ isFresh: false }), requestId: getTargetRequestId() });
+          },
+        });
+        comments = [plain('10240', member)];
+        assert.deepEqual([...await inbound.pollOnce()], [[issueKey, 'seen'], [`${issueKey}#comment:10240`, 'update']]);
+        comments = [...comments, plain('10241', colleague)];
+        issueUpdated = 'updated-2';
+        const readsBefore = countCommentReads();
+        assert.deepEqual([...await inbound.pollOnce()], [[issueKey, 'posting']], 'skipped while the update\'s post is in flight');
+        assert.equal(countCommentReads(), readsBefore);
+        release();
+        await flushPosts();
+        assert.deepEqual([...await inbound.pollOnce()], [[issueKey, 'seen'], [`${issueKey}#comment:10241`, 'update']]);
+        await flushPosts();
+        assert.equal(recorded.updates.length, 2);
+        assert.ok(recorded.updates[1].text.includes('comment 10241 by Colleague') && !recorded.updates[1].text.includes('comment 10240 by'), recorded.updates[1].text);
+      });
+
+      it('(8) a restart (nothing in memory) delivers nothing twice; (9) a comment made during a downtime longer than the mention window is delivered — once', async () => {
+        openHandOver();
+        comments = [plain('10240', member, { minutesAgo: 45 })];
+        assert.deepEqual([...await createCommentInbound().pollOnce()], [[issueKey, 'seen'], [`${issueKey}#comment:10240`, 'update']], 'no window: 45 minutes old and still new');
+        await flushPosts();
+        triggerLog = await createLoadedTriggerLog();
+        assert.deepEqual([...await createCommentInbound().pollOnce()], [[issueKey, 'seen']], 'a new process reads the comments again and finds them decided');
+        assert.equal(recorded.updates.length, 1);
+      });
+
+      it('(10) the hand-over finished between the decision and the forward: the update still reaches the agent, naming that request as finished (its answer becomes a comment) — or goes to another hand-over still open', async () => {
+        openHandOver();
+        let beforeForward: () => void = () => {};
+        const inbound = createCommentInbound({
+          postUpdate: async (_key, prompt, getTargetRequestId) => {
+            beforeForward();
+            recorded.updates.push({ text: prompt.buildText({ isFresh: false }), requestId: getTargetRequestId() });
+          },
+        });
+        beforeForward = () => openRequestOrigins.delete(issueKey);
+        comments = [plain('10240', member)];
+        assert.deepEqual([...await inbound.pollOnce()], [[issueKey, 'seen'], [`${issueKey}#comment:10240`, 'update']]);
+        await flushPosts();
+        const [finished] = recorded.updates;
+        assert.equal(finished.requestId, handOverRequestId);
+        assert.match(finished.text, /^\[Issue update · request req_open_1 is finished\]\n/);
+        assert.ok(finished.text.includes('Answer it with answer_request (requestId "req_open_1"): your answer becomes a comment on the issue and hands nothing back.'), finished.text);
+        assert.equal(triggerLog.checkIsSeen(issueKey, 'comment:10240'), true, 'delivered: decided');
+
+        // Another person's hand-over opened meanwhile: the update goes to it instead.
+        openHandOver();
+        beforeForward = () => openRequestOrigins.set(issueKey, [{ kind: 'trackerEvent', attributes: { issueKey, triggerId: '120', requester: outsider.accountId, testRequestId: 'req_newer' } }]);
+        issueUpdated = 'updated-2';
+        comments = [...comments, plain('10241', member)];
+        await inbound.pollOnce();
+        await flushPosts();
+        assert.equal(recorded.updates[1].requestId, 'req_newer');
+        assert.match(recorded.updates[1].text, /^\[Issue update · request req_newer is open\]/);
+      });
+
+      it('an update that did not reach the session is not recorded, and is tried again after a backoff — not at every poll', async () => {
+        openHandOver();
+        let clockMs = nowMs;
+        isPostFailing = true;
+        comments = [plain('10240', member)];
+        const warn = mock.method(console, 'warn', () => {});
+        try {
+          const inbound = createCommentInbound({ now: () => clockMs });
+          await inbound.pollOnce();
+          await flushPosts();
+          assert.equal(triggerLog.checkIsSeen(issueKey, 'comment:10240'), false);
+          const readsBefore = countCommentReads();
+          assert.deepEqual([...await inbound.pollOnce()], [[issueKey, 'seen']], 'the backoff holds the retry');
+          assert.equal(countCommentReads(), readsBefore);
+          isPostFailing = false;
+          clockMs += getJiraRetryDelayMs(60_000, 1);
+          assert.deepEqual([...await inbound.pollOnce()], [[issueKey, 'seen'], [`${issueKey}#comment:10240`, 'update']]);
+          await flushPosts();
+          assert.equal(triggerLog.checkIsSeen(issueKey, 'comment:10240'), true);
+        } finally {
+          warn.mock.restore();
+        }
+      });
+
+      it('a hand-over the wake-up engine gave up on is no target: the comment opens a request of its own', async () => {
+        openRequestOrigins.set(issueKey, [{ kind: 'trackerEvent', attributes: { issueKey, triggerId: '100', requester: colleague.accountId, testWakeStopped: 'true' } }]);
+        comments = [plain('10240', member)];
+        assert.deepEqual([...await createCommentInbound().pollOnce()], [[issueKey, 'seen'], [`${issueKey}#comment:10240`, 'request']]);
+      });
+
+      it('an open ACTING mention is the work too: a comment on the handed issue goes to it as an update — no request of its own, no second hand-back', async () => {
+        openRequestOrigins.set(issueKey, [{ kind: 'trackerMention', attributes: { issueKey, triggerId: 'mention:10100', requester: member.accountId, mayAct: 'true' } }]);
+        // The mention that asked: its author is named from the issue's own data.
+        comments = [createMentionComment('10100', member, { minutesAgo: 40 }), plain('10240', colleague)];
+        assert.deepEqual([...await createCommentInbound().pollOnce()], [[issueKey, 'seen'], [`${issueKey}#comment:10240`, 'update']]);
+        await flushPosts();
+        assert.equal(requestCount, 0);
+        assert.equal(recorded.updates[0].requestId, handOverRequestId);
+        assert.ok(recorded.updates[0].text.includes('while you work on request req_open_1 (asked by Member in a mention): comment 10240 by Colleague.'), recorded.updates[0].text);
+      });
+
+      it('an issue the AI account handed to ITSELF: a comment goes to the open request that took it up, even an answer-only mention\'s — never a request of its own; handed by a person, that answer-only mention is no target', async () => {
+        const selfHanded = (): JiraIssue => ({
+          ...handedIssue(),
+          changelog: { startAt: 0, maxResults: 100, total: 1, histories: [createHistory('150', 40, [{ field: 'assignee', to: aiAccountId }], { accountId: aiAccountId })] },
+        });
+        triggerLog.record({ issueKey, triggerId: '150', outcome: 'selfAuthored', at: nowMs - 20 * minuteMs });
+        openRequestOrigins.set(issueKey, [{ kind: 'trackerMention', attributes: { issueKey, triggerId: 'mention:10100', requester: member.accountId } }]);
+        comments = [plain('10240', colleague)];
+        const selfInbound = createCommentInbound({ client: createMentionClient(() => [selfHanded()], selfHanded) });
+        assert.deepEqual([...await selfInbound.pollOnce()], [[issueKey, 'seen'], [`${issueKey}#comment:10240`, 'update']]);
+        await flushPosts();
+        assert.equal(requestCount, 0);
+        assert.equal(recorded.updates[0].requestId, handOverRequestId);
+
+        // The same open answer-only mention on an issue a person handed over: it is no target, the comment opens its own request.
+        issueUpdated = 'updated-2';
+        comments = [plain('10240', colleague), plain('10241', colleague)];
+        assert.deepEqual([...await createCommentInbound().pollOnce()], [[issueKey, 'seen'], [`${issueKey}#comment:10241`, 'request']]);
+      });
+
+      it('W3: issue updates are capped per issue per rolling 24 h — past the cap the comments WAIT (undecided), the issue is told once until when, and they are delivered when the oldest update leaves the window', async () => {
+        openHandOver();
+        for (let index = 0; index < jiraIssueUpdatesPer24hMax; index += 1) {
+          triggerLog.record({ issueKey, triggerId: `comment:${9000 + index}`, outcome: 'update', at: nowMs - (index + 1) * minuteMs, requestId: handOverRequestId });
+        }
+        assert.equal(triggerLog.getUpdateCountLastDay(issueKey, nowMs), jiraIssueUpdatesPer24hMax);
+        const pausedUntil = nowMs - jiraIssueUpdatesPer24hMax * minuteMs + 24 * 60 * minuteMs;
+        let clockMs = nowMs;
+        comments = [plain('10240', member)];
+        const warn = mock.method(console, 'warn', () => {});
+        try {
+          const inbound = createCommentInbound({ now: () => clockMs });
+          assert.deepEqual([...await inbound.pollOnce()], [[issueKey, 'seen'], [`${issueKey}#comment:10240`, 'waiting']]);
+          assert.deepEqual(recorded.pausedNotices, [{ issueKey, untilMs: pausedUntil }], 'the issue is told, once, until when');
+          assert.equal(triggerLog.checkIsSeen(issueKey, 'comment:10240'), false, 'undecided: it is delivered later, never dropped');
+          const capLines = warn.mock.calls.map((call) => String(call.arguments[0])).filter((line) => line.includes('issue updates in 24 h, the cap'));
+          assert.equal(capLines.length, 1);
+          assert.ok(capLines[0].includes(`wait until ${new Date(pausedUntil).toISOString()} and are delivered then`), capLines[0]);
+          // A new comment during the pause: not even read, no second notice.
+          issueUpdated = 'updated-2';
+          comments = [plain('10240', member), plain('10241', colleague)];
+          const readsBefore = countCommentReads();
+          assert.deepEqual([...await inbound.pollOnce()], [[issueKey, 'seen']]);
+          assert.equal(countCommentReads(), readsBefore);
+          assert.equal(recorded.pausedNotices.length, 1);
+          // The oldest counted update leaves the window: both comments reach the agent in one update.
+          clockMs = pausedUntil;
+          assert.deepEqual([...await inbound.pollOnce()], [[issueKey, 'seen'], [`${issueKey}#comment:10241`, 'update']]);
+          await flushPosts();
+          assert.ok(recorded.updates[0].text.includes('comments 10240 by Member and 10241 by Colleague'), recorded.updates[0].text);
+        } finally {
+          warn.mock.restore();
+        }
+      });
+
+      it('the "updates paused" notice goes out at most once per issue per rolling 24 h: comments that fill the window again at its end pause the issue again — one log line with its own end — and post no second notice', async () => {
+        openHandOver();
+        for (let index = 0; index < jiraIssueUpdatesPer24hMax; index += 1) {
+          triggerLog.record({ issueKey, triggerId: `comment:${9000 + index}`, outcome: 'update', at: nowMs - (index + 1) * minuteMs, requestId: handOverRequestId });
+        }
+        const firstEnd = nowMs - jiraIssueUpdatesPer24hMax * minuteMs + 24 * 60 * minuteMs;
+        let clockMs = nowMs;
+        comments = [plain('10240', member)];
+        const warn = mock.method(console, 'warn', () => {});
+        try {
+          const inbound = createCommentInbound({ now: () => clockMs });
+          assert.deepEqual([...await inbound.pollOnce()], [[issueKey, 'seen'], [`${issueKey}#comment:10240`, 'waiting']]);
+          clockMs = firstEnd;
+          assert.deepEqual([...await inbound.pollOnce()], [[issueKey, 'seen'], [`${issueKey}#comment:10240`, 'update']]);
+          await flushPosts();
+          // The window is full again (19 older updates and this one): the next comment waits for the next oldest to leave.
+          issueUpdated = 'updated-2';
+          comments = [plain('10240', member), plain('10241', colleague)];
+          assert.deepEqual([...await inbound.pollOnce()], [[issueKey, 'seen'], [`${issueKey}#comment:10241`, 'waiting']]);
+          const secondEnd = nowMs - (jiraIssueUpdatesPer24hMax - 1) * minuteMs + 24 * 60 * minuteMs;
+          assert.deepEqual(recorded.pausedNotices, [{ issueKey, untilMs: firstEnd }], 'one notice in 24 h');
+          const capLines = warn.mock.calls.map((call) => String(call.arguments[0])).filter((line) => line.includes('issue updates in 24 h, the cap'));
+          assert.equal(capLines.length, 2, 'one log line per pause');
+          assert.ok(capLines[0].includes('the issue says so in one comment'), capLines[0]);
+          assert.ok(capLines[1].includes(`wait until ${new Date(secondEnd).toISOString()}`) && capLines[1].includes('so it gets none now'), capLines[1]);
+          assert.equal(triggerLog.checkIsUpdatesPausedNoticePostedLastDay(issueKey, nowMs + 24 * 60 * minuteMs - 1), true);
+          assert.equal(triggerLog.checkIsUpdatesPausedNoticePostedLastDay(issueKey, nowMs + 24 * 60 * minuteMs), false, 'a day after the notice the next pause is told again');
+
+          // The same holds after a restart: the silent pause is in the log, and the notice's time with it.
+          const reloaded = await createLoadedTriggerLog();
+          assert.equal(reloaded.checkIsUpdatesPausedNoticePostedLastDay(issueKey, clockMs), true);
+          assert.equal(reloaded.checkIsSeen(issueKey, `updates-paused:${secondEnd}`), true);
+        } finally {
+          warn.mock.restore();
+        }
+      });
+
+      it('FAIL 1: a comment on an issue the AI handed to ITSELF while ANOTHER issue\'s request works on it (it created or took it up in that run) goes to that request — named as on the linked issue — never into a second agent of its own', async () => {
+        const otherIssueKey = 'PROJ-29';
+        const selfHandedLinked = (): JiraIssue => {
+          const base = handedIssue();
+          return {
+            ...base,
+            fields: { ...base.fields, issuelinks: [{ type: { inward: 'is caused by', outward: 'causes' }, inwardIssue: { key: otherIssueKey } }] },
+            changelog: { startAt: 0, maxResults: 100, total: 1, histories: [createHistory('150', 40, [{ field: 'assignee', to: aiAccountId }], { accountId: aiAccountId })] },
+          };
+        };
+        triggerLog.record({ issueKey, triggerId: '150', outcome: 'selfAuthored', at: nowMs - 20 * minuteMs });
+        openRequestOrigins.set(otherIssueKey, [{ kind: 'trackerEvent', attributes: { issueKey: otherIssueKey, triggerId: '200', requester: requester.accountId, testRequestId: 'req_x' } }]);
+        comments = [plain('10240', colleague)];
+        const inbound = createCommentInbound({ client: createMentionClient(() => [selfHandedLinked()], selfHandedLinked) });
+        assert.deepEqual([...await inbound.pollOnce()], [[issueKey, 'seen'], [`${issueKey}#comment:10240`, 'update']]);
+        await flushPosts();
+        assert.equal(requestCount, 0, 'no request of its own: no second agent, no hand-back to the commenter');
+        assert.ok(recorded.calls.includes(`update jira:PROJ:${otherIssueKey} req_x`), 'posted into the conversation of the issue whose request works on it');
+        const [{ text }] = recorded.updates;
+        assert.match(text, /^\[Issue update · request req_x is open\]\n/);
+        assert.ok(text.includes(`New on ${issueKey} (an issue linked to ${otherIssueKey}, which that request is on) while you work on request req_x`), text);
+        assert.ok(text.includes(`Jira issue ${issueKey} — its new comments:`) && text.includes('> why does the export fail on empty rows?'), text);
+        assert.ok(!text.includes('Fields:'), 'only the new comments: that conversation knows its own issue');
+        assert.equal(triggerLog.checkIsSeen(issueKey, 'comment:10240'), true);
+
+        // Nothing linked works on it any more: only now does a comment open the issue's own request.
+        openRequestOrigins.delete(otherIssueKey);
+        issueUpdated = 'updated-2';
+        comments = [plain('10240', colleague), plain('10241', colleague)];
+        assert.deepEqual([...await inbound.pollOnce()], [[issueKey, 'seen'], [`${issueKey}#comment:10241`, 'request']]);
+      });
+
+      describe('linked routing of a self-handed issue', () => {
+        const aiAccount: JiraAccount = { accountId: aiAccountId, accountType: 'atlassian' };
+        const selfAssignment = (): JiraChangelogHistory => createHistory('150', 40, [{ field: 'assignee', to: aiAccountId }], aiAccount);
+        /** The issue handed to the AI by the AI itself, linked to `linkedKeys` (inward links, in that order). */
+        const selfHandedLinkedTo = (linkedKeys: readonly string[], histories: JiraChangelogHistory[] = [selfAssignment()]): JiraIssue => {
+          const base = handedIssue();
+          return {
+            ...base,
+            fields: { ...base.fields, issuelinks: linkedKeys.map((linkedKey) => ({ type: { inward: 'relates to', outward: 'relates to' }, inwardIssue: { key: linkedKey } })) },
+            changelog: { startAt: 0, maxResults: 100, total: histories.length, histories },
+          };
+        };
+        const openWorkOn = (linkedKey: string, requestId: string): void => {
+          openRequestOrigins.set(linkedKey, [{ kind: 'trackerEvent', attributes: { issueKey: linkedKey, triggerId: '200', requester: requester.accountId, testRequestId: requestId } }]);
+        };
+        /** A client whose issue reads answer `read` and whose changelog reads answer `changelog` (the context reads the whole changelog). */
+        const createLinkedClient = (read: () => JiraIssue, changelog: JiraChangelogHistory[] = [selfAssignment()]): JiraInboundDeps['client'] => ({
+          ...createMentionClient(() => [read()], read),
+          getChangelogPage: async (_key, startAt) => ({ startAt, maxResults: 100, total: changelog.length, isLast: true, values: changelog.slice(startAt) }),
+        });
+
+        beforeEach(() => {
+          triggerLog.record({ issueKey, triggerId: '150', outcome: 'selfAuthored', at: nowMs - 20 * minuteMs });
+        });
+
+        it('a linked issue OUTSIDE the allowlist is never a target, whatever request it has open: the comment opens the issue\'s own request', async () => {
+          openWorkOn('OTHER-5', 'req_outside');
+          comments = [plain('10240', colleague)];
+          const read = (): JiraIssue => selfHandedLinkedTo(['OTHER-5']);
+          assert.deepEqual([...await createCommentInbound({ client: createLinkedClient(read) }).pollOnce()], [[issueKey, 'seen'], [`${issueKey}#comment:10240`, 'request']]);
+          await flushPosts();
+          assert.deepEqual(recorded.updates, []);
+        });
+
+        it('two linked issues both at work: the one the AI account linked the issue to wins (the run that created or took it up); with no tie by the AI account, the first — and the log names the choice', async () => {
+          openWorkOn('PROJ-29', 'req_first');
+          openWorkOn('PROJ-31', 'req_tied');
+          comments = [plain('10240', colleague)];
+          const read = (): JiraIssue => selfHandedLinkedTo(['PROJ-29', 'PROJ-31']);
+          const log = mock.method(console, 'log', () => {});
+          try {
+            // A person linked it to PROJ-29; the AI account linked it to PROJ-31.
+            const changelog = [selfAssignment(), createHistory('160', 45, [{ field: 'Link', to: 'PROJ-29' }], colleague), createHistory('161', 46, [{ field: 'Link', to: 'PROJ-31' }], aiAccount)];
+            assert.deepEqual([...await createCommentInbound({ client: createLinkedClient(read, changelog) }).pollOnce()], [[issueKey, 'seen'], [`${issueKey}#comment:10240`, 'update']]);
+            await flushPosts();
+            assert.deepEqual(recorded.updates.map((update) => update.requestId), ['req_tied']);
+            assert.ok(recorded.updates[0].text.includes(`New on ${issueKey} (an issue linked to PROJ-31, which that request is on)`), recorded.updates[0].text);
+            const choice = log.mock.calls.map((call) => String(call.arguments[0])).find((line) => line.includes('each have a request at work'));
+            assert.ok(choice?.includes("its comments go to PROJ-31's (the AI account tied the issue to it)"), choice);
+
+            // No tie the AI account made: the first linked issue at work.
+            issueUpdated = 'updated-2';
+            comments = [plain('10240', colleague), plain('10241', colleague)];
+            assert.deepEqual([...await createCommentInbound({ client: createLinkedClient(read) }).pollOnce()], [[issueKey, 'seen'], [`${issueKey}#comment:10241`, 'update']]);
+            await flushPosts();
+            assert.equal(recorded.updates[1].requestId, 'req_first');
+            assert.ok(log.mock.calls.some((call) => String(call.arguments[0]).includes("its comments go to PROJ-29's (the first: the changelog shows no tie the AI account made)")));
+          } finally {
+            log.mock.restore();
+          }
+        });
+
+        it('the watermark is the newest DELIVERED comment: one written between the scan and the context read is not shown, so the next poll delivers it', async () => {
+          openWorkOn('PROJ-29', 'req_x');
+          comments = [plain('10240', colleague)];
+          const read = (): JiraIssue => selfHandedLinkedTo(['PROJ-29']);
+          // The context (read after the scan) already has 10245; the update carries only the scanned 10240.
+          const client = { ...createLinkedClient(read), getComments: async () => [...comments.filter((comment) => comment.id !== '10245'), plain('10245', member)] };
+          const inbound = createCommentInbound({ client });
+          assert.deepEqual([...await inbound.pollOnce()], [[issueKey, 'seen'], [`${issueKey}#comment:10240`, 'update']]);
+          await flushPosts();
+          assert.ok(!recorded.updates[0].text.includes('10245'), recorded.updates[0].text);
+          assert.equal(triggerLog.getNewestShownCommentId(issueKey), '10240');
+
+          issueUpdated = 'updated-2';
+          comments = [plain('10240', colleague), plain('10245', member)];
+          assert.deepEqual([...await inbound.pollOnce()], [[issueKey, 'seen'], [`${issueKey}#comment:10245`, 'update']]);
+          await flushPosts();
+          assert.ok(recorded.updates[1].text.includes('comment 10245 by Member'), recorded.updates[1].text);
+        });
+
+        it('rules NIT 5: the last comment scan of a self-handed issue that LEAVES the handed state takes the linked run too — a comment from just before that is not lost', async () => {
+          openWorkOn('PROJ-29', 'req_x');
+          let isLeft = false;
+          // 09:50: the AI account assigns the issue away (it moved it on to review).
+          const leftHanded = (): JiraIssue => {
+            const base = createUnhandedIssue(issueKey);
+            const histories = [selfAssignment(), createHistory('151', 50, [{ field: 'assignee', to: owner.accountId }], aiAccount)];
+            return {
+              ...base,
+              fields: { ...base.fields, issuelinks: [{ type: { inward: 'relates to', outward: 'relates to' }, inwardIssue: { key: 'PROJ-29' } }] },
+              changelog: { startAt: 0, maxResults: 100, total: histories.length, histories },
+            };
+          };
+          const read = (): JiraIssue => (isLeft ? leftHanded() : selfHandedLinkedTo(['PROJ-29']));
+          const inbound = createCommentInbound({ client: createLinkedClient(read) });
+          assert.deepEqual([...await inbound.pollOnce()], [[issueKey, 'seen']], 'handed by itself, nothing new');
+
+          isLeft = true;
+          issueUpdated = 'updated-2';
+          comments = [plain('10240', member, { minutesAgo: 200 })];
+          assert.deepEqual([...await inbound.pollOnce()], [[issueKey, 'notMatching'], [`${issueKey}#comment:10240`, 'update']]);
+          await flushPosts();
+          assert.ok(recorded.calls.includes('update jira:PROJ:PROJ-29 req_x'), recorded.calls.join('\n'));
+          assert.ok(recorded.updates[0].text.includes(`New on ${issueKey} (an issue linked to PROJ-29, which that request is on)`), recorded.updates[0].text);
+          assert.equal(triggerLog.checkIsSeen(issueKey, 'comment:10240'), true);
+        });
+      });
+
+      it('W4: an issue that LEAVES the handed state (its final answer handed it back) gets one last comment scan: a comment written before that is the "finished" update of the request it was working on; a later one is not', async () => {
+        openHandOver();
+        let isHandedBack = false;
+        const aiAccount: JiraAccount = { accountId: aiAccountId, accountType: 'atlassian' };
+        // 09:30: the hand-back (the changelog's newest entry assigns the issue away from the AI account).
+        const handedBack = (): JiraIssue => ({
+          ...createUnhandedIssue(issueKey),
+          changelog: {
+            startAt: 0,
+            maxResults: 100,
+            total: 2,
+            histories: [createHistory('100', 0, [{ field: 'assignee', to: aiAccountId }]), createHistory('101', 30, [{ field: 'assignee', to: owner.accountId }], aiAccount)],
+          },
+        });
+        const inbound = createCommentInbound({
+          client: createMentionClient(() => [isHandedBack ? handedBack() : handedIssue()], () => (isHandedBack ? handedBack() : handedIssue())),
+        });
+        assert.deepEqual([...await inbound.pollOnce()], [[issueKey, 'seen']], 'handed, nothing new');
+
+        // The agent answers and hands back; a comment written before that (08:40) never reached it, one written after (11:59) is not its.
+        openRequestOrigins.delete(issueKey);
+        isHandedBack = true;
+        issueUpdated = 'updated-2';
+        comments = [plain('10240', member, { minutesAgo: 200 }), plain('10241', colleague, { minutesAgo: 1 })];
+        assert.deepEqual([...await inbound.pollOnce()], [[issueKey, 'notMatching'], [`${issueKey}#comment:10240`, 'update']]);
+        await flushPosts();
+        assert.equal(recorded.updates.length, 1);
+        assert.equal(recorded.updates[0].requestId, handOverRequestId);
+        assert.match(recorded.updates[0].text, /^\[Issue update · request req_open_1 is finished\]\n/);
+        assert.ok(recorded.updates[0].text.includes('comment 10240 by Member') && !recorded.updates[0].text.includes('comment 10241 by'), recorded.updates[0].text);
+        assert.equal(triggerLog.checkIsSeen(issueKey, 'comment:10241'), false);
+
+        // One last scan only.
+        issueUpdated = 'updated-3';
+        assert.deepEqual([...await inbound.pollOnce()], [[issueKey, 'notMatching']]);
+        assert.equal(recorded.updates.length, 1);
+      });
+
+      it('(11) with wakeOnComment off a comment on the handed issue wakes nothing, and the requester\'s mention is `covered` as before', async () => {
+        openHandOver(member.accountId);
+        comments = [plain('10240', colleague, { minutesAgo: 2 }), createMentionComment('10241', member)];
+        assert.deepEqual([...await createCommentInbound({ isCommentWakeOn: false }).pollOnce()], [[issueKey, 'seen'], [`${issueKey}#mention:10241`, 'covered']]);
+        assert.deepEqual(recorded.updates, []);
+      });
+
+      it('an issue NOT handed with an open hand-over (the agent moved it on): the hand-over requester\'s mention becomes an update of that request instead of `covered`', async () => {
+        openHandOver(member.accountId);
+        comments = [createMentionComment('10240', member)];
+        assert.deepEqual([...await createCommentInbound({ client: createMentionClient(() => [createUnhandedIssue(issueKey)]) }).pollOnce()], [[issueKey, 'notMatching'], [`${issueKey}#mention:10240`, 'update']]);
+        await flushPosts();
+        assert.equal(recorded.updates[0].requestId, handOverRequestId);
+        assert.equal(triggerLog.checkIsSeen(issueKey, 'mention:10240'), true);
+        assert.equal(requestCount, 0);
+      });
+    });
+
+    describe('mentionMode "act": a trusted person\'s explicit ask in a mention is carried out', () => {
+      it('the note asks to carry out an explicit ask (or answer a question only); the request may act — it hands nothing back', async () => {
+        comments = [createMentionComment('10240', member)];
+        assert.deepEqual([...await createMentionInbound({ mentionMode: 'act' }).pollOnce()], [[issueKey, 'notMatching'], [`${issueKey}#mention:10240`, 'request']]);
+        await flushPosts();
+        assert.deepEqual(recorded.origins, [{ kind: 'trackerMention', attributes: { issueKey, triggerId: 'mention:10240', requester: member.accountId, mayAct: 'true' } }]);
+        const [prompt] = recorded.prompts;
+        assert.ok(prompt.includes(
+          'You were mentioned in comment 10240 by Member, a trusted account. The issue is not handed to you (assignee: Owner, status: Backlog). ' +
+          'If the comment explicitly asks you to do something — create or split issues, take a transition, change the assignee, take up the work — do it as your rules allow; ' +
+          'if it only asks a question, answer it and change nothing. Your answer becomes a comment on the issue; it hands nothing back.',
+        ), prompt);
+        assert.ok(!prompt.includes('Answer only'), prompt);
+      });
+
+      it('an acting mention takes a task-agent slot: past the cap it waits with the notice — outside the mention window and the search too — and starts when a slot frees', async () => {
+        const busySlots = createTestSlots({ maxConcurrent: 1 });
+        busySlots.setOpenRequests([{ key: createJiraConversationKey('PROJ-77'), kind: 'trackerEvent' }]);
+        comments = [createMentionComment('10240', member)];
+        let isSearchReturningIt = true;
+        const inbound = createMentionInbound({
+          mentionMode: 'act',
+          slots: busySlots.slots,
+          client: createMentionClient(() => (isSearchReturningIt ? [createUnhandedIssue(issueKey)] : [])),
+        });
+        assert.deepEqual([...await inbound.pollOnce()], [[issueKey, 'notMatching'], [`${issueKey}#mention:10240`, 'queued']]);
+        assert.deepEqual(recorded.queued.map((queued) => queued.issueKey), [issueKey]);
+        assert.deepEqual(busySlots.getWaitList().map((entry) => entry.triggerId), ['mention:10240']);
+        assert.equal(requestCount, 0);
+        assert.equal(triggerLog.checkIsSeen(issueKey, 'mention:10240'), false, 'not decided: every poll decides it again');
+
+        // An hour later: outside the window, and the search's `updated >= -5m` no longer returns the issue.
+        isSearchReturningIt = false;
+        comments = [createMentionComment('10240', member, { minutesAgo: 60 })];
+        assert.deepEqual([...await inbound.pollOnce()], [[issueKey, 'notMatching'], [`${issueKey}#mention:10240`, 'waiting']], 'read by its key, still waiting');
+        assert.ok(recorded.calls.includes(`getIssue ${issueKey}`));
+        assert.equal(recorded.queued.length, 1, 'told once');
+        busySlots.setOpenRequests([]);
+        assert.deepEqual([...await inbound.pollOnce()], [[issueKey, 'notMatching'], [`${issueKey}#mention:10240`, 'request']]);
+        assert.deepEqual(busySlots.getWaitList(), []);
+        assert.equal(recorded.origins[0].attributes.mayAct, 'true');
+      });
+
+      it('a waiting acting mention whose comment was deleted gives its place up; one in answer mode never takes a place (D10)', async () => {
+        const busySlots = createTestSlots({ maxConcurrent: 1 });
+        busySlots.setOpenRequests([{ key: createJiraConversationKey('PROJ-77'), kind: 'trackerEvent' }]);
+        comments = [createMentionComment('10240', member)];
+        const inbound = createMentionInbound({ mentionMode: 'act', slots: busySlots.slots });
+        await inbound.pollOnce();
+        assert.equal(busySlots.getWaitList().length, 1);
+        comments = [];
+        issueUpdated = 'updated-2';
+        await inbound.pollOnce();
+        assert.deepEqual(busySlots.getWaitList(), [], 'the comment is gone: nothing waits');
+      });
     });
   });
 

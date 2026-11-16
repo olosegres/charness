@@ -20,7 +20,12 @@ group, see "The trusted group" under Isolation; absent → none, with one boot l
 AI account needs the *Browse users and groups* global permission to read it), `wakeOnMention` (boolean: whether an
 @-mention of the AI account in a comment wakes it, see "An @-mention wakes the AI"; absent → on exactly when a
 `trustedGroup` is set; `true` without a group is refused at boot, because without one anyone who can comment could
-start the AI; `false` turns it off, with one boot line), `model`, `effort` (the sessions',
+start the AI; `false` turns it off, with one boot line), `mentionMode` (`"answer"` — absent — or `"act"`: what a mention asks
+of the agent, see "An @-mention wakes the AI"; `"act"` without a group is refused at boot; the boot line says which),
+`wakeOnComment` (boolean: whether a trusted person's comment on an issue handed to the AI reaches its agent, see "A comment
+on an issue handed to the AI reaches it"; absent → on exactly when a `trustedGroup` is set — it fixes a delivery bug, it
+widens nobody's rights; `true` without a group is refused at boot; `false` keeps the old behaviour; one boot line says
+which), `model`, `effort` (the sessions',
 since user settings do not apply; absent → `opus` / `high`, either key overrides only its own default),
 `agentBinaries` (tool name → absolute path of an executable, e.g. `ffmpeg`: checked at boot — missing or not
 executable stops it, naming the key — and linked into `DATA_DIR/agent-bin`, which leads the PATH of the Jira agents;
@@ -84,9 +89,10 @@ Operator-facing setup steps: the public `SETUP.md` § "Jira setup".
 ### The cap on task agents (`inbound.ts`, `trackers/taskAgentSlots.ts`)
 
 The bot runs at most `taskAgents.maxConcurrent` (`settings.json`, default 5, `0` = no limit) tracker conversations at once — ONE
-cap for every project and every tracker connector (`trackers/README.md`). Only a hand-over takes a slot (an open request of origin
-`trackerEvent`); a mention request bypasses the cap and joins no list. The gate stands after the trust check and the run budget
-(an untrusted or over-budget hand-over never waits for a slot) and before the issue is fetched:
+cap for every project and every tracker connector (`trackers/README.md`). A hand-over takes a slot (an open request of origin
+`trackerEvent`), and so does the request a comment on a handed issue opens and — with `mentionMode: "act"` — a mention request (it
+may start a build: its origin carries `mayAct`); a mention that answers only bypasses the cap and joins no list. The gate stands after
+the trust check and the run budget (an untrusted or over-budget hand-over never waits for a slot) and before the issue is fetched:
 
 - `checkIn` → `granted`: the request opens (the slot is reserved until it does) and `noteStarted` drops the issue's place;
   a failure while opening it (`noteStartFailed`) gives the reservation back and keeps the place — which no longer holds up the issues
@@ -95,21 +101,123 @@ cap for every project and every tracker connector (`trackers/README.md`). Only a
   (`answerSink.ts` `postQueuedNotice` — no hand-back, the issue stays the AI's). Its trigger is NOT recorded: every poll decides
   it again (`waiting`, silent) and it starts when it is within the free slots counted from the head of the list. A newer
   hand-over of a waiting issue keeps its place.
-- An issue that left the results of a complete poll, or no longer matches, leaves the list at once (`pruneWaiting`, `dropWaiting`).
+- An issue that left the results of a complete poll, or no longer matches, leaves the list at once (`pruneWaiting`, `dropWaiting`). One
+  conversation has one place, held by the trigger that waits: a hand-over's decision drops only a hand-over's place (and a comment's
+  once the issue is no longer handed); a comment's or a mention's place is decided by its own scan, which reads its comment at every
+  poll while it waits. An acting mention that waits outlives the mention window: its comment is decided again outside it, and its
+  issue — which the search's `updated >= -<n>m` no longer returns — is read by its key (`getIssue`; an issue Jira no longer has gives
+  the place up).
 - A slot freeing — the ledger's `onRequestClosed`, or `onRequestWakeStopped` when the wake-up engine gives up on a request — and a raised
   cap wake the poll at once (`pollSoon`: a poll under way is not interrupted, the next one follows it immediately; a failing Jira keeps
   its backoff).
 
-### An @-mention wakes the AI — it answers only (`inbound.ts` `getMentionDecisions`)
+### A comment on an issue handed to the AI reaches it (`inbound.ts` `getCommentDecisions`)
+
+With a `trustedGroup` (and `wakeOnComment` not `false`) every poll reads the new comments of an issue HANDED to the AI
+account — assigned to it in a trigger status, its hand-over's trigger seen — once its `updated` moved, and a trusted
+person's comment reaches the agent; a mention there is a comment like any other (the mention scan does not run on a
+handed issue). Before, a comment on a handed issue never reached the agent at all — and a mention by the hand-over's
+requester was recorded `covered` with nothing posted — so people unassigned and re-assigned an issue to get a word through.
+
+- **Which comments.** A person's (`accountType` `atlassian`, or none) — not the AI account's, and not an app's or an
+  automation's: a pipeline notice or a rule wakes nothing, it rides the next prompt. Newer than every comment a recorded
+  prompt of the issue was built from: each request, mention and update records, with its decision, the newest comment id
+  of the issue it fetched (`newestCommentId` in the trigger log, `getNewestShownCommentId`; comment ids grow site-wide,
+  `compareJiraCommentIds`). That bound is persisted and needs no window, so a comment made while the bot was down — or Jira
+  was — is still delivered once, and a compaction or a fresh session that made the agent forget what it was shown never
+  makes an old comment new. Decisions recorded before the bound existed fall back to what the conversation was shown
+  (`contextLedger.getShownBlock`) and, failing that, to comments written after the issue's last decision. Not decided yet
+  (`comment:<id>`, nor `mention:<id>` from the mention scan).
+- **Who may wake it.** The comment's author AND last editor trusted (`checkIsCommentTrusted`); otherwise it is
+  `untrusted`: recorded, one log line, nothing posted — and its text stays withheld in every prompt.
+- **The requests an update belongs to** (`listUpdateTargetRequests`): the conversation's open hand-overs and its open
+  mentions that may act (`mayAct`: that is the work it does on the issue), none the wake-up engine gave up on; on an
+  issue the AI account handed to itself (its seen hand-over is self-authored: an acting mention's «take up the work»),
+  any open request — the one that took it up is still working on it, so a comment never opens a second agent there. When
+  its own conversation has none, a request holding a task-agent slot in the conversation of an issue LINKED to it (its
+  parent, a sub-task or child, either end of an issue link — `findLinkedWorkingRequest`; the agent created the issue and
+  builds it in that run, say) gets the comments: an update of that request in that conversation whose header names the
+  commented issue ("New on PROJ-2 (an issue linked to PROJ-1, which that request is on) …") and carries only its new
+  comments (that conversation's context ledger is its own issue's) — recorded on the commented issue, its watermark the
+  newest comment DELIVERED (one written between the scan and the read of the issue stays new). The agent's answer is a
+  comment on PROJ-1: the header says so, and tells it to answer a person on PROJ-2 with a comment of its own there,
+  @-mentioning them — it offers no `replyToCommentIds`, which resolves only comments shown in the request's own
+  conversation. Linked issues are tried in the order parent, issue links, sub-tasks, children; only allowlisted projects
+  count. When several hold a working request, the one the AI account tied the issue to wins: an issue link the AI account
+  made (a `Link` entry of the commented issue's changelog, which the context already read), or the parent when the AI
+  account created the issue or last changed its parent (`listIssueKeysTiedByAi`); with no such tie the first wins and one
+  log line names the choice — a person who links the issue to another issue at work can then route its comments there.
+  Only when nothing linked works on it does a comment open the issue's own request. On an issue NOT handed to the AI the
+  comment scan does not run: there, only an @-mention reaches it, and a follow-up mention by the requester of an open
+  acting mention goes into that work as an update (`isCovered` counts every slot-holding request with comment wakes on).
+- **Such a request is open**: ONE **issue update** carries every new
+  trusted comment of the poll (`buildJiraUpdatePrompt`: `[Issue update · request req_… is open]`, then the issue's delta —
+  the whole issue for a session that does not know it). It is NOT a request: no request is opened, because a new one would
+  supersede the hand-over (same requester) and strip its hand-back, or hand the issue to the commenter on its first final
+  answer. It goes through the session post like a request's prompt: it waits for the running turn to end (a comment never
+  interrupts a turn; after 10 minutes it is written in anyway), and the wake-up engine watches the turn it starts as that
+  request's. Which request is settled right before the forward: the commenter's own open hand-over, else one with no
+  requester, else the newest; the note names every hand-over open. When every hand-over finished meanwhile (the agent's
+  final answer came first and handed the issue back), the update still reaches the agent, naming that request as
+  finished: its answer to it becomes a comment and hands nothing back — waiting for the next poll instead would lose the
+  comment whenever the hand-back left the issue no longer handed. The comments are recorded `update` once the post
+  settled; an update that did not reach the session is decided again after a backoff (the poll interval doubled per
+  failure, up to 15 minutes), so a session that cannot be started is not started at every poll.
+- **The cap.** An issue gets at most `jiraIssueUpdatesPer24hMax` (20) updates in a rolling 24 h (one per post, counted
+  off the trigger log's `update` lines). An account of the trusted group that comments as the agent's own tooling would
+  otherwise loop — each comment the next poll's update, each answer another comment —; past the cap the comments stay
+  undecided (`waiting`) and the issue is not scanned until the oldest counted update leaves the window
+  (`getUpdateWindowEnd`); then they are delivered in one update. Each pause gets one log line saying until when, recorded
+  under `updates-paused:<end>` so a restart does not repeat it. The issue gets ONE comment by the AI account about it at
+  most once per rolling 24 h (`buildJiraUpdatesPausedText`: until when, nothing lost, a pause within a day is not told
+  again; the record's `isNoticePosted`) — a steady stream of comments fills the window again at every end and pauses it
+  again, silently. The AI account's own comments are never delivered, so the notice starts no loop. A mention held back
+  by the cap — on an issue not handed to the AI, a follow-up mention is an update too — is marked `held-mention:<id>` in the
+  trigger log, so the mention scan keeps it outside the mention window, across a restart, and reads its issue by its key
+  once the search no longer returns it (not during the pause), until it is delivered — two days at most, and one that a
+  later prompt of the issue carried (the watermark passed it) is let go; a mention update whose post failed is held the
+  same way, as its backoff may outlast the window. The agent must comment only as the AI account.
+- **An issue that leaves the handed state gets one last scan** (`scanIssuesThatLeftHanded`): the poller remembers the
+  handed issues whose hand-over it saw, with the request an update would go to. One that a later poll finds no longer
+  handed (its final answer handed it back, someone took it) — read by its key when the search no longer returns it — has
+  its comments read once more: those written before the changelog entry that ended the hand-over (`findLeftHandedAt`)
+  and not delivered yet reach that request as the "finished" update (or a request still open; on an issue the AI account
+  took up in another issue's run with no request of its own known, the linked run's request as above). The gap between a
+  hand-back and the next poll no longer loses a comment. In memory: a restart forgets what was handed, and a request that
+  opens and is answered between two polls is never seen handed, so a comment inside that short window gets no last scan
+  (it still rides the issue's next prompt).
+- **No request is open but the issue is still handed** (a hand-back that failed, a hand-over with no
+  requester): the comments open ONE request of their own — origin `trackerEvent`, trigger
+  `comment:<newest id>` (`commented`; `from: KEY: <name> commented (comment <id>)`), the newest comment's author its
+  requester — through the run budget (over it: parked with the hand-over's notice and hand-back) and a task-agent slot (a
+  place in the list, told once, decided again at every poll); its note says the comment starts work like a hand-over. The
+  older comments of the poll are recorded `update` with it.
+- One post per issue at a time (`postingIssueKeys`), as for requests: a comment that comes while one is in flight is
+  taken by the next poll. `wakeOnComment: false` keeps the old decisions: no comment scan, `covered` for the requester's mention.
+
+### An @-mention wakes the AI (`inbound.ts` `getMentionDecisions`)
 
 With a `trustedGroup` (and `wakeOnMention` not `false`) a comment that @-mentions the AI account starts a request
-on any issue of an allowlisted project — any assignee, any status. On an issue that is NOT handed to it the agent
-may read the issue and the code and run read-only checks; it changes nothing, and asked to do work it answers that
-the issue has to be assigned to it in one of the project's trigger statuses, which the note lists — or, when the
-issue is already assigned to the AI account in another status, that only the status is missing. That is an instruction in the prompt, like the agent's other rules, not a technical lock: the agent still runs
-with the instance's rights.
+on an issue of an allowlisted project that is not handed to it (with `wakeOnComment` off: on any issue) — any assignee,
+any status. What it asks of the agent is `mentionMode`:
 
-- **The note has four cases** (`prompt.ts` `getMentionNote`), chosen from the issue as it stands when the prompt is
+- **`"answer"`** (absent): the agent may read the issue and the code and run read-only checks; it changes nothing, and
+  asked to do work it answers that the issue has to be assigned to it in one of the project's trigger statuses, which the
+  note lists — or, when the issue is already assigned to the AI account in another status, that only the status is missing.
+- **`"act"`**: a trusted person's explicit ask in the comment is carried out, whatever the issue's status and assignee —
+  «If the comment explicitly asks you to do something — create or split issues, take a transition, change the assignee,
+  take up the work — do it as your rules allow; if it only asks a question, answer it and change nothing. Your answer
+  becomes a comment on the issue; it hands nothing back.» The note still names the issue as it stands (not handed /
+  assigned in a status the agent does or does not work in) and every hand-over request that was open, which goes on: acting
+  on the comment never stops or ends that work. The request may act, so it takes a task-agent slot (its origin carries
+  `mayAct`, see "The cap on task agents"); its origin stays `trackerMention`, so nothing is handed back — nothing was
+  handed over. Giving a group member this power adds nothing: a member can already assign the AI any issue.
+
+Either way it is an instruction in the prompt, like the agent's other rules, not a technical lock: the agent still runs
+with the instance's rights, and what it may do is its rules' call.
+
+- **The answer-mode note has four cases** (`prompt.ts` `getMentionNote`; with comment wakes on, cases 3 and 4 are reached only
+  by a mention on an issue not returned as handed, so in practice no longer by a trusted commenter), chosen from the issue as it stands when the prompt is
   built — `assignee` is one of `jiraPromptIssueFields`, the status is matched by id against the project's
   `triggerStatusIds` — and from the conversation's OPEN hand-over requests (`trackerEvent`, read through
   `listOpenRequests` right before the request opens; the requester is named from the issue's own data, left out
@@ -145,22 +253,25 @@ with the instance's rights.
   was created or edited inside the window, is not the AI account's own, holds a `mention` node with the AI
   account's id (`getMentionedAccountIds`: the node's `id` attribute, never its text), and its trigger id
   `mention:<commentId>` is not in the trigger log. Oldest first, one decision each.
-- **One wake per comment.** The decision is recorded under `mention:<commentId>` (`untrusted`, `covered`,
+- **One wake per comment.** The decision is recorded under `mention:<commentId>` (`untrusted`, `covered`, `update`,
   `parked` or `request`), so a later edit of the comment, the next poll and a restart wake nothing. An edit that
-  ADDS a mention to an older comment is the first decision on it.
+  ADDS a mention to an older comment is the first decision on it. A comment decided by the comment scan
+  (`comment:<id>`) is never decided again by the mention scan, nor the other way round.
 - **Who may wake it.** The comment's author AND its last editor must be trusted (`checkIsCommentTrusted`, the same
   rule that decides whether the comment's text reaches the agent). Otherwise it is `untrusted`: recorded, one log
   line (`[jira] PROJ-1: the mention in comment 10240 is ignored: …`), nothing posted — an outsider gets no
   request and no notice. An app's or automation's mention is trusted only as `trustedApps` allows.
-- **Covered.** The requester of an OPEN hand-over request of the issue who mentions the AI gets no request of
-  their own (`covered`): it would supersede the hand-over request — same requester — and strip its hand-back. The
-  comment reaches that run in its next prompt. An open hand-over request with NO requester covers every mention
-  the same way: the ledger lets any next request of the conversation supersede such a request.
+- **The requester of an open hand-over** who mentions the AI (on an issue no longer returned as handed — the agent
+  moved it on, someone unassigned it) gets no request of their own: it would supersede the hand-over request — same
+  requester — and strip its hand-back. With comment wakes on the comment reaches that request as an issue update (see
+  "A comment on an issue handed to the AI reaches it"), recorded `update`. With them off it is `covered`: recorded, and
+  nothing is posted — no prompt ever carried it, which is the bug comment wakes fix. An open hand-over request with NO
+  requester takes every mention the same way: the ledger lets any next request of the conversation supersede such a request.
 - **Budget.** A mention request counts in `runBudgetPer24h` with the hand-overs. Over it the mention is `parked`;
   its notice (nothing is handed back — nothing was handed over) is posted at most once per issue per rolling
   24 hours, later ones are recorded silently.
-- **The request.** Origin `trackerMention`, requester = the comment's author; one request is posted at a time per
-  issue, so a second mention waits for the next poll. The prompt is the issue — whole, or what the conversation
+- **The request.** Origin `trackerMention` (with `mayAct: 'true'` in act mode), requester = the comment's author; one
+  request is posted at a time per issue, so a second mention waits for the next poll. The prompt is the issue — whole, or what the conversation
   has not seen yet — with the mention note after the requester line. A different person's mention opens a request
   of its own; a second mention by the same person supersedes their earlier open one; a hand-over by that person
   while their mention request is open supersedes the mention request. The answer is a comment and the issue stays
@@ -249,7 +360,8 @@ another platform's state.
   limit of every part). `replyToCommentIds` (at most 10 numeric ids) is offered to Jira sessions only.
 - A hand-over's `question` to an OPEN request (the one that hands the issue back) ends with one more paragraph,
   plain text on the last comment: "To let me go on, answer in a comment and assign the issue back to me." A reply
-  that only mentions the AI wakes it for an answer, not for the work; a hand-over is still how the work continues.
+  that only mentions the AI wakes it for an answer (with `mentionMode: "act"`, an explicit ask in it is carried out); a
+  hand-over is still how the hand-over's work continues.
 - Three notices are the bot's own, with no agent behind them: the park notice of a hand-over (it names
   hand-overs and mentions together, as both fill the budget) and the notice of an `untrusted` hand-over —
   "Only members of the AI's trusted group (`<configured name>`) can hand it work, so nothing was started. Ask a
@@ -388,8 +500,10 @@ context preamble tells the agent the tool exists and carries the standing rule: 
 real Jira-only instance each (`scripts/run-isolated.sh`) against `__tests__/jiraE2e/fakeJira.ts` (which also serves
 groups and their members) and `fakeClaude.ts`: `jiraConnectorE2e.test.ts` (requests and the session lifecycle),
 `jiraPromptE2e.test.ts` (what the prompts carry), `jiraTrustE2e.test.ts` (with a `trustedGroup` and no `trustedApps`: the
-filter, the notice, an automation's hand-over and mentions) and `jiraTrustedAppsE2e.test.ts` (with a `trustedApps`: a listed
-app starts the agent, an unlisted one — a group member — is refused and its text withheld), sharing
+filter, the notice, an automation's hand-over and mentions), `jiraTrustedAppsE2e.test.ts` (with a `trustedApps`: a listed
+app starts the agent, an unlisted one — a group member — is refused and its text withheld) and `jiraCommentWakeE2e.test.ts`
+(with a group, `mentionMode: "act"` and the backstop an hour away: a comment mid-turn reaches the same request, a comment
+after the final answer opens one, an acting mention, a kill-and-restart mid-turn answered within a minute), sharing
 `__tests__/jiraE2e/jiraFlowKit.ts`;
 `live/jiraLive.test.ts` runs the loop against a real site and is skipped unless its env variables are set; its
 prompt-context steps (media through the attachment tool, a delta, a requested compaction, the default model and

@@ -14,7 +14,9 @@ import * as os from 'os';
 import * as path from 'path';
 import {
   getOpenCodeIsolationError,
+  mentionActNeedsGroupError,
   trustedAppsNeedsGroupError,
+  wakeOnCommentNeedsGroupError,
   wakeOnMentionNeedsGroupError,
   jiraDefaultEffort,
   jiraDefaultModel,
@@ -427,6 +429,62 @@ describe('validateJiraConfig', () => {
 
     it('anything but a boolean is refused naming the field', () => {
       assert.deepEqual(getErrors(createConfig({ wakeOnMention: 'yes' })).map((error) => error.split(':')[0]), ['jira.json wakeOnMention']);
+    });
+  });
+
+  describe('wakeOnComment (a trusted person\'s comment on an issue handed to the AI reaches its agent)', () => {
+    const getCommentSettings = (overrides: Record<string, string | boolean>): { isCommentWakeOn: boolean; wakeOnCommentSetting: boolean | null } => {
+      const result = validateJiraConfig(createConfig(overrides), { workRoot, openCodeUrl: isolatedOpenCodeUrl });
+      assert.ok(result.ok, result.ok ? '' : result.errors.join('\n'));
+      return { isCommentWakeOn: result.config.isCommentWakeOn, wakeOnCommentSetting: result.config.wakeOnCommentSetting };
+    };
+
+    it('absent: on wherever a trusted group is set (it fixes a delivery bug), off without one', () => {
+      assert.deepEqual(getCommentSettings({}), { isCommentWakeOn: false, wakeOnCommentSetting: null });
+      assert.deepEqual(getCommentSettings({ trustedGroup: 'ai-trusted' }), { isCommentWakeOn: true, wakeOnCommentSetting: null });
+    });
+
+    it('true needs a trusted group: without one the config is refused with the one named reason', () => {
+      assert.deepEqual(getErrors(createConfig({ wakeOnComment: true })), [wakeOnCommentNeedsGroupError]);
+      assert.equal(
+        wakeOnCommentNeedsGroupError,
+        'jira.json wakeOnComment needs trustedGroup: without a group, anyone who can comment on an issue handed to the AI could steer its work',
+      );
+      assert.deepEqual(getCommentSettings({ wakeOnComment: true, trustedGroup: 'ai-trusted' }), { isCommentWakeOn: true, wakeOnCommentSetting: true });
+    });
+
+    it('false is kept — today\'s behaviour: a comment on a handed issue waits for the next request', () => {
+      assert.deepEqual(getCommentSettings({ wakeOnComment: false, trustedGroup: 'ai-trusted' }), { isCommentWakeOn: false, wakeOnCommentSetting: false });
+      assert.deepEqual(getCommentSettings({ wakeOnComment: false }), { isCommentWakeOn: false, wakeOnCommentSetting: false });
+    });
+
+    it('anything but a boolean is refused naming the field', () => {
+      assert.deepEqual(getErrors(createConfig({ trustedGroup: 'ai-trusted', wakeOnComment: 'yes' })).map((error) => error.split(':')[0]), ['jira.json wakeOnComment']);
+    });
+  });
+
+  describe('mentionMode (what a mention asks of the agent)', () => {
+    const getMentionMode = (overrides: Record<string, string | boolean>): string => {
+      const result = validateJiraConfig(createConfig(overrides), { workRoot, openCodeUrl: isolatedOpenCodeUrl });
+      assert.ok(result.ok, result.ok ? '' : result.errors.join('\n'));
+      return result.config.mentionMode;
+    };
+
+    it('absent: "answer" — today\'s answer-only mentions; "answer" and "act" are taken as given', () => {
+      assert.equal(getMentionMode({}), 'answer');
+      assert.equal(getMentionMode({ trustedGroup: 'ai-trusted' }), 'answer');
+      assert.equal(getMentionMode({ trustedGroup: 'ai-trusted', mentionMode: 'answer' }), 'answer');
+      assert.equal(getMentionMode({ trustedGroup: 'ai-trusted', mentionMode: 'act' }), 'act');
+      assert.equal(getMentionMode({ mentionMode: 'answer' }), 'answer', 'answering changes nothing: no group needed');
+    });
+
+    it('"act" needs a trusted group: without one the config is refused with the one named reason', () => {
+      assert.deepEqual(getErrors(createConfig({ mentionMode: 'act' })), [mentionActNeedsGroupError]);
+      assert.equal(mentionActNeedsGroupError, 'jira.json mentionMode "act" needs trustedGroup: without a group, anyone who can comment could make the AI change things');
+    });
+
+    it('any other value is refused naming the field', () => {
+      assert.deepEqual(getErrors(createConfig({ trustedGroup: 'ai-trusted', mentionMode: 'work' })).map((error) => error.split(':')[0]), ['jira.json mentionMode']);
     });
   });
 });

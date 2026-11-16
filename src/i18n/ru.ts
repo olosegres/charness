@@ -245,6 +245,7 @@ export const ruDict: Record<string, string> = {
   'agent.ready': '{label} готов в `{subdir}`{argsSuffix}\n{infoBlock}Отправь сообщение:',
   'agent.ready_model': '🧠 Модель: {model}',
   'agent.no_session': 'Агент не запущен. /claude или /opencode — старт.',
+  'agent.prompt_not_delivered': '⚠️ Агент не получил ваше последнее сообщение: не удалось записать его во ввод агента ({error}). Отправьте его ещё раз.',
   'agent.session_ended': '{label}: сессия завершена',
   'lostWork.line.resumed': '⚠️ Процесс агента {reason}; его незаконченная работа — {work}. Я возобновил его и попросил заново проверить эту работу.',
   'lostWork.line.held': '⚠️ Процесс агента {reason}; его незаконченная работа — {work}. Ваше следующее сообщение возобновит его и расскажет ему, что потеряно.',

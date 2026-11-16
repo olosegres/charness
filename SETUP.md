@@ -284,7 +284,7 @@ your chosen providers need them.
 | `SCHEDULER_MCP_PORT` | an OS-chosen free loopback port | You need a stable, explicitly chosen port; it must differ from this instance's `OPENCODE_URL` port |
 | `CLAUDE_SCRAPE_DEBUG` | off | You are debugging Claude tmux scraping (the deprecated tmux backend) and need full RAW/FILTERED chunks |
 | `AGENT_IDLE_MINUTES` | `55` | A json-stream Claude topic idle for this long is compacted (when `/compact_on_idle` allows) and its process stopped; the session sleeps and the next message resumes it — shorten it only for a test; a non-positive or non-numeric value keeps the default |
-| `REQUEST_BACKSTOP_MINUTES` | `90` | A request (a Jira hand-over, a message in an answers-only topic) with nothing seen working on it for this long is re-posted to its session — shorten it only for a test; a non-positive or non-numeric value keeps the default |
+| `REQUEST_BACKSTOP_MINUTES` | `90` | A request (a Jira hand-over, a message in an answers-only topic) with nothing seen working on it for this long is re-posted to its session — shorten it only for a test; a non-positive or non-numeric value keeps the default. A Jira request whose agent process a restart (or a crash with its own work pending) left behind does not wait for it: it is resumed at once, 30 s apart per issue |
 | `TMUX_SOCKET_NAME` | — (the default tmux server) | The instance must run its agents on its OWN tmux server (`tmux -L <name>`; any plain name except `default`). Recommended for a second instance on one host: at boot an instance kills every agent session on its server that its own state does not know |
 | `ENV_FILE` | — | Absolute path of the ONLY env file to read — no `~/.config/charness/.env`, no `$PWD/.env`; its values win over the inherited environment. Set it in the launching environment, never inside an env file (the start refuses that). `scripts/run-isolated.sh <env-file>` (in a checkout) starts an instance with a clean environment plus this variable |
 | `CONNECTORS` | `telegram` | Experimental: the surfaces this instance serves, as a comma list — see [Jira setup](#jira-setup). An instance that lists `jira` refuses to start on Node below 22.12 and without `ENV_FILE`, `TMUX_SOCKET_NAME` and `DATA_DIR/jira.json`, and — with Telegram off — with a `TELEGRAM_BOT_TOKEN` or any `ATLASSIAN_*` variable in its environment. Any instance refuses to start on a `DATA_DIR` that holds conversations of a surface it does not serve |
@@ -801,6 +801,8 @@ connector behaves is described in [`src/connectors/jira/README.md`](src/connecto
      "trustedGroup": "ai-trusted",
      "trustedApps": ["<an app account's id>"],
      "wakeOnMention": true,
+     "mentionMode": "answer",
+     "wakeOnComment": true,
      "pollIntervalSeconds": 30,
      "runBudgetPer24h": 5,
      "model": "opus",
@@ -836,9 +838,31 @@ connector behaves is described in [`src/connectors/jira/README.md`](src/connecto
    `trustedGroup` the key is refused — without a group everyone is trusted anyway. A listed id adds no trust
    to a person's account: people stay trusted by membership alone.
 
-   `wakeOnMention` (optional) decides whether an @-mention of the AI account in a comment wakes it to answer
-   only, without the issue being handed over; absent, it is on exactly when `trustedGroup` is set, and `true`
-   without a group is refused — without one, anyone who can comment could start the AI.
+   `wakeOnMention` (optional) decides whether an @-mention of the AI account in a comment wakes it, without the
+   issue being handed over; absent, it is on exactly when `trustedGroup` is set, and `true` without a group is
+   refused — without one, anyone who can comment could start the AI.
+
+   `mentionMode` (optional, needs `trustedGroup` for `"act"`) decides what such a mention asks of the agent:
+   `"answer"` (the default) — an answer only, it changes nothing; `"act"` — when a trusted person's comment
+   explicitly asks it to do something (create or split issues, take a transition, change the assignee, take up the
+   work), it does it as its own rules allow, whatever the issue's status and assignee, and a question is still only
+   answered. An acting mention counts as a task agent (see below) and still hands nothing back. The agent's rules
+   (its project's `CLAUDE.md`) decide what it may do; the start logs which mode is on.
+
+   `wakeOnComment` (optional) decides whether a comment on an issue HANDED to the AI — assigned to it in one of its
+   trigger statuses — reaches the agent: a comment by a trusted person (not an app's or an automation's) while the
+   AI works on the issue is added to that work at the end of its current step, and one written after it finished,
+   while the issue is still assigned to it, starts a new request — and one written while it worked that reaches it only
+   after its answer handed the issue back still gets to it, answered by a comment. Absent, it is on exactly when
+   `trustedGroup` is set; `true` without a group is refused; `false` keeps the old behaviour, where such a comment
+   reached the agent only with its next hand-over. The start logs which. **The agent must comment only as the AI
+   account** (the `answer_request` tool does): a comment it writes in Jira under any other account of the trusted group —
+   an operator's token in its own tools, say — comes back to it as a person's comment, and then its answer, and so on.
+   As a guard, an issue gets at most 20 such updates in 24 hours; past that, new comments wait until the oldest update
+   is a day old and reach the agent then, and one line goes to the log saying until when. The issue gets one comment
+   from the AI saying so, at most once a day: comments that keep coming wait again the same way without another one.
+   A comment on an issue the AI created or took up while working on ANOTHER issue goes to that work; the AI answers
+   its author on the commented issue with a comment of its own.
 
    `projects` maps each served project key to its folder under `WORK_ROOT` and the status names in which an
    assigned issue is a request; the agent loads that folder's project memory (`CLAUDE.md`, `.claude/`, … in it
@@ -860,8 +884,9 @@ connector behaves is described in [`src/connectors/jira/README.md`](src/connecto
    **How many agents run at once.** The AI works on at most 5 issues at the same time, all projects together — set
    `taskAgents.maxConcurrent` in [`settings.json`](#instance-settings-settingsjson) (`0` = no limit; read without a
    restart). An issue handed over beyond that gets one comment saying it is queued, stays assigned to the AI and starts by
-   itself when an agent hands its issue back, the one that waited longest first — also across a restart. An @-mention
-   (answer only) is never held back, and a lower number never stops an agent that is already working.
+   itself when an agent hands its issue back, the one that waited longest first — also across a restart. A comment that
+   starts a request and an acting mention (`mentionMode: "act"`) wait the same way; an @-mention that only answers is never
+   held back, and a lower number never stops an agent that is already working.
 
 5. Start it with a clean environment, so nothing of the calling shell reaches it:
 
@@ -874,7 +899,8 @@ connector behaves is described in [`src/connectors/jira/README.md`](src/connecto
    The start refuses a missing `ENV_FILE`, `TMUX_SOCKET_NAME` or `jira.json`, an `OPENCODE_URL` on the default
    port, a `TELEGRAM_BOT_TOKEN` or any `ATLASSIAN_*` variable when Telegram is off, a token that belongs to
    another account, an unknown project or status, a `trustedGroup` the site does not have or the AI account
-   may not read, a `trustedApps` without a `trustedGroup`, and a `DATA_DIR` holding another surface's state. An unreachable Jira does not refuse the start —
+   may not read, a `trustedApps`, a `wakeOnComment: true` or a `mentionMode: "act"` without a `trustedGroup`, and a
+   `DATA_DIR` holding another surface's state. An unreachable Jira does not refuse the start —
    polling backs off and resumes.
 
 The agent sessions of a Jira instance run without the user-level Claude settings, hooks and skills, with the

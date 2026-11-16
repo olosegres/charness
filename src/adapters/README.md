@@ -226,8 +226,10 @@ reads only what died while the bot was away. The bot (`utils/lostWork.ts`) keeps
 it in `state.json` (`lostWork`) until the agent is told: one plain line in a
 topic, and an automatic resume with the note as its prompt — or the note rides the
 next prompt (a spent hold, an armed limit wait, a second loss within 10 min of an
-automatic resume — that stamp is persisted, so a restart keeps it —, a tracker
-issue, whose agent answers only through a request). The line is posted after the
+automatic resume — that stamp is persisted, so a restart keeps it). A tracker
+issue, whose agent answers only through a request, is not resumed by the note:
+its open request is woken (`restarted`, `requests/README.md`) and the note rides
+that wake — none open, the note waits for the next request. The line is posted after the
 resume, so it never claims a resume that failed.
 A move that sends its own first prompt folds the note into it, with no line of its
 own: a usage-limit account switch (its notice says the background work stopped;
@@ -268,7 +270,31 @@ restarts — every hot reload — never touch it. Per-thread host dir
   fifo **`0<>` (read-write on fd 0)**, so a writer (bot) dying never EOFs its
   stdin. The bot's write-open is `O_WRONLY|O_NONBLOCK` with an `ENXIO` retry
   loop — a plain blocking open on a reader-less fifo hangs forever (probe-
-  proven); persistent `ENXIO` = the process is dead.
+  proven); persistent `ENXIO` = the process is dead. Writes are serialised per
+  session and wait out `EAGAIN` (a full buffer: a CLI still starting reads
+  nothing for a while — a resume whose 15 s initialize handshake timed out was
+  seen meeting `EAGAIN` for the old 5 s budget) for as long as the reader takes
+  bytes: `writeFifoText` gives up only after `fifoWriteStallTimeoutMs` (2 min)
+  without one, and says how much it wrote. A user turn's write is the forward's
+  outcome (`sendInputAndWait`): the bot's forward awaits it — a tracker's post, a
+  wake-up, a scheduled run, a retry's nudge — and one that failed rejects the forward,
+  so a tracker post gets its post retry instead of a prompt believed delivered. Only a
+  person's own message (`isPersonInput`: a topic's text, voice, file or album, and its
+  buffered replay) is not awaited — a CLI that stops reading would hold the topic's
+  update queue, `/esc` included — and its failed write is told in the topic
+  (`agent.prompt_not_delivered`).
+  A failed write takes back the turn-start state. A user turn is held until the CLI
+  shows it reads (`isReadingInput`: it answered the initialize handshake, or wrote
+  any output — a resumed CLI was seen reading nothing for over 20 s, past the 15 s
+  handshake timeout); after the stall budget it is written anyway, logged, so a CLI
+  that never answers the handshake still gets its prompts. The gate sits in the write
+  chain, so a control frame (an `/esc` interrupt) queued behind a held user turn waits
+  with it — a CLI that reads nothing could not take it anyway. A frame left half-written
+  breaks the stream (`isStdinBroken`): nothing more is written into it and the
+  process is suspended (killed when the suspend fails), so the next trigger resumes
+  the conversation in a fresh process; the same request's prompt torn a second time
+  (a re-post may be rebuilt with other text) is logged loudly — it stays pending with
+  its request's retries — and a write of it that lands clears the count.
 - `stdout.jsonl` — append-only event log replacing the stdout pipe. The
   adapter TAILS it (adaptive 300ms→1.5s cadence) and feeds the same line
   reader/classifier; deltas keep landing while the bot is down. The consumed

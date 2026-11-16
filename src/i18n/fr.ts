@@ -241,6 +241,7 @@ export const frDict: Record<string, string> = {
   'agent.ready': '{label} prêt dans `{subdir}`{argsSuffix}\n{infoBlock}Envoyez un message :',
   'agent.ready_model': '🧠 Modèle : {model}',
   'agent.no_session': 'Aucun agent en cours. /claude ou /opencode pour démarrer.',
+  'agent.prompt_not_delivered': '⚠️ L\'agent n\'a pas reçu votre dernier message : son écriture dans l\'entrée de l\'agent a échoué ({error}). Renvoyez-le.',
   'agent.session_ended': '{label} : session terminée',
   'lostWork.line.resumed': '⚠️ Le processus de l\'agent {reason} alors que son propre travail était en cours — {work}. Je l\'ai relancé et lui ai demandé de vérifier à nouveau ce travail.',
   'lostWork.line.held': '⚠️ Le processus de l\'agent {reason} alors que son propre travail était en cours — {work}. Votre prochain message le relance et lui dit ce qui a été perdu.',

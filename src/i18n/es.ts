@@ -241,6 +241,7 @@ export const esDict: Record<string, string> = {
   'agent.ready': '{label} listo en `{subdir}`{argsSuffix}\n{infoBlock}Envía un mensaje:',
   'agent.ready_model': '🧠 Modelo: {model}',
   'agent.no_session': 'No hay agente en ejecución. /claude o /opencode para iniciar.',
+  'agent.prompt_not_delivered': '⚠️ El agente no recibió tu último mensaje: no se pudo escribir en su entrada ({error}). Envíalo de nuevo.',
   'agent.session_ended': '{label}: sesión finalizada',
   'lostWork.line.resumed': '⚠️ El proceso del agente {reason} mientras su propio trabajo seguía pendiente — {work}. Lo reanudé y le pedí que revise ese trabajo de nuevo.',
   'lostWork.line.held': '⚠️ El proceso del agente {reason} mientras su propio trabajo seguía pendiente — {work}. Tu próximo mensaje lo reanuda y le dice lo que se perdió.',

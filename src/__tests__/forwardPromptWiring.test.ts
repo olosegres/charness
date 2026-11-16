@@ -21,7 +21,7 @@ const botSource = fs.readFileSync(path.join(__dirname, '..', 'bot.ts'), 'utf8');
 
 /** A top-level function's body — up to the next top-level declaration. */
 function getFunctionBody(name: string): string {
-  const startIdx = botSource.search(new RegExp(`\\nasync function ${name}\\(`));
+  const startIdx = botSource.search(new RegExp(`\\n(?:async )?function ${name}\\(`));
   assert.notEqual(startIdx, -1, `${name} must exist in bot.ts`);
   const nextIdx = botSource.slice(startIdx + 1).search(/\n(?:async function|function|interface|const|\/\*\*)/);
   return botSource.slice(startIdx, nextIdx === -1 ? undefined : startIdx + 1 + nextIdx);
@@ -63,6 +63,54 @@ test('the live forward awaits nothing between its start and the write to the age
   assert.ok(beforeWrite.length > 0, 'the write is in the live forward');
   const awaited = beforeWrite.split('\n').map((line) => line.trim()).filter((line) => !line.startsWith('//') && line.includes('await'));
   assert.deepEqual(awaited, ['await adapter.interruptAndWaitIdle(key);', 'await adapter.detachRunningSubagents(key);']);
+});
+
+test('the live forward awaits the write\'s outcome — except for a person\'s own message, whose write never holds the topic\'s queue and whose failure is told in the topic', () => {
+  // A json-stream stdin write that failed was only logged once, and a hand-over prompt counted as delivered was never read.
+  const body = getFunctionBody('forwardPromptToLiveAgent');
+  assert.match(body, /const written = adapter\.sendInputAndWait \? adapter\.sendInputAndWait\(key, promptText\) : \(adapter\.sendInput\(key, promptText\), Promise\.resolve\(\)\);/);
+  const personBranch = body.indexOf('if (options.isPersonInput === true) {');
+  const awaitWritten = body.indexOf('await written;');
+  assert.ok(personBranch > body.indexOf('const written ='), 'the write is handed over first');
+  assert.match(body.slice(personBranch), /^if \(options\.isPersonInput === true\) \{\n\s*void written\.then\(noteToldIfDelivered, \(error: unknown\) => reportUndeliveredTopicPrompt\(key, error\)\);\n\s*return;\n\s*\}/, 'a person\'s message: not awaited, the person told on failure');
+  assert.ok(!body.includes('checkIsTelegramKey(key)'), 'decided by who wrote the prompt, never by the platform: a wake-up, a scheduled run, a retry\'s nudge in a topic await it');
+  assert.ok(awaitWritten > personBranch, 'every other prompt awaits it');
+  assert.ok(body.indexOf('noteToldIfDelivered();') > awaitWritten, 'the note counts as told only after the write');
+  assert.ok(body.indexOf("startClaudeLiveness(key, 'busyOnset');") < personBranch, 'the busy-onset arm still starts at the write, not after its outcome');
+  assert.match(getFunctionBody('reportUndeliveredTopicPrompt'), /replyToThread\(key, t\('agent\.prompt_not_delivered', \{ error: message \}\)\)/);
+});
+
+test('only a person\'s own prompts are marked as such: the text, voice and label path, the buffered startup prompt, a file, an album, /schedule and what a usage-limit wait held — a wake-up, a nudge or a reminder is not', () => {
+  assert.match(getFunctionBody('deliverActivePrompt'), /forward: \(\) => forwardPromptToAgent\(key, getThreadAdapter\(key\), text, sentAtMs, \{ messageContext, requestHeader: opening\.header, isPersonInput: true \}\),/);
+  assert.match(getFunctionBody('deliverActivePrompt'), /, true, undefined, \{ isPersonInput: true \}\);/, 'and its buffered twin');
+  assert.match(getFunctionBody('bufferPromptDuringStartup'), /, true, undefined, \{ isPersonInput: true \}\);/);
+  assert.match(getFunctionBody('cancelPendingQuestionAndForward'), /isPersonInput: true \}\);/);
+  for (const name of ['forwardRequestWakeUp', 'remindAnswerTail', 'postTodoReminder']) {
+    assert.ok(!getFunctionBody(name).includes('isPersonInput'), `${name} awaits its write`);
+  }
+  // A buffered prompt replays with the flag it was buffered with.
+  assert.ok(botSource.includes('forward: async (prompt, isPersonInput) => { await forwardPromptToAgent(key, adapter, prompt, undefined, { isPersonInput }); },'));
+  // R23: what people asked for during a usage-limit wait, released to the next session — a failed write was only logged.
+  assert.match(getFunctionBody('replayBufferedPrompts'), /await forwardPromptToAgent\(key, adapter, heldText, undefined, \{ isPersonInput: true \}\);/);
+});
+
+test('a bot-made prompt that waits for an adopt replay behind a start counts only once replayed', () => {
+  const body = getFunctionBody('forwardPromptToAgent');
+  const buffer = body.slice(body.indexOf('buffer: async () => {'));
+  assert.match(buffer, /const buffered = createBufferedOutcome\(\);\n\s*await deliverPromptOrBuffer\([^\n]*, true, buffered\.settle, \{ isPersonInput: options\.isPersonInput \}\);\n\s*if \(options\.isPersonInput !== true\) await buffered\.assertReplayed\(\);/);
+});
+
+test('a session post (a tracker\'s request or update, a scheduled run, the lost-work note) whose prompt waited for the session start counts only once it was replayed', () => {
+  const postDeps = botSource.slice(botSource.indexOf('function createSessionPostDeps('), botSource.indexOf('function createSessionPostDeps(') + 3000);
+  assert.match(postDeps, /if \(delivery === 'buffered'\) await buffered\.assertReplayed\(\);/);
+  const lostWork = getFunctionBody('createLostWorkPostDeps');
+  assert.match(lostWork, /if \(delivery === 'buffered'\) await buffered\.assertReplayed\(\);/);
+});
+
+test('an untold lost-work note rides a request\'s reminder too (the restart wake of a tracker request), never a slash command, a technical prompt or a shell line', () => {
+  const body = getFunctionBody('forwardPromptToLiveAgent');
+  assert.match(body, /const isLostWorkNoteCarried = \(isReplayable \|\| options\.isRequestReminder === true\) && adapter\.name !== 'terminal';/);
+  assert.match(body, /const lostWorkRecord = isLostWorkNoteCarried \? state\.getLostWork\(key\) : undefined;/);
 });
 
 test('a prompt that finds no session after the wait is answered with the no-session reply, unless the wake already said why', () => {

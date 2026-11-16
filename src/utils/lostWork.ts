@@ -7,7 +7,8 @@
  *
  * A turn the bot itself cut off (a re-spawn, a backend switch) is lost work too: nothing else re-prompts it. A turn a
  * crash cut off is the request core's: it re-posts and wakes an open request (R21). An explicit release (`/quit`,
- * `/new`) drops the record — the person ended that conversation.
+ * `/new`) drops the record — the person ended that conversation. A tracker conversation, which answers only through a
+ * request, is resumed by waking its open request (`restarted`), the note riding that wake.
  */
 
 import type { ClaudeBackgroundTask } from './claudeStreamJson';
@@ -100,10 +101,13 @@ export function getTailRecordWithoutPendingWork(tail: JsonStreamTailOffset): Jso
  * @description `isAutoResume`: the bot resumes the conversation now with the note as its prompt. Otherwise the note
  * rides the next prompt, and `isResumedByNextMessage` says whether that is the person's next message waking a stopped
  * process (`false`: the process is alive, or an armed limit wait resumes it — the note rides that prompt).
+ * `isRequestWake`: a conversation that answers only through a request would have been resumed, and has an open
+ * request to answer — the bot wakes that request (`restarted`) and the note rides the wake.
  */
 export interface LostWorkPlan {
   isAutoResume: boolean;
   isResumedByNextMessage: boolean;
+  isRequestWake: boolean;
 }
 
 /**
@@ -111,17 +115,20 @@ export interface LostWorkPlan {
  * told on the next message, not woken (it would only re-arm the same forgotten task). An armed usage-limit wait has
  * its own resume, whose nudge carries the note. A loss right after an automatic resume waits for a person. A
  * conversation that answers only through a request (a tracker issue, `isRequestRequired`) is not resumed by a bare
- * note it could not answer: the note rides its next request's prompt.
+ * note it could not answer: its open request is woken instead (`hasOpenRequest`) — by the same rules, the cooldown
+ * included, so a crash loop is no wake loop — and with none open the note rides its next request's prompt.
  */
 export function getLostWorkPlan(input: {
   reason: LostWorkReason;
   isLimitWaitArmed: boolean;
   msSinceLastAutoResume: number | null;
   isRequestRequired: boolean;
+  hasOpenRequest: boolean;
 }): LostWorkPlan {
   const isInCooldown = input.msSinceLastAutoResume !== null && input.msSinceLastAutoResume < lostWorkResumeCooldownMs;
-  const isAutoResume = input.reason !== 'holdExpired' && input.reason !== 'switched' && !input.isLimitWaitArmed && !isInCooldown && !input.isRequestRequired;
-  return isAutoResume ? { isAutoResume: true, isResumedByNextMessage: false } : getHeldLostWorkPlan(input);
+  const isResumeDue = input.reason !== 'holdExpired' && input.reason !== 'switched' && !input.isLimitWaitArmed && !isInCooldown;
+  if (isResumeDue && !input.isRequestRequired) return { isAutoResume: true, isResumedByNextMessage: false, isRequestWake: false };
+  return { ...getHeldLostWorkPlan(input), isRequestWake: isResumeDue && input.isRequestRequired && input.hasOpenRequest };
 }
 
 /**
@@ -131,7 +138,7 @@ export function getLostWorkPlan(input: {
  */
 export function getHeldLostWorkPlan(input: { reason: LostWorkReason; isLimitWaitArmed: boolean }): LostWorkPlan {
   const isProcessAlive = input.reason === 'restarted' || input.reason === 'switched';
-  return { isAutoResume: false, isResumedByNextMessage: !isProcessAlive && !input.isLimitWaitArmed };
+  return { isAutoResume: false, isResumedByNextMessage: !isProcessAlive && !input.isLimitWaitArmed, isRequestWake: false };
 }
 
 /** The agent-facing wording of each reason (English on purpose, like every agent-facing template). */

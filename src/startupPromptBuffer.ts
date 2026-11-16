@@ -1,9 +1,9 @@
 /**
  * @name BufferedPromptOutcome
  * @description How a buffered prompt's wait ended. `replayed`: it was handed to the
- * session — a forward that threw is logged and not retried, so it counts, since
- * nobody re-delivers it. `dropped`: it can never reach a session (the start failed,
- * or the session is not active once the window closes).
+ * session. `dropped`: it never reached the agent — the start failed, the session is
+ * not active once the window closes, or its forward threw (its write into the agent
+ * failed): a sender that keeps something until the prompt arrived keeps it.
  */
 export type BufferedPromptOutcome = 'replayed' | 'dropped';
 
@@ -13,14 +13,16 @@ export type BufferedPromptSettled = (outcome: BufferedPromptOutcome) => void;
 interface BufferedPrompt {
   text: string;
   onSettled?: BufferedPromptSettled;
+  /** A person typed (or spoke, or sent) it: its replay does not wait for its write (see `PromptForwardOptions.isPersonInput`). */
+  isPersonInput: boolean;
 }
 
 /** What {@link StartupPromptBuffer.replayPrompts} replays through. */
 export interface ReplayPromptsOptions {
   /** Whether the session is up now; `false` drops every buffered prompt. */
   isSessionActive: boolean;
-  /** Hand one prompt to the live session. */
-  forward: (text: string) => Promise<void>;
+  /** Hand one prompt to the live session; `isPersonInput` as the prompt was buffered with. */
+  forward: (text: string, isPersonInput: boolean) => Promise<void>;
 }
 
 /** A callback that throws must not break the replay or the failed-start path that called it. */
@@ -97,9 +99,9 @@ export class StartupPromptBuffer {
    * @returns `true` if this is the first buffered prompt for the current
    * startup window (the caller uses it to send the ack only once).
    */
-  addPrompt(threadId: string, text: string, onSettled?: BufferedPromptSettled): boolean {
+  addPrompt(threadId: string, text: string, onSettled?: BufferedPromptSettled, isPersonInput = false): boolean {
     const prompts = this.bufferedPrompts.get(threadId) ?? [];
-    prompts.push({ text, onSettled });
+    prompts.push({ text, onSettled, isPersonInput });
     this.bufferedPrompts.set(threadId, prompts);
 
     const isFirstForWindow = !this.ackedThreads.has(threadId);
@@ -114,8 +116,8 @@ export class StartupPromptBuffer {
    * prompt able to slip into a second buffer.
    *
    * With no active session nothing is forwarded and every prompt is `dropped`;
-   * otherwise each is forwarded in turn (one that throws is logged, the rest still
-   * go) and settles as `replayed` after its own forward.
+   * otherwise each is forwarded in turn and settles as `replayed` after its own
+   * forward — or `dropped` when that forward threw (logged; the rest still go).
    */
   async replayPrompts(threadId: string, options: ReplayPromptsOptions): Promise<void> {
     const prompts = this.takePrompts(threadId);
@@ -126,9 +128,11 @@ export class StartupPromptBuffer {
     // Sequential await keeps the forwards in arrival order even when each one awaits its own loader send first.
     for (const prompt of prompts) {
       try {
-        await options.forward(prompt.text);
+        await options.forward(prompt.text, prompt.isPersonInput);
       } catch (err) {
         console.error('[replayBufferedPrompts] forward failed:', err);
+        settleBufferedPrompt(prompt, 'dropped');
+        continue;
       }
       settleBufferedPrompt(prompt, 'replayed');
     }

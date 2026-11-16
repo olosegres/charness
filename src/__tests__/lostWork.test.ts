@@ -45,7 +45,7 @@ function translateEn(code: string, vars: Record<string, string | number> = {}): 
 
 /** The plan for a Telegram topic, with no limit wait and no recent resume unless the case says so. */
 function planFor(reason: LostWorkReason, overrides: Partial<Parameters<typeof getLostWorkPlan>[0]> = {}): ReturnType<typeof getLostWorkPlan> {
-  return getLostWorkPlan({ reason, isLimitWaitArmed: false, msSinceLastAutoResume: null, isRequestRequired: false, ...overrides });
+  return getLostWorkPlan({ reason, isLimitWaitArmed: false, msSinceLastAutoResume: null, isRequestRequired: false, hasOpenRequest: false, ...overrides });
 }
 
 describe('lostWork', () => {
@@ -86,34 +86,49 @@ describe('lostWork', () => {
 
   it('the plan: a crash or a gone process resumes at once, the person\'s next message resumes after a spent hold, a recent resume or a limit wait', () => {
     for (const reason of ['exited', 'foundDead'] as const) {
-      assert.deepEqual(planFor(reason), { isAutoResume: true, isResumedByNextMessage: false }, reason);
-      assert.deepEqual(planFor(reason, { msSinceLastAutoResume: lostWorkResumeCooldownMs - 1 }), { isAutoResume: false, isResumedByNextMessage: true }, `${reason}: no resume loop`);
-      assert.deepEqual(planFor(reason, { msSinceLastAutoResume: lostWorkResumeCooldownMs }), { isAutoResume: true, isResumedByNextMessage: false }, `${reason}: after the cooldown, again`);
-      assert.deepEqual(planFor(reason, { isLimitWaitArmed: true }), { isAutoResume: false, isResumedByNextMessage: false }, `${reason}: the limit wait's own resume carries it`);
+      assert.deepEqual(planFor(reason), { isAutoResume: true, isResumedByNextMessage: false, isRequestWake: false }, reason);
+      assert.deepEqual(planFor(reason, { msSinceLastAutoResume: lostWorkResumeCooldownMs - 1 }), { isAutoResume: false, isResumedByNextMessage: true, isRequestWake: false }, `${reason}: no resume loop`);
+      assert.deepEqual(planFor(reason, { msSinceLastAutoResume: lostWorkResumeCooldownMs }), { isAutoResume: true, isResumedByNextMessage: false, isRequestWake: false }, `${reason}: after the cooldown, again`);
+      assert.deepEqual(planFor(reason, { isLimitWaitArmed: true }), { isAutoResume: false, isResumedByNextMessage: false, isRequestWake: false }, `${reason}: the limit wait's own resume carries it`);
     }
-    assert.deepEqual(planFor('holdExpired'), { isAutoResume: false, isResumedByNextMessage: true }, 'a forgotten task is not woken');
+    assert.deepEqual(planFor('holdExpired'), { isAutoResume: false, isResumedByNextMessage: true, isRequestWake: false }, 'a forgotten task is not woken');
   });
 
   it('the plan for a process that is still alive (a re-spawn, a switch): resumed at once unless held, and never "your next message resumes it"', () => {
-    assert.deepEqual(planFor('restarted'), { isAutoResume: true, isResumedByNextMessage: false });
-    assert.deepEqual(planFor('restarted', { msSinceLastAutoResume: 1 }), { isAutoResume: false, isResumedByNextMessage: false });
-    assert.deepEqual(planFor('restarted', { isLimitWaitArmed: true }), { isAutoResume: false, isResumedByNextMessage: false });
-    assert.deepEqual(planFor('switched'), { isAutoResume: false, isResumedByNextMessage: false }, 'a switch sends its own first prompt');
+    assert.deepEqual(planFor('restarted'), { isAutoResume: true, isResumedByNextMessage: false, isRequestWake: false });
+    assert.deepEqual(planFor('restarted', { msSinceLastAutoResume: 1 }), { isAutoResume: false, isResumedByNextMessage: false, isRequestWake: false });
+    assert.deepEqual(planFor('restarted', { isLimitWaitArmed: true }), { isAutoResume: false, isResumedByNextMessage: false, isRequestWake: false });
+    assert.deepEqual(planFor('switched'), { isAutoResume: false, isResumedByNextMessage: false, isRequestWake: false }, 'a switch sends its own first prompt');
   });
 
   it('the held plan (a resume the bot tried and could not do): a live process is told with its next prompt, a gone one by the person\'s next message, a limit wait by its own resume', () => {
-    assert.deepEqual(getHeldLostWorkPlan({ reason: 'restarted', isLimitWaitArmed: false }), { isAutoResume: false, isResumedByNextMessage: false });
-    assert.deepEqual(getHeldLostWorkPlan({ reason: 'switched', isLimitWaitArmed: false }), { isAutoResume: false, isResumedByNextMessage: false });
+    assert.deepEqual(getHeldLostWorkPlan({ reason: 'restarted', isLimitWaitArmed: false }), { isAutoResume: false, isResumedByNextMessage: false, isRequestWake: false });
+    assert.deepEqual(getHeldLostWorkPlan({ reason: 'switched', isLimitWaitArmed: false }), { isAutoResume: false, isResumedByNextMessage: false, isRequestWake: false });
     for (const reason of ['exited', 'foundDead', 'holdExpired'] as const) {
-      assert.deepEqual(getHeldLostWorkPlan({ reason, isLimitWaitArmed: false }), { isAutoResume: false, isResumedByNextMessage: true }, reason);
-      assert.deepEqual(getHeldLostWorkPlan({ reason, isLimitWaitArmed: true }), { isAutoResume: false, isResumedByNextMessage: false }, `${reason}: limit wait`);
+      assert.deepEqual(getHeldLostWorkPlan({ reason, isLimitWaitArmed: false }), { isAutoResume: false, isResumedByNextMessage: true, isRequestWake: false }, reason);
+      assert.deepEqual(getHeldLostWorkPlan({ reason, isLimitWaitArmed: true }), { isAutoResume: false, isResumedByNextMessage: false, isRequestWake: false }, `${reason}: limit wait`);
     }
   });
 
   it('a conversation that answers only through a request (a tracker issue) is never resumed by a bare note', () => {
     for (const reason of ['exited', 'foundDead', 'restarted'] as const) {
       assert.equal(planFor(reason, { isRequestRequired: true }).isAutoResume, false, reason);
+      assert.equal(planFor(reason, { isRequestRequired: true, hasOpenRequest: true }).isAutoResume, false, `${reason}: not with an open request either`);
     }
+  });
+
+  it('a tracker conversation with an open request is woken through that request instead (the note rides the wake) — never with none open, a limit wait armed, the cooldown running, or a hold spent', () => {
+    const tracker = { isRequestRequired: true, hasOpenRequest: true };
+    for (const reason of ['exited', 'foundDead'] as const) {
+      assert.deepEqual(planFor(reason, tracker), { isAutoResume: false, isResumedByNextMessage: true, isRequestWake: true }, reason);
+      assert.equal(planFor(reason, { ...tracker, hasOpenRequest: false }).isRequestWake, false, `${reason}: no open request — the note waits for the next one`);
+      assert.equal(planFor(reason, { ...tracker, isLimitWaitArmed: true }).isRequestWake, false, `${reason}: the limit wait's own resume carries it`);
+      assert.equal(planFor(reason, { ...tracker, msSinceLastAutoResume: lostWorkResumeCooldownMs - 1 }).isRequestWake, false, `${reason}: a crash loop is no wake loop`);
+      assert.equal(planFor(reason, { ...tracker, msSinceLastAutoResume: lostWorkResumeCooldownMs }).isRequestWake, true, `${reason}: after the cooldown, again`);
+    }
+    assert.equal(planFor('holdExpired', tracker).isRequestWake, false, 'a forgotten task is not woken');
+    assert.equal(planFor('switched', tracker).isRequestWake, false);
+    assert.equal(planFor('exited', { hasOpenRequest: true }).isRequestWake, false, 'a topic resumes with the note itself');
   });
 
   it('a newer loss adds to an untold one: tasks by id, the larger job count, either flag, the newer reason and time', () => {
@@ -164,15 +179,15 @@ describe('lostWork', () => {
 
   it('the topic line: resumed now, resumed by the next message, or told with the next prompt — the tasks by description, the hold in hours', () => {
     assert.equal(
-      formatLostWorkTopicLine(record, { isAutoResume: true, isResumedByNextMessage: false }, 6, translateEn),
+      formatLostWorkTopicLine(record, { isAutoResume: true, isResumedByNextMessage: false, isRequestWake: false }, 6, translateEn),
       '⚠️ The agent\'s process ended unexpectedly while its own work was pending — background tasks «Watch the test run», b2; scheduled jobs: 2; a finished task\'s result it had not read. I resumed it and asked it to check that work again.',
     );
     assert.equal(
-      formatLostWorkTopicLine({ ...record, scheduledJobCount: 0, hasUnreadTaskResult: false, reason: 'holdExpired' }, { isAutoResume: false, isResumedByNextMessage: true }, 6, translateEn),
+      formatLostWorkTopicLine({ ...record, scheduledJobCount: 0, hasUnreadTaskResult: false, reason: 'holdExpired' }, { isAutoResume: false, isResumedByNextMessage: true, isRequestWake: false }, 6, translateEn),
       '⚠️ The agent\'s process had no turn for 6 h and was stopped while its own work was pending — background tasks «Watch the test run», b2. Your next message resumes it and tells it what was lost.',
     );
     assert.equal(
-      formatLostWorkTopicLine({ ...nothing, wasTurnInFlight: true, reason: 'restarted', lostAt: 1 }, { isAutoResume: false, isResumedByNextMessage: false }, 6, translateEn),
+      formatLostWorkTopicLine({ ...nothing, wasTurnInFlight: true, reason: 'restarted', lostAt: 1 }, { isAutoResume: false, isResumedByNextMessage: false, isRequestWake: false }, 6, translateEn),
       '⚠️ The agent\'s process was restarted for the model, effort or account change while its own work was pending — the turn it was in the middle of. The agent is told with the next prompt it gets.',
       'a live process is never said to wait for "your next message"',
     );

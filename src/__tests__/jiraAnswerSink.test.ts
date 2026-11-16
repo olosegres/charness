@@ -16,6 +16,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {
   buildJiraAlertText,
+  buildJiraUpdatesPausedText,
   buildJiraMentionParkText,
   buildJiraParkText,
   buildJiraQueuedText,
@@ -482,6 +483,16 @@ describe('a mention request answers only — nothing is handed over, so nothing 
     assert.deepEqual(jira.calls, ['comment PROJ-12']);
     assert.deepEqual(jira.postedTexts, [buildJiraAlertText('req_2', 'silentTurns')]);
   });
+
+  it('an ACTING mention (mentionMode "act") hands nothing back either: its final answer and its alert are comments, the issue stays where it is', async () => {
+    const actingOrigin: RequestOrigin = { kind: 'trackerMention', attributes: { ...mentionOrigin.attributes, mayAct: 'true' } };
+    // The issue is the AI's (it assigned itself to take up the work): a final answer must still not hand it anywhere.
+    assert.equal(jira.assignee, aiAccountId);
+    assert.deepEqual(await sink().deliverAnswer(key, { requestId: 'req_2', kind: 'final', body: 'Split into PROJ-13 and PROJ-14.', origin: actingOrigin, isRequestOpen: true }), { ok: true });
+    assert.deepEqual(await sink().deliverAlert(key, { requestId: 'req_2', reason: 'wakeCap', origin: actingOrigin }), { ok: true });
+    assert.deepEqual(jira.calls, [`getComment PROJ-12 ${requesterCommentId}`, 'comment PROJ-12', 'comment PROJ-12']);
+    assert.deepEqual(jira.postedTexts[0], '@Requester\nSplit into PROJ-13 and PROJ-14.');
+  });
 });
 
 describe('a hand-over question tells the requester how to let the agent go on (T7)', () => {
@@ -701,5 +712,20 @@ describe('whom an answer notifies: the requester of a mention request, and the a
     }];
     assert.deepEqual(await deliverMention('final', 'Done.'), { ok: true });
     assert.equal(jira.postedTexts.length, 1, 'posted once');
+  });
+});
+
+describe('the "updates paused" notice of an issue past the cap on updates', () => {
+  it('says until when (UTC, to the minute), that nothing is lost and that a pause within a day is not told again; posted as plain text, nothing handed back', async () => {
+    const untilMs = Date.parse('2026-11-14T09:30:41Z');
+    assert.equal(
+      buildJiraUpdatesPausedText(20, untilMs),
+      '⏸ The AI got 20 updates from comments on this issue in the last 24 hours, its limit, so new comments reach it from 2026-11-14 09:30 UTC on — ' +
+        'nothing is lost. If the limit is reached again within a day, comments wait the same way without another note. ' +
+        'If you did not write that many, check that the AI posts only as its own account.',
+    );
+    await sink().postUpdatesPausedNotice(issueKey, 20, untilMs);
+    assert.deepEqual(jira.calls, ['comment PROJ-12']);
+    assert.deepEqual(jira.postedTexts, [buildJiraUpdatesPausedText(20, untilMs)]);
   });
 });

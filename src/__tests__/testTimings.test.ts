@@ -22,7 +22,7 @@ import { unconfirmedLimitProbeDelayMs } from '../apiErrorRetry';
 import { jiraPollIntervalMinSeconds } from '../connectors/jira/config';
 import { bindPickerClaimLimit } from '../connectors/telegram/bindPickerClaims';
 import { globalSendIntervalMs } from '../rateLimiter';
-import { unwatchedSweepMs, watchedTurnPollMs } from '../requests/wakeUpEngine';
+import { restartWakeStaggerMs, unwatchedSweepMs, watchedTurnPollMs } from '../requests/wakeUpEngine';
 import { postRetryDelaysMs } from '../requests/wakeUpRules';
 import { DEFAULT_SAVE_DEBOUNCE_MS } from '../state';
 import { pendingWorkHoldDefaultMs } from '../utils/jsonStreamPendingWork';
@@ -45,6 +45,7 @@ const productionWindowsMs: Array<[keyof TestTimings, number]> = [
   ['requestTurnPollMs', watchedTurnPollMs],
   ['requestSweepIntervalMs', unwatchedSweepMs],
   ['requestFirstPostRetryDelayMs', postRetryDelaysMs[0]],
+  ['requestRestartWakeStaggerMs', restartWakeStaggerMs],
   ['limitProbeDelayMs', unconfirmedLimitProbeDelayMs],
   ['stateSaveDebounceMs', DEFAULT_SAVE_DEBOUNCE_MS],
   ['openCodeServerUpBudgetMs', openCodeServerRestartRetryBudgetMs],
