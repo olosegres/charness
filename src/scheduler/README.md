@@ -55,11 +55,13 @@ constants in the code; this README keeps what the code cannot say.
   delivery waits for its agent to go idle (up to `waitIdleTimeoutMs`), and an agent mid-turn may be waiting for the
   operator's answer to its pinned question — which cannot arrive before the bot polls, and polling starts AFTER the
   boot's session phase. Awaiting the delivery there froze every topic for as long as the stuck deliveries took, at
-  every restart. `rearmAll()` returns `void` so that no edit can bring the wait back unnoticed. The catch-ups of ONE
+  every restart. `rearmAll()` and the boot step return `void` (nothing to wait for; the type alone would not stop an edit that
+  awaits a promise there, so `schedulerMcpBoot.test.ts` pins that a replay that never settles does not hold the boot phase). The catch-ups of ONE
   topic (one `threadKey`) run one after another, as the replay always did — every missed run of a boot is due at the same
   instant, and two prompts must not reach one agent together; those of different topics run side by side, so a stuck one
-  holds up only its own topic and never the arming of the jobs stored after it. `nextRunAt` is still booked only when a
-  delivery ends, so a restart during a delivery replays that catch-up again.
+  holds up only its own topic and never the arming of the jobs stored after it. A catch-up that waits for its turn is
+  dropped if the job was re-armed meanwhile (a `/timezone` change, a rebind): its own timer owns the next run. `nextRunAt`
+  is still booked only when a delivery ends, so a restart during a delivery replays that catch-up again.
 - **A timezone change must NOT go through `engine.rearmAll()`** — that is the BOOT replay: it arms from each
   job's stored `nextRunAt` and reads a now-past one as a MISSED run, so it would announce, pin and deliver a
   bogus catch-up into every topic. `timezoneRecompute.ts` recomputes `nextRunAt` from now first (reusing

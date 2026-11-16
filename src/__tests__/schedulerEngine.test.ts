@@ -440,6 +440,94 @@ describe('schedulerEngine', () => {
     assert.equal(clock.pendingCount, 1, 'and nothing was armed for it');
   });
 
+  it('boot rearmAll: a job re-armed while its catch-up waits behind another one of its topic is not fired as a catch-up — its new timer owns it', async () => {
+    const store = await newStore();
+    const createdAtMs = new Date(2026, 5, 6, 9, 0, 0).getTime();
+    const first = await createScheduleForThread(store, {
+      threadKey: threadA, name: 'first', spec: everyFiveMinutes, prompt: 'go', createdBy: 'user', nowMs: createdAtMs,
+    });
+    const queued = await createScheduleForThread(store, {
+      threadKey: threadA, name: 'queued', spec: everyFiveMinutes, prompt: 'go', createdBy: 'user', nowMs: createdAtMs,
+    });
+    assert.ok(first.ok && queued.ok);
+    const missedDueAt = first.record.nextRunAt;
+    assert.ok(missedDueAt !== null);
+    const bootNow = missedDueAt + 60 * 60 * 1000;
+    const clock = createFakeClock(bootNow);
+    const caps = createCaptures();
+    caps.hangNextDelivery();
+    const engine = createSchedulerEngine({
+      store, ledger: caps.ledger, deliver: caps.deliver,
+      now: clock.now, setTimeoutFn: clock.setTimeoutFn, clearTimeoutFn: clock.clearTimeoutFn,
+    });
+
+    const rearmedDueAt = bootNow + 30 * 60 * 1000;
+    try {
+      engine.rearmAll();
+      await yieldMacrotasks();
+      // What `/timezone` (or a rebind of the topic) does to a job: its next run is recomputed from now, persisted and armed.
+      const rearmed: ScheduleRecord = { ...store.getSchedules()[queued.record.id], nextRunAt: rearmedDueAt };
+      await store.upsertSchedule(rearmed);
+      engine.armJob(rearmed);
+    } finally {
+      caps.resolveHanging();
+    }
+    await engine.whenIdle();
+
+    assert.deepEqual(caps.deliverCalls.map((call) => call.job.id), [first.record.id], 'the re-armed job was not delivered: it is not due');
+    assert.equal(caps.ledgerRecords.some((record) => record.jobId === queued.record.id), false, 'and it left no ledger record');
+    assert.equal(store.getSchedules()[queued.record.id].nextRunAt, rearmedDueAt, 'its next run is the recomputed one');
+    assert.equal(clock.pendingCount, 2, 'its own timer stays armed, beside the one of the job that was waiting for its agent');
+    // The clock moves on: the timers of both jobs come due (the first job's own next run is a few minutes ahead).
+    clock.tick(rearmedDueAt - bootNow);
+    await engine.whenIdle();
+    const queuedDeliveries = caps.deliverCalls.filter((call) => call.job.id === queued.record.id);
+    assert.equal(queuedDeliveries.length, 1, 'it fires once, when it is due');
+    assert.equal(queuedDeliveries[0].fireContext.kind, 'on-time');
+  });
+
+  it('boot rearmAll: the timer of a job re-armed while its catch-up waits comes due before the wait ends — it fires once, by its timer, and the waiting catch-up does not fire it again', async () => {
+    const store = await newStore();
+    const createdAtMs = new Date(2026, 5, 6, 9, 0, 0).getTime();
+    const first = await createScheduleForThread(store, {
+      threadKey: threadA, name: 'first', spec: everyFiveMinutes, prompt: 'go', createdBy: 'user', nowMs: createdAtMs,
+    });
+    const queued = await createScheduleForThread(store, {
+      threadKey: threadA, name: 'queued', spec: everyFiveMinutes, prompt: 'go', createdBy: 'user', nowMs: createdAtMs,
+    });
+    assert.ok(first.ok && queued.ok);
+    const missedDueAt = first.record.nextRunAt;
+    assert.ok(missedDueAt !== null);
+    const bootNow = missedDueAt + 60 * 60 * 1000;
+    const clock = createFakeClock(bootNow);
+    const caps = createCaptures();
+    caps.hangNextDelivery();
+    const engine = createSchedulerEngine({
+      store, ledger: caps.ledger, deliver: caps.deliver,
+      now: clock.now, setTimeoutFn: clock.setTimeoutFn, clearTimeoutFn: clock.clearTimeoutFn,
+    });
+
+    const rearmedDelayMs = 10 * 60 * 1000;
+    try {
+      engine.rearmAll();
+      await yieldMacrotasks();
+      const rearmed: ScheduleRecord = { ...store.getSchedules()[queued.record.id], nextRunAt: bootNow + rearmedDelayMs };
+      await store.upsertSchedule(rearmed);
+      engine.armJob(rearmed);
+      // The new timer comes due while the first job still waits for its agent.
+      clock.tick(rearmedDelayMs);
+      await yieldMacrotasks();
+      assert.deepEqual(caps.deliverCalls.map((call) => call.job.id), [first.record.id, queued.record.id], 'the re-armed job was fired by its timer');
+      assert.equal(caps.deliverCalls[1].fireContext.kind, 'on-time');
+    } finally {
+      caps.resolveHanging();
+    }
+    await engine.whenIdle();
+
+    assert.deepEqual(caps.deliverCalls.map((call) => call.job.id), [first.record.id, queued.record.id], 'and the waiting catch-up did not deliver it a second time');
+    assert.equal(clock.pendingCount, 2, 'both jobs are armed for their next runs');
+  });
+
   it('boot rearmAll: a catch-up whose delivery throws is booked as failed and re-armed — nothing escapes the replay', async () => {
     const store = await newStore();
     const createdAtMs = new Date(2026, 5, 6, 9, 0, 0).getTime();

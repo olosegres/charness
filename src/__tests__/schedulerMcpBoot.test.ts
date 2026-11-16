@@ -229,6 +229,28 @@ describe('runSessionBootPhase', () => {
     assert.deepEqual(order, ['rearmSchedules']);
   });
 
+  it('a schedule replay that never settles does not hold the boot: the phase still resolves', async () => {
+    // A step that returns a promise still fits `() => void`: this is what pins that the phase does not wait for one.
+    const hangingReplay = (): Promise<void> => new Promise<void>(() => {});
+    const phase = runSessionBootPhase({
+      startBotMcp: async () => true,
+      reattachSessions: async () => {},
+      restoreAfterReattach: () => {},
+      releaseAdoptedSessions: () => {},
+      onSessionsRestored: () => {},
+      healActiveSessions: () => {},
+      rearmSchedules: hangingReplay,
+    });
+    const isResolved = await Promise.race([
+      phase.then(() => true),
+      (async () => {
+        for (let round = 0; round < 5; round += 1) await new Promise<void>((resolve) => setImmediate(resolve));
+        return false;
+      })(),
+    ]);
+    assert.equal(isResolved, true, 'the boot phase waited for the replay of the schedules');
+  });
+
   it('a schedule replay that throws does not abort the boot: the phase still resolves, and the failure is logged', async () => {
     const logged: string[] = [];
     const errorMock = mock.method(console, 'error', (...args: Parameters<typeof console.error>) => {

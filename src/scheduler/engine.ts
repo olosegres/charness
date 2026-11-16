@@ -77,10 +77,12 @@ export interface SchedulerEngine {
   /**
    * Boot replay: arm every persisted job and start one catch-up per missed run
    * (those of one topic one after another, those of different topics side by
-   * side). Returns at once — `void` on purpose: the boot must never wait for a
-   * catch-up's delivery, which waits for its agent, and an agent waiting for the
-   * operator's answer is answered only once the bot polls (`whenIdle` is the
-   * way to wait for the catch-ups).
+   * side). Returns at once: the boot must never wait for a catch-up's delivery,
+   * which waits for its agent, and an agent waiting for the operator's answer is
+   * answered only once the bot polls (`whenIdle` is the way to wait for the
+   * catch-ups). `void` states that the boot has no promise to wait for; it does
+   * not forbid one (a function returning a promise still fits it) — the boot
+   * phase's own test, with a replay that never settles, pins the contract.
    */
   rearmAll(): void;
   /**
@@ -112,11 +114,12 @@ export function createSchedulerEngine(deps: SchedulerEngineDeps): SchedulerEngin
 
   /**
    * Run an `onTimer` chain, tracking it so {@link whenIdle} can await it.
-   * `startAfter` queues it behind an earlier chain; `onTimer` never rejects, so
-   * a queued chain always starts. Resolves when the chain has settled.
+   * `startAfter` queues it behind an earlier chain (a catch-up waiting for the
+   * topic's earlier one, see {@link onQueuedCatchUp}); both chains never reject,
+   * so a queued one always starts. Resolves when the chain has settled.
    */
   function trackChain(jobId: string, startAfter?: Promise<void>): Promise<void> {
-    const chain = (startAfter === undefined ? onTimer(jobId) : startAfter.then(() => onTimer(jobId))).finally(() => {
+    const chain = (startAfter === undefined ? onTimer(jobId) : startAfter.then(() => onQueuedCatchUp(jobId))).finally(() => {
       activeChains.delete(chain);
     });
     activeChains.add(chain);
@@ -219,6 +222,21 @@ export function createSchedulerEngine(deps: SchedulerEngineDeps): SchedulerEngin
     } catch (error) {
       console.error(`[scheduler] timer callback failed for job ${jobId}:`, error);
     }
+  }
+
+  /**
+   * The turn of a catch-up that waited behind another one of its topic. While it
+   * waited, something may have re-armed the job — a `/timezone` change recomputes
+   * every `nextRunAt` from now, a rebind of the topic resumes its jobs: the record
+   * then carries a next run in the future and a timer of its own. Firing it now
+   * would deliver a run nobody scheduled, and a second one when that timer comes
+   * due, so such a job is left to its timer. Only a job that is still missed and
+   * has no timer takes its turn, through the same chain as any fire.
+   */
+  async function onQueuedCatchUp(jobId: string): Promise<void> {
+    const record = store.getSchedules()[jobId];
+    if (record && (timers.has(jobId) || getCatchUpDecision({ nextRunAt: record.nextRunAt, nowMs: now() }) !== 'fire-missed')) return;
+    await onTimer(jobId);
   }
 
   /**
@@ -384,8 +402,8 @@ export function createSchedulerEngine(deps: SchedulerEngineDeps): SchedulerEngin
    *   - on-time / future → just arm.
    * A catch-up is a due timer that fires at once: it goes through the same
    * tracked chain (`trackChain`, so the no-overlap guard, the fresh-record
-   * re-read and the error containment apply) and is NEVER awaited here — the
-   * return type is `void` so that no edit can bring the wait back unnoticed. The
+   * re-read and the error containment apply) and is NEVER awaited here; the
+   * return type is `void` because there is nothing to wait for. The
    * boot waits for no delivery: a delivery waits for its agent to go idle, and
    * an agent mid-turn can be waiting for the operator's answer — which cannot
    * arrive before the bot polls, and the polling starts after the boot.
@@ -395,7 +413,8 @@ export function createSchedulerEngine(deps: SchedulerEngineDeps): SchedulerEngin
    * replay always did: every missed run of a boot is due at the same instant, and
    * two prompts must not reach one agent together — the second one waits for the
    * first one's delivery, then sees the agent busy with its turn and waits for
-   * that. Different topics run side by side, so a stuck one holds up only its
+   * that ({@link onQueuedCatchUp} drops it if the job was re-armed meanwhile).
+   * Different topics run side by side, so a stuck one holds up only its
    * own topic; their announcements still go out one by one through the
    * process-wide send gate.
    */

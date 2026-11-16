@@ -99,7 +99,7 @@ export interface SessionBootPhaseSteps {
   releaseAdoptedSessions: () => void;
   onSessionsRestored: () => void;
   healActiveSessions: () => void;
-  /** Arms every job and starts the catch-ups. `void` on purpose: the boot never waits for a delivery. */
+  /** Arms every job and starts the catch-ups; the boot phase never waits for a delivery (pinned by its test: a replay that never settles). */
   rearmSchedules: () => void;
 }
 
