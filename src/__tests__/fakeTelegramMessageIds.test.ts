@@ -17,8 +17,8 @@ import { FakeTelegram, fakeTelegramFirstMessageId } from './telegramE2e/fakeTele
 const group = { id: -1001111111111, title: 'ExampleGroup' };
 const operator = { id: 424242, is_bot: false, first_name: 'Operator' };
 const botUser = { id: 7000000001, is_bot: true, first_name: 'Fake bot', username: 'fake_charness_bot' };
-/** A hard-coded thread id of a flow: `const docsThreadId = 241;`, `topicThreadId = 151`, … */
-const hardCodedThreadIdPattern = /\b\w*[tT]hreadId\w* = (\d+)\b/g;
+/** A hard-coded thread id of a flow: `const docsThreadId = 241;`, `topicThreadId = 151`, and in an object literal `{ threadId: 151, … }`. */
+const hardCodedThreadIdPattern = /\b\w*[tT]hreadId\w*\s*[:=]\s*(\d+)\b/g;
 
 function listTestFiles(dir: string): string[] {
   return fs.readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
@@ -29,7 +29,8 @@ function listTestFiles(dir: string): string[] {
 }
 
 function listHardCodedThreadIds(): number[] {
-  return listTestFiles(__dirname).flatMap((file) =>
+  // Not this file: its sample source holds an id beyond the bound on purpose.
+  return listTestFiles(__dirname).filter((file) => file !== __filename).flatMap((file) =>
     [...fs.readFileSync(file, 'utf8').matchAll(hardCodedThreadIdPattern)].map((match) => Number(match[1])));
 }
 
@@ -38,6 +39,11 @@ test('every thread id a flow hard-codes is below the first message id of the fak
   // Not vacuous: the scan really finds the flows' ids.
   assert.ok(threadIds.length > 20, `the scan found ${threadIds.length} hard-coded thread ids`);
   assert.ok(Math.max(...threadIds) < fakeTelegramFirstMessageId, `the highest hard-coded thread id is ${Math.max(...threadIds)}, the fake's messages start at ${fakeTelegramFirstMessageId}`);
+});
+
+test('the scan reads both forms of a hard-coded thread id: an assignment and an object-literal field', () => {
+  const source = 'const docsThreadId = 241;\nconst topics = [{ threadId: 150000, folder: \'x\' }, { threadId : 7 }];\nconst someOtherId = 5;';
+  assert.deepEqual([...source.matchAll(hardCodedThreadIdPattern)].map((match) => Number(match[1])), [241, 150000, 7]);
 });
 
 test('the fake numbers its messages and the topics it creates from its first message id', () => {
