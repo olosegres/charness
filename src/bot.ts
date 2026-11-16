@@ -5938,11 +5938,13 @@ async function replayBufferedPrompts(key: SessionKey): Promise<void> {
   });
   if (!isSessionActive) return;
   // R23: prompts held during a usage-limit wait that ended with the previous
-  // session go to this one — on their own when nothing above carried them.
+  // session go to this one — on their own when nothing above carried them. They
+  // are what people asked for meanwhile: a write that fails is told in the topic
+  // like a person's own message, never only logged.
   const heldText = limitHeldPrompts.releaseAll(key);
   if (heldText === null) return;
   try {
-    await forwardPromptToAgent(key, adapter, heldText);
+    await forwardPromptToAgent(key, adapter, heldText, undefined, { isPersonInput: true });
   } catch (err) {
     console.error('[replayBufferedPrompts] forwarding the held prompts failed:', err);
   }

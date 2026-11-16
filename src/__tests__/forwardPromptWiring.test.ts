@@ -80,7 +80,7 @@ test('the live forward awaits the write\'s outcome — except for a person\'s ow
   assert.match(getFunctionBody('reportUndeliveredTopicPrompt'), /replyToThread\(key, t\('agent\.prompt_not_delivered', \{ error: message \}\)\)/);
 });
 
-test('only a person\'s own prompts are marked as such: the text, voice and label path, the buffered startup prompt, a file, an album and /schedule — a wake-up, a nudge or a reminder is not', () => {
+test('only a person\'s own prompts are marked as such: the text, voice and label path, the buffered startup prompt, a file, an album, /schedule and what a usage-limit wait held — a wake-up, a nudge or a reminder is not', () => {
   assert.match(getFunctionBody('deliverActivePrompt'), /forward: \(\) => forwardPromptToAgent\(key, getThreadAdapter\(key\), text, sentAtMs, \{ messageContext, requestHeader: opening\.header, isPersonInput: true \}\),/);
   assert.match(getFunctionBody('deliverActivePrompt'), /, true, undefined, \{ isPersonInput: true \}\);/, 'and its buffered twin');
   assert.match(getFunctionBody('bufferPromptDuringStartup'), /, true, undefined, \{ isPersonInput: true \}\);/);
@@ -90,6 +90,8 @@ test('only a person\'s own prompts are marked as such: the text, voice and label
   }
   // A buffered prompt replays with the flag it was buffered with.
   assert.ok(botSource.includes('forward: async (prompt, isPersonInput) => { await forwardPromptToAgent(key, adapter, prompt, undefined, { isPersonInput }); },'));
+  // R23: what people asked for during a usage-limit wait, released to the next session — a failed write was only logged.
+  assert.match(getFunctionBody('replayBufferedPrompts'), /await forwardPromptToAgent\(key, adapter, heldText, undefined, \{ isPersonInput: true \}\);/);
 });
 
 test('a bot-made prompt that waits for an adopt replay behind a start counts only once replayed', () => {
