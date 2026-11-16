@@ -22,7 +22,6 @@ import assert from 'node:assert/strict';
 import {
   addPendingOutput,
   checkHasPendingOutput,
-  getNewestPendingSeq,
   getOutputFlushPlan,
   appendPendingOutput,
   getUnsentRemainder,
@@ -239,7 +238,7 @@ describe('getGroupDeltaContinuation (S3 — Claude edit-in-place in group mode)'
 });
 
 function createEmptyBuffer(): PendingOutputBuffer {
-  return { pendingSegments: [], firstSeq: 1, sealedThroughSeq: 0 };
+  return { pendingSegments: [] };
 }
 
 const midReplyBatch = { isContinuation: true, startsNewParagraph: false };
@@ -293,10 +292,10 @@ describe('addPendingOutput / takePendingOutput (the new-message mark belongs to 
     const lastMessage = { id: 41, text: 'the previous reply, so far' };
     const first = takePendingOutput(buffer);
     assert.ok(first);
-    assert.equal(planTakenSegment(first.segment, lastMessage).isEditInPlace, true, 'the tail still extends the message it belongs to');
+    assert.equal(planTakenSegment(first, lastMessage).isEditInPlace, true, 'the tail still extends the message it belongs to');
     const second = takePendingOutput(buffer);
     assert.ok(second);
-    assert.equal(planTakenSegment(second.segment, { id: 41, text: 'the previous reply, so far the end of the previous reply' }).isEditInPlace, false, 'the new turn\'s text is a message of its own');
+    assert.equal(planTakenSegment(second, { id: 41, text: 'the previous reply, so far the end of the previous reply' }).isEditInPlace, false, 'the new turn\'s text is a message of its own');
     assert.equal(takePendingOutput(buffer), null);
   });
 
@@ -322,7 +321,7 @@ describe('addPendingOutput / takePendingOutput (the new-message mark belongs to 
     // ... and only now does the earlier send end: it lands and moves the last-message cursor, but it never touches the mark.
     const resumed = takePendingOutput(buffer);
     assert.ok(resumed);
-    const plan = planTakenSegment(resumed.segment, { id: thread.lastMessageId, text: thread.lastMessageText });
+    const plan = planTakenSegment(resumed, { id: thread.lastMessageId, text: thread.lastMessageText });
     assert.equal(plan.isEditInPlace, false, 'a new message, not an edit of the interrupted turn\'s');
     assert.deepEqual(plan.chunks, ['Working on LIM-7.']);
   });
@@ -335,45 +334,32 @@ describe('addPendingOutput / takePendingOutput (the new-message mark belongs to 
     assert.equal(mark.needsNewMessage, true);
   });
 
-  it('take hands over the oldest segment with its flags and its number; nothing pending → null', () => {
+  it('take hands over the oldest segment with its flags; nothing pending → null', () => {
     const buffer = createEmptyBuffer();
     assert.equal(takePendingOutput(buffer), null);
     addPendingOutput(buffer, { needsNewMessage: true }, { output: 'answer', isContinuation: false, startsNewParagraph: false });
-    addPendingOutput(buffer, { needsNewMessage: true }, { output: 'next', isContinuation: false, startsNewParagraph: false });
     assert.equal(checkHasPendingOutput(buffer), true);
-    assert.equal(getNewestPendingSeq(buffer), 2);
-    assert.deepEqual(takePendingOutput(buffer), { segment: { output: 'answer', isContinuation: false, startsNewMessage: true }, seq: 1 });
-    assert.deepEqual(takePendingOutput(buffer), { segment: { output: 'next', isContinuation: false, startsNewMessage: true }, seq: 2 });
+    assert.deepEqual(takePendingOutput(buffer), { output: 'answer', isContinuation: false, startsNewMessage: true });
     assert.equal(checkHasPendingOutput(buffer), false);
     assert.equal(takePendingOutput(buffer), null);
-    assert.equal(getNewestPendingSeq(buffer), 2, 'the newest number queued so far, also once it was taken out');
   });
 
-  it('a sealed segment takes no more text: the next batch starts a segment of its own, still a continuation of the message', () => {
-    const buffer = createEmptyBuffer();
-    const mark: NewMessageMark = { needsNewMessage: false };
-    addPendingOutput(buffer, mark, { output: 'before the answer ', ...midReplyBatch });
-    buffer.sealedThroughSeq = getNewestPendingSeq(buffer);
-    addPendingOutput(buffer, mark, { output: 'after it', ...midReplyBatch });
-    assert.deepEqual(buffer.pendingSegments, [
-      { output: 'before the answer ', isContinuation: true, startsNewMessage: false },
-      { output: 'after it', isContinuation: true, startsNewMessage: false },
-    ]);
-  });
+  it('an unsent remainder goes back to the front as a fresh message and joins the next segment; a segment after a boundary stays apart', () => {
+    const alone = createEmptyBuffer();
+    requeueUnsentRemainder(alone, 'the part that hit a 429');
+    assert.deepEqual(alone.pendingSegments, [{ output: 'the part that hit a 429', isContinuation: false, startsNewMessage: false }]);
 
-  it('an unsent remainder goes back to the HEAD under the number of the segment it came from, a fresh message of its own — never joined to the newer text behind it', () => {
-    const buffer = createEmptyBuffer();
-    addPendingOutput(buffer, { needsNewMessage: false }, { output: 'older', ...midReplyBatch });
-    addPendingOutput(buffer, { needsNewMessage: true }, { output: 'newer', ...midReplyBatch });
-    const taken = takePendingOutput(buffer);
-    assert.equal(taken?.seq, 1);
+    const queuedMeanwhile = createEmptyBuffer();
+    addPendingOutput(queuedMeanwhile, { needsNewMessage: false }, { output: 'newer', ...midReplyBatch });
+    requeueUnsentRemainder(queuedMeanwhile, 'older');
+    assert.deepEqual(queuedMeanwhile.pendingSegments, [{ output: 'older\nnewer', isContinuation: false, startsNewMessage: false }]);
 
-    requeueUnsentRemainder(buffer, 'the part that hit a 429');
-
-    assert.equal(buffer.firstSeq, 1, 'it takes its number back');
-    assert.deepEqual(buffer.pendingSegments, [
-      { output: 'the part that hit a 429', isContinuation: false, startsNewMessage: false },
-      { output: 'newer', isContinuation: true, startsNewMessage: true },
+    const behindBoundary = createEmptyBuffer();
+    addPendingOutput(behindBoundary, { needsNewMessage: true }, { output: 'the next turn', ...midReplyBatch });
+    requeueUnsentRemainder(behindBoundary, 'the previous turn\'s part');
+    assert.deepEqual(behindBoundary.pendingSegments, [
+      { output: 'the previous turn\'s part', isContinuation: false, startsNewMessage: false },
+      { output: 'the next turn', isContinuation: true, startsNewMessage: true },
     ]);
   });
 });

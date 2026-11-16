@@ -93,7 +93,6 @@ async function startFixture(): Promise<Fixture> {
     splitMessage,
     maxMessageLength,
     measureRendered: (chunk) => chunk.length,
-    landStreamedOutput: async () => {},
   });
   const deps: SchedulerMcpDeps = {
     store,

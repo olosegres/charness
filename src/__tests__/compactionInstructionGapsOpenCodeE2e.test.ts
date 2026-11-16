@@ -40,7 +40,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { FakeTelegram } from './telegramE2e/fakeTelegram';
 import { TopicDriver } from './telegramE2e/topicDriver';
-import { FakeOpenCodeServer, loadBuiltOpenCodeCompactPlugin, writeFakeOpenCodeBinary } from './openCodeE2e/fakeOpenCodeServer';
+import { FakeOpenCodeServer, writeFakeOpenCodeBinary } from './openCodeE2e/fakeOpenCodeServer';
 import {
   builtCliPath,
   createIsolatedInstanceLayout,
@@ -69,7 +69,7 @@ import {
   compactionSkillsGuidance,
 } from '../utils/compactOnIdle';
 import { getOpenCodeCompactSelfReviewOffDir } from '../utils/compactSelfReviewFlags';
-import { getOpenCodeCompactPluginContext } from '../utils/openCodeCompactPlugin';
+import { getOpenCodeCompactPluginContext, installOpenCodeCompactPlugin } from '../utils/openCodeCompactPlugin';
 
 const group = { id: -1001111111111, title: 'ExampleGroup' };
 const operator = { id: 424242, is_bot: false, first_name: 'Operator' };
@@ -248,8 +248,7 @@ describe('The self-review section on OpenCode: built charness, fake Bot API, fak
     const apiRoot = await fakeTelegram.start();
     // The plugin the bot installs for the server (`GET /config` of the fake reports it loaded): the fake runs its hook before every compaction.
     const pluginDir = getInstancePluginDir();
-    // The built bot's plugin, as the bot installs it (the runner's copy of the module would name another file).
-    assert.equal(loadBuiltOpenCodeCompactPlugin().installOpenCodeCompactPlugin(pluginDir), 'written');
+    assert.equal(installOpenCodeCompactPlugin(pluginDir), 'written');
     fakeOpenCode = new FakeOpenCodeServer({ version: fakeOpenCodeVersion, models: [openCodeModel], defaultModel: openCodeModel, pluginDir });
     const openCodeUrl = await fakeOpenCode.start(await getFreePort());
     writeFakeOpenCodeBinary(layout.binDir, { version: fakeOpenCodeVersion, models: [openCodeModel] });

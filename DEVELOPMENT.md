@@ -179,8 +179,7 @@ A flow's own time budget is that same limit less a teardown reserve (`getFlowDea
 not with the runner's bare timeout. Run one flow directly with `--test-timeout=<ms>`.
 
 A flow does not wait out the production windows in real time: its env file sets `CHARNESS_TEST_TIMINGS`, a JSON object
-of named overrides (`src/testTimings.ts`: `telegramSendIntervalMs` — the global send pacer's 2 s, `telegramSendOperationDeadlineMs` — a send
-queue call's 30 s deadline, `jiraPollIntervalMs` —
+of named overrides (`src/testTimings.ts`: `telegramSendIntervalMs` — the global send pacer's 2 s, `jiraPollIntervalMs` —
 below the 10 s floor of `jira.json`, `requestTurnPollMs` — the wake-up engine's 10 s poll of the turns it watches,
 `requestSweepIntervalMs` and `requestFirstPostRetryDelayMs` — the wake-up engine's minutes, `limitProbeDelayMs` — the two-minute probe of an unconfirmed usage limit, `stateSaveDebounceMs` — `state.json`'s
 500 ms save debounce, `openCodeServerUpBudgetMs` — the OpenCode server's 60 s of retries, `backgroundHoldMaxMs` — the 6 h the

@@ -7,19 +7,16 @@
  * and — the attachment extension — an item with a `path` routes
  * through the injected file-send pipeline (caption/asFile/authorizedWorkDir
  * threaded), mixed batches preserve order, an all-empty object is rejected, and
- * a file `deliveryUnknown` terminates the batch without inviting a retry, and the
- * agent's streamed text is landed BEFORE anything is posted (a landing that fails never
- * holds the messages back, a call that resolves no target lands nothing).
+ * a file `deliveryUnknown` terminates the batch without inviting a retry.
  */
 
 /** Test case: N/A — Charness has no Jira tracker. */
 
 import { splitMessage } from '../connectors/telegram/messageSplit';
-import { mock, test } from 'node:test';
+import { test } from 'node:test';
 import * as assert from 'node:assert/strict';
 import {
   createSendMessagesToThread,
-  MessageDeliveryUnknownError,
   type SendMessagesToThreadDeps,
 } from '../utils/messageSendService';
 import type {
@@ -29,7 +26,6 @@ import type {
 } from '../utils/fileSendService';
 import { classifyFileSendKind } from '../utils/fileSendPlan';
 import { getAbortError } from '../utils';
-import { streamedOutputLandingLimitMs } from '../utils/streamedOutputLanding';
 
 interface FileCall {
   threadKey: string;
@@ -70,7 +66,6 @@ function createService(
     splitMessage,
     maxMessageLength: 10,
     measureRendered: (chunk) => chunk.length,
-    landStreamedOutput: async () => {},
     ...overrides,
   });
   return { service, recorder };
@@ -178,7 +173,6 @@ test('cancellation between messages stops further delivery', async () => {
     splitMessage,
     maxMessageLength: 10,
     measureRendered: (chunk) => chunk.length,
-    landStreamedOutput: async () => {},
   });
   const result = await service('-100:1', {
     messages: ['first', 'second'],
@@ -441,107 +435,4 @@ test('cancellation stops a following attachment send', async () => {
   assert.equal(recorder.fileCalls.length, 0);
   assert.equal(result.ok, false);
   assert.equal(!result.ok && result.error, 'cancelled after delivering 1 message');
-});
-
-test('lands the text the agent streamed FIRST, so every message is posted below it', async () => {
-  const landedTargets: string[] = [];
-  const { service, recorder } = createService({
-    // A landing that takes a round trip, as the real flush does: the messages must still wait for it.
-    landStreamedOutput: async (target) => {
-      await new Promise<void>((resolve) => setImmediate(resolve));
-      landedTargets.push(target);
-      recorder.events.push('landed');
-    },
-  });
-
-  await service('-100:1', { messages: ['first', 'second'] });
-
-  assert.deepEqual(recorder.events, ['landed', 'text:first', 'text:second']);
-  assert.deepEqual(landedTargets, ['-100:1']);
-});
-
-test('lands once per call, before an attachment as before a text', async () => {
-  const { service, recorder } = createService({ landStreamedOutput: async () => { recorder.events.push('landed'); } });
-
-  await service('-100:1', { messages: [{ path: 'a.png' }, 'tail'] });
-
-  assert.deepEqual(recorder.events, ['landed', 'file:a.png', 'text:tail']);
-});
-
-test('a landing that fails is logged and the messages are still posted', async () => {
-  const logged = mock.method(console, 'error', () => {});
-  try {
-    const { service, recorder } = createService({
-      landStreamedOutput: async () => { throw new Error('the send path is down'); },
-    });
-
-    const result = await service('-100:1', { messages: ['still here'] });
-
-    assert.equal(result.ok && result.summary, 'Delivered 1 message: 1 text.');
-    assert.deepEqual(recorder.sent, ['still here']);
-    assert.equal(logged.mock.callCount(), 1, 'the failure is reported, not swallowed');
-    assert.match(String(logged.mock.calls[0].arguments.join(' ')), /the send path is down/);
-  } finally {
-    logged.mock.restore();
-  }
-});
-
-test('a landing that never ends is given up on after the limit: the messages are posted anyway, so a hung send cannot hold the agent\'s tool call', async () => {
-  mock.timers.enable({ apis: ['setTimeout'] });
-  const warned = mock.method(console, 'warn', () => {});
-  try {
-    const { service, recorder } = createService({ landStreamedOutput: () => new Promise<void>(() => {}) });
-
-    const posting = service('-100:1', { messages: ['posted'] });
-    await new Promise<void>((resolve) => setImmediate(resolve));
-    assert.deepEqual(recorder.sent, [], 'nothing is posted while the landing may still end');
-
-    mock.timers.tick(streamedOutputLandingLimitMs);
-    const result = await posting;
-
-    assert.equal(result.ok && result.summary, 'Delivered 1 message: 1 text.');
-    assert.deepEqual(recorder.sent, ['posted']);
-    assert.equal(warned.mock.callCount(), 1, 'the give-up is reported');
-  } finally {
-    warned.mock.restore();
-    mock.timers.reset();
-  }
-});
-
-test('lands nothing for a call that posts nothing: an invalid item or an unresolvable target', async () => {
-  const { service, recorder } = createService({
-    landStreamedOutput: async () => { recorder.events.push('landed'); },
-    resolveTarget: (threadKey) => (threadKey === '-100:1' ? { ok: true, target: threadKey } : { ok: false, error: 'no such topic' }),
-  });
-
-  assert.equal((await service('-100:1', { messages: [{}] })).ok, false);
-  assert.equal((await service('-100:2', { messages: ['x'] })).ok, false);
-
-  assert.deepEqual(recorder.events, []);
-});
-
-test('a text message whose outcome is unknown ends the batch as deliveryUnknown, naming what landed — it is never sent again', async () => {
-  let calls = 0;
-  const { service, recorder } = createService({
-    sendChunk: async (_target, chunk) => {
-      calls += 1;
-      if (chunk === 'second') throw new MessageDeliveryUnknownError();
-      recorder.sent.push(chunk);
-      return calls;
-    },
-  });
-
-  const result = await service('-100:1', { messages: ['first', 'second', 'third'] });
-
-  assert.equal(result.ok, false);
-  assert.equal('kind' in result && result.kind, 'deliveryUnknown');
-  assert.match(!result.ok ? result.error : '', /^Delivered 1 message before a message's delivery outcome became unknown/);
-  assert.deepEqual(recorder.sent, ['first'], 'the third is not sent after the second\'s unknown fate');
-  assert.equal(calls, 2, 'the second is not sent again');
-  assert.deepEqual(!result.ok && 'kind' in result ? result.sentMessageIds : null, [1], 'the ids of the messages that did land are handed back');
-});
-
-test('any other error of a text send still propagates', async () => {
-  const { service } = createService({ sendChunk: async () => { throw new Error('a bug'); } });
-  await assert.rejects(service('-100:1', { messages: ['x'] }), /a bug/);
 });

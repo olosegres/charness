@@ -29,7 +29,6 @@ import {
   checkIsPlausibleAnthropicApiKey,
   claudeProfileApiKeyFileName,
   claudeProfileLaunchSettingsFileName,
-  claudeProfileSkillsRestoreSettingsFileNames,
   extractAnthropicApiKey,
   getClaudeAuthBilling,
   parseClaudeAuthStatus,
@@ -37,7 +36,7 @@ import {
   writeClaudeProfileApiKey,
 } from '../utils/claudeProfiles';
 import { buildClaudeApiKeyHelperCommand, buildClaudeAuthProbeSettingsArgs } from '../utils/claudeApiKeyHelper';
-import { claudeCompactHookSettingsFileName, claudeSkillsRestoreHookSettingsFileNames, getHookCompactionInstruction, prepareClaudeCompactHookFlags } from '../utils/claudeCompactHook';
+import { claudeCompactHookSettingsFileName, getHookCompactionInstruction, prepareClaudeCompactHookFlags } from '../utils/claudeCompactHook';
 import { anthropicModelsEndpoint, verifyAnthropicApiKey } from '../utils/anthropicApiKeyCheck';
 import { getRecvTracePreview, redactedAnthropicSecretPreview } from '../utils/recvPreviewRedaction';
 import { buildAccountPickerRows } from '../utils/claudeAccountPickerPlan';
@@ -123,7 +122,7 @@ describe('a pasted API key', () => {
     assert.ok(!helper.includes(apiKey), 'the helper names the file, never the key');
     assert.equal(execFileSync('/bin/sh', ['-c', helper], { encoding: 'utf8' }).trim(), apiKey);
 
-    for (const fileName of [claudeProfileLaunchSettingsFileName, ...Object.values(claudeProfileSkillsRestoreSettingsFileNames)]) fs.writeFileSync(path.join(dir, fileName), '{}');
+    fs.writeFileSync(path.join(dir, claudeProfileLaunchSettingsFileName), '{}');
     removeClaudeProfileApiKey(dir);
     assert.deepEqual(fs.readdirSync(dir), []);
     removeClaudeProfileApiKey(dir); // nothing left: no throw
@@ -154,7 +153,7 @@ describe('launch settings', () => {
     const dataDir = createTempDir();
     const profileDir = createTempDir();
     writeClaudeProfileApiKey(profileDir, apiKey);
-    const flags = prepareClaudeCompactHookFlags(dataDir, profileDir, { skillsRestore: null });
+    const flags = prepareClaudeCompactHookFlags(dataDir, profileDir);
     const settingsPath = path.join(profileDir, claudeProfileLaunchSettingsFileName);
     assert.deepEqual(flags, ['--settings', settingsPath]);
     const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
@@ -166,36 +165,13 @@ describe('launch settings', () => {
     assert.equal(fs.existsSync(path.join(dataDir, claudeCompactHookSettingsFileName)), false, 'the shared file is not that launch\'s');
   });
 
-  it('a key profile\'s json-stream launch gets a file of its own for each kind — the restore hooks and the helper — beside the tmux one', () => {
-    const dataDir = createTempDir();
-    const profileDir = createTempDir();
-    writeClaudeProfileApiKey(profileDir, apiKey);
-    const tmuxFlags = prepareClaudeCompactHookFlags(dataDir, profileDir, { skillsRestore: null });
-    const withBotSkills = prepareClaudeCompactHookFlags(dataDir, profileDir, { skillsRestore: { unavailableSkillsDir: null } });
-    const withoutBotSkills = prepareClaudeCompactHookFlags(dataDir, profileDir, { skillsRestore: { unavailableSkillsDir: '/opt/charness/agent-plugin/skills' } });
-    assert.deepEqual([tmuxFlags[1], withBotSkills[1], withoutBotSkills[1]], [
-      path.join(profileDir, claudeProfileLaunchSettingsFileName),
-      path.join(profileDir, claudeProfileSkillsRestoreSettingsFileNames.withBotSkills),
-      path.join(profileDir, claudeProfileSkillsRestoreSettingsFileNames.withoutBotSkills),
-    ]);
-    for (const settingsPath of [withBotSkills[1], withoutBotSkills[1]]) {
-      const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
-      assert.equal(settings.apiKeyHelper, buildClaudeApiKeyHelperCommand(profileDir), 'the key still rides the one --settings');
-      assert.equal(settings.hooks.SessionStart[0].matcher, 'compact');
-    }
-    assert.equal(JSON.parse(fs.readFileSync(tmuxFlags[1], 'utf8')).hooks.SessionStart, undefined, 'the tmux launch has no restore');
-  });
-
-  it('any other launch — the default account, a subscription profile — keeps the shared hook file of its kind', () => {
+  it('any other launch — the default account, a subscription profile — keeps the shared hook file', () => {
     const dataDir = createTempDir();
     const profileDir = createTempDir();
     const shared = path.join(dataDir, claudeCompactHookSettingsFileName);
-    assert.deepEqual(prepareClaudeCompactHookFlags(dataDir, profileDir, { skillsRestore: null }), ['--settings', shared]);
-    assert.deepEqual(prepareClaudeCompactHookFlags(dataDir, null, { skillsRestore: null }), ['--settings', shared]);
+    assert.deepEqual(prepareClaudeCompactHookFlags(dataDir, profileDir), ['--settings', shared]);
+    assert.deepEqual(prepareClaudeCompactHookFlags(dataDir, null), ['--settings', shared]);
     assert.equal(JSON.parse(fs.readFileSync(shared, 'utf8')).apiKeyHelper, undefined);
-    const restoreShared = path.join(dataDir, claudeSkillsRestoreHookSettingsFileNames.withBotSkills);
-    assert.deepEqual(prepareClaudeCompactHookFlags(dataDir, profileDir, { skillsRestore: { unavailableSkillsDir: null } }), ['--settings', restoreShared]);
-    assert.equal(JSON.parse(fs.readFileSync(restoreShared, 'utf8')).apiKeyHelper, undefined);
   });
 
   it('a key profile whose directory cannot take the file still gets its key: the same settings go inline', () => {
@@ -207,7 +183,7 @@ describe('launch settings', () => {
     const originalWarn = console.warn;
     console.warn = () => {};
     try {
-      const [flag, value] = prepareClaudeCompactHookFlags(dataDir, profileDir, { skillsRestore: null });
+      const [flag, value] = prepareClaudeCompactHookFlags(dataDir, profileDir);
       assert.equal(flag, '--settings');
       assert.equal(JSON.parse(value).apiKeyHelper, buildClaudeApiKeyHelperCommand(profileDir));
     } finally {

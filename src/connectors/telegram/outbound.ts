@@ -10,10 +10,9 @@
  */
 
 import type { InlineKeyboardMarkup } from 'telegraf/typings/core/types/typegram';
-import { keyToString, type SessionKey } from '../../sessionKey';
+import type { SessionKey } from '../../sessionKey';
 import type { OutputTransport } from '../../types';
 import type { SendFilesToThread } from '../../utils/fileSendService';
-import { landStreamedOutputWithinLimit } from '../../utils/streamedOutputLanding';
 import { MAX_MESSAGE_LEN } from './messageSplit';
 import { checkNeedsOwnMessage, getDegradedContent } from '../../platform/capabilityFallback';
 import type {
@@ -112,7 +111,7 @@ export function createTelegramConnectorOutbound(deps: TelegramOutboundDeps): Con
    * inline before the seam existed.
    */
   async function deliverStandalone(key: SessionKey, content: OutboundContent): Promise<void> {
-    await landStreamedOutputWithinLimit(() => deps.getOutputTransport().finalizeInFlight(key), keyToString(key));
+    await deps.getOutputTransport().finalizeInFlight(key);
     const keyboard = content.options ? buildOptionsKeyboard(content.options) : undefined;
     const messageId = await deps.sendStandaloneMessage(key, content.text, keyboard);
     if (messageId === null) return;

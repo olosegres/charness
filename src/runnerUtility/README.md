@@ -298,7 +298,7 @@ login). `prepare` also refuses a RE-install while Pueue runs a job (the bootouts
   a missing or different definition is written (the same text `service system-step prepare` renders) and, when the account has a login session, loaded into it; a current one the
   session does not have loaded is loaded; no session → the file stays, launchd loads it at the next login, and `runners` keeps saying a login is needed. A LOADED older agent is
   replaced (`bootout`, wait, `bootstrap`) only while Pueue holds no job that runs, is paused OR WAITS in its queue (a queued job starts the moment the old agent is gone), or whose
-  state cannot be read or that does not answer in time (`readQueue` is `readPueueView`, classified by `classifyPueueView`: a timeout is never "no daemon", and stopping the queue reads it the same way): its steps are the jobs', so a busy queue leaves the file AND the agent alone and the next look tries again. The queue is looked at twice — to decide, and
+  state cannot be read or that does not answer in time (`readQueue` is `readPueueView`, classified by `classifyPueueView`: a timeout is never "no daemon"; `inspectPueue`, where any failure is `absent`, is for stopping and clearing the queue only): its steps are the jobs', so a busy queue leaves the file AND the agent alone and the next look tries again. The queue is looked at twice — to decide, and
   right before the old agent is stopped, after the new file is written: a job that turned up between puts the old definition back (the next look sees the difference again) and
   stops nothing. What is left is the second or so between the stop and the new agent's first heartbeat: a job that STARTS then is refused («needs a login») or runs in the
   daemon, as without a session — never cut in the middle of a step, because no step runs through the old agent.
@@ -358,8 +358,7 @@ everything as it was, and `unpair --local` forgets the pairing here only.
 Pueue outlives the link by design (a link restart must never kill a job), so a removal has to end the work the hub's agents left running
 here — and a refused key alone is not proof of a removal: a hub whose home folder is locked (a volume not yet unlocked after a reboot), whose
 file modes changed or whose sshd setting was edited refuses the key the same way, for hours. So the jobs are stopped on evidence only
-(`stopAllPueueJobs`: the running ones are killed, the queued ones removed, and it waits until the queue is empty; only the client saying
-there is NO daemon skips the reset — a daemon too busy to answer in time, as under a heavy build, still runs its jobs and gets it):
+(`stopAllPueueJobs`: the running ones are killed, the queued ones removed, and it waits until the queue is empty):
 
 - **The hub does it itself** when it removes a runner that is online: `runners/runnerRemoval.ts` pauses the runner and runs
   `pueue reset --force` over the link WHILE IT IS STILL PAIRED (the gate ends a link as soon as its runner has left the registry, which

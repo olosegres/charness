@@ -12,7 +12,7 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import type { CommandResult, CommandRunner } from '../selfUpdate/commandRunner';
-import { parsePueueStatus, readPueueView, shutDownPueue, stopAllPueueJobs, summarizePueueView } from '../runnerUtility/pueueDaemon';
+import { countActivePueueTasks, inspectPueue, parsePueueStatus, readPueueView, shutDownPueue, stopAllPueueJobs, summarizePueueView } from '../runnerUtility/pueueDaemon';
 import { getRunnerHomePaths, type RunnerHomePaths } from '../runnerUtility/runnerHome';
 
 let paths: RunnerHomePaths;
@@ -22,29 +22,21 @@ function tasks(...statuses: Array<string | Record<string, object>>): string {
   return JSON.stringify({ tasks: Object.fromEntries(statuses.map((status, index) => [index, { status }])) });
 }
 
-/** How many tasks of a status text hold a process, by the rule the runner decides on ({@link summarizePueueView}); `null` for text that is not a status. */
-function countActiveTasks(statusJson: string): number | null {
-  const snapshot = parsePueueStatus(statusJson);
-  if (snapshot === null) return null;
-  const state = summarizePueueView({ kind: 'tasks', ...snapshot });
-  return state.kind === 'busy' ? state.activeJobs : 0;
-}
-
 describe('counting the jobs that hold a process', () => {
   it('counts Running and Paused tasks — Pueue kills those when it stops — and not the queued or the finished', () => {
-    assert.equal(countActiveTasks(tasks({ Running: {} }, { Queued: {} }, { Done: {} }, { Paused: {} })), 2);
-    assert.equal(countActiveTasks(tasks({ Queued: {} }, 'Stashed')), 0);
-    assert.equal(countActiveTasks(tasks('Running')), 1);
-    assert.equal(countActiveTasks(JSON.stringify({ tasks: {} })), 0);
+    assert.equal(countActivePueueTasks(tasks({ Running: {} }, { Queued: {} }, { Done: {} }, { Paused: {} })), 2);
+    assert.equal(countActivePueueTasks(tasks({ Queued: {} }, 'Stashed')), 0);
+    assert.equal(countActivePueueTasks(tasks('Running')), 1);
+    assert.equal(countActivePueueTasks(JSON.stringify({ tasks: {} })), 0);
   });
 
   it('does not count the LOCKED, the stashed or the finished either: only a task with a process Pueue would kill', () => {
-    assert.equal(countActiveTasks(tasks({ Locked: {} }, 'Stashed', { Done: {} })), 0);
+    assert.equal(countActivePueueTasks(tasks({ Locked: {} }, 'Stashed', { Done: {} })), 0);
   });
 
   it('is null for text that is not Pueue\'s status', () => {
-    assert.equal(countActiveTasks('not json'), null);
-    assert.equal(countActiveTasks(JSON.stringify({ other: 1 })), null);
+    assert.equal(countActivePueueTasks('not json'), null);
+    assert.equal(countActivePueueTasks(JSON.stringify({ other: 1 })), null);
   });
 });
 
@@ -54,19 +46,11 @@ describe('asking the daemon', () => {
   let commands: string[];
   /** After `reset --force` the tasks are still `Running` for this many looks (Pueue 4 answers the command at once and kills them later); `null` = no reset yet. */
   let looksUntilKilled: number | null;
-  /** How many of the next `status --json` looks a daemon too busy to answer lets time out (`Infinity`: every one). */
-  let unansweredLooks: number;
-  /** What the pueue client says when no daemon listens on the socket (Pueue 4.0.4). */
-  const noDaemonStderr = 'Error: \n   0: Failed to initialize client.\n   2: I/O error at path "/x/run/pueue.socket" while connecting to daemon. Did you start it?:\n      No such file or directory (os error 2)';
   const runner: CommandRunner = async (file, args) => {
     const line = `${path.basename(file)} ${args.join(' ')}`;
     commands.push(line);
-    const result = (ok: boolean, stdout = ''): CommandResult => ({ ok, exitCode: ok ? 0 : 1, stdout, stderr: ok ? '' : noDaemonStderr, isTimedOut: false });
+    const result = (ok: boolean, stdout = ''): CommandResult => ({ ok, exitCode: ok ? 0 : 1, stdout, stderr: '', isTimedOut: false });
     if (line.endsWith('status --json')) {
-      if (daemonUp && unansweredLooks > 0) {
-        unansweredLooks -= 1;
-        return { ok: false, exitCode: null, stdout: '', stderr: '', isTimedOut: true };
-      }
       if (looksUntilKilled === null) return result(daemonUp, statusJson);
       if (looksUntilKilled > 0) {
         looksUntilKilled -= 1;
@@ -93,28 +77,25 @@ describe('asking the daemon', () => {
     statusJson = tasks();
     commands = [];
     looksUntilKilled = null;
-    unansweredLooks = 0;
   });
   afterEach(() => {
     fs.rmSync(home, { recursive: true, force: true });
   });
 
-  it('absent, idle, busy, unreadable and unanswered', async () => {
-    const look = async (): Promise<unknown> => summarizePueueView(await readPueueView(paths, runner));
+  it('absent, idle, busy and unreadable', async () => {
     daemonUp = false;
-    assert.deepEqual(await look(), { kind: 'absent' });
+    assert.deepEqual(await inspectPueue(paths, runner), { kind: 'absent' });
     daemonUp = true;
-    assert.deepEqual(await look(), { kind: 'idle' });
+    assert.deepEqual(await inspectPueue(paths, runner), { kind: 'idle' });
     statusJson = tasks({ Running: {} }, { Paused: {} });
-    assert.deepEqual(await look(), { kind: 'busy', activeJobs: 2 });
+    assert.deepEqual(await inspectPueue(paths, runner), { kind: 'busy', activeJobs: 2 });
     statusJson = '<html>';
-    assert.deepEqual(await look(), { kind: 'unreadable' });
-    unansweredLooks = 1;
-    assert.deepEqual(await look(), { kind: 'unanswered', reason: 'it did not answer within 5 s' }, 'a daemon too busy to answer is not "no daemon"');
+    assert.deepEqual(await inspectPueue(paths, runner), { kind: 'unreadable' });
   });
 
   it('a queue that holds only queued jobs holds nothing Pueue would kill: it is idle for both ways of asking', async () => {
     statusJson = tasks({ Queued: {} }, { Done: {} });
+    assert.deepEqual(await inspectPueue(paths, runner), { kind: 'idle' });
     assert.deepEqual(summarizePueueView(await readPueueView(paths, runner)), { kind: 'idle' });
   });
 
@@ -129,27 +110,12 @@ describe('asking the daemon', () => {
     assert.equal(await stopAllPueueJobs(paths, runner), true, 'true although the first look after the reset still saw the task running: the kill is asynchronous');
     assert.ok(commands.some((line) => line.endsWith('reset --force')));
     assert.ok(commands.filter((line) => line.endsWith('status --json')).length >= 3, 'it looked again until the queue was empty');
-    assert.deepEqual(summarizePueueView(await readPueueView(paths, runner)), { kind: 'idle' });
+    assert.deepEqual(await inspectPueue(paths, runner), { kind: 'idle' });
 
     commands = [];
     daemonUp = false;
     assert.equal(await stopAllPueueJobs(paths, runner), true);
     assert.ok(!commands.some((line) => line.includes('reset')), 'no daemon, no reset');
-  });
-
-  it('a daemon too busy to answer the first look in time (a heavy build) still gets the reset: no answer is no proof that its jobs are gone', async () => {
-    statusJson = tasks({ Running: {} }, { Queued: {} });
-    unansweredLooks = 1;
-    assert.equal(await stopAllPueueJobs(paths, runner), true);
-    assert.ok(commands.some((line) => line.endsWith('reset --force')), `the reset was sent: ${commands.join(' | ')}`);
-    assert.deepEqual(summarizePueueView(await readPueueView(paths, runner)), { kind: 'idle' });
-  });
-
-  it('is false while the daemon keeps not answering after the reset — not "nothing left"', async () => {
-    statusJson = tasks({ Running: {} });
-    unansweredLooks = Infinity;
-    assert.equal(await stopAllPueueJobs(paths, runner, 200), false);
-    assert.ok(commands.some((line) => line.endsWith('reset --force')));
   });
 
   it('is false when a job survives the reset', async () => {
@@ -181,6 +147,12 @@ describe('reading the tasks and the paused groups (what a restart or a removal o
     assert.deepEqual(parsePueueStatus(JSON.stringify({ tasks: {} })), { tasks: [], pausedGroups: [] });
     assert.equal(parsePueueStatus('not json'), null);
     assert.equal(parsePueueStatus('{}'), null);
+  });
+
+  it('the counter and the reader are ONE parser: they agree on the same text, a status in either shape', () => {
+    assert.equal(countActivePueueTasks(snapshot), parsePueueStatus(snapshot)?.tasks.filter((task) => task.status === 'Running' || task.status === 'Paused').length);
+    assert.equal(countActivePueueTasks(snapshot), 1);
+    assert.equal(countActivePueueTasks('{}'), null, 'and both refuse what is not a status');
   });
 
   function createRunner(answer: Partial<CommandResult>): CommandRunner {

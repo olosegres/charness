@@ -21,7 +21,6 @@
 import { after, before, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import * as fs from 'fs';
-import * as path from 'path';
 import { FakeTelegram, generalTopicThreadId } from './telegramE2e/fakeTelegram';
 import { TopicDriver } from './telegramE2e/topicDriver';
 import {
@@ -44,7 +43,6 @@ import { startCharnessOnInstance } from './e2e/fallbackFlowKit';
 import { fakeClaudeTuiBanner, fakeUsageLimitRow, fakeUsageWarningRow } from './tmuxE2e/fakeClaudeTui';
 import { getFlagValues } from './jiraE2e/fakeClaudeContract';
 import { checkIsPidAlive } from '../utils/jsonStreamHost';
-import { claudeCompactHookSettingsFileName } from '../utils/claudeCompactHook';
 import { getTelegramFlowTestTimingsEnv } from './telegramE2e/telegramFlowTimings';
 
 const group = { id: -1001111111111, title: 'ExampleGroup' };
@@ -96,18 +94,6 @@ function listSentTexts(): string[] {
 /** Whether the bot relayed `text` to the topic — sent or edited into a message. */
 function checkIsRelayed(text: string): boolean {
   return topic.listMessages().some((message) => message.text.includes(text));
-}
-
-/**
- * The tmux backend is frozen: its launches keep the settings file they had, with the compaction guidance and no skills
- * restore — no `SessionStart` hook (a compaction there asks the agent to load its skills again).
- */
-function assertNoSkillsRestoreHook(argv: readonly string[]): void {
-  const settingsPaths = getFlagValues(argv, '--settings');
-  assert.deepEqual(settingsPaths, [path.join(getLayout().dataDir, claudeCompactHookSettingsFileName)], 'the tmux backend\'s own settings file');
-  const hooks: { PreCompact?: object[]; SessionStart?: object[] } = JSON.parse(fs.readFileSync(settingsPaths[0], 'utf8')).hooks;
-  assert.equal(hooks.PreCompact?.length, 1, 'the compaction guidance stays');
-  assert.equal(hooks.SessionStart, undefined, 'no skills restore on the tmux backend');
 }
 
 describe('A usage warning on the tmux backend end to end: built charness, fake Bot API, fake Claude TUI', () => {
@@ -162,7 +148,6 @@ describe('A usage warning on the tmux backend end to end: built charness, fake B
     const launches = readFakeClaudeTuiLaunches(getLayout());
     assert.equal(launches.length, 1, 'one TUI session launch');
     assert.deepEqual(getFlagValues(launches[0].argv, '--plugin-dir'), [builtAgentPluginDir], 'the TUI session loads the bot\'s skills');
-    assertNoSkillsRestoreHook(launches[0].argv);
     await getCharness().waitFor('the stored effort typed into the fresh TUI', agentTimeoutMs, () => getCharness().output.includes('[Claude] sendInput: "/effort'));
   });
 
@@ -187,7 +172,6 @@ describe('A usage warning on the tmux backend end to end: built charness, fake B
     const resumed = readFakeClaudeTuiLaunches(getLayout())[1];
     assert.deepEqual(getFlagValues(resumed.argv, '--resume'), [sessionId], 'the same conversation, resumed');
     assert.deepEqual(getFlagValues(resumed.argv, '--plugin-dir'), [builtAgentPluginDir], 'the resume loads the bot\'s skills');
-    assertNoSkillsRestoreHook(resumed.argv);
   });
 
   it('a turn that hits the real block: the limit notice is posted', async () => {

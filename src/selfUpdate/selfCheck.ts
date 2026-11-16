@@ -16,7 +16,7 @@ import * as path from 'path';
  * every other one is guarded by `require.main === module` and starts nothing when imported, so this list is the second line of defence for them.
  * A module that runs a promise chain or `main()` at module scope MUST be here (`entryModules.test.ts` scans the sources for one that is not).
  */
-export const entryModules: ReadonlySet<string> = new Set(['cli.js', 'index.js', 'bot.js', 'cli/botEntry.js', 'stt/sttInstallEntry.js', 'runnerUtility/runnerCli.js', 'runnerUtility/rootServiceCli.js', 'hooks/claudeSkillsRestoreHook.js']);
+export const entryModules: ReadonlySet<string> = new Set(['cli.js', 'index.js', 'bot.js', 'cli/botEntry.js', 'stt/sttInstallEntry.js', 'runnerUtility/runnerCli.js', 'runnerUtility/rootServiceCli.js']);
 const testsFolderName = '__tests__';
 const botModule = 'bot.js';
 const syntaxCheckTimeoutMs = 30 * 1000;

@@ -2435,17 +2435,6 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
     return session?.isActive ?? false;
   }
 
-  flushPendingOutput(key: SessionKey): void {
-    const session = this.sessions.get(keyToString(key));
-    if (!session) return;
-    // The batch window ending early: the same emit its timer makes, with the timer cleared so it cannot emit the tail twice.
-    if (session.outputTimer) {
-      clearTimeout(session.outputTimer);
-      session.outputTimer = null;
-    }
-    this.emitResponseTail(key, session);
-  }
-
   checkHasUnconsumedInput(key: SessionKey): boolean {
     return (this.sessions.get(keyToString(key))?.unconsumedInputCount ?? 0) > 0;
   }

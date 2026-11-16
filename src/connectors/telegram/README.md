@@ -20,16 +20,9 @@ Chosen once at boot by `CHAT_MODE` — an internal detail of this connector, not
 
 - **group** — the `queueOutput` edit-in-place path. A continuation appends to the message being rendered: the
   FULL accumulated text is re-rendered (so `**` / `` ` `` pairs split across flushes re-pair) and edited in
-  place, spilling into a new message past the cap (`outputFlushPlan.ts`). A topic's unsent text is ONE ordered,
-  numbered backlog sent by ONE loop from its head (`utils/groupOutputBacklog.ts`, whose header lists what it
-  keeps): a leftover that failed for now (a 429, the network) goes back to the head, one Telegram refused for good
-  (a closed topic, another 4xx) is dropped with a log line, a send whose outcome is unknown is never sent again, and
-  nothing captures a slice of it. `finalizeInFlight` is a landing: it seals the newest segment and waits until every
-  segment up to it has settled, so a question, a tool call's status frame, an `answer_request` answer and the
-  messages of `send_messages_to_user` — posted straight to the topic — land BELOW the text the agent streamed
-  before them. Each of them waits for at most `streamedOutputLandingLimitMs` (60 s,
-  `utils/streamedOutputLanding.ts`), then posts anyway. A stop gives the backlog ONE final attempt (a 429 then
-  drops what it keeps, logged) and drops only the pending status frame (`utils/clearStatusCoalescer.ts`).
+  place, spilling into a new message past the cap (`outputFlushPlan.ts`). `finalizeInFlight` drains the
+  coalesced-but-unsent buffer to a permanent message on settle or teardown, so the final answer is never
+  discarded under a 429.
 - **dm** — a live "cursor": ONE accumulating native `sendMessageDraft` holds the whole current reply and is
   FINALIZED to a permanent `sendMessage` on boundaries (idle, 4096 overflow, `isFinal`, a new response, status,
   teardown). Claude's scrape adapter emits deltas with no continuation meta, so the transport synthesises it
@@ -45,16 +38,7 @@ first-come-first-served, CLOCK-based and non-blocking (a slow send never head-of
 topic coalesces its own stream with a 3 s output debounce; when a topic backs up
 (`backlogGlueThreshold`) the flush glues the backlog into the fewest messages (`outputBacklogGlue.ts`).
 Cancelling rejects a send still parked in the queues; once a send has started, the caller awaits it and its
-cleanup. Each Bot API call of a topic's queue is bounded by `telegramSendOperationDeadlineMs` (30 s; the pacer's
-and a 429's waits do not count): at the deadline the request is aborted — the client passes the queue's abort signal
-to it (`botApiConnection.ts`) — and settles as `SendOutcomeUnknownError`, so one hung call never holds the topic's
-later sends. Its outcome is unknown, so no caller sends it again (`sendOutcome.ts`): an output chunk counts as sent
-(the next text opens a new message); an edit counts as made for every caller, so none posts the content anew (a
-status or thinking frame keeps its message, a screen is not posted again); a question is not posted again as plain
-text, and a pinned notice (logged out, limit reset, a runner's link — `pinnedNoticeSlot.ts`) not at all; an
-`answer_request` answer is reported delivered with a plain warning that it may not have reached the user, the part
-known to have landed pinned; a `send_messages_to_user` batch ends as `deliveryUnknown` with the ids that did land.
-A file upload opts out (it bounds its own wait).
+cleanup.
 
 - **Unpaced on purpose** (`sendUnpaced`: 429 retry kept, no pacer permit, no per-thread FIFO): the typing
   indicator (not a message, yet it ate ~60% of the budget) and the voice acks (the transcript echo and the
@@ -159,11 +143,7 @@ maintainer must not break (`fileSendGateway.ts` with `../../utils/fileSendServic
   notification; only the latest answer of a topic stays pinned — the previous one is unpinned silently (its
   message stays), and the record of the pinned answer is persisted (`state.json` `answerPins`) so a restart
   does not leave two pinned. A failed pin changes nothing. Native question pins and scheduled-run pins are
-  separate records. An answer is the LAST message of its turn: the shared message sender
-  (`utils/messageSendService.ts`, also behind `send_messages_to_user`) lands the text the agent streamed ahead of
-  it — still unread in the CLI's output, in the adapter's batch window (`flushPendingOutput`), in the 3 s output
-  debounce or already going out — before it posts (`landStreamedOutput`); a landing that fails, or that has not
-  ended after `streamedOutputLandingLimitMs`, never holds the messages back.
+  separate records.
 
 ## Testing against a fake Bot API
 

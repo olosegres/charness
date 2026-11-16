@@ -15,7 +15,6 @@ import * as os from 'os';
 import * as path from 'path';
 import {
   getClaudeAgentPluginFlags,
-  getUnloadedAgentSkillsDir,
   getOpenCodeAgentSkillsExpectation,
   getOpenCodeAgentConfigDir,
   getOpenCodeAgentConfigEnv,
@@ -54,12 +53,6 @@ describe('agentPlugin', () => {
     };
     assert.deepEqual(await getClaudeAgentPluginFlags('claude', true, null, recordRead), []);
     assert.equal(isVersionRead, false, 'no folder, no version read');
-  });
-
-  test('the skills restore calls the bot\'s skills unavailable exactly when a launch does not load them', () => {
-    assert.equal(getUnloadedAgentSkillsDir(['--plugin-dir', repoAgentPluginDir], repoAgentPluginDir), null, 'loaded: available');
-    assert.equal(getUnloadedAgentSkillsDir([], repoAgentPluginDir), path.join(repoAgentPluginDir, 'skills'), 'switched off or a CLI too old: their folder');
-    assert.equal(getUnloadedAgentSkillsDir([], null), null, 'a broken install has no such folder');
   });
 
   test('a conversation with the bot\'s skills switched off gets no --plugin-dir, and the CLI is not even asked its version', async () => {

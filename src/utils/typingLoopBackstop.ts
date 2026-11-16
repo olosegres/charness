@@ -7,8 +7,8 @@
  * `checkShouldKeepTyping` (`isOutputStreaming || isAdapterBusy`) goes false, and
  * has NO absolute bound. `jsonStreamBusyWatchdog` already covers a stuck
  * `isBusy` (a missed terminal `result`). This backstop covers the OTHER input:
- * `isOutputStreaming`, which reads "the backlog holds text || it is sending ||
- * q.debounceTimer !== null". A leaked non-null `debounceTimer` (the `isFinal`
+ * `isOutputStreaming`, which reads `q.pendingOutput !== null || q.isProcessing ||
+ * q.debounceTimer !== null`. A leaked non-null `debounceTimer` (the `isFinal`
  * fast-path in `queueOutput` cleared the timer but left the handle set) pins
  * `isOutputStreaming` true forever → the indicator hangs unbounded even though
  * the output queue is empty (live 2026-07-19, a json-stream group topic firing
@@ -22,12 +22,11 @@
  *    and on OpenCode it sets no busy flag at all → vetoed;
  *  - a live DM draft is a real stream (`isTransportStreaming`) → vetoed;
  *  - real text waiting to send (`hasPendingOutput`) or an in-flight send
- *    (`isProcessing`: the backlog's send loop runs, which may legitimately be a
- *    slow API call) → vetoed.
+ *    (`isProcessing`, which may legitimately be a slow API call) → vetoed.
  * Only when the adapter is idle, nothing is drafting, the queue is empty AND an
  * un-fired debounce handle lingers does it fire. A LIVE debounce is ALWAYS armed
- * WITH pending text (both `queueOutput` and the retry of text a failure put back
- * arm it only when the backlog holds text, nulling it the instant it fires), so "debounce armed +
+ * WITH pending text (both `queueOutput` and `processOutputQueue` arm it only when
+ * `pendingOutput` is set, nulling it the instant it fires), so "debounce armed +
  * empty queue" can only be the dead/stale handle from the leak — never a real
  * in-flight turn. The decision is therefore safe by construction: it truncates a
  * leak, never work.
@@ -47,9 +46,9 @@ export interface TypingLoopBackstopInput {
   isCompacting: boolean;
   /** The output transport (DM draft cursor) reports an active live stream. */
   isTransportStreaming: boolean;
-  /** The topic's output backlog holds text (`checkHasPendingOutput`) — real agent text still waiting to be sent. */
+  /** `q.pendingOutput !== null` — real agent text still waiting to be sent. */
   hasPendingOutput: boolean;
-  /** `q.isDraining` — the backlog's send loop is awaiting a send (possibly slow). */
+  /** `q.isProcessing` — a flush is actively awaiting a send (possibly slow). */
   isProcessing: boolean;
   /** `q.debounceTimer !== null` — a debounce timer HANDLE is present. */
   hasDebounceTimer: boolean;

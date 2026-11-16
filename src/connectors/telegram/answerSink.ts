@@ -41,25 +41,10 @@ export interface TelegramAnswerSinkDeps {
  * (parallel `answer_request` calls) would otherwise both read the same previous
  * pin and leave the earlier of them pinned for good.
  *
- * An answer whose delivery outcome is unknown (Telegram did not answer within the send
- * queue's deadline) is reported delivered with a plain warning that it may not have
- * reached the user, never as an error: the agent would send it again on its own, and the
- * topic could get it twice. The part of it known to have landed is pinned.
- *
- * The answer is the last thing of its turn in the topic: the shared message sender
- * lands the text the agent streamed before calling `answer_request` (held back for
- * a moment by the adapter and the per-topic output debounce) before it posts the
- * answer.
- *
  * The wake-up alert (core S4) is a bot message naming the request, PINNED with a
  * notification and unpinned when that request closes. Its message id is the
  * alert handle.
  */
-/** What the agent is told when Telegram did not confirm (part of) its answer in time. */
-export const answerDeliveryUnknownWarning =
-  'Telegram did not confirm the delivery of this answer in time: it may not have reached the user. '
-  + 'Do not send it again on your own; if the user says it did not arrive, send it then.';
-
 export function createTelegramAnswerSink(deps: TelegramAnswerSinkDeps): AnswerSink {
   const answerPinLock = new KeyLock();
 
@@ -78,14 +63,6 @@ export function createTelegramAnswerSink(deps: TelegramAnswerSinkDeps): AnswerSi
   return {
     async deliverAnswer(key, delivery) {
       const result = await deps.sendMessages(keyToString(key), { messages: [delivery.body] });
-      // The answer may be in the topic: reported as delivered, so the agent does not send it again on its own (a duplicate
-      // pinned answer), with a plain warning that it may not have reached the user. The part known to have landed is pinned —
-      // the notification still goes out; with no part known there is nothing to pin.
-      if (!result.ok && 'kind' in result && result.kind === 'deliveryUnknown') {
-        const [firstKnownMessageId] = result.sentMessageIds;
-        if (firstKnownMessageId !== undefined) await pinLatestAnswer(key, firstKnownMessageId);
-        return { ok: true, warning: answerDeliveryUnknownWarning };
-      }
       if (!result.ok) return { ok: false, error: result.error };
       const [firstMessageId] = result.sentMessageIds;
       if (firstMessageId !== undefined) await pinLatestAnswer(key, firstMessageId);

@@ -34,7 +34,6 @@ import { performance } from 'perf_hooks';
 import { Readable, type Duplex } from 'stream';
 import type { CallApiHost } from '../../outputTrace';
 import { checkIsConnectionResetError } from '../../sendErrorClassifier';
-import { getSendOperationSignal } from '../../rateLimiter';
 
 /**
  * @description How long a connection may idle in the pool before the agent closes it. Well under the server's own limit
@@ -171,24 +170,8 @@ export interface BotApiClient extends CallApiHost {
 }
 
 /**
- * Wrap `host.callApi` so a request made inside a call of the topic's send queue carries that call's abort signal
- * (`rateLimiter.ts` `getSendOperationSignal`): at the queue's deadline the request itself is aborted and its connection
- * closed, instead of only the wait for it ending while it runs on. A request that brings its own signal (a file upload) keeps
- * it. Installed OUTERMOST, so the signal reaches every attempt below.
- */
-function installSendOperationSignal(host: CallApiHost): void {
-  const originalCallApi = host.callApi.bind(host);
-  host.callApi = (method, payload, options) => {
-    const signal = getSendOperationSignal();
-    if (!signal || (options !== undefined && 'signal' in options && options.signal !== undefined)) return originalCallApi(method, payload, options);
-    return originalCallApi(method, payload, { ...options, signal });
-  };
-}
-
-/**
  * @description Put the bot's pooling on a Telegraf client: its agent (Telegraf drops the agent of an `http://` root, and
- * builds every client from options that already lack it), the retry of a request that met a closed pooled connection, and the
- * send queue's abort signal on every request it makes.
+ * builds every client from options that already lack it) and the retry of a request that met a closed pooled connection.
  * Telegraf builds a NEW client for every update (`ctx.telegram`, behind `ctx.reply` / `ctx.answerCbQuery` /
  * `ctx.editMessageText`), so this runs once for `bot.telegram` and once per update for `ctx.telegram`. For `bot.telegram`
  * call it AFTER the output trace wrap, so the trace records both attempts of a retried request.
@@ -196,5 +179,4 @@ function installSendOperationSignal(host: CallApiHost): void {
 export function wireBotApiClient(telegram: BotApiClient, agent: http.Agent): void {
   telegram.options.agent = agent;
   installReusedConnectionRetry(telegram, agent);
-  installSendOperationSignal(telegram);
 }

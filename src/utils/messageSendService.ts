@@ -1,5 +1,4 @@
 import { checkIsAbortError } from '../utils';
-import { landStreamedOutputWithinLimit } from './streamedOutputLanding';
 import type { SendFilesToThread, SendFilesToThreadResult } from './fileSendService';
 import { formatSentKinds, type SentKind } from './sentKindsSummary';
 
@@ -43,14 +42,12 @@ export type DiscreteMessageItem =
  * attempted but did not land (a partial delivery stays `ok`), so a caller can
  * tell a partial delivery from a full one without parsing `summary`.
  * `sentMessageIds` are the TEXT messages that landed, in order — what a caller
- * pins or edits afterwards (an answer's pin, S8); attachments are not listed. A
- * batch that ended on a delivery of unknown outcome (`deliveryUnknown`) lists the
- * ones that landed before it.
+ * pins or edits afterwards (an answer's pin, S8); attachments are not listed.
  */
 export type SendMessagesToThreadResult =
   | { ok: true; summary: string; undeliveredCount: number; sentMessageIds: number[] }
   | { ok: false; error: string }
-  | { ok: false; kind: 'deliveryUnknown'; error: string; sentMessageIds: number[] };
+  | { ok: false; kind: 'deliveryUnknown'; error: string };
 
 export type SendMessagesToThread = (
   threadKey: string,
@@ -82,17 +79,6 @@ export interface SendMessagesToThreadOptions {
  */
 export const maxDiscreteMessages = 50;
 
-/**
- * @description A text message whose delivery outcome is unknown: the platform did not answer within its deadline, so it may or
- * may not be in the topic. `sendChunk` throws it; the batch ends as `deliveryUnknown`, and the message is never sent again.
- */
-export class MessageDeliveryUnknownError extends Error {
-  constructor() {
-    super('the platform did not confirm the message in time; it may or may not be in the topic');
-    this.name = 'MessageDeliveryUnknownError';
-  }
-}
-
 export interface SendMessagesToThreadDeps<TTarget> {
   /** Map the scope-resolved thread key string to the concrete send target. */
   resolveTarget(threadKey: string): { ok: true; target: TTarget } | { ok: false; error: string };
@@ -100,8 +86,7 @@ export interface SendMessagesToThreadDeps<TTarget> {
    * Send ONE already-split chunk as its own permanent message; resolves the sent
    * message id, `null` when it did not land. The caller wires this to the bot's
    * paced HTML-with-plain-fallback send so ordering / rate-limiting / `/clear`
-   * tracking are reused. Throws {@link MessageDeliveryUnknownError} when the
-   * outcome is unknown (it must not be sent again).
+   * tracking are reused.
    */
   sendChunk(target: TTarget, chunk: string, signal?: AbortSignal): Promise<number | null>;
   /**
@@ -121,14 +106,6 @@ export interface SendMessagesToThreadDeps<TTarget> {
   maxMessageLength: number;
   /** Rendered-length measure so an over-cap RENDERED message is split like normal output. */
   measureRendered(chunk: string): number;
-  /**
-   * Land what the agent streamed before this call into the topic — the text its backend still batches and the output the topic
-   * still debounces or is sending — so the messages of this call are posted BELOW it. The agent writes its text, then calls the
-   * tool: without this the text, held back for a moment, would appear under the messages it led up to. A landing that fails is
-   * logged and never holds the messages back, and one that does not end within `streamedOutputLandingLimitMs` is given up on:
-   * a send that hangs must not hold the agent's tool call.
-   */
-  landStreamedOutput(target: TTarget): Promise<void>;
 }
 
 /**
@@ -202,9 +179,6 @@ function buildCancelledResult(landed: number): SendMessagesToThreadResult {
  * and letting that escape hid how many messages had already landed (the agent's
  * natural retry then posted them twice).
  *
- * The agent's streamed text lands first ({@link SendMessagesToThreadDeps.landStreamedOutput}): the messages are the last thing the
- * agent has written when they are posted, so they are posted last — the answer of `answer_request` rides this sender too.
- *
  * Items are validated up front (an all-empty object → error, nothing sent) so
  * the service mirrors the MCP schema's all-or-nothing rejection. Failure is NOT
  * swallowed: if every send failed the result is an ERROR (with any attachment
@@ -214,8 +188,7 @@ function buildCancelledResult(landed: number): SendMessagesToThreadResult {
  * attachment kinds taken from what the file pipeline reports it SENT, never from
  * the extension. An attachment whose delivery outcome is unknown terminates the
  * batch with a `deliveryUnknown` result so the agent does not blindly retry
- * (mirrors `send_file_to_user`); so does a text message whose outcome is unknown
- * ({@link MessageDeliveryUnknownError}).
+ * (mirrors `send_file_to_user`).
  */
 export function createSendMessagesToThread<TTarget>(
   deps: SendMessagesToThreadDeps<TTarget>,
@@ -231,7 +204,6 @@ export function createSendMessagesToThread<TTarget>(
     const resolved = deps.resolveTarget(threadKey);
     if (!resolved.ok) return { ok: false, error: resolved.error };
     const { target } = resolved;
-    await landStreamedOutputWithinLimit(() => deps.landStreamedOutput(target), threadKey);
 
     let attempted = 0;
     let landed = 0;
@@ -275,7 +247,6 @@ export function createSendMessagesToThread<TTarget>(
             error:
               `Delivered ${formatMessageCount(landed)} before an attachment's delivery ` +
               `outcome became unknown: ${fileResult.error}`,
-            sentMessageIds,
           };
         } else {
           attachmentErrors.push(fileResult.error);
@@ -286,19 +257,7 @@ export function createSendMessagesToThread<TTarget>(
       const chunks = deps.splitMessage(item.text, deps.maxMessageLength, deps.measureRendered);
       for (const chunk of chunks) {
         attempted += 1;
-        let messageId: number | null;
-        try {
-          messageId = await deps.sendChunk(target, chunk, signal);
-        } catch (error) {
-          if (!(error instanceof MessageDeliveryUnknownError)) throw error;
-          // Like an attachment of unknown fate: the batch ends here, and the caller is told not to send it again.
-          return {
-            ok: false,
-            kind: 'deliveryUnknown',
-            error: `Delivered ${formatMessageCount(landed)} before a message's delivery outcome became unknown: ${error.message}`,
-            sentMessageIds,
-          };
-        }
+        const messageId = await deps.sendChunk(target, chunk, signal);
         if (messageId === null) continue;
         landed += 1;
         deliveredKinds.push('text');

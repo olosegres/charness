@@ -3472,8 +3472,7 @@ export class ClaudeCliAdapter extends EventEmitter implements AgentAdapter {
       ...(await getClaudeAgentPluginFlags(claudePath, checkIsBotSkillsEnabled(key))),
       '--session-id', claudeSessionId,
       ...mcpFlagsArr,
-      // The tmux backend is frozen: no skills restore (a compaction there asks the agent to load its skills again).
-      ...prepareClaudeCompactHookFlags(resolveDataDir(), configDir, { skillsRestore: null }),
+      ...prepareClaudeCompactHookFlags(resolveDataDir(), configDir),
       ...(args ? [args] : []),
     ];
     const claudeShellCmd = claudeArgv.map(shellSingleQuote).join(' ');
@@ -4141,7 +4140,7 @@ export class ClaudeCliAdapter extends EventEmitter implements AgentAdapter {
       ...(await getClaudeAgentPluginFlags(claudePath, checkIsBotSkillsEnabled(key))),
       '--resume', sessionId,
       ...mcpFlagsArr,
-      ...prepareClaudeCompactHookFlags(resolveDataDir(), configDir, { skillsRestore: null }),
+      ...prepareClaudeCompactHookFlags(resolveDataDir(), configDir),
     ];
     const claudeShellCmd = claudeArgv.map(shellSingleQuote).join(' ');
 

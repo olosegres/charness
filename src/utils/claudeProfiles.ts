@@ -253,15 +253,6 @@ export const claudeProfileApiKeyFileName = 'charness-api-key';
 /** The launch settings of a profile that holds a pasted key: the PreCompact hook AND the `apiKeyHelper` (one file — only the last `--settings` counts). */
 export const claudeProfileLaunchSettingsFileName = 'charness-settings.json';
 
-/**
- * The same, for a launch that carries the skills restore (json-stream, per-turn; `utils/claudeCompactHook.ts`): a file per
- * kind, so a tmux launch and a json-stream one of the same profile starting together never read each other's hooks.
- */
-export const claudeProfileSkillsRestoreSettingsFileNames = {
-  withBotSkills: 'charness-settings-skills-restore.json',
-  withoutBotSkills: 'charness-settings-skills-restore-without-bot-skills.json',
-} as const;
-
 /** An Anthropic API key: `sk-ant-api03-…` (an admin key `sk-ant-admin…` or an OAuth token `sk-ant-oat…` cannot run Claude Code). */
 const anthropicApiKeyRe = /^sk-ant-api\d{2}-[A-Za-z0-9_-]{20,250}$/;
 /** Anything that starts like an Anthropic credential — deleted from the topic as a secret even when it is not a usable key. */
@@ -373,9 +364,7 @@ export function writeClaudeProfileApiKey(configDir: string, apiKey: string): voi
 /** Drop a profile's pasted key (and the launch settings that point at it); a missing file is fine. */
 export function removeClaudeProfileApiKey(configDir: string): void {
   fs.rmSync(resolveClaudeProfileApiKeyFile(configDir), { force: true });
-  for (const fileName of [claudeProfileLaunchSettingsFileName, ...Object.values(claudeProfileSkillsRestoreSettingsFileNames)]) {
-    fs.rmSync(path.join(configDir, fileName), { force: true });
-  }
+  fs.rmSync(path.join(configDir, claudeProfileLaunchSettingsFileName), { force: true });
 }
 
 /**

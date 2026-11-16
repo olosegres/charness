@@ -75,12 +75,6 @@ let sweepGate: Promise<void> | null = null;
 let editHook: ((messageId: number, text: string) => Promise<boolean> | null) | null = null;
 /** Makes a send of the texts it returns true for fail (Telegram refused it): the bot gets no message id back. */
 let sendFailsFor: ((text: string) => boolean) | null = null;
-/**
- * Makes a send of the texts it returns true for end with an UNKNOWN outcome (the Bot API did not answer in time): the message may
- * be in the topic, its id is not known. Such sends are recorded in {@link unknownOutcomeSends}, not as replies.
- */
-let sendIsUnknownFor: ((text: string) => boolean) | null = null;
-let unknownOutcomeSends: string[] = [];
 /** What the module told the runners to apply (the entry as the registry held it), and how the runner answers. */
 let appliedGroups: Array<{ name: string; jobsAtOnce: number | undefined }> = [];
 let applyOutcome: RunnerGroupsOutcome = 'applied';
@@ -106,24 +100,14 @@ const editWithHooks: Parameters<typeof createRunners>[0]['editThreadMessageDetai
   return harness.core.editThreadMessageDetailed(key, messageId, text, extra);
 };
 
-const sendWithHooks: Parameters<typeof createRunners>[0]['replyToThreadDetailed'] = async (key, text, extra, options) => {
-  if (sendFailsFor?.(text) === true) return { kind: 'failed', isRetryable: true };
-  if (sendIsUnknownFor?.(text) === true) {
-    unknownOutcomeSends.push(text);
-    return { kind: 'unknown' };
-  }
-  if (isLengthChecked) await harness.core.bot.telegram.sendMessage(harnessGroup.id, text, { message_thread_id: harnessThreadId });
-  return harness.core.replyToThreadDetailed(key, text, extra, options);
-};
-
 function buildPorts(): Parameters<typeof createRunners>[0] {
   return {
     ...harness.core,
     replyToThread: async (key, text, extra, options) => {
-      const outcome = await sendWithHooks(key, text, extra, options);
-      return outcome.kind === 'sent' ? outcome.messageId : null;
+      if (sendFailsFor?.(text) === true) return null;
+      if (isLengthChecked) await harness.core.bot.telegram.sendMessage(harnessGroup.id, text, { message_thread_id: harnessThreadId });
+      return harness.core.replyToThread(key, text, extra, options);
     },
-    replyToThreadDetailed: sendWithHooks,
     editThreadMessage: async (key, messageId, text, extra) => (await editWithHooks(key, messageId, text, extra)) === 'edited',
     editThreadMessageDetailed: editWithHooks,
     editThreadKeyboard: async (_key, messageId, keyboard) => {
@@ -228,8 +212,6 @@ describe('/runners over its ports', () => {
     isLengthChecked = false;
     editHook = null;
     sendFailsFor = null;
-    sendIsUnknownFor = null;
-    unknownOutcomeSends = [];
     sweepGate = null;
     clockMs = Date.now();
     savedAddress = null;
@@ -1345,22 +1327,6 @@ describe('/runners over its ports', () => {
       await feature.watchLinkConcernsOnce();
       assert.equal(harness.replies.length, repliesBefore + 1, 'told at the next look');
       assert.equal(pinnedMessageIds.length, 1);
-    });
-
-    it('a notice whose send got no answer in time is recorded as told and never posted again: it may already be in General', async () => {
-      const runnerId = await pairAndGetId('mac');
-      putLinkChanges(runnerId, [changeAt(clockMs, homeAddress, otherAddress)]);
-      sendIsUnknownFor = (text) => text.startsWith('mac: ⚠️');
-      await feature.watchLinkConcernsOnce();
-      assert.equal(unknownOutcomeSends.length, 1);
-      assert.deepEqual(pinnedMessageIds, [], 'its id is not known: nothing to pin');
-      sendIsUnknownFor = null;
-      await feature.watchLinkConcernsOnce();
-      await feature.watchLinkConcernsOnce();
-      const posts = unknownOutcomeSends.length + harness.replies.filter((reply) => reply.text.startsWith('mac: ⚠️')).length;
-      assert.equal(posts, 1, 'posted once, never again');
-      const record = JSON.parse(fs.readFileSync(linkNoticesPath, 'utf8')).notices as Array<{ runnerId: string }>;
-      assert.deepEqual(record.map((notice) => notice.runnerId), [runnerId], 'recorded as told — a restart does not post it either');
     });
 
     it('keeps the record to the runners that are still paired: a removed one leaves it', async () => {

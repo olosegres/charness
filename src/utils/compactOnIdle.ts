@@ -304,62 +304,31 @@ export const compactionSummaryGuidance =
   'Make the summary MAXIMALLY COMPLETE: preserve every detail needed to continue the work from a clean session with no memory of this conversation — never drop load-bearing information (decisions, constraints, file paths, commands, error strings, identifiers, active tasks, delegated-work state) for brevity. Capture only SESSION-SPECIFIC working nuances: the user\'s in-session directives and any deviations from the standard process. Do NOT restate the standard instructions that auto-load at session start (for example CLAUDE.md / AGENTS.md / rules files) — they reload automatically on the fresh session, so duplicating them only wastes the summary. Keep the conversational directives, active exceptions, and delegated-work state; drop the static rulebook.';
 
 /**
- * FIXED (English, locale-independent) sentinel markers of the loaded-skills block, the one place a summary names its
- * skills for a machine: the OpenCode plugin reads the block ({@link parseCompactionLoadedSkills}) to know which skills to
- * restore after the compaction, beside the skill tool calls it finds in the session's history. Sentinels for the same reason
- * as {@link compactionClosingStartMarker}; the guidance below pins these exact strings.
- *
- * The Claude restore hook cannot read the block of the compaction it follows. Measured on Claude Code 2.1.322 (`-p`, stream-json,
- * a manual `/compact` and three automatic mid-turn compactions): the hooks run `PreCompact` → `SessionStart` (source
- * `compact`) → `PostCompact`, and while the `SessionStart` hooks run the transcript holds neither the new `compact_boundary`
- * nor the new `isCompactSummary` record (only the previous compaction's). So on Claude the transcript's skill records are the
- * whole source; the block still serves OpenCode, whose plugin reads the finished summary.
- */
-export const compactionSkillsBlockStartMarker = '<<<LOADED_SKILLS>>>';
-export const compactionSkillsBlockEndMarker = '<<<END_LOADED_SKILLS>>>';
-
-/** The longest line the block holds as a skill name: longer is no name. */
-export const compactionSkillsBlockMaxNameLength = 128;
-
-/**
- * @description The loaded-skills block guidance: the summary names every skill that was loaded, one exact name per line
- * between {@link compactionSkillsBlockStartMarker} and {@link compactionSkillsBlockEndMarker}. The bot hides the block from the
- * topic ({@link createCompactionSummaryLineFilter}) and the OpenCode plugin reads it. ONE line of printable ASCII with no double
- * quote or backslash, for the `PreCompact` hook's fixed-string match (see {@link compactionChecklistGuidance}).
- */
-export const compactionSkillsBlockGuidance =
-  `Write the exact name of every skill that was loaded (invoked) in this session, never translated or shortened (a namespaced name such as plugin:skill stays whole), one name per line with nothing else on it, in a block of its own wrapped EXACTLY between a line containing only ${compactionSkillsBlockStartMarker} and a line containing only ${compactionSkillsBlockEndMarker}, placed before the numbered checklist and before any closing section. If no skill was loaded, leave the block out.`;
-
-/**
- * @description The loaded-skills guidance. A skill is loaded on demand mid-session (a tool call whose result carries its
- * instructions), so — unlike CLAUDE.md / AGENTS.md — the summary drops its text. Where the bot can, it puts the text back
- * itself right after the compaction (`utils/skillsRestore.ts`); where it cannot (the frozen tmux backend, a process started
- * before the restore existed, an OpenCode instance that has not loaded the current plugin yet), the continuing session must
- * load the skills again. The bot-issued instruction cannot know which case a compaction is in, so the summary says both, and
- * what the continuing session finds in its own context decides. Worded without the restore's header and without saying
- * WHERE the restore sits: the summary is shown to the person (`/compact_summary`), who must see nothing of the restore, and
- * the restore comes before the summary on OpenCode and after it on Claude. It travels with {@link compactionChecklistGuidance}
- * as {@link compactionResumeGuidance}.
+ * @description The loaded-skills guidance. A skill is loaded on demand mid-session (a tool call whose
+ * result carries its instructions), so — unlike CLAUDE.md / AGENTS.md — nothing
+ * reloads it after a compaction: the summary drops its text and the fresh
+ * session keeps working without the procedure it was following. Naming the
+ * skills and saying in plain words that they must be loaded again is the only
+ * way the continuing session learns to re-invoke them. It travels with
+ * {@link compactionChecklistGuidance} as {@link compactionResumeGuidance}.
  */
 export const compactionSkillsGuidance =
-  'Then state in plain words that these skills stay in force for the continuing session: it must load each of them again and follow it before resuming the work, unless their full text was restored to it right after the compaction (then it must NOT load them again), since this summary does not carry the instructions of a skill. If no skill was loaded, omit this.';
+  'List every skill that was loaded (invoked) during this session by its exact name, and state explicitly, in plain words, that the continuing session MUST load each of these skills again and follow it before resuming the work: a skill\'s instructions are not carried over by this summary, so without reloading them the fresh session works without them. If no skill was loaded, omit this.';
 
 /**
  * @description The "what to do next" checklist every compaction summary ends with.
- * Item 1 ({@link compactionChecklistSkillsItem}) names the skills of the block (exactly, so the continuing session cannot
- * paraphrase a name into one that does not load) and says when they need no loading; the rest are the next steps the summary already records, in order —
- * never invented ones. With a closing section requested, the list is that section's
- * last part, right before its end marker, so "write nothing after the end marker"
- * still holds; otherwise it ends the summary. A code constant for the same reason as
+ * Item 1 is the skills reload (the skills named exactly, so the continuing session
+ * cannot skip it or paraphrase a name into one that does not load); the rest are
+ * the next steps the summary already records, in order — never invented ones. With
+ * a closing section requested, the list is that section's last part, right before
+ * its end marker, so "write nothing after the end marker" still holds; otherwise it
+ * ends the summary. A code constant for the same reason as
  * {@link compactionSummaryGuidance}: one text for every path, no locale in it. It is
  * ONE line of printable ASCII with no double quote or backslash, because the
  * `PreCompact` hook matches it as a fixed string in the raw JSON it reads on stdin.
  */
-/** What checklist item 1 opens with, before the skills' names: the text the summary shows the person, so a test copies it as is. */
-export const compactionChecklistSkillsItem = 'skills in force (load them again only if their full text was not restored to you right after the compaction):';
-
 export const compactionChecklistGuidance =
-  `End the summary with a numbered checklist (1., 2., 3., one short item per line) of what the continuing session does next, as the very LAST thing in it. Item 1 is '${compactionChecklistSkillsItem}' followed by the exact name of every skill in that block, never translated or shortened; if none was loaded, leave that item out. The other items are the next steps this summary already records, in order: invent no new steps. If you are also asked to write a closing section between two marker lines, the checklist is the last part of that section, right before its end marker.`;
+  'End the summary with a numbered checklist (1., 2., 3., one short item per line) of what the continuing session does next, as the very LAST thing in it. Item 1 is \'load these skills\' followed by the exact name of every skill that was loaded (invoked) in this session, never translated or shortened; if none was loaded, leave that item out. The other items are the next steps this summary already records, in order: invent no new steps. If you are also asked to write a closing section between two marker lines, the checklist is the last part of that section, right before its end marker.';
 
 /**
  * FIXED (English, locale-independent) sentinel markers the self-review section is wrapped in, and the one line
@@ -387,30 +356,25 @@ export const compactionGapsGuidance =
   `List the mistakes the agent made in this session, especially REPEATED ones, that a change to its standing instructions (rules, skills, CLAUDE.md / AGENTS.md) could prevent: for each, the mistake, then the concrete instruction change that would prevent it and where that change would go. Put that list in its own section wrapped EXACTLY between a line containing only ${compactionGapsStartMarker} and a line containing only ${compactionGapsEndMarker}, placed before the numbered checklist and before any closing section, and write it in the language the user used in this conversation. If there were no such mistakes, write only the single line ${compactionNoGapsLine} between those two marker lines. The continuing session must only PROPOSE these changes to the user and wait for approval: it must never write or change instructions on its own.`;
 
 /**
- * @description The resume guidance WITHOUT the self-review section: the loaded-skills block, the loaded skills and the
- * next-steps checklist. What a compaction asks for while `/compact_self_review` is off, and the part every variant of
- * {@link compactionResumeGuidance} carries — so the one text the `PreCompact` hook matches to skip a compaction that already
- * holds the guidance, whichever variant the bot sent.
+ * @description The resume guidance WITHOUT the self-review section: the loaded skills and the next-steps checklist.
+ * What a compaction asks for while `/compact_self_review` is off, and the part every variant of {@link compactionResumeGuidance}
+ * carries — so the one text the `PreCompact` hook matches to skip a compaction that already holds the guidance, whichever
+ * variant the bot sent.
  */
-export const compactionResumeGuidanceWithoutGaps = `${compactionSkillsBlockGuidance} ${compactionSkillsGuidance} ${compactionChecklistGuidance}`;
+export const compactionResumeGuidanceWithoutGaps = `${compactionSkillsGuidance} ${compactionChecklistGuidance}`;
 
 /**
  * @description What the continuing session needs from EVERY compaction summary — the
- * self-review section, the loaded-skills block, the loaded skills and the next-steps checklist — as the one text each path
- * carries: a bot-issued compaction in its instruction ({@link buildCompactionInstruction}),
+ * self-review section, the loaded skills and the next-steps checklist — as the one text each path carries:
+ * a bot-issued compaction in its instruction ({@link buildCompactionInstruction}),
  * and each backend's own overflow compaction through a bot-installed hook — Claude's
  * `PreCompact` hook (`claudeCompactHook.ts`, which also matches on this exact text to
  * skip a compaction that already carries it) and OpenCode's compaction plugin
  * (`openCodeCompactPlugin.ts`). The checklist stays LAST: each sentence says where it goes in the summary, so the order
- * of the sentences is free.
- *
- * A process started before the current text keeps its own hook (adopted across hot reloads, hooks are read at start), and
- * that hook skips a compaction only by finding the text IT carries. The self-review sentence was added ahead of the older
- * text for that reason; the skills restore had to reword the skills sentence and checklist item 1 (they no longer say
- * "load these skills" unconditionally), so such a process's hook no longer finds its text in a bot-issued instruction and
- * appends its own: until that process stops at its idle mark, a `/compact` there reads both texts. Both then lead to the
- * same thing — such a process has no restore hook, so the summary's conditional wording tells it to load the skills again,
- * as its old text does.
+ * of the sentences is free — and the self-review sentence goes AHEAD of the older text, which stays a contiguous
+ * substring: a process started before the section existed keeps its hook (adopted across hot reloads, hooks are read at
+ * start), and that hook skips a compaction by finding the OLD text (`${skills} ${checklist}`); written between the two
+ * sentences, the new one would break that match and the model would read the skills and the checklist twice.
  */
 export const compactionResumeGuidance = `${compactionGapsGuidance} ${compactionResumeGuidanceWithoutGaps}`;
 
@@ -487,8 +451,8 @@ export function formatTokenCount(count: number): string {
 export const compactionClosingStartMarker = '<<<WHERE_WE_STOPPED>>>';
 export const compactionClosingEndMarker = '<<<END_WHERE_WE_STOPPED>>>';
 
-/** What a summary line can be besides prose: the machine scaffolding of the three sections. */
-export type CompactionScaffoldingKind = 'closingStart' | 'closingEnd' | 'gapsStart' | 'gapsEnd' | 'noGaps' | 'skillsStart' | 'skillsEnd';
+/** What a summary line can be besides prose: the machine scaffolding of the two sections. */
+export type CompactionScaffoldingKind = 'closingStart' | 'closingEnd' | 'gapsStart' | 'gapsEnd' | 'noGaps';
 
 /** Every scaffolding token a summary may carry, with what it is: the single table every reader of a summary line goes by. */
 const compactionScaffoldingTokens: ReadonlyArray<{ kind: CompactionScaffoldingKind; token: string }> = [
@@ -497,8 +461,6 @@ const compactionScaffoldingTokens: ReadonlyArray<{ kind: CompactionScaffoldingKi
   { kind: 'gapsStart', token: compactionGapsStartMarker },
   { kind: 'gapsEnd', token: compactionGapsEndMarker },
   { kind: 'noGaps', token: compactionNoGapsLine },
-  { kind: 'skillsStart', token: compactionSkillsBlockStartMarker },
-  { kind: 'skillsEnd', token: compactionSkillsBlockEndMarker },
 ];
 
 /** A summary line read as scaffolding: which kind it opens with and the prose after it on the same line. */
@@ -543,86 +505,17 @@ export function checkCouldBecomeCompactionScaffoldingLine(fragment: string): boo
 export interface CompactionSummaryLineFilter {
   /** The lines to show for `line`: none (scaffolding), the line itself (prose), or the header and the line that opens a section. */
   pushLine(line: string): string[];
-  /**
-   * Whether the filter is inside the loaded-skills block: every line there is hidden, so a streamed line not finished yet
-   * must wait for its newline — shown in part, the rest of it would go out unfiltered.
-   */
-  checkIsInHiddenBlock(): boolean;
 }
 
 /**
- * @description The skill name a line of the loaded-skills block holds: the line trimmed, with one leading list bullet
- * (`- `, `* `) and surrounding backticks dropped (models add them despite the guidance); `''` for a blank line; `null` for
- * a line that is no name — one with blanks inside, one over `maxNameLength`, or one of the block's own markers.
- * Self-contained (it reads nothing outside its parameters) because the OpenCode plugin embeds its source.
- */
-export function readSkillsBlockLineName(line: string, startMarker: string, endMarker: string, maxNameLength: number): string | null {
-  const trimmed = line.trim();
-  if (trimmed === '') return '';
-  const unbulleted = trimmed.startsWith('- ') || trimmed.startsWith('* ') ? trimmed.slice(2).trim() : trimmed;
-  const name = unbulleted.length > 2 && unbulleted.startsWith('`') && unbulleted.endsWith('`') ? unbulleted.slice(1, -1) : unbulleted;
-  if (name === '' || name === startMarker || name === endMarker || name.length > maxNameLength || /\s/.test(name)) return null;
-  return name;
-}
-
-/**
- * @description The skill names of a summary's loaded-skills block — the LAST complete pair of `startMarker` / `endMarker`
- * lines — in the order written, de-duplicated; `null` when the summary has no complete block. A marker counts only ALONE on
- * its line, as the guidance asks: a summary that quotes the instruction in prose holds no block. A line that is no name
- * ({@link readSkillsBlockLineName}) is skipped. Self-contained (it calls only {@link readSkillsBlockLineName}) because the
- * OpenCode plugin embeds the source of both; {@link parseCompactionLoadedSkills} is the bot's own entry.
- */
-export function parseSkillsBlock(summaryText: string, startMarker: string, endMarker: string, maxNameLength: number): string[] | null {
-  const lines = summaryText.split(/\r?\n/);
-  let endIndex = -1;
-  for (let index = lines.length - 1; index >= 0; index -= 1) {
-    if (lines[index].trim() === endMarker) {
-      endIndex = index;
-      break;
-    }
-  }
-  if (endIndex < 0) return null;
-  let startIndex = -1;
-  for (let index = endIndex - 1; index >= 0; index -= 1) {
-    if (lines[index].trim() === startMarker) {
-      startIndex = index;
-      break;
-    }
-  }
-  if (startIndex < 0) return null;
-  const names: string[] = [];
-  for (let index = startIndex + 1; index < endIndex; index += 1) {
-    const name = readSkillsBlockLineName(lines[index], startMarker, endMarker, maxNameLength);
-    if (name !== null && name !== '' && !names.includes(name)) names.push(name);
-  }
-  return names;
-}
-
-/** @description The skills a compaction summary's block names ({@link parseSkillsBlock} with the summary's own markers). */
-export function parseCompactionLoadedSkills(summaryText: string): string[] | null {
-  return parseSkillsBlock(summaryText, compactionSkillsBlockStartMarker, compactionSkillsBlockEndMarker, compactionSkillsBlockMaxNameLength);
-}
-
-/** @description Whether a line can sit inside the loaded-skills block: a name or a blank ({@link readSkillsBlockLineName}). */
-function checkIsSkillsBlockLine(line: string): boolean {
-  return readSkillsBlockLineName(line, compactionSkillsBlockStartMarker, compactionSkillsBlockEndMarker, compactionSkillsBlockMaxNameLength) !== null;
-}
-
-/**
- * @description The line filter of a summary shown in the topic. Scaffolding goes: the markers of the three sections and the
+ * @description The line filter of a summary shown in the topic. Scaffolding goes: the markers of both sections and the
  * «none» line. The self-review section gets `gapsHeader` where its first line is — it reads as the proposals it is, not as
  * more next steps beside the numbered checklist right after it — and a section with no first line (the none line, only
  * blanks) leaves no header, no marker and no trace. Prose on a marker's own line is kept.
- *
- * The loaded-skills block goes WHOLE — its names too, which are for the machine (the checklist names the skills for the
- * person) — unlike the other two sections, whose content is genuine prose. A line that is no name ends a block whose end
- * marker never came, so a model that forgets the marker hides nothing but the names.
  */
 export function createCompactionSummaryLineFilter(gapsHeader: string): CompactionSummaryLineFilter {
   /** The start marker was read and no line of the section has come yet: the header waits for one. */
   let isSectionOpening = false;
-  /** Inside the loaded-skills block: its lines are hidden. */
-  let isInSkillsBlock = false;
   const showProse = (line: string): string[] => {
     if (!isSectionOpening) return [line];
     if (line.trim() === '') return [];
@@ -632,35 +525,19 @@ export function createCompactionSummaryLineFilter(gapsHeader: string): Compactio
   return {
     pushLine(line: string): string[] {
       const { kind, rest } = parseCompactionSummaryLine(line);
-      if (isInSkillsBlock) {
-        if (kind === 'skillsEnd') {
-          isInSkillsBlock = false;
-          return rest.trim() === '' ? [] : showProse(rest);
-        }
-        if (kind === null && checkIsSkillsBlockLine(line)) return [];
-        isInSkillsBlock = false;
-      }
-      // What follows the start marker on its own line is the block's content too.
-      if (kind === 'skillsStart') {
-        isInSkillsBlock = true;
-        return [];
-      }
       if (kind === null) return showProse(line);
       if (kind === 'gapsStart') isSectionOpening = true;
       // The end of a section that never had a line, and the none line, close it without a header.
       if (kind === 'gapsEnd' || kind === 'noGaps') isSectionOpening = false;
       return rest.trim() === '' ? [] : showProse(rest);
     },
-    checkIsInHiddenBlock(): boolean {
-      return isInSkillsBlock;
-    },
   };
 }
 
 /**
  * @description The full compaction summary as the bot posts it to the topic: the scaffolding lines removed ({@link
- * createCompactionSummaryLineFilter}), every line of prose kept — including the closing and self-review sections the markers
- * wrap, which are genuine content — the loaded-skills block removed whole, and the self-review section under `gapsHeader`.
+ * createCompactionSummaryLineFilter}), every line of prose kept — including the sections the markers wrap, which are
+ * genuine content — and the self-review section under `gapsHeader`.
  *
  * A marker sitting ALONE on its line takes the whole line with it, so the summary is not left with a blank gap where it
  * stood; a marker the model happened to put AHEAD of real prose on one line loses only the marker, never the prose.

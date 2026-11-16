@@ -31,7 +31,7 @@ import { prepareMcpFlags, cleanupMcpTempFiles } from '../mcpConfig';
 import { prepareClaudeCompactHookFlags } from '../utils/claudeCompactHook';
 import type { ClaudeConfigDirApplyResult, ClaudeConfigDirReader, ClaudeRateLimitSink, ClaudeTurnCostSink } from './claudeConfigDir';
 import { getClaudePlatformEnvironment, getClaudePlatformFlags } from './claudePlatformFlags';
-import { getClaudeAgentPluginFlags, getUnloadedAgentSkillsDir } from '../utils/agentPlugin';
+import { getClaudeAgentPluginFlags } from '../utils/agentPlugin';
 import { checkIsBotSkillsEnabled } from '../utils/botSkills';
 import { resolveDataDir } from '../state';
 import { readLatestCompactSummaryFromTranscript } from '../utils/claudeCompactSummary';
@@ -596,7 +596,6 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
       throw new Error(`No conversation to resume for session ${sessionId}: its transcript holds none`);
     }
     const mcpFlags = await prepareMcpFlags({ key, dataDir: resolveDataDir() });
-    const pluginFlags = await getClaudeAgentPluginFlags(this.claudePath, checkIsBotSkillsEnabled(key));
     const args: string[] = [
       '-p',
       // Followed by an option on purpose: `--disallowedTools` takes several values.
@@ -606,7 +605,7 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
       '--include-partial-messages',
       '--verbose',
       // Followed by an option on purpose: `--plugin-dir` takes several values on Claude Code 2.0.25–2.1.74.
-      ...pluginFlags,
+      ...(await getClaudeAgentPluginFlags(this.claudePath, checkIsBotSkillsEnabled(key))),
       '--replay-user-messages',
       // Bypass ALL permission checks (tmux-backend parity) so the operator's own
       // agent never stalls on a permission prompt. `--dangerously-skip-permissions`
@@ -626,10 +625,9 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
     if (opts.model) args.push(claudeModelFlag, opts.model);
     if (opts.effort) args.push(claudeEffortFlag, opts.effort);
     args.push(...mcpFlags);
-    // Overflow-triggered compaction gets the bot's summary guidance (see the module), and every compaction is followed by
-    // the skills restore; a profile that holds a pasted API key gets them in its own settings file, beside the
-    // `apiKeyHelper` that reads the key.
-    args.push(...prepareClaudeCompactHookFlags(resolveDataDir(), opts.configDir, { skillsRestore: { unavailableSkillsDir: getUnloadedAgentSkillsDir(pluginFlags) } }));
+    // Overflow-triggered compaction gets the bot's summary guidance (see the module); a profile that holds a
+    // pasted API key gets it in its own settings file, beside the `apiKeyHelper` that reads the key.
+    args.push(...prepareClaudeCompactHookFlags(resolveDataDir(), opts.configDir));
 
     // Subscription billing: the wrapper runs `env -u ANTHROPIC_API_KEY` (a set
     // key would meter the API); a tracker conversation's wrapper starts claude
@@ -1216,18 +1214,6 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
   checkIsActive(key: SessionKey): boolean {
     const session = this.sessions.get(keyToString(key));
     return session?.isActive === true;
-  }
-
-  flushPendingOutput(key: SessionKey): void {
-    const session = this.sessions.get(keyToString(key));
-    if (!session?.isActive) return;
-    // The text the process wrote an instant before its tool call may not have been polled yet (the poll lags by its backoff):
-    // read it first, or the batch flushed below would miss it and the answer would still overtake it. Not from inside the
-    // handling of a chunk (a question event asks for it): that read is going on right now, and a second one would handle the
-    // lines behind the chunk ahead of the rest of it. Nor from an adopted tail the boot still holds: its replay is read only
-    // from the boot's release on (`releaseAdoptedTails`), and what it holds lands after the answer — nothing to warn of.
-    if (!session.applyingChunk && !session.isTailHeld) this.refreshWorkingState(key);
-    this.flushAnswer(session, false);
   }
 
   checkIsBusy(key: SessionKey): boolean {

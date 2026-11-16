@@ -165,11 +165,8 @@ describe('getClaudePlatformFlags (R1, R7)', () => {
         // The skills the bot gives its agents load on every launch path, a Jira one included — and, like the platform
         // flags, right before another option: `--plugin-dir` takes several values on Claude Code 2.0.25–2.1.74 (`<paths...>`),
         // so a free-text prompt after it would be read as a second plugin folder.
-        // The flags are spread inline (`...(await getClaudeAgentPluginFlags(…))`) or from a variable read from it right before the
-        // argv (the json-stream spawn keeps them: the restore hook needs to know whether the launch loads the bot's skills).
         const argvLines = lines.slice(Math.max(0, index - argvLookbackLines), index + 5);
-        const pluginVariable = /const (\w+) = await getClaudeAgentPluginFlags\(/.exec(argvStart)?.[1];
-        const pluginLine = argvLines.findIndex((line) => line.includes('...(await getClaudeAgentPluginFlags(') || (pluginVariable !== undefined && line.trim() === `...${pluginVariable},`));
+        const pluginLine = argvLines.findIndex((line) => line.includes('getClaudeAgentPluginFlags('));
         assert.ok(pluginLine >= 0, `${file}:${index + 1} launches without the bot's skills`);
         const afterPlugin = argvLines.slice(pluginLine + 1).find((next) => !next.trim().startsWith('//'));
         assert.match(afterPlugin ?? '', /^\s*('--|\.\.\.claudePermissionArgs)/, `${file}:${index + 1}: an option must follow the plugin flags`);

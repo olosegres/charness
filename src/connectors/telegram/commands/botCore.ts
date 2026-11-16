@@ -10,7 +10,6 @@ import type { CommandRegistrationOptions } from '../../../platform/commandRouter
 import type { SenderRole } from '../../../accessControl';
 import type { SessionKey } from '../../../sessionKey';
 import type { StateStore } from '../../../state';
-import type { ThreadSendOutcome } from '../sendOutcome';
 
 /** The Telegram context a command handler receives — a text message, always. */
 export type CommandContext = NarrowedContext<Context, Update.MessageUpdate<Message.TextMessage>>;
@@ -46,13 +45,6 @@ export type ThreadMessageEdit = 'edited' | 'gone' | 'failed';
  */
 export type ThreadMessageDeletion = 'deleted' | 'gone' | 'stayed';
 
-/** The options of a send into the topic: outside the pacer, a credential to keep out of the trace, the plain twin of a markup text. */
-export interface ReplyToThreadPortOptions {
-  unpaced?: boolean;
-  isSecret?: boolean;
-  plainFallbackText?: string;
-}
-
 export interface BotCore {
   bot: Telegraf;
   command: RegisterCommand;
@@ -65,12 +57,7 @@ export interface BotCore {
    * Send into the topic (paced, tracked for `/clear_messages`); the sent message id, or `null` when the send failed.
    * `isSecret`: the text is a credential, the output trace records its length and nothing else.
    */
-  replyToThread: (key: SessionKey, text: string, extra?: object, options?: ReplyToThreadPortOptions) => Promise<number | null>;
-  /**
-   * The same send, telling a send whose outcome is unknown (the Bot API did not answer in time: the message may be in the topic)
-   * from one that failed — for a caller that would otherwise post the same message again later.
-   */
-  replyToThreadDetailed: (key: SessionKey, text: string, extra?: object, options?: ReplyToThreadPortOptions) => Promise<ThreadSendOutcome>;
+  replyToThread: (key: SessionKey, text: string, extra?: object, options?: { unpaced?: boolean; isSecret?: boolean; plainFallbackText?: string }) => Promise<number | null>;
   /** Edit a message of the topic in place; `false` when the edit failed. */
   editThreadMessage: (key: SessionKey, messageId: number, text: string, extra?: object) => Promise<boolean>;
   /** The same edit, telling a message that is gone from one that failed to change — for a caller that must not retry a message nobody can edit any more. */

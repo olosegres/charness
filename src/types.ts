@@ -1263,16 +1263,6 @@ export interface AgentAdapter extends EventEmitter {
   // — Output mode —
 
   /**
-   * @description Emit NOW the answer text the adapter has but has not yet sent on: what the backend wrote since the last
-   * poll, and what waits in the adapter's own short batch window (a few hundred ms after the last delta) — as the `output`
-   * event the window's end would make, without ending the turn. The bot calls it before it posts something straight to the
-   * topic (an `answer_request` answer), so the text the agent streamed before that call reaches the bot's output queue — and
-   * is landed — ahead of it. A no-op without text pending or a live session. Not implemented by backends that batch nothing
-   * (the deprecated tmux scrape).
-   */
-  flushPendingOutput?(key: SessionKey): void;
-
-  /**
    * @description When true, adapter emits incremental text deltas (not accumulated content).
    * After a status/thinking break, the bot will force a new message to avoid
    * overwriting previous substantial content with new delta text.

@@ -13,7 +13,7 @@
  * degraded one.
  */
 
-import { mock, test } from 'node:test';
+import { test } from 'node:test';
 import * as assert from 'node:assert/strict';
 import type { InlineKeyboardMarkup } from 'telegraf/typings/core/types/typegram';
 import type { SessionKey } from '../sessionKey';
@@ -23,7 +23,6 @@ import type { OutboundHints } from '../platform/outbound';
 import type { SendFilesToThreadOptions, SendFilesToThreadResult } from '../utils/fileSendService';
 import { MAX_MESSAGE_LEN } from '../connectors/telegram/messageSplit';
 import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
-import { streamedOutputLandingLimitMs } from '../utils/streamedOutputLanding';
 import {
   buildOptionsKeyboard,
   createTelegramConnectorOutbound,
@@ -142,28 +141,6 @@ test('prominent content finalizes in-flight output FIRST, then sends, then pins'
   assert.equal(recorder.standalone[0].text, 'pick one');
   assert.deepEqual(recorder.delivered, []);
   assert.deepEqual(recorder.pinned, [501]);
-});
-
-test('a landing of in-flight output that never ends is given up on after the limit: the question is posted and pinned anyway', async () => {
-  mock.timers.enable({ apis: ['setTimeout'] });
-  const warned = mock.method(console, 'warn', () => {});
-  try {
-    const { outbound, recorder } = makeOutbound({}, { finalizeInFlight: () => new Promise<void>(() => {}) });
-
-    const delivering = outbound.deliver(key, { text: 'pick one', keepVisible: true });
-    await new Promise<void>((resolve) => setImmediate(resolve));
-    assert.deepEqual(recorder.standalone, [], 'the question waits while the text may still land above it');
-
-    mock.timers.tick(streamedOutputLandingLimitMs);
-    await delivering;
-
-    assert.equal(recorder.standalone.length, 1);
-    assert.deepEqual(recorder.pinned, [501]);
-    assert.equal(warned.mock.callCount(), 1, 'the give-up is reported');
-  } finally {
-    warned.mock.restore();
-    mock.timers.reset();
-  }
 });
 
 test('content with options is standalone too, and carries the keyboard', async () => {
