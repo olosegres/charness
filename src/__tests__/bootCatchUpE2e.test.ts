@@ -11,12 +11,13 @@
  *   → the agent of the first topic asks a question (pinned) and waits for the operator
  *   → the bot stops; while it is down three runs are missed: a heartbeat (a prompt job) and a check that fails (it wakes the
  *     agent) in the waiting topic, a heartbeat in the other topic whose agent is idle — and the bot starts again
- *   → polling starts (the instance's first poll reaches the fake Bot API) although two catch-ups are held by the waiting agent
+ *   → polling starts (the instance's first poll reaches the fake Bot API) although the waiting topic's catch-ups are held by its agent
  *   → the idle topic's catch-up is NOT held by them: announced, its prompt delivered, its run booked — while the question is
- *     still open and nothing of the waiting topic's runs has reached its agent
+ *     still open and nothing of the waiting topic's runs has reached its agent. The waiting topic's own catch-ups go one after
+ *     another: the check's has not even begun while the heartbeat's waits for the agent
  *   → the operator can be heard: a command is answered and a typed option number answers the question
- *   → the two held catch-ups then reach the agent, once each, and every missed run is booked once: one begin and one end record
- *     per job in the run ledger, the next run ahead.
+ *   → the two held catch-ups then reach the agent in that order, once each — the check's begins only after the heartbeat's ended —
+ *     and every missed run is booked once: one begin and one end record per job in the run ledger, the next run ahead.
  *
  * Nothing leaves the machine: the Bot API is on loopback and the agent is a fake. Everything the test starts is stopped in
  * `after`.
@@ -72,11 +73,17 @@ const replyTimeoutMs = 20 * 1000;
 const heldCatchUpTimeoutMs = 60 * 1000;
 const agentTimeoutMs = 60 * 1000;
 const msPerHour = 60 * 60 * 1000;
+const msPerDay = 24 * msPerHour;
 /** How long ago the runs were due: past the catch-up tolerance, so each reads as MISSED at the boot. */
 const missedForMs = 2 * msPerHour;
 
-/** A daily job: once its catch-up is booked, its next run is hours away, so no on-time run can fire inside the flow. */
-const dailySpec: ScheduleSpec = { kind: 'cron', cronExpr: '0 3 * * *' };
+/**
+ * A yearly job on a date half a year ahead of the test's own clock: once its catch-up is booked, its next run is months away
+ * in whatever zone the instance runs, so no on-time run can come due inside the flow.
+ */
+const daysUntilBookedRun = 180;
+const farOffDueDate = new Date(Date.now() + daysUntilBookedRun * msPerDay);
+const farOffSpec: ScheduleSpec = { kind: 'cron', cronExpr: `0 0 ${farOffDueDate.getDate()} ${farOffDueDate.getMonth() + 1} *` };
 
 const waitingHeartbeatName = 'heartbeat-waiting';
 const waitingHeartbeatPrompt = 'HB-WAITING-PROMPT';
@@ -124,10 +131,15 @@ function readLedgerRuns(jobId: string): ScheduleRunRecord[] {
   return readJsonLines<ScheduleRunRecord>(path.join(getLayout().dataDir, 'scheduler-runs.jsonl')).filter((run) => run.jobId === jobId);
 }
 
-/** A missed catch-up's records: its begin record (no `deliveredAt`) and its end record. */
-function countCatchUpRecords(jobId: string): { begun: number; ended: number } {
+/** A missed catch-up's records: its begin records (no `deliveredAt`) and its end records. */
+function getCatchUpRecords(jobId: string): { begun: ScheduleRunRecord[]; ended: ScheduleRunRecord[] } {
   const catchUps = readLedgerRuns(jobId).filter((run) => run.kind === 'catch-up');
-  return { begun: catchUps.filter((run) => run.deliveredAt === undefined).length, ended: catchUps.filter((run) => run.deliveredAt !== undefined).length };
+  return { begun: catchUps.filter((run) => run.deliveredAt === undefined), ended: catchUps.filter((run) => run.deliveredAt !== undefined) };
+}
+
+function countCatchUpRecords(jobId: string): { begun: number; ended: number } {
+  const { begun, ended } = getCatchUpRecords(jobId);
+  return { begun: begun.length, ended: ended.length };
 }
 
 function readPersistedJob(jobId: string): ScheduleRecord | undefined {
@@ -140,7 +152,7 @@ function buildMissedJob(args: { threadId: number; name: string; prompt: string; 
   const record = createScheduleRecord({
     threadKey: makeTelegramKey(group.id, args.threadId),
     name: args.name,
-    spec: dailySpec,
+    spec: farOffSpec,
     prompt: args.prompt,
     createdBy: 'agent',
     nowMs: Date.now() - missedForMs,
@@ -252,8 +264,11 @@ describe('A missed scheduled run never holds up the boot, end to end: built char
       const job = readPersistedJob(missedJobIds[name]);
       assert.ok(job, `${name} is stored`);
       assert.ok((job.nextRunAt ?? Infinity) < restartedAtMs, `${name} is not booked while its delivery waits`);
-      assert.deepEqual(countCatchUpRecords(missedJobIds[name]), { begun: 1, ended: 0 }, `${name} is under way: one catch-up begun, none ended`);
     }
+    // The waiting topic's catch-ups go one after another: the heartbeat's is under way, the check's has not begun — its command
+    // has not run and its agent was not woken, so the agent is never handed two runs together.
+    assert.deepEqual(countCatchUpRecords(missedJobIds[waitingHeartbeatName]), { begun: 1, ended: 0 }, 'the heartbeat is under way: one catch-up begun, none ended');
+    assert.deepEqual(countCatchUpRecords(missedJobIds[waitingWatchName]), { begun: 0, ended: 0 }, 'the check waits behind the heartbeat of its topic: not begun');
   });
 
   it('the operator is heard while those catch-ups wait: a command is answered, a typed option number answers the question', async () => {
@@ -271,9 +286,10 @@ describe('A missed scheduled run never holds up the boot, end to end: built char
 
     for (const name of [waitingHeartbeatName, waitingWatchName, idleHeartbeatName]) {
       const jobId = missedJobIds[name];
-      await getCharness().waitFor(`${name} to be booked`, heldCatchUpTimeoutMs, () => {
+      // The ledger's end record is written a moment AFTER the booking reaches `state.json`: wait for both before reading either.
+      await getCharness().waitFor(`${name} to be booked and its end record written`, heldCatchUpTimeoutMs, () => {
         const job = readPersistedJob(jobId);
-        return job?.lastRunStatus === 'delivered' && (job.nextRunAt ?? 0) > Date.now();
+        return job?.lastRunStatus === 'delivered' && (job.nextRunAt ?? 0) > Date.now() && countCatchUpRecords(jobId).ended > 0;
       });
       assert.deepEqual(countCatchUpRecords(jobId), { begun: 1, ended: 1 }, `${name}: one catch-up for the one missed run`);
       assert.equal(readLedgerRuns(jobId).some((run) => run.kind === 'on-time'), false, `${name}: no other run fired`);
@@ -281,5 +297,12 @@ describe('A missed scheduled run never holds up the boot, end to end: built char
     for (const prompt of [waitingHeartbeatPrompt, waitingWatchPrompt, idleHeartbeatPrompt]) {
       assert.equal(getAgentPrompts(prompt).length, 1, `${prompt} reached its agent exactly once`);
     }
+
+    // One after another, in the order they were stored: the check's catch-up began only once the heartbeat's was over.
+    const [heartbeatEnd] = getCatchUpRecords(missedJobIds[waitingHeartbeatName]).ended;
+    const [watchBegin] = getCatchUpRecords(missedJobIds[waitingWatchName]).begun;
+    assert.ok(heartbeatEnd?.deliveredAt !== undefined && watchBegin !== undefined, 'both catch-ups are in the ledger');
+    assert.ok(watchBegin.firedAt >= heartbeatEnd.deliveredAt, 'the check\'s catch-up began after the heartbeat\'s ended');
+    assert.ok(getAgentPrompts(waitingWatchPrompt)[0].readAt > getAgentPrompts(waitingHeartbeatPrompt)[0].readAt, 'and its wake reached the agent after the heartbeat');
   });
 });

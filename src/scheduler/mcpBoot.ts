@@ -99,8 +99,8 @@ export interface SessionBootPhaseSteps {
   releaseAdoptedSessions: () => void;
   onSessionsRestored: () => void;
   healActiveSessions: () => void;
-  /** Arms every job and starts the catch-ups; resolves without waiting for any delivery. */
-  rearmSchedules: () => Promise<void>;
+  /** Arms every job and starts the catch-ups. `void` on purpose: the boot never waits for a delivery. */
+  rearmSchedules: () => void;
 }
 
 /**
@@ -123,6 +123,11 @@ export async function runSessionBootPhase(steps: SessionBootPhaseSteps): Promise
       console.warn('[scheduler] MCP heal of active sessions failed:', e instanceof Error ? e.message : e);
     }
   }
-  await steps.rearmSchedules();
+  // Best-effort like the heal: a record the replay chokes on must not keep the bot from polling.
+  try {
+    steps.rearmSchedules();
+  } catch (e) {
+    console.error('[scheduler] rearmAll failed:', e);
+  }
   return isBotMcpStarted;
 }

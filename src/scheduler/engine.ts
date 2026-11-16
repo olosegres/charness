@@ -75,11 +75,14 @@ export interface SchedulerEngine {
   /** Cancel a job's timer if one is armed. Idempotent. */
   disarmJob(jobId: string): void;
   /**
-   * Boot replay: arm every persisted job and start one catch-up per missed run.
-   * Resolves once every job is armed or its catch-up is under way — it never
-   * waits for a catch-up's delivery (see `whenIdle` for that).
+   * Boot replay: arm every persisted job and start one catch-up per missed run
+   * (those of one topic one after another, those of different topics side by
+   * side). Returns at once — `void` on purpose: the boot must never wait for a
+   * catch-up's delivery, which waits for its agent, and an agent waiting for the
+   * operator's answer is answered only once the bot polls (`whenIdle` is the
+   * way to wait for the catch-ups).
    */
-  rearmAll(): Promise<void>;
+  rearmAll(): void;
   /**
    * Resolve once every fire chain currently in flight (delivery + bookkeeping +
    * flush + ledger end record) has settled. A timer-driven fire and a boot
@@ -107,12 +110,17 @@ export function createSchedulerEngine(deps: SchedulerEngineDeps): SchedulerEngin
    */
   const activeChains = new Set<Promise<void>>();
 
-  /** Run an `onTimer` chain, tracking it so {@link whenIdle} can await it. */
-  function trackChain(jobId: string): void {
-    const chain = onTimer(jobId).finally(() => {
+  /**
+   * Run an `onTimer` chain, tracking it so {@link whenIdle} can await it.
+   * `startAfter` queues it behind an earlier chain; `onTimer` never rejects, so
+   * a queued chain always starts. Resolves when the chain has settled.
+   */
+  function trackChain(jobId: string, startAfter?: Promise<void>): Promise<void> {
+    const chain = (startAfter === undefined ? onTimer(jobId) : startAfter.then(() => onTimer(jobId))).finally(() => {
       activeChains.delete(chain);
     });
     activeChains.add(chain);
+    return chain;
   }
 
   async function whenIdle(): Promise<void> {
@@ -376,26 +384,31 @@ export function createSchedulerEngine(deps: SchedulerEngineDeps): SchedulerEngin
    *   - on-time / future → just arm.
    * A catch-up is a due timer that fires at once: it goes through the same
    * tracked chain (`trackChain`, so the no-overlap guard, the fresh-record
-   * re-read and the error containment apply) and is NEVER awaited here. The
+   * re-read and the error containment apply) and is NEVER awaited here — the
+   * return type is `void` so that no edit can bring the wait back unnoticed. The
    * boot waits for no delivery: a delivery waits for its agent to go idle, and
    * an agent mid-turn can be waiting for the operator's answer — which cannot
    * arrive before the bot polls, and the polling starts after the boot.
    * Awaiting it deadlocked the boot, and a stuck catch-up also held every job
-   * stored after it unarmed. The replay resolves once every job is armed or
-   * its catch-up is under way; {@link whenIdle} awaits the catch-ups.
-   * Catch-ups of different jobs run side by side, as simultaneous timers do;
-   * their announcements still go out one by one through the process-wide send
-   * gate.
+   * stored after it unarmed. {@link whenIdle} awaits the catch-ups.
+   * The catch-ups of ONE topic (one `threadKey`) run one after another, as the
+   * replay always did: every missed run of a boot is due at the same instant, and
+   * two prompts must not reach one agent together — the second one waits for the
+   * first one's delivery, then sees the agent busy with its turn and waits for
+   * that. Different topics run side by side, so a stuck one holds up only its
+   * own topic; their announcements still go out one by one through the
+   * process-wide send gate.
    */
-  async function rearmAll(): Promise<void> {
-    const all = store.getSchedules();
-    for (const record of Object.values(all)) {
+  function rearmAll(): void {
+    /** threadKey → the catch-up chain queued last for it: the next catch-up of that topic starts after it. */
+    const lastCatchUpByThread = new Map<string, Promise<void>>();
+    for (const record of Object.values(store.getSchedules())) {
       if (record.isPaused) continue;
       const decision = getCatchUpDecision({ nextRunAt: record.nextRunAt, nowMs: now() });
       if (decision === 'fire-missed') {
         // fire() reads the same catch-up decision and handles re-arming via
         // bookkeeping; nothing else to arm here.
-        trackChain(record.id);
+        lastCatchUpByThread.set(record.threadKey, trackChain(record.id, lastCatchUpByThread.get(record.threadKey)));
         continue;
       }
       armJob(record);

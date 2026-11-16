@@ -18,7 +18,7 @@
 
 /** Test case: N/A — Charness has no Jira tracker. */
 
-import { afterEach, beforeEach, describe, it } from 'node:test';
+import { afterEach, beforeEach, describe, it, mock } from 'node:test';
 import assert from 'node:assert/strict';
 import * as fs from 'fs';
 import * as os from 'os';
@@ -142,7 +142,7 @@ describe('runSessionBootPhase', () => {
       releaseAdoptedSessions: () => {},
       onSessionsRestored: () => {},
       healActiveSessions: () => {},
-      rearmSchedules: async () => {},
+      rearmSchedules: () => {},
     });
 
     assert.ok(spawnedEntry, 'the re-attached session was spawned without the bot MCP server');
@@ -171,7 +171,7 @@ describe('runSessionBootPhase', () => {
       releaseAdoptedSessions: () => { order.push('releaseAdoptedSessions'); },
       onSessionsRestored: () => { order.push('onSessionsRestored'); },
       healActiveSessions: () => { order.push('healActiveSessions'); },
-      rearmSchedules: async () => { order.push('rearmSchedules'); },
+      rearmSchedules: () => { order.push('rearmSchedules'); },
     });
     assert.equal(isStarted, true);
     assert.deepEqual(order, [
@@ -194,7 +194,7 @@ describe('runSessionBootPhase', () => {
       releaseAdoptedSessions: () => { order.push('releaseAdoptedSessions'); },
       onSessionsRestored: () => { order.push('onSessionsRestored'); },
       healActiveSessions: () => { order.push('healActiveSessions'); },
-      rearmSchedules: async () => { order.push('rearmSchedules'); },
+      rearmSchedules: () => { order.push('rearmSchedules'); },
     });
     assert.equal(isStarted, false);
     assert.deepEqual(order, ['startBotMcp', 'reattachSessions', 'restoreAfterReattach', 'releaseAdoptedSessions', 'onSessionsRestored', 'rearmSchedules']);
@@ -209,7 +209,7 @@ describe('runSessionBootPhase', () => {
       releaseAdoptedSessions: () => { order.push('releaseAdoptedSessions'); },
       onSessionsRestored: () => { order.push('onSessionsRestored'); },
       healActiveSessions: () => {},
-      rearmSchedules: async () => {},
+      rearmSchedules: () => {},
     }), /state unreadable/);
     assert.deepEqual(order, ['releaseAdoptedSessions']);
   });
@@ -223,10 +223,32 @@ describe('runSessionBootPhase', () => {
       releaseAdoptedSessions: () => {},
       onSessionsRestored: () => {},
       healActiveSessions: () => { throw new Error('bindings unreadable'); },
-      rearmSchedules: async () => { order.push('rearmSchedules'); },
+      rearmSchedules: () => { order.push('rearmSchedules'); },
     });
     assert.equal(isStarted, true);
     assert.deepEqual(order, ['rearmSchedules']);
+  });
+
+  it('a schedule replay that throws does not abort the boot: the phase still resolves, and the failure is logged', async () => {
+    const logged: string[] = [];
+    const errorMock = mock.method(console, 'error', (...args: Parameters<typeof console.error>) => {
+      logged.push(args.map((arg) => (arg instanceof Error ? arg.message : String(arg))).join(' '));
+    });
+    try {
+      const isStarted = await runSessionBootPhase({
+        startBotMcp: async () => true,
+        reattachSessions: async () => {},
+        restoreAfterReattach: () => {},
+        releaseAdoptedSessions: () => {},
+        onSessionsRestored: () => {},
+        healActiveSessions: () => {},
+        rearmSchedules: () => { throw new Error('a schedule record is unreadable'); },
+      });
+      assert.equal(isStarted, true, 'the boot went on to its end, where the polling starts');
+    } finally {
+      errorMock.mock.restore();
+    }
+    assert.ok(logged.some((line) => line.includes('rearmAll failed') && line.includes('a schedule record is unreadable')), `the failure is in the log: ${logged.join(' | ')}`);
   });
 });
 

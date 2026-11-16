@@ -150,14 +150,6 @@ async function yieldMacrotasks(): Promise<void> {
   }
 }
 
-/**
- * Whether a boot replay RETURNED while a delivery of one of its catch-ups is rigged to hang. Raced against a few macrotask
- * rounds so a replay that waits for the delivery FAILS the test instead of hanging it (and everything after it).
- */
-async function checkReplayReturnsWhileDeliveryHangs(replay: Promise<void>): Promise<boolean> {
-  return Promise.race([replay.then(() => true), yieldMacrotasks().then(() => false)]);
-}
-
 describe('schedulerEngine', () => {
   let dataDir: string;
   let fakeHome: string;
@@ -246,7 +238,7 @@ describe('schedulerEngine', () => {
       now: clock.now, setTimeoutFn: clock.setTimeoutFn, clearTimeoutFn: clock.clearTimeoutFn,
     });
 
-    await engine.rearmAll();
+    engine.rearmAll();
     await engine.whenIdle();
 
     assert.equal(caps.deliverCalls.length, 1, 'catch-up fired once');
@@ -280,10 +272,11 @@ describe('schedulerEngine', () => {
     });
 
     try {
-      const isReturned = await checkReplayReturnsWhileDeliveryHangs(engine.rearmAll());
-      assert.equal(isReturned, true, 'the boot replay returned while the catch-up delivery was still pending');
+      // `rearmAll` returns `void`, at once: the boot has no delivery to wait for, and cannot be made to wait for one.
+      engine.rearmAll();
+      await yieldMacrotasks();
 
-      assert.equal(caps.deliverCalls.length, 1, 'the catch-up did start delivering');
+      assert.equal(caps.deliverCalls.length, 1, 'the catch-up did start delivering, and the boot went on');
       assert.equal(caps.deliverCalls[0].fireContext.kind, 'catch-up');
       assert.equal(caps.deliverCalls[0].fireContext.missedAtMs, missedDueAt, 'and it still carries the missed instant');
       assert.equal(
@@ -309,7 +302,7 @@ describe('schedulerEngine', () => {
     );
   });
 
-  it('boot rearmAll: a catch-up that cannot finish delays no other job — the other missed catch-ups run, the on-time jobs are armed', async () => {
+  it('boot rearmAll: a catch-up that cannot finish delays no other TOPIC — its own topic waits behind it, the other missed catch-ups run, the on-time jobs are armed', async () => {
     const store = await newStore();
     const createdAtMs = new Date(2026, 5, 6, 9, 0, 0).getTime();
     // Stored in this order, and the first one is the one that hangs.
@@ -319,7 +312,10 @@ describe('schedulerEngine', () => {
     const otherMissed = await createScheduleForThread(store, {
       threadKey: threadB, name: 'other-missed', spec: everyFiveMinutes, prompt: 'go', createdBy: 'user', nowMs: createdAtMs,
     });
-    assert.ok(stuck.ok && otherMissed.ok);
+    const behindStuck = await createScheduleForThread(store, {
+      threadKey: threadA, name: 'behind-stuck', spec: everyFiveMinutes, prompt: 'go', createdBy: 'user', nowMs: createdAtMs,
+    });
+    assert.ok(stuck.ok && otherMissed.ok && behindStuck.ok);
     const missedDueAt = stuck.record.nextRunAt;
     assert.ok(missedDueAt !== null);
     const bootNow = missedDueAt + 60 * 60 * 1000;
@@ -338,28 +334,110 @@ describe('schedulerEngine', () => {
     });
 
     try {
-      const isReturned = await checkReplayReturnsWhileDeliveryHangs(engine.rearmAll());
-      assert.equal(isReturned, true, 'the boot replay returned while the first catch-up delivery was still pending');
+      engine.rearmAll();
       await yieldMacrotasks();
 
       assert.deepEqual(
         caps.deliverCalls.map((call) => call.job.id),
         [stuck.record.id, otherMissed.record.id],
-        'the second job\'s catch-up was delivered while the first one is still waiting',
+        'the other topic\'s catch-up was delivered while the first one is still waiting; the stuck topic\'s second job waits behind it',
       );
       assert.ok(caps.deliverCalls.every((call) => call.fireContext.kind === 'catch-up'));
       const otherAfter = store.getSchedules()[otherMissed.record.id];
       assert.equal(otherAfter.lastRunStatus, 'delivered', 'and it is booked');
       assert.ok(otherAfter.nextRunAt !== null && otherAfter.nextRunAt > bootNow, 'with its next run ahead');
       assert.equal(store.getSchedules()[stuck.record.id].nextRunAt, missedDueAt, 'the waiting one is not booked yet');
-      // The finished catch-up re-armed its job and the on-time job was armed: one timer each. The waiting job has none yet.
-      assert.equal(clock.pendingCount, 2, 'every job but the waiting one is armed');
+      // The finished catch-up re-armed its job and the on-time job was armed: one timer each. The two jobs of the stuck topic have none yet.
+      assert.equal(clock.pendingCount, 2, 'every job of the other topic is armed');
     } finally {
       caps.resolveHanging();
     }
     await engine.whenIdle();
-    assert.equal(clock.pendingCount, 3, 'the waiting job is armed again once its delivery ends');
-    assert.equal(caps.deliverCalls.length, 2, 'one catch-up per missed job, no more');
+    assert.deepEqual(
+      caps.deliverCalls.map((call) => call.job.id),
+      [stuck.record.id, otherMissed.record.id, behindStuck.record.id],
+      'the job behind the stuck one is delivered once the stuck one ended: one catch-up per missed job, no more',
+    );
+    assert.equal(clock.pendingCount, 4, 'every job is armed again once the deliveries ended');
+  });
+
+  it('boot rearmAll: the catch-ups of ONE topic run one after another — the second delivery starts only after the first one ended and was booked', async () => {
+    const store = await newStore();
+    const createdAtMs = new Date(2026, 5, 6, 9, 0, 0).getTime();
+    const first = await createScheduleForThread(store, {
+      threadKey: threadA, name: 'first', spec: everyFiveMinutes, prompt: 'go', createdBy: 'user', nowMs: createdAtMs,
+    });
+    const second = await createScheduleForThread(store, {
+      threadKey: threadA, name: 'second', spec: everyFiveMinutes, prompt: 'go', createdBy: 'user', nowMs: createdAtMs,
+    });
+    assert.ok(first.ok && second.ok);
+    const missedDueAt = first.record.nextRunAt;
+    assert.ok(missedDueAt !== null);
+    const bootNow = missedDueAt + 60 * 60 * 1000;
+    const clock = createFakeClock(bootNow);
+    const caps = createCaptures();
+    // The first delivery waits for its agent: with both started together, the agent would be handed two prompts at once.
+    caps.hangNextDelivery();
+    const engine = createSchedulerEngine({
+      store, ledger: caps.ledger, deliver: caps.deliver,
+      now: clock.now, setTimeoutFn: clock.setTimeoutFn, clearTimeoutFn: clock.clearTimeoutFn,
+    });
+
+    try {
+      engine.rearmAll();
+      await yieldMacrotasks();
+      assert.deepEqual(caps.deliverCalls.map((call) => call.job.id), [first.record.id], 'only the first delivery has started');
+    } finally {
+      caps.resolveHanging();
+    }
+    await engine.whenIdle();
+
+    assert.deepEqual(caps.deliverCalls.map((call) => call.job.id), [first.record.id, second.record.id], 'then the second one, once');
+    assert.deepEqual(
+      caps.ledgerRecords.map((record) => `${record.jobId === first.record.id ? 'first' : 'second'}:${record.deliveredAt === undefined ? 'begin' : 'end'}`),
+      ['first:begin', 'first:end', 'second:begin', 'second:end'],
+      'the second catch-up began only after the first one\'s end record',
+    );
+    for (const record of [first.record, second.record]) {
+      const fresh = store.getSchedules()[record.id];
+      assert.equal(fresh.lastRunStatus, 'delivered');
+      assert.ok(fresh.nextRunAt !== null && fresh.nextRunAt > bootNow, `${record.name} is booked, its next run ahead`);
+    }
+    assert.equal(clock.pendingCount, 2, 'both jobs are armed again');
+  });
+
+  it('boot rearmAll: a job removed while its catch-up waits behind another one of its topic is not delivered', async () => {
+    const store = await newStore();
+    const createdAtMs = new Date(2026, 5, 6, 9, 0, 0).getTime();
+    const first = await createScheduleForThread(store, {
+      threadKey: threadA, name: 'first', spec: everyFiveMinutes, prompt: 'go', createdBy: 'user', nowMs: createdAtMs,
+    });
+    const cancelled = await createScheduleForThread(store, {
+      threadKey: threadA, name: 'cancelled', spec: everyFiveMinutes, prompt: 'go', createdBy: 'user', nowMs: createdAtMs,
+    });
+    assert.ok(first.ok && cancelled.ok);
+    const missedDueAt = first.record.nextRunAt;
+    assert.ok(missedDueAt !== null);
+    const clock = createFakeClock(missedDueAt + 60 * 60 * 1000);
+    const caps = createCaptures();
+    caps.hangNextDelivery();
+    const engine = createSchedulerEngine({
+      store, ledger: caps.ledger, deliver: caps.deliver,
+      now: clock.now, setTimeoutFn: clock.setTimeoutFn, clearTimeoutFn: clock.clearTimeoutFn,
+    });
+
+    try {
+      engine.rearmAll();
+      await yieldMacrotasks();
+      // The agent cancels the job (`schedule_cancel`) while its catch-up still waits for its turn.
+      await store.removeSchedule(cancelled.record.id);
+    } finally {
+      caps.resolveHanging();
+    }
+    await engine.whenIdle();
+
+    assert.deepEqual(caps.deliverCalls.map((call) => call.job.id), [first.record.id], 'the cancelled job was never delivered');
+    assert.equal(clock.pendingCount, 1, 'and nothing was armed for it');
   });
 
   it('boot rearmAll: a catch-up whose delivery throws is booked as failed and re-armed — nothing escapes the replay', async () => {
@@ -380,7 +458,7 @@ describe('schedulerEngine', () => {
       now: clock.now, setTimeoutFn: clock.setTimeoutFn, clearTimeoutFn: clock.clearTimeoutFn,
     });
 
-    await engine.rearmAll();
+    engine.rearmAll();
     await engine.whenIdle();
 
     const fresh = store.getSchedules()[created.record.id];
@@ -522,7 +600,7 @@ describe('schedulerEngine', () => {
 
     // rearmAll on an already-paused record arms nothing.
     await store.setSchedulePaused(job.id, true, 'unbound');
-    await engine.rearmAll();
+    engine.rearmAll();
     assert.equal(clock.pendingCount, 0, 'paused job is not armed at boot');
     assert.equal(caps.deliverCalls.length, 0, 'paused job does not fire at boot');
     assert.equal(caps.ledgerRecords.length, 0, 'paused boot skip writes NO ledger entry');

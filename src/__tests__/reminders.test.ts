@@ -50,7 +50,7 @@ const disarmedJobIds: string[] = [];
 const recordingEngine: SchedulerEngine = {
   armJob: (record) => { armedJobs.push(record); },
   disarmJob: (jobId) => { disarmedJobIds.push(jobId); },
-  rearmAll: async () => {},
+  rearmAll: () => {},
   whenIdle: async () => {},
   shutdown: () => {},
 };

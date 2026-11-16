@@ -15391,8 +15391,7 @@ export async function startBot(): Promise<void> {
     // missed run. Independent of the MCP server (delivery does not need it).
     // It never waits for a delivery — one waits for its agent, which may wait for
     // an answer that only polling (started after this phase) can bring.
-    rearmSchedules: () =>
-      schedulerEngine!.rearmAll().catch((e) => console.error('[scheduler] rearmAll failed:', e)),
+    rearmSchedules: () => schedulerEngine!.rearmAll(),
   });
 
   // 5a. Refresh pinned banners for every binding. Threads that have a

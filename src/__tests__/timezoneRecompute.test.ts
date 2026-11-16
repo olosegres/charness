@@ -145,7 +145,7 @@ describe('recomputeSchedulesForTimezoneChange', () => {
       now: clock.now, setTimeoutFn: clock.setTimeoutFn, clearTimeoutFn: clock.clearTimeoutFn,
     });
 
-    await engine.rearmAll();
+    engine.rearmAll();
     await engine.whenIdle();
 
     assert.equal(caps.deliverCalls.length, 1, 'rearmAll DOES fire on a past nextRunAt');
