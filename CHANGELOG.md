@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 4.1.0 — 2026-11-16
+
 **A «🔧 tool» status line is no longer left under a reply that was already posted, or under a question the agent asked.**
 Before, a tool call that started while the previous text was still waiting to be posted made its status line wait for that text to go out first; when the agent's next text arrived during that wait, the status line was created after it all the same — below the text that should have replaced it — and stayed there until the next message, and the next tool status then edited that stale line instead of posting its own. The same happened to the question tool's own «🔧 question…» line, which landed under the question it announced. Now a status line that newer text, a question or an error has already replaced is dropped instead of created.
 
