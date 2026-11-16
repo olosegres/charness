@@ -24,6 +24,7 @@ import { StateStore } from '../state';
 import { type SessionKey } from '../sessionKey';
 import { createScheduleForThread } from '../scheduler/store';
 import { createSchedulerEngine, maxTimeoutMs } from '../scheduler/engine';
+import { catchUpToleranceMs } from '../scheduler/recurrence';
 import type { DeliveryOutcome, FireContext, ScheduleRecord, ScheduleSpec } from '../scheduler/types';
 import type { ScheduleRunRecord } from '../scheduler/runLedger';
 import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
@@ -31,6 +32,8 @@ import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
 const threadA: SessionKey = makeTelegramKey(-1001234567890, 11);
 const threadB: SessionKey = makeTelegramKey(-1001234567890, 12);
 const everyFiveMinutes: ScheduleSpec = { kind: 'cron', cronExpr: '*/5 * * * *' };
+const waitUntilTimeoutMs = 5000;
+const waitUntilStepMs = 5;
 
 /** A controllable fake timer queue + clock, mirroring how the engine consumes them. */
 function createFakeClock(startMs: number) {
@@ -101,10 +104,18 @@ function createCaptures() {
   let nextOutcome: DeliveryOutcome = { status: 'delivered' };
   let pendingResolve: ((outcome: DeliveryOutcome) => void) | null = null;
   let shouldThrow = false;
+  /** Jobs whose delivery is rigged to hang (beside the one `hangNextDelivery` hangs), and the resolvers of those that do. */
+  const hangingJobIds = new Set<string>();
+  const pendingJobResolves = new Map<string, (outcome: DeliveryOutcome) => void>();
 
   const deliver = (job: ScheduleRecord, fireContext: FireContext): Promise<DeliveryOutcome> => {
     deliverCalls.push({ job: { ...job }, fireContext: { ...fireContext } });
     if (shouldThrow) return Promise.reject(new Error('deliver boom'));
+    if (hangingJobIds.has(job.id)) {
+      return new Promise<DeliveryOutcome>((resolve) => {
+        pendingJobResolves.set(job.id, resolve);
+      });
+    }
     if (pendingResolve === null && hangNext) {
       return new Promise<DeliveryOutcome>((resolve) => {
         pendingResolve = resolve;
@@ -134,6 +145,16 @@ function createCaptures() {
       pendingResolve = null;
       resolve?.(outcome);
     },
+    /** The delivery of this job hangs when it starts, until {@link resolveJobDelivery}. */
+    hangJobDelivery(jobId: string) {
+      hangingJobIds.add(jobId);
+    },
+    resolveJobDelivery(jobId: string, outcome: DeliveryOutcome = { status: 'delivered' }) {
+      hangingJobIds.delete(jobId);
+      const resolve = pendingJobResolves.get(jobId);
+      pendingJobResolves.delete(jobId);
+      resolve?.(outcome);
+    },
   };
 }
 
@@ -147,6 +168,15 @@ function createCaptures() {
 async function yieldMacrotasks(): Promise<void> {
   for (let i = 0; i < 5; i += 1) {
     await new Promise<void>((resolve) => setImmediate(resolve));
+  }
+}
+
+/** Poll `check` until it holds; a bounded wait for a concrete state, failing with `description` when it never does. */
+async function waitUntil(description: string, check: () => boolean): Promise<void> {
+  const deadline = Date.now() + waitUntilTimeoutMs;
+  while (!check()) {
+    if (Date.now() > deadline) throw new Error(`timed out waiting for ${description}`);
+    await new Promise<void>((resolve) => setTimeout(resolve, waitUntilStepMs));
   }
 }
 
@@ -486,7 +516,7 @@ describe('schedulerEngine', () => {
     assert.equal(queuedDeliveries[0].fireContext.kind, 'on-time');
   });
 
-  it('boot rearmAll: the timer of a job re-armed while its catch-up waits comes due before the wait ends — it fires once, by its timer, and the waiting catch-up does not fire it again', async () => {
+  it('boot rearmAll: the timer of a job re-armed while its catch-up waits comes due before the wait ends — it fires once, by its timer, and the waiting catch-up neither fires it again nor books an overlap for it', async () => {
     const store = await newStore();
     const createdAtMs = new Date(2026, 5, 6, 9, 0, 0).getTime();
     const first = await createScheduleForThread(store, {
@@ -502,29 +532,45 @@ describe('schedulerEngine', () => {
     const clock = createFakeClock(bootNow);
     const caps = createCaptures();
     caps.hangNextDelivery();
+    // The re-armed job waits for the same busy agent: its own delivery does not end before the first one's.
+    caps.hangJobDelivery(queued.record.id);
     const engine = createSchedulerEngine({
       store, ledger: caps.ledger, deliver: caps.deliver,
       now: clock.now, setTimeoutFn: clock.setTimeoutFn, clearTimeoutFn: clock.clearTimeoutFn,
     });
 
     const rearmedDelayMs = 10 * 60 * 1000;
+    const queuedLedgerKinds = (): string[] => caps.ledgerRecords.filter((record) => record.jobId === queued.record.id).map((record) => record.kind);
     try {
       engine.rearmAll();
       await yieldMacrotasks();
       const rearmed: ScheduleRecord = { ...store.getSchedules()[queued.record.id], nextRunAt: bootNow + rearmedDelayMs };
       await store.upsertSchedule(rearmed);
       engine.armJob(rearmed);
-      // The new timer comes due while the first job still waits for its agent.
+      // The new timer comes due while the first job still waits for its agent, and its delivery waits too.
       clock.tick(rearmedDelayMs);
       await yieldMacrotasks();
       assert.deepEqual(caps.deliverCalls.map((call) => call.job.id), [first.record.id, queued.record.id], 'the re-armed job was fired by its timer');
       assert.equal(caps.deliverCalls[1].fireContext.kind, 'on-time');
+      // Its run is by now older than the catch-up tolerance, so a stale queued turn would read it as MISSED.
+      clock.tick(2 * catchUpToleranceMs);
+
+      // The first job's delivery ends: its queue turn for the re-armed job comes while that job's own delivery is in flight.
+      caps.resolveHanging();
+      // Its bookkeeping writes the store, then its chain ends and the next queued turn starts: wait for the end record, then let that turn run.
+      await waitUntil('the first job\'s end record', () => caps.ledgerRecords.some((record) => record.jobId === first.record.id && record.deliveredAt !== undefined));
+      await yieldMacrotasks();
+      assert.equal(queuedLedgerKinds().includes('skipped-overlap'), false, 'no overlap is booked for a run that was never due: the delivery in flight owns the next run');
+      assert.deepEqual(caps.deliverCalls.map((call) => call.job.id), [first.record.id, queued.record.id], 'nothing is delivered a second time');
     } finally {
       caps.resolveHanging();
+      caps.resolveJobDelivery(queued.record.id);
     }
     await engine.whenIdle();
 
-    assert.deepEqual(caps.deliverCalls.map((call) => call.job.id), [first.record.id, queued.record.id], 'and the waiting catch-up did not deliver it a second time');
+    assert.deepEqual(caps.deliverCalls.map((call) => call.job.id), [first.record.id, queued.record.id], 'the waiting catch-up did not deliver it a second time');
+    assert.deepEqual(queuedLedgerKinds(), ['on-time', 'on-time'], 'the re-armed job has the begin and the end record of its own run, and nothing else');
+    assert.equal(store.getSchedules()[queued.record.id].lastRunStatus, 'delivered', 'and its own delivery is what booked it');
     assert.equal(clock.pendingCount, 2, 'both jobs are armed for their next runs');
   });
 

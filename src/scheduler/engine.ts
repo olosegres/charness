@@ -230,12 +230,17 @@ export function createSchedulerEngine(deps: SchedulerEngineDeps): SchedulerEngin
    * every `nextRunAt` from now, a rebind of the topic resumes its jobs: the record
    * then carries a next run in the future and a timer of its own. Firing it now
    * would deliver a run nobody scheduled, and a second one when that timer comes
-   * due, so such a job is left to its timer. Only a job that is still missed and
-   * has no timer takes its turn, through the same chain as any fire.
+   * due, so such a job is left to its timer. The same holds once that timer has
+   * fired: its delivery is in flight and its own bookkeeping owns the next run,
+   * while the record still holds the old `nextRunAt` — which reads as missed by
+   * now, and would book an overlap for a run that was never due. Only a job that
+   * is still missed, has no timer and is not in flight takes its turn, through
+   * the same chain as any fire.
    */
   async function onQueuedCatchUp(jobId: string): Promise<void> {
     const record = store.getSchedules()[jobId];
-    if (record && (timers.has(jobId) || getCatchUpDecision({ nextRunAt: record.nextRunAt, nowMs: now() }) !== 'fire-missed')) return;
+    const isOwnedElsewhere = timers.has(jobId) || inFlight.has(jobId);
+    if (record && (isOwnedElsewhere || getCatchUpDecision({ nextRunAt: record.nextRunAt, nowMs: now() }) !== 'fire-missed')) return;
     await onTimer(jobId);
   }
 
