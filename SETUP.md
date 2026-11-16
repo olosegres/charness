@@ -859,7 +859,10 @@ connector behaves is described in [`src/connectors/jira/README.md`](src/connecto
    account** (the `answer_request` tool does): a comment it writes in Jira under any other account of the trusted group —
    an operator's token in its own tools, say — comes back to it as a person's comment, and then its answer, and so on.
    As a guard, an issue gets at most 20 such updates in 24 hours; past that, new comments wait until the oldest update
-   is a day old and reach the agent then, the issue gets one comment from the AI saying so, and one line goes to the log.
+   is a day old and reach the agent then, and one line goes to the log saying until when. The issue gets one comment
+   from the AI saying so, at most once a day: comments that keep coming wait again the same way without another one.
+   A comment on an issue the AI created or took up while working on ANOTHER issue goes to that work; the AI answers
+   its author on the commented issue with a comment of its own.
 
    `projects` maps each served project key to its folder under `WORK_ROOT` and the status names in which an
    assigned issue is a request; the agent loads that folder's project memory (`CLAUDE.md`, `.claude/`, … in it

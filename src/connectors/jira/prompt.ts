@@ -313,7 +313,8 @@ export interface JiraUpdatePromptBase {
   issueUrl: string;
   /**
    * Set when the request is on ANOTHER issue (an issue the agent created or took up in that request's run, linked to it):
-   * the header names both, and the update carries only the new comments.
+   * the header names both, says the answer is a comment on that other issue — the agent answers a person on this one with
+   * a comment of its own — and the update carries only the new comments.
    */
   requestIssueKey?: string;
   target: JiraOpenHandOver & { isOpen: boolean; isMention?: boolean };
@@ -329,21 +330,25 @@ function getUpdateHeader(input: JiraUpdatePromptBase): string {
   let handedBy = target.requester ? ` (handed over by ${getAccountName(target.requester)})` : '';
   if (target.isMention) handedBy = target.requester ? ` (asked by ${getAccountName(target.requester)} in a mention)` : ' (asked in a mention)';
   const commentsText = getNewCommentsText(input.comments);
-  const issueText = input.requestIssueKey ? `${input.issueKey} (an issue linked to ${getSingleLineText(input.requestIssueKey)}, which that request is on)` : input.issueKey;
-  const notifyText = 'To notify the person who wrote a comment, put its id in replyToCommentIds.';
+  const requestIssueKey = input.requestIssueKey ? getSingleLineText(input.requestIssueKey) : null;
+  const issueText = requestIssueKey ? `${input.issueKey} (an issue linked to ${requestIssueKey}, which that request is on)` : input.issueKey;
+  // An answer is a comment on the request's issue, and only a comment shown in that conversation can be replied to there.
+  const notifyText = requestIssueKey
+    ? `To answer a person on ${input.issueKey}, write a comment on ${input.issueKey} yourself, @-mentioning them: your answer does not go there.`
+    : 'To notify the person who wrote a comment, put its id in replyToCommentIds.';
   const lines = target.isOpen
     ? [
       `[Issue update · request ${requestId} is open]`,
       `New on ${issueText} while you work on request ${requestId}${handedBy}: ${commentsText}. ` +
         'It is part of that work: read it below; if it asks for something, do it as your rules allow, and say in your answer what you did about it. ' +
         (input.openHandOvers.length > 1 ? `The ${getOpenHandOverText(input.openHandOvers)} are open in this conversation. ` : '') +
-        `Answer request ${requestId} with answer_request as usual (requestId "${requestId}"). ${notifyText}`,
+        `Answer request ${requestId} with answer_request as usual (requestId "${requestId}")${requestIssueKey ? `; your answer becomes a comment on ${requestIssueKey}` : ''}. ${notifyText}`,
     ]
     : [
       `[Issue update · request ${requestId} is finished]`,
       `New on ${issueText}, written while you worked on request ${requestId}${handedBy}, which is finished now (you gave its final answer, or asked a question): ${commentsText}. ` +
         'Read it below; if it asks for something, do it as your rules allow. ' +
-        `Answer it with answer_request (requestId "${requestId}"): your answer becomes a comment on the issue and hands nothing back. ${notifyText}`,
+        `Answer it with answer_request (requestId "${requestId}"): your answer becomes a comment on ${requestIssueKey ?? 'the issue'} and hands nothing back. ${notifyText}`,
     ];
   lines.push(answerStyleInstruction, 'The requester does not see your plain text output or your thinking — only what you send through answer_request reaches them.');
   return `${lines.join('\n')}\n\n`;

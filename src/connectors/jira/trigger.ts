@@ -23,6 +23,13 @@ export type JiraTriggerKind = 'assigned' | 'statusChanged' | 'created' | 'mentio
 export const mentionTriggerIdPrefix = 'mention:';
 /** The trigger id of a comment on an issue handed to the AI account (its comment scan) is this prefix and the comment's id. */
 export const commentTriggerIdPrefix = 'comment:';
+/**
+ * Marks a mention held back from its issue update — the cap on updates paused it, or its post failed — and not decided yet:
+ * this prefix and the comment's id. The mention scan keeps it, outside the mention window too, until it is delivered.
+ */
+export const heldMentionTriggerIdPrefix = 'held-mention:';
+/** The trigger id of a pause of an issue's updates (the cap): this prefix and the pause's end (epoch ms). */
+export const updatesPausedTriggerIdPrefix = 'updates-paused:';
 
 /**
  * @name JiraIssueTrigger

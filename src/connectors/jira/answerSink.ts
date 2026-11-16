@@ -78,12 +78,14 @@ export function buildJiraMentionParkText(runBudgetPer24h: number): string {
 
 /**
  * @description The notice of an issue whose updates reached the cap (`jiraIssueUpdatesPer24hMax` in a rolling 24 h): new comments
- * wait until `untilMs` and reach the AI then. Posted by the AI account, so it is never an update itself.
+ * wait until `untilMs` and reach the AI then. Posted by the AI account, so it is never an update itself — and at most once per
+ * issue per rolling 24 h, so it says that a pause soon after is not told again.
  */
 export function buildJiraUpdatesPausedText(maxUpdates: number, untilMs: number): string {
   const until = new Date(untilMs).toISOString().slice(0, 16).replace('T', ' ');
   return `⏸ The AI got ${maxUpdates} updates from comments on this issue in the last 24 hours, its limit, so new comments reach it from ${until} UTC on — ` +
-    'nothing is lost. If you did not write that many, check that the AI posts only as its own account.';
+    'nothing is lost. If the limit is reached again within a day, comments wait the same way without another note. ' +
+    'If you did not write that many, check that the AI posts only as its own account.';
 }
 
 /**

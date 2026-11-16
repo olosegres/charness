@@ -12,7 +12,7 @@ import assert from 'node:assert/strict';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { JiraTriggerLog, jiraTriggerLogFileName } from '../connectors/jira/triggerLog';
+import { JiraTriggerLog, jiraHeldMentionKeepMs, jiraTriggerLogFileName } from '../connectors/jira/triggerLog';
 import { compareJiraCommentIds } from '../connectors/jira/trigger';
 
 const hourMs = 60 * 60 * 1000;
@@ -136,6 +136,45 @@ describe('JiraTriggerLog', () => {
     assert.equal(log.checkIsMentionParkNoticePostedLastDay('PROJ-12', nowMs), false);
     log.record({ issueKey: 'PROJ-12', triggerId: 'mention:5', outcome: 'parked', at: nowMs - hourMs });
     assert.equal(log.checkIsMentionParkNoticePostedLastDay('PROJ-12', nowMs), true);
+  });
+
+  it('the "updates paused" notice: at most once per issue per rolling 24 h — a silent pause is not one, and neither notice kind reads as the other', async () => {
+    const log = await createLoadedLog();
+    log.record({ issueKey: 'PROJ-12', triggerId: 'updates-paused:1', outcome: 'parked', at: nowMs - 2 * hourMs, isNoticePosted: false });
+    assert.equal(log.checkIsUpdatesPausedNoticePostedLastDay('PROJ-12', nowMs), false, 'a pause without a notice');
+    log.record({ issueKey: 'PROJ-12', triggerId: 'mention:7', outcome: 'parked', at: nowMs - hourMs });
+    assert.equal(log.checkIsUpdatesPausedNoticePostedLastDay('PROJ-12', nowMs), false, 'a mention park notice is not this one');
+    log.record({ issueKey: 'PROJ-12', triggerId: 'updates-paused:2', outcome: 'parked', at: nowMs - hourMs, isNoticePosted: true });
+    assert.equal(log.checkIsUpdatesPausedNoticePostedLastDay('PROJ-12', nowMs), true);
+    assert.equal(log.checkIsUpdatesPausedNoticePostedLastDay('PROJ-13', nowMs), false, 'per issue');
+    assert.equal(log.checkIsUpdatesPausedNoticePostedLastDay('PROJ-12', nowMs + 23 * hourMs), false, 'a day after it, due again');
+    assert.equal((await createLoadedLog()).checkIsUpdatesPausedNoticePostedLastDay('PROJ-12', nowMs), true, 'the same after a reload');
+    log.record({ issueKey: 'PROJ-14', triggerId: 'updates-paused:3', outcome: 'parked', at: nowMs - hourMs });
+    assert.equal(log.checkIsMentionParkNoticePostedLastDay('PROJ-14', nowMs), false, 'a pause is no mention park notice');
+  });
+
+  it('a held mention is listed until its comment is decided (as a mention or a comment), for two days at most, and after a reload too', async () => {
+    const log = await createLoadedLog();
+    log.record({ issueKey: 'PROJ-12', triggerId: 'held-mention:10240', outcome: 'parked', at: nowMs - hourMs });
+    log.record({ issueKey: 'PROJ-12', triggerId: 'held-mention:10241', outcome: 'parked', at: nowMs - hourMs });
+    log.record({ issueKey: 'PROJ-13', triggerId: 'held-mention:10300', outcome: 'parked', at: nowMs - hourMs });
+    assert.deepEqual(log.listHeldMentionIds('PROJ-12', nowMs), ['10240', '10241']);
+    assert.deepEqual(log.listHeldMentionIssueKeys(nowMs), ['PROJ-12', 'PROJ-13']);
+    assert.equal(log.checkIsMentionParkNoticePostedLastDay('PROJ-12', nowMs), false, 'a held mention is no park notice');
+    assert.equal(log.getRequestCountLastDay('PROJ-12', nowMs), 0);
+    log.record({ issueKey: 'PROJ-12', triggerId: 'mention:10240', outcome: 'update', at: nowMs, requestId: 'req_1' });
+    log.record({ issueKey: 'PROJ-13', triggerId: 'comment:10300', outcome: 'update', at: nowMs, requestId: 'req_2' });
+    assert.deepEqual(log.listHeldMentionIds('PROJ-12', nowMs), ['10241']);
+    assert.deepEqual(log.listHeldMentionIssueKeys(nowMs), ['PROJ-12']);
+    const reloaded = await createLoadedLog();
+    assert.deepEqual(reloaded.listHeldMentionIds('PROJ-12', nowMs), ['10241'], 'decided before the reload: not held after it');
+    assert.deepEqual(reloaded.listHeldMentionIssueKeys(nowMs - hourMs + jiraHeldMentionKeepMs), [], 'kept two days at most');
+    // Held again after it was decided: the decision stands.
+    log.record({ issueKey: 'PROJ-12', triggerId: 'held-mention:10240', outcome: 'parked', at: nowMs });
+    assert.deepEqual(log.listHeldMentionIds('PROJ-12', nowMs), ['10241']);
+    log.forgetHeldMention('PROJ-12', '10241');
+    assert.deepEqual(log.listHeldMentionIssueKeys(nowMs), [], 'forgotten for this process');
+    assert.deepEqual((await createLoadedLog()).listHeldMentionIds('PROJ-12', nowMs), ['10241'], 'a restart finds it once more');
   });
 
   it('unreadable lines are skipped; the rest still load', async () => {

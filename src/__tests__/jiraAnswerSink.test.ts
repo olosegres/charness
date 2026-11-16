@@ -716,12 +716,13 @@ describe('whom an answer notifies: the requester of a mention request, and the a
 });
 
 describe('the "updates paused" notice of an issue past the cap on updates', () => {
-  it('says until when (UTC, to the minute) and that nothing is lost; posted as plain text, nothing handed back', async () => {
+  it('says until when (UTC, to the minute), that nothing is lost and that a pause within a day is not told again; posted as plain text, nothing handed back', async () => {
     const untilMs = Date.parse('2026-11-14T09:30:41Z');
     assert.equal(
       buildJiraUpdatesPausedText(20, untilMs),
       '⏸ The AI got 20 updates from comments on this issue in the last 24 hours, its limit, so new comments reach it from 2026-11-14 09:30 UTC on — ' +
-        'nothing is lost. If you did not write that many, check that the AI posts only as its own account.',
+        'nothing is lost. If the limit is reached again within a day, comments wait the same way without another note. ' +
+        'If you did not write that many, check that the AI posts only as its own account.',
     );
     await sink().postUpdatesPausedNotice(issueKey, 20, untilMs);
     assert.deepEqual(jira.calls, ['comment PROJ-12']);

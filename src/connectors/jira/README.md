@@ -138,10 +138,18 @@ requester was recorded `covered` with nothing posted — so people unassigned an
   parent, a sub-task or child, either end of an issue link — `findLinkedWorkingRequest`; the agent created the issue and
   builds it in that run, say) gets the comments: an update of that request in that conversation whose header names the
   commented issue ("New on PROJ-2 (an issue linked to PROJ-1, which that request is on) …") and carries only its new
-  comments (that conversation's context ledger is its own issue's) — recorded on the commented issue. Only when nothing
-  linked works on it does a comment open the issue's own request. On an issue NOT handed to the AI the comment scan does
-  not run: there, only an @-mention reaches it, and a follow-up mention by the requester of an open acting mention goes into
-  that work as an update (`isCovered` counts every slot-holding request with comment wakes on).
+  comments (that conversation's context ledger is its own issue's) — recorded on the commented issue, its watermark the
+  newest comment DELIVERED (one written between the scan and the read of the issue stays new). The agent's answer is a
+  comment on PROJ-1: the header says so, and tells it to answer a person on PROJ-2 with a comment of its own there,
+  @-mentioning them — it offers no `replyToCommentIds`, which resolves only comments shown in the request's own
+  conversation. Linked issues are tried in the order parent, issue links, sub-tasks, children; only allowlisted projects
+  count. When several hold a working request, the one the AI account tied the issue to wins: an issue link the AI account
+  made (a `Link` entry of the commented issue's changelog, which the context already read), or the parent when the AI
+  account created the issue or last changed its parent (`listIssueKeysTiedByAi`); with no such tie the first wins and one
+  log line names the choice — a person who links the issue to another issue at work can then route its comments there.
+  Only when nothing linked works on it does a comment open the issue's own request. On an issue NOT handed to the AI the
+  comment scan does not run: there, only an @-mention reaches it, and a follow-up mention by the requester of an open
+  acting mention goes into that work as an update (`isCovered` counts every slot-holding request with comment wakes on).
 - **Such a request is open**: ONE **issue update** carries every new
   trusted comment of the poll (`buildJiraUpdatePrompt`: `[Issue update · request req_… is open]`, then the issue's delta —
   the whole issue for a session that does not know it). It is NOT a request: no request is opened, because a new one would
@@ -159,15 +167,22 @@ requester was recorded `covered` with nothing posted — so people unassigned an
   off the trigger log's `update` lines). An account of the trusted group that comments as the agent's own tooling would
   otherwise loop — each comment the next poll's update, each answer another comment —; past the cap the comments stay
   undecided (`waiting`) and the issue is not scanned until the oldest counted update leaves the window
-  (`getUpdateWindowEnd`); then they are delivered in one update. Each pause gets ONE comment by the AI account
-  (`buildJiraUpdatesPausedText`: until when, nothing lost; recorded under `updates-paused:<end>`, so a restart does not
-  repeat it — the AI account's own comments are never delivered, so it starts no loop) and one log line. The agent must
-  comment only as the AI account.
+  (`getUpdateWindowEnd`); then they are delivered in one update. Each pause gets one log line saying until when, recorded
+  under `updates-paused:<end>` so a restart does not repeat it. The issue gets ONE comment by the AI account about it at
+  most once per rolling 24 h (`buildJiraUpdatesPausedText`: until when, nothing lost, a pause within a day is not told
+  again; the record's `isNoticePosted`) — a steady stream of comments fills the window again at every end and pauses it
+  again, silently. The AI account's own comments are never delivered, so the notice starts no loop. A mention held back
+  by the cap — on an issue not handed to the AI, a follow-up mention is an update too — is marked `held-mention:<id>` in the
+  trigger log, so the mention scan keeps it outside the mention window, across a restart, and reads its issue by its key
+  once the search no longer returns it (not during the pause), until it is delivered — two days at most, and one that a
+  later prompt of the issue carried (the watermark passed it) is let go; a mention update whose post failed is held the
+  same way, as its backoff may outlast the window. The agent must comment only as the AI account.
 - **An issue that leaves the handed state gets one last scan** (`scanIssuesThatLeftHanded`): the poller remembers the
   handed issues whose hand-over it saw, with the request an update would go to. One that a later poll finds no longer
   handed (its final answer handed it back, someone took it) — read by its key when the search no longer returns it — has
   its comments read once more: those written before the changelog entry that ended the hand-over (`findLeftHandedAt`)
-  and not delivered yet reach that request as the "finished" update (or a request still open). The gap between a
+  and not delivered yet reach that request as the "finished" update (or a request still open; on an issue the AI account
+  took up in another issue's run with no request of its own known, the linked run's request as above). The gap between a
   hand-back and the next poll no longer loses a comment. In memory: a restart forgets what was handed, and a request that
   opens and is answered between two polls is never seen handed, so a comment inside that short window gets no last scan
   (it still rides the issue's next prompt).
