@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 4.0.1 — 2026-11-16
+
+**No user-visible changes in this release.**
+
 ## 4.0.0 — 2026-11-16
 
 **Charness 4.0 is free for personal use and for organizations with up to $500,000 revenue (funding included) and up to 20 people; larger organizations pay one annual license from $500, with unlimited users and agents; every release before 4.0 stays MIT.**

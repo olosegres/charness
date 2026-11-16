@@ -1,12 +1,12 @@
 {
   "name": "charness",
-  "version": "4.0.0",
+  "version": "4.0.1",
   "lockfileVersion": 3,
   "requires": true,
   "packages": {
     "": {
       "name": "charness",
-      "version": "4.0.0",
+      "version": "4.0.1",
       "dependencies": {
         "@modelcontextprotocol/sdk": "^1.29.0",
         "abort-controller": "^3.0.0",
