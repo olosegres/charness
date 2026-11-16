@@ -33,6 +33,10 @@ import {
   globalSendIntervalMs,
   enterShutdownDrain,
   drainPendingSends,
+  configureSendOperationDeadline,
+  telegramSendOperationDeadlineMs,
+  getSendOperationSignal,
+  checkIsSendOutcomeUnknownError,
   type PacerClock,
 } from '../rateLimiter';
 import type { SessionKey } from '../sessionKey';
@@ -663,4 +667,67 @@ test('configureGlobalSendInterval: the boot\'s test-instance interval paces send
   } finally {
     __setGlobalPacerForTest(new GlobalSendPacer(1));
   }
+});
+
+// ─── the per-call deadline: a hung Bot API call never holds the topic's queue ───
+
+test('a hung call of a topic\'s queue is aborted at its deadline and settles as outcome unknown; the answer queued behind it goes out', async () => {
+  configureSendOperationDeadline(50);
+  try {
+    const key = k(-1009000001, 7);
+    let hungCallSignal: AbortSignal | undefined;
+    const events: string[] = [];
+    // The call never answers (a request Telegram sits on); it sees the abort signal the Bot API client would pass on.
+    const hung = enqueueSend(key, () => {
+      hungCallSignal = getSendOperationSignal();
+      events.push('hung call started');
+      return new Promise<never>(() => {});
+    });
+    const answer = enqueueSend(key, async () => {
+      events.push('answer sent');
+      return 'answer';
+    });
+
+    await assert.rejects(hung, (error) => checkIsSendOutcomeUnknownError(error));
+    assert.equal(await answer, 'answer');
+    assert.deepEqual(events, ['hung call started', 'answer sent'], 'the answer waited for the hung call, then went out — never before it');
+    assert.equal(hungCallSignal?.aborted, true, 'the request itself was aborted, not just the wait for it');
+  } finally {
+    configureSendOperationDeadline(telegramSendOperationDeadlineMs);
+  }
+});
+
+test('a call that answers in time is not touched by the deadline: no abort, its result returned', async () => {
+  configureSendOperationDeadline(200);
+  try {
+    let callSignal: AbortSignal | undefined;
+    const result = await enqueueSend(k(-1009000002, 7), async () => {
+      callSignal = getSendOperationSignal();
+      return 42;
+    });
+    assert.equal(result, 42);
+    assert.equal(callSignal?.aborted, false);
+  } finally {
+    configureSendOperationDeadline(telegramSendOperationDeadlineMs);
+  }
+});
+
+test('a file upload opts out of the deadline: it may take longer, and runs with no deadline signal', async () => {
+  configureSendOperationDeadline(20);
+  try {
+    let callSignal: AbortSignal | undefined;
+    const result = await enqueueSend(k(-1009000003, 7), async () => {
+      callSignal = getSendOperationSignal();
+      await new Promise<void>((resolve) => setTimeout(resolve, 60));
+      return 'uploaded';
+    }, undefined, { hasOperationDeadline: false });
+    assert.equal(result, 'uploaded');
+    assert.equal(callSignal, undefined);
+  } finally {
+    configureSendOperationDeadline(telegramSendOperationDeadlineMs);
+  }
+});
+
+test('outside a queued call there is no deadline signal', () => {
+  assert.equal(getSendOperationSignal(), undefined);
 });

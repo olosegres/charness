@@ -4,7 +4,7 @@ import { unconfirmedLimitProbeDelayMs } from './apiErrorRetry';
 import { tscWatchCheckIntervalMs, tscWatchStaleGraceMs } from './cli/tscWatchGuard';
 import { jiraPollIntervalMinSeconds } from './connectors/jira/config';
 import { bindPickerClaimLimit } from './connectors/telegram/bindPickerClaims';
-import { globalSendIntervalMs } from './rateLimiter';
+import { globalSendIntervalMs, telegramSendOperationDeadlineMs } from './rateLimiter';
 import { unwatchedSweepMs, watchedTurnPollMs } from './requests/wakeUpEngine';
 import { postRetryDelaysMs } from './requests/wakeUpRules';
 import { DEFAULT_SAVE_DEBOUNCE_MS } from './state';
@@ -25,7 +25,8 @@ import { runnerWaitPollMinMs, runnerWaitPollMs } from './remoteRun/runnerWaitTim
 
 /**
  * @description The ONE test-only timing seam: `CHARNESS_TEST_TIMINGS`, a JSON object of named overrides for the
- * production windows the process-level flows would otherwise wait out in real time (the Telegram send pacer's 2 s, the
+ * production windows the process-level flows would otherwise wait out in real time (the Telegram send pacer's 2 s, a send
+ * queue call's 30 s deadline, the
  * Jira poll's 10 s floor, the wake-up engine's 10 s turn poll and its sweep's minute, the first re-post retry's minute, the two-minute probe of an
  * unconfirmed usage limit, `state.json`'s save debounce, the OpenCode server's 60 s of retries, the 6 h pending-work hold, the 300 ms to the first read of an adopted json-stream session's output, the 15-minute gap of a passing check's status lines, the
  * todo reminder's 10 s poll and its interval, the 24 h between two rechecks of a used-up API credit and the 30 min poll that finds one due, the 45 s heartbeat lease of a foreground `charness remote-run` and its 10 s poll while it waits for a paired runner, and — a count, not a window —
@@ -53,6 +54,8 @@ function createShorterWindowSchema(productionMs: number): z.ZodNumber {
 const testTimingsSchema = z.strictObject({
   /** The global Telegram send pacer's interval (production: `globalSendIntervalMs`, 2 s). */
   telegramSendIntervalMs: createShorterWindowSchema(globalSendIntervalMs).optional(),
+  /** The deadline of one Bot API call of a topic's send queue (production: `telegramSendOperationDeadlineMs`, 30 s). */
+  telegramSendOperationDeadlineMs: createShorterWindowSchema(telegramSendOperationDeadlineMs).optional(),
   /** The Jira poll's interval, at most `jira.json`'s 10 s floor (production: `pollIntervalSeconds`, 10–600 s). */
   jiraPollIntervalMs: createShorterWindowSchema(jiraPollIntervalMinSeconds * msPerSecond).optional(),
   /** How often the wake-up engine polls the turns it watches for their end (production: `watchedTurnPollMs`, 10 s). */

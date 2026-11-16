@@ -2,12 +2,14 @@
  * @description A question the OpenCode agent asks stays in the topic however it ends, at PROCESS level: the BUILT charness
  * started the way an isolated instance is (`scripts/run-isolated.sh`) against the fake Bot API
  * (`telegramE2e/fakeTelegram.ts`) and the fake OpenCode server (`openCodeE2e/fakeOpenCodeServer.ts`), which can put a
- * question to the user whenever a flow says (the fake Claude agent cannot ask without a person's message). Two flows:
+ * question to the user whenever a flow says (the fake Claude agent cannot ask without a person's message). Three flows:
  *
  *   the idle compaction re-asked a question → the agent asks a NEW question while the re-asked copy waits: the copy is
  *     closed as «not answered» and keeps its text, and its button never answers the new question;
  *   a prompt the server refuses while a question is open → the adapter reports the error: the topic gets the error line,
- *     and the question stays with the «not answered» note, its buttons gone and its pin released.
+ *     and the question stays with the «not answered» note, its buttons gone and its pin released;
+ *   the question tool's own «🔧 question…» status that waits behind unposted text while the question arrives → it is
+ *     never posted: no status line lands under the question.
  *
  * What the json-stream flows cover instead: `questionKeptE2e.test.ts` (answer, number, another message, `/esc`, `/quit`,
  * re-post, the re-ask in every phase, a restart).
@@ -259,5 +261,65 @@ describe('A question stays when the server refuses a prompt while it is open, en
     } finally {
       refusePrompt(null);
     }
+  });
+});
+
+describe('The question tool\'s status that the question outran stays out of the topic, end to end: built charness, fake Bot API, fake OpenCode', () => {
+  before(async () => {
+    await setUpInstance('charness-ocask-status-', {});
+  });
+
+  after(tearDownInstance);
+
+  it('a «🔧 question…» status that waited behind unposted text while the question arrived is never posted — no status line lands under the question', async () => {
+    const statusFrameText = '🔧 question...';
+    const topicKey = `${group.id}:${questionTopic.threadId}`;
+    const isPosted = (text: string): boolean => fakeTelegram.listCalls('sendMessage').some((call) => String(call.payload.text).includes(text));
+    // The status frame is the whole text `🔧 question...`.
+    const isStatusFramePosted = (): boolean => fakeTelegram.listCalls('sendMessage').some((call) => call.payload.text === statusFrameText);
+    const botLogIncludes = (text: string): boolean => getCharness().output.includes(text);
+
+    charness = await startCharnessOnInstance(getLayout(), fakeTelegram);
+    await topic.sendAndAwaitReply(`/bind ${questionTopic.folder}`, `Bound to \`${questionTopic.folder}\``);
+    await topic.sendAndAwaitReply('/opencode', 'ready in');
+    fakeTelegram.pushOperatorMessage(questionTopic.threadId, 'STATUS-1 write the compiler');
+    await getCharness().waitFor('the prompt STATUS-1 to reach the server', replyTimeoutMs, () => fakeOpenCode.prompts.some((prompt) => prompt.text.includes('STATUS-1')));
+    const sessionId = getTopicSessionId();
+    fakeOpenCode.emitSessionBusy(sessionId);
+
+    // The bot posts one message at a time per topic: with the agent's first words held on their Bot API round trip, everything
+    // posted after them waits.
+    let releaseRoundTrip: () => void = () => {};
+    const roundTripReleased = new Promise<void>((resolve) => { releaseRoundTrip = resolve; });
+    try {
+      fakeTelegram.holdNextResponse('sendMessage', roundTripReleased, (payload) => String(payload.text).includes('I need a decision.'));
+      fakeOpenCode.emitAssistantText(sessionId, 'msg_STATUS-1', 'I need a decision.');
+      await getCharness().waitFor('the first words on their held round trip', replyTimeoutMs, () => isPosted('I need a decision.'));
+      // More words reach the bot and stay in its output buffer behind the flush that is on the round trip.
+      fakeOpenCode.emitAssistantText(sessionId, 'msg_STATUS-1', ' Let me ask you.');
+      await getCharness().waitFor('the next words to reach the bot', replyTimeoutMs, () => botLogIncludes('Let me ask you.'));
+      // The question tool's status is posted below the content, so it first lands that buffer — behind the held round trip.
+      fakeOpenCode.emitToolPart(sessionId, 'msg_STATUS-1', 'question', { status: 'running' });
+      const statusLogLine = `[Bot] status ${topicKey}: ${statusFrameText}`;
+      await getCharness().waitFor('the question tool\'s status to reach the bot', replyTimeoutMs, () => botLogIncludes(statusLogLine));
+      // The question itself arrives during that wait: its message replaces any status line.
+      fakeOpenCode.emitQuestionAsked(sessionId, firstQuestion.requestId, [{ question: firstQuestion.question, header: firstQuestion.header, options: firstQuestion.labels.map((label) => ({ label })) }]);
+      const questionLogLine = `[Bot] question ${topicKey} (${firstQuestion.requestId})`;
+      await getCharness().waitFor('the question to reach the bot', replyTimeoutMs, () => botLogIncludes(questionLogLine));
+      // The status did reach the bot, and before the question that supersedes it: without this the step would pass with no status at all.
+      const botLog = getCharness().output;
+      assert.ok(botLog.indexOf(statusLogLine) < botLog.indexOf(questionLogLine), 'the status reached the bot before the question');
+      assert.equal(isStatusFramePosted(), false, 'the status frame is still waiting for the buffer to land');
+    } finally {
+      // A failure above must not leave the topic's send queue wedged behind the held round trip.
+      releaseRoundTrip();
+    }
+
+    const question = await topic.waitForMessage(`the question «${firstQuestion.question}»`, (message) =>
+      message.text.includes(firstQuestion.question) && topic.getKeyboardData(message).flat().some((data) => data.startsWith('qa_')));
+    await waitForPinned(question);
+    // A command's reply is posted after every send queued before it, a status frame created after the buffer landed included.
+    await topic.sendAndAwaitReply('/verbosity stream', 'This topic shows: Stream only');
+    assert.equal(isStatusFramePosted(), false, 'the superseded status frame was not created under the question');
   });
 });

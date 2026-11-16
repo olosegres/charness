@@ -1445,6 +1445,7 @@ describe('scheduler MCP server end-to-end (real HTTP)', () => {
       splitMessage,
       maxMessageLength: 4_096,
       measureRendered: (message) => message.length,
+      landStreamedOutput: async () => {},
     });
     const token = buildSchedulerMcpToken(secret, { kind: 'dir', directory: fixture.fileWorkDir });
     const client = await buildClient(fixture.handle.port, token);

@@ -28,10 +28,10 @@ export interface StreamedSummaryDisplay {
 
 /**
  * @description The display of a SHOWN streamed summary. Complete lines go through the summary line filter; the last,
- * unfinished line is shown at once unless it could still become a marker (then it waits for its newline, or for the next
- * tail to settle it) — so a line that is not scaffolding is never kept back, and the last line of a summary that ends without
- * a newline is not lost. Once part of a line is out, the rest of that line is passed on as it comes: a fragment that starts
- * mid-line is never read as a marker.
+ * unfinished line is shown at once unless it could still become a marker, or the filter is inside the loaded-skills block
+ * (whose lines are hidden whole) — then it waits for its newline, or for the next tail to settle it. So a line that is not
+ * scaffolding is never kept back, and the last line of a summary that ends without a newline is not lost. Once part of a
+ * line is out, the rest of that line is passed on as it comes: a fragment that starts mid-line is never read as a marker.
  */
 export function createStreamedSummaryDisplay(gapsHeader: string): StreamedSummaryDisplay {
   const filter = createCompactionSummaryLineFilter(gapsHeader);
@@ -55,7 +55,7 @@ export function createStreamedSummaryDisplay(gapsHeader: string): StreamedSummar
       const unfinishedLine = lines.pop() ?? '';
       for (const line of lines) shown += filter.pushLine(line).map((shownLine) => `${shownLine}\n`).join('');
       if (unfinishedLine === '') return shown;
-      if (checkCouldBecomeCompactionScaffoldingLine(unfinishedLine)) {
+      if (filter.checkIsInHiddenBlock() || checkCouldBecomeCompactionScaffoldingLine(unfinishedLine)) {
         heldFragment = unfinishedLine;
         return shown;
       }

@@ -74,10 +74,10 @@ import {
   waitForSessionRespawn,
   type PersistedState,
 } from './e2e/fallbackFlowKit';
-import { claudeCompactHookSettingsFileName } from '../utils/claudeCompactHook';
+import { claudeSkillsRestoreHookSettingsFileNames } from '../utils/claudeCompactHook';
 import type { OpenRequestState } from '../requests/types';
 import type { ScheduleRecord } from '../scheduler/types';
-import { claudeProfileLaunchSettingsFileName, createClaudeProfileLayout, writeClaudeProfileApiKey } from '../utils/claudeProfiles';
+import { claudeProfileSkillsRestoreSettingsFileNames, createClaudeProfileLayout, writeClaudeProfileApiKey } from '../utils/claudeProfiles';
 import { getTelegramFlowTestTimingsEnv } from './telegramE2e/telegramFlowTimings';
 
 const group = { id: -1001111111111, title: 'ExampleGroup' };
@@ -211,7 +211,7 @@ describe('An account billed to API credits end to end: built charness, fake Bot 
     const [launch] = getSessionLaunches(getLayout());
     assert.equal(launch.claudeConfigDir, null, 'the default account');
     assert.ok(!(launch.envNames ?? []).includes('ANTHROPIC_API_KEY'), 'the subscription session never sees an API key');
-    assert.deepEqual(getFlagValues(launch.argv, '--settings'), [path.join(getLayout().dataDir, claudeCompactHookSettingsFileName)], 'the shared hook settings');
+    assert.deepEqual(getFlagValues(launch.argv, '--settings'), [path.join(getLayout().dataDir, claudeSkillsRestoreHookSettingsFileNames.withBotSkills)], 'the shared hook settings of a json-stream launch');
     sessionId = getLaunchSessionId(launch.argv) ?? '';
     assert.ok(sessionId);
   });
@@ -281,12 +281,13 @@ describe('An account billed to API credits end to end: built charness, fake Bot 
 
     await waitForSessionRespawn(getCharness(), getLayout(), 'the session under the key account', keyDir, sessionId, launchesBefore);
     const launch = getSessionLaunches(getLayout()).at(-1);
-    const settingsPath = path.join(keyDir, claudeProfileLaunchSettingsFileName);
+    const settingsPath = path.join(keyDir, claudeProfileSkillsRestoreSettingsFileNames.withBotSkills);
     assert.deepEqual(getFlagValues(launch?.argv ?? [], '--settings'), [settingsPath], 'ONE settings file, the account\'s own');
     assert.equal(launch?.isHelperKeyPlausible, true, 'its helper yields the key');
     assert.ok(!(launch?.envNames ?? []).includes('ANTHROPIC_API_KEY'));
     const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
     assert.ok(settings.hooks?.PreCompact, 'the PreCompact hook rides the same file');
+    assert.equal(settings.hooks?.SessionStart?.[0]?.matcher, 'compact', 'and so does the skills restore');
 
     const filesWithTheKey = listFilesRecursively(getLayout().dataDir).filter((file) => fs.readFileSync(file, 'utf8').includes(pastedApiKey));
     assert.deepEqual(filesWithTheKey, [path.join(keyDir, 'charness-api-key')], 'the key is in its own file only: not in settings, a wrapper script, state.json or a log');

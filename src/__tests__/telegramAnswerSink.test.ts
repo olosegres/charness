@@ -12,7 +12,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { keyToString } from '../sessionKey';
-import { createTelegramAnswerSink, type TelegramAnswerSinkDeps } from '../connectors/telegram/answerSink';
+import { answerDeliveryUnknownWarning, createTelegramAnswerSink, type TelegramAnswerSinkDeps } from '../connectors/telegram/answerSink';
 import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
 import { releaseRequestAlert, type AnswerSinks, type RequestAnswerDelivery } from '../platform/answerSink';
 import type { SendMessagesToThreadOptions, SendMessagesToThreadResult } from '../utils/messageSendService';
@@ -149,6 +149,30 @@ describe('createTelegramAnswerSink', () => {
 
     assert.deepEqual(pins.events, []);
     assert.equal(pins.getRemembered(), 77);
+  });
+
+  it('an answer whose delivery outcome is unknown is reported delivered with a plain warning — not an error the agent would answer by sending it again blindly — and nothing is pinned when no part of it is known to have landed', async () => {
+    const pins = createPinRecorder(77);
+    const sink = createTelegramAnswerSink(createDeps({
+      sendMessages: async () => ({ ok: false, kind: 'deliveryUnknown', error: 'Delivered 0 messages before a message\'s delivery outcome became unknown', sentMessageIds: [] }),
+      ...pins.deps,
+    }));
+
+    assert.deepEqual(await sink.deliverAnswer(topicKey, delivery), { ok: true, warning: answerDeliveryUnknownWarning });
+    assert.match(answerDeliveryUnknownWarning, /may not have reached the user/);
+    assert.match(answerDeliveryUnknownWarning, /Do not send it again on your own/);
+    assert.deepEqual(pins.events, [], 'no message id to pin; the previous answer keeps its pin');
+  });
+
+  it('an answer whose LATER part has an unknown outcome pins the first part, which landed: the notification still goes out', async () => {
+    const pins = createPinRecorder(77);
+    const sink = createTelegramAnswerSink(createDeps({
+      sendMessages: async () => ({ ok: false, kind: 'deliveryUnknown', error: 'Delivered 1 message before a message\'s delivery outcome became unknown', sentMessageIds: [101] }),
+      ...pins.deps,
+    }));
+
+    assert.deepEqual(await sink.deliverAnswer(topicKey, delivery), { ok: true, warning: answerDeliveryUnknownWarning });
+    assert.deepEqual(pins.events, ['pin 101', 'unpin 77', 'remember 101']);
   });
 
   it('reports a failed send as an error', async () => {

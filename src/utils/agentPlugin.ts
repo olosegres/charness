@@ -40,6 +40,17 @@ export function resolveAgentPluginDir(): string | null {
   return fs.existsSync(path.join(pluginDir, agentPluginSkillsDirName)) ? pluginDir : null;
 }
 
+/**
+ * @description The folder of the bot's skills when a launch does NOT load them (its `pluginFlags` from
+ * {@link getClaudeAgentPluginFlags} are empty: switched off, a CLI too old for the flag), else `null`. The skills restore
+ * after a compaction (`utils/skillsRestore.ts`) calls a skill from there "not available now" instead of handing its text to a
+ * session that cannot load it.
+ */
+export function getUnloadedAgentSkillsDir(pluginFlags: readonly string[], pluginDir: string | null = resolveAgentPluginDir()): string | null {
+  if (pluginFlags.length > 0 || pluginDir === null) return null;
+  return path.join(pluginDir, agentPluginSkillsDirName);
+}
+
 /** The version each Claude binary reported, read once per bot process (a hot reload or a restart reads again). */
 const claudeVersionByBinary = new Map<string, string>();
 

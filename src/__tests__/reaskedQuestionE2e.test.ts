@@ -134,9 +134,12 @@ function createRelease(): { promise: Promise<void>; release: () => void } {
  * Put the question (`ask` mode) and leave it unanswered until the idle fire rejects it, compacts and re-asks it: resolves
  * the re-asked message, whose buttons are `reask_<i>`, by default once the fire has also stopped the process, so the tap
  * wakes a sleeping conversation. The question is posted just BEFORE the stop: `isIdleStopAwaited: false` resolves at once,
- * for a tap that may land before, inside or after the stop.
+ * for a tap that may land before, inside or after the stop. The first question is then marked «asked again below», which comes
+ * once the re-ask's send has resolved — so a step that HOLDS that send's response (`isFirstQuestionMarkAwaited: false`) must not
+ * wait for the mark before it lets the response go. (Once the text a question follows lands above it, nothing puts the question
+ * back at the bottom, and so nothing marks it earlier.)
  */
-async function waitForReaskedQuestion(promptLabel: string, options: { isIdleStopAwaited: boolean } = { isIdleStopAwaited: true }): Promise<FakeTelegramMessage> {
+async function waitForReaskedQuestion(promptLabel: string, options: { isIdleStopAwaited: boolean; isFirstQuestionMarkAwaited?: boolean } = { isIdleStopAwaited: true }): Promise<FakeTelegramMessage> {
   const idleStopsBefore = countIdleStops();
   const sentMessageId = fakeTelegram.pushOperatorMessage(topicThreadId, `${promptLabel} [fake:ask] ask me something`);
   const question = await topic.waitForMessage(`the question of ${promptLabel}`, (message) => message.message_id > sentMessageId && message.text.includes(fakeAskQuestion.question) && message.reply_markup !== undefined);
@@ -146,13 +149,17 @@ async function waitForReaskedQuestion(promptLabel: string, options: { isIdleStop
   assert.match(reasked.text, /You still have a pending question/);
   assert.match(reasked.text, new RegExp(fakeAskQuestion.question.replace('?', '\\?')));
   assert.deepEqual(topic.getKeyboardData(reasked), [['reask_0'], ['reask_1']], 'one button per option');
+  if (options.isFirstQuestionMarkAwaited === false) return options.isIdleStopAwaited ? waitForIdleStopAfter(idleStopsBefore, promptLabel, reasked) : reasked;
   // The first question message is not deleted: the question as asked, «asked again below» in place of its buttons.
   await waitingTopic.waitForMessageText(`the first question of ${promptLabel} marked as asked again`, question, (text) => text.endsWith(`\n\n${enDict['agent.question_asked_again_note']}`));
   const keptQuestion = fakeTelegram.getMessage(question.message_id);
   assert.ok(keptQuestion && !keptQuestion.isDeleted, 'the first question message is still in the topic');
   assert.ok(keptQuestion.text.includes(fakeAskQuestion.question) && keptQuestion.text.includes(fakeAskQuestion.shortOptionLabel) && keptQuestion.text.includes(fakeAskQuestion.longOptionLabel), 'its question and options stay');
   assert.equal(keptQuestion.reply_markup, undefined, 'its buttons are gone');
-  if (!options.isIdleStopAwaited) return reasked;
+  return options.isIdleStopAwaited ? waitForIdleStopAfter(idleStopsBefore, promptLabel, reasked) : reasked;
+}
+
+async function waitForIdleStopAfter(idleStopsBefore: number, promptLabel: string, reasked: FakeTelegramMessage): Promise<FakeTelegramMessage> {
   await getCharness().waitFor(`the idle stop that follows the re-ask of ${promptLabel}`, agentStartTimeoutMs, () => countIdleStops() > idleStopsBefore);
   return reasked;
 }
@@ -315,7 +322,7 @@ describe('A pending question the idle compaction re-asks, end to end: built char
     fakeTelegram.holdNextResponse('sendMessage', questionHold.promise, (payload) => JSON.stringify(payload.reply_markup ?? null).includes('reask_'));
     fakeTelegram.holdNextResponse('answerCallbackQuery', toastHold.promise);
     try {
-      const reasked = await waitForReaskedQuestion(promptLabel, { isIdleStopAwaited: false });
+      const reasked = await waitForReaskedQuestion(promptLabel, { isIdleStopAwaited: false, isFirstQuestionMarkAwaited: false });
       const askingPid = getAgentPrompts(promptLabel)[0]?.pid;
       assert.ok(askingPid !== undefined, 'the process that put the question');
       // The toast reaches the Bot API once the handler has read the session: the tap was read.

@@ -6,7 +6,7 @@
  *
  * Extracted from `bot.ts`'s `flushStatusCoalescer` so the rule is unit-testable
  * without the Telegraf / bucket machinery (same pattern as
- * `clearThreadOutputQueues.ts`). Status frames are disposable spinner ticks:
+ * `clearStatusCoalescer.ts`). Status frames are disposable spinner ticks:
  * during congestion it is correct to drop or defer them rather than burn the
  * chat-wide send budget that interactive command replies and agent output need.
  *

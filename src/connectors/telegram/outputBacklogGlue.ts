@@ -7,7 +7,7 @@
  * burst drains in a single send. 1–2 pending frames stay separate (snappy).
  *
  * The join+threshold is a pure, Telegraf-free helper (mirrors
- * `utils/outputFlushPlan.ts` / `utils/groupFinalizePlan.ts`): input = ordered
+ * `utils/outputFlushPlan.ts` / `utils/groupOutputBacklog.ts`): input = ordered
  * pending frames, output = the fewest messages that fit, each ≤ the cap, frames
  * joined by `\n\n`. Per-topic only — cross-topic messages carry distinct
  * `message_thread_id`s and can never merge, so "in one chat" ⇒ "in one topic's

@@ -186,7 +186,8 @@ puts it in parentheses on the machine's row and the `/runners` screen under its 
 in General per new concern — `<name>: <the note>` — and pins it (the operator runs every topic muted; a pin pierces it). What it already told is the
 instance's own record, `DATA_DIR/runner-link-notices.json` (`connectors/telegram/runnerLinkNotices.ts`): a concern is told apart by the time of its
 newest change, so the next look, a restart and the rest of a fight tell nothing again; with no General to post in, or a send that failed, it is tried
-again at the next look. What it cannot see: two machines that share one address (one network behind one NAT show one source), and
+again at the next look — a send the Bot API did not answer in time may have landed, so it counts as told (unpinned: its id is not known). What it
+cannot see: two machines that share one address (one network behind one NAT show one source), and
 a source that is unknown (no `SSH_CLIENT`, a status file an older gate wrote) never counts as a change.
 
 **Removing an always-on service** (`serviceRemoval.ts`). Removing a runner here leaves its two LaunchDaemons running on the machine until an admin

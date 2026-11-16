@@ -74,30 +74,11 @@ export type PueueState =
   | { kind: 'busy'; activeJobs: number }
   /** The daemon answered, and the answer is not a status. */
   | { kind: 'unreadable' }
-  /** No answer came (it timed out, the client failed): the daemon may be busy with a heavy job — {@link summarizePueueView} only; {@link inspectPueue} calls this `absent`. */
+  /** No answer came (it timed out, the client failed): the daemon may be busy with a heavy job. */
   | { kind: 'unanswered'; reason: string };
 
 /** The statuses of a task that holds a process: it runs, or it is paused with its process kept. */
 const pueueProcessStatuses: readonly string[] = ['Running', 'Paused'];
-
-/** @description The tasks of `pueue status --json` that hold a process (`Running` and `Paused`: Pueue kills them when it stops), or `null` when the text is not that. */
-export function countActivePueueTasks(statusJson: string): number | null {
-  const snapshot = parsePueueStatus(statusJson);
-  return snapshot === null ? null : snapshot.tasks.filter((task) => pueueProcessStatuses.includes(task.status)).length;
-}
-
-/**
- * @description Is a daemon answering on the runner's socket, and does it hold running jobs? ANY failure of the question — also a timeout — is `absent`: right for stopping and
- * clearing the queue ({@link stopAllPueueJobs}, where a daemon that does not answer is waited for no longer), WRONG for deciding whether a job would be cut. For that, ask
- * {@link readPueueView}, which tells "no daemon" from "no answer".
- */
-export async function inspectPueue(paths: RunnerHomePaths, runner: CommandRunner = runCommand): Promise<PueueState> {
-  const result = await runner(path.join(paths.binDir, 'pueue'), ['--config', paths.pueueConfig, 'status', '--json'], { timeoutMs: probeTimeoutMs });
-  if (!result.ok) return { kind: 'absent' };
-  const activeJobs = countActivePueueTasks(result.stdout);
-  if (activeJobs === null) return { kind: 'unreadable' };
-  return activeJobs === 0 ? { kind: 'idle' } : { kind: 'busy', activeJobs };
-}
 
 /** One task of `pueue status --json`: its id, its status word (`Running`, `Paused`, `Queued`, `Locked`, `Done`, …) and the group it belongs to. */
 export interface PueueTask {
@@ -140,7 +121,7 @@ export type PueueView =
 const noDaemonPattern = /Did you start|Connection refused|No such file or directory/i;
 
 /**
- * @description Look at the queue the way a decision about a job's Node needs it: unlike {@link inspectPueue}, only a client that says there is NO daemon counts as `absent`.
+ * @description Look at the queue the way a decision about a job's Node, or stopping its jobs, needs it: only a client that says there is NO daemon counts as `absent`.
  * An answer that timed out and a failure of any other kind are `unanswered`, a reply that is not a status is `unreadable` — a daemon that is busy with a heavy build is not a free queue.
  */
 export async function readPueueView(paths: RunnerHomePaths, runner: CommandRunner = runCommand): Promise<PueueView> {
@@ -217,16 +198,18 @@ export async function shutDownPueue(paths: RunnerHomePaths, runner: CommandRunne
 
 /**
  * @description Stop every job of the queue and empty it (`pueue reset --force`: it kills the running tasks and their children and removes the
- * rest, so no queued task starts in their place), then wait until nothing is left running. `true` also when no daemon answers (its jobs died
- * with it). The reset only ASKS: Pueue 4 answers at once and its task handler kills the tasks a moment later, so one look right after the
- * command would still see them `Running` — it looks again, until `settleTimeoutMs` is over.
+ * rest, so no queued task starts in their place), then wait until nothing is left running. `true` also when there is no daemon (its jobs died
+ * with it) — only the client saying so counts ({@link readPueueView}): a daemon too busy to answer in time, as under a heavy build, still runs
+ * its jobs, so it gets the reset all the same, and while it keeps not answering the result is `false`. The reset only ASKS: Pueue 4 answers at
+ * once and its task handler kills the tasks a moment later, so one look right after the command would still see them `Running` — it looks
+ * again, until `settleTimeoutMs` is over.
  */
 export async function stopAllPueueJobs(paths: RunnerHomePaths, runner: CommandRunner = runCommand, settleTimeoutMs: number = daemonStartTimeoutMs): Promise<boolean> {
-  if ((await inspectPueue(paths, runner)).kind === 'absent') return true;
+  if ((await readPueueView(paths, runner)).kind === 'absent') return true;
   await runner(path.join(paths.binDir, 'pueue'), ['--config', paths.pueueConfig, 'reset', '--force'], { timeoutMs: daemonStartTimeoutMs });
   const deadline = Date.now() + settleTimeoutMs;
   for (;;) {
-    const after = await inspectPueue(paths, runner);
+    const after = summarizePueueView(await readPueueView(paths, runner));
     if (after.kind === 'absent' || after.kind === 'idle') return true;
     if (Date.now() >= deadline) return false;
     await new Promise((resolve) => { setTimeout(resolve, pueueWaitPollMs); });

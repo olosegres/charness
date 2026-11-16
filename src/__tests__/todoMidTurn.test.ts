@@ -99,7 +99,7 @@ describe('the PostToolUse inbox hook', () => {
     assert.deepEqual(JSON.parse(buildTodoInboxHookOutput('hello')), { hookSpecificOutput: { hookEventName: 'PostToolUse', additionalContext: 'hello' } });
     const cut = JSON.parse(buildTodoInboxHookOutput('y'.repeat(todoInboxMaxChars + 50))).hookSpecificOutput.additionalContext;
     assert.equal([...cut].length, todoInboxMaxChars);
-    const [, settingsPath] = prepareClaudeCompactHookFlags(dataDir);
+    const [, settingsPath] = prepareClaudeCompactHookFlags(dataDir, null, { skillsRestore: { unavailableSkillsDir: null } });
     const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
     assert.equal(settings.hooks.PostToolUse[0].hooks[0].command, buildTodoInboxHookCommand(getTodoInboxDir(dataDir)));
     assert.equal(settings.hooks.PostToolUse[0].matcher, undefined, 'every tool');

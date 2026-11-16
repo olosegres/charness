@@ -104,6 +104,10 @@ export class CommandHarness {
         this.replies.push({ messageId, text, extra, ...(options === undefined ? {} : { options }) });
         return messageId;
       },
+      replyToThreadDetailed: async (key, text, extra, options) => {
+        const messageId = await this.core.replyToThread(key, text, extra, options);
+        return messageId === null ? { kind: 'failed', isRetryable: false } : { kind: 'sent', messageId };
+      },
       editThreadMessage: async (key, messageId, text, extra) => (await this.core.editThreadMessageDetailed(key, messageId, text, extra)) === 'edited',
       editThreadMessageDetailed: async (_key, messageId, text, extra) => {
         if (this.goneMessageIds.has(messageId)) return 'gone';
@@ -222,6 +226,7 @@ export function createInertBotCore(): BotCore {
       throw new Error('this test did not set up a state store');
     },
     replyToThread: async () => null,
+    replyToThreadDetailed: async () => ({ kind: 'failed', isRetryable: false }),
     editThreadMessage: async () => false,
     editThreadMessageDetailed: async () => 'failed',
     editThreadKeyboard: async () => false,

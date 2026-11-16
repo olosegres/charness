@@ -57,8 +57,8 @@ claude -p --input-format stream-json --output-format stream-json \
   an account billed to API credits (`utils/claudeProfiles.ts`, `billing: 'api'`):
   its key is a console login's in its own `CLAUDE_CONFIG_DIR`, or a pasted key its
   launch settings' `apiKeyHelper` reads (`prepareClaudeCompactHookFlags(dataDir,
-  configDir)` — only the LAST `--settings` counts, so hook and helper share one
-  file) — still never `ANTHROPIC_API_KEY` (`apiKeySource` then reads
+  configDir, options)` — only the LAST `--settings` counts, so hooks and helper share one
+  file per kind of launch) — still never `ANTHROPIC_API_KEY` (`apiKeySource` then reads
   `/login managed key` or `apiKeyHelper`), and only there `total_cost_usd` is money.
 
 ### Output events (documented, stable)
@@ -97,6 +97,9 @@ Newline-delimited JSON, one object per line, parsed in
   `idle`, emitted only under `CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS`, which every
   wrapper sets. `running` marks a turn at its start; `idle` is ignored (it fires
   after every `result`, while a background task still runs).
+- `system` `subtype:"hook_started"` / `"hook_response"` — one each per hook the CLI runs; the response carries the hook's
+  whole stdout (`output`, `stdout`), the skills restore's text included. Dropped by the classifier (pinned by a test): it
+  must never reach the topic.
 - `command_lifecycle` `state:"started"` — a session-only job fired and starts a
   turn; it names its source, not the job: `wakeup_source:"schedule_wakeup"` for a
   `CronCreate` job, `"loop_wakeup"` for the `ScheduleWakeup` (`/loop`) one (both
@@ -131,6 +134,24 @@ same tmux name and host dir per conversation:
   each terminal `result`), unless a deferred compaction is armed or the process
   still works. stdin is never closed while a task runs: EOF kills background
   tasks ~5 s later (probe 2026-10-04).
+
+**Launch hooks** (`--settings`, `utils/claudeCompactHook.ts`): a `PreCompact` hook (the summary guidance for the CLI's own
+compaction), the todo lists' `PostToolUse` inbox hook and — json-stream and per-turn only, never the frozen tmux backend —
+the skills restore: 24 `SessionStart` hooks with the matcher `compact` (`hooks/claudeSkillsRestoreHook.ts`, run by the
+bot's own `node`, 30 s `timeout` each), each printing one labelled part (≤ 9,500 characters) of the skills the transcript
+shows were loaded since the previous compaction, every one with its current text read from `<base directory>/SKILL.md`,
+which the part names under the base directory as `Skill file: <path>` (`utils/skillsRestore.ts`; Claude's own
+re-attach is not relied on — a `--resume`d process re-attaches none of the skills an earlier process loaded, measured by the
+live probe on 2.1.323). Measured on 2.1.322: they run after EVERY
+compaction (the CLI's own mid-turn ones too) BEFORE the new boundary and summary reach the transcript, all parts reach the
+next model request whole, and the CLI keeps them in the transcript (`hook_additional_context`), so a resumed process sends
+them again. The CLI runs the hooks in parallel and takes each one's output when its process ends, so unchained parts landed
+shuffled (2.1.323: [5, 2, 1, 3, 4]); the slots form a CHAIN instead: slot i prints only once slot i-1 has left its
+done-marker in `DATA_DIR/skills-restore-order/` (named after the compaction: a hash of the transcript's last epoch, so an
+earlier compaction's marker never counts) and its process is gone — 3 s per missing step, 20 s at most, so a broken slot
+never holds the rest — and the slot with the last part clears the compaction's markers. Live: every part in order, the last
+one 1.1–1.3 s after the first hook started. Each kind of launch has its own settings file, so concurrent launches never read each
+other's hooks; a launch without the bot's skills passes their folder, which the restore then calls unavailable.
 
 Every COMPLETED compaction is told as `contextCompacted` (key, trigger): a bot-issued one on its one success
 path (`resolveCompaction`), and the CLI's own overflow compaction — a `compact_boundary` nobody waited for, live
@@ -255,7 +276,13 @@ restarts — every hot reload — never touch it. Per-thread host dir
   but only once batched answer text has actually been EMITTED — an offset past
   un-emitted text would skip it on replay (live seam-loss 2026-07-05). A turn's end
   emits what its batch holds (an error-ended turn's text too, ahead of its error), so
-  a finished turn leaves the offset at the end of the log.
+  a finished turn leaves the offset at the end of the log. `flushPendingOutput` (optional
+  on `AgentAdapter`, also OpenCode's) does the same mid-turn on demand: it reads the tail
+  (the poll lags the process; not from inside the handling of a chunk, as a question event asks,
+  nor from an adopted tail the boot still holds — its replay waits for `releaseAdoptedTails`)
+  and emits the batch, so the bot can land the text the agent streamed before it posts its
+  `answer_request` answer, its `send_messages_to_user` messages (`utils/messageSendService.ts`) or
+  its question (`handleAgentQuestion`).
   The record also carries the background-task list (ids, and `backgroundTasks`
   with descriptions), a turn-in-flight flag, the outstanding tool calls, the
   pending notification turn, the hold's start, the `CronCreate` jobs and a

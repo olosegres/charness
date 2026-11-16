@@ -67,10 +67,13 @@ import {
   fakeStatusWatchTargetFileName,
   fakeWatchJobName,
   getBotMcpServer,
+  getFakeDigestMessageText,
+  getFakeStreamTextEnd,
   type FakeClaudeMcpServer,
   type FakeStatusWatchTarget,
   type McpServerConfig,
 } from './fakeClaudeContract';
+import { runHookCommand } from './fakeHookRunner';
 import { workerWatchArmedFileName, workerWatchCheckCommand, workerWatchStatusArguments } from '../../scheduler/workerWatch';
 import { readClaudeTranscriptContent } from '../../utils/claudeTranscriptContent';
 import { claudeSessionStateEventsVariableName } from '../../utils/jsonStreamHost';
@@ -160,6 +163,9 @@ import { claudeSessionStateEventsVariableName } from '../../utils/jsonStreamHost
  *    after the other); the outcome logged is the two answers joined by `fakeAskTwoOutcomeSeparator`;
  *  - `ask-long`    — the same question, each option with a `fakeAskLongDescription`: it fits one Telegram message, but not
  *    with an answer note under it;
+ *  - `send-messages` — calls `send_messages_to_user` with ONE message, `getFakeDigestMessageText(<label>)`, between the
+ *    streamed text and its `final` answer (with the `tool_use` / `tool_result` lines around the call, as for every bot tool it
+ *    calls for the user), and logs the outcome to `tool-calls.jsonl`;
  *  - an `apiKeyHelper` in the launch's `--settings` (a file path or inline JSON; only the LAST `--settings` counts,
  *    as in the real CLI) is run through `/bin/sh` the way the CLI runs it: a plausible API key out of it makes the
  *    session report `apiKeySource: "apiKeyHelper"` in its init frames (else `"none"`, the subscription login) and a
@@ -193,7 +199,11 @@ import { claudeSessionStateEventsVariableName } from '../../utils/jsonStreamHost
  * adds an item, `[todo-id:<id>:<status>]` changes one, `[todo-touch]` confirms the list — sent as ONE `todo_update`
  * call before the turn answers, its outcome logged to `tool-calls.jsonl` (the shared todo registry, as a real agent
  * publishes). A `[tool-name:<name>]` token names the tool call every turn streams before its answer (default `Read`), so the bot's
- * `🔧 <name>` status line can carry markup characters. A `[work-ms:<n>]` token makes a turn that gets that far work n ms (busy, silent) before it answers; a
+ * `🔧 <name>` status line can carry markup characters. A `[text-chars:<n>]` token makes the text every turn streams about n
+ * characters long (it ends with `getFakeStreamTextEnd(<label>)`, so a test finds its LAST message): a text past Telegram's
+ * 4096 reaches the topic as several messages. Around `answer_request` and `send_messages_to_user` the fake writes what the real
+ * CLI writes — the assistant's `tool_use` line BEFORE it calls the tool, the `tool_result` line after it — so the bot sees a
+ * tool call (its status frame, the landing of the text ahead of it) before the tool's own request arrives. A `[work-ms:<n>]` token makes a turn that gets that far work n ms (busy, silent) before it answers; a
  * `[tool-after-ms:<n>]` token makes one more tool call n ms later, after which the launch's `PostToolUse` hooks (its
  * last `--settings`) run as the real CLI runs them — what one gives the agent as `additionalContext` is logged to
  * `hooks.jsonl`.
@@ -201,6 +211,16 @@ import { claudeSessionStateEventsVariableName } from '../../utils/jsonStreamHost
  * Every compaction (a `/compact` turn and the overflow mode's own) runs the launch's `PreCompact` hooks first, as the real
  * CLI does: each gets the hook input on stdin (`custom_instructions` is what followed `/compact`, null for the CLI's own),
  * and what they print is logged to `pre-compact-hooks.jsonl` — the instruction the real CLI appends to the compaction's.
+ * Then its `SessionStart` hooks for the `compact` source run, BEFORE the compaction reaches the transcript (the order measured
+ * on the real CLI 2.1.322); what they give as `additionalContext` is logged to `session-start-hooks.jsonl` and stored after
+ * the compaction's records as the CLI stores it (`hook_additional_context`), beside Claude's own re-attach of the skills
+ * loaded so far (`invoked_skills`: newest first, each cut at 20,000 characters, 100,000 in all — the measured rule). Every
+ * model request after it holds those contexts: a turn's first one and the continuation after the overflow mode's own
+ * compaction log what the transcript's last compaction holds to `restore-contexts.jsonl`, so a resumed process holds it too.
+ *
+ * A `[skill:<name>]` token loads that skill of the project (`.claude/skills/<name>/SKILL.md` in the session's folder) the way
+ * the real CLI's Skill tool does: the call, its result and — when the skill exists — the skill's message (`Base directory for
+ * this skill: <dir>` and its body) in the transcript; a skill that does not exist is a failed call.
  *
  * Like the real CLI, a user message that arrives mid-turn is NEVER read inside
  * that turn: turns run one at a time, in arrival order.
@@ -217,8 +237,8 @@ import { claudeSessionStateEventsVariableName } from '../../utils/jsonStreamHost
  * `FAKE_CLAUDE_STATE_DIR` (per-request turn counts, the conversations held).
  */
 
-export type FakeClaudeMode = 'answer' | 'silent-once' | 'silent' | 'hang-once' | 'hold-once' | 'slow-once' | 'progress' | 'finish-together' | 'answer-after-queued' | 'background' | 'background-notify' | 'compact' | 'overflow' | 'fetch-attachment' | 'run-tool' | 'reply-to' | 'usage-limit-once' | 'ask' | 'ask-two' | 'ask-long';
-const fakeModes: readonly FakeClaudeMode[] = ['answer', 'silent-once', 'silent', 'hang-once', 'hold-once', 'slow-once', 'progress', 'finish-together', 'answer-after-queued', 'background', 'background-notify', 'compact', 'overflow', 'fetch-attachment', 'run-tool', 'reply-to', 'usage-limit-once', 'ask', 'ask-two', 'ask-long'];
+export type FakeClaudeMode = 'answer' | 'silent-once' | 'silent' | 'hang-once' | 'hold-once' | 'slow-once' | 'progress' | 'finish-together' | 'answer-after-queued' | 'background' | 'background-notify' | 'compact' | 'overflow' | 'fetch-attachment' | 'run-tool' | 'reply-to' | 'usage-limit-once' | 'ask' | 'ask-two' | 'ask-long' | 'send-messages';
+const fakeModes: readonly FakeClaudeMode[] = ['answer', 'silent-once', 'silent', 'hang-once', 'hold-once', 'slow-once', 'progress', 'finish-together', 'answer-after-queued', 'background', 'background-notify', 'compact', 'overflow', 'fetch-attachment', 'run-tool', 'reply-to', 'usage-limit-once', 'ask', 'ask-two', 'ask-long', 'send-messages'];
 /**
  * How long an `answer-after-queued` turn waits for the next message before it answers anyway: four polls of the 10 s
  * floor, or what the launcher sets (`fakeClaudeQueuedWaitMaxMsEnvName`) for the instance's own poll.
@@ -242,6 +262,17 @@ const holdReleasePollMs = 100;
 
 const requestIdRe = /req_[A-Za-z0-9_-]+/;
 const issueKeyRe = /\b([A-Z][A-Z0-9]+-\d+)\b/;
+/** Every request id of a prompt (its header names one, and the ones it replaced). */
+const requestIdsRe = /req_[A-Za-z0-9_-]+/g;
+
+/**
+ * @description The label a prompt names (`KEY-n`: an issue key, or the label a test puts in its message): the first such token
+ * once the request ids are taken out. A request id is 8 random base64url characters after `req_` and stands in the header,
+ * ahead of the message, so one that happened to end like `-RT-2` used to be read as the label.
+ */
+function getPromptIssueKey(content: string): string | undefined {
+  return issueKeyRe.exec(content.replace(requestIdsRe, ' '))?.[1];
+}
 const modeRe = /\[fake:([a-z-]+)\]/;
 const answerToolName = 'answer_request';
 const compactToolName = 'compact_conversation';
@@ -257,6 +288,14 @@ const todoPatchRe = /\[todo-id:(t\d+):(queued|inWork|done|dropped)\]/g;
 const todoTouchToken = '[todo-touch]';
 const workMsRe = /\[work-ms:(\d+)\]/;
 const toolAfterMsRe = /\[tool-after-ms:(\d+)\]/;
+const textCharsRe = /\[text-chars:(\d+)\]/;
+/** What pads a `[text-chars:<n>]` text out: ordinary words, so the bot's splitter finds boundaries to cut at. */
+const streamTextFiller = ' lorem ipsum dolor sit amet consectetur';
+/** The name prefix of a bot MCP tool in a `tool_use` line (the real CLI names it `mcp__<server>__<tool>`); the server's own name is not the flows' concern. */
+const botToolNamePrefix = 'mcp__bot__';
+const sendMessagesToolName = 'send_messages_to_user';
+/** `[skill:<name>]`: the turn loads that project skill with the Skill tool. */
+const skillTokenRe = /\[skill:([A-Za-z0-9:_-]+)\]/g;
 /** `[tool-name:<name>]`: the tool call of the turn's activity carries this name (default `Read`) — the bot's `🔧 <name>` status line shows it. */
 const toolNameRe = /\[tool-name:([^\]]+)\]/;
 const defaultTurnToolName = 'Read';
@@ -312,7 +351,7 @@ function getPreCompactHookCommands(argv: readonly string[]): string[] {
   return (settings?.hooks?.PreCompact ?? []).flatMap((group) => (group.hooks ?? []).flatMap((hook) => (hook.type === 'command' && typeof hook.command === 'string' ? [hook.command] : [])));
 }
 
-/** How long a hook command may run, as the real CLI bounds it (it waits up to a minute; the fake's are quick). */
+/** How long a hook command with no `timeout` of its own may run (the real CLI waits up to a minute; the fake's are quick). */
 const hookTimeoutMs = 10_000;
 
 /**
@@ -326,6 +365,63 @@ function runPreCompactHooks(argv: readonly string[], sessionId: string, trigger:
     .join('')
     .trim();
   appendJsonLine(fakeClaudeLogFileNames.preCompactHooks, { sessionId, pid: process.pid, trigger, instruction });
+}
+
+/** A command hook of the launch's settings, with how long it may run: its own `timeout` (seconds), as the real CLI bounds it. */
+interface FakeCommandHook {
+  command: string;
+  timeoutMs: number;
+}
+
+/** The `SessionStart` command hooks of the launch's settings that fire for a compaction: no matcher, or the `compact` one. */
+function getSessionStartCompactHooks(argv: readonly string[]): FakeCommandHook[] {
+  const settings = readLaunchSettings(argv) as { hooks?: { SessionStart?: Array<{ matcher?: string; hooks?: Array<{ type?: string; command?: string; timeout?: number }> }> } } | null;
+  return (settings?.hooks?.SessionStart ?? [])
+    .filter((group) => group.matcher === undefined || group.matcher === '' || group.matcher === 'compact')
+    .flatMap((group) => (group.hooks ?? []).flatMap((hook): FakeCommandHook[] => (hook.type === 'command' && typeof hook.command === 'string'
+      ? [{ command: hook.command, timeoutMs: typeof hook.timeout === 'number' ? hook.timeout * 1000 : hookTimeoutMs }]
+      : [])));
+}
+
+/**
+ * How far apart the fake starts the `SessionStart` hooks, LAST slot first: the real CLI starts them all at once and the
+ * machine runs them in any order; the fake makes that order the worst one, so hooks that did not wait for each other would
+ * finish backwards.
+ */
+const sessionStartHookStaggerMs = 50;
+
+/**
+ * The launch's `SessionStart` hooks after a compaction, the way the real CLI runs them: all of them, without blocking the
+ * process (stdin and control frames are still read meanwhile), the hook input on stdin (source `compact`), a `hook_started`
+ * frame each and a `hook_response` as each ends on stdout (the response carries the hook's stdout, as the real one's does —
+ * the bot must drop it), and the `additionalContext` of each hook's JSON collected in the order the hooks FINISH, as the real
+ * CLI takes them (measured on Claude Code 2.1.323). They start in REVERSE slot order, {@link sessionStartHookStaggerMs} apart:
+ * only hooks that keep their order themselves end by number. Logged to `session-start-hooks.jsonl`.
+ */
+async function runSessionStartCompactHooks(argv: readonly string[], sessionId: string, trigger: 'auto' | 'manual'): Promise<string[]> {
+  const input = JSON.stringify({ session_id: sessionId, transcript_path: getTranscriptPath(sessionId), cwd: process.cwd(), hook_event_name: 'SessionStart', source: 'compact', model: getReportedModel(argv) });
+  const hooks = getSessionStartCompactHooks(argv);
+  const outputs: string[] = [];
+  await Promise.all(hooks.map(async (hook, index) => {
+    await new Promise((resolve) => { setTimeout(resolve, (hooks.length - 1 - index) * sessionStartHookStaggerMs); });
+    const hookId = randomUUID();
+    writeStdout({ type: 'system', subtype: 'hook_started', hook_id: hookId, hook_name: 'SessionStart:compact', hook_event: 'SessionStart', session_id: sessionId });
+    const output = await runHookCommand(hook.command, input, hook.timeoutMs);
+    writeStdout({ type: 'system', subtype: 'hook_response', hook_id: hookId, hook_name: 'SessionStart:compact', hook_event: 'SessionStart', output, stdout: output, stderr: '', exit_code: 0, outcome: 'success', session_id: sessionId });
+    outputs.push(output);
+  }));
+  const contexts = outputs.flatMap((output): string[] => {
+    if (output.trim() === '') return [];
+    try {
+      const additionalContext = (JSON.parse(output) as { hookSpecificOutput?: { additionalContext?: unknown } }).hookSpecificOutput?.additionalContext;
+      return typeof additionalContext === 'string' ? [additionalContext] : [];
+    } catch {
+      // Not hook JSON: the real CLI adds plain stdout as context too, but the bot's hooks print JSON.
+      return [];
+    }
+  });
+  appendJsonLine(fakeClaudeLogFileNames.sessionStartHooks, { sessionId, pid: process.pid, trigger, contexts });
+  return contexts;
 }
 
 /**
@@ -739,8 +835,31 @@ async function runWatchMode(server: McpServerConfig, mode: 'arm-watch' | 'arm-st
   if (jobId) logToolCall('schedule_cancel', { id: jobId }, await callBotTool(server, 'schedule_cancel', { id: jobId }));
 }
 
-function callAnswerRequest(server: McpServerConfig, args: AnswerRequestArgs): Promise<string> {
-  return callBotTool(server, answerToolName, args);
+/**
+ * @description Call a bot MCP tool the way the real CLI does: the assistant's `tool_use` line is written BEFORE the call (the bot
+ * reads it as a tool call and shows its status frame while the tool's own request is still on its way), the user's `tool_result`
+ * line after it.
+ */
+async function callBotToolAsAgent(server: McpServerConfig, sessionId: string, toolName: string, args: Record<string, unknown>): Promise<string> {
+  const toolUseId = `toolu_${randomUUID()}`;
+  writeStdout({
+    type: 'assistant',
+    message: { role: 'assistant', content: [{ type: 'tool_use', id: toolUseId, name: `${botToolNamePrefix}${toolName}`, input: args }] },
+    parent_tool_use_id: null,
+    session_id: sessionId,
+  });
+  const outcome = await callBotTool(server, toolName, args);
+  writeStdout({
+    type: 'user',
+    message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: toolUseId, content: outcome }] },
+    parent_tool_use_id: null,
+    session_id: sessionId,
+  });
+  return outcome;
+}
+
+function callAnswerRequest(server: McpServerConfig, sessionId: string, args: AnswerRequestArgs): Promise<string> {
+  return callBotToolAsAgent(server, sessionId, answerToolName, args);
 }
 
 /**
@@ -775,7 +894,17 @@ function emitTurnActivity(sessionId: string, issueKey: string, content: string =
     parent_tool_use_id: null,
     session_id: sessionId,
   });
-  writeStdout({ type: 'stream_event', event: { type: 'content_block_delta', index: 1, delta: { type: 'text_delta', text: `Working on ${issueKey}.` } } });
+  writeStdout({ type: 'stream_event', event: { type: 'content_block_delta', index: 1, delta: { type: 'text_delta', text: buildStreamText(issueKey, content) } } });
+}
+
+/** The text a turn streams: `Working on <label>.`, padded out to a `[text-chars:<n>]` token's length and ended by {@link getFakeStreamTextEnd}. */
+function buildStreamText(issueKey: string, content: string): string {
+  const text = `Working on ${issueKey}.`;
+  const length = Number(textCharsRe.exec(content)?.[1] ?? '0');
+  if (length <= 0) return text;
+  const end = getFakeStreamTextEnd(issueKey);
+  const fillerCount = Math.max(0, Math.ceil((length - text.length - end.length) / streamTextFiller.length));
+  return `${text}${streamTextFiller.repeat(fillerCount)} ${end}`;
 }
 
 /**
@@ -963,32 +1092,146 @@ async function askUserQuestion(variant: FakeAskVariant = 'one'): Promise<string>
   return questions.map((question) => answers[question.question] ?? fakeAskNoAnswerOutcome).join(fakeAskTwoOutcomeSeparator);
 }
 
-/**
- * What the real CLI does at the end of every compaction: it leaves the summary in the transcript as a message flagged
- * `isCompactSummary`. The fake does it when a flow gave it a summary ({@link fakeClaudeCompactionSummaryFileName}).
- */
-function recordCompactionSummary(sessionId: string): void {
-  const summaryPath = path.join(getStateDir(), fakeClaudeCompactionSummaryFileName);
-  if (!fs.existsSync(summaryPath)) return;
+/** The transcript's records as objects, a line that is no JSON skipped. */
+function readTranscriptRecords(sessionId: string): Array<Record<string, unknown>> {
   const transcriptPath = getTranscriptPath(sessionId);
-  fs.mkdirSync(path.dirname(transcriptPath), { recursive: true });
-  fs.appendFileSync(transcriptPath, `${JSON.stringify({ type: 'user', isCompactSummary: true, sessionId, message: { role: 'user', content: fs.readFileSync(summaryPath, 'utf8') } })}\n`);
+  if (!fs.existsSync(transcriptPath)) return [];
+  return fs.readFileSync(transcriptPath, 'utf8').split('\n').flatMap((line) => {
+    try {
+      const record: unknown = JSON.parse(line);
+      return record !== null && typeof record === 'object' && !Array.isArray(record) ? [record as Record<string, unknown>] : [];
+    } catch {
+      return [];
+    }
+  });
 }
 
-/** The CLI's own compaction at a context overflow: nobody asked for it, and no `/compact` turn is running. */
-function emitOverflowCompaction(argv: readonly string[], sessionId: string): void {
+/** The records after the transcript's last compaction boundary: what the real CLI sends the model now. */
+function readCurrentEpochRecords(sessionId: string): Array<Record<string, unknown>> {
+  const records = readTranscriptRecords(sessionId);
+  const boundaryIndex = records.map((record) => record.type === 'system' && record.subtype === 'compact_boundary').lastIndexOf(true);
+  return records.slice(boundaryIndex + 1);
+}
+
+/** The prefix of the real CLI's skill message, and the notice its re-attach puts where it cut a skill (both measured on 2.1.322). */
+const skillMessagePrefix = 'Base directory for this skill: ';
+const reattachCutNotice = '\n\n[... skill content truncated for compaction; use Read on the skill path if you need the full text]';
+const reattachSkillMaxChars = 20_000;
+const reattachBudgetChars = 100_000;
+
+/**
+ * Claude's own re-attach at a compaction, as measured on the real CLI 2.1.322: the most recent load of each skill — the
+ * current epoch's skill messages, then the previous re-attach — newest first, each cut to 20,000 characters, until 100,000
+ * characters are used.
+ */
+function buildReattachedSkills(sessionId: string): Array<{ name: string; path: string; content: string }> {
+  const epoch = readCurrentEpochRecords(sessionId);
+  const toolSkillNames = new Map<string, string>();
+  const loads: Array<{ name: string; content: string }> = [];
+  let previous: Array<{ name: string; content: string }> = [];
+  for (const record of epoch) {
+    const message = record.message as { content?: unknown } | undefined;
+    const blocks = Array.isArray(message?.content) ? (message.content as Array<{ type?: string; id?: string; name?: string; input?: { skill?: string }; text?: string }>) : [];
+    if (record.type === 'assistant') {
+      for (const block of blocks) if (block.type === 'tool_use' && block.name === 'Skill' && block.id && block.input?.skill) toolSkillNames.set(block.id, block.input.skill);
+    }
+    const text = blocks.map((block) => block.text ?? '').join('');
+    if (record.type === 'user' && record.isMeta === true && text.startsWith(skillMessagePrefix) && typeof record.sourceToolUseID === 'string') {
+      loads.push({ name: toolSkillNames.get(record.sourceToolUseID) ?? 'unknown', content: text });
+    }
+    const attachment = record.attachment as { type?: string; skills?: Array<{ name: string; content: string }> } | undefined;
+    if (record.type === 'attachment' && attachment?.type === 'invoked_skills' && attachment.skills) previous = attachment.skills;
+  }
+  const reattached: Array<{ name: string; path: string; content: string }> = [];
+  let usedChars = 0;
+  for (const load of [...loads.reverse(), ...previous]) {
+    if (reattached.some((skill) => skill.name === load.name)) continue;
+    const content = load.content.length > reattachSkillMaxChars ? `${load.content.slice(0, reattachSkillMaxChars - reattachCutNotice.length)}${reattachCutNotice}` : load.content;
+    if (usedChars + content.length > reattachBudgetChars) break;
+    usedChars += content.length;
+    reattached.push({ name: load.name, path: `projectSettings:${load.name}`, content });
+  }
+  return reattached;
+}
+
+/**
+ * What the real CLI writes to the transcript once a compaction is done (after its `SessionStart` hooks ran): the boundary,
+ * the summary — when a flow gave the fake one ({@link fakeClaudeCompactionSummaryFileName}) — as a message flagged
+ * `isCompactSummary`, its own re-attach of the skills, and what the hooks gave.
+ */
+function recordCompactionInTranscript(sessionId: string, trigger: 'auto' | 'manual', hookContexts: readonly string[]): void {
+  const reattached = buildReattachedSkills(sessionId);
+  const records: object[] = [{ type: 'system', subtype: 'compact_boundary', content: 'Conversation compacted', isMeta: false, parentUuid: null, uuid: randomUUID(), sessionId, compactMetadata: { trigger } }];
+  const summaryPath = path.join(getStateDir(), fakeClaudeCompactionSummaryFileName);
+  if (fs.existsSync(summaryPath)) records.push({ type: 'user', isCompactSummary: true, isVisibleInTranscriptOnly: true, sessionId, message: { role: 'user', content: fs.readFileSync(summaryPath, 'utf8') } });
+  if (reattached.length > 0) records.push({ type: 'attachment', sessionId, attachment: { type: 'invoked_skills', skills: reattached } });
+  if (hookContexts.length > 0) records.push({ type: 'attachment', sessionId, attachment: { type: 'hook_additional_context', content: hookContexts, hookName: 'SessionStart', hookEvent: 'SessionStart' } });
+  const transcriptPath = getTranscriptPath(sessionId);
+  fs.mkdirSync(path.dirname(transcriptPath), { recursive: true });
+  fs.appendFileSync(transcriptPath, records.map((record) => `${JSON.stringify(record)}\n`).join(''));
+}
+
+/** A model request of the fake: the hook contexts of the last compaction it holds, logged to `restore-contexts.jsonl`. */
+function logRestoreContext(sessionId: string, phase: 'turn' | 'continuation'): void {
+  const contexts = readCurrentEpochRecords(sessionId).flatMap((record) => {
+    const attachment = record.attachment as { type?: string; content?: unknown } | undefined;
+    return record.type === 'attachment' && attachment?.type === 'hook_additional_context' && Array.isArray(attachment.content) ? attachment.content.filter((item): item is string => typeof item === 'string') : [];
+  });
+  appendJsonLine(fakeClaudeLogFileNames.restoreContexts, { sessionId, pid: process.pid, phase, contexts });
+}
+
+/** A `SKILL.md`'s body as the real CLI loads it: no frontmatter, no blank lines before it. */
+function readSkillBody(fileText: string): string {
+  const frontmatter = /^---\n[\s\S]*?\n---\n/.exec(fileText);
+  return (frontmatter ? fileText.slice(frontmatter[0].length) : fileText).replace(/^\n+/, '');
+}
+
+/** The Skill tool calls of a turn's `[skill:<name>]` tokens, recorded in the transcript and streamed the way the real CLI does. */
+function runSkillLoads(sessionId: string, content: string): void {
+  const transcriptPath = getTranscriptPath(sessionId);
+  for (const match of content.matchAll(skillTokenRe)) {
+    const name = match[1];
+    const skillDir = path.join(process.cwd(), '.claude', 'skills', name);
+    const skillFile = path.join(skillDir, 'SKILL.md');
+    const toolUseId = `toolu_${randomUUID()}`;
+    const toolUse = { role: 'assistant', content: [{ type: 'tool_use', id: toolUseId, name: 'Skill', input: { skill: name } }] };
+    const isFound = fs.existsSync(skillFile);
+    const toolResult = { role: 'user', content: [{ type: 'tool_result', tool_use_id: toolUseId, ...(isFound ? { content: `Launching skill: ${name}` } : { is_error: true, content: `Unknown skill: ${name}` }) }] };
+    writeStdout({ type: 'assistant', message: toolUse, parent_tool_use_id: null, session_id: sessionId });
+    writeStdout({ type: 'user', message: toolResult, parent_tool_use_id: null, session_id: sessionId });
+    const records: object[] = [{ type: 'assistant', sessionId, isSidechain: false, message: toolUse }, { type: 'user', sessionId, isSidechain: false, message: toolResult }];
+    if (isFound) {
+      const skillMessage = `${skillMessagePrefix}${skillDir}\n\n${readSkillBody(fs.readFileSync(skillFile, 'utf8'))}`;
+      records.push({ type: 'user', sessionId, isSidechain: false, isMeta: true, sourceToolUseID: toolUseId, message: { role: 'user', content: [{ type: 'text', text: skillMessage }] } });
+    }
+    fs.mkdirSync(path.dirname(transcriptPath), { recursive: true });
+    fs.appendFileSync(transcriptPath, records.map((record) => `${JSON.stringify(record)}\n`).join(''));
+  }
+}
+
+/** A compaction's tail as the real CLI runs it: the `SessionStart` hooks first, then the records in the transcript. */
+async function finishCompaction(argv: readonly string[], sessionId: string, trigger: 'auto' | 'manual'): Promise<void> {
+  recordCompactionInTranscript(sessionId, trigger, await runSessionStartCompactHooks(argv, sessionId, trigger));
+}
+
+/**
+ * The CLI's own compaction at a context overflow: nobody asked for it, and no `/compact` turn is running. The turn then goes
+ * on with a new model request, which holds what the compaction's hooks gave.
+ */
+async function emitOverflowCompaction(argv: readonly string[], sessionId: string): Promise<void> {
   runPreCompactHooks(argv, sessionId, 'auto', null);
-  recordCompactionSummary(sessionId);
+  await finishCompaction(argv, sessionId, 'auto');
   writeStdout({ type: 'system', subtype: 'compact_boundary', compact_metadata: { trigger: 'auto', pre_tokens: 190_000, post_tokens: 9_000 }, session_id: sessionId });
+  logRestoreContext(sessionId, 'continuation');
 }
 
 /** The real CLI's answer to a `/compact` turn: status, boundary with token counts, result. `instruction` is what followed `/compact` (the bot's summary guidance), recorded for the flows. */
-function runCompactionTurn(argv: readonly string[], sessionId: string, instruction: string): void {
+async function runCompactionTurn(argv: readonly string[], sessionId: string, instruction: string): Promise<void> {
   writeStdout({ type: 'system', subtype: 'init', session_id: sessionId, model: 'fake-model', apiKeySource: launchApiKeySource, tools: [], mcp_servers: [], claude_code_version: getReportedClaudeCodeVersion() });
   writeStdout({ type: 'system', subtype: 'status', status: 'compacting', session_id: sessionId });
   runPreCompactHooks(argv, sessionId, 'manual', instruction === '' ? null : instruction);
+  await finishCompaction(argv, sessionId, 'manual');
   writeStdout({ type: 'system', subtype: 'status', compact_result: 'success', session_id: sessionId });
-  recordCompactionSummary(sessionId);
   writeStdout({ type: 'system', subtype: 'compact_boundary', compact_metadata: { trigger: 'manual', pre_tokens: 25_600, post_tokens: 2_800 }, session_id: sessionId });
   appendJsonLine(fakeClaudeLogFileNames.compactions, { sessionId, pid: process.pid, instruction });
   // The real CLI's compaction result: an all-zero `usage`, the summary call only under `modelUsage`.
@@ -1004,12 +1247,14 @@ async function runTurn(argv: readonly string[], sessionId: string, content: stri
   recordTranscriptMessage(sessionId, content);
   writeTurnStart(argv, sessionId);
   writeStdout({ type: 'user', message: { role: 'user', content }, session_id: sessionId });
+  logRestoreContext(sessionId, 'turn');
+  runSkillLoads(sessionId, content);
   emitUsageWindows(sessionId);
   const apiErrorOncePath = path.join(getStateDir(), fakeClaudeApiErrorOnceFileName);
   if (fs.existsSync(apiErrorOncePath)) {
     const errorText = fs.readFileSync(apiErrorOncePath, 'utf8').trim();
     fs.rmSync(apiErrorOncePath, { force: true });
-    appendJsonLine(fakeClaudeLogFileNames.turns, { requestId: null, issueKey: issueKeyRe.exec(content)?.[1] ?? 'unknown', isRequestPrompt: false, isPlainTextHidden: false, supersededRequestIds: [], turnCount: 1, pid: process.pid });
+    appendJsonLine(fakeClaudeLogFileNames.turns, { requestId: null, issueKey: getPromptIssueKey(content) ?? 'unknown', isRequestPrompt: false, isPlainTextHidden: false, supersededRequestIds: [], turnCount: 1, pid: process.pid });
     const apiErrorDelayPath = path.join(getStateDir(), fakeClaudeApiErrorDelayFileName);
     if (fs.existsSync(apiErrorDelayPath)) await new Promise((resolve) => setTimeout(resolve, Number(fs.readFileSync(apiErrorDelayPath, 'utf8').trim())));
     writeStdout({ type: 'result', subtype: 'success', is_error: true, result: errorText, session_id: sessionId, usage: fakeTurnUsage, total_cost_usd: addConversationCost(0) });
@@ -1017,26 +1262,26 @@ async function runTurn(argv: readonly string[], sessionId: string, content: stri
   }
   const alwaysUsageLimitPath = path.join(getStateDir(), fakeClaudeAlwaysUsageLimitFileName);
   if (fs.existsSync(alwaysUsageLimitPath)) {
-    appendJsonLine(fakeClaudeLogFileNames.turns, { requestId: null, issueKey: issueKeyRe.exec(content)?.[1] ?? 'unknown', isRequestPrompt: false, isPlainTextHidden: false, supersededRequestIds: [], turnCount: 1, pid: process.pid });
+    appendJsonLine(fakeClaudeLogFileNames.turns, { requestId: null, issueKey: getPromptIssueKey(content) ?? 'unknown', isRequestPrompt: false, isPlainTextHidden: false, supersededRequestIds: [], turnCount: 1, pid: process.pid });
     endTurnOnUsageLimit(sessionId, fs.readFileSync(alwaysUsageLimitPath, 'utf8').trim());
     return;
   }
   const requestId = requestIdRe.exec(content)?.[0];
   const watchMode = modeRe.exec(content)?.[1];
   if (watchMode === 'arm-watch' || watchMode === 'arm-status-watch' || watchMode === 'cancel-watch') {
-    const watchIssueKey = issueKeyRe.exec(content)?.[1] ?? 'unknown';
+    const watchIssueKey = getPromptIssueKey(content) ?? 'unknown';
     appendJsonLine(fakeClaudeLogFileNames.turns, { requestId: requestId ?? null, issueKey: watchIssueKey, isRequestPrompt: false, isPlainTextHidden: false, supersededRequestIds: [], turnCount: 1, pid: process.pid });
     emitTurnActivity(sessionId, watchIssueKey);
     const server = getBotMcpServer(argv);
     if (server) await runWatchMode(server, watchMode, watchIssueKey);
-    if (requestId && server) await callAnswerRequest(server, { requestId, kind: 'final', body: `Watch ${watchMode} done.` });
+    if (requestId && server) await callAnswerRequest(server, sessionId, { requestId, kind: 'final', body: `Watch ${watchMode} done.` });
     endTurn(sessionId, `Watch ${watchMode} done.`);
     return;
   }
   if (!requestId) {
     // A turn without a request (a topic whose view has requests off): logged, so a test can prove none was opened.
-    appendJsonLine(fakeClaudeLogFileNames.turns, { requestId: null, issueKey: issueKeyRe.exec(content)?.[1] ?? 'unknown', isRequestPrompt: false, isPlainTextHidden: false, supersededRequestIds: [], turnCount: 1, pid: process.pid });
-    const noRequestIssueKey = issueKeyRe.exec(content)?.[1] ?? 'unknown';
+    appendJsonLine(fakeClaudeLogFileNames.turns, { requestId: null, issueKey: getPromptIssueKey(content) ?? 'unknown', isRequestPrompt: false, isPlainTextHidden: false, supersededRequestIds: [], turnCount: 1, pid: process.pid });
+    const noRequestIssueKey = getPromptIssueKey(content) ?? 'unknown';
     emitTurnActivity(sessionId, noRequestIssueKey, content);
     await runTodoTokens(getBotMcpServer(argv), content, noRequestIssueKey);
     await waitTurnWork(content);
@@ -1045,7 +1290,7 @@ async function runTurn(argv: readonly string[], sessionId: string, content: stri
     // to be put to the user), `usage-limit-once` (a limit needs none to stop the turn; the bot's later "continue"
     // nudge carries no token, so it is answered — the "once") and `overflow` (the CLI's own compaction needs none).
     const noRequestMode = modeRe.exec(content)?.[1];
-    if (noRequestMode === 'overflow') emitOverflowCompaction(argv, sessionId);
+    if (noRequestMode === 'overflow') await emitOverflowCompaction(argv, sessionId);
     if (noRequestMode === 'usage-limit-once') {
       endTurnOnUsageLimit(sessionId, limitResetsRe.exec(content)?.[1] ?? 'in 1h');
       return;
@@ -1065,7 +1310,7 @@ async function runTurn(argv: readonly string[], sessionId: string, content: stri
   const isPlainTextHidden = content.includes(requesterDoesNotSeePlainTextPhrase);
   const supersededRequestIds = supersededRequestsLineRe.exec(content)?.[1].split(', ') ?? [];
   const previous = readRequestState(requestId);
-  const issueKey = issueKeyRe.exec(content)?.[1] ?? 'unknown';
+  const issueKey = getPromptIssueKey(content) ?? 'unknown';
   const state: RequestTurnState = previous ?? { mode: getMode(content, issueKey), issueKey, turnCount: 0, firstTurnAt: Date.now() };
   state.turnCount += 1;
   writeRequestState(requestId, state);
@@ -1097,7 +1342,7 @@ async function runTurn(argv: readonly string[], sessionId: string, content: stri
   const replyToCommentIds = state.mode === 'reply-to' ? (replyToIdsRe.exec(content)?.[1] ?? '').split(',').filter(Boolean) : [];
   const answer = async (answeredRequestId: string, kind: string, turnCount: number, body = `Fake ${kind} answer for ${state.issueKey} (${state.mode}, turn ${turnCount}).`): Promise<string> => {
     const outcome = server
-      ? await callAnswerRequest(server, { requestId: answeredRequestId, kind, body, ...(replyToCommentIds.length > 0 ? { replyToCommentIds } : {}) })
+      ? await callAnswerRequest(server, sessionId, { requestId: answeredRequestId, kind, body, ...(replyToCommentIds.length > 0 ? { replyToCommentIds } : {}) })
       : 'error: no bot MCP server in --mcp-config';
     appendJsonLine(fakeClaudeLogFileNames.answers, { requestId: answeredRequestId, issueKey: state.issueKey, kind, outcome });
     return body;
@@ -1134,11 +1379,15 @@ async function runTurn(argv: readonly string[], sessionId: string, content: stri
   if (state.mode === 'compact' && server) {
     logToolCall(compactToolName, { reason: 'a person asked' }, await callBotTool(server, compactToolName, { reason: 'a person asked' }));
   }
-  if (state.mode === 'overflow') emitOverflowCompaction(argv, sessionId);
+  if (state.mode === 'overflow') await emitOverflowCompaction(argv, sessionId);
   if (state.mode === 'fetch-attachment' && server) {
     for (const attachmentId of (fetchIdsRe.exec(content)?.[1] ?? '').split(',').filter(Boolean)) {
       logToolCall(attachmentToolName, { attachmentId }, await callBotTool(server, attachmentToolName, { attachmentId }));
     }
+  }
+  if (state.mode === 'send-messages' && server) {
+    const args = { messages: [getFakeDigestMessageText(state.issueKey)] };
+    logToolCall(sendMessagesToolName, { messages: args.messages.join(' | ') }, await callBotToolAsAgent(server, sessionId, sendMessagesToolName, args));
   }
   const askVariant = fakeAskVariantByMode[state.mode];
   if (askVariant) {
@@ -1258,7 +1507,7 @@ async function main(): Promise<void> {
       turnChain = turnChain.then(() => runCompactionTurn(argv, sessionId, content.trim().slice(compactCommandText.length).trim()));
       return;
     }
-    const promptIssueKey = issueKeyRe.exec(content)?.[1] ?? 'unknown';
+    const promptIssueKey = getPromptIssueKey(content) ?? 'unknown';
     appendJsonLine(fakeClaudeLogFileNames.prompts, { readAt: Date.now(), pid: process.pid, issueKey: promptIssueKey, requestId: requestIdRe.exec(content)?.[0] ?? null, text: content });
     if (fs.existsSync(path.join(getStateDir(), fakeClaudeCrashOnPromptFileName))) {
       // The message was read and neither echoed nor answered: the prompt never gets taken in.

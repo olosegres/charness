@@ -18,7 +18,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { runCommand, type CommandRunner } from '../selfUpdate/commandRunner';
-import { checkIsPueueRunning, ensurePueueConfig, ensurePueueDaemon, inspectPueue, stopAllPueueJobs } from '../runnerUtility/pueueDaemon';
+import { checkIsPueueRunning, ensurePueueConfig, ensurePueueDaemon, readPueueView, stopAllPueueJobs, summarizePueueView } from '../runnerUtility/pueueDaemon';
 import { writeRunnerConfig } from '../runnerUtility/runnerConfig';
 import { getRunnerHomePaths, type RunnerHomePaths } from '../runnerUtility/runnerHome';
 import { installService, readServiceKind, type ServiceDeps } from '../runnerUtility/serviceManager';
@@ -142,11 +142,11 @@ describe('the runner\'s queue and its services (real Pueue)', { skip: skipReason
     const runningPid = await startJob('running');
     const queuedMarker = path.join(home, 'queued-ran');
     pueue(['add', '--', `echo ran > ${queuedMarker}`]);
-    assert.deepEqual(await inspectPueue(paths), { kind: 'busy', activeJobs: 1 });
+    assert.deepEqual(summarizePueueView(await readPueueView(paths)), { kind: 'busy', activeJobs: 1 });
 
     assert.equal(await stopAllPueueJobs(paths), true);
     await waitUntil(() => !isAlive(runningPid), 'the running job to be killed', 15_000);
-    assert.deepEqual(await inspectPueue(paths), { kind: 'idle' });
+    assert.deepEqual(summarizePueueView(await readPueueView(paths)), { kind: 'idle' });
     await new Promise((resolve) => { setTimeout(resolve, 1500); });
     assert.equal(fs.existsSync(queuedMarker), false, 'the queued job never started');
   });

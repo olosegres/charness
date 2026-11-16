@@ -87,7 +87,7 @@ const settleRetryMaxDelayMs = 5 * 60 * 1000;
 const logTag = 'runners';
 
 /** What the module needs from the bot: the shared core, the hub and the few readings only the composition root has. */
-export interface RunnersPorts extends Pick<BotCore, 'bot' | 'command' | 'replyToThread' | 'editThreadMessage' | 'editThreadMessageDetailed' | 'editThreadKeyboard' | 'authoriseContext' | 'withThreadLocale' | 'checkIsGeneral'> {
+export interface RunnersPorts extends Pick<BotCore, 'bot' | 'command' | 'replyToThread' | 'replyToThreadDetailed' | 'editThreadMessage' | 'editThreadMessageDetailed' | 'editThreadKeyboard' | 'authoriseContext' | 'withThreadLocale' | 'checkIsGeneral'> {
   /** The hub registry of this OS user (`src/runners/`). */
   hub: HubContext;
   /** The address runners dial, as `settings.json` holds it; `null` = never chosen. */
@@ -163,7 +163,7 @@ interface ShownScreen {
  * look of that job, for a test to run on its own clock).
  */
 export function createRunners(ports: RunnersPorts) {
-  const { bot, command, replyToThread, editThreadMessage, editThreadMessageDetailed, editThreadKeyboard, authoriseContext, withThreadLocale, checkIsGeneral, hub, now } = ports;
+  const { bot, command, replyToThread, replyToThreadDetailed, editThreadMessage, editThreadMessageDetailed, editThreadKeyboard, authoriseContext, withThreadLocale, checkIsGeneral, hub, now } = ports;
 
   const shownScreens = new Map<string, ShownScreen>();
   const addressProposals = new Map<string, HubAddress | null>();
@@ -666,7 +666,8 @@ export function createRunners(ports: RunnersPorts) {
    * @description One look at where the runners' links come from (`runners/linkConcern.ts`): a link that came from another address than it did, or
    * links that keep replacing each other, is posted ONCE in General and pinned — the operator runs every topic muted, and a pin pierces it. A concern
    * is told apart by the time of its newest change (`runnerLinkNotices.ts`), so a look five seconds later, a restart or a longer fight tells nothing
-   * again; with no General to post in, or a send that failed, it is simply tried again at the next look. The `/runners` screen and `ls` keep the note
+   * again; with no General to post in, or a send that failed, it is simply tried again at the next look — but not a send whose outcome is unknown,
+   * which may have landed: it counts as told (unpinned, its id unknown). The `/runners` screen and `ls` keep the note
    * until the runner is removed or paired again.
    */
   async function watchLinkConcernsOnce(): Promise<void> {
@@ -685,9 +686,11 @@ export function createRunners(ports: RunnersPorts) {
       const generalKey = ports.getGeneralKey();
       if (generalKey === null) continue;
       const text = withThreadLocale(generalKey, () => `${runner.name}: ${buildLinkConcernNote(concern, t, formatRunnersTime)}`);
-      const messageId = await replyToThread(generalKey, text);
-      if (messageId === null) continue;
-      await ports.pinMessage(generalKey, messageId);
+      // A send that failed is tried again at the next look. One whose outcome is unknown may be in General already: it counts
+      // as told, so it is never posted twice — and is not pinned, its id is not known.
+      const outcome = await replyToThreadDetailed(generalKey, text);
+      if (outcome.kind === 'failed') continue;
+      if (outcome.kind === 'sent') await ports.pinMessage(generalKey, outcome.messageId);
       const told = createLinkNotice(runner.id, concern);
       toldThisRun.set(runner.id, told);
       record = [...record.filter((notice) => notice.runnerId !== runner.id), told];
