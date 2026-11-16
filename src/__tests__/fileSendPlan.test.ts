@@ -24,10 +24,14 @@ import {
   buildTelegramFileSendRequest,
   trimCaption,
   telegramPhotoMaxBytes,
+  telegramPhotoMaxSidePx,
+  telegramPhotoMaxAspectRatio,
   telegramSendMaxBytes,
   captionMaxLength,
+  checkIsPhotoKeptIntact,
   type FileSendItem,
 } from '../utils/fileSendPlan';
+import type { ImageDimensions } from '../utils/imageDimensions';
 
 // ─── resolveSendFileWithinDir (against a real temp dir) ──────────────
 
@@ -160,7 +164,15 @@ test('classifyFileSendKind: everything else → document', () => {
 
 // ─── planFileSend ─────────────────────────────────────────────────────
 
-function item(absPath: string, kind: FileSendItem['kind'], sizeBytes = 1000): FileSendItem {
+/** A photo-kind item defaults to a small image Telegram keeps as it is; `null` leaves its size unreadable. */
+const smallImage: ImageDimensions = { width: 800, height: 600 };
+
+function item(
+  absPath: string,
+  kind: FileSendItem['kind'],
+  sizeBytes = 1000,
+  imageSize: ImageDimensions | null = kind === 'photo' ? smallImage : null,
+): FileSendItem {
   return {
     absPath,
     source: {
@@ -169,7 +181,13 @@ function item(absPath: string, kind: FileSendItem['kind'], sizeBytes = 1000): Fi
       sizeBytes,
     },
     kind,
+    ...(imageSize !== null ? { imageSize } : {}),
   };
+}
+
+/** A photo whose pixel size is the one under test. */
+function photoOfSize(width: number, height: number, sizeBytes = 1000): FileSendItem {
+  return item('/w/shot.png', 'photo', sizeBytes, { width, height });
 }
 
 test('planFileSend: single photo → send photo', () => {
@@ -218,6 +236,74 @@ test('planFileSend: a photo over the photo cap downgrades to document', () => {
   const plan = planFileSend([item('/w/big.png', 'photo', telegramPhotoMaxBytes + 1)], false);
   assert.equal(plan.kind, 'send');
   if (plan.kind === 'send') assert.equal(plan.mode, 'document');
+});
+
+test('planFileSend: a 4K screenshot (3840×2160), which Telegram would shrink, goes as a document', () => {
+  const plan = planFileSend([photoOfSize(3840, 2160)], false);
+  assert.equal(plan.kind, 'send');
+  if (plan.kind === 'send') assert.equal(plan.mode, 'document');
+});
+
+test('planFileSend: an image within the kept side (2560×1440), and a Full HD screenshot, stay photos', () => {
+  const plan = planFileSend([photoOfSize(telegramPhotoMaxSidePx, 1440)], false);
+  const fullHd = planFileSend([photoOfSize(1920, 1080)], false);
+  assert.equal(fullHd.kind, 'send');
+  if (fullHd.kind === 'send') assert.equal(fullHd.mode, 'photo');
+  assert.equal(plan.kind, 'send');
+  if (plan.kind === 'send') assert.equal(plan.mode, 'photo');
+});
+
+test('planFileSend: a tall image is judged by its longest side too (720×2561 → document)', () => {
+  const plan = planFileSend([photoOfSize(720, telegramPhotoMaxSidePx + 1)], false);
+  assert.equal(plan.kind, 'send');
+  if (plan.kind === 'send') assert.equal(plan.mode, 'document');
+});
+
+test('planFileSend: a photo whose size could not be read goes as a document', () => {
+  const plan = planFileSend([item('/w/odd.png', 'photo', 1000, null)], false);
+  assert.equal(plan.kind, 'send');
+  if (plan.kind === 'send') assert.equal(plan.mode, 'document');
+});
+
+test('planFileSend: an album with ONE image above the kept side → albumDocument, all small → albumPhotoVideo', () => {
+  const withBig = planFileSend([photoOfSize(800, 600), photoOfSize(3840, 2160)], false);
+  const allSmall = planFileSend([photoOfSize(800, 600), photoOfSize(1920, 1080)], false);
+  assert.equal(withBig.kind, 'album');
+  if (withBig.kind === 'album') assert.equal(withBig.mode, 'albumDocument');
+  assert.equal(allSmall.kind, 'album');
+  if (allSmall.kind === 'album') assert.equal(allSmall.mode, 'albumPhotoVideo');
+});
+
+test('planFileSend: a big image mixed with video → albumDocument', () => {
+  const plan = planFileSend([photoOfSize(3840, 2160), item('/w/a.mp4', 'video')], false);
+  assert.equal(plan.kind, 'album');
+  if (plan.kind === 'album') assert.equal(plan.mode, 'albumDocument');
+});
+
+/**
+ * Source size → what Telegram stored as the largest copy of a photo the live bot sent with sendPhoto (2026-11-16, read
+ * back through a user account); the plan sends as a photo exactly the ones Telegram stored whole.
+ */
+const measuredPhotoCases: Array<{ source: ImageDimensions; stored: ImageDimensions }> = [
+  { source: { width: 800, height: 600 }, stored: { width: 800, height: 600 } },
+  { source: { width: 1280, height: 720 }, stored: { width: 1280, height: 720 } },
+  { source: { width: 1600, height: 900 }, stored: { width: 1600, height: 900 } },
+  { source: { width: 1920, height: 1080 }, stored: { width: 1920, height: 1080 } },
+  { source: { width: 2560, height: 1440 }, stored: { width: 2560, height: 1440 } },
+  { source: { width: 3840, height: 2160 }, stored: { width: 2560, height: 1440 } },
+  { source: { width: 1000, height: 6000 }, stored: { width: 427, height: 2560 } },
+  { source: { width: 3840, height: 1000 }, stored: { width: 2560, height: 667 } },
+];
+
+test('planFileSend: a photo only when Telegram stored it whole — the live measurements', () => {
+  for (const { source, stored } of measuredPhotoCases) {
+    const isStoredWhole = stored.width === source.width && stored.height === source.height;
+    const plan = planFileSend([photoOfSize(source.width, source.height)], false);
+    assert.equal(plan.kind, 'send');
+    if (plan.kind === 'send') {
+      assert.equal(plan.mode, isStoredWhole ? 'photo' : 'document', `${source.width}×${source.height}`);
+    }
+  }
 });
 
 test('planFileSend: any file over the 50MB send cap → error', () => {
@@ -301,6 +387,30 @@ test('planFileSend: 11 items → error', () => {
 // ─── getSentFileKinds: what was actually sent, overrides applied ─────
 
 /** The kinds a call's plan sends — the plan must not be an error. */
+// ─── checkIsPhotoKeptIntact ───────────────────────────────────────────
+
+test('checkIsPhotoKeptIntact: the longest side decides, at the boundary and either way round', () => {
+  assert.equal(checkIsPhotoKeptIntact(photoOfSize(telegramPhotoMaxSidePx, telegramPhotoMaxSidePx)), true);
+  assert.equal(checkIsPhotoKeptIntact(photoOfSize(telegramPhotoMaxSidePx + 1, 720)), false);
+  assert.equal(checkIsPhotoKeptIntact(photoOfSize(720, telegramPhotoMaxSidePx + 1)), false);
+});
+
+test('checkIsPhotoKeptIntact: a side ratio over the Bot API limit is refused, the limit itself is not', () => {
+  const longSide = telegramPhotoMaxSidePx;
+  assert.equal(checkIsPhotoKeptIntact(photoOfSize(longSide, longSide / telegramPhotoMaxAspectRatio)), true);
+  assert.equal(checkIsPhotoKeptIntact(photoOfSize(longSide, longSide / telegramPhotoMaxAspectRatio - 1)), false);
+  assert.equal(checkIsPhotoKeptIntact(photoOfSize(longSide / telegramPhotoMaxAspectRatio - 1, longSide)), false);
+});
+
+test('checkIsPhotoKeptIntact: the byte cap still applies to a small image', () => {
+  assert.equal(checkIsPhotoKeptIntact(photoOfSize(800, 600, telegramPhotoMaxBytes)), true);
+  assert.equal(checkIsPhotoKeptIntact(photoOfSize(800, 600, telegramPhotoMaxBytes + 1)), false);
+});
+
+test('checkIsPhotoKeptIntact: an unreadable size is not known to survive', () => {
+  assert.equal(checkIsPhotoKeptIntact(item('/w/odd.png', 'photo', 1000, null)), false);
+});
+
 function getPlannedKinds(items: FileSendItem[], asFile: boolean): string[] {
   const plan = planFileSend(items, asFile);
   if (plan.kind === 'error') assert.fail(plan.error);
@@ -318,6 +428,7 @@ test('getSentFileKinds: as_file and an over-cap photo are sent as documents, wha
   assert.deepEqual(getPlannedKinds([item('/w/a.png', 'photo')], true), ['document']);
   assert.deepEqual(getPlannedKinds([item('/w/a.mp4', 'video')], true), ['document']);
   assert.deepEqual(getPlannedKinds([item('/w/big.png', 'photo', telegramPhotoMaxBytes + 1)], false), ['document']);
+  assert.deepEqual(getPlannedKinds([photoOfSize(3840, 2160)], false), ['document']);
 });
 
 test('getSentFileKinds: a native photo/video album keeps each file its own kind', () => {
@@ -359,6 +470,11 @@ test('buildTelegramFileSendRequest: single photo uses sendPhoto', () => {
     method: 'sendPhoto',
     source: { fd: 100, filename: 'a.png', sizeBytes: 1000 },
   });
+});
+
+test('buildTelegramFileSendRequest: a screenshot above the kept side uses sendDocument', () => {
+  const request = buildRequest([photoOfSize(3840, 2160)], false);
+  assert.equal(request.method, 'sendDocument');
 });
 
 test('buildTelegramFileSendRequest: single GIF uses sendAnimation', () => {

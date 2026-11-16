@@ -37,6 +37,7 @@ import {
   GlobalSendPacer,
   __setGlobalPacerForTest,
 } from '../rateLimiter';
+import { createPngBytes } from './imageFixtures';
 import { keyToString, type SessionKey } from '../sessionKey';
 import type {
   FileDescriptorSnapshot,
@@ -535,7 +536,7 @@ linuxTest('real service records a Telegram media-group acceptance that resolves 
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'fileSendTelegram-album-late-accept-'));
   const workDir = path.join(tempRoot, 'bound');
   fs.mkdirSync(workDir);
-  fs.writeFileSync(path.join(workDir, 'chart.png'), 'accepted-photo-bytes');
+  fs.writeFileSync(path.join(workDir, 'chart.png'), createPngBytes(640, 480));
   fs.writeFileSync(path.join(workDir, 'clip.mp4'), 'accepted-video-bytes');
   const acceptedMessageIds = [73309, 73310];
   const recordedMessageIds: number[] = [];
@@ -567,7 +568,7 @@ linuxTest('real service records a Telegram media-group acceptance that resolves 
         senderSignal = signal;
         assert.deepEqual(
           await Promise.all(attemptedStreams.map((stream) => consumeBuffer(stream))),
-          [Buffer.from('accepted-photo-bytes'), Buffer.from('accepted-video-bytes')],
+          [createPngBytes(640, 480), Buffer.from('accepted-video-bytes')],
         );
         markSenderStarted();
         return senderResult;
@@ -1071,7 +1072,7 @@ for (const openStrategy of fileSendOpenStrategies) strategyTests[openStrategy](`
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'fileSendTelegram-album-'));
   const workDir = path.join(tempRoot, 'bound');
   fs.mkdirSync(workDir);
-  fs.writeFileSync(path.join(workDir, 'chart.png'), 'complete-photo-bytes');
+  fs.writeFileSync(path.join(workDir, 'chart.png'), createPngBytes(641, 481));
   fs.writeFileSync(path.join(workDir, 'clip.mp4'), 'complete-video-bytes');
   const attemptStreams: Readable[][] = [];
   const recordedMessageIds: number[] = [];
@@ -1096,7 +1097,7 @@ for (const openStrategy of fileSendOpenStrategies) strategyTests[openStrategy](`
         if (sendAttempt === 1) throw rateLimitError;
         assert.deepEqual(
           await Promise.all(streams.map((stream) => consumeBuffer(stream))),
-          [Buffer.from('complete-photo-bytes'), Buffer.from('complete-video-bytes')],
+          [createPngBytes(641, 481), Buffer.from('complete-video-bytes')],
           'every retry item must start at byte zero and consume its complete snapshot',
         );
         return [{ message_id: 601 }, { message_id: 602 }];

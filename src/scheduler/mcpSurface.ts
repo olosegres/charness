@@ -18,6 +18,7 @@ import { checkIsBotSkillsEnabled } from '../utils/botSkills';
 import { claudeProfileNameMaxLength } from '../utils/claudeProfiles';
 import { describeClaudeChainExclusions, describeClaudeLaunchOutcome, type ClaudeProfilesReport } from '../utils/claudeUsage';
 import type { SendFilesToThread } from '../utils/fileSendService';
+import { telegramPhotoMaxSidePx } from '../utils/fileSendPlan';
 import { formatIsoLocalOffset } from '../utils/isoTimestamp';
 import { formatLocalDateAndClock } from '../utils/localClock';
 import {
@@ -251,7 +252,7 @@ function buildTelegramInstructions(isTodoToolOffered: boolean, remoteRunInstruct
 
 When to use it:
 • The user asks to run/finish a plan or task LATER ("in 2h", "tomorrow 9am", "every weekday") → schedule_create. Put the work in \`prompt\`; the future run is a fresh session with no memory of this chat. Not CronCreate / ScheduleWakeup for anything that must happen: they die with your process, which the bot stops after a long idle stretch.
-• You produced a file/chart/screenshot/video to deliver → send_file_to_user. Videos MUST be H.264 .mp4 sent as video (never as_file/document or .webm/.mov — those render as GIFs or don't play); transcode first if needed (recipe in the tool description).
+• You produced a file/chart/screenshot/video to deliver → send_file_to_user (images over ${telegramPhotoMaxSidePx} px go as a file). Videos MUST be H.264 .mp4, never as_file/document/.webm/.mov (they render as GIFs or don't play); transcode if needed (see tool description).
 • You want to deliver SEVERAL discrete messages (each its own message, e.g. a per-item news digest) → send_messages_to_user; an item may attach ONE file (the text becomes its caption).
 ${compactConversationInstruction}
 ${isTodoToolOffered ? `${todoInstruction}\n` : ''}• You need to review or remove scheduled jobs → schedule_list / schedule_cancel.
@@ -844,6 +845,11 @@ const coerceJsonArrayArg = (value: unknown): unknown => {
   return [value];
 };
 
+/** What both send tools' `as_file` argument adds: the size rule, and when to set it by hand. */
+const asFileBigImageHint =
+  `An image over ${telegramPhotoMaxSidePx} px on its longest side is sent this way without it; ` +
+  'set it for a smaller image whose text must stay crisp.';
+
 const sendFileShape = {
   paths: z.preprocess(
     coerceJsonArrayArg,
@@ -865,7 +871,7 @@ const sendFileShape = {
     .boolean()
     .optional()
     .describe(
-      'Explicitly force sendDocument (original quality, no inline preview), including for MP4s that use sendVideo by default.',
+      `Explicitly force sendDocument (original quality, no inline preview), including for MP4s that use sendVideo by default. ${asFileBigImageHint}`,
     ),
   threadKey: threadKeyArgSchema,
 };
@@ -893,12 +899,13 @@ const sendMessageItemObjectSchema = createStrictToolInput({
     .describe(
       "Optional attachment, RELATIVE to this topic's bound folder (an absolute path is accepted only if it " +
         'resolves inside it; a path outside is rejected). Supported photos and MP4 videos are sent as native ' +
-        'media, GIFs as animations, and everything else as a document.',
+        `media (an image over ${telegramPhotoMaxSidePx} px on its longest side as a file, since Telegram would shrink it), ` +
+        'GIFs as animations, and everything else as a document.',
     ),
   as_file: z
     .boolean()
     .optional()
-    .describe('Force sendDocument for THIS attachment (original quality, no inline preview), including for MP4s.'),
+    .describe(`Force sendDocument for THIS attachment (original quality, no inline preview), including for MP4s. ${asFileBigImageHint}`),
 }).refine(
   (item) => (item.text?.trim().length ?? 0) > 0 || (item.path?.trim().length ?? 0) > 0,
   { message: 'each message object must set a non-empty text or path' },
@@ -916,7 +923,8 @@ const sendMessageShape = {
     .describe(
       `1..${maxDiscreteMessages} items; EACH item is posted as its OWN separate Telegram message, in order (never ` +
         'merged). An item is EITHER a plain string (a text message) OR an object {text?, path?, as_file?}. When ' +
-        'path is set the item is delivered as an ATTACHMENT: supported photos render inline, .gif uses ' +
+        `path is set the item is delivered as an ATTACHMENT: photos up to ${telegramPhotoMaxSidePx} px on the longest side ` +
+        'render inline (a bigger image goes as a file at full resolution, Telegram would shrink it), .gif uses ' +
         'sendAnimation, and .mp4 uses sendVideo (other video containers like .mov/.webm render as a GIF, so remux ' +
         'to .mp4 first); everything else is a document, and text becomes the media caption (trimmed to 1024 chars ' +
         '— send long prose as its OWN ' +
@@ -1263,15 +1271,17 @@ function registerFileSendTool(
       description:
         'Send one or more files/images from THIS topic\'s bound folder back to the user in the topic. ' +
         'Use it to deliver a generated chart, screenshot, report, etc. Paths are relative to the bound ' +
-        'folder; a path outside it is rejected and nothing is sent. Images (.png/.jpg/.jpeg/.webp) preview ' +
-        'inline, .gif autoplays, and a single .mp4 uses sendVideo by default. as_file:true is the explicit sendDocument ' +
+        `folder; a path outside it is rejected and nothing is sent. Images (.png/.jpg/.jpeg/.webp) up to ${telegramPhotoMaxSidePx} px ` +
+        'on the longest side preview inline; a bigger one goes as a document at its original resolution, because ' +
+        'Telegram would shrink it as a photo and blur a screenshot\'s text. .gif autoplays, and a single .mp4 uses ' +
+        'sendVideo by default. as_file:true is the explicit sendDocument ' +
         'override for previewable media; no fake audio track is needed for a silent MP4. Everything else arrives ' +
         'as a document. VIDEO RULE: to deliver a playable video, pass a .mp4 path and do NOT set as_file — any other ' +
         'container (.mov/.webm/.mkv) or a document fallback makes Telegram render it as a GIF instead; remux to .mp4 first ' +
         '(e.g. `ffmpeg -i in.webm -c:v libx264 -pix_fmt yuv420p -movflags +faststart out.mp4`; if no full ffmpeg is ' +
         'installed, `npm i ffmpeg-static` provides one — Playwright\'s bundled ffmpeg has no H.264 encoder). ' +
         '2..10 paths use sendMediaGroup: eligible photos and MP4 videos stay native in ' +
-        'all-video and mixed photo/video groups; as_file:true, any animation/document, or an over-cap photo makes ' +
+        `all-video and mixed photo/video groups; as_file:true, any animation/document, an image over ${telegramPhotoMaxSidePx} px or an over-cap photo makes ` +
         'the whole album documents — which turns its MP4s into GIFs, so send videos in their own call. ' +
         'If a send fails, say so and give the file\'s path in your reply, then go on with the work — never stop over it. ' +
         'Caption is optional (trimmed to 1024 chars; on the first album item).',
@@ -1323,7 +1333,8 @@ function registerMessageSendTool(
         'separate Telegram message, in order (never merged). Use it when you deliberately want several messages ' +
         'instead of one, e.g. a per-item news digest (header, a date separator, then one message per headline). ' +
         'An item is EITHER a plain string (text message) OR an object {text?, path?, as_file?} — set `path` to ' +
-        "attach ONE file (RELATIVE to this topic's bound folder): supported photos render inline, .gif uses " +
+        `attach ONE file (RELATIVE to this topic's bound folder): photos up to ${telegramPhotoMaxSidePx} px on the longest side ` +
+        'render inline (a bigger image goes as a file at full resolution, Telegram would shrink it), .gif uses ' +
         'sendAnimation, and .mp4 uses sendVideo (.mov/.webm render as a GIF, so remux to .mp4 first); everything ' +
         'else is a document, and `text` ' +
         'becomes the media caption (trimmed to 1024 chars — send long prose as its OWN text-only item). ' +

@@ -31,11 +31,13 @@ import {
 } from '../utils/fileSendService';
 import {
   telegramPhotoMaxBytes,
+  telegramPhotoMaxSidePx,
   telegramSendMaxBytes,
   type FileSendKind,
   type TelegramSingleFileSendMethod,
 } from '../utils/fileSendPlan';
 import { assertDescriptorReleased, captureDescriptor, type CapturedDescriptor } from './fileDescriptorProbe';
+import { createJpegBytes, createPngBytes } from './imageFixtures';
 import {
   createFileSendTestRecorderGateway,
   type RecordedFileSendGatewayCall,
@@ -68,9 +70,13 @@ interface ServiceOptions {
   rejectedMethod?: RecordedFileSendMethod;
 }
 
+/** A header-only PNG small enough for Telegram's photo path to keep as it is, and what the recorder reads back from it. */
+const smallPhotoBytes = createPngBytes(800, 600);
+const smallPhotoContents = smallPhotoBytes.toString('utf8');
+
 interface SingleGatewayCase {
   fileName: string;
-  contents: string;
+  contents: string | Buffer;
   expectedMethod: TelegramSingleFileSendMethod;
   expectedSentKind: FileSendKind;
   expectedMessageId: number;
@@ -199,7 +205,7 @@ function createService(
 const singleGatewayCases: SingleGatewayCase[] = [
   {
     fileName: 'chart.png',
-    contents: 'photo-bytes',
+    contents: smallPhotoBytes,
     expectedMethod: 'sendPhoto',
     expectedSentKind: 'photo',
     expectedMessageId: singleGatewayMessageIds.sendPhoto,
@@ -248,7 +254,7 @@ for (const gatewayCase of singleGatewayCases) {
         source: {
           filename: gatewayCase.fileName,
           sizeBytes: Buffer.byteLength(gatewayCase.contents),
-          contents: gatewayCase.contents,
+          contents: Buffer.from(gatewayCase.contents).toString('utf8'),
         },
         caption: 'caption',
       });
@@ -266,7 +272,7 @@ sharedTest('createSendFilesToThread routes a photo/video album, records every id
   const fixture = createTempFileSendFixture();
   const recorder = createServiceRecorder();
   try {
-    fs.writeFileSync(path.join(fixture.workDir, 'chart.png'), 'photo-bytes');
+    fs.writeFileSync(path.join(fixture.workDir, 'chart.png'), smallPhotoBytes);
     fs.writeFileSync(path.join(fixture.workDir, 'clip.mp4'), 'video-bytes');
     const sendFilesToThread = createService(fixture.workDir, recorder);
 
@@ -287,8 +293,8 @@ sharedTest('createSendFilesToThread routes a photo/video album, records every id
               type: 'photo',
               media: {
                 filename: 'chart.png',
-                sizeBytes: Buffer.byteLength('photo-bytes'),
-                contents: 'photo-bytes',
+                sizeBytes: smallPhotoBytes.length,
+                contents: smallPhotoContents,
               },
               caption: 'album caption',
             },
@@ -359,11 +365,12 @@ sharedTest('createSendFilesToThread answers with what it SENT: as_file, an over-
   const fixture = createTempFileSendFixture();
   const recorder = createServiceRecorder();
   try {
-    fs.writeFileSync(path.join(fixture.workDir, 'chart.png'), 'photo-bytes');
-    fs.writeFileSync(path.join(fixture.workDir, 'other.png'), 'photo-bytes');
+    fs.writeFileSync(path.join(fixture.workDir, 'chart.png'), smallPhotoBytes);
+    fs.writeFileSync(path.join(fixture.workDir, 'other.png'), smallPhotoBytes);
     fs.writeFileSync(path.join(fixture.workDir, 'loop.gif'), 'animation-bytes');
+    // A small image by its header whose BYTES are over the photo cap: only the byte cap can send it as a document.
     const huge = path.join(fixture.workDir, 'huge.png');
-    fs.writeFileSync(huge, '');
+    fs.writeFileSync(huge, smallPhotoBytes);
     fs.truncateSync(huge, telegramPhotoMaxBytes + 1);
     const sendFilesToThread = createService(fixture.workDir, recorder);
 
@@ -378,6 +385,66 @@ sharedTest('createSendFilesToThread answers with what it SENT: as_file, an over-
     assert.deepEqual(fallbackAlbum, { ok: true, summary: 'Sent 2 files: 2 documents.', sentKinds: ['document', 'document'] });
     assert.deepEqual(forcedAlbum, { ok: true, summary: 'Sent 2 files: 2 documents.', sentKinds: ['document', 'document'] });
     assert.deepEqual(photoAlbum, { ok: true, summary: 'Sent 2 files: 2 photos.', sentKinds: ['photo', 'photo'] });
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+interface ImageSizeCase {
+  fileName: string;
+  contents: Buffer;
+  expectedMethod: TelegramSingleFileSendMethod;
+}
+
+/** Telegram keeps a photo's longest side up to `telegramPhotoMaxSidePx`; above it a screenshot goes whole, as a file. */
+const imageSizeCases: ImageSizeCase[] = [
+  { fileName: 'screen4k.png', contents: createPngBytes(3840, 2160), expectedMethod: 'sendDocument' },
+  { fileName: 'retina.jpg', contents: createJpegBytes(2880, 1800, { appSegmentPayloadLengths: [30_000] }), expectedMethod: 'sendDocument' },
+  { fileName: 'fullpage.png', contents: createPngBytes(1000, 6000), expectedMethod: 'sendDocument' },
+  { fileName: 'edge.png', contents: createPngBytes(telegramPhotoMaxSidePx, 1440), expectedMethod: 'sendPhoto' },
+  { fileName: 'fullhd.png', contents: createPngBytes(1920, 1080), expectedMethod: 'sendPhoto' },
+  { fileName: 'small.jpg', contents: createJpegBytes(1024, 768), expectedMethod: 'sendPhoto' },
+  { fileName: 'unreadable.png', contents: Buffer.from('not an image'), expectedMethod: 'sendDocument' },
+];
+
+for (const imageSizeCase of imageSizeCases) {
+  sharedTest(`createSendFilesToThread sends ${imageSizeCase.fileName} (${imageSizeCase.contents.length} bytes) through ${imageSizeCase.expectedMethod} by the size in its header`, async () => {
+    const fixture = createTempFileSendFixture();
+    const recorder = createServiceRecorder();
+    try {
+      fs.writeFileSync(path.join(fixture.workDir, imageSizeCase.fileName), imageSizeCase.contents);
+      const sendFilesToThread = createService(fixture.workDir, recorder);
+
+      const result = await sendFilesToThread('thread-key', { paths: [imageSizeCase.fileName] });
+
+      assert.equal(result.ok, true);
+      assert.equal(recorder.gatewayCalls.length, 1);
+      assert.equal(recorder.gatewayCalls[0].method, imageSizeCase.expectedMethod);
+      // The size read must not eat into the upload: the whole file still goes out from byte zero.
+      assert.deepEqual(recorder.gatewayCalls[0].source, {
+        filename: imageSizeCase.fileName,
+        sizeBytes: imageSizeCase.contents.length,
+        contents: imageSizeCase.contents.toString('utf8'),
+      });
+      assertDescriptorReleased(recorder.capturedFileDescriptors[0]);
+    } finally {
+      fixture.cleanup();
+    }
+  });
+}
+
+sharedTest('createSendFilesToThread sends a whole album as documents when one image is bigger than Telegram keeps', async () => {
+  const fixture = createTempFileSendFixture();
+  const recorder = createServiceRecorder();
+  try {
+    fs.writeFileSync(path.join(fixture.workDir, 'small.png'), smallPhotoBytes);
+    fs.writeFileSync(path.join(fixture.workDir, 'screen.png'), createPngBytes(3840, 2160));
+    const sendFilesToThread = createService(fixture.workDir, recorder);
+
+    const result = await sendFilesToThread('thread-key', { paths: ['small.png', 'screen.png'] });
+
+    assert.deepEqual(result, { ok: true, summary: 'Sent 2 files: 2 documents.', sentKinds: ['document', 'document'] });
+    assert.equal(recorder.gatewayCalls[0].method, 'sendMediaGroup');
   } finally {
     fixture.cleanup();
   }

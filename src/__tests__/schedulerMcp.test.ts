@@ -82,6 +82,8 @@ import {
 } from './fileSendTestRecorder';
 import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
 import { holdPort } from './e2e/isolatedCharness';
+import { createPngBytes } from './imageFixtures';
+import { telegramPhotoMaxSidePx } from '../utils/fileSendPlan';
 import { formatLocalDateAndClock } from '../utils/localClock';
 import {
   workerWatchArmedFileName,
@@ -856,6 +858,10 @@ interface ServerFixture {
 
 const mcpSingleMessageId = 301;
 const mcpAlbumMessageIds = [401, 402];
+
+/** Header-only PNGs small enough for Telegram's photo path to keep as they are. */
+const insidePhotoBytes = createPngBytes(320, 240);
+const chartPhotoBytes = createPngBytes(640, 480);
 const mcpSingleMessageIds = {
   sendPhoto: mcpSingleMessageId,
   sendAnimation: mcpSingleMessageId,
@@ -1232,6 +1238,28 @@ describe('scheduler MCP server end-to-end (real HTTP)', () => {
     await assert.rejects(buildClient(fixture.handle.port, 'garbage.token'));
   });
 
+  it('tells the agent, in the instructions and both send tools, that a big image goes as a file', async () => {
+    const token = buildSchedulerMcpToken(secret, { kind: 'thread', threadKey: threadAKey });
+    const client = await buildClient(fixture.handle.port, token);
+    try {
+      const sidePhrase = `${telegramPhotoMaxSidePx} px`;
+      assert.match(client.getInstructions() ?? '', new RegExp(`images over ${sidePhrase} go as a file`));
+      const tools = (await client.listTools()).tools;
+      for (const toolName of ['send_file_to_user', 'send_messages_to_user']) {
+        const tool = tools.find((candidate) => candidate.name === toolName);
+        const description = tool?.description ?? '';
+        assert.ok(description.includes(sidePhrase), `${toolName} states the ${sidePhrase} rule: ${description}`);
+        // The `as_file` argument (the per-item one for send_messages_to_user) says when to set it by hand.
+        assert.ok(
+          JSON.stringify(tool?.inputSchema).includes('whose text must stay crisp'),
+          `${toolName}'s as_file argument carries the crisp-text hint`,
+        );
+      }
+    } finally {
+      await client.close();
+    }
+  });
+
   it('reports connect-time server instructions on initialize', async () => {
     const token = buildSchedulerMcpToken(secret, { kind: 'thread', threadKey: threadAKey });
     const client = await buildClient(fixture.handle.port, token);
@@ -1435,7 +1463,7 @@ describe('scheduler MCP server end-to-end (real HTTP)', () => {
   });
 
   linuxIt('directory-scoped send_messages_to_user composes with secure file delivery and rejects traversal', async () => {
-    fs.writeFileSync(path.join(fixture.fileWorkDir, 'inside.png'), 'image');
+    fs.writeFileSync(path.join(fixture.fileWorkDir, 'inside.png'), insidePhotoBytes);
     fs.writeFileSync(path.join(fakeHome, 'outside.png'), 'outside');
     fixture.boundThreads.set(fixture.fileWorkDir, [threadAKey]);
     fixture.messageSendHandler.current = createSendMessagesToThread<string>({
@@ -1459,7 +1487,7 @@ describe('scheduler MCP server end-to-end (real HTTP)', () => {
         {
           method: 'sendPhoto',
           target: threadAKey,
-          source: { filename: 'inside.png', sizeBytes: 5, contents: 'image' },
+          source: { filename: 'inside.png', sizeBytes: insidePhotoBytes.length, contents: insidePhotoBytes.toString('utf8') },
           caption: 'caption',
         },
       ]);
@@ -1575,7 +1603,7 @@ describe('scheduler MCP server end-to-end (real HTTP)', () => {
   });
 
   linuxIt('send_file_to_user routes a PNG+MP4 album as photo then video with one caption', async () => {
-    fs.writeFileSync(path.join(fixture.fileWorkDir, 'chart.png'), 'photo');
+    fs.writeFileSync(path.join(fixture.fileWorkDir, 'chart.png'), chartPhotoBytes);
     fs.writeFileSync(path.join(fixture.fileWorkDir, 'clip.mp4'), 'video');
     const token = buildSchedulerMcpToken(secret, { kind: 'thread', threadKey: threadAKey });
     const client = await buildClient(fixture.handle.port, token);
@@ -1594,7 +1622,7 @@ describe('scheduler MCP server end-to-end (real HTTP)', () => {
             media: [
               {
                 type: 'photo',
-                media: { filename: 'chart.png', sizeBytes: 5, contents: 'photo' },
+                media: { filename: 'chart.png', sizeBytes: chartPhotoBytes.length, contents: chartPhotoBytes.toString('utf8') },
                 caption: 'album caption',
               },
               {

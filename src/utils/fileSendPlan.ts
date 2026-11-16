@@ -11,8 +11,8 @@
  *   2. {@link classifyFileSendKind} — map an extension to how Telegram should
  *      render it (inline photo / autoplay animation / inline video / plain document).
  *   3. {@link planFileSend} — decide the single Telegram send method (or album
- *      shape) for 1..10 items, applying the `as_file` override, the photo size
- *      downgrade, and the album photo/video-vs-document rule. Returns the
+ *      shape) for 1..10 items, applying the `as_file` override, the photo
+ *      downgrade (bytes, pixels, ratio), and the album photo/video-vs-document rule. Returns the
  *      over-cap / count violations as an error variant rather than throwing.
  *   4. {@link buildTelegramFileSendRequest} — turn a non-error plan into the
  *      exact typed Bot API request shape, including caption placement.
@@ -26,9 +26,25 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { resolveCanonicalPathContainment } from './canonicalPathContainment';
+import type { ImageDimensions } from './imageDimensions';
 
 /** Telegram's inline-photo size cap; a photo-eligible file over this downgrades to a document. */
 export const telegramPhotoMaxBytes = 10 * 1024 * 1024;
+
+/**
+ * Longest side, in pixels, that Telegram keeps of a photo a bot sends with `sendPhoto`. MEASURED 2026-11-16 on the live
+ * bot (largest stored `PhotoSize`, read back through a user account): 800×600 → 800×600, 1280×720 → 1280×720,
+ * 1600×900 → 1600×900, 1920×1080 → 1920×1080, 2560×1440 → 2560×1440, but 3840×2160 → 2560×1440, 1000×6000 → 427×2560 and
+ * 3840×1000 → 2560×667: the server stores the original up to 2560 on the longest side (MTProto `PhotoSize` type `w`,
+ * https://core.telegram.org/api/files#image-thumbnail-types) and shrinks anything bigger to it. The copy is a JPEG of
+ * about quality 87 (a 2560×1440 text screenshot: PSNR 38.6 dB, legible, mild ringing); only "as a file" keeps the
+ * original (https://telegram.org/faq), byte for byte. So an image above this goes as a document. Whether the 2560 holds
+ * for every account or image kind was not measured beyond the cases above.
+ */
+export const telegramPhotoMaxSidePx = 2560;
+
+/** Bot API `sendPhoto`: "Width and height ratio must be at most 20"; a more extreme image is refused as a photo. */
+export const telegramPhotoMaxAspectRatio = 20;
 
 /** Bot API hard send cap per file; anything over this is rejected, never sent. */
 export const telegramSendMaxBytes = 50 * 1024 * 1024;
@@ -184,12 +200,14 @@ export function trimCaption(caption: string | undefined): string | undefined {
 /**
  * @name FileSendItem
  * @description One resolved file the planner reasons about: its safe absolute
- * path, pinned descriptor snapshot, and render kind.
+ * path, pinned descriptor snapshot, and render kind. `imageSize` is the pixel size
+ * read from the header of a photo-kind file; absent means it could not be read.
  */
 export interface FileSendItem {
   absPath: string;
   source: FileDescriptorSnapshot;
   kind: FileSendKind;
+  imageSize?: ImageDimensions;
 }
 
 /**
@@ -366,17 +384,31 @@ export function getFileSendCountError(itemCount: number): string | null {
 }
 
 /**
+ * @description Whether a photo-kind item survives Telegram's photo path as it is: within the 10 MB photo cap, its
+ * longest side within {@link telegramPhotoMaxSidePx} (above it Telegram shrinks the image) and its side ratio within {@link telegramPhotoMaxAspectRatio}. A size that could not be read is not known to
+ * survive, so it does not count.
+ */
+export function checkIsPhotoKeptIntact(item: FileSendItem): boolean {
+  if (item.source.sizeBytes > telegramPhotoMaxBytes || item.imageSize === undefined) return false;
+  const { width, height } = item.imageSize;
+  return (
+    Math.max(width, height) <= telegramPhotoMaxSidePx &&
+    Math.max(width, height) / Math.min(width, height) <= telegramPhotoMaxAspectRatio
+  );
+}
+
+/**
  * @description Decide how to deliver 1..10 resolved files.
  *
  * Single file: the method is the item's kind, with two overrides —
  *  - `asFile` forces `document` for every kind, and
- *  - a photo over {@link telegramPhotoMaxBytes} downgrades to `document` so it
- *    still goes through (just not inline).
+ *  - a photo that {@link checkIsPhotoKeptIntact} refuses (over the byte cap, bigger than Telegram keeps, an extreme
+ *    ratio or an unreadable size) downgrades to `document`, so it arrives whole and at full resolution.
  *
  * Album (2..10): `albumPhotoVideo` when `!asFile` and EVERY item is either a
- * video or a photo within the photo cap, preserving each item's native media
+ * video or a photo kept intact, preserving each item's native media
  * type in all-photo, all-video, and mixed photo/video groups. Otherwise use
- * `albumDocument` (animations/documents and over-cap photos included — a media
+ * `albumDocument` (animations/documents and downgraded photos included — a media
  * group cannot carry animation items, so a gif rides as a document in an album
  * and only autoplays when sent alone).
  *
@@ -397,8 +429,8 @@ export function planFileSend(items: FileSendItem[], asFile: boolean): FileSendPl
     let mode: FileSendKind = item.kind;
     if (asFile) {
       mode = 'document';
-    } else if (item.kind === 'photo' && item.source.sizeBytes > telegramPhotoMaxBytes) {
-      // Too big for an inline photo → still deliver, as a document.
+    } else if (item.kind === 'photo' && !checkIsPhotoKeptIntact(item)) {
+      // Telegram would shrink it, or refuse it as a photo → deliver it whole, as a document.
       mode = 'document';
     }
     return { kind: 'send', mode, item };
@@ -406,11 +438,7 @@ export function planFileSend(items: FileSendItem[], asFile: boolean): FileSendPl
 
   const allPhotoVideoEligible =
     !asFile &&
-    items.every(
-      (item) =>
-        item.kind === 'video' ||
-        (item.kind === 'photo' && item.source.sizeBytes <= telegramPhotoMaxBytes),
-    );
+    items.every((item) => item.kind === 'video' || (item.kind === 'photo' && checkIsPhotoKeptIntact(item)));
   return {
     kind: 'album',
     mode: allPhotoVideoEligible ? 'albumPhotoVideo' : 'albumDocument',
@@ -420,7 +448,7 @@ export function planFileSend(items: FileSendItem[], asFile: boolean): FileSendPl
 
 /**
  * @description What Telegram is actually asked to render for a validated plan, one kind per file, in order. It differs
- * from the extension's kind wherever the plan overrode it (`asFile`, an over-cap photo, an album that fell back to
+ * from the extension's kind wherever the plan overrode it (`asFile`, a downgraded photo, an album that fell back to
  * documents), so it is what a caller reports back to the agent as "sent".
  */
 export function getSentFileKinds(plan: NonErrorFileSendPlan): FileSendKind[] {

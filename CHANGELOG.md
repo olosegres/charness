@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+**A screenshot or picture bigger than 2560 pixels on its longest side now reaches you as a file at full resolution, not as a photo Telegram has shrunk.**
+Telegram keeps a photo at its own size only up to 2560 px on the longest side and shrinks anything bigger to that (measured on the live bot: a 3840 × 2160 screenshot arrived as 2560 × 1440, a 1000 × 6000 one as 427 × 2560), and it re-encodes every photo as JPEG. When the agent sends an image with `send_file_to_user` or `send_messages_to_user`, the bot now reads its size from the file header: an image up to 2560 px stays an inline photo, a bigger one goes as a document, the original file. The same goes for an image Telegram would refuse as a photo (a side ratio over 20) and for one whose size cannot be read. In an album one such image makes the whole album documents, and the agent's tool texts now say so; `as_file: true` still sends any image as a file, which the tool texts suggest for a small image whose text must stay crisp.
+
 ## 4.1.0 — 2026-11-16
 
 **A «🔧 tool» status line is no longer left under a reply that was already posted, or under a question the agent asked.**

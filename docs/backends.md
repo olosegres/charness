@@ -203,9 +203,16 @@ keys, instead of being dropped unseen. It exposes:
 - `send_file_to_user` — lets the agent push files from the bound folder into the
   topic. A single MP4 uses Bot API `sendVideo`; eligible all-video and mixed
   photo/video albums use `sendMediaGroup`, with each MP4 represented by an
-  `InputMediaVideo` entry. `as_file:true` explicitly forces documents. The success answer says
+  `InputMediaVideo` entry. `as_file:true` explicitly forces documents. An image goes as a photo only
+  while Telegram keeps it as it is: its longest side up to 2560 px (measured: Telegram stores a bot's photo at its own
+  size up to 2560 px and shrinks anything bigger to that, as a JPEG of about quality 87;
+  [MTProto files](https://core.telegram.org/api/files#image-thumbnail-types); only "as a file" keeps the original,
+  [Telegram FAQ](https://telegram.org/faq)), at most 10 MB, a side ratio of at most 20
+  ([`sendPhoto`](https://core.telegram.org/bots/api#sendphoto)); anything else — a 4K or retina screenshot above
+  all — goes as a document, whole and unshrunk. The size is read from the file header (PNG, JPEG, WebP; one that
+  cannot be read goes as a document). The success answer says
   what was actually sent, per kind — `Sent 3 files: 1 photo, 2 documents.` — so a photo that went
-  out as a document (`as_file`, over Telegram's photo size limit, or an album that fell back to
+  out as a document (`as_file`, a big image, over Telegram's photo size limit, or an album that fell back to
   documents) is visible to the agent. A file is
   opened so that a path swapped after validation cannot reach outside the bound
   folder: on Linux component by component beneath a pinned folder descriptor
@@ -235,7 +242,7 @@ keys, instead of being dropped unseen. It exposes:
   per-item digest and similar. Each item is either a plain text string OR an
   object `{text?, path?, as_file?}` that may carry ONE attachment: a `path` item
   reuses the SAME secure `send_file_to_user` pipeline (path relative to the bound
-  folder, supported photos inline, `.gif` as animation, `.mp4` as video, everything else a document,
+  folder, photos up to 2560 px inline (a bigger image as a document), `.gif` as animation, `.mp4` as video, everything else a document,
   `as_file` forces a document), with `text` used as the media caption (trimmed to
   1024 chars — send long prose as its own text-only item). Items are validated up
   front (an empty object is rejected and nothing is sent); a total send failure

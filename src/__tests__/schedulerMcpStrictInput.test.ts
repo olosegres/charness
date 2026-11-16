@@ -31,6 +31,7 @@ import {
 import { createSendFilesToThread } from '../utils/fileSendService';
 import { createSendMessagesToThread } from '../utils/messageSendService';
 import { createFileSendTestRecorderGateway, type RecordedFileSendGatewayCall } from './fileSendTestRecorder';
+import { createPngBytes } from './imageFixtures';
 
 const secret = 'c'.repeat(64);
 const telegramThreadKey = keyToString(makeTelegramKey(-1001111111111, 11));
@@ -185,8 +186,13 @@ function getValidationIssues(text: string): ValidationIssue[] {
   return JSON.parse(text.slice(listStart));
 }
 
-function writeBoundFile(name: string, contents = 'bytes'): void {
+function writeBoundFile(name: string, contents: string | Buffer = 'bytes'): void {
   fs.writeFileSync(path.join(fixture.boundDir, name), contents);
+}
+
+/** A photo-extension file with a small image header: the size Telegram's photo path keeps as it is. The plan reads the header, not the extension. */
+function writeBoundPhoto(name: string): void {
+  writeBoundFile(name, createPngBytes(640, 480));
 }
 
 /** Every object node (with `properties`) under a JSON Schema node, the node itself included. */
@@ -361,7 +367,7 @@ describe('send_messages_to_user', () => {
   });
 
   it('the summary says what was sent: three photos', async () => {
-    for (const name of ['a.png', 'b.jpg', 'c.webp']) writeBoundFile(name);
+    for (const name of ['a.png', 'b.jpg', 'c.webp']) writeBoundPhoto(name);
     const client = await connectTelegram();
     const result = await client.callTool({
       name: 'send_messages_to_user',
@@ -405,8 +411,8 @@ describe('send_file_to_user', () => {
 
 describe('send_file_to_user, the summary', () => {
   it('says what was sent, per kind: two photos, and the same two forced to documents', async () => {
-    writeBoundFile('a.png');
-    writeBoundFile('b.png');
+    writeBoundPhoto('a.png');
+    writeBoundPhoto('b.png');
     const client = await connectTelegram();
     const photos = await client.callTool({ name: 'send_file_to_user', arguments: { paths: ['a.png', 'b.png'] } });
     assert.notEqual(photos.isError, true, getText(photos));

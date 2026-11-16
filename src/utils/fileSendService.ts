@@ -13,6 +13,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { getAbortError } from '../utils';
 import { AbortableFifo } from './abortableFifo';
+import { createDescriptorByteReader, getImageDimensions } from './imageDimensions';
 import { formatSentKinds } from './sentKindsSummary';
 import {
   buildTelegramFileSendRequest,
@@ -43,7 +44,7 @@ export interface SendFilesToThreadOptions {
 /**
  * @name SendFilesToThreadResult
  * @description `sentKinds` is what Telegram was actually asked to render, one entry per file in order — not the kind the
- * extension suggests (`as_file`, an over-cap photo or an album that fell back to documents all send documents).
+ * extension suggests (`as_file`, a photo Telegram would shrink or refuse, or an album that fell back to documents all send documents).
  */
 export type SendFilesToThreadResult =
   | { ok: true; summary: string; sentKinds: FileSendKind[] }
@@ -451,10 +452,17 @@ export function createSendFilesToThread<TTarget>(
             };
           }
           ownedFileDescriptors.push(snapshot.source.fd);
+          const kind = classifyFileSendKind(resolved.absPath);
+          // Only a photo's size decides anything (`checkIsPhotoKeptIntact`); the read is positional, so the upload
+          // that follows still starts at byte 0.
+          const imageSize = kind === 'photo'
+            ? getImageDimensions(createDescriptorByteReader(snapshot.source.fd))
+            : null;
           items.push({
             absPath: resolved.absPath,
             source: snapshot.source,
-            kind: classifyFileSendKind(resolved.absPath),
+            kind,
+            ...(imageSize !== null ? { imageSize } : {}),
           });
         }
 
