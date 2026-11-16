@@ -15,7 +15,10 @@ import { defaultSchedulerMcpPort, type SchedulerMcpHandle } from './mcpSurface';
  *
  * The heals stay AFTER reattach: they walk only ACTIVE sessions, so run before
  * it they would heal nothing. The schedule re-arm stays after reattach too — a
- * catch-up fire needs the re-attached adapters.
+ * catch-up fire needs the re-attached adapters. It only STARTS the catch-ups:
+ * a catch-up's delivery waits for its agent, and an agent waiting for the
+ * operator's answer is answered only once the bot polls, which comes after this
+ * phase — so the boot must never wait for one.
  *
  * An adopted session's output is read only once the restore step is done: what
  * its process wrote while the bot was down replays through the live handlers,
@@ -96,6 +99,7 @@ export interface SessionBootPhaseSteps {
   releaseAdoptedSessions: () => void;
   onSessionsRestored: () => void;
   healActiveSessions: () => void;
+  /** Arms every job and starts the catch-ups; resolves without waiting for any delivery. */
   rearmSchedules: () => Promise<void>;
 }
 

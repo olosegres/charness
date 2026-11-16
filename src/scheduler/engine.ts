@@ -29,6 +29,9 @@ import type { DeliveryOutcome, FireContext, ScheduleRecord } from './types';
  *       │   → bookkeeping (lastRunAt/lastRunStatus; recurring recompute+re-arm;
  *       │     N-times decrement, remove at 0; one-shot remove) → store.flush()
  *       ▼     → ledger end record (always written).
+ *
+ * The boot replay (`rearmAll`) feeds a job whose run was missed into the same
+ * chain as a timer that is due at once (a catch-up), and never awaits it.
  */
 
 /**
@@ -71,12 +74,17 @@ export interface SchedulerEngine {
   armJob(record: ScheduleRecord): void;
   /** Cancel a job's timer if one is armed. Idempotent. */
   disarmJob(jobId: string): void;
-  /** Boot replay: arm every persisted job, firing one catch-up per missed run. */
+  /**
+   * Boot replay: arm every persisted job and start one catch-up per missed run.
+   * Resolves once every job is armed or its catch-up is under way — it never
+   * waits for a catch-up's delivery (see `whenIdle` for that).
+   */
   rearmAll(): Promise<void>;
   /**
    * Resolve once every fire chain currently in flight (delivery + bookkeeping +
-   * flush + ledger end record) has settled. A timer-driven fire is dispatched
-   * fire-and-forget, so this is the seam a caller (or a test) uses to await it.
+   * flush + ledger end record) has settled. A timer-driven fire and a boot
+   * catch-up are dispatched fire-and-forget, so this is the seam a caller (or a
+   * test) uses to await them.
    */
   whenIdle(): Promise<void>;
   /** Clear every armed timer (process shutdown). */
@@ -364,10 +372,20 @@ export function createSchedulerEngine(deps: SchedulerEngineDeps): SchedulerEngin
    *   - paused → skip silently (stays disarmed; no ledger entry).
    *   - nextRunAt missed (getCatchUpDecision → 'fire-missed') → fire ONCE as a
    *     catch-up (the deliver callback gets `missedAtMs`), then bookkeeping
-   *     already recomputed nextRunAt from now and re-armed.
+   *     recomputes nextRunAt from now and re-arms.
    *   - on-time / future → just arm.
-   * Catch-ups run sequentially (await) so a burst of missed jobs paces its
-   * announcements through the shared chat send budget.
+   * A catch-up is a due timer that fires at once: it goes through the same
+   * tracked chain (`trackChain`, so the no-overlap guard, the fresh-record
+   * re-read and the error containment apply) and is NEVER awaited here. The
+   * boot waits for no delivery: a delivery waits for its agent to go idle, and
+   * an agent mid-turn can be waiting for the operator's answer — which cannot
+   * arrive before the bot polls, and the polling starts after the boot.
+   * Awaiting it deadlocked the boot, and a stuck catch-up also held every job
+   * stored after it unarmed. The replay resolves once every job is armed or
+   * its catch-up is under way; {@link whenIdle} awaits the catch-ups.
+   * Catch-ups of different jobs run side by side, as simultaneous timers do;
+   * their announcements still go out one by one through the process-wide send
+   * gate.
    */
   async function rearmAll(): Promise<void> {
     const all = store.getSchedules();
@@ -377,7 +395,7 @@ export function createSchedulerEngine(deps: SchedulerEngineDeps): SchedulerEngin
       if (decision === 'fire-missed') {
         // fire() reads the same catch-up decision and handles re-arming via
         // bookkeeping; nothing else to arm here.
-        await fire(record);
+        trackChain(record.id);
         continue;
       }
       armJob(record);

@@ -29,6 +29,7 @@ import type { ScheduleRunRecord } from '../scheduler/runLedger';
 import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
 
 const threadA: SessionKey = makeTelegramKey(-1001234567890, 11);
+const threadB: SessionKey = makeTelegramKey(-1001234567890, 12);
 const everyFiveMinutes: ScheduleSpec = { kind: 'cron', cronExpr: '*/5 * * * *' };
 
 /** A controllable fake timer queue + clock, mirroring how the engine consumes them. */
@@ -149,6 +150,14 @@ async function yieldMacrotasks(): Promise<void> {
   }
 }
 
+/**
+ * Whether a boot replay RETURNED while a delivery of one of its catch-ups is rigged to hang. Raced against a few macrotask
+ * rounds so a replay that waits for the delivery FAILS the test instead of hanging it (and everything after it).
+ */
+async function checkReplayReturnsWhileDeliveryHangs(replay: Promise<void>): Promise<boolean> {
+  return Promise.race([replay.then(() => true), yieldMacrotasks().then(() => false)]);
+}
+
 describe('schedulerEngine', () => {
   let dataDir: string;
   let fakeHome: string;
@@ -248,6 +257,138 @@ describe('schedulerEngine', () => {
     assert.ok(fresh.nextRunAt !== null && fresh.nextRunAt > bootNow, 'recomputed from boot now, into the future');
     assert.equal(clock.pendingCount, 1, 're-armed after catch-up');
     assert.ok(caps.ledgerRecords.some((r) => r.kind === 'catch-up'), 'catch-up ledger record written');
+  });
+
+  it('boot rearmAll does not wait for a catch-up whose delivery cannot finish: the catch-up is under way and the boot goes on', async () => {
+    const store = await newStore();
+    const createdAtMs = new Date(2026, 5, 6, 9, 0, 0).getTime();
+    const created = await createScheduleForThread(store, {
+      threadKey: threadA, name: 'stuck', spec: everyFiveMinutes, prompt: 'go', createdBy: 'user', nowMs: createdAtMs,
+    });
+    assert.ok(created.ok);
+    const missedDueAt = created.record.nextRunAt;
+    assert.ok(missedDueAt !== null);
+
+    const bootNow = missedDueAt + 60 * 60 * 1000;
+    const clock = createFakeClock(bootNow);
+    const caps = createCaptures();
+    // The agent of the topic is mid-turn, waiting for its operator: the delivery waits for it and does not finish.
+    caps.hangNextDelivery();
+    const engine = createSchedulerEngine({
+      store, ledger: caps.ledger, deliver: caps.deliver,
+      now: clock.now, setTimeoutFn: clock.setTimeoutFn, clearTimeoutFn: clock.clearTimeoutFn,
+    });
+
+    try {
+      const isReturned = await checkReplayReturnsWhileDeliveryHangs(engine.rearmAll());
+      assert.equal(isReturned, true, 'the boot replay returned while the catch-up delivery was still pending');
+
+      assert.equal(caps.deliverCalls.length, 1, 'the catch-up did start delivering');
+      assert.equal(caps.deliverCalls[0].fireContext.kind, 'catch-up');
+      assert.equal(caps.deliverCalls[0].fireContext.missedAtMs, missedDueAt, 'and it still carries the missed instant');
+      assert.equal(
+        caps.ledgerRecords.filter((record) => record.kind === 'catch-up' && record.deliveredAt !== undefined).length,
+        0,
+        'its ledger record has no end yet',
+      );
+      assert.equal(store.getSchedules()[created.record.id].nextRunAt, missedDueAt, 'nothing is booked before the delivery ends');
+    } finally {
+      caps.resolveHanging();
+    }
+    await engine.whenIdle();
+
+    const fresh = store.getSchedules()[created.record.id];
+    assert.equal(fresh.lastRunStatus, 'delivered', 'once the delivery ends, the catch-up is booked as any fire');
+    assert.ok(fresh.nextRunAt !== null && fresh.nextRunAt > bootNow, 'nextRunAt is recomputed from the boot, into the future');
+    assert.equal(clock.pendingCount, 1, 'and the job is armed again');
+    assert.equal(caps.deliverCalls.length, 1, 'still ONE catch-up for the missed run');
+    assert.equal(
+      caps.ledgerRecords.filter((record) => record.kind === 'catch-up' && record.deliveredAt !== undefined).length,
+      1,
+      'the end record of the ledger is written',
+    );
+  });
+
+  it('boot rearmAll: a catch-up that cannot finish delays no other job — the other missed catch-ups run, the on-time jobs are armed', async () => {
+    const store = await newStore();
+    const createdAtMs = new Date(2026, 5, 6, 9, 0, 0).getTime();
+    // Stored in this order, and the first one is the one that hangs.
+    const stuck = await createScheduleForThread(store, {
+      threadKey: threadA, name: 'stuck', spec: everyFiveMinutes, prompt: 'go', createdBy: 'user', nowMs: createdAtMs,
+    });
+    const otherMissed = await createScheduleForThread(store, {
+      threadKey: threadB, name: 'other-missed', spec: everyFiveMinutes, prompt: 'go', createdBy: 'user', nowMs: createdAtMs,
+    });
+    assert.ok(stuck.ok && otherMissed.ok);
+    const missedDueAt = stuck.record.nextRunAt;
+    assert.ok(missedDueAt !== null);
+    const bootNow = missedDueAt + 60 * 60 * 1000;
+    // Created at the boot instant: its first run is minutes ahead, so the replay only arms it.
+    const onTime = await createScheduleForThread(store, {
+      threadKey: threadB, name: 'on-time', spec: everyFiveMinutes, prompt: 'go', createdBy: 'user', nowMs: bootNow,
+    });
+    assert.ok(onTime.ok);
+
+    const clock = createFakeClock(bootNow);
+    const caps = createCaptures();
+    caps.hangNextDelivery();
+    const engine = createSchedulerEngine({
+      store, ledger: caps.ledger, deliver: caps.deliver,
+      now: clock.now, setTimeoutFn: clock.setTimeoutFn, clearTimeoutFn: clock.clearTimeoutFn,
+    });
+
+    try {
+      const isReturned = await checkReplayReturnsWhileDeliveryHangs(engine.rearmAll());
+      assert.equal(isReturned, true, 'the boot replay returned while the first catch-up delivery was still pending');
+      await yieldMacrotasks();
+
+      assert.deepEqual(
+        caps.deliverCalls.map((call) => call.job.id),
+        [stuck.record.id, otherMissed.record.id],
+        'the second job\'s catch-up was delivered while the first one is still waiting',
+      );
+      assert.ok(caps.deliverCalls.every((call) => call.fireContext.kind === 'catch-up'));
+      const otherAfter = store.getSchedules()[otherMissed.record.id];
+      assert.equal(otherAfter.lastRunStatus, 'delivered', 'and it is booked');
+      assert.ok(otherAfter.nextRunAt !== null && otherAfter.nextRunAt > bootNow, 'with its next run ahead');
+      assert.equal(store.getSchedules()[stuck.record.id].nextRunAt, missedDueAt, 'the waiting one is not booked yet');
+      // The finished catch-up re-armed its job and the on-time job was armed: one timer each. The waiting job has none yet.
+      assert.equal(clock.pendingCount, 2, 'every job but the waiting one is armed');
+    } finally {
+      caps.resolveHanging();
+    }
+    await engine.whenIdle();
+    assert.equal(clock.pendingCount, 3, 'the waiting job is armed again once its delivery ends');
+    assert.equal(caps.deliverCalls.length, 2, 'one catch-up per missed job, no more');
+  });
+
+  it('boot rearmAll: a catch-up whose delivery throws is booked as failed and re-armed — nothing escapes the replay', async () => {
+    const store = await newStore();
+    const createdAtMs = new Date(2026, 5, 6, 9, 0, 0).getTime();
+    const created = await createScheduleForThread(store, {
+      threadKey: threadA, name: 'throws', spec: everyFiveMinutes, prompt: 'go', createdBy: 'user', nowMs: createdAtMs,
+    });
+    assert.ok(created.ok);
+    const missedDueAt = created.record.nextRunAt;
+    assert.ok(missedDueAt !== null);
+    const bootNow = missedDueAt + 60 * 60 * 1000;
+    const clock = createFakeClock(bootNow);
+    const caps = createCaptures();
+    caps.setShouldThrow(true);
+    const engine = createSchedulerEngine({
+      store, ledger: caps.ledger, deliver: caps.deliver,
+      now: clock.now, setTimeoutFn: clock.setTimeoutFn, clearTimeoutFn: clock.clearTimeoutFn,
+    });
+
+    await engine.rearmAll();
+    await engine.whenIdle();
+
+    const fresh = store.getSchedules()[created.record.id];
+    assert.equal(fresh.lastRunStatus, 'failed');
+    assert.ok(fresh.nextRunAt !== null && fresh.nextRunAt > bootNow);
+    assert.equal(clock.pendingCount, 1, 're-armed after the failed catch-up');
+    const ended = caps.ledgerRecords.find((record) => record.kind === 'catch-up' && record.deliveredAt !== undefined);
+    assert.equal(ended?.error, 'deliver boom', 'the end record names the failure');
   });
 
   it('skips an overlapping fire while delivery is in flight (no second deliver)', async () => {

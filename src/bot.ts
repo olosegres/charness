@@ -15387,8 +15387,10 @@ export async function startBot(): Promise<void> {
       // and the CLI never retries a failed MCP server. Fire-and-forget.
       healSchedulerMcpForActiveSessions();
     },
-    // Boot catch-up replay: arm every persisted job, fire one catch-up per
+    // Boot catch-up replay: arm every persisted job, START one catch-up per
     // missed run. Independent of the MCP server (delivery does not need it).
+    // It never waits for a delivery — one waits for its agent, which may wait for
+    // an answer that only polling (started after this phase) can bring.
     rearmSchedules: () =>
       schedulerEngine!.rearmAll().catch((e) => console.error('[scheduler] rearmAll failed:', e)),
   });
