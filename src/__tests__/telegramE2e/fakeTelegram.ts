@@ -33,6 +33,15 @@ import type { InlineKeyboardButton } from 'telegraf/typings/core/types/typegram'
  */
 export const generalTopicThreadId = 1;
 
+/**
+ * Where the fake's ONE message sequence (messages and the ids of topics it creates) starts: above every thread id a flow
+ * hard-codes. A topic's id is the id of its root message, and the bot rightly ignores a reply to that root (a reply "in the
+ * topic"), so a flow's message whose id happened to equal the hard-coded id of its topic lost its reply quote — which of the
+ * messages that was depended on how many the bot had sent before, so a full run met it once in a while
+ * (`fakeTelegramMessageIds.test.ts` keeps the two ranges apart).
+ */
+export const fakeTelegramFirstMessageId = 100_000;
+
 /** The most characters the Bot API accepts in the notification of `answerCallbackQuery`. */
 const callbackToastMaxLength = 200;
 
@@ -248,7 +257,7 @@ export class FakeTelegram {
   private readonly pendingUpdates: Array<Record<string, unknown>> = [];
   /** One waker per held long poll: a restarted bot leaves its dead predecessor's poll hanging for a moment. */
   private readonly pollWakers = new Set<() => void>();
-  private nextMessageId = 1;
+  private nextMessageId = fakeTelegramFirstMessageId;
   private nextUpdateId = 1;
   private nextCallbackQueryId = 1;
   private server: http.Server | null = null;
