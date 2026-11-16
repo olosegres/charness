@@ -282,12 +282,14 @@ describe('A Gemini per-minute quota on OpenCode end to end: built charness, fake
     const sessionId = getTopicSessionId();
     const pending = readPersistedState(getLayout()).apiRetries?.[getTopicKey()];
     assert.equal(pending?.kind, 'transient', 'precondition: the short retry of the step before is pending');
+    const pendingLine = `${getTopicKey()}: an unconfirmed usage limit — a retry is already pending`;
+    const pendingLinesBefore = getCharness().output.split(pendingLine).length;
     fakeOpenCode.emitSessionBusy(sessionId);
     fakeOpenCode.emitProviderRetry(sessionId, { attempt: 1, message: anthropicUnconfirmedMessage, next: Date.now() + anthropicRetryAfterMs });
 
-    // The barrier: the error is handled before the bot answers a later /limits.
-    await openLimitsBoard(fakeTelegram, topic, geminiTopic.threadId);
-    assert.ok(getCharness().output.includes(`${getTopicKey()}: an unconfirmed usage limit — a retry is already pending`), 'the unconfirmed limit was seen and left to the pending retry');
+    // The error reaches the bot on the server's event stream, a path of its own: the answer to a later /limits does not prove it was
+    // handled (it did not, once, under load). Wait for the line the bot logs for it — a NEW one — before judging what it did.
+    await getCharness().waitFor('the unconfirmed limit to be seen and left to the pending retry', replyTimeoutMs, () => getCharness().output.split(pendingLine).length > pendingLinesBefore);
     assert.deepEqual(readPersistedState(getLayout()).apiRetries?.[getTopicKey()], pending, 'the pending retry is untouched');
     assert.ok(!getCharness().output.includes(`${getTopicKey()}: ${probeArmedLogPhrase}`), 'no probe armed');
   });
