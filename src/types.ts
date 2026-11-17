@@ -285,10 +285,22 @@ export interface ReAskedQuestionRecord {
  * answer given later still reaches the agent, as a new message. Plain serialisable data, kept in `state.json`.
  */
 export interface SetAsideQuestionRecord {
-  /** Short id baked into the record's button data, unique among the topic's open set-aside questions. */
+  /**
+   * Short id baked into the record's button data (`qs_<id>_<option>`), unique for the topic's whole LIFETIME and never reused:
+   * a keyboard whose removal failed (the message is too old, a 429) stays live, and a later question that took its id would be
+   * answered by a tap on it. Made from a per-topic counter that only goes up and that closing a record, an eviction or the end
+   * of a conversation never reset (`createSetAsideQuestionId`); a tap is also honoured only on a message of the record
+   * (`checkIsSetAsideRecordMessage`).
+   */
   id: string;
   /** The Telegram message that shows the question (its buttons, its pin); `null` when its post never landed. */
   messageId: number | null;
+  /**
+   * The message the question was FIRST asked in, when a re-post put a copy at the bottom (`PendingQuestionState.originalMessageId`):
+   * the copy is `messageId`, the original stays up with «asked again below». A reply to either answers the record. Absent when the
+   * question was never re-posted.
+   */
+  originalMessageId?: number | null;
   questions: OpenCodeQuestion[];
   /** One slot per question (same order as `questions`): the answer given before the wait ended, `null` while it is still open. */
   answers: (string[] | null)[];

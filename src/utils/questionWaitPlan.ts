@@ -75,13 +75,21 @@ function formatAnswer(answer: string[]): string {
   return answer.join(', ');
 }
 
+/**
+ * A text of somebody's words inside a line of ours, as a JSON string: the agent cannot mistake it for a line of the text around
+ * it. The line breaks (`\n` and the others a reader takes for one: U+2028, U+2029, a carriage return) go through
+ * `neutraliseHeaderLookalikes` first — JSON leaves U+2028 / U+2029 raw, and an answer carries a topic member's name.
+ */
+function quoteWords(words: string): string {
+  return JSON.stringify(neutraliseHeaderLookalikes(words));
+}
+
 /** What the agent's tool result says about a call's questions that were answered before the wait ended. */
 function formatGivenAnswers(questions: OpenCodeQuestion[], answers: (string[] | null)[]): string | null {
   const given: string[] = [];
   questions.forEach((question, index) => {
     const answer = answers[index];
-    // Quoted as JSON strings: the agent cannot mistake a typed answer for a line of the text around it.
-    if (answer) given.push(`${JSON.stringify(getQuestionText(question))} = ${JSON.stringify(formatAnswer(answer))}`);
+    if (answer) given.push(`${quoteWords(getQuestionText(question))} = ${quoteWords(formatAnswer(answer))}`);
   });
   return given.length > 0 ? `(Answers already given in this call: ${given.join('; ')}.)` : null;
 }
@@ -162,6 +170,28 @@ export function buildLateAnswerPrompt(input: LateAnswerPromptInput): string {
   ].join('\n');
 }
 
+/** Radix of a record id: letters and digits only, so the `_` that separates the parts of the button data never occurs in one. */
+const setAsideQuestionIdRadix = 36;
+
+/**
+ * @description The id of the set-aside record made from the topic's `sequence`-th set-aside question (the counter starts at 1,
+ * only goes up, and is kept for the topic's lifetime — closing a record, an eviction or a new conversation never resets it). A
+ * counter, not a hash or a clock: two questions can never share an id, so an old keyboard that stayed live can never answer a
+ * newer question. Short, as the button data holds 64 bytes.
+ */
+export function createSetAsideQuestionId(sequence: number): string {
+  return sequence.toString(setAsideQuestionIdRadix);
+}
+
+/**
+ * @description Whether `messageId` is one of the messages that show a set-aside question: the live one (`messageId`) or, when a
+ * re-post put a copy at the bottom, the original it left up (`originalMessageId`). A reply to either answers the record, and a
+ * tap is honoured only on one of them.
+ */
+export function checkIsSetAsideRecordMessage(record: SetAsideQuestionRecord, messageId: number): boolean {
+  return record.messageId === messageId || record.originalMessageId === messageId;
+}
+
 /**
  * @description The question of a set-aside record a late answer goes to: its first one still open (the questions of one call
  * are answered in order, like on screen), `null` when none is. `index` is its place in `record.questions` / `record.answers`.
@@ -195,20 +225,37 @@ export interface QuestionReplyRouteInput {
   liveQuestion: OpenCodeQuestion | undefined;
   /** The conversation's open set-aside questions, oldest first. */
   setAside: readonly SetAsideQuestionRecord[];
+  /**
+   * The message is a forward: somebody else's words are content, never control, so it answers no question (the same rule as
+   * `deliverActivePrompt`'s). A waiting question is still cancelled by it, as by any other message that is not a pick.
+   */
+  isForwarded: boolean;
+  /**
+   * When agent output last landed in the topic (epoch ms), `null` when none has since the bot started counting. Later agent text
+   * may hold numbered choices of its own — a bare number then belongs to that, not to a question set aside before it.
+   */
+  lastAgentOutputAtMs: number | null;
 }
 
 /**
- * @description Route a typed message, in this order:
- *  1. a REPLY to a set-aside question's message answers that question — whatever else is open, the person named it: a bare
- *     option number in range picks that label, any other text is the answer itself (a reply with no text routes on);
+ * @description Route a typed message, in this order. A forwarded message is somebody else's words — content, never control —
+ * so it takes neither of the set-aside routes (1, 3), and answers no waiting question either (2: it cancels it, like any
+ * message that is not a pick).
+ *  1. a REPLY to either message of a set-aside question answers that question — whatever else is open, the person named it: a
+ *     bare option number in range picks that label, any other text is the answer itself (a reply with no text routes on);
  *  2. a question still waiting keeps its route (a number answers it, other text cancels it and goes as a prompt);
- *  3. no question waiting: a bare option number in range of the NEWEST set-aside question answers it;
+ *  3. no question waiting: a bare option number in range of the NEWEST set-aside question answers it — but only while no
+ *     agent output has landed in the topic after that question was set aside (later agent text may hold numbered choices of
+ *     its own; the number is then an ordinary message);
  *  4. anything else is an ordinary prompt — it never closes a set-aside question.
  */
 export function getQuestionReplyRouteWithSetAside(input: QuestionReplyRouteInput): QuestionReplyRouteWithSetAside {
   const text = input.text.trim();
 
-  const repliedRecord = input.replyToMessageId === null ? undefined : input.setAside.find((record) => record.messageId === input.replyToMessageId);
+  const { replyToMessageId } = input;
+  const repliedRecord = !input.isForwarded && replyToMessageId !== null
+    ? input.setAside.find((record) => checkIsSetAsideRecordMessage(record, replyToMessageId))
+    : undefined;
   const repliedTarget = repliedRecord ? getSetAsideAnswerTarget(repliedRecord) : null;
   if (repliedRecord && repliedTarget && text !== '') {
     const numberRoute = getQuestionReplyRoute(text, repliedTarget.question);
@@ -220,11 +267,15 @@ export function getQuestionReplyRouteWithSetAside(input: QuestionReplyRouteInput
     };
   }
 
-  if (input.liveQuestion) return getQuestionReplyRoute(text, input.liveQuestion);
+  if (input.liveQuestion) {
+    const liveRoute = getQuestionReplyRoute(text, input.liveQuestion);
+    return input.isForwarded && liveRoute.kind === 'answer' ? { kind: 'cancel' } : liveRoute;
+  }
 
   const newestRecord = input.setAside[input.setAside.length - 1];
   const newestTarget = newestRecord ? getSetAsideAnswerTarget(newestRecord) : null;
-  if (newestRecord && newestTarget) {
+  const isOutputSinceSetAside = newestRecord !== undefined && input.lastAgentOutputAtMs !== null && input.lastAgentOutputAtMs > newestRecord.setAsideAt;
+  if (!input.isForwarded && newestRecord && newestTarget && !isOutputSinceSetAside) {
     const numberRoute = getQuestionReplyRoute(text, newestTarget.question);
     if (numberRoute.kind === 'answer') {
       return { kind: 'answerSetAside', recordId: newestRecord.id, questionIndex: newestTarget.index, answer: numberRoute.labels };
