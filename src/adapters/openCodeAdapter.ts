@@ -6042,15 +6042,19 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
   }
 
   /**
-   * @description Set the pending question aside: REPLY to it with `text` as the custom answer of every question left open
+   * @description Set the question `requestId` aside: REPLY to it with `text` as the custom answer of every question left open
    * (`givenAnswers` keeps the ones already collected), so the question tool returns and the agent goes on. Never a reject —
    * a `Question.RejectedError` ends OpenCode's agent loop (`continue_loop_on_deny` is off by default), which is the opposite
-   * of «go on». The reply takes any text as an answer (the server does not check it against the options).
+   * of «go on». The reply takes any text as an answer (the server does not check it against the options). Does nothing, and
+   * says so (`false`), unless `requestId` is the question pending now; `true` once the reply is sent (a failure of the send
+   * surfaces through the `error` event, as for an answer).
    */
-  setQuestionAside(key: SessionKey, text: string, givenAnswers: (string[] | null)[]): void {
-    const questions = this.sessions.get(keyToString(key))?.pendingQuestion?.questions;
-    if (!questions) return;
-    this.answerQuestion(key, questions.map((_, index) => givenAnswers[index] ?? [text]));
+  setQuestionAside(key: SessionKey, requestId: string, text: string, givenAnswers: (string[] | null)[]): boolean {
+    const session = this.sessions.get(keyToString(key));
+    const pending = session?.isActive ? session.pendingQuestion : null;
+    if (!pending || pending.requestId !== requestId) return false;
+    this.answerQuestion(key, pending.questions.map((_, index) => givenAnswers[index] ?? [text]));
+    return true;
   }
 
   /**

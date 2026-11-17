@@ -60,9 +60,9 @@ function createRecord(overrides: Partial<SetAsideQuestionRecord> & Pick<SetAside
   };
 }
 
-/** Every way a message can reach the router, with the ordinary case — not forwarded, no agent output since — as the default. */
-function routeOf(input: Omit<QuestionReplyRouteInput, 'isForwarded' | 'lastAgentOutputAtMs'> & Partial<Pick<QuestionReplyRouteInput, 'isForwarded' | 'lastAgentOutputAtMs'>>) {
-  return getQuestionReplyRouteWithSetAside({ isForwarded: false, lastAgentOutputAtMs: null, ...input });
+/** Every way a message can reach the router, with the ordinary case — not forwarded — as the default. */
+function routeOf(input: Omit<QuestionReplyRouteInput, 'isForwarded'> & Partial<Pick<QuestionReplyRouteInput, 'isForwarded'>>) {
+  return getQuestionReplyRouteWithSetAside({ isForwarded: false, ...input });
 }
 
 /** The lines of a text the way a reader takes them: every kind of line break, not only `\n`. */
@@ -415,30 +415,16 @@ describe('getQuestionReplyRouteWithSetAside', () => {
     assert.deepEqual(route, { kind: 'cancel' });
   });
 
-  it('with nothing waiting, a bare number answers the NEWEST set-aside question', () => {
-    const route = routeOf({
-      text: ' 3 ',
-      replyToMessageId: null,
-      liveQuestion: undefined,
-      setAside: [older, newest],
-    });
-    assert.deepEqual(route, { kind: 'answerSetAside', recordId: 'newest', questionIndex: 0, answer: ['Both'] });
-  });
-
-  it('a number out of range of the newest set-aside question is an ordinary prompt (an older one is not guessed at)', () => {
-    const route = routeOf({
-      text: '3',
-      replyToMessageId: null,
-      liveQuestion: undefined,
-      setAside: [newest, older],
-    });
-    assert.deepEqual(route, { kind: 'prompt' });
-  });
-
-  it('a number answers the first question still open of a half-answered record', () => {
-    const half = createRecord({ id: 'half', questions: [deployQuestion, docsQuestion], answers: [['Push now'], null] });
-    const route = routeOf({ text: '1', replyToMessageId: null, liveQuestion: undefined, setAside: [half] });
-    assert.deepEqual(route, { kind: 'answerSetAside', recordId: 'half', questionIndex: 1, answer: ['README'] });
+  it('with nothing waiting, a bare number is an ordinary message — a set-aside question is answered late only by a tap or a reply', () => {
+    // However many set-aside questions are open, whatever the number would pick: no guard on «the agent has written nothing
+    // since» survives a restart, and the agent writes numbered text of its own right after a set-aside.
+    const half = createRecord({ id: 'half', messageId: 300, questions: [deployQuestion, docsQuestion], answers: [['Push now'], null] });
+    for (const text of ['1', '2', '3', ' 3 ']) {
+      for (const setAside of [[older], [older, newest], [half]]) {
+        const route = routeOf({ text, replyToMessageId: null, liveQuestion: undefined, setAside });
+        assert.deepEqual(route, { kind: 'prompt' }, `${JSON.stringify(text)} with ${setAside.length} open`);
+      }
+    }
   });
 
   it('other text with nothing waiting is an ordinary prompt and closes nothing', () => {
@@ -529,37 +515,15 @@ describe('getQuestionReplyRouteWithSetAside', () => {
     });
   });
 
-  describe('a bare number and the agent output that landed after the question was set aside', () => {
-    const setAsideAtMs = afterAsk(30);
-    const only = createRecord({ id: 'only', setAsideAt: setAsideAtMs, questions: [deployQuestion] });
-
-    it('answers while nothing was output since — also exactly at the set-aside moment, and when none is known', () => {
-      for (const lastAgentOutputAtMs of [null, setAsideAtMs - 1, setAsideAtMs]) {
-        const route = routeOf({ text: '1', replyToMessageId: null, liveQuestion: undefined, setAside: [only], lastAgentOutputAtMs });
-        assert.deepEqual(route, { kind: 'answerSetAside', recordId: 'only', questionIndex: 0, answer: ['Push now'] }, String(lastAgentOutputAtMs));
-      }
-    });
-
-    it('is an ordinary message once the agent wrote anything after it — a numbered list of its own may be what the number picks', () => {
-      const route = routeOf({ text: '2', replyToMessageId: null, liveQuestion: undefined, setAside: [only], lastAgentOutputAtMs: setAsideAtMs + 1 });
-      assert.deepEqual(route, { kind: 'prompt' });
-    });
-
-    it('judges by the NEWEST record\'s set-aside moment: output between two set-asides does not hide the newer one', () => {
-      const first = createRecord({ id: 'first', setAsideAt: setAsideAtMs, questions: [deployQuestion] });
-      const second = createRecord({ id: 'second', setAsideAt: setAsideAtMs + 600_000, questions: [docsQuestion] });
-      const route = routeOf({ text: '3', replyToMessageId: null, liveQuestion: undefined, setAside: [first, second], lastAgentOutputAtMs: setAsideAtMs + 1000 });
-      assert.deepEqual(route, { kind: 'answerSetAside', recordId: 'second', questionIndex: 0, answer: ['Both'] });
-    });
-
-    it('a REPLY still answers, however much was output since — the person named the question', () => {
-      const route = routeOf({ text: '2', replyToMessageId: 100, liveQuestion: undefined, setAside: [only], lastAgentOutputAtMs: setAsideAtMs + 3_600_000 });
-      assert.deepEqual(route, { kind: 'answerSetAside', recordId: 'only', questionIndex: 0, answer: ['Wait for the review'] });
-    });
-
-    it('does not touch a question that is still waiting: output since is not a reason to refuse its answer', () => {
-      const route = routeOf({ text: '2', replyToMessageId: null, liveQuestion: docsQuestion, setAside: [only], lastAgentOutputAtMs: setAsideAtMs + 1 });
+  describe('a bare number next to a set-aside question', () => {
+    it('answers the question that waits, and only that one — the set-aside one is left open', () => {
+      const route = routeOf({ text: '2', replyToMessageId: null, liveQuestion: docsQuestion, setAside: [older] });
       assert.deepEqual(route, { kind: 'answer', labels: ['Changelog'] });
+    });
+
+    it('a REPLY to the set-aside question\'s message still answers it, whatever else was written meanwhile', () => {
+      const route = routeOf({ text: '2', replyToMessageId: 100, liveQuestion: undefined, setAside: [older] });
+      assert.deepEqual(route, { kind: 'answerSetAside', recordId: 'older', questionIndex: 0, answer: ['Wait for the review'] });
     });
   });
 
@@ -584,10 +548,10 @@ describe('getQuestionReplyRouteWithSetAside', () => {
       assert.deepEqual(route, { kind: 'cancel' });
     });
 
-    it('the same text, not forwarded, takes the answer routes — the flag is what changes the route', () => {
+    it('the same reply, not forwarded, answers — the flag is what changes the route', () => {
       assert.deepEqual(
-        routeOf({ text: '1', replyToMessageId: null, liveQuestion: undefined, setAside: [older, newest], isForwarded: false }),
-        { kind: 'answerSetAside', recordId: 'newest', questionIndex: 0, answer: ['README'] },
+        routeOf({ text: 'Push now', replyToMessageId: 100, liveQuestion: undefined, setAside: [older, newest], isForwarded: false }),
+        { kind: 'answerSetAside', recordId: 'older', questionIndex: 0, answer: ['Push now'] },
       );
     });
   });

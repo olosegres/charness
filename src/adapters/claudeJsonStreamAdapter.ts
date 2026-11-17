@@ -2386,19 +2386,21 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
   }
 
   /**
-   * @description Set the pending question aside: DENY its `can_use_tool` with `text` as the message. The CLI hands the model a
-   * denied tool call's message as the tool's result and the turn goes on — no interrupt, unlike {@link rejectQuestion}'s
+   * @description Set the question `requestId` aside: DENY its `can_use_tool` with `text` as the message. The CLI hands the model
+   * a denied tool call's message as the tool's result and the turn goes on — no interrupt, unlike {@link rejectQuestion}'s
    * abandonment (the Agent SDK: «When denying, provide a message explaining why. Claude sees this message and may adjust its
-   * approach»). The answers already given travel in `text` itself, so `givenAnswers` is not read here.
+   * approach»). The answers already given travel in `text` itself, so `givenAnswers` is not read here. Does nothing, and says
+   * so (`false`), unless `requestId` is the question pending now.
    */
-  setQuestionAside(key: SessionKey, text: string): void {
+  setQuestionAside(key: SessionKey, requestId: string, text: string): boolean {
     const session = this.sessions.get(keyToString(key));
-    if (!session?.isActive) return;
+    if (!session?.isActive || session.pendingQuestion?.requestId !== requestId) return false;
     const pending = this.takePendingQuestion(session);
-    if (!pending) return;
+    if (!pending) return false;
     // The turn resumes now, as after an answer: restart the idle-watchdog clock the wait for the person had run down.
     session.lastStdoutActivityAt = Date.now();
     this.writeControlResponse(session, pending.requestId, buildCanUseToolDeny(text, pending.toolUseId));
+    return true;
   }
 
   /**

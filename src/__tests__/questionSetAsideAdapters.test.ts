@@ -71,7 +71,8 @@ describe('json-stream: setQuestionAside denies the question with the text and le
 
     // Called the way the bot calls it, through the backend-neutral contract (which also carries the answers given so far).
     const backendNeutralAdapter: AgentAdapter = adapter;
-    backendNeutralAdapter.setQuestionAside?.(key, text, [null, null]);
+    const wasSetAside = backendNeutralAdapter.setQuestionAside?.(key, 'req_ask', text, [null, null]);
+    assert.equal(wasSetAside, true, 'the bot is told the question was set aside');
 
     // Load-bearing: the frame is a deny carrying the bot's text — the model reads it as the tool's result — and nothing
     // else is written: an interrupt (`control_request`) would abort the very turn this is meant to let go on.
@@ -86,7 +87,7 @@ describe('json-stream: setQuestionAside denies the question with the text and le
     const { adapter, session } = createAdapterBlockedOnQuestion();
     assert.equal(session.isBusy, true, 'precondition: asking marked the turn busy');
 
-    adapter.setQuestionAside(key, 'set aside');
+    adapter.setQuestionAside(key, 'req_ask', 'set aside');
 
     assert.equal(session.pendingQuestion, null);
     assert.equal(fs.existsSync(session.paths.questionFile), false, 'a restart finds no question to resurface');
@@ -100,7 +101,7 @@ describe('json-stream: setQuestionAside denies the question with the text and le
     session.lastStdoutActivityAt = Date.now() - 3_600_000;
 
     const before = Date.now();
-    adapter.setQuestionAside(key, 'set aside');
+    adapter.setQuestionAside(key, 'req_ask', 'set aside');
 
     assert.ok(session.lastStdoutActivityAt >= before, 'the clock restarts at the set-aside');
   });
@@ -114,7 +115,7 @@ describe('json-stream: setQuestionAside denies the question with the text and le
       message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: toolUseId, content: output, is_error: true }] },
     }) + '\n';
 
-    adapter.setQuestionAside(key, 'set aside');
+    adapter.setQuestionAside(key, 'req_ask', 'set aside');
     // The CLI answers the denied call with its tool_result; it must stay out of the topic like an answered question's.
     adapter['onStdout'](session, buildToolResultLine('toolu_ask', 'set aside'));
     assert.deepEqual(toolResults, []);
@@ -129,22 +130,43 @@ describe('json-stream: setQuestionAside denies the question with the text and le
     adapter.rejectQuestion(key);
     frames.length = 0;
 
-    adapter.setQuestionAside(key, 'set aside');
+    const wasSetAside = adapter.setQuestionAside(key, 'req_ask', 'set aside');
 
+    assert.equal(wasSetAside, false, 'the bot is told nothing was set aside');
     assert.deepEqual(frames, [], 'nothing is written for a question that is not pending');
     assert.equal(session.pendingQuestion, null);
+  });
+
+  it('is a no-op for a question that is not the one pending now: a late timer cannot set the agent\'s NEXT question aside', () => {
+    const { adapter, session, frames } = createAdapterBlockedOnQuestion();
+    // Question A was answered, the agent went on and asked B in the same turn; A's timer (armed for A's request id) fires late.
+    adapter.answerQuestion(key, [['Push now'], ['README']]);
+    adapter['onStdout'](session, buildAskUserQuestionLine('req_ask_b', 'toolu_ask_b'));
+    assert.equal(session.pendingQuestion?.requestId, 'req_ask_b', 'precondition: B is pending');
+    frames.length = 0;
+
+    const wasSetAside = adapter.setQuestionAside(key, 'req_ask', 'asked 14:05, waited 30 min — A\'s text');
+
+    // Load-bearing: B is still pending and untouched — its tool call is still waiting for an answer, nothing was written.
+    assert.equal(wasSetAside, false);
+    assert.deepEqual(frames, []);
+    assert.equal(session.pendingQuestion?.requestId, 'req_ask_b');
+    assert.equal(fs.existsSync(session.paths.questionFile), true, 'B\'s saved copy is kept');
+    // B's own timer sets it aside: the id is what matches.
+    assert.equal(adapter.setQuestionAside(key, 'req_ask_b', 'B\'s text'), true);
+    assert.equal(frames.length, 1);
   });
 
   it('settles a question once: a set-aside after the answer (or before it) writes no second response', () => {
     const answeredFirst = createAdapterBlockedOnQuestion();
     answeredFirst.adapter.answerQuestion(key, [['Push now'], ['README']]);
-    answeredFirst.adapter.setQuestionAside(key, 'set aside');
+    assert.equal(answeredFirst.adapter.setQuestionAside(key, 'req_ask', 'set aside'), false, 'a question answered already is not set aside');
     assert.deepEqual(answeredFirst.frames.map((frame) => (frame.response as Record<string, unknown>).request_id), ['req_ask'], 'only the answer is written');
     assert.equal(((answeredFirst.frames[0].response as Record<string, unknown>).response as Record<string, unknown>).behavior, 'allow');
     fs.rmSync(dir, { recursive: true, force: true });
 
     const setAsideFirst = createAdapterBlockedOnQuestion();
-    setAsideFirst.adapter.setQuestionAside(key, 'set aside');
+    assert.equal(setAsideFirst.adapter.setQuestionAside(key, 'req_ask', 'set aside'), true);
     setAsideFirst.adapter.answerQuestion(key, [['Push now'], ['README']]);
     setAsideFirst.adapter.rejectQuestion(key);
     assert.equal(setAsideFirst.frames.length, 1, 'only the set-aside is written');
@@ -155,7 +177,7 @@ describe('json-stream: setQuestionAside denies the question with the text and le
     const { adapter, session, frames } = createAdapterBlockedOnQuestion();
     session.isActive = false;
 
-    adapter.setQuestionAside(key, 'set aside');
+    assert.equal(adapter.setQuestionAside(key, 'req_ask', 'set aside'), false);
 
     assert.deepEqual(frames, []);
     assert.notEqual(session.pendingQuestion, null, 'the question is left as it was');
@@ -163,7 +185,7 @@ describe('json-stream: setQuestionAside denies the question with the text and le
 
   it('is a no-op for a conversation with no session at all', () => {
     const adapter = new ClaudeJsonStreamAdapter();
-    assert.doesNotThrow(() => adapter.setQuestionAside(key, 'set aside'));
+    assert.equal(adapter.setQuestionAside(key, 'req_ask', 'set aside'), false);
   });
 });
 
@@ -198,7 +220,7 @@ describe('OpenCode: setQuestionAside replies with the text as the custom answer 
     const { adapter, apiCalls } = createAdapterBlockedOnQuestion();
     const text = buildQuestionSetAsideText({ questions: twoQuestions, answers: [null, null], askedAtMs, nowMs: setAsideAtMs });
 
-    adapter.setQuestionAside(key, text, [null, null]);
+    assert.equal(adapter.setQuestionAside(key, requestId, text, [null, null]), true, 'the bot is told the question was set aside');
 
     // Load-bearing: one reply, no reject — a reject would end the agent's loop.
     assert.equal(apiCalls.length, 1);
@@ -211,24 +233,24 @@ describe('OpenCode: setQuestionAside replies with the text as the custom answer 
   it('keeps an answer already collected as the label it is, and the text only where nothing was answered', () => {
     const { adapter, apiCalls } = createAdapterBlockedOnQuestion();
 
-    adapter.setQuestionAside(key, 'set aside', [['Push now'], null]);
+    adapter.setQuestionAside(key, requestId, 'set aside', [['Push now'], null]);
     assert.deepEqual(apiCalls[0].body, { answers: [['Push now'], ['set aside']] });
   });
 
   it('keeps a multi-select answer\'s labels together', () => {
     const { adapter, apiCalls } = createAdapterBlockedOnQuestion();
 
-    adapter.setQuestionAside(key, 'set aside', [null, ['README', 'Changelog']]);
+    adapter.setQuestionAside(key, requestId, 'set aside', [null, ['README', 'Changelog']]);
     assert.deepEqual(apiCalls[0].body, { answers: [['set aside'], ['README', 'Changelog']] });
   });
 
   it('clears the pending question, so it is not answered, replied or rejected a second time', () => {
     const { adapter, apiCalls } = createAdapterBlockedOnQuestion();
 
-    adapter.setQuestionAside(key, 'set aside', [null, null]);
+    assert.equal(adapter.setQuestionAside(key, requestId, 'set aside', [null, null]), true);
     assert.equal(getOpenCodeSession(adapter, keyToString(key)).pendingQuestion, null);
 
-    adapter.setQuestionAside(key, 'again', [null, null]);
+    assert.equal(adapter.setQuestionAside(key, requestId, 'again', [null, null]), false);
     adapter.answerQuestion(key, [['Push now'], ['README']]);
     adapter.rejectQuestion(key);
     assert.equal(apiCalls.length, 1, 'only the first resolution reaches the server');
@@ -237,11 +259,29 @@ describe('OpenCode: setQuestionAside replies with the text as the custom answer 
   it('is a no-op when no question is pending, or the session is not active', () => {
     const { adapter, apiCalls } = createAdapterBlockedOnQuestion();
     getOpenCodeSession(adapter, keyToString(key)).isActive = false;
-    adapter.setQuestionAside(key, 'set aside', [null, null]);
+    assert.equal(adapter.setQuestionAside(key, requestId, 'set aside', [null, null]), false);
     assert.deepEqual(apiCalls, []);
 
     const idle = new OpenCodeAdapter();
-    assert.doesNotThrow(() => idle.setQuestionAside(key, 'set aside', [null]));
+    assert.equal(idle.setQuestionAside(key, requestId, 'set aside', [null]), false);
+  });
+
+  it('is a no-op for a question that is not the one pending now: a late timer cannot set the NEXT question aside', () => {
+    const { adapter, apiCalls } = createAdapterBlockedOnQuestion();
+    // Question A was answered, the agent asked B; A's timer (armed for A's request id) fires late with A's answers and text.
+    adapter.answerQuestion(key, [['Push now'], ['README']]);
+    adapter['handleQuestionAsked'](key, { id: 'que_next', sessionID: 'ses_set_aside', questions: [twoQuestions[1]] }, owningDirectory);
+    apiCalls.length = 0;
+
+    const wasSetAside = adapter.setQuestionAside(key, requestId, 'A\'s text', [['Push now'], null]);
+
+    // Load-bearing: B is untouched — no reply reached the server, B is still pending.
+    assert.equal(wasSetAside, false);
+    assert.equal(apiCalls.length, 0);
+    assert.equal(getOpenCodeSession(adapter, keyToString(key)).pendingQuestion?.requestId, 'que_next');
+    assert.equal(adapter.setQuestionAside(key, 'que_next', 'B\'s text', [null]), true);
+    assert.deepEqual(apiCalls.map((call) => call.urlPath), [`/question/que_next/reply?directory=${encodeURIComponent(owningDirectory)}`]);
+    assert.deepEqual(apiCalls[0].body, { answers: [['B\'s text']] });
   });
 
   it('surfaces a failed reply through the adapter\'s error event, like an answer does', async () => {
@@ -250,7 +290,7 @@ describe('OpenCode: setQuestionAside replies with the text as the custom answer 
     const originalError = console.error;
     console.error = () => {};
     try {
-      adapter.setQuestionAside(key, 'set aside', [null, null]);
+      adapter.setQuestionAside(key, requestId, 'set aside', [null, null]);
       await new Promise((resolve) => setImmediate(resolve));
     } finally {
       console.error = originalError;

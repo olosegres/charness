@@ -1294,11 +1294,15 @@ export interface AgentAdapter extends EventEmitter {
    *    reads as the tool's result; no interrupt follows.
    *  - OpenCode: the question is REPLIED to with `text` as the custom answer of every question left open; never rejected,
    *    since a reject ends OpenCode's agent loop.
-   * `givenAnswers` is one slot per question: the answer already collected for it (kept as it is — OpenCode's reply takes
-   * the whole answer matrix at once), `null` for one left open. A no-op when no question is pending, and for a backend that
-   * implements neither question path (the tmux-scrape Claude, the terminal).
+   * `requestId` is the question the `text` was written for: nothing happens unless it is the question pending NOW, so a timer
+   * that fires late — after that question was answered and the agent asked the next one — cannot set the wrong one aside.
+   * `givenAnswers` is one slot per question: the answer already collected for it (kept as it is — OpenCode's reply takes the
+   * whole answer matrix at once), `null` for one left open.
+   * @returns `true` only when the question's tool call was answered (the reply or the deny was sent); `false` for a no-op: no
+   * question pending, another one pending, an inactive session, or a backend that implements neither question path (the
+   * tmux-scrape Claude, the terminal). The bot says «the agent went on» in the topic only for `true`.
    */
-  setQuestionAside?(key: SessionKey, text: string, givenAnswers: (string[] | null)[]): void;
+  setQuestionAside?(key: SessionKey, requestId: string, text: string, givenAnswers: (string[] | null)[]): boolean;
 
   /**
    * @description Whether this session's turn is wedged behind an open

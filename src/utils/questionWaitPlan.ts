@@ -207,7 +207,7 @@ export function getSetAsideAnswerTarget(record: SetAsideQuestionRecord): { index
  * @description How a message typed in the topic is routed while a question may wait or may be set aside.
  *  - `answer` / `cancel` — a question is still waiting (the agent is blocked on it): today's route, see {@link getQuestionReplyRoute};
  *  - `answerSetAside` — the message answers the open question `questionIndex` of the set-aside record `recordId`, with `answer`
- *    (the label a bare option number names, else the typed text);
+ *    (a reply: the label a bare option number names, else the typed text);
  *  - `prompt` — an ordinary message: it closes nothing and interrupts nothing, a set-aside question stays open.
  */
 export type QuestionReplyRouteWithSetAside =
@@ -230,24 +230,18 @@ export interface QuestionReplyRouteInput {
    * `deliverActivePrompt`'s). A waiting question is still cancelled by it, as by any other message that is not a pick.
    */
   isForwarded: boolean;
-  /**
-   * When agent output last landed in the topic (epoch ms), `null` when none has since the bot started counting. Later agent text
-   * may hold numbered choices of its own — a bare number then belongs to that, not to a question set aside before it.
-   */
-  lastAgentOutputAtMs: number | null;
 }
 
 /**
  * @description Route a typed message, in this order. A forwarded message is somebody else's words — content, never control —
- * so it takes neither of the set-aside routes (1, 3), and answers no waiting question either (2: it cancels it, like any
- * message that is not a pick).
+ * so it does not answer a set-aside question (1), and answers no waiting question either (2: it cancels it, like any message
+ * that is not a pick).
  *  1. a REPLY to either message of a set-aside question answers that question — whatever else is open, the person named it: a
  *     bare option number in range picks that label, any other text is the answer itself (a reply with no text routes on);
  *  2. a question still waiting keeps its route (a number answers it, other text cancels it and goes as a prompt);
- *  3. no question waiting: a bare option number in range of the NEWEST set-aside question answers it — but only while no
- *     agent output has landed in the topic after that question was set aside (later agent text may hold numbered choices of
- *     its own; the number is then an ordinary message);
- *  4. anything else is an ordinary prompt — it never closes a set-aside question.
+ *  3. anything else is an ordinary prompt — it never closes a set-aside question. In particular a bare number with nothing
+ *     waiting is NOT an answer to one: the agent writes new numbered text right after a set-aside, and no guard on it can be kept
+ *     across a restart, so a set-aside question is answered late only by a tap on its buttons or a reply to its message.
  */
 export function getQuestionReplyRouteWithSetAside(input: QuestionReplyRouteInput): QuestionReplyRouteWithSetAside {
   const text = input.text.trim();
@@ -272,15 +266,6 @@ export function getQuestionReplyRouteWithSetAside(input: QuestionReplyRouteInput
     return input.isForwarded && liveRoute.kind === 'answer' ? { kind: 'cancel' } : liveRoute;
   }
 
-  const newestRecord = input.setAside[input.setAside.length - 1];
-  const newestTarget = newestRecord ? getSetAsideAnswerTarget(newestRecord) : null;
-  const isOutputSinceSetAside = newestRecord !== undefined && input.lastAgentOutputAtMs !== null && input.lastAgentOutputAtMs > newestRecord.setAsideAt;
-  if (!input.isForwarded && newestRecord && newestTarget && !isOutputSinceSetAside) {
-    const numberRoute = getQuestionReplyRoute(text, newestTarget.question);
-    if (numberRoute.kind === 'answer') {
-      return { kind: 'answerSetAside', recordId: newestRecord.id, questionIndex: newestTarget.index, answer: numberRoute.labels };
-    }
-  }
   return { kind: 'prompt' };
 }
 
