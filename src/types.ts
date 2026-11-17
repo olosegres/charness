@@ -280,6 +280,25 @@ export interface ReAskedQuestionRecord {
 }
 
 /**
+ * @description A question the agent asked that nobody answered within the question wait: the bot told the agent to go on
+ * without it (`utils/questionWaitPlan.ts`) and keeps the question open in the topic — its message, buttons and pin — so an
+ * answer given later still reaches the agent, as a new message. Plain serialisable data, kept in `state.json`.
+ */
+export interface SetAsideQuestionRecord {
+  /** Short id baked into the record's button data, unique among the topic's open set-aside questions. */
+  id: string;
+  /** The Telegram message that shows the question (its buttons, its pin); `null` when its post never landed. */
+  messageId: number | null;
+  questions: OpenCodeQuestion[];
+  /** One slot per question (same order as `questions`): the answer given before the wait ended, `null` while it is still open. */
+  answers: (string[] | null)[];
+  /** When the question was first asked, epoch ms. */
+  askedAt: number;
+  /** When the agent was told to go on without it, epoch ms. */
+  setAsideAt: number;
+}
+
+/**
  * @description Classification of a provider-side API error surfaced by either
  * agent backend (Claude terminal "API Error" line or OpenCode `session.error`).
  * Drives the retry/surface decision: `transient` (rate-limit / overloaded —
