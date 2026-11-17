@@ -209,7 +209,7 @@ import { installTelegramCallGuard } from './connectors/telegram/telegramCallGuar
 import { createBotApiHttpAgent, createBotApiHttpsAgent, wireBotApiClient } from './connectors/telegram/botApiConnection';
 import { getPersistedConversations, getUnservedStateError } from './platform/unservedStateGuard';
 import { buildJiraContextPreamble } from './connectors/jira/contextPreamble';
-import { postToIdleSession, postToSession, type PostToSessionDeps } from './postToSession';
+import { postToIdleSession, postToSession, registerPostWaitWindows, type PostToSessionDeps } from './postToSession';
 import { getLimitResumeMessage } from './utils/limitHeldPrompts';
 import { waitForAdoptedReplay } from './utils/adoptReplayGate';
 import { createTopicRequestSettler } from './requests/topicRequestSettle';
@@ -651,6 +651,7 @@ if (ENV.testTimings.telegramSendIntervalMs !== undefined) configureGlobalSendInt
 if (ENV.testTimings.telegramSendOperationDeadlineMs !== undefined) configureSendOperationDeadline(ENV.testTimings.telegramSendOperationDeadlineMs);
 if (ENV.testTimings.backgroundHoldMaxMs !== undefined) registerPendingWorkHoldMs(ENV.testTimings.backgroundHoldMaxMs);
 if (ENV.testTimings.scheduleMinFireIntervalMs !== undefined) registerMinFireIntervalMs(ENV.testTimings.scheduleMinFireIntervalMs);
+registerPostWaitWindows({ busyPollMs: ENV.testTimings.postBusyPollMs, waitForIdleMs: ENV.testTimings.postWaitForIdleMs });
 /** The short retry that probes an unconfirmed usage limit (a test instance may shorten it). */
 const limitProbeDelayMs = ENV.testTimings.limitProbeDelayMs ?? unconfirmedLimitProbeDelayMs;
 
@@ -1868,46 +1869,48 @@ function setPendingQuestion(key: SessionKey, value: PendingQuestionState): void 
 }
 
 /**
- * @description Drop a thread's pending interactive question from BOTH the
- * in-memory map and the persisted store. Single choke point for every
- * `pendingQuestions.delete(...)` so memory and disk stay in lockstep.
+ * @description The ONE place a thread's pending interactive question is removed: from the in-memory map, the persisted store
+ * and the re-post and set-aside-timer bookkeeping, so memory and disk stay in lockstep. Everything it does is STARTED in the
+ * same tick, in order — the saved-state clear and the pin step queue behind whatever else touches them — so a question the
+ * agent asks right after cannot be wiped by a removal that is still finishing: its own writes queue after this one's.
+ *
+ * `isPinKept`: the bot SET the question aside, so its pin stays — it belongs to the set-aside record now. The map entry that
+ * tracks «the pinned question» is dropped WITHOUT unpinning, so the pin of the question the agent asks next neither retires it
+ * nor counts as a re-pin (which is silent); taken under the pin lock, after any pin of this question still in flight. Otherwise
+ * the pin is released. Resolves once the saved state and the pin step are done.
  */
-function clearPendingQuestion(key: SessionKey): void {
+function dropPendingQuestion(key: SessionKey, options: { isPinKept: boolean }): Promise<void> {
   const kStr = keyToString(key);
-  // Post-restart OpenCode: the in-memory pin map was lost on restart but the
-  // question message is still pinned on Telegram (its id lives on the persisted
-  // `pendingQuestions` entry). Seed the map from it so the unpin below finds the
-  // id — deterministic, with no reliance on sync execution order against the
-  // `delete` that follows. The live case is a no-op (the map already holds the
-  // id; `has` is true).
-  const pending = pendingQuestions.get(kStr);
-  if (pending?.messageId != null && !questionPinnedMessageId.has(kStr)) {
-    questionPinnedMessageId.set(kStr, pending.messageId);
+  let pinStep: Promise<void>;
+  if (options.isPinKept) {
+    pinStep = questionPinLock.withLock(kStr, async () => {
+      questionPinnedMessageId.delete(kStr);
+    });
+  } else {
+    // Post-restart OpenCode: the in-memory pin map was lost on restart but the
+    // question message is still pinned on Telegram (its id lives on the persisted
+    // `pendingQuestions` entry). Seed the map from it so the unpin below finds the
+    // id — deterministic, with no reliance on sync execution order against the
+    // `delete` that follows. The live case is a no-op (the map already holds the
+    // id; `has` is true).
+    const pending = pendingQuestions.get(kStr);
+    if (pending?.messageId != null && !questionPinnedMessageId.has(kStr)) {
+      questionPinnedMessageId.set(kStr, pending.messageId);
+    }
+    pinStep = unpinThreadQuestion(key);
   }
-  void unpinThreadQuestion(key);
   pendingQuestions.delete(kStr);
-  state.clearPendingQuestion(key).catch(e =>
+  const savedStateStep = state.clearPendingQuestion(key).catch(e =>
     console.error('[pendingQuestion] clear failed:', e),
   );
   clearQuestionRepostState(key);
   clearQuestionSetAsideTimer(key);
+  return Promise.all([pinStep, savedStateStep]).then(() => undefined);
 }
 
-/**
- * @description Take a thread's pending question out of the pending state because the bot SET IT ASIDE (the question wait ended,
- * the agent went on): memory, saved state and the re-post bookkeeping, like {@link clearPendingQuestion} — but the question's pin
- * is NOT removed. The pinned message stays pinned and belongs to the set-aside record now: the map entry that tracks «the pinned
- * question» is dropped without unpinning, so the pin of a question the agent asks next neither retires it nor counts as a
- * re-pin (which is silent). Taken under the pin lock, after any pin of this question that is still in flight.
- */
-async function releasePendingQuestionToSetAside(key: SessionKey): Promise<void> {
-  const kStr = keyToString(key);
-  await questionPinLock.withLock(kStr, async () => {
-    questionPinnedMessageId.delete(kStr);
-  });
-  pendingQuestions.delete(kStr);
-  await state.clearPendingQuestion(key);
-  clearQuestionRepostState(key);
+/** @description Drop a thread's pending question and release its pin ({@link dropPendingQuestion}); not awaited. */
+function clearPendingQuestion(key: SessionKey): void {
+  void dropPendingQuestion(key, { isPinKept: false });
 }
 
 // ── keep a pending question at the bottom of its topic (plan S3) ──
@@ -2072,33 +2075,38 @@ const questionClosingNoteKeys: Record<QuestionClosing, string> = {
 };
 
 /**
- * @description End a question's message in the topic WITHOUT deleting it: the buttons are replaced by `note`, and the
- * header, the question and its options stay, so what the agent asked and how it ended can still be read. Resolves
- * whether the text edit landed. Every way a question ends goes through this — a delete would take the record away.
+ * @description Put a note under a question's message in the topic WITHOUT deleting it or re-posting it: the header, the question
+ * and its options stay, so what the agent asked can still be read, and `note` says what became of it. Without `keyboard` the
+ * buttons are taken off (a question that ended — every way one ends goes through this, a delete would take the record away);
+ * with `keyboard` they are replaced by it (a question the bot set aside keeps option buttons, which now name its record).
+ * Resolves whether the text edit landed.
  *
  * Telegram that cannot parse the Markdown render gets the plain one (no escape marks shown), and a question too long for
- * the note gets a shortened plain one. An edit that still fails (the message gone, say) leaves the old text, and the
- * buttons would stay on it dead — so they are taken off by themselves.
+ * the note gets a shortened plain one. An edit that fails (the message gone, say) leaves the old text — and with it the buttons
+ * of a question that is NO LONGER the one waiting here, which would answer whatever the agent asks next: they are replaced by
+ * `keyboard`, or taken off when there is none or that edit fails too.
  */
-async function editQuestionMessageToClosed(key: SessionKey, messageId: number, question: OpenCodeQuestion, note: string): Promise<boolean> {
+async function editQuestionMessageWithNote(key: SessionKey, messageId: number, question: OpenCodeQuestion, note: string, keyboard?: InlineKeyboardMarkup): Promise<boolean> {
   const markdownText = buildClosedQuestionText(question, note, escapeMarkdown);
   const plainText = buildClosedQuestionPlainText(question, note, MAX_MESSAGE_LEN);
   // A question that filled a message when it was asked has no room for the note under it, and Telegram refuses the text:
   // the note is the result, so the body gives way (descriptions first) and goes out as plain text, which cutting cannot break.
   const isEdited = markdownText.length <= MAX_MESSAGE_LEN
-    ? await editThreadMessage(key, messageId, markdownText, { parse_mode: 'Markdown' }, plainText)
-    : await editThreadMessage(key, messageId, plainText);
-  if (!isEdited) await editThreadKeyboard(key, messageId, null, 'questionClose');
-  return isEdited;
+    ? await editThreadMessage(key, messageId, markdownText, buildKeyboardExtra(keyboard, { parse_mode: 'Markdown' }), plainText)
+    : await editThreadMessage(key, messageId, plainText, buildKeyboardExtra(keyboard));
+  if (isEdited) return true;
+  const isKeyboardReplaced = keyboard !== undefined && await editThreadKeyboard(key, messageId, keyboard, 'questionNote');
+  if (!isKeyboardReplaced) await editThreadKeyboard(key, messageId, null, 'questionNote');
+  return false;
 }
 
 /**
- * {@link editQuestionMessageToClosed} for a question that ended some way ({@link QuestionEnd}). The note speaks the topic's
+ * {@link editQuestionMessageWithNote} for a question that ended some way ({@link QuestionEnd}). The note speaks the topic's
  * language whatever called it — a boot or a session teardown runs in no request, so no locale is set by one.
  */
 async function closeQuestionMessage(key: SessionKey, messageId: number, question: OpenCodeQuestion, ending: QuestionEnd): Promise<boolean> {
   const note = withThreadLocale(key, () => (typeof ending === 'string' ? t(questionClosingNoteKeys[ending]) : t('agent.question_answered_note', { answer: ending.answer })));
-  return editQuestionMessageToClosed(key, messageId, question, note);
+  return editQuestionMessageWithNote(key, messageId, question, note);
 }
 
 /**
@@ -6468,16 +6476,18 @@ const {
 const {
   armQuestionSetAsideTimer,
   clearQuestionSetAsideTimer,
+  checkIsSetAsideQuestionMessage,
 } = createQuestionSetAside({
   ...botCore,
   pendingQuestions,
   getThreadAdapter,
   runQuestionLifecycleOp,
   setPendingQuestion,
-  releasePendingQuestionToSetAside,
+  clearPendingQuestion,
+  releasePendingQuestionToSetAside: (key) => dropPendingQuestion(key, { isPinKept: true }),
+  editQuestionMessageWithNote,
   closeQuestionMessage,
   unpinMessage: unpinMessageQuiet,
-  escapeMarkdown,
   markNeedsNewMessage,
   // The topic's and General's own choices arrive with the setting; until then every topic waits the default.
   getQuestionWaitChoice: () => resolveQuestionWait(undefined, undefined),
@@ -11587,6 +11597,10 @@ bot.action(/^qa_(\d+)_(\d+)$/, async (ctx) => {
   const kStr = keyToString(key);
   const pending = pendingQuestions.get(kStr);
   if (!pending) { await ctx.answerCbQuery(t('cb.no_pending_question')); return; }
+  // A button on a message of a question the bot SET ASIDE is a stale one (its edit to the set-aside look never landed): that
+  // question is no longer the one waiting, and its `qa_<i>_<j>` would answer whatever the agent asks next.
+  const tappedMessageId = getCallbackMessageId(ctx);
+  if (tappedMessageId !== null && checkIsSetAsideQuestionMessage(key, tappedMessageId)) { await ctx.answerCbQuery(t('cb.no_pending_question')); return; }
   // A button must belong to the question currently on screen. With sequential
   // posting we only ever show `currentIndex`, so a click for any other index is
   // a stale button from a question that was already answered/advanced.
@@ -11850,7 +11864,7 @@ async function applyQuestionAnswerInner(key: SessionKey, answerForCurrent: strin
 
   // Mark the answered question's message as done: the question stays as asked, the chosen answer takes the place of
   // its buttons.
-  const isAnswerShown = pending.messageId !== null && answeredQuestion !== undefined && await editQuestionMessageToClosed(
+  const isAnswerShown = pending.messageId !== null && answeredQuestion !== undefined && await editQuestionMessageWithNote(
     key,
     pending.messageId,
     answeredQuestion,

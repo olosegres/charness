@@ -22,7 +22,7 @@ import {
   type ScheduleAnnounceOptions,
   type ScheduleDeliveryDeps,
 } from '../scheduler/delivery';
-import { busyPollIntervalMs, waitIdleTimeoutMs, type EnsureSessionResult } from '../postToSession';
+import { busyPollIntervalMs, registerPostWaitWindows, waitIdleTimeoutMs, type EnsureSessionResult } from '../postToSession';
 import {
   checkIsReminderSchedule,
   getUnboundPausableSchedules,
@@ -273,6 +273,25 @@ test('busy past timeout: forwards anyway after exactly waitIdleTimeoutMs of poll
   const expectedPolls = Math.ceil(waitIdleTimeoutMs / busyPollIntervalMs);
   assert.equal(elapsed, expectedPolls * busyPollIntervalMs, 'polled exactly up to the timeout');
   assert.ok(elapsed >= waitIdleTimeoutMs, 'waited at least the full timeout before giving up');
+});
+
+test('a test instance\'s shorter wait windows are the ones the loop polls and gives up by — and the production ones come back', async () => {
+  registerPostWaitWindows({ busyPollMs: 100, waitForIdleMs: 350 });
+  try {
+    const { deps, callLog, getNow } = createHarness({ busyValues: [true] });
+    const startNow = getNow();
+    const outcome = await createScheduleDelivery(deps)(makeJob(), onTime);
+
+    assert.deepEqual(outcome, { status: 'delivered' });
+    assert.ok(callLog.some((e) => e.step === 'forward'), 'forwards anyway after the shorter timeout');
+    assert.equal(getNow() - startNow, 400, 'four polls of 100 ms reach the 350 ms deadline: not the production 5 s hops, not 10 minutes');
+  } finally {
+    registerPostWaitWindows({});
+  }
+  const { deps, getNow } = createHarness({ busyValues: [true] });
+  const startNow = getNow();
+  await createScheduleDelivery(deps)(makeJob(), onTime);
+  assert.ok(getNow() - startNow >= waitIdleTimeoutMs, 'with no windows registered the production timeout is back');
 });
 
 test('no session: ensureSession called with the job lastAdapterName', async () => {

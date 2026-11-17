@@ -10,13 +10,18 @@
  *     fixed text); the question's message stays, with a note under it and the same buttons (now naming the saved record) and
  *     its pin, and the question is saved as a set-aside record instead of a waiting one
  *   → the owner's case: a prompt the bot delivers to the agent while the question waits (a one-shot schedule the agent made
- *     itself) does not cancel the question, and the question is still set aside when its wait ends — the prompt is then read
+ *     itself, written to the agent's input once its short busy wait is over — it queues behind the question) does not cancel the
+ *     question; the question is still set aside when its wait ends, and the queued prompt is read after the deny and answered
  *   → one call with two questions, the first answered by a tap: at the end of the wait the agent gets that answer at once,
  *     and the second stays open as the set-aside record
  *   → the bot restarts with the question waiting and comes back when most of its wait is over: it is set aside at the
  *     ORIGINAL moment, not after a new wait; a restart after that keeps the record and the buttons
  *   → a sixth open set-aside question closes the oldest as «not answered» and releases its pin; the others keep theirs, a
  *     question asked meanwhile is pinned beside them
+ *   → the edit that puts the note under a set-aside question is refused by Telegram: the buttons the message still carries never
+ *     stay (they would answer the agent's NEXT question) — they are replaced by the record's, or taken off when that is refused too;
+ *     and when nothing can be edited at all, a tap on the stale button answers nothing, while the question the agent asks next is
+ *     answered as usual
  *
  * Nothing leaves the machine: the Bot API is on loopback and the agent is a fake. Everything the test starts is stopped in
  * `after`. How a late answer reaches the agent, and what ends a set-aside question, come with the answer routes.
@@ -76,6 +81,12 @@ const setAsideTimeoutMs = 45 * 1000;
 
 /** The question wait of the instance, in ms (production: 30 min by default). */
 const questionWaitMs = 6000;
+/**
+ * How long a prompt the bot delivers waits for a busy session before it is written to it anyway, and how often it looks (production:
+ * 10 min and 5 s): inside the question wait, so the prompt is written to the agent while its question still waits for the owner.
+ */
+const postWaitForIdleMs = 1500;
+const postBusyPollMs = 500;
 /** How late after `askedAt + wait` the agent may be told: the timer, the lifecycle queue and one paced send. */
 const setAsideLatenessMs = 3000;
 
@@ -214,7 +225,7 @@ describe('A question nobody answers is set aside, end to end: built charness, fa
       // A free port nothing listens on: the boot's OpenCode pre-start finds no server and no binary, and gives up.
       OPENCODE_URL: `http://127.0.0.1:${await getUnservedPort()}`,
       SCHEDULER_MCP_PORT: (await getFreeFixedPort()).toString(),
-      ...getTelegramFlowTestTimingsEnv({ questionSetAsideWaitMs: questionWaitMs }),
+      ...getTelegramFlowTestTimingsEnv({ questionSetAsideWaitMs: questionWaitMs, postWaitForIdleMs, postBusyPollMs }),
     });
   });
 
@@ -268,25 +279,32 @@ describe('A question nobody answers is set aside, end to end: built charness, fa
     assertShownAsSetAside(question, record, firstQuestion, 2);
   });
 
-  it('a prompt the bot delivers while the question waits does not cancel it: it is set aside when its wait ends, and the prompt is read after it', async () => {
+  it('a prompt the bot writes to the agent while its question waits queues behind it and does not cancel it: the question is set aside when its wait ends, and the queued prompt is read after the deny and answered', async () => {
     const recordsBefore = getSetAsideRecords().length;
     const responsesBefore = getControlResponses().length;
     const question = await askQuestion('SETASIDE-2', 'ask', ` ${fakeScheduleOnceToken(2, 'SCHED-1')}`);
     await waitForPinned(question);
     const askedAt = getWaitingQuestionAskedAt();
 
-    // The agent's own schedule fires inside the wait: a prompt reaches the agent's session while the question waits for the owner.
-    await getCharness().waitFor('the scheduled prompt to fire into the topic', replyTimeoutMs, () => fakeTelegram.listBotMessages(topicThreadId).some((message) => message.message_id > question.message_id && message.text.includes('SCHED-1')));
+    // The agent's own schedule fires inside the wait; the bot holds the prompt for the busy session, then (the short windows) writes it
+    // to the agent anyway: it reaches the agent's input while the question still waits for the owner.
+    await getCharness().waitFor('the scheduled prompt to be written to the agent', replyTimeoutMs, () => getAgentPrompts('SCHED-1 [fake:answer] scheduled').length > 0);
+    const [scheduledPrompt] = getAgentPrompts('SCHED-1 [fake:answer] scheduled');
+    assert.ok(scheduledPrompt.readAt < askedAt + questionWaitMs - 500, `precondition: the prompt was written inside the wait (${scheduledPrompt.readAt - askedAt} ms after the ask)`);
+    assert.equal(getControlResponses().length, responsesBefore, 'and the agent has still heard nothing about its question');
     assert.notEqual(readKeptMessage(question).reply_markup, undefined, 'the prompt left the question as it was: its buttons');
     assert.ok(readPersistedState(getLayout()).pendingQuestions?.[topicKey], 'the question still waits');
 
     const response = await waitForSetAsideDeny('the bot to tell the agent its question was set aside', responsesBefore);
     assertToldToGoOn(response);
     assert.ok(response.readAt >= askedAt + questionWaitMs - 50 && response.readAt <= askedAt + questionWaitMs + setAsideLatenessMs, `at the end of the wait, whatever else the agent is sent: ${response.readAt - askedAt} ms after the ask`);
+    assert.ok(scheduledPrompt.readAt < response.readAt, 'the prompt was in the agent\'s input BEFORE the deny: the deny is read behind it');
 
     // The queued prompt is taken in once the turn that waited on the question is over: its answer comes after the turn text.
     const turnEnd = await waitingTopic.waitForMessage('the agent\'s turn going on', (message) => message.message_id > question.message_id && message.text.includes(fakeAskSetAsideTurnText));
-    await waitingTopic.waitForMessage('the scheduled prompt answered', (message) => message.message_id > turnEnd.message_id && message.text.includes('Working on SCHED-1'));
+    // The agent's streamed texts continue one rolling message, so the answer may stand in the very message that holds the turn text: after it.
+    const answered = await waitingTopic.waitForMessage('the scheduled prompt answered', (message) => message.message_id >= turnEnd.message_id && message.text.includes('Working on SCHED-1'));
+    assert.ok(answered.text.indexOf(fakeAskSetAsideTurnText) < answered.text.indexOf('Working on SCHED-1') || answered.message_id > turnEnd.message_id, 'the answer to the queued prompt comes after the turn that waited on the question');
     assert.equal(getAgentPrompts('SCHED-1 [fake:answer] scheduled').length, 1, 'the agent read the scheduled prompt once');
     await waitingTopic.waitForMessageText('the set-aside note under the question', question, (text) => text.endsWith(`\n\n${setAsideNote}`));
     await waitForSetAsideRecords(recordsBefore + 1);
@@ -381,5 +399,79 @@ describe('A question nobody answers is set aside, end to end: built charness, fa
     assert.ok(closed.text.includes(fakeAskQuestion.question), 'it stays readable');
     await getCharness().waitFor('the oldest question\'s pin to be released', replyTimeoutMs, () => !fakeTelegram.listPinnedMessageIds().includes(oldestMessage.message_id));
     for (const record of records) assert.ok(fakeTelegram.listPinnedMessageIds().includes(record.messageId ?? -1), `set-aside question ${record.id} keeps its pin`);
+  });
+
+  describe('the edit that puts the note under the question is refused', () => {
+    const refusal = "Bad Request: message can't be edited";
+    /** The set-aside edit of the message's text (the only text edit that ends with the note). */
+    const isSetAsideTextEdit = (payload: Record<string, unknown>): boolean => String(payload.text).endsWith(setAsideNote);
+
+    /** Ask a question and wait until it is saved as the newest set-aside record: its message and the record. */
+    async function askAndWaitForSetAside(promptLabel: string): Promise<{ question: FakeTelegramMessage; record: SetAsideQuestionRecord }> {
+      const question = await askQuestion(promptLabel);
+      await waitForPinned(question);
+      // At the cap the count does not change when a question is set aside: the newest record is what tells.
+      await getCharness().waitFor('the question to be saved as the newest set-aside record', setAsideTimeoutMs, () => getSetAsideRecords().at(-1)?.messageId === question.message_id);
+      const record = getSetAsideRecords().at(-1);
+      assert.ok(record, 'the record is saved');
+      return { question, record };
+    }
+
+    it('the text edit refused: the message keeps its text, and its buttons are replaced by the record\'s — never left as they were', async () => {
+      fakeTelegram.failNextCall('editMessageText', refusal, isSetAsideTextEdit);
+      const { question, record } = await askAndWaitForSetAside('SETASIDE-7');
+
+      await getCharness().waitFor('the buttons to name the record', replyTimeoutMs, () => topic.getKeyboardData(readKeptMessage(question)).flat().every((data) => data.startsWith('qs_')) && fakeTelegram.getMessage(question.message_id)?.reply_markup !== undefined);
+      const current = readKeptMessage(question);
+      assert.ok(!current.text.includes(setAsideNote), 'the note never landed');
+      assert.deepEqual(topic.getKeyboardData(current), [[`qs_${record.id}_0`], [`qs_${record.id}_1`]], 'but the buttons are the record\'s');
+      assert.ok(fakeTelegram.listPinnedMessageIds().includes(question.message_id), 'and the pin stays');
+      await getCharness().waitFor('the agent to go on', setAsideTimeoutMs, () => topic.listMessages().some((message) => message.message_id > question.message_id && message.text.includes(fakeAskSetAsideTurnText)));
+    });
+
+    it('the text edit and the record\'s buttons both refused: the old buttons are taken off', async () => {
+      fakeTelegram.failNextCall('editMessageText', refusal, isSetAsideTextEdit);
+      const messageIdsAsked = new Set<number>();
+      fakeTelegram.failNextCall('editMessageReplyMarkup', refusal, (payload) => {
+        messageIdsAsked.add(Number(payload.message_id));
+        return JSON.stringify(payload.reply_markup ?? null).includes('qs_');
+      });
+      const { question } = await askAndWaitForSetAside('SETASIDE-8');
+
+      await getCharness().waitFor('the old buttons to come off', replyTimeoutMs, () => fakeTelegram.getMessage(question.message_id)?.reply_markup === undefined);
+      const current = readKeptMessage(question);
+      assert.ok(!current.text.includes(setAsideNote), 'the note never landed');
+      assert.equal(current.reply_markup, undefined, 'and no button is left to answer anything');
+      assert.ok(fakeTelegram.listPinnedMessageIds().includes(question.message_id), 'the pin stays');
+      assert.ok(messageIdsAsked.has(question.message_id), 'the record\'s buttons were tried first');
+    });
+
+    it('nothing can be edited at all: the stale button of the set-aside question answers NOTHING — the question the agent asks next is answered by its own buttons only', async () => {
+      fakeTelegram.failNextCall('editMessageText', refusal, isSetAsideTextEdit);
+      fakeTelegram.failNextCall('editMessageReplyMarkup', refusal, (payload) => JSON.stringify(payload.reply_markup ?? null).includes('qs_'));
+      fakeTelegram.failNextCall('editMessageReplyMarkup', refusal, (payload) => !JSON.stringify(payload.reply_markup ?? null).includes('qs_'));
+      const { question: stale } = await askAndWaitForSetAside('SETASIDE-9');
+      await getCharness().waitFor('the agent to go on', setAsideTimeoutMs, () => topic.listMessages().some((message) => message.message_id > stale.message_id && message.text.includes(fakeAskSetAsideTurnText)));
+      assert.deepEqual(topic.getKeyboardData(readKeptMessage(stale)), [['qa_0_0'], ['qa_0_1']], 'precondition: every edit was refused, so the old buttons are still there');
+
+      // The agent asks its next question: B waits, and the stale button of the set-aside question sits above it.
+      const responsesBefore = getControlResponses().length;
+      const next = await askQuestion('SETASIDE-10');
+      await waitForPinned(next);
+      const nextAskedAt = getWaitingQuestionAskedAt();
+      const toast = await topic.tapAndAwaitAnswer(stale, 'qa_0_1');
+      assert.equal(toast, enDict['cb.no_pending_question'], 'the stale button answers nothing');
+      assert.equal(getControlResponses().length, responsesBefore, 'and the agent heard nothing');
+      assert.ok(readPersistedState(getLayout()).pendingQuestions?.[topicKey], 'the new question still waits');
+      assert.equal(getWaitingQuestionAskedAt(), nextAskedAt, 'untouched');
+
+      // The new question's own button answers it as usual.
+      await topic.tapAndAwaitAnswer(next, 'qa_0_0');
+      await topic.waitForMessageText('the answer under the new question', next, (text) => text.endsWith(buildAnsweredNote(fakeAskQuestion.shortOptionLabel)));
+      await getCharness().waitFor('the agent to get the answer', replyTimeoutMs, () => getControlResponses().length > responsesBefore);
+      const answer = getControlResponses()[responsesBefore];
+      assert.equal(answer.behavior, 'allow', 'an answer, not a deny');
+      assert.equal(answer.answerCount, 1);
+    });
   });
 });

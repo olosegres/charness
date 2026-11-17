@@ -22,6 +22,20 @@ export const busyPollIntervalMs = 5000;
  */
 export const waitIdleTimeoutMs = 10 * 60 * 1000;
 
+/** The wait windows in force: the two constants above, or a test instance's shorter ones ({@link registerPostWaitWindows}). */
+let effectiveBusyPollIntervalMs = busyPollIntervalMs;
+let effectiveWaitIdleTimeoutMs = waitIdleTimeoutMs;
+
+/**
+ * @description Register a test instance's shorter wait for a busy session (`CHARNESS_TEST_TIMINGS` `postBusyPollMs` and
+ * `postWaitForIdleMs`), so a flow can have a scheduled prompt written to a session whose turn is blocked on a question inside
+ * the question wait instead of 10 minutes after it. Never called in production.
+ */
+export function registerPostWaitWindows(windows: { busyPollMs?: number; waitForIdleMs?: number }): void {
+  effectiveBusyPollIntervalMs = windows.busyPollMs ?? busyPollIntervalMs;
+  effectiveWaitIdleTimeoutMs = windows.waitForIdleMs ?? waitIdleTimeoutMs;
+}
+
 /**
  * @name EnsureSessionResult
  * @description What {@link PostToSessionDeps.ensureSession} reports back. It
@@ -83,10 +97,10 @@ export type PostToSessionResult =
   | { ok: false; reason: 'forward-failed'; error: string };
 
 async function waitForIdle(deps: PostToSessionDeps, conversationKey: string): Promise<void> {
-  const deadline = deps.now() + waitIdleTimeoutMs;
+  const deadline = deps.now() + effectiveWaitIdleTimeoutMs;
   while (deps.checkBusy(conversationKey)) {
     if (deps.now() >= deadline) return;
-    await deps.sleep(busyPollIntervalMs);
+    await deps.sleep(effectiveBusyPollIntervalMs);
   }
 }
 
