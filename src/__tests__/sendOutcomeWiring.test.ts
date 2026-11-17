@@ -39,13 +39,13 @@ test('the output flush lands its chunks through sendOutputChunks and hands its r
 
 test('a failed send says whether trying again may help, by the one rule the unpins use: a refusal for good is not retried for ever', () => {
   const body = getFunctionBody('replyToThreadDetailed');
-  const failures = body.match(/return \{ kind: 'failed'[^}]*\}/g) ?? [];
+  const failures = body.match(/return (?:\{ kind: 'failed'[^}]*\}|getFailedSendOutcome\(\w+\))/g) ?? [];
   assert.deepEqual(failures, [
     "return { kind: 'failed', isRetryable: false }",
     "return { kind: 'failed', isRetryable: false }",
-    "return { kind: 'failed', isRetryable: checkIsTelegramFailureRetryable(e2) }",
-    "return { kind: 'failed', isRetryable: checkIsTelegramFailureRetryable(e) }",
-  ], 'not a Telegram topic, aborted by the caller, then the Bot API failures');
+    'return getFailedSendOutcome(e2)',
+    'return getFailedSendOutcome(e)',
+  ], 'not a Telegram topic, aborted by the caller, then the Bot API failures — by the one helper that also says whether Telegram refused for good (403)');
 });
 
 test('a chunk of unknown outcome is not sent again as plain text', () => {

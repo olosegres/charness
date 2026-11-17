@@ -17,7 +17,7 @@
 
 import { test } from 'node:test';
 import * as assert from 'node:assert/strict';
-import { classifySendError, getErrorCode, getErrorDescription, checkIsApiError, checkIsConnectionResetError } from '../sendErrorClassifier';
+import { classifySendError, getErrorCode, getErrorDescription, checkIsApiError, checkIsConnectionResetError, checkIsForbiddenError } from '../sendErrorClassifier';
 
 // Helper: build an error in Telegraf's shape.
 function tgError(code: number, description: string): unknown {
@@ -152,4 +152,17 @@ test('values that are not errors are not connection-reset errors', () => {
   for (const value of [null, undefined, 'socket hang up', 0, {}, { code: 'ECONNRESET_NOT' }]) {
     assert.equal(checkIsConnectionResetError(value), false, JSON.stringify(value) ?? 'undefined');
   }
+});
+
+test('403 — the bot may not write to the chat (never started, blocked, deactivated, removed) — is forbidden; nothing else is', () => {
+  assert.equal(checkIsForbiddenError(tgError(403, "Forbidden: bot can't initiate conversation with a user")), true);
+  assert.equal(checkIsForbiddenError(tgError(403, 'Forbidden: bot was blocked by the user')), true);
+  assert.equal(checkIsForbiddenError(tgError(403, 'Forbidden: user is deactivated')), true);
+  assert.equal(checkIsForbiddenError({ description: 'Forbidden: bot was blocked by the user' }), false, 'no code, no answer: not known to be a refusal');
+  assert.equal(checkIsForbiddenError(tgError(400, 'Bad Request: chat not found')), false);
+  assert.equal(checkIsForbiddenError(tgError(429, 'Too Many Requests: retry after 5')), false);
+  assert.equal(checkIsForbiddenError(new Error('403')), false, 'a plain error is not an answer of Telegram');
+  assert.equal(checkIsForbiddenError(null), false);
+  // A refusal for good: not retried, and not a thread cleanup.
+  assert.equal(classifySendError(tgError(403, "Forbidden: bot can't initiate conversation with a user")), 'other');
 });

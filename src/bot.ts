@@ -165,6 +165,8 @@ import {
   type CurrentGroupCreatorship,
   GENERAL_THREAD_ID,
   DM_GENERAL_THREAD_ID,
+  checkIsPrivateChatMainKey,
+  getOwnPrivateChatKey,
   type ChatMode,
 } from './threadRouting';
 import { AdminCache, ADMIN_CACHE_TTL_MS, getSenderRole, type SenderRole } from './accessControl';
@@ -249,7 +251,7 @@ import { buildFoldedMessage } from './connectors/telegram/foldedMessage';
 import { unpinMessagesReportingRetryable } from './connectors/telegram/unpinMessages';
 import { addPendingOutput, checkHasPendingOutput, getNewestPendingSeq, getOutputFlushPlan } from './connectors/telegram/outputFlushPlan';
 import { getCallerEditResult, sendOutputChunks, type ThreadEditOutcome, type ThreadSendOutcome } from './connectors/telegram/sendOutcome';
-import { checkIsTelegramFailureRetryable } from './connectors/telegram/telegramFailureRetry';
+import { getFailedSendOutcome } from './connectors/telegram/telegramFailureRetry';
 import { releasePinnedNoticeSlot, surfacePinnedNotice, type PinnedNoticePorts, type PinnedNoticeSlots } from './connectors/telegram/pinnedNoticeSlot';
 import { glueBacklogFrames } from './connectors/telegram/outputBacklogGlue';
 import { checkShouldKeepTyping as checkShouldKeepTypingDecision } from './utils/typingActive';
@@ -3430,6 +3432,21 @@ async function authoriseContext(ctx: Context): Promise<SessionKey | null> {
 }
 
 /**
+ * @description The gate of a tap on a pairing line's «jobs at once» row (`/runners`): the line is sent to the admin who asked for it in a
+ * PRIVATE message, so the tap comes from their own chat with the bot — which the DM surface does not serve unless it is the owner's
+ * (`authoriseContext` refuses it). A group admin tapping in a chat that is theirs gets that chat's key (`getOwnPrivateChatKey`); every
+ * other tap — the group, the owner's DM — takes the usual admin gate. The key, or `null` when refused.
+ */
+async function authorisePairingTap(ctx: Context): Promise<SessionKey | null> {
+  if (ctx.chat?.type === 'private' && !checkIsDmChat(ctx)) {
+    const key = getOwnPrivateChatKey({ chatType: ctx.chat.type, chatId: ctx.chat.id, userId: ctx.from?.id, adminIds: await adminCache.getAdminIds() });
+    if (key === null) console.warn(`[security] ignored update from chat ${ctx.chat.id} user ${ctx.from?.id ?? '?'} (not a group admin in their own private chat)`);
+    return key;
+  }
+  return authoriseContext(ctx);
+}
+
+/**
  * Refresh the group-title cache from an accepted update — supergroups always carry `chat.title`. Feeds the thread-context
  * preamble (S2). Cheap, idempotent, and the one place every accepted update funnels through. A private chat (DM key) has
  * no `title`, so there is nothing to cache (the preamble falls back to the bot name) — skip it explicitly.
@@ -4050,7 +4067,9 @@ type SendExtra = Record<string, unknown> | object;
  */
 function buildSendExtra(key: SessionKey, extra: SendExtra): Record<string, unknown> {
   const base = extra as Record<string, unknown>;
-  if (checkIsGeneral(key)) return { ...base };
+  // The main thread of ANY private chat — the owner's DM and an admin's own chat alike — has no topic to name: Telegram answers a
+  // `message_thread_id` there with «message thread not found».
+  if (checkIsGeneral(key) || checkIsPrivateChatMainKey(key)) return { ...base };
   // Audit S20 / #36: spread `base` BEFORE `message_thread_id` so a
   // caller passing `message_thread_id: undefined` in `extra` can't
   // accidentally suppress our routing. With this order, our explicit
@@ -4162,7 +4181,7 @@ async function replyToThreadDetailed(
       } catch (e2) {
         if (checkIsSendOutcomeUnknownError(e2)) return reportUnknown();
         await handleSendError(key, e2);
-        return { kind: 'failed', isRetryable: checkIsTelegramFailureRetryable(e2) };
+        return getFailedSendOutcome(e2);
       }
     }
 
@@ -4172,7 +4191,7 @@ async function replyToThreadDetailed(
     // re-arm a bounded redelivery (its late re-send was the OUT-OF-ORDER cause
     // the user reported) — the rare 429 is just logged via handleSendError.
     await handleSendError(key, e);
-    return { kind: 'failed', isRetryable: checkIsTelegramFailureRetryable(e) };
+    return getFailedSendOutcome(e);
   } finally {
     releaseSecret?.();
   }
@@ -8228,6 +8247,7 @@ const { registerRunnersCommands, registerRunnersCallbacks, handleRunnersAddressT
   // What this instance has told about where the runners' links come from: once per new concern, pinned in General.
   linkNoticesPath: path.join(resolveDataDir(), 'runner-link-notices.json'),
   cacheDir: runnersCacheDir,
+  authorisePairingTap,
   getGeneralKey: () => getOperatorGeneralKey(),
   pinMessage: (key, messageId) => pinMessageQuiet(key, messageId, { disableNotification: false }),
   sweepExpiredCodes: async (nowMs) => { await sweepExpiredPairings(runnersHub, nowMs); },
@@ -10151,7 +10171,7 @@ bot.on(message('text'), async (ctx) => {
   }
 
   // `/runners` → «Enter another address»: this General message is the address runners dial. A slash command wins over the wait.
-  if (await handleRunnersAddressText(key, text)) return;
+  if (ctx.from !== undefined && (await handleRunnersAddressText(key, text, ctx.from))) return;
 
   // Session is mid-startup → buffer the prompt and replay it once the agent is
   // ready, instead of dropping it into the "no agent running" guidance below.

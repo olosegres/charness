@@ -53,6 +53,13 @@ describe('runnerPairingMessages', () => {
     assert.equal(readPairingMessages(filePath).problem, `${filePath} is invalid`, 'but only the two roles that existed');
   });
 
+  it('a message in a private chat (the key is `<user id>:0`) is a record like any other: it validates, round-trips, and a record of the topic messages written before them is read as it was', () => {
+    const privateChatMessage = createMessage({ key: '424242:0', messageId: 99 });
+    fs.writeFileSync(filePath, JSON.stringify({ messages: [createMessage()] }));
+    addPairingMessage(filePath, privateChatMessage);
+    assert.deepEqual(readPairingMessages(filePath), { messages: [createMessage(), privateChatMessage], problem: null });
+  });
+
   it('removing takes out the named messages only — one message of a code can go while the other stays — and nothing named is no change', () => {
     addPairingMessage(filePath, createMessage());
     addPairingMessage(filePath, createMessage({ messageId: 43 }));

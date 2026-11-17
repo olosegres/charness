@@ -11,6 +11,7 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { Telegraf } from 'telegraf';
+import type { User } from 'telegraf/typings/core/types/typegram';
 import type { BotCore, CommandContext, RegisterCommand } from '../connectors/telegram/commands/botCore';
 import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
 import type { SessionKey } from '../sessionKey';
@@ -29,6 +30,8 @@ const firstRecordedMessageId = 500;
 
 /** One send or edit the module made through the topic helpers. */
 export interface RecordedSend {
+  /** The conversation the send or edit was addressed to. */
+  key: SessionKey;
   messageId: number | null;
   text: string;
   extra: object | undefined;
@@ -99,9 +102,9 @@ export class CommandHarness {
         }
       },
       getState: () => this.state,
-      replyToThread: async (_key, text, extra, options) => {
+      replyToThread: async (key, text, extra, options) => {
         const messageId = this.nextSentMessageId++;
-        this.replies.push({ messageId, text, extra, ...(options === undefined ? {} : { options }) });
+        this.replies.push({ key, messageId, text, extra, ...(options === undefined ? {} : { options }) });
         return messageId;
       },
       replyToThreadDetailed: async (key, text, extra, options) => {
@@ -109,9 +112,9 @@ export class CommandHarness {
         return messageId === null ? { kind: 'failed', isRetryable: false } : { kind: 'sent', messageId };
       },
       editThreadMessage: async (key, messageId, text, extra) => (await this.core.editThreadMessageDetailed(key, messageId, text, extra)) === 'edited',
-      editThreadMessageDetailed: async (_key, messageId, text, extra) => {
+      editThreadMessageDetailed: async (key, messageId, text, extra) => {
         if (this.goneMessageIds.has(messageId)) return 'gone';
-        this.edits.push({ messageId, text, extra });
+        this.edits.push({ key, messageId, text, extra });
         return 'edited';
       },
       // Straight to the fake Bot API, so a test counts the keyboard edits the way it counts any other call; a refused edit
@@ -168,8 +171,8 @@ export class CommandHarness {
     await handler(createCommandContext(messageId, `/${name}${argsText ? ` ${argsText}` : ''}`, messageExtras), this.key, { name, args: argsText ? argsText.split(' ') : [], argsText });
   }
 
-  /** @description The operator taps `callbackData` on the bot's message `messageId`, through telegraf's middleware chain. */
-  async tapButton(messageId: number, callbackData: string): Promise<void> {
+  /** @description The operator (or `from`, another admin) taps `callbackData` on the bot's message `messageId`, through telegraf's middleware chain. */
+  async tapButton(messageId: number, callbackData: string, from: User = harnessOperator): Promise<void> {
     this.callbackSequence += 1;
     const message = this.fakeTelegram.getMessage(this.fakeTelegram.pushOperatorMessage(harnessThreadId, `screen ${messageId}`));
     if (!message) throw new Error('the fake Bot API lost the message it just stored');
@@ -177,7 +180,7 @@ export class CommandHarness {
       update_id: this.callbackSequence,
       callback_query: {
         id: this.callbackSequence.toString(),
-        from: harnessOperator,
+        from,
         message: { ...message, message_id: messageId },
         chat_instance: 'fake-chat-instance',
         data: callbackData,

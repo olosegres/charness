@@ -43,6 +43,15 @@ export function getErrorDescription(e: TelegramApiErrorLike): string {
 }
 
 /**
+ * @description Telegram's 403: the bot may not write to that chat — a person who never opened a private chat with it («bot can't initiate
+ * conversation with a user») or blocked it («bot was blocked by the user»), a deactivated account, a group the bot was removed from. The
+ * answer is final: asking again changes nothing until the person (or an admin) lets the bot write.
+ */
+export function checkIsForbiddenError(err: unknown): boolean {
+  return checkIsApiError(err) && getErrorCode(err) === 403;
+}
+
+/**
  * @description The `retry_after` (seconds) Telegram attaches to a 429, or
  * `undefined` when absent. Callers fall back to their own default backoff when
  * this is missing.

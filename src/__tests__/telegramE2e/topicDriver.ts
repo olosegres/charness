@@ -8,17 +8,17 @@
  */
 
 import type { IsolatedCharness } from '../e2e/isolatedCharness';
-import type { FakeTelegram, FakeTelegramMessage } from './fakeTelegram';
+import type { FakeTelegram, FakeTelegramMessage, TelegramUser } from './fakeTelegram';
 
 /** A command's reply: a poll round trip and the paced send. */
 export const defaultReplyTimeoutMs = 20 * 1000;
 
 export class TopicDriver {
   constructor(
-    private readonly fakeTelegram: FakeTelegram,
-    private readonly getCharness: () => IsolatedCharness,
-    private readonly threadId: number,
-    private readonly replyTimeoutMs: number = defaultReplyTimeoutMs,
+    protected readonly fakeTelegram: FakeTelegram,
+    protected readonly getCharness: () => IsolatedCharness,
+    protected readonly threadId: number,
+    protected readonly replyTimeoutMs: number = defaultReplyTimeoutMs,
   ) {}
 
   /** @description The bot's messages in the topic, oldest first, with their CURRENT text. */
@@ -48,10 +48,10 @@ export class TopicDriver {
     await this.getCharness().waitFor(description, this.replyTimeoutMs, () => check(message.text));
   }
 
-  /** @description The operator taps `callbackData` on `message` and waits for the callback to be answered. */
-  async tapAndAwaitAnswer(message: FakeTelegramMessage, callbackData: string): Promise<string> {
+  /** @description The operator (or `from`) taps `callbackData` on `message` and waits for the callback to be answered. */
+  async tapAndAwaitAnswer(message: FakeTelegramMessage, callbackData: string, from?: TelegramUser): Promise<string> {
     const answersBefore = this.fakeTelegram.callbackAnswers.length;
-    this.fakeTelegram.pushCallback(message.message_id, callbackData);
+    this.fakeTelegram.pushCallback(message.message_id, callbackData, from);
     await this.getCharness().waitFor(`the tap on ${callbackData} to be answered`, this.replyTimeoutMs, () => this.fakeTelegram.callbackAnswers.length > answersBefore);
     return this.fakeTelegram.callbackAnswers[answersBefore];
   }
@@ -78,5 +78,28 @@ export class TopicDriver {
   /** @description The links of a message's keyboard, in order. */
   getKeyboardUrls(message: FakeTelegramMessage): string[] {
     return (message.reply_markup?.inline_keyboard ?? []).flat().flatMap((button) => ('url' in button ? [button.url] : []));
+  }
+}
+
+/**
+ * @description The same, in the private chat of the bot with `user`: its messages are the bot's messages there, a typed message is
+ * `user`'s own to the bot, and a tap is theirs. It has no topic.
+ */
+export class PrivateChatDriver extends TopicDriver {
+  constructor(fakeTelegram: FakeTelegram, getCharness: () => IsolatedCharness, private readonly user: TelegramUser, replyTimeoutMs: number = defaultReplyTimeoutMs) {
+    super(fakeTelegram, getCharness, 0, replyTimeoutMs);
+  }
+
+  override listMessages(): FakeTelegramMessage[] {
+    return this.fakeTelegram.listPrivateBotMessages(this.user.id);
+  }
+
+  override async sendAndAwaitReply(text: string, expectedText: string): Promise<FakeTelegramMessage> {
+    const sentMessageId = this.fakeTelegram.pushPrivateMessage(this.user, text);
+    return this.waitForMessage(`a reply to "${text}" with "${expectedText}"`, (message) => message.message_id > sentMessageId && message.text.includes(expectedText));
+  }
+
+  override tapAndAwaitAnswer(message: FakeTelegramMessage, callbackData: string, from: TelegramUser = this.user): Promise<string> {
+    return super.tapAndAwaitAnswer(message, callbackData, from);
   }
 }

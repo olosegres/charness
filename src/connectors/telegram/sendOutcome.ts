@@ -4,11 +4,12 @@ import { getUnsentRemainder } from './outputFlushPlan';
 
 /**
  * @description How a send to a topic ended: `sent` with the message id; `failed` — it did not land, and `isRetryable` says
- * whether trying again later may help (a 429, a 5xx, no answer from the network) or not (a closed topic, another 4xx);
+ * whether trying again later may help (a 429, a 5xx, no answer from the network) or not (a closed topic, another 4xx), and `isForbidden`
+ * (set only when true) that Telegram answered 403 — the bot may not write to that chat at all (see `checkIsForbiddenError`);
  * `unknown` — the Bot API did not answer within the send queue's deadline (`rateLimiter.ts` `SendOutcomeUnknownError`): the
  * message may or may not be in the topic, so it must NOT be sent again.
  */
-export type ThreadSendOutcome = { kind: 'sent'; messageId: number } | { kind: 'failed'; isRetryable: boolean } | { kind: 'unknown' };
+export type ThreadSendOutcome = { kind: 'sent'; messageId: number } | { kind: 'failed'; isRetryable: boolean; isForbidden?: boolean } | { kind: 'unknown' };
 
 /** @description How an edit of a topic message ended, with `unknown` as for a send: it may or may not be applied. */
 export type ThreadEditOutcome = ThreadMessageEdit | 'unknown';

@@ -63,6 +63,15 @@ test('t substitutes single {name} placeholder', () => {
   assert.ok(out.includes('overview'), `expected substring "overview" in "${out}"`);
 });
 
+test('t puts a value in as it is: a person\'s name with `$` in it is no replacement pattern, and the pairing note carries it in every language', () => {
+  const name = "Cash $& $' $1 $$";
+  for (const locale of localeCodes) {
+    const out = runWithLocale(locale, () => t('runners.pairingLineSentToPersonText', { name }));
+    assert.ok(out.includes(name), `${locale}: «${out}» must show the name as written`);
+    assert.ok(!out.includes('{name}'), `${locale}: the placeholder must be replaced`);
+  }
+});
+
 test('t substitutes multiple placeholders', () => {
   // `bind.not_found` mentions `{subdir}` once + `{workRoot}` once.
   const out = t('bind.not_found', { subdir: 'src', workRoot: '/work' });

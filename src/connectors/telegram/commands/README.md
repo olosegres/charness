@@ -284,7 +284,10 @@ runners (`src/runners/` is the hub, `utils/runnersScreenPlan.ts` the pure text a
   `runnersScreenPlan.test.ts` checks in every language), HTML with the line in a `<pre>` (tap to copy) sent with the `isSecret` option of `replyToThread`
   (`markOutboundTextSecret` keeps the text out of the output trace — length only). A failure to send it offers nothing and is told, and a message that cannot fit
   (`TELEGRAM_HARD_LIMIT`: an RSA host key of 4096 bits with a long host name or hub account, or any RSA host key larger than 4096 bits) is not even tried: the code is closed at once (`closeUnofferedPairing` →
-  `cancelPairing`) and the failure names the length and `charness runners pair --host <address>` (`runners.pairLineTooLongReasonText`).
+  `cancelPairing`) and the failure names the length and `charness runners pair --host <address>` (`runners.pairLineTooLongReasonText`). WHERE it is sent: General is read by the whole group and the line is a secret, so a pairing
+  started in a topic goes to the admin who started it (`senderId`: the presser of the button, or the author of the typed address) as a message of THEIR private chat (`createPrivateChatKey`; the main thread of a private chat
+  has no topic, so `buildSendExtra` names none, whoever the person is); the topic gets one note. Only Telegram's 403 (`ThreadSendOutcome.isForbidden`) falls back to the line in the topic, after a hint naming the bot; a conversation that already is private
+  (`checkIsPrivateChatMainKey`) gets it in place. The pairing message's own row is the one button accepted in an admin's private chat (`RunnersPorts.authorisePairingTap` → `getOwnPrivateChatKey`: a group admin in a chat that is theirs).
 - **Settling the pairing messages.** The place of every message that offers a code is this INSTANCE's own record (`runnerPairingMessages.ts`,
   `DATA_DIR/runner-pairing-messages.json`; one entry per MESSAGE, named by `getPairingMessageId`) — not the shared hub registry, which is every charness's of the OS user and holds credentials only. `startRunnersWatcher`
   (every 5 s, one look at boot) edits each message to «paired» (a runner carries its code's id) or «expired» (the code is neither open nor a runner) and

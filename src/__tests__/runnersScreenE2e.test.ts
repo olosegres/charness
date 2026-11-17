@@ -9,7 +9,9 @@
  *   nothing is created on disk for an instance that has no runner
  *   → General's empty list (Pair / Refresh) → Pair asks for an address (an address that answers nothing is refused with the reason and
  *     asked again) → the right one is kept in settings.json and the pairing follows as ONE message — the explanation, then the line — HTML
- *     with the line in a <pre>, under it the row that picks how many jobs the new machine runs at once (1 ticked; 2 is chosen before the line is used)
+ *     with the line in a <pre>, under it the row that picks how many jobs the new machine runs at once (1 ticked; 2 is chosen before the line is used), sent to
+ *     the operator's PRIVATE chat with the bot (the line is a secret and General is read by the whole group; this instance serves the group only, so the private chat
+ *     is a plain admin's one): General gets one note saying so and never the line, and every later step of a pairing — the tap on the row, «paired», «expired» — is in that chat
  *   → the line run on the runner machine WITHOUT its `sudo`, by the account itself (its last word names that account), pairs it: the message turns
  *     into «Runner “…” paired …» naming the 2 jobs at once, its line and keyboard are gone, the registry entry holds the 2 the key line of the machine is in authorized_keys and the temporary one is not
  *   → the utility holds the link: /runners lists the machine online, and the live probe adds its hardware, jobs and capabilities
@@ -76,7 +78,7 @@ import {
 } from './e2e/isolatedCharness';
 import { FakeTelegram, generalTopicThreadId, type FakeTelegramMessage } from './telegramE2e/fakeTelegram';
 import { getTelegramFlowTestTimingsEnv } from './telegramE2e/telegramFlowTimings';
-import { TopicDriver } from './telegramE2e/topicDriver';
+import { PrivateChatDriver, TopicDriver } from './telegramE2e/topicDriver';
 import {
   createRunnerLinkLayout,
   destroyRunnerLinkLayout,
@@ -110,6 +112,7 @@ const replyTimeoutMs = 90 * 1000;
 const linkTimeoutMs = 90 * 1000;
 const pairingLineTimeoutMs = 180 * 1000;
 const generalOnlyText = '⚠️ Runners are managed in General — open /runners there.';
+const sentPrivatelyNote = 'The pairing line was sent to Operator in a private message.';
 const staleListToast = 'The list changed — here it is again.';
 const secretTracePreview = '[secret — text not recorded]';
 /** The bot's probe deadline for the step that needs a busy machine (the seam's floor is 1 s; production is 20 s), and how long each `awk` of the runner's probe takes in it: a dozen of them, one after the other, are far past it. */
@@ -124,6 +127,8 @@ describe('/runners end to end: built charness, fake Bot API, loopback sshd, a ru
   let link: RunnerLinkLayout;
   let fakeTelegram: FakeTelegram;
   let general: TopicDriver;
+  /** The operator's private chat with the bot: where every pairing line goes. */
+  let operatorChat: PrivateChatDriver;
   let topic: TopicDriver;
   let defaultTmuxSessionsBefore: string[] = [];
   let runner: ChildProcess | null = null;
@@ -352,7 +357,11 @@ describe('/runners end to end: built charness, fake Bot API, loopback sshd, a ru
     fs.symlinkSync(instanceSshDir, path.join(link.hubHome, '.ssh'));
 
     fakeTelegram = new FakeTelegram({ botUser, operator, group });
+    // The bot may write to a person only once they opened a private chat with it: the operator did.
+    fakeTelegram.isPrivateChatStartRequired = true;
+    fakeTelegram.openPrivateChat(operator);
     general = new TopicDriver(fakeTelegram, getCharness, generalTopicThreadId, replyTimeoutMs);
+    operatorChat = new PrivateChatDriver(fakeTelegram, getCharness, operator, replyTimeoutMs);
     topic = new TopicDriver(fakeTelegram, getCharness, topicThreadId, replyTimeoutMs);
     const apiRoot = await fakeTelegram.start();
     instanceEnv = {
@@ -436,13 +445,14 @@ describe('/runners end to end: built charness, fake Bot API, loopback sshd, a ru
   }
 
   it('the right address is kept in settings.json and the pairing follows as ONE message — the explanation, then the line — HTML with the line in a <pre>, under it the row that picks how many jobs the new machine runs at once', async () => {
-    await general.sendAndAwaitReply(`127.0.0.1:${link.sshPort}`, 'Pair a runner — valid 10 minutes, single use;');
+    await general.sendAndAwaitReply(`127.0.0.1:${link.sshPort}`, sentPrivatelyNote);
     assert.deepEqual(readSettingsRunnerHost(), { host: '127.0.0.1', port: link.sshPort });
-    const pairingMessage = await general.waitForMessage('the pairing message', (message) => message.text.startsWith('Pair a runner'));
+    const pairingMessage = await operatorChat.waitForMessage('the pairing message in the operator\'s private chat', (message) => message.text.startsWith('Pair a runner — valid 10 minutes, single use;'));
+    assert.ok(general.listMessages().every((message) => !message.text.startsWith('Pair a runner') && !message.text.includes('cr2.')), 'General never shows the line');
     assert.ok(pairingMessage.text.includes('The last word, «runner», is the account that runs the agents\' code'), pairingMessage.text);
     assert.ok(pairingMessage.text.includes('No admin rights? Run the line in that account\'s own terminal without «sudo»:'), pairingMessage.text);
-    assert.ok(!general.listMessages().some((message) => message.text.startsWith('② Without admin rights')), 'there is no second message');
-    assert.deepEqual(general.getKeyboardLabels(pairingMessage), [['Jobs at once:'], ['1 ✓', '2', '3', '4']]);
+    assert.ok(!operatorChat.listMessages().some((message) => message.text.startsWith('② Without admin rights')), 'there is no second message');
+    assert.deepEqual(operatorChat.getKeyboardLabels(pairingMessage), [['Jobs at once:'], ['1 ✓', '2', '3', '4']]);
     const adminLine = readPairingLine(pairingMessage);
     assert.match(adminLine, /^sudo sh -c '.*"cr2\.\$u,\$h,\$p,[0-9a-f]+,\$y,\$z,\$k".*' sh runner$/s);
     firstPairingLine = toOwnAccountLine(adminLine);
@@ -450,31 +460,34 @@ describe('/runners end to end: built charness, fake Bot API, loopback sshd, a ru
     assert.equal(readLineCode(adminLine), readLineCode(firstPairingLine), 'the same code, the other way of running it');
     const sendCall = fakeTelegram.listCalls('sendMessage').find((call) => call.payload.text === pairingMessage.text);
     assert.equal(sendCall?.payload.parse_mode, 'HTML');
+    assert.equal(sendCall?.payload.chat_id, operator.id, 'sent to the operator\'s private chat');
+    assert.equal(sendCall?.payload.message_thread_id, undefined, 'a private chat has no topic to name');
     const [pending] = readJson<{ pending: Array<{ pairId: string; messageRef: string | null; label: string; host: string; port: number }> }>(path.join(getRegistryDir(), 'pending.json')).pending;
     assert.equal(pending.messageRef, null, 'the shared registry carries credentials only');
     // The instance writes its record after the send has been answered, so a message can be on the fake Bot API a moment before its record is.
     await waitUntil(() => readPairingStore().length === 1, 'the instance to record the message it sent', 10_000);
     assert.deepEqual(readPairingStore().map((message) => [message.pairId, message.key, message.messageId]), [
-      [pending.pairId, `${group.id}:${generalTopicThreadId}`, pairingMessage.message_id],
-    ], 'the instance keeps its own record of the message');
+      [pending.pairId, `${operator.id}:0`, pairingMessage.message_id],
+    ], 'the instance keeps its own record of the message, in the private chat it is in');
     assert.deepEqual([pending.label, pending.host, pending.port], ['@fake_charness_bot', '127.0.0.1', link.sshPort]);
     assert.match(readAuthorizedKeys(), /charness-pairing:/);
-    assert.deepEqual(general.getKeyboardData(pairingMessage), [['rnr_pjinfo'], [1, 2, 3, 4].map((count) => `rnr_pj_${pending.pairId}_${count}`)]);
-    // The operator wants two side by side on this machine: chosen while the code is open, kept for the machine that will use it.
-    assert.equal(await general.tapAndAwaitAnswer(pairingMessage, `rnr_pj_${pending.pairId}_2`), 'The new machine will run 2 at once.');
+    assert.deepEqual(operatorChat.getKeyboardData(pairingMessage), [['rnr_pjinfo'], [1, 2, 3, 4].map((count) => `rnr_pj_${pending.pairId}_${count}`)]);
+    // The operator wants two side by side on this machine: chosen while the code is open — in the private chat, which this instance does not serve, a tap of the admin there is
+    // accepted because the chat is theirs — and kept for the machine that will use it.
+    assert.equal(await operatorChat.tapAndAwaitAnswer(pairingMessage, `rnr_pj_${pending.pairId}_2`), 'The new machine will run 2 at once.');
     await waitUntil(() => readJson<{ pending: Array<{ jobsAtOnce?: number }> }>(path.join(getRegistryDir(), 'pending.json')).pending[0]?.jobsAtOnce === 2, 'the choice to be kept on the open code', 10_000);
-    await waitUntil(() => general.getKeyboardLabels(pairingMessage)[1]?.join(' ') === '1 2 ✓ 3 4', 'the tick to move to 2', 10_000);
+    await waitUntil(() => operatorChat.getKeyboardLabels(pairingMessage)[1]?.join(' ') === '1 2 ✓ 3 4', 'the tick to move to 2', 10_000);
     assert.equal(pairingMessage.text.includes('cr2.') || pairingMessage.text.includes('sh -c'), true, 'the line is still in the message: only the keyboard changed');
   });
 
   it('the line run on the runner machine without its sudo, by the account itself, pairs it: the message turns into «paired» and loses its line; authorized_keys holds the machine\'s key, not the temporary one', async () => {
-    const pairingMessage = general.listMessages().find((message) => message.text.startsWith('Pair a runner'));
+    const pairingMessage = operatorChat.listMessages().find((message) => message.text.startsWith('Pair a runner'));
     assert.ok(pairingMessage, 'the pairing message is still there');
     const result = await runPairingLineAsync(firstPairingLine);
     assert.equal(result.status, 0, result.output);
     assert.match(result.output, /Paired with /);
     assert.match(result.output, /Keep it running:/, 'the account\'s way installs no service: the help for keeping it running is printed');
-    await general.waitForMessageText('the pairing message to read paired', pairingMessage, (text) => /^Runner “[a-z0-9-]+” paired \d{1,2} \S+ \d{2}:\d{2}\.\nJobs at once: 2 — change it in \/runners\.$/u.test(text));
+    await operatorChat.waitForMessageText('the pairing message to read paired', pairingMessage, (text) => /^Runner “[a-z0-9-]+” paired \d{1,2} \S+ \d{2}:\d{2}\.\nJobs at once: 2 — change it in \/runners\.$/u.test(text));
     assert.ok(!pairingMessage.text.includes('cr2.') && !pairingMessage.text.includes('sh -c'), 'the line is gone from the message');
     assert.equal(pairingMessage.reply_markup, undefined, 'the keyboard goes with the line');
     assert.notEqual(pairingMessage.isDeleted, true, 'the message stays and says what became of the code');
@@ -659,7 +672,7 @@ describe('/runners end to end: built charness, fake Bot API, loopback sshd, a ru
   it('a second pairing needs no address; after a restart of the bot the message is found again from its own record and turns to «expired»; the expired code and the used one are refused', async () => {
     const list = await general.sendAndAwaitReply('/runners', 'No runners yet.');
     await general.tapAndAwaitAnswer(list, 'rnr_pair');
-    const second = await general.waitForMessage('the second pairing message', (message) => message.text.startsWith('Pair a runner') && message.message_id > list.message_id);
+    const second = await operatorChat.waitForMessage('the second pairing message', (message) => message.text.startsWith('Pair a runner') && message.message_id > list.message_id);
     secondPairingLine = toOwnAccountLine(readPairingLine(second));
     assert.notEqual(secondPairingLine, firstPairingLine);
     assert.deepEqual(readSettingsRunnerHost(), { host: '127.0.0.1', port: link.sshPort }, 'the address was kept');
@@ -667,7 +680,7 @@ describe('/runners end to end: built charness, fake Bot API, loopback sshd, a ru
     await getCharness().stop();
     await startCharness();
     expireOpenPairings();
-    await general.waitForMessageText('the pairing message to read expired', second, (text) => text === 'Pairing code expired.');
+    await operatorChat.waitForMessageText('the pairing message to read expired', second, (text) => text === 'Pairing code expired.');
     assert.equal(readJson<{ pending: unknown[] }>(path.join(getRegistryDir(), 'pending.json')).pending.length, 0, 'the expired code is swept');
     assert.doesNotMatch(readAuthorizedKeys(), /charness-pairing:/);
 
@@ -681,7 +694,7 @@ describe('/runners end to end: built charness, fake Bot API, loopback sshd, a ru
   it('a pairing message the person deleted by hand: the code still settles when it runs out — the instance\'s record empties, nothing is retried', async () => {
     const list = await general.sendAndAwaitReply('/runners', 'No runners yet.');
     await general.tapAndAwaitAnswer(list, 'rnr_pair');
-    const fourth = await general.waitForMessage('the fourth pairing message', (message) => message.text.startsWith('Pair a runner') && message.message_id > list.message_id);
+    const fourth = await operatorChat.waitForMessage('the fourth pairing message', (message) => message.text.startsWith('Pair a runner') && message.message_id > list.message_id);
     // The bot records a message just after Telegram has it: the record is read once it is in it.
     await waitUntil(() => readPairingStore().length === 1, 'the message to be followed', 10_000);
     // The person deletes the message by hand (the fake Bot API then answers «message to edit not found» to an edit of it, like Telegram).
@@ -695,7 +708,7 @@ describe('/runners end to end: built charness, fake Bot API, loopback sshd, a ru
   it('a code used while the bot is stopped: the restarted bot turns its message into «paired»', async () => {
     const list = await general.sendAndAwaitReply('/runners', 'No runners yet.');
     await general.tapAndAwaitAnswer(list, 'rnr_pair');
-    const third = await general.waitForMessage('the third pairing message', (message) => message.text.startsWith('Pair a runner') && message.message_id > list.message_id);
+    const third = await operatorChat.waitForMessage('the third pairing message', (message) => message.text.startsWith('Pair a runner') && message.message_id > list.message_id);
     thirdPairingLine = toOwnAccountLine(readPairingLine(third));
 
     await getCharness().stop();
@@ -705,7 +718,7 @@ describe('/runners end to end: built charness, fake Bot API, loopback sshd, a ru
     assert.equal(readPaired().runners.length, 1, 'the second machine is paired');
 
     await startCharness();
-    await general.waitForMessageText('the pairing message to read paired', third, (text) => /^Runner “[a-z0-9-]+” paired \d{1,2} \S+ \d{2}:\d{2}\.\nJobs at once: 1 — change it in \/runners\.$/u.test(text));
+    await operatorChat.waitForMessageText('the pairing message to read paired', third, (text) => /^Runner “[a-z0-9-]+” paired \d{1,2} \S+ \d{2}:\d{2}\.\nJobs at once: 1 — change it in \/runners\.$/u.test(text));
     assert.ok(!third.text.includes('cr2.'), 'the line is gone');
     await waitUntil(() => readPairingStore().length === 0, 'the settled message to leave the instance\'s record', 10_000);
   });

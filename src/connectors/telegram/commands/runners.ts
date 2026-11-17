@@ -1,8 +1,10 @@
 /**
  * `/runners` — the machines that run the agents' tests and builds, paired from Telegram. In General only (admins): one message that
  * lists the machines (online or not, what they are, what they can do) with Pause / Resume / Remove per machine, and a button that pairs
- * another one — two one-time lines for the new machine (one for an admin account, one for the runner account itself), valid 10 minutes, in
- * two messages that turn into «paired» or «expired».
+ * another one — ONE one-time line for the new machine (it works for an admin account with its `sudo` and for the runner account itself without it),
+ * valid 10 minutes, in a message that turns into «paired» or «expired». The line is a secret that anybody who holds it can pair a machine with, and General is read
+ * by every member of the group: so it goes to the admin who asked for it in a PRIVATE message of the bot (a short note in the topic says so); only an admin who has
+ * not opened a private chat with the bot (Telegram 403) gets it in the topic, preceded by how to receive it privately next time.
  * The hub itself is `src/runners/`; this file is only the screen, its buttons and the two background jobs (editing the pairing message,
  * refreshing a list with live data). See `src/runners/README.md` for the safety line and `utils/runnersScreenPlan.ts` for the texts.
  *
@@ -14,10 +16,12 @@
  * was already paired) or «expired».
  */
 import { Markup, type Context } from 'telegraf';
+import type { User } from 'telegraf/typings/core/types/typegram';
 import { getCaughtErrnoCode } from '../../../configDirFile';
 import { getActiveLang, t } from '../../../i18n';
 import { escapeHtmlText } from '../renderAgentHtml';
 import { keyFromString, keyToString, type SessionKey } from '../../../sessionKey';
+import { checkIsPrivateChatMainKey, createPrivateChatKey } from '../../../threadRouting';
 import { checkIsNewConcern, createLinkNotice, readLinkNotices, writeLinkNotices, type LinkNotice } from '../runnerLinkNotices';
 import { buildAdminBootstrapLine, defaultRunnerAccount } from '../../../runners/bootstrapLine';
 import { checkHubAddress, parseHubAddress, type HostKeyScanner, type HubAddress, type HubAddressCheck } from '../../../runners/hubAddress';
@@ -27,6 +31,7 @@ import { defaultJobsAtOnce, getJobsAtOnce } from '../../../remoteRun/runnersConf
 import {
   cancelPairing,
   createPairing,
+  type CreatedPairing,
   setPairedRunnerJobsAtOnce,
   setPairedRunnerPaused,
   setPairingJobsAtOnce,
@@ -90,6 +95,11 @@ const logTag = 'runners';
 export interface RunnersPorts extends Pick<BotCore, 'bot' | 'command' | 'replyToThread' | 'replyToThreadDetailed' | 'editThreadMessage' | 'editThreadMessageDetailed' | 'editThreadKeyboard' | 'authoriseContext' | 'withThreadLocale' | 'checkIsGeneral'> {
   /** The hub registry of this OS user (`src/runners/`). */
   hub: HubContext;
+  /**
+   * The gate of a tap on a pairing message's «jobs at once» row: the line is sent to the admin who asked for it in their private chat with the bot, where
+   * only the owner's DM is a served surface — so this one also lets a group admin tap in a chat that is their own. The key, or `null` when refused.
+   */
+  authorisePairingTap: (ctx: Context) => Promise<SessionKey | null>;
   /** The address runners dial, as `settings.json` holds it; `null` = never chosen. */
   readRunnerHost: () => HubAddress | null;
   /** Remember the address; `null` on success, else the errno code of the failed write. */
@@ -144,6 +154,12 @@ function buildKeyboard(screen: Pick<RunnersScreen, 'rows'>): ReturnType<typeof M
 function buildPairingKeyboard(pairId: string, current: number): ReturnType<typeof Markup.inlineKeyboard> {
   return buildKeyboard({ rows: buildPairingJobsAtOnceRows(pairId, current, t) });
 }
+
+/** The admin a pairing line goes to — the one whose tap or typed address made it: the id of their private chat with the bot, and what the topic calls them. */
+type PairingRecipient = Pick<User, 'id' | 'first_name' | 'username'>;
+
+/** What posting a pairing line to one conversation came to: sent, not sent for good, too long for one Telegram message, or refused by Telegram's 403 (the bot may not write there). */
+type PairingPostOutcome = { kind: 'posted' } | { kind: 'tooLong'; length: number } | { kind: 'forbidden' } | { kind: 'failed' };
 
 /**
  * @description What a message was last CLAIMED for: the list (the page it shows) or a question that replaced it. `generation` is
@@ -287,21 +303,42 @@ export function createRunners(ports: RunnersPorts) {
   }
 
   /**
-   * Post the message that carries a pairing line (a secret: the trace keeps only its length) with the row that picks how many jobs the new machine runs at once,
-   * and remember it so it can turn into «paired» / «expired».
+   * Post the message that carries a pairing line (a secret: the trace keeps only its length) in the conversation `key` — in ITS language — with the row that picks how many
+   * jobs the new machine runs at once, and remember it so it can turn into «paired» / «expired».
    * If Telegram refuses the markup the message goes out as `message.plain`, never with the tags shown.
+   * `forbidden`: Telegram answered 403 — the bot may not write to that chat (a person who never opened a private chat with it, or blocked it).
    */
-  async function postPairingLine(key: SessionKey, pairId: string, message: { html: string; plain: string }): Promise<boolean> {
-    const keyboard = buildPairingKeyboard(pairId, defaultJobsAtOnce);
-    const messageId = await replyToThread(key, message.html, { parse_mode: 'HTML', reply_markup: keyboard.reply_markup }, { isSecret: true, plainFallbackText: message.plain });
-    if (messageId === null) return false;
-    try {
-      addPairingMessage(ports.pairingMessagesPath, { pairId, key: keyToString(key), messageId, offeredAtMs: now() });
-    } catch (error) {
-      // The line is out and works; only its turning into «paired» / «expired» is lost.
-      console.warn(`[${logTag}] the pairing message could not be recorded (${getCaughtErrnoCode(error)}); it will not turn into «paired» or «expired»`);
+  async function postPairingLine(key: SessionKey, pairing: CreatedPairing): Promise<PairingPostOutcome> {
+    return withThreadLocale(key, async () => {
+      const message = renderPairingMessage(buildPairingIntro(pairingLifetimeMinutes, defaultRunnerAccount, t), buildAdminBootstrapLine(pairing.payload, defaultRunnerAccount));
+      if (message.plain.length > TELEGRAM_HARD_LIMIT) return { kind: 'tooLong', length: message.plain.length };
+      const keyboard = buildPairingKeyboard(pairing.pairId, defaultJobsAtOnce);
+      const outcome = await replyToThreadDetailed(key, message.html, { parse_mode: 'HTML', reply_markup: keyboard.reply_markup }, { isSecret: true, plainFallbackText: message.plain });
+      // A send with no answer in time may have landed, but its message id is not known: it cannot turn into «paired», so it counts as not sent (the code is closed).
+      if (outcome.kind !== 'sent') return { kind: outcome.kind === 'failed' && outcome.isForbidden === true ? 'forbidden' : 'failed' };
+      try {
+        addPairingMessage(ports.pairingMessagesPath, { pairId: pairing.pairId, key: keyToString(key), messageId: outcome.messageId, offeredAtMs: now() });
+      } catch (error) {
+        // The line is out and works; only its turning into «paired» / «expired» is lost.
+        console.warn(`[${logTag}] the pairing message could not be recorded (${getCaughtErrnoCode(error)}); it will not turn into «paired» or «expired»`);
+      }
+      return { kind: 'posted' };
+    });
+  }
+
+  /**
+   * Tell the topic WHERE the line went, naming the person: General is read by every member, and the admin who made the line is not always the one who asked (another admin may
+   * have used the proposed address), so «sent to you» would send the wrong one looking in their own chat. The name is the first name, else the @username; with neither — Telegram
+   * gives a first name to everybody, so this is only a guard — the note says «you». The name is escaped for the HTML the note goes out in (its plain twin shows it as written).
+   */
+  async function noteLineSentPrivately(key: SessionKey, recipient: PairingRecipient): Promise<void> {
+    const firstName = recipient.first_name.trim();
+    const name = firstName !== '' ? firstName : recipient.username === undefined || recipient.username === '' ? null : `@${recipient.username}`;
+    if (name === null) {
+      await replyToThread(key, t('runners.pairingLineSentPrivatelyText'));
+      return;
     }
-    return true;
+    await replyToThread(key, t('runners.pairingLineSentToPersonText', { name: escapeHtmlText(name) }), { parse_mode: 'HTML' }, { plainFallbackText: t('runners.pairingLineSentToPersonText', { name }) });
   }
 
   /** Close the code of a line nobody was given, so its credential does not stay open until it runs out; a registry that cannot be written is said, the code then runs out by itself. */
@@ -316,10 +353,14 @@ export function createRunners(ports: RunnersPorts) {
   /**
    * Make a code and post the one message that carries it: the line (it works for an admin account with its `sudo`, and for the runner account itself without it) under
    * its explanation. The message shows what became of the code — «paired», «expired», or that the line was used on a machine that was already paired.
+   * WHERE it is posted: the line is a secret, and a topic is read by every member of the group — so, asked in a topic, it goes to `recipient`, the admin who asked, in the bot's
+   * PRIVATE chat with them, and the topic gets one plain line saying so. A conversation that already is private (the owner's DM) gets the line itself. When Telegram says the bot may
+   * not write to that person (403: they never opened a private chat with it, or blocked it) the line follows in the topic, as it always did, after a line that says how to receive it
+   * privately next time; any other failure of the private send is a failure of the offer.
    * A code whose message cannot be sent — too long for Telegram (an RSA host key of 4096 bits with a long host name or hub account, or an RSA key larger than 4096 bits: the line holds the host key once), or refused by it — is
    * CLOSED at once and the failure says so (for a message too long, where to make the line instead): no credential is left open for ten minutes with nobody holding its line.
    */
-  async function offerPairing(key: SessionKey, address: HubAddress, knownCheck: Extract<HubAddressCheck, { ok: true }> | null): Promise<void> {
+  async function offerPairing(key: SessionKey, address: HubAddress, knownCheck: Extract<HubAddressCheck, { ok: true }> | null, recipient: PairingRecipient): Promise<void> {
     const check = knownCheck ?? (await checkHubAddress(address, ports.scanHostKey));
     if (!check.ok) {
       await rejectAddress(key, check.error);
@@ -328,30 +369,31 @@ export function createRunners(ports: RunnersPorts) {
     try {
       ports.ensureGateWrapper();
       const pairing = await createPairing(hub, { host: address.host, port: address.port, hostKey: check.hostKey, label: ports.getBotLabel(), nowMs: now() });
-      const intro = buildPairingIntro(pairingLifetimeMinutes, defaultRunnerAccount, t);
-      const message = renderPairingMessage(intro, buildAdminBootstrapLine(pairing.payload, defaultRunnerAccount));
-      if (message.plain.length > TELEGRAM_HARD_LIMIT) {
-        await closeUnofferedPairing(pairing.pairId);
-        const reason = t('runners.pairLineTooLongReasonText', { length: message.plain.length, limit: TELEGRAM_HARD_LIMIT, address: formatHubAddress(address) });
-        await replyToThread(key, t('runners.pairFailedText', { reason }));
+      let outcome: PairingPostOutcome | null = checkIsPrivateChatMainKey(key) ? null : await postPairingLine(createPrivateChatKey(recipient.id), pairing);
+      if (outcome?.kind === 'posted') {
+        await noteLineSentPrivately(key, recipient);
         return;
       }
-      if (!(await postPairingLine(key, pairing.pairId, message))) {
-        await closeUnofferedPairing(pairing.pairId);
-        await replyToThread(key, t('runners.pairFailedText', { reason: 'the message could not be sent' }));
-      }
+      if (outcome?.kind === 'forbidden') await replyToThread(key, t('runners.pairingLineOpenPrivateChatText', { bot: ports.getBotLabel() }));
+      if (outcome === null || outcome.kind === 'forbidden') outcome = await postPairingLine(key, pairing);
+      if (outcome.kind === 'posted') return;
+      await closeUnofferedPairing(pairing.pairId);
+      const reason = outcome.kind === 'tooLong'
+        ? t('runners.pairLineTooLongReasonText', { length: outcome.length, limit: TELEGRAM_HARD_LIMIT, address: formatHubAddress(address) })
+        : 'the message could not be sent';
+      await replyToThread(key, t('runners.pairFailedText', { reason }));
     } catch (error) {
       await replyToThread(key, t('runners.pairFailedText', { reason: describeCaughtError(error) }));
     }
   }
 
-  async function startPairing(key: SessionKey): Promise<void> {
+  async function startPairing(key: SessionKey, recipient: PairingRecipient): Promise<void> {
     const address = ports.readRunnerHost();
     if (address === null) await showAddressStep(key);
-    else await offerPairing(key, address, null);
+    else await offerPairing(key, address, null, recipient);
   }
 
-  async function useAddress(key: SessionKey, messageId: number | null): Promise<void> {
+  async function useAddress(key: SessionKey, messageId: number | null, recipient: PairingRecipient): Promise<void> {
     const address = messageId === null ? undefined : addressProposals.get(buildMessageSnapshotKey(key, messageId));
     if (address === undefined || address === null) {
       await replyToThread(key, t('runners.addressExpired'));
@@ -360,7 +402,7 @@ export function createRunners(ports: RunnersPorts) {
     if (messageId !== null) await editThreadKeyboard(key, messageId, null, logTag);
     const saveError = ports.saveRunnerHost(address);
     if (saveError !== null) console.warn(`[${logTag}] the address could not be saved (${saveError}); it is used for this pairing only`);
-    await offerPairing(key, address, null);
+    await offerPairing(key, address, null, recipient);
   }
 
   /** A slash command ends the wait for the address (the command itself runs normally); the text handler calls it before a bot command returns. */
@@ -370,10 +412,10 @@ export function createRunners(ports: RunnersPorts) {
 
   /**
    * @description A General message while the address is awaited: parse it, check that it answers with this machine's own sshd, keep it
-   * and make the pairing line. A failed check keeps the wait (the reason is posted). A slash command ends the wait and runs normally.
-   * Resolves to whether the message was taken here.
+   * and make the pairing line, which goes to `sender` — the admin who wrote the address — in a private message. A failed check keeps the wait (the reason is posted).
+   * A slash command ends the wait and runs normally. Resolves to whether the message was taken here.
    */
-  async function handleRunnersAddressText(key: SessionKey, text: string): Promise<boolean> {
+  async function handleRunnersAddressText(key: SessionKey, text: string, sender: PairingRecipient): Promise<boolean> {
     const keyText = keyToString(key);
     const waitStartedAt = addressWaits.get(keyText);
     if (waitStartedAt === undefined || !checkIsGeneral(key)) return false;
@@ -396,7 +438,7 @@ export function createRunners(ports: RunnersPorts) {
       const saveError = ports.saveRunnerHost(parsed.address);
       if (saveError !== null) console.warn(`[${logTag}] the address could not be saved (${saveError}); it is used for this pairing only`);
       if (check.note !== null) await replyToThread(key, t('runners.addressNote', { note: check.note }));
-      await offerPairing(key, parsed.address, check);
+      await offerPairing(key, parsed.address, check, sender);
     });
     return true;
   }
@@ -545,22 +587,25 @@ export function createRunners(ports: RunnersPorts) {
   }
 
   async function handleCallback(ctx: Context, callback: RunnersCallback): Promise<void> {
-    const key = await authoriseContext(ctx);
-    if (!key) {
+    // The row under a pairing line stands where the line was sent: in General (a line that could not be sent privately) or in the admin's own private chat.
+    const isPairingTap = callback.kind === 'pairingJobs' || callback.kind === 'pairingJobsInfo';
+    const key = await (isPairingTap ? ports.authorisePairingTap(ctx) : authoriseContext(ctx));
+    const sender = ctx.from;
+    if (!key || sender === undefined) {
       await ctx.answerCbQuery(t('cb.access_denied'));
       return;
     }
     const messageId = getCallbackMessageId(ctx);
     await withThreadLocale(key, async () => {
       // The screen only ever stands in General, but a tap is checked where it lands.
-      if (!checkIsGeneral(key)) {
+      if (!checkIsGeneral(key) && !(isPairingTap && checkIsPrivateChatMainKey(key))) {
         await answerCallbackQuerySafely(ctx, t('runners.generalOnlyText'));
         return;
       }
       switch (callback.kind) {
         case 'pair':
           await answerCallbackQuerySafely(ctx);
-          await startPairing(key);
+          await startPairing(key, sender);
           return;
         case 'refresh':
           await answerCallbackQuerySafely(ctx);
@@ -569,7 +614,7 @@ export function createRunners(ports: RunnersPorts) {
           return;
         case 'addressUse':
           await answerCallbackQuerySafely(ctx);
-          await useAddress(key, messageId);
+          await useAddress(key, messageId, sender);
           return;
         case 'addressOther':
           await answerCallbackQuerySafely(ctx);

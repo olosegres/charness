@@ -31,6 +31,9 @@ import {
   type PairingAuthorityProbes,
   checkIsGeneralTopic,
   checkIsChatMode,
+  checkIsPrivateChatMainKey,
+  getOwnPrivateChatKey,
+  createPrivateChatKey,
   GENERAL_THREAD_ID,
   DM_GENERAL_THREAD_ID,
   type SurfaceRouting,
@@ -516,4 +519,27 @@ test('regression — group mode: only the group resolver runs (owner DM dropped)
     resolveThreadKeyForMode({ chat: ownerDmPrivateChat, message: {} }, groupRouting),
     null,
   );
+});
+
+test('private chats: the main thread of ANY person\'s chat is the DM main thread (no topic to name), a group topic and a DM forum topic are not', () => {
+  assert.equal(checkIsPrivateChatMainKey(makeTelegramKey(OWNER_USER_ID, DM_GENERAL_THREAD_ID)), true, 'the owner\'s DM');
+  assert.equal(checkIsPrivateChatMainKey(makeTelegramKey(7654321, DM_GENERAL_THREAD_ID)), true, 'another person\'s chat with the bot');
+  assert.equal(checkIsPrivateChatMainKey(makeTelegramKey(ALLOWED, GENERAL_THREAD_ID)), false, 'the group\'s General');
+  assert.equal(checkIsPrivateChatMainKey(makeTelegramKey(ALLOWED, 42)), false, 'a group topic');
+  assert.equal(checkIsPrivateChatMainKey(makeTelegramKey(OWNER_USER_ID, 5)), false, 'a topic of the owner\'s DM has a thread to name');
+  assert.equal(checkIsPrivateChatMainKey({ platform: 'jira', space: 'PROJ', thread: 'PROJ-1' }), false, 'a conversation of another platform answers, never throws');
+  assert.deepEqual(createPrivateChatKey(7654321), makeTelegramKey(7654321, DM_GENERAL_THREAD_ID));
+});
+
+test('getOwnPrivateChatKey: only a group admin in a private chat that is their own gets its key', () => {
+  const adminIds = new Set(['424242', '434343']);
+  const ownChat = { chatType: 'private', chatId: 434343, userId: 434343, adminIds };
+  assert.deepEqual(getOwnPrivateChatKey(ownChat), makeTelegramKey(434343, DM_GENERAL_THREAD_ID));
+  assert.equal(getOwnPrivateChatKey({ ...ownChat, userId: 555555 }), null, 'a tap on a message of someone else\'s chat (the chat id is not the sender\'s)');
+  assert.equal(getOwnPrivateChatKey({ ...ownChat, chatId: 555555, userId: 555555 }), null, 'a person who is no admin of the group');
+  assert.equal(getOwnPrivateChatKey({ ...ownChat, chatType: 'supergroup' }), null, 'a group chat is not a private one');
+  assert.equal(getOwnPrivateChatKey({ ...ownChat, chatType: undefined }), null);
+  assert.equal(getOwnPrivateChatKey({ ...ownChat, chatId: undefined }), null);
+  assert.equal(getOwnPrivateChatKey({ ...ownChat, userId: undefined }), null);
+  assert.equal(getOwnPrivateChatKey({ ...ownChat, adminIds: new Set() }), null, 'no admins known');
 });

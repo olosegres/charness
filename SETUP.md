@@ -400,7 +400,7 @@ had run locally. Without a runner nothing changes for anyone, and agents are not
 **Pair it (the normal way).** Needs this machine's ordinary `sshd` (key login on) with an address the runner can reach — nothing else is
 opened or changed, no root, no VPN — and on the runner machine `ssh`, `tar`, `curl` or `wget`, and a way to reach nodejs.org (no Node.js needed: the pairing installs the runner its own). In General send `/runners` → **＋ Pair a new
 runner**; the first time the bot asks which address runners dial (the `runnerHost` row of the [instance settings](#instance-settings-settingsjson)) and
-proposes the public address it finds. It posts ONE line (valid 10 minutes, single use) with the words that explain it: pasted in an admin account's terminal
+proposes the public address it finds. It sends ONE line (valid 10 minutes, single use) with the words that explain it — to you in a private message of the bot, not into General, which the whole group reads (open a private chat with the bot and press Start first, or the line is posted in General): pasted in an admin account's terminal
 on the runner machine it pairs a standard user there (`runner` unless you change the last word of the line) and installs its always-on service
 in one go; without admin rights, the same line run from the terminal of that account itself (without its leading `sudo`, its last word being that
 account's name) pairs it only, with `charness-runner service install` afterwards to keep it running. An

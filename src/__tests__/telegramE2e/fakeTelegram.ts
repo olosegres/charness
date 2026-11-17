@@ -70,6 +70,13 @@ interface TelegramChat {
   is_forum: true;
 }
 
+/** A private chat of the bot with one person: its id is the person's user id, and it has no topics (a message in it carries no `message_thread_id`). */
+interface FakePrivateChat {
+  id: number;
+  type: 'private';
+  first_name: string;
+}
+
 /** A button of an inline keyboard: a tap (`callback_data`) or a link (`url`), as the Bot API types it. */
 export type FakeTelegramInlineButton = InlineKeyboardButton;
 
@@ -77,9 +84,10 @@ export type FakeTelegramInlineButton = InlineKeyboardButton;
 export interface FakeTelegramMessage {
   message_id: number;
   date: number;
-  chat: TelegramChat;
-  message_thread_id: number;
-  is_topic_message: true;
+  chat: TelegramChat | FakePrivateChat;
+  /** Absent in a private chat. */
+  message_thread_id?: number;
+  is_topic_message?: true;
   from: TelegramUser;
   text: string;
   entities?: Array<{ type: 'bot_command'; offset: number; length: number } | { type: 'text_mention'; offset: number; length: number; user: TelegramUser }>;
@@ -198,6 +206,11 @@ const maxDeleteMessagesPerCall = 100;
 /** The icon colour every topic made in the fake group has (Telegram's first preset). */
 const topicIconColor = 0x6FB9F0;
 
+/** The private chat of the bot with `user`. */
+function getPrivateChat(user: TelegramUser): FakePrivateChat {
+  return { id: user.id, type: 'private', first_name: user.first_name };
+}
+
 /** A stored message as the Bot API embeds it in a reply: a voice note without `text`. */
 function embedAsReplied(message: FakeTelegramMessage): FakeRepliedMessage {
   if (!message.voice) return message;
@@ -231,6 +244,14 @@ export class FakeTelegram {
   /** Whether the bot may create topics (`can_manage_topics`); while unset, `createForumTopic` is refused as the Bot API refuses it. */
   canManageTopics = true;
   /**
+   * While set, a send to a person who has not opened a private chat with the bot ({@link openPrivateChat}, or by writing to it with
+   * {@link pushPrivateMessage}) is refused the way the Bot API refuses it — 403 «bot can't initiate conversation with a user» —, and
+   * a send to one who has lands in that private chat ({@link listPrivateBotMessages}). Unset (the default): a send to a user id that
+   * is no registered private chat lands in the flow's group, which is where the owner's startup status has always gone in the flows
+   * that never model a private chat.
+   */
+  isPrivateChatStartRequired = false;
+  /**
    * While set, the topic the bot creates also reaches it as the `forum_topic_created` service message (`from` is the bot
    * itself): whether Telegram delivers a bot its own service messages is not documented, so a flow can make it so.
    */
@@ -253,6 +274,8 @@ export class FakeTelegram {
   /** The files `getFile` knows, by file id. */
   private readonly files = new Map<string, { filePath: string; bytes: Buffer }>();
   private readonly messages = new Map<number, FakeTelegramMessage>();
+  /** The people who opened a private chat with the bot, by user id: the bot may write to them. */
+  private readonly privateChatUsers = new Map<number, TelegramUser>();
   private readonly pinnedMessageIds = new Set<number>();
   private readonly pendingUpdates: Array<Record<string, unknown>> = [];
   /** One waker per held long poll: a restarted bot leaves its dead predecessor's poll hanging for a moment. */
@@ -337,6 +360,23 @@ export class FakeTelegram {
     const entities = [...commandEntities, ...mentionEntities];
     const message = this.storeMessage(threadId, text, from, { ...(entities.length > 0 ? { entities } : {}) });
     this.pushUpdate({ message: { ...message, ...this.getContext(options) } });
+    return message.message_id;
+  }
+
+  /** @description `user` opened a private chat with the bot (pressed Start): the bot may write to them, and what it sends them lands in {@link listPrivateBotMessages}. */
+  openPrivateChat(user: TelegramUser): void {
+    this.privateChatUsers.set(user.id, user);
+  }
+
+  /**
+   * @description `from` writes `text` to the bot in their private chat (a command, say) — which opens the chat, as writing to a bot does;
+   * resolves the message id. The message carries no topic.
+   */
+  pushPrivateMessage(from: TelegramUser, text: string): number {
+    this.openPrivateChat(from);
+    const commandEntities = getCommandEntities(text);
+    const message = this.storeMessage(null, text, from, { ...(commandEntities ? { entities: commandEntities } : {}) }, getPrivateChat(from));
+    this.pushUpdate({ message });
     return message.message_id;
   }
 
@@ -455,6 +495,13 @@ export class FakeTelegram {
       .sort((a, b) => a.message_id - b.message_id);
   }
 
+  /** @description The bot's messages in its private chat with user `userId` that are not deleted, oldest first, with their CURRENT text. */
+  listPrivateBotMessages(userId: number): FakeTelegramMessage[] {
+    return [...this.messages.values()]
+      .filter((message) => message.chat.type === 'private' && message.chat.id === userId && message.from.id === this.options.botUser.id && !message.isDeleted)
+      .sort((a, b) => a.message_id - b.message_id);
+  }
+
   getMessage(messageId: number): FakeTelegramMessage | undefined {
     return this.messages.get(messageId);
   }
@@ -500,20 +547,20 @@ export class FakeTelegram {
     };
   }
 
+  /** `threadId` is `null` for a message of a private chat, which has no topics. */
   private storeMessage(
-    threadId: number,
+    threadId: number | null,
     text: string,
     from: TelegramUser,
     extra: Pick<FakeTelegramMessage, 'entities' | 'reply_markup' | 'isSilent' | 'parseMode' | 'voice'> = {},
-    chat: TelegramChat = this.chat,
+    chat: TelegramChat | FakePrivateChat = this.chat,
   ): FakeTelegramMessage {
     const message: FakeTelegramMessage = {
       message_id: this.nextMessageId++,
       createdAtMs: Date.now(),
       date: Math.floor(Date.now() / 1000),
       chat,
-      message_thread_id: threadId,
-      is_topic_message: true,
+      ...(threadId === null ? {} : { message_thread_id: threadId, is_topic_message: true as const }),
       from,
       text,
       ...(extra.entities ? { entities: extra.entities } : {}),
@@ -698,6 +745,17 @@ export class FakeTelegram {
       }
       case 'sendMessage': {
         if (String(payload.text).length > telegramTextMaxLength) return { ok: false, error_code: 400, description: 'Bad Request: message is too long' };
+        const privateUser = this.privateChatUsers.get(Number(payload.chat_id));
+        if (privateUser) {
+          // A private chat has no topics: the Bot API refuses a send into one that names a topic.
+          if (payload.message_thread_id !== undefined) return { ok: false, error_code: 400, description: 'Bad Request: message thread not found' };
+          return { ok: true, result: this.storeMessage(null, String(payload.text), this.options.botUser, {
+            reply_markup: payload.reply_markup as FakeTelegramMessage['reply_markup'],
+            isSilent: payload.disable_notification === true,
+            ...(typeof payload.parse_mode === 'string' ? { parseMode: payload.parse_mode } : {}),
+          }, getPrivateChat(privateUser)) };
+        }
+        if (this.isPrivateChatStartRequired && Number(payload.chat_id) > 0) return { ok: false, error_code: 403, description: "Forbidden: bot can't initiate conversation with a user" };
         const message = this.storeMessage(Number(payload.message_thread_id ?? generalTopicThreadId), String(payload.text), this.options.botUser, {
           reply_markup: payload.reply_markup as FakeTelegramMessage['reply_markup'],
           isSilent: payload.disable_notification === true,

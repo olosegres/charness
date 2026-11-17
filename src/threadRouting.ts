@@ -181,6 +181,41 @@ export function checkIsDmThreadKey(
 }
 
 /**
+ * @description Is `key` the main thread of a private chat — the bot's chat with ONE person, which has no topics ({@link DM_GENERAL_THREAD_ID})?
+ * Whoever the person is: the owner's DM (the served DM surface) and any other person's chat alike. A send there carries NO
+ * `message_thread_id` (Telegram answers a thread id in a private chat with «message thread not found»), and the chat id is the person's user id.
+ */
+export function checkIsPrivateChatMainKey(key: SessionKey): boolean {
+  return checkIsTelegramKey(key) && getTelegramThreadId(key) === DM_GENERAL_THREAD_ID;
+}
+
+/** @description The key of the main thread of the bot's private chat with the person whose Telegram user id is `userId`. */
+export function createPrivateChatKey(userId: number): SessionKey {
+  return makeTelegramKey(userId, DM_GENERAL_THREAD_ID);
+}
+
+/** What {@link getOwnPrivateChatKey} reads of an update. */
+export interface OwnPrivateChatInput {
+  chatType: string | undefined;
+  chatId: number | undefined;
+  userId: number | undefined;
+  /** The user ids (as strings, the admin cache's form) of the served group's creator and administrators. */
+  adminIds: ReadonlySet<string>;
+}
+
+/**
+ * @description The key of a PRIVATE chat that is the sender's own, when the sender is an administrator of the served group — else `null`.
+ * It is the gate of the few buttons a group admin may tap in their own chat with the bot (the «jobs at once» row of a pairing line the
+ * bot sent them there): the DM SURFACE stays the owner's alone (`resolveDmThreadKey`), and a chat that is not the sender's (a private
+ * chat's id is its person's user id, so a tap on a message of someone else's chat cannot match) or a sender who is no admin opens nothing.
+ */
+export function getOwnPrivateChatKey(input: OwnPrivateChatInput): SessionKey | null {
+  if (input.chatType !== 'private' || input.chatId === undefined || input.userId === undefined) return null;
+  if (input.chatId !== input.userId || !input.adminIds.has(input.userId.toString())) return null;
+  return createPrivateChatKey(input.userId);
+}
+
+/**
  * @description Resolve the `SessionKey` for an update across BOTH surfaces, per
  * {@link ChatMode}. The two resolvers are disjoint (a private chat vs. a forum
  * supergroup), so trying both in `both` is unambiguous — an update matches at

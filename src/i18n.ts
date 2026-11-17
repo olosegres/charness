@@ -200,7 +200,8 @@ export function t(code: string, opts?: Record<string, string | number>): string 
   }
   if (opts) {
     for (const [k, v] of Object.entries(opts)) {
-      template = template.replace(new RegExp(`\\{${k}\\}`, 'g'), v.toString());
+      // A replacer function: a string would read `$&`, `$'` … in the value (a person's name) as replacement patterns.
+      template = template.replace(new RegExp(`\\{${k}\\}`, 'g'), () => v.toString());
     }
   }
   return template;

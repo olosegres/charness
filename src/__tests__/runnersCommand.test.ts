@@ -28,6 +28,7 @@ import { createRunners, runnersWatchIntervalMs } from '../connectors/telegram/co
 import { readPairingMessages, writePairingMessages } from '../connectors/telegram/runnerPairingMessages';
 import { readLastProbe } from '../remoteRun/runners';
 import { keyToString, type SessionKey } from '../sessionKey';
+import { createPrivateChatKey } from '../threadRouting';
 import { parseProbeOutput } from '../remoteRun/probe';
 import { ensureGateWrapper } from '../runners/gateWrapper';
 import type { HostKeyScanner, HubAddress } from '../runners/hubAddress';
@@ -43,7 +44,7 @@ import { readRunnersOverview, type RunnersOverview } from '../runners/runnersOve
 import { generateEd25519KeyPair } from '../runners/sshKeys';
 import { TELEGRAM_HARD_LIMIT } from '../connectors/telegram/messageSplit';
 import { maxScreenTextChars } from '../utils/runnersScreenPlan';
-import { createCommandHarness, harnessGroup, harnessThreadId, type CommandHarness, type RecordedSend } from './commandModuleHarness';
+import { createCommandHarness, harnessGroup, harnessOperator, harnessThreadId, type CommandHarness, type RecordedSend } from './commandModuleHarness';
 import { createHubFixture, createRedeemFixture, type HubFixture } from './runnersTestKit';
 
 const ownKey = generateEd25519KeyPair('own').publicKey;
@@ -81,6 +82,10 @@ let sendFailsFor: ((text: string) => boolean) | null = null;
  */
 let sendIsUnknownFor: ((text: string) => boolean) | null = null;
 let unknownOutcomeSends: string[] = [];
+/** The chats (Telegram chat ids) Telegram refuses every send to with a 403: a person who never opened a private chat with the bot, or blocked it. */
+let forbiddenChatSpaces = new Set<string>();
+/** Where the NEXT taps on a pairing message's row come from: the admin's own private chat (its key); `null` = the topic the harness stands in. */
+let pairingTapKey: SessionKey | null = null;
 /** What the module told the runners to apply (the entry as the registry held it), and how the runner answers. */
 let appliedGroups: Array<{ name: string; jobsAtOnce: number | undefined }> = [];
 let applyOutcome: RunnerGroupsOutcome = 'applied';
@@ -107,6 +112,7 @@ const editWithHooks: Parameters<typeof createRunners>[0]['editThreadMessageDetai
 };
 
 const sendWithHooks: Parameters<typeof createRunners>[0]['replyToThreadDetailed'] = async (key, text, extra, options) => {
+  if (forbiddenChatSpaces.has(key.space)) return { kind: 'failed', isRetryable: false, isForbidden: true };
   if (sendFailsFor?.(text) === true) return { kind: 'failed', isRetryable: true };
   if (sendIsUnknownFor?.(text) === true) {
     unknownOutcomeSends.push(text);
@@ -135,6 +141,7 @@ function buildPorts(): Parameters<typeof createRunners>[0] {
       return applyOutcome;
     },
     hub: hubFixture.ctx,
+    authorisePairingTap: async () => (harness.isAuthorised ? pairingTapKey ?? harness.foreignChatKey ?? harness.key : null),
     pairingMessagesPath,
     linkNoticesPath,
     cacheDir,
@@ -197,6 +204,11 @@ function findReply(predicate: (reply: RecordedSend) => boolean): RecordedSend {
   return found;
 }
 
+/** The message that carries the pairing line: the latest reply that opens with its explanation. It is sent to the admin's PRIVATE chat; the topic only gets a note about it. */
+function findPairingLine(): RecordedSend {
+  return findReply((reply) => reply.text.startsWith('Pair a runner'));
+}
+
 /** The latest text of a message: its last edit, else what it was sent as. */
 function readMessageText(messageId: number | null): string {
   const lastEdit = [...harness.edits].reverse().find((edit) => edit.messageId === messageId);
@@ -230,6 +242,8 @@ describe('/runners over its ports', () => {
     sendFailsFor = null;
     sendIsUnknownFor = null;
     unknownOutcomeSends = [];
+    forbiddenChatSpaces = new Set();
+    pairingTapKey = null;
     sweepGate = null;
     clockMs = Date.now();
     savedAddress = null;
@@ -386,21 +400,21 @@ describe('/runners over its ports', () => {
 
       // A wrong address says why and keeps asking.
       scanAnswers = { 'wrong.example:22': strangerKey, '127.0.0.1:22': ownKey };
-      assert.equal(await feature.handleRunnersAddressText(harness.key, 'wrong.example'), true);
+      assert.equal(await feature.handleRunnersAddressText(harness.key, 'wrong.example', harnessOperator), true);
       assert.ok(harness.replies.at(-1)?.text.startsWith('⚠️ wrong.example:22 answers with the ssh key SHA256:'), harness.replies.at(-1)?.text);
       assert.ok(harness.replies.at(-1)?.text.endsWith('Send another address, or open /runners again.'));
-      assert.equal(await feature.handleRunnersAddressText(harness.key, 'two words'), true);
+      assert.equal(await feature.handleRunnersAddressText(harness.key, 'two words', harnessOperator), true);
       assert.ok(harness.replies.at(-1)?.text.startsWith('⚠️ the address must be a host name or an IP address'), harness.replies.at(-1)?.text);
       assert.equal(savedAddress, null);
 
       // The right one is saved and the pairing message follows.
       scanAnswers = { 'host.example:2222': ownKey, '127.0.0.1:2222': ownKey };
-      assert.equal(await feature.handleRunnersAddressText(harness.key, 'host.example:2222'), true);
+      assert.equal(await feature.handleRunnersAddressText(harness.key, 'host.example:2222', harnessOperator), true);
       assert.deepEqual(savedAddress, { host: 'host.example', port: 2222 });
-      const pairing = harness.replies.at(-1);
-      assert.ok(pairing?.text.startsWith('Pair a runner — valid 10 minutes, single use;'), pairing?.text);
+      const pairing = findPairingLine();
+      assert.ok(pairing.text.startsWith('Pair a runner — valid 10 minutes, single use;'), pairing.text);
       assert.equal(readPendingFile(hubFixture.ctx.dir).pending.length, 1);
-      assert.equal(await feature.handleRunnersAddressText(harness.key, 'hello'), false, 'the wait ended with the address');
+      assert.equal(await feature.handleRunnersAddressText(harness.key, 'hello', harnessOperator), false, 'the wait ended with the address');
     });
 
     it('"Enter another address" arms the wait and asks for the address', async () => {
@@ -413,7 +427,7 @@ describe('/runners over its ports', () => {
       await harness.tapButton(step?.messageId ?? 0, 'rnr_adother');
       assert.equal(harness.replies.at(-1)?.text, 'Send the address runners will dial, as host or host:port.');
       scanAnswers = { ...scanAnswers, 'other.example:22': ownKey };
-      assert.equal(await feature.handleRunnersAddressText(harness.key, 'other.example'), true);
+      assert.equal(await feature.handleRunnersAddressText(harness.key, 'other.example', harnessOperator), true);
       assert.deepEqual(savedAddress, { host: 'other.example', port: 22 });
     });
 
@@ -426,7 +440,7 @@ describe('/runners over its ports', () => {
       assert.ok(step?.text.includes("Address runners will dial: 203.0.113.5:22 — found on this machine, answers with this machine's ssh key ✓"), step?.text);
       await harness.tapButton(step?.messageId ?? 0, 'rnr_aduse');
       assert.deepEqual(savedAddress, { host: '203.0.113.5', port: 22 });
-      assert.ok(harness.replies.at(-1)?.text.startsWith('Pair a runner'), harness.replies.at(-1)?.text);
+      assert.ok(findPairingLine().text.startsWith('Pair a runner'));
       assert.equal(readPendingFile(hubFixture.ctx.dir).pending[0].host, '203.0.113.5');
     });
 
@@ -444,7 +458,7 @@ describe('/runners over its ports', () => {
       const repliesBefore = harness.replies.length;
       await harness.tapButton(findReply(() => true).messageId ?? 0, 'rnr_pair');
       const sent = harness.replies.slice(repliesBefore);
-      assert.equal(sent.length, 1, 'one message for the code');
+      assert.deepEqual(sent.map((reply) => reply.text.startsWith('Pair a runner')), [true, false], 'one message for the code, then the note in the topic that says where it went');
       const [message] = sent;
       /** The words of an HTML pairing message with the markup taken off: what must go out if Telegram refuses the markup. */
       const decodeHtml = (html: string): string => html.replace(/<\/?pre>/g, '').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
@@ -462,7 +476,7 @@ describe('/runners over its ports', () => {
       const [pending] = readPendingFile(hubFixture.ctx.dir).pending;
       assert.equal(readPendingFile(hubFixture.ctx.dir).pending.length, 1, 'one code');
       assert.equal(pending.messageRef, null, 'the shared registry carries credentials only: no note of this instance\'s message');
-      assert.deepEqual(readPairingMessages(pairingMessagesPath).messages, [{ pairId: pending.pairId, key: keyToString(harness.key), messageId: message.messageId, offeredAtMs: clockMs }]);
+      assert.deepEqual(readPairingMessages(pairingMessagesPath).messages, [{ pairId: pending.pairId, key: keyToString(createPrivateChatKey(harnessOperator.id)), messageId: message.messageId, offeredAtMs: clockMs }], 'the record names the chat the message is in: the admin\'s private one');
       assert.equal(pending.label, '@ExampleBot');
       assert.ok(fs.existsSync(path.join(hubFixture.ctx.dir, 'gate')), 'the gate wrapper the key line runs is in place');
     });
@@ -507,40 +521,213 @@ describe('/runners over its ports', () => {
       assert.ok(harness.replies.at(-1)?.text.startsWith('⚠️ host.example:22 answers with the ssh key'), harness.replies.at(-1)?.text);
       assert.equal(readPendingFile(hubFixture.ctx.dir).pending.length, 0);
       scanAnswers = { 'new.example:22': ownKey, '127.0.0.1:22': ownKey };
-      assert.equal(await feature.handleRunnersAddressText(harness.key, 'new.example'), true);
+      assert.equal(await feature.handleRunnersAddressText(harness.key, 'new.example', harnessOperator), true);
       assert.deepEqual(savedAddress, { host: 'new.example', port: 22 });
     });
 
     it('the typed address is read only in General, only while awaited, and a slash command ends the wait', async () => {
-      assert.equal(await feature.handleRunnersAddressText(harness.key, 'host.example'), false, 'nothing asked yet');
+      assert.equal(await feature.handleRunnersAddressText(harness.key, 'host.example', harnessOperator), false, 'nothing asked yet');
       await harness.tapButton(900, 'rnr_adother');
       harness.isGeneral = false;
-      assert.equal(await feature.handleRunnersAddressText(harness.key, 'host.example'), false, 'not General: left alone');
+      assert.equal(await feature.handleRunnersAddressText(harness.key, 'host.example', harnessOperator), false, 'not General: left alone');
       harness.isGeneral = true;
-      assert.equal(await feature.handleRunnersAddressText(harness.key, '/status'), false, 'a command goes on to run');
-      assert.equal(await feature.handleRunnersAddressText(harness.key, 'host.example'), false, 'and it ended the wait');
+      assert.equal(await feature.handleRunnersAddressText(harness.key, '/status', harnessOperator), false, 'a command goes on to run');
+      assert.equal(await feature.handleRunnersAddressText(harness.key, 'host.example', harnessOperator), false, 'and it ended the wait');
     });
 
     it('cancelRunnersAddressWait ends the wait — what the text handler does for any slash command, a bot command included', async () => {
       await harness.tapButton(900, 'rnr_adother');
       feature.cancelRunnersAddressWait(harness.key);
-      assert.equal(await feature.handleRunnersAddressText(harness.key, 'host.example'), false);
+      assert.equal(await feature.handleRunnersAddressText(harness.key, 'host.example', harnessOperator), false);
       assert.equal(savedAddress, null);
     });
 
     it('an address typed after the wait ran out is not taken', async () => {
       await harness.tapButton(900, 'rnr_adother');
       clockMs += 11 * minute;
-      assert.equal(await feature.handleRunnersAddressText(harness.key, 'host.example'), false);
+      assert.equal(await feature.handleRunnersAddressText(harness.key, 'host.example', harnessOperator), false);
     });
 
     it('a typed address that is only unverified (this machine\'s own sshd could not be read) is accepted with the note, before the pairing message', async () => {
       await harness.tapButton(900, 'rnr_adother');
       scanAnswers = { 'host.example:22': ownKey };
-      assert.equal(await feature.handleRunnersAddressText(harness.key, 'host.example'), true);
+      assert.equal(await feature.handleRunnersAddressText(harness.key, 'host.example', harnessOperator), true);
       const texts = harness.replies.map((reply) => reply.text);
-      assert.ok(texts.some((text) => text.startsWith("ℹ️ this machine's own sshd could not be read on 127.0.0.1:22")), texts.join(' | '));
-      assert.ok(texts.at(-1)?.startsWith('Pair a runner'));
+      const noteIndex = texts.findIndex((text) => text.startsWith("ℹ️ this machine's own sshd could not be read on 127.0.0.1:22"));
+      assert.ok(noteIndex >= 0, texts.join(' | '));
+      assert.ok(texts.findIndex((text) => text.startsWith('Pair a runner')) > noteIndex, 'the note comes before the pairing message');
+    });
+  });
+
+  describe('the pairing line goes to the admin in a private message, not into the topic', () => {
+    const privateKey = createPrivateChatKey(harnessOperator.id);
+    /** What the topic says when the line went to the operator of the harness, whose first name is «Operator». */
+    const sentPrivatelyNote = 'The pairing line was sent to Operator in a private message.';
+    const isInTopic = (reply: RecordedSend): boolean => keyToString(reply.key) === keyToString(harness.key);
+
+    async function startKnownAddressPairing(): Promise<void> {
+      savedAddress = { host: 'host.example', port: 22 };
+      scanAnswers = { 'host.example:22': ownKey, '127.0.0.1:22': ownKey };
+      await harness.runCommand('runners');
+      await harness.tapButton(findReply(() => true).messageId ?? 0, 'rnr_pair');
+    }
+
+    it('the line (with its «jobs at once» row) is sent to the admin who tapped, in their private chat; the topic gets one plain note and never the line', async () => {
+      await startKnownAddressPairing();
+      const line = findPairingLine();
+      assert.equal(keyToString(line.key), keyToString(privateKey), 'the private chat of the admin who tapped');
+      assert.deepEqual(line.options && 'isSecret' in line.options ? line.options.isSecret : null, true, 'still a secret for the trace');
+      const [pending] = readPendingFile(hubFixture.ctx.dir).pending;
+      assert.deepEqual(harness.getKeyboardData(line), [['rnr_pjinfo'], [1, 2, 3, 4].map((count) => `rnr_pj_${pending.pairId}_${count}`)], 'the row goes with the line');
+      const topicTexts = harness.replies.filter(isInTopic).map((reply) => reply.text);
+      assert.ok(topicTexts.includes(sentPrivatelyNote), topicTexts.join(' | '));
+      assert.ok(topicTexts.every((text) => !text.startsWith('Pair a runner') && !text.includes('cr2.') && !text.includes('sh -c')), 'no line, no explanation of it, in the topic');
+      assert.equal(keyToString(findReply((reply) => reply.text === sentPrivatelyNote).key), keyToString(harness.key), 'the note stands in the topic');
+      assert.deepEqual(readPairingMessages(pairingMessagesPath).messages.map((message) => [message.pairId, message.key, message.messageId]), [[pending.pairId, keyToString(privateKey), line.messageId]]);
+    });
+
+    it('the admin who TYPED the address gets the line — whoever sends the next message is the one who asked, not the operator of the harness', async () => {
+      await harness.runCommand('runners');
+      await harness.tapButton(findReply(() => true).messageId ?? 0, 'rnr_pair');
+      scanAnswers = { 'host.example:22': ownKey, '127.0.0.1:22': ownKey };
+      const typist = { id: 777000777, is_bot: false, first_name: 'Typist' };
+      assert.equal(await feature.handleRunnersAddressText(harness.key, 'host.example', typist), true);
+      assert.equal(keyToString(findPairingLine().key), keyToString(createPrivateChatKey(typist.id)));
+      assert.equal(harness.replies.filter(isInTopic).some((reply) => reply.text.startsWith('Pair a runner')), false);
+      assert.ok(harness.replies.filter(isInTopic).some((reply) => reply.text === 'The pairing line was sent to Typist in a private message.'), 'the note names the one who typed the address, not whoever asked for the step');
+    });
+
+    it('the note names WHO got the line — the first name of the one whose tap made it — so that an admin who asked and did not get it looks in the right chat; a name goes out as HTML, escaped, with its plain twin showing it as written', async () => {
+      const asker = { id: 888000888, is_bot: false, first_name: 'Ann <b>&</b> Co' };
+      await harness.runCommand('runners');
+      const list = findReply(() => true).messageId ?? 0;
+      savedAddress = { host: 'host.example', port: 22 };
+      scanAnswers = { 'host.example:22': ownKey, '127.0.0.1:22': ownKey };
+      await harness.tapButton(list, 'rnr_pair', asker);
+      assert.equal(keyToString(findPairingLine().key), keyToString(createPrivateChatKey(asker.id)));
+      const note = findReply((reply) => reply.text.startsWith('The pairing line was sent to'));
+      assert.equal(note.text, 'The pairing line was sent to Ann &lt;b&gt;&amp;&lt;/b&gt; Co in a private message.', 'escaped for HTML');
+      assert.deepEqual(note.extra, { parse_mode: 'HTML' });
+      assert.deepEqual(note.options, { plainFallbackText: 'The pairing line was sent to Ann <b>&</b> Co in a private message.' }, 'the plain twin, for a refusal of the markup, shows the name as it is');
+      assert.equal(keyToString(note.key), keyToString(harness.key), 'in the topic');
+    });
+
+    it('a name with `$` in it is shown as written — it is a value to put in, never a replacement pattern', async () => {
+      await harness.runCommand('runners');
+      savedAddress = { host: 'host.example', port: 22 };
+      scanAnswers = { 'host.example:22': ownKey, '127.0.0.1:22': ownKey };
+      await harness.tapButton(findReply(() => true).messageId ?? 0, 'rnr_pair', { id: 888000889, is_bot: false, first_name: "Cash $& $' $1" });
+      assert.equal(findReply((reply) => reply.text.startsWith('The pairing line was sent to')).text, "The pairing line was sent to Cash $&amp; $' $1 in a private message.");
+    });
+
+    it('with no usable first name the note names the @username, and with neither it says «you» — never a blank or «undefined»', async () => {
+      savedAddress = { host: 'host.example', port: 22 };
+      scanAnswers = { 'host.example:22': ownKey, '127.0.0.1:22': ownKey };
+      await harness.runCommand('runners');
+      const list = findReply(() => true).messageId ?? 0;
+      await harness.tapButton(list, 'rnr_pair', { id: 888000890, is_bot: false, first_name: '  ', username: 'ann_example' });
+      assert.equal(findReply((reply) => reply.text.startsWith('The pairing line was sent to')).text, 'The pairing line was sent to @ann_example in a private message.');
+      await harness.tapButton(list, 'rnr_pair', { id: 888000891, is_bot: false, first_name: '' });
+      assert.equal(harness.replies.at(-1)?.text, 'The pairing line was sent to you in a private message.');
+      assert.equal(harness.replies.at(-1)?.extra, undefined, 'the plain wording needs no markup');
+      assert.equal(keyToString(findPairingLine().key), keyToString(createPrivateChatKey(888000891)), 'the line went to them all the same');
+    });
+
+    it('«paired» and «expired» are edits of the PRIVATE message — it is the message the record follows — and the topic is not touched', async () => {
+      await startKnownAddressPairing();
+      const paired = findPairingLine();
+      await redeemPairing(hubFixture.ctx, readPendingFile(hubFixture.ctx.dir).pending[0].pairId, createRedeemFixture({ suggestedName: 'Mac Mini' }).request, clockMs);
+      await feature.watchPairingsOnce();
+      assert.deepEqual(harness.edits.map((edit) => [keyToString(edit.key), edit.messageId]), [[keyToString(privateKey), paired.messageId]]);
+      assert.match(harness.edits[0].text, /^Runner “mac-mini” paired /);
+
+      await harness.tapButton(findReply(() => true).messageId ?? 0, 'rnr_pair');
+      const expiring = findPairingLine();
+      assert.notEqual(expiring.messageId, paired.messageId);
+      clockMs += pairingLifetimeMs + 1;
+      await feature.watchPairingsOnce();
+      assert.deepEqual(harness.edits.slice(1).map((edit) => [keyToString(edit.key), edit.messageId, edit.text]), [[keyToString(privateKey), expiring.messageId, 'Pairing code expired.']]);
+      assert.deepEqual(readPairingMessages(pairingMessagesPath).messages, []);
+    });
+
+    it('a tap on the row in the admin\'s own private chat is accepted — a chat that is not General — and sets the number; the same chat opens no other button', async () => {
+      await startKnownAddressPairing();
+      const line = findPairingLine();
+      const { pairId } = readPendingFile(hubFixture.ctx.dir).pending[0];
+      harness.isGeneral = false;
+      pairingTapKey = privateKey;
+      await harness.tapButton(line.messageId ?? 0, `rnr_pj_${pairId}_3`);
+      assert.equal(harness.fakeTelegram.callbackAnswers.at(-1), 'The new machine will run 3 at once.');
+      assert.equal(readPendingFile(hubFixture.ctx.dir).pending[0].jobsAtOnce, 3);
+      assert.equal(keyboardEdits.at(-1)?.messageId, line.messageId);
+      await harness.tapButton(line.messageId ?? 0, 'rnr_pjinfo');
+      assert.equal(harness.fakeTelegram.callbackAnswers.at(-1), 'How many jobs the new machine runs side by side. It can be changed later in /runners.');
+
+      // Any other button of /runners stands in General only, a private chat of an admin included.
+      harness.foreignChatKey = privateKey;
+      await harness.tapButton(line.messageId ?? 0, 'rnr_refresh');
+      assert.equal(harness.fakeTelegram.callbackAnswers.at(-1), '⚠️ Runners are managed in General — open /runners there.');
+    });
+
+    it('a tap the gate refuses (not an admin, or not their own chat) sets nothing', async () => {
+      await startKnownAddressPairing();
+      const line = findPairingLine();
+      const { pairId } = readPendingFile(hubFixture.ctx.dir).pending[0];
+      harness.isAuthorised = false;
+      await harness.tapButton(line.messageId ?? 0, `rnr_pj_${pairId}_3`);
+      assert.equal(harness.fakeTelegram.callbackAnswers.at(-1), 'Access denied');
+      assert.equal(readPendingFile(hubFixture.ctx.dir).pending[0].jobsAtOnce, undefined);
+    });
+
+    it('the command typed in a private chat that is already the admin\'s own (the owner\'s DM): the line is posted right there, with no note to point elsewhere', async () => {
+      savedAddress = { host: 'host.example', port: 22 };
+      scanAnswers = { 'host.example:22': ownKey, '127.0.0.1:22': ownKey };
+      await harness.runCommand('runners');
+      harness.foreignChatKey = privateKey;
+      await harness.tapButton(findReply(() => true).messageId ?? 0, 'rnr_pair');
+      assert.equal(keyToString(findPairingLine().key), keyToString(privateKey));
+      assert.equal(harness.replies.some((reply) => reply.text === sentPrivatelyNote), false, 'no note: nothing was sent anywhere else');
+      assert.equal(harness.replies.filter((reply) => reply.text.startsWith('Pair a runner')).length, 1, 'one line');
+      assert.deepEqual(readPairingMessages(pairingMessagesPath).messages.map((message) => message.key), [keyToString(privateKey)]);
+    });
+
+    it('Telegram\'s 403 (the admin never opened a private chat with the bot, or blocked it): a line says how to receive it privately next time — naming the bot — and the line follows in the topic, with its row, as before', async () => {
+      forbiddenChatSpaces.add(privateKey.space);
+      await startKnownAddressPairing();
+      const topicReplies = harness.replies.filter(isInTopic);
+      const hintIndex = topicReplies.findIndex((reply) => reply.text.includes('@ExampleBot'));
+      assert.ok(hintIndex >= 0, topicReplies.map((reply) => reply.text).join(' | '));
+      assert.equal(topicReplies[hintIndex].text, 'To get the pairing line in a private message next time, open a private chat with @ExampleBot and press Start. This time the line follows here:');
+      const line = findPairingLine();
+      assert.equal(keyToString(line.key), keyToString(harness.key), 'the line is in the topic');
+      assert.equal(topicReplies.indexOf(line), hintIndex + 1, 'right after the hint');
+      assert.equal(harness.replies.some((reply) => reply.text === sentPrivatelyNote), false, 'and no claim that it was sent privately');
+      const { pairId } = readPendingFile(hubFixture.ctx.dir).pending[0];
+      assert.deepEqual(harness.getKeyboardData(line), [['rnr_pjinfo'], [1, 2, 3, 4].map((count) => `rnr_pj_${pairId}_${count}`)]);
+      assert.deepEqual(readPairingMessages(pairingMessagesPath).messages.map((message) => [message.key, message.messageId]), [[keyToString(harness.key), line.messageId]], 'the record follows the message that exists');
+      assert.equal(readPendingFile(hubFixture.ctx.dir).pending.length, 1, 'the code stays open: its line is out');
+    });
+
+    it('any other failure of the private send is a failure of the offer, as it always was: ONE try, the code is closed, nothing reaches the topic but the failure', async () => {
+      let attempts = 0;
+      sendFailsFor = (text) => {
+        if (text.startsWith('Pair a runner')) attempts += 1;
+        return text.startsWith('Pair a runner');
+      };
+      await startKnownAddressPairing();
+      assert.equal(attempts, 1, 'no second try in the topic');
+      assert.equal(harness.replies.at(-1)?.text, '⚠️ Could not make a pairing line: the message could not be sent');
+      assert.equal(harness.replies.some((reply) => reply.text === sentPrivatelyNote || reply.text.includes('@ExampleBot')), false);
+      assert.equal(readPendingFile(hubFixture.ctx.dir).pending.length, 0, 'the code is closed');
+      assert.deepEqual(readPairingMessages(pairingMessagesPath).messages, []);
+    });
+
+    it('a private send with no answer in time may have landed but has no known id: it counts as not sent — the code is closed and the line is not posted a second time in the topic', async () => {
+      sendIsUnknownFor = (text) => text.startsWith('Pair a runner');
+      await startKnownAddressPairing();
+      assert.equal(unknownOutcomeSends.length, 1, 'one try');
+      assert.equal(harness.replies.at(-1)?.text, '⚠️ Could not make a pairing line: the message could not be sent');
+      assert.equal(readPendingFile(hubFixture.ctx.dir).pending.length, 0);
     });
   });
 
@@ -555,9 +742,9 @@ describe('/runners over its ports', () => {
       savedAddress = { host: 'host.example', port: 22 };
       scanAnswers = { 'host.example:22': ownKey, '127.0.0.1:22': ownKey };
       await harness.tapButton(900, 'rnr_pair');
-      const message = harness.replies.at(-1);
+      const message = findPairingLine();
       const [pending] = readPendingFile(hubFixture.ctx.dir).pending.slice(-1);
-      assert.ok(message?.messageId !== null && message?.messageId !== undefined);
+      assert.ok(message.messageId !== null);
       return { messageId: message.messageId, pairId: pending.pairId };
     }
 
@@ -1140,9 +1327,9 @@ describe('/runners over its ports', () => {
         savedAddress = { host: 'host.example', port: 22 };
         scanAnswers = { 'host.example:22': ownKey, '127.0.0.1:22': ownKey };
         await harness.tapButton(900, 'rnr_pair');
-        const message = harness.replies.at(-1);
+        const message = findPairingLine();
         const [pending] = readPendingFile(hubFixture.ctx.dir).pending.slice(-1);
-        assert.ok(message?.messageId !== null && message?.messageId !== undefined);
+        assert.ok(message.messageId !== null);
         return { messageId: message.messageId, pairId: pending.pairId };
       }
 
