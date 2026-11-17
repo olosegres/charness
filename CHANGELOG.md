@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 4.1.1 — 2026-11-17
+
 **The pairing line of `/runners` — a secret that lets whoever holds it pair a machine to your host — now comes to you in a private message from the bot, no longer in General, where every member of the group could read it.**
 Before, **＋ Pair a new runner** posted the line in General, readable by anyone in the group (topic talkers included) for the ten minutes it lives. Now the bot sends it to the admin who tapped the button (or typed the address it asked for) in that admin's private chat with the bot, as the same message — the explanation, the line, the row that picks how many jobs the new machine runs at once — and General gets one plain line that names who got it — «The pairing line was sent to <their first name> in a private message.» (their @username, or «you», if Telegram gave no first name) — so an admin who asked but did not get the line, because another admin used the address they were offered, looks in the right chat. The row works in that chat (a tap there is accepted from a group admin because the chat is theirs, also when they are not the owner and the bot serves no private chat of theirs), and the message turns into «paired» or «expired» there as it did in General. An admin who never opened a private chat with the bot (Telegram refuses with 403), or who blocked it, gets the line in General as before, after a line that says to open a private chat with the bot — named by its @username — and press Start so the next one comes privately; any other failure to send it still closes the code. The owner who runs `/runners` in their own private chat with the bot has the line right there, with no note. Pairing messages recorded by an earlier version still turn into «paired» or «expired».
 
