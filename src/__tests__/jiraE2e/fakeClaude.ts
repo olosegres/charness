@@ -16,6 +16,9 @@ import {
   fakeAskLongDescription,
   fakeAskNoAnswerOutcome,
   fakeAskQuestion,
+  fakeAskSetAsideOutcome,
+  fakeAskSetAsideTurnText,
+  fakeSetAsideDenyMessagePrefix,
   fakeAskSecondQuestion,
   fakeAskToolName,
   fakeAskTwoOutcomeSeparator,
@@ -553,8 +556,8 @@ interface StdinFrame {
   request_id?: string;
   request?: { subtype?: string; serverName?: string };
   message?: { content?: string };
-  /** A `control_response` the bot wrote: the verdict on a `can_use_tool` request, with the answers an `AskUserQuestion` collected. */
-  response?: { request_id?: string; response?: { behavior?: string; updatedInput?: { answers?: Record<string, string> } } };
+  /** A `control_response` the bot wrote: the verdict on a `can_use_tool` request — a deny's message, or the answers an `AskUserQuestion` collected. */
+  response?: { request_id?: string; response?: { behavior?: string; message?: string; updatedInput?: { answers?: Record<string, string> } } };
 }
 
 function appendJsonLine(fileName: string, record: object): void {
@@ -578,6 +581,7 @@ function readMcpServers(): FakeClaudeMcpServer[] {
  * `mcp_reconnect` is logged and, for a server it lists, leaves it `connected`; every other request (the `initialize` handshake) gets an empty one.
  */
 function answerControlRequest(frame: StdinFrame): object {
+  appendJsonLine(fakeClaudeLogFileNames.controlRequests, { readAt: Date.now(), pid: process.pid, subtype: frame.request?.subtype ?? null });
   if (frame.request?.subtype === 'mcp_status') return { mcpServers: readMcpServers() };
   if (frame.request?.subtype === 'mcp_reconnect' && frame.request.serverName !== undefined) {
     const serverName = frame.request.serverName;
@@ -1033,8 +1037,21 @@ interface FakeAskedQuestion {
   options: { label: string; description: string }[];
 }
 
-/** The `can_use_tool` requests the fake is blocked on, by `request_id`: resolved with the answers the bot's `control_response` carries. */
-const controlResponseWaiters = new Map<string, (answers: Record<string, string>) => void>();
+/** What the bot's `control_response` to a `can_use_tool` request says: its verdict, a deny's message, and the answers an allow carries. */
+interface FakeControlVerdict {
+  behavior: string | null;
+  message: string | null;
+  answers: Record<string, string>;
+}
+
+/** What an ask turn got back: the outcome it logs, and whether the bot SET the question aside (a deny that tells the agent to go on). */
+interface FakeAskResult {
+  outcome: string;
+  isSetAside: boolean;
+}
+
+/** The `can_use_tool` requests the fake is blocked on, by `request_id`: resolved with the verdict the bot's `control_response` carries. */
+const controlResponseWaiters = new Map<string, (verdict: FakeControlVerdict) => void>();
 
 /** What an ask-mode turn puts: the one question, it and a second one in the same call, or the one with very long option descriptions. */
 type FakeAskVariant = 'one' | 'two' | 'long';
@@ -1046,9 +1063,9 @@ const fakeAskVariantByMode: Partial<Record<FakeClaudeMode, FakeAskVariant>> = { 
  * writes the matching `control_response` on stdin. Resolves with what the user answered to the question — with the `two`
  * variant the call carries a second question too, and it resolves with both answers, joined.
  */
-async function askUserQuestion(variant: FakeAskVariant = 'one'): Promise<string> {
+async function askUserQuestion(variant: FakeAskVariant = 'one'): Promise<FakeAskResult> {
   const askRequestId = `req_ask_${randomUUID()}`;
-  const answered = new Promise<Record<string, string>>((resolve) => controlResponseWaiters.set(askRequestId, resolve));
+  const answered = new Promise<FakeControlVerdict>((resolve) => controlResponseWaiters.set(askRequestId, resolve));
   const questions: FakeAskedQuestion[] = [{
     header: fakeAskQuestion.header,
     question: fakeAskQuestion.question,
@@ -1090,8 +1107,33 @@ async function askUserQuestion(variant: FakeAskVariant = 'one'): Promise<string>
     fs.rmSync(nextOutputPath, { force: true });
     writeStdout({ type: 'stream_event', event: { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text } } });
   }, fakeOutputWhileAskedPollMs);
-  const answers = await answered.finally(() => clearInterval(nextOutputPoll));
-  return questions.map((question) => answers[question.question] ?? fakeAskNoAnswerOutcome).join(fakeAskTwoOutcomeSeparator);
+  const verdict = await answered.finally(() => clearInterval(nextOutputPoll));
+  if (verdict.behavior === 'deny' && verdict.message?.startsWith(fakeSetAsideDenyMessagePrefix)) return { outcome: fakeAskSetAsideOutcome, isSetAside: true };
+  return { outcome: questions.map((question) => verdict.answers[question.question] ?? fakeAskNoAnswerOutcome).join(fakeAskTwoOutcomeSeparator), isSetAside: false };
+}
+
+/**
+ * The end of a turn whose question the bot set aside: the agent GOES ON, which shows as text it streams after the deny (a turn whose
+ * result alone carries a text shows nothing in a topic that already got the turn's earlier text), then the turn's own end.
+ */
+function endTurnAfterSetAsideQuestion(sessionId: string): void {
+  writeStdout({ type: 'stream_event', event: { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: fakeAskSetAsideTurnText } } });
+  endTurn(sessionId, fakeAskSetAsideTurnText);
+}
+
+/**
+ * `[fake:schedule-once <seconds> <label>]` (see `fakeScheduleOnceToken`): create the one-shot prompt schedule the token names,
+ * on the bot's MCP, BEFORE the turn asks its question — the bot then delivers a prompt of its own while the question waits.
+ */
+const scheduleOnceRe = /\[fake:schedule-once (\d+) ([^\]]+)\]/;
+
+async function armScheduledPrompt(argv: readonly string[], content: string, issueKey: string): Promise<void> {
+  const token = scheduleOnceRe.exec(content);
+  if (!token) return;
+  const server = getBotMcpServer(argv);
+  if (!server) throw new Error('schedule-once needs the bot MCP server in --mcp-config');
+  const args = { name: `queued ${token[2]}`, onceAt: new Date(Date.now() + Number(token[1]) * 1000).toISOString(), prompt: `${token[2]} [fake:answer] scheduled` };
+  appendJsonLine(fakeClaudeLogFileNames.toolCalls, { issueKey, tool: 'schedule_create', args, outcome: await callBotTool(server, 'schedule_create', args) });
 }
 
 /** The transcript's records as objects, a line that is no JSON skipped. */
@@ -1299,7 +1341,13 @@ async function runTurn(argv: readonly string[], sessionId: string, content: stri
     }
     const noRequestAskVariant = noRequestMode === undefined ? undefined : fakeAskVariantByMode[noRequestMode as FakeClaudeMode];
     if (noRequestAskVariant) {
-      appendJsonLine(fakeClaudeLogFileNames.toolCalls, { issueKey: noRequestIssueKey, tool: fakeAskToolName, args: { question: fakeAskQuestion.question }, outcome: await askUserQuestion(noRequestAskVariant) });
+      await armScheduledPrompt(argv, content, noRequestIssueKey);
+      const asked = await askUserQuestion(noRequestAskVariant);
+      appendJsonLine(fakeClaudeLogFileNames.toolCalls, { issueKey: noRequestIssueKey, tool: fakeAskToolName, args: { question: fakeAskQuestion.question }, outcome: asked.outcome });
+      if (asked.isSetAside) {
+        endTurnAfterSetAsideQuestion(sessionId);
+        return;
+      }
     }
     endTurn(sessionId, 'Nothing to do.');
     if (noRequestMode === 'background-notify') {
@@ -1393,7 +1441,13 @@ async function runTurn(argv: readonly string[], sessionId: string, content: stri
   }
   const askVariant = fakeAskVariantByMode[state.mode];
   if (askVariant) {
-    logToolCall(fakeAskToolName, { question: fakeAskQuestion.question }, await askUserQuestion(askVariant));
+    await armScheduledPrompt(argv, content, state.issueKey);
+    const asked = await askUserQuestion(askVariant);
+    logToolCall(fakeAskToolName, { question: fakeAskQuestion.question }, asked.outcome);
+    if (asked.isSetAside) {
+      endTurnAfterSetAsideQuestion(sessionId);
+      return;
+    }
   }
   if (state.mode === 'run-tool') {
     const ran = spawnSync(probeToolName, [], { encoding: 'utf8' });
@@ -1495,10 +1549,15 @@ async function main(): Promise<void> {
       return;
     }
     if (frame.type === 'control_response') {
+      const verdictBody = frame.response?.response;
+      appendJsonLine(fakeClaudeLogFileNames.controlResponses, {
+        readAt: Date.now(), pid: process.pid, requestId: frame.response?.request_id ?? null, behavior: verdictBody?.behavior ?? null,
+        message: verdictBody?.message ?? null, answerCount: Object.keys(verdictBody?.updatedInput?.answers ?? {}).length,
+      });
       const waiter = frame.response?.request_id ? controlResponseWaiters.get(frame.response.request_id) : undefined;
       if (waiter && frame.response?.request_id) {
         controlResponseWaiters.delete(frame.response.request_id);
-        waiter(frame.response.response?.updatedInput?.answers ?? {});
+        waiter({ behavior: verdictBody?.behavior ?? null, message: verdictBody?.message ?? null, answers: verdictBody?.updatedInput?.answers ?? {} });
       }
       return;
     }

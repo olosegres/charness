@@ -271,6 +271,7 @@ export const hiDict: Record<string, string> = {
   'agent.question_answered_note': '✅ उत्तर: {answer}',
   'agent.question_unanswered_note': '❌ अनुत्तरित',
   'agent.question_asked_again_note': '↓ नीचे दोबारा पूछा गया',
+  'agent.question_set_aside_note': '⏸ एजेंट आपके उत्तर के बिना आगे बढ़ गया — आप अब भी उत्तर दे सकते हैं',
   'agent.login_code_relayed': '🔐 लॉगिन कोड Claude को भेजा गया — टोकन संदेश इतिहास से हटाया गया।',
   'agent.login_url': '🔐 Claude में साइन इन करने के लिए यह लिंक खोलें, साइन-इन पूरा करें, फिर कोड यहाँ पेस्ट करें:\n{url}',
   'agent.login_success': '✅ Claude में साइन इन हो गए।',

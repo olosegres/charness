@@ -12,6 +12,7 @@ import { pendingWorkHoldDefaultMs } from './utils/jsonStreamPendingWork';
 import { basePollIntervalMs } from './utils/pollBackoff';
 import { claudeApiCreditRecheckIntervalMs, claudeApiCreditRecheckPollMs } from './utils/claudeApiCreditRecheck';
 import { todoReminderDefaultMinutes } from './todos/nag';
+import { longestQuestionWaitMs } from './utils/questionWaitPlan';
 import { todoReminderPollMs } from './todos/reminderEngine';
 import { minFireIntervalMs } from './scheduler/recurrence';
 import { defaultCheckStatusEveryMinutes } from './scheduler/checkStatus';
@@ -30,7 +31,7 @@ import { runnerWaitPollMinMs, runnerWaitPollMs } from './remoteRun/runnerWaitTim
  * Jira poll's 10 s floor, the wake-up engine's 10 s turn poll and its sweep's minute, the first re-post retry's minute, the 30 s stagger of the wakes after a restart, the two-minute probe of an
  * unconfirmed usage limit, `state.json`'s save debounce, the OpenCode server's 60 s of retries, the 6 h pending-work hold, the 300 ms to the first read of an adopted json-stream session's output, the 15-minute gap of a passing check's status lines, the
  * todo reminder's 10 s poll and its interval, the 24 h between two rechecks of a used-up API credit and the 30 min poll that finds one due, the 45 s heartbeat lease of a foreground `charness remote-run` and its 10 s poll while it waits for a paired runner, and — a count, not a window —
- * the 200 `/bind` picker claims). It is NOT a setting: no
+ * the 200 `/bind` picker claims, and the question wait: how long an unanswered agent question waits before it is set aside). It is NOT a setting: no
  * operator sets it and it is documented only for developers (DEVELOPMENT.md); settings live in `settings.json`.
  *
  * Unset (every production instance) = every built-in window as it is. Set, it is validated strictly at boot: an unknown
@@ -114,6 +115,8 @@ const testTimingsSchema = z.strictObject({
   creditRecheckIntervalMs: createShorterWindowSchema(claudeApiCreditRecheckIntervalMs).optional(),
   /** How often the bot looks for an API account whose recheck day is up (production: `claudeApiCreditRecheckPollMs`, 30 min). */
   creditRecheckPollMs: createShorterWindowSchema(claudeApiCreditRecheckPollMs).optional(),
+  /** The question wait, cut to at most this (production: `longestQuestionWaitMs`, the hour the setting's longest finite choice waits); `Don't wait` and `Wait for my answer` stay as they are. */
+  questionSetAsideWaitMs: createShorterWindowSchema(longestQuestionWaitMs).optional(),
   /** How often the hot supervisor compares its `tsc -w` with the sources (production: `tscWatchCheckIntervalMs`, 30 s). Read by `charness hot`, not by the bot. */
   tscWatchCheckIntervalMs: createShorterWindowSchema(tscWatchCheckIntervalMs).optional(),
   /** How long a source may stay newer than its output before the hot supervisor blames its `tsc -w` (production: `tscWatchStaleGraceMs`, 1 min). Read by `charness hot`, not by the bot. */

@@ -71,6 +71,8 @@ import {
   type QuestionEnd,
 } from './openCodeQuestionFlow';
 import { checkShouldRepostPendingQuestion } from './pendingQuestionRepost';
+import { createQuestionSetAside } from './connectors/telegram/commands/questionSetAside';
+import { resolveQuestionWait } from './utils/questionWaitPlan';
 import {
   enqueueSend,
   sendUnpaced,
@@ -1887,6 +1889,24 @@ function clearPendingQuestion(key: SessionKey): void {
   state.clearPendingQuestion(key).catch(e =>
     console.error('[pendingQuestion] clear failed:', e),
   );
+  clearQuestionRepostState(key);
+  clearQuestionSetAsideTimer(key);
+}
+
+/**
+ * @description Take a thread's pending question out of the pending state because the bot SET IT ASIDE (the question wait ended,
+ * the agent went on): memory, saved state and the re-post bookkeeping, like {@link clearPendingQuestion} — but the question's pin
+ * is NOT removed. The pinned message stays pinned and belongs to the set-aside record now: the map entry that tracks «the pinned
+ * question» is dropped without unpinning, so the pin of a question the agent asks next neither retires it nor counts as a
+ * re-pin (which is silent). Taken under the pin lock, after any pin of this question that is still in flight.
+ */
+async function releasePendingQuestionToSetAside(key: SessionKey): Promise<void> {
+  const kStr = keyToString(key);
+  await questionPinLock.withLock(kStr, async () => {
+    questionPinnedMessageId.delete(kStr);
+  });
+  pendingQuestions.delete(kStr);
+  await state.clearPendingQuestion(key);
   clearQuestionRepostState(key);
 }
 
@@ -6443,6 +6463,25 @@ const {
   closeOrphanQuestionMessage,
   notePersonActivity,
   compactSelfReviewFlagDirs: getCompactSelfReviewFlagDirs(resolveDataDir(), resolveOpenCodeGlobalPluginDir(process.env)),
+});
+
+const {
+  armQuestionSetAsideTimer,
+  clearQuestionSetAsideTimer,
+} = createQuestionSetAside({
+  ...botCore,
+  pendingQuestions,
+  getThreadAdapter,
+  runQuestionLifecycleOp,
+  setPendingQuestion,
+  releasePendingQuestionToSetAside,
+  closeQuestionMessage,
+  unpinMessage: unpinMessageQuiet,
+  escapeMarkdown,
+  markNeedsNewMessage,
+  // The topic's and General's own choices arrive with the setting; until then every topic waits the default.
+  getQuestionWaitChoice: () => resolveQuestionWait(undefined, undefined),
+  shortenedWaitMs: ENV.testTimings.questionSetAsideWaitMs,
 });
 
 /**
@@ -12959,7 +12998,10 @@ function handleAgentQuestion(key: SessionKey, questionData: OpenCodePendingQuest
     messageId: null,
     answers: new Array(questionData.questions.length).fill(null),
     currentIndex: 0,
+    askedAt: Date.now(),
   });
+  // The question waits for the owner only for the question wait: then the agent is told to go on without it.
+  armQuestionSetAsideTimer(key);
 
   void runQuestionLifecycleOp(key, async () => {
     await streamedOutputLanding;
@@ -13964,6 +14006,8 @@ function restorePendingQuestions(): void {
       // handlers. Migrate to the new shape and re-persist so disk catches up.
       const migrated = migratePendingQuestionState(value);
       setPendingQuestion(key, migrated);
+      // The rest of its wait, counted from when it was asked — not a new one.
+      armQuestionSetAsideTimer(key);
       restored += 1;
     } else {
       // The agent that asked it is gone, so nobody can answer it: it is closed like any question that ends unanswered —

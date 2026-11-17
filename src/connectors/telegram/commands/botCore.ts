@@ -71,8 +71,11 @@ export interface BotCore {
    * from one that failed — for a caller that would otherwise post the same message again later.
    */
   replyToThreadDetailed: (key: SessionKey, text: string, extra?: object, options?: ReplyToThreadPortOptions) => Promise<ThreadSendOutcome>;
-  /** Edit a message of the topic in place; `false` when the edit failed. */
-  editThreadMessage: (key: SessionKey, messageId: number, text: string, extra?: object) => Promise<boolean>;
+  /**
+   * Edit a message of the topic in place; `false` when the edit failed. `plainFallbackText` is the text a Telegram that cannot
+   * parse the markup of `text` is given instead (default: `text` itself).
+   */
+  editThreadMessage: (key: SessionKey, messageId: number, text: string, extra?: object, plainFallbackText?: string) => Promise<boolean>;
   /** The same edit, telling a message that is gone from one that failed to change — for a caller that must not retry a message nobody can edit any more. */
   editThreadMessageDetailed: (key: SessionKey, messageId: number, text: string, extra?: object) => Promise<ThreadMessageEdit>;
   /**

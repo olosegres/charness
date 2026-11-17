@@ -35,6 +35,9 @@ const questionWaitMs: Record<QuestionWaitChoice, number | null> = {
   untilAnswered: null,
 };
 
+/** The longest finite wait the setting offers: the ceiling a test's shorter window (`CHARNESS_TEST_TIMINGS`) may name. */
+export const longestQuestionWaitMs = 60 * msPerMinute;
+
 /** The most questions set aside and still open in one conversation; a further one closes the oldest. */
 export const maxSetAsideQuestions = 5;
 
@@ -53,16 +56,19 @@ export function resolveQuestionWait(
  * @description How long from `nowMs` until a question asked at `askedAtMs` is to be set aside: `0` when its wait is over
  * (also a `dontWait`), `null` when its choice never sets it aside. The point is `askedAtMs + wait` whatever the agent's
  * process looks like — the timer is armed from this at ask time and again at boot, so a restart keeps the original moment.
+ * `shortenedToMs` is a test instance's own window (`CHARNESS_TEST_TIMINGS`): it cuts a finite wait to at most that, and
+ * leaves `dontWait` and `untilAnswered` as they are.
  */
-export function getQuestionSetAsideDelayMs(askedAtMs: number, choice: QuestionWaitChoice, nowMs: number): number | null {
+export function getQuestionSetAsideDelayMs(askedAtMs: number, choice: QuestionWaitChoice, nowMs: number, shortenedToMs?: number): number | null {
   const waitMs = questionWaitMs[choice];
   if (waitMs === null) return null;
-  return Math.max(askedAtMs + waitMs - nowMs, 0);
+  const effectiveWaitMs = shortenedToMs === undefined ? waitMs : Math.min(waitMs, shortenedToMs);
+  return Math.max(askedAtMs + effectiveWaitMs - nowMs, 0);
 }
 
 /** @description Whether the wait of a question asked at `askedAtMs` is over — it is to be set aside now. */
-export function checkIsQuestionSetAsideDue(askedAtMs: number, choice: QuestionWaitChoice, nowMs: number): boolean {
-  return getQuestionSetAsideDelayMs(askedAtMs, choice, nowMs) === 0;
+export function checkIsQuestionSetAsideDue(askedAtMs: number, choice: QuestionWaitChoice, nowMs: number, shortenedToMs?: number): boolean {
+  return getQuestionSetAsideDelayMs(askedAtMs, choice, nowMs, shortenedToMs) === 0;
 }
 
 /** What a question is called to the agent: its full text, else its header. */

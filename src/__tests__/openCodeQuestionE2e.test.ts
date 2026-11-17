@@ -2,14 +2,17 @@
  * @description A question the OpenCode agent asks stays in the topic however it ends, at PROCESS level: the BUILT charness
  * started the way an isolated instance is (`scripts/run-isolated.sh`) against the fake Bot API
  * (`telegramE2e/fakeTelegram.ts`) and the fake OpenCode server (`openCodeE2e/fakeOpenCodeServer.ts`), which can put a
- * question to the user whenever a flow says (the fake Claude agent cannot ask without a person's message). Three flows:
+ * question to the user whenever a flow says (the fake Claude agent cannot ask without a person's message). Four flows:
  *
  *   the idle compaction re-asked a question → the agent asks a NEW question while the re-asked copy waits: the copy is
  *     closed as «not answered» and keeps its text, and its button never answers the new question;
  *   a prompt the server refuses while a question is open → the adapter reports the error: the topic gets the error line,
  *     and the question stays with the «not answered» note, its buttons gone and its pin released;
  *   the question tool's own «🔧 question…» status that waits behind unposted text while the question arrives → it is
- *     never posted: no status line lands under the question.
+ *     never posted: no status line lands under the question;
+ *   a question nobody answers within the question wait (cut to seconds) → the server gets a REPLY whose custom answer is the bot's
+ *     «no answer yet, go on» text and never a reject (a reject ends OpenCode's agent loop), the question's message keeps its
+ *     buttons and its pin and gains a note, and it is saved as a set-aside record.
  *
  * What the json-stream flows cover instead: `questionKeptE2e.test.ts` (answer, number, another message, `/esc`, `/quit`,
  * re-post, the re-ask in every phase, a restart).
@@ -41,9 +44,11 @@ import {
   writeInstanceEnvFile,
   type IsolatedInstanceLayout,
 } from './e2e/isolatedCharness';
-import { startCharnessOnInstance } from './e2e/fallbackFlowKit';
+import { readPersistedState, startCharnessOnInstance } from './e2e/fallbackFlowKit';
 import { enDict } from '../i18n/en';
 import { getTelegramFlowTestTimingsEnv } from './telegramE2e/telegramFlowTimings';
+import { keyToString } from '../sessionKey';
+import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
 
 const group = { id: -1001111111111, title: 'ExampleGroup' };
 const operator = { id: 424242, is_bot: false, first_name: 'Operator' };
@@ -321,5 +326,65 @@ describe('The question tool\'s status that the question outran stays out of the 
     // A command's reply is posted after every send queued before it, a status frame created after the buffer landed included.
     await topic.sendAndAwaitReply('/verbosity stream', 'This topic shows: Stream only');
     assert.equal(isStatusFramePosted(), false, 'the superseded status frame was not created under the question');
+  });
+});
+
+/** The `answers` matrix of a `POST /question/:id/reply` body: one list of answer texts per question. */
+function readReplyAnswers(body: unknown): string[][] {
+  if (typeof body !== 'object' || body === null || !('answers' in body) || !Array.isArray(body.answers)) throw new Error(`the reply carries no answers: ${JSON.stringify(body)}`);
+  return body.answers.map((answer) => {
+    if (!Array.isArray(answer)) throw new Error(`an answer is not a list of texts: ${JSON.stringify(answer)}`);
+    return answer.map((text) => text.toString());
+  });
+}
+
+describe('A question nobody answers is set aside on the OpenCode backend too, end to end: built charness, fake Bot API, fake OpenCode', () => {
+  /** The question wait of the instance, in ms (production: 30 min by default). */
+  const questionWaitMs = 6000;
+  const setAsideTimeoutMs = 45 * 1000;
+  const setAsideNote = enDict['agent.question_set_aside_note'];
+
+  before(async () => {
+    await setUpInstance('charness-ocask-aside-', { ...getTelegramFlowTestTimingsEnv({ questionSetAsideWaitMs: questionWaitMs }) });
+  });
+
+  after(tearDownInstance);
+
+  it('the server gets a REPLY with the bot\'s «no answer yet, go on» text as the custom answer and never a reject; the message keeps its buttons and pin and gains a note', async () => {
+    const sessionId = await bootBindAndStartTurn('ASIDE-1');
+    const topicKey = keyToString(makeTelegramKey(group.id, questionTopic.threadId));
+    const question = await askQuestion(sessionId, firstQuestion);
+    await waitForPinned(question);
+    const askedAt = readPersistedState(getLayout()).pendingQuestions?.[topicKey]?.askedAt;
+    assert.equal(typeof askedAt, 'number', 'the waiting question is saved with the moment it was asked');
+    assert.ok(Date.now() < (askedAt ?? 0) + questionWaitMs - 1000, 'precondition: the wait has not ended yet');
+    assert.deepEqual(fakeOpenCode.listRequests('POST', `/question/${firstQuestion.requestId}/reply`), [], 'precondition: nothing was sent for the question yet');
+
+    const waitingTopicForAside = new TopicDriver(fakeTelegram, getCharness, questionTopic.threadId, setAsideTimeoutMs);
+    await getCharness().waitFor('the server to get the reply that sets the question aside', setAsideTimeoutMs, () => fakeOpenCode.listRequests('POST', `/question/${firstQuestion.requestId}/reply`).length > 0);
+    const replies = fakeOpenCode.listRequests('POST', `/question/${firstQuestion.requestId}/reply`);
+    assert.equal(replies.length, 1, 'one reply');
+    const answers = readReplyAnswers(replies[0].body);
+    assert.equal(answers.length, 1, 'one answer per question');
+    assert.equal(answers[0].length, 1, 'a custom answer: one text');
+    assert.ok(answers[0][0].startsWith('[Charness] The user has not answered yet (asked '), `the answer is the bot's text, not an option: ${answers[0][0]}`);
+    assert.ok(answers[0][0].includes('This is NOT an answer.') && answers[0][0].includes('Go on with work that does not depend on it'), 'it says so, and to go on');
+    // Load-bearing: never a reject — OpenCode ends its agent loop on one.
+    assert.deepEqual(fakeOpenCode.listRequests('POST', `/question/${firstQuestion.requestId}/reject`), [], 'the question is never rejected');
+    assert.ok(Date.now() >= (askedAt ?? 0) + questionWaitMs - 50, 'not before the wait ended');
+
+    await waitingTopicForAside.waitForMessageText('the set-aside note under the question', question, (text) => text.endsWith(`\n\n${setAsideNote}`));
+    // The bot saves its state a moment after it changes: read it once the record is there.
+    await getCharness().waitFor('the set-aside question to be saved', replyTimeoutMs, () => (readPersistedState(getLayout()).setAsideQuestions?.[topicKey] ?? []).length === 1);
+    const state = readPersistedState(getLayout());
+    assert.equal(state.pendingQuestions?.[topicKey], undefined, 'the question no longer counts as the one the agent is blocked on');
+    const [record, ...others] = state.setAsideQuestions?.[topicKey] ?? [];
+    assert.deepEqual(others, []);
+    assert.equal(record.messageId, question.message_id);
+    assert.deepEqual(record.answers, [null]);
+    const current = fakeTelegram.getMessage(question.message_id);
+    assert.ok(current && !current.isDeleted, 'the message stays');
+    assert.deepEqual(topic.getKeyboardData(current), [[`qs_${record.id}_0`], [`qs_${record.id}_1`]], 'the buttons stay, naming the record');
+    assert.ok(fakeTelegram.listPinnedMessageIds().includes(question.message_id), 'and so does the pin');
   });
 });

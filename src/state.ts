@@ -9,6 +9,7 @@ import {
   type LimitEpisodeMarker,
   type PendingQuestionState,
   type ReAskedQuestionRecord,
+  type SetAsideQuestionRecord,
   type ResolvedThreadDisplayPrefs,
   type SeenWatermark,
   type ThreadDisplayPrefs,
@@ -642,6 +643,19 @@ export interface StateV1 {
    * instead of leaving them. Optional so older state files stay valid — a missing value is an empty set.
    */
   reAskedQuestions?: Record<string, ReAskedQuestionRecord>;
+  /**
+   * The questions the agent asked that nobody answered within the question wait, per conversation, oldest first (at most
+   * `maxSetAsideQuestions`): the bot told the agent to go on without them, and keeps each open in the topic — message, buttons,
+   * pin — so an answer given later still reaches the agent. Persisted so those buttons survive a restart. Optional so older
+   * state files stay valid — a missing value is an empty set.
+   */
+  setAsideQuestions?: Record<string, SetAsideQuestionRecord[]>;
+  /**
+   * How many questions of a conversation were ever set aside: the counter their record ids come from. Only goes up and is
+   * never reset — not by closing a record, an eviction or the end of a conversation — so an id is never reused and an old
+   * keyboard that stayed live can never answer a newer question (`createSetAsideQuestionId`).
+   */
+  setAsideQuestionSequences?: Record<string, number>;
   /**
    * Armed auto-retries after a provider-side API error, keyed by
    * {@link SessionKey} string. Persisted so a pending retry survives a bot
@@ -3086,6 +3100,50 @@ export class StateStore {
         delete this.state.reAskedQuestions;
       }
       this.scheduleSave();
+    });
+  }
+
+  // ── questions set aside after the question wait (restart survival) ──
+
+  /**
+   * @description Every conversation's set-aside questions, oldest first, keyed by {@link SessionKey} string. Read at boot and
+   * by the answer routes. Returns a copy of the map so callers can't mutate the live state object.
+   */
+  getSetAsideQuestions(): Record<string, SetAsideQuestionRecord[]> {
+    return { ...(this.state.setAsideQuestions ?? {}) };
+  }
+
+  /**
+   * @description Replace the set-aside questions of `key` with `records` (oldest first); an empty list removes the entry, and
+   * the map once empty, so an idle bot leaves a clean `state.json`.
+   */
+  async setSetAsideQuestions(key: SessionKey, records: readonly SetAsideQuestionRecord[]): Promise<void> {
+    const k = keyToString(key);
+    await this.withLock(key, async () => {
+      if (records.length === 0) {
+        if (!this.state.setAsideQuestions?.[k]) return;
+        delete this.state.setAsideQuestions[k];
+        if (Object.keys(this.state.setAsideQuestions).length === 0) delete this.state.setAsideQuestions;
+      } else {
+        (this.state.setAsideQuestions ??= {})[k] = [...records];
+      }
+      this.scheduleSave();
+    });
+  }
+
+  /**
+   * @description The next number of the conversation's set-aside counter (1, 2, 3 …), saved at once in memory so two calls
+   * never get the same one. See {@link StateV1.setAsideQuestionSequences}: never reset, so a record id made from it is never
+   * reused.
+   */
+  async takeNextSetAsideQuestionSequence(key: SessionKey): Promise<number> {
+    const k = keyToString(key);
+    return this.withLock(key, async () => {
+      const sequences = (this.state.setAsideQuestionSequences ??= {});
+      const next = (sequences[k] ?? 0) + 1;
+      sequences[k] = next;
+      this.scheduleSave();
+      return next;
     });
   }
 

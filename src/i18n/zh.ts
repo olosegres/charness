@@ -271,6 +271,7 @@ export const zhDict: Record<string, string> = {
   'agent.question_answered_note': '✅ 回答：{answer}',
   'agent.question_unanswered_note': '❌ 未回答',
   'agent.question_asked_again_note': '↓ 已在下方重新提问',
+  'agent.question_set_aside_note': '⏸ 智能体没有等待你的回答，已继续工作——你仍然可以回答',
   'agent.login_code_relayed': '🔐 登录码已转发给 Claude — 包含 token 的消息已从历史中删除。',
   'agent.login_url': '🔐 要登录 Claude，请打开此链接，完成登录，然后把代码粘贴回这里：\n{url}',
   'agent.login_success': '✅ 已登录 Claude。',

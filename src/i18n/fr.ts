@@ -271,6 +271,7 @@ export const frDict: Record<string, string> = {
   'agent.question_answered_note': '✅ Réponse : {answer}',
   'agent.question_unanswered_note': '❌ Sans réponse',
   'agent.question_asked_again_note': '↓ Reposée plus bas',
+  'agent.question_set_aside_note': '⏸ L’agent a continué sans votre réponse — vous pouvez encore répondre',
   'agent.login_code_relayed': '🔐 Code de connexion transmis à Claude — le message avec le jeton a été supprimé de l\'historique.',
   'agent.login_url': '🔐 Pour te connecter à Claude, ouvre ce lien, termine la connexion, puis colle le code ici :\n{url}',
   'agent.login_success': '✅ Connecté à Claude.',

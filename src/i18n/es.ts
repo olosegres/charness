@@ -271,6 +271,7 @@ export const esDict: Record<string, string> = {
   'agent.question_answered_note': '✅ Respuesta: {answer}',
   'agent.question_unanswered_note': '❌ Sin responder',
   'agent.question_asked_again_note': '↓ Preguntada de nuevo abajo',
+  'agent.question_set_aside_note': '⏸ El agente siguió sin tu respuesta — aún puedes responder',
   'agent.login_code_relayed': '🔐 Código de inicio de sesión enviado a Claude — el mensaje con el token se eliminó del historial.',
   'agent.login_url': '🔐 Para iniciar sesión en Claude, abre este enlace, completa el inicio de sesión y pega el código aquí:\n{url}',
   'agent.login_success': '✅ Sesión iniciada en Claude.',

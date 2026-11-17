@@ -37,6 +37,7 @@ import { nodeUpkeepIntervalMs } from '../runnerUtility/nodeUpkeepTiming';
 import { runnerVersionPollMs } from '../runnerUtility/versionPollTiming';
 import { pairingLifetimeMs } from '../runners/pairingTiming';
 import { runnerWaitPollMinMs, runnerWaitPollMs } from '../remoteRun/runnerWaitTiming';
+import { longestQuestionWaitMs } from '../utils/questionWaitPlan';
 
 /** Every key with the production window (a count, for `bindPickerClaimLimit`) it may only shorten. */
 const productionWindowsMs: Array<[keyof TestTimings, number]> = [
@@ -65,6 +66,7 @@ const productionWindowsMs: Array<[keyof TestTimings, number]> = [
   ['remoteRunRunnerPollMs', runnerWaitPollMs],
   ['remoteRunProbeDeadlineMs', probeAllTimeoutMs],
   ['bindPickerClaimLimit', bindPickerClaimLimit],
+  ['questionSetAsideWaitMs', longestQuestionWaitMs],
   ['tscWatchCheckIntervalMs', tscWatchCheckIntervalMs],
   ['tscWatchStaleGraceMs', tscWatchStaleGraceMs],
 ];

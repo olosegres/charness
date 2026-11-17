@@ -23,6 +23,7 @@ import {
   getQuestionReplyRouteWithSetAside,
   getQuestionSetAsideDelayMs,
   getSetAsideAnswerTarget,
+  longestQuestionWaitMs,
   maxSetAsideQuestions,
   questionWaitChoices,
   resolveQuestionWait,
@@ -123,6 +124,26 @@ describe('getQuestionSetAsideDelayMs and checkIsQuestionSetAsideDue', () => {
 
   it('«Don\'t wait» is due at the ask moment itself', () => {
     assert.equal(checkIsQuestionSetAsideDue(askedAtMs, 'dontWait', askedAtMs), true);
+  });
+
+  it('a test instance\'s shorter window cuts a finite wait, and only a finite one', () => {
+    const shortenedToMs = 4_000;
+    for (const choice of ['tenMinutes', 'thirtyMinutes', 'oneHour'] as const) {
+      assert.equal(getQuestionSetAsideDelayMs(askedAtMs, choice, askedAtMs, shortenedToMs), shortenedToMs, choice);
+    }
+    assert.equal(getQuestionSetAsideDelayMs(askedAtMs, 'tenMinutes', askedAtMs + 3_000, shortenedToMs), 1_000, 'it counts down from the ask moment too');
+    assert.equal(getQuestionSetAsideDelayMs(askedAtMs, 'dontWait', askedAtMs, shortenedToMs), 0);
+    assert.equal(getQuestionSetAsideDelayMs(askedAtMs, 'untilAnswered', askedAtMs, shortenedToMs), null, '«Wait for my answer» stays never, in a test too');
+    assert.equal(checkIsQuestionSetAsideDue(askedAtMs, 'thirtyMinutes', askedAtMs + shortenedToMs, shortenedToMs), true);
+    assert.equal(checkIsQuestionSetAsideDue(askedAtMs, 'thirtyMinutes', askedAtMs + shortenedToMs - 1, shortenedToMs), false);
+  });
+
+  it('a window longer than the wait does not stretch it', () => {
+    assert.equal(getQuestionSetAsideDelayMs(askedAtMs, 'tenMinutes', askedAtMs, 3_600_000), 10 * msPerMinute);
+  });
+
+  it('the longest finite wait is the hour the setting offers', () => {
+    assert.equal(longestQuestionWaitMs, getQuestionSetAsideDelayMs(askedAtMs, 'oneHour', askedAtMs));
   });
 
   it('«Wait for my answer» is never due, however long it has waited', () => {

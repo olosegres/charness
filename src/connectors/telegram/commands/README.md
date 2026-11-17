@@ -223,6 +223,31 @@ once: when the conversation can still be resumed and no question waits beside it
 `restoreReAskedQuestion` and an unposted one is asked again (`reAskInterruptedQuestion`); else its message is closed as unanswered
 and the record dropped.
 
+## `questionSetAside.ts`
+
+An agent's question the owner has not answered never keeps the agent standing still. When the question wait ends (default 30 min;
+`utils/questionWaitPlan.ts` holds the choices, the arithmetic and the agent-facing texts), the bot tells the agent «no answer yet, go on»
+through `AgentAdapter.setQuestionAside(key, requestId, text, givenAnswers)` — Claude json-stream: the question's `can_use_tool` is DENIED
+with the text; OpenCode: the question is REPLIED to with it (never rejected: that ends OpenCode's loop) — and keeps the question open in
+the topic. The pieces:
+
+- **The timer** (`armQuestionSetAsideTimer`): one per waiting question, armed by `handleAgentQuestion` and again by `restorePendingQuestions`
+  at boot, always for `askedAt + wait` (`PendingQuestionState.askedAt`, saved), so a restart keeps the ORIGINAL moment; none for «Wait for my
+  answer». `clearPendingQuestion` clears it. It is the bot's own and independent of the idle fire, of the agent's background work and of
+  queued input. `CHARNESS_TEST_TIMINGS` `questionSetAsideWaitMs` cuts a finite wait for a flow.
+- **The set-aside** (`setPendingQuestionAside`, run in the question lifecycle queue — the one the post, the re-post and the answer share): does
+  nothing unless the question is still the one waiting AND the adapter holds the same `requestId` (a timer that fires late, after the agent
+  asked the next question, finds a different one and sets nothing aside). Then the question leaves `pendingQuestions` (so every reader of «the
+  agent is blocked on a question» — the busy and idle checks, the wake-up engine, the status line — says no, and the re-post to the bottom, which
+  reads that map, leaves the message alone), becomes a `SetAsideQuestionRecord` of `state.json` `setAsideQuestions` (at most
+  `maxSetAsideQuestions`; a further one closes the oldest as «not answered» and unpins it) and its message is EDITED, not re-posted: a note under
+  the options (`agent.question_set_aside_note`) and the same option buttons, whose data is `qs_<record id>_<option index>`.
+- **The pin stays** and belongs to the record: `releasePendingQuestionToSetAside` (`bot.ts`) drops the map entry that tracks «the pinned question»
+  WITHOUT unpinning, so the pin of the question the agent asks next neither retires it nor counts as a re-pin (silent). A record's pin is released
+  when the record closes.
+- **Ids** come from a per-topic counter (`setAsideQuestionSequences`) that only goes up and is never reset: an id is never reused, so an old
+  keyboard that stayed live can never answer a newer question.
+
 ## `autoContinueLimits.ts`
 
 The «wait for the reset and continue» setting (the `/auto_continue_limits` alias and the old buttons `acl_on` /

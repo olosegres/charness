@@ -220,6 +220,26 @@ export const fakeAskNoAnswerOutcome = 'no answer';
 export const fakeAskToolName = 'AskUserQuestion';
 
 /**
+ * How a question the bot SET ASIDE reads to the fake: a `can_use_tool` deny whose message opens with this (the bot's own
+ * `[Charness] …` text, `utils/questionWaitPlan.ts`) — unlike the abandonment deny («User declined to answer the question.»),
+ * which the bot follows with an interrupt. The turn then GOES ON: it ends with {@link fakeAskSetAsideTurnText}, so a test that
+ * finds that text in the topic knows the agent carried on after the deny — the fake does not end its turn for any other reason.
+ */
+export const fakeSetAsideDenyMessagePrefix = '[Charness] ';
+/** The outcome `ask` mode logs for a question that was set aside (the deny's whole message follows it in `control-responses.jsonl`). */
+export const fakeAskSetAsideOutcome = 'set aside';
+/** What the turn of a question that was set aside ends with: the proof that the agent went on after the deny. */
+export const fakeAskSetAsideTurnText = 'Went on without the answer.';
+
+/**
+ * `[fake:schedule-once <seconds> <label>]` in a prompt: before it puts its question, the fake creates a one-shot prompt schedule
+ * (`schedule_create` on the bot's MCP) that fires after that many seconds with the prompt `<label> [fake:answer] scheduled` — a
+ * prompt the BOT delivers to the agent while its question waits, which is not an answer to it and does not cancel it (a message
+ * the operator types does).
+ */
+export const fakeScheduleOnceToken = (seconds: number, label: string): string => `[fake:schedule-once ${seconds} ${label}]`;
+
+/**
  * While this file is absent, the background task a `background-notify` turn leaves running keeps running; the test
  * writes it to END the task (its content is ignored) — the fake then writes the task's end and starts the task's turn.
  */
@@ -287,6 +307,13 @@ export const fakeClaudeLogFileNames = {
    * every request after a compaction — `{ sessionId, pid, phase, contexts }`.
    */
   restoreContexts: 'restore-contexts.jsonl',
+  /**
+   * One record per `control_response` the bot wrote that the fake READ (the verdict on a `can_use_tool` request):
+   * `{ readAt, pid, requestId, behavior, message, answerCount }` — `message` is a deny's, `null` for an allow.
+   */
+  controlResponses: 'control-responses.jsonl',
+  /** One record per `control_request` the bot wrote that the fake READ (an interrupt among them): `{ readAt, pid, subtype }`. */
+  controlRequests: 'control-requests.jsonl',
 } as const;
 
 /**
@@ -345,6 +372,24 @@ export interface FakeClaudePrompt {
   requestId: string | null;
   /** The whole text the agent was sent: header, issue, everything. */
   text: string;
+}
+
+/** One line of `control-responses.jsonl`: a verdict the bot wrote on a `can_use_tool` request. */
+export interface FakeClaudeControlResponse {
+  readAt: number;
+  pid: number;
+  requestId: string | null;
+  behavior: string | null;
+  /** A deny's message — what the agent reads as the tool's result; `null` for an allow. */
+  message: string | null;
+  answerCount: number;
+}
+
+/** One line of `control-requests.jsonl`: a control request the bot wrote (`interrupt`, `mcp_status`, …). */
+export interface FakeClaudeControlRequest {
+  readAt: number;
+  pid: number;
+  subtype: string | null;
 }
 
 /** One line of `tool-calls.jsonl`. */

@@ -253,6 +253,12 @@ export interface PendingQuestionState {
    * which is never deleted).
    */
   originalMessageId?: number | null;
+  /**
+   * When the agent asked the question, epoch ms: the moment its wait counts from (`utils/questionWaitPlan.ts`), kept here so a
+   * restart re-arms the set-aside timer for the original point and not a fresh wait. Absent in a state that predates it (the
+   * restore then counts from the boot).
+   */
+  askedAt?: number;
 }
 
 /**

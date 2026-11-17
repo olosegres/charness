@@ -271,6 +271,7 @@ export const deDict: Record<string, string> = {
   'agent.question_answered_note': '✅ Antwort: {answer}',
   'agent.question_unanswered_note': '❌ Nicht beantwortet',
   'agent.question_asked_again_note': '↓ Unten erneut gestellt',
+  'agent.question_set_aside_note': '⏸ Der Agent hat ohne deine Antwort weitergemacht — du kannst noch antworten',
   'agent.login_code_relayed': '🔐 Login-Code an Claude weitergeleitet — die Token-Nachricht wurde aus dem Verlauf gelöscht.',
   'agent.login_url': '🔐 Um dich bei Claude anzumelden, öffne diesen Link, schließe die Anmeldung ab und füge den Code hier ein:\n{url}',
   'agent.login_success': '✅ Bei Claude angemeldet.',

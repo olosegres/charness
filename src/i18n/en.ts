@@ -275,6 +275,7 @@ export const enDict: Record<string, string> = {
   'agent.question_answered_note': '✅ Answer: {answer}',
   'agent.question_unanswered_note': '❌ Not answered',
   'agent.question_asked_again_note': '↓ Asked again below',
+  'agent.question_set_aside_note': '⏸ The agent went on without your answer — you can still answer',
   'agent.login_code_relayed': '🔐 Login code relayed to Claude — the token message was deleted from history.',
   'agent.login_url': '🔐 To sign in to Claude, open this link, complete sign-in, then paste the code back here:\n{url}',
   'agent.login_success': '✅ Signed in to Claude.',

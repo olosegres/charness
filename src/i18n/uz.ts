@@ -271,6 +271,7 @@ export const uzDict: Record<string, string> = {
   'agent.question_answered_note': '✅ Javob: {answer}',
   'agent.question_unanswered_note': '❌ Javobsiz qoldi',
   'agent.question_asked_again_note': '↓ Pastda qayta berildi',
+  'agent.question_set_aside_note': '⏸ Agent javobingizsiz davom etdi — hali ham javob berishingiz mumkin',
   'agent.login_code_relayed': '🔐 Kirish kodi Claude ga yuborildi — token xabari tarixdan o‘chirildi.',
   'agent.login_url': '🔐 Claude ga kirish uchun ushbu havolani oching, kirishni yakunlang va kodni shu yerga joylashtiring:\n{url}',
   'agent.login_success': '✅ Claude ga kirildi.',

@@ -271,6 +271,7 @@ export const jaDict: Record<string, string> = {
   'agent.question_answered_note': '✅ 回答: {answer}',
   'agent.question_unanswered_note': '❌ 未回答',
   'agent.question_asked_again_note': '↓ 下で再度質問しました',
+  'agent.question_set_aside_note': '⏸ エージェントは回答を待たずに作業を進めました — 今からでも回答できます',
   'agent.login_code_relayed': '🔐 ログインコードを Claude に中継 — トークンを含むメッセージを履歴から削除しました。',
   'agent.login_url': '🔐 Claude にサインインするには、このリンクを開いてサインインを完了し、コードをここに貼り付けてください：\n{url}',
   'agent.login_success': '✅ Claude にサインインしました。',

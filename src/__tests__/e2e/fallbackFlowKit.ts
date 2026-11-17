@@ -14,7 +14,7 @@ import type { TopicDriver } from '../telegramE2e/topicDriver';
 import type { AgentData, BindingData, ClaudeProfileRecord, CompactIdleTrackingEntry, ParkedSession } from '../../state';
 import type { FallbackChainEntry } from '../../utils/fallbackChain';
 import type { ClaudeCostBaseline } from '../../utils/claudeApiSpend';
-import type { PendingQuestionState, ReAskedQuestionRecord } from '../../types';
+import type { PendingQuestionState, ReAskedQuestionRecord, SetAsideQuestionRecord } from '../../types';
 
 /** The line the bot prints once its long polling is up. */
 const launchLine = 'Launching Telegraf bot (long polling';
@@ -46,6 +46,10 @@ export interface PersistedState {
   pendingQuestions?: Record<string, PendingQuestionState>;
   /** The question the idle compaction re-asked for each topic (its message id among the fields), keyed by the topic. */
   reAskedQuestions?: Record<string, ReAskedQuestionRecord>;
+  /** The questions each topic's agent was told to go on without (oldest first), keyed by the topic. */
+  setAsideQuestions?: Record<string, SetAsideQuestionRecord[]>;
+  /** How many questions each topic ever set aside: the counter the record ids come from, keyed by the topic. */
+  setAsideQuestionSequences?: Record<string, number>;
   /** The compact-on-idle instants each topic's conversation carries (dropped when the conversation ends), keyed by the topic. */
   compactIdleTracking?: Record<string, CompactIdleTrackingEntry>;
   [field: string]: unknown;
