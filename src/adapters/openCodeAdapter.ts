@@ -6042,6 +6042,18 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
   }
 
   /**
+   * @description Set the pending question aside: REPLY to it with `text` as the custom answer of every question left open
+   * (`givenAnswers` keeps the ones already collected), so the question tool returns and the agent goes on. Never a reject —
+   * a `Question.RejectedError` ends OpenCode's agent loop (`continue_loop_on_deny` is off by default), which is the opposite
+   * of «go on». The reply takes any text as an answer (the server does not check it against the options).
+   */
+  setQuestionAside(key: SessionKey, text: string, givenAnswers: (string[] | null)[]): void {
+    const questions = this.sessions.get(keyToString(key))?.pendingQuestion?.questions;
+    if (!questions) return;
+    this.answerQuestion(key, questions.map((_, index) => givenAnswers[index] ?? [text]));
+  }
+
+  /**
    * @description Reject a pending question server-side WITHOUT answering it —
    * called when the user ABANDONS the question (sends a fresh prompt instead of
    * answering, or the session is torn down while it is pending). Mirrors

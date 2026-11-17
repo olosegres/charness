@@ -1,0 +1,260 @@
+/**
+ * @description `AgentAdapter.setQuestionAside` — what each backend does to the question the agent is blocked on when the
+ * bot sets it aside (the wait ended): the question's tool call returns the bot's text and the agent's turn GOES ON.
+ *
+ *  - Claude json-stream: the `can_use_tool` request is DENIED with the text as its message — through the real path (a
+ *    `control_request` line read from stdout makes the question pending, and the frame the CLI would read from stdin is
+ *    captured) — and NO interrupt follows; the question's sidecar is gone, so a restart cannot resurface it.
+ *  - OpenCode: the question is REPLIED to with the text as the custom answer of every question left open (answers already
+ *    collected stay as they are) and is NEVER rejected: a reject ends OpenCode's agent loop.
+ *
+ * The bot-side wiring (the timer, the topic message) is a later scope; the flows that run a real agent process through it
+ * come with it.
+ */
+
+/** Test case: N/A — Charness has no Jira tracker. */
+
+import { afterEach, describe, it } from 'node:test';
+import assert from 'node:assert/strict';
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
+import { ClaudeJsonStreamAdapter, type StreamSession } from '../adapters/claudeJsonStreamAdapter';
+import { OpenCodeAdapter } from '../adapters/openCodeAdapter';
+import { keyToString, type SessionKey } from '../sessionKey';
+import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
+import type { AgentAdapter, OpenCodePendingQuestion } from '../types';
+import { getJsonStreamSessionPaths } from '../utils/jsonStreamHost';
+import { buildQuestionSetAsideText } from '../utils/questionWaitPlan';
+import { createStreamSessionFixture } from './claudeJsonStreamSessionFixture';
+import { createOpenCodeSessionFixture, getOpenCodeSession } from './openCodeSessionFixture';
+
+const key: SessionKey = makeTelegramKey(-100999778, 56);
+const askedAtMs = new Date(2026, 10, 18, 14, 5).getTime();
+const setAsideAtMs = new Date(2026, 10, 18, 14, 35).getTime();
+
+const askedQuestions = [
+  { question: 'Push the fix to main now, or wait for the review?', header: 'Deploy', options: [{ label: 'Push now' }, { label: 'Wait for the review' }], multiSelect: false },
+  { question: 'Which docs to update first?', header: 'Docs', options: [{ label: 'README' }, { label: 'Changelog' }], multiSelect: false },
+];
+
+/** The line the CLI writes when the agent calls AskUserQuestion: it blocks on this request until the bot answers it. */
+function buildAskUserQuestionLine(requestId: string, toolUseId: string): string {
+  return JSON.stringify({
+    type: 'control_request',
+    request_id: requestId,
+    request: { subtype: 'can_use_tool', tool_name: 'AskUserQuestion', input: { questions: askedQuestions }, tool_use_id: toolUseId, requires_user_interaction: true },
+  }) + '\n';
+}
+
+describe('json-stream: setQuestionAside denies the question with the text and lets the turn go on', () => {
+  let dir: string;
+  afterEach(() => { if (dir) fs.rmSync(dir, { recursive: true, force: true }); });
+
+  /** An adapter whose session holds a question the agent really asked, and the frames the CLI would read from stdin. */
+  function createAdapterBlockedOnQuestion(): { adapter: ClaudeJsonStreamAdapter; session: StreamSession; frames: Array<Record<string, unknown>> } {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'jsonstream-set-aside-'));
+    const adapter = new ClaudeJsonStreamAdapter();
+    const session = createStreamSessionFixture({ key, workDir: '/tmp/jsonstream-set-aside-work', sessionId: 'sess-set-aside', paths: getJsonStreamSessionPaths(dir) });
+    adapter['sessions'].set(keyToString(key), session);
+    const frames: Array<Record<string, unknown>> = [];
+    adapter['writeStdin'] = (_session: StreamSession, frame: Record<string, unknown>) => { frames.push(frame); };
+    adapter['onStdout'](session, buildAskUserQuestionLine('req_ask', 'toolu_ask'));
+    return { adapter, session, frames };
+  }
+
+  it('answers the tool call with a DENY whose message is the text — and sends no interrupt', () => {
+    const { adapter, session, frames } = createAdapterBlockedOnQuestion();
+    assert.equal(session.pendingQuestion?.requestId, 'req_ask', 'precondition: the agent is blocked on the question');
+    assert.equal(fs.existsSync(session.paths.questionFile), true, 'precondition: the question is kept for a restart');
+    const text = buildQuestionSetAsideText({ questions: session.pendingQuestion?.questions ?? [], answers: [null, null], askedAtMs, nowMs: setAsideAtMs });
+
+    // Called the way the bot calls it, through the backend-neutral contract (which also carries the answers given so far).
+    const backendNeutralAdapter: AgentAdapter = adapter;
+    backendNeutralAdapter.setQuestionAside?.(key, text, [null, null]);
+
+    // Load-bearing: the frame is a deny carrying the bot's text — the model reads it as the tool's result — and nothing
+    // else is written: an interrupt (`control_request`) would abort the very turn this is meant to let go on.
+    assert.deepEqual(frames, [{
+      type: 'control_response',
+      response: { subtype: 'success', request_id: 'req_ask', response: { behavior: 'deny', message: text, toolUseID: 'toolu_ask' } },
+    }]);
+    assert.match(text, /^\[Charness\] The user has not answered yet/, 'the text the agent reads is the plan\'s');
+  });
+
+  it('closes the question on the bot\'s side: no pending question, its sidecar removed, the turn still busy', () => {
+    const { adapter, session } = createAdapterBlockedOnQuestion();
+    assert.equal(session.isBusy, true, 'precondition: asking marked the turn busy');
+
+    adapter.setQuestionAside(key, 'set aside');
+
+    assert.equal(session.pendingQuestion, null);
+    assert.equal(fs.existsSync(session.paths.questionFile), false, 'a restart finds no question to resurface');
+    assert.equal(session.isBusy, true, 'the agent\'s turn goes on, it is not ended');
+    assert.equal(session.isActive, true);
+    assert.equal(adapter['sessions'].has(keyToString(key)), true, 'the session is not torn down');
+  });
+
+  it('restarts the idle-watchdog clock the long wait had run down, as an answer does', () => {
+    const { adapter, session } = createAdapterBlockedOnQuestion();
+    session.lastStdoutActivityAt = Date.now() - 3_600_000;
+
+    const before = Date.now();
+    adapter.setQuestionAside(key, 'set aside');
+
+    assert.ok(session.lastStdoutActivityAt >= before, 'the clock restarts at the set-aside');
+  });
+
+  it('the question stays suppressed in the topic: the denied call\'s own result is not echoed', () => {
+    const { adapter, session } = createAdapterBlockedOnQuestion();
+    const toolResults: string[] = [];
+    adapter.on('toolResult', (_key: SessionKey, result: { output: string }) => toolResults.push(result.output));
+    const buildToolResultLine = (toolUseId: string, output: string): string => JSON.stringify({
+      type: 'user',
+      message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: toolUseId, content: output, is_error: true }] },
+    }) + '\n';
+
+    adapter.setQuestionAside(key, 'set aside');
+    // The CLI answers the denied call with its tool_result; it must stay out of the topic like an answered question's.
+    adapter['onStdout'](session, buildToolResultLine('toolu_ask', 'set aside'));
+    assert.deepEqual(toolResults, []);
+
+    // Negative control: the same line for an ordinary tool IS relayed — so the silence above is the question's, not the line's shape.
+    adapter['onStdout'](session, buildToolResultLine('toolu_other', 'ordinary output'));
+    assert.deepEqual(toolResults, ['ordinary output']);
+  });
+
+  it('is a no-op when no question is pending', () => {
+    const { adapter, session, frames } = createAdapterBlockedOnQuestion();
+    adapter.rejectQuestion(key);
+    frames.length = 0;
+
+    adapter.setQuestionAside(key, 'set aside');
+
+    assert.deepEqual(frames, [], 'nothing is written for a question that is not pending');
+    assert.equal(session.pendingQuestion, null);
+  });
+
+  it('settles a question once: a set-aside after the answer (or before it) writes no second response', () => {
+    const answeredFirst = createAdapterBlockedOnQuestion();
+    answeredFirst.adapter.answerQuestion(key, [['Push now'], ['README']]);
+    answeredFirst.adapter.setQuestionAside(key, 'set aside');
+    assert.deepEqual(answeredFirst.frames.map((frame) => (frame.response as Record<string, unknown>).request_id), ['req_ask'], 'only the answer is written');
+    assert.equal(((answeredFirst.frames[0].response as Record<string, unknown>).response as Record<string, unknown>).behavior, 'allow');
+    fs.rmSync(dir, { recursive: true, force: true });
+
+    const setAsideFirst = createAdapterBlockedOnQuestion();
+    setAsideFirst.adapter.setQuestionAside(key, 'set aside');
+    setAsideFirst.adapter.answerQuestion(key, [['Push now'], ['README']]);
+    setAsideFirst.adapter.rejectQuestion(key);
+    assert.equal(setAsideFirst.frames.length, 1, 'only the set-aside is written');
+    assert.equal(((setAsideFirst.frames[0].response as Record<string, unknown>).response as Record<string, unknown>).behavior, 'deny');
+  });
+
+  it('writes nothing to a session that is no longer active', () => {
+    const { adapter, session, frames } = createAdapterBlockedOnQuestion();
+    session.isActive = false;
+
+    adapter.setQuestionAside(key, 'set aside');
+
+    assert.deepEqual(frames, []);
+    assert.notEqual(session.pendingQuestion, null, 'the question is left as it was');
+  });
+
+  it('is a no-op for a conversation with no session at all', () => {
+    const adapter = new ClaudeJsonStreamAdapter();
+    assert.doesNotThrow(() => adapter.setQuestionAside(key, 'set aside'));
+  });
+});
+
+describe('OpenCode: setQuestionAside replies with the text as the custom answer and never rejects', () => {
+  const requestId = 'que_set_aside';
+  const owningDirectory = '/home/user/src/someProject';
+
+  const twoQuestions: OpenCodePendingQuestion['questions'] = [
+    { question: 'Push the fix to main now, or wait for the review?', header: 'Deploy', options: [{ label: 'Push now' }, { label: 'Wait for the review' }] },
+    { question: 'Which docs to update first?', header: 'Docs', options: [{ label: 'README' }, { label: 'Changelog' }] },
+  ];
+
+  function createAdapterBlockedOnQuestion(): {
+    adapter: OpenCodeAdapter;
+    apiCalls: Array<{ method: string; urlPath: string; body: unknown }>;
+    errors: Error[];
+  } {
+    const adapter = new OpenCodeAdapter();
+    adapter['sessions'].set(keyToString(key), createOpenCodeSessionFixture({ key, sessionId: 'ses_set_aside', workDir: '/tmp/work-set-aside', isModelInfoShown: true }));
+    const apiCalls: Array<{ method: string; urlPath: string; body: unknown }> = [];
+    adapter['apiRequest'] = (async (method: string, urlPath: string, body?: unknown) => {
+      apiCalls.push({ method, urlPath, body });
+      return undefined;
+    }) as OpenCodeAdapter['apiRequest'];
+    const errors: Error[] = [];
+    adapter.on('error', (_key: SessionKey, error: Error) => errors.push(error));
+    adapter['handleQuestionAsked'](key, { id: requestId, sessionID: 'ses_set_aside', questions: twoQuestions }, owningDirectory);
+    return { adapter, apiCalls, errors };
+  }
+
+  it('replies to the question\'s own instance with the text as the answer of every question left open', () => {
+    const { adapter, apiCalls } = createAdapterBlockedOnQuestion();
+    const text = buildQuestionSetAsideText({ questions: twoQuestions, answers: [null, null], askedAtMs, nowMs: setAsideAtMs });
+
+    adapter.setQuestionAside(key, text, [null, null]);
+
+    // Load-bearing: one reply, no reject — a reject would end the agent's loop.
+    assert.equal(apiCalls.length, 1);
+    assert.equal(apiCalls[0].method, 'POST');
+    assert.equal(apiCalls[0].urlPath, `/question/${requestId}/reply?directory=${encodeURIComponent(owningDirectory)}`);
+    assert.deepEqual(apiCalls[0].body, { answers: [[text], [text]] });
+    assert.ok(apiCalls.every((call) => !call.urlPath.includes('/reject')), 'a set-aside is never a reject');
+  });
+
+  it('keeps an answer already collected as the label it is, and the text only where nothing was answered', () => {
+    const { adapter, apiCalls } = createAdapterBlockedOnQuestion();
+
+    adapter.setQuestionAside(key, 'set aside', [['Push now'], null]);
+    assert.deepEqual(apiCalls[0].body, { answers: [['Push now'], ['set aside']] });
+  });
+
+  it('keeps a multi-select answer\'s labels together', () => {
+    const { adapter, apiCalls } = createAdapterBlockedOnQuestion();
+
+    adapter.setQuestionAside(key, 'set aside', [null, ['README', 'Changelog']]);
+    assert.deepEqual(apiCalls[0].body, { answers: [['set aside'], ['README', 'Changelog']] });
+  });
+
+  it('clears the pending question, so it is not answered, replied or rejected a second time', () => {
+    const { adapter, apiCalls } = createAdapterBlockedOnQuestion();
+
+    adapter.setQuestionAside(key, 'set aside', [null, null]);
+    assert.equal(getOpenCodeSession(adapter, keyToString(key)).pendingQuestion, null);
+
+    adapter.setQuestionAside(key, 'again', [null, null]);
+    adapter.answerQuestion(key, [['Push now'], ['README']]);
+    adapter.rejectQuestion(key);
+    assert.equal(apiCalls.length, 1, 'only the first resolution reaches the server');
+  });
+
+  it('is a no-op when no question is pending, or the session is not active', () => {
+    const { adapter, apiCalls } = createAdapterBlockedOnQuestion();
+    getOpenCodeSession(adapter, keyToString(key)).isActive = false;
+    adapter.setQuestionAside(key, 'set aside', [null, null]);
+    assert.deepEqual(apiCalls, []);
+
+    const idle = new OpenCodeAdapter();
+    assert.doesNotThrow(() => idle.setQuestionAside(key, 'set aside', [null]));
+  });
+
+  it('surfaces a failed reply through the adapter\'s error event, like an answer does', async () => {
+    const { adapter, errors } = createAdapterBlockedOnQuestion();
+    adapter['apiRequest'] = (async () => { throw new Error('server gone'); }) as OpenCodeAdapter['apiRequest'];
+    const originalError = console.error;
+    console.error = () => {};
+    try {
+      adapter.setQuestionAside(key, 'set aside', [null, null]);
+      await new Promise((resolve) => setImmediate(resolve));
+    } finally {
+      console.error = originalError;
+    }
+    assert.deepEqual(errors.map((error) => error.message), ['server gone']);
+  });
+});

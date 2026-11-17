@@ -1286,6 +1286,21 @@ export interface AgentAdapter extends EventEmitter {
   rejectQuestion?(key: SessionKey): void;
 
   /**
+   * @description Set the pending question ASIDE without answering it and without ending the turn: the question's tool call
+   * returns `text` — the bot's «nobody answered yet, go on, the answer comes later as a message»
+   * (`buildQuestionSetAsideText`) — and the agent carries on with its work. Not {@link rejectQuestion}, which is the
+   * abandonment path (the turn is interrupted, or on OpenCode the agent's loop ends).
+   *  - Claude json-stream / per-turn: the `can_use_tool` request is DENIED with `text` as its message, which the model
+   *    reads as the tool's result; no interrupt follows.
+   *  - OpenCode: the question is REPLIED to with `text` as the custom answer of every question left open; never rejected,
+   *    since a reject ends OpenCode's agent loop.
+   * `givenAnswers` is one slot per question: the answer already collected for it (kept as it is — OpenCode's reply takes
+   * the whole answer matrix at once), `null` for one left open. A no-op when no question is pending, and for a backend that
+   * implements neither question path (the tmux-scrape Claude, the terminal).
+   */
+  setQuestionAside?(key: SessionKey, text: string, givenAnswers: (string[] | null)[]): void;
+
+  /**
    * @description Whether this session's turn is wedged behind an open
    * interactive question (the agent's `question` tool is blocking the turn and
    * the bot has no `pendingQuestions` entry to break out with). OpenCode-only:

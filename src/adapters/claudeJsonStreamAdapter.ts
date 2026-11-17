@@ -2361,10 +2361,9 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
 
   answerQuestion(key: SessionKey, answers: string[][]): void {
     const session = this.sessions.get(keyToString(key));
-    if (!session?.isActive || !session.pendingQuestion) return;
-    const pending = session.pendingQuestion;
-    session.pendingQuestion = null;
-    this.clearQuestionSidecar(session);
+    if (!session?.isActive) return;
+    const pending = this.takePendingQuestion(session);
+    if (!pending) return;
     // The turn resumes now; reset the idle-watchdog clock so the (possibly long)
     // wait for the user's answer doesn't instantly trip it before output resumes.
     session.lastStdoutActivityAt = Date.now();
@@ -2381,11 +2380,38 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
 
   rejectQuestion(key: SessionKey): void {
     const session = this.sessions.get(keyToString(key));
-    if (!session?.pendingQuestion) return;
+    const pending = session ? this.takePendingQuestion(session) : null;
+    if (!session || !pending) return;
+    this.writeControlResponse(session, pending.requestId, buildCanUseToolDeny('User declined to answer the question.', pending.toolUseId));
+  }
+
+  /**
+   * @description Set the pending question aside: DENY its `can_use_tool` with `text` as the message. The CLI hands the model a
+   * denied tool call's message as the tool's result and the turn goes on — no interrupt, unlike {@link rejectQuestion}'s
+   * abandonment (the Agent SDK: «When denying, provide a message explaining why. Claude sees this message and may adjust its
+   * approach»). The answers already given travel in `text` itself, so `givenAnswers` is not read here.
+   */
+  setQuestionAside(key: SessionKey, text: string): void {
+    const session = this.sessions.get(keyToString(key));
+    if (!session?.isActive) return;
+    const pending = this.takePendingQuestion(session);
+    if (!pending) return;
+    // The turn resumes now, as after an answer: restart the idle-watchdog clock the wait for the person had run down.
+    session.lastStdoutActivityAt = Date.now();
+    this.writeControlResponse(session, pending.requestId, buildCanUseToolDeny(text, pending.toolUseId));
+  }
+
+  /**
+   * Take the pending question out of the session — its sidecar goes too, so a restart cannot resurface it — and hand it to the
+   * caller, who answers, denies or sets aside its `can_use_tool` request. `null` when none is pending (already resolved: a
+   * second resolution is a no-op, never a second control_response).
+   */
+  private takePendingQuestion(session: StreamSession): PendingStreamQuestion | null {
     const pending = session.pendingQuestion;
+    if (!pending) return null;
     session.pendingQuestion = null;
     this.clearQuestionSidecar(session);
-    this.writeControlResponse(session, pending.requestId, buildCanUseToolDeny('User declined to answer the question.', pending.toolUseId));
+    return pending;
   }
 
   private writeControlResponse(session: StreamSession, requestId: string, response: Record<string, unknown>): void {
