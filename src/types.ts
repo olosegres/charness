@@ -1317,13 +1317,23 @@ export interface AgentAdapter extends EventEmitter {
   setQuestionAside?(key: SessionKey, requestId: string, text: string, givenAnswers: (string[] | null)[]): boolean;
 
   /**
-   * @description Re-read the backend's OWN registry of open questions for this session into the adapter's, and say what it holds:
-   * `held` — a question is open there (the adapter now holds it, so {@link setQuestionAside} can act); `none` — the registry says
-   * there is none; `unknown` — it could not be read, or the adapter has no live session to ask for (a replacement may be under way).
+   * @description Re-read the backend's OWN registry of open questions for this session and say whether it holds `requestId`, the
+   * question the bot asks about: `held` — that very question is open there (the adapter now holds it, so {@link setQuestionAside}
+   * can act); `none` — the registry holds no such question: it is empty for this session, or holds ANOTHER one (the bot's copy is
+   * stale; the adapter's own is left alone, and {@link surfaceOpenQuestion} hands the other one to the bot); `unknown` — it could
+   * not be read, or the adapter has no live session to ask for (a replacement may be under way).
    * Only for a backend whose adapter merely CACHES such a registry (OpenCode: the server's `GET /question`); one that is itself the
    * authority on what it waits on (Claude json-stream: the CLI's blocked `can_use_tool`, saved beside the session) has none.
    */
-  resyncOpenQuestion?(key: SessionKey): Promise<'held' | 'none' | 'unknown'>;
+  resyncOpenQuestion?(key: SessionKey, requestId: string): Promise<'held' | 'none' | 'unknown'>;
+
+  /**
+   * @description Read the backend's OWN registry of open questions for this session and, when it holds one, hand it to the bot as a
+   * `question` event — the way a reattach does — so it is shown in the topic. The bot calls it after it closed a copy of a question
+   * the registry no longer holds: the question the registry holds NOW was never shown. Best-effort: nothing is emitted for an empty
+   * registry or a failed read. Only for a backend that has such a registry ({@link resyncOpenQuestion}).
+   */
+  surfaceOpenQuestion?(key: SessionKey): Promise<void>;
 
   /**
    * @description Whether this session's turn is wedged behind an open

@@ -317,7 +317,7 @@ describe('OpenCode: setQuestionAside replies with the text as the custom answer 
       const { adapter, apiCalls } = createAdapterThatLostTheQuestion(serverEntry);
       assert.equal(adapter.setQuestionAside(key, requestId, 'set aside', [null, null]), false, 'precondition: the adapter does not know the question');
 
-      assert.equal(await adapter.resyncOpenQuestion(key), 'held');
+      assert.equal(await adapter.resyncOpenQuestion(key, requestId), 'held');
 
       assert.deepEqual(apiCalls, [{ method: 'GET', urlPath: `/question?directory=${encodeURIComponent('/tmp/work-set-aside')}` }], 'the server is asked for this session\'s instance');
       assert.equal(getOpenCodeSession(adapter, keyToString(key)).pendingQuestion?.requestId, requestId);
@@ -330,31 +330,66 @@ describe('OpenCode: setQuestionAside replies with the text as the custom answer 
       const emitted: string[] = [];
       adapter.on('question', () => emitted.push('question'));
 
-      await adapter.resyncOpenQuestion(key);
+      await adapter.resyncOpenQuestion(key, requestId);
 
       assert.deepEqual(emitted, []);
     });
 
     it('none: the server has no question of this session (another session\'s question is not this one\'s)', async () => {
-      assert.equal(await createAdapterThatLostTheQuestion([]).adapter.resyncOpenQuestion(key), 'none');
-      assert.equal(await createAdapterThatLostTheQuestion([{ id: 'que_other', sessionID: 'ses_other', questions: twoQuestions }]).adapter.resyncOpenQuestion(key), 'none');
+      assert.equal(await createAdapterThatLostTheQuestion([]).adapter.resyncOpenQuestion(key, requestId), 'none');
+      assert.equal(await createAdapterThatLostTheQuestion([{ id: 'que_other', sessionID: 'ses_other', questions: twoQuestions }]).adapter.resyncOpenQuestion(key, requestId), 'none');
+    });
+
+    it('none for ANOTHER question: the server holds a different one than the bot asked about — the bot\'s copy is stale, and the adapter\'s cache is not filled with the other one', async () => {
+      const { adapter } = createAdapterThatLostTheQuestion([{ id: 'que_changed', sessionID: 'ses_set_aside', questions: twoQuestions }]);
+
+      assert.equal(await adapter.resyncOpenQuestion(key, requestId), 'none');
+
+      assert.equal(getOpenCodeSession(adapter, keyToString(key)).pendingQuestion, null, 'a tap on the stale buttons can not answer a question the owner never saw');
+      assert.equal(adapter.setQuestionAside(key, requestId, 'set aside', [null, null]), false);
+    });
+
+    it('surfaceOpenQuestion hands the question the server holds to the bot as a `question` event — and reads it into the cache the way a reattach does', async () => {
+      const { adapter } = createAdapterThatLostTheQuestion([{ id: 'que_changed', sessionID: 'ses_set_aside', questions: twoQuestions }]);
+      const emitted: string[] = [];
+      adapter.on('question', (_key: SessionKey, question: { requestId: string }) => emitted.push(question.requestId));
+
+      await adapter.surfaceOpenQuestion(key);
+
+      assert.deepEqual(emitted, ['que_changed']);
+      assert.equal(getOpenCodeSession(adapter, keyToString(key)).pendingQuestion?.requestId, 'que_changed');
+    });
+
+    it('surfaceOpenQuestion emits nothing when the server holds none of this session\'s, or the session is not active', async () => {
+      const none = createAdapterThatLostTheQuestion([{ id: 'que_other', sessionID: 'ses_other', questions: twoQuestions }]);
+      const emitted: string[] = [];
+      none.adapter.on('question', () => emitted.push('question'));
+      await none.adapter.surfaceOpenQuestion(key);
+
+      const inactive = createAdapterThatLostTheQuestion(serverEntry);
+      inactive.adapter.on('question', () => emitted.push('question'));
+      getOpenCodeSession(inactive.adapter, keyToString(key)).isActive = false;
+      await inactive.adapter.surfaceOpenQuestion(key);
+
+      assert.deepEqual(emitted, []);
+      assert.deepEqual(inactive.apiCalls, [], 'an inactive session is not even asked about');
     });
 
     it('unknown: the read failed, the answer is not a list, or the session is not active (a replacement may be under way) — never «none»', async () => {
       const originalWarn = console.warn;
       console.warn = () => {};
       try {
-        assert.equal(await createAdapterThatLostTheQuestion(new Error('server busy')).adapter.resyncOpenQuestion(key), 'unknown');
+        assert.equal(await createAdapterThatLostTheQuestion(new Error('server busy')).adapter.resyncOpenQuestion(key, requestId), 'unknown');
       } finally {
         console.warn = originalWarn;
       }
-      assert.equal(await createAdapterThatLostTheQuestion({ not: 'a list' }).adapter.resyncOpenQuestion(key), 'unknown');
+      assert.equal(await createAdapterThatLostTheQuestion({ not: 'a list' }).adapter.resyncOpenQuestion(key, requestId), 'unknown');
 
       const inactive = createAdapterThatLostTheQuestion(serverEntry);
       getOpenCodeSession(inactive.adapter, keyToString(key)).isActive = false;
-      assert.equal(await inactive.adapter.resyncOpenQuestion(key), 'unknown');
+      assert.equal(await inactive.adapter.resyncOpenQuestion(key, requestId), 'unknown');
       assert.deepEqual(inactive.apiCalls, [], 'and the server was not even asked');
-      assert.equal(await new OpenCodeAdapter().resyncOpenQuestion(key), 'unknown', 'no session at all');
+      assert.equal(await new OpenCodeAdapter().resyncOpenQuestion(key, requestId), 'unknown', 'no session at all');
     });
   });
 });

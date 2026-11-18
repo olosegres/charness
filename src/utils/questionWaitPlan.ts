@@ -209,9 +209,14 @@ export function getSetAsideAnswerTarget(record: SetAsideQuestionRecord): { index
   return question ? { index, question } : null;
 }
 
-/** A question's text as the check «the same question again» reads it: a run of whitespace and the ends do not tell two questions apart. */
-function normaliseQuestionTextForMatch(question: OpenCodeQuestion): string {
-  return getQuestionText(question).replace(/\s+/g, ' ').trim();
+/**
+ * A question as the check «the same question again» reads it: its text and its option labels, in order. A run of whitespace and the
+ * ends do not tell two apart; the header and the option descriptions do not count. The labels are part of it because short
+ * questions repeat word for word across unrelated steps («Proceed?»), and only a question with the same choices has the same answers.
+ */
+function getQuestionMatchKey(question: OpenCodeQuestion): string {
+  const normalise = (words: string): string => words.replace(/\s+/g, ' ').trim();
+  return JSON.stringify([normalise(getQuestionText(question)), question.options.map((option) => normalise(option.label))]);
 }
 
 /** @description What {@link getSetAsideRecordAskedAgain} found. */
@@ -222,16 +227,16 @@ export interface SetAsideRecordAskedAgain {
 }
 
 /**
- * @description The set-aside record the question the agent asks NOW repeats — it did not take «do not ask it again»: the same
- * question texts (the header and the options do not count) as the record's whole call, in the same order — the answers the
- * owner already gave ride along — or as the questions the record still has open (the rest of a call the owner answered in part,
- * asked again alone). The newest such record; `null` for a question that is new.
+ * @description The set-aside record the question the agent asks NOW repeats — it did not take «do not ask it again»: the same question
+ * texts AND option labels (the header does not count), in the same order, as the record's whole call — the answers the owner
+ * already gave ride along — or as the questions the record still has open (the rest of a call the owner answered in part, asked
+ * again alone). The newest such record; `null` for a question that is new.
  */
 export function getSetAsideRecordAskedAgain(records: SetAsideQuestionRecord[], questions: OpenCodeQuestion[]): SetAsideRecordAskedAgain | null {
   if (questions.length === 0) return null;
-  const askedTexts = questions.map(normaliseQuestionTextForMatch);
+  const askedKeys = questions.map(getQuestionMatchKey);
   const checkIsAsked = (candidates: OpenCodeQuestion[]): boolean =>
-    candidates.length === askedTexts.length && candidates.every((candidate, index) => normaliseQuestionTextForMatch(candidate) === askedTexts[index]);
+    candidates.length === askedKeys.length && candidates.every((candidate, index) => getQuestionMatchKey(candidate) === askedKeys[index]);
   for (const record of [...records].reverse()) {
     if (checkIsAsked(record.questions)) return { record, answers: record.answers };
     const openQuestions = record.questions.filter((_, index) => record.answers[index] === null);

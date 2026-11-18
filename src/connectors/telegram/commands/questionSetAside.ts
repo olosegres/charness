@@ -52,7 +52,7 @@ export interface QuestionSetAsidePorts extends Pick<BotCore, 'withThreadLocale' 
   /** The state store (assigned at boot): the saved set-aside records and the counter their ids come from. */
   getState: () => Pick<StateStore, 'takeNextSetAsideQuestionSequence' | 'getSetAsideQuestions' | 'setSetAsideQuestions' | 'pushMessageId'>;
   pendingQuestions: Map<string, PendingQuestionState>;
-  getThreadAdapter: (key: SessionKey) => Pick<AgentAdapter, 'setQuestionAside' | 'resyncOpenQuestion'>;
+  getThreadAdapter: (key: SessionKey) => Pick<AgentAdapter, 'setQuestionAside' | 'resyncOpenQuestion' | 'surfaceOpenQuestion'>;
   runQuestionLifecycleOp: <TResult>(key: SessionKey, op: () => Promise<TResult>) => Promise<TResult>;
   /** Persist the pending question (the in-memory map and the saved state, which `bot.ts` keeps in lockstep). */
   setPendingQuestion: (key: SessionKey, value: PendingQuestionState) => void;
@@ -106,7 +106,8 @@ export interface LateAnswerTarget {
 export interface SetAsideReplyCandidate {
   message_id: number;
   text: string;
-  reply_to_message?: { message_id: number } | undefined;
+  /** The message it is genuinely a reply to (`getTelegramReplyTargetId`: «post in this topic» is no reply), `null` for none. */
+  replyToMessageId: number | null;
   isForwarded: boolean;
 }
 
@@ -240,16 +241,16 @@ export function createQuestionSetAside(ports: QuestionSetAsidePorts) {
    * record — and `ended` when it did not: the bot's copy was closed (nothing is held), or left waiting with one more try armed.
    * Nothing is awaited between the second try and the return, like the first.
    */
-  async function settleQuestionTheAdapterDoesNotHold(key: SessionKey, adapter: Pick<AgentAdapter, 'setQuestionAside' | 'resyncOpenQuestion'>, pending: PendingQuestionState, text: string): Promise<'told' | 'ended'> {
+  async function settleQuestionTheAdapterDoesNotHold(key: SessionKey, adapter: Pick<AgentAdapter, 'setQuestionAside' | 'resyncOpenQuestion' | 'surfaceOpenQuestion'>, pending: PendingQuestionState, text: string): Promise<'told' | 'ended'> {
     const kStr = keyToString(key);
     const { requestId } = pending.data;
     // A backend with no registry of its own to ask holds exactly what it says it holds.
-    const server = adapter.resyncOpenQuestion ? await adapter.resyncOpenQuestion(key) : 'none';
+    const server = adapter.resyncOpenQuestion ? await adapter.resyncOpenQuestion(key, requestId) : 'none';
     // The agent asked the next question, or this one was answered, while the server was asked: it is not this one's business any more.
     if (pendingQuestions.get(kStr) !== pending) return 'ended';
     if (server === 'held' && adapter.setQuestionAside?.(key, requestId, text, pending.answers)) return 'told';
     if (server === 'none') {
-      await dropQuestionTheAdapterDoesNotHold(key, pending);
+      await dropQuestionTheAdapterDoesNotHold(key, adapter, pending);
       return 'ended';
     }
     const attempt = (retryAttempts.get(`${kStr}:${requestId}`) ?? 0) + 1;
@@ -317,12 +318,17 @@ export function createQuestionSetAside(ports: QuestionSetAsidePorts) {
     return getThreadAdapter(key).setQuestionAside?.(key, questionData.requestId, text, answers) === true;
   }
 
-  /** The bot's copy of a waiting question that the agent's side confirms it holds no such question for: stale, so it ends as «not answered». */
-  async function dropQuestionTheAdapterDoesNotHold(key: SessionKey, pending: PendingQuestionState): Promise<void> {
+  /**
+   * The bot's copy of a waiting question that the agent's side confirms it holds no such question for: stale, so it ends as «not
+   * answered». The question the agent's side holds INSTEAD (a backend whose server can hold another one than the bot knew of) was
+   * never shown: it is handed to the bot now, after the stale copy is gone, so it shows as the question that waits.
+   */
+  async function dropQuestionTheAdapterDoesNotHold(key: SessionKey, adapter: Pick<AgentAdapter, 'surfaceOpenQuestion'>, pending: PendingQuestionState): Promise<void> {
     console.warn(`[questionSetAside] ${keyToString(key)}: the agent holds no question ${pending.data.requestId}, so there is nothing to set aside; the bot's copy is closed as not answered`);
     clearPendingQuestion(key);
     const question = pending.data.questions[pending.currentIndex];
     if (pending.messageId !== null && question) await closeQuestionMessage(key, pending.messageId, question, 'unanswered');
+    await adapter.surfaceOpenQuestion?.(key);
   }
 
   /**
@@ -504,7 +510,10 @@ export function createQuestionSetAside(ports: QuestionSetAsidePorts) {
     const record = getSetAsideRecords(key).find((candidate) => candidate.id === recordId);
     const open = record ? getSetAsideAnswerTarget(record) : null;
     const tappedMessageId = getCallbackMessageId(ctx);
-    if (!record || !open || tappedMessageId === null || record.messageId !== tappedMessageId) { await ctx.answerCbQuery(t('cb.no_pending_question')); return; }
+    // A second tap made while the first answer of the record's last question is still on its way answers nothing — in the toast alone:
+    // the topic shows the first answer, and a notice beside it would read as «your answer was not sent».
+    const isLastAnswerOnItsWay = answeringRecords.has(`${keyToString(key)}:${recordId}`);
+    if (!record || !open || tappedMessageId === null || record.messageId !== tappedMessageId || isLastAnswerOnItsWay) { await ctx.answerCbQuery(t('cb.no_pending_question')); return; }
     const label = open.question.options[optionIndex]?.label;
     if (!label) { await ctx.answerCbQuery(t('cb.invalid_option')); return; }
     const isLabelCut = await answerCallbackWithFittedText(ctx, label);
@@ -526,7 +535,7 @@ export function createQuestionSetAside(ports: QuestionSetAsidePorts) {
    * still no ordinary message — it was meant as an answer, so it is answered with a note, never passed on as a prompt or a pick.
    */
   async function answerSetAsideQuestionByReply(from: User | undefined, key: SessionKey, message: SetAsideReplyCandidate, role: 'admin' | 'talker'): Promise<boolean> {
-    const replyToMessageId = message.reply_to_message?.message_id ?? null;
+    const { replyToMessageId } = message;
     const setAside = getSetAsideRecords(key);
     const text = message.text.trim();
     // A slash command is no answer; a message that replies to nothing, or when nothing is set aside, is none either.

@@ -272,7 +272,7 @@ export const uzDict: Record<string, string> = {
   'agent.question_unanswered_note': '❌ Javobsiz qoldi',
   'agent.question_asked_again_note': '↓ Pastda qayta berildi',
   'agent.question_set_aside_note': '⏸ Agent javobingizsiz davom etdi — hali ham javob berishingiz mumkin',
-  'agent.set_aside_question_gone_notice': 'Bu savolga allaqachon javob berilgan yoki u yopilgan — agentga hech narsa yuborilmadi.',
+  'agent.set_aside_question_gone_notice': 'Bu savolga allaqachon javob berilgan yoki u yopilgan — bu hech narsani o‘zgartirmadi.',
   'agent.set_aside_next_question_failed_notice': 'Keyingi savolni yuborib bo‘lmadi, shuning uchun javobingiz qabul qilinmadi — qayta urinib ko‘ring.',
   'agent.login_code_relayed': '🔐 Kirish kodi Claude ga yuborildi — token xabari tarixdan o‘chirildi.',
   'agent.login_url': '🔐 Claude ga kirish uchun ushbu havolani oching, kirishni yakunlang va kodni shu yerga joylashtiring:\n{url}',

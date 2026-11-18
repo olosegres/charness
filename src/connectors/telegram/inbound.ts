@@ -30,9 +30,11 @@ import { getTelegramFileMeta, type TelegramFileKind, type TelegramFileMeta } fro
 import {
   buildReplyQuoteBlock,
   extractReplyQuote,
+  getReplyTargetMessageId,
   type ReplyQuoteAttachment,
   type ReplyQuoteAuthorKind,
   type ReplyQuoteSource,
+  type ReplyTargetSource,
 } from '../../utils/replyQuote';
 import { buildMessageAuthorMark, describeMessageAuthor, type NonOperatorAuthorKind } from '../../utils/authorMark';
 import { buildForwardedMark, describeForwardedOrigin, type ForwardedMarkSource } from '../../utils/forwardedMark';
@@ -298,6 +300,25 @@ function getReplyQuoteAuthor(
   return { kind, name, username };
 }
 
+/** The structural facts of a message's reply that tell a genuine reply from «post in this topic» ({@link checkIsReplyToNobody}). */
+function getReplyTargetSource(message: Message, replied: Message): ReplyTargetSource {
+  return {
+    replyMessageId: replied.message_id,
+    topicRootId: 'message_thread_id' in message ? message.message_thread_id : undefined,
+    isServiceMessage: 'forum_topic_created' in replied,
+  };
+}
+
+/**
+ * @description The message a Telegram message is genuinely a REPLY to: its id, or `null` when it replies to nothing — or to nobody:
+ * a client attaches the forum topic's root message to a plain message typed in a topic («post in this topic»), and that is no reply.
+ * Every route that asks what a reply is for reads this, never `reply_to_message` itself.
+ */
+export function getTelegramReplyTargetId(message: Message): number | null {
+  const replied = 'reply_to_message' in message ? message.reply_to_message : undefined;
+  return replied ? getReplyTargetMessageId(getReplyTargetSource(message, replied)) : null;
+}
+
 /**
  * @description A message's Telegram REPLY reduced to the structural input of
  * {@link extractReplyQuote}, or `undefined` when the message replies to nothing.
@@ -318,9 +339,7 @@ function getReplyQuoteSource(
     replyText: 'text' in replied ? replied.text : undefined,
     replyCaption: 'caption' in replied ? replied.caption : undefined,
     replyAttachment: getReplyQuoteAttachment(replied, findSavedFile),
-    replyMessageId: replied.message_id,
-    topicRootId: 'message_thread_id' in message ? message.message_thread_id : undefined,
-    isServiceMessage: 'forum_topic_created' in replied,
+    ...getReplyTargetSource(message, replied),
     authorKind: author.kind,
     authorName: author.name,
     authorUsername: author.username,

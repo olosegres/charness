@@ -62,8 +62,9 @@ interface Harness {
   delivered: Array<{ text: string }>;
   /** What the topic was told (a notice, a reply). */
   replies: string[];
-  /** How many times the server was asked what it holds. */
+  /** How many times the server was asked what it holds, and which question it was asked about. */
   resyncs: number;
+  resyncRequestIds: string[];
   /** The questions posted as new messages (the next question of a record), and the pins made without a notification. */
   sentQuestions: Array<{ question: OpenCodeQuestion; keyboard: InlineKeyboardMarkup | undefined; messageId: number }>;
   silentPins: number[];
@@ -113,8 +114,8 @@ function createHarness(options: {
 
   const returns = Array.isArray(options.adapterReturns) ? options.adapterReturns : [options.adapterReturns ?? true];
   let tries = 0;
-  const harnessHolder: { resyncs: number } = { resyncs: 0 };
-  const adapter: Pick<AgentAdapter, 'setQuestionAside' | 'resyncOpenQuestion'> = {
+  const harnessHolder: { resyncs: number; resyncRequestIds: string[] } = { resyncs: 0, resyncRequestIds: [] };
+  const adapter: Pick<AgentAdapter, 'setQuestionAside' | 'resyncOpenQuestion' | 'surfaceOpenQuestion'> = {
     ...(options.hasSetAside === false ? {} : {
       setQuestionAside: (_key: SessionKey, requestId: string, text: string, givenAnswers: (string[] | null)[]) => {
         events.push('adapter');
@@ -129,11 +130,13 @@ function createHarness(options: {
       },
     }),
     ...(options.resync === undefined ? {} : {
-      resyncOpenQuestion: async () => {
+      resyncOpenQuestion: async (_key: SessionKey, requestId: string) => {
         harnessHolder.resyncs += 1;
         events.push('resync');
+        harnessHolder.resyncRequestIds.push(requestId);
         return options.resync ?? 'unknown';
       },
+      surfaceOpenQuestion: async () => { events.push('surface'); },
     }),
   };
 
@@ -173,7 +176,7 @@ function createHarness(options: {
     postQuestionAnew: (_key, questionData) => { postedAnew.push(questionData); },
   };
   const settle = async (): Promise<void> => { await queue.run(async () => {}); await sleep(0); };
-  return { ports, setAside: createQuestionSetAside(ports), pendingQuestions, events, adapterCalls, edits, closes, unpins, cleared, savedRecords, savedPending, markedNewMessage, state: harnessState, delivered, replies, get resyncs() { return harnessHolder.resyncs; }, sentQuestions, silentPins, pushedMessageIds, postedAnew, settle };
+  return { ports, setAside: createQuestionSetAside(ports), pendingQuestions, events, adapterCalls, edits, closes, unpins, cleared, savedRecords, savedPending, markedNewMessage, state: harnessState, delivered, replies, get resyncs() { return harnessHolder.resyncs; }, resyncRequestIds: harnessHolder.resyncRequestIds, sentQuestions, silentPins, pushedMessageIds, postedAnew, settle };
 }
 
 function sleep(ms: number): Promise<void> {
@@ -567,9 +570,35 @@ describe('setPendingQuestionAside — the agent\'s side does not hold the questi
     });
 
     assert.equal(harness.resyncs, 1);
+    assert.deepEqual(harness.resyncRequestIds, ['req_a'], 'the server is asked about THE question the bot holds');
     assert.equal(warnings.length, 1);
     assert.deepEqual(harness.closes, [{ messageId: 500, ending: 'unanswered' }]);
     assert.equal(harness.pendingQuestions.has(keyString), false);
+  });
+
+  it('OpenCode, the server holds ANOTHER question: the stale copy is closed FIRST, and only then is the server\'s question handed to the bot to be shown', async () => {
+    const harness = createHarness({ adapterReturns: false, resync: 'none' });
+    harness.pendingQuestions.set(keyString, createPending('req_a'));
+
+    await captureWarnings(async () => {
+      await harness.setAside.setPendingQuestionAside(key, 'req_a');
+    });
+
+    assert.equal(harness.events.at(-1), 'surface', 'the other question is surfaced');
+    assert.ok(harness.events.indexOf('clear') < harness.events.indexOf('surface'), 'after the stale copy left the pending state — so it cannot take the new question with it');
+    assert.equal(harness.events.filter((event) => event === 'surface').length, 1);
+  });
+
+  it('a question the server still holds, or one it could not tell about, is not followed by a surfacing: nothing was closed', async () => {
+    for (const resync of ['unknown', 'held'] as const) {
+      const harness = createHarness({ adapterReturns: [false, false], resync, retryDelayMs: 1_000 });
+      harness.pendingQuestions.set(keyString, createPending('req_a'));
+      await captureWarnings(async () => {
+        await harness.setAside.setPendingQuestionAside(key, 'req_a');
+      });
+      harness.setAside.clearQuestionSetAsideTimer(key);
+      assert.ok(!harness.events.includes('surface'), resync);
+    }
   });
 
   it('OpenCode, the server cannot be read: nothing is closed, the question keeps waiting, one log line — and the wait ends again, so a server that answers later still sets it aside', async () => {
@@ -745,7 +774,7 @@ describe('checkIsSetAsideQuestionMessage', () => {
 const operatorReply = (messageId: number, text: string, replyTo: number | null, overrides: Partial<SetAsideReplyCandidate> = {}): SetAsideReplyCandidate => ({
   message_id: messageId,
   text,
-  reply_to_message: replyTo === null ? undefined : { message_id: replyTo },
+  replyToMessageId: replyTo,
   isForwarded: false,
   ...overrides,
 });
@@ -849,7 +878,7 @@ describe('a late answer by reply', () => {
     release();
 
     assert.equal(second, true, 'taken as the answer it was meant to be — never passed on as a prompt or a pick for another question');
-    assert.deepEqual(harness.replies, ['That question is already answered or closed — nothing was sent to the agent.']);
+    assert.deepEqual(harness.replies, ['That question is already answered or closed — this changed nothing.']);
     assert.equal(await first, true);
     assert.equal(harness.delivered.length, 1);
   });
@@ -951,7 +980,7 @@ describe('a late answer to a call with several questions', () => {
     assert.deepEqual([first, second], [true, true]);
     assert.deepEqual(harness.savedRecords.get(keyString)?.[0].answers, [['Push now'], null]);
     assert.deepEqual(harness.delivered, []);
-    assert.deepEqual(harness.replies, ['That question is already answered or closed — nothing was sent to the agent.']);
+    assert.deepEqual(harness.replies, ['That question is already answered or closed — this changed nothing.']);
   });
 
   it('an answer meant for a question that is no longer the open one — a tap on the first question\'s message after the record moved to the second — is gone', async () => {

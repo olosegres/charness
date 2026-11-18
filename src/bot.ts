@@ -176,6 +176,7 @@ import {
   checkShouldInvalidateAdminCache,
   createTelegramConnectorInbound,
   checkIsTelegramForward,
+  getTelegramReplyTargetId,
   checkIsWrittenMessage,
   getTelegramCommand,
   checkHasLeftGroup,
@@ -10073,12 +10074,12 @@ async function handleTalkerText(ctx: NarrowedContext<Context, Update.MessageUpda
     return;
   }
   if (adapter.checkIsActive(key)) {
-    await deliverActivePrompt(key, adapter, text, intake, sentAtMs, messageContext, { replyToMessageId: ctx.message.reply_to_message?.message_id });
+    await deliverActivePrompt(key, adapter, text, intake, sentAtMs, messageContext, { replyToMessageId: getTelegramReplyTargetId(ctx.message) });
     return;
   }
   // A sleeping conversation is resumed by the message itself, as for anybody (L-D4).
   if (await resumeSleepingSessionForPrompt(key)) {
-    await deliverActivePrompt(key, getThreadAdapter(key), text, intake, sentAtMs, messageContext, { replyToMessageId: ctx.message.reply_to_message?.message_id });
+    await deliverActivePrompt(key, getThreadAdapter(key), text, intake, sentAtMs, messageContext, { replyToMessageId: getTelegramReplyTargetId(ctx.message) });
     return;
   }
   await replyToThread(key, t('access.noAgentForTalkerNotice'));
@@ -10103,7 +10104,7 @@ bot.on(message('text'), async (ctx) => {
   const { key } = speaker;
   // A REPLY to a question the bot set aside is its late answer — from the operator and from a topic member alike. It is not a prompt:
   // it cancels no question that waits now, and reaches the agent as the late-answer message.
-  if (await answerSetAsideQuestionByReply(ctx.from, key, { message_id: ctx.message.message_id, text: ctx.message.text, reply_to_message: ctx.message.reply_to_message, isForwarded: checkIsTelegramForward(ctx.message) }, speaker.role)) return;
+  if (await answerSetAsideQuestionByReply(ctx.from, key, { message_id: ctx.message.message_id, text: ctx.message.text, replyToMessageId: getTelegramReplyTargetId(ctx.message), isForwarded: checkIsTelegramForward(ctx.message) }, speaker.role)) return;
   if (speaker.role === 'talker') {
     await handleTalkerText(ctx, key);
     return;
@@ -10439,14 +10440,14 @@ bot.on(message('text'), async (ctx) => {
   // REPLY or FORWARD folds its context into the prompt (see `getMessageContext`).
   if (adapter.checkIsActive(key)) {
     const messageContext = getMessageContext(key, ctx.message);
-    await deliverActivePrompt(key, adapter, text, { source: 'text', requesterId: getTopicRequesterId(ctx.from) }, ctx.message.date * 1000, messageContext, { replyToMessageId: ctx.message.reply_to_message?.message_id });
+    await deliverActivePrompt(key, adapter, text, { source: 'text', requesterId: getTopicRequesterId(ctx.from) }, ctx.message.date * 1000, messageContext, { replyToMessageId: getTelegramReplyTargetId(ctx.message) });
     return;
   }
 
   // A sleeping conversation (its process stopped, its session kept) is resumed by
   // the message itself (L-D4) — the prompt continues the same conversation.
   if (await resumeSleepingSessionForPrompt(key)) {
-    await deliverActivePrompt(key, getThreadAdapter(key), text, { source: 'text', requesterId: getTopicRequesterId(ctx.from) }, ctx.message.date * 1000, getMessageContext(key, ctx.message), { replyToMessageId: ctx.message.reply_to_message?.message_id });
+    await deliverActivePrompt(key, getThreadAdapter(key), text, { source: 'text', requesterId: getTopicRequesterId(ctx.from) }, ctx.message.date * 1000, getMessageContext(key, ctx.message), { replyToMessageId: getTelegramReplyTargetId(ctx.message) });
     return;
   }
 
@@ -11716,6 +11717,7 @@ async function deliverActivePrompt(
   intake: TopicRequestIntake | null,
   sentAtMs?: number,
   messageContext?: MessageContext,
+  /** `replyToMessageId`: the message the text is genuinely a reply to (`getTelegramReplyTargetId`), `null` for none. */
   options: { replyToMessageId?: number | null } = {},
 ): Promise<LatePromptOutcome | null> {
   // A FORWARDED message is content, never control input: it answers no question and purges no context, whatever its words are.
@@ -11732,15 +11734,13 @@ async function deliverActivePrompt(
   const pending = pendingQuestions.get(keyToString(key));
   if (pending && adapter.answerQuestion) {
     // A REPLY to a message other than the question that waits NOW (one that was answered, closed or set aside, or any other message)
-    // is not a response to this question: no number in it is a pick, and it does not cancel the question either — it is an ordinary
-    // prompt. Otherwise «2» typed as a reply to an old question's message would answer the one the owner never looked at.
+    // is not a response to this question: no number in it is a pick — «2» typed as a reply to an old question's message would answer
+    // the one the owner never looked at. Its words still move the agent on like any text: below, they cancel the waiting question.
     const { replyToMessageId } = options;
-    if (replyToMessageId != null && replyToMessageId !== pending.messageId && replyToMessageId !== pending.originalMessageId) {
-      return deliverPromptByState(key, adapter, text, intake, sentAtMs, messageContext);
-    }
+    const isReplyToAnotherMessage = replyToMessageId != null && replyToMessageId !== pending.messageId && replyToMessageId !== pending.originalMessageId;
     const currentQuestion = pending.data.questions[pending.currentIndex];
     const route = getQuestionReplyRoute(text, currentQuestion);
-    if (route.kind === 'answer' && !isForwarded) {
+    if (route.kind === 'answer' && !isForwarded && !isReplyToAnotherMessage) {
       // Answering a pending question (bare digit) is a pick, not a prompt about
       // the quote — the reply context is deliberately dropped here. Not a request
       // either: the turn it unblocks continues under the open one. A forwarded digit

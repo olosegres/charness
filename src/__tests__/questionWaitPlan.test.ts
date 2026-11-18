@@ -408,10 +408,23 @@ describe('getSetAsideRecordAskedAgain — the agent asks a question whose set-as
     assert.deepEqual(getSetAsideRecordAskedAgain([record], [deployQuestion]), { record, answers: [null] });
   });
 
-  it('reads only the question TEXT: another header, other options or the same words spaced differently are the same question', () => {
+  it('reads the text and the option labels, not the header or the descriptions: another header, descriptions or spacing is the same question', () => {
     const record = createRecord({ id: 'a' });
-    const reworded: OpenCodeQuestion = { question: '  Push the fix to main now,\n or wait   for the review? ', header: 'Shipping', options: [{ label: 'Yes' }, { label: 'No' }, { label: 'Later' }] };
+    const reworded: OpenCodeQuestion = {
+      question: '  Push the fix to main now,\n or wait   for the review? ',
+      header: 'Shipping',
+      options: [{ label: 'Push now', description: 'tests are green' }, { label: ' Wait  for the review ' }],
+    };
     assert.equal(getSetAsideRecordAskedAgain([record], [reworded])?.record, record);
+  });
+
+  it('the same words with other options are a NEW question: a short question that repeats across steps is not swallowed', () => {
+    const proceed = (labels: string[]): OpenCodeQuestion => ({ question: 'Proceed?', header: 'Next', options: labels.map((label) => ({ label })) });
+    const record = createRecord({ id: 'a', questions: [proceed(['Deploy', 'Hold'])] });
+    assert.equal(getSetAsideRecordAskedAgain([record], [proceed(['Delete the branch', 'Keep it'])]), null, 'other labels');
+    assert.equal(getSetAsideRecordAskedAgain([record], [proceed(['Deploy', 'Hold', 'Later'])]), null, 'one more label');
+    assert.equal(getSetAsideRecordAskedAgain([record], [proceed(['Hold', 'Deploy'])]), null, 'the labels in another order');
+    assert.equal(getSetAsideRecordAskedAgain([record], [proceed(['Deploy', 'Hold'])])?.record, record, 'the same labels');
   });
 
   it('a question with another text is a new one', () => {

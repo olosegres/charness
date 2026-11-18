@@ -240,7 +240,7 @@ the topic. The pieces:
   answer». `clearPendingQuestion` clears it. It is the bot's own and independent of the idle fire, of the agent's background work and of
   queued input. `CHARNESS_TEST_TIMINGS` `questionSetAsideWaitMs` cuts a finite wait for a flow.
 - **A question asked again** (`answerQuestionAskedAgain`, called first by `handleAgentQuestion`): the agent that did not take «do not ask it
-  again» and puts the SAME question (`getSetAsideRecordAskedAgain`: the same question texts, in order — the header and the options do not
+  again» and puts the SAME question (`getSetAsideRecordAskedAgain`: the same question texts AND option labels, in order — the header does not
   count — as a record's whole call or as the questions it still has open) while its set-aside copy is open is told AT ONCE, in the set-aside
   text worded «still open», through `setQuestionAside` on the question it holds now; nothing else happens — no second message, no pin, no
   record, no timer, nothing waiting. It runs in the lifecycle queue; when by then the record is gone, or the agent's side cannot be told,
@@ -258,8 +258,10 @@ the topic. The pieces:
   the options (`agent.question_set_aside_note`) and the same option buttons, whose data is `qs_<record id>_<option index>`.
 - **The bot holds the question and the adapter says it holds none** (at the end of the wait): json-stream — the CLI's own question is the authority, so the
   bot's copy is stale and closes as «not answered» with one log line; OpenCode — the adapter only caches the server's registry, so the server is asked
-  (`resyncOpenQuestion`): it holds the question → set aside after all; it confirms none → closed as above; it cannot be read → nothing closes, one log line,
-  and the wait ends again after `setAsideRetryDelayMs`, at most `setAsideRetryLimit` times.
+  (`resyncOpenQuestion(key, requestId)`): it holds THAT question → set aside after all; it holds none, or ANOTHER one → the bot's copy is closed as above and
+  the server's question is then handed to the bot as a new one (`surfaceOpenQuestion`: a `question` event, the way a reattach does), so it is shown
+  instead of being left unseen; it cannot be read → nothing closes, one log line, and the wait ends again after `setAsideRetryDelayMs`, at most
+  `setAsideRetryLimit` times.
 - **The pin stays** and belongs to the record: `releasePendingQuestionToSetAside` (`bot.ts`) drops the map entry that tracks «the pinned question»
   WITHOUT unpinning, so the pin of the question the agent asks next neither retires it nor counts as a re-pin (silent). A record's pin is released
   when the record closes.
@@ -281,8 +283,11 @@ the topic. The pieces:
   bot's own `[Late answer …]` header. Each answer is meant for the question it was tapped or replied to on (`LateAnswerTarget`: record, question
   index, message): checked again inside the lifecycle queue, so a double tap on a call with several questions answers the first once and the
   second is `gone` — told «already answered or closed» — never given to the next question. The next question of a call is posted BEFORE the answered
-  one closes; a post that fails takes nothing (the record stays on its question, the owner is told to try again). A reply to a message other than the
-  question that waits NOW is no pick for it and cancels nothing (`deliverActivePrompt`, `replyToMessageId`).
+  one closes; a post that fails takes nothing (the record stays on its question, the owner is told to try again). A second tap on a record's last question while
+  the first answer is on its way answers nothing in the toast alone. A reply to a message other than the question that waits NOW is no pick for
+  it, but its words still cancel the waiting question like any text (`deliverActivePrompt`, `replyToMessageId`). The reply target is always
+  `getTelegramReplyTargetId`: a client attaches the topic's root message to a plain message typed in a topic («post in this topic»), and that is
+  no reply — no route reads `reply_to_message` itself.
 - **Ends**: the release of a conversation's ids (`/new`, `/quit`, `/quitall`, leaving the folder), a switch to another backend or conversation, and a
   boot that finds the conversation released (not active, no saved id) close every open record as «not answered» and release the pins
   (`closeSetAsideQuestions`, in the lifecycle queue: after a set-aside in flight, so none is saved for a conversation that is gone; the list is emptied

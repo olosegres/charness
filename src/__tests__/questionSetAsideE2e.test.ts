@@ -660,7 +660,7 @@ describe('A question nobody answers is set aside, end to end: built charness, fa
       await waitingTopic.waitForMessage('the agent reading the late answer after it', (message) => message.message_id > second.message_id && message.text.includes('Working on unknown.'));
     });
 
-    it('a number typed as a reply to the message of a question that is CLOSED answers nothing: the question that waits keeps waiting and the reply is an ordinary prompt', async () => {
+    it('a number typed as a reply to the message of a question that is CLOSED is no pick for the question that waits: it cancels that question like any other text and reaches the agent as a prompt', async () => {
       const { question: closed, record } = await askAndWaitForSetAside('LATE-12');
       assert.equal(await topic.tapAndAwaitAnswer(closed, `qs_${record.id}_0`), fakeAskQuestion.shortOptionLabel);
       await topic.waitForMessageText('the answer under the question', closed, (text) => text.endsWith(`\n\n${buildAnsweredNote(fakeAskQuestion.shortOptionLabel)}`));
@@ -675,16 +675,36 @@ describe('A question nobody answers is set aside, end to end: built charness, fa
       fakeTelegram.pushOperatorMessage(topicThreadId, '2', { replyToMessageId: closed.message_id });
       await getCharness().waitFor('the reply to reach the agent as a prompt', replyTimeoutMs, () => getAgentPrompts('\n\n2').length > promptsBefore);
 
-      // Load-bearing: «2» did not pick option 2 of the question that waits, and did not cancel it.
-      assert.equal(getControlResponses().length, responsesBefore, 'the agent heard nothing about the waiting question');
-      assert.equal(getControlRequests().filter((request) => request.subtype === 'interrupt').length, interruptsBefore, 'no interrupt');
-      assert.ok(readPersistedState(getLayout()).pendingQuestions?.[topicKey], 'the question still waits');
-      assert.deepEqual(topic.getKeyboardData(readKeptMessage(waiting)), [['qa_0_0'], ['qa_0_1']], 'with its buttons');
-      assert.ok(topic.listMessages().every((message) => !message.text.includes(enDict['agent.question_cancelled_for_prompt'])), 'and nothing was cancelled');
+      // Load-bearing: «2» did not pick option 2 of the question that waits — it cancelled it, as any other text does.
+      await topic.waitForMessageText('the «not answered» note under the question the reply cancelled', waiting, (text) => text.endsWith(`\n\n${unansweredNote}`));
+      const verdicts = getControlResponses().slice(responsesBefore);
+      assert.equal(verdicts.length, 1, 'the agent heard ONE verdict for the waiting question');
+      assert.equal(verdicts[0].behavior, 'deny', 'a refusal, not a pick');
+      assert.equal(verdicts[0].answerCount, 0, 'option 2 was not picked');
+      assert.equal(getControlRequests().filter((request) => request.subtype === 'interrupt').length, interruptsBefore + 1, 'the turn was interrupted, as for any text');
+      assert.equal(readPersistedState(getLayout()).pendingQuestions?.[topicKey], undefined, 'nothing waits any more');
+      assert.ok(!readKeptMessage(waiting).text.includes(buildAnsweredNote(fakeAskQuestion.longOptionLabel)), 'and the question shows no answer');
+    });
 
-      // A reply to the question that DOES wait is a pick, as ever.
-      fakeTelegram.pushOperatorMessage(topicThreadId, '1', { replyToMessageId: waiting.message_id });
-      await topic.waitForMessageText('the pick under the waiting question', waiting, (text) => text.endsWith(buildAnsweredNote(fakeAskQuestion.shortOptionLabel)));
+    it('a reply to an ordinary message of the agent while a question waits cancels it like any text; a plain number typed in the topic — which a real client sends as a reply to the topic root — is a pick', async () => {
+      const { question: setAside } = await askAndWaitForSetAside('LATE-15');
+      const agentMessage = await waitingTopic.waitForMessage('the agent going on', (message) => message.message_id > setAside.message_id && message.text.includes(fakeAskSetAsideTurnText));
+
+      const waiting = await askQuestion('LATE-16');
+      await waitForPinned(waiting);
+      const interruptsBefore = getControlRequests().filter((request) => request.subtype === 'interrupt').length;
+      const promptsBefore = getAgentPrompts('use the staging branch instead').length;
+      fakeTelegram.pushOperatorMessage(topicThreadId, 'use the staging branch instead', { replyToMessageId: agentMessage.message_id });
+      await getCharness().waitFor('the reply to reach the agent as a prompt', replyTimeoutMs, () => getAgentPrompts('use the staging branch instead').length > promptsBefore);
+      await topic.waitForMessageText('the «not answered» note under the question the reply cancelled', waiting, (text) => text.endsWith(`\n\n${unansweredNote}`));
+      assert.equal(getControlRequests().filter((request) => request.subtype === 'interrupt').length, interruptsBefore + 1, 'the turn was interrupted');
+      assert.equal(readPersistedState(getLayout()).pendingQuestions?.[topicKey], undefined, 'nothing waits any more');
+
+      // A number typed with no reply at all carries the topic root as its reply target on the wire: it is no reply, and it picks.
+      const next = await askQuestion('LATE-17');
+      await waitForPinned(next);
+      fakeTelegram.pushOperatorMessage(topicThreadId, '1');
+      await topic.waitForMessageText('the pick under the waiting question', next, (text) => text.endsWith(buildAnsweredNote(fakeAskQuestion.shortOptionLabel)));
     });
 
     it('a tap on a question whose conversation sleeps wakes it: the late answer reaches the RESUMED process', async () => {

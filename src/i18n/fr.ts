@@ -272,7 +272,7 @@ export const frDict: Record<string, string> = {
   'agent.question_unanswered_note': '❌ Sans réponse',
   'agent.question_asked_again_note': '↓ Reposée plus bas',
   'agent.question_set_aside_note': '⏸ L’agent a continué sans votre réponse — vous pouvez encore répondre',
-  'agent.set_aside_question_gone_notice': 'Cette question est déjà répondue ou fermée — rien n’a été envoyé à l’agent.',
+  'agent.set_aside_question_gone_notice': 'Cette question est déjà répondue ou fermée — cela n’a rien changé.',
   'agent.set_aside_next_question_failed_notice': 'La question suivante n’a pas pu être publiée, votre réponse n’a donc pas été prise en compte — réessayez.',
   'agent.login_code_relayed': '🔐 Code de connexion transmis à Claude — le message avec le jeton a été supprimé de l\'historique.',
   'agent.login_url': '🔐 Pour te connecter à Claude, ouvre ce lien, termine la connexion, puis colle le code ici :\n{url}',

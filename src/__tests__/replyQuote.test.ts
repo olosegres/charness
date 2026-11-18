@@ -20,8 +20,10 @@
 import { test } from 'node:test';
 import * as assert from 'node:assert/strict';
 import {
+  checkIsReplyToNobody,
   extractReplyQuote,
   buildReplyQuoteBlock,
+  getReplyTargetMessageId,
   replyQuoteMaxChars,
   type ReplyQuoteSource,
 } from '../utils/replyQuote';
@@ -225,4 +227,32 @@ test('extractReplyQuote: the author of the replied-to message travels with the q
     extractReplyQuote(makeSource({ authorKind: 'talker', authorName: 'Alice Smith', authorUsername: 'alice' })),
     { quotedText: 'X did Y', authorKind: 'talker', authorName: 'Alice Smith', authorUsername: 'alice' },
   );
+});
+
+test('checkIsReplyToNobody / getReplyTargetMessageId: a genuine reply names its message; the topic root (post in this topic) and a service message name nobody', () => {
+  const genuine = makeSource();
+  assert.equal(checkIsReplyToNobody(genuine), false);
+  assert.equal(getReplyTargetMessageId(genuine), 42);
+
+  const toTopicRoot = makeSource({ replyMessageId: 4242, topicRootId: 4242 });
+  assert.equal(checkIsReplyToNobody(toTopicRoot), true);
+  assert.equal(getReplyTargetMessageId(toTopicRoot), null);
+
+  const toService = makeSource({ isServiceMessage: true });
+  assert.equal(checkIsReplyToNobody(toService), true);
+  assert.equal(getReplyTargetMessageId(toService), null);
+});
+
+test('checkIsReplyToNobody / getReplyTargetMessageId: outside a forum topic (no topic id, or 0) the id is a genuine target', () => {
+  for (const topicRootId of [undefined, 0]) {
+    const source = makeSource({ replyMessageId: 42, topicRootId });
+    assert.equal(checkIsReplyToNobody(source), false, String(topicRootId));
+    assert.equal(getReplyTargetMessageId(source), 42, String(topicRootId));
+  }
+  assert.equal(getReplyTargetMessageId(makeSource({ replyMessageId: undefined })), null, 'a source with no replied-to id has no target');
+});
+
+test('extractReplyQuote: shares the «reply to nobody» rule — a topic-root reply and a service message quote nothing', () => {
+  assert.equal(extractReplyQuote(makeSource({ replyMessageId: 4242, topicRootId: 4242 })), null);
+  assert.equal(extractReplyQuote(makeSource({ isServiceMessage: true })), null);
 });

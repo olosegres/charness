@@ -39,7 +39,7 @@ import {
   type AccessScreen,
   type AccessTarget,
 } from '../../../utils/topicAccessScreenPlan';
-import { getDisplayName } from '../inbound';
+import { getDisplayName, getTelegramReplyTargetId } from '../inbound';
 import { getTelegramThreadId } from '../sessionKeyCodec';
 import type { BotCore } from './botCore';
 import { buildMessageSnapshotKey, getCallbackMessageId, rememberBoundedSnapshot } from './callbackMessage';
@@ -106,7 +106,7 @@ function getPersonTarget(user: User): AccessTarget {
  */
 function getReplyTarget(message: Message.TextMessage): AccessTarget | null {
   const replied = message.reply_to_message;
-  if (!replied || 'forum_topic_created' in replied || replied.message_id === message.message_thread_id) return null;
+  if (!replied || getTelegramReplyTargetId(message) === null) return null;
   if (replied.sender_chat || !replied.from) return { kind: 'chatIdentity' };
   return getPersonTarget(replied.from);
 }

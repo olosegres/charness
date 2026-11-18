@@ -108,8 +108,8 @@ export interface FakeTelegramMessage {
   deletedAtMs?: number;
 }
 
-/** A message embedded as another one's `reply_to_message`: a voice note has no `text` on the wire. */
-export type FakeRepliedMessage = Omit<FakeTelegramMessage, 'text'> & { text?: string };
+/** A message embedded as another one's `reply_to_message`: a voice note has no `text` on the wire, a topic's creation message only its `forum_topic_created`. */
+export type FakeRepliedMessage = Omit<FakeTelegramMessage, 'text'> & { text?: string; forum_topic_created?: { name: string; icon_color: number } };
 
 /** The wire fields of an operator message that arrives as a reply and/or a forward. */
 interface OperatorMessageContext {
@@ -359,7 +359,7 @@ export class FakeTelegram {
     const mentionEntities = options.textMention ? [{ type: 'text_mention' as const, offset: options.textMention.offset, length: options.textMention.length, user: options.textMention.user }] : [];
     const entities = [...commandEntities, ...mentionEntities];
     const message = this.storeMessage(threadId, text, from, { ...(entities.length > 0 ? { entities } : {}) });
-    this.pushUpdate({ message: { ...message, ...this.getContext(options) } });
+    this.pushUpdate({ message: { ...message, ...this.getContext(options, threadId) } });
     return message.message_id;
   }
 
@@ -414,7 +414,7 @@ export class FakeTelegram {
     const message = this.storeMessage(threadId, '', options.from ?? this.options.operator, { voice });
     // On the wire a voice note has no `text` at all; an empty one would still match the bot's text handler.
     const { text: _text, ...wireMessage } = message;
-    this.pushUpdate({ message: { ...wireMessage, ...this.getContext(options) } });
+    this.pushUpdate({ message: { ...wireMessage, ...this.getContext(options, threadId) } });
     return message.message_id;
   }
 
@@ -432,7 +432,7 @@ export class FakeTelegram {
     const fileFields = kind === 'document'
       ? { document: { file_id: fileId, file_unique_id: `unique-${fileId}`, file_name: options.fileName ?? `${fileId}.bin`, mime_type: 'application/octet-stream', file_size: file.bytes.length } }
       : { photo: [{ file_id: fileId, file_unique_id: `unique-${fileId}`, width: 90, height: 60, file_size: file.bytes.length }] };
-    this.pushUpdate({ message: { ...wireMessage, ...fileFields, ...(options.caption ? { caption: options.caption } : {}), ...(options.mediaGroupId ? { media_group_id: options.mediaGroupId } : {}), ...this.getContext(options) } });
+    this.pushUpdate({ message: { ...wireMessage, ...fileFields, ...(options.caption ? { caption: options.caption } : {}), ...(options.mediaGroupId ? { media_group_id: options.mediaGroupId } : {}), ...this.getContext(options, threadId) } });
     return message.message_id;
   }
 
@@ -537,13 +537,33 @@ export class FakeTelegram {
     for (const wake of [...this.pollWakers]) wake();
   }
 
-  private getContext(options: FakeOperatorMessageOptions): OperatorMessageContext {
+  /**
+   * The reply, forward and sender-chat fields of a message the operator sends into topic `threadId`. A message that replies to
+   * nothing in particular still carries the topic's ROOT message as its `reply_to_message` — what a real client sends for a plain
+   * message typed in a topic («post in this topic») — so a bot that mistakes it for a genuine reply shows in every flow.
+   */
+  private getContext(options: FakeOperatorMessageOptions, threadId: number): OperatorMessageContext {
     const replied = options.replyToMessageId === undefined ? undefined : this.messages.get(options.replyToMessageId);
     if (options.replyToMessageId !== undefined && !replied) throw new Error(`no message ${options.replyToMessageId} to reply to`);
     return {
-      ...(replied ? { reply_to_message: embedAsReplied(replied) } : {}),
+      reply_to_message: replied ? embedAsReplied(replied) : this.getTopicRootMessage(threadId),
       ...(options.forwardOrigin ? { forward_origin: options.forwardOrigin } : {}),
       ...(options.senderChat ? { sender_chat: options.senderChat } : {}),
+    };
+  }
+
+  /** The creation service message of topic `threadId` (its id IS the topic's id), as the Bot API embeds it in a reply. */
+  private getTopicRootMessage(threadId: number): FakeRepliedMessage {
+    const created = this.createdTopics.find((topic) => topic.threadId === threadId);
+    return {
+      message_id: threadId,
+      message_thread_id: threadId,
+      is_topic_message: true,
+      createdAtMs: 0,
+      date: 0,
+      chat: this.chat,
+      from: this.options.botUser,
+      forum_topic_created: { name: created?.name ?? `Topic ${threadId}`, icon_color: topicIconColor },
     };
   }
 

@@ -106,6 +106,25 @@ export interface ExtractedReplyQuote {
   forwardedFrom?: string;
 }
 
+/** What tells a genuine reply from Telegram's «post in this topic»: the replied-to message and the topic. */
+export type ReplyTargetSource = Pick<ReplyQuoteSource, 'replyMessageId' | 'topicRootId' | 'isServiceMessage'>;
+
+/**
+ * @description Whether a message that carries a Telegram reply replies to NOBODY: it targets a forum/service message, or the forum
+ * topic-root message — Telegram's «post in this topic», which a client attaches to a plain message typed in a topic. The one rule of
+ * «is this a genuine reply», shared by the quote of a reply and by every route that asks what a reply is FOR.
+ */
+export function checkIsReplyToNobody(source: ReplyTargetSource): boolean {
+  if (source.isServiceMessage) return true;
+  const { topicRootId, replyMessageId } = source;
+  return topicRootId !== undefined && topicRootId !== 0 && replyMessageId === topicRootId;
+}
+
+/** @description The message a reply is genuinely FOR: its id, `null` when it replies to nobody ({@link checkIsReplyToNobody}) or carries no id. */
+export function getReplyTargetMessageId(source: ReplyTargetSource): number | null {
+  return checkIsReplyToNobody(source) ? null : source.replyMessageId ?? null;
+}
+
 /**
  * @description Decide whether a genuine reply carries quotable content and, if
  * so, extract it.
@@ -125,13 +144,7 @@ export interface ExtractedReplyQuote {
  * naming the replied-to file when there is one ({@link formatReplyAttachment}).
  */
 export function extractReplyQuote(source: ReplyQuoteSource | undefined): ExtractedReplyQuote | null {
-  if (!source) return null;
-  if (source.isServiceMessage) return null;
-
-  const { topicRootId, replyMessageId } = source;
-  if (topicRootId !== undefined && topicRootId !== 0 && replyMessageId === topicRootId) {
-    return null;
-  }
+  if (!source || checkIsReplyToNobody(source)) return null;
 
   const candidates = [source.manualQuoteText, source.replyText, source.replyCaption];
   const text = candidates.map((candidate) => candidate?.trim()).find((trimmed) => !!trimmed);

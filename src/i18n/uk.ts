@@ -278,7 +278,7 @@ export const ukDict: Record<string, string> = {
   'agent.question_unanswered_note': '❌ Без відповіді',
   'agent.question_asked_again_note': '↓ Запитано знову нижче',
   'agent.question_set_aside_note': '⏸ Агент продовжив роботу без вашої відповіді — відповісти ще можна',
-  'agent.set_aside_question_gone_notice': 'На це запитання вже відповіли або воно закрите — агенту нічого не надіслано.',
+  'agent.set_aside_question_gone_notice': 'На це запитання вже відповіли або воно закрите — це нічого не змінило.',
   'agent.set_aside_next_question_failed_notice': 'Наступне запитання не вдалося надіслати, тому відповідь не прийнято — спробуйте ще раз.',
   'agent.login_code_relayed': '🔐 Код входу передано в Claude — повідомлення з токеном видалено з історії.',
   'agent.login_url': '🔐 Щоб увійти в Claude, відкрийте це посилання, завершіть вхід і вставте код сюди:\n{url}',

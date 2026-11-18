@@ -276,7 +276,7 @@ export const enDict: Record<string, string> = {
   'agent.question_unanswered_note': '❌ Not answered',
   'agent.question_asked_again_note': '↓ Asked again below',
   'agent.question_set_aside_note': '⏸ The agent went on without your answer — you can still answer',
-  'agent.set_aside_question_gone_notice': 'That question is already answered or closed — nothing was sent to the agent.',
+  'agent.set_aside_question_gone_notice': 'That question is already answered or closed — this changed nothing.',
   'agent.set_aside_next_question_failed_notice': 'The next question could not be posted, so your answer was not taken — try again.',
   'agent.login_code_relayed': '🔐 Login code relayed to Claude — the token message was deleted from history.',
   'agent.login_url': '🔐 To sign in to Claude, open this link, complete sign-in, then paste the code back here:\n{url}',

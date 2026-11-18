@@ -6059,19 +6059,20 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
 
   /**
    * @description Ask the server what it holds: `GET /question` for this session's instance, read into `session.pendingQuestion`
-   * when it names an open question of the session (the adapter's copy is only a cache that a reattach which could not read the
-   * server leaves empty). Resolves `held` (the cache now has it, nothing is emitted: the bot that asks already knows the
-   * question), `none` (the server answered with no question of this session) or `unknown` (the read failed, or the session is not
-   * active — a stale-version replacement is under way — so nothing can be told).
+   * when its open question of the session IS `requestId` (the adapter's copy is only a cache that a reattach which could not read
+   * the server leaves empty). Resolves `held` (the cache now has it, nothing is emitted: the bot that asks already knows the
+   * question), `none` (the server answered with no question of this session — or with ANOTHER one: the bot's copy is stale, and
+   * the cache is left as it was, never filled with a question the bot did not ask about) or `unknown` (the read failed, or the
+   * session is not active — a stale-version replacement is under way — so nothing can be told).
    */
-  async resyncOpenQuestion(key: SessionKey): Promise<'held' | 'none' | 'unknown'> {
+  async resyncOpenQuestion(key: SessionKey, requestId: string): Promise<'held' | 'none' | 'unknown'> {
     const session = this.sessions.get(keyToString(key));
     if (!session?.isActive) return 'unknown';
     try {
       const response = await this.apiRequest<unknown>('GET', buildDirectoryScopedPath('/question', session.workDir));
       if (!Array.isArray(response)) return 'unknown';
       const open = getOpenQuestionForSession(response, session.sessionId, session.workDir);
-      if (!open) return 'none';
+      if (open?.requestId !== requestId) return 'none';
       const current = this.sessions.get(keyToString(key));
       if (!current?.isActive || current.sessionId !== session.sessionId) return 'unknown';
       current.pendingQuestion = open;
@@ -6080,6 +6081,13 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
       console.warn('[OpenCode] re-reading the open question failed:', e instanceof Error ? e.message : e);
       return 'unknown';
     }
+  }
+
+  /** @description Hand the question the server holds for this session to the bot as a `question` event (see {@link restoreOpenQuestion}); nothing when it holds none. */
+  async surfaceOpenQuestion(key: SessionKey): Promise<void> {
+    const session = this.sessions.get(keyToString(key));
+    if (!session?.isActive) return;
+    await this.restoreOpenQuestion(key, session.sessionId, session.workDir);
   }
 
   /**

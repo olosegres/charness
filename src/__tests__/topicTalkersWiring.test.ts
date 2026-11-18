@@ -68,7 +68,7 @@ test('the talker branch refuses a slash text (a forward\'s is words), deletes a 
   assert.match(body, /parseOAuthCallbackFromReply\(text\)\)\s*\{\s*await deleteThreadMessage/);
   assert.match(body, /if \(await refuseTalkerInTerminalTopic\(key\)\) return;/);
   assert.match(body, /bufferPromptDuringStartup\(key, text, intake, messageContext\)/);
-  assert.match(body, /deliverActivePrompt\(key, adapter, text, intake, sentAtMs, messageContext, \{ replyToMessageId: ctx\.message\.reply_to_message\?\.message_id \}\)/);
+  assert.match(body, /deliverActivePrompt\(key, adapter, text, intake, sentAtMs, messageContext, \{ replyToMessageId: getTelegramReplyTargetId\(ctx\.message\) \}\)/);
   assert.match(body, /resumeSleepingSessionForPrompt\(key\)/);
   assert.match(body, /t\('access\.noAgentForTalkerNotice'\)/);
   assert.match(getFunctionBody('refuseTalkerInTerminalTopic'), /getThreadAdapter\(key\)\.name !== 'terminal'[^]*t\('access\.terminalTopicRefusal'\)/);

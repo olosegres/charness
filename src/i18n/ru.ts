@@ -276,7 +276,7 @@ export const ruDict: Record<string, string> = {
   'agent.question_unanswered_note': '❌ Без ответа',
   'agent.question_asked_again_note': '↓ Задан снова ниже',
   'agent.question_set_aside_note': '⏸ Агент продолжил работу без вашего ответа — ответить всё ещё можно',
-  'agent.set_aside_question_gone_notice': 'На этот вопрос уже ответили или он закрыт — агенту ничего не отправлено.',
+  'agent.set_aside_question_gone_notice': 'На этот вопрос уже ответили или он закрыт — это ничего не изменило.',
   'agent.set_aside_next_question_failed_notice': 'Следующий вопрос не удалось отправить, поэтому ответ не принят — попробуйте ещё раз.',
   'agent.login_code_relayed': '🔐 Код входа передан в Claude — сообщение с токеном удалено из истории.',
   'agent.login_url': '🔐 Чтобы войти в Claude, откройте эту ссылку, завершите вход и вставьте код сюда:\n{url}',

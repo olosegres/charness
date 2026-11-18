@@ -79,14 +79,17 @@ test('a backend switch closes the set-aside questions only when the operator cho
   assert.doesNotMatch(getFunctionBody('executeBackendSwitch'), /isConversationKept/, 'the operator\'s manual switch ends the conversation it leaves');
 });
 
-test('a reply to a message other than the question that waits is no pick for it and cancels nothing', () => {
+test('a reply to a message other than the question that waits is no pick for it, but its words still cancel the waiting question; the reply target is the genuine one', () => {
   const active = getFunctionBody('deliverActivePrompt');
-  assert.match(active, /replyToMessageId\s*!=\s*null\s*&&\s*replyToMessageId\s*!==\s*pending\.messageId\s*&&\s*replyToMessageId\s*!==\s*pending\.originalMessageId/);
-  assert.ok(active.indexOf('replyToMessageId !== pending.originalMessageId') < active.indexOf('getQuestionReplyRoute(text, currentQuestion)'), 'decided before the digit is read');
-  assert.ok(active.indexOf('replyToMessageId !== pending.originalMessageId') < active.indexOf('cancelPendingQuestionAndForward('), 'and before the question is cancelled');
+  assert.match(active, /isReplyToAnotherMessage\s*=\s*replyToMessageId\s*!=\s*null\s*&&\s*replyToMessageId\s*!==\s*pending\.messageId\s*&&\s*replyToMessageId\s*!==\s*pending\.originalMessageId/);
+  assert.match(active, /route\.kind\s*===\s*'answer'\s*&&\s*!isForwarded\s*&&\s*!isReplyToAnotherMessage/, 'only the pick is refused');
+  assert.ok(active.indexOf('cancelPendingQuestionAndForward(') > active.indexOf("route.kind === 'answer'"), 'the cancel stays after the pick');
+  assert.doesNotMatch(active.slice(active.indexOf('isReplyToAnotherMessage'), active.indexOf('cancelPendingQuestionAndForward(')), /deliverPromptByState/, 'a reply elsewhere does not skip the cancel');
   const handler = getSourceSlice("bot.on(message('text'), async (ctx) => {", "//  Voice message handler");
-  assert.equal(handler.match(/deliverActivePrompt\([^;]*\{\s*replyToMessageId:\s*ctx\.message\.reply_to_message\?\.message_id\s*\}\)/g)?.length, 2, 'the operator\'s two routes');
-  assert.equal(getFunctionBody('handleTalkerText').match(/deliverActivePrompt\([^;]*\{\s*replyToMessageId:\s*ctx\.message\.reply_to_message\?\.message_id\s*\}\)/g)?.length, 2, 'and a topic member\'s');
+  assert.equal(handler.match(/deliverActivePrompt\([^;]*\{\s*replyToMessageId:\s*getTelegramReplyTargetId\(ctx\.message\)\s*\}\)/g)?.length, 2, 'the operator\'s two routes read the genuine reply target');
+  assert.equal(getFunctionBody('handleTalkerText').match(/deliverActivePrompt\([^;]*\{\s*replyToMessageId:\s*getTelegramReplyTargetId\(ctx\.message\)\s*\}\)/g)?.length, 2, 'and a topic member\'s');
+  assert.match(handler, /answerSetAsideQuestionByReply\(ctx\.from,\s*key,\s*\{[^}]*replyToMessageId:\s*getTelegramReplyTargetId\(ctx\.message\)[^}]*\}/, 'the late-answer route reads the same value');
+  assert.doesNotMatch(botSource, /reply_to_message\??\.message_id/, 'no route reads the raw reply: «post in this topic» is no reply');
 });
 
 test('the idle fire sets a waiting question aside through the module, and the wait it reads is the instance setting', () => {

@@ -32,6 +32,7 @@ import {
   getTelegramForwardedMark,
   getTelegramMessageContext,
   getTelegramReplyQuoteBlock,
+  getTelegramReplyTargetId,
   getTelegramTalkerContext,
   type TelegramMessageAccess,
 } from '../connectors/telegram/inbound';
@@ -1025,4 +1026,27 @@ test('checkIsWrittenMessage: text, captions, media and the like are somebody wri
   ];
   for (const fields of written) assert.equal(checkIsWrittenMessage({ ...base, ...fields } as Message), true, JSON.stringify(Object.keys(fields)));
   for (const fields of service) assert.equal(checkIsWrittenMessage({ ...base, ...fields } as Message), false, JSON.stringify(Object.keys(fields)));
+});
+
+// ─── the message a reply is genuinely for ───────────────────────────────
+
+test('getTelegramReplyTargetId: a reply to a message of the topic names that message', () => {
+  assert.equal(getTelegramReplyTargetId(makeTopicVoiceMessage(agentAnswer)), agentAnswer.message_id);
+});
+
+test('getTelegramReplyTargetId: a plain post in a topic — Telegram\'s «post in this topic» points at the topic root — replies to nobody', () => {
+  assert.equal(getTelegramReplyTargetId(makeTopicVoiceMessage(topicRootMessage)), null);
+});
+
+test('getTelegramReplyTargetId: the topic root counts by its id even when the client leaves the service marker out, and a service message by its marker', () => {
+  const rootWithoutMarker = { ...topicRootMessage, forum_topic_created: undefined } as RepliedMessage;
+  assert.equal(getTelegramReplyTargetId(makeTopicVoiceMessage(rootWithoutMarker)), null, 'its id is the topic\'s');
+  const otherServiceMessage = { ...topicRootMessage, message_id: topicRootId + 5 } as RepliedMessage;
+  assert.equal(getTelegramReplyTargetId(makeTopicVoiceMessage(otherServiceMessage)), null, 'its marker says it is one');
+});
+
+test('getTelegramReplyTargetId: a message that replies to nothing, or that is not in a topic, has the id it replies to — or none', () => {
+  assert.equal(getTelegramReplyTargetId(makeTopicVoiceMessage(undefined)), null);
+  const outsideTopic = { ...makeTopicVoiceMessage(agentAnswer), message_thread_id: undefined, is_topic_message: undefined } as Message.VoiceMessage;
+  assert.equal(getTelegramReplyTargetId(outsideTopic), agentAnswer.message_id);
 });
