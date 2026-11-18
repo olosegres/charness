@@ -232,6 +232,14 @@ function getGivenAnswers(): string[] {
   return readJsonLines<FakeClaudeToolCall>(path.join(getLayout().fakeLogDir, fakeClaudeLogFileNames.toolCalls)).filter((call) => call.tool === fakeAskToolName).map((call) => call.outcome);
 }
 
+/**
+ * The agent gets `answer` AFTER `answersBefore` answers were already logged. A bare «the log holds `answer`» is true at once when an
+ * earlier step gave the same answer, so it would not wait for THIS step's answer to reach the agent.
+ */
+async function waitForNewAnswer(answer: string, answersBefore: number): Promise<void> {
+  await getCharness().waitFor(`the agent to get the new answer «${answer.slice(0, 40)}»`, agentStartTimeoutMs, () => getGivenAnswers().slice(answersBefore).includes(answer));
+}
+
 /** Put the question (`ask` mode, or `mode`): resolves its message once it carries the option buttons. */
 async function askQuestion(driver: TopicDriver, promptLabel: string, mode: 'ask' | 'ask-two' | 'ask-long' | 'ask-repeat' = 'ask'): Promise<FakeTelegramMessage> {
   const sentMessageId = fakeTelegram.pushOperatorMessage(topicThreadId, `${promptLabel} [fake:${mode}] ask me something`);
@@ -380,11 +388,12 @@ describe('A question the agent asks stays in the topic however it ends, end to e
     await waitForPinned(question);
     assert.deepEqual(topic.getKeyboardData(question), [['qa_0_0'], ['qa_0_1']], 'one button per option');
 
+    const answersBefore = getGivenAnswers().length;
     await topic.tapAndAwaitAnswer(question, 'qa_0_0');
     await topic.waitForMessageText('the answer under the question', question, (text) => text.endsWith(buildAnsweredNote(fakeAskQuestion.shortOptionLabel)));
     assertQuestionKeptWithNote(question, buildAnsweredNote(fakeAskQuestion.shortOptionLabel));
     await waitForUnpinned(question);
-    await getCharness().waitFor('the agent to get the answer', agentStartTimeoutMs, () => getGivenAnswers().includes(fakeAskQuestion.shortOptionLabel));
+    await waitForNewAnswer(fakeAskQuestion.shortOptionLabel, answersBefore);
   });
 
   it('the number of an option typed instead of a tap: the same, with the long label whole', async () => {
@@ -623,6 +632,7 @@ describe('A question the agent asks stays in the topic however it ends, end to e
     assert.ok(question.text.length + buildAnsweredNote(fakeAskQuestion.longOptionLabel).length > 4096, 'precondition: and has no room for the answer note');
     await waitForPinned(question);
 
+    const answersBefore = getGivenAnswers().length;
     await topic.tapAndAwaitAnswer(question, 'qa_0_1');
     await topic.waitForMessageText('the answer under the long question', question, (text) => text.endsWith(buildAnsweredNote(fakeAskQuestion.longOptionLabel)));
     const current = readKeptMessage(question);
@@ -630,7 +640,7 @@ describe('A question the agent asks stays in the topic however it ends, end to e
     assert.ok(!current.text.includes(fakeAskLongDescription), 'the long descriptions are what was left out');
     assertQuestionKeptWithNote(question, buildAnsweredNote(fakeAskQuestion.longOptionLabel));
     await waitForUnpinned(question);
-    await getCharness().waitFor('the agent to get the answer', agentStartTimeoutMs, () => getGivenAnswers().includes(fakeAskQuestion.longOptionLabel));
+    await waitForNewAnswer(fakeAskQuestion.longOptionLabel, answersBefore);
   });
 
   it('an option whose description only repeats its label shows the label once; the option whose description says more keeps it, also after the answer', async () => {
@@ -644,13 +654,14 @@ describe('A question the agent asks stays in the topic however it ends, end to e
     assert.ok(!question.text.toLowerCase().includes(fakeAskRepeatDescriptions.repeatingLabel), `the repeating description is not printed: ${question.text}`);
     assert.equal(lines.at(-1), `   ${fakeAskRepeatDescriptions.saysMore}`, `the description that says more stays under its option: ${question.text}`);
 
+    const answersBefore = getGivenAnswers().length;
     await topic.tapAndAwaitAnswer(question, 'qa_0_0');
     await topic.waitForMessageText('the answer under the question', question, (text) => text.endsWith(buildAnsweredNote(fakeAskQuestion.shortOptionLabel)));
     const current = readKeptMessage(question);
     assert.ok(current.text.startsWith(question.text), `the question stays as it was posted: ${current.text}`);
     assertQuestionKeptWithNote(question, buildAnsweredNote(fakeAskQuestion.shortOptionLabel));
     await waitForUnpinned(question);
-    await getCharness().waitFor('the agent to get the answer', agentStartTimeoutMs, () => getGivenAnswers().includes(fakeAskQuestion.shortOptionLabel));
+    await waitForNewAnswer(fakeAskQuestion.shortOptionLabel, answersBefore);
   });
 
   it('the question cannot be put again at the bottom: the old copy is not marked «asked again below», keeps its buttons and still answers', async () => {
@@ -688,13 +699,14 @@ describe('A question the agent asks stays in the topic however it ends, end to e
     await runStepThenRestore(async () => {
       const sentMessageId = fakeTelegram.pushOperatorMessage(topicThreadId, 'KEPT-INFLIGHTANS [fake:ask] ask me something');
       const question = await waitForQuestionAfter(topic, 'the question, its send held', sentMessageId, firstQuestion);
+      const answersBefore = getGivenAnswers().length;
       fakeTelegram.pushOperatorMessage(topicThreadId, '1');
       sendHold.release();
 
       await topic.waitForMessageText('the answer under the question', question, (text) => text.endsWith(buildAnsweredNote(fakeAskQuestion.shortOptionLabel)));
       assertQuestionKeptWithNote(question, buildAnsweredNote(fakeAskQuestion.shortOptionLabel));
       await waitForUnpinned(question);
-      await getCharness().waitFor('the agent to get the answer', agentStartTimeoutMs, () => getGivenAnswers().includes(fakeAskQuestion.shortOptionLabel));
+      await waitForNewAnswer(fakeAskQuestion.shortOptionLabel, answersBefore);
     }, async () => {
       sendHold.release();
     });
@@ -718,9 +730,11 @@ describe('A question the agent asks stays in the topic however it ends, end to e
     assertQuestionKeptWithNote(staleCopy, unansweredNote);
     await getCharness().waitFor('the saved copy to be dropped', replyTimeoutMs, () => readPersistedState(getLayout()).reAskedQuestions?.[key] === undefined);
     assert.notEqual(readKeptMessage(question).reply_markup, undefined, 'the live question kept its buttons');
+    const answersBefore = getGivenAnswers().length;
     await topic.tapAndAwaitAnswer(question, 'qa_0_0');
     await topic.waitForMessageText('the answer under the restored question', question, (text) => text.endsWith(buildAnsweredNote(fakeAskQuestion.shortOptionLabel)));
-    await getCharness().waitFor('the agent to get the answer', agentStartTimeoutMs, () => getAgentPrompts('KEPT-STALECOPY').length > 0 && getGivenAnswers().includes(fakeAskQuestion.shortOptionLabel));
+    await getCharness().waitFor('the agent to get the prompt', agentStartTimeoutMs, () => getAgentPrompts('KEPT-STALECOPY').length > 0);
+    await waitForNewAnswer(fakeAskQuestion.shortOptionLabel, answersBefore);
   });
 
   it('a restart that finds the agent\'s session gone: the question the bot drops at boot stays with the «not answered» note, its buttons gone and its pin released', async () => {

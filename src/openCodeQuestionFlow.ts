@@ -14,12 +14,12 @@
 
 import type { OpenCodeQuestion, OpenCodeQuestionOption, PendingQuestionState } from './types';
 
-/** What ends a sentence — and so tells a label from the same words said as a sentence ("Red" / "Red."). Whitespace goes with it. */
-const trailingSentencePunctuation = /[\s.!?…,;:。！？、]+$/u;
+/** Whitespace and punctuation (`. ! ? … , ; :` and their CJK forms) at the end of a text — what a label gains when it is said as a sentence ("Red" / "Red."). */
+const trailingPunctuation = /[\s.!?…,;:。！？、]+$/u;
 
 /** A label or description as a reader compares them: trimmed, without its trailing punctuation, in lower case. */
 function getComparableOptionText(text: string): string {
-  return text.trimStart().replace(trailingSentencePunctuation, '').toLowerCase();
+  return text.trimStart().replace(trailingPunctuation, '').toLowerCase();
 }
 
 /**
