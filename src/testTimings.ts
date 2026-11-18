@@ -33,7 +33,7 @@ import { runnerWaitPollMinMs, runnerWaitPollMs } from './remoteRun/runnerWaitTim
  * Jira poll's 10 s floor, the wake-up engine's 10 s turn poll and its sweep's minute, the first re-post retry's minute, the 30 s stagger of the wakes after a restart, the two-minute probe of an
  * unconfirmed usage limit, `state.json`'s save debounce, the OpenCode server's 60 s of retries, the 6 h pending-work hold, the 300 ms to the first read of an adopted json-stream session's output, the 15-minute gap of a passing check's status lines, the
  * todo reminder's 10 s poll and its interval, the 24 h between two rechecks of a used-up API credit and the 30 min poll that finds one due, the 45 s heartbeat lease of a foreground `charness remote-run` and its 10 s poll while it waits for a paired runner, and — a count, not a window —
- * the 200 `/bind` picker claims, the question wait — how long an unanswered agent question waits before it is set aside —, the 5 s / 10 min a prompt the bot delivers waits for a busy session, and the four windows of a topic's status mark: the 20 s a turn runs before its ⏳ shows, the 60 s between two renames, the 5-minute sweep and the 5 s the boot's wave waits). It is NOT a setting: no
+ * the 200 `/bind` picker claims, the question wait — how long an unanswered agent question waits before it is set aside —, the 5 s / 10 min a prompt the bot delivers waits for a busy session, and the four windows of a topic's status mark: the 20 s a name holds before it is written (a turn runs that long before its ⏳ shows), the 60 s between two renames, the 5-minute sweep and the 5 s the boot's wave waits). It is NOT a setting: no
  * operator sets it and it is documented only for developers (DEVELOPMENT.md); settings live in `settings.json`.
  *
  * Unset (every production instance) = every built-in window as it is. Set, it is validated strictly at boot: an unknown
@@ -125,7 +125,7 @@ const testTimingsSchema = z.strictObject({
   questionSetAsideWaitMs: createShorterWindowSchema(longestQuestionWaitMs).optional(),
   /** The pause before the bot tries again to set a question aside after the agent's server did not take it (production: `setAsideRetryDelayMs`, 30 s). */
   questionSetAsideRetryMs: createShorterWindowSchema(setAsideRetryDelayMs).optional(),
-  /** How long a turn runs before its ⏳ shows in the topic's name (production: `indicatorSettleMs`, 20 s). */
+  /** How long a name must have been the wanted one before it is written to the topic — a turn runs this long before its ⏳ shows (production: `indicatorSettleMs`, 20 s). */
   topicIndicatorSettleMs: createShorterWindowSchema(indicatorSettleMs).optional(),
   /** The least time between two renames of one topic (production: `indicatorMinRenameGapMs`, 60 s). */
   topicIndicatorMinRenameGapMs: createShorterWindowSchema(indicatorMinRenameGapMs).optional(),

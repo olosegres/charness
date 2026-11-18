@@ -174,16 +174,26 @@ describe('the status mark of topic names', () => {
     return harness.state.getBinding(topic)?.indicatorAppliedName;
   }
 
+  /** The topic wants `inputs` from now on: ask for a look, and let the settle time pass (the gap too, when a name was written before). */
+  async function wantAndWait(harness: Harness, key: SessionKey, inputs: Partial<TopicStatusInputs>, waitMs = indicatorSettleMs): Promise<void> {
+    setInputs(harness, key, inputs);
+    harness.indicator.requestRefresh(key);
+    await harness.settle();
+    await harness.advance(waitMs);
+  }
+
+  const settleAndGapMs = indicatorSettleMs + indicatorMinRenameGapMs;
+
   describe('what it writes', () => {
     it('writes the question mark at once, and takes it off at once when the question is answered', async () => {
       const harness = await createHarness();
       setInputs(harness, topic, { hasOpenQuestion: true, isFinished: true });
       harness.indicator.requestRefresh(topic);
       await harness.settle();
-      assert.deepEqual(harness.renames.map((rename) => rename.name), ['Deploy ❓']);
+      assert.deepEqual(harness.renames.map((rename) => rename.name), ['Deploy ❓'], 'no settle time, no gap');
       assert.equal(getAppliedName(harness), 'Deploy ❓', 'the applied name is persisted');
 
-      // The answer comes a second later: far inside the gap, and the next state shows at once all the same.
+      // The answer comes a second later: far inside the gap and the settle time, and the next state shows at once all the same.
       await harness.advance(1_000);
       setInputs(harness, topic, { isFinished: true });
       harness.indicator.requestRefresh(topic);
@@ -203,57 +213,47 @@ describe('the status mark of topic names', () => {
 
     it('writes the name only: a plain rename call, never an icon', async () => {
       const harness = await createHarness();
-      setInputs(harness, topic, { isAsleep: true });
-      harness.indicator.requestRefresh(topic);
-      await harness.settle();
+      await wantAndWait(harness, topic, { isAsleep: true });
       assert.deepEqual(harness.renames, [{ key: topic, name: 'Deploy 💤' }]);
     });
 
     it('shows ⏳ only after the turn has run the settle time, and a short turn goes straight to ✅', async () => {
       const harness = await createHarness();
-      setInputs(harness, topic, { isAsleep: true });
-      harness.indicator.requestRefresh(topic);
-      await harness.settle();
+      await wantAndWait(harness, topic, { isAsleep: true });
       await harness.advance(indicatorMinRenameGapMs);
       assert.deepEqual(harness.renames.map((rename) => rename.name), ['Deploy 💤']);
 
       // A turn of 5 s: ⏳ never shows.
-      setInputs(harness, topic, { isWorking: true });
-      harness.indicator.requestRefresh(topic);
-      await harness.settle();
-      await harness.advance(5_000);
-      setInputs(harness, topic, { isFinished: true });
-      harness.indicator.requestRefresh(topic);
-      await harness.settle();
+      await wantAndWait(harness, topic, { isWorking: true }, 5_000);
+      await wantAndWait(harness, topic, { isFinished: true }, settleAndGapMs);
       assert.deepEqual(harness.renames.map((rename) => rename.name), ['Deploy 💤', 'Deploy ✅'], 'straight to ✅, no ⏳ in between');
 
-      // A turn that runs on: ⏳ shows when the settle time is up (the gap since ✅ is up by then too).
+      // A turn that runs on: ⏳ shows when it has run the settle time (the gap since ✅ is up by then too).
       await harness.advance(indicatorMinRenameGapMs);
-      setInputs(harness, topic, { isWorking: true });
-      harness.indicator.requestRefresh(topic);
-      await harness.settle();
-      await harness.advance(indicatorSettleMs - 1_000);
+      await wantAndWait(harness, topic, { isWorking: true }, indicatorSettleMs - 1_000);
       assert.equal(harness.renames.at(-1)?.name, 'Deploy ✅', 'still not');
       await harness.advance(1_000);
       assert.equal(harness.renames.at(-1)?.name, 'Deploy ⏳');
     });
 
+    it('a session that wakes for a prompt never shows a ✅ on the way to its ⏳', async () => {
+      const harness = await createHarness();
+      await wantAndWait(harness, topic, { isAsleep: true });
+      await harness.advance(indicatorMinRenameGapMs);
+      // The resume makes the process active an instant before the turn runs: ✅ is wanted for 200 ms, then ⏳ for good.
+      await wantAndWait(harness, topic, { isFinished: true }, 200);
+      await wantAndWait(harness, topic, { isWorking: true }, settleAndGapMs);
+      assert.deepEqual(harness.renames.map((rename) => rename.name), ['Deploy 💤', 'Deploy ⏳']);
+    });
+
     it('keeps two renames of a topic a gap apart, and what came and went inside the gap is never shown: the latest state wins', async () => {
       const harness = await createHarness();
-      setInputs(harness, topic, { isFinished: true });
-      harness.indicator.requestRefresh(topic);
-      await harness.settle();
+      await wantAndWait(harness, topic, { isFinished: true });
       assert.deepEqual(harness.renames.map((rename) => rename.name), ['Deploy ✅']);
 
       // Inside the gap: stuck, then asleep. Neither is written; the topic waits for the gap's end.
-      await harness.advance(10_000);
-      setInputs(harness, topic, { isStuck: true });
-      harness.indicator.requestRefresh(topic);
-      await harness.settle();
-      await harness.advance(10_000);
-      setInputs(harness, topic, { isAsleep: true });
-      harness.indicator.requestRefresh(topic);
-      await harness.settle();
+      await wantAndWait(harness, topic, { isStuck: true }, 25_000);
+      await wantAndWait(harness, topic, { isAsleep: true }, 5_000);
       assert.equal(harness.renames.length, 1, 'nothing written inside the gap');
 
       await harness.advance(indicatorMinRenameGapMs);
@@ -262,9 +262,7 @@ describe('the status mark of topic names', () => {
 
     it('writes nothing for a state the topic already shows', async () => {
       const harness = await createHarness();
-      setInputs(harness, topic, { isAsleep: true });
-      harness.indicator.requestRefresh(topic);
-      await harness.settle();
+      await wantAndWait(harness, topic, { isAsleep: true });
       harness.indicator.requestRefresh(topic);
       await harness.settle();
       await harness.advance(10 * indicatorMinRenameGapMs);
@@ -276,19 +274,19 @@ describe('the status mark of topic names', () => {
       setInputs(harness, topic, { isFinished: true });
       for (let index = 0; index < 50; index += 1) harness.indicator.requestRefresh(topic);
       await harness.settle();
+      await harness.advance(indicatorSettleMs);
       assert.equal(harness.renames.length, 1);
-      assert.ok(harness.inputReads.count <= 4, `the facts were read ${harness.inputReads.count} times for 50 signals in one tick`);
+      assert.ok(harness.inputReads.count <= 8, `the facts were read ${harness.inputReads.count} times for 50 signals in one tick`);
     });
 
     it('shows no mark for a topic that has no agent, and the owner\'s own name for a closed topic', async () => {
       const harness = await createHarness();
-      setInputs(harness, topic, { isFinished: true });
-      harness.indicator.requestRefresh(topic);
-      await harness.settle();
+      await wantAndWait(harness, topic, { isFinished: true });
       await harness.advance(indicatorMinRenameGapMs);
       await harness.state.setBindingClosed(topic, true);
       harness.indicator.requestRefresh(topic);
       await harness.settle();
+      await harness.advance(indicatorSettleMs);
       assert.deepEqual(harness.renames.map((rename) => rename.name), ['Deploy ✅', 'Deploy'], 'a closed topic shows the owner\'s name');
     });
   });
@@ -310,18 +308,17 @@ describe('the status mark of topic names', () => {
       setInputs(harness, otherTopic, { isFinished: true });
       harness.indicator.requestRefresh(otherTopic);
       await harness.settle();
+      await harness.advance(settleAndGapMs);
       assert.equal(harness.renames.length, 0);
     });
   });
 
   describe('the switches', () => {
-    it('a status switched off is skipped; every status off leaves the owner\'s name', async () => {
+    it('a status switched off is skipped: nothing to write when the owner\'s name is what is left', async () => {
       const harness = await createHarness();
       harness.prefs.current = { ...defaultTopicStatusPrefs, finished: false };
-      setInputs(harness, topic, { isFinished: true });
-      harness.indicator.requestRefresh(topic);
-      await harness.settle();
-      assert.deepEqual(harness.renames, [], 'the name already is the owner\'s: nothing to write');
+      await wantAndWait(harness, topic, { isFinished: true });
+      assert.equal(harness.renames.length, 0, 'the name already is the owner\'s');
     });
 
     it('the counts show after the mark only when switched on, each only from 1', async () => {
@@ -329,17 +326,13 @@ describe('the status mark of topic names', () => {
       harness.prefs.current = { ...defaultTopicStatusPrefs, agents: true, queued: true };
       harness.counts.agents = 3;
       harness.counts.queued = 5;
-      setInputs(harness, topic, { isFinished: true });
-      harness.indicator.requestRefresh(topic);
-      await harness.settle();
+      await wantAndWait(harness, topic, { isFinished: true });
       assert.equal(harness.renames.at(-1)?.name, 'Deploy ✅ ⚙️3 📋5');
     });
 
-    it('a change the owner made skips the gap: the base name is back at once when he turns the mark off', async () => {
+    it('a change the owner made skips the wait and the gap: the base name is back at once when he turns the mark off', async () => {
       const harness = await createHarness();
-      setInputs(harness, topic, { isFinished: true });
-      harness.indicator.requestRefresh(topic);
-      await harness.settle();
+      await wantAndWait(harness, topic, { isFinished: true });
       await harness.advance(2_000);
       harness.prefs.current = { ...defaultTopicStatusPrefs, finished: false };
       harness.indicator.requestRefresh(topic, { isOwnerChange: true });
@@ -347,17 +340,15 @@ describe('the status mark of topic names', () => {
       assert.deepEqual(harness.renames.map((rename) => rename.name), ['Deploy ✅', 'Deploy']);
     });
 
-    it('a change that is not the owner\'s waits for the gap even when a switch moved', async () => {
+    it('a change that is not the owner\'s waits even when a switch moved', async () => {
       const harness = await createHarness();
-      setInputs(harness, topic, { isFinished: true });
-      harness.indicator.requestRefresh(topic);
-      await harness.settle();
+      await wantAndWait(harness, topic, { isFinished: true });
       await harness.advance(2_000);
       harness.prefs.current = { ...defaultTopicStatusPrefs, finished: false };
       harness.indicator.requestRefresh(topic);
       await harness.settle();
       assert.equal(harness.renames.length, 1);
-      await harness.advance(indicatorMinRenameGapMs);
+      await harness.advance(settleAndGapMs);
       assert.equal(harness.renames.length, 2);
     });
   });
@@ -366,29 +357,23 @@ describe('the status mark of topic names', () => {
     it('a missing «Manage topics» right stops the feature for the chat, with one log line and a hint for the picker', async () => {
       const harness = await createHarness();
       harness.failNextRename.error = createApiError('Bad Request: not enough rights to manage topics');
-      setInputs(harness, topic, { isFinished: true });
-      harness.indicator.requestRefresh(topic);
-      await harness.settle();
+      await wantAndWait(harness, topic, { isFinished: true });
       assert.deepEqual(harness.indicator.getHealth(topic), { isRenameRefused: true, isLineDeletionRefused: false });
       assert.equal(harness.logs.filter((line) => line.includes('Manage topics')).length, 1);
 
-      setInputs(harness, topic, { hasOpenQuestion: true });
-      harness.indicator.requestRefresh(topic);
-      await harness.settle();
+      await wantAndWait(harness, topic, { hasOpenQuestion: true });
       assert.equal(harness.renames.length, 0, 'not tried again while refused');
       assert.equal(harness.logs.length, 1, 'and no second line');
     });
 
     it('the sweep tries a refused chat once more, and logs nothing new when it is refused again', async () => {
-      const harness = await createHarness({ windows: { sweepIntervalMs: 60_000 } });
+      const harness = await createHarness({ windows: { sweepIntervalMs: 120_000, bootWaveDelayMs: 1_000 } });
       harness.indicator.start();
       harness.failNextRename.error = createApiError('Bad Request: not enough rights');
-      setInputs(harness, topic, { isFinished: true });
-      harness.indicator.requestRefresh(topic);
-      await harness.settle();
+      await wantAndWait(harness, topic, { isFinished: true });
       assert.equal(harness.indicator.getHealth(topic).isRenameRefused, true);
       // The right is granted meanwhile: the sweep's attempt succeeds.
-      await harness.advance(60_000);
+      await harness.advance(120_000 + indicatorSettleMs);
       assert.deepEqual(harness.renames.map((rename) => rename.name), ['Deploy ✅']);
       assert.equal(harness.indicator.getHealth(topic).isRenameRefused, false);
       harness.indicator.stop();
@@ -397,9 +382,7 @@ describe('the status mark of topic names', () => {
     it('«topic not modified» means the topic already has the name: it is recorded as applied, not retried', async () => {
       const harness = await createHarness();
       harness.failNextRename.error = createApiError('Bad Request: TOPIC_NOT_MODIFIED');
-      setInputs(harness, topic, { isFinished: true });
-      harness.indicator.requestRefresh(topic);
-      await harness.settle();
+      await wantAndWait(harness, topic, { isFinished: true });
       assert.equal(getAppliedName(harness), 'Deploy ✅');
       assert.equal(harness.logs.length, 0);
     });
@@ -407,9 +390,7 @@ describe('the status mark of topic names', () => {
     it('any other failure is logged once per cause and tried again at the next signal', async () => {
       const harness = await createHarness();
       harness.failNextRename.error = createApiError('Bad Request: something odd', 500);
-      setInputs(harness, topic, { isFinished: true });
-      harness.indicator.requestRefresh(topic);
-      await harness.settle();
+      await wantAndWait(harness, topic, { isFinished: true });
       assert.equal(harness.logs.length, 1);
       assert.match(harness.logs[0], /renaming the topic failed: Bad Request: something odd/);
       assert.equal(getAppliedName(harness), undefined, 'nothing is recorded as applied');
@@ -440,9 +421,7 @@ describe('the status mark of topic names', () => {
       await harness.indicator.handleOwnRenameLine(topic, 2);
       assert.equal(harness.logs.filter((line) => line.includes('stayed')).length, 1);
       assert.equal(harness.indicator.getHealth(topic).isLineDeletionRefused, true);
-      setInputs(harness, topic, { isFinished: true });
-      harness.indicator.requestRefresh(topic);
-      await harness.settle();
+      await wantAndWait(harness, topic, { isFinished: true });
       assert.deepEqual(harness.renames.map((rename) => rename.name), ['Deploy ✅']);
     });
 
@@ -458,9 +437,7 @@ describe('the status mark of topic names', () => {
   describe('the owner\'s name put back', () => {
     it('restoreBaseName writes the base at once, whatever the gap says', async () => {
       const harness = await createHarness();
-      setInputs(harness, topic, { isFinished: true });
-      harness.indicator.requestRefresh(topic);
-      await harness.settle();
+      await wantAndWait(harness, topic, { isFinished: true });
       await harness.indicator.restoreBaseName(topic);
       assert.deepEqual(harness.renames.map((rename) => rename.name), ['Deploy ✅', 'Deploy']);
       assert.equal(getAppliedName(harness), 'Deploy');
@@ -474,13 +451,8 @@ describe('the status mark of topic names', () => {
 
     it('cancels a rename that waits for its gap', async () => {
       const harness = await createHarness();
-      setInputs(harness, topic, { isFinished: true });
-      harness.indicator.requestRefresh(topic);
-      await harness.settle();
-      await harness.advance(1_000);
-      setInputs(harness, topic, { isAsleep: true });
-      harness.indicator.requestRefresh(topic);
-      await harness.settle();
+      await wantAndWait(harness, topic, { isFinished: true });
+      await wantAndWait(harness, topic, { isAsleep: true }, 1_000);
       await harness.indicator.restoreBaseName(topic);
       await harness.advance(10 * indicatorMinRenameGapMs);
       assert.deepEqual(harness.renames.map((rename) => rename.name), ['Deploy ✅', 'Deploy'], 'the waiting 💤 never lands over the restored name');
@@ -488,15 +460,15 @@ describe('the status mark of topic names', () => {
   });
 
   describe('the boot wave and the sweep', () => {
-    it('the wave writes after its window and only once the waiting updates are handled', async () => {
+    it('the wave looks after its window and only once the waiting updates are handled', async () => {
       const harness = await createHarness({ windows: { bootWaveDelayMs: 5_000, sweepIntervalMs: 10 * indicatorSweepIntervalMs } });
       setInputs(harness, topic, { isAsleep: true });
       harness.isBacklogHandled.current = false;
       harness.indicator.start();
-      await harness.advance(5_000);
+      await harness.advance(5_000 + indicatorSettleMs);
       assert.equal(harness.renames.length, 0, 'the updates that waited are not handled yet');
       harness.isBacklogHandled.current = true;
-      await harness.advance(1_000);
+      await harness.advance(1_000 + indicatorSettleMs);
       assert.deepEqual(harness.renames.map((rename) => rename.name), ['Deploy 💤']);
       harness.indicator.stop();
     });
@@ -516,7 +488,7 @@ describe('the status mark of topic names', () => {
       await harness.state.setBindingTopicNaming(topic, { indicatorAppliedName: 'Deploy 💤' });
       setInputs(harness, topic, { isAsleep: true });
       harness.indicator.start();
-      await harness.advance(5_000);
+      await harness.advance(5_000 + indicatorSettleMs);
       assert.equal(harness.renames.length, 0);
       harness.indicator.stop();
     });
@@ -526,8 +498,10 @@ describe('the status mark of topic names', () => {
       harness.indicator.start();
       await harness.advance(2_000);
       setInputs(harness, topic, { isFinished: true });
-      assert.equal(harness.renames.length, 0, 'no event signalled it');
+      await harness.advance(indicatorSettleMs);
+      assert.equal(harness.renames.length, 0, 'no event signalled it, and the sweep has not come yet');
       await harness.advance(60_000);
+      await harness.advance(indicatorSettleMs);
       assert.deepEqual(harness.renames.map((rename) => rename.name), ['Deploy ✅']);
       harness.indicator.stop();
     });

@@ -82,8 +82,9 @@ interface TopicRuntime {
   /** A look at the topic is already queued for the end of this tick (a burst of events makes one). */
   isLookQueued: boolean;
   lastRenameAtMs: number | null;
-  /** When the topic's turn began to run, as the bot saw it. */
-  workingSinceMs: number | null;
+  /** The name the topic was last found to want, and since when it has wanted it (the settle time counts from there). */
+  heldName: string | null;
+  heldSinceMs: number;
   /** The owner changed what is shown and the change has not been written yet. */
   isOwnerChangePending: boolean;
   /** The last failure logged for this topic: the same cause is not logged again. */
@@ -129,7 +130,7 @@ export function createTopicIndicator(ports: TopicIndicatorPorts) {
   function getRuntime(keyString: string): TopicRuntime {
     let runtime = runtimes.get(keyString);
     if (!runtime) {
-      runtime = { timer: null, isLookQueued: false, lastRenameAtMs: null, workingSinceMs: null, isOwnerChangePending: false, lastLoggedFailure: null };
+      runtime = { timer: null, isLookQueued: false, lastRenameAtMs: null, heldName: null, heldSinceMs: 0, isOwnerChangePending: false, lastLoggedFailure: null };
       runtimes.set(keyString, runtime);
     }
     return runtime;
@@ -137,7 +138,8 @@ export function createTopicIndicator(ports: TopicIndicatorPorts) {
 
   /**
    * What the topic shows and what it should show — `null` when it cannot carry a mark (not a topic, not bound, its own name unknown).
-   * Notes, as a side effect, since when its turn runs. A closed topic shows its owner's own name, like a topic without an agent.
+   * Notes, as a side effect, since when the wanted name has been the wanted one. A closed topic shows its owner's own name, like a topic
+   * without an agent.
    */
   function observeTopic(key: SessionKey): TopicView | null {
     if (!checkIsMarkableTopic(key)) return null;
@@ -147,17 +149,16 @@ export function createTopicIndicator(ports: TopicIndicatorPorts) {
     const isShown = binding.closed !== true;
     const inputs = isShown ? ports.getStatusInputs(key) : noStatusInputs;
     const runtime = getRuntime(keyToString(key));
-    runtime.workingSinceMs = inputs.isWorking ? (runtime.workingSinceMs ?? getNowMs()) : null;
     const desiredStatus = resolveTopicStatus(inputs, prefs);
     const counts: TopicIndicatorCounts = isShown
       ? { agents: prefs.agents ? ports.getAgentsCount(key) : 0, queued: prefs.queued ? ports.getQueuedCount(key) : 0 }
       : noCounts;
-    return {
-      base: binding.topicName,
-      appliedName: binding.indicatorAppliedName ?? binding.topicName,
-      desiredName: composeIndicatorName(binding.topicName, desiredStatus, counts, prefs),
-      desiredStatus,
-    };
+    const desiredName = composeIndicatorName(binding.topicName, desiredStatus, counts, prefs);
+    if (runtime.heldName !== desiredName) {
+      runtime.heldName = desiredName;
+      runtime.heldSinceMs = getNowMs();
+    }
+    return { base: binding.topicName, appliedName: binding.indicatorAppliedName ?? binding.topicName, desiredName, desiredStatus };
   }
 
   function planRename(view: TopicView, runtime: TopicRuntime): ReturnType<typeof planIndicatorRename> {
@@ -165,7 +166,7 @@ export function createTopicIndicator(ports: TopicIndicatorPorts) {
       desiredName: view.desiredName,
       desiredStatus: view.desiredStatus,
       appliedName: view.appliedName,
-      workingSinceMs: runtime.workingSinceMs,
+      heldSinceMs: runtime.heldSinceMs,
       lastRenameAtMs: runtime.lastRenameAtMs,
       isOwnerChange: runtime.isOwnerChangePending,
       nowMs: getNowMs(),

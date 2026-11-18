@@ -201,7 +201,10 @@ export function getOwnerRenameOutcome(savedName: string, appliedName: string | u
 
 // ── when a rename may happen ──
 
-/** A turn must have run this long before its ⏳ shows: a short reply goes straight to its final mark (the owner: no flashing). */
+/**
+ * A name must have been the wanted one this long before it is written: a turn runs this long before its ⏳ shows, a short reply goes
+ * straight to its final mark, and a session that wakes for a prompt never shows a ✅ on the way to its ⏳ (the owner: no flashing).
+ */
 export const indicatorSettleMs = 20_000;
 
 /** Two renames of one topic are at least this far apart; the latest state wins, a state that came and went inside the gap is never shown. */
@@ -221,11 +224,11 @@ export interface IndicatorRenameInputs {
   desiredStatus: TopicStatus | null;
   /** The name the topic shows now, as the bot last applied it. */
   appliedName: string;
-  /** When the topic's turn began running, as the bot saw it; `null` while it does not run. */
-  workingSinceMs: number | null;
+  /** Since when `desiredName` has been the wanted one, as the bot saw it. */
+  heldSinceMs: number;
   /** When the bot last renamed this topic; `null` before the first. */
   lastRenameAtMs: number | null;
-  /** The owner just changed what is shown (a switch of `/topic_status`): his change skips the gap like the edges of ❓ do. */
+  /** The owner just changed what is shown (a switch of `/topic_status`): his change skips the wait like the edges of ❓ do. */
   isOwnerChange: boolean;
   nowMs: number;
   settleMs: number;
@@ -236,18 +239,20 @@ export interface IndicatorRenameInputs {
 export type IndicatorRenamePlan = { kind: 'now' } | { kind: 'at'; atMs: number } | { kind: 'none' };
 
 /**
- * @description When the topic is renamed to its desired name. Nothing when it already shows it. The ⏳ waits until the turn has run
- * `settleMs`. Two renames keep `minGapMs` apart — except the edges of ❓ (a question appearing or being answered is the one thing the owner
- * must see at once) and a change the owner just made himself, which still go through the shared send gate. The instant a wait ends is when the caller asks again, so the LATEST
- * desired name wins and states that came and went meanwhile are never shown.
+ * @description When the topic is renamed to its desired name. Nothing when it already shows it. A name waits until it has been the
+ * wanted one for `settleMs`, and two renames keep `minGapMs` apart — except the edges of ❓ (a question appearing or being answered is the
+ * one thing the owner must see at once) and a change the owner just made himself, which skip both and still go through the shared send
+ * gate. The instant a wait ends is when the caller asks again, so the LATEST desired name wins and states that came and went meanwhile
+ * are never shown.
  */
 export function planIndicatorRename(inputs: IndicatorRenameInputs): IndicatorRenamePlan {
-  const { desiredName, desiredStatus, appliedName, workingSinceMs, lastRenameAtMs, isOwnerChange, nowMs, settleMs, minGapMs } = inputs;
+  const { desiredName, desiredStatus, appliedName, heldSinceMs, lastRenameAtMs, isOwnerChange, nowMs, settleMs, minGapMs } = inputs;
   if (desiredName === appliedName) return { kind: 'none' };
   const isQuestionEdge = desiredStatus === 'question' || getIndicatorStatusOfName(appliedName) === 'question';
-  const settleAtMs = desiredStatus === 'working' && workingSinceMs !== null ? workingSinceMs + settleMs : nowMs;
-  const gapEndsAtMs = !isQuestionEdge && !isOwnerChange && lastRenameAtMs !== null ? lastRenameAtMs + minGapMs : nowMs;
-  const atMs = Math.max(settleAtMs, gapEndsAtMs);
+  if (isQuestionEdge || isOwnerChange) return { kind: 'now' };
+  const settleEndsAtMs = heldSinceMs + settleMs;
+  const gapEndsAtMs = lastRenameAtMs === null ? nowMs : lastRenameAtMs + minGapMs;
+  const atMs = Math.max(settleEndsAtMs, gapEndsAtMs);
   return atMs > nowMs ? { kind: 'at', atMs } : { kind: 'now' };
 }
 

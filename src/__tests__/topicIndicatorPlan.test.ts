@@ -236,7 +236,7 @@ describe('planIndicatorRename', () => {
       desiredName: 'Deploy ✅',
       desiredStatus: 'finished',
       appliedName: 'Deploy 💤',
-      workingSinceMs: null,
+      heldSinceMs: quietSince,
       lastRenameAtMs: quietSince,
       isOwnerChange: false,
       nowMs,
@@ -250,7 +250,7 @@ describe('planIndicatorRename', () => {
     assert.deepEqual(plan({ desiredName: 'Deploy 💤', desiredStatus: 'asleep' }), { kind: 'none' });
   });
 
-  it('renames at once when the last rename is long ago, and on the very first', () => {
+  it('renames at once when the name has held long enough and the last rename is long ago, and on the very first', () => {
     assert.deepEqual(plan({}), { kind: 'now' });
     assert.deepEqual(plan({ lastRenameAtMs: null }), { kind: 'now' });
   });
@@ -261,40 +261,37 @@ describe('planIndicatorRename', () => {
     assert.deepEqual(plan({ lastRenameAtMs: nowMs - indicatorMinRenameGapMs }), { kind: 'now' }, 'at the boundary the gap is over');
   });
 
-  it('shows ⏳ only after the turn has run the settle time; a turn that ends first never shows it', () => {
+  it('shows a name only once it has been the wanted one for the settle time: ⏳ after the turn ran that long, never a ✅ on the way', () => {
     const workingNow = { desiredName: 'Deploy ⏳', desiredStatus: 'working' as const, appliedName: 'Deploy ✅' };
-    assert.deepEqual(plan({ ...workingNow, workingSinceMs: nowMs - 5_000 }), { kind: 'at', atMs: nowMs - 5_000 + indicatorSettleMs });
-    assert.deepEqual(plan({ ...workingNow, workingSinceMs: nowMs - indicatorSettleMs }), { kind: 'now' });
-    // The turn ended inside the settle time: the desired name is the final mark, nothing waits for a ⏳.
-    assert.deepEqual(plan({ desiredName: 'Deploy ✅', desiredStatus: 'finished', appliedName: 'Deploy 💤', workingSinceMs: null }), { kind: 'now' });
+    assert.deepEqual(plan({ ...workingNow, heldSinceMs: nowMs - 5_000 }), { kind: 'at', atMs: nowMs - 5_000 + indicatorSettleMs });
+    assert.deepEqual(plan({ ...workingNow, heldSinceMs: nowMs - indicatorSettleMs }), { kind: 'now' });
+    // A session that wakes for a prompt wants ✅ for an instant before its turn runs: the instant is not enough to show it.
+    assert.deepEqual(plan({ desiredName: 'Deploy ✅', desiredStatus: 'finished', appliedName: 'Deploy 💤', heldSinceMs: nowMs - 100 }), { kind: 'at', atMs: nowMs - 100 + indicatorSettleMs });
   });
 
   it('takes the later of the settle time and the gap', () => {
-    const workingSinceMs = nowMs - 5_000;
+    const heldSinceMs = nowMs - 5_000;
     const lastRenameAtMs = nowMs - 5_000;
     assert.deepEqual(
-      plan({ desiredName: 'Deploy ⏳', desiredStatus: 'working', appliedName: 'Deploy ✅', workingSinceMs, lastRenameAtMs }),
+      plan({ desiredName: 'Deploy ⏳', desiredStatus: 'working', appliedName: 'Deploy ✅', heldSinceMs, lastRenameAtMs }),
       { kind: 'at', atMs: lastRenameAtMs + indicatorMinRenameGapMs },
     );
+    assert.deepEqual(plan({ heldSinceMs: nowMs - 100, lastRenameAtMs: nowMs - 59_000 }), { kind: 'at', atMs: nowMs - 100 + indicatorSettleMs });
   });
 
-  it('lets the edges of ❓ skip the gap: the question appearing, and the question answered', () => {
+  it('lets the edges of ❓ skip the wait and the gap: the question appearing, and the question answered', () => {
     const lastRenameAtMs = nowMs - 1_000;
-    assert.deepEqual(plan({ desiredName: 'Deploy ❓', desiredStatus: 'question', appliedName: 'Deploy ⏳', lastRenameAtMs }), { kind: 'now' });
-    assert.deepEqual(plan({ desiredName: 'Deploy ⏳', desiredStatus: 'working', appliedName: 'Deploy ❓', workingSinceMs: nowMs - indicatorSettleMs, lastRenameAtMs }), { kind: 'now' });
-    assert.deepEqual(plan({ desiredName: 'Deploy ✅', desiredStatus: 'finished', appliedName: 'Deploy ❓', lastRenameAtMs }), { kind: 'now' });
+    const justWanted = { heldSinceMs: nowMs, lastRenameAtMs };
+    assert.deepEqual(plan({ desiredName: 'Deploy ❓', desiredStatus: 'question', appliedName: 'Deploy ⏳', ...justWanted }), { kind: 'now' });
+    assert.deepEqual(plan({ desiredName: 'Deploy ⏳', desiredStatus: 'working', appliedName: 'Deploy ❓', ...justWanted }), { kind: 'now' });
+    assert.deepEqual(plan({ desiredName: 'Deploy ✅', desiredStatus: 'finished', appliedName: 'Deploy ❓', ...justWanted }), { kind: 'now' });
   });
 
-  it('lets a change the owner just made skip the gap, but not the settle time of ⏳', () => {
-    const lastRenameAtMs = nowMs - 1_000;
-    assert.deepEqual(plan({ desiredName: 'Deploy', desiredStatus: null, appliedName: 'Deploy ✅', lastRenameAtMs, isOwnerChange: true }), { kind: 'now' });
-    assert.deepEqual(
-      plan({ desiredName: 'Deploy ⏳', desiredStatus: 'working', appliedName: 'Deploy', workingSinceMs: nowMs - 5_000, lastRenameAtMs, isOwnerChange: true }),
-      { kind: 'at', atMs: nowMs - 5_000 + indicatorSettleMs },
-    );
+  it('lets a change the owner just made skip the wait and the gap', () => {
+    assert.deepEqual(plan({ desiredName: 'Deploy', desiredStatus: null, appliedName: 'Deploy ✅', heldSinceMs: nowMs, lastRenameAtMs: nowMs - 1_000, isOwnerChange: true }), { kind: 'now' });
   });
 
-  it('does not let any other change skip the gap', () => {
+  it('does not let any other change skip them', () => {
     const lastRenameAtMs = nowMs - 1_000;
     assert.deepEqual(plan({ desiredName: 'Deploy ❗️', desiredStatus: 'stuck', appliedName: 'Deploy ⏳', lastRenameAtMs }), { kind: 'at', atMs: lastRenameAtMs + indicatorMinRenameGapMs });
   });
