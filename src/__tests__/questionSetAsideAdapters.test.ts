@@ -392,7 +392,7 @@ describe('OpenCode: setQuestionAside replies with the text as the custom answer 
       const emitted: string[] = [];
       adapter.on('question', (_key: SessionKey, question: { requestId: string }) => emitted.push(question.requestId));
 
-      await adapter.surfaceOpenQuestion(key);
+      assert.equal(await adapter.surfaceOpenQuestion(key), 'emitted');
 
       assert.deepEqual(emitted, ['que_changed']);
       assert.equal(getOpenCodeSession(adapter, keyToString(key)).pendingQuestion?.requestId, 'que_changed');
@@ -406,7 +406,7 @@ describe('OpenCode: setQuestionAside replies with the text as the custom answer 
       const emitted: string[] = [];
       adapter.on('question', (_key: SessionKey, question: { requestId: string }) => emitted.push(question.requestId));
 
-      await adapter.surfaceOpenQuestion(key, requestId);
+      assert.equal(await adapter.surfaceOpenQuestion(key, requestId), 'emitted');
 
       assert.deepEqual(emitted, ['que_sibling']);
     });
@@ -416,7 +416,7 @@ describe('OpenCode: setQuestionAside replies with the text as the custom answer 
       const emitted: string[] = [];
       adapter.on('question', () => emitted.push('question'));
 
-      await adapter.surfaceOpenQuestion(key, requestId);
+      assert.equal(await adapter.surfaceOpenQuestion(key, requestId), 'none');
 
       assert.deepEqual(emitted, []);
     });
@@ -425,15 +425,31 @@ describe('OpenCode: setQuestionAside replies with the text as the custom answer 
       const none = createAdapterThatLostTheQuestion([{ id: 'que_other', sessionID: 'ses_other', questions: twoQuestions }]);
       const emitted: string[] = [];
       none.adapter.on('question', () => emitted.push('question'));
-      await none.adapter.surfaceOpenQuestion(key);
+      assert.equal(await none.adapter.surfaceOpenQuestion(key), 'none');
 
       const inactive = createAdapterThatLostTheQuestion(serverEntry);
       inactive.adapter.on('question', () => emitted.push('question'));
       getOpenCodeSession(inactive.adapter, keyToString(key)).isActive = false;
-      await inactive.adapter.surfaceOpenQuestion(key);
+      assert.equal(await inactive.adapter.surfaceOpenQuestion(key), 'none');
 
       assert.deepEqual(emitted, []);
       assert.deepEqual(inactive.apiCalls, [], 'an inactive session is not even asked about');
+    });
+
+    it('surfaceOpenQuestion says `readFailed` — not «none» — when the server cannot be read or does not answer with a list, and emits nothing', async () => {
+      const originalWarn = console.warn;
+      console.warn = () => {};
+      try {
+        for (const response of [new Error('server busy'), { not: 'a list' }]) {
+          const { adapter } = createAdapterThatLostTheQuestion(response);
+          const emitted: string[] = [];
+          adapter.on('question', () => emitted.push('question'));
+          assert.equal(await adapter.surfaceOpenQuestion(key), 'readFailed');
+          assert.deepEqual(emitted, []);
+        }
+      } finally {
+        console.warn = originalWarn;
+      }
     });
 
     it('unknown: the read failed, the answer is not a list, or the session is not active (a replacement may be under way) — never «none»', async () => {

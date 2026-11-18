@@ -3,7 +3,7 @@ import { execFile } from 'child_process';
 import { promisify } from 'util';
 import * as fs from 'fs';
 import * as path from 'path';
-import type { AgentAdapter, AgentApiErrorClass, AgentRuntimeInfo, AgentSession, CompactionResult, DisplayPrefsReader, DisplayVerbosityMode, EffortSetOutcome, EffortState, OpenCodePendingQuestion, OpenCodeQuestion, ReattachRecap, RecentTurn, ResolvedThreadDisplayPrefs, ResumeSessionOptions, SeenWatermark, SeenWatermarkWriter, ThinkingEvent, ThreadLocaleReader, ToolResultEvent } from '../types';
+import type { AgentAdapter, AgentApiErrorClass, AgentRuntimeInfo, AgentSession, CompactionResult, DisplayPrefsReader, DisplayVerbosityMode, EffortSetOutcome, EffortState, OpenCodePendingQuestion, OpenCodeQuestion, ReattachRecap, RecentTurn, ResolvedThreadDisplayPrefs, ResumeSessionOptions, SeenWatermark, SeenWatermarkWriter, SurfaceOpenQuestionOutcome, ThinkingEvent, ThreadLocaleReader, ToolResultEvent } from '../types';
 import type { OutboundHints } from '../platform/outbound';
 import type { SessionKey } from '../sessionKey';
 import { keyToString } from '../sessionKey';
@@ -5966,28 +5966,33 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
    * {@link getOpenQuestionForSession} helper.
    *
    * Best-effort: a read/parse failure is logged and swallowed — it must never
-   * throw out of reattach. Only meaningful on the resume/reattach path; a
+   * throw out of reattach — and reported as `readFailed` to a caller that
+   * counts on the question being shown. Only meaningful on the resume/reattach path; a
    * brand-new session (startSession) has no history and thus no open question,
    * so it is deliberately NOT called there.
    */
-  private async restoreOpenQuestion(key: SessionKey, sessionId: string, workDir: string, exceptRequestId?: string): Promise<void> {
+  private async restoreOpenQuestion(key: SessionKey, sessionId: string, workDir: string, exceptRequestId?: string): Promise<SurfaceOpenQuestionOutcome> {
     try {
       const response = await this.apiRequest<unknown>(
         'GET',
         buildDirectoryScopedPath('/question', workDir),
       );
+      // An answer that is not a list is as good as none read (`resyncOpenQuestion` says «unknown» for it too).
+      if (!Array.isArray(response)) return 'readFailed';
       const restored = getOpenQuestionForSession(response, sessionId, workDir, { exceptRequestId });
-      if (!restored) return;
+      if (!restored) return 'none';
 
       // The session may have been stopped/replaced between the GET and now.
       const session = this.sessions.get(keyToString(key));
-      if (!session?.isActive || session.sessionId !== sessionId) return;
+      if (!session?.isActive || session.sessionId !== sessionId) return 'none';
 
       session.pendingQuestion = restored;
       console.log(`[OpenCode] Restored open question ${restored.requestId} for ${keyToString(key)} on reattach`);
       this.emit('question', key, restored);
+      return 'emitted';
     } catch (e) {
       console.warn(`[OpenCode] restore open question failed:`, e instanceof Error ? e.message : e);
+      return 'readFailed';
     }
   }
 
@@ -6100,12 +6105,12 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
   /**
    * @description Hand the question the server holds for this session to the bot as a `question` event (see {@link restoreOpenQuestion});
    * nothing when it holds none. `exceptRequestId` leaves the question the bot has just set aside out — a sibling open at the same time
-   * (the model's parallel tool calls) is the one to show.
+   * (the model's parallel tool calls) is the one to show. Resolves `emitted`, `none` (also: no live session) or `readFailed`.
    */
-  async surfaceOpenQuestion(key: SessionKey, exceptRequestId?: string): Promise<void> {
+  async surfaceOpenQuestion(key: SessionKey, exceptRequestId?: string): Promise<SurfaceOpenQuestionOutcome> {
     const session = this.sessions.get(keyToString(key));
-    if (!session?.isActive) return;
-    await this.restoreOpenQuestion(key, session.sessionId, session.workDir, exceptRequestId);
+    if (!session?.isActive) return 'none';
+    return this.restoreOpenQuestion(key, session.sessionId, session.workDir, exceptRequestId);
   }
 
   /**

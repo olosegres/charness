@@ -24,7 +24,7 @@ import { createQuestionSetAside, setAsideRetryLimit, type QuestionSetAsidePorts,
 import type { LatePromptOutcome } from '../utils/promptDelivery';
 import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
 import { keyToString, type SessionKey } from '../sessionKey';
-import type { AgentAdapter, OpenCodePendingQuestion, OpenCodeQuestion, PendingQuestionState, SetAsideQuestionRecord } from '../types';
+import type { AgentAdapter, OpenCodePendingQuestion, OpenCodeQuestion, PendingQuestionState, SetAsideQuestionRecord, SurfaceOpenQuestionOutcome } from '../types';
 import type { QuestionEnd } from '../openCodeQuestionFlow';
 import { maxSetAsideQuestions } from '../utils/questionWaitPlan';
 import type { QuestionWaitChoice } from '../utils/questionWaitChoices';
@@ -95,6 +95,8 @@ function createHarness(options: {
   adapterThrows?: boolean;
   /** The adapter can hand the server's own question to the bot (OpenCode) even when it has no registry probe. */
   withSurface?: boolean;
+  /** What reading the server's own question comes to (default: it is emitted). */
+  surfaceOutcome?: SurfaceOpenQuestionOutcome;
 } = {}): Harness {
   const pendingQuestions = new Map<string, PendingQuestionState>();
   const events: string[] = [];
@@ -145,7 +147,11 @@ function createHarness(options: {
       },
     }),
     ...(options.resync === undefined && !options.withSurface ? {} : {
-      surfaceOpenQuestion: async (_key: SessionKey, exceptRequestId?: string) => { events.push('surface'); surfaceCalls.push(exceptRequestId); },
+      surfaceOpenQuestion: async (_key: SessionKey, exceptRequestId?: string): Promise<SurfaceOpenQuestionOutcome> => {
+        events.push('surface');
+        surfaceCalls.push(exceptRequestId);
+        return options.surfaceOutcome ?? 'emitted';
+      },
     }),
   };
 
@@ -414,8 +420,43 @@ describe('a question the server holds beside the one set aside, and a reply the 
     });
 
     assert.deepEqual(harness.replies, [enDict['agent.set_aside_reply_failed_notice']]);
-    assert.ok(warnings.some((warning) => warning.includes('refused the reply')), warnings.join('\n'));
+    assert.ok(warnings.some((warning) => warning.includes('did not take the reply')), warnings.join('\n'));
     assert.equal(harness.surfaceCalls.length, 0, 'and nothing is tried again: the retry still to come was dropped');
+  });
+
+  it('a re-read of the server that fails too is another failure, never the end of the chain: it is tried again and, after the last try, the topic is told', async () => {
+    const harness = createHarness({ withSurface: true, retryDelayMs: 5, surfaceOutcome: 'readFailed' });
+    harness.pendingQuestions.set(keyString, createPending('req_a'));
+    await harness.setAside.setPendingQuestionAside(key, 'req_a');
+    harness.surfaceCalls.length = 0;
+
+    const warnings = await captureWarnings(async () => {
+      harness.adapterCalls[0].onSettled?.(false);
+      await sleep(120);
+    });
+
+    assert.equal(harness.surfaceCalls.length, setAsideRetryLimit, 'the server is asked once per pause, however it answers');
+    assert.deepEqual(harness.replies, [enDict['agent.set_aside_reply_failed_notice']], 'the topic is told once, after the last try');
+    assert.ok(warnings.some((warning) => warning.includes('could not be read')), warnings.join('\n'));
+  });
+
+  it('a server that holds no question any more ends the chain without a word: nothing waits, and the next failure counts from the first', async () => {
+    const harness = createHarness({ withSurface: true, retryDelayMs: 5, surfaceOutcome: 'none' });
+    harness.pendingQuestions.set(keyString, createPending('req_a'));
+    await harness.setAside.setPendingQuestionAside(key, 'req_a');
+    harness.surfaceCalls.length = 0;
+    const { onSettled } = harness.adapterCalls[0];
+
+    const warnings = await captureWarnings(async () => {
+      onSettled?.(false);
+      await sleep(40);
+      onSettled?.(false);
+      await sleep(40);
+    });
+
+    assert.deepEqual(harness.replies, []);
+    assert.equal(harness.surfaceCalls.length, 2);
+    assert.ok(warnings.every((warning) => warning.includes('try 1 of 3')), warnings.join('\n'));
   });
 
   it('the tell «still open» to a question asked again carries the same outcome callback, so its failure is retried the same way', async () => {

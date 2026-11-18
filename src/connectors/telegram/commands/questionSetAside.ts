@@ -274,38 +274,58 @@ export function createQuestionSetAside(ports: QuestionSetAsidePorts) {
 
   /**
    * @description What the agent's server made of the reply that set question `requestId` aside, as `setQuestionAside`'s `onSettled`
-   * hands it over. A reply the server took ends the count of failures. One it did not take leaves the question OPEN on the server —
-   * the topic says «the agent went on» and nothing waits on the bot's side, yet the agent stands still on it: after a pause the
-   * question is handed to the bot again (`surfaceOpenQuestion`), which finds its record and tells the agent once more as a question
-   * asked again. At most {@link setAsideRetryLimit} times; then the topic is told, so a stuck agent is not left to a console line.
+   * hands it over. A reply the server took ends the count of failures; one it did not take is {@link countReplyFailure}.
    */
   function handleReplySettled(key: SessionKey, requestId: string): (isSent: boolean) => void {
     return (isSent) => {
-      const attemptKey = getAttemptKey(key, requestId);
       if (isSent) {
-        replyFailures.delete(attemptKey);
+        replyFailures.delete(getAttemptKey(key, requestId));
         return;
       }
-      const failures = (replyFailures.get(attemptKey) ?? 0) + 1;
-      replyFailures.set(attemptKey, failures);
-      const kStr = keyToString(key);
-      if (failures > setAsideRetryLimit) {
-        console.warn(`[questionSetAside] ${kStr}: the agent's server refused the reply that sets the question ${requestId} aside ${failures} times; it may still wait for it`);
-        replyFailures.delete(attemptKey);
-        clearTimeout(replyRetryTimers.get(kStr));
-        replyRetryTimers.delete(kStr);
-        void replyToThread(key, withThreadLocale(key, () => t('agent.set_aside_reply_failed_notice')));
-        return;
-      }
-      console.warn(`[questionSetAside] ${kStr}: the agent's server did not take the reply that sets the question ${requestId} aside; trying again in ${retryDelayMs / 1000} s (try ${failures} of ${setAsideRetryLimit})`);
-      clearTimeout(replyRetryTimers.get(kStr));
-      const timer = setTimeout(() => {
-        replyRetryTimers.delete(kStr);
-        void getThreadAdapter(key).surfaceOpenQuestion?.(key);
-      }, retryDelayMs);
-      timer.unref();
-      replyRetryTimers.set(kStr, timer);
+      countReplyFailure(key, requestId, `did not take the reply that sets the question ${requestId} aside`);
     };
+  }
+
+  /**
+   * One more failure to get the question `requestId` aside on the agent's server — its reply was not taken, or the server could not be
+   * read to find the question again. The question stays OPEN there: the topic says «the agent went on» and nothing waits on the bot's
+   * side, yet the agent stands still on it. After a pause the question is handed to the bot again (`surfaceOpenQuestion`), which finds
+   * its record and tells the agent once more as a question asked again ({@link surfaceQuestionAgain}). At most
+   * {@link setAsideRetryLimit} times; then the topic is told, so a stuck agent is not left to a console line.
+   */
+  function countReplyFailure(key: SessionKey, requestId: string, cause: string): void {
+    const attemptKey = getAttemptKey(key, requestId);
+    const failures = (replyFailures.get(attemptKey) ?? 0) + 1;
+    replyFailures.set(attemptKey, failures);
+    const kStr = keyToString(key);
+    if (failures > setAsideRetryLimit) {
+      console.warn(`[questionSetAside] ${kStr}: the agent's server ${cause} ${failures} times; it may still wait for it`);
+      replyFailures.delete(attemptKey);
+      clearTimeout(replyRetryTimers.get(kStr));
+      replyRetryTimers.delete(kStr);
+      void replyToThread(key, withThreadLocale(key, () => t('agent.set_aside_reply_failed_notice')));
+      return;
+    }
+    console.warn(`[questionSetAside] ${kStr}: the agent's server ${cause}; trying again in ${retryDelayMs / 1000} s (try ${failures} of ${setAsideRetryLimit})`);
+    clearTimeout(replyRetryTimers.get(kStr));
+    const timer = setTimeout(() => {
+      replyRetryTimers.delete(kStr);
+      void surfaceQuestionAgain(key, requestId);
+    }, retryDelayMs);
+    timer.unref();
+    replyRetryTimers.set(kStr, timer);
+  }
+
+  /**
+   * The pause after a reply the server did not take is over: the server's own question is handed to the bot again. When it is
+   * shown (`emitted`) the telling runs once more and its outcome comes back through {@link handleReplySettled}; when the server holds
+   * none any more nothing waits and the count ends; when it could not be read the question may still be open there, which is another
+   * failure — the chain never stops silently on a read that failed.
+   */
+  async function surfaceQuestionAgain(key: SessionKey, requestId: string): Promise<void> {
+    const outcome = await getThreadAdapter(key).surfaceOpenQuestion?.(key);
+    if (outcome === 'readFailed') countReplyFailure(key, requestId, `could not be read to find the question ${requestId} again`);
+    else if (outcome === 'none') replyFailures.delete(getAttemptKey(key, requestId));
   }
 
   /**

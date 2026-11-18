@@ -734,6 +734,15 @@ export interface EffortState {
   nextStart: string;
 }
 
+
+/**
+ * @name SurfaceOpenQuestionOutcome
+ * @description What {@link AgentAdapter.surfaceOpenQuestion} did: `emitted` — the registry held a question and the bot got it as a
+ * `question` event; `none` — nothing to show (an empty registry, only the question left out, or no live session); `readFailed` — the
+ * registry could not be read, so whether a question waits there is not known.
+ */
+export type SurfaceOpenQuestionOutcome = 'emitted' | 'none' | 'readFailed';
+
 /**
  * @description Unified interface for AI agent backends (Claude CLI, OpenCode, etc.).
  * Each adapter manages sessions keyed by `SessionKey` and communicates via EventEmitter.
@@ -1334,9 +1343,10 @@ export interface AgentAdapter extends EventEmitter {
    * @description Read the backend's OWN registry of open questions for this session and, when it holds one, hand it to the bot as a
    * `question` event — the way a reattach does — so it is shown in the topic. The bot calls it after it closed a copy of a question
    * the registry no longer holds: the question the registry holds NOW was never shown. Best-effort: nothing is emitted for an empty
-   * registry or a failed read. Only for a backend that has such a registry ({@link resyncOpenQuestion}).
+   * registry or a failed read, and it never throws. Only for a backend that has such a registry ({@link resyncOpenQuestion}).
+   * Resolves what became of it, so a caller that counts on the question being shown can tell a failed read from an empty registry.
    */
-  surfaceOpenQuestion?(key: SessionKey, exceptRequestId?: string): Promise<void>;
+  surfaceOpenQuestion?(key: SessionKey, exceptRequestId?: string): Promise<SurfaceOpenQuestionOutcome>;
 
   /**
    * @description Whether this session's turn is wedged behind an open
