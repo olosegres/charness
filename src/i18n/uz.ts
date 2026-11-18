@@ -274,7 +274,7 @@ export const uzDict: Record<string, string> = {
   'agent.question_unanswered_note': '❌ Javobsiz qoldi',
   'agent.question_asked_again_note': '↓ Pastda qayta berildi',
   'agent.question_set_aside_note': '⏸ Agent javobingizsiz davom etdi — hali ham javob berishingiz mumkin',
-  'agent.question_set_aside_not_taken_note': '⚠️ Agent hali ham javobingizni kutayotgan bo‘lishi mumkin — server unga davom etishni aytadigan xabarni qabul qilmadi. Hali ham javob berishingiz mumkin',
+  'agent.question_set_aside_not_taken_note': '⚠️ Server agentga javobingizsiz davom etishni aytilganini tasdiqlamadi — agar u qotib qolganga o‘xshasa, unga istalgan xabar yuboring. Hali ham javob berishingiz mumkin',
   'agent.set_aside_question_gone_notice': 'Bu savolga allaqachon javob berilgan yoki u yopilgan — bu hech narsani o‘zgartirmadi.',
   'agent.set_aside_reply_failed_notice': '⚠️ Agentga savolsiz davom etishni aytib bo‘lmadi — server xabarni qabul qilmadi va agent hali ham kutayotgan bo‘lishi mumkin. Davom etishi uchun unga istalgan xabar yuboring.',
   'agent.set_aside_next_question_failed_notice': 'Keyingi savolni yuborib bo‘lmadi, shuning uchun javobingiz qabul qilinmadi — qayta urinib ko‘ring.',

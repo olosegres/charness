@@ -274,7 +274,7 @@ export const jaDict: Record<string, string> = {
   'agent.question_unanswered_note': '❌ 未回答',
   'agent.question_asked_again_note': '↓ 下で再度質問しました',
   'agent.question_set_aside_note': '⏸ エージェントは回答を待たずに作業を進めました — 今からでも回答できます',
-  'agent.question_set_aside_not_taken_note': '⚠️ エージェントはまだ回答を待っている可能性があります — 先へ進むよう伝えるメッセージをサーバーが受け付けませんでした。今からでも回答できます',
+  'agent.question_set_aside_not_taken_note': '⚠️ エージェントに回答を待たず先へ進むよう伝えられたか、サーバーが確認できませんでした — 止まっているようなら、何かメッセージを送ってください。今からでも回答できます',
   'agent.set_aside_question_gone_notice': 'その質問はすでに回答済みか終了しています — 今回の操作では何も変わりませんでした。',
   'agent.set_aside_reply_failed_notice': '⚠️ エージェントに質問なしで先へ進むよう伝えられませんでした — サーバーがメッセージを受け付けず、エージェントはまだ待っている可能性があります。先へ進めるには、何かメッセージを送ってください。',
   'agent.set_aside_next_question_failed_notice': '次の質問を投稿できなかったため、回答は受け付けられませんでした — もう一度お試しください。',

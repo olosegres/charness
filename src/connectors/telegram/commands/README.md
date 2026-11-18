@@ -260,9 +260,11 @@ the topic. The pieces:
   agent went on. The bot hands the server's question to itself again after `retryDelayMs` (`surfaceOpenQuestion` → the question-asked-again route tells
   the agent once more; a re-read that FAILS (`readFailed`) counts as one more failure, never as the end of the chain), at most `setAsideRetryLimit`
   times, then the topic is told once (`agent.set_aside_reply_failed_notice`: send any message to move the agent on — the wedge backstop of
-  `deliverActivePrompt` aborts the turn) AND the pinned message's own note is rewritten (`agent.question_set_aside_not_taken_note`: the agent may still
-  wait; buttons and pin stay) — put back to «went on» if a later tell is taken (`rewriteSetAsideNote`, decided in the lifecycle queue so an answered
-  record keeps its «✅ Answer»). `questionSetAsideRetryMs` (`CHARNESS_TEST_TIMINGS`) shortens the pause for a flow. After EVERY set-aside the server's OTHER open question of the session is
+  `deliverActivePrompt` aborts the turn) AND the pinned message's own note is rewritten (`agent.question_set_aside_not_taken_note`: the server did not
+  CONFIRM the «go on» message — «if the agent seems stuck, send it any message»; buttons and pin stay). The note is a fact about that message, never
+  the agent's state now: the agent can move on by itself, by the owner's message (the wedge abort) or by asking the next question, and no single signal
+  covers all three (nor a restart), so a note claiming it still waits would stay up false. It goes back to «went on» when a later tell is taken
+  (`rewriteSetAsideNote`, in the lifecycle queue so an answered record keeps its «✅ Answer»; best effort — in memory only, and a miss leaves a true note). `questionSetAsideRetryMs` (`CHARNESS_TEST_TIMINGS`) shortens the pause for a flow. After EVERY set-aside the server's OTHER open question of the session is
   surfaced too (`exceptRequestId`). The counts of the tries (`retryAttempts`, `replyFailures`) are forgotten when the question is told, dropped or its timer
   is armed afresh (`/question_wait`, a restart): one timer per conversation (`armSetAsideTimer`) serves the wait and its second chance.
 - **The bot holds the question and the adapter says it holds none** (at the end of the wait): json-stream — the CLI's own question is the authority, so the

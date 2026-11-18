@@ -42,8 +42,14 @@ const setAsideButtonPrefix = 'qs_';
 /** After the agent's server could not confirm a waiting question, or did not take what sets it aside, it is tried again at most this many times (a pause of {@link setAsideRetryDelayMs} between). */
 export const setAsideRetryLimit = 3;
 
-/** What the note under a set-aside question says: the agent went on, or its server did not take the message that tells it to (it may still wait). */
-type SetAsideNoteState = 'wentOn' | 'mayStillWait';
+/**
+ * What the note under a set-aside question says: the agent went on, or its server did not CONFIRM the message that tells it to. The second is
+ * worded as a fact about that message («did not confirm … if it seems stuck, send it any message»), never as the agent's state now: the
+ * agent may move on afterwards on its own, by the owner's message (the wedge abort), or by asking the next question — and a note that
+ * claimed it waits would stay up, false, with no single signal to take it down (a restart forgets it too). The way back to the plain note
+ * ({@link notTakenNotes}) is best effort: when it is missed the note is still true.
+ */
+type SetAsideNoteState = 'wentOn' | 'unconfirmed';
 
 /**
  * What the set-aside needs from the bot: the shared core, the pending-question state it moves the question out of, the
@@ -134,7 +140,7 @@ export function createQuestionSetAside(ports: QuestionSetAsidePorts) {
   const replyFailures = new Map<string, number>();
   /** One pending re-try of such a reply per conversation. */
   const replyRetryTimers = new Map<string, NodeJS.Timeout>();
-  /** The set-aside records whose message says the server did not take the «go on» reply, by conversation and record id. */
+  /** The set-aside records whose message says the server did not confirm the «go on» reply, by conversation and record id (in memory only: see {@link SetAsideNoteState}). */
   const notTakenNotes = new Set<string>();
 
   /** What is counted for a question: the conversation and the request (or, for the notes of a record, the record id). */
@@ -301,7 +307,7 @@ export function createQuestionSetAside(ports: QuestionSetAsidePorts) {
    * side, yet the agent stands still on it. After a pause the question is handed to the bot again (`surfaceOpenQuestion`), which finds
    * its record and tells the agent once more as a question asked again ({@link surfaceQuestionAgain}). At most
    * {@link setAsideRetryLimit} times; then the topic is told — a message, and the pinned message's own note, which no longer says the
-   * agent went on — so a stuck agent is not left to a console line.
+   * agent went on but that the server did not confirm it — so a stuck agent is not left to a console line.
    */
   function countReplyFailure(key: SessionKey, requestId: string, recordId: string, cause: string): void {
     const attemptKey = getAttemptKey(key, requestId);
@@ -314,7 +320,7 @@ export function createQuestionSetAside(ports: QuestionSetAsidePorts) {
       clearTimeout(replyRetryTimers.get(kStr));
       replyRetryTimers.delete(kStr);
       notTakenNotes.add(getAttemptKey(key, recordId));
-      void rewriteSetAsideNote(key, recordId, 'mayStillWait');
+      void rewriteSetAsideNote(key, recordId, 'unconfirmed');
       void replyToThread(key, withThreadLocale(key, () => t('agent.set_aside_reply_failed_notice')));
       return;
     }
@@ -432,8 +438,8 @@ export function createQuestionSetAside(ports: QuestionSetAsidePorts) {
 
   /**
    * @description Edit the question's message to the set-aside look: the question as asked, a note under it («the agent went on
-   * without your answer — you can still answer», or, when the agent's server did not take the message that tells it to go on, «the agent
-   * may still be waiting»), and the option buttons, whose data now names the record. The message is not
+   * without your answer — you can still answer», or, when the agent's server did not confirm the message that tells it to go on, «the server
+   * did not confirm it — if the agent seems stuck, send it any message»), and the option buttons, whose data now names the record. The message is not
    * re-posted, not deleted, not unpinned. When the edit fails the old buttons never stay (they would answer the agent's NEXT
    * question): they are replaced by the record's, or taken off. The record is saved and open either way.
    */

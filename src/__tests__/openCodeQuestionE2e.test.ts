@@ -15,8 +15,10 @@
  *     buttons and its pin and gains a note, and it is saved as a set-aside record; a later tap on its button sends the late
  *     answer to the server as a prompt and closes the message with the answer;
  *   the server refuses the reply that sets a question aside every time → the bot hands the server's question to itself again, tells the
- *     agent again after each pause, and after the last try says so in the topic AND rewrites the pinned message's own note («the agent
- *     may still be waiting», its buttons and pin kept); a later tap on its button still answers it.
+ *     agent again after each pause, and after the last try says so in the topic AND rewrites the pinned message's own note («the server did
+ *     not confirm it — if the agent seems stuck, send it any message», its buttons and pin kept — a statement about the message, never about
+ *     the agent now); the owner's message after the notice moves the agent on (the wedge abort) and the note is still true; a later tap on its
+ *     button still answers it.
  *
  * What the json-stream flows cover instead: `questionKeptE2e.test.ts` (answer, number, another message, `/esc`, `/quit`,
  * re-post, the re-ask in every phase, a restart).
@@ -461,6 +463,33 @@ describe('A reply that sets a question aside is refused by the OpenCode server, 
     assert.ok(!current.text.includes(enDict['agent.question_set_aside_note']), 'and it no longer says the agent went on');
     assert.deepEqual(topic.getKeyboardData(current), [[`qs_${record.id}_0`], [`qs_${record.id}_1`]], 'the buttons stay, naming the record');
     assert.ok(fakeTelegram.listPinnedMessageIds().includes(question.message_id), 'and so does the pin');
+  });
+
+  it('the owner does what the notice says — any message: the wedge backstop aborts the stuck turn, the message reaches the agent, and the pinned note is still true (it never claimed the agent waits)', async () => {
+    const sessionId = getTopicSessionId();
+    const topicKey = keyToString(makeTelegramKey(group.id, questionTopic.threadId));
+    const [record] = readPersistedState(getLayout()).setAsideQuestions?.[topicKey] ?? [];
+    assert.ok(record && record.messageId !== null, 'precondition: the question is still set aside');
+    const question = fakeTelegram.getMessage(record.messageId);
+    assert.ok(question, 'and its message is there');
+    const abortsBefore = fakeOpenCode.listRequests('POST', `/session/${sessionId}/abort`).length;
+
+    fakeTelegram.pushOperatorMessage(questionTopic.threadId, 'MOVE-ON please carry on without it');
+    await getCharness().waitFor('the owner\'s message to reach the server', replyTimeoutMs, () => fakeOpenCode.prompts.some((prompt) => prompt.text.includes('MOVE-ON')));
+    assert.equal(fakeOpenCode.listRequests('POST', `/session/${sessionId}/abort`).length, abortsBefore + 1, 'the turn stuck on the question was aborted before the message went in');
+    // The agent moves on: the server's registry no longer holds the question, and the agent works.
+    fakeOpenCode.setServedQuestions([]);
+    fakeOpenCode.emitAssistantText(sessionId, 'msg_MOVED_ON', 'Carrying on without the answer.');
+    await topic.waitForMessage('the agent\'s words after it moved on', (message) => message.text.includes('Carrying on without the answer.'));
+
+    // The note says what happened to the «go on» message — still the case, and not a claim about the agent: it was never rewritten to say the
+    // agent waits, so nothing has to take it back when the agent moves on by itself, by this message, or by a new question.
+    const current = fakeTelegram.getMessage(question.message_id);
+    assert.ok(current && current.text.endsWith(`\n\n${notTakenNote}`), `the note is the one about the unconfirmed message: ${current?.text.slice(-120)}`);
+    assert.ok(!current.text.includes(enDict['agent.question_set_aside_note']), 'and never the false reassurance that the agent went on');
+    assert.deepEqual(topic.getKeyboardData(current), [[`qs_${record.id}_0`], [`qs_${record.id}_1`]], 'the question can still be answered');
+    assert.ok(fakeTelegram.listPinnedMessageIds().includes(question.message_id), 'and stays pinned');
+    assert.equal((readPersistedState(getLayout()).setAsideQuestions?.[topicKey] ?? []).length, 1, 'a message that is not an answer closes nothing');
   });
 
   it('a tap on its button still answers it: the late answer reaches the server as a prompt, the message closes with the answer and the pin is released', async () => {

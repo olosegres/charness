@@ -274,7 +274,7 @@ export const deDict: Record<string, string> = {
   'agent.question_unanswered_note': '❌ Nicht beantwortet',
   'agent.question_asked_again_note': '↓ Unten erneut gestellt',
   'agent.question_set_aside_note': '⏸ Der Agent hat ohne deine Antwort weitergemacht — du kannst noch antworten',
-  'agent.question_set_aside_not_taken_note': '⚠️ Der Agent wartet womöglich noch auf deine Antwort — der Server hat die Nachricht, die ihm sagt, dass er weitermachen soll, nicht angenommen. Du kannst noch antworten',
+  'agent.question_set_aside_not_taken_note': '⚠️ Der Server hat nicht bestätigt, dass dem Agenten gesagt wurde, ohne deine Antwort weiterzumachen — wenn er festzuhängen scheint, sende ihm irgendeine Nachricht. Du kannst noch antworten',
   'agent.set_aside_question_gone_notice': 'Diese Frage ist schon beantwortet oder geschlossen — das hat nichts geändert.',
   'agent.set_aside_reply_failed_notice': '⚠️ Dem Agenten ließ sich nicht sagen, ohne seine Frage weiterzumachen — der Server hat die Nachricht nicht angenommen, und der Agent wartet womöglich noch darauf. Sende ihm irgendeine Nachricht, damit er weitermacht.',
   'agent.set_aside_next_question_failed_notice': 'Die nächste Frage konnte nicht gesendet werden, daher wurde deine Antwort nicht übernommen — versuche es noch einmal.',

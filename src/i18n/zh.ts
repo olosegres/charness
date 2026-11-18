@@ -274,7 +274,7 @@ export const zhDict: Record<string, string> = {
   'agent.question_unanswered_note': '❌ 未回答',
   'agent.question_asked_again_note': '↓ 已在下方重新提问',
   'agent.question_set_aside_note': '⏸ 智能体没有等待你的回答，已继续工作——你仍然可以回答',
-  'agent.question_set_aside_not_taken_note': '⚠️ 智能体可能仍在等你的回答——服务器没有收下让它继续的消息。你仍然可以回答',
+  'agent.question_set_aside_not_taken_note': '⚠️ 服务器未确认已告知智能体无需等待你的回答而继续——如果它似乎卡住了，给它发送任意消息即可。你仍然可以回答',
   'agent.set_aside_question_gone_notice': '该问题已经回答或已关闭——这次操作没有改变任何内容。',
   'agent.set_aside_reply_failed_notice': '⚠️ 未能告知智能体不等该问题的答案继续工作——服务器没有收下这条消息，智能体可能仍在等待。给它发送任意消息即可让它继续。',
   'agent.set_aside_next_question_failed_notice': '无法发送下一个问题，因此你的回答未被采纳——请重试。',
