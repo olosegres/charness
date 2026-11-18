@@ -117,7 +117,9 @@ test('the request ledger keeps the prompt WITH its message context, at every ent
   assert.match(opener, /buildTopicRequestPrompt\(\{[^}]*\bpromptBody\b[^}]*\}\)/);
   assert.match(getFunctionBody('bufferPromptDuringStartup'), /openTopicRequest\(\s*key\s*,\s*text\s*,\s*intake\s*,\s*messageContext\s*\)/);
   const active = getFunctionBody('deliverActivePrompt');
-  assert.equal(active.match(/openTopicRequest\(\s*key\s*,\s*text\s*,\s*intake\s*,\s*messageContext\s*\)/g)?.length, 2, 'both the question-cancel route and the plain route');
+  assert.equal(active.match(/openTopicRequest\(\s*key\s*,\s*text\s*,\s*intake\s*,\s*messageContext\s*\)/g)?.length, 1, 'the question-cancel route');
+  assert.match(getFunctionBody('deliverPromptByState'), /openTopicRequest\(\s*key\s*,\s*text\s*,\s*intake\s*,\s*messageContext\s*\)/, 'and the plain route, which a late answer shares');
+  assert.match(active, /return\s+deliverPromptByState\(\s*key\s*,\s*adapter\s*,\s*text\s*,\s*intake\s*,\s*sentAtMs\s*,\s*messageContext\s*\)/, 'that deliverActivePrompt ends in');
   assert.match(getFunctionBody('handleIncomingFile'), /openTopicRequest\([^;]*,\s*messageContext\s*\)/);
   const flush = getSourceSlice('const albumCollector = ', 'function buildAlbumGroupKey(');
   assert.match(flush, /openTopicRequest\([^;]*,\s*messageContext\s*\)/);

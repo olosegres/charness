@@ -23,8 +23,16 @@
  *     and when nothing can be edited at all, a tap on the stale button answers nothing, while the question the agent asks next is
  *     answered as usual
  *
+ *   → a LATE ANSWER: a tap on a set-aside question's button, or a reply to its message, closes the message with «✅ Answer: …»,
+ *     releases its pin and sends the agent ONE late-answer message (the question, the answer, «you went on without it»); a
+ *     second tap on the same button answers nothing. Plain text typed instead is an ordinary prompt: it cancels nothing, sends no
+ *     interrupt, and the question stays open and pinned. A call whose two questions were both left open is answered one at a time:
+ *     the first answer is kept and the second question is posted in the set-aside look, and the agent hears of both at once. A
+ *     tap on a question whose conversation sleeps wakes it and the answer reaches the resumed process
+ *   → `/new` with a set-aside question open ends it as «not answered», pin released; a later tap answers nothing
+ *
  * Nothing leaves the machine: the Bot API is on loopback and the agent is a fake. Everything the test starts is stopped in
- * `after`. How a late answer reaches the agent, and what ends a set-aside question, come with the answer routes.
+ * `after`.
  */
 
 /** Test case: N/A — Charness has no Jira tracker. */
@@ -74,6 +82,9 @@ const botUser = { id: 7000000001, is_bot: true, first_name: 'Fake bot', username
 /** Not a Telegram token: the fake Bot API accepts any `/bot<token>/` path, and the real host is never contacted. */
 const fakeBotToken = '1000000001:fake-token-for-the-loopback-bot-api';
 const projectFolder = 'proj';
+/** A group member an admin let talk to the agent in this topic (seeded into `state.json` before the boot). */
+const topicTalker = { id: 515151, is_bot: false, first_name: 'Tess', last_name: 'Talker', username: 'tess' };
+const talkerMark = '[Message from topic member "Tess Talker" (@tess) · not the operator]';
 
 const replyTimeoutMs = 20 * 1000;
 /** What a step that waits for the set-aside waits at most: the wait, a send and the agent's turn after it, with room for a loaded box. */
@@ -196,6 +207,17 @@ function assertShownAsSetAside(message: FakeTelegramMessage, record: SetAsideQue
   assert.ok(fakeTelegram.listPinnedMessageIds().includes(current.message_id), 'the pin stays');
 }
 
+/** Ask a question and wait until it is saved as the newest set-aside record: its message and the record. */
+async function askAndWaitForSetAside(promptLabel: string): Promise<{ question: FakeTelegramMessage; record: SetAsideQuestionRecord }> {
+  const question = await askQuestion(promptLabel);
+  await waitForPinned(question);
+  // At the cap the count does not change when a question is set aside: the newest record is what tells.
+  await getCharness().waitFor('the question to be saved as the newest set-aside record', setAsideTimeoutMs, () => getSetAsideRecords().at(-1)?.messageId === question.message_id);
+  const record = getSetAsideRecords().at(-1);
+  assert.ok(record, 'the record is saved');
+  return { question, record };
+}
+
 const firstQuestion = { header: fakeAskQuestion.header, question: fakeAskQuestion.question, labels: [fakeAskQuestion.shortOptionLabel, fakeAskQuestion.longOptionLabel] } as const;
 const secondQuestion = { header: fakeAskSecondQuestion.header, question: fakeAskSecondQuestion.question, labels: [fakeAskSecondQuestion.firstOptionLabel, fakeAskSecondQuestion.secondOptionLabel] } as const;
 
@@ -209,6 +231,22 @@ describe('A question nobody answers is set aside, end to end: built charness, fa
     process.once('SIGINT', exitOnSignal);
     process.once('SIGTERM', exitOnSignal);
 
+    fs.writeFileSync(
+      path.join(layout.dataDir, 'state.json'),
+      `${JSON.stringify({
+        version: 1,
+        bindings: {},
+        agents: {},
+        messages: {},
+        topicTalkers: {
+          [topicKey]: {
+            revision: 1,
+            talkers: [{ userId: topicTalker.id.toString(), username: topicTalker.username, name: `${topicTalker.first_name} ${topicTalker.last_name}`, addedAt: 1_800_000_000_000, addedBy: operator.id.toString(), addedByName: operator.first_name }],
+            invites: [],
+          },
+        },
+      }, null, 2)}\n`,
+    );
     fakeTelegram = new FakeTelegram({ botUser, operator, group });
     topic = new TopicDriver(fakeTelegram, getCharness, topicThreadId, replyTimeoutMs);
     waitingTopic = new TopicDriver(fakeTelegram, getCharness, topicThreadId, setAsideTimeoutMs);
@@ -406,17 +444,6 @@ describe('A question nobody answers is set aside, end to end: built charness, fa
     /** The set-aside edit of the message's text (the only text edit that ends with the note). */
     const isSetAsideTextEdit = (payload: Record<string, unknown>): boolean => String(payload.text).endsWith(setAsideNote);
 
-    /** Ask a question and wait until it is saved as the newest set-aside record: its message and the record. */
-    async function askAndWaitForSetAside(promptLabel: string): Promise<{ question: FakeTelegramMessage; record: SetAsideQuestionRecord }> {
-      const question = await askQuestion(promptLabel);
-      await waitForPinned(question);
-      // At the cap the count does not change when a question is set aside: the newest record is what tells.
-      await getCharness().waitFor('the question to be saved as the newest set-aside record', setAsideTimeoutMs, () => getSetAsideRecords().at(-1)?.messageId === question.message_id);
-      const record = getSetAsideRecords().at(-1);
-      assert.ok(record, 'the record is saved');
-      return { question, record };
-    }
-
     it('the text edit refused: the message keeps its text, and its buttons are replaced by the record\'s — never left as they were', async () => {
       fakeTelegram.failNextCall('editMessageText', refusal, isSetAsideTextEdit);
       const { question, record } = await askAndWaitForSetAside('SETASIDE-7');
@@ -472,6 +499,183 @@ describe('A question nobody answers is set aside, end to end: built charness, fa
       const answer = getControlResponses()[responsesBefore];
       assert.equal(answer.behavior, 'allow', 'an answer, not a deny');
       assert.equal(answer.answerCount, 1);
+    });
+  });
+
+  describe('a set-aside question is answered late', () => {
+    const lateAnswerHeader = '[Late answer to your question asked ';
+    /** The late-answer messages the agent read after the `before`-th one. */
+    const getLatePrompts = (): FakeClaudePrompt[] => getAgentPrompts(lateAnswerHeader);
+    const isRecordOpen = (record: SetAsideQuestionRecord): boolean => getSetAsideRecords().some((candidate) => candidate.id === record.id);
+    const countSuspendedSessions = (): number => getCharness().output.split(`session ${topicKey} suspended (code=`).length - 1;
+
+    async function waitForNewLatePrompt(promptsBefore: number): Promise<FakeClaudePrompt> {
+      await getCharness().waitFor('the late answer to reach the agent', setAsideTimeoutMs, () => getLatePrompts().length > promptsBefore);
+      return getLatePrompts()[promptsBefore];
+    }
+
+    it('a tap on a button: the message closes with the answer and loses its pin, the agent gets ONE late-answer message, and a second tap answers nothing', async () => {
+      const promptsBefore = getLatePrompts().length;
+      const { question, record } = await askAndWaitForSetAside('LATE-1');
+      assert.equal(getLatePrompts().length, promptsBefore, 'precondition: the agent has heard no late answer');
+
+      const toast = await topic.tapAndAwaitAnswer(question, `qs_${record.id}_0`);
+      assert.equal(toast, fakeAskQuestion.shortOptionLabel, 'the toast is the label');
+      await topic.waitForMessageText('the answer under the question', question, (text) => text.endsWith(`\n\n${buildAnsweredNote(fakeAskQuestion.shortOptionLabel)}`));
+      const current = readKeptMessage(question);
+      assert.equal(current.reply_markup, undefined, 'the buttons are gone');
+      assert.ok(current.text.includes(fakeAskQuestion.question) && current.text.includes(fakeAskQuestion.longOptionLabel), 'the question and its options stay readable');
+      await getCharness().waitFor('the pin to be released', replyTimeoutMs, () => !fakeTelegram.listPinnedMessageIds().includes(question.message_id));
+
+      // Load-bearing: the agent read the late answer, worded for a question it went on without.
+      const prompt = await waitForNewLatePrompt(promptsBefore);
+      assert.ok(prompt.text.includes(`Question: ${fakeAskQuestion.question}\nAnswer: ${fakeAskQuestion.shortOptionLabel}\n`), prompt.text);
+      assert.ok(prompt.text.includes('You went on without it'), 'and says so');
+      assert.ok(prompt.text.startsWith(lateAnswerHeader), 'headed as the set-aside text promised');
+      await waitingTopic.waitForMessage('the agent answering the late answer', (message) => message.message_id > question.message_id && message.text.includes('Working on unknown.'));
+      await getCharness().waitFor('the record to be gone', replyTimeoutMs, () => !isRecordOpen(record));
+
+      assert.equal(await topic.tapAndAwaitAnswer(question, `qs_${record.id}_0`), enDict['cb.no_pending_question'], 'a second tap answers nothing');
+      assert.equal(getLatePrompts().length, promptsBefore + 1, 'and the agent hears nothing more');
+    });
+
+    it('plain text typed instead is an ordinary prompt: nothing is cancelled, no interrupt is sent, and the question stays open and pinned — then a reply to its message answers it', async () => {
+      const promptsBefore = getLatePrompts().length;
+      const { question, record } = await askAndWaitForSetAside('LATE-2');
+      await getCharness().waitFor('the agent to go on', setAsideTimeoutMs, () => topic.listMessages().some((message) => message.message_id > question.message_id && message.text.includes(fakeAskSetAsideTurnText)));
+      const interruptsBefore = getControlRequests().filter((request) => request.subtype === 'interrupt').length;
+
+      fakeTelegram.pushOperatorMessage(topicThreadId, 'PLAIN-2 [fake:answer] a thought of mine, not an answer');
+      await waitingTopic.waitForMessage('the agent answering the plain prompt', (message) => message.message_id > question.message_id && message.text.includes('Working on PLAIN-2'));
+      assert.equal(getAgentPrompts('PLAIN-2 [fake:answer]').length, 1, 'it reached the agent as the prompt it is');
+      assert.equal(getControlRequests().filter((request) => request.subtype === 'interrupt').length, interruptsBefore, 'no interrupt was sent');
+      assert.equal(getLatePrompts().length, promptsBefore, 'and it is no late answer');
+      assert.ok(isRecordOpen(record), 'the question is still open');
+      const current = readKeptMessage(question);
+      assert.deepEqual(topic.getKeyboardData(current), [[`qs_${record.id}_0`], [`qs_${record.id}_1`]], 'with its buttons');
+      assert.ok(current.text.endsWith(`\n\n${setAsideNote}`) && fakeTelegram.listPinnedMessageIds().includes(question.message_id), 'its note and its pin');
+      assert.ok(topic.listMessages().every((message) => !message.text.includes(enDict['agent.question_cancelled_for_prompt'])), 'and no «question cancelled» notice was posted');
+
+      // A REPLY to the question's message is its answer: its text is the answer itself.
+      fakeTelegram.pushOperatorMessage(topicThreadId, 'Wait for the review, please', { replyToMessageId: question.message_id });
+      const prompt = await waitForNewLatePrompt(promptsBefore);
+      assert.ok(prompt.text.includes('Answer: Wait for the review, please\n'), prompt.text);
+      await topic.waitForMessageText('the answer under the question', question, (text) => text.endsWith(`\n\n${buildAnsweredNote('Wait for the review, please')}`));
+      assert.equal(readKeptMessage(question).reply_markup, undefined, 'the buttons are gone');
+      await getCharness().waitFor('the pin to be released', replyTimeoutMs, () => !fakeTelegram.listPinnedMessageIds().includes(question.message_id));
+      await getCharness().waitFor('the record to be gone', replyTimeoutMs, () => !isRecordOpen(record));
+    });
+
+    it('a call whose two questions were both left open is answered one at a time: the first answer is kept, the second question is posted in the set-aside look, and the agent hears of both at once', async () => {
+      const promptsBefore = getLatePrompts().length;
+      const first = await askQuestion('LATE-4', 'ask-two');
+      await getCharness().waitFor('the call to be saved as a set-aside record', setAsideTimeoutMs, () => getSetAsideRecords().at(-1)?.messageId === first.message_id);
+      const record = getSetAsideRecords().at(-1);
+      assert.ok(record);
+      assert.deepEqual(record.answers, [null, null], 'both questions are open');
+
+      assert.equal(await topic.tapAndAwaitAnswer(first, `qs_${record.id}_0`), fakeAskQuestion.shortOptionLabel);
+      await topic.waitForMessageText('the first answer under the first question', first, (text) => text.endsWith(`\n\n${buildAnsweredNote(fakeAskQuestion.shortOptionLabel)}`));
+      const second = await topic.waitForMessage('the second question in the set-aside look', (message) =>
+        message.message_id > first.message_id && message.text.includes(fakeAskSecondQuestion.question) && message.text.endsWith(`\n\n${setAsideNote}`) && topic.getKeyboardData(message).flat().some((data) => data.startsWith(`qs_${record.id}_`)));
+      await waitForPinned(second);
+      assert.equal(getLatePrompts().length, promptsBefore, 'the agent has heard nothing yet: one question is still open');
+      assert.deepEqual(topic.getKeyboardData(second), [[`qs_${record.id}_0`], [`qs_${record.id}_1`]]);
+      await getCharness().waitFor('the record to follow the second question', replyTimeoutMs, () => getSetAsideRecords().at(-1)?.messageId === second.message_id);
+      assert.deepEqual(getSetAsideRecords().at(-1)?.answers, [[fakeAskQuestion.shortOptionLabel], null], 'the first answer is kept');
+      assert.ok(!fakeTelegram.listPinnedMessageIds().includes(first.message_id), 'the answered question gave up its pin');
+
+      assert.equal(await topic.tapAndAwaitAnswer(second, `qs_${record.id}_1`), fakeAskSecondQuestion.secondOptionLabel);
+      const prompt = await waitForNewLatePrompt(promptsBefore);
+      assert.ok(prompt.text.includes(`Question: ${fakeAskQuestion.question}\nAnswer: ${fakeAskQuestion.shortOptionLabel}\n\nQuestion: ${fakeAskSecondQuestion.question}\nAnswer: ${fakeAskSecondQuestion.secondOptionLabel}\n`), prompt.text);
+      assert.ok(prompt.text.includes('You went on without them'), 'worded for several answers');
+      assert.equal(getLatePrompts().length, promptsBefore + 1, 'ONE message for the whole call');
+      await topic.waitForMessageText('the second answer under the second question', second, (text) => text.endsWith(`\n\n${buildAnsweredNote(fakeAskSecondQuestion.secondOptionLabel)}`));
+      await getCharness().waitFor('the second question\'s pin to be released', replyTimeoutMs, () => !fakeTelegram.listPinnedMessageIds().includes(second.message_id));
+      await getCharness().waitFor('the record to be gone', replyTimeoutMs, () => !isRecordOpen(record));
+    });
+
+    it('a topic member answers a set-aside question by a tap and by a reply: each reaches the agent under their mark, never as the operator\'s answer', async () => {
+      const promptsBefore = getLatePrompts().length;
+      const { question: tapped, record: tappedRecord } = await askAndWaitForSetAside('LATE-8');
+      const answersBefore = fakeTelegram.callbackAnswers.length;
+      fakeTelegram.pushCallback(tapped.message_id, `qs_${tappedRecord.id}_0`, topicTalker);
+      await getCharness().waitFor('the member\'s tap to be answered', replyTimeoutMs, () => fakeTelegram.callbackAnswers.length > answersBefore);
+      assert.equal(fakeTelegram.callbackAnswers[answersBefore], fakeAskQuestion.shortOptionLabel, 'a tap on a set-aside question\'s button is one a member may make');
+      const tapPrompt = await waitForNewLatePrompt(promptsBefore);
+      assert.ok(tapPrompt.text.includes(`${talkerMark}\n\n${lateAnswerHeader}`), `the member\'s answer carries their mark: ${tapPrompt.text}`);
+      assert.ok(tapPrompt.text.includes(`Answer: ${fakeAskQuestion.shortOptionLabel}\n`));
+      await topic.waitForMessageText('the answer under the question', tapped, (text) => text.endsWith(`\n\n${buildAnsweredNote(fakeAskQuestion.shortOptionLabel)}`));
+
+      const { question: replied } = await askAndWaitForSetAside('LATE-9');
+      fakeTelegram.pushUserMessage(topicThreadId, 'The member says: wait for the review', topicTalker, { replyToMessageId: replied.message_id });
+      const replyPrompt = await waitForNewLatePrompt(promptsBefore + 1);
+      assert.ok(replyPrompt.text.includes(`${talkerMark}\n\n${lateAnswerHeader}`), `and so does their reply: ${replyPrompt.text}`);
+      assert.ok(replyPrompt.text.includes('Answer: The member says: wait for the review\n'));
+      await topic.waitForMessageText('the answer under the replied question', replied, (text) => text.endsWith(`\n\n${buildAnsweredNote('The member says: wait for the review')}`));
+    });
+
+    it('a tap on a question whose conversation sleeps wakes it: the late answer reaches the RESUMED process', async () => {
+      // The per-turn backend stops the process after every turn: the turn of the set-aside question ends, and the conversation sleeps.
+      await topic.sendAndAwaitReply('/claude_mode perturn', 'same conversation resumed');
+      const promptsBefore = getLatePrompts().length;
+      const suspendedBefore = countSuspendedSessions();
+      const { question, record } = await askAndWaitForSetAside('LATE-5');
+      const askingPid = getAgentPrompts('LATE-5')[0]?.pid;
+      assert.ok(askingPid !== undefined, 'the process that put the question');
+      await getCharness().waitFor('the per-turn process to stop after the turn', setAsideTimeoutMs, () => countSuspendedSessions() > suspendedBefore);
+      assert.ok(isRecordOpen(record), 'precondition: the conversation sleeps and the question is still open');
+
+      assert.equal(await topic.tapAndAwaitAnswer(question, `qs_${record.id}_0`), fakeAskQuestion.shortOptionLabel);
+      const prompt = await waitForNewLatePrompt(promptsBefore);
+      assert.notEqual(prompt.pid, askingPid, 'it was read by a process started AFTER the one that asked');
+      assert.ok(prompt.text.includes(`Answer: ${fakeAskQuestion.shortOptionLabel}\n`), prompt.text);
+      await topic.waitForMessageText('the answer under the question', question, (text) => text.endsWith(`\n\n${buildAnsweredNote(fakeAskQuestion.shortOptionLabel)}`));
+      await getCharness().waitFor('the record to be gone', replyTimeoutMs, () => !isRecordOpen(record));
+    });
+
+    it('`/new` ends the conversation: the open set-aside question ends as «not answered», its pin is released, and a later tap answers nothing', async () => {
+      const promptsBefore = getLatePrompts().length;
+      const { question, record } = await askAndWaitForSetAside('LATE-6');
+      await getCharness().waitFor('the agent to go on', setAsideTimeoutMs, () => topic.listMessages().some((message) => message.message_id > question.message_id && message.text.includes(fakeAskSetAsideTurnText)));
+      assert.ok(fakeTelegram.listPinnedMessageIds().includes(question.message_id), 'precondition: the question is open and pinned');
+
+      await topic.sendAndAwaitReply('/new', 'ready in');
+      await topic.waitForMessageText('the note under the ended question', question, (text) => text.endsWith(`\n\n${unansweredNote}`));
+      const current = readKeptMessage(question);
+      assert.equal(current.reply_markup, undefined, 'its buttons are gone');
+      assert.ok(current.text.includes(fakeAskQuestion.question), 'it stays readable');
+      await getCharness().waitFor('the pin to be released', replyTimeoutMs, () => !fakeTelegram.listPinnedMessageIds().includes(question.message_id));
+      await getCharness().waitFor('the record to be gone', replyTimeoutMs, () => !isRecordOpen(record));
+      assert.deepEqual(getSetAsideRecords().filter((candidate) => candidate.id === record.id), []);
+
+      assert.equal(await topic.tapAndAwaitAnswer(question, `qs_${record.id}_0`), enDict['cb.no_pending_question'], 'a tap on its old button answers nothing');
+      assert.equal(getLatePrompts().length, promptsBefore, 'and nothing reaches the agent');
+    });
+
+    it('a conversation released while the bot was down: at boot its open set-aside question ends as «not answered» and its pin is released — one that can be resumed keeps its buttons', async () => {
+      const suspendedBefore = countSuspendedSessions();
+      const { question: kept, record: keptRecord } = await askAndWaitForSetAside('LATE-7');
+      await getCharness().waitFor('the per-turn process to stop after the turn', setAsideTimeoutMs, () => countSuspendedSessions() > suspendedBefore);
+
+      // A restart that finds the conversation as it was — asleep, its id kept: the buttons stay.
+      charness = await restartCharnessWithState(getLayout(), fakeTelegram, getCharness(), () => {});
+      assert.ok(isRecordOpen(keptRecord), 'the conversation can be resumed: the record stays');
+      assert.deepEqual(topic.getKeyboardData(readKeptMessage(kept)), [[`qs_${keptRecord.id}_0`], [`qs_${keptRecord.id}_1`]], 'with its buttons');
+      assert.ok(fakeTelegram.listPinnedMessageIds().includes(kept.message_id), 'and its pin');
+
+      // A restart that finds it released while the bot was down: nothing can be answered any more.
+      charness = await restartCharnessWithState(getLayout(), fakeTelegram, getCharness(), (persisted) => {
+        const agent = persisted.agents?.[topicKey];
+        assert.ok(agent, 'the topic has an agent record');
+        delete agent.claudeSessionId;
+        delete agent.opencodeSessionId;
+      });
+      await topic.waitForMessageText('the note under the question of the released conversation', kept, (text) => text.endsWith(`\n\n${unansweredNote}`));
+      assert.equal(readKeptMessage(kept).reply_markup, undefined, 'its buttons are gone');
+      await getCharness().waitFor('the pin to be released', replyTimeoutMs, () => !fakeTelegram.listPinnedMessageIds().includes(kept.message_id));
+      await getCharness().waitFor('the record to be gone', replyTimeoutMs, () => !isRecordOpen(keptRecord));
+      assert.equal(await topic.tapAndAwaitAnswer(kept, `qs_${keptRecord.id}_0`), enDict['cb.no_pending_question'], 'a tap on its old button answers nothing');
     });
   });
 });

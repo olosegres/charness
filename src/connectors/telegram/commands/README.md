@@ -246,7 +246,24 @@ the topic. The pieces:
   WITHOUT unpinning, so the pin of the question the agent asks next neither retires it nor counts as a re-pin (silent). A record's pin is released
   when the record closes.
 - **Ids** come from a per-topic counter (`setAsideQuestionSequences`) that only goes up and is never reset: an id is never reused, so an old
-  keyboard that stayed live can never answer a newer question.
+  keyboard that stayed live can never answer a newer question. A message whose note edit Telegram refused never keeps its old `qa_` buttons
+  (`editQuestionMessageWithNote` replaces them by the record's, else takes them off), and a `qa_` tap on a record's message answers nothing
+  (`checkIsSetAsideQuestionMessage`).
+- **A late answer** is a tap on a button (`qs_<record id>_<option>`; a topic member may tap, `utils/talkerAccess.ts`) or a REPLY to the question's
+  message (either of its messages, when it was re-posted; the text is the answer, a bare option number in range picks that option; the operator and
+  a topic member alike, a forward and a slash command never). A bare typed number with nothing waiting is NOT one — it is an ordinary message — and
+  neither is other text: it cancels nothing, sends no interrupt, and the set-aside question stays open and pinned (it left `pendingQuestions`, which
+  is the only thing a free message cancels). `giveSetAsideAnswer` runs in the lifecycle queue: the questions of one call are answered in order — an
+  answer while another question of the record is still open is kept, its message closes «✅ Answer: …» and the next question is posted in the
+  set-aside look; the last one sends ONE late-answer message (`buildLateAnswerPrompt`, listing the answers from `lateFromIndex` on) through
+  `deliverLateAnswerPrompt` (`bot.ts`: buffered behind a start, waking a sleeping conversation, or written to the live session — NOT through the free-text
+  route of a waiting question, so it never cancels one the agent asks next), and only once it reached a session is the record over (its message closes with
+  the answer, its pin goes); a conversation with no session leaves it open. A topic member's answer carries their author mark and nothing else
+  (the text is the bot's, so it is not neutralised as the member's own words are).
+- **Ends**: the release of a conversation's ids (`/new`, `/quit`, `/quitall`, leaving the folder), a switch to another backend or conversation, and a
+  boot that finds the conversation released (not active, no saved id) close every open record as «not answered» and release the pins
+  (`closeSetAsideQuestions`, in the lifecycle queue: after a set-aside in flight, so none is saved for a conversation that is gone; the list is emptied
+  first, so a late tap finds nothing). The idle stop, a suspend and an unexpected exit do NOT: the conversation is still there and a late answer wakes it.
 
 ## `autoContinueLimits.ts`
 

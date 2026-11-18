@@ -29,6 +29,7 @@ const createRecord = (id: string, messageId: number): SetAsideQuestionRecord => 
   messageId,
   questions: [{ question: 'Which database should I use?', header: 'Database choice', options: [{ label: 'Postgres', description: 'relational' }, { label: 'SQLite' }] }],
   answers: [null],
+  lateFromIndex: 0,
   askedAt: 1_800_000_000_000,
   setAsideAt: 1_800_001_800_000,
 });

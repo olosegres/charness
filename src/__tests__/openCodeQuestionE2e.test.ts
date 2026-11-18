@@ -12,7 +12,8 @@
  *     never posted: no status line lands under the question;
  *   a question nobody answers within the question wait (cut to seconds) → the server gets a REPLY whose custom answer is the bot's
  *     «no answer yet, go on» text and never a reject (a reject ends OpenCode's agent loop), the question's message keeps its
- *     buttons and its pin and gains a note, and it is saved as a set-aside record.
+ *     buttons and its pin and gains a note, and it is saved as a set-aside record; a later tap on its button sends the late
+ *     answer to the server as a prompt and closes the message with the answer.
  *
  * What the json-stream flows cover instead: `questionKeptE2e.test.ts` (answer, number, another message, `/esc`, `/quit`,
  * re-post, the re-ask in every phase, a restart).
@@ -386,5 +387,27 @@ describe('A question nobody answers is set aside on the OpenCode backend too, en
     assert.ok(current && !current.isDeleted, 'the message stays');
     assert.deepEqual(topic.getKeyboardData(current), [[`qs_${record.id}_0`], [`qs_${record.id}_1`]], 'the buttons stay, naming the record');
     assert.ok(fakeTelegram.listPinnedMessageIds().includes(question.message_id), 'and so does the pin');
+  });
+
+  it('a later tap on its button delivers the late answer to the agent as a prompt, closes the message with the answer and releases the pin', async () => {
+    const topicKey = keyToString(makeTelegramKey(group.id, questionTopic.threadId));
+    const [record] = readPersistedState(getLayout()).setAsideQuestions?.[topicKey] ?? [];
+    assert.ok(record && record.messageId !== null, 'precondition: the question is set aside');
+    const question = fakeTelegram.getMessage(record.messageId);
+    assert.ok(question, 'and its message is there');
+    const lateAnswerPrefix = '[Late answer to your question asked ';
+    const promptsBefore = fakeOpenCode.prompts.filter((prompt) => prompt.text.includes(lateAnswerPrefix)).length;
+
+    assert.equal(await topic.tapAndAwaitAnswer(question, `qs_${record.id}_0`), firstQuestion.labels[0], 'the toast is the label');
+
+    await getCharness().waitFor('the late answer to reach the server as a prompt', replyTimeoutMs, () => fakeOpenCode.prompts.filter((prompt) => prompt.text.includes(lateAnswerPrefix)).length > promptsBefore);
+    const prompt = fakeOpenCode.prompts.filter((candidate) => candidate.text.includes(lateAnswerPrefix))[promptsBefore];
+    assert.ok(prompt.text.includes(`Question: ${firstQuestion.question}\nAnswer: ${firstQuestion.labels[0]}\n`), prompt.text);
+    assert.ok(prompt.text.includes('You went on without it'), 'worded for a question the agent went on without');
+    await topic.waitForMessageText('the answer under the question', question, (text) => text.endsWith(`\n\n${enDict['agent.question_answered_note'].replace('{answer}', firstQuestion.labels[0])}`));
+    assert.equal(fakeTelegram.getMessage(question.message_id)?.reply_markup, undefined, 'the buttons are gone');
+    await waitForUnpinned(question);
+    await getCharness().waitFor('the record to be gone', replyTimeoutMs, () => (readPersistedState(getLayout()).setAsideQuestions?.[topicKey] ?? []).length === 0);
+    assert.deepEqual(fakeOpenCode.listRequests('POST', `/question/${firstQuestion.requestId}/reject`), [], 'and the question was never rejected');
   });
 });

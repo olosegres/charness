@@ -19,8 +19,10 @@
 
 import { afterEach, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import type { InlineKeyboardMarkup } from 'telegraf/typings/core/types/typegram';
-import { createQuestionSetAside, type QuestionSetAsidePorts } from '../connectors/telegram/commands/questionSetAside';
+import type { InlineKeyboardMarkup, User } from 'telegraf/typings/core/types/typegram';
+import { createQuestionSetAside, type QuestionSetAsidePorts, type SetAsideReplyCandidate } from '../connectors/telegram/commands/questionSetAside';
+import type { MessageContext } from '../utils/messageContext';
+import type { LatePromptOutcome } from '../utils/promptDelivery';
 import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
 import { keyToString, type SessionKey } from '../sessionKey';
 import type { AgentAdapter, OpenCodeQuestion, PendingQuestionState, SetAsideQuestionRecord } from '../types';
@@ -39,7 +41,7 @@ function createPending(requestId: string, overrides: Partial<PendingQuestionStat
 }
 
 function createRecord(id: string, messageId: number): SetAsideQuestionRecord {
-  return { id, messageId, questions: [deployQuestion], answers: [null], askedAt: 1, setAsideAt: 2 };
+  return { id, messageId, questions: [deployQuestion], answers: [null], lateFromIndex: 0, askedAt: 1, setAsideAt: 2 };
 }
 
 interface Harness {
@@ -57,6 +59,12 @@ interface Harness {
   savedPending: PendingQuestionState[];
   markedNewMessage: number[];
   state: { sequence: number; takeSequence: () => Promise<number> };
+  /** The late-answer messages delivered to the agent, with the context they carried. */
+  delivered: Array<{ text: string; messageContext: MessageContext | undefined }>;
+  /** The questions posted as new messages (the next question of a record), and the pins made without a notification. */
+  sentQuestions: Array<{ question: OpenCodeQuestion; keyboard: InlineKeyboardMarkup | undefined; messageId: number }>;
+  silentPins: number[];
+  pushedMessageIds: number[];
 }
 
 function createHarness(options: {
@@ -66,6 +74,7 @@ function createHarness(options: {
   shortenedWaitMs?: number;
   takeSequence?: () => Promise<number>;
   existingRecords?: SetAsideQuestionRecord[];
+  deliverLateAnswer?: () => Promise<LatePromptOutcome>;
 } = {}): Harness {
   const pendingQuestions = new Map<string, PendingQuestionState>();
   const events: string[] = [];
@@ -78,6 +87,11 @@ function createHarness(options: {
   if (options.existingRecords) savedRecords.set(keyString, options.existingRecords);
   const savedPending: PendingQuestionState[] = [];
   const markedNewMessage: number[] = [];
+  const delivered: Harness['delivered'] = [];
+  const sentQuestions: Harness['sentQuestions'] = [];
+  const silentPins: number[] = [];
+  const pushedMessageIds: number[] = [];
+  let nextPostedMessageId = 900;
   const queue = createSerialQueue();
   const harnessState = { sequence: 0, takeSequence: async () => { harnessState.sequence += 1; return harnessState.sequence; } };
   if (options.takeSequence) harnessState.takeSequence = options.takeSequence;
@@ -98,6 +112,7 @@ function createHarness(options: {
       takeNextSetAsideQuestionSequence: () => harnessState.takeSequence(),
       getSetAsideQuestions: () => Object.fromEntries(savedRecords),
       setSetAsideQuestions: async (_key, records) => { savedRecords.set(keyString, [...records]); },
+      pushMessageId: async (_key, messageId) => { pushedMessageIds.push(messageId); },
     }),
     withThreadLocale: (_key, run) => run(),
     pendingQuestions,
@@ -112,8 +127,20 @@ function createHarness(options: {
     markNeedsNewMessage: () => { markedNewMessage.push(1); },
     getQuestionWaitChoice: () => options.choice ?? 'thirtyMinutes',
     shortenedWaitMs: options.shortenedWaitMs,
+    authoriseSpeaker: async () => null,
+    replyToThread: async () => null,
+    pinMessageSilently: async (_key, messageId) => { silentPins.push(messageId); return true; },
+    sendQuestionMessage: async (_key, question, keyboard) => {
+      nextPostedMessageId += 1;
+      sentQuestions.push({ question, keyboard, messageId: nextPostedMessageId });
+      return nextPostedMessageId;
+    },
+    deliverLateAnswer: async (_key, text, messageContext) => {
+      delivered.push({ text, messageContext });
+      return options.deliverLateAnswer ? options.deliverLateAnswer() : 'forwarded';
+    },
   };
-  return { ports, setAside: createQuestionSetAside(ports), pendingQuestions, events, adapterCalls, edits, closes, unpins, cleared, savedRecords, savedPending, markedNewMessage, state: harnessState };
+  return { ports, setAside: createQuestionSetAside(ports), pendingQuestions, events, adapterCalls, edits, closes, unpins, cleared, savedRecords, savedPending, markedNewMessage, state: harnessState, delivered, sentQuestions, silentPins, pushedMessageIds };
 }
 
 function sleep(ms: number): Promise<void> {
@@ -380,5 +407,219 @@ describe('checkIsSetAsideQuestionMessage', () => {
 
     const none = createHarness();
     assert.equal(none.setAside.checkIsSetAsideQuestionMessage(key, 250), false);
+  });
+});
+
+const operatorReply = (messageId: number, text: string, replyTo: number | null, overrides: Partial<SetAsideReplyCandidate> = {}): SetAsideReplyCandidate => ({
+  message_id: messageId,
+  text,
+  reply_to_message: replyTo === null ? undefined : { message_id: replyTo },
+  isForwarded: false,
+  ...overrides,
+});
+
+const topicMember: User = { id: 515151, is_bot: false, first_name: 'Tess', last_name: 'Talker', username: 'tess' };
+
+describe('a late answer by reply', () => {
+  it('a reply to the question\'s message sends ONE late-answer message to the agent, closes the message with the answer and releases its pin', async () => {
+    const harness = createHarness({ existingRecords: [createRecord('1', 500)] });
+
+    assert.equal(await harness.setAside.answerSetAsideQuestionByReply(undefined, key, operatorReply(700, 'Wait, the review comes first', 500), 'admin'), true);
+
+    assert.equal(harness.delivered.length, 1);
+    assert.match(harness.delivered[0].text, /^\[Late answer to your question asked [\d: -]+, set aside [\d: -]+\]\nQuestion: Push the fix to main now, or wait for the review\?\nAnswer: Wait, the review comes first\n/);
+    assert.equal(harness.delivered[0].messageContext, undefined, 'the operator\'s answer carries no mark');
+    assert.deepEqual(harness.closes, [{ messageId: 500, ending: { answer: 'Wait, the review comes first' } }]);
+    assert.deepEqual(harness.unpins, [500]);
+    assert.deepEqual(harness.savedRecords.get(keyString), [], 'the record is over');
+    assert.deepEqual(harness.pushedMessageIds, [700], 'the reply is tracked like any inbound message');
+  });
+
+  it('a bare option number in a reply picks that option', async () => {
+    const harness = createHarness({ existingRecords: [createRecord('1', 500)] });
+
+    await harness.setAside.answerSetAsideQuestionByReply(undefined, key, operatorReply(700, '2', 500), 'admin');
+
+    assert.match(harness.delivered[0].text, /Answer: Wait for the review\n/);
+    assert.deepEqual(harness.closes, [{ messageId: 500, ending: { answer: 'Wait for the review' } }]);
+  });
+
+  it('a topic member\'s reply reaches the agent under their mark, never as the operator\'s words', async () => {
+    const harness = createHarness({ existingRecords: [createRecord('1', 500)] });
+
+    await harness.setAside.answerSetAsideQuestionByReply(topicMember, key, operatorReply(700, 'Push now', 500), 'talker');
+
+    assert.match(harness.delivered[0].messageContext?.block ?? '', /^\[Message from topic member "Tess Talker" \(@tess\) · not the operator\]$/, 'the mark, and nothing else');
+    assert.equal(harness.delivered[0].messageContext?.nonOperatorSender, undefined, 'not marked as foreign words: that would neutralise the bot\'s own header');
+    assert.equal(harness.delivered[0].messageContext?.isForwarded, false);
+  });
+
+  it('a reply to the ORIGINAL message of a re-posted question answers it too', async () => {
+    const harness = createHarness({ existingRecords: [{ ...createRecord('1', 250), originalMessageId: 150 }] });
+
+    assert.equal(await harness.setAside.answerSetAsideQuestionByReply(undefined, key, operatorReply(700, 'Push now', 150), 'admin'), true);
+
+    assert.equal(harness.delivered.length, 1);
+    assert.deepEqual(harness.closes, [{ messageId: 250, ending: { answer: 'Push now' } }], 'the live copy carries the answer');
+  });
+
+  it('is no answer — and delivers nothing — when it replies to another message, to nothing, is forwarded, a slash command or empty, or nothing is set aside', async () => {
+    const harness = createHarness({ existingRecords: [createRecord('1', 500)] });
+    const notAnswers: SetAsideReplyCandidate[] = [
+      operatorReply(701, 'Push now', 999),
+      operatorReply(702, 'Push now', null),
+      operatorReply(703, 'Push now', 500, { isForwarded: true }),
+      operatorReply(704, '/new', 500),
+      operatorReply(705, '   ', 500),
+    ];
+    for (const message of notAnswers) {
+      assert.equal(await harness.setAside.answerSetAsideQuestionByReply(undefined, key, message, 'admin'), false, JSON.stringify(message));
+    }
+    assert.deepEqual(harness.delivered, []);
+    assert.equal(harness.savedRecords.get(keyString)?.length, 1, 'the question stays open');
+
+    const none = createHarness();
+    assert.equal(await none.setAside.answerSetAsideQuestionByReply(undefined, key, operatorReply(706, 'Push now', 500), 'admin'), false);
+  });
+
+  it('a conversation with no session to take it leaves the question open: nothing is closed, and the next reply still answers', async () => {
+    let outcome: LatePromptOutcome = 'noSession';
+    const harness = createHarness({ existingRecords: [createRecord('1', 500)], deliverLateAnswer: async () => outcome });
+
+    assert.equal(await harness.setAside.answerSetAsideQuestionByReply(undefined, key, operatorReply(700, 'Push now', 500), 'admin'), true, 'it was taken as an answer — the topic was told why it did not arrive');
+    assert.deepEqual(harness.closes, []);
+    assert.equal(harness.savedRecords.get(keyString)?.length, 1);
+
+    outcome = 'forwarded';
+    await harness.setAside.answerSetAsideQuestionByReply(undefined, key, operatorReply(701, 'Push now', 500), 'admin');
+    assert.deepEqual(harness.closes, [{ messageId: 500, ending: { answer: 'Push now' } }]);
+    assert.deepEqual(harness.savedRecords.get(keyString), []);
+  });
+
+  it('a second answer while the first is on its way answers nothing: the agent gets one late answer', async () => {
+    let release: () => void = () => {};
+    const harness = createHarness({ existingRecords: [createRecord('1', 500)], deliverLateAnswer: () => new Promise<LatePromptOutcome>((resolve) => { release = () => resolve('forwarded'); }) });
+
+    const first = harness.setAside.answerSetAsideQuestionByReply(undefined, key, operatorReply(700, 'Push now', 500), 'admin');
+    await sleep(10);
+    const second = await harness.setAside.answerSetAsideQuestionByReply(undefined, key, operatorReply(701, 'Wait', 500), 'admin');
+    release();
+
+    assert.equal(second, false, 'the second one is an ordinary message');
+    assert.equal(await first, true);
+    assert.equal(harness.delivered.length, 1);
+  });
+});
+
+describe('a late answer to a call with several questions', () => {
+  const twoQuestionRecord = (overrides: Partial<SetAsideQuestionRecord> = {}): SetAsideQuestionRecord => ({
+    id: '1', messageId: 500, questions: [deployQuestion, docsQuestion], answers: [null, null], lateFromIndex: 0, askedAt: 1, setAsideAt: 2, ...overrides,
+  });
+
+  it('the first answer is kept, its message closes with it, and the next question is posted in the set-aside look — nothing goes to the agent yet', async () => {
+    const harness = createHarness({ existingRecords: [{ ...twoQuestionRecord(), originalMessageId: 400 }] });
+
+    await harness.setAside.answerSetAsideQuestionByReply(undefined, key, operatorReply(700, 'Push now', 500), 'admin');
+
+    assert.deepEqual(harness.delivered, []);
+    assert.deepEqual(harness.closes, [{ messageId: 500, ending: { answer: 'Push now' } }]);
+    assert.deepEqual(harness.unpins, [500]);
+    assert.equal(harness.sentQuestions.length, 1);
+    assert.equal(harness.sentQuestions[0].question, docsQuestion);
+    assert.deepEqual(harness.sentQuestions[0].keyboard?.inline_keyboard.map((row) => row.map((button) => 'callback_data' in button ? button.callback_data : null)), [['qs_1_0'], ['qs_1_1'], ['qs_1_2']]);
+    assert.deepEqual(harness.silentPins, [901], 'the next question is pinned, silently');
+    assert.equal(harness.edits.length, 1, 'and shown in the set-aside look');
+    assert.equal(harness.edits[0].messageId, 901);
+    const [record] = harness.savedRecords.get(keyString) ?? [];
+    assert.deepEqual(record.answers, [['Push now'], null]);
+    assert.equal(record.messageId, 901, 'the record now follows the second question\'s message');
+    assert.equal(record.originalMessageId, undefined, 'the answered question\'s first message is not the new one\'s');
+  });
+
+  it('the last answer sends ONE message listing every late answer, and ends the record', async () => {
+    const harness = createHarness({ existingRecords: [twoQuestionRecord()] });
+
+    await harness.setAside.answerSetAsideQuestionByReply(undefined, key, operatorReply(700, 'Push now', 500), 'admin');
+    await harness.setAside.answerSetAsideQuestionByReply(undefined, key, operatorReply(701, '3', 901), 'admin');
+
+    assert.equal(harness.delivered.length, 1, 'one message for the whole call');
+    assert.match(harness.delivered[0].text, /Question: Push the fix to main now, or wait for the review\?\nAnswer: Push now\n\nQuestion: Which docs to update first\?\nAnswer: Both\nYou went on without them/);
+    assert.deepEqual(harness.closes.map((close) => close.messageId), [500, 901]);
+    assert.deepEqual(harness.savedRecords.get(keyString), []);
+  });
+
+  it('only the questions that were open when the agent was told to go on are late: the answer given before the wait is not repeated', async () => {
+    const harness = createHarness({ existingRecords: [twoQuestionRecord({ answers: [['Push now'], null], lateFromIndex: 1, messageId: 501 })] });
+
+    await harness.setAside.answerSetAsideQuestionByReply(undefined, key, operatorReply(700, 'README', 501), 'admin');
+
+    assert.equal(harness.delivered.length, 1);
+    assert.ok(!harness.delivered[0].text.includes('Push the fix to main'), 'the first question was answered at the wait');
+    assert.match(harness.delivered[0].text, /Question: Which docs to update first\?\nAnswer: README\n/);
+  });
+
+  it('a question that cannot be posted leaves the record open with no message, and says so in the log', async () => {
+    const harness = createHarness({ existingRecords: [twoQuestionRecord()] });
+    harness.ports.sendQuestionMessage = async () => null;
+    const setAside = createQuestionSetAside(harness.ports);
+
+    const warnings = await captureWarnings(async () => {
+      await setAside.answerSetAsideQuestionByReply(undefined, key, operatorReply(700, 'Push now', 500), 'admin');
+    });
+
+    assert.equal(warnings.length, 1);
+    assert.equal(harness.savedRecords.get(keyString)?.[0].messageId, null);
+    assert.deepEqual(harness.silentPins, []);
+  });
+});
+
+describe('closeSetAsideQuestions — the end of a conversation', () => {
+  it('empties the saved list FIRST, then closes every message as not answered and releases every pin', async () => {
+    const harness = createHarness({ existingRecords: [createRecord('1', 500), { ...createRecord('2', 600), originalMessageId: 550 }] });
+    let listWhenFirstClosed: number | undefined;
+    harness.ports.closeQuestionMessage = async (_key, messageId, _question, ending) => {
+      listWhenFirstClosed ??= harness.savedRecords.get(keyString)?.length;
+      harness.closes.push({ messageId, ending });
+      return true;
+    };
+    const fresh = createQuestionSetAside(harness.ports);
+
+    await fresh.closeSetAsideQuestions(key);
+
+    assert.equal(listWhenFirstClosed, 0, 'a tap that comes meanwhile finds nothing');
+    assert.deepEqual(harness.closes, [{ messageId: 500, ending: 'unanswered' }, { messageId: 600, ending: 'unanswered' }]);
+    assert.deepEqual(harness.unpins, [500, 600]);
+    assert.deepEqual(harness.savedRecords.get(keyString), []);
+  });
+
+  it('does nothing for a conversation with no set-aside question', async () => {
+    const harness = createHarness();
+    await harness.setAside.closeSetAsideQuestions(key);
+    assert.deepEqual(harness.closes, []);
+    assert.equal(harness.savedRecords.size, 0);
+  });
+
+  it('orders after a set-aside in flight: the question that set-aside is about to save is closed too, not left open for a conversation that is gone', async () => {
+    let resolveSequence: (value: number) => void = () => {};
+    const harness = createHarness({ takeSequence: () => new Promise<number>((resolve) => { resolveSequence = resolve; }) });
+    harness.pendingQuestions.set(keyString, createPending('req_a', { messageId: 500 }));
+
+    const setAside = harness.setAside.setPendingQuestionAside(key, 'req_a');
+    await sleep(0);
+    const closing = harness.setAside.closeSetAsideQuestions(key);
+    resolveSequence(1);
+    await Promise.all([setAside, closing]);
+
+    assert.deepEqual(harness.savedRecords.get(keyString), [], 'nothing stays open');
+    assert.ok(harness.closes.some((close) => close.messageId === 500 && close.ending === 'unanswered'), 'the question\'s message ends as not answered');
+    assert.ok(harness.unpins.includes(500));
+  });
+
+  it('a late answer that comes after the conversation ended answers nothing', async () => {
+    const harness = createHarness({ existingRecords: [createRecord('1', 500)] });
+    await harness.setAside.closeSetAsideQuestions(key);
+
+    assert.equal(await harness.setAside.answerSetAsideQuestionByReply(undefined, key, operatorReply(700, 'Push now', 500), 'admin'), false);
+    assert.deepEqual(harness.delivered, []);
   });
 });

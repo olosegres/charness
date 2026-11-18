@@ -5325,6 +5325,17 @@ async function releaseThreadSession(key: SessionKey): Promise<ReturnType<typeof 
 async function releaseConversationIds(key: SessionKey): Promise<void> {
   await state.clearAgentSessionIds(key);
   clearThreadCompaction(key);
+  closeSetAsideQuestionsInBackground(key);
+}
+
+/**
+ * @description The conversation ended or was replaced (released for good, another conversation or backend picked): every question
+ * the bot had set aside for it ends as «not answered», its pin released — its buttons would send an answer into a conversation that
+ * is not the one that asked. NOT the idle stop, the sleep or a crash: the conversation is still there, and a late answer wakes it.
+ * Not awaited (the edits go through the send pacer); a failure is logged.
+ */
+function closeSetAsideQuestionsInBackground(key: SessionKey): void {
+  closeSetAsideQuestions(key).catch((e) => console.error('[questionSetAside] closing the set-aside questions failed:', e));
 }
 
 /**
@@ -5353,6 +5364,8 @@ async function switchThreadAdapter(key: SessionKey, newName: string): Promise<Lo
     cancelConversationRequest(key);
     // Nor does the conversation left behind get its re-asked question answered: its buttons would send the label into the new one.
     closeReAskedQuestion(key);
+    // The same for the questions it had set aside.
+    closeSetAsideQuestionsInBackground(key);
   }
   let switchCutOffWork: LostWork | null = null;
   if (prevName && prevName !== newName) {
@@ -6477,6 +6490,9 @@ const {
   armQuestionSetAsideTimer,
   clearQuestionSetAsideTimer,
   checkIsSetAsideQuestionMessage,
+  registerQuestionSetAsideCallbacks,
+  answerSetAsideQuestionByReply,
+  closeSetAsideQuestions,
 } = createQuestionSetAside({
   ...botCore,
   pendingQuestions,
@@ -6488,6 +6504,9 @@ const {
   editQuestionMessageWithNote,
   closeQuestionMessage,
   unpinMessage: unpinMessageQuiet,
+  pinMessageSilently: (key, messageId) => pinMessageQuiet(key, messageId, { disableNotification: true }),
+  sendQuestionMessage,
+  deliverLateAnswer: (key, text, messageContext) => withThreadLocale(key, () => deliverLateAnswerPrompt(key, text, messageContext)),
   markNeedsNewMessage,
   // The topic's and General's own choices arrive with the setting; until then every topic waits the default.
   getQuestionWaitChoice: () => resolveQuestionWait(undefined, undefined),
@@ -9456,6 +9475,7 @@ async function resumeSessionByIndex(
     // for the conversation it replaces would send its label into the picked one.
     cancelConversationRequest(key);
     closeReAskedQuestion(key);
+    closeSetAsideQuestionsInBackground(key);
     // Persist the PICKED id — without this the next restart re-attaches to
     // whatever id the last fresh start wrote, silently dropping the user's
     // pick (live incident 2026-06-10).
@@ -10071,6 +10091,9 @@ bot.on(message('text'), async (ctx) => {
   const speaker = await authoriseTopicSpeaker(ctx);
   if (!speaker) return;
   const { key } = speaker;
+  // A REPLY to a question the bot set aside is its late answer — from the operator and from a topic member alike. It is not a prompt:
+  // it cancels no question that waits now, and reaches the agent as the late-answer message.
+  if (await answerSetAsideQuestionByReply(ctx.from, key, { message_id: ctx.message.message_id, text: ctx.message.text, reply_to_message: ctx.message.reply_to_message, isForwarded: checkIsTelegramForward(ctx.message) }, speaker.role)) return;
   if (speaker.role === 'talker') {
     await handleTalkerText(ctx, key);
     return;
@@ -11455,6 +11478,8 @@ bot.action(zonePickCallbackRe, async (ctx) => {
 registerModelCallbacks();
 
 registerCompactionCallbacks();
+// The buttons of a set-aside question (`qs_<id>_<i>`): disjoint from the live (`qa_`) and the re-asked (`reask_`) ones.
+registerQuestionSetAsideCallbacks(bot);
 
 registerAutoContinueLimitsCallbacks();
 registerBotSkillsCallbacks();
@@ -11736,6 +11761,23 @@ async function deliverActivePrompt(
     adapter.sendSignal(key, 'SIGINT');
     await replyToThread(key, t('agent.question_cancelled_for_prompt'));
   }
+  return deliverPromptByState(key, adapter, text, intake, sentAtMs, messageContext);
+}
+
+/**
+ * @description The end of {@link deliverActivePrompt}, shared with the delivery of a late answer ({@link deliverLateAnswerPrompt}): open
+ * the request the prompt belongs to (none for `intake` null — an answer to the agent's own question is never a request), deliver it by
+ * the state of the session NOW — buffered behind a start, waking a sleeping conversation, or forwarded to the live one — and settle
+ * the request. It touches no pending question and no wedged turn: that is the caller's.
+ */
+async function deliverPromptByState(
+  key: SessionKey,
+  adapter: AgentAdapter,
+  text: string,
+  intake: TopicRequestIntake | null,
+  sentAtMs?: number,
+  messageContext?: MessageContext,
+): Promise<LatePromptOutcome> {
   // The request (S7) is opened AFTER the user takeover cancelled an armed limit
   // wait (the handlers' `cancelApiRetry`) and before the forward, so its id is
   // durable by the time the agent reads it.
@@ -11757,6 +11799,18 @@ async function deliverActivePrompt(
   });
   await settleTopicRequestAfterDelivery(key, opening, outcome);
   return outcome;
+}
+
+/**
+ * @description Deliver a LATE ANSWER to the agent — what the owner chose for a question the bot set aside, worded by
+ * `buildLateAnswerPrompt` — as a message of the owner's: written to a live session behind whatever it is doing, buffered behind a
+ * start, or waking a sleeping conversation. Unlike {@link deliverActivePrompt} it is NOT free text for the question the agent may be
+ * waiting on NOW (that one is a different question, and the owner has not answered it): it never cancels it and never aborts a
+ * wedged turn. A topic member's answer carries their author mark (`messageContext`).
+ */
+async function deliverLateAnswerPrompt(key: SessionKey, text: string, messageContext?: MessageContext): Promise<LatePromptOutcome> {
+  noteThreadUserActivity(key);
+  return deliverPromptByState(key, getThreadAdapter(key), text, null, undefined, messageContext);
 }
 
 /**
@@ -13053,6 +13107,29 @@ function handleAgentQuestion(key: SessionKey, questionData: OpenCodePendingQuest
  * Closing this properly means moving bot-authored Markdown templates onto the
  * connector's dialect, which is a follow-up plan, not a question-path change.
  */
+/**
+ * @description Post a question as a NEW message of the topic — its text (header, question, numbered options with their descriptions)
+ * with `keyboard` as its buttons. Resolves the id of the message, `null` when no send landed.
+ *
+ * Markdown first, then plain when Telegram refuses it. Only a post that FAILED is retried: one whose outcome is unknown may already
+ * be in the topic, and a second copy of the question would be posted under it (its id stays unknown; its buttons still answer it).
+ */
+async function sendQuestionMessage(key: SessionKey, question: OpenCodeQuestion, keyboard: InlineKeyboardMarkup | undefined): Promise<number | null> {
+  let outcome = await replyToThreadDetailed(
+    key,
+    buildQuestionBodyLines(question, escapeMarkdown).join('\n'),
+    buildKeyboardExtra(keyboard, { parse_mode: 'Markdown' }),
+  );
+  if (outcome.kind === 'failed') {
+    outcome = await replyToThreadDetailed(
+      key,
+      buildQuestionBodyLinesPlain(question).join('\n'),
+      buildKeyboardExtra(keyboard),
+    );
+  }
+  return outcome.kind === 'sent' ? outcome.messageId : null;
+}
+
 async function postPendingQuestionAt(key: SessionKey): Promise<void> {
   const kStr = keyToString(key);
   const pending = pendingQuestions.get(kStr);
@@ -13086,21 +13163,7 @@ async function postPendingQuestionAt(key: SessionKey): Promise<void> {
     : undefined;
 
   try {
-    let outcome = await replyToThreadDetailed(
-      key,
-      buildQuestionBodyLines(question, escapeMarkdown).join('\n'),
-      buildKeyboardExtra(keyboard, { parse_mode: 'Markdown' }),
-    );
-    // Markdown rejected — retry plain. Only a post that FAILED: one whose outcome is unknown may already be in the topic, and a
-    // second copy of the question would be posted under it (its id stays unknown; its buttons still answer it).
-    if (outcome.kind === 'failed') {
-      outcome = await replyToThreadDetailed(
-        key,
-        buildQuestionBodyLinesPlain(question).join('\n'),
-        buildKeyboardExtra(keyboard),
-      );
-    }
-    const messageId = outcome.kind === 'sent' ? outcome.messageId : null;
+    const messageId = await sendQuestionMessage(key, question, keyboard);
 
     if (messageId !== null) {
       // Patch the messageId on the existing entry (it may already have been
@@ -14036,6 +14099,26 @@ function restorePendingQuestions(): void {
     }
   }
   console.log(`[reattach] pending questions: restored ${restored}, dropped ${dropped}`);
+}
+
+/**
+ * @description Boot: the questions the bot set aside keep their buttons while their conversation can still be resumed (a live
+ * adopted process, or a sleeping conversation whose id is kept — a late answer wakes it); those of a conversation that was released
+ * while the bot was down end as «not answered», their pins released. MUST run AFTER {@link reattachExistingSessions} so session
+ * activity is known. A platform this instance does not serve is left alone, like {@link restorePendingQuestions}.
+ */
+function restoreSetAsideQuestions(): void {
+  for (const keyStr of Object.keys(state.getSetAsideQuestions())) {
+    let key: SessionKey;
+    try {
+      key = keyFromString(keyStr);
+    } catch {
+      continue;
+    }
+    if (!checkIsServedConversation(key, ENV.servedPlatforms)) continue;
+    if (getThreadAdapter(key).checkIsActive(key) || getResumableSessionId(key) !== null) continue;
+    closeSetAsideQuestionsInBackground(key);
+  }
 }
 
 /**
@@ -15516,6 +15599,8 @@ export async function startBot(): Promise<void> {
       // The questions the idle compaction re-asked: their buttons come back while the conversation can be resumed,
       // else the message is closed.
       restoreReAskedQuestions();
+      // The questions the bot set aside: their buttons stay while the conversation can be resumed, else they are closed.
+      restoreSetAsideQuestions();
       // Re-arm persisted API-error retries (S6) so a pending kick survives the
       // restart. AFTER restorePendingQuestions so the kick lands in a live
       // session; a past fireAt fires one delayed catch-up.

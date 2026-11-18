@@ -310,6 +310,12 @@ export interface SetAsideQuestionRecord {
   questions: OpenCodeQuestion[];
   /** One slot per question (same order as `questions`): the answer given before the wait ended, `null` while it is still open. */
   answers: (string[] | null)[];
+  /**
+   * The index of the first question that was still open when the agent was told to go on: the questions from it on are answered
+   * LATE (the ones before it went to the agent with the set-aside text). Their answers are collected here, one at a time, and the
+   * agent gets them in one late-answer message once the last is in.
+   */
+  lateFromIndex: number;
   /** When the question was first asked, epoch ms. */
   askedAt: number;
   /** When the agent was told to go on without it, epoch ms. */

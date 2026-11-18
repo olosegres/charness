@@ -55,6 +55,7 @@ function createRecord(overrides: Partial<SetAsideQuestionRecord> & Pick<SetAside
     messageId: 100,
     questions: [deployQuestion],
     answers: [null],
+    lateFromIndex: 0,
     askedAt: askedAtMs,
     setAsideAt: afterAsk(30),
     ...overrides,
