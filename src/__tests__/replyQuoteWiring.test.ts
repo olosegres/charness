@@ -172,6 +172,9 @@ test('a topic member\'s words start no agent and wipe no context: the voice star
   assert.match(getFunctionBody('deliverActivePrompt'), /text\s*===\s*forwardedClearCommand\s*&&\s*!checkIsForeignWords\(messageContext\)/);
 });
 
+/** The late-answer route of the voice job: its `isForwarded` test is the one allowed outside the two answer routes of the prompt helpers. */
+const lateAnswerRouteCall = /answerSetAsideQuestionByReply\(reply\.from, key, \{[^}]*\}, reply\.role\)/g;
+
 test('the one thing a topic member\'s words may do in the shared prompt helpers is answer the agent\'s question with a bare number — those routes, and only those, ask `isForwarded` alone', () => {
   const active = getFunctionBody('deliverActivePrompt');
   const forwardOnlyGuards = active.match(/!isForwarded/g) ?? [];
@@ -185,6 +188,10 @@ test('the one thing a topic member\'s words may do in the shared prompt helpers 
   // Every other control guard of the three prompt helpers asks the one predicate (or the slash test built on it): no forward-only
   // test of a control action is left outside the two answer routes.
   for (const name of ['processVoiceJob', 'forwardPromptToLiveAgent', 'openTopicRequest']) {
-    assert.doesNotMatch(getFunctionBody(name), /isForwarded\s*(!==|===)\s*(true|false)/, `${name} asks checkIsForeignWords, not isForwarded`);
+    assert.doesNotMatch(getFunctionBody(name).replace(lateAnswerRouteCall, ''), /isForwarded\s*(!==|===)\s*(true|false)/, `${name} asks checkIsForeignWords, not isForwarded`);
   }
+  // The one carve-out outside deliverActivePrompt: a voice REPLY to a set-aside question is its late answer, and a forwarded voice note never is.
+  const voiceAnswerRoutes = getFunctionBody('processVoiceJob').match(lateAnswerRouteCall) ?? [];
+  assert.equal(voiceAnswerRoutes.length, 1, 'the voice job asks `isForwarded` alone in its late-answer route only');
+  assert.match(voiceAnswerRoutes[0], /isForwarded:\s*messageContext\?\.isForwarded\s*===\s*true\s*\},\s*reply\.role\)/);
 });

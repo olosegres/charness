@@ -10623,7 +10623,8 @@ async function processVoiceJob(
     void replyToThread(key, t('voice.transcribed', { text: transcript }), {}, { unpaced: true }).catch(() => {});
 
     // A voice REPLY to a question the bot set aside is its late answer, as a typed reply is: the transcript is the answer (a topic member's
-    // only when it names an option). Taken before any other route, like the typed one.
+    // only when it names an option; a forwarded voice note never answers). Taken before any other route, like the typed one — answering the
+    // agent's question is the one thing foreign words may do here.
     if (await answerSetAsideQuestionByReply(reply.from, key, { message_id: reply.messageId, text: transcript, replyToMessageId: reply.replyToMessageId, isForwarded: messageContext?.isForwarded === true }, reply.role)) return;
 
     // `/reminders` step 4 accepts a voice note as well as typed text, so the

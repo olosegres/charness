@@ -81,8 +81,10 @@ test('the live forward awaits the write\'s outcome — except for a person\'s ow
 });
 
 test('only a person\'s own prompts are marked as such: the text, voice and label path, the buffered startup prompt, a file, an album, /schedule and what a usage-limit wait held — a wake-up, a nudge or a reminder is not', () => {
-  assert.match(getFunctionBody('deliverActivePrompt'), /forward: \(\) => forwardPromptToAgent\(key, getThreadAdapter\(key\), text, sentAtMs, \{ messageContext, requestHeader: opening\.header, isPersonInput: true \}\),/);
-  assert.match(getFunctionBody('deliverActivePrompt'), /, true, undefined, \{ isPersonInput: true \}\);/, 'and its buffered twin');
+  // The state-routed delivery both a person's prompt (`deliverActivePrompt`) and a late answer end in.
+  assert.match(getFunctionBody('deliverPromptByState'), /forward: \(\) => forwardPromptToAgent\(key, getThreadAdapter\(key\), text, sentAtMs, \{ messageContext, requestHeader: opening\.header, isPersonInput: true \}\),/);
+  assert.match(getFunctionBody('deliverActivePrompt'), /return deliverPromptByState\(key, adapter, text, intake, sentAtMs, messageContext\);/, 'a person\'s prompt ends in it');
+  assert.match(getFunctionBody('deliverPromptByState'), /, true, undefined, \{ isPersonInput: true \}\);/, 'and its buffered twin');
   assert.match(getFunctionBody('bufferPromptDuringStartup'), /, true, undefined, \{ isPersonInput: true \}\);/);
   assert.match(getFunctionBody('cancelPendingQuestionAndForward'), /isPersonInput: true \}\);/);
   for (const name of ['forwardRequestWakeUp', 'remindAnswerTail', 'postTodoReminder']) {

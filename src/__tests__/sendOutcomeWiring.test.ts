@@ -53,9 +53,13 @@ test('a chunk of unknown outcome is not sent again as plain text', () => {
 });
 
 test('the question is posted again as plain text only after a post that failed', () => {
-  const body = getFunctionBody('postPendingQuestionAt');
+  // The send itself is `sendQuestionMessage`, which the first post, the next question of a call and a late answer's next question share.
+  const body = getFunctionBody('sendQuestionMessage');
   assert.match(body, /if \(outcome\.kind === 'failed'\) \{\n\s*outcome = await replyToThreadDetailed\(/);
   assert.equal(body.includes('await replyToThread('), false, 'no send that cannot tell an unknown outcome from a failure');
+  const post = getFunctionBody('postPendingQuestionAt');
+  assert.match(post, /await sendQuestionMessage\(/, 'the post goes through it');
+  assert.equal(post.includes('await replyToThread('), false, 'and has no send of its own that cannot tell an unknown outcome from a failure');
 });
 
 test('the logged-out and limit-resumed notices go through the one-notice slot', () => {
