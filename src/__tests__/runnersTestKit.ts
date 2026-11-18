@@ -4,8 +4,9 @@ import path from 'path';
 import { Writable } from 'stream';
 import { injectStreamIntoSshServer } from '../runnerUtility/injectStream';
 import type { RedeemRequest } from '../runners/gateProtocol';
-import { createHubContext, type HubContext } from '../runners/hubPaths';
-import { generateEd25519KeyPair, type SshKeyPair } from '../runners/sshKeys';
+import { createHubContext, getRunnerLinkPaths, type HubContext } from '../runners/hubPaths';
+import { createRandomId, generateEd25519KeyPair, type SshKeyPair } from '../runners/sshKeys';
+import { assertUnixSocketPathFits } from './e2e/isolatedCharness';
 import { decodePairCode, joinPairCodeFields, type PairCodePayload } from '../runners/pairCode';
 import { ensureNodeScriptRelativePath } from '../runnerUtility/managedNode';
 
@@ -43,6 +44,17 @@ export const fixtureRunnerLock = {
     'node_modules/zod': { version: '4.4.3', resolved: 'https://registry.npmjs.org/zod/-/zod-4.4.3.tgz', integrity: 'sha512-zodExampleIntegrity==' },
   },
 };
+
+/**
+ * @description Refuse, with the real cause, an isolated instance whose runner link could not listen: the gate's socket
+ * `<registry>/link/<id>.sock` plus the temporary suffix it is bound under (`gateLink.ts` `socketSuffixBytes`: 3 bytes, 6 hex digits) must fit
+ * a unix socket path, and the instance's HOME is deep — a `TMPDIR` a few characters too long leaves the runner «linked» and the hub's
+ * list «offline» for ever.
+ */
+export function assertRunnerLinkSocketFits(instanceHome: string): void {
+  const registryDir = createHubContext({ homeDir: instanceHome }).dir;
+  assertUnixSocketPathFits(`${getRunnerLinkPaths(registryDir, createRandomId()).socket}.${'0'.repeat(6)}`, 'the runner link of the isolated instance');
+}
 
 /** A hub in a temp folder. The registry folder has a short name so the unix socket paths below it stay far under the OS limit. */
 export function createHubFixture(): HubFixture {

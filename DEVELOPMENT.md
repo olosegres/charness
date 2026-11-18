@@ -138,6 +138,9 @@ yarn test         # test:unit, then test:flows (node test runner + tsx); build
 yarn test:unit    # every file but the flows; each file must finish in 2 min
 yarn test:flows   # the `*E2e.test.ts` flows, 16 files at a time (they mostly wait
                   # on their fakes, not the CPU); each file must finish in 20 min
+                  # The flows keep unix sockets (the instance's tmux server, a runner's link)
+                  # under TMPDIR, and Linux allows 107 bytes of path: a TMPDIR over about 26
+                  # characters makes the layout refuse to start, saying by how many bytes
 yarn runner-lock  # after ANY dependency change: rewrite remoteRun/runner-package-lock.json (the
                   # lock the runners install from, made from yarn.lock; fetches the sha512
                   # hashes of new versions from the registry). A unit test fails until you do

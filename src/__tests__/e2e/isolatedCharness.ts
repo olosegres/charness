@@ -50,6 +50,24 @@ export const fakeClaudeTuiPath = path.join(__dirname, '..', 'tmuxE2e', 'fakeClau
 const tsxLoaderPath = path.join(repoRoot, 'node_modules', 'tsx', 'dist', 'loader.mjs');
 const reaperPath = path.join(__dirname, 'isolatedInstanceReaper.ts');
 
+/** The longest path a unix socket can have on Linux: `sun_path` holds 108 bytes, the last is the terminating NUL. */
+export const maxUnixSocketPathBytes = 107;
+/** How many characters `fs.mkdtempSync` appends to a layout's folder name. */
+const tempFolderSuffixLength = 6;
+/** How many hex characters end the instance's tmux socket name (`randomBytes(4)`). */
+const tmuxSocketSuffixLength = 8;
+
+/**
+ * @description Refuse, with the real cause, a socket path that does not fit a unix socket: the connect fails with «File name too long»
+ * and the flow only times out waiting for what the socket was to carry. `what` names the socket; the message says how many bytes over
+ * it is, so the cure — a shorter `TMPDIR` — is clear.
+ */
+export function assertUnixSocketPathFits(socketPath: string, what: string): void {
+  const bytes = Buffer.byteLength(socketPath);
+  if (bytes <= maxUnixSocketPathBytes) return;
+  throw new Error(`${what}: its socket path would be ${bytes} bytes, ${bytes - maxUnixSocketPathBytes} over the ${maxUnixSocketPathBytes} a unix socket allows (${socketPath}) — the TMPDIR of this run (${os.tmpdir()}) is too long for the flows: use a shorter one`);
+}
+
 /** The instance settings file a layout starts with (`settings.json`, beside the env file) and what it holds. */
 export const isolatedSettingsFileName = 'settings.json';
 export const isolatedBaselineSettings = { autoUpdate: 'off' };
@@ -528,6 +546,9 @@ export interface IsolatedInstanceLayout {
  * its budget's end, which every wait on the layout's charness then honours.
  */
 export function createIsolatedInstanceLayout(prefix: string, projectFolders: readonly string[], flowDeadlineMs: number | null = null): IsolatedInstanceLayout {
+  // Before anything is created: the instance's tmux server listens on a unix socket whose path must fit `sun_path`. A TMPDIR a few characters
+  // too long made every agent start fail with «File name too long», seen only as a flow that timed out waiting for its agent.
+  assertUnixSocketPathFits(path.join(os.tmpdir(), `${prefix}${'x'.repeat(tempFolderSuffixLength)}`, 'tmux', `tmux-${process.getuid?.() ?? 0}`, `${prefix}${'0'.repeat(tmuxSocketSuffixLength)}`), 'the isolated instance\'s tmux server');
   for (const reapedRoot of reapDeadIsolatedInstances(prefix)) console.log(`[isolated] reaped a dead earlier instance: ${reapedRoot}`);
   const testRoot = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), prefix)));
   const layout: IsolatedInstanceLayout = {

@@ -91,7 +91,7 @@ import {
   waitUntil,
   type RunnerLinkLayout,
 } from './runnerLinkE2e/runnerLinkFlowKit';
-import { readCodeOfLine, readPayloadOfLine } from './runnersTestKit';
+import { assertRunnerLinkSocketFits, readCodeOfLine, readPayloadOfLine } from './runnersTestKit';
 
 const missingTools = getMissingTools();
 const skipReason = missingTools.length > 0 && !isCi ? `missing: ${missingTools.join(', ')}` : false;
@@ -344,6 +344,7 @@ describe('/runners end to end: built charness, fake Bot API, loopback sshd, a ru
     assert.deepEqual(missingTools, [], 'CI installs everything this flow needs');
     if (!fs.existsSync(builtCliPath)) throw new Error('Built CLI is missing. Run `yarn build` before `yarn test`.');
     layout = createIsolatedInstanceLayout('charness-rns-', [projectFolder], getFlowDeadlineMs());
+    assertRunnerLinkSocketFits(layout.instanceHome);
     defaultTmuxSessionsBefore = listTmuxSessions([]);
     process.on('exit', removeInstanceSync);
     process.once('SIGINT', exitOnSignal);
