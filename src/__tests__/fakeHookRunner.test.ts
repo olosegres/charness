@@ -26,7 +26,8 @@ after(() => {
   fs.rmSync(root, { recursive: true, force: true });
 });
 
-const hangTimeoutMs = 500;
+/** Long enough for a `node` to start and write its pid before the deadline, on a loaded box too (it is killed with its group at the deadline). */
+const hangTimeoutMs = 3000;
 /** How long a cut-off hook may take on top of its deadline: the kill and the settle are immediate. */
 const settleMarginMs = 2000;
 

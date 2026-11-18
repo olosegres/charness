@@ -193,16 +193,22 @@ describe('json-stream adapter — frames keep their order, and a big one lands w
       const fifoPath = path.join(dir, 'stdin.fifo');
       const outPath = path.join(dir, 'read.jsonl');
       execFileSync('mkfifo', [fifoPath]);
-      // Holds the FIFO read-write from the start (as the wrapper's `0<>` does), reads nothing for 1.5 s, then drains it.
-      holder = spawn('sh', ['-c', 'exec 3<>"$1"; sleep 1.5; exec cat <&3 > "$2"', 'sh', fifoPath, outPath], { stdio: 'ignore' });
+      // Holds the FIFO read-write from the start (as the wrapper's `0<>` does), reads nothing until the test creates `startReadingPath`, then drains it.
+      // A signal, not a sleep: on a loaded box the holder's own start and the test's resumption can drift apart by more than any sleep.
+      const startReadingPath = path.join(dir, 'start-reading');
+      holder = spawn('sh', ['-c', 'exec 3<>"$1"; while [ ! -e "$3" ]; do sleep 0.05; done; exec cat <&3 > "$2"', 'sh', fifoPath, outPath, startReadingPath], { stdio: 'ignore' });
       fd = await openFifoWriterNonBlocking(fifoPath);
       assert.notEqual(fd, null, 'the held FIFO opens');
       const adapter = new ClaudeJsonStreamAdapter({ lifecycle: 'idle' });
       addSession(adapter, { fifoFd: fd ?? -1 });
       const big = 'x'.repeat(300 * 1024);
-      const startedAt = Date.now();
-      await Promise.all([adapter.sendInputAndWait(key, big), adapter.sendInputAndWait(key, 'the next prompt')]);
-      assert.ok(Date.now() - startedAt >= 1000, 'the writes waited for the late reader (a 64 KB pipe holds a fifth of the frame)');
+      let areWritesDone = false;
+      const writes = Promise.all([adapter.sendInputAndWait(key, big), adapter.sendInputAndWait(key, 'the next prompt')]).then(() => { areWritesDone = true; });
+      // Nobody reads yet, and a 64 KB pipe holds a fifth of the frame: the writes are still waiting, however long this pause really took.
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+      assert.equal(areWritesDone, false, 'the writes waited for the late reader');
+      fs.writeFileSync(startReadingPath, '');
+      await writes;
       let lines: string[] = [];
       for (let attempt = 0; attempt < 100 && lines.length < 2; attempt += 1) {
         await new Promise((resolve) => setTimeout(resolve, 50));

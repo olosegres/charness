@@ -27,7 +27,11 @@ import type { AddressInfo } from 'node:net';
 import { getOpenCodeServerCredentialFilePath, getOpenCodeServerHealth, openCodeHealthAttemptTimeoutMs, openCodeHealthTimeoutRetries, probeOpenCodePort } from '../installManager';
 import { startFullBacklogListener } from './fullBacklogListener';
 
-const testAttemptTimeoutMs = 100;
+/**
+ * The attempt time of the cases that need an attempt to give up. Long enough that a loaded machine does not starve the test process past
+ * it before the request leaves (the request count would then be 0, not 1), short enough that three attempts stay a second or so.
+ */
+const testAttemptTimeoutMs = 400;
 /**
  * For the cases where the server answers at once (or refuses at once) and the time limit is NOT what is tested: the first `fetch` of a test
  * process is cold, and on a loaded machine it can take longer than `testAttemptTimeoutMs` — the probe then asks again, as designed, and a
@@ -35,7 +39,7 @@ const testAttemptTimeoutMs = 100;
  */
 const promptServerAttemptTimeoutMs = 10_000;
 /** Late enough for a test attempt to give up, soon enough that the next one meets an answer. */
-const lateAnswerDelayMs = 250;
+const lateAnswerDelayMs = 700;
 
 let server: http.Server | null = null;
 let savedOpenCodeUrl: string | undefined;
