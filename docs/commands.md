@@ -37,6 +37,7 @@ them. How the agents run (the Claude Code backends, OpenCode, restarts, the bot'
   - [`/compact_summary`](#compact_summary)
   - [`/compact_self_review`](#compact_self_review)
   - [`/bot_skills`](#bot_skills)
+  - [`/question_wait`](#question_wait)
   - [`/task_agents`](#task_agents)
   - [`/limits`](#limits)
   - [`/limits_autoswitch`](#limits_autoswitch)
@@ -636,7 +637,7 @@ Compact the agent's context — a real, confirmed compaction on OpenCode and on 
 
 ### `/compact_on_idle`
 
-Toggle auto-compaction after ~55 min idle (Enable/Disable picker; `AGENT_IDLE_MINUTES` sets the window). Per topic; run it in **General** to set the default for all topics. On by default. Each idle compaction posts one short notice, followed by the agent's [self-review](#compact_self_review) (when it found any mistakes); the picker's «Show summary» / «Hide summary» row (the `/compact_summary` switch) adds the agent's full summary instead of that section alone, and its «Show self-review» / «Hide self-review» row is the [`/compact_self_review`](#compact_self_review) switch. Fires at most once per active period (until you write again); if a question was pending it is re-asked with tappable buttons after the compaction and the first copy stays as a record (see [The agent's questions](#the-agents-questions)). On the json-stream backends the idle mark also STOPS the agent process, compaction or not — the topic sleeps and your next message resumes it (`/status` says so).
+Toggle auto-compaction after ~55 min idle (Enable/Disable picker; `AGENT_IDLE_MINUTES` sets the window). Per topic; run it in **General** to set the default for all topics. On by default. Each idle compaction posts one short notice, followed by the agent's [self-review](#compact_self_review) (when it found any mistakes); the picker's «Show summary» / «Hide summary» row (the `/compact_summary` switch) adds the agent's full summary instead of that section alone, and its «Show self-review» / «Hide self-review» row is the [`/compact_self_review`](#compact_self_review) switch. Fires at most once per active period (until you write again); if a question is still waiting it is set aside instead — the agent goes on, no compaction, no stop — and the compaction comes at the next idle mark (with the wait **Wait for my answer** it is re-asked with tappable buttons after the compaction and the first copy stays as a record; see [The agent's questions](#the-agents-questions)). On the json-stream backends the idle mark also STOPS the agent process, compaction or not — the topic sleeps and your next message resumes it (`/status` says so).
 
 ### `/compact_summary`
 
@@ -690,6 +691,10 @@ next start. OpenCode has ONE server for every topic, so only the instance value 
 start, once nothing works in it, by one started without (or, when turned back on, with) the folder. A topic's own choice changes the
 orchestration hint of its OpenCode folder only when the OpenCode server next restarts, and OpenCode topics sharing a folder share the hint
 (it stays while any of them has the skills on).
+
+### `/question_wait`
+
+How long the agent's unanswered question waits before the agent is told to go on without it (see [The agent's questions](#the-agents-questions)). A picker with five choices — **Don't wait** (the question is set aside the moment it is asked), **10 min**, **30 min** (the default), **1 h** and **Wait for my answer** (it never is: the agent stands still until you answer, as before) — the current one marked ✓. In **General** it sets the default of every topic (saved as `"questionWait"` in [`settings.json`](../SETUP.md#instance-settings-settingsjson); the screen shows the value in force); in a topic it is that topic's own choice, with «As in General (value)» to follow the default again. A repeated-use picker: a tap answers with the value now in force and the screen re-renders in place. A change applies to a question that waits now too, counted from the moment it was asked — a wait that is already over sets it aside on the tap, and «Wait for my answer» takes its timer off. Admin-only; it works without an agent (the choice is read when the agent next asks). A test instance's shorter wait (`CHARNESS_TEST_TIMINGS`) is described in DEVELOPMENT.md.
 
 ### `/task_agents`
 
@@ -1000,7 +1005,7 @@ explicit command opens a shell.
 ### The agent's questions
 
 When the agent asks a question (Claude Code's `AskUserQuestion`, OpenCode's question tool) the bot posts it with one button per option and
-pins it, so even a muted topic notifies you once. You answer by tapping an option or by typing its number. **The message is never deleted**:
+pins it, so even a muted topic notifies you once. You answer by tapping an option or by typing its number (a plain message in the topic; a reply to some other message is no answer). **The message is never deleted**:
 it keeps the header, the question and the numbered options (a long question gives up its option descriptions, and shows as plain text if
 Telegram cannot parse its formatting, so the result always fits), and under them stands how it ended in place of the buttons:
 
@@ -1015,7 +1020,7 @@ Telegram cannot parse its formatting, so the result always fits), and under them
 
 The pin is released whenever the question ends.
 
-**After an idle compaction** (see [`/compact_on_idle`](#compact_on_idle)) a question that was pending is asked again with new buttons:
+**With «Wait for my answer», after an idle compaction** (see [`/compact_on_idle`](#compact_on_idle)) a question that was pending is asked again with new buttons:
 the first copy loses its buttons at once and keeps its text as a record, with «↓ Asked again below» once the new copy is posted (or
 «❌ Not answered» if it could not be sent, or you wrote something else while the compaction ran — then nothing is asked again; a bot
 restart in that time asks the question again when the conversation can still be resumed — nobody had the chance to answer — and leaves the
@@ -1027,6 +1032,12 @@ copy answers nothing and closes that copy with «❌ Not answered», and a resta
 the conversation sleeps. A number typed while the new copy is being sent (or while the compaction runs) shows the answer only once the agent has really got it; if the
 conversation cannot be started, the question stays open with its buttons — asked again at once if the compaction was over. A second tap on
 a copy that is already being answered changes nothing: the answer stays the last word on the message.
+
+**A question you leave unanswered never stops the agent.** The agent that asked is blocked on your answer, and it may have other work to do — so the bot waits for you only for the *question wait* (30 minutes by default, [`/question_wait`](#question_wait) changes it per topic or for all of them). When the wait ends the bot tells the agent, in the result of its own question, that nobody answered yet, that the question stays open for you, not to ask it again or wait for it, and to go on with the work that does not depend on it (or end its turn if nothing is left); on Claude Code it is the question's tool call denied with that text, on OpenCode the question is replied to with it — never rejected, which would end OpenCode's loop. Nothing is interrupted and the agent's turn simply goes on. In the topic the question keeps its message, its buttons and its pin and gains one silent line, «⏸ The agent went on without your answer — you can still answer»; it is not put back at the bottom when the agent's output lands under it. The idle mark does the same instead of compacting: a question still waiting at `AGENT_IDLE_MINUTES` is set aside, the agent goes on, and the topic is compacted and stopped later like any quiet one (with **Wait for my answer** the old way stays: reject, compact, stop, ask again — see below).
+
+**You can still answer it, however much later**, by tapping an option of the old message or by **replying** to it (a reply's text is the answer: a bare option number picks that option, any other text is the answer itself; a reply to the original message of a question that was put at the bottom again works too — and a bare number that is not a reply is an ordinary message, never an answer). The message closes with «✅ Answer: …», its pin is released, and the agent gets **one new message** — `[Late answer to your question asked 14:05, set aside 14:35]`, the question, the answer, and «You went on without it — check whether anything you did meanwhile conflicts with this answer, and adjust». It reaches a live agent like a message you typed (after whatever it is doing, never as an interrupt) and wakes a sleeping conversation. A topic member's answer says who gave it on its `Answer:` line. A call with several questions is answered one at a time: the answers you gave before the wait ended went to the agent with the set-aside text, the next open question is shown in the same look as soon as you answer the one before it, and the agent hears of all of them at once when the last is in. Typing something else is an ordinary message: it cancels nothing, interrupts nothing, and the question stays open — except while a question still *waits*: any text that is not its answer cancels it, as it always did, a reply to some other message included (a reply is never a pick for a question it was not written to, so «2» typed as a reply to an old message answers nothing).
+
+Up to **five** set-aside questions stay open at once, each with its own message, buttons and pin; a sixth closes the oldest with «❌ Not answered». They end the same way when the conversation ends because you ended it — `/new`, `/quit`, `/quitall`, leaving the folder, picking another conversation, or switching to another backend yourself — and when a restart finds the conversation gone; the idle stop, a sleeping or a crashed process and an *automatic* usage-limit switch (the conversation moves to the next account or provider with its context handed over) keep them: the late answer reaches the conversation that runs by then. A restart keeps the buttons and the original moment of the wait. If the agent asks the *same* question again (the same question text and the same options) while its set-aside copy is open, it is not posted a second time: the agent is told at once that it is still open. Jira conversations are unaffected (they have no such question), and the deprecated tmux Claude backend is not covered.
 
 ### File intake
 

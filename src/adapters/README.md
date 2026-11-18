@@ -409,6 +409,29 @@ event (identical shape to OpenCode's), so the pin + one-at-a-time + inline-butto
 flow is reused verbatim; `answerQuestion` / `rejectQuestion` emit the matching
 `control_response`.
 
+### Setting a question aside (`setQuestionAside`)
+
+An unanswered question must not keep the agent standing still (`utils/questionWaitPlan.ts` words the text, `connectors/telegram/commands/questionSetAside.ts`
+decides when). `AgentAdapter.setQuestionAside(key, requestId, text, givenAnswers): boolean` tells the agent «no answer yet, go on» IN the
+result of the question it is blocked on, and resolves the question — **a turn that goes on, never an interrupt**:
+
+- **Claude (json-stream and per-turn):** the pending `can_use_tool` is answered with a **deny** whose `message` is `text` (the same path
+  and sidecar clean-up as `rejectQuestion`, but no interrupt follows). The CLI hands the message to the model as the tool's result and the turn
+  continues. Not `defer` (it ENDS the turn) and not an allow with a `response` (it would claim the user said something).
+- **OpenCode:** `/question/:id/reply` with the answers of the call — `givenAnswers[i]` for a question the owner already answered, `[text]` for
+  every one left open. **Never `/reject`**: a `Question.RejectedError` blocks the loop (`continue_loop_on_deny` is off by default), which ends the
+  agent's turn — `reject` stays for a real cancellation.
+- **Returns `true` only when the reply or the deny was actually written**; `false` is a no-op — no question pending, another request id
+  pending (a timer that fires late finds the agent's NEXT question and sets nothing aside), an inactive session, or a backend with no question
+  path (the tmux-scrape Claude, the terminal). The bot edits the message and moves the question to its set-aside list only for `true`.
+- **A cache is not an authority.** OpenCode's adapter only caches the server's registry (a reattach that could not read it leaves it
+  empty): `resyncOpenQuestion(key, requestId)` re-reads `GET /question` and answers `held` (that very question is open there; the cache now holds
+  it), `none` (the server holds none — or ANOTHER one: the bot's copy is stale, the cache is left alone) or `unknown` (read failed, inactive session);
+  after the bot closed a stale copy, `surfaceOpenQuestion(key)` hands the server's own question to the bot as a `question` event, the way a reattach
+  does. The Claude CLI IS the authority on what it waits on (the blocked `can_use_tool`, saved beside the session), so it has neither.
+- **The same question asked again** after the set-aside text gets the same call with a text worded «still open» (`isAlreadyOpen`), on the
+  question the agent holds now (its own request id), `givenAnswers` aligned with the new call.
+
 ## Selecting it (default + `/claude_mode`)
 
 This is the **DEFAULT** Claude backend (`getDefaultClaudeBackendName` /

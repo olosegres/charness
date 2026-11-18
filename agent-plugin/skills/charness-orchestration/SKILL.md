@@ -96,6 +96,7 @@ kill -0 <pid> 2>/dev/null || { echo "worker <pid> exited"; exit 1; }; [ -n "$(fi
 - The user keeps the bot's topics muted: your plain text reaches the topic silently. Anything they must notice —
   a blocker, a fork, "ready to push" — ask as a native question (Claude Code: `AskUserQuestion`; OpenCode: its
   question tool); the bot pins it, and the pin notifies. In autonomous mode stop and report instead.
+- A question never stops your work: when the bot sets it aside, go on; the answer comes later as a message.
 - A message headed `[Request <id> · from: …]` is answered through `answer_request` (`progress`, `question`,
   `final`); do not repeat its text as plain text afterwards.
 - The passing-run video of a new e2e test → `send_file_to_user` (H.264 `.mp4`, sent as a video). Several
