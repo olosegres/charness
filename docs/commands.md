@@ -1006,7 +1006,8 @@ explicit command opens a shell.
 
 When the agent asks a question (Claude Code's `AskUserQuestion`, OpenCode's question tool) the bot posts it with one button per option and
 pins it, so even a muted topic notifies you once. You answer by tapping an option or by typing its number (a plain message in the topic; a reply to some other message is no answer). **The message is never deleted**:
-it keeps the header, the question and the numbered options (a long question gives up its option descriptions, and shows as plain text if
+it keeps the header, the question and the numbered options with their descriptions (a description that only repeats its label — the same words, in any
+case, with or without trailing punctuation — is left out; a long question gives up its option descriptions, and shows as plain text if
 Telegram cannot parse its formatting, so the result always fits), and under them stands how it ended in place of the buttons:
 
 - **«✅ Answer: …»** — you tapped or typed an option (several questions in one call are shown one after the other, each with its own result).

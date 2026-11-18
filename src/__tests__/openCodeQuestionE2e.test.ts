@@ -2,7 +2,7 @@
  * @description A question the OpenCode agent asks stays in the topic however it ends, at PROCESS level: the BUILT charness
  * started the way an isolated instance is (`scripts/run-isolated.sh`) against the fake Bot API
  * (`telegramE2e/fakeTelegram.ts`) and the fake OpenCode server (`openCodeE2e/fakeOpenCodeServer.ts`), which can put a
- * question to the user whenever a flow says (the fake Claude agent cannot ask without a person's message). Five flows:
+ * question to the user whenever a flow says (the fake Claude agent cannot ask without a person's message). Six flows:
  *
  *   the idle compaction re-asked a question → the agent asks a NEW question while the re-asked copy waits: the copy is
  *     closed as «not answered» and keeps its text, and its button never answers the new question;
@@ -18,7 +18,9 @@
  *     agent again after each pause, and after the last try says so in the topic AND rewrites the pinned message's own note («the server did
  *     not confirm it — if the agent seems stuck, send it any message», its buttons and pin kept — a statement about the message, never about
  *     the agent now); the owner's message after the notice moves the agent on (the wedge abort) and the note is still true; a later tap on its
- *     button still answers it.
+ *     button still answers it;
+ *   an option whose description only repeats its label → the label is printed once, an option whose description says more keeps it,
+ *     in the question as posted and as it stays after the answer.
  *
  * What the json-stream flows cover instead: `questionKeptE2e.test.ts` (answer, number, another message, `/esc`, `/quit`,
  * re-post, the re-ask in every phase, a restart).
@@ -80,6 +82,14 @@ const errorLinePrefix = 'Error:';
 const firstQuestion = { requestId: 'que_oc_1', header: 'Lexer', question: 'Which lexer should I write?', labels: ['hand-written', 'regex'] } as const;
 const secondQuestion = { requestId: 'que_oc_2', header: 'Parser', question: 'Which parser should I write?', labels: ['recursive descent', 'table-driven'] } as const;
 type AskedQuestion = typeof firstQuestion | typeof secondQuestion;
+
+/** The question of the flow whose options carry descriptions: the first only repeats its label, the second says more. */
+const describedQuestion = {
+  requestId: 'que_oc_3',
+  header: 'Color',
+  question: 'Which color do you prefer?',
+  options: [{ label: 'Red', description: 'red.' }, { label: 'Blue', description: 'The cold one.' }],
+} as const;
 
 const unansweredNote = enDict['agent.question_unanswered_note'];
 const askedAgainNote = enDict['agent.question_asked_again_note'];
@@ -507,5 +517,33 @@ describe('A reply that sets a question aside is refused by the OpenCode server, 
     await topic.waitForMessageText('the answer under the question', question, (text) => text.endsWith(`\n\n${enDict['agent.question_answered_note'].replace('{answer}', firstQuestion.labels[0])}`));
     await waitForUnpinned(question);
     await getCharness().waitFor('the record to be gone', replyTimeoutMs, () => (readPersistedState(getLayout()).setAsideQuestions?.[topicKey] ?? []).length === 0);
+  });
+});
+
+describe('An option whose description only repeats its label is printed once on the OpenCode backend too, end to end: built charness, fake Bot API, fake OpenCode', () => {
+  before(async () => {
+    await setUpInstance('charness-ocask-repeat-', {});
+  });
+
+  after(tearDownInstance);
+
+  it('the label shows once, the description that says more stays under its option, and the answered question keeps the same body', async () => {
+    const sessionId = await bootBindAndStartTurn('REPEAT-1');
+    fakeOpenCode.emitQuestionAsked(sessionId, describedQuestion.requestId, [{ question: describedQuestion.question, header: describedQuestion.header, options: describedQuestion.options }]);
+    const question = await topic.waitForMessage('the described question', (message) =>
+      message.text.includes(describedQuestion.question) && topic.getKeyboardData(message).flat().some((data) => data.startsWith('qa_')));
+    await waitForPinned(question);
+
+    assert.deepEqual(question.text.split('\n'), [`❓ *${describedQuestion.header}*`, describedQuestion.question, '1. Red', '2. Blue', `   ${describedQuestion.options[1].description}`], 'no line repeats «Red» under it');
+
+    await topic.tapAndAwaitAnswer(question, 'qa_0_0');
+    const answerNote = enDict['agent.question_answered_note'].replace('{answer}', describedQuestion.options[0].label);
+    await topic.waitForMessageText('the answer under the question', question, (text) => text.endsWith(`\n\n${answerNote}`));
+    const current = fakeTelegram.getMessage(question.message_id);
+    assert.ok(current && !current.isDeleted, 'the question stays');
+    assert.ok(current.text.startsWith(question.text), `with the body it was posted with: ${current.text}`);
+    assert.equal(current.reply_markup, undefined, 'and no buttons');
+    await waitForUnpinned(question);
+    await getCharness().waitFor('the answer to reach the server', replyTimeoutMs, () => fakeOpenCode.listRequests('POST', `/question/${describedQuestion.requestId}/reply`).length > 0);
   });
 });

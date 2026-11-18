@@ -16,6 +16,7 @@ import {
   fakeAskLongDescription,
   fakeAskNoAnswerOutcome,
   fakeAskQuestion,
+  fakeAskRepeatDescriptions,
   fakeAskSetAsideOutcome,
   fakeAskSetAsideTurnText,
   fakeSetAsideDenyMessagePrefix,
@@ -173,6 +174,8 @@ import { claudeSessionStateEventsVariableName } from '../../utils/jsonStreamHost
  *    after the other); the outcome logged is the two answers joined by `fakeAskTwoOutcomeSeparator`;
  *  - `ask-long`    — the same question, each option with a `fakeAskLongDescription`: it fits one Telegram message, but not
  *    with an answer note under it;
+ *  - `ask-repeat`  — the same question, its first option's description only repeats the label
+ *    (`fakeAskRepeatDescriptions.repeatingLabel`), the second's says more: the bot prints the second alone;
  *  - `send-messages` — calls `send_messages_to_user` with ONE message, `getFakeDigestMessageText(<label>)`, between the
  *    streamed text and its `final` answer (with the `tool_use` / `tool_result` lines around the call, as for every bot tool it
  *    calls for the user), and logs the outcome to `tool-calls.jsonl`;
@@ -247,8 +250,8 @@ import { claudeSessionStateEventsVariableName } from '../../utils/jsonStreamHost
  * `FAKE_CLAUDE_STATE_DIR` (per-request turn counts, the conversations held).
  */
 
-export type FakeClaudeMode = 'answer' | 'silent-once' | 'silent' | 'hang-once' | 'hold-once' | 'hold-progress-once' | 'slow-once' | 'progress' | 'finish-together' | 'answer-after-queued' | 'background' | 'background-notify' | 'compact' | 'overflow' | 'fetch-attachment' | 'run-tool' | 'reply-to' | 'usage-limit-once' | 'ask' | 'ask-again' | 'ask-two' | 'ask-long' | 'send-messages';
-const fakeModes: readonly FakeClaudeMode[] = ['answer', 'silent-once', 'silent', 'hang-once', 'hold-once', 'hold-progress-once', 'slow-once', 'progress', 'finish-together', 'answer-after-queued', 'background', 'background-notify', 'compact', 'overflow', 'fetch-attachment', 'run-tool', 'reply-to', 'usage-limit-once', 'ask', 'ask-again', 'ask-two', 'ask-long', 'send-messages'];
+export type FakeClaudeMode = 'answer' | 'silent-once' | 'silent' | 'hang-once' | 'hold-once' | 'hold-progress-once' | 'slow-once' | 'progress' | 'finish-together' | 'answer-after-queued' | 'background' | 'background-notify' | 'compact' | 'overflow' | 'fetch-attachment' | 'run-tool' | 'reply-to' | 'usage-limit-once' | 'ask' | 'ask-again' | 'ask-two' | 'ask-long' | 'ask-repeat' | 'send-messages';
+const fakeModes: readonly FakeClaudeMode[] = ['answer', 'silent-once', 'silent', 'hang-once', 'hold-once', 'hold-progress-once', 'slow-once', 'progress', 'finish-together', 'answer-after-queued', 'background', 'background-notify', 'compact', 'overflow', 'fetch-attachment', 'run-tool', 'reply-to', 'usage-limit-once', 'ask', 'ask-again', 'ask-two', 'ask-long', 'ask-repeat', 'send-messages'];
 /**
  * How long an `answer-after-queued` turn waits for the next message before it answers anyway: four polls of the 10 s
  * floor, or what the launcher sets (`fakeClaudeQueuedWaitMaxMsEnvName`) for the instance's own poll.
@@ -1058,10 +1061,10 @@ interface FakeAskResult {
 /** The `can_use_tool` requests the fake is blocked on, by `request_id`: resolved with the verdict the bot's `control_response` carries. */
 const controlResponseWaiters = new Map<string, (verdict: FakeControlVerdict) => void>();
 
-/** What an ask-mode turn puts: the one question, it and a second one in the same call, or the one with very long option descriptions. */
-type FakeAskVariant = 'one' | 'two' | 'long';
+/** What an ask-mode turn puts: the one question, it and a second one in the same call, the one with very long option descriptions, or the one whose first description repeats its label. */
+type FakeAskVariant = 'one' | 'two' | 'long' | 'repeat';
 
-const fakeAskVariantByMode: Partial<Record<FakeClaudeMode, FakeAskVariant>> = { ask: 'one', 'ask-again': 'one', 'ask-two': 'two', 'ask-long': 'long' };
+const fakeAskVariantByMode: Partial<Record<FakeClaudeMode, FakeAskVariant>> = { ask: 'one', 'ask-again': 'one', 'ask-two': 'two', 'ask-long': 'long', 'ask-repeat': 'repeat' };
 
 const questionVariantRe = /\[fake:question-variant (\d+)\]/;
 
@@ -1069,6 +1072,13 @@ const questionVariantRe = /\[fake:question-variant (\d+)\]/;
 function getFakeQuestionVariant(content: string): number | undefined {
   const variant = questionVariantRe.exec(content)?.[1];
   return variant === undefined ? undefined : Number.parseInt(variant, 10);
+}
+
+/** The description the `optionIndex`-th option of the first question carries in `variant`. */
+function getFakeAskOptionDescription(variant: FakeAskVariant, optionIndex: 0 | 1): string {
+  if (variant === 'long') return fakeAskLongDescription;
+  if (variant === 'repeat') return optionIndex === 0 ? fakeAskRepeatDescriptions.repeatingLabel : fakeAskRepeatDescriptions.saysMore;
+  return optionIndex === 0 ? 'Quick.' : 'Thorough.';
 }
 
 /**
@@ -1084,8 +1094,8 @@ async function askUserQuestion(variant: FakeAskVariant, options: { isAskedAgainW
     question: getFakeAskQuestionText(options.questionVariant),
     multiSelect: false,
     options: [
-      { label: fakeAskQuestion.shortOptionLabel, description: variant === 'long' ? fakeAskLongDescription : 'Quick.' },
-      { label: fakeAskQuestion.longOptionLabel, description: variant === 'long' ? fakeAskLongDescription : 'Thorough.' },
+      { label: fakeAskQuestion.shortOptionLabel, description: getFakeAskOptionDescription(variant, 0) },
+      { label: fakeAskQuestion.longOptionLabel, description: getFakeAskOptionDescription(variant, 1) },
     ],
   }];
   if (variant === 'two') {

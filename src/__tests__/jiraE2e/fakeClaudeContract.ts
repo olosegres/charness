@@ -210,6 +210,15 @@ export const fakeAskSecondQuestion = {
  */
 export const fakeAskLongDescription = 'every step spelled out in detail, '.repeat(52);
 
+/**
+ * What `ask-repeat` mode puts under its options: the first option's description only says its label again (in lower case,
+ * with a full stop), which the bot leaves out; the second's says something more, which stays.
+ */
+export const fakeAskRepeatDescriptions = {
+  repeatingLabel: `${fakeAskQuestion.shortOptionLabel.toLowerCase()}.`,
+  saysMore: 'Thorough.',
+} as const;
+
 /** What `ask-two` mode logs as its outcome: the two answers it got, in order, joined by this. */
 export const fakeAskTwoOutcomeSeparator = ' / ';
 

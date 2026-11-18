@@ -8,6 +8,7 @@
  * Coverage:
  *  - S1: option descriptions rendered under each numbered label (and NOT on the
  *    button — that is asserted in the body line shape; buttons are bot-side).
+ *  - A description that only repeats its option's label is not printed (the option would show twice); a different one stays.
  *  - S2: the sequential answer state machine — answering a non-final question
  *    advances WITHOUT submitting; answering the last builds the full matrix with
  *    the REAL collected answers and signals exactly one submit.
@@ -24,6 +25,7 @@ import {
   buildClosedQuestionText,
   buildQuestionBodyLines,
   buildQuestionBodyLinesPlain,
+  getOptionDescriptionToShow,
   recordAnswerAndAdvance,
   migratePendingQuestionState,
   getQuestionReplyRoute,
@@ -151,6 +153,109 @@ test('S1: plain fallback mirrors the body but without bold/escaping', () => {
     '   relational',
     '2. SQLite',
   ]);
+});
+
+// ── A description that repeats its label is not printed ─────────────────────
+
+test('an option whose description is its label shows the label once, in the body and in the plain fallback', () => {
+  const question = makeQuestion({
+    header: 'Color',
+    question: 'Which color do you prefer?',
+    options: [
+      { label: 'Red', description: 'Red' },
+      { label: 'Blue', description: 'Blue' },
+    ],
+  });
+
+  assert.deepEqual(buildQuestionBodyLines(question, noEscape), [
+    '❓ *Color*',
+    'Which color do you prefer?',
+    '1. Red',
+    '2. Blue',
+  ]);
+  assert.deepEqual(buildQuestionBodyLinesPlain(question), [
+    '❓ Color',
+    'Which color do you prefer?',
+    '1. Red',
+    '2. Blue',
+  ]);
+});
+
+test('a repeat is the same words trimmed, in any case, with or without trailing punctuation — on either side', () => {
+  const repeats: Array<{ label: string; description: string }> = [
+    { label: 'Red', description: '  Red  ' },
+    { label: 'Red', description: 'RED' },
+    { label: 'Red', description: 'red.' },
+    { label: 'Red', description: 'Red!' },
+    { label: 'Red', description: 'Red?' },
+    { label: 'Red', description: 'Red…' },
+    { label: 'Red', description: 'Red,' },
+    { label: 'Red', description: 'Red;' },
+    { label: 'Red', description: 'Red:' },
+    { label: 'Red', description: 'Red。' },
+    { label: 'Red', description: 'Red. ' },
+    { label: 'Red.', description: 'Red' },
+    { label: 'Red!', description: 'red.' },
+    { label: 'Красный', description: 'КРАСНЫЙ.' },
+  ];
+
+  for (const repeat of repeats) {
+    assert.equal(getOptionDescriptionToShow(repeat), undefined, `«${repeat.description}» repeats «${repeat.label}»`);
+    const question = makeQuestion({ options: [repeat] });
+    assert.deepEqual(buildQuestionBodyLines(question, noEscape), ['❓ *Q?*', `1. ${repeat.label}`], `body: «${repeat.description}»`);
+    assert.deepEqual(buildQuestionBodyLinesPlain(question), ['❓ Q?', `1. ${repeat.label}`], `plain: «${repeat.description}»`);
+  }
+});
+
+test('a description that says more than the label stays, even when it starts with the label', () => {
+  const stays: Array<{ label: string; description: string }> = [
+    { label: 'Red', description: 'Red wine' },
+    { label: 'Red wine', description: 'Red' },
+    { label: 'Red', description: 'The warm one.' },
+    { label: 'Red', description: 'Red, like a rose' },
+    { label: 'Red', description: 'Re d' },
+    { label: 'Red', description: '...' },
+  ];
+
+  for (const option of stays) {
+    assert.equal(getOptionDescriptionToShow(option), option.description, `«${option.description}» is kept for «${option.label}»`);
+    assert.deepEqual(buildQuestionBodyLines(makeQuestion({ options: [option] }), noEscape), ['❓ *Q?*', `1. ${option.label}`, `   ${option.description}`]);
+  }
+});
+
+test('an option with no description (absent or empty) has none to show', () => {
+  assert.equal(getOptionDescriptionToShow({ label: 'Red' }), undefined);
+  assert.equal(getOptionDescriptionToShow({ label: 'Red', description: '' }), undefined);
+});
+
+test('only the repeating options lose their sub-line: the numbering and the other descriptions are as before', () => {
+  const question = makeQuestion({
+    header: 'Pick a DB',
+    question: 'Which database?',
+    options: [
+      { label: 'Postgres', description: 'Postgres' },
+      { label: 'SQLite', description: 'embedded, zero-config' },
+      { label: 'MySQL', description: 'mysql.' },
+    ],
+  });
+
+  assert.deepEqual(buildQuestionBodyLines(question, noEscape), [
+    '❓ *Pick a DB*',
+    'Which database?',
+    '1. Postgres',
+    '2. SQLite',
+    '   embedded, zero-config',
+    '3. MySQL',
+  ]);
+});
+
+test('the text a closed question is edited to leaves the repeat out too, as the question was posted', () => {
+  const question = makeQuestion({
+    options: [{ label: 'Red', description: 'Red.' }, { label: 'Blue', description: 'Cold' }],
+  });
+
+  assert.deepEqual(buildClosedQuestionText(question, '✅ Answer: Red', noEscape).split('\n'), ['❓ *Q?*', '1. Red', '2. Blue', '   Cold', '', '✅ Answer: Red']);
+  assert.deepEqual(buildClosedQuestionPlainText(question, '✅ Answer: Red').split('\n'), ['❓ Q?', '1. Red', '2. Blue', '   Cold', '', '✅ Answer: Red']);
 });
 
 // ── S2: sequential answer state machine ─────────────────────────────────────

@@ -15,6 +15,8 @@
  *   → a close whose edit Telegram refuses to apply to the text (too long): the buttons are taken off all the same
  *   → a close whose Markdown Telegram cannot parse: the question is kept as plain text, without escape marks
  *   → a question so long that its answer note does not fit under it: the option descriptions are left out, the answer shows
+ *   → an option whose description only repeats its label: the label is printed once, the option whose description says more
+ *     keeps it — in the question as posted and as it stays after the answer
  *   → the agent's process exits (the CLI dies) with the question open: the same note, the pin gone
  *   → `/quit` (the session is stopped with the question open): the same note
  *   → one call with TWO questions (`ask-two`): each question message keeps its own text and gets its own result — both
@@ -69,6 +71,7 @@ import {
   fakeAskLongDescription,
   fakeAskNoAnswerOutcome,
   fakeAskQuestion,
+  fakeAskRepeatDescriptions,
   fakeAskSecondQuestion,
   fakeAskToolName,
   fakeAskTwoOutcomeSeparator,
@@ -230,7 +233,7 @@ function getGivenAnswers(): string[] {
 }
 
 /** Put the question (`ask` mode, or `mode`): resolves its message once it carries the option buttons. */
-async function askQuestion(driver: TopicDriver, promptLabel: string, mode: 'ask' | 'ask-two' | 'ask-long' = 'ask'): Promise<FakeTelegramMessage> {
+async function askQuestion(driver: TopicDriver, promptLabel: string, mode: 'ask' | 'ask-two' | 'ask-long' | 'ask-repeat' = 'ask'): Promise<FakeTelegramMessage> {
   const sentMessageId = fakeTelegram.pushOperatorMessage(topicThreadId, `${promptLabel} [fake:${mode}] ask me something`);
   return driver.waitForMessage(`the question of ${promptLabel}`, (message) =>
     message.message_id > sentMessageId
@@ -628,6 +631,26 @@ describe('A question the agent asks stays in the topic however it ends, end to e
     assertQuestionKeptWithNote(question, buildAnsweredNote(fakeAskQuestion.longOptionLabel));
     await waitForUnpinned(question);
     await getCharness().waitFor('the agent to get the answer', agentStartTimeoutMs, () => getGivenAnswers().includes(fakeAskQuestion.longOptionLabel));
+  });
+
+  it('an option whose description only repeats its label shows the label once; the option whose description says more keeps it, also after the answer', async () => {
+    const question = await askQuestion(topic, 'KEPT-REPEAT', 'ask-repeat');
+    await waitForPinned(question);
+
+    const lines = question.text.split('\n');
+    const shortOptionIndex = lines.indexOf(`1. ${fakeAskQuestion.shortOptionLabel}`);
+    assert.notEqual(shortOptionIndex, -1, `the first option is listed: ${question.text}`);
+    assert.ok(lines[shortOptionIndex + 1].startsWith('2. '), `no line repeats the first label under it: ${question.text}`);
+    assert.ok(!question.text.toLowerCase().includes(fakeAskRepeatDescriptions.repeatingLabel), `the repeating description is not printed: ${question.text}`);
+    assert.equal(lines.at(-1), `   ${fakeAskRepeatDescriptions.saysMore}`, `the description that says more stays under its option: ${question.text}`);
+
+    await topic.tapAndAwaitAnswer(question, 'qa_0_0');
+    await topic.waitForMessageText('the answer under the question', question, (text) => text.endsWith(buildAnsweredNote(fakeAskQuestion.shortOptionLabel)));
+    const current = readKeptMessage(question);
+    assert.ok(current.text.startsWith(question.text), `the question stays as it was posted: ${current.text}`);
+    assertQuestionKeptWithNote(question, buildAnsweredNote(fakeAskQuestion.shortOptionLabel));
+    await waitForUnpinned(question);
+    await getCharness().waitFor('the agent to get the answer', agentStartTimeoutMs, () => getGivenAnswers().includes(fakeAskQuestion.shortOptionLabel));
   });
 
   it('the question cannot be put again at the bottom: the old copy is not marked «asked again below», keeps its buttons and still answers', async () => {

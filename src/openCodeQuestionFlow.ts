@@ -12,13 +12,34 @@
  * agent reply.
  */
 
-import type { OpenCodeQuestion, PendingQuestionState } from './types';
+import type { OpenCodeQuestion, OpenCodeQuestionOption, PendingQuestionState } from './types';
+
+/** What ends a sentence — and so tells a label from the same words said as a sentence ("Red" / "Red."). Whitespace goes with it. */
+const trailingSentencePunctuation = /[\s.!?…,;:。！？、]+$/u;
+
+/** A label or description as a reader compares them: trimmed, without its trailing punctuation, in lower case. */
+function getComparableOptionText(text: string): string {
+  return text.trimStart().replace(trailingSentencePunctuation, '').toLowerCase();
+}
+
+/**
+ * @description The description to print under an option's label: the option's own, or `undefined` when there is none or
+ * it only repeats the label (agents often fill the field with the label itself, and the option would show twice —
+ * `1. Red` / `   Red`). A repeat is the same words compared trimmed and case-insensitively, trailing punctuation aside; a
+ * description that says anything more stays.
+ */
+export function getOptionDescriptionToShow(option: OpenCodeQuestionOption): string | undefined {
+  const { label, description } = option;
+  if (!description) return undefined;
+  return getComparableOptionText(description) === getComparableOptionText(label) ? undefined : description;
+}
 
 /**
  * @description Build the message-BODY text lines for ONE question: the header,
  * the question text (only when it differs from the header), then the numbered
  * option labels each followed by its description (S1 — descriptions were
- * previously discarded even though OpenCode delivers them).
+ * previously discarded even though OpenCode delivers them) — except a description
+ * that only repeats its label ({@link getOptionDescriptionToShow}).
  *
  * The numbering is 1-based and lines up with the inline option buttons
  * (`qa_<qIdx>_<optIdx>`), so a user can answer by tapping a button OR by typing
@@ -39,9 +60,10 @@ export function buildQuestionBodyLines(
   }
   question.options.forEach((option, optIdx) => {
     lines.push(`${optIdx + 1}. ${escape(option.label)}`);
-    if (option.description) {
+    const description = getOptionDescriptionToShow(option);
+    if (description) {
       // Indented under the label so it reads as that option's sub-line.
-      lines.push(`   ${escape(option.description)}`);
+      lines.push(`   ${escape(description)}`);
     }
   });
   return lines;
@@ -60,7 +82,8 @@ export function buildQuestionBodyLinesPlain(question: OpenCodeQuestion): string[
   }
   question.options.forEach((option, optIdx) => {
     lines.push(`${optIdx + 1}. ${option.label}`);
-    if (option.description) lines.push(`   ${option.description}`);
+    const description = getOptionDescriptionToShow(option);
+    if (description) lines.push(`   ${description}`);
   });
   return lines;
 }
