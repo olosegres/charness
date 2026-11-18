@@ -1,6 +1,6 @@
 /**
  * @description Coverage for `src/release/cli.ts commit-release` — the release workflow's commit step — run as a real process against the throwaway git repository of `releaseCliKit.ts`. The rest of the
- * release CLI (`plan`, `apply`, `check-pack`, …) is `releaseCli.test.ts`; split because a file runs under one time limit and one ran 60 s alone on a loaded box.
+ * release CLI is `releaseCli.test.ts` (`plan`, `apply`, `test-gate`, …) and `releaseCliChecks.test.ts` (`check-pack`, …); split because a file runs under one time limit and one ran 60 s alone on a loaded box.
  *
  * Test case: N/A — Charness has no Jira tracker.
  */

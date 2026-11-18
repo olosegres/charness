@@ -7,7 +7,7 @@
  * it (the release writes it, as `npm version` does), what an installed copy must match — and, on the repository's REAL files, that the
  * committed shrinkwrap is the one `yarn.lock` and `package.json` ask for, pins every tarball by hash and is shipped.
  *
- * That npm really installs by it, through a registry, is `releaseCli.test.ts` (check-pack / check-install).
+ * That npm really installs by it, through a registry, is `releaseCliChecks.test.ts` (check-pack / check-install).
  *
  * Test case: N/A — Charness has no Jira tracker.
  */

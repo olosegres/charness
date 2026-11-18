@@ -1,5 +1,5 @@
 /**
- * @description The sandbox of the release CLI tests (`releaseCli.test.ts`, `releaseCliCommit.test.ts`): the CLI transpiled once per file, a throwaway git repository with its own HOME and git
+ * @description The sandbox of the release CLI tests (`releaseCli.test.ts`, `releaseCliChecks.test.ts`, `releaseCliCommit.test.ts`): the CLI transpiled once per file, a throwaway git repository with its own HOME and git
  * config per case, and the helpers that run git and the CLI in it. Split from the test file because a file runs under one time limit and one ran 60 s alone on a loaded box.
  *
  * Test case: N/A — Charness has no Jira tracker.
