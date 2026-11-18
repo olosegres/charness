@@ -258,6 +258,17 @@ export class FakeTelegram {
   isOwnTopicEventDelivered = false;
   /** The topics the bot created, in order: the id of each (the id of its creation service message) and its name. */
   readonly createdTopics: Array<{ threadId: number; name: string }> = [];
+  /**
+   * While set, the bot's own `editForumTopic` also reaches it as the `forum_topic_edited` service message (`from` is the bot itself),
+   * stored in the topic so the bot may delete it: the live Bot API does this (measured on the test topic, 2026-11-18).
+   */
+  isOwnTopicRenameDelivered = false;
+  /** The ids of the «renamed the topic» service lines the fake made of the bot's own renames, in order. */
+  readonly ownRenameLineIds: number[] = [];
+  /** What each topic is called NOW (by thread id): the name the flow gave it or the last rename. */
+  private readonly topicNames = new Map<number, string>();
+  /** The name each topic was CREATED with: what the root message a client attaches to a plain post in it carries, whatever it is called now. */
+  private readonly topicCreationNames = new Map<number, string>();
   /** The responses {@link holdNextResponse} still has to hold, in the order they were asked for. */
   private readonly responseHolds: Array<{ method: string; release: Promise<unknown> | number; isMatch: (payload: Record<string, unknown>) => boolean }> = [];
   private readonly callFailures: Array<{ method: string; description: string; errorCode: number; isMatch: (payload: Record<string, unknown>) => boolean }> = [];
@@ -395,8 +406,33 @@ export class FakeTelegram {
    */
   pushTopicCreated(name: string, from: TelegramUser = this.options.operator): number {
     const threadId = this.nextMessageId++;
+    this.topicNames.set(threadId, name);
+    this.topicCreationNames.set(threadId, name);
     this.pushTopicCreatedEvent(threadId, name, from);
     return threadId;
+  }
+
+  /**
+   * @description Name the topic the flow uses for a thread the bot never saw created (the operator's own topic, bound with `/bind`): its
+   * CURRENT name and the name its root message carries, which a client attaches to the operator's plain posts in it.
+   */
+  setTopicCreationName(threadId: number, name: string): void {
+    this.topicNames.set(threadId, name);
+    this.topicCreationNames.set(threadId, name);
+  }
+
+  /** @description What the topic is called now — the last name the bot or the operator gave it; `undefined` for a topic the fake knows no name of. */
+  getTopicName(threadId: number): string | undefined {
+    return this.topicNames.get(threadId);
+  }
+
+  /**
+   * @description The operator (or `from`) renames topic `threadId` to `name`: the topic is called so from now on and the bot gets the
+   * `forum_topic_edited` service message, the way the group app does. Resolves the service message's id.
+   */
+  pushTopicRenamed(threadId: number, name: string, from: TelegramUser = this.options.operator): number {
+    this.topicNames.set(threadId, name);
+    return this.pushTopicEditedEvent(threadId, name, from);
   }
 
   /** @description Make a file downloadable: `getFile` answers its path, the file endpoint serves `bytes`. */
@@ -491,7 +527,7 @@ export class FakeTelegram {
   /** @description The bot's messages in topic `threadId` (of the group `groupId`, the flow's own by default) that are not deleted, oldest first, with their CURRENT text. */
   listBotMessages(threadId: number, groupId: number = this.chat.id): FakeTelegramMessage[] {
     return [...this.messages.values()]
-      .filter((message) => message.chat.id === groupId && message.message_thread_id === threadId && message.from.id === this.options.botUser.id && !message.isDeleted)
+      .filter((message) => message.chat.id === groupId && message.message_thread_id === threadId && message.from.id === this.options.botUser.id && !message.isDeleted && !this.ownRenameLineIds.includes(message.message_id))
       .sort((a, b) => a.message_id - b.message_id);
   }
 
@@ -565,7 +601,7 @@ export class FakeTelegram {
       date: 0,
       chat: this.chat,
       from: this.options.botUser,
-      forum_topic_created: { name: created?.name ?? `Topic ${threadId}`, icon_color: topicIconColor },
+      forum_topic_created: { name: this.topicCreationNames.get(threadId) ?? created?.name ?? `Topic ${threadId}`, icon_color: topicIconColor },
     };
   }
 
@@ -599,8 +635,27 @@ export class FakeTelegram {
   private createTopic(name: string): { message_thread_id: number; name: string; icon_color: number } {
     const threadId = this.nextMessageId++;
     this.createdTopics.push({ threadId, name });
+    this.topicNames.set(threadId, name);
+    this.topicCreationNames.set(threadId, name);
     if (this.isOwnTopicEventDelivered) this.pushTopicCreatedEvent(threadId, name, this.options.botUser);
     return { message_thread_id: threadId, name, icon_color: topicIconColor };
+  }
+
+  /** The `forum_topic_edited` service message of topic `threadId`, as `from` made it; stored in the topic like any message, so it can be deleted. Resolves its id. */
+  private pushTopicEditedEvent(threadId: number, name: string, from: TelegramUser): number {
+    const line = this.storeMessage(threadId, '', from);
+    this.pushUpdate({
+      message: {
+        message_id: line.message_id,
+        date: line.date,
+        chat: this.chat,
+        message_thread_id: threadId,
+        is_topic_message: true,
+        from,
+        forum_topic_edited: { name },
+      },
+    });
+    return line.message_id;
   }
 
   /** The `forum_topic_created` service message of topic `threadId`, as `from` made it. */
@@ -758,6 +813,17 @@ export class FakeTelegram {
       case 'createForumTopic': {
         if (!this.canManageTopics) return { ok: false, error_code: 400, description: 'Bad Request: not enough rights to create a topic' };
         return { ok: true, result: this.createTopic(String(payload.name)) };
+      }
+      case 'editForumTopic': {
+        // The icon is the owner's: a rename that carries one fails the call, so a bot that sends it fails its flow.
+        if ('icon_custom_emoji_id' in payload) return { ok: false, error_code: 400, description: 'Bad Request: the topic icon must not be sent (the fake refuses it)' };
+        if (!this.canManageTopics) return { ok: false, error_code: 400, description: 'Bad Request: not enough rights to manage topics' };
+        const threadId = Number(payload.message_thread_id);
+        const name = String(payload.name);
+        if (this.topicNames.get(threadId) === name) return { ok: false, error_code: 400, description: 'Bad Request: TOPIC_NOT_MODIFIED' };
+        this.topicNames.set(threadId, name);
+        if (this.isOwnTopicRenameDelivered) this.ownRenameLineIds.push(this.pushTopicEditedEvent(threadId, name, this.options.botUser));
+        return { ok: true, result: true };
       }
       case 'getFile': {
         const fileId = String(payload.file_id);
