@@ -39,6 +39,7 @@ Unless the user names others:
 
 ## Launch
 
+0. Call `claude_profiles` first — never launch or resume a worker without it.
 1. Make a private run directory (an absolute path: a resume starts from the checkout), generate a UUID for the
    session, write the brief into `<run-dir>/brief.md`: the task and its context (the worker does not see this
    conversation), the skills it must load by name, every resource another live process holds, and "report every
