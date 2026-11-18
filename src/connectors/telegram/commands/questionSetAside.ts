@@ -15,7 +15,6 @@ import { t } from '../../../i18n';
 import type { QuestionEnd } from '../../../openCodeQuestionFlow';
 import type { StateStore } from '../../../state';
 import type { AgentAdapter, OpenCodeQuestion, PendingQuestionState, SetAsideQuestionRecord } from '../../../types';
-import type { MessageContext } from '../../../utils/messageContext';
 import type { LatePromptOutcome } from '../../../utils/promptDelivery';
 import {
   addSetAsideQuestion,
@@ -29,6 +28,7 @@ import {
   type LateAnswerEntry,
   type QuestionWaitChoice,
 } from '../../../utils/questionWaitPlan';
+import { getAnswerWithAttribution } from '../../../utils/authorMark';
 import { getTelegramTalkerContext } from '../inbound';
 import { getCallbackMessageId } from './callbackMessage';
 import { answerCallbackWithFittedText } from './callbackToast';
@@ -37,6 +37,10 @@ import type { BotCore } from './botCore';
 
 /** The prefix of a set-aside question's button data: `qs_<record id>_<option index>`. */
 const setAsideButtonPrefix = 'qs_';
+
+/** After the agent's server could not confirm a waiting question, the wait ends again this long after (and at most this many times). */
+export const setAsideRetryDelayMs = 30_000;
+export const setAsideRetryLimit = 3;
 
 /**
  * What the set-aside needs from the bot: the shared core, the pending-question state it moves the question out of, the
@@ -47,7 +51,7 @@ export interface QuestionSetAsidePorts extends Pick<BotCore, 'withThreadLocale' 
   /** The state store (assigned at boot): the saved set-aside records and the counter their ids come from. */
   getState: () => Pick<StateStore, 'takeNextSetAsideQuestionSequence' | 'getSetAsideQuestions' | 'setSetAsideQuestions' | 'pushMessageId'>;
   pendingQuestions: Map<string, PendingQuestionState>;
-  getThreadAdapter: (key: SessionKey) => Pick<AgentAdapter, 'setQuestionAside'>;
+  getThreadAdapter: (key: SessionKey) => Pick<AgentAdapter, 'setQuestionAside' | 'resyncOpenQuestion'>;
   runQuestionLifecycleOp: <TResult>(key: SessionKey, op: () => Promise<TResult>) => Promise<TResult>;
   /** Persist the pending question (the in-memory map and the saved state, which `bot.ts` keeps in lockstep). */
   setPendingQuestion: (key: SessionKey, value: PendingQuestionState) => void;
@@ -77,13 +81,22 @@ export interface QuestionSetAsidePorts extends Pick<BotCore, 'withThreadLocale' 
    * whatever it is doing — it is NOT an answer to a question the agent waits on now, and never cancels one), buffered behind a start,
    * or waking a sleeping conversation. `noSession`: nothing could take it (the topic was told).
    */
-  deliverLateAnswer: (key: SessionKey, text: string, messageContext?: MessageContext) => Promise<LatePromptOutcome>;
+  deliverLateAnswer: (key: SessionKey, text: string) => Promise<LatePromptOutcome>;
   /** The next agent output starts a message of its own, below the question (the answer path does the same). */
   markNeedsNewMessage: (key: SessionKey) => void;
   /** The question wait that applies to the topic (its own setting, else General's, else the default). */
   getQuestionWaitChoice: (key: SessionKey) => QuestionWaitChoice;
   /** A test instance's shorter wait (`CHARNESS_TEST_TIMINGS` `questionSetAsideWaitMs`), `undefined` in production. */
   shortenedWaitMs: number | undefined;
+  /** The wait between two tries when the server could not confirm a question ({@link setAsideRetryDelayMs} unless a test shortens it). */
+  retryDelayMs?: number;
+}
+
+/** Which question a late answer was meant for: its index in the record and the message it was given on (tapped, or replied to). */
+export interface LateAnswerTarget {
+  recordId: string;
+  questionIndex: number;
+  messageId: number;
 }
 
 /** A text message of the topic as far as the late-answer route reads it: what it says, what it replies to, whether it is a forward. */
@@ -105,9 +118,22 @@ export function createQuestionSetAside(ports: QuestionSetAsidePorts) {
     releasePendingQuestionToSetAside, editQuestionMessageWithNote, closeQuestionMessage, unpinMessage, pinMessageSilently, sendQuestionMessage, deliverLateAnswer,
     markNeedsNewMessage, getQuestionWaitChoice, shortenedWaitMs,
   } = ports;
+  const retryDelayMs = ports.retryDelayMs ?? setAsideRetryDelayMs;
 
   /** One timer per waiting question, by conversation: it fires at `askedAt + wait`, whatever the agent's process does. */
   const timers = new Map<string, NodeJS.Timeout>();
+  /** How many times the wait of a question has ended again for want of the server's word, by conversation and request. */
+  const retryAttempts = new Map<string, number>();
+
+  /** The conversation's open set-aside questions, oldest first. */
+  function getSetAsideRecords(key: SessionKey): SetAsideQuestionRecord[] {
+    return getState().getSetAsideQuestions()[keyToString(key)] ?? [];
+  }
+
+  /** The option buttons of a set-aside question: their data names the record, `qs_<record id>_<option index>`. */
+  function buildSetAsideKeyboard(record: SetAsideQuestionRecord, question: OpenCodeQuestion): InlineKeyboardMarkup | undefined {
+    return buildQuestionOptionsKeyboard(question, (optionIndex) => `${setAsideButtonPrefix}${record.id}_${optionIndex}`);
+  }
 
   function clearQuestionSetAsideTimer(key: SessionKey): void {
     const kStr = keyToString(key);
@@ -151,10 +177,14 @@ export function createQuestionSetAside(ports: QuestionSetAsidePorts) {
    * `false` — and nothing set aside — when it is no longer the one waiting (answered or closed while the timer waited its turn
    * in the lifecycle queue, or the agent asked the next one meanwhile) or the backend cannot set a question aside.
    *
-   * When the bot holds the question but the adapter does not (a restart found the agent's session without it, or the agent was
-   * told and the bot died before it saved), the adapter is the authority on what blocks the agent: the bot's copy is stale — one
-   * log line, and it is closed as «not answered» like any question nobody can answer, never left as a waiting question nothing
-   * can end.
+   * When the bot holds the question but the adapter says it holds none, what that means depends on the backend:
+   *  - json-stream: the CLI's own question is the authority (the bot reads its sidecar before it restores its copy), so none is held
+   *    — the bot's copy is stale (the agent was told and the bot died before it saved): one log line, and it is closed as «not
+   *    answered», never left as a waiting question nothing can end;
+   *  - OpenCode: the adapter only CACHES the server's registry (a reattach that could not read it leaves it empty), so «none» means
+   *    «not known»: the server is asked (`resyncOpenQuestion`). It holds the question → the adapter takes it and the question is set
+   *    aside after all; it confirms there is none → the bot's copy is closed as above; it cannot tell → nothing is closed, one log
+   *    line, and the wait ends again after {@link setAsideRetryDelayMs}, at most {@link setAsideRetryLimit} times.
    */
   async function setPendingQuestionAside(key: SessionKey, requestId: string): Promise<boolean> {
     return runQuestionLifecycleOp(key, async () => {
@@ -172,8 +202,11 @@ export function createQuestionSetAside(ports: QuestionSetAsidePorts) {
       const nowMs = Date.now();
       const askedAtMs = pending.askedAt ?? nowMs;
       const text = buildQuestionSetAsideText({ questions: pending.data.questions, answers: pending.answers, askedAtMs, nowMs });
-      // The adapter checks the request id once more, against the question it holds: the one authority on what is pending there.
-      if (!adapter.setQuestionAside(key, requestId, text, pending.answers)) return dropQuestionTheAdapterDoesNotHold(key, pending);
+      // The adapter checks the request id once more, against the question it holds.
+      if (!adapter.setQuestionAside(key, requestId, text, pending.answers)) {
+        const resynced = await settleQuestionTheAdapterDoesNotHold(key, adapter, pending, text);
+        if (resynced === 'ended') return false;
+      }
 
       const record: SetAsideQuestionRecord = {
         id: createSetAsideQuestionId(sequence),
@@ -189,7 +222,7 @@ export function createQuestionSetAside(ports: QuestionSetAsidePorts) {
       const released = releasePendingQuestionToSetAside(key);
       markNeedsNewMessage(key);
       await released;
-      const { records, evicted } = addSetAsideQuestion(getState().getSetAsideQuestions()[kStr] ?? [], record);
+      const { records, evicted } = addSetAsideQuestion(getSetAsideRecords(key), record);
       await getState().setSetAsideQuestions(key, records);
 
       await showQuestionSetAside(key, record);
@@ -198,13 +231,51 @@ export function createQuestionSetAside(ports: QuestionSetAsidePorts) {
     });
   }
 
-  /** The bot's copy of a waiting question that the adapter holds no such question for: stale, so it ends as «not answered». */
-  async function dropQuestionTheAdapterDoesNotHold(key: SessionKey, pending: PendingQuestionState): Promise<false> {
+  /**
+   * The adapter would not set the bot's waiting question aside (see {@link setPendingQuestionAside} for what that means per backend).
+   * Resolves `told` when the adapter took it on a second try after it re-read the server's registry — the caller goes on to save the
+   * record — and `ended` when it did not: the bot's copy was closed (nothing is held), or left waiting with one more try armed.
+   * Nothing is awaited between the second try and the return, like the first.
+   */
+  async function settleQuestionTheAdapterDoesNotHold(key: SessionKey, adapter: Pick<AgentAdapter, 'setQuestionAside' | 'resyncOpenQuestion'>, pending: PendingQuestionState, text: string): Promise<'told' | 'ended'> {
+    const kStr = keyToString(key);
+    const { requestId } = pending.data;
+    // A backend with no registry of its own to ask holds exactly what it says it holds.
+    const server = adapter.resyncOpenQuestion ? await adapter.resyncOpenQuestion(key) : 'none';
+    // The agent asked the next question, or this one was answered, while the server was asked: it is not this one's business any more.
+    if (pendingQuestions.get(kStr) !== pending) return 'ended';
+    if (server === 'held' && adapter.setQuestionAside?.(key, requestId, text, pending.answers)) return 'told';
+    if (server === 'none') {
+      await dropQuestionTheAdapterDoesNotHold(key, pending);
+      return 'ended';
+    }
+    const attempt = (retryAttempts.get(`${kStr}:${requestId}`) ?? 0) + 1;
+    retryAttempts.set(`${kStr}:${requestId}`, attempt);
+    const isRetried = attempt <= setAsideRetryLimit;
+    console.warn(`[questionSetAside] ${kStr}: the agent's server did not confirm the question ${requestId} (${server}); it stays waiting${isRetried ? `, the wait ends again in ${setAsideRetryDelayMs / 1000} s (try ${attempt} of ${setAsideRetryLimit})` : ', no more tries'}`);
+    if (isRetried) armRetry(key, requestId);
+    return 'ended';
+  }
+
+  /** The wait of a question ends again after the server did not confirm it: one timer per conversation, like the first. */
+  function armRetry(key: SessionKey, requestId: string): void {
+    clearQuestionSetAsideTimer(key);
+    const kStr = keyToString(key);
+    const timer = setTimeout(() => {
+      timers.delete(kStr);
+      void withThreadLocale(key, () => setPendingQuestionAside(key, requestId))
+        .catch((error) => console.error('[questionSetAside] setting the question aside failed:', error));
+    }, retryDelayMs);
+    timer.unref();
+    timers.set(kStr, timer);
+  }
+
+  /** The bot's copy of a waiting question that the agent's side confirms it holds no such question for: stale, so it ends as «not answered». */
+  async function dropQuestionTheAdapterDoesNotHold(key: SessionKey, pending: PendingQuestionState): Promise<void> {
     console.warn(`[questionSetAside] ${keyToString(key)}: the agent holds no question ${pending.data.requestId}, so there is nothing to set aside; the bot's copy is closed as not answered`);
     clearPendingQuestion(key);
     const question = pending.data.questions[pending.currentIndex];
     if (pending.messageId !== null && question) await closeQuestionMessage(key, pending.messageId, question, 'unanswered');
-    return false;
   }
 
   /**
@@ -217,8 +288,7 @@ export function createQuestionSetAside(ports: QuestionSetAsidePorts) {
     const target = getSetAsideAnswerTarget(record);
     if (record.messageId === null || !target) return;
     const note = withThreadLocale(key, () => t('agent.question_set_aside_note'));
-    const keyboard = buildQuestionOptionsKeyboard(target.question, (optionIndex) => `${setAsideButtonPrefix}${record.id}_${optionIndex}`);
-    const isEdited = await editQuestionMessageWithNote(key, record.messageId, target.question, note, keyboard);
+    const isEdited = await editQuestionMessageWithNote(key, record.messageId, target.question, note, buildSetAsideKeyboard(record, target.question));
     if (!isEdited) console.warn(`[questionSetAside] the note could not be written under the question (record ${record.id})`);
   }
 
@@ -227,7 +297,7 @@ export function createQuestionSetAside(ports: QuestionSetAsidePorts) {
    * such a message (its edit to the set-aside look never landed) must never answer the question the agent asks next.
    */
   function checkIsSetAsideQuestionMessage(key: SessionKey, messageId: number): boolean {
-    return (getState().getSetAsideQuestions()[keyToString(key)] ?? []).some((record) => checkIsSetAsideRecordMessage(record, messageId));
+    return getSetAsideRecords(key).some((record) => checkIsSetAsideRecordMessage(record, messageId));
   }
 
   /**
@@ -244,23 +314,19 @@ export function createQuestionSetAside(ports: QuestionSetAsidePorts) {
   // ── a late answer ──
 
   /**
-   * The message context of a late answer a topic member gave: the author mark ahead of the text, so it never reads as the operator's.
-   * Only the mark: the text is the BOT's (`buildLateAnswerPrompt`), and the member's own words in it — the answer — are already made
-   * unable to pass for one of the bot's headers there, so the delivery does not neutralise the whole message as it does a member's
-   * free text (it would turn the bot's own «[Late answer …]» header into «\\[Late answer …]»).
+   * Who answered, as the agent must read it: the description of a topic member (`topic member "Tess Talker" (@tess)`), `undefined`
+   * for the operator. The late-answer message is the BOT's block — a member's author mark ahead of it would end at its own header
+   * («everything after it up to the next line that starts with `[` is theirs»), so the attribution travels INSIDE each answer, as
+   * it does for the answer to a waiting question.
    */
-  function getAnsweringMemberContext(from: User): MessageContext {
-    return { block: getTelegramTalkerContext(from).block, isForwarded: false };
+  function getAnsweringMember(from: User | undefined, role: 'admin' | 'talker'): string | undefined {
+    return role === 'talker' && from ? getTelegramTalkerContext(from).nonOperatorSender : undefined;
   }
 
   /** The records whose last answer is on its way to the agent: a second tap on one of them answers nothing. */
   const answeringRecords = new Set<string>();
 
-  function getSetAsideRecords(key: SessionKey): SetAsideQuestionRecord[] {
-    return getState().getSetAsideQuestions()[keyToString(key)] ?? [];
-  }
-
-  /** The late answers of a record — the questions from `lateFromIndex` on — with the one given now. */
+  /** The late answers of a record — the questions from `lateFromIndex` on — with the one given now (already attributed, like the kept ones). */
   function buildLateEntries(record: SetAsideQuestionRecord, questionIndex: number, answer: string[]): [LateAnswerEntry, ...LateAnswerEntry[]] {
     const [first, ...rest] = record.questions.slice(record.lateFromIndex).map((question, offset): LateAnswerEntry => {
       const index = record.lateFromIndex + offset;
@@ -270,44 +336,56 @@ export function createQuestionSetAside(ports: QuestionSetAsidePorts) {
     return [first, ...rest];
   }
 
-  /** What became of a late answer: it reached the agent (`answered`), it is kept for the questions still open (`collected`), the conversation has no session to take it (`noSession`), or the question is not open any more (`gone`). */
-  type LateAnswerOutcome = 'answered' | 'collected' | 'noSession' | 'gone';
+  /**
+   * What became of a late answer: it reached the agent (`answered`), it is kept for the questions still open (`collected`), the
+   * conversation has no session to take it (`noSession`), the next question of the call could not be posted so the answer was not
+   * taken (`notPosted`), or the question is not the open one any more (`gone`).
+   */
+  type LateAnswerOutcome = 'answered' | 'collected' | 'noSession' | 'notPosted' | 'gone';
 
   /**
-   * @description Give the answer `answer` to the first question still open of the set-aside record `recordId`. The record's questions
-   * are answered in order, as on screen:
-   *  - while another question of the record is still open the answer is KEPT, its message closes with «✅ Answer: …» and the next
-   *    question is posted as a message of its own with the set-aside look (the agent hears nothing yet);
+   * @description Give the answer `answer` to the question `target` names of a set-aside record. The record's questions are answered in
+   * order, as on screen:
+   *  - while another question of the record is still open the answer is KEPT: the next question is posted as a message of its own
+   *    with the set-aside look, and only then does the answered question's message close with «✅ Answer: …» (the agent hears
+   *    nothing yet; an answer whose next question could not be posted is not taken);
    *  - the last one sends ONE late-answer message with every late answer to the agent (`deliverLateAnswer`); only once it reached
    *    a session is the record over — its message closes with the answer, its pin is released. A conversation with no session to
    *    take it leaves the record open.
-   * Resolves the outcome and whether the topic now shows the whole answer (the question's message was edited to carry it). The
-   * record is read and changed inside the question lifecycle queue, so this orders after a set-aside or a conversation's end in flight.
+   * Everything is decided inside the question lifecycle queue, against the record as it is THEN: an answer meant for a question that
+   * is no longer the open one (two taps made at once, the first of which moved the record on) is `gone`, never given to the next
+   * question. `answeredBy` (see {@link getAnsweringMember}) rides inside the answer. Resolves the outcome and whether the topic now
+   * shows the whole answer (the question's message was edited to carry it).
    */
-  async function giveSetAsideAnswer(key: SessionKey, request: { recordId: string; answer: string[]; messageContext?: MessageContext }): Promise<{ outcome: LateAnswerOutcome; isAnswerShown: boolean }> {
-    const answeringKey = `${keyToString(key)}:${request.recordId}`;
+  async function giveSetAsideAnswer(key: SessionKey, request: { target: LateAnswerTarget; answer: string[]; answeredBy?: string }): Promise<{ outcome: LateAnswerOutcome; isAnswerShown: boolean }> {
+    const { target: meant } = request;
+    const answeringKey = `${keyToString(key)}:${meant.recordId}`;
+    const attributed = request.answeredBy === undefined ? request.answer : getAnswerWithAttribution(request.answer, request.answeredBy);
     const step = await runQuestionLifecycleOp(key, async () => {
-      const record = getSetAsideRecords(key).find((candidate) => candidate.id === request.recordId);
-      const target = record ? getSetAsideAnswerTarget(record) : null;
-      if (!record || !target || answeringRecords.has(answeringKey)) return { kind: 'gone' as const };
-      const isLastOpenQuestion = record.answers.every((answer, index) => answer !== null || index === target.index);
-      if (!isLastOpenQuestion) return { kind: 'collected' as const, isAnswerShown: await collectLateAnswer(key, record, target, request.answer) };
+      const record = getSetAsideRecords(key).find((candidate) => candidate.id === meant.recordId);
+      const open = record ? getSetAsideAnswerTarget(record) : null;
+      if (!record || !open || open.index !== meant.questionIndex || !checkIsSetAsideRecordMessage(record, meant.messageId) || answeringRecords.has(answeringKey)) return { kind: 'gone' as const };
+      const isLastOpenQuestion = record.answers.every((answer, index) => answer !== null || index === open.index);
+      if (!isLastOpenQuestion) {
+        const collected = await collectLateAnswer(key, record, open, request.answer, attributed);
+        return collected === null ? { kind: 'notPosted' as const } : { kind: 'collected' as const, isAnswerShown: collected };
+      }
       answeringRecords.add(answeringKey);
-      return { kind: 'last' as const, record, target };
+      return { kind: 'last' as const, record, open };
     });
-    if (step.kind === 'gone') return { outcome: 'gone', isAnswerShown: false };
+    if (step.kind === 'gone' || step.kind === 'notPosted') return { outcome: step.kind, isAnswerShown: false };
     if (step.kind === 'collected') return { outcome: 'collected', isAnswerShown: step.isAnswerShown };
 
     try {
       const prompt = buildLateAnswerPrompt({
-        entries: buildLateEntries(step.record, step.target.index, request.answer),
+        entries: buildLateEntries(step.record, step.open.index, attributed),
         askedAtMs: step.record.askedAt,
         setAsideAtMs: step.record.setAsideAt,
         nowMs: Date.now(),
       });
-      const delivery = await deliverLateAnswer(key, prompt, request.messageContext);
+      const delivery = await deliverLateAnswer(key, prompt);
       if (delivery === 'noSession') return { outcome: 'noSession', isAnswerShown: false };
-      const isAnswerShown = await runQuestionLifecycleOp(key, () => finishSetAsideRecord(key, step.record, step.target.question, request.answer));
+      const isAnswerShown = await runQuestionLifecycleOp(key, () => finishSetAsideRecord(key, step.record, step.open.question, request.answer));
       return { outcome: 'answered', isAnswerShown };
     } finally {
       answeringRecords.delete(answeringKey);
@@ -324,23 +402,21 @@ export function createQuestionSetAside(ports: QuestionSetAsidePorts) {
   }
 
   /**
-   * One answer of a record with more questions still open: kept in the record, its question's message closes with the answer and
-   * gives up its pin, and the next open question is posted as a message of its own in the set-aside look — buttons, note, pin.
-   * Resolves whether the answered question's message shows the answer.
+   * One answer of a record with more questions still open. The next open question is posted FIRST, as a message of its own in the
+   * set-aside look; only once it is there is the answer kept in the saved record and the answered question's message closed with it
+   * («✅ Answer: …», its pin released, the new message pinned). A post that fails changes nothing — the answer is not taken, the
+   * record stays on this question — and resolves `null`. Otherwise resolves whether the answered question's message shows the answer.
+   * `answer` is the plain one (the note under the question), `attributed` the one the record keeps for the agent.
    */
-  async function collectLateAnswer(key: SessionKey, record: SetAsideQuestionRecord, target: { index: number; question: OpenCodeQuestion }, answer: string[]): Promise<boolean> {
+  async function collectLateAnswer(key: SessionKey, record: SetAsideQuestionRecord, open: { index: number; question: OpenCodeQuestion }, answer: string[], attributed: string[]): Promise<boolean | null> {
     const answers = record.answers.slice();
-    answers[target.index] = answer;
-    let isAnswerShown = false;
-    if (record.messageId !== null) {
-      isAnswerShown = await closeQuestionMessage(key, record.messageId, target.question, { answer: answer.join(', ') });
-      await unpinMessage(key, record.messageId);
+    answers[open.index] = attributed;
+    const nextQuestion = record.questions[answers.findIndex((candidate) => candidate === null)];
+    const nextMessageId = nextQuestion ? await sendQuestionMessage(key, nextQuestion, buildSetAsideKeyboard(record, nextQuestion)) : null;
+    if (nextMessageId === null) {
+      console.warn(`[questionSetAside] the next question of record ${record.id} could not be posted; the answer was not taken`);
+      return null;
     }
-    const nextIndex = answers.findIndex((candidate) => candidate === null);
-    const nextQuestion = record.questions[nextIndex];
-    const nextMessageId = nextQuestion
-      ? await sendQuestionMessage(key, nextQuestion, buildQuestionOptionsKeyboard(nextQuestion, (optionIndex) => `${setAsideButtonPrefix}${record.id}_${optionIndex}`))
-      : null;
     // The record keeps what it needs for the questions left: the first message of the answered question is not theirs.
     const updated: SetAsideQuestionRecord = {
       id: record.id,
@@ -352,42 +428,55 @@ export function createQuestionSetAside(ports: QuestionSetAsidePorts) {
       setAsideAt: record.setAsideAt,
     };
     await getState().setSetAsideQuestions(key, getSetAsideRecords(key).map((candidate) => (candidate.id === record.id ? updated : candidate)));
-    if (nextMessageId !== null) {
-      await pinMessageSilently(key, nextMessageId);
-      await showQuestionSetAside(key, updated);
-    } else {
-      console.warn(`[questionSetAside] the next question of record ${record.id} could not be posted`);
+    let isAnswerShown = false;
+    if (record.messageId !== null) {
+      isAnswerShown = await closeQuestionMessage(key, record.messageId, open.question, { answer: answer.join(', ') });
+      await unpinMessage(key, record.messageId);
     }
+    await pinMessageSilently(key, nextMessageId);
+    await showQuestionSetAside(key, updated);
     return isAnswerShown;
+  }
+
+  /** What the topic is told when an answer was not taken: the question is no longer open, or the next question could not be posted. */
+  async function tellAnswerNotTaken(key: SessionKey, outcome: 'gone' | 'notPosted'): Promise<void> {
+    await replyToThread(key, withThreadLocale(key, () => t(outcome === 'gone' ? 'agent.set_aside_question_gone_notice' : 'agent.set_aside_next_question_failed_notice')));
   }
 
   /**
    * @description A tap on a button of a set-aside question (`qs_<record id>_<option index>`). A topic member may answer the agent's
    * question, as for a waiting one (the speaker gate, not the admin one). The tap must be on the message of the question that is
    * open NOW — a button left on a message that carries a result, or on one of another record, answers nothing — and the toast is
-   * the label (the closed question carries it whole).
+   * the label (the closed question carries it whole). The answer is meant for the question it was tapped on: one that is no longer
+   * the open one by the time it is taken (a double tap) is not given to the next.
    */
   async function handleSetAsideTap(ctx: Context, recordId: string, optionIndex: number): Promise<void> {
     const speaker = await authoriseSpeaker(ctx);
     if (!speaker) { await ctx.answerCbQuery(t('cb.access_denied')); return; }
     const { key } = speaker;
     const record = getSetAsideRecords(key).find((candidate) => candidate.id === recordId);
-    const target = record ? getSetAsideAnswerTarget(record) : null;
+    const open = record ? getSetAsideAnswerTarget(record) : null;
     const tappedMessageId = getCallbackMessageId(ctx);
-    if (!record || !target || tappedMessageId === null || record.messageId !== tappedMessageId) { await ctx.answerCbQuery(t('cb.no_pending_question')); return; }
-    const label = target.question.options[optionIndex]?.label;
+    if (!record || !open || tappedMessageId === null || record.messageId !== tappedMessageId) { await ctx.answerCbQuery(t('cb.no_pending_question')); return; }
+    const label = open.question.options[optionIndex]?.label;
     if (!label) { await ctx.answerCbQuery(t('cb.invalid_option')); return; }
     const isLabelCut = await answerCallbackWithFittedText(ctx, label);
-    const messageContext = speaker.role === 'talker' && ctx.from ? getAnsweringMemberContext(ctx.from) : undefined;
-    const { outcome, isAnswerShown } = await giveSetAsideAnswer(key, { recordId, answer: [label], messageContext });
+    const { outcome, isAnswerShown } = await giveSetAsideAnswer(key, {
+      target: { recordId, questionIndex: open.index, messageId: tappedMessageId },
+      answer: [label],
+      answeredBy: getAnsweringMember(ctx.from, speaker.role),
+    });
+    if (outcome === 'gone' || outcome === 'notPosted') await tellAnswerNotTaken(key, outcome);
     // The closed question carries the whole label; one that could not be edited does not, and a toast cut it.
-    if (outcome === 'answered' && !isAnswerShown && isLabelCut) await replyToThread(key, label);
+    else if (outcome === 'answered' && !isAnswerShown && isLabelCut) await replyToThread(key, label);
   }
 
   /**
    * @description A text typed as a REPLY to a set-aside question's message (either of its messages, when it was re-posted) is its
    * late answer: a bare option number in range picks that option, any other text is the answer itself. Resolves whether it was taken
-   * as one — otherwise it is an ordinary message. `role`: a topic member's answer reaches the agent under their mark (`from` says who).
+   * as one — otherwise it is an ordinary message. `role`: a topic member's answer reaches the agent as theirs (`from` says who). A
+   * reply that matched a question which is no longer the open one (a second reply made at once, a record closed meanwhile) is
+   * still no ordinary message — it was meant as an answer, so it is answered with a note, never passed on as a prompt or a pick.
    */
   async function answerSetAsideQuestionByReply(from: User | undefined, key: SessionKey, message: SetAsideReplyCandidate, role: 'admin' | 'talker'): Promise<boolean> {
     const replyToMessageId = message.reply_to_message?.message_id ?? null;
@@ -398,9 +487,13 @@ export function createQuestionSetAside(ports: QuestionSetAsidePorts) {
     const route = getQuestionReplyRouteWithSetAside({ text, replyToMessageId, liveQuestion: undefined, setAside, isForwarded: message.isForwarded });
     if (route.kind !== 'answerSetAside') return false;
     await getState().pushMessageId(key, message.message_id);
-    const messageContext = role === 'talker' && from ? getAnsweringMemberContext(from) : undefined;
-    const { outcome } = await giveSetAsideAnswer(key, { recordId: route.recordId, answer: route.answer, messageContext });
-    return outcome !== 'gone';
+    const { outcome } = await giveSetAsideAnswer(key, {
+      target: { recordId: route.recordId, questionIndex: route.questionIndex, messageId: replyToMessageId },
+      answer: route.answer,
+      answeredBy: getAnsweringMember(from, role),
+    });
+    if (outcome === 'gone' || outcome === 'notPosted') await tellAnswerNotTaken(key, outcome);
+    return true;
   }
 
   /** Register the buttons of a set-aside question (`qs_<record id>_<option index>`), disjoint from the live (`qa_`) and re-asked (`reask_`) ones. */
@@ -432,6 +525,7 @@ export function createQuestionSetAside(ports: QuestionSetAsidePorts) {
     checkIsSetAsideQuestionMessage,
     registerQuestionSetAsideCallbacks,
     answerSetAsideQuestionByReply,
+    giveSetAsideAnswer,
     closeSetAsideQuestions,
   };
 }

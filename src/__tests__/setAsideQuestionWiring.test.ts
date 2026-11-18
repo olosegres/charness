@@ -58,7 +58,29 @@ test('the buttons of a set-aside question are registered once, beside the compac
 
 test('a late answer is delivered without the free-text route of a waiting question: it cancels none and aborts no turn', () => {
   const late = getFunctionBody('deliverLateAnswerPrompt');
-  assert.match(late, /deliverPromptByState\(\s*key\s*,\s*getThreadAdapter\(key\)\s*,\s*text\s*,\s*null\s*,\s*undefined\s*,\s*messageContext\s*\)/, 'no request opened for it, the topic member\'s mark rides along');
+  assert.match(late, /deliverPromptByState\(\s*key\s*,\s*getThreadAdapter\(key\)\s*,\s*text\s*,\s*null\s*\)/, 'no request opened for it, and no message context: a member\'s attribution travels inside the answer');
   assert.doesNotMatch(late, /cancelPendingQuestionAndForward|checkIsWedgedOnQuestion|pendingQuestions/);
   assert.doesNotMatch(getFunctionBody('deliverPromptByState'), /cancelPendingQuestionAndForward|checkIsWedgedOnQuestion/);
+});
+
+test('a backend switch closes the set-aside questions only when the operator chose it: an AUTOMATIC usage-limit fallback keeps the conversation, parked and bridged', () => {
+  assert.match(getFunctionBody('switchThreadAdapter'), /if\s*\(options\.isConversationKept\s*!==\s*true\)\s*closeSetAsideQuestionsInBackground\(key\)/);
+  assert.match(getFunctionBody('moveTopicToOtherBackend'), /switchThreadAdapter\([^;]*,\s*options\)/, 'the flag is handed on');
+  assert.match(getFunctionBody('switchTopicToFallbackEntry'), /moveTopicToOtherBackend\([^;]*\{\s*isConversationKept:\s*options\.isAutomatic\s*===\s*true\s*\}\)/);
+  // The automatic callers say so …
+  assert.match(botSource, /resumeOnRung:[^}]*switchTopicToFallbackEntry\(key,\s*from,\s*rung,\s*\{\s*isAnnounced:\s*true,\s*isAutomatic:\s*true\s*\}\)/s, 'the wait that ends on another rung');
+  assert.equal(botSource.match(/switchTopicToFallbackEntry\(key,\s*plan\.from,\s*to,\s*\{\s*isAnnounced:\s*true,\s*isAutomatic:\s*true\s*\}\)/g)?.length, 2, 'the two auto-switch paths');
+  // … and an operator's own move (a pick, a tapped offer, `/claude` · `/opencode`) does not.
+  assert.equal(botSource.match(/await switchTopicToFallbackEntry\([^)]*isAutomatic/g)?.length, 3, 'three automatic callers, no more');
+  assert.doesNotMatch(getFunctionBody('executeBackendSwitch'), /isConversationKept/, 'the operator\'s manual switch ends the conversation it leaves');
+});
+
+test('a reply to a message other than the question that waits is no pick for it and cancels nothing', () => {
+  const active = getFunctionBody('deliverActivePrompt');
+  assert.match(active, /replyToMessageId\s*!=\s*null\s*&&\s*replyToMessageId\s*!==\s*pending\.messageId\s*&&\s*replyToMessageId\s*!==\s*pending\.originalMessageId/);
+  assert.ok(active.indexOf('replyToMessageId !== pending.originalMessageId') < active.indexOf('getQuestionReplyRoute(text, currentQuestion)'), 'decided before the digit is read');
+  assert.ok(active.indexOf('replyToMessageId !== pending.originalMessageId') < active.indexOf('cancelPendingQuestionAndForward('), 'and before the question is cancelled');
+  const handler = getSourceSlice("bot.on(message('text'), async (ctx) => {", "//  Voice message handler");
+  assert.equal(handler.match(/deliverActivePrompt\([^;]*\{\s*replyToMessageId:\s*ctx\.message\.reply_to_message\?\.message_id\s*\}\)/g)?.length, 2, 'the operator\'s two routes');
+  assert.equal(getFunctionBody('handleTalkerText').match(/deliverActivePrompt\([^;]*\{\s*replyToMessageId:\s*ctx\.message\.reply_to_message\?\.message_id\s*\}\)/g)?.length, 2, 'and a topic member\'s');
 });

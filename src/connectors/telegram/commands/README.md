@@ -242,6 +242,10 @@ the topic. The pieces:
   reads that map, leaves the message alone), becomes a `SetAsideQuestionRecord` of `state.json` `setAsideQuestions` (at most
   `maxSetAsideQuestions`; a further one closes the oldest as «not answered» and unpins it) and its message is EDITED, not re-posted: a note under
   the options (`agent.question_set_aside_note`) and the same option buttons, whose data is `qs_<record id>_<option index>`.
+- **The bot holds the question and the adapter says it holds none** (at the end of the wait): json-stream — the CLI's own question is the authority, so the
+  bot's copy is stale and closes as «not answered» with one log line; OpenCode — the adapter only caches the server's registry, so the server is asked
+  (`resyncOpenQuestion`): it holds the question → set aside after all; it confirms none → closed as above; it cannot be read → nothing closes, one log line,
+  and the wait ends again after `setAsideRetryDelayMs`, at most `setAsideRetryLimit` times.
 - **The pin stays** and belongs to the record: `releasePendingQuestionToSetAside` (`bot.ts`) drops the map entry that tracks «the pinned question»
   WITHOUT unpinning, so the pin of the question the agent asks next neither retires it nor counts as a re-pin (silent). A record's pin is released
   when the record closes.
@@ -258,12 +262,19 @@ the topic. The pieces:
   set-aside look; the last one sends ONE late-answer message (`buildLateAnswerPrompt`, listing the answers from `lateFromIndex` on) through
   `deliverLateAnswerPrompt` (`bot.ts`: buffered behind a start, waking a sleeping conversation, or written to the live session — NOT through the free-text
   route of a waiting question, so it never cancels one the agent asks next), and only once it reached a session is the record over (its message closes with
-  the answer, its pin goes); a conversation with no session leaves it open. A topic member's answer carries their author mark and nothing else
-  (the text is the bot's, so it is not neutralised as the member's own words are).
+  the answer, its pin goes); a conversation with no session leaves it open. A topic member's answer says who gave it INSIDE the `Answer:` line
+  (`getAnswerWithAttribution`, as the answer to a waiting question does) — never as an author mark ahead of the message, which would end at the
+  bot's own `[Late answer …]` header. Each answer is meant for the question it was tapped or replied to on (`LateAnswerTarget`: record, question
+  index, message): checked again inside the lifecycle queue, so a double tap on a call with several questions answers the first once and the
+  second is `gone` — told «already answered or closed» — never given to the next question. The next question of a call is posted BEFORE the answered
+  one closes; a post that fails takes nothing (the record stays on its question, the owner is told to try again). A reply to a message other than the
+  question that waits NOW is no pick for it and cancels nothing (`deliverActivePrompt`, `replyToMessageId`).
 - **Ends**: the release of a conversation's ids (`/new`, `/quit`, `/quitall`, leaving the folder), a switch to another backend or conversation, and a
   boot that finds the conversation released (not active, no saved id) close every open record as «not answered» and release the pins
   (`closeSetAsideQuestions`, in the lifecycle queue: after a set-aside in flight, so none is saved for a conversation that is gone; the list is emptied
-  first, so a late tap finds nothing). The idle stop, a suspend and an unexpected exit do NOT: the conversation is still there and a late answer wakes it.
+  first, so a late tap finds nothing). The idle stop, a suspend and an unexpected exit do NOT: the conversation is still there and a late answer wakes it
+  — nor does an AUTOMATIC usage-limit fallback across backends (`switchTopicToFallbackEntry` `isAutomatic` → `isConversationKept`): it parks the conversation
+  and bridges its context, so the records stay open and a late answer goes to the one now running; a switch the operator chose ends them.
 
 ## `autoContinueLimits.ts`
 

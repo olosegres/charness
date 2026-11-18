@@ -1317,6 +1317,15 @@ export interface AgentAdapter extends EventEmitter {
   setQuestionAside?(key: SessionKey, requestId: string, text: string, givenAnswers: (string[] | null)[]): boolean;
 
   /**
+   * @description Re-read the backend's OWN registry of open questions for this session into the adapter's, and say what it holds:
+   * `held` — a question is open there (the adapter now holds it, so {@link setQuestionAside} can act); `none` — the registry says
+   * there is none; `unknown` — it could not be read, or the adapter has no live session to ask for (a replacement may be under way).
+   * Only for a backend whose adapter merely CACHES such a registry (OpenCode: the server's `GET /question`); one that is itself the
+   * authority on what it waits on (Claude json-stream: the CLI's blocked `can_use_tool`, saved beside the session) has none.
+   */
+  resyncOpenQuestion?(key: SessionKey): Promise<'held' | 'none' | 'unknown'>;
+
+  /**
    * @description Whether this session's turn is wedged behind an open
    * interactive question (the agent's `question` tool is blocking the turn and
    * the bot has no `pendingQuestions` entry to break out with). OpenCode-only:

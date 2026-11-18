@@ -272,6 +272,8 @@ export const kaDict: Record<string, string> = {
   'agent.question_unanswered_note': '❌ უპასუხოდ დარჩა',
   'agent.question_asked_again_note': '↓ ხელახლა დასმულია ქვემოთ',
   'agent.question_set_aside_note': '⏸ აგენტმა თქვენი პასუხის გარეშე გააგრძელა — შეგიძლიათ ახლაც უპასუხოთ',
+  'agent.set_aside_question_gone_notice': 'ეს კითხვა უკვე პასუხგაცემულია ან დახურულია — აგენტს არაფერი გაგზავნილა.',
+  'agent.set_aside_next_question_failed_notice': 'შემდეგი კითხვა ვერ გამოქვეყნდა, ამიტომ თქვენი პასუხი არ მიღებულა — სცადეთ ხელახლა.',
   'agent.login_code_relayed': '🔐 შესვლის კოდი გადაგზავნილია Claude-სთვის — ტოკენის შეტყობინება ისტორიიდან წაშლილია.',
   'agent.login_url': '🔐 Claude-ში შესასვლელად გახსენით ეს ბმული, დაასრულეთ შესვლა და ჩასვით კოდი აქ:\n{url}',
   'agent.login_success': '✅ Claude-ში შესვლა შესრულდა.',

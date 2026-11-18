@@ -297,4 +297,64 @@ describe('OpenCode: setQuestionAside replies with the text as the custom answer 
     }
     assert.deepEqual(errors.map((error) => error.message), ['server gone']);
   });
+
+  describe('resyncOpenQuestion — what the server holds, when the adapter\'s own copy is only a cache', () => {
+    function createAdapterThatLostTheQuestion(response: unknown): { adapter: OpenCodeAdapter; apiCalls: Array<{ method: string; urlPath: string }> } {
+      const adapter = new OpenCodeAdapter();
+      adapter['sessions'].set(keyToString(key), createOpenCodeSessionFixture({ key, sessionId: 'ses_set_aside', workDir: '/tmp/work-set-aside', isModelInfoShown: true }));
+      const apiCalls: Array<{ method: string; urlPath: string }> = [];
+      adapter['apiRequest'] = (async (method: string, urlPath: string) => {
+        apiCalls.push({ method, urlPath });
+        if (response instanceof Error) throw response;
+        return response;
+      }) as OpenCodeAdapter['apiRequest'];
+      return { adapter, apiCalls };
+    }
+
+    const serverEntry = [{ id: requestId, sessionID: 'ses_set_aside', questions: twoQuestions }];
+
+    it('held: the question the server has open is read into the adapter — and then it CAN be set aside', async () => {
+      const { adapter, apiCalls } = createAdapterThatLostTheQuestion(serverEntry);
+      assert.equal(adapter.setQuestionAside(key, requestId, 'set aside', [null, null]), false, 'precondition: the adapter does not know the question');
+
+      assert.equal(await adapter.resyncOpenQuestion(key), 'held');
+
+      assert.deepEqual(apiCalls, [{ method: 'GET', urlPath: `/question?directory=${encodeURIComponent('/tmp/work-set-aside')}` }], 'the server is asked for this session\'s instance');
+      assert.equal(getOpenCodeSession(adapter, keyToString(key)).pendingQuestion?.requestId, requestId);
+      assert.equal(adapter.setQuestionAside(key, requestId, 'set aside', [null, null]), true);
+      assert.equal(apiCalls.at(-1)?.urlPath, `/question/${requestId}/reply?directory=${encodeURIComponent('/tmp/work-set-aside')}`);
+    });
+
+    it('held emits nothing: the bot that asks already holds the question', async () => {
+      const { adapter } = createAdapterThatLostTheQuestion(serverEntry);
+      const emitted: string[] = [];
+      adapter.on('question', () => emitted.push('question'));
+
+      await adapter.resyncOpenQuestion(key);
+
+      assert.deepEqual(emitted, []);
+    });
+
+    it('none: the server has no question of this session (another session\'s question is not this one\'s)', async () => {
+      assert.equal(await createAdapterThatLostTheQuestion([]).adapter.resyncOpenQuestion(key), 'none');
+      assert.equal(await createAdapterThatLostTheQuestion([{ id: 'que_other', sessionID: 'ses_other', questions: twoQuestions }]).adapter.resyncOpenQuestion(key), 'none');
+    });
+
+    it('unknown: the read failed, the answer is not a list, or the session is not active (a replacement may be under way) — never «none»', async () => {
+      const originalWarn = console.warn;
+      console.warn = () => {};
+      try {
+        assert.equal(await createAdapterThatLostTheQuestion(new Error('server busy')).adapter.resyncOpenQuestion(key), 'unknown');
+      } finally {
+        console.warn = originalWarn;
+      }
+      assert.equal(await createAdapterThatLostTheQuestion({ not: 'a list' }).adapter.resyncOpenQuestion(key), 'unknown');
+
+      const inactive = createAdapterThatLostTheQuestion(serverEntry);
+      getOpenCodeSession(inactive.adapter, keyToString(key)).isActive = false;
+      assert.equal(await inactive.adapter.resyncOpenQuestion(key), 'unknown');
+      assert.deepEqual(inactive.apiCalls, [], 'and the server was not even asked');
+      assert.equal(await new OpenCodeAdapter().resyncOpenQuestion(key), 'unknown', 'no session at all');
+    });
+  });
 });

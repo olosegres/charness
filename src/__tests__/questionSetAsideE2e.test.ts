@@ -509,6 +509,16 @@ describe('A question nobody answers is set aside, end to end: built charness, fa
     const isRecordOpen = (record: SetAsideQuestionRecord): boolean => getSetAsideRecords().some((candidate) => candidate.id === record.id);
     const countSuspendedSessions = (): number => getCharness().output.split(`session ${topicKey} suspended (code=`).length - 1;
 
+    /** A member's late answer: the bot's block leads, and the attribution travels on the `Answer:` line itself. */
+    function assertMemberAnswer(prompt: FakeClaudePrompt, answer: string): void {
+      const lines = prompt.text.split('\n');
+      const headerIndex = lines.findIndex((line) => line.startsWith(lateAnswerHeader));
+      assert.notEqual(headerIndex, -1, prompt.text);
+      assert.ok(lines.slice(0, headerIndex).every((line) => !line.startsWith('[Message from')), `no author mark stands ahead of the bot's header, whose scope it would end at: ${prompt.text}`);
+      assert.ok(prompt.text.includes(`Answer: ${answer} (answered by topic member "Tess Talker" (@tess), not the operator)\n`), `the attribution is inside the answer: ${prompt.text}`);
+      assert.ok(!prompt.text.includes(talkerMark), 'the member\'s mark line is not used for it');
+    }
+
     async function waitForNewLatePrompt(promptsBefore: number): Promise<FakeClaudePrompt> {
       await getCharness().waitFor('the late answer to reach the agent', setAsideTimeoutMs, () => getLatePrompts().length > promptsBefore);
       return getLatePrompts()[promptsBefore];
@@ -595,7 +605,7 @@ describe('A question nobody answers is set aside, end to end: built charness, fa
       await getCharness().waitFor('the record to be gone', replyTimeoutMs, () => !isRecordOpen(record));
     });
 
-    it('a topic member answers a set-aside question by a tap and by a reply: each reaches the agent under their mark, never as the operator\'s answer', async () => {
+    it('a topic member answers a set-aside question by a tap and by a reply: each says who gave it INSIDE the answer, and no author mark stands ahead of the bot\'s block', async () => {
       const promptsBefore = getLatePrompts().length;
       const { question: tapped, record: tappedRecord } = await askAndWaitForSetAside('LATE-8');
       const answersBefore = fakeTelegram.callbackAnswers.length;
@@ -603,16 +613,71 @@ describe('A question nobody answers is set aside, end to end: built charness, fa
       await getCharness().waitFor('the member\'s tap to be answered', replyTimeoutMs, () => fakeTelegram.callbackAnswers.length > answersBefore);
       assert.equal(fakeTelegram.callbackAnswers[answersBefore], fakeAskQuestion.shortOptionLabel, 'a tap on a set-aside question\'s button is one a member may make');
       const tapPrompt = await waitForNewLatePrompt(promptsBefore);
-      assert.ok(tapPrompt.text.includes(`${talkerMark}\n\n${lateAnswerHeader}`), `the member\'s answer carries their mark: ${tapPrompt.text}`);
-      assert.ok(tapPrompt.text.includes(`Answer: ${fakeAskQuestion.shortOptionLabel}\n`));
+      assertMemberAnswer(tapPrompt, fakeAskQuestion.shortOptionLabel);
       await topic.waitForMessageText('the answer under the question', tapped, (text) => text.endsWith(`\n\n${buildAnsweredNote(fakeAskQuestion.shortOptionLabel)}`));
 
       const { question: replied } = await askAndWaitForSetAside('LATE-9');
       fakeTelegram.pushUserMessage(topicThreadId, 'The member says: wait for the review', topicTalker, { replyToMessageId: replied.message_id });
       const replyPrompt = await waitForNewLatePrompt(promptsBefore + 1);
-      assert.ok(replyPrompt.text.includes(`${talkerMark}\n\n${lateAnswerHeader}`), `and so does their reply: ${replyPrompt.text}`);
-      assert.ok(replyPrompt.text.includes('Answer: The member says: wait for the review\n'));
+      assertMemberAnswer(replyPrompt, 'The member says: wait for the review');
       await topic.waitForMessageText('the answer under the replied question', replied, (text) => text.endsWith(`\n\n${buildAnsweredNote('The member says: wait for the review')}`));
+    });
+
+    it('a late answer given while the agent waits on a NEW question cancels nothing: that question keeps waiting, pinned and answerable, and the late answer is read only once it is resolved', async () => {
+      const lateBefore = getLatePrompts().length;
+      const { question: first, record } = await askAndWaitForSetAside('LATE-10');
+      const responsesBefore = getControlResponses().length;
+      const interruptsBefore = getControlRequests().filter((request) => request.subtype === 'interrupt').length;
+      const second = await askQuestion('LATE-11');
+      await waitForPinned(second);
+      assert.ok(readPersistedState(getLayout()).pendingQuestions?.[topicKey], 'precondition: the new question waits');
+
+      assert.equal(await topic.tapAndAwaitAnswer(first, `qs_${record.id}_0`), fakeAskQuestion.shortOptionLabel);
+      const prompt = await waitForNewLatePrompt(lateBefore);
+      assert.ok(prompt.text.includes(`Answer: ${fakeAskQuestion.shortOptionLabel}\n`), 'the late answer reached the agent\'s input');
+      await topic.waitForMessageText('the answer under the old question', first, (text) => text.endsWith(`\n\n${buildAnsweredNote(fakeAskQuestion.shortOptionLabel)}`));
+
+      // Load-bearing: the question that waits was not touched — nothing was told to the agent about it, no interrupt, no notice.
+      assert.equal(getControlResponses().length, responsesBefore, 'the agent heard nothing about the new question');
+      assert.equal(getControlRequests().filter((request) => request.subtype === 'interrupt').length, interruptsBefore, 'no interrupt was sent');
+      assert.ok(topic.listMessages().every((message) => !message.text.includes(enDict['agent.question_cancelled_for_prompt'])), 'and no «question cancelled» notice was posted');
+      assert.ok(readPersistedState(getLayout()).pendingQuestions?.[topicKey], 'the new question is still saved as waiting');
+      assert.deepEqual(topic.getKeyboardData(readKeptMessage(second)), [['qa_0_0'], ['qa_0_1']], 'with its own buttons');
+      assert.ok(fakeTelegram.listPinnedMessageIds().includes(second.message_id), 'and its pin');
+      // The agent is blocked on that question, so it cannot read the late answer yet.
+      assert.ok(!topic.listMessages().some((message) => message.message_id > second.message_id && message.text.includes('Working on unknown.')), 'the late answer is not read while the question waits');
+
+      // The new question is answered by its own button; only then does the agent get to the late answer.
+      await topic.tapAndAwaitAnswer(second, 'qa_0_0');
+      await topic.waitForMessageText('the answer under the new question', second, (text) => text.endsWith(buildAnsweredNote(fakeAskQuestion.shortOptionLabel)));
+      await waitingTopic.waitForMessage('the agent reading the late answer after it', (message) => message.message_id > second.message_id && message.text.includes('Working on unknown.'));
+    });
+
+    it('a number typed as a reply to the message of a question that is CLOSED answers nothing: the question that waits keeps waiting and the reply is an ordinary prompt', async () => {
+      const { question: closed, record } = await askAndWaitForSetAside('LATE-12');
+      assert.equal(await topic.tapAndAwaitAnswer(closed, `qs_${record.id}_0`), fakeAskQuestion.shortOptionLabel);
+      await topic.waitForMessageText('the answer under the question', closed, (text) => text.endsWith(`\n\n${buildAnsweredNote(fakeAskQuestion.shortOptionLabel)}`));
+      await waitingTopic.waitForMessage('the agent reading the late answer', (message) => message.message_id > closed.message_id && message.text.includes('Working on unknown.'));
+
+      const waiting = await askQuestion('LATE-13');
+      await waitForPinned(waiting);
+      const responsesBefore = getControlResponses().length;
+      const interruptsBefore = getControlRequests().filter((request) => request.subtype === 'interrupt').length;
+      const promptsBefore = getAgentPrompts('\n\n2').length;
+
+      fakeTelegram.pushOperatorMessage(topicThreadId, '2', { replyToMessageId: closed.message_id });
+      await getCharness().waitFor('the reply to reach the agent as a prompt', replyTimeoutMs, () => getAgentPrompts('\n\n2').length > promptsBefore);
+
+      // Load-bearing: «2» did not pick option 2 of the question that waits, and did not cancel it.
+      assert.equal(getControlResponses().length, responsesBefore, 'the agent heard nothing about the waiting question');
+      assert.equal(getControlRequests().filter((request) => request.subtype === 'interrupt').length, interruptsBefore, 'no interrupt');
+      assert.ok(readPersistedState(getLayout()).pendingQuestions?.[topicKey], 'the question still waits');
+      assert.deepEqual(topic.getKeyboardData(readKeptMessage(waiting)), [['qa_0_0'], ['qa_0_1']], 'with its buttons');
+      assert.ok(topic.listMessages().every((message) => !message.text.includes(enDict['agent.question_cancelled_for_prompt'])), 'and nothing was cancelled');
+
+      // A reply to the question that DOES wait is a pick, as ever.
+      fakeTelegram.pushOperatorMessage(topicThreadId, '1', { replyToMessageId: waiting.message_id });
+      await topic.waitForMessageText('the pick under the waiting question', waiting, (text) => text.endsWith(buildAnsweredNote(fakeAskQuestion.shortOptionLabel)));
     });
 
     it('a tap on a question whose conversation sleeps wakes it: the late answer reaches the RESUMED process', async () => {
@@ -676,6 +741,22 @@ describe('A question nobody answers is set aside, end to end: built charness, fa
       await getCharness().waitFor('the pin to be released', replyTimeoutMs, () => !fakeTelegram.listPinnedMessageIds().includes(kept.message_id));
       await getCharness().waitFor('the record to be gone', replyTimeoutMs, () => !isRecordOpen(keptRecord));
       assert.equal(await topic.tapAndAwaitAnswer(kept, `qs_${keptRecord.id}_0`), enDict['cb.no_pending_question'], 'a tap on its old button answers nothing');
+    });
+
+    it('a switch to another backend the operator chose ends the conversation: the open set-aside question ends as «not answered», its pin is released', async () => {
+      // The conversation the step before released has no agent: a fresh one is started for the question.
+      await topic.sendAndAwaitReply('/claude', 'ready in');
+      const { question, record } = await askAndWaitForSetAside('LATE-14');
+      await getCharness().waitFor('the agent to go on', setAsideTimeoutMs, () => topic.listMessages().some((message) => message.message_id > question.message_id && message.text.includes(fakeAskSetAsideTurnText)));
+      assert.ok(fakeTelegram.listPinnedMessageIds().includes(question.message_id), 'precondition: the question is open and pinned');
+
+      await topic.sendAndAwaitReply('/terminal', 'Terminal ready');
+
+      await topic.waitForMessageText('the note under the question of the conversation that was left', question, (text) => text.endsWith(`\n\n${unansweredNote}`));
+      assert.equal(readKeptMessage(question).reply_markup, undefined, 'its buttons are gone');
+      await getCharness().waitFor('the pin to be released', replyTimeoutMs, () => !fakeTelegram.listPinnedMessageIds().includes(question.message_id));
+      await getCharness().waitFor('the record to be gone', replyTimeoutMs, () => !isRecordOpen(record));
+      assert.equal(await topic.tapAndAwaitAnswer(question, `qs_${record.id}_0`), enDict['cb.no_pending_question'], 'a tap on its old button answers nothing');
     });
   });
 });

@@ -2500,7 +2500,7 @@ const apiRetryKickDeps: ApiRetryKickDeps = {
   resumeOnRung: async (key, rung) => {
     const from = getTopicFallbackPosition(key);
     if (from !== null && checkIsSameFallbackAccount(from, rung)) return false; // already there
-    const outcome = await switchTopicToFallbackEntry(key, from, rung, { isAnnounced: true });
+    const outcome = await switchTopicToFallbackEntry(key, from, rung, { isAnnounced: true, isAutomatic: true });
     return outcome.isSwitched;
   },
   clearSavedRetry: clearSavedApiRetry,
@@ -2560,7 +2560,7 @@ async function announceUsageLimitOrSwitch(
   }
   if (plan.action === 'auto') {
     const to = plan.to;
-    const outcome = await switchTopicToFallbackEntry(key, plan.from, to, { isAnnounced: true }).catch((e) => {
+    const outcome = await switchTopicToFallbackEntry(key, plan.from, to, { isAnnounced: true, isAutomatic: true }).catch((e) => {
       console.warn(`[fallback] ${keyToString(key)}: the auto-switch to ${formatFallbackEntry(to)} failed:`, e instanceof Error ? e.message : e);
       return { isSwitched: false };
     });
@@ -2632,7 +2632,7 @@ async function handleBalanceExhausted(key: SessionKey, cls: AgentApiErrorClass):
   if (plan.action === 'auto') {
     const to = plan.to;
     await replyToThread(key, notice);
-    const outcome = await switchTopicToFallbackEntry(key, plan.from, to, { isAnnounced: true }).catch((e) => {
+    const outcome = await switchTopicToFallbackEntry(key, plan.from, to, { isAnnounced: true, isAutomatic: true }).catch((e) => {
       console.warn(`[fallback] ${k}: the auto-switch to ${formatFallbackEntry(to)} failed:`, e instanceof Error ? e.message : e);
       return { isSwitched: false };
     });
@@ -5355,7 +5355,7 @@ function closeSetAsideQuestionsInBackground(key: SessionKey): void {
  * Resolves the work the stop cut off that the agent's next prompt is told about (`null`: none), so a caller's line to
  * the operator is derived from the very record the note lists.
  */
-async function switchThreadAdapter(key: SessionKey, newName: string): Promise<LostWork | null> {
+async function switchThreadAdapter(key: SessionKey, newName: string, options: { isConversationKept?: boolean } = {}): Promise<LostWork | null> {
   const prevName = getThreadAdapterNameRaw(key);
   // Another agent or a shell takes the topic over: the open request belonged to
   // the old conversation, so it closes silently instead of a later wake-up
@@ -5364,8 +5364,9 @@ async function switchThreadAdapter(key: SessionKey, newName: string): Promise<Lo
     cancelConversationRequest(key);
     // Nor does the conversation left behind get its re-asked question answered: its buttons would send the label into the new one.
     closeReAskedQuestion(key);
-    // The same for the questions it had set aside.
-    closeSetAsideQuestionsInBackground(key);
+    // The same for the questions it had set aside — unless the bot moved the conversation itself (an automatic usage-limit
+    // fallback): it parks the conversation and bridges its context, so a late answer goes to the one now running.
+    if (options.isConversationKept !== true) closeSetAsideQuestionsInBackground(key);
   }
   let switchCutOffWork: LostWork | null = null;
   if (prevName && prevName !== newName) {
@@ -6506,7 +6507,7 @@ const {
   unpinMessage: unpinMessageQuiet,
   pinMessageSilently: (key, messageId) => pinMessageQuiet(key, messageId, { disableNotification: true }),
   sendQuestionMessage,
-  deliverLateAnswer: (key, text, messageContext) => withThreadLocale(key, () => deliverLateAnswerPrompt(key, text, messageContext)),
+  deliverLateAnswer: (key, text) => withThreadLocale(key, () => deliverLateAnswerPrompt(key, text)),
   markNeedsNewMessage,
   // The topic's and General's own choices arrive with the setting; until then every topic waits the default.
   getQuestionWaitChoice: () => resolveQuestionWait(undefined, undefined),
@@ -8882,7 +8883,7 @@ async function switchTopicToFallbackEntry(
   key: SessionKey,
   from: FallbackChainEntry | null,
   to: FallbackChainEntry,
-  options: { isAnnounced: boolean },
+  options: { isAnnounced: boolean; isAutomatic?: boolean },
 ): Promise<{ isSwitched: boolean; notice: string; isFailed?: boolean }> {
   const k = keyToString(key);
   const fromLabel = from ? formatFallbackEntry(from) : '?';
@@ -8931,7 +8932,8 @@ async function switchTopicToFallbackEntry(
       reason: 'limit',
       resetsAtText: getFallbackResetTime(from),
     });
-    isStoppingBackground = await moveTopicToOtherBackend(key, to.backend, to.backend === 'claude' ? to.profile : null);
+    // An automatic fallback keeps the conversation (parked, bridged): the questions it had set aside stay open for a late answer.
+    isStoppingBackground = await moveTopicToOtherBackend(key, to.backend, to.backend === 'claude' ? to.profile : null, { isConversationKept: options.isAutomatic === true });
     if (to.backend === 'opencode') {
       const error = await getThreadAdapter(key).setModel?.(key, buildOpenCodeModelLabel(to));
       if (error) return fail(error);
@@ -8976,9 +8978,9 @@ interface FirstPromptAfterMove {
  * the adapter being left still runs. Resolves whether the stop took background work with it — the caller tells the
  * operator (the agent is told by the next prompt, `switchThreadAdapter`).
  */
-async function moveTopicToOtherBackend(key: SessionKey, backend: BackendFamily, account: string | null): Promise<boolean> {
+async function moveTopicToOtherBackend(key: SessionKey, backend: BackendFamily, account: string | null, options: { isConversationKept?: boolean } = {}): Promise<boolean> {
   if (account !== null) await state.setClaudeProfileOverride(key, account);
-  return checkHasLostBackgroundWork(await switchThreadAdapter(key, backend === 'claude' ? resolveClaudeBackendName(key) : openCodeAdapterName));
+  return checkHasLostBackgroundWork(await switchThreadAdapter(key, backend === 'claude' ? resolveClaudeBackendName(key) : openCodeAdapterName, options));
 }
 
 /**
@@ -10063,12 +10065,12 @@ async function handleTalkerText(ctx: NarrowedContext<Context, Update.MessageUpda
     return;
   }
   if (adapter.checkIsActive(key)) {
-    await deliverActivePrompt(key, adapter, text, intake, sentAtMs, messageContext);
+    await deliverActivePrompt(key, adapter, text, intake, sentAtMs, messageContext, { replyToMessageId: ctx.message.reply_to_message?.message_id });
     return;
   }
   // A sleeping conversation is resumed by the message itself, as for anybody (L-D4).
   if (await resumeSleepingSessionForPrompt(key)) {
-    await deliverActivePrompt(key, getThreadAdapter(key), text, intake, sentAtMs, messageContext);
+    await deliverActivePrompt(key, getThreadAdapter(key), text, intake, sentAtMs, messageContext, { replyToMessageId: ctx.message.reply_to_message?.message_id });
     return;
   }
   await replyToThread(key, t('access.noAgentForTalkerNotice'));
@@ -10429,14 +10431,14 @@ bot.on(message('text'), async (ctx) => {
   // REPLY or FORWARD folds its context into the prompt (see `getMessageContext`).
   if (adapter.checkIsActive(key)) {
     const messageContext = getMessageContext(key, ctx.message);
-    await deliverActivePrompt(key, adapter, text, { source: 'text', requesterId: getTopicRequesterId(ctx.from) }, ctx.message.date * 1000, messageContext);
+    await deliverActivePrompt(key, adapter, text, { source: 'text', requesterId: getTopicRequesterId(ctx.from) }, ctx.message.date * 1000, messageContext, { replyToMessageId: ctx.message.reply_to_message?.message_id });
     return;
   }
 
   // A sleeping conversation (its process stopped, its session kept) is resumed by
   // the message itself (L-D4) — the prompt continues the same conversation.
   if (await resumeSleepingSessionForPrompt(key)) {
-    await deliverActivePrompt(key, getThreadAdapter(key), text, { source: 'text', requesterId: getTopicRequesterId(ctx.from) }, ctx.message.date * 1000, getMessageContext(key, ctx.message));
+    await deliverActivePrompt(key, getThreadAdapter(key), text, { source: 'text', requesterId: getTopicRequesterId(ctx.from) }, ctx.message.date * 1000, getMessageContext(key, ctx.message), { replyToMessageId: ctx.message.reply_to_message?.message_id });
     return;
   }
 
@@ -11706,6 +11708,7 @@ async function deliverActivePrompt(
   intake: TopicRequestIntake | null,
   sentAtMs?: number,
   messageContext?: MessageContext,
+  options: { replyToMessageId?: number | null } = {},
 ): Promise<LatePromptOutcome | null> {
   // A FORWARDED message is content, never control input: it answers no question and purges no context, whatever its words are.
   // A topic member's words are not the operator's either — but a bare option number of theirs DOES answer the agent's question
@@ -11720,6 +11723,13 @@ async function deliverActivePrompt(
   notePersonActivity(key);
   const pending = pendingQuestions.get(keyToString(key));
   if (pending && adapter.answerQuestion) {
+    // A REPLY to a message other than the question that waits NOW (one that was answered, closed or set aside, or any other message)
+    // is not a response to this question: no number in it is a pick, and it does not cancel the question either — it is an ordinary
+    // prompt. Otherwise «2» typed as a reply to an old question's message would answer the one the owner never looked at.
+    const { replyToMessageId } = options;
+    if (replyToMessageId != null && replyToMessageId !== pending.messageId && replyToMessageId !== pending.originalMessageId) {
+      return deliverPromptByState(key, adapter, text, intake, sentAtMs, messageContext);
+    }
     const currentQuestion = pending.data.questions[pending.currentIndex];
     const route = getQuestionReplyRoute(text, currentQuestion);
     if (route.kind === 'answer' && !isForwarded) {
@@ -11806,11 +11816,12 @@ async function deliverPromptByState(
  * `buildLateAnswerPrompt` — as a message of the owner's: written to a live session behind whatever it is doing, buffered behind a
  * start, or waking a sleeping conversation. Unlike {@link deliverActivePrompt} it is NOT free text for the question the agent may be
  * waiting on NOW (that one is a different question, and the owner has not answered it): it never cancels it and never aborts a
- * wedged turn. A topic member's answer carries their author mark (`messageContext`).
+ * wedged turn. It carries no message context: the text is the bot's block, and a topic member's answer says who gave it inside the
+ * answer itself (an author mark ahead of it would end at the block's own header).
  */
-async function deliverLateAnswerPrompt(key: SessionKey, text: string, messageContext?: MessageContext): Promise<LatePromptOutcome> {
+async function deliverLateAnswerPrompt(key: SessionKey, text: string): Promise<LatePromptOutcome> {
   noteThreadUserActivity(key);
-  return deliverPromptByState(key, getThreadAdapter(key), text, null, undefined, messageContext);
+  return deliverPromptByState(key, getThreadAdapter(key), text, null);
 }
 
 /**
