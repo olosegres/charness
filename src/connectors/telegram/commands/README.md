@@ -335,6 +335,20 @@ confirmations carry the OpenCode note INSTEAD of the Claude agent's «keeps its 
 stay (one server serves every topic), the hint changes only when the OpenCode server next restarts, and the OpenCode topics of
 the folder share it. The screen's text names no slash command (Telegram auto-links one, and a tap would run it).
 
+## `topicStatus.ts`
+
+`/topic_status` and the buttons `tst_<switch>_<1|0>` (a switch's data names the switch and its NEW value), `tst_off`, `tst_same`, `tsn_<threadId>`: the
+switches of the status mark at the end of topic names (`utils/topicIndicatorPlan.ts` holds the marks, the switches and the rules, `connectors/telegram/topicIndicator.ts`
+writes the names; the module only sets the switches and names topics). `utils/topicStatusPlan.ts` is the pure half — the codec, what a tap does to a set
+(`applyTopicStatusTap`) and both screens (text + button plan). In General the picker is the instance default, written to `settings.json` `topicStatus` (only the switches
+that differ from the defaults; a file that cannot be written is told in the toast and changes nothing) and it lists the bound topics whose own name the bot does not know
+(`binding.topicName` absent) — a button for each that has a `topicNameCandidate` (`tsn_<threadId>`: a tap makes the candidate the topic's name, applied = candidate, and the
+topic's mark is looked at at once), the rest counted; in a topic a tap copies the set the topic followed into `state.json` `topicStatusOverrides` and flips the one switch
+(`tst_same` drops it). A REPEATED-USE picker like `/question_wait`: a tap toasts `✅ Saved` and re-renders in place. The topic screen's hints (the right to rename refused,
+a name too long for a phone's list, an ending of the owner's own that was dropped — told ONCE, then cleared —, the «renamed» lines that stay) read `topicIndicator.getHealth`
+and the binding. Every change tells the bot through `noteTopicStatusChanged` (one topic or all), which asks the refresher to look with `isOwnerChange` — the owner's own change
+skips the settle time and the gap, like the edges of ❓. Not gated on an adapter or a session; admin-only (a talker never reaches it).
+
 ## `questionWait.ts`
 
 `/question_wait` and the buttons `qw_<choice>` / `qw_same`: how long the agent's unanswered question waits before it is set aside

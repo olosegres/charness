@@ -38,6 +38,7 @@ them. How the agents run (the Claude Code backends, OpenCode, restarts, the bot'
   - [`/compact_self_review`](#compact_self_review)
   - [`/bot_skills`](#bot_skills)
   - [`/question_wait`](#question_wait)
+  - [`/topic_status`](#topic_status)
   - [`/task_agents`](#task_agents)
   - [`/limits`](#limits)
   - [`/limits_autoswitch`](#limits_autoswitch)
@@ -778,6 +779,28 @@ orchestration hint of its OpenCode folder only when the OpenCode server next res
 ### `/question_wait`
 
 How long the agent's unanswered question waits before the agent is told to go on without it (see [The agent's questions](#the-agents-questions)). A picker with five choices — **Don't wait** (the question is set aside the moment it is asked), **10 min**, **30 min** (the default), **1 h** and **Wait for my answer** (it never is: the agent stands still until you answer, as before) — the current one marked ✓. In **General** it sets the default of every topic (saved as `"questionWait"` in [`settings.json`](../SETUP.md#instance-settings-settingsjson); the screen shows the value in force); in a topic it is that topic's own choice, with «As in General (value)» to follow the default again. A repeated-use picker: a tap answers with the value now in force and the screen re-renders in place. A change applies to a question that waits now too, counted from the moment it was asked — a wait that is already over sets it aside on the tap, and «Wait for my answer» takes its timer off. Admin-only; it works without an agent (the choice is read when the agent next asks).
+
+### `/topic_status`
+
+A mark at the **end of a topic's name** that says, in the group's topic list, what the topic's agent is doing — so you see without opening anything which topics need you. The mark comes after your own words (`Deploy ⏳`, `Деплой бота 💤`); the topic's **icon is never touched**. The first of these that holds is shown:
+
+| Mark | When |
+|---|---|
+| ❓ | a question of the agent is open — waiting for you or [set aside](#the-agents-questions), however many |
+| ❗️ | the agent cannot go on by itself: logged out, a usage-limit wait with nowhere to switch to, or it crashed / lost its conversation (until its next turn) |
+| ⏳ | its turn runs (background tasks and a compaction included), or a worker it watches runs |
+| ✅ | the turn ended and the process is still up — the answer is there to read |
+| 💤 | the bot stopped the idle process; the conversation is kept and wakes on your next message |
+
+No mark: no agent yet, a closed topic, the terminal backend, or a name the bot does not know (below). Two **counts** can follow the mark, **off by default**: `⚙️N` agents at work (the topic's own agent while it works, plus each worker it watches) and `📋N` tasks the agent queued in its [todo list](#shared-todo-lists) — `Deploy ⏳ ⚙️3 📋5`; a count of 0 shows nothing.
+
+**No flashing:** a name has to be the wanted one for 20 seconds before it is written (a short reply goes straight to ✅, a sleeping topic that wakes for a prompt goes straight to ⏳ — never a ✅ on the way) and two renames of a topic are at least a minute apart, the latest state winning. Only ❓ appearing or going, and a switch you tap, show at once. A long name is cut at its end to fit Telegram's 128 characters — the mark is never cut; on a phone the topic list cuts a long name too, so the picker says when a name is long enough to hide its mark.
+
+**The picker** is `/topic_status`: one button per mark and per count, ✓ on those that are on, «All off», and in a topic «As General». In **General** it sets the default of every topic (kept as `"topicStatus"` in [`settings.json`](../SETUP.md#instance-settings-settingsjson), only the switches that differ from the defaults); in a topic a tap copies the set the topic followed into the topic and flips the one switch — «As General» hands the topic back. Turning a mark off puts your own name back at once; so does leaving the folder with the leave button.
+
+**Your own name.** The bot writes only to a topic whose own name it **knows**: from the topic's creation or your rename, from `/topic`, or from a name you confirmed. For any other topic the picker offers the name it was created with — «Is it «Deploy»?» — and one tap on **Yes, that's its name** makes it the base; General lists such topics with a button each. When you rename a topic yourself the bot reads your name without its own trailing marks (`Deploy v2 ⏳` → `Deploy v2`); the cost is that a name of yours that itself **ends** with one of these marks (`Release ✅`) loses that ending, which the picker tells you once. The bot tells the agent and the `/topic` rows your own name, never the one with a mark. Telegram keeps updates for about 24 hours: a rename made while the bot was down for longer than that is overwritten once with the old name — rename again.
+
+**Rights.** Renaming a topic needs the bot to be an admin with **Manage topics** (topics the bot made itself with `/topic` need nothing); without it no mark is written, one line is logged and the picker says so. Each rename posts Telegram's «renamed the topic» line, which the bot **deletes at once** (measured: the topic shows no trace and no unread badge); without the **Delete messages** right the renames go on and the lines stay — the picker says so. General, Jira issues and terminal topics are never marked.
 
 ### `/task_agents`
 

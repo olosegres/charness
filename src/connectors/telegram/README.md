@@ -165,13 +165,36 @@ maintainer must not break (`fileSendGateway.ts` with `../../utils/fileSendServic
   debounce or already going out — before it posts (`landStreamedOutput`); a landing that fails, or that has not
   ended after `streamedOutputLandingLimitMs`, never holds the messages back.
 
+## Topic status marks (`topicIndicator.ts`)
+
+The mark at the END of a bound topic's name (`❓ ❗️ ⏳ ✅ 💤`, optionally `⚙️N 📋N`; switched by `/topic_status`, see `commands/README.md`). `utils/topicIndicatorPlan.ts`
+is the pure plan (which status holds, `composeIndicatorName` — `<base> <status> <counts>`, the BASE cut to Telegram's 128, never the mark —, `stripIndicatorSuffix`, and
+`planIndicatorRename`: a name must have been the wanted one for the settle time and two renames keep a gap, except the edges of ❓ and the owner's own change);
+`utils/topicIndicatorSources.ts` turns what `bot.ts` reads (adapter, question maps, schedules, retry timers, todos) into the facts; this module keeps, per topic, the name it last
+wrote (`binding.indicatorAppliedName`, persisted) and since when the wanted name has been wanted, and writes it with `editForumTopic` — **the name only, the icon is the owner's**,
+through the one send gate (`enqueueSend`). `bot.ts` asks `requestRefresh(key)` at every change signal (`updatePinnedStatus` at the agent's start / stop / suspend / close, a turn's first output
+and end, a question asked / answered / set aside, a retry armed or cancelled, the logged-out notice, a watched worker created / paused / failing — `StateStore.setStatusSourceChangeListener` —,
+a todo list change), a 5-minute sweep covers what no event announces, and the boot's wave looks at every topic once the updates that waited while the bot was down are handled (an
+owner's rename made meanwhile is learned first).
+
+- **The base is the owner's own name** (`binding.topicName`); a topic whose base the bot does not know is never written. It is learned from `forum_topic_created` / `forum_topic_edited`
+  (`getOwnerRenameOutcome` cuts the bot's own trailing marks), from `/topic`, or by the owner's confirmation of `binding.topicNameCandidate` — the name on the root message a client
+  attaches to the owner's plain posts (`getTopicCreationName`); the preamble and the topic rows read the base.
+- **The bot's own rename comes back as a `forum_topic_edited` service message** (measured on the live bot, 2026-11-18): the handler checks «sent by the bot» FIRST, never stores it as a name
+  or logs it as a stranger's, and deletes the line at once (`handleOwnRenameLine`; deleting it also reverts the unread badge and the topic's preview). A refused delete (no «Delete messages»)
+  leaves the lines and shows a hint in the picker.
+- **Failures are never error reports.** A refused right (`not enough rights`) stops the marks for the chat — one log line per boot, the sweep tries once more each round, the picker says why;
+  «TOPIC_NOT_MODIFIED» means the topic already has the name; anything else is logged once per cause and tried again at the next signal. A 429 is `enqueueSend`'s own retry.
+- Out of scope: General, Jira conversations, terminal topics (no agent states); the tmux-scrape backend shows only the states its adapter already reports (no question mark — its questions have no
+  `pendingQuestions` entry).
+
 ## Testing against a fake Bot API
 
 `TELEGRAM_API_ROOT` points the telegraf client at another Bot API host. The process-level Telegram test
 (`src/__tests__/telegramViewsE2e.test.ts`; `telegramCommandsE2e.test.ts` for the slash commands, their
 buttons and the voice path through a fake OpenAI-compatible engine `telegramE2e/fakeSpeechEngine.ts`, driven through
 `telegramE2e/topicDriver.ts`; `sttBootE2e.test.ts` for the voice settings at boot and the end of an interrupted install; `fallbackSwitchE2e.test.ts` and `fallbackSwitchOpenCodeE2e.test.ts` for the usage-limit switch and its notice — the latter against a fake OpenCode server and CLI, `openCodeE2e/fakeOpenCodeServer.ts`, that serves only what the bot calls and lists the rest as `unhandled`) runs the built bot against
-`telegramE2e/fakeTelegram.ts` on loopback with a placeholder token; unset, the client talks to `api.telegram.org`. Telegraf drops its https
+`telegramE2e/fakeTelegram.ts` on loopback with a placeholder token (it also answers `editForumTopic`, echoes the bot's own «renamed» line and refuses a rename that carries an icon — `topicStatusE2e.test.ts`); unset, the client talks to `api.telegram.org`. Telegraf drops its https
 agent by itself for an `http://` root; the bot then wires its own http agent onto every client (`wireBotApiClient`, see «Bot API connections»).
 
 ## Guards
