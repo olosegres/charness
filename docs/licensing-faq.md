@@ -106,7 +106,7 @@ Customers need no separate Charness fee just to use the embedded component withi
 
 **Is it open source?** New releases under these terms are source-available, not OSI open source. Every release before 4.0 was published under MIT and remains MIT. GitHub may classify the custom license as "Other".
 
-**Can I contribute?** Yes, pull requests are welcome: by opening one you agree to the [Contributor License Agreement](../CLA.md). You keep your copyright; the licensor may ship your contribution under the public and the commercial license. Contributing for a company? Write to charnesshub@gmail.com first.
+**Can I contribute?** Yes, pull requests are welcome: by opening one you agree to the [Contributor License Agreement](../CLA.md). You keep your copyright; the licensor may ship your contribution under the Charness License and the commercial license. If your work belongs to an employer, please write to charnesshub@gmail.com first; we may ask for a company agreement.
 
 **How do we buy?** There is no online checkout: write to charnesshub@gmail.com (information: https://olosegres.github.io/charness/commercial/). We reply with a written order and invoice stating group scope, assessment/bands, fixed terms, term dates, list price, any discount and its condition, net fee and taxes. No user quantity is ordered. For procurement or custom terms, contact the same address.
 
