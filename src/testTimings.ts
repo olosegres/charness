@@ -13,7 +13,7 @@ import { pendingWorkHoldDefaultMs } from './utils/jsonStreamPendingWork';
 import { basePollIntervalMs } from './utils/pollBackoff';
 import { claudeApiCreditRecheckIntervalMs, claudeApiCreditRecheckPollMs } from './utils/claudeApiCreditRecheck';
 import { todoReminderDefaultMinutes } from './todos/nag';
-import { longestQuestionWaitMs } from './utils/questionWaitChoices';
+import { longestQuestionWaitMs, setAsideRetryDelayMs } from './utils/questionWaitChoices';
 import { todoReminderPollMs } from './todos/reminderEngine';
 import { minFireIntervalMs } from './scheduler/recurrence';
 import { defaultCheckStatusEveryMinutes } from './scheduler/checkStatus';
@@ -122,6 +122,8 @@ const testTimingsSchema = z.strictObject({
   postWaitForIdleMs: createShorterWindowSchema(waitIdleTimeoutMs).optional(),
   /** The question wait, cut to at most this (production: `longestQuestionWaitMs`, the hour the setting's longest finite choice waits); `Don't wait` and `Wait for my answer` stay as they are. */
   questionSetAsideWaitMs: createShorterWindowSchema(longestQuestionWaitMs).optional(),
+  /** The pause before the bot tries again to set a question aside after the agent's server did not take it (production: `setAsideRetryDelayMs`, 30 s). */
+  questionSetAsideRetryMs: createShorterWindowSchema(setAsideRetryDelayMs).optional(),
   /** How often the hot supervisor compares its `tsc -w` with the sources (production: `tscWatchCheckIntervalMs`, 30 s). Read by `charness hot`, not by the bot. */
   tscWatchCheckIntervalMs: createShorterWindowSchema(tscWatchCheckIntervalMs).optional(),
   /** How long a source may stay newer than its output before the hot supervisor blames its `tsc -w` (production: `tscWatchStaleGraceMs`, 1 min). Read by `charness hot`, not by the bot. */

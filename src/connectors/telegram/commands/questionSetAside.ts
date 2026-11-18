@@ -28,7 +28,7 @@ import {
   getSetAsideRecordAskedAgain,
   type LateAnswerEntry,
 } from '../../../utils/questionWaitPlan';
-import type { QuestionWaitChoice } from '../../../utils/questionWaitChoices';
+import { setAsideRetryDelayMs, type QuestionWaitChoice } from '../../../utils/questionWaitChoices';
 import { getAnswerWithAttribution } from '../../../utils/authorMark';
 import { getTelegramTalkerContext } from '../inbound';
 import { getCallbackMessageId } from './callbackMessage';
@@ -39,9 +39,11 @@ import type { BotCore } from './botCore';
 /** The prefix of a set-aside question's button data: `qs_<record id>_<option index>`. */
 const setAsideButtonPrefix = 'qs_';
 
-/** After the agent's server could not confirm a waiting question, the wait ends again this long after (and at most this many times). */
-export const setAsideRetryDelayMs = 30_000;
+/** After the agent's server could not confirm a waiting question, or did not take what sets it aside, it is tried again at most this many times (a pause of {@link setAsideRetryDelayMs} between). */
 export const setAsideRetryLimit = 3;
+
+/** What the note under a set-aside question says: the agent went on, or its server did not take the message that tells it to (it may still wait). */
+type SetAsideNoteState = 'wentOn' | 'mayStillWait';
 
 /**
  * What the set-aside needs from the bot: the shared core, the pending-question state it moves the question out of, the
@@ -132,9 +134,11 @@ export function createQuestionSetAside(ports: QuestionSetAsidePorts) {
   const replyFailures = new Map<string, number>();
   /** One pending re-try of such a reply per conversation. */
   const replyRetryTimers = new Map<string, NodeJS.Timeout>();
+  /** The set-aside records whose message says the server did not take the «go on» reply, by conversation and record id. */
+  const notTakenNotes = new Set<string>();
 
-  /** What is counted for a question: the conversation and the request. */
-  const getAttemptKey = (key: SessionKey, requestId: string): string => `${keyToString(key)}:${requestId}`;
+  /** What is counted for a question: the conversation and the request (or, for the notes of a record, the record id). */
+  const getAttemptKey = (key: SessionKey, id: string): string => `${keyToString(key)}:${id}`;
 
   /** Forget every count of the conversation's questions (its question was answered, closed or timed again). */
   function forgetAttempts(key: SessionKey): void {
@@ -142,6 +146,7 @@ export function createQuestionSetAside(ports: QuestionSetAsidePorts) {
     for (const counts of [retryAttempts, replyFailures]) {
       for (const attemptKey of [...counts.keys()]) if (attemptKey.startsWith(prefix)) counts.delete(attemptKey);
     }
+    for (const recordKey of [...notTakenNotes]) if (recordKey.startsWith(prefix)) notTakenNotes.delete(recordKey);
   }
 
   /** The conversation's open set-aside questions, oldest first. */
@@ -233,15 +238,16 @@ export function createQuestionSetAside(ports: QuestionSetAsidePorts) {
       const nowMs = Date.now();
       const askedAtMs = pending.askedAt ?? nowMs;
       const text = buildQuestionSetAsideText({ questions: pending.data.questions, answers: pending.answers, askedAtMs, nowMs });
+      const recordId = createSetAsideQuestionId(sequence);
       // The adapter checks the request id once more, against the question it holds.
-      if (!adapter.setQuestionAside(key, requestId, text, pending.answers, handleReplySettled(key, requestId))) {
-        const resynced = await settleQuestionTheAdapterDoesNotHold(key, adapter, pending, text);
+      if (!adapter.setQuestionAside(key, requestId, text, pending.answers, handleReplySettled(key, requestId, recordId))) {
+        const resynced = await settleQuestionTheAdapterDoesNotHold(key, adapter, pending, text, recordId);
         if (resynced === 'ended') return false;
       }
       forgetAttempt(key, requestId);
 
       const record: SetAsideQuestionRecord = {
-        id: createSetAsideQuestionId(sequence),
+        id: recordId,
         messageId: pending.messageId,
         // A re-posted question has two messages: the live copy (`messageId`) and the original it left up.
         ...(pending.originalMessageId != null && pending.originalMessageId !== pending.messageId ? { originalMessageId: pending.originalMessageId } : {}),
@@ -273,16 +279,19 @@ export function createQuestionSetAside(ports: QuestionSetAsidePorts) {
   }
 
   /**
-   * @description What the agent's server made of the reply that set question `requestId` aside, as `setQuestionAside`'s `onSettled`
-   * hands it over. A reply the server took ends the count of failures; one it did not take is {@link countReplyFailure}.
+   * @description What the agent's server made of the reply that set question `requestId` aside (the one that became the record
+   * `recordId`), as `setQuestionAside`'s `onSettled` hands it over. A reply the server took ends the count of failures — and, when the
+   * question's message had been told «the server did not take it», takes that note back. One it did not take is
+   * {@link countReplyFailure}.
    */
-  function handleReplySettled(key: SessionKey, requestId: string): (isSent: boolean) => void {
+  function handleReplySettled(key: SessionKey, requestId: string, recordId: string): (isSent: boolean) => void {
     return (isSent) => {
       if (isSent) {
         replyFailures.delete(getAttemptKey(key, requestId));
+        if (notTakenNotes.delete(getAttemptKey(key, recordId))) void rewriteSetAsideNote(key, recordId, 'wentOn');
         return;
       }
-      countReplyFailure(key, requestId, `did not take the reply that sets the question ${requestId} aside`);
+      countReplyFailure(key, requestId, recordId, `did not take the reply that sets the question ${requestId} aside`);
     };
   }
 
@@ -291,9 +300,10 @@ export function createQuestionSetAside(ports: QuestionSetAsidePorts) {
    * read to find the question again. The question stays OPEN there: the topic says «the agent went on» and nothing waits on the bot's
    * side, yet the agent stands still on it. After a pause the question is handed to the bot again (`surfaceOpenQuestion`), which finds
    * its record and tells the agent once more as a question asked again ({@link surfaceQuestionAgain}). At most
-   * {@link setAsideRetryLimit} times; then the topic is told, so a stuck agent is not left to a console line.
+   * {@link setAsideRetryLimit} times; then the topic is told — a message, and the pinned message's own note, which no longer says the
+   * agent went on — so a stuck agent is not left to a console line.
    */
-  function countReplyFailure(key: SessionKey, requestId: string, cause: string): void {
+  function countReplyFailure(key: SessionKey, requestId: string, recordId: string, cause: string): void {
     const attemptKey = getAttemptKey(key, requestId);
     const failures = (replyFailures.get(attemptKey) ?? 0) + 1;
     replyFailures.set(attemptKey, failures);
@@ -303,6 +313,8 @@ export function createQuestionSetAside(ports: QuestionSetAsidePorts) {
       replyFailures.delete(attemptKey);
       clearTimeout(replyRetryTimers.get(kStr));
       replyRetryTimers.delete(kStr);
+      notTakenNotes.add(getAttemptKey(key, recordId));
+      void rewriteSetAsideNote(key, recordId, 'mayStillWait');
       void replyToThread(key, withThreadLocale(key, () => t('agent.set_aside_reply_failed_notice')));
       return;
     }
@@ -310,7 +322,7 @@ export function createQuestionSetAside(ports: QuestionSetAsidePorts) {
     clearTimeout(replyRetryTimers.get(kStr));
     const timer = setTimeout(() => {
       replyRetryTimers.delete(kStr);
-      void surfaceQuestionAgain(key, requestId);
+      void surfaceQuestionAgain(key, requestId, recordId);
     }, retryDelayMs);
     timer.unref();
     replyRetryTimers.set(kStr, timer);
@@ -322,9 +334,9 @@ export function createQuestionSetAside(ports: QuestionSetAsidePorts) {
    * none any more nothing waits and the count ends; when it could not be read the question may still be open there, which is another
    * failure — the chain never stops silently on a read that failed.
    */
-  async function surfaceQuestionAgain(key: SessionKey, requestId: string): Promise<void> {
+  async function surfaceQuestionAgain(key: SessionKey, requestId: string, recordId: string): Promise<void> {
     const outcome = await getThreadAdapter(key).surfaceOpenQuestion?.(key);
-    if (outcome === 'readFailed') countReplyFailure(key, requestId, `could not be read to find the question ${requestId} again`);
+    if (outcome === 'readFailed') countReplyFailure(key, requestId, recordId, `could not be read to find the question ${requestId} again`);
     else if (outcome === 'none') replyFailures.delete(getAttemptKey(key, requestId));
   }
 
@@ -334,14 +346,14 @@ export function createQuestionSetAside(ports: QuestionSetAsidePorts) {
    * record — and `ended` when it did not: the bot's copy was closed (nothing is held), or left waiting with one more try armed.
    * Nothing is awaited between the second try and the return, like the first.
    */
-  async function settleQuestionTheAdapterDoesNotHold(key: SessionKey, adapter: Pick<AgentAdapter, 'setQuestionAside' | 'resyncOpenQuestion' | 'surfaceOpenQuestion'>, pending: PendingQuestionState, text: string): Promise<'told' | 'ended'> {
+  async function settleQuestionTheAdapterDoesNotHold(key: SessionKey, adapter: Pick<AgentAdapter, 'setQuestionAside' | 'resyncOpenQuestion' | 'surfaceOpenQuestion'>, pending: PendingQuestionState, text: string, recordId: string): Promise<'told' | 'ended'> {
     const kStr = keyToString(key);
     const { requestId } = pending.data;
     // A backend with no registry of its own to ask holds exactly what it says it holds.
     const server = adapter.resyncOpenQuestion ? await adapter.resyncOpenQuestion(key, requestId) : 'none';
     // The agent asked the next question, or this one was answered, while the server was asked: it is not this one's business any more.
     if (pendingQuestions.get(kStr) !== pending) return 'ended';
-    if (server === 'held' && adapter.setQuestionAside?.(key, requestId, text, pending.answers, handleReplySettled(key, requestId))) return 'told';
+    if (server === 'held' && adapter.setQuestionAside?.(key, requestId, text, pending.answers, handleReplySettled(key, requestId, recordId))) return 'told';
     if (server === 'none') {
       await dropQuestionTheAdapterDoesNotHold(key, adapter, pending);
       return 'ended';
@@ -401,7 +413,7 @@ export function createQuestionSetAside(ports: QuestionSetAsidePorts) {
     if (!found) return false;
     const { record, answers } = found;
     const text = buildQuestionSetAsideText({ questions: record.questions, answers: record.answers, askedAtMs: record.askedAt, nowMs: Date.now(), isAlreadyOpen: true });
-    return getThreadAdapter(key).setQuestionAside?.(key, questionData.requestId, text, answers, handleReplySettled(key, questionData.requestId)) === true;
+    return getThreadAdapter(key).setQuestionAside?.(key, questionData.requestId, text, answers, handleReplySettled(key, questionData.requestId, record.id)) === true;
   }
 
   /**
@@ -420,16 +432,33 @@ export function createQuestionSetAside(ports: QuestionSetAsidePorts) {
 
   /**
    * @description Edit the question's message to the set-aside look: the question as asked, a note under it («the agent went on
-   * without your answer — you can still answer»), and the option buttons, whose data now names the record. The message is not
+   * without your answer — you can still answer», or, when the agent's server did not take the message that tells it to go on, «the agent
+   * may still be waiting»), and the option buttons, whose data now names the record. The message is not
    * re-posted, not deleted, not unpinned. When the edit fails the old buttons never stay (they would answer the agent's NEXT
    * question): they are replaced by the record's, or taken off. The record is saved and open either way.
    */
-  async function showQuestionSetAside(key: SessionKey, record: SetAsideQuestionRecord): Promise<void> {
+  async function showQuestionSetAside(key: SessionKey, record: SetAsideQuestionRecord, state: SetAsideNoteState = 'wentOn'): Promise<void> {
     const target = getSetAsideAnswerTarget(record);
     if (record.messageId === null || !target) return;
-    const note = withThreadLocale(key, () => t('agent.question_set_aside_note'));
+    const note = withThreadLocale(key, () => t(state === 'wentOn' ? 'agent.question_set_aside_note' : 'agent.question_set_aside_not_taken_note'));
     const isEdited = await editQuestionMessageWithNote(key, record.messageId, target.question, note, buildSetAsideKeyboard(record, target.question));
     if (!isEdited) console.warn(`[questionSetAside] the note could not be written under the question (record ${record.id})`);
+  }
+
+  /**
+   * The note of record `recordId`'s message changes with what became of the reply that told the agent to go on. Decided inside the
+   * lifecycle queue against the record as it is THEN: one that was answered or closed meanwhile has a message that is no longer the
+   * note's to rewrite — its «✅ Answer» must stay.
+   */
+  async function rewriteSetAsideNote(key: SessionKey, recordId: string, state: SetAsideNoteState): Promise<void> {
+    try {
+      await runQuestionLifecycleOp(key, async () => {
+        const record = getSetAsideRecords(key).find((candidate) => candidate.id === recordId);
+        if (record) await showQuestionSetAside(key, record, state);
+      });
+    } catch (error) {
+      console.error(`[questionSetAside] ${keyToString(key)}: rewriting the note of the set-aside question ${recordId} failed:`, error);
+    }
   }
 
   /**
@@ -445,6 +474,7 @@ export function createQuestionSetAside(ports: QuestionSetAsidePorts) {
    * message is closed without deleting it, and its pin is released.
    */
   async function closeSetAsideRecord(key: SessionKey, record: SetAsideQuestionRecord, ending: QuestionEnd): Promise<void> {
+    notTakenNotes.delete(getAttemptKey(key, record.id));
     const question = getSetAsideAnswerTarget(record)?.question ?? record.questions[0];
     if (record.messageId === null || !question) return;
     await closeQuestionMessage(key, record.messageId, question, ending);
@@ -534,6 +564,7 @@ export function createQuestionSetAside(ports: QuestionSetAsidePorts) {
 
   /** The record's last open question was answered and delivered: the record is over. Its message carries the answer, its pin goes. */
   async function finishSetAsideRecord(key: SessionKey, record: SetAsideQuestionRecord, question: OpenCodeQuestion, answer: string[]): Promise<boolean> {
+    notTakenNotes.delete(getAttemptKey(key, record.id));
     await getState().setSetAsideQuestions(key, getSetAsideRecords(key).filter((candidate) => candidate.id !== record.id));
     if (record.messageId === null) return false;
     const isAnswerShown = await closeQuestionMessage(key, record.messageId, question, { answer: answer.join(', ') });

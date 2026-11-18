@@ -427,7 +427,8 @@ result of the question it is blocked on, and resolves the question — **a turn 
 - **The reply's own outcome (OpenCode).** `true` means the reply was STARTED; whether the server took it comes later through the optional
   `onSettled(isSent)`. A failed set-aside reply is NOT posted through the `error` event (an answer's is): the question stays open on the server, so
   the bot is told and re-hands the server's question to itself after a pause (`surfaceOpenQuestion`, which finds the record and tells the agent once
-  more as a question asked again), at most three times, then the topic is told that the agent may still wait.
+  more as a question asked again; when that read fails — `surfaceOpenQuestion` resolves `emitted` / `none` / `readFailed` — it counts as another
+  failure), at most three times, then the topic is told that the agent may still wait and the pinned message's note says so too.
 - **A cache is not an authority.** OpenCode's adapter only caches the server's registry (a reattach that could not read it leaves it
   empty): `resyncOpenQuestion(key, requestId)` re-reads `GET /question` and answers `held` (that very question is open there; the cache now holds
   it), `none` (the server holds none — or ANOTHER one: the bot's copy is stale, the cache is left alone) or `unknown` (read failed, inactive session);

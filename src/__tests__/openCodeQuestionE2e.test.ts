@@ -2,7 +2,7 @@
  * @description A question the OpenCode agent asks stays in the topic however it ends, at PROCESS level: the BUILT charness
  * started the way an isolated instance is (`scripts/run-isolated.sh`) against the fake Bot API
  * (`telegramE2e/fakeTelegram.ts`) and the fake OpenCode server (`openCodeE2e/fakeOpenCodeServer.ts`), which can put a
- * question to the user whenever a flow says (the fake Claude agent cannot ask without a person's message). Four flows:
+ * question to the user whenever a flow says (the fake Claude agent cannot ask without a person's message). Five flows:
  *
  *   the idle compaction re-asked a question → the agent asks a NEW question while the re-asked copy waits: the copy is
  *     closed as «not answered» and keeps its text, and its button never answers the new question;
@@ -13,7 +13,10 @@
  *   a question nobody answers within the question wait (cut to seconds) → the server gets a REPLY whose custom answer is the bot's
  *     «no answer yet, go on» text and never a reject (a reject ends OpenCode's agent loop), the question's message keeps its
  *     buttons and its pin and gains a note, and it is saved as a set-aside record; a later tap on its button sends the late
- *     answer to the server as a prompt and closes the message with the answer.
+ *     answer to the server as a prompt and closes the message with the answer;
+ *   the server refuses the reply that sets a question aside every time → the bot hands the server's question to itself again, tells the
+ *     agent again after each pause, and after the last try says so in the topic AND rewrites the pinned message's own note («the agent
+ *     may still be waiting», its buttons and pin kept); a later tap on its button still answers it.
  *
  * What the json-stream flows cover instead: `questionKeptE2e.test.ts` (answer, number, another message, `/esc`, `/quit`,
  * re-post, the re-ask in every phase, a restart).
@@ -31,6 +34,7 @@ import * as path from 'path';
 import { FakeTelegram, type FakeTelegramMessage } from './telegramE2e/fakeTelegram';
 import { TopicDriver } from './telegramE2e/topicDriver';
 import { FakeOpenCodeServer, writeFakeOpenCodeBinary } from './openCodeE2e/fakeOpenCodeServer';
+import { setAsideRetryLimit } from '../connectors/telegram/commands/questionSetAside';
 import {
   builtCliPath,
   createIsolatedInstanceLayout,
@@ -412,5 +416,67 @@ describe('A question nobody answers is set aside on the OpenCode backend too, en
     await waitForUnpinned(question);
     await getCharness().waitFor('the record to be gone', replyTimeoutMs, () => (readPersistedState(getLayout()).setAsideQuestions?.[topicKey] ?? []).length === 0);
     assert.deepEqual(fakeOpenCode.listRequests('POST', `/question/${firstQuestion.requestId}/reject`), [], 'and the question was never rejected');
+  });
+});
+
+describe('A reply that sets a question aside is refused by the OpenCode server, end to end: built charness, fake Bot API, fake OpenCode', () => {
+  /** The question wait of the instance, in ms, and the pause before the bot tries again (production: 30 min and 30 s). */
+  const questionWaitMs = 4000;
+  const retryPauseMs = 300;
+  const refusalTimeoutMs = 60 * 1000;
+  /** A client error: the adapter does not retry it on its own, so each refusal is exactly one failed set-aside. */
+  const refusedReplyStatus = 400;
+  const notTakenNote = enDict['agent.question_set_aside_not_taken_note'];
+
+  before(async () => {
+    await setUpInstance('charness-ocask-refused-', { ...getTelegramFlowTestTimingsEnv({ questionSetAsideWaitMs: questionWaitMs, questionSetAsideRetryMs: retryPauseMs }) });
+  });
+
+  after(tearDownInstance);
+
+  it('every try is refused: the server is asked for its question again after each pause, the topic is told once after the last, and the pinned message\'s note says the agent may still wait', async () => {
+    const sessionId = await bootBindAndStartTurn('REFUSED-1');
+    const topicKey = keyToString(makeTelegramKey(group.id, questionTopic.threadId));
+    const replyPath = `/question/${firstQuestion.requestId}/reply`;
+    // The question stays open on the server although its reply is refused: it is what the server's registry lists.
+    fakeOpenCode.setServedQuestions([{ id: firstQuestion.requestId, sessionID: sessionId, questions: [{ question: firstQuestion.question, header: firstQuestion.header, options: firstQuestion.labels.map((label) => ({ label })) }] }]);
+    const attempts = setAsideRetryLimit + 1;
+    for (let attempt = 0; attempt < attempts; attempt += 1) fakeOpenCode.holdNextRequest('POST', new RegExp(`^${replyPath}$`), Promise.resolve(refusedReplyStatus));
+    const question = await askQuestion(sessionId, firstQuestion);
+    await waitForPinned(question);
+
+    const refusedTopic = new TopicDriver(fakeTelegram, getCharness, questionTopic.threadId, refusalTimeoutMs);
+    await refusedTopic.waitForMessage('the notice that the agent may still wait', (message) => message.text === enDict['agent.set_aside_reply_failed_notice']);
+    assert.equal(fakeOpenCode.listRequests('POST', replyPath).length, attempts, 'the first try and one more after each pause — the chain did not stop early and did not go on');
+    assert.deepEqual(fakeOpenCode.listRequests('POST', `/question/${firstQuestion.requestId}/reject`), [], 'the question is never rejected');
+    assert.ok(fakeOpenCode.listRequests('GET', '/question').length >= setAsideRetryLimit, 'the server was asked for its open question again after each refusal');
+    assert.equal(topic.listMessages().filter((message) => message.text === enDict['agent.set_aside_reply_failed_notice']).length, 1, 'the notice is posted once');
+
+    // Load-bearing: the pinned message no longer says «the agent went on» — it says the agent may still be waiting — and stays answerable.
+    await refusedTopic.waitForMessageText('the «may still wait» note under the question', question, (text) => text.endsWith(`\n\n${notTakenNote}`));
+    await getCharness().waitFor('the set-aside question to be saved', replyTimeoutMs, () => (readPersistedState(getLayout()).setAsideQuestions?.[topicKey] ?? []).length === 1);
+    const [record] = readPersistedState(getLayout()).setAsideQuestions?.[topicKey] ?? [];
+    const current = fakeTelegram.getMessage(question.message_id);
+    assert.ok(current && !current.isDeleted, 'the message stays');
+    assert.ok(!current.text.includes(enDict['agent.question_set_aside_note']), 'and it no longer says the agent went on');
+    assert.deepEqual(topic.getKeyboardData(current), [[`qs_${record.id}_0`], [`qs_${record.id}_1`]], 'the buttons stay, naming the record');
+    assert.ok(fakeTelegram.listPinnedMessageIds().includes(question.message_id), 'and so does the pin');
+  });
+
+  it('a tap on its button still answers it: the late answer reaches the server as a prompt, the message closes with the answer and the pin is released', async () => {
+    const topicKey = keyToString(makeTelegramKey(group.id, questionTopic.threadId));
+    const [record] = readPersistedState(getLayout()).setAsideQuestions?.[topicKey] ?? [];
+    assert.ok(record && record.messageId !== null, 'precondition: the question is still set aside');
+    const question = fakeTelegram.getMessage(record.messageId);
+    assert.ok(question, 'and its message is there');
+    const lateAnswerPrefix = '[Late answer to your question asked ';
+    const promptsBefore = fakeOpenCode.prompts.filter((prompt) => prompt.text.includes(lateAnswerPrefix)).length;
+
+    assert.equal(await topic.tapAndAwaitAnswer(question, `qs_${record.id}_0`), firstQuestion.labels[0], 'the toast is the label');
+
+    await getCharness().waitFor('the late answer to reach the server as a prompt', replyTimeoutMs, () => fakeOpenCode.prompts.filter((prompt) => prompt.text.includes(lateAnswerPrefix)).length > promptsBefore);
+    await topic.waitForMessageText('the answer under the question', question, (text) => text.endsWith(`\n\n${enDict['agent.question_answered_note'].replace('{answer}', firstQuestion.labels[0])}`));
+    await waitForUnpinned(question);
+    await getCharness().waitFor('the record to be gone', replyTimeoutMs, () => (readPersistedState(getLayout()).setAsideQuestions?.[topicKey] ?? []).length === 0);
   });
 });

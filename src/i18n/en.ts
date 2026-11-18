@@ -278,6 +278,7 @@ export const enDict: Record<string, string> = {
   'agent.question_unanswered_note': '❌ Not answered',
   'agent.question_asked_again_note': '↓ Asked again below',
   'agent.question_set_aside_note': '⏸ The agent went on without your answer — you can still answer',
+  'agent.question_set_aside_not_taken_note': '⚠️ The agent may still be waiting for your answer — the server did not take the message that tells it to go on. You can still answer',
   'agent.set_aside_question_gone_notice': 'That question is already answered or closed — this changed nothing.',
   'agent.set_aside_reply_failed_notice': '⚠️ The agent could not be told to go on without its question — the server did not take the message, and the agent may still be waiting for it. Send it any message to move it on.',
   'agent.set_aside_next_question_failed_notice': 'The next question could not be posted, so your answer was not taken — try again.',

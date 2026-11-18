@@ -424,6 +424,65 @@ describe('a question the server holds beside the one set aside, and a reply the 
     assert.equal(harness.surfaceCalls.length, 0, 'and nothing is tried again: the retry still to come was dropped');
   });
 
+  it('after the last try the pinned message\'s own note stops saying the agent went on: it says the agent may still wait, and the buttons stay', async () => {
+    const harness = createHarness({ withSurface: true, retryDelayMs: 5 });
+    harness.pendingQuestions.set(keyString, createPending('req_a'));
+    await harness.setAside.setPendingQuestionAside(key, 'req_a');
+    const [wentOnEdit] = harness.edits;
+    assert.equal(wentOnEdit.note, enDict['agent.question_set_aside_note'], 'precondition: the note says the agent went on');
+    const { onSettled } = harness.adapterCalls[0];
+
+    await captureWarnings(async () => {
+      for (let failure = 0; failure < setAsideRetryLimit; failure += 1) onSettled?.(false);
+      await sleep(60);
+      assert.equal(harness.edits.length, 1, 'while a try is still to come the note is not touched');
+      onSettled?.(false);
+      await harness.settle();
+    });
+
+    assert.equal(harness.edits.length, 2);
+    assert.deepEqual(harness.edits[1], { messageId: wentOnEdit.messageId, note: enDict['agent.question_set_aside_not_taken_note'], keyboard: wentOnEdit.keyboard });
+    assert.notEqual(harness.edits[1].keyboard, undefined, 'its buttons stay: it can still be answered');
+  });
+
+  it('a later reply the server DID take puts the «the agent went on» note back — once', async () => {
+    const harness = createHarness({ withSurface: true, retryDelayMs: 5 });
+    harness.pendingQuestions.set(keyString, createPending('req_a'));
+    await harness.setAside.setPendingQuestionAside(key, 'req_a');
+    const { onSettled } = harness.adapterCalls[0];
+    await captureWarnings(async () => {
+      for (let failure = 0; failure < setAsideRetryLimit + 1; failure += 1) onSettled?.(false);
+      await harness.settle();
+    });
+    assert.equal(harness.edits.at(-1)?.note, enDict['agent.question_set_aside_not_taken_note'], 'precondition');
+
+    onSettled?.(true);
+    await harness.settle();
+    assert.equal(harness.edits.at(-1)?.note, enDict['agent.question_set_aside_note']);
+    const editsAfterRestore = harness.edits.length;
+
+    onSettled?.(true);
+    await harness.settle();
+    assert.equal(harness.edits.length, editsAfterRestore, 'nothing more to take back');
+  });
+
+  it('a record answered or closed meanwhile keeps its message: the note is not rewritten over «✅ Answer»', async () => {
+    const harness = createHarness({ withSurface: true, retryDelayMs: 5 });
+    harness.pendingQuestions.set(keyString, createPending('req_a'));
+    await harness.setAside.setPendingQuestionAside(key, 'req_a');
+    const editsBefore = harness.edits.length;
+    const { onSettled } = harness.adapterCalls[0];
+    harness.savedRecords.set(keyString, []);
+
+    await captureWarnings(async () => {
+      for (let failure = 0; failure < setAsideRetryLimit + 1; failure += 1) onSettled?.(false);
+      await harness.settle();
+    });
+
+    assert.equal(harness.edits.length, editsBefore);
+    assert.deepEqual(harness.replies, [enDict['agent.set_aside_reply_failed_notice']], 'the topic is still told');
+  });
+
   it('a re-read of the server that fails too is another failure, never the end of the chain: it is tried again and, after the last try, the topic is told', async () => {
     const harness = createHarness({ withSurface: true, retryDelayMs: 5, surfaceOutcome: 'readFailed' });
     harness.pendingQuestions.set(keyString, createPending('req_a'));

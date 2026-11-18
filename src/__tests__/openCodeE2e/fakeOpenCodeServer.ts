@@ -10,7 +10,7 @@
  *   • `GET|POST /mcp?directory=` — the runtime MCP table (the bot registers its `charness` server there); `POST /mcp/:name/disconnect` leaves
  *     an entry `disabled` (`seedMcpServer` gives an instance a server it held before the bot registered anything);
  *   • `POST /session?directory=`, `GET /session/:id`, `GET /session?directory=`, `GET /session/:id/message` (the prompts it received, as stored user messages),
- *     `GET /session/status`, `GET /question?directory=` (the pending questions: none), `PATCH /session/:id`,
+ *     `GET /session/status`, `GET /question?directory=` (the open questions: none, unless a flow serves some — {@link FakeOpenCodeServer.setServedQuestions}), `PATCH /session/:id`,
  *     `POST /session/:id/abort`, `POST /session/:id/prompt_async`, `POST /session/:id/summarize`,
  *     `POST /question/:id/reply` and `POST /question/:id/reject` (accepted and recorded);
  *   • `POST /instance/dispose`.
@@ -197,6 +197,13 @@ interface PromptBody {
   model?: { providerID?: string; modelID?: string };
 }
 
+/** One entry of the registry `GET /question` lists: the question's id, the session that asked it and what it asks. */
+export interface FakeServedQuestion {
+  id: string;
+  sessionID: string;
+  questions: ReadonlyArray<{ question: string; header?: string; options: ReadonlyArray<{ label: string }> }>;
+}
+
 export class FakeOpenCodeServer {
   readonly requests: FakeOpenCodeRequest[] = [];
   readonly unhandled: FakeOpenCodeRequest[] = [];
@@ -237,6 +244,8 @@ export class FakeOpenCodeServer {
   private readonly storedSummaries = new Map<string, Array<{ messageId: string; text: string }>>();
   /** The summary the NEXT `POST /session/:id/summarize` plays out before it answers; none: it answers at once. */
   private nextSummarize: FakeCompactionSummary | null = null;
+  /** The open questions `GET /question` lists: the server's own registry, which a flow fills to make a question still open there. */
+  private servedQuestions: FakeServedQuestion[] = [];
   /** The requests a flow holds: each is let go (or refused) by the first request that matches it, once. */
   private readonly requestHolds: Array<{ method: string; pathPattern: RegExp; outcome: Promise<number | null> }> = [];
 
@@ -273,6 +282,14 @@ export class FakeOpenCodeServer {
    */
   holdNextRequest(method: string, pathPattern: RegExp, outcome: Promise<number | null>): void {
     this.requestHolds.push({ method, pathPattern, outcome });
+  }
+
+  /**
+   * @description What `GET /question` answers from now on: the questions the server holds open (the real one lists them until they are
+   * replied to or rejected; the fake does not track that, so a flow that wants the registry to change says so with another call).
+   */
+  setServedQuestions(entries: readonly FakeServedQuestion[]): void {
+    this.servedQuestions = [...entries];
   }
 
   /** @description Requests with this method and path, in arrival order. */
@@ -638,7 +655,7 @@ export class FakeOpenCodeServer {
     if (method === 'POST' && record.path === '/mcp') return reply(this.registerMcp(record));
     const mcpDisconnectMatch = method === 'POST' ? /^\/mcp\/([^/]+)\/disconnect$/.exec(record.path) : null;
     if (mcpDisconnectMatch) return this.disconnectMcp(record, decodeURIComponent(mcpDisconnectMatch[1]), response);
-    if (method === 'GET' && record.path === '/question') return reply([]);
+    if (method === 'GET' && record.path === '/question') return reply(this.servedQuestions);
     if (method === 'GET' && record.path === '/skill') return reply(this.options.skills ?? []);
     if (method === 'GET' && record.path === '/session/status') return reply({});
     if (method === 'GET' && record.path === '/session') return reply([...this.sessions.values()].filter((session) => session.directory === record.directory).map(toApiSession));

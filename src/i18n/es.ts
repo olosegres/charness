@@ -274,6 +274,7 @@ export const esDict: Record<string, string> = {
   'agent.question_unanswered_note': '❌ Sin responder',
   'agent.question_asked_again_note': '↓ Preguntada de nuevo abajo',
   'agent.question_set_aside_note': '⏸ El agente siguió sin tu respuesta — aún puedes responder',
+  'agent.question_set_aside_not_taken_note': '⚠️ Puede que el agente siga esperando tu respuesta: el servidor no aceptó el mensaje que le dice que siga. Aún puedes responder',
   'agent.set_aside_question_gone_notice': 'Esa pregunta ya está respondida o cerrada: esto no cambió nada.',
   'agent.set_aside_reply_failed_notice': '⚠️ No se pudo decirle al agente que siga sin su pregunta: el servidor no aceptó el mensaje y puede que el agente siga esperándola. Envíale cualquier mensaje para que continúe.',
   'agent.set_aside_next_question_failed_notice': 'No se pudo publicar la siguiente pregunta, así que tu respuesta no se tomó: inténtalo de nuevo.',

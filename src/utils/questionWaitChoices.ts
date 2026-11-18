@@ -31,3 +31,6 @@ export const questionWaitMs: Record<QuestionWaitChoice, number | null> = {
 
 /** The longest finite wait the setting offers: the ceiling a test's shorter window (`CHARNESS_TEST_TIMINGS`) may name. */
 export const longestQuestionWaitMs = 60 * msPerMinute;
+
+/** After the agent's server did not take what sets a question aside, the bot tries again this long after: the ceiling a test's shorter window may name. */
+export const setAsideRetryDelayMs = 30_000;

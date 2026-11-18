@@ -274,6 +274,7 @@ export const frDict: Record<string, string> = {
   'agent.question_unanswered_note': '❌ Sans réponse',
   'agent.question_asked_again_note': '↓ Reposée plus bas',
   'agent.question_set_aside_note': '⏸ L’agent a continué sans votre réponse — vous pouvez encore répondre',
+  'agent.question_set_aside_not_taken_note': '⚠️ L’agent attend peut-être encore votre réponse : le serveur n’a pas accepté le message qui lui dit de poursuivre. Vous pouvez encore répondre',
   'agent.set_aside_question_gone_notice': 'Cette question est déjà répondue ou fermée — cela n’a rien changé.',
   'agent.set_aside_reply_failed_notice': '⚠️ L’agent n’a pas pu être invité à poursuivre sans sa question : le serveur n’a pas accepté le message, et l’agent l’attend peut-être encore. Envoyez-lui n’importe quel message pour le relancer.',
   'agent.set_aside_next_question_failed_notice': 'La question suivante n’a pas pu être publiée, votre réponse n’a donc pas été prise en compte — réessayez.',

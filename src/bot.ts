@@ -6521,6 +6521,7 @@ const {
   // The topic's own choice (`/question_wait`), else the instance value `settings.json` holds (`questionWait`), else the default.
   getQuestionWaitChoice: (key) => resolveQuestionWait(state.getQuestionWaitOverride(key), readInstanceQuestionWait() ?? undefined),
   shortenedWaitMs: ENV.testTimings.questionSetAsideWaitMs,
+  retryDelayMs: ENV.testTimings.questionSetAsideRetryMs,
   postQuestionAnew: postAgentQuestion,
 });
 
