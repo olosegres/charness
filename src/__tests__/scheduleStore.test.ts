@@ -119,6 +119,24 @@ describe('StateStore schedule collection', () => {
     fs.rmSync(fakeHome, { recursive: true, force: true });
   });
 
+  it('tells the status listener which conversation\'s schedules changed: a create, a pause, a rewrite and a cancel — a watched worker coming and going', async () => {
+    const store = trackStore(new StateStore(dataDir, { saveDebounceMs: 20 }));
+    await store.init();
+    const changed: string[] = [];
+    store.setStatusSourceChangeListener((key) => changed.push(keyToString(key)));
+    const record = createScheduleRecord({ threadKey: threadA, name: 'Watch', spec: dailySpec, prompt: 'p', createdBy: 'agent', nowMs });
+    await store.upsertSchedule(record);
+    await store.setSchedulePaused(record.id, true, 'unbound');
+    assert.equal(await store.updateScheduleIfPresent(record.id, (current) => ({ ...current, isCheckFailing: true })), true);
+    assert.equal(await store.updateScheduleIfPresent(record.id, () => null), false, 'a refused rewrite changes nothing');
+    await store.removeSchedule(record.id);
+    await store.removeSchedule(record.id);
+    assert.deepEqual(changed, Array.from({ length: 4 }, () => keyToString(threadA)), 'one signal per real change, for the owner of the schedule');
+    store.setStatusSourceChangeListener(null);
+    await store.upsertSchedule(record);
+    assert.equal(changed.length, 4, 'a removed listener is not told');
+  });
+
   it('upsert / get / remove round-trip', async () => {
     const store = trackStore(new StateStore(dataDir, { saveDebounceMs: 20 }));
     await store.init();

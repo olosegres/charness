@@ -583,6 +583,16 @@ test('topic naming: a re-bind to another folder keeps the candidate and the name
   assert.equal(store.getBinding(key1)?.indicatorDroppedMark, '✅');
 });
 
+test('setAsideQuestions: the status listener hears of a conversation whose set-aside questions changed', async () => {
+  const store = new StateStore(dataDir, { saveDebounceMs: 5 });
+  await store.init();
+  const changed: string[] = [];
+  store.setStatusSourceChangeListener((key) => changed.push(keyToString(key)));
+  await store.setSetAsideQuestions(key1, []);
+  await store.setSetAsideQuestions(key2, []);
+  assert.deepEqual(changed, [keyToString(key1), keyToString(key2)]);
+});
+
 // ── the status marks a topic chose for itself (`/topic_status`) ──
 
 test('topicStatusOverrides: a topic\'s own set round-trips through a reload, another topic is untouched, null hands it back to the instance', async () => {

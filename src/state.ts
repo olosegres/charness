@@ -1073,6 +1073,8 @@ export class StateStore {
   private readonly saveDebounceMs: number;
 
   private state: StateV1 = emptyState();
+  /** Told which conversation's schedules or set-aside questions just changed (the status mark of a topic's name is built from them). */
+  private statusSourceChangeListener: ((key: SessionKey) => void) | null = null;
   /** True if the previous on-disk state file was unreadable / corrupt. */
   private corruptedOnLoad = false;
   /** Archive path if the previous on-disk state was corrupted. */
@@ -1177,6 +1179,14 @@ export class StateStore {
   }
 
   // ── bindings ──
+
+  /**
+   * @description Register the one listener told when a conversation's schedules (a watched worker created, cancelled, paused, its check
+   * failing) or set-aside questions change. It runs after the change is made, outside the conversation's lock, and must not throw.
+   */
+  setStatusSourceChangeListener(listener: ((key: SessionKey) => void) | null): void {
+    this.statusSourceChangeListener = listener;
+  }
 
   getBinding(key: SessionKey): BindingData | null {
     return this.state.bindings[keyToString(key)] ?? null;
@@ -3018,6 +3028,7 @@ export class StateStore {
       (this.state.schedules ??= {})[record.id] = record;
       this.scheduleSave();
     });
+    this.statusSourceChangeListener?.(target);
   }
 
   /**
@@ -3043,6 +3054,7 @@ export class StateStore {
     };
     if (owner) await this.withLock(owner, run);
     else await run();
+    if (isUpdated && owner) this.statusSourceChangeListener?.(owner);
     return isUpdated;
   }
 
@@ -3060,6 +3072,7 @@ export class StateStore {
     };
     if (owner) await this.withLock(owner, run);
     else await run();
+    if (owner) this.statusSourceChangeListener?.(owner);
   }
 
   /**
@@ -3090,6 +3103,7 @@ export class StateStore {
     };
     if (owner) await this.withLock(owner, run);
     else await run();
+    if (owner) this.statusSourceChangeListener?.(owner);
   }
 
   // ── scheduler MCP secret ──
@@ -3240,6 +3254,7 @@ export class StateStore {
       }
       this.scheduleSave();
     });
+    this.statusSourceChangeListener?.(key);
   }
 
   /**

@@ -75,7 +75,7 @@ import { createQuestionSetAside } from './connectors/telegram/commands/questionS
 import { resolveQuestionWait } from './utils/questionWaitPlan';
 import { getOwnerRenameOutcome, indicatorBootWaveDelayMs, indicatorMinRenameGapMs, indicatorSettleMs, indicatorSweepIntervalMs, resolveTopicStatusPrefs, type TopicStatusInputs } from './utils/topicIndicatorPlan';
 import { createTopicIndicator } from './connectors/telegram/topicIndicator';
-import { checkIsCheckSchedule } from './scheduler/deliveryKind';
+import { checkIsWatchedWorkerRunning, getTopicStatusInputs } from './utils/topicIndicatorSources';
 import {
   enqueueSend,
   sendUnpaced,
@@ -1341,7 +1341,7 @@ function getDataDir(): string {
 let todoRegistry: TodoRegistry | null = null;
 
 function getTodoRegistry(): TodoRegistry {
-  todoRegistry ??= createTodoRegistry({ store: new TodoStore(getDataDir()), getNowMs: Date.now });
+  todoRegistry ??= createTodoRegistry({ store: new TodoStore(getDataDir()), getNowMs: Date.now, onItemsChanged: (key) => topicIndicator.requestRefresh(key) });
   return todoRegistry;
 }
 
@@ -1891,6 +1891,7 @@ const identicalOutputGuard = createIdenticalOutputGuard();
  */
 function setPendingQuestion(key: SessionKey, value: PendingQuestionState): void {
   pendingQuestions.set(keyToString(key), value);
+  topicIndicator.requestRefresh(key);
   state.setPendingQuestion(key, value).catch(e =>
     console.error('[pendingQuestion] persist failed:', e),
   );
@@ -1928,6 +1929,7 @@ function dropPendingQuestion(key: SessionKey, options: { isPinKept: boolean }): 
     pinStep = unpinThreadQuestion(key);
   }
   pendingQuestions.delete(kStr);
+  topicIndicator.requestRefresh(key);
   const savedStateStep = state.clearPendingQuestion(key).catch(e =>
     console.error('[pendingQuestion] clear failed:', e),
   );
@@ -2280,6 +2282,7 @@ function handleApiError(key: SessionKey, cls: AgentApiErrorClass, options: Handl
   if (cls.kind === 'usageLimit' && !state.checkIsAutoContinueOnLimitEnabled(key)) {
     const isFirstOffNotice = !autoContinueOffNoticedThreads.has(k);
     autoContinueOffNoticedThreads.add(k);
+    topicIndicator.requestRefresh(key);
     // Each repeat is offered to the open request: the dedup is per request, so one
     // opened after the first notice still hears about the limit (and is stopped).
     const wait: UsageLimitWait = { kind: 'autoResumeOff' };
@@ -2385,6 +2388,7 @@ function armApiRetryTimer(key: SessionKey, arming: ApiRetryArming): void {
   // bottom (debounced; no-op when no question is pending).
   onThreadActivityWhileQuestionPending(key);
 
+  topicIndicator.requestRefresh(key);
   void state
     .setApiRetry(key, { kind: arming.kind, attempt: arming.attempt, fireAt: arming.fireAt, ...(arming.isLimitProbe ? { isLimitProbe: true } : {}), ...(arming.resumeOn ? { resumeOn: arming.resumeOn } : {}) })
     .catch(e => console.error('[apiRetry] persist failed:', e));
@@ -2650,6 +2654,7 @@ async function handleBalanceExhausted(key: SessionKey, cls: AgentApiErrorClass):
     return;
   }
   balanceExhaustedNoticedThreads.add(k);
+  topicIndicator.requestRefresh(key);
   const episodeId = Date.now();
   let plan: Awaited<ReturnType<typeof planFallbackSwitch>> = { action: 'none', from: position, earliest: null };
   try {
@@ -2784,6 +2789,7 @@ function cancelApiRetry(key: SessionKey): void {
   apiRetryTimers.delete(k);
   clearSavedApiRetry(key);
   clearSavedFiredLimitProbe(key);
+  topicIndicator.requestRefresh(key);
   // The limit episode is over for this thread → retire its two one-shot markers.
   // Unlike the logged-out notice below, BOTH are safe to drop here: the pinned
   // "work resumed" message announces a PAST event (nothing re-posts it), and the
@@ -2793,6 +2799,7 @@ function cancelApiRetry(key: SessionKey): void {
   autoContinueOffNoticedThreads.delete(k);
   balanceExhaustedNoticedThreads.delete(k);
   fallbackSwitchOffers.delete(k);
+  topicIndicator.requestRefresh(key);
   // NOTE: intentionally does NOT touch the logged-out notice. `cancelApiRetry`
   // fires on EVERY inbound message (user takeover); clearing the auth notice here
   // would drop the one-notice guard so the user's next prompt (into the STILL
@@ -2900,6 +2907,7 @@ async function surfaceLoggedOutNotice(key: SessionKey): Promise<void> {
   const messageKey =
     getThreadAdapterNameRaw(key) === openCodeAdapterName ? 'apiRetry.loggedOutOpenCode' : 'apiRetry.loggedOutClaude';
   await surfacePinnedNotice(authNoticePinnedMessageId, keyToString(key), getPinnedNoticePorts(key, t(messageKey)));
+  topicIndicator.requestRefresh(key);
 }
 
 /** @description The post and the notifying pin of a pinned notice of `key`'s topic ({@link surfacePinnedNotice}). */
@@ -2923,6 +2931,7 @@ function getPinnedNoticePorts(key: SessionKey, text: string): PinnedNoticePorts 
 function clearAuthNotice(key: SessionKey): void {
   const pinnedId = releasePinnedNoticeSlot(authNoticePinnedMessageId, keyToString(key));
   if (pinnedId !== null) void unpinMessageQuiet(key, pinnedId);
+  topicIndicator.requestRefresh(key);
 }
 
 /**
@@ -3888,50 +3897,53 @@ function checkIsTopicStuck(key: SessionKey): boolean {
   );
 }
 
-/** The workers the agent of `key`'s topic watches (a passing check with a worker's run directory) that still run: not paused, not ended, not failing. */
+/** The workers the agent of `key`'s topic watches that still run (`checkIsWatchedWorkerRunning`). */
 function getWatchedWorkerCount(key: SessionKey): number {
-  return state.getThreadSchedules(key).filter((record) => (
-    checkIsCheckSchedule(record) && record.statusWorkerRunDir !== undefined && record.isPaused !== true && record.nextRunAt !== null && record.isCheckFailing !== true
-  )).length;
+  return state.getThreadSchedules(key).filter(checkIsWatchedWorkerRunning).length;
+}
+
+/** The name of the backend `key`'s topic runs, when it has agent states: none for a terminal topic and for one that never started an agent. */
+function getTopicIndicatorAdapterName(key: SessionKey): string | null {
+  const adapterName = getThreadAdapterNameRaw(key) ?? state.getAgent(key)?.name;
+  return adapterName !== undefined && adapterName !== terminalAdapterName ? adapterName : null;
+}
+
+/** The adapter of `key`'s topic with whether its process is up; `null` when it has no agent states or the adapter name a stale binding holds is unknown. */
+function getTopicIndicatorAdapter(key: SessionKey): { adapter: AgentAdapter; isActive: boolean } | null {
+  const adapterName = getTopicIndicatorAdapterName(key);
+  if (adapterName === null) return null;
+  try {
+    const adapter = getAdapter(adapterName);
+    return { adapter, isActive: adapter.checkIsActive(key) };
+  } catch {
+    return null;
+  }
 }
 
 /** Whether the topic's own agent runs a turn (background tasks and a compaction included): `checkIsWorking`, else `checkIsBusy`. */
 function checkIsTopicAgentWorking(key: SessionKey): boolean {
-  const adapterName = getThreadAdapterNameRaw(key) ?? state.getAgent(key)?.name;
-  if (!adapterName || adapterName === terminalAdapterName) return false;
-  try {
-    const adapter = getAdapter(adapterName);
-    return adapter.checkIsActive(key) && (adapter.checkIsWorking ? adapter.checkIsWorking(key) : adapter.checkIsBusy?.(key) === true);
-  } catch {
-    // An adapter name a stale binding holds: no state to read.
-    return false;
-  }
+  const found = getTopicIndicatorAdapter(key);
+  if (!found?.isActive) return false;
+  return found.adapter.checkIsWorking ? found.adapter.checkIsWorking(key) : found.adapter.checkIsBusy?.(key) === true;
 }
 
 /**
  * @description The facts the status mark of `key`'s topic name is chosen from (`utils/topicIndicatorPlan.ts`), read live: an open question
  * (waiting or set aside), a stuck agent, a turn or a watched worker at work, a process that is up and idle (finished) or stopped with the
- * conversation kept (asleep). A topic with no agent, or on the terminal backend, has none of them.
+ * conversation kept (asleep). The rules are `getTopicStatusInputs`.
  */
 function getTopicIndicatorInputs(key: SessionKey): TopicStatusInputs {
   const k = keyToString(key);
-  const adapterName = getThreadAdapterNameRaw(key) ?? state.getAgent(key)?.name;
-  const hasAgent = adapterName !== undefined && adapterName !== terminalAdapterName;
-  if (!hasAgent) return { hasOpenQuestion: false, isStuck: false, isWorking: false, isFinished: false, isAsleep: false };
-  let isActive = false;
-  try {
-    isActive = getAdapter(adapterName).checkIsActive(key);
-  } catch {
-    isActive = false;
-  }
-  const isAgentWorking = isActive && checkIsTopicAgentWorking(key);
-  return {
+  const found = getTopicIndicatorAdapter(key);
+  return getTopicStatusInputs({
+    hasAgent: getTopicIndicatorAdapterName(key) !== null,
+    isActive: found?.isActive ?? false,
+    isTurnRunning: checkIsTopicAgentWorking(key),
+    watchedWorkerCount: getWatchedWorkerCount(key),
     hasOpenQuestion: pendingQuestions.has(k) || (state.getSetAsideQuestions()[k]?.length ?? 0) > 0,
     isStuck: checkIsTopicStuck(key),
-    isWorking: isAgentWorking || getWatchedWorkerCount(key) > 0,
-    isFinished: isActive && !isAgentWorking,
-    isAsleep: !isActive && getResumableSessionId(key) !== null,
-  };
+    hasResumableSession: getResumableSessionId(key) !== null,
+  });
 }
 
 /** The agents at work in `key`'s topic: its own while it works, plus each worker it watches. */
@@ -3960,6 +3972,8 @@ async function updatePinnedStatus(key: SessionKey): Promise<void> {
   const k = keyToString(key);
   if (unbindingKeys.has(k)) return;
   if (!shouldHavePinnedStatus(key)) return;
+  // The banner is refreshed at every start, stop, suspension and close of the topic's agent: the same moments its name's mark changes.
+  topicIndicator.requestRefresh(key);
 
   // Audit S6 / #8: serialise all banner work for a key — without this,
   // two near-simultaneous adapter events could both observe a missing
@@ -6070,6 +6084,7 @@ const autoStopUnsupportedLoggedKeys = new Set<string>();
  */
 function handleAgentTurnEnded(key: SessionKey): void {
   noteThreadActivity(key);
+  topicIndicator.requestRefresh(key);
   const adapter = getThreadAdapter(key);
   if (adapter.name !== claudePerTurnAdapterName) return;
   if (checkIsDeferredCompactionArmed(key) || adapter.checkIsWorking?.(key)) return;
@@ -6162,6 +6177,8 @@ async function forwardPromptToAgent(
   sentAtMs?: number,
   options: PromptForwardOptions = {},
 ): Promise<LatePromptOutcome> {
+  // The next turn begins: an agent that went wrong is no longer stuck (`checkIsTopicStuck`), and its name follows.
+  if (topicsStuckUntilNextTurn.delete(keyToString(key))) topicIndicator.requestRefresh(key);
   // An adopted session replays what its process wrote during the downtime first: a prompt written meanwhile would reset
   // the answer and error state those frames still use, and the replayed text would join the new reply's message (the
   // «new message» mark would go to the replayed text). Nothing is awaited when no replay is pending: the forward then runs
@@ -11425,6 +11442,8 @@ bot.on(message('forum_topic_edited'), async (ctx) => {
       indicatorAppliedName: newName,
       indicatorDroppedMark: renamed.droppedMark,
     });
+    // What the topic shows now is the owner's name (with or without our mark): look at it again.
+    topicIndicator.requestRefresh(key);
   } else {
     // No binding yet — keep the freshest name for a later fuzzy auto-bind.
     pendingTopicNames.set(keyToString(key), { name: renamed.base, ts: Date.now(), isFromAdmin: true });
@@ -13522,6 +13541,8 @@ function handleAgentClosed(key: SessionKey): void {
   // A closed session has nothing to resume — drop any armed retry silently.
   cancelApiRetry(key);
   clearAuthNotice(key); // session closed → retire any pinned logged-out notice
+  // The process died on its own: the topic's name says stuck until the next turn (the banner refresh below asks for the mark).
+  topicsStuckUntilNextTurn.add(keyToString(key));
   // A closed session has nothing to compact — drop the idle watchdog + any arm.
   clearThreadCompaction(key);
   const adapter = getThreadAdapter(key);
@@ -13679,6 +13700,8 @@ function createBufferedOutcome(): { settle: BufferedPromptSettled; assertReplaye
 
 function handleAgentError(key: SessionKey, error: Error): void {
   console.error(`[Bot] adapter error ${keyToString(key)}:`, error.message);
+  topicsStuckUntilNextTurn.add(keyToString(key));
+  topicIndicator.requestRefresh(key);
   stopClaudeLiveness(key);
   supersedeStatusFrames(key);
   deleteStatusMessage(key).catch(() => {});
@@ -13771,6 +13794,8 @@ function handleAgentStopped(key: SessionKey): void {
  * never told it.
  */
 function handleConversationLost(key: SessionKey): void {
+  topicsStuckUntilNextTurn.add(keyToString(key));
+  topicIndicator.requestRefresh(key);
   dropLostConversationWatermark(key);
   clearThreadContextMarker(key);
   replyToThread(key, t('agent.resume_failed_fresh')).catch(() => {});
@@ -15514,6 +15539,8 @@ export async function startBot(): Promise<void> {
   // docs/troubleshooting.md's two-instances section tells the operator to compare this
   // exact line across instances.
   state = await getStateStore({ saveDebounceMs: ENV.testTimings.stateSaveDebounceMs });
+  // A watched worker created, ended or paused, a question set aside or closed: the topic's name follows.
+  state.setStatusSourceChangeListener((key) => topicIndicator.requestRefresh(key));
   console.log(`[startup] DATA_DIR=${path.dirname(state.stateFilePath)}`);
   // R13: before anything reads, rewrites or acts on the state, it must hold only
   // conversations of the platforms this instance serves.
@@ -15715,6 +15742,9 @@ export async function startBot(): Promise<void> {
     // Output means a turn is under way — the wake-up engine's busy-onset signal, and the todo reminder's.
     requestWakeUpEngine?.noteAgentOutput(key);
     todoReminderEngine?.noteAgentOutput(key);
+    // …and the topic's name shows it: an agent that went wrong is no longer stuck once a turn runs.
+    topicsStuckUntilNextTurn.delete(keyToString(key));
+    topicIndicator.requestRefresh(key);
   };
   registerAdapterEventHandlers({
     onOutput: (key, output, meta) => dispatchAdapterEvent(key, 'output', () => {
@@ -15732,7 +15762,11 @@ export async function startBot(): Promise<void> {
       markThreadTurnProducedOutput(key);
       noteThreadActivity(key);
     }),
-    onStatus: (key, status) => dispatchAdapterEvent(key, 'status', () => withThreadLocale(key, () => handleAdapterStatus(key, status))),
+    onStatus: (key, status) => dispatchAdapterEvent(key, 'status', () => {
+      // A status frame (a tool call, thinking) is the first sign of a turn that produces no text yet.
+      topicIndicator.requestRefresh(key);
+      return withThreadLocale(key, () => handleAdapterStatus(key, status));
+    }),
     onQuestion: (key, question) => dispatchAdapterEvent(key, 'question', () => withThreadLocale(key, () => handleAgentQuestion(key, question))),
     onThinking: (key, payload) => dispatchAdapterEvent(key, 'thinking', () => withThreadLocale(key, () => handleAgentThinking(key, payload))),
     onToolResult: (key, payload) => dispatchAdapterEvent(key, 'toolResult', () => withThreadLocale(key, () => handleAgentToolResult(key, payload))),

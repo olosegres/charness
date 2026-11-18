@@ -246,6 +246,20 @@ describe('the registry service', () => {
     assert.equal(createRegistry().getTopic(topicKey).items.length, 1, 'persisted across a new registry');
   });
 
+  it('tells its listener when a todo_update changed the items, and only then — the queued count of the topic\'s name follows them', () => {
+    const changedKeys: string[] = [];
+    const registry = createTodoRegistry({ store: new TodoStore(dataDir, () => clockMs), getNowMs: () => clockMs, onItemsChanged: (key) => changedKeys.push(key.thread.toString()) });
+    registry.updateTodos(topicKey, { items: [{ title: 'Fix leak' }] });
+    assert.deepEqual(changedKeys, [topicKey.thread.toString()]);
+    registry.updateTodos(topicKey, {});
+    registry.updateTodos(topicKey, { items: [{ id: 't1', status: 'queued' }] });
+    assert.equal(changedKeys.length, 1, 'a call that changes nothing, and a refused one, tell nobody');
+    registry.updateTodos(topicKey, { items: [{ id: 't9', status: 'done' }] });
+    assert.equal(changedKeys.length, 1);
+    registry.updateTodos(topicKey, { items: [{ id: 't1', status: 'inWork' }] });
+    assert.equal(changedKeys.length, 2);
+  });
+
   it('todo_read: the own list, and with the history the closed items newest first up to the cap', () => {
     const registry = createRegistry();
     registry.updateTodos(topicKey, { items: [{ title: 'Open one' }, { title: 'Closed one', status: 'done' }, { title: 'Abandoned', status: 'dropped' }] });

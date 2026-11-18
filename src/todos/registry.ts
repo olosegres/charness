@@ -45,6 +45,8 @@ export type TodoToolOutcome = { ok: true; message: string } | { ok: false; error
 export interface TodoRegistryDeps {
   store: TodoStore;
   getNowMs: () => number;
+  /** Told when a `todo_update` changed the conversation's items (the queued count of the topic's name follows them). */
+  onItemsChanged?: (key: SessionKey) => void;
 }
 
 /** @name TodoRegistry @description The registry's operations over the conversations' lists. */
@@ -81,7 +83,7 @@ function formatUpdateSummary(isChanged: boolean, createdIds: readonly string[]):
 }
 
 export function createTodoRegistry(deps: TodoRegistryDeps): TodoRegistry {
-  const { store, getNowMs } = deps;
+  const { store, getNowMs, onItemsChanged } = deps;
   /** Busy time polled since the conversation's last turn end, not stored yet (a write per poll would be wasted). */
   const unsavedWorkMs = new Map<string, number>();
 
@@ -105,6 +107,7 @@ export function createTodoRegistry(deps: TodoRegistryDeps): TodoRegistry {
       // Any call says the list is accurate: the reminder's clock waits for the next turn end (D10).
       unsavedWorkMs.delete(keyToString(key));
       const saved = store.saveTopic(key, { ...result.file, nag: createTodoNagState() });
+      if (result.isChanged) onItemsChanged?.(key);
       return { ok: true, message: `${formatUpdateSummary(result.isChanged, result.createdIds)}\n\n${formatOwnTodoList(saved.items, nowMs)}` };
     },
 
