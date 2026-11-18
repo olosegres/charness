@@ -22,8 +22,10 @@ printf '%s\\n' "$*" >> "$dir/calls.log"
 mkdir -p "$dir/tasks"
 case $1 in
   status)
-    # FAKE_PQ_STATUS_SLOW_SEC: Pueue answers, but only after that long (a daemon starved of CPU on a machine with load 129).
-    [ -z "\${FAKE_PQ_STATUS_SLOW_SEC:-}" ] || sleep "$FAKE_PQ_STATUS_SLOW_SEC"
+    # A status.hold file in the task dir: Pueue does not answer for as long as it exists (a daemon starved of CPU on a machine with load 129), bounded to 30 s so that a test that forgets it cannot hang. A held answer, unlike a
+    # sleep, does not race the rest of a loaded box: the caller decides when the daemon answers.
+    held=0
+    while [ -e "$dir/status.hold" ] && [ $held -lt 300 ]; do sleep 0.1; held=$((held+1)); done
     [ -z "\${FAKE_PQ_DOWN:-}" ] || exit 1
     # FAKE_PQ_DOWN_FILE: Pueue does not answer for as long as that file exists (a daemon that restarts, then is back).
     [ ! -e "\${FAKE_PQ_DOWN_FILE:-/nonexistent}" ] || exit 1
@@ -103,6 +105,10 @@ afterEach(() => {
   removeTestRoot(root);
 });
 }
+
+/** Pueue stops answering `status` until {@link releasePueueStatus} (the stand-in's `status.hold`, 30 s at most). */
+export const holdPueueStatus = (): void => writeFile(pueueDir, 'status.hold', '');
+export const releasePueueStatus = (): void => fs.rmSync(path.join(pueueDir, 'status.hold'), { force: true });
 
 export function getEnvironment(extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
   return { ...process.env, PUEUE_BIN: path.join(root, 'bin', 'pueue'), FAKE_PQ: pueueDir, ...extra };

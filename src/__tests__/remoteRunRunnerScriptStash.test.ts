@@ -13,7 +13,7 @@ import assert from 'node:assert/strict';
 import fs from 'fs';
 import path from 'path';
 import { killDetachedRuns, startRunnerStandIn, writeFile } from './remoteRunRunnerScriptKit';
-import { slug, otherSlug, root, workDir, pueueDir, Run, runScript, runSourced, probeAndSettle, jobFolder, createJobFolder, submit, waitUntil, isStashed, readTaskId, readCalls, readTaskState, endJob, markRunning, useStashHarness } from './remoteRunRunnerScriptStashKit';
+import { slug, otherSlug, root, workDir, pueueDir, Run, runScript, runSourced, probeAndSettle, jobFolder, createJobFolder, submit, waitUntil, isStashed, readTaskId, readCalls, readTaskState, endJob, markRunning, holdPueueStatus, releasePueueStatus, useStashHarness } from './remoteRunRunnerScriptStashKit';
 
 useStashHarness();
 
@@ -223,16 +223,17 @@ describe('the safety net: `prepare` and `probe`', () => {
 
 describe('the probe\'s answer never waits for the scheduling safety net', () => {
   /** A job that is being queued: it has its task number and no process yet — what a probe sees while a submit is under way, and what the safety net then looks at. */
-  const slowPueueSec = 6;
-  const answerBoundMs = 4_000;
+  /** Half of the 30 s that a held Pueue and a held mutex both last: a probe that waited for either takes 30 s, one that answered takes what a loaded box needs for its own work. */
+  const answerBoundMs = 15_000;
 
-  it('a job that is starting while Pueue answers `status` slowly (a daemon starved of CPU on a loaded Mac): the probe still answers at once, counting the job as queued — it used to wait for Pueue, 25.8 s against 0.4 s measured, past the caller\'s 20 s', () => {
+  it('a job that is starting while Pueue does not answer `status` (a daemon starved of CPU on a loaded Mac): the probe still answers at once, counting the job as queued — it used to wait for Pueue, 25.8 s against 0.4 s measured, past the caller\'s 20 s', () => {
     submit('box1-aaaaaa');
+    holdPueueStatus();
     const startedAt = Date.now();
-    const probe = runScript(['probe', workDir], { FAKE_PQ_STATUS_SLOW_SEC: `${slowPueueSec}` });
+    const probe = runScript(['probe', workDir]);
     const tookMs = Date.now() - startedAt;
     assert.equal(probe.status, 0, probe.stderr);
-    assert.ok(tookMs < answerBoundMs, `the probe took ${tookMs} ms: it waited for Pueue (${slowPueueSec} s)`);
+    assert.ok(tookMs < answerBoundMs, `the probe took ${tookMs} ms: it waited for Pueue`);
     assert.match(probe.stdout, /^jobs_queued=1$/m, 'the starting job is counted');
     assert.match(probe.stdout, /^pueue=/m);
     killDetachedRuns(root);
@@ -253,14 +254,17 @@ describe('the probe\'s answer never waits for the scheduling safety net', () => 
   it('the net still runs — in the background, one at a time: the lost job is ended after the answer, and a probe while it is still going starts no second', async () => {
     submit('box1-aaaaaa');
     fs.rmSync(path.join(pueueDir, 'tasks', readTaskId('box1-aaaaaa')));
-    const first = runScript(['probe', workDir], { FAKE_PQ_STATUS_SLOW_SEC: '2' });
+    // Held until the case has looked: a sleep would race the probe's own work, and on a loaded box the net would end the lost job before the probe counted it.
+    holdPueueStatus();
+    const first = runScript(['probe', workDir]);
     assert.equal(first.status, 0, first.stderr);
     assert.match(first.stdout, /^jobs_queued=1$/m, 'the answer does not wait: the lost job still counts');
     const pidFile = path.join(workDir, 'tmp', 'settle-queue.pid');
     assert.ok(fs.existsSync(pidFile), 'a detached run was started');
     const startedPid = fs.readFileSync(pidFile, 'utf8').trim();
-    runScript(['probe', workDir], { FAKE_PQ_STATUS_SLOW_SEC: '2' });
+    runScript(['probe', workDir]);
     assert.equal(fs.readFileSync(pidFile, 'utf8').trim(), startedPid, 'a probe while the net is still going does not start another');
+    releasePueueStatus();
     await waitUntil(() => fs.existsSync(path.join(jobFolder('box1-aaaaaa'), 'exit')), 'the net to end the lost job');
     assert.equal(fs.readFileSync(path.join(jobFolder('box1-aaaaaa'), 'exit'), 'utf8').trim(), '137');
   });
