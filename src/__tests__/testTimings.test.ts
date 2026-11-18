@@ -39,6 +39,7 @@ import { pairingLifetimeMs } from '../runners/pairingTiming';
 import { runnerWaitPollMinMs, runnerWaitPollMs } from '../remoteRun/runnerWaitTiming';
 import { longestQuestionWaitMs, setAsideRetryDelayMs } from '../utils/questionWaitChoices';
 import { busyPollIntervalMs, waitIdleTimeoutMs } from '../postToSession';
+import { indicatorBootWaveDelayMs, indicatorMinRenameGapMs, indicatorSettleMs, indicatorSweepIntervalMs } from '../utils/topicIndicatorPlan';
 
 /** Every key with the production window (a count, for `bindPickerClaimLimit`) it may only shorten. */
 const productionWindowsMs: Array<[keyof TestTimings, number]> = [
@@ -58,6 +59,10 @@ const productionWindowsMs: Array<[keyof TestTimings, number]> = [
   ['creditRecheckIntervalMs', claudeApiCreditRecheckIntervalMs],
   ['creditRecheckPollMs', claudeApiCreditRecheckPollMs],
   ['scheduleMinFireIntervalMs', minFireIntervalMs],
+  ['topicIndicatorSettleMs', indicatorSettleMs],
+  ['topicIndicatorMinRenameGapMs', indicatorMinRenameGapMs],
+  ['topicIndicatorSweepMs', indicatorSweepIntervalMs],
+  ['topicIndicatorBootWaveDelayMs', indicatorBootWaveDelayMs],
   ['checkStatusIntervalMs', defaultCheckStatusEveryMinutes * 60 * 1000],
   ['remoteRunLeaseMs', remoteRunLeaseMs],
   ['runnerVersionPollMs', runnerVersionPollMs],

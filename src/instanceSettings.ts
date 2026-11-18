@@ -16,6 +16,7 @@ import type { HubAddress } from './runners/hubAddress';
 import { autoUpdateModes, defaultAutoUpdateMode, defaultWhatsNew, type AutoUpdateMode, type UpdateSettings } from './selfUpdate/updateModes';
 import { todoReminderDefaultMinutes, type TodoReminderSettings } from './todos/nag';
 import { questionWaitChoices, type QuestionWaitChoice } from './utils/questionWaitChoices';
+import type { TopicStatusPrefs } from './utils/topicIndicatorPlan';
 
 /**
  * @description The instance-wide settings: ONE JSON file, `settings.json`, in the charness config directory
@@ -23,7 +24,7 @@ import { questionWaitChoices, type QuestionWaitChoice } from './utils/questionWa
  * hand-edit it and the next read sees the edit (the load is cached by file stamp, no restart). More instance
  * settings will move here later; today it holds `defaultEffort`, `autoUpdate`, `whatsNew`, `botSkills` (whether the bot's
  * own skills reach the agents: the way an instance without General sets it), `taskAgents` (the cap on tracker task agents
- * running at once — the way an instance without General sets it), `questionWait` (how long an unanswered agent question waits before it is set aside — the instance default a topic's own choice overrides), `todo` (the shared todo lists: on / off and the
+ * running at once — the way an instance without General sets it), `questionWait` (how long an unanswered agent question waits before it is set aside — the instance default a topic's own choice overrides), `topicStatus` (which status marks and counts the topic list shows after a topic's name — the instance default a topic's own set overrides), `todo` (the shared todo lists: on / off and the
  * staleness reminder's interval — also the way an instance without General sets them) and `runnerHost` (the address
  * paired runners dial, chosen once in `/runners`).
  *
@@ -50,6 +51,8 @@ export interface InstanceSettings {
   botSkills: BotSkillsSetting | null;
   /** The question wait of every topic that has none of its own (`utils/questionWaitPlan.ts`): how long an unanswered agent question waits before it is set aside; `null` = the built-in default (30 min). */
   questionWait: QuestionWaitChoice | null;
+  /** The switches the owner changed for the status mark after every topic's name that has no set of its own (`utils/topicIndicatorPlan.ts`); a switch it does not name keeps its default. */
+  topicStatus: Partial<TopicStatusPrefs>;
   /** The tracker task agents (`trackers/`): `maxConcurrent` is the cap for the whole bot, `0` = no limit; `null` = not set, the built-in default (5). */
   taskAgents: { maxConcurrent: number | null };
   /** The shared todo lists (`todos/`); a field that is `null` = its default (on, a reminder every hour). */
@@ -67,6 +70,15 @@ const rawSettingsSchema = z.strictObject({
   whatsNew: z.boolean().optional(),
   botSkills: z.enum(botSkillsSettingValues).optional(),
   questionWait: z.enum(questionWaitChoices).optional(),
+  topicStatus: z.strictObject({
+    question: z.boolean().optional(),
+    stuck: z.boolean().optional(),
+    working: z.boolean().optional(),
+    finished: z.boolean().optional(),
+    asleep: z.boolean().optional(),
+    agents: z.boolean().optional(),
+    queued: z.boolean().optional(),
+  }).optional(),
   taskAgents: z.strictObject({
     /** `0` = no limit. */
     maxConcurrent: z.number().int().min(0).max(taskAgentsMaxConcurrentUpperBound).optional(),
@@ -81,7 +93,7 @@ const rawSettingsSchema = z.strictObject({
 
 /** @description The settings of an instance that has no `settings.json`: nothing set. */
 export function createEmptyInstanceSettings(): InstanceSettings {
-  return { defaultEffort: null, autoUpdate: null, whatsNew: null, botSkills: null, questionWait: null, taskAgents: { maxConcurrent: null }, todo: { isEnabled: null, reminderMinutes: null }, runnerHost: null };
+  return { defaultEffort: null, autoUpdate: null, whatsNew: null, botSkills: null, questionWait: null, topicStatus: {}, taskAgents: { maxConcurrent: null }, todo: { isEnabled: null, reminderMinutes: null }, runnerHost: null };
 }
 
 /**
@@ -104,6 +116,7 @@ export function validateInstanceSettings(parsedJson: object): ConfigValidation<I
       whatsNew: parsed.data.whatsNew ?? null,
       botSkills: parsed.data.botSkills ?? null,
       questionWait: parsed.data.questionWait ?? null,
+      topicStatus: { ...parsed.data.topicStatus },
       taskAgents: { maxConcurrent: parsed.data.taskAgents?.maxConcurrent ?? null },
       todo: { isEnabled: parsed.data.todo?.isEnabled ?? null, reminderMinutes: parsed.data.todo?.reminderMinutes ?? null },
       runnerHost: parsed.data.runnerHost ?? null,
@@ -143,6 +156,7 @@ export function saveInstanceSettings(filePath: string, settings: InstanceSetting
     ...(settings.whatsNew === null ? {} : { whatsNew: settings.whatsNew }),
     ...(settings.botSkills === null ? {} : { botSkills: settings.botSkills }),
     ...(settings.questionWait === null ? {} : { questionWait: settings.questionWait }),
+    ...(Object.keys(settings.topicStatus).length === 0 ? {} : { topicStatus: settings.topicStatus }),
     ...(settings.taskAgents.maxConcurrent === null ? {} : { taskAgents: { maxConcurrent: settings.taskAgents.maxConcurrent } }),
     ...(settings.todo.isEnabled === null && settings.todo.reminderMinutes === null
       ? {}
@@ -253,6 +267,15 @@ export function createBotSkillsSettingsReader(getFilePath: () => string, logErro
  */
 export function createQuestionWaitSettingsReader(getFilePath: () => string, logError: (line: string) => void): () => QuestionWaitChoice | null {
   return createSettingsPartReader(getFilePath, logError, (settings) => settings.questionWait);
+}
+
+/**
+ * @description The reader of the instance's status-mark switches (`utils/topicIndicatorPlan.ts`): `topicStatus`, re-read when the file
+ * changes — a hand edit applies at the next look at a topic. An empty object = the file names none (every default applies). An invalid
+ * file reads as the empty one, and `logError` gets ONE line per distinct broken state (not one per read).
+ */
+export function createTopicStatusSettingsReader(getFilePath: () => string, logError: (line: string) => void): () => Partial<TopicStatusPrefs> {
+  return createSettingsPartReader(getFilePath, logError, (settings) => settings.topicStatus);
 }
 
 /**

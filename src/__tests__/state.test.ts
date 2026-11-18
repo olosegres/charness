@@ -583,6 +583,37 @@ test('topic naming: a re-bind to another folder keeps the candidate and the name
   assert.equal(store.getBinding(key1)?.indicatorDroppedMark, '✅');
 });
 
+// ── the status marks a topic chose for itself (`/topic_status`) ──
+
+test('topicStatusOverrides: a topic\'s own set round-trips through a reload, another topic is untouched, null hands it back to the instance', async () => {
+  const first = new StateStore(dataDir, { saveDebounceMs: 5 });
+  await first.init();
+  assert.equal(first.getTopicStatusOverride(key1), undefined);
+  const own = { question: true, stuck: true, working: false, finished: true, asleep: false, agents: true, queued: false };
+  await first.setTopicStatusOverride(key1, own);
+  assert.deepEqual(first.getTopicStatusOverride(key1), own);
+  assert.equal(first.getTopicStatusOverride(key2), undefined, 'another topic follows the instance');
+  await first.flush();
+
+  const second = new StateStore(dataDir, { saveDebounceMs: 5 });
+  await second.init();
+  assert.deepEqual(second.getTopicStatusOverride(key1), own, 'survives a restart');
+  await second.setTopicStatusOverride(key1, null);
+  assert.equal(second.getTopicStatusOverride(key1), undefined);
+  await second.flush();
+  assert.equal('topicStatusOverrides' in JSON.parse(fs.readFileSync(path.join(dataDir, 'state.json'), 'utf8')), false, 'an emptied map leaves no field');
+});
+
+test('topicStatusOverrides: a set that is not whole booleans (a hand edit) counts as none', async () => {
+  fs.mkdirSync(dataDir, { recursive: true });
+  const whole = { question: true, stuck: true, working: true, finished: true, asleep: true, agents: false, queued: false };
+  fs.writeFileSync(path.join(dataDir, 'state.json'), JSON.stringify({ version: 1, bindings: {}, agents: {}, messages: {}, topicStatusOverrides: { [keyToString(key1)]: { ...whole, queued: 'yes' }, [keyToString(key2)]: whole } }));
+  const store = new StateStore(dataDir, { saveDebounceMs: 5 });
+  await store.init();
+  assert.equal(store.getTopicStatusOverride(key1), undefined);
+  assert.deepEqual(store.getTopicStatusOverride(key2), whole);
+});
+
 // ── output-trace toggle (/trace) ──
 
 test('traceConfig: defaults all-threads ON (always-on observability) on a fresh state file', async () => {

@@ -207,6 +207,12 @@ export const indicatorSettleMs = 20_000;
 /** Two renames of one topic are at least this far apart; the latest state wins, a state that came and went inside the gap is never shown. */
 export const indicatorMinRenameGapMs = 60_000;
 
+/** The bot looks at every topic again this often, for the changes no event announces (a watched worker that ended). */
+export const indicatorSweepIntervalMs = 5 * 60_000;
+
+/** After the polling starts, the boot's rename wave waits this long for the first pending updates to be handled (an owner's rename made while the bot was down is learned before the wave writes). */
+export const indicatorBootWaveDelayMs = 5_000;
+
 /** What {@link planIndicatorRename} decides on. */
 export interface IndicatorRenameInputs {
   /** The name the topic should show now. */
@@ -219,6 +225,8 @@ export interface IndicatorRenameInputs {
   workingSinceMs: number | null;
   /** When the bot last renamed this topic; `null` before the first. */
   lastRenameAtMs: number | null;
+  /** The owner just changed what is shown (a switch of `/topic_status`): his change skips the gap like the edges of ❓ do. */
+  isOwnerChange: boolean;
   nowMs: number;
   settleMs: number;
   minGapMs: number;
@@ -230,15 +238,15 @@ export type IndicatorRenamePlan = { kind: 'now' } | { kind: 'at'; atMs: number }
 /**
  * @description When the topic is renamed to its desired name. Nothing when it already shows it. The ⏳ waits until the turn has run
  * `settleMs`. Two renames keep `minGapMs` apart — except the edges of ❓ (a question appearing or being answered is the one thing the owner
- * must see at once), which still go through the shared send gate. The instant a wait ends is when the caller asks again, so the LATEST
+ * must see at once) and a change the owner just made himself, which still go through the shared send gate. The instant a wait ends is when the caller asks again, so the LATEST
  * desired name wins and states that came and went meanwhile are never shown.
  */
 export function planIndicatorRename(inputs: IndicatorRenameInputs): IndicatorRenamePlan {
-  const { desiredName, desiredStatus, appliedName, workingSinceMs, lastRenameAtMs, nowMs, settleMs, minGapMs } = inputs;
+  const { desiredName, desiredStatus, appliedName, workingSinceMs, lastRenameAtMs, isOwnerChange, nowMs, settleMs, minGapMs } = inputs;
   if (desiredName === appliedName) return { kind: 'none' };
   const isQuestionEdge = desiredStatus === 'question' || getIndicatorStatusOfName(appliedName) === 'question';
   const settleAtMs = desiredStatus === 'working' && workingSinceMs !== null ? workingSinceMs + settleMs : nowMs;
-  const gapEndsAtMs = !isQuestionEdge && lastRenameAtMs !== null ? lastRenameAtMs + minGapMs : nowMs;
+  const gapEndsAtMs = !isQuestionEdge && !isOwnerChange && lastRenameAtMs !== null ? lastRenameAtMs + minGapMs : nowMs;
   const atMs = Math.max(settleAtMs, gapEndsAtMs);
   return atMs > nowMs ? { kind: 'at', atMs } : { kind: 'now' };
 }

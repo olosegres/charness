@@ -25,6 +25,9 @@ export const claudePerTurnAdapterName = 'claude-per-turn';
  */
 export const claudeTmuxAdapterName = 'claude';
 
+/** The raw `$SHELL` in tmux (`/terminal`): no agent, so no agent states. */
+export const terminalAdapterName = 'terminal';
+
 /** Both backends that run the json-stream host (one process per conversation at a time). */
 export function checkIsJsonStreamBackend(name: string): boolean {
   return name === claudeJsonStreamAdapterName || name === claudePerTurnAdapterName;

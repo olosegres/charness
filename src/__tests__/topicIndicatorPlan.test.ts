@@ -238,6 +238,7 @@ describe('planIndicatorRename', () => {
       appliedName: 'Deploy 💤',
       workingSinceMs: null,
       lastRenameAtMs: quietSince,
+      isOwnerChange: false,
       nowMs,
       settleMs: indicatorSettleMs,
       minGapMs: indicatorMinRenameGapMs,
@@ -282,6 +283,15 @@ describe('planIndicatorRename', () => {
     assert.deepEqual(plan({ desiredName: 'Deploy ❓', desiredStatus: 'question', appliedName: 'Deploy ⏳', lastRenameAtMs }), { kind: 'now' });
     assert.deepEqual(plan({ desiredName: 'Deploy ⏳', desiredStatus: 'working', appliedName: 'Deploy ❓', workingSinceMs: nowMs - indicatorSettleMs, lastRenameAtMs }), { kind: 'now' });
     assert.deepEqual(plan({ desiredName: 'Deploy ✅', desiredStatus: 'finished', appliedName: 'Deploy ❓', lastRenameAtMs }), { kind: 'now' });
+  });
+
+  it('lets a change the owner just made skip the gap, but not the settle time of ⏳', () => {
+    const lastRenameAtMs = nowMs - 1_000;
+    assert.deepEqual(plan({ desiredName: 'Deploy', desiredStatus: null, appliedName: 'Deploy ✅', lastRenameAtMs, isOwnerChange: true }), { kind: 'now' });
+    assert.deepEqual(
+      plan({ desiredName: 'Deploy ⏳', desiredStatus: 'working', appliedName: 'Deploy', workingSinceMs: nowMs - 5_000, lastRenameAtMs, isOwnerChange: true }),
+      { kind: 'at', atMs: nowMs - 5_000 + indicatorSettleMs },
+    );
   });
 
   it('does not let any other change skip the gap', () => {

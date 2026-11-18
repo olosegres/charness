@@ -1,3 +1,40 @@
+test('topicStatus names only the switches the owner changed; an empty file names none; an unknown switch or a non-boolean is an error naming the field', () => {
+  assert.deepEqual(createEmptyInstanceSettings().topicStatus, {});
+  assert.deepEqual(validateInstanceSettings({ topicStatus: { asleep: false, agents: true } }), { ok: true, config: createSettings({ topicStatus: { asleep: false, agents: true } }) });
+  assert.deepEqual(validateInstanceSettings({}), { ok: true, config: createEmptyInstanceSettings() });
+  for (const wrong of [{ flashing: true }, { asleep: 'no' }, 'on']) {
+    const bad = validateInstanceSettings({ topicStatus: wrong });
+    assert.equal(bad.ok, false, JSON.stringify(wrong));
+    assert.match(bad.ok ? '' : bad.errors.join('\n'), /^settings\.json topicStatus/);
+  }
+});
+
+test('topicStatus is written only when it holds a switch, and a change elsewhere keeps it', () => {
+  saveInstanceSettings(settingsPath, createSettings({ topicStatus: { queued: true }, autoUpdate: 'off' }));
+  assert.deepEqual(JSON.parse(fs.readFileSync(settingsPath, 'utf8')), { autoUpdate: 'off', topicStatus: { queued: true } });
+  saveInstanceSettings(settingsPath, { ...loadInstanceSettingsForUpdate(settingsPath), defaultEffort: 'high' });
+  assert.deepEqual(JSON.parse(fs.readFileSync(settingsPath, 'utf8')).topicStatus, { queued: true });
+  saveInstanceSettings(settingsPath, createSettings({ autoUpdate: 'off' }));
+  assert.equal('topicStatus' in JSON.parse(fs.readFileSync(settingsPath, 'utf8')), false, 'no switch named leaves no field');
+});
+
+test('the topic-status reader: {} with no file or field, the file\'s switches, a hand edit with no restart, a broken file as {} with ONE named error', () => {
+  const errors: string[] = [];
+  const read = createTopicStatusSettingsReader(() => settingsPath, (line) => errors.push(line));
+  assert.deepEqual(read(), {}, 'no file');
+  writeRaw('{"autoUpdate":"off"}');
+  assert.deepEqual(read(), {}, 'the field left out');
+  writeRaw('{"topicStatus":{"working":false}}');
+  assert.deepEqual(read(), { working: false });
+  writeRaw('{"topicStatus":{"working":false,"queued":true}}');
+  assert.deepEqual(read(), { working: false, queued: true });
+  writeRaw('{"topicStatus":{"working":"maybe"}}');
+  assert.deepEqual(read(), {}, 'a broken file says nothing');
+  read();
+  assert.equal(errors.length, 1);
+  assert.match(errors[0], /topicStatus/);
+});
+
 /**
  * @description `settings.json` is the ONE source of truth for the instance-wide settings (today the default
  * effort of every topic without its own pick): `/effort` in General writes it, a hand edit is picked up without a
@@ -16,6 +53,7 @@ import {
   createQuestionWaitSettingsReader,
   createRunnerHostReader,
   createTaskAgentsMaxConcurrentReader,
+  createTopicStatusSettingsReader,
   createUpdateSettingsReader,
   getInstanceSettingsPath,
   instanceSettingsFileName,

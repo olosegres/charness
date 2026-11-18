@@ -29,6 +29,7 @@ import type { ClaudeApiCreditSpend } from './utils/claudeApiCredit';
 import type { OpenCodeProviderUsageRecord } from './utils/openCodeUsage';
 import { pushRecentModel } from './utils/modelRecentPlan';
 import { checkIsQuestionWaitChoice, type QuestionWaitChoice } from './utils/questionWaitChoices';
+import { topicIndicatorSwitches, type TopicStatusPrefs } from './utils/topicIndicatorPlan';
 import { normaliseFallbackChain, type FallbackChainEntry } from './utils/fallbackChain';
 import type { TodoProjectOverride } from './todos/projects';
 import type { ScheduleRecord } from './scheduler/types';
@@ -696,6 +697,12 @@ export interface StateV1 {
    * (`settings.json` `questionWait`, else the built-in default). Optional so older state files stay valid.
    */
   questionWaitOverrides?: Record<string, QuestionWaitChoice>;
+  /**
+   * The status marks (`/topic_status`, `utils/topicIndicatorPlan.ts`) a topic chose for itself, keyed by {@link SessionKey} string: its
+   * whole set of switches (a tap copies the instance's set into the topic first). A topic with no entry follows the instance value
+   * (`settings.json` `topicStatus` over the defaults). Optional so older state files stay valid.
+   */
+  topicStatusOverrides?: Record<string, TopicStatusPrefs>;
   /**
    * Armed auto-retries after a provider-side API error, keyed by
    * {@link SessionKey} string. Persisted so a pending retry survives a bot
@@ -2429,6 +2436,30 @@ export class StateStore {
       }
       if (this.state.questionWaitOverrides?.[k] === choice) return;
       (this.state.questionWaitOverrides ??= {})[k] = choice;
+      this.scheduleSave();
+    });
+  }
+
+  // ── The status marks of a topic's name (`/topic_status`) ──
+
+  /** @description The topic's own set of status switches, or `undefined` when it follows the instance value (a set that is not whole booleans counts as none). */
+  getTopicStatusOverride(key: SessionKey): TopicStatusPrefs | undefined {
+    const stored = this.state.topicStatusOverrides?.[keyToString(key)];
+    return stored !== undefined && topicIndicatorSwitches.every((name) => typeof stored[name] === 'boolean') ? { ...stored } : undefined;
+  }
+
+  /** @description Set the topic's own set of status switches (`null` = follow the instance value again; an emptied map is dropped). Debounced. */
+  async setTopicStatusOverride(key: SessionKey, prefs: TopicStatusPrefs | null): Promise<void> {
+    const k = keyToString(key);
+    await this.withLock(key, async () => {
+      if (prefs === null) {
+        if (!this.state.topicStatusOverrides || !(k in this.state.topicStatusOverrides)) return;
+        delete this.state.topicStatusOverrides[k];
+        if (Object.keys(this.state.topicStatusOverrides).length === 0) delete this.state.topicStatusOverrides;
+        this.scheduleSave();
+        return;
+      }
+      (this.state.topicStatusOverrides ??= {})[k] = { ...prefs };
       this.scheduleSave();
     });
   }

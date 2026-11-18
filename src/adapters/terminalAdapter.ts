@@ -14,6 +14,7 @@ import {
 } from '../utils/tmuxExec';
 import { getBotSecretUnsetArguments } from '../utils/agentEnvironment';
 import { cleanOutput } from '../utils/ansiClean';
+import { terminalAdapterName } from './adapterNames';
 import { getNewPaneContent } from '../utils/paneDiff';
 import {
   buildTmuxSessionName,
@@ -76,7 +77,7 @@ interface TerminalSession {
  * bot's Claude-specific liveness loop never fires for a terminal.
  */
 export class TerminalAdapter extends EventEmitter implements AgentAdapter {
-  readonly name = 'terminal';
+  readonly name = terminalAdapterName;
   readonly label = 'Terminal';
 
   /** Serialised `SessionKey` (`"<chatId>:<threadId>"`) → live session. */
