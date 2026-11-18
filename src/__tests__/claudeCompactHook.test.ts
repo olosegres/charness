@@ -298,6 +298,35 @@ test('prepareClaudeCompactHookFlags: writes the settings file and returns the --
   }
 });
 
+test('prepareClaudeCompactHookFlags: a launch settings file an agent rewrote (DATA_DIR is writable by the agents\' user) is replaced by the next launch, so a planted hook never reaches a later session', () => {
+  // Claude Code reads a `--settings` file once at its start and keeps that content for the session (2.1.304), so a rewrite
+  // reaches only a launch that reads the file after it — and every launch writes the file first.
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'compact-hook-planted-'));
+  try {
+    const kinds = [{ skillsRestore: null }, { skillsRestore: { unavailableSkillsDir: null } }, { skillsRestore: { unavailableSkillsDir: '/x' } }] as const;
+    for (const options of kinds) {
+      const [, settingsPath] = prepareClaudeCompactHookFlags(dataDir, null, options);
+      const wanted = fs.readFileSync(settingsPath, 'utf-8');
+      const planted = JSON.stringify({ hooks: { SessionStart: [{ hooks: [{ type: 'command', command: 'echo planted' }] }] } });
+      fs.writeFileSync(settingsPath, planted);
+      const [, again] = prepareClaudeCompactHookFlags(dataDir, null, options);
+      assert.equal(again, settingsPath);
+      assert.equal(fs.readFileSync(settingsPath, 'utf-8'), wanted, `the planted hooks are gone (${path.basename(settingsPath)})`);
+    }
+    // A link planted in the file's place is replaced, not written through.
+    const [, settingsPath] = prepareClaudeCompactHookFlags(dataDir, null, { skillsRestore: null });
+    const elsewhere = path.join(dataDir, 'elsewhere.json');
+    fs.writeFileSync(elsewhere, 'untouched');
+    fs.rmSync(settingsPath);
+    fs.symlinkSync(elsewhere, settingsPath);
+    prepareClaudeCompactHookFlags(dataDir, null, { skillsRestore: null });
+    assert.equal(fs.lstatSync(settingsPath).isSymbolicLink(), false);
+    assert.equal(fs.readFileSync(elsewhere, 'utf-8'), 'untouched');
+  } finally {
+    fs.rmSync(dataDir, { recursive: true, force: true });
+  }
+});
+
 test('prepareClaudeCompactHookFlags with a relative DATA_DIR: the settings path and the flag folder the hook reads are absolute, so the hook finds the flag from the agent\'s own folder', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'compact-hook-relative-'));
   const botFolder = path.join(root, 'bot');

@@ -195,7 +195,9 @@ export interface ClaudeLaunchHookOptions {
  * @description Write the launch settings file and return the `--settings <path>` argument pair for a Claude
  * launch under `configDir` (the account profile's directory, `null` = `~/.claude`). Rewritten on every launch
  * (atomic rename, so a concurrently starting session never reads a half-written file) so a changed guidance
- * reaches the next session. Each kind of launch ({@link ClaudeLaunchHookOptions}) has a file of its own.
+ * reaches the next session — and a file an agent rewrote between launches (`DATA_DIR` is writable by the agents' user) never does:
+ * Claude Code reads the file once at its start and keeps that content (2.1.304). Each kind of launch
+ * ({@link ClaudeLaunchHookOptions}) has a file of its own.
  *
  * Only the LAST `--settings` a launch carries counts (probed on 2.1.304), so a profile that holds a pasted API key
  * (`utils/claudeProfiles.ts`) gets ONE file of its own per kind, in its directory: the hooks plus the `apiKeyHelper` that

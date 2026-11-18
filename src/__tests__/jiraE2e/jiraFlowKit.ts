@@ -518,14 +518,7 @@ export function itHoldsTheInstanceInvariants(): void {
     }
   });
 
-  it('no Telegram path was reached for the Jira conversations (R6)', () => {
-    const output = getCharness().output;
-    assert.ok(!output.includes(telegramCallRefusedLogPrefix), 'no Telegram API call reached the guard');
-    assert.ok(!output.includes(TelegramDisabledError.name));
-    // What a Telegram primitive says when a Jira key reaches it (a skipped primitive, the send queue's refusal).
-    assert.ok(!output.includes(notTelegramChatPhrase), 'no Telegram primitive was handed a Jira conversation');
-    assert.ok(!output.includes(foreignKeyAccessorErrorPrefix), 'no Telegram id was read off a Jira key');
-  });
+  itReachedNoTelegramPath();
 
   it('every tmux call named the private server; nothing of the instance runs on the default tmux server', () => {
     // A call without `-L` would have started (or reached) a `default` server beside it.
@@ -536,5 +529,17 @@ export function itHoldsTheInstanceInvariants(): void {
     const defaultSessionsNow = listTmuxSessions([]);
     assert.deepEqual(defaultSessionsNow.filter((name) => instanceSessions.has(name)), []);
     assert.deepEqual(defaultSessionsNow.filter((name) => !defaultTmuxSessionsBefore.includes(name) && name.includes('PROJ')), []);
+  });
+}
+
+/** @description The step that says no Telegram path was reached for the Jira conversations of the flow (R6): the output of the instance holds none of the guards' lines. */
+export function itReachedNoTelegramPath(): void {
+  it('no Telegram path was reached for the Jira conversations (R6)', () => {
+    const output = getCharness().output;
+    assert.ok(!output.includes(telegramCallRefusedLogPrefix), 'no Telegram API call reached the guard');
+    assert.ok(!output.includes(TelegramDisabledError.name));
+    // What a Telegram primitive says when a Jira key reaches it (a skipped primitive, the send queue's refusal).
+    assert.ok(!output.includes(notTelegramChatPhrase), 'no Telegram primitive was handed a Jira conversation');
+    assert.ok(!output.includes(foreignKeyAccessorErrorPrefix), 'no Telegram id was read off a Jira key');
   });
 }

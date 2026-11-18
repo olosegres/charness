@@ -277,6 +277,37 @@ with the instance's rights, and what it may do is its rules' call.
   while their mention request is open supersedes the mention request. The answer is a comment and the issue stays
   where it is (`answerSink.ts` keys on the origin kind).
 
+## Claude accounts and usage limits (`utils/claudeProfileSync.ts`, `utils/limitSwitchPlan.ts`)
+
+A Jira-only instance has no `/accounts`, so its accounts are found on disk. Every folder under `DATA_DIR/claude-profiles/` whose name is
+a valid profile name (a lowercase slug, never `default`) and that has no record in `state.json` is ADOPTED — at the boot and at each usage
+poll (every 10 minutes, and whenever an agent asks `claude_profiles`): the bot records it and asks the CLI who is signed in
+(`claude auth status --json` under that folder, as `/accounts` does). An operator makes the folder
+(`createClaudeProfileLayout` does it with its links back into `~/.claude`; a bare folder is given the links it lacks — `projects/`
+above all, or a conversation could not resume under the account — when it is adopted) and signs it in with
+`CLAUDE_CONFIG_DIR=<folder> claude auth login`; a folder that is not signed in is recorded as such and is never picked. Every folder is
+put back in line before each launch under it (`repairClaudeProfileLayout`): the entries Claude Code loads as user-level configuration
+are links into `~/.claude` again, and an agent's planted replacement is moved aside as `<entry>.moved-<time>` — see
+`docs/commands.md` («Several accounts»). A signed-in
+account's status is read again after an hour, a signed-out one at most every five minutes (a sign-in by hand shows up), and no profile
+more than once per five minutes whatever the answer — a poll that finds nothing to do spawns no process. `default` (`~/.claude`) is
+probed the same way, so it can take a limited session over; the one the operator signed out through Telegram's `/accounts` (`isRemoved`)
+is not probed by the scan. A removed profile's folder is deleted with its record, so it is not found again.
+
+When a Jira conversation's agent hits a usage limit the bot moves it to the next signed-in Claude account by itself — the conversation
+resumed (`--resume`) under that account's `CLAUDE_CONFIG_DIR`, answered as before — by the rules a Telegram topic follows: the fallback
+list's Claude entries when it has any (an OpenCode entry is skipped: a hand-over to another backend has no surface here; a list with no
+Claude entry restricts nothing), else the ranking by the soonest weekly reset (`pickClaudeLimitSwitchCandidates`). The requester hears
+nothing — the work simply goes on; the bot's log has the `[fallback]` line. Everything that is a topic's stays out: the «Switch to …»
+offer (with auto switch OFF the conversation waits), the notice, the wait aimed at the account that resets first (the retry kick moves only a
+topic there) — and with no account free, or on OpenCode, the conversation waits for the reset exactly as before, announced to the open
+request. The account-switch settings are ONE set for the whole bot, whatever the connector, and a Jira conversation has no setting of its
+own (an automatic move pins it to the account it moved to, as it does a topic): it starts on the instance's default account (`claudeProfileDefault`, General's `/accounts` pick) and follows the instance's fallback
+list and General's «Auto switch» (`claudeAutoSwitchOnLimitEnabled`, ON unless turned OFF) and «Wait for reset»
+(`autoContinueOnLimitEnabled`, ON unless turned OFF) of `/limits_autoswitch`. Telegram's General topic is where they are set (an instance that serves
+Jira and Telegram together uses the same values for both); a Jira-only one keeps them in `state.json`. A launch under an account's directory carries
+`CLAUDE_CONFIG_DIR` — a path, the one variable beyond the agent allowlist (R32). Flow: `jiraFallbackSwitchE2e.test.ts`.
+
 ## Isolation — fail-closed, checked at boot
 
 `cli/connectorGuards.ts` runs before any env file is read and before the bot module loads: a `jira` instance
@@ -503,7 +534,9 @@ groups and their members) and `fakeClaude.ts`: `jiraConnectorE2e.test.ts` (reque
 filter, the notice, an automation's hand-over and mentions), `jiraTrustedAppsE2e.test.ts` (with a `trustedApps`: a listed
 app starts the agent, an unlisted one — a group member — is refused and its text withheld) and `jiraCommentWakeE2e.test.ts`
 (with a group, `mentionMode: "act"` and the backstop an hour away: a comment mid-turn reaches the same request, a comment
-after the final answer opens one, an acting mention, a kill-and-restart mid-turn answered within a minute), sharing
+after the final answer opens one, an acting mention, a kill-and-restart mid-turn answered within a minute) and
+`jiraFallbackSwitchE2e.test.ts` (an account signed in by hand is adopted with no Telegram; a conversation at its usage limit continues
+on it, and waits when auto switch is OFF), sharing
 `__tests__/jiraE2e/jiraFlowKit.ts`;
 `live/jiraLive.test.ts` runs the loop against a real site and is skipped unless its env variables are set; its
 prompt-context steps (media through the attachment tool, a delta, a requested compaction, the default model and

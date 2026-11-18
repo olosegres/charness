@@ -37,6 +37,7 @@ import {
 } from '../../../utils/claudeProfiles';
 import type { AnthropicApiKeyCheck } from '../../../utils/anthropicApiKeyCheck';
 import { formatClaudeProfileUsageLines } from '../../../utils/claudeProfileUsageLines';
+import { recordClaudeProfileStatus, type ClaudeProfileSyncResult } from '../../../utils/claudeProfileSync';
 import { refreshUsageWithinBudget } from '../../../utils/usageRefreshBudget';
 import type { ClaudeProfileUsageView } from '../../../utils/claudeUsage';
 import {
@@ -100,6 +101,8 @@ export interface ClaudeAccountsPorts
   getInstanceTimezone: () => string;
   /** Bring the per-profile usage snapshots up to date (`utils/claudeUsageRefresher.ts`); never throws. */
   refreshClaudeUsage: (options: { maxAgeMs?: number }) => Promise<void>;
+  /** The shared profile scan (`utils/claudeProfileSync.ts`, the very one the usage poll runs): adopt folders signed in by hand, probe the profiles. */
+  syncClaudeProfiles: (options: { isForced: boolean }) => Promise<ClaudeProfileSyncResult>;
   /** `claude auth status --json` under `configDir` (`null` = `~/.claude`); `null` when the probe fails. */
   readClaudeAuthStatus: (configDir: string | null) => Promise<ClaudeAuthStatus | null>;
   /** Start the out-of-band sign-in of `profile`; the relay posts the link and the outcome into the topic. */
@@ -151,7 +154,7 @@ const providerSnapshotLimit = 50;
 export function createClaudeAccounts(ports: ClaudeAccountsPorts) {
   const {
     bot, command, getState, replyToThread, editThreadMessage, deleteThreadMessage, authoriseContext, withThreadLocale, checkIsGeneral,
-    getDataDir, getInstanceTimezone, refreshClaudeUsage, readClaudeAuthStatus, startClaudeProfileLogin, applyClaudeProfile,
+    getDataDir, getInstanceTimezone, refreshClaudeUsage, syncClaudeProfiles, readClaudeAuthStatus, startClaudeProfileLogin, applyClaudeProfile,
     applyClaudeProfileEverywhere, switchTopicByOperator, detectOpenCodeProviders, listOpenCodeModels, getTopicRun, disconnectOpenCodeProvider, startOpenCodeConnect, applyAutoSwitch, getHomeClaudeDir,
     verifyAnthropicApiKey, getProfileUsageView, checkIsProfileMissingFromLimitsList,
   } = ports;
@@ -225,43 +228,18 @@ export function createClaudeAccounts(ports: ClaudeAccountsPorts) {
   }
 
   /**
-   * @description Re-read every added profile's auth status (and the default's) and persist what changed, so the
-   * picker shows the CLI's truth, not the state of the last sign-in. One short `claude auth status` per profile,
-   * in parallel; a failed probe leaves the record as it was.
+   * @description Re-read every profile's auth status (the default's too) and persist what changed, so the picker shows the CLI's
+   * truth, not the state of the last sign-in — and adopt a profile folder signed in by hand that has no record yet. The shared scan
+   * (`utils/claudeProfileSync.ts`), forced: one short `claude auth status` per profile, in parallel; a failed probe leaves the
+   * record as it was.
    */
   async function refreshProfileStatuses(): Promise<ClaudeAuthStatus | null> {
-    const names = Object.keys(getState().getClaudeProfileRecords());
-    const [defaultStatus, ...statuses] = await Promise.all([
-      readClaudeAuthStatus(null),
-      ...names.map((name) => readClaudeAuthStatus(resolveDir(name))),
-    ]);
-    await Promise.all([
-      recordProfileStatus(defaultClaudeProfileName, defaultStatus),
-      ...names.map((name, index) => recordProfileStatus(name, statuses[index])),
-    ]);
-    return defaultStatus;
+    return (await syncClaudeProfiles({ isForced: true })).defaultStatus;
   }
 
-  /**
-   * Persist a probe's answer on the profile's record (nothing for a failed probe). `default` gets its hidden
-   * record, so the usage ranking and the CLI twin know whether it is signed in and as whom.
-   */
-  async function recordProfileStatus(name: string, status: ClaudeAuthStatus | null): Promise<void> {
-    if (status === null) return;
-    if (name !== defaultClaudeProfileName && getState().getClaudeProfileRecord(name) === undefined) return; // removed meanwhile
-    await getState().upsertClaudeProfileRecord(name, {
-      // A removed `default` comes back by itself the moment it is signed in again.
-      ...(name === defaultClaudeProfileName && status.loggedIn ? { isRemoved: undefined } : {}),
-      // The CLI's word on how the account pays wins over the kind it was added as, both ways.
-      ...(status.billing !== null ? { billing: status.billing } : {}),
-      // Which key the sessions use decides whether the stored one may be asked on (the daily credit recheck of `default`).
-      isConsoleLoginKey: status.apiKeySource === claudeConsoleLoginKeySource,
-      loggedIn: status.loggedIn,
-      email: status.email ?? undefined,
-      subscriptionType: status.subscriptionType ?? undefined,
-      orgName: status.orgName ?? undefined,
-      statusCheckedAt: new Date().toISOString(),
-    });
+  /** Persist a probe's answer on the profile's record (nothing for a failed probe) — the shared `recordClaudeProfileStatus`. */
+  function recordProfileStatus(name: string, status: ClaudeAuthStatus | null): Promise<void> {
+    return recordClaudeProfileStatus(getState(), name, status);
   }
 
   /**
@@ -545,18 +523,20 @@ export function createClaudeAccounts(ports: ClaudeAccountsPorts) {
    * @description Remove a profile — the SAFE way: `default` is `~/.claude` and is never removed; the instance
    * default is refused until General picks another (otherwise every following topic would silently change
    * account); topics that picked the profile explicitly return to the instance default and are moved at once,
-   * and the confirmation says how many. The directory (its login with it) goes last, after the registry.
+   * and the confirmation says how many. The directory (its login with it) goes first, before the registry, so the profile scan never finds a record-less folder to adopt.
    */
   async function removeProfile(name: string): Promise<string> {
     if (name === defaultClaudeProfileName) return signOutDefault();
     if (!checkIsKnownProfile(name)) return t('account.unknown', { name });
     if (getState().getClaudeProfileGlobalDefault() === name) return t('account.removeInstanceDefaultRefused', { name });
-    const dropped = await getState().removeClaudeProfileRecord(name);
+    // The directory goes FIRST: a folder with no record is what the profile scan adopts (`utils/claudeProfileSync.ts`), so a scan
+    // landing between the two steps — or a crash between them — would bring the profile back.
     try {
       removeClaudeProfileLayout(getDataDir(), name);
     } catch (e) {
-      console.error(`[account] removing the directory of ${name} failed:`, e instanceof Error ? e.message : e);
+      console.error(`[account] removing the directory of ${name} failed (the scan adopts it again until it is deleted by hand):`, e instanceof Error ? e.message : e);
     }
+    const dropped = await getState().removeClaudeProfileRecord(name);
     await applyClaudeProfileEverywhere();
     return t('account.removed', { name, count: dropped.length });
   }

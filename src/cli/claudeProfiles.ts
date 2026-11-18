@@ -17,6 +17,9 @@
  *   credit <profile> <remainingUsd> [--of <grantUsd>] [--expires YYYY-MM-DD] | credit <profile> --clear
  *                  give the bot the bonus API credit figure of an account billed to API credits (`claudeProfilesCredit.ts`)
  *
+ * Every profile folder it lists is repaired first (the entries Claude Code loads as user config are links into `~/.claude` again; a
+ * planted replacement is moved aside) — the one thing this command writes besides `credit`.
+ *
  * Without a flag: one human line per profile. `DATA_DIR` comes from the environment the bot itself reads
  * (`~/.config/charness/.env`, `$PWD/.env`, or `ENV_FILE`).
  */
@@ -25,6 +28,7 @@ import { loadEnvFiles } from './envLoader';
 import { readFlagValue } from './flagValue';
 import { runClaudeProfilesCreditCli } from './claudeProfilesCredit';
 import { resolveDataDir } from '../state';
+import { repairClaudeProfileFolderForLaunch } from '../utils/claudeProfiles';
 import { readStateFileObject } from '../stateFile';
 import { getClaudeLaunchChainScope, normaliseFallbackChain } from '../utils/fallbackChain';
 import { formatUsd } from '../utils/claudeApiSpend';
@@ -151,6 +155,9 @@ export async function runClaudeProfilesCli(
     isStoppedByLimit: args.isStoppedByLimit,
     chainScope: getClaudeLaunchChainScope(normaliseFallbackChain(stateFile.fallbackChain)),
   });
+  // A worker is started under whichever folder this names (`CLAUDE_CONFIG_DIR="$(charness claude-profiles --best)"`): every folder it
+  // lists is put right first — the layout only, anything moved aside is said on stderr (`utils/claudeProfiles.ts`).
+  for (const entry of report.profiles) repairClaudeProfileFolderForLaunch({ dataDir, configDir: entry.configDir, log: (line) => stderr(`${line}\n`) });
   const outcome = describeClaudeLaunchOutcome(report, args.currentProfile);
   const exclusions = describeClaudeChainExclusions(report);
   if (args.isJson) {

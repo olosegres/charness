@@ -20,7 +20,7 @@ import {
   type ClaudeUsageSnapshot,
 } from './claudeUsage';
 
-/** The toggle's resolver (OFF when unset) lives beside `/auto_continue_limits`'s, where `state.ts` reads it. */
+/** The toggle's resolver (ON when unset — `StateStore.getClaudeAutoSwitchOnLimitGlobalDefault`; an explicit OFF is kept) lives beside `/auto_continue_limits`'s, where `state.ts` reads it. */
 export { resolveClaudeAutoSwitchOnLimitEnabled } from './autoContinueOnLimit';
 
 /**

@@ -8,6 +8,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { agentEnvironmentNames } from '../../utils/agentEnvironment';
+import { claudeConfigDirVariableName } from '../../utils/claudeProfiles';
 import { claudeSessionStateEventsVariableName } from '../../utils/jsonStreamHost';
 
 export const argvViolationExitCode = 3;
@@ -436,10 +437,11 @@ const shellAddedEnvNames: readonly string[] = ['PWD'];
 /**
  * @description The variables of an agent's environment R32 does not allow: anything
  * but the agent allowlist, what a shell adds, the wrapper's own opt-in to the CLI's
- * session-state events, and the fake's own launcher variables.
+ * session-state events, the account an agent runs under (`CLAUDE_CONFIG_DIR`: the bot sets it at the spawn of a conversation on a
+ * non-default Claude account — a path, no secret) and the fake's own launcher variables.
  */
 export function getForeignAgentEnvNames(envNames: readonly string[]): string[] {
-  const allowedNames: readonly string[] = [...agentEnvironmentNames, ...shellAddedEnvNames, claudeSessionStateEventsVariableName];
+  const allowedNames: readonly string[] = [...agentEnvironmentNames, ...shellAddedEnvNames, claudeSessionStateEventsVariableName, claudeConfigDirVariableName];
   return envNames.filter((name) => !allowedNames.includes(name) && !name.startsWith(fakeClaudeOwnEnvPrefix));
 }
 

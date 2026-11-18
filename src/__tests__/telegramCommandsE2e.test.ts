@@ -554,10 +554,15 @@ describe('Telegram commands end to end: built charness, fake Bot API', () => {
     await topic.sendAndAwaitReply('/limits wait same', 'this topic follows General (ON)');
   });
 
-  it('/limits_autoswitch asks before a rung of a backend the list does not use yet joins automatic switching: ✖️ Cancel keeps the list, ✅ Continue adds it', async () => {
+  it('/limits_autoswitch asks before a rung of a backend the list does not use yet joins automatic switching: ✖️ Cancel keeps the list, ✅ Continue adds it', async (testContext) => {
     // No OpenCode catalog here to add from, so the list starts with the OpenCode rung the state holds and the other
     // backend is a second Claude account, signed in.
     createClaudeProfileLayout({ dataDir: getLayout().dataDir, name: limitsAccount, homeClaudeDir: path.join(getLayout().instanceHome, '.claude') });
+    // «Signed in» as this flow's own `claude auth status` says it (the marker, for every directory): the bot reads the CLI's word at its
+    // boot — the profile scan — so a record seeded as signed in while the CLI says otherwise would be corrected to signed out.
+    const signedInMarker = path.join(authStateDir, 'logged-in');
+    fs.writeFileSync(signedInMarker, '1');
+    testContext.after(() => fs.rmSync(signedInMarker, { force: true }));
     charness = await restartCharnessWithState(getLayout(), fakeTelegram, getCharness(), (persisted) => {
       persisted.claudeProfiles = { ...persisted.claudeProfiles, [limitsAccount]: { createdAt: new Date().toISOString(), loggedIn: true, email: 'work@example.com', subscriptionType: 'max' } };
       persisted.fallbackChain = [limitsOpenCodeRung];
