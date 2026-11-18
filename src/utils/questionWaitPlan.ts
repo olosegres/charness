@@ -209,6 +209,37 @@ export function getSetAsideAnswerTarget(record: SetAsideQuestionRecord): { index
   return question ? { index, question } : null;
 }
 
+/** A question's text as the check «the same question again» reads it: a run of whitespace and the ends do not tell two questions apart. */
+function normaliseQuestionTextForMatch(question: OpenCodeQuestion): string {
+  return getQuestionText(question).replace(/\s+/g, ' ').trim();
+}
+
+/** @description What {@link getSetAsideRecordAskedAgain} found. */
+export interface SetAsideRecordAskedAgain {
+  record: SetAsideQuestionRecord;
+  /** One slot per question of the call the agent asks now: what the owner answered before, `null` for a question still open. */
+  answers: (string[] | null)[];
+}
+
+/**
+ * @description The set-aside record the question the agent asks NOW repeats — it did not take «do not ask it again»: the same
+ * question texts (the header and the options do not count) as the record's whole call, in the same order — the answers the
+ * owner already gave ride along — or as the questions the record still has open (the rest of a call the owner answered in part,
+ * asked again alone). The newest such record; `null` for a question that is new.
+ */
+export function getSetAsideRecordAskedAgain(records: SetAsideQuestionRecord[], questions: OpenCodeQuestion[]): SetAsideRecordAskedAgain | null {
+  if (questions.length === 0) return null;
+  const askedTexts = questions.map(normaliseQuestionTextForMatch);
+  const checkIsAsked = (candidates: OpenCodeQuestion[]): boolean =>
+    candidates.length === askedTexts.length && candidates.every((candidate, index) => normaliseQuestionTextForMatch(candidate) === askedTexts[index]);
+  for (const record of [...records].reverse()) {
+    if (checkIsAsked(record.questions)) return { record, answers: record.answers };
+    const openQuestions = record.questions.filter((_, index) => record.answers[index] === null);
+    if (checkIsAsked(openQuestions)) return { record, answers: openQuestions.map(() => null) };
+  }
+  return null;
+}
+
 /**
  * @description How a message typed in the topic is routed while a question may wait or may be set aside.
  *  - `answer` / `cancel` — a question is still waiting (the agent is blocked on it): today's route, see {@link getQuestionReplyRoute};

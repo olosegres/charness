@@ -11,7 +11,9 @@
  *   • a waiting question's own end (`clearPendingQuestion`) never touches a set-aside one;
  *   • the buttons are registered once, beside the compaction's, disjoint from `qa_` and `reask_`;
  *   • the idle fire reaches the set-aside module through the compaction's port, and the wait every topic has is the instance's
- *     `settings.json` value (`questionWait`).
+ *     `settings.json` value (`questionWait`);
+ *   • a question the agent asks again while its set-aside copy is open is answered by the module before anything is posted, and
+ *     the module posts a question it cannot answer that way through the one function that posts a new question.
  * The real flows are `questionSetAsideE2e.test.ts` (the release, `/new`, a restart) and `openCodeQuestionE2e.test.ts`.
  */
 
@@ -91,4 +93,18 @@ test('the idle fire sets a waiting question aside through the module, and the wa
   assert.match(botSource, /setQuestionAsideAtIdle:\s*\(key\)\s*=>\s*setPendingQuestionAsideAtIdle\(key\)/, 'the compaction port is the module\'s idle entry');
   assert.match(botSource, /getQuestionWaitChoice:\s*\(\)\s*=>\s*resolveQuestionWait\(undefined,\s*readInstanceQuestionWait\(\)\s*\?\?\s*undefined\)/, 'the instance value of settings.json is the General choice');
   assert.match(botSource, /readInstanceQuestionWait\s*=\s*createQuestionWaitSettingsReader\(\(\)\s*=>\s*getInstanceSettingsPath\(\)/);
+});
+
+test('a question the agent asks again is taken over by the set-aside module before anything is posted, and a question it cannot take is posted by the one posting function', () => {
+  const handler = getFunctionBody('handleAgentQuestion');
+  const persistedCheckAt = handler.indexOf('persistedQuestion.data.requestId === questionData.requestId');
+  const askedAgainAt = handler.indexOf('answerQuestionAskedAgain(key, questionData)');
+  const postAt = handler.indexOf('postAgentQuestion(key, questionData)');
+  assert.ok(persistedCheckAt !== -1 && askedAgainAt > persistedCheckAt, 'after the restart-idempotence check');
+  assert.ok(postAt > askedAgainAt, 'and before the question is posted');
+  assert.match(handler, /if \(answerQuestionAskedAgain\(key, questionData\)\) return;/, 'a question taken over is not posted');
+  assert.match(botSource, /postQuestionAnew:\s*postAgentQuestion\b/, 'the module hands a question it cannot answer back to the function that posts one');
+  const posting = getFunctionBody('postAgentQuestion');
+  for (const step of ['closeReAskedQuestion(key)', 'setPendingQuestion(key,', 'armQuestionSetAsideTimer(key)', 'postPendingQuestionAt(key)']) assert.ok(posting.includes(step), `a new question still ${step}`);
+  assert.doesNotMatch(posting, /answerQuestionAskedAgain/, 'the posting function never takes a question over: the module posts through it');
 });

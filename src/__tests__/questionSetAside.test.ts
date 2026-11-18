@@ -24,7 +24,7 @@ import { createQuestionSetAside, type QuestionSetAsidePorts, type SetAsideReplyC
 import type { LatePromptOutcome } from '../utils/promptDelivery';
 import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
 import { keyToString, type SessionKey } from '../sessionKey';
-import type { AgentAdapter, OpenCodeQuestion, PendingQuestionState, SetAsideQuestionRecord } from '../types';
+import type { AgentAdapter, OpenCodePendingQuestion, OpenCodeQuestion, PendingQuestionState, SetAsideQuestionRecord } from '../types';
 import type { QuestionEnd } from '../openCodeQuestionFlow';
 import { maxSetAsideQuestions, type QuestionWaitChoice } from '../utils/questionWaitPlan';
 import { createSerialQueue } from '../utils/serialQueue';
@@ -68,6 +68,10 @@ interface Harness {
   sentQuestions: Array<{ question: OpenCodeQuestion; keyboard: InlineKeyboardMarkup | undefined; messageId: number }>;
   silentPins: number[];
   pushedMessageIds: number[];
+  /** The questions the module handed back to be posted as new waiting ones (`postQuestionAnew`). */
+  postedAnew: OpenCodePendingQuestion[];
+  /** Resolves once everything queued in the question lifecycle queue so far has run, and what follows it. */
+  settle: () => Promise<void>;
 }
 
 function createHarness(options: {
@@ -82,6 +86,8 @@ function createHarness(options: {
   existingRecords?: SetAsideQuestionRecord[];
   deliverLateAnswer?: () => Promise<LatePromptOutcome>;
   retryDelayMs?: number;
+  /** The adapter's `setQuestionAside` throws instead of answering. */
+  adapterThrows?: boolean;
 } = {}): Harness {
   const pendingQuestions = new Map<string, PendingQuestionState>();
   const events: string[] = [];
@@ -99,6 +105,7 @@ function createHarness(options: {
   const sentQuestions: Harness['sentQuestions'] = [];
   const silentPins: number[] = [];
   const pushedMessageIds: number[] = [];
+  const postedAnew: OpenCodePendingQuestion[] = [];
   let nextPostedMessageId = 900;
   const queue = createSerialQueue();
   const harnessState = { sequence: 0, takeSequence: async () => { harnessState.sequence += 1; return harnessState.sequence; } };
@@ -112,6 +119,7 @@ function createHarness(options: {
       setQuestionAside: (_key: SessionKey, requestId: string, text: string, givenAnswers: (string[] | null)[]) => {
         events.push('adapter');
         adapterCalls.push({ requestId, text, givenAnswers });
+        if (options.adapterThrows) throw new Error('the write to the agent failed');
         // A microtask queued here runs before any `await` that follows the call resumes: if the bot awaits anything between telling
         // the adapter and releasing the question, it shows as `microtask` ahead of `release`.
         queueMicrotask(() => events.push('microtask'));
@@ -162,8 +170,10 @@ function createHarness(options: {
       delivered.push({ text });
       return options.deliverLateAnswer ? options.deliverLateAnswer() : 'forwarded';
     },
+    postQuestionAnew: (_key, questionData) => { postedAnew.push(questionData); },
   };
-  return { ports, setAside: createQuestionSetAside(ports), pendingQuestions, events, adapterCalls, edits, closes, unpins, cleared, savedRecords, savedPending, markedNewMessage, state: harnessState, delivered, replies, get resyncs() { return harnessHolder.resyncs; }, sentQuestions, silentPins, pushedMessageIds };
+  const settle = async (): Promise<void> => { await queue.run(async () => {}); await sleep(0); };
+  return { ports, setAside: createQuestionSetAside(ports), pendingQuestions, events, adapterCalls, edits, closes, unpins, cleared, savedRecords, savedPending, markedNewMessage, state: harnessState, delivered, replies, get resyncs() { return harnessHolder.resyncs; }, sentQuestions, silentPins, pushedMessageIds, postedAnew, settle };
 }
 
 function sleep(ms: number): Promise<void> {
@@ -366,6 +376,158 @@ describe('setPendingQuestionAsideAtIdle — the idle mark finds the question wai
     assert.equal(await harness.setAside.setPendingQuestionAsideAtIdle(key), false);
 
     assert.equal(harness.pendingQuestions.has(keyString), true, 'the question still waits');
+  });
+});
+
+describe('answerQuestionAskedAgain — the agent asks a question whose set-aside copy is open', () => {
+  const askedAgain = (requestId: string, questions: OpenCodeQuestion[] = [deployQuestion]): OpenCodePendingQuestion => ({ requestId, questions });
+
+  it('tells the agent at once that it is the same question, still open — and does nothing else: no message, no pin, no record, no timer, nothing waiting', async () => {
+    const record = createRecord('1', 500);
+    const harness = createHarness({ existingRecords: [record] });
+
+    assert.equal(harness.setAside.answerQuestionAskedAgain(key, askedAgain('req_b')), true, 'the module took the question over');
+    await harness.settle();
+
+    assert.equal(harness.adapterCalls.length, 1);
+    assert.equal(harness.adapterCalls[0].requestId, 'req_b', 'the question the agent holds now');
+    assert.match(harness.adapterCalls[0].text, /^\[Charness\] This question is still open: the user has not answered it yet \(asked /);
+    assert.ok(harness.adapterCalls[0].text.includes('This is NOT an answer.'));
+    assert.ok(harness.adapterCalls[0].text.includes('do not ask it again and do not wait for it'));
+    assert.deepEqual(harness.adapterCalls[0].givenAnswers, [null]);
+    assert.deepEqual(harness.postedAnew, [], 'nothing is posted as a new question');
+    assert.deepEqual(harness.edits, []);
+    assert.deepEqual(harness.sentQuestions, [], 'no second message');
+    assert.deepEqual(harness.silentPins, [], 'no new pin');
+    assert.deepEqual(harness.savedPending, [], 'nothing is made to wait');
+    assert.equal(harness.pendingQuestions.size, 0);
+    assert.deepEqual(harness.savedRecords.get(keyString), [record], 'the record is the one it was');
+    assert.deepEqual(harness.markedNewMessage, []);
+    assert.deepEqual(harness.closes, []);
+    assert.deepEqual(harness.unpins, []);
+  });
+
+  it('a question that repeats no open one is left to the caller: it takes nothing over and tells the agent nothing', async () => {
+    const harness = createHarness({ existingRecords: [createRecord('1', 500)] });
+
+    assert.equal(harness.setAside.answerQuestionAskedAgain(key, askedAgain('req_b', [docsQuestion])), false);
+    await harness.settle();
+
+    assert.deepEqual(harness.adapterCalls, []);
+    assert.deepEqual(harness.postedAnew, [], 'the caller posts it itself');
+  });
+
+  it('with no set-aside question open nothing repeats', async () => {
+    const harness = createHarness();
+
+    assert.equal(harness.setAside.answerQuestionAskedAgain(key, askedAgain('req_b')), false);
+    await harness.settle();
+
+    assert.deepEqual(harness.adapterCalls, []);
+  });
+
+  it('a call the owner answered in part: the same call carries the answer given, aligned with it, and the text names it', async () => {
+    const record: SetAsideQuestionRecord = { ...createRecord('1', 500), questions: [deployQuestion, docsQuestion], answers: [['Push now'], null], lateFromIndex: 1 };
+    const harness = createHarness({ existingRecords: [record] });
+
+    assert.equal(harness.setAside.answerQuestionAskedAgain(key, askedAgain('req_b', [deployQuestion, docsQuestion])), true);
+    await harness.settle();
+
+    assert.deepEqual(harness.adapterCalls[0].givenAnswers, [['Push now'], null]);
+    assert.match(harness.adapterCalls[0].text, /\(Answers already given in this call: "Push the fix to main now, or wait for the review\?" = "Push now"\.\)$/);
+  });
+
+  it('the questions still open, asked again alone, are answered the same way, with nothing given for them', async () => {
+    const record: SetAsideQuestionRecord = { ...createRecord('1', 500), questions: [deployQuestion, docsQuestion], answers: [['Push now'], null], lateFromIndex: 1 };
+    const harness = createHarness({ existingRecords: [record] });
+
+    assert.equal(harness.setAside.answerQuestionAskedAgain(key, askedAgain('req_b', [docsQuestion])), true);
+    await harness.settle();
+
+    assert.deepEqual(harness.adapterCalls[0].givenAnswers, [null]);
+    assert.deepEqual(harness.postedAnew, []);
+  });
+
+  it('runs in the lifecycle queue: after the operation in flight, and it finds the record as that operation left it', async () => {
+    const harness = createHarness({ existingRecords: [createRecord('1', 500)] });
+    let openGate: () => void = () => {};
+    const gate = new Promise<void>((resolve) => { openGate = resolve; });
+    const inFlight = harness.ports.runQuestionLifecycleOp(key, () => gate);
+
+    harness.setAside.answerQuestionAskedAgain(key, askedAgain('req_b'));
+    await sleep(20);
+    assert.deepEqual(harness.adapterCalls, [], 'the agent is told only after the operation in flight');
+
+    openGate();
+    await inFlight;
+    await harness.settle();
+    assert.equal(harness.adapterCalls.length, 1);
+    assert.deepEqual(harness.postedAnew, []);
+  });
+
+  it('a record that was answered or closed while the telling waited its turn is gone: the question is posted as a new one, the agent is not told', async () => {
+    const harness = createHarness({ existingRecords: [createRecord('1', 500)] });
+    let openGate: () => void = () => {};
+    const gate = new Promise<void>((resolve) => { openGate = resolve; });
+    const inFlight = harness.ports.runQuestionLifecycleOp(key, () => gate);
+
+    const question = askedAgain('req_b');
+    assert.equal(harness.setAside.answerQuestionAskedAgain(key, question), true);
+    harness.savedRecords.delete(keyString);
+    const warnings = await captureWarnings(async () => {
+      openGate();
+      await inFlight;
+      await harness.settle();
+    });
+
+    assert.deepEqual(harness.adapterCalls, []);
+    assert.deepEqual(harness.postedAnew, [question]);
+    assert.ok(warnings.some((warning) => warning.includes('req_b') && warning.includes('posted as a new one')), warnings.join('\n'));
+  });
+
+  it('an agent that cannot be told is not left blocked on a question nobody sees: the question is posted as a new one, once', async () => {
+    const harness = createHarness({ existingRecords: [createRecord('1', 500)], adapterReturns: false });
+    const question = askedAgain('req_b');
+
+    const warnings = await captureWarnings(async () => {
+      assert.equal(harness.setAside.answerQuestionAskedAgain(key, question), true);
+      await harness.settle();
+    });
+
+    assert.equal(harness.adapterCalls.length, 1, 'it was tried once');
+    assert.deepEqual(harness.postedAnew, [question]);
+    assert.equal(warnings.length, 1);
+  });
+
+  it('a backend that cannot set a question aside gets the question posted as a new one', async () => {
+    const harness = createHarness({ existingRecords: [createRecord('1', 500)], hasSetAside: false });
+    const question = askedAgain('req_b');
+
+    await captureWarnings(async () => {
+      harness.setAside.answerQuestionAskedAgain(key, question);
+      await harness.settle();
+    });
+
+    assert.deepEqual(harness.postedAnew, [question]);
+  });
+
+  it('a failure of the telling is logged and ends the same way: the question is posted as a new one', async () => {
+    const harness = createHarness({ existingRecords: [createRecord('1', 500)], adapterThrows: true });
+    const question = askedAgain('req_b');
+    const errors: string[] = [];
+    const originalError = console.error;
+    console.error = (...args: unknown[]) => { errors.push(args.map((arg) => String(arg)).join(' ')); };
+    try {
+      await captureWarnings(async () => {
+        harness.setAside.answerQuestionAskedAgain(key, question);
+        await harness.settle();
+      });
+    } finally {
+      console.error = originalError;
+    }
+
+    assert.deepEqual(harness.postedAnew, [question]);
+    assert.ok(errors.some((line) => line.includes('still open failed')), errors.join('\n'));
   });
 });
 

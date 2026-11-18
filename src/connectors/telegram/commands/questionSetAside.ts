@@ -14,7 +14,7 @@ import { keyToString } from '../../../sessionKey';
 import { t } from '../../../i18n';
 import type { QuestionEnd } from '../../../openCodeQuestionFlow';
 import type { StateStore } from '../../../state';
-import type { AgentAdapter, OpenCodeQuestion, PendingQuestionState, SetAsideQuestionRecord } from '../../../types';
+import type { AgentAdapter, OpenCodePendingQuestion, OpenCodeQuestion, PendingQuestionState, SetAsideQuestionRecord } from '../../../types';
 import type { LatePromptOutcome } from '../../../utils/promptDelivery';
 import {
   addSetAsideQuestion,
@@ -25,6 +25,7 @@ import {
   getQuestionReplyRouteWithSetAside,
   getQuestionSetAsideDelayMs,
   getSetAsideAnswerTarget,
+  getSetAsideRecordAskedAgain,
   type LateAnswerEntry,
   type QuestionWaitChoice,
 } from '../../../utils/questionWaitPlan';
@@ -90,6 +91,8 @@ export interface QuestionSetAsidePorts extends Pick<BotCore, 'withThreadLocale' 
   shortenedWaitMs: number | undefined;
   /** The wait between two tries when the server could not confirm a question ({@link setAsideRetryDelayMs} unless a test shortens it). */
   retryDelayMs?: number;
+  /** Put a question the agent asks to the topic as a NEW waiting question (what a question that repeats no open one gets); not awaited. */
+  postQuestionAnew: (key: SessionKey, questionData: OpenCodePendingQuestion) => void;
 }
 
 /** Which question a late answer was meant for: its index in the record and the message it was given on (tapped, or replied to). */
@@ -116,7 +119,7 @@ export function createQuestionSetAside(ports: QuestionSetAsidePorts) {
   const {
     getState, withThreadLocale, authoriseSpeaker, replyToThread, pendingQuestions, getThreadAdapter, runQuestionLifecycleOp, setPendingQuestion, clearPendingQuestion,
     releasePendingQuestionToSetAside, editQuestionMessageWithNote, closeQuestionMessage, unpinMessage, pinMessageSilently, sendQuestionMessage, deliverLateAnswer,
-    markNeedsNewMessage, getQuestionWaitChoice, shortenedWaitMs,
+    markNeedsNewMessage, getQuestionWaitChoice, shortenedWaitMs, postQuestionAnew,
   } = ports;
   const retryDelayMs = ports.retryDelayMs ?? setAsideRetryDelayMs;
 
@@ -280,6 +283,38 @@ export function createQuestionSetAside(ports: QuestionSetAsidePorts) {
     const pending = pendingQuestions.get(keyToString(key));
     if (!pending || getQuestionWaitChoice(key) === 'untilAnswered') return false;
     return setPendingQuestionAside(key, pending.data.requestId);
+  }
+
+  /**
+   * @description The agent asks a question whose set-aside copy is still open in the topic (`getSetAsideRecordAskedAgain`) — it did
+   * not take «do not ask it again». It is told AT ONCE, in the set-aside text worded «still open», that it is the same question and
+   * nobody answered it yet; nothing else happens: no second message, no pin, no record, no timer, nothing waiting. Returns whether it
+   * took the question over (the caller posts nothing then); the telling runs in the lifecycle queue, after whatever is in flight. When
+   * by then the record is gone (answered or closed meanwhile) or the agent's side cannot be told, the question is posted like a new
+   * one ({@link QuestionSetAsidePorts.postQuestionAnew}): an agent left blocked on a question nobody sees is the worse failure.
+   */
+  function answerQuestionAskedAgain(key: SessionKey, questionData: OpenCodePendingQuestion): boolean {
+    if (!getSetAsideRecordAskedAgain(getSetAsideRecords(key), questionData.questions)) return false;
+    void runQuestionLifecycleOp(key, () => tellAgentQuestionIsStillOpen(key, questionData))
+      .catch((error) => {
+        console.error('[questionSetAside] telling the agent its question is still open failed:', error);
+        return false;
+      })
+      .then((isTold) => {
+        if (isTold) return;
+        console.warn(`[questionSetAside] ${keyToString(key)}: the question ${questionData.requestId} the agent asked again could not be answered as «still open»; it is posted as a new one`);
+        postQuestionAnew(key, questionData);
+      });
+    return true;
+  }
+
+  /** The record the question repeats is read AGAIN, now that the queue got to it; resolves whether the agent was told. */
+  async function tellAgentQuestionIsStillOpen(key: SessionKey, questionData: OpenCodePendingQuestion): Promise<boolean> {
+    const found = getSetAsideRecordAskedAgain(getSetAsideRecords(key), questionData.questions);
+    if (!found) return false;
+    const { record, answers } = found;
+    const text = buildQuestionSetAsideText({ questions: record.questions, answers: record.answers, askedAtMs: record.askedAt, nowMs: Date.now(), isAlreadyOpen: true });
+    return getThreadAdapter(key).setQuestionAside?.(key, questionData.requestId, text, answers) === true;
   }
 
   /** The bot's copy of a waiting question that the agent's side confirms it holds no such question for: stale, so it ends as «not answered». */
@@ -535,6 +570,7 @@ export function createQuestionSetAside(ports: QuestionSetAsidePorts) {
     clearQuestionSetAsideTimer,
     setPendingQuestionAside,
     setPendingQuestionAsideAtIdle,
+    answerQuestionAskedAgain,
     checkIsSetAsideQuestionMessage,
     registerQuestionSetAsideCallbacks,
     answerSetAsideQuestionByReply,

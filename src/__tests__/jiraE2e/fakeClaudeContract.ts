@@ -240,6 +240,15 @@ export const fakeAskSetAsideTurnText = 'Went on without the answer.';
 export const fakeScheduleOnceToken = (seconds: number, label: string): string => `[fake:schedule-once ${seconds} ${label}]`;
 
 /**
+ * `[fake:question-variant <n>]` in a prompt: the question an `ask` turn puts reads `<question> (<n>)` instead of {@link fakeAskQuestion}'s
+ * bare text — so a flow that keeps several questions open at once asks DISTINCT ones (the bot does not post a question that repeats
+ * an open one). `ask-again` puts the very same text a second time.
+ */
+export const fakeQuestionVariantToken = (variant: number): string => `[fake:question-variant ${variant}]`;
+/** The text of the question an `ask` turn put for `variant` (`undefined`: no token, the bare text). */
+export const getFakeAskQuestionText = (variant?: number): string => (variant === undefined ? fakeAskQuestion.question : `${fakeAskQuestion.question} (${variant})`);
+
+/**
  * While this file is absent, the background task a `background-notify` turn leaves running keeps running; the test
  * writes it to END the task (its content is ignored) — the fake then writes the task's end and starts the task's turn.
  */

@@ -23,6 +23,7 @@ import {
   getQuestionReplyRouteWithSetAside,
   getQuestionSetAsideDelayMs,
   getSetAsideAnswerTarget,
+  getSetAsideRecordAskedAgain,
   longestQuestionWaitMs,
   maxSetAsideQuestions,
   questionWaitChoices,
@@ -398,6 +399,66 @@ describe('getSetAsideAnswerTarget', () => {
   it('is null when every question is answered', () => {
     const record = createRecord({ id: 'a', questions: [deployQuestion], answers: [['Push now']] });
     assert.equal(getSetAsideAnswerTarget(record), null);
+  });
+});
+
+describe('getSetAsideRecordAskedAgain — the agent asks a question whose set-aside copy is open', () => {
+  it('finds the record of the same question, with the answers the call has none of yet', () => {
+    const record = createRecord({ id: 'a' });
+    assert.deepEqual(getSetAsideRecordAskedAgain([record], [deployQuestion]), { record, answers: [null] });
+  });
+
+  it('reads only the question TEXT: another header, other options or the same words spaced differently are the same question', () => {
+    const record = createRecord({ id: 'a' });
+    const reworded: OpenCodeQuestion = { question: '  Push the fix to main now,\n or wait   for the review? ', header: 'Shipping', options: [{ label: 'Yes' }, { label: 'No' }, { label: 'Later' }] };
+    assert.equal(getSetAsideRecordAskedAgain([record], [reworded])?.record, record);
+  });
+
+  it('a question with another text is a new one', () => {
+    assert.equal(getSetAsideRecordAskedAgain([createRecord({ id: 'a' })], [{ ...deployQuestion, question: 'Push the fix to main now, or wait for the build?' }]), null);
+    assert.equal(getSetAsideRecordAskedAgain([createRecord({ id: 'a' })], [docsQuestion]), null);
+  });
+
+  it('a call with no questions, and no records, match nothing', () => {
+    assert.equal(getSetAsideRecordAskedAgain([createRecord({ id: 'a' })], []), null);
+    assert.equal(getSetAsideRecordAskedAgain([], [deployQuestion]), null);
+  });
+
+  it('a call of several questions is the same only when ALL of them are, in the same order', () => {
+    const record = createRecord({ id: 'a', questions: [deployQuestion, docsQuestion], answers: [null, null] });
+    assert.equal(getSetAsideRecordAskedAgain([record], [deployQuestion, docsQuestion])?.record, record);
+    assert.equal(getSetAsideRecordAskedAgain([record], [docsQuestion, deployQuestion]), null, 'another order');
+    assert.equal(getSetAsideRecordAskedAgain([record], [deployQuestion, docsQuestion, docsQuestion]), null, 'one more');
+  });
+
+  it('the same call asked again after the owner answered its first question carries that answer along, aligned with the call', () => {
+    const record = createRecord({ id: 'a', questions: [deployQuestion, docsQuestion], answers: [['Push now'], null], lateFromIndex: 1 });
+    assert.deepEqual(getSetAsideRecordAskedAgain([record], [deployQuestion, docsQuestion])?.answers, [['Push now'], null]);
+  });
+
+  it('the questions the record still has open, asked again alone, are the same too: nothing is given for them', () => {
+    const record = createRecord({ id: 'a', questions: [deployQuestion, docsQuestion], answers: [['Push now'], null], lateFromIndex: 1 });
+    assert.deepEqual(getSetAsideRecordAskedAgain([record], [docsQuestion]), { record, answers: [null] });
+    assert.equal(getSetAsideRecordAskedAgain([record], [deployQuestion]), null, 'a question the owner already answered is not one that is open');
+  });
+
+  it('of two records that match, the newest', () => {
+    const older = createRecord({ id: 'a', messageId: 100 });
+    const newer = createRecord({ id: 'b', messageId: 200 });
+    assert.equal(getSetAsideRecordAskedAgain([older, newer], [deployQuestion])?.record, newer);
+  });
+
+  it('takes the record of its own question among others', () => {
+    const deploy = createRecord({ id: 'a', questions: [deployQuestion] });
+    const docs = createRecord({ id: 'b', questions: [docsQuestion] });
+    assert.equal(getSetAsideRecordAskedAgain([deploy, docs], [deployQuestion])?.record, deploy);
+    assert.equal(getSetAsideRecordAskedAgain([deploy, docs], [docsQuestion])?.record, docs);
+  });
+
+  it('does not change the records it reads', () => {
+    const records = [createRecord({ id: 'a' }), createRecord({ id: 'b' })];
+    getSetAsideRecordAskedAgain(records, [deployQuestion]);
+    assert.deepEqual(records.map((record) => record.id), ['a', 'b']);
   });
 });
 

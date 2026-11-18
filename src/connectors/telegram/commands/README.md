@@ -239,6 +239,12 @@ the topic. The pieces:
   at boot, always for `askedAt + wait` (`PendingQuestionState.askedAt`, saved), so a restart keeps the ORIGINAL moment; none for «Wait for my
   answer». `clearPendingQuestion` clears it. It is the bot's own and independent of the idle fire, of the agent's background work and of
   queued input. `CHARNESS_TEST_TIMINGS` `questionSetAsideWaitMs` cuts a finite wait for a flow.
+- **A question asked again** (`answerQuestionAskedAgain`, called first by `handleAgentQuestion`): the agent that did not take «do not ask it
+  again» and puts the SAME question (`getSetAsideRecordAskedAgain`: the same question texts, in order — the header and the options do not
+  count — as a record's whole call or as the questions it still has open) while its set-aside copy is open is told AT ONCE, in the set-aside
+  text worded «still open», through `setQuestionAside` on the question it holds now; nothing else happens — no second message, no pin, no
+  record, no timer, nothing waiting. It runs in the lifecycle queue; when by then the record is gone, or the agent's side cannot be told,
+  the question is posted like a new one (`postQuestionAnew` = `postAgentQuestion`) rather than leave the agent blocked on a question nobody sees.
 - **The idle mark** (`setPendingQuestionAsideAtIdle`, called by the compaction module's idle fire through its `setQuestionAsideAtIdle` port):
   a question still waiting is set aside NOW, earlier than its wait, instead of the idle compaction's reject + compact + stop + ask again —
   unless the wait is «Wait for my answer» (that keeps today's flow). The wait every topic has is the instance's `settings.json`

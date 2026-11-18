@@ -21,6 +21,7 @@ import {
   fakeSetAsideDenyMessagePrefix,
   fakeAskSecondQuestion,
   fakeAskToolName,
+  getFakeAskQuestionText,
   fakeAskTwoOutcomeSeparator,
   fakeClaudeCrashOnPromptFileName,
   fakeClaudeAlwaysUsageLimitFileName,
@@ -164,6 +165,10 @@ import { claudeSessionStateEventsVariableName } from '../../utils/jsonStreamHost
  *    streams that file's content as text right after the question, and each write of `fakeClaudeNextOutputWhileAskedFileName`
  *    while the question waits streams one more text), logs the answer it got to `tool-calls.jsonl`, then
  *    answers `final` (in a turn without a request: ends the turn);
+ *  - `ask-again`   — the same; when the bot SETS THE QUESTION ASIDE (a `[Charness] …` deny) the agent does not take «do not
+ *    ask it again» and puts the SAME question a second time, then goes on once that is answered too (the bot's second verdict
+ *    is in `control-responses.jsonl`);
+ *    `[fake:question-variant <n>]` in the prompt (`fakeQuestionVariantToken`) makes the question read `<question> (<n>)`;
  *  - `ask-two`     — the same, with `fakeAskSecondQuestion` as a second question of the SAME call (the bot shows them one
  *    after the other); the outcome logged is the two answers joined by `fakeAskTwoOutcomeSeparator`;
  *  - `ask-long`    — the same question, each option with a `fakeAskLongDescription`: it fits one Telegram message, but not
@@ -242,8 +247,8 @@ import { claudeSessionStateEventsVariableName } from '../../utils/jsonStreamHost
  * `FAKE_CLAUDE_STATE_DIR` (per-request turn counts, the conversations held).
  */
 
-export type FakeClaudeMode = 'answer' | 'silent-once' | 'silent' | 'hang-once' | 'hold-once' | 'hold-progress-once' | 'slow-once' | 'progress' | 'finish-together' | 'answer-after-queued' | 'background' | 'background-notify' | 'compact' | 'overflow' | 'fetch-attachment' | 'run-tool' | 'reply-to' | 'usage-limit-once' | 'ask' | 'ask-two' | 'ask-long' | 'send-messages';
-const fakeModes: readonly FakeClaudeMode[] = ['answer', 'silent-once', 'silent', 'hang-once', 'hold-once', 'hold-progress-once', 'slow-once', 'progress', 'finish-together', 'answer-after-queued', 'background', 'background-notify', 'compact', 'overflow', 'fetch-attachment', 'run-tool', 'reply-to', 'usage-limit-once', 'ask', 'ask-two', 'ask-long', 'send-messages'];
+export type FakeClaudeMode = 'answer' | 'silent-once' | 'silent' | 'hang-once' | 'hold-once' | 'hold-progress-once' | 'slow-once' | 'progress' | 'finish-together' | 'answer-after-queued' | 'background' | 'background-notify' | 'compact' | 'overflow' | 'fetch-attachment' | 'run-tool' | 'reply-to' | 'usage-limit-once' | 'ask' | 'ask-again' | 'ask-two' | 'ask-long' | 'send-messages';
+const fakeModes: readonly FakeClaudeMode[] = ['answer', 'silent-once', 'silent', 'hang-once', 'hold-once', 'hold-progress-once', 'slow-once', 'progress', 'finish-together', 'answer-after-queued', 'background', 'background-notify', 'compact', 'overflow', 'fetch-attachment', 'run-tool', 'reply-to', 'usage-limit-once', 'ask', 'ask-again', 'ask-two', 'ask-long', 'send-messages'];
 /**
  * How long an `answer-after-queued` turn waits for the next message before it answers anyway: four polls of the 10 s
  * floor, or what the launcher sets (`fakeClaudeQueuedWaitMaxMsEnvName`) for the instance's own poll.
@@ -1056,19 +1061,27 @@ const controlResponseWaiters = new Map<string, (verdict: FakeControlVerdict) => 
 /** What an ask-mode turn puts: the one question, it and a second one in the same call, or the one with very long option descriptions. */
 type FakeAskVariant = 'one' | 'two' | 'long';
 
-const fakeAskVariantByMode: Partial<Record<FakeClaudeMode, FakeAskVariant>> = { ask: 'one', 'ask-two': 'two', 'ask-long': 'long' };
+const fakeAskVariantByMode: Partial<Record<FakeClaudeMode, FakeAskVariant>> = { ask: 'one', 'ask-again': 'one', 'ask-two': 'two', 'ask-long': 'long' };
+
+const questionVariantRe = /\[fake:question-variant (\d+)\]/;
+
+/** The question variant a prompt asks for (`fakeQuestionVariantToken`), `undefined` for the bare question. */
+function getFakeQuestionVariant(content: string): number | undefined {
+  const variant = questionVariantRe.exec(content)?.[1];
+  return variant === undefined ? undefined : Number.parseInt(variant, 10);
+}
 
 /**
  * The real CLI's `AskUserQuestion`: a `can_use_tool` control request on stdout, then the turn is blocked until the bot
  * writes the matching `control_response` on stdin. Resolves with what the user answered to the question — with the `two`
  * variant the call carries a second question too, and it resolves with both answers, joined.
  */
-async function askUserQuestion(variant: FakeAskVariant = 'one'): Promise<FakeAskResult> {
+async function askUserQuestion(variant: FakeAskVariant, options: { isAskedAgainWhenSetAside: boolean; questionVariant: number | undefined }): Promise<FakeAskResult> {
   const askRequestId = `req_ask_${randomUUID()}`;
   const answered = new Promise<FakeControlVerdict>((resolve) => controlResponseWaiters.set(askRequestId, resolve));
   const questions: FakeAskedQuestion[] = [{
     header: fakeAskQuestion.header,
-    question: fakeAskQuestion.question,
+    question: getFakeAskQuestionText(options.questionVariant),
     multiSelect: false,
     options: [
       { label: fakeAskQuestion.shortOptionLabel, description: variant === 'long' ? fakeAskLongDescription : 'Quick.' },
@@ -1108,7 +1121,11 @@ async function askUserQuestion(variant: FakeAskVariant = 'one'): Promise<FakeAsk
     writeStdout({ type: 'stream_event', event: { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text } } });
   }, fakeOutputWhileAskedPollMs);
   const verdict = await answered.finally(() => clearInterval(nextOutputPoll));
-  if (verdict.behavior === 'deny' && verdict.message?.startsWith(fakeSetAsideDenyMessagePrefix)) return { outcome: fakeAskSetAsideOutcome, isSetAside: true };
+  if (verdict.behavior === 'deny' && verdict.message?.startsWith(fakeSetAsideDenyMessagePrefix)) {
+    // `ask-again` mode: the agent ignores «do not ask it again» — the second verdict is read like the first, and the turn goes on after it.
+    if (options.isAskedAgainWhenSetAside) await askUserQuestion(variant, { ...options, isAskedAgainWhenSetAside: false });
+    return { outcome: fakeAskSetAsideOutcome, isSetAside: true };
+  }
   return { outcome: questions.map((question) => verdict.answers[question.question] ?? fakeAskNoAnswerOutcome).join(fakeAskTwoOutcomeSeparator), isSetAside: false };
 }
 
@@ -1342,7 +1359,7 @@ async function runTurn(argv: readonly string[], sessionId: string, content: stri
     const noRequestAskVariant = noRequestMode === undefined ? undefined : fakeAskVariantByMode[noRequestMode as FakeClaudeMode];
     if (noRequestAskVariant) {
       await armScheduledPrompt(argv, content, noRequestIssueKey);
-      const asked = await askUserQuestion(noRequestAskVariant);
+      const asked = await askUserQuestion(noRequestAskVariant, { isAskedAgainWhenSetAside: noRequestMode === 'ask-again', questionVariant: getFakeQuestionVariant(content) });
       appendJsonLine(fakeClaudeLogFileNames.toolCalls, { issueKey: noRequestIssueKey, tool: fakeAskToolName, args: { question: fakeAskQuestion.question }, outcome: asked.outcome });
       if (asked.isSetAside) {
         endTurnAfterSetAsideQuestion(sessionId);
@@ -1442,7 +1459,7 @@ async function runTurn(argv: readonly string[], sessionId: string, content: stri
   const askVariant = fakeAskVariantByMode[state.mode];
   if (askVariant) {
     await armScheduledPrompt(argv, content, state.issueKey);
-    const asked = await askUserQuestion(askVariant);
+    const asked = await askUserQuestion(askVariant, { isAskedAgainWhenSetAside: state.mode === 'ask-again', questionVariant: getFakeQuestionVariant(content) });
     logToolCall(fakeAskToolName, { question: fakeAskQuestion.question }, asked.outcome);
     if (asked.isSetAside) {
       endTurnAfterSetAsideQuestion(sessionId);

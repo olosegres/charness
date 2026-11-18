@@ -48,6 +48,8 @@ import {
   fakeAskSecondQuestion,
   fakeAskSetAsideTurnText,
   fakeClaudeLogFileNames,
+  fakeQuestionVariantToken,
+  getFakeAskQuestionText,
   fakeScheduleOnceToken,
   type FakeClaudeControlRequest,
   type FakeClaudeControlResponse,
@@ -158,13 +160,34 @@ function getWaitingQuestionAskedAt(): number {
   return askedAt as number;
 }
 
-/** Put the question (`ask`, or `ask-two`): resolves its message once it carries the option buttons. `extra` is more of the prompt (a token). */
-async function askQuestion(promptLabel: string, mode: 'ask' | 'ask-two' = 'ask', extra = ''): Promise<FakeTelegramMessage> {
-  const sentMessageId = fakeTelegram.pushOperatorMessage(topicThreadId, `${promptLabel} [fake:${mode}]${extra} ask me something`);
-  return topic.waitForMessage(`the question of ${promptLabel}`, (message) =>
-    message.message_id > sentMessageId
-    && message.text.includes(fakeAskQuestion.question)
-    && topic.getKeyboardData(message).flat().some((data) => data.startsWith('qa_')));
+/** The next variant of the question the fake agent asks: every question this flow asks reads differently. */
+let nextQuestionVariant = 1;
+/** The text of the question each asked message shows, by message id. */
+const askedQuestionTextByMessageId = new Map<number, string>();
+
+/** The text the fake agent put as the question of `message` (the one `askQuestion` resolved). */
+function getAskedQuestionText(message: FakeTelegramMessage): string {
+  const text = askedQuestionTextByMessageId.get(message.message_id);
+  assert.ok(text, `message ${message.message_id} was resolved by askQuestion`);
+  return text;
+}
+
+/**
+ * Put the question (`ask`, `ask-again` or `ask-two`): resolves its message once it carries the option buttons. `extra` is more of the
+ * prompt (a token). Each question has a text of its own: the bot does not post a question that repeats one whose set-aside copy is
+ * still open (a flow that keeps several open would otherwise ask the same one over and over); `ask-again` repeats ITS text.
+ */
+async function askQuestion(promptLabel: string, mode: 'ask' | 'ask-again' | 'ask-two' = 'ask', extra = ''): Promise<FakeTelegramMessage> {
+  const variant = nextQuestionVariant;
+  nextQuestionVariant += 1;
+  const questionText = getFakeAskQuestionText(variant);
+  const sentMessageId = fakeTelegram.pushOperatorMessage(topicThreadId, `${promptLabel} [fake:${mode}]${extra} ${fakeQuestionVariantToken(variant)} ask me something`);
+  const message = await topic.waitForMessage(`the question of ${promptLabel}`, (candidate) =>
+    candidate.message_id > sentMessageId
+    && candidate.text.includes(questionText)
+    && topic.getKeyboardData(candidate).flat().some((data) => data.startsWith('qa_')));
+  askedQuestionTextByMessageId.set(message.message_id, questionText);
+  return message;
 }
 
 async function waitForPinned(message: FakeTelegramMessage): Promise<void> {
@@ -347,7 +370,7 @@ describe('A question nobody answers is set aside, end to end: built charness, fa
     assertToldToGoOn(response);
     // The answer already given goes with the text, so the agent does not lose it.
     assert.ok(
-      response.message?.endsWith(`(Answers already given in this call: ${JSON.stringify(fakeAskQuestion.question)} = ${JSON.stringify(fakeAskQuestion.shortOptionLabel)}.)`),
+      response.message?.endsWith(`(Answers already given in this call: ${JSON.stringify(getAskedQuestionText(first))} = ${JSON.stringify(fakeAskQuestion.shortOptionLabel)}.)`),
       `the given answer is named: ${response.message}`,
     );
     await waitingTopic.waitForMessageText('the set-aside note under the second question', second, (text) => text.endsWith(`\n\n${setAsideNote}`));
@@ -523,7 +546,7 @@ describe('A question nobody answers is set aside, end to end: built charness, fa
 
       // Load-bearing: the agent read the late answer, worded for a question it went on without.
       const prompt = await waitForNewLatePrompt(promptsBefore);
-      assert.ok(prompt.text.includes(`Question: ${fakeAskQuestion.question}\nAnswer: ${fakeAskQuestion.shortOptionLabel}\n`), prompt.text);
+      assert.ok(prompt.text.includes(`Question: ${getAskedQuestionText(question)}\nAnswer: ${fakeAskQuestion.shortOptionLabel}\n`), prompt.text);
       assert.ok(prompt.text.includes('You went on without it'), 'and says so');
       assert.ok(prompt.text.startsWith(lateAnswerHeader), 'headed as the set-aside text promised');
       await waitingTopic.waitForMessage('the agent answering the late answer', (message) => message.message_id > question.message_id && message.text.includes('Working on unknown.'));
@@ -581,7 +604,7 @@ describe('A question nobody answers is set aside, end to end: built charness, fa
 
       assert.equal(await topic.tapAndAwaitAnswer(second, `qs_${record.id}_1`), fakeAskSecondQuestion.secondOptionLabel);
       const prompt = await waitForNewLatePrompt(promptsBefore);
-      assert.ok(prompt.text.includes(`Question: ${fakeAskQuestion.question}\nAnswer: ${fakeAskQuestion.shortOptionLabel}\n\nQuestion: ${fakeAskSecondQuestion.question}\nAnswer: ${fakeAskSecondQuestion.secondOptionLabel}\n`), prompt.text);
+      assert.ok(prompt.text.includes(`Question: ${getAskedQuestionText(first)}\nAnswer: ${fakeAskQuestion.shortOptionLabel}\n\nQuestion: ${fakeAskSecondQuestion.question}\nAnswer: ${fakeAskSecondQuestion.secondOptionLabel}\n`), prompt.text);
       assert.ok(prompt.text.includes('You went on without them'), 'worded for several answers');
       assert.equal(getLatePrompts().length, promptsBefore + 1, 'ONE message for the whole call');
       await topic.waitForMessageText('the second answer under the second question', second, (text) => text.endsWith(`\n\n${buildAnsweredNote(fakeAskSecondQuestion.secondOptionLabel)}`));
@@ -727,9 +750,43 @@ describe('A question nobody answers is set aside, end to end: built charness, fa
       assert.equal(await topic.tapAndAwaitAnswer(kept, `qs_${keptRecord.id}_0`), enDict['cb.no_pending_question'], 'a tap on its old button answers nothing');
     });
 
-    it('a switch to another backend the operator chose ends the conversation: the open set-aside question ends as «not answered», its pin is released', async () => {
-      // The conversation the step before released has no agent: a fresh one is started for the question.
+    it('a question the agent asks AGAIN while its set-aside copy is open is not posted a second time: the agent is told at once that it is the same one and still open, and the one message stays the one to answer', async () => {
+      // The conversation the step before left has no agent: a fresh one is started for the question.
       await topic.sendAndAwaitReply('/claude', 'ready in');
+      const promptsBefore = getLatePrompts().length;
+      const responsesBefore = getControlResponses().length;
+      const sequenceBefore = readPersistedState(getLayout()).setAsideQuestionSequences?.[topicKey] ?? 0;
+      const question = await askQuestion('SAME-1', 'ask-again');
+      await waitForPinned(question);
+
+      // First the wait ends and the agent is told to go on — which it does not take: it puts the same question a second time.
+      assertToldToGoOn(await waitForSetAsideDeny('the bot to set the question aside', responsesBefore));
+      const [record] = await waitForSetAsideRecords(1);
+      const second = await waitForSetAsideDeny('the bot to answer the question the agent asked again', responsesBefore + 1);
+      assert.equal(second.behavior, 'deny', 'told, not answered');
+      assert.ok(second.message?.startsWith('[Charness] This question is still open: the user has not answered it yet (asked '), `it is the same question, still open: ${second.message}`);
+      assert.ok(second.message?.includes('This is NOT an answer.') && second.message?.includes('do not ask it again and do not wait for it'), 'with the same instructions');
+      assert.ok(second.readAt <= getControlResponses()[responsesBefore].readAt + setAsideLatenessMs, 'at once — no new wait');
+
+      // Load-bearing: the agent went on after the second verdict too (the fake ends its turn only once both were read).
+      await waitingTopic.waitForMessage('the agent going on after it asked again', (message) => message.message_id > question.message_id && message.text.includes(fakeAskSetAsideTurnText));
+      assert.equal(topic.listMessages().filter((message) => message.message_id > question.message_id && message.text.includes(fakeAskQuestion.question)).length, 0, 'no second message of the question');
+      assert.deepEqual(fakeTelegram.listPinnedMessageIds().filter((messageId) => messageId > question.message_id), [], 'no new pin');
+      assert.deepEqual(getSetAsideRecords(), [record], 'still the one record');
+      const state = readPersistedState(getLayout());
+      assert.equal(state.pendingQuestions?.[topicKey], undefined, 'nothing waits, so no wait can end');
+      assert.equal(state.setAsideQuestionSequences?.[topicKey], sequenceBefore + 1, 'one record id was taken: the question the agent asked again got none');
+      assert.equal(getControlResponses().length, responsesBefore + 2, 'the agent heard two verdicts, one for each ask');
+      assertShownAsSetAside(question, record, firstAskedQuestion, 2);
+
+      // The one message is still the one that answers: a tap on it reaches the agent as a late answer.
+      assert.equal(await topic.tapAndAwaitAnswer(question, `qs_${record.id}_0`), fakeAskQuestion.shortOptionLabel);
+      const prompt = await waitForNewLatePrompt(promptsBefore);
+      assert.ok(prompt.text.includes(`Question: ${getAskedQuestionText(question)}\nAnswer: ${fakeAskQuestion.shortOptionLabel}\n`), prompt.text);
+    });
+
+    it('a switch to another backend the operator chose ends the conversation: the open set-aside question ends as «not answered», its pin is released', async () => {
+      // The agent the step before started is running: its question is the one to be left.
       const { question, record } = await askAndWaitForSetAside('LATE-14');
       await getCharness().waitFor('the agent to go on', setAsideTimeoutMs, () => topic.listMessages().some((message) => message.message_id > question.message_id && message.text.includes(fakeAskSetAsideTurnText)));
       assert.ok(fakeTelegram.listPinnedMessageIds().includes(question.message_id), 'precondition: the question is open and pinned');

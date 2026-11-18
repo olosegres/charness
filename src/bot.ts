@@ -6496,6 +6496,7 @@ const {
   armQuestionSetAsideTimer,
   clearQuestionSetAsideTimer,
   setPendingQuestionAsideAtIdle,
+  answerQuestionAskedAgain,
   checkIsSetAsideQuestionMessage,
   registerQuestionSetAsideCallbacks,
   answerSetAsideQuestionByReply,
@@ -6518,6 +6519,7 @@ const {
   // The instance value `settings.json` holds (`questionWait`); a topic's own choice arrives with the `/question_wait` command.
   getQuestionWaitChoice: () => resolveQuestionWait(undefined, readInstanceQuestionWait() ?? undefined),
   shortenedWaitMs: ENV.testTimings.questionSetAsideWaitMs,
+  postQuestionAnew: postAgentQuestion,
 });
 
 /**
@@ -13041,6 +13043,16 @@ function handleAgentQuestion(key: SessionKey, questionData: OpenCodePendingQuest
   if (persistedQuestion && persistedQuestion.data.requestId === questionData.requestId) {
     return;
   }
+  // A question whose set-aside copy is still open in the topic is not posted again: the agent is told it is the same one.
+  if (answerQuestionAskedAgain(key, questionData)) return;
+  postAgentQuestion(key, questionData);
+}
+
+/**
+ * @description Put a question the agent asked to the topic as the one that WAITS: the question UI takes over from the agent's
+ * status, the message is posted (and pinned) in the lifecycle queue, and the question wait starts.
+ */
+function postAgentQuestion(key: SessionKey, questionData: OpenCodePendingQuestion): void {
   // The agent asks anew: a question the idle compaction re-asked earlier is superseded, and its buttons would now answer
   // the wrong question — it is closed as unanswered.
   closeReAskedQuestion(key);
