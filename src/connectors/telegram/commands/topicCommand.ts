@@ -7,14 +7,12 @@ import type { Chat } from 'telegraf/typings/core/types/typegram';
 import type { SessionKey } from '../../../sessionKey';
 import { keyToString } from '../../../sessionKey';
 import { t } from '../../../i18n';
+import { topicNameMaxLength } from '../../../utils/topicIndicatorPlan';
 import { checkIsApiError, getErrorDescription } from '../../../sendErrorClassifier';
 import { getTelegramChatId, makeTelegramKey } from '../sessionKeyCodec';
 import { BIND_PAGE_SIZE, buildBindKeyboard, type BindPickerCallbacks } from '../bindPicker';
 import { getCallbackMessageId } from './callbackMessage';
 import type { BotCore } from './botCore';
-
-/** The Bot API accepts a topic name of 1–128 characters (`createForumTopic`). */
-export const topicNameMaxLength = 128;
 
 /** In-flight wizards kept in memory, the newest; an older one's keyboard answers «out of date». */
 const topicWizardLimit = 20;

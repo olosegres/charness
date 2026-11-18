@@ -33,13 +33,13 @@ import {
   createTopicCommand,
   getPublicChatUsername,
   normaliseTopicName,
-  topicNameMaxLength,
   type WorkFolderResult,
 } from '../connectors/telegram/commands/topicCommand';
 import { BIND_PAGE_SIZE } from '../connectors/telegram/bindPicker';
 import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
 import type { SessionKey } from '../sessionKey';
 import { t } from '../i18n';
+import { topicNameMaxLength } from '../utils/topicIndicatorPlan';
 import { createCommandHarness, harnessGroup, type CommandHarness, type RecordedSend } from './commandModuleHarness';
 
 const folderRepoName = 'repo-one';
