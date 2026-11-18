@@ -12,6 +12,10 @@ import { checkIsTerminal, createStepRunner, stepLabels, stepLinePrefix, type Ste
 
 const dotIntervalMs = 15;
 const longEnoughForSeveralFramesMs = 140;
+/** How many frames a step that runs "long enough" must have drawn before it ends. */
+const severalFramesCount = 4;
+/** The most a step waits for its frames: a loaded box delays a timer, it does not stop it. */
+const framesDeadlineMs = 10_000;
 /** macOS Terminal's default width — the narrowest a person runs the pairing line in. */
 const defaultTerminalColumns = 80;
 const unreadableTerminalColumns = 20;
@@ -22,6 +26,18 @@ function getDrawnWidth(frame: string): number {
 
 function wait(ms: number): Promise<void> {
   return new Promise((resolve) => { setTimeout(resolve, ms); });
+}
+
+/**
+ * A work that ends once `output` has drawn `count` frames. The dots move on a timer: a fixed sleep counts on how fast the box is, and on a
+ * starved event loop its own timer comes due together with the dots' and ends the step after a frame or two.
+ */
+async function waitForFrames(output: { written: string[] }, count: number): Promise<void> {
+  const deadline = Date.now() + framesDeadlineMs;
+  while (output.written.length < count) {
+    if (Date.now() > deadline) throw new Error(`${output.written.length} frames in ${framesDeadlineMs} ms, expected ${count}`);
+    await wait(dotIntervalMs);
+  }
 }
 
 function createOutput(isTerminal: boolean, getColumns: StepOutput['getColumns'] = () => defaultTerminalColumns): StepOutput & { written: string[] } {
@@ -50,10 +66,10 @@ describe('a step on a pipe or a file', () => {
 describe('a step on a terminal', () => {
   it('redraws its one line with dots that cycle one, two, three while it runs, then closes it with «— done»', async () => {
     const output = createOutput(true);
-    await createStepRunner(output, dotIntervalMs)('installing the thing', () => wait(longEnoughForSeveralFramesMs));
+    await createStepRunner(output, dotIntervalMs)('installing the thing', () => waitForFrames(output, severalFramesCount));
     const head = `${stepLinePrefix}installing the thing`;
     const frames = output.written.slice(0, -1);
-    assert.ok(frames.length >= 4, `the dots moved: ${JSON.stringify(output.written)}`);
+    assert.ok(frames.length >= severalFramesCount, `the dots moved: ${JSON.stringify(output.written)}`);
     const expectedCycle = [`\r${head}.  `, `\r${head}.. `, `\r${head}...`];
     frames.forEach((frame, index) => assert.equal(frame, expectedCycle[index % expectedCycle.length], `frame ${index}`));
     assert.equal(output.written.at(-1), `\r${head} — done\n`, 'the line ends on a result that covers the dots');
@@ -116,8 +132,8 @@ describe('a step on a narrow terminal', () => {
   it('cuts a name that does not fit (a long account name) with an ellipsis so that no frame reaches the last column', async () => {
     const output = createOutput(true);
     const longName = stepLabels.installService('an-account-with-a-very-long-name-that-goes-on-and-on-and-on');
-    await createStepRunner(output, dotIntervalMs)(longName, () => wait(longEnoughForSeveralFramesMs));
-    assert.ok(output.written.length >= 4);
+    await createStepRunner(output, dotIntervalMs)(longName, () => waitForFrames(output, severalFramesCount));
+    assert.ok(output.written.length >= severalFramesCount);
     assert.ok(output.written.every((frame) => getDrawnWidth(frame) < defaultTerminalColumns), `a frame wraps: ${JSON.stringify(output.written)}`);
     assert.match(output.written[0], /…\.\s*$/, 'the cut is marked');
     assert.equal(output.written.at(-1)?.endsWith(' — done\n'), true, 'the result still closes the line');
