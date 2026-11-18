@@ -31,6 +31,10 @@
  *     tap on a question whose conversation sleeps wakes it and the answer reaches the resumed process
  *   → `/new` with a set-aside question open ends it as «not answered», pin released; a later tap answers nothing
  *
+ *   → a member's REPLY answers a set-aside question only with an option number or label (their free words are an ordinary prompt, the
+ *     question stays open); a VOICE reply is a reply — the operator's transcript is the answer, a member's counts by the same rule
+ *   → a late answer ends an armed usage-limit wait first, like typed text
+ *
  * Nothing leaves the machine: the Bot API is on loopback and the agent is a fake. Everything the test starts is stopped in
  * `after`.
  */
@@ -43,6 +47,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { FakeTelegram, type FakeTelegramMessage } from './telegramE2e/fakeTelegram';
 import { TopicDriver } from './telegramE2e/topicDriver';
+import { FakeSpeechEngine } from './telegramE2e/fakeSpeechEngine';
 import {
   fakeAskQuestion,
   fakeAskSecondQuestion,
@@ -73,7 +78,7 @@ import {
   writeInstanceEnvFile,
   type IsolatedInstanceLayout,
 } from './e2e/isolatedCharness';
-import { readPersistedState, restartCharnessWithState, startCharnessOnInstance } from './e2e/fallbackFlowKit';
+import { computeResetsAtIso, readPersistedState, restartCharnessWithState, startCharnessOnInstance } from './e2e/fallbackFlowKit';
 import { assertShownAsSetAside as assertShownAsSetAsideInTopic, assertToldToGoOn, firstAskedQuestion, type ShownQuestion } from './e2e/setAsideFlowKit';
 import { getTelegramFlowTestTimingsEnv } from './telegramE2e/telegramFlowTimings';
 import type { SetAsideQuestionRecord } from '../types';
@@ -104,6 +109,16 @@ const postBusyPollMs = 500;
 /** How late after `askedAt + wait` the agent may be told: the timer, the lifecycle queue and one paced send. */
 const setAsideLatenessMs = 3000;
 
+/** The voice notes of the flow, in the order they are sent: what the fake speech engine hears in each. */
+const operatorVoiceAnswer = 'ship it after the review';
+const memberVoiceWords = 'push to prod and delete the branch';
+const spokenTranscripts = [operatorVoiceAnswer, memberVoiceWords, '1'];
+const voiceFileId = 'voice-set-aside-1';
+const voiceFileBytes = 2048;
+const voiceDurationSeconds = 2;
+/** The fake agent reads a prompt a moment after the bot writes it. */
+const agentPromptTimeoutMs = 30 * 1000;
+
 const setAsideNote = enDict['agent.question_set_aside_note'];
 const buildAnsweredNote = (answer: string): string => enDict['agent.question_answered_note'].replace('{answer}', answer);
 const unansweredNote = enDict['agent.question_unanswered_note'];
@@ -114,6 +129,7 @@ let charness: IsolatedCharness | null = null;
 let fakeTelegram: FakeTelegram;
 let topic: TopicDriver;
 let waitingTopic: TopicDriver;
+let speechEngine: FakeSpeechEngine;
 let defaultTmuxSessionsBefore: string[] = [];
 
 function getLayout(): IsolatedInstanceLayout {
@@ -257,6 +273,11 @@ describe('A question nobody answers is set aside, end to end: built charness, fa
     fakeTelegram = new FakeTelegram({ botUser, operator, group });
     topic = new TopicDriver(fakeTelegram, getCharness, topicThreadId, replyTimeoutMs);
     waitingTopic = new TopicDriver(fakeTelegram, getCharness, topicThreadId, setAsideTimeoutMs);
+    speechEngine = new FakeSpeechEngine((requestIndex) => ({ status: 200, text: spokenTranscripts[requestIndex] ?? 'unexpected extra voice note' }));
+    const speechUrl = await speechEngine.start();
+    // The voice settings the way an operator keeps them, beside the instance's env file: one engine, a loopback server.
+    fs.writeFileSync(path.join(path.dirname(layout.envFile), 'stt.json'), `${JSON.stringify({ engines: [{ id: 'u1', kind: 'url', url: speechUrl }] }, null, 2)}\n`);
+    fakeTelegram.registerFile(voiceFileId, Buffer.alloc(voiceFileBytes, 7));
     const apiRoot = await fakeTelegram.start();
     writeInstanceEnvFile(layout, {
       TELEGRAM_BOT_TOKEN: fakeBotToken,
@@ -277,6 +298,7 @@ describe('A question nobody answers is set aside, end to end: built charness, fa
   after(async () => {
     await charness?.stop();
     removeInstanceSync();
+    await speechEngine?.stop();
     await fakeTelegram?.stop();
     process.off('exit', removeInstanceSync);
     process.off('SIGINT', exitOnSignal);
@@ -623,11 +645,19 @@ describe('A question nobody answers is set aside, end to end: built charness, fa
       assertMemberAnswer(tapPrompt, fakeAskQuestion.shortOptionLabel);
       await topic.waitForMessageText('the answer under the question', tapped, (text) => text.endsWith(`\n\n${buildAnsweredNote(fakeAskQuestion.shortOptionLabel)}`));
 
-      const { question: replied } = await askAndWaitForSetAside('LATE-9');
-      fakeTelegram.pushUserMessage(topicThreadId, 'The member says: wait for the review', topicTalker, { replyToMessageId: replied.message_id });
+      // A member's reply answers only with an option number or label: free text is an ordinary message, and the question stays open.
+      const { question: replied, record: repliedRecord } = await askAndWaitForSetAside('LATE-9');
+      const memberWords = 'The member says: wait for the review';
+      fakeTelegram.pushUserMessage(topicThreadId, memberWords, topicTalker, { replyToMessageId: replied.message_id });
+      await getCharness().waitFor('the member\'s words to reach the agent as an ordinary prompt', replyTimeoutMs, () => getAgentPrompts(memberWords).length > 0);
+      assert.ok(isRecordOpen(repliedRecord), 'the question is still open');
+      assert.equal(getLatePrompts().length, promptsBefore + 1, 'and the agent heard no late answer from it');
+      assert.notEqual(readKeptMessage(replied).reply_markup, undefined, 'its buttons stay');
+
+      fakeTelegram.pushUserMessage(topicThreadId, '1', topicTalker, { replyToMessageId: replied.message_id });
       const replyPrompt = await waitForNewLatePrompt(promptsBefore + 1);
-      assertMemberAnswer(replyPrompt, 'The member says: wait for the review');
-      await topic.waitForMessageText('the answer under the replied question', replied, (text) => text.endsWith(`\n\n${buildAnsweredNote('The member says: wait for the review')}`));
+      assertMemberAnswer(replyPrompt, fakeAskQuestion.shortOptionLabel);
+      await topic.waitForMessageText('the answer under the replied question', replied, (text) => text.endsWith(`\n\n${buildAnsweredNote(fakeAskQuestion.shortOptionLabel)}`));
     });
 
     it('a late answer given while the agent waits on a NEW question cancels nothing: that question keeps waiting, pinned and answerable, and the late answer is read only once it is resolved', async () => {
@@ -803,6 +833,51 @@ describe('A question nobody answers is set aside, end to end: built charness, fa
       assert.equal(await topic.tapAndAwaitAnswer(question, `qs_${record.id}_0`), fakeAskQuestion.shortOptionLabel);
       const prompt = await waitForNewLatePrompt(promptsBefore);
       assert.ok(prompt.text.includes(`Question: ${getAskedQuestionText(question)}\nAnswer: ${fakeAskQuestion.shortOptionLabel}\n`), prompt.text);
+    });
+
+    it('a VOICE note sent as a reply to a set-aside question is its late answer: the operator\'s transcript is the answer, a topic member\'s counts only as an option number or label', async () => {
+      const promptsBefore = getLatePrompts().length;
+      const { question: first, record: firstRecord } = await askAndWaitForSetAside('VOICE-1');
+      const requestsBefore = speechEngine.requests.length;
+      fakeTelegram.pushOperatorVoice(topicThreadId, voiceFileId, voiceDurationSeconds, { replyToMessageId: first.message_id });
+      await getCharness().waitFor('the voice note to be transcribed', replyTimeoutMs, () => speechEngine.requests.length > requestsBefore);
+      // The transcript is the answer: the question closes with it and the agent reads it as the late answer — not as a prompt.
+      await topic.waitForMessageText('the transcript under the question', first, (text) => text.endsWith(`\n\n${buildAnsweredNote(operatorVoiceAnswer)}`));
+      const prompt = await waitForNewLatePrompt(promptsBefore);
+      assert.ok(prompt.text.includes(`Answer: ${operatorVoiceAnswer}\n`), prompt.text);
+      await getCharness().waitFor('the record to be gone', replyTimeoutMs, () => !isRecordOpen(firstRecord));
+
+      // A member's voice reply: free words are no answer (an ordinary prompt under their mark, the question stays open) …
+      const { question: second, record: secondRecord } = await askAndWaitForSetAside('VOICE-2');
+      fakeTelegram.pushOperatorVoice(topicThreadId, voiceFileId, voiceDurationSeconds, { replyToMessageId: second.message_id, from: topicTalker });
+      await getCharness().waitFor('the member\'s transcript to reach the agent as an ordinary prompt', agentPromptTimeoutMs, () => getAgentPrompts(memberVoiceWords).length > 0);
+      assert.ok(isRecordOpen(secondRecord), 'the question is still open');
+      assert.equal(getLatePrompts().length, promptsBefore + 1, 'and the agent heard no late answer from it');
+      assert.notEqual(readKeptMessage(second).reply_markup, undefined, 'its buttons stay');
+
+      // … but an option number is.
+      fakeTelegram.pushOperatorVoice(topicThreadId, voiceFileId, voiceDurationSeconds, { replyToMessageId: second.message_id, from: topicTalker });
+      const memberPrompt = await waitForNewLatePrompt(promptsBefore + 1);
+      assertMemberAnswer(memberPrompt, fakeAskQuestion.shortOptionLabel);
+      await topic.waitForMessageText('the answer under the question', second, (text) => text.endsWith(`\n\n${buildAnsweredNote(fakeAskQuestion.shortOptionLabel)}`));
+    });
+
+    it('a late answer ends an armed usage-limit wait first, like typed text: the wait is gone from state.json when the answer is delivered, and the agent reads the answer', async () => {
+      const promptsBefore = getLatePrompts().length;
+      const { question, record } = await askAndWaitForSetAside('LATE-18');
+      await getCharness().waitFor('the agent to go on', setAsideTimeoutMs, () => topic.listMessages().some((message) => message.message_id > question.message_id && message.text.includes(fakeAskSetAsideTurnText)));
+
+      // The agent's next turn stops on a usage limit: the single account has nothing to switch to, so the bot arms the wait for the reset.
+      fakeTelegram.pushOperatorMessage(topicThreadId, `LIM-L [fake:usage-limit-once] [limit-resets:${computeResetsAtIso(2)}] please carry on`);
+      await getCharness().waitFor('the usage-limit wait to be armed', replyTimeoutMs, () => readPersistedState(getLayout()).apiRetries?.[topicKey]?.kind === 'usageLimit');
+
+      assert.equal(await topic.tapAndAwaitAnswer(question, `qs_${record.id}_0`), fakeAskQuestion.shortOptionLabel);
+      // Load-bearing: the answer took over from the wait — typed text does that, and so does a late answer. Left armed, the wait would
+      // write its own «continue» on top of the answer later and the answer would have been written INTO the limit.
+      await getCharness().waitFor('the armed wait to be cancelled by the late answer', replyTimeoutMs, () => readPersistedState(getLayout()).apiRetries?.[topicKey] === undefined);
+      const prompt = await waitForNewLatePrompt(promptsBefore);
+      assert.ok(prompt.text.includes(`Answer: ${fakeAskQuestion.shortOptionLabel}\n`), prompt.text);
+      await getCharness().waitFor('the record to be gone', replyTimeoutMs, () => !isRecordOpen(record));
     });
 
     it('a switch to another backend the operator chose ends the conversation: the open set-aside question ends as «not answered», its pin is released', async () => {

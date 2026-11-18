@@ -1313,8 +1313,11 @@ export interface AgentAdapter extends EventEmitter {
    * @returns `true` only when the question's tool call was answered (the reply or the deny was sent); `false` for a no-op: no
    * question pending, another one pending, an inactive session, or a backend that implements neither question path (the
    * tmux-scrape Claude, the terminal). The bot says «the agent went on» in the topic only for `true`.
+   * `onSettled` (a backend whose reply is a network call: OpenCode) is told once whether the send was taken (`true`) or failed
+   * (`false`): a failed one leaves the question open on the backend's side, so «the agent went on» may be untrue and the caller
+   * must see to it; such a failure does not surface through the `error` event.
    */
-  setQuestionAside?(key: SessionKey, requestId: string, text: string, givenAnswers: (string[] | null)[]): boolean;
+  setQuestionAside?(key: SessionKey, requestId: string, text: string, givenAnswers: (string[] | null)[], onSettled?: (isSent: boolean) => void): boolean;
 
   /**
    * @description Re-read the backend's OWN registry of open questions for this session and say whether it holds `requestId`, the
@@ -1333,7 +1336,7 @@ export interface AgentAdapter extends EventEmitter {
    * the registry no longer holds: the question the registry holds NOW was never shown. Best-effort: nothing is emitted for an empty
    * registry or a failed read. Only for a backend that has such a registry ({@link resyncOpenQuestion}).
    */
-  surfaceOpenQuestion?(key: SessionKey): Promise<void>;
+  surfaceOpenQuestion?(key: SessionKey, exceptRequestId?: string): Promise<void>;
 
   /**
    * @description Whether this session's turn is wedged behind an open

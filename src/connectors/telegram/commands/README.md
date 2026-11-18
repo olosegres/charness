@@ -256,6 +256,12 @@ the topic. The pieces:
   reads that map, leaves the message alone), becomes a `SetAsideQuestionRecord` of `state.json` `setAsideQuestions` (at most
   `maxSetAsideQuestions`; a further one closes the oldest as «not answered» and unpins it) and its message is EDITED, not re-posted: a note under
   the options (`agent.question_set_aside_note`) and the same option buttons, whose data is `qs_<record id>_<option index>`.
+- **A reply the server did not take** (OpenCode; `setQuestionAside`'s `onSettled`): the question stays open on the server although the topic says the
+  agent went on. The bot hands the server's question to itself again after `retryDelayMs` (`surfaceOpenQuestion` → the question-asked-again route tells
+  the agent once more), at most `setAsideRetryLimit` times, then the topic is told once (`agent.set_aside_reply_failed_notice`: send any message to move
+  the agent on — the wedge backstop of `deliverActivePrompt` aborts the turn). After EVERY set-aside the server's OTHER open question of the session is
+  surfaced too (`exceptRequestId`). The counts of the tries (`retryAttempts`, `replyFailures`) are forgotten when the question is told, dropped or its timer
+  is armed afresh (`/question_wait`, a restart): one timer per conversation (`armSetAsideTimer`) serves the wait and its second chance.
 - **The bot holds the question and the adapter says it holds none** (at the end of the wait): json-stream — the CLI's own question is the authority, so the
   bot's copy is stale and closes as «not answered» with one log line; OpenCode — the adapter only caches the server's registry, so the server is asked
   (`resyncOpenQuestion(key, requestId)`): it holds THAT question → set aside after all; it holds none, or ANOTHER one → the bot's copy is closed as above and
@@ -283,7 +289,10 @@ the topic. The pieces:
   bot's own `[Late answer …]` header. Each answer is meant for the question it was tapped or replied to on (`LateAnswerTarget`: record, question
   index, message): checked again inside the lifecycle queue, so a double tap on a call with several questions answers the first once and the
   second is `gone` — told «already answered or closed» — never given to the next question. The next question of a call is posted BEFORE the answered
-  one closes; a post that fails takes nothing (the record stays on its question, the owner is told to try again). A second tap on a record's last question while
+  one closes; a post that fails takes nothing (the record stays on its question, the owner is told to try again). A late answer cancels an armed usage-limit wait first (`deliverLateAnswerPrompt`: `cancelApiRetry`, as typed text does). A VOICE reply is a reply: the voice
+  job hands its transcript to `answerSetAsideQuestionByReply` (`VoiceReply`: who, which role, which message, the genuine reply target) before any other voice
+  route. A reply answers with an option number, an option's own label or — for the operator only (`canAnswerWithFreeText`) — any words; a topic member's other
+  words are an ordinary prompt. A second tap on a record's last question while
   the first answer is on its way answers nothing in the toast alone. A reply to a message other than the question that waits NOW is no pick for
   it, but its words still cancel the waiting question like any text (`deliverActivePrompt`, `replyToMessageId`). The reply target is always
   `getTelegramReplyTargetId`: a client attaches the topic's root message to a plain message typed in a topic («post in this topic»), and that is

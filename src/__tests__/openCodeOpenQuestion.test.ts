@@ -64,14 +64,22 @@ describe('getOpenQuestionForSession', () => {
     const firstOfSession = { ...targetEntry, id: 'que_first' };
     const secondOfSession = { ...targetEntry, id: 'que_second' };
     assert.equal(getOpenQuestionForSession([firstOfSession, secondOfSession], sessionId, workDir)?.requestId, 'que_first', 'without an id the first');
-    assert.equal(getOpenQuestionForSession([firstOfSession, secondOfSession], sessionId, workDir, 'que_second')?.requestId, 'que_second');
-    assert.equal(getOpenQuestionForSession([firstOfSession, secondOfSession], sessionId, workDir, 'que_first')?.requestId, 'que_first');
+    assert.equal(getOpenQuestionForSession([firstOfSession, secondOfSession], sessionId, workDir, { requestId: 'que_second' })?.requestId, 'que_second');
+    assert.equal(getOpenQuestionForSession([firstOfSession, secondOfSession], sessionId, workDir, { requestId: 'que_first' })?.requestId, 'que_first');
+  });
+
+  it('with an entry left out: the first of the OTHERS — the sibling of a question the caller has just set aside', () => {
+    const first = { ...targetEntry, id: 'que_first' };
+    const second = { ...targetEntry, id: 'que_second' };
+    assert.equal(getOpenQuestionForSession([first, second], sessionId, workDir, { exceptRequestId: 'que_first' })?.requestId, 'que_second');
+    assert.equal(getOpenQuestionForSession([first, second], sessionId, workDir, { exceptRequestId: 'que_second' })?.requestId, 'que_first');
+    assert.equal(getOpenQuestionForSession([first], sessionId, workDir, { exceptRequestId: 'que_first' }), null, 'nothing but the one left out');
   });
 
   it('with a request id: null when the session holds no entry of that id — another session\'s entry of the id does not count', () => {
     const otherSessionSameId = { ...targetEntry, id: 'que_wanted', sessionID: 'ses_other' };
-    assert.equal(getOpenQuestionForSession([targetEntry], sessionId, workDir, 'que_wanted'), null);
-    assert.equal(getOpenQuestionForSession([otherSessionSameId, targetEntry], sessionId, workDir, 'que_wanted'), null);
+    assert.equal(getOpenQuestionForSession([targetEntry], sessionId, workDir, { requestId: 'que_wanted' }), null);
+    assert.equal(getOpenQuestionForSession([otherSessionSameId, targetEntry], sessionId, workDir, { requestId: 'que_wanted' }), null);
   });
 
   it('returns null when no open question belongs to this session', () => {

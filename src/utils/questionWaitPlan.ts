@@ -71,11 +71,6 @@ export function getQuestionSetAsideDelayMs(askedAtMs: number, choice: QuestionWa
   return Math.max(askedAtMs + effectiveWaitMs - nowMs, 0);
 }
 
-/** @description Whether the wait of a question asked at `askedAtMs` is over — it is to be set aside now. */
-export function checkIsQuestionSetAsideDue(askedAtMs: number, choice: QuestionWaitChoice, nowMs: number, shortenedToMs?: number): boolean {
-  return getQuestionSetAsideDelayMs(askedAtMs, choice, nowMs, shortenedToMs) === 0;
-}
-
 /** What a question is called to the agent: its full text, else its header. */
 function getQuestionText(question: OpenCodeQuestion): string {
   return question.question || question.header || 'Question';
@@ -277,6 +272,16 @@ export interface QuestionReplyRouteInput {
    * `deliverActivePrompt`'s). A waiting question is still cancelled by it, as by any other message that is not a pick.
    */
   isForwarded: boolean;
+  /**
+   * Whether the reply may be the answer in the person's own words. The operator's may; a topic member's answers only with an option
+   * number or an option's label — their free text is an ordinary prompt, as on the waiting-question route.
+   */
+  canAnswerWithFreeText: boolean;
+}
+
+/** An option label as a reply is matched against it: the ends and the case do not tell two apart. */
+function normaliseOptionLabel(label: string): string {
+  return label.trim().toLowerCase();
 }
 
 /**
@@ -284,7 +289,9 @@ export interface QuestionReplyRouteInput {
  * so it does not answer a set-aside question (1), and answers no waiting question either (2: it cancels it, like any message
  * that is not a pick).
  *  1. a REPLY to either message of a set-aside question answers that question — whatever else is open, the person named it: a
- *     bare option number in range picks that label, any other text is the answer itself (a reply with no text routes on);
+ *     bare option number in range picks that label, so does an option's own label, and any other text is the answer itself — but
+ *     only where `canAnswerWithFreeText` (a topic member's other text routes on, as an ordinary message; a reply with no text routes
+ *     on too);
  *  2. a question still waiting keeps its route (a number answers it, other text cancels it and goes as a prompt);
  *  3. anything else is an ordinary prompt — it never closes a set-aside question. In particular a bare number with nothing
  *     waiting is NOT an answer to one: the agent writes new numbered text right after a set-aside, and no guard on it can be kept
@@ -300,12 +307,9 @@ export function getQuestionReplyRouteWithSetAside(input: QuestionReplyRouteInput
   const repliedTarget = repliedRecord ? getSetAsideAnswerTarget(repliedRecord) : null;
   if (repliedRecord && repliedTarget && text !== '') {
     const numberRoute = getQuestionReplyRoute(text, repliedTarget.question);
-    return {
-      kind: 'answerSetAside',
-      recordId: repliedRecord.id,
-      questionIndex: repliedTarget.index,
-      answer: numberRoute.kind === 'answer' ? numberRoute.labels : [text],
-    };
+    const ownLabel = repliedTarget.question.options.find((option) => normaliseOptionLabel(option.label) === normaliseOptionLabel(text))?.label;
+    const answer = numberRoute.kind === 'answer' ? numberRoute.labels : ownLabel !== undefined ? [ownLabel] : input.canAnswerWithFreeText ? [text] : null;
+    if (answer !== null) return { kind: 'answerSetAside', recordId: repliedRecord.id, questionIndex: repliedTarget.index, answer };
   }
 
   if (input.liveQuestion) {

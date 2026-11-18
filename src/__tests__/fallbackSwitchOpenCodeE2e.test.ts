@@ -22,6 +22,9 @@
  *      the rung's model. A Claude account tapped in `/accounts` then asks, and ✖️ Cancel leaves the topic on
  *      OpenCode with no pick recorded.
  *   D  A fresh topic (an agent started and not yet spoken to) switches in both directions without asking.
+ *   E  A Claude topic whose agent asked a question nobody answered (set aside after the instance's shortened wait) hits a limit and
+ *      moves to OpenCode BY ITSELF: the question stays open — its message with its buttons and its pin, its record in `state.json` —
+ *      and a tap on it, long after, reaches the OpenCode conversation as a late-answer message, AFTER the context bridge.
  *
  * Then the operator's own picks on topic A, from the screens (`/limits` board, `/accounts`):
  *   · `/limits` → an OpenCode provider → a model (the shared model page) on a Claude topic with a conversation ASKS naming the
@@ -47,7 +50,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { FakeTelegram, generalTopicThreadId, type FakeTelegramMessage } from './telegramE2e/fakeTelegram';
 import { TopicDriver } from './telegramE2e/topicDriver';
-import { getFakeBackgroundTaskDescription, getFakeClaudeTranscriptPath, getLaunchSessionId } from './jiraE2e/fakeClaudeContract';
+import { fakeAskQuestion, getFakeBackgroundTaskDescription, getFakeClaudeTranscriptPath, getLaunchSessionId } from './jiraE2e/fakeClaudeContract';
 import { FakeOpenCodeServer, writeFakeOpenCodeBinary } from './openCodeE2e/fakeOpenCodeServer';
 import {
   builtCliPath,
@@ -98,6 +101,8 @@ const lostWorkNoteStart = '[charness] This conversation\'s agent process ended w
 const openCodeToClaude = { threadId: 112, folder: 'oc-to-claude' };
 const openCodeToOpenCode = { threadId: 113, folder: 'oc-to-oc' };
 const freshSwitch = { threadId: 114, folder: 'oc-fresh' };
+/** The topic whose agent asks a question nobody answers, then hits a limit: bound at the end of the flow. */
+const keptQuestionSwitch = { threadId: 115, folder: 'oc-question' };
 
 const fakeOpenCodeVersion = '1.17.11';
 /** The model OpenCode runs by default, and the ones the chain names. */
@@ -121,6 +126,10 @@ const cancelCallback = 'bsw_no';
 
 const replyTimeoutMs = 20 * 1000;
 const agentStartTimeoutMs = 60 * 1000;
+/** The question wait of the instance, in ms (production: 30 min): a question nobody answers is set aside after it. */
+const questionWaitMs = 6000;
+/** What a step that waits for a question to be set aside waits at most. */
+const setAsideTimeoutMs = 45 * 1000;
 const takeoverDaysAhead = 2;
 
 let layout: IsolatedInstanceLayout | null = null;
@@ -132,6 +141,7 @@ let claudeTopic: TopicDriver;
 let toClaudeTopic: TopicDriver;
 let openCodeTopic: TopicDriver;
 let freshTopic: TopicDriver;
+let keptQuestionTopic: TopicDriver;
 let defaultTmuxSessionsBefore: string[] = [];
 let resetsAtIso = '';
 let resetClock = '';
@@ -227,7 +237,7 @@ function getOpenCodeSessionOf(folder: string): { id: string } {
 describe('The usage-limit switch to and from OpenCode end to end: built charness, fake Bot API, fake claude, fake OpenCode', () => {
   before(async () => {
     if (!fs.existsSync(builtCliPath)) throw new Error('Built CLI is missing. Run `yarn build` before `yarn test`.');
-    layout = createIsolatedInstanceLayout('charness-fbopencode-', [claudeToOpenCode.folder, openCodeToClaude.folder, openCodeToOpenCode.folder, freshSwitch.folder], getFlowDeadlineMs());
+    layout = createIsolatedInstanceLayout('charness-fbopencode-', [claudeToOpenCode.folder, openCodeToClaude.folder, openCodeToOpenCode.folder, freshSwitch.folder, keptQuestionSwitch.folder], getFlowDeadlineMs());
     defaultTmuxSessionsBefore = listTmuxSessions([]);
     resetsAtIso = computeResetsAtIso(takeoverDaysAhead);
     resetClock = getResetClock(resetsAtIso);
@@ -242,6 +252,7 @@ describe('The usage-limit switch to and from OpenCode end to end: built charness
     toClaudeTopic = new TopicDriver(fakeTelegram, getCharness, openCodeToClaude.threadId, replyTimeoutMs);
     openCodeTopic = new TopicDriver(fakeTelegram, getCharness, openCodeToOpenCode.threadId, replyTimeoutMs);
     freshTopic = new TopicDriver(fakeTelegram, getCharness, freshSwitch.threadId, replyTimeoutMs);
+    keptQuestionTopic = new TopicDriver(fakeTelegram, getCharness, keptQuestionSwitch.threadId, setAsideTimeoutMs);
     const apiRoot = await fakeTelegram.start();
 
     // The OpenCode server the bot adopts, and the `opencode` CLI it shells out to, on the instance's private PATH.
@@ -259,7 +270,7 @@ describe('The usage-limit switch to and from OpenCode end to end: built charness
       CLAUDE_BIN: writeFakeClaudeLauncher(layout, null),
       OPENCODE_URL: openCodeUrl,
       SCHEDULER_MCP_PORT: (await getFreeFixedPort()).toString(),
-      ...getTelegramFlowTestTimingsEnv(),
+      ...getTelegramFlowTestTimingsEnv({ questionSetAsideWaitMs: questionWaitMs }),
     });
   });
 
@@ -697,5 +708,57 @@ describe('The usage-limit switch to and from OpenCode end to end: built charness
     // Put the default back so the flow ends where it started.
     await general.tapAndAwaitAnswer(board.message, board.rowData(`Claude · ${exhaustedAccount}`));
     await getCharness().waitFor('the default account back to the built-in one in state.json (stored as no value)', replyTimeoutMs, () => readPersistedState(getLayout()).claudeProfileDefault === undefined);
+  });
+
+  it('an AUTOMATIC limit switch to the other backend keeps a set-aside question open — message, buttons, pin, record — and a late tap reaches the OpenCode conversation AFTER the context bridge', async () => {
+    // The accounts the earlier steps left limited are usable again, and the chain's one rung is the OpenCode model.
+    await restartWithState((persisted) => {
+      for (const profile of Object.values(persisted.claudeProfiles ?? {})) delete profile.limitedUntil;
+      persisted.fallbackChain = [{ backend: 'opencode', providerId: 'openai', modelId: 'gpt-5' }];
+    });
+    await keptQuestionTopic.sendAndAwaitReply(`/bind ${keptQuestionSwitch.folder}`, `Bound to \`${keptQuestionSwitch.folder}\``);
+    await keptQuestionTopic.sendAndAwaitReply('/verbosity stream_answers', 'This topic shows: Stream + answers');
+    await keptQuestionTopic.sendAndAwaitReply('/claude', 'ready in');
+
+    // A question nobody answers: set aside when the instance's (shortened) wait ends. The agent goes on, the question stays open.
+    fakeTelegram.pushOperatorMessage(keptQuestionSwitch.threadId, 'KEEP-1 [fake:ask] ask me something');
+    const question = await keptQuestionTopic.waitForMessage('the question', (message) => message.text.includes(fakeAskQuestion.question) && keptQuestionTopic.getKeyboardData(message).flat().some((data) => data.startsWith('qa_')));
+    await keptQuestionTopic.waitForMessageText('the set-aside note under the question', question, (text) => text.endsWith(`\n\n${enDict['agent.question_set_aside_note']}`));
+    const topicKey = getTopicKey(keptQuestionSwitch.threadId);
+    await getCharness().waitFor('the question to be saved as a set-aside record', replyTimeoutMs, () => readPersistedState(getLayout()).setAsideQuestions?.[topicKey]?.length === 1);
+    const [record] = readPersistedState(getLayout()).setAsideQuestions?.[topicKey] ?? [];
+    assert.ok(record, 'the record is saved');
+    assert.ok(fakeTelegram.listPinnedMessageIds().includes(question.message_id), 'precondition: the question is pinned');
+
+    // The agent then hits a usage limit: the chain moves the topic to OpenCode by itself.
+    fakeTelegram.pushOperatorMessage(keptQuestionSwitch.threadId, `LIM-K [fake:usage-limit-once] [limit-resets:${resetsAtIso}] please carry on`);
+    const notice = await keptQuestionTopic.waitForMessage('the switch notice', (message) => message.text.startsWith('🔁'));
+    assert.ok(notice.text.includes(`this topic continues on OpenCode ${chainOpenCodeModel}`), notice.text);
+    await getCharness().waitFor('the switch to reach state.json', replyTimeoutMs, () => readAgent(keptQuestionSwitch.threadId)?.name === openCodeAdapterName);
+    const keptFolderPath = path.join(getLayout().workRoot, keptQuestionSwitch.folder);
+    await getCharness().waitFor('the bridge to reach the OpenCode session', agentStartTimeoutMs, () => fakeOpenCode.prompts.some((prompt) => prompt.directory === keptFolderPath));
+    const session = getOpenCodeSessionOf(keptQuestionSwitch.folder);
+
+    // Load-bearing (decision 12): an AUTOMATIC move ends no conversation, so the question stays open exactly as it was.
+    assert.deepEqual(readPersistedState(getLayout()).setAsideQuestions?.[topicKey], [record], 'the record survived the switch');
+    const kept = fakeTelegram.getMessage(question.message_id);
+    assert.ok(kept && !kept.isDeleted && kept.text.endsWith(`\n\n${enDict['agent.question_set_aside_note']}`), 'the message still carries the set-aside note, not «not answered»');
+    assert.deepEqual(keptQuestionTopic.getKeyboardData(kept), [[`qs_${record.id}_0`], [`qs_${record.id}_1`]], 'and its buttons');
+    assert.ok(fakeTelegram.listPinnedMessageIds().includes(question.message_id), 'and its pin');
+
+    // A tap, long after: the answer goes to the conversation that runs NOW — OpenCode — and after the bridge that told it the context.
+    assert.equal(await keptQuestionTopic.tapAndAwaitAnswer(question, `qs_${record.id}_0`), fakeAskQuestion.shortOptionLabel);
+    const lateAnswerHeader = '[Late answer to your question asked ';
+    await getCharness().waitFor('the late answer to reach the OpenCode session', agentStartTimeoutMs, () => fakeOpenCode.prompts.some((prompt) => prompt.sessionId === session.id && prompt.text.startsWith(lateAnswerHeader)));
+    const sessionPrompts = fakeOpenCode.prompts.filter((prompt) => prompt.sessionId === session.id);
+    const bridgeIndex = sessionPrompts.findIndex((prompt) => prompt.text.includes('[Backend switch]'));
+    const lateIndex = sessionPrompts.findIndex((prompt) => prompt.text.startsWith(lateAnswerHeader));
+    assert.ok(bridgeIndex !== -1 && lateIndex > bridgeIndex, `the late answer (prompt ${lateIndex}) comes after the bridge (prompt ${bridgeIndex})`);
+    assert.ok(sessionPrompts[lateIndex].text.includes(`Question: ${fakeAskQuestion.question}\nAnswer: ${fakeAskQuestion.shortOptionLabel}\n`), sessionPrompts[lateIndex].text);
+    assert.equal(sessionPrompts[lateIndex].model, chainOpenCodeModel, 'on the rung\'s model');
+
+    await keptQuestionTopic.waitForMessageText('the answer under the question', question, (text) => text.endsWith(`\n\n${enDict['agent.question_answered_note'].replace('{answer}', fakeAskQuestion.shortOptionLabel)}`));
+    await getCharness().waitFor('the pin to be released', replyTimeoutMs, () => !fakeTelegram.listPinnedMessageIds().includes(question.message_id));
+    await getCharness().waitFor('the record to be gone', replyTimeoutMs, () => (readPersistedState(getLayout()).setAsideQuestions?.[topicKey] ?? []).length === 0);
   });
 });

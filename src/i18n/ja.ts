@@ -275,6 +275,7 @@ export const jaDict: Record<string, string> = {
   'agent.question_asked_again_note': '↓ 下で再度質問しました',
   'agent.question_set_aside_note': '⏸ エージェントは回答を待たずに作業を進めました — 今からでも回答できます',
   'agent.set_aside_question_gone_notice': 'その質問はすでに回答済みか終了しています — 今回の操作では何も変わりませんでした。',
+  'agent.set_aside_reply_failed_notice': '⚠️ エージェントに質問なしで先へ進むよう伝えられませんでした — サーバーがメッセージを受け付けず、エージェントはまだ待っている可能性があります。先へ進めるには、何かメッセージを送ってください。',
   'agent.set_aside_next_question_failed_notice': '次の質問を投稿できなかったため、回答は受け付けられませんでした — もう一度お試しください。',
   'agent.login_code_relayed': '🔐 ログインコードを Claude に中継 — トークンを含むメッセージを履歴から削除しました。',
   'agent.login_url': '🔐 Claude にサインインするには、このリンクを開いてサインインを完了し、コードをここに貼り付けてください：\n{url}',

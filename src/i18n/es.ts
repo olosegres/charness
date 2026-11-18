@@ -275,6 +275,7 @@ export const esDict: Record<string, string> = {
   'agent.question_asked_again_note': '↓ Preguntada de nuevo abajo',
   'agent.question_set_aside_note': '⏸ El agente siguió sin tu respuesta — aún puedes responder',
   'agent.set_aside_question_gone_notice': 'Esa pregunta ya está respondida o cerrada: esto no cambió nada.',
+  'agent.set_aside_reply_failed_notice': '⚠️ No se pudo decirle al agente que siga sin su pregunta: el servidor no aceptó el mensaje y puede que el agente siga esperándola. Envíale cualquier mensaje para que continúe.',
   'agent.set_aside_next_question_failed_notice': 'No se pudo publicar la siguiente pregunta, así que tu respuesta no se tomó: inténtalo de nuevo.',
   'agent.login_code_relayed': '🔐 Código de inicio de sesión enviado a Claude — el mensaje con el token se eliminó del historial.',
   'agent.login_url': '🔐 Para iniciar sesión en Claude, abre este enlace, completa el inicio de sesión y pega el código aquí:\n{url}',

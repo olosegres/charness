@@ -275,6 +275,7 @@ export const ptDict: Record<string, string> = {
   'agent.question_asked_again_note': '↓ Perguntada de novo abaixo',
   'agent.question_set_aside_note': '⏸ O agente continuou sem a sua resposta — você ainda pode responder',
   'agent.set_aside_question_gone_notice': 'Essa pergunta já foi respondida ou encerrada — isto não mudou nada.',
+  'agent.set_aside_reply_failed_notice': '⚠️ Não foi possível dizer ao agente para seguir sem a pergunta — o servidor não aceitou a mensagem e o agente ainda pode estar esperando por ela. Envie qualquer mensagem para ele continuar.',
   'agent.set_aside_next_question_failed_notice': 'Não foi possível publicar a próxima pergunta, então sua resposta não foi aceita — tente de novo.',
   'agent.login_code_relayed': '🔐 Código de login retransmitido para o Claude — a mensagem com o token foi apagada do histórico.',
   'agent.login_url': '🔐 Para entrar no Claude, abra este link, conclua o login e cole o código aqui:\n{url}',

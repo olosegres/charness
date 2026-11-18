@@ -5970,13 +5970,13 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
    * brand-new session (startSession) has no history and thus no open question,
    * so it is deliberately NOT called there.
    */
-  private async restoreOpenQuestion(key: SessionKey, sessionId: string, workDir: string): Promise<void> {
+  private async restoreOpenQuestion(key: SessionKey, sessionId: string, workDir: string, exceptRequestId?: string): Promise<void> {
     try {
       const response = await this.apiRequest<unknown>(
         'GET',
         buildDirectoryScopedPath('/question', workDir),
       );
-      const restored = getOpenQuestionForSession(response, sessionId, workDir);
+      const restored = getOpenQuestionForSession(response, sessionId, workDir, { exceptRequestId });
       if (!restored) return;
 
       // The session may have been stopped/replaced between the GET and now.
@@ -6046,14 +6046,23 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
    * (`givenAnswers` keeps the ones already collected), so the question tool returns and the agent goes on. Never a reject —
    * a `Question.RejectedError` ends OpenCode's agent loop (`continue_loop_on_deny` is off by default), which is the opposite
    * of «go on». The reply takes any text as an answer (the server does not check it against the options). Does nothing, and
-   * says so (`false`), unless `requestId` is the question pending now; `true` once the reply is sent (a failure of the send
-   * surfaces through the `error` event, as for an answer).
+   * says so (`false`), unless `requestId` is the question pending now; `true` once the reply is sent. The send's own outcome comes
+   * later, through `onSettled` (`true`: the server took the reply; `false`: it did not — and the question stays open on the server,
+   * which the caller must not mistake for «the agent went on»). A failed set-aside reply does not surface through the `error` event:
+   * the caller owns what to do about it.
    */
-  setQuestionAside(key: SessionKey, requestId: string, text: string, givenAnswers: (string[] | null)[]): boolean {
+  setQuestionAside(key: SessionKey, requestId: string, text: string, givenAnswers: (string[] | null)[], onSettled?: (isSent: boolean) => void): boolean {
     const session = this.sessions.get(keyToString(key));
     const pending = session?.isActive ? session.pendingQuestion : null;
-    if (!pending || pending.requestId !== requestId) return false;
-    this.answerQuestion(key, pending.questions.map((_, index) => givenAnswers[index] ?? [text]));
+    if (!session || !pending || pending.requestId !== requestId) return false;
+    const answers = pending.questions.map((_, index) => givenAnswers[index] ?? [text]);
+    session.pendingQuestion = null;
+    this.apiRequest('POST', buildDirectoryScopedPath(`/question/${requestId}/reply`, pending.directory), { answers })
+      .then(() => onSettled?.(true))
+      .catch((e) => {
+        console.error(`[OpenCode] Failed to set the question ${requestId} aside:`, e);
+        onSettled?.(false);
+      });
     return true;
   }
 
@@ -6073,7 +6082,7 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
       if (!Array.isArray(response)) return 'unknown';
       // Among ALL the session's open entries: the server may hold more than one (parallel tool calls), and the bot's is not
       // necessarily the first.
-      const held = getOpenQuestionForSession(response, session.sessionId, session.workDir, requestId);
+      const held = getOpenQuestionForSession(response, session.sessionId, session.workDir, { requestId });
       if (!held) return 'none';
       const current = this.sessions.get(keyToString(key));
       if (!current?.isActive || current.sessionId !== session.sessionId) return 'unknown';
@@ -6085,11 +6094,15 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
     }
   }
 
-  /** @description Hand the question the server holds for this session to the bot as a `question` event (see {@link restoreOpenQuestion}); nothing when it holds none. */
-  async surfaceOpenQuestion(key: SessionKey): Promise<void> {
+  /**
+   * @description Hand the question the server holds for this session to the bot as a `question` event (see {@link restoreOpenQuestion});
+   * nothing when it holds none. `exceptRequestId` leaves the question the bot has just set aside out — a sibling open at the same time
+   * (the model's parallel tool calls) is the one to show.
+   */
+  async surfaceOpenQuestion(key: SessionKey, exceptRequestId?: string): Promise<void> {
     const session = this.sessions.get(keyToString(key));
     if (!session?.isActive) return;
-    await this.restoreOpenQuestion(key, session.sessionId, session.workDir);
+    await this.restoreOpenQuestion(key, session.sessionId, session.workDir, exceptRequestId);
   }
 
   /**

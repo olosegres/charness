@@ -67,6 +67,23 @@ test('a late answer is delivered without the free-text route of a waiting questi
   assert.doesNotMatch(getFunctionBody('deliverPromptByState'), /cancelPendingQuestionAndForward|checkIsWedgedOnQuestion/);
 });
 
+test('a late answer cancels an armed usage-limit wait first, like typed text — before anything is written to the session', () => {
+  const late = getFunctionBody('deliverLateAnswerPrompt');
+  assert.ok(late.indexOf('cancelApiRetry(key)') !== -1 && late.indexOf('cancelApiRetry(key)') < late.indexOf('deliverPromptByState('), 'the wait is cancelled before the answer is delivered');
+});
+
+test('a VOICE reply to a set-aside question is a late answer: its transcript goes through the same function as a typed reply, before the other voice routes', () => {
+  const handler = getSourceSlice("bot.on(message('voice'), async (ctx) => {", "/**\n * @description Background worker for a single voice note");
+  assert.match(handler, /reply:\s*VoiceReply\s*=\s*\{[^}]*role:\s*speaker\.role[^}]*replyToMessageId:\s*getTelegramReplyTargetId\(ctx\.message\)[^}]*\}/, 'the genuine reply target and the role ride to the job');
+  assert.match(handler, /processVoiceJob\([^;]*progressNote,\s*reply,/);
+  const job = getFunctionBody('processVoiceJob');
+  const routeAt = job.indexOf('answerSetAsideQuestionByReply(reply.from, key, { message_id: reply.messageId, text: transcript, replyToMessageId: reply.replyToMessageId');
+  assert.notEqual(routeAt, -1);
+  assert.match(job, /isForwarded:\s*messageContext\?\.isForwarded\s*===\s*true\s*\},\s*reply\.role\)\)\s*return;/, 'a forward is told apart, the role rides along, and a taken reply ends the job');
+  assert.ok(routeAt > job.indexOf("t('voice.transcribed'") && routeAt < job.indexOf('claimReminderTextCapture'), 'after the echo, before the reminder step and the startup buffer');
+  assert.ok(routeAt < job.indexOf('deliverActivePrompt('), 'and before the transcript is delivered as a prompt');
+});
+
 test('a backend switch closes the set-aside questions only when the operator chose it: an AUTOMATIC usage-limit fallback keeps the conversation, parked and bridged', () => {
   assert.match(getFunctionBody('switchThreadAdapter'), /if\s*\(options\.isConversationKept\s*!==\s*true\)\s*closeSetAsideQuestionsInBackground\(key\)/);
   assert.match(getFunctionBody('moveTopicToOtherBackend'), /switchThreadAdapter\([^;]*,\s*options\)/, 'the flag is handed on');

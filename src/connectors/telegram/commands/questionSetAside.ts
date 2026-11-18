@@ -128,6 +128,21 @@ export function createQuestionSetAside(ports: QuestionSetAsidePorts) {
   const timers = new Map<string, NodeJS.Timeout>();
   /** How many times the wait of a question has ended again for want of the server's word, by conversation and request. */
   const retryAttempts = new Map<string, number>();
+  /** How many times the reply that set a question aside failed to reach the agent's server, by conversation and request. */
+  const replyFailures = new Map<string, number>();
+  /** One pending re-try of such a reply per conversation. */
+  const replyRetryTimers = new Map<string, NodeJS.Timeout>();
+
+  /** What is counted for a question: the conversation and the request. */
+  const getAttemptKey = (key: SessionKey, requestId: string): string => `${keyToString(key)}:${requestId}`;
+
+  /** Forget every count of the conversation's questions (its question was answered, closed or timed again). */
+  function forgetAttempts(key: SessionKey): void {
+    const prefix = `${keyToString(key)}:`;
+    for (const counts of [retryAttempts, replyFailures]) {
+      for (const attemptKey of [...counts.keys()]) if (attemptKey.startsWith(prefix)) counts.delete(attemptKey);
+    }
+  }
 
   /** The conversation's open set-aside questions, oldest first. */
   function getSetAsideRecords(key: SessionKey): SetAsideQuestionRecord[] {
@@ -139,11 +154,30 @@ export function createQuestionSetAside(ports: QuestionSetAsidePorts) {
     return buildQuestionOptionsKeyboard(question, (optionIndex) => `${setAsideButtonPrefix}${record.id}_${optionIndex}`);
   }
 
-  function clearQuestionSetAsideTimer(key: SessionKey): void {
+  function stopSetAsideTimer(key: SessionKey): void {
     const kStr = keyToString(key);
     const timer = timers.get(kStr);
     if (timer) clearTimeout(timer);
     timers.delete(kStr);
+  }
+
+  /** The conversation's question left the pending state, or its wait is timed afresh: no timer, and no count of tries made for it. */
+  function clearQuestionSetAsideTimer(key: SessionKey): void {
+    stopSetAsideTimer(key);
+    forgetAttempts(key);
+  }
+
+  /** Set a question aside after `delayMs`: the one timer of the conversation — the wait's own, and the wait ending again after the server's silence. */
+  function armSetAsideTimer(key: SessionKey, requestId: string, delayMs: number): void {
+    stopSetAsideTimer(key);
+    const kStr = keyToString(key);
+    const timer = setTimeout(() => {
+      timers.delete(kStr);
+      void withThreadLocale(key, () => setPendingQuestionAside(key, requestId))
+        .catch((error) => console.error('[questionSetAside] setting the question aside failed:', error));
+    }, delayMs);
+    timer.unref();
+    timers.set(kStr, timer);
   }
 
   /**
@@ -163,14 +197,7 @@ export function createQuestionSetAside(ports: QuestionSetAsidePorts) {
     }
     const delayMs = getQuestionSetAsideDelayMs(pending.askedAt, getQuestionWaitChoice(key), nowMs, shortenedWaitMs);
     if (delayMs === null) return;
-    const { requestId } = pending.data;
-    const timer = setTimeout(() => {
-      timers.delete(kStr);
-      void withThreadLocale(key, () => setPendingQuestionAside(key, requestId))
-        .catch((error) => console.error('[questionSetAside] setting the question aside failed:', error));
-    }, delayMs);
-    timer.unref();
-    timers.set(kStr, timer);
+    armSetAsideTimer(key, pending.data.requestId, delayMs);
   }
 
   /**
@@ -207,10 +234,11 @@ export function createQuestionSetAside(ports: QuestionSetAsidePorts) {
       const askedAtMs = pending.askedAt ?? nowMs;
       const text = buildQuestionSetAsideText({ questions: pending.data.questions, answers: pending.answers, askedAtMs, nowMs });
       // The adapter checks the request id once more, against the question it holds.
-      if (!adapter.setQuestionAside(key, requestId, text, pending.answers)) {
+      if (!adapter.setQuestionAside(key, requestId, text, pending.answers, handleReplySettled(key, requestId))) {
         const resynced = await settleQuestionTheAdapterDoesNotHold(key, adapter, pending, text);
         if (resynced === 'ended') return false;
       }
+      forgetAttempt(key, requestId);
 
       const record: SetAsideQuestionRecord = {
         id: createSetAsideQuestionId(sequence),
@@ -231,8 +259,53 @@ export function createQuestionSetAside(ports: QuestionSetAsidePorts) {
 
       await showQuestionSetAside(key, record);
       for (const closedRecord of evicted) await closeSetAsideRecord(key, closedRecord, 'unanswered');
+      // A question the agent's server holds BESIDE this one (its parallel tool calls) was never shown: it is handed to the bot now, as
+      // the question that waits. Not awaited — the server may still list this question for a moment, so it is left out.
+      void adapter.surfaceOpenQuestion?.(key, requestId);
       return true;
     });
+  }
+
+  /** Forget the counts of one question: it was told to go on, or it is gone. */
+  function forgetAttempt(key: SessionKey, requestId: string): void {
+    retryAttempts.delete(getAttemptKey(key, requestId));
+    replyFailures.delete(getAttemptKey(key, requestId));
+  }
+
+  /**
+   * @description What the agent's server made of the reply that set question `requestId` aside, as `setQuestionAside`'s `onSettled`
+   * hands it over. A reply the server took ends the count of failures. One it did not take leaves the question OPEN on the server —
+   * the topic says «the agent went on» and nothing waits on the bot's side, yet the agent stands still on it: after a pause the
+   * question is handed to the bot again (`surfaceOpenQuestion`), which finds its record and tells the agent once more as a question
+   * asked again. At most {@link setAsideRetryLimit} times; then the topic is told, so a stuck agent is not left to a console line.
+   */
+  function handleReplySettled(key: SessionKey, requestId: string): (isSent: boolean) => void {
+    return (isSent) => {
+      const attemptKey = getAttemptKey(key, requestId);
+      if (isSent) {
+        replyFailures.delete(attemptKey);
+        return;
+      }
+      const failures = (replyFailures.get(attemptKey) ?? 0) + 1;
+      replyFailures.set(attemptKey, failures);
+      const kStr = keyToString(key);
+      if (failures > setAsideRetryLimit) {
+        console.warn(`[questionSetAside] ${kStr}: the agent's server refused the reply that sets the question ${requestId} aside ${failures} times; it may still wait for it`);
+        replyFailures.delete(attemptKey);
+        clearTimeout(replyRetryTimers.get(kStr));
+        replyRetryTimers.delete(kStr);
+        void replyToThread(key, withThreadLocale(key, () => t('agent.set_aside_reply_failed_notice')));
+        return;
+      }
+      console.warn(`[questionSetAside] ${kStr}: the agent's server did not take the reply that sets the question ${requestId} aside; trying again in ${retryDelayMs / 1000} s (try ${failures} of ${setAsideRetryLimit})`);
+      clearTimeout(replyRetryTimers.get(kStr));
+      const timer = setTimeout(() => {
+        replyRetryTimers.delete(kStr);
+        void getThreadAdapter(key).surfaceOpenQuestion?.(key);
+      }, retryDelayMs);
+      timer.unref();
+      replyRetryTimers.set(kStr, timer);
+    };
   }
 
   /**
@@ -248,7 +321,7 @@ export function createQuestionSetAside(ports: QuestionSetAsidePorts) {
     const server = adapter.resyncOpenQuestion ? await adapter.resyncOpenQuestion(key, requestId) : 'none';
     // The agent asked the next question, or this one was answered, while the server was asked: it is not this one's business any more.
     if (pendingQuestions.get(kStr) !== pending) return 'ended';
-    if (server === 'held' && adapter.setQuestionAside?.(key, requestId, text, pending.answers)) return 'told';
+    if (server === 'held' && adapter.setQuestionAside?.(key, requestId, text, pending.answers, handleReplySettled(key, requestId))) return 'told';
     if (server === 'none') {
       await dropQuestionTheAdapterDoesNotHold(key, adapter, pending);
       return 'ended';
@@ -256,22 +329,14 @@ export function createQuestionSetAside(ports: QuestionSetAsidePorts) {
     const attempt = (retryAttempts.get(`${kStr}:${requestId}`) ?? 0) + 1;
     retryAttempts.set(`${kStr}:${requestId}`, attempt);
     const isRetried = attempt <= setAsideRetryLimit;
-    console.warn(`[questionSetAside] ${kStr}: the agent's server did not confirm the question ${requestId} (${server}); it stays waiting${isRetried ? `, the wait ends again in ${setAsideRetryDelayMs / 1000} s (try ${attempt} of ${setAsideRetryLimit})` : ', no more tries'}`);
+    console.warn(`[questionSetAside] ${kStr}: the agent's server did not confirm the question ${requestId} (${server}); it stays waiting${isRetried ? `, the wait ends again in ${retryDelayMs / 1000} s (try ${attempt} of ${setAsideRetryLimit})` : ', no more tries'}`);
     if (isRetried) armRetry(key, requestId);
     return 'ended';
   }
 
-  /** The wait of a question ends again after the server did not confirm it: one timer per conversation, like the first. */
+  /** The wait of a question ends again after the server did not confirm it. */
   function armRetry(key: SessionKey, requestId: string): void {
-    clearQuestionSetAsideTimer(key);
-    const kStr = keyToString(key);
-    const timer = setTimeout(() => {
-      timers.delete(kStr);
-      void withThreadLocale(key, () => setPendingQuestionAside(key, requestId))
-        .catch((error) => console.error('[questionSetAside] setting the question aside failed:', error));
-    }, retryDelayMs);
-    timer.unref();
-    timers.set(kStr, timer);
+    armSetAsideTimer(key, requestId, retryDelayMs);
   }
 
   /**
@@ -315,7 +380,7 @@ export function createQuestionSetAside(ports: QuestionSetAsidePorts) {
     if (!found) return false;
     const { record, answers } = found;
     const text = buildQuestionSetAsideText({ questions: record.questions, answers: record.answers, askedAtMs: record.askedAt, nowMs: Date.now(), isAlreadyOpen: true });
-    return getThreadAdapter(key).setQuestionAside?.(key, questionData.requestId, text, answers) === true;
+    return getThreadAdapter(key).setQuestionAside?.(key, questionData.requestId, text, answers, handleReplySettled(key, questionData.requestId)) === true;
   }
 
   /**
@@ -325,6 +390,7 @@ export function createQuestionSetAside(ports: QuestionSetAsidePorts) {
    */
   async function dropQuestionTheAdapterDoesNotHold(key: SessionKey, adapter: Pick<AgentAdapter, 'surfaceOpenQuestion'>, pending: PendingQuestionState): Promise<void> {
     console.warn(`[questionSetAside] ${keyToString(key)}: the agent holds no question ${pending.data.requestId}, so there is nothing to set aside; the bot's copy is closed as not answered`);
+    forgetAttempt(key, pending.data.requestId);
     clearPendingQuestion(key);
     const question = pending.data.questions[pending.currentIndex];
     if (pending.messageId !== null && question) await closeQuestionMessage(key, pending.messageId, question, 'unanswered');
@@ -529,8 +595,10 @@ export function createQuestionSetAside(ports: QuestionSetAsidePorts) {
 
   /**
    * @description A text typed as a REPLY to a set-aside question's message (either of its messages, when it was re-posted) is its
-   * late answer: a bare option number in range picks that option, any other text is the answer itself. Resolves whether it was taken
-   * as one — otherwise it is an ordinary message. `role`: a topic member's answer reaches the agent as theirs (`from` says who). A
+   * late answer: a bare option number in range picks that option, so does an option's own label, and — for the operator only — any
+   * other text is the answer itself (a topic member answers only with an option number or label: their other words are an ordinary
+   * prompt, as on the waiting-question route). A voice note is a reply too: the bot hands its transcript here. Resolves whether it
+   * was taken as one — otherwise it is an ordinary message. `role`: a topic member's answer reaches the agent as theirs (`from` says who). A
    * reply that matched a question which is no longer the open one (a second reply made at once, a record closed meanwhile) is
    * still no ordinary message — it was meant as an answer, so it is answered with a note, never passed on as a prompt or a pick.
    */
@@ -540,7 +608,7 @@ export function createQuestionSetAside(ports: QuestionSetAsidePorts) {
     const text = message.text.trim();
     // A slash command is no answer; a message that replies to nothing, or when nothing is set aside, is none either.
     if (replyToMessageId === null || setAside.length === 0 || text === '' || (!message.isForwarded && text.startsWith('/'))) return false;
-    const route = getQuestionReplyRouteWithSetAside({ text, replyToMessageId, liveQuestion: undefined, setAside, isForwarded: message.isForwarded });
+    const route = getQuestionReplyRouteWithSetAside({ text, replyToMessageId, liveQuestion: undefined, setAside, isForwarded: message.isForwarded, canAnswerWithFreeText: role === 'admin' });
     if (route.kind !== 'answerSetAside') return false;
     await getState().pushMessageId(key, message.message_id);
     const { outcome } = await giveSetAsideAnswer(key, {

@@ -424,11 +424,16 @@ result of the question it is blocked on, and resolves the question — **a turn 
 - **Returns `true` only when the reply or the deny was actually written**; `false` is a no-op — no question pending, another request id
   pending (a timer that fires late finds the agent's NEXT question and sets nothing aside), an inactive session, or a backend with no question
   path (the tmux-scrape Claude, the terminal). The bot edits the message and moves the question to its set-aside list only for `true`.
+- **The reply's own outcome (OpenCode).** `true` means the reply was STARTED; whether the server took it comes later through the optional
+  `onSettled(isSent)`. A failed set-aside reply is NOT posted through the `error` event (an answer's is): the question stays open on the server, so
+  the bot is told and re-hands the server's question to itself after a pause (`surfaceOpenQuestion`, which finds the record and tells the agent once
+  more as a question asked again), at most three times, then the topic is told that the agent may still wait.
 - **A cache is not an authority.** OpenCode's adapter only caches the server's registry (a reattach that could not read it leaves it
   empty): `resyncOpenQuestion(key, requestId)` re-reads `GET /question` and answers `held` (that very question is open there; the cache now holds
   it), `none` (the server holds none — or ANOTHER one: the bot's copy is stale, the cache is left alone) or `unknown` (read failed, inactive session);
   after the bot closed a stale copy, `surfaceOpenQuestion(key)` hands the server's own question to the bot as a `question` event, the way a reattach
-  does. The Claude CLI IS the authority on what it waits on (the blocked `can_use_tool`, saved beside the session), so it has neither.
+  does — and after EVERY set-aside it is asked for the session's OTHER open question (`exceptRequestId`: the one just set aside left out; the model's
+  parallel tool calls leave siblings that were never shown). The Claude CLI IS the authority on what it waits on (the blocked `can_use_tool`, saved beside the session), so it has neither.
 - **The same question asked again** after the set-aside text gets the same call with a text worded «still open» (`isAlreadyOpen`), on the
   question the agent holds now (its own request id), `givenAnswers` aligned with the new call.
 

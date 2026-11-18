@@ -284,13 +284,39 @@ describe('OpenCode: setQuestionAside replies with the text as the custom answer 
     assert.deepEqual(apiCalls[0].body, { answers: [['B\'s text']] });
   });
 
-  it('surfaces a failed reply through the adapter\'s error event, like an answer does', async () => {
+  it('a failed reply does NOT surface through the error event: the caller is told through onSettled, and the question stays open on the server', async () => {
+    const { adapter, errors } = createAdapterBlockedOnQuestion();
+    adapter['apiRequest'] = (async () => { throw new Error('server gone'); }) as OpenCodeAdapter['apiRequest'];
+    const settled: boolean[] = [];
+    const originalError = console.error;
+    console.error = () => {};
+    try {
+      assert.equal(adapter.setQuestionAside(key, requestId, 'set aside', [null, null], (isSent) => settled.push(isSent)), true, 'started');
+      await new Promise((resolve) => setImmediate(resolve));
+    } finally {
+      console.error = originalError;
+    }
+    assert.deepEqual(settled, [false], 'the failure is told to the caller, once');
+    assert.deepEqual(errors, [], 'and is not posted to the topic as an error: the caller decides what to do');
+  });
+
+  it('a reply the server took is told to the caller as sent, once', async () => {
+    const { adapter } = createAdapterBlockedOnQuestion();
+    const settled: boolean[] = [];
+
+    adapter.setQuestionAside(key, requestId, 'set aside', [null, null], (isSent) => settled.push(isSent));
+    await new Promise((resolve) => setImmediate(resolve));
+
+    assert.deepEqual(settled, [true]);
+  });
+
+  it('an ordinary answer\'s failure still surfaces through the error event, as it always did', async () => {
     const { adapter, errors } = createAdapterBlockedOnQuestion();
     adapter['apiRequest'] = (async () => { throw new Error('server gone'); }) as OpenCodeAdapter['apiRequest'];
     const originalError = console.error;
     console.error = () => {};
     try {
-      adapter.setQuestionAside(key, requestId, 'set aside', [null, null]);
+      adapter.answerQuestion(key, [['Push now'], ['README']]);
       await new Promise((resolve) => setImmediate(resolve));
     } finally {
       console.error = originalError;
@@ -370,6 +396,29 @@ describe('OpenCode: setQuestionAside replies with the text as the custom answer 
 
       assert.deepEqual(emitted, ['que_changed']);
       assert.equal(getOpenCodeSession(adapter, keyToString(key)).pendingQuestion?.requestId, 'que_changed');
+    });
+
+    it('surfaceOpenQuestion with a question left out hands the bot the session\'s OTHER open question — the sibling of a parallel step — and not the one just set aside', async () => {
+      const { adapter } = createAdapterThatLostTheQuestion([
+        { id: requestId, sessionID: 'ses_set_aside', questions: twoQuestions },
+        { id: 'que_sibling', sessionID: 'ses_set_aside', questions: twoQuestions },
+      ]);
+      const emitted: string[] = [];
+      adapter.on('question', (_key: SessionKey, question: { requestId: string }) => emitted.push(question.requestId));
+
+      await adapter.surfaceOpenQuestion(key, requestId);
+
+      assert.deepEqual(emitted, ['que_sibling']);
+    });
+
+    it('surfaceOpenQuestion with a question left out emits nothing when that is the only one the server holds', async () => {
+      const { adapter } = createAdapterThatLostTheQuestion(serverEntry);
+      const emitted: string[] = [];
+      adapter.on('question', () => emitted.push('question'));
+
+      await adapter.surfaceOpenQuestion(key, requestId);
+
+      assert.deepEqual(emitted, []);
     });
 
     it('surfaceOpenQuestion emits nothing when the server holds none of this session\'s, or the session is not active', async () => {

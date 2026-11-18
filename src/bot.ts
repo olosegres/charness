@@ -1,6 +1,6 @@
 import { Telegraf, Markup, type Context, type NarrowedContext } from 'telegraf';
 import { message } from 'telegraf/filters';
-import type { Update, Message } from 'telegraf/typings/core/types/typegram';
+import type { Update, Message, User } from 'telegraf/typings/core/types/typegram';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -10526,13 +10526,24 @@ bot.on(message('voice'), async (ctx) => {
   // clock runs from the voice's arrival, so a voice waiting in line behind an earlier one gets its note too; the job finishes it
   // the moment its text arrives, and the `finally` is the backstop for a job that never ran or ended some other way.
   const progressNote = startVoiceProgressNote(key);
+  // What the job needs to treat the transcript as a LATE ANSWER when the voice note is a reply to a set-aside question's message.
+  const reply: VoiceReply = { from: ctx.from, role: speaker.role, messageId: ctx.message.message_id, replyToMessageId: getTelegramReplyTargetId(ctx.message) };
   void getVoiceTranscriptionQueue(key)
-    .run(() => processVoiceJob(key, fileId, durationSeconds, getTopicRequesterId(ctx.from), warmedEndpoint, progressNote, sentAtMs, messageContext))
+    .run(() => processVoiceJob(key, fileId, durationSeconds, getTopicRequesterId(ctx.from), warmedEndpoint, progressNote, reply, sentAtMs, messageContext))
     .catch((err) => {
       console.error('[Bot] Voice job error (already handled):', err);
     })
     .finally(() => progressNote.finish());
 });
+
+/** The facts of a voice note a transcript may be a late answer by: who sent it, in which role, as which message, and what it replies to. */
+interface VoiceReply {
+  from: User | undefined;
+  role: 'admin' | 'talker';
+  messageId: number;
+  /** The message it is genuinely a reply to (`getTelegramReplyTargetId`), `null` for none. */
+  replyToMessageId: number | null;
+}
 
 /**
  * @description Background worker for a single voice note: download → transcribe
@@ -10550,7 +10561,8 @@ bot.on(message('voice'), async (ctx) => {
  * (the job reuses that one ask — see `warmUpFirstEngine`), and `progressNote`, the
  * «transcribing…» note armed on arrival, which the job finishes as soon as the
  * text is here or the voice failed — BEFORE the echo or the failure notice, never
- * at the end of the job (delivering the prompt may take long).
+ * at the end of the job (delivering the prompt may take long). `reply` says who sent the voice note and what it replies to: a voice reply
+ * to a question the bot set aside is that question's late answer, its transcript the answer (like a typed reply).
  */
 async function processVoiceJob(
   key: SessionKey,
@@ -10559,6 +10571,7 @@ async function processVoiceJob(
   requesterId: string,
   warmedEndpoint: WarmedEndpoint | null,
   progressNote: VoiceProgressNote,
+  reply: VoiceReply,
   sentAtMs?: number,
   messageContext?: MessageContext,
 ): Promise<void> {
@@ -10608,6 +10621,10 @@ async function processVoiceJob(
     // surfaces immediately instead of queuing behind the thread's streaming
     // agent output (which is what made it arrive minutes late under load).
     void replyToThread(key, t('voice.transcribed', { text: transcript }), {}, { unpaced: true }).catch(() => {});
+
+    // A voice REPLY to a question the bot set aside is its late answer, as a typed reply is: the transcript is the answer (a topic member's
+    // only when it names an option). Taken before any other route, like the typed one.
+    if (await answerSetAsideQuestionByReply(reply.from, key, { message_id: reply.messageId, text: transcript, replyToMessageId: reply.replyToMessageId, isForwarded: messageContext?.isForwarded === true }, reply.role)) return;
 
     // `/reminders` step 4 accepts a voice note as well as typed text, so the
     // transcript is routed here — right after the 🎤 echo and BEFORE the
@@ -11837,10 +11854,14 @@ async function deliverPromptByState(
  * `buildLateAnswerPrompt` — as a message of the owner's: written to a live session behind whatever it is doing, buffered behind a
  * start, or waking a sleeping conversation. Unlike {@link deliverActivePrompt} it is NOT free text for the question the agent may be
  * waiting on NOW (that one is a different question, and the owner has not answered it): it never cancels it and never aborts a
- * wedged turn. It carries no message context: the text is the bot's block, and a topic member's answer says who gave it inside the
- * answer itself (an author mark ahead of it would end at the block's own header).
+ * wedged turn. It cancels an armed usage-limit wait first, as typed text does. It carries no message context: the text is the bot's
+ * block, and a topic member's answer says who gave it inside the answer itself (an author mark ahead of it would end at the block's
+ * own header).
  */
 async function deliverLateAnswerPrompt(key: SessionKey, text: string): Promise<LatePromptOutcome> {
+  // The owner took over, like with any message they type: an armed usage-limit wait is over (the answer is not written INTO it, and its
+  // own «continue» nudge would come on top of the answer later).
+  cancelApiRetry(key);
   noteThreadUserActivity(key);
   return deliverPromptByState(key, getThreadAdapter(key), text, null);
 }
@@ -13136,6 +13157,29 @@ function postAgentQuestion(key: SessionKey, questionData: OpenCodePendingQuestio
 }
 
 /**
+ * @description Post a question as a NEW message of the topic — its text (header, question, numbered options with their descriptions)
+ * with `keyboard` as its buttons. Resolves the id of the message, `null` when no send landed.
+ *
+ * Markdown first, then plain when Telegram refuses it. Only a post that FAILED is retried: one whose outcome is unknown may already
+ * be in the topic, and a second copy of the question would be posted under it (its id stays unknown; its buttons still answer it).
+ */
+async function sendQuestionMessage(key: SessionKey, question: OpenCodeQuestion, keyboard: InlineKeyboardMarkup | undefined): Promise<number | null> {
+  let outcome = await replyToThreadDetailed(
+    key,
+    buildQuestionBodyLines(question, escapeMarkdown).join('\n'),
+    buildKeyboardExtra(keyboard, { parse_mode: 'Markdown' }),
+  );
+  if (outcome.kind === 'failed') {
+    outcome = await replyToThreadDetailed(
+      key,
+      buildQuestionBodyLinesPlain(question).join('\n'),
+      buildKeyboardExtra(keyboard),
+    );
+  }
+  return outcome.kind === 'sent' ? outcome.messageId : null;
+}
+
+/**
  * @description Render + send ONE OpenCode question (the one at the pending
  * state's `currentIndex`) as the newest thread message, then patch the
  * resulting message id back onto the pending state (in memory + persisted).
@@ -13165,29 +13209,6 @@ function postAgentQuestion(key: SessionKey, questionData: OpenCodePendingQuestio
  * Closing this properly means moving bot-authored Markdown templates onto the
  * connector's dialect, which is a follow-up plan, not a question-path change.
  */
-/**
- * @description Post a question as a NEW message of the topic — its text (header, question, numbered options with their descriptions)
- * with `keyboard` as its buttons. Resolves the id of the message, `null` when no send landed.
- *
- * Markdown first, then plain when Telegram refuses it. Only a post that FAILED is retried: one whose outcome is unknown may already
- * be in the topic, and a second copy of the question would be posted under it (its id stays unknown; its buttons still answer it).
- */
-async function sendQuestionMessage(key: SessionKey, question: OpenCodeQuestion, keyboard: InlineKeyboardMarkup | undefined): Promise<number | null> {
-  let outcome = await replyToThreadDetailed(
-    key,
-    buildQuestionBodyLines(question, escapeMarkdown).join('\n'),
-    buildKeyboardExtra(keyboard, { parse_mode: 'Markdown' }),
-  );
-  if (outcome.kind === 'failed') {
-    outcome = await replyToThreadDetailed(
-      key,
-      buildQuestionBodyLinesPlain(question).join('\n'),
-      buildKeyboardExtra(keyboard),
-    );
-  }
-  return outcome.kind === 'sent' ? outcome.messageId : null;
-}
-
 async function postPendingQuestionAt(key: SessionKey): Promise<void> {
   const kStr = keyToString(key);
   const pending = pendingQuestions.get(kStr);

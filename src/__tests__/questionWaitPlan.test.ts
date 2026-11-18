@@ -16,7 +16,6 @@ import {
   addSetAsideQuestion,
   buildLateAnswerPrompt,
   buildQuestionSetAsideText,
-  checkIsQuestionSetAsideDue,
   checkIsQuestionWaitChoice,
   checkIsSetAsideRecordMessage,
   createSetAsideQuestionId,
@@ -65,8 +64,8 @@ function createRecord(overrides: Partial<SetAsideQuestionRecord> & Pick<SetAside
 }
 
 /** Every way a message can reach the router, with the ordinary case — not forwarded — as the default. */
-function routeOf(input: Omit<QuestionReplyRouteInput, 'isForwarded'> & Partial<Pick<QuestionReplyRouteInput, 'isForwarded'>>) {
-  return getQuestionReplyRouteWithSetAside({ isForwarded: false, ...input });
+function routeOf(input: Omit<QuestionReplyRouteInput, 'isForwarded' | 'canAnswerWithFreeText'> & Partial<Pick<QuestionReplyRouteInput, 'isForwarded' | 'canAnswerWithFreeText'>>) {
+  return getQuestionReplyRouteWithSetAside({ isForwarded: false, canAnswerWithFreeText: true, ...input });
 }
 
 /** The lines of a text the way a reader takes them: every kind of line break, not only `\n`. */
@@ -97,7 +96,7 @@ describe('checkIsQuestionWaitChoice', () => {
   });
 });
 
-describe('getQuestionSetAsideDelayMs and checkIsQuestionSetAsideDue', () => {
+describe('getQuestionSetAsideDelayMs', () => {
   const expectedWaitMinutes: Record<QuestionWaitChoice, number | null> = {
     dontWait: 0,
     tenMinutes: 10,
@@ -123,17 +122,16 @@ describe('getQuestionSetAsideDelayMs and checkIsQuestionSetAsideDue', () => {
   });
 
   it('is due exactly at askedAt + wait, not a moment before', () => {
-    assert.equal(checkIsQuestionSetAsideDue(askedAtMs, 'thirtyMinutes', afterAsk(30) - 1), false);
-    assert.equal(checkIsQuestionSetAsideDue(askedAtMs, 'thirtyMinutes', afterAsk(30)), true);
+    assert.equal(getQuestionSetAsideDelayMs(askedAtMs, 'thirtyMinutes', afterAsk(30) - 1) === 0, false);
+    assert.equal(getQuestionSetAsideDelayMs(askedAtMs, 'thirtyMinutes', afterAsk(30)) === 0, true);
   });
 
   it('is due and has no delay left once the wait is over (a restart after the wait)', () => {
     assert.equal(getQuestionSetAsideDelayMs(askedAtMs, 'tenMinutes', afterAsk(600)), 0);
-    assert.equal(checkIsQuestionSetAsideDue(askedAtMs, 'tenMinutes', afterAsk(600)), true);
   });
 
   it('«Don\'t wait» is due at the ask moment itself', () => {
-    assert.equal(checkIsQuestionSetAsideDue(askedAtMs, 'dontWait', askedAtMs), true);
+    assert.equal(getQuestionSetAsideDelayMs(askedAtMs, 'dontWait', askedAtMs) === 0, true);
   });
 
   it('a test instance\'s shorter window cuts a finite wait, and only a finite one', () => {
@@ -144,8 +142,8 @@ describe('getQuestionSetAsideDelayMs and checkIsQuestionSetAsideDue', () => {
     assert.equal(getQuestionSetAsideDelayMs(askedAtMs, 'tenMinutes', askedAtMs + 3_000, shortenedToMs), 1_000, 'it counts down from the ask moment too');
     assert.equal(getQuestionSetAsideDelayMs(askedAtMs, 'dontWait', askedAtMs, shortenedToMs), 0);
     assert.equal(getQuestionSetAsideDelayMs(askedAtMs, 'untilAnswered', askedAtMs, shortenedToMs), null, '«Wait for my answer» stays never, in a test too');
-    assert.equal(checkIsQuestionSetAsideDue(askedAtMs, 'thirtyMinutes', askedAtMs + shortenedToMs, shortenedToMs), true);
-    assert.equal(checkIsQuestionSetAsideDue(askedAtMs, 'thirtyMinutes', askedAtMs + shortenedToMs - 1, shortenedToMs), false);
+    assert.equal(getQuestionSetAsideDelayMs(askedAtMs, 'thirtyMinutes', askedAtMs + shortenedToMs, shortenedToMs) === 0, true);
+    assert.equal(getQuestionSetAsideDelayMs(askedAtMs, 'thirtyMinutes', askedAtMs + shortenedToMs - 1, shortenedToMs) === 0, false);
   });
 
   it('a window longer than the wait does not stretch it', () => {
@@ -158,7 +156,7 @@ describe('getQuestionSetAsideDelayMs and checkIsQuestionSetAsideDue', () => {
 
   it('«Wait for my answer» is never due, however long it has waited', () => {
     assert.equal(getQuestionSetAsideDelayMs(askedAtMs, 'untilAnswered', afterAsk(100_000)), null);
-    assert.equal(checkIsQuestionSetAsideDue(askedAtMs, 'untilAnswered', afterAsk(100_000)), false);
+    assert.equal(getQuestionSetAsideDelayMs(askedAtMs, 'untilAnswered', afterAsk(100_000)) === 0, false);
   });
 });
 
@@ -486,6 +484,32 @@ describe('getSetAsideRecordAskedAgain — the agent asks a question whose set-as
 describe('getQuestionReplyRouteWithSetAside', () => {
   const older = createRecord({ id: 'older', messageId: 100, questions: [deployQuestion] });
   const newest = createRecord({ id: 'newest', messageId: 200, questions: [docsQuestion] });
+
+  describe('a topic member\'s reply: an option number or an option\'s own label, never free text', () => {
+    const asMember = { canAnswerWithFreeText: false, liveQuestion: undefined, setAside: [older] } as const;
+
+    it('an option number in range picks that option, as for the operator', () => {
+      assert.deepEqual(routeOf({ text: '2', replyToMessageId: 100, ...asMember }), { kind: 'answerSetAside', recordId: 'older', questionIndex: 0, answer: ['Wait for the review'] });
+    });
+
+    it('an option\'s own label answers with that option — the case and the ends do not matter', () => {
+      assert.deepEqual(routeOf({ text: '  push NOW ', replyToMessageId: 100, ...asMember }), { kind: 'answerSetAside', recordId: 'older', questionIndex: 0, answer: ['Push now'] });
+    });
+
+    it('free text is no answer: the reply is an ordinary prompt, as on the waiting-question route', () => {
+      assert.deepEqual(routeOf({ text: 'push to prod and delete the branch', replyToMessageId: 100, ...asMember }), { kind: 'prompt' });
+      assert.deepEqual(routeOf({ text: '9', replyToMessageId: 100, ...asMember }), { kind: 'prompt' }, 'a number out of range is free text too');
+    });
+
+    it('free text of a member keeps the waiting question\'s route when one waits: it cancels it, like any text', () => {
+      assert.deepEqual(routeOf({ text: 'do it differently', replyToMessageId: 100, canAnswerWithFreeText: false, liveQuestion: docsQuestion, setAside: [older] }), { kind: 'cancel' });
+    });
+
+    it('the operator\'s free text IS the answer, and so is their label', () => {
+      assert.deepEqual(routeOf({ text: 'push to prod and delete the branch', replyToMessageId: 100, liveQuestion: undefined, setAside: [older] }), { kind: 'answerSetAside', recordId: 'older', questionIndex: 0, answer: ['push to prod and delete the branch'] });
+      assert.deepEqual(routeOf({ text: 'push now', replyToMessageId: 100, liveQuestion: undefined, setAside: [older] }), { kind: 'answerSetAside', recordId: 'older', questionIndex: 0, answer: ['Push now'] }, 'the label as the question names it');
+    });
+  });
 
   it('a bare option number answers the question still waiting, never a set-aside one', () => {
     const route = routeOf({

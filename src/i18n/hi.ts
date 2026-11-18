@@ -275,6 +275,7 @@ export const hiDict: Record<string, string> = {
   'agent.question_asked_again_note': '↓ नीचे दोबारा पूछा गया',
   'agent.question_set_aside_note': '⏸ एजेंट आपके उत्तर के बिना आगे बढ़ गया — आप अब भी उत्तर दे सकते हैं',
   'agent.set_aside_question_gone_notice': 'वह प्रश्न पहले ही उत्तर पा चुका है या बंद है — इससे कुछ नहीं बदला।',
+  'agent.set_aside_reply_failed_notice': '⚠️ एजेंट को उसके प्रश्न के बिना आगे बढ़ने को नहीं कहा जा सका — सर्वर ने संदेश नहीं लिया, और एजेंट अब भी उसका इंतज़ार कर रहा हो सकता है। उसे आगे बढ़ाने के लिए कोई भी संदेश भेजें।',
   'agent.set_aside_next_question_failed_notice': 'अगला प्रश्न पोस्ट नहीं हो सका, इसलिए आपका उत्तर नहीं लिया गया — फिर से कोशिश करें।',
   'agent.login_code_relayed': '🔐 लॉगिन कोड Claude को भेजा गया — टोकन संदेश इतिहास से हटाया गया।',
   'agent.login_url': '🔐 Claude में साइन इन करने के लिए यह लिंक खोलें, साइन-इन पूरा करें, फिर कोड यहाँ पेस्ट करें:\n{url}',

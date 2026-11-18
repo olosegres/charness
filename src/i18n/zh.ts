@@ -275,6 +275,7 @@ export const zhDict: Record<string, string> = {
   'agent.question_asked_again_note': '↓ 已在下方重新提问',
   'agent.question_set_aside_note': '⏸ 智能体没有等待你的回答，已继续工作——你仍然可以回答',
   'agent.set_aside_question_gone_notice': '该问题已经回答或已关闭——这次操作没有改变任何内容。',
+  'agent.set_aside_reply_failed_notice': '⚠️ 未能告知智能体不等该问题的答案继续工作——服务器没有收下这条消息，智能体可能仍在等待。给它发送任意消息即可让它继续。',
   'agent.set_aside_next_question_failed_notice': '无法发送下一个问题，因此你的回答未被采纳——请重试。',
   'agent.login_code_relayed': '🔐 登录码已转发给 Claude — 包含 token 的消息已从历史中删除。',
   'agent.login_url': '🔐 要登录 Claude，请打开此链接，完成登录，然后把代码粘贴回这里：\n{url}',
