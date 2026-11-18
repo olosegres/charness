@@ -198,6 +198,22 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+/** How long a case waits for a state it needs: generous for a loaded machine, and a case that never gets there still fails by name. */
+const waitUntilTimeoutMs = 10_000;
+const waitUntilPollMs = 5;
+
+/** Poll until `isReached` holds — never a fixed pause: a pause is right on an idle machine and short on a loaded one. */
+async function waitUntil(description: string, isReached: () => boolean): Promise<void> {
+  const deadlineMs = Date.now() + waitUntilTimeoutMs;
+  while (!isReached()) {
+    if (Date.now() > deadlineMs) throw new Error(`gave up waiting for ${description}`);
+    await sleep(waitUntilPollMs);
+  }
+}
+
+/** How long a case lets a retry that must NOT happen have to happen (a pause of 5 ms is armed): the window only has to be longer than it, and cannot fail a case that is right. */
+const noRetryWindowMs = 50;
+
 /** Keep the console quiet and read what the code logged. */
 function captureWarnings(run: () => Promise<void>): Promise<string[]> {
   const warnings: string[] = [];
@@ -381,7 +397,7 @@ describe('a question the server holds beside the one set aside, and a reply the 
 
     const warnings = await captureWarnings(async () => {
       harness.adapterCalls[0].onSettled?.(false);
-      await sleep(60);
+      await waitUntil('the question to be handed to the bot again', () => harness.surfaceCalls.length > 0);
     });
 
     assert.deepEqual(harness.surfaceCalls, [undefined], 'the server\'s own question, nothing left out');
@@ -394,6 +410,7 @@ describe('a question the server holds beside the one set aside, and a reply the 
     const harness = createHarness({ withSurface: true, retryDelayMs: 5 });
     harness.pendingQuestions.set(keyString, createPending('req_a'));
     await harness.setAside.setPendingQuestionAside(key, 'req_a');
+    harness.surfaceCalls.length = 0;
     const { onSettled } = harness.adapterCalls[0];
 
     const warnings = await captureWarnings(async () => {
@@ -401,9 +418,10 @@ describe('a question the server holds beside the one set aside, and a reply the 
       onSettled?.(false);
       onSettled?.(true);
       onSettled?.(false);
-      await sleep(40);
+      await waitUntil('the retry the last failure armed', () => harness.surfaceCalls.length > 0);
     });
 
+    assert.equal(warnings.length, 3, warnings.join('\n'));
     assert.ok(warnings.at(-1)?.includes('try 1 of 3'), warnings.join('\n'));
   });
 
@@ -416,7 +434,8 @@ describe('a question the server holds beside the one set aside, and a reply the 
 
     const warnings = await captureWarnings(async () => {
       for (let failure = 0; failure < setAsideRetryLimit + 1; failure += 1) onSettled?.(false);
-      await sleep(60);
+      await waitUntil('the topic to be told', () => harness.replies.length > 0);
+      await sleep(noRetryWindowMs);
     });
 
     assert.deepEqual(harness.replies, [enDict['agent.set_aside_reply_failed_notice']]);
@@ -424,7 +443,7 @@ describe('a question the server holds beside the one set aside, and a reply the 
     assert.equal(harness.surfaceCalls.length, 0, 'and nothing is tried again: the retry still to come was dropped');
   });
 
-  it('after the last try the pinned message\'s own note stops saying the agent went on: it says the agent may still wait, and the buttons stay', async () => {
+  it('after the last try the pinned message\'s own note stops saying the agent went on: it says the server did not confirm it, and the buttons stay', async () => {
     const harness = createHarness({ withSurface: true, retryDelayMs: 5 });
     harness.pendingQuestions.set(keyString, createPending('req_a'));
     await harness.setAside.setPendingQuestionAside(key, 'req_a');
@@ -434,7 +453,7 @@ describe('a question the server holds beside the one set aside, and a reply the 
 
     await captureWarnings(async () => {
       for (let failure = 0; failure < setAsideRetryLimit; failure += 1) onSettled?.(false);
-      await sleep(60);
+      await harness.settle();
       assert.equal(harness.edits.length, 1, 'while a try is still to come the note is not touched');
       onSettled?.(false);
       await harness.settle();
@@ -491,12 +510,12 @@ describe('a question the server holds beside the one set aside, and a reply the 
 
     const warnings = await captureWarnings(async () => {
       harness.adapterCalls[0].onSettled?.(false);
-      await sleep(120);
+      await waitUntil('the topic to be told after the last try', () => harness.replies.length > 0);
     });
 
     assert.equal(harness.surfaceCalls.length, setAsideRetryLimit, 'the server is asked once per pause, however it answers');
     assert.deepEqual(harness.replies, [enDict['agent.set_aside_reply_failed_notice']], 'the topic is told once, after the last try');
-    assert.ok(warnings.some((warning) => warning.includes('could not be read')), warnings.join('\n'));
+    assert.equal(warnings.filter((warning) => warning.includes('could not be read')).length, setAsideRetryLimit, warnings.join('\n'));
   });
 
   it('a server that holds no question any more ends the chain without a word: nothing waits, and the next failure counts from the first', async () => {
@@ -508,14 +527,14 @@ describe('a question the server holds beside the one set aside, and a reply the 
 
     const warnings = await captureWarnings(async () => {
       onSettled?.(false);
-      await sleep(40);
+      await waitUntil('the server to be asked after the first failure', () => harness.surfaceCalls.length === 1);
       onSettled?.(false);
-      await sleep(40);
+      await waitUntil('the server to be asked after the second failure', () => harness.surfaceCalls.length === 2);
     });
 
     assert.deepEqual(harness.replies, []);
-    assert.equal(harness.surfaceCalls.length, 2);
-    assert.ok(warnings.every((warning) => warning.includes('try 1 of 3')), warnings.join('\n'));
+    assert.equal(warnings.length, 2, warnings.join('\n'));
+    assert.ok(warnings.every((warning) => warning.includes('try 1 of 3')), 'the count started again from the first failure: ' + warnings.join('\n'));
   });
 
   it('the tell «still open» to a question asked again carries the same outcome callback, so its failure is retried the same way', async () => {
