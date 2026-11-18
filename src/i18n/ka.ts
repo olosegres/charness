@@ -99,6 +99,7 @@ export const kaDict: Record<string, string> = {
     '/compact_self_review — აგენტის თვითანალიზი შეკუმშვისას (გადამრთველი)\n' +
     '/bot_skills — ბოტის skills აგენტებისთვის (ჩართვა / გამორთვა ამ თემისთვის)\n' +
     '/question_wait — რამდენ ხანს ელოდება აგენტი პასუხს თავის კითხვაზე, სანამ გააგრძელებს\n' +
+    '/topic_status — ნიშნები თემების სახელების ბოლოს (კითხვა, მუშაობს, დაასრულა, სძინავს)\n' +
     '/todo — აგენტის გამოქვეყნებული ამოცანების სია და მისი პროექტი\n' +
     '/limits — ყველა ანგარიშისა და პროვაიდერის გამოყენება; ამ თემის გადასართავად დააჭირეთ ერთ-ერთს\n' +
     '/limits_autoswitch — მოდელის ავტომატური გადართვა გამოყენების ლიმიტზე (სარეზერვო სია, გადართვა, ლოდინი)\n' +
@@ -556,6 +557,33 @@ export const kaDict: Record<string, string> = {
   'questionWait.untilAnswered': 'დაელოდე ჩემს პასუხს',
   'questionWait.sameAsGeneralButton': 'როგორც General-ში ({value})',
   'questionWait.appliedToast': '✅ {value}',
+  'topicStatus.generalTitleText': 'თემის სტატუსი თემების სიაში — ყველა თემის ნაგულისხმევი',
+  'topicStatus.topicTitleText': 'თემის სტატუსი თემების სიაში — ეს თემა: {value}',
+  'topicStatus.valueOwnText': 'საკუთარი ნაკრები',
+  'topicStatus.valueAsGeneralText': 'როგორც General-ში',
+  'topicStatus.statusesIntroText': 'ნიშანი სახელის ბოლოს — პირველი, რომელიც ერგება:',
+  'topicStatus.countsIntroText': 'რიცხვები ნიშნის შემდეგ (ყველაზე ბოლოს):',
+  'topicStatus.questionButtonLabel': '❓ კითხვა',
+  'topicStatus.stuckButtonLabel': '❗️ გაიჭედა',
+  'topicStatus.workingButtonLabel': '⏳ მუშაობს',
+  'topicStatus.finishedButtonLabel': '✅ დაასრულა',
+  'topicStatus.asleepButtonLabel': '💤 სძინავს',
+  'topicStatus.agentsButtonLabel': '⚙️ მომუშავე აგენტები',
+  'topicStatus.queuedButtonLabel': '📋 რიგში მდგომი ამოცანები',
+  'topicStatus.allOffButtonLabel': 'ყველას გამორთვა',
+  'topicStatus.sameAsGeneralButtonLabel': 'როგორც General-ში',
+  'topicStatus.confirmNameButtonLabel': '✓ დიახ, ეს არის მისი სახელი',
+  'topicStatus.unknownNameCandidateHintText': '⚠️ არ ვიცი ამ თემის სახელი. ეს არის «{name}»?',
+  'topicStatus.unknownNameHintText': '⚠️ არ ვიცი ამ თემის სახელი — გადაარქვით სახელი ერთხელ (ნებისმიერი ცვლილება) და ნიშნები გამოჩნდება.',
+  'topicStatus.manageTopicsRightHintText': '⚠️ საჭიროა ადმინისტრატორის უფლება „თემების მართვა“.',
+  'topicStatus.longNameHintText': 'ℹ️ სახელი გრძელია: ტელეფონზე ნიშანი შეიძლება მოიჭრას — შეამოკლეთ {max} სიმბოლომდე.',
+  'topicStatus.droppedMarkHintText': 'ℹ️ თქვენი სახელის ბოლოს „{mark}“ ჩემს ნიშანს ჰგავს, ამიტომ სახელიდან ამოვიღე.',
+  'topicStatus.lineDeletionHintText': 'ℹ️ „შეტყობინებების წაშლის“ უფლების გარეშე ყოველი ცვლილება თემაში „გადაერქვა“ ხაზს ტოვებს.',
+  'topicStatus.unknownNamesHeadingText': 'სახელები, რომლებიც ჯერ არ ვიცი (ნიშნები იქ არ იქნება, სანამ არ გავიგებ):',
+  'topicStatus.unknownNameChoiceButtonLabel': '✓ «{name}»',
+  'topicStatus.moreUnknownNamesText': 'კიდევ {count}: გადაარქვით მათაც სახელი ერთხელ (ნებისმიერი ცვლილება).',
+  'topicStatus.savedToast': '✅ შენახულია',
+  'topicStatus.staleToast': 'ეს მოძველებულია — გახსენით ეკრანი თავიდან.',
   'taskAgents.noLimitValue': 'შეზღუდვის გარეშე',
   'taskAgents.title': '🧵 ერთდროულად მომუშავე ამოცანის აგენტები მთელ ბოტზე: {value} — {source}',
   'taskAgents.sourceGeneral': 'დაყენებულია General-ში',

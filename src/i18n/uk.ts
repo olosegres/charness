@@ -105,6 +105,7 @@ export const ukDict: Record<string, string> = {
     '/compact_self_review — самоаналіз агента під час стиснення (перемикач)\n' +
     '/bot_skills — скіли бота для агентів (увімк / вимк для цього топіка)\n' +
     '/question_wait — скільки агент чекає вашої відповіді на своє запитання, перш ніж продовжити\n' +
+    '/topic_status — позначки в кінці назв топіків (питання, працює, завершив, спить)\n' +
     '/todo — опублікований список завдань агента та його проєкт\n' +
     '/limits — використання кожного облікового запису та провайдера; натисни на один, щоб перемкнути топік\n' +
     '/limits_autoswitch — автоматичне перемикання моделі при ліміті (запасні моделі, перемикання, очікування)\n' +
@@ -562,6 +563,33 @@ export const ukDict: Record<string, string> = {
   'questionWait.untilAnswered': 'Чекати моєї відповіді',
   'questionWait.sameAsGeneralButton': 'Як у General ({value})',
   'questionWait.appliedToast': '✅ {value}',
+  'topicStatus.generalTitleText': 'Статус топіка в списку топіків — значення за замовчуванням для УСІХ топіків',
+  'topicStatus.topicTitleText': 'Статус топіка в списку топіків — цей топік: {value}',
+  'topicStatus.valueOwnText': 'власний набір',
+  'topicStatus.valueAsGeneralText': 'як у General',
+  'topicStatus.statusesIntroText': 'Позначка в кінці назви — перша з тих, що підходять:',
+  'topicStatus.countsIntroText': 'Числа після позначки (в самому кінці):',
+  'topicStatus.questionButtonLabel': '❓ Питання',
+  'topicStatus.stuckButtonLabel': '❗️ Застряг',
+  'topicStatus.workingButtonLabel': '⏳ Працює',
+  'topicStatus.finishedButtonLabel': '✅ Завершив',
+  'topicStatus.asleepButtonLabel': '💤 Спить',
+  'topicStatus.agentsButtonLabel': '⚙️ Агентів працює',
+  'topicStatus.queuedButtonLabel': '📋 Завдань у черзі',
+  'topicStatus.allOffButtonLabel': 'Вимкнути все',
+  'topicStatus.sameAsGeneralButtonLabel': 'Як у General',
+  'topicStatus.confirmNameButtonLabel': '✓ Так, це його назва',
+  'topicStatus.unknownNameCandidateHintText': '⚠️ Я не знаю назви цього топіка. Це «{name}»?',
+  'topicStatus.unknownNameHintText': '⚠️ Я не знаю назви цього топіка — перейменуйте його один раз (будь-яка зміна), і позначки з’являться.',
+  'topicStatus.manageTopicsRightHintText': '⚠️ Потрібне право адміністратора «Керування темами».',
+  'topicStatus.longNameHintText': 'ℹ️ Назва довга: на телефоні позначка може обрізатися — скоротіть її до {max} символів.',
+  'topicStatus.droppedMarkHintText': 'ℹ️ «{mark}» у кінці вашої назви схоже на мою позначку, тому я прибрав це з назви.',
+  'topicStatus.lineDeletionHintText': 'ℹ️ Без права «Видалення повідомлень» кожна зміна залишає в топіку рядок «перейменував тему».',
+  'topicStatus.unknownNamesHeadingText': 'Назви, яких я ще не знаю (позначок там немає, доки не дізнаюся):',
+  'topicStatus.unknownNameChoiceButtonLabel': '✓ «{name}»',
+  'topicStatus.moreUnknownNamesText': 'Ще {count}: перейменуйте їх один раз (будь-яка зміна).',
+  'topicStatus.savedToast': '✅ Збережено',
+  'topicStatus.staleToast': 'Це застаріло — відкрийте екран знову.',
   'taskAgents.noLimitValue': 'без обмеження',
   'taskAgents.title': '🧵 Агентів за задачами одночасно, на весь бот: {value} — {source}',
   'taskAgents.sourceGeneral': 'задано в General',

@@ -103,6 +103,7 @@ export const ruDict: Record<string, string> = {
     '/compact_self_review — самоанализ агента при сжатии (переключатель)\n' +
     '/bot_skills — скиллы бота для агентов (вкл / выкл для этого топика)\n' +
     '/question_wait — сколько агент ждёт вашего ответа на свой вопрос, прежде чем продолжить\n' +
+    '/topic_status — отметки в конце названий топиков (вопрос, работает, закончил, спит)\n' +
     '/todo — опубликованный список задач агента и его проект\n' +
     '/limits — расход по всем аккаунтам и провайдерам; нажми на один, чтобы переключить топик\n' +
     '/limits_autoswitch — автоматическое переключение модели при лимите (запасные модели, переключение, ожидание)\n' +
@@ -560,6 +561,33 @@ export const ruDict: Record<string, string> = {
   'questionWait.untilAnswered': 'Ждать моего ответа',
   'questionWait.sameAsGeneralButton': 'Как в General ({value})',
   'questionWait.appliedToast': '✅ {value}',
+  'topicStatus.generalTitleText': 'Статус топика в списке топиков — значение по умолчанию для ВСЕХ топиков',
+  'topicStatus.topicTitleText': 'Статус топика в списке топиков — этот топик: {value}',
+  'topicStatus.valueOwnText': 'свой набор',
+  'topicStatus.valueAsGeneralText': 'как в General',
+  'topicStatus.statusesIntroText': 'Отметка в конце названия — первая из подходящих:',
+  'topicStatus.countsIntroText': 'Числа после отметки (в самом конце):',
+  'topicStatus.questionButtonLabel': '❓ Вопрос',
+  'topicStatus.stuckButtonLabel': '❗️ Застрял',
+  'topicStatus.workingButtonLabel': '⏳ Работает',
+  'topicStatus.finishedButtonLabel': '✅ Закончил',
+  'topicStatus.asleepButtonLabel': '💤 Спит',
+  'topicStatus.agentsButtonLabel': '⚙️ Агентов работает',
+  'topicStatus.queuedButtonLabel': '📋 Задач в очереди',
+  'topicStatus.allOffButtonLabel': 'Всё выключить',
+  'topicStatus.sameAsGeneralButtonLabel': 'Как в General',
+  'topicStatus.confirmNameButtonLabel': '✓ Да, это его название',
+  'topicStatus.unknownNameCandidateHintText': '⚠️ Я не знаю названия этого топика. Это «{name}»?',
+  'topicStatus.unknownNameHintText': '⚠️ Я не знаю названия этого топика — переименуйте его один раз (любое изменение), и отметки появятся.',
+  'topicStatus.manageTopicsRightHintText': '⚠️ Нужно право администратора «Управление темами».',
+  'topicStatus.longNameHintText': 'ℹ️ Название длинное: на телефоне отметка может обрезаться — сократите его до {max} символов.',
+  'topicStatus.droppedMarkHintText': 'ℹ️ «{mark}» в конце вашего названия похоже на мою отметку, поэтому я убрал это из названия.',
+  'topicStatus.lineDeletionHintText': 'ℹ️ Без права «Удаление сообщений» каждое изменение оставляет в топике строку «переименовал тему».',
+  'topicStatus.unknownNamesHeadingText': 'Названия, которых я пока не знаю (отметок там нет, пока не узнаю):',
+  'topicStatus.unknownNameChoiceButtonLabel': '✓ «{name}»',
+  'topicStatus.moreUnknownNamesText': 'Ещё {count}: переименуйте их один раз (любое изменение).',
+  'topicStatus.savedToast': '✅ Сохранено',
+  'topicStatus.staleToast': 'Это устарело — откройте экран заново.',
   'taskAgents.noLimitValue': 'без ограничения',
   'taskAgents.title': '🧵 Агентов по задачам одновременно, на весь бот: {value} — {source}',
   'taskAgents.sourceGeneral': 'задано в General',

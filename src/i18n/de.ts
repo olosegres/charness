@@ -99,6 +99,7 @@ export const deDict: Record<string, string> = {
     '/compact_self_review — Selbstanalyse des Agents bei der Komprimierung (Umschalter)\n' +
     '/bot_skills — Skills des Bots für Agenten (ein / aus für dieses Thema)\n' +
     '/question_wait — wie lange der Agent auf deine Antwort auf seine Frage wartet, bevor er weitermacht\n' +
+    '/topic_status — Zeichen am Ende der Themennamen (Frage, arbeitet, fertig, schläft)\n' +
     '/todo — die veröffentlichte Aufgabenliste des Agenten und sein Projekt\n' +
     '/limits — Verbrauch aller Konten und Provider; tippe auf eines, um dieses Thema umzustellen\n' +
     '/limits_autoswitch — automatischer Modellwechsel bei Nutzungslimit (Ersatzliste, Wechsel, Warten)\n' +
@@ -556,6 +557,33 @@ export const deDict: Record<string, string> = {
   'questionWait.untilAnswered': 'Auf meine Antwort warten',
   'questionWait.sameAsGeneralButton': 'Wie in General ({value})',
   'questionWait.appliedToast': '✅ {value}',
+  'topicStatus.generalTitleText': 'Themenstatus in der Themenliste — Standard für ALLE Themen',
+  'topicStatus.topicTitleText': 'Themenstatus in der Themenliste — dieses Thema: {value}',
+  'topicStatus.valueOwnText': 'eigene Auswahl',
+  'topicStatus.valueAsGeneralText': 'wie in General',
+  'topicStatus.statusesIntroText': 'Ein Zeichen am Ende des Namens — das erste, das zutrifft:',
+  'topicStatus.countsIntroText': 'Zahlen nach dem Zeichen (ganz am Ende):',
+  'topicStatus.questionButtonLabel': '❓ Frage',
+  'topicStatus.stuckButtonLabel': '❗️ Hängt',
+  'topicStatus.workingButtonLabel': '⏳ Arbeitet',
+  'topicStatus.finishedButtonLabel': '✅ Fertig',
+  'topicStatus.asleepButtonLabel': '💤 Schläft',
+  'topicStatus.agentsButtonLabel': '⚙️ Agenten bei der Arbeit',
+  'topicStatus.queuedButtonLabel': '📋 Aufgaben in der Warteschlange',
+  'topicStatus.allOffButtonLabel': 'Alles aus',
+  'topicStatus.sameAsGeneralButtonLabel': 'Wie General',
+  'topicStatus.confirmNameButtonLabel': '✓ Ja, so heißt es',
+  'topicStatus.unknownNameCandidateHintText': '⚠️ Ich kenne den Namen dieses Themas nicht. Heißt es «{name}»?',
+  'topicStatus.unknownNameHintText': '⚠️ Ich kenne den Namen dieses Themas nicht — benenne es einmal um (irgendeine Änderung), dann erscheinen die Zeichen.',
+  'topicStatus.manageTopicsRightHintText': '⚠️ Dafür braucht der Bot das Admin-Recht „Themen verwalten“.',
+  'topicStatus.longNameHintText': 'ℹ️ Dieser Name ist lang: auf dem Handy kann das Zeichen abgeschnitten werden — kürze ihn auf {max} Zeichen.',
+  'topicStatus.droppedMarkHintText': 'ℹ️ „{mark}“ am Ende deines Namens sieht aus wie mein Zeichen, deshalb habe ich es aus dem Namen entfernt.',
+  'topicStatus.lineDeletionHintText': 'ℹ️ Ohne „Nachrichten löschen“ hinterlässt jede Änderung eine „umbenannt“-Zeile im Thema.',
+  'topicStatus.unknownNamesHeadingText': 'Namen, die ich noch nicht kenne (dort keine Zeichen, bis ich sie kenne):',
+  'topicStatus.unknownNameChoiceButtonLabel': '✓ «{name}»',
+  'topicStatus.moreUnknownNamesText': '{count} weitere: benenne sie einmal um (irgendeine Änderung).',
+  'topicStatus.savedToast': '✅ Gespeichert',
+  'topicStatus.staleToast': 'Das ist veraltet — öffne den Bildschirm neu.',
   'taskAgents.noLimitValue': 'kein Limit',
   'taskAgents.title': '🧵 Aufgaben-Agenten gleichzeitig, für den ganzen Bot: {value} — {source}',
   'taskAgents.sourceGeneral': 'in General festgelegt',

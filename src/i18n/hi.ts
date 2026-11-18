@@ -99,6 +99,7 @@ export const hiDict: Record<string, string> = {
     '/compact_self_review — संक्षेपण पर एजेंट का आत्म-विश्लेषण (टॉगल)\n' +
     '/bot_skills — एजेंटों के लिए बॉट के skills (इस विषय के लिए चालू / बंद)\n' +
     '/question_wait — एजेंट अपने प्रश्न पर आपके उत्तर का कितना इंतज़ार करता है, फिर आगे बढ़ता है\n' +
+    '/topic_status — टॉपिक नामों के अंत में निशान (प्रश्न, काम कर रहा है, पूरा हुआ, सो रहा है)\n' +
     '/todo — एजेंट की प्रकाशित कार्य सूची और उसका प्रोजेक्ट\n' +
     '/limits — हर खाते और प्रदाता का उपयोग; इस टॉपिक को बदलने के लिए किसी पर टैप करें\n' +
     '/limits_autoswitch — उपयोग-सीमा पर मॉडल का स्वचालित स्विच (वैकल्पिक सूची, स्विच, प्रतीक्षा)\n' +
@@ -556,6 +557,33 @@ export const hiDict: Record<string, string> = {
   'questionWait.untilAnswered': 'मेरे उत्तर की प्रतीक्षा करें',
   'questionWait.sameAsGeneralButton': 'General जैसा ({value})',
   'questionWait.appliedToast': '✅ {value}',
+  'topicStatus.generalTitleText': 'टॉपिक सूची में टॉपिक की स्थिति — सभी टॉपिक का डिफ़ॉल्ट',
+  'topicStatus.topicTitleText': 'टॉपिक सूची में टॉपिक की स्थिति — यह टॉपिक: {value}',
+  'topicStatus.valueOwnText': 'अपना सेट',
+  'topicStatus.valueAsGeneralText': 'General जैसा',
+  'topicStatus.statusesIntroText': 'नाम के अंत में निशान — जो पहले लागू हो:',
+  'topicStatus.countsIntroText': 'निशान के बाद संख्याएँ (सबसे अंत में):',
+  'topicStatus.questionButtonLabel': '❓ प्रश्न',
+  'topicStatus.stuckButtonLabel': '❗️ अटका',
+  'topicStatus.workingButtonLabel': '⏳ काम कर रहा है',
+  'topicStatus.finishedButtonLabel': '✅ पूरा हुआ',
+  'topicStatus.asleepButtonLabel': '💤 सो रहा है',
+  'topicStatus.agentsButtonLabel': '⚙️ काम कर रहे एजेंट',
+  'topicStatus.queuedButtonLabel': '📋 कतार में कार्य',
+  'topicStatus.allOffButtonLabel': 'सब बंद',
+  'topicStatus.sameAsGeneralButtonLabel': 'General जैसा',
+  'topicStatus.confirmNameButtonLabel': '✓ हाँ, यही इसका नाम है',
+  'topicStatus.unknownNameCandidateHintText': '⚠️ मुझे इस टॉपिक का नाम नहीं पता। क्या यह «{name}» है?',
+  'topicStatus.unknownNameHintText': '⚠️ मुझे इस टॉपिक का नाम नहीं पता — इसका नाम एक बार बदलें (कोई भी बदलाव), तो निशान दिखने लगेंगे।',
+  'topicStatus.manageTopicsRightHintText': '⚠️ व्यवस्थापक अधिकार «टॉपिक प्रबंधित करें» चाहिए।',
+  'topicStatus.longNameHintText': 'ℹ️ यह नाम लंबा है: फ़ोन पर निशान कट सकता है — इसे {max} अक्षरों तक छोटा करें।',
+  'topicStatus.droppedMarkHintText': 'ℹ️ आपके नाम के अंत का «{mark}» मेरे निशान जैसा दिखता है, इसलिए मैंने उसे नाम से हटा दिया।',
+  'topicStatus.lineDeletionHintText': 'ℹ️ «संदेश हटाएँ» अधिकार के बिना हर बदलाव टॉपिक में एक «नाम बदला» पंक्ति छोड़ता है।',
+  'topicStatus.unknownNamesHeadingText': 'वे नाम जो मुझे अभी नहीं पता (जब तक पता नहीं चलते, वहाँ निशान नहीं):',
+  'topicStatus.unknownNameChoiceButtonLabel': '✓ «{name}»',
+  'topicStatus.moreUnknownNamesText': '{count} और: इनका भी एक बार नाम बदलें (कोई भी बदलाव)।',
+  'topicStatus.savedToast': '✅ सहेजा गया',
+  'topicStatus.staleToast': 'यह पुराना हो चुका है — स्क्रीन फिर से खोलें।',
   'taskAgents.noLimitValue': 'कोई सीमा नहीं',
   'taskAgents.title': '🧵 एक साथ काम करने वाले टास्क एजेंट, पूरे बॉट के लिए: {value} — {source}',
   'taskAgents.sourceGeneral': 'General में तय',

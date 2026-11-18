@@ -99,6 +99,7 @@ export const zhDict: Record<string, string> = {
     '/compact_self_review — 压缩时的智能体自我复盘（开关）\n' +
     '/bot_skills — 机器人提供给智能体的技能（本话题开启 / 关闭）\n' +
     '/question_wait — 智能体等待你回答其提问多久后继续工作\n' +
+    '/topic_status — 主题名称末尾的标记（提问、工作中、已完成、休眠）\n' +
     '/todo — 智能体发布的任务列表及其所在项目\n' +
     '/limits — 各账号和提供方的用量；点按其中一个即可切换此话题\n' +
     '/limits_autoswitch — 达到用量上限时自动切换模型（备用列表、切换、等待）\n' +
@@ -556,6 +557,33 @@ export const zhDict: Record<string, string> = {
   'questionWait.untilAnswered': '等我回答',
   'questionWait.sameAsGeneralButton': '同 General（{value}）',
   'questionWait.appliedToast': '✅ {value}',
+  'topicStatus.generalTitleText': '主题列表中的主题状态 —— 所有主题的默认设置',
+  'topicStatus.topicTitleText': '主题列表中的主题状态 —— 本主题：{value}',
+  'topicStatus.valueOwnText': '自己的设置',
+  'topicStatus.valueAsGeneralText': '同 General',
+  'topicStatus.statusesIntroText': '名称末尾的标记 —— 取第一个符合的：',
+  'topicStatus.countsIntroText': '标记之后的数字（在最末尾）：',
+  'topicStatus.questionButtonLabel': '❓ 提问',
+  'topicStatus.stuckButtonLabel': '❗️ 卡住',
+  'topicStatus.workingButtonLabel': '⏳ 工作中',
+  'topicStatus.finishedButtonLabel': '✅ 已完成',
+  'topicStatus.asleepButtonLabel': '💤 休眠',
+  'topicStatus.agentsButtonLabel': '⚙️ 工作中的智能体',
+  'topicStatus.queuedButtonLabel': '📋 排队任务',
+  'topicStatus.allOffButtonLabel': '全部关闭',
+  'topicStatus.sameAsGeneralButtonLabel': '同 General',
+  'topicStatus.confirmNameButtonLabel': '✓ 是的，这就是它的名称',
+  'topicStatus.unknownNameCandidateHintText': '⚠️ 我不知道这个主题的名称。是「{name}」吗？',
+  'topicStatus.unknownNameHintText': '⚠️ 我不知道这个主题的名称 —— 请重命名一次（任意改动），标记就会出现。',
+  'topicStatus.manageTopicsRightHintText': '⚠️ 需要“管理主题”管理员权限。',
+  'topicStatus.longNameHintText': 'ℹ️ 名称较长：在手机上标记可能被截断 —— 请缩短到 {max} 个字符。',
+  'topicStatus.droppedMarkHintText': 'ℹ️ 你名称末尾的“{mark}”看起来像我的标记，所以我把它从名称中去掉了。',
+  'topicStatus.lineDeletionHintText': 'ℹ️ 没有“删除消息”权限时，每次更改都会在主题里留下一条“已重命名”的提示。',
+  'topicStatus.unknownNamesHeadingText': '我还不知道的名称（在我知道之前那里没有标记）：',
+  'topicStatus.unknownNameChoiceButtonLabel': '✓ 「{name}」',
+  'topicStatus.moreUnknownNamesText': '还有 {count} 个：请各重命名一次（任意改动）。',
+  'topicStatus.savedToast': '✅ 已保存',
+  'topicStatus.staleToast': '内容已过期 —— 请重新打开此界面。',
   'taskAgents.noLimitValue': '不限',
   'taskAgents.title': '🧵 同时工作的任务智能体数量（整个机器人）：{value} — {source}',
   'taskAgents.sourceGeneral': '在 General 中设置',

@@ -99,6 +99,7 @@ export const jaDict: Record<string, string> = {
     '/compact_self_review — 圧縮時のエージェントの自己分析（切り替え）\n' +
     '/bot_skills — エージェント向けボットのスキル（このトピックのオン / オフ）\n' +
     '/question_wait — エージェントが質問への回答を待ってから先へ進むまでの時間\n' +
+    '/topic_status — トピック名の末尾のマーク（質問・作業中・完了・スリープ）\n' +
     '/todo — エージェントが公開したタスクリストとそのプロジェクト\n' +
     '/limits — 各アカウントとプロバイダーの使用状況。タップするとこのトピックを切り替えます\n' +
     '/limits_autoswitch — 使用量上限でのモデル自動切り替え（予備リスト、切り替え、待機）\n' +
@@ -556,6 +557,33 @@ export const jaDict: Record<string, string> = {
   'questionWait.untilAnswered': '私の回答を待つ',
   'questionWait.sameAsGeneralButton': 'General に合わせる（{value}）',
   'questionWait.appliedToast': '✅ {value}',
+  'topicStatus.generalTitleText': 'トピック一覧でのトピックの状態 — すべてのトピックの既定',
+  'topicStatus.topicTitleText': 'トピック一覧でのトピックの状態 — このトピック：{value}',
+  'topicStatus.valueOwnText': '独自の設定',
+  'topicStatus.valueAsGeneralText': 'General と同じ',
+  'topicStatus.statusesIntroText': '名前の末尾のマーク — 当てはまる最初のもの：',
+  'topicStatus.countsIntroText': 'マークの後の数字（いちばん最後）：',
+  'topicStatus.questionButtonLabel': '❓ 質問',
+  'topicStatus.stuckButtonLabel': '❗️ 停止',
+  'topicStatus.workingButtonLabel': '⏳ 作業中',
+  'topicStatus.finishedButtonLabel': '✅ 完了',
+  'topicStatus.asleepButtonLabel': '💤 スリープ',
+  'topicStatus.agentsButtonLabel': '⚙️ 稼働中のエージェント',
+  'topicStatus.queuedButtonLabel': '📋 待機中のタスク',
+  'topicStatus.allOffButtonLabel': 'すべてオフ',
+  'topicStatus.sameAsGeneralButtonLabel': 'General と同じ',
+  'topicStatus.confirmNameButtonLabel': '✓ はい、これが名前です',
+  'topicStatus.unknownNameCandidateHintText': '⚠️ このトピックの名前がわかりません。「{name}」ですか？',
+  'topicStatus.unknownNameHintText': '⚠️ このトピックの名前がわかりません — 一度名前を変更（どんな変更でも）するとマークが表示されます。',
+  'topicStatus.manageTopicsRightHintText': '⚠️ 管理者権限「トピックの管理」が必要です。',
+  'topicStatus.longNameHintText': 'ℹ️ 名前が長めです：スマホではマークが切れることがあります — {max} 文字に短縮してください。',
+  'topicStatus.droppedMarkHintText': 'ℹ️ 名前の末尾の「{mark}」は私のマークに見えるため、名前から外しました。',
+  'topicStatus.lineDeletionHintText': 'ℹ️ 「メッセージの削除」権限がないと、変更のたびにトピックに「名前を変更しました」の行が残ります。',
+  'topicStatus.unknownNamesHeadingText': 'まだ名前を知らないトピック（わかるまでマークは付きません）：',
+  'topicStatus.unknownNameChoiceButtonLabel': '✓ 「{name}」',
+  'topicStatus.moreUnknownNamesText': 'ほか {count} 件：それぞれ一度名前を変更してください（どんな変更でも）。',
+  'topicStatus.savedToast': '✅ 保存しました',
+  'topicStatus.staleToast': 'この内容は古くなっています — 画面を開き直してください。',
   'taskAgents.noLimitValue': '無制限',
   'taskAgents.title': '🧵 同時に動くタスクエージェント（ボット全体）：{value} — {source}',
   'taskAgents.sourceGeneral': 'General で設定',

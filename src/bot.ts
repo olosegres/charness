@@ -472,6 +472,7 @@ import { createCompaction } from './connectors/telegram/commands/compaction';
 import { createAutoContinueLimits, appendAutoContinueLimitsHint } from './connectors/telegram/commands/autoContinueLimits';
 import { createBotSkills } from './connectors/telegram/commands/botSkills';
 import { createQuestionWait } from './connectors/telegram/commands/questionWait';
+import { createTopicStatus } from './connectors/telegram/commands/topicStatus';
 import { createTopicAccess } from './connectors/telegram/commands/topicAccess';
 import { createTaskAgents } from './connectors/telegram/commands/taskAgents';
 import { createRunners } from './connectors/telegram/commands/runners';
@@ -8469,6 +8470,18 @@ const topicIndicator = createTopicIndicator({
   log: (line) => console.warn(line),
 });
 
+// ── `/topic_status`: `connectors/telegram/commands/topicStatus.ts`, `utils/topicStatusPlan.ts` — the switches of those marks ──
+const { registerTopicStatusCommands, registerTopicStatusCallbacks } = createTopicStatus({
+  ...botCore,
+  readInstanceTopicStatus,
+  getSettingsPath: () => getInstanceSettingsPath(),
+  getHealth: (key) => topicIndicator.getHealth(key),
+  // The change is the owner's own: it skips the settle time and the gap, like the edges of ❓.
+  noteTopicStatusChanged: (key) => (key === null ? topicIndicator.refreshAll({ isOwnerChange: true }) : topicIndicator.requestRefresh(key, { isOwnerChange: true })),
+});
+
+registerTopicStatusCommands();
+
 // ── Who may talk to the agent in a topic (`/access`): `connectors/telegram/commands/topicAccess.ts`, `topicTalkers.ts` ──
 const { registerTopicAccessCommands, registerTopicAccessCallbacks } = createTopicAccess({
   ...botCore,
@@ -10237,7 +10250,7 @@ const botCommands = new Set([
   'start', 'claude', 'opencode', 'oc', 'terminal', 'agent', 'sessions', 'resume', 'cancel', 'model', 'connect',
   'disconnect', 'stop', 'stopall', 'stop-all', 'quit-all', 'status', 'c', 'y', 'n', 'enter', 'up', 'down', 'tab', 'esc', 'escape', 'interrupt', 'output', 'clear_messages',
   'bind', 'topic', 'unbind', 'where', 'ls', 'list', 'new', 'whoami', 'version', 'help', 'language', 'lang',
-  'doctor', 'mcp', 'rename_session', 'compact', 'compact_on_idle', 'compact_summary', 'compact_self_review', 'bot_skills', 'question_wait', 'task_agents', 'runners', 'auto_continue_limits', 'limits', 'limits_autoswitch', 'trace', 'timestamps', 'timezone', 'schedule', 'reminders', 'todo', 'thinking', 'tool_results',
+  'doctor', 'mcp', 'rename_session', 'compact', 'compact_on_idle', 'compact_summary', 'compact_self_review', 'bot_skills', 'question_wait', 'topic_status', 'task_agents', 'runners', 'auto_continue_limits', 'limits', 'limits_autoswitch', 'trace', 'timestamps', 'timezone', 'schedule', 'reminders', 'todo', 'thinking', 'tool_results',
   'subagent', 'claude_mode', 'effort', 'verbosity', 'quit', 'q', 'quitall', 'pair', 'account', 'accounts', 'fallback', 'stt', 'voice', 'speech', 'update', 'access',
 ]);
 
@@ -11754,6 +11767,7 @@ registerQuestionSetAsideCallbacks(bot);
 registerAutoContinueLimitsCallbacks();
 registerBotSkillsCallbacks();
 registerQuestionWaitCallbacks();
+registerTopicStatusCallbacks();
 registerTopicAccessCallbacks();
 registerTaskAgentsCallbacks();
 registerRunnersCallbacks();
@@ -13860,6 +13874,7 @@ export const COMMANDS_MENU = [
   { command: 'compact_self_review', description: '💡 Agent self-review on compaction: its mistakes and what to change in its instructions' },
   { command: 'bot_skills', description: '🧰 The bot\'s own skills for agents (on/off)' },
   { command: 'question_wait', description: '⏳ How long the agent waits for your answer to its question' },
+  { command: 'topic_status', description: '❓ Marks at the end of topic names: question, working, finished, asleep' },
   { command: 'task_agents', description: '🧵 How many tracker task agents work at once' },
   { command: 'runners', description: '🖥 Runners — machines for the agents\' tests and builds' },
   { command: 'accounts', description: '👤 Claude accounts and OpenCode providers (switch, add, re-login, remove, connect, disconnect)' },

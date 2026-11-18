@@ -99,6 +99,7 @@ export const esDict: Record<string, string> = {
     '/compact_self_review — el autoanálisis del agente en la compactación (conmutador)\n' +
     '/bot_skills — skills del bot para los agentes (activar / desactivar en este tema)\n' +
     '/question_wait — cuánto espera el agente tu respuesta a su pregunta antes de seguir\n' +
+    '/topic_status — marcas al final de los nombres de los temas (pregunta, trabajando, terminado, dormido)\n' +
     '/todo — la lista de tareas publicada del agente y su proyecto\n' +
     '/limits — uso de cada cuenta y proveedor; toca uno para cambiar este tema\n' +
     '/limits_autoswitch — cambio automático de modelo al alcanzar un límite de uso (lista de reserva, cambio, espera)\n' +
@@ -556,6 +557,33 @@ export const esDict: Record<string, string> = {
   'questionWait.untilAnswered': 'Esperar mi respuesta',
   'questionWait.sameAsGeneralButton': 'Como en General ({value})',
   'questionWait.appliedToast': '✅ {value}',
+  'topicStatus.generalTitleText': 'Estado del tema en la lista de temas — el valor por defecto de TODOS los temas',
+  'topicStatus.topicTitleText': 'Estado del tema en la lista de temas — este tema: {value}',
+  'topicStatus.valueOwnText': 'su propia selección',
+  'topicStatus.valueAsGeneralText': 'como en General',
+  'topicStatus.statusesIntroText': 'Una marca al final del nombre — la primera que se cumpla:',
+  'topicStatus.countsIntroText': 'Números tras la marca (al final del todo):',
+  'topicStatus.questionButtonLabel': '❓ Pregunta',
+  'topicStatus.stuckButtonLabel': '❗️ Atascado',
+  'topicStatus.workingButtonLabel': '⏳ Trabajando',
+  'topicStatus.finishedButtonLabel': '✅ Terminado',
+  'topicStatus.asleepButtonLabel': '💤 Dormido',
+  'topicStatus.agentsButtonLabel': '⚙️ Agentes trabajando',
+  'topicStatus.queuedButtonLabel': '📋 Tareas en cola',
+  'topicStatus.allOffButtonLabel': 'Todo desactivado',
+  'topicStatus.sameAsGeneralButtonLabel': 'Como General',
+  'topicStatus.confirmNameButtonLabel': '✓ Sí, ese es su nombre',
+  'topicStatus.unknownNameCandidateHintText': '⚠️ No conozco el nombre de este tema. ¿Es «{name}»?',
+  'topicStatus.unknownNameHintText': '⚠️ No conozco el nombre de este tema — renómbralo una vez (cualquier cambio) y aparecerán las marcas.',
+  'topicStatus.manageTopicsRightHintText': '⚠️ Hace falta el derecho de administrador «Gestionar temas».',
+  'topicStatus.longNameHintText': 'ℹ️ Este nombre es largo: en el móvil la marca puede quedar cortada — acórtalo a {max} caracteres.',
+  'topicStatus.droppedMarkHintText': 'ℹ️ «{mark}» al final de tu nombre se lee como mi marca, así que lo quité del nombre.',
+  'topicStatus.lineDeletionHintText': 'ℹ️ Sin «Eliminar mensajes», cada cambio deja una línea «renombrado» en el tema.',
+  'topicStatus.unknownNamesHeadingText': 'Nombres que aún no conozco (sin marcas allí hasta que los conozca):',
+  'topicStatus.unknownNameChoiceButtonLabel': '✓ «{name}»',
+  'topicStatus.moreUnknownNamesText': '{count} más: renómbralos una vez (cualquier cambio).',
+  'topicStatus.savedToast': '✅ Guardado',
+  'topicStatus.staleToast': 'Esto está desactualizado — abre la pantalla de nuevo.',
   'taskAgents.noLimitValue': 'sin límite',
   'taskAgents.title': '🧵 Agentes de tareas trabajando a la vez, en todo el bot: {value} — {source}',
   'taskAgents.sourceGeneral': 'definido en General',

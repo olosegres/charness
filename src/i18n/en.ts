@@ -103,6 +103,7 @@ export const enDict: Record<string, string> = {
     '/compact_self_review — the agent\'s self-review on compaction (toggle)\n' +
     '/bot_skills — the bot\'s own skills for agents (on / off for this topic)\n' +
     '/question_wait — how long the agent waits for your answer to its question before it goes on\n' +
+    '/topic_status — marks at the end of topic names (question, working, finished, asleep)\n' +
     '/todo — the agent\'s published todo list and the project it shares a board with\n' +
     '/limits — usage of every account and provider; tap one to switch this topic\n' +
     '/limits_autoswitch — automatic model switching on a usage limit (fallback list, switch, wait)\n' +
@@ -567,6 +568,33 @@ export const enDict: Record<string, string> = {
   'questionWait.untilAnswered': 'Wait for my answer',
   'questionWait.sameAsGeneralButton': 'As in General ({value})',
   'questionWait.appliedToast': '✅ {value}',
+  'topicStatus.generalTitleText': 'Topic status in the topic list — the default of ALL topics',
+  'topicStatus.topicTitleText': 'Topic status in the topic list — this topic: {value}',
+  'topicStatus.valueOwnText': 'its own set',
+  'topicStatus.valueAsGeneralText': 'as in General',
+  'topicStatus.statusesIntroText': 'A mark at the end of the name — the first that holds:',
+  'topicStatus.countsIntroText': 'Numbers after the mark (at the very end):',
+  'topicStatus.questionButtonLabel': '❓ Question',
+  'topicStatus.stuckButtonLabel': '❗️ Stuck',
+  'topicStatus.workingButtonLabel': '⏳ Working',
+  'topicStatus.finishedButtonLabel': '✅ Finished',
+  'topicStatus.asleepButtonLabel': '💤 Asleep',
+  'topicStatus.agentsButtonLabel': '⚙️ Agents at work',
+  'topicStatus.queuedButtonLabel': '📋 Tasks queued',
+  'topicStatus.allOffButtonLabel': 'All off',
+  'topicStatus.sameAsGeneralButtonLabel': 'As General',
+  'topicStatus.confirmNameButtonLabel': '✓ Yes, that\'s its name',
+  'topicStatus.unknownNameCandidateHintText': '⚠️ I don\'t know this topic\'s name. Is it «{name}»?',
+  'topicStatus.unknownNameHintText': '⚠️ I don\'t know this topic\'s name — rename it once (any change) and the marks appear.',
+  'topicStatus.manageTopicsRightHintText': '⚠️ Needs the «Manage topics» admin right.',
+  'topicStatus.longNameHintText': 'ℹ️ This name is long: on a phone the mark may be cut off — shorten it to {max} characters.',
+  'topicStatus.droppedMarkHintText': 'ℹ️ «{mark}» at the end of your name reads as my mark, so I dropped it from the name.',
+  'topicStatus.lineDeletionHintText': 'ℹ️ Without «Delete messages» each change leaves a «renamed» line in the topic.',
+  'topicStatus.unknownNamesHeadingText': 'Names I don\'t know yet (no marks there until I do):',
+  'topicStatus.unknownNameChoiceButtonLabel': '✓ «{name}»',
+  'topicStatus.moreUnknownNamesText': '{count} more: rename them once (any change).',
+  'topicStatus.savedToast': '✅ Saved',
+  'topicStatus.staleToast': 'This is out of date — open the screen again.',
   'taskAgents.noLimitValue': 'no limit',
   'taskAgents.title': '🧵 Task agents working at once, for the whole bot: {value} — {source}',
   'taskAgents.sourceGeneral': 'set in General',

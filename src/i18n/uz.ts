@@ -99,6 +99,7 @@ export const uzDict: Record<string, string> = {
     '/compact_self_review — siqishda agentning o‘z-o‘zini tahlili (almashtirgich)\n' +
     '/bot_skills — botning agentlar uchun skills’lari (bu mavzu uchun yoqish / o‘chirish)\n' +
     '/question_wait — agent savoliga javobingizni qancha kutib, so‘ng davom etadi\n' +
+    '/topic_status — mavzu nomlari oxiridagi belgilar (savol, ishlamoqda, tugadi, uxlayapti)\n' +
     '/todo — agentning e\'lon qilingan vazifalar ro\'yxati va uning loyihasi\n' +
     '/limits — har bir hisob va provayderning sarfi; bu mavzuni almashtirish uchun birini bosing\n' +
     '/limits_autoswitch — foydalanish limitida modelni avtomatik almashtirish (zaxira ro‘yxat, almashtirish, kutish)\n' +
@@ -556,6 +557,33 @@ export const uzDict: Record<string, string> = {
   'questionWait.untilAnswered': 'Javobimni kutish',
   'questionWait.sameAsGeneralButton': 'General kabi ({value})',
   'questionWait.appliedToast': '✅ {value}',
+  'topicStatus.generalTitleText': 'Mavzular ro‘yxatida mavzu holati — BARCHA mavzular uchun standart',
+  'topicStatus.topicTitleText': 'Mavzular ro‘yxatida mavzu holati — shu mavzu: {value}',
+  'topicStatus.valueOwnText': 'o‘z to‘plami',
+  'topicStatus.valueAsGeneralText': 'General kabi',
+  'topicStatus.statusesIntroText': 'Nom oxiridagi belgi — mos keladigan birinchisi:',
+  'topicStatus.countsIntroText': 'Belgidan keyingi raqamlar (eng oxirida):',
+  'topicStatus.questionButtonLabel': '❓ Savol',
+  'topicStatus.stuckButtonLabel': '❗️ Tiqilib qoldi',
+  'topicStatus.workingButtonLabel': '⏳ Ishlamoqda',
+  'topicStatus.finishedButtonLabel': '✅ Tugadi',
+  'topicStatus.asleepButtonLabel': '💤 Uxlayapti',
+  'topicStatus.agentsButtonLabel': '⚙️ Ishlayotgan agentlar',
+  'topicStatus.queuedButtonLabel': '📋 Navbatdagi vazifalar',
+  'topicStatus.allOffButtonLabel': 'Hammasini o‘chirish',
+  'topicStatus.sameAsGeneralButtonLabel': 'General kabi',
+  'topicStatus.confirmNameButtonLabel': '✓ Ha, uning nomi shu',
+  'topicStatus.unknownNameCandidateHintText': '⚠️ Bu mavzuning nomini bilmayman. U «{name}» mi?',
+  'topicStatus.unknownNameHintText': '⚠️ Bu mavzuning nomini bilmayman — uning nomini bir marta o‘zgartiring (istalgan o‘zgarish), belgilar paydo bo‘ladi.',
+  'topicStatus.manageTopicsRightHintText': '⚠️ «Mavzularni boshqarish» administrator huquqi kerak.',
+  'topicStatus.longNameHintText': 'ℹ️ Nom uzun: telefonda belgi kesilib qolishi mumkin — uni {max} belgigacha qisqartiring.',
+  'topicStatus.droppedMarkHintText': 'ℹ️ Nomingiz oxiridagi «{mark}» mening belgimga o‘xshaydi, shuning uchun uni nomdan olib tashladim.',
+  'topicStatus.lineDeletionHintText': 'ℹ️ «Xabarlarni o‘chirish» huquqisiz har bir o‘zgarish mavzuda «nomi o‘zgartirildi» qatorini qoldiradi.',
+  'topicStatus.unknownNamesHeadingText': 'Hali bilmaydigan nomlarim (men bilguncha u yerda belgilar yo‘q):',
+  'topicStatus.unknownNameChoiceButtonLabel': '✓ «{name}»',
+  'topicStatus.moreUnknownNamesText': 'Yana {count} ta: ularning nomini ham bir martadan o‘zgartiring (istalgan o‘zgarish).',
+  'topicStatus.savedToast': '✅ Saqlandi',
+  'topicStatus.staleToast': 'Bu eskirgan — ekranni qayta oching.',
   'taskAgents.noLimitValue': 'cheklovsiz',
   'taskAgents.title': '🧵 Bir vaqtda ishlaydigan vazifa agentlari, butun bot uchun: {value} — {source}',
   'taskAgents.sourceGeneral': 'General’da belgilangan',

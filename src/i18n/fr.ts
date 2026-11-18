@@ -99,6 +99,7 @@ export const frDict: Record<string, string> = {
     '/compact_self_review — l\'auto-analyse de l\'agent au compactage (bascule)\n' +
     '/bot_skills — skills du bot pour les agents (activer / désactiver pour ce sujet)\n' +
     '/question_wait — combien de temps l’agent attend votre réponse à sa question avant de continuer\n' +
+    '/topic_status — marques à la fin des noms de sujets (question, travaille, terminé, en veille)\n' +
     '/todo — la liste de tâches publiée de l\'agent et son projet\n' +
     '/limits — usage de chaque compte et fournisseur ; touchez-en un pour y basculer ce sujet\n' +
     '/limits_autoswitch — bascule automatique de modèle en cas de limite d’usage (liste de secours, bascule, attente)\n' +
@@ -556,6 +557,33 @@ export const frDict: Record<string, string> = {
   'questionWait.untilAnswered': 'Attendre ma réponse',
   'questionWait.sameAsGeneralButton': 'Comme dans General ({value})',
   'questionWait.appliedToast': '✅ {value}',
+  'topicStatus.generalTitleText': 'État du sujet dans la liste des sujets — valeur par défaut de TOUS les sujets',
+  'topicStatus.topicTitleText': 'État du sujet dans la liste des sujets — ce sujet : {value}',
+  'topicStatus.valueOwnText': 'son propre choix',
+  'topicStatus.valueAsGeneralText': 'comme dans General',
+  'topicStatus.statusesIntroText': 'Une marque à la fin du nom — la première qui s’applique :',
+  'topicStatus.countsIntroText': 'Nombres après la marque (tout à la fin) :',
+  'topicStatus.questionButtonLabel': '❓ Question',
+  'topicStatus.stuckButtonLabel': '❗️ Bloqué',
+  'topicStatus.workingButtonLabel': '⏳ Travaille',
+  'topicStatus.finishedButtonLabel': '✅ Terminé',
+  'topicStatus.asleepButtonLabel': '💤 En veille',
+  'topicStatus.agentsButtonLabel': '⚙️ Agents au travail',
+  'topicStatus.queuedButtonLabel': '📋 Tâches en attente',
+  'topicStatus.allOffButtonLabel': 'Tout désactiver',
+  'topicStatus.sameAsGeneralButtonLabel': 'Comme General',
+  'topicStatus.confirmNameButtonLabel': '✓ Oui, c’est son nom',
+  'topicStatus.unknownNameCandidateHintText': '⚠️ Je ne connais pas le nom de ce sujet. Est-ce « {name} » ?',
+  'topicStatus.unknownNameHintText': '⚠️ Je ne connais pas le nom de ce sujet — renommez-le une fois (n’importe quel changement) et les marques apparaîtront.',
+  'topicStatus.manageTopicsRightHintText': '⚠️ Nécessite le droit d’administrateur « Gérer les sujets ».',
+  'topicStatus.longNameHintText': 'ℹ️ Ce nom est long : sur un téléphone la marque peut être coupée — raccourcissez-le à {max} caractères.',
+  'topicStatus.droppedMarkHintText': 'ℹ️ « {mark} » à la fin de votre nom ressemble à ma marque, je l’ai donc retiré du nom.',
+  'topicStatus.lineDeletionHintText': 'ℹ️ Sans « Supprimer des messages », chaque changement laisse une ligne « renommé » dans le sujet.',
+  'topicStatus.unknownNamesHeadingText': 'Noms que je ne connais pas encore (pas de marques là-bas tant que je ne les connais pas) :',
+  'topicStatus.unknownNameChoiceButtonLabel': '✓ « {name} »',
+  'topicStatus.moreUnknownNamesText': '{count} de plus : renommez-les une fois (n’importe quel changement).',
+  'topicStatus.savedToast': '✅ Enregistré',
+  'topicStatus.staleToast': 'C’est périmé — rouvrez l’écran.',
   'taskAgents.noLimitValue': 'sans limite',
   'taskAgents.title': '🧵 Agents de tâches en même temps, pour tout le bot : {value} — {source}',
   'taskAgents.sourceGeneral': 'défini dans General',
