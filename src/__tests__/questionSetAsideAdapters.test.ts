@@ -58,7 +58,7 @@ describe('json-stream: setQuestionAside denies the question with the text and le
     const session = createStreamSessionFixture({ key, workDir: '/tmp/jsonstream-set-aside-work', sessionId: 'sess-set-aside', paths: getJsonStreamSessionPaths(dir) });
     adapter['sessions'].set(keyToString(key), session);
     const frames: Array<Record<string, unknown>> = [];
-    adapter['writeStdin'] = (_session: StreamSession, frame: Record<string, unknown>) => { frames.push(frame); };
+    adapter['writeStdin'] = async (_session: StreamSession, frame: Record<string, unknown>) => { frames.push(frame); };
     adapter['onStdout'](session, buildAskUserQuestionLine('req_ask', 'toolu_ask'));
     return { adapter, session, frames };
   }
