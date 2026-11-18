@@ -73,6 +73,7 @@ import {
 import { checkShouldRepostPendingQuestion } from './pendingQuestionRepost';
 import { createQuestionSetAside } from './connectors/telegram/commands/questionSetAside';
 import { resolveQuestionWait } from './utils/questionWaitPlan';
+import { getOwnerRenameOutcome } from './utils/topicIndicatorPlan';
 import {
   enqueueSend,
   sendUnpaced,
@@ -183,6 +184,7 @@ import {
   getDisplayName,
   getTelegramMessageContext,
   getTelegramTalkerContext,
+  getTopicCreationName,
   type TelegramMessageAccess,
 } from './connectors/telegram/inbound';
 import { createRecentWriters, createSeenSenders, type SeenPerson } from './topicTalkerMemory';
@@ -1055,6 +1057,17 @@ bot.use(async (ctx, next) => {
     await noteServedGroupSender(ctx);
   } catch (e) {
     console.warn('[access] noting the sender of an update failed:', e instanceof Error ? e.message : e);
+  }
+  return next();
+});
+
+// The name a topic was created with rides on the root message a client attaches to the owner's plain messages: kept as a candidate for
+// the topic's name while the bot does not know it (it is offered to the owner, never applied by itself).
+bot.use(async (ctx, next) => {
+  try {
+    await noteTopicNameCandidate(ctx);
+  } catch (e) {
+    console.warn('[topic-name] noting the creation name of a topic failed:', e instanceof Error ? e.message : e);
   }
   return next();
 });
@@ -3564,6 +3577,22 @@ async function noteServedGroupSender(ctx: Context): Promise<void> {
   // another topic does not.
   const isTalkerNow = state.getEffectiveTalkerIds(groupSpeaker.key, getGroupGeneralKey(groupSpeaker.key)).has(person.userId);
   if (groupSpeaker.role === 'none' && !isTalkerNow) recentTopicWriters.noteIgnoredWriter(keyToString(groupSpeaker.key), person);
+}
+
+/**
+ * @description Keep the name a bound topic was created with as the candidate for its name, when an admin writes in it and the bot
+ * knows no name for it yet. The topic may have been renamed since: the candidate is only offered by `/topic_status`, never applied.
+ */
+async function noteTopicNameCandidate(ctx: Context): Promise<void> {
+  if (!ctx.message) return;
+  const creationName = getTopicCreationName(ctx.message);
+  if (creationName === null) return;
+  const key = getThreadKey(ctx);
+  if (!key || checkIsGeneral(key)) return;
+  const binding = state.getBinding(key);
+  if (!binding || binding.topicName !== undefined || binding.topicNameCandidate === creationName) return;
+  if (!(await checkIsAllowedUser(ctx))) return;
+  await state.setBindingTopicNaming(key, { topicNameCandidate: creationName });
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -11236,7 +11265,9 @@ bot.on(message('forum_topic_created'), async (ctx) => {
 /**
  * @description A forum topic was renamed (or its icon changed). When the name
  * changed, persist it so the thread-context preamble can tell the agent its
- * current topic name. Admin-gated like the created/closed/reopened trio: a
+ * current topic name — the owner's OWN name: a trailing status mark of the bot's
+ * is cut off it (`getOwnerRenameOutcome`), and the name saved is remembered as the
+ * one the topic shows now. Admin-gated like the created/closed/reopened trio: a
  * non-authorised member's rename must not reshape what the bot remembers.
  *
  * This is also the ONLY way the bot learns the name of a pre-existing topic
@@ -11254,11 +11285,20 @@ bot.on(message('forum_topic_edited'), async (ctx) => {
     console.warn(`[security] forum_topic_edited in chat ${ctx.chat.id} by user ${userId ?? '?'} (not a group admin) — name not updated`);
     return;
   }
-  if (state.getBinding(key)) {
-    await state.setBindingTopicName(key, newName);
+  const binding = state.getBinding(key);
+  // The owner's own words are what is kept: a trailing mark of the bot's is not part of them (`getOwnerRenameOutcome`).
+  const renamed = getOwnerRenameOutcome(newName, binding?.indicatorAppliedName, binding?.topicName);
+  if (binding) {
+    // The name saved IS what the topic shows now; the candidate (a guess) is settled by it.
+    await state.setBindingTopicNaming(key, {
+      topicName: renamed.base,
+      topicNameCandidate: null,
+      indicatorAppliedName: newName,
+      indicatorDroppedMark: renamed.droppedMark,
+    });
   } else {
     // No binding yet — keep the freshest name for a later fuzzy auto-bind.
-    pendingTopicNames.set(keyToString(key), { name: newName, ts: Date.now(), isFromAdmin: true });
+    pendingTopicNames.set(keyToString(key), { name: renamed.base, ts: Date.now(), isFromAdmin: true });
   }
 });
 

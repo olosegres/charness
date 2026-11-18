@@ -16,6 +16,7 @@ import {
   defaultTopicStatusPrefs,
   getIndicatorStatusOfName,
   getIndicatorSuffix,
+  getOwnerRenameOutcome,
   indicatorMinRenameGapMs,
   indicatorSettleMs,
   planIndicatorRename,
@@ -190,6 +191,27 @@ describe('stripIndicatorSuffix', () => {
 
   it('is the name itself when it ends in no mark', () => {
     assert.equal(stripIndicatorSuffix('Notes', 'Notes ⏳', 'Notes'), 'Notes');
+  });
+});
+
+describe('getOwnerRenameOutcome', () => {
+  it('reads the base out of a rename around the bot\'s own mark, with no news for the owner', () => {
+    assert.deepEqual(getOwnerRenameOutcome('Deploy v2 ⏳', 'Deploy ⏳', 'Deploy'), { base: 'Deploy v2', droppedMark: null });
+    assert.deepEqual(getOwnerRenameOutcome('Deploy v2 ⏳ ⚙️3', 'Deploy ⏳ ⚙️3', 'Deploy'), { base: 'Deploy v2', droppedMark: null });
+  });
+
+  it('reports the owner\'s own ending mark that was dropped, so the picker can say so once', () => {
+    assert.deepEqual(getOwnerRenameOutcome('Release ✅', 'Release ⏳', 'Release'), { base: 'Release', droppedMark: '✅' });
+    assert.deepEqual(getOwnerRenameOutcome('Release ✅', undefined, undefined), { base: 'Release', droppedMark: '✅' }, 'a topic the bot never marked');
+  });
+
+  it('a plain rename drops nothing', () => {
+    assert.deepEqual(getOwnerRenameOutcome('New', 'Deploy ⏳', 'Deploy'), { base: 'New', droppedMark: null });
+  });
+
+  it('a name saved equal to the applied one keeps the stored whole base and reports nothing', () => {
+    const wholeBase = 'w'.repeat(140);
+    assert.deepEqual(getOwnerRenameOutcome('wwww… ⏳', 'wwww… ⏳', wholeBase), { base: wholeBase, droppedMark: null });
   });
 });
 

@@ -34,6 +34,7 @@ import {
   getTelegramReplyQuoteBlock,
   getTelegramReplyTargetId,
   getTelegramTalkerContext,
+  getTopicCreationName,
   type TelegramMessageAccess,
 } from '../connectors/telegram/inbound';
 import type { InboundEvent } from '../platform/inbound';
@@ -1043,6 +1044,17 @@ test('getTelegramReplyTargetId: the topic root counts by its id even when the cl
   assert.equal(getTelegramReplyTargetId(makeTopicVoiceMessage(rootWithoutMarker)), null, 'its id is the topic\'s');
   const otherServiceMessage = { ...topicRootMessage, message_id: topicRootId + 5 } as RepliedMessage;
   assert.equal(getTelegramReplyTargetId(makeTopicVoiceMessage(otherServiceMessage)), null, 'its marker says it is one');
+});
+
+test('getTopicCreationName: the root message a client attaches to a plain post in a topic names the name the topic was created with', () => {
+  assert.equal(getTopicCreationName(makeTopicVoiceMessage(topicRootMessage)), 'Topic');
+});
+
+test('getTopicCreationName: none from a genuine reply, from a message that replies to nothing, or from a root without a name', () => {
+  assert.equal(getTopicCreationName(makeTopicVoiceMessage(agentAnswer)), null);
+  assert.equal(getTopicCreationName(makeTopicVoiceMessage(undefined)), null);
+  const unnamedRoot = { ...topicRootMessage, forum_topic_created: { name: '', icon_color: 0 } } as RepliedMessage;
+  assert.equal(getTopicCreationName(makeTopicVoiceMessage(unnamedRoot)), null);
 });
 
 test('getTelegramReplyTargetId: a message that replies to nothing, or that is not in a topic, has the id it replies to — or none', () => {

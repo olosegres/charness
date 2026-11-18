@@ -320,6 +320,17 @@ export function getTelegramReplyTargetId(message: Message): number | null {
 }
 
 /**
+ * @description The name a forum topic was CREATED with, as the root message a client attaches to a message typed in the topic carries it
+ * (`reply_to_message.forum_topic_created`); `null` when the message carries none (General, a private chat, a genuine reply Telegram
+ * embeds without it). The topic may have been renamed since — a name to offer, never one to trust.
+ */
+export function getTopicCreationName(message: Message): string | null {
+  const replied = 'reply_to_message' in message ? message.reply_to_message : undefined;
+  if (!replied || !('forum_topic_created' in replied)) return null;
+  return replied.forum_topic_created.name || null;
+}
+
+/**
  * @description A message's Telegram REPLY reduced to the structural input of
  * {@link extractReplyQuote}, or `undefined` when the message replies to nothing.
  * Read off the message itself, so a typed text and a voice note reply the same

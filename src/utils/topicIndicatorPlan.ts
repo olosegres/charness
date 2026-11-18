@@ -181,6 +181,24 @@ export function stripIndicatorSuffix(name: string, appliedName: string | undefin
   return name.replace(indicatorSuffixPattern, '').trimEnd();
 }
 
+/** @name OwnerRenameOutcome @description What an owner's rename means for the bot: the owner's own name, and the mark of his that was taken for the bot's (`null` when none was). */
+export interface OwnerRenameOutcome {
+  base: string;
+  droppedMark: string | null;
+}
+
+/**
+ * @description The owner saved `savedName` as the topic's name. The base is that name without a trailing mark of ours. A mark that is NOT
+ * the one the bot itself had applied (`Release ✅` typed while ⏳ showed) was the owner's own and is reported as dropped, so the picker can
+ * say so once; the bot's own mark left in place by an edit around it (`Deploy v2 ⏳` over `Deploy ⏳`) is no news.
+ */
+export function getOwnerRenameOutcome(savedName: string, appliedName: string | undefined, storedBase: string | undefined): OwnerRenameOutcome {
+  const base = stripIndicatorSuffix(savedName, appliedName, storedBase);
+  const savedSuffix = getIndicatorSuffix(savedName);
+  const isOwnMarkDropped = savedSuffix !== '' && savedName !== appliedName && savedSuffix !== getIndicatorSuffix(appliedName ?? '');
+  return { base, droppedMark: isOwnMarkDropped ? savedSuffix : null };
+}
+
 // ── when a rename may happen ──
 
 /** A turn must have run this long before its ⏳ shows: a short reply goes straight to its final mark (the owner: no flashing). */

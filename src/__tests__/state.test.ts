@@ -527,12 +527,12 @@ test('topicName: re-binding WITHOUT a name keeps the previously stored name', as
   assert.equal(store.getBinding(key1)?.topicName, 'Fix login bug', 'name must be carried through');
 });
 
-test('setBindingTopicName: updates an existing binding and persists', async () => {
+test('setBindingTopicNaming: renames an existing binding and persists', async () => {
   const first = new StateStore(dataDir, { saveDebounceMs: 5 });
   await first.init();
   await first.setBinding(key1, 'alpha', { topicName: 'Old name' });
   // The forum_topic_edited (rename) path.
-  await first.setBindingTopicName(key1, 'New name');
+  await first.setBindingTopicNaming(key1, { topicName: 'New name' });
   assert.equal(first.getBinding(key1)?.topicName, 'New name');
   await first.flush();
 
@@ -541,11 +541,46 @@ test('setBindingTopicName: updates an existing binding and persists', async () =
   assert.equal(second.getBinding(key1)?.topicName, 'New name', 'rename must survive restart');
 });
 
-test('setBindingTopicName: no-op when the binding does not exist (no dangling row)', async () => {
+test('setBindingTopicNaming: no-op when the binding does not exist (no dangling row)', async () => {
   const store = new StateStore(dataDir, { saveDebounceMs: 5 });
   await store.init();
-  await store.setBindingTopicName(key1, 'orphan');
+  await store.setBindingTopicNaming(key1, { topicName: 'orphan', topicNameCandidate: 'orphan' });
   assert.equal(store.getBinding(key1), null, 'must not create a binding row');
+});
+
+test('setBindingTopicNaming: a field left out stays, null clears it, and a change that changes nothing saves nothing', async () => {
+  const first = new StateStore(dataDir, { saveDebounceMs: 5 });
+  await first.init();
+  await first.setBinding(key1, 'alpha');
+  await first.setBindingTopicNaming(key1, { topicNameCandidate: 'Created as', indicatorAppliedName: 'Deploy ⏳', indicatorDroppedMark: '✅' });
+  assert.deepEqual(
+    { candidate: first.getBinding(key1)?.topicNameCandidate, applied: first.getBinding(key1)?.indicatorAppliedName, dropped: first.getBinding(key1)?.indicatorDroppedMark, name: first.getBinding(key1)?.topicName },
+    { candidate: 'Created as', applied: 'Deploy ⏳', dropped: '✅', name: undefined },
+  );
+  await first.setBindingTopicNaming(key1, { topicName: 'Deploy', topicNameCandidate: null, indicatorDroppedMark: null });
+  const binding = first.getBinding(key1);
+  assert.equal(binding?.topicName, 'Deploy');
+  assert.equal('topicNameCandidate' in (binding ?? {}), false, 'null removes the field from the row');
+  assert.equal('indicatorDroppedMark' in (binding ?? {}), false);
+  assert.equal(binding?.indicatorAppliedName, 'Deploy ⏳', 'a field left out stays');
+  await first.flush();
+
+  const second = new StateStore(dataDir, { saveDebounceMs: 5 });
+  await second.init();
+  assert.equal(second.getBinding(key1)?.indicatorAppliedName, 'Deploy ⏳', 'it survives a restart: a restart renames only what must change');
+  assert.equal(second.getBinding(key1)?.topicName, 'Deploy');
+});
+
+test('topic naming: a re-bind to another folder keeps the candidate and the name the bot applied', async () => {
+  const store = new StateStore(dataDir, { saveDebounceMs: 5 });
+  await store.init();
+  await store.setBinding(key1, 'alpha');
+  await store.setBindingTopicNaming(key1, { topicNameCandidate: 'Created as', indicatorAppliedName: 'Created as 💤', indicatorDroppedMark: '✅' });
+  await store.setBinding(key1, 'beta');
+  assert.equal(store.getBinding(key1)?.subdir, 'beta');
+  assert.equal(store.getBinding(key1)?.topicNameCandidate, 'Created as');
+  assert.equal(store.getBinding(key1)?.indicatorAppliedName, 'Created as 💤');
+  assert.equal(store.getBinding(key1)?.indicatorDroppedMark, '✅');
 });
 
 // ── output-trace toggle (/trace) ──

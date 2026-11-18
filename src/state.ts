@@ -146,8 +146,41 @@ export interface BindingData {
    * Persisted so the thread-context preamble (see `threadContextPreamble.ts`)
    * can tell the agent which topic it works in across restarts. Absent for
    * pre-existing topics until a rename event reveals the name.
+   *
+   * It is the owner's OWN name — the base of the status mark the bot may write after it (`utils/topicIndicatorPlan.ts`) — never the name
+   * a topic shows with the mark.
    */
   topicName?: string;
+  /**
+   * The name the topic was CREATED with, kept while {@link topicName} is unknown (`topicIndicatorPlan` never writes a name it does not
+   * know). It rides on the root message a client attaches to the owner's plain messages; the topic may have been renamed since, so it is
+   * only offered ("Is it «Deploy»?") and applied when the owner taps «Yes».
+   */
+  topicNameCandidate?: string;
+  /**
+   * The name the bot last wrote to the topic (the base plus its status mark), or — after the owner's own rename — the name the topic
+   * shows. Persisted so a restart renames only a topic whose name must change. Absent: the topic shows the owner's own name.
+   */
+  indicatorAppliedName?: string;
+  /**
+   * The trailing mark the owner typed as part of a name and the bot took for its own and dropped from {@link topicName} (`Release ✅`).
+   * Kept until `/topic_status` has told the owner so once.
+   */
+  indicatorDroppedMark?: string;
+}
+
+/** The naming fields of a binding a patch may clear (`null`). */
+const bindingNullableNamingFields = ['topicNameCandidate', 'indicatorAppliedName', 'indicatorDroppedMark'] as const;
+
+/**
+ * @name BindingTopicNamingPatch
+ * @description A change of what the bot knows of a topic's name (see {@link BindingData}): a field left out stays, `null` clears it.
+ */
+export interface BindingTopicNamingPatch {
+  topicName?: string;
+  topicNameCandidate?: string | null;
+  indicatorAppliedName?: string | null;
+  indicatorDroppedMark?: string | null;
 }
 
 export interface AgentData {
@@ -1174,24 +1207,39 @@ export class StateStore {
       } else if (existing?.topicName !== undefined) {
         next.topicName = existing.topicName;
       }
+      // A re-bind (another folder) leaves the topic's name — and the mark the bot wrote to it — as it is.
+      if (existing?.topicNameCandidate !== undefined) next.topicNameCandidate = existing.topicNameCandidate;
+      if (existing?.indicatorAppliedName !== undefined) next.indicatorAppliedName = existing.indicatorAppliedName;
+      if (existing?.indicatorDroppedMark !== undefined) next.indicatorDroppedMark = existing.indicatorDroppedMark;
       this.state.bindings[k] = next;
       this.scheduleSave();
     });
   }
 
   /**
-   * @description Persist the forum-topic display name for a thread. Used by
-   * `forum_topic_edited` (rename) when a binding already exists. No-op (no
-   * save) when the binding is absent or the name is unchanged — symmetric to
-   * {@link setBindingPinnedStatusText}.
+   * @description Change what the bot knows of a topic's name (the owner's own name, the candidate, the name the bot applied, a dropped
+   * mark) in ONE write. No-op (no save) when the binding is absent or nothing changes.
    */
-  async setBindingTopicName(key: SessionKey, topicName: string): Promise<void> {
+  async setBindingTopicNaming(key: SessionKey, patch: BindingTopicNamingPatch): Promise<void> {
     const k = keyToString(key);
     await this.withLock(key, async () => {
       const existing = this.state.bindings[k];
       if (!existing) return;
-      if (existing.topicName === topicName) return;
-      this.state.bindings[k] = { ...existing, topicName };
+      const next: BindingData = { ...existing };
+      let isChanged = false;
+      if (patch.topicName !== undefined && patch.topicName !== existing.topicName) {
+        next.topicName = patch.topicName;
+        isChanged = true;
+      }
+      for (const field of bindingNullableNamingFields) {
+        const value = patch[field];
+        if (value === undefined || value === (existing[field] ?? null)) continue;
+        if (value === null) delete next[field];
+        else next[field] = value;
+        isChanged = true;
+      }
+      if (!isChanged) return;
+      this.state.bindings[k] = next;
       this.scheduleSave();
     });
   }
