@@ -222,10 +222,10 @@ describe('the safety net: `prepare` and `probe`', () => {
 });
 
 describe('the probe\'s answer never waits for the scheduling safety net', () => {
-  /** A job that is being queued: it has its task number and no process yet — what a probe sees while a submit is under way, and what the safety net then looks at. */
   /** Half of the 30 s that a held Pueue and a held mutex both last: a probe that waited for either takes 30 s, one that answered takes what a loaded box needs for its own work. */
   const answerBoundMs = 15_000;
 
+  // The cases below stage a job that is being queued: it has its task number and no process yet — what a probe sees while a submit is under way, and what the safety net then looks at.
   it('a job that is starting while Pueue does not answer `status` (a daemon starved of CPU on a loaded Mac): the probe still answers at once, counting the job as queued — it used to wait for Pueue, 25.8 s against 0.4 s measured, past the caller\'s 20 s', () => {
     submit('box1-aaaaaa');
     holdPueueStatus();
