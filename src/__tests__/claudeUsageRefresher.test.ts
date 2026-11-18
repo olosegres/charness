@@ -12,6 +12,7 @@ const session = (percent: number): ClaudeUsageBucket => ({ kind: 'session', perc
 
 function createHarness(options: {
   profiles: ClaudeUsageRefresherProfile[];
+  syncProfiles?: ClaudeUsageRefresherDeps['syncProfiles'];
   refreshOpenCode?: ClaudeUsageRefresherDeps['refreshOpenCode'];
   tokens?: Record<string, { accessToken: string; expiresAtMs: number | null } | null>;
   fetch?: (token: string, signal: AbortSignal | undefined) => Promise<ClaudeUsageFetchResult>;
@@ -26,6 +27,7 @@ function createHarness(options: {
   const fetchSignals: Array<AbortSignal | undefined> = [];
   const logs: string[] = [];
   const deps: ClaudeUsageRefresherDeps = {
+    syncProfiles: options.syncProfiles,
     listProfiles: () => options.profiles,
     getSnapshot: (name) => snapshots.get(name),
     saveSnapshot: (name, snapshot) => { snapshots.set(name, snapshot); saves.push([name, snapshot]); },
@@ -49,6 +51,37 @@ function createHarness(options: {
 
 const defaultProfile: ClaudeUsageRefresherProfile = { name: 'default', configDir: null, loggedIn: true };
 const workProfile: ClaudeUsageRefresherProfile = { name: 'work', configDir: '/p/work', loggedIn: true };
+
+describe('refreshAll: the profile scan before the poll', () => {
+  it('runs first, so a profile the scan adopted is polled in the same refresh', async () => {
+    const profiles: ClaudeUsageRefresherProfile[] = [defaultProfile];
+    const order: string[] = [];
+    const h = createHarness({
+      profiles,
+      syncProfiles: async () => {
+        order.push('scan');
+        profiles.push({ name: 'adopted', configDir: '/p/adopted', loggedIn: true });
+      },
+    });
+    await h.refresher.refreshAll();
+    assert.deepEqual(order, ['scan']);
+    assert.deepEqual(h.fetched.sort(), ['tok-/p/adopted', 'tok-default']);
+  });
+
+  it('is joined with the poll in flight: one scan per refresh, not one per caller', async () => {
+    let scans = 0;
+    const h = createHarness({ profiles: [defaultProfile], syncProfiles: async () => { scans += 1; } });
+    await Promise.all([h.refresher.refreshAll(), h.refresher.refreshAll()]);
+    assert.equal(scans, 1);
+  });
+
+  it('a scan that throws is logged and the poll goes on with the registry it has', async () => {
+    const h = createHarness({ profiles: [defaultProfile], syncProfiles: async () => { throw new Error('disk gone'); } });
+    await h.refresher.refreshAll();
+    assert.deepEqual(h.fetched, ['tok-default']);
+    assert.ok(h.logs.some((line) => line.includes('profile scan') && line.includes('disk gone')));
+  });
+});
 
 describe('refreshAll', () => {
   it('polls every profile not known to be signed out, with its own token, and stores an api snapshot', async () => {

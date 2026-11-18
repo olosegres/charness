@@ -480,12 +480,14 @@ import { applyRunnerGroups } from './runners/runnerGroups';
 import { probeRunnersOverview, readRunnersOverview } from './runners/runnersOverview';
 import { getRemoteRunCacheDir } from './remoteRun/ssh';
 import { createClaudeAccounts, type ClaudeProfileApplyOutcome } from './connectors/telegram/commands/claudeAccounts';
-import { checkIsSameClaudeConfigDir, defaultClaudeProfileName, getClaudeAuthCommandEnvironment, getProcessFailureReason, parseClaudeAuthStatus, readClaudeProfileApiKey, readDefaultClaudeProfileApiKey, readProcessErrorStdout, resolveClaudeProfileDir, resolveClaudeProfilesRoot, type ClaudeAuthStatus } from './utils/claudeProfiles';
+import { checkIsSameClaudeConfigDir, createClaudeProfileLayout, defaultClaudeProfileName, getClaudeAuthCommandEnvironment, getProcessFailureReason, parseClaudeAuthStatus, readClaudeProfileApiKey, readDefaultClaudeProfileApiKey, readProcessErrorStdout, resolveClaudeProfileDir, resolveClaudeProfilesRoot, type ClaudeAuthStatus } from './utils/claudeProfiles';
 import { checkIsClaudeModelClearOfLimit, checkIsClaudeUsageExhausted, fetchClaudeUsage, readClaudeOAuthToken, type ClaudeProfilesReport, type ClaudeProfileUsageView } from './utils/claudeUsage';
 import { claudeUsageOnDemandMaxAgeMs, createClaudeUsageRefresher, refreshClaudeUsageForLaunch } from './utils/claudeUsageRefresher';
+import { createClaudeProfileSync } from './utils/claudeProfileSync';
 import { createOpenCodeUsagePoller, readOpenCodeCredentials } from './utils/openCodeUsage';
 import { refreshUsageWithinBudget } from './utils/usageRefreshBudget';
-import { pickClaudeLimitSwitchCandidates, resolveClaudeLimitedUntil } from './utils/claudeLimitSwitch';
+import { resolveClaudeLimitedUntil } from './utils/claudeLimitSwitch';
+import { checkIsLimitSwitchPossible, decideLimitSwitch } from './utils/limitSwitchPlan';
 import { verifyAnthropicApiKey } from './utils/anthropicApiKeyCheck';
 import { buildClaudeAuthProbeSettingsArgs } from './utils/claudeApiKeyHelper';
 import { buildFallbackDeferredNotice, buildFallbackSwitchedNotice } from './utils/fallbackSwitchNotice';
@@ -494,7 +496,6 @@ import {
   buildFallbackSwitchCallbackData,
   buildOpenCodeModelLabel,
   checkIsClaudeProfileMissingFromChain,
-  decideFallbackSwitch,
   formatFallbackEntryLabel,
   getClaudeLaunchChainScope,
   getFallbackModelToPin,
@@ -502,7 +503,6 @@ import {
   parseOpenCodeModelLabel,
   listOpenCodeProviders,
   pickEarliestResetRung,
-  pickFallbackCandidates,
   checkIsSameFallbackAccount,
   resolveOpenCodeLimitedUntil,
   type FallbackChainEntry,
@@ -2633,7 +2633,7 @@ async function handleBalanceExhausted(key: SessionKey, cls: AgentApiErrorClass):
   }
   if (plan.action === 'auto') {
     const to = plan.to;
-    await replyToThread(key, notice);
+    if (checkIsTelegramKey(key)) await replyToThread(key, notice);
     const outcome = await switchTopicToFallbackEntry(key, plan.from, to, { isAnnounced: true, isAutomatic: true }).catch((e) => {
       console.warn(`[fallback] ${k}: the auto-switch to ${formatFallbackEntry(to)} failed:`, e instanceof Error ? e.message : e);
       return { isSwitched: false };
@@ -8443,11 +8443,31 @@ const openCodeUsagePoller = createOpenCodeUsagePoller({
 });
 
 /**
+ * The registry of Claude profiles kept in step with the disk and the CLI, with no Telegram in the way (`utils/claudeProfileSync.ts`):
+ * a profile folder under `DATA_DIR/claude-profiles/` signed in by hand is adopted, every profile's sign-in status is probed when it
+ * is due. The usage poll below runs it first, so an instance that serves only a tracker sees every account; `/accounts` forces it.
+ * `state` is assigned at boot, so the store reads it at each call.
+ */
+const claudeProfileSync = createClaudeProfileSync({
+  store: {
+    getClaudeProfileRecords: () => state.getClaudeProfileRecords(),
+    getClaudeProfileRecord: (name) => state.getClaudeProfileRecord(name),
+    getClaudeProfileInfo: (name) => state.getClaudeProfileInfo(name),
+    upsertClaudeProfileRecord: (name, patch) => state.upsertClaudeProfileRecord(name, patch),
+  },
+  getDataDir: () => resolveDataDir(),
+  readStatus: readClaudeAuthStatusUnder,
+  // A folder made by hand may lack the links into `~/.claude` (the transcripts above all): the one idempotent layout call adds them.
+  ensureLayout: (name) => { createClaudeProfileLayout({ dataDir: resolveDataDir(), name }); },
+});
+
+/**
  * The per-profile usage cache (`utils/claudeUsageRefresher.ts`): every signed-in profile's windows off the
  * OAuth usage endpoint on a 10-minute timer, on `/account` open and on a `claude_profiles` call, plus the
  * `rate_limit_event` frames the json-stream sessions report. Snapshots live on the profile records.
  */
 const claudeUsageRefresher = createClaudeUsageRefresher({
+  syncProfiles: () => claudeProfileSync.sync(),
   listProfiles: () => [
     {
       name: defaultClaudeProfileName, configDir: null,
@@ -8729,12 +8749,18 @@ function notePersonActivity(key: SessionKey): void {
  * blind delay; an OpenCode model: else the blind delay), the usage snapshots are brought up to date, and the
  * chain's AVAILABLE rungs are listed in priority order. Without a configured chain a Claude topic falls back to
  * the within-Claude ranking by the soonest weekly reset (`utils/claudeLimitSwitch.ts`) — the behaviour before the chain existed. An
- * offer is remembered per thread under its episode so only ITS buttons can act on it. `none` for a non-Telegram
- * conversation, a topic with no account to switch from, or when no rung can take over.
+ * offer is remembered per thread under its episode so only ITS buttons can act on it. `none` for a topic with no account to
+ * switch from, or when no rung can take over.
+ *
+ * A conversation of another platform (a Jira issue) takes the AUTOMATIC move only, and only between Claude accounts: the chain's
+ * Claude rungs when it has any (else the ranking), never an OpenCode rung (a cross-backend hand-over has no surface there). The
+ * offer's buttons and the wait aimed at the rung that resets first (the retry kick moves a topic there only for Telegram) are
+ * Telegram's: with auto-switch OFF, with no account free, or on OpenCode such a conversation waits for the reset as it always did.
  */
 async function planFallbackSwitch(key: SessionKey, cls: AgentApiErrorClass, episodeId: number): Promise<FallbackSwitchPlan & { from: FallbackChainEntry | null; earliest: { entry: FallbackChainEntry; untilMs: number } | null }> {
   const from = getTopicFallbackPosition(key);
-  if (!checkIsTelegramKey(key) || from === null) return { action: 'none', from, earliest: null };
+  const isTelegram = checkIsTelegramKey(key);
+  if (from === null || !checkIsLimitSwitchPossible(isTelegram, from)) return { action: 'none', from, earliest: null };
   const k = keyToString(key);
   const nowMs = Date.now();
   const resetAtMs = cls.kind === 'usageLimit' ? cls.resetAt : undefined;
@@ -8760,27 +8786,21 @@ async function planFallbackSwitch(key: SessionKey, cls: AgentApiErrorClass, epis
   // a stuck usage endpoint must never hold the switch or the wait notice of a topic that just hit its limit.
   await refreshUsageWithinBudget((options) => claudeUsageRefresher.refreshAll(options));
   const detection = await detectFallbackOptions();
-  let chain = state.getFallbackChain();
-  if (chain.length === 0 && from.backend === 'claude') {
-    chain = pickClaudeLimitSwitchCandidates({ profiles: detection.claudeProfiles, currentName: from.profile, model: from.model, nowMs: Date.now() })
-      .map((profile): FallbackChainEntry => ({ backend: 'claude', profile, model: null }));
-  }
-  const candidates = pickFallbackCandidates({ chain, current: from, detection, nowMs: Date.now() });
-  const plan = decideFallbackSwitch({ candidates, isAutoSwitchEnabled: state.checkIsClaudeAutoSwitchOnLimitEnabled(key) });
+  const { plan, waitRungs } = decideLimitSwitch({
+    isTelegram,
+    from,
+    chain: state.getFallbackChain(),
+    detection,
+    isAutoSwitchEnabled: state.checkIsClaudeAutoSwitchOnLimitEnabled(key),
+    nowMs: Date.now(),
+  });
   if (plan.action === 'offer') fallbackSwitchOffers.set(k, { episodeId, from, candidates: plan.candidates });
   else fallbackSwitchOffers.delete(k);
   const detail = plan.action === 'auto' ? ` → ${formatFallbackEntry(plan.to)}` : plan.action === 'offer' ? ` [${plan.candidates.map(formatFallbackEntry).join(', ')}]` : '';
-  // Nothing has room: the wait should end on the rung whose limit resets EARLIEST, not necessarily this one.
+  // Nothing has room: the wait should end on the rung whose limit resets EARLIEST, not necessarily this one (a topic's wait only).
   let earliest: { entry: FallbackChainEntry; untilMs: number } | null = null;
-  if (plan.action === 'none') {
-    const explicit = state.getFallbackChain();
-    // Without a chain the implicit one is the signed-in SUBSCRIPTIONS: an account billed to API credits never ends a wait by itself.
-    const rungs: FallbackChainEntry[] = explicit.length > 0 ? explicit : from.backend === 'claude'
-      ? detection.claudeProfiles
-        .filter((profile) => profile.loggedIn !== false && profile.billing !== 'api')
-        .map((profile): FallbackChainEntry => ({ backend: 'claude', profile: profile.name, model: null }))
-      : [];
-    const found = pickEarliestResetRung({ chain: rungs, current: from, detection, nowMs: Date.now() });
+  if (waitRungs.length > 0) {
+    const found = pickEarliestResetRung({ chain: waitRungs, current: from, detection, nowMs: Date.now() });
     if (found && !found.isCurrent) earliest = { entry: found.entry, untilMs: found.untilMs };
   }
   console.log(`[fallback] ${k}: usage limit on ${formatFallbackEntry(from)}; switch plan: ${plan.action}${detail}${earliest ? `; earliest reset: ${formatFallbackEntry(earliest.entry)} at ${new Date(earliest.untilMs).toISOString()}` : ''}`);
@@ -8913,8 +8933,10 @@ async function switchTopicToFallbackEntry(
   // An OpenCode topic on the server's default model has no rung (`from` is null), yet it is on OpenCode all the same.
   const isSameFamily = (from?.backend ?? getTopicBackendFamily(key)) === to.backend;
   const runningModel = readRunningModelBeforeMove(key, from, to);
+  // The notice is a topic message: a conversation of another platform (a Jira issue) hears nothing — the log line below says it — and
+  // its work simply continues.
   const say = async (notice: string): Promise<void> => {
-    if (options.isAnnounced) await replyToThread(key, notice);
+    if (options.isAnnounced && checkIsTelegramKey(key)) await replyToThread(key, notice);
   };
   const fail = async (error: string): Promise<{ isSwitched: boolean; notice: string; isFailed: boolean }> => {
     const notice = t('fallback.switchFailed', { to: toLabel, error });
@@ -9292,6 +9314,7 @@ const {
   getDataDir: resolveDataDir,
   getInstanceTimezone: getCurrentTimezone,
   refreshClaudeUsage: (options) => claudeUsageRefresher.refreshAll(options),
+  syncClaudeProfiles: (options) => claudeProfileSync.sync(options),
   readClaudeAuthStatus: readClaudeAuthStatusUnder,
   startClaudeProfileLogin: (key, profile) => startClaudeAuthLogin(key, profile),
   applyClaudeProfile: applyClaudePickToThread,

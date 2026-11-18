@@ -1,7 +1,8 @@
 /**
  * @description The usage poller behind `/account`, the `claude_profiles` MCP tool and the stream frames: keeps
  * one `ClaudeUsageSnapshot` per account profile current (`utils/claudeUsage.ts`), reading every signed-in
- * profile's own token — and, beside them, the usage of the OpenCode subscriptions (`utils/openCodeUsage.ts`). Runs on a modest timer (`claudeUsageRefreshIntervalMs`), on `/account` open and on
+ * profile's own token — and, beside them, the usage of the OpenCode subscriptions (`utils/openCodeUsage.ts`). Each poll begins with the
+ * profile scan (`syncProfiles`: folders signed in by hand are adopted, auth statuses brought up to date). Runs on a modest timer (`claudeUsageRefreshIntervalMs`), on `/account` open and on
  * demand (`refreshAll({ maxAgeMs })` skips a snapshot fresher than that), and folds in the `rate_limit_event`
  * windows a json-stream session reports (`noteStreamWindows`), persisting only when a bucket actually moved.
  *
@@ -57,6 +58,12 @@ export interface ClaudeUsageRefresherProfile {
 }
 
 export interface ClaudeUsageRefresherDeps {
+  /**
+   * Run before every poll lists the profiles (`utils/claudeProfileSync.ts`): adopt the profile folders nobody recorded and bring the
+   * auth status of the profiles up to date, so the poll below reads the registry as it is on disk. A throw is logged, never fatal:
+   * the poll goes on with the registry it has.
+   */
+  syncProfiles?: () => Promise<unknown>;
   listProfiles: () => ClaudeUsageRefresherProfile[];
   getSnapshot: (name: string) => ClaudeUsageSnapshot | undefined;
   saveSnapshot: (name: string, snapshot: ClaudeUsageSnapshot) => void;
@@ -209,6 +216,14 @@ export function createClaudeUsageRefresher(deps: ClaudeUsageRefresherDeps): Clau
   async function refreshAll(options: { maxAgeMs?: number } = {}): Promise<void> {
     if (inFlight) return inFlight;
     inFlight = (async () => {
+      // Awaited only when there is one: without it the polls start in this very tick (their start instant is what a newer stream frame is judged against).
+      if (deps.syncProfiles) {
+        try {
+          await deps.syncProfiles();
+        } catch (e) {
+          log(`[usage] the profile scan before the poll threw: ${e instanceof Error ? e.message : String(e)}`);
+        }
+      }
       const due = deps.listProfiles().filter((profile) => checkNeedsPoll(profile, options.maxAgeMs));
       const refreshOpenCode = deps.refreshOpenCode;
       await Promise.all([

@@ -27,6 +27,7 @@ import type { ClaudeLoginProfile } from '../agentLogin/agentLogin';
 import type { SessionKey } from '../sessionKey';
 import { keyToString } from '../sessionKey';
 import { signOutDefaultClaudeLogin, type ClaudeAuthStatus } from '../utils/claudeProfiles';
+import { createClaudeProfileSync } from '../utils/claudeProfileSync';
 import type { FallbackChainEntry } from '../utils/fallbackChain';
 import type { BackendFamily } from '../utils/backendSwitchPlan';
 import type { OperatorSwitchOutcome } from '../utils/operatorSwitchPlan';
@@ -92,6 +93,7 @@ describe('claudeAccounts: /accounts over its ports', () => {
         usageRefreshes.push(options);
         await runUsageRefresh();
       },
+      syncClaudeProfiles: createClaudeProfileSync({ store: harness.state, getDataDir: () => dataDir, readStatus: async (configDir) => statusByDir.get(configDir) ?? null, log: () => {} }).sync,
       readClaudeAuthStatus: async (configDir) => statusByDir.get(configDir) ?? null,
       startClaudeProfileLogin: async (key, profile) => {
         startedLogins.push({ key, profile });

@@ -130,6 +130,24 @@ so one account's usage limit does not stop every topic.
   profile keeps your current login out of the way), finish the sign-in and paste
   the code back into the topic. The code message is deleted; the bot confirms
   with the account's email and plan.
+- **An account signed in by hand is picked up on its own — no Telegram needed.**
+  A folder under `DATA_DIR/claude-profiles/` whose name is a valid profile name
+  (lowercase letters, digits, `-` and `_`, at most 32 characters, not `default`) and
+  that the bot holds no record of is adopted at the bot's start and at every usage
+  poll (every 10 minutes): make the folder (`/accounts add <name>` makes it; by
+  hand an empty folder of that name will do — the bot adds the links back into
+  `~/.claude` that it lacks, the transcripts above all, so that a conversation can
+  resume under it) and sign it in with
+  `CLAUDE_CONFIG_DIR=<that folder> claude auth login`. The bot records it, asks
+  the CLI who is signed in (`claude auth status`) and offers it like any other
+  account. This is how an instance that serves only a tracker (`CONNECTORS=jira`,
+  no `/accounts`) gets its accounts. A folder that is not signed in is listed as
+  signed out and cannot be picked. The scan is cheap: a signed-in account's status
+  is read again after an hour, a signed-out one — so that a sign-in by hand shows
+  up — at most every five minutes, and a poll that finds nothing due spawns no
+  process; `/accounts` re-reads every account whenever it opens. A profile you
+  removed is gone with its folder and is not brought back; `default` signed out
+  through `/accounts` stays out until it is signed in again.
 - **Switching:** tap a profile in `/accounts` or an account on the `/limits`
   board (or `/accounts use <name>`). A
   running session on the default (stream) backend is restarted under the new
@@ -204,7 +222,15 @@ so one account's usage limit does not stop every topic.
   for the reset as before. A Claude session that works when a limit hits is
   moved at once (the turn is dead; background tasks it started are stopped and
   the notice says so); only a tmux Claude session with nothing to resume yet is
-  left to the end of its turn.
+  left to the end of its turn. **A conversation that is not a Telegram topic** — a
+  Jira issue's — takes the automatic move too: with switching ON it continues on
+  the next signed-in Claude account by the same rules (the chain's Claude entries
+  when there are any, else the soonest weekly reset), the same conversation resumed
+  under that account, and the requester hears nothing — the work simply goes on
+  (the bot's log has the line). It has no topic to carry the buttons or the notice,
+  so with switching OFF, with no account free or on OpenCode it waits for the reset
+  as before and says so to the open request; an OpenCode entry of the chain is
+  skipped (a list with no Claude entry restricts no account).
 - **Which account for a child process.** An agent that launches a detached
   `claude` (a worker, a reviewer) asks the bot's `claude_profiles` MCP tool
   — optionally with the model it will run — and gets every

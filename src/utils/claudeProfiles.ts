@@ -14,7 +14,8 @@
  * session would change account at once); the variable is per process, set at spawn.
  *
  * Pure helpers (layout, name gate, resolution, parsers) — the registry and the selection live in
- * `state.json` (`StateStore`), the spawn-side use in the adapters, the UI in
+ * `state.json` (`StateStore`), kept in step with the disk and the CLI by `utils/claudeProfileSync.ts` (a folder signed in by hand is
+ * adopted without Telegram), the spawn-side use in the adapters, the UI in
  * `connectors/telegram/commands/claudeAccounts.ts`. Shaped for the later phases: a record carries room for a
  * `limitedUntil` mark and a cached usage snapshot, and the resolver takes the known names so a selection that
  * names a removed profile falls back instead of launching a dead directory.
