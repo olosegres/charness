@@ -77,6 +77,7 @@ export const enDict: Record<string, string> = {
     '/stt — voice recognition settings\n' +
     '/update — bot updates: automatic, notify only, off\n' +
     '/bot\\_skills — the bot\'s own skills for agents: on / off\n' +
+    '/question\\_wait — how long an agent waits for an answer to its question before going on: the default of every topic\n' +
     '/task\\_agents — how many tracker task agents may work at once\n' +
     '/runners — machines for the agents\' tests and builds\n' +
     '/todo — the agents\' todo lists of every project; their settings\n' +
@@ -101,6 +102,7 @@ export const enDict: Record<string, string> = {
     '/compact_on_idle — auto-compact after idle (toggle)\n' +
     '/compact_self_review — the agent\'s self-review on compaction (toggle)\n' +
     '/bot_skills — the bot\'s own skills for agents (on / off for this topic)\n' +
+    '/question_wait — how long the agent waits for your answer to its question before it goes on\n' +
     '/todo — the agent\'s published todo list and the project it shares a board with\n' +
     '/limits — usage of every account and provider; tap one to switch this topic\n' +
     '/limits_autoswitch — automatic model switching on a usage limit (fallback list, switch, wait)\n' +
@@ -551,6 +553,18 @@ export const enDict: Record<string, string> = {
   'botSkills.setGeneralConfirmation': '✅ Bot skills: {state} for ALL topics (a topic\'s own choice still applies). A running agent keeps its skills until its next start; OpenCode\'s server follows at the bot\'s next start.',
   'botSkills.setTopicConfirmation': '✅ Bot skills: {state} for this topic.',
   'botSkills.followGeneralConfirmation': '✅ Bot skills in this topic follow General again: {state}.',
+  'questionWait.titleGeneral': '⏳ How long an agent waits for your answer to its question before it goes on without it — the default of ALL topics: {value}',
+  'questionWait.titleTopic': '⏳ How long the agent waits for your answer to its question before it goes on without it — this topic: {value}',
+  'questionWait.explanationText': 'When the wait ends, the agent is told to go on with other work, and the question stays here with its buttons and its pin: you can still answer it, however much later, and the answer reaches the agent as a new message.',
+  'questionWait.generalScopeNote': 'This is the default of every topic that has no choice of its own.',
+  'questionWait.valueAsGeneral': 'as in General — {value}',
+  'questionWait.dontWait': 'Don\'t wait',
+  'questionWait.tenMinutes': '10 min',
+  'questionWait.thirtyMinutes': '30 min',
+  'questionWait.oneHour': '1 h',
+  'questionWait.untilAnswered': 'Wait for my answer',
+  'questionWait.sameAsGeneralButton': 'As in General ({value})',
+  'questionWait.appliedToast': '✅ {value}',
   'taskAgents.noLimitValue': 'no limit',
   'taskAgents.title': '🧵 Task agents working at once, for the whole bot: {value} — {source}',
   'taskAgents.sourceGeneral': 'set in General',

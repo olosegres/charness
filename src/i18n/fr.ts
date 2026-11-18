@@ -73,6 +73,7 @@ export const frDict: Record<string, string> = {
     '/stt — réglages de la reconnaissance vocale\n' +
     '/update — mises à jour du bot : automatiques, notifier seulement, désactivées\n' +
     '/bot\\_skills — skills du bot pour les agents : activer / désactiver\n' +
+    '/question\\_wait — combien de temps un agent attend une réponse à sa question avant de continuer : valeur par défaut de chaque sujet\n' +
     '/task\\_agents — combien d’agents de tâches du tracker peuvent travailler en même temps\n' +
     '/runners — machines pour les tests et builds des agents\n' +
     '/todo — les listes de tâches des agents de chaque projet ; leurs réglages\n' +
@@ -97,6 +98,7 @@ export const frDict: Record<string, string> = {
     '/compact_on_idle — compactage auto après inactivité (bascule)\n' +
     '/compact_self_review — l\'auto-analyse de l\'agent au compactage (bascule)\n' +
     '/bot_skills — skills du bot pour les agents (activer / désactiver pour ce sujet)\n' +
+    '/question_wait — combien de temps l’agent attend votre réponse à sa question avant de continuer\n' +
     '/todo — la liste de tâches publiée de l\'agent et son projet\n' +
     '/limits — usage de chaque compte et fournisseur ; touchez-en un pour y basculer ce sujet\n' +
     '/limits_autoswitch — bascule automatique de modèle en cas de limite d’usage (liste de secours, bascule, attente)\n' +
@@ -540,6 +542,18 @@ export const frDict: Record<string, string> = {
   'botSkills.setGeneralConfirmation': '✅ Skills du bot : {state} pour TOUS les sujets (le choix propre d’un sujet continue de s’appliquer). Un agent en cours garde ses skills jusqu’à son prochain démarrage ; le serveur OpenCode appliquera la valeur au prochain démarrage du bot.',
   'botSkills.setTopicConfirmation': '✅ Skills du bot : {state} pour ce sujet.',
   'botSkills.followGeneralConfirmation': '✅ Les skills du bot suivent de nouveau General dans ce sujet : {state}.',
+  'questionWait.titleGeneral': '⏳ Combien de temps un agent attend votre réponse à sa question avant de continuer sans elle — valeur par défaut de TOUS les sujets : {value}',
+  'questionWait.titleTopic': '⏳ Combien de temps l’agent attend votre réponse à sa question avant de continuer sans elle — ce sujet : {value}',
+  'questionWait.explanationText': 'Quand l’attente prend fin, on dit à l’agent de poursuivre avec un autre travail, et la question reste ici avec ses boutons et son épingle : vous pouvez encore y répondre, même bien plus tard, et la réponse parvient à l’agent comme un nouveau message.',
+  'questionWait.generalScopeNote': 'C’est la valeur par défaut de chaque sujet qui n’a pas fait son propre choix.',
+  'questionWait.valueAsGeneral': 'comme dans General — {value}',
+  'questionWait.dontWait': 'Ne pas attendre',
+  'questionWait.tenMinutes': '10 min',
+  'questionWait.thirtyMinutes': '30 min',
+  'questionWait.oneHour': '1 h',
+  'questionWait.untilAnswered': 'Attendre ma réponse',
+  'questionWait.sameAsGeneralButton': 'Comme dans General ({value})',
+  'questionWait.appliedToast': '✅ {value}',
   'taskAgents.noLimitValue': 'sans limite',
   'taskAgents.title': '🧵 Agents de tâches en même temps, pour tout le bot : {value} — {source}',
   'taskAgents.sourceGeneral': 'défini dans General',

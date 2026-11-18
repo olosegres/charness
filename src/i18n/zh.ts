@@ -73,6 +73,7 @@ export const zhDict: Record<string, string> = {
     '/stt — 语音识别设置\n' +
     '/update — 机器人更新：自动、仅通知、关闭\n' +
     '/bot\\_skills — 机器人提供给智能体的技能：开启 / 关闭\n' +
+    '/question\\_wait — 智能体等待其提问的回答多久后继续工作：所有话题的默认值\n' +
     '/task\\_agents — 可同时工作的跟踪器任务智能体数量\n' +
     '/runners — 智能体测试和构建用的机器\n' +
     '/todo — 所有项目中智能体的任务列表及其设置\n' +
@@ -97,6 +98,7 @@ export const zhDict: Record<string, string> = {
     '/compact_on_idle — 空闲后自动压缩（开关）\n' +
     '/compact_self_review — 压缩时的智能体自我复盘（开关）\n' +
     '/bot_skills — 机器人提供给智能体的技能（本话题开启 / 关闭）\n' +
+    '/question_wait — 智能体等待你回答其提问多久后继续工作\n' +
     '/todo — 智能体发布的任务列表及其所在项目\n' +
     '/limits — 各账号和提供方的用量；点按其中一个即可切换此话题\n' +
     '/limits_autoswitch — 达到用量上限时自动切换模型（备用列表、切换、等待）\n' +
@@ -540,6 +542,18 @@ export const zhDict: Record<string, string> = {
   'botSkills.setGeneralConfirmation': '✅ 机器人技能：所有话题 {state}（各话题的单独设置仍然有效）。正在运行的智能体会保留其 skills，直到下次启动；OpenCode 服务器会在机器人下次启动时采用该值。',
   'botSkills.setTopicConfirmation': '✅ 机器人技能：本话题 {state}。',
   'botSkills.followGeneralConfirmation': '✅ 本话题的机器人技能再次与 General 一致：{state}。',
+  'questionWait.titleGeneral': '⏳ 智能体等待你回答其提问多久，之后不等答案继续工作——所有话题的默认值：{value}',
+  'questionWait.titleTopic': '⏳ 智能体等待你回答其提问多久，之后不等答案继续工作——本话题：{value}',
+  'questionWait.explanationText': '等待结束后，智能体会被告知去做别的工作，问题则连同按钮和置顶一起留在这里：你之后随时还能回答，答案会作为新消息送达智能体。',
+  'questionWait.generalScopeNote': '这是所有没有自己设置的话题的默认值。',
+  'questionWait.valueAsGeneral': '同 General — {value}',
+  'questionWait.dontWait': '不等待',
+  'questionWait.tenMinutes': '10 分钟',
+  'questionWait.thirtyMinutes': '30 分钟',
+  'questionWait.oneHour': '1 小时',
+  'questionWait.untilAnswered': '等我回答',
+  'questionWait.sameAsGeneralButton': '同 General（{value}）',
+  'questionWait.appliedToast': '✅ {value}',
   'taskAgents.noLimitValue': '不限',
   'taskAgents.title': '🧵 同时工作的任务智能体数量（整个机器人）：{value} — {source}',
   'taskAgents.sourceGeneral': '在 General 中设置',

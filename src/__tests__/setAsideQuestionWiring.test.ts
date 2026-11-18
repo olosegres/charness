@@ -10,8 +10,8 @@
  *   • a reply to a set-aside question's message is taken before the talker branch, so an operator and a topic member alike answer;
  *   • a waiting question's own end (`clearPendingQuestion`) never touches a set-aside one;
  *   • the buttons are registered once, beside the compaction's, disjoint from `qa_` and `reask_`;
- *   • the idle fire reaches the set-aside module through the compaction's port, and the wait every topic has is the instance's
- *     `settings.json` value (`questionWait`);
+ *   • the idle fire reaches the set-aside module through the compaction's port, and the wait a topic has is its own choice
+ *     (`/question_wait`), else the instance's `settings.json` value (`questionWait`); a changed wait sets the timers again;
  *   • a question the agent asks again while its set-aside copy is open is answered by the module before anything is posted, and
  *     the module posts a question it cannot answer that way through the one function that posts a new question.
  * The real flows are `questionSetAsideE2e.test.ts` (the release, `/new`, a restart) and `openCodeQuestionE2e.test.ts`.
@@ -92,10 +92,21 @@ test('a reply to a message other than the question that waits is no pick for it,
   assert.doesNotMatch(botSource, /reply_to_message\??\.message_id/, 'no route reads the raw reply: «post in this topic» is no reply');
 });
 
-test('the idle fire sets a waiting question aside through the module, and the wait it reads is the instance setting', () => {
+test('the idle fire sets a waiting question aside through the module, and the wait it reads is the topic\'s own choice, else the instance setting', () => {
   assert.match(botSource, /setQuestionAsideAtIdle:\s*\(key\)\s*=>\s*setPendingQuestionAsideAtIdle\(key\)/, 'the compaction port is the module\'s idle entry');
-  assert.match(botSource, /getQuestionWaitChoice:\s*\(\)\s*=>\s*resolveQuestionWait\(undefined,\s*readInstanceQuestionWait\(\)\s*\?\?\s*undefined\)/, 'the instance value of settings.json is the General choice');
+  assert.match(botSource, /getQuestionWaitChoice:\s*\(key\)\s*=>\s*resolveQuestionWait\(state\.getQuestionWaitOverride\(key\),\s*readInstanceQuestionWait\(\)\s*\?\?\s*undefined\)/, 'the topic\'s choice wins over the instance value of settings.json');
   assert.match(botSource, /readInstanceQuestionWait\s*=\s*createQuestionWaitSettingsReader\(\(\)\s*=>\s*getInstanceSettingsPath\(\)/);
+});
+
+test('/question_wait is a registered, listed command wired to the one reader of the instance value, and a changed wait sets the waiting questions\' timers again', () => {
+  assert.match(botSource, /createQuestionWait\(\{\s*\.\.\.botCore,\s*readInstanceQuestionWait,\s*getSettingsPath:\s*\(\)\s*=>\s*getInstanceSettingsPath\(\),(?:\s*\/\/[^\n]*)*\s*noteQuestionWaitChanged:\s*\(key\)\s*=>\s*rearmQuestionSetAsideTimers\(key\)/, 'the module reads the same instance value the timers do');
+  assert.equal(botSource.match(/registerQuestionWaitCommands\(\);/g)?.length, 1);
+  assert.equal(botSource.match(/registerQuestionWaitCallbacks\(\);/g)?.length, 1);
+  assert.match(botSource, /const botCommands = new Set\([^;]*'question_wait'/s, 'a stray /question_wait is never forwarded to the agent as text');
+  assert.match(botSource, /\{ command: 'question_wait', description: /, 'and it is in the menu');
+  const rearm = getFunctionBody('rearmQuestionSetAsideTimers');
+  assert.match(rearm, /armQuestionSetAsideTimer\(key\)/, 'one conversation\'s timer');
+  assert.match(rearm, /pendingQuestions\.keys\(\)[^]*armQuestionSetAsideTimer\(pendingKey\)/, 'and, when the instance value changed, every waiting one');
 });
 
 test('a question the agent asks again is taken over by the set-aside module before anything is posted, and a question it cannot take is posted by the one posting function', () => {

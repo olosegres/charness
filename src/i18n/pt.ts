@@ -73,6 +73,7 @@ export const ptDict: Record<string, string> = {
     '/stt — configurações de reconhecimento de voz\n' +
     '/update — atualizações do bot: automáticas, só avisar, desligadas\n' +
     '/bot\\_skills — skills do bot para os agentes: ligar / desligar\n' +
+    '/question\\_wait — quanto tempo um agente espera pela resposta à pergunta antes de seguir: padrão de todos os tópicos\n' +
     '/task\\_agents — quantos agentes de tarefas do tracker podem trabalhar ao mesmo tempo\n' +
     '/runners — máquinas para testes e builds dos agentes\n' +
     '/todo — as listas de tarefas dos agentes de cada projeto; suas configurações\n' +
@@ -97,6 +98,7 @@ export const ptDict: Record<string, string> = {
     '/compact_on_idle — compactar automaticamente após inatividade (alternar)\n' +
     '/compact_self_review — a autoanálise do agente na compactação (alternar)\n' +
     '/bot_skills — skills do bot para os agentes (ligar / desligar neste tópico)\n' +
+    '/question_wait — quanto tempo o agente espera pela sua resposta à pergunta antes de seguir\n' +
     '/todo — a lista de tarefas publicada do agente e o seu projeto\n' +
     '/limits — uso de cada conta e fornecedor; toca num para trocar este tópico\n' +
     '/limits_autoswitch — troca automática de modelo ao atingir um limite de uso (lista de reserva, troca, espera)\n' +
@@ -540,6 +542,18 @@ export const ptDict: Record<string, string> = {
   'botSkills.setGeneralConfirmation': '✅ Skills do bot: {state} para TODOS os tópicos (a escolha própria de cada tópico continua a aplicar-se). Um agente em execução mantém os seus skills até ao próximo arranque; o servidor do OpenCode aplica o valor no próximo arranque do bot.',
   'botSkills.setTopicConfirmation': '✅ Skills do bot: {state} para este tópico.',
   'botSkills.followGeneralConfirmation': '✅ Os skills do bot neste tópico voltam a seguir General: {state}.',
+  'questionWait.titleGeneral': '⏳ Quanto tempo um agente espera pela sua resposta à pergunta antes de seguir sem ela — padrão de TODOS os tópicos: {value}',
+  'questionWait.titleTopic': '⏳ Quanto tempo o agente espera pela sua resposta à pergunta antes de seguir sem ela — este tópico: {value}',
+  'questionWait.explanationText': 'Quando a espera termina, o agente é avisado para seguir com outro trabalho, e a pergunta fica aqui com seus botões e seu pin: você ainda pode respondê-la, por mais tarde que seja, e a resposta chega ao agente como uma nova mensagem.',
+  'questionWait.generalScopeNote': 'É o padrão de todo tópico que não tem escolha própria.',
+  'questionWait.valueAsGeneral': 'como em General — {value}',
+  'questionWait.dontWait': 'Não esperar',
+  'questionWait.tenMinutes': '10 min',
+  'questionWait.thirtyMinutes': '30 min',
+  'questionWait.oneHour': '1 h',
+  'questionWait.untilAnswered': 'Esperar minha resposta',
+  'questionWait.sameAsGeneralButton': 'Como em General ({value})',
+  'questionWait.appliedToast': '✅ {value}',
   'taskAgents.noLimitValue': 'sem limite',
   'taskAgents.title': '🧵 Agentes de tarefas trabalhando ao mesmo tempo, em todo o bot: {value} — {source}',
   'taskAgents.sourceGeneral': 'definido em General',

@@ -23,6 +23,11 @@ export const questionWaitChoices = ['dontWait', 'tenMinutes', 'thirtyMinutes', '
 /** @name QuestionWaitChoice @description One value of the «question wait» setting. */
 export type QuestionWaitChoice = (typeof questionWaitChoices)[number];
 
+/** @description Whether `value` is one of the wait choices (a hand-edited state or settings file may hold anything). */
+export function checkIsQuestionWaitChoice(value: string | undefined): value is QuestionWaitChoice {
+  return questionWaitChoices.some((choice) => choice === value);
+}
+
 /** What an instance does until the operator chooses: the owner's figure. */
 export const defaultQuestionWaitChoice: QuestionWaitChoice = 'thirtyMinutes';
 

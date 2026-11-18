@@ -321,6 +321,21 @@ confirmations carry the OpenCode note INSTEAD of the Claude agent's «keeps its 
 stay (one server serves every topic), the hint changes only when the OpenCode server next restarts, and the OpenCode topics of
 the folder share it. The screen's text names no slash command (Telegram auto-links one, and a tap would run it).
 
+## `questionWait.ts`
+
+`/question_wait` and the buttons `qw_<choice>` / `qw_same`: how long the agent's unanswered question waits before it is set aside
+(`utils/questionWaitPlan.ts` holds the choices — «Don't wait», 10 min, 30 min (default), 1 h, «Wait for my answer» — and `resolveQuestionWait`;
+`questionSetAside.ts` acts on the result). In General the picker is the instance default, written to `settings.json` `questionWait`
+(`saveInstanceSettingsChange`; a file that cannot be written is told in the toast and changes nothing); in a topic it is that topic's own
+choice (`state.json` `questionWaitOverrides`, `setQuestionWaitOverride`, `null` drops it) with «As in General (value)» — the ✓ on the topic's own
+choice or on «As in General». A REPEATED-USE picker: a tap answers with the value now in force (`✅ …`) and RE-RENDERS the message in place
+(`editThreadMessage`), the ✓ following. The choice is the button's own data, so a keyboard that has gone stale still means exactly what it
+says (there is no index or revision to misfire); `qw_same` means nothing in General. Not gated on an adapter or a session, and admin-only (a
+talker never reaches it). After a write the port `noteQuestionWaitChanged` tells `bot.ts`, which sets the timers of the questions that wait
+NOW again (`rearmQuestionSetAsideTimers`: one topic's, or every waiting one when General's value changed), counted from each question's own
+`askedAt` — a wait that is already over sets the question aside at once, «Wait for my answer» takes its timer off. The wait a topic has is
+`resolveQuestionWait(its own choice, the instance value)`; the screen's text names no slash command (Telegram auto-links one, and a tap would run it).
+
 ## `taskAgents.ts`
 
 `/task_agents` and the buttons `tka_5` / `tka_10` / `tka_15` / `tka_20` / `tka_30` / `tka_0`: the cap on tracker task agents (`trackers/` holds

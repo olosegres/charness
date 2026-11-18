@@ -73,6 +73,7 @@ export const kaDict: Record<string, string> = {
     '/stt — ხმის ამოცნობის პარამეტრები\n' +
     '/update — ბოტის განახლებები: ავტომატური, მხოლოდ შეტყობინება, გამორთული\n' +
     '/bot\\_skills — ბოტის skills აგენტებისთვის: ჩართვა / გამორთვა\n' +
+    '/question\\_wait — რამდენ ხანს ელოდება აგენტი პასუხს თავის კითხვაზე, სანამ გააგრძელებს: ყველა თემის ნაგულისხმევი\n' +
     '/task\\_agents — რამდენ ტრეკერის ამოცანის აგენტს შეუძლია ერთდროულად მუშაობა\n' +
     '/runners — მანქანები აგენტების ტესტებისა და ბილდებისთვის\n' +
     '/todo — ყველა პროექტის აგენტების ამოცანების სიები; მათი პარამეტრები\n' +
@@ -97,6 +98,7 @@ export const kaDict: Record<string, string> = {
     '/compact_on_idle — უმოქმედობის შემდეგ ავტო-შეკუმშვა (გადამრთველი)\n' +
     '/compact_self_review — აგენტის თვითანალიზი შეკუმშვისას (გადამრთველი)\n' +
     '/bot_skills — ბოტის skills აგენტებისთვის (ჩართვა / გამორთვა ამ თემისთვის)\n' +
+    '/question_wait — რამდენ ხანს ელოდება აგენტი პასუხს თავის კითხვაზე, სანამ გააგრძელებს\n' +
     '/todo — აგენტის გამოქვეყნებული ამოცანების სია და მისი პროექტი\n' +
     '/limits — ყველა ანგარიშისა და პროვაიდერის გამოყენება; ამ თემის გადასართავად დააჭირეთ ერთ-ერთს\n' +
     '/limits_autoswitch — მოდელის ავტომატური გადართვა გამოყენების ლიმიტზე (სარეზერვო სია, გადართვა, ლოდინი)\n' +
@@ -540,6 +542,18 @@ export const kaDict: Record<string, string> = {
   'botSkills.setGeneralConfirmation': '✅ ბოტის skills: {state} ყველა თემისთვის (თემის საკუთარი არჩევანი კვლავ მოქმედებს). მომუშავე აგენტი თავის skills-ს შეინარჩუნებს შემდეგ გაშვებამდე; OpenCode-ის სერვერი ამ მნიშვნელობას ბოტის შემდეგ გაშვებაზე გამოიყენებს.',
   'botSkills.setTopicConfirmation': '✅ ბოტის skills: {state} ამ თემისთვის.',
   'botSkills.followGeneralConfirmation': '✅ ბოტის skills ამ თემაში ისევ General-ს მიჰყვება: {state}.',
+  'questionWait.titleGeneral': '⏳ რამდენ ხანს ელოდება აგენტი პასუხს თავის კითხვაზე, სანამ მის გარეშე გააგრძელებს — ყველა თემის ნაგულისხმევი: {value}',
+  'questionWait.titleTopic': '⏳ რამდენ ხანს ელოდება აგენტი პასუხს თავის კითხვაზე, სანამ მის გარეშე გააგრძელებს — ეს თემა: {value}',
+  'questionWait.explanationText': 'მოლოდინის დასრულებისას აგენტს ეუბნებიან, გააგრძელოს სხვა სამუშაო, ხოლო კითხვა ღილაკებითა და მიმაგრებით აქვე რჩება: მაინც შეგიძლიათ უპასუხოთ, რამდენიც არ უნდა გავიდეს, და პასუხი აგენტამდე ახალი შეტყობინებით მივა.',
+  'questionWait.generalScopeNote': 'ეს არის თითოეული იმ თემის ნაგულისხმევი, რომელსაც საკუთარი არჩევანი არ აქვს.',
+  'questionWait.valueAsGeneral': 'როგორც General-ში — {value}',
+  'questionWait.dontWait': 'არ დაელოდო',
+  'questionWait.tenMinutes': '10 წთ',
+  'questionWait.thirtyMinutes': '30 წთ',
+  'questionWait.oneHour': '1 სთ',
+  'questionWait.untilAnswered': 'დაელოდე ჩემს პასუხს',
+  'questionWait.sameAsGeneralButton': 'როგორც General-ში ({value})',
+  'questionWait.appliedToast': '✅ {value}',
   'taskAgents.noLimitValue': 'შეზღუდვის გარეშე',
   'taskAgents.title': '🧵 ერთდროულად მომუშავე ამოცანის აგენტები მთელ ბოტზე: {value} — {source}',
   'taskAgents.sourceGeneral': 'დაყენებულია General-ში',

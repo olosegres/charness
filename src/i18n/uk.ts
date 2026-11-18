@@ -79,6 +79,7 @@ export const ukDict: Record<string, string> = {
     '/stt — налаштування розпізнавання голосу\n' +
     '/update — оновлення бота: автоматично, лише сповіщати, вимк\n' +
     '/bot\\_skills — скіли бота для агентів: увімк / вимк\n' +
+    '/question\\_wait — скільки агент чекає відповіді на своє запитання, перш ніж продовжити: значення за замовчуванням для всіх топіків\n' +
     '/task\\_agents — скільки агентів за задачами трекера можуть працювати одночасно\n' +
     '/runners — машини для тестів і збірок агентів\n' +
     '/todo — списки завдань агентів усіх проєктів; їхні налаштування\n' +
@@ -103,6 +104,7 @@ export const ukDict: Record<string, string> = {
     '/compact_on_idle — авто-стиснення після простою (перемикач)\n' +
     '/compact_self_review — самоаналіз агента під час стиснення (перемикач)\n' +
     '/bot_skills — скіли бота для агентів (увімк / вимк для цього топіка)\n' +
+    '/question_wait — скільки агент чекає вашої відповіді на своє запитання, перш ніж продовжити\n' +
     '/todo — опублікований список завдань агента та його проєкт\n' +
     '/limits — використання кожного облікового запису та провайдера; натисни на один, щоб перемкнути топік\n' +
     '/limits_autoswitch — автоматичне перемикання моделі при ліміті (запасні моделі, перемикання, очікування)\n' +
@@ -546,6 +548,18 @@ export const ukDict: Record<string, string> = {
   'botSkills.setGeneralConfirmation': '✅ Скіли бота: {state} для ВСІХ топіків (власний вибір топіка й далі діє). Працюючий агент зберігає свої скіли до наступного запуску; сервер OpenCode застосує значення під час наступного запуску бота.',
   'botSkills.setTopicConfirmation': '✅ Скіли бота: {state} для цього топіка.',
   'botSkills.followGeneralConfirmation': '✅ Скіли бота в цьому топіку знову як у General: {state}.',
+  'questionWait.titleGeneral': '⏳ Скільки агент чекає вашої відповіді на своє запитання, перш ніж продовжити без неї — значення за замовчуванням для УСІХ топіків: {value}',
+  'questionWait.titleTopic': '⏳ Скільки агент чекає вашої відповіді на своє запитання, перш ніж продовжити без неї — цей топік: {value}',
+  'questionWait.explanationText': 'Коли очікування закінчується, агентові кажуть продовжити іншу роботу, а запитання лишається тут із кнопками й закріпленням: на нього все ще можна відповісти, скільки б часу не минуло, і відповідь дійде до агента новим повідомленням.',
+  'questionWait.generalScopeNote': 'Це значення за замовчуванням для кожного топіка без власного вибору.',
+  'questionWait.valueAsGeneral': 'як у General — {value}',
+  'questionWait.dontWait': 'Не чекати',
+  'questionWait.tenMinutes': '10 хв',
+  'questionWait.thirtyMinutes': '30 хв',
+  'questionWait.oneHour': '1 год',
+  'questionWait.untilAnswered': 'Чекати моєї відповіді',
+  'questionWait.sameAsGeneralButton': 'Як у General ({value})',
+  'questionWait.appliedToast': '✅ {value}',
   'taskAgents.noLimitValue': 'без обмеження',
   'taskAgents.title': '🧵 Агентів за задачами одночасно, на весь бот: {value} — {source}',
   'taskAgents.sourceGeneral': 'задано в General',

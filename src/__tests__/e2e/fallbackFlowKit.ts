@@ -50,6 +50,8 @@ export interface PersistedState {
   setAsideQuestions?: Record<string, SetAsideQuestionRecord[]>;
   /** How many questions each topic ever set aside: the counter the record ids come from, keyed by the topic. */
   setAsideQuestionSequences?: Record<string, number>;
+  /** The question wait each topic chose for itself with `/question_wait` (a topic that follows General has none), keyed by the topic. */
+  questionWaitOverrides?: Record<string, string>;
   /** The compact-on-idle instants each topic's conversation carries (dropped when the conversation ends), keyed by the topic. */
   compactIdleTracking?: Record<string, CompactIdleTrackingEntry>;
   [field: string]: unknown;

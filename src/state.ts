@@ -28,6 +28,7 @@ import type { ClaudeApiSpend, ClaudeCostBaseline } from './utils/claudeApiSpend'
 import type { ClaudeApiCreditSpend } from './utils/claudeApiCredit';
 import type { OpenCodeProviderUsageRecord } from './utils/openCodeUsage';
 import { pushRecentModel } from './utils/modelRecentPlan';
+import { checkIsQuestionWaitChoice, type QuestionWaitChoice } from './utils/questionWaitPlan';
 import { normaliseFallbackChain, type FallbackChainEntry } from './utils/fallbackChain';
 import type { TodoProjectOverride } from './todos/projects';
 import type { ScheduleRecord } from './scheduler/types';
@@ -656,6 +657,12 @@ export interface StateV1 {
    * keyboard that stayed live can never answer a newer question (`createSetAsideQuestionId`).
    */
   setAsideQuestionSequences?: Record<string, number>;
+  /**
+   * The question wait (`/question_wait`, `utils/questionWaitPlan.ts`) a topic chose for itself, keyed by {@link SessionKey} string:
+   * how long the agent's unanswered question waits before it is set aside. A topic with no entry follows the instance value
+   * (`settings.json` `questionWait`, else the built-in default). Optional so older state files stay valid.
+   */
+  questionWaitOverrides?: Record<string, QuestionWaitChoice>;
   /**
    * Armed auto-retries after a provider-side API error, keyed by
    * {@link SessionKey} string. Persisted so a pending retry survives a bot
@@ -2349,6 +2356,31 @@ export class StateStore {
       }
       if (this.state.botSkillsOverrides?.[k] === enabled) return;
       (this.state.botSkillsOverrides ??= {})[k] = enabled;
+      this.scheduleSave();
+    });
+  }
+
+  // ── The question wait (`/question_wait`) ──
+
+  /** @description The topic's own question wait, or `undefined` when it follows the instance value (a value no choice names counts as none). */
+  getQuestionWaitOverride(key: SessionKey): QuestionWaitChoice | undefined {
+    const choice = this.state.questionWaitOverrides?.[keyToString(key)];
+    return checkIsQuestionWaitChoice(choice) ? choice : undefined;
+  }
+
+  /** @description Set the topic's own question wait (`null` = follow the instance value again; an emptied map is dropped). Debounced. */
+  async setQuestionWaitOverride(key: SessionKey, choice: QuestionWaitChoice | null): Promise<void> {
+    const k = keyToString(key);
+    await this.withLock(key, async () => {
+      if (choice === null) {
+        if (!this.state.questionWaitOverrides || !(k in this.state.questionWaitOverrides)) return;
+        delete this.state.questionWaitOverrides[k];
+        if (Object.keys(this.state.questionWaitOverrides).length === 0) delete this.state.questionWaitOverrides;
+        this.scheduleSave();
+        return;
+      }
+      if (this.state.questionWaitOverrides?.[k] === choice) return;
+      (this.state.questionWaitOverrides ??= {})[k] = choice;
       this.scheduleSave();
     });
   }

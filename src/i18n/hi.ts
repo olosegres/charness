@@ -73,6 +73,7 @@ export const hiDict: Record<string, string> = {
     '/stt — वॉइस रिकग्निशन सेटिंग्स\n' +
     '/update — बॉट अपडेट: ऑटोमैटिक, सिर्फ़ सूचना, बंद\n' +
     '/bot\\_skills — एजेंटों के लिए बॉट के skills: चालू / बंद\n' +
+    '/question\\_wait — एजेंट अपने प्रश्न के उत्तर का कितना इंतज़ार करता है, फिर आगे बढ़ता है: हर विषय का डिफ़ॉल्ट\n' +
     '/task\\_agents — ट्रैकर के कितने टास्क एजेंट एक साथ काम कर सकते हैं\n' +
     '/runners — एजेंटों के टेस्ट और बिल्ड की मशीनें\n' +
     '/todo — हर प्रोजेक्ट के एजेंटों की कार्य सूचियाँ; उनकी सेटिंग्स\n' +
@@ -97,6 +98,7 @@ export const hiDict: Record<string, string> = {
     '/compact_on_idle — निष्क्रियता के बाद स्वतः संक्षेपण (टॉगल)\n' +
     '/compact_self_review — संक्षेपण पर एजेंट का आत्म-विश्लेषण (टॉगल)\n' +
     '/bot_skills — एजेंटों के लिए बॉट के skills (इस विषय के लिए चालू / बंद)\n' +
+    '/question_wait — एजेंट अपने प्रश्न पर आपके उत्तर का कितना इंतज़ार करता है, फिर आगे बढ़ता है\n' +
     '/todo — एजेंट की प्रकाशित कार्य सूची और उसका प्रोजेक्ट\n' +
     '/limits — हर खाते और प्रदाता का उपयोग; इस टॉपिक को बदलने के लिए किसी पर टैप करें\n' +
     '/limits_autoswitch — उपयोग-सीमा पर मॉडल का स्वचालित स्विच (वैकल्पिक सूची, स्विच, प्रतीक्षा)\n' +
@@ -540,6 +542,18 @@ export const hiDict: Record<string, string> = {
   'botSkills.setGeneralConfirmation': '✅ बॉट के skills: सभी विषयों के लिए {state} (विषय की अपनी पसंद फिर भी लागू रहती है)। चल रहा एजेंट अपने अगले आरंभ तक अपने skills रखता है; OpenCode सर्वर बॉट के अगले आरंभ पर यह मान अपनाएगा।',
   'botSkills.setTopicConfirmation': '✅ बॉट के skills: इस विषय के लिए {state}।',
   'botSkills.followGeneralConfirmation': '✅ इस विषय में बॉट के skills फिर से General जैसे हैं: {state}।',
+  'questionWait.titleGeneral': '⏳ एजेंट अपने प्रश्न पर आपके उत्तर का कितना इंतज़ार करता है, उसके बाद वह उसके बिना आगे बढ़ जाता है — सभी विषयों का डिफ़ॉल्ट: {value}',
+  'questionWait.titleTopic': '⏳ एजेंट अपने प्रश्न पर आपके उत्तर का कितना इंतज़ार करता है, उसके बाद वह उसके बिना आगे बढ़ जाता है — इस विषय के लिए: {value}',
+  'questionWait.explanationText': 'प्रतीक्षा समाप्त होने पर एजेंट को दूसरा काम जारी रखने को कहा जाता है, और प्रश्न अपने बटनों और पिन के साथ यहीं रहता है: आप बाद में, चाहे कितनी भी देर से, उसका उत्तर दे सकते हैं, और उत्तर एजेंट तक एक नए संदेश के रूप में पहुँचता है।',
+  'questionWait.generalScopeNote': 'यह हर उस विषय का डिफ़ॉल्ट है जिसकी अपनी कोई पसंद नहीं है।',
+  'questionWait.valueAsGeneral': 'General जैसा — {value}',
+  'questionWait.dontWait': 'इंतज़ार न करें',
+  'questionWait.tenMinutes': '10 मिनट',
+  'questionWait.thirtyMinutes': '30 मिनट',
+  'questionWait.oneHour': '1 घंटा',
+  'questionWait.untilAnswered': 'मेरे उत्तर की प्रतीक्षा करें',
+  'questionWait.sameAsGeneralButton': 'General जैसा ({value})',
+  'questionWait.appliedToast': '✅ {value}',
   'taskAgents.noLimitValue': 'कोई सीमा नहीं',
   'taskAgents.title': '🧵 एक साथ काम करने वाले टास्क एजेंट, पूरे बॉट के लिए: {value} — {source}',
   'taskAgents.sourceGeneral': 'General में तय',

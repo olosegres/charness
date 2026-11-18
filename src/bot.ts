@@ -467,6 +467,7 @@ import { answerCallbackWithFittedText, answerCallbackWithWholeText } from './con
 import { createCompaction } from './connectors/telegram/commands/compaction';
 import { createAutoContinueLimits, appendAutoContinueLimitsHint } from './connectors/telegram/commands/autoContinueLimits';
 import { createBotSkills } from './connectors/telegram/commands/botSkills';
+import { createQuestionWait } from './connectors/telegram/commands/questionWait';
 import { createTopicAccess } from './connectors/telegram/commands/topicAccess';
 import { createTaskAgents } from './connectors/telegram/commands/taskAgents';
 import { createRunners } from './connectors/telegram/commands/runners';
@@ -6517,8 +6518,8 @@ const {
   sendQuestionMessage,
   deliverLateAnswer: (key, text) => withThreadLocale(key, () => deliverLateAnswerPrompt(key, text)),
   markNeedsNewMessage,
-  // The instance value `settings.json` holds (`questionWait`); a topic's own choice arrives with the `/question_wait` command.
-  getQuestionWaitChoice: () => resolveQuestionWait(undefined, readInstanceQuestionWait() ?? undefined),
+  // The topic's own choice (`/question_wait`), else the instance value `settings.json` holds (`questionWait`), else the default.
+  getQuestionWaitChoice: (key) => resolveQuestionWait(state.getQuestionWaitOverride(key), readInstanceQuestionWait() ?? undefined),
   shortenedWaitMs: ENV.testTimings.questionSetAsideWaitMs,
   postQuestionAnew: postAgentQuestion,
 });
@@ -8287,6 +8288,17 @@ const { registerBotSkillsCommands, registerBotSkillsCallbacks } = createBotSkill
 
 registerBotSkillsCommands();
 
+// ── The question wait (`/question_wait`): `connectors/telegram/commands/questionWait.ts`, `utils/questionWaitPlan.ts` ──
+const { registerQuestionWaitCommands, registerQuestionWaitCallbacks } = createQuestionWait({
+  ...botCore,
+  readInstanceQuestionWait,
+  getSettingsPath: () => getInstanceSettingsPath(),
+  // A changed wait applies to the questions that wait now too: their timers are set again, counted from the moment each was asked.
+  noteQuestionWaitChanged: (key) => rearmQuestionSetAsideTimers(key),
+});
+
+registerQuestionWaitCommands();
+
 // ── Who may talk to the agent in a topic (`/access`): `connectors/telegram/commands/topicAccess.ts`, `topicTalkers.ts` ──
 const { registerTopicAccessCommands, registerTopicAccessCallbacks } = createTopicAccess({
   ...botCore,
@@ -10015,7 +10027,7 @@ const botCommands = new Set([
   'start', 'claude', 'opencode', 'oc', 'terminal', 'agent', 'sessions', 'resume', 'cancel', 'model', 'connect',
   'disconnect', 'stop', 'stopall', 'stop-all', 'quit-all', 'status', 'c', 'y', 'n', 'enter', 'up', 'down', 'tab', 'esc', 'escape', 'interrupt', 'output', 'clear_messages',
   'bind', 'topic', 'unbind', 'where', 'ls', 'list', 'new', 'whoami', 'version', 'help', 'language', 'lang',
-  'doctor', 'mcp', 'rename_session', 'compact', 'compact_on_idle', 'compact_summary', 'compact_self_review', 'bot_skills', 'task_agents', 'runners', 'auto_continue_limits', 'limits', 'limits_autoswitch', 'trace', 'timestamps', 'timezone', 'schedule', 'reminders', 'todo', 'thinking', 'tool_results',
+  'doctor', 'mcp', 'rename_session', 'compact', 'compact_on_idle', 'compact_summary', 'compact_self_review', 'bot_skills', 'question_wait', 'task_agents', 'runners', 'auto_continue_limits', 'limits', 'limits_autoswitch', 'trace', 'timestamps', 'timezone', 'schedule', 'reminders', 'todo', 'thinking', 'tool_results',
   'subagent', 'claude_mode', 'effort', 'verbosity', 'quit', 'q', 'quitall', 'pair', 'account', 'accounts', 'fallback', 'stt', 'voice', 'speech', 'update', 'access',
 ]);
 
@@ -11494,6 +11506,7 @@ registerQuestionSetAsideCallbacks(bot);
 
 registerAutoContinueLimitsCallbacks();
 registerBotSkillsCallbacks();
+registerQuestionWaitCallbacks();
 registerTopicAccessCallbacks();
 registerTaskAgentsCallbacks();
 registerRunnersCallbacks();
@@ -13028,6 +13041,22 @@ function handleSubagentStatus(key: SessionKey, payload: SubagentStatusEvent): vo
   })();
 }
 
+/**
+ * @description The question wait changed (`/question_wait`): the questions that wait now are timed again from the moment each was
+ * asked — one conversation's (`key`), or, when the instance value changed, every waiting one (those that follow it get a new moment,
+ * the others keep theirs). A wait that is already over sets the question aside at once; «Wait for my answer» takes the timer off.
+ */
+function rearmQuestionSetAsideTimers(key: SessionKey | null): void {
+  if (key !== null) {
+    armQuestionSetAsideTimer(key);
+    return;
+  }
+  for (const keyString of pendingQuestions.keys()) {
+    const pendingKey = tryKeyFromString(keyString);
+    if (pendingKey) armQuestionSetAsideTimer(pendingKey);
+  }
+}
+
 function handleAgentQuestion(key: SessionKey, questionData: OpenCodePendingQuestion): void {
   console.log(`[Bot] question ${keyToString(key)} (${questionData.requestId}): ${questionData.questions.length}`);
   // Idempotent across restart: this handler ALSO fires from the adapter's
@@ -13573,6 +13602,7 @@ export const COMMANDS_MENU = [
   { command: 'compact_summary', description: '📄 Post the compaction summary (toggle)' },
   { command: 'compact_self_review', description: '💡 Agent self-review on compaction: its mistakes and what to change in its instructions' },
   { command: 'bot_skills', description: '🧰 The bot\'s own skills for agents (on/off)' },
+  { command: 'question_wait', description: '⏳ How long the agent waits for your answer to its question' },
   { command: 'task_agents', description: '🧵 How many tracker task agents work at once' },
   { command: 'runners', description: '🖥 Runners — machines for the agents\' tests and builds' },
   { command: 'accounts', description: '👤 Claude accounts and OpenCode providers (switch, add, re-login, remove, connect, disconnect)' },

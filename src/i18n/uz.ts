@@ -73,6 +73,7 @@ export const uzDict: Record<string, string> = {
     '/stt — ovozni aniqlash sozlamalari\n' +
     '/update — bot yangilanishlari: avtomatik, faqat xabar, o‘chiq\n' +
     '/bot\\_skills — botning agentlar uchun skills’lari: yoqish / o‘chirish\n' +
+    '/question\\_wait — agent savoliga javobni qancha kutib, so‘ng davom etadi: barcha mavzular uchun standart\n' +
     '/task\\_agents — tracker vazifalari bo‘yicha nechta agent bir vaqtda ishlashi mumkin\n' +
     '/runners — agentlarning test va buildlari uchun mashinalar\n' +
     '/todo — barcha loyihalar agentlarining vazifa ro\'yxatlari; ularning sozlamalari\n' +
@@ -97,6 +98,7 @@ export const uzDict: Record<string, string> = {
     '/compact_on_idle — bo‘sh turgandan keyin avtosiqish (almashtirgich)\n' +
     '/compact_self_review — siqishda agentning o‘z-o‘zini tahlili (almashtirgich)\n' +
     '/bot_skills — botning agentlar uchun skills’lari (bu mavzu uchun yoqish / o‘chirish)\n' +
+    '/question_wait — agent savoliga javobingizni qancha kutib, so‘ng davom etadi\n' +
     '/todo — agentning e\'lon qilingan vazifalar ro\'yxati va uning loyihasi\n' +
     '/limits — har bir hisob va provayderning sarfi; bu mavzuni almashtirish uchun birini bosing\n' +
     '/limits_autoswitch — foydalanish limitida modelni avtomatik almashtirish (zaxira ro‘yxat, almashtirish, kutish)\n' +
@@ -540,6 +542,18 @@ export const uzDict: Record<string, string> = {
   'botSkills.setGeneralConfirmation': '✅ Botning skills’lari: BARCHA mavzular uchun {state} (mavzuning o‘z tanlovi kuchda qoladi). Ishlayotgan agent o‘z skills’ini keyingi ishga tushishigacha saqlaydi; OpenCode serveri qiymatni botning keyingi ishga tushishida qo‘llaydi.',
   'botSkills.setTopicConfirmation': '✅ Botning skills’lari: bu mavzu uchun {state}.',
   'botSkills.followGeneralConfirmation': '✅ Botning skills’lari bu mavzuda yana General’ga ergashadi: {state}.',
+  'questionWait.titleGeneral': '⏳ Agent o‘z savoliga javobingizni qancha kutadi, so‘ng usiz davom etadi — BARCHA mavzular uchun standart: {value}',
+  'questionWait.titleTopic': '⏳ Agent o‘z savoliga javobingizni qancha kutadi, so‘ng usiz davom etadi — bu mavzu: {value}',
+  'questionWait.explanationText': 'Kutish tugagach, agentga boshqa ish bilan davom etish aytiladi, savol esa tugmalari va mahkamlanishi bilan shu yerda qoladi: unga keyinroq, qancha vaqt o‘tmasin, javob berishingiz mumkin va javob agentga yangi xabar sifatida yetib boradi.',
+  'questionWait.generalScopeNote': 'Bu o‘z tanlovi yo‘q har bir mavzu uchun standart qiymat.',
+  'questionWait.valueAsGeneral': 'General kabi — {value}',
+  'questionWait.dontWait': 'Kutmaslik',
+  'questionWait.tenMinutes': '10 daqiqa',
+  'questionWait.thirtyMinutes': '30 daqiqa',
+  'questionWait.oneHour': '1 soat',
+  'questionWait.untilAnswered': 'Javobimni kutish',
+  'questionWait.sameAsGeneralButton': 'General kabi ({value})',
+  'questionWait.appliedToast': '✅ {value}',
   'taskAgents.noLimitValue': 'cheklovsiz',
   'taskAgents.title': '🧵 Bir vaqtda ishlaydigan vazifa agentlari, butun bot uchun: {value} — {source}',
   'taskAgents.sourceGeneral': 'General’da belgilangan',

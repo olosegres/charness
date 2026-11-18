@@ -77,6 +77,7 @@ export const ruDict: Record<string, string> = {
     '/stt — настройки распознавания голоса\n' +
     '/update — обновления бота: автоматически, только уведомлять, выкл\n' +
     '/bot\\_skills — скиллы бота для агентов: вкл / выкл\n' +
+    '/question\\_wait — сколько агент ждёт ответа на свой вопрос, прежде чем продолжить: значение по умолчанию для всех топиков\n' +
     '/task\\_agents — сколько агентов по задачам трекера могут работать одновременно\n' +
     '/runners — машины для тестов и сборок агентов\n' +
     '/todo — списки задач агентов всех проектов; их настройки\n' +
@@ -101,6 +102,7 @@ export const ruDict: Record<string, string> = {
     '/compact_on_idle — авто-сжатие после простоя (переключатель)\n' +
     '/compact_self_review — самоанализ агента при сжатии (переключатель)\n' +
     '/bot_skills — скиллы бота для агентов (вкл / выкл для этого топика)\n' +
+    '/question_wait — сколько агент ждёт вашего ответа на свой вопрос, прежде чем продолжить\n' +
     '/todo — опубликованный список задач агента и его проект\n' +
     '/limits — расход по всем аккаунтам и провайдерам; нажми на один, чтобы переключить топик\n' +
     '/limits_autoswitch — автоматическое переключение модели при лимите (запасные модели, переключение, ожидание)\n' +
@@ -544,6 +546,18 @@ export const ruDict: Record<string, string> = {
   'botSkills.setGeneralConfirmation': '✅ Скиллы бота: {state} для ВСЕХ топиков (собственный выбор топика продолжает действовать). Работающий агент сохраняет свои скиллы до следующего запуска; сервер OpenCode применит значение при следующем запуске бота.',
   'botSkills.setTopicConfirmation': '✅ Скиллы бота: {state} для этого топика.',
   'botSkills.followGeneralConfirmation': '✅ Скиллы бота в этом топике снова как в General: {state}.',
+  'questionWait.titleGeneral': '⏳ Сколько агент ждёт вашего ответа на свой вопрос, прежде чем продолжить без него — значение по умолчанию для ВСЕХ топиков: {value}',
+  'questionWait.titleTopic': '⏳ Сколько агент ждёт вашего ответа на свой вопрос, прежде чем продолжить без него — этот топик: {value}',
+  'questionWait.explanationText': 'Когда ожидание заканчивается, агенту сообщают продолжать другую работу, а вопрос остаётся здесь с кнопками и закрепом: на него всё ещё можно ответить, сколько бы ни прошло времени, и ответ дойдёт до агента новым сообщением.',
+  'questionWait.generalScopeNote': 'Это значение по умолчанию для каждого топика без собственного выбора.',
+  'questionWait.valueAsGeneral': 'как в General — {value}',
+  'questionWait.dontWait': 'Не ждать',
+  'questionWait.tenMinutes': '10 мин',
+  'questionWait.thirtyMinutes': '30 мин',
+  'questionWait.oneHour': '1 ч',
+  'questionWait.untilAnswered': 'Ждать моего ответа',
+  'questionWait.sameAsGeneralButton': 'Как в General ({value})',
+  'questionWait.appliedToast': '✅ {value}',
   'taskAgents.noLimitValue': 'без ограничения',
   'taskAgents.title': '🧵 Агентов по задачам одновременно, на весь бот: {value} — {source}',
   'taskAgents.sourceGeneral': 'задано в General',

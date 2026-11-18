@@ -17,6 +17,7 @@ import {
   buildLateAnswerPrompt,
   buildQuestionSetAsideText,
   checkIsQuestionSetAsideDue,
+  checkIsQuestionWaitChoice,
   checkIsSetAsideRecordMessage,
   createSetAsideQuestionId,
   defaultQuestionWaitChoice,
@@ -86,6 +87,13 @@ describe('resolveQuestionWait', () => {
   it('falls back to 30 minutes when neither is set', () => {
     assert.equal(defaultQuestionWaitChoice, 'thirtyMinutes');
     assert.equal(resolveQuestionWait(undefined, undefined), 'thirtyMinutes');
+  });
+});
+
+describe('checkIsQuestionWaitChoice', () => {
+  it('is true for each choice and for nothing else: a hand-edited value, another case, nothing', () => {
+    for (const choice of questionWaitChoices) assert.equal(checkIsQuestionWaitChoice(choice), true, choice);
+    for (const other of ['forever', 'THIRTYMINUTES', '30', '', undefined]) assert.equal(checkIsQuestionWaitChoice(other), false, String(other));
   });
 });
 

@@ -73,6 +73,7 @@ export const jaDict: Record<string, string> = {
     '/stt — 音声認識の設定\n' +
     '/update — ボットの更新：自動、通知のみ、オフ\n' +
     '/bot\\_skills — エージェント向けボットのスキル：オン / オフ\n' +
+    '/question\\_wait — エージェントが質問への回答を待つ時間（すべてのトピックの既定値）\n' +
     '/task\\_agents — トラッカーのタスクエージェントを同時に動かせる数\n' +
     '/runners — エージェントのテストとビルド用マシン\n' +
     '/todo — 全プロジェクトのエージェントのタスクリストと設定\n' +
@@ -97,6 +98,7 @@ export const jaDict: Record<string, string> = {
     '/compact_on_idle — アイドル後に自動圧縮（切り替え）\n' +
     '/compact_self_review — 圧縮時のエージェントの自己分析（切り替え）\n' +
     '/bot_skills — エージェント向けボットのスキル（このトピックのオン / オフ）\n' +
+    '/question_wait — エージェントが質問への回答を待ってから先へ進むまでの時間\n' +
     '/todo — エージェントが公開したタスクリストとそのプロジェクト\n' +
     '/limits — 各アカウントとプロバイダーの使用状況。タップするとこのトピックを切り替えます\n' +
     '/limits_autoswitch — 使用量上限でのモデル自動切り替え（予備リスト、切り替え、待機）\n' +
@@ -540,6 +542,18 @@ export const jaDict: Record<string, string> = {
   'botSkills.setGeneralConfirmation': '✅ ボットのスキル: すべてのトピックで {state}（トピックごとの選択は引き続き有効）。実行中のエージェントは次の起動まで自分のスキルを保ちます。OpenCode のサーバーはボットの次の起動時にこの値に従います。',
   'botSkills.setTopicConfirmation': '✅ ボットのスキル: このトピックで {state}。',
   'botSkills.followGeneralConfirmation': '✅ このトピックのボットのスキルは再び General に従います：{state}。',
+  'questionWait.titleGeneral': '⏳ エージェントが質問への回答を待ち、回答なしで先へ進むまでの時間 — すべてのトピックの既定値: {value}',
+  'questionWait.titleTopic': '⏳ エージェントが質問への回答を待ち、回答なしで先へ進むまでの時間 — このトピック: {value}',
+  'questionWait.explanationText': '待ち時間が終わると、エージェントは他の作業を続けるよう伝えられ、質問はボタンとピンのままここに残ります。あとからいつでも回答でき、回答は新しいメッセージとしてエージェントに届きます。',
+  'questionWait.generalScopeNote': '独自の設定を持たないすべてのトピックの既定値です。',
+  'questionWait.valueAsGeneral': 'General と同じ — {value}',
+  'questionWait.dontWait': '待たない',
+  'questionWait.tenMinutes': '10分',
+  'questionWait.thirtyMinutes': '30分',
+  'questionWait.oneHour': '1時間',
+  'questionWait.untilAnswered': '私の回答を待つ',
+  'questionWait.sameAsGeneralButton': 'General に合わせる（{value}）',
+  'questionWait.appliedToast': '✅ {value}',
   'taskAgents.noLimitValue': '無制限',
   'taskAgents.title': '🧵 同時に動くタスクエージェント（ボット全体）：{value} — {source}',
   'taskAgents.sourceGeneral': 'General で設定',
