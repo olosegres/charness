@@ -106,6 +106,8 @@ Customers need no separate Charness fee just to use the embedded component withi
 
 **Is it open source?** New releases under these terms are source-available, not OSI open source. Every release before 4.0 was published under MIT and remains MIT. GitHub may classify the custom license as "Other".
 
+**Can I contribute?** Yes, pull requests are welcome: by opening one you agree to the [Contributor License Agreement](../CLA.md). You keep your copyright; the licensor may ship your contribution under the public and the commercial license. Contributing for a company? Write to charnesshub@gmail.com first.
+
 **How do we buy?** There is no online checkout: write to charnesshub@gmail.com (information: https://olosegres.github.io/charness/commercial/). We reply with a written order and invoice stating group scope, assessment/bands, fixed terms, term dates, list price, any discount and its condition, net fee and taxes. No user quantity is ordered. For procurement or custom terms, contact the same address.
 
 **Refunds and referrals?** Full refund within 30 days after any payment, including renewal or a multi-year prepayment (no pro-rata refund of a prepayment after those 30 days; one such no-reason refund per group in any 12 months); corresponding paid rights end, subject to independent rights and valid installed OEM-customer protection. Approved partners under a separate agreement earn 20% of collected license fees (after any discount) for referred new customers' first 12 months, excluding taxes/refunds/chargebacks. No automatic renewal commission, self-referrals or procurement kickbacks; this is separate from consulting income.

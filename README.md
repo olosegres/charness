@@ -163,3 +163,4 @@ Full write-up: [Vibe-coding by voice, from my phone](https://dev.to/olosegres/vi
 - **One annual license per organization group above that** — from $500 to $60,000 by the higher of its revenue band and its people band, with unlimited users, agents and machines and no seats. Buy by e-mail: [commercial page](https://olosegres.github.io/charness/commercial/), [commercial terms](LICENSE-COMMERCIAL.md).
 - Every release before 4.0 was published under MIT and stays MIT.
 - Questions and examples: [licensing FAQ](docs/licensing-faq.md); moving from 3.x: [MIGRATION_3_TO_4.md](MIGRATION_3_TO_4.md).
+- Pull requests are welcome: by opening one you agree to the [Contributor License Agreement](CLA.md) — see [CONTRIBUTING.md](CONTRIBUTING.md).
