@@ -54,6 +54,7 @@ import {
   removeIsolatedInstanceSync,
   writeFakeClaudeLauncher,
   writeInstanceEnvFile,
+  writeInstanceSettingsFile,
   type IsolatedInstanceLayout,
 } from './e2e/isolatedCharness';
 import { getTelegramFlowTestTimingsEnv } from './telegramE2e/telegramFlowTimings';
@@ -169,6 +170,8 @@ describe('A pending question the idle compaction re-asks, end to end: built char
     if (!fs.existsSync(builtCliPath)) throw new Error('Built CLI is missing. Run `yarn build` before `yarn test`.');
     layout = createIsolatedInstanceLayout('charness-reask-', [projectFolder], getFlowDeadlineMs());
     defaultTmuxSessionsBefore = listTmuxSessions([]);
+    // The idle fire asks the question again only for «Wait for my answer»; any other wait sets it aside (`questionSetAsideIdleE2e.test.ts`).
+    writeInstanceSettingsFile(layout, { questionWait: 'untilAnswered' });
 
     process.on('exit', removeInstanceSync);
     process.once('SIGINT', exitOnSignal);

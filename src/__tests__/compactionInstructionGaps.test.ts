@@ -146,6 +146,7 @@ describe('the self-review section of a compaction summary, through the compactio
       pendingQuestions,
       clearPendingQuestion: (clearedKey) => { pendingQuestions.delete(keyToString(clearedKey)); },
       closeQuestionMessage: async () => true,
+      setQuestionAsideAtIdle: async () => false,
       idleWindowMs,
       checkIsLimitWaitArmed: () => false,
       // The last step of the idle fire (after the compaction and the posts): the stop of the conversation.

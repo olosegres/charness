@@ -101,6 +101,7 @@ import {
   removeIsolatedInstanceSync,
   writeFakeClaudeLauncher,
   writeInstanceEnvFile,
+  writeInstanceSettingsFile,
   type IsolatedInstanceLayout,
 } from './e2e/isolatedCharness';
 import { getStatePath, readPersistedState, restartCharnessWithState, startCharnessOnInstance } from './e2e/fallbackFlowKit';
@@ -754,6 +755,8 @@ describe('A question the agent asks stays in the topic however it ends, end to e
 describe('A question the idle compaction re-asked stays too, when the conversation ends before it is used, end to end: built charness, fake Bot API', () => {
   before(async () => {
     await setUpInstance('charness-qkept-idle-', reaskTimeoutMs, { AGENT_IDLE_MINUTES: idleWindowMinutes });
+    // The idle fire asks the question again only for «Wait for my answer»; any other wait sets it aside (`questionSetAsideIdleE2e.test.ts`).
+    writeInstanceSettingsFile(getLayout(), { questionWait: 'untilAnswered' });
   });
 
   after(tearDownInstance);

@@ -326,6 +326,49 @@ describe('setPendingQuestionAside', () => {
   });
 });
 
+describe('setPendingQuestionAsideAtIdle — the idle mark finds the question waiting', () => {
+  it('sets the waiting question aside at once, whatever time is left of its wait (the wait choices short of «until answered»)', async () => {
+    for (const choice of ['dontWait', 'tenMinutes', 'thirtyMinutes', 'oneHour'] as const) {
+      const harness = createHarness({ choice });
+      harness.pendingQuestions.set(keyString, createPending('req_a', { askedAt: Date.now() - 1000 }));
+
+      assert.equal(await harness.setAside.setPendingQuestionAsideAtIdle(key), true, choice);
+
+      assert.equal(harness.adapterCalls.length, 1, `${choice}: the agent is told to go on`);
+      assert.equal(harness.pendingQuestions.has(keyString), false, `${choice}: nothing waits any more`);
+      assert.equal(harness.savedRecords.get(keyString)?.length, 1, `${choice}: the question stays open as a record`);
+    }
+  });
+
+  it('«Wait for my answer» is left alone: the question keeps waiting and the agent is not told anything', async () => {
+    const harness = createHarness({ choice: 'untilAnswered' });
+    harness.pendingQuestions.set(keyString, createPending('req_a'));
+
+    assert.equal(await harness.setAside.setPendingQuestionAsideAtIdle(key), false);
+
+    assert.deepEqual(harness.adapterCalls, []);
+    assert.equal(harness.pendingQuestions.has(keyString), true);
+    assert.equal(harness.savedRecords.has(keyString), false);
+  });
+
+  it('with no question waiting there is nothing to set aside', async () => {
+    const harness = createHarness();
+
+    assert.equal(await harness.setAside.setPendingQuestionAsideAtIdle(key), false);
+
+    assert.deepEqual(harness.adapterCalls, []);
+  });
+
+  it('answers false when the agent\'s side could not set it aside, so the idle fire keeps its own flow', async () => {
+    const harness = createHarness({ adapterReturns: false, resync: 'held' });
+    harness.pendingQuestions.set(keyString, createPending('req_a'));
+
+    assert.equal(await harness.setAside.setPendingQuestionAsideAtIdle(key), false);
+
+    assert.equal(harness.pendingQuestions.has(keyString), true, 'the question still waits');
+  });
+});
+
 describe('setPendingQuestionAside — the agent\'s side does not hold the question', () => {
   it('json-stream (no registry to ask): the CLI is the authority, so the bot\'s copy is stale — closed as not answered, one log line', async () => {
     const harness = createHarness({ adapterReturns: false });

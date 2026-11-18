@@ -618,6 +618,15 @@ export function writeFakeClaudeTuiLauncher(layout: IsolatedInstanceLayout): stri
   return claudeBin;
 }
 
+/**
+ * @description Set fields of the instance's `settings.json` before its first start, on top of the baseline every layout starts
+ * with (automatic updates off). A flow that needs the idle fire to keep today's way with a waiting question writes
+ * `{ questionWait: 'untilAnswered' }` here.
+ */
+export function writeInstanceSettingsFile(layout: IsolatedInstanceLayout, settings: object): void {
+  fs.writeFileSync(path.join(layout.testRoot, isolatedSettingsFileName), `${JSON.stringify({ ...isolatedBaselineSettings, ...settings })}\n`);
+}
+
 /** @description Write the instance's env file (`NAME=value` lines, owner-only). */
 export function writeInstanceEnvFile(layout: IsolatedInstanceLayout, variables: Record<string, string>): void {
   fs.writeFileSync(layout.envFile, `${Object.entries(variables).map(([name, value]) => `${name}=${value}`).join('\n')}\n`, { mode: 0o600 });

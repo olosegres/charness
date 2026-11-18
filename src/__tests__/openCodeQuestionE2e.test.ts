@@ -43,6 +43,7 @@ import {
   removeIsolatedInstanceSync,
   writeFakeClaudeLauncher,
   writeInstanceEnvFile,
+  writeInstanceSettingsFile,
   type IsolatedInstanceLayout,
 } from './e2e/isolatedCharness';
 import { readPersistedState, startCharnessOnInstance } from './e2e/fallbackFlowKit';
@@ -192,6 +193,8 @@ function assertKeptWithNote(message: FakeTelegramMessage, note: string, asked: A
 describe('A question the idle compaction re-asked stays when the OpenCode agent asks a new one, end to end: built charness, fake Bot API, fake OpenCode', () => {
   before(async () => {
     await setUpInstance('charness-ocask-idle-', { AGENT_IDLE_MINUTES: idleWindowMinutes });
+    // The idle fire asks the question again only for «Wait for my answer»; any other wait sets it aside (`questionSetAsideIdleE2e.test.ts`).
+    writeInstanceSettingsFile(getLayout(), { questionWait: 'untilAnswered' });
   });
 
   after(tearDownInstance);

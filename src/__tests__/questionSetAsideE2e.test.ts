@@ -72,6 +72,7 @@ import {
   type IsolatedInstanceLayout,
 } from './e2e/isolatedCharness';
 import { readPersistedState, restartCharnessWithState, startCharnessOnInstance } from './e2e/fallbackFlowKit';
+import { assertShownAsSetAside as assertShownAsSetAsideInTopic, assertToldToGoOn, firstAskedQuestion, type ShownQuestion } from './e2e/setAsideFlowKit';
 import { getTelegramFlowTestTimingsEnv } from './telegramE2e/telegramFlowTimings';
 import type { SetAsideQuestionRecord } from '../types';
 
@@ -186,25 +187,9 @@ async function waitForSetAsideDeny(description: string, responsesBefore: number)
   return getControlResponses()[responsesBefore];
 }
 
-/** What the set-aside text tells the agent, asserted on the message the fake read as its tool result. */
-function assertToldToGoOn(response: FakeClaudeControlResponse): void {
-  assert.equal(response.behavior, 'deny', 'the question\'s tool call is denied, not answered');
-  assert.ok(response.message?.startsWith('[Charness] The user has not answered yet (asked '), `the agent is told nobody answered: ${response.message}`);
-  assert.ok(response.message?.includes('This is NOT an answer.'), 'and that this is not an answer');
-  assert.ok(response.message?.includes('do not ask it again and do not wait for it'), 'not to ask it again or wait');
-  assert.ok(response.message?.includes('Go on with work that does not depend on it'), 'to go on');
-  assert.ok(response.message?.includes('[Late answer to your question …]'), 'and how the answer will come');
-  assert.notEqual(response.message, 'User declined to answer the question.', 'it is not the abandonment\'s decline');
-}
-
-/** The question is on screen as set aside: as asked, the note last, the same options as buttons that name the record, still pinned. */
-function assertShownAsSetAside(message: FakeTelegramMessage, record: SetAsideQuestionRecord, question: { header: string; question: string; labels: readonly string[] }, optionCount: number): void {
-  const current = readKeptMessage(message);
-  for (const part of [question.header, question.question, ...question.labels]) assert.ok(current.text.includes(part), `the question's «${part.slice(0, 40)}…» stays: ${current.text}`);
-  assert.ok(current.text.endsWith(`\n\n${setAsideNote}`), `the text ends with the set-aside note: ${current.text.slice(-120)}`);
-  assert.notEqual(current.reply_markup, undefined, 'the buttons stay');
-  assert.deepEqual(topic.getKeyboardData(current), Array.from({ length: optionCount }, (_, optionIndex) => [`qs_${record.id}_${optionIndex}`]), 'one button per option, naming the record');
-  assert.ok(fakeTelegram.listPinnedMessageIds().includes(current.message_id), 'the pin stays');
+/** The question is on screen as set aside (`setAsideFlowKit.ts`) — this flow's topic and fake Bot API. */
+function assertShownAsSetAside(message: FakeTelegramMessage, record: SetAsideQuestionRecord, question: ShownQuestion, optionCount: number): void {
+  assertShownAsSetAsideInTopic(fakeTelegram, topic, message, record, question, optionCount);
 }
 
 /** Ask a question and wait until it is saved as the newest set-aside record: its message and the record. */
@@ -218,7 +203,6 @@ async function askAndWaitForSetAside(promptLabel: string): Promise<{ question: F
   return { question, record };
 }
 
-const firstQuestion = { header: fakeAskQuestion.header, question: fakeAskQuestion.question, labels: [fakeAskQuestion.shortOptionLabel, fakeAskQuestion.longOptionLabel] } as const;
 const secondQuestion = { header: fakeAskSecondQuestion.header, question: fakeAskSecondQuestion.question, labels: [fakeAskSecondQuestion.firstOptionLabel, fakeAskSecondQuestion.secondOptionLabel] } as const;
 
 describe('A question nobody answers is set aside, end to end: built charness, fake Bot API', () => {
@@ -314,7 +298,7 @@ describe('A question nobody answers is set aside, end to end: built charness, fa
     assert.equal(record.askedAt, askedAt, 'the record keeps the moment of the ask');
     assert.ok(record.setAsideAt >= askedAt + questionWaitMs - 50, 'and the moment it was set aside');
     assert.equal(state.setAsideQuestionSequences?.[topicKey], 1, 'the record id comes from a counter');
-    assertShownAsSetAside(question, record, firstQuestion, 2);
+    assertShownAsSetAside(question, record, firstAskedQuestion, 2);
   });
 
   it('a prompt the bot writes to the agent while its question waits queues behind it and does not cancel it: the question is set aside when its wait ends, and the queued prompt is read after the deny and answered', async () => {
@@ -403,7 +387,7 @@ describe('A question nobody answers is set aside, end to end: built charness, fa
     const recordsAfterSetAside = getSetAsideRecords();
     charness = await restartCharnessWithState(getLayout(), fakeTelegram, getCharness(), () => {});
     assert.deepEqual(getSetAsideRecords(), recordsAfterSetAside, 'the record survives the restart');
-    assertShownAsSetAside(question, recordsAfterSetAside[recordsAfterSetAside.length - 1], firstQuestion, 2);
+    assertShownAsSetAside(question, recordsAfterSetAside[recordsAfterSetAside.length - 1], firstAskedQuestion, 2);
   });
 
   it('a sixth open set-aside question closes the oldest as «not answered» and releases its pin; the others keep theirs, and a question asked meanwhile is pinned beside them', async () => {

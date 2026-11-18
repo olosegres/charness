@@ -201,6 +201,12 @@ export interface CompactionPorts
    * is never deleted); resolves whether it was edited. The re-asked copy uses it with `unanswered` when its conversation ends.
    */
   closeQuestionMessage: (key: SessionKey, messageId: number, question: OpenCodeQuestion, ending: QuestionEnd) => Promise<boolean>;
+  /**
+   * Set the topic's WAITING question aside now, because the idle mark came (`questionSetAside.ts`): the agent is told to go on without
+   * it and the question stays open in the topic. Resolves whether it was — `false` for a wait of «Wait for my answer», for no waiting
+   * question, or when nothing could be set aside; the idle fire then keeps its own flow (reject, compact, stop, ask again).
+   */
+  setQuestionAsideAtIdle: (key: SessionKey) => Promise<boolean>;
   /** The idle window in force (`AGENT_IDLE_MINUTES` or the 55-minute default; L-D9). */
   idleWindowMs: number;
   /** Whether a usage-limit wait is armed for the topic — no compaction turn then (L-D6). */
@@ -243,7 +249,7 @@ export interface CompactionPorts
  * state the typing loop and the request probe read, and the `register…()` calls.
  */
 export function createCompaction(ports: CompactionPorts) {
-  const { startTypingLoader, forwardPromptToAgent, pendingQuestions, clearPendingQuestion, closeQuestionMessage, idleWindowMs, checkIsLimitWaitArmed, suspendThreadSession, resumeSleepingSessionForCompaction, getThreadAdapter, deliverLabel, resumeSleepingSessionForPrompt, checkIsStarting, closeOrphanQuestionMessage, notePersonActivity, compactSelfReviewFlagDirs, bot, command, getState, replyToThread, editThreadKeyboard, authoriseContext, authoriseSpeaker, withThreadLocale, checkIsGeneral, wakeSleepingSession } = ports;
+  const { startTypingLoader, forwardPromptToAgent, pendingQuestions, clearPendingQuestion, closeQuestionMessage, setQuestionAsideAtIdle, idleWindowMs, checkIsLimitWaitArmed, suspendThreadSession, resumeSleepingSessionForCompaction, getThreadAdapter, deliverLabel, resumeSleepingSessionForPrompt, checkIsStarting, closeOrphanQuestionMessage, notePersonActivity, compactSelfReviewFlagDirs, bot, command, getState, replyToThread, editThreadKeyboard, authoriseContext, authoriseSpeaker, withThreadLocale, checkIsGeneral, wakeSleepingSession } = ports;
 
   /**
    * @description Resolve the `/compact` route for a thread's current backend — the
@@ -722,6 +728,13 @@ export function createCompaction(ports: CompactionPorts) {
         return;
       }
       console.log(`[compact-on-idle] ${kStr} sleeping per-turn session resumed for its compaction`);
+    }
+    // A question that still waits at the idle mark is SET ASIDE, not rejected: the agent goes on (its turn ends the way any turn does,
+    // and that end re-arms the countdown), the question stays open in the topic, and there is no compaction, no stop and no asking
+    // again — those stay only for the «Wait for my answer» choice, or when nothing could be set aside.
+    if (pendingQuestions.has(kStr) && adapter.checkIsActive(key) && await setQuestionAsideAtIdle(key)) {
+      console.log(`[compact-on-idle] ${kStr} set the waiting question aside instead of compacting: the agent goes on`);
+      return;
     }
     // Both instants come from the store, so a restart no longer erases the evidence
     // that this session has an un-compacted turn (the bug: two in-memory zeros made

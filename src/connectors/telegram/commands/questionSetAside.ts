@@ -270,6 +270,18 @@ export function createQuestionSetAside(ports: QuestionSetAsidePorts) {
     timers.set(kStr, timer);
   }
 
+  /**
+   * @description The idle fire (`compaction.ts`) meets a question that still waits: it is set aside NOW — earlier than its wait —
+   * instead of the idle compaction rejecting it, compacting, stopping the process and asking it again. Not for «Wait for my
+   * answer» (today's flow stays for that choice), and not when nothing waits. Resolves whether the question was set aside; `false`
+   * leaves everything as it was, so the caller goes on with the flow it had.
+   */
+  async function setPendingQuestionAsideAtIdle(key: SessionKey): Promise<boolean> {
+    const pending = pendingQuestions.get(keyToString(key));
+    if (!pending || getQuestionWaitChoice(key) === 'untilAnswered') return false;
+    return setPendingQuestionAside(key, pending.data.requestId);
+  }
+
   /** The bot's copy of a waiting question that the agent's side confirms it holds no such question for: stale, so it ends as «not answered». */
   async function dropQuestionTheAdapterDoesNotHold(key: SessionKey, pending: PendingQuestionState): Promise<void> {
     console.warn(`[questionSetAside] ${keyToString(key)}: the agent holds no question ${pending.data.requestId}, so there is nothing to set aside; the bot's copy is closed as not answered`);
@@ -522,6 +534,7 @@ export function createQuestionSetAside(ports: QuestionSetAsidePorts) {
     armQuestionSetAsideTimer,
     clearQuestionSetAsideTimer,
     setPendingQuestionAside,
+    setPendingQuestionAsideAtIdle,
     checkIsSetAsideQuestionMessage,
     registerQuestionSetAsideCallbacks,
     answerSetAsideQuestionByReply,

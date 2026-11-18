@@ -9,7 +9,9 @@
  *     wakes the conversation;
  *   • a reply to a set-aside question's message is taken before the talker branch, so an operator and a topic member alike answer;
  *   • a waiting question's own end (`clearPendingQuestion`) never touches a set-aside one;
- *   • the buttons are registered once, beside the compaction's, disjoint from `qa_` and `reask_`.
+ *   • the buttons are registered once, beside the compaction's, disjoint from `qa_` and `reask_`;
+ *   • the idle fire reaches the set-aside module through the compaction's port, and the wait every topic has is the instance's
+ *     `settings.json` value (`questionWait`).
  * The real flows are `questionSetAsideE2e.test.ts` (the release, `/new`, a restart) and `openCodeQuestionE2e.test.ts`.
  */
 
@@ -83,4 +85,10 @@ test('a reply to a message other than the question that waits is no pick for it 
   const handler = getSourceSlice("bot.on(message('text'), async (ctx) => {", "//  Voice message handler");
   assert.equal(handler.match(/deliverActivePrompt\([^;]*\{\s*replyToMessageId:\s*ctx\.message\.reply_to_message\?\.message_id\s*\}\)/g)?.length, 2, 'the operator\'s two routes');
   assert.equal(getFunctionBody('handleTalkerText').match(/deliverActivePrompt\([^;]*\{\s*replyToMessageId:\s*ctx\.message\.reply_to_message\?\.message_id\s*\}\)/g)?.length, 2, 'and a topic member\'s');
+});
+
+test('the idle fire sets a waiting question aside through the module, and the wait it reads is the instance setting', () => {
+  assert.match(botSource, /setQuestionAsideAtIdle:\s*\(key\)\s*=>\s*setPendingQuestionAsideAtIdle\(key\)/, 'the compaction port is the module\'s idle entry');
+  assert.match(botSource, /getQuestionWaitChoice:\s*\(\)\s*=>\s*resolveQuestionWait\(undefined,\s*readInstanceQuestionWait\(\)\s*\?\?\s*undefined\)/, 'the instance value of settings.json is the General choice');
+  assert.match(botSource, /readInstanceQuestionWait\s*=\s*createQuestionWaitSettingsReader\(\(\)\s*=>\s*getInstanceSettingsPath\(\)/);
 });

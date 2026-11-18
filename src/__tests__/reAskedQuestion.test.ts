@@ -76,8 +76,11 @@ class StubAdapter extends EventEmitter implements AgentAdapter {
   sendInput(): void {}
   sendSignal(_key: SessionKey, signal: string): void { this.signals.push(signal); }
   async getSessions(): Promise<AgentSession[]> { return []; }
-  rejectQuestion(): void {}
+  rejectedQuestions = 0;
+  rejectQuestion(): void { this.rejectedQuestions += 1; }
+  compactions = 0;
   async compactContext(): Promise<CompactionResult> {
+    this.compactions += 1;
     this.compactionStarted.resolve();
     await this.compactionGate?.promise;
     return { ok: true, preTokens: null, postTokens: null };
@@ -112,6 +115,11 @@ let isReAskSendRefused = false;
 let heldCloses = new Map<number, Deferred>();
 /** Messages whose close Telegram refuses: the call is recorded, the edit does not land. */
 let refusedCloses = new Set<number>();
+/** What the idle fire asked the question-set-aside port, and what the port answers (`true`: the question was set aside). */
+let setAsideAtIdleCalls = 0;
+let setAsideAtIdleAnswer = false;
+/** How many times the idle fire stopped the conversation. */
+let suspendCalls = 0;
 let reAskSendStarted = createDeferred();
 let reAskSendGate = createDeferred();
 let idleFireFinished = createDeferred();
@@ -202,10 +210,11 @@ describe('the question the idle compaction asked again, through the compaction m
         await heldCloses.get(messageId)?.promise;
         return !refusedCloses.has(messageId);
       },
+      setQuestionAsideAtIdle: async () => { setAsideAtIdleCalls += 1; return setAsideAtIdleAnswer; },
       idleWindowMs,
       checkIsLimitWaitArmed: () => false,
       // The last step of the idle fire (after the compaction and the re-ask): the stop of the conversation.
-      suspendThreadSession: async () => { idleFireFinished.resolve(); },
+      suspendThreadSession: async () => { suspendCalls += 1; idleFireFinished.resolve(); },
       resumeSleepingSessionForCompaction: async () => false,
       getThreadAdapter: () => adapter,
       deliverLabel: (_key, label, messageContext) => new Promise((resolve) => { deliveries.push({ label, messageContext, settle: resolve }); }),
@@ -239,6 +248,12 @@ describe('the question the idle compaction asked again, through the compaction m
     adapter.compactionGate = null;
     adapter.compactionStarted = createDeferred();
     adapter.isActive = true;
+    adapter.rejectedQuestions = 0;
+    adapter.compactions = 0;
+    adapter.signals.length = 0;
+    setAsideAtIdleCalls = 0;
+    setAsideAtIdleAnswer = false;
+    suspendCalls = 0;
     pendingQuestions.clear();
     harness.replies.length = 0;
     await harness.state.clearCompactIdleTracking(key);
@@ -751,6 +766,51 @@ describe('the question the idle compaction asked again, through the compaction m
       compaction.closeReAskedQuestion(key);
       compaction.clearThreadCompaction(key);
       assert.equal(closedQuestionMessages.length, 1, 'closing again closes nothing more');
+    });
+  });
+
+  describe('the idle mark that finds the question still waiting', () => {
+    /** Time the fire is given to do anything more once the port has answered: its flow is a few awaits long, the window itself is 20 ms. */
+    const quietAfterFireMs = 150;
+
+    it('a question that was set aside is the whole fire: no rejection, no compaction, no stop, no asking again — the agent goes on', async () => {
+      setAsideAtIdleAnswer = true;
+      startIdleFire(waitingMessageId);
+      await waitUntil('the idle fire to offer the waiting question to the set-aside port', () => setAsideAtIdleCalls === 1);
+      await new Promise((resolve) => setTimeout(resolve, quietAfterFireMs));
+      assert.equal(adapter.rejectedQuestions, 0, 'the question is not rejected');
+      assert.deepEqual(adapter.signals, [], 'the agent is not interrupted');
+      assert.equal(suspendCalls, 0, 'the conversation is not stopped');
+      assert.equal(harness.replies.some((reply) => harness.getKeyboardData(reply).flat().some((data) => data.startsWith('reask_'))), false, 'the question is not asked again');
+      assert.equal(adapter.compactions, 0, 'no compaction turn is written');
+    });
+
+    it('a question the port could not set aside (its wait is «until answered», or nothing could be done) keeps today\'s flow: reject, compact, ask again, stop', async () => {
+      setAsideAtIdleAnswer = false;
+      await startIdleFireUntilReAskIsBeingSent();
+      reAskSendGate.resolve();
+      await idleFireFinished.promise;
+      assert.equal(setAsideAtIdleCalls, 1, 'the port was asked once');
+      assert.equal(suspendCalls, 1, 'the conversation was stopped after the compaction');
+      assert.equal(adapter.compactions, 1, 'the compaction ran');
+      assert.ok(getReAskedMessageId() > 0, 'the question was asked again');
+    });
+
+    it('with no question waiting the port is never asked: the idle compaction is the same as before', async () => {
+      compaction.markThreadTurnProducedOutput(key);
+      compaction.noteThreadActivity(key);
+      await idleFireFinished.promise;
+      assert.equal(setAsideAtIdleCalls, 0);
+      assert.equal(adapter.rejectedQuestions, 0);
+    });
+
+    it('a stopped conversation is not offered the port either: there is no agent left to tell', async () => {
+      adapter.isActive = false;
+      pendingQuestions.set(keyString, { data: { requestId: 'que_1', questions: [question] }, messageId: waitingMessageId, answers: [null], currentIndex: 0 });
+      compaction.markThreadTurnProducedOutput(key);
+      compaction.noteThreadActivity(key);
+      await new Promise((resolve) => setTimeout(resolve, quietAfterFireMs));
+      assert.equal(setAsideAtIdleCalls, 0);
     });
   });
 });

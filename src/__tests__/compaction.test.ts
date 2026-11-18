@@ -61,6 +61,7 @@ describe('compaction: the compaction flow over its ports', () => {
       pendingQuestions: new Map(),
       clearPendingQuestion: () => {},
       closeQuestionMessage: async () => true,
+      setQuestionAsideAtIdle: async () => false,
       idleWindowMs: 55 * 60 * 1000,
       checkIsLimitWaitArmed: () => false,
       suspendThreadSession: async () => {},

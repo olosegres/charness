@@ -111,6 +111,7 @@ describe('the idle fire of an adopted session waits for its replay', () => {
       pendingQuestions,
       clearPendingQuestion: (clearedKey) => { pendingQuestions.delete(keyToString(clearedKey)); },
       closeQuestionMessage: async () => true,
+      setQuestionAsideAtIdle: async () => false,
       idleWindowMs,
       checkIsLimitWaitArmed: () => false,
       suspendThreadSession: async () => { steps.push('stop'); },

@@ -13,6 +13,7 @@ import {
   createBotSkillsSettingsReader,
   createEmptyInstanceSettings,
   createInstanceDefaultEffortReader,
+  createQuestionWaitSettingsReader,
   createRunnerHostReader,
   createTaskAgentsMaxConcurrentReader,
   createUpdateSettingsReader,
@@ -26,6 +27,7 @@ import {
   type InstanceSettings,
 } from '../instanceSettings';
 import { taskAgentsMaxConcurrentUpperBound } from '../trackers/taskAgentLimit';
+import { questionWaitChoices } from '../utils/questionWaitPlan';
 import { claudeEffortLevels, defaultEffortLevel, getInstanceDefaultEffort, setInstanceDefaultEffortReader } from '../effortLevels';
 
 let configDir = '';
@@ -256,6 +258,44 @@ test('the bot-skills reader: null with no file or field, the file\'s value, a ha
   read();
   assert.equal(errors.length, 1);
   assert.match(errors[0], /botSkills/);
+});
+
+test('questionWait takes each of the wait choices and is "not set" in an empty file; a wrong value is an error naming the field', () => {
+  for (const value of questionWaitChoices) {
+    assert.deepEqual(validateInstanceSettings({ questionWait: value }), { ok: true, config: createSettings({ questionWait: value }) }, value);
+  }
+  assert.equal(createEmptyInstanceSettings().questionWait, null);
+  for (const wrong of ['forever', 30, true, 'untilanswered']) {
+    const bad = validateInstanceSettings({ questionWait: wrong });
+    assert.equal(bad.ok, false, String(wrong));
+    assert.match(bad.ok ? '' : bad.errors.join('\n'), /^settings\.json questionWait: /);
+  }
+});
+
+test('questionWait is written only when set and a change keeps it', () => {
+  saveInstanceSettings(settingsPath, createSettings({ questionWait: 'untilAnswered', autoUpdate: 'off' }));
+  assert.deepEqual(JSON.parse(fs.readFileSync(settingsPath, 'utf8')), { autoUpdate: 'off', questionWait: 'untilAnswered' });
+  saveInstanceSettings(settingsPath, { ...loadInstanceSettingsForUpdate(settingsPath), defaultEffort: 'high' });
+  assert.deepEqual(JSON.parse(fs.readFileSync(settingsPath, 'utf8')), { defaultEffort: 'high', autoUpdate: 'off', questionWait: 'untilAnswered' });
+  saveInstanceSettings(settingsPath, createSettings({ autoUpdate: 'off' }));
+  assert.equal('questionWait' in JSON.parse(fs.readFileSync(settingsPath, 'utf8')), false, 'not set leaves no field');
+});
+
+test('the question-wait reader: null with no file or field, the file\'s value, a hand edit with no restart, a broken file as null with ONE named error', () => {
+  const errors: string[] = [];
+  const read = createQuestionWaitSettingsReader(() => settingsPath, (line) => errors.push(line));
+  assert.equal(read(), null, 'no file');
+  writeRaw('{"autoUpdate":"off"}');
+  assert.equal(read(), null, 'the field left out');
+  writeRaw('{"questionWait":"untilAnswered"}');
+  assert.equal(read(), 'untilAnswered');
+  writeRaw('{"questionWait":"tenMinutes"}');
+  assert.equal(read(), 'tenMinutes');
+  writeRaw('{"questionWait":"forever"}');
+  assert.equal(read(), null, 'a broken file says nothing');
+  read();
+  assert.equal(errors.length, 1);
+  assert.match(errors[0], /questionWait/);
 });
 
 test('taskAgents.maxConcurrent takes 0 (no limit) up to the bound and is "not set" in an empty file; anything else is an error naming the field', () => {

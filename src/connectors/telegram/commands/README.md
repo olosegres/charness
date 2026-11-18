@@ -170,6 +170,10 @@ the output path (`markThreadTurnProducedOutput`) and the session lifecycle (`rea
 `clearThreadCompaction`), and reads `threadsCompacting` (the typing loop, the request probe) and
 `reAskedQuestions` (the re-ask button's question, which a tap closes with its answer). The factory must be built BEFORE the module-scope objects that name
 its hooks (`routedCommandTriggerDeps`): a destructured `const` is not hoisted like the function it replaced.
+**Only for «Wait for my answer» (and when nothing could be set aside).** A question still waiting at the idle mark is first offered to the
+`setQuestionAsideAtIdle` port (`questionSetAside.ts` `setPendingQuestionAsideAtIdle`: the agent is told to go on, no rejection, no
+compaction, no stop, no re-ask — the idle fire is over, and the end of the agent's own turn re-arms the countdown); the flow below is what
+runs when the port answers `false` — the wait is «Wait for my answer», no question waits, or the agent's side could not set it aside.
 **A question's message is never deleted.** The idle fire clears the pending question through the `clearPendingQuestion` port
 (`bot.ts`: clears the state, which unpins), takes the old message's buttons off at once (`editThreadKeyboard`: the compaction can
 take minutes) and starts a `ReAskedQuestion` record for it (`startReAskedQuestion`, internal). The record lives from there to the end of the
@@ -235,6 +239,10 @@ the topic. The pieces:
   at boot, always for `askedAt + wait` (`PendingQuestionState.askedAt`, saved), so a restart keeps the ORIGINAL moment; none for «Wait for my
   answer». `clearPendingQuestion` clears it. It is the bot's own and independent of the idle fire, of the agent's background work and of
   queued input. `CHARNESS_TEST_TIMINGS` `questionSetAsideWaitMs` cuts a finite wait for a flow.
+- **The idle mark** (`setPendingQuestionAsideAtIdle`, called by the compaction module's idle fire through its `setQuestionAsideAtIdle` port):
+  a question still waiting is set aside NOW, earlier than its wait, instead of the idle compaction's reject + compact + stop + ask again —
+  unless the wait is «Wait for my answer» (that keeps today's flow). The wait every topic has is the instance's `settings.json`
+  `questionWait` (default 30 min) until the per-topic choice arrives.
 - **The set-aside** (`setPendingQuestionAside`, run in the question lifecycle queue — the one the post, the re-post and the answer share): does
   nothing unless the question is still the one waiting AND the adapter holds the same `requestId` (a timer that fires late, after the agent
   asked the next question, finds a different one and sets nothing aside). Then the question leaves `pendingQuestions` (so every reader of «the

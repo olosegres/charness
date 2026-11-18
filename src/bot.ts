@@ -334,7 +334,7 @@ import {
 } from './utils/claudeLivenessAction';
 import { formatIsoLocalOffset } from './utils/isoTimestamp';
 import { getThreadEffortView, setInstanceDefaultEffortReader, type ThreadEffortView } from './effortLevels';
-import { createBotSkillsSettingsReader, createInstanceDefaultEffortReader, createRunnerHostReader, createTaskAgentsMaxConcurrentReader, createTodoSettingsReader, createUpdateSettingsReader, getInstanceSettingsPath, saveInstanceSettingsChange } from './instanceSettings';
+import { createBotSkillsSettingsReader, createInstanceDefaultEffortReader, createQuestionWaitSettingsReader, createRunnerHostReader, createTaskAgentsMaxConcurrentReader, createTodoSettingsReader, createUpdateSettingsReader, getInstanceSettingsPath, saveInstanceSettingsChange } from './instanceSettings';
 import { readTaskAgentLimit, type TaskAgentLimitSources } from './trackers/taskAgentLimit';
 import { TaskAgentSlots } from './trackers/taskAgentSlots';
 import { checkIsBotSkillsEnabled, createBotSkillsReader, readBotSkillsInstanceValue, setBotSkillsReader, type BotSkillsSources } from './utils/botSkills';
@@ -6471,6 +6471,8 @@ const {
   pendingQuestions,
   clearPendingQuestion,
   closeQuestionMessage,
+  // The module that sets questions aside is built just below (it needs nothing from this one): the idle fire reaches it through this.
+  setQuestionAsideAtIdle: (key) => setPendingQuestionAsideAtIdle(key),
   idleWindowMs: getAgentIdleMs(process.env.AGENT_IDLE_MINUTES),
   checkIsLimitWaitArmed: (key) => getArmedApiRetry(key)?.kind === 'usageLimit',
   suspendThreadSession,
@@ -6487,9 +6489,13 @@ const {
   compactSelfReviewFlagDirs: getCompactSelfReviewFlagDirs(resolveDataDir(), resolveOpenCodeGlobalPluginDir(process.env)),
 });
 
+/** The instance's question wait, re-read from `settings.json` when the file changes (`null`: not set, the default applies). */
+const readInstanceQuestionWait = createQuestionWaitSettingsReader(() => getInstanceSettingsPath(), (line) => console.error(line));
+
 const {
   armQuestionSetAsideTimer,
   clearQuestionSetAsideTimer,
+  setPendingQuestionAsideAtIdle,
   checkIsSetAsideQuestionMessage,
   registerQuestionSetAsideCallbacks,
   answerSetAsideQuestionByReply,
@@ -6509,8 +6515,8 @@ const {
   sendQuestionMessage,
   deliverLateAnswer: (key, text) => withThreadLocale(key, () => deliverLateAnswerPrompt(key, text)),
   markNeedsNewMessage,
-  // The topic's and General's own choices arrive with the setting; until then every topic waits the default.
-  getQuestionWaitChoice: () => resolveQuestionWait(undefined, undefined),
+  // The instance value `settings.json` holds (`questionWait`); a topic's own choice arrives with the `/question_wait` command.
+  getQuestionWaitChoice: () => resolveQuestionWait(undefined, readInstanceQuestionWait() ?? undefined),
   shortenedWaitMs: ENV.testTimings.questionSetAsideWaitMs,
 });
 
