@@ -53,21 +53,26 @@ function getOpenQuestionEntry(value: unknown): OpenCodeOpenQuestionEntry | null 
  * `questions` array, and the owning `directory` so the eventual reply targets
  * the right project instance).
  *
+ * A session can hold several open entries (the model's tool calls of one step run in parallel). Without `requestId` the FIRST
+ * of them is returned; with it, the entry of that id among ALL the session's entries — so a caller that holds one particular
+ * question is never told it is gone because another entry of the session stands ahead of it.
+ *
  * Returns `null` when the response is not an array, holds no entry for this
- * session, or the matching entry is malformed — i.e. "there is no open question
- * to recover for this session". Pure: the adapter does the `GET` and passes the
- * already-parsed JSON in here.
+ * session (or none with `requestId`), or the matching entry is malformed — i.e.
+ * "there is no open question to recover for this session". Pure: the adapter
+ * does the `GET` and passes the already-parsed JSON in here.
  */
 export function getOpenQuestionForSession(
   response: unknown,
   sessionId: string,
   workDir: string,
+  requestId?: string,
 ): OpenCodePendingQuestion | null {
   if (!Array.isArray(response)) return null;
 
   for (const element of response) {
     const entry = getOpenQuestionEntry(element);
-    if (entry && entry.sessionID === sessionId) {
+    if (entry && entry.sessionID === sessionId && (requestId === undefined || entry.id === requestId)) {
       return { requestId: entry.id, questions: entry.questions, directory: workDir };
     }
   }

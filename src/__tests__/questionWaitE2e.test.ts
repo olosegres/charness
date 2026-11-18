@@ -14,7 +14,7 @@
  *   → a change made while a question waits applies to it: «Don't wait» sets it aside on the tap
  *   → General: its picker, a tap writes `settings.json` beside the other fields, and a topic with no choice of its own follows it —
  *     with General's «Wait for my answer» a question waits; a later «Don't wait» in General sets the waiting question aside at once
- *   → a restart keeps the topic's own choice
+ *   → a topic's own choice wins over General's (General «Don't wait», the topic 1 h: the question waits the topic's wait), and a restart keeps it
  *
  * Nothing leaves the machine: the Bot API is on loopback and the agent is a fake. Everything the test starts is stopped in `after`.
  */
@@ -74,6 +74,8 @@ const questionWaitMs = 6000;
 const setAsideLatenessMs = 3000;
 /** A set-aside «at once» comes well inside the wait every other topic has. */
 const atOnceBoundMs = questionWaitMs - 1500;
+/** How long a question is watched for a set-aside that must NOT come yet: past «at once», inside the wait. */
+const precedenceQuietMs = 3000;
 const topicKey = keyToString(makeTelegramKey(group.id, topicThreadId));
 
 let layout: IsolatedInstanceLayout | null = null;
@@ -293,7 +295,7 @@ describe('/question_wait, end to end: built charness, fake Bot API', () => {
     await waitForAgentToGoOn(question);
   });
 
-  it('a topic\'s own choice wins over General\'s, and a restart keeps it', async () => {
+  it('a topic\'s own choice wins over General\'s — a question waits the topic\'s wait, not General\'s — and a restart keeps it', async () => {
     const screen = await openPicker(topic, 'this topic: as in General — Don\'t wait');
     assert.equal(await topic.tapAndAwaitAnswer(screen, 'qw_oneHour'), '✅ 1 h');
     await getCharness().waitFor('the choice to be saved', replyTimeoutMs, () => readPersistedState(getLayout()).questionWaitOverrides?.[topicKey] === 'oneHour');
@@ -302,5 +304,17 @@ describe('/question_wait, end to end: built charness, fake Bot API', () => {
     const afterRestart = await openPicker(topic, '— this topic: 1 h');
     assert.deepEqual(topic.getKeyboardLabels(afterRestart), [["Don't wait", '10 min', '30 min', '1 h ✓'], ['Wait for my answer'], ["As in General (Don't wait)"]]);
     assert.equal((readSettingsFile() as { questionWait?: string }).questionWait, 'dontWait', 'General\'s value is still in the file');
+
+    // The precedence itself, load-bearing: General says «Don't wait», the topic says 1 h (cut to six seconds on this instance). With the
+    // two swapped the question would be set aside the moment it is asked.
+    const responsesBefore = getControlResponses().length;
+    const question = await askQuestion('PRECEDENCE-1');
+    const askedAt = getWaitingQuestionAskedAt();
+    await new Promise((resolve) => setTimeout(resolve, precedenceQuietMs));
+    assert.equal(getControlResponses().length, responsesBefore, 'the topic\'s choice wins: General\'s «Don\'t wait» did not set the question aside');
+    assert.equal(checkIsQuestionWaiting(), true, 'it still waits');
+    const response = await waitForSetAsideDeny('the bot to set the question aside when the topic\'s wait ends', responsesBefore);
+    assert.ok(response.readAt >= askedAt + questionWaitMs - 50, `not before the topic's wait ended: ${response.readAt - askedAt} ms after the ask`);
+    await waitForAgentToGoOn(question);
   });
 });

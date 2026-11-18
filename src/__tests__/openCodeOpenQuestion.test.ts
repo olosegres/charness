@@ -60,6 +60,20 @@ describe('getOpenQuestionForSession', () => {
     assert.equal(result.requestId, 'que_target');
   });
 
+  it('with a request id: the entry of THAT id among all the session\'s entries, not the first one', () => {
+    const firstOfSession = { ...targetEntry, id: 'que_first' };
+    const secondOfSession = { ...targetEntry, id: 'que_second' };
+    assert.equal(getOpenQuestionForSession([firstOfSession, secondOfSession], sessionId, workDir)?.requestId, 'que_first', 'without an id the first');
+    assert.equal(getOpenQuestionForSession([firstOfSession, secondOfSession], sessionId, workDir, 'que_second')?.requestId, 'que_second');
+    assert.equal(getOpenQuestionForSession([firstOfSession, secondOfSession], sessionId, workDir, 'que_first')?.requestId, 'que_first');
+  });
+
+  it('with a request id: null when the session holds no entry of that id — another session\'s entry of the id does not count', () => {
+    const otherSessionSameId = { ...targetEntry, id: 'que_wanted', sessionID: 'ses_other' };
+    assert.equal(getOpenQuestionForSession([targetEntry], sessionId, workDir, 'que_wanted'), null);
+    assert.equal(getOpenQuestionForSession([otherSessionSameId, targetEntry], sessionId, workDir, 'que_wanted'), null);
+  });
+
   it('returns null when no open question belongs to this session', () => {
     const otherEntry = { ...targetEntry, id: 'que_other', sessionID: 'ses_other' };
     assert.equal(getOpenQuestionForSession([otherEntry], sessionId, workDir), null);

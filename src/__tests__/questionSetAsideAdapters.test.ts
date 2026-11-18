@@ -349,6 +349,18 @@ describe('OpenCode: setQuestionAside replies with the text as the custom answer 
       assert.equal(adapter.setQuestionAside(key, requestId, 'set aside', [null, null]), false);
     });
 
+    it('held when the session has several open questions and the bot\'s is NOT the first: it is found among all of them, and the cache holds that one', async () => {
+      const { adapter } = createAdapterThatLostTheQuestion([
+        { id: 'que_ahead', sessionID: 'ses_set_aside', questions: twoQuestions },
+        { id: requestId, sessionID: 'ses_set_aside', questions: twoQuestions },
+      ]);
+
+      assert.equal(await adapter.resyncOpenQuestion(key, requestId), 'held');
+
+      assert.equal(getOpenCodeSession(adapter, keyToString(key)).pendingQuestion?.requestId, requestId, 'not the entry that stands ahead of it');
+      assert.equal(adapter.setQuestionAside(key, requestId, 'set aside', [null, null]), true);
+    });
+
     it('surfaceOpenQuestion hands the question the server holds to the bot as a `question` event — and reads it into the cache the way a reattach does', async () => {
       const { adapter } = createAdapterThatLostTheQuestion([{ id: 'que_changed', sessionID: 'ses_set_aside', questions: twoQuestions }]);
       const emitted: string[] = [];

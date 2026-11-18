@@ -6059,10 +6059,10 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
 
   /**
    * @description Ask the server what it holds: `GET /question` for this session's instance, read into `session.pendingQuestion`
-   * when its open question of the session IS `requestId` (the adapter's copy is only a cache that a reattach which could not read
-   * the server leaves empty). Resolves `held` (the cache now has it, nothing is emitted: the bot that asks already knows the
-   * question), `none` (the server answered with no question of this session — or with ANOTHER one: the bot's copy is stale, and
-   * the cache is left as it was, never filled with a question the bot did not ask about) or `unknown` (the read failed, or the
+   * when `requestId` is among the session's open questions, wherever it stands in the list (the adapter's copy is only a cache that
+   * a reattach which could not read the server leaves empty). Resolves `held` (the cache now has it, nothing is emitted: the bot
+   * that asks already knows the question), `none` (the server holds no such question of this session — it holds none, or only
+   * OTHER ones: the bot's copy is stale, and the cache is left as it was, never filled with a question the bot did not ask about) or `unknown` (the read failed, or the
    * session is not active — a stale-version replacement is under way — so nothing can be told).
    */
   async resyncOpenQuestion(key: SessionKey, requestId: string): Promise<'held' | 'none' | 'unknown'> {
@@ -6071,11 +6071,13 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
     try {
       const response = await this.apiRequest<unknown>('GET', buildDirectoryScopedPath('/question', session.workDir));
       if (!Array.isArray(response)) return 'unknown';
-      const open = getOpenQuestionForSession(response, session.sessionId, session.workDir);
-      if (open?.requestId !== requestId) return 'none';
+      // Among ALL the session's open entries: the server may hold more than one (parallel tool calls), and the bot's is not
+      // necessarily the first.
+      const held = getOpenQuestionForSession(response, session.sessionId, session.workDir, requestId);
+      if (!held) return 'none';
       const current = this.sessions.get(keyToString(key));
       if (!current?.isActive || current.sessionId !== session.sessionId) return 'unknown';
-      current.pendingQuestion = open;
+      current.pendingQuestion = held;
       return 'held';
     } catch (e) {
       console.warn('[OpenCode] re-reading the open question failed:', e instanceof Error ? e.message : e);

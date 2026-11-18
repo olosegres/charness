@@ -540,13 +540,15 @@ export class FakeTelegram {
   /**
    * The reply, forward and sender-chat fields of a message the operator sends into topic `threadId`. A message that replies to
    * nothing in particular still carries the topic's ROOT message as its `reply_to_message` — what a real client sends for a plain
-   * message typed in a topic («post in this topic») — so a bot that mistakes it for a genuine reply shows in every flow.
+   * message typed in a topic («post in this topic») — so a bot that mistakes it for a genuine reply shows in every flow. General has
+   * no creation message, so a plain message there carries no `reply_to_message` at all.
    */
   private getContext(options: FakeOperatorMessageOptions, threadId: number): OperatorMessageContext {
     const replied = options.replyToMessageId === undefined ? undefined : this.messages.get(options.replyToMessageId);
     if (options.replyToMessageId !== undefined && !replied) throw new Error(`no message ${options.replyToMessageId} to reply to`);
+    const repliedMessage = replied ? embedAsReplied(replied) : threadId === generalTopicThreadId ? undefined : this.getTopicRootMessage(threadId);
     return {
-      reply_to_message: replied ? embedAsReplied(replied) : this.getTopicRootMessage(threadId),
+      ...(repliedMessage ? { reply_to_message: repliedMessage } : {}),
       ...(options.forwardOrigin ? { forward_origin: options.forwardOrigin } : {}),
       ...(options.senderChat ? { sender_chat: options.senderChat } : {}),
     };
