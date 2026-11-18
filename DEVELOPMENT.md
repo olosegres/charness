@@ -272,7 +272,7 @@ publish, no tag, no push, the run is red; the next day's run tries again by itse
   know yet). Its version is the package's: `apply` writes it, as `npm version` does, and `verify-delta` lets it differ from
   the tested commit in exactly those two lines. Those two lines sit between lines a dependency change never touches (`"name"`,
   `"lockfileVersion"`, `"dependencies": {`), so a dependency change that lands on `main` during a release merges with it
-  (`releaseCli.test.ts` holds that).
+  (`releaseCliCommit.test.ts` holds that).
 
 - **Tests gate:** the release does not run the suite again when the exact commit already passed. It asks GitHub for the
   `Tests` workflow's runs of that commit's SHA (the newest run of the commit decides): **passed** → go on; **no run at all**

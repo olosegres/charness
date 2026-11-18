@@ -1,5 +1,5 @@
 /**
- * @description What the stash cases of `remoteRun/runner.sh` share (`remoteRunRunnerScriptStash.test.ts`, `remoteRunRunnerScriptStashWaiting.test.ts`: one file ran past 70 s alone and a loaded box cut it at the
+ * @description What the stash cases of `remoteRun/runner.sh` share (`remoteRunRunnerScriptStash.test.ts`, `remoteRunRunnerScriptStashLost.test.ts`, `remoteRunRunnerScriptStashWaiting.test.ts`: one file ran past 70 s alone and a loaded box cut it at the
  * 2-minute cap of a unit file): a stand-in for Pueue that keeps its task list in files and records every call, the per-test root, and the helpers that run the script, submit a job and read what it left.
  * Matches no test glob.
  */

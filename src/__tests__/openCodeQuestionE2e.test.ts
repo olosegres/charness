@@ -436,7 +436,7 @@ describe('A reply that sets a question aside is refused by the OpenCode server, 
 
   after(tearDownInstance);
 
-  it('every try is refused: the server is asked for its question again after each pause, the topic is told once after the last, and the pinned message\'s note says the agent may still wait', async () => {
+  it('every try is refused: the server is asked for its question again after each pause, the topic is told once after the last, and the pinned message\'s note says the server did not confirm the go-on message', async () => {
     const sessionId = await bootBindAndStartTurn('REFUSED-1');
     const topicKey = keyToString(makeTelegramKey(group.id, questionTopic.threadId));
     const replyPath = `/question/${firstQuestion.requestId}/reply`;
@@ -448,14 +448,14 @@ describe('A reply that sets a question aside is refused by the OpenCode server, 
     await waitForPinned(question);
 
     const refusedTopic = new TopicDriver(fakeTelegram, getCharness, questionTopic.threadId, refusalTimeoutMs);
-    await refusedTopic.waitForMessage('the notice that the agent may still wait', (message) => message.text === enDict['agent.set_aside_reply_failed_notice']);
+    await refusedTopic.waitForMessage('the notice that the agent may still be waiting', (message) => message.text === enDict['agent.set_aside_reply_failed_notice']);
     assert.equal(fakeOpenCode.listRequests('POST', replyPath).length, attempts, 'the first try and one more after each pause — the chain did not stop early and did not go on');
     assert.deepEqual(fakeOpenCode.listRequests('POST', `/question/${firstQuestion.requestId}/reject`), [], 'the question is never rejected');
     assert.ok(fakeOpenCode.listRequests('GET', '/question').length >= setAsideRetryLimit, 'the server was asked for its open question again after each refusal');
     assert.equal(topic.listMessages().filter((message) => message.text === enDict['agent.set_aside_reply_failed_notice']).length, 1, 'the notice is posted once');
 
-    // Load-bearing: the pinned message no longer says «the agent went on» — it says the agent may still be waiting — and stays answerable.
-    await refusedTopic.waitForMessageText('the «may still wait» note under the question', question, (text) => text.endsWith(`\n\n${notTakenNote}`));
+    // Load-bearing: the pinned message no longer says «the agent went on» — it says the server did not confirm the go-on message — and stays answerable.
+    await refusedTopic.waitForMessageText('the unconfirmed note under the question', question, (text) => text.endsWith(`\n\n${notTakenNote}`));
     await getCharness().waitFor('the set-aside question to be saved', replyTimeoutMs, () => (readPersistedState(getLayout()).setAsideQuestions?.[topicKey] ?? []).length === 1);
     const [record] = readPersistedState(getLayout()).setAsideQuestions?.[topicKey] ?? [];
     const current = fakeTelegram.getMessage(question.message_id);
