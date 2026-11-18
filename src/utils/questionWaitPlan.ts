@@ -14,34 +14,9 @@ import { getQuestionReplyRoute } from '../openCodeQuestionFlow';
 import type { OpenCodeQuestion, SetAsideQuestionRecord } from '../types';
 import { neutraliseHeaderLookalikes } from './authorMark';
 import { formatLocalClockWithDateIfNotToday } from './localClock';
+import { defaultQuestionWaitChoice, questionWaitMs, type QuestionWaitChoice } from './questionWaitChoices';
 
 const msPerMinute = 60_000;
-
-/** The question wait, in the order a picker lists it: `dontWait` sets a question aside at once, `untilAnswered` never does. */
-export const questionWaitChoices = ['dontWait', 'tenMinutes', 'thirtyMinutes', 'oneHour', 'untilAnswered'] as const;
-
-/** @name QuestionWaitChoice @description One value of the «question wait» setting. */
-export type QuestionWaitChoice = (typeof questionWaitChoices)[number];
-
-/** @description Whether `value` is one of the wait choices (a hand-edited state or settings file may hold anything). */
-export function checkIsQuestionWaitChoice(value: string | undefined): value is QuestionWaitChoice {
-  return questionWaitChoices.some((choice) => choice === value);
-}
-
-/** What an instance does until the operator chooses: the owner's figure. */
-export const defaultQuestionWaitChoice: QuestionWaitChoice = 'thirtyMinutes';
-
-/** How long each choice lets a question wait; `null` = for as long as it takes (the pre-set-aside behaviour). */
-const questionWaitMs: Record<QuestionWaitChoice, number | null> = {
-  dontWait: 0,
-  tenMinutes: 10 * msPerMinute,
-  thirtyMinutes: 30 * msPerMinute,
-  oneHour: 60 * msPerMinute,
-  untilAnswered: null,
-};
-
-/** The longest finite wait the setting offers: the ceiling a test's shorter window (`CHARNESS_TEST_TIMINGS`) may name. */
-export const longestQuestionWaitMs = 60 * msPerMinute;
 
 /** The most questions set aside and still open in one conversation; a further one closes the oldest. */
 export const maxSetAsideQuestions = 5;

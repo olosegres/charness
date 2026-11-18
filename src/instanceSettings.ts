@@ -15,7 +15,7 @@ import { hubHostSchema, hubPortSchema } from './runners/hubIds';
 import type { HubAddress } from './runners/hubAddress';
 import { autoUpdateModes, defaultAutoUpdateMode, defaultWhatsNew, type AutoUpdateMode, type UpdateSettings } from './selfUpdate/updateModes';
 import { todoReminderDefaultMinutes, type TodoReminderSettings } from './todos/nag';
-import { questionWaitChoices, type QuestionWaitChoice } from './utils/questionWaitPlan';
+import { questionWaitChoices, type QuestionWaitChoice } from './utils/questionWaitChoices';
 
 /**
  * @description The instance-wide settings: ONE JSON file, `settings.json`, in the charness config directory

@@ -27,7 +27,7 @@ import {
   type InstanceSettings,
 } from '../instanceSettings';
 import { taskAgentsMaxConcurrentUpperBound } from '../trackers/taskAgentLimit';
-import { questionWaitChoices } from '../utils/questionWaitPlan';
+import { questionWaitChoices } from '../utils/questionWaitChoices';
 import { claudeEffortLevels, defaultEffortLevel, getInstanceDefaultEffort, setInstanceDefaultEffortReader } from '../effortLevels';
 
 let configDir = '';

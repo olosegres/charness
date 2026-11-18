@@ -28,7 +28,7 @@ import type { ClaudeApiSpend, ClaudeCostBaseline } from './utils/claudeApiSpend'
 import type { ClaudeApiCreditSpend } from './utils/claudeApiCredit';
 import type { OpenCodeProviderUsageRecord } from './utils/openCodeUsage';
 import { pushRecentModel } from './utils/modelRecentPlan';
-import { checkIsQuestionWaitChoice, type QuestionWaitChoice } from './utils/questionWaitPlan';
+import { checkIsQuestionWaitChoice, type QuestionWaitChoice } from './utils/questionWaitChoices';
 import { normaliseFallbackChain, type FallbackChainEntry } from './utils/fallbackChain';
 import type { TodoProjectOverride } from './todos/projects';
 import type { ScheduleRecord } from './scheduler/types';

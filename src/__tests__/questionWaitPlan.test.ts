@@ -16,21 +16,17 @@ import {
   addSetAsideQuestion,
   buildLateAnswerPrompt,
   buildQuestionSetAsideText,
-  checkIsQuestionWaitChoice,
   checkIsSetAsideRecordMessage,
   createSetAsideQuestionId,
-  defaultQuestionWaitChoice,
   getQuestionReplyRouteWithSetAside,
   getQuestionSetAsideDelayMs,
   getSetAsideAnswerTarget,
   getSetAsideRecordAskedAgain,
-  longestQuestionWaitMs,
   maxSetAsideQuestions,
-  questionWaitChoices,
   resolveQuestionWait,
   type QuestionReplyRouteInput,
-  type QuestionWaitChoice,
 } from '../utils/questionWaitPlan';
+import { checkIsQuestionWaitChoice, defaultQuestionWaitChoice, longestQuestionWaitMs, questionWaitChoices, type QuestionWaitChoice } from '../utils/questionWaitChoices';
 
 const msPerMinute = 60_000;
 const askedAtMs = new Date(2026, 10, 18, 14, 5).getTime();

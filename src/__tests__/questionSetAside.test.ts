@@ -26,7 +26,8 @@ import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
 import { keyToString, type SessionKey } from '../sessionKey';
 import type { AgentAdapter, OpenCodePendingQuestion, OpenCodeQuestion, PendingQuestionState, SetAsideQuestionRecord } from '../types';
 import type { QuestionEnd } from '../openCodeQuestionFlow';
-import { maxSetAsideQuestions, type QuestionWaitChoice } from '../utils/questionWaitPlan';
+import { maxSetAsideQuestions } from '../utils/questionWaitPlan';
+import type { QuestionWaitChoice } from '../utils/questionWaitChoices';
 import { enDict } from '../i18n/en';
 import { createSerialQueue } from '../utils/serialQueue';
 

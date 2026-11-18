@@ -37,7 +37,7 @@ import { nodeUpkeepIntervalMs } from '../runnerUtility/nodeUpkeepTiming';
 import { runnerVersionPollMs } from '../runnerUtility/versionPollTiming';
 import { pairingLifetimeMs } from '../runners/pairingTiming';
 import { runnerWaitPollMinMs, runnerWaitPollMs } from '../remoteRun/runnerWaitTiming';
-import { longestQuestionWaitMs } from '../utils/questionWaitPlan';
+import { longestQuestionWaitMs } from '../utils/questionWaitChoices';
 import { busyPollIntervalMs, waitIdleTimeoutMs } from '../postToSession';
 
 /** Every key with the production window (a count, for `bindPickerClaimLimit`) it may only shorten. */

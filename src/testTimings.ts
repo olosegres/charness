@@ -13,7 +13,7 @@ import { pendingWorkHoldDefaultMs } from './utils/jsonStreamPendingWork';
 import { basePollIntervalMs } from './utils/pollBackoff';
 import { claudeApiCreditRecheckIntervalMs, claudeApiCreditRecheckPollMs } from './utils/claudeApiCreditRecheck';
 import { todoReminderDefaultMinutes } from './todos/nag';
-import { longestQuestionWaitMs } from './utils/questionWaitPlan';
+import { longestQuestionWaitMs } from './utils/questionWaitChoices';
 import { todoReminderPollMs } from './todos/reminderEngine';
 import { minFireIntervalMs } from './scheduler/recurrence';
 import { defaultCheckStatusEveryMinutes } from './scheduler/checkStatus';

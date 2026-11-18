@@ -27,8 +27,8 @@ import {
   getSetAsideAnswerTarget,
   getSetAsideRecordAskedAgain,
   type LateAnswerEntry,
-  type QuestionWaitChoice,
 } from '../../../utils/questionWaitPlan';
+import type { QuestionWaitChoice } from '../../../utils/questionWaitChoices';
 import { getAnswerWithAttribution } from '../../../utils/authorMark';
 import { getTelegramTalkerContext } from '../inbound';
 import { getCallbackMessageId } from './callbackMessage';
