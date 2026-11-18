@@ -139,8 +139,11 @@ yarn test:unit    # every file but the flows; each file must finish in 2 min
 yarn test:flows   # the `*E2e.test.ts` flows, 16 files at a time (they mostly wait
                   # on their fakes, not the CPU); each file must finish in 20 min
                   # The flows keep unix sockets (the instance's tmux server, a runner's link)
-                  # under TMPDIR, and Linux allows 107 bytes of path: a TMPDIR over about 26
-                  # characters makes the layout refuse to start, saying by how many bytes
+                  # under TMPDIR, and Linux allows 107 bytes of path. An instance that would
+                  # exceed it refuses to start, saying by how many bytes: that holds for the
+                  # runner-link flows and for the flows that name TMUX_SOCKET_NAME (the Jira
+                  # ones) once TMPDIR is over about 26 characters; most flows keep tmux's
+                  # short «default» socket and have room to spare
 yarn runner-lock  # after ANY dependency change: rewrite remoteRun/runner-package-lock.json (the
                   # lock the runners install from, made from yarn.lock; fetches the sha512
                   # hashes of new versions from the registry). A unit test fails until you do
