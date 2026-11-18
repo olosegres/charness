@@ -52,11 +52,6 @@ const reaperPath = path.join(__dirname, 'isolatedInstanceReaper.ts');
 
 /** The longest path a unix socket can have on Linux: `sun_path` holds 108 bytes, the last is the terminating NUL. */
 export const maxUnixSocketPathBytes = 107;
-/** How many characters `fs.mkdtempSync` appends to a layout's folder name. */
-const tempFolderSuffixLength = 6;
-/** How many hex characters end the instance's tmux socket name (`randomBytes(4)`). */
-const tmuxSocketSuffixLength = 8;
-
 /**
  * @description Refuse, with the real cause, a socket path that does not fit a unix socket: the connect fails with «File name too long»
  * and the flow only times out waiting for what the socket was to carry. `what` names the socket; the message says how many bytes over
@@ -66,6 +61,24 @@ export function assertUnixSocketPathFits(socketPath: string, what: string): void
   const bytes = Buffer.byteLength(socketPath);
   if (bytes <= maxUnixSocketPathBytes) return;
   throw new Error(`${what}: its socket path would be ${bytes} bytes, ${bytes - maxUnixSocketPathBytes} over the ${maxUnixSocketPathBytes} a unix socket allows (${socketPath}) — the TMPDIR of this run (${os.tmpdir()}) is too long for the flows: use a shorter one`);
+}
+
+/**
+ * @description Where the tmux server of the instance whose env file reads `envText` listens: `<TMUX_TMPDIR>/tmux-<uid>/<TMUX_SOCKET_NAME>`
+ * (tmux's own `default` name when the file names none — most flows do not), `null` when no private `TMUX_TMPDIR` is set (tmux then keeps its
+ * socket under `/tmp`).
+ */
+export function getInstanceTmuxSocketPath(envText: string): string | null {
+  const variables = new Map(envText.split('\n').filter((line) => line.includes('=')).map((line) => [line.slice(0, line.indexOf('=')), line.slice(line.indexOf('=') + 1)] as const));
+  const tmpDir = variables.get('TMUX_TMPDIR');
+  if (!tmpDir) return null;
+  return path.join(tmpDir, `tmux-${process.getuid?.() ?? 0}`, variables.get('TMUX_SOCKET_NAME') || 'default');
+}
+
+/** @description Refuse, with the real cause, an instance whose env file puts its tmux server on a socket path that does not fit `sun_path`. */
+export function assertInstanceTmuxSocketFits(envText: string): void {
+  const socketPath = getInstanceTmuxSocketPath(envText);
+  if (socketPath !== null) assertUnixSocketPathFits(socketPath, 'the instance\'s tmux server');
 }
 
 /** The instance settings file a layout starts with (`settings.json`, beside the env file) and what it holds. */
@@ -546,9 +559,6 @@ export interface IsolatedInstanceLayout {
  * its budget's end, which every wait on the layout's charness then honours.
  */
 export function createIsolatedInstanceLayout(prefix: string, projectFolders: readonly string[], flowDeadlineMs: number | null = null): IsolatedInstanceLayout {
-  // Before anything is created: the instance's tmux server listens on a unix socket whose path must fit `sun_path`. A TMPDIR a few characters
-  // too long made every agent start fail with «File name too long», seen only as a flow that timed out waiting for its agent.
-  assertUnixSocketPathFits(path.join(os.tmpdir(), `${prefix}${'x'.repeat(tempFolderSuffixLength)}`, 'tmux', `tmux-${process.getuid?.() ?? 0}`, `${prefix}${'0'.repeat(tmuxSocketSuffixLength)}`), 'the isolated instance\'s tmux server');
   for (const reapedRoot of reapDeadIsolatedInstances(prefix)) console.log(`[isolated] reaped a dead earlier instance: ${reapedRoot}`);
   const testRoot = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), prefix)));
   const layout: IsolatedInstanceLayout = {
@@ -693,6 +703,9 @@ export class IsolatedCharness {
    * before that fails.
    */
   async start(timeoutMs: number, checkIsReady: (runOutput: string) => boolean): Promise<void> {
+    // The instance's private tmux server listens on a unix socket whose path must fit `sun_path`: a TMPDIR a few characters too long made every
+    // agent start fail with «File name too long», seen only as a flow that timed out waiting for its agent. Checked on the env the instance really gets.
+    assertInstanceTmuxSocketFits(fs.readFileSync(this.layout.envFile, 'utf8'));
     const outputStart = this.output.length;
     // run-isolated.sh passes on only these; HOME is the instance's own temp home.
     const instanceEnv = {
