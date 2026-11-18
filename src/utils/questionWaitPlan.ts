@@ -254,9 +254,16 @@ export interface QuestionReplyRouteInput {
   canAnswerWithFreeText: boolean;
 }
 
-/** An option label as a reply is matched against it: the ends and the case do not tell two apart. */
-function normaliseOptionLabel(label: string): string {
-  return label.trim().toLowerCase();
+/**
+ * What does not tell two replies apart at their ends: the quotes a person wraps an option in, and the sentence punctuation a speech
+ * engine puts after a lone answer («1.», «Wait for the review.»). Leading quotes and trailing quotes and punctuation only — a
+ * punctuation mark inside the words stays.
+ */
+const replyEdgeNoise = /^[\s"'`«»“”„‘’]+|[\s"'`«»“”„‘’.,;:!?…]+$/g;
+
+/** A reply, or an option label, as an option is matched against it: without the noise at its ends, and with no regard to the case. */
+function normaliseReplyText(text: string): string {
+  return text.replace(replyEdgeNoise, '').toLowerCase();
 }
 
 /**
@@ -264,7 +271,8 @@ function normaliseOptionLabel(label: string): string {
  * so it does not answer a set-aside question (1), and answers no waiting question either (2: it cancels it, like any message
  * that is not a pick).
  *  1. a REPLY to either message of a set-aside question answers that question — whatever else is open, the person named it: a
- *     bare option number in range picks that label, so does an option's own label, and any other text is the answer itself — but
+ *     bare option number in range picks that label, so does an option's own label (both read without the quotes and the closing
+ *     punctuation around them, which a transcript adds), and any other text is the answer itself, as it was typed — but
  *     only where `canAnswerWithFreeText` (a topic member's other text routes on, as an ordinary message; a reply with no text routes
  *     on too);
  *  2. a question still waiting keeps its route (a number answers it, other text cancels it and goes as a prompt);
@@ -281,8 +289,10 @@ export function getQuestionReplyRouteWithSetAside(input: QuestionReplyRouteInput
     : undefined;
   const repliedTarget = repliedRecord ? getSetAsideAnswerTarget(repliedRecord) : null;
   if (repliedRecord && repliedTarget && text !== '') {
-    const numberRoute = getQuestionReplyRoute(text, repliedTarget.question);
-    const ownLabel = repliedTarget.question.options.find((option) => normaliseOptionLabel(option.label) === normaliseOptionLabel(text))?.label;
+    // A reply is read the way it was probably meant: a voice reply's transcript carries a full stop after the «1» or the label it says.
+    const meant = normaliseReplyText(text);
+    const numberRoute = getQuestionReplyRoute(meant, repliedTarget.question);
+    const ownLabel = meant === '' ? undefined : repliedTarget.question.options.find((option) => normaliseReplyText(option.label) === meant)?.label;
     const answer = numberRoute.kind === 'answer' ? numberRoute.labels : ownLabel !== undefined ? [ownLabel] : input.canAnswerWithFreeText ? [text] : null;
     if (answer !== null) return { kind: 'answerSetAside', recordId: repliedRecord.id, questionIndex: repliedTarget.index, answer };
   }

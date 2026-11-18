@@ -112,7 +112,9 @@ const setAsideLatenessMs = 3000;
 /** The voice notes of the flow, in the order they are sent: what the fake speech engine hears in each. */
 const operatorVoiceAnswer = 'ship it after the review';
 const memberVoiceWords = 'push to prod and delete the branch';
-const spokenTranscripts = [operatorVoiceAnswer, memberVoiceWords, '1'];
+/** A speech engine ends a lone spoken number with a full stop: «1.» is the third note, and it still picks the first option. */
+const memberVoiceOptionNumber = '1.';
+const spokenTranscripts = [operatorVoiceAnswer, memberVoiceWords, memberVoiceOptionNumber];
 const voiceFileId = 'voice-set-aside-1';
 const voiceFileBytes = 2048;
 const voiceDurationSeconds = 2;
@@ -855,7 +857,7 @@ describe('A question nobody answers is set aside, end to end: built charness, fa
       assert.equal(getLatePrompts().length, promptsBefore + 1, 'and the agent heard no late answer from it');
       assert.notEqual(readKeptMessage(second).reply_markup, undefined, 'its buttons stay');
 
-      // … but an option number is.
+      // … but an option number is, even with the full stop a transcript puts after it.
       fakeTelegram.pushOperatorVoice(topicThreadId, voiceFileId, voiceDurationSeconds, { replyToMessageId: second.message_id, from: topicTalker });
       const memberPrompt = await waitForNewLatePrompt(promptsBefore + 1);
       assertMemberAnswer(memberPrompt, fakeAskQuestion.shortOptionLabel);

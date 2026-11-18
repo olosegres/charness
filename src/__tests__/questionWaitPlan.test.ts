@@ -501,9 +501,41 @@ describe('getQuestionReplyRouteWithSetAside', () => {
       assert.deepEqual(routeOf({ text: 'do it differently', replyToMessageId: 100, canAnswerWithFreeText: false, liveQuestion: docsQuestion, setAside: [older] }), { kind: 'cancel' });
     });
 
+    it('a transcript\'s full stop or quotes do not hide the option: «2.» and «Wait for the review.» pick it for a member too', () => {
+      const expected = { kind: 'answerSetAside', recordId: 'older', questionIndex: 0, answer: ['Wait for the review'] };
+      for (const spoken of ['2.', ' 2! ', '"2"', '«2».', 'Wait for the review.', '"Wait for the review"', '“Wait for the review.”', 'wait for the review…']) {
+        assert.deepEqual(routeOf({ text: spoken, replyToMessageId: 100, ...asMember }), expected, spoken);
+      }
+    });
+
+    it('punctuation INSIDE the words is not noise, and a bare mark is no option: «Push, now» and «.» stay free text', () => {
+      assert.deepEqual(routeOf({ text: 'Push, now', replyToMessageId: 100, ...asMember }), { kind: 'prompt' });
+      assert.deepEqual(routeOf({ text: '...', replyToMessageId: 100, ...asMember }), { kind: 'prompt' });
+    });
+
     it('the operator\'s free text IS the answer, and so is their label', () => {
       assert.deepEqual(routeOf({ text: 'push to prod and delete the branch', replyToMessageId: 100, liveQuestion: undefined, setAside: [older] }), { kind: 'answerSetAside', recordId: 'older', questionIndex: 0, answer: ['push to prod and delete the branch'] });
       assert.deepEqual(routeOf({ text: 'push now', replyToMessageId: 100, liveQuestion: undefined, setAside: [older] }), { kind: 'answerSetAside', recordId: 'older', questionIndex: 0, answer: ['Push now'] }, 'the label as the question names it');
+    });
+  });
+
+  describe('the operator\'s spoken option', () => {
+    const asOperator = { liveQuestion: undefined, setAside: [older] } as const;
+
+    it('«1.» picks the option\'s label — not the free-text answer «1.»', () => {
+      assert.deepEqual(routeOf({ text: '1.', replyToMessageId: 100, ...asOperator }), { kind: 'answerSetAside', recordId: 'older', questionIndex: 0, answer: ['Push now'] });
+    });
+
+    it('a label with a full stop answers with the label as the question names it', () => {
+      assert.deepEqual(routeOf({ text: 'Wait for the review.', replyToMessageId: 100, ...asOperator }), { kind: 'answerSetAside', recordId: 'older', questionIndex: 0, answer: ['Wait for the review'] });
+    });
+
+    it('free words keep their punctuation: the answer is what was said, as it was written', () => {
+      assert.deepEqual(routeOf({ text: 'Push it, but only after lunch.', replyToMessageId: 100, ...asOperator }), { kind: 'answerSetAside', recordId: 'older', questionIndex: 0, answer: ['Push it, but only after lunch.'] });
+    });
+
+    it('a bare number with a full stop is still no pick of the question that waits: only the reply to a set-aside question reads it', () => {
+      assert.deepEqual(routeOf({ text: '1.', replyToMessageId: null, liveQuestion: docsQuestion, setAside: [older] }), { kind: 'cancel' });
     });
   });
 
