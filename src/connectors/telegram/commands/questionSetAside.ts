@@ -326,8 +326,9 @@ export function createQuestionSetAside(ports: QuestionSetAsidePorts) {
       await dropQuestionTheAdapterDoesNotHold(key, adapter, pending);
       return 'ended';
     }
-    const attempt = (retryAttempts.get(`${kStr}:${requestId}`) ?? 0) + 1;
-    retryAttempts.set(`${kStr}:${requestId}`, attempt);
+    const attemptKey = getAttemptKey(key, requestId);
+    const attempt = (retryAttempts.get(attemptKey) ?? 0) + 1;
+    retryAttempts.set(attemptKey, attempt);
     const isRetried = attempt <= setAsideRetryLimit;
     console.warn(`[questionSetAside] ${kStr}: the agent's server did not confirm the question ${requestId} (${server}); it stays waiting${isRetried ? `, the wait ends again in ${retryDelayMs / 1000} s (try ${attempt} of ${setAsideRetryLimit})` : ', no more tries'}`);
     if (isRetried) armRetry(key, requestId);

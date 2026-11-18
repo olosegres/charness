@@ -6020,6 +6020,11 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
     }
   }
 
+  /** The one request that answers a question: `POST /question/:id/reply`, one list of answer texts per question. Resolves once the server took it. */
+  private async postQuestionReply(requestId: string, directory: string | undefined, answers: string[][]): Promise<void> {
+    await this.apiRequest('POST', buildDirectoryScopedPath(`/question/${requestId}/reply`, directory), { answers });
+  }
+
   /**
    * @description Reply to a pending question with user-selected answers.
    * Called by the bot when the user clicks an inline button or types a custom answer.
@@ -6033,9 +6038,7 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
 
     // Audit S15 / #41: surface failures via `error` so the bot's
     // handleAgentError shows them in the thread, not just in console.
-    this.apiRequest('POST', buildDirectoryScopedPath(`/question/${requestId}/reply`, directory), {
-      answers,
-    }).catch((e) => {
+    this.postQuestionReply(requestId, directory, answers).catch((e) => {
       console.error(`[OpenCode] Failed to reply to question:`, e);
       this.emit('error', key, e instanceof Error ? e : new Error(String(e)));
     });
@@ -6057,7 +6060,7 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
     if (!session || !pending || pending.requestId !== requestId) return false;
     const answers = pending.questions.map((_, index) => givenAnswers[index] ?? [text]);
     session.pendingQuestion = null;
-    this.apiRequest('POST', buildDirectoryScopedPath(`/question/${requestId}/reply`, pending.directory), { answers })
+    this.postQuestionReply(requestId, pending.directory, answers)
       .then(() => onSettled?.(true))
       .catch((e) => {
         console.error(`[OpenCode] Failed to set the question ${requestId} aside:`, e);
