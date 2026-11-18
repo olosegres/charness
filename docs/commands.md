@@ -197,11 +197,15 @@ so one account's usage limit does not stop every topic.
   what is behind the `projects` link. Not covered, because the docs give them no
   instruction or executable role at the user level: `keybindings.json`, `themes/`,
   and `settings.local.json` (a project's file, not the user directory's).
-  **A folder the bot's user does not own** (an operator locked it) is not written
-  to and is not chmod'ed: when its layout is right nothing is said; when it is not,
-  one warning per profile per process says so and the launch goes ahead — the
-  agent runs as the bot's user, so a folder the bot cannot write is one the agent
-  could not plant in either.
+  **A folder another user owns** (an operator locked it) is not chmod'ed, and
+  one the bot's user cannot write is not written to: when its layout is right
+  nothing is said; when it is not, one warning per profile per process says so and
+  the launch goes ahead — the agent runs as the bot's user, so a folder the bot
+  cannot write is one the agent could not plant in either. A locked folder the
+  bot's user can still write (its group or an ACL lets it) is repaired like any
+  other, since an agent could add entries there too; a link of the operator's
+  that it may not move (the folder has the sticky bit) stays, with the same one
+  warning.
   `.claude.json` also holds the account's MCP servers (the docs keep them there),
   and the bot does not edit it: when it holds MCP servers (or settings-style keys
   such as `hooks`, whose effect there the docs do not describe) the log names them —
@@ -214,7 +218,9 @@ so one account's usage limit does not stop every topic.
   For a hard guarantee, lock the folder instead: owned by another user, the links
   and config entries owned by that user, and writable by the account's user only
   where Claude Code keeps its own state (`.credentials.json`, `.claude.json`,
-  `backups/`, `session-env/`, …). The bot does not write to such a folder (checked
+  `backups/`, `session-env/`, …); if the account's user must still create files in
+  the folder itself, give it the sticky bit, so that user cannot move the
+  operator's links. The bot does not write to a folder it cannot write (checked
   with a simulated owner; not run against the real CLI under a lock).
 - **Usage per account.** Under each profile `/accounts` shows how much of each
   subscription window is used and when it resets:
@@ -274,7 +280,12 @@ so one account's usage limit does not stop every topic.
   (the bot's log has the line). It has no topic to carry the buttons or the notice,
   so with switching OFF, with no account free or on OpenCode it waits for the reset
   as before and says so to the open request; an OpenCode entry of the chain is
-  skipped (a list with no Claude entry restricts no account).
+  skipped (a list with no Claude entry restricts no account). Such a conversation
+  has no settings of its own: the account it starts on (General's `/accounts`
+  default), the `/limits_autoswitch` list, «Auto switch» and «Wait for reset» are
+  ONE set for the whole bot, whatever the connector, and are set in Telegram's
+  General topic (an instance that serves Jira and Telegram together uses the same
+  values for both).
 - **Which account for a child process.** An agent that launches a detached
   `claude` (a worker, a reviewer) asks the bot's `claude_profiles` MCP tool
   — optionally with the model it will run — and gets every
@@ -810,7 +821,7 @@ and the two settings (auto switch, wait for the reset):
 
 ### `/limits_autoswitch`
 
-The setup of automatic switching on a usage limit, with a short text: a title, what the topic runs on and where its two settings come from. **Fallback models** — an ordered list of Claude accounts (with an optional model) and OpenCode providers with a model, top = preferred, where a topic continues when its agent hits a limit. One full-width button per entry (`✓ 1. Claude · work · opus`, `2. Claude · default ⛔ 14:00`, `3. OpenCode · openai · gpt-5 🚫` — ✓ where the topic runs, ⛔ limited until, 🔒 not signed in, ❓ no longer offered, 💸 API credits used up, 🚫 left out of automatic switching); a tap opens that entry in the same message with ⬆️ Up / ⬇️ Down, 🚫 Don't use / ✅ Use (a left-out entry stays usable by hand through `/model` and `/accounts`), 🗑 Remove and ⬅️ Back. Below the list: «➕ Add» (account or provider, then the model; an entry of a backend the list does not use yet — an OpenCode model next to Claude accounts, or the reverse — asks first, because a limit then hands a conversation over in compacted form; including a 🚫 entry that does that asks the same way), «🔄 Fill from connected» (a draft from what is connected; entries you left out stay left out; an account billed to API credits comes last and left out unless you had included it; asks first when a list exists), «🗑 Clear». The list is ONE instance-wide list and is editable from every topic. **Two settings** decide what a limit does: «🔁 Auto switch» — auto switch to a fallback model (ON by default, also with one account; the topic moves to the first entry of the list with room — an OpenCode entry included, which hands the conversation over in compacted form; turned OFF, the limit notice carries «🔁 Switch to …» buttons instead) and «⏳ Wait for reset» — wait for the reset and continue (ON by default; while a wait is armed the topic screen also offers «⏭ Skip once»). In General they are the defaults for all topics and each is one button that flips the value. In a regular topic each is one short full-width button showing the effective value (`🔁 Auto switch: ON`; one line of text above the list says where each value comes from — `🔁 as in General · ⏳ set for this topic`); a tap opens the setting in the same message with ON / OFF / «As in General (<the General value>)» — the topic's own choice marked ✓ — and ⬅️ Back, and a choice applies and returns to the screen. Switch ON: the topic moves to the first available entry at once. OFF: buttons on the notice, and if none is pressed the bot waits for the reset (waiting ON); both OFF: it only reports the limit. When every enabled entry, the current one included, is limited, the wait ends at the EARLIEST reset and the topic continues on that entry (the notice names it and the time). Text forms: `/limits_autoswitch rebuild`, `/limits_autoswitch clear`, `/limits_autoswitch switch on|off|same`, `/limits_autoswitch wait on|off|same` (the same verbs work after `/limits`). `/fallback` and `/auto_continue_limits [on|off]` still work as hidden aliases. The board that switches a topic by hand is [`/limits`](#limits).
+The setup of automatic switching on a usage limit, with a short text: a title, what the topic runs on and where its two settings come from. **Fallback models** — an ordered list of Claude accounts (with an optional model) and OpenCode providers with a model, top = preferred, where a topic continues when its agent hits a limit. One full-width button per entry (`✓ 1. Claude · work · opus`, `2. Claude · default ⛔ 14:00`, `3. OpenCode · openai · gpt-5 🚫` — ✓ where the topic runs, ⛔ limited until, 🔒 not signed in, ❓ no longer offered, 💸 API credits used up, 🚫 left out of automatic switching); a tap opens that entry in the same message with ⬆️ Up / ⬇️ Down, 🚫 Don't use / ✅ Use (a left-out entry stays usable by hand through `/model` and `/accounts`), 🗑 Remove and ⬅️ Back. Below the list: «➕ Add» (account or provider, then the model; an entry of a backend the list does not use yet — an OpenCode model next to Claude accounts, or the reverse — asks first, because a limit then hands a conversation over in compacted form; including a 🚫 entry that does that asks the same way), «🔄 Fill from connected» (a draft from what is connected; entries you left out stay left out; an account billed to API credits comes last and left out unless you had included it; asks first when a list exists), «🗑 Clear». The list is ONE instance-wide list and is editable from every topic. **Two settings** decide what a limit does: «🔁 Auto switch» — auto switch to a fallback model (ON by default, also with one account; the topic moves to the first entry of the list with room — an OpenCode entry included, which hands the conversation over in compacted form; turned OFF, the limit notice carries «🔁 Switch to …» buttons instead) and «⏳ Wait for reset» — wait for the reset and continue (ON by default; while a wait is armed the topic screen also offers «⏭ Skip once»). In General they are the defaults for all topics and each is one button that flips the value. In a regular topic each is one short full-width button showing the effective value (`🔁 Auto switch: ON`; one line of text above the list says where each value comes from — `🔁 as in General · ⏳ set for this topic`); a tap opens the setting in the same message with ON / OFF / «As in General (<the General value>)» — the topic's own choice marked ✓ — and ⬅️ Back, and a choice applies and returns to the screen. Switch ON: the topic moves to the first available entry at once. OFF: buttons on the notice, and if none is pressed the bot waits for the reset (waiting ON); both OFF: it only reports the limit. When every enabled entry, the current one included, is limited, the wait ends at the EARLIEST reset and the topic continues on that entry (the notice names it and the time). Text forms: `/limits_autoswitch rebuild`, `/limits_autoswitch clear`, `/limits_autoswitch switch on|off|same`, `/limits_autoswitch wait on|off|same` (the same verbs work after `/limits`). `/fallback` and `/auto_continue_limits [on|off]` still work as hidden aliases. A conversation that is not a Telegram topic (a Jira issue) follows the list and General's two values — it has no choice of its own. The board that switches a topic by hand is [`/limits`](#limits).
 
 #### Fallback models and automatic switching
 

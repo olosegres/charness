@@ -301,8 +301,11 @@ Claude entry restricts nothing), else the ranking by the soonest weekly reset (`
 nothing — the work simply goes on; the bot's log has the `[fallback]` line. Everything that is a topic's stays out: the «Switch to …»
 offer (with auto switch OFF the conversation waits), the notice, the wait aimed at the account that resets first (the retry kick moves only a
 topic there) — and with no account free, or on OpenCode, the conversation waits for the reset exactly as before, announced to the open
-request. It follows the instance's auto-switch setting (`/limits_autoswitch`): ON unless it was turned OFF — in General on an instance that also
-serves Telegram, or `claudeAutoSwitchOnLimitEnabled: false` in `state.json` on a Jira-only one. A launch under an account's directory carries
+request. The account-switch settings are ONE set for the whole bot, whatever the connector, and a Jira conversation has no override of its
+own: it starts on the instance's default account (`claudeProfileDefault`, General's `/accounts` pick) and follows the instance's fallback
+list and General's «Auto switch» (`claudeAutoSwitchOnLimitEnabled`, ON unless turned OFF) and «Wait for reset»
+(`autoContinueOnLimitEnabled`, ON unless turned OFF) of `/limits_autoswitch`. Telegram's General topic is where they are set (an instance that serves
+Jira and Telegram together uses the same values for both); a Jira-only one keeps them in `state.json`. A launch under an account's directory carries
 `CLAUDE_CONFIG_DIR` — a path, the one variable beyond the agent allowlist (R32). Flow: `jiraFallbackSwitchE2e.test.ts`.
 
 ## Isolation — fail-closed, checked at boot

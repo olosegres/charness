@@ -11,8 +11,9 @@
  *   • a link to `~/.claude` that dangles (the user deleted the target) is the bot's own and is left alone;
  *   • the account's own state — login, `.claude.json`, backups, history, todos, snapshots, caches, subagent memory — and the entries
  *     the docs give no user-level role (`settings.local.json`, `keybindings.json`, `themes/`) are never touched;
- *   • a folder another user owns: nothing written, nothing thrown, ONE warning per profile per process, and none at all when the
- *     layout is already right (the locked cloud layout); a failing write in a folder the bot owns is warned about once too;
+ *   • a folder another user owns that this user cannot write: nothing written, nothing thrown, ONE warning per profile per process,
+ *     and none at all when the layout is already right (the locked cloud layout); one it can still write (group, ACL) is repaired;
+ *     a failing write in a folder the bot owns is warned about once too;
  *   • the creation path no longer chmods a folder it does not own;
  *   • `.claude.json` is only READ: its MCP servers and settings-style keys are named in one warning per finding — never a command, an
  *     argument or a value — and the file is left byte for byte;
@@ -236,10 +237,12 @@ describe('claudeProfileRepair', () => {
   describe('a folder another user owns (an operator locked it)', () => {
     const otherUid = (): number => (typeof process.getuid === 'function' ? process.getuid() : 1000) + 1;
 
-    it('a wrong layout is not written to, does not throw and is warned about ONCE per profile per process — the launch goes on', () => {
+    it('a wrong layout in a folder this user cannot write is not written to, does not throw and is warned about ONCE per profile per process — the launch goes on', (testContext) => {
+      if (typeof process.getuid === 'function' && process.getuid() === 0) return testContext.skip('root writes into a read-only folder');
       plant('settings.json');
       plant('agents', 'directory');
       const longAgo = new Date('2026-01-01T00:00:00Z');
+      fs.chmodSync(profileDir, 0o555);
       fs.utimesSync(profileDir, longAgo, longAgo);
 
       const first = repair({ uid: otherUid() });
@@ -250,15 +253,34 @@ describe('claudeProfileRepair', () => {
       assert.deepEqual(first.actions, []);
       assert.equal(second.status, 'notOwned');
       assert.equal(logLines.length, 1, `one warning, not one per launch: ${logLines.join(' | ')}`);
-      assert.match(logLines[0], /profile work: .*belongs to another user.*launching anyway/);
+      assert.match(logLines[0], /profile work: .*cannot write the folder.*launching anyway/);
       assert.equal(fs.readFileSync(path.join(profileDir, 'settings.json'), 'utf8'), 'planted settings.json', 'nothing was written');
       assert.equal(fs.statSync(profileDir).mtimeMs, longAgo.getTime());
       // Another profile is warned about on its own.
-      createClaudeProfileLayout({ dataDir, name: 'second', homeClaudeDir });
-      fs.rmSync(path.join(dataDir, 'claude-profiles', 'second', 'skills'));
-      fs.mkdirSync(path.join(dataDir, 'claude-profiles', 'second', 'skills'));
-      repairClaudeProfileLayout({ dataDir, name: 'second', homeClaudeDir, uid: otherUid(), log: (line) => logLines.push(line) });
+      const secondDir = createClaudeProfileLayout({ dataDir, name: 'second', homeClaudeDir });
+      fs.rmSync(path.join(secondDir, 'skills'));
+      fs.mkdirSync(path.join(secondDir, 'skills'));
+      fs.chmodSync(secondDir, 0o555);
+      try {
+        repairClaudeProfileLayout({ dataDir, name: 'second', homeClaudeDir, uid: otherUid(), log: (line) => logLines.push(line) });
+      } finally {
+        fs.chmodSync(secondDir, 0o700);
+      }
       assert.equal(logLines.length, 2);
+    });
+
+    it('a locked folder this user can still write (its group or ACL lets the CLI save its files) is repaired: what an agent added is moved aside', () => {
+      plant('agents', 'directory');
+      fs.rmSync(path.join(profileDir, 'settings.json'));
+      fs.writeFileSync(path.join(profileDir, 'settings.json'), 'planted settings.json');
+
+      const result = repair({ uid: otherUid() });
+
+      assert.equal(result.status, 'ok');
+      assert.deepEqual(result.actions.map((action) => action.entry).sort(), ['agents', 'settings.json']);
+      assert.deepEqual(listMovedAside('agents'), [`agents.moved-${movedStamp}`]);
+      assert.equal(fs.existsSync(path.join(profileDir, 'agents')), false, '~/.claude has no agents/, so none is linked');
+      assert.equal(fs.readlinkSync(path.join(profileDir, 'settings.json')), path.join(homeClaudeDir, 'settings.json'));
     });
 
     it('a layout that is already right is neither written to nor warned about, whoever owns the folder', () => {

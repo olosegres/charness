@@ -97,9 +97,25 @@ export function resolveHomeClaudeDir(homeDir: string = os.homedir()): string {
   return path.join(homeDir, '.claude');
 }
 
-/** Whether this process may write into a folder `stat` describes: root, a folder it owns, or a platform with no owner to ask. */
-function checkCanWriteInto(stat: fs.Stats, uid: number | null): boolean {
+/** Whether this process may chmod a folder `stat` describes: root, the folder's owner, or a platform with no owner to ask. */
+function checkCanChmod(stat: fs.Stats, uid: number | null): boolean {
   return uid === null || uid === 0 || stat.uid === uid;
+}
+
+/**
+ * Whether this process may write into the folder `dir` (`stat` describes it): its owner or root may, and so may anyone the folder's
+ * group or ACL lets write — a locked folder the CLI must still save its own files in is one an agent can add entries to, so it is not
+ * left alone for being another user's. With a `uid` other than the process's own (a test standing in for another owner) only the
+ * permission check speaks.
+ */
+function checkCanWriteInto(dir: string, stat: fs.Stats, uid: number | null): boolean {
+  if (checkCanChmod(stat, uid) && uid === readCurrentUid()) return true;
+  try {
+    fs.accessSync(dir, fs.constants.W_OK);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /** The uid of this process; `null` where there is none (Windows). */
@@ -112,7 +128,7 @@ function readCurrentUid(): number | null {
  * ({@link repairClaudeProfileLayout}). Idempotent — an existing directory keeps its login and its state, gains a missing link, and has
  * anything that stands in a link's place moved aside; so a re-run after a crash is safe. Refuses `default` and an invalid name
  * (defence in depth: the command gate already rejected them). `~/.claude/projects` is created when absent so the link never dangles
- * into the one entry the bot reads. A folder another user owns (an operator locked it) is neither chmod'ed nor written to.
+ * into the one entry the bot reads. A folder another user owns (an operator locked it) is not chmod'ed, and one this user cannot write is not written to.
  */
 export function createClaudeProfileLayout(input: { dataDir: string; name: string; homeClaudeDir?: string; uid?: number | null }): string {
   const { dataDir, name } = input;
@@ -124,7 +140,7 @@ export function createClaudeProfileLayout(input: { dataDir: string; name: string
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
   const dirStat = fs.statSync(dir);
   // Only the owner may chmod (anyone else gets EPERM), and nothing is written when the mode is already right.
-  if (checkCanWriteInto(dirStat, input.uid === undefined ? readCurrentUid() : input.uid) && (dirStat.mode & 0o777) !== 0o700) fs.chmodSync(dir, 0o700);
+  if (checkCanChmod(dirStat, input.uid === undefined ? readCurrentUid() : input.uid) && (dirStat.mode & 0o777) !== 0o700) fs.chmodSync(dir, 0o700);
   fs.mkdirSync(path.join(homeClaudeDir, 'projects'), { recursive: true });
   repairClaudeProfileLayout({ dataDir, name, homeClaudeDir, uid: input.uid, isStrict: true });
   return dir;
@@ -146,7 +162,7 @@ export interface ClaudeProfileRepairAction {
 export interface ClaudeProfileRepairResult {
   /** The folder; `null` for `default`, an invalid name or an absent folder (nothing was looked at). */
   dir: string | null;
-  /** `ok`: right already, or repaired; `notOwned`: wrong, in a folder this user cannot write — nothing was written; `failed`: a write failed. */
+  /** `ok`: right already, or repaired; `notOwned`: wrong, in another user's folder this user cannot write — nothing was written; `failed`: a write failed. */
   status: 'ok' | 'skipped' | 'notOwned' | 'failed';
   /** What was repaired. */
   actions: ClaudeProfileRepairAction[];
@@ -211,10 +227,12 @@ function isDanglingLink(linkPath: string): boolean {
  * Everything else in the folder is the account's own state — `.credentials.json`, `.claude.json`, backups, history, caches, the
  * contents behind the `projects` link — and is never touched.
  *
- * A folder this user does not own (an operator locked it) is not written to: a wrong layout there is warned about ONCE per
- * profile per process, and the launch goes ahead — the agent runs as the same user as the bot, so a folder the bot cannot write is
- * one the agent could not plant in either. A write that fails in a folder the bot does own is warned about once the same way, unless
- * `isStrict` (the creation path), which throws it.
+ * A folder another user owns that this user cannot write (an operator locked it) is not written to: a wrong layout there is warned
+ * about ONCE per profile per process, and the launch goes ahead — the agent runs as the same user as the bot, so a folder the bot
+ * cannot write is one the agent could not plant in either. A locked folder this user CAN still write (its group or ACL lets the CLI
+ * save its own files there) is repaired like any other — an agent could add entries to it — as far as the operator's entries allow
+ * (with the sticky bit their links cannot be moved). A write that fails is warned about once the same way, unless `isStrict` (the
+ * creation path), which throws it.
  */
 export function repairClaudeProfileLayout(input: {
   dataDir: string;
@@ -269,9 +287,9 @@ export function repairClaudeProfileLayout(input: {
     log(line);
   };
   const uid = input.uid === undefined ? readCurrentUid() : input.uid;
-  if (!checkCanWriteInto(dirStat, uid)) {
+  if (!checkCanWriteInto(dir, dirStat, uid)) {
     const pending = plan.map((step) => step.entry);
-    warnOnce(`[accounts] profile ${name}: ${pending.join(', ')} ${pending.length === 1 ? 'is' : 'are'} not what the layout expects, but the folder belongs to another user, so nothing was changed; launching anyway`);
+    warnOnce(`[accounts] profile ${name}: ${pending.join(', ')} ${pending.length === 1 ? 'is' : 'are'} not what the layout expects, but this user cannot write the folder (another user locked it), so nothing was changed; launching anyway`);
     return { dir, status: 'notOwned', actions: [], pending };
   }
 
