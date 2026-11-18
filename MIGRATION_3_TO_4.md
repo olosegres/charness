@@ -45,7 +45,7 @@ The fee is the **higher** of the revenue band and the people band:
   pays for the group.
 - Two optional discounts, together 32% off: 20% for showing a "Powered by Charness" mark, 15% for prepaying 2 or 3 years.
 - Buying is by e-mail: charnesshub@gmail.com, see the [commercial page](https://olosegres.github.io/charness/commercial/)
-  and the [commercial terms](COMMERCIAL-LICENSE.md). Full refund within 30 days.
+  and the [commercial terms](LICENSE-COMMERCIAL.md). Full refund within 30 days.
 
 More cases, and what counts in R and H: the [licensing FAQ](docs/licensing-faq.md).
 

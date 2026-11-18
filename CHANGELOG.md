@@ -11,6 +11,9 @@ In General it sets the default of every topic (kept as `questionWait` in `settin
 **An option of the agent's question no longer shows twice when the agent gives it a description that only repeats its label.**
 Before, the question message printed each option as its label and, on the next line, its description — so an agent that filled the description with the label itself produced «1. Red» followed by «Red», «2. Blue» followed by «Blue». Now such a description is left out, in the question as posted and as it stays after the answer: a description counts as a repeat when it is the label's words compared trimmed and in any case, with or without trailing punctuation (a full stop, «!», «?», «…», a comma and the like) — «Red», «RED» and «red.» all repeat the label «Red». A description that says anything more stays under its option as before. Claude Code (json-stream and per-turn) and OpenCode; the deprecated tmux backend is not covered.
 
+**The commercial license terms are now in `LICENSE-COMMERCIAL.md` (formerly `COMMERCIAL-LICENSE.md`), so the file sorts right next to `LICENSE` in a file list.**
+The wording is unchanged. The package ships the file under the new name, and the links to it in the README, the licensing FAQ and the 3 → 4 migration guide follow; a link to the old file name no longer opens it.
+
 ## 4.1.1 — 2026-11-17
 
 **The pairing line of `/runners` — a secret that lets whoever holds it pair a machine to your host — now comes to you in a private message from the bot, no longer in General, where every member of the group could read it.**

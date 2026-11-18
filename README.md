@@ -160,6 +160,6 @@ Full write-up: [Vibe-coding by voice, from my phone](https://dev.to/olosegres/vi
 **Charness 4.0 and later is source-available under the [Charness License 1.0.0](LICENSE)** — not open source:
 
 - **Free** for personal use and for any organization group with revenue plus funding up to $500,000 and up to 20 people; also for education, charities and public bodies' core work, and a 32-day evaluation.
-- **One annual license per organization group above that** — from $500 to $60,000 by the higher of its revenue band and its people band, with unlimited users, agents and machines and no seats. Buy by e-mail: [commercial page](https://olosegres.github.io/charness/commercial/), [commercial terms](COMMERCIAL-LICENSE.md).
+- **One annual license per organization group above that** — from $500 to $60,000 by the higher of its revenue band and its people band, with unlimited users, agents and machines and no seats. Buy by e-mail: [commercial page](https://olosegres.github.io/charness/commercial/), [commercial terms](LICENSE-COMMERCIAL.md).
 - Every release before 4.0 was published under MIT and stays MIT.
 - Questions and examples: [licensing FAQ](docs/licensing-faq.md); moving from 3.x: [MIGRATION_3_TO_4.md](MIGRATION_3_TO_4.md).

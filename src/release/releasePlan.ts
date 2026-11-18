@@ -26,7 +26,7 @@ export const requiredPackFiles = [
   'README.md',
   'LICENSE',
   // The paid terms the license points to: a package without them would send a buyer to a file that is not there.
-  'COMMERCIAL-LICENSE.md',
+  'LICENSE-COMMERCIAL.md',
 ];
 const forbiddenPackPathPrefixes = ['src/', 'dist/release/'];
 const forbiddenPackPathFragment = '__tests__';
@@ -42,7 +42,7 @@ const unshippedSourcePrefixes = ['src/__tests__/', 'src/release/'];
  * license texts: a change to the terms a copy is under is a change to what an install gets, and without it a license-only commit would
  * count as "nothing shipped" and never be released.
  */
-const shippedExtraPaths = ['stt/gigaam_sidecar.py', 'npm-shrinkwrap.json', 'LICENSE', 'COMMERCIAL-LICENSE.md'];
+const shippedExtraPaths = ['stt/gigaam_sidecar.py', 'npm-shrinkwrap.json', 'LICENSE', 'LICENSE-COMMERCIAL.md'];
 /** Folders shipped as they are: the skills the bot gives its agents. */
 const shippedExtraPrefixes = ['agent-plugin/'];
 const shippedManifestFields = ['dependencies', 'bin', 'engines', 'files', 'main', 'license'] as const;

@@ -1,7 +1,7 @@
 # Charness licensing FAQ
 
 > Plain-language help, not legal advice or a grant. The [Charness License 1.0.0](../LICENSE), the
-> [commercial terms](../COMMERCIAL-LICENSE.md) and signed addenda control.
+> [commercial terms](../LICENSE-COMMERCIAL.md) and signed addenda control.
 
 **Ordinary business use is free when group revenue plus counted funding (R) is at most $500,000 AND group people (H) is at most 20.** Otherwise pay one annual group fee selected by the higher band, with unlimited users, agents, jobs, machines and instances. Personal hobby/study and defined education/public-benefit purposes have separate free permissions. There are no seats to buy.
 
@@ -117,6 +117,6 @@ Customers need no separate Charness fee just to use the embedded component withi
 ## Exact terms
 
 - Public Charness License 1.0.0: https://olosegres.github.io/charness/license/1.0.0/ (the same text as the repository's [LICENSE](../LICENSE)).
-- [COMMERCIAL-LICENSE.md](../COMMERCIAL-LICENSE.md): group schedule, discounts, annual rights, verification and separately activated OEM/host terms.
+- [LICENSE-COMMERCIAL.md](../LICENSE-COMMERCIAL.md): group schedule, discounts, annual rights, verification and separately activated OEM/host terms.
 - Commercial information and contact route: https://olosegres.github.io/charness/commercial/; write to charnesshub@gmail.com.
 - Georgian law governs the public and commercial software-license terms, subject to mandatory applicable law; an identified payment seller's purchase terms are separate.
