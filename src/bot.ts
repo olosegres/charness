@@ -480,7 +480,7 @@ import { applyRunnerGroups } from './runners/runnerGroups';
 import { probeRunnersOverview, readRunnersOverview } from './runners/runnersOverview';
 import { getRemoteRunCacheDir } from './remoteRun/ssh';
 import { createClaudeAccounts, type ClaudeProfileApplyOutcome } from './connectors/telegram/commands/claudeAccounts';
-import { checkIsSameClaudeConfigDir, createClaudeProfileLayout, defaultClaudeProfileName, getClaudeAuthCommandEnvironment, getProcessFailureReason, parseClaudeAuthStatus, readClaudeProfileApiKey, readDefaultClaudeProfileApiKey, readProcessErrorStdout, resolveClaudeProfileDir, resolveClaudeProfilesRoot, type ClaudeAuthStatus } from './utils/claudeProfiles';
+import { checkIsSameClaudeConfigDir, createClaudeProfileLayout, defaultClaudeProfileName, getClaudeAuthCommandEnvironment, getProcessFailureReason, parseClaudeAuthStatus, readClaudeProfileApiKey, readDefaultClaudeProfileApiKey, readProcessErrorStdout, repairClaudeProfileFolderForLaunch, resolveClaudeProfileDir, resolveClaudeProfilesRoot, type ClaudeAuthStatus } from './utils/claudeProfiles';
 import { checkIsClaudeModelClearOfLimit, checkIsClaudeUsageExhausted, fetchClaudeUsage, readClaudeOAuthToken, type ClaudeProfilesReport, type ClaudeProfileUsageView } from './utils/claudeUsage';
 import { claudeUsageOnDemandMaxAgeMs, createClaudeUsageRefresher, refreshClaudeUsageForLaunch } from './utils/claudeUsageRefresher';
 import { createClaudeProfileSync } from './utils/claudeProfileSync';
@@ -8360,8 +8360,20 @@ registerRunnersCommands();
 // ── Claude account profiles (`/account`): `utils/claudeProfiles.ts`, `commands/claudeAccounts.ts` ──
 
 /**
+ * @description Put a profile folder's layout right before a process starts under it (`repairClaudeProfileFolderForLaunch`): the entries
+ * Claude Code loads as user-level configuration are links into `~/.claude` again, and whatever an agent on the account planted in their
+ * place is moved aside. Every launch site calls it — the conversation spawns (`resolveThreadClaudeConfigDir`: json-stream, per-turn and
+ * tmux, start, resume and account switch), the `claude auth` probes (`readClaudeAuthStatusUnder`), the sign-in (the layout call of
+ * `/accounts`) and the account a worker is pointed at (`listClaudeProfilesForAgent`, `charness claude-profiles`). Never throws.
+ */
+function repairClaudeProfileFolder(configDir: string | null): void {
+  repairClaudeProfileFolderForLaunch({ dataDir: resolveDataDir(), configDir });
+}
+
+/**
  * @description The Claude config directory a conversation's NEXT process starts with: its resolved account
- * profile's directory, `null` for the default profile. Registered as the adapters' reader at boot. A profile
+ * profile's directory, `null` for the default profile. Registered as the adapters' reader at boot, and read by
+ * every spawn, so the folder is repaired here ({@link repairClaudeProfileFolder}). A profile
  * whose directory vanished (a hand-cleaned `DATA_DIR`) runs on the default rather than failing the spawn.
  */
 function resolveThreadClaudeConfigDir(key: SessionKey): string | null {
@@ -8371,6 +8383,7 @@ function resolveThreadClaudeConfigDir(key: SessionKey): string | null {
     console.warn(`[account] ${keyToString(key)}: the directory of profile ${name} is missing; its process runs on the default profile`);
     return null;
   }
+  repairClaudeProfileFolder(dir);
   return dir;
 }
 
@@ -8380,6 +8393,8 @@ function resolveThreadClaudeConfigDir(key: SessionKey): string | null {
  * the probe fails.
  */
 async function readClaudeAuthStatusUnder(configDir: string | null): Promise<ClaudeAuthStatus | null> {
+  // The probe loads the folder's settings (an `apiKeyHelper` there is a command): the layout is put right first.
+  repairClaudeProfileFolder(configDir);
   const env = getClaudeAuthCommandEnvironment(configDir);
   try {
     const args = [...buildClaudeAuthProbeSettingsArgs(configDir), 'auth', 'status', '--json'];
@@ -9248,6 +9263,8 @@ async function takeFallbackSwitchOffer(key: SessionKey, episodeId: number, index
  * dropped by its own client after 300 s).
  */
 async function listClaudeProfilesForAgent(query: ClaudeProfilesQuery): Promise<ClaudeProfilesReport> {
+  // The agent launches its worker under whichever folder the answer names, so every folder is put right before it is named.
+  for (const view of getClaudeProfileUsageViews()) repairClaudeProfileFolder(view.configDir);
   const stoppedApiProfile = getApiProfileStoppedByAgent(getClaudeProfileUsageViews(), query, Date.now());
   await Promise.all([
     refreshClaudeUsageForLaunch(claudeUsageRefresher, { currentProfile: query.currentProfile, isStoppedByLimit: query.isStoppedByLimit, maxAgeMs: claudeUsageOnDemandMaxAgeMs }),

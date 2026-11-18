@@ -9,6 +9,12 @@
  * `~/.claude`, so a conversation started under one account resumes under another and every account sees
  * the same hooks and skills.
  *
+ * Everything Claude Code loads as USER-level configuration from that directory (instructions, rules, skills, subagents, commands,
+ * output styles, workflows, mods, plugins, the settings with their hooks) is therefore kept a link into `~/.claude`: a profile folder is
+ * writable by the user the bot and every agent run as, so an agent on the account could otherwise plant files there that every later
+ * session on it would follow. {@link repairClaudeProfileLayout} restores the links right before a launch under the folder and moves
+ * whatever stood in their place aside; the account's own state (login, `.claude.json`, history, caches) is never touched.
+ *
  * The profile `default` IS `~/.claude` itself: nothing is set for it and nothing is migrated. A process is
  * never switched by swapping files under `~/.claude` (the CLI re-reads its credentials live and EVERY running
  * session would change account at once); the variable is per process, set at spawn.
@@ -39,7 +45,19 @@ export const claudeProfilesDirName = 'claude-profiles';
  * file the CLI tries to read on every start).
  */
 export const claudeProfileSharedEntries = ['projects', 'settings.json', 'skills', 'plugins'] as const;
-export const claudeProfileOptionalSharedEntries = ['CLAUDE.md'] as const;
+
+/**
+ * The other user-level entries Claude Code loads from its config directory (code.claude.com/docs, «Explore the .claude directory»,
+ * «Create a mod»): `CLAUDE.md` and `rules/` (instructions, loaded at session start), `agents/` (subagent prompts, with their hooks and
+ * MCP servers in the frontmatter), `commands/` and `output-styles/` (prompts and instruction sets), `workflows/` (scripts the runtime
+ * runs), and `dev-mods/<session id>/` (mods Claude wrote — loaded again when that session is RESUMED, which is what the bot does).
+ * They mirror `~/.claude` the way the four above do, but only while `~/.claude` HAS the entry (a link to nothing would be read at every
+ * start for nothing): where it has none, a profile must hold none either, so anything found there is moved aside.
+ * Not in the list, on purpose: `keybindings.json` and `themes/` (the docs give them no instruction or executable role),
+ * `settings.local.json` (the docs scope it to a project's `.claude/`, not the user directory) and `agent-memory/` (subagent memory —
+ * the account's own state, loaded only by a subagent that opts in).
+ */
+export const claudeProfileOptionalSharedEntries = ['CLAUDE.md', 'rules', 'agents', 'commands', 'output-styles', 'workflows', 'dev-mods'] as const;
 
 /** Profile names are safe slugs: they become a directory name and a button's `callback_data`. */
 export const claudeProfileNameMaxLength = 32;
@@ -79,13 +97,24 @@ export function resolveHomeClaudeDir(homeDir: string = os.homedir()): string {
   return path.join(homeDir, '.claude');
 }
 
+/** Whether this process may write into a folder `stat` describes: root, a folder it owns, or a platform with no owner to ask. */
+function checkCanWriteInto(stat: fs.Stats, uid: number | null): boolean {
+  return uid === null || uid === 0 || stat.uid === uid;
+}
+
+/** The uid of this process; `null` where there is none (Windows). */
+function readCurrentUid(): number | null {
+  return typeof process.getuid === 'function' ? process.getuid() : null;
+}
+
 /**
- * @description Create a profile's config directory: `0700`, with the shared entries symlinked into `~/.claude`.
- * Idempotent — an existing directory keeps its login and only gains a missing link, so a re-run after a crash is
- * safe. Refuses `default` and an invalid name (defence in depth: the command gate already rejected them).
- * `~/.claude/projects` is created when absent so the link never dangles into the one entry the bot reads.
+ * @description Create a profile's config directory: `0700`, with the entries it mirrors from `~/.claude` linked
+ * ({@link repairClaudeProfileLayout}). Idempotent — an existing directory keeps its login and its state, gains a missing link, and has
+ * anything that stands in a link's place moved aside; so a re-run after a crash is safe. Refuses `default` and an invalid name
+ * (defence in depth: the command gate already rejected them). `~/.claude/projects` is created when absent so the link never dangles
+ * into the one entry the bot reads. A folder another user owns (an operator locked it) is neither chmod'ed nor written to.
  */
-export function createClaudeProfileLayout(input: { dataDir: string; name: string; homeClaudeDir?: string }): string {
+export function createClaudeProfileLayout(input: { dataDir: string; name: string; homeClaudeDir?: string; uid?: number | null }): string {
   const { dataDir, name } = input;
   if (!checkIsValidClaudeProfileName(name)) throw new Error(`invalid Claude profile name: ${JSON.stringify(name)}`);
   const homeClaudeDir = input.homeClaudeDir ?? resolveHomeClaudeDir();
@@ -93,27 +122,269 @@ export function createClaudeProfileLayout(input: { dataDir: string; name: string
   if (dir === null) throw new Error('the default profile has no directory of its own');
   fs.mkdirSync(resolveClaudeProfilesRoot(dataDir), { recursive: true, mode: 0o700 });
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
-  fs.chmodSync(dir, 0o700);
+  const dirStat = fs.statSync(dir);
+  // Only the owner may chmod (anyone else gets EPERM), and nothing is written when the mode is already right.
+  if (checkCanWriteInto(dirStat, input.uid === undefined ? readCurrentUid() : input.uid) && (dirStat.mode & 0o777) !== 0o700) fs.chmodSync(dir, 0o700);
   fs.mkdirSync(path.join(homeClaudeDir, 'projects'), { recursive: true });
-  const linked: string[] = [...claudeProfileSharedEntries];
-  for (const entry of claudeProfileOptionalSharedEntries) {
-    if (fs.existsSync(path.join(homeClaudeDir, entry))) linked.push(entry);
-  }
-  for (const entry of linked) {
-    const linkPath = path.join(dir, entry);
-    const target = path.join(homeClaudeDir, entry);
-    try {
-      const existing = fs.lstatSync(linkPath);
-      // A real file or dir of the profile's own (the CLI wrote one before the link existed) is left alone.
-      if (!existing.isSymbolicLink()) continue;
-      if (fs.readlinkSync(linkPath) === target) continue;
-      fs.unlinkSync(linkPath);
-    } catch {
-      /* absent → create below */
-    }
-    fs.symlinkSync(target, linkPath);
-  }
+  repairClaudeProfileLayout({ dataDir, name, homeClaudeDir, uid: input.uid, isStrict: true });
   return dir;
+}
+
+/** What stood where a link into `~/.claude` belongs. */
+export type ClaudeProfileEntryFinding = 'missing' | 'wrongLink' | 'file' | 'directory' | 'other';
+
+/** One entry the repair found wrong and what it did (or would have done) about it. */
+export interface ClaudeProfileRepairAction {
+  entry: string;
+  found: ClaudeProfileEntryFinding;
+  /** Where what stood there was moved aside to; `null` when nothing stood there. */
+  movedTo: string | null;
+  /** The target the link was restored to; `null` when `~/.claude` has no such entry and none belongs there. */
+  linkedTo: string | null;
+}
+
+export interface ClaudeProfileRepairResult {
+  /** The folder; `null` for `default`, an invalid name or an absent folder (nothing was looked at). */
+  dir: string | null;
+  /** `ok`: right already, or repaired; `notOwned`: wrong, in a folder this user cannot write — nothing was written; `failed`: a write failed. */
+  status: 'ok' | 'skipped' | 'notOwned' | 'failed';
+  /** What was repaired. */
+  actions: ClaudeProfileRepairAction[];
+  /** The entries still wrong afterwards (`notOwned`, `failed`). */
+  pending: string[];
+}
+
+/** Profiles whose unrepairable layout was already warned about by this process: one warning each, not one per launch. */
+const unrepairedWarnedDirs = new Set<string>();
+
+/** For tests only: forget which profiles were warned about. */
+export function resetClaudeProfileRepairWarningsForTests(): void {
+  unrepairedWarnedDirs.clear();
+  configRiskSeen.clear();
+}
+
+/** Whether the link at `linkPath` points at `target`: the same path, or paths that resolve to one real entry (an old spelling of it). */
+function checkIsLinkTo(linkPath: string, target: string): boolean {
+  let raw: string;
+  try {
+    raw = fs.readlinkSync(linkPath);
+  } catch {
+    return false;
+  }
+  if (path.resolve(path.dirname(linkPath), raw) === path.resolve(target)) return true;
+  try {
+    return fs.realpathSync(linkPath) === fs.realpathSync(target);
+  } catch {
+    return false;
+  }
+}
+
+/** `YYYYMMDDTHHMMSSZ` of an instant — the suffix of a moved-aside entry. */
+function formatMovedAsideStamp(nowMs: number): string {
+  return new Date(nowMs).toISOString().replace(/[-:]/g, '').replace(/\.\d+Z$/, 'Z');
+}
+
+/** A free `<entry>.moved-<UTC time>` name in `dir` (`-2`, `-3`… when two moves land in one second). */
+function pickMovedAsideName(dir: string, entry: string, nowMs: number): string {
+  const base = `${entry}.moved-${formatMovedAsideStamp(nowMs)}`;
+  let candidate = base;
+  for (let n = 2; fs.existsSync(path.join(dir, candidate)) || isDanglingLink(path.join(dir, candidate)); n += 1) candidate = `${base}-${n}`;
+  return candidate;
+}
+
+function isDanglingLink(linkPath: string): boolean {
+  try {
+    return fs.lstatSync(linkPath).isSymbolicLink();
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * @description Put a profile's folder back the way {@link createClaudeProfileLayout} made it, as far as the entries Claude Code loads
+ * as user-level configuration go ({@link claudeProfileSharedEntries} always, {@link claudeProfileOptionalSharedEntries} where
+ * `~/.claude` has them): each is a link to `~/.claude/<entry>`. Run right before every launch under the folder, so it is cheap — a few
+ * `lstat`s, and NOT ONE write when the layout is right (a link into `~/.claude` that dangles is right: it is the one the bot made).
+ * What stands in a link's place — a real file or directory, a link elsewhere, an entry `~/.claude` has no counterpart of — is MOVED
+ * ASIDE as `<entry>.moved-<UTC time>`, never deleted (it may hold the operator's data), one log line each, and the right link restored.
+ *
+ * Everything else in the folder is the account's own state — `.credentials.json`, `.claude.json`, backups, history, caches, the
+ * contents behind the `projects` link — and is never touched.
+ *
+ * A folder this user does not own (an operator locked it) is not written to: a wrong layout there is warned about ONCE per
+ * profile per process, and the launch goes ahead — the agent runs as the same user as the bot, so a folder the bot cannot write is
+ * one the agent could not plant in either. A write that fails in a folder the bot does own is warned about once the same way, unless
+ * `isStrict` (the creation path), which throws it.
+ */
+export function repairClaudeProfileLayout(input: {
+  dataDir: string;
+  name: string;
+  homeClaudeDir?: string;
+  isStrict?: boolean;
+  /** The uid that decides ownership; the process's own unless a test says otherwise. `null`: no owner to ask. */
+  uid?: number | null;
+  now?: () => number;
+  log?: (line: string) => void;
+}): ClaudeProfileRepairResult {
+  const { dataDir, name } = input;
+  const log = input.log ?? ((line: string) => console.warn(line));
+  const dir = resolveClaudeProfileDir(dataDir, name);
+  const skipped: ClaudeProfileRepairResult = { dir: null, status: 'skipped', actions: [], pending: [] };
+  if (dir === null || !checkIsValidClaudeProfileName(name)) return skipped;
+  let dirStat: fs.Stats;
+  try {
+    dirStat = fs.statSync(dir);
+  } catch {
+    return skipped;
+  }
+  if (!dirStat.isDirectory()) return skipped;
+  const homeClaudeDir = input.homeClaudeDir ?? resolveHomeClaudeDir();
+  const specs = [
+    ...claudeProfileSharedEntries.map((entry) => ({ entry, isAlwaysLinked: true })),
+    ...claudeProfileOptionalSharedEntries.map((entry) => ({ entry, isAlwaysLinked: false })),
+  ];
+  const plan: Array<{ entry: string; found: ClaudeProfileEntryFinding; isMoveNeeded: boolean; target: string | null }> = [];
+  for (const { entry, isAlwaysLinked } of specs) {
+    const target = path.join(homeClaudeDir, entry);
+    const isLinkWanted = isAlwaysLinked || fs.existsSync(target);
+    let stat: fs.Stats | null = null;
+    try {
+      stat = fs.lstatSync(path.join(dir, entry));
+    } catch {
+      stat = null;
+    }
+    if (stat === null) {
+      if (isLinkWanted) plan.push({ entry, found: 'missing', isMoveNeeded: false, target });
+    } else if (stat.isSymbolicLink()) {
+      if (!checkIsLinkTo(path.join(dir, entry), target)) plan.push({ entry, found: 'wrongLink', isMoveNeeded: true, target: isLinkWanted ? target : null });
+    } else {
+      plan.push({ entry, found: stat.isDirectory() ? 'directory' : stat.isFile() ? 'file' : 'other', isMoveNeeded: true, target: isLinkWanted ? target : null });
+    }
+  }
+  if (plan.length === 0) return { dir, status: 'ok', actions: [], pending: [] };
+
+  const warnOnce = (line: string): void => {
+    if (unrepairedWarnedDirs.has(dir)) return;
+    unrepairedWarnedDirs.add(dir);
+    log(line);
+  };
+  const uid = input.uid === undefined ? readCurrentUid() : input.uid;
+  if (!checkCanWriteInto(dirStat, uid)) {
+    const pending = plan.map((step) => step.entry);
+    warnOnce(`[accounts] profile ${name}: ${pending.join(', ')} ${pending.length === 1 ? 'is' : 'are'} not what the layout expects, but the folder belongs to another user, so nothing was changed; launching anyway`);
+    return { dir, status: 'notOwned', actions: [], pending };
+  }
+
+  const nowMs = (input.now ?? Date.now)();
+  const actions: ClaudeProfileRepairAction[] = [];
+  const pending: string[] = [];
+  let firstError: unknown = null;
+  for (const step of plan) {
+    const entryPath = path.join(dir, step.entry);
+    try {
+      let movedTo: string | null = null;
+      if (step.isMoveNeeded) {
+        movedTo = pickMovedAsideName(dir, step.entry, nowMs);
+        fs.renameSync(entryPath, path.join(dir, movedTo));
+        log(`[accounts] profile ${name}: ${step.entry} was ${step.found === 'wrongLink' ? 'a link to somewhere else' : `a ${step.found} of its own`}, not the link into ~/.claude — moved aside to ${movedTo}${step.target === null ? ' (~/.claude has no such entry)' : ''}`);
+      }
+      if (step.target !== null) {
+        if (step.entry === 'projects') fs.mkdirSync(step.target, { recursive: true });
+        fs.symlinkSync(step.target, entryPath);
+      }
+      actions.push({ entry: step.entry, found: step.found, movedTo, linkedTo: step.target });
+    } catch (e) {
+      pending.push(step.entry);
+      firstError ??= e;
+    }
+  }
+  if (pending.length === 0) return { dir, status: 'ok', actions, pending };
+  if (input.isStrict === true) throw firstError;
+  warnOnce(`[accounts] profile ${name}: ${pending.join(', ')} could not be put right (${firstError instanceof Error ? firstError.message : String(firstError)}); launching anyway`);
+  return { dir, status: 'failed', actions, pending };
+}
+
+/**
+ * @description What a profile's `.claude.json` — the account's own state, which the repair never edits — holds that Claude Code treats
+ * as configuration with an effect: MCP servers (the docs keep them in `~/.claude.json`, per project under `projects.<path>.mcpServers`,
+ * and a profile's file carries them at the top level too), and, defensively, the settings-style keys `hooks`, `env`, `apiKeyHelper`
+ * and `statusLine` (the docs place those in `settings.json`; whether the CLI honours them in `.claude.json` is not documented, so a
+ * mention is a pointer, not a verdict). Names only — never a command, argument or value. `[]` for a file that is absent, too big or
+ * not JSON.
+ */
+export function listClaudeProfileConfigRisks(configDir: string): string[] {
+  const file = path.join(configDir, '.claude.json');
+  let parsed: unknown;
+  try {
+    if (fs.statSync(file).size > claudeJsonMaxReadBytes) return [];
+    parsed = JSON.parse(fs.readFileSync(file, 'utf8'));
+  } catch {
+    return [];
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return [];
+  const record = parsed as Record<string, unknown>;
+  const risks: string[] = [];
+  const nameServers = (servers: unknown): string[] => (servers && typeof servers === 'object' && !Array.isArray(servers)
+    ? Object.keys(servers).slice(0, configRiskNameLimit).map((serverName) => serverName.replace(/[^\w.@ -]/g, '?').slice(0, 40))
+    : []);
+  const topServers = nameServers(record.mcpServers);
+  if (topServers.length > 0) risks.push(`mcpServers: ${topServers.join(', ')}`);
+  const projects = record.projects && typeof record.projects === 'object' && !Array.isArray(record.projects) ? Object.values(record.projects) : [];
+  const projectServerCount = projects.filter((project) => project && typeof project === 'object' && nameServers((project as Record<string, unknown>).mcpServers).length > 0).length;
+  if (projectServerCount > 0) risks.push(`projects.*.mcpServers: ${projectServerCount} project(s)`);
+  for (const key of claudeJsonSettingsLikeKeys) {
+    if (key in record) risks.push(`${key} (a settings key, not documented for this file)`);
+  }
+  return risks;
+}
+
+/** A `.claude.json` bigger than this is not read for the warning (the real ones are ~100 kB). */
+const claudeJsonMaxReadBytes = 8 * 1024 * 1024;
+const configRiskNameLimit = 10;
+const claudeJsonSettingsLikeKeys = ['hooks', 'env', 'apiKeyHelper', 'statusLine'] as const;
+
+/** What `.claude.json` held the last time the warning looked, per folder: `size:mtime` (skip the read while it is the same) and the risks said. */
+const configRiskSeen = new Map<string, { stamp: string; said: string }>();
+
+/**
+ * @description THE call every launch under a profile folder makes first (a bot session, a sign-in or status probe, a worker the bot or
+ * the CLI points at an account): repair the folder's layout ({@link repairClaudeProfileLayout}), then say — once per distinct finding,
+ * not per launch — what its `.claude.json` configures ({@link listClaudeProfileConfigRisks}); the file is read only when its size or
+ * time moved. `configDir` is the directory a process is about to get as `CLAUDE_CONFIG_DIR`: `null` (the default account) and any
+ * directory that is not `<dataDir>/claude-profiles/<valid name>` are left alone. Never throws — a launch must not fail on a repair.
+ */
+export function repairClaudeProfileFolderForLaunch(input: {
+  dataDir: string;
+  configDir: string | null;
+  homeClaudeDir?: string;
+  uid?: number | null;
+  now?: () => number;
+  log?: (line: string) => void;
+}): ClaudeProfileRepairResult {
+  const skipped: ClaudeProfileRepairResult = { dir: null, status: 'skipped', actions: [], pending: [] };
+  if (input.configDir === null) return skipped;
+  const log = input.log ?? ((line: string) => console.warn(line));
+  const resolved = path.resolve(input.configDir);
+  const name = path.basename(resolved);
+  if (path.dirname(resolved) !== path.resolve(resolveClaudeProfilesRoot(input.dataDir)) || !checkIsValidClaudeProfileName(name)) return skipped;
+  try {
+    const result = repairClaudeProfileLayout({ dataDir: input.dataDir, name, homeClaudeDir: input.homeClaudeDir, uid: input.uid, now: input.now, log });
+    if (result.dir === null) return result;
+    const stat = fs.statSync(path.join(result.dir, '.claude.json'), { throwIfNoEntry: false });
+    const stamp = stat === undefined ? 'none' : `${stat.size}:${stat.mtimeMs}`;
+    const seen = configRiskSeen.get(result.dir);
+    if (seen?.stamp !== stamp) {
+      const said = listClaudeProfileConfigRisks(result.dir).join('; ');
+      configRiskSeen.set(result.dir, { stamp, said });
+      if (said !== '' && said !== seen?.said) {
+        log(`[accounts] profile ${name}: its .claude.json (the account's own state — not checked or edited by the bot) configures ${said}. These run as this account's user-level config; make sure they are yours`);
+      }
+    }
+    return result;
+  } catch (e) {
+    log(`[accounts] profile ${name}: the pre-launch repair of its folder failed: ${e instanceof Error ? e.message : String(e)}`);
+    return skipped;
+  }
 }
 
 /**

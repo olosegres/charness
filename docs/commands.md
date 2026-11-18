@@ -172,6 +172,50 @@ so one account's usage limit does not stop every topic.
   fallback ranking until it is signed in again (`/accounts login default`).
 - A child `claude` the agent starts inherits the same `CLAUDE_CONFIG_DIR`, so
   it runs on the topic's account too.
+- **A profile folder is put back in line before every launch under it.** The
+  folder is writable by the user the bot and every agent run as, and Claude Code
+  loads a good deal of it as *your* configuration — so an agent on an account
+  could plant rules there that every later session on that account would follow.
+  Right before a Claude process starts under a profile (a topic's session, the
+  `claude auth` status and sign-in calls, and the account a worker is pointed at
+  through the `claude_profiles` tool or `charness claude-profiles`) the bot checks
+  the entries Claude Code loads as user-level configuration: `settings.json`
+  (permissions, hooks, `apiKeyHelper`), `skills`, `plugins`, `projects` (the
+  transcripts and auto memory) — always — and `CLAUDE.md`, `rules`, `agents`,
+  `commands`, `output-styles`, `workflows` and `dev-mods` (mods Claude wrote, loaded
+  again when that session is resumed) wherever `~/.claude` has them. Each must be
+  a link to `~/.claude/<entry>`. Anything else standing there — a real file or
+  directory, a link elsewhere, an entry `~/.claude` has no counterpart of — is
+  **moved aside, never deleted**, as `<entry>.moved-<UTC time>` (one log line
+  each, `[accounts] profile work: settings.json was a file of its own, … moved aside
+  to settings.json.moved-20261118T184305Z`), and the right link restored. It costs
+  a few `stat`s and writes nothing when the folder is already right. A real
+  `settings.json` or `CLAUDE.md` an account kept of its own is therefore replaced
+  by the shared one from the next launch on; the old file stays beside it. The
+  account's own state is never touched: `.credentials.json`, `.claude.json`,
+  `backups/`, history, `todos`, shell snapshots, caches, `agent-memory/`, and
+  what is behind the `projects` link. Not covered, because the docs give them no
+  instruction or executable role at the user level: `keybindings.json`, `themes/`,
+  and `settings.local.json` (a project's file, not the user directory's).
+  **A folder the bot's user does not own** (an operator locked it) is not written
+  to and is not chmod'ed: when its layout is right nothing is said; when it is not,
+  one warning per profile per process says so and the launch goes ahead — the
+  agent runs as the bot's user, so a folder the bot cannot write is one the agent
+  could not plant in either.
+  `.claude.json` also holds the account's MCP servers (the docs keep them there),
+  and the bot does not edit it: when it holds MCP servers (or settings-style keys
+  such as `hooks`, whose effect there the docs do not describe) the log names them —
+  names only, once per finding — so you can check they are yours.
+  *Limits:* the links point into the shared `~/.claude`, which an agent can write
+  just as it can on the `default` account; the repair is not a sandbox. It acts at
+  launch: a session that is already running has read its configuration, and the
+  docs say Claude Code reloads settings files while a session runs, so a file
+  planted mid-session can take effect until the next launch puts the folder right.
+  For a hard guarantee, lock the folder instead: owned by another user, the links
+  and config entries owned by that user, and writable by the account's user only
+  where Claude Code keeps its own state (`.credentials.json`, `.claude.json`,
+  `backups/`, `session-env/`, …). The bot does not write to such a folder (checked
+  with a simulated owner; not run against the real CLI under a lock).
 - **Usage per account.** Under each profile `/accounts` shows how much of each
   subscription window is used and when it resets:
   the 5-hour session window, the weekly window (all models) and Fable's own

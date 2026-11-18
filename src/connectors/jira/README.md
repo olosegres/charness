@@ -285,7 +285,10 @@ poll (every 10 minutes, and whenever an agent asks `claude_profiles`): the bot r
 (`claude auth status --json` under that folder, as `/accounts` does). An operator makes the folder
 (`createClaudeProfileLayout` does it with its links back into `~/.claude`; a bare folder is given the links it lacks — `projects/`
 above all, or a conversation could not resume under the account — when it is adopted) and signs it in with
-`CLAUDE_CONFIG_DIR=<folder> claude auth login`; a folder that is not signed in is recorded as such and is never picked. A signed-in
+`CLAUDE_CONFIG_DIR=<folder> claude auth login`; a folder that is not signed in is recorded as such and is never picked. Every folder is
+put back in line before each launch under it (`repairClaudeProfileLayout`): the entries Claude Code loads as user-level configuration
+are links into `~/.claude` again, and an agent's planted replacement is moved aside as `<entry>.moved-<time>` — see
+`docs/commands.md` («Several accounts»). A signed-in
 account's status is read again after an hour, a signed-out one at most every five minutes (a sign-in by hand shows up), and no profile
 more than once per five minutes whatever the answer — a poll that finds nothing to do spawns no process. `default` (`~/.claude`) is
 probed the same way, so it can take a limited session over; the one the operator signed out through Telegram's `/accounts` (`isRemoved`)

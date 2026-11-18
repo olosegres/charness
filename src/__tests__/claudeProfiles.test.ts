@@ -96,7 +96,7 @@ describe('profile layout on disk', () => {
     assert.ok(fs.existsSync(path.join(homeClaudeDir, 'projects', '-work-dir', 'sess.jsonl')));
   });
 
-  it('is idempotent and links CLAUDE.md once it exists; a real file of the profile is left alone', () => {
+  it('is idempotent and links CLAUDE.md once it exists; the login of the profile is left alone', () => {
     const dir = resolveClaudeProfileDir(dataDir, 'work')!;
     fs.writeFileSync(path.join(dir, '.credentials.json'), '{"claudeAiOauth":{}}', { mode: 0o600 });
     fs.writeFileSync(path.join(homeClaudeDir, 'CLAUDE.md'), '# memory');

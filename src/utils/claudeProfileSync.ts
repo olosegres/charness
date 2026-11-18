@@ -116,7 +116,7 @@ export interface ClaudeProfileSyncDeps {
   readStatus: (configDir: string | null) => Promise<ClaudeAuthStatus | null>;
   /**
    * Called for a folder about to be adopted: give it the links back into `~/.claude` that a profile needs (`createClaudeProfileLayout` —
-   * idempotent, a login and anything of the folder's own stay). Without `projects/` linked a conversation could not be resumed under
+   * idempotent: the login and the account's state stay, an entry of the folder's own that stands in a link's place is moved aside). Without `projects/` linked a conversation could not be resumed under
    * the account. A throw is logged and the folder adopted all the same.
    */
   ensureLayout?: (name: string) => void;
