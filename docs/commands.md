@@ -220,8 +220,9 @@ so one account's usage limit does not stop every topic.
   where Claude Code keeps its own state (`.credentials.json`, `.claude.json`,
   `backups/`, `session-env/`, …); if the account's user must still create files in
   the folder itself, give it the sticky bit, so that user cannot move the
-  operator's links. The bot does not write to a folder it cannot write (checked
-  with a simulated owner; not run against the real CLI under a lock).
+  operator's links (what it adds is still moved aside at the next launch). The
+  bot does not write to a folder it cannot write (checked with a simulated owner;
+  not run against the real CLI under a lock).
 - **Usage per account.** Under each profile `/accounts` shows how much of each
   subscription window is used and when it resets:
   the 5-hour session window, the weekly window (all models) and Fable's own
@@ -285,7 +286,8 @@ so one account's usage limit does not stop every topic.
   default), the `/limits_autoswitch` list, «Auto switch» and «Wait for reset» are
   ONE set for the whole bot, whatever the connector, and are set in Telegram's
   General topic (an instance that serves Jira and Telegram together uses the same
-  values for both).
+  values for both; a Jira-only one keeps them in `state.json`). After an automatic
+  move the conversation stays on the account it moved to, as a topic does.
 - **Which account for a child process.** An agent that launches a detached
   `claude` (a worker, a reviewer) asks the bot's `claude_profiles` MCP tool
   — optionally with the model it will run — and gets every
