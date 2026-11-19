@@ -313,6 +313,22 @@ export function readTelegramFileSnapshot(
   expectedIdentity: FileIdentity,
   pinnedRoot: PinnedFileSendRoot,
 ): TelegramFileSnapshotResult {
+  return readFileSnapshotWithinRoot(absPath, expectedIdentity, pinnedRoot, { maxBytes: telegramSendMaxBytes, getOversizeError: getTelegramFileOversizeError });
+}
+
+/** How big a file a send may hold, and what refusing a bigger one says. */
+export interface FileSnapshotLimits {
+  maxBytes: number;
+  getOversizeError: (absPath: string) => string;
+}
+
+/** @description {@link readTelegramFileSnapshot} with the size limit of another surface. */
+function readFileSnapshotWithinRoot(
+  absPath: string,
+  expectedIdentity: FileIdentity,
+  pinnedRoot: PinnedFileSendRoot,
+  limits: FileSnapshotLimits,
+): TelegramFileSnapshotResult {
   let fileDescriptor: number | null = null;
   let result: TelegramFileSnapshotResult;
   try {
@@ -329,11 +345,11 @@ export function readTelegramFileSnapshot(
       result = { ok: false, kind: 'read', error: `file changed after validation: ${absPath}` };
     } else if (pathChangeError !== null) {
       result = { ok: false, kind: 'read', error: pathChangeError };
-    } else if (fileStat.size > BigInt(telegramSendMaxBytes)) {
+    } else if (fileStat.size > BigInt(limits.maxBytes)) {
       result = {
         ok: false,
         kind: 'oversize',
-        error: getTelegramFileOversizeError(absPath),
+        error: limits.getOversizeError(absPath),
       };
     } else {
       result = {
@@ -361,6 +377,60 @@ export function readTelegramFileSnapshot(
     }
   }
   return result;
+}
+
+/** A file a connector uploads itself, opened by the file send's rules: what the agent named, where it is, its descriptor and size. */
+export interface OpenedSendFile {
+  rawPath: string;
+  absPath: string;
+  /** Read-only, owned by the caller until `close()`; read it positionally — another reader may share it. */
+  fd: number;
+  sizeBytes: number;
+}
+
+export type OpenFilesWithinWorkDirResult =
+  | { ok: true; files: OpenedSendFile[]; close: () => void }
+  | { ok: false; error: string };
+
+/**
+ * @description Open `rawPaths` inside the bound folder `workDir` by the same rules as the file send — each resolved
+ * inside the folder ({@link resolveSendFileWithinDir}), opened without following a component swapped after validation
+ * ({@link FileSendOpenStrategy}), its identity checked, at most `limits.maxBytes` — for a connector that uploads them
+ * itself (the Jira connector attaches files to an issue). On success the caller owns the descriptors and the pinned root:
+ * `close()` releases them all. On failure nothing stays open, and the error names the path the agent gave.
+ */
+export function openFilesWithinWorkDir(
+  workDir: string,
+  rawPaths: readonly string[],
+  limits: FileSnapshotLimits,
+  openStrategy: FileSendOpenStrategy = platformOpenStrategy,
+): OpenFilesWithinWorkDirResult {
+  const files: OpenedSendFile[] = [];
+  let pinnedRoot: PinnedFileSendRoot | null = null;
+  const close = (): void => {
+    for (const file of files) closeFileDescriptor(file.fd);
+    if (pinnedRoot?.strategy === 'descriptorWalk') closeFileDescriptor(pinnedRoot.fd);
+  };
+  try {
+    pinnedRoot = openPinnedFileSendRoot(workDir, openStrategy);
+    for (const rawPath of rawPaths) {
+      const resolved = resolveSendFileWithinDir(workDir, rawPath, pinnedRoot.rootPath);
+      if (!resolved.ok) {
+        close();
+        return { ok: false, error: resolved.error };
+      }
+      const snapshot = readFileSnapshotWithinRoot(resolved.absPath, resolved.identity, pinnedRoot, limits);
+      if (!snapshot.ok) {
+        close();
+        return { ok: false, error: snapshot.kind === 'oversize' ? snapshot.error : `cannot read ${rawPath}: ${snapshot.error}` };
+      }
+      files.push({ rawPath, absPath: resolved.absPath, fd: snapshot.source.fd, sizeBytes: snapshot.source.sizeBytes });
+    }
+  } catch (error) {
+    close();
+    return { ok: false, error: error instanceof Error ? error.message : 'unknown error' };
+  }
+  return { ok: true, files, close };
 }
 
 const messageIdRecordingWarning =

@@ -1,3 +1,6 @@
+import * as fs from 'fs';
+import { randomBytes } from 'crypto';
+import { promisify } from 'util';
 import { z } from 'zod';
 import { sleep } from '../../utils';
 import { getRetryAfterHeaderMs } from '../../utils/retryAfterHeader';
@@ -241,6 +244,10 @@ const groupMemberPageSchema = z.object({
 });
 
 const createdCommentSchema = z.object({ id: z.string() });
+/** `GET /attachment/meta`: whether the site takes attachments, and the most bytes one may have. */
+const attachmentSettingsSchema = z.object({ enabled: z.boolean().optional(), uploadLimit: z.number().optional() });
+/** `POST /issue/{key}/attachments` answers with the attachments it made. */
+const uploadedAttachmentsSchema = z.array(attachmentSchema);
 const myselfSchema = z.object({ accountId: z.string() });
 
 export type JiraAccount = z.infer<typeof accountSchema>;
@@ -270,6 +277,38 @@ export type JiraChangelogPage = z.infer<typeof changelogPageSchema>;
 export type JiraProjectStatus = z.infer<typeof projectStatusSchema>;
 /** A group as `GET /group/bulk` lists it: its name and the id that stays when the name changes. */
 export type JiraGroup = z.infer<typeof groupPageSchema>['values'][number];
+
+/** @name JiraAttachmentSettings @description Whether the site takes attachments at all, and its upload limit in bytes (`null`: none stated). */
+export interface JiraAttachmentSettings {
+  isEnabled: boolean;
+  uploadLimitBytes: number | null;
+}
+
+/** @name JiraUploadFile @description A file to attach: an open descriptor read from byte 0 (never held in memory), its name, type and size. */
+export interface JiraUploadFile {
+  fd: number;
+  filename: string;
+  mimeType: string;
+  sizeBytes: number;
+}
+
+/**
+ * @name JiraAttachmentUploadResult
+ * @description `uploaded` — Jira answered with the attachments it made; `deliveryUnknown` — the upload may have
+ * landed but the answer did not say (a timeout, a dropped connection, a 5xx): it is never repeated blindly, the caller
+ * reads the issue's attachments instead.
+ */
+export type JiraAttachmentUploadResult = { outcome: 'uploaded'; attachments: JiraAttachment[] } | { outcome: 'deliveryUnknown'; reason: string };
+
+/** The media file id in the address Jira's attachment content redirects to (`…/file/<uuid>/binary?…`). */
+const mediaFileIdRe = /\/file\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\//;
+/** How slow an upload may be on average before it counts as hung: its time budget grows with its size. */
+export const jiraUploadMinBytesPerSecond = 128 * 1024;
+/** One upload's read of its file, per step. */
+const uploadChunkBytes = 256 * 1024;
+const readFileAt = promisify(fs.read);
+/** What may not stand in a multipart file name: its quote, a backslash, control characters. */
+const unsafeUploadNameCharsRe = /["\\\u0000-\u001f\u007f]/g;
 
 /** @name JiraSearchRequest @description `POST /rest/api/3/search/jql` (D13). */
 export interface JiraSearchRequest {
@@ -380,6 +419,20 @@ export interface JiraClient {
    * reply to a reply with 400: the thread's root is the parent of every reply in it.
    */
   addComment(issueKey: string, body: AdfDocument, parentId?: string | null): Promise<JiraCommentPostResult>;
+  /** `GET /attachment/meta`: whether the site takes attachments, and how big one may be. */
+  getAttachmentSettings(): Promise<JiraAttachmentSettings>;
+  /**
+   * Attach `file` to the issue (`POST /issue/{key}/attachments`, multipart, streamed from the descriptor). Never
+   * repeated: an outcome Jira did not confirm is `deliveryUnknown`. A refusal is a {@link JiraHttpError} (a 413: too
+   * big), or a {@link JiraAuthError} when the AI account may not attach files.
+   */
+  uploadAttachment(issueKey: string, file: JiraUploadFile): Promise<JiraAttachmentUploadResult>;
+  /**
+   * The media file id of attachment `attachmentId` — what an ADF `media` node names to show it in a comment — read from
+   * the address its content redirects to; the redirect is NOT followed (the credentials stay with the site). `null` when
+   * Jira answers without that redirect.
+   */
+  getAttachmentMediaId(attachmentId: string): Promise<string | null>;
   /** The issue's newest comments, newest first — R18's read-back after a post of unknown outcome. */
   getRecentComments(issueKey: string, maxResults: number): Promise<JiraComment[]>;
   /** One comment of the issue by its id; a comment that is gone is a {@link JiraHttpError} with `status` 404. */
@@ -603,6 +656,87 @@ export function createJiraClient(options: JiraClientOptions): JiraClient {
       return parsed.ok
         ? { outcome: 'created', id: parsed.value.id }
         : { outcome: 'deliveryUnknown', reason: `Jira ${request.method} ${request.path}: ${parsed.detail}` };
+    },
+
+    getAttachmentSettings: async () => {
+      const settings = await sendForJson({ method: 'GET', path: '/rest/api/3/attachment/meta', isIdempotent: true }, attachmentSettingsSchema);
+      return { isEnabled: settings.enabled ?? true, uploadLimitBytes: settings.uploadLimit ?? null };
+    },
+
+    uploadAttachment: async (issueKey, file) => {
+      const requestPath = `/rest/api/3/issue/${encode(issueKey)}/attachments`;
+      const boundary = `charness-${randomBytes(12).toString('hex')}`;
+      const filename = file.filename.replace(unsafeUploadNameCharsRe, '_');
+      const head = Buffer.from(
+        `--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="${filename}"\r\nContent-Type: ${file.mimeType}\r\n\r\n`,
+        'utf8',
+      );
+      const tail = Buffer.from(`\r\n--${boundary}--\r\n`, 'utf8');
+      async function* readBody(): AsyncGenerator<Uint8Array> {
+        yield head;
+        const chunk = Buffer.alloc(uploadChunkBytes);
+        for (let position = 0; position < file.sizeBytes;) {
+          // Positional: the descriptor may be shared, and its own offset is never moved.
+          const { bytesRead } = await readFileAt(file.fd, chunk, 0, Math.min(chunk.length, file.sizeBytes - position), position);
+          if (bytesRead === 0) throw new Error(`the file ended at byte ${position} of ${file.sizeBytes}: it changed while it was sent`);
+          yield Buffer.from(chunk.subarray(0, bytesRead));
+          position += bytesRead;
+        }
+        yield tail;
+      }
+      // An upload takes as long as its size: the budget is the usual timeout plus the time a slow line needs.
+      const uploadTimeoutMs = timeoutMs + Math.ceil(file.sizeBytes / jiraUploadMinBytesPerSecond) * 1000;
+      let response: Response;
+      let text: string;
+      try {
+        response = await fetchImpl(`${baseUrl}${requestPath}`, {
+          method: 'POST',
+          headers: {
+            Authorization: authorization,
+            Accept: 'application/json',
+            // Jira refuses an attachment upload without it (its XSRF check).
+            'X-Atlassian-Token': 'no-check',
+            'Content-Type': `multipart/form-data; boundary=${boundary}`,
+            'Content-Length': String(head.length + file.sizeBytes + tail.length),
+          },
+          body: readBody(),
+          duplex: 'half',
+          redirect: 'manual',
+          signal: AbortSignal.timeout(uploadTimeoutMs),
+        });
+        text = await response.text();
+      } catch (e) {
+        const detail = e instanceof Error ? getFailureDetail(e) : 'network failure';
+        if (e instanceof Error && checkIsFailedBeforeSending(e)) throw new JiraHttpError(0, 'POST', requestPath, detail);
+        return { outcome: 'deliveryUnknown', reason: `Jira POST ${requestPath}: outcome unknown — ${detail}` };
+      }
+      if (response.status === 401 || response.status === 403) throw new JiraAuthError(response.status, 'POST', requestPath);
+      if (response.status >= 500) return { outcome: 'deliveryUnknown', reason: `Jira POST ${requestPath}: outcome unknown — ${response.status}: ${getErrorDetail(text)}` };
+      if (!response.ok) throw new JiraHttpError(response.status, 'POST', requestPath, getErrorDetail(text));
+      const parsed = getParsedResponse(text, uploadedAttachmentsSchema);
+      return parsed.ok
+        ? { outcome: 'uploaded', attachments: parsed.value }
+        : { outcome: 'deliveryUnknown', reason: `Jira POST ${requestPath}: ${parsed.detail}` };
+    },
+
+    getAttachmentMediaId: async (attachmentId) => {
+      const requestPath = `/rest/api/3/attachment/content/${encode(attachmentId)}`;
+      let response: Response;
+      try {
+        response = await fetchImpl(`${baseUrl}${requestPath}`, {
+          method: 'GET',
+          headers: { Authorization: authorization },
+          redirect: 'manual',
+          signal: AbortSignal.timeout(timeoutMs),
+        });
+        // The answer is the redirect, or — without one — the file itself, which is not wanted here.
+        await response.body?.cancel();
+      } catch (e) {
+        throw new JiraHttpError(0, 'GET', requestPath, e instanceof Error ? getFailureDetail(e) : 'network failure');
+      }
+      if (response.status === 401 || response.status === 403) throw new JiraAuthError(response.status, 'GET', requestPath);
+      if (response.status >= 400) throw new JiraHttpError(response.status, 'GET', requestPath, 'the attachment could not be read');
+      return mediaFileIdRe.exec(response.headers.get('location') ?? '')?.[1] ?? null;
     },
 
     getRecentComments: async (issueKey, maxResults) => {

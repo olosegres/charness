@@ -11,6 +11,7 @@ import {
   argvViolationExitCode,
   checkHasFlag,
   fakeClaudeLogFileNames,
+  fakeSendFileCaption,
   fakeClaudeCodeVersion,
   fakeClaudeCodeVersionOverrideFileName,
   fakeAskLongDescription,
@@ -150,6 +151,9 @@ import { claudeSessionStateEventsVariableName } from '../../utils/jsonStreamHost
  *  - `run-tool`    — runs `e2e-tool` BY NAME on its own PATH and logs what it printed, then answers `final`;
  *  - `reply-to`    — answers `final` naming the comments of a `[reply-to:<id>,<id>]` token in the request's text in
  *    `replyToCommentIds` (what the bot then mentions; the answer's outcome is in `answers.jsonl`);
+ *  - `send-file`   — calls `send_file_to_user` with the paths of a `[send-file:<path>,<path>]` token and a caption, logs the
+ *    outcome to `tool-calls.jsonl`, then answers `final`;
+ *  - in any mode a `[files:<path>,<path>]` token puts those paths in the answers' `files` (what the bot attaches and shows);
  *  - `background`  — answers `final`, then reports a background task that never
  *    ends (`system/background_tasks_changed`), so the process is WORKING between
  *    turns and the idle stop must keep it (lifecycle plan L-D2);
@@ -250,8 +254,8 @@ import { claudeSessionStateEventsVariableName } from '../../utils/jsonStreamHost
  * `FAKE_CLAUDE_STATE_DIR` (per-request turn counts, the conversations held).
  */
 
-export type FakeClaudeMode = 'answer' | 'silent-once' | 'silent' | 'hang-once' | 'hold-once' | 'hold-progress-once' | 'slow-once' | 'progress' | 'finish-together' | 'answer-after-queued' | 'background' | 'background-notify' | 'compact' | 'overflow' | 'fetch-attachment' | 'run-tool' | 'reply-to' | 'usage-limit-once' | 'ask' | 'ask-again' | 'ask-two' | 'ask-long' | 'ask-repeat' | 'send-messages';
-const fakeModes: readonly FakeClaudeMode[] = ['answer', 'silent-once', 'silent', 'hang-once', 'hold-once', 'hold-progress-once', 'slow-once', 'progress', 'finish-together', 'answer-after-queued', 'background', 'background-notify', 'compact', 'overflow', 'fetch-attachment', 'run-tool', 'reply-to', 'usage-limit-once', 'ask', 'ask-again', 'ask-two', 'ask-long', 'ask-repeat', 'send-messages'];
+export type FakeClaudeMode = 'answer' | 'silent-once' | 'silent' | 'hang-once' | 'hold-once' | 'hold-progress-once' | 'slow-once' | 'progress' | 'finish-together' | 'answer-after-queued' | 'background' | 'background-notify' | 'compact' | 'overflow' | 'fetch-attachment' | 'run-tool' | 'reply-to' | 'send-file' | 'usage-limit-once' | 'ask' | 'ask-again' | 'ask-two' | 'ask-long' | 'ask-repeat' | 'send-messages';
+const fakeModes: readonly FakeClaudeMode[] = ['answer', 'silent-once', 'silent', 'hang-once', 'hold-once', 'hold-progress-once', 'slow-once', 'progress', 'finish-together', 'answer-after-queued', 'background', 'background-notify', 'compact', 'overflow', 'fetch-attachment', 'run-tool', 'reply-to', 'send-file', 'usage-limit-once', 'ask', 'ask-again', 'ask-two', 'ask-long', 'ask-repeat', 'send-messages'];
 /**
  * How long an `answer-after-queued` turn waits for the next message before it answers anyway: four polls of the 10 s
  * floor, or what the launcher sets (`fakeClaudeQueuedWaitMaxMsEnvName`) for the instance's own poll.
@@ -294,6 +298,11 @@ const attachmentToolName = 'jira_get_attachment';
 const probeToolName = 'e2e-tool';
 const fetchIdsRe = /\[fetch:([0-9,]+)\]/;
 const replyToIdsRe = /\[reply-to:([0-9,]+)\]/;
+/** `[files:<path>,<path>]`: the files every answer of the request carries. */
+const answerFilesRe = /\[files:([^\]]+)\]/;
+/** `[send-file:<path>,<path>]`: what the `send-file` mode hands `send_file_to_user`. */
+const sendFilePathsRe = /\[send-file:([^\]]+)\]/;
+const fileSendToolName = 'send_file_to_user';
 const limitResetsRe = /\[limit-resets:([^\]]+)\]/;
 /** `[todo:<status>:<title>]` adds an item; `[todo-id:<id>:<status>]` changes one; `[todo-touch]` confirms the list. */
 const todoAddRe = /\[todo:(queued|inWork|done|dropped):([^\]]+)\]/g;
@@ -556,6 +565,7 @@ type AnswerRequestArgs = {
   kind: string;
   body: string;
   replyToCommentIds?: string[];
+  files?: string[];
 };
 
 /** A stdin line of the stream-json protocol — only the fields the fake reads. */
@@ -1417,9 +1427,16 @@ async function runTurn(argv: readonly string[], sessionId: string, content: stri
   await waitTurnWork(content);
   await runLateToolCall(argv, sessionId, content, state.issueKey);
   const replyToCommentIds = state.mode === 'reply-to' ? (replyToIdsRe.exec(content)?.[1] ?? '').split(',').filter(Boolean) : [];
+  const answerFiles = (answerFilesRe.exec(content)?.[1] ?? '').split(',').filter(Boolean);
   const answer = async (answeredRequestId: string, kind: string, turnCount: number, body = `Fake ${kind} answer for ${state.issueKey} (${state.mode}, turn ${turnCount}).`): Promise<string> => {
     const outcome = server
-      ? await callAnswerRequest(server, sessionId, { requestId: answeredRequestId, kind, body, ...(replyToCommentIds.length > 0 ? { replyToCommentIds } : {}) })
+      ? await callAnswerRequest(server, sessionId, {
+        requestId: answeredRequestId,
+        kind,
+        body,
+        ...(replyToCommentIds.length > 0 ? { replyToCommentIds } : {}),
+        ...(answerFiles.length > 0 ? { files: answerFiles } : {}),
+      })
       : 'error: no bot MCP server in --mcp-config';
     appendJsonLine(fakeClaudeLogFileNames.answers, { requestId: answeredRequestId, issueKey: state.issueKey, kind, outcome });
     return body;
@@ -1461,6 +1478,10 @@ async function runTurn(argv: readonly string[], sessionId: string, content: stri
     for (const attachmentId of (fetchIdsRe.exec(content)?.[1] ?? '').split(',').filter(Boolean)) {
       logToolCall(attachmentToolName, { attachmentId }, await callBotTool(server, attachmentToolName, { attachmentId }));
     }
+  }
+  if (state.mode === 'send-file' && server) {
+    const paths = (sendFilePathsRe.exec(content)?.[1] ?? '').split(',').filter(Boolean);
+    logToolCall(fileSendToolName, { paths: paths.join(','), caption: fakeSendFileCaption }, await callBotTool(server, fileSendToolName, { paths, caption: fakeSendFileCaption }));
   }
   if (state.mode === 'send-messages' && server) {
     const args = { messages: [getFakeDigestMessageText(state.issueKey)] };

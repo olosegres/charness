@@ -19,6 +19,8 @@ import { checkIsCommentTrusted } from './issueBlocks';
 import type { JiraContextLedger } from './contextLedger';
 import type { JiraTrust } from './trustedGroup';
 import type { TaskAgentSlotDecision } from '../../trackers/taskAgentSlots';
+import type { SendFilesToThreadResult } from '../../utils/fileSendService';
+import { appendNodesToBodies, type JiraFilesAttachResult } from './outgoingFiles';
 
 /**
  * @description The Jira connector's answer sink (plan J6, D20, R18): an answer
@@ -40,6 +42,10 @@ import type { TaskAgentSlotDecision } from '../../trackers/taskAgentSlots';
  * comment; the request's alert and the notices about its trigger follow the same thread. Jira threads are one level
  * deep, so a reply always names the thread's top-level comment. A thread Jira refuses (400: its comments are gone)
  * gets the comment top-level instead, and the agent is told.
+ *
+ * Files: an answer's `files` are attached to the issue BEFORE its comment is posted and shown in it, after its text
+ * (`outgoingFiles.ts`); a file that cannot be attached fails the answer with nothing posted. `postFiles` is
+ * `send_file_to_user` on an issue: the files, and the caption as text, in a comment of their own.
  */
 
 /** How many of the issue's newest comments R18's read-back looks through. */
@@ -151,7 +157,15 @@ export interface JiraAnswerSinkDeps {
   /** Pause before the read-back ({@link jiraReadBackDelayMs}). */
   wait: (ms: number) => Promise<void>;
   unconfirmedPosts: Pick<JiraUnconfirmedPosts, 'getPostedAt' | 'recordUnconfirmed' | 'settle'>;
+  /**
+   * Attach files of the issue's project folder to the issue and say how a comment shows them (`outgoingFiles.ts`);
+   * absent where files cannot be sent — an answer that carries some is then refused, nothing posted.
+   */
+  attachFiles?: (issueKey: string, paths: readonly string[], options: { isShownInline: boolean }) => Promise<JiraFilesAttachResult>;
 }
+
+/** The refusal of files where the sink has no way to attach them. */
+export const jiraFilesUnavailableError = 'files cannot be attached to a Jira issue on this instance; nothing was posted';
 
 /**
  * Why a comment did not land. `unchecked` — an earlier, unconfirmed post of the
@@ -215,6 +229,11 @@ export interface JiraAnswerSink extends AnswerSink {
   postQueuedNotice(issueKey: string, queue: Extract<TaskAgentSlotDecision, { kind: 'queued' }>, threadRootId?: string | null): Promise<void>;
   /** A hand-over the trusted group `groupName` does not back: the fixed notice, then the hand-back. Never rejects. */
   refuseUntrusted(issueKey: string, requester: JiraAccount | null, groupName: string): Promise<void>;
+  /**
+   * `send_file_to_user` on an issue: the files attached and ONE comment showing them, the caption (Markdown) as its text,
+   * in the thread of `threadRootId` or top-level. `isAsLinks` lists every file as a link (`as_file`). Never rejects.
+   */
+  postFiles(issueKey: string, request: { paths: readonly string[]; caption?: string; isAsLinks: boolean }, threadRootId: string | null): Promise<SendFilesToThreadResult>;
 }
 
 export function createJiraAnswerSink(deps: JiraAnswerSinkDeps): JiraAnswerSink {
@@ -363,6 +382,17 @@ export function createJiraAnswerSink(deps: JiraAnswerSinkDeps): JiraAnswerSink {
     return { targets: [...targets.values()], leftOutCommentIds, threadRootId, otherThreadCommentIds };
   }
 
+  /** The answer's files attached (`null`: it carries none), or why they could not be. */
+  async function attachAnswerFiles(issueKey: string, paths: readonly string[] | undefined): Promise<JiraFilesAttachResult | null> {
+    if (!paths || paths.length === 0) return null;
+    if (!deps.attachFiles) return { ok: false, error: jiraFilesUnavailableError };
+    try {
+      return await deps.attachFiles(issueKey, paths, { isShownInline: true });
+    } catch (error) {
+      return { ok: false, error: `the files could not be attached (${error instanceof Error ? error.message : String(error)}); nothing was posted` };
+    }
+  }
+
   /** Hand the issue back to the requester while it is still the AI's; a warning when that could not happen. */
   async function handBack(issueKey: string, requesterAccountId: string): Promise<string | null> {
     if (requesterAccountId === emptyRequester) return 'no requester is known, so the issue stays assigned to the AI account';
@@ -449,17 +479,21 @@ export function createJiraAnswerSink(deps: JiraAnswerSinkDeps): JiraAnswerSink {
       const { targets, leftOutCommentIds } = replies;
       // The comment the agent replies to decides the thread; else the thread its request was opened in; else top-level.
       const threadRootId = replies.threadRootId ?? getOriginThreadRootId(delivery.origin);
-      const bodies = targets.length > 0
+      const textBodies = targets.length > 0
         ? createCommentBodiesWithLeadingNode(delivery.body, createMentionParagraph(targets))
         : createCommentBodies(delivery.body);
-      if (bodies.length === 0) return { ok: false, error: 'the answer is empty' };
+      if (textBodies.length === 0) return { ok: false, error: 'the answer is empty' };
+      // Attached before anything is posted: a file that cannot be attached leaves the answer undelivered, safe to send again.
+      const files = await attachAnswerFiles(issueKey, delivery.files);
+      if (files && !files.ok) return { ok: false, error: files.error };
+      const bodies = files ? appendNodesToBodies(textBodies, files.nodes) : textBodies;
       // Only a hand-over's question hands the issue back, so only it carries the line saying how to give it back —
       // and only while its request is open: a superseded request's question hands nothing back.
       const isHandOver = delivery.origin.kind === 'trackerEvent';
       if (isHandOver && delivery.isRequestOpen && delivery.kind === 'question') bodies[bodies.length - 1] = getBodyWithContinueLine(bodies[bodies.length - 1]);
       const posted = await postComments(issueKey, bodies, delivery.requestId, threadRootId);
       if (posted.postedCount === 0 && posted.failure) return { ok: false, error: getNothingPostedError(posted.failure) };
-      const warnings: string[] = [];
+      const warnings: string[] = [...(files?.notes ?? [])];
       if (leftOutCommentIds.length > 0) warnings.push(buildJiraReplyLeftOutWarning(leftOutCommentIds));
       if (replies.threadRootId !== null && replies.otherThreadCommentIds.length > 0) {
         warnings.push(buildJiraOtherThreadsWarning(replies.threadRootId, replies.otherThreadCommentIds));
@@ -508,5 +542,35 @@ export function createJiraAnswerSink(deps: JiraAnswerSinkDeps): JiraAnswerSink {
     // A hand-over's: it has no comment, so top-level.
     refuseUntrusted: (issueKey, requester, groupName) =>
       postNoticeAndHandBack(issueKey, requester, createPlainTextAdf(buildJiraUntrustedText(groupName)), 'untrusted', null),
+
+    postFiles: async (issueKey, request, threadRootId) => {
+      if (!deps.attachFiles) return { ok: false, error: jiraFilesUnavailableError };
+      let files: JiraFilesAttachResult;
+      try {
+        files = await deps.attachFiles(issueKey, request.paths, { isShownInline: !request.isAsLinks });
+      } catch (error) {
+        return { ok: false, error: `the files could not be attached (${error instanceof Error ? error.message : String(error)}); nothing was posted` };
+      }
+      if (!files.ok) return { ok: false, error: files.error };
+      const caption = request.caption?.trim() ?? '';
+      const bodies = appendNodesToBodies(caption === '' ? [] : createCommentBodies(caption), files.nodes);
+      const posted = await postComments(issueKey, bodies, null, threadRootId);
+      if (posted.postedCount === 0 && posted.failure) {
+        const error = `the files are attached to ${issueKey} — ${files.summary} — but the comment that shows them was not posted (${posted.failure.detail}); ` +
+          'sending them again reuses the attachments';
+        return posted.failure.kind === 'unknown' ? { ok: false, kind: 'deliveryUnknown', error } : { ok: false, error };
+      }
+      const notes = [
+        ...files.notes,
+        ...(posted.refusedThreadRootId === null ? [] : [buildJiraThreadRefusedWarning(posted.refusedThreadRootId)]),
+        ...(posted.failure ? [`only the first ${posted.postedCount} of the comment's ${bodies.length} parts were posted (${posted.failure.detail})`] : []),
+      ];
+      const place = threadRootId === null || posted.refusedThreadRootId !== null ? 'a comment' : `a comment in the thread of comment ${threadRootId}`;
+      return {
+        ok: true,
+        summary: `Posted in ${place} on ${issueKey}: ${files.summary}.${notes.length > 0 ? ` Note: ${notes.join('; ')}.` : ''}`,
+        sentKinds: files.sentKinds,
+      };
+    },
   };
 }

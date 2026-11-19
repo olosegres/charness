@@ -236,7 +236,9 @@ keys, instead of being dropped unseen. It exposes:
   success with a warning and never retries. If the connection fails after an
   upload starts and Telegram's response never arrives, the tool returns a
   machine-readable, non-error `deliveryUnknown` outcome with `retryable:false`,
-  preventing accidental duplicates.
+  preventing accidental duplicates. In a Jira issue's session the tool has the same name and arguments (no
+  `threadKey`): the files, taken from the issue's folder by the same path rules, are attached to the issue and shown
+  in ONE comment — see `src/connectors/jira/README.md`, «Files the agent shows on an issue»;
 - `send_messages_to_user` — delivers a batch of DISCRETE messages into the topic,
   each item posted as its OWN Telegram message in order (never merged) — for a
   per-item digest and similar. Each item is either a plain text string OR an

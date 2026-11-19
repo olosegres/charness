@@ -895,6 +895,11 @@ connector behaves is described in [`src/connectors/jira/README.md`](src/connecto
    into that thread — so do the notices about it (queued, over the budget). An answer that replies to a comment goes
    into that comment's thread; anything else is a new comment, as before.
 
+   **Screenshots and videos in answers.** The agent can attach files of the project folder to its answer: they are
+   uploaded to the issue and shown in the answer's comment — an image shown, an H.264 `.mp4` playing, anything else
+   linked. The AI account needs the *Create Attachments* permission in the project, and attachments must be on for the
+   site; a file over the site's upload limit is refused.
+
 5. Start it with a clean environment, so nothing of the calling shell reaches it:
 
    ```bash

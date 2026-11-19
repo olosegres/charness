@@ -203,9 +203,10 @@ import {
   getConnectorOutbound,
   type ConnectorOutbound,
   type ConnectorOutbounds,
+  type OutboundFileRequest,
   type OutboundHints,
 } from './platform/outbound';
-import { createJiraConnectorOutbound } from './connectors/jira/outbound';
+import { createJiraConnectorOutbound, type JiraFileSender } from './connectors/jira/outbound';
 import { dispatchAdapterEvent } from './adapters/adapterEventRouting';
 import {
   checkIsServedConversation,
@@ -877,9 +878,12 @@ const telegramOutbound = createTelegramConnectorOutbound({
  * conversation only through {@link getOutboundFor}, so a Jira conversation's
  * stream never lands in a Telegram send.
  */
+/** The Jira connector's file send, set once the lazily loaded connector is ready (`send_file_to_user` on an issue). */
+let jiraFileSender: JiraFileSender | null = null;
+
 const connectorOutbounds: ConnectorOutbounds = new Map<PlatformId, ConnectorOutbound>([
   ['telegram', telegramOutbound],
-  ['jira', createJiraConnectorOutbound()],
+  ['jira', createJiraConnectorOutbound(() => jiraFileSender)],
 ]);
 
 function getOutboundFor(key: SessionKey): ConnectorOutbound {
@@ -15328,7 +15332,14 @@ function wireScheduler(wiring: SchedulerWiringDeps): SchedulerMcpHandle {
     // A refused tool call leaves one line in the bounded diagnostic log (agent-diag.log): the SDK refuses before the bot sees it.
     logDiagnostic: appendDiagLog,
     ...(jiraConnector
-      ? { fetchJiraAttachment: (threadKeyStr: string, attachmentId: string) => jiraConnector.fetchAttachment(keyFromString(threadKeyStr), attachmentId) }
+      ? {
+        fetchJiraAttachment: (threadKeyStr: string, attachmentId: string) => jiraConnector.fetchAttachment(keyFromString(threadKeyStr), attachmentId),
+        // Through the issue's outbound, like a topic's file send: the agent-facing tool is a connector delivery.
+        sendJiraFiles: (threadKeyStr: string, request: OutboundFileRequest) => {
+          const key = keyFromString(threadKeyStr);
+          return getOutboundFor(key).deliverFile(key, request);
+        },
+      }
       : {}),
     // Read per request: General can turn the shared lists off, and the tools go with them.
     get todos() {
@@ -15675,6 +15686,7 @@ export async function startBot(): Promise<void> {
   const jiraConnector = ENV.servedPlatforms.has('jira') ? await prepareJiraConnectorOrExit() : null;
   todoJiraConversations = jiraConnector;
   if (jiraConnector) {
+    jiraFileSender = (key, request) => jiraConnector.sendFiles(key, request);
     const { launchDefaults } = jiraConnector;
     registerSessionLaunchDefaultsReader((key) => (key.platform === 'jira' ? launchDefaults : null));
   }

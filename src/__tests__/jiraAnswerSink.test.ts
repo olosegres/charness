@@ -25,6 +25,7 @@ import {
   buildJiraThreadRefusedWarning,
   buildJiraUntrustedText,
   createJiraAnswerSink,
+  jiraFilesUnavailableError,
   jiraQuestionContinueText,
   jiraReadBackClockSkewMs,
   jiraReadBackDelayMs,
@@ -66,6 +67,8 @@ interface FakeJira {
   /** What the read-back sees (newest first), or an error. */
   recentComments: JiraComment[] | Error;
   isAssignFailing: boolean;
+  /** The sink's way to attach files; absent: the sink has none. */
+  attachFiles?: NonNullable<Parameters<typeof createJiraAnswerSink>[0]['attachFiles']>;
 }
 
 let jira: FakeJira;
@@ -125,6 +128,7 @@ const sink = () => createJiraAnswerSink({
     jira.calls.push(`wait ${ms}`);
   },
   unconfirmedPosts,
+  ...(jira.attachFiles ? { attachFiles: jira.attachFiles } : {}),
 });
 const deliver = (kind: RequestAnswerKind, body: string, isRequestOpen = true) =>
   sink().deliverAnswer(key, { requestId: 'req_1', kind, body, origin, isRequestOpen });
@@ -848,5 +852,134 @@ describe('comment threads: an answer goes where it was asked, or into the thread
     // A notice without a thread, as every caller before threads: top-level.
     await sink().parkMention(issueKey);
     assert.equal(jira.postedParentIds.at(-1), null);
+  });
+});
+
+describe('files: attached first, then shown in the comment after its text', () => {
+  const shownNode = { type: 'mediaSingle', attrs: { layout: 'center' }, content: [{ type: 'media', attrs: { type: 'file', id: 'm-1', collection: '' } }] };
+  /** What the fake attach did, in order. */
+  let attachCalls: string[];
+
+  beforeEach(() => {
+    attachCalls = [];
+    jira.attachFiles = async (issue, paths, options) => {
+      attachCalls.push(`attach ${issue} ${paths.join(',')} ${options.isShownInline ? 'shown' : 'linked'}`);
+      jira.calls.push('attach');
+      return {
+        ok: true,
+        files: [{ name: 'shot.png', attachmentId: '9001', kind: 'image', mediaId: 'm-1', size: null, isReused: false }],
+        nodes: [shownNode],
+        summary: 'shot.png (shown in the comment, attachment 9001)',
+        notes: [],
+        sentKinds: ['photo'],
+      };
+    };
+  });
+  const deliverWithFiles = (kind: RequestAnswerKind, body: string, files: string[], answerOrigin: RequestOrigin = origin) =>
+    sink().deliverAnswer(key, { requestId: 'req_5', kind, body, origin: answerOrigin, isRequestOpen: true, files });
+
+  it('an answer\'s files are attached before its comment is posted, and shown after its text in that comment', async () => {
+    assert.deepEqual(await deliverWithFiles('final', 'Fixed — see the screenshot.', ['shots/after.png']), { ok: true });
+    assert.deepEqual(attachCalls, ['attach PROJ-12 shots/after.png shown']);
+    assert.deepEqual(jira.calls.slice(0, 2), ['attach', 'comment PROJ-12']);
+    assert.deepEqual(jira.postedBodies[0].content.map((node) => node.type), ['paragraph', 'mediaSingle']);
+  });
+
+  it('a hand-over\'s question: the files sit between the text and the line saying how to let the agent go on', async () => {
+    await deliverWithFiles('question', 'Is this the layout you meant?', ['a.png']);
+    const types = jira.postedBodies[0].content.map((node) => node.type);
+    assert.deepEqual(types, ['paragraph', 'mediaSingle', 'paragraph']);
+    assert.ok(getAdfText(jira.postedBodies[0]).endsWith(jiraQuestionContinueText));
+  });
+
+  it('in a thread the files go with the answer; what the attach had to say rides the result', async () => {
+    const attachWithNote = jira.attachFiles;
+    jira.attachFiles = async (issue, paths, options) => {
+      const result = await attachWithNote?.(issue, paths, options);
+      return result && result.ok ? { ...result, notes: ['run.webm is linked, not played'] } : { ok: false, error: 'x' };
+    };
+    const threadOrigin: RequestOrigin = { kind: 'trackerMention', attributes: { issueKey, triggerId: 'mention:10201', requester: 'requester-account', threadCommentId: '10200' } };
+    jira.commentsById.set('10201', { id: '10201', author: { accountId: 'requester-account', accountType: 'atlassian', displayName: 'Requester' }, created: '2026-10-03T10:00:00.000+0000' });
+    assert.deepEqual(await deliverWithFiles('final', 'Here.', ['run.webm'], threadOrigin), { ok: true, warning: 'run.webm is linked, not played' });
+    assert.deepEqual(jira.postedParentIds, ['10200']);
+  });
+
+  it('a file that cannot be attached fails the answer with nothing posted — safe to send again', async () => {
+    jira.attachFiles = async () => ({ ok: false, error: 'cut.png is not a complete PNG image — a partial file? Save it again whole. Nothing was attached or posted.' });
+    assert.deepEqual(await deliverWithFiles('final', 'Done.', ['cut.png']), { ok: false, error: 'cut.png is not a complete PNG image — a partial file? Save it again whole. Nothing was attached or posted.' });
+    assert.deepEqual(jira.postedBodies, []);
+    assert.ok(!jira.calls.includes('assign PROJ-12 requester-account'), 'nothing handed back either');
+  });
+
+  it('an attach that throws is the same; a sink with no way to attach refuses files, nothing posted; an answer without files never asks', async () => {
+    jira.attachFiles = async () => {
+      throw new Error('Jira GET /rest/api/3/attachment/meta failed with 503');
+    };
+    const thrown = await deliverWithFiles('final', 'Done.', ['a.png']);
+    assert.match(!thrown.ok ? thrown.error : '', /^the files could not be attached \(Jira GET .* 503\); nothing was posted$/);
+    jira.attachFiles = undefined;
+    assert.deepEqual(await deliverWithFiles('final', 'Done.', ['a.png']), { ok: false, error: jiraFilesUnavailableError });
+    assert.deepEqual(await deliver('final', 'Done.'), { ok: true });
+    assert.deepEqual(jira.postedTexts, ['Done.']);
+  });
+});
+
+describe('send_file_to_user on an issue: the files in a comment of their own', () => {
+  const nodes = [{ type: 'mediaSingle', attrs: { layout: 'center' }, content: [{ type: 'media', attrs: { type: 'file', id: 'm-1', collection: '' } }] }];
+  beforeEach(() => {
+    jira.attachFiles = async (_issue, _paths, options) => ({
+      ok: true,
+      files: [{ name: 'run.mp4', attachmentId: '9002', kind: 'video', mediaId: options.isShownInline ? 'm-1' : null, size: null, isReused: false }],
+      nodes,
+      summary: 'run.mp4 (plays in the comment, attachment 9002)',
+      notes: [],
+      sentKinds: ['video'],
+    });
+  });
+
+  it('the caption is the comment\'s text, the files follow it; the comment goes into the thread it is given', async () => {
+    const result = await sink().postFiles(issueKey, { paths: ['run.mp4'], caption: 'The passing run:', isAsLinks: false }, '10200');
+    assert.deepEqual(result, { ok: true, summary: 'Posted in a comment in the thread of comment 10200 on PROJ-12: run.mp4 (plays in the comment, attachment 9002).', sentKinds: ['video'] });
+    assert.deepEqual(jira.postedBodies[0].content.map((node) => node.type), ['paragraph', 'mediaSingle']);
+    assert.deepEqual(jira.postedParentIds, ['10200']);
+    assert.ok(!jira.calls.some((call) => call.startsWith('assign')), 'a file comment hands nothing back');
+  });
+
+  it('no caption: a comment of the files alone, top-level without a thread', async () => {
+    const result = await sink().postFiles(issueKey, { paths: ['run.mp4'], isAsLinks: false }, null);
+    assert.equal(result.ok && result.summary, 'Posted in a comment on PROJ-12: run.mp4 (plays in the comment, attachment 9002).');
+    assert.deepEqual(jira.postedBodies, [{ version: 1, type: 'doc', content: nodes }]);
+    assert.deepEqual(jira.postedParentIds, [null]);
+  });
+
+  it('a comment Jira refused: the files are attached, the error says so; one of unknown outcome is deliveryUnknown', async () => {
+    jira.postOutcomes = [new JiraHttpError(400, 'POST', '/rest/api/3/issue/PROJ-12/comment', 'INVALID_INPUT')];
+    const refused = await sink().postFiles(issueKey, { paths: ['run.mp4'], isAsLinks: false }, null);
+    assert.equal(refused.ok, false);
+    assert.match(!refused.ok ? refused.error : '', /^the files are attached to PROJ-12 — run\.mp4 \(plays in the comment, attachment 9002\) — but the comment that shows them was not posted \(.*INVALID_INPUT\); sending them again reuses the attachments$/);
+    assert.ok(!('kind' in refused));
+
+    jira.postOutcomes = [{ outcome: 'deliveryUnknown', reason: 'timeout' }];
+    jira.recentComments = new Error('Jira 503');
+    const warn = mock.method(console, 'warn', () => {});
+    try {
+      const unknown = await sink().postFiles(issueKey, { paths: ['run.mp4'], isAsLinks: false }, null);
+      assert.equal(!unknown.ok && 'kind' in unknown && unknown.kind, 'deliveryUnknown');
+    } finally {
+      warn.mock.restore();
+    }
+  });
+
+  it('as_file lists the files as links: the attach is asked not to show them; a sink with no way to attach refuses', async () => {
+    let askedInline: boolean | null = null;
+    const attach = jira.attachFiles;
+    jira.attachFiles = async (issue, paths, options) => {
+      askedInline = options.isShownInline;
+      return attach ? attach(issue, paths, options) : { ok: false, error: 'x' };
+    };
+    await sink().postFiles(issueKey, { paths: ['run.mp4'], isAsLinks: true }, null);
+    assert.equal(askedInline, false);
+    jira.attachFiles = undefined;
+    assert.deepEqual(await sink().postFiles(issueKey, { paths: ['run.mp4'], isAsLinks: false }, null), { ok: false, error: jiraFilesUnavailableError });
   });
 });

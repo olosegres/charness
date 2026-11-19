@@ -114,6 +114,8 @@ kill -0 <pid> 2>/dev/null || { echo "worker <pid> exited"; exit 1; }; [ -n "$(fi
 There are no `schedule_*` tools and nothing will wake you. Do not end your turn while a worker runs: wait in the
 turn with foreground polls of at most 10 minutes each, checking the same signals (the PID, the run directory
 changing, 2 h 30 min since you started waiting without a report), report interim progress with `answer_request` kind `progress`, and end with kind `final`.
+A screenshot or the passing-run video goes into the answer itself: its path in `answer_request`'s `files` (an H.264
+`.mp4` plays in the comment); `send_file_to_user` posts files in a comment of their own.
 
 ## Closing a task that ran on a runner
 

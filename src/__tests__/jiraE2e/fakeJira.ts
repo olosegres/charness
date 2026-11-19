@@ -16,6 +16,11 @@ import type { JiraAccount } from '../../connectors/jira/client';
  * valid ADF document (an empty text node included). Groups ({@link FakeJira.addGroup})
  * are served by `group/bulk` (by exact name) and `group/member` (paged).
  *
+ * Attachments are Jira Cloud's too: an upload (`POST …/attachments`, multipart) needs the `X-Atlassian-Token: no-check`
+ * header (403 without it) and is listed as the AI account's; `GET /attachment/content/{id}` answers with the file itself
+ * when asked `redirect=false` and otherwise redirects (303) to the attachment's media file — the address an ADF `media`
+ * node's id is read from — on another host; `GET /attachment/meta` states the upload limit.
+ *
  * Comment threads are Jira Cloud's: a comment posted with a `parentId` is a reply in the thread of that TOP-LEVEL comment
  * (answered with `parentId` as a number, as Jira does); a reply to a reply, or to a comment the issue never had, is
  * refused with Jira's own 400 — a deleted top-level comment still takes replies while its thread has some (measured).
@@ -52,6 +57,13 @@ export interface FakeJiraAttachment {
   content: Buffer;
   /** Who uploaded it; the issue's reporter when absent. */
   author?: JiraAccount;
+  /** When it was attached; the issue's creation when absent. */
+  created?: string;
+}
+
+/** The media file an attachment's content redirects to, as a UUID derived from its id. */
+export function getFakeMediaId(attachmentId: string): string {
+  return `00000000-0000-4000-8000-${attachmentId.padStart(12, '0')}`;
 }
 
 interface FakeJiraGroup {
@@ -163,6 +175,8 @@ export class FakeJira {
   readonly requestLog: string[] = [];
   /** Issues whose assignee the connector may not change (Jira refuses, as for a person who cannot be assigned there): a hand-back fails. */
   readonly refusedAssigneeIssueKeys = new Set<string>();
+  /** The site's upload limit in bytes, as `GET /attachment/meta` states it. */
+  attachmentUploadLimitBytes = 10 * 1024 * 1024;
 
   constructor(private readonly options: FakeJiraOptions) {
     this.server = http.createServer((request, response) => {
@@ -326,19 +340,52 @@ export class FakeJira {
         updated: issue.updated,
         description: createAdfParagraph(issue.description),
         comment: { total: issue.comments.length, comments: issue.comments },
-        attachment: issue.attachments.map((attachment) => ({
-          id: attachment.id,
-          filename: attachment.filename,
-          mimeType: attachment.mimeType,
-          size: attachment.content.length,
-          created: issue.created,
-          author: attachment.author ?? issue.reporter,
-        })),
+        attachment: issue.attachments.map((attachment) => this.getAttachmentJson(issue, attachment)),
       },
       ...(isChangelogExpanded
         ? { changelog: { startAt: 0, maxResults: issue.histories.length, total: issue.histories.length, histories: [...issue.histories].reverse() } }
         : {}),
     };
+  }
+
+  private getAttachmentJson(issue: FakeJiraIssue, attachment: FakeJiraAttachment): object {
+    return {
+      id: attachment.id,
+      filename: attachment.filename,
+      mimeType: attachment.mimeType,
+      size: attachment.content.length,
+      created: attachment.created ?? issue.created,
+      author: attachment.author ?? issue.reporter,
+    };
+  }
+
+  /** An upload, as Jira takes it: one multipart file, the XSRF opt-out required. */
+  private handleUpload(issue: FakeJiraIssue, request: http.IncomingMessage, rawBody: Buffer, send: (status: number, body?: object) => void): void {
+    if (request.headers['x-atlassian-token'] !== 'no-check') {
+      send(403, { errorMessages: ['XSRF check failed'] });
+      return;
+    }
+    const file = parseMultipartFile(rawBody, request.headers['content-type'] ?? '');
+    if (!file) {
+      send(400, { errorMessages: ['no file in the request'] });
+      return;
+    }
+    if (file.content.length > this.attachmentUploadLimitBytes) {
+      send(413, { errorMessages: ['The file is too large'] });
+      return;
+    }
+    this.nextAttachmentId += 1;
+    const attachment: FakeJiraAttachment = {
+      id: this.nextAttachmentId.toString(),
+      filename: file.filename,
+      mimeType: file.mimeType,
+      content: file.content,
+      author: this.options.aiAccount,
+      created: new Date().toISOString(),
+    };
+    issue.attachments.push(attachment);
+    this.touch(issue);
+    send(200, [this.getAttachmentJson(issue, attachment)]);
   }
 
   private async handle(request: http.IncomingMessage, response: http.ServerResponse): Promise<void> {
@@ -353,9 +400,11 @@ export class FakeJira {
       send(401, { errorMessages: ['Client must be authenticated to access this resource.'] });
       return;
     }
-    const requestBody = await this.readBody(request);
+    const rawBody = await this.readRawBody(request);
+    const isMultipart = (request.headers['content-type'] ?? '').startsWith('multipart/');
+    const requestBody: FakeJiraRequestBody = !isMultipart && rawBody.length > 0 ? JSON.parse(rawBody.toString('utf8')) : {};
     const route = url.pathname.startsWith(restPrefix) ? url.pathname.slice(restPrefix.length) : url.pathname;
-    const issueMatch = /^\/issue\/([^/]+)(\/(changelog|comment|assignee|remotelink)(?:\/([^/]+))?)?$/.exec(route);
+    const issueMatch = /^\/issue\/([^/]+)(\/(changelog|comment|assignee|remotelink|attachments)(?:\/([^/]+))?)?$/.exec(route);
     const statusesMatch = /^\/project\/([^/]+)\/statuses$/.exec(route);
     const attachmentContentMatch = /^\/attachment\/content\/([^/]+)$/.exec(route);
 
@@ -378,13 +427,21 @@ export class FakeJira {
       const maxResults = Number(url.searchParams.get('maxResults') ?? 50);
       const values = group.members.slice(startAt, startAt + maxResults);
       send(200, { startAt, maxResults, total: group.members.length, isLast: startAt + values.length >= group.members.length, values });
+    } else if (method === 'GET' && route === '/attachment/meta') {
+      send(200, { enabled: true, uploadLimit: this.attachmentUploadLimitBytes });
     } else if (method === 'GET' && attachmentContentMatch) {
-      // With `redirect=false`, as the connector asks, Jira answers with the file itself.
       const attachment = [...this.issues.values()].flatMap((issue) => issue.attachments).find((candidate) => candidate.id === attachmentContentMatch[1]);
       if (!attachment) {
         send(404, { errorMessages: ['The attachment does not exist.'] });
         return;
       }
+      if (url.searchParams.get('redirect') !== 'false') {
+        // As Jira Cloud: the content is the media file's, on another host; the connector reads its id and never follows.
+        response.writeHead(303, { location: `https://media.example.invalid/file/${getFakeMediaId(attachment.id)}/binary?token=fake&name=${encodeURIComponent(attachment.filename)}` });
+        response.end();
+        return;
+      }
+      // With `redirect=false`, as the download asks, Jira answers with the file itself.
       response.writeHead(200, { 'content-type': attachment.mimeType, 'content-length': attachment.content.length });
       response.end(attachment.content);
     } else if (method === 'POST' && route === '/search/jql') {
@@ -396,7 +453,8 @@ export class FakeJira {
         send(404, { errorMessages: ['Issue does not exist or you do not have permission to see it.'] });
         return;
       }
-      this.handleIssueRoute(method, issue, issueMatch[3], issueMatch[4], url, requestBody, send);
+      if (method === 'POST' && issueMatch[3] === 'attachments') this.handleUpload(issue, request, rawBody, send);
+      else this.handleIssueRoute(method, issue, issueMatch[3], issueMatch[4], url, requestBody, send);
     } else {
       send(404, { errorMessages: [`fake Jira does not serve ${method} ${url.pathname}`] });
     }
@@ -472,10 +530,23 @@ export class FakeJira {
     }
   }
 
-  private async readBody(request: http.IncomingMessage): Promise<FakeJiraRequestBody> {
+  private async readRawBody(request: http.IncomingMessage): Promise<Buffer> {
     const chunks: Buffer[] = [];
     for await (const chunk of request) chunks.push(Buffer.from(chunk));
-    const text = Buffer.concat(chunks).toString('utf8');
-    return text ? JSON.parse(text) : {};
+    return Buffer.concat(chunks);
   }
+}
+
+/** The one file of a multipart body: its name, its type and its bytes; `null` when there is none. */
+function parseMultipartFile(body: Buffer, contentType: string): { filename: string; mimeType: string; content: Buffer } | null {
+  const boundary = /boundary=([^;]+)/.exec(contentType)?.[1];
+  if (!boundary) return null;
+  const start = body.indexOf(`--${boundary}\r\n`);
+  const headerEnd = body.indexOf('\r\n\r\n', start);
+  const end = body.indexOf(`\r\n--${boundary}--`, headerEnd);
+  if (start < 0 || headerEnd < 0 || end < 0) return null;
+  const headers = body.subarray(start, headerEnd).toString('utf8');
+  const filename = /filename="([^"]*)"/.exec(headers)?.[1];
+  if (filename === undefined) return null;
+  return { filename, mimeType: /Content-Type: ([^\r\n]+)/i.exec(headers)?.[1] ?? 'application/octet-stream', content: Buffer.from(body.subarray(headerEnd + 4, end)) };
 }

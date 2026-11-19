@@ -10,6 +10,9 @@
 
 import { after, before, beforeEach, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import { closeSync, mkdtempSync, openSync, rmSync, writeFileSync } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import * as http from 'http';
 import type { AddressInfo } from 'net';
 import {
@@ -37,6 +40,9 @@ interface RecordedRequest {
   authorization: string | undefined;
   contentType: string | undefined;
   body: string;
+  /** The XSRF opt-out an attachment upload must carry, and the length it announced. */
+  atlassianToken?: string | undefined;
+  contentLength?: string | undefined;
 }
 
 interface CannedResponse {
@@ -95,6 +101,8 @@ describe('createJiraClient', () => {
           authorization: request.headers.authorization,
           contentType: request.headers['content-type'],
           body: Buffer.concat(chunks).toString('utf8'),
+          atlassianToken: request.headers['x-atlassian-token'] as string | undefined,
+          contentLength: request.headers['content-length'],
         });
         const canned = responses.shift() ?? { status: 500, body: 'no canned response left' };
         if (canned.isHanging) return;
@@ -239,6 +247,67 @@ describe('createJiraClient', () => {
       assert.equal(getCommentParentId(reply), '10200');
       assert.equal(getCommentThreadRootId(root), '10200', 'a top-level comment is its own thread');
       assert.equal(getCommentThreadRootId(reply), '10200', 'a reply is in its parent\'s');
+    });
+
+    describe('attachments the agent shows on an issue', () => {
+      let fileDir = '';
+      let fd = -1;
+      before(() => {
+        fileDir = mkdtempSync(path.join(os.tmpdir(), 'jira-upload-'));
+        writeFileSync(path.join(fileDir, 'notes.txt'), 'the log\n');
+        fd = openSync(path.join(fileDir, 'notes.txt'), 'r');
+      });
+      after(() => {
+        closeSync(fd);
+        rmSync(fileDir, { recursive: true, force: true });
+      });
+      const upload = (filename = 'notes.txt') => createClient().uploadAttachment('PROJ-7', { fd, filename, mimeType: 'text/plain', sizeBytes: 8 });
+
+      it('uploadAttachment POSTs ONE multipart file streamed from its descriptor, with the XSRF opt-out and its exact length; the answer lists the attachment', async () => {
+        respondWith({ status: 200, body: json([{ id: '9001', filename: 'notes _1_.txt', size: 8, mimeType: 'text/plain' }]) });
+        const result = await upload('notes "1".txt');
+        assert.deepEqual(result, { outcome: 'uploaded', attachments: [{ id: '9001', filename: 'notes _1_.txt', size: 8, mimeType: 'text/plain' }] });
+        const [request] = requests;
+        assert.equal(`${request.method} ${request.url}`, 'POST /rest/api/3/issue/PROJ-7/attachments');
+        assert.equal(request.atlassianToken, 'no-check');
+        const boundary = /^multipart\/form-data; boundary=(charness-[0-9a-f]{24})$/.exec(request.contentType ?? '')?.[1];
+        assert.ok(boundary, request.contentType);
+        assert.equal(request.body,
+          `--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="notes _1_.txt"\r\nContent-Type: text/plain\r\n\r\nthe log\n\r\n--${boundary}--\r\n`,
+          'the quote in the name cannot break the header; the file is read from byte 0');
+        assert.equal(request.contentLength, String(Buffer.byteLength(request.body)));
+      });
+
+      it('an upload is never repeated: a 5xx or an unreadable answer is deliveryUnknown; a refusal is the error, a 403 the auth error', async () => {
+        respondWith({ status: 503, body: json({ errorMessages: ['busy'] }) });
+        assert.deepEqual(await upload(), { outcome: 'deliveryUnknown', reason: 'Jira POST /rest/api/3/issue/PROJ-7/attachments: outcome unknown — 503: busy' });
+        assert.equal(requests.length, 1, 'not retried');
+        respondWith({ status: 200, body: 'not json' });
+        assert.equal((await upload()).outcome, 'deliveryUnknown');
+        respondWith({ status: 413, body: json({ errorMessages: ['The file is too large'] }) });
+        await assert.rejects(upload(), (error: Error) => error instanceof JiraHttpError && error.status === 413 && error.message.includes('The file is too large'));
+        respondWith({ status: 403, body: json({ errorMessages: ['no permission'] }) });
+        await assert.rejects(upload(), (error: Error) => error instanceof JiraAuthError && error.status === 403);
+        assert.equal(requests.length, 4);
+      });
+
+      it('getAttachmentMediaId reads the media file id from where the content redirects, never following it; no redirect: null', async () => {
+        const mediaId = '0f0e0d0c-0b0a-4908-8706-050403020100';
+        respondWith({ status: 303, headers: { Location: `https://media.example.invalid/file/${mediaId}/binary?token=t&client=c&name=shot.png` } });
+        assert.equal(await createClient().getAttachmentMediaId('9001'), mediaId);
+        assert.deepEqual(requests.map((request) => `${request.method} ${request.url}`), ['GET /rest/api/3/attachment/content/9001'], 'one request, to the site only');
+        respondWith({ status: 200, body: 'the file itself' });
+        assert.equal(await createClient().getAttachmentMediaId('9001'), null);
+        respondWith({ status: 404, body: json({ errorMessages: ['gone'] }) });
+        await assert.rejects(createClient().getAttachmentMediaId('9001'), (error: Error) => error instanceof JiraHttpError && error.status === 404);
+      });
+
+      it('getAttachmentSettings: switched on unless Jira says off; no stated limit is null', async () => {
+        respondWith({ status: 200, body: json({ enabled: false, uploadLimit: 10485760 }) }, { status: 200, body: json({}) });
+        assert.deepEqual(await createClient().getAttachmentSettings(), { isEnabled: false, uploadLimitBytes: 10485760 });
+        assert.deepEqual(await createClient().getAttachmentSettings(), { isEnabled: true, uploadLimitBytes: null });
+        assert.equal(requests[0].url, '/rest/api/3/attachment/meta');
+      });
     });
 
     it('getGroupByName: GET /group/bulk with the name encoded; the group of EXACTLY that name, else null', async () => {

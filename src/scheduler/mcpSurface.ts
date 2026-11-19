@@ -233,6 +233,8 @@ export interface ClaudeProfilesQuery {
  */
 export interface OptionalBotTools {
   isJiraAttachmentToolOffered: boolean;
+  /** A Jira session can show files on its issue (`send_file_to_user`, `answer_request`'s `files`). */
+  isJiraFileSendOffered: boolean;
   isTodoToolOffered: boolean;
   /** One line per runner that is paired or listed in `runners.json` (`remoteRun/runnerSummary.ts`); none = the instructions do not mention `charness remote-run`. */
   remoteRunRunnerLines: readonly string[];
@@ -242,6 +244,7 @@ export interface OptionalBotTools {
 function getOptionalBotTools(deps: SchedulerMcpDeps): OptionalBotTools {
   return {
     isJiraAttachmentToolOffered: deps.fetchJiraAttachment !== undefined,
+    isJiraFileSendOffered: deps.sendJiraFiles !== undefined,
     isTodoToolOffered: deps.todos !== undefined,
     remoteRunRunnerLines: deps.getRemoteRunRunnerLines?.() ?? [],
   };
@@ -267,6 +270,10 @@ Tool descriptions hold the argument recipes.`;
 /** What a Jira session's instructions add: the tool that reaches the issue's original files (C10). */
 const jiraAttachmentInstruction =
   '• The issue lists a file (an attachment id in the attachments list, or in a placeholder such as "[image: shot.png — attachment 10234]") you need to look at → jira_get_attachment with that id; it saves the original file and returns its path.';
+
+/** What a Jira session's instructions add when it can show files on its issue. */
+const jiraFileSendInstruction =
+  '• You made a screenshot, a video or a file the requester should see → put its path in answer_request\'s `files`: it is attached to the issue and shown in your answer\'s comment (an image shown, an H.264 .mp4 playing, any other file linked); send_file_to_user posts files in a comment of their own.';
 
 /** For a conversation on a tracker: the requester sees nothing but the answers; `extraInstructions` name the platform's own tools. */
 function buildTrackerInstructions(extraInstructions: readonly string[], isBotSkillsEnabled: boolean): string {
@@ -304,6 +311,7 @@ export function buildMcpServerInstructions(platform: PlatformId | null, offered:
     if (platform !== 'jira') return buildTrackerInstructions(remoteRunInstructions, isBotSkillsEnabled);
     return buildTrackerInstructions([
       ...(offered.isJiraAttachmentToolOffered ? [jiraAttachmentInstruction] : []),
+      ...(offered.isJiraFileSendOffered ? [jiraFileSendInstruction] : []),
       ...(offered.isTodoToolOffered ? [todoInstruction] : []),
       ...remoteRunInstructions,
     ], isBotSkillsEnabled);
@@ -506,6 +514,12 @@ export interface SchedulerMcpDeps {
    * without it, and then the tool is not offered.
    */
   fetchJiraAttachment?: (threadKey: string, attachmentId: string) => Promise<{ ok: true; message: string } | { ok: false; error: string }>;
+  /**
+   * `send_file_to_user` in a Jira session: attach files of the issue's folder to the issue `threadKey` names and post a
+   * comment that shows them — the issue's outbound `deliverFile`. Supplied by the Jira connector; absent without it,
+   * and then a Jira session is not offered the tool.
+   */
+  sendJiraFiles?: SendFilesToThread;
   /**
    * `claude_profiles`: the signed-in Claude account profiles with their usage windows and the one a process of
    * `query.model` should run on (`getClaudeLaunchPick`, `utils/claudeUsage.ts`); the bot refreshes the snapshots on
@@ -1613,6 +1627,31 @@ const jiraAnswerRequestShape = {
 };
 const jiraAnswerRequestInput = createStrictToolInput(jiraAnswerRequestShape);
 
+/** The most files a Jira answer or comment carries ({@link jiraFilesMaxCount} of the connector: Telegram's album cap). */
+const jiraFilesMaxCount = 10;
+const jiraFilesDescription =
+  'Files to show in this answer\'s comment, as 1..10 paths RELATIVE to the issue\'s folder (absolute paths only if they resolve ' +
+  'inside it): each is attached to the issue and shown after your text — a .png/.jpg/.jpeg/.gif/.webp image shown, an H.264 .mp4 ' +
+  'playing, any other file listed as a link to its attachment. An image must be whole and what its name says; an .mp4 must be H.264 ' +
+  '(convert: ffmpeg -i in.webm -c:v libx264 -pix_fmt yuv420p -movflags +faststart out.mp4). If one cannot be attached, nothing is ' +
+  'posted; sending the same answer again reuses the files already attached.';
+
+/** `answer_request` in a Jira session that can show files: the Jira shape, and the files the answer carries. */
+const jiraFilesAnswerRequestShape = {
+  ...jiraAnswerRequestShape,
+  files: z.preprocess(coerceJsonArrayArg, z.array(z.string().min(1)).min(1).max(jiraFilesMaxCount)).optional().describe(jiraFilesDescription),
+};
+const jiraFilesAnswerRequestInput = createStrictToolInput(jiraFilesAnswerRequestShape);
+
+/** `send_file_to_user` in a Jira session: the Telegram tool's arguments, but `threadKey` (a Jira session's token names its issue). */
+const jiraSendFileShape = {
+  paths: z.preprocess(coerceJsonArrayArg, z.array(z.string().min(1)).min(1).max(jiraFilesMaxCount))
+    .describe('Files to show, as 1..10 paths RELATIVE to the issue\'s folder (absolute paths only if they resolve inside it). A path outside it is rejected and nothing is attached.'),
+  caption: z.string().optional().describe('Optional text of the comment, in Markdown, above the files.'),
+  as_file: z.boolean().optional().describe('List every file as a link to its attachment instead of showing images and videos in the comment.'),
+};
+const jiraSendFileInput = createStrictToolInput(jiraSendFileShape);
+
 /**
  * @description Register `answer_request` (request/answer core S3): the agent's
  * answer to a request, delivered to the surface the request came from. The
@@ -1631,20 +1670,54 @@ function registerAnswerRequestTool(server: ToolRegistrar, deps: SchedulerMcpDeps
       'restate the answer in plain text afterwards: where your plain text is relayed as well, a recap shows twice. ' +
       answerStyleInstruction,
   };
-  const handle = async (args: { requestId: string; kind: RequestAnswerKind; body: string; replyToCommentIds?: string[] }) => {
+  const handle = async (args: { requestId: string; kind: RequestAnswerKind; body: string; replyToCommentIds?: string[]; files?: string[] }) => {
     const outcome = await deps.answerRequest({
       requestId: args.requestId,
       kind: args.kind,
       body: args.body,
       ...(args.replyToCommentIds === undefined ? {} : { replyToCommentIds: args.replyToCommentIds }),
+      ...(args.files === undefined ? {} : { files: args.files }),
       checkIsConversationInScope: (conversationKey) =>
         checkIsConversationInScope(scope, conversationKey, deps.getThreadsForDirectory),
     });
     return outcome.ok ? textResult(outcome.message) : errorResult(outcome.error);
   };
-  // The reply field names a tracker's comments: only a Jira session is offered it.
-  if (platform === 'jira') server.registerTool('answer_request', { ...definition, inputSchema: jiraAnswerRequestInput }, handle);
+  // The reply field names a tracker's comments: only a Jira session is offered it — and the files, where the connector can attach them.
+  if (platform === 'jira' && deps.sendJiraFiles) server.registerTool('answer_request', { ...definition, inputSchema: jiraFilesAnswerRequestInput }, handle);
+  else if (platform === 'jira') server.registerTool('answer_request', { ...definition, inputSchema: jiraAnswerRequestInput }, handle);
   else server.registerTool('answer_request', { ...definition, inputSchema: answerRequestInput }, handle);
+}
+
+/**
+ * `send_file_to_user` in a Jira session — the tool a Telegram session sends files with, under the same name and
+ * arguments, so one instruction («send the video with send_file_to_user») works on both: the files are attached to the
+ * issue and shown in ONE comment, the caption as its text. The issue is the session's own (its scoped token).
+ */
+function registerJiraFileSendTool(server: ToolRegistrar, deps: SchedulerMcpDeps, sendJiraFiles: SendFilesToThread, scope: SchedulerScope): void {
+  server.registerTool(
+    'send_file_to_user',
+    {
+      title: 'Show files on this issue',
+      description:
+        'Attach one or more files from THIS issue\'s folder to the Jira issue and post ONE comment that shows them, the caption as ' +
+        'its text: a .png/.jpg/.jpeg/.gif/.webp image is shown in the comment, an H.264 .mp4 plays in it, any other file is listed ' +
+        'as a link to its attachment (as_file:true lists every file that way). To put files INTO your answer instead, pass them in ' +
+        'answer_request\'s `files`. The comment goes into the thread your newest open request answers in. An image must be whole ' +
+        'and what its name says, an .mp4 must be H.264 (convert: ffmpeg -i in.webm -c:v libx264 -pix_fmt yuv420p -movflags ' +
+        '+faststart out.mp4), and no file may be over the site\'s upload limit: otherwise nothing is attached. A file of the same ' +
+        'name and size you attached within the hour is reused, so sending again attaches nothing twice. If a send fails, say so in ' +
+        'your answer and go on.',
+      inputSchema: jiraSendFileInput,
+    },
+    async (args) => {
+      await deps.whenSessionsRestored();
+      const resolved = resolveTargetThreadKey(scope, undefined, deps.getThreadsForDirectory);
+      if (!resolved.ok) return errorResult(resolved.error);
+      const result = await sendJiraFiles(resolved.threadKey, { paths: args.paths, caption: args.caption, asFile: args.as_file });
+      if (result.ok) return textResult(result.summary);
+      return 'kind' in result && result.kind === 'deliveryUnknown' ? deliveryUnknownResult(result.error) : errorResult(result.error);
+    },
+  );
 }
 
 // ─── server factory ──────────────────────────────────────────────────
@@ -1844,6 +1917,8 @@ function registerBotTools(
   }
   // The original files of the conversation's own issue: only a Jira session, and only with the connector loaded.
   if (platform === 'jira' && deps.fetchJiraAttachment) registerJiraAttachmentTool(server, deps, deps.fetchJiraAttachment, scope);
+  // Files shown on the conversation's own issue: only a Jira session, and only with the connector loaded.
+  if (platform === 'jira' && deps.sendJiraFiles) registerJiraFileSendTool(server, deps, deps.sendJiraFiles, scope);
   registerCompactConversationTool(server, deps, scope);
   // A published list belongs to a conversation of a platform that has one (D54): a topic or a Jira issue.
   if (deps.todos && (platform === 'telegram' || platform === 'jira')) registerTodoTools(server, deps, deps.todos, scope);

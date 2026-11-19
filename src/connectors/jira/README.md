@@ -424,6 +424,46 @@ another platform's state.
 - The client retries only requests safe to repeat; 429 honours `Retry-After` (capped); errors carry method, path
   and Jira's messages, never the token.
 
+## Files the agent shows on an issue (`outgoingFiles.ts`, `outgoingFileCheck.ts`)
+
+The agent's answer can carry files: `answer_request`'s `files` (1–10 paths relative to the issue's project folder) are
+attached to the issue BEFORE the answer's comment is posted and shown in it after its text — an image (`.png`, `.jpg` /
+`.jpeg`, `.gif`, `.webp`) shown and an `.mp4` playing in the comment (an ADF `mediaSingle` holding a `media` node of
+`type: "file"` whose `id` is the attachment's MEDIA file id, not its attachment id), any other file listed as a link to
+its attachment (`/rest/api/3/attachment/content/<id>`, which a signed-in browser opens). The same goes for
+`send_file_to_user` — the tool a Telegram session sends files with, offered to a Jira session under the same name and
+arguments (no `threadKey`) so one instruction («send the run's video with send_file_to_user», the orchestration skill's)
+works on both: its files go into a comment of their own, the caption as its text, in the thread the conversation's newest
+open request answers in (top-level when none is open); `as_file: true` links every file. On Jira Cloud a plain
+attachment, or a link to one, shows only in the attachments list — only the media node shows it in the comment.
+
+- **Checked before anything is uploaded.** The paths go through the file send's own rule (`openFilesWithinWorkDir`,
+  `utils/fileSendService.ts`): inside the folder, no component swapped after validation, the descriptor kept. The site's
+  `GET /attachment/meta` must have attachments on, and no file may be over its `uploadLimit`. An image must be what its
+  name says and WHOLE — a PNG ending in its IEND chunk, a JPEG in its end marker (zero padding allowed), a GIF in its
+  trailer, a WebP whose RIFF size is the file's — and an `.mp4` a complete MP4 (its top-level boxes tile the file, its
+  `moov` is there) whose first video track is H.264 (`avc1` / `avc3`), read from the boxes by position, so no ffprobe is
+  needed and a file of any size costs a few reads; another codec is refused with the `ffmpeg` line that converts it. A
+  video in another container (`.mov`, `.webm`, …) is attached and linked, with a note. A refusal names the file and the
+  fix, and nothing is attached or posted. The size a picture or video states is put on its media node (without one Jira
+  shows it at a default size).
+- **Uploaded once.** `POST /issue/{key}/attachments` (multipart, `X-Atlassian-Token: no-check`, streamed from the
+  descriptor with its exact length, a time budget that grows with the size) is never repeated: an answer Jira did not
+  confirm is looked for among the issue's attachments once, else it is an error. A file of the same name and size that
+  the AI account attached within the hour (`jiraAttachmentReuseMaxAgeMs`) — an earlier try whose comment did not land —
+  is reused, so the agent may send the same answer again; an older one, or someone else's, is not. A failure after some
+  files were attached names them.
+- **The media id** is read from where `GET /attachment/content/{id}` redirects (303 to the media API,
+  `…/file/<uuid>/binary?…`); the redirect is NEVER followed, so the credentials stay with the site. No such redirect, or
+  no answer, and the file is linked instead, the agent told.
+- An answer whose files cannot be attached is NOT delivered (nothing posted; the request unchanged, safe to send again);
+  the files sit after the answer's text in its last comment (a comment of their own when that one is full), before the
+  hand-over question's closing line. Measured on a live site (2026-11-20): an upload's answer lists the attachment with
+  its id, name, type, size and `content` address; the content of an image, a video and a text file each redirected to
+  `api.media.atlassian.com/file/<uuid>/…`; a comment of `mediaSingle` nodes naming those ids — a reply in a thread too —
+  is taken, its `renderedBody` shows the image as an `<img>` and the video as a player of
+  `/rest/api/3/attachment/content/<id>?stream=true`, and a `media` node without `width` / `height` is taken as well.
+
 ## The original files (`attachmentTool.ts`, `attachmentDownload.ts`)
 
 The bot MCP gives a Jira session one more tool, `jira_get_attachment(attachmentId)`. The issue is taken from the
@@ -558,7 +598,9 @@ What the connector relies on, probed with a throw-away issue (REST v3 unless not
 
 - The agent's Markdown becomes ADF. HTML stays literal text (every `<` that opens no autolink is swapped for a
   placeholder before conversion), so `<adf>…</adf>` can never smuggle a notifying mention. No external media:
-  an image becomes a plain link (a `media` node would be fetched by every viewer's browser). Link targets keep
+  an image in the agent's Markdown becomes a plain link (a `media` node would be fetched by every viewer's browser);
+  the only media nodes in a comment are the bot's own, for files it attached to the issue (see «Files the agent shows
+  on an issue»). Link targets keep
   only `http`, `https`, `mailto`.
 - Each comment must fit BOTH counts — its Markdown and its serialized ADF (which runs several times longer);
   which one Jira enforces is not documented.
@@ -570,11 +612,13 @@ What the connector relies on, probed with a throw-away issue (REST v3 unless not
 ## Tests
 
 `jiraConfig.test.ts`, `jiraTrustedGroup.test.ts`, `jiraIssueBlocks.test.ts` and `jiraMediaPlaceholders.test.ts` (over the recorded fixture),
+`jiraOutgoingFileCheck.test.ts` and `jiraOutgoingFiles.test.ts` (the files an answer shows, over files built by `mediaFileFixtures.ts`),
 `jiraPromptSpill.test.ts`, `jiraPrompt.test.ts`, `connectorGuards*.test.ts`, `jiraLazyLoad.test.ts`; flows boot a
 real Jira-only instance each (`scripts/run-isolated.sh`) against `__tests__/jiraE2e/fakeJira.ts` (which also serves
-groups and their members) and `fakeClaude.ts`: `jiraConnectorE2e.test.ts` (requests and the session lifecycle),
+groups and their members) and `fakeClaude.ts`: `jiraConnectorE2e.test.ts` (requests and the session lifecycle, an answer that shows files and `send_file_to_user`; the fake Jira takes
+uploads and redirects an attachment's content to its media file as Jira Cloud does),
 `jiraPromptE2e.test.ts` (what the prompts carry), `jiraTrustE2e.test.ts` (with a `trustedGroup` and no `trustedApps`: the
-filter, the notice, an automation's hand-over and mentions), `jiraTrustedAppsE2e.test.ts` (with a `trustedApps`: a listed
+filter, the notice, an automation's hand-over and mentions, a mention in a comment thread answered in it), `jiraTrustedAppsE2e.test.ts` (with a `trustedApps`: a listed
 app starts the agent, an unlisted one — a group member — is refused and its text withheld) and `jiraCommentWakeE2e.test.ts`
 (with a group, `mentionMode: "act"` and the backstop an hour away: a comment mid-turn reaches the same request, a comment
 after the final answer opens one, an acting mention, a kill-and-restart mid-turn answered within a minute) and

@@ -28,6 +28,11 @@ export interface RequestAnswerDelivery {
    * core passes it through untouched; a sink that has no such notion ignores it.
    */
   replyToCommentIds?: readonly string[];
+  /**
+   * Platform-owned: files of the conversation's folder the answer carries, as the agent named them (paths relative to
+   * it). The core passes them through untouched; a sink that has no such notion ignores them.
+   */
+  files?: readonly string[];
 }
 
 /**

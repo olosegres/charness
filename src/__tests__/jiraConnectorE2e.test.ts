@@ -15,6 +15,8 @@
  *   → an answered issue idles: compacted, its process stopped, the next hand-over resumes it (L3)
  *   → the agent process killed mid-turn: resumed in its own session, answered
  *   → the self-assigned and the foreign issue: no request, nothing posted
+ *   → an answer that carries files: an image and an H.264 video of the project folder attached to the issue and shown in
+ *     the answer's comment, a log linked; `send_file_to_user` posts files in a comment of their own
  *   → two people hand one issue over in turn: two open requests, two answers, the issue goes back to the person whose
  *     answer closed first (R34)
  *   → one person hands an issue over twice while the agent is mid-turn: the newer request replaces the first; the agent
@@ -40,13 +42,16 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import * as fs from 'fs';
-import { fakeJiraSearchRequest } from './jiraE2e/fakeJira';
+import * as path from 'path';
+import { fakeJiraSearchRequest, getFakeMediaId } from './jiraE2e/fakeJira';
+import { createCompletePngBytes, createH264Mp4Bytes } from './mediaFileFixtures';
 import { fakeClaudePath, listTmuxSessions } from './e2e/isolatedCharness';
 import { getPolledRequestIssueKeys } from './jiraE2e/charnessLog';
 import { claudeJsonStreamUsageLogPrefix } from '../adapters/claudeJsonStreamAdapter';
 import {
   fakeClaudeLogFileNames,
   fakeCompactionModelUsage,
+  fakeSendFileCaption,
   fakeTurnUsage,
   getFlagValues,
   getLaunchSessionId,
@@ -70,14 +75,17 @@ import {
   getLayout,
   getPrompts,
   getSessionLaunchOf,
+  getToolCalls,
   getTurns,
   handIssueToAi,
+  handOverAndAwaitAnswer,
   idleStopTimeoutMs,
   isWholePrompt,
   itHoldsIsolationBeforeBoot,
   itHoldsTheInstanceInvariants,
   markToolDigestStale,
   perTurnStopTimeoutMs,
+  projectFolder,
   readFakeLog,
   registerJiraFlowHooks,
   requester,
@@ -227,6 +235,48 @@ describe('Jira connector end to end — requests and the session lifecycle: buil
       assert.deepEqual(fakeJira.getIssue(key).comments, [], `${key} got no comment`);
       assert.equal(fakeJira.getIssue(key).assignee?.accountId, aiAccount.accountId, `${key} was not handed anywhere`);
     }
+  });
+
+  it('an answer carries files of the project folder: attached to the issue and shown in its comment — the image and the H.264 video inline, the log linked; send_file_to_user posts files in a comment of their own', async () => {
+    const outDir = path.join(getLayout().workRoot, projectFolder, 'out');
+    fs.mkdirSync(outDir, { recursive: true });
+    const png = createCompletePngBytes(1366, 768);
+    fs.writeFileSync(path.join(outDir, 'after.png'), png);
+    fs.writeFileSync(path.join(outDir, 'run.mp4'), createH264Mp4Bytes(1366, 768));
+    fs.writeFileSync(path.join(outDir, 'build.log'), 'build ok\n');
+
+    const answeredKey = 'PROJ-60';
+    createIssue(answeredKey, 'answer', ' [files:out/after.png,out/run.mp4,out/build.log]');
+    await handOverAndAwaitAnswer(answeredKey);
+    const issue = fakeJira.getIssue(answeredKey);
+    const uploaded = issue.attachments.filter((attachment) => attachment.author?.accountId === aiAccount.accountId);
+    assert.deepEqual(uploaded.map((attachment) => [attachment.filename, attachment.mimeType]), [['after.png', 'image/png'], ['run.mp4', 'video/mp4'], ['build.log', 'text/plain']]);
+    assert.ok(uploaded[0].content.equals(png), 'the file itself reached Jira');
+    const answer = issue.comments[issue.comments.length - 1];
+    assert.equal(answer.author.accountId, aiAccount.accountId);
+    assert.deepEqual(answer.body.content.map((node) => node.type), ['paragraph', 'mediaSingle', 'mediaSingle', 'bulletList']);
+    assert.deepEqual(answer.body.content.slice(1, 3).map((node) => node.content?.[0].attrs), [
+      { type: 'file', id: getFakeMediaId(uploaded[0].id), collection: '', width: 1366, height: 768 },
+      { type: 'file', id: getFakeMediaId(uploaded[1].id), collection: '', width: 1366, height: 768 },
+    ]);
+    const link = answer.body.content[3].content?.[0].content?.[0].content?.[0];
+    assert.equal(link?.text, 'build.log');
+    assert.match(String(link?.marks?.[0].attrs?.href), new RegExp(`/rest/api/3/attachment/content/${uploaded[2].id}$`));
+    assert.ok(getAnswers(answeredKey)[0].outcome.startsWith('Delivered.'), getAnswers(answeredKey)[0].outcome);
+
+    const sentKey = 'PROJ-61';
+    createIssue(sentKey, 'send-file', ' [send-file:out/run.mp4]');
+    await handOverAndAwaitAnswer(sentKey);
+    const sentIssue = fakeJira.getIssue(sentKey);
+    const [video] = sentIssue.attachments;
+    assert.equal(video.filename, 'run.mp4');
+    const [fileComment, answerComment] = sentIssue.comments;
+    assert.deepEqual(fileComment.body.content.map((node) => node.type), ['paragraph', 'mediaSingle']);
+    assert.equal(fileComment.body.content[0].content?.[0].text, fakeSendFileCaption);
+    assert.equal(fileComment.parentId, undefined, 'no thread: the request was a hand-over');
+    assert.equal(answerComment.author.accountId, aiAccount.accountId);
+    const [call] = getToolCalls(sentKey);
+    assert.equal(call.outcome, `Posted in a comment on ${sentKey}: run.mp4 (plays in the comment, attachment ${video.id}).`);
   });
 
   it('two people hand one issue over in turn: two requests, two answers, handed back to the first answered (R34)', async () => {

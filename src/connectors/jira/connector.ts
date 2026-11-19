@@ -1,7 +1,11 @@
 import * as path from 'path';
 import { resolveThreadFilesDir } from '../../botFileStorage';
 import { createJiraClient, JiraAuthError, JiraHttpError, type JiraClient, type JiraFieldDefinition } from './client';
-import { createJiraAnswerSink, type JiraAnswerSink } from './answerSink';
+import { createJiraAnswerSink, getOriginThreadRootId, type JiraAnswerSink } from './answerSink';
+import { attachFilesToIssue, type JiraFilesAttachResult } from './outgoingFiles';
+import { getJiraIssueProjectKey } from './sessionKeyCodec';
+import { resolveBoundWorkDir } from '../../validation';
+import type { OutboundFileRequest, OutboundFileResult } from '../../platform/outbound';
 import { loadJiraConfig, resolveExtraFields, resolveTriggerStatusIds, type JiraConfig } from './config';
 import { buildJiraTriggerJql, getJiraMentionWindowMs, getJiraRetryDelayMs, JiraInbound, jiraIssueUpdatesPer24hMax, type JiraInboundDeps, type JiraProjectTrigger } from './inbound';
 import { JiraTriggerLog, jiraTriggerLogFileName } from './triggerLog';
@@ -64,6 +68,11 @@ export interface JiraConnector {
    * fetched the issue yet, or when the trusted group rule withholds it (someone outside the group wrote it).
    */
   getConversationTitle(key: SessionKey): string | null;
+  /**
+   * `send_file_to_user` on the issue `key` names (its outbound's `deliverFile`): the files attached and ONE comment that
+   * shows them, in the thread the conversation's newest open request answers in (top-level when none is open).
+   */
+  sendFiles(key: SessionKey, request: OutboundFileRequest): Promise<OutboundFileResult>;
   /** Start polling (the session side is ready: the boot restored the sessions). */
   start(deps: JiraConnectorSessionDeps): void;
   stop(): void;
@@ -266,6 +275,16 @@ export async function prepareJiraConnector(context: {
   registerAgentBinDir(linkAgentBinaries(context.dataDir, config.agentBinaries));
   /** Built from the first setup check that came out ready; `null` before that, and for good without `trustedGroup`. */
   let trust: JiraTrust | null = null;
+  /** The core's side, handed over at `start`: the open requests a file comment takes its thread from. */
+  let sessionDeps: JiraConnectorSessionDeps | null = null;
+  /** The files an agent shows on its issue come from the issue's project folder, the one its conversation is bound to. */
+  const attachFiles = async (issueKey: string, paths: readonly string[], options: { isShownInline: boolean }): Promise<JiraFilesAttachResult> => {
+    const projectKey = getJiraIssueProjectKey(issueKey);
+    const project = projectKey === null ? undefined : config.projects.get(projectKey);
+    const decision = project ? resolveBoundWorkDir(context.workRoot, { subdir: project.folder }) : null;
+    if (decision?.kind !== 'proceed') return { ok: false, error: `the folder of ${issueKey}'s project cannot be used, so no file can be attached; nothing was posted` };
+    return attachFilesToIssue({ client, aiAccountId: config.accountId, siteUrl: config.baseUrl, now }, issueKey, decision.workDir, paths, options);
+  };
   const answerSink = createJiraAnswerSink({
     client,
     aiAccountId: config.accountId,
@@ -275,6 +294,7 @@ export async function prepareJiraConnector(context: {
     now,
     wait: sleep,
     unconfirmedPosts,
+    attachFiles,
   });
   let inbound: JiraInbound | null = null;
   /** Issue key → the summary its last fetched context showed the agent (trust-filtered); memory only. */
@@ -377,9 +397,16 @@ export async function prepareJiraConnector(context: {
       contextLedger.reset(key.thread);
       console.log(`[jira] ${key.thread}: its context was reset (${reason}); the next prompt carries the whole issue`);
     },
+    sendFiles: (key, request) => {
+      // A Jira conversation's thread IS its issue key; its newest open request decides the comment's thread.
+      const newest = sessionDeps?.listOpenRequests(key).filter((open) => !open.isWakeStopped).at(-1);
+      const threadRootId = newest ? getOriginThreadRootId(newest.origin) : null;
+      return answerSink.postFiles(key.thread, { paths: request.paths, caption: request.caption, isAsLinks: request.asFile === true }, threadRootId);
+    },
     start: (deps) => {
       if (isStarted) return;
       isStarted = true;
+      sessionDeps = deps;
       if (firstCheck.kind === 'ready') startPolling(deps, firstCheck);
       else retrySetupCheck(deps, 0);
     },
