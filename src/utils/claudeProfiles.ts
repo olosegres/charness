@@ -308,7 +308,14 @@ export function repairClaudeProfileLayout(input: {
       }
       if (step.target !== null) {
         if (step.entry === 'projects') fs.mkdirSync(step.target, { recursive: true });
-        fs.symlinkSync(step.target, entryPath);
+        try {
+          fs.symlinkSync(step.target, entryPath);
+        } catch (linkError) {
+          // Another process — the bot's watch of the profiles folder adopting this very folder, a CLI call — made the same link between the plan
+          // and this write: the layout is what this step wanted, so it is done. Anything else at that path is a failure as before.
+          const isLinkMadeMeanwhile = linkError instanceof Error && 'code' in linkError && linkError.code === 'EEXIST' && checkIsLinkTo(entryPath, step.target);
+          if (!isLinkMadeMeanwhile) throw linkError;
+        }
       }
       actions.push({ entry: step.entry, found: step.found, movedTo, linkedTo: step.target });
     } catch (e) {

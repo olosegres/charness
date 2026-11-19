@@ -22,9 +22,10 @@
 
 /** Test case: N/A — Charness has no Jira tracker. */
 
-import { afterEach, beforeEach, describe, it } from 'node:test';
+import { afterEach, beforeEach, describe, it, mock } from 'node:test';
 import assert from 'node:assert/strict';
 import * as fs from 'node:fs';
+import realFs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import {
@@ -311,6 +312,47 @@ describe('claudeProfileRepair', () => {
     assert.equal(logLines.length, 1);
     assert.match(logLines[0], /could not be put right.*launching anyway/);
     assert.throws(() => repair({ isStrict: true }), /EACCES|EPERM/);
+  });
+
+  describe('another process makes the very link between the plan and the write (the bot\'s watch adopting a folder a CLI call is still laying out)', () => {
+    /** The next `symlinkSync` finds its path taken: the other process was a moment faster. `linkRight`: it made the RIGHT link; else a directory of its own. */
+    function loseTheRaceOnce(testContext: { mock: typeof mock }, linkRight: boolean): void {
+      const realSymlink = realFs.symlinkSync;
+      let isLost = false;
+      // The real module object: the code under test reads `symlinkSync` from it at every call.
+      testContext.mock.method(realFs, 'symlinkSync', (target: fs.PathLike, linkPath: fs.PathLike, type?: fs.symlink.Type | null) => {
+        if (isLost) return realSymlink(target, linkPath, type);
+        isLost = true;
+        if (linkRight) realSymlink(target, linkPath, type);
+        else fs.mkdirSync(linkPath);
+        throw Object.assign(new Error(`EEXIST: file already exists, symlink '${target}' -> '${linkPath}'`), { code: 'EEXIST' });
+      });
+    }
+
+    it('the link the other process made is the layout that was wanted: no failure, not even on the strict path (creation), and the entry is right', (testContext) => {
+      fs.rmSync(path.join(profileDir, 'settings.json'));
+      loseTheRaceOnce(testContext, true);
+
+      const result = repair({ isStrict: true });
+
+      assert.equal(result.status, 'ok');
+      assert.deepEqual(result.pending, []);
+      assert.equal(fs.readlinkSync(path.join(profileDir, 'settings.json')), path.join(homeClaudeDir, 'settings.json'));
+      assert.deepEqual(logLines, []);
+    });
+
+    it('anything else that took the path is still a failure: the strict path throws it, the launch path warns once', (testContext) => {
+      fs.rmSync(path.join(profileDir, 'settings.json'));
+      loseTheRaceOnce(testContext, false);
+      assert.throws(() => repair({ isStrict: true }), /EEXIST/);
+
+      fs.rmSync(path.join(profileDir, 'settings.json'), { recursive: true, force: true });
+      loseTheRaceOnce(testContext, false);
+      const result = repair();
+      assert.equal(result.status, 'failed');
+      assert.deepEqual(result.pending, ['settings.json']);
+      assert.equal(logLines.length, 1);
+    });
   });
 
   describe('.claude.json: read, never edited', () => {
