@@ -572,7 +572,7 @@ export const ukDict: Record<string, string> = {
   'topicStatus.questionButtonLabel': '❓ Питання',
   'topicStatus.stuckButtonLabel': '❗️ Застряг',
   'topicStatus.workingButtonLabel': '⏳ Працює',
-  'topicStatus.finishedButtonLabel': '✅ Завершив',
+  'topicStatus.finishedButtonLabel': '🟢 Завершив',
   'topicStatus.asleepButtonLabel': '💤 Спить',
   'topicStatus.agentsButtonLabel': '⚙️ Агентів працює',
   'topicStatus.queuedButtonLabel': '📋 Завдань у черзі',

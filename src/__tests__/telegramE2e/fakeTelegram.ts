@@ -268,6 +268,12 @@ export class FakeTelegram {
    * default: a flow that pushes updates before its first boot (itself a cold one) expects to get them.
    */
   isPendingDroppedByLaunch = false;
+  /**
+   * Endings Telegram drops from a topic name — measured live on 2026-11-19: a trailing ✅ never shows. A rename asking for `<name> <ending>`
+   * stores `<name>`; the call answers ok when that changes the title and TOPIC_NOT_MODIFIED when the title already reads so, and the
+   * bot's own «renamed» line carries the stored name. Empty by default: a flow that wants a name kept must not meet this.
+   */
+  strippedTopicNameEndings: string[] = [];
   /** How long a `getUpdates` long poll is held when nothing arrives (telegraf asks for 50 s; the default is shorter to keep a stop quick). */
   longPollHoldMs = defaultLongPollHoldMs;
   /** The ids of the «renamed the topic» service lines the fake made of the bot's own renames, in order. */
@@ -829,7 +835,7 @@ export class FakeTelegram {
         if ('icon_custom_emoji_id' in payload) return { ok: false, error_code: 400, description: 'Bad Request: the topic icon must not be sent (the fake refuses it)' };
         if (!this.canManageTopics) return { ok: false, error_code: 400, description: 'Bad Request: not enough rights to manage topics' };
         const threadId = Number(payload.message_thread_id);
-        const name = String(payload.name);
+        const name = this.getStoredTopicName(String(payload.name));
         if (this.topicNames.get(threadId) === name) return { ok: false, error_code: 400, description: 'Bad Request: TOPIC_NOT_MODIFIED' };
         this.topicNames.set(threadId, name);
         if (this.isOwnTopicRenameDelivered) this.ownRenameLineIds.push(this.pushTopicEditedEvent(threadId, name, this.options.botUser));
@@ -928,6 +934,12 @@ export class FakeTelegram {
         // deleteWebhook, setMyCommands, sendChatAction, … — accepted and recorded.
         return { ok: true, result: true };
     }
+  }
+
+  /** The name Telegram stores for a requested one: without an ending it drops (`strippedTopicNameEndings`), else as asked. */
+  private getStoredTopicName(requestedName: string): string {
+    const dropped = this.strippedTopicNameEndings.find((ending) => requestedName.endsWith(` ${ending}`));
+    return dropped === undefined ? requestedName : requestedName.slice(0, requestedName.length - dropped.length - 1).trimEnd();
   }
 
   /**

@@ -566,7 +566,7 @@ export const zhDict: Record<string, string> = {
   'topicStatus.questionButtonLabel': '❓ 提问',
   'topicStatus.stuckButtonLabel': '❗️ 卡住',
   'topicStatus.workingButtonLabel': '⏳ 工作中',
-  'topicStatus.finishedButtonLabel': '✅ 已完成',
+  'topicStatus.finishedButtonLabel': '🟢 已完成',
   'topicStatus.asleepButtonLabel': '💤 休眠',
   'topicStatus.agentsButtonLabel': '⚙️ 工作中的智能体',
   'topicStatus.queuedButtonLabel': '📋 排队任务',

@@ -3,10 +3,10 @@
  * instance is (`scripts/run-isolated.sh`) against the fake Bot API, with the fake `claude` as the agent and the idle window cut to seconds
  * (`AGENT_IDLE_MINUTES`); the settle time and the gap of the marks are cut too (`CHARNESS_TEST_TIMINGS`). One flow, in order:
  *
- *   boot → the owner's topic «Deploy» is bound, its agent started and given one answered turn: the name reads ✅
+ *   boot → the owner's topic «Deploy» is bound, its agent started and given one answered turn: the name reads 🟢
  *   → the topic sits idle: the conversation is compacted and the bot stops the process at the idle mark (the conversation is kept): the
  *     name takes 💤 — the idle stop is what «asleep» means (the per-turn backend's stop after every turn is not: see `topicStatusE2e`)
- *   → a short reply that wakes it: the process comes back, takes the turn and stays up — the name goes back to ✅ and no ⏳ is ever
+ *   → a short reply that wakes it: the process comes back, takes the turn and stays up — the name goes back to 🟢 and no ⏳ is ever
  *     written for a turn that ended inside the settle time
  *
  * Nothing leaves the machine: the Bot API is on loopback and the agent is a fake. Everything the test starts is stopped in `after`.
@@ -135,7 +135,7 @@ describe('The idle stop shows as 💤 in the topic name, end to end: built charn
     assert.deepEqual(listTmuxSessions([]), defaultTmuxSessionsBefore, 'the default tmux server was not touched');
   });
 
-  it('boots, binds the owner\'s topic «Deploy», starts its agent and gives it one answered turn: the name reads ✅', async () => {
+  it('boots, binds the owner\'s topic «Deploy», starts its agent and gives it one answered turn: the name reads 🟢', async () => {
     charness = await startCharnessOnInstance(getLayout(), fakeTelegram);
     topicThreadId = fakeTelegram.pushTopicCreated(deployBase);
     topic = new TopicDriver(fakeTelegram, getCharness, topicThreadId, replyTimeoutMs);
@@ -144,7 +144,7 @@ describe('The idle stop shows as 💤 in the topic name, end to end: built charn
     await topic.sendAndAwaitReply('/claude', 'ready in');
     const warmUpMessageId = fakeTelegram.pushOperatorMessage(topicThreadId, 'WARM-1 [fake:answer] hello');
     await topic.waitForMessage('the warm-up answer', (message) => message.message_id > warmUpMessageId);
-    await waitForTopicName(`${deployBase} ✅`);
+    await waitForTopicName(`${deployBase} 🟢`);
   });
 
   it('the idle mark compacts the quiet conversation and stops the process, the conversation kept: the name takes 💤', async () => {
@@ -152,11 +152,11 @@ describe('The idle stop shows as 💤 in the topic name, end to end: built charn
     await waitForTopicName(`${deployBase} 💤`);
   });
 
-  it('a short reply wakes it: the process comes back and stays up — the name goes back to ✅, and no ⏳ was written for a turn that ended inside the settle time', async () => {
+  it('a short reply wakes it: the process comes back and stays up — the name goes back to 🟢, and no ⏳ was written for a turn that ended inside the settle time', async () => {
     const renamesBefore = listRenamedTo().length;
     const wakeMessageId = fakeTelegram.pushOperatorMessage(topicThreadId, 'WAKE-1 [fake:answer] are you there?');
     await topic.waitForMessage('the answer of the woken agent', (message) => message.message_id > wakeMessageId && message.text.includes('WAKE-1'));
-    await waitForTopicName(`${deployBase} ✅`);
-    assert.deepEqual(listRenamedTo().slice(renamesBefore), [`${deployBase} ✅`], 'straight from 💤 to ✅, nothing on the way');
+    await waitForTopicName(`${deployBase} 🟢`);
+    assert.deepEqual(listRenamedTo().slice(renamesBefore), [`${deployBase} 🟢`], 'straight from 💤 to 🟢, nothing on the way');
   });
 });

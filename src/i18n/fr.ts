@@ -566,7 +566,7 @@ export const frDict: Record<string, string> = {
   'topicStatus.questionButtonLabel': '❓ Question',
   'topicStatus.stuckButtonLabel': '❗️ Bloqué',
   'topicStatus.workingButtonLabel': '⏳ Travaille',
-  'topicStatus.finishedButtonLabel': '✅ Terminé',
+  'topicStatus.finishedButtonLabel': '🟢 Terminé',
   'topicStatus.asleepButtonLabel': '💤 En veille',
   'topicStatus.agentsButtonLabel': '⚙️ Agents au travail',
   'topicStatus.queuedButtonLabel': '📋 Tâches en attente',

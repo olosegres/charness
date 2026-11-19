@@ -167,7 +167,7 @@ maintainer must not break (`fileSendGateway.ts` with `../../utils/fileSendServic
 
 ## Topic status marks (`topicIndicator.ts`)
 
-The mark at the END of a bound topic's name (`❓ ❗️ ⏳ ✅ 💤`, optionally `⚙️N 📋N`; switched by `/topic_status`, see `commands/README.md`). `utils/topicIndicatorPlan.ts`
+The mark at the END of a bound topic's name (`❓ ❗️ ⏳ 🟢 💤`, optionally `⚙️N 📋N`; switched by `/topic_status`, see `commands/README.md`). `utils/topicIndicatorPlan.ts`
 is the pure plan (which status holds, `composeIndicatorName` — `<base> <status> <counts>`, the BASE cut to Telegram's 128, never the mark —, `stripIndicatorSuffix`, and
 `planIndicatorRename`: a name must have been the wanted one for the settle time and two renames keep a gap, except the edges of ❓ and the owner's own change);
 `utils/topicIndicatorSources.ts` turns what `bot.ts` reads (adapter, question maps, schedules, retry timers, todos) into the facts; this module keeps, per topic, the name it last
@@ -197,6 +197,11 @@ the bot's own «renamed» lines; everything else is dropped as before and a read
   the send gate, its name still waiting for the settle time, its call failed with no answer / a 429 / a 5xx and its retry is armed — stays the probe for another round (an outage hits every topic alike: dropping one probe per sweep would only spend a failing call on each), so the picker's hint does not flicker — so a rights-less chat costs one failing call per round on the shared send gate, never one per topic. «TOPIC_NOT_MODIFIED» means the topic already has the name; any other failure is logged once per cause and
   retried by a backoff timer (`scheduleRetry`: the gap, doubling to a sweep, or the 429's `retry_after` as the floor) that looks again, so the LATEST name is written; `retryNotBeforeMs` keeps the backoff
   against every change signal — the plan holds all names back until it ends, a ❓ edge and the owner's own change excepted. A 429 is also `enqueueSend`'s own retry.
+- **A name Telegram does not keep is never believed.** Telegram drops a trailing ✅ (also ☑️, ✔️) from a topic name — measured live 2026-11-19: a rename to `<name> ✅` is answered ok when the title changes and `TOPIC_NOT_MODIFIED`
+  when it already reads `<name>` — so the marks are ones read back as KEPT (`topicStatusMarks`: ❓ ❗️ ⏳ 🟢 💤; 🆗 was kept too). When the answer is `TOPIC_NOT_MODIFIED` for a name that differs from the one the bot believed
+  (and is not the owner's plain base, which «not modified» then proves), `writeDesiredName` stores it as `runtime.unkept` — NOT as the applied name —, logs one line per topic per boot, and the planner returns `none` for that
+  (applied, desired) pair, so no sweep, wave or signal asks again; another applied name, a name the owner saved, or a change of a switch of his (`isOwnerChange`) ends it. A restart tries once more. The fake Bot API
+  drops configured endings (`strippedTopicNameEndings`) so a flow can show this; `topicStatusE2e` runs against a fake that drops ✅ all through.
 - **A topic that is being unbound is never written** (`checkIsUnbinding`, the guard `updatePinnedStatus` uses): `restoreBaseName` waits on the send gate and a late ❓ edge must not land after it.
 - **The own rename's delete** marks the chat «no Delete messages right» only for a rights error (`checkIsMessageDeletionRefusedError`); a network blip leaves the picker alone.
 - **The owner's rename** is cut of the bot's own trailing marks (`getOwnerRenameOutcome`); the «your ending was dropped» hint is told only when the saved ending is not one of the names the bot applied

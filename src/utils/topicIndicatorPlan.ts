@@ -18,12 +18,16 @@ export const topicStatuses = ['question', 'stuck', 'working', 'finished', 'aslee
 /** @name TopicStatus @description One status mark: a question waits, the agent is stuck, it works, it finished, it sleeps. */
 export type TopicStatus = (typeof topicStatuses)[number];
 
-/** The mark each status writes; `stuck` and `agents` carry the emoji variation selector the way the owner types them. */
+/**
+ * The mark each status writes; `stuck` and `agents` carry the emoji variation selector the way the owner types them. Telegram drops some
+ * endings from a topic name — a trailing ✅ (and ☑️, ✔️) never shows, measured live on 2026-11-19 — so a mark is only ever one proven to be
+ * KEPT there: ❓ ❗️ ⏳ 💤 🟢 (and 🆗) were read back.
+ */
 export const topicStatusMarks: Record<TopicStatus, string> = {
   question: '❓',
   stuck: '❗️',
   working: '⏳',
-  finished: '✅',
+  finished: '🟢',
   asleep: '💤',
 };
 
@@ -190,7 +194,7 @@ export interface OwnerRenameOutcome {
 /**
  * @description The owner saved `savedName` as the topic's name. The base is that name without a trailing mark of ours. A mark that is NOT
  * one the bot itself had written — `appliedName` or any of `recentAppliedNames` (he may have opened the name before the bot changed its
- * mark) — is the owner's own (`Release ✅` typed while ⏳ showed) and is reported as dropped, so the picker can say so once; a mark of the
+ * mark) — is the owner's own (`Release 🟢` typed while ⏳ showed) and is reported as dropped, so the picker can say so once; a mark of the
  * bot's own left in place by an edit around it (`Deploy v2 ⏳` over `Deploy ⏳`) is no news.
  */
 export function getOwnerRenameOutcome(savedName: string, appliedName: string | undefined, storedBase: string | undefined, recentAppliedNames: readonly string[] = []): OwnerRenameOutcome {
@@ -205,7 +209,7 @@ export function getOwnerRenameOutcome(savedName: string, appliedName: string | u
 
 /**
  * A name must have been the wanted one this long before it is written: a turn runs this long before its ⏳ shows, a short reply goes
- * straight to its final mark, and a session that wakes for a prompt never shows a ✅ on the way to its ⏳ (the owner: no flashing).
+ * straight to its final mark, and a session that wakes for a prompt never shows a 🟢 on the way to its ⏳ (the owner: no flashing).
  */
 export const indicatorSettleMs = 20_000;
 

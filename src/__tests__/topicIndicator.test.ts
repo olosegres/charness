@@ -237,7 +237,7 @@ describe('the status mark of topic names', () => {
       setInputs(harness, topic, { isFinished: true });
       harness.indicator.requestRefresh(topic);
       await harness.settle();
-      assert.deepEqual(harness.renames.map((rename) => rename.name), ['Deploy ❓', 'Deploy ✅']);
+      assert.deepEqual(harness.renames.map((rename) => rename.name), ['Deploy ❓', 'Deploy 🟢']);
     });
 
     it('two questions keep the mark until both are closed (the input says so, the mark follows)', async () => {
@@ -256,7 +256,7 @@ describe('the status mark of topic names', () => {
       assert.deepEqual(harness.renames, [{ key: topic, name: 'Deploy 💤' }]);
     });
 
-    it('shows ⏳ only after the turn has run the settle time, and a short turn goes straight to ✅', async () => {
+    it('shows ⏳ only after the turn has run the settle time, and a short turn goes straight to 🟢', async () => {
       const harness = await createHarness();
       await wantAndWait(harness, topic, { isAsleep: true });
       await harness.advance(indicatorMinRenameGapMs);
@@ -265,21 +265,21 @@ describe('the status mark of topic names', () => {
       // A turn of 5 s: ⏳ never shows.
       await wantAndWait(harness, topic, { isWorking: true }, 5_000);
       await wantAndWait(harness, topic, { isFinished: true }, settleAndGapMs);
-      assert.deepEqual(harness.renames.map((rename) => rename.name), ['Deploy 💤', 'Deploy ✅'], 'straight to ✅, no ⏳ in between');
+      assert.deepEqual(harness.renames.map((rename) => rename.name), ['Deploy 💤', 'Deploy 🟢'], 'straight to 🟢, no ⏳ in between');
 
-      // A turn that runs on: ⏳ shows when it has run the settle time (the gap since ✅ is up by then too).
+      // A turn that runs on: ⏳ shows when it has run the settle time (the gap since 🟢 is up by then too).
       await harness.advance(indicatorMinRenameGapMs);
       await wantAndWait(harness, topic, { isWorking: true }, indicatorSettleMs - 1_000);
-      assert.equal(harness.renames.at(-1)?.name, 'Deploy ✅', 'still not');
+      assert.equal(harness.renames.at(-1)?.name, 'Deploy 🟢', 'still not');
       await harness.advance(1_000);
       assert.equal(harness.renames.at(-1)?.name, 'Deploy ⏳');
     });
 
-    it('a session that wakes for a prompt never shows a ✅ on the way to its ⏳', async () => {
+    it('a session that wakes for a prompt never shows a 🟢 on the way to its ⏳', async () => {
       const harness = await createHarness();
       await wantAndWait(harness, topic, { isAsleep: true });
       await harness.advance(indicatorMinRenameGapMs);
-      // The resume makes the process active an instant before the turn runs: ✅ is wanted for 200 ms, then ⏳ for good.
+      // The resume makes the process active an instant before the turn runs: 🟢 is wanted for 200 ms, then ⏳ for good.
       await wantAndWait(harness, topic, { isFinished: true }, 200);
       await wantAndWait(harness, topic, { isWorking: true }, settleAndGapMs);
       assert.deepEqual(harness.renames.map((rename) => rename.name), ['Deploy 💤', 'Deploy ⏳']);
@@ -288,7 +288,7 @@ describe('the status mark of topic names', () => {
     it('keeps two renames of a topic a gap apart, and what came and went inside the gap is never shown: the latest state wins', async () => {
       const harness = await createHarness();
       await wantAndWait(harness, topic, { isFinished: true });
-      assert.deepEqual(harness.renames.map((rename) => rename.name), ['Deploy ✅']);
+      assert.deepEqual(harness.renames.map((rename) => rename.name), ['Deploy 🟢']);
 
       // Inside the gap: stuck, then asleep. Neither is written; the topic waits for the gap's end.
       await wantAndWait(harness, topic, { isStuck: true }, 25_000);
@@ -296,7 +296,7 @@ describe('the status mark of topic names', () => {
       assert.equal(harness.renames.length, 1, 'nothing written inside the gap');
 
       await harness.advance(indicatorMinRenameGapMs);
-      assert.deepEqual(harness.renames.map((rename) => rename.name), ['Deploy ✅', 'Deploy 💤'], 'the latest state, once, when the gap ended');
+      assert.deepEqual(harness.renames.map((rename) => rename.name), ['Deploy 🟢', 'Deploy 💤'], 'the latest state, once, when the gap ended');
     });
 
     it('writes nothing for a state the topic already shows', async () => {
@@ -326,7 +326,7 @@ describe('the status mark of topic names', () => {
       harness.indicator.requestRefresh(topic);
       await harness.settle();
       await harness.advance(indicatorSettleMs);
-      assert.deepEqual(harness.renames.map((rename) => rename.name), ['Deploy ✅', 'Deploy'], 'a closed topic shows the owner\'s name');
+      assert.deepEqual(harness.renames.map((rename) => rename.name), ['Deploy 🟢', 'Deploy'], 'a closed topic shows the owner\'s name');
     });
   });
 
@@ -366,7 +366,7 @@ describe('the status mark of topic names', () => {
       harness.counts.agents = 3;
       harness.counts.queued = 5;
       await wantAndWait(harness, topic, { isFinished: true });
-      assert.equal(harness.renames.at(-1)?.name, 'Deploy ✅ ⚙️3 📋5');
+      assert.equal(harness.renames.at(-1)?.name, 'Deploy 🟢 ⚙️3 📋5');
     });
 
     it('a change the owner made skips the wait and the gap: the base name is back at once when he turns the mark off', async () => {
@@ -376,7 +376,7 @@ describe('the status mark of topic names', () => {
       harness.prefs.current = { ...defaultTopicStatusPrefs, finished: false };
       harness.indicator.requestRefresh(topic, { isOwnerChange: true });
       await harness.settle();
-      assert.deepEqual(harness.renames.map((rename) => rename.name), ['Deploy ✅', 'Deploy']);
+      assert.deepEqual(harness.renames.map((rename) => rename.name), ['Deploy 🟢', 'Deploy']);
     });
 
     it('a change that is not the owner\'s waits even when a switch moved', async () => {
@@ -425,7 +425,7 @@ describe('the status mark of topic names', () => {
       harness.indicator.requestRefresh(botMadeTopic);
       await harness.settle();
       await harness.advance(indicatorSettleMs);
-      assert.deepEqual(harness.renames.map((rename) => `${rename.key.thread}:${rename.name}`), [`${botMadeTopic.thread}:Research ✅`], 'the refused topic got nothing, the other its mark');
+      assert.deepEqual(harness.renames.map((rename) => `${rename.key.thread}:${rename.name}`), [`${botMadeTopic.thread}:Research 🟢`], 'the refused topic got nothing, the other its mark');
       assert.equal(harness.indicator.getHealth(topic).isRenameRefused, true, 'the picker still says why the owner-made topic has no mark');
       assert.equal(harness.logs.filter((line) => line.includes('Manage topics')).length, 1, 'one line for the chat');
     });
@@ -451,7 +451,7 @@ describe('the status mark of topic names', () => {
       harness.refusedThreads.clear();
       await harness.advance(60_000);
       await harness.advance(indicatorSettleMs);
-      assert.deepEqual(harness.renames.map((rename) => rename.name).sort(), ['Billing ✅', 'Deploy ✅', 'Research ✅']);
+      assert.deepEqual(harness.renames.map((rename) => rename.name).sort(), ['Billing 🟢', 'Deploy 🟢', 'Research 🟢']);
       assert.equal(harness.indicator.getHealth(topic).isRenameRefused, false);
       harness.indicator.stop();
     });
@@ -499,7 +499,7 @@ describe('the status mark of topic names', () => {
 
         await harness.advance(60_000);
         await harness.advance(indicatorSettleMs);
-        assert.deepEqual(harness.renames.map((rename) => `${rename.key.thread}:${rename.name}`), [`${research.thread}:Research ✅`], 'the second sweep dropped that probe and probed — and wrote — the next refused topic');
+        assert.deepEqual(harness.renames.map((rename) => `${rename.key.thread}:${rename.name}`), [`${research.thread}:Research 🟢`], 'the second sweep dropped that probe and probed — and wrote — the next refused topic');
         assert.equal(harness.indicator.getHealth(topic).isRenameRefused, false, 'the probe that went through released the chat');
         assert.equal(harness.state.getBinding(topic)?.indicatorRenameRefused, undefined, 'the dropped probe\'s flag is cleared in its binding');
         assert.equal(harness.state.getBinding(research)?.indicatorRenameRefused, undefined, 'and so is the written one\'s');
@@ -547,7 +547,7 @@ describe('the status mark of topic names', () => {
         // Its write releases the chat, and the re-refused topic is refused again.
         await harness.advance(2 * 60_000);
         await harness.advance(indicatorSettleMs);
-        assert.deepEqual(harness.renames.map((rename) => `${rename.key.thread}:${rename.name}`), [`${research.thread}:Research ✅`], 'the other topic was probed and written');
+        assert.deepEqual(harness.renames.map((rename) => `${rename.key.thread}:${rename.name}`), [`${research.thread}:Research 🟢`], 'the other topic was probed and written');
         assert.equal(harness.indicator.getHealth(topic).isRenameRefused, true, 'the re-refused topic stays refused');
         assert.equal(harness.state.getBinding(topic)?.indicatorRenameRefused, true, 'with its flag');
         assert.equal(harness.state.getBinding(research)?.indicatorRenameRefused, undefined, 'the written topic\'s flag is cleared');
@@ -576,7 +576,7 @@ describe('the status mark of topic names', () => {
       harness.indicator.stop();
     });
 
-    it('a sweep that comes while the probe is still on its way (a slow send gate) loses nothing: the right comes back, and the answered question\'s ✅ is written at once', async () => {
+    it('a sweep that comes while the probe is still on its way (a slow send gate) loses nothing: the right comes back, and the answered question\'s 🟢 is written at once', async () => {
       const harness = await createHarness({ windows: { sweepIntervalMs: 3_000, bootWaveDelayMs: 1_000 } });
       harness.refusedThreads.add(topic.thread);
       harness.indicator.start();
@@ -604,7 +604,7 @@ describe('the status mark of topic names', () => {
       setInputs(harness, topic, { isFinished: true });
       harness.indicator.requestRefresh(topic);
       await harness.settle();
-      assert.equal(harness.fakeNameOf(topic), 'Deploy ✅');
+      assert.equal(harness.fakeNameOf(topic), 'Deploy 🟢');
       harness.indicator.stop();
     });
 
@@ -682,18 +682,68 @@ describe('the status mark of topic names', () => {
       second.refusedThreads.clear();
       await second.advance(60_000);
       await second.advance(indicatorSettleMs);
-      assert.deepEqual(second.renames.map((rename) => rename.name).sort(), ['Deploy ✅', 'Research ✅'], 'the probe went through and released the other topic');
+      assert.deepEqual(second.renames.map((rename) => rename.name).sort(), ['Deploy 🟢', 'Research 🟢'], 'the probe went through and released the other topic');
       assert.equal(second.state.getBinding(topic)?.indicatorRenameRefused, undefined, 'a written rename clears the flag in its own write');
       assert.equal(second.state.getBinding(research)?.indicatorRenameRefused, undefined);
       second.indicator.stop();
     });
 
-    it('«topic not modified» means the topic already has the name: it is recorded as applied, not retried', async () => {
+    it('«topic not modified» for the owner\'s plain base proves the title IS the base: it is recorded as applied, not retried, and nothing is logged', async () => {
+      const harness = await createHarness();
+      await harness.state.setBindingTopicNaming(topic, { indicatorAppliedName: 'Deploy 💤' });
+      harness.failNextRename.error = createApiError('Bad Request: TOPIC_NOT_MODIFIED');
+      await wantAndWait(harness, topic, {});
+      assert.equal(getAppliedName(harness), 'Deploy');
+      assert.equal(harness.renameAttempts.length, 1);
+      assert.equal(harness.logs.length, 0);
+    });
+
+    it('«topic not modified» for a name that is not what the bot believed shows — Telegram did not keep it (it drops a trailing ✅) — is NOT taken for applied: logged once per topic, not asked again until the name or the status changes', async () => {
+      const harness = await createHarness({ windows: { sweepIntervalMs: 60_000, bootWaveDelayMs: 1_000 } });
+      harness.indicator.start();
+      harness.failNextRename.error = createApiError('Bad Request: TOPIC_NOT_MODIFIED');
+      await wantAndWait(harness, topic, { isFinished: true });
+      assert.equal(harness.renameAttempts.length, 1);
+      assert.equal(getAppliedName(harness), undefined, 'the topic is still known to show the owner\'s own name: «Deploy 🟢» is not what it shows');
+      assert.equal(harness.logs.filter((line) => line.includes('did not keep «Deploy 🟢»')).length, 1, 'one line, naming the name');
+
+      // Signals, sweeps and the boot wave come and go: the same call would be answered the same, so it is never sent again.
+      for (const round of [1, 2, 3, 4, 5]) {
+        harness.indicator.requestRefresh(topic);
+        await harness.settle();
+        await harness.advance(60_000 + round);
+      }
+      assert.equal(harness.renameAttempts.length, 1, 'no retry loop');
+      assert.equal(harness.logs.length, 1, 'and no second line');
+
+      // The status changes: a name that IS kept is written, and the belief follows it.
+      await wantAndWait(harness, topic, { isWorking: true }, indicatorSettleMs + indicatorMinRenameGapMs);
+      assert.deepEqual(harness.renames.map((rename) => rename.name), ['Deploy ⏳']);
+      assert.equal(getAppliedName(harness), 'Deploy ⏳');
+
+      // Back to the name that was not kept: asked once more (the pair is a new one), answered the same, and the line is not repeated.
+      harness.failNextRename.error = createApiError('Bad Request: TOPIC_NOT_MODIFIED');
+      await wantAndWait(harness, topic, { isFinished: true }, indicatorSettleMs + indicatorMinRenameGapMs);
+      assert.equal(harness.renameAttempts.length, 3);
+      assert.equal(getAppliedName(harness), 'Deploy ⏳', 'still what was last kept');
+      assert.equal(harness.logs.length, 1, 'once per topic');
+      harness.indicator.stop();
+    });
+
+    it('a change the owner makes with a switch asks for the name again although nothing else changed: he asked, and Telegram may have changed meanwhile', async () => {
       const harness = await createHarness();
       harness.failNextRename.error = createApiError('Bad Request: TOPIC_NOT_MODIFIED');
       await wantAndWait(harness, topic, { isFinished: true });
-      assert.equal(getAppliedName(harness), 'Deploy ✅');
-      assert.equal(harness.logs.length, 0);
+      assert.equal(harness.renameAttempts.length, 1);
+      assert.equal(getAppliedName(harness), undefined);
+      // The same pair, a sign of life from nobody: not asked again. The owner touches a switch: asked, and — Telegram keeps it now — believed.
+      harness.indicator.requestRefresh(topic);
+      await harness.settle();
+      assert.equal(harness.renameAttempts.length, 1);
+      harness.indicator.requestRefresh(topic, { isOwnerChange: true });
+      await harness.settle();
+      assert.equal(harness.renameAttempts.length, 2);
+      assert.equal(getAppliedName(harness), 'Deploy 🟢');
     });
 
     it('a failure a later try may fix is logged once per cause and tried again after a backoff that grows, up to a sweep — with no new signal', async () => {
@@ -716,7 +766,7 @@ describe('the status mark of topic names', () => {
       await harness.advance(99_999);
       assert.equal(harness.renameAttempts.length, 2, 'the second backoff is longer than the first, capped at the sweep');
       await harness.advance(1);
-      assert.deepEqual(harness.renames.map((rename) => rename.name), ['Deploy ✅'], 'the second retry wrote the latest name');
+      assert.deepEqual(harness.renames.map((rename) => rename.name), ['Deploy 🟢'], 'the second retry wrote the latest name');
       assert.equal(harness.renameAttempts.length, 3);
     });
 
@@ -777,7 +827,7 @@ describe('the status mark of topic names', () => {
       await harness.advance(4 * indicatorMinRenameGapMs);
       assert.equal(harness.renameAttempts.length, 1, 'the cooldown is not over');
       await harness.advance(indicatorMinRenameGapMs);
-      assert.deepEqual(harness.renames.map((rename) => rename.name), ['Deploy ✅']);
+      assert.deepEqual(harness.renames.map((rename) => rename.name), ['Deploy 🟢']);
     });
 
     it('a topic that is gone or closed is not retried by a timer', async () => {
@@ -806,7 +856,7 @@ describe('the status mark of topic names', () => {
       assert.equal(harness.logs.filter((line) => line.includes('stayed')).length, 1);
       assert.equal(harness.indicator.getHealth(topic).isLineDeletionRefused, true);
       await wantAndWait(harness, topic, { isFinished: true });
-      assert.deepEqual(harness.renames.map((rename) => rename.name), ['Deploy ✅']);
+      assert.deepEqual(harness.renames.map((rename) => rename.name), ['Deploy 🟢']);
     });
 
     it('a failure that says nothing about the right — a reset, a 429 after its retry — is logged once and is NOT taken for a missing right', async () => {
@@ -846,7 +896,7 @@ describe('the status mark of topic names', () => {
     it('a look queued before the unbind began writes nothing — not even a ❓ edge — and the name put back stays the last write', async () => {
       const harness = await createHarness();
       await wantAndWait(harness, topic, { isFinished: true });
-      assert.deepEqual(harness.renames.map((rename) => rename.name), ['Deploy ✅']);
+      assert.deepEqual(harness.renames.map((rename) => rename.name), ['Deploy 🟢']);
       setInputs(harness, topic, { hasOpenQuestion: true });
       harness.indicator.requestRefresh(topic);
       harness.unbindingThreads.add(topic.thread);
@@ -854,7 +904,7 @@ describe('the status mark of topic names', () => {
       assert.equal(harness.renames.length, 1, 'the queued look found the topic unbinding');
 
       await harness.indicator.restoreBaseName(topic);
-      assert.deepEqual(harness.renames.map((rename) => rename.name), ['Deploy ✅', 'Deploy'], 'the unbind\'s own restore still writes');
+      assert.deepEqual(harness.renames.map((rename) => rename.name), ['Deploy 🟢', 'Deploy'], 'the unbind\'s own restore still writes');
       harness.indicator.requestRefresh(topic);
       await harness.settle();
       await harness.advance(settleAndGapMs);
@@ -871,7 +921,7 @@ describe('the status mark of topic names', () => {
       await restore;
       await harness.settle();
       await harness.advance(settleAndGapMs);
-      assert.deepEqual(harness.renames.map((rename) => rename.name), ['Deploy ✅', 'Deploy']);
+      assert.deepEqual(harness.renames.map((rename) => rename.name), ['Deploy 🟢', 'Deploy']);
     });
   });
 
@@ -891,7 +941,7 @@ describe('the status mark of topic names', () => {
       const harness = await createHarness();
       await wantAndWait(harness, topic, { isFinished: true });
       await harness.indicator.restoreBaseName(topic);
-      assert.deepEqual(harness.renames.map((rename) => rename.name), ['Deploy ✅', 'Deploy']);
+      assert.deepEqual(harness.renames.map((rename) => rename.name), ['Deploy 🟢', 'Deploy']);
       assert.equal(getAppliedName(harness), 'Deploy');
     });
 
@@ -907,7 +957,7 @@ describe('the status mark of topic names', () => {
       await wantAndWait(harness, topic, { isAsleep: true }, 1_000);
       await harness.indicator.restoreBaseName(topic);
       await harness.advance(10 * indicatorMinRenameGapMs);
-      assert.deepEqual(harness.renames.map((rename) => rename.name), ['Deploy ✅', 'Deploy'], 'the waiting 💤 never lands over the restored name');
+      assert.deepEqual(harness.renames.map((rename) => rename.name), ['Deploy 🟢', 'Deploy'], 'the waiting 💤 never lands over the restored name');
     });
   });
 
@@ -939,7 +989,7 @@ describe('the status mark of topic names', () => {
       await harness.state.setBindingTopicNaming(topic, { topicName: 'Deploy 2', indicatorAppliedName: 'Deploy 2 ❓' });
       harness.isBacklogHandled.current = true;
       await harness.advance(1_000);
-      assert.deepEqual(harness.renames.map((rename) => rename.name), ['Deploy 2 ✅'], 'once, with the new name — never the old one');
+      assert.deepEqual(harness.renames.map((rename) => rename.name), ['Deploy 2 🟢'], 'once, with the new name — never the old one');
     });
 
     it('a boot with NOTHING waiting: a mark leaving ❓ is written once the first poll has stayed open for the hold — seconds after the start, not at the cap', async () => {
@@ -957,7 +1007,7 @@ describe('the status mark of topic names', () => {
       await harness.advance(firstPollHoldMs - 1);
       assert.equal(harness.renames.length, 0, 'the poll could still be about to bring the owner\'s rename');
       await harness.advance(1_000);
-      assert.deepEqual(harness.renames.map((rename) => rename.name), ['Deploy ✅']);
+      assert.deepEqual(harness.renames.map((rename) => rename.name), ['Deploy 🟢']);
       assert.ok(harness.nowMs() - 1_000_000 < 10_000, 'well before the 30 s cap');
       harness.indicator.stop();
     });
@@ -991,7 +1041,7 @@ describe('the status mark of topic names', () => {
       assert.equal(harness.renames.length, 0, 'no event signalled it, and the sweep has not come yet');
       await harness.advance(60_000);
       await harness.advance(indicatorSettleMs);
-      assert.deepEqual(harness.renames.map((rename) => rename.name), ['Deploy ✅']);
+      assert.deepEqual(harness.renames.map((rename) => rename.name), ['Deploy 🟢']);
       harness.indicator.stop();
     });
 

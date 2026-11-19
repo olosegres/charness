@@ -164,7 +164,7 @@ export interface BindingData {
    */
   indicatorAppliedName?: string;
   /**
-   * The trailing mark the owner typed as part of a name and the bot took for its own and dropped from {@link topicName} (`Release ✅`).
+   * The trailing mark the owner typed as part of a name and the bot took for its own and dropped from {@link topicName} (`Release 🟢`).
    * Kept until `/topic_status` has told the owner so once.
    */
   indicatorDroppedMark?: string;

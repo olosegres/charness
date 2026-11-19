@@ -138,9 +138,9 @@ describe('/topic_status, through the module', () => {
     });
 
     it('a mark of the owner\'s own that was dropped is told ONCE, then forgotten', async () => {
-      await harness.state.setBindingTopicNaming(harness.key, { indicatorDroppedMark: '✅' });
+      await harness.state.setBindingTopicNaming(harness.key, { indicatorDroppedMark: '🟢' });
       await harness.runCommand('topic_status');
-      assert.ok(getSentScreen().text.includes('«✅» at the end of your name reads as my mark'));
+      assert.ok(getSentScreen().text.includes('«🟢» at the end of your name reads as my mark'));
       assert.equal(harness.state.getBinding(harness.key)?.indicatorDroppedMark, undefined);
       await harness.runCommand('topic_status');
       assert.ok(!getSentScreen().text.includes('at the end of your name'));

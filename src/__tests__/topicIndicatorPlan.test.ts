@@ -57,11 +57,11 @@ describe('resolveTopicStatus', () => {
     for (const status of topicStatuses) assert.equal(resolveTopicStatus(holding(status), defaultTopicStatusPrefs), status);
   });
 
-  it('ranks the statuses ❓ ❗️ ⏳ ✅ 💤, highest first (the plan\'s table, not whatever order the list happens to have)', () => {
+  it('ranks the statuses ❓ ❗️ ⏳ 🟢 💤, highest first (the plan\'s table, not whatever order the list happens to have)', () => {
     assert.deepEqual(topicStatuses, ['question', 'stuck', 'working', 'finished', 'asleep']);
   });
 
-  it('shows the higher status of every pair that holds together (❓ ❗️ ⏳ ✅ 💤)', () => {
+  it('shows the higher status of every pair that holds together (❓ ❗️ ⏳ 🟢 💤)', () => {
     for (const [higherIndex, higher] of topicStatuses.entries()) {
       for (const lower of topicStatuses.slice(higherIndex + 1)) {
         assert.equal(resolveTopicStatus(holding(lower, higher), defaultTopicStatusPrefs), higher, `${higher} beats ${lower}`);
@@ -118,7 +118,7 @@ describe('composeIndicatorName', () => {
     assert.equal(composeIndicatorName('Deploy', 'working', { agents: 3, queued: 5 }, allCountsOn), 'Deploy ⏳ ⚙️3 📋5');
     assert.equal(composeIndicatorName('Research', 'asleep', { agents: 0, queued: 2 }, allCountsOn), 'Research 💤 📋2');
     assert.equal(composeIndicatorName('Research', null, { agents: 0, queued: 2 }, allCountsOn), 'Research 📋2', 'a count stands alone without a status');
-    assert.equal(composeIndicatorName('Landing page', 'finished', noCounts, allCountsOn), 'Landing page ✅', 'both zero: no numbers');
+    assert.equal(composeIndicatorName('Landing page', 'finished', noCounts, allCountsOn), 'Landing page 🟢', 'both zero: no numbers');
     assert.equal(composeIndicatorName('Deploy', 'working', { agents: 3, queued: 5 }, defaultTopicStatusPrefs), 'Deploy ⏳', 'counts off by default: never a number');
     assert.equal(composeIndicatorName('Deploy', 'working', { agents: 3, queued: 5 }, { ...allCountsOn, queued: false }), 'Deploy ⏳ ⚙️3');
   });
@@ -167,19 +167,19 @@ describe('stripIndicatorSuffix', () => {
     assert.equal(stripIndicatorSuffix('Deploy ❗ ', 'x', undefined), 'Deploy');
     assert.equal(stripIndicatorSuffix('Deploy ❗️', 'x', undefined), 'Deploy');
     assert.equal(stripIndicatorSuffix('Research 📋2', 'x', undefined), 'Research');
-    assert.equal(stripIndicatorSuffix('Deploy ✅ 💤', 'x', undefined), 'Deploy');
+    assert.equal(stripIndicatorSuffix('Deploy 🟢 💤', 'x', undefined), 'Deploy');
   });
 
   it('leaves a mark that is not at the end, or has no space before it, or is no mark of ours', () => {
-    assert.equal(stripIndicatorSuffix('✅ Release notes', 'x', undefined), '✅ Release notes');
-    assert.equal(stripIndicatorSuffix('Release✅', 'x', undefined), 'Release✅');
+    assert.equal(stripIndicatorSuffix('🟢 Release notes', 'x', undefined), '🟢 Release notes');
+    assert.equal(stripIndicatorSuffix('Release🟢', 'x', undefined), 'Release🟢');
     assert.equal(stripIndicatorSuffix('Ship it 🚀', 'x', undefined), 'Ship it 🚀');
     assert.equal(stripIndicatorSuffix('Q3 ⚙️ plan', 'x', undefined), 'Q3 ⚙️ plan');
     assert.equal(stripIndicatorSuffix('Deploy 📋', 'x', undefined), 'Deploy 📋', 'a count mark with no number is the owner\'s');
   });
 
-  it('costs an owner\'s own ending mark: «Release ✅» typed by the owner is «Release»', () => {
-    assert.equal(stripIndicatorSuffix('Release ✅', 'Release ⏳', 'Release'), 'Release');
+  it('costs an owner\'s own ending mark: «Release 🟢» typed by the owner is «Release»', () => {
+    assert.equal(stripIndicatorSuffix('Release 🟢', 'Release ⏳', 'Release'), 'Release');
   });
 
   it('keeps the whole stored base when the name saved is the one the bot applied (it may be a cut of it)', () => {
@@ -201,14 +201,14 @@ describe('getOwnerRenameOutcome', () => {
   });
 
   it('reports the owner\'s own ending mark that was dropped, so the picker can say so once', () => {
-    assert.deepEqual(getOwnerRenameOutcome('Release ✅', 'Release ⏳', 'Release'), { base: 'Release', droppedMark: '✅' });
-    assert.deepEqual(getOwnerRenameOutcome('Release ✅', undefined, undefined), { base: 'Release', droppedMark: '✅' }, 'a topic the bot never marked');
+    assert.deepEqual(getOwnerRenameOutcome('Release 🟢', 'Release ⏳', 'Release'), { base: 'Release', droppedMark: '🟢' });
+    assert.deepEqual(getOwnerRenameOutcome('Release 🟢', undefined, undefined), { base: 'Release', droppedMark: '🟢' }, 'a topic the bot never marked');
   });
 
-  it('a mark the bot wrote a moment ago is not the owner\'s: he opened «Deploy ⏳», the bot wrote «Deploy ✅», he saved «Deploy v2 ⏳»', () => {
-    assert.deepEqual(getOwnerRenameOutcome('Deploy v2 ⏳', 'Deploy ✅', 'Deploy', ['Deploy ✅', 'Deploy ⏳']), { base: 'Deploy v2', droppedMark: null });
-    assert.deepEqual(getOwnerRenameOutcome('Deploy v2 ⏳ 📋2', 'Deploy ✅', 'Deploy', ['Deploy ✅', 'Deploy ⏳ 📋2']), { base: 'Deploy v2', droppedMark: null }, 'a count that changed meanwhile');
-    assert.deepEqual(getOwnerRenameOutcome('Deploy v2 💤', 'Deploy ✅', 'Deploy', ['Deploy ✅', 'Deploy ⏳']), { base: 'Deploy v2', droppedMark: '💤' }, 'a mark the bot did not write recently is the owner\'s');
+  it('a mark the bot wrote a moment ago is not the owner\'s: he opened «Deploy ⏳», the bot wrote «Deploy 🟢», he saved «Deploy v2 ⏳»', () => {
+    assert.deepEqual(getOwnerRenameOutcome('Deploy v2 ⏳', 'Deploy 🟢', 'Deploy', ['Deploy 🟢', 'Deploy ⏳']), { base: 'Deploy v2', droppedMark: null });
+    assert.deepEqual(getOwnerRenameOutcome('Deploy v2 ⏳ 📋2', 'Deploy 🟢', 'Deploy', ['Deploy 🟢', 'Deploy ⏳ 📋2']), { base: 'Deploy v2', droppedMark: null }, 'a count that changed meanwhile');
+    assert.deepEqual(getOwnerRenameOutcome('Deploy v2 💤', 'Deploy 🟢', 'Deploy', ['Deploy 🟢', 'Deploy ⏳']), { base: 'Deploy v2', droppedMark: '💤' }, 'a mark the bot did not write recently is the owner\'s');
   });
 
   it('a plain rename drops nothing', () => {
@@ -239,7 +239,7 @@ describe('planIndicatorRename', () => {
 
   function plan(overrides: Partial<IndicatorRenameInputs>): ReturnType<typeof planIndicatorRename> {
     return planIndicatorRename({
-      desiredName: 'Deploy ✅',
+      desiredName: 'Deploy 🟢',
       desiredStatus: 'finished',
       appliedName: 'Deploy 💤',
       heldSinceMs: quietSince,
@@ -268,19 +268,19 @@ describe('planIndicatorRename', () => {
     assert.deepEqual(plan({ lastRenameAtMs: nowMs - indicatorMinRenameGapMs }), { kind: 'now' }, 'at the boundary the gap is over');
   });
 
-  it('shows a name only once it has been the wanted one for the settle time: ⏳ after the turn ran that long, never a ✅ on the way', () => {
-    const workingNow = { desiredName: 'Deploy ⏳', desiredStatus: 'working' as const, appliedName: 'Deploy ✅' };
+  it('shows a name only once it has been the wanted one for the settle time: ⏳ after the turn ran that long, never a 🟢 on the way', () => {
+    const workingNow = { desiredName: 'Deploy ⏳', desiredStatus: 'working' as const, appliedName: 'Deploy 🟢' };
     assert.deepEqual(plan({ ...workingNow, heldSinceMs: nowMs - 5_000 }), { kind: 'at', atMs: nowMs - 5_000 + indicatorSettleMs });
     assert.deepEqual(plan({ ...workingNow, heldSinceMs: nowMs - indicatorSettleMs }), { kind: 'now' });
-    // A session that wakes for a prompt wants ✅ for an instant before its turn runs: the instant is not enough to show it.
-    assert.deepEqual(plan({ desiredName: 'Deploy ✅', desiredStatus: 'finished', appliedName: 'Deploy 💤', heldSinceMs: nowMs - 100 }), { kind: 'at', atMs: nowMs - 100 + indicatorSettleMs });
+    // A session that wakes for a prompt wants 🟢 for an instant before its turn runs: the instant is not enough to show it.
+    assert.deepEqual(plan({ desiredName: 'Deploy 🟢', desiredStatus: 'finished', appliedName: 'Deploy 💤', heldSinceMs: nowMs - 100 }), { kind: 'at', atMs: nowMs - 100 + indicatorSettleMs });
   });
 
   it('takes the later of the settle time and the gap', () => {
     const heldSinceMs = nowMs - 5_000;
     const lastRenameAtMs = nowMs - 5_000;
     assert.deepEqual(
-      plan({ desiredName: 'Deploy ⏳', desiredStatus: 'working', appliedName: 'Deploy ✅', heldSinceMs, lastRenameAtMs }),
+      plan({ desiredName: 'Deploy ⏳', desiredStatus: 'working', appliedName: 'Deploy 🟢', heldSinceMs, lastRenameAtMs }),
       { kind: 'at', atMs: lastRenameAtMs + indicatorMinRenameGapMs },
     );
     assert.deepEqual(plan({ heldSinceMs: nowMs - 100, lastRenameAtMs: nowMs - 59_000 }), { kind: 'at', atMs: nowMs - 100 + indicatorSettleMs });
@@ -291,11 +291,11 @@ describe('planIndicatorRename', () => {
     const justWanted = { heldSinceMs: nowMs, lastRenameAtMs };
     assert.deepEqual(plan({ desiredName: 'Deploy ❓', desiredStatus: 'question', appliedName: 'Deploy ⏳', ...justWanted }), { kind: 'now' });
     assert.deepEqual(plan({ desiredName: 'Deploy ⏳', desiredStatus: 'working', appliedName: 'Deploy ❓', ...justWanted }), { kind: 'now' });
-    assert.deepEqual(plan({ desiredName: 'Deploy ✅', desiredStatus: 'finished', appliedName: 'Deploy ❓', ...justWanted }), { kind: 'now' });
+    assert.deepEqual(plan({ desiredName: 'Deploy 🟢', desiredStatus: 'finished', appliedName: 'Deploy ❓', ...justWanted }), { kind: 'now' });
   });
 
   it('lets a change the owner just made skip the wait and the gap', () => {
-    assert.deepEqual(plan({ desiredName: 'Deploy', desiredStatus: null, appliedName: 'Deploy ✅', heldSinceMs: nowMs, lastRenameAtMs: nowMs - 1_000, isOwnerChange: true }), { kind: 'now' });
+    assert.deepEqual(plan({ desiredName: 'Deploy', desiredStatus: null, appliedName: 'Deploy 🟢', heldSinceMs: nowMs, lastRenameAtMs: nowMs - 1_000, isOwnerChange: true }), { kind: 'now' });
   });
 
   it('holds every name back until the backoff of a failed rename is over — a ❓ edge and the owner\'s change excepted — and asks again exactly then', () => {

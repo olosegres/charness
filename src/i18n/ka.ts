@@ -566,7 +566,7 @@ export const kaDict: Record<string, string> = {
   'topicStatus.questionButtonLabel': '❓ კითხვა',
   'topicStatus.stuckButtonLabel': '❗️ გაიჭედა',
   'topicStatus.workingButtonLabel': '⏳ მუშაობს',
-  'topicStatus.finishedButtonLabel': '✅ დაასრულა',
+  'topicStatus.finishedButtonLabel': '🟢 დაასრულა',
   'topicStatus.asleepButtonLabel': '💤 სძინავს',
   'topicStatus.agentsButtonLabel': '⚙️ მომუშავე აგენტები',
   'topicStatus.queuedButtonLabel': '📋 რიგში მდგომი ამოცანები',

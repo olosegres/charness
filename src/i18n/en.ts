@@ -577,7 +577,7 @@ export const enDict: Record<string, string> = {
   'topicStatus.questionButtonLabel': '❓ Question',
   'topicStatus.stuckButtonLabel': '❗️ Stuck',
   'topicStatus.workingButtonLabel': '⏳ Working',
-  'topicStatus.finishedButtonLabel': '✅ Finished',
+  'topicStatus.finishedButtonLabel': '🟢 Finished',
   'topicStatus.asleepButtonLabel': '💤 Asleep',
   'topicStatus.agentsButtonLabel': '⚙️ Agents at work',
   'topicStatus.queuedButtonLabel': '📋 Tasks queued',

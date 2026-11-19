@@ -566,7 +566,7 @@ export const jaDict: Record<string, string> = {
   'topicStatus.questionButtonLabel': '❓ 質問',
   'topicStatus.stuckButtonLabel': '❗️ 停止',
   'topicStatus.workingButtonLabel': '⏳ 作業中',
-  'topicStatus.finishedButtonLabel': '✅ 完了',
+  'topicStatus.finishedButtonLabel': '🟢 完了',
   'topicStatus.asleepButtonLabel': '💤 スリープ',
   'topicStatus.agentsButtonLabel': '⚙️ 稼働中のエージェント',
   'topicStatus.queuedButtonLabel': '📋 待機中のタスク',

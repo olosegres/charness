@@ -570,7 +570,7 @@ export const ruDict: Record<string, string> = {
   'topicStatus.questionButtonLabel': '❓ Вопрос',
   'topicStatus.stuckButtonLabel': '❗️ Застрял',
   'topicStatus.workingButtonLabel': '⏳ Работает',
-  'topicStatus.finishedButtonLabel': '✅ Закончил',
+  'topicStatus.finishedButtonLabel': '🟢 Закончил',
   'topicStatus.asleepButtonLabel': '💤 Спит',
   'topicStatus.agentsButtonLabel': '⚙️ Агентов работает',
   'topicStatus.queuedButtonLabel': '📋 Задач в очереди',

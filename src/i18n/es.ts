@@ -566,7 +566,7 @@ export const esDict: Record<string, string> = {
   'topicStatus.questionButtonLabel': '❓ Pregunta',
   'topicStatus.stuckButtonLabel': '❗️ Atascado',
   'topicStatus.workingButtonLabel': '⏳ Trabajando',
-  'topicStatus.finishedButtonLabel': '✅ Terminado',
+  'topicStatus.finishedButtonLabel': '🟢 Terminado',
   'topicStatus.asleepButtonLabel': '💤 Dormido',
   'topicStatus.agentsButtonLabel': '⚙️ Agentes trabajando',
   'topicStatus.queuedButtonLabel': '📋 Tareas en cola',

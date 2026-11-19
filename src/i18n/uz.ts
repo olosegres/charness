@@ -566,7 +566,7 @@ export const uzDict: Record<string, string> = {
   'topicStatus.questionButtonLabel': '❓ Savol',
   'topicStatus.stuckButtonLabel': '❗️ Tiqilib qoldi',
   'topicStatus.workingButtonLabel': '⏳ Ishlamoqda',
-  'topicStatus.finishedButtonLabel': '✅ Tugadi',
+  'topicStatus.finishedButtonLabel': '🟢 Tugadi',
   'topicStatus.asleepButtonLabel': '💤 Uxlayapti',
   'topicStatus.agentsButtonLabel': '⚙️ Ishlayotgan agentlar',
   'topicStatus.queuedButtonLabel': '📋 Navbatdagi vazifalar',

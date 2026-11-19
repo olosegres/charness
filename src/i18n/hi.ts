@@ -566,7 +566,7 @@ export const hiDict: Record<string, string> = {
   'topicStatus.questionButtonLabel': '❓ प्रश्न',
   'topicStatus.stuckButtonLabel': '❗️ अटका',
   'topicStatus.workingButtonLabel': '⏳ काम कर रहा है',
-  'topicStatus.finishedButtonLabel': '✅ पूरा हुआ',
+  'topicStatus.finishedButtonLabel': '🟢 पूरा हुआ',
   'topicStatus.asleepButtonLabel': '💤 सो रहा है',
   'topicStatus.agentsButtonLabel': '⚙️ काम कर रहे एजेंट',
   'topicStatus.queuedButtonLabel': '📋 कतार में कार्य',

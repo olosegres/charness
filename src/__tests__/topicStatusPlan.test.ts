@@ -114,7 +114,7 @@ describe('a topic\'s screen', () => {
     assert.ok(screen.text.includes(enDict['topicStatus.statusesIntroText']) && screen.text.includes(enDict['topicStatus.countsIntroText']));
     assert.deepEqual(getLabels(screen), [
       ['✓ ❓ Question', '✓ ❗️ Stuck'],
-      ['✓ ⏳ Working', '✓ ✅ Finished'],
+      ['✓ ⏳ Working', '✓ 🟢 Finished'],
       ['✓ 💤 Asleep'],
       ['⚙️ Agents at work', '📋 Tasks queued'],
       ['All off', 'As General ✓'],
@@ -157,10 +157,10 @@ describe('a topic\'s screen', () => {
   });
 
   it('says the right is missing, the name is long, the owner\'s own mark was dropped, and the «renamed» lines stay — each only when it holds', () => {
-    const screen = buildTopicStatusTopicScreen({ ...topicView, base: 'x'.repeat(visibleBaseChars + 1), isRenameRefused: true, droppedMark: '✅', isLineDeletionRefused: true });
+    const screen = buildTopicStatusTopicScreen({ ...topicView, base: 'x'.repeat(visibleBaseChars + 1), isRenameRefused: true, droppedMark: '🟢', isLineDeletionRefused: true });
     assert.ok(screen.text.includes('⚠️ Needs the «Manage topics» admin right.'));
     assert.ok(screen.text.includes(`ℹ️ This name is long: on a phone the mark may be cut off — shorten it to ${visibleBaseChars} characters.`));
-    assert.ok(screen.text.includes('ℹ️ «✅» at the end of your name reads as my mark, so I dropped it from the name.'));
+    assert.ok(screen.text.includes('ℹ️ «🟢» at the end of your name reads as my mark, so I dropped it from the name.'));
     assert.ok(screen.text.includes('ℹ️ Without «Delete messages» each change leaves a «renamed» line in the topic.'));
     const fitting = buildTopicStatusTopicScreen({ ...topicView, base: 'x'.repeat(visibleBaseChars) });
     assert.ok(!fitting.text.includes('This name is long'));
@@ -173,7 +173,7 @@ describe('General\'s screen', () => {
   it('is the default of all topics: the switches and «All off», no «As General», and no list when every name is known', () => {
     const screen = buildTopicStatusGeneralScreen(generalView);
     assert.ok(screen.text.startsWith('Topic status in the topic list — the default of ALL topics'), screen.text);
-    assert.deepEqual(getLabels(screen), [['✓ ❓ Question', '✓ ❗️ Stuck'], ['✓ ⏳ Working', '✓ ✅ Finished'], ['✓ 💤 Asleep'], ['⚙️ Agents at work', '📋 Tasks queued'], ['All off']]);
+    assert.deepEqual(getLabels(screen), [['✓ ❓ Question', '✓ ❗️ Stuck'], ['✓ ⏳ Working', '✓ 🟢 Finished'], ['✓ 💤 Asleep'], ['⚙️ Agents at work', '📋 Tasks queued'], ['All off']]);
     assert.ok(!screen.text.includes('Names I don\'t know yet'));
   });
 

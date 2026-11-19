@@ -102,6 +102,16 @@ interface TopicRuntime {
   retryNotBeforeMs: number | null;
   /** The names the bot wrote last, newest first: an owner who saves a name while one of them still showed has not typed its mark. */
   recentAppliedNames: string[];
+  /**
+   * A name Telegram did NOT keep: asked for `desiredName` while the bot believed `appliedName` showed, it answered TOPIC_NOT_MODIFIED — its
+   * title already read as that name once the ending it drops (a ✅ was one) is gone, so the topic never shows `desiredName`. While the
+   * bot's belief and its wish are still this pair, nothing is written (the same call would be answered the same, for ever); a change of
+   * either — an owner's rename, another name written — ends it, and so does a change the owner makes with a switch of `/topic_status`
+   * (he asked, so it is tried once more). In memory only: a restart tries once more.
+   */
+  unkept: { appliedName: string; desiredName: string } | null;
+  /** The «not kept» line was logged for this topic: once per topic per boot, however often the pair changes. */
+  isUnkeptLogged: boolean;
 }
 
 /** What Telegram refused for want of the right, in one chat: the topics it refused, and the one topic the sweep probes again. */
@@ -122,7 +132,7 @@ interface RenameRefusal {
 /** How a write of the wanted name ended: written; nothing to write; skipped (refused topic); failed (a later try may work). */
 type WriteOutcome = 'written' | 'idle' | 'refused' | 'failed';
 
-/** What a failed rename means. `noChange`: the topic already has the name; `gone`: the topic is not there or closed — no retry. */
+/** What a failed rename means. `noChange`: Telegram says the topic already has the name (see the «not kept» rule in `writeDesiredName`); `gone`: the topic is not there or closed — no retry. */
 type RenameErrorKind = 'noChange' | 'refused' | 'gone' | 'failed';
 
 /** How many of the names the bot wrote are remembered per topic. */
@@ -182,6 +192,8 @@ export function createTopicIndicator(ports: TopicIndicatorPorts) {
         failureCount: 0,
         retryNotBeforeMs: null,
         recentAppliedNames: [],
+        unkept: null,
+        isUnkeptLogged: false,
       };
       runtimes.set(keyString, runtime);
     }
@@ -214,6 +226,8 @@ export function createTopicIndicator(ports: TopicIndicatorPorts) {
   }
 
   function planRename(view: TopicView, runtime: TopicRuntime): ReturnType<typeof planIndicatorRename> {
+    // The name was asked for and Telegram did not keep it: asking again changes nothing.
+    if (runtime.unkept?.appliedName === view.appliedName && runtime.unkept.desiredName === view.desiredName) return { kind: 'none' };
     const inputs: IndicatorRenameInputs = {
       desiredName: view.desiredName,
       desiredStatus: view.desiredStatus,
@@ -376,12 +390,26 @@ export function createTopicIndicator(ports: TopicIndicatorPorts) {
           noteProbeSilent(key);
           return { outcome: 'idle' };
         }
+        // «Not modified» for a name that differs from the one the bot believed (the plan only writes a name that does): the title already reads
+        // as the asked name, and the bot's belief was another — so Telegram turned what it asked for into something else (it drops a trailing
+        // ✅ from a topic name: ok when that is a change, «not modified» when it is none). Believing the asked name would show a mark the topic
+        // does not carry. The one name that proves itself is the owner's plain base: «not modified» for it says the title IS the base.
+        if (kind === 'noChange' && view.desiredName !== view.base) {
+          runtime.unkept = { appliedName: view.appliedName, desiredName: view.desiredName };
+          if (!runtime.isUnkeptLogged) {
+            runtime.isUnkeptLogged = true;
+            log(`[topic-indicator] ${keyToString(key)}: Telegram did not keep «${view.desiredName}» (answered TOPIC_NOT_MODIFIED: the title already reads as that name without its ending) — not taken for applied, not asked again until the name or the status changes`);
+          }
+          noteProbeSilent(key);
+          return { outcome: 'idle' };
+        }
       }
       runtime.lastRenameAtMs = getNowMs();
       runtime.isOwnerChangePending = false;
       runtime.lastLoggedFailure = null;
       runtime.failureCount = 0;
       runtime.retryNotBeforeMs = null;
+      runtime.unkept = null;
       noteAppliedName(runtime, view.desiredName);
       await getState().setBindingTopicNaming(key, { indicatorAppliedName: view.desiredName, indicatorRenameRefused: null }).catch((error) => {
         log(`[topic-indicator] ${keyToString(key)}: saving the applied name failed: ${error instanceof Error ? error.message : error}`);
@@ -447,7 +475,10 @@ export function createTopicIndicator(ports: TopicIndicatorPorts) {
   function requestRefresh(key: SessionKey, options: { isOwnerChange?: boolean } = {}): void {
     if (!checkIsMarkableTopic(key) || checkIsUnbinding(key)) return;
     const runtime = getRuntime(keyToString(key));
-    if (options.isOwnerChange === true) runtime.isOwnerChangePending = true;
+    if (options.isOwnerChange === true) {
+      runtime.isOwnerChangePending = true;
+      runtime.unkept = null;
+    }
     if (runtime.isLookQueued) return;
     runtime.isLookQueued = true;
     setImmediate(() => {

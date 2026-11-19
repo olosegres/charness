@@ -566,7 +566,7 @@ export const deDict: Record<string, string> = {
   'topicStatus.questionButtonLabel': '❓ Frage',
   'topicStatus.stuckButtonLabel': '❗️ Hängt',
   'topicStatus.workingButtonLabel': '⏳ Arbeitet',
-  'topicStatus.finishedButtonLabel': '✅ Fertig',
+  'topicStatus.finishedButtonLabel': '🟢 Fertig',
   'topicStatus.asleepButtonLabel': '💤 Schläft',
   'topicStatus.agentsButtonLabel': '⚙️ Agenten bei der Arbeit',
   'topicStatus.queuedButtonLabel': '📋 Aufgaben in der Warteschlange',

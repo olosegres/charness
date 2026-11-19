@@ -566,7 +566,7 @@ export const ptDict: Record<string, string> = {
   'topicStatus.questionButtonLabel': '❓ Pergunta',
   'topicStatus.stuckButtonLabel': '❗️ Travado',
   'topicStatus.workingButtonLabel': '⏳ Trabalhando',
-  'topicStatus.finishedButtonLabel': '✅ Concluído',
+  'topicStatus.finishedButtonLabel': '🟢 Concluído',
   'topicStatus.asleepButtonLabel': '💤 Dormindo',
   'topicStatus.agentsButtonLabel': '⚙️ Agentes trabalhando',
   'topicStatus.queuedButtonLabel': '📋 Tarefas na fila',
