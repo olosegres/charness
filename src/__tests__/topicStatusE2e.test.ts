@@ -115,6 +115,12 @@ const secondTopicCreatedName = 'Research';
 const pickerTitle = 'Topic status in the topic list';
 
 const replyTimeoutMs = 20 * 1000;
+/**
+ * How long an AGENT takes to start or to answer its first prompt after a resume: a process of its own in tmux, which on a box shared with other
+ * suites (a load far above its cores starves even the bot's own 5 s status probes) takes far longer than a bot's reply — the bound the other flows
+ * give an agent start (`fallbackFlowKit`), not `replyTimeoutMs`.
+ */
+const agentStartTimeoutMs = 60 * 1000;
 /** A name that must wait out the settle time and the gap, with room for a loaded box. */
 const renameTimeoutMs = gapMs + settleMs + 15 * 1000;
 /** The wait of the usage-limit step: the reset, the bot's own buffer after it (production's, not timed), the resume and the mark's change after it, on a loaded box. */
@@ -206,10 +212,27 @@ function getFirstOptionData(question: FakeTelegramMessage): string {
   return data;
 }
 
-/** The operator puts a question (`[fake:ask]`) in `driver`'s topic: resolves its message once it carries the option buttons. */
+/** Wait, for as long as an agent start takes, for the bot message in `driver`'s topic that `check` accepts (newest first). */
+async function waitForAgentMessage(driver: TopicDriver, description: string, check: (message: FakeTelegramMessage) => boolean): Promise<FakeTelegramMessage> {
+  let found: FakeTelegramMessage | undefined;
+  await getCharness().waitFor(description, agentStartTimeoutMs, () => {
+    found = [...driver.listMessages()].reverse().find(check);
+    return found !== undefined;
+  });
+  if (!found) throw new Error(`no message for ${description}`);
+  return found;
+}
+
+/** The operator starts the Claude agent (`/claude`) in `driver`'s topic: resolves the bot's «ready in» reply. */
+async function startAgent(driver: TopicDriver, threadId: number): Promise<FakeTelegramMessage> {
+  const sentMessageId = fakeTelegram.pushOperatorMessage(threadId, '/claude');
+  return waitForAgentMessage(driver, 'a reply to "/claude" with "ready in"', (message) => message.message_id > sentMessageId && message.text.includes('ready in'));
+}
+
+/** The operator puts a question (`[fake:ask]`) in `driver`'s topic: resolves its message once it carries the option buttons — the agent that asks it may have to be started first. */
 async function askQuestion(label: string, driver: TopicDriver = topic, threadId: number = topicThreadId): Promise<FakeTelegramMessage> {
   const sentMessageId = fakeTelegram.pushOperatorMessage(threadId, `${label} [fake:ask] ask me something`);
-  return driver.waitForMessage(`the question of ${label}`, (candidate) =>
+  return waitForAgentMessage(driver, `the question of ${label}`, (candidate) =>
     candidate.message_id > sentMessageId && candidate.text.includes(fakeAskQuestion.question) && driver.getKeyboardData(candidate).flat().some((data) => data.startsWith('qa_')));
 }
 
@@ -316,7 +339,7 @@ describe('The status mark of topic names end to end: built charness, fake Bot AP
     await topic.sendAndAwaitReply(`/bind ${projectFolder}`, `Bound to \`${projectFolder}\``);
     await getCharness().waitFor('the owner\'s name to be kept with the binding', replyTimeoutMs, () => readBinding(topicThreadId)?.topicName === deployBase);
     assert.deepEqual(listRenamedTo(topicThreadId), [], 'a topic without an agent keeps the owner\'s name: nothing is written');
-    await topic.sendAndAwaitReply('/claude', 'ready in');
+    await startAgent(topic, topicThreadId);
 
     await waitForTopicName(topicThreadId, `${deployBase} ✅`);
     assert.deepEqual(listRenamedTo(topicThreadId), [`${deployBase} ✅`], 'one rename: the settle time held back every other name');
@@ -541,7 +564,7 @@ describe('The status mark of topic names end to end: built charness, fake Bot AP
     fakeTelegram.setTopicCreationName(secondTopicThreadId, secondTopicCreatedName);
     secondTopic = new TopicDriver(fakeTelegram, getCharness, secondTopicThreadId, replyTimeoutMs);
     await secondTopic.sendAndAwaitReply(`/bind ${projectFolder}`, `Bound to \`${projectFolder}\``);
-    await secondTopic.sendAndAwaitReply('/claude', 'ready in');
+    await startAgent(secondTopic, secondTopicThreadId);
     const renamesInWindow = await watchForRenames(secondTopicThreadId);
     assert.deepEqual(renamesInWindow, [], 'an unknown name is never written over');
     assert.equal(readBinding(secondTopicThreadId)?.topicName, undefined);
@@ -622,7 +645,7 @@ describe('The status mark of topic names end to end: built charness, fake Bot AP
     const unboundTopic = new TopicDriver(fakeTelegram, getCharness, unboundThreadId, replyTimeoutMs);
     await unboundTopic.waitForMessage('the welcome of the new topic', () => true);
     await unboundTopic.sendAndAwaitReply(`/bind ${projectFolder}`, `Bound to \`${projectFolder}\``);
-    await unboundTopic.sendAndAwaitReply('/claude', 'ready in');
+    await startAgent(unboundTopic, unboundThreadId);
     await waitForTopicName(unboundThreadId, 'Billing ✅');
     await askQuestion('Q-5', unboundTopic, unboundThreadId);
     await waitForTopicName(unboundThreadId, 'Billing ❓');
