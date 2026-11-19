@@ -245,6 +245,7 @@ describe('planIndicatorRename', () => {
       heldSinceMs: quietSince,
       lastRenameAtMs: quietSince,
       isOwnerChange: false,
+      retryNotBeforeMs: null,
       nowMs,
       settleMs: indicatorSettleMs,
       minGapMs: indicatorMinRenameGapMs,
@@ -295,6 +296,16 @@ describe('planIndicatorRename', () => {
 
   it('lets a change the owner just made skip the wait and the gap', () => {
     assert.deepEqual(plan({ desiredName: 'Deploy', desiredStatus: null, appliedName: 'Deploy ✅', heldSinceMs: nowMs, lastRenameAtMs: nowMs - 1_000, isOwnerChange: true }), { kind: 'now' });
+  });
+
+  it('holds every name back until the backoff of a failed rename is over — a ❓ edge and the owner\'s change excepted — and asks again exactly then', () => {
+    const retryNotBeforeMs = nowMs + 30_000;
+    assert.deepEqual(plan({ retryNotBeforeMs }), { kind: 'at', atMs: retryNotBeforeMs }, 'the gap and the settle time are long over, the backoff is not');
+    assert.deepEqual(plan({ retryNotBeforeMs: nowMs }), { kind: 'now' }, 'at the boundary the backoff is over');
+    assert.deepEqual(plan({ retryNotBeforeMs, desiredName: 'Deploy ❓', desiredStatus: 'question', appliedName: 'Deploy ⏳' }), { kind: 'now' });
+    assert.deepEqual(plan({ retryNotBeforeMs, desiredName: 'Deploy ⏳', desiredStatus: 'working', appliedName: 'Deploy ❓' }), { kind: 'now' });
+    assert.deepEqual(plan({ retryNotBeforeMs, isOwnerChange: true }), { kind: 'now' });
+    assert.deepEqual(plan({ retryNotBeforeMs, desiredName: 'Deploy 💤', desiredStatus: 'asleep' }), { kind: 'none' }, 'a topic that already shows its name has nothing to retry');
   });
 
   it('does not let any other change skip them', () => {

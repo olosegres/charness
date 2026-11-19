@@ -168,6 +168,11 @@ export interface BindingData {
    * Kept until `/topic_status` has told the owner so once.
    */
   indicatorDroppedMark?: string;
+  /**
+   * Telegram refused to rename this topic for want of the «Manage topics» right. Kept so a restart does not try every such topic of the chat
+   * again (one failing call each, on the shared send gate): only the sweep's probe does. Cleared by the next rename that is written.
+   */
+  indicatorRenameRefused?: true;
 }
 
 /** The naming fields of a binding a patch may clear (`null`). */
@@ -182,6 +187,8 @@ export interface BindingTopicNamingPatch {
   topicNameCandidate?: string | null;
   indicatorAppliedName?: string | null;
   indicatorDroppedMark?: string | null;
+  /** `true` sets the refusal flag, `null` clears it. */
+  indicatorRenameRefused?: true | null;
 }
 
 export interface AgentData {
@@ -1228,6 +1235,7 @@ export class StateStore {
       if (existing?.topicNameCandidate !== undefined) next.topicNameCandidate = existing.topicNameCandidate;
       if (existing?.indicatorAppliedName !== undefined) next.indicatorAppliedName = existing.indicatorAppliedName;
       if (existing?.indicatorDroppedMark !== undefined) next.indicatorDroppedMark = existing.indicatorDroppedMark;
+      if (existing?.indicatorRenameRefused !== undefined) next.indicatorRenameRefused = existing.indicatorRenameRefused;
       this.state.bindings[k] = next;
       this.scheduleSave();
     });
@@ -1253,6 +1261,11 @@ export class StateStore {
         if (value === undefined || value === (existing[field] ?? null)) continue;
         if (value === null) delete next[field];
         else next[field] = value;
+        isChanged = true;
+      }
+      if (patch.indicatorRenameRefused !== undefined && (patch.indicatorRenameRefused === true) !== (existing.indicatorRenameRefused === true)) {
+        if (patch.indicatorRenameRefused === null) delete next.indicatorRenameRefused;
+        else next.indicatorRenameRefused = true;
         isChanged = true;
       }
       if (!isChanged) return;

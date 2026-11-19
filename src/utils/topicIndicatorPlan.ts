@@ -232,6 +232,8 @@ export interface IndicatorRenameInputs {
   lastRenameAtMs: number | null;
   /** The owner just changed what is shown (a switch of `/topic_status`): his change skips the wait like the edges of ❓ do. */
   isOwnerChange: boolean;
+  /** The end of the backoff after a rename that failed (`null`: none runs): no name but a ❓ edge or the owner's change is written before it, however often the topic signals. */
+  retryNotBeforeMs: number | null;
   nowMs: number;
   settleMs: number;
   minGapMs: number;
@@ -244,17 +246,18 @@ export type IndicatorRenamePlan = { kind: 'now' } | { kind: 'at'; atMs: number }
  * @description When the topic is renamed to its desired name. Nothing when it already shows it. A name waits until it has been the
  * wanted one for `settleMs`, and two renames keep `minGapMs` apart — except the edges of ❓ (a question appearing or being answered is the
  * one thing the owner must see at once) and a change the owner just made himself, which skip both and still go through the shared send
- * gate. The instant a wait ends is when the caller asks again, so the LATEST desired name wins and states that came and went meanwhile
- * are never shown.
+ * gate. A backoff after a failed rename (`retryNotBeforeMs`) holds every other name back too, so a topic that keeps signalling while
+ * Telegram fails sends one try per backoff, not one per signal. The instant a wait ends is when the caller asks again, so the LATEST
+ * desired name wins and states that came and went meanwhile are never shown.
  */
 export function planIndicatorRename(inputs: IndicatorRenameInputs): IndicatorRenamePlan {
-  const { desiredName, desiredStatus, appliedName, heldSinceMs, lastRenameAtMs, isOwnerChange, nowMs, settleMs, minGapMs } = inputs;
+  const { desiredName, desiredStatus, appliedName, heldSinceMs, lastRenameAtMs, isOwnerChange, retryNotBeforeMs, nowMs, settleMs, minGapMs } = inputs;
   if (desiredName === appliedName) return { kind: 'none' };
   const isQuestionEdge = desiredStatus === 'question' || getIndicatorStatusOfName(appliedName) === 'question';
   if (isQuestionEdge || isOwnerChange) return { kind: 'now' };
   const settleEndsAtMs = heldSinceMs + settleMs;
   const gapEndsAtMs = lastRenameAtMs === null ? nowMs : lastRenameAtMs + minGapMs;
-  const atMs = Math.max(settleEndsAtMs, gapEndsAtMs);
+  const atMs = Math.max(settleEndsAtMs, gapEndsAtMs, retryNotBeforeMs ?? 0);
   return atMs > nowMs ? { kind: 'at', atMs } : { kind: 'now' };
 }
 

@@ -5,9 +5,10 @@
  * does not know is never written. See `README.md` in `commands/` (`/topic_status`) and `docs/commands.md`.
  *
  * Failures never reach the owner as errors. A refused right is remembered PER TOPIC (a topic the bot made itself needs no right and keeps
- * its marks): one log line per chat per boot, the picker says why, and the sweep re-probes a refused chat with ONE of its topics — only a
- * probe that succeeds lets the others try again, so a chat without the right costs one failing call per sweep, not one per topic. Any other
- * failure is logged once per distinct cause and tried again after a bounded backoff.
+ * its marks) and kept with the binding, so a restart does not try those topics again: one log line per chat per boot, the picker says why,
+ * and the sweep re-probes a refused chat with ONE of its topics — only a probe that succeeds lets the others try again, so a chat without
+ * the right costs one failing call per sweep, not one per topic. Any other failure is logged once per distinct cause and tried again
+ * after a bounded backoff, which no change signal skips (a ❓ edge and the owner's own change excepted).
  */
 import type { SessionKey } from '../../sessionKey';
 import { keyToString, tryKeyFromString } from '../../sessionKey';
@@ -96,6 +97,8 @@ interface TopicRuntime {
   lastLoggedFailure: string | null;
   /** Renames in a row that failed for a cause a later try may fix: the backoff grows with it. */
   failureCount: number;
+  /** The end of the backoff after the last failed rename: until then only a ❓ edge and the owner's own change are written. */
+  retryNotBeforeMs: number | null;
   /** The names the bot wrote last, newest first: an owner who saves a name while one of them still showed has not typed its mark. */
   recentAppliedNames: string[];
 }
@@ -154,11 +157,23 @@ export function createTopicIndicator(ports: TopicIndicatorPorts) {
   /** Opens once the updates that waited are handled (or the cap after `start()` ran out) and stays open: from then on nothing waits for them. */
   let isBootGateOpen = false;
   let bootStartedAtMs: number | null = null;
+  let areRefusalsLoaded = false;
 
   function getRuntime(keyString: string): TopicRuntime {
     let runtime = runtimes.get(keyString);
     if (!runtime) {
-      runtime = { timer: null, isLookQueued: false, lastRenameAtMs: null, heldName: null, heldSinceMs: 0, isOwnerChangePending: false, lastLoggedFailure: null, failureCount: 0, recentAppliedNames: [] };
+      runtime = {
+        timer: null,
+        isLookQueued: false,
+        lastRenameAtMs: null,
+        heldName: null,
+        heldSinceMs: 0,
+        isOwnerChangePending: false,
+        lastLoggedFailure: null,
+        failureCount: 0,
+        retryNotBeforeMs: null,
+        recentAppliedNames: [],
+      };
       runtimes.set(keyString, runtime);
     }
     return runtime;
@@ -197,6 +212,7 @@ export function createTopicIndicator(ports: TopicIndicatorPorts) {
       heldSinceMs: runtime.heldSinceMs,
       lastRenameAtMs: runtime.lastRenameAtMs,
       isOwnerChange: runtime.isOwnerChangePending,
+      retryNotBeforeMs: runtime.retryNotBeforeMs,
       nowMs: getNowMs(),
       settleMs: windows.settleMs,
       minGapMs: windows.minGapMs,
@@ -216,13 +232,36 @@ export function createTopicIndicator(ports: TopicIndicatorPorts) {
     log(`[topic-indicator] ${keyToString(key)}: ${line}`);
   }
 
+  /**
+   * The refusals the bindings remember from before this boot (`indicatorRenameRefused`), loaded on first use: a restart does not send one
+   * failing call per such topic — the sweep's probe is the first to try again.
+   */
+  function ensureRefusalsLoaded(): void {
+    if (areRefusalsLoaded) return;
+    areRefusalsLoaded = true;
+    for (const { key, data } of getState().listBindings()) {
+      if (data.indicatorRenameRefused === true && checkIsMarkableTopic(key)) recordRefusal(key, { isRemembered: true });
+    }
+  }
+
   /** Whether Telegram refused `key`'s topic a rename for want of the right and the sweep has not let it try again. */
   function checkIsRefused(key: SessionKey): boolean {
+    ensureRefusalsLoaded();
     return renameRefusals.get(getTelegramChatId(key))?.topicKeys.has(keyToString(key)) === true;
   }
 
-  /** The topic was refused for want of the right: remember it (a probe that is refused again goes to the end), say so once per chat per boot. */
-  function recordRefusal(key: SessionKey): void {
+  /** Forget in the binding that the topic was refused (a rename went through, or the probe of it said nothing). Never rejects. */
+  function clearRefusalFlag(key: SessionKey): void {
+    void getState().setBindingTopicNaming(key, { indicatorRenameRefused: null }).catch((error) => {
+      log(`[topic-indicator] ${keyToString(key)}: saving that the rename is no longer refused failed: ${error instanceof Error ? error.message : error}`);
+    });
+  }
+
+  /**
+   * The topic was refused for want of the right: remember it in memory and with the binding (a probe that is refused again goes to the end),
+   * and say so once per chat per boot. `isRemembered`: it is the binding's memory of an earlier boot being loaded — nothing to save.
+   */
+  function recordRefusal(key: SessionKey, options: { isRemembered?: boolean } = {}): void {
     const chatId = getTelegramChatId(key);
     const keyString = keyToString(key);
     const refusal = renameRefusals.get(chatId) ?? { topicKeys: new Set<string>(), probeKey: null };
@@ -230,6 +269,11 @@ export function createTopicIndicator(ports: TopicIndicatorPorts) {
     refusal.topicKeys.delete(keyString);
     refusal.topicKeys.add(keyString);
     if (refusal.probeKey === keyString) refusal.probeKey = null;
+    if (options.isRemembered !== true && getState().getBinding(key)?.indicatorRenameRefused !== true) {
+      void getState().setBindingTopicNaming(key, { indicatorRenameRefused: true }).catch((error) => {
+        log(`[topic-indicator] ${keyString}: saving the refused rename failed: ${error instanceof Error ? error.message : error}`);
+      });
+    }
     if (!loggedRefusedChats.has(`rename:${chatId}`)) {
       loggedRefusedChats.add(`rename:${chatId}`);
       log(`[topic-indicator] chat ${chatId}: the bot may not rename topics it did not make (needs the «Manage topics» admin right) — no status marks on those until it does`);
@@ -271,6 +315,8 @@ export function createTopicIndicator(ports: TopicIndicatorPorts) {
     runtime.failureCount += 1;
     const backoffMs = Math.min(windows.minGapMs * 2 ** (runtime.failureCount - 1), windows.sweepIntervalMs);
     const delayMs = checkIsRateLimitedError(error) ? Math.max(backoffMs, error.retryAfterMs) : backoffMs;
+    // A change signal looks at the topic before the timer fires: the plan holds every name but a ❓ edge back until this instant.
+    runtime.retryNotBeforeMs = getNowMs() + delayMs;
     dropTimer(runtime);
     runtime.timer = setTimer(() => {
       runtime.timer = null;
@@ -290,16 +336,18 @@ export function createTopicIndicator(ports: TopicIndicatorPorts) {
         await sendTopicName(key, view.desiredName);
       } catch (error) {
         const kind = classifyRenameError(key, runtime, error);
+        if (kind === 'failed') return { outcome: 'failed', error };
+        runtime.retryNotBeforeMs = null;
         if (kind === 'refused') return { outcome: 'refused' };
         if (kind === 'gone') return { outcome: 'idle' };
-        if (kind === 'failed') return { outcome: 'failed', error };
       }
       runtime.lastRenameAtMs = getNowMs();
       runtime.isOwnerChangePending = false;
       runtime.lastLoggedFailure = null;
       runtime.failureCount = 0;
+      runtime.retryNotBeforeMs = null;
       noteAppliedName(runtime, view.desiredName);
-      await getState().setBindingTopicNaming(key, { indicatorAppliedName: view.desiredName }).catch((error) => {
+      await getState().setBindingTopicNaming(key, { indicatorAppliedName: view.desiredName, indicatorRenameRefused: null }).catch((error) => {
         log(`[topic-indicator] ${keyToString(key)}: saving the applied name failed: ${error instanceof Error ? error.message : error}`);
       });
       noteRenameWritten(key);
@@ -416,23 +464,34 @@ export function createTopicIndicator(ports: TopicIndicatorPorts) {
         if (classifyRenameError(key, runtime, error) !== 'noChange') return;
       }
       runtime.lastRenameAtMs = getNowMs();
+      runtime.retryNotBeforeMs = null;
       noteAppliedName(runtime, binding.topicName);
-      await getState().setBindingTopicNaming(key, { indicatorAppliedName: binding.topicName }).catch((error) => {
+      await getState().setBindingTopicNaming(key, { indicatorAppliedName: binding.topicName, indicatorRenameRefused: null }).catch((error) => {
         log(`[topic-indicator] ${keyToString(key)}: saving the restored name failed: ${error instanceof Error ? error.message : error}`);
       });
     });
   }
 
-  /** The topic's marks forgotten in memory (its binding is gone). */
-  function forgetTopic(key: SessionKey): void {
-    const keyString = keyToString(key);
+  /** The topic's marks and its refusal forgotten in memory: its binding is gone. */
+  function forgetKeyString(keyString: string): void {
     const runtime = runtimes.get(keyString);
     if (runtime) dropTimer(runtime);
     runtimes.delete(keyString);
+    for (const [chatId, refusal] of renameRefusals) {
+      refusal.topicKeys.delete(keyString);
+      if (refusal.probeKey === keyString) refusal.probeKey = null;
+      if (refusal.topicKeys.size === 0 && refusal.probeKey === null) renameRefusals.delete(chatId);
+    }
+  }
+
+  /** @description The topic's marks forgotten in memory (its binding is gone): it is never probed again for the right. */
+  function forgetTopic(key: SessionKey): void {
+    forgetKeyString(keyToString(key));
   }
 
   /** @description How the marks stand in `key`'s chat, for the picker's hints. */
   function getHealth(key: SessionKey): TopicIndicatorHealth {
+    ensureRefusalsLoaded();
     const chatId = getTelegramChatId(key);
     return { isRenameRefused: renameRefusals.has(chatId), isLineDeletionRefused: lineDeletionRefusedChats.has(chatId) };
   }
@@ -443,14 +502,21 @@ export function createTopicIndicator(ports: TopicIndicatorPorts) {
   }
 
   /**
-   * Let ONE refused topic of each refused chat try again (the probe); a probe the last sweep left without a result — nothing wanted
-   * writing — says nothing about the right, so that chat's topics all try again. The deletion refusals are forgotten: the next line tells.
+   * Let ONE refused topic of each refused chat try again (the probe), the oldest first. A probe the last sweep left without a result —
+   * nothing wanted writing, it said nothing about the right — is dropped from the refusal (and from its binding) and the next refused
+   * topic is probed instead; the chat is released when no refused topic is left. The deletion refusals are forgotten: the next line tells.
    */
   function chooseRefusalProbes(): void {
+    ensureRefusalsLoaded();
     lineDeletionRefusedChats.clear();
     for (const [chatId, refusal] of renameRefusals) {
+      if (refusal.probeKey !== null) {
+        const silentProbeKey = tryKeyFromString(refusal.probeKey);
+        refusal.probeKey = null;
+        if (silentProbeKey) clearRefusalFlag(silentProbeKey);
+      }
       const [probeKey] = refusal.topicKeys;
-      if (refusal.probeKey !== null || probeKey === undefined) {
+      if (probeKey === undefined) {
         renameRefusals.delete(chatId);
         continue;
       }
@@ -462,13 +528,11 @@ export function createTopicIndicator(ports: TopicIndicatorPorts) {
   /** The sweep: a look at every topic, for the changes no event announces; a refused chat is probed with one topic. */
   function armSweep(): void {
     sweepTimer = setTimer(() => {
-      chooseRefusalProbes();
       const boundKeys = new Set(getState().listBindings().map(({ key }) => keyToString(key)));
-      for (const [keyString, runtime] of runtimes) {
-        if (boundKeys.has(keyString)) continue;
-        dropTimer(runtime);
-        runtimes.delete(keyString);
+      for (const keyString of [...runtimes.keys()]) {
+        if (!boundKeys.has(keyString)) forgetKeyString(keyString);
       }
+      chooseRefusalProbes();
       refreshAll();
       armSweep();
     }, windows.sweepIntervalMs);

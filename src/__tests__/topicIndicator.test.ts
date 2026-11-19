@@ -28,6 +28,8 @@ import {
   type TopicStatusPrefs,
 } from '../utils/topicIndicatorPlan';
 import { RateLimitedError } from '../rateLimiter';
+import type { CallApiHost } from '../outputTrace';
+import { firstPollHoldMs, installFirstUpdateBatchNote } from '../connectors/telegram/firstUpdateBatchNote';
 
 const chatId = -1001234567890;
 const topic: SessionKey = makeTelegramKey(chatId, 11);
@@ -62,10 +64,17 @@ interface Harness {
   refusedThreads: Set<string>;
   /** The topics (thread ids) being unbound right now. */
   unbindingThreads: Set<string>;
+  /** While set, every `sendTopicName` waits (a slow send gate); `releaseHeldRenames` lets the held calls go on, each judged as it is by then. */
+  isSendHeld: { current: boolean };
+  releaseHeldRenames: () => void;
   /** Every `deleteMessage` rejects with this while it is set. */
   deletionError: { current: unknown | null };
   isBacklogHandled: { current: boolean };
+  /** When set, the boot gate asks it instead of `isBacklogHandled` (a test that wires the real note of the first poll). */
+  backlogProbe: { current: (() => boolean) | null };
   nowMs: () => number;
+  /** The name the topic has in Telegram now: the last one written. */
+  fakeNameOf: (key: SessionKey) => string | undefined;
   /** Move the clock forward, running the timers that come due on the way, each at its own instant. */
   advance: (ms: number) => Promise<void>;
   /** Let every look the refresher queued and every write it started finish. */
@@ -98,13 +107,19 @@ describe('the status mark of topic names', () => {
     fs.rmSync(fakeHome, { recursive: true, force: true });
   });
 
-  async function createHarness(options: { windows?: Partial<{ settleMs: number; minGapMs: number; sweepIntervalMs: number; bootWaveDelayMs: number }> } = {}): Promise<Harness> {
-    const state = new StateStore(dataDir, { saveDebounceMs: 5 });
-    stores.push(state);
-    await state.init();
-    await state.setBinding(topic, 'alpha', { topicName: 'Deploy' });
-    let currentMs = 1_000_000;
+  async function createHarness(
+    options: { windows?: Partial<{ settleMs: number; minGapMs: number; sweepIntervalMs: number; bootWaveDelayMs: number }>; state?: StateStore; startMs?: number } = {},
+  ): Promise<Harness> {
+    // `state`: a second boot over the first one's bindings — what they remember is what the new refresher starts from.
+    const state = options.state ?? new StateStore(dataDir, { saveDebounceMs: 5 });
+    if (!options.state) {
+      stores.push(state);
+      await state.init();
+      await state.setBinding(topic, 'alpha', { topicName: 'Deploy' });
+    }
+    let currentMs = options.startMs ?? 1_000_000;
     const timers: FakeTimer[] = [];
+    const heldSends: Array<() => void> = [];
     const parts: Omit<Harness, 'indicator'> = {
       state,
       inputs: new Map(),
@@ -118,9 +133,13 @@ describe('the status mark of topic names', () => {
       renameAttempts: [],
       refusedThreads: new Set(),
       unbindingThreads: new Set(),
+      isSendHeld: { current: false },
+      releaseHeldRenames: () => { for (const release of heldSends.splice(0)) release(); },
       deletionError: { current: null },
       isBacklogHandled: { current: true },
+      backlogProbe: { current: null },
       nowMs: () => currentMs,
+      fakeNameOf: (key) => parts.renames.filter((rename) => rename.key.thread === key.thread).at(-1)?.name,
       advance: async (ms) => {
         const target = currentMs + ms;
         for (;;) {
@@ -150,6 +169,7 @@ describe('the status mark of topic names', () => {
       getQueuedCount: () => parts.counts.queued,
       sendTopicName: async (key, name) => {
         parts.renameAttempts.push(key.thread);
+        if (parts.isSendHeld.current) await new Promise<void>((resolve) => heldSends.push(resolve));
         if (parts.refusedThreads.has(key.thread)) throw createApiError('Bad Request: not enough rights to manage topics');
         if (parts.failNextRename.error !== null) {
           const error = parts.failNextRename.error;
@@ -162,7 +182,7 @@ describe('the status mark of topic names', () => {
         parts.deletions.push({ key, messageId });
         if (parts.deletionError.current !== null) throw parts.deletionError.current;
       },
-      checkIsBacklogHandled: () => parts.isBacklogHandled.current,
+      checkIsBacklogHandled: () => parts.backlogProbe.current?.() ?? parts.isBacklogHandled.current,
       windows: {
         settleMs: options.windows?.settleMs ?? indicatorSettleMs,
         minGapMs: options.windows?.minGapMs ?? indicatorMinRenameGapMs,
@@ -431,18 +451,127 @@ describe('the status mark of topic names', () => {
       harness.indicator.stop();
     });
 
-    it('a probe that came to no write — nothing wanted a mark — says nothing about the right: the next sweep lets every topic try again', async () => {
+    it('a probe that came to no write — nothing wanted a mark — says nothing about the right: it is dropped, and with no other refused topic the chat is released', async () => {
       const harness = await createHarness({ windows: { sweepIntervalMs: 60_000, bootWaveDelayMs: 1_000 } });
       harness.refusedThreads.add(topic.thread);
       await wantAndWait(harness, topic, { isFinished: true });
       assert.equal(harness.indicator.getHealth(topic).isRenameRefused, true);
+      assert.equal(harness.state.getBinding(topic)?.indicatorRenameRefused, true, 'the refusal is kept with the binding');
       setInputs(harness, topic, {});
       harness.indicator.start();
       await harness.advance(60_000);
       assert.equal(harness.indicator.getHealth(topic).isRenameRefused, true, 'the first sweep chose the probe, which had nothing to write');
       await harness.advance(60_000);
-      assert.equal(harness.indicator.getHealth(topic).isRenameRefused, false, 'the second dropped the refusal: the hint would be stale');
+      assert.equal(harness.indicator.getHealth(topic).isRenameRefused, false, 'the second dropped it: the hint would be stale');
+      assert.equal(harness.state.getBinding(topic)?.indicatorRenameRefused, undefined, 'and the binding forgot it too');
       harness.indicator.stop();
+    });
+
+    it('a probe that came to no write does NOT release the whole chat: the next refused topic is probed, one failing call per sweep', async () => {
+      const harness = await createHarness({ windows: { sweepIntervalMs: 60_000, bootWaveDelayMs: 1_000 } });
+      const [research, billing] = await bindMoreTopics(harness);
+      for (const key of [topic, research, billing]) harness.refusedThreads.add(key.thread);
+      setInputs(harness, topic, { isFinished: true });
+      harness.indicator.start();
+      for (const key of [topic, research, billing]) harness.indicator.requestRefresh(key);
+      await harness.settle();
+      await harness.advance(indicatorSettleMs);
+      assert.deepEqual(harness.renameAttempts, [topic.thread, research.thread, billing.thread], 'each topic is refused once, in the order it was first looked at');
+
+      // The oldest refused topic, the first probe, no longer wants a mark: its probe comes to no write.
+      setInputs(harness, topic, {});
+      await harness.advance(60_000);
+      assert.equal(harness.renameAttempts.length, 3, 'the first sweep probed the topic that had nothing to write');
+      await harness.advance(60_000);
+      assert.deepEqual(harness.renameAttempts.slice(3), [research.thread], 'the second sweep dropped that probe and tried ONE other topic — not the whole chat');
+      assert.equal(harness.indicator.getHealth(topic).isRenameRefused, true);
+      harness.indicator.stop();
+    });
+
+    it('a sweep that comes while the probe is still on its way (a slow send gate) loses nothing: the right comes back, and the answered question\'s ✅ is written at once', async () => {
+      const harness = await createHarness({ windows: { sweepIntervalMs: 3_000, bootWaveDelayMs: 1_000 } });
+      harness.refusedThreads.add(topic.thread);
+      harness.indicator.start();
+      await wantAndWait(harness, topic, { isFinished: true });
+      setInputs(harness, topic, { hasOpenQuestion: true });
+      harness.indicator.requestRefresh(topic);
+      await harness.settle();
+      assert.equal(harness.indicator.getHealth(topic).isRenameRefused, true, 'the ❓ was refused');
+
+      // The right is back, but the sends are slow: several sweeps pass while the probe's call is still waiting for the gate.
+      harness.refusedThreads.clear();
+      harness.isSendHeld.current = true;
+      await harness.advance(10_000);
+      harness.isSendHeld.current = false;
+      harness.releaseHeldRenames();
+      await harness.settle();
+      assert.equal(harness.fakeNameOf(topic), 'Deploy ❓', 'the held calls went through: the mark shows');
+
+      // The question is answered: the mark leaves at once, however the probes before it ended.
+      setInputs(harness, topic, { isFinished: true });
+      harness.indicator.requestRefresh(topic);
+      await harness.settle();
+      assert.equal(harness.fakeNameOf(topic), 'Deploy ✅');
+      harness.indicator.stop();
+    });
+
+    it('a topic that was unbound is forgotten: it is never probed, and a chat with no refused topic left is released', async () => {
+      const harness = await createHarness({ windows: { sweepIntervalMs: 60_000, bootWaveDelayMs: 1_000 } });
+      const [research, billing] = await bindMoreTopics(harness);
+      setInputs(harness, billing, {});
+      for (const key of [topic, research]) harness.refusedThreads.add(key.thread);
+      setInputs(harness, topic, { isFinished: true });
+      harness.indicator.start();
+      for (const key of [topic, research]) harness.indicator.requestRefresh(key);
+      await harness.settle();
+      await harness.advance(indicatorSettleMs);
+      assert.deepEqual(harness.renameAttempts, [topic.thread, research.thread]);
+
+      await harness.state.removeBinding(topic);
+      harness.indicator.forgetTopic(topic);
+      await harness.advance(60_000);
+      assert.deepEqual(harness.renameAttempts.slice(2), [research.thread], 'the sweep probed the topic that is still there, not the unbound one');
+
+      await harness.state.removeBinding(research);
+      harness.indicator.forgetTopic(research);
+      assert.equal(harness.indicator.getHealth(topic).isRenameRefused, false, 'no refused topic is left in the chat');
+      harness.indicator.stop();
+    });
+
+    it('a restart does not try the refused topics again: the binding remembers them, only the sweep\'s probe tries — and its success releases the rest', async () => {
+      const first = await createHarness();
+      const [research] = await bindMoreTopics(first);
+      for (const key of [topic, research]) first.refusedThreads.add(key.thread);
+      setInputs(first, topic, { isFinished: true });
+      for (const key of [topic, research]) first.indicator.requestRefresh(key);
+      await first.settle();
+      await first.advance(indicatorSettleMs);
+      assert.equal(first.renameAttempts.length, 2);
+      assert.equal(first.state.getBinding(research)?.indicatorRenameRefused, true);
+
+      // The boot after it: the same bindings, a new refresher. The wave and every signal find the topics refused: no call at all.
+      const second = await createHarness({ state: first.state, windows: { sweepIntervalMs: 60_000, bootWaveDelayMs: 1_000 } });
+      for (const key of [topic, research]) {
+        second.refusedThreads.add(key.thread);
+        setInputs(second, key, { isFinished: true });
+      }
+      second.indicator.start();
+      for (const key of [topic, research]) second.indicator.requestRefresh(key);
+      await second.settle();
+      await second.advance(2_000 + indicatorSettleMs);
+      assert.equal(second.renameAttempts.length, 0, 'not one failing call after the restart');
+      assert.deepEqual(second.indicator.getHealth(topic), { isRenameRefused: true, isLineDeletionRefused: false }, 'the picker says why from the first moment');
+      assert.equal(second.logs.filter((line) => line.includes('Manage topics')).length, 1, 'the boot says it once for the chat');
+
+      await second.advance(60_000);
+      assert.deepEqual(second.renameAttempts, [topic.thread], 'the first sweep probes one topic');
+      second.refusedThreads.clear();
+      await second.advance(60_000);
+      await second.advance(indicatorSettleMs);
+      assert.deepEqual(second.renames.map((rename) => rename.name).sort(), ['Deploy ✅', 'Research ✅'], 'the probe went through and released the other topic');
+      assert.equal(second.state.getBinding(topic)?.indicatorRenameRefused, undefined, 'a written rename clears the flag in its own write');
+      assert.equal(second.state.getBinding(research)?.indicatorRenameRefused, undefined);
+      second.indicator.stop();
     });
 
     it('«topic not modified» means the topic already has the name: it is recorded as applied, not retried', async () => {
@@ -485,6 +614,46 @@ describe('the status mark of topic names', () => {
       await harness.advance(indicatorMinRenameGapMs);
       await harness.advance(indicatorSettleMs);
       assert.deepEqual(harness.renames.map((rename) => rename.name), ['Deploy 💤']);
+    });
+
+    it('a topic that keeps signalling while Telegram fails sends one try per backoff, not one per signal — only a ❓ edge goes at once', async () => {
+      // A backoff (the gap) longer than the four signals below: the gap and the settle time are long over when they come.
+      const harness = await createHarness({ windows: { minGapMs: 300_000, sweepIntervalMs: 1_000_000 } });
+      harness.failNextRename.error = createApiError('Bad Request: something odd', 500);
+      await wantAndWait(harness, topic, { isFinished: true });
+      assert.equal(harness.renameAttempts.length, 1);
+
+      // Signals come while the backoff runs (the settle time and the gap are long over): none sends a call.
+      for (const inputs of [{ isAsleep: true }, { isWorking: true }, { isFinished: true }, { isAsleep: true }]) {
+        setInputs(harness, topic, inputs);
+        harness.indicator.requestRefresh(topic);
+        await harness.settle();
+        await harness.advance(indicatorSettleMs);
+      }
+      assert.equal(harness.renameAttempts.length, 1, 'four signals inside the backoff, no call');
+
+      // A question must be seen at once, backoff or not.
+      setInputs(harness, topic, { hasOpenQuestion: true });
+      harness.indicator.requestRefresh(topic);
+      await harness.settle();
+      assert.deepEqual(harness.renames.map((rename) => rename.name), ['Deploy ❓']);
+      assert.equal(harness.renameAttempts.length, 2);
+    });
+
+    it('the backoff ends with ONE write of the latest wanted name, whatever the signals asked meanwhile', async () => {
+      const harness = await createHarness({ windows: { minGapMs: 300_000, sweepIntervalMs: 1_000_000 } });
+      harness.failNextRename.error = createApiError('Bad Request: something odd', 500);
+      await wantAndWait(harness, topic, { isFinished: true });
+      for (const inputs of [{ isWorking: true }, { isFinished: true }, { isAsleep: true }]) {
+        setInputs(harness, topic, inputs);
+        harness.indicator.requestRefresh(topic);
+        await harness.settle();
+        await harness.advance(indicatorSettleMs);
+      }
+      assert.equal(harness.renameAttempts.length, 1);
+      await harness.advance(300_000);
+      assert.deepEqual(harness.renames.map((rename) => rename.name), ['Deploy 💤'], 'one try, with the name the topic wants by then');
+      assert.equal(harness.renameAttempts.length, 2);
     });
 
     it('a 429\'s own cooldown is the floor of the backoff', async () => {
@@ -657,6 +826,26 @@ describe('the status mark of topic names', () => {
       harness.isBacklogHandled.current = true;
       await harness.advance(1_000);
       assert.deepEqual(harness.renames.map((rename) => rename.name), ['Deploy 2 ✅'], 'once, with the new name — never the old one');
+    });
+
+    it('a boot with NOTHING waiting: a mark leaving ❓ is written once the first poll has stayed open for the hold — seconds after the start, not at the cap', async () => {
+      const harness = await createHarness();
+      await harness.state.setBindingTopicNaming(topic, { indicatorAppliedName: 'Deploy ❓' });
+      // The real note over a host whose first long poll Telegram holds open (nothing waits for the bot), on the test's clock.
+      const host: CallApiHost = { callApi: () => new Promise(() => undefined) };
+      const note = installFirstUpdateBatchNote(host, { getNowMs: harness.nowMs });
+      harness.backlogProbe.current = () => note.checkIsBacklogHandled(0);
+      harness.indicator.start();
+      void host.callApi('getUpdates', { timeout: 50 });
+      setInputs(harness, topic, { isFinished: true });
+      harness.indicator.requestRefresh(topic);
+      await harness.settle();
+      await harness.advance(firstPollHoldMs - 1);
+      assert.equal(harness.renames.length, 0, 'the poll could still be about to bring the owner\'s rename');
+      await harness.advance(1_000);
+      assert.deepEqual(harness.renames.map((rename) => rename.name), ['Deploy ✅']);
+      assert.ok(harness.nowMs() - 1_000_000 < 10_000, 'well before the 30 s cap');
+      harness.indicator.stop();
     });
 
     it('the wave does not wait for ever for a backlog that never settles', async () => {

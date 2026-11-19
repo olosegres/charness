@@ -583,6 +583,25 @@ test('topic naming: a re-bind to another folder keeps the candidate and the name
   assert.equal(store.getBinding(key1)?.indicatorDroppedMark, '✅');
 });
 
+test('indicatorRenameRefused: the refusal of a rename is kept with the binding through a re-bind and a restart, and null clears it', async () => {
+  const first = new StateStore(dataDir, { saveDebounceMs: 5 });
+  await first.init();
+  await first.setBinding(key1, 'alpha');
+  await first.setBinding(key2, 'alpha');
+  await first.setBindingTopicNaming(key1, { indicatorRenameRefused: true });
+  await first.setBinding(key1, 'beta');
+  assert.equal(first.getBinding(key1)?.indicatorRenameRefused, true, 'a re-bind to another folder leaves it');
+  assert.equal(first.getBinding(key2)?.indicatorRenameRefused, undefined, 'another topic is untouched');
+  await first.flush();
+
+  const second = new StateStore(dataDir, { saveDebounceMs: 5 });
+  await second.init();
+  assert.equal(second.getBinding(key1)?.indicatorRenameRefused, true, 'it survives a restart: the restart does not try the topic again');
+  await second.setBindingTopicNaming(key1, { indicatorAppliedName: 'Deploy ✅', indicatorRenameRefused: null });
+  assert.equal('indicatorRenameRefused' in (second.getBinding(key1) ?? {}), false, 'a written rename clears it, in the same write as the applied name');
+  assert.equal(second.getBinding(key1)?.indicatorAppliedName, 'Deploy ✅');
+});
+
 test('setAsideQuestions: the status listener hears of a conversation whose set-aside questions changed', async () => {
   const store = new StateStore(dataDir, { saveDebounceMs: 5 });
   await store.init();
