@@ -14,7 +14,7 @@ import type { SessionKey } from '../../sessionKey';
 import { keyToString, tryKeyFromString } from '../../sessionKey';
 import { KeyLock, type StateStore } from '../../state';
 import { checkIsRateLimitedError } from '../../rateLimiter';
-import { checkIsApiError, classifySendError, getErrorDescription } from '../../sendErrorClassifier';
+import { checkIsApiError, checkIsLastingRejection, classifySendError, getErrorDescription } from '../../sendErrorClassifier';
 import { checkIsMessageDeletionRefusedError, checkIsMessageNotFoundError } from '../../utils/telegramError';
 import {
   composeIndicatorName,
@@ -109,10 +109,11 @@ interface RenameRefusal {
   topicKeys: Set<string>;
   probeKey: string | null;
   /**
-   * The probe ended WITHOUT a verdict on the right: its look found nothing to write (the topic wants no mark), or its rename failed
-   * for a cause that is no missing right (the topic is gone, a lasting error). The next sweep drops it and probes the next refused
-   * topic. A probe that has no result yet — its call is still queued on the send gate, or its name still waits for the settle time —
-   * is NOT silent: dropping it would release the chat (and its hint) while the answer is on its way.
+   * The probe ended WITHOUT a verdict on the right: its look found nothing to write (the topic wants no mark), the topic is gone, or
+   * Telegram answered its rename with a lasting rejection that is no missing right (`checkIsLastingRejection`). The next sweep drops it
+   * and probes the next refused topic. A probe that has no result yet — its call is still queued on the send gate, its name still waits
+   * for the settle time, or its call failed with no answer / a 429 / a 5xx and its retry is armed — is NOT silent: dropping it would
+   * release the chat (and its hint) while the answer is still to come.
    */
   isProbeSilent: boolean;
 }
@@ -359,10 +360,12 @@ export function createTopicIndicator(ports: TopicIndicatorPorts) {
         await sendTopicName(key, view.desiredName);
       } catch (error) {
         const kind = classifyRenameError(key, runtime, error);
-        // A topic that is gone, or whose rename fails for a cause that is no missing right, gives no verdict on the right: were its probe kept
-        // for the answer, one deleted topic would keep the chat's other refused topics from ever being probed again.
+        // A topic that is gone, or that Telegram ANSWERED with a rejection that is not about the right (a lasting 4xx), gives no verdict on the
+        // right: were its probe kept for the answer, one deleted topic would keep the chat's other refused topics from ever being probed
+        // again. A failure that is no answer (a timeout, a reset), a 429 or a 5xx is no verdict either way: the probe is KEPT, and its armed
+        // retry decides — an outage hits every topic alike, so dropping one probe per sweep would only spend a failing call on each.
         if (kind === 'failed') {
-          noteProbeSilent(key);
+          if (checkIsLastingRejection(error)) noteProbeSilent(key);
           return { outcome: 'failed', error };
         }
         runtime.retryNotBeforeMs = null;

@@ -76,6 +76,18 @@ export function classifySendError(err: unknown): SendErrorClass {
   return 'other';
 }
 
+/**
+ * @description Whether `err` is an ANSWER of the Bot API that rejects the request itself: a 4xx other than 429 — a 400 for a request it
+ * will not take (a topic that is gone, a bad parameter), a 403 for a chat the bot may not act in. Asking again changes nothing until
+ * something else does. A 429 (wait, then ask again), a 5xx and NO answer at all (a timeout, a reset connection, a refused host) say
+ * nothing about the request: a retry may go through, so the caller must not treat them as a verdict.
+ */
+export function checkIsLastingRejection(err: unknown): boolean {
+  if (!checkIsApiError(err)) return false;
+  const code = getErrorCode(err);
+  return code !== undefined && code >= 400 && code < 500 && code !== 429;
+}
+
 /** Node's socket error codes for a connection the peer closed or reset under a request. */
 const connectionResetCodes = new Set(['ECONNRESET', 'EPIPE']);
 

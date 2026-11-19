@@ -506,6 +506,54 @@ describe('the status mark of topic names', () => {
       });
     }
 
+    for (const [cause, transientError] of [
+      ['a 502 from Telegram', createApiError('Bad Gateway', 502)],
+      ['a 429 that outlived the send gate\'s own retry', createApiError('Too Many Requests: retry after 5', 429)],
+      ['a connection reset before any answer', new Error('socket hang up')],
+    ] as const) {
+      it(`a probe whose rename fails with ${cause} is KEPT across the sweeps — the hint stays, no other topic is tried — and when its retry is refused it is recorded again and the next sweep probes another topic`, async () => {
+        const harness = await createHarness({ windows: { sweepIntervalMs: 60_000, bootWaveDelayMs: 1_000 } });
+        const [research, billing] = await bindMoreTopics(harness);
+        setInputs(harness, billing, {});
+        for (const key of [topic, research]) harness.refusedThreads.add(key.thread);
+        setInputs(harness, topic, { isFinished: true });
+        harness.indicator.start();
+        for (const key of [topic, research]) harness.indicator.requestRefresh(key);
+        await harness.settle();
+        await harness.advance(indicatorSettleMs);
+        assert.deepEqual(harness.renameAttempts, [topic.thread, research.thread], 'each topic is refused once');
+        const attemptsOf = (key: SessionKey): number => harness.renameAttempts.filter((thread) => thread === key.thread).length;
+
+        // The outage: the right is back, but the probe's call gets no verdict. Several sweeps pass, and its retries fail the same way.
+        harness.refusedThreads.clear();
+        harness.brokenThreads.set(topic.thread, transientError);
+        await harness.advance(3 * 60_000);
+        assert.ok(attemptsOf(topic) > 1, 'the probe was tried, and its retries went on');
+        assert.equal(attemptsOf(research), 1, 'the other refused topic was never tried: the probe is no verdict on the right');
+        assert.equal(harness.indicator.getHealth(topic).isRenameRefused, true, 'the hint stays through the outage');
+        assert.equal(harness.state.getBinding(topic)?.indicatorRenameRefused, true, 'and so does the flag of the probe\'s topic in its binding');
+        assert.equal(harness.state.getBinding(research)?.indicatorRenameRefused, true, 'and the other\'s');
+        assert.equal(harness.renames.length, 0);
+
+        // The outage ends, the right is still missing: the retry is refused and the topic is recorded as refused again.
+        harness.brokenThreads.delete(topic.thread);
+        harness.refusedThreads.add(topic.thread);
+        await harness.advance(60_000);
+        assert.equal(harness.indicator.getHealth(topic).isRenameRefused, true);
+        assert.equal(harness.state.getBinding(topic)?.indicatorRenameRefused, true, 'its flag is saved again');
+
+        // The next sweep probes ANOTHER topic (the right is back for it): the re-refused one was put back among the refused, not kept as the probe.
+        // Its write releases the chat, and the re-refused topic is refused again.
+        await harness.advance(2 * 60_000);
+        await harness.advance(indicatorSettleMs);
+        assert.deepEqual(harness.renames.map((rename) => `${rename.key.thread}:${rename.name}`), [`${research.thread}:Research ✅`], 'the other topic was probed and written');
+        assert.equal(harness.indicator.getHealth(topic).isRenameRefused, true, 'the re-refused topic stays refused');
+        assert.equal(harness.state.getBinding(topic)?.indicatorRenameRefused, true, 'with its flag');
+        assert.equal(harness.state.getBinding(research)?.indicatorRenameRefused, undefined, 'the written topic\'s flag is cleared');
+        harness.indicator.stop();
+      });
+    }
+
     it('a probe that came to no write does NOT release the whole chat: the next refused topic is probed, one failing call per sweep', async () => {
       const harness = await createHarness({ windows: { sweepIntervalMs: 60_000, bootWaveDelayMs: 1_000 } });
       const [research, billing] = await bindMoreTopics(harness);

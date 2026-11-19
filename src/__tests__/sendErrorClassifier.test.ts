@@ -17,7 +17,7 @@
 
 import { test } from 'node:test';
 import * as assert from 'node:assert/strict';
-import { classifySendError, getErrorCode, getErrorDescription, checkIsApiError, checkIsConnectionResetError, checkIsForbiddenError } from '../sendErrorClassifier';
+import { classifySendError, getErrorCode, getErrorDescription, checkIsApiError, checkIsConnectionResetError, checkIsForbiddenError, checkIsLastingRejection } from '../sendErrorClassifier';
 
 // Helper: build an error in Telegraf's shape.
 function tgError(code: number, description: string): unknown {
@@ -165,4 +165,22 @@ test('403 — the bot may not write to the chat (never started, blocked, deactiv
   assert.equal(checkIsForbiddenError(null), false);
   // A refusal for good: not retried, and not a thread cleanup.
   assert.equal(classifySendError(tgError(403, "Forbidden: bot can't initiate conversation with a user")), 'other');
+});
+
+test('a lasting rejection is an ANSWER of the Bot API in the 4xx class other than 429: a 400, a 403, a 404', () => {
+  assert.equal(checkIsLastingRejection(tgError(400, 'Bad Request: message thread not found')), true);
+  assert.equal(checkIsLastingRejection(tgError(400, 'Bad Request: something odd')), true);
+  assert.equal(checkIsLastingRejection(tgError(403, 'Forbidden: bot was kicked from the supergroup chat')), true);
+  assert.equal(checkIsLastingRejection(tgError(404, 'Not Found')), true);
+});
+
+test('a 429, a 5xx, no answer at all and a flat description with no code are no lasting rejection: a retry may go through', () => {
+  assert.equal(checkIsLastingRejection(tgError(429, 'Too Many Requests: retry after 5')), false, 'wait, then ask again');
+  assert.equal(checkIsLastingRejection(tgError(500, 'Internal Server Error')), false);
+  assert.equal(checkIsLastingRejection(tgError(502, 'Bad Gateway')), false);
+  assert.equal(checkIsLastingRejection(tgError(504, 'Gateway Timeout')), false);
+  assert.equal(checkIsLastingRejection(new Error('socket hang up')), false, 'the connection was reset before any answer');
+  assert.equal(checkIsLastingRejection(Object.assign(new Error('connect ETIMEDOUT'), { code: 'ETIMEDOUT' })), false, 'a timeout is no answer');
+  assert.equal(checkIsLastingRejection({ description: 'Bad Request: something odd' }), false, 'no code: not known to be an answer');
+  assert.equal(checkIsLastingRejection(null), false);
 });
