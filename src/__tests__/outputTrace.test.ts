@@ -9,6 +9,7 @@ import {
   configureTraceWriterForTests,
   createTracePreview,
   flushTraceBufferSyncOnExit,
+  getForumTopicServiceName,
   getTraceConfig,
   installCallApiTrace,
   markOutboundTextSecret,
@@ -441,6 +442,172 @@ describe('installCallApiTrace — send-path filtering', () => {
     assert.equal(errEntry.kind, 'sendErr');
     assert.equal(errEntry.errorCode, 429);
     assert.equal(errEntry.retryAfterSec, 31);
+  });
+});
+
+describe('topic names — a complaint about a topic mark is checked by looking the name up in the trace', () => {
+  const askedName = '🟢 ✅3 ❓1 Release notes';
+
+  it('an editForumTopic call keeps the name it asked for, on sendTry and on sendOk', async () => {
+    const fake = createFakeWriter();
+    restoreWriter = configureTraceWriterForTests(fake.deps);
+    const host: CallApiHost = { callApi: async () => true };
+    installCallApiTrace(host);
+
+    await host.callApi('editForumTopic', { chat_id: -100123, message_thread_id: 7, name: askedName });
+    fake.fireFlushTimer();
+    await fake.settle();
+
+    const [tryEntry, okEntry] = parseLines(fake.written);
+    assert.equal(tryEntry.method, 'editForumTopic');
+    assert.equal(tryEntry.topicName, askedName);
+    assert.equal(okEntry.topicName, askedName);
+  });
+
+  it('an editForumTopic call that fails keeps the asked name on sendErr', async () => {
+    const fake = createFakeWriter();
+    restoreWriter = configureTraceWriterForTests(fake.deps);
+    const host: CallApiHost = {
+      callApi: async () => {
+        throw new Error('400: Bad Request: TOPIC_NOT_MODIFIED');
+      },
+    };
+    installCallApiTrace(host);
+
+    await assert.rejects(host.callApi('editForumTopic', { chat_id: -100123, message_thread_id: 7, name: askedName }));
+    fake.fireFlushTimer();
+    await fake.settle();
+
+    const errEntry = parseLines(fake.written)[1];
+    assert.equal(errEntry.kind, 'sendErr');
+    assert.equal(errEntry.topicName, askedName);
+  });
+
+  it('a createForumTopic call keeps the name of the topic it creates', async () => {
+    setTraceConfig({ allThreads: true, threadKeys: [] });
+    const fake = createFakeWriter();
+    restoreWriter = configureTraceWriterForTests(fake.deps);
+    const host: CallApiHost = { callApi: async () => ({ message_thread_id: 12, name: 'New topic' }) };
+    installCallApiTrace(host);
+
+    await host.callApi('createForumTopic', { chat_id: -100123, name: 'New topic' });
+    fake.fireFlushTimer();
+    await fake.settle();
+
+    const tryEntry = parseLines(fake.written)[0];
+    assert.equal(tryEntry.method, 'createForumTopic');
+    assert.equal(tryEntry.topicName, 'New topic');
+  });
+
+  it('an editForumTopic call that changes only the icon has no name to keep', async () => {
+    const fake = createFakeWriter();
+    restoreWriter = configureTraceWriterForTests(fake.deps);
+    const host: CallApiHost = { callApi: async () => true };
+    installCallApiTrace(host);
+
+    await host.callApi('editForumTopic', { chat_id: -100123, message_thread_id: 7, icon_custom_emoji_id: '1111111111111111111' });
+    fake.fireFlushTimer();
+    await fake.settle();
+
+    assert.equal('topicName' in parseLines(fake.written)[0], false);
+  });
+
+  it('a name is cut like a text preview (120 characters and an ellipsis)', async () => {
+    const fake = createFakeWriter();
+    restoreWriter = configureTraceWriterForTests(fake.deps);
+    const host: CallApiHost = { callApi: async () => true };
+    installCallApiTrace(host);
+    const longName = 'n'.repeat(200);
+
+    await host.callApi('editForumTopic', { chat_id: -100123, message_thread_id: 7, name: longName });
+    fake.fireFlushTimer();
+    await fake.settle();
+
+    assert.equal(parseLines(fake.written)[0].topicName, createTracePreview(longName));
+    assert.equal((parseLines(fake.written)[0].topicName as string).length, 121);
+  });
+
+  it('only the two topic methods carry a topic name — another call with a `name` argument does not', async () => {
+    setTraceConfig({ allThreads: true, threadKeys: [] });
+    const fake = createFakeWriter();
+    restoreWriter = configureTraceWriterForTests(fake.deps);
+    const host: CallApiHost = { callApi: async () => true };
+    installCallApiTrace(host);
+
+    await host.callApi('createChatInviteLink', { chat_id: -100123, name: 'invite for a friend' });
+    fake.fireFlushTimer();
+    await fake.settle();
+
+    assert.equal('topicName' in parseLines(fake.written)[0], false);
+  });
+
+  it('a recv of a topic-edited service message keeps the stored name', async () => {
+    const fake = createFakeWriter();
+    restoreWriter = configureTraceWriterForTests(fake.deps);
+
+    traceRecvUpdate({
+      updateType: 'message',
+      updateId: 60,
+      chatId: -100123,
+      threadId: 7,
+      topicName: getForumTopicServiceName({ forum_topic_edited: { name: askedName } }),
+    });
+    fake.fireFlushTimer();
+    await fake.settle();
+
+    const entry = parseLines(fake.written)[0];
+    assert.equal(entry.kind, 'recv');
+    assert.equal(entry.topicName, askedName);
+  });
+
+  it('a recv of a topic-created service message keeps the new name', async () => {
+    setTraceConfig({ allThreads: true, threadKeys: [] });
+    const fake = createFakeWriter();
+    restoreWriter = configureTraceWriterForTests(fake.deps);
+
+    traceRecvUpdate({
+      updateType: 'message',
+      updateId: 61,
+      chatId: -100123,
+      threadId: 12,
+      topicName: getForumTopicServiceName({ forum_topic_created: { name: 'New topic' } }),
+    });
+    fake.fireFlushTimer();
+    await fake.settle();
+
+    assert.equal(parseLines(fake.written)[0].topicName, 'New topic');
+  });
+
+  it('a recv name is cut like a text preview', async () => {
+    const fake = createFakeWriter();
+    restoreWriter = configureTraceWriterForTests(fake.deps);
+    const longName = 'n'.repeat(200);
+
+    traceRecvUpdate({ updateType: 'message', updateId: 62, chatId: -100123, threadId: 7, topicName: longName });
+    fake.fireFlushTimer();
+    await fake.settle();
+
+    assert.equal(parseLines(fake.written)[0].topicName, createTracePreview(longName));
+  });
+
+  it('a recv with no topic name has no topicName field', async () => {
+    const fake = createFakeWriter();
+    restoreWriter = configureTraceWriterForTests(fake.deps);
+
+    traceRecvUpdate({ updateType: 'message', updateId: 63, chatId: -100123, threadId: 7, preview: 'hi' });
+    fake.fireFlushTimer();
+    await fake.settle();
+
+    assert.equal('topicName' in parseLines(fake.written)[0], false);
+  });
+
+  it('getForumTopicServiceName reads the name of a created or edited topic and nothing else', () => {
+    assert.equal(getForumTopicServiceName({ forum_topic_created: { name: 'A' } }), 'A');
+    assert.equal(getForumTopicServiceName({ forum_topic_edited: { name: 'B' } }), 'B');
+    // A rename that only changed the icon carries no name.
+    assert.equal(getForumTopicServiceName({ forum_topic_edited: { icon_custom_emoji_id: '1' } }), undefined);
+    assert.equal(getForumTopicServiceName({}), undefined);
+    assert.equal(getForumTopicServiceName(undefined), undefined);
   });
 });
 

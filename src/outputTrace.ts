@@ -41,11 +41,16 @@ import { makeTelegramKey } from './connectors/telegram/sessionKeyCodec';
  *
  * Entry kinds:
  *  - `recv`    — incoming Telegram update (middleware): type, from, preview,
- *                latency vs the update's own timestamp
+ *                latency vs the update's own timestamp; a topic created / edited
+ *                service message also carries `topicName` (the stored name)
  *  - `emit`    — adapter `output`/`status` event entering the bot send path
  *  - `sendTry` / `sendOk` / `sendErr` — every outgoing Bot API call, recorded
  *                at the `callApi` chokepoint (i.e. AFTER queue/bucket waits;
- *                each 429 retry attempt is its own try/err pair)
+ *                each 429 retry attempt is its own try/err pair); an
+ *                `editForumTopic` / `createForumTopic` call also carries
+ *                `topicName` (the name it asked for)
+ *
+ * `preview` and `topicName` are cut to 120 characters (an ellipsis marks the cut).
  */
 const maxTraceBytes = 10 * 1024 * 1024;
 const previewLength = 120;
@@ -140,6 +145,11 @@ export function pruneTraceBuckets(nowMs: number): Promise<void> {
 export function createTracePreview(text: string): string {
   if (text.length <= previewLength) return text;
   return `${cutTextSurrogateSafe(text, previewLength)}…`;
+}
+
+/** {@link createTracePreview} of a field that may be absent (`undefined` stays absent, so `JSON.stringify` drops it). */
+function createOptionalTracePreview(text: string | undefined): string | undefined {
+  return text === undefined ? undefined : createTracePreview(text);
 }
 
 type TraceFieldValue = string | number | boolean | null | undefined;
@@ -306,8 +316,24 @@ export interface RecvTraceFields {
   chatId?: number;
   threadId?: number;
   preview?: string;
+  /** The name a `forum_topic_created` / `forum_topic_edited` service message stored — see {@link getForumTopicServiceName}. */
+  topicName?: string;
   /** Telegram-side `message.date` in seconds — lets us compute receive latency. */
   tgDateSec?: number;
+}
+
+/** The two service messages that carry a topic's name, structurally (the Telegram library's types stay in the connector). */
+export interface ForumTopicServiceMessage {
+  forum_topic_created?: { name?: string };
+  forum_topic_edited?: { name?: string; icon_custom_emoji_id?: string };
+}
+
+/**
+ * @description The topic name a service message stored: the new topic's name, or the name a rename set. A rename that
+ * changed only the icon carries none, and neither does any other message — `undefined`.
+ */
+export function getForumTopicServiceName(message: ForumTopicServiceMessage | undefined): string | undefined {
+  return message?.forum_topic_created?.name ?? message?.forum_topic_edited?.name;
 }
 
 /**
@@ -320,13 +346,14 @@ export interface RecvTraceFields {
  */
 export function traceRecvUpdate(fields: RecvTraceFields): void {
   if (!checkIsTracingActive()) return;
-  const { tgDateSec, preview, chatId, threadId, ...rest } = fields;
+  const { tgDateSec, preview, topicName, chatId, threadId, ...rest } = fields;
   if (!checkIsRecvThreadTraced(chatId, threadId)) return;
   appendTraceEntry('recv', {
     ...rest,
     chatId,
     threadId,
-    preview: preview === undefined ? undefined : createTracePreview(preview),
+    preview: createOptionalTracePreview(preview),
+    topicName: createOptionalTracePreview(topicName),
     latencyMs: tgDateSec === undefined ? undefined : Date.now() - tgDateSec * 1000,
   });
 }
@@ -426,9 +453,13 @@ function createApiCallPreview(text: string): string {
   return secretOutboundTexts.has(text) ? secretTextPreview : createTracePreview(text);
 }
 
+/** The Bot API methods whose `name` argument is a forum topic's name. */
+const forumTopicNameMethods: ReadonlySet<string> = new Set(['editForumTopic', 'createForumTopic']);
+
 function extractApiCallFields(method: string, payload: object): Record<string, TraceFieldValue> {
   const p = payload as Record<string, unknown>;
   const text = getStringField(p, 'text');
+  const topicName = forumTopicNameMethods.has(method) ? getStringField(p, 'name') : undefined;
   return {
     method,
     chatId: getNumberField(p, 'chat_id'),
@@ -441,6 +472,8 @@ function extractApiCallFields(method: string, payload: object): Record<string, T
     disableNotification: getBooleanField(p, 'disable_notification'),
     len: text?.length,
     preview: text === undefined ? undefined : createApiCallPreview(text),
+    // The name a topic rename / creation ASKED for — without it the trace cannot say what mark a topic was given.
+    topicName: createOptionalTracePreview(topicName),
   };
 }
 
