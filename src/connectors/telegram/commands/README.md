@@ -267,6 +267,11 @@ the topic. The pieces:
   (`rewriteSetAsideNote`, in the lifecycle queue so an answered record keeps its «✅ Answer»; best effort — in memory only, and a miss leaves a true note). `questionSetAsideRetryMs` (`CHARNESS_TEST_TIMINGS`) shortens the pause for a flow. After EVERY set-aside the server's OTHER open question of the session is
   surfaced too (`exceptRequestId`). The counts of the tries (`retryAttempts`, `replyFailures`) are forgotten when the question is told, dropped or its timer
   is armed afresh (`/question_wait`, a restart): one timer per conversation (`armSetAsideTimer`) serves the wait and its second chance.
+- **A live `qa_` button on the message of a question that was set aside meanwhile** — the edit to the `qs_` buttons is paced by the send gate, or was
+  refused — answers THAT question: `bot.ts`'s `qa_` handler asks `answerLiveTapOnSetAsideQuestion` first, which finds the record by the tapped message and
+  takes the tap through the same `answerSetAsideTap` as a `qs_` button (the toast is the label, the agent gets the late answer) when the button is for the
+  record's open question. Any other `qa_` tap — another message, another question of the call — stays with the live path, which answers
+  «no pending question» for a message of a set-aside record, so a stale button never answers the question the agent asks next.
 - **The bot holds the question and the adapter says it holds none** (at the end of the wait): json-stream — the CLI's own question is the authority, so the
   bot's copy is stale and closes as «not answered» with one log line; OpenCode — the adapter only caches the server's registry, so the server is asked
   (`resyncOpenQuestion(key, requestId)`): it holds THAT question → set aside after all; it holds none, or ANOTHER one → the bot's copy is closed as above and

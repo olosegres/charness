@@ -34,7 +34,7 @@ import { getTelegramTalkerContext } from '../inbound';
 import { getCallbackMessageId } from './callbackMessage';
 import { answerCallbackWithFittedText } from './callbackToast';
 import { buildQuestionOptionsKeyboard } from '../questionKeyboards';
-import type { BotCore } from './botCore';
+import type { BotCore, TopicSpeaker } from './botCore';
 
 /** The prefix of a set-aside question's button data: `qs_<record id>_<option index>`. */
 const setAsideButtonPrefix = 'qs_';
@@ -630,8 +630,16 @@ export function createQuestionSetAside(ports: QuestionSetAsidePorts) {
   async function handleSetAsideTap(ctx: Context, recordId: string, optionIndex: number): Promise<void> {
     const speaker = await authoriseSpeaker(ctx);
     if (!speaker) { await ctx.answerCbQuery(t('cb.access_denied')); return; }
+    await answerSetAsideTap(ctx, speaker, getSetAsideRecords(speaker.key).find((candidate) => candidate.id === recordId), optionIndex);
+  }
+
+  /**
+   * @description The tap of an authorised `speaker` on option `optionIndex` of `record` (`undefined`: no such record any more),
+   * answered with the toast and the late answer — the part of a `qs_` tap that comes after the record is found.
+   */
+  async function answerSetAsideTap(ctx: Context, speaker: TopicSpeaker, record: SetAsideQuestionRecord | undefined, optionIndex: number): Promise<void> {
     const { key } = speaker;
-    const record = getSetAsideRecords(key).find((candidate) => candidate.id === recordId);
+    const recordId = record?.id ?? '';
     const open = record ? getSetAsideAnswerTarget(record) : null;
     const tappedMessageId = getCallbackMessageId(ctx);
     // A second tap made while the first answer of the record's last question is still on its way answers nothing — in the toast alone:
@@ -649,6 +657,23 @@ export function createQuestionSetAside(ports: QuestionSetAsidePorts) {
     if (outcome === 'gone' || outcome === 'notPosted') await tellAnswerNotTaken(key, outcome);
     // The closed question carries the whole label; one that could not be edited does not, and a toast cut it.
     else if (outcome === 'answered' && !isAnswerShown && isLabelCut) await replyToThread(key, label);
+  }
+
+  /**
+   * @description A LIVE button (`qa_<question>_<option>`) tapped on the message of a question the bot has SET ASIDE meanwhile: the
+   * edit that swaps its buttons for the `qs_` ones is paced by the send gate, so for a moment the message still shows the old ones
+   * (and may keep them when the edit is refused). The question is still open and answerable, so the tap answers IT, through the
+   * set-aside path, as its own `qs_` button would — never «no pending question», and never the question the agent asks next (that
+   * one is answered by its own message's buttons only). Resolves whether the tap was taken; `false` leaves it to the live path (the
+   * message is no set-aside question's, or the button is for a question of the call that is not the open one).
+   */
+  async function answerLiveTapOnSetAsideQuestion(ctx: Context, speaker: TopicSpeaker, questionIndex: number, optionIndex: number): Promise<boolean> {
+    const tappedMessageId = getCallbackMessageId(ctx);
+    if (tappedMessageId === null) return false;
+    const record = getSetAsideRecords(speaker.key).find((candidate) => candidate.messageId === tappedMessageId);
+    if (!record || getSetAsideAnswerTarget(record)?.index !== questionIndex) return false;
+    await answerSetAsideTap(ctx, speaker, record, optionIndex);
+    return true;
   }
 
   /**
@@ -707,6 +732,7 @@ export function createQuestionSetAside(ports: QuestionSetAsidePorts) {
     setPendingQuestionAsideAtIdle,
     answerQuestionAskedAgain,
     checkIsSetAsideQuestionMessage,
+    answerLiveTapOnSetAsideQuestion,
     registerQuestionSetAsideCallbacks,
     answerSetAsideQuestionByReply,
     giveSetAsideAnswer,

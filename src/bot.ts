@@ -6656,6 +6656,7 @@ const {
   setPendingQuestionAsideAtIdle,
   answerQuestionAskedAgain,
   checkIsSetAsideQuestionMessage,
+  answerLiveTapOnSetAsideQuestion,
   registerQuestionSetAsideCallbacks,
   answerSetAsideQuestionByReply,
   closeSetAsideQuestions,
@@ -11971,10 +11972,13 @@ bot.action(/^qa_(\d+)_(\d+)$/, async (ctx) => {
   const qIdx = parseInt(ctx.match[1], 10);
   const optIdx = parseInt(ctx.match[2], 10);
   const kStr = keyToString(key);
+  // A button still showing on the message of a question the bot SET ASIDE meanwhile (the edit to the `qs_` buttons is paced by the send
+  // gate, or was refused): that question is open and answerable, so the tap answers IT through the set-aside path.
+  if (await answerLiveTapOnSetAsideQuestion(ctx, speaker, qIdx, optIdx)) return;
   const pending = pendingQuestions.get(kStr);
   if (!pending) { await ctx.answerCbQuery(t('cb.no_pending_question')); return; }
-  // A button on a message of a question the bot SET ASIDE is a stale one (its edit to the set-aside look never landed): that
-  // question is no longer the one waiting, and its `qa_<i>_<j>` would answer whatever the agent asks next.
+  // A button on a message of a set-aside question that is not the open one is stale: that question is no longer the one waiting, and
+  // its `qa_<i>_<j>` would answer whatever the agent asks next.
   const tappedMessageId = getCallbackMessageId(ctx);
   if (tappedMessageId !== null && checkIsSetAsideQuestionMessage(key, tappedMessageId)) { await ctx.answerCbQuery(t('cb.no_pending_question')); return; }
   // A button must belong to the question currently on screen. With sequential

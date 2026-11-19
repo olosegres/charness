@@ -20,8 +20,8 @@
  *     question asked meanwhile is pinned beside them
  *   → the edit that puts the note under a set-aside question is refused by Telegram: the buttons the message still carries never
  *     stay (they would answer the agent's NEXT question) — they are replaced by the record's, or taken off when that is refused too;
- *     and when nothing can be edited at all, a tap on the stale button answers nothing, while the question the agent asks next is
- *     answered as usual
+ *     and when nothing can be edited at all (the buttons on the message are still the live `qa_` ones), a tap on such a button answers
+ *     ITS OWN question through the late-answer path — never the question the agent asks next, which is answered by its own buttons only
  *
  *   → a LATE ANSWER: a tap on a set-aside question's button, or a reply to its message, closes the message with «✅ Answer: …»,
  *     releases its pin and sends the agent ONE late-answer message (the question, the answer, «you went on without it»); a
@@ -504,7 +504,7 @@ describe('A question nobody answers is set aside, end to end: built charness, fa
       assert.ok(messageIdsAsked.has(question.message_id), 'the record\'s buttons were tried first');
     });
 
-    it('nothing can be edited at all: the stale button of the set-aside question answers NOTHING — the question the agent asks next is answered by its own buttons only', async () => {
+    it('nothing can be edited at all: the live button still on the set-aside question answers THAT question late — never the question the agent asks next, which is answered by its own buttons only', async () => {
       fakeTelegram.failNextCall('editMessageText', refusal, isSetAsideTextEdit);
       fakeTelegram.failNextCall('editMessageReplyMarkup', refusal, (payload) => JSON.stringify(payload.reply_markup ?? null).includes('qs_'));
       fakeTelegram.failNextCall('editMessageReplyMarkup', refusal, (payload) => !JSON.stringify(payload.reply_markup ?? null).includes('qs_'));
@@ -517,9 +517,13 @@ describe('A question nobody answers is set aside, end to end: built charness, fa
       const next = await askQuestion('SETASIDE-10');
       await waitForPinned(next);
       const nextAskedAt = getWaitingQuestionAskedAt();
-      const toast = await topic.tapAndAwaitAnswer(stale, 'qa_0_1');
-      assert.equal(toast, enDict['cb.no_pending_question'], 'the stale button answers nothing');
-      assert.equal(getControlResponses().length, responsesBefore, 'and the agent heard nothing');
+      const latePromptsBefore = getAgentPrompts('[Late answer to your question asked ').length;
+      const toast = await topic.tapAndAwaitAnswer(stale, 'qa_0_0');
+      assert.equal(toast, fakeAskQuestion.shortOptionLabel, 'the button answers its own question — not «no pending question»');
+      await getCharness().waitFor('the agent to get the late answer to the set-aside question', replyTimeoutMs, () => getAgentPrompts('[Late answer to your question asked ').length > latePromptsBefore);
+      assert.ok(getAgentPrompts('[Late answer to your question asked ').at(-1)?.text.includes(`Answer: ${fakeAskQuestion.shortOptionLabel}`), 'a late answer, with the label');
+      assert.ok(!getSetAsideRecords().some((record) => record.messageId === stale.message_id), 'the set-aside question is closed');
+      assert.equal(getControlResponses().length, responsesBefore, 'the question the agent waits on was not answered');
       assert.ok(readPersistedState(getLayout()).pendingQuestions?.[topicKey], 'the new question still waits');
       assert.equal(getWaitingQuestionAskedAt(), nextAskedAt, 'untouched');
 
