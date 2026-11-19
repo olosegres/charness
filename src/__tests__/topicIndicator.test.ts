@@ -475,6 +475,7 @@ describe('the status mark of topic names', () => {
     for (const [cause, brokenError] of [
       ['its topic was deleted in Telegram while still bound (\u00abmessage thread not found\u00bb)', createApiError('Bad Request: message thread not found')],
       ['its rename keeps failing for a cause that is no missing right (a 400 of another kind)', createApiError('Bad Request: something odd', 400)],
+      ['its rename keeps throwing an error that is neither an answer nor the network\'s — a bug of ours (a TypeError)', new TypeError('x is not a function')],
     ] as const) {
       it(`a probe that ends without a verdict on the right — ${cause} — is dropped like a silent one: the next refused topic is probed and written, the chat released`, async () => {
         const harness = await createHarness({ windows: { sweepIntervalMs: 60_000, bootWaveDelayMs: 1_000 } });
