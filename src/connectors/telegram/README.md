@@ -175,7 +175,9 @@ wrote (`binding.indicatorAppliedName`, persisted) and since when the wanted name
 through the one send gate (`enqueueSend`). `bot.ts` asks `requestRefresh(key)` at every change signal (`updatePinnedStatus` at the agent's start / stop / suspend / close, a turn's first output
 and end, a question asked / answered / set aside, a retry armed or cancelled, the logged-out notice, a watched worker created / paused / failing — `StateStore.setStatusSourceChangeListener` —,
 a todo list change), a 5-minute sweep covers what no event announces, and the boot's wave looks at every topic once the updates that waited while the bot was down are handled (an
-owner's rename made meanwhile is learned first).
+owner's rename made meanwhile is learned first). That wait is the **boot gate** — EVERY look (not only the wave) waits until the first polling batch is handled and the update
+dispatcher is empty, capped at 30 s from `start()`: a boot signal such as a dropped question or the pinned-status refresh wave would otherwise write the old base before the
+owner's offline rename was learned.
 
 - **The base is the owner's own name** (`binding.topicName`); a topic whose base the bot does not know is never written. It is learned from `forum_topic_created` / `forum_topic_edited`
   (`getOwnerRenameOutcome` cuts the bot's own trailing marks), from `/topic`, or by the owner's confirmation of `binding.topicNameCandidate` — the name on the root message a client
@@ -183,8 +185,14 @@ owner's rename made meanwhile is learned first).
 - **The bot's own rename comes back as a `forum_topic_edited` service message** (measured on the live bot, 2026-11-18): the handler checks «sent by the bot» FIRST, never stores it as a name
   or logs it as a stranger's, and deletes the line at once (`handleOwnRenameLine`; deleting it also reverts the unread badge and the topic's preview). A refused delete (no «Delete messages»)
   leaves the lines and shows a hint in the picker.
-- **Failures are never error reports.** A refused right (`not enough rights`) stops the marks for the chat — one log line per boot, the sweep tries once more each round, the picker says why;
-  «TOPIC_NOT_MODIFIED» means the topic already has the name; anything else is logged once per cause and tried again at the next signal. A 429 is `enqueueSend`'s own retry.
+- **Failures are never error reports.** A refused right (`not enough rights`) stops the marks of THAT topic (`renameRefusals`, per topic — a topic the bot made itself needs no right, so one refusal must
+  not cost it its marks) — one log line per chat per boot, the picker says why; a refused chat is re-probed with ONE topic per sweep (`chooseRefusalProbes`), the others only after it succeeds, so a
+  rights-less chat costs one failing call per round on the shared send gate, never one per topic. «TOPIC_NOT_MODIFIED» means the topic already has the name; any other failure is logged once per cause and
+  retried by a backoff timer (`scheduleRetry`: the gap, or the 429's `retry_after`) that looks again, so the LATEST name is written. A 429 is also `enqueueSend`'s own retry.
+- **A topic that is being unbound is never written** (`checkIsUnbinding`, the guard `updatePinnedStatus` uses): `restoreBaseName` waits on the send gate and a late ❓ edge must not land after it.
+- **The own rename's delete** marks the chat «no Delete messages right» only for a rights error (`checkIsMessageDeletionRefusedError`); a network blip leaves the picker alone.
+- **The owner's rename** is cut of the bot's own trailing marks (`getOwnerRenameOutcome`); the «your ending was dropped» hint is told only when the saved ending is not one of the names the bot applied
+  last (`getRecentAppliedNames`) — a mark the bot changed while the owner was typing is not his.
 - Out of scope: General, Jira conversations, terminal topics (no agent states); the tmux-scrape backend shows only the states its adapter already reports (no question mark — its questions have no
   `pendingQuestions` entry).
 

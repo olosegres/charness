@@ -789,8 +789,8 @@ A mark at the **end of a topic's name** that says, in the group's topic list, wh
 | ❓ | a question of the agent is open — waiting for you or [set aside](#the-agents-questions), however many |
 | ❗️ | the agent cannot go on by itself: logged out, a usage-limit wait with nowhere to switch to, or it crashed / lost its conversation (until its next turn) |
 | ⏳ | its turn runs (background tasks and a compaction included), or a worker it watches runs |
-| ✅ | the turn ended and the process is still up — the answer is there to read |
-| 💤 | the bot stopped the idle process; the conversation is kept and wakes on your next message |
+| ✅ | the turn ended — the answer is there to read; it stays until the next turn, also on the per-turn backend, whose process the bot stops after every turn |
+| 💤 | the bot stopped the idle process (the quiet period ran out); the conversation is kept and wakes on your next message |
 
 No mark: no agent yet, a closed topic, the terminal backend, or a name the bot does not know (below). Two **counts** can follow the mark, **off by default**: `⚙️N` agents at work (the topic's own agent while it works, plus each worker it watches) and `📋N` tasks the agent queued in its [todo list](#shared-todo-lists) — `Deploy ⏳ ⚙️3 📋5`; a count of 0 shows nothing.
 
@@ -800,7 +800,7 @@ No mark: no agent yet, a closed topic, the terminal backend, or a name the bot d
 
 **Your own name.** The bot writes only to a topic whose own name it **knows**: from the topic's creation or your rename, from `/topic`, or from a name you confirmed. For any other topic the picker offers the name it was created with — «Is it «Deploy»?» — and one tap on **Yes, that's its name** makes it the base; General lists such topics with a button each. When you rename a topic yourself the bot reads your name without its own trailing marks (`Deploy v2 ⏳` → `Deploy v2`); the cost is that a name of yours that itself **ends** with one of these marks (`Release ✅`) loses that ending, which the picker tells you once. The bot tells the agent and the `/topic` rows your own name, never the one with a mark. Telegram keeps updates for about 24 hours: a rename made while the bot was down for longer than that is overwritten once with the old name — rename again.
 
-**Rights.** Renaming a topic needs the bot to be an admin with **Manage topics** (topics the bot made itself with `/topic` need nothing); without it no mark is written, one line is logged and the picker says so. Each rename posts Telegram's «renamed the topic» line, which the bot **deletes at once** (measured: the topic shows no trace and no unread badge); without the **Delete messages** right the renames go on and the lines stay — the picker says so. General, Jira issues and terminal topics are never marked.
+**Rights.** Renaming a topic needs the bot to be an admin with **Manage topics** (topics the bot made itself with `/topic` need nothing); the right is checked **per topic**, so one refusal never takes the marks of the topics the bot made itself. Without it no mark is written in that topic, one line per chat is logged and the picker says so; in a chat that has not given the right the bot tries again once per 5-minute round, with one topic, and goes on with the others as soon as that one succeeds. Each rename posts Telegram's «renamed the topic» line, which the bot **deletes at once** (measured: the topic shows no trace and no unread badge); without the **Delete messages** right the renames go on and the lines stay — the picker says so (a delete that fails for another reason, such as a network blip, does not count as a missing right). A rename that fails for another reason is tried again after a short pause. General, Jira issues and terminal topics are never marked.
 
 ### `/task_agents`
 
