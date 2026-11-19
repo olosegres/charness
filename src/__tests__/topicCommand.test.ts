@@ -268,6 +268,21 @@ describe('topicCommand: /topic over its ports', () => {
       return { question, wizardId: getWizardId(question) };
     }
 
+    it('binds the name Telegram STORED, not the one typed: it drops a trailing ✅ from a topic name, and the marks are written after the name the topic has', async () => {
+      harness.fakeTelegram.strippedTopicNameEndings = ['✅'];
+      try {
+        const { question, wizardId } = await askFolderOfBoundTopic('Release ✅');
+        await harness.tapButton(question.messageId ?? 0, buildTopicSameFolderCallback(wizardId));
+        const { threadId, name } = harness.fakeTelegram.createdTopics.at(-1) ?? { threadId: 0, name: '' };
+        assert.equal(name, 'Release', 'the topic carries the stored name');
+        assert.equal(boundTopics.at(-1)?.topicName, 'Release', 'and so does its binding');
+        assert.equal(boundTopics.at(-1)?.key.thread, threadId.toString());
+        assert.equal(harness.edits.at(-1)?.text, t('topic.created', { name: 'Release', subdir: folderRepoName }), 'and the answer names it');
+      } finally {
+        harness.fakeTelegram.strippedTopicNameEndings = [];
+      }
+    });
+
     it('«as here» creates the topic, binds it to this folder and turns the question into the answer with the link to the topic', async () => {
       const { question, wizardId } = await askFolderOfBoundTopic();
       await harness.tapButton(question.messageId ?? 0, buildTopicSameFolderCallback(wizardId));

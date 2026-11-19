@@ -199,10 +199,15 @@ the bot's own «renamed» lines; everything else is dropped as before and a read
   against every change signal — the plan holds all names back until it ends, a ❓ edge and the owner's own change excepted. A 429 is also `enqueueSend`'s own retry.
 - **A name Telegram does not keep is never believed.** Telegram drops a trailing ✅ (also ☑️, ✔️) from a topic name — measured live 2026-11-19: a rename to `<name> ✅` is answered ok when the title changes and `TOPIC_NOT_MODIFIED`
   when it already reads `<name>` — so the marks are ones read back as KEPT (`topicStatusMarks`: ❓ ❗️ ⏳ 🟢 💤; 🆗 was kept too). When the answer is `TOPIC_NOT_MODIFIED` for a name that differs from the one the bot believed
-  (and is not the owner's plain base, which «not modified» then proves), `writeDesiredName` stores it as `runtime.unkept` — NOT as the applied name —, logs one line per topic per boot, and the planner returns `none` for that
-  (applied, desired) pair, so no sweep, wave or signal asks again; another applied name, a name the owner saved, or a change of a switch of his (`isOwnerChange`) ends it. A restart tries once more. The fake Bot API
+  (and is not the owner's plain base, which «not modified» then proves), `writeDesiredName` stores it as `runtime.unkept` — NOT as the applied name —, logs one line per topic and name per boot, and the planner returns `none` for that
+  (applied, desired) pair, so no sweep, wave or signal asks again; another applied name, a name the owner saved, or a change of a switch of his (`isOwnerChange`) ends it, and he is answered (`isOwnerChangePending` cleared). Any OTHER wish is
+  planned against `unkept.desiredName`, the name the topic is known to read as, not against the belief: «not modified» may mean the belief was stale, and a wish equal to a stale belief would never be written. A restart tries once more.
+  The case no answer shows — Telegram answers OK and stores another name — is read from the bot's OWN «renamed» line, which carries the stored name (`handleOwnRenameLine(key, id, storedName)` → `judgeOwnRenameLine`): each ok
+  ask waits in `pendingAsks` (30 s) and the lines, which arrive in order, are matched with them; a line whose name is a REDUCTION of its ask (`checkIsNameReduction`: Telegram only takes characters out) makes that ask not kept —
+  the stored name becomes the belief and `unkept` is set with `isTitleKnown`. A line with no ask behind it (an earlier life), or no reduction, is nobody's to judge. The fake Bot API
   drops configured endings (`strippedTopicNameEndings`) so a flow can show this; `topicStatusE2e` runs against a fake that drops ✅ all through.
 - **A topic that is being unbound is never written** (`checkIsUnbinding`, the guard `updatePinnedStatus` uses): `restoreBaseName` waits on the send gate and a late ❓ edge must not land after it.
+- **`/topic` binds the name Telegram stored** (`createForumTopic`'s answer, not the typed name): a ✅ typed in it is dropped by Telegram, and a base the topic does not carry would make «not modified» prove a name that is not there.
 - **The own rename's delete** marks the chat «no Delete messages right» only for a rights error (`checkIsMessageDeletionRefusedError`); a network blip leaves the picker alone.
 - **The owner's rename** is cut of the bot's own trailing marks (`getOwnerRenameOutcome`); the «your ending was dropped» hint is told only when the saved ending is not one of the names the bot applied
   last (`getRecentAppliedNames`) — a mark the bot changed while the owner was typing is not his.

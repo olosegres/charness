@@ -17,6 +17,7 @@ import { checkIsRateLimitedError } from '../../rateLimiter';
 import { checkIsApiError, classifySendError, getErrorDescription } from '../../sendErrorClassifier';
 import { checkIsMessageDeletionRefusedError, checkIsMessageNotFoundError } from '../../utils/telegramError';
 import {
+  checkIsNameReduction,
   composeIndicatorName,
   planIndicatorRename,
   resolveTopicStatus,
@@ -103,15 +104,23 @@ interface TopicRuntime {
   /** The names the bot wrote last, newest first: an owner who saves a name while one of them still showed has not typed its mark. */
   recentAppliedNames: string[];
   /**
-   * A name Telegram did NOT keep: asked for `desiredName` while the bot believed `appliedName` showed, it answered TOPIC_NOT_MODIFIED — its
-   * title already read as that name once the ending it drops (a ✅ was one) is gone, so the topic never shows `desiredName`. While the
-   * bot's belief and its wish are still this pair, nothing is written (the same call would be answered the same, for ever); a change of
-   * either — an owner's rename, another name written — ends it, and so does a change the owner makes with a switch of `/topic_status`
-   * (he asked, so it is tried once more). In memory only: a restart tries once more.
+   * A name Telegram did NOT keep: it was asked for `desiredName` while the bot believed `appliedName`, and Telegram either answered
+   * TOPIC_NOT_MODIFIED (the title already read as that name once the ending it drops — a ✅ was one — is gone: the topic never shows
+   * `desiredName`, or the bot's belief was stale) or stored another name, which its own «renamed» line says (`isTitleKnown`: `appliedName`
+   * IS what the topic shows). While the bot's belief and its wish are still this pair nothing is written (the same call would be answered
+   * the same, for ever); a change of either — an owner's rename, another name written — ends it, and so does a change the owner makes
+   * with a switch of `/topic_status` (he asked, so it is tried once more). A wish that is NOT this pair is planned against the name the
+   * topic is known to read as — not against a belief that may be stale. In memory only: a restart tries once more.
    */
-  unkept: { appliedName: string; desiredName: string } | null;
-  /** The «not kept» line was logged for this topic: once per topic per boot, however often the pair changes. */
-  isUnkeptLogged: boolean;
+  unkept: { appliedName: string; desiredName: string; isTitleKnown: boolean } | null;
+  /** The «not kept» names logged for this topic: each once per boot, however often the pair comes back. */
+  loggedUnkeptNames: Set<string>;
+  /**
+   * The names asked for and answered ok whose «renamed» line has not come back yet, oldest first (the lines arrive in order): the line
+   * carries the name Telegram STORED, which is compared with the one asked. An ask older than {@link ownLineWindowMs} is forgotten — its
+   * line is lost, and a stale head must not be matched with a later line.
+   */
+  pendingAsks: Array<{ name: string; atMs: number }>;
 }
 
 /** What Telegram refused for want of the right, in one chat: the topics it refused, and the one topic the sweep probes again. */
@@ -134,6 +143,9 @@ type WriteOutcome = 'written' | 'idle' | 'refused' | 'failed';
 
 /** What a failed rename means. `noChange`: Telegram says the topic already has the name (see the «not kept» rule in `writeDesiredName`); `gone`: the topic is not there or closed — no retry. */
 type RenameErrorKind = 'noChange' | 'refused' | 'gone' | 'failed';
+
+/** How long after a rename its «renamed» line may still be matched with it: the line comes back within seconds (measured 0.1–14 s), a renames' gap is a minute. */
+const ownLineWindowMs = 30_000;
 
 /** How many of the names the bot wrote are remembered per topic. */
 const recentAppliedNamesLimit = 3;
@@ -193,7 +205,8 @@ export function createTopicIndicator(ports: TopicIndicatorPorts) {
         retryNotBeforeMs: null,
         recentAppliedNames: [],
         unkept: null,
-        isUnkeptLogged: false,
+        loggedUnkeptNames: new Set(),
+        pendingAsks: [],
       };
       runtimes.set(keyString, runtime);
     }
@@ -226,12 +239,19 @@ export function createTopicIndicator(ports: TopicIndicatorPorts) {
   }
 
   function planRename(view: TopicView, runtime: TopicRuntime): ReturnType<typeof planIndicatorRename> {
-    // The name was asked for and Telegram did not keep it: asking again changes nothing.
-    if (runtime.unkept?.appliedName === view.appliedName && runtime.unkept.desiredName === view.desiredName) return { kind: 'none' };
+    let { appliedName } = view;
+    const { unkept } = runtime;
+    if (unkept !== null && unkept.appliedName === view.appliedName) {
+      // The name was asked for and Telegram did not keep it: asking again changes nothing.
+      if (unkept.desiredName === view.desiredName) return { kind: 'none' };
+      // Any OTHER wish is planned against what the topic is known to read as — that name, less what Telegram drops from it — not against the
+      // belief, which «not modified» may have shown stale: a wish equal to a stale belief would be taken for «already shown» and never written.
+      if (!unkept.isTitleKnown) appliedName = unkept.desiredName;
+    }
     const inputs: IndicatorRenameInputs = {
       desiredName: view.desiredName,
       desiredStatus: view.desiredStatus,
-      appliedName: view.appliedName,
+      appliedName,
       heldSinceMs: runtime.heldSinceMs,
       lastRenameAtMs: runtime.lastRenameAtMs,
       isOwnerChange: runtime.isOwnerChangePending,
@@ -356,6 +376,50 @@ export function createTopicIndicator(ports: TopicIndicatorPorts) {
     }, delayMs);
   }
 
+  /** Note a name just asked for, forgetting the asks whose line is long overdue. */
+  function noteAsk(runtime: TopicRuntime, name: string): void {
+    const nowMs = getNowMs();
+    runtime.pendingAsks = [...runtime.pendingAsks.filter((ask) => nowMs - ask.atMs <= ownLineWindowMs), { name, atMs: nowMs }];
+  }
+
+  /** The «not kept» line of a name, once per topic per boot. */
+  function logUnkeptOnce(key: SessionKey, runtime: TopicRuntime, name: string, cause: string): void {
+    if (runtime.loggedUnkeptNames.has(name)) return;
+    runtime.loggedUnkeptNames.add(name);
+    log(`[topic-indicator] ${keyToString(key)}: Telegram did not keep «${name}» as asked (${cause}) — not taken for applied, not asked again until the name or the status changes`);
+  }
+
+  /**
+   * The name on the bot's own «renamed» line is the name Telegram STORED: compared with the one asked, it shows an ask that was answered ok
+   * and kept altered (the title went `<name> 💤` → `<name>` for a ✅) — which no answer shows. The line is matched with its ask in order; one
+   * whose ask is unknown (a line of an earlier life, an ask forgotten as overdue) or whose name is no reduction of the ask is nobody's to judge.
+   * An altered ask is NOT kept: the stored name becomes the belief (unless a newer ask has taken the belief over already), and the pair is
+   * not asked again.
+   */
+  function judgeOwnRenameLine(key: SessionKey, storedName: string): void {
+    const runtime = runtimes.get(keyToString(key));
+    if (!runtime) return;
+    const nowMs = getNowMs();
+    runtime.pendingAsks = runtime.pendingAsks.filter((ask) => nowMs - ask.atMs <= ownLineWindowMs);
+    const keptIndex = runtime.pendingAsks.findIndex((ask) => ask.name === storedName);
+    if (keptIndex !== -1) {
+      // Kept as asked; the asks before it, whose lines never came, are forgotten with it.
+      runtime.pendingAsks.splice(0, keptIndex + 1);
+      return;
+    }
+    const asked = runtime.pendingAsks[0];
+    if (asked === undefined || !checkIsNameReduction(storedName, asked.name)) return;
+    runtime.pendingAsks.shift();
+    logUnkeptOnce(key, runtime, asked.name, `Telegram stored «${storedName}»`);
+    const binding = getState().getBinding(key);
+    // The belief moved on already — a newer ask answered ok (its own line tells what the topic shows now), or an owner's rename — so this line is history.
+    if (!binding || binding.indicatorAppliedName !== asked.name) return;
+    runtime.unkept = { appliedName: storedName, desiredName: asked.name, isTitleKnown: true };
+    void getState().setBindingTopicNaming(key, { indicatorAppliedName: storedName }).then(() => requestRefresh(key)).catch((error) => {
+      log(`[topic-indicator] ${keyToString(key)}: saving the name Telegram stored failed: ${error instanceof Error ? error.message : error}`);
+    });
+  }
+
   /** Write the name the topic should show now, if the plan still says so inside the lock. */
   async function writeDesiredName(key: SessionKey): Promise<{ outcome: WriteOutcome; error?: unknown }> {
     return writeLock.withLock(keyToString(key), async () => {
@@ -371,9 +435,12 @@ export function createTopicIndicator(ports: TopicIndicatorPorts) {
         if (plan.kind === 'none') noteProbeSilent(key);
         return { outcome: 'idle' };
       }
+      // The ask is noted BEFORE the call: its «renamed» line may come back before the answer is read.
+      noteAsk(runtime, view.desiredName);
       try {
         await sendTopicName(key, view.desiredName);
       } catch (error) {
+        runtime.pendingAsks.pop();
         const kind = classifyRenameError(key, runtime, error);
         // A topic that is gone, or whose rename fails in a way no retry can change (`checkIsTelegramFailureRetryable`: a rejection other than
         // 429 / 5xx, or an error that is neither an answer nor the network's), gives no verdict on the right: were its probe kept for the
@@ -395,11 +462,11 @@ export function createTopicIndicator(ports: TopicIndicatorPorts) {
         // ✅ from a topic name: ok when that is a change, «not modified» when it is none). Believing the asked name would show a mark the topic
         // does not carry. The one name that proves itself is the owner's plain base: «not modified» for it says the title IS the base.
         if (kind === 'noChange' && view.desiredName !== view.base) {
-          runtime.unkept = { appliedName: view.appliedName, desiredName: view.desiredName };
-          if (!runtime.isUnkeptLogged) {
-            runtime.isUnkeptLogged = true;
-            log(`[topic-indicator] ${keyToString(key)}: Telegram did not keep «${view.desiredName}» (answered TOPIC_NOT_MODIFIED: the title already reads as that name without its ending) — not taken for applied, not asked again until the name or the status changes`);
-          }
+          runtime.unkept = { appliedName: view.appliedName, desiredName: view.desiredName, isTitleKnown: false };
+          // The owner's ask WAS answered: were the flag kept, the next wish that is none of his would skip the settle time and the gap, and a
+          // short reply would flash its ⏳ for a minute.
+          runtime.isOwnerChangePending = false;
+          logUnkeptOnce(key, runtime, view.desiredName, 'TOPIC_NOT_MODIFIED — Telegram dropped part of the name, or the bot\'s belief was stale');
           noteProbeSilent(key);
           return { outcome: 'idle' };
         }
@@ -493,11 +560,12 @@ export function createTopicIndicator(ports: TopicIndicatorPorts) {
   }
 
   /**
-   * @description The bot's own «renamed the topic» service line came back as an update: delete it, so the topic shows no trace of a
-   * status change. Best effort — without the right to delete the renames still happen and the lines stay (the picker says so); a line
+   * @description The bot's own «renamed the topic» service line came back as an update, carrying `storedName` — what Telegram stored for
+   * the ask ({@link judgeOwnRenameLine}). Delete it, so the topic shows no trace of a status change. Best effort — without the right to delete the renames still happen and the lines stay (the picker says so); a line
    * that is already gone is fine, and any other failure (a reset, a 429 after its retry) is logged once and says nothing about the right.
    */
-  async function handleOwnRenameLine(key: SessionKey, messageId: number): Promise<void> {
+  async function handleOwnRenameLine(key: SessionKey, messageId: number, storedName: string): Promise<void> {
+    judgeOwnRenameLine(key, storedName);
     try {
       await deleteMessage(key, messageId);
     } catch (error) {
@@ -529,9 +597,11 @@ export function createTopicIndicator(ports: TopicIndicatorPorts) {
       const binding = getState().getBinding(key);
       if (!binding || binding.topicName === undefined || (binding.indicatorAppliedName ?? binding.topicName) === binding.topicName) return;
       if (checkIsRefused(key)) return;
+      noteAsk(runtime, binding.topicName);
       try {
         await sendTopicName(key, binding.topicName);
       } catch (error) {
+        runtime.pendingAsks.pop();
         if (classifyRenameError(key, runtime, error) !== 'noChange') return;
       }
       runtime.lastRenameAtMs = getNowMs();

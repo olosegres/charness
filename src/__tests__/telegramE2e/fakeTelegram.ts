@@ -645,7 +645,8 @@ export class FakeTelegram {
   }
 
   /** A topic's id is the id of its creation service message, so it comes from the one message sequence. */
-  private createTopic(name: string): { message_thread_id: number; name: string; icon_color: number } {
+  private createTopic(requestedName: string): { message_thread_id: number; name: string; icon_color: number } {
+    const name = this.getStoredTopicName(requestedName);
     const threadId = this.nextMessageId++;
     this.createdTopics.push({ threadId, name });
     this.topicNames.set(threadId, name);

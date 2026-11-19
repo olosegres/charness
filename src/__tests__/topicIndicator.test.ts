@@ -746,6 +746,135 @@ describe('the status mark of topic names', () => {
       assert.equal(getAppliedName(harness), 'Deploy 🟢');
     });
 
+    it('«not modified» may mean the BELIEF was stale: a later wish equal to that stale belief is still written, never taken for «already shown»', async () => {
+      const harness = await createHarness();
+      // The bot believes ⏳, the topic shows 🟢 already (a hot worker killed between the rename and the save): the 🟢 ask is «not modified».
+      await harness.state.setBindingTopicNaming(topic, { indicatorAppliedName: 'Deploy ⏳' });
+      harness.failNextRename.error = createApiError('Bad Request: TOPIC_NOT_MODIFIED');
+      await wantAndWait(harness, topic, { isFinished: true });
+      assert.equal(harness.renameAttempts.length, 1);
+      assert.equal(getAppliedName(harness), 'Deploy ⏳', 'not taken for applied');
+      assert.equal(harness.logs.length, 1);
+      assert.match(harness.logs[0], /dropped part of the name, or the bot's belief was stale/, 'the line does not claim more than is known');
+
+      // The next turn wants ⏳ — the name the stale belief holds. The topic shows 🟢, so it must be asked.
+      await wantAndWait(harness, topic, { isWorking: true }, indicatorSettleMs + indicatorMinRenameGapMs);
+      assert.deepEqual(harness.renames.map((rename) => rename.name), ['Deploy ⏳']);
+      assert.equal(getAppliedName(harness), 'Deploy ⏳');
+    });
+
+    it('«not kept» answers the owner\'s ask: the next wish that is none of his waits for the settle time instead of flashing its mark for a minute', async () => {
+      const harness = await createHarness();
+      harness.failNextRename.error = createApiError('Bad Request: TOPIC_NOT_MODIFIED');
+      setInputs(harness, topic, { isFinished: true });
+      harness.indicator.requestRefresh(topic, { isOwnerChange: true });
+      await harness.settle();
+      assert.equal(harness.renameAttempts.length, 1, 'the owner\'s switch was asked at once');
+
+      // A short turn starts: ⏳ is no wish of the owner, so it waits out the settle time like any other.
+      setInputs(harness, topic, { isWorking: true });
+      harness.indicator.requestRefresh(topic);
+      await harness.settle();
+      assert.equal(harness.renameAttempts.length, 1, 'not at once');
+      await harness.advance(indicatorSettleMs);
+      assert.deepEqual(harness.renames.map((rename) => rename.name), ['Deploy ⏳']);
+    });
+
+    describe('the name on the bot\'s own «renamed» line is what Telegram STORED', () => {
+      /** The topic wants 🟢 and the ask goes through (answer ok): the line that follows says what the title reads now. */
+      async function askFinished(harness: Harness): Promise<void> {
+        await wantAndWait(harness, topic, { isFinished: true });
+        assert.deepEqual(harness.renames.map((rename) => rename.name), ['Deploy 🟢']);
+        assert.equal(getAppliedName(harness), 'Deploy 🟢');
+      }
+
+      it('a line with another name than the one asked — an answer ok that Telegram kept altered — is NOT kept: the stored name is the belief, one line is logged, and the same ask is not repeated', async () => {
+        const harness = await createHarness({ windows: { sweepIntervalMs: 60_000, bootWaveDelayMs: 1_000 } });
+        harness.indicator.start();
+        await askFinished(harness);
+        await harness.indicator.handleOwnRenameLine(topic, 11, 'Deploy');
+        await harness.settle();
+        assert.equal(getAppliedName(harness), 'Deploy', 'the belief is what the topic shows');
+        assert.equal(harness.logs.filter((line) => line.includes('did not keep «Deploy 🟢»') && line.includes('stored «Deploy»')).length, 1);
+        assert.deepEqual(harness.deletions.map((deletion) => deletion.messageId), [11], 'the line is deleted all the same');
+
+        for (const round of [1, 2, 3, 4]) {
+          harness.indicator.requestRefresh(topic);
+          await harness.settle();
+          await harness.advance(60_000 + round);
+        }
+        assert.equal(harness.renameAttempts.length, 1, 'the belief and the wish are the pair that was not kept: nothing is asked again');
+
+        // Another status is written as usual, and the belief follows it.
+        await wantAndWait(harness, topic, { isWorking: true }, indicatorSettleMs + indicatorMinRenameGapMs);
+        assert.deepEqual(harness.renames.map((rename) => rename.name), ['Deploy 🟢', 'Deploy ⏳']);
+        harness.indicator.stop();
+      });
+
+      it('a line with the name that was asked changes nothing', async () => {
+        const harness = await createHarness();
+        await askFinished(harness);
+        await harness.indicator.handleOwnRenameLine(topic, 11, 'Deploy 🟢');
+        await harness.settle();
+        assert.equal(getAppliedName(harness), 'Deploy 🟢');
+        assert.equal(harness.logs.length, 0);
+      });
+
+      it('a line that is nobody\'s to judge changes nothing: a name that is no reduction of the ask, a line with no ask behind it (an earlier life), a line that came after the window', async () => {
+        const harness = await createHarness();
+        await askFinished(harness);
+        await harness.indicator.handleOwnRenameLine(topic, 11, 'Something else entirely');
+        assert.equal(getAppliedName(harness), 'Deploy 🟢', 'no reduction of the ask');
+
+        await harness.indicator.handleOwnRenameLine(topic, 12, 'Deploy 🟢');
+        await harness.indicator.handleOwnRenameLine(topic, 13, 'Deploy');
+        assert.equal(getAppliedName(harness), 'Deploy 🟢', 'the ask was matched with its line already: this one has none');
+
+        await harness.advance(60_000);
+        await wantAndWait(harness, topic, { isAsleep: true }, indicatorSettleMs);
+        await harness.advance(31_000);
+        await harness.indicator.handleOwnRenameLine(topic, 14, 'Deploy');
+        assert.equal(getAppliedName(harness), 'Deploy 💤', 'the ask is overdue: its line is forgotten with it');
+        assert.equal(harness.logs.length, 0);
+      });
+
+      it('an altered ask whose belief a NEWER ask has taken over is history: the belief stays the newer ask\'s', async () => {
+        const harness = await createHarness();
+        await askFinished(harness);
+        // A question comes at once (an edge skips the gap): the ❓ ask is on its way when the 🟢 ask\'s altered line arrives.
+        setInputs(harness, topic, { hasOpenQuestion: true });
+        harness.indicator.requestRefresh(topic);
+        await harness.settle();
+        assert.deepEqual(harness.renames.map((rename) => rename.name), ['Deploy 🟢', 'Deploy ❓']);
+
+        await harness.indicator.handleOwnRenameLine(topic, 31, 'Deploy');
+        await harness.settle();
+        assert.equal(getAppliedName(harness), 'Deploy ❓', 'the belief stays the newest ask: a title that is «Deploy» for a moment is not what the topic will read');
+        await harness.indicator.handleOwnRenameLine(topic, 32, 'Deploy ❓');
+        assert.equal(getAppliedName(harness), 'Deploy ❓');
+        assert.equal(harness.renameAttempts.length, 2, 'and no call is spent on correcting a belief that was never wrong');
+      });
+
+      it('lines come in the order of the asks: the first is kept, the second altered — and it is the latest ask, so its stored name is the belief', async () => {
+        const harness = await createHarness();
+        // ❓ at once, then its answer at once: two asks inside the gap (the edges skip it).
+        await harness.state.setBindingTopicNaming(topic, { indicatorAppliedName: 'Deploy ⏳' });
+        setInputs(harness, topic, { hasOpenQuestion: true });
+        harness.indicator.requestRefresh(topic);
+        await harness.settle();
+        setInputs(harness, topic, { isFinished: true });
+        harness.indicator.requestRefresh(topic);
+        await harness.settle();
+        assert.deepEqual(harness.renames.map((rename) => rename.name), ['Deploy ❓', 'Deploy 🟢']);
+
+        await harness.indicator.handleOwnRenameLine(topic, 21, 'Deploy ❓');
+        assert.equal(getAppliedName(harness), 'Deploy 🟢', 'the ❓ was kept as asked: the 🟢 ask is still to be judged');
+        await harness.indicator.handleOwnRenameLine(topic, 22, 'Deploy');
+        await harness.settle();
+        assert.equal(getAppliedName(harness), 'Deploy', 'the 🟢 ask was the latest: its stored name is the belief');
+      });
+    });
+
     it('a failure a later try may fix is logged once per cause and tried again after a backoff that grows, up to a sweep — with no new signal', async () => {
       const harness = await createHarness({ windows: { sweepIntervalMs: 100_000 } });
       harness.failNextRename.error = createApiError('Bad Request: something odd', 500);
@@ -843,7 +972,7 @@ describe('the status mark of topic names', () => {
   describe('the bot\'s own «renamed» line', () => {
     it('is deleted at once', async () => {
       const harness = await createHarness();
-      await harness.indicator.handleOwnRenameLine(topic, 4242);
+      await harness.indicator.handleOwnRenameLine(topic, 4242, 'Deploy');
       assert.deepEqual(harness.deletions, [{ key: topic, messageId: 4242 }]);
       assert.deepEqual(harness.indicator.getHealth(topic), { isRenameRefused: false, isLineDeletionRefused: false });
     });
@@ -851,8 +980,8 @@ describe('the status mark of topic names', () => {
     it('stays when Telegram REFUSES the delete: one log line and a hint for the picker, while the renames go on', async () => {
       const harness = await createHarness();
       harness.deletionError.current = createApiError('Bad Request: message can\'t be deleted');
-      await harness.indicator.handleOwnRenameLine(topic, 1);
-      await harness.indicator.handleOwnRenameLine(topic, 2);
+      await harness.indicator.handleOwnRenameLine(topic, 1, 'Deploy');
+      await harness.indicator.handleOwnRenameLine(topic, 2, 'Deploy');
       assert.equal(harness.logs.filter((line) => line.includes('stayed')).length, 1);
       assert.equal(harness.indicator.getHealth(topic).isLineDeletionRefused, true);
       await wantAndWait(harness, topic, { isFinished: true });
@@ -862,20 +991,20 @@ describe('the status mark of topic names', () => {
     it('a failure that says nothing about the right — a reset, a 429 after its retry — is logged once and is NOT taken for a missing right', async () => {
       const harness = await createHarness();
       harness.deletionError.current = new Error('socket hang up');
-      await harness.indicator.handleOwnRenameLine(topic, 1);
-      await harness.indicator.handleOwnRenameLine(topic, 2);
+      await harness.indicator.handleOwnRenameLine(topic, 1, 'Deploy');
+      await harness.indicator.handleOwnRenameLine(topic, 2, 'Deploy');
       assert.equal(harness.indicator.getHealth(topic).isLineDeletionRefused, false);
       assert.equal(harness.logs.length, 1, 'one line for the same cause');
       assert.match(harness.logs[0], /deleting the «renamed the topic» line failed: socket hang up/);
       harness.deletionError.current = createApiError('Too Many Requests: retry after 3', 429);
-      await harness.indicator.handleOwnRenameLine(topic, 3);
+      await harness.indicator.handleOwnRenameLine(topic, 3, 'Deploy');
       assert.equal(harness.indicator.getHealth(topic).isLineDeletionRefused, false);
     });
 
     it('the sweep forgets a refusal to delete: the hint must not outlive the missing right', async () => {
       const harness = await createHarness({ windows: { sweepIntervalMs: 60_000, bootWaveDelayMs: 1_000 } });
       harness.deletionError.current = createApiError('Bad Request: not enough rights to delete a message');
-      await harness.indicator.handleOwnRenameLine(topic, 1);
+      await harness.indicator.handleOwnRenameLine(topic, 1, 'Deploy');
       assert.equal(harness.indicator.getHealth(topic).isLineDeletionRefused, true);
       harness.indicator.start();
       await harness.advance(60_000);
@@ -886,7 +1015,7 @@ describe('the status mark of topic names', () => {
     it('a line that was already gone is no refusal', async () => {
       const harness = await createHarness();
       harness.deletionError.current = createApiError('Bad Request: message to delete not found');
-      await harness.indicator.handleOwnRenameLine(topic, 7);
+      await harness.indicator.handleOwnRenameLine(topic, 7, 'Deploy');
       assert.equal(harness.indicator.getHealth(topic).isLineDeletionRefused, false);
       assert.equal(harness.logs.length, 0);
     });

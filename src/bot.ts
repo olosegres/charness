@@ -11460,7 +11460,7 @@ bot.on(message('forum_topic_edited'), async (ctx) => {
   // The bot's OWN rename (its status mark) comes back as this service message: never an owner's rename (stored as a name) nor a
   // stranger's (a `[security]` line) — only a line to delete, so the topic shows no trace of the change.
   if (userId !== undefined && userId === bot.botInfo?.id) {
-    await topicIndicator.handleOwnRenameLine(key, ctx.message.message_id);
+    await topicIndicator.handleOwnRenameLine(key, ctx.message.message_id, newName);
     return;
   }
   if (!userId || !(await checkIsAllowedUser(ctx))) {
@@ -11517,7 +11517,7 @@ async function applyRenamesThatWaitedForColdStart(): Promise<void> {
     if (!key) continue;
     const senderId = renamed.from?.id;
     if (senderId !== undefined && senderId === botUserId) {
-      await topicIndicator.handleOwnRenameLine(key, renamed.message_id);
+      await topicIndicator.handleOwnRenameLine(key, renamed.message_id, renamed.forum_topic_edited.name);
       continue;
     }
     if (!state.getBinding(key)) continue;

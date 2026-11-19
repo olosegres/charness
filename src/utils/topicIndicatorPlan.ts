@@ -205,6 +205,22 @@ export function getOwnerRenameOutcome(savedName: string, appliedName: string | u
   return { base, droppedMark: isOwnMarkDropped ? savedSuffix : null };
 }
 
+/**
+ * @description Whether `storedName` is what Telegram made of `askedName` by DROPPING characters from it — a shorter name every character of
+ * which is in the asked one, in order (`Release 🟢` of `Release ✅ 🟢`, `Deploy` of `Deploy 🟢`). It is how the bot tells that the name on its
+ * own «renamed» line is its own ask, altered, and no stranger's: Telegram only takes characters out (it drops a ✅ anywhere in a name).
+ */
+export function checkIsNameReduction(storedName: string, askedName: string): boolean {
+  const stored = Array.from(storedName);
+  const asked = Array.from(askedName);
+  if (stored.length >= asked.length) return false;
+  let storedIndex = 0;
+  for (const character of asked) {
+    if (character === stored[storedIndex]) storedIndex += 1;
+  }
+  return storedIndex === stored.length;
+}
+
 // ── when a rename may happen ──
 
 /**

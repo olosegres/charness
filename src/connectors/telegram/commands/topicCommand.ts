@@ -316,11 +316,16 @@ export function createTopicCommand(ports: TopicCommandPorts) {
   /** Create the topic, bind it, greet it, and turn the wizard's message into the answer with the link to the new topic. */
   async function createTopic(wizard: TopicWizard, subdir: string): Promise<void> {
     wizard.isCreating = true;
-    const name = wizard.name ?? '';
+    const typedName = wizard.name ?? '';
     const chatId = getTelegramChatId(wizard.originKey);
     let threadId: number;
+    // The name Telegram STORED (it drops some endings, a trailing ✅ among them), not the one typed: it is the owner's name the status
+    // marks are written after, and a base the topic does not carry would make «not modified» prove a name that is not there.
+    let name: string;
     try {
-      threadId = (await bot.telegram.createForumTopic(chatId, name)).message_thread_id;
+      const created = await bot.telegram.createForumTopic(chatId, typedName);
+      threadId = created.message_thread_id;
+      name = created.name;
     } catch (error) {
       forgetWizard(wizard);
       const reason = checkIsMissingTopicRightsError(error)

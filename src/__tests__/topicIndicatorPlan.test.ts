@@ -10,6 +10,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   checkIsBaseTooLongForMark,
+  checkIsNameReduction,
   checkIsTopicIndicatorSwitch,
   composeIndicatorName,
   createTopicStatusPrefsWith,
@@ -322,5 +323,27 @@ describe('names too long for the mark', () => {
 
   it('counts characters, not UTF-16 units', () => {
     assert.ok(!checkIsBaseTooLongForMark('😀'.repeat(visibleBaseChars)), 'an emoji is one character on a phone');
+  });
+});
+
+describe('checkIsNameReduction', () => {
+  it('is a name Telegram made of the asked one by taking characters out, in order: its ✅ dropped from the end or from the middle', () => {
+    assert.equal(checkIsNameReduction('Deploy', 'Deploy ✅'), true);
+    assert.equal(checkIsNameReduction('Deploy', 'Deploy 🟢'), true);
+    assert.equal(checkIsNameReduction('Release 🟢', 'Release ✅ 🟢'), true);
+    assert.equal(checkIsNameReduction('Деплой', 'Деплой ⏳'), true);
+  });
+
+  it('is not the same name, a longer one, a rearranged one, or one that carries a character the asked name has not', () => {
+    assert.equal(checkIsNameReduction('Deploy 🟢', 'Deploy 🟢'), false);
+    assert.equal(checkIsNameReduction('Deploy 🟢 x', 'Deploy 🟢'), false);
+    assert.equal(checkIsNameReduction('🟢 Deploy', 'Deploy 🟢'), false, 'order matters');
+    assert.equal(checkIsNameReduction('Deploy 💤', 'Deploy 🟢'), false);
+    assert.equal(checkIsNameReduction('New', 'Deploy ✅'), false);
+  });
+
+  it('reads a name by characters, not UTF-16 units: an emoji outside the basic plane is one', () => {
+    assert.equal(checkIsNameReduction('A', 'A🟢'), true);
+    assert.equal(checkIsNameReduction('A\ud83d', 'A🟢'), false, 'half of an emoji is no character of the asked name');
   });
 });

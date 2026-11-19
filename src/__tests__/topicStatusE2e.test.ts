@@ -21,6 +21,8 @@
  *     by itself; a crashed agent: ❗️ until its next turn
  *   → a name Telegram does not keep (the fake drops a trailing mark, as Telegram drops ✅): «not modified» for it is logged once, never believed
  *     and not asked again; a switch the owner touches asks once more, and the mark shows once Telegram keeps it
+ *   → the same for an ask Telegram answers OK and keeps altered (the title was not the base): its «renamed» line carries the stored name, which
+ *     becomes the belief — the ask is not repeated until the owner touches a switch
  *   → a topic that is unbound while its question waits gets the owner's name back and nothing after it
  *   → a topic whose own name the bot does not know is never renamed: the candidate (the name it was created with, carried by the root
  *     message of the owner's plain messages) is offered by the picker, General lists such topics, one tap names it and the mark appears
@@ -690,6 +692,34 @@ describe('The status mark of topic names end to end: built charness, fake Bot AP
       await tapPicker(topic, picker, 'tst_same');
     } finally {
       fakeTelegram.strippedTopicNameEndings = [strippedByTelegramEnding];
+    }
+  });
+
+  it('an ask answered OK that Telegram kept altered is not believed either: the «renamed» line carries the stored name, which becomes the belief — and the same ask is not repeated', async () => {
+    // The fake drops 🟢 as Telegram drops ✅. The topic shows ❓ when 🟢 is asked, so the answer is ok (a change) and nothing but the line tells.
+    fakeTelegram.strippedTopicNameEndings = [strippedByTelegramEnding, '🟢'];
+    await setQuestionWait(topic, topicThreadId, 'qw_untilAnswered');
+    try {
+      const question = await askQuestion('Q-8');
+      await waitForTopicName(topicThreadId, `${deployBase} ❓`);
+      await answerQuestion(question);
+      // The turn runs on and ends: «finished» is asked from a title that is not the base — answered ok, stored as «Deploy».
+      await getCharness().waitFor('the topic to read the owner\'s name: the 🟢 was dropped', renameTimeoutMs, () => fakeTelegram.getTopicName(topicThreadId) === deployBase && listRenamedTo(topicThreadId).at(-1) === `${deployBase} 🟢`);
+      await getCharness().waitFor('the stored name to become the belief', replyTimeoutMs, () => readBinding(topicThreadId)?.indicatorAppliedName === deployBase);
+      assert.deepEqual(await watchForRenames(topicThreadId), [], 'no retry loop: «Deploy 🟢» is not asked again');
+
+      // Telegram keeps the mark from now on; the owner touches the switch (he asked): the mark shows.
+      fakeTelegram.strippedTopicNameEndings = [strippedByTelegramEnding];
+      const picker = await openPicker(topic, topicThreadId);
+      await tapPicker(topic, picker, 'tst_finished_0');
+      await waitForTopicName(topicThreadId, deployBase, gapMs);
+      await tapPicker(topic, picker, 'tst_finished_1');
+      await waitForTopicName(topicThreadId, `${deployBase} 🟢`, gapMs);
+      await getCharness().waitFor('the shown mark to be the applied one', replyTimeoutMs, () => readBinding(topicThreadId)?.indicatorAppliedName === `${deployBase} 🟢`);
+      await tapPicker(topic, picker, 'tst_same');
+    } finally {
+      fakeTelegram.strippedTopicNameEndings = [strippedByTelegramEnding];
+      await setQuestionWait(topic, topicThreadId, 'qw_same').catch((error) => console.warn(`the Deploy topic's question wait could not be handed back: ${error instanceof Error ? error.message : error}`));
     }
   });
 
