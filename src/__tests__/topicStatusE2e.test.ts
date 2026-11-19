@@ -604,40 +604,51 @@ describe('The status mark of topic names end to end: built charness, fake Bot AP
 
   it('no right to manage topics: no rename, one log line and a hint; the renames go on once the right is back', async () => {
     // The question waits for ever: this step is about the right, and a question the wait set aside in the middle of it (the flow's wait is
-    // 3 s) would change the buttons under the tap. The next step shares the setting; it is handed back there.
+    // 3 s) would change the buttons under the tap. The next step shares the setting; it hands it back, whatever happens in either.
     await setQuestionWait(topic, topicThreadId, 'qw_untilAnswered');
-    fakeTelegram.canManageTopics = false;
-    const question = await askQuestion('Q-3');
-    await getCharness().waitFor('the refusal to be logged', replyTimeoutMs, () => getCharness().output.includes('the bot may not rename topics'));
-    const renamesAfterRefusal = listRenamedTo(topicThreadId).length;
-    assert.equal(fakeTelegram.getTopicName(topicThreadId), `${deployBase} ✅`, 'the name stays as it was');
-    const picker = await openPicker(topic, topicThreadId);
-    assert.ok(picker.text.includes('Needs the «Manage topics» admin right.'), picker.text);
-    assert.equal(getCharness().output.split('the bot may not rename topics').length - 1, 1, 'one log line');
+    try {
+      fakeTelegram.canManageTopics = false;
+      const question = await askQuestion('Q-3');
+      await getCharness().waitFor('the refusal to be logged', replyTimeoutMs, () => getCharness().output.includes('the bot may not rename topics'));
+      const renamesAfterRefusal = listRenamedTo(topicThreadId).length;
+      assert.equal(fakeTelegram.getTopicName(topicThreadId), `${deployBase} ✅`, 'the name stays as it was');
+      const picker = await openPicker(topic, topicThreadId);
+      assert.ok(picker.text.includes('Needs the «Manage topics» admin right.'), picker.text);
+      assert.equal(getCharness().output.split('the bot may not rename topics').length - 1, 1, 'one log line');
 
-    fakeTelegram.canManageTopics = true;
-    await getCharness().waitFor('the sweep to try again and write the question mark', renameTimeoutMs, () => fakeTelegram.getTopicName(topicThreadId) === `${deployBase} ❓`);
-    assert.ok(listRenamedTo(topicThreadId).length > renamesAfterRefusal - 1);
-    assert.ok(topic.getKeyboardData(fakeTelegram.getMessage(question.message_id) ?? question).flat().every((data) => data.startsWith('qa_')), 'the question is still the waiting one: the wait is not over');
-    await answerQuestion(question);
-    await waitForTopicName(topicThreadId, `${deployBase} ✅`);
+      fakeTelegram.canManageTopics = true;
+      await getCharness().waitFor('the sweep to try again and write the question mark', renameTimeoutMs, () => fakeTelegram.getTopicName(topicThreadId) === `${deployBase} ❓`);
+      assert.ok(listRenamedTo(topicThreadId).length > renamesAfterRefusal - 1);
+      assert.ok(topic.getKeyboardData(fakeTelegram.getMessage(question.message_id) ?? question).flat().every((data) => data.startsWith('qa_')), 'the question is still the waiting one: the wait is not over');
+      await answerQuestion(question);
+      await waitForTopicName(topicThreadId, `${deployBase} ✅`);
+    } finally {
+      // The right is the bot's to have in the steps after this one, however this one ended.
+      fakeTelegram.canManageTopics = true;
+    }
   });
 
   it('no right to delete messages: the renames go on, the «renamed» lines stay, one log line and a hint', async () => {
-    fakeTelegram.isMessageDeletionRefused = true;
-    const linesBefore = fakeTelegram.ownRenameLineIds.length;
-    const question = await askQuestion('Q-4');
-    await waitForTopicName(topicThreadId, `${deployBase} ❓`);
-    await getCharness().waitFor('the line to stay and be logged', replyTimeoutMs, () => getCharness().output.includes('a «renamed the topic» line of the bot stayed'));
-    const stayedLineId = fakeTelegram.ownRenameLineIds[linesBefore];
-    assert.ok(stayedLineId !== undefined && fakeTelegram.getMessage(stayedLineId)?.isDeleted !== true, 'the line is still in the topic');
-    const picker = await openPicker(topic, topicThreadId);
-    assert.ok(picker.text.includes('Without «Delete messages» each change leaves a «renamed» line in the topic.'), picker.text);
+    try {
+      fakeTelegram.isMessageDeletionRefused = true;
+      const linesBefore = fakeTelegram.ownRenameLineIds.length;
+      const question = await askQuestion('Q-4');
+      await waitForTopicName(topicThreadId, `${deployBase} ❓`);
+      await getCharness().waitFor('the line to stay and be logged', replyTimeoutMs, () => getCharness().output.includes('a «renamed the topic» line of the bot stayed'));
+      const stayedLineId = fakeTelegram.ownRenameLineIds[linesBefore];
+      assert.ok(stayedLineId !== undefined && fakeTelegram.getMessage(stayedLineId)?.isDeleted !== true, 'the line is still in the topic');
+      const picker = await openPicker(topic, topicThreadId);
+      assert.ok(picker.text.includes('Without «Delete messages» each change leaves a «renamed» line in the topic.'), picker.text);
 
-    fakeTelegram.isMessageDeletionRefused = false;
-    await answerQuestion(question);
-    await waitForTopicName(topicThreadId, `${deployBase} ✅`);
-    await setQuestionWait(topic, topicThreadId, 'qw_same');
+      fakeTelegram.isMessageDeletionRefused = false;
+      await answerQuestion(question);
+      await waitForTopicName(topicThreadId, `${deployBase} ✅`);
+    } finally {
+      // What the two steps changed is handed back whatever happened in them, so one failure does not fail the steps after it for another cause:
+      // the right to delete, and the Deploy topic's question wait (set in the step before; the failure of THIS call is told, never hides the step's own).
+      fakeTelegram.isMessageDeletionRefused = false;
+      await setQuestionWait(topic, topicThreadId, 'qw_same').catch((error) => console.warn(`the Deploy topic's question wait could not be handed back: ${error instanceof Error ? error.message : error}`));
+    }
   });
 
   it('a topic that is unbound while its question waits gets the owner\'s name back — and nothing is written to it after that', async () => {
