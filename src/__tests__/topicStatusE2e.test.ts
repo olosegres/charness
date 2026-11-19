@@ -22,7 +22,8 @@
  *   → a name Telegram does not keep (the fake drops a trailing mark, as Telegram drops ✅): «not modified» for it is logged once, never believed
  *     and not asked again; a switch the owner touches asks once more, and the mark shows once Telegram keeps it
  *   → the same for an ask Telegram answers OK and keeps altered (the title was not the base): its «renamed» line carries the stored name, which
- *     becomes the belief — the ask is not repeated until the owner touches a switch
+ *     becomes the belief — also when the line reaches the bot before the answer of its own call does (the fake holds that answer) —,
+ *     and the ask is not repeated until the owner touches a switch
  *   → a topic that is unbound while its question waits gets the owner's name back and nothing after it
  *   → a topic whose own name the bot does not know is never renamed: the candidate (the name it was created with, carried by the root
  *     message of the owner's plain messages) is offered by the picker, General lists such topics, one tap names it and the mark appears
@@ -114,6 +115,12 @@ const productionLongPollHoldMs = 50 * 1000;
 const noBacklogWriteDeadlineMs = firstPollHoldMs + 12 * 1000;
 /** What Telegram drops from the end of a topic name (the old «finished» mark): the fake does the same all through the flow. */
 const strippedByTelegramEnding = '✅';
+/**
+ * How long the fake holds the answer of the rename whose «renamed» line the step reads: the call is handled at once (its line is pushed to the
+ * bot), only the answer waits — long enough for the bot to take the line first, far inside the 30 s the bot keeps an ask for its line.
+ * Without it the order of the two is a race of two responses; the bot must judge the same in both, and this fixes the harder one.
+ */
+const lineBeforeAnswerHoldMs = 2500;
 const strangerUser = { id: 909090, is_bot: false, first_name: 'Stranger' };
 /** A reset this long ahead is the wait of the usage-limit step: longer than the ❗️ takes to show (settle time and gap), short enough for a flow. */
 const usageLimitResetAheadMs = gapMs + settleMs + 8000;
@@ -702,10 +709,12 @@ describe('The status mark of topic names end to end: built charness, fake Bot AP
     try {
       const question = await askQuestion('Q-8');
       await waitForTopicName(topicThreadId, `${deployBase} ❓`);
+      // The line of the 🟢 ask reaches the bot BEFORE the answer of that call does: the verdict must wait for the answer's success block.
+      fakeTelegram.holdNextResponse('editForumTopic', lineBeforeAnswerHoldMs, (payload) => payload.name === `${deployBase} 🟢`);
       await answerQuestion(question);
       // The turn runs on and ends: «finished» is asked from a title that is not the base — answered ok, stored as «Deploy».
       await getCharness().waitFor('the topic to read the owner\'s name: the 🟢 was dropped', renameTimeoutMs, () => fakeTelegram.getTopicName(topicThreadId) === deployBase && listRenamedTo(topicThreadId).at(-1) === `${deployBase} 🟢`);
-      await getCharness().waitFor('the stored name to become the belief', replyTimeoutMs, () => readBinding(topicThreadId)?.indicatorAppliedName === deployBase);
+      await getCharness().waitFor('the stored name to become the belief', replyTimeoutMs + lineBeforeAnswerHoldMs, () => readBinding(topicThreadId)?.indicatorAppliedName === deployBase);
       assert.deepEqual(await watchForRenames(topicThreadId), [], 'no retry loop: «Deploy 🟢» is not asked again');
 
       // Telegram keeps the mark from now on; the owner touches the switch (he asked): the mark shows.

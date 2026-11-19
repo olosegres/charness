@@ -811,6 +811,57 @@ describe('the status mark of topic names', () => {
         harness.indicator.stop();
       });
 
+      it('a line that arrives BEFORE the answer of its own call is read is judged after it: the stored name is the belief, never the asked one — and no further ask follows', async () => {
+        const harness = await createHarness({ windows: { sweepIntervalMs: 60_000, bootWaveDelayMs: 1_000 } });
+        harness.indicator.start();
+        // The 🟢 call is on its way (held): Telegram stored «Deploy» and the line is already here, the answer is not.
+        harness.isSendHeld.current = true;
+        setInputs(harness, topic, { isFinished: true });
+        harness.indicator.requestRefresh(topic);
+        await harness.settle();
+        await harness.advance(indicatorSettleMs);
+        assert.equal(harness.renameAttempts.length, 1, 'the ask is in flight');
+        assert.equal(getAppliedName(harness), undefined);
+        await harness.indicator.handleOwnRenameLine(topic, 11, 'Deploy');
+        assert.equal(getAppliedName(harness), undefined, 'the belief is not touched while the call is in flight');
+
+        // The answer is read: the success block stores the asked name — and the verdict, which waited for it, takes the stored one over.
+        harness.isSendHeld.current = false;
+        harness.releaseHeldRenames();
+        await harness.settle();
+        assert.equal(getAppliedName(harness), 'Deploy', 'the topic reads «Deploy»: that is what the bot believes');
+        assert.equal(harness.logs.filter((line) => line.includes('did not keep «Deploy 🟢»')).length, 1);
+
+        for (const round of [1, 2, 3]) {
+          harness.indicator.requestRefresh(topic);
+          await harness.settle();
+          await harness.advance(60_000 + round);
+        }
+        assert.equal(harness.renameAttempts.length, 1, 'nothing is asked again: the pair was not kept');
+        harness.indicator.stop();
+      });
+
+      it('a line that arrives before the answer, while a NEWER ask is already queued behind the call, is history: the newer ask\'s own line decides', async () => {
+        const harness = await createHarness();
+        harness.isSendHeld.current = true;
+        setInputs(harness, topic, { isFinished: true });
+        harness.indicator.requestRefresh(topic);
+        await harness.settle();
+        await harness.advance(indicatorSettleMs);
+        assert.equal(harness.renameAttempts.length, 1);
+        // A question comes while the call is in flight: its write queues behind it.
+        setInputs(harness, topic, { hasOpenQuestion: true });
+        harness.indicator.requestRefresh(topic);
+        await harness.settle();
+        await harness.indicator.handleOwnRenameLine(topic, 11, 'Deploy');
+
+        harness.isSendHeld.current = false;
+        harness.releaseHeldRenames();
+        await harness.settle();
+        assert.deepEqual(harness.renames.map((rename) => rename.name), ['Deploy 🟢', 'Deploy ❓']);
+        assert.equal(getAppliedName(harness), 'Deploy ❓', 'the belief is the newest ask, not the name of the line that came before it');
+      });
+
       it('a line with the name that was asked changes nothing', async () => {
         const harness = await createHarness();
         await askFinished(harness);
