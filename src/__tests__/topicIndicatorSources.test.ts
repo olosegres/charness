@@ -34,6 +34,7 @@ const idleAgent: TopicAgentFacts = {
   hasAgent: true,
   isActive: false,
   isTurnRunning: false,
+  isPerTurnBackend: false,
   watchedWorkerCount: 0,
   hasOpenQuestion: false,
   isStuck: false,
@@ -77,6 +78,18 @@ describe('getTopicStatusInputs', () => {
   it('a stopped process whose conversation is kept is asleep; one with nothing to resume is nothing', () => {
     assert.equal(getTopicStatusInputs({ ...idleAgent, hasResumableSession: true }).isAsleep, true);
     assert.deepEqual(getTopicStatusInputs(idleAgent), { hasOpenQuestion: false, isStuck: false, isWorking: false, isFinished: false, isAsleep: false });
+  });
+
+  it('the per-turn backend\'s stopped process after its turn is FINISHED, not asleep: ✅ until the next turn, as for an agent that stayed up', () => {
+    const afterTurn = getTopicStatusInputs({ ...idleAgent, isPerTurnBackend: true, hasResumableSession: true });
+    assert.deepEqual(afterTurn, { hasOpenQuestion: false, isStuck: false, isWorking: false, isFinished: true, isAsleep: false });
+    assert.equal(getTopicStatusInputs({ ...idleAgent, isPerTurnBackend: true, hasResumableSession: true, isActive: true, isTurnRunning: true }).isWorking, true, 'its turn runs: working');
+    assert.equal(getTopicStatusInputs({ ...idleAgent, isPerTurnBackend: true }).isFinished, false, 'nothing to resume, nothing finished');
+    assert.equal(getTopicStatusInputs({ ...idleAgent, isPerTurnBackend: true, hasResumableSession: true, isStuck: true }).isStuck, true, 'a crash is still stuck — it outranks ✅ in the plan');
+  });
+
+  it('the idle stop of the other backends is asleep: the conversation is kept, the process was stopped on purpose', () => {
+    assert.deepEqual(getTopicStatusInputs({ ...idleAgent, hasResumableSession: true }), { hasOpenQuestion: false, isStuck: false, isWorking: false, isFinished: false, isAsleep: true });
   });
 
   it('a turn flag of a process that is not up counts for nothing', () => {

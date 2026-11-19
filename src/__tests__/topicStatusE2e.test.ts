@@ -15,13 +15,17 @@
  *     saved unchanged keeps the whole stored base
  *   → counts off by default; `/topic_status` switches them on: `📋N` follows the published todo list, and a worker the agent watches
  *     makes the topic work (`⚙️1`) while its own agent rests, until the worker is gone
- *   → the per-turn backend: the process stops after the turn, 💤; a short reply that wakes it writes nothing (no ✅ on the way to ⏳)
- *   → the agent is logged out: ❗️ until it works again
+ *   → the per-turn backend: the process stops after every turn by design and the topic keeps its ✅ until the next turn (⏳ while it
+ *     runs, never 💤); a short reply that wakes it writes nothing (no ⏳ or ✅ on the way)
+ *   → the agent is logged out: ❗️ until it works again; a usage-limit wait with nowhere to switch to: ❗️, leaving it when the wait ends
+ *     by itself; a crashed agent: ❗️ until its next turn
+ *   → a topic that is unbound while its question waits gets the owner's name back and nothing after it
  *   → a topic whose own name the bot does not know is never renamed: the candidate (the name it was created with, carried by the root
  *     message of the owner's plain messages) is offered by the picker, General lists such topics, one tap names it and the mark appears
  *   → a mark turned off in a topic gives the owner's name back at once; «All off» in General does so for every topic
  *   → no right to manage topics: no rename, one log line, a hint; no right to delete: the renames go on and the lines stay
- *   → a restart renames nothing that is already right, and an owner's rename that waited meanwhile is learned before the boot's wave
+ *   → a restart renames nothing that is already right, and an owner's rename that waited meanwhile is learned BEFORE the boot's wave
+ *     writes (the mark that leaves ❓ at boot is the one write that comes at once: it must carry the owner's NEW name)
  *   → the agent's own context names the owner's name, never one with a mark
  *
  * Nothing leaves the machine: the Bot API is on loopback and the agent is a fake. Everything the test starts is stopped in `after`.
@@ -39,6 +43,7 @@ import { spawn, type ChildProcess } from 'child_process';
 import {
   fakeAskQuestion,
   fakeClaudeApiErrorOnceFileName,
+  fakeClaudeCrashOnPromptFileName,
   fakeClaudeLogFileNames,
   fakeStatusWatchTargetFileName,
   type FakeClaudePrompt,
@@ -59,8 +64,12 @@ import {
   writeInstanceEnvFile,
   type IsolatedInstanceLayout,
 } from './e2e/isolatedCharness';
-import { readPersistedState, restartCharnessWithState, startCharnessOnInstance } from './e2e/fallbackFlowKit';
+import { getSessionLaunches, readPersistedState, startCharnessOnInstance } from './e2e/fallbackFlowKit';
+import { bindLeaveCurrentCallback } from '../connectors/telegram/bindPicker';
+import { enDict } from '../i18n/en';
+import { resetBufferMs } from '../apiErrorRetry';
 import { getTelegramFlowTestTimingsEnv } from './telegramE2e/telegramFlowTimings';
+import { getLaunchSessionId } from './jiraE2e/fakeClaudeContract';
 import type { BindingData } from '../state';
 
 const group = { id: -1001111111111, title: 'ExampleGroup' };
@@ -87,12 +96,16 @@ const checkRunTimeoutMs = 2 * 60 * 1000;
 /** How long the fake needs to see the stopped bot's last long poll close. */
 const deadPollSettleMs = 1500;
 const secondTopicThreadId = 222;
+/** A reset this long ahead is the wait of the usage-limit step: longer than the ❗️ takes to show (settle time and gap), short enough for a flow. */
+const usageLimitResetAheadMs = gapMs + settleMs + 8000;
 const secondTopicCreatedName = 'Research';
 const pickerTitle = 'Topic status in the topic list';
 
 const replyTimeoutMs = 20 * 1000;
 /** A name that must wait out the settle time and the gap, with room for a loaded box. */
 const renameTimeoutMs = gapMs + settleMs + 15 * 1000;
+/** The wait of the usage-limit step: the reset, the bot's own buffer after it (production's, not timed), the resume and the mark's change after it, on a loaded box. */
+const usageLimitTimeoutMs = usageLimitResetAheadMs + resetBufferMs + 2 * renameTimeoutMs;
 /** How long a step that proves a rename did NOT happen watches: the gap and the settle time over, then some. */
 const quietWatchMs = gapMs + settleMs + 3000;
 
@@ -105,6 +118,8 @@ let topicThreadId = 0;
 let secondTopic: TopicDriver;
 let defaultTmuxSessionsBefore: string[] = [];
 let worker: ChildProcess | null = null;
+/** Write the instance's env file with the boot wave's window set: a restart shortens it to make the wave come before the polling does. */
+let writeEnvironment: (bootWaveDelay: number) => void = () => { throw new Error('the instance is not set up yet'); };
 
 function getLayout(): IsolatedInstanceLayout {
   if (!layout) throw new Error('the instance layout is not created yet');
@@ -178,11 +193,11 @@ function getFirstOptionData(question: FakeTelegramMessage): string {
   return data;
 }
 
-/** The operator puts a question (`[fake:ask]`): resolves its message once it carries the option buttons. */
-async function askQuestion(label: string): Promise<FakeTelegramMessage> {
-  const sentMessageId = fakeTelegram.pushOperatorMessage(topicThreadId, `${label} [fake:ask] ask me something`);
-  return topic.waitForMessage(`the question of ${label}`, (candidate) =>
-    candidate.message_id > sentMessageId && candidate.text.includes(fakeAskQuestion.question) && topic.getKeyboardData(candidate).flat().some((data) => data.startsWith('qa_')));
+/** The operator puts a question (`[fake:ask]`) in `driver`'s topic: resolves its message once it carries the option buttons. */
+async function askQuestion(label: string, driver: TopicDriver = topic, threadId: number = topicThreadId): Promise<FakeTelegramMessage> {
+  const sentMessageId = fakeTelegram.pushOperatorMessage(threadId, `${label} [fake:ask] ask me something`);
+  return driver.waitForMessage(`the question of ${label}`, (candidate) =>
+    candidate.message_id > sentMessageId && candidate.text.includes(fakeAskQuestion.question) && driver.getKeyboardData(candidate).flat().some((data) => data.startsWith('qa_')));
 }
 
 
@@ -223,7 +238,7 @@ describe('The status mark of topic names end to end: built charness, fake Bot AP
     fakeTelegram.isOwnTopicRenameDelivered = true;
     general = new TopicDriver(fakeTelegram, getCharness, generalTopicThreadId, replyTimeoutMs);
     const apiRoot = await fakeTelegram.start();
-    writeInstanceEnvFile(layout, {
+    const environment = {
       TELEGRAM_BOT_TOKEN: fakeBotToken,
       TELEGRAM_API_ROOT: apiRoot,
       ALLOWED_GROUP_ID: group.id.toString(),
@@ -235,15 +250,19 @@ describe('The status mark of topic names end to end: built charness, fake Bot AP
       // A free port nothing listens on: the boot's OpenCode pre-start finds no server and no binary, and gives up.
       OPENCODE_URL: `http://127.0.0.1:${await getUnservedPort()}`,
       SCHEDULER_MCP_PORT: (await getFreeFixedPort()).toString(),
+    };
+    writeEnvironment = (bootWaveDelay) => writeInstanceEnvFile(getLayout(), {
+      ...environment,
       ...getTelegramFlowTestTimingsEnv({
         topicIndicatorSettleMs: settleMs,
         topicIndicatorMinRenameGapMs: gapMs,
         topicIndicatorSweepMs: sweepMs,
-        topicIndicatorBootWaveDelayMs: bootWaveDelayMs,
+        topicIndicatorBootWaveDelayMs: bootWaveDelay,
         questionSetAsideWaitMs,
         scheduleMinFireIntervalMs: watchCronIntervalMs,
       }),
     });
+    writeEnvironment(bootWaveDelayMs);
   });
 
   after(async () => {
@@ -427,28 +446,63 @@ describe('The status mark of topic names end to end: built charness, fake Bot AP
     assert.ok(again.text.includes('this topic: as in General'));
   });
 
-  it('the per-turn backend: the process stops after the turn, 💤; a short reply that wakes it writes NOTHING — no ✅ on the way to a ⏳ that never comes', async () => {
+  it('the per-turn backend stops its process after every turn by design: the topic shows ⏳ while the turn runs and ✅ after it — never 💤 — and a short reply that wakes it writes NOTHING', async () => {
     const sentId = fakeTelegram.pushOperatorMessage(topicThreadId, '/claude_mode per-turn');
     await topic.waitForMessage('the backend switch answer', (message) => message.message_id > sentId);
-    fakeTelegram.pushOperatorMessage(topicThreadId, 'PT-1 a short reply');
-    await waitForTopicName(topicThreadId, `${deployBase} 💤`);
+    const launchesBeforeLongTurn = getSessionLaunches(getLayout()).length;
+    const renamesBefore = listRenamedTo(topicThreadId).length;
+    fakeTelegram.pushOperatorMessage(topicThreadId, `PT-1 [work-ms:${longTurnMs}] a long turn`);
+    await waitForTopicName(topicThreadId, `${deployBase} ⏳`);
+    await waitForTopicName(topicThreadId, `${deployBase} ✅`, renameTimeoutMs + longTurnMs);
+    // The process is gone now (the per-turn stop), and the topic did not go to sleep: ✅ until the next turn.
+    await getCharness().waitFor('the per-turn process to be stopped', replyTimeoutMs, () => getCharness().output.includes('stopped (code='));
+    assert.deepEqual(listRenamedTo(topicThreadId).slice(renamesBefore), [`${deployBase} ⏳`, `${deployBase} ✅`], 'working, then finished — no 💤 in between or after');
+    assert.deepEqual(await watchForRenames(topicThreadId), [], 'the stopped topic stays ✅: nothing is written while it rests');
 
-    // The gap since the 💤 is over, so a ✅ wanted for an instant on the way would be written at once if the settle time did not hold it.
-    await new Promise((resolve) => setTimeout(resolve, gapMs + 500));
+    // A short reply wakes the stopped process and ends inside the settle time: the topic shows nothing of it.
     const wakeMessageId = fakeTelegram.pushOperatorMessage(topicThreadId, 'PT-2 another short reply');
     await topic.waitForMessage('the reply to the waking prompt', (message) => message.message_id > wakeMessageId);
+    assert.ok(getSessionLaunches(getLayout()).length > launchesBeforeLongTurn, 'the reply was taken by a NEW process: the topic really had stopped');
     const renames = await watchForRenames(topicThreadId);
-    assert.deepEqual(renames, [], `a turn that wakes the sleeping topic and ends inside the settle time shows nothing, not even a ✅: ${JSON.stringify(renames)}`);
-    assert.equal(fakeTelegram.getTopicName(topicThreadId), `${deployBase} 💤`);
+    assert.deepEqual(renames, [], `a turn that wakes the stopped topic and ends inside the settle time shows nothing: ${JSON.stringify(renames)}`);
+    assert.equal(fakeTelegram.getTopicName(topicThreadId), `${deployBase} ✅`);
   });
 
   it('a logged-out agent is ❗️ until it works again', async () => {
     fs.writeFileSync(path.join(getLayout().fakeStateDir, fakeClaudeApiErrorOnceFileName), 'Invalid API key · Please run /login');
     fakeTelegram.pushOperatorMessage(topicThreadId, 'AUTH-1 this turn is refused');
     await waitForTopicName(topicThreadId, `${deployBase} ❗️`);
-    // It is logged in again: the next turn produces output, the notice is retired, the topic goes back to sleep.
+    // It is logged in again: the next turn produces output, the notice is retired, the topic is finished again.
     fakeTelegram.pushOperatorMessage(topicThreadId, 'AUTH-2 hello again');
-    await waitForTopicName(topicThreadId, `${deployBase} 💤`);
+    await waitForTopicName(topicThreadId, `${deployBase} ✅`);
+  });
+
+  it('a usage-limit wait with no account to switch to is ❗️, and the mark leaves it when the wait ends by itself and the agent goes on', async () => {
+    const resetAt = new Date(Date.now() + usageLimitResetAheadMs).toISOString();
+    fakeTelegram.pushOperatorMessage(topicThreadId, `LIMIT-1 [fake:usage-limit-once] [limit-resets:${resetAt}] hit the limit`);
+    await waitForTopicName(topicThreadId, `${deployBase} ❗️`, usageLimitTimeoutMs);
+    const wasStuckUntilMs = Date.now();
+    assert.ok(Object.keys(readPersistedState(getLayout()).apiRetries ?? {}).length === 1, 'a usage-limit wait is armed: nothing to switch to');
+    // The window resets, the bot nudges the agent by itself, the agent goes on: no longer stuck, the topic is finished again.
+    await getCharness().waitFor('the topic to leave ❗️', usageLimitTimeoutMs, () => fakeTelegram.getTopicName(topicThreadId) !== `${deployBase} ❗️`);
+    await waitForTopicName(topicThreadId, `${deployBase} ✅`, usageLimitTimeoutMs);
+    assert.ok(Date.now() - wasStuckUntilMs < usageLimitTimeoutMs, 'the wait ended by itself, nobody wrote to the topic');
+    assert.equal(Object.keys(readPersistedState(getLayout()).apiRetries ?? {}).length, 0, 'the wait is over');
+  });
+
+  it('a crashed agent is ❗️ until its next turn — not stuck for ever, and not hidden by a ✅ — and the next turn clears it', async () => {
+    const crashSwitch = path.join(getLayout().fakeStateDir, fakeClaudeCrashOnPromptFileName);
+    fs.writeFileSync(crashSwitch, '');
+    try {
+      fakeTelegram.pushOperatorMessage(topicThreadId, 'CRASH-1 this prompt kills the agent');
+      await waitForTopicName(topicThreadId, `${deployBase} ❗️`, usageLimitTimeoutMs);
+    } finally {
+      fs.rmSync(crashSwitch, { force: true });
+    }
+    // Nothing runs, nothing is asked of the agent: the mark stays while the topic waits for the owner's next message.
+    assert.deepEqual(await watchForRenames(topicThreadId), [], 'a crash is stuck until the next turn, however long that takes');
+    fakeTelegram.pushOperatorMessage(topicThreadId, 'CRASH-2 are you back?');
+    await waitForTopicName(topicThreadId, `${deployBase} ✅`, usageLimitTimeoutMs);
   });
 
   it('a topic whose own name the bot does not know is NEVER renamed: its candidate is offered, General lists it, one tap names it — and the mark appears', async () => {
@@ -489,7 +543,7 @@ describe('The status mark of topic names end to end: built charness, fake Bot AP
     assert.deepEqual(JSON.parse(fs.readFileSync(path.join(path.dirname(getLayout().envFile), 'settings.json'), 'utf8')).topicStatus, { question: false, stuck: false, working: false, finished: false, asleep: false });
 
     for (const name of ['question', 'stuck', 'working', 'finished', 'asleep']) await tapPicker(general, generalPicker, `tst_${name}_1`);
-    await waitForTopicName(topicThreadId, `${deployBase} 💤`);
+    await waitForTopicName(topicThreadId, `${deployBase} ✅`);
     assert.equal(fakeTelegram.getTopicName(secondTopicThreadId), secondTopicCreatedName, 'the topic with its own set keeps it');
   });
 
@@ -498,7 +552,7 @@ describe('The status mark of topic names end to end: built charness, fake Bot AP
     const question = await askQuestion('Q-3');
     await getCharness().waitFor('the refusal to be logged', replyTimeoutMs, () => getCharness().output.includes('the bot may not rename topics'));
     const renamesAfterRefusal = listRenamedTo(topicThreadId).length;
-    assert.equal(fakeTelegram.getTopicName(topicThreadId), `${deployBase} 💤`, 'the name stays as it was');
+    assert.equal(fakeTelegram.getTopicName(topicThreadId), `${deployBase} ✅`, 'the name stays as it was');
     const picker = await openPicker(topic, topicThreadId);
     assert.ok(picker.text.includes('Needs the «Manage topics» admin right.'), picker.text);
     assert.equal(getCharness().output.split('the bot may not rename topics').length - 1, 1, 'one log line');
@@ -507,7 +561,7 @@ describe('The status mark of topic names end to end: built charness, fake Bot AP
     await getCharness().waitFor('the sweep to try again and write the question mark', renameTimeoutMs, () => fakeTelegram.getTopicName(topicThreadId) === `${deployBase} ❓`);
     assert.ok(listRenamedTo(topicThreadId).length > renamesAfterRefusal - 1);
     await topic.tapAndAwaitAnswer(fakeTelegram.getMessage(question.message_id) ?? question, getFirstOptionData(question));
-    await waitForTopicName(topicThreadId, `${deployBase} 💤`);
+    await waitForTopicName(topicThreadId, `${deployBase} ✅`);
   });
 
   it('no right to delete messages: the renames go on, the «renamed» lines stay, one log line and a hint', async () => {
@@ -523,26 +577,67 @@ describe('The status mark of topic names end to end: built charness, fake Bot AP
 
     fakeTelegram.isMessageDeletionRefused = false;
     await topic.tapAndAwaitAnswer(fakeTelegram.getMessage(question.message_id) ?? question, getFirstOptionData(question));
-    await waitForTopicName(topicThreadId, `${deployBase} 💤`);
+    await waitForTopicName(topicThreadId, `${deployBase} ✅`);
   });
 
-  it('a restart renames nothing that is already right, and an owner\'s rename that waited meanwhile is learned BEFORE the boot\'s wave', async () => {
+  it('a topic that is unbound while its question waits gets the owner\'s name back — and nothing is written to it after that', async () => {
+    const unboundThreadId = fakeTelegram.pushTopicCreated('Billing');
+    const unboundTopic = new TopicDriver(fakeTelegram, getCharness, unboundThreadId, replyTimeoutMs);
+    await unboundTopic.waitForMessage('the welcome of the new topic', () => true);
+    await unboundTopic.sendAndAwaitReply(`/bind ${projectFolder}`, `Bound to \`${projectFolder}\``);
+    await unboundTopic.sendAndAwaitReply('/claude', 'ready in');
+    await waitForTopicName(unboundThreadId, 'Billing ✅');
+    await askQuestion('Q-5', unboundTopic, unboundThreadId);
+    await waitForTopicName(unboundThreadId, 'Billing ❓');
+
+    // «Leave current dir» while the ❓ shows: the question closes, the name goes back — and no look queued by the unbind writes a mark after it.
+    const picker = await unboundTopic.sendAndAwaitReply('/bind', enDict['bind.current'].replace('{subdir}', projectFolder));
+    await unboundTopic.tapAndAwaitAnswer(picker, bindLeaveCurrentCallback);
+    await unboundTopic.waitForMessage('the unbound notice', (message) => message.message_id > picker.message_id && message.text === enDict['thread.unbound']);
+    await waitForTopicName(unboundThreadId, 'Billing', replyTimeoutMs);
+    await getCharness().waitFor('the binding to be gone from the saved state', replyTimeoutMs, () => readBinding(unboundThreadId) === undefined);
+    assert.deepEqual(await watchForRenames(unboundThreadId), [], 'nothing is written to a topic that is no longer bound');
+    assert.equal(listRenamedTo(unboundThreadId).at(-1), 'Billing', 'the last name the bot wrote is the owner\'s own');
+    assert.equal(fakeTelegram.getTopicName(unboundThreadId), 'Billing');
+  });
+
+  it('a restart renames nothing that is already right, and an owner\'s rename that waited meanwhile is learned BEFORE the boot\'s wave writes — also the write that comes at once, a mark leaving ❓', async () => {
+    // Topic «Research» has a question that waits for ever (it is never set aside), so its name carries ❓ across the restart.
+    const waitSentId = fakeTelegram.pushOperatorMessage(secondTopicThreadId, '/question_wait');
+    const waitPicker = await secondTopic.waitForMessage('the question wait picker', (message) => message.message_id > waitSentId && message.text.includes('How long the agent waits'));
+    await secondTopic.tapAndAwaitAnswer(waitPicker, 'qw_untilAnswered');
+    await askQuestion('Q-6', secondTopic, secondTopicThreadId);
+    await waitForTopicName(secondTopicThreadId, `${secondTopicCreatedName} ❓`);
     await new Promise((resolve) => setTimeout(resolve, gapMs));
+    const secondKey = `${group.id}:${secondTopicThreadId}`;
+    await getCharness().waitFor('the saved state', replyTimeoutMs, () => readBinding(secondTopicThreadId)?.indicatorAppliedName === `${secondTopicCreatedName} ❓` && readPersistedState(getLayout()).pendingQuestions?.[secondKey] !== undefined);
     const deployRenamesBefore = listRenames(topicThreadId).length;
     const secondRenamesBefore = listRenames(secondTopicThreadId).length;
-    await getCharness().waitFor('the saved state', replyTimeoutMs, () => readBinding(topicThreadId)?.indicatorAppliedName === `${deployBase} 💤`);
-    // The bot is down; the owner renames the topic meanwhile — the update waits for the bot.
+    const secondSessionId = readPersistedState(getLayout()).agents?.[secondKey]?.claudeSessionId;
+    const secondAgent = getSessionLaunches(getLayout()).filter((launch) => getLaunchSessionId(launch.argv) === secondSessionId).at(-1);
+    assert.ok(secondAgent, 'the topic\'s agent runs');
+
+    // The bot is down: the agent dies (the question with it), and the owner renames both topics — the updates wait for the bot.
     await charness?.stop();
     // The stopped bot's last long poll is closed by the time the fake notices: an update pushed before that is handed to a dead socket and lost.
     await new Promise((resolve) => setTimeout(resolve, deadPollSettleMs));
-    fakeTelegram.pushTopicRenamed(topicThreadId, 'Deploy 3 💤');
-    charness = await restartCharnessWithState(getLayout(), fakeTelegram, getCharness(), () => {});
-    await getCharness().waitFor('the owner\'s rename to be learned', replyTimeoutMs, () => readBinding(topicThreadId)?.topicName === 'Deploy 3');
-    const renames = await watchForRenames(topicThreadId, bootWaveDelayMs + quietWatchMs);
-    assert.deepEqual(renames, [], 'the wave did not overwrite the rename that waited with the old name');
-    assert.equal(listRenames(topicThreadId).length, deployRenamesBefore, 'no rename of the topic since the restart');
-    assert.equal(listRenames(secondTopicThreadId).length, secondRenamesBefore, 'the topic that was right is not renamed');
-    assert.equal(fakeTelegram.getTopicName(topicThreadId), 'Deploy 3 💤');
+    process.kill(secondAgent.pid, 'SIGKILL');
+    fakeTelegram.pushTopicRenamed(secondTopicThreadId, `${secondTopicCreatedName} 2 ❓`);
+    fakeTelegram.pushTopicRenamed(topicThreadId, 'Deploy 3 ✅');
+    // The boot's wave comes at once (1 ms), BEFORE the polling does: only the guard keeps it from writing with the old names.
+    writeEnvironment(1);
+    charness = await startCharnessOnInstance(getLayout(), fakeTelegram);
+    try {
+      await getCharness().waitFor('the owner\'s renames to be learned', replyTimeoutMs, () => readBinding(topicThreadId)?.topicName === 'Deploy 3' && readBinding(secondTopicThreadId)?.topicName === `${secondTopicCreatedName} 2`);
+      // The dead agent's question is gone, so the ❓ leaves — the write that comes at once, skipping the settle time and the gap. It carries the NEW name.
+      await waitForTopicName(secondTopicThreadId, `${secondTopicCreatedName} 2 💤`);
+      assert.deepEqual(listRenamedTo(secondTopicThreadId).slice(secondRenamesBefore), [`${secondTopicCreatedName} 2 💤`], 'the owner\'s rename was never overwritten with the old name');
+      assert.deepEqual(await watchForRenames(topicThreadId), [], 'the topic that was right is not renamed');
+      assert.equal(listRenames(topicThreadId).length, deployRenamesBefore, 'no rename of it since the restart');
+      assert.equal(fakeTelegram.getTopicName(topicThreadId), 'Deploy 3 ✅');
+    } finally {
+      writeEnvironment(bootWaveDelayMs);
+    }
   });
 
   it('the agent\'s own context names the owner\'s name, never one with a mark', () => {

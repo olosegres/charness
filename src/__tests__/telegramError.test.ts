@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { checkIsMessageNotFoundError, checkIsNetworkError, checkIsRetryableTelegramError, checkIsStaleAnswerCallbackQueryError } from '../utils/telegramError';
+import { checkIsMessageDeletionRefusedError, checkIsMessageNotFoundError, checkIsNetworkError, checkIsRetryableTelegramError, checkIsStaleAnswerCallbackQueryError } from '../utils/telegramError';
 
 describe('checkIsStaleAnswerCallbackQueryError', () => {
   it('matches stale answerCallbackQuery Telegram 400 errors', () => {
@@ -21,6 +21,21 @@ describe('checkIsStaleAnswerCallbackQueryError', () => {
       }),
       false,
     );
+  });
+});
+
+describe('checkIsMessageDeletionRefusedError', () => {
+  it('matches the refusals to delete: no right, and a message Telegram will not delete', () => {
+    for (const description of ['Bad Request: message can\'t be deleted', 'Bad Request: message can\'t be deleted for everyone', 'Bad Request: not enough rights to delete a message', 'Bad Request: CHAT_ADMIN_REQUIRED', 'Forbidden: not enough rights']) {
+      assert.equal(checkIsMessageDeletionRefusedError({ response: { error_code: 400, description }, on: { method: 'deleteMessage' } }), true, description);
+    }
+  });
+
+  it('does not match a message that is not there, a 429, a network failure or a thrown string: a later try may work', () => {
+    assert.equal(checkIsMessageDeletionRefusedError({ response: { error_code: 400, description: 'Bad Request: message to delete not found' } }), false);
+    assert.equal(checkIsMessageDeletionRefusedError({ response: { error_code: 429, description: 'Too Many Requests: retry after 5' } }), false);
+    assert.equal(checkIsMessageDeletionRefusedError(new Error('socket hang up')), false);
+    assert.equal(checkIsMessageDeletionRefusedError('nope'), false);
   });
 });
 

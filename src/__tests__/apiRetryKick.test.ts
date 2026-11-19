@@ -603,7 +603,10 @@ describe('the bot wires the kick and the restore, and keeps the saved record mea
   })();
 
   it('a due timer runs the kick under the thread\'s locale, on the bot\'s own retry map and in-flight set', () => {
-    assert.ok(getFunction('async function fireApiRetry(').includes('return withThreadLocale(key, () => runApiRetryKick(apiRetryKickDeps, key));'));
+    const fireApiRetrySource = getFunction('async function fireApiRetry(');
+    assert.ok(fireApiRetrySource.includes('return await withThreadLocale(key, () => runApiRetryKick(apiRetryKickDeps, key));'));
+    // The status mark asks again once the kick is over: the fired timer's entry stays in the map, the wait is not armed any more.
+    assert.ok(/finally \{[^}]*topicIndicator\.requestRefresh\(key\);/.test(fireApiRetrySource));
     assert.ok(kickPorts.includes('entries: apiRetryTimers,') && kickPorts.includes('kicksInFlight: apiRetryKicksInFlight,'));
     // The wake-up probe reads the same two: a retry armed or being kicked is not a turn end.
     assert.ok(botSource.includes('getApiRetryTimer: (keyString) => apiRetryTimers.get(keyString)?.timer,'));

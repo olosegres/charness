@@ -24,6 +24,8 @@ export interface TopicAgentFacts {
   isActive: boolean;
   /** Its turn runs (background tasks and a compaction included). */
   isTurnRunning: boolean;
+  /** Its backend stops the process after EVERY turn (`claude-per-turn`): a stopped process is its normal state between turns, not an idle stop. */
+  isPerTurnBackend: boolean;
   /** The workers the agent watches that still run. */
   watchedWorkerCount: number;
   /** A question of the agent is open: waiting or set aside. */
@@ -36,8 +38,9 @@ export interface TopicAgentFacts {
 
 /**
  * @description The facts a status is chosen from. A topic with no agent has none of them. Working is the agent's own turn OR a watched
- * worker (the agent may rest while its builder runs); finished is a process that is up and not working; asleep is a stopped process whose
- * conversation is kept.
+ * worker (the agent may rest while its builder runs); finished is a process that is up and not working — or, for the per-turn backend, whose
+ * process the bot stopped after the turn that ended (the answer is there to read until the next turn, as for any agent that finished);
+ * asleep is a process the bot stopped at the idle mark with the conversation kept.
  */
 export function getTopicStatusInputs(facts: TopicAgentFacts): TopicStatusInputs {
   if (!facts.hasAgent) return { hasOpenQuestion: false, isStuck: false, isWorking: false, isFinished: false, isAsleep: false };
@@ -46,7 +49,7 @@ export function getTopicStatusInputs(facts: TopicAgentFacts): TopicStatusInputs 
     hasOpenQuestion: facts.hasOpenQuestion,
     isStuck: facts.isStuck,
     isWorking: isAgentWorking || facts.watchedWorkerCount > 0,
-    isFinished: facts.isActive && !isAgentWorking,
-    isAsleep: !facts.isActive && facts.hasResumableSession,
+    isFinished: (facts.isActive && !isAgentWorking) || (!facts.isActive && facts.isPerTurnBackend && facts.hasResumableSession),
+    isAsleep: !facts.isActive && !facts.isPerTurnBackend && facts.hasResumableSession,
   };
 }

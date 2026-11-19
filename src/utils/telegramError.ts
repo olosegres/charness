@@ -32,6 +32,17 @@ export function checkIsMessageNotFoundError(err: unknown): boolean {
   return e.response?.error_code === 400 && /message to (delete|edit) not found/i.test(e.response.description ?? '');
 }
 
+/**
+ * @description Whether a Telegram error is the REFUSAL to delete a message — no right to delete (`not enough rights`,
+ * `CHAT_ADMIN_REQUIRED`) or a message Telegram will not delete (`message can't be deleted`: older than 48 hours, say). The
+ * answer is final until the right changes; a timeout, a reset or a 429 is none of these and a later try may well work.
+ */
+export function checkIsMessageDeletionRefusedError(err: unknown): boolean {
+  if (!checkIsRecord(err)) return false;
+  const e = err as TelegramErrorLike;
+  return /not enough rights|CHAT_ADMIN_REQUIRED|message can't be deleted/i.test(e.response?.description ?? '');
+}
+
 /** Node's socket and DNS error codes for a request that could not reach Telegram, or that it never answered. */
 const networkErrorCodes: ReadonlySet<string> = new Set([
   'ECONNRESET',

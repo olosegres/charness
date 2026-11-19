@@ -205,6 +205,12 @@ describe('getOwnerRenameOutcome', () => {
     assert.deepEqual(getOwnerRenameOutcome('Release ✅', undefined, undefined), { base: 'Release', droppedMark: '✅' }, 'a topic the bot never marked');
   });
 
+  it('a mark the bot wrote a moment ago is not the owner\'s: he opened «Deploy ⏳», the bot wrote «Deploy ✅», he saved «Deploy v2 ⏳»', () => {
+    assert.deepEqual(getOwnerRenameOutcome('Deploy v2 ⏳', 'Deploy ✅', 'Deploy', ['Deploy ✅', 'Deploy ⏳']), { base: 'Deploy v2', droppedMark: null });
+    assert.deepEqual(getOwnerRenameOutcome('Deploy v2 ⏳ 📋2', 'Deploy ✅', 'Deploy', ['Deploy ✅', 'Deploy ⏳ 📋2']), { base: 'Deploy v2', droppedMark: null }, 'a count that changed meanwhile');
+    assert.deepEqual(getOwnerRenameOutcome('Deploy v2 💤', 'Deploy ✅', 'Deploy', ['Deploy ✅', 'Deploy ⏳']), { base: 'Deploy v2', droppedMark: '💤' }, 'a mark the bot did not write recently is the owner\'s');
+  });
+
   it('a plain rename drops nothing', () => {
     assert.deepEqual(getOwnerRenameOutcome('New', 'Deploy ⏳', 'Deploy'), { base: 'New', droppedMark: null });
   });

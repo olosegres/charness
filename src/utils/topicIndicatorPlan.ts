@@ -189,13 +189,15 @@ export interface OwnerRenameOutcome {
 
 /**
  * @description The owner saved `savedName` as the topic's name. The base is that name without a trailing mark of ours. A mark that is NOT
- * the one the bot itself had applied (`Release ✅` typed while ⏳ showed) was the owner's own and is reported as dropped, so the picker can
- * say so once; the bot's own mark left in place by an edit around it (`Deploy v2 ⏳` over `Deploy ⏳`) is no news.
+ * one the bot itself had written — `appliedName` or any of `recentAppliedNames` (he may have opened the name before the bot changed its
+ * mark) — is the owner's own (`Release ✅` typed while ⏳ showed) and is reported as dropped, so the picker can say so once; a mark of the
+ * bot's own left in place by an edit around it (`Deploy v2 ⏳` over `Deploy ⏳`) is no news.
  */
-export function getOwnerRenameOutcome(savedName: string, appliedName: string | undefined, storedBase: string | undefined): OwnerRenameOutcome {
+export function getOwnerRenameOutcome(savedName: string, appliedName: string | undefined, storedBase: string | undefined, recentAppliedNames: readonly string[] = []): OwnerRenameOutcome {
   const base = stripIndicatorSuffix(savedName, appliedName, storedBase);
   const savedSuffix = getIndicatorSuffix(savedName);
-  const isOwnMarkDropped = savedSuffix !== '' && savedName !== appliedName && savedSuffix !== getIndicatorSuffix(appliedName ?? '');
+  const botSuffixes = [appliedName ?? '', ...recentAppliedNames].map(getIndicatorSuffix);
+  const isOwnMarkDropped = savedSuffix !== '' && savedName !== appliedName && !botSuffixes.includes(savedSuffix);
   return { base, droppedMark: isOwnMarkDropped ? savedSuffix : null };
 }
 

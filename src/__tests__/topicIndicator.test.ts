@@ -2,8 +2,9 @@
  * @description The refresher of the status mark at the end of a topic's name (`connectors/telegram/topicIndicator.ts`) over fake ports, a
  * fake clock and a real `StateStore`: what it writes and when — the question edges at once, the settle time of ⏳, the gap between two
  * renames with the latest state winning — what it never writes (a topic whose own name it does not know), how it answers Telegram's
- * refusals (the missing right stops the chat, «not modified» is fine, anything else is logged once), the bot's own «renamed» line, the
- * name put back, the owner's change of a switch, the sweep and the boot wave.
+ * refusals (the missing right is remembered per topic and probed with one topic per sweep, «not modified» is fine, anything else is
+ * logged once and tried again after a backoff), the bot's own «renamed» line, the name put back, a topic that is being unbound, the
+ * owner's change of a switch, the sweep and the boot wave.
  */
 
 /** Test case: N/A — Charness has no Jira tracker. */
@@ -26,7 +27,7 @@ import {
   type TopicStatusInputs,
   type TopicStatusPrefs,
 } from '../utils/topicIndicatorPlan';
-import type { ThreadMessageDeletion } from '../connectors/telegram/commands/botCore';
+import { RateLimitedError } from '../rateLimiter';
 
 const chatId = -1001234567890;
 const topic: SessionKey = makeTelegramKey(chatId, 11);
@@ -55,7 +56,14 @@ interface Harness {
   inputReads: { count: number };
   /** The next `sendTopicName` rejects with this, once. */
   failNextRename: { error: unknown | null };
-  deletionOutcome: { current: ThreadMessageDeletion };
+  /** Every `sendTopicName` call, the refused and failed ones too, by thread id. */
+  renameAttempts: string[];
+  /** The topics (thread ids) Telegram refuses to rename for want of the right. */
+  refusedThreads: Set<string>;
+  /** The topics (thread ids) being unbound right now. */
+  unbindingThreads: Set<string>;
+  /** Every `deleteMessage` rejects with this while it is set. */
+  deletionError: { current: unknown | null };
   isBacklogHandled: { current: boolean };
   nowMs: () => number;
   /** Move the clock forward, running the timers that come due on the way, each at its own instant. */
@@ -107,7 +115,10 @@ describe('the status mark of topic names', () => {
       logs: [],
       inputReads: { count: 0 },
       failNextRename: { error: null },
-      deletionOutcome: { current: 'deleted' },
+      renameAttempts: [],
+      refusedThreads: new Set(),
+      unbindingThreads: new Set(),
+      deletionError: { current: null },
       isBacklogHandled: { current: true },
       nowMs: () => currentMs,
       advance: async (ms) => {
@@ -129,6 +140,7 @@ describe('the status mark of topic names', () => {
     const indicator = createTopicIndicator({
       getState: () => state,
       checkIsMarkableTopic: (key) => key.thread !== generalTopic.thread,
+      checkIsUnbinding: (key) => parts.unbindingThreads.has(key.thread),
       getPrefs: () => parts.prefs.current,
       getStatusInputs: (key) => {
         parts.inputReads.count += 1;
@@ -137,6 +149,8 @@ describe('the status mark of topic names', () => {
       getAgentsCount: () => parts.counts.agents,
       getQueuedCount: () => parts.counts.queued,
       sendTopicName: async (key, name) => {
+        parts.renameAttempts.push(key.thread);
+        if (parts.refusedThreads.has(key.thread)) throw createApiError('Bad Request: not enough rights to manage topics');
         if (parts.failNextRename.error !== null) {
           const error = parts.failNextRename.error;
           parts.failNextRename.error = null;
@@ -146,7 +160,7 @@ describe('the status mark of topic names', () => {
       },
       deleteMessage: async (key, messageId) => {
         parts.deletions.push({ key, messageId });
-        return parts.deletionOutcome.current;
+        if (parts.deletionError.current !== null) throw parts.deletionError.current;
       },
       checkIsBacklogHandled: () => parts.isBacklogHandled.current,
       windows: {
@@ -353,29 +367,81 @@ describe('the status mark of topic names', () => {
     });
   });
 
+  /** A second and a third topic of the chat, each with its own name known, wanting a mark. */
+  async function bindMoreTopics(harness: Harness): Promise<SessionKey[]> {
+    const keys = [otherTopic, makeTelegramKey(chatId, 33)];
+    for (const [index, key] of keys.entries()) {
+      await harness.state.setBinding(key, 'beta', { topicName: ['Research', 'Billing'][index] });
+      setInputs(harness, key, { isFinished: true });
+    }
+    return keys;
+  }
+
   describe('Telegram\'s answers', () => {
-    it('a missing «Manage topics» right stops the feature for the chat, with one log line and a hint for the picker', async () => {
+    it('a missing «Manage topics» right is remembered for the topic: one log line, a hint for the picker, no second try', async () => {
       const harness = await createHarness();
-      harness.failNextRename.error = createApiError('Bad Request: not enough rights to manage topics');
+      harness.refusedThreads.add(topic.thread);
       await wantAndWait(harness, topic, { isFinished: true });
       assert.deepEqual(harness.indicator.getHealth(topic), { isRenameRefused: true, isLineDeletionRefused: false });
       assert.equal(harness.logs.filter((line) => line.includes('Manage topics')).length, 1);
+      assert.deepEqual(harness.renameAttempts, [topic.thread]);
 
       await wantAndWait(harness, topic, { hasOpenQuestion: true });
-      assert.equal(harness.renames.length, 0, 'not tried again while refused');
+      assert.deepEqual(harness.renameAttempts, [topic.thread], 'not tried again while refused');
       assert.equal(harness.logs.length, 1, 'and no second line');
     });
 
-    it('the sweep tries a refused chat once more, and logs nothing new when it is refused again', async () => {
-      const harness = await createHarness({ windows: { sweepIntervalMs: 120_000, bootWaveDelayMs: 1_000 } });
+    it('a topic the bot made itself — no right needed — keeps its marks while an owner-made topic of the same chat is refused', async () => {
+      const harness = await createHarness();
+      harness.refusedThreads.add(topic.thread);
+      const [botMadeTopic] = await bindMoreTopics(harness);
+      setInputs(harness, topic, { isFinished: true });
+      harness.indicator.requestRefresh(topic);
+      harness.indicator.requestRefresh(botMadeTopic);
+      await harness.settle();
+      await harness.advance(indicatorSettleMs);
+      assert.deepEqual(harness.renames.map((rename) => `${rename.key.thread}:${rename.name}`), [`${botMadeTopic.thread}:Research ✅`], 'the refused topic got nothing, the other its mark');
+      assert.equal(harness.indicator.getHealth(topic).isRenameRefused, true, 'the picker still says why the owner-made topic has no mark');
+      assert.equal(harness.logs.filter((line) => line.includes('Manage topics')).length, 1, 'one line for the chat');
+    });
+
+    it('a chat without the right costs ONE failing call per sweep — the probe, the oldest refused topic — not one per topic', async () => {
+      const harness = await createHarness({ windows: { sweepIntervalMs: 60_000, bootWaveDelayMs: 1_000 } });
+      const moreTopics = await bindMoreTopics(harness);
+      for (const key of [topic, ...moreTopics]) harness.refusedThreads.add(key.thread);
+      setInputs(harness, topic, { isFinished: true });
       harness.indicator.start();
-      harness.failNextRename.error = createApiError('Bad Request: not enough rights');
+      for (const key of [topic, ...moreTopics]) harness.indicator.requestRefresh(key);
+      await harness.settle();
+      await harness.advance(indicatorSettleMs);
+      assert.equal(harness.renameAttempts.length, 3, 'each topic is refused once, as it is first looked at');
+
+      await harness.advance(60_000);
+      assert.equal(harness.renameAttempts.length, 4, 'a sweep probes one topic');
+      await harness.advance(60_000);
+      assert.equal(harness.renameAttempts.length, 5, 'and the next one');
+      assert.equal(new Set(harness.renameAttempts.slice(3)).size, 2, 'a probe that is refused again goes to the end: the next sweep probes another topic');
+
+      // The right is granted: the next probe succeeds, and only then do the other topics try again.
+      harness.refusedThreads.clear();
+      await harness.advance(60_000);
+      await harness.advance(indicatorSettleMs);
+      assert.deepEqual(harness.renames.map((rename) => rename.name).sort(), ['Billing ✅', 'Deploy ✅', 'Research ✅']);
+      assert.equal(harness.indicator.getHealth(topic).isRenameRefused, false);
+      harness.indicator.stop();
+    });
+
+    it('a probe that came to no write — nothing wanted a mark — says nothing about the right: the next sweep lets every topic try again', async () => {
+      const harness = await createHarness({ windows: { sweepIntervalMs: 60_000, bootWaveDelayMs: 1_000 } });
+      harness.refusedThreads.add(topic.thread);
       await wantAndWait(harness, topic, { isFinished: true });
       assert.equal(harness.indicator.getHealth(topic).isRenameRefused, true);
-      // The right is granted meanwhile: the sweep's attempt succeeds.
-      await harness.advance(120_000 + indicatorSettleMs);
-      assert.deepEqual(harness.renames.map((rename) => rename.name), ['Deploy ✅']);
-      assert.equal(harness.indicator.getHealth(topic).isRenameRefused, false);
+      setInputs(harness, topic, {});
+      harness.indicator.start();
+      await harness.advance(60_000);
+      assert.equal(harness.indicator.getHealth(topic).isRenameRefused, true, 'the first sweep chose the probe, which had nothing to write');
+      await harness.advance(60_000);
+      assert.equal(harness.indicator.getHealth(topic).isRenameRefused, false, 'the second dropped the refusal: the hint would be stale');
       harness.indicator.stop();
     });
 
@@ -387,22 +453,57 @@ describe('the status mark of topic names', () => {
       assert.equal(harness.logs.length, 0);
     });
 
-    it('any other failure is logged once per cause and tried again at the next signal', async () => {
-      const harness = await createHarness();
+    it('a failure a later try may fix is logged once per cause and tried again after a backoff that grows, up to a sweep — with no new signal', async () => {
+      const harness = await createHarness({ windows: { sweepIntervalMs: 100_000 } });
       harness.failNextRename.error = createApiError('Bad Request: something odd', 500);
       await wantAndWait(harness, topic, { isFinished: true });
       assert.equal(harness.logs.length, 1);
       assert.match(harness.logs[0], /renaming the topic failed: Bad Request: something odd/);
       assert.equal(getAppliedName(harness), undefined, 'nothing is recorded as applied');
       assert.equal(harness.indicator.getHealth(topic).isRenameRefused, false);
+      assert.equal(harness.renameAttempts.length, 1);
 
+      // The retry comes after the minimum gap (60 s); it fails too, and the next waits twice as long, capped at the sweep.
       harness.failNextRename.error = createApiError('Bad Request: something odd', 500);
-      harness.indicator.requestRefresh(topic);
-      await harness.settle();
+      await harness.advance(indicatorMinRenameGapMs - 1);
+      assert.equal(harness.renameAttempts.length, 1, 'not before the backoff is over');
+      await harness.advance(1);
+      assert.equal(harness.renameAttempts.length, 2, 'the first retry');
       assert.equal(harness.logs.length, 1, 'the same cause is not logged again');
-      harness.indicator.requestRefresh(topic);
-      await harness.settle();
-      assert.deepEqual(harness.renames.map((rename) => rename.name), ['Deploy ✅'], 'the next signal after the failures writes it');
+      await harness.advance(99_999);
+      assert.equal(harness.renameAttempts.length, 2, 'the second backoff is longer than the first, capped at the sweep');
+      await harness.advance(1);
+      assert.deepEqual(harness.renames.map((rename) => rename.name), ['Deploy ✅'], 'the second retry wrote the latest name');
+      assert.equal(harness.renameAttempts.length, 3);
+    });
+
+    it('a retry writes the LATEST wanted name, not the one that failed', async () => {
+      const harness = await createHarness();
+      harness.failNextRename.error = createApiError('Bad Request: something odd', 500);
+      await wantAndWait(harness, topic, { isFinished: true });
+      setInputs(harness, topic, { isAsleep: true });
+      await harness.advance(indicatorMinRenameGapMs);
+      await harness.advance(indicatorSettleMs);
+      assert.deepEqual(harness.renames.map((rename) => rename.name), ['Deploy 💤']);
+    });
+
+    it('a 429\'s own cooldown is the floor of the backoff', async () => {
+      const harness = await createHarness({ windows: { sweepIntervalMs: 10 * indicatorMinRenameGapMs } });
+      harness.failNextRename.error = new RateLimitedError(chatId, 5 * indicatorMinRenameGapMs);
+      await wantAndWait(harness, topic, { isFinished: true });
+      await harness.advance(4 * indicatorMinRenameGapMs);
+      assert.equal(harness.renameAttempts.length, 1, 'the cooldown is not over');
+      await harness.advance(indicatorMinRenameGapMs);
+      assert.deepEqual(harness.renames.map((rename) => rename.name), ['Deploy ✅']);
+    });
+
+    it('a topic that is gone or closed is not retried by a timer', async () => {
+      const harness = await createHarness();
+      harness.failNextRename.error = createApiError('Bad Request: message thread not found');
+      await wantAndWait(harness, topic, { isFinished: true });
+      await harness.advance(10 * indicatorMinRenameGapMs);
+      assert.equal(harness.renameAttempts.length, 1);
+      assert.equal(harness.getTimerCount(), 0);
     });
   });
 
@@ -414,9 +515,9 @@ describe('the status mark of topic names', () => {
       assert.deepEqual(harness.indicator.getHealth(topic), { isRenameRefused: false, isLineDeletionRefused: false });
     });
 
-    it('stays when Telegram refuses the delete: one log line and a hint for the picker, while the renames go on', async () => {
+    it('stays when Telegram REFUSES the delete: one log line and a hint for the picker, while the renames go on', async () => {
       const harness = await createHarness();
-      harness.deletionOutcome.current = 'stayed';
+      harness.deletionError.current = createApiError('Bad Request: message can\'t be deleted');
       await harness.indicator.handleOwnRenameLine(topic, 1);
       await harness.indicator.handleOwnRenameLine(topic, 2);
       assert.equal(harness.logs.filter((line) => line.includes('stayed')).length, 1);
@@ -425,12 +526,80 @@ describe('the status mark of topic names', () => {
       assert.deepEqual(harness.renames.map((rename) => rename.name), ['Deploy ✅']);
     });
 
+    it('a failure that says nothing about the right — a reset, a 429 after its retry — is logged once and is NOT taken for a missing right', async () => {
+      const harness = await createHarness();
+      harness.deletionError.current = new Error('socket hang up');
+      await harness.indicator.handleOwnRenameLine(topic, 1);
+      await harness.indicator.handleOwnRenameLine(topic, 2);
+      assert.equal(harness.indicator.getHealth(topic).isLineDeletionRefused, false);
+      assert.equal(harness.logs.length, 1, 'one line for the same cause');
+      assert.match(harness.logs[0], /deleting the «renamed the topic» line failed: socket hang up/);
+      harness.deletionError.current = createApiError('Too Many Requests: retry after 3', 429);
+      await harness.indicator.handleOwnRenameLine(topic, 3);
+      assert.equal(harness.indicator.getHealth(topic).isLineDeletionRefused, false);
+    });
+
+    it('the sweep forgets a refusal to delete: the hint must not outlive the missing right', async () => {
+      const harness = await createHarness({ windows: { sweepIntervalMs: 60_000, bootWaveDelayMs: 1_000 } });
+      harness.deletionError.current = createApiError('Bad Request: not enough rights to delete a message');
+      await harness.indicator.handleOwnRenameLine(topic, 1);
+      assert.equal(harness.indicator.getHealth(topic).isLineDeletionRefused, true);
+      harness.indicator.start();
+      await harness.advance(60_000);
+      assert.equal(harness.indicator.getHealth(topic).isLineDeletionRefused, false);
+      harness.indicator.stop();
+    });
+
     it('a line that was already gone is no refusal', async () => {
       const harness = await createHarness();
-      harness.deletionOutcome.current = 'gone';
+      harness.deletionError.current = createApiError('Bad Request: message to delete not found');
       await harness.indicator.handleOwnRenameLine(topic, 7);
       assert.equal(harness.indicator.getHealth(topic).isLineDeletionRefused, false);
       assert.equal(harness.logs.length, 0);
+    });
+  });
+
+  describe('a topic that is being unbound', () => {
+    it('a look queued before the unbind began writes nothing — not even a ❓ edge — and the name put back stays the last write', async () => {
+      const harness = await createHarness();
+      await wantAndWait(harness, topic, { isFinished: true });
+      assert.deepEqual(harness.renames.map((rename) => rename.name), ['Deploy ✅']);
+      setInputs(harness, topic, { hasOpenQuestion: true });
+      harness.indicator.requestRefresh(topic);
+      harness.unbindingThreads.add(topic.thread);
+      await harness.settle();
+      assert.equal(harness.renames.length, 1, 'the queued look found the topic unbinding');
+
+      await harness.indicator.restoreBaseName(topic);
+      assert.deepEqual(harness.renames.map((rename) => rename.name), ['Deploy ✅', 'Deploy'], 'the unbind\'s own restore still writes');
+      harness.indicator.requestRefresh(topic);
+      await harness.settle();
+      await harness.advance(settleAndGapMs);
+      assert.equal(harness.renames.length, 2, 'and nothing after it');
+    });
+
+    it('a refresh asked for while the restore runs writes nothing either', async () => {
+      const harness = await createHarness();
+      await wantAndWait(harness, topic, { isFinished: true });
+      setInputs(harness, topic, { hasOpenQuestion: true });
+      harness.unbindingThreads.add(topic.thread);
+      const restore = harness.indicator.restoreBaseName(topic);
+      harness.indicator.requestRefresh(topic);
+      await restore;
+      await harness.settle();
+      await harness.advance(settleAndGapMs);
+      assert.deepEqual(harness.renames.map((rename) => rename.name), ['Deploy ✅', 'Deploy']);
+    });
+  });
+
+  describe('the names the bot wrote', () => {
+    it('the last three are remembered, newest first, for the owner\'s rename to be read against', async () => {
+      const harness = await createHarness();
+      assert.deepEqual(harness.indicator.getRecentAppliedNames(topic), []);
+      for (const inputs of [{ isFinished: true }, { isAsleep: true }, { isStuck: true }, { hasOpenQuestion: true }]) {
+        await wantAndWait(harness, topic, inputs, settleAndGapMs);
+      }
+      assert.deepEqual(harness.indicator.getRecentAppliedNames(topic), ['Deploy ❓', 'Deploy ❗️', 'Deploy 💤']);
     });
   });
 
@@ -471,6 +640,23 @@ describe('the status mark of topic names', () => {
       await harness.advance(1_000 + indicatorSettleMs);
       assert.deepEqual(harness.renames.map((rename) => rename.name), ['Deploy 💤']);
       harness.indicator.stop();
+    });
+
+    it('a signal of the boot itself — a mark leaving ❓ asks for a write at once — waits for the updates that waited: the owner\'s rename made during the downtime is learned first', async () => {
+      const harness = await createHarness();
+      await harness.state.setBindingTopicNaming(topic, { indicatorAppliedName: 'Deploy ❓' });
+      harness.isBacklogHandled.current = false;
+      setInputs(harness, topic, { isFinished: true });
+      harness.indicator.requestRefresh(topic);
+      await harness.settle();
+      await harness.advance(10_000);
+      assert.equal(harness.renames.length, 0, 'nothing is written with a name the owner may have changed meanwhile');
+
+      // The update is handled: the owner had renamed the topic around the mark. Now the write goes out, with his NEW name.
+      await harness.state.setBindingTopicNaming(topic, { topicName: 'Deploy 2', indicatorAppliedName: 'Deploy 2 ❓' });
+      harness.isBacklogHandled.current = true;
+      await harness.advance(1_000);
+      assert.deepEqual(harness.renames.map((rename) => rename.name), ['Deploy 2 ✅'], 'once, with the new name — never the old one');
     });
 
     it('the wave does not wait for ever for a backlog that never settles', async () => {

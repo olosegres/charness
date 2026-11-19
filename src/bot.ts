@@ -75,6 +75,7 @@ import { createQuestionSetAside } from './connectors/telegram/commands/questionS
 import { resolveQuestionWait } from './utils/questionWaitPlan';
 import { getOwnerRenameOutcome, indicatorBootWaveDelayMs, indicatorMinRenameGapMs, indicatorSettleMs, indicatorSweepIntervalMs, resolveTopicStatusPrefs, type TopicStatusInputs } from './utils/topicIndicatorPlan';
 import { createTopicIndicator } from './connectors/telegram/topicIndicator';
+import { installFirstUpdateBatchNote } from './connectors/telegram/firstUpdateBatchNote';
 import { checkIsWatchedWorkerRunning, getTopicStatusInputs } from './utils/topicIndicatorSources';
 import {
   enqueueSend,
@@ -804,6 +805,10 @@ process.on('exit', flushTraceBufferSyncOnExit);
 // send queue, pacer and 429 retry. Telegraf builds a NEW client per update: see the first `bot.use` below.
 wireBotApiClient(bot.telegram, telegramApiAgent);
 
+// The first answered long poll: the updates that waited while the bot was down are in its hands from then on — the boot wave of the topic
+// status marks waits for it and for the dispatcher to be idle, so an owner's rename made during the downtime is learned before the wave writes.
+const firstUpdateBatch = installFirstUpdateBatchNote(bot.telegram);
+
 // Default every text message/edit to NO link preview: a bare URL in agent
 // output otherwise expanded into a large preview card, one per message, in the
 // muted topic (operator complaint 2026-09-07). Installed OUTSIDE the trace wrap
@@ -991,17 +996,6 @@ const pairingRefusalTextKeys: Record<PairingRefusal, string> = {
 bot.use((ctx, next) => {
   wireBotApiClient(ctx.telegram, telegramApiAgent);
   return next();
-});
-
-/** How many updates are being handled right now: the boot's rename wave of the topic status marks waits until the updates that waited while the bot was down are handled. */
-let updatesInFlight = 0;
-bot.use(async (_ctx, next) => {
-  updatesInFlight += 1;
-  try {
-    return await next();
-  } finally {
-    updatesInFlight -= 1;
-  }
 });
 
 // Output-trace `recv` hook — must come before every middleware that can gate or drop an update, so every update is
@@ -2498,7 +2492,12 @@ function holdPromptForLimitResume(key: SessionKey, text: string, heldText?: stri
  * relentlessly.
  */
 async function fireApiRetry(key: SessionKey): Promise<void> {
-  return withThreadLocale(key, () => runApiRetryKick(apiRetryKickDeps, key));
+  try {
+    return await withThreadLocale(key, () => runApiRetryKick(apiRetryKickDeps, key));
+  } finally {
+    // The wait is no longer armed (the entry stays in memory, its timer is gone): the topic is no longer stuck on it.
+    topicIndicator.requestRefresh(key);
+  }
 }
 
 /**
@@ -2790,7 +2789,6 @@ function cancelApiRetry(key: SessionKey): void {
   apiRetryTimers.delete(k);
   clearSavedApiRetry(key);
   clearSavedFiredLimitProbe(key);
-  topicIndicator.requestRefresh(key);
   // The limit episode is over for this thread → retire its two one-shot markers.
   // Unlike the logged-out notice below, BOTH are safe to drop here: the pinned
   // "work resumed" message announces a PAST event (nothing re-posts it), and the
@@ -3884,14 +3882,14 @@ function computePinnedStatusText(key: SessionKey): string | null {
 const topicsStuckUntilNextTurn = new Set<string>();
 
 /**
- * @description Whether the agent of `key`'s topic cannot go on by itself: logged out, a usage-limit wait armed or its notice waiting for
+ * @description Whether the agent of `key`'s topic cannot go on by itself: logged out, a usage-limit wait ARMED (a fired one — its entry kept in memory — is the agent going on) or its notice waiting for
  * the owner (auto-continue off, an API account used up), or a crash / lost conversation not yet followed by a turn.
  */
 function checkIsTopicStuck(key: SessionKey): boolean {
   const k = keyToString(key);
   return (
     authNoticePinnedMessageId.has(k) ||
-    apiRetryTimers.get(k)?.kind === 'usageLimit' ||
+    getArmedApiRetry(key)?.kind === 'usageLimit' ||
     autoContinueOffNoticedThreads.has(k) ||
     balanceExhaustedNoticedThreads.has(k) ||
     topicsStuckUntilNextTurn.has(k)
@@ -3903,43 +3901,49 @@ function getWatchedWorkerCount(key: SessionKey): number {
   return state.getThreadSchedules(key).filter(checkIsWatchedWorkerRunning).length;
 }
 
-/** The name of the backend `key`'s topic runs, when it has agent states: none for a terminal topic and for one that never started an agent. */
-function getTopicIndicatorAdapterName(key: SessionKey): string | null {
+/** What the bot reads of a topic's agent in one go: which backend it runs, whether its process is up and whether its turn runs. */
+interface TopicAgentReading {
+  adapterName: string;
+  isActive: boolean;
+  /** The agent's own turn runs (background tasks and a compaction included): `checkIsWorking`, else `checkIsBusy`. */
+  isTurnRunning: boolean;
+}
+
+/** The adapter names a topic held that no adapter answers to, told once each. */
+const unknownTopicAdapterNamesLogged = new Set<string>();
+
+/**
+ * @description Read the agent of `key`'s topic once: `null` for a topic with no agent states — a terminal topic, one that never started an
+ * agent. A name no adapter answers to (a stale binding) is a topic with an agent that is not up, said once in the log.
+ */
+function readTopicAgent(key: SessionKey): TopicAgentReading | null {
   const adapterName = getThreadAdapterNameRaw(key) ?? state.getAgent(key)?.name;
-  return adapterName !== undefined && adapterName !== terminalAdapterName ? adapterName : null;
-}
-
-/** The adapter of `key`'s topic with whether its process is up; `null` when it has no agent states or the adapter name a stale binding holds is unknown. */
-function getTopicIndicatorAdapter(key: SessionKey): { adapter: AgentAdapter; isActive: boolean } | null {
-  const adapterName = getTopicIndicatorAdapterName(key);
-  if (adapterName === null) return null;
-  try {
-    const adapter = getAdapter(adapterName);
-    return { adapter, isActive: adapter.checkIsActive(key) };
-  } catch {
-    return null;
+  if (adapterName === undefined || adapterName === terminalAdapterName) return null;
+  if (!getKnownAdapterNames().includes(adapterName)) {
+    if (!unknownTopicAdapterNamesLogged.has(adapterName)) {
+      unknownTopicAdapterNamesLogged.add(adapterName);
+      console.warn(`[topic-indicator] ${keyToString(key)}: the topic holds the backend "${adapterName}", which no adapter answers to — no agent states for it`);
+    }
+    return { adapterName, isActive: false, isTurnRunning: false };
   }
-}
-
-/** Whether the topic's own agent runs a turn (background tasks and a compaction included): `checkIsWorking`, else `checkIsBusy`. */
-function checkIsTopicAgentWorking(key: SessionKey): boolean {
-  const found = getTopicIndicatorAdapter(key);
-  if (!found?.isActive) return false;
-  return found.adapter.checkIsWorking ? found.adapter.checkIsWorking(key) : found.adapter.checkIsBusy?.(key) === true;
+  const adapter = getAdapter(adapterName);
+  const isActive = adapter.checkIsActive(key);
+  return { adapterName, isActive, isTurnRunning: isActive && (adapter.checkIsWorking ? adapter.checkIsWorking(key) : adapter.checkIsBusy?.(key) === true) };
 }
 
 /**
  * @description The facts the status mark of `key`'s topic name is chosen from (`utils/topicIndicatorPlan.ts`), read live: an open question
  * (waiting or set aside), a stuck agent, a turn or a watched worker at work, a process that is up and idle (finished) or stopped with the
- * conversation kept (asleep). The rules are `getTopicStatusInputs`.
+ * conversation kept (asleep; for the per-turn backend, whose process stops after every turn, finished). The rules are `getTopicStatusInputs`.
  */
 function getTopicIndicatorInputs(key: SessionKey): TopicStatusInputs {
   const k = keyToString(key);
-  const found = getTopicIndicatorAdapter(key);
+  const agent = readTopicAgent(key);
   return getTopicStatusInputs({
-    hasAgent: getTopicIndicatorAdapterName(key) !== null,
-    isActive: found?.isActive ?? false,
-    isTurnRunning: checkIsTopicAgentWorking(key),
+    hasAgent: agent !== null,
+    isActive: agent?.isActive ?? false,
+    isTurnRunning: agent?.isTurnRunning ?? false,
+    isPerTurnBackend: agent?.adapterName === claudePerTurnAdapterName,
     watchedWorkerCount: getWatchedWorkerCount(key),
     hasOpenQuestion: pendingQuestions.has(k) || (state.getSetAsideQuestions()[k]?.length ?? 0) > 0,
     isStuck: checkIsTopicStuck(key),
@@ -3949,7 +3953,7 @@ function getTopicIndicatorInputs(key: SessionKey): TopicStatusInputs {
 
 /** The agents at work in `key`'s topic: its own while it works, plus each worker it watches. */
 function getTopicIndicatorAgentsCount(key: SessionKey): number {
-  return (checkIsTopicAgentWorking(key) ? 1 : 0) + getWatchedWorkerCount(key);
+  return (readTopicAgent(key)?.isTurnRunning ? 1 : 0) + getWatchedWorkerCount(key);
 }
 
 /** The tasks the topic's agent published as queued (`todo_update`); `inWork` ones are being done and show as working. */
@@ -8445,6 +8449,7 @@ const readInstanceTopicStatus = createTopicStatusSettingsReader(() => getInstanc
 const topicIndicator = createTopicIndicator({
   getState: () => state,
   checkIsMarkableTopic: (key) => checkIsTelegramKey(key) && !checkIsGeneral(key),
+  checkIsUnbinding: (key) => unbindingKeys.has(keyToString(key)),
   getPrefs: (key) => resolveTopicStatusPrefs(readInstanceTopicStatus(), state.getTopicStatusOverride(key)),
   getStatusInputs: getTopicIndicatorInputs,
   getAgentsCount: getTopicIndicatorAgentsCount,
@@ -8453,8 +8458,10 @@ const topicIndicator = createTopicIndicator({
   sendTopicName: async (key, name) => {
     await enqueueSend(key, () => bot.telegram.editForumTopic(getTelegramChatId(key), getTelegramThreadId(key), { name }));
   },
-  deleteMessage: (key, messageId) => deleteThreadMessageDetailed(key, messageId),
-  checkIsBacklogHandled: () => updatesInFlight === 0,
+  deleteMessage: async (key, messageId) => {
+    await enqueueSend(key, () => bot.telegram.deleteMessage(getTelegramChatId(key), messageId));
+  },
+  checkIsBacklogHandled: () => firstUpdateBatch.checkIsFirstBatchFetched() && updateDispatcher.size() === 0,
   windows: {
     settleMs: ENV.testTimings.topicIndicatorSettleMs ?? indicatorSettleMs,
     minGapMs: ENV.testTimings.topicIndicatorMinRenameGapMs ?? indicatorMinRenameGapMs,
@@ -11446,7 +11453,7 @@ bot.on(message('forum_topic_edited'), async (ctx) => {
   }
   const binding = state.getBinding(key);
   // The owner's own words are what is kept: a trailing mark of the bot's is not part of them (`getOwnerRenameOutcome`).
-  const renamed = getOwnerRenameOutcome(newName, binding?.indicatorAppliedName, binding?.topicName);
+  const renamed = getOwnerRenameOutcome(newName, binding?.indicatorAppliedName, binding?.topicName, topicIndicator.getRecentAppliedNames(key));
   if (binding) {
     // The name saved IS what the topic shows now; the candidate (a guess) is settled by it.
     await state.setBindingTopicNaming(key, {
