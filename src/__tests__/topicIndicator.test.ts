@@ -502,6 +502,11 @@ describe('the status mark of topic names', () => {
       harness.refusedThreads.clear();
       harness.isSendHeld.current = true;
       await harness.advance(10_000);
+      // A probe whose call is still queued has no result: the sweeps that came meanwhile did not take it for a silent one — the chat is
+      // still refused (the picker's hint stays) and its binding still says so.
+      assert.equal(harness.indicator.getHealth(topic).isRenameRefused, true, 'the hint stays while the probe is on its way');
+      assert.equal(harness.state.getBinding(topic)?.indicatorRenameRefused, true, 'and so does the flag in the binding');
+      assert.equal(harness.renameAttempts.length, 2, 'one call from the first refusal, ONE probe on its way — the sweeps sent no second');
       harness.isSendHeld.current = false;
       harness.releaseHeldRenames();
       await harness.settle();
@@ -512,6 +517,27 @@ describe('the status mark of topic names', () => {
       harness.indicator.requestRefresh(topic);
       await harness.settle();
       assert.equal(harness.fakeNameOf(topic), 'Deploy ✅');
+      harness.indicator.stop();
+    });
+
+    it('a probe whose name still waits for the settle time has no result yet: the sweeps in between do not drop it, and its write releases the chat', async () => {
+      const harness = await createHarness({ windows: { sweepIntervalMs: 3_000, bootWaveDelayMs: 1_000 } });
+      harness.refusedThreads.add(topic.thread);
+      harness.indicator.start();
+      setInputs(harness, topic, { hasOpenQuestion: true });
+      harness.indicator.requestRefresh(topic);
+      await harness.settle();
+      assert.equal(harness.indicator.getHealth(topic).isRenameRefused, true, 'the ❓ was refused');
+
+      // The question is gone and the agent works: ⏳ waits for the settle time (20 s), longer than several sweeps. The right is back.
+      harness.refusedThreads.clear();
+      setInputs(harness, topic, { isWorking: true });
+      await harness.advance(9_000);
+      assert.equal(harness.indicator.getHealth(topic).isRenameRefused, true, 'the probe waits for its settle time: it said nothing about the right, the hint stays');
+      assert.equal(harness.renames.length, 0);
+      await harness.advance(indicatorSettleMs);
+      assert.deepEqual(harness.renames.map((rename) => rename.name), ['Deploy ⏳']);
+      assert.equal(harness.indicator.getHealth(topic).isRenameRefused, false, 'the write was the probe: the right is back');
       harness.indicator.stop();
     });
 

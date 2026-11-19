@@ -108,6 +108,12 @@ interface RenameRefusal {
   /** Oldest refusal first: the sweep probes the oldest, and a probe that is refused again goes to the end. */
   topicKeys: Set<string>;
   probeKey: string | null;
+  /**
+   * The probe's look ran to a plan with NOTHING to write (the topic wants no mark): it says nothing about the right, and the next sweep
+   * drops it. A probe that has no result yet — its call is still queued on the send gate, or its name still waits for the settle time —
+   * is NOT silent: dropping it would release the chat (and its hint) while the answer is on its way.
+   */
+  isProbeSilent: boolean;
 }
 
 /** How a write of the wanted name ended: written; nothing to write; skipped (refused topic); failed (a later try may work). */
@@ -264,11 +270,14 @@ export function createTopicIndicator(ports: TopicIndicatorPorts) {
   function recordRefusal(key: SessionKey, options: { isRemembered?: boolean } = {}): void {
     const chatId = getTelegramChatId(key);
     const keyString = keyToString(key);
-    const refusal = renameRefusals.get(chatId) ?? { topicKeys: new Set<string>(), probeKey: null };
+    const refusal = renameRefusals.get(chatId) ?? { topicKeys: new Set<string>(), probeKey: null, isProbeSilent: false };
     renameRefusals.set(chatId, refusal);
     refusal.topicKeys.delete(keyString);
     refusal.topicKeys.add(keyString);
-    if (refusal.probeKey === keyString) refusal.probeKey = null;
+    if (refusal.probeKey === keyString) {
+      refusal.probeKey = null;
+      refusal.isProbeSilent = false;
+    }
     if (options.isRemembered !== true && getState().getBinding(key)?.indicatorRenameRefused !== true) {
       void getState().setBindingTopicNaming(key, { indicatorRenameRefused: true }).catch((error) => {
         log(`[topic-indicator] ${keyString}: saving the refused rename failed: ${error instanceof Error ? error.message : error}`);
@@ -278,6 +287,12 @@ export function createTopicIndicator(ports: TopicIndicatorPorts) {
       loggedRefusedChats.add(`rename:${chatId}`);
       log(`[topic-indicator] chat ${chatId}: the bot may not rename topics it did not make (needs the «Manage topics» admin right) — no status marks on those until it does`);
     }
+  }
+
+  /** The look at `key` found nothing to write: when it is the probe of a refused chat, the probe is silent (it says nothing about the right). */
+  function noteProbeSilent(key: SessionKey): void {
+    const refusal = renameRefusals.get(getTelegramChatId(key));
+    if (refusal && refusal.probeKey === keyToString(key)) refusal.isProbeSilent = true;
   }
 
   /** A rename was written: when it was the probe of a refused chat, the right is back — the chat's other topics try again. */
@@ -329,9 +344,16 @@ export function createTopicIndicator(ports: TopicIndicatorPorts) {
     return writeLock.withLock(keyToString(key), async () => {
       if (checkIsRefused(key)) return { outcome: 'refused' };
       const view = observeTopic(key);
-      if (view === null) return { outcome: 'idle' };
+      if (view === null) {
+        noteProbeSilent(key);
+        return { outcome: 'idle' };
+      }
       const runtime = getRuntime(keyToString(key));
-      if (planRename(view, runtime).kind !== 'now') return { outcome: 'idle' };
+      const plan = planRename(view, runtime);
+      if (plan.kind !== 'now') {
+        if (plan.kind === 'none') noteProbeSilent(key);
+        return { outcome: 'idle' };
+      }
       try {
         await sendTopicName(key, view.desiredName);
       } catch (error) {
@@ -378,10 +400,14 @@ export function createTopicIndicator(ports: TopicIndicatorPorts) {
       return;
     }
     const view = observeTopic(key);
-    if (view === null) return;
+    if (view === null) {
+      noteProbeSilent(key);
+      return;
+    }
     const plan = planRename(view, runtime);
     if (plan.kind === 'none') {
       runtime.isOwnerChangePending = false;
+      noteProbeSilent(key);
       return;
     }
     if (plan.kind === 'at') {
@@ -479,7 +505,10 @@ export function createTopicIndicator(ports: TopicIndicatorPorts) {
     runtimes.delete(keyString);
     for (const [chatId, refusal] of renameRefusals) {
       refusal.topicKeys.delete(keyString);
-      if (refusal.probeKey === keyString) refusal.probeKey = null;
+      if (refusal.probeKey === keyString) {
+        refusal.probeKey = null;
+        refusal.isProbeSilent = false;
+      }
       if (refusal.topicKeys.size === 0 && refusal.probeKey === null) renameRefusals.delete(chatId);
     }
   }
@@ -511,8 +540,11 @@ export function createTopicIndicator(ports: TopicIndicatorPorts) {
     lineDeletionRefusedChats.clear();
     for (const [chatId, refusal] of renameRefusals) {
       if (refusal.probeKey !== null) {
+        // The probe has no result yet (its call waits on the send gate, or its name on the settle time): it stays the probe one more round.
+        if (!refusal.isProbeSilent) continue;
         const silentProbeKey = tryKeyFromString(refusal.probeKey);
         refusal.probeKey = null;
+        refusal.isProbeSilent = false;
         if (silentProbeKey) clearRefusalFlag(silentProbeKey);
       }
       const [probeKey] = refusal.topicKeys;
