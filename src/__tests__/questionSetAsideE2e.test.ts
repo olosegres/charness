@@ -522,7 +522,8 @@ describe('A question nobody answers is set aside, end to end: built charness, fa
       assert.equal(toast, fakeAskQuestion.shortOptionLabel, 'the button answers its own question — not «no pending question»');
       await getCharness().waitFor('the agent to get the late answer to the set-aside question', replyTimeoutMs, () => getAgentPrompts('[Late answer to your question asked ').length > latePromptsBefore);
       assert.ok(getAgentPrompts('[Late answer to your question asked ').at(-1)?.text.includes(`Answer: ${fakeAskQuestion.shortOptionLabel}`), 'a late answer, with the label');
-      assert.ok(!getSetAsideRecords().some((record) => record.messageId === stale.message_id), 'the set-aside question is closed');
+      // The bot saves its state a moment after it changes (the debounce): the record is gone from the SAVED state a few ms after the agent heard of the answer.
+      await getCharness().waitFor('the set-aside question to be closed in the saved state', replyTimeoutMs, () => !getSetAsideRecords().some((record) => record.messageId === stale.message_id));
       assert.equal(getControlResponses().length, responsesBefore, 'the question the agent waits on was not answered');
       assert.ok(readPersistedState(getLayout()).pendingQuestions?.[topicKey], 'the new question still waits');
       assert.equal(getWaitingQuestionAskedAt(), nextAskedAt, 'untouched');
