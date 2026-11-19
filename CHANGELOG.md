@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 4.2.0 — 2026-11-20
+
 **Pull requests to Charness are welcome: by opening one you agree to the new Contributor License Agreement, `CLA.md` — no form to sign.**
 Before, outside pull requests were not accepted. Now `CONTRIBUTING.md`, the pull-request template, the README and the licensing FAQ say that a pull request (or a patch) is accepted under `CLA.md`: you keep the copyright in your contribution, and the licensor may ship it under the Charness License and the paid commercial license. If your work belongs to an employer, please write to charnesshub@gmail.com first; the licensor may ask for a company agreement.
 
