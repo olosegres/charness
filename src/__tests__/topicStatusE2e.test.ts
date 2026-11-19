@@ -214,6 +214,25 @@ async function askQuestion(label: string, driver: TopicDriver = topic, threadId:
 }
 
 
+/**
+ * The operator taps an option of `question` (the first, unless `data` names another button) and the step FAILS AT THE TAP when the bot
+ * refuses it with «No pending question» — a refused tap shows only later, as a mark that never leaves, far from its cause. The button is
+ * read from the message as it shows NOW: a question the wait has set aside carries the `qs_` buttons by then (or, for a moment, the old
+ * ones, which the bot answers the same way).
+ */
+async function answerQuestion(question: FakeTelegramMessage, data: string = getFirstOptionData(question), driver: TopicDriver = topic): Promise<string> {
+  const toast = await driver.tapAndAwaitAnswer(fakeTelegram.getMessage(question.message_id) ?? question, data);
+  assert.notEqual(toast, enDict['cb.no_pending_question'], `the tap on ${data} of question ${question.message_id} was refused`);
+  return toast;
+}
+
+/** The operator sets the question wait of `driver`'s topic from its picker: `qw_untilAnswered` (never set aside), `qw_same` (as in General). */
+async function setQuestionWait(driver: TopicDriver, threadId: number, choiceData: string): Promise<void> {
+  const sentMessageId = fakeTelegram.pushOperatorMessage(threadId, '/question_wait');
+  const picker = await driver.waitForMessage('the question wait picker', (message) => message.message_id > sentMessageId && message.text.includes('How long the agent waits'));
+  await driver.tapAndAwaitAnswer(picker, choiceData);
+}
+
 /** The operator opens `/topic_status` in `driver`'s topic: the picker's message. */
 async function openPicker(driver: TopicDriver, threadId: number): Promise<FakeTelegramMessage> {
   const sentMessageId = fakeTelegram.pushOperatorMessage(threadId, '/topic_status');
@@ -318,7 +337,7 @@ describe('The status mark of topic names end to end: built charness, fake Bot AP
     assert.ok(questionRename.atMs - lastRenameAtMs < gapMs, `precondition: the gap since the last rename (${questionRename.atMs - lastRenameAtMs} ms) had not ended — the edge skipped it`);
 
     const answerTapAtMs = Date.now();
-    await topic.tapAndAwaitAnswer(fakeTelegram.getMessage(question.message_id) ?? question, getFirstOptionData(question));
+    await answerQuestion(question);
     await getCharness().waitFor('the ❓ to be taken off', replyTimeoutMs, () => fakeTelegram.getTopicName(topicThreadId) !== `${deployBase} ❓`);
     const afterAnswer = listRenames(topicThreadId).at(-1);
     assert.ok(afterAnswer && afterAnswer.atMs - answerTapAtMs < gapMs, 'the answered question\'s mark went at once, not after the gap');
@@ -339,7 +358,7 @@ describe('The status mark of topic names end to end: built charness, fake Bot AP
     assert.ok(current);
     const lateAnswerData = topic.getKeyboardData(current).flat().find((data) => data.startsWith('qs_')) ?? '';
     assert.ok(lateAnswerData, 'the set-aside question has its buttons');
-    await topic.tapAndAwaitAnswer(current, lateAnswerData);
+    await answerQuestion(current, lateAnswerData);
     await getCharness().waitFor('the ❓ to be taken off by the late answer', renameTimeoutMs, () => fakeTelegram.getTopicName(topicThreadId) !== `${deployBase} ❓`);
     await waitForTopicName(topicThreadId, `${deployBase} ✅`);
   });
@@ -561,6 +580,9 @@ describe('The status mark of topic names end to end: built charness, fake Bot AP
   });
 
   it('no right to manage topics: no rename, one log line and a hint; the renames go on once the right is back', async () => {
+    // The question waits for ever: this step is about the right, and a question the wait set aside in the middle of it (the flow's wait is
+    // 3 s) would change the buttons under the tap. The next step shares the setting; it is handed back there.
+    await setQuestionWait(topic, topicThreadId, 'qw_untilAnswered');
     fakeTelegram.canManageTopics = false;
     const question = await askQuestion('Q-3');
     await getCharness().waitFor('the refusal to be logged', replyTimeoutMs, () => getCharness().output.includes('the bot may not rename topics'));
@@ -573,7 +595,8 @@ describe('The status mark of topic names end to end: built charness, fake Bot AP
     fakeTelegram.canManageTopics = true;
     await getCharness().waitFor('the sweep to try again and write the question mark', renameTimeoutMs, () => fakeTelegram.getTopicName(topicThreadId) === `${deployBase} ❓`);
     assert.ok(listRenamedTo(topicThreadId).length > renamesAfterRefusal - 1);
-    await topic.tapAndAwaitAnswer(fakeTelegram.getMessage(question.message_id) ?? question, getFirstOptionData(question));
+    assert.ok(topic.getKeyboardData(fakeTelegram.getMessage(question.message_id) ?? question).flat().every((data) => data.startsWith('qa_')), 'the question is still the waiting one: the wait is not over');
+    await answerQuestion(question);
     await waitForTopicName(topicThreadId, `${deployBase} ✅`);
   });
 
@@ -589,8 +612,9 @@ describe('The status mark of topic names end to end: built charness, fake Bot AP
     assert.ok(picker.text.includes('Without «Delete messages» each change leaves a «renamed» line in the topic.'), picker.text);
 
     fakeTelegram.isMessageDeletionRefused = false;
-    await topic.tapAndAwaitAnswer(fakeTelegram.getMessage(question.message_id) ?? question, getFirstOptionData(question));
+    await answerQuestion(question);
     await waitForTopicName(topicThreadId, `${deployBase} ✅`);
+    await setQuestionWait(topic, topicThreadId, 'qw_same');
   });
 
   it('a topic that is unbound while its question waits gets the owner\'s name back — and nothing is written to it after that', async () => {
@@ -619,9 +643,7 @@ describe('The status mark of topic names end to end: built charness, fake Bot AP
 
   it('a restart renames nothing that is already right, and an owner\'s rename that waited meanwhile is learned BEFORE the boot\'s wave writes — also the write that comes at once, a mark leaving ❓', async () => {
     // Topic «Research» has a question that waits for ever (it is never set aside), so its name carries ❓ across the restart.
-    const waitSentId = fakeTelegram.pushOperatorMessage(secondTopicThreadId, '/question_wait');
-    const waitPicker = await secondTopic.waitForMessage('the question wait picker', (message) => message.message_id > waitSentId && message.text.includes('How long the agent waits'));
-    await secondTopic.tapAndAwaitAnswer(waitPicker, 'qw_untilAnswered');
+    await setQuestionWait(secondTopic, secondTopicThreadId, 'qw_untilAnswered');
     await askQuestion('Q-6', secondTopic, secondTopicThreadId);
     await waitForTopicName(secondTopicThreadId, `${secondTopicCreatedName} ❓`);
     await new Promise((resolve) => setTimeout(resolve, gapMs));
@@ -656,8 +678,9 @@ describe('The status mark of topic names end to end: built charness, fake Bot AP
     }
   });
 
-  it('a COLD start reads the topic renames that waited before it drops the updates: the owner\'s rename is learned and marked, a stranger\'s is not, a plain message that waited is dropped', async () => {
+  it('a COLD start reads the topic renames that waited before it drops the updates: the owner\'s rename is learned and marked, a stranger\'s is not, the bot\'s own «renamed» line is deleted and never taken for a name, a plain message that waited is dropped', async () => {
     const renamesBefore = listRenames(topicThreadId).length;
+    const pollsBefore = fakeTelegram.listCalls('getUpdates').length;
     await charness?.stop();
     await new Promise((resolve) => setTimeout(resolve, deadPollSettleMs));
     // The heartbeat is a few minutes old: the next boot is a cold start, which drops what waited — as Telegram does, in this fake.
@@ -666,6 +689,8 @@ describe('The status mark of topic names end to end: built charness, fake Bot AP
     fs.writeFileSync(getStatePath(getLayout()), JSON.stringify(persisted));
     fakeTelegram.isPendingDroppedByLaunch = true;
     fakeTelegram.pushTopicRenamed(topicThreadId, 'Deploy 4');
+    // The bot's own last rename, whose echo had not come back before it stopped: its line must be deleted and its name never taken as the owner's.
+    const ownLineId = fakeTelegram.pushTopicRenamed(topicThreadId, 'Deploy ⏳', botUser);
     fakeTelegram.pushTopicRenamed(topicThreadId, 'Hijacked', strangerUser);
     fakeTelegram.pushOperatorMessage(topicThreadId, 'COLD-1 typed while the bot was down');
     try {
@@ -676,9 +701,18 @@ describe('The status mark of topic names end to end: built charness, fake Bot AP
       await getCharness().waitFor('the topic to be called «Deploy 4» plus its mark', renameTimeoutMs, () => /^Deploy 4 [✅💤]$/u.test(fakeTelegram.getTopicName(topicThreadId) ?? ''));
       assert.equal(readBinding(topicThreadId)?.topicName, 'Deploy 4');
       assert.ok(listRenamedTo(topicThreadId).slice(renamesBefore).every((name) => name.startsWith('Deploy 4 ')), `no rename carried the old or the stranger's name: ${JSON.stringify(listRenamedTo(topicThreadId).slice(renamesBefore))}`);
-      assert.match(getCharness().output, /Cold start: 2 topic rename\(s\) waited while the bot was down, 1 applied/);
+      assert.match(getCharness().output, /Cold start: 3 topic rename\(s\) waited while the bot was down, 1 applied/);
       assert.match(getCharness().output, /\[security\] forum_topic_edited in chat -1001111111111 by user 909090/);
-      assert.ok(fakeTelegram.listCalls('getUpdates').some((call) => call.payload.timeout === 0 && JSON.stringify(call.payload.allowed_updates) === '["message"]'), 'the waiting updates were read once, as service messages, without holding the poll');
+      assert.ok(!getCharness().output.includes(`by user ${botUser.id}`), 'the bot\'s own line was no stranger\'s rename');
+      await getCharness().waitFor('the bot\'s own «renamed» line that waited to be deleted', replyTimeoutMs, () => fakeTelegram.getMessage(ownLineId)?.isDeleted === true);
+      // Telegram remembers `allowed_updates`: the read asks with the bot's whole list — the polling's own — never a partial one.
+      const pollsSince = fakeTelegram.listCalls('getUpdates').slice(pollsBefore);
+      const read = pollsSince.find((call) => call.payload.timeout === 0);
+      // The stopped bot's last call (telegraf's ACK of its final batch) carries no subscription and is no poll: the launch's own does.
+      const polling = pollsSince.find((call) => call.payload.timeout !== 0 && call.payload.allowed_updates !== undefined);
+      assert.ok(read && polling, 'the waiting updates were read once (a short poll), and the launch polled after it');
+      assert.deepEqual(read.payload.allowed_updates, polling.payload.allowed_updates, 'the read left the subscription as the launch makes it');
+      assert.ok((read.payload.allowed_updates as string[]).includes('callback_query'), 'the buttons are still subscribed to');
       assert.deepEqual(getAgentPrompts('COLD-1'), [], 'the plain message that waited was dropped, as a cold start always did');
     } finally {
       fakeTelegram.isPendingDroppedByLaunch = false;
@@ -729,6 +763,7 @@ describe('The status mark of topic names end to end: built charness, fake Bot AP
     assert.ok(calls.length > 20, 'the flow renamed topics a good many times');
     assert.ok(calls.every((call) => Object.keys(call.payload).every((field) => ['chat_id', 'message_thread_id', 'name'].includes(field))), 'no call carried an icon');
     assert.equal(listRenames(generalTopicThreadId).length, 0);
-    assert.ok(!getCharness().output.includes('[security] forum_topic_edited'), 'no rename after the cold start was taken for a stranger\'s');
+    // `getCharness()` is the instance of the last restart (the no-backlog one): none of its renames was a stranger's.
+    assert.ok(!getCharness().output.includes('[security] forum_topic_edited'), 'the last instance took no rename for a stranger\'s');
   });
 });

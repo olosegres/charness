@@ -179,7 +179,8 @@ owner's rename made meanwhile is learned first). That wait is the **boot gate** 
 pinned-status refresh wave would otherwise write the old base before the owner's offline rename was learned. `firstUpdateBatchNote.ts` decides «handled»: the first `getUpdates` was answered and the dispatcher is
 empty — OR that first poll is still open after `firstPollHoldMs` (3 s), because Telegram answers at once when updates wait and holds the long poll (50 s) when none does: without that rule the marks, ❓ included,
 would wait the whole cap after almost every restart. A COLD start (downtime over a minute) drops the waiting updates (`dropPendingUpdates`), so `waitingTopicRenames.ts` reads them first (`getUpdates`, `timeout: 0`,
-`allowed_updates: ['message']`, pages of 100, at most 50 pages) and `bot.ts` applies only the `forum_topic_edited` messages of BOUND topics by an authorised sender through `applyOwnerTopicRename` — the path of a live rename — and deletes
+`allowed_updates` = the bot's whole list `botAllowedUpdates` — Telegram REMEMBERS the list a call names, so a partial one would unsubscribe the rest until the launch's first poll resets it —, pages of 100, at most 50 pages; the renames are
+picked out in code) and `bot.ts` applies only the `forum_topic_edited` messages of BOUND topics by an authorised sender through `applyOwnerTopicRename` — the path of a live rename — and deletes
 the bot's own «renamed» lines; everything else is dropped as before and a read that fails is the old behaviour. It runs before `start()`, so the gate is no issue there.
 
 - **The base is the owner's own name** (`binding.topicName`); a topic whose base the bot does not know is never written. It is learned from `forum_topic_created` / `forum_topic_edited`
@@ -190,8 +191,9 @@ the bot's own «renamed» lines; everything else is dropped as before and a read
   leaves the lines and shows a hint in the picker.
 - **Failures are never error reports.** A refused right (`not enough rights`) stops the marks of THAT topic (`renameRefusals`, per topic — a topic the bot made itself needs no right, so one refusal must
   not cost it its marks) — one log line per chat per boot, the picker says why. The refusal is kept with the binding (`indicatorRenameRefused`, cleared by the next rename that is written, loaded on first use), so
-  a restart does not send one failing call per refused topic; a refused chat is re-probed with ONE topic per sweep (`chooseRefusalProbes`, the oldest refused), the others only after it succeeds — a probe that came to
-  no write is dropped from the refusal and the next refused topic is probed, never the whole chat released — so a rights-less chat costs one failing call per round on the shared send gate, never one per topic. «TOPIC_NOT_MODIFIED» means the topic already has the name; any other failure is logged once per cause and
+  a restart does not send one failing call per refused topic; a refused chat is re-probed with ONE topic per sweep (`chooseRefusalProbes`, the oldest refused), the others only after it succeeds — a probe whose look found
+  NOTHING to write (`isProbeSilent`: the topic wants no mark) is dropped from the refusal and the next refused topic is probed, never the whole chat released; a probe that has no result yet — its call still queued on
+  the send gate, its name still waiting for the settle time — stays the probe for another round, so the picker's hint does not flicker — so a rights-less chat costs one failing call per round on the shared send gate, never one per topic. «TOPIC_NOT_MODIFIED» means the topic already has the name; any other failure is logged once per cause and
   retried by a backoff timer (`scheduleRetry`: the gap, doubling to a sweep, or the 429's `retry_after` as the floor) that looks again, so the LATEST name is written; `retryNotBeforeMs` keeps the backoff
   against every change signal — the plan holds all names back until it ends, a ❓ edge and the owner's own change excepted. A 429 is also `enqueueSend`'s own retry.
 - **A topic that is being unbound is never written** (`checkIsUnbinding`, the guard `updatePinnedStatus` uses): `restoreBaseName` waits on the send gate and a late ❓ edge must not land after it.

@@ -11,6 +11,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import type { Update } from 'telegraf/typings/core/types/typegram';
+import type { UpdateType } from 'telegraf/typings/telegram-types';
 import {
   getWaitingTopicRename,
   readWaitingTopicRenames,
@@ -20,6 +21,8 @@ import {
 } from '../connectors/telegram/waitingTopicRenames';
 
 const chat = { id: -1001111111111, type: 'supergroup' as const, title: 'ExampleGroup', is_forum: true as const };
+/** The bot's own subscription (`botAllowedUpdates`): Telegram remembers the list a call names, so the read must hand the whole of it back. */
+const allowedUpdates: UpdateType[] = ['message', 'edited_message', 'callback_query', 'my_chat_member', 'chat_member'];
 const operator = { id: 424242, is_bot: false, first_name: 'Operator' };
 
 function renameUpdate(updateId: number, threadId: number, name: string | undefined): Update {
@@ -45,16 +48,17 @@ describe('getWaitingTopicRename', () => {
 });
 
 describe('readWaitingTopicRenames', () => {
-  it('asks for service messages only and never holds the poll open', async () => {
+  it('asks with the bot\'s whole list of update types — never a partial one Telegram would remember — and never holds the poll open', async () => {
     const requests: WaitingUpdatesRequest[] = [];
-    await readWaitingTopicRenames(async (request) => { requests.push(request); return []; }, () => undefined);
-    assert.deepEqual(requests, [{ limit: waitingUpdatesPageSize, timeout: 0, allowed_updates: ['message'] }]);
+    await readWaitingTopicRenames(async (request) => { requests.push(request); return []; }, () => undefined, allowedUpdates);
+    assert.deepEqual(requests, [{ limit: waitingUpdatesPageSize, timeout: 0, allowed_updates: allowedUpdates }]);
   });
 
-  it('keeps the renames of every topic in order and drops everything else', async () => {
+  it('keeps the renames of every topic in order and drops everything else, the other update types of the list included', async () => {
     const renames = await readWaitingTopicRenames(
       async () => [textUpdate(1), renameUpdate(2, 11, 'Deploy 2'), callbackUpdate(3), renameUpdate(4, 22, 'Research'), renameUpdate(5, 11, 'Deploy 3'), renameUpdate(6, 33, undefined)],
       () => undefined,
+      allowedUpdates,
     );
     assert.deepEqual(renames.map((rename) => [rename.message_thread_id, rename.forum_topic_edited.name]), [[11, 'Deploy 2'], [22, 'Research'], [11, 'Deploy 3']]);
   });
@@ -63,7 +67,7 @@ describe('readWaitingTopicRenames', () => {
     const fullPage = Array.from({ length: waitingUpdatesPageSize }, (_, index) => textUpdate(index + 1));
     const requests: WaitingUpdatesRequest[] = [];
     const pages: Update[][] = [fullPage, [...fullPage.map((update) => ({ ...update, update_id: update.update_id + waitingUpdatesPageSize })).slice(0, 5), renameUpdate(9_999, 11, 'Late')]];
-    const renames = await readWaitingTopicRenames(async (request) => { requests.push(request); return pages[requests.length - 1] ?? []; }, () => undefined);
+    const renames = await readWaitingTopicRenames(async (request) => { requests.push(request); return pages[requests.length - 1] ?? []; }, () => undefined, allowedUpdates);
     assert.deepEqual(requests.map((request) => request.offset), [undefined, waitingUpdatesPageSize + 1], 'the second page starts after the first one\'s last update');
     assert.deepEqual(renames.map((rename) => rename.forum_topic_edited.name), ['Late']);
   });
@@ -73,7 +77,7 @@ describe('readWaitingTopicRenames', () => {
     await readWaitingTopicRenames(async () => {
       calls += 1;
       return Array.from({ length: waitingUpdatesPageSize }, (_, index) => textUpdate(calls * 1000 + index));
-    }, () => undefined);
+    }, () => undefined, allowedUpdates);
     assert.equal(calls, waitingUpdatesMaxPages);
   });
 
@@ -84,7 +88,7 @@ describe('readWaitingTopicRenames', () => {
       calls += 1;
       if (calls === 2) throw new Error('Conflict: terminated by other getUpdates request');
       return Array.from({ length: waitingUpdatesPageSize - 1 }, (_, index) => textUpdate(index + 1)).concat([renameUpdate(500, 11, 'Before the failure')]);
-    }, (error) => errors.push(error));
+    }, (error) => errors.push(error), allowedUpdates);
     assert.deepEqual(renames.map((rename) => rename.forum_topic_edited.name), ['Before the failure']);
     assert.equal(errors.length, 1);
     assert.match(String(errors[0]), /Conflict/);

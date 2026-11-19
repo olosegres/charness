@@ -11504,6 +11504,7 @@ async function applyRenamesThatWaitedForColdStart(): Promise<void> {
   const renames = await readWaitingTopicRenames(
     (request) => bot.telegram.callApi('getUpdates', request),
     (error) => console.warn('[boot] reading the topic renames that waited failed — they are dropped with the other updates:', error instanceof Error ? error.message : error),
+    botAllowedUpdates,
   );
   const botUserId = bot.botInfo?.id ?? (await bot.telegram.getMe()).id;
   let appliedCount = 0;
