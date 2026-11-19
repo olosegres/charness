@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+**When someone answers the AI inside a Jira comment thread, the AI now answers in that thread too — before, its answer came as a new comment at the bottom of the issue.**
+Jira Cloud has threaded replies, and the connector ignored them: a reply reached the agent like any comment, with nothing saying what it answered, and every answer was a new top-level comment. Now a reply reaches the agent marked as one — «A reply in the thread of comment 10240 by Ann, which says: "…"», the start of that comment on one line (never the text of a comment withheld from the agent) — and a request that a reply opened (an @-mention, or a comment on an issue handed to the AI) is answered in that thread: its progress notes, its final answer, its usage-limit notice and its alert, and the queued or over-budget notice about it. An answer that names a comment in `replyToCommentIds` goes into that comment's thread (Jira threads are one level deep, so a reply's answer goes under the thread's first comment) and still mentions its author; a request opened by a hand-over or a top-level comment is answered top-level, as before. If Jira refuses the thread because its comments are gone, the answer is posted as a new comment and the agent is told.
+
 **A topic whose agent finished now shows 🟢 at the end of its name in the topic list — the ✅ of 4.2.0 never appeared, because Telegram drops ✅ from topic names.**
 Before, a finished topic showed no mark at all: Telegram removed the ✅ the bot asked for and answered as if nothing had changed, and the bot believed the mark was there. Now «finished» is a green circle (`Deploy 🟢`), and when Telegram keeps a topic's name different from the one the bot asked for — it answers «not modified», or its «renamed» line carries another name — the bot no longer takes the asked name for what the topic shows, so the next mark is still written. `/topic` binds a new topic under the name Telegram stored.
 

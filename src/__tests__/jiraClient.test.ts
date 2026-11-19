@@ -20,6 +20,8 @@ import {
   jiraGroupMemberPageSize,
   jiraMaxAttempts,
   jiraRetryAfterCapMs,
+  getCommentParentId,
+  getCommentThreadRootId,
   JiraAuthError,
   JiraHttpError,
   type JiraClient,
@@ -212,6 +214,31 @@ describe('createJiraClient', () => {
       ]);
       assert.deepEqual(JSON.parse(requests[0].body), { body: adf });
       assert.deepEqual(JSON.parse(requests[1].body), { accountId: 'placeholder-requester' });
+    });
+
+    it('addComment with a parentId posts a reply in that thread: {body, parentId}; without one the body is as before', async () => {
+      const adf = convertMarkdownToAdf('In the thread.');
+      respondWith({ status: 201, body: json({ id: '20002', parentId: 20001 }) }, { status: 201, body: json({ id: '20003' }) });
+      const client = createClient();
+      assert.deepEqual(await client.addComment('PROJ-7', adf, '20001'), { outcome: 'created', id: '20002' });
+      assert.deepEqual(await client.addComment('PROJ-7', adf, null), { outcome: 'created', id: '20003' });
+      assert.deepEqual(JSON.parse(requests[0].body), { body: adf, parentId: '20001' });
+      assert.deepEqual(JSON.parse(requests[1].body), { body: adf }, 'no parentId key for a top-level comment');
+    });
+
+    it('a reply\'s parentId — a number in Jira\'s answer — is read as text; a top-level comment has none, and starts its own thread', async () => {
+      respondWith({
+        status: 200,
+        body: json({ total: 2, comments: [
+          { id: '10200', author: { accountId: 'a' }, created: '2026-10-03T10:00:00.000+0000', body: null },
+          { id: '10205', author: { accountId: 'b' }, created: '2026-10-03T10:05:00.000+0000', body: null, parentId: 10200 },
+        ] }),
+      });
+      const [root, reply] = await createClient().getRecentComments('PROJ-7', 20);
+      assert.equal(getCommentParentId(root), null);
+      assert.equal(getCommentParentId(reply), '10200');
+      assert.equal(getCommentThreadRootId(root), '10200', 'a top-level comment is its own thread');
+      assert.equal(getCommentThreadRootId(reply), '10200', 'a reply is in its parent\'s');
     });
 
     it('getGroupByName: GET /group/bulk with the name encoded; the group of EXACTLY that name, else null', async () => {

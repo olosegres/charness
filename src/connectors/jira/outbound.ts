@@ -16,7 +16,8 @@ export const jiraCapabilities: ConnectorCapabilities = {
   pinMessages: false,
   tappableOptions: false,
   attachments: false,
-  threadedReplies: false,
+  // Comment threads: an answer goes into the thread its request came from, or of the comment it replies to (`answerSink.ts`).
+  threadedReplies: true,
   activityIndicator: false,
   maxMessageChars: jiraCommentMaxChars,
   markupDialect: 'markdown',

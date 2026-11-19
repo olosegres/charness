@@ -1,6 +1,6 @@
 import { createHash } from 'crypto';
 import { adfNodeSchema, getAdfText, type AdfAttributeValue } from './adf';
-import type { JiraAccount, JiraAttachment, JiraComment, JiraIssueLink, JiraIssueReference } from './client';
+import { getCommentParentId, type JiraAccount, type JiraAttachment, type JiraComment, type JiraIssueLink, type JiraIssueReference } from './client';
 import type { JiraIssueContext } from './issueContext';
 import { jiraParentHierarchyLevel } from './issueContext';
 import { createMediaResolver, getAttachmentIdsByMediaId } from './mediaPlaceholders';
@@ -44,6 +44,11 @@ export interface IssueBlock {
   comment?: IssueBlockComment;
   /** The whole text was written or edited by someone outside the trusted group: the block is a marker, on the heading's own line. */
   isWithheld?: boolean;
+  /**
+   * A reply's line under its heading: the thread it is in — its top-level comment's id, author and an excerpt of its text,
+   * or why that text is not there. Not part of the hash: the reply's own text is what the block says.
+   */
+  replyNote?: string;
 }
 
 /** What a delta says about a comment beyond its text (prompt context C4–C7). */
@@ -73,6 +78,8 @@ export interface JiraBlockTrust {
 }
 
 const withheldWrittenMarker = '[withheld: written or edited by someone outside the trusted group]';
+/** How much of a thread's top-level comment a reply's line quotes, in characters. */
+export const jiraReplyParentExcerptMaxChars = 200;
 const withheldUploadedMarker = '[withheld: uploaded by someone outside the trusted group]';
 /** The ids Jira's changelog names the free-text system fields by. */
 const summaryFieldId = 'summary';
@@ -90,7 +97,8 @@ const namedValueProperties = ['displayName', 'value', 'name'] as const;
  * the heading. A withheld block is one line: its marker follows the heading's colon.
  */
 export function getIssueBlockText(block: IssueBlock, stateNote?: string): string {
-  return `${block.heading}${stateNote ? ` (${stateNote})` : ''}:${block.isWithheld ? ' ' : '\n'}${block.body}`;
+  const replyLine = block.replyNote && !block.isWithheld ? `${block.replyNote}\n` : '';
+  return `${block.heading}${stateNote ? ` (${stateNote})` : ''}:${block.isWithheld ? ' ' : '\n'}${replyLine}${block.body}`;
 }
 
 function getHash(text: string): string {
@@ -293,6 +301,27 @@ function getCommentBlock(comment: JiraComment, text: string, aiAccountId: string
   };
 }
 
+/** `text` on one line, cut to `maxChars` characters (never inside a character) with an ellipsis. */
+function getExcerpt(text: string, maxChars: number): string {
+  const characters = [...getSingleLineText(text)];
+  return characters.length > maxChars ? `${characters.slice(0, maxChars).join('')}…` : characters.join('');
+}
+
+/**
+ * @description The line under a reply's heading (comment threads): which thread it is in, and what the thread's top-level
+ * comment says — its author, its visibility marker and an excerpt, so the agent knows what is being answered even when a
+ * delta does not carry that comment. A top-level comment whose text the agent may not read is named, never quoted; one
+ * that was deleted (its replies stay, Jira keeps their `parentId`) is said to be gone.
+ */
+function getReplyNote(parentId: string, parentComment: JiraComment | undefined, parentBlock: IssueBlock | undefined): string {
+  const id = getSingleLineText(parentId);
+  if (!parentComment || !parentBlock) return `A reply in the thread of comment ${id}, which was deleted.`;
+  if (parentBlock.isWithheld) return `A reply in the thread of comment ${id} ${withheldWrittenMarker}.`;
+  const marker = getCommentVisibilityMarker(parentComment);
+  const excerpt = getExcerpt(parentBlock.fullText, jiraReplyParentExcerptMaxChars) || emptyBodyText;
+  return `A reply in the thread of comment ${id} by ${getAccountName(parentComment.author)}${marker ? ` ${marker}` : ''}, which says: "${excerpt}"`;
+}
+
 /** Oldest first; Jira sorts them already, a tie keeps Jira's order. */
 function getCommentsOldestFirst(comments: readonly JiraComment[]): JiraComment[] {
   return [...comments].sort((left, right) => Date.parse(left.created) - Date.parse(right.created));
@@ -345,11 +374,19 @@ export function buildIssueBlocks(
     const descriptionText = getAdfText(context.issue.fields.description, getResolver(descriptionLocation));
     descriptionBlock = createBlock('description', 'description', 'Description', getQuotedText(descriptionText || emptyBodyText), descriptionText);
   }
-  const commentBlocks = comments.map((comment) => (
+  const ownCommentBlocks = comments.map((comment) => (
     trust !== null && !checkIsCommentTrusted(comment, trust)
       ? getWithheldCommentBlock(comment)
       : getCommentBlock(comment, getAdfText(comment.body, getResolver(`comment ${comment.id}`)), aiAccountId)
   ));
+  // A reply names its thread from the blocks just built, so a withheld top-level comment stays withheld in its replies too.
+  const commentsById = new Map(comments.map((comment) => [comment.id, comment]));
+  const blocksByKey = new Map(ownCommentBlocks.map((block) => [block.key, block]));
+  const commentBlocks = ownCommentBlocks.map((block, index) => {
+    const parentId = getCommentParentId(comments[index]);
+    if (parentId === null || block.isWithheld) return block;
+    return { ...block, replyNote: getReplyNote(parentId, commentsById.get(parentId), blocksByKey.get(`comment:${parentId}`)) };
+  });
   return [
     getFieldsBlock(context, extraFields, trust),
     descriptionBlock,

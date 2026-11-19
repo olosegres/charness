@@ -376,7 +376,7 @@ another platform's state.
   request. Comment first, then the hand-back: a failed hand-back is a delivered answer plus a warning (a retry
   would post it twice). A mention request (origin `trackerMention`) hands nothing back — not its `final`, not its
   `question`, not its alert: the issue was never handed over.
-- **Who an answer notifies** (`resolveMentionTargets`). The first comment of an answer may open with ONE paragraph
+- **Who an answer notifies** (`resolveReplyTargets`). The first comment of an answer may open with ONE paragraph
   of real mention nodes (`createMentionParagraph`: one per person, one space between, nothing else — Jira shows
   `@Name` and notifies them): the requester of a mention request on every answer, unless it is an app (read from
   the request's own comment, `GET …/comment/{id}`; a comment that is gone means no mention, never a failed answer),
@@ -389,6 +389,21 @@ another platform's state.
   qualify are left out and named in the tool result's warning (the answer itself is delivered, never resent). The
   paragraph counts toward the comment size split (`createCommentBodiesWithLeadingNode`: its size comes off the
   limit of every part). `replyToCommentIds` (at most 10 numeric ids) is offered to Jira sessions only.
+- **Where an answer goes: comment threads.** Jira Cloud has threaded replies (one level, see "Comment threads in the
+  API" below), and an answer follows them: it goes into the thread of the first comment it replies to
+  (`replyToCommentIds` — a top-level comment's own thread, or the thread a reply is in), else into the thread its
+  request was opened in, else it is a top-level comment. A request is opened in a thread when the comment that
+  opened it — a mention, or a comment on a handed issue — is a reply: `inbound.ts` puts the thread's top-level comment
+  id in the origin as `threadCommentId` (`jiraReplyThreadAttribute`), fixed when the request opens like its requester,
+  so where an answer goes never comes from the issue's text later. A request opened by a top-level comment, or by a
+  hand-over, answers top-level. Every part of a long answer, the request's progress notes, its usage-limit notice
+  (`limitWaitAnswer.ts` goes through the same sink) and its alert go into the same thread; so do the notices about a
+  trigger that is a reply (the park notices, the queued notice). The untrusted notice (a hand-over has no comment) and
+  the updates-paused notice (the issue's, no trigger's) stay top-level. A replied-to id that does not qualify (the rule
+  above) moves nothing; ids in several threads put the answer in the first one's and the result names the others
+  (`buildJiraOtherThreadsWarning`), whose authors are still mentioned. A reply Jira refuses with 400 — its thread is
+  gone — is posted top-level instead, with the rest of the answer, and the result says so
+  (`buildJiraThreadRefusedWarning`); any other refusal stays the answer's error.
 - A hand-over's `question` to an OPEN request (the one that hands the issue back) ends with one more paragraph,
   plain text on the last comment: "To let me go on, answer in a comment and assign the issue back to me." A reply
   that only mentions the AI wakes it for an answer (with `mentionMode: "act"`, an explicit ask in it is carried out); a
@@ -474,6 +489,14 @@ context preamble tells the agent the tool exists and carries the standing rule: 
   since your last prompt)` — never `edited`; a field line that flips sends the fields block as `changed since your
   last prompt`, the marker in that line telling why. The context ledger stores `isWithheld` per sent block
   (absent = readable, so older ledgers load). Without `trustedGroup` every block, hash and prompt is as it always was.
+- **A reply says which thread it is in.** A comment with a `parentId` gets one line under its heading, before its quoted
+  text: `A reply in the thread of comment 10240 by Ann, which says: "…"` — the thread's top-level comment, its author,
+  its visibility marker and its text on one line, cut to 200 characters (`jiraReplyParentExcerptMaxChars`), so the agent
+  knows what is answered even in a delta that does not carry that comment. A top-level comment that is withheld is
+  named, never quoted (`… comment 10240 [withheld: …].`); one that was deleted (its replies keep their `parentId`) reads
+  `…, which was deleted.`; a withheld reply has no such line. The line is not part of the reply's hash. A request a
+  reply opened says `Thread: comment <id> is a reply in the thread of comment <id>, so your answers to this request are
+  posted in that thread.` after the requester line, and an issue update names a reply's thread next to its id.
 - A restricted comment is marked `[restricted to <role or group>]`, a Service Management internal note
   `[internal]`. Each block carries a sha256 of what it says (a comment's covers its text and marker only, so a
   save that changed nothing leaves it alone).
@@ -510,6 +533,26 @@ context preamble tells the agent the tool exists and carries the standing rule: 
   session start (`startAgentSession`, at its start — a request whose post found that start under way still gets
   the whole issue), every completed compaction (the adapter's `contextCompacted`: bot-issued or the CLI's own
   overflow compaction), and a live re-spawn that began a new conversation where one was lost (`conversationLost`). Not an idle stop, a resume, a restart or a hot reload: the conversation survives them.
+
+## Comment threads in the API (measured on a live Jira Cloud site, 2026-11-20)
+
+What the connector relies on, probed with a throw-away issue (REST v3 unless noted):
+
+- `POST /rest/api/3/issue/{key}/comment` with `{ body, parentId }` posts a reply in that comment's thread (201); v2
+  takes `parentId` the same way. `parentId` may be sent as a number or a numeric string; the answer carries it as a
+  NUMBER (`client.ts` keeps ids as text: `getCommentParentId`).
+- Threads are ONE level deep: `parentId` must be a top-level comment. A reply to a reply — or to an id the issue never
+  had — is refused with 400, `errors.comment` "Parent comment not found, and no child comments exist. Cannot create new
+  child comments." So an answer to a reply names the reply's own `parentId` (`getCommentThreadRootId`).
+- `GET …/comment` (v3 and v2) lists replies with the rest, flat, in `created` order (`orderBy=created` / `-created`),
+  counted in `total`; only a reply has `parentId`; `expand=renderedBody` works for replies. `GET …/comment/{id}` of a
+  reply carries `parentId`. The issue's own `comment` field (`GET /issue/{key}?fields=comment`) does NOT — the
+  connector reads comments through the comments endpoint only.
+- A reply moves the issue's `updated` like any comment, and `comment ~ currentUser()` finds a mention made in a reply:
+  the poll, the mention scan and the comment scan see replies as they see comments. The changelog records no comments.
+- Editing (`PUT …/comment/{id}`) keeps a reply's `parentId`; a `parentId` in the edit's body is ignored (a reply cannot
+  move). Deleting works on a reply and on a top-level comment alike; a deleted top-level comment's replies stay, with a
+  `parentId` that answers 404 — and a POST with that `parentId` is still taken while the thread holds replies.
 
 ## Comment content (`adf.ts`, `prompt.ts`)
 

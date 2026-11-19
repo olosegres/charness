@@ -1606,7 +1606,9 @@ const jiraAnswerRequestShape = {
     .optional()
     .describe(
       'Ids of the issue\'s comments this answer replies to, e.g. ["10240"]. The bot mentions each comment\'s ' +
-        'author at the top of your answer so they are notified. Only comments you were shown in this conversation count.',
+        'author at the top of your answer so they are notified, and posts the answer in the thread of the first one ' +
+        '(without it, an answer goes into the thread of the reply that opened its request, else it is a new comment). ' +
+        'Only comments you were shown in this conversation count.',
     ),
 };
 const jiraAnswerRequestInput = createStrictToolInput(jiraAnswerRequestShape);

@@ -317,11 +317,11 @@ export async function prepareJiraConnector(context: {
       mentionMode: config.mentionMode,
       isCommentWakeOn: config.isCommentWakeOn,
       now,
-      parkIssue: (issueKey, requester) => answerSink.parkIssue(issueKey, requester),
+      parkIssue: (issueKey, requester, threadRootId) => answerSink.parkIssue(issueKey, requester, threadRootId),
       refuseUntrusted: (issueKey, requester, groupName) => answerSink.refuseUntrusted(issueKey, requester, groupName),
-      parkMention: (issueKey) => answerSink.parkMention(issueKey),
+      parkMention: (issueKey, threadRootId) => answerSink.parkMention(issueKey, threadRootId),
       postUpdatesPausedNotice: (issueKey, untilMs) => answerSink.postUpdatesPausedNotice(issueKey, jiraIssueUpdatesPer24hMax, untilMs),
-      postQueuedNotice: (issueKey, queue) => answerSink.postQueuedNotice(issueKey, queue),
+      postQueuedNotice: (issueKey, queue, threadRootId) => answerSink.postQueuedNotice(issueKey, queue, threadRootId),
       noteShownSummary: (issueKey, summary) => shownSummaries.set(issueKey, summary),
     });
     inbound.start();

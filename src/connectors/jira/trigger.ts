@@ -30,12 +30,18 @@ export const commentTriggerIdPrefix = 'comment:';
 export const heldMentionTriggerIdPrefix = 'held-mention:';
 /** The trigger id of a pause of an issue's updates (the cap): this prefix and the pause's end (epoch ms). */
 export const updatesPausedTriggerIdPrefix = 'updates-paused:';
+/**
+ * The request origin's attribute naming the comment thread its answers go into — the id of the thread's top-level
+ * comment — set when the comment that opened the request is a reply in a thread. Absent: the answers are top-level.
+ */
+export const jiraReplyThreadAttribute = 'threadCommentId';
 
 /**
  * @name JiraIssueTrigger
  * @description `author` is `null` when Jira names no one (an automation without an actor); for a mention or a comment it
  * is the comment's author. `commentId` is set for a `mentioned` and a `commented` trigger only (for a `commented` one, the
- * newest of its `commentIds`, oldest first: one request carries every new comment a poll found).
+ * newest of its `commentIds`, oldest first: one request carries every new comment a poll found). `parentId` is set when
+ * that comment is a reply: the id of its thread's top-level comment, where the answers and notices of the trigger go.
  */
 export interface JiraIssueTrigger {
   /** The changelog history id, {@link createdTriggerId}, or {@link mentionTriggerIdPrefix} / {@link commentTriggerIdPrefix} and a comment id. */
@@ -44,20 +50,22 @@ export interface JiraIssueTrigger {
   author: JiraAccount | null;
   commentId?: string;
   commentIds?: readonly string[];
+  parentId?: string;
 }
 
-/** @description The trigger of the comment `commentId`, written by `author`, that mentions the AI account. */
-export function createMentionTrigger(commentId: string, author: JiraAccount | null): JiraIssueTrigger {
-  return { triggerId: `${mentionTriggerIdPrefix}${commentId}`, kind: 'mentioned', author, commentId };
+/** @description The trigger of the comment `commentId`, written by `author`, that mentions the AI account; `parentId` when it is a reply. */
+export function createMentionTrigger(commentId: string, author: JiraAccount | null, parentId: string | null = null): JiraIssueTrigger {
+  return { triggerId: `${mentionTriggerIdPrefix}${commentId}`, kind: 'mentioned', author, commentId, ...(parentId === null ? {} : { parentId }) };
 }
 
 /**
  * @description The trigger of the new comments `commentIds` (oldest first) on an issue handed to the AI account while no
- * hand-over request of it is open: the newest one names it, and its author (`author`) is the requester.
+ * hand-over request of it is open: the newest one names it, and its author (`author`) is the requester; `parentId` when
+ * that newest comment is a reply.
  */
-export function createCommentTrigger(commentIds: readonly string[], author: JiraAccount | null): JiraIssueTrigger {
+export function createCommentTrigger(commentIds: readonly string[], author: JiraAccount | null, parentId: string | null = null): JiraIssueTrigger {
   const commentId = commentIds[commentIds.length - 1];
-  return { triggerId: `${commentTriggerIdPrefix}${commentId}`, kind: 'commented', author, commentId, commentIds };
+  return { triggerId: `${commentTriggerIdPrefix}${commentId}`, kind: 'commented', author, commentId, commentIds, ...(parentId === null ? {} : { parentId }) };
 }
 
 /** @description A hand-over's trigger (a changelog entry, a creation) — not a comment's or a mention's. */

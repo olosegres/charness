@@ -16,6 +16,10 @@ import type { JiraAccount } from '../../connectors/jira/client';
  * valid ADF document (an empty text node included). Groups ({@link FakeJira.addGroup})
  * are served by `group/bulk` (by exact name) and `group/member` (paged).
  *
+ * Comment threads are Jira Cloud's: a comment posted with a `parentId` is a reply in the thread of that TOP-LEVEL comment
+ * (answered with `parentId` as a number, as Jira does); a reply to a reply, or to a comment the issue never had, is
+ * refused with Jira's own 400 — a deleted top-level comment still takes replies while its thread has some (measured).
+ *
  * The search keeps ignoring its JQL — except for the mention branch (`comment ~ currentUser()`): a JQL
  * that carries it is answered as Jira answers it — the issues assigned to the AI account in the listed
  * statuses, and the issues with a comment that holds a mention node of the AI account and changed within
@@ -36,6 +40,8 @@ export interface FakeJiraComment {
   /** Set by an edit ({@link FakeJira.editComment}). */
   updated?: string;
   updateAuthor?: JiraAccount;
+  /** A reply's thread: its top-level comment's id — a number, as Jira sends it. */
+  parentId?: number;
 }
 
 /** A file attached to an issue; `content` is what the download answers with. */
@@ -99,6 +105,8 @@ export interface FakeJiraOptions {
 interface FakeJiraRequestBody {
   expand?: string;
   body?: AdfDocument;
+  /** A comment posted as a reply: the thread's top-level comment id, as a string or a number. */
+  parentId?: string | number;
   accountId?: string;
   jql?: string;
 }
@@ -106,6 +114,8 @@ interface FakeJiraRequestBody {
 /** A person's comment or edit: who it mentions (each a real ADF mention node, first in the paragraph, as the editor writes them). */
 export interface FakeJiraCommentOptions {
   mentions?: JiraAccount[];
+  /** Post it as a reply in the thread of this top-level comment. */
+  parentId?: string;
 }
 
 /** The mention clause of the connector's poll JQL, and the pieces the fake reads out of that JQL. */
@@ -201,9 +211,26 @@ export class FakeJira {
     this.nextCommentId += 1;
     const id = this.nextCommentId.toString();
     const issue = this.getIssue(issueKey);
-    issue.comments.push({ id, author, created: new Date().toISOString(), body: createAdfParagraph(text, options.mentions) });
+    issue.comments.push({
+      id,
+      author,
+      created: new Date().toISOString(),
+      body: createAdfParagraph(text, options.mentions),
+      ...(options.parentId === undefined ? {} : { parentId: Number(options.parentId) }),
+    });
     this.touch(issue);
     return id;
+  }
+
+  /**
+   * Jira's refusal of a reply whose thread it does not have — a reply to a reply, or to a comment the issue never had
+   * (a deleted top-level comment still takes replies while its thread holds some); `null` when the thread takes it.
+   */
+  private getThreadRefusal(issue: FakeJiraIssue, parentId: string): string | null {
+    const parent = issue.comments.find((comment) => comment.id === parentId);
+    const hasReplies = issue.comments.some((comment) => comment.parentId === Number(parentId));
+    if ((parent && parent.parentId === undefined) || (!parent && hasReplies)) return null;
+    return 'Parent comment not found, and no child comments exist. Cannot create new child comments.';
   }
 
   /** @description Edit a comment's text as `editor` does: `updated` and `updateAuthor` move, the author and date stay. */
@@ -397,16 +424,23 @@ export class FakeJira {
         send(400, { errorMessages: ['INVALID_INPUT'] });
         return;
       }
+      const parentId = requestBody.parentId === undefined ? null : String(requestBody.parentId);
+      const threadRefusal = parentId === null ? null : this.getThreadRefusal(issue, parentId);
+      if (threadRefusal !== null) {
+        send(400, { errorMessages: [], errors: { comment: threadRefusal } });
+        return;
+      }
       this.nextCommentId += 1;
       const comment: FakeJiraComment = {
         id: this.nextCommentId.toString(),
         author: this.options.aiAccount,
         created: new Date().toISOString(),
         body: parsedBody.data,
+        ...(parentId === null ? {} : { parentId: Number(parentId) }),
       };
       issue.comments.push(comment);
       this.touch(issue);
-      send(201, { id: comment.id });
+      send(201, { id: comment.id, ...(comment.parentId === undefined ? {} : { parentId: comment.parentId }) });
     } else if (method === 'GET' && subresource === 'comment' && subresourceId !== undefined) {
       const comment = issue.comments.find((candidate) => candidate.id === decodeURIComponent(subresourceId));
       if (comment) send(200, comment);

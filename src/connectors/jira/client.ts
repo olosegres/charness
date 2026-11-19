@@ -123,6 +123,11 @@ const commentSchema = z.object({
   body: adfNodeSchema.nullable().optional(),
   /** Only with `expand=renderedBody`: the HTML that names the attachment behind each media node. */
   renderedBody: z.string().optional(),
+  /**
+   * Only on a reply: the id of the top-level comment whose thread it is in — Jira sends a number; read it through
+   * {@link getCommentParentId}. Threads are one level deep, and a reply keeps it after its root was deleted.
+   */
+  parentId: z.union([z.number(), z.string()]).optional(),
 });
 
 const commentPageSchema = z.object({
@@ -243,6 +248,16 @@ export type JiraChangelogHistory = z.infer<typeof changelogHistorySchema>;
 /** `rawFields` (every returned field's value as Jira sent it, by id) is filled in by `getIssue` only, never by a search. */
 export type JiraIssue = z.infer<typeof issueSchema> & { rawFields?: Record<string, AdfAttributeValue> };
 export type JiraComment = z.infer<typeof commentSchema>;
+
+/** @description The id of the thread a reply is in (its top-level comment), as text like every other id; `null` for a top-level comment. */
+export function getCommentParentId(comment: Pick<JiraComment, 'parentId'>): string | null {
+  return comment.parentId === undefined ? null : String(comment.parentId);
+}
+
+/** @description The thread a comment belongs to: its parent's for a reply, its own for a top-level comment (which starts it). */
+export function getCommentThreadRootId(comment: Pick<JiraComment, 'id' | 'parentId'>): string {
+  return getCommentParentId(comment) ?? comment.id;
+}
 export type JiraAttachment = z.infer<typeof attachmentSchema>;
 export type JiraIssueReference = z.infer<typeof issueReferenceSchema>;
 export type JiraIssueLink = z.infer<typeof issueLinkSchema>;
@@ -360,7 +375,11 @@ export interface JiraClient {
    * otherwise (a stall included, status 0); the file is removed on failure.
    */
   downloadAttachment(attachmentId: string, destinationPath: string): Promise<number>;
-  addComment(issueKey: string, body: AdfDocument): Promise<JiraCommentPostResult>;
+  /**
+   * Post a comment; with `parentId` (a top-level comment's id) it is a reply in that comment's thread. Jira refuses a
+   * reply to a reply with 400: the thread's root is the parent of every reply in it.
+   */
+  addComment(issueKey: string, body: AdfDocument, parentId?: string | null): Promise<JiraCommentPostResult>;
   /** The issue's newest comments, newest first — R18's read-back after a post of unknown outcome. */
   getRecentComments(issueKey: string, maxResults: number): Promise<JiraComment[]>;
   /** One comment of the issue by its id; a comment that is gone is a {@link JiraHttpError} with `status` 404. */
@@ -565,8 +584,13 @@ export function createJiraClient(options: JiraClientOptions): JiraClient {
 
     getFields: () => sendForJson({ method: 'GET', path: '/rest/api/3/field', isIdempotent: true }, fieldDefinitionsSchema),
 
-    addComment: async (issueKey, body) => {
-      const request: JiraRequest = { method: 'POST', path: `/rest/api/3/issue/${encode(issueKey)}/comment`, isIdempotent: false, body: { body } };
+    addComment: async (issueKey, body, parentId) => {
+      const request: JiraRequest = {
+        method: 'POST',
+        path: `/rest/api/3/issue/${encode(issueKey)}/comment`,
+        isIdempotent: false,
+        body: { body, ...(parentId ? { parentId } : {}) },
+      };
       let text: string;
       try {
         text = await send(request);

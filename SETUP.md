@@ -890,6 +890,11 @@ connector behaves is described in [`src/connectors/jira/README.md`](src/connecto
    starts a request and an acting mention (`mentionMode: "act"`) wait the same way; an @-mention that only answers is never
    held back, and a lower number never stops an agent that is already working.
 
+   **Comment threads.** The AI follows Jira's threaded replies. A comment written as a reply reaches the agent marked
+   as one, with the start of the comment that opened the thread, and the agent's answers to a request a reply opened go
+   into that thread — so do the notices about it (queued, over the budget). An answer that replies to a comment goes
+   into that comment's thread; anything else is a new comment, as before.
+
 5. Start it with a clean environment, so nothing of the calling shell reaches it:
 
    ```bash
