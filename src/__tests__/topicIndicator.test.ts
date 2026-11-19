@@ -62,6 +62,8 @@ interface Harness {
   renameAttempts: string[];
   /** The topics (thread ids) Telegram refuses to rename for want of the right. */
   refusedThreads: Set<string>;
+  /** The topics (thread ids) whose every rename fails with this error — a deleted topic, a lasting failure that is no missing right. */
+  brokenThreads: Map<string, object>;
   /** The topics (thread ids) being unbound right now. */
   unbindingThreads: Set<string>;
   /** While set, every `sendTopicName` waits (a slow send gate); `releaseHeldRenames` lets the held calls go on, each judged as it is by then. */
@@ -132,6 +134,7 @@ describe('the status mark of topic names', () => {
       failNextRename: { error: null },
       renameAttempts: [],
       refusedThreads: new Set(),
+      brokenThreads: new Map(),
       unbindingThreads: new Set(),
       isSendHeld: { current: false },
       releaseHeldRenames: () => { for (const release of heldSends.splice(0)) release(); },
@@ -171,6 +174,8 @@ describe('the status mark of topic names', () => {
         parts.renameAttempts.push(key.thread);
         if (parts.isSendHeld.current) await new Promise<void>((resolve) => heldSends.push(resolve));
         if (parts.refusedThreads.has(key.thread)) throw createApiError('Bad Request: not enough rights to manage topics');
+        const brokenError = parts.brokenThreads.get(key.thread);
+        if (brokenError !== undefined) throw brokenError;
         if (parts.failNextRename.error !== null) {
           const error = parts.failNextRename.error;
           parts.failNextRename.error = null;
@@ -466,6 +471,40 @@ describe('the status mark of topic names', () => {
       assert.equal(harness.state.getBinding(topic)?.indicatorRenameRefused, undefined, 'and the binding forgot it too');
       harness.indicator.stop();
     });
+
+    for (const [cause, brokenError] of [
+      ['its topic was deleted in Telegram while still bound (\u00abmessage thread not found\u00bb)', createApiError('Bad Request: message thread not found')],
+      ['its rename keeps failing for a cause that is no missing right (a 400 of another kind)', createApiError('Bad Request: something odd', 400)],
+    ] as const) {
+      it(`a probe that ends without a verdict on the right — ${cause} — is dropped like a silent one: the next refused topic is probed and written, the chat released`, async () => {
+        const harness = await createHarness({ windows: { sweepIntervalMs: 60_000, bootWaveDelayMs: 1_000 } });
+        const [research, billing] = await bindMoreTopics(harness);
+        setInputs(harness, billing, {});
+        for (const key of [topic, research]) harness.refusedThreads.add(key.thread);
+        setInputs(harness, topic, { isFinished: true });
+        harness.indicator.start();
+        for (const key of [topic, research]) harness.indicator.requestRefresh(key);
+        await harness.settle();
+        await harness.advance(indicatorSettleMs);
+        assert.deepEqual(harness.renameAttempts, [topic.thread, research.thread], 'each topic is refused once');
+        assert.equal(harness.state.getBinding(topic)?.indicatorRenameRefused, true);
+
+        // The right is back, but the oldest refused topic — the probe — cannot be renamed for another reason: its answer says nothing about the right.
+        harness.refusedThreads.clear();
+        harness.brokenThreads.set(topic.thread, brokenError);
+        await harness.advance(60_000);
+        assert.equal(harness.indicator.getHealth(topic).isRenameRefused, true, 'the first sweep probed the topic that cannot be renamed: the chat is still refused');
+        assert.equal(harness.renames.length, 0);
+
+        await harness.advance(60_000);
+        await harness.advance(indicatorSettleMs);
+        assert.deepEqual(harness.renames.map((rename) => `${rename.key.thread}:${rename.name}`), [`${research.thread}:Research ✅`], 'the second sweep dropped that probe and probed — and wrote — the next refused topic');
+        assert.equal(harness.indicator.getHealth(topic).isRenameRefused, false, 'the probe that went through released the chat');
+        assert.equal(harness.state.getBinding(topic)?.indicatorRenameRefused, undefined, 'the dropped probe\'s flag is cleared in its binding');
+        assert.equal(harness.state.getBinding(research)?.indicatorRenameRefused, undefined, 'and so is the written one\'s');
+        harness.indicator.stop();
+      });
+    }
 
     it('a probe that came to no write does NOT release the whole chat: the next refused topic is probed, one failing call per sweep', async () => {
       const harness = await createHarness({ windows: { sweepIntervalMs: 60_000, bootWaveDelayMs: 1_000 } });
