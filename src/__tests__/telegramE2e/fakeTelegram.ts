@@ -195,8 +195,8 @@ export interface FakeTelegramOptions {
   keepAliveTimeoutMs?: number;
 }
 
-/** How long a `getUpdates` long poll is held when nothing arrives (telegraf asks for 50 s; shorter keeps the stop quick). */
-const longPollHoldMs = 2_000;
+/** How long a `getUpdates` long poll is held when nothing arrives, unless a flow sets another (telegraf asks for 50 s; shorter keeps the stop quick). */
+const defaultLongPollHoldMs = 2_000;
 /** The cap the Bot API enforces on `getUpdates` `limit`. */
 const maxUpdatesPerPoll = 100;
 /** The most characters a message text holds (the Bot API documents 1-4096): a longer one is refused, as it is for real. */
@@ -263,6 +263,13 @@ export class FakeTelegram {
    * stored in the topic so the bot may delete it: the live Bot API does this (measured on the test topic, 2026-11-18).
    */
   isOwnTopicRenameDelivered = false;
+  /**
+   * Whether `deleteWebhook` with `drop_pending_updates` — what a COLD launch sends — empties the updates that wait, as Telegram does. Off by
+   * default: a flow that pushes updates before its first boot (itself a cold one) expects to get them.
+   */
+  isPendingDroppedByLaunch = false;
+  /** How long a `getUpdates` long poll is held when nothing arrives (telegraf asks for 50 s; the default is shorter to keep a stop quick). */
+  longPollHoldMs = defaultLongPollHoldMs;
   /** The ids of the «renamed the topic» service lines the fake made of the bot's own renames, in order. */
   readonly ownRenameLineIds: number[] = [];
   /** What each topic is called NOW (by thread id): the name the flow gave it or the last rename. */
@@ -789,7 +796,10 @@ export class FakeTelegram {
       case 'getMe':
         return { ok: true, result: { ...this.options.botUser, can_join_groups: true, can_read_all_group_messages: true, supports_inline_queries: false } };
       case 'getUpdates':
-        return { ok: true, result: await this.takeUpdates(Number(payload.limit ?? maxUpdatesPerPoll), socket) };
+        return { ok: true, result: await this.getUpdates(payload, socket) };
+      case 'deleteWebhook':
+        if (this.isPendingDroppedByLaunch && payload.drop_pending_updates === true) this.pendingUpdates.length = 0;
+        return { ok: true, result: true };
       case 'getChatAdministrators': {
         const group = this.getGroup(payload);
         return {
@@ -921,10 +931,26 @@ export class FakeTelegram {
   }
 
   /**
+   * `getUpdates`. An `offset` confirms the updates below it, as Telegram's does (telegraf sends one after every batch, so the updates it
+   * got are gone already). `timeout: 0` is a short poll that only PEEKS — what waits, else an empty answer at once, never a held
+   * connection, and nothing is taken: like Telegram, the fake keeps an update until a later call confirms it or a launch drops it
+   * (`isPendingDroppedByLaunch`); the long poll below takes what it hands over.
+   */
+  private async getUpdates(payload: Record<string, unknown>, socket: Socket): Promise<Array<Record<string, unknown>>> {
+    const limit = Number(payload.limit ?? maxUpdatesPerPoll);
+    if (typeof payload.offset === 'number') {
+      const firstUnconfirmedIndex = this.pendingUpdates.findIndex((update) => Number(update.update_id) >= Number(payload.offset));
+      this.pendingUpdates.splice(0, firstUnconfirmedIndex === -1 ? this.pendingUpdates.length : firstUnconfirmedIndex);
+    }
+    if (Number(payload.timeout) === 0) return this.pendingUpdates.slice(0, Math.min(limit, maxUpdatesPerPoll));
+    return this.takeUpdates(limit, socket, this.longPollHoldMs);
+  }
+
+  /**
    * The long poll: the pending updates at once, else held until one arrives or the hold passes. A poll whose
    * connection is gone (a stopped bot's last request) takes nothing: an update handed to a dead socket is lost.
    */
-  private async takeUpdates(limit: number, socket: Socket): Promise<Array<Record<string, unknown>>> {
+  private async takeUpdates(limit: number, socket: Socket, holdMs: number): Promise<Array<Record<string, unknown>>> {
     if (this.pendingUpdates.length === 0 && this.server) {
       await new Promise<void>((resolve) => {
         const wake = (): void => {
@@ -933,7 +959,7 @@ export class FakeTelegram {
           this.pollWakers.delete(wake);
           resolve();
         };
-        const timer = setTimeout(wake, longPollHoldMs);
+        const timer = setTimeout(wake, holdMs);
         socket.once('close', wake);
         this.pollWakers.add(wake);
       });

@@ -26,6 +26,11 @@
  *   → no right to manage topics: no rename, one log line, a hint; no right to delete: the renames go on and the lines stay
  *   → a restart renames nothing that is already right, and an owner's rename that waited meanwhile is learned BEFORE the boot's wave
  *     writes (the mark that leaves ❓ at boot is the one write that comes at once: it must carry the owner's NEW name)
+ *   → a COLD start (the heartbeat is older than a minute) drops the updates that waited — but first reads the topic renames among them: an
+ *     owner's rename made while the bot was down is learned and its mark written over HIS name; a stranger's rename is not taken (and the
+ *     name goes back); the owner's plain message that waited is dropped as before
+ *   → a restart with NOTHING waiting, while the fake holds the first long poll open as Telegram does: the mark that leaves ❓ is written
+ *     seconds after the start, not after the 30 s the wait for a backlog that is not there could cost
  *   → the agent's own context names the owner's name, never one with a mark
  *
  * Nothing leaves the machine: the Bot API is on loopback and the agent is a fake. Everything the test starts is stopped in `after`.
@@ -64,7 +69,8 @@ import {
   writeInstanceEnvFile,
   type IsolatedInstanceLayout,
 } from './e2e/isolatedCharness';
-import { getSessionLaunches, readPersistedState, startCharnessOnInstance } from './e2e/fallbackFlowKit';
+import { getSessionLaunches, getStatePath, readPersistedState, startCharnessOnInstance } from './e2e/fallbackFlowKit';
+import { firstPollHoldMs } from '../connectors/telegram/firstUpdateBatchNote';
 import { bindLeaveCurrentCallback } from '../connectors/telegram/bindPicker';
 import { enDict } from '../i18n/en';
 import { resetBufferMs } from '../apiErrorRetry';
@@ -96,6 +102,13 @@ const checkRunTimeoutMs = 2 * 60 * 1000;
 /** How long the fake needs to see the stopped bot's last long poll close. */
 const deadPollSettleMs = 1500;
 const secondTopicThreadId = 222;
+/** A heartbeat this old makes the next boot a cold start (the boot classifier's threshold is one minute). */
+const coldStartDowntimeMs = 5 * 60 * 1000;
+/** How long the fake holds a long poll when nothing arrives in the no-backlog restart: as long as Telegram (50 s), far over the first poll's hold. */
+const productionLongPollHoldMs = 50 * 1000;
+/** How soon after the start a mark leaving ❓ must be written when nothing waited: the first poll's hold and the boot wave, on a loaded box — far below the 30 s cap of the wait for a backlog. */
+const noBacklogWriteDeadlineMs = firstPollHoldMs + 12 * 1000;
+const strangerUser = { id: 909090, is_bot: false, first_name: 'Stranger' };
 /** A reset this long ahead is the wait of the usage-limit step: longer than the ❗️ takes to show (settle time and gap), short enough for a flow. */
 const usageLimitResetAheadMs = gapMs + settleMs + 8000;
 const secondTopicCreatedName = 'Research';
@@ -590,7 +603,10 @@ describe('The status mark of topic names end to end: built charness, fake Bot AP
     await askQuestion('Q-5', unboundTopic, unboundThreadId);
     await waitForTopicName(unboundThreadId, 'Billing ❓');
 
-    // «Leave current dir» while the ❓ shows: the question closes, the name goes back — and no look queued by the unbind writes a mark after it.
+    // «Leave current dir» while the ❓ shows: the question closes, the name goes back, and nothing is written after it.
+    // This step covers the RESTORE and the end state. It does not prove the guard against a late ❓ (`checkIsUnbinding`): the unbind closes
+    // the question, so the look it queues wants ✅ and is written before the restore takes the lock — with or without the guard. The race
+    // the guard closes is set up by the unit tests (`topicIndicator.test.ts`, «a topic that is being unbound»).
     const picker = await unboundTopic.sendAndAwaitReply('/bind', enDict['bind.current'].replace('{subdir}', projectFolder));
     await unboundTopic.tapAndAwaitAnswer(picker, bindLeaveCurrentCallback);
     await unboundTopic.waitForMessage('the unbound notice', (message) => message.message_id > picker.message_id && message.text === enDict['thread.unbound']);
@@ -640,6 +656,65 @@ describe('The status mark of topic names end to end: built charness, fake Bot AP
     }
   });
 
+  it('a COLD start reads the topic renames that waited before it drops the updates: the owner\'s rename is learned and marked, a stranger\'s is not, a plain message that waited is dropped', async () => {
+    const renamesBefore = listRenames(topicThreadId).length;
+    await charness?.stop();
+    await new Promise((resolve) => setTimeout(resolve, deadPollSettleMs));
+    // The heartbeat is a few minutes old: the next boot is a cold start, which drops what waited — as Telegram does, in this fake.
+    const persisted = readPersistedState(getLayout());
+    persisted.lastHeartbeatAt = Date.now() - coldStartDowntimeMs;
+    fs.writeFileSync(getStatePath(getLayout()), JSON.stringify(persisted));
+    fakeTelegram.isPendingDroppedByLaunch = true;
+    fakeTelegram.pushTopicRenamed(topicThreadId, 'Deploy 4');
+    fakeTelegram.pushTopicRenamed(topicThreadId, 'Hijacked', strangerUser);
+    fakeTelegram.pushOperatorMessage(topicThreadId, 'COLD-1 typed while the bot was down');
+    try {
+      charness = await startCharnessOnInstance(getLayout(), fakeTelegram);
+      assert.match(getCharness().output, /Boot mode:\s+COLD START/, 'the boot was a cold start');
+      await getCharness().waitFor('the owner\'s rename that waited to be learned', replyTimeoutMs, () => readBinding(topicThreadId)?.topicName === 'Deploy 4');
+      // The topic carries HIS name with the mark after it: the stranger's name never became the base, and the bot put the name back over it.
+      await getCharness().waitFor('the topic to be called «Deploy 4» plus its mark', renameTimeoutMs, () => /^Deploy 4 [✅💤]$/u.test(fakeTelegram.getTopicName(topicThreadId) ?? ''));
+      assert.equal(readBinding(topicThreadId)?.topicName, 'Deploy 4');
+      assert.ok(listRenamedTo(topicThreadId).slice(renamesBefore).every((name) => name.startsWith('Deploy 4 ')), `no rename carried the old or the stranger's name: ${JSON.stringify(listRenamedTo(topicThreadId).slice(renamesBefore))}`);
+      assert.match(getCharness().output, /Cold start: 2 topic rename\(s\) waited while the bot was down, 1 applied/);
+      assert.match(getCharness().output, /\[security\] forum_topic_edited in chat -1001111111111 by user 909090/);
+      assert.ok(fakeTelegram.listCalls('getUpdates').some((call) => call.payload.timeout === 0 && JSON.stringify(call.payload.allowed_updates) === '["message"]'), 'the waiting updates were read once, as service messages, without holding the poll');
+      assert.deepEqual(getAgentPrompts('COLD-1'), [], 'the plain message that waited was dropped, as a cold start always did');
+    } finally {
+      fakeTelegram.isPendingDroppedByLaunch = false;
+    }
+  });
+
+  it('a restart with NOTHING waiting writes the mark that leaves ❓ seconds after the start: the first long poll Telegram holds open is no backlog', async () => {
+    await askQuestion('Q-7', secondTopic, secondTopicThreadId);
+    await waitForTopicName(secondTopicThreadId, `${secondTopicCreatedName} 2 ❓`);
+    await new Promise((resolve) => setTimeout(resolve, gapMs));
+    const secondKey = `${group.id}:${secondTopicThreadId}`;
+    await getCharness().waitFor('the saved state', replyTimeoutMs, () => readBinding(secondTopicThreadId)?.indicatorAppliedName === `${secondTopicCreatedName} 2 ❓` && readPersistedState(getLayout()).pendingQuestions?.[secondKey] !== undefined);
+    const secondSessionId = readPersistedState(getLayout()).agents?.[secondKey]?.claudeSessionId;
+    const secondAgent = getSessionLaunches(getLayout()).filter((launch) => getLaunchSessionId(launch.argv) === secondSessionId).at(-1);
+    assert.ok(secondAgent, 'the topic\'s agent runs');
+    const renamesBefore = listRenames(secondTopicThreadId).length;
+
+    // The bot is down: the agent dies, the question with it. Nothing is pushed: no update waits for the bot.
+    await charness?.stop();
+    await new Promise((resolve) => setTimeout(resolve, deadPollSettleMs));
+    process.kill(secondAgent.pid, 'SIGKILL');
+    const previousHoldMs = fakeTelegram.longPollHoldMs;
+    fakeTelegram.longPollHoldMs = productionLongPollHoldMs;
+    try {
+      charness = await startCharnessOnInstance(getLayout(), fakeTelegram);
+      const readyAtMs = Date.now();
+      assert.match(getCharness().output, /Boot mode:\s+HOT RELOAD/, 'a restart within a minute is a hot reload: nothing was read before a drop');
+      await waitForTopicName(secondTopicThreadId, `${secondTopicCreatedName} 2 💤`);
+      const writtenAfterMs = (listRenames(secondTopicThreadId).at(-1)?.atMs ?? Number.POSITIVE_INFINITY) - readyAtMs;
+      assert.deepEqual(listRenamedTo(secondTopicThreadId).slice(renamesBefore), [`${secondTopicCreatedName} 2 💤`]);
+      assert.ok(writtenAfterMs < noBacklogWriteDeadlineMs, `the mark was written ${writtenAfterMs} ms after the start; the poll that waits for nothing must not hold it back for the cap (30 s)`);
+    } finally {
+      fakeTelegram.longPollHoldMs = previousHoldMs;
+    }
+  });
+
   it('the agent\'s own context names the owner\'s name, never one with a mark', () => {
     // The preamble rides on a prompt only when it changed, so it names each name the topic had: the owner's, as he renamed it.
     const names = [...new Set(listPreambleTopicNames())];
@@ -654,6 +729,6 @@ describe('The status mark of topic names end to end: built charness, fake Bot AP
     assert.ok(calls.length > 20, 'the flow renamed topics a good many times');
     assert.ok(calls.every((call) => Object.keys(call.payload).every((field) => ['chat_id', 'message_thread_id', 'name'].includes(field))), 'no call carried an icon');
     assert.equal(listRenames(generalTopicThreadId).length, 0);
-    assert.ok(!getCharness().output.includes('[security] forum_topic_edited'), 'no rename was taken for a stranger\'s');
+    assert.ok(!getCharness().output.includes('[security] forum_topic_edited'), 'no rename after the cold start was taken for a stranger\'s');
   });
 });

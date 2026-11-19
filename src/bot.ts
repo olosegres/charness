@@ -76,6 +76,7 @@ import { resolveQuestionWait } from './utils/questionWaitPlan';
 import { getOwnerRenameOutcome, indicatorBootWaveDelayMs, indicatorMinRenameGapMs, indicatorSettleMs, indicatorSweepIntervalMs, resolveTopicStatusPrefs, type TopicStatusInputs } from './utils/topicIndicatorPlan';
 import { createTopicIndicator } from './connectors/telegram/topicIndicator';
 import { installFirstUpdateBatchNote } from './connectors/telegram/firstUpdateBatchNote';
+import { readWaitingTopicRenames } from './connectors/telegram/waitingTopicRenames';
 import { checkIsWatchedWorkerRunning, getTopicStatusInputs } from './utils/topicIndicatorSources';
 import {
   enqueueSend,
@@ -163,6 +164,7 @@ import {
 import { validateNewFolderName, NewFolderNameError } from './folderName';
 import {
   resolveThreadKeyForMode,
+  type RouteInput,
   checkIsDmThreadKey,
   resolvePairingCandidate,
   getPairingRefusal,
@@ -735,8 +737,12 @@ function checkIsDmKey(key: SessionKey): boolean {
  * chat type and identifies the owner. False when the DM surface is inert.
  */
 function checkIsDmChat(ctx: Context): boolean {
+  return checkIsOwnerDm(ctx.chat);
+}
+
+/** @description Whether `chat` is the owner's private chat on a surface that serves it. */
+function checkIsOwnerDm(chat: { id: number; type: string } | undefined): boolean {
   if (!checkIsDmSurfaceActive()) return false;
-  const chat = ctx.chat;
   if (!chat || chat.type !== 'private') return false;
   return chat.id === getOwnerUserId();
 }
@@ -922,9 +928,13 @@ const seenGroupSenders = createSeenSenders();
  * group with the owner id would lock out the group's real admins.
  */
 async function checkIsAllowedUser(ctx: Context): Promise<boolean> {
-  const userId = ctx.from?.id;
+  return checkIsAllowedSender(checkIsDmChat(ctx), ctx.from?.id);
+}
+
+/** @description {@link checkIsAllowedUser} for a sender read off a raw update (no `ctx`): `isDmChat` says which surface decides. */
+async function checkIsAllowedSender(isDmChat: boolean, userId: number | undefined): Promise<boolean> {
   if (!userId) return false;
-  if (checkIsDmChat(ctx)) {
+  if (isDmChat) {
     return userId === getOwnerUserId();
   }
   const adminIds = await adminCache.getAdminIds();
@@ -3338,6 +3348,11 @@ function getThreadKey(ctx: Context): SessionKey | null {
         }
       : undefined,
   };
+  return getThreadKeyForRoute(routeInput);
+}
+
+/** @description The thread key of a route, under the instance's surface settings — for a `ctx` and for a raw update alike. */
+function getThreadKeyForRoute(routeInput: RouteInput): SessionKey | null {
   return resolveThreadKeyForMode(routeInput, {
     mode: getChatMode(),
     ownerUserId: getOwnerUserId(),
@@ -8461,7 +8476,7 @@ const topicIndicator = createTopicIndicator({
   deleteMessage: async (key, messageId) => {
     await enqueueSend(key, () => bot.telegram.deleteMessage(getTelegramChatId(key), messageId));
   },
-  checkIsBacklogHandled: () => firstUpdateBatch.checkIsFirstBatchFetched() && updateDispatcher.size() === 0,
+  checkIsBacklogHandled: () => firstUpdateBatch.checkIsBacklogHandled(updateDispatcher.size()),
   windows: {
     settleMs: ENV.testTimings.topicIndicatorSettleMs ?? indicatorSettleMs,
     minGapMs: ENV.testTimings.topicIndicatorMinRenameGapMs ?? indicatorMinRenameGapMs,
@@ -11451,6 +11466,14 @@ bot.on(message('forum_topic_edited'), async (ctx) => {
     console.warn(`[security] forum_topic_edited in chat ${ctx.chat.id} by user ${userId ?? '?'} (not a group admin) — name not updated`);
     return;
   }
+  await applyOwnerTopicRename(key, newName);
+});
+
+/**
+ * @description An authorised sender renamed a topic: what the bot keeps of its name. Shared by the live `forum_topic_edited` update and
+ * the renames read before a cold start drops the waiting updates (`applyRenamesThatWaitedForColdStart`).
+ */
+async function applyOwnerTopicRename(key: SessionKey, newName: string): Promise<void> {
   const binding = state.getBinding(key);
   // The owner's own words are what is kept: a trailing mark of the bot's is not part of them (`getOwnerRenameOutcome`).
   const renamed = getOwnerRenameOutcome(newName, binding?.indicatorAppliedName, binding?.topicName, topicIndicator.getRecentAppliedNames(key));
@@ -11468,7 +11491,43 @@ bot.on(message('forum_topic_edited'), async (ctx) => {
     // No binding yet — keep the freshest name for a later fuzzy auto-bind.
     pendingTopicNames.set(keyToString(key), { name: renamed.base, ts: Date.now(), isFromAdmin: true });
   }
-});
+}
+
+/**
+ * @description A COLD start drops the updates that waited while the bot was down, and with them an owner's rename of a topic — the bot
+ * would write the old name plus a mark over it. So they are read once first (`waitingTopicRenames.ts`) and only the renames of bound
+ * topics, by an authorised sender, are applied through {@link applyOwnerTopicRename}; the bot's own «renamed» lines are deleted as a live
+ * one is; everything else is dropped by the launch as before. Never throws: a read that fails is the old behaviour.
+ */
+async function applyRenamesThatWaitedForColdStart(): Promise<void> {
+  const renames = await readWaitingTopicRenames(
+    (request) => bot.telegram.callApi('getUpdates', request),
+    (error) => console.warn('[boot] reading the topic renames that waited failed — they are dropped with the other updates:', error instanceof Error ? error.message : error),
+  );
+  const botUserId = bot.botInfo?.id ?? (await bot.telegram.getMe()).id;
+  let appliedCount = 0;
+  for (const renamed of renames) {
+    const chat = renamed.chat;
+    const key = getThreadKeyForRoute({
+      chat: { id: chat.id, type: chat.type, is_forum: 'is_forum' in chat ? chat.is_forum : undefined },
+      message: { message_thread_id: renamed.message_thread_id, is_topic_message: renamed.is_topic_message },
+    });
+    if (!key) continue;
+    const senderId = renamed.from?.id;
+    if (senderId !== undefined && senderId === botUserId) {
+      await topicIndicator.handleOwnRenameLine(key, renamed.message_id);
+      continue;
+    }
+    if (!state.getBinding(key)) continue;
+    if (!(await checkIsAllowedSender(checkIsOwnerDm(chat), senderId))) {
+      console.warn(`[security] forum_topic_edited in chat ${chat.id} by user ${senderId ?? '?'} (not a group admin) — name not updated`);
+      continue;
+    }
+    await applyOwnerTopicRename(key, renamed.forum_topic_edited.name);
+    appliedCount += 1;
+  }
+  console.log(`Cold start: ${renames.length} topic rename(s) waited while the bot was down, ${appliedCount} applied; the other waiting updates are dropped`);
+}
 
 // Audit S2 / #5: closed/reopened events can come from a member who isn't an
 // authorised user. We deliberately diverge from "trust Telegram's state":
@@ -16296,7 +16355,15 @@ export async function startBot(): Promise<void> {
 
   console.log(`Launching Telegraf bot (long polling, dropPendingUpdates=${bootMode.dropPendingUpdates})...`);
   // The marks of the topic names are written once the updates that waited are handled — an owner's rename made while the bot was down is
-  // learned first — and looked at again every few minutes. `launch` below returns only when the bot stops.
+  // learned first (on a COLD start, which drops the waiting updates, it is read before the drop) — and looked at again every few minutes.
+  // `launch` below returns only when the bot stops.
+  if (bootMode.dropPendingUpdates) {
+    try {
+      await applyRenamesThatWaitedForColdStart();
+    } catch (error) {
+      console.warn('[boot] applying the topic renames that waited failed:', error instanceof Error ? error.message : error);
+    }
+  }
   topicIndicator.start();
   try {
     await bot.launch({
