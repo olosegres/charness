@@ -10,7 +10,7 @@
  */
 
 import { t } from '../i18n';
-import { cutAccessLabel } from './topicAccessScreenPlan';
+import { cutButtonLabel } from './cutButtonLabel';
 import {
   checkIsBaseTooLongForMark,
   checkIsTopicIndicatorSwitch,
@@ -206,7 +206,7 @@ export function buildTopicStatusGeneralScreen(view: TopicStatusGeneralView): Top
     parts.push(t('topicStatus.unknownNamesHeadingText'));
     const offered = view.unknownNameTopics.filter((topic) => topic.candidate !== undefined).slice(0, topicStatusUnknownNameButtonLimit);
     const nameButtons = offered.map((topic): TopicStatusButton => ({
-      label: t('topicStatus.unknownNameChoiceButtonLabel', { name: cutAccessLabel(topic.candidate ?? '', nameButtonMaxChars) }),
+      label: t('topicStatus.unknownNameChoiceButtonLabel', { name: cutButtonLabel(topic.candidate ?? '', nameButtonMaxChars) }),
       callbackData: buildTopicStatusNameCallback(topic.threadId),
     }));
     for (let index = 0; index < nameButtons.length; index += nameButtonsPerRow) keyboard.push(nameButtons.slice(index, index + nameButtonsPerRow));

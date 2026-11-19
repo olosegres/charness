@@ -11,6 +11,7 @@
 import { getActiveLang, t } from '../i18n';
 import type { SeenPerson } from '../topicTalkerMemory';
 import { normaliseUsername, topicInviteTtlMs, type TopicTalkersEntry } from '../topicTalkers';
+import { cutButtonLabel } from './cutButtonLabel';
 import { formatPersonLabel } from './personLabel';
 
 /** How many people a page of the list holds. */
@@ -78,14 +79,9 @@ export function getAccessPageOfRow(index: number): number {
   return Math.floor(index / topicAccessPageSize);
 }
 
-const graphemeSegmenter = new Intl.Segmenter(undefined, { granularity: 'grapheme' });
-const labelEllipsis = '…';
-
-/** @description `text` cut to `maxChars` characters on a grapheme boundary, ending in an ellipsis when it was cut. */
+/** @description `text` cut to `maxChars` characters (a phone's button) on a grapheme boundary, ending in an ellipsis when it was cut. */
 export function cutAccessLabel(text: string, maxChars: number = topicAccessLabelMaxChars): string {
-  const graphemes = [...graphemeSegmenter.segment(text)].map((segment) => segment.segment);
-  if (graphemes.length <= maxChars) return text;
-  return `${graphemes.slice(0, maxChars - 1).join('')}${labelEllipsis}`;
+  return cutButtonLabel(text, maxChars);
 }
 
 /** @description A row's button caption: the @username, or the name when there is none; a waiting invitation leads with ⏳. */
