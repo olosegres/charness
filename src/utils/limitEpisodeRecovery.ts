@@ -20,6 +20,7 @@
  * `bot.ts` (the apiErrorRetry pure-layer / manager split).
  */
 
+import * as crypto from 'crypto';
 import { classifyAgentApiError } from '../apiErrorRetry';
 import { classifyClaudeStreamMessage, parseStreamJsonLine, type ClaudeStreamAction } from './claudeStreamJson';
 import type { AgentApiErrorClass, LimitEpisodeMarker } from '../types';
@@ -61,20 +62,65 @@ export const limitEpisodeMaxAgeMs = 12 * 60 * 60 * 1000;
  * leaving the sub-agent's out loses nothing and keeps a parked topic parked.
  */
 export function getLastTerminalErrorText(tailText: string): string | null {
-  let lastErrorText: string | null = null;
-  for (const line of tailText.split('\n')) {
-    const parsed = parseStreamJsonLine(line);
+  return findParkedTerminalError(Buffer.from(tailText, 'utf8'), 0)?.text ?? null;
+}
+
+/** The error a session is parked on, and where its terminal frame ends in the session's `stdout.jsonl`. */
+export interface ParkedTerminalError {
+  text: string;
+  /**
+   * The byte offset in the log right after the error's `result` line (its newline included): WHERE the episode is. Frames
+   * appended after it — the reply to the bot's boot `mcp_status`, a rate-limit event — move the log's size and mtime, never this.
+   */
+  endOffset: number;
+}
+
+const newlineByte = 0x0a;
+
+/**
+ * @description {@link getLastTerminalErrorText} with the position of the error: `tail` is the log's tail as read (`tailStartOffset`
+ * is where it starts in the log), split on its newline bytes — a newline is never part of a multi-byte UTF-8 character, so the
+ * offsets are exact even when the tail starts in the middle of one (that torn first line is skipped).
+ */
+export function findParkedTerminalError(tail: Buffer, tailStartOffset: number): ParkedTerminalError | null {
+  let parked: ParkedTerminalError | null = null;
+  let lineStart = 0;
+  while (lineStart < tail.length) {
+    const newlineAt = tail.indexOf(newlineByte, lineStart);
+    const lineEnd = newlineAt === -1 ? tail.length : newlineAt + 1;
+    const parsed = parseStreamJsonLine(tail.subarray(lineStart, newlineAt === -1 ? tail.length : newlineAt).toString('utf8'));
+    lineStart = lineEnd;
     if (!parsed) continue; // blank, or the tail's torn first line
     for (const action of classifyClaudeStreamMessage(parsed)) {
       if (action.kind === 'turnEnd') {
         // A later healthy turn CLEARS the verdict — the session recovered.
-        lastErrorText = action.isError ? action.errorText : null;
+        parked = action.isError && action.errorText !== null ? { text: action.errorText, endOffset: tailStartOffset + lineEnd } : null;
       } else if (checkIsSessionActivity(action)) {
-        lastErrorText = null;
+        parked = null;
       }
     }
   }
-  return lastErrorText;
+  return parked;
+}
+
+/** How many hex digits of the error text's hash an episode marker keeps: enough to tell two errors apart. */
+const errorStampLength = 16;
+
+/** @description The stamp of a parked error's text an episode marker keeps beside its offset (a hash, not the text). */
+export function getLimitEpisodeErrorStamp(errorText: string): string {
+  return crypto.createHash('sha256').update(errorText).digest('hex').slice(0, errorStampLength);
+}
+
+/**
+ * @description The marker that records an episode as handled: the log's identity now, and — when the log is parked on an error —
+ * that error's place and text stamp, which is what later boots compare ({@link decideLimitEpisodeRecovery}).
+ */
+export function buildLimitEpisodeMarker(log: Pick<LimitEpisodeMarker, 'sizeBytes' | 'mtimeMs'>, parked: ParkedTerminalError | null): LimitEpisodeMarker {
+  return {
+    sizeBytes: log.sizeBytes,
+    mtimeMs: log.mtimeMs,
+    ...(parked !== null ? { errorEndOffset: parked.endOffset, errorStamp: getLimitEpisodeErrorStamp(parked.text) } : {}),
+  };
 }
 
 /** Frames that only a running PARENT session writes (not the ambient rate-limit /
@@ -139,17 +185,27 @@ export type LimitEpisodeDecision =
   | { action: 'skip'; reason: 'noError' | 'notUsageLimit' | 'stale' | 'alreadyArmed' | 'alreadyHandled' };
 
 /**
- * @description Whether this thread's trailing error is the one a previous boot
- * already acted on: the log is byte-for-byte the same file, at the same mtime, as
- * when the marker was written. Nothing has happened since, so re-arming would
- * resurrect a wait that was already settled — skipped by «⏭ Skip once», by a user
- * takeover, or by the retry giving up. Both fields must match; any real turn
- * appends frames and changes them, so a genuinely NEW trailing error still arms.
- * This matters on every code change, because hot mode reloads the bot.
+ * @description Whether this thread's trailing error is the one a previous boot (or a settled wait) already acted on, so re-arming
+ * would resurrect a wait that was already settled — skipped by «⏭ Skip once», by a user takeover, by the retry giving up, or armed by
+ * the recovery of an earlier boot. This matters on every code change, because hot mode reloads the bot.
+ *
+ * The episode is the parked error ITSELF: the same error frame at the same place in the log (`errorEndOffset`, and its text stamp).
+ * Frames written after it that are no activity of the session — above all the reply to the `mcp_status` request every boot sends an
+ * adopted session, and rate-limit events — change the log's size and mtime but not the episode; compared on those, every restart
+ * re-armed the last parked error. A genuinely NEW trailing error is a new frame at a new offset, so it still arms. A marker written
+ * before the episode was kept (no `errorEndOffset`), or a log read without its error's place, is compared the old way: both the
+ * log's size and its mtime.
  */
-function checkIsSameHandledLog(handled: LimitEpisodeMarker | undefined, log: LimitEpisodeMarker): boolean {
+function checkIsSameHandledEpisode(
+  handled: LimitEpisodeMarker | undefined,
+  current: { log: LimitEpisodeMarker; errorText: string | null; errorEndOffset: number | null | undefined },
+): boolean {
   if (!handled) return false;
-  return handled.sizeBytes === log.sizeBytes && handled.mtimeMs === log.mtimeMs;
+  if (handled.errorEndOffset !== undefined && current.errorEndOffset !== undefined && current.errorEndOffset !== null && current.errorText !== null) {
+    return handled.errorEndOffset === current.errorEndOffset
+      && (handled.errorStamp === undefined || handled.errorStamp === getLimitEpisodeErrorStamp(current.errorText));
+  }
+  return handled.sizeBytes === current.log.sizeBytes && handled.mtimeMs === current.log.mtimeMs;
 }
 
 /**
@@ -158,11 +214,14 @@ function checkIsSameHandledLog(handled: LimitEpisodeMarker | undefined, log: Lim
  * pushing a surprise prompt into a topic:
  *  - only when no persisted retry record already covers the thread (that one is
  *    re-armed by the normal restore path — arming twice would double-notice);
- *  - only when the log CHANGED since the episode a previous boot already handled
- *    ({@link checkIsSameHandledLog});
+ *  - only when the parked error is not the episode a previous boot, or a settled
+ *    wait, already handled ({@link checkIsSameHandledEpisode});
  *  - only the `usageLimit` class (a transient error is long past by restart time,
  *    and an `auth` error needs a human, not a wait);
- *  - only when the log is younger than {@link limitEpisodeMaxAgeMs}.
+ *  - only when the ERROR is younger than {@link limitEpisodeMaxAgeMs} — its own time
+ *    (`errorWrittenAtMs`) when known: the log's mtime moves with every frame written
+ *    after it, a boot's own `mcp_status` reply included, so it would keep an old error
+ *    young for ever.
  * The reset the error names is resolved against the moment it was WRITTEN —
  * `errorWrittenAtMs` (the transcript's own timestamp, {@link getParkedErrorWrittenAtMs}),
  * else the log's mtime — not against the boot: a clock-only reset (`resets 10:50pm`)
@@ -173,19 +232,23 @@ function checkIsSameHandledLog(handled: LimitEpisodeMarker | undefined, log: Lim
  */
 export function decideLimitEpisodeRecovery(input: {
   errorText: string | null;
+  /** Where the parked error's frame ends in the log ({@link findParkedTerminalError}); absent → the episode is told by the log's identity. */
+  errorEndOffset?: number | null;
   /** When the error was written, from the transcript; absent → the log's mtime. */
   errorWrittenAtMs?: number | null;
   /** Identity (size + mtime) of the session's `stdout.jsonl` right now. */
   log: LimitEpisodeMarker;
-  /** Identity recorded when a previous boot armed from this log, if any. */
+  /** The marker of the episode a previous boot or a settled wait handled, if any ({@link buildLimitEpisodeMarker}). */
   handled?: LimitEpisodeMarker;
   now: number;
   hasArmedRetry: boolean;
 }): LimitEpisodeDecision {
   if (input.hasArmedRetry) return { action: 'skip', reason: 'alreadyArmed' };
-  if (checkIsSameHandledLog(input.handled, input.log)) return { action: 'skip', reason: 'alreadyHandled' };
+  if (checkIsSameHandledEpisode(input.handled, { log: input.log, errorText: input.errorText, errorEndOffset: input.errorEndOffset })) {
+    return { action: 'skip', reason: 'alreadyHandled' };
+  }
   if (!input.errorText) return { action: 'skip', reason: 'noError' };
-  if (input.now - input.log.mtimeMs > limitEpisodeMaxAgeMs) return { action: 'skip', reason: 'stale' };
+  if (input.now - (input.errorWrittenAtMs ?? input.log.mtimeMs) > limitEpisodeMaxAgeMs) return { action: 'skip', reason: 'stale' };
   const cls = classifyAgentApiError(input.errorText, input.errorWrittenAtMs ?? input.log.mtimeMs);
   if (cls?.kind !== 'usageLimit') return { action: 'skip', reason: 'notUsageLimit' };
   return { action: 'arm', cls };

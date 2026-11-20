@@ -994,6 +994,16 @@ describe('checkIsClaudeUsageExhausted — does the reading SHOW a window at 100 
     assert.equal(checkIsClaudeUsageExhausted(snapshotOf(100, 20), 'sonnet', Date.parse('2026-10-12T13:00:00.000Z')), false, 'the 100 % window has reset since');
     assert.equal(checkIsClaudeUsageExhausted({ ...snapshotOf(100, 20), isStale: true }, 'sonnet', readAtMs), false, 'a stale snapshot is last known, not now');
   });
+
+  it('with readNotBeforeMs (a recovered episode\'s own time) a reading taken BEFORE it proves nothing — not marked stale yet or not', () => {
+    // snapshotOf was read at 09:59Z, its session window at 100 % until 13:00Z.
+    const errorAt = Date.parse('2026-10-12T09:59:30.000Z');
+    assert.equal(checkIsClaudeUsageExhausted(snapshotOf(100, 20), 'sonnet', readAtMs, { readNotBeforeMs: errorAt }), false, 'read half a minute before the error');
+    assert.equal(checkIsClaudeUsageExhausted(snapshotOf(100, 20), 'sonnet', readAtMs, { readNotBeforeMs: Date.parse('2026-10-12T09:59:00.000Z') }), true, 'read at the error: proof');
+    assert.equal(checkIsClaudeUsageExhausted(snapshotOf(100, 20), 'sonnet', readAtMs, { readNotBeforeMs: Date.parse('2026-10-12T09:00:00.000Z') }), true, 'read after it: proof');
+    assert.equal(checkIsClaudeUsageExhausted({ ...snapshotOf(100, 20), fetchedAt: 'not a date' }, 'sonnet', readAtMs, { readNotBeforeMs: 0 }), false, 'an unreadable time is no proof');
+    assert.equal(checkIsClaudeUsageExhausted(snapshotOf(100, 20), 'sonnet', readAtMs, {}), true, 'without the option: as before');
+  });
 });
 
 describe('getClaudeUsageBucketAsOf — a bucket against the clock', () => {

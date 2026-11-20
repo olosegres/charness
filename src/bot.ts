@@ -461,9 +461,11 @@ import {
   getLoginCommandRoute,
 } from './utils/claudeAuthLogin';
 import {
+  buildLimitEpisodeMarker,
   decideLimitEpisodeRecovery,
-  getLastTerminalErrorText,
+  findParkedTerminalError,
   limitEpisodeTailMaxBytes,
+  type ParkedTerminalError,
 } from './utils/limitEpisodeRecovery';
 import { readTranscriptErrorWrittenAtMs } from './utils/transcriptErrorTime';
 import {
@@ -2365,6 +2367,12 @@ const wedgeRecoveriesInFlight = new Set<string>();
 interface HandleApiErrorOptions {
   /** A parked error the boot recovery found on disk (`recoverLimitEpisodesFromDisk`), not one the agent just hit. */
   isRecoveredEpisode?: boolean;
+  /**
+   * A recovered episode only: when its error was written. A usage reading taken before it proves nothing about it — an
+   * unconfirmed wording is then probed, not taken as a confirmed limit on an old reading the boot's usage poll has not yet
+   * re-read or marked stale.
+   */
+  episodeWrittenAtMs?: number;
 }
 
 /**
@@ -2397,7 +2405,7 @@ function handleApiError(key: SessionKey, cls: AgentApiErrorClass, options: Handl
     return;
   }
   // An unconfirmed usage limit is probed first; it reaches the wait below only once confirmed.
-  if (cls.kind === 'usageLimit' && cls.isUnconfirmed === true && handleUnconfirmedLimit(key)) return;
+  if (cls.kind === 'usageLimit' && cls.isUnconfirmed === true && handleUnconfirmedLimit(key, options.isRecoveredEpisode === true ? options.episodeWrittenAtMs : undefined)) return;
   if (cls.kind === 'usageLimit' && !state.checkIsAutoContinueOnLimitEnabled(key)) {
     const isFirstOffNotice = !autoContinueOffNoticedThreads.has(k);
     autoContinueOffNoticedThreads.add(k);
@@ -2535,10 +2543,11 @@ function armApiRetryTimer(key: SessionKey, arming: ApiRetryArming): void {
 /**
  * @description An UNCONFIRMED usage limit (`isUnconfirmed`) of `key`: the probe retry it gets first — or `false` when the
  * limit is confirmed and takes the usual usage-limit wait. Confirmed when it came again right after the probe fired, or
- * the topic's account shows a window at 100 % ({@link checkIsTopicAccountUsageExhausted}); a retry already pending —
- * the probe or a short retry — takes it with it (`true`, nothing more to do).
+ * the topic's account shows a window at 100 % ({@link checkIsTopicAccountUsageExhausted}) — in a reading taken no earlier than
+ * `readingNotBeforeMs` when given (a recovered episode's own time); a retry already pending — the probe or a short retry — takes
+ * it with it (`true`, nothing more to do).
  */
-function handleUnconfirmedLimit(key: SessionKey): boolean {
+function handleUnconfirmedLimit(key: SessionKey, readingNotBeforeMs?: number): boolean {
   const k = keyToString(key);
   const entry = apiRetryTimers.get(k);
   // A retry already pending (the probe itself, or a short retry) takes this error with it — as `decideRetryAction`
@@ -2548,7 +2557,7 @@ function handleUnconfirmedLimit(key: SessionKey): boolean {
     return true;
   }
   const isRepeatAfterProbe = entry?.isLimitProbe === true && entry.firedAt !== null && Date.now() - entry.firedAt <= retryRecurrenceGraceMs;
-  const action = getUnconfirmedLimitAction({ isRepeatAfterProbe, isUsageExhausted: checkIsTopicAccountUsageExhausted(key) });
+  const action = getUnconfirmedLimitAction({ isRepeatAfterProbe, isUsageExhausted: checkIsTopicAccountUsageExhausted(key, readingNotBeforeMs) });
   if (action === 'waitForReset') {
     console.log(`[apiRetry] ${k}: the unconfirmed usage limit is confirmed (${isRepeatAfterProbe ? 'it came again after the probe' : 'the account is marked limited or reads a window at 100 %'}) — waiting for the reset`);
     return false;
@@ -2562,15 +2571,17 @@ function handleUnconfirmedLimit(key: SessionKey): boolean {
 
 /**
  * @description Whether the topic's account usage reading proves its limit: a Claude topic's live profile marked limited
- * (a rejected `rate_limit_event`) or showing a window its model drains at 100 %. Other backends carry no reading for the
- * account an unconfirmed wording names: `false`, and only a repeat confirms it.
+ * (a rejected `rate_limit_event`) or showing a window its model drains at 100 % — in a reading taken no earlier than
+ * `readingNotBeforeMs` when given (`checkIsClaudeUsageExhausted`). Other backends carry no reading for the account an
+ * unconfirmed wording names: `false`, and only a repeat confirms it.
  */
-function checkIsTopicAccountUsageExhausted(key: SessionKey): boolean {
+function checkIsTopicAccountUsageExhausted(key: SessionKey, readingNotBeforeMs?: number): boolean {
   if (!checkIsClaudeProfileBackend(key)) return false;
   const info = state.getClaudeProfileInfo(resolveLiveClaudeProfileName(key));
   const limitedUntilMs = info?.limitedUntil ? Date.parse(info.limitedUntil) : Number.NaN;
   const nowMs = Date.now();
-  return (Number.isFinite(limitedUntilMs) && limitedUntilMs > nowMs) || checkIsClaudeUsageExhausted(info?.usage, getThreadClaudeModel(key), nowMs);
+  return (Number.isFinite(limitedUntilMs) && limitedUntilMs > nowMs)
+    || checkIsClaudeUsageExhausted(info?.usage, getThreadClaudeModel(key), nowMs, { readNotBeforeMs: readingNotBeforeMs });
 }
 
 /**
@@ -15208,25 +15219,43 @@ function restoreApiRetries(): void {
 }
 
 /**
- * @description Record a json-stream conversation's stdout log, as it is now, as a limit episode already handled
- * (`limitEpisodesRecovered`, the stamp {@link recoverLimitEpisodesFromDisk} checks). A live wait that ends without
- * its resume — «⏭ Skip once», a give-up, a takeover — leaves the error it waited on as the log's last terminal frame,
- * and the next boot's recovery armed it again: only the recovery itself wrote the stamp. A later turn writes to the
- * log and changes its identity, so a NEW parked error is still recovered.
+ * @description What a json-stream conversation's `stdout.jsonl` says of a limit episode now: the log's identity (ONE stat:
+ * size and mtime describe the same instant) and the error it is parked on, with that error's place in the log
+ * (`findParkedTerminalError` over the tail — never the whole log). `null` when there is no log; `parked` is `null` when the log
+ * is not parked on an error, or its tail could not be read (`tailError` says why).
  */
-function markLimitEpisodeSettled(key: SessionKey): void {
-  const agent = state.getAgent(key);
-  if (!agent || !checkIsJsonStreamBackend(agent.name)) return;
-  const { stdoutFile } = getJsonStreamSessionPaths(resolveJsonStreamSessionDir(getDataDir(), key));
+function readLimitEpisodeEvidence(stdoutFile: string): { log: LimitEpisodeMarker; parked: ParkedTerminalError | null; tailError?: unknown } | null {
   let log: LimitEpisodeMarker;
   try {
     const stat = fs.statSync(stdoutFile);
     log = { sizeBytes: stat.size, mtimeMs: stat.mtimeMs };
   } catch {
-    return; // no stdout log for this thread — nothing a boot could recover
+    return null; // no stdout log for this thread — nothing a boot could recover
   }
+  if (log.sizeBytes === 0) return { log, parked: null };
+  try {
+    const tailStart = Math.max(0, log.sizeBytes - limitEpisodeTailMaxBytes);
+    return { log, parked: findParkedTerminalError(readFileByteRange(stdoutFile, tailStart, log.sizeBytes), tailStart) };
+  } catch (tailError) {
+    return { log, parked: null, tailError };
+  }
+}
+
+/**
+ * @description Record a json-stream conversation's parked limit error, as the log holds it now, as an episode already handled
+ * (`limitEpisodesRecovered`, the marker {@link recoverLimitEpisodesFromDisk} checks). A live wait that ends without its resume —
+ * «⏭ Skip once», a give-up, a used-up balance — leaves the error it waited on as the log's last terminal frame, and the next
+ * boot's recovery armed it again: only the recovery itself wrote the marker. The marker names that error's place in the log, so
+ * the frames a later boot appends after it (its `mcp_status` reply) leave it handled, while a NEW parked error is still recovered.
+ */
+function markLimitEpisodeSettled(key: SessionKey): void {
+  const agent = state.getAgent(key);
+  if (!agent || !checkIsJsonStreamBackend(agent.name)) return;
+  const { stdoutFile } = getJsonStreamSessionPaths(resolveJsonStreamSessionDir(getDataDir(), key));
+  const evidence = readLimitEpisodeEvidence(stdoutFile);
+  if (evidence === null) return;
   void state
-    .setLimitEpisodeRecovered(key, log)
+    .setLimitEpisodeRecovered(key, buildLimitEpisodeMarker(evidence.log, evidence.parked))
     .catch((e) => console.error('[limitRecovery] marker persist failed:', e));
 }
 
@@ -15268,11 +15297,20 @@ const limitEpisodesOwnedByRecovery = new Set<string>();
  * error's own time) resumes at once: the retry plan clamps the negative delay to
  * zero, and {@link handleApiError} announces no limit for a window that is over.
  *
- * Each arming STAMPS the log's identity (`state.json` `limitEpisodesRecovered`), so
+ * Each arming STAMPS the episode (`state.json` `limitEpisodesRecovered`): the parked
+ * error's place in the log and a stamp of its text (`buildLimitEpisodeMarker`), so
  * an episode is recovered at most once: «⏭ Skip once», a user takeover and a
  * give-up all clear the armed record while leaving the same trailing error in the
  * log, and hot mode reloads the bot on every code change — without the stamp each
- * reload resurrected the settled wait.
+ * reload resurrected the settled wait. The place, not the log's size and mtime:
+ * every boot asks an adopted session for its `mcp_status`, whose reply lands in the
+ * log AFTER this step, so a stamp of the whole log was out of date by the next boot
+ * and each restart re-armed the same parked error.
+ *
+ * The usage poll of this boot runs beside the reattach, so a recovered UNCONFIRMED
+ * wording must not be confirmed by a reading the poll has not re-read or marked stale
+ * yet: a reading older than the error proves nothing about it (`episodeWrittenAtMs`,
+ * {@link handleUnconfirmedLimit}) — it is probed, and the probe's repeat confirms it.
  */
 function recoverLimitEpisodesFromDisk(): void {
   const now = Date.now();
@@ -15288,33 +15326,21 @@ function recoverLimitEpisodesFromDisk(): void {
     const keyStr = keyToString(key);
     const { stdoutFile } = getJsonStreamSessionPaths(resolveJsonStreamSessionDir(getDataDir(), key));
 
-    // ONE stat: size and mtime must describe the same instant, because together
-    // they are the episode identity persisted below.
-    let log: LimitEpisodeMarker;
-    try {
-      const stat = fs.statSync(stdoutFile);
-      log = { sizeBytes: stat.size, mtimeMs: stat.mtimeMs };
-    } catch {
-      continue; // no stdout log for this thread (yet) — nothing to recover
-    }
-    if (log.sizeBytes === 0) continue;
-
-    let errorText: string | null = null;
-    try {
-      const tail = readFileByteRange(
-        stdoutFile,
-        Math.max(0, log.sizeBytes - limitEpisodeTailMaxBytes),
-        log.sizeBytes,
-      );
-      errorText = getLastTerminalErrorText(tail.toString('utf8'));
-    } catch (e) {
-      console.warn(`[limitRecovery] ${keyStr}: cannot read stdout tail:`, e instanceof Error ? e.message : e);
+    const evidence = readLimitEpisodeEvidence(stdoutFile);
+    if (evidence === null || evidence.log.sizeBytes === 0) continue; // no stdout log for this thread (yet) — nothing to recover
+    if (evidence.tailError !== undefined) {
+      const reason = evidence.tailError;
+      console.warn(`[limitRecovery] ${keyStr}: cannot read stdout tail:`, reason instanceof Error ? reason.message : reason);
       continue;
     }
+    const { log, parked } = evidence;
+    const errorText = parked?.text ?? null;
+    const errorWrittenAtMs = errorText === null ? null : readParkedErrorWrittenAtMs(key, agent.claudeSessionId, errorText);
 
     const decision = decideLimitEpisodeRecovery({
       errorText,
-      errorWrittenAtMs: errorText === null ? null : readParkedErrorWrittenAtMs(key, agent.claudeSessionId, errorText),
+      errorEndOffset: parked?.endOffset ?? null,
+      errorWrittenAtMs,
       log,
       handled: state.getLimitEpisodeRecovered(key),
       now,
@@ -15325,17 +15351,20 @@ function recoverLimitEpisodesFromDisk(): void {
       continue;
     }
     console.log(`[limitRecovery] ${keyStr}: re-arming a limit wait left over from before the restart`);
-    // Stamp the log identity BEFORE arming: this trailing error is now handled, so
-    // a later boot must not recover it again even once the armed record is gone
-    // («⏭ Skip once», a user takeover, or a give-up all clear it).
+    // Stamp the episode BEFORE arming: this parked error is now handled, so a later boot must not recover it again even
+    // once the armed record is gone («⏭ Skip once», a user takeover, or a give-up all clear it) — nor once frames that are
+    // no turn (this very boot's `mcp_status` reply) land after it: the marker names the error's place, not the log's size.
     void state
-      .setLimitEpisodeRecovered(key, log)
+      .setLimitEpisodeRecovered(key, buildLimitEpisodeMarker(log, parked))
       .catch(e => console.error('[limitRecovery] marker persist failed:', e));
     // This episode is the recovery's alone: the adopt replays the same error once the boot releases its output (after this
     // step), and `handleApiError` leaves that copy out until the replay is over.
     limitEpisodesOwnedByRecovery.add(keyStr);
     void (getAdapter(agent.name).whenAdoptReplayed?.(key) ?? Promise.resolve()).then(() => limitEpisodesOwnedByRecovery.delete(keyStr));
-    void withThreadLocale(key, () => handleApiError(key, decision.cls, { isRecoveredEpisode: true }));
+    // A usage reading older than the error proves nothing about it (an unconfirmed wording is probed, not confirmed by it):
+    // this boot's usage poll, started before the reattach, may not have re-read the account or marked its reading stale yet.
+    const episodeWrittenAtMs = errorWrittenAtMs ?? log.mtimeMs;
+    void withThreadLocale(key, () => handleApiError(key, decision.cls, { isRecoveredEpisode: true, episodeWrittenAtMs }));
     recovered += 1;
   }
   if (recovered > 0) console.log(`[reattach] limit episodes: recovered ${recovered}`);

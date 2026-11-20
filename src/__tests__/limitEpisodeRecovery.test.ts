@@ -10,7 +10,10 @@
 import { test } from 'node:test';
 import * as assert from 'node:assert/strict';
 import {
+  buildLimitEpisodeMarker,
+  findParkedTerminalError,
   getLastTerminalErrorText,
+  getLimitEpisodeErrorStamp,
   getParkedErrorWrittenAtMs,
   decideLimitEpisodeRecovery,
   limitEpisodeMaxAgeMs,
@@ -230,7 +233,8 @@ test('decide: a healthy tail (no error text) → skip', () => {
 // «⏭ Skip once», a user takeover and a give-up all clear the armed record while
 // leaving the SAME trailing error in the log — and hot mode reloads the bot on
 // every code change, so without the marker each reload resurrected the settled
-// wait. Identity = size + mtime: an unchanged log means nothing has happened.
+// wait. The marker names the parked error's place in the log (its frame's end offset and a stamp of its text); a marker
+// without it — written before it was kept — is compared on the log's size + mtime, as it always was.
 
 test('decide: no marker yet → arm (the first boot after the episode)', () => {
   const decision = decideLimitEpisodeRecovery({
@@ -360,4 +364,114 @@ test('decide: the transcript\'s error time wins over a log mtime that frames wri
     Date.parse('2026-09-24T22:50:00.000Z'),
     'the 10:50pm reset of the error written at 22:00, though the log was last written at 23:00',
   );
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  The episode is the parked error itself, not the whole log
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// Every boot asks an adopted session for its `mcp_status` (the bot MCP heal), and the reply lands in `stdout.jsonl` AFTER
+// the boot's recovery read it. A marker of the whole log (size + mtime) was out of date by the next boot, so every restart
+// re-armed the last parked error — a limit settled long ago, announced and waited for again.
+
+/** The control_response an adopted session writes to the `mcp_status` request of the bot's boot heal. */
+const mcpStatusReplyLine = JSON.stringify({ type: 'control_response', response: { subtype: 'success', request_id: 'mcp_status_1', response: { mcpServers: [] } } });
+const sessionStateLine = JSON.stringify({ type: 'system', subtype: 'session_state_changed', state: 'idle' });
+
+/** A stdout log as the bot reads it: lines joined, each closed by its newline. */
+function buildLogBytes(lines: readonly string[]): Buffer {
+  return Buffer.from(lines.map((line) => `${line}\n`).join(''), 'utf8');
+}
+
+/** What the boot recovery reads of `bytes`: the tail (from `tailStart`) and the log's identity. */
+function readEvidence(bytes: Buffer, mtimeMs: number, tailStart = 0) {
+  return { log: buildLog(mtimeMs, bytes.length), parked: findParkedTerminalError(bytes.subarray(tailStart), tailStart) };
+}
+
+test('parked error: its place is the byte offset right after its line — exact past multi-byte text, and in a tail cut mid-character', () => {
+  const before = [JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: 'Готово — 日本語 ✅' }] } }), assistantLine];
+  const bytes = buildLogBytes([...before, buildResultLine(true, liveLimitText)]);
+  assert.deepEqual(findParkedTerminalError(bytes, 0), { text: liveLimitText, endOffset: bytes.length });
+  // A tail starting inside the Cyrillic text: its torn first line is skipped, the offset is still the log's.
+  const tailStart = bytes.indexOf(Buffer.from('Готово', 'utf8')) + 1;
+  assert.deepEqual(findParkedTerminalError(bytes.subarray(tailStart), tailStart), { text: liveLimitText, endOffset: bytes.length });
+  // No trailing newline (a line still being written): the offset is the end of what was read.
+  const unterminated = Buffer.from(buildResultLine(true, liveLimitText), 'utf8');
+  assert.equal(findParkedTerminalError(unterminated, 100)?.endOffset, 100 + unterminated.length);
+});
+
+test('parked error: frames that are no turn — the boot\'s mcp_status reply, a session state, a rate-limit event — keep the error and its place', () => {
+  const parkedBytes = buildLogBytes([assistantLine, buildResultLine(true, liveLimitText)]);
+  const grown = Buffer.concat([parkedBytes, buildLogBytes([mcpStatusReplyLine, sessionStateLine, rateLimitEventLine, mcpStatusReplyLine])]);
+  assert.deepEqual(findParkedTerminalError(grown, 0), { text: liveLimitText, endOffset: parkedBytes.length });
+  // Activity after it still ends the episode, and a later error is a new place.
+  assert.equal(findParkedTerminalError(Buffer.concat([grown, buildLogBytes([userEchoLine])]), 0), null);
+  const again = Buffer.concat([grown, buildLogBytes([userEchoLine, buildResultLine(true, liveLimitText)])]);
+  assert.deepEqual(findParkedTerminalError(again, 0), { text: liveLimitText, endOffset: again.length });
+});
+
+test('restarts: an episode the recovery armed is not armed again at the next boots, though each boot appends its mcp_status reply', () => {
+  const bootAt = now - 10 * 60_000;
+  let bytes = buildLogBytes([assistantLine, buildResultLine(true, liveLimitText)]);
+  // Boot 1: the parked error is recovered and stamped — then this boot's heal appends its reply.
+  const first = readEvidence(bytes, bootAt);
+  const firstDecision = decideLimitEpisodeRecovery({ errorText: first.parked?.text ?? null, errorEndOffset: first.parked?.endOffset, log: first.log, now: bootAt, hasArmedRetry: false });
+  assert.equal(firstDecision.action, 'arm');
+  const marker = buildLimitEpisodeMarker(first.log, first.parked);
+  bytes = Buffer.concat([bytes, buildLogBytes([mcpStatusReplyLine])]);
+  // Boots 2..4 (the armed record gone: skipped once, given up, taken over): each finds the grown log, each appends again.
+  for (let boot = 2; boot <= 4; boot += 1) {
+    const evidence = readEvidence(bytes, bootAt + boot * 60_000);
+    assert.notEqual(evidence.log.sizeBytes, marker.sizeBytes, 'the log did grow');
+    assert.deepEqual(
+      decideLimitEpisodeRecovery({ errorText: evidence.parked?.text ?? null, errorEndOffset: evidence.parked?.endOffset, log: evidence.log, handled: marker, now: bootAt + boot * 60_000, hasArmedRetry: false }),
+      { action: 'skip', reason: 'alreadyHandled' },
+      `boot ${boot}`,
+    );
+    bytes = Buffer.concat([bytes, buildLogBytes([mcpStatusReplyLine])]);
+  }
+  // A NEW parked error (a later turn hit a limit again) is a new episode: recovered.
+  bytes = Buffer.concat([bytes, buildLogBytes([userEchoLine, buildResultLine(true, liveLimitText)])]);
+  const later = readEvidence(bytes, now);
+  assert.equal(decideLimitEpisodeRecovery({ errorText: later.parked?.text ?? null, errorEndOffset: later.parked?.endOffset, log: later.log, handled: marker, now, hasArmedRetry: false }).action, 'arm');
+});
+
+test('restarts: a wait settled without its resume (marker written then) stays settled across the boots\' mcp_status replies too', () => {
+  // «⏭ Skip once» / a give-up mark the episode while the live log is parked on it (markLimitEpisodeSettled).
+  const parked = buildLogBytes([buildResultLine(true, liveLimitText), rateLimitEventLine]);
+  const marker = buildLimitEpisodeMarker(buildLog(now - 120_000, parked.length), findParkedTerminalError(parked, 0));
+  const grown = Buffer.concat([parked, buildLogBytes([mcpStatusReplyLine, mcpStatusReplyLine])]);
+  const evidence = readEvidence(grown, now - 1_000);
+  assert.deepEqual(
+    decideLimitEpisodeRecovery({ errorText: evidence.parked?.text ?? null, errorEndOffset: evidence.parked?.endOffset, log: evidence.log, handled: marker, now, hasArmedRetry: false }),
+    { action: 'skip', reason: 'alreadyHandled' },
+  );
+});
+
+test('marker: the parked error\'s place and text stamp beside the log\'s identity; none when the log is not parked; another text at the same place is another episode', () => {
+  const log = buildLog(now - 1_000, 4096);
+  assert.deepEqual(buildLimitEpisodeMarker(log, null), { sizeBytes: 4096, mtimeMs: now - 1_000 });
+  const marker = buildLimitEpisodeMarker(log, { text: liveLimitText, endOffset: 2048 });
+  assert.deepEqual(marker, { sizeBytes: 4096, mtimeMs: now - 1_000, errorEndOffset: 2048, errorStamp: getLimitEpisodeErrorStamp(liveLimitText) });
+  assert.match(marker.errorStamp ?? '', /^[0-9a-f]{16}$/);
+  assert.ok(!JSON.stringify(marker).includes('session limit'), 'the text itself is not kept');
+  // A log truncated and reseeded by a new process may put another error at the same byte offset.
+  const otherText = "You've hit your weekly limit · resets Mon 9:00am (UTC)";
+  assert.equal(decideLimitEpisodeRecovery({ errorText: otherText, errorEndOffset: 2048, log: buildLog(now, 4300), handled: marker, now, hasArmedRetry: false }).action, 'arm');
+  assert.equal(decideLimitEpisodeRecovery({ errorText: liveLimitText, errorEndOffset: 2048, log: buildLog(now, 4300), handled: marker, now, hasArmedRetry: false }).action, 'skip');
+});
+
+test('marker: one written before the episode was kept (no offset) is still compared on the log\'s size and mtime', () => {
+  const legacy = buildLog(now - 60_000, 4096);
+  assert.equal(decideLimitEpisodeRecovery({ errorText: liveLimitText, errorEndOffset: 4096, log: { ...legacy }, handled: legacy, now, hasArmedRetry: false }).action, 'skip');
+  assert.equal(decideLimitEpisodeRecovery({ errorText: liveLimitText, errorEndOffset: 4000, log: buildLog(now - 1_000, 4250), handled: legacy, now, hasArmedRetry: false }).action, 'arm', 'one last time — the stamp it writes then is the new one');
+});
+
+test('decide: the 12 h age is the ERROR\'s own time when known — frames written after it (a boot\'s mcp_status reply) never keep an old error young', () => {
+  const freshMtime = now - 60_000;
+  assert.deepEqual(
+    decideLimitEpisodeRecovery({ errorText: liveLimitText, errorWrittenAtMs: now - limitEpisodeMaxAgeMs - 1, log: buildLog(freshMtime), now, hasArmedRetry: false }),
+    { action: 'skip', reason: 'stale' },
+  );
+  assert.equal(decideLimitEpisodeRecovery({ errorText: liveLimitText, errorWrittenAtMs: now - limitEpisodeMaxAgeMs, log: buildLog(freshMtime), now, hasArmedRetry: false }).action, 'arm');
 });
