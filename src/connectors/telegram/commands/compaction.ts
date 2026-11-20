@@ -689,7 +689,7 @@ export function createCompaction(ports: CompactionPorts) {
     return checkIsWorkingAtIdle({
       isBusy: adapter.checkIsBusy?.(key) ?? false,
       hasPendingQuestion: pendingQuestions.has(keyToString(key)),
-      hasBackgroundWork: adapter.checkHasBackgroundWork?.(key) ?? false,
+      hasBackgroundWork: (adapter.getBackgroundWorkSignals?.(key) ?? []).length > 0,
     });
   }
 
@@ -790,7 +790,7 @@ export function createCompaction(ports: CompactionPorts) {
     const kStr = keyToString(key);
     if (!adapter.checkIsActive(key)) return;
     const isRealTurn = checkIsBusyForRealTurn({ isBusy: adapter.checkIsBusy?.(key) ?? false, hasPendingQuestion: pendingQuestions.has(kStr) });
-    if (isRealTurn || !(adapter.checkHasBackgroundWork?.(key) ?? false)) return;
+    if (isRealTurn || (adapter.getBackgroundWorkSignals?.(key) ?? []).length === 0) return;
     const delayMs = getPendingWorkRecheckDelayMs({ idleWindowMs, holdRemainingMs: adapter.getPendingWorkHoldRemainingMs?.(key) ?? null });
     console.log(`[compact-on-idle] ${kStr} looks again in ${(delayMs / 60_000).toFixed(1)} min: only the agent's own pending work keeps it`);
     setIdleFireTimer(key, delayMs);

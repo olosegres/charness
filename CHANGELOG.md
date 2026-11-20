@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+**An idle topic is no longer taken for «working» for hours after you sent the agent several messages while it was busy — the idle compaction and the idle stop run on time again.**
+Before, two or more messages sent while the agent was in the middle of a turn (voice notes, say) were taken in by Claude Code together, as one message; the bot counted every one of them as still waiting, took the process for working for good, and at the idle mark skipped both the compaction and the stop — every 55 minutes, without a word in the topic — until you typed `/compact` yourself. The same stuck count also held back automatic updates and account switches. Now the bot matches what the agent took in with what it wrote, so those messages count as taken in. And as a safety net, a message the agent never confirms keeps a process that runs no turn for 30 seconds only, and a compaction flag nobody cleared for no longer than the bot itself waits for a compaction (30 minutes).
+
 **A topic whose agent finished now shows 🟢 at the end of its name in the topic list — the ✅ of 4.2.0 never appeared, because Telegram drops ✅ from topic names.**
 Before, a finished topic showed no mark at all: Telegram removed the ✅ the bot asked for and answered as if nothing had changed, and the bot believed the mark was there. Now «finished» is a green circle (`Deploy 🟢`), and when Telegram keeps a topic's name different from the one the bot asked for — it answers «not modified», or its «renamed» line carries another name — the bot no longer takes the asked name for what the topic shows, so the next mark is still written. `/topic` binds a new topic under the name Telegram stored.
 

@@ -155,8 +155,10 @@ export type ClaudeStreamAction =
       windows: Array<{ name: string; utilization: number; resetsAtMs: number | null }>;
     }
   /** `--replay-user-messages` echo of a message the BOT wrote — the input-ack
-   *  signal (see {@link checkIsOwnInputEcho} for the user lines that are not). */
-  | { kind: 'userEcho' };
+   *  signal (see {@link checkIsOwnInputEcho} for the user lines that are not). `text` is
+   *  the echoed content when it is plain text, `null` for any other shape: messages the
+   *  CLI takes in together are echoed as ONE line carrying their texts joined by a newline. */
+  | { kind: 'userEcho'; text: string | null };
 
 /**
  * @description Whether a non-tool-result `user` line is the
@@ -419,7 +421,7 @@ export function classifyClaudeStreamMessage(msg: Record<string, unknown>): Claud
       }
       if (actions.length > 0) return actions;
     }
-    return checkIsOwnInputEcho(msg) ? [{ kind: 'userEcho' }] : [];
+    return checkIsOwnInputEcho(msg) ? [{ kind: 'userEcho', text: typeof content === 'string' ? content : null }] : [];
   }
 
   if (type === 'result') {

@@ -215,7 +215,7 @@ describe('json-stream external transport — exit detection', () => {
     adapter['drainStdoutTail'](session);
     assert.deepEqual([...session.backgroundTasks.keys()], ['b1', 'a2']);
     assert.equal(adapter.checkIsWorking(key), true, 'a background task keeps the idle session working (L-D2)');
-    assert.equal(adapter.checkHasBackgroundWork(key), true, 'reported apart from the turn, so a pending question cannot excuse it');
+    assert.deepEqual(adapter.getBackgroundWorkSignals(key), [{ kind: 'backgroundTasks', count: 2 }], 'reported apart from the turn, so a pending question cannot excuse it');
     assert.equal(adapter.checkIsBusy(key), false, 'no turn runs');
     assert.deepEqual(tailWrites.at(-1), {
       sessionId: 'sess-transport', offsetBytes: Buffer.byteLength(twoTasks), backgroundTaskIds: ['b1', 'a2'], isTurnInFlight: false, outstandingToolUseIds: [],
@@ -246,13 +246,15 @@ describe('json-stream external transport — exit detection', () => {
     assert.equal(adapter.checkIsWorking(key), true, 'a running turn');
     session.isBusy = false;
 
-    session.unconsumedInputCount = 1;
+    session.unconsumedInputs = [{ text: 'a prompt', since: Date.now() }];
     assert.equal(adapter.checkIsWorking(key), true, 'a prompt not yet taken in');
-    session.unconsumedInputCount = 0;
+    session.unconsumedInputs = [];
 
     session.compactionInProgress = true;
+    session.pendingCompaction = { resolve: () => {}, timer: null, sawSuccess: false, startedAt: Date.now() };
     assert.equal(adapter.checkIsWorking(key), true, 'a compaction in flight');
     session.compactionInProgress = false;
+    session.pendingCompaction = null;
 
     assert.equal(adapter.checkIsWorking(key), false);
     session.isActive = false;

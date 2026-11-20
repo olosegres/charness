@@ -82,7 +82,7 @@ describe('json-stream pending work — the agent\'s own background tasks and sch
     append(backgroundFinishedLines);
     assert.equal(adapter.checkIsBusy(key), false, 'no output of the task\'s turn yet');
     assert.equal(adapter.checkIsWorking(key), true, 'the task\'s notification says its turn is coming: still working');
-    assert.equal(adapter.checkHasBackgroundWork(key), true);
+    assert.deepEqual(adapter.getBackgroundWorkSignals(key), [{ kind: 'taskTurnOnItsWay' }], 'the list is already empty: only the announced turn holds');
 
     append(sessionRunningLine);
     assert.equal(adapter.checkIsBusy(key), true, 'the CLI\'s running state marks the turn at its start');

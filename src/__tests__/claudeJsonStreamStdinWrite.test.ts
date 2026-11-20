@@ -83,7 +83,7 @@ describe('json-stream adapter — a user turn that does not reach the CLI fails 
     await adapter.sendInputAndWait(key, 'please handle PROJ-1');
     assert.deepEqual(written.map((line) => JSON.parse(line)), [{ type: 'user', message: { role: 'user', content: 'please handle PROJ-1' } }]);
     assert.equal(session.isBusy, true);
-    assert.equal(session.unconsumedInputCount, 1, 'counted until the CLI echoes it');
+    assert.deepEqual(session.unconsumedInputs.map((pending) => pending.text), ['please handle PROJ-1'], 'listed until the CLI echoes it');
   });
 
   it('EAGAIN past the stall budget with NOTHING written rejects the forward, takes back the turn start, and leaves the stream usable', async () => {
@@ -92,7 +92,7 @@ describe('json-stream adapter — a user turn that does not reach the CLI fails 
     const session = addSession(adapter);
     await assert.rejects(adapter.sendInputAndWait(key, 'please handle PROJ-1'), stalled);
     assert.equal(session.isBusy, false, 'not busy: nothing reached the CLI');
-    assert.equal(session.unconsumedInputCount, 0, 'no echo is owed for a turn that was never written');
+    assert.deepEqual(session.unconsumedInputs, [], 'no echo is owed for a turn that was never written');
     assert.equal(session.isStdinBroken, false, 'nothing of the frame was written: the stream is intact');
     assert.deepEqual(suspended, []);
     // The retry goes through the same stream.
@@ -103,7 +103,7 @@ describe('json-stream adapter — a user turn that does not reach the CLI fails 
 
   it('a session that was busy stays busy after a failed write: the turn it is in still runs', async () => {
     const { adapter } = createAdapter([new FifoWriteError('EPIPE: write (0 of 10 bytes written)', 0, 10)]);
-    const session = addSession(adapter, { isBusy: true, unconsumedInputCount: 0 });
+    const session = addSession(adapter, { isBusy: true, unconsumedInputs: [] });
     await assert.rejects(adapter.sendInputAndWait(key, 'a message written mid-turn'));
     assert.equal(session.isBusy, true);
   });

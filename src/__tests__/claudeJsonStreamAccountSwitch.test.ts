@@ -2,7 +2,7 @@
  * @description The account switch after a usage limit must not wait for a "working" flag the limit left stuck.
  *
  * Live incident: a fresh process got a batch of messages, the first turn failed with a usage limit, and the
- * CLI never echoed the queued messages — `unconsumedInputCount` stayed above zero, the session looked working
+ * CLI never echoed the queued messages — the unconsumed-input list stayed non-empty, the session looked working
  * for good, and the deferred switch never fired. Load-bearing intent:
  * - an error `result` reconciles the unconsumed-input count so a pending switch applies at that turn end;
  * - a switch answering a limit (`isAfterLimit`) re-spawns now even over a busy / input-holding session, while a
@@ -17,11 +17,15 @@ import assert from 'node:assert/strict';
 import { ClaudeJsonStreamAdapter } from '../adapters/claudeJsonStreamAdapter';
 import { keyToString, type SessionKey } from '../sessionKey';
 import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
+import { type UnconsumedInput } from '../utils/jsonStreamUnconsumedInput';
 import { createStreamSessionFixture } from './claudeJsonStreamSessionFixture';
 
 const key: SessionKey = makeTelegramKey(-100999222, 78);
 const limitResult = JSON.stringify({ type: 'result', is_error: true, result: "You've hit your weekly limit" }) + '\n';
 const okResult = JSON.stringify({ type: 'result', is_error: false, result: 'done' }) + '\n';
+
+/** `count` messages written to the CLI and not echoed back. */
+const queuedInputs = (count: number): UnconsumedInput[] => Array.from({ length: count }, (_unused, index) => ({ text: `queued ${index}`, since: Date.now() }));
 
 function setup(): { adapter: ClaudeJsonStreamAdapter; respawns: Array<string | null | undefined> } {
   const adapter = new ClaudeJsonStreamAdapter();
@@ -36,7 +40,7 @@ function setup(): { adapter: ClaudeJsonStreamAdapter; respawns: Array<string | n
 describe('claude-json-stream account switch after a limit', () => {
   it('a plain apply over a session holding unconsumed input defers', async () => {
     const { adapter, respawns } = setup();
-    adapter['sessions'].get(keyToString(key))!.unconsumedInputCount = 4;
+    adapter['sessions'].get(keyToString(key))!.unconsumedInputs = queuedInputs(4);
     assert.equal(await adapter.applyClaudeConfigDir(key), 'deferred');
     assert.deepEqual(respawns, []);
   });
@@ -45,7 +49,7 @@ describe('claude-json-stream account switch after a limit', () => {
     const { adapter, respawns } = setup();
     const session = adapter['sessions'].get(keyToString(key))!;
     session.isBusy = true;
-    session.unconsumedInputCount = 3;
+    session.unconsumedInputs = queuedInputs(3);
     assert.equal(await adapter.applyClaudeConfigDir(key, { isAfterLimit: true }), 'respawned');
     assert.deepEqual(respawns, ['/profiles/perf']);
   });
@@ -54,25 +58,25 @@ describe('claude-json-stream account switch after a limit', () => {
     const { adapter } = setup();
     const session = adapter['sessions'].get(keyToString(key))!;
     session.isBusy = true;
-    session.unconsumedInputCount = 4; // four queued messages, the CLI echoed none of them
+    session.unconsumedInputs = queuedInputs(4); // four queued messages, the CLI echoed none of them
     adapter['onStdout'](session, limitResult);
-    assert.equal(session.unconsumedInputCount, 0);
+    assert.deepEqual(session.unconsumedInputs, []);
     assert.equal(adapter.checkIsWorking(key), false);
   });
 
   it('a normal result keeps the count of messages still queued', () => {
     const { adapter } = setup();
     const session = adapter['sessions'].get(keyToString(key))!;
-    session.unconsumedInputCount = 2;
+    session.unconsumedInputs = queuedInputs(2);
     adapter['onStdout'](session, okResult);
-    assert.equal(session.unconsumedInputCount, 2);
+    assert.equal(session.unconsumedInputs.length, 2);
   });
 
   it('a pending switch fires at the limit-error turn end', async () => {
     const { adapter, respawns } = setup();
     const session = adapter['sessions'].get(keyToString(key))!;
     session.isBusy = true;
-    session.unconsumedInputCount = 4;
+    session.unconsumedInputs = queuedInputs(4);
     assert.equal(await adapter.applyClaudeConfigDir(key), 'deferred');
     adapter['onStdout'](session, limitResult);
     await new Promise((resolve) => setTimeout(resolve, 20));

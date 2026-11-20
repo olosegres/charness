@@ -10,12 +10,23 @@
  * the agent was being woken to read its task's result.
  */
 
+import type { BackgroundWorkSignal } from './workingSignals';
+
 /**
  * How long a background task's notification holds the process for the turn it starts. The CLI starts that turn ~0.1 s
  * after the notification; the grace only bounds a notification whose turn never shows (one folded into a running
  * turn, a task stopped from inside a turn).
  */
 export const notificationTurnGraceMs = 30_000;
+
+/**
+ * How long a message the CLI has not echoed yet holds a process that runs no turn (`utils/jsonStreamUnconsumedInput.ts`): the
+ * time the CLI has to start the turn that takes it in. Measured on 2.1.329: a queued message's turn starts at the previous
+ * turn's end and its echo follows within a second; the start after a task's end took 3–5 s on a large context (see
+ * {@link notificationTurnGraceMs}, which this follows: the same "a turn is on its way" wait). Past it the message was dropped
+ * or never echoed in a shape the adapter knows, and counting it would hold the process for good.
+ */
+export const unconsumedInputGraceMs = notificationTurnGraceMs;
 
 /**
  * How long pending work (background tasks, scheduled jobs) holds the process after the conversation's LAST turn
@@ -51,8 +62,17 @@ export function checkIsNotificationTurnPending(input: Pick<PendingWorkInput, 'no
   return input.notificationTurnPendingSince !== null && input.now - input.notificationTurnPendingSince < notificationTurnGraceMs;
 }
 
-/** @description Whether the agent's own pending work must keep its process: tasks or jobs within the hold, or a task's turn on its way. */
-export function checkHasPendingWork(input: PendingWorkInput): boolean {
+/**
+ * @description What of the agent's own pending work must keep its process, by name: background tasks and scheduled jobs within the
+ * hold, and a finished task's turn on its way. Empty when nothing does.
+ */
+export function getPendingWorkSignals(input: PendingWorkInput): BackgroundWorkSignal[] {
+  const signals: BackgroundWorkSignal[] = [];
   const holdRemainingMs = getPendingWorkHoldRemainingMs(input);
-  return (holdRemainingMs !== null && holdRemainingMs > 0) || checkIsNotificationTurnPending(input);
+  if (holdRemainingMs !== null && holdRemainingMs > 0) {
+    if (input.backgroundTaskCount > 0) signals.push({ kind: 'backgroundTasks', count: input.backgroundTaskCount });
+    if (input.scheduledJobCount > 0) signals.push({ kind: 'scheduledJobs', count: input.scheduledJobCount });
+  }
+  if (checkIsNotificationTurnPending(input)) signals.push({ kind: 'taskTurnOnItsWay' });
+  return signals;
 }

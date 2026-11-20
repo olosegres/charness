@@ -84,6 +84,14 @@ export const fakeCompactionModelUsage = { 'fake-model': { inputTokens: 1446, out
 export const fakeClaudeCrashOnPromptFileName = 'crash-on-prompt';
 
 /**
+ * A file in the fake's state dir that, while it exists, makes the fake drain the prompts that arrive while a prompt turn runs
+ * the way the real CLI does (measured on 2.1.329, `-p`, stream-json, `--replay-user-messages`): as ONE turn, the one echo of
+ * which carries their texts joined by a newline — N written messages, one echo. Without the file every prompt runs as a turn
+ * of its own, with its own echo.
+ */
+export const fakeClaudeMergeQueuedPromptsFileName = 'merge-queued-prompts';
+
+/**
  * A file in the fake's state dir that, while it exists, makes EVERY turn end on a subscription limit whose reset is the
  * file's content — the bot's own "continue" nudge included, so a flow can drive a limit wait through all its attempts.
  */

@@ -8,6 +8,7 @@ import type { FallbackChainEntry } from './utils/fallbackChain';
 import type { ClaudeBackgroundTask } from './utils/claudeStreamJson';
 import type { ScheduledJob } from './utils/claudeScheduledJobs';
 import type { LostWork } from './utils/lostWork';
+import type { BackgroundWorkSignal } from './utils/workingSignals';
 
 export interface AgentSession {
   id: string;
@@ -861,8 +862,10 @@ export interface AgentAdapter extends EventEmitter {
    * json-stream and OpenCode accept it mid-turn and merge it into the running
    * turn), so for that window the backend can report the END of the earlier
    * turn. The request wake-up engine counts a turn end only once this is false.
-   *  - **Claude json-stream** — user messages written minus their
-   *    `--replay-user-messages` echoes (the echo arrives when Claude reads it).
+   *  - **Claude json-stream** — user messages written that no `--replay-user-messages`
+   *    echo has carried yet (the echo arrives when Claude reads them; messages it takes in
+   *    together are ONE echo), for as long as they can still be on their way: while a turn
+   *    runs, and for a short grace after its end or their write.
    *  - **OpenCode** — prompts sent minus the new user messages seen on the event
    *    stream.
    * Optional: a backend without such a signal omits it, and the engine falls
@@ -885,20 +888,20 @@ export interface AgentAdapter extends EventEmitter {
   checkIsWorking?(key: SessionKey): boolean;
 
   /**
-   * The part of "working" that is NOT the running turn: a background task the
-   * process still runs, input written but not yet taken in, a compaction in
-   * flight. Read apart from `checkIsBusy` by the idle fire, which excuses a busy
-   * turn that only waits on an interactive question (D1) but never this — with a
-   * question pending AND a background task running, the process is working (L-D2).
-   * Optional, like `checkIsWorking`.
+   * The part of "working" that is NOT the running turn, by name: a background task or a scheduled job the
+   * process still runs, a finished task's turn on its way, input written but not yet taken in, a compaction in
+   * flight — each only for a bounded time, so none holds a turn-less process for good. Empty when there is none.
+   * Read apart from `checkIsBusy` by the idle fire, which excuses a busy turn that only waits on an interactive
+   * question (D1) but never this — with a question pending AND a background task running, the process is working
+   * (L-D2) — and which logs WHICH signal held the process. Optional, like `checkIsWorking`.
    */
-  checkHasBackgroundWork?(key: SessionKey): boolean;
+  getBackgroundWorkSignals?(key: SessionKey): BackgroundWorkSignal[];
 
   /**
    * The hold left for the agent's own pending work between turns — background tasks, scheduled jobs — which keeps
    * the process only for a bounded time after its last turn (`utils/jsonStreamPendingWork.ts`): `null` with nothing
    * pending, `0` once spent. The idle fire that found only this work re-checks no later than when it runs out.
-   * Optional, like `checkHasBackgroundWork`.
+   * Optional, like `getBackgroundWorkSignals`.
    */
   getPendingWorkHoldRemainingMs?(key: SessionKey): number | null;
 

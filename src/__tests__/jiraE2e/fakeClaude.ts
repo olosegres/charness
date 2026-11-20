@@ -25,6 +25,7 @@ import {
   getFakeAskQuestionText,
   fakeAskTwoOutcomeSeparator,
   fakeClaudeCrashOnPromptFileName,
+  fakeClaudeMergeQueuedPromptsFileName,
   fakeClaudeAlwaysUsageLimitFileName,
   fakeClaudeApiErrorDelayFileName,
   fakeClaudeApiErrorOnceFileName,
@@ -236,7 +237,9 @@ import { claudeSessionStateEventsVariableName } from '../../utils/jsonStreamHost
  * this skill: <dir>` and its body) in the transcript; a skill that does not exist is a failed call.
  *
  * Like the real CLI, a user message that arrives mid-turn is NEVER read inside
- * that turn: turns run one at a time, in arrival order.
+ * that turn: turns run one at a time, in arrival order. While the state dir holds
+ * `fakeClaudeMergeQueuedPromptsFileName`, the prompts that arrived behind a running prompt turn
+ * are drained TOGETHER as one turn with one echo (their texts joined by a newline), as the real CLI does.
  *
  * A `/compact` user turn is answered like the real CLI's: a `compact_status`
  * success, a `compact_boundary` with token counts and a `result` whose `usage`
@@ -1314,7 +1317,12 @@ function getReportedModel(argv: readonly string[]): string {
   return getFlagValues(argv, '--model')[0] ?? 'fake-model';
 }
 
-async function runTurn(argv: readonly string[], sessionId: string, content: string): Promise<void> {
+/**
+ * One turn on `content`. A turn that drained several queued prompts at once ({@link fakeClaudeMergeQueuedPromptsFileName}) is
+ * echoed and recorded as the whole `content`, and answers the request of `answeredContent`, the newest prompt in it — the one
+ * a real agent answers, since a newer request covers the older ones it replaces.
+ */
+async function runTurn(argv: readonly string[], sessionId: string, content: string, answeredContent: string = content): Promise<void> {
   recordTranscriptMessage(sessionId, content);
   writeTurnStart(argv, sessionId);
   writeStdout({ type: 'user', message: { role: 'user', content }, session_id: sessionId });
@@ -1337,7 +1345,7 @@ async function runTurn(argv: readonly string[], sessionId: string, content: stri
     endTurnOnUsageLimit(sessionId, fs.readFileSync(alwaysUsageLimitPath, 'utf8').trim());
     return;
   }
-  const requestId = requestIdRe.exec(content)?.[0];
+  const requestId = requestIdRe.exec(answeredContent)?.[0];
   const watchMode = modeRe.exec(content)?.[1];
   if (watchMode === 'arm-watch' || watchMode === 'arm-status-watch' || watchMode === 'cancel-watch') {
     const watchIssueKey = getPromptIssueKey(content) ?? 'unknown';
@@ -1382,13 +1390,13 @@ async function runTurn(argv: readonly string[], sessionId: string, content: stri
     }
     return;
   }
-  const isRequestPrompt = content.includes(`[Request ${requestId}`);
+  const isRequestPrompt = answeredContent.includes(`[Request ${requestId}`);
   // The header's line for a requester who never sees the agent's plain text (a Telegram answers-only topic, a tracker).
-  const isPlainTextHidden = content.includes(requesterDoesNotSeePlainTextPhrase);
-  const supersededRequestIds = supersededRequestsLineRe.exec(content)?.[1].split(', ') ?? [];
+  const isPlainTextHidden = answeredContent.includes(requesterDoesNotSeePlainTextPhrase);
+  const supersededRequestIds = supersededRequestsLineRe.exec(answeredContent)?.[1].split(', ') ?? [];
   const previous = readRequestState(requestId);
-  const issueKey = getPromptIssueKey(content) ?? 'unknown';
-  const state: RequestTurnState = previous ?? { mode: getMode(content, issueKey), issueKey, turnCount: 0, firstTurnAt: Date.now() };
+  const issueKey = getPromptIssueKey(answeredContent) ?? 'unknown';
+  const state: RequestTurnState = previous ?? { mode: getMode(answeredContent, issueKey), issueKey, turnCount: 0, firstTurnAt: Date.now() };
   state.turnCount += 1;
   writeRequestState(requestId, state);
   appendJsonLine(fakeClaudeLogFileNames.turns, { requestId, issueKey: state.issueKey, isRequestPrompt, isPlainTextHidden, supersededRequestIds, turnCount: state.turnCount, pid: process.pid });
@@ -1508,6 +1516,28 @@ function takeOverlappingProcessPid(sessionId: string | undefined): number | null
   }
 }
 
+/** Whether a prompt's turn is queued or running: a prompt arriving meanwhile is held for the merged turn ({@link fakeClaudeMergeQueuedPromptsFileName}). */
+let isPromptTurnRunning = false;
+/** The prompts held behind the running prompt turn, in arrival order. */
+let queuedPrompts: string[] = [];
+
+/** Run the turn of `prompts` (their texts joined by a newline: the real CLI's drain of a queue), then the one the prompts held behind it make. */
+function enqueuePromptTurn(argv: readonly string[], sessionId: string, prompts: readonly string[]): void {
+  isPromptTurnRunning = true;
+  turnChain = turnChain
+    .then(() => runTurn(argv, sessionId, prompts.join('\n'), prompts[prompts.length - 1]))
+    .catch((error: Error) => {
+      process.stderr.write(`fake claude: turn failed: ${error.stack ?? error.message}\n`);
+      endTurn(sessionId, 'The turn failed.');
+    })
+    .then(() => {
+      isPromptTurnRunning = false;
+      const drainedPrompts = queuedPrompts;
+      queuedPrompts = [];
+      if (drainedPrompts.length > 0) enqueuePromptTurn(argv, sessionId, drainedPrompts);
+    });
+}
+
 async function main(): Promise<void> {
   const argv = process.argv.slice(2);
   const isSessionLaunch = checkHasFlag(argv, ['--input-format', 'stream-json']);
@@ -1602,10 +1632,11 @@ async function main(): Promise<void> {
       process.exit(1);
     }
     notifyUserMessageQueued();
-    turnChain = turnChain.then(() => runTurn(argv, sessionId, content)).catch((error: Error) => {
-      process.stderr.write(`fake claude: turn failed: ${error.stack ?? error.message}\n`);
-      endTurn(sessionId, 'The turn failed.');
-    });
+    if (isPromptTurnRunning && fs.existsSync(path.join(getStateDir(), fakeClaudeMergeQueuedPromptsFileName))) {
+      queuedPrompts.push(content);
+      return;
+    }
+    enqueuePromptTurn(argv, sessionId, [content]);
   });
 }
 

@@ -119,7 +119,9 @@ import { checkIsSameClaudeConfigDir } from '../utils/claudeProfiles';
 import { claudeJsonStreamAdapterName, claudePerTurnAdapterName } from './adapterNames';
 import { checkIsClaudeAutoStopSupported } from '../utils/claudeCodeVersion';
 import { getSessionLaunchOptions, type SessionLaunchDefaultsReader } from './sessionLaunchDefaults';
-import { checkHasPendingWork, checkIsNotificationTurnPending, getPendingWorkHoldRemainingMs, pendingWorkHoldDefaultMs, type PendingWorkInput } from '../utils/jsonStreamPendingWork';
+import { checkIsNotificationTurnPending, getPendingWorkHoldRemainingMs, getPendingWorkSignals, pendingWorkHoldDefaultMs, type PendingWorkInput } from '../utils/jsonStreamPendingWork';
+import { getInputsAfterEcho, getInputsAfterTurnEnd, getInputsOnTheirWay, type UnconsumedInput } from '../utils/jsonStreamUnconsumedInput';
+import type { BackgroundWorkSignal } from '../utils/workingSignals';
 import { checkHasLostWork, getLostWorkFromTailRecord, type LostWork } from '../utils/lostWork';
 import {
   cronCreateToolName,
@@ -179,6 +181,8 @@ interface PendingStreamCompaction {
   timer: NodeJS.Timeout | null;
   /** Set when a `compact_status` reported `success` (wait for the boundary's tokens). */
   sawSuccess: boolean;
+  /** When the bot sent the `/compact`: the "compaction in flight" judgement never outlasts the longest the bot waits for one. */
+  startedAt: number;
 }
 
 /** The settled reply to a bot-issued control request (see
@@ -350,9 +354,11 @@ export interface StreamSession {
   /**
    * User messages written to stdin that Claude has not echoed back yet
    * (`--replay-user-messages`): a message written mid-turn is read only when the
-   * running turn reaches a point to take it in. See `checkHasUnconsumedInput`.
+   * running turn reaches a point to take it in. Kept with their texts, because messages
+   * taken in together are echoed as ONE line (`utils/jsonStreamUnconsumedInput.ts`).
+   * See `checkHasUnconsumedInput`.
    */
-  unconsumedInputCount: number;
+  unconsumedInputs: UnconsumedInput[];
   /**
    * The CLI's live background-task list (`system/background_tasks_changed`,
    * re-sent whole on every change), id → the description the agent gave it: a
@@ -716,7 +722,7 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
       pollTimer: null, pollDelayMs: basePollIntervalMs, unchangedStreak: 0,
       isOversizeWarned: false, lastPersistedTailOffset: 0,
       reader: new ClaudeStreamLineReader(),
-      isActive: true, isStopping: false, isSuspending: false, isRespawning: false, isBusy: false, unconsumedInputCount: 0,
+      isActive: true, isStopping: false, isSuspending: false, isRespawning: false, isBusy: false, unconsumedInputs: [],
       lastStdoutActivityAt: Date.now(), outstandingToolUseIds: new Set(),
       model: opts.model, reportedModel: null, effort: opts.effort,
       configDir: opts.configDir, isConfigDirSwitchPending: false, startCostUsd,
@@ -1049,7 +1055,7 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
       // tool call leaves no frame after the tail offset to rebuild it from. The
       // replayed/live events then keep it right (deltas/toolUse set it, `result`
       // clears it) — see `applyAction`.
-      isActive: true, isStopping: false, isSuspending: false, isRespawning: false, isBusy: isTurnInFlight, unconsumedInputCount: 0,
+      isActive: true, isStopping: false, isSuspending: false, isRespawning: false, isBusy: isTurnInFlight, unconsumedInputs: [],
       // The outstanding tools come from the record too: they veto the busy-idle watchdog, which would
       // otherwise clear the restored turn after its silence window and let the stale-tool stop kill it.
       lastStdoutActivityAt: Date.now(), outstandingToolUseIds: new Set(outstandingToolUseIds),
@@ -1275,7 +1281,13 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
   }
 
   checkHasUnconsumedInput(key: SessionKey): boolean {
-    return (this.sessions.get(keyToString(key))?.unconsumedInputCount ?? 0) > 0;
+    const session = this.sessions.get(keyToString(key));
+    return session !== undefined && this.getUnconsumedInputsOnTheirWay(session).length > 0;
+  }
+
+  /** The written messages that may still be on their way to the CLI's turn — a bounded judgement, see {@link getInputsOnTheirWay}. */
+  private getUnconsumedInputsOnTheirWay(session: StreamSession): UnconsumedInput[] {
+    return getInputsOnTheirWay({ inputs: session.unconsumedInputs, isBusy: session.isBusy, now: Date.now() });
   }
 
   /**
@@ -1288,19 +1300,27 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
   checkIsWorking(key: SessionKey): boolean {
     const session = this.sessions.get(keyToString(key));
     if (!session?.isActive) return false;
-    return session.isBusy || this.checkHasBackgroundWork(key);
+    return session.isBusy || this.getBackgroundWorkSignals(key).length > 0;
   }
 
   /**
-   * The agent's own pending work (background tasks and scheduled jobs within the hold, a finished task's turn on its
-   * way), input not yet taken in, a compaction in flight — "working" minus the turn (L-D2).
+   * @description What keeps the process working apart from its running turn (L-D2), by name: the agent's own pending work
+   * (background tasks and scheduled jobs within the hold, a finished task's turn on its way), input not yet taken in, a
+   * compaction in flight. Empty for an unknown / inactive session. Each signal is BOUNDED, so none holds a turn-less process
+   * for good: pending work by the hold, input by the grace the CLI has to start the turn that takes it in
+   * (`unconsumedInputGraceMs`), a compaction by the longest the bot itself waits for one (`compactionAbsoluteTimeoutMs`).
    */
-  checkHasBackgroundWork(key: SessionKey): boolean {
+  getBackgroundWorkSignals(key: SessionKey): BackgroundWorkSignal[] {
     const session = this.sessions.get(keyToString(key));
-    if (!session?.isActive) return false;
-    return checkHasPendingWork(this.getPendingWorkInput(session))
-      || session.unconsumedInputCount > 0
-      || session.compactionInProgress;
+    if (!session?.isActive) return [];
+    const signals = getPendingWorkSignals(this.getPendingWorkInput(session));
+    const inputsOnTheirWay = this.getUnconsumedInputsOnTheirWay(session);
+    if (inputsOnTheirWay.length > 0) signals.push({ kind: 'unconsumedInput', count: inputsOnTheirWay.length });
+    // The flag alone is not enough: a compaction nobody awaits any more, or one older than the bot's own timeout, is stale.
+    if (session.compactionInProgress && session.pendingCompaction !== null && Date.now() - session.pendingCompaction.startedAt < compactionAbsoluteTimeoutMs) {
+      signals.push({ kind: 'compaction' });
+    }
+    return signals;
   }
 
   /**
@@ -1482,7 +1502,7 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
         });
       }, compactionWaitPollMs);
       timer.unref?.();
-      session.pendingCompaction = { resolve, timer, sawSuccess: false };
+      session.pendingCompaction = { resolve, timer, sawSuccess: false, startedAt };
       session.compactionInProgress = true;
       session.isCompactionResultPending = true;
       // Fresh turn: reset the answer cursor + idle-watchdog clock, mark busy.
@@ -1553,9 +1573,9 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
     // The turn in flight is persisted at once (same offset, flipped flag): a restart
     // during a long, silent tool call finds no frame after the offset to rebuild it.
     this.jsonStreamTailWriter?.(key, buildTailRecord(session, session.lastPersistedTailOffset));
-    return this.writeUserMessage(session, input).catch((error: unknown) => {
-      // Nothing of this turn reached the CLI: it is not owed an echo, and — unless the CLI showed life since — it is as busy as it was.
-      session.unconsumedInputCount = Math.max(0, session.unconsumedInputCount - 1);
+    return this.writeUserMessage(session, input, wasBusy).catch((error: unknown) => {
+      // Nothing of this turn reached the CLI: it is not owed an echo (the write took its message back off the list), and — unless
+      // the CLI showed life since — it is as busy as it was.
       if (session.lastStdoutActivityAt === turnStartedAt) session.isBusy = wasBusy;
       throw error;
     });
@@ -1592,10 +1612,18 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
     session.swallowNextAbortError = true;
   }
 
-  /** Write one user turn, counting it until Claude echoes it back (it has read it); settles as its write does. */
-  private writeUserMessage(session: StreamSession, content: string): Promise<void> {
-    session.unconsumedInputCount += 1;
-    return this.writeStdin(session, { type: 'user', message: { role: 'user', content } }, { userText: content });
+  /**
+   * Write one user turn, keeping it on the unconsumed list until Claude echoes it back (it has read it); settles as its write
+   * does, and a write that failed takes its message back off the list — no echo is owed for it. What went stale before this
+   * write is dropped first: it must not come back to life beside the new message.
+   */
+  private writeUserMessage(session: StreamSession, content: string, wasBusy: boolean): Promise<void> {
+    const pending: UnconsumedInput = { text: content, since: Date.now() };
+    session.unconsumedInputs = [...getInputsOnTheirWay({ inputs: session.unconsumedInputs, isBusy: wasBusy, now: pending.since }), pending];
+    return this.writeStdin(session, { type: 'user', message: { role: 'user', content } }, { userText: content }).catch((error: unknown) => {
+      session.unconsumedInputs = session.unconsumedInputs.filter((unconsumed) => unconsumed !== pending);
+      throw error;
+    });
   }
 
   /**
@@ -1898,10 +1926,10 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
         this.handleRateLimit(session, action);
         return;
       case 'userEcho':
-        // Claude has read one of our user messages. A message written mid-turn
-        // is taken into the RUNNING turn, so the session is busy from here until
-        // the turn's `result`, even if an earlier `result` already cleared it.
-        session.unconsumedInputCount = Math.max(0, session.unconsumedInputCount - 1);
+        // Claude has read one or SEVERAL of our user messages (those it takes in together are one echo). A message written
+        // mid-turn is taken into the RUNNING turn, so the session is busy from here until the turn's `result`, even if an
+        // earlier `result` already cleared it.
+        session.unconsumedInputs = getInputsAfterEcho(session.unconsumedInputs, action.text);
         session.isBusy = true;
         return;
     }
@@ -2130,10 +2158,11 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
     if (!session.isCompactionResultPending) session.lastTurnEndedAt = Date.now();
     session.isCompactionResultPending = false;
     // Self-healing accounting: a FAILED turn (usage limit, API error) may never echo the messages that were
-    // queued behind it, and a count left above zero would make the session look "working" forever — a pending
-    // account switch would never fire. A message still genuinely queued is echoed later (the decrement clamps
-    // at zero and the echo marks the session busy again), so zeroing here can only under-count briefly.
-    if (action.isError) session.unconsumedInputCount = 0;
+    // queued behind it, and a list left non-empty would make the session look "working" — a pending account
+    // switch would never fire. A message still genuinely queued is echoed later (an echo of nothing listed takes
+    // nothing off and marks the session busy again), so forgetting them here can only under-count briefly.
+    // Otherwise the queue is taken in by the turn that starts next, its wait starting over from this end.
+    session.unconsumedInputs = action.isError ? [] : getInputsAfterTurnEnd(session.unconsumedInputs, Date.now());
     session.outstandingToolUseIds.clear();
     this.finishReasoning(session);
     this.clearSubagent(session);
@@ -2566,7 +2595,7 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
    * wait). The turn is dead and the model cannot act on the limited account, so the re-spawn happens NOW even
    * when the session looks working (busy flag, unconsumed input). Live background tasks (background Bash,
    * sub-agents) are stopped by it too — a deliberate choice: the user chose to move, and a process on a limited
-   * account cannot make progress; the caller says so when `checkHasBackgroundWork` was true.
+   * account cannot make progress; the caller says so when `getBackgroundWorkSignals` listed any.
    */
   async applyClaudeConfigDir(key: SessionKey, options: { isAfterLimit?: boolean } = {}): Promise<ClaudeConfigDirApplyResult> {
     const session = this.sessions.get(keyToString(key));

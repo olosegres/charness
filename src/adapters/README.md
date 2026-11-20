@@ -192,9 +192,14 @@ process is SIGKILLed (`waitForPidExitOrKill`) — a launch finds what the exit l
 
 **Working (L-D2).** A process is never stopped while it works: a running turn
 (`checkIsBusy` — from its start: `init`, `session_state_changed running`, a
-scheduled job firing — not from its first output), or `checkHasBackgroundWork`:
-the agent's own pending work (`utils/jsonStreamPendingWork.ts`), input written
-but not yet echoed, a bot-issued compaction in flight. Pending work is:
+scheduled job firing — not from its first output), or a signal of
+`getBackgroundWorkSignals` (named, so the idle fire can log which one held the process): the
+agent's own pending work (`utils/jsonStreamPendingWork.ts`), input written but not
+yet echoed, a bot-issued compaction in flight. EVERY signal is bounded, none holds a
+turn-less process for good: pending work by the hold below, a compaction by the longest the bot waits
+for one (`compactionAbsoluteTimeoutMs`; the flag alone, without a compaction awaiting it, holds nothing), input
+by the grace the CLI has to start the turn that takes it in (`unconsumedInputGraceMs`, 30 s, counted from the
+write and restarted at every turn end — a turn running holds it meanwhile). Pending work is:
 
 - the live background-task list (`system/background_tasks_changed`) and the
   session-only `CronCreate` jobs — held only while the agent's last turn ended
@@ -205,6 +210,14 @@ but not yet echoed, a bot-issued compaction in flight. Pending work is:
 - a background task's `task_notification`, until its turn shows (≤ 30 s grace):
   the list empties BEFORE that turn's first output, and the gap once read as idle
   — the stop landed right as the agent was woken to read its task's result.
+
+**Unconsumed input** (`utils/jsonStreamUnconsumedInput.ts`) is kept WITH ITS TEXT, not counted. Measured on CLI 2.1.329:
+a message written while a turn runs is taken in at a point of that turn (a tool boundary: one echo each), or — when the turn
+ends first — drained with every other message queued by then as ONE turn whose single echo carries their texts joined by a
+newline (four writes, two echoes). So an echo takes off the run of messages whose newline-joined texts are exactly its content;
+a user line that matches nothing written (the CLI's own `[Request interrupted…]` marker) takes nothing off, and an error
+`result` forgets the queue (a limit may never echo it). Counting writes minus echoes left such a drain's remainder "working"
+for hours (a topic whose idle compaction never ran). `checkHasUnconsumedInput` reads the same bounded judgement.
 
 The two halves are read apart by the idle fire: a pending interactive question
 excuses the turn (D1: reject, compact, re-ask) but never pending work. An idle

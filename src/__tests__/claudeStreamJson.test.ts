@@ -152,14 +152,24 @@ describe('classifyClaudeStreamMessage — real captured events', () => {
 
   it('user message with no tool_result → userEcho (replay-user-messages ack)', () => {
     const msg = { type: 'user', message: { role: 'user', content: 'Reply with ready' } };
-    assert.deepEqual(classify(msg), [{ kind: 'userEcho' }]);
+    assert.deepEqual(classify(msg), [{ kind: 'userEcho', text: 'Reply with ready' }]);
   });
 
   it('the replayed echo of our message (isReplay) → userEcho, a local command\'s stdout included', () => {
     const echo = { type: 'user', isReplay: true, parent_tool_use_id: null, message: { role: 'user', content: 'the request' } };
     const localCommand = { ...echo, message: { role: 'user', content: '<local-command-stdout>Compacted </local-command-stdout>' } };
-    assert.deepEqual(classify(echo), [{ kind: 'userEcho' }]);
-    assert.deepEqual(classify(localCommand), [{ kind: 'userEcho' }]);
+    assert.deepEqual(classify(echo), [{ kind: 'userEcho', text: 'the request' }]);
+    assert.deepEqual(classify(localCommand), [{ kind: 'userEcho', text: '<local-command-stdout>Compacted </local-command-stdout>' }]);
+  });
+
+  it('messages the CLI took in together are ONE echo carrying their texts joined by a newline (measured on 2.1.329)', () => {
+    const mergedEcho = { type: 'user', isReplay: true, parent_tool_use_id: null, message: { role: 'user', content: 'TEXTONLY-A\nTEXTONLY-B\nTEXTONLY-C' } };
+    assert.deepEqual(classify(mergedEcho), [{ kind: 'userEcho', text: 'TEXTONLY-A\nTEXTONLY-B\nTEXTONLY-C' }]);
+  });
+
+  it('the CLI\'s own interrupt marker (array content, no isReplay) is an echo with no text: it matches nothing we wrote', () => {
+    const marker = { type: 'user', parent_tool_use_id: null, message: { role: 'user', content: [{ type: 'text', text: '[Request interrupted by user]' }] } };
+    assert.deepEqual(classify(marker), [{ kind: 'userEcho', text: null }]);
   });
 
   it('user lines the CLI produced itself are not echoes of our input (shapes from live stdout logs)', () => {
