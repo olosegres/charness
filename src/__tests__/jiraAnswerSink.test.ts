@@ -36,6 +36,7 @@ import type { JiraSentBlocks } from '../connectors/jira/contextLedger';
 import { makeJiraKey } from '../connectors/jira/sessionKeyCodec';
 import { JiraAuthError, JiraHttpError, type JiraClient, type JiraComment, type JiraCommentPostResult, type JiraIssue } from '../connectors/jira/client';
 import { getCommentBodyHash, JiraUnconfirmedPosts, jiraUnconfirmedPostsFileName } from '../connectors/jira/unconfirmedPosts';
+import { JiraAnswerThreads, jiraAnswerThreadsFileName } from '../connectors/jira/answerThreads';
 import type { RequestAnswerKind, RequestOrigin } from '../requests/types';
 
 const aiAccountId = 'ai-account';
@@ -74,6 +75,8 @@ interface FakeJira {
 let jira: FakeJira;
 let dataDir: string;
 let unconfirmedPosts: JiraUnconfirmedPosts;
+/** The thread an issue update put a request's next answer in — the real store, over a file in `dataDir`. */
+let answerThreads: JiraAnswerThreads;
 
 /** The store as a restarted process finds it: read back from its file. */
 async function loadUnconfirmedPosts(): Promise<JiraUnconfirmedPosts> {
@@ -128,6 +131,7 @@ const sink = () => createJiraAnswerSink({
     jira.calls.push(`wait ${ms}`);
   },
   unconfirmedPosts,
+  answerThreads,
   ...(jira.attachFiles ? { attachFiles: jira.attachFiles } : {}),
 });
 const deliver = (kind: RequestAnswerKind, body: string, isRequestOpen = true) =>
@@ -137,6 +141,8 @@ beforeEach(async () => {
   jira = { calls: [], postedTexts: [], postedBodies: [], postedParentIds: [], commentsById: new Map(), sentBlocks: {}, trust: null, assignee: aiAccountId, postOutcomes: [], recentComments: [], isAssignFailing: false };
   dataDir = mkdtempSync(path.join(os.tmpdir(), 'jira-sink-'));
   unconfirmedPosts = await loadUnconfirmedPosts();
+  answerThreads = JiraAnswerThreads.createForDataDir(path.join(dataDir, jiraAnswerThreadsFileName), () => nowMs);
+  await answerThreads.load();
 });
 
 afterEach(() => {
@@ -840,6 +846,39 @@ describe('comment threads: an answer goes where it was asked, or into the thread
     jira.postOutcomes = [new JiraHttpError(400, 'POST', '/rest/api/3/issue/PROJ-12/comment', 'INVALID_INPUT')];
     assert.equal((await deliver('final', 'Done.')).ok, false);
     assert.deepEqual(jira.postedParentIds, ['10200', null], 'neither was tried again');
+  });
+
+  it('an issue update whose newest comment is a reply puts the request\'s NEXT answer in that thread — ahead of the request\'s own; the answer uses it up', async () => {
+    answerThreads.note('req_1', '10900');
+    assert.deepEqual(await deliver('progress', 'About your reply:'), { ok: true });
+    assert.deepEqual(await deliver('progress', 'Back to the work.'), { ok: true });
+    answerThreads.note('req_3', '10900');
+    await deliverInThread('progress', 'In the update\'s thread, not the one the request was opened in.');
+    await deliverInThread('progress', 'Back in the request\'s own thread.');
+    assert.deepEqual(jira.postedParentIds, ['10900', null, '10900', '10200']);
+  });
+
+  it('a comment the agent replies to still decides first; a later top-level update sends the next answer where it goes by default; a restarted process keeps the thread', async () => {
+    addShownComment('10950');
+    answerThreads.note('req_1', '10900');
+    await deliverReplying('progress', 'To that one:', ['10950']);
+    assert.deepEqual(jira.postedParentIds, ['10950']);
+    answerThreads.note('req_1', '10900');
+    answerThreads.note('req_1', null);
+    await deliver('progress', 'Top-level, as the newest comment was.');
+    answerThreads.note('req_1', '10900');
+    answerThreads = JiraAnswerThreads.createForDataDir(path.join(dataDir, jiraAnswerThreadsFileName), () => nowMs);
+    await answerThreads.load();
+    await deliver('final', 'Done, in the thread after a restart.');
+    assert.deepEqual(jira.postedParentIds, ['10950', null, '10900']);
+  });
+
+  it('an answer that was not delivered leaves the update\'s thread for the resend', async () => {
+    answerThreads.note('req_1', '10900');
+    jira.postOutcomes = [new JiraAuthError(403, 'POST', '/rest/api/3/issue/PROJ-12/comment')];
+    assert.equal((await deliver('progress', 'First try.')).ok, false);
+    await deliver('progress', 'Second try.');
+    assert.deepEqual(jira.postedParentIds, ['10900', '10900'], 'the refused try and the resend, both in the thread');
   });
 
   it('the alert of a request a reply opened goes into its thread', async () => {

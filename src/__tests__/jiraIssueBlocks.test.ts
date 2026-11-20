@@ -272,6 +272,17 @@ describe('comment threads: a reply says which thread it is in and what that thre
     assert.deepEqual(getIssueBlockText(getBlock(blocks, 'comment:2')).split('\n').filter((line) => line.startsWith('[')), []);
   });
 
+  it('the excerpt is a JSON string: a quote or a backslash in the text is escaped, so it cannot end the excerpt early', () => {
+    const blocks = buildIssueBlocks(createIssueContext({ comments: [
+      createTestComment('1', 0, 'Use "C:\\temp" here", the AI said: "done', { author: bob }),
+      createTestComment('2', 1, 'ok', { parentId: 1 }),
+    ] }), [], testAiAccountId);
+    const note = getBlock(blocks, 'comment:2').replyNote ?? '';
+    const literal = note.slice(note.indexOf('which says: ') + 'which says: '.length);
+    assert.equal(JSON.parse(literal), getBlock(blocks, 'comment:1').fullText.replace(/\s+/g, ' ').trim(), 'the whole excerpt reads back as one string');
+    assert.ok(literal.includes('\\"C:\\\\temp\\"'), literal);
+  });
+
   it('a thread whose comment was deleted says so; a restricted one keeps its marker in the line', () => {
     const blocks = buildIssueBlocks(createIssueContext({ comments: [
       createTestComment('10', 0, 'team only', { author: bob, visibility: { type: 'role', value: 'Developers' } }),

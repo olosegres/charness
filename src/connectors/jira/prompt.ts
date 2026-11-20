@@ -339,6 +339,8 @@ export interface JiraUpdatePromptBase {
   target: JiraOpenHandOver & { isOpen: boolean; isMention?: boolean };
   openHandOvers: readonly JiraOpenHandOver[];
   comments: readonly JiraNewComment[];
+  /** The thread the update's newest comment is a reply in: the request's next answer goes there by itself. */
+  threadRootId?: string | null;
   isTextFiltered?: boolean;
 }
 
@@ -352,9 +354,12 @@ function getUpdateHeader(input: JiraUpdatePromptBase): string {
   const requestIssueKey = input.requestIssueKey ? getSingleLineText(input.requestIssueKey) : null;
   const issueText = requestIssueKey ? `${input.issueKey} (an issue linked to ${requestIssueKey}, which that request is on)` : input.issueKey;
   // An answer is a comment on the request's issue, and only a comment shown in that conversation can be replied to there.
+  const threadText = input.threadRootId && !requestIssueKey
+    ? `Your next answer to request ${requestId} is posted in the thread of comment ${getSingleLineText(input.threadRootId)}, where the newest of them was written. `
+    : '';
   const notifyText = requestIssueKey
     ? `To answer a person on ${input.issueKey}, write a comment on ${input.issueKey} yourself, @-mentioning them: your answer does not go there.`
-    : 'To answer a comment in its thread and notify the person who wrote it, put its id in replyToCommentIds.';
+    : `${threadText}To answer a comment in its thread and notify the person who wrote it, put its id in replyToCommentIds.`;
   const lines = target.isOpen
     ? [
       `[Issue update · request ${requestId} is open]`,

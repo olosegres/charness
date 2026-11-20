@@ -21,6 +21,7 @@ import type { JiraTrust } from './trustedGroup';
 import type { TaskAgentSlotDecision } from '../../trackers/taskAgentSlots';
 import type { SendFilesToThreadResult } from '../../utils/fileSendService';
 import { appendNodesToBodies, type JiraFilesAttachResult } from './outgoingFiles';
+import type { JiraAnswerThreads } from './answerThreads';
 
 /**
  * @description The Jira connector's answer sink (plan J6, D20, R18): an answer
@@ -37,9 +38,11 @@ import { appendNodesToBodies, type JiraFilesAttachResult } from './outgoingFiles
  * twice. The agent cannot look at the issue itself, so every failure tells it
  * what to send again. Bot texts on the issue are English (D20).
  *
- * Comment threads: an answer goes into the thread of the first comment it replies to (`replyToCommentIds`), else
- * into the thread its request was opened in (the origin's {@link jiraReplyThreadAttribute}), else it is a top-level
- * comment; the request's alert and the notices about its trigger follow the same thread. Jira threads are one level
+ * Comment threads: an answer goes into the thread of the first comment it replies to (`replyToCommentIds`), else into
+ * the thread the request's latest issue update came from (`answerThreads.ts`: its newest comment was a reply there; the
+ * answer delivered uses it up), else into the thread its request was opened in (the origin's
+ * {@link jiraReplyThreadAttribute}), else it is a top-level comment; the request's alert and the notices about its
+ * trigger follow the request's own thread. Jira threads are one level
  * deep, so a reply always names the thread's top-level comment. A thread Jira refuses (400: its comments are gone)
  * gets the comment top-level instead, and the agent is told.
  *
@@ -157,6 +160,8 @@ export interface JiraAnswerSinkDeps {
   /** Pause before the read-back ({@link jiraReadBackDelayMs}). */
   wait: (ms: number) => Promise<void>;
   unconfirmedPosts: Pick<JiraUnconfirmedPosts, 'getPostedAt' | 'recordUnconfirmed' | 'settle'>;
+  /** The thread an issue update put a request's next answer in; consumed by the answer delivered. */
+  answerThreads: Pick<JiraAnswerThreads, 'get' | 'consume'>;
   /**
    * Attach files of the issue's project folder to the issue and say how a comment shows them (`outgoingFiles.ts`);
    * absent where files cannot be sent — an answer that carries some is then refused, nothing posted.
@@ -477,8 +482,9 @@ export function createJiraAnswerSink(deps: JiraAnswerSinkDeps): JiraAnswerSink {
       const issueKey = key.thread;
       const replies = await resolveReplyTargets(issueKey, delivery);
       const { targets, leftOutCommentIds } = replies;
-      // The comment the agent replies to decides the thread; else the thread its request was opened in; else top-level.
-      const threadRootId = replies.threadRootId ?? getOriginThreadRootId(delivery.origin);
+      // The comment the agent replies to decides the thread; else the thread an update of the request came from; else the
+      // thread the request was opened in; else top-level.
+      const threadRootId = replies.threadRootId ?? deps.answerThreads.get(delivery.requestId) ?? getOriginThreadRootId(delivery.origin);
       const textBodies = targets.length > 0
         ? createCommentBodiesWithLeadingNode(delivery.body, createMentionParagraph(targets))
         : createCommentBodies(delivery.body);
@@ -493,6 +499,8 @@ export function createJiraAnswerSink(deps: JiraAnswerSinkDeps): JiraAnswerSink {
       if (isHandOver && delivery.isRequestOpen && delivery.kind === 'question') bodies[bodies.length - 1] = getBodyWithContinueLine(bodies[bodies.length - 1]);
       const posted = await postComments(issueKey, bodies, delivery.requestId, threadRootId);
       if (posted.postedCount === 0 && posted.failure) return { ok: false, error: getNothingPostedError(posted.failure) };
+      // The answer is there: the thread an update put it in is used up, the next answer goes where they go by default.
+      deps.answerThreads.consume(delivery.requestId);
       const warnings: string[] = [...(files?.notes ?? [])];
       if (leftOutCommentIds.length > 0) warnings.push(buildJiraReplyLeftOutWarning(leftOutCommentIds));
       if (replies.threadRootId !== null && replies.otherThreadCommentIds.length > 0) {

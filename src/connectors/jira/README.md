@@ -391,8 +391,14 @@ another platform's state.
   limit of every part). `replyToCommentIds` (at most 10 numeric ids) is offered to Jira sessions only.
 - **Where an answer goes: comment threads.** Jira Cloud has threaded replies (one level, see "Comment threads in the
   API" below), and an answer follows them: it goes into the thread of the first comment it replies to
-  (`replyToCommentIds` — a top-level comment's own thread, or the thread a reply is in), else into the thread its
-  request was opened in, else it is a top-level comment. A request is opened in a thread when the comment that
+  (`replyToCommentIds` — a top-level comment's own thread, or the thread a reply is in), else into the thread the
+  request's latest issue update came from, else into the thread its request was opened in, else it is a top-level
+  comment. **An update's thread** (`answerThreads.ts`, `DATA_DIR/jira-answer-threads.jsonl`): an update is no request —
+  its comments belong to a request already open, whose origin is fixed — so when the newest comment an update brought
+  is a reply, the request's NEXT answer goes into that thread by itself (the update says so: «Your next answer to request
+  … is posted in the thread of comment …»), and when it is a top-level comment the next answer goes where the request's
+  answers go by default; the entry is noted once the update reached the session, used up by the answer delivered (an
+  answer that was not delivered leaves it for the resend), and survives a restart. A request is opened in a thread when the comment that
   opened it — a mention, or a comment on a handed issue — is a reply: `inbound.ts` puts the thread's top-level comment
   id in the origin as `threadCommentId` (`jiraReplyThreadAttribute`), fixed when the request opens like its requester,
   so where an answer goes never comes from the issue's text later. A request opened by a top-level comment, or by a
@@ -539,7 +545,8 @@ context preamble tells the agent the tool exists and carries the standing rule: 
   (absent = readable, so older ledgers load). Without `trustedGroup` every block, hash and prompt is as it always was.
 - **A reply says which thread it is in.** A comment with a `parentId` gets one line under its heading, before its quoted
   text: `A reply in the thread of comment 10240 by Ann, which says: "…"` — the thread's top-level comment, its author,
-  its visibility marker and its text on one line, cut to 200 characters (`jiraReplyParentExcerptMaxChars`), so the agent
+  its visibility marker and its text on one line as a JSON string (a quote or a backslash in it escaped, so nothing in
+  the text can end the excerpt early), cut to 200 characters (`jiraReplyParentExcerptMaxChars`), so the agent
   knows what is answered even in a delta that does not carry that comment. A top-level comment that is withheld is
   named, never quoted (`… comment 10240 [withheld: …].`); one that was deleted (its replies keep their `parentId`) reads
   `…, which was deleted.`; a withheld reply has no such line. The line is not part of the reply's hash. A request a

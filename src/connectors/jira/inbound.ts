@@ -226,6 +226,11 @@ export interface JiraInboundDeps {
   postUpdatesPausedNotice: (issueKey: string, untilMs: number) => Promise<void>;
   /** The bot's one cap on task agents and its wait list; a mention request that answers only bypasses it. */
   slots: Pick<TaskAgentSlots, 'checkIn' | 'noteStarted' | 'noteStartFailed' | 'dropWaiting' | 'listWaiting' | 'pruneWaiting' | 'onSlotFreed'>;
+  /**
+   * An issue update reached request `requestId`'s session: its next answer goes into the thread of `threadRootId` — the
+   * update's newest comment is a reply there — or, `null`, where its answers go by default (the answer side). Never throws.
+   */
+  noteAnswerThread: (requestId: string, threadRootId: string | null) => void;
   /** A hand-over that has to wait for a slot: the short comment saying so (the answer side), in the trigger's thread when it has one. Never rejects. */
   postQueuedNotice: (issueKey: string, queue: Extract<TaskAgentSlotDecision, { kind: 'queued' }>, threadRootId: string | null) => Promise<void>;
 }
@@ -1191,6 +1196,8 @@ export class JiraInbound {
     deps.noteShownSummary?.(issue.key, getShownIssueSummary(context, blockTrust));
     const key = makeJiraKey(issue.key);
     const commenterAccountId = comments[comments.length - 1].author?.accountId;
+    // The newest comment is what the request's next answer answers: a reply in a thread is answered there.
+    const threadRootId = getCommentParentId(comments[comments.length - 1]);
     const newComments: JiraNewComment[] = comments.map((comment) => ({ commentId: comment.id, author: comment.author ?? null, parentId: getCommentParentId(comment) }));
     /** The requests the update can belong to now, named from the issue's data (a mention's marked as one). */
     const getTargets = (): JiraUpdateTarget[] => this.listUpdateTargetRequests(key).map((request) => ({
@@ -1218,6 +1225,7 @@ export class JiraInbound {
         target: { requestId: target.requestId, requester: target.requester, isMention: target.isMention, isOpen: now !== null },
         openHandOvers: getTargets().map((open) => ({ requestId: open.requestId, requester: open.requester })),
         comments: newComments,
+        threadRootId,
         isTextFiltered: trust !== null,
       };
     };
@@ -1249,7 +1257,7 @@ export class JiraInbound {
       at,
       requestId,
       newestCommentId,
-    })), onFailed);
+    })), onFailed, (requestId) => deps.noteAnswerThread(requestId, threadRootId));
     return 'update';
   }
 
@@ -1265,6 +1273,7 @@ export class JiraInbound {
     getTargetRequestId: () => string,
     createRecords: (requestId: string) => JiraTriggerRecord[],
     onFailed?: () => void,
+    onPosted?: (requestId: string) => void,
   ): Promise<void> {
     try {
       await this.deps.postUpdate(key, prompt, getTargetRequestId);
@@ -1279,6 +1288,7 @@ export class JiraInbound {
       return;
     }
     this.updateRetries.delete(issueKey);
+    onPosted?.(getTargetRequestId());
     for (const record of createRecords(getTargetRequestId())) {
       if (!this.recordOrWarn(record)) this.deps.triggerLog.remember(record);
     }

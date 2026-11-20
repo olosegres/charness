@@ -309,8 +309,8 @@ function getExcerpt(text: string, maxChars: number): string {
 
 /**
  * @description The line under a reply's heading (comment threads): which thread it is in, and what the thread's top-level
- * comment says — its author, its visibility marker and an excerpt, so the agent knows what is being answered even when a
- * delta does not carry that comment. A top-level comment whose text the agent may not read is named, never quoted; one
+ * comment says — its author, its visibility marker and an excerpt on one line as a JSON string (its quotes escaped), so
+ * the agent knows what is being answered even when a delta does not carry that comment. A top-level comment whose text the agent may not read is named, never quoted; one
  * that was deleted (its replies stay, Jira keeps their `parentId`) is said to be gone.
  */
 function getReplyNote(parentId: string, parentComment: JiraComment | undefined, parentBlock: IssueBlock | undefined): string {
@@ -319,7 +319,8 @@ function getReplyNote(parentId: string, parentComment: JiraComment | undefined, 
   if (parentBlock.isWithheld) return `A reply in the thread of comment ${id} ${withheldWrittenMarker}.`;
   const marker = getCommentVisibilityMarker(parentComment);
   const excerpt = getExcerpt(parentBlock.fullText, jiraReplyParentExcerptMaxChars) || emptyBodyText;
-  return `A reply in the thread of comment ${id} by ${getAccountName(parentComment.author)}${marker ? ` ${marker}` : ''}, which says: "${excerpt}"`;
+  // A JSON string: a quote or a backslash in the text is escaped, so nothing in it can end the excerpt early.
+  return `A reply in the thread of comment ${id} by ${getAccountName(parentComment.author)}${marker ? ` ${marker}` : ''}, which says: ${JSON.stringify(excerpt)}`;
 }
 
 /** Oldest first; Jira sorts them already, a tie keeps Jira's order. */

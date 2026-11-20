@@ -18,6 +18,7 @@ import type { SessionKey } from '../../sessionKey';
 import type { RequestPromptOutcome } from '../../requests/types';
 import { JiraUnconfirmedPosts, jiraUnconfirmedPostsFileName } from './unconfirmedPosts';
 import { JiraUploadedFiles, jiraUploadedFilesFileName } from './uploadedFiles';
+import { JiraAnswerThreads, jiraAnswerThreadsFileName } from './answerThreads';
 import { sleep } from '../../utils';
 
 /**
@@ -270,6 +271,8 @@ export async function prepareJiraConnector(context: {
   await unconfirmedPosts.load();
   const uploadedFiles = JiraUploadedFiles.createForDataDir(path.join(context.dataDir, jiraUploadedFilesFileName), now);
   await uploadedFiles.load();
+  const answerThreads = JiraAnswerThreads.createForDataDir(path.join(context.dataDir, jiraAnswerThreadsFileName), now);
+  await answerThreads.load();
 
   /** The connector's own folder inside a conversation's files dir. */
   const getJiraFilesDir = (key: SessionKey): string => path.join(resolveThreadFilesDir(context.dataDir, key), jiraFilesDirName);
@@ -297,6 +300,7 @@ export async function prepareJiraConnector(context: {
     now,
     wait: sleep,
     unconfirmedPosts,
+    answerThreads,
     attachFiles,
   });
   let inbound: JiraInbound | null = null;
@@ -345,6 +349,7 @@ export async function prepareJiraConnector(context: {
       parkMention: (issueKey, threadRootId) => answerSink.parkMention(issueKey, threadRootId),
       postUpdatesPausedNotice: (issueKey, untilMs) => answerSink.postUpdatesPausedNotice(issueKey, jiraIssueUpdatesPer24hMax, untilMs),
       postQueuedNotice: (issueKey, queue, threadRootId) => answerSink.postQueuedNotice(issueKey, queue, threadRootId),
+      noteAnswerThread: (requestId, threadRootId) => answerThreads.note(requestId, threadRootId),
       noteShownSummary: (issueKey, summary) => shownSummaries.set(issueKey, summary),
     });
     inbound.start();

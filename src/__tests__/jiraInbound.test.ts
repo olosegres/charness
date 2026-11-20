@@ -105,6 +105,8 @@ interface Recorded {
   pausedNotices: Array<{ issueKey: string; untilMs: number }>;
   /** The thread each park, mention park and queued notice was asked to go into (`null`: top-level), in order. */
   noticeThreads: Array<{ notice: 'park' | 'mentionPark' | 'queued'; threadRootId: string | null }>;
+  /** Each issue update that reached its session: the request it went to and the thread its next answer goes into. */
+  answerThreads: Array<{ requestId: string; threadRootId: string | null }>;
 }
 
 describe('JiraInbound', () => {
@@ -125,7 +127,7 @@ describe('JiraInbound', () => {
 
   beforeEach(async () => {
     dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'jira-inbound-'));
-    recorded = { calls: [], searches: [], issueReads: [], origins: [], prompts: [], storedPrompts: [], parked: [], untrusted: [], mentionParked: [], queued: [], updates: [], pausedNotices: [], noticeThreads: [] };
+    recorded = { calls: [], searches: [], issueReads: [], origins: [], prompts: [], storedPrompts: [], parked: [], untrusted: [], mentionParked: [], queued: [], updates: [], pausedNotices: [], noticeThreads: [], answerThreads: [] };
     searchPages = [];
     changelogPages = new Map();
     triggerLog = await createLoadedTriggerLog();
@@ -241,6 +243,9 @@ describe('JiraInbound', () => {
         recorded.calls.push(`queued ${issueKey}`);
         recorded.queued.push({ issueKey, aheadCount: queue.aheadCount, maxConcurrent: queue.maxConcurrent });
         recorded.noticeThreads.push({ notice: 'queued', threadRootId });
+      },
+      noteAnswerThread: (requestId, threadRootId) => {
+        recorded.answerThreads.push({ requestId, threadRootId });
       },
       ...overrides,
     });
@@ -2059,6 +2064,36 @@ describe('JiraInbound', () => {
         assert.deepEqual(recorded.parked, [{ issueKey, requester: colleague }]);
         assert.equal(triggerLog.checkIsSeen(issueKey, 'comment:10241'), true);
         assert.deepEqual(recorded.noticeThreads, [{ notice: 'park', threadRootId: null }], 'a top-level comment\'s park notice is top-level');
+      });
+
+      it('an update whose newest comment is a reply in a thread sends the open request\'s next answer into that thread, and says so; a top-level newest comment sends it where it goes by default', async () => {
+        openHandOver(member.accountId);
+        comments = [plain('10240', colleague, { minutesAgo: 2 }), { ...plain('10241', member), parentId: 10230 }];
+        assert.deepEqual([...await createCommentInbound().pollOnce()], [[issueKey, 'seen'], [`${issueKey}#comment:10241`, 'update']]);
+        await flushPosts();
+        assert.deepEqual(recorded.answerThreads, [{ requestId: handOverRequestId, threadRootId: '10230' }]);
+        assert.ok(recorded.updates[0].text.includes(`Your next answer to request ${handOverRequestId} is posted in the thread of comment 10230, where the newest of them was written. `), recorded.updates[0].text);
+
+        issueUpdated = 'updated-2';
+        comments = [...comments, plain('10242', member)];
+        await createCommentInbound().pollOnce();
+        await flushPosts();
+        assert.deepEqual(recorded.answerThreads.at(-1), { requestId: handOverRequestId, threadRootId: null });
+        assert.ok(!recorded.updates[1].text.includes('Your next answer to request'), recorded.updates[1].text);
+      });
+
+      it('an update that did not reach its session puts no answer in a thread', async () => {
+        openHandOver(member.accountId);
+        isPostFailing = true;
+        comments = [{ ...plain('10241', member), parentId: 10230 }];
+        const warn = mock.method(console, 'warn', () => {});
+        try {
+          await createCommentInbound().pollOnce();
+          await flushPosts();
+        } finally {
+          warn.mock.restore();
+        }
+        assert.deepEqual(recorded.answerThreads, []);
       });
 
       it('a reply in a thread opens a request that answers in that thread; its park notice over the budget goes there too', async () => {
