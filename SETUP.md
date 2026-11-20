@@ -436,7 +436,7 @@ The CLI is installed first — see [Install the CLI](#install-the-cli). After th
    ([Telegram: privacy mode](https://core.telegram.org/bots/features#privacy-mode)). Only a bot
    you do not make an admin needs `/setprivacy` → pick this bot → `Disable` to see free-form text, not just `/commands`.
 
-<p><img src="docs/images/01-botfather.png" width="360" alt="@BotFather: /newbot to get the token, then /setprivacy → this bot → Disable" /></p>
+<p><img src="docs/images/01-botfather.png" width="360" alt="@BotFather: /newbot gives the token (the screenshot also shows /setprivacy, needed only for a bot that is not a group admin)" /></p>
 
 Put the token where the bot reads it — the global config `.env`:
 

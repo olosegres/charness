@@ -7,7 +7,7 @@ exact filenames and the portrait `720x1280` size (rendered at `width="360"`).
 
 | File | Step | What the image shows |
 |---|---|---|
-| `01-botfather.png` | Telegram setup 1. Create the bot | The @BotFather chat: `/newbot` giving the token, then `/setprivacy` → this bot → **Disable**. |
+| `01-botfather.png` | Telegram setup 1. Create the bot | The @BotFather chat: `/newbot` giving the token (the screenshot also shows `/setprivacy` → this bot → **Disable**, which only a bot that is not a group admin needs). |
 | `02-enable-topics.png` | Telegram setup 2. Set up a group | Group settings with the **Topics** (Forum mode) toggle switched on. |
 | `03-promote-admin.png` | Telegram setup 2. Set up a group | The bot's admin-rights screen with **Manage Topics**, **Delete Messages**, **Pin Messages** ticked. |
 | `04-bind-and-run.png` | Telegram setup 4. Bind a topic | A topic where `/bind <subdir>` then `/claude` (or `/opencode`) was sent and the agent is replying. |
