@@ -26,7 +26,8 @@ export interface UnconsumedInput {
   /**
    * An echo of ours that matched nothing arrived in the running turn, and this is the entry it is counted against (the oldest
    * unmarked one at that moment): the message the turn took in, in a shape nothing here matches. The turn's end drops marked
-   * entries; a new turn's start forgets the marks (see {@link getInputsAfterTurnEnd}).
+   * entries ({@link getInputsAfterTurnEnd}); a turn that really opens (`init`, a job's firing, a `running` with none running), an
+   * interrupt or the busy watchdog forgets the marks (see {@link getInputsWithoutEchoMarks}).
    */
   hasUnmatchedEcho: boolean;
 }

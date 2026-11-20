@@ -138,7 +138,7 @@ export const uzDict: Record<string, string> = {
     'Bot huquqlarini o‘qib bo‘lmadi — getChatMember muvaffaqiyatsiz',
 
   'onboarding.welcome':
-    'Salom! Men Charness — Claude Code va OpenCode agentlarini ushbu guruhning mavzularida ishga tushiraman: bitta mavzu = bitta loyiha papkasi = bitta agent.\n\n' +
+    'Salom! Men Charnessman — Claude Code va OpenCode agentlarini ushbu guruhning mavzularida ishga tushiraman: bitta mavzu = bitta loyiha papkasi = bitta agent.\n\n' +
     'Ishni boshlash uchun 3 qadam:\n' +
     '1️⃣ Meni guruh admini qiling va Manage Topics, Delete Messages hamda Pin Messages huquqlarini bering\n' +
     '2️⃣ Yana nima yetishmasligini ko‘rish uchun /doctor ni ishga tushiring\n' +
