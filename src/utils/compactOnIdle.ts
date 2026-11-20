@@ -283,8 +283,10 @@ export interface IdleFireDecision {
  * idle window (`idleCompactMs`), so a compaction later than the mark is only an expensive one. A process held at the mark
  * (a compaction that was otherwise due is then `isIdleMarkHeld`) does NOT get its compaction on a later look: once the mark is
  * spent (`isIdleMarkSpent` — it was held and no activity has re-warmed the cache since) every later fire, the re-checks of a
- * held process, decides only the stop. Nor does the OVERDUE boot fire (`isIdleMarkMissed`: the bot was down past the window)
- * compact: it decides only the stop too, and a hold at it costs nothing, so there is no mark to hold and nothing to tell.
+ * held process, decides only the stop. Nor does a fire whose countdown was armed AFTER the mark had already passed
+ * (`isIdleMarkMissed`: the overdue arm — the bot came back from downtime past the window, or a re-spawn or a per-turn wake found
+ * the topic idle for longer than that) compact: it decides only the stop too, and a hold at it costs nothing, so there is no
+ * mark to hold and nothing to tell.
  * Activity re-arms the countdown, and with it the next mark's compaction.
  *
  * The STOP happens whether or not the compaction runs (L-D1: a resume restores
@@ -297,7 +299,7 @@ export function getIdleFireDecision(input: {
   workingSignals: readonly WorkingSignal[];
   /** The idle mark of this idle period was already held (a fire found the process working and forwent its compaction). */
   isIdleMarkSpent: boolean;
-  /** This fire is the OVERDUE boot arm's: the bot was down past the idle window, so the mark passed long ago (the cache is cold). */
+  /** This fire's countdown was armed (the overdue arm) when the idle mark had already passed: the prompt cache is cold. */
   isIdleMarkMissed: boolean;
   isEnabled: boolean;
   isLatched: boolean;
@@ -311,7 +313,7 @@ export function getIdleFireDecision(input: {
     input.isLatched && 'latched (D2)',
     !input.hasCompletedTurnSinceCompaction && 'nothing to compress',
     input.isLimitWaitArmed && 'a usage-limit wait is armed (L-D6)',
-    input.isIdleMarkMissed && 'the idle mark passed while the bot was down (the prompt cache is cold by now)',
+    input.isIdleMarkMissed && 'the idle mark had already passed when the countdown was armed (the prompt cache is cold by now)',
   ].filter((reason): reason is string => typeof reason === 'string');
   const notIdleReasons = [
     !input.isSessionActive && 'no active session',

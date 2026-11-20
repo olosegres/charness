@@ -15,7 +15,8 @@
  *   • activity after the held mark opens a new idle period: its mark compacts again;
  *   • a real turn still running at the mark holds it too, but says nothing: its end opens a new idle period anyway;
  *   • the overdue boot fire — the bot was down past the idle window — never compacts either, and only stops the idle process
- *     (the owner's rule again: after the window the cache is cold).
+ *     (the owner's rule again: after the window the cache is cold); with a question that waits for an answer the process is kept and
+ *     the countdown is NOT re-armed, or the fire would come back every few minutes for as long as the question waits.
  *
  * What the line says for each kind of signal is `getIdleHeldNoticeReason`'s (`workingSignals.test.ts`); the decision's own
  * branches are `compactOnIdle.test.ts`'s. The whole thing at process level — the real bot, a fake agent holding a background
@@ -84,11 +85,11 @@ describe('the idle mark of a held process: told once, compacted never later', ()
   let steps: string[] = [];
   let logs: string[] = [];
   const modules: Array<ReturnType<typeof createCompaction>> = [];
+  const pendingQuestions = new Map<string, PendingQuestionState>();
   const originalLog = console.log;
 
   /** A module over the harness' saved state — a second one stands for the bot after a restart. */
   function createModule(): ReturnType<typeof createCompaction> {
-    const pendingQuestions = new Map<string, PendingQuestionState>();
     const module = createCompaction({
       ...harness.core,
       compactSelfReviewFlagDirs: harness.compactSelfReviewFlagDirs,
@@ -100,7 +101,12 @@ describe('the idle mark of a held process: told once, compacted never later', ()
       setQuestionAsideAtIdle: async () => false,
       idleWindowMs,
       checkIsLimitWaitArmed: () => false,
-      suspendThreadSession: async () => { steps.push('stop'); },
+      // As `bot.ts` does it: the stop finds a process that works (a turn blocked on a question is busy) and does nothing, then re-arms
+      // the countdown from the saved instants.
+      suspendThreadSession: async (suspendedKey) => {
+        steps.push('stop');
+        if (adapter.isBusy) module.rearmThreadIdleTimer(suspendedKey);
+      },
       resumeSleepingSessionForCompaction: async () => false,
       getThreadAdapter: () => adapter,
       deliverLabel: async () => null,
@@ -130,6 +136,7 @@ describe('the idle mark of a held process: told once, compacted never later', ()
     await harness.state.setCompactIdleLatched(key, false);
     adapter.signals = [];
     adapter.isBusy = false;
+    pendingQuestions.clear();
   });
 
   /** The state of a topic whose agent finished a turn `idleWindowMs - windowLeftMs` ago, held by `signals`; the timer armed as a re-adopt arms it. */
@@ -229,8 +236,37 @@ describe('the idle mark of a held process: told once, compacted never later', ()
     module.rearmThreadIdleTimer(key);
     await waitUntil('the stop of the overdue fire', () => steps.includes('stop'));
     assert.equal(adapter.compactions, 0, 'no compaction: the cache has been cold since the window ended');
-    assert.ok(logs.some((line) => line.includes('the idle mark passed while the bot was down')), `the log says why:\n${logs.join('\n')}`);
+    assert.ok(logs.some((line) => line.includes('the idle mark had already passed when the countdown was armed')), `the log says why:\n${logs.join('\n')}`);
     assert.deepEqual(harness.replies.map((reply) => reply.text), [], 'nothing posted: no skip the person would care about');
+  });
+
+  it('an overdue fire with a question that WAITS for an answer keeps the busy process and does not re-arm: the fire does not come back every few minutes for as long as the question waits (review)', async () => {
+    const module = createModule();
+    harness.replies.length = 0;
+    steps = [];
+    logs = [];
+    adapter.compactions = 0;
+    // The agent's turn is blocked on its question («Wait for my answer»: `setQuestionAsideAtIdle` could set nothing aside), so the
+    // process reads busy, but the question excuses that turn for the idle fire (D1).
+    adapter.isBusy = true;
+    pendingQuestions.set(keyToString(key), {
+      data: { requestId: 'que_1', questions: [{ question: 'Which one?', options: [{ label: 'A', description: '' }, { label: 'B', description: '' }] }] },
+      messageId: 77,
+      answers: [null],
+      currentIndex: 0,
+    });
+    console.log = (...args: unknown[]) => { logs.push(args.map(String).join(' ')); };
+    module.markThreadTurnProducedOutput(key);
+    harness.state.noteCompactIdleActivity(key, Date.now() - 10 * idleWindowMs);
+    module.rearmThreadIdleTimer(key);
+    await waitUntil('the overdue fire', () => logs.some((line) => line.includes('timer fired but the compaction is skipped')));
+    // Far longer than the overdue stagger at this window: a re-armed countdown would have fired several times by now.
+    await new Promise((resolve) => setTimeout(resolve, quietMs));
+    assert.deepEqual(steps, [], 'no stop: the process is blocked on the question, a stop would find it busy and do nothing');
+    assert.equal(logs.filter((line) => line.includes('timer fired but the compaction is skipped')).length, 1, `one fire, no loop:\n${logs.join('\n')}`);
+    assert.ok(logs.some((line) => line.includes('its turn waits on a pending question')), `the log says why it is kept:\n${logs.join('\n')}`);
+    assert.equal(adapter.compactions, 0);
+    assert.deepEqual(harness.replies.map((reply) => reply.text), []);
   });
 
   it('a held overdue fire is not announced either: the compaction would not have run anyway', async () => {

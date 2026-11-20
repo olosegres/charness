@@ -121,9 +121,10 @@ interface ThreadCompactionResult {
 interface ThreadCompactionState {
   idleTimer: NodeJS.Timeout | null;
   /**
-   * The armed countdown is the OVERDUE boot arm's: the bot was down past the idle window, so the mark it fires for passed long
-   * ago and the fire only decides the stop (`getIdleFireDecision`'s `isIdleMarkMissed`). Set by every arm of the countdown, so
-   * activity (which re-arms it) clears it.
+   * The armed countdown is the OVERDUE arm's: the idle mark it fires for had already passed when it was armed (the bot came back
+   * from downtime past the idle window, a re-spawn or a per-turn wake found the topic idle for longer than that), so the fire
+   * only decides the stop (`getIdleFireDecision`'s `isIdleMarkMissed`). Set by every arm of the countdown, so activity (which
+   * re-arms it) clears it.
    */
   isIdleMarkMissed: boolean;
 }
@@ -796,6 +797,13 @@ export function createCompaction(ports: CompactionPorts) {
     if (signalsAfterFire.length > 0) {
       console.log(`[compact-on-idle] ${kStr} process kept: it started working during the idle fire (${describeWorkingSignals(signalsAfterFire)})`);
       armPendingWorkRecheck(key, adapter);
+      return;
+    }
+    // A turn that only a pending question holds (D1) is blocked on it. Nothing was compacted here (compaction would have cleared the
+    // question), so the stop would find the process busy and do nothing, and its re-arm would fire this again every few minutes for
+    // as long as the question waits. Keep the process and do not re-arm: the answer is activity, and re-arms the countdown (D2).
+    if (pendingQuestions.has(kStr) && (adapter.checkIsBusy?.(key) ?? false)) {
+      console.log(`[compact-on-idle] ${kStr} process kept: its turn waits on a pending question; the answer re-arms the countdown`);
       return;
     }
     await suspendThreadSession(key);

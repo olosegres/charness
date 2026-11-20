@@ -235,8 +235,10 @@ cold later): a process held at the mark forgoes it (`getIdleFireDecision`'s
 `isIdleMarkHeld`; the topic gets ONE silent line, `compactOnIdle.skipped.*Notice`, naming what holds
 it — background work or a message not taken in; a bare running turn holds the mark without a line), the mark is remembered as held (`lastHeldMarkAt`, persisted: a restart repeats nothing and
 compacts nothing late) until the next activity opens a new idle period, and the looks again
-decide only the stop. The OVERDUE boot fire (the bot was down past the window,
-`getIdleCompactionArmDecision`'s `overdue`) never compacts either — `isIdleMarkMissed`: the cache is cold — and only decides the stop. The bot console names the signals that hold the process
+decide only the stop. A fire whose countdown was armed AFTER the mark had passed
+(`getIdleCompactionArmDecision`'s `overdue`: the bot came back from downtime past the window, a re-spawn or a per-turn wake found the
+topic idle longer than that) never compacts either — `isIdleMarkMissed`: the cache is cold — and only decides the stop; a turn that only a
+pending question holds is kept without re-arming (the answer is activity), or the fire would come back every few minutes. The bot console names the signals that hold the process
 (`working (busy turn, unconsumed input 2)`). Every automatic stop calls `refreshWorkingState` (a fresh read of
 stdout) inside its transition before its last look. All of it rides the tail
 record (below), so an adopt restores it.

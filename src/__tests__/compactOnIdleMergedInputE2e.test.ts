@@ -197,7 +197,7 @@ describe('Messages sent while the agent works do not keep the topic "working" fo
       tracking.lastActivityAt = Date.now() - 3 * 60 * 60 * 1000;
     });
     await getCharness().waitFor('the idle stop of the overdue fire', idleStopTimeoutMs, () => getCharness().output.includes(stopLine));
-    assert.ok(getCharness().output.includes(`${topicKey} timer fired but the compaction is skipped: the idle mark passed while the bot was down`), `the console says why it did not compact:\n${getCharness().output.split('\n').filter((line) => line.includes('compact-on-idle') || line.includes('reattach')).join('\n')}`);
+    assert.ok(getCharness().output.includes(`${topicKey} timer fired but the compaction is skipped: the idle mark had already passed when the countdown was armed`), `the console says why it did not compact:\n${getCharness().output.split('\n').filter((line) => line.includes('compact-on-idle') || line.includes('reattach')).join('\n')}`);
     assert.equal(listCompactions().length, compactionsBefore, 'not compacted: the idle mark was missed, the cache is cold');
     assert.ok(!checkIsPidAlive(pid), 'the process is gone');
   });

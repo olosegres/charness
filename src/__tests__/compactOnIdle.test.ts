@@ -279,7 +279,7 @@ test('getIdleFireDecision: the overdue boot fire (the bot was down past the wind
   const missed = getIdleFireDecision({ ...fireBase, isIdleMarkMissed: true });
   assert.equal(missed.shouldCompact, false);
   assert.equal(missed.shouldSuspend, true, 'the stop still follows');
-  assert.deepEqual(missed.compactionSkipReasons, ['the idle mark passed while the bot was down (the prompt cache is cold by now)']);
+  assert.deepEqual(missed.compactionSkipReasons, ['the idle mark had already passed when the countdown was armed (the prompt cache is cold by now)']);
   assert.equal(missed.isIdleMarkHeld, false);
   // Held at such a fire: the compaction would not have run anyway, so the hold cost it nothing — no line, no mark.
   const heldAndMissed = getIdleFireDecision({ ...fireBase, isIdleMarkMissed: true, workingSignals: [{ kind: 'backgroundTasks', count: 1 }] });
