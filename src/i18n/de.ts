@@ -122,7 +122,7 @@ export const deDict: Record<string, string> = {
   'doctor.can_pin_messages': '`can_pin_messages` gewährt',
   'doctor.privacy_off': 'Privacy-Modus deaktiviert',
   'doctor.privacy_hint':
-    '@BotFather → /setprivacy → Disable, dann Bot entfernen und neu hinzufügen',
+    'Bot zum Gruppen-Admin machen — oder @BotFather → /setprivacy → Disable, dann Bot entfernen und neu hinzufügen',
   'doctor.workroot_subdirs':
     '`WORK_ROOT`: `{workRoot}` ({count} Unterordner)',
   'doctor.datadir_path': '`DATA_DIR`: `{dataDir}`',

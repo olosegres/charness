@@ -122,7 +122,7 @@ export const hiDict: Record<string, string> = {
   'doctor.can_pin_messages': '`can_pin_messages` प्रदान किया गया',
   'doctor.privacy_off': 'Privacy mode अक्षम',
   'doctor.privacy_hint':
-    '@BotFather → /setprivacy → Disable, फिर Bot को हटाकर पुनः जोड़ें',
+    'Bot को ग्रुप एडमिन बनाएँ — या @BotFather → /setprivacy → Disable, फिर Bot को हटाकर पुनः जोड़ें',
   'doctor.workroot_subdirs':
     '`WORK_ROOT`: `{workRoot}` ({count} सबफ़ोल्डर)',
   'doctor.datadir_path': '`DATA_DIR`: `{dataDir}`',

@@ -122,7 +122,7 @@ export const jaDict: Record<string, string> = {
   'doctor.can_pin_messages': '`can_pin_messages` が付与されました',
   'doctor.privacy_off': 'Privacy mode が無効です',
   'doctor.privacy_hint':
-    '@BotFather → /setprivacy → Disable、その後 Bot を削除して再追加',
+    'Bot をグループ管理者にする、または @BotFather → /setprivacy → Disable、その後 Bot を削除して再追加',
   'doctor.workroot_subdirs':
     '`WORK_ROOT`: `{workRoot}` ({count} サブフォルダ)',
   'doctor.datadir_path': '`DATA_DIR`: `{dataDir}`',

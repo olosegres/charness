@@ -122,7 +122,7 @@ export const uzDict: Record<string, string> = {
   'doctor.can_pin_messages': '`can_pin_messages` berilgan',
   'doctor.privacy_off': 'Privacy mode o‘chirilgan',
   'doctor.privacy_hint':
-    '@BotFather → /setprivacy → Disable, so‘ng Bot ni o‘chiring va qayta qo‘shing',
+    'Botni guruh admini qiling — yoki @BotFather → /setprivacy → Disable, so‘ng Bot ni o‘chiring va qayta qo‘shing',
   'doctor.workroot_subdirs':
     '`WORK_ROOT`: `{workRoot}` ({count} quyi papka)',
   'doctor.datadir_path': '`DATA_DIR`: `{dataDir}`',

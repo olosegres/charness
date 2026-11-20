@@ -126,7 +126,7 @@ export const ruDict: Record<string, string> = {
   'doctor.can_pin_messages': 'Право `can_pin_messages`',
   'doctor.privacy_off': 'Privacy mode выключен',
   'doctor.privacy_hint':
-    '@BotFather → /setprivacy → Disable, потом удали и добавь бота заново',
+    'Сделай бота админом группы — или @BotFather → /setprivacy → Disable, потом удали и добавь бота заново',
   'doctor.workroot_subdirs':
     '`WORK_ROOT`: `{workRoot}` ({count} подпапок)',
   'doctor.datadir_path': '`DATA_DIR`: `{dataDir}`',

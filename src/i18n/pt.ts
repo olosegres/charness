@@ -122,7 +122,7 @@ export const ptDict: Record<string, string> = {
   'doctor.can_pin_messages': '`can_pin_messages` concedido',
   'doctor.privacy_off': 'Privacy mode desativado',
   'doctor.privacy_hint':
-    '@BotFather → /setprivacy → Disable, depois remove e volta a adicionar o bot',
+    'Torna o bot admin do grupo — ou @BotFather → /setprivacy → Disable, depois remove e volta a adicionar o bot',
   'doctor.workroot_subdirs':
     '`WORK_ROOT`: `{workRoot}` ({count} subpastas)',
   'doctor.datadir_path': '`DATA_DIR`: `{dataDir}`',

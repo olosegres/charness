@@ -122,7 +122,7 @@ export const kaDict: Record<string, string> = {
   'doctor.can_pin_messages': '`can_pin_messages` მინიჭებულია',
   'doctor.privacy_off': 'Privacy mode გამორთულია',
   'doctor.privacy_hint':
-    '@BotFather → /setprivacy → Disable, შემდეგ წაშალეთ და ხელახლა დაამატეთ Bot',
+    'გახადეთ Bot ჯგუფის ადმინისტრატორი — ან @BotFather → /setprivacy → Disable, შემდეგ წაშალეთ და ხელახლა დაამატეთ Bot',
   'doctor.workroot_subdirs':
     '`WORK_ROOT`: `{workRoot}` ({count} ქვესაქაღალდე)',
   'doctor.datadir_path': '`DATA_DIR`: `{dataDir}`',

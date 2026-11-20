@@ -186,7 +186,7 @@ describe('the greeting when the bot is added to the group', () => {
     fakeTelegram.isBotPrivacyModeOn = true;
     const report = await generalTopic.sendAndAwaitReply('/doctor', doctorHeader);
     assert.ok(report.text.includes(`❌ ${enDict['doctor.bot_admin']}`), `the admin line fails:\n${report.text}`);
-    assert.ok(report.text.includes(`❌ ${enDict['doctor.privacy_off']}`), `the privacy line fails for a bot that is not an admin:\n${report.text}`);
+    assert.ok(report.text.includes(`❌ ${enDict['doctor.privacy_off']} — ${enDict['doctor.privacy_hint']}`), `the privacy line fails for a bot that is not an admin, with the admin advice first:\n${report.text}`);
   });
 
   it('/doctor: the bot made an admin passes with privacy mode still on — no privacy line, nothing red', async () => {

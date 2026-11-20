@@ -122,7 +122,7 @@ export const esDict: Record<string, string> = {
   'doctor.can_pin_messages': '`can_pin_messages` concedido',
   'doctor.privacy_off': 'Privacy mode desactivado',
   'doctor.privacy_hint':
-    '@BotFather → /setprivacy → Disable, luego quita y vuelve a añadir el bot',
+    'Haz admin del grupo al bot — o @BotFather → /setprivacy → Disable, luego quita y vuelve a añadir el bot',
   'doctor.workroot_subdirs':
     '`WORK_ROOT`: `{workRoot}` ({count} subcarpetas)',
   'doctor.datadir_path': '`DATA_DIR`: `{dataDir}`',

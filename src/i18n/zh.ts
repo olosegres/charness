@@ -122,7 +122,7 @@ export const zhDict: Record<string, string> = {
   'doctor.can_pin_messages': '`can_pin_messages` 已授予',
   'doctor.privacy_off': 'Privacy mode 已禁用',
   'doctor.privacy_hint':
-    '@BotFather → /setprivacy → Disable，然后移除并重新添加 bot',
+    '将 bot 设为群组管理员，或 @BotFather → /setprivacy → Disable，然后移除并重新添加 bot',
   'doctor.workroot_subdirs':
     '`WORK_ROOT`：`{workRoot}`（{count} 个子文件夹）',
   'doctor.datadir_path': '`DATA_DIR`：`{dataDir}`',

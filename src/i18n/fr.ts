@@ -122,7 +122,7 @@ export const frDict: Record<string, string> = {
   'doctor.can_pin_messages': '`can_pin_messages` accordé',
   'doctor.privacy_off': 'Privacy mode désactivé',
   'doctor.privacy_hint':
-    '@BotFather → /setprivacy → Disable, puis retirer et ré-ajouter le bot',
+    'Faire du bot un admin du groupe — ou @BotFather → /setprivacy → Disable, puis retirer et ré-ajouter le bot',
   'doctor.workroot_subdirs':
     '`WORK_ROOT` : `{workRoot}` ({count} sous-dossiers)',
   'doctor.datadir_path': '`DATA_DIR` : `{dataDir}`',

@@ -126,7 +126,7 @@ export const enDict: Record<string, string> = {
   'doctor.can_pin_messages': '`can_pin_messages` granted',
   'doctor.privacy_off': 'Privacy mode disabled',
   'doctor.privacy_hint':
-    '@BotFather → /setprivacy → Disable, then remove and re-add the bot',
+    'Make the bot a group admin — or @BotFather → /setprivacy → Disable, then remove and re-add the bot',
   'doctor.workroot_subdirs':
     '`WORK_ROOT`: `{workRoot}` ({count} subfolders)',
   'doctor.datadir_path': '`DATA_DIR`: `{dataDir}`',

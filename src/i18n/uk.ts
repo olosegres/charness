@@ -128,7 +128,7 @@ export const ukDict: Record<string, string> = {
   'doctor.can_pin_messages': 'Право `can_pin_messages` надано',
   'doctor.privacy_off': 'Privacy mode вимкнено',
   'doctor.privacy_hint':
-    '@BotFather → /setprivacy → Disable, потім видали й додай бота знову',
+    'Зроби бота адміністратором групи — або @BotFather → /setprivacy → Disable, потім видали й додай бота знову',
   'doctor.workroot_subdirs':
     '`WORK_ROOT`: `{workRoot}` ({count} підпапок)',
   'doctor.datadir_path': '`DATA_DIR`: `{dataDir}`',
