@@ -40,10 +40,10 @@ import type { JiraAnswerThreads } from './answerThreads';
  *
  * Comment threads: an answer goes into the thread of the first comment it replies to (`replyToCommentIds`), else into
  * the thread the request's latest issue update came from (`answerThreads.ts`: its newest comment was a reply there; the
- * answer delivered uses it up), else into the thread its request was opened in (the origin's
- * {@link jiraReplyThreadAttribute}), else it is a top-level comment; the request's alert and the notices about its
- * trigger follow the request's own thread. Jira threads are one level
- * deep, so a reply always names the thread's top-level comment. A thread Jira refuses (400: its comments are gone)
+ * agent's answer delivered uses it up, a notice the bot writes does not), else into the thread its request was opened
+ * in (the origin's {@link jiraReplyThreadAttribute}), else it is a top-level comment; the request's alert and the
+ * notices about its trigger follow the request's own thread. Jira threads are one level deep, so a reply always names
+ * the thread's top-level comment. A thread Jira refuses (400: its comments are gone)
  * gets the comment top-level instead, and the agent is told.
  *
  * Files: an answer's `files` are attached to the issue BEFORE its comment is posted and shown in it, after its text
@@ -504,8 +504,10 @@ export function createJiraAnswerSink(deps: JiraAnswerSinkDeps): JiraAnswerSink {
       if (isHandOver && delivery.isRequestOpen && delivery.kind === 'question') bodies[bodies.length - 1] = getBodyWithContinueLine(bodies[bodies.length - 1]);
       const posted = await postComments(issueKey, bodies, delivery.requestId, threadRootId);
       if (posted.postedCount === 0 && posted.failure) return { ok: false, error: getNothingPostedError(posted.failure) };
-      // The answer is there: the thread an update put it in is used up, the next answer goes where they go by default.
-      deps.answerThreads.consume(delivery.requestId);
+      // The agent's answer is there: the thread an update put it in is used up, the next answer goes where they go by default.
+      // A notice the bot wrote (a usage limit, a refused sign-in) goes into that thread too but uses nothing up: the agent's
+      // answer to the reply is still owed, and comes after the resume.
+      if (!delivery.isBotNotice) deps.answerThreads.consume(delivery.requestId);
       const warnings: string[] = [...(files?.notes ?? [])];
       if (leftOutCommentIds.length > 0) warnings.push(buildJiraReplyLeftOutWarning(leftOutCommentIds));
       if (replies.threadRootId !== null && replies.otherThreadCommentIds.length > 0) {

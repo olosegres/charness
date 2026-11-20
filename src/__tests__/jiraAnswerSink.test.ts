@@ -878,6 +878,17 @@ describe('comment threads: an answer goes where it was asked, or into the thread
     assert.deepEqual(jira.postedParentIds, ['10950', null, '10900']);
   });
 
+  it('a notice the BOT writes (a usage limit, a refused sign-in) goes into the update\'s thread but uses nothing up: the agent\'s answer after the resume still goes there', async () => {
+    answerThreads.note('req_1', '10900');
+    const botNotice = await sink().deliverAnswer(key, { requestId: 'req_1', kind: 'progress', body: 'The AI hit its usage limit and goes on at 14:00.', origin, isRequestOpen: true, isBotNotice: true });
+    assert.deepEqual(botNotice, { ok: true });
+    assert.equal(answerThreads.get('req_1'), '10900', 'still owed to the agent\'s answer');
+    await deliver('progress', 'About your reply, after the resume:');
+    assert.equal(answerThreads.get('req_1'), null, 'the agent\'s answer used it up');
+    await deliver('progress', 'Back to the work.');
+    assert.deepEqual(jira.postedParentIds, ['10900', '10900', null]);
+  });
+
   it('an answer that was not delivered leaves the update\'s thread for the resend', async () => {
     answerThreads.note('req_1', '10900');
     jira.postOutcomes = [new JiraAuthError(403, 'POST', '/rest/api/3/issue/PROJ-12/comment')];

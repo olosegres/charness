@@ -450,8 +450,10 @@ another platform's state.
   its comments belong to a request already open, whose origin is fixed — so when the newest comment an update brought
   is a reply, the request's NEXT answer goes into that thread by itself (the update says so: «Your next answer to request
   … is posted in the thread of comment …»), and when it is a top-level comment the next answer goes where the request's
-  answers go by default; the entry is noted once the update reached the session, used up by the answer delivered (an
-  answer that was not delivered leaves it for the resend), and survives a restart. A request is opened in a thread when the comment that
+  answers go by default; the entry is noted once the update reached the session, used up by the AGENT's answer delivered
+  (an answer that was not delivered leaves it for the resend; a notice the bot writes itself — a usage limit, a refused
+  sign-in, `RequestAnswerDelivery.isBotNotice` — goes into the thread but uses nothing up, so the agent's answer after
+  the resume still lands there), and survives a restart. A request is opened in a thread when the comment that
   opened it — a mention, or a comment on a handed issue — is a reply: `inbound.ts` puts the thread's top-level comment
   id in the origin as `threadCommentId` (`jiraReplyThreadAttribute`), fixed when the request opens like its requester,
   so where an answer goes never comes from the issue's text later. A request opened by a top-level comment, or by a

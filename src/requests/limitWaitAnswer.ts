@@ -151,6 +151,8 @@ async function answerOneRequestWithBotNotice(
       body,
       origin: request.origin,
       isRequestOpen: true,
+      // The bot's own words: a sink keeps whatever the agent's real answer is still owed (`RequestAnswerDelivery.isBotNotice`).
+      isBotNotice: true,
     })
     : lookup;
   if (!result.ok) {
