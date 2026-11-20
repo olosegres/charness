@@ -73,7 +73,7 @@ const maxConcurrent = 2;
 const quietPollCount = 3;
 /** The poll of the give-up step: `jira.json`'s longest, so no regular poll comes within the step — only a wake-up can start the waiting issue. */
 const stretchedPollSeconds = jiraPollIntervalMaxSeconds;
-const giveUpAlertPrefix = '⚠️ The AI could not finish request';
+const giveUpAlertPrefix = '⚠️ The AI stopped working on this without giving an answer';
 
 function getSettingsFilePath(): string {
   return path.join(path.dirname(getLayout().envFile), isolatedSettingsFileName);

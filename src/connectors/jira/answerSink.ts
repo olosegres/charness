@@ -12,13 +12,16 @@ import {
   type AdfDocument,
 } from './adf';
 import { getSingleLineText } from './promptText';
-import { JiraHttpError, type JiraAccount, type JiraClient } from './client';
+import { getCommentThreadRootId, JiraHttpError, type JiraAccount, type JiraClient } from './client';
 import { getCommentBodyHash, type JiraUnconfirmedPosts } from './unconfirmedPosts';
-import { mentionTriggerIdPrefix, checkIsPersonAccount } from './trigger';
+import { jiraReplyThreadAttribute, mentionTriggerIdPrefix, checkIsPersonAccount } from './trigger';
 import { checkIsCommentTrusted } from './issueBlocks';
 import type { JiraContextLedger } from './contextLedger';
 import type { JiraTrust } from './trustedGroup';
 import type { TaskAgentSlotDecision } from '../../trackers/taskAgentSlots';
+import type { SendFilesToThreadResult } from '../../utils/fileSendService';
+import { appendNodesToBodies, type JiraFilesAttachResult } from './outgoingFiles';
+import type { JiraAnswerThreads } from './answerThreads';
 
 /**
  * @description The Jira connector's answer sink (plan J6, D20, R18): an answer
@@ -34,6 +37,18 @@ import type { TaskAgentSlotDecision } from '../../trackers/taskAgentSlots';
  * request, the issue is read first and a comment that did land is not posted
  * twice. The agent cannot look at the issue itself, so every failure tells it
  * what to send again. Bot texts on the issue are English (D20).
+ *
+ * Comment threads: an answer goes into the thread of the first comment it replies to (`replyToCommentIds`), else into
+ * the thread the request's latest issue update came from (`answerThreads.ts`: its newest comment was a reply there; the
+ * agent's answer delivered uses it up, a notice the bot writes does not), else into the thread its request was opened
+ * in (the origin's {@link jiraReplyThreadAttribute}), else it is a top-level comment; the request's alert and the
+ * notices about its trigger follow the request's own thread. Jira threads are one level deep, so a reply always names
+ * the thread's top-level comment. A thread Jira refuses (400: its comments are gone)
+ * gets the comment top-level instead, and the agent is told.
+ *
+ * Files: an answer's `files` are attached to the issue BEFORE its comment is posted and shown in it, after its text
+ * (`outgoingFiles.ts`); a file that cannot be attached fails the answer with nothing posted. `postFiles` is
+ * `send_file_to_user` on an issue: the files, and the caption as text, in a comment of their own.
  */
 
 /** How many of the issue's newest comments R18's read-back looks through. */
@@ -54,14 +69,19 @@ export const jiraReadBackDelayMs = 10_000;
 const missingPartPreviewChars = 80;
 
 const alertTexts: Readonly<Record<RequestAlertReason, string>> = {
-  silentTurns: 'the agent ended its turns without answering, and the reminders gave up',
-  wakeCap: 'the agent was reminded as many times as allowed without answering',
-  wakeFailed: "the agent's session could not be reached to remind it",
+  silentTurns: 'The AI stopped working on this without giving an answer, even after it was reminded.',
+  wakeCap: 'The AI was reminded as many times as allowed and still gave no answer here.',
+  wakeFailed: "The AI's session could not be reached to remind it, so there is no answer here.",
 };
 
-/** @description The alert comment: which request, why, and that a person is needed (D20). */
-export function buildJiraAlertText(requestId: string, reason: RequestAlertReason): string {
-  return `⚠️ The AI could not finish request ${requestId}: ${alertTexts[reason]}. A person needs to look at this issue.`;
+/**
+ * @description The alert comment (D20), in words a reader of the issue understands: what happened, and in one line what it means for
+ * them — nothing more happens by itself, a person has to look, and how to try again. The request's id stays out of it (the bot's log
+ * names it). A turn refused for the AI's Claude account never ends here: the bot says that in words of its own and moves the work, or
+ * the work waits for the account (`bot.ts` `handleClaudeAuthRefusal`).
+ */
+export function buildJiraAlertText(reason: RequestAlertReason): string {
+  return `⚠️ ${alertTexts[reason]} It will not go on by itself: a person needs to look at this issue. To try again, hand it to the AI again or mention it in a comment.`;
 }
 
 /** @description The park notice (D12): over the run budget, handed back without a new request. Hand-overs and mentions share the budget. */
@@ -107,6 +127,21 @@ export function buildJiraReplyLeftOutWarning(commentIds: readonly string[]): str
     'Only comments you were shown in this conversation, written by a trusted person, can be replied to this way.';
 }
 
+/**
+ * @description The warning of an answer that replied to comments in several threads: one answer is one place, so it
+ * went into the thread of the first comment it replied to; the others' authors were only mentioned.
+ */
+export function buildJiraOtherThreadsWarning(threadRootId: string, commentIds: readonly string[]): string {
+  return `Delivered in the thread of comment ${threadRootId}, but ${commentIds.length === 1 ? 'comment' : 'comments'} ${commentIds.join(', ')} ` +
+    `${commentIds.length === 1 ? 'is' : 'are'} in another thread: ${commentIds.length === 1 ? 'its author was' : 'their authors were'} mentioned, ` +
+    'and the answer is not there. To answer in that thread too, send a separate answer that replies to it.';
+}
+
+/** @description The warning of an answer whose thread Jira refused (its comments are gone): it was posted as a new top-level comment. */
+export function buildJiraThreadRefusedWarning(threadRootId: string): string {
+  return `The thread of comment ${threadRootId} no longer takes replies (Jira refused it), so the answer was posted as a new comment instead.`;
+}
+
 /** @description The last paragraph of a hand-over's `question` comment: how the requester lets the agent go on. */
 export const jiraQuestionContinueText = 'To let me go on, answer in a comment and assign the issue back to me.';
 
@@ -130,7 +165,17 @@ export interface JiraAnswerSinkDeps {
   /** Pause before the read-back ({@link jiraReadBackDelayMs}). */
   wait: (ms: number) => Promise<void>;
   unconfirmedPosts: Pick<JiraUnconfirmedPosts, 'getPostedAt' | 'recordUnconfirmed' | 'settle'>;
+  /** The thread an issue update put a request's next answer in; consumed by the answer delivered. */
+  answerThreads: Pick<JiraAnswerThreads, 'get' | 'consume'>;
+  /**
+   * Attach files of the issue's project folder to the issue and say how a comment shows them (`outgoingFiles.ts`);
+   * absent where files cannot be sent — an answer that carries some is then refused, nothing posted.
+   */
+  attachFiles?: (issueKey: string, paths: readonly string[], options: { isShownInline: boolean }) => Promise<JiraFilesAttachResult>;
 }
+
+/** The refusal of files where the sink has no way to attach them. */
+export const jiraFilesUnavailableError = 'files cannot be attached to a Jira issue on this instance; nothing was posted';
 
 /**
  * Why a comment did not land. `unchecked` — an earlier, unconfirmed post of the
@@ -139,12 +184,27 @@ export interface JiraAnswerSinkDeps {
 interface CommentPostFailure {
   kind: 'refused' | 'notPosted' | 'unknown' | 'unchecked';
   detail: string;
+  /** A refusal's HTTP status; 0 when none applies. */
+  status?: number;
 }
 
-/** What posting an answer's comments did: how many landed, and why the next one did not. */
+/**
+ * What posting an answer's comments did: how many landed, why the next one did not, and the thread Jira refused when
+ * the comments went top-level instead (`null` when they went where they were meant to).
+ */
 interface CommentsPosted {
   postedCount: number;
   failure: CommentPostFailure | null;
+  refusedThreadRootId: string | null;
+}
+
+/** Jira's answer to a reply whose thread it does not have: the request is refused, nothing was posted. */
+const threadRefusedStatus = 400;
+
+/** The thread a request's answers go into by default: the origin's {@link jiraReplyThreadAttribute}, when it is a comment id. */
+export function getOriginThreadRootId(origin: RequestOrigin): string | null {
+  const threadRootId = origin.attributes[jiraReplyThreadAttribute];
+  return threadRootId !== undefined && /^\d+$/.test(threadRootId) ? threadRootId : null;
 }
 
 /** A comment's text as the read-back compares it: its plain text, whitespace collapsed. */
@@ -164,17 +224,26 @@ function getBodyWithContinueLine(body: AdfDocument): AdfDocument {
   return { ...body, content: [...body.content, continueParagraph] };
 }
 
+/**
+ * The notices that answer a trigger — a park, a queued hand-over — go where an answer to it would: `threadRootId` is
+ * the thread of the comment that triggered it when that comment is a reply, `null` (or absent) for a top-level one.
+ */
 export interface JiraAnswerSink extends AnswerSink {
   /** Over the run budget (D12): the park notice, then the hand-back. Never rejects. */
-  parkIssue(issueKey: string, requester: JiraAccount | null): Promise<void>;
+  parkIssue(issueKey: string, requester: JiraAccount | null, threadRootId?: string | null): Promise<void>;
   /** A mention over the run budget (D10): the park notice, no hand-back (nothing was handed over). Never rejects. */
-  parkMention(issueKey: string): Promise<void>;
+  parkMention(issueKey: string, threadRootId?: string | null): Promise<void>;
   /** The issue's comments wait past the cap on updates: the notice saying until when (`untilMs`). Never rejects. */
   postUpdatesPausedNotice(issueKey: string, maxUpdates: number, untilMs: number): Promise<void>;
   /** A hand-over that waits for a task-agent slot (D10): the notice saying so, no hand-back — the issue stays the AI's. Never rejects. */
-  postQueuedNotice(issueKey: string, queue: Extract<TaskAgentSlotDecision, { kind: 'queued' }>): Promise<void>;
+  postQueuedNotice(issueKey: string, queue: Extract<TaskAgentSlotDecision, { kind: 'queued' }>, threadRootId?: string | null): Promise<void>;
   /** A hand-over the trusted group `groupName` does not back: the fixed notice, then the hand-back. Never rejects. */
   refuseUntrusted(issueKey: string, requester: JiraAccount | null, groupName: string): Promise<void>;
+  /**
+   * `send_file_to_user` on an issue: the files attached and ONE comment showing them, the caption (Markdown) as its text,
+   * in the thread of `threadRootId` or top-level. `isAsLinks` lists every file as a link (`as_file`). Never rejects.
+   */
+  postFiles(issueKey: string, request: { paths: readonly string[]; caption?: string; isAsLinks: boolean }, threadRootId: string | null): Promise<SendFilesToThreadResult>;
 }
 
 export function createJiraAnswerSink(deps: JiraAnswerSinkDeps): JiraAnswerSink {
@@ -195,10 +264,10 @@ export function createJiraAnswerSink(deps: JiraAnswerSinkDeps): JiraAnswerSink {
   }
 
   /**
-   * Post one comment. With a `requestId`, a post left unconfirmed is remembered,
-   * and a resend of a remembered one reads the issue first (R29).
+   * Post one comment, in the thread of `parentId` (a top-level comment's id) or top-level (`null`). With a
+   * `requestId`, a post left unconfirmed is remembered, and a resend of a remembered one reads the issue first (R29).
    */
-  async function postComment(issueKey: string, body: AdfDocument, requestId: string | null): Promise<CommentPostFailure | 'posted'> {
+  async function postComment(issueKey: string, body: AdfDocument, requestId: string | null, parentId: string | null): Promise<CommentPostFailure | 'posted'> {
     const comparableText = getComparableText(body);
     const bodyHash = getCommentBodyHash(comparableText);
     const earlierPostedAt = requestId === null ? null : deps.unconfirmedPosts.getPostedAt(requestId, bodyHash);
@@ -213,9 +282,9 @@ export function createJiraAnswerSink(deps: JiraAnswerSinkDeps): JiraAnswerSink {
     const postStartedAt = deps.now();
     let result: Awaited<ReturnType<JiraClient['addComment']>>;
     try {
-      result = await client.addComment(issueKey, body);
+      result = await client.addComment(issueKey, body, parentId);
     } catch (error) {
-      return { kind: 'refused', detail: error instanceof Error ? error.message : String(error) };
+      return { kind: 'refused', detail: error instanceof Error ? error.message : String(error), status: error instanceof JiraHttpError ? error.status : 0 };
     }
     if (result.outcome === 'created') return 'posted';
     // R18: a post that timed out or met a 5xx may still be committing on Jira's side.
@@ -228,14 +297,26 @@ export function createJiraAnswerSink(deps: JiraAnswerSinkDeps): JiraAnswerSink {
       : { kind: 'unknown', detail: result.reason };
   }
 
-  async function postComments(issueKey: string, bodies: readonly AdfDocument[], requestId: string | null): Promise<CommentsPosted> {
+  /**
+   * Post `bodies` in order, in the thread of `threadRootId` or top-level (`null`). A reply Jira refuses with 400 — the
+   * thread's comments are gone — is posted top-level instead, and so is the rest of the answer: a refusal posted nothing.
+   */
+  async function postComments(issueKey: string, bodies: readonly AdfDocument[], requestId: string | null, threadRootId: string | null): Promise<CommentsPosted> {
     let postedCount = 0;
+    let parentId = threadRootId;
+    let refusedThreadRootId: string | null = null;
     for (const body of bodies) {
-      const outcome = await postComment(issueKey, body, requestId);
-      if (outcome !== 'posted') return { postedCount, failure: outcome };
+      let outcome = await postComment(issueKey, body, requestId, parentId);
+      if (outcome !== 'posted' && outcome.kind === 'refused' && outcome.status === threadRefusedStatus && parentId !== null) {
+        console.warn(`[jira] ${issueKey}: the thread of comment ${parentId} was refused (${outcome.detail}); posting top-level`);
+        refusedThreadRootId = parentId;
+        parentId = null;
+        outcome = await postComment(issueKey, body, requestId, null);
+      }
+      if (outcome !== 'posted') return { postedCount, failure: outcome, refusedThreadRootId };
       postedCount += 1;
     }
-    return { postedCount, failure: null };
+    return { postedCount, failure: null, refusedThreadRootId };
   }
 
   /**
@@ -258,11 +339,11 @@ export function createJiraAnswerSink(deps: JiraAnswerSinkDeps): JiraAnswerSink {
   }
 
   /**
-   * The author of comment `commentId` when the agent may reply to it that way: the conversation was shown it and
-   * its text was readable then, its author is a person other than the AI account, and — with a trusted group —
-   * the comment is trusted now (author and last editor). `null` otherwise.
+   * Comment `commentId` when the agent may reply to it — its author to mention, the thread the answer goes into:
+   * the conversation was shown it and its text was readable then, its author is a person other than the AI account,
+   * and — with a trusted group — the comment is trusted now (author and last editor). `null` otherwise.
    */
-  async function getReplyTarget(issueKey: string, commentId: string): Promise<JiraAccount | null> {
+  async function getReplyTarget(issueKey: string, commentId: string): Promise<{ author: JiraAccount; threadRootId: string } | null> {
     const shown = deps.contextLedger.getShownBlock(issueKey, `comment:${commentId}`);
     if (!shown || shown.isWithheld) return null;
     try {
@@ -270,7 +351,7 @@ export function createJiraAnswerSink(deps: JiraAnswerSinkDeps): JiraAnswerSink {
       const { author } = comment;
       if (!author || author.accountId === deps.aiAccountId || !checkIsPersonAccount(author)) return null;
       const trust = deps.getTrust();
-      return trust && !checkIsCommentTrusted(comment, trust) ? null : author;
+      return trust && !checkIsCommentTrusted(comment, trust) ? null : { author, threadRootId: getCommentThreadRootId(comment) };
     } catch (error) {
       // An id Jira does not know is the agent's slip, told to it in the result; anything else is the operator's to see.
       const isUnknownComment = error instanceof JiraHttpError && error.status === 404;
@@ -281,21 +362,45 @@ export function createJiraAnswerSink(deps: JiraAnswerSinkDeps): JiraAnswerSink {
 
   /**
    * Whom an answer notifies, requester first, each once: the requester of a mention request, and the authors of the
-   * comments the answer replies to. `leftOutCommentIds` are the replies that did not qualify.
+   * comments the answer replies to. `leftOutCommentIds` are the replies that did not qualify; `threadRootId` is the
+   * thread of the first that did (`null`: none did), and `otherThreadCommentIds` those that qualified in another thread.
    */
-  async function resolveMentionTargets(issueKey: string, delivery: RequestAnswerDelivery): Promise<{ targets: JiraAccount[]; leftOutCommentIds: string[] }> {
+  async function resolveReplyTargets(issueKey: string, delivery: RequestAnswerDelivery): Promise<{
+    targets: JiraAccount[];
+    leftOutCommentIds: string[];
+    threadRootId: string | null;
+    otherThreadCommentIds: string[];
+  }> {
     const targets = new Map<string, JiraAccount>();
     if (delivery.origin.kind === 'trackerMention') {
       const requester = await getMentionRequester(issueKey, delivery.origin);
       if (requester) targets.set(requester.accountId, requester);
     }
     const leftOutCommentIds: string[] = [];
+    const otherThreadCommentIds: string[] = [];
+    let threadRootId: string | null = null;
     for (const commentId of new Set(delivery.replyToCommentIds ?? [])) {
-      const author = await getReplyTarget(issueKey, commentId);
-      if (author) targets.set(author.accountId, author);
-      else leftOutCommentIds.push(commentId);
+      const target = await getReplyTarget(issueKey, commentId);
+      if (!target) {
+        leftOutCommentIds.push(commentId);
+        continue;
+      }
+      targets.set(target.author.accountId, target.author);
+      if (threadRootId === null) threadRootId = target.threadRootId;
+      else if (target.threadRootId !== threadRootId) otherThreadCommentIds.push(commentId);
     }
-    return { targets: [...targets.values()], leftOutCommentIds };
+    return { targets: [...targets.values()], leftOutCommentIds, threadRootId, otherThreadCommentIds };
+  }
+
+  /** The answer's files attached (`null`: it carries none), or why they could not be. */
+  async function attachAnswerFiles(issueKey: string, paths: readonly string[] | undefined): Promise<JiraFilesAttachResult | null> {
+    if (!paths || paths.length === 0) return null;
+    if (!deps.attachFiles) return { ok: false, error: jiraFilesUnavailableError };
+    try {
+      return await deps.attachFiles(issueKey, paths, { isShownInline: true });
+    } catch (error) {
+      return { ok: false, error: `the files could not be attached (${error instanceof Error ? error.message : String(error)}); nothing was posted` };
+    }
   }
 
   /** Hand the issue back to the requester while it is still the AI's; a warning when that could not happen. */
@@ -316,15 +421,26 @@ export function createJiraAnswerSink(deps: JiraAnswerSinkDeps): JiraAnswerSink {
    * A notice the bot writes itself (no agent ran), then the hand-back to the requester. A notice that did not land
    * is a warning and no hand-back: the issue stays the AI's, and the trigger is recorded already, so it is not repeated.
    */
-  async function postNoticeAndHandBack(issueKey: string, requester: JiraAccount | null, notice: AdfDocument, noticeKind: 'park' | 'untrusted'): Promise<void> {
-    if (!await postNotice(issueKey, notice, noticeKind)) return;
+  async function postNoticeAndHandBack(
+    issueKey: string,
+    requester: JiraAccount | null,
+    notice: AdfDocument,
+    noticeKind: 'park' | 'untrusted',
+    threadRootId: string | null,
+  ): Promise<void> {
+    if (!await postNotice(issueKey, notice, noticeKind, threadRootId)) return;
     const handBackWarning = await handBack(issueKey, requester?.accountId ?? emptyRequester);
     if (handBackWarning) console.warn(`[jira] ${issueKey}: ${noticeKind}: ${handBackWarning}`);
   }
 
-  /** A notice the bot writes itself; `false` (and a warning) when it did not land. */
-  async function postNotice(issueKey: string, notice: AdfDocument, noticeKind: 'park' | 'untrusted' | 'mention park' | 'queued' | 'updates paused'): Promise<boolean> {
-    const posted = await postComments(issueKey, [notice], null);
+  /** A notice the bot writes itself, in the thread of `threadRootId` or top-level; `false` (and a warning) when it did not land. */
+  async function postNotice(
+    issueKey: string,
+    notice: AdfDocument,
+    noticeKind: 'park' | 'untrusted' | 'mention park' | 'queued' | 'updates paused',
+    threadRootId: string | null,
+  ): Promise<boolean> {
+    const posted = await postComments(issueKey, [notice], null, threadRootId);
     if (posted.postedCount === 0 && posted.failure) {
       console.warn(`[jira] ${issueKey}: ${noticeKind} notice not posted: ${getNothingPostedError(posted.failure)}`);
       return false;
@@ -369,19 +485,35 @@ export function createJiraAnswerSink(deps: JiraAnswerSinkDeps): JiraAnswerSink {
   return {
     async deliverAnswer(key: SessionKey, delivery): Promise<AnswerDeliveryResult> {
       const issueKey = key.thread;
-      const { targets, leftOutCommentIds } = await resolveMentionTargets(issueKey, delivery);
-      const bodies = targets.length > 0
+      const replies = await resolveReplyTargets(issueKey, delivery);
+      const { targets, leftOutCommentIds } = replies;
+      // The comment the agent replies to decides the thread; else the thread an update of the request came from; else the
+      // thread the request was opened in; else top-level.
+      const threadRootId = replies.threadRootId ?? deps.answerThreads.get(delivery.requestId) ?? getOriginThreadRootId(delivery.origin);
+      const textBodies = targets.length > 0
         ? createCommentBodiesWithLeadingNode(delivery.body, createMentionParagraph(targets))
         : createCommentBodies(delivery.body);
-      if (bodies.length === 0) return { ok: false, error: 'the answer is empty' };
+      if (textBodies.length === 0) return { ok: false, error: 'the answer is empty' };
+      // Attached before anything is posted: a file that cannot be attached leaves the answer undelivered, safe to send again.
+      const files = await attachAnswerFiles(issueKey, delivery.files);
+      if (files && !files.ok) return { ok: false, error: files.error };
+      const bodies = files ? appendNodesToBodies(textBodies, files.nodes) : textBodies;
       // Only a hand-over's question hands the issue back, so only it carries the line saying how to give it back —
       // and only while its request is open: a superseded request's question hands nothing back.
       const isHandOver = delivery.origin.kind === 'trackerEvent';
       if (isHandOver && delivery.isRequestOpen && delivery.kind === 'question') bodies[bodies.length - 1] = getBodyWithContinueLine(bodies[bodies.length - 1]);
-      const posted = await postComments(issueKey, bodies, delivery.requestId);
+      const posted = await postComments(issueKey, bodies, delivery.requestId, threadRootId);
       if (posted.postedCount === 0 && posted.failure) return { ok: false, error: getNothingPostedError(posted.failure) };
-      const warnings: string[] = [];
+      // The agent's answer is there: the thread an update put it in is used up, the next answer goes where they go by default.
+      // A notice the bot wrote (a usage limit, a refused sign-in) goes into that thread too but uses nothing up: the agent's
+      // answer to the reply is still owed, and comes after the resume.
+      if (!delivery.isBotNotice) deps.answerThreads.consume(delivery.requestId);
+      const warnings: string[] = [...(files?.notes ?? [])];
       if (leftOutCommentIds.length > 0) warnings.push(buildJiraReplyLeftOutWarning(leftOutCommentIds));
+      if (replies.threadRootId !== null && replies.otherThreadCommentIds.length > 0) {
+        warnings.push(buildJiraOtherThreadsWarning(replies.threadRootId, replies.otherThreadCommentIds));
+      }
+      if (posted.refusedThreadRootId !== null) warnings.push(buildJiraThreadRefusedWarning(posted.refusedThreadRootId));
       if (posted.failure) warnings.push(getMissingPartsWarning(bodies, posted, posted.failure));
       // An answer to a request that is no longer open (superseded by a newer one) must not take the issue from it.
       // A mention request never had the issue handed over: its answer is a comment, and the issue stays where it is.
@@ -394,8 +526,10 @@ export function createJiraAnswerSink(deps: JiraAnswerSinkDeps): JiraAnswerSink {
 
     async deliverAlert(key, alert) {
       const issueKey = key.thread;
-      const posted = await postComments(issueKey, [convertMarkdownToAdf(buildJiraAlertText(alert.requestId, alert.reason))], alert.requestId);
+      const posted = await postComments(issueKey, [convertMarkdownToAdf(buildJiraAlertText(alert.reason))], alert.requestId, getOriginThreadRootId(alert.origin));
       if (posted.postedCount === 0 && posted.failure) return { ok: false, error: getNothingPostedError(posted.failure) };
+      // The comment names no request: the log does.
+      console.log(`[jira] ${issueKey}: request ${alert.requestId} given up (${alert.reason}); the alert comment is posted`);
       if (alert.origin.kind === 'trackerEvent') {
         const handBackWarning = await handBack(issueKey, getRequestRequester(alert.origin));
         if (handBackWarning) console.warn(`[jira] ${issueKey}: alert for ${alert.requestId}: ${handBackWarning}`);
@@ -406,22 +540,54 @@ export function createJiraAnswerSink(deps: JiraAnswerSinkDeps): JiraAnswerSink {
 
     async releaseAlert() {},
 
-    parkIssue: (issueKey, requester) =>
-      postNoticeAndHandBack(issueKey, requester, convertMarkdownToAdf(buildJiraParkText(deps.runBudgetPer24h)), 'park'),
+    parkIssue: (issueKey, requester, threadRootId = null) =>
+      postNoticeAndHandBack(issueKey, requester, convertMarkdownToAdf(buildJiraParkText(deps.runBudgetPer24h)), 'park', threadRootId),
 
-    parkMention: async (issueKey) => {
-      await postNotice(issueKey, convertMarkdownToAdf(buildJiraMentionParkText(deps.runBudgetPer24h)), 'mention park');
+    parkMention: async (issueKey, threadRootId = null) => {
+      await postNotice(issueKey, convertMarkdownToAdf(buildJiraMentionParkText(deps.runBudgetPer24h)), 'mention park', threadRootId);
     },
 
+    // The issue's, not a trigger's: top-level.
     postUpdatesPausedNotice: async (issueKey, maxUpdates, untilMs) => {
-      await postNotice(issueKey, createPlainTextAdf(buildJiraUpdatesPausedText(maxUpdates, untilMs)), 'updates paused');
+      await postNotice(issueKey, createPlainTextAdf(buildJiraUpdatesPausedText(maxUpdates, untilMs)), 'updates paused', null);
     },
 
-    postQueuedNotice: async (issueKey, queue) => {
-      await postNotice(issueKey, convertMarkdownToAdf(buildJiraQueuedText(queue.maxConcurrent, queue.aheadCount)), 'queued');
+    postQueuedNotice: async (issueKey, queue, threadRootId = null) => {
+      await postNotice(issueKey, convertMarkdownToAdf(buildJiraQueuedText(queue.maxConcurrent, queue.aheadCount)), 'queued', threadRootId);
     },
 
+    // A hand-over's: it has no comment, so top-level.
     refuseUntrusted: (issueKey, requester, groupName) =>
-      postNoticeAndHandBack(issueKey, requester, createPlainTextAdf(buildJiraUntrustedText(groupName)), 'untrusted'),
+      postNoticeAndHandBack(issueKey, requester, createPlainTextAdf(buildJiraUntrustedText(groupName)), 'untrusted', null),
+
+    postFiles: async (issueKey, request, threadRootId) => {
+      if (!deps.attachFiles) return { ok: false, error: jiraFilesUnavailableError };
+      let files: JiraFilesAttachResult;
+      try {
+        files = await deps.attachFiles(issueKey, request.paths, { isShownInline: !request.isAsLinks });
+      } catch (error) {
+        return { ok: false, error: `the files could not be attached (${error instanceof Error ? error.message : String(error)}); nothing was posted` };
+      }
+      if (!files.ok) return { ok: false, error: files.error };
+      const caption = request.caption?.trim() ?? '';
+      const bodies = appendNodesToBodies(caption === '' ? [] : createCommentBodies(caption), files.nodes);
+      const posted = await postComments(issueKey, bodies, null, threadRootId);
+      if (posted.postedCount === 0 && posted.failure) {
+        const error = `the files are attached to ${issueKey} — ${files.summary} — but the comment that shows them was not posted (${posted.failure.detail}); ` +
+          'sending them again reuses the attachments';
+        return posted.failure.kind === 'unknown' ? { ok: false, kind: 'deliveryUnknown', error } : { ok: false, error };
+      }
+      const notes = [
+        ...files.notes,
+        ...(posted.refusedThreadRootId === null ? [] : [buildJiraThreadRefusedWarning(posted.refusedThreadRootId)]),
+        ...(posted.failure ? [`only the first ${posted.postedCount} of the comment's ${bodies.length} parts were posted (${posted.failure.detail})`] : []),
+      ];
+      const place = threadRootId === null || posted.refusedThreadRootId !== null ? 'a comment' : `a comment in the thread of comment ${threadRootId}`;
+      return {
+        ok: true,
+        summary: `Posted in ${place} on ${issueKey}: ${files.summary}.${notes.length > 0 ? ` Note: ${notes.join('; ')}.` : ''}`,
+        sentKinds: files.sentKinds,
+      };
+    },
   };
 }

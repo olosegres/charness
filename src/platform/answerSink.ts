@@ -28,6 +28,17 @@ export interface RequestAnswerDelivery {
    * core passes it through untouched; a sink that has no such notion ignores it.
    */
   replyToCommentIds?: readonly string[];
+  /**
+   * Platform-owned: files of the conversation's folder the answer carries, as the agent named them (paths relative to
+   * it). The core passes them through untouched; a sink that has no such notion ignores them.
+   */
+  files?: readonly string[];
+  /**
+   * Set when the BOT wrote the answer itself (a usage-limit or sign-in notice, `requests/limitWaitAnswer.ts`), not the
+   * agent: a sink still delivers it as the request's answer, but must not treat it as the agent's reply to anything —
+   * whatever state an answer of the agent's uses up (Jira: the thread an issue update put the next answer in) stays.
+   */
+  isBotNotice?: true;
 }
 
 /**

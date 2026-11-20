@@ -161,6 +161,54 @@ so one account's usage limit does not stop every topic.
   pick is a switch to Claude on that account (see [*A manual switch between Claude and
   OpenCode asks first*](#limits_autoswitch) under the fallback models). While a usage-limit wait is armed a
   pick is the limit move: the wait ends and the work continues on the account you tapped.
+- **An account that is signed out or refused is left at once.** A conversation — a
+  topic or a tracker issue alike — never starts or resumes on an account known not to
+  work: one its last `claude auth status` found signed out, or one the CLI refused on a
+  turn (no login, a login that expired or was revoked, «Your organization has disabled
+  Claude subscription access for Claude Code», a bare 401 / 403). It goes to the account
+  the `claude_profiles` tool recommends for it — of the accounts the `/limits` list holds
+  (an API-credit one first), else of all, the subscription whose weekly limit resets
+  soonest — and keeps that account as its own pick, as after a usage limit; a sleeping
+  conversation resumes there, same conversation. A turn the CLI refuses moves the
+  conversation the same way and continues the turn there (a topic gets one line, `🔁
+  Account «default» is signed out or its sign-in was refused — this topic continues on
+  «work». Switch: /limits`; a Jira issue gets a comment in plain words — «The AI's Claude
+  account «default» is signed out: its sign-in expired or was revoked. I moved this issue to
+  «second» and will continue.»). With no other usable account the conversation WAITS: a
+  topic gets the pinned logged-out notice as before, a Jira issue the comment «No Claude
+  account of the AI can work right now (…). The operator has been told; the work continues
+  once one is signed in again.»; it is not reminded meanwhile (so it never ends in «gave no
+  answer»), and it goes on by itself as soon as an account can work again. «🔁 Auto switch» does not govern it: a refused account comes back by
+  no wait. Until it is signed in again the account counts as not signed in everywhere
+  (`/accounts`, `/limits`, the recommendation; `charness claude-profiles` prints
+  `sign-in refused at <time>: <why>`): signed in again means a new login in its folder
+  (`/accounts login <name>`, or `claude auth login` by hand), which the usage poll
+  notices within ten minutes, or at once when you sign it in through `/accounts`. A bare
+  401 / 403 also ends once the hourly status check finds the account signed in — but only
+  once: the same login refused that way again within six hours is held until a new sign-in
+  (the CLI reports some refused logins as signed in, so the account could otherwise swing
+  between refused and usable every hour), and such an end is no sign-in, so you are not told
+  «signed in again» (the pin goes quietly). The bot log says each change once:
+  `[accounts] profile default: not signed in — new sessions go to second`,
+  `[accounts] profile default: signed in again — usable for new sessions`. The
+  deprecated tmux-scrape backend is moved at start only; a refused turn there keeps the
+  notice.
+- **You are told once when an account needs you.** When an account stops working because
+  of its sign-in — its status check finds it signed out, or the CLI refuses it on a turn —
+  the bot posts one message in **General**, pinned (the pin is what reaches you in a muted
+  chat): what broke (`⚠️ Action needed: Claude account «default» is signed out: its sign-in
+  expired or was revoked.`, then `The CLI said: …` with the CLI's own words), what to do
+  (`To fix it, sign it in again: /accounts login default`; for an organization that turned
+  Claude subscription use off: ask its admin, or sign the account in with another login) and
+  what the bot did (`Its conversations continue on «second», and new ones start there.`, or
+  `No other Claude account can work right now: the conversations wait and go on once one is
+  signed in again.`). It is said once per change — not per turn, and not again after a
+  restart; an account seen for the first time is told only when it is the one new
+  conversations start on or the CLI refused it on a turn (a folder whose sign-in is still
+  under way is not news). When the account is signed in again one line says so and the pin
+  goes. An instance without Telegram posts the same, in English, on its Jira **operator
+  issue** (`jira.json` `operatorIssue`, see SETUP.md § Jira setup), mentioning the
+  operator's accounts; without one it goes only to the log.
 - **Removing:** «🗑 Remove» deletes the profile's login directory. The profile
   that is currently the instance default cannot be removed (pick another one in
   General first); topics that had picked the removed profile return to the
@@ -313,7 +361,7 @@ so one account's usage limit does not stop every topic.
   the lower five-hour percent decides; an unknown reset ranks after every known
   one. A **resumed** worker
   passes `currentProfile` (the profile it last ran on) and stays on it unless the
-  account is signed out, marked limited, out of credits, left out of the list or at
+  account is signed out (or its sign-in was refused by the CLI on a turn), marked limited, out of credits, left out of the list or at
   100 % on a window the model drains; the 90 % ceiling does not apply to it. One that
   broke off on a usage limit — or on «Credit balance is too low» — passes
   `isStoppedByLimit` too: the bot re-reads that account's usage (an account billed
@@ -848,7 +896,7 @@ and the two settings (auto switch, wait for the reset):
 
 ### `/limits_autoswitch`
 
-The setup of automatic switching on a usage limit, with a short text: a title, what the topic runs on and where its two settings come from. **Fallback models** — an ordered list of Claude accounts (with an optional model) and OpenCode providers with a model, top = preferred, where a topic continues when its agent hits a limit. One full-width button per entry (`✓ 1. Claude · work · opus`, `2. Claude · default ⛔ 14:00`, `3. OpenCode · openai · gpt-5 🚫` — ✓ where the topic runs, ⛔ limited until, 🔒 not signed in, ❓ no longer offered, 💸 API credits used up, 🚫 left out of automatic switching); a tap opens that entry in the same message with ⬆️ Up / ⬇️ Down, 🚫 Don't use / ✅ Use (a left-out entry stays usable by hand through `/model` and `/accounts`), 🗑 Remove and ⬅️ Back. Below the list: «➕ Add» (account or provider, then the model; an entry of a backend the list does not use yet — an OpenCode model next to Claude accounts, or the reverse — asks first, because a limit then hands a conversation over in compacted form; including a 🚫 entry that does that asks the same way), «🔄 Fill from connected» (a draft from what is connected; entries you left out stay left out; an account billed to API credits comes last and left out unless you had included it; asks first when a list exists), «🗑 Clear». The list is ONE instance-wide list and is editable from every topic. **Two settings** decide what a limit does: «🔁 Auto switch» — auto switch to a fallback model (ON by default, also with one account; the topic moves to the first entry of the list with room — an OpenCode entry included, which hands the conversation over in compacted form; turned OFF, the limit notice carries «🔁 Switch to …» buttons instead) and «⏳ Wait for reset» — wait for the reset and continue (ON by default; while a wait is armed the topic screen also offers «⏭ Skip once»). In General they are the defaults for all topics and each is one button that flips the value. In a regular topic each is one short full-width button showing the effective value (`🔁 Auto switch: ON`; one line of text above the list says where each value comes from — `🔁 as in General · ⏳ set for this topic`); a tap opens the setting in the same message with ON / OFF / «As in General (<the General value>)» — the topic's own choice marked ✓ — and ⬅️ Back, and a choice applies and returns to the screen. Switch ON: the topic moves to the first available entry at once. OFF: buttons on the notice, and if none is pressed the bot waits for the reset (waiting ON); both OFF: it only reports the limit. When every enabled entry, the current one included, is limited, the wait ends at the EARLIEST reset and the topic continues on that entry (the notice names it and the time). Text forms: `/limits_autoswitch rebuild`, `/limits_autoswitch clear`, `/limits_autoswitch switch on|off|same`, `/limits_autoswitch wait on|off|same` (the same verbs work after `/limits`). `/fallback` and `/auto_continue_limits [on|off]` still work as hidden aliases. A conversation that is not a Telegram topic (a Jira issue) follows the list and General's two values — it has no choice of its own. The board that switches a topic by hand is [`/limits`](#limits).
+The setup of automatic switching on a usage limit, with a short text: a title, what the topic runs on and where its two settings come from. **Fallback models** — an ordered list of Claude accounts (with an optional model) and OpenCode providers with a model, top = preferred, where a topic continues when its agent hits a limit. One full-width button per entry (`✓ 1. Claude · work · opus`, `2. Claude · default ⛔ 14:00`, `3. OpenCode · openai · gpt-5 🚫` — ✓ where the topic runs, ⛔ limited until, 🔒 not signed in, ❓ no longer offered, 💸 API credits used up, 🚫 left out of automatic switching); a tap opens that entry in the same message with ⬆️ Up / ⬇️ Down, 🚫 Don't use / ✅ Use (a left-out entry stays usable by hand through `/model` and `/accounts`), 🗑 Remove and ⬅️ Back. Below the list: «➕ Add» (account or provider, then the model; an entry of a backend the list does not use yet — an OpenCode model next to Claude accounts, or the reverse — asks first, because a limit then hands a conversation over in compacted form; including a 🚫 entry that does that asks the same way), «🔄 Fill from connected» (a draft from what is connected; entries you left out stay left out; an account billed to API credits comes last and left out unless you had included it; asks first when a list exists), «🗑 Clear». The list is ONE instance-wide list and is editable from every topic. **Two settings** decide what a limit does: «🔁 Auto switch» — auto switch to a fallback model (ON by default, also with one account; the topic moves to the first entry of the list with room — an OpenCode entry included, which hands the conversation over in compacted form; turned OFF, the limit notice carries «🔁 Switch to …» buttons instead) and «⏳ Wait for reset» — wait for the reset and continue (ON by default; while a wait is armed the topic screen also offers «⏭ Skip once»). In General they are the defaults for all topics and each is one button that flips the value. In a regular topic each is one short full-width button showing the effective value (`🔁 Auto switch: ON`; one line of text above the list says where each value comes from — `🔁 as in General · ⏳ set for this topic`); a tap opens the setting in the same message with ON / OFF / «As in General (<the General value>)» — the topic's own choice marked ✓ — and ⬅️ Back, and a choice applies and returns to the screen. Switch ON: the topic moves to the first available entry at once. OFF: buttons on the notice, and if none is pressed the bot waits for the reset (waiting ON); both OFF: it only reports the limit. When every enabled entry, the current one included, is limited, the wait ends at the EARLIEST reset and the topic continues on that entry (the notice names it and the time). Text forms: `/limits_autoswitch rebuild`, `/limits_autoswitch clear`, `/limits_autoswitch switch on|off|same`, `/limits_autoswitch wait on|off|same` (the same verbs work after `/limits`). `/fallback` and `/auto_continue_limits [on|off]` still work as hidden aliases. A conversation that is not a Telegram topic (a Jira issue) follows the list and General's two values — it has no choice of its own. A Claude account that is signed out or whose sign-in the CLI refuses is not a limit: the conversation leaves it at once whatever the two settings say, for the account the list (else the soonest weekly reset) names — see [*An account that is signed out or refused*](#accounts). The board that switches a topic by hand is [`/limits`](#limits).
 
 #### Fallback models and automatic switching
 

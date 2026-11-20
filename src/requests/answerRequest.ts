@@ -61,6 +61,8 @@ export interface AnswerRequestArgs {
   body: string;
   /** Platform-owned (a tracker's comment ids); handed to the sink untouched. */
   replyToCommentIds?: readonly string[];
+  /** Platform-owned (files a tracker's answer carries); handed to the sink untouched. */
+  files?: readonly string[];
   checkIsConversationInScope: (conversationKey: string) => boolean;
 }
 
@@ -127,6 +129,7 @@ export async function answerRequest(deps: AnswerRequestDeps, args: AnswerRequest
     origin: lookup.request.origin,
     isRequestOpen: lookup.isOpen,
     ...(args.replyToCommentIds === undefined ? {} : { replyToCommentIds: args.replyToCommentIds }),
+    ...(args.files === undefined ? {} : { files: args.files }),
   });
   if (!delivery.ok) {
     return { ok: false, error: `The answer was NOT delivered: ${delivery.error}. Request ${args.requestId} is unchanged; you may retry.` };

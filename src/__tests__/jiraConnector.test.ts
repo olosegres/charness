@@ -1048,8 +1048,16 @@ describe('bot.ts wires the Jira connector (J5)', () => {
   it('C10: the bot MCP offers the connector\'s attachment tool only when the instance has the connector', () => {
     const wiring = botSource.slice(botSource.indexOf('function wireScheduler('), botSource.indexOf('export async function startBot('));
     assert.match(wiring, /const \{ jiraConnector \} = wiring;/);
-    assert.match(wiring, /\.\.\.\(jiraConnector\s*\?\s*\{ fetchJiraAttachment: \(threadKeyStr: string, attachmentId: string\) => jiraConnector\.fetchAttachment\(keyFromString\(threadKeyStr\), attachmentId\) \}\s*:\s*\{\}\),/);
+    assert.match(wiring, /\.\.\.\(jiraConnector\s*\?\s*\{\s*fetchJiraAttachment: \(threadKeyStr: string, attachmentId: string\) => jiraConnector\.fetchAttachment\(keyFromString\(threadKeyStr\), attachmentId\),/);
     assert.match(startBody, /wireScheduler\(\{\s*requestLedger,\s*answerSinks,\s*jiraConnector,/);
+  });
+
+  it('files on an issue: the bot MCP offers them only with the connector, through the issue\'s outbound, whose sender is the connector once it is ready', () => {
+    const wiring = botSource.slice(botSource.indexOf('function wireScheduler('), botSource.indexOf('export async function startBot('));
+    const ports = wiring.slice(wiring.indexOf('...(jiraConnector'));
+    assert.match(ports, /^\.\.\.\(jiraConnector\s*\?\s*\{[\s\S]*?sendJiraFiles: \(threadKeyStr: string, request: OutboundFileRequest\) => \{\s*const key = keyFromString\(threadKeyStr\);\s*return getOutboundFor\(key\)\.deliverFile\(key, request\);\s*\},\s*\}\s*:\s*\{\}\),/);
+    assert.match(botSource, /\['jira', createJiraConnectorOutbound\(\(\) => jiraFileSender\)\],/);
+    assert.match(startBody, /if \(jiraConnector\) \{\s*jiraFileSender = \(key, request\) => jiraConnector\.sendFiles\(key, request\);/);
   });
 
   it('C5: a Jira post is told whether its session is fresh — a fresh start or a failed resume\'s fallback start is, a running or resumed one is not', () => {

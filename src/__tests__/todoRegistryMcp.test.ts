@@ -144,7 +144,7 @@ describe('todo_update / todo_read over the bot MCP server', () => {
     for (const platform of ['telegram', 'jira', null] as const) {
       for (const isBotSkillsEnabled of [true, false]) {
         for (const remoteRunRunnerLines of [[], worstRunnerLines]) {
-          const length = buildMcpServerInstructions(platform, { isJiraAttachmentToolOffered: true, isTodoToolOffered: true, remoteRunRunnerLines }, isBotSkillsEnabled).length;
+          const length = buildMcpServerInstructions(platform, { isJiraAttachmentToolOffered: true, isJiraFileSendOffered: true, isTodoToolOffered: true, remoteRunRunnerLines }, isBotSkillsEnabled).length;
           assert.ok(length <= claudeCodeInstructionsMaxLength, `${platform}, skills ${isBotSkillsEnabled ? 'on' : 'off'}, ${remoteRunRunnerLines.length} runners: ${length}`);
         }
       }

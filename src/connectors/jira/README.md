@@ -29,7 +29,9 @@ which), `model`, `effort` (the sessions',
 since user settings do not apply; absent → `opus` / `high`, either key overrides only its own default),
 `agentBinaries` (tool name → absolute path of an executable, e.g. `ffmpeg`: checked at boot — missing or not
 executable stops it, naming the key — and linked into `DATA_DIR/agent-bin`, which leads the PATH of the Jira agents;
-host runtime), `baseUrl` (loopback only, for the fakes). `adapter` is `claude-json-stream`
+host runtime), `operatorIssue` (an issue key: the bot's own channel to its operator, see «The operator issue» below; read at boot —
+one the AI account cannot see refuses the start), `operatorAccountIds` (1–5 account ids mentioned on each operator alert that asks
+them to act; needs `operatorIssue`), `baseUrl` (loopback only, for the fakes). `adapter` is `claude-json-stream`
 (the default: the process is stopped at the idle mark) or `claude-per-turn` (stopped after every answer; when the
 issue's last known Claude Code is below 2.1.287 the pick is kept but that session runs without the per-turn stop —
 an old process is never auto-stopped — until a newer CLI reports in, L-D10); nothing else (R14). An issue's conversation sleeps between requests and the next request
@@ -308,6 +310,61 @@ list and General's «Auto switch» (`claudeAutoSwitchOnLimitEnabled`, ON unless 
 Jira and Telegram together uses the same values for both); a Jira-only one keeps them in `state.json`. A launch under an account's directory carries
 `CLAUDE_CONFIG_DIR` — a path, the one variable beyond the agent allowlist (R32). Flow: `jiraFallbackSwitchE2e.test.ts`.
 
+An account that cannot work because of its SIGN-IN is never started or resumed on (`utils/claudeAuthRefusal.ts`): one its last status check
+found signed out, or one the CLI refused on a turn — the stream's `authentication_failed` / `oauth_org_not_allowed` code, or its words (signed
+out, a login expired or revoked, «Your organization has disabled Claude subscription access for Claude Code», a bare 401 / 403 — which a status
+check that finds the account signed in may end once; the same login refused that way again within six hours is held until a new login,
+`claudeRejectedRepeatWindowMs`). The issue's
+conversation goes to the account `claude_profiles` recommends and keeps it. A turn refused that way is moved at once and goes on, and the issue
+hears it from the bot in plain words, as a `progress` answer to its open requests (`requests.account.movedAnswer`, through the same sink as a
+limit notice): «The AI's Claude account «default» is signed out: its sign-in expired or was revoked. I moved this issue to «second» and will
+continue.» With no account left that can work the conversation WAITS (`claudeAccountWaits` in `state.json`): its requests are no longer woken —
+so no reminder meets the same refusal and no give-up alert reads as the agent's silence — and they hear «No Claude account of the AI can work
+right now (…). The operator has been told; the work continues once one is signed in again.» once per request; the first account that can work
+again takes the conversation on with the continue prompt. The operator hears it on the operator issue (below). The give-up alert
+(`buildJiraAlertText`) is left for a real silence: it says in plain words what happened and that a person has to look, without the
+request's id (the log names it).
+
+## The operator issue (`operatorIssue.ts`)
+
+A Jira-only instance has no Telegram General, where the bot tells its operator what only they can fix. `jira.json` `operatorIssue`
+names an issue that plays that part: each operator alert (`utils/claudeAccountAlert.ts` — a Claude account signed out or refused by its
+organization, which conversations it moved where or that they wait, what to run to sign it in again; one line when it is signed in again)
+is a comment by the AI account there, in English, posted once per change (the record is in `state.json`, so a restart tells nothing
+again). An alert that asks the operator to act opens with a mention paragraph of `operatorAccountIds` (`createMentionParagraph`: Jira
+notifies them); a recovery line mentions nobody. A post is made once and never retried — its outcome may be unknown, and an alert told
+twice is worse than one the log names as not posted. The issue is read at boot (`checkJiraSetup`: 404 → `jiraOperatorIssueUnseenError`,
+the start refused; an outage only delays polling, as for the rest of the setup). It need not be in the allowlist; when it is, it is still
+never a request source: the poller's client never sees it (`hideJiraOperatorIssue`, one log line the first time) — it is left out of every
+search page, and a read of it by its key (the poller's re-read of a mention waiting for a slot, a mention held back from its update, an issue
+that left the handed state — one may date from before `operatorIssue` was set) answers 404, so the poller drops what it kept for it as for an
+issue gone. A hand-over, a comment or a mention on it reaches no agent. Without `operatorIssue` the alerts reach only the bot's log (`[accounts] …`;
+the boot says so once).
+
+## Possible next steps
+
+**Operator commands on the operator issue** (not implemented — a design note). The operator issue could take a few commands typed as a
+comment, so a Jira-only instance can be looked after without a shell:
+
+- `/accounts` — the bot answers with the Claude accounts as `charness claude-profiles` shows them (signed in or refused, usage, which one
+  new conversations go to).
+- `/login <profile>` — the bot starts the sign-in of that account out of band, as Telegram's `/accounts login` does through
+  `agentLogin/` (a pty running `claude auth login` under the profile's `CLAUDE_CONFIG_DIR`), posts the sign-in link as its comment, and
+  takes the code from the NEXT comment of the same operator on that issue; the code is never echoed, logged or quoted back, and a sign-in
+  left open expires like Telegram's.
+- `/status` — what runs: the open requests and their issues, the waits (a usage limit, an account to sign in), the task-agent slots.
+
+Who: only a comment whose author is one of `operatorAccountIds` (a plain id check — no group, no app, never the AI account itself, and
+never an edited comment whose last editor is someone else); anything else on the issue stays ignored, as now. A command is decided by
+the poller's scan of the issue's new comments (its `updated` moving), answered once (a seen-log, like `triggerLog.ts`), and never reaches an
+agent.
+
+Risks: a sign-in code in a Jira comment is readable by everyone who can browse the issue, kept in its history and sent in its
+notification e-mails. So the bot deletes the code's comment as soon as it has read it (the AI account needs the *Delete all comments*
+permission in that project; without it the command is refused up front), the code is single-use and short-lived, and the issue should live
+in a project only the operators can browse. The answers must never carry a token, a key or a path beyond the profile's folder; a mistyped
+command gets a short usage line, not an echo of what was typed.
+
 ## Isolation — fail-closed, checked at boot
 
 `cli/connectorGuards.ts` runs before any env file is read and before the bot module loads: a `jira` instance
@@ -376,7 +433,7 @@ another platform's state.
   request. Comment first, then the hand-back: a failed hand-back is a delivered answer plus a warning (a retry
   would post it twice). A mention request (origin `trackerMention`) hands nothing back — not its `final`, not its
   `question`, not its alert: the issue was never handed over.
-- **Who an answer notifies** (`resolveMentionTargets`). The first comment of an answer may open with ONE paragraph
+- **Who an answer notifies** (`resolveReplyTargets`). The first comment of an answer may open with ONE paragraph
   of real mention nodes (`createMentionParagraph`: one per person, one space between, nothing else — Jira shows
   `@Name` and notifies them): the requester of a mention request on every answer, unless it is an app (read from
   the request's own comment, `GET …/comment/{id}`; a comment that is gone means no mention, never a failed answer),
@@ -389,6 +446,29 @@ another platform's state.
   qualify are left out and named in the tool result's warning (the answer itself is delivered, never resent). The
   paragraph counts toward the comment size split (`createCommentBodiesWithLeadingNode`: its size comes off the
   limit of every part). `replyToCommentIds` (at most 10 numeric ids) is offered to Jira sessions only.
+- **Where an answer goes: comment threads.** Jira Cloud has threaded replies (one level, see "Comment threads in the
+  API" below), and an answer follows them: it goes into the thread of the first comment it replies to
+  (`replyToCommentIds` — a top-level comment's own thread, or the thread a reply is in), else into the thread the
+  request's latest issue update came from, else into the thread its request was opened in, else it is a top-level
+  comment. **An update's thread** (`answerThreads.ts`, `DATA_DIR/jira-answer-threads.jsonl`): an update is no request —
+  its comments belong to a request already open, whose origin is fixed — so when the newest comment an update brought
+  is a reply, the request's NEXT answer goes into that thread by itself (the update says so: «Your next answer to request
+  … is posted in the thread of comment …»), and when it is a top-level comment the next answer goes where the request's
+  answers go by default; the entry is noted once the update reached the session, used up by the AGENT's answer delivered
+  (an answer that was not delivered leaves it for the resend; a notice the bot writes itself — a usage limit, a refused
+  sign-in, `RequestAnswerDelivery.isBotNotice` — goes into the thread but uses nothing up, so the agent's answer after
+  the resume still lands there), and survives a restart. A request is opened in a thread when the comment that
+  opened it — a mention, or a comment on a handed issue — is a reply: `inbound.ts` puts the thread's top-level comment
+  id in the origin as `threadCommentId` (`jiraReplyThreadAttribute`), fixed when the request opens like its requester,
+  so where an answer goes never comes from the issue's text later. A request opened by a top-level comment, or by a
+  hand-over, answers top-level. Every part of a long answer, the request's progress notes, its usage-limit notice
+  (`limitWaitAnswer.ts` goes through the same sink) and its alert go into the same thread; so do the notices about a
+  trigger that is a reply (the park notices, the queued notice). The untrusted notice (a hand-over has no comment) and
+  the updates-paused notice (the issue's, no trigger's) stay top-level. A replied-to id that does not qualify (the rule
+  above) moves nothing; ids in several threads put the answer in the first one's and the result names the others
+  (`buildJiraOtherThreadsWarning`), whose authors are still mentioned. A reply Jira refuses with 400 — its thread is
+  gone — is posted top-level instead, with the rest of the answer, and the result says so
+  (`buildJiraThreadRefusedWarning`); any other refusal stays the answer's error.
 - A hand-over's `question` to an OPEN request (the one that hands the issue back) ends with one more paragraph,
   plain text on the last comment: "To let me go on, answer in a comment and assign the issue back to me." A reply
   that only mentions the AI wakes it for an answer (with `mentionMode: "act"`, an explicit ask in it is carried out); a
@@ -408,6 +488,54 @@ another platform's state.
   issue first and posts at most once — a reworded resend is a new text and is posted without a check.
 - The client retries only requests safe to repeat; 429 honours `Retry-After` (capped); errors carry method, path
   and Jira's messages, never the token.
+
+## Files the agent shows on an issue (`outgoingFiles.ts`, `outgoingFileCheck.ts`)
+
+The agent's answer can carry files: `answer_request`'s `files` (1–10 paths relative to the issue's project folder) are
+attached to the issue BEFORE the answer's comment is posted and shown in it after its text — an image (`.png`, `.jpg` /
+`.jpeg`, `.gif`, `.webp`) shown and an `.mp4` playing in the comment (an ADF `mediaSingle` holding a `media` node of
+`type: "file"` whose `id` is the attachment's MEDIA file id, not its attachment id), any other file listed as a link to
+its attachment (`/rest/api/3/attachment/content/<id>`, which a signed-in browser opens). The same goes for
+`send_file_to_user` — the tool a Telegram session sends files with, offered to a Jira session under the same name and
+arguments (no `threadKey`) so one instruction («send the run's video with send_file_to_user», the orchestration skill's)
+works on both: its files go into a comment of their own, the caption as its text, in the thread the conversation's newest
+open request answers in (top-level when none is open); `as_file: true` links every file. On Jira Cloud a plain
+attachment, or a link to one, shows only in the attachments list — only the media node shows it in the comment.
+
+- **Checked before anything is uploaded.** The paths go through the file send's own rule (`openFilesWithinWorkDir`,
+  `utils/fileSendService.ts`): inside the folder, no component swapped after validation, the descriptor kept. The site's
+  `GET /attachment/meta` must have attachments on, and no file may be over its `uploadLimit`. An image must be what its
+  name says and WHOLE — a PNG ending in its IEND chunk, a JPEG in its end marker (zero padding allowed), a GIF in its
+  trailer, a WebP whose RIFF size is the file's — and an `.mp4` a complete MP4 (its top-level boxes tile the file, its
+  `moov` is there) whose first video track is H.264 (`avc1` / `avc3`), read from the boxes by position, so no ffprobe is
+  needed and a file of any size costs a few reads; another codec is refused with the `ffmpeg` line that converts it. A
+  video in another container (`.mov`, `.webm`, …) is attached and linked, with a note. A refusal names the file and the
+  fix, and nothing is attached or posted. The size a picture or video states is put on its media node (without one Jira
+  shows it at a default size).
+- **One file, one attachment.** One file named twice — the same path, another spelling of it, a link to it (one
+  device and inode) — is attached and shown once. Its name is made safe for the multipart header once
+  (`getJiraUploadFileName`: a quote, a backslash or a control character becomes `_`), and that name is the upload's and
+  every comparison's.
+- **Uploaded once, reused only as the very same file.** `POST /issue/{key}/attachments` (multipart,
+  `X-Atlassian-Token: no-check`, streamed from the descriptor with its exact length, a time budget that grows with the
+  size) is never repeated: an answer Jira did not confirm is looked for among the attachments that appeared during it,
+  once, else it is an error. Every upload is recorded by CONTENT (`uploadedFiles.ts`, `DATA_DIR/jira-uploaded-files.jsonl`:
+  the issue, the attachment, the name, size and sha256; read back after a restart, 30 days kept), and a file the agent
+  sends again reuses an attachment only when it is still on the issue, the AI account's, and recorded with the file's
+  name, size AND hash — so the agent may send the same answer again without attaching anything twice, while a file
+  regenerated under the same name and length (a new screenshot, a new recording) is uploaded anew and never shows the
+  old content. An attachment nobody recorded — attached by hand, by someone else — is never reused. A failure after some
+  files were attached names them.
+- **The media id** is read from where `GET /attachment/content/{id}` redirects (303 to the media API,
+  `…/file/<uuid>/binary?…`); the redirect is NEVER followed, so the credentials stay with the site. No such redirect, or
+  no answer, and the file is linked instead, the agent told.
+- An answer whose files cannot be attached is NOT delivered (nothing posted; the request unchanged, safe to send again);
+  the files sit after the answer's text in its last comment (a comment of their own when that one is full), before the
+  hand-over question's closing line. Measured on a live site (2026-11-20): an upload's answer lists the attachment with
+  its id, name, type, size and `content` address; the content of an image, a video and a text file each redirected to
+  `api.media.atlassian.com/file/<uuid>/…`; a comment of `mediaSingle` nodes naming those ids — a reply in a thread too —
+  is taken, its `renderedBody` shows the image as an `<img>` and the video as a player of
+  `/rest/api/3/attachment/content/<id>?stream=true`, and a `media` node without `width` / `height` is taken as well.
 
 ## The original files (`attachmentTool.ts`, `attachmentDownload.ts`)
 
@@ -474,6 +602,15 @@ context preamble tells the agent the tool exists and carries the standing rule: 
   since your last prompt)` — never `edited`; a field line that flips sends the fields block as `changed since your
   last prompt`, the marker in that line telling why. The context ledger stores `isWithheld` per sent block
   (absent = readable, so older ledgers load). Without `trustedGroup` every block, hash and prompt is as it always was.
+- **A reply says which thread it is in.** A comment with a `parentId` gets one line under its heading, before its quoted
+  text: `A reply in the thread of comment 10240 by Ann, which says: "…"` — the thread's top-level comment, its author,
+  its visibility marker and its text on one line as a JSON string (a quote or a backslash in it escaped, so nothing in
+  the text can end the excerpt early), cut to 200 characters (`jiraReplyParentExcerptMaxChars`), so the agent
+  knows what is answered even in a delta that does not carry that comment. A top-level comment that is withheld is
+  named, never quoted (`… comment 10240 [withheld: …].`); one that was deleted (its replies keep their `parentId`) reads
+  `…, which was deleted.`; a withheld reply has no such line. The line is not part of the reply's hash. A request a
+  reply opened says `Thread: comment <id> is a reply in the thread of comment <id>, so your answers to this request are
+  posted in that thread.` after the requester line, and an issue update names a reply's thread next to its id.
 - A restricted comment is marked `[restricted to <role or group>]`, a Service Management internal note
   `[internal]`. Each block carries a sha256 of what it says (a comment's covers its text and marker only, so a
   save that changed nothing leaves it alone).
@@ -511,11 +648,33 @@ context preamble tells the agent the tool exists and carries the standing rule: 
   the whole issue), every completed compaction (the adapter's `contextCompacted`: bot-issued or the CLI's own
   overflow compaction), and a live re-spawn that began a new conversation where one was lost (`conversationLost`). Not an idle stop, a resume, a restart or a hot reload: the conversation survives them.
 
+## Comment threads in the API (measured on a live Jira Cloud site, 2026-11-20)
+
+What the connector relies on, probed with a throw-away issue (REST v3 unless noted):
+
+- `POST /rest/api/3/issue/{key}/comment` with `{ body, parentId }` posts a reply in that comment's thread (201); v2
+  takes `parentId` the same way. `parentId` may be sent as a number or a numeric string; the answer carries it as a
+  NUMBER (`client.ts` keeps ids as text: `getCommentParentId`).
+- Threads are ONE level deep: `parentId` must be a top-level comment. A reply to a reply — or to an id the issue never
+  had — is refused with 400, `errors.comment` "Parent comment not found, and no child comments exist. Cannot create new
+  child comments." So an answer to a reply names the reply's own `parentId` (`getCommentThreadRootId`).
+- `GET …/comment` (v3 and v2) lists replies with the rest, flat, in `created` order (`orderBy=created` / `-created`),
+  counted in `total`; only a reply has `parentId`; `expand=renderedBody` works for replies. `GET …/comment/{id}` of a
+  reply carries `parentId`. The issue's own `comment` field (`GET /issue/{key}?fields=comment`) does NOT — the
+  connector reads comments through the comments endpoint only.
+- A reply moves the issue's `updated` like any comment, and `comment ~ currentUser()` finds a mention made in a reply:
+  the poll, the mention scan and the comment scan see replies as they see comments. The changelog records no comments.
+- Editing (`PUT …/comment/{id}`) keeps a reply's `parentId`; a `parentId` in the edit's body is ignored (a reply cannot
+  move). Deleting works on a reply and on a top-level comment alike; a deleted top-level comment's replies stay, with a
+  `parentId` that answers 404 — and a POST with that `parentId` is still taken while the thread holds replies.
+
 ## Comment content (`adf.ts`, `prompt.ts`)
 
 - The agent's Markdown becomes ADF. HTML stays literal text (every `<` that opens no autolink is swapped for a
   placeholder before conversion), so `<adf>…</adf>` can never smuggle a notifying mention. No external media:
-  an image becomes a plain link (a `media` node would be fetched by every viewer's browser). Link targets keep
+  an image in the agent's Markdown becomes a plain link (a `media` node would be fetched by every viewer's browser);
+  the only media nodes in a comment are the bot's own, for files it attached to the issue (see «Files the agent shows
+  on an issue»). Link targets keep
   only `http`, `https`, `mailto`.
 - Each comment must fit BOTH counts — its Markdown and its serialized ADF (which runs several times longer);
   which one Jira enforces is not documented.
@@ -527,11 +686,14 @@ context preamble tells the agent the tool exists and carries the standing rule: 
 ## Tests
 
 `jiraConfig.test.ts`, `jiraTrustedGroup.test.ts`, `jiraIssueBlocks.test.ts` and `jiraMediaPlaceholders.test.ts` (over the recorded fixture),
+`jiraOutgoingFileCheck.test.ts` and `jiraOutgoingFiles.test.ts` (the files an answer shows, over files built by `mediaFileFixtures.ts`),
+`jiraOperatorIssue.test.ts` (the operator issue: its keys, the boot read, the alert comment with its mention, the poller that never sees it),
 `jiraPromptSpill.test.ts`, `jiraPrompt.test.ts`, `connectorGuards*.test.ts`, `jiraLazyLoad.test.ts`; flows boot a
 real Jira-only instance each (`scripts/run-isolated.sh`) against `__tests__/jiraE2e/fakeJira.ts` (which also serves
-groups and their members) and `fakeClaude.ts`: `jiraConnectorE2e.test.ts` (requests and the session lifecycle),
+groups and their members) and `fakeClaude.ts`: `jiraConnectorE2e.test.ts` (requests and the session lifecycle, an answer that shows files and `send_file_to_user`; the fake Jira takes
+uploads and redirects an attachment's content to its media file as Jira Cloud does),
 `jiraPromptE2e.test.ts` (what the prompts carry), `jiraTrustE2e.test.ts` (with a `trustedGroup` and no `trustedApps`: the
-filter, the notice, an automation's hand-over and mentions), `jiraTrustedAppsE2e.test.ts` (with a `trustedApps`: a listed
+filter, the notice, an automation's hand-over and mentions, a mention in a comment thread answered in it), `jiraTrustedAppsE2e.test.ts` (with a `trustedApps`: a listed
 app starts the agent, an unlisted one — a group member — is refused and its text withheld) and `jiraCommentWakeE2e.test.ts`
 (with a group, `mentionMode: "act"` and the backstop an hour away: a comment mid-turn reaches the same request, a comment
 after the final answer opens one, an acting mention, a kill-and-restart mid-turn answered within a minute) and

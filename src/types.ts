@@ -323,13 +323,23 @@ export interface SetAsideQuestionRecord {
 }
 
 /**
+ * Why an agent's account was refused (an `auth` error): `signedOut` — no login, or one that expired or was revoked (the Claude
+ * CLI's `authentication_failed`); `orgDisabled` — the account's organization turned its use off (`oauth_org_not_allowed`:
+ * «Your organization has disabled Claude subscription access for Claude Code»); `rejected` — a bare 401 / 403 that names
+ * neither.
+ */
+export type AgentAuthErrorReason = 'signedOut' | 'orgDisabled' | 'rejected';
+
+/**
  * @description Classification of a provider-side API error surfaced by either
  * agent backend (Claude terminal "API Error" line or OpenCode `session.error`).
  * Drives the retry/surface decision: `transient` (rate-limit / overloaded —
  * short backoff) vs `usageLimit` (subscription / quota exhausted — long wait)
- * vs `auth` (logged out / bad credentials). `auth` is SURFACED, not retried — a
- * wait never fixes it (the user must re-`/login`, or the OpenCode server needs a
- * restart) — so the bot posts a pinned notice instead of arming a timer.
+ * vs `auth` (logged out / bad credentials). `auth` is never retried — a wait
+ * never fixes it: a json-stream Claude conversation moves to another account
+ * that can work (`bot.ts` `handleClaudeAuthRefusal`); anything else, or nowhere
+ * to go, is SURFACED as a pinned notice (the user must re-`/login`, or the
+ * OpenCode server needs a restart) instead of arming a timer.
  */
 export interface AgentApiErrorClass {
   /**
@@ -351,6 +361,10 @@ export interface AgentApiErrorClass {
    * wait-for-reset: the bot marks the account exhausted until the operator acts and moves along the fallback chain.
    */
   isBalanceExhausted?: boolean;
+  /** An `auth` error only: what the CLI refused the account for ({@link AgentAuthErrorReason}); absent = not told. */
+  authReason?: AgentAuthErrorReason;
+  /** An `auth` error only: the CLI's own words of it (the turn's error text), for the operator's alert; absent = none read. */
+  authDetail?: string;
   /**
    * The error was read while an adopted session replayed the tail its process wrote while the bot was down: it ended a
    * turn BEFORE this bot started, not just now. The boot recovery owns such an episode (it reads the error's own time off

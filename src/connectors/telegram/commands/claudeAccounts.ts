@@ -112,6 +112,12 @@ export interface ClaudeAccountsPorts
   /** Bring every served topic's live Claude session onto its resolved profile (after a General change / a removal). */
   applyClaudeProfileEverywhere: () => Promise<void>;
   /**
+   * An account's sign-in changed here (a sign-in finished, a key stored): the round of the accounts' states runs at once (`bot.ts`
+   * `noteClaudeProfileUsability`) — the log line, the operator's «signed in again» and the unpinned alert, the conversations waiting for
+   * an account going on — not at the next usage poll, up to ten minutes later.
+   */
+  noteClaudeAccountsChanged: () => void;
+  /**
    * The operator's own pick of a rung on a topic (`bot.ts`, `utils/operatorSwitchPlan.ts`): an account of the backend
    * the topic runs changes the account, an account picked on the other backend asks first when a conversation is to
    * be handed over (`asked`: the question is already in the topic, nothing more to say), a pick while a limit wait is
@@ -156,7 +162,7 @@ export function createClaudeAccounts(ports: ClaudeAccountsPorts) {
     bot, command, getState, replyToThread, editThreadMessage, deleteThreadMessage, authoriseContext, withThreadLocale, checkIsGeneral,
     getDataDir, getInstanceTimezone, refreshClaudeUsage, syncClaudeProfiles, readClaudeAuthStatus, startClaudeProfileLogin, applyClaudeProfile,
     applyClaudeProfileEverywhere, switchTopicByOperator, detectOpenCodeProviders, listOpenCodeModels, getTopicRun, disconnectOpenCodeProvider, startOpenCodeConnect, applyAutoSwitch, getHomeClaudeDir,
-    verifyAnthropicApiKey, getProfileUsageView, checkIsProfileMissingFromLimitsList,
+    verifyAnthropicApiKey, getProfileUsageView, checkIsProfileMissingFromLimitsList, noteClaudeAccountsChanged,
   } = ports;
   const answerWithWholeText = createWholeTextAnswerer(replyToThread);
 
@@ -255,8 +261,13 @@ export function createClaudeAccounts(ports: ClaudeAccountsPorts) {
       recorded = await readClaudeAuthStatus(profile.configDir) ?? status;
     }
     await recordProfileStatus(profile.name, recorded);
-    // A sign-in is the operator acting on the account: a used-up-credits mark ends with it.
-    if (recorded?.loggedIn) getState().liftClaudeProfileCreditExhaustion(profile.name);
+    // A sign-in is the operator acting on the account: a used-up-credits mark ends with it, and so does the CLI's refusal of it.
+    if (recorded?.loggedIn) {
+      getState().liftClaudeProfileCreditExhaustion(profile.name);
+      await getState().setClaudeProfileAuthRefusal(profile.name, null);
+    }
+    // At once, not at the next poll: the operator hears it is back, and the conversations waiting for an account go on.
+    noteClaudeAccountsChanged();
     // A topic may already have picked the profile before its sign-in: its sleeping session resumes under it by
     // itself, and a live one is re-spawned now that the account exists.
     if (recorded?.loggedIn) await applyClaudeProfileEverywhere();
@@ -283,6 +294,8 @@ export function createClaudeAccounts(ports: ClaudeAccountsPorts) {
     await getState().upsertClaudeProfileRecord(profile.name, { billing: 'api' });
     await recordProfileStatus(profile.name, status);
     getState().liftClaudeProfileCreditExhaustion(profile.name);
+    await getState().setClaudeProfileAuthRefusal(profile.name, null);
+    noteClaudeAccountsChanged();
     if (status?.loggedIn) await applyClaudeProfileEverywhere();
     console.log(`[account] ${profile.name}: an API key was stored (${check === 'valid' ? 'accepted by the API' : 'not verified'})`);
     return appendLimitsListNote(
@@ -336,7 +349,8 @@ export function createClaudeAccounts(ports: ClaudeAccountsPorts) {
       isDefaultRemoved: state.getClaudeProfileInfo(defaultClaudeProfileName)?.isRemoved === true,
       records: state.getClaudeProfileRecords(),
       defaultStatus: {
-        loggedIn: defaultStatus?.loggedIn,
+        // The CLI's refusal of `default` on a turn outweighs a probe that still finds a login there (a revoked one, a switch of the organization's).
+        loggedIn: state.getClaudeProfileInfo(defaultClaudeProfileName)?.authRefusal !== undefined ? false : defaultStatus?.loggedIn,
         email: defaultStatus?.email ?? null,
         subscriptionType: defaultStatus?.subscriptionType ?? null,
         billing: defaultStatus?.billing ?? readBilling(defaultClaudeProfileName),

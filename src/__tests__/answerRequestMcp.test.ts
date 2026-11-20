@@ -22,6 +22,8 @@ import { RequestLedger, requestHistoryMaxBytes } from '../requests/requestLedger
 import { answerRequest } from '../requests/answerRequest';
 import { answerStyleInstruction } from '../requests/answerStyle';
 import type { AnswerSinks, RequestAnswerDelivery } from '../platform/answerSink';
+import type { OutboundFileRequest } from '../platform/outbound';
+import type { SendFilesToThreadResult } from '../utils/fileSendService';
 import { RotatingJsonlFile } from '../utils/rotatingJsonlFile';
 import {
   buildSchedulerMcpToken,
@@ -48,6 +50,12 @@ let compactCalls: string[];
 let attachmentCalls: string[];
 /** Whether the Jira connector's port is supplied (an instance without the connector has none). */
 let isJiraAttachmentOffered = true;
+/** Whether the Jira connector's file port is supplied; off unless a test turns it on. */
+let isJiraFileSendOffered = false;
+/** `<thread key>` and the request of every Jira file send that reached the connector's port. */
+let jiraFileSendCalls: Array<{ threadKey: string; request: OutboundFileRequest }>;
+/** What the Jira file port answers. */
+let jiraFileSendResult: SendFilesToThreadResult;
 let openSessionsGate: () => void;
 let clients: Client[];
 
@@ -67,6 +75,9 @@ beforeEach(async () => {
   compactCalls = [];
   attachmentCalls = [];
   isJiraAttachmentOffered = true;
+  isJiraFileSendOffered = false;
+  jiraFileSendCalls = [];
+  jiraFileSendResult = { ok: true, summary: 'Posted in a comment on PROJ-12: run.mp4 (plays in the comment, attachment 9002).', sentKinds: ['video'] };
   clients = [];
   const recordingSink = { deliverAnswer: async (_key: unknown, delivery: RequestAnswerDelivery) => { deliveries.push(delivery); return { ok: true as const }; }, deliverAlert: async () => ({ ok: true as const }), releaseAlert: async () => {} };
   const answerSinks: AnswerSinks = new Map([
@@ -97,6 +108,14 @@ beforeEach(async () => {
           return attachmentId === '10234'
             ? { ok: true as const, message: 'Attachment 10234 (shot.png, image/png, 3 bytes) is saved at /files/10234-shot.png.' }
             : { ok: false as const, error: `Attachment ${attachmentId} is not an attachment of PROJ-12.` };
+        }
+        : undefined;
+    },
+    get sendJiraFiles() {
+      return isJiraFileSendOffered
+        ? async (threadKey: string, request: OutboundFileRequest) => {
+          jiraFileSendCalls.push({ threadKey, request });
+          return jiraFileSendResult;
         }
         : undefined;
     },
@@ -229,7 +248,9 @@ describe('the tool set per platform (Jira connector plan J2, D18)', () => {
   describe('replyToCommentIds — the comments an answer replies to (T11)', () => {
     const jiraScope = { kind: 'thread' as const, threadKey: keyToString(makeJiraKey('PROJ-12')) };
     const t11 = 'Ids of the issue\'s comments this answer replies to, e.g. ["10240"]. The bot mentions each comment\'s ' +
-      'author at the top of your answer so they are notified. Only comments you were shown in this conversation count.';
+      'author at the top of your answer so they are notified, and posts the answer in the thread of the first one ' +
+      '(without it, an answer goes into the thread of the reply that opened its request, else it is a new comment). ' +
+      'Only comments you were shown in this conversation count.';
     const getAnswerTool = async (client: Client) => (await client.listTools()).tools.find((tool) => tool.name === 'answer_request');
 
     it('a Jira session is offered the field, described by T11, at most 10 numeric ids — nobody else is', async () => {
@@ -272,6 +293,68 @@ describe('the tool set per platform (Jira connector plan J2, D18)', () => {
         assert.equal(refused, true, JSON.stringify(replyToCommentIds));
       }
       assert.deepEqual(deliveries, []);
+    });
+  });
+
+  describe('files on a Jira issue: send_file_to_user and answer_request\'s files', () => {
+    const jiraScope = { kind: 'thread' as const, threadKey: keyToString(makeJiraKey('PROJ-12')) };
+
+    it('with the connector\'s file port a Jira session gets send_file_to_user — the Telegram tool\'s name and arguments, no threadKey — and the files field; the instructions name both', async () => {
+      isJiraFileSendOffered = true;
+      const client = await connectAgent(jiraScope);
+      const tools = (await client.listTools()).tools;
+      assert.deepEqual(tools.map((tool) => tool.name).sort(), [...neutralToolNames, 'jira_get_attachment', 'send_file_to_user'].sort());
+      const fileTool = tools.find((tool) => tool.name === 'send_file_to_user');
+      assert.deepEqual(Object.keys(fileTool?.inputSchema.properties ?? {}).sort(), ['as_file', 'caption', 'paths']);
+      assert.match(fileTool?.description ?? '', /an H\.264 \.mp4 plays in it/);
+      const answerTool = tools.find((tool) => tool.name === 'answer_request');
+      assert.deepEqual(Object.keys(answerTool?.inputSchema.properties ?? {}).sort(), ['body', 'files', 'kind', 'replyToCommentIds', 'requestId']);
+      const instructions = client.getInstructions() ?? '';
+      assert.match(instructions, /put its path in answer_request's `files`/);
+      assert.match(instructions, /send_file_to_user posts files in a comment of their own/);
+      assert.doesNotMatch(instructions, /Telegram/);
+    });
+
+    it('send_file_to_user reaches the port with the SESSION\'s issue and the files as given; what the port answers is relayed', async () => {
+      isJiraFileSendOffered = true;
+      openSessionsGate();
+      const client = await connectAgent(jiraScope);
+      const sent = CallToolResultSchema.parse(await client.callTool({ name: 'send_file_to_user', arguments: { paths: ['out/run.mp4'], caption: 'The run:', as_file: false } }));
+      assert.equal(sent.isError, undefined);
+      assert.deepEqual(sent.content, [{ type: 'text', text: 'Posted in a comment on PROJ-12: run.mp4 (plays in the comment, attachment 9002).' }]);
+      assert.deepEqual(jiraFileSendCalls, [{ threadKey: jiraScope.threadKey, request: { paths: ['out/run.mp4'], caption: 'The run:', asFile: false } }]);
+
+      jiraFileSendResult = { ok: false, error: 'cut.png is not a complete PNG image — a partial file? Save it again whole. Nothing was attached or posted.' };
+      const refused = CallToolResultSchema.parse(await client.callTool({ name: 'send_file_to_user', arguments: { paths: ['cut.png'] } }));
+      assert.equal(refused.isError, true);
+      const named = await client.callTool({ name: 'send_file_to_user', arguments: { paths: ['a.png'], threadKey: 'telegram:1:2' } })
+        .then((result) => CallToolResultSchema.parse(result).isError === true, () => true);
+      assert.equal(named, true, 'a Jira session cannot name another conversation');
+    });
+
+    it('answer_request\'s files reach the sink untouched; an answer without them carries none; more than ten are refused', async () => {
+      isJiraFileSendOffered = true;
+      const request = await ledger.createRequest(makeJiraKey('PROJ-12'), { kind: 'trackerMention', attributes: { issueKey: 'PROJ-12', triggerId: 'mention:10240', requester: 'a' } });
+      const client = await connectAgent(jiraScope);
+      await client.callTool({ name: 'answer_request', arguments: { requestId: request.id, kind: 'progress', body: 'Look:', files: ['shots/a.png', 'run.mp4'] } });
+      assert.deepEqual(deliveries[0].files, ['shots/a.png', 'run.mp4']);
+      await client.callTool({ name: 'answer_request', arguments: { requestId: request.id, kind: 'progress', body: 'Still on it.' } });
+      assert.equal(deliveries[1].files, undefined);
+      const tooMany = Array.from({ length: 11 }, (_, index) => `f${index}.png`);
+      const refused = await client.callTool({ name: 'answer_request', arguments: { requestId: request.id, kind: 'final', body: 'Done.', files: tooMany } })
+        .then((result) => CallToolResultSchema.parse(result).isError === true, () => true);
+      assert.equal(refused, true);
+      assert.equal(deliveries.length, 2);
+    });
+
+    it('without the port a Jira session has neither; a Telegram topic keeps its own send_file_to_user and no files field', async () => {
+      const jira = (await (await connectAgent(jiraScope)).listTools()).tools;
+      assert.ok(!jira.some((tool) => tool.name === 'send_file_to_user'));
+      assert.ok(!Object.keys(jira.find((tool) => tool.name === 'answer_request')?.inputSchema.properties ?? {}).includes('files'));
+      isJiraFileSendOffered = true;
+      const topic = (await (await connectAgent({ kind: 'thread', threadKey: keyToString(topicKey) })).listTools()).tools;
+      assert.ok(Object.keys(topic.find((tool) => tool.name === 'send_file_to_user')?.inputSchema.properties ?? {}).includes('threadKey'), 'the Telegram tool');
+      assert.deepEqual(Object.keys(topic.find((tool) => tool.name === 'answer_request')?.inputSchema.properties ?? {}).sort(), ['body', 'kind', 'requestId']);
     });
   });
 

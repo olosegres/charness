@@ -15,7 +15,7 @@
  * through `session.error`.
  */
 
-import type { AgentApiErrorClass } from './types';
+import type { AgentApiErrorClass, AgentAuthErrorReason } from './types';
 import { maxTimeoutMs } from './scheduler/engine';
 import { getCanonicalTimezone, getEpochMsOfZonedWallClock, getZonedWallClock } from './utils/timezone';
 
@@ -136,6 +136,35 @@ const msPerDay = hoursPerDay * msPerHour;
  * with `.test()`, so lastIndex never carries between calls.
  */
 export const authErrorPhrasesRe = /please run \/login|not logged in|invalid authentication credentials/i;
+
+/**
+ * The account's ORGANIZATION turned its use off, as the Claude CLI words it (its `oauth_org_not_allowed`, measured on 2.1.304):
+ * «Your organization has disabled Claude subscription access for Claude Code · Use an Anthropic API key instead, or ask your
+ * admin to enable access», the API's «OAuth authentication is currently not allowed for this organization», and an API
+ * account's «Your organization has disabled API key authentication». Read by {@link classifyAgentApiError} only — the tmux
+ * scrape detector keeps its own closed list ({@link authErrorPhrasesRe}).
+ */
+const orgDisabledAuthRe = /organization has disabled (?:claude subscription access|api key authentication)|oauth authentication is currently not allowed for this organization/i;
+
+/**
+ * The Claude CLI's other wordings of a login it cannot use that carry no «please run /login»: «Login expired», «OAuth token
+ * revoked» / «OAuth token has been revoked», «Authentication required · Sign in again to continue», «Failed to authenticate».
+ */
+const signedOutAuthRe = /\blogin expired\b|\boauth (?:access )?token (?:has been )?revoked|\bauthentication required\b|\bfailed to authenticate\b/i;
+
+/** A bare refusal of the credentials as the Claude CLI prints it — `API Error: 401 …` / `API Error: 403 …` — or the API's own `authentication_error` type. */
+const bareAuthRefusalRe = /\bAPI Error:\s*40[13]\b|"type"\s*:\s*"authentication_error"/i;
+
+/**
+ * @description Why an `auth` error refused the account ({@link AgentAuthErrorReason}), read off its text: the organization's switch
+ * first ({@link orgDisabledAuthRe}), then a missing, expired or revoked login, else a bare 401 / 403 (`rejected`). Meant for a text
+ * {@link classifyAgentApiError} already called `auth`.
+ */
+export function getAuthErrorReason(text: string): AgentAuthErrorReason {
+  if (orgDisabledAuthRe.test(text)) return 'orgDisabled';
+  if (authErrorPhrasesRe.test(text) || signedOutAuthRe.test(text)) return 'signedOut';
+  return 'rejected';
+}
 
 /**
  * The wordings that name a usage WINDOW or an exhausted balance EXPLICITLY: the
@@ -304,9 +333,11 @@ export function checkIsUsageLimitText(text: string): boolean {
  *
  * ORDER IS LOAD-BEARING — branches are evaluated top to bottom and return on
  * first match:
- *  1. auth / logged out (login, bad credentials) → `{ kind: 'auth' }`. Must win:
+ *  1. auth / logged out (login, bad credentials; the Claude CLI's expired / revoked login, an organization that turned
+ *     its use off, a bare `API Error: 401 / 403`) → `{ kind: 'auth' }` ({@link getAuthErrorReason} tells which). Must win:
  *     a wait never fixes these (they need a re-login or server restart), so they
- *     are SURFACED (a pinned notice), never auto-retried. Used to return `null`.
+ *     are never auto-retried: a Claude conversation moves to another signed-in account (the bot's
+ *     `handleClaudeAuthRefusal`), anything else is SURFACED (a pinned notice). Used to return `null`.
  *  1a. the refusal of a history that ends on the model's turn ({@link conversationTailRe}) → `conversationTail`.
  *  1b. a usage WARNING ({@link checkIsUsageLimitWarningText}) → `null`: the
  *     request went through; it names a window and a reset like the block does. Right after it, a used-up
@@ -336,7 +367,7 @@ export function checkIsUsageLimitText(text: string): boolean {
  *   reset time for the usage class; the transient/auth branches ignore it.
  */
 export function classifyAgentApiError(text: string, now: number): AgentApiErrorClass | null {
-  if (authErrorPhrasesRe.test(text)) {
+  if (authErrorPhrasesRe.test(text) || orgDisabledAuthRe.test(text) || signedOutAuthRe.test(text) || bareAuthRefusalRe.test(text)) {
     return { kind: 'auth' };
   }
   if (conversationTailRe.test(text)) return { kind: 'conversationTail' };

@@ -40,7 +40,7 @@ import { createPairedRunnerFixture } from './remoteRunPairedKit';
 
 const secret = 'f'.repeat(64);
 const runnerLines = ['mac — macOS 15.1, android, playwright', 'box1 (paused) — Ubuntu 24.04, docker'];
-const offeredWithout: OptionalBotTools = { isJiraAttachmentToolOffered: true, isTodoToolOffered: true, remoteRunRunnerLines: [] };
+const offeredWithout: OptionalBotTools = { isJiraAttachmentToolOffered: true, isJiraFileSendOffered: true, isTodoToolOffered: true, remoteRunRunnerLines: [] };
 const offeredWith: OptionalBotTools = { ...offeredWithout, remoteRunRunnerLines: runnerLines };
 /** The lines the runner list adds under the bullet: its heading and one per runner. */
 const runnersHeading = '  Runners, as last seen:';

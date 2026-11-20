@@ -25,6 +25,7 @@ import {
   type JiraProjectTrigger,
 } from '../connectors/jira/inbound';
 import { JiraTriggerLog, jiraTriggerLogFileName } from '../connectors/jira/triggerLog';
+import { hideJiraOperatorIssue } from '../connectors/jira/operatorIssue';
 import { JiraContextLedger } from '../connectors/jira/contextLedger';
 import { createTestComment } from './jiraIssueTestData';
 import { createJiraConversationKey, createTestSlots, createUnlimitedSlots, createWaitEntry, type TestOpenRequest, type TestSlots } from './taskAgentSlotsTestKit';
@@ -103,6 +104,10 @@ interface Recorded {
   updates: Array<{ text: string; requestId: string }>;
   /** Each "updates are paused" notice: the issue and until when. */
   pausedNotices: Array<{ issueKey: string; untilMs: number }>;
+  /** The thread each park, mention park and queued notice was asked to go into (`null`: top-level), in order. */
+  noticeThreads: Array<{ notice: 'park' | 'mentionPark' | 'queued'; threadRootId: string | null }>;
+  /** Each issue update that reached its session: the request it went to and the thread its next answer goes into. */
+  answerThreads: Array<{ requestId: string; threadRootId: string | null }>;
 }
 
 describe('JiraInbound', () => {
@@ -123,7 +128,7 @@ describe('JiraInbound', () => {
 
   beforeEach(async () => {
     dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'jira-inbound-'));
-    recorded = { calls: [], searches: [], issueReads: [], origins: [], prompts: [], storedPrompts: [], parked: [], untrusted: [], mentionParked: [], queued: [], updates: [], pausedNotices: [] };
+    recorded = { calls: [], searches: [], issueReads: [], origins: [], prompts: [], storedPrompts: [], parked: [], untrusted: [], mentionParked: [], queued: [], updates: [], pausedNotices: [], noticeThreads: [], answerThreads: [] };
     searchPages = [];
     changelogPages = new Map();
     triggerLog = await createLoadedTriggerLog();
@@ -217,25 +222,31 @@ describe('JiraInbound', () => {
         if (isPostFailing) throw new Error('session start failed');
       },
       listOpenRequests: (key) => (openRequestOrigins.get(key.thread) ?? []).map((origin, index) => ({ id: origin.attributes.testRequestId ?? `req_open_${index + 1}`, origin, isWakeStopped: origin.attributes.testWakeStopped === 'true' })),
-      parkMention: async (issueKey) => {
+      parkMention: async (issueKey, threadRootId) => {
         recorded.calls.push(`parkMention ${issueKey}`);
         recorded.mentionParked.push(issueKey);
+        recorded.noticeThreads.push({ notice: 'mentionPark', threadRootId });
       },
       postUpdatesPausedNotice: async (issueKey, untilMs) => {
         recorded.pausedNotices.push({ issueKey, untilMs });
       },
-      parkIssue: async (issueKey, parkedRequester) => {
+      parkIssue: async (issueKey, parkedRequester, threadRootId) => {
         recorded.calls.push(`park ${issueKey}`);
         recorded.parked.push({ issueKey, requester: parkedRequester });
+        recorded.noticeThreads.push({ notice: 'park', threadRootId });
       },
       refuseUntrusted: async (issueKey, refusedRequester, groupName) => {
         recorded.calls.push(`untrusted ${issueKey}`);
         recorded.untrusted.push({ issueKey, requester: refusedRequester, groupName });
       },
       slots: createUnlimitedSlots(),
-      postQueuedNotice: async (issueKey, queue) => {
+      postQueuedNotice: async (issueKey, queue, threadRootId) => {
         recorded.calls.push(`queued ${issueKey}`);
         recorded.queued.push({ issueKey, aheadCount: queue.aheadCount, maxConcurrent: queue.maxConcurrent });
+        recorded.noticeThreads.push({ notice: 'queued', threadRootId });
+      },
+      noteAnswerThread: (requestId, threadRootId) => {
+        recorded.answerThreads.push({ requestId, threadRootId });
       },
       ...overrides,
     });
@@ -1813,6 +1824,32 @@ describe('JiraInbound', () => {
       assert.deepEqual([...await createMentionInbound().pollOnce()], [[issueKey, 'notMatching'], [`${issueKey}#mention:10240`, 'request']]);
     });
 
+    it('a mention in a reply opens a request that answers in its thread: the origin names the thread\'s top-level comment, the prompt says so', async () => {
+      comments = [{ ...createMentionComment('10241', member), parentId: 10240 }];
+      assert.deepEqual([...await createMentionInbound().pollOnce()], [[issueKey, 'notMatching'], [`${issueKey}#mention:10241`, 'request']]);
+      await flushPosts();
+      assert.deepEqual(recorded.origins, [
+        { kind: 'trackerMention', attributes: { issueKey, triggerId: 'mention:10241', requester: member.accountId, threadCommentId: '10240' } },
+      ]);
+      assert.ok(recorded.prompts[0].includes('Thread: comment 10241 is a reply in the thread of comment 10240'), recorded.prompts[0]);
+    });
+
+    it('the notices about a mention in a reply go into its thread: the park over the budget, the queued notice of an acting mention past the cap', async () => {
+      triggerLog.record({ issueKey, triggerId: 'a', outcome: 'request', at: nowMs - 2 * 60 * minuteMs });
+      triggerLog.record({ issueKey, triggerId: 'b', outcome: 'request', at: nowMs - 60 * minuteMs });
+      comments = [{ ...createMentionComment('10241', member), parentId: '10240' }];
+      assert.deepEqual([...await createMentionInbound().pollOnce()], [[issueKey, 'notMatching'], [`${issueKey}#mention:10241`, 'parked']]);
+      assert.deepEqual(recorded.noticeThreads, [{ notice: 'mentionPark', threadRootId: '10240' }]);
+
+      const busySlots = createTestSlots({ maxConcurrent: 1 });
+      busySlots.setOpenRequests([{ key: createJiraConversationKey('PROJ-77'), kind: 'trackerEvent' }]);
+      comments = [{ ...createMentionComment('10251', colleague), parentId: 10250 }];
+      issueUpdated = 'updated-2';
+      const acting = createMentionInbound({ mentionMode: 'act', slots: busySlots.slots, runBudgetPer24h: 10 });
+      assert.deepEqual([...await acting.pollOnce()], [[issueKey, 'notMatching'], [`${issueKey}#mention:10251`, 'queued']]);
+      assert.deepEqual(recorded.noticeThreads.at(-1), { notice: 'queued', threadRootId: '10250' });
+    });
+
     it('over the run budget: the mention park notice goes out once; the next over-budget mention is recorded silently (D10)', async () => {
       triggerLog.record({ issueKey, triggerId: 'a', outcome: 'request', at: nowMs - 2 * 60 * minuteMs });
       triggerLog.record({ issueKey, triggerId: 'b', outcome: 'request', at: nowMs - 60 * minuteMs });
@@ -2027,6 +2064,51 @@ describe('JiraInbound', () => {
         assert.deepEqual([...await createCommentInbound().pollOnce()], [[issueKey, 'seen'], [`${issueKey}#comment:10241`, 'parked']]);
         assert.deepEqual(recorded.parked, [{ issueKey, requester: colleague }]);
         assert.equal(triggerLog.checkIsSeen(issueKey, 'comment:10241'), true);
+        assert.deepEqual(recorded.noticeThreads, [{ notice: 'park', threadRootId: null }], 'a top-level comment\'s park notice is top-level');
+      });
+
+      it('an update whose newest comment is a reply in a thread sends the open request\'s next answer into that thread, and says so; a top-level newest comment sends it where it goes by default', async () => {
+        openHandOver(member.accountId);
+        comments = [plain('10240', colleague, { minutesAgo: 2 }), { ...plain('10241', member), parentId: 10230 }];
+        assert.deepEqual([...await createCommentInbound().pollOnce()], [[issueKey, 'seen'], [`${issueKey}#comment:10241`, 'update']]);
+        await flushPosts();
+        assert.deepEqual(recorded.answerThreads, [{ requestId: handOverRequestId, threadRootId: '10230' }]);
+        assert.ok(recorded.updates[0].text.includes(`Your next answer to request ${handOverRequestId} is posted in the thread of comment 10230, where the newest of them was written. `), recorded.updates[0].text);
+
+        issueUpdated = 'updated-2';
+        comments = [...comments, plain('10242', member)];
+        await createCommentInbound().pollOnce();
+        await flushPosts();
+        assert.deepEqual(recorded.answerThreads.at(-1), { requestId: handOverRequestId, threadRootId: null });
+        assert.ok(!recorded.updates[1].text.includes('Your next answer to request'), recorded.updates[1].text);
+      });
+
+      it('an update that did not reach its session puts no answer in a thread', async () => {
+        openHandOver(member.accountId);
+        isPostFailing = true;
+        comments = [{ ...plain('10241', member), parentId: 10230 }];
+        const warn = mock.method(console, 'warn', () => {});
+        try {
+          await createCommentInbound().pollOnce();
+          await flushPosts();
+        } finally {
+          warn.mock.restore();
+        }
+        assert.deepEqual(recorded.answerThreads, []);
+      });
+
+      it('a reply in a thread opens a request that answers in that thread; its park notice over the budget goes there too', async () => {
+        comments = [{ ...plain('10241', member), parentId: 10240 }];
+        assert.deepEqual([...await createCommentInbound().pollOnce()], [[issueKey, 'seen'], [`${issueKey}#comment:10241`, 'request']]);
+        await flushPosts();
+        assert.deepEqual(recorded.origins, [{ kind: 'trackerEvent', attributes: { issueKey, triggerId: 'comment:10241', requester: member.accountId, threadCommentId: '10240' } }]);
+        assert.ok(recorded.prompts[0].includes('when comment 10241 by Member (a reply in the thread of comment 10240) came in'), recorded.prompts[0]);
+
+        triggerLog.record({ issueKey, triggerId: 'x', outcome: 'request', at: nowMs - minuteMs });
+        issueUpdated = 'updated-2';
+        comments = [{ ...plain('10241', member), parentId: 10240 }, { ...plain('10242', colleague), parentId: 10240 }];
+        assert.deepEqual([...await createCommentInbound().pollOnce()], [[issueKey, 'seen'], [`${issueKey}#comment:10242`, 'parked']]);
+        assert.deepEqual(recorded.noticeThreads, [{ notice: 'park', threadRootId: '10240' }]);
       });
 
       it('(3) a comment\'s request takes a task-agent slot: past the cap it waits — told once, decided again at every poll, started when a slot frees', async () => {
@@ -2530,6 +2612,24 @@ describe('JiraInbound', () => {
         assert.deepEqual([...await inbound.pollOnce()], [[issueKey, 'notMatching'], [`${issueKey}#mention:10240`, 'request']]);
         assert.deepEqual(busySlots.getWaitList(), []);
         assert.equal(recorded.origins[0].attributes.mayAct, 'true');
+      });
+
+      it('an acting mention left waiting on an issue that has since become the OPERATOR issue gives its place up and starts nothing', async () => {
+        const busySlots = createTestSlots({ maxConcurrent: 1 });
+        busySlots.setOpenRequests([{ key: createJiraConversationKey('PROJ-77'), kind: 'trackerEvent' }]);
+        comments = [createMentionComment('10240', member)];
+        const client = createMentionClient(() => [createUnhandedIssue(issueKey)]);
+        assert.deepEqual([...await createMentionInbound({ mentionMode: 'act', slots: busySlots.slots, client }).pollOnce()], [[issueKey, 'notMatching'], [`${issueKey}#mention:10240`, 'queued']]);
+        assert.equal(busySlots.getWaitList().length, 1);
+
+        // A restart with jira.json naming that issue `operatorIssue`, and a slot free: the poller's client never sees it — neither
+        // in the search nor by its key (the wait list's re-read), so its place is dropped as for an issue gone, and nothing starts.
+        busySlots.setOpenRequests([]);
+        const restarted = createMentionInbound({ mentionMode: 'act', slots: busySlots.slots, client: hideJiraOperatorIssue(client, issueKey) });
+        assert.deepEqual([...await restarted.pollOnce()], []);
+        assert.deepEqual(busySlots.getWaitList(), [], 'its place is dropped');
+        assert.equal(requestCount, 0, 'no request of the operator issue');
+        assert.ok(!recorded.calls.slice(recorded.calls.lastIndexOf('search')).includes(`getIssue ${issueKey}`), 'the real Jira is never asked for it');
       });
 
       it('a waiting acting mention whose comment was deleted gives its place up; one in answer mode never takes a place (D10)', async () => {

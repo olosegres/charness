@@ -18,11 +18,14 @@ import {
   buildJiraAlertText,
   buildJiraUpdatesPausedText,
   buildJiraMentionParkText,
+  buildJiraOtherThreadsWarning,
   buildJiraParkText,
   buildJiraQueuedText,
   buildJiraReplyLeftOutWarning,
+  buildJiraThreadRefusedWarning,
   buildJiraUntrustedText,
   createJiraAnswerSink,
+  jiraFilesUnavailableError,
   jiraQuestionContinueText,
   jiraReadBackClockSkewMs,
   jiraReadBackDelayMs,
@@ -31,8 +34,9 @@ import { getAdfText, getMentionedAccountIds, jiraCommentMarkdownMaxChars, type A
 import { createJiraTrust, type JiraTrust } from '../connectors/jira/trustedGroup';
 import type { JiraSentBlocks } from '../connectors/jira/contextLedger';
 import { makeJiraKey } from '../connectors/jira/sessionKeyCodec';
-import { JiraHttpError, type JiraClient, type JiraComment, type JiraCommentPostResult, type JiraIssue } from '../connectors/jira/client';
+import { JiraAuthError, JiraHttpError, type JiraClient, type JiraComment, type JiraCommentPostResult, type JiraIssue } from '../connectors/jira/client';
 import { getCommentBodyHash, JiraUnconfirmedPosts, jiraUnconfirmedPostsFileName } from '../connectors/jira/unconfirmedPosts';
+import { JiraAnswerThreads, jiraAnswerThreadsFileName } from '../connectors/jira/answerThreads';
 import type { RequestAnswerKind, RequestOrigin } from '../requests/types';
 
 const aiAccountId = 'ai-account';
@@ -50,6 +54,8 @@ interface FakeJira {
   postedTexts: string[];
   /** The bodies as posted, for what the plain text cannot tell (a paragraph of its own, no Markdown). */
   postedBodies: AdfDocument[];
+  /** The thread of each post, in order: its top-level comment's id, `null` for a top-level post. */
+  postedParentIds: Array<string | null>;
   /** `getComment` answers by comment id: a comment, or the failure Jira would give. */
   commentsById: Map<string, JiraComment | Error>;
   /** What the conversation was shown (`comment:<id>` → the block), as the context ledger holds it. */
@@ -62,11 +68,15 @@ interface FakeJira {
   /** What the read-back sees (newest first), or an error. */
   recentComments: JiraComment[] | Error;
   isAssignFailing: boolean;
+  /** The sink's way to attach files; absent: the sink has none. */
+  attachFiles?: NonNullable<Parameters<typeof createJiraAnswerSink>[0]['attachFiles']>;
 }
 
 let jira: FakeJira;
 let dataDir: string;
 let unconfirmedPosts: JiraUnconfirmedPosts;
+/** The thread an issue update put a request's next answer in — the real store, over a file in `dataDir`. */
+let answerThreads: JiraAnswerThreads;
 
 /** The store as a restarted process finds it: read back from its file. */
 async function loadUnconfirmedPosts(): Promise<JiraUnconfirmedPosts> {
@@ -84,10 +94,11 @@ function createClient(): Pick<JiraClient, 'addComment' | 'getRecentComments' | '
       if (comment instanceof Error) throw comment;
       return comment;
     },
-    addComment: async (issue, body: AdfDocument) => {
-      jira.calls.push(`comment ${issue}`);
+    addComment: async (issue, body: AdfDocument, parentId) => {
+      jira.calls.push(parentId ? `comment ${issue} in thread ${parentId}` : `comment ${issue}`);
       jira.postedTexts.push(getAdfText(body));
       jira.postedBodies.push(body);
+      jira.postedParentIds.push(parentId ?? null);
       const outcome = jira.postOutcomes.shift() ?? { outcome: 'created', id: `c${jira.postedTexts.length}` };
       if (outcome instanceof Error) throw outcome;
       return outcome;
@@ -120,14 +131,18 @@ const sink = () => createJiraAnswerSink({
     jira.calls.push(`wait ${ms}`);
   },
   unconfirmedPosts,
+  answerThreads,
+  ...(jira.attachFiles ? { attachFiles: jira.attachFiles } : {}),
 });
 const deliver = (kind: RequestAnswerKind, body: string, isRequestOpen = true) =>
   sink().deliverAnswer(key, { requestId: 'req_1', kind, body, origin, isRequestOpen });
 
 beforeEach(async () => {
-  jira = { calls: [], postedTexts: [], postedBodies: [], commentsById: new Map(), sentBlocks: {}, trust: null, assignee: aiAccountId, postOutcomes: [], recentComments: [], isAssignFailing: false };
+  jira = { calls: [], postedTexts: [], postedBodies: [], postedParentIds: [], commentsById: new Map(), sentBlocks: {}, trust: null, assignee: aiAccountId, postOutcomes: [], recentComments: [], isAssignFailing: false };
   dataDir = mkdtempSync(path.join(os.tmpdir(), 'jira-sink-'));
   unconfirmedPosts = await loadUnconfirmedPosts();
+  answerThreads = JiraAnswerThreads.createForDataDir(path.join(dataDir, jiraAnswerThreadsFileName), () => nowMs);
+  await answerThreads.load();
 });
 
 afterEach(() => {
@@ -347,10 +362,15 @@ describe('a resend of an unconfirmed post reads the issue first: at most once (R
 });
 
 describe('alert and park notice', () => {
-  it('the alert is an English comment naming the request and the reason, then the hand-back; nothing to release', async () => {
+  it('the alert is an English comment saying in plain words what happened and what it means — no request id — then the hand-back; nothing to release', async () => {
     assert.deepEqual(await sink().deliverAlert(key, { requestId: 'req_9', reason: 'wakeFailed', origin }), { ok: true });
-    assert.deepEqual(jira.postedTexts, [buildJiraAlertText('req_9', 'wakeFailed')]);
-    assert.match(jira.postedTexts[0], /^⚠️ The AI could not finish request req_9: the agent's session could not be reached to remind it\. A person needs to look at this issue\.$/);
+    assert.deepEqual(jira.postedTexts, [buildJiraAlertText('wakeFailed')]);
+    assert.equal(
+      jira.postedTexts[0],
+      "⚠️ The AI's session could not be reached to remind it, so there is no answer here. It will not go on by itself: a person needs to look at this issue. To try again, hand it to the AI again or mention it in a comment.",
+    );
+    assert.ok(!jira.postedTexts[0].includes('req_'), 'the request id stays in the log');
+    assert.match(buildJiraAlertText('silentTurns'), /^⚠️ The AI stopped working on this without giving an answer, even after it was reminded\. It will not go on by itself/);
     assert.ok(jira.calls.includes('assign PROJ-12 requester-account'));
     await sink().releaseAlert(key, 'anything');
   });
@@ -481,7 +501,7 @@ describe('a mention request answers only — nothing is handed over, so nothing 
   it('the alert of a mention request is a comment and no hand-back', async () => {
     assert.deepEqual(await sink().deliverAlert(key, { requestId: 'req_2', reason: 'silentTurns', origin: mentionOrigin }), { ok: true });
     assert.deepEqual(jira.calls, ['comment PROJ-12']);
-    assert.deepEqual(jira.postedTexts, [buildJiraAlertText('req_2', 'silentTurns')]);
+    assert.deepEqual(jira.postedTexts, [buildJiraAlertText('silentTurns')]);
   });
 
   it('an ACTING mention (mentionMode "act") hands nothing back either: its final answer and its alert are comments, the issue stays where it is', async () => {
@@ -631,8 +651,13 @@ describe('whom an answer notifies: the requester of a mention request, and the a
     addComment('10250', colleague);
     addComment('10251', colleague);
     addComment('10252', requester);
-    assert.deepEqual(await deliverMention('final', 'Both of you:', ['10250', '10251', '10250', '10252']), { ok: true });
+    // Three top-level comments are three threads: the answer goes into the first one's, and the result says so.
+    assert.deepEqual(await deliverMention('final', 'Both of you:', ['10250', '10251', '10250', '10252']), {
+      ok: true,
+      warning: buildJiraOtherThreadsWarning('10250', ['10251', '10252']),
+    });
     assert.deepEqual(getLeadingMentions(), [requester.accountId, colleague.accountId], 'requester first; duplicates and the requester again are one mention each');
+    assert.deepEqual(jira.postedParentIds, ['10250']);
   });
 
   it('a hand-over answer may reply too: the mention leads, the "to let me go on" line ends a question', async () => {
@@ -727,5 +752,294 @@ describe('the "updates paused" notice of an issue past the cap on updates', () =
     await sink().postUpdatesPausedNotice(issueKey, 20, untilMs);
     assert.deepEqual(jira.calls, ['comment PROJ-12']);
     assert.deepEqual(jira.postedTexts, [buildJiraUpdatesPausedText(20, untilMs)]);
+  });
+});
+
+describe('comment threads: an answer goes where it was asked, or into the thread of the comment it replies to', () => {
+  const colleague = { accountId: 'colleague-account', accountType: 'atlassian', displayName: 'Colleague' };
+  const created = '2026-10-03T10:00:00.000+0000';
+  /** A hand-over the requester opened by a reply in the thread of comment 10200 (a comment's request on a handed issue). */
+  const threadOrigin: RequestOrigin = { kind: 'trackerEvent', attributes: { issueKey, triggerId: 'comment:10201', requester: 'requester-account', threadCommentId: '10200' } };
+  const deliverInThread = (kind: RequestAnswerKind, body: string, replyToCommentIds?: string[]) =>
+    sink().deliverAnswer(key, { requestId: 'req_3', kind, body, origin: threadOrigin, isRequestOpen: true, ...(replyToCommentIds ? { replyToCommentIds } : {}) });
+  /** An answer to the top-level hand-over that replies to `replyToCommentIds`. */
+  const deliverReplying = (kind: RequestAnswerKind, body: string, replyToCommentIds: string[]) =>
+    sink().deliverAnswer(key, { requestId: 'req_1', kind, body, origin, isRequestOpen: true, replyToCommentIds });
+
+  /** A comment the conversation was shown; `parentId` (as Jira sends it, a number) makes it a reply in that thread. */
+  function addShownComment(id: string, parentId?: number): void {
+    jira.commentsById.set(id, { id, author: colleague, created, ...(parentId === undefined ? {} : { parentId }) });
+    jira.sentBlocks[`comment:${id}`] = { hash: `hash-${id}` };
+  }
+
+  it('the answers of a request a reply opened go into that reply\'s thread — progress, question and final alike; the hand-back is as before', async () => {
+    assert.deepEqual(await deliverInThread('progress', 'Looking.'), { ok: true });
+    assert.deepEqual(await deliverInThread('final', 'Done.'), { ok: true });
+    assert.deepEqual(jira.postedParentIds, ['10200', '10200']);
+    assert.deepEqual(jira.calls, ['comment PROJ-12 in thread 10200', 'comment PROJ-12 in thread 10200', 'assignee? PROJ-12', 'assign PROJ-12 requester-account']);
+  });
+
+  it('a request opened top-level (a hand-over, a top-level comment) answers top-level; an origin thread that is no comment id is ignored', async () => {
+    await deliver('final', 'Done.');
+    const oddOrigin: RequestOrigin = { kind: 'trackerEvent', attributes: { ...origin.attributes, threadCommentId: '10200/../x' } };
+    await sink().deliverAnswer(key, { requestId: 'req_4', kind: 'progress', body: 'Still on it.', origin: oddOrigin, isRequestOpen: true });
+    assert.deepEqual(jira.postedParentIds, [null, null]);
+  });
+
+  it('every part of a long answer goes into the same thread', async () => {
+    const paragraph = 'x'.repeat(paragraphLength);
+    await deliverInThread('progress', `${paragraph}\n\n${paragraph}`);
+    assert.deepEqual(jira.postedParentIds, ['10200', '10200']);
+  });
+
+  it('replying to a top-level comment puts the answer in that comment\'s thread; replying to a reply, in its thread\'s — never under the reply (one level)', async () => {
+    addShownComment('10300');
+    addShownComment('10301', 10300);
+    await deliverReplying('progress', 'About that:', ['10300']);
+    await deliverReplying('progress', 'And that:', ['10301']);
+    assert.deepEqual(jira.postedParentIds, ['10300', '10300']);
+  });
+
+  it('the comment replied to wins over the thread the request was opened in', async () => {
+    addShownComment('10400');
+    assert.deepEqual(await deliverInThread('final', 'Answered there.', ['10400']), { ok: true });
+    assert.deepEqual(jira.postedParentIds, ['10400']);
+  });
+
+  it('a replied-to id that does not qualify moves nothing: the answer stays in the request\'s own thread, with the left-out warning', async () => {
+    jira.sentBlocks['comment:10500'] = { hash: 'hash-10500', isWithheld: true };
+    jira.commentsById.set('10500', { id: '10500', author: colleague, created });
+    assert.deepEqual(await deliverInThread('final', 'Done.', ['10500']), { ok: true, warning: buildJiraReplyLeftOutWarning(['10500']) });
+    assert.deepEqual(jira.postedParentIds, ['10200']);
+  });
+
+  it('replies in several threads: the answer goes into the first one\'s, the others are mentioned and named in a warning', async () => {
+    addShownComment('10600');
+    addShownComment('10601', 10600);
+    addShownComment('10700');
+    const result = await deliverReplying('final', 'For all of you.', ['10601', '10600', '10700']);
+    assert.deepEqual(result, { ok: true, warning: buildJiraOtherThreadsWarning('10600', ['10700']) });
+    assert.deepEqual(jira.postedParentIds, ['10600']);
+    assert.equal(
+      buildJiraOtherThreadsWarning('10600', ['10700']),
+      'Delivered in the thread of comment 10600, but comment 10700 is in another thread: its author was mentioned, and the answer is not there. ' +
+        'To answer in that thread too, send a separate answer that replies to it.',
+    );
+  });
+
+  it('a thread Jira refuses (400 — its comments are gone) gets the answer as a new top-level comment, and the agent is told; nothing is posted twice', async () => {
+    jira.postOutcomes = [new JiraHttpError(400, 'POST', '/rest/api/3/issue/PROJ-12/comment', 'comment: Parent comment not found, and no child comments exist. Cannot create new child comments.')];
+    const paragraph = 'x'.repeat(paragraphLength);
+    const warn = mock.method(console, 'warn', () => {});
+    try {
+      const result = await deliverInThread('progress', `${paragraph}\n\n${paragraph}`);
+      assert.deepEqual(result, { ok: true, warning: buildJiraThreadRefusedWarning('10200') });
+    } finally {
+      warn.mock.restore();
+    }
+    // The refused reply, the same part top-level, and the rest of the answer top-level too.
+    assert.deepEqual(jira.postedParentIds, ['10200', null, null]);
+    assert.equal(
+      buildJiraThreadRefusedWarning('10200'),
+      'The thread of comment 10200 no longer takes replies (Jira refused it), so the answer was posted as a new comment instead.',
+    );
+  });
+
+  it('any other refusal is not taken for a gone thread: a reply refused with 403, a top-level post refused with 400 — the answer\'s error, posted nowhere else', async () => {
+    jira.postOutcomes = [new JiraAuthError(403, 'POST', '/rest/api/3/issue/PROJ-12/comment')];
+    assert.equal((await deliverInThread('final', 'Done.')).ok, false);
+    jira.postOutcomes = [new JiraHttpError(400, 'POST', '/rest/api/3/issue/PROJ-12/comment', 'INVALID_INPUT')];
+    assert.equal((await deliver('final', 'Done.')).ok, false);
+    assert.deepEqual(jira.postedParentIds, ['10200', null], 'neither was tried again');
+  });
+
+  it('an issue update whose newest comment is a reply puts the request\'s NEXT answer in that thread — ahead of the request\'s own; the answer uses it up', async () => {
+    answerThreads.note('req_1', '10900');
+    assert.deepEqual(await deliver('progress', 'About your reply:'), { ok: true });
+    assert.deepEqual(await deliver('progress', 'Back to the work.'), { ok: true });
+    answerThreads.note('req_3', '10900');
+    await deliverInThread('progress', 'In the update\'s thread, not the one the request was opened in.');
+    await deliverInThread('progress', 'Back in the request\'s own thread.');
+    assert.deepEqual(jira.postedParentIds, ['10900', null, '10900', '10200']);
+  });
+
+  it('a comment the agent replies to still decides first; a later top-level update sends the next answer where it goes by default; a restarted process keeps the thread', async () => {
+    addShownComment('10950');
+    answerThreads.note('req_1', '10900');
+    await deliverReplying('progress', 'To that one:', ['10950']);
+    assert.deepEqual(jira.postedParentIds, ['10950']);
+    answerThreads.note('req_1', '10900');
+    answerThreads.note('req_1', null);
+    await deliver('progress', 'Top-level, as the newest comment was.');
+    answerThreads.note('req_1', '10900');
+    answerThreads = JiraAnswerThreads.createForDataDir(path.join(dataDir, jiraAnswerThreadsFileName), () => nowMs);
+    await answerThreads.load();
+    await deliver('final', 'Done, in the thread after a restart.');
+    assert.deepEqual(jira.postedParentIds, ['10950', null, '10900']);
+  });
+
+  it('a notice the BOT writes (a usage limit, a refused sign-in) goes into the update\'s thread but uses nothing up: the agent\'s answer after the resume still goes there', async () => {
+    answerThreads.note('req_1', '10900');
+    const botNotice = await sink().deliverAnswer(key, { requestId: 'req_1', kind: 'progress', body: 'The AI hit its usage limit and goes on at 14:00.', origin, isRequestOpen: true, isBotNotice: true });
+    assert.deepEqual(botNotice, { ok: true });
+    assert.equal(answerThreads.get('req_1'), '10900', 'still owed to the agent\'s answer');
+    await deliver('progress', 'About your reply, after the resume:');
+    assert.equal(answerThreads.get('req_1'), null, 'the agent\'s answer used it up');
+    await deliver('progress', 'Back to the work.');
+    assert.deepEqual(jira.postedParentIds, ['10900', '10900', null]);
+  });
+
+  it('an answer that was not delivered leaves the update\'s thread for the resend', async () => {
+    answerThreads.note('req_1', '10900');
+    jira.postOutcomes = [new JiraAuthError(403, 'POST', '/rest/api/3/issue/PROJ-12/comment')];
+    assert.equal((await deliver('progress', 'First try.')).ok, false);
+    await deliver('progress', 'Second try.');
+    assert.deepEqual(jira.postedParentIds, ['10900', '10900'], 'the refused try and the resend, both in the thread');
+  });
+
+  it('the alert of a request a reply opened goes into its thread', async () => {
+    await sink().deliverAlert(key, { requestId: 'req_3', reason: 'silentTurns', origin: threadOrigin });
+    assert.deepEqual(jira.postedParentIds, ['10200']);
+  });
+
+  it('the notices about a trigger that is a reply go into its thread: park, mention park, queued; the untrusted and the updates-paused notices stay top-level', async () => {
+    await sink().parkIssue(issueKey, { accountId: 'requester-account' }, '10200');
+    await sink().parkMention(issueKey, '10210');
+    await sink().postQueuedNotice(issueKey, { kind: 'queued', isNewlyQueued: true, aheadCount: 0, maxConcurrent: 5 }, '10220');
+    await sink().refuseUntrusted(issueKey, { accountId: 'requester-account' }, 'ai-trusted');
+    await sink().postUpdatesPausedNotice(issueKey, 20, nowMs);
+    assert.deepEqual(jira.postedParentIds, ['10200', '10210', '10220', null, null]);
+    // A notice without a thread, as every caller before threads: top-level.
+    await sink().parkMention(issueKey);
+    assert.equal(jira.postedParentIds.at(-1), null);
+  });
+});
+
+describe('files: attached first, then shown in the comment after its text', () => {
+  const shownNode = { type: 'mediaSingle', attrs: { layout: 'center' }, content: [{ type: 'media', attrs: { type: 'file', id: 'm-1', collection: '' } }] };
+  /** What the fake attach did, in order. */
+  let attachCalls: string[];
+
+  beforeEach(() => {
+    attachCalls = [];
+    jira.attachFiles = async (issue, paths, options) => {
+      attachCalls.push(`attach ${issue} ${paths.join(',')} ${options.isShownInline ? 'shown' : 'linked'}`);
+      jira.calls.push('attach');
+      return {
+        ok: true,
+        files: [{ name: 'shot.png', attachmentId: '9001', kind: 'image', mediaId: 'm-1', size: null, isReused: false }],
+        nodes: [shownNode],
+        summary: 'shot.png (shown in the comment, attachment 9001)',
+        notes: [],
+        sentKinds: ['photo'],
+      };
+    };
+  });
+  const deliverWithFiles = (kind: RequestAnswerKind, body: string, files: string[], answerOrigin: RequestOrigin = origin) =>
+    sink().deliverAnswer(key, { requestId: 'req_5', kind, body, origin: answerOrigin, isRequestOpen: true, files });
+
+  it('an answer\'s files are attached before its comment is posted, and shown after its text in that comment', async () => {
+    assert.deepEqual(await deliverWithFiles('final', 'Fixed — see the screenshot.', ['shots/after.png']), { ok: true });
+    assert.deepEqual(attachCalls, ['attach PROJ-12 shots/after.png shown']);
+    assert.deepEqual(jira.calls.slice(0, 2), ['attach', 'comment PROJ-12']);
+    assert.deepEqual(jira.postedBodies[0].content.map((node) => node.type), ['paragraph', 'mediaSingle']);
+  });
+
+  it('a hand-over\'s question: the files sit between the text and the line saying how to let the agent go on', async () => {
+    await deliverWithFiles('question', 'Is this the layout you meant?', ['a.png']);
+    const types = jira.postedBodies[0].content.map((node) => node.type);
+    assert.deepEqual(types, ['paragraph', 'mediaSingle', 'paragraph']);
+    assert.ok(getAdfText(jira.postedBodies[0]).endsWith(jiraQuestionContinueText));
+  });
+
+  it('in a thread the files go with the answer; what the attach had to say rides the result', async () => {
+    const attachWithNote = jira.attachFiles;
+    jira.attachFiles = async (issue, paths, options) => {
+      const result = await attachWithNote?.(issue, paths, options);
+      return result && result.ok ? { ...result, notes: ['run.webm is linked, not played'] } : { ok: false, error: 'x' };
+    };
+    const threadOrigin: RequestOrigin = { kind: 'trackerMention', attributes: { issueKey, triggerId: 'mention:10201', requester: 'requester-account', threadCommentId: '10200' } };
+    jira.commentsById.set('10201', { id: '10201', author: { accountId: 'requester-account', accountType: 'atlassian', displayName: 'Requester' }, created: '2026-10-03T10:00:00.000+0000' });
+    assert.deepEqual(await deliverWithFiles('final', 'Here.', ['run.webm'], threadOrigin), { ok: true, warning: 'run.webm is linked, not played' });
+    assert.deepEqual(jira.postedParentIds, ['10200']);
+  });
+
+  it('a file that cannot be attached fails the answer with nothing posted — safe to send again', async () => {
+    jira.attachFiles = async () => ({ ok: false, error: 'cut.png is not a complete PNG image — a partial file? Save it again whole. Nothing was attached or posted.' });
+    assert.deepEqual(await deliverWithFiles('final', 'Done.', ['cut.png']), { ok: false, error: 'cut.png is not a complete PNG image — a partial file? Save it again whole. Nothing was attached or posted.' });
+    assert.deepEqual(jira.postedBodies, []);
+    assert.ok(!jira.calls.includes('assign PROJ-12 requester-account'), 'nothing handed back either');
+  });
+
+  it('an attach that throws is the same; a sink with no way to attach refuses files, nothing posted; an answer without files never asks', async () => {
+    jira.attachFiles = async () => {
+      throw new Error('Jira GET /rest/api/3/attachment/meta failed with 503');
+    };
+    const thrown = await deliverWithFiles('final', 'Done.', ['a.png']);
+    assert.match(!thrown.ok ? thrown.error : '', /^the files could not be attached \(Jira GET .* 503\); nothing was posted$/);
+    jira.attachFiles = undefined;
+    assert.deepEqual(await deliverWithFiles('final', 'Done.', ['a.png']), { ok: false, error: jiraFilesUnavailableError });
+    assert.deepEqual(await deliver('final', 'Done.'), { ok: true });
+    assert.deepEqual(jira.postedTexts, ['Done.']);
+  });
+});
+
+describe('send_file_to_user on an issue: the files in a comment of their own', () => {
+  const nodes = [{ type: 'mediaSingle', attrs: { layout: 'center' }, content: [{ type: 'media', attrs: { type: 'file', id: 'm-1', collection: '' } }] }];
+  beforeEach(() => {
+    jira.attachFiles = async (_issue, _paths, options) => ({
+      ok: true,
+      files: [{ name: 'run.mp4', attachmentId: '9002', kind: 'video', mediaId: options.isShownInline ? 'm-1' : null, size: null, isReused: false }],
+      nodes,
+      summary: 'run.mp4 (plays in the comment, attachment 9002)',
+      notes: [],
+      sentKinds: ['video'],
+    });
+  });
+
+  it('the caption is the comment\'s text, the files follow it; the comment goes into the thread it is given', async () => {
+    const result = await sink().postFiles(issueKey, { paths: ['run.mp4'], caption: 'The passing run:', isAsLinks: false }, '10200');
+    assert.deepEqual(result, { ok: true, summary: 'Posted in a comment in the thread of comment 10200 on PROJ-12: run.mp4 (plays in the comment, attachment 9002).', sentKinds: ['video'] });
+    assert.deepEqual(jira.postedBodies[0].content.map((node) => node.type), ['paragraph', 'mediaSingle']);
+    assert.deepEqual(jira.postedParentIds, ['10200']);
+    assert.ok(!jira.calls.some((call) => call.startsWith('assign')), 'a file comment hands nothing back');
+  });
+
+  it('no caption: a comment of the files alone, top-level without a thread', async () => {
+    const result = await sink().postFiles(issueKey, { paths: ['run.mp4'], isAsLinks: false }, null);
+    assert.equal(result.ok && result.summary, 'Posted in a comment on PROJ-12: run.mp4 (plays in the comment, attachment 9002).');
+    assert.deepEqual(jira.postedBodies, [{ version: 1, type: 'doc', content: nodes }]);
+    assert.deepEqual(jira.postedParentIds, [null]);
+  });
+
+  it('a comment Jira refused: the files are attached, the error says so; one of unknown outcome is deliveryUnknown', async () => {
+    jira.postOutcomes = [new JiraHttpError(400, 'POST', '/rest/api/3/issue/PROJ-12/comment', 'INVALID_INPUT')];
+    const refused = await sink().postFiles(issueKey, { paths: ['run.mp4'], isAsLinks: false }, null);
+    assert.equal(refused.ok, false);
+    assert.match(!refused.ok ? refused.error : '', /^the files are attached to PROJ-12 — run\.mp4 \(plays in the comment, attachment 9002\) — but the comment that shows them was not posted \(.*INVALID_INPUT\); sending them again reuses the attachments$/);
+    assert.ok(!('kind' in refused));
+
+    jira.postOutcomes = [{ outcome: 'deliveryUnknown', reason: 'timeout' }];
+    jira.recentComments = new Error('Jira 503');
+    const warn = mock.method(console, 'warn', () => {});
+    try {
+      const unknown = await sink().postFiles(issueKey, { paths: ['run.mp4'], isAsLinks: false }, null);
+      assert.equal(!unknown.ok && 'kind' in unknown && unknown.kind, 'deliveryUnknown');
+    } finally {
+      warn.mock.restore();
+    }
+  });
+
+  it('as_file lists the files as links: the attach is asked not to show them; a sink with no way to attach refuses', async () => {
+    let askedInline: boolean | null = null;
+    const attach = jira.attachFiles;
+    jira.attachFiles = async (issue, paths, options) => {
+      askedInline = options.isShownInline;
+      return attach ? attach(issue, paths, options) : { ok: false, error: 'x' };
+    };
+    await sink().postFiles(issueKey, { paths: ['run.mp4'], isAsLinks: true }, null);
+    assert.equal(askedInline, false);
+    jira.attachFiles = undefined;
+    assert.deepEqual(await sink().postFiles(issueKey, { paths: ['run.mp4'], isAsLinks: false }, null), { ok: false, error: jiraFilesUnavailableError });
   });
 });

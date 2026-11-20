@@ -142,7 +142,8 @@ Numeric bounds are named constants in the files below; this README says only wha
 
 - During an ARMED wait the probe holds the turn: nothing wakes the request and no attempt is spent. The bot
   answers every open request of the conversation itself with a `progress` answer ("the answer will come after HH:MM") — not through
-  `answer_request`, so it is not the agent's note and starts no follow-up. It replaces the plain notice, is
+  `answer_request`, so it is not the agent's note and starts no follow-up. Its delivery carries `isBotNotice`, so a sink
+  keeps what the agent's own answer still owes (the Jira sink: the thread an issue update put the next answer in). It replaces the plain notice, is
   deduplicated per request and per wait, and a request opened mid-wait is told by the ledger's
   `onRequestCreated` hook.
 - When the retry's "continue" nudge is forwarded, `trackContinuationTurn` watches its turn afresh and, after a

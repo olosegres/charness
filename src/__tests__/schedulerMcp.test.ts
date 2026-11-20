@@ -196,6 +196,16 @@ describe('the bot-MCP tool digest (lifecycle plan L4)', () => {
     assert.equal(createSchedulerMcpServer(deps).getToolDigest('telegram', true), telegram);
   });
 
+  it('with the Jira connector\'s file port a Jira session gets its own send_file_to_user and the answer files — its digest moves, a Telegram topic\'s does not', () => {
+    const without = createDigestDeps();
+    const withPort: SchedulerMcpDeps = { ...without, sendJiraFiles: async () => ({ ok: false, error: 'unused' }) };
+    assert.notEqual(getBotMcpToolDigest(withPort, 'jira', true), getBotMcpToolDigest(without, 'jira', true));
+    assert.equal(getBotMcpToolDigest(withPort, 'telegram', true), getBotMcpToolDigest(without, 'telegram', true));
+    const jiraTools = getBotMcpToolDefinitions(withPort, 'jira');
+    assert.deepEqual(jiraTools.find((tool) => tool.name === 'send_file_to_user')?.inputKeys, ['as_file', 'caption', 'paths']);
+    assert.deepEqual(jiraTools.find((tool) => tool.name === 'answer_request')?.inputKeys, ['body', 'files', 'kind', 'replyToCommentIds', 'requestId']);
+  });
+
   it('C10: with the Jira connector\'s attachment port a Jira session gets its own tool set — its digest differs from the neutral one, no other platform\'s moves', () => {
     const without = createDigestDeps();
     const withPort: SchedulerMcpDeps = { ...without, fetchJiraAttachment: async () => ({ ok: false, error: 'unused' }) };
@@ -230,7 +240,7 @@ describe('the bot-MCP tool digest (lifecycle plan L4)', () => {
 
   it('a tracker conversation is pointed at the orchestration add-on but gets no scheduling recipe — it has no scheduling tools', () => {
     for (const platform of ['jira', null] as const) {
-      const instructions = buildMcpServerInstructions(platform, { isJiraAttachmentToolOffered: false, isTodoToolOffered: false, remoteRunRunnerLines: [] }, true);
+      const instructions = buildMcpServerInstructions(platform, { isJiraAttachmentToolOffered: false, isJiraFileSendOffered: false, isTodoToolOffered: false, remoteRunRunnerLines: [] }, true);
       assert.ok(instructions.includes('`charness-orchestration`'), `${platform ?? 'neutral'}`);
       assert.ok(!instructions.includes(workerWatchCheckCommand), `${platform ?? 'neutral'}`);
       assert.doesNotMatch(instructions, /schedule_create/);
@@ -259,9 +269,10 @@ describe('the bot-MCP tool digest (lifecycle plan L4)', () => {
     const deps: SchedulerMcpDeps = {
       ...createDigestDeps(),
       fetchJiraAttachment: async () => ({ ok: false, error: 'unused' }),
+      sendJiraFiles: async () => ({ ok: false, error: 'unused' }),
       listClaudeProfiles: async ({ model }) => ({ model, relevantBuckets: [], recommended: null, pickReason: 'none', nextAvailable: null, profiles: [] }),
     };
-    const offered: OptionalBotTools = { isJiraAttachmentToolOffered: true, isTodoToolOffered: true, remoteRunRunnerLines: [] };
+    const offered: OptionalBotTools = { isJiraAttachmentToolOffered: true, isJiraFileSendOffered: true, isTodoToolOffered: true, remoteRunRunnerLines: [] };
     const toolNames = new Set((['telegram', 'jira', null] as const).flatMap((platform) => getBotMcpToolDefinitions(deps, platform).map((definition) => definition.name)));
     // Claude Code's form is `mcp__<server>__<tool>`, OpenCode's `<server>_<tool>`. The OpenCode pattern starts at the start of an
     // identifier (not inside one) and takes everything up to `_<tool>` as the server, underscores included — so `some_server_<tool>`
@@ -1121,8 +1132,8 @@ describe('scheduler MCP server end-to-end (real HTTP)', () => {
           pickReason,
           nextAvailable: model === 'exhausted' ? { profile: 'work', at: '2026-10-20T10:00:00.000Z' } : null,
           profiles: [
-            { name: 'default', configDir: null, email: 'me@example.com', kind: 'personal', subscriptionType: 'max', loggedIn: true, buckets: [], usageFetchedAt: null, isUsageStale: false, limitedUntil: null, billing: null, creditExhaustedAt: null, spentUsd: null, remainingEstimateUsd: null, expiresOn: null, probablyUsedUp: false, renewedAt: null, isEligible: true, chainExclusion: null, headroomPercent: 19, isRecommended: recommended === 'default' },
-            { name: 'work', configDir: '/data/profiles/work', email: 'w@example.com', kind: 'personal', subscriptionType: 'pro', loggedIn: true, buckets: [], usageFetchedAt: null, isUsageStale: false, limitedUntil: null, billing: null, creditExhaustedAt: null, spentUsd: null, remainingEstimateUsd: null, expiresOn: null, probablyUsedUp: false, renewedAt: null, isEligible: !isWorkUnlisted, chainExclusion: isWorkUnlisted ? 'notListed' as const : null, headroomPercent: 90, isRecommended: recommended === 'work' },
+            { name: 'default', configDir: null, email: 'me@example.com', kind: 'personal', subscriptionType: 'max', loggedIn: true, buckets: [], usageFetchedAt: null, isUsageStale: false, limitedUntil: null, authRefusal: null, billing: null, creditExhaustedAt: null, spentUsd: null, remainingEstimateUsd: null, expiresOn: null, probablyUsedUp: false, renewedAt: null, isEligible: true, chainExclusion: null, headroomPercent: 19, isRecommended: recommended === 'default' },
+            { name: 'work', configDir: '/data/profiles/work', email: 'w@example.com', kind: 'personal', subscriptionType: 'pro', loggedIn: true, buckets: [], usageFetchedAt: null, isUsageStale: false, limitedUntil: null, authRefusal: null, billing: null, creditExhaustedAt: null, spentUsd: null, remainingEstimateUsd: null, expiresOn: null, probablyUsedUp: false, renewedAt: null, isEligible: !isWorkUnlisted, chainExclusion: isWorkUnlisted ? 'notListed' as const : null, headroomPercent: 90, isRecommended: recommended === 'work' },
           ],
         };
       },

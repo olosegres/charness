@@ -6,7 +6,7 @@ import { BindError, validateSubdir, type BindErrorCode } from '../../validation'
 import { defaultOpenCodeUrl, getOpenCodePort } from '../../installManager';
 import { claudeJsonStreamAdapterName, claudePerTurnAdapterName, checkIsJsonStreamBackend } from '../../adapters/adapterNames';
 import { claudeEffortLevels, type ClaudeEffortLevel } from '../../effortLevels';
-import { checkIsJiraProjectKey } from './sessionKeyCodec';
+import { checkIsJiraProjectKey, getJiraIssueProjectKey } from './sessionKeyCodec';
 import { getJiraConfigPath } from './configFile';
 import type { JiraFieldDefinition, JiraProjectStatus } from './client';
 import type { JiraExtraField } from './issueBlocks';
@@ -43,6 +43,10 @@ export const mentionActNeedsGroupError =
 /** What an @-mention of the AI account asks of it: `answer` — an answer only, it changes nothing; `act` — an explicit ask is carried out. */
 export const jiraMentionModes = ['answer', 'act'] as const;
 export type JiraMentionMode = typeof jiraMentionModes[number];
+
+/** The refusal of `operatorAccountIds` without an `operatorIssue`: there is nothing to mention them on. */
+export const operatorAccountIdsNeedIssueError =
+  'jira.json operatorAccountIds needs operatorIssue: the operator is mentioned only on the operator issue';
 
 /** The refusal of `trustedApps` without a `trustedGroup`. */
 export const trustedAppsNeedsGroupError =
@@ -121,6 +125,11 @@ const rawConfigSchema = z.strictObject({
   baseUrl: z.string().min(1).optional(),
   // C11: tools the agent should find on its PATH (`ffmpeg`): name → absolute path of the program.
   agentBinaries: z.record(z.string().regex(agentBinaryNameRe, 'must be one file name'), z.string().min(1)).optional(),
+  // The bot's own channel to its operator (General's role on a Jira-only instance): an issue the bot posts its operator alerts on as
+  // comments (a Claude account signed out, nothing usable). Never a request source: the poller skips it.
+  operatorIssue: z.string().min(1).optional(),
+  // The operator's Jira account ids: each alert that asks them to act mentions them (they get Jira's notification). Needs operatorIssue.
+  operatorAccountIds: z.array(z.string().regex(accountIdRe, 'must be one account id, without spaces')).min(1).max(5).optional(),
 });
 
 /** @name JiraProjectConfig @description One allowlisted project. */
@@ -177,6 +186,10 @@ export interface JiraConfig {
   effort: ClaudeEffortLevel;
   /** Tool name → absolute path of an executable, checked at boot; linked into the agents' PATH (host runtime). */
   agentBinaries: ReadonlyMap<string, string>;
+  /** The issue the bot posts its operator alerts on (`operatorIssue`); `null` when none — the alerts reach only the bot's log. */
+  operatorIssueKey: string | null;
+  /** The accounts an alert that asks the operator to act mentions (`operatorAccountIds`); empty = no mention. */
+  operatorAccountIds: readonly string[];
 }
 
 export type JiraConfigResult = { ok: true; config: JiraConfig } | { ok: false; errors: string[] };
@@ -277,6 +290,8 @@ export function validateJiraConfig(
   if (raw.wakeOnComment === true && raw.trustedGroup === undefined) errors.push(wakeOnCommentNeedsGroupError);
   if (raw.mentionMode === 'act' && raw.trustedGroup === undefined) errors.push(mentionActNeedsGroupError);
   if (raw.trustedApps !== undefined && raw.trustedGroup === undefined) errors.push(trustedAppsNeedsGroupError);
+  if (raw.operatorIssue !== undefined && getJiraIssueProjectKey(raw.operatorIssue) === null) errors.push('jira.json operatorIssue: not a Jira issue key');
+  if (raw.operatorAccountIds !== undefined && raw.operatorIssue === undefined) errors.push(operatorAccountIdsNeedIssueError);
 
   const agentBinaries = new Map<string, string>();
   for (const [name, binaryPath] of Object.entries(raw.agentBinaries ?? {})) {
@@ -332,6 +347,8 @@ export function validateJiraConfig(
       model: raw.model ?? jiraDefaultModel,
       effort: raw.effort ?? jiraDefaultEffort,
       agentBinaries,
+      operatorIssueKey: raw.operatorIssue ?? null,
+      operatorAccountIds: [...new Set(raw.operatorAccountIds ?? [])],
     },
   };
 }
