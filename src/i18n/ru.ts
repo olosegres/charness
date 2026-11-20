@@ -509,7 +509,6 @@ export const ruDict: Record<string, string> = {
   'compactOnIdle.pendingQuestionReask': '❓ У тебя остался неотвеченный вопрос. Нажми на вариант, чтобы ответить и продолжить:',
   'compactOnIdle.skipped.backgroundWorkNotice': '🧹 Сжатие при простое пропущено: фоновая работа агента ещё идёт, разговор оставлен как есть.',
   'compactOnIdle.skipped.unconsumedInputNotice': '🧹 Сжатие при простое пропущено: агент ещё не принял сообщение, разговор оставлен как есть.',
-  'compactOnIdle.skipped.runningTurnNotice': '🧹 Сжатие при простое пропущено: агент ещё работает, разговор оставлен как есть.',
   'compactSummary.on': 'ВКЛ',
   'compactSummary.off': 'ВЫКЛ',
   'compactSummary.title':

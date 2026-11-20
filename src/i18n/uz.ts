@@ -505,7 +505,6 @@ export const uzDict: Record<string, string> = {
   'compactOnIdle.pendingQuestionReask': '❓ Sizda hali javob berilmagan savol bor. Javob berib davom etish uchun variantni bosing:',
   'compactOnIdle.skipped.backgroundWorkNotice': '🧹 Bo‘sh turganda siqish o‘tkazib yuborildi: agentning fon ishi hali davom etmoqda, suhbat o‘z holicha qoldirildi.',
   'compactOnIdle.skipped.unconsumedInputNotice': '🧹 Bo‘sh turganda siqish o‘tkazib yuborildi: agentga yuborilgan xabar hali qabul qilinmagan, suhbat o‘z holicha qoldirildi.',
-  'compactOnIdle.skipped.runningTurnNotice': '🧹 Bo‘sh turganda siqish o‘tkazib yuborildi: agent hali ishlayapti, suhbat o‘z holicha qoldirildi.',
   'compactSummary.on': 'YONIQ',
   'compactSummary.off': "O‘CHIQ",
   'compactSummary.title':

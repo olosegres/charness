@@ -24,8 +24,10 @@ backends:
   task nobody hears from does not keep it forever. A message you sent that the agent has not
   taken in keeps it for 30 seconds only. The idle **compaction** is
   not held back and run later: it belongs to the idle mark (the prompt cache is cold after it),
-  so a process that is working at the mark is not compacted — the topic gets one line saying why —
-  and the later looks only decide its stop. When that work is lost
+  so a process that is working at the mark is not compacted — the topic gets one line saying why
+  when it is background work or a message not taken in — and the later looks only decide its stop;
+  a bot that was down past the idle window does not compact on its way back either, it only stops
+  the idle process. When that work is lost
   anyway (a crash, a process gone after a restart, a `/model` / `/effort` /
   account restart, a task let go after 6 h), the topic gets one plain line and
   the agent is resumed with a note to check that work again — or, after a

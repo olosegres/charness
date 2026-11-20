@@ -40,9 +40,13 @@ describe('getIdleHeldNoticeReason — what the person is told', () => {
     assert.equal(getIdleHeldNoticeReason([{ kind: 'turn' }, { kind: 'unconsumedInput', count: 1 }, { kind: 'backgroundTasks', count: 1 }]), 'backgroundWork');
   });
 
-  it('then a message it has not taken in, then a turn it still runs', () => {
+  it('then a message it has not taken in — also beside a running turn', () => {
     assert.equal(getIdleHeldNoticeReason([{ kind: 'turn' }, { kind: 'unconsumedInput', count: 2 }]), 'unconsumedInput');
-    assert.equal(getIdleHeldNoticeReason([{ kind: 'turn' }]), 'turn');
+    assert.equal(getIdleHeldNoticeReason([{ kind: 'unconsumedInput', count: 1 }]), 'unconsumedInput');
+  });
+
+  it('a running turn alone has no line: a long silent command is no news, and the turn\'s end opens a new idle period anyway', () => {
+    assert.equal(getIdleHeldNoticeReason([{ kind: 'turn' }]), null);
   });
 
   it('a compaction in flight alone, or nothing, has no reason to tell: the compaction is what the idle mark would have done', () => {

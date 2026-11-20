@@ -64,6 +64,7 @@ const fireBase = {
   isSessionActive: true,
   workingSignals: [],
   isIdleMarkSpent: false,
+  isIdleMarkMissed: false,
   isEnabled: true,
   isLatched: false,
   hasCompletedTurnSinceCompaction: true,
@@ -247,28 +248,44 @@ test('getIdleFireDecision: no session or WORKING (L-D2) → nothing happens, nei
   }
 });
 
-test('getIdleFireDecision: the log names WHICH signal holds the process (busy turn / unconsumed input N / compaction in flight / background tasks / scheduled jobs)', () => {
-  const held = (workingSignals: IdleFireInput['workingSignals']): string[] => getIdleFireDecision({ ...fireBase, workingSignals }).suspendSkipReasons;
-  assert.deepEqual(held([{ kind: 'turn' }]), ['working (busy turn)']);
-  assert.deepEqual(held([{ kind: 'unconsumedInput', count: 2 }]), ['working (unconsumed input 2)']);
-  assert.deepEqual(held([{ kind: 'compaction' }]), ['working (compaction in flight)']);
-  assert.deepEqual(held([{ kind: 'backgroundTasks', count: 1 }, { kind: 'scheduledJobs', count: 3 }]), ['working (background tasks 1, scheduled jobs 3)']);
-  assert.deepEqual(held([{ kind: 'turn' }, { kind: 'taskTurnOnItsWay' }]), ['working (busy turn, task result turn on its way)']);
+test('getIdleFireDecision: the log names the signals that hold the process, inside the `working (…)` reason (the wording of each kind: workingSignals.test.ts)', () => {
+  const decision = getIdleFireDecision({ ...fireBase, workingSignals: [{ kind: 'turn' }, { kind: 'unconsumedInput', count: 2 }] });
+  assert.deepEqual(decision.suspendSkipReasons, ['working (busy turn, unconsumed input 2)']);
+  assert.deepEqual(decision.compactionSkipReasons, ['working (busy turn, unconsumed input 2)']);
 });
 
 test('getIdleFireDecision: a process held at the idle mark forgoes a compaction that was due — the mark is held, and the topic is told why, once', () => {
   const held = getIdleFireDecision({ ...fireBase, workingSignals: [{ kind: 'backgroundTasks', count: 1 }] });
   assert.equal(held.shouldCompact, false);
   assert.equal(held.isIdleMarkHeld, true);
-  assert.equal(held.heldNoticeReason, 'backgroundWork');
-  assert.equal(getIdleFireDecision({ ...fireBase, workingSignals: [{ kind: 'unconsumedInput', count: 1 }] }).heldNoticeReason, 'unconsumedInput');
-  assert.equal(getIdleFireDecision({ ...fireBase, workingSignals: [{ kind: 'turn' }] }).heldNoticeReason, 'turn');
+  assert.equal(held.heldNoticeReason, 'backgroundWork', 'which reason for which signals: workingSignals.test.ts');
+});
+
+test('getIdleFireDecision: a real turn still running at the idle mark holds the mark but there is no line — its end opens a new idle period anyway', () => {
+  const decision = getIdleFireDecision({ ...fireBase, workingSignals: [{ kind: 'turn' }] });
+  assert.equal(decision.isIdleMarkHeld, true, 'the compaction is still forgone: no late one');
+  assert.equal(decision.heldNoticeReason, null, 'a long silent foreground command is no news: the agent is working');
+  const withUntakenMessage = getIdleFireDecision({ ...fireBase, workingSignals: [{ kind: 'turn' }, { kind: 'unconsumedInput', count: 1 }] });
+  assert.equal(withUntakenMessage.heldNoticeReason, 'unconsumedInput', 'a message not taken in is worth a line even beside a turn');
 });
 
 test('getIdleFireDecision: a compaction in flight at the idle mark holds the mark but has nothing to tell', () => {
   const decision = getIdleFireDecision({ ...fireBase, workingSignals: [{ kind: 'compaction' }] });
   assert.equal(decision.isIdleMarkHeld, true);
   assert.equal(decision.heldNoticeReason, null);
+});
+
+test('getIdleFireDecision: the overdue boot fire (the bot was down past the window) never compacts — it only decides the stop', () => {
+  const missed = getIdleFireDecision({ ...fireBase, isIdleMarkMissed: true });
+  assert.equal(missed.shouldCompact, false);
+  assert.equal(missed.shouldSuspend, true, 'the stop still follows');
+  assert.deepEqual(missed.compactionSkipReasons, ['the idle mark passed while the bot was down (the prompt cache is cold by now)']);
+  assert.equal(missed.isIdleMarkHeld, false);
+  // Held at such a fire: the compaction would not have run anyway, so the hold cost it nothing — no line, no mark.
+  const heldAndMissed = getIdleFireDecision({ ...fireBase, isIdleMarkMissed: true, workingSignals: [{ kind: 'backgroundTasks', count: 1 }] });
+  assert.equal(heldAndMissed.shouldSuspend, false);
+  assert.equal(heldAndMissed.isIdleMarkHeld, false);
+  assert.equal(heldAndMissed.heldNoticeReason, null);
 });
 
 test('getIdleFireDecision: a compaction that was not due anyway is not "held" — no notice for a skip the hold did not cause', () => {
@@ -278,6 +295,15 @@ test('getIdleFireDecision: a compaction that was not due anyway is not "held" �
     assert.equal(decision.isIdleMarkHeld, false, JSON.stringify(override));
     assert.equal(decision.heldNoticeReason, null, JSON.stringify(override));
   }
+});
+
+test('getIdleCompactionArmDecision: a shortened window shortens the overdue floor and spread in proportion — a test\'s 12 s window does not wait out a minute', () => {
+  const idleWindowMs = 12 * 1000;
+  const scale = idleWindowMs / idleCompactMs;
+  const { delayMs, kind } = getIdleCompactionArmDecision({ threadKeyString: threadKeyA, lastActivityAt: now - 10 * idleWindowMs, now, idleWindowMs });
+  assert.equal(kind, 'overdue');
+  assert.ok(delayMs >= Math.floor(compactIdleOverdueMinDelayMs * scale), 'still never instantly');
+  assert.ok(delayMs < Math.ceil((compactIdleOverdueMinDelayMs + compactIdleOverdueSpreadMs) * scale) + 1, 'but proportionally short');
 });
 
 test('checkIsIdleMarkSpent: a held mark is spent until activity comes after it', () => {

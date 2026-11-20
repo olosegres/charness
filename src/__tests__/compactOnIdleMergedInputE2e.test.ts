@@ -11,6 +11,8 @@
  *   → the topic sits idle: the idle mark compacts the conversation (the notice reaches the topic) and stops the process — it was
  *     not kept "working" for the one message the bot believed was never taken in (the incident: no compaction, no line, for hours,
  *     until the operator typed `/compact`)
+ *   → a bot that was down past the idle window and comes back (its saved last activity hours old) does not compact the idle
+ *     process on its overdue boot fire — the prompt cache is cold by then — it only stops it
  *
  * Nothing leaves the machine: the Bot API is on loopback and the agent is a fake. Everything the test starts is stopped in `after`.
  */
@@ -39,9 +41,11 @@ import {
   writeInstanceEnvFile,
   type IsolatedInstanceLayout,
 } from './e2e/isolatedCharness';
-import { getAgentTurns, getAllAgentTurns, startCharnessOnInstance } from './e2e/fallbackFlowKit';
+import { getAgentTurns, getAllAgentTurns, restartCharnessWithState, startCharnessOnInstance } from './e2e/fallbackFlowKit';
 import { enDict } from '../i18n/en';
+import { claudeJsonStreamUsageLogPrefix } from '../adapters/claudeJsonStreamAdapter';
 import { checkIsPidAlive } from '../utils/jsonStreamHost';
+import { unconsumedInputGraceMs } from '../utils/jsonStreamPendingWork';
 import { getTelegramFlowTestTimingsEnv } from './telegramE2e/telegramFlowTimings';
 
 const group = { id: -1001111111111, title: 'ExampleGroup' };
@@ -53,8 +57,13 @@ const botUser = { id: 7000000001, is_bot: true, first_name: 'Fake bot', username
 const fakeBotToken = '1000000001:fake-token-for-the-loopback-bot-api';
 const projectFolder = 'merged-input';
 
-/** The idle window, cut to seconds. */
+/**
+ * The idle window, cut to seconds. It must stay SHORTER than the grace an unconsumed message holds a turn-less process
+ * (`unconsumedInputGraceMs`): with a longer window the grace alone would release a message the matcher failed to recognise,
+ * and the flow would pass on a broken matcher (asserted in the idle step).
+ */
 const idleWindowMinutes = '0.2';
+const idleWindowMs = 12 * 1000;
 const replyTimeoutMs = 20 * 1000;
 /** How long MR-1's turn works: the two messages are written inside it. */
 const slowTurnMs = 6 * 1000;
@@ -90,6 +99,11 @@ function listCompactions(): Array<{ sessionId: string; pid: number; instruction:
 }
 
 const stopLine = `[compact-on-idle] ${topicKey} process stopped; the session sleeps`;
+
+/** How many turns ended so far: the bot logs every result's usage. */
+function countTurnEnds(): number {
+  return getCharness().output.split(`${claudeJsonStreamUsageLogPrefix}${topicKey}:`).length - 1;
+}
 /** The notice the idle compaction posts into the topic (its first line). */
 const idleNoticeStart = enDict['compactOnIdle.notice'].split('\n')[0];
 
@@ -158,11 +172,33 @@ describe('Messages sent while the agent works do not keep the topic "working" fo
   it('the idle mark compacts the conversation and stops the process: nothing is kept "working" for a message the CLI already took in', async () => {
     const pid = getAgentTurns(getLayout(), 'MR-3')[0]?.pid;
     assert.ok(pid !== undefined && checkIsPidAlive(pid), 'the process is up before the idle mark');
+    assert.ok(idleWindowMs < unconsumedInputGraceMs, 'the grace alone must not be able to release the message: the flow would not prove the matcher');
     const compactionsBefore = listCompactions().length;
     await getCharness().waitFor('the idle stop', idleStopTimeoutMs, () => getCharness().output.includes(stopLine));
     assert.ok(listCompactions().length > compactionsBefore, 'the conversation was compacted at the idle mark');
     assert.ok(topic.listMessages().some((message) => message.text.startsWith(idleNoticeStart)), 'the topic got the idle compaction notice');
     assert.ok(!getCharness().output.includes(`${topicKey} timer fired but the compaction is skipped: working`), 'the idle fire never took the process for working');
+    assert.ok(!checkIsPidAlive(pid), 'the process is gone');
+  });
+
+  it('a bot that was down past the idle window does not compact on its way back: its overdue boot fire only stops the idle process (the prompt cache is cold by then)', async () => {
+    const turnEndsBefore = countTurnEnds();
+    fakeTelegram.pushOperatorMessage(topicThreadId, 'MR-4 [fake:answer] a turn after the idle stop');
+    await topic.waitForMessage('the answer to MR-4', (message) => message.text.includes('Fake final answer for MR-4'));
+    // The answer shows a moment before its turn ends: a restart before that would adopt a process that looks mid-turn, and the fire would find it busy.
+    await getCharness().waitFor('the end of MR-4\'s turn', replyTimeoutMs, () => countTurnEnds() > turnEndsBefore);
+    const pid = getAgentTurns(getLayout(), 'MR-4')[0]?.pid;
+    assert.ok(pid !== undefined && checkIsPidAlive(pid), 'the woken process is up: a compaction is due, and the process idle');
+    const compactionsBefore = listCompactions().length;
+    // The bot goes down and comes back long after the idle window: what it saved as the topic's last activity is hours old.
+    charness = await restartCharnessWithState(getLayout(), fakeTelegram, getCharness(), (persisted) => {
+      const tracking = persisted.compactIdleTracking?.[topicKey];
+      assert.ok(tracking, 'the topic has saved compact-on-idle instants');
+      tracking.lastActivityAt = Date.now() - 3 * 60 * 60 * 1000;
+    });
+    await getCharness().waitFor('the idle stop of the overdue fire', idleStopTimeoutMs, () => getCharness().output.includes(stopLine));
+    assert.ok(getCharness().output.includes(`${topicKey} timer fired but the compaction is skipped: the idle mark passed while the bot was down`), `the console says why it did not compact:\n${getCharness().output.split('\n').filter((line) => line.includes('compact-on-idle') || line.includes('reattach')).join('\n')}`);
+    assert.equal(listCompactions().length, compactionsBefore, 'not compacted: the idle mark was missed, the cache is cold');
     assert.ok(!checkIsPidAlive(pid), 'the process is gone');
   });
 });

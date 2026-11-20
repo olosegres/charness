@@ -505,7 +505,6 @@ export const jaDict: Record<string, string> = {
   'compactOnIdle.pendingQuestionReask': '❓ 未回答の質問が残っています。オプションをタップして回答し、続行してください：',
   'compactOnIdle.skipped.backgroundWorkNotice': '🧹 アイドル時の圧縮をスキップしました：エージェントのバックグラウンド作業がまだ実行中のため、会話はそのままです。',
   'compactOnIdle.skipped.unconsumedInputNotice': '🧹 アイドル時の圧縮をスキップしました：エージェントへのメッセージがまだ受け取られていないため、会話はそのままです。',
-  'compactOnIdle.skipped.runningTurnNotice': '🧹 アイドル時の圧縮をスキップしました：エージェントがまだ作業中のため、会話はそのままです。',
   'compactSummary.on': 'オン',
   'compactSummary.off': 'オフ',
   'compactSummary.title':

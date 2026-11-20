@@ -505,7 +505,6 @@ export const ptDict: Record<string, string> = {
   'compactOnIdle.pendingQuestionReask': '❓ Você ainda tem uma pergunta pendente. Toque em uma opção para respondê-la e continuar:',
   'compactOnIdle.skipped.backgroundWorkNotice': '🧹 Compactação por inatividade ignorada: o trabalho em segundo plano do agente ainda está em andamento, a conversa foi deixada como estava.',
   'compactOnIdle.skipped.unconsumedInputNotice': '🧹 Compactação por inatividade ignorada: uma mensagem para o agente ainda não foi recebida, a conversa foi deixada como estava.',
-  'compactOnIdle.skipped.runningTurnNotice': '🧹 Compactação por inatividade ignorada: o agente ainda está trabalhando, a conversa foi deixada como estava.',
   'compactSummary.on': 'LIGADO',
   'compactSummary.off': 'DESLIGADO',
   'compactSummary.title':

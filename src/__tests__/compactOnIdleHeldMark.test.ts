@@ -10,12 +10,16 @@
  *     topic saying the compaction was skipped and why — and remembers the mark as held;
  *   • the re-check of that held mark never compacts, however idle the process is by then: it decides only the stop, and says
  *     nothing again;
- *   • a restart in between (a fresh module over the same saved state) keeps the mark spent: no second line, no late compaction;
- *   • activity after the held mark opens a new idle period: its mark compacts again.
+ *   • a re-adopt after a restart in between (the countdown re-armed from the saved instants, the held stamp among them) finds the
+ *     mark spent: no second line, no late compaction — the stamp's own survival of a reload is `state.test.ts`'s;
+ *   • activity after the held mark opens a new idle period: its mark compacts again;
+ *   • a real turn still running at the mark holds it too, but says nothing: its end opens a new idle period anyway;
+ *   • the overdue boot fire — the bot was down past the idle window — never compacts either, and only stops the idle process
+ *     (the owner's rule again: after the window the cache is cold).
  *
  * What the line says for each kind of signal is `getIdleHeldNoticeReason`'s (`workingSignals.test.ts`); the decision's own
  * branches are `compactOnIdle.test.ts`'s. The whole thing at process level — the real bot, a fake agent holding a background
- * task — is `backgroundTaskStopE2e.test.ts`.
+ * task, a bot restarted after the window — is `backgroundTaskStopE2e.test.ts` and `compactOnIdleMergedInputE2e.test.ts`.
  *
  * Test case: N/A — Charness has no Jira tracker.
  */
@@ -54,6 +58,7 @@ class HeldStubAdapter extends EventEmitter implements AgentAdapter {
   readonly name = 'stub-held-adapter';
   readonly label = 'Stub';
   signals: BackgroundWorkSignal[] = [];
+  isBusy = false;
   compactions = 0;
 
   async startSession(): Promise<void> {}
@@ -61,7 +66,7 @@ class HeldStubAdapter extends EventEmitter implements AgentAdapter {
   stopSession(): void {}
   async suspendSession(): Promise<void> {}
   checkIsActive(): boolean { return true; }
-  checkIsBusy(): boolean { return false; }
+  checkIsBusy(): boolean { return this.isBusy; }
   sendInput(): void {}
   sendSignal(): void {}
   async getSessions(): Promise<AgentSession[]> { return []; }
@@ -124,6 +129,7 @@ describe('the idle mark of a held process: told once, compacted never later', ()
     await harness.state.clearCompactIdleTracking(key);
     await harness.state.setCompactIdleLatched(key, false);
     adapter.signals = [];
+    adapter.isBusy = false;
   });
 
   /** The state of a topic whose agent finished a turn `idleWindowMs - windowLeftMs` ago, held by `signals`; the timer armed as a re-adopt arms it. */
@@ -193,6 +199,58 @@ describe('the idle mark of a held process: told once, compacted never later', ()
     await waitUntil('its stop', () => steps.includes('stop'));
     assert.equal(heldNotices().length, 1, 'nothing more to tell');
     await new Promise((resolve) => setTimeout(resolve, quietMs / 4));
+  });
+
+  it('a real turn still running at the mark holds it silently: no line (its end opens a new idle period), but no late compaction either', async () => {
+    const module = createModule();
+    harness.replies.length = 0;
+    adapter.isBusy = true;
+    await armHeldTopic(module, []);
+    await waitUntil('the held fire', () => logs.some((line) => line.includes('process kept: working (busy turn)')));
+    await waitUntil('the mark remembered', () => {
+      const tracking = harness.state.getCompactIdleTracking(key);
+      return tracking.lastHeldMarkAt > tracking.lastActivityAt;
+    });
+    await new Promise((resolve) => setTimeout(resolve, quietMs / 4));
+    assert.deepEqual(harness.replies.map((reply) => reply.text), [], 'nothing posted for a turn that is merely still running');
+    assert.equal(adapter.compactions, 0);
+  });
+
+  it('the overdue boot fire (the bot was down past the idle window) never compacts: the idle process is only stopped, and nothing is posted', async () => {
+    const module = createModule();
+    harness.replies.length = 0;
+    steps = [];
+    logs = [];
+    adapter.compactions = 0;
+    console.log = (...args: unknown[]) => { logs.push(args.map(String).join(' ')); };
+    module.markThreadTurnProducedOutput(key);
+    // The last activity is far past the window: the re-adopt arms an OVERDUE fire (staggered; proportionally short at this window).
+    harness.state.noteCompactIdleActivity(key, Date.now() - 10 * idleWindowMs);
+    module.rearmThreadIdleTimer(key);
+    await waitUntil('the stop of the overdue fire', () => steps.includes('stop'));
+    assert.equal(adapter.compactions, 0, 'no compaction: the cache has been cold since the window ended');
+    assert.ok(logs.some((line) => line.includes('the idle mark passed while the bot was down')), `the log says why:\n${logs.join('\n')}`);
+    assert.deepEqual(harness.replies.map((reply) => reply.text), [], 'nothing posted: no skip the person would care about');
+  });
+
+  it('a held overdue fire is not announced either: the compaction would not have run anyway', async () => {
+    const module = createModule();
+    harness.replies.length = 0;
+    steps = [];
+    logs = [];
+    adapter.compactions = 0;
+    adapter.signals = [{ kind: 'backgroundTasks', count: 1 }];
+    console.log = (...args: unknown[]) => { logs.push(args.map(String).join(' ')); };
+    module.markThreadTurnProducedOutput(key);
+    harness.state.noteCompactIdleActivity(key, Date.now() - 10 * idleWindowMs);
+    module.rearmThreadIdleTimer(key);
+    await waitUntil('the held fire', () => logs.some((line) => line.includes('process kept: working (background tasks 1)')));
+    const tracking = harness.state.getCompactIdleTracking(key);
+    assert.ok(tracking.lastHeldMarkAt <= tracking.lastActivityAt, 'no mark was held: there was no compaction to forgo');
+    assert.deepEqual(harness.replies.map((reply) => reply.text), []);
+    adapter.signals = [];
+    await waitUntil('the stop of the re-check', () => steps.includes('stop'));
+    assert.equal(adapter.compactions, 0);
   });
 
   it('a tracker conversation (no topic to narrate into) is held all the same, silently: the mark is remembered, nothing is posted', async () => {

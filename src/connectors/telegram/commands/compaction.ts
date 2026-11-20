@@ -120,6 +120,12 @@ interface ThreadCompactionResult {
  */
 interface ThreadCompactionState {
   idleTimer: NodeJS.Timeout | null;
+  /**
+   * The armed countdown is the OVERDUE boot arm's: the bot was down past the idle window, so the mark it fires for passed long
+   * ago and the fire only decides the stop (`getIdleFireDecision`'s `isIdleMarkMissed`). Set by every arm of the countdown, so
+   * activity (which re-arms it) clears it.
+   */
+  isIdleMarkMissed: boolean;
 }
 
 /**
@@ -515,7 +521,7 @@ export function createCompaction(ports: CompactionPorts) {
   function getThreadCompactionState(kStr: string): ThreadCompactionState {
     let existing = threadCompactionStates.get(kStr);
     if (!existing) {
-      existing = { idleTimer: null };
+      existing = { idleTimer: null, isIdleMarkMissed: false };
       threadCompactionStates.set(kStr, existing);
     }
     return existing;
@@ -539,7 +545,6 @@ export function createCompaction(ports: CompactionPorts) {
   const idleHeldNoticeKeys: Record<IdleHeldNoticeReason, string> = {
     backgroundWork: 'compactOnIdle.skipped.backgroundWorkNotice',
     unconsumedInput: 'compactOnIdle.skipped.unconsumedInputNotice',
-    turn: 'compactOnIdle.skipped.runningTurnNotice',
   };
 
   /**
@@ -605,6 +610,7 @@ export function createCompaction(ports: CompactionPorts) {
     if (!isSuspendable && getState().checkIsCompactIdleLatched(key)) return;
     const { lastActivityAt } = getState().getCompactIdleTracking(key);
     const { delayMs, kind } = getIdleCompactionArmDecision({ threadKeyString: kStr, lastActivityAt, now, idleWindowMs });
+    getThreadCompactionState(kStr).isIdleMarkMissed = kind === 'overdue';
     if (!opts.isRealActivity) {
       // Session-start / re-adopt only (once per thread per boot, or per manual start) —
       // was the other blind spot: nothing showed whether an adopted thread got re-armed
@@ -729,8 +735,10 @@ export function createCompaction(ports: CompactionPorts) {
         return;
       }
     }
-    // L-D7: a sleeping per-turn session is resumed for its compaction; the stop below puts it back to sleep.
-    if (!adapter.checkIsActive(key) && adapter.name === claudePerTurnAdapterName && checkIsCompactionDue(key)) {
+    const isIdleMarkMissed = getThreadCompactionState(kStr).isIdleMarkMissed;
+    // L-D7: a sleeping per-turn session is resumed for its compaction; the stop below puts it back to sleep. Not for a fire that
+    // missed the idle mark: it compacts nothing, so waking the session only to stop it again would be for nothing.
+    if (!adapter.checkIsActive(key) && adapter.name === claudePerTurnAdapterName && checkIsCompactionDue(key) && !isIdleMarkMissed) {
       if (!(await resumeSleepingSessionForCompaction(key))) {
         console.log(`[compact-on-idle] ${kStr} sleeping per-turn session could not be resumed for its compaction`);
         return;
@@ -753,6 +761,7 @@ export function createCompaction(ports: CompactionPorts) {
       isSessionActive: adapter.checkIsActive(key),
       workingSignals,
       isIdleMarkSpent: checkIsIdleMarkSpent({ lastActivityAt, lastHeldMarkAt }),
+      isIdleMarkMissed,
       isEnabled: getState().checkIsCompactOnIdleEnabled(key),
       isLatched: getState().checkIsCompactIdleLatched(key),
       hasCompletedTurnSinceCompaction: lastTurnEndAt > lastCompactionAt,
@@ -798,8 +807,9 @@ export function createCompaction(ports: CompactionPorts) {
    * that the compaction was skipped and why. A re-check of this mark never gets here: it only decides the stop.
    */
   async function noteIdleMarkHeld(key: SessionKey, noticeReason: IdleHeldNoticeReason | null): Promise<void> {
-    // Remembered BEFORE the post: a restart between the two must not post it twice.
+    // Remembered — and flushed to disk, the save is debounced — BEFORE the post: a restart or a crash between the two must not post it twice.
     await getState().setCompactIdleMarkHeldAt(key);
+    await getState().flush();
     // A tracker issue has no topic to narrate into (R6): the mark is held there all the same, silently.
     if (noticeReason === null || !checkIsTelegramKey(key)) {
       console.log(`[compact-on-idle] ${keyToString(key)} the idle mark is held: its compaction is forgone, nothing to tell the topic`);

@@ -36,7 +36,8 @@ export function getAgentIdleMs(overrideMinutes: string | undefined): number {
  * Floor delay for an OVERDUE arm (the thread has been idle longer than
  * {@link idleCompactMs}, across one or more bot restarts). Never fire instantly at
  * boot: the reattach is still adopting sessions and the topic may be about to
- * receive a real prompt, so give it a minute of grace first.
+ * receive a real prompt, so give it a minute of grace first. At a shortened idle window (a test's) it
+ * shortens in proportion, see {@link getIdleCompactionArmDecision}.
  */
 export const compactIdleOverdueMinDelayMs = 60_000;
 
@@ -102,10 +103,13 @@ export interface IdleCompactionArmDecision {
  *    fire soon, but staggered: {@link compactIdleOverdueMinDelayMs} plus a
  *    per-thread offset inside {@link compactIdleOverdueSpreadMs}. The boot
  *    reattach adopts every live session at once; without the stagger every
- *    overdue topic would start an LLM compaction turn and post its notice in the
- *    same instant. Spreading them over ~1–11 minutes keeps the backlog orderly,
+ *    overdue topic would be stopped (and its session slept) in the same instant.
+ *    Spreading them over ~1–11 minutes keeps the backlog orderly,
  *    and deriving the offset from the thread key keeps it deterministic (hence
- *    testable) instead of random.
+ *    testable) instead of random. At a shortened window (`AGENT_IDLE_MINUTES`, a
+ *    test's) the floor and the spread shorten in the same proportion, so a flow
+ *    with a 12 s window does not wait out minutes; at the default window they are
+ *    exactly the constants.
  *
  * The stagger being DETERMINISTIC was considered and chosen, not overlooked: a
  * thread whose offset lands near the top of the spread never fires while the bot
@@ -116,12 +120,11 @@ export interface IdleCompactionArmDecision {
  * frequent a FULL-window arm starves just as surely, so the stagger is not
  * uniquely affected. Do not re-litigate this as an oversight.
  *
- * An overdue thread is compacted even though its prompt cache has long gone
- * cold. The 55-minute interval exists to make the compaction TURN itself cheap
- * against a warm cache, but the payoff of compacting is that every SUBSEQUENT
- * turn in that session reads a small context instead of a huge one — clearly
- * worth one uncached read, whereas skipping it leaves the session permanently
- * bloated.
+ * An overdue fire does NOT compact (the owner's rule, replacing an earlier decision to compact anyway): the 55-minute interval
+ * exists so the compaction TURN reads the still-warm prompt cache, and past the window that cache is gone — compacting then is
+ * only an expensive uncached read, the same reason a held mark is never compacted late (see {@link getIdleFireDecision}). The
+ * overdue fire only decides the STOP of the idle process; the conversation is compacted at the idle mark of a later period,
+ * while the cache is warm.
  */
 export function getIdleCompactionArmDecision(input: {
   threadKeyString: string;
@@ -136,8 +139,11 @@ export function getIdleCompactionArmDecision(input: {
   // Clamped: a backward clock step makes `lastActivityAt` future-dated, and the
   // remainder must never exceed the window it is a remainder of.
   if (remainingMs > 0) return { delayMs: Math.min(remainingMs, idleWindowMs), kind: 'remainder' };
+  // Never LONGER than the production constants: a window above the default keeps them.
+  const windowRatio = Math.min(1, idleWindowMs / idleCompactMs);
+  const spreadMs = Math.max(1, Math.round(compactIdleOverdueSpreadMs * windowRatio));
   return {
-    delayMs: compactIdleOverdueMinDelayMs + (getStableHash(input.threadKeyString) % compactIdleOverdueSpreadMs),
+    delayMs: Math.round(compactIdleOverdueMinDelayMs * windowRatio) + (getStableHash(input.threadKeyString) % spreadMs),
     kind: 'overdue',
   };
 }
@@ -277,7 +283,9 @@ export interface IdleFireDecision {
  * idle window (`idleCompactMs`), so a compaction later than the mark is only an expensive one. A process held at the mark
  * (a compaction that was otherwise due is then `isIdleMarkHeld`) does NOT get its compaction on a later look: once the mark is
  * spent (`isIdleMarkSpent` — it was held and no activity has re-warmed the cache since) every later fire, the re-checks of a
- * held process, decides only the stop. Activity re-arms the countdown, and with it the next mark's compaction.
+ * held process, decides only the stop. Nor does the OVERDUE boot fire (`isIdleMarkMissed`: the bot was down past the window)
+ * compact: it decides only the stop too, and a hold at it costs nothing, so there is no mark to hold and nothing to tell.
+ * Activity re-arms the countdown, and with it the next mark's compaction.
  *
  * The STOP happens whether or not the compaction runs (L-D1: a resume restores
  * the full history, so a stopped process loses nothing) — on a backend that can
@@ -289,6 +297,8 @@ export function getIdleFireDecision(input: {
   workingSignals: readonly WorkingSignal[];
   /** The idle mark of this idle period was already held (a fire found the process working and forwent its compaction). */
   isIdleMarkSpent: boolean;
+  /** This fire is the OVERDUE boot arm's: the bot was down past the idle window, so the mark passed long ago (the cache is cold). */
+  isIdleMarkMissed: boolean;
   isEnabled: boolean;
   isLatched: boolean;
   hasCompletedTurnSinceCompaction: boolean;
@@ -301,6 +311,7 @@ export function getIdleFireDecision(input: {
     input.isLatched && 'latched (D2)',
     !input.hasCompletedTurnSinceCompaction && 'nothing to compress',
     input.isLimitWaitArmed && 'a usage-limit wait is armed (L-D6)',
+    input.isIdleMarkMissed && 'the idle mark passed while the bot was down (the prompt cache is cold by now)',
   ].filter((reason): reason is string => typeof reason === 'string');
   const notIdleReasons = [
     !input.isSessionActive && 'no active session',

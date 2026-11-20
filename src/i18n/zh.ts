@@ -505,7 +505,6 @@ export const zhDict: Record<string, string> = {
   'compactOnIdle.pendingQuestionReask': '❓ 你还有一个待回答的问题。点击一个选项来回答并继续：',
   'compactOnIdle.skipped.backgroundWorkNotice': '🧹 已跳过空闲压缩：代理的后台工作仍在运行，对话保持原样。',
   'compactOnIdle.skipped.unconsumedInputNotice': '🧹 已跳过空闲压缩：发给代理的消息尚未被接收，对话保持原样。',
-  'compactOnIdle.skipped.runningTurnNotice': '🧹 已跳过空闲压缩：代理仍在处理任务，对话保持原样。',
   'compactSummary.on': '开启',
   'compactSummary.off': '关闭',
   'compactSummary.title':

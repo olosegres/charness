@@ -505,7 +505,6 @@ export const esDict: Record<string, string> = {
   'compactOnIdle.pendingQuestionReask': '❓ Aún tienes una pregunta pendiente. Toca una opción para responderla y continuar:',
   'compactOnIdle.skipped.backgroundWorkNotice': '🧹 Compactación por inactividad omitida: el trabajo en segundo plano del agente sigue en curso, la conversación se dejó como estaba.',
   'compactOnIdle.skipped.unconsumedInputNotice': '🧹 Compactación por inactividad omitida: el agente aún no ha recibido un mensaje, la conversación se dejó como estaba.',
-  'compactOnIdle.skipped.runningTurnNotice': '🧹 Compactación por inactividad omitida: el agente sigue trabajando, la conversación se dejó como estaba.',
   'compactSummary.on': 'ACTIVADO',
   'compactSummary.off': 'DESACTIVADO',
   'compactSummary.title':
