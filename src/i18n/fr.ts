@@ -503,6 +503,9 @@ export const frDict: Record<string, string> = {
   'compactOnIdle.setGlobal': '✅ Compactage auto en cas d’inactivité : {state} pour TOUS les sujets (les remplacements par sujet s’appliquent toujours).',
   'compactOnIdle.unsupported': 'Le compactage auto en cas d’inactivité s’applique à une session d’agent active. Lance d’abord /claude ou /opencode dans un sujet lié.',
   'compactOnIdle.pendingQuestionReask': '❓ Tu as encore une question en attente. Touche une option pour y répondre et continuer :',
+  'compactOnIdle.skipped.backgroundWorkNotice': '🧹 Compactage en cas d’inactivité ignoré : le travail en arrière-plan de l’agent est encore en cours, la conversation est laissée telle quelle.',
+  'compactOnIdle.skipped.unconsumedInputNotice': '🧹 Compactage en cas d’inactivité ignoré : un message à l’agent n’a pas encore été pris en compte, la conversation est laissée telle quelle.',
+  'compactOnIdle.skipped.runningTurnNotice': '🧹 Compactage en cas d’inactivité ignoré : l’agent est encore en train de travailler, la conversation est laissée telle quelle.',
   'compactSummary.on': 'ACTIVÉ',
   'compactSummary.off': 'DÉSACTIVÉ',
   'compactSummary.title':

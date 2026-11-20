@@ -786,7 +786,7 @@ const sessionIdA = '11111111-1111-4111-8111-111111111111';
 const sessionIdB = '22222222-2222-4222-8222-222222222222';
 const activityAt = 1_800_000_000_000;
 
-test('compactIdleTracking: an untracked thread reads back as three zeros', async () => {
+test('compactIdleTracking: an untracked thread reads back as all zeros', async () => {
   // `0` is the explicit "no history" value: the arming path takes it as "use the
   // full idle window", the fire guard as "nothing to compress". A pre-feature
   // state file must therefore behave exactly like an untracked thread.
@@ -797,10 +797,11 @@ test('compactIdleTracking: an untracked thread reads back as three zeros', async
     lastActivityAt: 0,
     lastTurnEndAt: 0,
     lastCompactionAt: 0,
+    lastHeldMarkAt: 0,
   });
 });
 
-test('compactIdleTracking: all three instants survive a reload (THE restart guard)', async () => {
+test('compactIdleTracking: the instants survive a reload (THE restart guard)', async () => {
   // The reported bug: these lived in a process-local map, so after a restart the
   // fire guard compared `0 > 0`, decided there was nothing to compress, and — D2
   // forbidding a reschedule — the feature stayed dead in every quiet topic.
@@ -820,6 +821,7 @@ test('compactIdleTracking: all three instants survive a reload (THE restart guar
     lastActivityAt: activityAt,
     lastTurnEndAt: turnEndAt,
     lastCompactionAt: compactedAt,
+    lastHeldMarkAt: 0,
   });
   assert.ok(
     second.getCompactIdleTracking(key1).lastTurnEndAt >
@@ -828,7 +830,7 @@ test('compactIdleTracking: all three instants survive a reload (THE restart guar
   );
   assert.deepEqual(
     second.getCompactIdleTracking(key2),
-    { lastActivityAt: 0, lastTurnEndAt: 0, lastCompactionAt: 0 },
+    { lastActivityAt: 0, lastTurnEndAt: 0, lastCompactionAt: 0, lastHeldMarkAt: 0 },
     'tracking is per-thread',
   );
 });
@@ -883,6 +885,7 @@ test('compactIdleTracking: a session swap reads as no history (not the old marke
     lastActivityAt: 0,
     lastTurnEndAt: 0,
     lastCompactionAt: 0,
+    lastHeldMarkAt: 0,
   });
 });
 
@@ -916,6 +919,7 @@ test('compactIdleTracking: a compaction stamp under a new session starts the ent
     lastActivityAt: 0,
     lastTurnEndAt: 0,
     lastCompactionAt: activityAt + 120_000,
+    lastHeldMarkAt: 0,
   });
 });
 
@@ -934,7 +938,31 @@ test('compactIdleTracking: stamping under a new session overwrites, never merges
     lastActivityAt: activityAt + 120_000,
     lastTurnEndAt: 0,
     lastCompactionAt: 0,
+    lastHeldMarkAt: 0,
   });
+});
+
+test('compactIdleTracking: the held idle mark survives a reload, rides beside the other instants, and is reset by a session swap', async () => {
+  // The idle mark that found the process working forwent its compaction; a hot reload during the hold must not forget that, or
+  // the re-armed (overdue) fire would post its notice again and compact long after the cache went cold.
+  const heldAt = activityAt + 55 * 60_000;
+  const first = new StateStore(dataDir, { saveDebounceMs: 5 });
+  await first.init();
+  await first.setAgent(key1, { name: 'claude', claudeSessionId: sessionIdA });
+  first.noteCompactIdleActivity(key1, activityAt);
+  first.noteCompactIdleTurnEnd(key1, activityAt);
+  await first.setCompactIdleMarkHeldAt(key1, heldAt);
+  first.noteCompactIdleActivity(key1, heldAt + 1_000);
+  assert.deepEqual(first.getCompactIdleTracking(key1), { lastActivityAt: heldAt + 1_000, lastTurnEndAt: activityAt, lastCompactionAt: 0, lastHeldMarkAt: heldAt }, 'stamping activity leaves the held mark alone');
+  await first.flush();
+
+  const second = new StateStore(dataDir, { saveDebounceMs: 5 });
+  await second.init();
+  assert.equal(second.getCompactIdleTracking(key1).lastHeldMarkAt, heldAt, 'persisted');
+  await second.setAgent(key1, { name: 'claude', claudeSessionId: sessionIdB });
+  assert.equal(second.getCompactIdleTracking(key1).lastHeldMarkAt, 0, 'a different session starts without it');
+  await second.setCompactIdleMarkHeldAt(key2, heldAt);
+  assert.equal(second.getCompactIdleTracking(key2).lastHeldMarkAt, 0, 'a thread with no session id has nothing to bind it to');
 });
 
 // ── full-compaction-summary toggle (/compact_summary) ──

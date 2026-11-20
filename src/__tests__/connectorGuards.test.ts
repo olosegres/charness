@@ -393,7 +393,7 @@ describe('the guards are wired where they must run', () => {
       'requests/requestGroup.ts', 'sessionKey.ts', 'state.ts', 'stateFile.ts', 'topicTalkers.ts', 'utils/agentEnvironment.ts', 'utils/autoContinueOnLimit.ts',
       'utils/checkIsRecord.ts', 'utils/claudeProfiles.ts', 'utils/claudeUsage.ts', 'utils/compactOnIdle.ts', 'utils/displayVerbosity.ts', 'utils/fallbackChain.ts',
       'utils/minutesOverride.ts', 'utils/modelRecentPlan.ts', 'utils/questionWaitChoices.ts', 'utils/surrogateSafeCut.ts', 'utils/threadToggle.ts', 'utils/topicIndicatorPlan.ts',
-      'utils/topicView.ts',
+      'utils/topicView.ts', 'utils/workingSignals.ts',
     ];
     assert.deepEqual(projectModules.filter((name) => !allowed.includes(name)), []);
     assert.ok(projectModules.includes('cli/connectorGuards.ts'), 'the probe is not vacuous');

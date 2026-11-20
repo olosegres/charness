@@ -18,7 +18,8 @@ import {
   getAgentIdleMs,
   getIdleFireDecision,
   checkIsBusyForRealTurn,
-  checkIsWorkingAtIdle,
+  getWorkingSignalsAtIdle,
+  checkIsIdleMarkSpent,
   buildCompactionInstruction,
   compactionSummaryGuidance,
   compactionSkillsGuidance,
@@ -61,7 +62,8 @@ type IdleFireInput = Parameters<typeof getIdleFireDecision>[0];
 /** The all-conditions-met base for the idle-fire decision (D1/D2, L3): compact AND stop. */
 const fireBase = {
   isSessionActive: true,
-  isWorking: false,
+  workingSignals: [],
+  isIdleMarkSpent: false,
   isEnabled: true,
   isLatched: false,
   hasCompletedTurnSinceCompaction: true,
@@ -231,17 +233,73 @@ test('getIdleCompactionArmDecision: the override window is the one armed and the
 });
 
 test('getIdleFireDecision: idle, enabled, unlatched, with a turn to compress, no limit wait → compact AND stop (L-D1)', () => {
-  assert.deepEqual(getIdleFireDecision({ ...fireBase }), { shouldCompact: true, compactionSkipReasons: [], shouldSuspend: true, suspendSkipReasons: [] });
+  assert.deepEqual(getIdleFireDecision({ ...fireBase }), {
+    shouldCompact: true, compactionSkipReasons: [], shouldSuspend: true, suspendSkipReasons: [], isIdleMarkHeld: false, heldNoticeReason: null,
+  });
 });
 
 test('getIdleFireDecision: no session or WORKING (L-D2) → nothing happens, neither compaction nor stop', () => {
-  for (const input of [{ ...fireBase, isSessionActive: false }, { ...fireBase, isWorking: true }]) {
+  for (const input of [{ ...fireBase, isSessionActive: false }, { ...fireBase, workingSignals: [{ kind: 'turn' }] as const }]) {
     const decision = getIdleFireDecision(input);
     assert.equal(decision.shouldCompact, false);
     assert.equal(decision.shouldSuspend, false, 'a working process is never stopped');
     assert.deepEqual(decision.suspendSkipReasons, decision.compactionSkipReasons);
   }
-  assert.deepEqual(getIdleFireDecision({ ...fireBase, isWorking: true }).suspendSkipReasons, ['working']);
+});
+
+test('getIdleFireDecision: the log names WHICH signal holds the process (busy turn / unconsumed input N / compaction in flight / background tasks / scheduled jobs)', () => {
+  const held = (workingSignals: IdleFireInput['workingSignals']): string[] => getIdleFireDecision({ ...fireBase, workingSignals }).suspendSkipReasons;
+  assert.deepEqual(held([{ kind: 'turn' }]), ['working (busy turn)']);
+  assert.deepEqual(held([{ kind: 'unconsumedInput', count: 2 }]), ['working (unconsumed input 2)']);
+  assert.deepEqual(held([{ kind: 'compaction' }]), ['working (compaction in flight)']);
+  assert.deepEqual(held([{ kind: 'backgroundTasks', count: 1 }, { kind: 'scheduledJobs', count: 3 }]), ['working (background tasks 1, scheduled jobs 3)']);
+  assert.deepEqual(held([{ kind: 'turn' }, { kind: 'taskTurnOnItsWay' }]), ['working (busy turn, task result turn on its way)']);
+});
+
+test('getIdleFireDecision: a process held at the idle mark forgoes a compaction that was due — the mark is held, and the topic is told why, once', () => {
+  const held = getIdleFireDecision({ ...fireBase, workingSignals: [{ kind: 'backgroundTasks', count: 1 }] });
+  assert.equal(held.shouldCompact, false);
+  assert.equal(held.isIdleMarkHeld, true);
+  assert.equal(held.heldNoticeReason, 'backgroundWork');
+  assert.equal(getIdleFireDecision({ ...fireBase, workingSignals: [{ kind: 'unconsumedInput', count: 1 }] }).heldNoticeReason, 'unconsumedInput');
+  assert.equal(getIdleFireDecision({ ...fireBase, workingSignals: [{ kind: 'turn' }] }).heldNoticeReason, 'turn');
+});
+
+test('getIdleFireDecision: a compaction in flight at the idle mark holds the mark but has nothing to tell', () => {
+  const decision = getIdleFireDecision({ ...fireBase, workingSignals: [{ kind: 'compaction' }] });
+  assert.equal(decision.isIdleMarkHeld, true);
+  assert.equal(decision.heldNoticeReason, null);
+});
+
+test('getIdleFireDecision: a compaction that was not due anyway is not "held" — no notice for a skip the hold did not cause', () => {
+  const working = [{ kind: 'backgroundTasks', count: 1 }] as const;
+  for (const override of [{ isEnabled: false }, { isLatched: true }, { hasCompletedTurnSinceCompaction: false }, { isLimitWaitArmed: true }, { isSessionActive: false }]) {
+    const decision = getIdleFireDecision({ ...fireBase, ...override, workingSignals: working });
+    assert.equal(decision.isIdleMarkHeld, false, JSON.stringify(override));
+    assert.equal(decision.heldNoticeReason, null, JSON.stringify(override));
+  }
+});
+
+test('checkIsIdleMarkSpent: a held mark is spent until activity comes after it', () => {
+  assert.equal(checkIsIdleMarkSpent({ lastActivityAt: 100, lastHeldMarkAt: 0 }), false, 'never held');
+  assert.equal(checkIsIdleMarkSpent({ lastActivityAt: 100, lastHeldMarkAt: 200 }), true, 'held at the mark, nothing since');
+  assert.equal(checkIsIdleMarkSpent({ lastActivityAt: 300, lastHeldMarkAt: 200 }), false, 'activity after it: a new idle period, a new mark');
+  assert.equal(checkIsIdleMarkSpent({ lastActivityAt: 200, lastHeldMarkAt: 200 }), false, 'the same instant is not after it');
+});
+
+test('getIdleFireDecision: a RE-CHECK of a held mark never compacts — a compaction after the idle window reads a cold cache — and decides only the stop', () => {
+  // Still held: nothing happens, and the notice is not repeated.
+  const stillHeld = getIdleFireDecision({ ...fireBase, isIdleMarkSpent: true, workingSignals: [{ kind: 'backgroundTasks', count: 1 }] });
+  assert.equal(stillHeld.shouldCompact, false);
+  assert.equal(stillHeld.shouldSuspend, false);
+  assert.equal(stillHeld.isIdleMarkHeld, false, 'the mark was held at the first fire: nothing new to remember');
+  assert.equal(stillHeld.heldNoticeReason, null, 'told once, never on a re-check');
+  // No longer held (the hold ran out, the task ended): the stop, but no late compaction.
+  const released = getIdleFireDecision({ ...fireBase, isIdleMarkSpent: true });
+  assert.equal(released.shouldCompact, false);
+  assert.equal(released.shouldSuspend, true, 'the stop still follows');
+  assert.deepEqual(released.compactionSkipReasons, ['the idle mark passed while the process was held (the prompt cache is cold by now)']);
+  assert.equal(released.isIdleMarkHeld, false);
 });
 
 test('getIdleFireDecision: each compaction guard skips the compaction but the stop still happens (L-D1, L-D6)', () => {
@@ -275,24 +333,30 @@ test('checkIsBusyForRealTurn: a pending question is NOT a real-turn busy (D1 fir
   assert.equal(checkIsBusyForRealTurn({ isBusy: false, hasPendingQuestion: false }), false);
 });
 
-test('checkIsWorkingAtIdle: a pending question excuses the turn alone — over a background task the process is working (L-D2)', () => {
+test('getWorkingSignalsAtIdle: a pending question excuses the turn alone — over a background task the process is working (L-D2)', () => {
   // The L3 review case: question pending AND a background task running. The old probe masked the
   // whole adapter "working" reading behind the question and would compact, re-ask, then stop — killing the task.
-  assert.equal(checkIsWorkingAtIdle({ isBusy: true, hasPendingQuestion: true, hasBackgroundWork: true }), true);
-  assert.equal(checkIsWorkingAtIdle({ isBusy: true, hasPendingQuestion: true, hasBackgroundWork: false }), false, 'the question alone: idle-waiting (D1 fires)');
-  assert.equal(checkIsWorkingAtIdle({ isBusy: true, hasPendingQuestion: false, hasBackgroundWork: false }), true, 'a real turn');
-  assert.equal(checkIsWorkingAtIdle({ isBusy: false, hasPendingQuestion: false, hasBackgroundWork: true }), true, 'a background task between turns');
-  assert.equal(checkIsWorkingAtIdle({ isBusy: false, hasPendingQuestion: false, hasBackgroundWork: false }), false);
-  const decision = getIdleFireDecision({ ...fireBase, isWorking: checkIsWorkingAtIdle({ isBusy: true, hasPendingQuestion: true, hasBackgroundWork: true }) });
+  const backgroundTask = [{ kind: 'backgroundTasks', count: 1 }] as const;
+  assert.deepEqual(getWorkingSignalsAtIdle({ isBusy: true, hasPendingQuestion: true, backgroundSignals: backgroundTask }), backgroundTask);
+  assert.deepEqual(getWorkingSignalsAtIdle({ isBusy: true, hasPendingQuestion: true, backgroundSignals: [] }), [], 'the question alone: idle-waiting (D1 fires)');
+  assert.deepEqual(getWorkingSignalsAtIdle({ isBusy: true, hasPendingQuestion: false, backgroundSignals: [] }), [{ kind: 'turn' }], 'a real turn');
+  assert.deepEqual(getWorkingSignalsAtIdle({ isBusy: false, hasPendingQuestion: false, backgroundSignals: backgroundTask }), backgroundTask, 'a background task between turns');
+  assert.deepEqual(getWorkingSignalsAtIdle({ isBusy: false, hasPendingQuestion: false, backgroundSignals: [] }), []);
+  assert.deepEqual(
+    getWorkingSignalsAtIdle({ isBusy: true, hasPendingQuestion: false, backgroundSignals: backgroundTask }),
+    [{ kind: 'turn' }, ...backgroundTask],
+    'a real turn and a task: both are named',
+  );
+  const decision = getIdleFireDecision({ ...fireBase, workingSignals: getWorkingSignalsAtIdle({ isBusy: true, hasPendingQuestion: true, backgroundSignals: backgroundTask }) });
   assert.equal(decision.shouldCompact, false);
   assert.equal(decision.shouldSuspend, false, 'never stopped: the stop would kill the task');
 });
 
 test('a pending question at idle still fires (D1): it is not "working"', () => {
-  // A question pending → checkIsBusyForRealTurn is false → the decision fires so the
+  // A question pending → no real turn among the signals → the decision fires so the
   // watchdog can reject + compact + re-ask.
-  const isWorking = checkIsBusyForRealTurn({ isBusy: true, hasPendingQuestion: true });
-  assert.equal(getIdleFireDecision({ ...fireBase, isWorking }).shouldCompact, true);
+  const workingSignals = getWorkingSignalsAtIdle({ isBusy: true, hasPendingQuestion: true, backgroundSignals: [] });
+  assert.equal(getIdleFireDecision({ ...fireBase, workingSignals }).shouldCompact, true);
 });
 
 test('buildCompactionInstruction: Claude backends get the D3 + resume guidance, closing last', () => {

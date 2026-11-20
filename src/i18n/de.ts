@@ -503,6 +503,9 @@ export const deDict: Record<string, string> = {
   'compactOnIdle.setGlobal': '✅ Auto-Komprimierung bei Leerlauf: {state} für ALLE Themen (themenspezifische Überschreibungen gelten weiterhin).',
   'compactOnIdle.unsupported': 'Auto-Komprimierung bei Leerlauf gilt für eine aktive Agent-Sitzung. Starte zuerst /claude oder /opencode in einem gebundenen Thema.',
   'compactOnIdle.pendingQuestionReask': '❓ Du hast noch eine offene Frage. Tippe auf eine Option, um sie zu beantworten und fortzufahren:',
+  'compactOnIdle.skipped.backgroundWorkNotice': '🧹 Kompression bei Leerlauf übersprungen: Die Hintergrundarbeit des Agenten läuft noch, das Gespräch blieb unverändert.',
+  'compactOnIdle.skipped.unconsumedInputNotice': '🧹 Kompression bei Leerlauf übersprungen: Eine Nachricht an den Agenten wurde noch nicht aufgenommen, das Gespräch blieb unverändert.',
+  'compactOnIdle.skipped.runningTurnNotice': '🧹 Kompression bei Leerlauf übersprungen: Der Agent arbeitet noch, das Gespräch blieb unverändert.',
   'compactSummary.on': 'EIN',
   'compactSummary.off': 'AUS',
   'compactSummary.title':

@@ -13,9 +13,11 @@
  *     lifecycle: the idle compaction first, the stop after it
  *   → BG-7's task ends with only its notification saying a turn is coming (no running event) and the turn starting
  *     after an idle window: the idle fire lands in that gap, keeps the process, and the turn reaches the topic
- *   → BG-2 leaves a task that never reports: the idle fire keeps the process while the hold lasts and looks again,
- *     and once the hold is spent the process is compacted and stopped — a forgotten task does not pin it forever; the
- *     topic gets ONE line naming the task, and the agent is not woken for it
+ *   → BG-2 leaves a task that never reports: the idle mark finds the process working, skips its compaction and says so
+ *     in ONE line of the topic (the compaction belongs to the idle mark: it reads the warm prompt cache, a later one only
+ *     costs more), the later looks keep the process while the hold lasts, and once the hold is spent the process is
+ *     stopped — never compacted late; a forgotten task does not pin it forever; the topic gets ONE line naming the task,
+ *     and the agent is not woken for it
  *   → the next message (BG-3) carries the note about the lost task to the agent, once
  *   → BG-3's process is killed while its task runs (a crash): one line in the topic, and the conversation is resumed
  *     at once with a note naming the lost task — the agent is not left waiting for a notification that never comes
@@ -149,6 +151,14 @@ function findOutput(text: string, fromIndex: number): number {
 }
 
 const stopLine = `[compact-on-idle] ${topicKey} process stopped; the session sleeps`;
+/** The line the topic gets when the idle mark finds the agent's background work running and skips the compaction. */
+const heldNoticeText = enDict['compactOnIdle.skipped.backgroundWorkNotice'];
+
+/** The topic's lines that say an idle compaction was skipped for the agent's background work. */
+function listHeldNotices(): string[] {
+  return topic.listMessages().map((message) => message.text).filter((text) => text === heldNoticeText);
+}
+
 /** The first line of the note the agent gets about lost work (`utils/lostWork.ts`). */
 const lostWorkNoteStart = '[charness] This conversation\'s agent process ended while its own work was still pending';
 /** The end of the topic line when the bot resumed the agent at once, and when the next message will. */
@@ -312,21 +322,28 @@ describe('The agent\'s own background work is never cut off by an automatic stop
     }
   });
 
-  it('a task that never reports holds the process only for the hold: the idle fire keeps it and looks again, then the process is compacted and stopped', async () => {
+  it('a task that never reports holds the process only for the hold: the idle mark skips the compaction and says so once, the looks again keep the process, then it is stopped — never compacted late', async () => {
     const outputBefore = getCharness().output.length;
     const compactionsBefore = listCompactions().length;
+    const heldNoticesBefore = listHeldNotices().length;
     fakeTelegram.pushOperatorMessage(topicThreadId, 'BG-2 [fake:background-notify] start a watcher and forget it');
     await topic.waitForMessage('the answer to BG-2', (message) => message.text.includes('Fake final answer for BG-2'));
     const answeredAt = Date.now();
     const pid = getTurnPid('BG-2');
 
-    await getCharness().waitFor('the idle fire to keep the process for its task', idleStopTimeoutMs, () => findOutput(`[compact-on-idle] ${topicKey} process kept: working`, outputBefore) >= 0);
+    // The log names WHICH signal holds the process.
+    await getCharness().waitFor('the idle fire to keep the process for its task', idleStopTimeoutMs, () => findOutput(`[compact-on-idle] ${topicKey} process kept: working (background tasks 1)`, outputBefore) >= 0);
     await getCharness().waitFor('the idle fire to look again', replyTimeoutMs, () => findOutput(`[compact-on-idle] ${topicKey} looks again in`, outputBefore) >= 0);
     assert.ok(checkIsPidAlive(pid), 'kept while the hold lasts');
+    // The mark was held: the topic is told once, in plain words, that the compaction was skipped and why.
+    await topic.waitForMessage('the line saying the idle compaction was skipped', (message) => message.text === heldNoticeText);
+    assert.equal(listCompactions().length, compactionsBefore, 'no compaction while the process is held');
 
     await getCharness().waitFor('the stop once the hold is spent', holdStopTimeoutMs, () => findOutput(stopLine, outputBefore) >= 0);
     assert.ok(Date.now() - answeredAt >= backgroundHoldMs, 'not stopped before the hold was spent');
-    assert.ok(listCompactions().length > compactionsBefore, 'compacted before the stop');
+    // The re-checks decided only the stop: a compaction after the idle window would read a cold cache.
+    assert.equal(listCompactions().length, compactionsBefore, 'not compacted at the later looks or at the stop');
+    assert.equal(listHeldNotices().length, heldNoticesBefore + 1, 'told once, never on a re-check');
     assert.ok(!checkIsPidAlive(pid), 'the process is gone');
     // The task went with the process: one line, and the agent is not woken for a task nobody heard from.
     await topic.waitForMessage('the line about the task the stop let go', (message) => listLostWorkLines('BG-2').includes(message.text));

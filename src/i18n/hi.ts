@@ -503,6 +503,9 @@ export const hiDict: Record<string, string> = {
   'compactOnIdle.setGlobal': '✅ निष्क्रियता पर स्वतः संक्षेपण: सभी विषयों के लिए {state} (प्रति-विषय ओवरराइड अब भी लागू रहते हैं)।',
   'compactOnIdle.unsupported': 'निष्क्रियता पर स्वतः संक्षेपण किसी सक्रिय एजेंट सत्र पर लागू होता है। पहले किसी बाउंड विषय में /claude या /opencode शुरू करें।',
   'compactOnIdle.pendingQuestionReask': '❓ आपका एक प्रश्न अब भी लंबित है। उत्तर देकर आगे बढ़ने के लिए किसी विकल्प पर टैप करें:',
+  'compactOnIdle.skipped.backgroundWorkNotice': '🧹 निष्क्रिय रहने पर संक्षेपण छोड़ा गया: एजेंट का बैकग्राउंड कार्य अभी चल रहा है, इसलिए बातचीत जैसी थी वैसी रखी गई।',
+  'compactOnIdle.skipped.unconsumedInputNotice': '🧹 निष्क्रिय रहने पर संक्षेपण छोड़ा गया: एजेंट को भेजा गया एक संदेश अभी तक स्वीकार नहीं हुआ है, इसलिए बातचीत जैसी थी वैसी रखी गई।',
+  'compactOnIdle.skipped.runningTurnNotice': '🧹 निष्क्रिय रहने पर संक्षेपण छोड़ा गया: एजेंट अभी काम कर रहा है, इसलिए बातचीत जैसी थी वैसी रखी गई।',
   'compactSummary.on': 'चालू',
   'compactSummary.off': 'बंद',
   'compactSummary.title':

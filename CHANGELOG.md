@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+**When the agent's process is still working at the idle mark, the topic now gets one line saying the idle compaction was skipped and why — and the compaction is never made late.**
+Before, such a mark was skipped without a word in the topic (only the bot's console said «compaction is skipped: working»), and the compaction ran at some later look — hours on, long after the prompt cache had gone cold, so it only cost more — or never. Now the idle compaction runs only AT the idle mark: if the agent's background work, a message it has not taken in, or a running turn holds the process then, the bot says so in one silent line (what is still running) and leaves the conversation as it is. The later looks only decide the stop of the process; the next turn of the agent starts a new idle period whose mark compacts again. The bot's console now names which signal holds the process (`working (busy turn, unconsumed input 2)`), and the mark's state survives a restart.
+
 **An idle topic is no longer taken for «working» for hours after you sent the agent several messages while it was busy — the idle compaction and the idle stop run on time again.**
 Before, two or more messages sent while the agent was in the middle of a turn (voice notes, say) were taken in by Claude Code together, as one message; the bot counted every one of them as still waiting, took the process for working for good, and at the idle mark skipped both the compaction and the stop — every 55 minutes, without a word in the topic — until you typed `/compact` yourself. The same stuck count also held back automatic updates and account switches. Now the bot matches what the agent took in with what it wrote, so those messages count as taken in. And as a safety net, a message the agent never confirms keeps a process that runs no turn for 30 seconds only, and a compaction flag nobody cleared for no longer than the bot itself waits for a compaction (30 minutes).
 

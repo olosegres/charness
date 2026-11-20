@@ -11,6 +11,7 @@
 import type { CompactCommandRoute } from './compactCommandRoute';
 import { resolveDefaultOnThreadToggle, resolveThreadToggle } from './threadToggle';
 import { getMinutesOverrideMs } from './minutesOverride';
+import { describeWorkingSignals, getIdleHeldNoticeReason, type BackgroundWorkSignal, type IdleHeldNoticeReason, type WorkingSignal } from './workingSignals';
 
 /**
  * Idle interval before an untouched, idle agent session is auto-compacted (F2)
@@ -201,19 +202,18 @@ export function checkIsBusyForRealTurn(input: {
 }
 
 /**
- * @description Whether the process is WORKING at the idle fire (L-D2): a real
- * running turn ({@link checkIsBusyForRealTurn} — a pending question excuses the
- * turn, D1) OR background work the question never excuses (a background task,
- * input not yet taken in, a compaction in flight). The two are read apart so a
- * question pending over a running background task still reads as working: the
- * D1 reject-compact-re-ask would otherwise end in a stop that kills the task.
+ * @description What keeps the process WORKING at the idle fire (L-D2), by name: a real running turn
+ * ({@link checkIsBusyForRealTurn} — a pending question excuses the turn, D1) and the background signals the question
+ * never excuses (a background task, input not yet taken in, a compaction in flight). The two are read apart so a question
+ * pending over a running background task still reads as working: the D1 reject-compact-re-ask would otherwise end in a
+ * stop that kills the task. Empty when the process is idle.
  */
-export function checkIsWorkingAtIdle(input: {
+export function getWorkingSignalsAtIdle(input: {
   isBusy: boolean;
   hasPendingQuestion: boolean;
-  hasBackgroundWork: boolean;
-}): boolean {
-  return checkIsBusyForRealTurn(input) || input.hasBackgroundWork;
+  backgroundSignals: readonly BackgroundWorkSignal[];
+}): WorkingSignal[] {
+  return checkIsBusyForRealTurn(input) ? [{ kind: 'turn' }, ...input.backgroundSignals] : [...input.backgroundSignals];
 }
 
 /** Past the pending-work hold's end by this much, the re-check finds the hold spent rather than a few ms left. */
@@ -230,6 +230,15 @@ export function getPendingWorkRecheckDelayMs(input: { idleWindowMs: number; hold
   return Math.min(input.idleWindowMs, input.holdRemainingMs + pendingWorkRecheckMarginMs);
 }
 
+/**
+ * @description Whether the idle mark of the thread's CURRENT idle period was already held: a fire found the process working and
+ * forwent its compaction (`lastHeldMarkAt`), and no activity has come since (`lastActivityAt` — activity warms the prompt cache
+ * again and starts a new idle period, whose mark may compact). Both instants are persisted, so a restart keeps the answer.
+ */
+export function checkIsIdleMarkSpent(input: { lastActivityAt: number; lastHeldMarkAt: number }): boolean {
+  return input.lastHeldMarkAt > input.lastActivityAt;
+}
+
 /** What the idle timer does when it fires: the compaction half and the stop half, each with its reasons. */
 export interface IdleFireDecision {
   /** Run the idle compaction (D1/D2). */
@@ -240,6 +249,13 @@ export interface IdleFireDecision {
   shouldSuspend: boolean;
   /** Why the process stays. */
   suspendSkipReasons: string[];
+  /**
+   * This fire forgoes a compaction that was due ONLY because the process is held: the caller remembers the idle mark as held
+   * (see {@link getIdleFireDecision}'s `isIdleMarkSpent`). False for a re-check, which has nothing new to remember.
+   */
+  isIdleMarkHeld: boolean;
+  /** What to tell the topic about the forgone compaction — once, at the fire that holds the mark; `null`: nothing to say. */
+  heldNoticeReason: IdleHeldNoticeReason | null;
 }
 
 /**
@@ -247,7 +263,8 @@ export interface IdleFireDecision {
  * (lifecycle plan L3). Nothing happens to a session that is not there or is
  * WORKING (L-D2: a real running turn, a background task, input not yet taken in,
  * a compaction in flight — a pending interactive question is NOT work, see
- * {@link checkIsBusyForRealTurn}; D1); the next activity re-arms the timer.
+ * {@link checkIsBusyForRealTurn}; D1); the next activity re-arms the timer. The reasons name WHICH signals hold the
+ * process (`working (busy turn, unconsumed input 2)`).
  *
  * The compaction runs only when the feature is enabled for the thread, the
  * per-thread user-latch is NOT already spent (D2 — after a fire it stays latched
@@ -256,37 +273,60 @@ export interface IdleFireDecision {
  * last compaction (otherwise there is nothing new to compress), and no
  * usage-limit wait is armed (L-D6: a compaction turn would hit the limit).
  *
+ * The compaction belongs to the IDLE MARK alone: it exists to read the still-warm prompt cache, which is gone a little after the
+ * idle window (`idleCompactMs`), so a compaction later than the mark is only an expensive one. A process held at the mark
+ * (a compaction that was otherwise due is then `isIdleMarkHeld`) does NOT get its compaction on a later look: once the mark is
+ * spent (`isIdleMarkSpent` — it was held and no activity has re-warmed the cache since) every later fire, the re-checks of a
+ * held process, decides only the stop. Activity re-arms the countdown, and with it the next mark's compaction.
+ *
  * The STOP happens whether or not the compaction runs (L-D1: a resume restores
  * the full history, so a stopped process loses nothing) — on a backend that can
  * be suspended; the tmux TUI and OpenCode stay (L-D8).
  */
 export function getIdleFireDecision(input: {
   isSessionActive: boolean;
-  isWorking: boolean;
+  /** What holds the process now (empty: idle); see {@link getWorkingSignalsAtIdle}. */
+  workingSignals: readonly WorkingSignal[];
+  /** The idle mark of this idle period was already held (a fire found the process working and forwent its compaction). */
+  isIdleMarkSpent: boolean;
   isEnabled: boolean;
   isLatched: boolean;
   hasCompletedTurnSinceCompaction: boolean;
   isLimitWaitArmed: boolean;
   canSuspend: boolean;
 }): IdleFireDecision {
-  const notIdleReasons = [
-    !input.isSessionActive && 'no active session',
-    input.isWorking && 'working',
-  ].filter((reason): reason is string => typeof reason === 'string');
-  if (notIdleReasons.length > 0) {
-    return { shouldCompact: false, compactionSkipReasons: notIdleReasons, shouldSuspend: false, suspendSkipReasons: notIdleReasons };
-  }
-  const compactionSkipReasons = [
+  const isWorking = input.workingSignals.length > 0;
+  const compactionBlockers = [
     !input.isEnabled && 'disabled',
     input.isLatched && 'latched (D2)',
     !input.hasCompletedTurnSinceCompaction && 'nothing to compress',
     input.isLimitWaitArmed && 'a usage-limit wait is armed (L-D6)',
   ].filter((reason): reason is string => typeof reason === 'string');
+  const notIdleReasons = [
+    !input.isSessionActive && 'no active session',
+    isWorking && `working (${describeWorkingSignals(input.workingSignals)})`,
+  ].filter((reason): reason is string => typeof reason === 'string');
+  if (notIdleReasons.length > 0) {
+    const isIdleMarkHeld = input.isSessionActive && isWorking && !input.isIdleMarkSpent && compactionBlockers.length === 0;
+    return {
+      shouldCompact: false,
+      compactionSkipReasons: notIdleReasons,
+      shouldSuspend: false,
+      suspendSkipReasons: notIdleReasons,
+      isIdleMarkHeld,
+      heldNoticeReason: isIdleMarkHeld ? getIdleHeldNoticeReason(input.workingSignals) : null,
+    };
+  }
+  const compactionSkipReasons = input.isIdleMarkSpent
+    ? [...compactionBlockers, 'the idle mark passed while the process was held (the prompt cache is cold by now)']
+    : compactionBlockers;
   return {
     shouldCompact: compactionSkipReasons.length === 0,
     compactionSkipReasons,
     shouldSuspend: input.canSuspend,
     suspendSkipReasons: input.canSuspend ? [] : ['the backend is not suspended'],
+    isIdleMarkHeld: false,
+    heldNoticeReason: null,
   };
 }
 

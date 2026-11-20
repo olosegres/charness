@@ -21,7 +21,11 @@ backends:
   finished task's result it is about to read, a `CronCreate` job or a `/loop`
   wakeup it scheduled.
   That work keeps the process for up to 6 h after the agent's last turn, so a
-  task nobody hears from does not keep it forever. When that work is lost
+  task nobody hears from does not keep it forever. A message you sent that the agent has not
+  taken in keeps it for 30 seconds only. The idle **compaction** is
+  not held back and run later: it belongs to the idle mark (the prompt cache is cold after it),
+  so a process that is working at the mark is not compacted — the topic gets one line saying why —
+  and the later looks only decide its stop. When that work is lost
   anyway (a crash, a process gone after a restart, a `/model` / `/effort` /
   account restart, a task let go after 6 h), the topic gets one plain line and
   the agent is resumed with a note to check that work again — or, after a

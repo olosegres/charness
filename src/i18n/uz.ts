@@ -503,6 +503,9 @@ export const uzDict: Record<string, string> = {
   'compactOnIdle.setGlobal': '✅ Bo‘sh turganda avtosiqish: BARCHA mavzular uchun {state} (mavzu bo‘yicha bekor qilishlar amal qiladi).',
   'compactOnIdle.unsupported': 'Bo‘sh turganda avtosiqish faol agent seansiga taalluqli. Avval bog‘langan mavzuda /claude yoki /opencode ni ishga tushiring.',
   'compactOnIdle.pendingQuestionReask': '❓ Sizda hali javob berilmagan savol bor. Javob berib davom etish uchun variantni bosing:',
+  'compactOnIdle.skipped.backgroundWorkNotice': '🧹 Bo‘sh turganda siqish o‘tkazib yuborildi: agentning fon ishi hali davom etmoqda, suhbat o‘z holicha qoldirildi.',
+  'compactOnIdle.skipped.unconsumedInputNotice': '🧹 Bo‘sh turganda siqish o‘tkazib yuborildi: agentga yuborilgan xabar hali qabul qilinmagan, suhbat o‘z holicha qoldirildi.',
+  'compactOnIdle.skipped.runningTurnNotice': '🧹 Bo‘sh turganda siqish o‘tkazib yuborildi: agent hali ishlayapti, suhbat o‘z holicha qoldirildi.',
   'compactSummary.on': 'YONIQ',
   'compactSummary.off': "O‘CHIQ",
   'compactSummary.title':

@@ -369,6 +369,10 @@ export interface ParkedSession {
  *    there is something to compress.
  *  - `lastCompactionAt` — last compaction of this thread (any trigger: manual
  *    `/compact`, the F1 tool, or an F2 idle fire).
+ *  - `lastHeldMarkAt`  — last idle mark that found the process WORKING and forwent its compaction. The compaction belongs
+ *    to the idle mark (the prompt cache is cold later), so while this is newer than `lastActivityAt` — no activity has
+ *    re-warmed the cache since — no later fire compacts, and the topic is not told again. Persisted, so a restart (hot
+ *    reload) during the hold neither repeats the notice nor compacts late.
  *
  * The fire guard is `lastTurnEndAt > lastCompactionAt`, which used to live in a
  * process-local map: after a restart both were `0`, the comparison was false, and
@@ -385,6 +389,7 @@ export interface CompactIdleTrackingEntry {
   lastActivityAt?: number;
   lastTurnEndAt?: number;
   lastCompactionAt?: number;
+  lastHeldMarkAt?: number;
 }
 
 /**
@@ -2202,17 +2207,19 @@ export class StateStore {
     lastActivityAt: number;
     lastTurnEndAt: number;
     lastCompactionAt: number;
+    lastHeldMarkAt: number;
   } {
     const k = keyToString(key);
     const entry = this.state.compactIdleTracking?.[k];
     const sessionId = this.getAgentSessionId(k);
     if (!entry || !sessionId || entry.sessionId !== sessionId) {
-      return { lastActivityAt: 0, lastTurnEndAt: 0, lastCompactionAt: 0 };
+      return { lastActivityAt: 0, lastTurnEndAt: 0, lastCompactionAt: 0, lastHeldMarkAt: 0 };
     }
     return {
       lastActivityAt: entry.lastActivityAt ?? 0,
       lastTurnEndAt: entry.lastTurnEndAt ?? 0,
       lastCompactionAt: entry.lastCompactionAt ?? 0,
+      lastHeldMarkAt: entry.lastHeldMarkAt ?? 0,
     };
   }
 
@@ -2259,6 +2266,24 @@ export class StateStore {
       // session's instants describe a context this one no longer has.
       const base = existing?.sessionId === sessionId ? existing : {};
       tracking[k] = { ...base, sessionId, lastCompactionAt: now };
+      this.scheduleSave();
+    });
+  }
+
+  /**
+   * @description Stamp that the idle mark of `key` found its process working and forwent the compaction (see
+   * {@link CompactIdleTrackingEntry.lastHeldMarkAt}). Rare — once per held idle period — so it always schedules a save: a
+   * restart right after must still know the mark was spent.
+   */
+  async setCompactIdleMarkHeldAt(key: SessionKey, now: number = Date.now()): Promise<void> {
+    const k = keyToString(key);
+    await this.withLock(key, async () => {
+      const sessionId = this.getAgentSessionId(k);
+      if (!sessionId) return; // nothing to bind the marker to — see `getAgentSessionId`
+      const tracking = (this.state.compactIdleTracking ??= {});
+      const existing = tracking[k];
+      const base = existing?.sessionId === sessionId ? existing : {};
+      tracking[k] = { ...base, sessionId, lastHeldMarkAt: now };
       this.scheduleSave();
     });
   }

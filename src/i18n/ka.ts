@@ -503,6 +503,9 @@ export const kaDict: Record<string, string> = {
   'compactOnIdle.setGlobal': '✅ უმოქმედობისას ავტო-შეკუმშვა: {state} ყველა თემისთვის (თემების მიხედვით გადაფარვები კვლავ მოქმედებს).',
   'compactOnIdle.unsupported': 'უმოქმედობისას ავტო-შეკუმშვა მოქმედებს აქტიურ აგენტის სესიაზე. ჯერ დაბმულ თემაში გაუშვი /claude ან /opencode.',
   'compactOnIdle.pendingQuestionReask': '❓ შენ ჯერ კიდევ გაქვს უპასუხო კითხვა. შეეხე ვარიანტს, რომ უპასუხო და გააგრძელო:',
+  'compactOnIdle.skipped.backgroundWorkNotice': '🧹 უმოქმედობისას შეკუმშვა გამოტოვებულია: აგენტის ფონური სამუშაო ჯერ კიდევ მიმდინარეობს, საუბარი უცვლელად დარჩა.',
+  'compactOnIdle.skipped.unconsumedInputNotice': '🧹 უმოქმედობისას შეკუმშვა გამოტოვებულია: აგენტისთვის გაგზავნილი შეტყობინება ჯერ არ არის მიღებული, საუბარი უცვლელად დარჩა.',
+  'compactOnIdle.skipped.runningTurnNotice': '🧹 უმოქმედობისას შეკუმშვა გამოტოვებულია: აგენტი ჯერ კიდევ მუშაობს, საუბარი უცვლელად დარჩა.',
   'compactSummary.on': 'ჩართული',
   'compactSummary.off': 'გამორთული',
   'compactSummary.title':

@@ -23,11 +23,12 @@ import {
   formatTokenCount,
   type IdleCompactionArmKind,
   getIdleCompactionArmDecision,
-  checkIsWorkingAtIdle,
-  checkIsBusyForRealTurn,
+  getWorkingSignalsAtIdle,
+  checkIsIdleMarkSpent,
   getIdleFireDecision,
   getPendingWorkRecheckDelayMs,
 } from '../../../utils/compactOnIdle';
+import { describeWorkingSignals, type IdleHeldNoticeReason, type WorkingSignal } from '../../../utils/workingSignals';
 import { createStreamedSummaryTracker } from '../../../utils/streamedCompactionSummary';
 import { pruneStaleClaudeCompactSelfReviewFlags, syncCompactSelfReviewFlags, type CompactSelfReviewFlagDirs } from '../../../utils/compactSelfReviewFlags';
 import type { OutboundHints } from '../../../platform/outbound';
@@ -534,6 +535,13 @@ export function createCompaction(ports: CompactionPorts) {
     overdue: 'overdue (staggered)',
   };
 
+  /** The line a held idle mark posts into the topic (once), by why the process is held. */
+  const idleHeldNoticeKeys: Record<IdleHeldNoticeReason, string> = {
+    backgroundWork: 'compactOnIdle.skipped.backgroundWorkNotice',
+    unconsumedInput: 'compactOnIdle.skipped.unconsumedInputNotice',
+    turn: 'compactOnIdle.skipped.runningTurnNotice',
+  };
+
   /**
    * @description Re-arm the F2 idle timer for a thread on REAL activity (a user
    * message / command, a forwarded prompt, or agent output). Stamps the persisted
@@ -677,7 +685,7 @@ export function createCompaction(ports: CompactionPorts) {
   }
 
   /**
-   * @description Whether the topic's process is WORKING right now (L-D2). The
+   * @description What keeps the topic's process WORKING right now (L-D2), by name; empty when it is idle. The
    * turn and the background work are read APART: a pending interactive question
    * makes the session report busy, but it is idle-WAITING, not running a turn —
    * D1 treats that as a FIRE condition (reject + compact + re-ask), so the
@@ -685,11 +693,11 @@ export function createCompaction(ports: CompactionPorts) {
    * not yet taken in or a compaction in flight: with those the process is working
    * whatever the question says, and is neither compacted nor stopped.
    */
-  function checkIsThreadWorking(key: SessionKey, adapter: AgentAdapter): boolean {
-    return checkIsWorkingAtIdle({
+  function getThreadWorkingSignals(key: SessionKey, adapter: AgentAdapter): WorkingSignal[] {
+    return getWorkingSignalsAtIdle({
       isBusy: adapter.checkIsBusy?.(key) ?? false,
       hasPendingQuestion: pendingQuestions.has(keyToString(key)),
-      hasBackgroundWork: (adapter.getBackgroundWorkSignals?.(key) ?? []).length > 0,
+      backgroundSignals: adapter.getBackgroundWorkSignals?.(key) ?? [],
     });
   }
 
@@ -739,16 +747,19 @@ export function createCompaction(ports: CompactionPorts) {
     // Both instants come from the store, so a restart no longer erases the evidence
     // that this session has an un-compacted turn (the bug: two in-memory zeros made
     // `0 > 0` false, and D2's no-reschedule rule then left the feature dead).
-    const { lastTurnEndAt, lastCompactionAt } = getState().getCompactIdleTracking(key);
+    const { lastTurnEndAt, lastCompactionAt, lastActivityAt, lastHeldMarkAt } = getState().getCompactIdleTracking(key);
+    const workingSignals = getThreadWorkingSignals(key, adapter);
     const decision = getIdleFireDecision({
       isSessionActive: adapter.checkIsActive(key),
-      isWorking: checkIsThreadWorking(key, adapter),
+      workingSignals,
+      isIdleMarkSpent: checkIsIdleMarkSpent({ lastActivityAt, lastHeldMarkAt }),
       isEnabled: getState().checkIsCompactOnIdleEnabled(key),
       isLatched: getState().checkIsCompactIdleLatched(key),
       hasCompletedTurnSinceCompaction: lastTurnEndAt > lastCompactionAt,
       isLimitWaitArmed: checkIsLimitWaitArmed(key),
       canSuspend: typeof adapter.suspendSession === 'function',
     });
+    if (decision.isIdleMarkHeld) await noteIdleMarkHeld(key, decision.heldNoticeReason);
     if (decision.shouldCompact) {
       await runIdleCompaction(key, adapter);
     } else {
@@ -772,8 +783,9 @@ export function createCompaction(ports: CompactionPorts) {
       console.log(`[compact-on-idle] ${kStr} process already stopped during the idle fire`);
       return;
     }
-    if (checkIsThreadWorking(key, adapter)) {
-      console.log(`[compact-on-idle] ${kStr} process kept: it started working during the idle fire`);
+    const signalsAfterFire = getThreadWorkingSignals(key, adapter);
+    if (signalsAfterFire.length > 0) {
+      console.log(`[compact-on-idle] ${kStr} process kept: it started working during the idle fire (${describeWorkingSignals(signalsAfterFire)})`);
       armPendingWorkRecheck(key, adapter);
       return;
     }
@@ -781,18 +793,36 @@ export function createCompaction(ports: CompactionPorts) {
   }
 
   /**
-   * @description The idle fire found the process kept ONLY by the agent's own pending work (background tasks,
-   * scheduled jobs, a finished task's turn on its way) — no real turn runs. Look again at the next idle window or when
-   * the pending-work hold runs out, whichever is first: a task that never reports produces no output to re-arm the
-   * timer, and the hold must still end. A real turn keeps D2's rule — its output re-arms the timer.
+   * @description The idle mark found the process working and forwent a compaction that was due: remember it (persisted — a
+   * restart must neither repeat the line nor compact late) and, when there is something to say, tell the topic ONCE, silently,
+   * that the compaction was skipped and why. A re-check of this mark never gets here: it only decides the stop.
+   */
+  async function noteIdleMarkHeld(key: SessionKey, noticeReason: IdleHeldNoticeReason | null): Promise<void> {
+    // Remembered BEFORE the post: a restart between the two must not post it twice.
+    await getState().setCompactIdleMarkHeldAt(key);
+    // A tracker issue has no topic to narrate into (R6): the mark is held there all the same, silently.
+    if (noticeReason === null || !checkIsTelegramKey(key)) {
+      console.log(`[compact-on-idle] ${keyToString(key)} the idle mark is held: its compaction is forgone, nothing to tell the topic`);
+      return;
+    }
+    console.log(`[compact-on-idle] ${keyToString(key)} the idle mark is held (${noticeReason}): its compaction is forgone, the topic is told once`);
+    await replyToThread(key, t(idleHeldNoticeKeys[noticeReason]));
+  }
+
+  /**
+   * @description The idle fire found the process kept ONLY by signals that are not a running turn (the agent's own background
+   * tasks, scheduled jobs, a finished task's turn on its way, input not yet taken in, a compaction in flight). Look again at the
+   * next idle window or when the pending-work hold runs out, whichever is first: a task that never reports produces no output
+   * to re-arm the timer, and the hold must still end. A real turn keeps D2's rule — its output re-arms the timer. The look
+   * again decides only the STOP: a held mark never compacts late (`getIdleFireDecision`).
    */
   function armPendingWorkRecheck(key: SessionKey, adapter: AgentAdapter): void {
     const kStr = keyToString(key);
     if (!adapter.checkIsActive(key)) return;
-    const isRealTurn = checkIsBusyForRealTurn({ isBusy: adapter.checkIsBusy?.(key) ?? false, hasPendingQuestion: pendingQuestions.has(kStr) });
-    if (isRealTurn || (adapter.getBackgroundWorkSignals?.(key) ?? []).length === 0) return;
+    const workingSignals = getThreadWorkingSignals(key, adapter);
+    if (workingSignals.length === 0 || workingSignals.some((signal) => signal.kind === 'turn')) return;
     const delayMs = getPendingWorkRecheckDelayMs({ idleWindowMs, holdRemainingMs: adapter.getPendingWorkHoldRemainingMs?.(key) ?? null });
-    console.log(`[compact-on-idle] ${kStr} looks again in ${(delayMs / 60_000).toFixed(1)} min: only the agent's own pending work keeps it`);
+    console.log(`[compact-on-idle] ${kStr} looks again in ${(delayMs / 60_000).toFixed(1)} min: kept only by ${describeWorkingSignals(workingSignals)}, no turn runs`);
     setIdleFireTimer(key, delayMs);
   }
 

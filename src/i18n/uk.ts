@@ -509,6 +509,9 @@ export const ukDict: Record<string, string> = {
   'compactOnIdle.setGlobal': '✅ Авто-стиснення під час простою: {state} для ВСІХ тем (перевизначення по темах діють далі).',
   'compactOnIdle.unsupported': 'Авто-стиснення під час простою застосовується до активної сесії агента. Спочатку запусти /claude або /opencode у прив’язаній темі.',
   'compactOnIdle.pendingQuestionReask': '❓ У тебе лишилося запитання без відповіді. Натисни варіант, щоб відповісти та продовжити:',
+  'compactOnIdle.skipped.backgroundWorkNotice': '🧹 Стиснення під час простою пропущено: фонова робота агента ще триває, розмову залишено як є.',
+  'compactOnIdle.skipped.unconsumedInputNotice': '🧹 Стиснення під час простою пропущено: агент ще не прийняв повідомлення, розмову залишено як є.',
+  'compactOnIdle.skipped.runningTurnNotice': '🧹 Стиснення під час простою пропущено: агент ще працює, розмову залишено як є.',
   'compactSummary.on': 'УВІМК',
   'compactSummary.off': 'ВИМК',
   'compactSummary.title':
