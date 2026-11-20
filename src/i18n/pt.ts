@@ -1127,6 +1127,8 @@ export const ptDict: Record<string, string> = {
   'fallback.switchedReset': ' O limite é reiniciado {time}. Para trocar: /limits',
   'fallback.switchedBack': ' Para trocar: /limits',
   'fallback.switchedDeferred': '🔁 A conta {from} atingiu o limite de uso — este tópico passará para {to} quando a resposta atual terminar.',
+  'fallback.switchedSignedOut': '🔁 A conta {from} está desconectada ou o seu login foi recusado — este tópico continua em {to}.{tail}',
+  'fallback.switchedSignedOutDeferred': '🔁 A conta {from} está desconectada ou o seu login foi recusado — este tópico passará para {to} quando a resposta atual terminar.',
   'fallback.switchFailed': '⚠️ A troca para {to} falhou: {error}. A espera pelo reinício continua armada.',
   'handover.note': 'O contexto da conversa será passado de forma compactada.',
   'handover.continueButton': '✅ Continuar',

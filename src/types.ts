@@ -331,6 +331,14 @@ export interface SetAsideQuestionRecord {
  * wait never fixes it (the user must re-`/login`, or the OpenCode server needs a
  * restart) — so the bot posts a pinned notice instead of arming a timer.
  */
+/**
+ * Why an agent's account was refused (an `auth` error): `signedOut` — no login, or one that expired or was revoked (the Claude
+ * CLI's `authentication_failed`); `orgDisabled` — the account's organization turned its use off (`oauth_org_not_allowed`:
+ * «Your organization has disabled Claude subscription access for Claude Code»); `rejected` — a bare 401 / 403 that names
+ * neither.
+ */
+export type AgentAuthErrorReason = 'signedOut' | 'orgDisabled' | 'rejected';
+
 export interface AgentApiErrorClass {
   /**
    * `conversationTail` — the provider refused a request whose history ended on the MODEL's turn (Gemini through
@@ -351,6 +359,8 @@ export interface AgentApiErrorClass {
    * wait-for-reset: the bot marks the account exhausted until the operator acts and moves along the fallback chain.
    */
   isBalanceExhausted?: boolean;
+  /** An `auth` error only: what the CLI refused the account for ({@link AgentAuthErrorReason}); absent = not told. */
+  authReason?: AgentAuthErrorReason;
   /**
    * The error was read while an adopted session replayed the tail its process wrote while the bot was down: it ended a
    * turn BEFORE this bot started, not just now. The boot recovery owns such an episode (it reads the error's own time off

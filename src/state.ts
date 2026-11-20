@@ -26,6 +26,7 @@ import { defaultClaudeProfileName, resolveClaudeProfileName as resolveClaudeProf
 import type { ClaudeUsageSnapshot } from './utils/claudeUsage';
 import type { ClaudeApiSpend, ClaudeCostBaseline } from './utils/claudeApiSpend';
 import type { ClaudeApiCreditSpend } from './utils/claudeApiCredit';
+import type { ClaudeAuthRefusal } from './utils/claudeAuthRefusal';
 import type { OpenCodeProviderUsageRecord } from './utils/openCodeUsage';
 import { pushRecentModel } from './utils/modelRecentPlan';
 import { checkIsQuestionWaitChoice, type QuestionWaitChoice } from './utils/questionWaitChoices';
@@ -314,6 +315,13 @@ export interface ClaudeProfileRecord {
   creditRecheckedAt?: string;
   /** The last usage snapshot read for the profile (`utils/claudeUsage.ts`): the endpoint poll or a stream frame. */
   usage?: ClaudeUsageSnapshot;
+  /**
+   * The CLI refused the account on a turn — signed out, its login expired or revoked, its organization turned Claude
+   * subscription use in Claude Code off, a bare 401 / 403 (`utils/claudeAuthRefusal.ts`). While it stands the account counts as
+   * not signed in everywhere: no conversation starts or resumes on it, the rankings leave it out. It ends when the account is
+   * signed in again (the stored login changed), or for a bare 401 / 403 when a status probe after it finds the account signed in.
+   */
+  authRefusal?: ClaudeAuthRefusal;
   /**
    * Only on the hidden `default` record: the operator signed `~/.claude` out through `/accounts`. The account
    * is left out of the list and every ranking until a probe finds it signed in again.
@@ -2692,6 +2700,19 @@ export class StateStore {
     if (limitedUntil === null) delete record.limitedUntil;
     else record.limitedUntil = limitedUntil;
     this.scheduleSave();
+  }
+
+  /**
+   * The CLI's refusal of the account (`null` ends it; see {@link ClaudeProfileRecord.authRefusal}); same record rules as the usage.
+   * Flushed at once, not debounced: the next conversation's launch reads it, and a refusal lost to a crash would send the
+   * conversations after a restart back into it.
+   */
+  async setClaudeProfileAuthRefusal(name: string, refusal: ClaudeAuthRefusal | null): Promise<void> {
+    const record = this.touchClaudeProfileInfo(name);
+    if (!record || (refusal === null && record.authRefusal === undefined)) return;
+    if (refusal === null) delete record.authRefusal;
+    else record.authRefusal = refusal;
+    await this.flush();
   }
 
   /** The agents-only hold (`null` clears it; see {@link ClaudeProfileRecord.agentHoldUntil}); same record rules as the usage. Debounced. */

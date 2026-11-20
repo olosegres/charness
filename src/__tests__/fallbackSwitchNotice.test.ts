@@ -113,6 +113,22 @@ describe('buildFallbackDeferredNotice (English)', () => {
       '🔁 Account «default» hit its usage limit — this topic moves to «work» when the current answer ends.',
     );
   });
+
+  it('a move off an account the CLI refused says so, not a limit', () => {
+    assert.equal(
+      buildFallbackDeferredNotice(claude('default'), claude('work'), 'signIn'),
+      '🔁 Account «default» is signed out or its sign-in was refused — this topic moves to «work» when the current answer ends.',
+    );
+  });
+});
+
+describe('a move off an account the CLI refused (English)', () => {
+  it('names the refused account and the one the topic continues on, no limit and no reset — a sign-in has none', () => {
+    assert.equal(
+      buildFallbackSwitchedNotice({ from: claude('default', runningOpus), to: claude('work'), resetTime, runningModel: runningOpus, reason: 'signIn' }),
+      '🔁 Account «default» is signed out or its sign-in was refused — this topic continues on «work». Switch: /limits',
+    );
+  });
 });
 
 describe('getFallbackModelToPin', () => {
@@ -143,6 +159,7 @@ const noticeCases: Array<{ name: string; input: SwitchedNoticeInput; names: stri
   { name: 'opencode → claude', input: { from: openCode('openai', 'gpt-5'), to: claude('work', 'opus'), resetTime, runningModel: null }, names: ['openai/gpt-5', 'Claude «work»', 'opus'] },
   { name: 'same account, another model', input: { from: claude('default', 'claude-fable-5-1'), to: claude('default', 'sonnet'), resetTime, runningModel: 'claude-fable-5-1' }, names: ['claude-fable-5-1', '«default»'] },
   { name: 'unknown source', input: { from: null, to: claude('work'), resetTime: null, runningModel: null }, names: ['Claude «work»'] },
+  { name: 'refused sign-in', input: { from: claude('default'), to: claude('work'), resetTime: null, runningModel: runningOpus, reason: 'signIn' }, names: ['«default»', '«work»'] },
 ];
 
 const countOccurrences = (text: string, part: string): number => text.split(part).length - 1;
@@ -166,10 +183,18 @@ for (const locale of localeCodes) {
     });
 
     it('the deferred notice names both accounts once and promises no model, reset or command', () => {
-      const text = run(() => buildFallbackDeferredNotice(claude('default'), claude('work', 'sonnet')));
-      assert.equal(countOccurrences(text, '«default»'), 1, text);
-      assert.equal(countOccurrences(text, '«work»'), 1, text);
-      assert.ok(!text.includes('sonnet') && !text.includes('/limits') && !/\{\w+\}/.test(text), text);
+      for (const reason of ['limit', 'signIn'] as const) {
+        const text = run(() => buildFallbackDeferredNotice(claude('default'), claude('work', 'sonnet'), reason));
+        assert.equal(countOccurrences(text, '«default»'), 1, text);
+        assert.equal(countOccurrences(text, '«work»'), 1, text);
+        assert.ok(!text.includes('sonnet') && !text.includes('/limits') && !/\{\w+\}/.test(text), text);
+      }
+    });
+
+    it('a move off a refused account reads apart from a limit move', () => {
+      const signIn = run(() => buildFallbackSwitchedNotice({ from: claude('default'), to: claude('work'), resetTime: null, runningModel: null, reason: 'signIn' }));
+      const limit = run(() => buildFallbackSwitchedNotice({ from: claude('default'), to: claude('work'), resetTime: null, runningModel: null }));
+      assert.notEqual(signIn, limit);
     });
   });
 }

@@ -1126,6 +1126,8 @@ export const kaDict: Record<string, string> = {
   'fallback.switchedReset': ' ლიმიტი განულდება {time}-ზე. გადასართავად: /limits',
   'fallback.switchedBack': ' გადასართავად: /limits',
   'fallback.switchedDeferred': '🔁 ანგარიშმა {from} გამოყენების ლიმიტს მიაღწია — მიმდინარე პასუხის დასრულებისას ეს თემა {to}-ზე გადავა.',
+  'fallback.switchedSignedOut': '🔁 ანგარიში {from} გამოსულია ან მისი შესვლა უარყოფილია — ეს თემა {to}-ზე აგრძელებს მუშაობას.{tail}',
+  'fallback.switchedSignedOutDeferred': '🔁 ანგარიში {from} გამოსულია ან მისი შესვლა უარყოფილია — მიმდინარე პასუხის დასრულებისას ეს თემა {to}-ზე გადავა.',
   'fallback.switchFailed': '⚠️ {to}-ზე გადართვა ვერ მოხერხდა: {error}. განულების ლოდინი რჩება.',
   'handover.note': 'საუბრის კონტექსტი გადაეცემა შეკუმშული სახით.',
   'handover.continueButton': '✅ გაგრძელება',

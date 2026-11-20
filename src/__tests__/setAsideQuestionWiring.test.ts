@@ -91,8 +91,9 @@ test('a backend switch closes the set-aside questions only when the operator cho
   // The automatic callers say so …
   assert.match(botSource, /resumeOnRung:[^}]*switchTopicToFallbackEntry\(key,\s*from,\s*rung,\s*\{\s*isAnnounced:\s*true,\s*isAutomatic:\s*true\s*\}\)/s, 'the wait that ends on another rung');
   assert.equal(botSource.match(/switchTopicToFallbackEntry\(key,\s*plan\.from,\s*to,\s*\{\s*isAnnounced:\s*true,\s*isAutomatic:\s*true\s*\}\)/g)?.length, 2, 'the two auto-switch paths');
+  assert.match(getFunctionBody('handleClaudeAuthRefusal'), /switchTopicToFallbackEntry\(key,\s*from,\s*to,\s*\{\s*isAnnounced:\s*true,\s*isAutomatic:\s*true,\s*reason:\s*'signIn'\s*\}\)/, 'the move off an account the CLI refused');
   // … and an operator's own move (a pick, a tapped offer, `/claude` · `/opencode`) does not.
-  assert.equal(botSource.match(/await switchTopicToFallbackEntry\([^)]*isAutomatic/g)?.length, 3, 'three automatic callers, no more');
+  assert.equal(botSource.match(/await switchTopicToFallbackEntry\([^)]*isAutomatic/g)?.length, 4, 'four automatic callers, no more');
   assert.doesNotMatch(getFunctionBody('executeBackendSwitch'), /isConversationKept/, 'the operator\'s manual switch ends the conversation it leaves');
 });
 

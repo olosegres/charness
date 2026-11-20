@@ -177,6 +177,10 @@ per-backend controls are optional methods the bot checks before calling.
   never `ANTHROPIC_API_KEY`) spends money only where the operator put it: never in the implicit chain (no list), drafted
   last and 🚫 (the operator's «✅ Use» includes it — then topics AND agents use it); «Credit balance is too low» marks it
   `creditExhaustedAt` and arms no reset wait (`handleBalanceExhausted`); an agent's `isStoppedByLimit` on it is VERIFIED, never believed (`utils/claudeApiAgentStop.ts`: one probe on its key marks it used up only if the API refuses for the balance, else it is held off AGENTS for an hour via `agentHoldUntil` — a field of its own that topics never read; `limitedUntil` stays the topics' mark).
+  A spawn never lands on an account known not to work (`utils/claudeAuthRefusal.ts`, the reader `resolveThreadClaudeProfileForLaunch`): signed
+  out by its probe, or REFUSED by the CLI on a turn (`authRefusal`: the stream's `authentication_failed` / `oauth_org_not_allowed` code or the
+  wording; held until a new login changes the folder's login stamp) — the conversation takes the `claude_profiles` pick as its own pick, and a
+  refused json-stream turn makes the limit move at once (`handleClaudeAuthRefusal` → `switchTopicToFallbackEntry` with `reason: 'signIn'`).
 - **Usage limits / fallback chain** (`/limits_autoswitch`, hidden aliases `/fallback` and `/auto_continue_limits`, `utils/fallbackChain.ts`, `commands/fallbackChain.ts`): ONE instance-wide
   priority list of `{claude, profile, model|null}` / `{opencode, providerId, modelId}` rungs in `state.json`
   (`fallbackChain`), drafted from what is detected (`detectFallbackOptions`: profile views + the OpenCode catalog

@@ -24,7 +24,7 @@ import type { OutboundHints } from '../platform/outbound';
 import type { SessionKey } from '../sessionKey';
 import { keyToString } from '../sessionKey';
 import type { OpenCodePendingQuestion } from './openCodeAdapter';
-import { classifyAgentApiError } from '../apiErrorRetry';
+import { classifyAgentApiError, getAuthErrorReason } from '../apiErrorRetry';
 import { readTranscriptErrorWrittenAtMs } from '../utils/transcriptErrorTime';
 import { checkIsInstalled, installTool } from '../installManager';
 import { prepareMcpFlags, cleanupMcpTempFiles } from '../mcpConfig';
@@ -57,6 +57,7 @@ import {
   classifyClaudeStreamMessage,
   buildCanUseToolAllow,
   buildCanUseToolDeny,
+  getClaudeAuthErrorCodeReason,
   type ClaudeStreamAction,
 } from '../utils/claudeStreamJson';
 import {
@@ -333,6 +334,12 @@ export interface StreamSession {
    * at all) — this exact value wins over the parse of it.
    */
   rejectedResetAtMs: number | null;
+  /**
+   * The CLI's own code of the API error the turn's main-thread `assistant` message wrapped (`authentication_failed`,
+   * `oauth_org_not_allowed`, …; `apiErrorCode` action), `null` when none. Read by the turn's error (an account refusal is told
+   * by it, whatever the text says) and cleared at every turn end.
+   */
+  turnApiErrorCode: string | null;
   /**
    * One-shot: swallow the NEXT terminal `result{is_error}` because it is the
    * direct consequence of an interrupt WE issued (`sendInterrupt`), not a real
@@ -726,7 +733,7 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
       subagentActive: false, childResponseText: '', childEmittedLength: 0, childOutputTimer: null,
       pendingInitResolve: null, startExitDetail: null, initRequestId: null, pendingControlRequests: new Map(),
       compactionInProgress: false, pendingCompaction: null,
-      pendingQuestion: null, apiErrorFired: false, rejectedResetAtMs: null, swallowNextAbortError: false,
+      pendingQuestion: null, apiErrorFired: false, rejectedResetAtMs: null, turnApiErrorCode: null, swallowNextAbortError: false,
       lastWatermarkOffset: -1,
       backgroundTasks: new Map(), notificationTurnPendingSince: null, lastTurnEndedAt: Date.now(), isCompactionResultPending: false, scheduledJobs: new Map(),
       claudeCodeVersion: null, applyingChunk: null,
@@ -1066,7 +1073,7 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
       pendingInitResolve: null, startExitDetail: null, initRequestId: null, pendingControlRequests: new Map(),
       compactionInProgress: false, pendingCompaction: null,
       pendingQuestion: this.readQuestionSidecar(paths),
-      apiErrorFired: false, rejectedResetAtMs: null, swallowNextAbortError: false,
+      apiErrorFired: false, rejectedResetAtMs: null, turnApiErrorCode: null, swallowNextAbortError: false,
       lastWatermarkOffset: -1,
       // The frames that built the list and reported the version lie before the
       // tail offset (not replayed): both come from the persisted record, with the
@@ -1897,6 +1904,9 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
       case 'rateLimit':
         this.handleRateLimit(session, action);
         return;
+      case 'apiErrorCode':
+        session.turnApiErrorCode = action.code;
+        return;
       case 'userEcho':
         // Claude has read one of our user messages. A message written mid-turn
         // is taken into the RUNNING turn, so the session is busy from here until
@@ -2161,6 +2171,9 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
     // (read-and-clear so it can never leak onto a later, unrelated turn).
     const swallowAbortError = session.swallowNextAbortError;
     session.swallowNextAbortError = false;
+    // The error code belongs to THIS turn only, read-and-clear like the flag above.
+    const apiErrorCode = session.turnApiErrorCode;
+    session.turnApiErrorCode = null;
 
     if (action.isError && action.errorText) {
       // The turn is over, whatever it ended on: the text it streamed goes out FIRST and at once (a debounced flush would
@@ -2174,7 +2187,7 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
         console.log(`[ClaudeJson] swallowed interrupt-aborted turn error for ${keyToString(session.key)}: ${action.errorText}`);
         return;
       }
-      const emitted = this.maybeEmitApiError(session, action.errorText);
+      const emitted = this.maybeEmitApiError(session, action.errorText, apiErrorCode);
       if (!emitted) this.emit('output', session.key, `Claude error: ${action.errorText}`, { isFinal: true });
       return;
     }
@@ -2246,16 +2259,22 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
   /**
    * Classify + emit an `apiError` once per episode; returns whether it fired. A usage limit takes the reset of the window
    * that rejected the request when one is still ahead — exact, where the text's is a parse of whatever this release
-   * prints. (The same rejection marks the profile limited, which is what confirms an `isUnconfirmed` wording.)
+   * prints. (The same rejection marks the profile limited, which is what confirms an `isUnconfirmed` wording.) An account
+   * refusal is `auth` by the CLI's own code (`apiErrorCode`: signed out, or the organization turned its use off) whatever the
+   * text says, by the text otherwise, and says why (`authReason`) — the bot moves the conversation to another account on it.
    */
-  private maybeEmitApiError(session: StreamSession, text: string): boolean {
+  private maybeEmitApiError(session: StreamSession, text: string, apiErrorCode: string | null = null): boolean {
     if (session.apiErrorFired) return false;
     const now = Date.now();
     const isReplayed = session.adoptCatchUpOffset !== null;
+    const codeAuthReason = getClaudeAuthErrorCodeReason(apiErrorCode);
     // An error read from the downtime tail ended a turn when it was WRITTEN: a reset named by its clock ("resets 10:20am") is
     // the next occurrence after that moment, not after the replay's — read against the replay it became tomorrow's.
-    const classified = classifyAgentApiError(text, isReplayed ? this.getReplayedErrorWrittenAtMs(session, text) ?? now : now);
+    const classified: AgentApiErrorClass | null = codeAuthReason !== null
+      ? { kind: 'auth', authReason: codeAuthReason }
+      : classifyAgentApiError(text, isReplayed ? this.getReplayedErrorWrittenAtMs(session, text) ?? now : now);
     if (!classified) return false;
+    if (classified.kind === 'auth' && classified.authReason === undefined) classified.authReason = getAuthErrorReason(text);
     const rejectedResetAtMs = session.rejectedResetAtMs;
     const apiError: AgentApiErrorClass = {
       ...(classified.kind === 'usageLimit' && rejectedResetAtMs !== null && rejectedResetAtMs > now

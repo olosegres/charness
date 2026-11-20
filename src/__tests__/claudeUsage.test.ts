@@ -740,7 +740,7 @@ describe('the claude-profiles CLI line', () => {
         { kind: 'session', percent: 12, resetsAt: null, scopeModel: null },
         { kind: 'weekly_all', percent: 40, resetsAt: new Date(nowMs + 49 * 3_600_000).toISOString(), scopeModel: null },
       ],
-      usageFetchedAt: null, isUsageStale: false, limitedUntil: null, creditExhaustedAt: null, billing: null, spentUsd: null, remainingEstimateUsd: null, expiresOn: null, probablyUsedUp: false, renewedAt: null, isEligible: true, chainExclusion: null, headroomPercent: 60, isRecommended: true,
+      usageFetchedAt: null, isUsageStale: false, limitedUntil: null, authRefusal: null, creditExhaustedAt: null, billing: null, spentUsd: null, remainingEstimateUsd: null, expiresOn: null, probablyUsedUp: false, renewedAt: null, isEligible: true, chainExclusion: null, headroomPercent: 60, isRecommended: true,
     } as const;
     const line = formatClaudeProfileCliLine({ ...entry, buckets: [...entry.buckets] }, nowMs);
     assert.match(line, /5h 12% 🔄 in 2d 1h · week 40% 🔄 in 2d 1h$/, 'an account with no Fable window says nothing about Fable');
@@ -758,9 +758,20 @@ describe('the claude-profiles CLI line', () => {
         { kind: 'session', percent: 100, resetsAt: new Date(nowMs - 60_000).toISOString(), scopeModel: null },
         { kind: 'weekly_all', percent: 100, resetsAt: new Date(nowMs - 3_600_000).toISOString(), scopeModel: null },
       ],
-      usageFetchedAt: null, isUsageStale: true, limitedUntil: null, creditExhaustedAt: null, billing: null, spentUsd: null, remainingEstimateUsd: null, expiresOn: null, probablyUsedUp: false, renewedAt: null, isEligible: true, chainExclusion: null, headroomPercent: 100, isRecommended: false,
+      usageFetchedAt: null, isUsageStale: true, limitedUntil: null, authRefusal: null, creditExhaustedAt: null, billing: null, spentUsd: null, remainingEstimateUsd: null, expiresOn: null, probablyUsedUp: false, renewedAt: null, isEligible: true, chainExclusion: null, headroomPercent: 100, isRecommended: false,
     } as const;
     assert.match(formatClaudeProfileCliLine({ ...frozen, buckets: [...frozen.buckets] }, nowMs), /5h 0% · week 0% \(stale\)$/);
+  });
+
+  it('an account the CLI refused says when and why in place of its login, and is not offered', () => {
+    const refused = {
+      name: 'work', configDir: '/d/work', email: 'w@example.com', kind: 'corporate', subscriptionType: 'team', loggedIn: false,
+      buckets: [], usageFetchedAt: null, isUsageStale: false, limitedUntil: null,
+      authRefusal: { at: '2026-11-20T08:00:00.000Z', reason: 'orgDisabled' },
+      creditExhaustedAt: null, billing: null, spentUsd: null, remainingEstimateUsd: null, expiresOn: null, probablyUsedUp: false, renewedAt: null, isEligible: false, chainExclusion: null, headroomPercent: null, isRecommended: false,
+    } as const;
+    const line = formatClaudeProfileCliLine({ ...refused, buckets: [], authRefusal: { ...refused.authRefusal } }, nowMs);
+    assert.match(line, /^✗ work {2}\/d\/work {2}sign-in refused at 2026-11-20T08:00:00\.000Z: its organization disabled Claude subscription access in Claude Code {2}/);
   });
 });
 

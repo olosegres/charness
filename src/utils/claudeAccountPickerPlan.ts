@@ -7,6 +7,7 @@
  */
 
 import type { ClaudeProfileRecord } from '../state';
+import { getClaudeProfileSignedIn } from './claudeAuthRefusal';
 import {
   checkIsValidClaudeProfileName,
   defaultClaudeProfileName,
@@ -154,7 +155,7 @@ export function buildAccountPickerRows(input: {
     rows.push({
       name,
       isActive: input.activeName === name,
-      loggedIn: record.loggedIn,
+      loggedIn: getClaudeProfileSignedIn(record),
       email: record.email ?? null,
       subscriptionType: record.subscriptionType ?? null,
       kind: getClaudeAccountKind(record.subscriptionType ?? null),

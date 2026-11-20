@@ -1125,6 +1125,8 @@ export const hiDict: Record<string, string> = {
   'fallback.switchedReset': ' सीमा {time} पर रीसेट होगी। स्विच करें: /limits',
   'fallback.switchedBack': ' स्विच करें: /limits',
   'fallback.switchedDeferred': '🔁 खाता {from} की उपयोग सीमा पूरी हो गई — मौजूदा उत्तर खत्म होने पर यह टॉपिक {to} पर चला जाएगा।',
+  'fallback.switchedSignedOut': '🔁 खाता {from} साइन आउट है या उसका साइन-इन अस्वीकार हुआ — यह टॉपिक {to} पर जारी है।{tail}',
+  'fallback.switchedSignedOutDeferred': '🔁 खाता {from} साइन आउट है या उसका साइन-इन अस्वीकार हुआ — मौजूदा उत्तर खत्म होने पर यह टॉपिक {to} पर चला जाएगा।',
   'fallback.switchFailed': '⚠️ {to} पर स्विच विफल: {error}। रीसेट की प्रतीक्षा सक्रिय रहती है।',
   'handover.note': 'बातचीत का संदर्भ संक्षिप्त रूप में सौंपा जाएगा।',
   'handover.continueButton': '✅ जारी रखें',

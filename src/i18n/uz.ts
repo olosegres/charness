@@ -1126,6 +1126,8 @@ export const uzDict: Record<string, string> = {
   'fallback.switchedReset': ' Limit {time} da tiklanadi. Almashtirish: /limits',
   'fallback.switchedBack': ' Almashtirish: /limits',
   'fallback.switchedDeferred': '🔁 {from} hisobi foydalanish limitiga yetdi — joriy javob tugagach, bu mavzu {to} ga o\'tadi.',
+  'fallback.switchedSignedOut': '🔁 {from} hisobidan chiqilgan yoki unga kirish rad etildi — bu mavzu {to} da davom etmoqda.{tail}',
+  'fallback.switchedSignedOutDeferred': '🔁 {from} hisobidan chiqilgan yoki unga kirish rad etildi — joriy javob tugagach, bu mavzu {to} ga o\'tadi.',
   'fallback.switchFailed': '⚠️ {to} ga o\'tish muvaffaqiyatsiz: {error}. Tiklanishni kutish saqlanadi.',
   'handover.note': 'Suhbat konteksti siqilgan shaklda uzatiladi.',
   'handover.continueButton': '✅ Davom etish',

@@ -1120,6 +1120,8 @@ export const jaDict: Record<string, string> = {
   'fallback.switchedReset': ' 上限は {time} にリセットされます。切り替えは /limits',
   'fallback.switchedBack': ' 切り替えは /limits',
   'fallback.switchedDeferred': '🔁 アカウント {from} が利用上限に達しました — このトピックは現在の回答が終わると {to} に移ります。',
+  'fallback.switchedSignedOut': '🔁 アカウント {from} はサインアウトしているか、サインインが拒否されました — このトピックは {to} で続行します。{tail}',
+  'fallback.switchedSignedOutDeferred': '🔁 アカウント {from} はサインアウトしているか、サインインが拒否されました — このトピックは現在の回答が終わると {to} に移ります。',
   'fallback.switchFailed': '⚠️ {to} への切替に失敗しました: {error}。リセット待ちは維持されます。',
   'handover.note': '会話のコンテキストは圧縮された形で引き継がれます。',
   'handover.continueButton': '✅ 続ける',

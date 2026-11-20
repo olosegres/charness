@@ -1130,6 +1130,8 @@ export const ruDict: Record<string, string> = {
   'fallback.switchedReset': ' Лимит сбросится {time}. Переключить: /limits',
   'fallback.switchedBack': ' Переключить: /limits',
   'fallback.switchedDeferred': '🔁 Аккаунт {from} достиг лимита — топик перейдёт на {to}, когда закончится текущий ответ.',
+  'fallback.switchedSignedOut': '🔁 Аккаунт {from} не авторизован или его вход отклонён — топик продолжает работу на {to}.{tail}',
+  'fallback.switchedSignedOutDeferred': '🔁 Аккаунт {from} не авторизован или его вход отклонён — топик перейдёт на {to}, когда закончится текущий ответ.',
   'fallback.switchFailed': '⚠️ Переключение на {to} не удалось: {error}. Ожидание сброса остаётся.',
   'handover.note': 'Контекст разговора будет передан в сжатом виде.',
   'handover.continueButton': '✅ Продолжить',

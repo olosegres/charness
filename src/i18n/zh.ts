@@ -1120,6 +1120,8 @@ export const zhDict: Record<string, string> = {
   'fallback.switchedReset': ' 上限将于 {time} 重置。切换：/limits',
   'fallback.switchedBack': ' 切换：/limits',
   'fallback.switchedDeferred': '🔁 账号 {from} 已达用量上限 — 此话题将在当前回答结束后切换到 {to}。',
+  'fallback.switchedSignedOut': '🔁 账号 {from} 未登录或登录被拒绝 — 此话题已切换到 {to} 并继续。{tail}',
+  'fallback.switchedSignedOutDeferred': '🔁 账号 {from} 未登录或登录被拒绝 — 此话题将在当前回答结束后切换到 {to}。',
   'fallback.switchFailed': '⚠️ 切换到 {to} 失败：{error}。重置等待保持生效。',
   'handover.note': '对话上下文将以压缩形式移交。',
   'handover.continueButton': '✅ 继续',

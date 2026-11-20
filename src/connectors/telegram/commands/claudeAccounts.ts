@@ -255,8 +255,11 @@ export function createClaudeAccounts(ports: ClaudeAccountsPorts) {
       recorded = await readClaudeAuthStatus(profile.configDir) ?? status;
     }
     await recordProfileStatus(profile.name, recorded);
-    // A sign-in is the operator acting on the account: a used-up-credits mark ends with it.
-    if (recorded?.loggedIn) getState().liftClaudeProfileCreditExhaustion(profile.name);
+    // A sign-in is the operator acting on the account: a used-up-credits mark ends with it, and so does the CLI's refusal of it.
+    if (recorded?.loggedIn) {
+      getState().liftClaudeProfileCreditExhaustion(profile.name);
+      await getState().setClaudeProfileAuthRefusal(profile.name, null);
+    }
     // A topic may already have picked the profile before its sign-in: its sleeping session resumes under it by
     // itself, and a live one is re-spawned now that the account exists.
     if (recorded?.loggedIn) await applyClaudeProfileEverywhere();
@@ -283,6 +286,7 @@ export function createClaudeAccounts(ports: ClaudeAccountsPorts) {
     await getState().upsertClaudeProfileRecord(profile.name, { billing: 'api' });
     await recordProfileStatus(profile.name, status);
     getState().liftClaudeProfileCreditExhaustion(profile.name);
+    await getState().setClaudeProfileAuthRefusal(profile.name, null);
     if (status?.loggedIn) await applyClaudeProfileEverywhere();
     console.log(`[account] ${profile.name}: an API key was stored (${check === 'valid' ? 'accepted by the API' : 'not verified'})`);
     return appendLimitsListNote(
@@ -336,7 +340,8 @@ export function createClaudeAccounts(ports: ClaudeAccountsPorts) {
       isDefaultRemoved: state.getClaudeProfileInfo(defaultClaudeProfileName)?.isRemoved === true,
       records: state.getClaudeProfileRecords(),
       defaultStatus: {
-        loggedIn: defaultStatus?.loggedIn,
+        // The CLI's refusal of `default` on a turn outweighs a probe that still finds a login there (a revoked one, a switch of the organization's).
+        loggedIn: state.getClaudeProfileInfo(defaultClaudeProfileName)?.authRefusal !== undefined ? false : defaultStatus?.loggedIn,
         email: defaultStatus?.email ?? null,
         subscriptionType: defaultStatus?.subscriptionType ?? null,
         billing: defaultStatus?.billing ?? readBilling(defaultClaudeProfileName),

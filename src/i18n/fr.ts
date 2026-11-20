@@ -1126,6 +1126,8 @@ export const frDict: Record<string, string> = {
   'fallback.switchedReset': ' La limite se réinitialise {time}. Pour basculer : /limits',
   'fallback.switchedBack': ' Pour basculer : /limits',
   'fallback.switchedDeferred': '🔁 Le compte {from} a atteint sa limite d\'usage — ce sujet passera à {to} à la fin de la réponse en cours.',
+  'fallback.switchedSignedOut': '🔁 Le compte {from} est déconnecté ou sa connexion a été refusée — ce sujet continue sur {to}.{tail}',
+  'fallback.switchedSignedOutDeferred': '🔁 Le compte {from} est déconnecté ou sa connexion a été refusée — ce sujet passera à {to} à la fin de la réponse en cours.',
   'fallback.switchFailed': '⚠️ La bascule vers {to} a échoué : {error}. L\'attente de la réinitialisation reste armée.',
   'handover.note': 'Le contexte de la conversation sera transmis sous forme compactée.',
   'handover.continueButton': '✅ Continuer',

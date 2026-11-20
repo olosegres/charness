@@ -1,6 +1,6 @@
 /**
- * @description The two notices the bot posts when a usage limit moves a topic onto another rung of the fallback
- * chain (`utils/fallbackChain.ts`): «switched» (the topic already runs on the new rung) and «deferred» (the agent is
+ * @description The two notices the bot posts when a usage limit — or the CLI's refusal of a Claude account — moves a topic onto
+ * another rung of the fallback chain (`utils/fallbackChain.ts`): «switched» (the topic already runs on the new rung) and «deferred» (the agent is
  * still answering, so the move waits for the end of the answer). Both read as one short sentence: WHAT hit its
  * limit, WHERE the topic continues, and — in «switched» — when the limit resets and the ONE command that moves
  * the topic again (`/limits`, the board of every account and provider, whatever the backend: the owner's decision,
@@ -46,19 +46,30 @@ function buildSwitchTail(resetTime: string | null): string {
 }
 
 /**
+ * Why a topic moves: `limit` — its rung hit a usage limit; `signIn` — the CLI refused its Claude account (signed out, a login
+ * expired or revoked, an organization that turned its use off: `utils/claudeAuthRefusal.ts`), which no wait brings back.
+ */
+export type FallbackSwitchReason = 'limit' | 'signIn';
+
+/**
  * @description The «switched» notice. `from` is the rung that hit the limit (`null` when the topic's position
  * is unknown); `resetTime` is when it comes back, already as a clock in the topic's zone (`null` when unknown or
  * past — the reset clause is dropped, the switch-back command stays); `runningModel` is what the topic's Claude
- * session runs now (`null` when unknown), the reference for whether the switch changes the model.
+ * session runs now (`null` when unknown), the reference for whether the switch changes the model. A move off a refused
+ * Claude account (`reason: 'signIn'`) says so and names no reset: nothing resets a sign-in.
  */
 export function buildFallbackSwitchedNotice(input: {
   from: FallbackChainEntry | null;
   to: FallbackChainEntry;
   resetTime: string | null;
   runningModel: string | null;
+  reason?: FallbackSwitchReason;
 }): string {
   const { from, to, resetTime, runningModel } = input;
   const target = formatSwitchTarget(from, to, runningModel);
+  if (input.reason === 'signIn' && from?.backend === 'claude') {
+    return t('fallback.switchedSignedOut', { from: quoteName(from.profile), to: target, tail: buildSwitchTail(null) });
+  }
   const tail = buildSwitchTail(resetTime);
   if (from === null) return t('fallback.switchedUnknownSource', { to: target, tail });
   // Another model of the SAME account (the limit covered the model it ran, not the one picked): the model hit it, not the account.
@@ -73,6 +84,10 @@ export function buildFallbackSwitchedNotice(input: {
  * @description The «deferred» notice: a Claude session that cannot be moved yet is moved to another account when
  * its answer ends, so both sides are Claude accounts. The rung's model is not named — a deferred move does not pin it.
  */
-export function buildFallbackDeferredNotice(from: Extract<FallbackChainEntry, { backend: 'claude' }>, to: Extract<FallbackChainEntry, { backend: 'claude' }>): string {
-  return t('fallback.switchedDeferred', { from: quoteName(from.profile), to: quoteName(to.profile) });
+export function buildFallbackDeferredNotice(
+  from: Extract<FallbackChainEntry, { backend: 'claude' }>,
+  to: Extract<FallbackChainEntry, { backend: 'claude' }>,
+  reason: FallbackSwitchReason = 'limit',
+): string {
+  return t(reason === 'signIn' ? 'fallback.switchedSignedOutDeferred' : 'fallback.switchedDeferred', { from: quoteName(from.profile), to: quoteName(to.profile) });
 }

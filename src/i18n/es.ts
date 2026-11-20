@@ -1126,6 +1126,8 @@ export const esDict: Record<string, string> = {
   'fallback.switchedReset': ' El límite se restablece {time}. Para cambiar: /limits',
   'fallback.switchedBack': ' Para cambiar: /limits',
   'fallback.switchedDeferred': '🔁 La cuenta {from} alcanzó su límite de uso — este tema pasará a {to} cuando termine la respuesta actual.',
+  'fallback.switchedSignedOut': '🔁 La cuenta {from} no tiene sesión iniciada o su inicio de sesión fue rechazado — este tema continúa en {to}.{tail}',
+  'fallback.switchedSignedOutDeferred': '🔁 La cuenta {from} no tiene sesión iniciada o su inicio de sesión fue rechazado — este tema pasará a {to} cuando termine la respuesta actual.',
   'fallback.switchFailed': '⚠️ El cambio a {to} falló: {error}. La espera del reinicio sigue armada.',
   'handover.note': 'El contexto de la conversación se transferirá en forma compactada.',
   'handover.continueButton': '✅ Continuar',

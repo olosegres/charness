@@ -1170,6 +1170,8 @@ export const enDict: Record<string, string> = {
   'fallback.switchedReset': ' The limit resets {time}. Switch: /limits',
   'fallback.switchedBack': ' Switch: /limits',
   'fallback.switchedDeferred': '🔁 Account {from} hit its usage limit — this topic moves to {to} when the current answer ends.',
+  'fallback.switchedSignedOut': '🔁 Account {from} is signed out or its sign-in was refused — this topic continues on {to}.{tail}',
+  'fallback.switchedSignedOutDeferred': '🔁 Account {from} is signed out or its sign-in was refused — this topic moves to {to} when the current answer ends.',
   'fallback.switchFailed': '⚠️ Switching to {to} failed: {error}. The wait for the reset stays armed.',
   'handover.note': 'The conversation context will be handed over in compacted form.',
   'handover.continueButton': '✅ Continue',

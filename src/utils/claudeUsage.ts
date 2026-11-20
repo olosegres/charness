@@ -31,6 +31,7 @@ import * as path from 'path';
 import type { ClaudeProfileRecord } from '../state';
 import { getClaudeAccountKind, resolveHomeClaudeDir, type ClaudeAccountKind, type ClaudeProfileBilling } from './claudeProfiles';
 import type { ClaudeApiSpend } from './claudeApiSpend';
+import type { ClaudeAuthRefusal } from './claudeAuthRefusal';
 import type { ClaudeApiCreditAnchor, ClaudeApiCreditSpend } from './claudeApiCredit';
 import { checkIsRecord } from './checkIsRecord';
 
@@ -362,6 +363,8 @@ export interface ClaudeProfileUsageView {
   subscriptionType: string | null;
   usage: ClaudeUsageSnapshot | undefined;
   limitedUntil: string | null;
+  /** The CLI refused the account on a turn (`utils/claudeAuthRefusal.ts`); `loggedIn` is `false` while it stands. Absent = none. */
+  authRefusal?: ClaudeAuthRefusal;
   /** How the account pays; `null` when never recorded (a subscription account added before billing was). */
   billing: ClaudeProfileBilling | null;
   /** Until when agents are not pointed at it (a worker's stop report not proven by the API, `claudeApiAgentStop.ts`); absent = no hold. Read by the agent pick ONLY — topics read `limitedUntil`. */
@@ -394,8 +397,10 @@ export interface ClaudeProfileReportEntry {
    * credit lasts); with no such rung only a warm session already on it stays. `null`: a subscription not recorded as such.
    */
   billing: ClaudeProfileBilling | null;
-  /** `null` when never probed. */
+  /** `null` when never probed; `false` also while the CLI's refusal of it stands (`authRefusal`). */
   loggedIn: boolean | null;
+  /** The CLI refused the account on a turn and it was not signed in again since (`utils/claudeAuthRefusal.ts`); `null` = no refusal. */
+  authRefusal: ClaudeAuthRefusal | null;
   /** The windows as read, their used percent against the clock ({@link getClaudeUsagePercentAsOf}): one whose reset has passed since it was read is 0 % — its `resetsAt` stays the instant that passed, no next reset is estimated. */
   buckets: ClaudeUsageBucket[];
   usageFetchedAt: string | null;
@@ -886,6 +891,7 @@ export function buildClaudeProfilesReport(profiles: readonly ClaudeProfileUsageV
       subscriptionType: profile.subscriptionType,
       billing: profile.billing,
       loggedIn: profile.loggedIn ?? null,
+      authRefusal: profile.authRefusal ?? null,
       buckets: (profile.usage?.buckets ?? []).map((bucket) => ({ ...bucket, percent: getClaudeUsagePercentAsOf(bucket, nowMs) })),
       usageFetchedAt: profile.usage?.fetchedAt ?? null,
       isUsageStale: profile.usage?.isStale === true,

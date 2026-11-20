@@ -1132,6 +1132,8 @@ export const ukDict: Record<string, string> = {
   'fallback.switchedReset': ' Ліміт скинеться {time}. Перемкнути: /limits',
   'fallback.switchedBack': ' Перемкнути: /limits',
   'fallback.switchedDeferred': '🔁 Обліковий запис {from} досяг ліміту — топік перейде на {to}, коли завершиться поточна відповідь.',
+  'fallback.switchedSignedOut': '🔁 Обліковий запис {from} не авторизований або його вхід відхилено — топік продовжує роботу на {to}.{tail}',
+  'fallback.switchedSignedOutDeferred': '🔁 Обліковий запис {from} не авторизований або його вхід відхилено — топік перейде на {to}, коли завершиться поточна відповідь.',
   'fallback.switchFailed': '⚠️ Перемикання на {to} не вдалося: {error}. Очікування скидання лишається.',
   'handover.note': 'Контекст розмови буде передано у стисненому вигляді.',
   'handover.continueButton': '✅ Продовжити',

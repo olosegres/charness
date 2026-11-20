@@ -1126,6 +1126,8 @@ export const deDict: Record<string, string> = {
   'fallback.switchedReset': ' Das Limit wird {time} zurückgesetzt. Wechseln: /limits',
   'fallback.switchedBack': ' Wechseln: /limits',
   'fallback.switchedDeferred': '🔁 Konto {from} hat sein Nutzungslimit erreicht — dieses Thema wechselt zu {to}, sobald die aktuelle Antwort endet.',
+  'fallback.switchedSignedOut': '🔁 Konto {from} ist abgemeldet oder seine Anmeldung wurde abgelehnt — dieses Thema macht mit {to} weiter.{tail}',
+  'fallback.switchedSignedOutDeferred': '🔁 Konto {from} ist abgemeldet oder seine Anmeldung wurde abgelehnt — dieses Thema wechselt zu {to}, sobald die aktuelle Antwort endet.',
   'fallback.switchFailed': '⚠️ Wechsel zu {to} fehlgeschlagen: {error}. Das Warten auf das Zurücksetzen bleibt aktiv.',
   'handover.note': 'Der Gesprächskontext wird in komprimierter Form übergeben.',
   'handover.continueButton': '✅ Weiter',
