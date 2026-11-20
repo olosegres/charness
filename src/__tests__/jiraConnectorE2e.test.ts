@@ -262,6 +262,8 @@ describe('Jira connector end to end — requests and the session lifecycle: buil
     const link = answer.body.content[3].content?.[0].content?.[0].content?.[0];
     assert.equal(link?.text, 'build.log');
     assert.match(String(link?.marks?.[0].attrs?.href), new RegExp(`/rest/api/3/attachment/content/${uploaded[2].id}$`));
+    // The bot closes the request and hands the issue back before the tool's result reaches the fake agent, which logs it only then.
+    await waitFor(`${answeredKey}: the answer's tool result read by the agent`, answerTimeoutMs, () => getAnswers(answeredKey).length > 0);
     assert.ok(getAnswers(answeredKey)[0].outcome.startsWith('Delivered.'), getAnswers(answeredKey)[0].outcome);
 
     const sentKey = 'PROJ-61';
@@ -275,6 +277,7 @@ describe('Jira connector end to end — requests and the session lifecycle: buil
     assert.equal(fileComment.body.content[0].content?.[0].text, fakeSendFileCaption);
     assert.equal(fileComment.parentId, undefined, 'no thread: the request was a hand-over');
     assert.equal(answerComment.author.accountId, aiAccount.accountId);
+    await waitFor(`${sentKey}: the send_file_to_user result read by the agent`, answerTimeoutMs, () => getToolCalls(sentKey).length > 0);
     const [call] = getToolCalls(sentKey);
     assert.equal(call.outcome, `Posted in a comment on ${sentKey}: run.mp4 (plays in the comment, attachment ${video.id}).`);
   });
