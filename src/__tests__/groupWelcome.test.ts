@@ -12,7 +12,7 @@ import * as path from 'node:path';
 
 import { t, runWithLocale, localeCodes, getKeyInLang } from '../i18n';
 import { formatGroupWelcome, getGroupWelcomeTitle } from '../connectors/telegram/groupWelcome';
-import { unknownRunningVersion } from '../selfUpdate/updateRuntime';
+import { unknownRunningVersion } from '../selfUpdate/constants';
 
 const packageVersion: string = JSON.parse(fs.readFileSync(path.resolve(__dirname, '..', '..', 'package.json'), 'utf8')).version;
 /** A projects folder with Markdown-safe characters only (a code span cannot escape a backtick). */

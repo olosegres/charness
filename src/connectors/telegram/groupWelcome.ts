@@ -1,5 +1,5 @@
 import type { Translate } from '../../i18n';
-import { unknownRunningVersion } from '../../selfUpdate/updateRuntime';
+import { unknownRunningVersion } from '../../selfUpdate/constants';
 
 /** The product name the greeting's title opens with: a name, never translated. */
 const productName = 'Charness';

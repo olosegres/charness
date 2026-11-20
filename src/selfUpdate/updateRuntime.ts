@@ -3,7 +3,7 @@ import * as path from 'path';
 import { getProcessIdentity } from '../installManager';
 import { getChildProcessEnvironment } from '../utils/agentEnvironment';
 import { getOutputTail, runCommand as defaultRunCommand, type CommandRunner } from './commandRunner';
-import { queryTimeoutMs, selfCheckTimeoutMs } from './constants';
+import { queryTimeoutMs, selfCheckTimeoutMs, unknownRunningVersion } from './constants';
 import { createGitSource } from './gitSource';
 import { acquireHostLock } from './hostLock';
 import { getStaleSupervisorModules, readHotSupervisorRecord, requestSupervisorReexec } from './hotSupervisor';
@@ -25,8 +25,6 @@ import type { UpdateEngineDeps } from './updateEngine';
 
 const changelogFileName = 'CHANGELOG.md';
 const shortShaLength = 7;
-/** What the running version reads as when the install's `package.json` cannot be read. */
-export const unknownRunningVersion = 'unknown';
 
 export type UpdateRuntime = Pick<
   UpdateEngineDeps,
