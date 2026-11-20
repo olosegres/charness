@@ -386,6 +386,8 @@ export interface OpenedSendFile {
   /** Read-only, owned by the caller until `close()`; read it positionally — another reader may share it. */
   fd: number;
   sizeBytes: number;
+  /** The file's device and inode: two paths of one file (a symlink, the same path twice) share it. */
+  identity: FileIdentity;
 }
 
 export type OpenFilesWithinWorkDirResult =
@@ -424,7 +426,7 @@ export function openFilesWithinWorkDir(
         close();
         return { ok: false, error: snapshot.kind === 'oversize' ? snapshot.error : `cannot read ${rawPath}: ${snapshot.error}` };
       }
-      files.push({ rawPath, absPath: resolved.absPath, fd: snapshot.source.fd, sizeBytes: snapshot.source.sizeBytes });
+      files.push({ rawPath, absPath: resolved.absPath, fd: snapshot.source.fd, sizeBytes: snapshot.source.sizeBytes, identity: resolved.identity });
     }
   } catch (error) {
     close();

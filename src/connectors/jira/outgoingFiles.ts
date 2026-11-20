@@ -3,8 +3,9 @@ import { openFilesWithinWorkDir, type FileSendOpenStrategy, type OpenedSendFile 
 import type { FileSendKind } from '../../utils/fileSendPlan';
 import { createDescriptorByteReader, type ImageDimensions } from '../../utils/imageDimensions';
 import { jiraCommentAdfMaxChars, type AdfDocument, type AdfNode } from './adf';
-import type { JiraAttachment, JiraClient } from './client';
+import { getJiraUploadFileName, type JiraAttachment, type JiraClient } from './client';
 import { checkJiraOutgoingFile, type JiraOutgoingFileKind } from './outgoingFileCheck';
+import { getFileSha256, type JiraUploadedFiles } from './uploadedFiles';
 
 /**
  * @description The files an agent shows on a Jira issue (`answer_request`'s `files`, `send_file_to_user`): each is
@@ -15,19 +16,19 @@ import { checkJiraOutgoingFile, type JiraOutgoingFileKind } from './outgoingFile
  *
  * Every file is read and checked BEFORE anything is uploaded (`outgoingFileCheck.ts`, the site's upload limit, attachments
  * switched on), so a refusal attaches nothing. A path is taken the way the file send takes it (`openFilesWithinWorkDir`:
- * inside the issue's project folder, no component swapped after validation). A file of the same name and size that the
- * AI account attached before — an earlier try whose comment did not land — is reused, so sending again attaches nothing
- * twice. The media id is read from where the attachment's content redirects to, a redirect never followed (the
- * credentials stay with the site); without one the file is linked instead, and the agent is told.
+ * inside the issue's project folder, no component swapped after validation), and one file named twice — the same path, or
+ * two paths of one file — is attached and shown once. Its name is made safe for the upload once
+ * (`getJiraUploadFileName`) and that name is the one compared with the issue's attachments. The media id is read from where
+ * the attachment's content redirects to, a redirect never followed (the credentials stay with the site); without one the
+ * file is linked instead, and the agent is told.
  *
- * Reuse is bounded: only an attachment the AI account made within {@link jiraAttachmentReuseMaxAgeMs} counts — a resend
- * comes within minutes, and an older file of the same name and size may well hold something else.
+ * Reuse is by CONTENT: an attachment of the issue is reused for a file only when the AI account attached it and the upload
+ * store (`uploadedFiles.ts`) holds it with the file's name, size and sha256 — a resend whose comment did not land attaches
+ * nothing twice, and a file regenerated under the same name and length is uploaded anew, never shown as the old one.
  */
 
 /** The most files one comment shows — Telegram's album cap, so the tool reads the same on both. */
 export const jiraFilesMaxCount = 10;
-/** How old an attachment of the AI account's may be and still stand for a file of its name and size (a resend's). */
-export const jiraAttachmentReuseMaxAgeMs = 60 * 60 * 1000;
 
 /** One file the comment carries: its attachment, and how it shows. */
 export interface JiraAttachedFile {
@@ -62,7 +63,8 @@ export interface JiraFileAttachDeps {
   aiAccountId: string;
   /** `https://<site>`: the attachment links point there. */
   siteUrl: string;
-  now: () => number;
+  /** What the AI account uploaded, by content: the only attachments a file may reuse. */
+  uploads: Pick<JiraUploadedFiles, 'findAttachmentIds' | 'record'>;
   /** Tests only: how files are opened (the platform's own by default). */
   openStrategy?: FileSendOpenStrategy;
 }
@@ -70,6 +72,7 @@ export interface JiraFileAttachDeps {
 /** A file read and checked, ready to be attached. */
 interface CheckedFile {
   opened: OpenedSendFile;
+  /** The name it is attached under ({@link getJiraUploadFileName}): the upload's and every comparison's. */
   name: string;
   kind: JiraOutgoingFileKind;
   mimeType: string;
@@ -77,6 +80,9 @@ interface CheckedFile {
   /** What the agent should know about it although it passed. */
   note?: string;
 }
+
+/** A checked file with its content hash: what reuse and the upload store compare. */
+type HashedFile = CheckedFile & { sha256: string };
 
 function getMegabytes(bytes: number): string {
   return (bytes / (1024 * 1024)).toFixed(1);
@@ -136,11 +142,22 @@ function getSentKind(file: JiraAttachedFile): FileSendKind {
   return path.extname(file.name).toLowerCase() === '.gif' ? 'animation' : 'photo';
 }
 
+/** `files` with each file once, in the order first named: the same path twice, or two paths of one file, are one file. */
+function getDistinctFiles(files: readonly OpenedSendFile[]): OpenedSendFile[] {
+  const seen = new Set<string>();
+  return files.filter((file) => {
+    const identity = `${file.identity.dev}:${file.identity.ino}`;
+    if (seen.has(identity)) return false;
+    seen.add(identity);
+    return true;
+  });
+}
+
 /** Read and check every opened file; the first refusal, or all of them checked. */
 function checkFiles(files: readonly OpenedSendFile[]): { ok: true; files: CheckedFile[] } | { ok: false; error: string } {
   const checked: CheckedFile[] = [];
   for (const opened of files) {
-    const name = path.basename(opened.absPath);
+    const name = getJiraUploadFileName(path.basename(opened.absPath));
     const check = checkJiraOutgoingFile(name, opened.sizeBytes, createDescriptorByteReader(opened.fd));
     if (!check.ok) return { ok: false, error: check.error };
     checked.push({ opened, name, kind: check.kind, mimeType: check.mimeType, size: check.size, ...(check.note ? { note: check.note } : {}) });
@@ -171,15 +188,18 @@ export async function attachFilesToIssue(
   }, deps.openStrategy);
   if (!opened.ok) return { ok: false, error: `${opened.error}; nothing was attached or posted` };
   try {
-    const checked = checkFiles(opened.files);
+    const checked = checkFiles(getDistinctFiles(opened.files));
     if (!checked.ok) return { ok: false, error: `${checked.error} Nothing was attached or posted.` };
     const notes = checked.files.flatMap((file) => (file.note ? [file.note] : []));
+    // Hashed before anything is uploaded: a file that cannot be read whole attaches nothing.
+    const hashed: HashedFile[] = [];
+    for (const file of checked.files) hashed.push({ ...file, sha256: await getFileSha256(file.opened.fd, file.opened.sizeBytes) });
     const issue = await deps.client.getIssue(issueKey, ['attachment']);
     const onIssue = issue.fields.attachment ?? [];
     const taken = new Set<string>();
     const done: string[] = [];
     const attached: JiraAttachedFile[] = [];
-    for (const file of checked.files) {
+    for (const file of hashed) {
       let result: { attachmentId: string; isReused: boolean } | { error: string };
       try {
         result = await attachOne(deps, issueKey, file, onIssue, taken);
@@ -222,38 +242,46 @@ async function getMediaIdSafely(deps: JiraFileAttachDeps, file: JiraAttachedFile
   }
 }
 
-/** A recent attachment of the AI account's own of this name and size that no earlier file of the comment took. */
-function findReusable(deps: JiraFileAttachDeps, attachments: readonly JiraAttachment[], file: CheckedFile, taken: ReadonlySet<string>): JiraAttachment | null {
-  const oldestMs = deps.now() - jiraAttachmentReuseMaxAgeMs;
-  return attachments.find((attachment) => attachment.author?.accountId === deps.aiAccountId
+/** Is `attachment` the AI account's, of the file's name and size, and not taken by an earlier file of the comment? */
+function checkIsSameNamedOwnAttachment(deps: JiraFileAttachDeps, attachment: JiraAttachment, file: HashedFile, taken: ReadonlySet<string>): boolean {
+  return attachment.author?.accountId === deps.aiAccountId
     && attachment.filename === file.name
     && attachment.size === file.opened.sizeBytes
-    && Date.parse(attachment.created ?? '') >= oldestMs
-    && !taken.has(attachment.id)) ?? null;
+    && !taken.has(attachment.id);
+}
+
+/** An attachment of the issue that holds exactly this file — recorded with its name, size and hash — that no earlier file of the comment took. */
+function findReusable(deps: JiraFileAttachDeps, issueKey: string, attachments: readonly JiraAttachment[], file: HashedFile, taken: ReadonlySet<string>): JiraAttachment | null {
+  const sameContentIds = new Set(deps.uploads.findAttachmentIds(issueKey, { filename: file.name, size: file.opened.sizeBytes, sha256: file.sha256 }));
+  return attachments.find((attachment) => sameContentIds.has(attachment.id) && checkIsSameNamedOwnAttachment(deps, attachment, file, taken)) ?? null;
 }
 
 /**
- * One file's attachment: one of its name and size the AI account attached before, else a new upload. An upload Jira
- * did not confirm is looked for among the issue's attachments once; still not there, it is an error — never a second
- * upload, which could attach it twice.
+ * One file's attachment: one of the issue's that holds exactly this file, else a new upload, recorded by its content. An
+ * upload Jira did not confirm is looked for among the attachments that appeared during it, once; still not there, it is an
+ * error — never a second upload, which could attach it twice.
  */
 async function attachOne(
   deps: JiraFileAttachDeps,
   issueKey: string,
-  file: CheckedFile,
+  file: HashedFile,
   onIssue: readonly JiraAttachment[],
   taken: ReadonlySet<string>,
 ): Promise<{ attachmentId: string; isReused: boolean } | { error: string }> {
-  const reusable = findReusable(deps, onIssue, file, taken);
+  const reusable = findReusable(deps, issueKey, onIssue, file, taken);
   if (reusable) return { attachmentId: reusable.id, isReused: true };
+  const identity = { filename: file.name, size: file.opened.sizeBytes, sha256: file.sha256 };
   const uploaded = await deps.client.uploadAttachment(issueKey, { fd: file.opened.fd, filename: file.name, mimeType: file.mimeType, sizeBytes: file.opened.sizeBytes });
+  let attachment: JiraAttachment | undefined;
   if (uploaded.outcome === 'uploaded') {
-    const attachment = uploaded.attachments.find((candidate) => candidate.filename === file.name) ?? (uploaded.attachments.length === 1 ? uploaded.attachments[0] : undefined);
-    return attachment ? { attachmentId: attachment.id, isReused: false } : { error: `Jira took the upload of ${file.name} but names no such attachment in its answer` };
+    attachment = uploaded.attachments.find((candidate) => candidate.filename === file.name) ?? (uploaded.attachments.length === 1 ? uploaded.attachments[0] : undefined);
+    if (!attachment) return { error: `Jira took the upload of ${file.name} but names no such attachment in its answer` };
+  } else {
+    // Only an attachment that appeared during this upload can be it.
+    const nowOnIssue = (await deps.client.getIssue(issueKey, ['attachment'])).fields.attachment ?? [];
+    attachment = nowOnIssue.find((candidate) => !onIssue.some((before) => before.id === candidate.id) && checkIsSameNamedOwnAttachment(deps, candidate, file, taken));
+    if (!attachment) return { error: `the upload of ${file.name} was not confirmed (${uploaded.reason}) and it is not on the issue` };
   }
-  const nowOnIssue = (await deps.client.getIssue(issueKey, ['attachment'])).fields.attachment ?? [];
-  const landed = findReusable(deps, nowOnIssue.filter((attachment) => !onIssue.some((before) => before.id === attachment.id)), file, taken);
-  return landed
-    ? { attachmentId: landed.id, isReused: false }
-    : { error: `the upload of ${file.name} was not confirmed (${uploaded.reason}) and it is not on the issue` };
+  deps.uploads.record(issueKey, attachment.id, identity);
+  return { attachmentId: attachment.id, isReused: false };
 }

@@ -310,6 +310,16 @@ const readFileAt = promisify(fs.read);
 /** What may not stand in a multipart file name: its quote, a backslash, control characters. */
 const unsafeUploadNameCharsRe = /["\\\u0000-\u001f\u007f]/g;
 
+/**
+ * @description The name a file is attached under: its own, with each character that could break the multipart header
+ * (a quote, a backslash, a control character) made `_`. The caller uses it for the upload AND for every comparison with
+ * the issue's attachments, so a resend finds what it attached; `uploadAttachment` applies it as well — a no-op on a name
+ * it already went through — so no caller can put a raw name into the header.
+ */
+export function getJiraUploadFileName(name: string): string {
+  return name.replace(unsafeUploadNameCharsRe, '_');
+}
+
 /** @name JiraSearchRequest @description `POST /rest/api/3/search/jql` (D13). */
 export interface JiraSearchRequest {
   jql: string;
@@ -666,7 +676,7 @@ export function createJiraClient(options: JiraClientOptions): JiraClient {
     uploadAttachment: async (issueKey, file) => {
       const requestPath = `/rest/api/3/issue/${encode(issueKey)}/attachments`;
       const boundary = `charness-${randomBytes(12).toString('hex')}`;
-      const filename = file.filename.replace(unsafeUploadNameCharsRe, '_');
+      const filename = getJiraUploadFileName(file.filename);
       const head = Buffer.from(
         `--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="${filename}"\r\nContent-Type: ${file.mimeType}\r\n\r\n`,
         'utf8',

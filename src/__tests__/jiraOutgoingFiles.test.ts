@@ -1,25 +1,26 @@
 /**
  * @description Files an agent shows on a Jira issue (`outgoingFiles.ts`) over real files in a temporary folder and a fake
  * client that records every call: everything checked before anything is uploaded, the folder rule of the file send,
- * the site's switch and upload limit, reuse of a recent attachment of the AI account's own, an upload Jira did not
- * confirm, the media ids read for what is shown and the nodes the comment carries.
+ * one file named twice attached once, the site's switch and upload limit, reuse ONLY of an attachment that holds the very
+ * same file (name, size and content, over a real upload store), an upload Jira did not confirm, the media ids read for
+ * what is shown and the nodes the comment carries.
  */
 
 /** Test case: N/A — Charness has no Jira tracker. */
 
 import { afterEach, beforeEach, describe, it, mock } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, readSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {
   appendNodesToBodies,
   attachFilesToIssue,
   createAttachedFilesNodes,
-  jiraAttachmentReuseMaxAgeMs,
   jiraFilesMaxCount,
   type JiraFileAttachDeps,
 } from '../connectors/jira/outgoingFiles';
+import { JiraUploadedFiles } from '../connectors/jira/uploadedFiles';
 import { convertMarkdownToAdf, jiraCommentAdfMaxChars } from '../connectors/jira/adf';
 import type { JiraAttachment, JiraAttachmentSettings, JiraAttachmentUploadResult, JiraIssue } from '../connectors/jira/client';
 import { createPngBytes } from './imageFixtures';
@@ -49,15 +50,23 @@ interface FakeAttachJira {
 }
 
 let jira: FakeAttachJira;
-/** Holds the issue's folder and, beside it, a file outside it. */
+/** Holds the issue's folder and, beside it, a file outside it and the upload store's file. */
 let baseDir: string;
 let workDir: string;
+let uploadedFiles: JiraUploadedFiles;
+
+/** The upload store as a (re)started process reads it from its file. */
+async function loadUploads(): Promise<JiraUploadedFiles> {
+  const store = JiraUploadedFiles.createForDataDir(path.join(baseDir, 'jira-uploaded-files.jsonl'), () => nowMs);
+  await store.load();
+  return store;
+}
 
 function createDeps(): JiraFileAttachDeps {
   return {
     aiAccountId,
     siteUrl,
-    now: () => nowMs,
+    uploads: uploadedFiles,
     client: {
       getAttachmentSettings: async () => {
         jira.calls.push('settings');
@@ -98,7 +107,7 @@ function createDeps(): JiraFileAttachDeps {
 const attach = (paths: string[], isShownInline = true) => attachFilesToIssue(createDeps(), issueKey, workDir, paths, { isShownInline });
 const uploads = (): string[] => jira.calls.filter((call) => call.startsWith('upload'));
 
-beforeEach(() => {
+beforeEach(async () => {
   jira = { calls: [], settings: { isEnabled: true, uploadLimitBytes: 10 * 1024 * 1024 }, onIssue: [], uploadOutcomes: [], mediaIds: new Map([['9001', 'aaaaaaaa-0000-4000-8000-000000000001'], ['9002', 'aaaaaaaa-0000-4000-8000-000000000002']]), uploadedBytes: [], nextId: 9001 };
   baseDir = mkdtempSync(path.join(os.tmpdir(), 'jira-files-'));
   workDir = path.join(baseDir, 'proj');
@@ -107,6 +116,7 @@ beforeEach(() => {
   writeFileSync(path.join(workDir, 'shot.png'), pngBytes);
   writeFileSync(path.join(workDir, 'run.mp4'), createMp4Bytes());
   writeFileSync(path.join(workDir, 'notes.txt'), 'the log\n');
+  uploadedFiles = await loadUploads();
 });
 
 afterEach(() => {
@@ -196,33 +206,69 @@ describe('nothing is uploaded unless every file passes', () => {
   });
 });
 
-describe('sending again attaches nothing twice', () => {
-  const ownAttachment = (id: string, name: string, size: number, ageMs: number, accountId = aiAccountId): JiraAttachment => ({
-    id, filename: name, size, created: new Date(nowMs - ageMs).toISOString(), author: { accountId },
+describe('sending again attaches nothing twice — but only the very same file', () => {
+  const ownAttachment = (id: string, name: string, size: number, accountId = aiAccountId): JiraAttachment => ({
+    id, filename: name, size, created: new Date(nowMs).toISOString(), author: { accountId },
   });
 
-  it('a recent attachment of the AI account\'s own of the same name and size is reused; each one stands for one file only', async () => {
-    jira.onIssue = [ownAttachment('8001', 'notes.txt', 8, 5 * 60 * 1000)];
-    const result = await attach(['notes.txt', 'notes.txt']);
-    assert.deepEqual(uploads(), [`upload ${issueKey} notes.txt text/plain 8`], 'the second file of that name is a new upload');
-    assert.deepEqual(result.ok && result.files.map((file) => [file.attachmentId, file.isReused]), [['8001', true], ['9001', false]]);
-    assert.match(result.ok ? result.summary : '', /notes\.txt \(linked, attachment 8001, attached before\)/);
+  it('a resend reuses what the first send attached — same name, size and content, as the upload recorded it — and so does a restarted process', async () => {
+    assert.equal((await attach(['notes.txt', 'shot.png'])).ok, true);
+    jira.calls = [];
+    const again = await attach(['notes.txt', 'shot.png']);
+    assert.deepEqual(uploads(), []);
+    assert.deepEqual(again.ok && again.files.map((file) => [file.attachmentId, file.isReused]), [['9001', true], ['9002', true]]);
+    assert.match(again.ok ? again.summary : '', /^notes\.txt \(linked, attachment 9001, attached before\)/);
+    uploadedFiles = await loadUploads();
+    jira.calls = [];
+    const afterRestart = await attach(['notes.txt']);
+    assert.deepEqual(uploads(), [], 'the record is read back from its file');
+    assert.equal(afterRestart.ok && afterRestart.files[0].attachmentId, '9001');
   });
 
-  it('not reused: someone else\'s, one older than the hour, one of another size', async () => {
-    jira.onIssue = [
-      ownAttachment('8001', 'notes.txt', 8, 60_000, 'someone-else'),
-      ownAttachment('8002', 'notes.txt', 8, jiraAttachmentReuseMaxAgeMs + 60_000),
-      ownAttachment('8003', 'notes.txt', 9, 60_000),
-    ];
+  it('a file regenerated under the same name and length is uploaded anew: the old attachment would show the old content', async () => {
+    await attach(['notes.txt']);
+    writeFileSync(path.join(workDir, 'notes.txt'), 'new log\n');
+    jira.calls = [];
+    const result = await attach(['notes.txt']);
+    assert.deepEqual(uploads(), [`upload ${issueKey} notes.txt text/plain 8`]);
+    assert.deepEqual(result.ok && result.files.map((file) => [file.attachmentId, file.isReused]), [['9002', false]]);
+  });
+
+  it('not reused: an attachment of the same name and size nobody recorded (attached by hand, by someone else), nor a recorded one that is gone from the issue', async () => {
+    jira.onIssue = [ownAttachment('8001', 'notes.txt', 8), ownAttachment('8002', 'notes.txt', 8, 'someone-else')];
     await attach(['notes.txt']);
     assert.equal(uploads().length, 1);
+    jira.onIssue = [];
+    jira.calls = [];
+    await attach(['notes.txt']);
+    assert.equal(uploads().length, 1, 'the recorded attachment was deleted from the issue: uploaded again');
   });
 
-  it('an upload Jira did not confirm: found on the issue it counts as attached; not found it is an error naming what is attached already — never a second upload', async () => {
+  it('the same file named twice — the same path, another spelling of it, or a link to it — is attached and shown once', async () => {
+    symlinkSync(path.join(workDir, 'shot.png'), path.join(workDir, 'again.png'));
+    const result = await attach(['shot.png', './shot.png', 'again.png']);
+    assert.deepEqual(uploads(), [`upload ${issueKey} shot.png image/png ${pngBytes.length}`]);
+    assert.equal(result.ok && result.files.length, 1);
+    assert.equal(result.ok && result.nodes.length, 1);
+  });
+
+  it('a name the upload header cannot carry is made safe once: uploaded under that name, and a resend finds the attachment by it', async () => {
+    writeFileSync(path.join(workDir, 'run "final".txt'), 'final\n');
+    await attach(['run "final".txt']);
+    assert.deepEqual(uploads(), [`upload ${issueKey} run _final_.txt text/plain 6`]);
+    jira.calls = [];
+    const again = await attach(['run "final".txt']);
+    assert.deepEqual(uploads(), [], 'reused');
+    assert.equal(again.ok && again.summary, 'run _final_.txt (linked, attachment 9001, attached before)');
+  });
+
+  it('an upload Jira did not confirm: found among the attachments that appeared during it, it counts as attached and is recorded; not found it is an error naming what is attached already — never a second upload', async () => {
     jira.uploadOutcomes = ['landedUnconfirmed'];
     const landed = await attach(['notes.txt']);
     assert.equal(landed.ok && landed.files[0].attachmentId, '9001');
+    jira.calls = [];
+    assert.equal((await attach(['notes.txt'])).ok, true);
+    assert.deepEqual(uploads(), [], 'the landed upload was recorded: a resend reuses it');
 
     jira.onIssue = [];
     jira.calls = [];

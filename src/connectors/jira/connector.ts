@@ -17,6 +17,7 @@ import { registerAgentBinDir } from '../../utils/agentEnvironment';
 import type { SessionKey } from '../../sessionKey';
 import type { RequestPromptOutcome } from '../../requests/types';
 import { JiraUnconfirmedPosts, jiraUnconfirmedPostsFileName } from './unconfirmedPosts';
+import { JiraUploadedFiles, jiraUploadedFilesFileName } from './uploadedFiles';
 import { sleep } from '../../utils';
 
 /**
@@ -267,6 +268,8 @@ export async function prepareJiraConnector(context: {
   await triggerLog.load();
   const unconfirmedPosts = JiraUnconfirmedPosts.createForDataDir(path.join(context.dataDir, jiraUnconfirmedPostsFileName), now);
   await unconfirmedPosts.load();
+  const uploadedFiles = JiraUploadedFiles.createForDataDir(path.join(context.dataDir, jiraUploadedFilesFileName), now);
+  await uploadedFiles.load();
 
   /** The connector's own folder inside a conversation's files dir. */
   const getJiraFilesDir = (key: SessionKey): string => path.join(resolveThreadFilesDir(context.dataDir, key), jiraFilesDirName);
@@ -283,7 +286,7 @@ export async function prepareJiraConnector(context: {
     const project = projectKey === null ? undefined : config.projects.get(projectKey);
     const decision = project ? resolveBoundWorkDir(context.workRoot, { subdir: project.folder }) : null;
     if (decision?.kind !== 'proceed') return { ok: false, error: `the folder of ${issueKey}'s project cannot be used, so no file can be attached; nothing was posted` };
-    return attachFilesToIssue({ client, aiAccountId: config.accountId, siteUrl: config.baseUrl, now }, issueKey, decision.workDir, paths, options);
+    return attachFilesToIssue({ client, aiAccountId: config.accountId, siteUrl: config.baseUrl, uploads: uploadedFiles }, issueKey, decision.workDir, paths, options);
   };
   const answerSink = createJiraAnswerSink({
     client,

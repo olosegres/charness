@@ -1704,9 +1704,9 @@ function registerJiraFileSendTool(server: ToolRegistrar, deps: SchedulerMcpDeps,
         'as a link to its attachment (as_file:true lists every file that way). To put files INTO your answer instead, pass them in ' +
         'answer_request\'s `files`. The comment goes into the thread your newest open request answers in. An image must be whole ' +
         'and what its name says, an .mp4 must be H.264 (convert: ffmpeg -i in.webm -c:v libx264 -pix_fmt yuv420p -movflags ' +
-        '+faststart out.mp4), and no file may be over the site\'s upload limit: otherwise nothing is attached. A file of the same ' +
-        'name and size you attached within the hour is reused, so sending again attaches nothing twice. If a send fails, say so in ' +
-        'your answer and go on.',
+        '+faststart out.mp4), and no file may be over the site\'s upload limit: otherwise nothing is attached. A file you attached ' +
+        'before with the same name and the same content is reused, so sending again attaches nothing twice. If a send fails, say so ' +
+        'in your answer and go on.',
       inputSchema: jiraSendFileInput,
     },
     async (args) => {

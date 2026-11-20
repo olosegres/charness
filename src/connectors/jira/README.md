@@ -447,11 +447,19 @@ attachment, or a link to one, shows only in the attachments list — only the me
   video in another container (`.mov`, `.webm`, …) is attached and linked, with a note. A refusal names the file and the
   fix, and nothing is attached or posted. The size a picture or video states is put on its media node (without one Jira
   shows it at a default size).
-- **Uploaded once.** `POST /issue/{key}/attachments` (multipart, `X-Atlassian-Token: no-check`, streamed from the
-  descriptor with its exact length, a time budget that grows with the size) is never repeated: an answer Jira did not
-  confirm is looked for among the issue's attachments once, else it is an error. A file of the same name and size that
-  the AI account attached within the hour (`jiraAttachmentReuseMaxAgeMs`) — an earlier try whose comment did not land —
-  is reused, so the agent may send the same answer again; an older one, or someone else's, is not. A failure after some
+- **One file, one attachment.** One file named twice — the same path, another spelling of it, a link to it (one
+  device and inode) — is attached and shown once. Its name is made safe for the multipart header once
+  (`getJiraUploadFileName`: a quote, a backslash or a control character becomes `_`), and that name is the upload's and
+  every comparison's.
+- **Uploaded once, reused only as the very same file.** `POST /issue/{key}/attachments` (multipart,
+  `X-Atlassian-Token: no-check`, streamed from the descriptor with its exact length, a time budget that grows with the
+  size) is never repeated: an answer Jira did not confirm is looked for among the attachments that appeared during it,
+  once, else it is an error. Every upload is recorded by CONTENT (`uploadedFiles.ts`, `DATA_DIR/jira-uploaded-files.jsonl`:
+  the issue, the attachment, the name, size and sha256; read back after a restart, 30 days kept), and a file the agent
+  sends again reuses an attachment only when it is still on the issue, the AI account's, and recorded with the file's
+  name, size AND hash — so the agent may send the same answer again without attaching anything twice, while a file
+  regenerated under the same name and length (a new screenshot, a new recording) is uploaded anew and never shows the
+  old content. An attachment nobody recorded — attached by hand, by someone else — is never reused. A failure after some
   files were attached names them.
 - **The media id** is read from where `GET /attachment/content/{id}` redirects (303 to the media API,
   `…/file/<uuid>/binary?…`); the redirect is NEVER followed, so the credentials stay with the site. No such redirect, or
