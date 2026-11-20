@@ -11717,7 +11717,7 @@ bot.on('my_chat_member', async (ctx) => {
   const generalKey: SessionKey = makeTelegramKey(chat.id, GENERAL_THREAD_ID);
   await replyToThread(
     generalKey,
-    formatGroupWelcome(t, { runningVersion: updateEngine?.getStatus().running.version, workRoot: ENV.workRoot }),
+    formatGroupWelcome(t, { workRoot: ENV.workRoot }),
     { parse_mode: 'Markdown' },
   );
 });

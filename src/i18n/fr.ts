@@ -138,7 +138,7 @@ export const frDict: Record<string, string> = {
     'impossible de lire les droits du bot — getChatMember échoué',
 
   'onboarding.welcome':
-    '👋 *{title}*\n\n' +
+    '👋 *Charness*\n\n' +
     'Je lance des agents Claude Code et OpenCode dans les fils de ce groupe : un fil = un dossier de projet = un agent.\n\n' +
     'Prêt à travailler en 3 étapes :\n' +
     '1️⃣ Faites de moi un admin du groupe avec les droits Manage Topics, Delete Messages et Pin Messages\n' +

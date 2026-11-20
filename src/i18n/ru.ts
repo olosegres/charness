@@ -142,7 +142,7 @@ export const ruDict: Record<string, string> = {
     'не могу прочитать права бота — getChatMember failed',
 
   'onboarding.welcome':
-    '👋 *{title}*\n\n' +
+    '👋 *Charness*\n\n' +
     'Я запускаю агентов Claude Code и OpenCode в топиках этой группы: один топик = одна папка проекта = один агент.\n\n' +
     'Три шага до начала работы:\n' +
     '1️⃣ Сделай меня админом группы с правами Manage Topics, Delete Messages и Pin Messages\n' +

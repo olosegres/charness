@@ -144,7 +144,7 @@ export const ukDict: Record<string, string> = {
     'не можу прочитати права бота — getChatMember failed',
 
   'onboarding.welcome':
-    '👋 *{title}*\n\n' +
+    '👋 *Charness*\n\n' +
     'Я запускаю агентів Claude Code і OpenCode у тредах цієї групи: один тред = одна папка проєкту = один агент.\n\n' +
     'Щоб почати роботу, три кроки:\n' +
     '1️⃣ Зроби мене адміністратором групи з правами Manage Topics, Delete Messages і Pin Messages\n' +

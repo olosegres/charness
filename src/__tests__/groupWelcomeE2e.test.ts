@@ -6,8 +6,7 @@
  *   boot → changes that are not «the bot joined» (another user made an admin, the bot itself leaving) post nothing
  *   → the bot joining posts ONE greeting into General, as Markdown — and the owner's next steps, which Telegram reports too (the
  *     bot made an admin, its rights edited after `/doctor`), post none — and that greeting is exactly the
- *     `onboarding.welcome` text with the version this very package says in its title (read from `package.json`, never a number
- *     written into the text) and the projects folder in plain words
+ *     `onboarding.welcome` text — a title that is the product name alone, no version — and the projects folder in plain words
  *   → a bot removed and added back (also straight as an admin) is greeted again
  *   → `/doctor` agrees with it: a bot that is not an admin, privacy mode on, fails the admin line and the privacy line; the same
  *     bot made an admin still has privacy mode on and gets no privacy line — nothing red is left for a step the greeting dropped.
@@ -24,7 +23,6 @@
 import { after, before, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import * as fs from 'fs';
-import * as path from 'path';
 import { FakeTelegram, generalTopicThreadId, type FakeTelegramMessage } from './telegramE2e/fakeTelegram';
 import { TopicDriver } from './telegramE2e/topicDriver';
 import {
@@ -58,8 +56,6 @@ const replyTimeoutMs = 20 * 1000;
 const doctorHeader = 'Charness Doctor';
 /** How many polls to let pass after the greeting before counting what the bot posted: the updates queued before it have been handled. */
 const settlePolls = 2;
-
-const packageVersion: string = JSON.parse(fs.readFileSync(path.resolve(__dirname, '..', '..', 'package.json'), 'utf8')).version;
 
 let layout: IsolatedInstanceLayout | null = null;
 let charness: IsolatedCharness | null = null;
@@ -151,11 +147,11 @@ describe('the greeting when the bot is added to the group', () => {
     assert.equal(listGreetings().length, 1, 'one greeting, for the one change that is the bot joining');
 
     assert.equal(greeting.parseMode, 'Markdown', 'the title is bold and the folder is code');
-    assert.equal(greeting.text.split('\n')[0], `👋 *Charness ${packageVersion}*`, 'the title carries the version of the package that runs, not a number written into the text');
+    assert.equal(greeting.text.split('\n')[0], '👋 *Charness*', 'the title is the product name, with no version');
     assert.equal(
       greeting.text,
-      enDict['onboarding.welcome'].replace('{title}', `Charness ${packageVersion}`).replace('{workRoot}', getLayout().workRoot),
-      'the greeting is the onboarding text with the title and the projects folder filled in',
+      enDict['onboarding.welcome'].replace('{workRoot}', getLayout().workRoot),
+      'the greeting is the onboarding text with the projects folder filled in',
     );
     assert.ok(greeting.text.includes(`Project folders: \`${getLayout().workRoot}\``), 'the projects folder in plain words, not an environment variable');
   });

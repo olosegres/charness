@@ -142,7 +142,7 @@ export const enDict: Record<string, string> = {
     'cannot read bot rights — getChatMember failed',
 
   'onboarding.welcome':
-    '👋 *{title}*\n\n' +
+    '👋 *Charness*\n\n' +
     'I run Claude Code and OpenCode agents in this group\'s topics: one topic = one project folder = one agent.\n\n' +
     'Ready to work in 3 steps:\n' +
     '1️⃣ Make me a group admin with the rights Manage Topics, Delete Messages and Pin Messages\n' +

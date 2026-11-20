@@ -138,7 +138,7 @@ export const ptDict: Record<string, string> = {
     'não é possível ler os direitos do bot — getChatMember falhou',
 
   'onboarding.welcome':
-    '👋 *{title}*\n\n' +
+    '👋 *Charness*\n\n' +
     'Executo agentes Claude Code e OpenCode nos tópicos deste grupo: um tópico = uma pasta de projeto = um agente.\n\n' +
     'Pronto para trabalhar em 3 passos:\n' +
     '1️⃣ Torna-me admin do grupo com os direitos Manage Topics, Delete Messages e Pin Messages\n' +

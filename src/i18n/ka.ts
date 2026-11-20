@@ -138,7 +138,7 @@ export const kaDict: Record<string, string> = {
     'Bot-ის უფლებების წაკითხვა ვერ ხერხდება — getChatMember ვერ შედგა',
 
   'onboarding.welcome':
-    '👋 *{title}*\n\n' +
+    '👋 *Charness*\n\n' +
     'მე ვუშვებ Claude Code-ისა და OpenCode-ის აგენტებს ამ ჯგუფის თემებში: ერთი თემა = ერთი პროექტის საქაღალდე = ერთი აგენტი.\n\n' +
     'მუშაობის დასაწყებად 3 ნაბიჯია:\n' +
     '1️⃣ გამხადეთ ჯგუფის ადმინისტრატორი უფლებებით Manage Topics, Delete Messages და Pin Messages\n' +
