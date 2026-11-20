@@ -223,7 +223,9 @@ in the turn, or one a later echo takes off, is never the one that goes), the tur
 (`getInputsAfterTurnEnd`), and a new turn's start or an interrupt forgets the marks (a turn that never reported a result leaves
 none behind), so the readers that decide AT a turn end (the claude-per-turn stop, a deferred
 account switch) are not held off by it for good. A turn with NO echo of ours (a finished task's notification, a scheduled job,
-the bot's own `/compact`) took nothing in and drops nothing — it only starts the grace over: a real message the CLI queued behind
+the bot's own `/compact`) took nothing in and drops nothing — it writes no `user` line of its own at all (recorded live on 2.1.329 for
+a cron job, a `ScheduleWakeup` wakeup and a task notification: `claudeSelfStartedTurnFrames.ts`), and a message written behind it
+is echoed in its own turn after it — it only starts the grace over: a real message the CLI queued behind
 it stays counted until its own echo, or the stop and the switch would kill the process a moment before the turn that takes it
 in. Every read — and the start of a turn the bot never wrote to — also drops what is past its grace. `checkHasUnconsumedInput`
 reads the same bounded judgement.
