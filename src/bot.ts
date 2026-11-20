@@ -15298,7 +15298,7 @@ const limitEpisodesOwnedByRecovery = new Set<string>();
  * zero, and {@link handleApiError} announces no limit for a window that is over.
  *
  * Each arming STAMPS the episode (`state.json` `limitEpisodesRecovered`): the parked
- * error's place in the log and a stamp of its text (`buildLimitEpisodeMarker`), so
+ * error's place in the log and a stamp of its whole `result` line (`buildLimitEpisodeMarker`), so
  * an episode is recovered at most once: «⏭ Skip once», a user takeover and a
  * give-up all clear the armed record while leaving the same trailing error in the
  * log, and hot mode reloads the bot on every code change — without the stamp each
@@ -15340,6 +15340,7 @@ function recoverLimitEpisodesFromDisk(): void {
     const decision = decideLimitEpisodeRecovery({
       errorText,
       errorEndOffset: parked?.endOffset ?? null,
+      errorStamp: parked?.stamp ?? null,
       errorWrittenAtMs,
       log,
       handled: state.getLimitEpisodeRecovered(key),

@@ -413,7 +413,7 @@ export interface ApiRetryState {
  * @description A limit EPISODE already handled in a json-stream session's `stdout.jsonl` (`state.json`
  * `limitEpisodesRecovered`): recorded when the boot recovery arms a limit wait from the log's trailing error, and when a
  * live wait settles without its resume («⏭ Skip once», a give-up, a used-up balance). A later boot whose log is parked on
- * the SAME error (`errorEndOffset` + `errorStamp`, `utils/limitEpisodeRecovery.ts`) does not arm it again — whatever ambient
+ * the SAME `result` line (`errorEndOffset` + `errorStamp`, `utils/limitEpisodeRecovery.ts`) does not arm it again — whatever ambient
  * frames (the boot's own `mcp_status` reply) were appended after it; a genuinely NEW trailing error is handled again. A marker
  * without `errorEndOffset` (written before it was kept, or of a log not parked on an error) is compared on the log's byte size
  * plus mtime, as it always was.
@@ -423,7 +423,7 @@ export interface LimitEpisodeMarker {
   mtimeMs: number;
   /** The byte offset right after the parked error's `result` line: where the episode is in the log. */
   errorEndOffset?: number;
-  /** A hash of the parked error's text (`getLimitEpisodeErrorStamp`), beside its offset. */
+  /** A hash of the parked error's whole `result` line (`getLimitEpisodeLineStamp`: its turn's `uuid`, `duration_ms`, `session_id`), beside its offset. */
   errorStamp?: string;
 }
 

@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-**A restart no longer brings back a usage limit the bot had already dealt with: before, every restart re-armed the last limit a Claude topic had stopped on — a wait you had skipped, given up or that had already resumed was announced and waited for again.**
+**A restart no longer brings back a usage limit the bot had already dealt with: before, every restart re-armed the last limit a Claude topic had stopped on — a wait you had skipped or that had given up was announced and waited for again.**
 The bot recognises a limit it already handled by the error itself, not by the whole session log: each restart adds the agent's answer to the bot's own MCP check to that log, which made the old error look new at the next restart. A limit error found at a restart is also no longer confirmed by a usage reading taken before the error — one the restart's own usage poll had not re-read or marked out of date yet could make the bot wait hours for a reset; such a limit is now probed with a short retry first, as a live one is, and its repeat confirms it.
 
 **When a Claude account signs out, the bot now also writes to you in a private message, with a button that signs it in again — and `/limits` no longer makes the account vanish.**

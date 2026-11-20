@@ -73,6 +73,13 @@ export interface ParkedTerminalError {
    * appended after it — the reply to the bot's boot `mcp_status`, a rate-limit event — move the log's size and mtime, never this.
    */
   endOffset: number;
+  /**
+   * {@link getLimitEpisodeLineStamp} of that whole `result` line — WHICH turn it ended: the line carries the turn's own `uuid`,
+   * `duration_ms` and `session_id`. The log is deleted and written anew whenever the agent process starts or exits, so a
+   * resumed process can hit the same limit text at the same byte offset (the same start frames, the bot's fixed «continue»
+   * prompt, a clock-only reset that repeats every day); the offset and the text alone would take that new limit for the old one.
+   */
+  stamp: string;
 }
 
 const newlineByte = 0x0a;
@@ -88,13 +95,16 @@ export function findParkedTerminalError(tail: Buffer, tailStartOffset: number): 
   while (lineStart < tail.length) {
     const newlineAt = tail.indexOf(newlineByte, lineStart);
     const lineEnd = newlineAt === -1 ? tail.length : newlineAt + 1;
-    const parsed = parseStreamJsonLine(tail.subarray(lineStart, newlineAt === -1 ? tail.length : newlineAt).toString('utf8'));
+    const line = tail.subarray(lineStart, newlineAt === -1 ? tail.length : newlineAt);
+    const parsed = parseStreamJsonLine(line.toString('utf8'));
     lineStart = lineEnd;
     if (!parsed) continue; // blank, or the tail's torn first line
     for (const action of classifyClaudeStreamMessage(parsed)) {
       if (action.kind === 'turnEnd') {
         // A later healthy turn CLEARS the verdict — the session recovered.
-        parked = action.isError && action.errorText !== null ? { text: action.errorText, endOffset: tailStartOffset + lineEnd } : null;
+        parked = action.isError && action.errorText !== null
+          ? { text: action.errorText, endOffset: tailStartOffset + lineEnd, stamp: getLimitEpisodeLineStamp(line) }
+          : null;
       } else if (checkIsSessionActivity(action)) {
         parked = null;
       }
@@ -103,23 +113,26 @@ export function findParkedTerminalError(tail: Buffer, tailStartOffset: number): 
   return parked;
 }
 
-/** How many hex digits of the error text's hash an episode marker keeps: enough to tell two errors apart. */
-const errorStampLength = 16;
+/** How many hex digits of the `result` line's hash an episode marker keeps: enough to tell two turns apart. */
+const lineStampLength = 16;
 
-/** @description The stamp of a parked error's text an episode marker keeps beside its offset (a hash, not the text). */
-export function getLimitEpisodeErrorStamp(errorText: string): string {
-  return crypto.createHash('sha256').update(errorText).digest('hex').slice(0, errorStampLength);
+/**
+ * @description The stamp of a parked error's whole `result` line (its bytes, the newline left out) an episode marker keeps beside
+ * its offset: a hash — the line's text, the error included, is not kept.
+ */
+export function getLimitEpisodeLineStamp(resultLine: Buffer | string): string {
+  return crypto.createHash('sha256').update(resultLine).digest('hex').slice(0, lineStampLength);
 }
 
 /**
  * @description The marker that records an episode as handled: the log's identity now, and — when the log is parked on an error —
- * that error's place and text stamp, which is what later boots compare ({@link decideLimitEpisodeRecovery}).
+ * that error's place and the stamp of its `result` line, which is what later boots compare ({@link decideLimitEpisodeRecovery}).
  */
 export function buildLimitEpisodeMarker(log: Pick<LimitEpisodeMarker, 'sizeBytes' | 'mtimeMs'>, parked: ParkedTerminalError | null): LimitEpisodeMarker {
   return {
     sizeBytes: log.sizeBytes,
     mtimeMs: log.mtimeMs,
-    ...(parked !== null ? { errorEndOffset: parked.endOffset, errorStamp: getLimitEpisodeErrorStamp(parked.text) } : {}),
+    ...(parked !== null ? { errorEndOffset: parked.endOffset, errorStamp: parked.stamp } : {}),
   };
 }
 
@@ -189,21 +202,24 @@ export type LimitEpisodeDecision =
  * would resurrect a wait that was already settled — skipped by «⏭ Skip once», by a user takeover, by the retry giving up, or armed by
  * the recovery of an earlier boot. This matters on every code change, because hot mode reloads the bot.
  *
- * The episode is the parked error ITSELF: the same error frame at the same place in the log (`errorEndOffset`, and its text stamp).
- * Frames written after it that are no activity of the session — above all the reply to the `mcp_status` request every boot sends an
- * adopted session, and rate-limit events — change the log's size and mtime but not the episode; compared on those, every restart
- * re-armed the last parked error. A genuinely NEW trailing error is a new frame at a new offset, so it still arms. A marker written
+ * The episode is the parked error ITSELF: the same `result` line (`errorStamp`, the stamp of the whole line — its turn's `uuid`,
+ * `duration_ms`, `session_id` and the error) at the same place in the log (`errorEndOffset`). Frames written after it that are no
+ * activity of the session — above all the reply to the `mcp_status` request every boot sends an adopted session, and rate-limit
+ * events — change the log's size and mtime but not the episode; compared on those, every restart re-armed the last parked error. A
+ * genuinely NEW trailing error is a new line — at a new offset, or, in a log a new process wrote anew, at the same offset with the
+ * same text but another turn's fields — so it still arms; a stamp missing on either side counts as another line. A marker written
  * before the episode was kept (no `errorEndOffset`), or a log read without its error's place, is compared the old way: both the
  * log's size and its mtime.
  */
 function checkIsSameHandledEpisode(
   handled: LimitEpisodeMarker | undefined,
-  current: { log: LimitEpisodeMarker; errorText: string | null; errorEndOffset: number | null | undefined },
+  current: { log: LimitEpisodeMarker; errorText: string | null; errorEndOffset: number | null | undefined; errorStamp: string | null | undefined },
 ): boolean {
   if (!handled) return false;
   if (handled.errorEndOffset !== undefined && current.errorEndOffset !== undefined && current.errorEndOffset !== null && current.errorText !== null) {
     return handled.errorEndOffset === current.errorEndOffset
-      && (handled.errorStamp === undefined || handled.errorStamp === getLimitEpisodeErrorStamp(current.errorText));
+      && handled.errorStamp !== undefined && current.errorStamp !== undefined && current.errorStamp !== null
+      && handled.errorStamp === current.errorStamp;
   }
   return handled.sizeBytes === current.log.sizeBytes && handled.mtimeMs === current.log.mtimeMs;
 }
@@ -234,6 +250,8 @@ export function decideLimitEpisodeRecovery(input: {
   errorText: string | null;
   /** Where the parked error's frame ends in the log ({@link findParkedTerminalError}); absent → the episode is told by the log's identity. */
   errorEndOffset?: number | null;
+  /** The stamp of that error's whole `result` line ({@link ParkedTerminalError.stamp}); with `errorEndOffset`, WHICH turn's error it is. */
+  errorStamp?: string | null;
   /** When the error was written, from the transcript; absent → the log's mtime. */
   errorWrittenAtMs?: number | null;
   /** Identity (size + mtime) of the session's `stdout.jsonl` right now. */
@@ -244,7 +262,7 @@ export function decideLimitEpisodeRecovery(input: {
   hasArmedRetry: boolean;
 }): LimitEpisodeDecision {
   if (input.hasArmedRetry) return { action: 'skip', reason: 'alreadyArmed' };
-  if (checkIsSameHandledEpisode(input.handled, { log: input.log, errorText: input.errorText, errorEndOffset: input.errorEndOffset })) {
+  if (checkIsSameHandledEpisode(input.handled, { log: input.log, errorText: input.errorText, errorEndOffset: input.errorEndOffset, errorStamp: input.errorStamp })) {
     return { action: 'skip', reason: 'alreadyHandled' };
   }
   if (!input.errorText) return { action: 'skip', reason: 'noError' };
