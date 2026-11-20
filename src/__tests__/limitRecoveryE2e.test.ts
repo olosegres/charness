@@ -425,8 +425,11 @@ describe('The boot recovery of a parked usage limit end to end: built charness, 
         ...persisted.claudeProfiles,
         default: {
           ...defaultProfile,
-          // Read two hours ago: due again, the refresher re-polls it at boot, finds no sign-in and marks it stale.
-          usage: { fetchedAt: new Date(Date.now() - 2 * 60 * msPerMinute).toISOString(), source: 'api', buckets: [
+          // Read two hours ago and already marked stale: due again, the refresher re-polls it at boot, finds no sign-in and marks it
+          // stale once more. Stale from the start, not only once that poll is done: this boot's own recovery re-arms the parked error
+          // too (the reply to the boot's `mcp_status` lands in the log after the episode stamp), and decides on the reading as it is
+          // then — a race with the poll the step must not depend on.
+          usage: { fetchedAt: new Date(Date.now() - 2 * 60 * msPerMinute).toISOString(), source: 'api', isStale: true, buckets: [
             { kind: 'session', percent: 100, resetsAt: new Date(Date.now() + 2 * 60 * msPerMinute).toISOString(), scopeModel: null },
             { kind: 'weekly_all', percent: 30, resetsAt: new Date(Date.now() + weeklyResetAheadMs).toISOString(), scopeModel: null },
           ] },
@@ -434,7 +437,7 @@ describe('The boot recovery of a parked usage limit end to end: built charness, 
       };
     });
     await getCharness().waitFor('the snapshot marked stale', agentStartTimeoutMs, () => readPersistedState(getLayout()).claudeProfiles?.default?.usage?.isStale === true);
-    // The parked error was handled by the previous step's recovery: a NEW turn hits the wording.
+    // A NEW turn hits the wording (the operator's message below ends whatever this boot's recovery armed).
     fs.writeFileSync(path.join(getLayout().fakeStateDir, fakeClaudeApiErrorOnceFileName), "API Error: 429 This request would exceed your account's rate limit. Please try again later.");
     const callsBefore = fakeTelegram.listCalls('sendMessage').length;
     fakeTelegram.pushOperatorMessage(topicThreadId, `${requestLabel}-stalesnapshot one more step`);
