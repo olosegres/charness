@@ -12,7 +12,7 @@ import { getInputsAfterEcho, getInputsAfterTurnEnd, getInputsOnTheirWay, type Un
 import { unconsumedInputGraceMs } from '../utils/jsonStreamPendingWork';
 
 const now = 5_000_000;
-const written = (...texts: string[]): UnconsumedInput[] => texts.map((text) => ({ text, since: now }));
+const written = (...texts: string[]): UnconsumedInput[] => texts.map((text) => ({ text, since: now, hasSeenTurnEnd: false }));
 const textsOf = (inputs: readonly UnconsumedInput[]): string[] => inputs.map((input) => input.text);
 
 describe('getInputsAfterEcho — what an echo carries is taken in', () => {
@@ -69,10 +69,18 @@ describe('getInputsOnTheirWay / getInputsAfterTurnEnd — the bound', () => {
     assert.equal(getInputsOnTheirWay({ inputs: written('a'), isBusy: false, now: now + unconsumedInputGraceMs }).length, 0);
   });
 
-  it('a turn end starts every message\'s wait over, the older one and the newer alike', () => {
-    const older: UnconsumedInput = { text: 'older', since: now - 10 * unconsumedInputGraceMs };
+  it('the turn end that follows a write starts its wait over: the turn that takes it in is about to start', () => {
+    const older: UnconsumedInput = { text: 'older', since: now - 10 * unconsumedInputGraceMs, hasSeenTurnEnd: false };
     const afterEnd = getInputsAfterTurnEnd([older, ...written('newer')], now);
     assert.deepEqual(afterEnd.map((input) => input.since), [now, now]);
+    assert.deepEqual(afterEnd.map((input) => input.hasSeenTurnEnd), [true, true]);
     assert.equal(getInputsOnTheirWay({ inputs: afterEnd, isBusy: false, now: now + unconsumedInputGraceMs - 1 }).length, 2);
+  });
+
+  it('the NEXT turn end drops what already waited through one: that turn had its chance to echo it (review: a phantom held the turn-end readers for good)', () => {
+    const afterFirstEnd = getInputsAfterTurnEnd(written('phantom'), now);
+    const writtenBetween: UnconsumedInput = { text: 'written between the two turns', since: now + 1, hasSeenTurnEnd: false };
+    const afterSecondEnd = getInputsAfterTurnEnd([...afterFirstEnd, writtenBetween], now + 2);
+    assert.deepEqual(textsOf(afterSecondEnd), ['written between the two turns'], 'only the one written after the first end survives its own first end');
   });
 });

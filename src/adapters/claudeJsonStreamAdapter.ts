@@ -1285,9 +1285,14 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
     return session !== undefined && this.getUnconsumedInputsOnTheirWay(session).length > 0;
   }
 
-  /** The written messages that may still be on their way to the CLI's turn — a bounded judgement, see {@link getInputsOnTheirWay}. */
+  /**
+   * The written messages that may still be on their way to the CLI's turn — a bounded judgement, see {@link getInputsOnTheirWay}.
+   * Every read drops what is no longer on its way from the list too, so a stale entry never waits for the next write to go.
+   */
   private getUnconsumedInputsOnTheirWay(session: StreamSession): UnconsumedInput[] {
-    return getInputsOnTheirWay({ inputs: session.unconsumedInputs, isBusy: session.isBusy, now: Date.now() });
+    const inputsOnTheirWay = getInputsOnTheirWay({ inputs: session.unconsumedInputs, isBusy: session.isBusy, now: Date.now() });
+    session.unconsumedInputs = inputsOnTheirWay;
+    return inputsOnTheirWay;
   }
 
   /**
@@ -1549,7 +1554,7 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
    * @description {@link sendInput} that resolves once the user turn is written WHOLE into the CLI's stdin, and rejects
    * when it could not be (`EAGAIN` past the stall budget, a dead reader, a broken stream): the prompt never reached the
    * agent, and its caller is told so instead of believing it delivered. The state a turn start sets is set before the
-   * first await, as `sendInput` always did; a write that failed takes back its unconsumed-input count, and the busy flag
+   * first await, as `sendInput` always did; a write that failed takes its message back off the unconsumed-input list, and the busy flag
    * when nothing of the CLI was seen since. A session that is not active drops the input, as before (logged).
    */
   sendInputAndWait(key: SessionKey, input: string): Promise<void> {
@@ -1618,7 +1623,7 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
    * write is dropped first: it must not come back to life beside the new message.
    */
   private writeUserMessage(session: StreamSession, content: string, wasBusy: boolean): Promise<void> {
-    const pending: UnconsumedInput = { text: content, since: Date.now() };
+    const pending: UnconsumedInput = { text: content, since: Date.now(), hasSeenTurnEnd: false };
     session.unconsumedInputs = [...getInputsOnTheirWay({ inputs: session.unconsumedInputs, isBusy: wasBusy, now: pending.since }), pending];
     return this.writeStdin(session, { type: 'user', message: { role: 'user', content } }, { userText: content }).catch((error: unknown) => {
       session.unconsumedInputs = session.unconsumedInputs.filter((unconsumed) => unconsumed !== pending);
@@ -1954,6 +1959,9 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
 
   /** A turn began (its `init`, the CLI's running state, a scheduled job firing): busy from here; an announced turn has shown. */
   private markTurnStarted(session: StreamSession): void {
+    // A turn the bot never wrote to (a task's notification, a scheduled job) starting while nothing ran: a running turn counts every
+    // listed message as queued behind it, so what went stale before it must not be revived by it.
+    if (!session.isBusy) this.getUnconsumedInputsOnTheirWay(session);
     session.isBusy = true;
     session.notificationTurnPendingSince = null;
   }

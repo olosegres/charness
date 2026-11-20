@@ -25,7 +25,7 @@ const limitResult = JSON.stringify({ type: 'result', is_error: true, result: "Yo
 const okResult = JSON.stringify({ type: 'result', is_error: false, result: 'done' }) + '\n';
 
 /** `count` messages written to the CLI and not echoed back. */
-const queuedInputs = (count: number): UnconsumedInput[] => Array.from({ length: count }, (_unused, index) => ({ text: `queued ${index}`, since: Date.now() }));
+const queuedInputs = (count: number): UnconsumedInput[] => Array.from({ length: count }, (_unused, index) => ({ text: `queued ${index}`, since: Date.now(), hasSeenTurnEnd: false }));
 
 function setup(): { adapter: ClaudeJsonStreamAdapter; respawns: Array<string | null | undefined> } {
   const adapter = new ClaudeJsonStreamAdapter();
