@@ -102,22 +102,35 @@ export async function answerOpenRequestForLimitWait(
   wait: UsageLimitWait,
   body: string,
 ): Promise<LimitWaitAnswerOutcome> {
+  return answerOpenRequestsWithBotNotice(deps, key, { identity: getUsageLimitWaitIdentity(wait), body, isWakeStopped: wait.kind === 'autoResumeOff' });
+}
+
+/**
+ * @description The same answer for any stop of the agent the bot itself tells the requests about (a limit wait above; the AI's Claude
+ * account refused — moved to another account, or waiting for one, `bot.ts` `handleClaudeAuthRefusal`): every open request of the
+ * conversation hears `body` once per `identity` (kept in `limitWaitAnsweredFor`, cleared when the work goes on), as the bot's own
+ * `progress` answer. `isWakeStopped`: nothing will continue the work by itself, so the requests also stop being woken.
+ */
+export async function answerOpenRequestsWithBotNotice(
+  deps: LimitWaitAnswerDeps,
+  key: SessionKey,
+  notice: { identity: string; body: string; isWakeStopped: boolean },
+): Promise<LimitWaitAnswerOutcome> {
   const outcomes: LimitWaitAnswerOutcome[] = [];
   for (const request of deps.ledger.listOpenRequestsOf(key)) {
-    outcomes.push(await answerOneRequestForLimitWait(deps, key, request, wait, body));
+    outcomes.push(await answerOneRequestWithBotNotice(deps, key, request, notice));
   }
   if (outcomes.includes('answered')) return 'answered';
   return outcomes.includes('alreadyAnswered') ? 'alreadyAnswered' : 'notAnswered';
 }
 
-async function answerOneRequestForLimitWait(
+async function answerOneRequestWithBotNotice(
   deps: LimitWaitAnswerDeps,
   key: SessionKey,
   request: OpenRequestState,
-  wait: UsageLimitWait,
-  body: string,
+  notice: { identity: string; body: string; isWakeStopped: boolean },
 ): Promise<LimitWaitAnswerOutcome> {
-  const identity = getUsageLimitWaitIdentity(wait);
+  const { identity, body } = notice;
   // The common repeat (another frame of the same error) costs no state write.
   if (request.limitWaitAnsweredFor === identity) return 'alreadyAnswered';
   // Claimed under the ledger lock: a repeated error and a request opened at the same moment must not answer twice.
@@ -128,7 +141,7 @@ async function answerOneRequestForLimitWait(
   });
   if (!claimed) return 'notAnswered';
   if (!isClaimed) return 'alreadyAnswered';
-  if (wait.kind === 'autoResumeOff') await deps.engine.stopWakingForLimitWait(key);
+  if (notice.isWakeStopped) await deps.engine.stopWakingForLimitWait(key);
 
   const lookup = getAnswerSink(deps.answerSinks, key);
   const result = lookup.ok
@@ -138,6 +151,8 @@ async function answerOneRequestForLimitWait(
       body,
       origin: request.origin,
       isRequestOpen: true,
+      // The bot's own words: a sink keeps whatever the agent's real answer is still owed (`RequestAnswerDelivery.isBotNotice`).
+      isBotNotice: true,
     })
     : lookup;
   if (!result.ok) {

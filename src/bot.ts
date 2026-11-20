@@ -39,7 +39,7 @@ import {
 import { ClaudeJsonStreamAdapter } from './adapters/claudeJsonStreamAdapter';
 import { claudeJsonStreamAdapterName, claudePerTurnAdapterName, claudeTmuxAdapterName, checkIsJsonStreamBackend, openCodeAdapterName, terminalAdapterName } from './adapters/adapterNames';
 import { checkShouldPostReattachRecap, formatReattachRecap } from './resumeContext';
-import type { AgentAdapter, AgentRuntimeInfo, AgentSession, DisplayVerbosityMode, OutputTransport, PendingQuestionState, AgentApiErrorClass, LimitEpisodeMarker, OpenCodeQuestion, RecentTurn, SeenWatermark, SubagentStatusEvent, ThinkingEvent, ToolResultEvent } from './types';
+import type { AgentAdapter, AgentRuntimeInfo, AgentSession, DisplayVerbosityMode, OutputTransport, PendingQuestionState, AgentApiErrorClass, AgentAuthErrorReason, LimitEpisodeMarker, OpenCodeQuestion, RecentTurn, SeenWatermark, SubagentStatusEvent, ThinkingEvent, ToolResultEvent } from './types';
 import type { PlatformId, SessionKey } from './sessionKey';
 import { createOutputTransport } from './connectors/telegram/output/createOutputTransport';
 import { keyToString, keyFromString, tryKeyFromString } from './sessionKey';
@@ -109,7 +109,8 @@ import {
   type ReadinessFacts,
   type StartupTarget,
 } from './utils/startupReadiness';
-import { formatDoctorLine, type DoctorLine } from './utils/doctorLine';
+import { formatDoctorLine, getPrivacyDoctorLine, type DoctorLine } from './utils/doctorLine';
+import { formatGroupWelcome } from './connectors/telegram/groupWelcome';
 import {
   getNativeWindowsConsoleLine,
   getNativeWindowsDoctorLine,
@@ -185,6 +186,7 @@ import {
   getTelegramReplyTargetId,
   checkIsWrittenMessage,
   getTelegramCommand,
+  checkHasJoinedGroup,
   checkHasLeftGroup,
   getDisplayName,
   getTelegramMessageContext,
@@ -203,9 +205,10 @@ import {
   getConnectorOutbound,
   type ConnectorOutbound,
   type ConnectorOutbounds,
+  type OutboundFileRequest,
   type OutboundHints,
 } from './platform/outbound';
-import { createJiraConnectorOutbound } from './connectors/jira/outbound';
+import { createJiraConnectorOutbound, type JiraFileSender } from './connectors/jira/outbound';
 import { dispatchAdapterEvent } from './adapters/adapterEventRouting';
 import {
   checkIsServedConversation,
@@ -429,6 +432,7 @@ import { getAnswerSink, releaseRequestAlert, type AnswerSink, type AnswerSinks }
 import { createSessionTurnProbe } from './requests/sessionTurnProbe';
 import {
   answerOpenRequestForLimitWait,
+  answerOpenRequestsWithBotNotice,
   getLimitWaitForNewRequest,
   type LimitWaitAnswerDeps,
   type LimitWaitAnswerOutcome,
@@ -490,16 +494,38 @@ import { probeRunnersOverview, readRunnersOverview } from './runners/runnersOver
 import { getRemoteRunCacheDir } from './remoteRun/ssh';
 import { createClaudeAccounts, type ClaudeProfileApplyOutcome } from './connectors/telegram/commands/claudeAccounts';
 import { checkIsSameClaudeConfigDir, createClaudeProfileLayout, defaultClaudeProfileName, getClaudeAuthCommandEnvironment, getProcessFailureReason, parseClaudeAuthStatus, readClaudeProfileApiKey, readDefaultClaudeProfileApiKey, readProcessErrorStdout, repairClaudeProfileFolderForLaunch, resolveClaudeProfileDir, resolveClaudeProfilesRoot, type ClaudeAuthStatus } from './utils/claudeProfiles';
-import { checkIsClaudeModelClearOfLimit, checkIsClaudeUsageExhausted, fetchClaudeUsage, readClaudeOAuthToken, type ClaudeProfilesReport, type ClaudeProfileUsageView } from './utils/claudeUsage';
+import { checkIsClaudeModelClearOfLimit, checkIsClaudeUsageExhausted, fetchClaudeUsage, readClaudeOAuthToken, type ClaudeLaunchChainScope, type ClaudeProfilesReport, type ClaudeProfileUsageView } from './utils/claudeUsage';
 import { claudeUsageOnDemandMaxAgeMs, createClaudeUsageRefresher, refreshClaudeUsageForLaunch } from './utils/claudeUsageRefresher';
-import { createClaudeProfileSync } from './utils/claudeProfileSync';
+import { createClaudeProfileSync, type ClaudeProfileSyncResult } from './utils/claudeProfileSync';
+import {
+  formatClaudeAccountRefusal,
+  getClaudeAccountAlertDetail,
+  planClaudeAccountAlert,
+  renderClaudeAccountAlert,
+  type ClaudeAccountAlert,
+} from './utils/claudeAccountAlert';
+import type { OperatorAlertChannel } from './platform/operatorAlert';
+import {
+  buildClaudeAuthRefusalMark,
+  checkIsClaudeProfileBackByStatusCheck,
+  checkIsClaudeProfileKnownUnusable,
+  getClaudeAuthRefusalEnd,
+  claudeAuthRefusalWords,
+  describeClaudeProfileUsability,
+  getClaudeProfileSignedIn,
+  getClaudeProfileUsability,
+  listClaudeProfileUsabilityLines,
+  readClaudeLoginStamp,
+  type ClaudeAuthRefusal,
+  type ClaudeProfileUsability,
+} from './utils/claudeAuthRefusal';
 import { createOpenCodeUsagePoller, readOpenCodeCredentials } from './utils/openCodeUsage';
 import { refreshUsageWithinBudget } from './utils/usageRefreshBudget';
 import { resolveClaudeLimitedUntil } from './utils/claudeLimitSwitch';
 import { checkIsLimitSwitchPossible, decideLimitSwitch } from './utils/limitSwitchPlan';
 import { verifyAnthropicApiKey } from './utils/anthropicApiKeyCheck';
 import { buildClaudeAuthProbeSettingsArgs } from './utils/claudeApiKeyHelper';
-import { buildFallbackDeferredNotice, buildFallbackSwitchedNotice } from './utils/fallbackSwitchNotice';
+import { buildFallbackDeferredNotice, buildFallbackSwitchedNotice, type FallbackSwitchReason } from './utils/fallbackSwitchNotice';
 import { getAdapterSwitchSessionIds } from './utils/adapterSwitchSessionIds';
 import {
   buildFallbackSwitchCallbackData,
@@ -529,7 +555,14 @@ import { createSelfUpdate } from './connectors/telegram/commands/selfUpdate';
 import { createStt } from './connectors/telegram/commands/stt';
 import type { ClaudeRateLimitEvent, ClaudeTurnCostReport } from './adapters/claudeConfigDir';
 import { addClaudeApiSpend, computeClaudeTurnCostUsd, formatUsd, getClaudeTurnCostOutcome } from './utils/claudeApiSpend';
-import { buildClaudeProfilesCreditReport, buildClaudeProfileUsageView, buildClaudeProfileUsageViews } from './utils/claudeProfileUsageViews';
+import {
+  buildClaudeProfilesCreditReport,
+  buildClaudeProfileUsageView,
+  buildClaudeProfileUsageViews,
+  pickClaudeProfileInstead,
+  planClaudeAuthRefusalMove,
+  resolveClaudeProfileForLaunch,
+} from './utils/claudeProfileUsageViews';
 import { getApiProfileStoppedByAgent, verifyClaudeApiAgentStop, type ClaudeApiAgentStopPorts } from './utils/claudeApiAgentStop';
 import { addClaudeApiCreditSpend, getClaudeApiCreditPeriod, listProfilesWithSupersededCreditEvidence, readClaudeApiCreditAnchors, type ClaudeApiCreditAnchors } from './utils/claudeApiCredit';
 import { claudeApiCreditRecheckIntervalMs, claudeApiCreditRecheckPollMs, probeClaudeApiCredit, startClaudeApiCreditRechecks, type ClaudeApiCreditRecheckPorts } from './utils/claudeApiCreditRecheck';
@@ -877,9 +910,12 @@ const telegramOutbound = createTelegramConnectorOutbound({
  * conversation only through {@link getOutboundFor}, so a Jira conversation's
  * stream never lands in a Telegram send.
  */
+/** The Jira connector's file send, set once the lazily loaded connector is ready (`send_file_to_user` on an issue). */
+let jiraFileSender: JiraFileSender | null = null;
+
 const connectorOutbounds: ConnectorOutbounds = new Map<PlatformId, ConnectorOutbound>([
   ['telegram', telegramOutbound],
-  ['jira', createJiraConnectorOutbound()],
+  ['jira', createJiraConnectorOutbound(() => jiraFileSender)],
 ]);
 
 function getOutboundFor(key: SessionKey): ConnectorOutbound {
@@ -2309,10 +2345,12 @@ function handleApiError(key: SessionKey, cls: AgentApiErrorClass, options: Handl
     prev,
   });
 
-  // auth / logged out → surface a pinned notice (never a timer). Deduped to one
-  // notice per episode inside `surfaceLoggedOutNotice`.
+  // auth / logged out → never a timer. A json-stream Claude conversation moves to another signed-in account and goes on
+  // there (`handleClaudeAuthRefusal`; the frozen tmux backend keeps the notice alone); anything else, or nowhere to go,
+  // surfaces a pinned notice — deduped to one per episode inside `surfaceLoggedOutNotice`.
   if (action.action === 'surface') {
-    void surfaceLoggedOutNotice(key);
+    if (getThreadAdapter(key) instanceof ClaudeJsonStreamAdapter) void handleClaudeAuthRefusal(key, cls);
+    else void surfaceLoggedOutNotice(key);
     return;
   }
 
@@ -8009,12 +8047,14 @@ async function runDoctor(): Promise<DoctorLine[]> {
 
   // 1. Bot admin permissions in the configured group.
   const groupId = getAllowedGroupId();
+  let isBotAdmin = false;
   if (groupId === null) {
     lines.push({ status: 'warn', label: t('doctor.bot_admin'), hint: t('pair.not_paired') });
   } else try {
     const botId = bot.botInfo?.id ?? (await bot.telegram.getMe()).id;
     const member = await bot.telegram.getChatMember(groupId, botId);
     if (member.status === 'administrator') {
+      isBotAdmin = true;
       lines.push({ status: 'ok', label: t('doctor.bot_admin') });
       lines.push({
         status: member.can_manage_topics ? 'ok' : 'fail',
@@ -8046,15 +8086,12 @@ async function runDoctor(): Promise<DoctorLine[]> {
     });
   }
 
-  // 2. Privacy mode (heuristic — Bot API doesn't expose the flag directly,
-  //    but `getMe().can_read_all_group_messages === false` indicates it's on).
+  // 2. Privacy mode — only a non-admin bot depends on it (`getPrivacyDoctorLine`). The Bot API doesn't expose the mode itself,
+  //    but `getMe().can_read_all_group_messages === false` indicates it's on.
   try {
     const me = await bot.telegram.getMe();
-    lines.push({
-      status: me.can_read_all_group_messages ? 'ok' : 'fail',
-      label: t('doctor.privacy_off'),
-      hint: t('doctor.privacy_hint'),
-    });
+    const privacyLine = getPrivacyDoctorLine({ isBotAdmin, canReadAllGroupMessages: me.can_read_all_group_messages }, t);
+    if (privacyLine) lines.push(privacyLine);
   } catch { /* skip silently — covered by admin check above */ }
 
   // 3. WORK_ROOT.
@@ -8578,13 +8615,13 @@ function repairClaudeProfileFolder(configDir: string | null): void {
 }
 
 /**
- * @description The Claude config directory a conversation's NEXT process starts with: its resolved account
- * profile's directory, `null` for the default profile. Registered as the adapters' reader at boot, and read by
- * every spawn, so the folder is repaired here ({@link repairClaudeProfileFolder}). A profile
+ * @description The Claude config directory a conversation's NEXT process starts with: its account profile's directory
+ * ({@link resolveThreadClaudeProfileForLaunch}: never one known not to work), `null` for the default profile. Registered as the
+ * adapters' reader at boot, and read by every spawn, so the folder is repaired here ({@link repairClaudeProfileFolder}). A profile
  * whose directory vanished (a hand-cleaned `DATA_DIR`) runs on the default rather than failing the spawn.
  */
 function resolveThreadClaudeConfigDir(key: SessionKey): string | null {
-  const name = state.resolveClaudeProfileName(key);
+  const name = resolveThreadClaudeProfileForLaunch(key);
   const dir = resolveClaudeProfileDir(resolveDataDir(), name);
   if (dir !== null && !fs.existsSync(dir)) {
     console.warn(`[account] ${keyToString(key)}: the directory of profile ${name} is missing; its process runs on the default profile`);
@@ -8592,6 +8629,340 @@ function resolveThreadClaudeConfigDir(key: SessionKey): string | null {
   }
   repairClaudeProfileFolder(dir);
   return dir;
+}
+
+/**
+ * @description The account profile a conversation's next Claude process starts on — start, resume and account switch alike (the
+ * reader every spawn goes through, {@link resolveThreadClaudeConfigDir}): the profile it resolves to, unless that account is known
+ * not to work — not signed in by its last probe, or refused by the CLI since (`utils/claudeAuthRefusal.ts`). Then the conversation
+ * goes where `claude_profiles` sends a session leaving that account (`resolveClaudeProfileForLaunch`), recorded as its own
+ * pick the way the limit move records it: a resume carries the same conversation onto the other account, and it stays there when
+ * the first one is signed in again. With no other account usable it stays (and the refusal is surfaced as before).
+ */
+function resolveThreadClaudeProfileForLaunch(key: SessionKey): string {
+  const resolved = state.resolveClaudeProfileName(key);
+  settleClaudeAuthRefusal(resolved);
+  const record = state.getClaudeProfileInfo(resolved);
+  // The common case reads nothing more: the views and the `/limits` list only matter for an account that cannot run.
+  if (!checkIsClaudeProfileKnownUnusable(record)) return resolved;
+  const launch = resolveClaudeProfileForLaunch({ ...getClaudeConversationPickContext(key), resolved, record });
+  if (!launch.isMoved) return resolved;
+  const reason = describeClaudeProfileUsability(getClaudeProfileUsability(record));
+  console.log(`[accounts] ${keyToString(key)}: profile ${resolved} cannot run it (${reason}) — the session starts on ${launch.name}`);
+  void state.setClaudeProfileOverride(key, launch.name).catch((e) => console.warn(`[accounts] ${keyToString(key)}: recording the move to ${launch.name} failed:`, e instanceof Error ? e.message : e));
+  return launch.name;
+}
+
+/**
+ * @description What picking the account a Claude conversation goes to reads (`utils/claudeProfileUsageViews.ts`: the account
+ * `claude_profiles` names for a session leaving one it cannot run on): every profile's view as of now, the conversation's model
+ * (`null` = none named: a new conversation), the `/limits` list's word on the accounts.
+ */
+function getClaudeConversationPickContext(key: SessionKey | null): { views: ClaudeProfileUsageView[]; model: string | null; nowMs: number; chainScope: ClaudeLaunchChainScope | null } {
+  return {
+    views: getClaudeProfileUsageViews(),
+    model: key === null ? null : getThreadClaudeModel(key),
+    nowMs: Date.now(),
+    chainScope: getClaudeLaunchChainScope(state.getFallbackChain()),
+  };
+}
+
+/**
+ * @description End the CLI's refusal of the account `name` once it is over (`getClaudeAuthRefusalEnd`): a new login in its folder, or —
+ * a bare 401 / 403 not held until a new login — a probe after it that found the account signed in, which is kept as such (no sign-in
+ * happened: a repeat is held, and nobody is told «signed in again»). Cheap — one small file read, only for a refused account — so every
+ * launch on the account and every profile scan run it.
+ */
+function settleClaudeAuthRefusal(name: string): void {
+  const record = state.getClaudeProfileInfo(name);
+  const refusal = record?.authRefusal;
+  if (!record || !refusal) return;
+  const loginStamp = readClaudeLoginStamp(resolveClaudeProfileDir(resolveDataDir(), name));
+  const end = getClaudeAuthRefusalEnd({ refusal, loginStamp, loggedIn: record.loggedIn, statusCheckedAt: record.statusCheckedAt });
+  if (end === null) return;
+  const ending = end === 'statusCheck'
+    ? state.endClaudeProfileAuthRefusalByStatusCheck(name, new Date().toISOString())
+    : state.setClaudeProfileAuthRefusal(name, null);
+  void ending.catch((e) => console.warn(`[accounts] profile ${name}: ending its refusal failed:`, e instanceof Error ? e.message : e));
+  noteClaudeProfileUsability();
+}
+
+/**
+ * The CLI's refusal of the account `name` now (`buildClaudeAuthRefusalMark`): the stamp of the login it refused, the CLI's words, and
+ * held until a new login when it repeats a bare 401 / 403 a status check ended lately.
+ */
+function buildClaudeAuthRefusal(name: string, reason: AgentAuthErrorReason, cliText: string | undefined): ClaudeAuthRefusal {
+  return buildClaudeAuthRefusalMark({
+    reason,
+    login: readClaudeLoginStamp(resolveClaudeProfileDir(resolveDataDir(), name)),
+    detail: cliText === undefined ? null : getClaudeAccountAlertDetail(cliText),
+    nowMs: Date.now(),
+    endedByStatusCheck: state.getClaudeProfileInfo(name)?.authRefusalEndedByStatusCheck,
+  });
+}
+
+/** The last state of each account the log said ({@link noteClaudeProfileUsability}); in memory — a restart says the unusable ones again. */
+const loggedClaudeProfileUsability = new Map<string, ClaudeProfileUsability>();
+
+/**
+ * @description Say in the log, once per change, that an account stopped or started being usable for a conversation
+ * (`[accounts] profile default: not signed in — new sessions go to second`). Run after every profile scan and every refusal
+ * mark or end, so a sign-out the poll finds, a refusal on a turn and a sign-in again each leave one line.
+ */
+function noteClaudeProfileUsability(): void {
+  const current = new Map<string, ClaudeProfileUsability>();
+  const backByStatusCheck = new Set<string>();
+  const nowMs = Date.now();
+  for (const view of getClaudeProfileUsageViews()) {
+    const record = state.getClaudeProfileInfo(view.name);
+    current.set(view.name, getClaudeProfileUsability(record));
+    if (checkIsClaudeProfileBackByStatusCheck(record, nowMs)) backByStatusCheck.add(view.name);
+  }
+  const lines = listClaudeProfileUsabilityLines({
+    previous: loggedClaudeProfileUsability,
+    current,
+    getInstead: (name) => pickClaudeProfileInstead({ ...getClaudeConversationPickContext(null), currentProfile: name }),
+    backByStatusCheck,
+  });
+  for (const line of lines) console.log(line);
+  loggedClaudeProfileUsability.clear();
+  for (const [name, usability] of current) loggedClaudeProfileUsability.set(name, usability);
+  if (!isOperatorAlertOpen) return;
+  tellOperatorAboutClaudeAccounts(current, backByStatusCheck);
+  void resumeConversationsWaitingForAccount();
+}
+
+/** The channels besides General that operator alerts go to (a connector's own: Jira's operator issue); set at boot. */
+let operatorAlertChannels: readonly OperatorAlertChannel[] = [];
+
+/**
+ * Until the boot has restored the sessions and knows its channels, a change of the accounts is only logged: nobody is told yet (the
+ * persisted record keeps the change for the first round after) and no waiting conversation is resumed.
+ */
+let isOperatorAlertOpen = false;
+
+/** At boot, once the sessions are restored and the connectors' channels are known: the first round tells and resumes. */
+function openOperatorAlerts(): void {
+  isOperatorAlertOpen = true;
+  noteClaudeProfileUsability();
+}
+
+/**
+ * @description Tell the operator, once per change, about the accounts that cannot work because of their sign-in and those usable again
+ * (`utils/claudeAccountAlert.ts`): the record of what was told is kept in the same tick, so two rounds close together never tell it
+ * twice, and a round that changes nothing writes nothing.
+ */
+function tellOperatorAboutClaudeAccounts(current: ReadonlyMap<string, ClaudeProfileUsability>, backByStatusCheck: ReadonlySet<string>): void {
+  const details = new Map<string, string>();
+  for (const name of current.keys()) {
+    const detail = state.getClaudeProfileInfo(name)?.authRefusal?.detail;
+    if (detail) details.set(name, detail);
+  }
+  const previous = state.getClaudeAccountAlertState();
+  const { alert, next } = planClaudeAccountAlert({
+    previous,
+    current,
+    details,
+    defaultProfile: state.getClaudeProfileGlobalDefault(),
+    instead: pickClaudeProfileInstead({ ...getClaudeConversationPickContext(null), currentProfile: null }),
+    backByStatusCheck,
+  });
+  if (alert === null && JSON.stringify(previous) === JSON.stringify(next)) return;
+  void state.setClaudeAccountAlertState(next).catch((e) => console.warn('[accounts] keeping what the operator was told failed:', e instanceof Error ? e.message : e));
+  if (alert !== null) void deliverClaudeAccountAlert(alert);
+  // An account back by a status check alone leaves quietly: with no told account left, the pin goes all the same.
+  else void releaseClaudeAccountAlertPin();
+}
+
+/**
+ * @description Unpin the account alert in General once no told account is left unusable; nothing while one is, or when none is
+ * pinned. Changes only the pin of the record as it is now.
+ */
+async function releaseClaudeAccountAlertPin(): Promise<void> {
+  const current = state.getClaudeAccountAlertState();
+  const pinnedMessageId = current?.pinnedMessageId;
+  if (!current || current.alerted.length > 0 || pinnedMessageId === undefined) return;
+  await state.setClaudeAccountAlertPinnedMessageId(null);
+  const generalKey = ENV.isTelegramServed ? getOperatorGeneralKey() : null;
+  if (generalKey !== null) void unpinMessageQuiet(generalKey, pinnedMessageId);
+}
+
+/**
+ * @description How to sign an account in again on the bot's host, for a channel read outside Telegram (the Jira operator issue): the
+ * CLI's own sign-in under the account's folder, as the bot's OS user.
+ */
+function getHostClaudeSignInHow(name: string): string {
+  const dir = resolveClaudeProfileDir(resolveDataDir(), name);
+  const command = dir === null ? 'claude auth login' : `CLAUDE_CONFIG_DIR=${dir} claude auth login`;
+  return `\`${command}\` on the bot's host, as its OS user`;
+}
+
+/**
+ * @description Post an account alert to the operator: in General (Telegram, the chat's language, pinned while it asks to act) and on
+ * every connector's channel (English). A failed post is logged, never retried — an alert told twice is worse.
+ */
+async function deliverClaudeAccountAlert(alert: ClaudeAccountAlert): Promise<void> {
+  const lost = alert.lost.map((loss) => `${loss.name} (${loss.usability})`).join(', ');
+  console.log(`[accounts] operator alert: ${lost ? `cannot work: ${lost}; conversations go to ${alert.instead ?? 'no account — they wait'}` : ''}${alert.back.length > 0 ? `${lost ? '; ' : ''}usable again: ${alert.back.join(', ')}` : ''}`);
+  const posts: Array<Promise<void>> = [];
+  if (ENV.isTelegramServed) posts.push(postClaudeAccountAlertToGeneral(alert));
+  const isActionRequired = alert.lost.length > 0;
+  for (const channel of operatorAlertChannels) {
+    const text = runWithLocale('en', () => renderClaudeAccountAlert(alert, getHostClaudeSignInHow));
+    posts.push(channel.post(text, { isActionRequired }).then((result) => {
+      if (!result.ok) console.warn(`[accounts] the operator alert did not reach ${channel.label}: ${result.error}`);
+    }));
+  }
+  await Promise.all(posts);
+}
+
+/**
+ * @description The account alert in General, like the updater's: worded in that chat's language, the sign-in named as
+ * `/accounts login <name>`; an alert that asks to act is pinned (the pin is what reaches a muted operator) in place of the previous
+ * one, and once no told account is left unusable the pin goes.
+ */
+async function postClaudeAccountAlertToGeneral(alert: ClaudeAccountAlert): Promise<void> {
+  const generalKey = getOperatorGeneralKey();
+  if (generalKey === null) {
+    console.log('[accounts] no General topic to post the account alert in');
+    return;
+  }
+  const text = withThreadLocale(generalKey, () => renderClaudeAccountAlert(alert, (name) => `/accounts login ${name}`));
+  const messageId = await replyToThread(generalKey, text);
+  if (alert.lost.length === 0 || messageId === null) {
+    await releaseClaudeAccountAlertPin();
+    return;
+  }
+  await pinMessageQuiet(generalKey, messageId, { disableNotification: false });
+  // Read AFTER the waits, and only the pin is written: a round in between may have told another account, and that must stay told.
+  const previousPinnedId = state.getClaudeAccountAlertState()?.pinnedMessageId;
+  await state.setClaudeAccountAlertPinnedMessageId(messageId);
+  if (previousPinnedId !== undefined && previousPinnedId !== messageId) void unpinMessageQuiet(generalKey, previousPinnedId);
+}
+
+/** A resume of the conversations waiting for an account runs one at a time. */
+let isResumingAccountWaits = false;
+
+/**
+ * @description The conversations a refused turn left with no account to move to (`claudeAccountWaits`) go on once one can work:
+ * each is moved onto the account it resolves to now (the launch pick leaves the refused one) and gets the continue prompt — or its
+ * open requests' prompts not taken in — with its requests woken again, as after a usage-limit wait. Run after every round of the
+ * accounts' states; nothing happens while no account is usable.
+ */
+async function resumeConversationsWaitingForAccount(): Promise<void> {
+  if (isResumingAccountWaits) return;
+  const waiting = state.listClaudeAccountWaits();
+  if (waiting.length === 0) return;
+  if (pickClaudeProfileInstead({ ...getClaudeConversationPickContext(null), currentProfile: null }) === null) return;
+  isResumingAccountWaits = true;
+  try {
+    for (const key of waiting) {
+      await state.setWaitingForClaudeAccount(key, false);
+      if (!checkIsServedConversation(key, ENV.servedPlatforms) || !checkIsClaudeProfileBackend(key)) continue;
+      try {
+        await applyClaudeProfileToThread(key, { isAfterLimit: true });
+        console.log(`[accounts] ${keyToString(key)}: a Claude account can work again — the conversation goes on (${state.resolveClaudeProfileName(key)})`);
+        await resumeTopicOnNewSession(key, {
+          modelToPin: null,
+          getFirstPrompt: () => getLimitResumeMessage({
+            continueNudge: t('apiRetry.continueNudge'),
+            untakenRequestPrompt: joinPromptsNotTakenIn(requestLimitWaitAnswerDeps?.ledger.listOpenRequestsOf(key) ?? []),
+          }),
+        });
+      } catch (e) {
+        console.warn(`[accounts] ${keyToString(key)}: resuming the conversation failed:`, e instanceof Error ? e.message : e);
+      }
+    }
+  } finally {
+    isResumingAccountWaits = false;
+  }
+}
+
+/**
+ * @description The profile scan (`utils/claudeProfileSync.ts`) the usage poll and `/accounts` run, followed by the refusals it may
+ * end: an account signed in again since the CLI refused it is usable again from here.
+ */
+async function syncClaudeProfilesAndRefusals(options: { isForced?: boolean } = {}): Promise<ClaudeProfileSyncResult> {
+  const result = await claudeProfileSync.sync(options);
+  for (const name of Object.keys(state.getAllClaudeProfileInfos())) settleClaudeAuthRefusal(name);
+  noteClaudeProfileUsability();
+  return result;
+}
+
+/**
+ * @description The CLI refused the account a json-stream Claude conversation runs on (an `auth` error: signed out, a login expired
+ * or revoked, its organization turned Claude subscription use off, a bare 401 / 403). The account is marked refused
+ * (`utils/claudeAuthRefusal.ts`) until it is signed in again, and the conversation makes the limit move
+ * ({@link switchTopicToFallbackEntry}, same conversation) to the account `claude_profiles` names for it
+ * (`planClaudeAuthRefusalMove`); the dead turn goes on there — the continue prompt, or the open requests' prompts not
+ * taken in. Not tied to the auto-switch setting: a refused account comes back by no wait. With no other account usable, a move
+ * that fails, or an error replayed from before this boot (the login may have been fixed since; it is not marked), the pinned
+ * logged-out notice as before.
+ */
+async function handleClaudeAuthRefusal(key: SessionKey, cls: AgentApiErrorClass): Promise<void> {
+  const k = keyToString(key);
+  const from = getTopicFallbackPosition(key);
+  if (from?.backend !== 'claude') {
+    await surfaceLoggedOutNotice(key);
+    return;
+  }
+  const reason = cls.authReason ?? 'signedOut';
+  const refusal = buildClaudeAuthRefusal(from.profile, reason, cls.authDetail);
+  const plan = planClaudeAuthRefusalMove({ ...getClaudeConversationPickContext(key), refused: from.profile, refusal, isReplayed: cls.isReplayed === true });
+  if (!plan.isMarked) {
+    await surfaceLoggedOutNotice(key);
+    return;
+  }
+  await state.setClaudeProfileAuthRefusal(from.profile, refusal);
+  noteClaudeProfileUsability();
+  const instead = plan.to;
+  if (instead === null) {
+    console.log(`[accounts] ${k}: profile ${from.profile} was refused (${claudeAuthRefusalWords[reason]}) and no other account can take the conversation over — it waits for one`);
+    await waitForClaudeAccount(key);
+    return;
+  }
+  console.log(`[accounts] ${k}: profile ${from.profile} was refused (${claudeAuthRefusalWords[reason]}) — moving the conversation to ${instead}`);
+  const to: FallbackChainEntry = { backend: 'claude', profile: instead, model: null };
+  // A topic hears it from the move's own notice; a tracker issue from the bot's answer to its open requests, in plain words.
+  if (!checkIsTelegramKey(key) && requestLimitWaitAnswerDeps) {
+    await answerOpenRequestsWithBotNotice(requestLimitWaitAnswerDeps, key, {
+      identity: `claudeAccountMove:${instead}`,
+      body: t('requests.account.movedAnswer', { from: from.profile, reason: formatClaudeAccountRefusal(reason), to: instead }),
+      isWakeStopped: false,
+    }).catch((e) => console.warn(`[accounts] ${k}: telling the requests about the move failed:`, e instanceof Error ? e.message : e));
+  }
+  try {
+    await switchTopicToFallbackEntry(key, from, to, { isAnnounced: true, isAutomatic: true, reason: 'signIn' });
+  } catch (e) {
+    console.warn(`[accounts] ${k}: moving the conversation to ${instead} failed:`, e instanceof Error ? e.message : e);
+    await surfaceLoggedOutNotice(key);
+  }
+}
+
+/**
+ * @description A refused turn with no other Claude account to move to: the conversation WAITS for one (`claudeAccountWaits`) — its
+ * requests are no longer woken (a reminder would only meet the same refusal, and its give-up would read as the agent's silence), a
+ * topic gets the pinned logged-out notice, a tracker issue the bot's own answer saying in plain words that no account of the AI can
+ * work, why, that the operator was told, and that the work goes on once one is signed in again
+ * ({@link resumeConversationsWaitingForAccount}).
+ */
+async function waitForClaudeAccount(key: SessionKey): Promise<void> {
+  await state.setWaitingForClaudeAccount(key, true);
+  await requestWakeUpEngine?.stopWakingForLimitWait(key);
+  if (checkIsTelegramKey(key) || !requestLimitWaitAnswerDeps) {
+    await surfaceLoggedOutNotice(key);
+    return;
+  }
+  const reasons = getClaudeProfileUsageViews()
+    .map((view) => ({ name: view.name, usability: getClaudeProfileUsability(state.getClaudeProfileInfo(view.name)) }))
+    .flatMap(({ name, usability }) => (usability === 'usable' ? [] : [`«${name}» ${formatClaudeAccountRefusal(usability)}`]))
+    .join('; ');
+  await answerOpenRequestsWithBotNotice(requestLimitWaitAnswerDeps, key, {
+    // One wait, one answer per request: a later refused turn of the same wait (a new request's prompt) answers only the new request.
+    identity: 'claudeAccountWait',
+    body: t('requests.account.noneUsableAnswer', { reasons }),
+    isWakeStopped: true,
+  }).catch((e) => console.warn(`[accounts] ${keyToString(key)}: telling the requests about the wait failed:`, e instanceof Error ? e.message : e));
 }
 
 /**
@@ -8689,7 +9060,7 @@ const claudeProfileSync = createClaudeProfileSync({
  * `rate_limit_event` frames the json-stream sessions report. Snapshots live on the profile records.
  */
 const claudeUsageRefresher = createClaudeUsageRefresher({
-  syncProfiles: () => claudeProfileSync.sync(),
+  syncProfiles: () => syncClaudeProfilesAndRefusals(),
   listProfiles: () => [
     {
       name: defaultClaudeProfileName, configDir: null,
@@ -8849,7 +9220,7 @@ function readStatusAccountSource(name: string): ThreadStatusAccountSource {
   syncClaudeApiCreditAnchors();
   const info = state.getClaudeProfileInfo(name);
   return {
-    name, email: info?.email ?? null, loggedIn: info?.loggedIn, limitedUntil: info?.limitedUntil ?? null,
+    name, email: info?.email ?? null, loggedIn: getClaudeProfileSignedIn(info), limitedUntil: info?.limitedUntil ?? null,
     billing: info?.billing ?? null, creditExhaustedAt: info?.creditExhaustedAt ?? null, ...(info?.apiSpend ? { apiSpend: info.apiSpend } : {}),
   };
 }
@@ -8963,6 +9334,10 @@ function notePersonActivity(key: SessionKey): void {
   noteThreadUserActivity(key);
   getTodoRegistry().notePersonActivity(key);
   closeReAskedQuestion(key);
+  // Their words go to the agent now — on an account that works, or back into the wait if none does — so no later resume adds a nudge.
+  if (state.checkIsWaitingForClaudeAccount(key)) {
+    void state.setWaitingForClaudeAccount(key, false).catch((e) => console.warn(`[accounts] ${keyToString(key)}: ending the wait for an account failed:`, e instanceof Error ? e.message : e));
+  }
 }
 
 /**
@@ -9044,8 +9419,8 @@ function getFallbackResetTime(from: FallbackChainEntry | null): string | null {
  * The «switched» notice (`utils/fallbackSwitchNotice.ts`), with the reset of the exhausted rung when known — and, onto
  * an account billed to API credits, the line that it costs money per request and what it has spent so far.
  */
-function getFallbackSwitchedNotice(from: FallbackChainEntry | null, to: FallbackChainEntry, runningModel: string | null): string {
-  const notice = buildFallbackSwitchedNotice({ from, to, resetTime: getFallbackResetTime(from), runningModel });
+function getFallbackSwitchedNotice(from: FallbackChainEntry | null, to: FallbackChainEntry, runningModel: string | null, reason: FallbackSwitchReason = 'limit'): string {
+  const notice = buildFallbackSwitchedNotice({ from, to, resetTime: getFallbackResetTime(from), runningModel, reason });
   const info = to.backend === 'claude' ? state.getClaudeProfileInfo(to.profile) : undefined;
   if (to.backend !== 'claude' || info?.billing !== 'api') return notice;
   return `${notice}\n${t('fallback.switchedToApi', { name: to.profile, spent: formatUsd(info.apiSpend?.totalUsd ?? 0) })}`;
@@ -9141,14 +9516,16 @@ function formatThreadBackend(key: SessionKey): string {
  * deliver it. After a limit the turn is dead, so a working Claude session is moved at once; only one that cannot
  * be re-spawned yet (a tmux session with nothing to resume) keeps its wait and moves at turn end. Returns whether
  * the work continues now and the notice that says so (posted here only when `isAnnounced` — the auto-switch has no
- * other voice, while a tapped button's notice is edited into the same line by its handler).
+ * other voice, while a tapped button's notice is edited into the same line by its handler). `reason: 'signIn'` is the same
+ * move off a Claude account the CLI refused ({@link handleClaudeAuthRefusal}): only its notices and log line differ.
  */
 async function switchTopicToFallbackEntry(
   key: SessionKey,
   from: FallbackChainEntry | null,
   to: FallbackChainEntry,
-  options: { isAnnounced: boolean; isAutomatic?: boolean },
+  options: { isAnnounced: boolean; isAutomatic?: boolean; reason?: FallbackSwitchReason },
 ): Promise<{ isSwitched: boolean; notice: string; isFailed?: boolean }> {
+  const reason = options.reason ?? 'limit';
   const k = keyToString(key);
   const fromLabel = from ? formatFallbackEntry(from) : '?';
   const toLabel = formatFallbackEntry(to);
@@ -9180,7 +9557,7 @@ async function switchTopicToFallbackEntry(
     }
     if (outcome === 'deferred' || outcome === 'restartRequired') {
       fallbackSwitchOffers.delete(k);
-      const notice = buildFallbackDeferredNotice(from, to);
+      const notice = buildFallbackDeferredNotice(from, to, reason);
       await say(notice);
       return { isSwitched: false, notice };
     }
@@ -9213,8 +9590,8 @@ async function switchTopicToFallbackEntry(
   if (isHoldingTurnEnd) apiRetryKicksInFlight.add(k);
   try {
     cancelApiRetry(key); // retires the offer too: the switch consumed it
-    const notice = `${getFallbackSwitchedNotice(from, to, runningModel)}${isStoppingBackground ? `\n${t('fallback.backgroundStopped')}` : ''}`;
-    console.log(`[fallback] ${k}: switched from ${fromLabel} to ${toLabel} after a usage limit${firstPrompt ? ' (cross-backend, bridged)' : ''}; resuming`);
+    const notice = `${getFallbackSwitchedNotice(from, to, runningModel, reason)}${isStoppingBackground ? `\n${t('fallback.backgroundStopped')}` : ''}`;
+    console.log(`[fallback] ${k}: switched from ${fromLabel} to ${toLabel} after ${reason === 'signIn' ? 'its account was refused' : 'a usage limit'}${firstPrompt ? ' (cross-backend, bridged)' : ''}; resuming`);
     await say(notice);
     await resumeTopicOnNewSession(key, {
       modelToPin: getFallbackModelToPin(to, runningModel),
@@ -9538,11 +9915,12 @@ const {
   getDataDir: resolveDataDir,
   getInstanceTimezone: getCurrentTimezone,
   refreshClaudeUsage: (options) => claudeUsageRefresher.refreshAll(options),
-  syncClaudeProfiles: (options) => claudeProfileSync.sync(options),
+  syncClaudeProfiles: (options) => syncClaudeProfilesAndRefusals(options),
   readClaudeAuthStatus: readClaudeAuthStatusUnder,
   startClaudeProfileLogin: (key, profile) => startClaudeAuthLogin(key, profile),
   applyClaudeProfile: applyClaudePickToThread,
   applyClaudeProfileEverywhere,
+  noteClaudeAccountsChanged: () => noteClaudeProfileUsability(),
   switchTopicByOperator,
   detectOpenCodeProviders: async () => listOpenCodeProviders((await getAdapter(openCodeAdapterName).getAvailableModels?.()) ?? []),
   listOpenCodeModels: async () => (await getAdapter(openCodeAdapterName).getAvailableModels?.()) ?? [],
@@ -11310,26 +11688,28 @@ bot.on('edited_message', async (ctx) => {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 /**
- * @description Detect when *this* bot is added to the configured group and
- * post a setup checklist into General. Without this, a fresh deployment is
+ * @description Detect when *this* bot JOINS the configured group and
+ * post the greeting into General (`formatGroupWelcome`: what the bot is, the
+ * version that runs, the setup steps). Without this, a fresh deployment is
  * silent: the user adds the bot, sees nothing, and has to dig through the
- * README to find out what permissions / privacy flags they need to flip.
+ * README to find out what rights the bot needs.
  *
  * Filters:
  *   - chat must be the allowlisted group (we don't react in foreign chats),
  *   - the member that changed must be us (other admins being promoted etc.
  *     are not interesting),
- *   - new status must be `member` or `administrator` — `kicked`/`left`
- *     events would only generate noise.
+ *   - the change must be a join (`checkHasJoinedGroup`): out of the group
+ *     before, a member or an administrator now. The greeting's own steps —
+ *     make the bot an admin, add a right `/doctor` asked for — are
+ *     `my_chat_member` changes too, and must not bring it back.
  */
 bot.on('my_chat_member', async (ctx) => {
   const chat = ctx.chat;
   if (!chat || chat.id !== getAllowedGroupId()) return;
   const upd = ctx.update.my_chat_member;
-  const newMember = upd.new_chat_member;
   const botId = bot.botInfo?.id;
-  if (!botId || newMember.user.id !== botId) return;
-  if (newMember.status !== 'member' && newMember.status !== 'administrator') return;
+  if (!botId || upd.new_chat_member.user.id !== botId) return;
+  if (!checkHasJoinedGroup(upd.old_chat_member, upd.new_chat_member)) return;
 
   // We don't know which message_thread_id General actually has on this
   // group (it can be 1, or undefined for non-forum chats). For a forum
@@ -11337,7 +11717,7 @@ bot.on('my_chat_member', async (ctx) => {
   const generalKey: SessionKey = makeTelegramKey(chat.id, GENERAL_THREAD_ID);
   await replyToThread(
     generalKey,
-    t('onboarding.welcome', { workRoot: ENV.workRoot }),
+    formatGroupWelcome(t, { workRoot: ENV.workRoot }),
     { parse_mode: 'Markdown' },
   );
 });
@@ -15328,7 +15708,14 @@ function wireScheduler(wiring: SchedulerWiringDeps): SchedulerMcpHandle {
     // A refused tool call leaves one line in the bounded diagnostic log (agent-diag.log): the SDK refuses before the bot sees it.
     logDiagnostic: appendDiagLog,
     ...(jiraConnector
-      ? { fetchJiraAttachment: (threadKeyStr: string, attachmentId: string) => jiraConnector.fetchAttachment(keyFromString(threadKeyStr), attachmentId) }
+      ? {
+        fetchJiraAttachment: (threadKeyStr: string, attachmentId: string) => jiraConnector.fetchAttachment(keyFromString(threadKeyStr), attachmentId),
+        // Through the issue's outbound, like a topic's file send: the agent-facing tool is a connector delivery.
+        sendJiraFiles: (threadKeyStr: string, request: OutboundFileRequest) => {
+          const key = keyFromString(threadKeyStr);
+          return getOutboundFor(key).deliverFile(key, request);
+        },
+      }
       : {}),
     // Read per request: General can turn the shared lists off, and the tools go with them.
     get todos() {
@@ -15674,7 +16061,10 @@ export async function startBot(): Promise<void> {
 
   const jiraConnector = ENV.servedPlatforms.has('jira') ? await prepareJiraConnectorOrExit() : null;
   todoJiraConversations = jiraConnector;
+  // The operator issue plays General's part for the alerts only the operator can act on (a Claude account signed out).
+  operatorAlertChannels = jiraConnector?.operatorChannel ? [jiraConnector.operatorChannel] : [];
   if (jiraConnector) {
+    jiraFileSender = (key, request) => jiraConnector.sendFiles(key, request);
     const { launchDefaults } = jiraConnector;
     registerSessionLaunchDefaultsReader((key) => (key.platform === 'jira' ? launchDefaults : null));
   }
@@ -16048,6 +16438,8 @@ export async function startBot(): Promise<void> {
       scheduleRestartWakesAtBoot(requestLedger);
       todoReminderEngine?.start();
       jiraConnector?.start(createJiraSessionDeps(requestLedger, slots, jiraConnector.adapterName));
+      // The accounts' changes found while booting are told now, and the conversations waiting for an account may go on.
+      openOperatorAlerts();
     },
     healActiveSessions: () => {
       // When this boot ADOPTED an already-running opencode, that server may

@@ -420,6 +420,9 @@ export interface FakeClaudeControlRequest {
 }
 
 /** One line of `tool-calls.jsonl`. */
+/** The caption the fake's `send-file` mode sends its files with (`send_file_to_user`). */
+export const fakeSendFileCaption = 'The run, recorded:';
+
 export interface FakeClaudeToolCall {
   issueKey: string;
   tool: string;

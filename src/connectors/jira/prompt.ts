@@ -58,9 +58,15 @@ export function getJiraOriginDescription(issueKey: string, trigger: JiraIssueTri
   }
 }
 
-/** `comment 10240 by Ann`, `comments 10240 by Ann and 10241 by Bob` — the new comments an update or a comment's request is about. */
+/**
+ * `comment 10240 by Ann`, `comments 10240 by Ann and 10241 by Bob (a reply in the thread of comment 10200)` — the new
+ * comments an update or a comment's request is about; a reply says which thread it is in.
+ */
 function getNewCommentsText(comments: readonly JiraNewComment[]): string {
-  const names = comments.map((comment) => `${getSingleLineText(comment.commentId)} by ${getAccountName(comment.author)}`);
+  const names = comments.map((comment) => {
+    const threadText = comment.parentId ? ` (a reply in the thread of comment ${getSingleLineText(comment.parentId)})` : '';
+    return `${getSingleLineText(comment.commentId)} by ${getAccountName(comment.author)}${threadText}`;
+  });
   const list = names.length > 1 ? `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}` : names[0];
   return `${names.length > 1 ? 'comments' : 'comment'} ${list}`;
 }
@@ -224,10 +230,12 @@ export interface JiraRequestPromptBase {
   newComments?: readonly JiraNewComment[];
 }
 
-/** A comment an issue update, or the request a comment opened, brings the agent: its id and who wrote it. */
+/** A comment an issue update, or the request a comment opened, brings the agent: its id, who wrote it, and the thread a reply is in. */
 export interface JiraNewComment {
   commentId: string;
   author: JiraAccount | null;
+  /** A reply's thread: the id of its top-level comment; `null` (or absent) for a top-level comment. */
+  parentId?: string | null;
 }
 
 export interface JiraRequestPromptInput extends JiraRequestPromptBase {
@@ -235,6 +243,16 @@ export interface JiraRequestPromptInput extends JiraRequestPromptBase {
   blocks: readonly IssueBlock[];
   /** Set when the comments went to one file because even their stubs did not fit: it stands for the comment blocks. */
   commentsFile?: CommentsFile | null;
+}
+
+/**
+ * The line of a request a reply opened (a mention or a comment in a thread): its answers go into that thread by
+ * themselves. `null` for any other request — its answers are new comments unless they reply to one.
+ */
+function getThreadLine(trigger: JiraIssueTrigger): string | null {
+  if (trigger.parentId === undefined) return null;
+  const commentId = getSingleLineText(trigger.commentId ?? '');
+  return `Thread: comment ${commentId} is a reply in the thread of comment ${getSingleLineText(trigger.parentId)}, so your answers to this request are posted in that thread.`;
 }
 
 /** The request header, the issue-text note and the issue's per-request lines; `title` names the issue. */
@@ -251,6 +269,7 @@ function getPromptStart(input: JiraRequestPromptBase, title: string): string[] {
     title,
     `Link: ${input.issueUrl}`,
     `Requester (your answers go to them): ${getAccountName(input.requester)}`,
+    ...[getThreadLine(input.trigger)].filter((line) => line !== null),
     ...(input.trigger.kind === 'mentioned' && input.trigger.commentId !== undefined
       ? ['', getMentionNote(input, input.trigger.commentId)]
       : []),
@@ -320,6 +339,8 @@ export interface JiraUpdatePromptBase {
   target: JiraOpenHandOver & { isOpen: boolean; isMention?: boolean };
   openHandOvers: readonly JiraOpenHandOver[];
   comments: readonly JiraNewComment[];
+  /** The thread the update's newest comment is a reply in: the request's next answer goes there by itself. */
+  threadRootId?: string | null;
   isTextFiltered?: boolean;
 }
 
@@ -333,9 +354,12 @@ function getUpdateHeader(input: JiraUpdatePromptBase): string {
   const requestIssueKey = input.requestIssueKey ? getSingleLineText(input.requestIssueKey) : null;
   const issueText = requestIssueKey ? `${input.issueKey} (an issue linked to ${requestIssueKey}, which that request is on)` : input.issueKey;
   // An answer is a comment on the request's issue, and only a comment shown in that conversation can be replied to there.
+  const threadText = input.threadRootId && !requestIssueKey
+    ? `Your next answer to request ${requestId} is posted in the thread of comment ${getSingleLineText(input.threadRootId)}, where the newest of them was written. `
+    : '';
   const notifyText = requestIssueKey
     ? `To answer a person on ${input.issueKey}, write a comment on ${input.issueKey} yourself, @-mentioning them: your answer does not go there.`
-    : 'To notify the person who wrote a comment, put its id in replyToCommentIds.';
+    : `${threadText}To answer a comment in its thread and notify the person who wrote it, put its id in replyToCommentIds.`;
   const lines = target.isOpen
     ? [
       `[Issue update · request ${requestId} is open]`,

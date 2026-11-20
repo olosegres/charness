@@ -122,7 +122,7 @@ export const deDict: Record<string, string> = {
   'doctor.can_pin_messages': '`can_pin_messages` gewährt',
   'doctor.privacy_off': 'Privacy-Modus deaktiviert',
   'doctor.privacy_hint':
-    '@BotFather → /setprivacy → Disable, dann Bot entfernen und neu hinzufügen',
+    'Bot zum Gruppen-Admin machen — oder @BotFather → /setprivacy → Disable, dann Bot entfernen und neu hinzufügen',
   'doctor.workroot_subdirs':
     '`WORK_ROOT`: `{workRoot}` ({count} Unterordner)',
   'doctor.datadir_path': '`DATA_DIR`: `{dataDir}`',
@@ -138,14 +138,12 @@ export const deDict: Record<string, string> = {
     'Bot-Rechte nicht lesbar — getChatMember fehlgeschlagen',
 
   'onboarding.welcome':
-    '👋 *Charness 2.0*\n\n' +
-    'Checkliste für den Einsatz:\n' +
-    '1️⃣ Mach mich zum Gruppen-Admin mit Rechten:\n' +
-    '   • Manage Topics, Delete Messages, Pin Messages\n' +
-    '2️⃣ @BotFather → /setprivacy → Disable, dann entferne und füge mich neu hinzu\n' +
-    '3️⃣ Führe /doctor aus, um zu sehen, was noch fehlt\n' +
-    '4️⃣ In jedem thematischen Thread /bind <subdir> ausführen und Agent starten\n\n' +
-    '`WORK_ROOT`: `{workRoot}`',
+    'Hallo! Ich bin Charness — ich starte Claude-Code- und OpenCode-Agenten in den Threads dieser Gruppe: ein Thread = ein Projektordner = ein Agent.\n\n' +
+    'In 3 Schritten startklar:\n' +
+    '1️⃣ Mach mich zum Gruppen-Admin mit den Rechten Manage Topics, Delete Messages und Pin Messages\n' +
+    '2️⃣ Führe /doctor aus, um zu sehen, was noch fehlt\n' +
+    '3️⃣ Lege einen Thread an: Passt sein Name zu einem Projektordner, verknüpfe ich ihn selbst, sonst wähle einen Ordner aus meiner Liste (oder /bind <subdir>). Starte dann einen Agenten: /claude oder /opencode\n\n' +
+    'Projektordner: `{workRoot}`',
 
   'binding.welcome.header': '📁 Verknüpft mit `{subdir}`',
   'binding.welcome.claude_md': '• CLAUDE.md: {size}',
@@ -1018,6 +1016,8 @@ export const deDict: Record<string, string> = {
   'startup.item.optional_owner':
     '(optional) Setze OWNER_USER_ID, um diesen Status in deinem privaten Chat zu erhalten.',
   'requests.alert.notAnsweringNotice': '⚠️ Anfrage {requestId} blieb unbeantwortet: Der Agent hat seine Züge ohne Antwort beendet, und die Erinnerungen haben aufgegeben. Prüfe die Sitzung in diesem Thema.',
+  'requests.account.movedAnswer': 'Das Claude-Konto «{from}» der KI {reason}. Ich habe dieses Issue auf «{to}» verschoben und mache weiter.',
+  'requests.account.noneUsableAnswer': 'Gerade kann kein Claude-Konto der KI arbeiten ({reasons}). Der Betreiber ist informiert; die Arbeit geht weiter, sobald eines wieder angemeldet ist.',
   'requests.alert.unreachableNotice': '⚠️ Anfrage {requestId} blieb unbeantwortet: Die Sitzung des Agenten war für eine Erinnerung nicht erreichbar. Prüfe die Sitzung in diesem Thema.',
   'requests.limit.answerBalanceExhaustedNotice': '💸 Das API-Guthaben des Kontos, auf dem diese Arbeit läuft, ist aufgebraucht. Die Arbeit wartet, bis der Betreiber es auflädt oder sie auf ein anderes Konto verlegt.',
   'requests.limit.answerAfterResetNotice': '🚧 Nutzungslimit erreicht — die Antwort kommt nach {time}.',
@@ -1043,6 +1043,17 @@ export const deDict: Record<string, string> = {
   'account.removeInstanceDefaultRefused': '{name} ist der Standard für alle Themen. Wähle zuerst im Thema General einen anderen Standard.',
   'account.unknown': '❌ Kein Profil namens {name}. /accounts zeigt die Liste.',
   'account.notLoggedIn': '⚠️ Profil {name} ist nicht angemeldet. Zuerst /accounts login {name} ausführen.',
+  'accounts.refusal.notSignedIn': 'ist abgemeldet: claude auth status findet keine Anmeldung',
+  'accounts.refusal.signedOut': 'ist abgemeldet: seine Anmeldung ist abgelaufen oder wurde widerrufen',
+  'accounts.refusal.orgDisabled': 'wurde abgelehnt: seine Organisation hat die Nutzung des Claude-Abos in Claude Code abgeschaltet',
+  'accounts.refusal.rejected': 'wurde von der Claude-API abgelehnt (401/403)',
+  'accounts.alert.title': '⚠️ Handlung nötig: Claude-Konto «{name}» {reason}.',
+  'accounts.alert.cliSaid': 'Die CLI meldete: {detail}',
+  'accounts.alert.fixSignIn': 'Zur Behebung erneut anmelden: {how}',
+  'accounts.alert.fixOrg': 'Zur Behebung den Admin der Organisation bitten, die Nutzung des Claude-Abos in Claude Code wieder einzuschalten, oder das Konto mit einer anderen Anmeldung anmelden: {how}',
+  'accounts.alert.movedTo': 'Seine Unterhaltungen laufen auf «{to}» weiter, und neue beginnen dort.',
+  'accounts.alert.noneUsable': 'Kein anderes Claude-Konto kann gerade arbeiten: Die Unterhaltungen warten und gehen weiter, sobald eines wieder angemeldet ist.',
+  'accounts.alert.back': '✅ Claude-Konto «{name}» ist wieder angemeldet und übernimmt Unterhaltungen.',
   'account.askName': '➕ Name des neuen Profils — Kleinbuchstaben, Ziffern, - und _, bis zu {max} Zeichen (z. B. work). Sende ihn als nächste Nachricht oder führe /accounts add <name> aus.',
   'account.invalidName': '❌ Ein Profilname besteht aus Kleinbuchstaben, Ziffern, - und _, höchstens {max} Zeichen, und ist nicht "default".',
   'account.exists': 'Ein Profil namens {name} existiert bereits.',
@@ -1128,6 +1139,8 @@ export const deDict: Record<string, string> = {
   'fallback.switchedReset': ' Das Limit wird {time} zurückgesetzt. Wechseln: /limits',
   'fallback.switchedBack': ' Wechseln: /limits',
   'fallback.switchedDeferred': '🔁 Konto {from} hat sein Nutzungslimit erreicht — dieses Thema wechselt zu {to}, sobald die aktuelle Antwort endet.',
+  'fallback.switchedSignedOut': '🔁 Konto {from} ist abgemeldet oder seine Anmeldung wurde abgelehnt — dieses Thema macht mit {to} weiter.{tail}',
+  'fallback.switchedSignedOutDeferred': '🔁 Konto {from} ist abgemeldet oder seine Anmeldung wurde abgelehnt — dieses Thema wechselt zu {to}, sobald die aktuelle Antwort endet.',
   'fallback.switchFailed': '⚠️ Wechsel zu {to} fehlgeschlagen: {error}. Das Warten auf das Zurücksetzen bleibt aktiv.',
   'handover.note': 'Der Gesprächskontext wird in komprimierter Form übergeben.',
   'handover.continueButton': '✅ Weiter',

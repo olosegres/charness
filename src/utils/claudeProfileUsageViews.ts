@@ -9,9 +9,10 @@
  */
 
 import type { ClaudeProfileRecord } from '../state';
+import { checkIsClaudeProfileKnownUnusable, getClaudeProfileSignedIn, type ClaudeAuthRefusal } from './claudeAuthRefusal';
 import { resolveClaudeProfileDir } from './claudeProfiles';
 import { checkIsClaudeApiCreditMarkCurrent, getClaudeApiCreditEstimate, type ClaudeApiCreditAnchor, type ClaudeApiCreditAnchors, type ClaudeApiCreditEstimate } from './claudeApiCredit';
-import { buildClaudeProfilesReport, type ClaudeLaunchPickOptions, type ClaudeProfileReportEntry, type ClaudeProfilesReport, type ClaudeProfileUsageView } from './claudeUsage';
+import { buildClaudeProfilesReport, type ClaudeLaunchChainScope, type ClaudeLaunchPickOptions, type ClaudeProfileReportEntry, type ClaudeProfilesReport, type ClaudeProfileUsageView } from './claudeUsage';
 
 /** @description One profile's view: its record's usage, marks and spend, plus the operator's credit figure (what `/accounts` and `/limits` render). */
 export function buildClaudeProfileUsageView(input: {
@@ -26,7 +27,9 @@ export function buildClaudeProfileUsageView(input: {
   return {
     name,
     configDir: resolveClaudeProfileDir(input.dataDir, name),
-    loggedIn: record?.loggedIn,
+    // A refusal by the CLI counts as signed out until the account is signed in again (`utils/claudeAuthRefusal.ts`).
+    loggedIn: getClaudeProfileSignedIn(record),
+    ...(record?.authRefusal ? { authRefusal: record.authRefusal } : {}),
     email: record?.email ?? null,
     subscriptionType: record?.subscriptionType ?? null,
     usage: record?.usage,
@@ -64,6 +67,68 @@ export function buildClaudeProfileUsageViews(input: {
     .filter(([name]) => name !== 'default')
     .sort(([, a], [, b]) => a.createdAt.localeCompare(b.createdAt));
   return [...(isDefaultRemoved ? [] : [toView('default', input.records.default)]), ...added.map(([name, record]) => toView(name, record))];
+}
+
+/**
+ * @description The account a conversation goes to instead of `currentProfile` (one it cannot run on): the account `claude_profiles`
+ * recommends for a session leaving it — the same launch pick (`getClaudeLaunchPick` through `buildClaudeProfilesCreditReport`): only
+ * the accounts the `/limits` list holds with an enabled rung once it names any Claude account (`chainScope`), an API-credit account of
+ * it first, then the usable subscription whose weekly window resets soonest. An agents-only hold (`agentHoldUntil`) is not read: a
+ * conversation is not an agent's worker. `null` when no other account is usable.
+ */
+export function pickClaudeProfileInstead(input: {
+  views: readonly ClaudeProfileUsageView[];
+  currentProfile: string | null;
+  model: string | null;
+  nowMs: number;
+  chainScope: ClaudeLaunchChainScope | null;
+}): string | null {
+  const views = input.views.map((view): ClaudeProfileUsageView => ({ ...view, agentHoldUntil: null }));
+  const { recommended } = buildClaudeProfilesCreditReport(views, input.model, input.nowMs, { currentProfile: input.currentProfile, chainScope: input.chainScope });
+  return recommended === input.currentProfile ? null : recommended;
+}
+
+
+/** What a pick of the account a conversation runs on needs besides the profiles: its model, the clock and the `/limits` list's word. */
+interface ClaudeConversationPickContext {
+  views: readonly ClaudeProfileUsageView[];
+  model: string | null;
+  nowMs: number;
+  chainScope: ClaudeLaunchChainScope | null;
+}
+
+/**
+ * @description The account a conversation's next Claude process starts on (a start, a resume, an account switch): `resolved` — its
+ * own pick, else General's, else `default` — unless that account is known not to work (`checkIsClaudeProfileKnownUnusable`: not
+ * signed in by its last probe, or refused by the CLI since); then {@link pickClaudeProfileInstead}, or `resolved` all the same when
+ * no other account is usable (the turn then fails and is surfaced as before). `isMoved`: the conversation leaves `resolved`.
+ */
+export function resolveClaudeProfileForLaunch(input: ClaudeConversationPickContext & {
+  resolved: string;
+  /** The record of `resolved` (`undefined` when nothing was recorded for it). */
+  record: Pick<ClaudeProfileRecord, 'loggedIn' | 'authRefusal'> | undefined;
+}): { name: string; isMoved: boolean } {
+  if (!checkIsClaudeProfileKnownUnusable(input.record)) return { name: input.resolved, isMoved: false };
+  const instead = pickClaudeProfileInstead({ ...input, currentProfile: input.resolved });
+  return instead === null ? { name: input.resolved, isMoved: false } : { name: instead, isMoved: true };
+}
+
+/**
+ * @description What the CLI's refusal of the account a conversation runs on leads to: `isMarked` — the account is to be marked
+ * refused (`refused` names a Claude account, and the error is not one replayed from before the boot: the login may have been fixed
+ * since); `to` — the account the conversation moves to, {@link pickClaudeProfileInstead} read as if the mark were already there;
+ * `null` = nowhere (the logged-out notice, as before).
+ */
+export function planClaudeAuthRefusalMove(input: ClaudeConversationPickContext & {
+  /** The Claude account the conversation runs on; `null` for any other backend. */
+  refused: string | null;
+  refusal: ClaudeAuthRefusal;
+  isReplayed: boolean;
+}): { isMarked: boolean; to: string | null } {
+  const { refused } = input;
+  if (refused === null || input.isReplayed) return { isMarked: false, to: null };
+  const views = input.views.map((view): ClaudeProfileUsageView => (view.name === refused ? { ...view, loggedIn: false, authRefusal: input.refusal } : view));
+  return { isMarked: true, to: pickClaudeProfileInstead({ ...input, views, currentProfile: refused }) };
 }
 
 /** What the bot can tell of an API account's credit now; `null` for any other account and when it knows nothing worth a line. */

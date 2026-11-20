@@ -126,7 +126,7 @@ export const enDict: Record<string, string> = {
   'doctor.can_pin_messages': '`can_pin_messages` granted',
   'doctor.privacy_off': 'Privacy mode disabled',
   'doctor.privacy_hint':
-    '@BotFather → /setprivacy → Disable, then remove and re-add the bot',
+    'Make the bot a group admin — or @BotFather → /setprivacy → Disable, then remove and re-add the bot',
   'doctor.workroot_subdirs':
     '`WORK_ROOT`: `{workRoot}` ({count} subfolders)',
   'doctor.datadir_path': '`DATA_DIR`: `{dataDir}`',
@@ -142,14 +142,12 @@ export const enDict: Record<string, string> = {
     'cannot read bot rights — getChatMember failed',
 
   'onboarding.welcome':
-    '👋 *Charness 2.0*\n\n' +
-    'Ready-to-work checklist:\n' +
-    '1️⃣ Make me a group admin with rights:\n' +
-    '   • Manage Topics, Delete Messages, Pin Messages\n' +
-    '2️⃣ @BotFather → /setprivacy → Disable, then remove and re-add me\n' +
-    '3️⃣ Run /doctor to see what is still missing\n' +
-    '4️⃣ In each topical thread run /bind <subdir> and start an agent\n\n' +
-    '`WORK_ROOT`: `{workRoot}`',
+    'Hi! I\'m Charness — I run Claude Code and OpenCode agents in this group\'s topics: one topic = one project folder = one agent.\n\n' +
+    'Ready to work in 3 steps:\n' +
+    '1️⃣ Make me a group admin with the rights Manage Topics, Delete Messages and Pin Messages\n' +
+    '2️⃣ Run /doctor to see what is still missing\n' +
+    '3️⃣ Create a topic: if its name matches a project folder I bind it, otherwise pick a folder from my list (or /bind <subdir>). Then start an agent: /claude or /opencode\n\n' +
+    'Project folders: `{workRoot}`',
 
   'binding.welcome.header': '📁 Bound to `{subdir}`',
   'binding.welcome.claude_md': '• CLAUDE.md: {size}',
@@ -1062,6 +1060,8 @@ export const enDict: Record<string, string> = {
   'startup.item.optional_owner':
     '(optional) Set OWNER_USER_ID to receive this status in your private chat.',
   'requests.alert.notAnsweringNotice': '⚠️ Request {requestId} got no answer: the agent ended its turns without answering and the reminders gave up. Check the session in this topic.',
+  'requests.account.movedAnswer': 'The AI\'s Claude account «{from}» {reason}. I moved this issue to «{to}» and will continue.',
+  'requests.account.noneUsableAnswer': 'No Claude account of the AI can work right now ({reasons}). The operator has been told; the work continues once one is signed in again.',
   'requests.alert.unreachableNotice': "⚠️ Request {requestId} got no answer: the agent's session could not be reached to remind it. Check the session in this topic.",
   'requests.limit.answerBalanceExhaustedNotice': '💸 The API credits of the account this work runs on are used up. The work waits until the operator tops them up or moves it to another account.',
   'requests.limit.answerAfterResetNotice': '🚧 Usage limit reached — the answer will come after {time}.',
@@ -1087,6 +1087,17 @@ export const enDict: Record<string, string> = {
   'account.removeInstanceDefaultRefused': '{name} is the default for all topics. Pick another default in the General topic first.',
   'account.unknown': '❌ No profile named {name}. Run /accounts to see the list.',
   'account.notLoggedIn': '⚠️ Profile {name} is not signed in. Run /accounts login {name} first.',
+  'accounts.refusal.notSignedIn': 'is signed out: claude auth status finds no login',
+  'accounts.refusal.signedOut': 'is signed out: its sign-in expired or was revoked',
+  'accounts.refusal.orgDisabled': 'was refused: its organization turned off Claude subscription use in Claude Code',
+  'accounts.refusal.rejected': 'was refused by the Claude API (401/403)',
+  'accounts.alert.title': '⚠️ Action needed: Claude account «{name}» {reason}.',
+  'accounts.alert.cliSaid': 'The CLI said: {detail}',
+  'accounts.alert.fixSignIn': 'To fix it, sign it in again: {how}',
+  'accounts.alert.fixOrg': 'To fix it, ask the organization\'s admin to turn Claude subscription use in Claude Code back on, or sign the account in with another login: {how}',
+  'accounts.alert.movedTo': 'Its conversations continue on «{to}», and new ones start there.',
+  'accounts.alert.noneUsable': 'No other Claude account can work right now: the conversations wait and go on once one is signed in again.',
+  'accounts.alert.back': '✅ Claude account «{name}» is signed in again and takes conversations.',
   'account.askName': '➕ Name for the new profile — lowercase letters, digits, - and _, up to {max} characters (e.g. work). Send it as the next message, or run /accounts add <name>.',
   'account.invalidName': '❌ A profile name is lowercase letters, digits, - and _, up to {max} characters, and not "default".',
   'account.exists': 'A profile named {name} already exists.',
@@ -1172,6 +1183,8 @@ export const enDict: Record<string, string> = {
   'fallback.switchedReset': ' The limit resets {time}. Switch: /limits',
   'fallback.switchedBack': ' Switch: /limits',
   'fallback.switchedDeferred': '🔁 Account {from} hit its usage limit — this topic moves to {to} when the current answer ends.',
+  'fallback.switchedSignedOut': '🔁 Account {from} is signed out or its sign-in was refused — this topic continues on {to}.{tail}',
+  'fallback.switchedSignedOutDeferred': '🔁 Account {from} is signed out or its sign-in was refused — this topic moves to {to} when the current answer ends.',
   'fallback.switchFailed': '⚠️ Switching to {to} failed: {error}. The wait for the reset stays armed.',
   'handover.note': 'The conversation context will be handed over in compacted form.',
   'handover.continueButton': '✅ Continue',

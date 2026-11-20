@@ -122,7 +122,7 @@ export const jaDict: Record<string, string> = {
   'doctor.can_pin_messages': '`can_pin_messages` が付与されました',
   'doctor.privacy_off': 'Privacy mode が無効です',
   'doctor.privacy_hint':
-    '@BotFather → /setprivacy → Disable、その後 Bot を削除して再追加',
+    'Bot をグループ管理者にする、または @BotFather → /setprivacy → Disable、その後 Bot を削除して再追加',
   'doctor.workroot_subdirs':
     '`WORK_ROOT`: `{workRoot}` ({count} サブフォルダ)',
   'doctor.datadir_path': '`DATA_DIR`: `{dataDir}`',
@@ -138,14 +138,12 @@ export const jaDict: Record<string, string> = {
     'Bot の権限を読めません — getChatMember が失敗しました',
 
   'onboarding.welcome':
-    '👋 *Charness 2.0*\n\n' +
-    '稼働準備チェックリスト:\n' +
-    '1️⃣ 私をグループ管理者にしてください。権限:\n' +
-    '   • Manage Topics, Delete Messages, Pin Messages\n' +
-    '2️⃣ @BotFather → /setprivacy → Disable、その後私を削除して再追加\n' +
-    '3️⃣ /doctor を実行して不足を確認\n' +
-    '4️⃣ 各トピックスレッドで /bind <subdir> を実行しエージェントを起動\n\n' +
-    '`WORK_ROOT`: `{workRoot}`',
+    'こんにちは！私は Charness です。このグループのトピックで Claude Code と OpenCode のエージェントを動かします。1 トピック = 1 プロジェクトフォルダ = 1 エージェントです。\n\n' +
+    '3 ステップで準備完了:\n' +
+    '1️⃣ 私をグループ管理者にして、Manage Topics・Delete Messages・Pin Messages の権限を付与してください\n' +
+    '2️⃣ /doctor を実行して、まだ足りないものを確認\n' +
+    '3️⃣ トピックを作成: 名前がプロジェクトフォルダと一致すれば自動で紐付け、それ以外は一覧からフォルダを選択（または /bind <subdir>）。その後エージェントを起動: /claude または /opencode\n\n' +
+    'プロジェクトフォルダ: `{workRoot}`',
 
   'binding.welcome.header': '📁 `{subdir}` にバインドしました',
   'binding.welcome.claude_md': '• CLAUDE.md: {size}',
@@ -1012,6 +1010,8 @@ export const jaDict: Record<string, string> = {
   'startup.item.optional_owner':
     '（任意）このステータスをプライベートチャットで受け取るには OWNER_USER_ID を設定してください。',
   'requests.alert.notAnsweringNotice': '⚠️ リクエスト {requestId} に回答がありません：エージェントは回答せずにターンを終え、リマインダーも打ち切られました。このトピックのセッションを確認してください。',
+  'requests.account.movedAnswer': 'AI の Claude アカウント «{from}» {reason}。この課題を «{to}» に移して続けます。',
+  'requests.account.noneUsableAnswer': '今は AI のどの Claude アカウントも作業できません（{reasons}）。オペレーターには伝えてあります。どれかに再びサインインすると作業が続きます。',
   'requests.alert.unreachableNotice': '⚠️ リクエスト {requestId} に回答がありません：リマインダーを送るためにエージェントのセッションに接続できませんでした。このトピックのセッションを確認してください。',
   'requests.limit.answerBalanceExhaustedNotice': '💸 この作業を実行しているアカウントの API クレジットを使い切りました。オペレーターがチャージするか別のアカウントに移すまで作業は止まります。',
   'requests.limit.answerAfterResetNotice': '🚧 使用量の上限に達しました — 回答は {time} 以降になります。',
@@ -1037,6 +1037,17 @@ export const jaDict: Record<string, string> = {
   'account.removeInstanceDefaultRefused': '{name} は全トピックの既定です。まず General トピックで別の既定を選んでください。',
   'account.unknown': '❌ {name} というプロファイルはありません。/accounts で一覧を表示します。',
   'account.notLoggedIn': '⚠️ プロファイル {name} はログインしていません。先に /accounts login {name} を実行してください。',
+  'accounts.refusal.notSignedIn': 'はサインアウトしています（claude auth status でログインが見つかりません）',
+  'accounts.refusal.signedOut': 'はサインアウトしています（サインインの期限切れまたは取り消し）',
+  'accounts.refusal.orgDisabled': 'は拒否されました（組織が Claude Code での Claude サブスクリプション利用をオフにしました）',
+  'accounts.refusal.rejected': 'は Claude API に拒否されました（401/403）',
+  'accounts.alert.title': '⚠️ 対応が必要です: Claude アカウント «{name}» {reason}。',
+  'accounts.alert.cliSaid': 'CLI の応答: {detail}',
+  'accounts.alert.fixSignIn': '解決するには、もう一度サインインしてください: {how}',
+  'accounts.alert.fixOrg': '解決するには、組織の管理者に Claude Code での Claude サブスクリプション利用を再びオンにしてもらうか、別のログインでこのアカウントにサインインしてください: {how}',
+  'accounts.alert.movedTo': 'その会話は «{to}» で続き、新しい会話もそこで始まります。',
+  'accounts.alert.noneUsable': '今は他に使える Claude アカウントがありません。会話は待機し、どれかに再びサインインすると続きます。',
+  'accounts.alert.back': '✅ Claude アカウント «{name}» に再びサインインし、会話を受け付けます。',
   'account.askName': '➕ 新しいプロファイル名 — 小文字、数字、- と _、{max} 文字まで（例: work）。次のメッセージとして送るか、/accounts add <名前> を実行してください。',
   'account.invalidName': '❌ プロファイル名は小文字、数字、- と _ で {max} 文字まで、かつ "default" 以外です。',
   'account.exists': '{name} というプロファイルは既にあります。',
@@ -1122,6 +1133,8 @@ export const jaDict: Record<string, string> = {
   'fallback.switchedReset': ' 上限は {time} にリセットされます。切り替えは /limits',
   'fallback.switchedBack': ' 切り替えは /limits',
   'fallback.switchedDeferred': '🔁 アカウント {from} が利用上限に達しました — このトピックは現在の回答が終わると {to} に移ります。',
+  'fallback.switchedSignedOut': '🔁 アカウント {from} はサインアウトしているか、サインインが拒否されました — このトピックは {to} で続行します。{tail}',
+  'fallback.switchedSignedOutDeferred': '🔁 アカウント {from} はサインアウトしているか、サインインが拒否されました — このトピックは現在の回答が終わると {to} に移ります。',
   'fallback.switchFailed': '⚠️ {to} への切替に失敗しました: {error}。リセット待ちは維持されます。',
   'handover.note': '会話のコンテキストは圧縮された形で引き継がれます。',
   'handover.continueButton': '✅ 続ける',

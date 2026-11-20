@@ -128,7 +128,7 @@ export const ukDict: Record<string, string> = {
   'doctor.can_pin_messages': 'Право `can_pin_messages` надано',
   'doctor.privacy_off': 'Privacy mode вимкнено',
   'doctor.privacy_hint':
-    '@BotFather → /setprivacy → Disable, потім видали й додай бота знову',
+    'Зроби бота адміністратором групи — або @BotFather → /setprivacy → Disable, потім видали й додай бота знову',
   'doctor.workroot_subdirs':
     '`WORK_ROOT`: `{workRoot}` ({count} підпапок)',
   'doctor.datadir_path': '`DATA_DIR`: `{dataDir}`',
@@ -144,14 +144,12 @@ export const ukDict: Record<string, string> = {
     'не можу прочитати права бота — getChatMember failed',
 
   'onboarding.welcome':
-    '👋 *Charness 2.0*\n\n' +
-    'Чеклист готовності до роботи:\n' +
-    '1️⃣ Зроби мене адміністратором групи з правами:\n' +
-    '   • Manage Topics, Delete Messages, Pin Messages\n' +
-    '2️⃣ @BotFather → /setprivacy → Disable, потім видали й додай мене знову\n' +
-    '3️⃣ Запусти /doctor, щоб побачити, чого ще бракує\n' +
-    '4️⃣ У кожному тематичному треді виконай /bind <subdir> і запусти агента\n\n' +
-    '`WORK_ROOT`: `{workRoot}`',
+    'Привіт! Я Charness — запускаю агентів Claude Code і OpenCode у тредах цієї групи: один тред = одна папка проєкту = один агент.\n\n' +
+    'Щоб почати роботу, три кроки:\n' +
+    '1️⃣ Зроби мене адміністратором групи з правами Manage Topics, Delete Messages і Pin Messages\n' +
+    '2️⃣ Запусти /doctor, щоб побачити, чого ще бракує\n' +
+    '3️⃣ Створи тред: якщо його назва збігається з папкою проєкту, я прив’яжу її сам, інакше обери папку з мого списку (або /bind <subdir>). Потім запусти агента: /claude або /opencode\n\n' +
+    'Папки проєктів: `{workRoot}`',
 
   'binding.welcome.header': '📁 Прив\'язано до `{subdir}`',
   'binding.welcome.claude_md': '• CLAUDE.md: {size}',
@@ -1024,6 +1022,8 @@ export const ukDict: Record<string, string> = {
   'startup.item.optional_owner':
     '(необов\'язково) Задай OWNER_USER_ID, щоб отримувати цей статус у своєму приватному чаті.',
   'requests.alert.notAnsweringNotice': '⚠️ Запит {requestId} залишився без відповіді: агент завершував ходи, не відповідаючи, і нагадування припинено. Перевірте сесію в цій темі.',
+  'requests.account.movedAnswer': 'Обліковий запис Claude «{from}», на якому працює ШІ, {reason}. Я переніс це завдання на «{to}» і продовжу.',
+  'requests.account.noneUsableAnswer': 'Зараз жоден обліковий запис Claude ШІ не може працювати ({reasons}). Оператору повідомлено; робота продовжиться, щойно в один із них знову увійдуть.',
   'requests.alert.unreachableNotice': '⚠️ Запит {requestId} залишився без відповіді: до сесії агента не вдалося достукатися з нагадуванням. Перевірте сесію в цій темі.',
   'requests.limit.answerBalanceExhaustedNotice': '💸 API-кредити облікового запису, на якому йде ця робота, закінчилися. Робота чекає, доки оператор їх поповнить або перенесе її на інший обліковий запис.',
   'requests.limit.answerAfterResetNotice': '🚧 Досягнуто ліміту використання — відповідь буде після {time}.',
@@ -1049,6 +1049,17 @@ export const ukDict: Record<string, string> = {
   'account.removeInstanceDefaultRefused': '{name} — типовий профіль для всіх топіків. Спершу оберіть інший у топіку General.',
   'account.unknown': '❌ Профілю {name} немає. Список — /accounts.',
   'account.notLoggedIn': '⚠️ У профіль {name} не виконано вхід. Спершу /accounts login {name}.',
+  'accounts.refusal.notSignedIn': 'не авторизований: claude auth status не знаходить входу',
+  'accounts.refusal.signedOut': 'не авторизований: його вхід закінчився або був відкликаний',
+  'accounts.refusal.orgDisabled': 'відхилений: його організація вимкнула використання підписки Claude у Claude Code',
+  'accounts.refusal.rejected': 'відхилений API Claude (401/403)',
+  'accounts.alert.title': '⚠️ Потрібна дія: обліковий запис Claude «{name}» {reason}.',
+  'accounts.alert.cliSaid': 'CLI відповів: {detail}',
+  'accounts.alert.fixSignIn': 'Щоб виправити, увійдіть у нього знову: {how}',
+  'accounts.alert.fixOrg': 'Щоб виправити, попросіть адміністратора організації знову ввімкнути використання підписки Claude у Claude Code або увійдіть в обліковий запис під іншим логіном: {how}',
+  'accounts.alert.movedTo': 'Його розмови тривають на «{to}», і нові починаються там.',
+  'accounts.alert.noneUsable': 'Жоден інший обліковий запис Claude зараз не може працювати: розмови чекають і продовжаться, щойно в якийсь знову увійдуть.',
+  'accounts.alert.back': '✅ В обліковий запис Claude «{name}» знову увійшли — він приймає розмови.',
   'account.askName': '➕ Назва нового профілю — малі латинські літери, цифри, - та _, до {max} символів (наприклад, work). Надішліть її наступним повідомленням або виконайте /accounts add <назва>.',
   'account.invalidName': '❌ Назва профілю — малі латинські літери, цифри, - та _, до {max} символів, і не "default".',
   'account.exists': 'Профіль {name} уже існує.',
@@ -1134,6 +1145,8 @@ export const ukDict: Record<string, string> = {
   'fallback.switchedReset': ' Ліміт скинеться {time}. Перемкнути: /limits',
   'fallback.switchedBack': ' Перемкнути: /limits',
   'fallback.switchedDeferred': '🔁 Обліковий запис {from} досяг ліміту — топік перейде на {to}, коли завершиться поточна відповідь.',
+  'fallback.switchedSignedOut': '🔁 Обліковий запис {from} не авторизований або його вхід відхилено — топік продовжує роботу на {to}.{tail}',
+  'fallback.switchedSignedOutDeferred': '🔁 Обліковий запис {from} не авторизований або його вхід відхилено — топік перейде на {to}, коли завершиться поточна відповідь.',
   'fallback.switchFailed': '⚠️ Перемикання на {to} не вдалося: {error}. Очікування скидання лишається.',
   'handover.note': 'Контекст розмови буде передано у стисненому вигляді.',
   'handover.continueButton': '✅ Продовжити',

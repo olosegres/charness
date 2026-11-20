@@ -15,6 +15,7 @@
  * Every event type below is backed by a captured sample.
  */
 
+import type { AgentAuthErrorReason } from '../types';
 import type { ScheduledWakeupSource } from './claudeScheduledJobs';
 import { checkIsRecord } from './checkIsRecord';
 
@@ -158,7 +159,25 @@ export type ClaudeStreamAction =
    *  signal (see {@link checkIsOwnInputEcho} for the user lines that are not). `text` is
    *  the echoed content when it is plain text, `null` for any other shape: messages the
    *  CLI takes in together are echoed as ONE line carrying their texts joined by a newline. */
-  | { kind: 'userEcho'; text: string | null };
+  | { kind: 'userEcho'; text: string | null }
+  /**
+   * The main thread's `assistant` message that wraps an API error carries the CLI's own code of it in `error`
+   * (`authentication_failed`, `oauth_org_not_allowed`, `rate_limit`, …), ahead of the turn's `result` — which repeats only
+   * the message text (measured on 2.1.304: «Not logged in · Please run /login», `is_error: true`). The adapter keeps it for
+   * that turn end ({@link getClaudeAuthErrorCodeReason}).
+   */
+  | { kind: 'apiErrorCode'; code: string };
+
+/**
+ * @description The refusal of the account a CLI error code ({@link ClaudeStreamAction} `apiErrorCode`) means: `authentication_failed`
+ * (no login, or one that expired or was revoked) → `signedOut`, `oauth_org_not_allowed` (the organization disabled Claude
+ * subscription access in Claude Code) → `orgDisabled`; `null` for every other code and none.
+ */
+export function getClaudeAuthErrorCodeReason(code: string | null): AgentAuthErrorReason | null {
+  if (code === 'authentication_failed') return 'signedOut';
+  if (code === 'oauth_org_not_allowed') return 'orgDisabled';
+  return null;
+}
 
 /**
  * @description Whether a non-tool-result `user` line is the
@@ -405,6 +424,9 @@ export function classifyClaudeStreamMessage(msg: Record<string, unknown>): Claud
         actions.push({ kind: 'toolUse', tool: block.name, toolUseId: block.id, isSubagent });
       }
     }
+    // A sub-agent's API error is its own; only the main thread's ends the turn the bot answers for.
+    const errorCode = readString(msg, 'error');
+    if (errorCode && !isSubagent) actions.push({ kind: 'apiErrorCode', code: errorCode });
     return actions;
   }
 

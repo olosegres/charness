@@ -122,7 +122,7 @@ export const zhDict: Record<string, string> = {
   'doctor.can_pin_messages': '`can_pin_messages` 已授予',
   'doctor.privacy_off': 'Privacy mode 已禁用',
   'doctor.privacy_hint':
-    '@BotFather → /setprivacy → Disable，然后移除并重新添加 bot',
+    '将 bot 设为群组管理员，或 @BotFather → /setprivacy → Disable，然后移除并重新添加 bot',
   'doctor.workroot_subdirs':
     '`WORK_ROOT`：`{workRoot}`（{count} 个子文件夹）',
   'doctor.datadir_path': '`DATA_DIR`：`{dataDir}`',
@@ -138,14 +138,12 @@ export const zhDict: Record<string, string> = {
     '无法读取 bot 权限 — getChatMember 失败',
 
   'onboarding.welcome':
-    '👋 *Charness 2.0*\n\n' +
-    '就绪清单：\n' +
-    '1️⃣ 将我设为群组管理员，权限包括：\n' +
-    '   • Manage Topics, Delete Messages, Pin Messages\n' +
-    '2️⃣ @BotFather → /setprivacy → Disable，然后移除并重新添加我\n' +
-    '3️⃣ 运行 /doctor 查看缺少什么\n' +
-    '4️⃣ 在每个主题话题中运行 /bind <subdir> 并启动代理\n\n' +
-    '`WORK_ROOT`：`{workRoot}`',
+    '你好！我是 Charness——我在本群的话题里运行 Claude Code 和 OpenCode 代理：一个话题 = 一个项目文件夹 = 一个代理。\n\n' +
+    '三步即可开始工作：\n' +
+    '1️⃣ 将我设为群组管理员，并授予 Manage Topics、Delete Messages 和 Pin Messages 权限\n' +
+    '2️⃣ 运行 /doctor 查看还缺少什么\n' +
+    '3️⃣ 创建话题：名称与项目文件夹相同时我会自动绑定，否则请从我的列表中选择文件夹（或使用 /bind <subdir>）。然后启动代理：/claude 或 /opencode\n\n' +
+    '项目文件夹：`{workRoot}`',
 
   'binding.welcome.header': '📁 已绑定到 `{subdir}`',
   'binding.welcome.claude_md': '• CLAUDE.md: {size}',
@@ -1012,6 +1010,8 @@ export const zhDict: Record<string, string> = {
   'startup.item.optional_owner':
     '（可选）设置 OWNER_USER_ID 以在你的私聊中接收此状态。',
   'requests.alert.notAnsweringNotice': '⚠️ 请求 {requestId} 未获回复：智能体多次结束回合却未作答，提醒已停止。请检查此话题中的会话。',
+  'requests.account.movedAnswer': 'AI 的 Claude 账号 «{from}» {reason}。我已把此问题移到 «{to}» 并会继续。',
+  'requests.account.noneUsableAnswer': '目前 AI 的 Claude 账号都无法工作（{reasons}）。已通知操作员；任一账号重新登录后工作会继续。',
   'requests.alert.unreachableNotice': '⚠️ 请求 {requestId} 未获回复：无法连接智能体的会话以发送提醒。请检查此话题中的会话。',
   'requests.limit.answerBalanceExhaustedNotice': '💸 运行此工作的账号的 API 额度已用完。工作将等待，直到操作员充值或将其转到另一个账号。',
   'requests.limit.answerAfterResetNotice': '🚧 已达到使用限额 — 答复将在 {time} 之后给出。',
@@ -1037,6 +1037,17 @@ export const zhDict: Record<string, string> = {
   'account.removeInstanceDefaultRefused': '{name} 是所有话题的默认值。请先在 General 话题中选择另一个默认值。',
   'account.unknown': '❌ 没有名为 {name} 的配置。运行 /accounts 查看列表。',
   'account.notLoggedIn': '⚠️ 配置 {name} 未登录。请先运行 /accounts login {name}。',
+  'accounts.refusal.notSignedIn': '已退出登录：claude auth status 找不到登录',
+  'accounts.refusal.signedOut': '已退出登录：其登录已过期或被撤销',
+  'accounts.refusal.orgDisabled': '被拒绝：其组织关闭了在 Claude Code 中使用 Claude 订阅',
+  'accounts.refusal.rejected': '被 Claude API 拒绝（401/403）',
+  'accounts.alert.title': '⚠️ 需要处理：Claude 账号 «{name}» {reason}。',
+  'accounts.alert.cliSaid': 'CLI 返回：{detail}',
+  'accounts.alert.fixSignIn': '解决方法：重新登录：{how}',
+  'accounts.alert.fixOrg': '解决方法：请组织管理员重新开启在 Claude Code 中使用 Claude 订阅，或用另一个登录身份登录该账号：{how}',
+  'accounts.alert.movedTo': '它的会话在 «{to}» 上继续，新会话也从那里开始。',
+  'accounts.alert.noneUsable': '目前没有其他可用的 Claude 账号：会话会等待，任一账号重新登录后继续。',
+  'accounts.alert.back': '✅ Claude 账号 «{name}» 已重新登录，可以接收会话。',
   'account.askName': '➕ 新配置的名称 — 小写字母、数字、- 和 _，最多 {max} 个字符（例如 work）。作为下一条消息发送，或运行 /accounts add <名称>。',
   'account.invalidName': '❌ 配置名称只能是小写字母、数字、- 和 _，最多 {max} 个字符，且不能是 "default"。',
   'account.exists': '已存在名为 {name} 的配置。',
@@ -1122,6 +1133,8 @@ export const zhDict: Record<string, string> = {
   'fallback.switchedReset': ' 上限将于 {time} 重置。切换：/limits',
   'fallback.switchedBack': ' 切换：/limits',
   'fallback.switchedDeferred': '🔁 账号 {from} 已达用量上限 — 此话题将在当前回答结束后切换到 {to}。',
+  'fallback.switchedSignedOut': '🔁 账号 {from} 未登录或登录被拒绝 — 此话题已切换到 {to} 并继续。{tail}',
+  'fallback.switchedSignedOutDeferred': '🔁 账号 {from} 未登录或登录被拒绝 — 此话题将在当前回答结束后切换到 {to}。',
   'fallback.switchFailed': '⚠️ 切换到 {to} 失败：{error}。重置等待保持生效。',
   'handover.note': '对话上下文将以压缩形式移交。',
   'handover.continueButton': '✅ 继续',

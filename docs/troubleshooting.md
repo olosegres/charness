@@ -1,19 +1,20 @@
 # Troubleshooting
 
-Known problems and their fixes. Check the bot first with `/doctor` (admin rights, privacy mode, paths, CLIs); installing and
+Known problems and their fixes. Check the bot first with `/doctor` (admin rights, privacy mode of a non-admin bot, paths, CLIs); installing and
 configuring is in [SETUP.md](../SETUP.md), the commands are in [commands.md](commands.md), the overview is the
 [README](../README.md).
 
 ## Bot doesn't see text (Telegram)
 
-You disabled privacy mode in @BotFather **after** adding the bot. The
-flag is cached on join. Fix:
+Telegram sends a bot only commands and replies to it while privacy mode is on — unless the bot is a group **admin**, which
+receives every message ([Telegram: privacy mode](https://core.telegram.org/bots/features#privacy-mode)). Fix: make the bot an
+admin of the group (with `Manage Topics`, `Delete Messages`, `Pin Messages`). Without admin rights, disable privacy mode
+instead — the flag is cached on join:
 
-1. Remove the bot from the group.
-2. (Re-confirm in @BotFather → `/setprivacy` → this bot → `Disable`.)
-3. Add the bot back.
+1. In @BotFather → `/setprivacy` → this bot → `Disable`.
+2. Remove the bot from the group and add it back.
 
-Verify with `/doctor` — the privacy line should report it as disabled.
+Verify with `/doctor` — the admin line is green, and for a bot that is not an admin the privacy line reports it as disabled.
 
 ## `/bind` says "folder not found" (Telegram)
 

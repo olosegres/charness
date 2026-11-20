@@ -1,10 +1,16 @@
 import * as path from 'path';
 import { resolveThreadFilesDir } from '../../botFileStorage';
 import { createJiraClient, JiraAuthError, JiraHttpError, type JiraClient, type JiraFieldDefinition } from './client';
-import { createJiraAnswerSink, type JiraAnswerSink } from './answerSink';
+import { createJiraAnswerSink, getOriginThreadRootId, type JiraAnswerSink } from './answerSink';
+import { attachFilesToIssue, type JiraFilesAttachResult } from './outgoingFiles';
+import { getJiraIssueProjectKey } from './sessionKeyCodec';
+import { resolveBoundWorkDir } from '../../validation';
+import type { OutboundFileRequest, OutboundFileResult } from '../../platform/outbound';
 import { loadJiraConfig, resolveExtraFields, resolveTriggerStatusIds, type JiraConfig } from './config';
 import { buildJiraTriggerJql, getJiraMentionWindowMs, getJiraRetryDelayMs, JiraInbound, jiraIssueUpdatesPer24hMax, type JiraInboundDeps, type JiraProjectTrigger } from './inbound';
 import { JiraTriggerLog, jiraTriggerLogFileName } from './triggerLog';
+import { createJiraOperatorChannel, hideJiraOperatorIssue } from './operatorIssue';
+import type { OperatorAlertChannel } from '../../platform/operatorAlert';
 import { JiraContextLedger } from './contextLedger';
 import { createJiraTrust, readJiraTrustedGroup, type JiraTrust, type JiraTrustedGroupSnapshot } from './trustedGroup';
 import { fetchIssueAttachment, type JiraAttachmentToolResult } from './attachmentTool';
@@ -13,6 +19,8 @@ import { registerAgentBinDir } from '../../utils/agentEnvironment';
 import type { SessionKey } from '../../sessionKey';
 import type { RequestPromptOutcome } from '../../requests/types';
 import { JiraUnconfirmedPosts, jiraUnconfirmedPostsFileName } from './unconfirmedPosts';
+import { JiraUploadedFiles, jiraUploadedFilesFileName } from './uploadedFiles';
+import { JiraAnswerThreads, jiraAnswerThreadsFileName } from './answerThreads';
 import { sleep } from '../../utils';
 
 /**
@@ -64,6 +72,16 @@ export interface JiraConnector {
    * fetched the issue yet, or when the trusted group rule withholds it (someone outside the group wrote it).
    */
   getConversationTitle(key: SessionKey): string | null;
+  /**
+   * `send_file_to_user` on the issue `key` names (its outbound's `deliverFile`): the files attached and ONE comment that
+   * shows them, in the thread the conversation's newest open request answers in (top-level when none is open).
+   */
+  sendFiles(key: SessionKey, request: OutboundFileRequest): Promise<OutboundFileResult>;
+  /**
+   * The operator issue (`jira.json` `operatorIssue`, `operatorIssue.ts`): where the bot tells its operator what only they can fix,
+   * as comments; `null` without one — the alerts then reach only the bot's log.
+   */
+  operatorChannel: OperatorAlertChannel | null;
   /** Start polling (the session side is ready: the boot restored the sessions). */
   start(deps: JiraConnectorSessionDeps): void;
   stop(): void;
@@ -111,6 +129,11 @@ async function settle<T>(lookup: Promise<T>): Promise<SettledLookup<T>> {
 
 /** The status Jira answers with when the account lacks the permission a call needs. */
 const permissionRefusedStatus = 403;
+/** The status Jira answers with for an issue that does not exist — or that the account may not browse. */
+const notFoundStatus = 404;
+
+/** The refusal of an `operatorIssue` the AI account cannot see. */
+export const jiraOperatorIssueUnseenError = 'jira.json operatorIssue: the AI account cannot see that issue (no such issue, or no permission to browse it)';
 
 /**
  * What the setup check reads from Jira: the token's account, every project's statuses, the site's fields when
@@ -121,11 +144,13 @@ async function checkJiraSetup(client: JiraClient, config: JiraConfig, now: () =>
   const hasExtraFields = projectEntries.some(([, project]) => project.extraFieldIds.length > 0);
   const { trustedGroupName } = config;
   // Independent lookups, made together; one project's failure does not hide the others' problems.
-  const [myself, statusLookups, fieldsLookup, groupLookup] = await Promise.all([
+  const [myself, statusLookups, fieldsLookup, groupLookup, operatorIssueLookup] = await Promise.all([
     settle(client.getMyself()),
     Promise.all(projectEntries.map(([projectKey]) => settle(client.getProjectStatuses(projectKey)))),
     hasExtraFields ? settle(client.getFields()) : null,
     trustedGroupName === null ? null : settle(readJiraTrustedGroup(client, trustedGroupName, now)),
+    // The operator issue must be one the AI account can see — it posts the alerts there.
+    config.operatorIssueKey === null ? null : settle(client.getIssue(config.operatorIssueKey, ['summary'])),
   ]);
   const reasons: string[] = [];
   const transientDetails: string[] = [];
@@ -145,6 +170,11 @@ async function checkJiraSetup(client: JiraClient, config: JiraConfig, now: () =>
     }
   } else if (groupLookup && groupLookup.value === null) {
     reasons.push(`jira.json trustedGroup: the site has no group named "${trustedGroupName}"`);
+  }
+  if (operatorIssueLookup && !operatorIssueLookup.ok) {
+    const { error } = operatorIssueLookup;
+    if (error instanceof JiraHttpError && error.status === notFoundStatus) reasons.push(jiraOperatorIssueUnseenError);
+    else noteFailure(error);
   }
   const trustedGroup = groupLookup?.ok ? groupLookup.value : null;
   const projects = new Map<string, JiraProjectTrigger>();
@@ -258,6 +288,10 @@ export async function prepareJiraConnector(context: {
   await triggerLog.load();
   const unconfirmedPosts = JiraUnconfirmedPosts.createForDataDir(path.join(context.dataDir, jiraUnconfirmedPostsFileName), now);
   await unconfirmedPosts.load();
+  const uploadedFiles = JiraUploadedFiles.createForDataDir(path.join(context.dataDir, jiraUploadedFilesFileName), now);
+  await uploadedFiles.load();
+  const answerThreads = JiraAnswerThreads.createForDataDir(path.join(context.dataDir, jiraAnswerThreadsFileName), now);
+  await answerThreads.load();
 
   /** The connector's own folder inside a conversation's files dir. */
   const getJiraFilesDir = (key: SessionKey): string => path.join(resolveThreadFilesDir(context.dataDir, key), jiraFilesDirName);
@@ -266,6 +300,16 @@ export async function prepareJiraConnector(context: {
   registerAgentBinDir(linkAgentBinaries(context.dataDir, config.agentBinaries));
   /** Built from the first setup check that came out ready; `null` before that, and for good without `trustedGroup`. */
   let trust: JiraTrust | null = null;
+  /** The core's side, handed over at `start`: the open requests a file comment takes its thread from. */
+  let sessionDeps: JiraConnectorSessionDeps | null = null;
+  /** The files an agent shows on its issue come from the issue's project folder, the one its conversation is bound to. */
+  const attachFiles = async (issueKey: string, paths: readonly string[], options: { isShownInline: boolean }): Promise<JiraFilesAttachResult> => {
+    const projectKey = getJiraIssueProjectKey(issueKey);
+    const project = projectKey === null ? undefined : config.projects.get(projectKey);
+    const decision = project ? resolveBoundWorkDir(context.workRoot, { subdir: project.folder }) : null;
+    if (decision?.kind !== 'proceed') return { ok: false, error: `the folder of ${issueKey}'s project cannot be used, so no file can be attached; nothing was posted` };
+    return attachFilesToIssue({ client, aiAccountId: config.accountId, siteUrl: config.baseUrl, uploads: uploadedFiles }, issueKey, decision.workDir, paths, options);
+  };
   const answerSink = createJiraAnswerSink({
     client,
     aiAccountId: config.accountId,
@@ -275,6 +319,8 @@ export async function prepareJiraConnector(context: {
     now,
     wait: sleep,
     unconfirmedPosts,
+    answerThreads,
+    attachFiles,
   });
   let inbound: JiraInbound | null = null;
   /** Issue key → the summary its last fetched context showed the agent (trust-filtered); memory only. */
@@ -303,7 +349,8 @@ export async function prepareJiraConnector(context: {
     }
     inbound = new JiraInbound({
       ...deps,
-      client,
+      // The operator issue is the bot's own channel, never a request source: the search never shows it to the poller.
+      client: hideJiraOperatorIssue(client, config.operatorIssueKey),
       aiAccountId: config.accountId,
       siteUrl: config.baseUrl,
       projects,
@@ -317,11 +364,12 @@ export async function prepareJiraConnector(context: {
       mentionMode: config.mentionMode,
       isCommentWakeOn: config.isCommentWakeOn,
       now,
-      parkIssue: (issueKey, requester) => answerSink.parkIssue(issueKey, requester),
+      parkIssue: (issueKey, requester, threadRootId) => answerSink.parkIssue(issueKey, requester, threadRootId),
       refuseUntrusted: (issueKey, requester, groupName) => answerSink.refuseUntrusted(issueKey, requester, groupName),
-      parkMention: (issueKey) => answerSink.parkMention(issueKey),
+      parkMention: (issueKey, threadRootId) => answerSink.parkMention(issueKey, threadRootId),
       postUpdatesPausedNotice: (issueKey, untilMs) => answerSink.postUpdatesPausedNotice(issueKey, jiraIssueUpdatesPer24hMax, untilMs),
-      postQueuedNotice: (issueKey, queue) => answerSink.postQueuedNotice(issueKey, queue),
+      postQueuedNotice: (issueKey, queue, threadRootId) => answerSink.postQueuedNotice(issueKey, queue, threadRootId),
+      noteAnswerThread: (requestId, threadRootId) => answerThreads.note(requestId, threadRootId),
       noteShownSummary: (issueKey, summary) => shownSummaries.set(issueKey, summary),
     });
     inbound.start();
@@ -350,10 +398,19 @@ export async function prepareJiraConnector(context: {
     }, getJiraRetryDelayMs(context.testTiming?.setupRetryBaseMs ?? pollIntervalMs, failureCount));
   };
 
+  if (config.operatorIssueKey !== null) {
+    const mention = config.operatorAccountIds.length === 0 ? 'mentioning nobody' : `mentioning ${config.operatorAccountIds.length} operator account(s)`;
+    console.log(`[jira] operator alerts go to ${config.operatorIssueKey} as comments, ${mention}; the poller skips that issue`);
+  } else {
+    console.log('[jira] no operatorIssue: operator alerts (a Claude account signed out, nothing usable) reach only this log');
+  }
   return {
     adapterName: config.adapter,
     launchDefaults: { model: config.model, effort: config.effort },
     answerSink,
+    operatorChannel: config.operatorIssueKey === null
+      ? null
+      : createJiraOperatorChannel({ client, issueKey: config.operatorIssueKey, operatorAccountIds: config.operatorAccountIds }),
     onPromptSettled: (key, requestId, outcome) => {
       // A Jira conversation's thread IS its issue key.
       if (outcome === 'takenIn') contextLedger.commit(key.thread, requestId);
@@ -377,9 +434,16 @@ export async function prepareJiraConnector(context: {
       contextLedger.reset(key.thread);
       console.log(`[jira] ${key.thread}: its context was reset (${reason}); the next prompt carries the whole issue`);
     },
+    sendFiles: (key, request) => {
+      // A Jira conversation's thread IS its issue key; its newest open request decides the comment's thread.
+      const newest = sessionDeps?.listOpenRequests(key).filter((open) => !open.isWakeStopped).at(-1);
+      const threadRootId = newest ? getOriginThreadRootId(newest.origin) : null;
+      return answerSink.postFiles(key.thread, { paths: request.paths, caption: request.caption, isAsLinks: request.asFile === true }, threadRootId);
+    },
     start: (deps) => {
       if (isStarted) return;
       isStarted = true;
+      sessionDeps = deps;
       if (firstCheck.kind === 'ready') startPolling(deps, firstCheck);
       else retrySetupCheck(deps, 0);
     },

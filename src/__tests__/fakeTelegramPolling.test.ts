@@ -17,6 +17,14 @@ const botUser = { id: 7000000001, is_bot: true, first_name: 'Fake bot', username
 const topicThreadId = 111;
 /** A hold long enough to tell from an answer at once, short enough for a test. */
 const testHoldMs = 400;
+/**
+ * The hold a short poll is checked against: a poll that is wrongly held takes this long. An absolute bound on the answer-at-once
+ * has to sit far from it — a machine running the whole suite delays a loopback answer by hundreds of milliseconds, which made the
+ * check fail when the bound was the (short) test hold itself.
+ */
+const wronglyHeldPollMs = 30_000;
+/** What a short poll may take, however loaded the machine: far below {@link wronglyHeldPollMs}. */
+const answerAtOnceLimitMs = 10_000;
 
 interface UpdatesAnswer {
   ok: boolean;
@@ -43,10 +51,14 @@ describe('the fake Bot API\'s polling', () => {
     return { answer: (await response.json()) as UpdatesAnswer, elapsedMs: Date.now() - startedAtMs };
   }
 
-  it('a poll with timeout 0 answers at once when nothing waits — a long poll is held', async () => {
+  it('a poll with timeout 0 answers at once when nothing waits', async () => {
+    fake.longPollHoldMs = wronglyHeldPollMs;
     const short = await callApi('getUpdates', { timeout: 0, limit: 100 });
     assert.deepEqual(short.answer.result, []);
-    assert.ok(short.elapsedMs < testHoldMs, `the short poll took ${short.elapsedMs} ms`);
+    assert.ok(short.elapsedMs < answerAtOnceLimitMs, `the short poll took ${short.elapsedMs} ms`);
+  });
+
+  it('a long poll is held for the hold when nothing waits', async () => {
     const long = await callApi('getUpdates', { timeout: 50, limit: 100 });
     assert.deepEqual(long.answer.result, []);
     assert.ok(long.elapsedMs >= testHoldMs - 50, `the long poll took ${long.elapsedMs} ms`);

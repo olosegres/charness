@@ -122,7 +122,7 @@ export const uzDict: Record<string, string> = {
   'doctor.can_pin_messages': '`can_pin_messages` berilgan',
   'doctor.privacy_off': 'Privacy mode o‘chirilgan',
   'doctor.privacy_hint':
-    '@BotFather → /setprivacy → Disable, so‘ng Bot ni o‘chiring va qayta qo‘shing',
+    'Botni guruh admini qiling — yoki @BotFather → /setprivacy → Disable, so‘ng Bot ni o‘chiring va qayta qo‘shing',
   'doctor.workroot_subdirs':
     '`WORK_ROOT`: `{workRoot}` ({count} quyi papka)',
   'doctor.datadir_path': '`DATA_DIR`: `{dataDir}`',
@@ -138,14 +138,12 @@ export const uzDict: Record<string, string> = {
     'Bot huquqlarini o‘qib bo‘lmadi — getChatMember muvaffaqiyatsiz',
 
   'onboarding.welcome':
-    '👋 *Charness 2.0*\n\n' +
-    'Tayyorgarlik ro‘yxati:\n' +
-    '1️⃣ Meni guruh admini qiling, huquqlar:\n' +
-    '   • Manage Topics, Delete Messages, Pin Messages\n' +
-    '2️⃣ @BotFather → /setprivacy → Disable, so‘ng meni o‘chiring va qayta qo‘shing\n' +
-    '3️⃣ Nimadir yetishmasligini ko‘rish uchun /doctor ni ishga tushiring\n' +
-    '4️⃣ Har bir mavzu mavzusida /bind <subdir> ni ishga tushiring va agentni boshlang\n\n' +
-    '`WORK_ROOT`: `{workRoot}`',
+    'Salom! Men Charness — Claude Code va OpenCode agentlarini ushbu guruhning mavzularida ishga tushiraman: bitta mavzu = bitta loyiha papkasi = bitta agent.\n\n' +
+    'Ishni boshlash uchun 3 qadam:\n' +
+    '1️⃣ Meni guruh admini qiling va Manage Topics, Delete Messages hamda Pin Messages huquqlarini bering\n' +
+    '2️⃣ Yana nima yetishmasligini ko‘rish uchun /doctor ni ishga tushiring\n' +
+    '3️⃣ Mavzu yarating: nomi loyiha papkasiga mos kelsa, men uni o‘zim bog‘layman, aks holda ro‘yxatimdan papkani tanlang (yoki /bind <subdir>). Keyin agentni ishga tushiring: /claude yoki /opencode\n\n' +
+    'Loyiha papkalari: `{workRoot}`',
 
   'binding.welcome.header': '📁 `{subdir}` ga bog‘landi',
   'binding.welcome.claude_md': '• CLAUDE.md: {size}',
@@ -1018,6 +1016,8 @@ export const uzDict: Record<string, string> = {
   'startup.item.optional_owner':
     '(ixtiyoriy) Ushbu holatni shaxsiy chatingizda olish uchun OWNER_USER_ID ni belgilang.',
   'requests.alert.notAnsweringNotice': '⚠️ {requestId} so‘roviga javob berilmadi: agent javob bermay navbatlarini yakunladi va eslatmalar to‘xtatildi. Ushbu mavzudagi seansni tekshiring.',
+  'requests.account.movedAnswer': 'AI ning Claude hisobi «{from}» {reason}. Bu vazifani «{to}» ga o\'tkazdim va davom etaman.',
+  'requests.account.noneUsableAnswer': 'Hozir AI ning hech bir Claude hisobi ishlay olmaydi ({reasons}). Operatorga xabar berildi; qaysidir biriga qayta kirilgach, ish davom etadi.',
   'requests.alert.unreachableNotice': '⚠️ {requestId} so‘roviga javob berilmadi: eslatma yuborish uchun agent seansiga ulanib bo‘lmadi. Ushbu mavzudagi seansni tekshiring.',
   'requests.limit.answerBalanceExhaustedNotice': '💸 Bu ish bajarilayotgan hisobning API krediti tugadi. Operator uni to\'ldirmaguncha yoki ishni boshqa hisobga o\'tkazmaguncha ish kutadi.',
   'requests.limit.answerAfterResetNotice': '🚧 Foydalanish limitiga yetildi — javob {time} dan keyin keladi.',
@@ -1043,6 +1043,17 @@ export const uzDict: Record<string, string> = {
   'account.removeInstanceDefaultRefused': '{name} barcha mavzular uchun standart. Avval General mavzusida boshqa standartni tanlang.',
   'account.unknown': '❌ {name} nomli profil yo‘q. Ro‘yxat uchun /accounts ni ishga tushiring.',
   'account.notLoggedIn': '⚠️ {name} profiliga kirilmagan. Avval /accounts login {name} ni bajaring.',
+  'accounts.refusal.notSignedIn': 'tizimdan chiqqan: claude auth status kirishni topa olmayapti',
+  'accounts.refusal.signedOut': 'tizimdan chiqqan: uning kirish muddati tugagan yoki bekor qilingan',
+  'accounts.refusal.orgDisabled': 'rad etildi: uning tashkiloti Claude Code\'da Claude obunasidan foydalanishni o\'chirib qo\'ygan',
+  'accounts.refusal.rejected': 'Claude API tomonidan rad etildi (401/403)',
+  'accounts.alert.title': '⚠️ Harakat kerak: Claude hisobi «{name}» {reason}.',
+  'accounts.alert.cliSaid': 'CLI javobi: {detail}',
+  'accounts.alert.fixSignIn': 'Tuzatish uchun unga qaytadan kiring: {how}',
+  'accounts.alert.fixOrg': 'Tuzatish uchun tashkilot adminidan Claude Code\'da Claude obunasidan foydalanishni qayta yoqishni so\'rang yoki hisobga boshqa login bilan kiring: {how}',
+  'accounts.alert.movedTo': 'Uning suhbatlari «{to}» da davom etadi, yangilari ham o\'sha yerda boshlanadi.',
+  'accounts.alert.noneUsable': 'Hozir boshqa hech bir Claude hisobi ishlay olmaydi: suhbatlar kutadi va qaysidir biriga qayta kirilgach davom etadi.',
+  'accounts.alert.back': '✅ Claude hisobi «{name}» ga qayta kirildi, u suhbatlarni qabul qiladi.',
   'account.askName': '➕ Yangi profil nomi — kichik harflar, raqamlar, - va _, ko‘pi bilan {max} ta belgi (masalan, work). Uni keyingi xabar qilib yuboring yoki /accounts add <nom> ni bajaring.',
   'account.invalidName': '❌ Profil nomi — kichik harflar, raqamlar, - va _, ko‘pi bilan {max} ta belgi, va "default" emas.',
   'account.exists': '{name} nomli profil allaqachon bor.',
@@ -1128,6 +1139,8 @@ export const uzDict: Record<string, string> = {
   'fallback.switchedReset': ' Limit {time} da tiklanadi. Almashtirish: /limits',
   'fallback.switchedBack': ' Almashtirish: /limits',
   'fallback.switchedDeferred': '🔁 {from} hisobi foydalanish limitiga yetdi — joriy javob tugagach, bu mavzu {to} ga o\'tadi.',
+  'fallback.switchedSignedOut': '🔁 {from} hisobidan chiqilgan yoki unga kirish rad etildi — bu mavzu {to} da davom etmoqda.{tail}',
+  'fallback.switchedSignedOutDeferred': '🔁 {from} hisobidan chiqilgan yoki unga kirish rad etildi — joriy javob tugagach, bu mavzu {to} ga o\'tadi.',
   'fallback.switchFailed': '⚠️ {to} ga o\'tish muvaffaqiyatsiz: {error}. Tiklanishni kutish saqlanadi.',
   'handover.note': 'Suhbat konteksti siqilgan shaklda uzatiladi.',
   'handover.continueButton': '✅ Davom etish',

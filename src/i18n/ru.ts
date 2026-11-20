@@ -126,7 +126,7 @@ export const ruDict: Record<string, string> = {
   'doctor.can_pin_messages': 'Право `can_pin_messages`',
   'doctor.privacy_off': 'Privacy mode выключен',
   'doctor.privacy_hint':
-    '@BotFather → /setprivacy → Disable, потом удали и добавь бота заново',
+    'Сделай бота админом группы — или @BotFather → /setprivacy → Disable, потом удали и добавь бота заново',
   'doctor.workroot_subdirs':
     '`WORK_ROOT`: `{workRoot}` ({count} подпапок)',
   'doctor.datadir_path': '`DATA_DIR`: `{dataDir}`',
@@ -142,14 +142,12 @@ export const ruDict: Record<string, string> = {
     'не могу прочитать права бота — getChatMember failed',
 
   'onboarding.welcome':
-    '👋 *Charness 2.0*\n\n' +
-    'Готовность к работе:\n' +
-    '1️⃣ Сделай меня админом группы с правами:\n' +
-    '   • Manage Topics, Delete Messages, Pin Messages\n' +
-    '2️⃣ @BotFather → /setprivacy → Disable, потом удали и добавь бота заново\n' +
-    '3️⃣ Запусти /doctor — увижу проблемы сразу\n' +
-    '4️⃣ В каждом тематическом треде сделай /bind <subdir> и запусти агента\n\n' +
-    '`WORK_ROOT`: `{workRoot}`',
+    'Привет! Я Charness — запускаю агентов Claude Code и OpenCode в топиках этой группы: один топик = одна папка проекта = один агент.\n\n' +
+    'Три шага до начала работы:\n' +
+    '1️⃣ Сделай меня админом группы с правами Manage Topics, Delete Messages и Pin Messages\n' +
+    '2️⃣ Запусти /doctor — он покажет, чего ещё не хватает\n' +
+    '3️⃣ Создай топик: если его название совпадает с папкой проекта, я сам привяжу его к ней, иначе выбери папку из моего списка (или /bind <subdir>). Потом запусти агента: /claude или /opencode\n\n' +
+    'Папки проектов: `{workRoot}`',
 
   'binding.welcome.header': '📁 Привязано к `{subdir}`',
   'binding.welcome.claude_md': '• CLAUDE.md: {size}',
@@ -1022,6 +1020,8 @@ export const ruDict: Record<string, string> = {
   'startup.item.optional_owner':
     '(необязательно) Задайте OWNER_USER_ID, чтобы получать этот статус в личном чате.',
   'requests.alert.notAnsweringNotice': '⚠️ Запрос {requestId} остался без ответа: агент завершал ходы, не отвечая, и напоминания прекращены. Проверьте сессию в этой теме.',
+  'requests.account.movedAnswer': 'Аккаунт Claude «{from}», на котором работает ИИ, {reason}. Я перенёс эту задачу на «{to}» и продолжу.',
+  'requests.account.noneUsableAnswer': 'Сейчас ни один аккаунт Claude ИИ не может работать ({reasons}). Оператору сообщено; работа продолжится, когда в один из них снова войдут.',
   'requests.alert.unreachableNotice': '⚠️ Запрос {requestId} остался без ответа: до сессии агента не удалось достучаться с напоминанием. Проверьте сессию в этой теме.',
   'requests.limit.answerBalanceExhaustedNotice': '💸 API-кредиты аккаунта, на котором идёт эта работа, закончились. Работа ждёт, пока оператор их пополнит или переведёт её на другой аккаунт.',
   'requests.limit.answerAfterResetNotice': '🚧 Достигнут лимит использования — ответ будет после {time}.',
@@ -1047,6 +1047,17 @@ export const ruDict: Record<string, string> = {
   'account.removeInstanceDefaultRefused': '{name} — профиль по умолчанию для всех топиков. Сначала выберите другой в топике General.',
   'account.unknown': '❌ Профиля {name} нет. Список — /accounts.',
   'account.notLoggedIn': '⚠️ В профиль {name} не выполнен вход. Сначала /accounts login {name}.',
+  'accounts.refusal.notSignedIn': 'не авторизован: claude auth status не находит входа',
+  'accounts.refusal.signedOut': 'не авторизован: его вход истёк или был отозван',
+  'accounts.refusal.orgDisabled': 'отклонён: его организация отключила использование подписки Claude в Claude Code',
+  'accounts.refusal.rejected': 'отклонён API Claude (401/403)',
+  'accounts.alert.title': '⚠️ Нужно действие: аккаунт Claude «{name}» {reason}.',
+  'accounts.alert.cliSaid': 'CLI ответил: {detail}',
+  'accounts.alert.fixSignIn': 'Чтобы исправить, войдите в него снова: {how}',
+  'accounts.alert.fixOrg': 'Чтобы исправить, попросите администратора организации снова включить использование подписки Claude в Claude Code или войдите в аккаунт под другим логином: {how}',
+  'accounts.alert.movedTo': 'Его разговоры продолжаются на «{to}», и новые начинаются там.',
+  'accounts.alert.noneUsable': 'Ни один другой аккаунт Claude сейчас не может работать: разговоры ждут и продолжатся, когда в какой-нибудь снова войдут.',
+  'accounts.alert.back': '✅ В аккаунт Claude «{name}» снова вошли — он принимает разговоры.',
   'account.askName': '➕ Имя нового профиля — строчные латинские буквы, цифры, - и _, до {max} символов (например, work). Отправьте его следующим сообщением или выполните /accounts add <имя>.',
   'account.invalidName': '❌ Имя профиля — строчные латинские буквы, цифры, - и _, до {max} символов, и не "default".',
   'account.exists': 'Профиль {name} уже существует.',
@@ -1132,6 +1143,8 @@ export const ruDict: Record<string, string> = {
   'fallback.switchedReset': ' Лимит сбросится {time}. Переключить: /limits',
   'fallback.switchedBack': ' Переключить: /limits',
   'fallback.switchedDeferred': '🔁 Аккаунт {from} достиг лимита — топик перейдёт на {to}, когда закончится текущий ответ.',
+  'fallback.switchedSignedOut': '🔁 Аккаунт {from} не авторизован или его вход отклонён — топик продолжает работу на {to}.{tail}',
+  'fallback.switchedSignedOutDeferred': '🔁 Аккаунт {from} не авторизован или его вход отклонён — топик перейдёт на {to}, когда закончится текущий ответ.',
   'fallback.switchFailed': '⚠️ Переключение на {to} не удалось: {error}. Ожидание сброса остаётся.',
   'handover.note': 'Контекст разговора будет передан в сжатом виде.',
   'handover.continueButton': '✅ Продолжить',

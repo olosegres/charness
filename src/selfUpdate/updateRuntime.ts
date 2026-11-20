@@ -3,7 +3,7 @@ import * as path from 'path';
 import { getProcessIdentity } from '../installManager';
 import { getChildProcessEnvironment } from '../utils/agentEnvironment';
 import { getOutputTail, runCommand as defaultRunCommand, type CommandRunner } from './commandRunner';
-import { queryTimeoutMs, selfCheckTimeoutMs } from './constants';
+import { queryTimeoutMs, selfCheckTimeoutMs, unknownRunningVersion } from './constants';
 import { createGitSource } from './gitSource';
 import { acquireHostLock } from './hostLock';
 import { getStaleSupervisorModules, readHotSupervisorRecord, requestSupervisorReexec } from './hotSupervisor';
@@ -116,7 +116,7 @@ export async function createUpdateRuntime(options: UpdateRuntimeOptions): Promis
   const npmPrefix = installKind.kind === 'npmGlobal' ? installKind.prefix : '';
 
   return {
-    running: { version: readVersionOrNull(packageRoot) ?? 'unknown', commit },
+    running: { version: readVersionOrNull(packageRoot) ?? unknownRunningVersion, commit },
     runningNode: options.nodeVersion,
     installKind,
     isHotMode: options.isHotMode,

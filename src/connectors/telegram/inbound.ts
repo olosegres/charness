@@ -146,6 +146,16 @@ export function checkHasLeftGroup(member: ChatMember): boolean {
 }
 
 /**
+ * @description Whether this membership change is the member COMING IN: before, they were out of the group
+ * (`checkHasLeftGroup`: never in, left, removed, banned), now they are a member or an administrator. A promotion
+ * (`member` → `administrator`) or an edit of an admin's rights (`administrator` → `administrator`) is a change of someone
+ * already there — Telegram reports both to the bot itself as `my_chat_member`.
+ */
+export function checkHasJoinedGroup(oldMember: ChatMember, newMember: ChatMember): boolean {
+  return checkHasLeftGroup(oldMember) && (newMember.status === 'member' || newMember.status === 'administrator');
+}
+
+/**
  * @description Telegram's six ingestible media kinds collapsed onto the core's
  * five. `video_note` (a round video) and `animation` (a GIF) are Telegram UI
  * distinctions with no bearing on how the core treats the bytes.

@@ -26,3 +26,5 @@ export const bootConfirmMs = 60 * 1000;
 export const maxUnconfirmedBoots = 2;
 /** The most items a "what's new" summary lists before "…and N more". */
 export const whatsNewItemLimit = 8;
+/** What the running version reads as when the install's `package.json` cannot be read. */
+export const unknownRunningVersion = 'unknown';

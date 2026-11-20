@@ -56,6 +56,9 @@ const expiredCallbackQueryError: ApiError = {
   description: 'Bad Request: query is too old and response timeout expired or query ID is invalid',
 };
 
+/** The statuses the fake reports for the bot's own membership (`my_chat_member`). */
+export type BotMembershipStatus = 'left' | 'kicked' | 'member' | 'administrator';
+
 export interface TelegramUser {
   id: number;
   is_bot: boolean;
@@ -243,6 +246,10 @@ export class FakeTelegram {
   isMessageDeletionRefused = false;
   /** Whether the bot may create topics (`can_manage_topics`); while unset, `createForumTopic` is refused as the Bot API refuses it. */
   canManageTopics = true;
+  /** Whether `getChatMember` answers for the bot as a group administrator with the rights it asks for; unset (the default): as a plain member. */
+  isBotAdmin = false;
+  /** Whether the bot's privacy mode is on, as `getMe` reports it (`can_read_all_group_messages` false). Off by default. */
+  isBotPrivacyModeOn = false;
   /**
    * While set, a send to a person who has not opened a private chat with the bot ({@link openPrivateChat}, or by writing to it with
    * {@link pushPrivateMessage}) is refused the way the Bot API refuses it — 403 «bot can't initiate conversation with a user» —, and
@@ -535,6 +542,30 @@ export class FakeTelegram {
     });
   }
 
+  /**
+   * @description The bot's OWN membership in the group changed, as the Bot API reports it to a bot that asked for `my_chat_member`
+   * updates: `user` is the bot itself (the default — «the bot was added» is `left` → `member` or `administrator`); another user
+   * is an update that is not about the bot.
+   */
+  pushMyChatMember(oldStatus: BotMembershipStatus, newStatus: BotMembershipStatus, user: TelegramUser = this.options.botUser): void {
+    const asMember = (status: BotMembershipStatus) => ({
+      status,
+      user,
+      // The rights an administrator carries on the wire; the bot reads the status only.
+      ...(status === 'administrator' ? { can_be_edited: false, is_anonymous: false, can_manage_chat: true, can_delete_messages: true, can_manage_topics: true, can_pin_messages: true } : {}),
+      ...(status === 'kicked' ? { until_date: 0 } : {}),
+    });
+    this.pushUpdate({
+      my_chat_member: {
+        chat: this.chat,
+        from: this.options.operator,
+        date: Math.floor(Date.now() / 1000),
+        old_chat_member: asMember(oldStatus),
+        new_chat_member: asMember(newStatus),
+      },
+    });
+  }
+
   // ─── what the test reads back ─────────────────────────────────────
 
   /** @description The bot's messages in topic `threadId` (of the group `groupId`, the flow's own by default) that are not deleted, oldest first, with their CURRENT text. */
@@ -801,7 +832,7 @@ export class FakeTelegram {
     if (this.deletedGroupIds.has(Number(payload.chat_id))) return { ok: false, error_code: 400, description: 'Bad Request: chat not found' };
     switch (method) {
       case 'getMe':
-        return { ok: true, result: { ...this.options.botUser, can_join_groups: true, can_read_all_group_messages: true, supports_inline_queries: false } };
+        return { ok: true, result: { ...this.options.botUser, can_join_groups: true, can_read_all_group_messages: !this.isBotPrivacyModeOn, supports_inline_queries: false } };
       case 'getUpdates':
         return { ok: true, result: await this.getUpdates(payload, socket) };
       case 'deleteWebhook':
@@ -821,6 +852,9 @@ export class FakeTelegram {
         const group = this.getGroup(payload);
         const userId = Number(payload.user_id);
         const admin = group.admins.find((candidate) => candidate.id === userId);
+        if (this.isBotAdmin && userId === this.options.botUser.id) {
+          return { ok: true, result: { status: 'administrator', user: this.options.botUser, is_anonymous: false, can_manage_topics: true, can_delete_messages: true, can_pin_messages: true } };
+        }
         if (group.creator.id === userId) return { ok: true, result: { status: 'creator', user: group.creator, is_anonymous: false } };
         if (admin) return { ok: true, result: { status: 'administrator', user: admin, is_anonymous: false } };
         return { ok: true, result: { status: 'member', user: { id: userId, is_bot: false, first_name: 'Member' } } };

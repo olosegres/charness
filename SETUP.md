@@ -431,10 +431,12 @@ The CLI is installed first — see [Install the CLI](#install-the-cli). After th
 
 1. Message [@BotFather](https://t.me/BotFather), send `/newbot`, follow prompts.
 2. Save the token (`123456789:ABCdef...`).
-3. **Disable privacy mode** — same chat: `/setprivacy` → pick this bot →
-   `Disable`. Without this the bot only sees `/commands`, not free-form text.
+3. **Leave privacy mode as it is** if you serve a group: a bot made a group admin
+   (step 2 below) receives every message whatever the privacy mode says
+   ([Telegram: privacy mode](https://core.telegram.org/bots/features#privacy-mode)). Only a bot
+   you do not make an admin needs `/setprivacy` → pick this bot → `Disable` to see free-form text, not just `/commands`.
 
-<p><img src="docs/images/01-botfather.png" width="360" alt="@BotFather: /newbot to get the token, then /setprivacy → this bot → Disable" /></p>
+<p><img src="docs/images/01-botfather.png" width="360" alt="@BotFather: /newbot gives the token (the screenshot also shows /setprivacy, needed only for a bot that is not a group admin)" /></p>
 
 Put the token where the bot reads it — the global config `.env`:
 
@@ -479,10 +481,10 @@ visible topic list, per-topic names/icons, quick agent switching — but it is
    - `Delete Messages` (for `/clear_messages`)
    - `Pin Messages` (per-thread status banner + question alerts; `/doctor`
      warns if missing, but the bot still runs without it)
-4. **Remove the bot from the group and add it again.** Telegram caches the
-   privacy-mode flag on join; without re-adding, the bot keeps private-mode and
-   ignores free-form messages (see
-   [Troubleshooting → Bot doesn't see text](docs/troubleshooting.md#bot-doesnt-see-text-telegram)).
+
+Once the bot is in the group it greets General with these steps and the version it runs; `/doctor` shows what is still
+missing. If it does not see free-form text, see
+[Troubleshooting → Bot doesn't see text](docs/troubleshooting.md#bot-doesnt-see-text-telegram).
 
 <p>
   <img src="docs/images/02-enable-topics.png" width="360" alt="Group settings → Topics toggle enabled (Forum mode)" />
@@ -808,7 +810,9 @@ connector behaves is described in [`src/connectors/jira/README.md`](src/connecto
      "pollIntervalSeconds": 30,
      "runBudgetPer24h": 5,
      "model": "opus",
-     "effort": "high"
+     "effort": "high",
+     "operatorIssue": "OPS-12",
+     "operatorAccountIds": ["<your own account's id>"]
    }
    ```
 
@@ -883,12 +887,32 @@ connector behaves is described in [`src/connectors/jira/README.md`](src/connecto
    idles) or `claude-per-turn` (stopped after every answer); either way the issue's conversation sleeps between
    requests and the next request resumes it.
 
+   `operatorIssue` (optional) is the instance's channel to YOU, the operator — what General is on Telegram: an issue the
+   bot comments on when something needs you, such as a Claude account of the AI that is signed out or whose sign-in its
+   organization refused (which account, the CLI's own words, where its issues went or that they wait, and how to sign it in
+   again: `CLAUDE_CONFIG_DIR=<its folder> claude auth login` on the host, as the instance's OS user — `claude auth login`
+   for `default`), and once more when it is signed in again. Pick an issue the AI account can see and comment on, in any
+   project; it need not be in `projects`. The issue is the bot's own: whatever happens on it — a hand-over, a comment, a
+   mention — never starts the AI. `operatorAccountIds` (optional, needs `operatorIssue`, 1–5 account ids) are mentioned in
+   each comment that asks you to act, so Jira notifies you; a comment that only says things are fine again mentions nobody.
+   Without `operatorIssue` such news goes only to the log (`[accounts] …`).
+
    **How many agents run at once.** The AI works on at most 5 issues at the same time, all projects together — set
    `taskAgents.maxConcurrent` in [`settings.json`](#instance-settings-settingsjson) (`0` = no limit; read without a
    restart). An issue handed over beyond that gets one comment saying it is queued, stays assigned to the AI and starts by
    itself when an agent hands its issue back, the one that waited longest first — also across a restart. A comment that
    starts a request and an acting mention (`mentionMode: "act"`) wait the same way; an @-mention that only answers is never
    held back, and a lower number never stops an agent that is already working.
+
+   **Comment threads.** The AI follows Jira's threaded replies. A comment written as a reply reaches the agent marked
+   as one, with the start of the comment that opened the thread, and the agent's answers to a request a reply opened go
+   into that thread — so do the notices about it (queued, over the budget). An answer that replies to a comment goes
+   into that comment's thread; anything else is a new comment, as before.
+
+   **Screenshots and videos in answers.** The agent can attach files of the project folder to its answer: they are
+   uploaded to the issue and shown in the answer's comment — an image shown, an H.264 `.mp4` playing, anything else
+   linked. The AI account needs the *Create Attachments* permission in the project, and attachments must be on for the
+   site; a file over the site's upload limit is refused.
 
 5. Start it with a clean environment, so nothing of the calling shell reaches it:
 
@@ -901,7 +925,8 @@ connector behaves is described in [`src/connectors/jira/README.md`](src/connecto
    The start refuses a missing `ENV_FILE`, `TMUX_SOCKET_NAME` or `jira.json`, an `OPENCODE_URL` on the default
    port, a `TELEGRAM_BOT_TOKEN` or any `ATLASSIAN_*` variable when Telegram is off, a token that belongs to
    another account, an unknown project or status, a `trustedGroup` the site does not have or the AI account
-   may not read, a `trustedApps`, a `wakeOnComment: true` or a `mentionMode: "act"` without a `trustedGroup`, and a
+   may not read, a `trustedApps`, a `wakeOnComment: true` or a `mentionMode: "act"` without a `trustedGroup`, an
+   `operatorIssue` that is no issue key or that the AI account cannot see, `operatorAccountIds` without an `operatorIssue`, and a
    `DATA_DIR` holding another surface's state. An unreachable Jira does not refuse the start —
    polling backs off and resumes.
 

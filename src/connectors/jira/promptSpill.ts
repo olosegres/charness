@@ -90,7 +90,7 @@ function getLargestSpillableIndex(blocks: readonly IssueBlock[], textDir: string
 }
 
 function getCommentsFile(commentBlocks: readonly IssueBlock[], textDir: string): CommentsFile {
-  const text = commentBlocks.map((block) => `${block.heading}:\n${block.fullText}`).join('\n\n');
+  const text = commentBlocks.map((block) => `${block.heading}:\n${block.replyNote && !block.isWithheld ? `${block.replyNote}\n` : ''}${block.fullText}`).join('\n\n');
   const hash = createHash('sha256').update(commentBlocks.map((block) => block.hash).join('\n')).digest('hex');
   return { path: getSpillFilePath(textDir, 'comments', hash), chars: text.length, text };
 }

@@ -122,7 +122,7 @@ export const kaDict: Record<string, string> = {
   'doctor.can_pin_messages': '`can_pin_messages` მინიჭებულია',
   'doctor.privacy_off': 'Privacy mode გამორთულია',
   'doctor.privacy_hint':
-    '@BotFather → /setprivacy → Disable, შემდეგ წაშალეთ და ხელახლა დაამატეთ Bot',
+    'გახადეთ Bot ჯგუფის ადმინისტრატორი — ან @BotFather → /setprivacy → Disable, შემდეგ წაშალეთ და ხელახლა დაამატეთ Bot',
   'doctor.workroot_subdirs':
     '`WORK_ROOT`: `{workRoot}` ({count} ქვესაქაღალდე)',
   'doctor.datadir_path': '`DATA_DIR`: `{dataDir}`',
@@ -138,14 +138,12 @@ export const kaDict: Record<string, string> = {
     'Bot-ის უფლებების წაკითხვა ვერ ხერხდება — getChatMember ვერ შედგა',
 
   'onboarding.welcome':
-    '👋 *Charness 2.0*\n\n' +
-    'მზადყოფის ჩეკლისტი:\n' +
-    '1️⃣ გამახლეთ ჯგუფის ადმინად უფლებებით:\n' +
-    '   • Manage Topics, Delete Messages, Pin Messages\n' +
-    '2️⃣ @BotFather → /setprivacy → Disable, შემდეგ წამშალეთ და ხელახლა დაამატეთ\n' +
-    '3️⃣ გაუშვით /doctor რა აკლია ნახვად\n' +
-    '4️⃣ თითოეულ თემატურ თემაში გაუშვით /bind <subdir> და გაუშვით აგენტი\n\n' +
-    '`WORK_ROOT`: `{workRoot}`',
+    'გამარჯობა! მე Charness ვარ — ვუშვებ Claude Code-ისა და OpenCode-ის აგენტებს ამ ჯგუფის თემებში: ერთი თემა = ერთი პროექტის საქაღალდე = ერთი აგენტი.\n\n' +
+    'მუშაობის დასაწყებად 3 ნაბიჯია:\n' +
+    '1️⃣ გამხადეთ ჯგუფის ადმინისტრატორი უფლებებით Manage Topics, Delete Messages და Pin Messages\n' +
+    '2️⃣ გაუშვით /doctor, რომ ნახოთ, რა აკლია კიდევ\n' +
+    '3️⃣ შექმენით თემა: თუ მისი სახელი პროექტის საქაღალდეს ემთხვევა, მე თვითონ მივაბამ, სხვა შემთხვევაში აირჩიეთ საქაღალდე ჩემი სიიდან (ან /bind <subdir>). შემდეგ გაუშვით აგენტი: /claude ან /opencode\n\n' +
+    'პროექტების საქაღალდეები: `{workRoot}`',
 
   'binding.welcome.header': '📁 დაკავშირებულია `{subdir}`-თან',
   'binding.welcome.claude_md': '• CLAUDE.md: {size}',
@@ -1018,6 +1016,8 @@ export const kaDict: Record<string, string> = {
   'startup.item.optional_owner':
     '(არასავალდებულო) დააყენეთ OWNER_USER_ID, რომ ეს სტატუსი მიიღოთ თქვენს პირად ჩატში.',
   'requests.alert.notAnsweringNotice': '⚠️ მოთხოვნა {requestId} უპასუხოდ დარჩა: აგენტმა სვლები პასუხის გარეშე დაასრულა და შეხსენებები შეწყდა. შეამოწმეთ სესია ამ თემაში.',
+  'requests.account.movedAnswer': 'AI-ს Claude-ის ანგარიში «{from}» {reason}. ეს ამოცანა «{to}»-ზე გადავიტანე და გავაგრძელებ.',
+  'requests.account.noneUsableAnswer': 'ახლა AI-ს Claude-ის ვერცერთი ანგარიში ვერ მუშაობს ({reasons}). ოპერატორს ეცნობა; სამუშაო გაგრძელდება, როგორც კი რომელიმეში ხელახლა შევლენ.',
   'requests.alert.unreachableNotice': '⚠️ მოთხოვნა {requestId} უპასუხოდ დარჩა: შეხსენებისთვის აგენტის სესიასთან დაკავშირება ვერ მოხერხდა. შეამოწმეთ სესია ამ თემაში.',
   'requests.limit.answerBalanceExhaustedNotice': '💸 ანგარიშის, რომელზეც ეს სამუშაო მიმდინარეობს, API კრედიტი ამოიწურა. სამუშაო ელოდება, სანამ ოპერატორი შეავსებს ბალანსს ან სხვა ანგარიშზე გადაიტანს.',
   'requests.limit.answerAfterResetNotice': '🚧 გამოყენების ლიმიტი ამოიწურა — პასუხი მოვა {time}-ის შემდეგ.',
@@ -1043,6 +1043,17 @@ export const kaDict: Record<string, string> = {
   'account.removeInstanceDefaultRefused': '{name} ყველა თემის ნაგულისხმევია. ჯერ General თემაში სხვა ნაგულისხმევი აირჩიეთ.',
   'account.unknown': '❌ პროფილი სახელით {name} არ არსებობს. სიისთვის გაუშვით /accounts.',
   'account.notLoggedIn': '⚠️ პროფილი {name} შესული არ არის. ჯერ გაუშვით /accounts login {name}.',
+  'accounts.refusal.notSignedIn': 'გამოსულია: claude auth status შესვლას ვერ პოულობს',
+  'accounts.refusal.signedOut': 'გამოსულია: მისი შესვლის ვადა გავიდა ან გაუქმდა',
+  'accounts.refusal.orgDisabled': 'უარყოფილია: მისმა ორგანიზაციამ Claude Code-ში Claude-ის გამოწერის გამოყენება გამორთო',
+  'accounts.refusal.rejected': 'უარყო Claude API-მ (401/403)',
+  'accounts.alert.title': '⚠️ საჭიროა მოქმედება: Claude-ის ანგარიში «{name}» {reason}.',
+  'accounts.alert.cliSaid': 'CLI-მ უპასუხა: {detail}',
+  'accounts.alert.fixSignIn': 'გამოსასწორებლად ხელახლა შედით მასში: {how}',
+  'accounts.alert.fixOrg': 'გამოსასწორებლად სთხოვეთ ორგანიზაციის ადმინს, ხელახლა ჩართოს Claude-ის გამოწერის გამოყენება Claude Code-ში, ან შედით ანგარიშში სხვა ლოგინით: {how}',
+  'accounts.alert.movedTo': 'მისი საუბრები «{to}»-ზე გრძელდება და ახლებიც იქ იწყება.',
+  'accounts.alert.noneUsable': 'ახლა Claude-ის სხვა ანგარიში ვერ მუშაობს: საუბრები ელოდება და გაგრძელდება, როგორც კი რომელიმეში ხელახლა შევლენ.',
+  'accounts.alert.back': '✅ Claude-ის ანგარიშში «{name}» ხელახლა შევიდნენ და ის საუბრებს იღებს.',
   'account.askName': '➕ ახალი პროფილის სახელი — პატარა ლათინური ასოები, ციფრები, - და _, არაუმეტეს {max} სიმბოლო (მაგ. work). გამოაგზავნეთ შემდეგი შეტყობინებით ან გაუშვით /accounts add <სახელი>.',
   'account.invalidName': '❌ პროფილის სახელი — პატარა ლათინური ასოები, ციფრები, - და _, არაუმეტეს {max} სიმბოლო, და არა "default".',
   'account.exists': 'პროფილი სახელით {name} უკვე არსებობს.',
@@ -1128,6 +1139,8 @@ export const kaDict: Record<string, string> = {
   'fallback.switchedReset': ' ლიმიტი განულდება {time}-ზე. გადასართავად: /limits',
   'fallback.switchedBack': ' გადასართავად: /limits',
   'fallback.switchedDeferred': '🔁 ანგარიშმა {from} გამოყენების ლიმიტს მიაღწია — მიმდინარე პასუხის დასრულებისას ეს თემა {to}-ზე გადავა.',
+  'fallback.switchedSignedOut': '🔁 ანგარიში {from} გამოსულია ან მისი შესვლა უარყოფილია — ეს თემა {to}-ზე აგრძელებს მუშაობას.{tail}',
+  'fallback.switchedSignedOutDeferred': '🔁 ანგარიში {from} გამოსულია ან მისი შესვლა უარყოფილია — მიმდინარე პასუხის დასრულებისას ეს თემა {to}-ზე გადავა.',
   'fallback.switchFailed': '⚠️ {to}-ზე გადართვა ვერ მოხერხდა: {error}. განულების ლოდინი რჩება.',
   'handover.note': 'საუბრის კონტექსტი გადაეცემა შეკუმშული სახით.',
   'handover.continueButton': '✅ გაგრძელება',

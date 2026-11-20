@@ -16,7 +16,9 @@
  *     wakes it once
  *   → an answer that replies to comments mentions their authors: the requester of a mention first, then the author of a
  *     comment the agent was shown; a withheld comment's id and an unknown id are left out, and the agent's tool result
- *     says so while its answer is delivered
+ *     says so while its answer is delivered — in the thread of the comment it replies to
+ *   → a mention in a reply (Jira's comment threads) reaches the agent marked as a reply, with what the thread's comment
+ *     says, and is answered in that thread
  *   → the instance invariants (R11, R32, R6, the private tmux server)
  *
  * Nothing leaves the machine; everything the test starts is stopped in `after`.
@@ -264,6 +266,7 @@ describe('Jira connector end to end — the trusted group and mentions: built ch
     await waitFor(`${issueKey}: answered`, answerTimeoutMs, () => issue.comments.length === 4 && getAnswers(issueKey).length === 1);
     const answerComment = issue.comments[3];
     assert.equal(answerComment.author.accountId, aiAccount.accountId);
+    assert.equal(answerComment.parentId, Number(colleagueCommentId), 'posted in the thread of the comment it replies to');
     // T10: the first paragraph holds nothing but the mentions — the requester of the mention request, then the replied-to author.
     assert.deepEqual(getMentionedAccountIds(answerComment.body.content[0]), [requester.accountId, colleague.accountId]);
     assert.equal(getAdfText(answerComment.body), `@Requester @Colleague\nFake final answer for ${issueKey} (reply-to, turn 1).`);
@@ -279,9 +282,29 @@ describe('Jira connector end to end — the trusted group and mentions: built ch
     assert.equal(issue.assignee?.accountId, requester.accountId, 'nothing was handed back');
     assert.equal(countAssigneeChanges(issueKey), 0);
     // T4: the agent knew about the field from its context preamble.
-    assert.ok(getPrompts(issueKey)[0].text.includes('put its id in answer_request\'s replyToCommentIds: the bot then mentions its author, so they are notified.'));
+    assert.ok(getPrompts(issueKey)[0].text.includes('put its id in answer_request\'s replyToCommentIds: the bot then mentions its author, so they are notified, ' +
+      'and posts your answer in that comment\'s thread.'));
   });
 
+
+  it('M3: a mention in a reply reaches the agent marked as a reply, with what the thread\'s comment says, and is answered in that thread', async () => {
+    const issueKey = 'PROJ-32';
+    fakeJira.createIssue({ key: issueKey, summary: `[fake:answer] Task ${issueKey}`, description: 'The export fails on empty rows.', statusId: toDo.id, reporter: requester });
+    fakeJira.assignIssue(issueKey, requester, requester);
+    const issue = fakeJira.getIssue(issueKey);
+    const rootId = fakeJira.addComment(issueKey, colleague, 'Should the export skip empty rows?');
+    const replyId = fakeJira.addComment(issueKey, requester, 'what do you think?', { mentions: [aiAccount], parentId: rootId });
+
+    await waitFor(`${issueKey}: answered`, answerTimeoutMs, () => issue.comments.length === 3 && getAnswers(issueKey).length === 1);
+    const answerComment = issue.comments[2];
+    assert.equal(answerComment.author.accountId, aiAccount.accountId);
+    assert.equal(answerComment.parentId, Number(rootId), 'posted in the thread the mention was made in — under its top-level comment');
+    assert.deepEqual(getMentionedAccountIds(answerComment.body.content[0]), [requester.accountId]);
+    const [prompt] = getPrompts(issueKey);
+    assert.ok(prompt.text.includes(`Thread: comment ${replyId} is a reply in the thread of comment ${rootId}, so your answers to this request are posted in that thread.`), prompt.text);
+    assert.ok(prompt.text.includes(`A reply in the thread of comment ${rootId} by Colleague, which says: "Should the export skip empty rows?"`), prompt.text);
+    assert.equal(issue.assignee?.accountId, requester.accountId, 'nothing was handed back');
+  });
 
   itHoldsTheInstanceInvariants();
 });

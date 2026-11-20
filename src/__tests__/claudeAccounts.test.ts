@@ -50,6 +50,7 @@ let isGeneralTopic = false;
 let applyOutcome: ClaudeProfileApplyOutcome = 'inactive';
 const appliedKeys: SessionKey[] = [];
 let applyEverywhereCalls = 0;
+let accountsChangedCalls = 0;
 /**
  * What the stand-in bot answers when a rung is picked on a topic: `null` = the topic runs Claude (the pick is recorded and
  * applied, `applyOutcome` says how), else the outcome of a pick that crosses to Claude from OpenCode (`asked` / `switched`).
@@ -104,6 +105,9 @@ describe('claudeAccounts: /accounts over its ports', () => {
       },
       applyClaudeProfileEverywhere: async () => {
         applyEverywhereCalls += 1;
+      },
+      noteClaudeAccountsChanged: () => {
+        accountsChangedCalls += 1;
       },
       switchTopicByOperator: async (key, to) => {
         operatorSwitches.push({ key, to });
@@ -257,9 +261,17 @@ describe('claudeAccounts: /accounts over its ports', () => {
     const dir = path.join(dataDir, 'claude-profiles', 'work');
     const status: ClaudeAuthStatus = { loggedIn: true, email: 'work@example.com', subscriptionType: 'team', orgName: 'Example Org', authMethod: 'claude.ai', apiKeySource: null, billing: 'subscription' };
     setStatus(dir, status);
+    // The CLI had refused the account on a turn; a status check had ended an earlier bare 401 / 403 of it too.
+    await harness.state.setClaudeProfileAuthRefusal('work', { at: '2026-11-20T08:00:00.000Z', reason: 'rejected', login: 'aaaa' });
+    await harness.state.endClaudeProfileAuthRefusalByStatusCheck('work', '2026-11-20T09:00:00.000Z');
+    await harness.state.setClaudeProfileAuthRefusal('work', { at: '2026-11-20T09:30:00.000Z', reason: 'rejected', login: 'aaaa', isHeldUntilNewLogin: true });
     const callsBefore = applyEverywhereCalls;
+    const changedBefore = accountsChangedCalls;
     await accounts.onClaudeProfileAuthStatus(harness.key, { name: 'work', configDir: dir }, status);
     assert.equal(harness.state.getClaudeProfileRecord('work')?.email, 'work@example.com');
+    assert.equal(harness.state.getClaudeProfileRecord('work')?.authRefusal, undefined, 'a sign-in ends the refusal');
+    assert.equal(harness.state.getClaudeProfileRecord('work')?.authRefusalEndedByStatusCheck, undefined, 'and what a status check ended before');
+    assert.equal(accountsChangedCalls, changedBefore + 1, 'the accounts\' round runs at once: the operator is told, the waiting conversations go on');
     assert.equal(applyEverywhereCalls, callsBefore + 1);
   });
 
@@ -820,7 +832,9 @@ describe('claudeAccounts: /accounts over its ports', () => {
     apiKeyCheck = 'valid';
     setStatus(dir, { loggedIn: true, email: null, subscriptionType: null, orgName: null, authMethod: 'api_key_helper', apiKeySource: 'apiKeyHelper', billing: 'api' });
     const callsBefore = applyEverywhereCalls;
+    const changedBefore = accountsChangedCalls;
     const stored = await accounts.onClaudeProfileApiKey(harness.key, { name: 'console', configDir: dir, billing: 'api' }, apiKey);
+    assert.equal(accountsChangedCalls, changedBefore + 1, 'a stored key runs the accounts\' round at once');
     assert.match(stored, /API key stored for account console \(the API accepted it\)/);
     assert.ok(!stored.includes(apiKey), 'the key is never echoed');
     assert.equal(fs.readFileSync(path.join(dir, 'charness-api-key'), 'utf8').trim(), apiKey);

@@ -1,7 +1,7 @@
 import type { SessionKey } from '../../sessionKey';
 import type { OpenRequestState, RequestOrigin } from '../../requests/types';
 import { emptyRequester, getRequestRequester, requestRequesterAttribute } from '../../requests/requestGroup';
-import { JiraAuthError, JiraHttpError, jiraChangelogPageSize, type JiraAccount, type JiraChangelogHistory, type JiraClient, type JiraComment, type JiraIssue } from './client';
+import { getCommentParentId, JiraAuthError, JiraHttpError, jiraChangelogPageSize, type JiraAccount, type JiraChangelogHistory, type JiraClient, type JiraComment, type JiraIssue } from './client';
 import { getMentionedAccountIds } from './adf';
 import { getJiraIssueProjectKey, makeJiraKey } from './sessionKeyCodec';
 import {
@@ -16,6 +16,7 @@ import {
   getItemField,
   getRequester,
   heldMentionTriggerIdPrefix,
+  jiraReplyThreadAttribute,
   mentionTriggerIdPrefix,
   updatesPausedTriggerIdPrefix,
   type JiraIssueTrigger,
@@ -210,20 +211,28 @@ export interface JiraInboundDeps {
   postUpdate: (key: SessionKey, prompt: SessionPromptText, getTargetRequestId: () => string) => Promise<void>;
   /** What each issue's conversation was already told (C4), and shown (a comment before its prompt recorded its newest one). */
   contextLedger: Pick<JiraContextLedger, 'getSnapshot' | 'recordBuild' | 'getShownBlock'>;
-  /** Over the run budget: the park notice and the hand-back (the answer side, J6). */
-  parkIssue: (issueKey: string, requester: JiraAccount | null) => Promise<void>;
+  /**
+   * Over the run budget: the park notice and the hand-back (the answer side, J6) — in the thread of `threadRootId` when the
+   * trigger is a reply in one (the notices of a trigger go where its answers would).
+   */
+  parkIssue: (issueKey: string, requester: JiraAccount | null, threadRootId: string | null) => Promise<void>;
   /** The summary a request's prompt shows of its issue — `null` when withheld (D55: the todo boards name the issue by it). */
   noteShownSummary?: (issueKey: string, summary: string | null) => void;
   /** A hand-over the trusted group `groupName` does not back: the fixed notice and the hand-back (the answer side). */
   refuseUntrusted: (issueKey: string, requester: JiraAccount | null, groupName: string) => Promise<void>;
-  /** A mention over the run budget: the park notice, no hand-back (the answer side). */
-  parkMention: (issueKey: string) => Promise<void>;
+  /** A mention over the run budget: the park notice, no hand-back (the answer side); in the mention's thread when it is a reply. */
+  parkMention: (issueKey: string, threadRootId: string | null) => Promise<void>;
   /** The issue reached the cap on updates: one comment saying they are paused until `untilMs` (the answer side). Never rejects. */
   postUpdatesPausedNotice: (issueKey: string, untilMs: number) => Promise<void>;
   /** The bot's one cap on task agents and its wait list; a mention request that answers only bypasses it. */
   slots: Pick<TaskAgentSlots, 'checkIn' | 'noteStarted' | 'noteStartFailed' | 'dropWaiting' | 'listWaiting' | 'pruneWaiting' | 'onSlotFreed'>;
-  /** A hand-over that has to wait for a slot: the short comment saying so (the answer side). Never rejects. */
-  postQueuedNotice: (issueKey: string, queue: Extract<TaskAgentSlotDecision, { kind: 'queued' }>) => Promise<void>;
+  /**
+   * An issue update reached request `requestId`'s session: its next answer goes into the thread of `threadRootId` — the
+   * update's newest comment is a reply there — or, `null`, where its answers go by default (the answer side). Never throws.
+   */
+  noteAnswerThread: (requestId: string, threadRootId: string | null) => void;
+  /** A hand-over that has to wait for a slot: the short comment saying so (the answer side), in the trigger's thread when it has one. Never rejects. */
+  postQueuedNotice: (issueKey: string, queue: Extract<TaskAgentSlotDecision, { kind: 'queued' }>, threadRootId: string | null) => Promise<void>;
 }
 
 /**
@@ -724,7 +733,7 @@ export class JiraInbound {
     if (deps.triggerLog.getRequestCountLastDay(issue.key, at) >= deps.runBudgetPer24h) {
       // Recorded first: a failed notice is not repeated on every poll (at most one per trigger).
       if (!this.recordOrWarn({ issueKey: issue.key, triggerId: trigger.triggerId, outcome: 'parked', at })) return 'failed';
-      await deps.parkIssue(issue.key, requester);
+      await deps.parkIssue(issue.key, requester, null);
       return 'parked';
     }
     // D10: one cap on the task agents of the whole bot. Past it the issue waits — its trigger stays unrecorded, so every poll
@@ -733,7 +742,7 @@ export class JiraInbound {
     const slot = await deps.slots.checkIn(key, trigger.triggerId);
     if (slot.kind === 'queued') {
       if (!slot.isNewlyQueued) return 'waiting';
-      await deps.postQueuedNotice(issue.key, slot);
+      await deps.postQueuedNotice(issue.key, slot, trigger.parentId ?? null);
       return 'queued';
     }
     try {
@@ -832,7 +841,7 @@ export class JiraInbound {
   ): Promise<JiraIssueDecision> {
     const { deps } = this;
     const at = deps.now();
-    const trigger = createMentionTrigger(comment.id, comment.author ?? null);
+    const trigger = createMentionTrigger(comment.id, comment.author ?? null, getCommentParentId(comment));
     const record = (outcome: 'untrusted' | 'covered' | 'parked', extra: { isNoticePosted?: boolean } = {}): boolean =>
       this.recordOrWarn({ issueKey: issue.key, triggerId: trigger.triggerId, outcome, at, ...extra });
     // The same rule as for the comment's text: its author AND its last editor. A comment that fails it is recorded,
@@ -861,7 +870,7 @@ export class JiraInbound {
       // D10: the notice is posted at most once per issue per rolling 24 h; later over-budget mentions are recorded silently.
       const isNoticeDue = !deps.triggerLog.checkIsMentionParkNoticePostedLastDay(issue.key, at);
       if (!record('parked', { isNoticePosted: isNoticeDue })) return 'failed';
-      if (isNoticeDue) await deps.parkMention(issue.key);
+      if (isNoticeDue) await deps.parkMention(issue.key, trigger.parentId ?? null);
       return 'parked';
     }
     // An acting mention may start a build: it takes a task-agent slot like a hand-over (and waits for one past the cap).
@@ -886,7 +895,7 @@ export class JiraInbound {
     const slot = await deps.slots.checkIn(key, trigger.triggerId);
     if (slot.kind === 'queued') {
       if (!slot.isNewlyQueued) return 'waiting';
-      await deps.postQueuedNotice(issue.key, slot);
+      await deps.postQueuedNotice(issue.key, slot, trigger.parentId ?? null);
       return 'queued';
     }
     try {
@@ -1023,14 +1032,14 @@ export class JiraInbound {
       if (linked) return this.postLinkedIssueUpdate(issue, counted, at, linked);
     }
     const newest = counted[counted.length - 1];
-    const trigger = createCommentTrigger(counted.map((comment) => comment.id), newest.author ?? null);
+    const trigger = createCommentTrigger(counted.map((comment) => comment.id), newest.author ?? null, getCommentParentId(newest));
     const requester = newest.author ?? null;
     const olderRecords = counted.slice(0, -1).map((comment): JiraTriggerRecord => ({ issueKey: issue.key, triggerId: `${commentTriggerIdPrefix}${comment.id}`, outcome: 'update', at }));
     if (deps.triggerLog.getRequestCountLastDay(issue.key, at) >= deps.runBudgetPer24h) {
       // Recorded first, as a hand-over's park: the notice and the hand-back go out at most once.
       const records = [...olderRecords.map((record) => ({ ...record, outcome: 'parked' as const })), { issueKey: issue.key, triggerId: trigger.triggerId, outcome: 'parked' as const, at }];
       if (!records.every((record) => this.recordOrWarn(record))) return 'failed';
-      await deps.parkIssue(issue.key, requester);
+      await deps.parkIssue(issue.key, requester, trigger.parentId ?? null);
       return 'parked';
     }
     return this.openRequestInSlot(issue, project, trigger, requester, at, olderRecords);
@@ -1094,7 +1103,7 @@ export class JiraInbound {
         isOpen: deps.listOpenRequests(targetKey).some((open) => open.id === linked.requestId),
       },
       openHandOvers: [],
-      comments: comments.map((comment) => ({ commentId: comment.id, author: comment.author ?? null })),
+      comments: comments.map((comment) => ({ commentId: comment.id, author: comment.author ?? null, parentId: getCommentParentId(comment) })),
       isTextFiltered: trust !== null,
       delta: { entries: commentBlocks.map((block) => ({ block, stateNote: newBlockNote })), unchangedKinds: [], unchangedCommentCount: 0, deletedCommentLabels: [], sent: {} },
     });
@@ -1187,7 +1196,9 @@ export class JiraInbound {
     deps.noteShownSummary?.(issue.key, getShownIssueSummary(context, blockTrust));
     const key = makeJiraKey(issue.key);
     const commenterAccountId = comments[comments.length - 1].author?.accountId;
-    const newComments: JiraNewComment[] = comments.map((comment) => ({ commentId: comment.id, author: comment.author ?? null }));
+    // The newest comment is what the request's next answer answers: a reply in a thread is answered there.
+    const threadRootId = getCommentParentId(comments[comments.length - 1]);
+    const newComments: JiraNewComment[] = comments.map((comment) => ({ commentId: comment.id, author: comment.author ?? null, parentId: getCommentParentId(comment) }));
     /** The requests the update can belong to now, named from the issue's data (a mention's marked as one). */
     const getTargets = (): JiraUpdateTarget[] => this.listUpdateTargetRequests(key).map((request) => ({
       requestId: request.id,
@@ -1214,6 +1225,7 @@ export class JiraInbound {
         target: { requestId: target.requestId, requester: target.requester, isMention: target.isMention, isOpen: now !== null },
         openHandOvers: getTargets().map((open) => ({ requestId: open.requestId, requester: open.requester })),
         comments: newComments,
+        threadRootId,
         isTextFiltered: trust !== null,
       };
     };
@@ -1245,7 +1257,7 @@ export class JiraInbound {
       at,
       requestId,
       newestCommentId,
-    })), onFailed);
+    })), onFailed, (requestId) => deps.noteAnswerThread(requestId, threadRootId));
     return 'update';
   }
 
@@ -1261,6 +1273,7 @@ export class JiraInbound {
     getTargetRequestId: () => string,
     createRecords: (requestId: string) => JiraTriggerRecord[],
     onFailed?: () => void,
+    onPosted?: (requestId: string) => void,
   ): Promise<void> {
     try {
       await this.deps.postUpdate(key, prompt, getTargetRequestId);
@@ -1275,6 +1288,7 @@ export class JiraInbound {
       return;
     }
     this.updateRetries.delete(issueKey);
+    onPosted?.(getTargetRequestId());
     for (const record of createRecords(getTargetRequestId())) {
       if (!this.recordOrWarn(record)) this.deps.triggerLog.remember(record);
     }
@@ -1355,10 +1369,10 @@ export class JiraInbound {
     const statusId = context.issue.fields.status?.id;
     const isMention = trigger.kind === 'mentioned';
     const isActingMention = isMention && deps.mentionMode === 'act';
-    const newComments: JiraNewComment[] = (trigger.commentIds ?? []).map((commentId) => ({
-      commentId,
-      author: context.comments.find((comment) => comment.id === commentId)?.author ?? null,
-    }));
+    const newComments: JiraNewComment[] = (trigger.commentIds ?? []).map((commentId) => {
+      const comment = context.comments.find((candidate) => candidate.id === commentId);
+      return { commentId, author: comment?.author ?? null, parentId: comment ? getCommentParentId(comment) : null };
+    });
     const promptInput = {
       issueKey: issue.key,
       statusName: context.issue.fields.status?.name,
@@ -1401,6 +1415,8 @@ export class JiraInbound {
         triggerId: trigger.triggerId,
         [requestRequesterAttribute]: requester?.accountId ?? emptyRequester,
         ...(isActingMention ? { [actingMentionAttribute]: 'true' } : {}),
+        // Fixed when the request opens, like its requester: a request a reply opened answers in that reply's thread.
+        ...(trigger.parentId === undefined ? {} : { [jiraReplyThreadAttribute]: trigger.parentId }),
       },
     }, createPrompt);
     const supersededRequestIds = request.supersededRequestIds ?? [];

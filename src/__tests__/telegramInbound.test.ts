@@ -20,6 +20,7 @@ import { test } from 'node:test';
 import * as assert from 'node:assert/strict';
 import type { ChatMember, Message, User } from 'telegraf/typings/core/types/typegram';
 import {
+  checkHasJoinedGroup,
   checkHasLeftGroup,
   checkIsTelegramForward,
   checkIsWrittenMessage,
@@ -987,14 +988,34 @@ test('getInboundEvent: the neutral reply still says only whether the assistant w
 
 // ─── leaving the group ──────────────────────────────────────────────────
 
+/** A chat member with the given status fields: the group-membership checks read the status (and `is_member`) only. */
+const makeChatMemberWithFields = (fields: Record<string, unknown>): ChatMember => ({ user: makeUser(9), ...fields } as ChatMember);
+
 test('checkHasLeftGroup: left, removed and banned members are gone; a restricted one only when it is no longer a member', () => {
-  const user = makeUser(9);
-  const asMember = (fields: Record<string, unknown>): ChatMember => ({ user, ...fields } as ChatMember);
-  assert.equal(checkHasLeftGroup(asMember({ status: 'left' })), true);
-  assert.equal(checkHasLeftGroup(asMember({ status: 'kicked', until_date: 0 })), true);
-  assert.equal(checkHasLeftGroup(asMember({ status: 'restricted', is_member: false })), true, 'muted, then left');
-  assert.equal(checkHasLeftGroup(asMember({ status: 'restricted', is_member: true })), false, 'muted but still in the group');
-  for (const status of ['member', 'administrator', 'creator']) assert.equal(checkHasLeftGroup(asMember({ status })), false, status);
+  assert.equal(checkHasLeftGroup(makeChatMemberWithFields({ status: 'left' })), true);
+  assert.equal(checkHasLeftGroup(makeChatMemberWithFields({ status: 'kicked', until_date: 0 })), true);
+  assert.equal(checkHasLeftGroup(makeChatMemberWithFields({ status: 'restricted', is_member: false })), true, 'muted, then left');
+  assert.equal(checkHasLeftGroup(makeChatMemberWithFields({ status: 'restricted', is_member: true })), false, 'muted but still in the group');
+  for (const status of ['member', 'administrator', 'creator']) assert.equal(checkHasLeftGroup(makeChatMemberWithFields({ status })), false, status);
+});
+
+test('checkHasJoinedGroup: a member who was out comes in; a promotion or an edit of an admin\'s rights is not a join', () => {
+  const left = makeChatMemberWithFields({ status: 'left' });
+  const kicked = makeChatMemberWithFields({ status: 'kicked', until_date: 0 });
+  const member = makeChatMemberWithFields({ status: 'member' });
+  const administrator = makeChatMemberWithFields({ status: 'administrator' });
+  assert.equal(checkHasJoinedGroup(left, member), true, 'added');
+  assert.equal(checkHasJoinedGroup(left, administrator), true, 'added straight as an admin');
+  assert.equal(checkHasJoinedGroup(kicked, member), true, 'back after a removal');
+  assert.equal(checkHasJoinedGroup(kicked, administrator), true, 'back after a removal, as an admin');
+  assert.equal(checkHasJoinedGroup(makeChatMemberWithFields({ status: 'restricted', is_member: false }), member), true, 'muted, left, then back');
+  assert.equal(checkHasJoinedGroup(member, administrator), false, 'promoted');
+  assert.equal(checkHasJoinedGroup(administrator, administrator), false, 'rights edited');
+  assert.equal(checkHasJoinedGroup(administrator, member), false, 'demoted');
+  assert.equal(checkHasJoinedGroup(makeChatMemberWithFields({ status: 'restricted', is_member: true }), member), false, 'a restricted member who stayed');
+  assert.equal(checkHasJoinedGroup(member, left), false, 'leaving');
+  assert.equal(checkHasJoinedGroup(administrator, kicked), false, 'removal');
+  assert.equal(checkHasJoinedGroup(left, kicked), false, 'banned after leaving');
 });
 
 test('getTelegramTalkerContext: a talker who TAPPED a button gets the context a message of theirs would — the mark and who they are', () => {

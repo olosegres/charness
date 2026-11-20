@@ -122,7 +122,7 @@ export const esDict: Record<string, string> = {
   'doctor.can_pin_messages': '`can_pin_messages` concedido',
   'doctor.privacy_off': 'Privacy mode desactivado',
   'doctor.privacy_hint':
-    '@BotFather → /setprivacy → Disable, luego quita y vuelve a añadir el bot',
+    'Haz admin del grupo al bot — o @BotFather → /setprivacy → Disable, luego quita y vuelve a añadir el bot',
   'doctor.workroot_subdirs':
     '`WORK_ROOT`: `{workRoot}` ({count} subcarpetas)',
   'doctor.datadir_path': '`DATA_DIR`: `{dataDir}`',
@@ -138,14 +138,12 @@ export const esDict: Record<string, string> = {
     'no se pueden leer los derechos del bot — getChatMember falló',
 
   'onboarding.welcome':
-    '👋 *Charness 2.0*\n\n' +
-    'Lista de comprobación:\n' +
-    '1️⃣ Hazme admin del grupo con derechos:\n' +
-    '   • Manage Topics, Delete Messages, Pin Messages\n' +
-    '2️⃣ @BotFather → /setprivacy → Disable, luego quítame y vuelve a añadirme\n' +
-    '3️⃣ Ejecuta /doctor para ver qué falta\n' +
-    '4️⃣ En cada hilo temático ejecuta /bind <subdir> e inicia un agente\n\n' +
-    '`WORK_ROOT`: `{workRoot}`',
+    '¡Hola! Soy Charness — ejecuto agentes de Claude Code y OpenCode en los hilos de este grupo: un hilo = una carpeta de proyecto = un agente.\n\n' +
+    'Listo para trabajar en 3 pasos:\n' +
+    '1️⃣ Hazme admin del grupo con los derechos Manage Topics, Delete Messages y Pin Messages\n' +
+    '2️⃣ Ejecuta /doctor para ver qué falta\n' +
+    '3️⃣ Crea un hilo: si su nombre coincide con una carpeta de proyecto, la vinculo yo; si no, elige una carpeta de mi lista (o /bind <subdir>). Luego inicia un agente: /claude u /opencode\n\n' +
+    'Carpetas de proyectos: `{workRoot}`',
 
   'binding.welcome.header': '📁 Vinculado a `{subdir}`',
   'binding.welcome.claude_md': '• CLAUDE.md: {size}',
@@ -1018,6 +1016,8 @@ export const esDict: Record<string, string> = {
   'startup.item.optional_owner':
     '(opcional) Configura OWNER_USER_ID para recibir este estado en tu chat privado.',
   'requests.alert.notAnsweringNotice': '⚠️ La solicitud {requestId} quedó sin respuesta: el agente terminó sus turnos sin responder y los recordatorios se rindieron. Revisa la sesión en este tema.',
+  'requests.account.movedAnswer': 'La cuenta de Claude «{from}» de la IA {reason}. Moví esta incidencia a «{to}» y continuaré.',
+  'requests.account.noneUsableAnswer': 'Ninguna cuenta de Claude de la IA puede trabajar ahora ({reasons}). Se ha avisado al operador; el trabajo seguirá cuando alguna vuelva a tener sesión iniciada.',
   'requests.alert.unreachableNotice': '⚠️ La solicitud {requestId} quedó sin respuesta: no se pudo alcanzar la sesión del agente para recordárselo. Revisa la sesión en este tema.',
   'requests.limit.answerBalanceExhaustedNotice': '💸 El crédito de API de la cuenta en la que se ejecuta este trabajo se ha agotado. El trabajo espera hasta que el operador lo recargue o lo pase a otra cuenta.',
   'requests.limit.answerAfterResetNotice': '🚧 Se alcanzó el límite de uso — la respuesta llegará después de las {time}.',
@@ -1043,6 +1043,17 @@ export const esDict: Record<string, string> = {
   'account.removeInstanceDefaultRefused': '{name} es el predeterminado de todos los temas. Elige primero otro predeterminado en el tema General.',
   'account.unknown': '❌ No hay ningún perfil llamado {name}. /accounts muestra la lista.',
   'account.notLoggedIn': '⚠️ El perfil {name} no ha iniciado sesión. Ejecuta antes /accounts login {name}.',
+  'accounts.refusal.notSignedIn': 'no tiene sesión iniciada: claude auth status no encuentra ninguna',
+  'accounts.refusal.signedOut': 'no tiene sesión iniciada: su inicio de sesión caducó o fue revocado',
+  'accounts.refusal.orgDisabled': 'fue rechazada: su organización desactivó el uso de la suscripción de Claude en Claude Code',
+  'accounts.refusal.rejected': 'fue rechazada por la API de Claude (401/403)',
+  'accounts.alert.title': '⚠️ Se necesita una acción: la cuenta de Claude «{name}» {reason}.',
+  'accounts.alert.cliSaid': 'La CLI respondió: {detail}',
+  'accounts.alert.fixSignIn': 'Para arreglarlo, vuelve a iniciar sesión en ella: {how}',
+  'accounts.alert.fixOrg': 'Para arreglarlo, pide al administrador de la organización que vuelva a activar el uso de la suscripción de Claude en Claude Code, o inicia sesión en la cuenta con otro usuario: {how}',
+  'accounts.alert.movedTo': 'Sus conversaciones continúan en «{to}», y las nuevas empiezan allí.',
+  'accounts.alert.noneUsable': 'Ninguna otra cuenta de Claude puede trabajar ahora: las conversaciones esperan y seguirán cuando alguna vuelva a tener sesión iniciada.',
+  'accounts.alert.back': '✅ La cuenta de Claude «{name}» vuelve a tener sesión iniciada y acepta conversaciones.',
   'account.askName': '➕ Nombre del nuevo perfil — minúsculas, dígitos, - y _, hasta {max} caracteres (p. ej. work). Envíalo como siguiente mensaje o ejecuta /accounts add <nombre>.',
   'account.invalidName': '❌ Un nombre de perfil: minúsculas, dígitos, - y _, hasta {max} caracteres, y no "default".',
   'account.exists': 'Ya existe un perfil llamado {name}.',
@@ -1128,6 +1139,8 @@ export const esDict: Record<string, string> = {
   'fallback.switchedReset': ' El límite se restablece {time}. Para cambiar: /limits',
   'fallback.switchedBack': ' Para cambiar: /limits',
   'fallback.switchedDeferred': '🔁 La cuenta {from} alcanzó su límite de uso — este tema pasará a {to} cuando termine la respuesta actual.',
+  'fallback.switchedSignedOut': '🔁 La cuenta {from} no tiene sesión iniciada o su inicio de sesión fue rechazado — este tema continúa en {to}.{tail}',
+  'fallback.switchedSignedOutDeferred': '🔁 La cuenta {from} no tiene sesión iniciada o su inicio de sesión fue rechazado — este tema pasará a {to} cuando termine la respuesta actual.',
   'fallback.switchFailed': '⚠️ El cambio a {to} falló: {error}. La espera del reinicio sigue armada.',
   'handover.note': 'El contexto de la conversación se transferirá en forma compactada.',
   'handover.continueButton': '✅ Continuar',

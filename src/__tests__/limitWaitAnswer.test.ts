@@ -17,6 +17,7 @@ import { RequestLedger, requestHistoryMaxBytes } from '../requests/requestLedger
 import { RequestWakeUpEngine } from '../requests/wakeUpEngine';
 import {
   answerOpenRequestForLimitWait,
+  answerOpenRequestsWithBotNotice,
   getLimitWaitForNewRequest,
   getUsageLimitWaitIdentity,
   type LimitEpisodeState,
@@ -93,6 +94,8 @@ describe('answerOpenRequestForLimitWait', () => {
       body: answerBody,
       origin: request.origin,
       isRequestOpen: true,
+      // The bot's own words: a sink must not take it for the agent's reply (Jira keeps the thread an update owes an answer in).
+      isBotNotice: true,
     }]);
     const open = deps.ledger.getNewestOpenRequest(topicKey);
     assert.equal(open?.id, request.id);
@@ -228,5 +231,24 @@ describe('getUsageLimitWaitIdentity', () => {
       getUsageLimitWaitIdentity({ kind: 'nextAttempt', fireAt }),
       getUsageLimitWaitIdentity({ kind: 'nextAttempt', fireAt: fireAt + 1 }),
     );
+  });
+});
+
+describe('answerOpenRequestsWithBotNotice — the bot\'s own notice of an account it moved the work off, or waits for', () => {
+  it('each request hears a notice once per identity; a move keeps the requests woken, a wait for an account stops them', async () => {
+    const deps = await createDeps();
+    const request = await deps.ledger.createRequest(topicKey, { kind: 'message', attributes: {} });
+    const moved = { identity: 'claudeAccountMove:second', body: 'Moved to «second».', isWakeStopped: false };
+    assert.equal(await answerOpenRequestsWithBotNotice(deps, topicKey, moved), 'answered');
+    assert.equal(await answerOpenRequestsWithBotNotice(deps, topicKey, moved), 'alreadyAnswered');
+    assert.deepEqual(deliveries.map((delivery) => [delivery.requestId, delivery.kind, delivery.body, delivery.isBotNotice]), [[request.id, 'progress', 'Moved to «second».', true]]);
+    assert.equal(deps.ledger.listOpenRequestsOf(topicKey)[0].isLimitStopped, undefined, 'the work goes on: still woken');
+
+    const waiting = { identity: 'claudeAccountWait', body: 'No account can work.', isWakeStopped: true };
+    assert.equal(await answerOpenRequestsWithBotNotice(deps, topicKey, waiting), 'answered');
+    assert.equal(deps.ledger.listOpenRequestsOf(topicKey)[0].isLimitStopped, true, 'nothing wakes a request that waits for an account');
+    const later = await deps.ledger.createRequest(topicKey, { kind: 'scheduledRun', attributes: {} });
+    await answerOpenRequestsWithBotNotice(deps, topicKey, waiting);
+    assert.deepEqual(deliveries.slice(2).map((delivery) => delivery.requestId), [later.id], 'a later turn of the same wait tells only the new request');
   });
 });

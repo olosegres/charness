@@ -33,6 +33,7 @@ import { readStateFileObject } from '../stateFile';
 import { getClaudeLaunchChainScope, normaliseFallbackChain } from '../utils/fallbackChain';
 import { formatUsd } from '../utils/claudeApiSpend';
 import { readClaudeApiCreditAnchors } from '../utils/claudeApiCredit';
+import { claudeAuthRefusalWords } from '../utils/claudeAuthRefusal';
 import { buildClaudeProfilesCreditReport, buildClaudeProfileUsageViews } from '../utils/claudeProfileUsageViews';
 import {
   claudeChainExclusionWords,
@@ -103,7 +104,9 @@ export function formatClaudeProfileCliLine(entry: ClaudeProfileReportEntry, nowM
   const read = (kind: ClaudeUsageBucketKind) => formatClaudeUsageBucket(find(kind), nowMs, { fallbackBucket: kind === 'session' ? weeklyBucket : null });
   const marker = entry.isRecommended ? '✓' : entry.isEligible ? '•' : '✗';
   const isApi = entry.billing === 'api';
-  const account = entry.loggedIn === false
+  const account = entry.authRefusal !== null
+    ? `sign-in refused at ${entry.authRefusal.at}: ${claudeAuthRefusalWords[entry.authRefusal.reason]}`
+    : entry.loggedIn === false
     ? 'not signed in'
     : isApi
       ? `${entry.email ?? 'API key'} API billing (pay per use; offered to agents only when the /limits list holds it)`

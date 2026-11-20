@@ -122,7 +122,7 @@ export const frDict: Record<string, string> = {
   'doctor.can_pin_messages': '`can_pin_messages` accordé',
   'doctor.privacy_off': 'Privacy mode désactivé',
   'doctor.privacy_hint':
-    '@BotFather → /setprivacy → Disable, puis retirer et ré-ajouter le bot',
+    'Faire du bot un admin du groupe — ou @BotFather → /setprivacy → Disable, puis retirer et ré-ajouter le bot',
   'doctor.workroot_subdirs':
     '`WORK_ROOT` : `{workRoot}` ({count} sous-dossiers)',
   'doctor.datadir_path': '`DATA_DIR` : `{dataDir}`',
@@ -138,14 +138,12 @@ export const frDict: Record<string, string> = {
     'impossible de lire les droits du bot — getChatMember échoué',
 
   'onboarding.welcome':
-    '👋 *Charness 2.0*\n\n' +
-    'Checklist de mise en service :\n' +
-    '1️⃣ Faites de moi un admin de groupe avec les droits :\n' +
-    '   • Manage Topics, Delete Messages, Pin Messages\n' +
-    '2️⃣ @BotFather → /setprivacy → Disable, puis retirez et ré-ajoutez-moi\n' +
-    '3️⃣ Lancez /doctor pour voir ce qui manque\n' +
-    '4️⃣ Dans chaque fil thématique, lancez /bind <subdir> et démarrez un agent\n\n' +
-    '`WORK_ROOT` : `{workRoot}`',
+    'Salut ! Je suis Charness — je lance des agents Claude Code et OpenCode dans les fils de ce groupe : un fil = un dossier de projet = un agent.\n\n' +
+    'Prêt à travailler en 3 étapes :\n' +
+    '1️⃣ Faites de moi un admin du groupe avec les droits Manage Topics, Delete Messages et Pin Messages\n' +
+    '2️⃣ Lancez /doctor pour voir ce qui manque encore\n' +
+    '3️⃣ Créez un fil : si son nom correspond à un dossier de projet, je le lie moi-même, sinon choisissez un dossier dans ma liste (ou /bind <subdir>). Puis démarrez un agent : /claude ou /opencode\n\n' +
+    'Dossiers de projets : `{workRoot}`',
 
   'binding.welcome.header': '📁 Lié à `{subdir}`',
   'binding.welcome.claude_md': '• CLAUDE.md : {size}',
@@ -1018,6 +1016,8 @@ export const frDict: Record<string, string> = {
   'startup.item.optional_owner':
     '(optionnel) Définissez OWNER_USER_ID pour recevoir ce statut dans votre chat privé.',
   'requests.alert.notAnsweringNotice': "⚠️ La demande {requestId} est restée sans réponse : l'agent a terminé ses tours sans répondre et les rappels ont abandonné. Vérifiez la session dans ce sujet.",
+  'requests.account.movedAnswer': 'Le compte Claude «{from}» de l\'IA {reason}. J\'ai déplacé ce ticket vers «{to}» et je continue.',
+  'requests.account.noneUsableAnswer': 'Aucun compte Claude de l\'IA ne peut travailler pour l\'instant ({reasons}). L\'opérateur a été prévenu ; le travail reprendra dès qu\'un compte sera reconnecté.',
   'requests.alert.unreachableNotice': "⚠️ La demande {requestId} est restée sans réponse : la session de l'agent était injoignable pour un rappel. Vérifiez la session dans ce sujet.",
   'requests.limit.answerBalanceExhaustedNotice': '💸 Les crédits API du compte sur lequel tourne ce travail sont épuisés. Le travail attend que l\'opérateur les recharge ou le déplace vers un autre compte.',
   'requests.limit.answerAfterResetNotice': '🚧 Limite d’utilisation atteinte — la réponse arrivera après {time}.',
@@ -1043,6 +1043,17 @@ export const frDict: Record<string, string> = {
   'account.removeInstanceDefaultRefused': '{name} est la valeur par défaut de tous les sujets. Choisissez d’abord une autre valeur par défaut dans le sujet General.',
   'account.unknown': '❌ Aucun profil nommé {name}. /accounts affiche la liste.',
   'account.notLoggedIn': '⚠️ Le profil {name} n’est pas connecté. Lancez d’abord /accounts login {name}.',
+  'accounts.refusal.notSignedIn': 'est déconnecté : claude auth status ne trouve aucune connexion',
+  'accounts.refusal.signedOut': 'est déconnecté : sa connexion a expiré ou a été révoquée',
+  'accounts.refusal.orgDisabled': 'a été refusé : son organisation a désactivé l\'usage de l\'abonnement Claude dans Claude Code',
+  'accounts.refusal.rejected': 'a été refusé par l\'API Claude (401/403)',
+  'accounts.alert.title': '⚠️ Action requise : le compte Claude «{name}» {reason}.',
+  'accounts.alert.cliSaid': 'La CLI a répondu : {detail}',
+  'accounts.alert.fixSignIn': 'Pour corriger, reconnectez-le : {how}',
+  'accounts.alert.fixOrg': 'Pour corriger, demandez à l\'administrateur de l\'organisation de réactiver l\'usage de l\'abonnement Claude dans Claude Code, ou connectez le compte avec un autre identifiant : {how}',
+  'accounts.alert.movedTo': 'Ses conversations continuent sur «{to}», et les nouvelles y commencent.',
+  'accounts.alert.noneUsable': 'Aucun autre compte Claude ne peut travailler pour l\'instant : les conversations attendent et reprendront dès qu\'un compte sera reconnecté.',
+  'accounts.alert.back': '✅ Le compte Claude «{name}» est de nouveau connecté et prend les conversations.',
   'account.askName': '➕ Nom du nouveau profil — minuscules, chiffres, - et _, {max} caractères au plus (p. ex. work). Envoyez-le comme prochain message, ou lancez /accounts add <nom>.',
   'account.invalidName': '❌ Un nom de profil : minuscules, chiffres, - et _, {max} caractères au plus, et pas "default".',
   'account.exists': 'Un profil nommé {name} existe déjà.',
@@ -1128,6 +1139,8 @@ export const frDict: Record<string, string> = {
   'fallback.switchedReset': ' La limite se réinitialise {time}. Pour basculer : /limits',
   'fallback.switchedBack': ' Pour basculer : /limits',
   'fallback.switchedDeferred': '🔁 Le compte {from} a atteint sa limite d\'usage — ce sujet passera à {to} à la fin de la réponse en cours.',
+  'fallback.switchedSignedOut': '🔁 Le compte {from} est déconnecté ou sa connexion a été refusée — ce sujet continue sur {to}.{tail}',
+  'fallback.switchedSignedOutDeferred': '🔁 Le compte {from} est déconnecté ou sa connexion a été refusée — ce sujet passera à {to} à la fin de la réponse en cours.',
   'fallback.switchFailed': '⚠️ La bascule vers {to} a échoué : {error}. L\'attente de la réinitialisation reste armée.',
   'handover.note': 'Le contexte de la conversation sera transmis sous forme compactée.',
   'handover.continueButton': '✅ Continuer',
