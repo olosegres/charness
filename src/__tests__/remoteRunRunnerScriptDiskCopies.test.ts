@@ -183,9 +183,10 @@ describe('`clean`: the owner of a task removes its project copy on request', () 
       const removerPid = startRunnerStandIn();
       const trash = makeTrash('task-aaaaaaaaaa', removerPid, 12);
       writeFile(workDir, 'tmp/prune.lock', `${removerPid}\n`);
-      const outcome = runShell(`prune_wait_sec=4; prune_poll_sec=0.2; started=$SECONDS; cmd_clean ${workDir} task-aaaaaaaaaa; echo waited=$((SECONDS - started))`);
+      // The wait is set far above what a loaded box adds to a call (a few seconds): only a wait for the lock reaches two digits.
+      const outcome = runShell(`prune_wait_sec=30; prune_poll_sec=0.2; started=$SECONDS; cmd_clean ${workDir} task-aaaaaaaaaa; echo waited=$((SECONDS - started))`);
       assert.equal(outcome.status, 0, outcome.stderr);
-      assert.match(outcome.stdout, /^removing=task-aaaaaaaaaa\nwaited=[01]$/, 'a wait for the lock would have shown as 4');
+      assert.match(outcome.stdout, /^removing=task-aaaaaaaaaa\nwaited=\d$/, 'a wait for the lock would have shown as 30');
       assert.ok(fs.existsSync(path.join(trash, 'tree/file.txt')), 'the leftover is the remover\'s');
       assert.equal(fs.readFileSync(path.join(workDir, 'tmp', 'prune.lock'), 'utf8').trim(), `${removerPid}`, 'and so is the lock');
     });
@@ -196,11 +197,11 @@ describe('`clean`: the owner of a task removes its project copy on request', () 
       makeTrash('task-aaaaaaaaaa', first, 12);
       makeTrash('task-aaaaaaaaaa', second, 12);
       writeFile(workDir, 'tmp/prune.lock', `${first}\n`);
-      const quick = runShell(`prune_wait_sec=4; prune_poll_sec=0.2; started=$SECONDS; cmd_clean ${workDir} task-aaaaaaaaaa; echo waited=$((SECONDS - started))`);
-      assert.match(quick.stdout, /^removing=task-aaaaaaaaaa\nwaited=[01]$/);
+      const quick = runShell(`prune_wait_sec=30; prune_poll_sec=0.2; started=$SECONDS; cmd_clean ${workDir} task-aaaaaaaaaa; echo waited=$((SECONDS - started))`);
+      assert.match(quick.stdout, /^removing=task-aaaaaaaaaa\nwaited=\d$/, 'a wait for the lock would have shown as 30');
       makeTrash('task-aaaaaaaaaa', getDeadPid(), 3);
       const waiting = runShell(`prune_wait_sec=1; prune_poll_sec=0.2; started=$SECONDS; cmd_clean ${workDir} task-aaaaaaaaaa; echo waited=$((SECONDS - started))`);
-      assert.match(waiting.stdout, /waited=[1-3]$/, 'it waited for the lock this time');
+      assert.match(waiting.stdout, /waited=[1-9]\d*$/, 'it waited for the lock this time (at least its second; a loaded box may add several)');
       assert.match(waiting.stdout, /^removed=task-aaaaaaaaaa /m, 'and then finished the leftover whose remover was gone');
     });
 
