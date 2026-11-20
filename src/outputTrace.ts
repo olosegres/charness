@@ -50,7 +50,8 @@ import { makeTelegramKey } from './connectors/telegram/sessionKeyCodec';
  *                `editForumTopic` / `createForumTopic` call also carries
  *                `topicName` (the name it asked for)
  *
- * `preview` and `topicName` are cut to 120 characters (an ellipsis marks the cut).
+ * `preview` is cut to 120 characters (an ellipsis marks the cut). `topicName` is kept WHOLE: Telegram bounds a topic name at 128
+ * characters, and the status mark the bot writes sits at its END — a cut would drop exactly the part a complaint is about.
  */
 const maxTraceBytes = 10 * 1024 * 1024;
 const previewLength = 120;
@@ -145,11 +146,6 @@ export function pruneTraceBuckets(nowMs: number): Promise<void> {
 export function createTracePreview(text: string): string {
   if (text.length <= previewLength) return text;
   return `${cutTextSurrogateSafe(text, previewLength)}…`;
-}
-
-/** {@link createTracePreview} of a field that may be absent (`undefined` stays absent, so `JSON.stringify` drops it). */
-function createOptionalTracePreview(text: string | undefined): string | undefined {
-  return text === undefined ? undefined : createTracePreview(text);
 }
 
 type TraceFieldValue = string | number | boolean | null | undefined;
@@ -316,7 +312,7 @@ export interface RecvTraceFields {
   chatId?: number;
   threadId?: number;
   preview?: string;
-  /** The name a `forum_topic_created` / `forum_topic_edited` service message stored — see {@link getForumTopicServiceName}. */
+  /** The name a `forum_topic_created` / `forum_topic_edited` service message stored, recorded whole — see {@link getForumTopicServiceName}. */
   topicName?: string;
   /** Telegram-side `message.date` in seconds — lets us compute receive latency. */
   tgDateSec?: number;
@@ -330,9 +326,11 @@ export interface ForumTopicServiceMessage {
 
 /**
  * @description The topic name a service message stored: the new topic's name, or the name a rename set. A rename that
- * changed only the icon carries none, and neither does any other message — `undefined`.
+ * changed only the icon carries none, and neither does any other message — `undefined`. Takes any incoming message as it is:
+ * `& object` keeps a message that carries neither field assignable (a type whose properties are all optional rejects a
+ * source that shares none of them).
  */
-export function getForumTopicServiceName(message: ForumTopicServiceMessage | undefined): string | undefined {
+export function getForumTopicServiceName(message: (ForumTopicServiceMessage & object) | undefined): string | undefined {
   return message?.forum_topic_created?.name ?? message?.forum_topic_edited?.name;
 }
 
@@ -346,14 +344,13 @@ export function getForumTopicServiceName(message: ForumTopicServiceMessage | und
  */
 export function traceRecvUpdate(fields: RecvTraceFields): void {
   if (!checkIsTracingActive()) return;
-  const { tgDateSec, preview, topicName, chatId, threadId, ...rest } = fields;
+  const { tgDateSec, preview, chatId, threadId, ...rest } = fields;
   if (!checkIsRecvThreadTraced(chatId, threadId)) return;
   appendTraceEntry('recv', {
     ...rest,
     chatId,
     threadId,
-    preview: createOptionalTracePreview(preview),
-    topicName: createOptionalTracePreview(topicName),
+    preview: preview === undefined ? undefined : createTracePreview(preview),
     latencyMs: tgDateSec === undefined ? undefined : Date.now() - tgDateSec * 1000,
   });
 }
@@ -472,8 +469,8 @@ function extractApiCallFields(method: string, payload: object): Record<string, T
     disableNotification: getBooleanField(p, 'disable_notification'),
     len: text?.length,
     preview: text === undefined ? undefined : createApiCallPreview(text),
-    // The name a topic rename / creation ASKED for — without it the trace cannot say what mark a topic was given.
-    topicName: createOptionalTracePreview(topicName),
+    // The name a topic rename / creation ASKED for, whole (see the header): without it the trace cannot say what mark a topic was given.
+    topicName,
   };
 }
 

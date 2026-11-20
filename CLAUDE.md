@@ -361,8 +361,7 @@ History was scrubbed of real operator identifiers — keep it that way:
   stdout is also tee'd to `bot-console-*.log`) are the source of truth. Follow `recv` → `emit` → `sendTry` →
   `sendOk` / `sendErr`: no `emit` = lost in the adapter; `emit` without `sendTry` = lost in the send path;
   `sendErr` 429 = rate-limited; `sendOk` but absent in `get_history` = spilled onto another message.
-  `editMessageText` records carry NO thread id — never filter the trace by thread key alone. A topic's name is `topicName`
-  on `editForumTopic` / `createForumTopic` calls (what was asked) and on the `recv` of a topic created / edited service message (what was stored).
+  `editMessageText` records carry NO thread id — never filter the trace by thread key alone.
 - **OpenCode:** `Invalid authentication credentials` → restart the `opencode serve` process (stale provider
   credentials). Prove a per-prompt override (model or `/effort` variant) applied with
   `GET /session/<id>/message` — the stored turns echo `model.variant`.

@@ -999,8 +999,9 @@ Output-trace recorder (`on`/`off`, `on all`/`off all`; bare = status).
   `editForumTopic` / `createForumTopic` calls (`sendTry` / `sendOk` /
   `sendErr`) carry `topicName`, the name they asked for, and the
   `recv` of Telegram's «renamed the topic» / «created the topic» line
-  carries the name it stored (both cut to 120 characters) — so what mark a
-  topic was given, and when, is a lookup, not a guess from timing.
+  carries the name it stored — whole, not cut like a message preview: Telegram
+  bounds a name at 128 characters and the status mark sits at its end — so what
+  mark a topic was given, and when, is a lookup, not a guess from timing.
 - **Console tee** — the bot's stdout/stderr is mirrored to
   `DATA_DIR/bot-console-*.log` (same hourly buckets, same 6h prune), so
   boot logs stay readable post-incident without the operator's terminal.

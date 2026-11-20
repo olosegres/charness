@@ -1025,9 +1025,6 @@ bot.use(async (ctx, next) => {
   const isThreadPendingProviderConnect =
     threadKey !== null && pendingProviderConnects.has(keyToString(threadKey));
   const awaitedSttStep = threadKey !== null ? getAwaitedSttStep(threadKey) : null;
-  // Narrowed by `in` to the two topic service messages — a weak all-optional parameter type rejects the whole message union.
-  const topicServiceMessage =
-    message && ('forum_topic_created' in message || 'forum_topic_edited' in message) ? message : undefined;
   traceRecvUpdate({
     updateType: ctx.updateType,
     updateId: ctx.update.update_id,
@@ -1038,7 +1035,7 @@ bot.use(async (ctx, next) => {
       messageText === undefined
         ? callbackData
         : getRecvTracePreview(messageText, isThreadPendingProviderConnect, awaitedSttStep),
-    topicName: getForumTopicServiceName(topicServiceMessage),
+    topicName: getForumTopicServiceName(message),
     tgDateSec: message?.date,
   });
   return next();

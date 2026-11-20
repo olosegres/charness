@@ -22,6 +22,12 @@ import {
   type TraceWriterDeps,
 } from '../outputTrace';
 import { getHourBucketPath, retentionMs } from '../utils/rotatingLogFile';
+import {
+  composeIndicatorName,
+  createTopicStatusPrefsWith,
+  defaultTopicStatusPrefs,
+  topicNameMaxLength,
+} from '../utils/topicIndicatorPlan';
 import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
 
 const threadKey = makeTelegramKey(-100123, 7);
@@ -446,7 +452,20 @@ describe('installCallApiTrace — send-path filtering', () => {
 });
 
 describe('topic names — a complaint about a topic mark is checked by looking the name up in the trace', () => {
-  const askedName = '🟢 ✅3 ❓1 Release notes';
+  // Built by the composer that writes the real names: `<base> <status> <counts>`, the base cut with «…» when the whole would pass 128.
+  const askedName = composeIndicatorName('Release notes', 'working', { agents: 2, queued: 1 }, createTopicStatusPrefsWith(true));
+  const longBase = 'b'.repeat(200);
+  const maxLengthStatusName = composeIndicatorName(longBase, 'finished', { agents: 0, queued: 0 }, defaultTopicStatusPrefs);
+  const maxLengthCountedName = composeIndicatorName(longBase, 'working', { agents: 2, queued: 1 }, createTopicStatusPrefsWith(true));
+  const maxLengthNames = [maxLengthStatusName, maxLengthCountedName];
+
+  it('the max-length fixtures are real: 128 units over the 120-character preview cut, the mark at the end', () => {
+    assert.equal(askedName.endsWith(' ⏳ ⚙️2 📋1'), true);
+    for (const name of maxLengthNames) assert.equal(name.length, topicNameMaxLength);
+    assert.ok(topicNameMaxLength > 120);
+    assert.equal(maxLengthStatusName.endsWith('… 🟢'), true);
+    assert.equal(maxLengthCountedName.endsWith('… ⏳ ⚙️2 📋1'), true);
+  });
 
   it('an editForumTopic call keeps the name it asked for, on sendTry and on sendOk', async () => {
     const fake = createFakeWriter();
@@ -512,19 +531,24 @@ describe('topic names — a complaint about a topic mark is checked by looking t
     assert.equal('topicName' in parseLines(fake.written)[0], false);
   });
 
-  it('a name is cut like a text preview (120 characters and an ellipsis)', async () => {
+  it('a max-length name is kept whole, its end mark included — it is not cut like a text preview', async () => {
     const fake = createFakeWriter();
     restoreWriter = configureTraceWriterForTests(fake.deps);
     const host: CallApiHost = { callApi: async () => true };
     installCallApiTrace(host);
-    const longName = 'n'.repeat(200);
 
-    await host.callApi('editForumTopic', { chat_id: -100123, message_thread_id: 7, name: longName });
+    for (const name of maxLengthNames) {
+      await host.callApi('editForumTopic', { chat_id: -100123, message_thread_id: 7, name });
+    }
     fake.fireFlushTimer();
     await fake.settle();
 
-    assert.equal(parseLines(fake.written)[0].topicName, createTracePreview(longName));
-    assert.equal((parseLines(fake.written)[0].topicName as string).length, 121);
+    // sendTry + sendOk per call, in order.
+    const entries = parseLines(fake.written);
+    assert.deepEqual(
+      entries.map((entry) => entry.topicName),
+      [maxLengthStatusName, maxLengthStatusName, maxLengthCountedName, maxLengthCountedName],
+    );
   });
 
   it('only the two topic methods carry a topic name — another call with a `name` argument does not', async () => {
@@ -578,16 +602,26 @@ describe('topic names — a complaint about a topic mark is checked by looking t
     assert.equal(parseLines(fake.written)[0].topicName, 'New topic');
   });
 
-  it('a recv name is cut like a text preview', async () => {
+  it('a recv max-length name is kept whole, its end mark included', async () => {
     const fake = createFakeWriter();
     restoreWriter = configureTraceWriterForTests(fake.deps);
-    const longName = 'n'.repeat(200);
 
-    traceRecvUpdate({ updateType: 'message', updateId: 62, chatId: -100123, threadId: 7, topicName: longName });
+    for (const [index, name] of maxLengthNames.entries()) {
+      traceRecvUpdate({
+        updateType: 'message',
+        updateId: 62 + index,
+        chatId: -100123,
+        threadId: 7,
+        topicName: getForumTopicServiceName({ forum_topic_edited: { name } }),
+      });
+    }
     fake.fireFlushTimer();
     await fake.settle();
 
-    assert.equal(parseLines(fake.written)[0].topicName, createTracePreview(longName));
+    assert.deepEqual(
+      parseLines(fake.written).map((entry) => entry.topicName),
+      [maxLengthStatusName, maxLengthCountedName],
+    );
   });
 
   it('a recv with no topic name has no topicName field', async () => {
@@ -608,6 +642,16 @@ describe('topic names — a complaint about a topic mark is checked by looking t
     assert.equal(getForumTopicServiceName({ forum_topic_edited: { icon_custom_emoji_id: '1' } }), undefined);
     assert.equal(getForumTopicServiceName({}), undefined);
     assert.equal(getForumTopicServiceName(undefined), undefined);
+  });
+
+  it('getForumTopicServiceName takes an incoming message as it is: a plain text message and a topic-closed one carry no name', () => {
+    // Non-fresh values (not literals) like `ctx.message`: the parameter type must accept a message that shares no property with it.
+    const textMessage = { message_id: 5, text: 'hello' };
+    const topicClosedMessage = { message_id: 6, forum_topic_closed: {} };
+    assert.equal(getForumTopicServiceName(textMessage), undefined);
+    assert.equal(getForumTopicServiceName(topicClosedMessage), undefined);
+    const topicEditedMessage = { message_id: 7, forum_topic_edited: { name: askedName } };
+    assert.equal(getForumTopicServiceName(topicEditedMessage), askedName);
   });
 });
 
