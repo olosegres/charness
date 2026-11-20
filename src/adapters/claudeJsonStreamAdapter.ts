@@ -2274,7 +2274,10 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
       ? { kind: 'auth', authReason: codeAuthReason }
       : classifyAgentApiError(text, isReplayed ? this.getReplayedErrorWrittenAtMs(session, text) ?? now : now);
     if (!classified) return false;
-    if (classified.kind === 'auth' && classified.authReason === undefined) classified.authReason = getAuthErrorReason(text);
+    if (classified.kind === 'auth') {
+      if (classified.authReason === undefined) classified.authReason = getAuthErrorReason(text);
+      classified.authDetail = text;
+    }
     const rejectedResetAtMs = session.rejectedResetAtMs;
     const apiError: AgentApiErrorClass = {
       ...(classified.kind === 'usageLimit' && rejectedResetAtMs !== null && rejectedResetAtMs > now

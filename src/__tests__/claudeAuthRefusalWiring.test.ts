@@ -30,7 +30,35 @@ test('an `auth` error of a json-stream conversation is the move; every other bac
   const move = getFunctionBody('handleClaudeAuthRefusal');
   assert.match(move, /planClaudeAuthRefusalMove\(/);
   assert.ok(move.indexOf('state.setClaudeProfileAuthRefusal(from.profile, refusal)') < move.indexOf('switchTopicToFallbackEntry('), 'the account is marked before the move reads the accounts');
-  assert.equal(move.match(/surfaceLoggedOutNotice\(key\)/g)?.length, 4, 'no Claude account, nothing to mark, nowhere to go, a move that failed');
+  assert.equal(move.match(/surfaceLoggedOutNotice\(key\)/g)?.length, 3, 'no Claude account, nothing to mark, a move that failed');
+  assert.match(move, /if \(instead === null\) \{[^]*?await waitForClaudeAccount\(key\);\s*return;/, 'nowhere to go: the conversation waits for an account');
+});
+
+test('a tracker issue hears the move in plain words before it happens; a topic hears the move\'s own notice', () => {
+  const move = getFunctionBody('handleClaudeAuthRefusal');
+  const notice = move.indexOf("t('requests.account.movedAnswer'");
+  assert.ok(notice > 0 && notice < move.indexOf('switchTopicToFallbackEntry('));
+  assert.match(move, /if \(!checkIsTelegramKey\(key\) && requestLimitWaitAnswerDeps\) \{\s*await answerOpenRequestsWithBotNotice\(/);
+});
+
+test('with nowhere to go the conversation waits: marked, its requests no longer woken, a tracker issue told why in plain words', () => {
+  const wait = getFunctionBody('waitForClaudeAccount');
+  assert.ok(wait.indexOf('state.setWaitingForClaudeAccount(key, true)') < wait.indexOf('stopWakingForLimitWait(key)'));
+  assert.match(wait, /if \(checkIsTelegramKey\(key\) \|\| !requestLimitWaitAnswerDeps\) \{\s*await surfaceLoggedOutNotice\(key\);/);
+  assert.match(wait, /identity: 'claudeAccountWait',\s*body: t\('requests\.account\.noneUsableAnswer', \{ reasons \}\),\s*isWakeStopped: true,/);
+});
+
+test('every round of the accounts\' states tells the operator and resumes the waiting conversations — from the end of the boot on', () => {
+  const round = getFunctionBody('noteClaudeProfileUsability');
+  assert.match(round, /if \(!isOperatorAlertOpen\) return;\s*tellOperatorAboutClaudeAccounts\(current\);\s*void resumeConversationsWaitingForAccount\(\);/);
+  const restored = botSource.slice(botSource.indexOf('onSessionsRestored: () => {'));
+  assert.ok(restored.indexOf('jiraConnector?.start(') < restored.indexOf('openOperatorAlerts();'), 'the connectors\' channels are known first');
+  assert.match(botSource, /operatorAlertChannels = jiraConnector\?\.operatorChannel \? \[jiraConnector\.operatorChannel\] : \[\];/);
+  const deliver = getFunctionBody('deliverClaudeAccountAlert');
+  assert.match(deliver, /if \(ENV\.isTelegramServed\) posts\.push\(postClaudeAccountAlertToGeneral\(alert\)\);/);
+  assert.match(deliver, /runWithLocale\('en', \(\) => renderClaudeAccountAlert\(alert, getHostClaudeSignInHow\)\)/, 'a connector\'s channel reads English and the host\'s sign-in');
+  const resume = getFunctionBody('resumeConversationsWaitingForAccount');
+  assert.ok(resume.indexOf('applyClaudeProfileToThread(key, { isAfterLimit: true })') < resume.indexOf('resumeTopicOnNewSession(key,'), 'moved onto an account that works before the continue prompt');
 });
 
 test('the profile scan of the usage poll and of /accounts ends the refusals of accounts signed in again and logs the changes', () => {

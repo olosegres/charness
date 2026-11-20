@@ -808,7 +808,9 @@ connector behaves is described in [`src/connectors/jira/README.md`](src/connecto
      "pollIntervalSeconds": 30,
      "runBudgetPer24h": 5,
      "model": "opus",
-     "effort": "high"
+     "effort": "high",
+     "operatorIssue": "OPS-12",
+     "operatorAccountIds": ["<your own account's id>"]
    }
    ```
 
@@ -883,6 +885,16 @@ connector behaves is described in [`src/connectors/jira/README.md`](src/connecto
    idles) or `claude-per-turn` (stopped after every answer); either way the issue's conversation sleeps between
    requests and the next request resumes it.
 
+   `operatorIssue` (optional) is the instance's channel to YOU, the operator — what General is on Telegram: an issue the
+   bot comments on when something needs you, such as a Claude account of the AI that is signed out or whose sign-in its
+   organization refused (which account, the CLI's own words, where its issues went or that they wait, and how to sign it in
+   again: `CLAUDE_CONFIG_DIR=<its folder> claude auth login` on the host, as the instance's OS user — `claude auth login`
+   for `default`), and once more when it is signed in again. Pick an issue the AI account can see and comment on, in any
+   project; it need not be in `projects`. The issue is the bot's own: whatever happens on it — a hand-over, a comment, a
+   mention — never starts the AI. `operatorAccountIds` (optional, needs `operatorIssue`, 1–5 account ids) are mentioned in
+   each comment that asks you to act, so Jira notifies you; a comment that only says things are fine again mentions nobody.
+   Without `operatorIssue` such news goes only to the log (`[accounts] …`).
+
    **How many agents run at once.** The AI works on at most 5 issues at the same time, all projects together — set
    `taskAgents.maxConcurrent` in [`settings.json`](#instance-settings-settingsjson) (`0` = no limit; read without a
    restart). An issue handed over beyond that gets one comment saying it is queued, stays assigned to the AI and starts by
@@ -911,7 +923,8 @@ connector behaves is described in [`src/connectors/jira/README.md`](src/connecto
    The start refuses a missing `ENV_FILE`, `TMUX_SOCKET_NAME` or `jira.json`, an `OPENCODE_URL` on the default
    port, a `TELEGRAM_BOT_TOKEN` or any `ATLASSIAN_*` variable when Telegram is off, a token that belongs to
    another account, an unknown project or status, a `trustedGroup` the site does not have or the AI account
-   may not read, a `trustedApps`, a `wakeOnComment: true` or a `mentionMode: "act"` without a `trustedGroup`, and a
+   may not read, a `trustedApps`, a `wakeOnComment: true` or a `mentionMode: "act"` without a `trustedGroup`, an
+   `operatorIssue` that is no issue key or that the AI account cannot see, `operatorAccountIds` without an `operatorIssue`, and a
    `DATA_DIR` holding another surface's state. An unreachable Jira does not refuse the start —
    polling backs off and resumes.
 

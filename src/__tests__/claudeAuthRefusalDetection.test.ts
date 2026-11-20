@@ -111,7 +111,7 @@ describe('claude-json-stream: a refused account ends the turn in an `auth` error
     const { adapter, session, errors, outputs } = createAdapterWithSession();
     adapter['onStdout'](session, errorAssistantLine('authentication_failed', notLoggedInText));
     adapter['onStdout'](session, errorResultLine(notLoggedInText));
-    assert.deepEqual(errors, [{ kind: 'auth', authReason: 'signedOut' }]);
+    assert.deepEqual(errors, [{ kind: 'auth', authReason: 'signedOut', authDetail: notLoggedInText }], 'the CLI\'s own words ride along for the operator\'s alert');
     assert.ok(!outputs.some((text) => text.startsWith('Claude error:')), 'no raw «Claude error» line on top of the move');
   });
 
@@ -119,12 +119,12 @@ describe('claude-json-stream: a refused account ends the turn in an `auth` error
     const worded = createAdapterWithSession();
     worded.adapter['onStdout'](worded.session, errorAssistantLine('oauth_org_not_allowed', orgDisabledText));
     worded.adapter['onStdout'](worded.session, errorResultLine(orgDisabledText));
-    assert.deepEqual(worded.errors, [{ kind: 'auth', authReason: 'orgDisabled' }]);
+    assert.deepEqual(worded.errors, [{ kind: 'auth', authReason: 'orgDisabled', authDetail: orgDisabledText }]);
 
     const reworded = createAdapterWithSession();
     reworded.adapter['onStdout'](reworded.session, errorAssistantLine('oauth_org_not_allowed', 'A wording no release has used yet'));
     reworded.adapter['onStdout'](reworded.session, errorResultLine('A wording no release has used yet'));
-    assert.deepEqual(reworded.errors, [{ kind: 'auth', authReason: 'orgDisabled' }]);
+    assert.deepEqual(reworded.errors, [{ kind: 'auth', authReason: 'orgDisabled', authDetail: 'A wording no release has used yet' }]);
   });
 
   it('a code that is no account refusal leaves the text to decide; the code never outlives its turn', () => {

@@ -362,10 +362,15 @@ describe('a resend of an unconfirmed post reads the issue first: at most once (R
 });
 
 describe('alert and park notice', () => {
-  it('the alert is an English comment naming the request and the reason, then the hand-back; nothing to release', async () => {
+  it('the alert is an English comment saying in plain words what happened and what it means — no request id — then the hand-back; nothing to release', async () => {
     assert.deepEqual(await sink().deliverAlert(key, { requestId: 'req_9', reason: 'wakeFailed', origin }), { ok: true });
-    assert.deepEqual(jira.postedTexts, [buildJiraAlertText('req_9', 'wakeFailed')]);
-    assert.match(jira.postedTexts[0], /^⚠️ The AI could not finish request req_9: the agent's session could not be reached to remind it\. A person needs to look at this issue\.$/);
+    assert.deepEqual(jira.postedTexts, [buildJiraAlertText('wakeFailed')]);
+    assert.equal(
+      jira.postedTexts[0],
+      "⚠️ The AI's session could not be reached to remind it, so there is no answer here. It will not go on by itself: a person needs to look at this issue. To try again, hand it to the AI again or mention it in a comment.",
+    );
+    assert.ok(!jira.postedTexts[0].includes('req_'), 'the request id stays in the log');
+    assert.match(buildJiraAlertText('silentTurns'), /^⚠️ The AI stopped working on this without giving an answer, even after it was reminded\. It will not go on by itself/);
     assert.ok(jira.calls.includes('assign PROJ-12 requester-account'));
     await sink().releaseAlert(key, 'anything');
   });
@@ -496,7 +501,7 @@ describe('a mention request answers only — nothing is handed over, so nothing 
   it('the alert of a mention request is a comment and no hand-back', async () => {
     assert.deepEqual(await sink().deliverAlert(key, { requestId: 'req_2', reason: 'silentTurns', origin: mentionOrigin }), { ok: true });
     assert.deepEqual(jira.calls, ['comment PROJ-12']);
-    assert.deepEqual(jira.postedTexts, [buildJiraAlertText('req_2', 'silentTurns')]);
+    assert.deepEqual(jira.postedTexts, [buildJiraAlertText('silentTurns')]);
   });
 
   it('an ACTING mention (mentionMode "act") hands nothing back either: its final answer and its alert are comments, the issue stays where it is', async () => {

@@ -27,6 +27,7 @@ import type { ClaudeUsageSnapshot } from './utils/claudeUsage';
 import type { ClaudeApiSpend, ClaudeCostBaseline } from './utils/claudeApiSpend';
 import type { ClaudeApiCreditSpend } from './utils/claudeApiCredit';
 import type { ClaudeAuthRefusal } from './utils/claudeAuthRefusal';
+import type { ClaudeAccountAlertState } from './utils/claudeAccountAlert';
 import type { OpenCodeProviderUsageRecord } from './utils/openCodeUsage';
 import { pushRecentModel } from './utils/modelRecentPlan';
 import { checkIsQuestionWaitChoice, type QuestionWaitChoice } from './utils/questionWaitChoices';
@@ -604,6 +605,16 @@ export interface StateV1 {
   claudeProfiles?: Record<string, ClaudeProfileRecord>;
   claudeProfileDefault?: string;
   claudeProfileOverrides?: Record<string, string>;
+  /**
+   * What the operator was told about the Claude accounts that cannot work (`utils/claudeAccountAlert.ts`): every account's last
+   * state, the accounts told unusable and the alert pinned in General — kept so a restart never tells it again.
+   */
+  claudeAccountAlerts?: ClaudeAccountAlertState;
+  /**
+   * The conversations (keyed by {@link SessionKey} string) a refused turn left with no Claude account to move to: their requests are
+   * not woken meanwhile, and they go on by themselves once an account can work again (`bot.ts` `resumeConversationsWaitingForAccount`).
+   */
+  claudeAccountWaits?: string[];
   /**
    * Auto-switch of the Claude account on a usage limit (`/account`, `utils/claudeLimitSwitch.ts`): whether a
    * topic whose profile hits a limit is moved to the next entry of the fallback list with room by itself (another signed-in
@@ -2712,6 +2723,38 @@ export class StateStore {
     if (!record || (refusal === null && record.authRefusal === undefined)) return;
     if (refusal === null) delete record.authRefusal;
     else record.authRefusal = refusal;
+    await this.flush();
+  }
+
+  /** What the operator was told about the Claude accounts (see the persisted field); `undefined` before the first round. */
+  getClaudeAccountAlertState(): ClaudeAccountAlertState | undefined {
+    return this.state.claudeAccountAlerts;
+  }
+
+  /** Keep what the operator was told. Flushed at once: an alert told twice after a crash is what the record exists to prevent. */
+  async setClaudeAccountAlertState(alertState: ClaudeAccountAlertState): Promise<void> {
+    this.state.claudeAccountAlerts = alertState;
+    await this.flush();
+  }
+
+  /** The conversations waiting for a Claude account that can work (see the persisted field), oldest first. */
+  listClaudeAccountWaits(): SessionKey[] {
+    return (this.state.claudeAccountWaits ?? []).map((keyStr) => tryKeyFromString(keyStr)).filter((key): key is SessionKey => key !== null);
+  }
+
+  /** Whether the conversation waits for a Claude account that can work. */
+  checkIsWaitingForClaudeAccount(key: SessionKey): boolean {
+    return this.state.claudeAccountWaits?.includes(keyToString(key)) === true;
+  }
+
+  /** Mark (`true`) or end (`false`) the conversation's wait for a Claude account. Flushed at once: a restart must still resume it. */
+  async setWaitingForClaudeAccount(key: SessionKey, isWaiting: boolean): Promise<void> {
+    const k = keyToString(key);
+    const waits = this.state.claudeAccountWaits ?? [];
+    if (waits.includes(k) === isWaiting) return;
+    const next = isWaiting ? [...waits, k] : waits.filter((entry) => entry !== k);
+    if (next.length === 0) delete this.state.claudeAccountWaits;
+    else this.state.claudeAccountWaits = next;
     await this.flush();
   }
 

@@ -33,6 +33,8 @@ export interface ClaudeAuthRefusal {
   reason: AgentAuthErrorReason;
   /** {@link readClaudeLoginStamp} of the login that was refused; absent when the folder held none. */
   login?: string;
+  /** The CLI's own words of the refusal, one line (`Not logged in · Please run /login`); absent when none were read. */
+  detail?: string;
 }
 
 /** Hex digits of a login stamp: enough to tell two logins apart, nothing to recover a secret from. */

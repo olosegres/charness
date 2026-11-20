@@ -361,6 +361,8 @@ export interface AgentApiErrorClass {
   isBalanceExhausted?: boolean;
   /** An `auth` error only: what the CLI refused the account for ({@link AgentAuthErrorReason}); absent = not told. */
   authReason?: AgentAuthErrorReason;
+  /** An `auth` error only: the CLI's own words of it (the turn's error text), for the operator's alert; absent = none read. */
+  authDetail?: string;
   /**
    * The error was read while an adopted session replayed the tail its process wrote while the bot was down: it ended a
    * turn BEFORE this bot started, not just now. The boot recovery owns such an episode (it reads the error's own time off

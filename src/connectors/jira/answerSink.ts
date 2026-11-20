@@ -69,14 +69,19 @@ export const jiraReadBackDelayMs = 10_000;
 const missingPartPreviewChars = 80;
 
 const alertTexts: Readonly<Record<RequestAlertReason, string>> = {
-  silentTurns: 'the agent ended its turns without answering, and the reminders gave up',
-  wakeCap: 'the agent was reminded as many times as allowed without answering',
-  wakeFailed: "the agent's session could not be reached to remind it",
+  silentTurns: 'The AI stopped working on this without giving an answer, even after it was reminded.',
+  wakeCap: 'The AI was reminded as many times as allowed and still gave no answer here.',
+  wakeFailed: "The AI's session could not be reached to remind it, so there is no answer here.",
 };
 
-/** @description The alert comment: which request, why, and that a person is needed (D20). */
-export function buildJiraAlertText(requestId: string, reason: RequestAlertReason): string {
-  return `⚠️ The AI could not finish request ${requestId}: ${alertTexts[reason]}. A person needs to look at this issue.`;
+/**
+ * @description The alert comment (D20), in words a reader of the issue understands: what happened, and in one line what it means for
+ * them — nothing more happens by itself, a person has to look, and how to try again. The request's id stays out of it (the bot's log
+ * names it). A turn refused for the AI's Claude account never ends here: the bot says that in words of its own and moves the work, or
+ * the work waits for the account (`bot.ts` `handleClaudeAuthRefusal`).
+ */
+export function buildJiraAlertText(reason: RequestAlertReason): string {
+  return `⚠️ ${alertTexts[reason]} It will not go on by itself: a person needs to look at this issue. To try again, hand it to the AI again or mention it in a comment.`;
 }
 
 /** @description The park notice (D12): over the run budget, handed back without a new request. Hand-overs and mentions share the budget. */
@@ -519,8 +524,10 @@ export function createJiraAnswerSink(deps: JiraAnswerSinkDeps): JiraAnswerSink {
 
     async deliverAlert(key, alert) {
       const issueKey = key.thread;
-      const posted = await postComments(issueKey, [convertMarkdownToAdf(buildJiraAlertText(alert.requestId, alert.reason))], alert.requestId, getOriginThreadRootId(alert.origin));
+      const posted = await postComments(issueKey, [convertMarkdownToAdf(buildJiraAlertText(alert.reason))], alert.requestId, getOriginThreadRootId(alert.origin));
       if (posted.postedCount === 0 && posted.failure) return { ok: false, error: getNothingPostedError(posted.failure) };
+      // The comment names no request: the log does.
+      console.log(`[jira] ${issueKey}: request ${alert.requestId} given up (${alert.reason}); the alert comment is posted`);
       if (alert.origin.kind === 'trackerEvent') {
         const handBackWarning = await handBack(issueKey, getRequestRequester(alert.origin));
         if (handBackWarning) console.warn(`[jira] ${issueKey}: alert for ${alert.requestId}: ${handBackWarning}`);

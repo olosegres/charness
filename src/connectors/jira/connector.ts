@@ -9,6 +9,8 @@ import type { OutboundFileRequest, OutboundFileResult } from '../../platform/out
 import { loadJiraConfig, resolveExtraFields, resolveTriggerStatusIds, type JiraConfig } from './config';
 import { buildJiraTriggerJql, getJiraMentionWindowMs, getJiraRetryDelayMs, JiraInbound, jiraIssueUpdatesPer24hMax, type JiraInboundDeps, type JiraProjectTrigger } from './inbound';
 import { JiraTriggerLog, jiraTriggerLogFileName } from './triggerLog';
+import { createJiraOperatorChannel, hideJiraOperatorIssue } from './operatorIssue';
+import type { OperatorAlertChannel } from '../../platform/operatorAlert';
 import { JiraContextLedger } from './contextLedger';
 import { createJiraTrust, readJiraTrustedGroup, type JiraTrust, type JiraTrustedGroupSnapshot } from './trustedGroup';
 import { fetchIssueAttachment, type JiraAttachmentToolResult } from './attachmentTool';
@@ -75,6 +77,11 @@ export interface JiraConnector {
    * shows them, in the thread the conversation's newest open request answers in (top-level when none is open).
    */
   sendFiles(key: SessionKey, request: OutboundFileRequest): Promise<OutboundFileResult>;
+  /**
+   * The operator issue (`jira.json` `operatorIssue`, `operatorIssue.ts`): where the bot tells its operator what only they can fix,
+   * as comments; `null` without one — the alerts then reach only the bot's log.
+   */
+  operatorChannel: OperatorAlertChannel | null;
   /** Start polling (the session side is ready: the boot restored the sessions). */
   start(deps: JiraConnectorSessionDeps): void;
   stop(): void;
@@ -122,6 +129,11 @@ async function settle<T>(lookup: Promise<T>): Promise<SettledLookup<T>> {
 
 /** The status Jira answers with when the account lacks the permission a call needs. */
 const permissionRefusedStatus = 403;
+/** The status Jira answers with for an issue that does not exist — or that the account may not browse. */
+const notFoundStatus = 404;
+
+/** The refusal of an `operatorIssue` the AI account cannot see. */
+export const jiraOperatorIssueUnseenError = 'jira.json operatorIssue: the AI account cannot see that issue (no such issue, or no permission to browse it)';
 
 /**
  * What the setup check reads from Jira: the token's account, every project's statuses, the site's fields when
@@ -132,11 +144,13 @@ async function checkJiraSetup(client: JiraClient, config: JiraConfig, now: () =>
   const hasExtraFields = projectEntries.some(([, project]) => project.extraFieldIds.length > 0);
   const { trustedGroupName } = config;
   // Independent lookups, made together; one project's failure does not hide the others' problems.
-  const [myself, statusLookups, fieldsLookup, groupLookup] = await Promise.all([
+  const [myself, statusLookups, fieldsLookup, groupLookup, operatorIssueLookup] = await Promise.all([
     settle(client.getMyself()),
     Promise.all(projectEntries.map(([projectKey]) => settle(client.getProjectStatuses(projectKey)))),
     hasExtraFields ? settle(client.getFields()) : null,
     trustedGroupName === null ? null : settle(readJiraTrustedGroup(client, trustedGroupName, now)),
+    // The operator issue must be one the AI account can see — it posts the alerts there.
+    config.operatorIssueKey === null ? null : settle(client.getIssue(config.operatorIssueKey, ['summary'])),
   ]);
   const reasons: string[] = [];
   const transientDetails: string[] = [];
@@ -156,6 +170,11 @@ async function checkJiraSetup(client: JiraClient, config: JiraConfig, now: () =>
     }
   } else if (groupLookup && groupLookup.value === null) {
     reasons.push(`jira.json trustedGroup: the site has no group named "${trustedGroupName}"`);
+  }
+  if (operatorIssueLookup && !operatorIssueLookup.ok) {
+    const { error } = operatorIssueLookup;
+    if (error instanceof JiraHttpError && error.status === notFoundStatus) reasons.push(jiraOperatorIssueUnseenError);
+    else noteFailure(error);
   }
   const trustedGroup = groupLookup?.ok ? groupLookup.value : null;
   const projects = new Map<string, JiraProjectTrigger>();
@@ -330,7 +349,8 @@ export async function prepareJiraConnector(context: {
     }
     inbound = new JiraInbound({
       ...deps,
-      client,
+      // The operator issue is the bot's own channel, never a request source: the search never shows it to the poller.
+      client: hideJiraOperatorIssue(client, config.operatorIssueKey),
       aiAccountId: config.accountId,
       siteUrl: config.baseUrl,
       projects,
@@ -378,10 +398,19 @@ export async function prepareJiraConnector(context: {
     }, getJiraRetryDelayMs(context.testTiming?.setupRetryBaseMs ?? pollIntervalMs, failureCount));
   };
 
+  if (config.operatorIssueKey !== null) {
+    const mention = config.operatorAccountIds.length === 0 ? 'mentioning nobody' : `mentioning ${config.operatorAccountIds.length} operator account(s)`;
+    console.log(`[jira] operator alerts go to ${config.operatorIssueKey} as comments, ${mention}; the poller skips that issue`);
+  } else {
+    console.log('[jira] no operatorIssue: operator alerts (a Claude account signed out, nothing usable) reach only this log');
+  }
   return {
     adapterName: config.adapter,
     launchDefaults: { model: config.model, effort: config.effort },
     answerSink,
+    operatorChannel: config.operatorIssueKey === null
+      ? null
+      : createJiraOperatorChannel({ client, issueKey: config.operatorIssueKey, operatorAccountIds: config.operatorAccountIds }),
     onPromptSettled: (key, requestId, outcome) => {
       // A Jira conversation's thread IS its issue key.
       if (outcome === 'takenIn') contextLedger.commit(key.thread, requestId);

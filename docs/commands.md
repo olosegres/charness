@@ -172,8 +172,13 @@ so one account's usage limit does not stop every topic.
   conversation resumes there, same conversation. A turn the CLI refuses moves the
   conversation the same way and continues the turn there (a topic gets one line, `🔁
   Account «default» is signed out or its sign-in was refused — this topic continues on
-  «work». Switch: /limits`); with no other usable account the pinned logged-out notice
-  comes as before. «🔁 Auto switch» does not govern it: a refused account comes back by
+  «work». Switch: /limits`; a Jira issue gets a comment in plain words — «The AI's Claude
+  account «default» is signed out: its sign-in expired or was revoked. I moved this issue to
+  «second» and will continue.»). With no other usable account the conversation WAITS: a
+  topic gets the pinned logged-out notice as before, a Jira issue the comment «No Claude
+  account of the AI can work right now (…). The operator has been told; the work continues
+  once one is signed in again.»; it is not reminded meanwhile (so it never ends in «gave no
+  answer»), and it goes on by itself as soon as an account can work again. «🔁 Auto switch» does not govern it: a refused account comes back by
   no wait. Until it is signed in again the account counts as not signed in everywhere
   (`/accounts`, `/limits`, the recommendation; `charness claude-profiles` prints
   `sign-in refused at <time>: <why>`): signed in again means a new login in its folder
@@ -184,6 +189,22 @@ so one account's usage limit does not stop every topic.
   `[accounts] profile default: signed in again — usable for new sessions`. The
   deprecated tmux-scrape backend is moved at start only; a refused turn there keeps the
   notice.
+- **You are told once when an account needs you.** When an account stops working because
+  of its sign-in — its status check finds it signed out, or the CLI refuses it on a turn —
+  the bot posts one message in **General**, pinned (the pin is what reaches you in a muted
+  chat): what broke (`⚠️ Action needed: Claude account «default» is signed out: its sign-in
+  expired or was revoked.`, then `The CLI said: …` with the CLI's own words), what to do
+  (`To fix it, sign it in again: /accounts login default`; for an organization that turned
+  Claude subscription use off: ask its admin, or sign the account in with another login) and
+  what the bot did (`Its conversations continue on «second», and new ones start there.`, or
+  `No other Claude account can work right now: the conversations wait and go on once one is
+  signed in again.`). It is said once per change — not per turn, and not again after a
+  restart; an account seen for the first time is told only when it is the one new
+  conversations start on or the CLI refused it on a turn (a folder whose sign-in is still
+  under way is not news). When the account is signed in again one line says so and the pin
+  goes. An instance without Telegram posts the same, in English, on its Jira **operator
+  issue** (`jira.json` `operatorIssue`, see SETUP.md § Jira setup), mentioning the
+  operator's accounts; without one it goes only to the log.
 - **Removing:** «🗑 Remove» deletes the profile's login directory. The profile
   that is currently the instance default cannot be removed (pick another one in
   General first); topics that had picked the removed profile return to the

@@ -29,7 +29,9 @@ which), `model`, `effort` (the sessions',
 since user settings do not apply; absent → `opus` / `high`, either key overrides only its own default),
 `agentBinaries` (tool name → absolute path of an executable, e.g. `ffmpeg`: checked at boot — missing or not
 executable stops it, naming the key — and linked into `DATA_DIR/agent-bin`, which leads the PATH of the Jira agents;
-host runtime), `baseUrl` (loopback only, for the fakes). `adapter` is `claude-json-stream`
+host runtime), `operatorIssue` (an issue key: the bot's own channel to its operator, see «The operator issue» below; read at boot —
+one the AI account cannot see refuses the start), `operatorAccountIds` (1–5 account ids mentioned on each operator alert that asks
+them to act; needs `operatorIssue`), `baseUrl` (loopback only, for the fakes). `adapter` is `claude-json-stream`
 (the default: the process is stopped at the idle mark) or `claude-per-turn` (stopped after every answer; when the
 issue's last known Claude Code is below 2.1.287 the pick is kept but that session runs without the per-turn stop —
 an old process is never auto-stopped — until a newer CLI reports in, L-D10); nothing else (R14). An issue's conversation sleeps between requests and the next request
@@ -307,6 +309,57 @@ list and General's «Auto switch» (`claudeAutoSwitchOnLimitEnabled`, ON unless 
 (`autoContinueOnLimitEnabled`, ON unless turned OFF) of `/limits_autoswitch`. Telegram's General topic is where they are set (an instance that serves
 Jira and Telegram together uses the same values for both); a Jira-only one keeps them in `state.json`. A launch under an account's directory carries
 `CLAUDE_CONFIG_DIR` — a path, the one variable beyond the agent allowlist (R32). Flow: `jiraFallbackSwitchE2e.test.ts`.
+
+An account that cannot work because of its SIGN-IN is never started or resumed on (`utils/claudeAuthRefusal.ts`): one its last status check
+found signed out, or one the CLI refused on a turn — the stream's `authentication_failed` / `oauth_org_not_allowed` code, or its words (signed
+out, a login expired or revoked, «Your organization has disabled Claude subscription access for Claude Code», a bare 401 / 403). The issue's
+conversation goes to the account `claude_profiles` recommends and keeps it. A turn refused that way is moved at once and goes on, and the issue
+hears it from the bot in plain words, as a `progress` answer to its open requests (`requests.account.movedAnswer`, through the same sink as a
+limit notice): «The AI's Claude account «default» is signed out: its sign-in expired or was revoked. I moved this issue to «second» and will
+continue.» With no account left that can work the conversation WAITS (`claudeAccountWaits` in `state.json`): its requests are no longer woken —
+so no reminder meets the same refusal and no give-up alert reads as the agent's silence — and they hear «No Claude account of the AI can work
+right now (…). The operator has been told; the work continues once one is signed in again.» once per request; the first account that can work
+again takes the conversation on with the continue prompt. The operator hears it on the operator issue (below). The give-up alert
+(`buildJiraAlertText`) is left for a real silence: it says in plain words what happened and that a person has to look, without the
+request's id (the log names it).
+
+## The operator issue (`operatorIssue.ts`)
+
+A Jira-only instance has no Telegram General, where the bot tells its operator what only they can fix. `jira.json` `operatorIssue`
+names an issue that plays that part: each operator alert (`utils/claudeAccountAlert.ts` — a Claude account signed out or refused by its
+organization, which conversations it moved where or that they wait, what to run to sign it in again; one line when it is signed in again)
+is a comment by the AI account there, in English, posted once per change (the record is in `state.json`, so a restart tells nothing
+again). An alert that asks the operator to act opens with a mention paragraph of `operatorAccountIds` (`createMentionParagraph`: Jira
+notifies them); a recovery line mentions nobody. A post is made once and never retried — its outcome may be unknown, and an alert told
+twice is worse than one the log names as not posted. The issue is read at boot (`checkJiraSetup`: 404 → `jiraOperatorIssueUnseenError`,
+the start refused; an outage only delays polling, as for the rest of the setup). It need not be in the allowlist; when it is, it is still
+never a request source: the poller's client leaves it out of every search page (`hideJiraOperatorIssue`, one log line the first time),
+so a hand-over, a comment or a mention on it reaches no agent. Without `operatorIssue` the alerts reach only the bot's log (`[accounts] …`;
+the boot says so once).
+
+## Possible next steps
+
+**Operator commands on the operator issue** (not implemented — a design note). The operator issue could take a few commands typed as a
+comment, so a Jira-only instance can be looked after without a shell:
+
+- `/accounts` — the bot answers with the Claude accounts as `charness claude-profiles` shows them (signed in or refused, usage, which one
+  new conversations go to).
+- `/login <profile>` — the bot starts the sign-in of that account out of band, as Telegram's `/accounts login` does through
+  `agentLogin/` (a pty running `claude auth login` under the profile's `CLAUDE_CONFIG_DIR`), posts the sign-in link as its comment, and
+  takes the code from the NEXT comment of the same operator on that issue; the code is never echoed, logged or quoted back, and a sign-in
+  left open expires like Telegram's.
+- `/status` — what runs: the open requests and their issues, the waits (a usage limit, an account to sign in), the task-agent slots.
+
+Who: only a comment whose author is one of `operatorAccountIds` (a plain id check — no group, no app, never the AI account itself, and
+never an edited comment whose last editor is someone else); anything else on the issue stays ignored, as now. A command is decided by
+the poller's scan of the issue's new comments (its `updated` moving), answered once (a seen-log, like `triggerLog.ts`), and never reaches an
+agent.
+
+Risks: a sign-in code in a Jira comment is readable by everyone who can browse the issue, kept in its history and sent in its
+notification e-mails. So the bot deletes the code's comment as soon as it has read it (the AI account needs the *Delete all comments*
+permission in that project; without it the command is refused up front), the code is single-use and short-lived, and the issue should live
+in a project only the operators can browse. The answers must never carry a token, a key or a path beyond the profile's folder; a mistyped
+command gets a short usage line, not an echo of what was typed.
 
 ## Isolation — fail-closed, checked at boot
 
@@ -628,6 +681,7 @@ What the connector relies on, probed with a throw-away issue (REST v3 unless not
 
 `jiraConfig.test.ts`, `jiraTrustedGroup.test.ts`, `jiraIssueBlocks.test.ts` and `jiraMediaPlaceholders.test.ts` (over the recorded fixture),
 `jiraOutgoingFileCheck.test.ts` and `jiraOutgoingFiles.test.ts` (the files an answer shows, over files built by `mediaFileFixtures.ts`),
+`jiraOperatorIssue.test.ts` (the operator issue: its keys, the boot read, the alert comment with its mention, the poller that never sees it),
 `jiraPromptSpill.test.ts`, `jiraPrompt.test.ts`, `connectorGuards*.test.ts`, `jiraLazyLoad.test.ts`; flows boot a
 real Jira-only instance each (`scripts/run-isolated.sh`) against `__tests__/jiraE2e/fakeJira.ts` (which also serves
 groups and their members) and `fakeClaude.ts`: `jiraConnectorE2e.test.ts` (requests and the session lifecycle, an answer that shows files and `send_file_to_user`; the fake Jira takes

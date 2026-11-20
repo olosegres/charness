@@ -180,7 +180,10 @@ per-backend controls are optional methods the bot checks before calling.
   A spawn never lands on an account known not to work (`utils/claudeAuthRefusal.ts`, the reader `resolveThreadClaudeProfileForLaunch`): signed
   out by its probe, or REFUSED by the CLI on a turn (`authRefusal`: the stream's `authentication_failed` / `oauth_org_not_allowed` code or the
   wording; held until a new login changes the folder's login stamp) — the conversation takes the `claude_profiles` pick as its own pick, and a
-  refused json-stream turn makes the limit move at once (`handleClaudeAuthRefusal` → `switchTopicToFallbackEntry` with `reason: 'signIn'`).
+  refused json-stream turn makes the limit move at once (`handleClaudeAuthRefusal` → `switchTopicToFallbackEntry` with `reason: 'signIn'`);
+  with nowhere to go the conversation WAITS (`claudeAccountWaits`, not woken) until an account can work. The OPERATOR is told once per change
+  (`utils/claudeAccountAlert.ts`, record `claudeAccountAlerts`): General, pinned, and every connector's `platform/operatorAlert.ts` channel
+  (Jira: the `operatorIssue`, never a request source).
 - **Usage limits / fallback chain** (`/limits_autoswitch`, hidden aliases `/fallback` and `/auto_continue_limits`, `utils/fallbackChain.ts`, `commands/fallbackChain.ts`): ONE instance-wide
   priority list of `{claude, profile, model|null}` / `{opencode, providerId, modelId}` rungs in `state.json`
   (`fallbackChain`), drafted from what is detected (`detectFallbackOptions`: profile views + the OpenCode catalog
