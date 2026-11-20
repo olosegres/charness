@@ -186,6 +186,7 @@ import {
   getTelegramReplyTargetId,
   checkIsWrittenMessage,
   getTelegramCommand,
+  checkHasJoinedGroup,
   checkHasLeftGroup,
   getDisplayName,
   getTelegramMessageContext,
@@ -11310,7 +11311,7 @@ bot.on('edited_message', async (ctx) => {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 /**
- * @description Detect when *this* bot is added to the configured group and
+ * @description Detect when *this* bot JOINS the configured group and
  * post the greeting into General (`formatGroupWelcome`: what the bot is, the
  * version that runs, the setup steps). Without this, a fresh deployment is
  * silent: the user adds the bot, sees nothing, and has to dig through the
@@ -11320,17 +11321,18 @@ bot.on('edited_message', async (ctx) => {
  *   - chat must be the allowlisted group (we don't react in foreign chats),
  *   - the member that changed must be us (other admins being promoted etc.
  *     are not interesting),
- *   - new status must be `member` or `administrator` — `kicked`/`left`
- *     events would only generate noise.
+ *   - the change must be a join (`checkHasJoinedGroup`): out of the group
+ *     before, a member or an administrator now. The greeting's own steps —
+ *     make the bot an admin, add a right `/doctor` asked for — are
+ *     `my_chat_member` changes too, and must not bring it back.
  */
 bot.on('my_chat_member', async (ctx) => {
   const chat = ctx.chat;
   if (!chat || chat.id !== getAllowedGroupId()) return;
   const upd = ctx.update.my_chat_member;
-  const newMember = upd.new_chat_member;
   const botId = bot.botInfo?.id;
-  if (!botId || newMember.user.id !== botId) return;
-  if (newMember.status !== 'member' && newMember.status !== 'administrator') return;
+  if (!botId || upd.new_chat_member.user.id !== botId) return;
+  if (!checkHasJoinedGroup(upd.old_chat_member, upd.new_chat_member)) return;
 
   // We don't know which message_thread_id General actually has on this
   // group (it can be 1, or undefined for non-forum chats). For a forum

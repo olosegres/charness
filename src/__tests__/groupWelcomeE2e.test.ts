@@ -3,10 +3,12 @@
  * way an isolated instance is (`scripts/run-isolated.sh`) against the fake Bot API (`telegramE2e/fakeTelegram.ts`), which reports the
  * bot's own membership changes as `my_chat_member` updates. One flow, in order:
  *
- *   boot → two changes that are not «the bot was added» (another user made an admin, the bot itself leaving) post nothing
- *   → the bot made a group admin posts ONE greeting into General, as Markdown, and that greeting is exactly the
+ *   boot → changes that are not «the bot joined» (another user made an admin, the bot itself leaving) post nothing
+ *   → the bot joining posts ONE greeting into General, as Markdown — and the owner's next steps, which Telegram reports too (the
+ *     bot made an admin, its rights edited after `/doctor`), post none — and that greeting is exactly the
  *     `onboarding.welcome` text with the version this very package says in its title (read from `package.json`, never a number
  *     written into the text) and the projects folder in plain words
+ *   → a bot removed and added back (also straight as an admin) is greeted again
  *   → the greeting is short and no longer sends the owner to @BotFather (a group admin gets every message)
  *   → `/doctor` agrees with it: a bot that is not an admin, privacy mode on, fails the admin line and the privacy line; the same
  *     bot made an admin still has privacy mode on and gets no privacy line — nothing red is left for a step the greeting dropped.
@@ -132,15 +134,24 @@ describe('the greeting when the bot is added to the group', () => {
     charness = await startCharnessOnInstance(getLayout(), fakeTelegram);
   });
 
-  it('greets General ONCE, when the bot is made an admin — not for another member, not for the bot leaving', async () => {
-    fakeTelegram.pushMyChatMember('member', 'administrator', otherUser);
-    fakeTelegram.pushMyChatMember('member', 'left');
-    fakeTelegram.pushMyChatMember('left', 'administrator');
-
-    const greeting = await generalTopic.waitForMessage('the greeting in General', (message) => message.text.startsWith('👋'));
+  /** Wait until the greeting count is `count` and stays so for a few polls: the updates queued after it have been handled. */
+  async function waitForGreetingCount(count: number): Promise<void> {
+    await getCharness().waitFor(`${count} greeting(s) in General`, replyTimeoutMs, () => listGreetings().length >= count);
     const pollsAtGreeting = fakeTelegram.listCalls('getUpdates').length;
     await getCharness().waitFor('the updates queued before the greeting to be handled', replyTimeoutMs, () => fakeTelegram.listCalls('getUpdates').length >= pollsAtGreeting + settlePolls);
-    assert.deepEqual(listGreetings().map((message) => message.message_id), [greeting.message_id], 'one greeting, for the one change that is the bot being added');
+  }
+
+  it('greets General ONCE, when the bot JOINS — not for another member, not for the bot leaving, not when it is then made an admin or its rights are edited', async () => {
+    fakeTelegram.pushMyChatMember('member', 'administrator', otherUser);
+    fakeTelegram.pushMyChatMember('administrator', 'left');
+    // The owner's steps after the greeting: add the bot, make it an admin, add a right /doctor asked for. Telegram reports each.
+    fakeTelegram.pushMyChatMember('left', 'member');
+    fakeTelegram.pushMyChatMember('member', 'administrator');
+    fakeTelegram.pushMyChatMember('administrator', 'administrator');
+
+    await waitForGreetingCount(1);
+    const [greeting] = listGreetings();
+    assert.equal(listGreetings().length, 1, 'one greeting, for the one change that is the bot joining');
 
     assert.equal(greeting.parseMode, 'Markdown', 'the title is bold and the folder is code');
     assert.equal(greeting.text.split('\n')[0], `👋 *Charness ${packageVersion}*`, 'the title carries the version of the package that runs, not a number written into the text');
@@ -150,6 +161,14 @@ describe('the greeting when the bot is added to the group', () => {
       'the greeting is the onboarding text with the title and the projects folder filled in',
     );
     assert.ok(greeting.text.includes(`Project folders: \`${getLayout().workRoot}\``), 'the projects folder in plain words, not an environment variable');
+  });
+
+  it('greets again when the bot is removed and added back: a rejoin is a join, joining as an admin at once too', async () => {
+    fakeTelegram.pushMyChatMember('administrator', 'kicked');
+    fakeTelegram.pushMyChatMember('kicked', 'administrator');
+
+    await waitForGreetingCount(2);
+    assert.equal(listGreetings().length, 2, 'the removal posts nothing, the re-adding posts one greeting');
   });
 
   it('the greeting is short and sends nobody to @BotFather', async () => {
