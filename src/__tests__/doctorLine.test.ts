@@ -6,7 +6,7 @@ import { test } from 'node:test';
 import * as assert from 'node:assert/strict';
 
 import { t, checkKeyInAllLangs, localeCodes, getKeyInLang } from '../i18n';
-import { formatDoctorLine } from '../utils/doctorLine';
+import { formatDoctorLine, getPrivacyDoctorLine } from '../utils/doctorLine';
 
 test('an ok line is the label behind a check mark', () => {
   assert.equal(formatDoctorLine({ status: 'ok', label: 'tmux found' }, t), '✅ tmux found');
@@ -30,4 +30,16 @@ test('doctor.warnWithoutHint exists in every locale and keeps the {label} placeh
   for (const locale of localeCodes) {
     assert.ok(getKeyInLang(locale, 'doctor.warnWithoutHint')?.includes('{label}'), `doctor.warnWithoutHint in ${locale} lost the {label} placeholder`);
   }
+});
+
+test('an admin bot gets no privacy line: Telegram sends a group admin every message, so the flag decides nothing', () => {
+  assert.equal(getPrivacyDoctorLine({ isBotAdmin: true, canReadAllGroupMessages: false }, t), null);
+  assert.equal(getPrivacyDoctorLine({ isBotAdmin: true, canReadAllGroupMessages: true }, t), null);
+});
+
+test('a bot that is not an admin is checked on the privacy flag: off is fine, on fails with the BotFather hint', () => {
+  const hint = t('doctor.privacy_hint');
+  assert.deepEqual(getPrivacyDoctorLine({ isBotAdmin: false, canReadAllGroupMessages: true }, t), { status: 'ok', label: t('doctor.privacy_off'), hint });
+  assert.deepEqual(getPrivacyDoctorLine({ isBotAdmin: false, canReadAllGroupMessages: false }, t), { status: 'fail', label: t('doctor.privacy_off'), hint });
+  assert.equal(getPrivacyDoctorLine({ isBotAdmin: false, canReadAllGroupMessages: undefined }, t)?.status, 'fail', 'a flag Telegram did not report is not taken as «off»');
 });

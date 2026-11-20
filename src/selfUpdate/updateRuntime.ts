@@ -25,6 +25,8 @@ import type { UpdateEngineDeps } from './updateEngine';
 
 const changelogFileName = 'CHANGELOG.md';
 const shortShaLength = 7;
+/** What the running version reads as when the install's `package.json` cannot be read. */
+export const unknownRunningVersion = 'unknown';
 
 export type UpdateRuntime = Pick<
   UpdateEngineDeps,
@@ -116,7 +118,7 @@ export async function createUpdateRuntime(options: UpdateRuntimeOptions): Promis
   const npmPrefix = installKind.kind === 'npmGlobal' ? installKind.prefix : '';
 
   return {
-    running: { version: readVersionOrNull(packageRoot) ?? 'unknown', commit },
+    running: { version: readVersionOrNull(packageRoot) ?? unknownRunningVersion, commit },
     runningNode: options.nodeVersion,
     installKind,
     isHotMode: options.isHotMode,

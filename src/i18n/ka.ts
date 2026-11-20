@@ -138,14 +138,13 @@ export const kaDict: Record<string, string> = {
     'Bot-ის უფლებების წაკითხვა ვერ ხერხდება — getChatMember ვერ შედგა',
 
   'onboarding.welcome':
-    '👋 *Charness 2.0*\n\n' +
-    'მზადყოფის ჩეკლისტი:\n' +
-    '1️⃣ გამახლეთ ჯგუფის ადმინად უფლებებით:\n' +
-    '   • Manage Topics, Delete Messages, Pin Messages\n' +
-    '2️⃣ @BotFather → /setprivacy → Disable, შემდეგ წამშალეთ და ხელახლა დაამატეთ\n' +
-    '3️⃣ გაუშვით /doctor რა აკლია ნახვად\n' +
-    '4️⃣ თითოეულ თემატურ თემაში გაუშვით /bind <subdir> და გაუშვით აგენტი\n\n' +
-    '`WORK_ROOT`: `{workRoot}`',
+    '👋 *{title}*\n\n' +
+    'მე ვუშვებ Claude Code-ისა და OpenCode-ის აგენტებს ამ ჯგუფის თემებში: ერთი თემა = ერთი პროექტის საქაღალდე = ერთი აგენტი.\n\n' +
+    'მუშაობის დასაწყებად 3 ნაბიჯია:\n' +
+    '1️⃣ გამხადეთ ჯგუფის ადმინისტრატორი უფლებებით Manage Topics, Delete Messages და Pin Messages\n' +
+    '2️⃣ გაუშვით /doctor, რომ ნახოთ, რა აკლია კიდევ\n' +
+    '3️⃣ შექმენით თემა: თუ მისი სახელი პროექტის საქაღალდეს ემთხვევა, მე თვითონ მივაბამ, სხვა შემთხვევაში აირჩიეთ საქაღალდე ჩემი სიიდან (ან /bind <subdir>). შემდეგ გაუშვით აგენტი: /claude ან /opencode\n\n' +
+    'პროექტების საქაღალდეები: `{workRoot}`',
 
   'binding.welcome.header': '📁 დაკავშირებულია `{subdir}`-თან',
   'binding.welcome.claude_md': '• CLAUDE.md: {size}',

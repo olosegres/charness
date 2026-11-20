@@ -968,7 +968,7 @@ List existing topics and their bindings.
 
 ### `/doctor`
 
-Self-diagnose: admin rights, privacy mode, paths, CLIs.
+Self-diagnose: admin rights, privacy mode (checked only while the bot is not a group admin — an admin receives every message anyway), paths, CLIs.
 
 ### `/version`
 

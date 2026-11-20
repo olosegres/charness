@@ -142,14 +142,13 @@ export const ruDict: Record<string, string> = {
     'не могу прочитать права бота — getChatMember failed',
 
   'onboarding.welcome':
-    '👋 *Charness 2.0*\n\n' +
-    'Готовность к работе:\n' +
-    '1️⃣ Сделай меня админом группы с правами:\n' +
-    '   • Manage Topics, Delete Messages, Pin Messages\n' +
-    '2️⃣ @BotFather → /setprivacy → Disable, потом удали и добавь бота заново\n' +
-    '3️⃣ Запусти /doctor — увижу проблемы сразу\n' +
-    '4️⃣ В каждом тематическом треде сделай /bind <subdir> и запусти агента\n\n' +
-    '`WORK_ROOT`: `{workRoot}`',
+    '👋 *{title}*\n\n' +
+    'Я запускаю агентов Claude Code и OpenCode в тредах этой группы: один тред = одна папка проекта = один агент.\n\n' +
+    'Чтобы начать работу, три шага:\n' +
+    '1️⃣ Сделай меня админом группы с правами Manage Topics, Delete Messages и Pin Messages\n' +
+    '2️⃣ Запусти /doctor — он покажет, чего ещё не хватает\n' +
+    '3️⃣ Создай тред: если его название совпадает с папкой проекта, я привяжу её сам, иначе выбери папку из моего списка (или /bind <subdir>). Потом запусти агента: /claude или /opencode\n\n' +
+    'Папки проектов: `{workRoot}`',
 
   'binding.welcome.header': '📁 Привязано к `{subdir}`',
   'binding.welcome.claude_md': '• CLAUDE.md: {size}',

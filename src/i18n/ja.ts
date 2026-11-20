@@ -138,14 +138,13 @@ export const jaDict: Record<string, string> = {
     'Bot の権限を読めません — getChatMember が失敗しました',
 
   'onboarding.welcome':
-    '👋 *Charness 2.0*\n\n' +
-    '稼働準備チェックリスト:\n' +
-    '1️⃣ 私をグループ管理者にしてください。権限:\n' +
-    '   • Manage Topics, Delete Messages, Pin Messages\n' +
-    '2️⃣ @BotFather → /setprivacy → Disable、その後私を削除して再追加\n' +
-    '3️⃣ /doctor を実行して不足を確認\n' +
-    '4️⃣ 各トピックスレッドで /bind <subdir> を実行しエージェントを起動\n\n' +
-    '`WORK_ROOT`: `{workRoot}`',
+    '👋 *{title}*\n\n' +
+    '私はこのグループのトピックで Claude Code と OpenCode のエージェントを動かします。1 トピック = 1 プロジェクトフォルダ = 1 エージェントです。\n\n' +
+    '3 ステップで準備完了:\n' +
+    '1️⃣ 私をグループ管理者にして、Manage Topics・Delete Messages・Pin Messages の権限を付与してください\n' +
+    '2️⃣ /doctor を実行して、まだ足りないものを確認\n' +
+    '3️⃣ トピックを作成: 名前がプロジェクトフォルダと一致すれば自動で紐付け、それ以外は一覧からフォルダを選択（または /bind <subdir>）。その後エージェントを起動: /claude または /opencode\n\n' +
+    'プロジェクトフォルダ: `{workRoot}`',
 
   'binding.welcome.header': '📁 `{subdir}` にバインドしました',
   'binding.welcome.claude_md': '• CLAUDE.md: {size}',

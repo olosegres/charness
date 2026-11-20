@@ -138,14 +138,13 @@ export const deDict: Record<string, string> = {
     'Bot-Rechte nicht lesbar — getChatMember fehlgeschlagen',
 
   'onboarding.welcome':
-    '👋 *Charness 2.0*\n\n' +
-    'Checkliste für den Einsatz:\n' +
-    '1️⃣ Mach mich zum Gruppen-Admin mit Rechten:\n' +
-    '   • Manage Topics, Delete Messages, Pin Messages\n' +
-    '2️⃣ @BotFather → /setprivacy → Disable, dann entferne und füge mich neu hinzu\n' +
-    '3️⃣ Führe /doctor aus, um zu sehen, was noch fehlt\n' +
-    '4️⃣ In jedem thematischen Thread /bind <subdir> ausführen und Agent starten\n\n' +
-    '`WORK_ROOT`: `{workRoot}`',
+    '👋 *{title}*\n\n' +
+    'Ich starte Claude-Code- und OpenCode-Agenten in den Threads dieser Gruppe: ein Thread = ein Projektordner = ein Agent.\n\n' +
+    'In 3 Schritten startklar:\n' +
+    '1️⃣ Mach mich zum Gruppen-Admin mit den Rechten Manage Topics, Delete Messages und Pin Messages\n' +
+    '2️⃣ Führe /doctor aus, um zu sehen, was noch fehlt\n' +
+    '3️⃣ Lege einen Thread an: Passt sein Name zu einem Projektordner, verknüpfe ich ihn selbst, sonst wähle einen Ordner aus meiner Liste (oder /bind <subdir>). Starte dann einen Agenten: /claude oder /opencode\n\n' +
+    'Projektordner: `{workRoot}`',
 
   'binding.welcome.header': '📁 Verknüpft mit `{subdir}`',
   'binding.welcome.claude_md': '• CLAUDE.md: {size}',

@@ -138,14 +138,13 @@ export const zhDict: Record<string, string> = {
     '无法读取 bot 权限 — getChatMember 失败',
 
   'onboarding.welcome':
-    '👋 *Charness 2.0*\n\n' +
-    '就绪清单：\n' +
-    '1️⃣ 将我设为群组管理员，权限包括：\n' +
-    '   • Manage Topics, Delete Messages, Pin Messages\n' +
-    '2️⃣ @BotFather → /setprivacy → Disable，然后移除并重新添加我\n' +
-    '3️⃣ 运行 /doctor 查看缺少什么\n' +
-    '4️⃣ 在每个主题话题中运行 /bind <subdir> 并启动代理\n\n' +
-    '`WORK_ROOT`：`{workRoot}`',
+    '👋 *{title}*\n\n' +
+    '我在本群的话题里运行 Claude Code 和 OpenCode 代理：一个话题 = 一个项目文件夹 = 一个代理。\n\n' +
+    '三步即可开始工作：\n' +
+    '1️⃣ 将我设为群组管理员，并授予 Manage Topics、Delete Messages 和 Pin Messages 权限\n' +
+    '2️⃣ 运行 /doctor 查看还缺少什么\n' +
+    '3️⃣ 创建话题：名称与项目文件夹相同时我会自动绑定，否则请从我的列表中选择文件夹（或使用 /bind <subdir>）。然后启动代理：/claude 或 /opencode\n\n' +
+    '项目文件夹：`{workRoot}`',
 
   'binding.welcome.header': '📁 已绑定到 `{subdir}`',
   'binding.welcome.claude_md': '• CLAUDE.md: {size}',

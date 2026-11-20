@@ -109,7 +109,8 @@ import {
   type ReadinessFacts,
   type StartupTarget,
 } from './utils/startupReadiness';
-import { formatDoctorLine, type DoctorLine } from './utils/doctorLine';
+import { formatDoctorLine, getPrivacyDoctorLine, type DoctorLine } from './utils/doctorLine';
+import { formatGroupWelcome } from './connectors/telegram/groupWelcome';
 import {
   getNativeWindowsConsoleLine,
   getNativeWindowsDoctorLine,
@@ -8009,12 +8010,14 @@ async function runDoctor(): Promise<DoctorLine[]> {
 
   // 1. Bot admin permissions in the configured group.
   const groupId = getAllowedGroupId();
+  let isBotAdmin = false;
   if (groupId === null) {
     lines.push({ status: 'warn', label: t('doctor.bot_admin'), hint: t('pair.not_paired') });
   } else try {
     const botId = bot.botInfo?.id ?? (await bot.telegram.getMe()).id;
     const member = await bot.telegram.getChatMember(groupId, botId);
     if (member.status === 'administrator') {
+      isBotAdmin = true;
       lines.push({ status: 'ok', label: t('doctor.bot_admin') });
       lines.push({
         status: member.can_manage_topics ? 'ok' : 'fail',
@@ -8046,15 +8049,12 @@ async function runDoctor(): Promise<DoctorLine[]> {
     });
   }
 
-  // 2. Privacy mode (heuristic — Bot API doesn't expose the flag directly,
-  //    but `getMe().can_read_all_group_messages === false` indicates it's on).
+  // 2. Privacy mode — only a non-admin bot depends on it (`getPrivacyDoctorLine`). The Bot API doesn't expose the mode itself,
+  //    but `getMe().can_read_all_group_messages === false` indicates it's on.
   try {
     const me = await bot.telegram.getMe();
-    lines.push({
-      status: me.can_read_all_group_messages ? 'ok' : 'fail',
-      label: t('doctor.privacy_off'),
-      hint: t('doctor.privacy_hint'),
-    });
+    const privacyLine = getPrivacyDoctorLine({ isBotAdmin, canReadAllGroupMessages: me.can_read_all_group_messages }, t);
+    if (privacyLine) lines.push(privacyLine);
   } catch { /* skip silently — covered by admin check above */ }
 
   // 3. WORK_ROOT.
@@ -11311,9 +11311,10 @@ bot.on('edited_message', async (ctx) => {
 
 /**
  * @description Detect when *this* bot is added to the configured group and
- * post a setup checklist into General. Without this, a fresh deployment is
+ * post the greeting into General (`formatGroupWelcome`: what the bot is, the
+ * version that runs, the setup steps). Without this, a fresh deployment is
  * silent: the user adds the bot, sees nothing, and has to dig through the
- * README to find out what permissions / privacy flags they need to flip.
+ * README to find out what rights the bot needs.
  *
  * Filters:
  *   - chat must be the allowlisted group (we don't react in foreign chats),
@@ -11337,7 +11338,7 @@ bot.on('my_chat_member', async (ctx) => {
   const generalKey: SessionKey = makeTelegramKey(chat.id, GENERAL_THREAD_ID);
   await replyToThread(
     generalKey,
-    t('onboarding.welcome', { workRoot: ENV.workRoot }),
+    formatGroupWelcome(t, { runningVersion: updateEngine?.getStatus().running.version, workRoot: ENV.workRoot }),
     { parse_mode: 'Markdown' },
   );
 });

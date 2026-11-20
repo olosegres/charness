@@ -138,14 +138,13 @@ export const uzDict: Record<string, string> = {
     'Bot huquqlarini o‘qib bo‘lmadi — getChatMember muvaffaqiyatsiz',
 
   'onboarding.welcome':
-    '👋 *Charness 2.0*\n\n' +
-    'Tayyorgarlik ro‘yxati:\n' +
-    '1️⃣ Meni guruh admini qiling, huquqlar:\n' +
-    '   • Manage Topics, Delete Messages, Pin Messages\n' +
-    '2️⃣ @BotFather → /setprivacy → Disable, so‘ng meni o‘chiring va qayta qo‘shing\n' +
-    '3️⃣ Nimadir yetishmasligini ko‘rish uchun /doctor ni ishga tushiring\n' +
-    '4️⃣ Har bir mavzu mavzusida /bind <subdir> ni ishga tushiring va agentni boshlang\n\n' +
-    '`WORK_ROOT`: `{workRoot}`',
+    '👋 *{title}*\n\n' +
+    'Men Claude Code va OpenCode agentlarini ushbu guruhning mavzularida ishga tushiraman: bitta mavzu = bitta loyiha papkasi = bitta agent.\n\n' +
+    'Ishni boshlash uchun 3 qadam:\n' +
+    '1️⃣ Meni guruh admini qiling va Manage Topics, Delete Messages hamda Pin Messages huquqlarini bering\n' +
+    '2️⃣ Yana nima yetishmasligini ko‘rish uchun /doctor ni ishga tushiring\n' +
+    '3️⃣ Mavzu yarating: nomi loyiha papkasiga mos kelsa, men uni o‘zim bog‘layman, aks holda ro‘yxatimdan papkani tanlang (yoki /bind <subdir>). Keyin agentni ishga tushiring: /claude yoki /opencode\n\n' +
+    'Loyiha papkalari: `{workRoot}`',
 
   'binding.welcome.header': '📁 `{subdir}` ga bog‘landi',
   'binding.welcome.claude_md': '• CLAUDE.md: {size}',

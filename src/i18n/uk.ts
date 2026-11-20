@@ -144,14 +144,13 @@ export const ukDict: Record<string, string> = {
     'не можу прочитати права бота — getChatMember failed',
 
   'onboarding.welcome':
-    '👋 *Charness 2.0*\n\n' +
-    'Чеклист готовності до роботи:\n' +
-    '1️⃣ Зроби мене адміністратором групи з правами:\n' +
-    '   • Manage Topics, Delete Messages, Pin Messages\n' +
-    '2️⃣ @BotFather → /setprivacy → Disable, потім видали й додай мене знову\n' +
-    '3️⃣ Запусти /doctor, щоб побачити, чого ще бракує\n' +
-    '4️⃣ У кожному тематичному треді виконай /bind <subdir> і запусти агента\n\n' +
-    '`WORK_ROOT`: `{workRoot}`',
+    '👋 *{title}*\n\n' +
+    'Я запускаю агентів Claude Code і OpenCode у тредах цієї групи: один тред = одна папка проєкту = один агент.\n\n' +
+    'Щоб почати роботу, три кроки:\n' +
+    '1️⃣ Зроби мене адміністратором групи з правами Manage Topics, Delete Messages і Pin Messages\n' +
+    '2️⃣ Запусти /doctor, щоб побачити, чого ще бракує\n' +
+    '3️⃣ Створи тред: якщо його назва збігається з папкою проєкту, я прив’яжу її сам, інакше обери папку з мого списку (або /bind <subdir>). Потім запусти агента: /claude або /opencode\n\n' +
+    'Папки проєктів: `{workRoot}`',
 
   'binding.welcome.header': '📁 Прив\'язано до `{subdir}`',
   'binding.welcome.claude_md': '• CLAUDE.md: {size}',

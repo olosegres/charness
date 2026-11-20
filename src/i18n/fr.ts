@@ -138,14 +138,13 @@ export const frDict: Record<string, string> = {
     'impossible de lire les droits du bot — getChatMember échoué',
 
   'onboarding.welcome':
-    '👋 *Charness 2.0*\n\n' +
-    'Checklist de mise en service :\n' +
-    '1️⃣ Faites de moi un admin de groupe avec les droits :\n' +
-    '   • Manage Topics, Delete Messages, Pin Messages\n' +
-    '2️⃣ @BotFather → /setprivacy → Disable, puis retirez et ré-ajoutez-moi\n' +
-    '3️⃣ Lancez /doctor pour voir ce qui manque\n' +
-    '4️⃣ Dans chaque fil thématique, lancez /bind <subdir> et démarrez un agent\n\n' +
-    '`WORK_ROOT` : `{workRoot}`',
+    '👋 *{title}*\n\n' +
+    'Je lance des agents Claude Code et OpenCode dans les fils de ce groupe : un fil = un dossier de projet = un agent.\n\n' +
+    'Prêt à travailler en 3 étapes :\n' +
+    '1️⃣ Faites de moi un admin du groupe avec les droits Manage Topics, Delete Messages et Pin Messages\n' +
+    '2️⃣ Lancez /doctor pour voir ce qui manque encore\n' +
+    '3️⃣ Créez un fil : si son nom correspond à un dossier de projet, je le lie moi-même, sinon choisissez un dossier dans ma liste (ou /bind <subdir>). Puis démarrez un agent : /claude ou /opencode\n\n' +
+    'Dossiers de projets : `{workRoot}`',
 
   'binding.welcome.header': '📁 Lié à `{subdir}`',
   'binding.welcome.claude_md': '• CLAUDE.md : {size}',

@@ -142,14 +142,13 @@ export const enDict: Record<string, string> = {
     'cannot read bot rights — getChatMember failed',
 
   'onboarding.welcome':
-    '👋 *Charness 2.0*\n\n' +
-    'Ready-to-work checklist:\n' +
-    '1️⃣ Make me a group admin with rights:\n' +
-    '   • Manage Topics, Delete Messages, Pin Messages\n' +
-    '2️⃣ @BotFather → /setprivacy → Disable, then remove and re-add me\n' +
-    '3️⃣ Run /doctor to see what is still missing\n' +
-    '4️⃣ In each topical thread run /bind <subdir> and start an agent\n\n' +
-    '`WORK_ROOT`: `{workRoot}`',
+    '👋 *{title}*\n\n' +
+    'I run Claude Code and OpenCode agents in this group\'s topics: one topic = one project folder = one agent.\n\n' +
+    'Ready to work in 3 steps:\n' +
+    '1️⃣ Make me a group admin with the rights Manage Topics, Delete Messages and Pin Messages\n' +
+    '2️⃣ Run /doctor to see what is still missing\n' +
+    '3️⃣ Create a topic: if its name matches a project folder I bind it, otherwise pick a folder from my list (or /bind <subdir>). Then start an agent: /claude or /opencode\n\n' +
+    'Project folders: `{workRoot}`',
 
   'binding.welcome.header': '📁 Bound to `{subdir}`',
   'binding.welcome.claude_md': '• CLAUDE.md: {size}',

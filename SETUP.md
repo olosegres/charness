@@ -431,8 +431,10 @@ The CLI is installed first — see [Install the CLI](#install-the-cli). After th
 
 1. Message [@BotFather](https://t.me/BotFather), send `/newbot`, follow prompts.
 2. Save the token (`123456789:ABCdef...`).
-3. **Disable privacy mode** — same chat: `/setprivacy` → pick this bot →
-   `Disable`. Without this the bot only sees `/commands`, not free-form text.
+3. **Leave privacy mode as it is** if you serve a group: a bot made a group admin
+   (step 2 below) receives every message whatever the privacy mode says
+   ([Telegram: privacy mode](https://core.telegram.org/bots/features#privacy-mode)). Only a bot
+   you do not make an admin needs `/setprivacy` → pick this bot → `Disable` to see free-form text, not just `/commands`.
 
 <p><img src="docs/images/01-botfather.png" width="360" alt="@BotFather: /newbot to get the token, then /setprivacy → this bot → Disable" /></p>
 
@@ -479,10 +481,10 @@ visible topic list, per-topic names/icons, quick agent switching — but it is
    - `Delete Messages` (for `/clear_messages`)
    - `Pin Messages` (per-thread status banner + question alerts; `/doctor`
      warns if missing, but the bot still runs without it)
-4. **Remove the bot from the group and add it again.** Telegram caches the
-   privacy-mode flag on join; without re-adding, the bot keeps private-mode and
-   ignores free-form messages (see
-   [Troubleshooting → Bot doesn't see text](docs/troubleshooting.md#bot-doesnt-see-text-telegram)).
+
+Once the bot is in the group it greets General with these steps and the version it runs; `/doctor` shows what is still
+missing. If it does not see free-form text, see
+[Troubleshooting → Bot doesn't see text](docs/troubleshooting.md#bot-doesnt-see-text-telegram).
 
 <p>
   <img src="docs/images/02-enable-topics.png" width="360" alt="Group settings → Topics toggle enabled (Forum mode)" />

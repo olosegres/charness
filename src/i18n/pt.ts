@@ -138,14 +138,13 @@ export const ptDict: Record<string, string> = {
     'não é possível ler os direitos do bot — getChatMember falhou',
 
   'onboarding.welcome':
-    '👋 *Charness 2.0*\n\n' +
-    'Checklist de configuração:\n' +
-    '1️⃣ Torna-me admin do grupo com direitos:\n' +
-    '   • Manage Topics, Delete Messages, Pin Messages\n' +
-    '2️⃣ @BotFather → /setprivacy → Disable, depois remove e volta a adicionar-me\n' +
-    '3️⃣ Executa /doctor para ver o que falta\n' +
-    '4️⃣ Em cada tópico temático executa /bind <subdir> e inicia um agente\n\n' +
-    '`WORK_ROOT`: `{workRoot}`',
+    '👋 *{title}*\n\n' +
+    'Executo agentes Claude Code e OpenCode nos tópicos deste grupo: um tópico = uma pasta de projeto = um agente.\n\n' +
+    'Pronto para trabalhar em 3 passos:\n' +
+    '1️⃣ Torna-me admin do grupo com os direitos Manage Topics, Delete Messages e Pin Messages\n' +
+    '2️⃣ Executa /doctor para ver o que ainda falta\n' +
+    '3️⃣ Cria um tópico: se o nome corresponder a uma pasta de projeto, eu ligo-o sozinho; senão escolhe uma pasta da minha lista (ou /bind <subdir>). Depois inicia um agente: /claude ou /opencode\n\n' +
+    'Pastas de projetos: `{workRoot}`',
 
   'binding.welcome.header': '📁 Vinculado a `{subdir}`',
   'binding.welcome.claude_md': '• CLAUDE.md: {size}',

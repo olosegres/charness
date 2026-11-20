@@ -138,14 +138,13 @@ export const esDict: Record<string, string> = {
     'no se pueden leer los derechos del bot — getChatMember falló',
 
   'onboarding.welcome':
-    '👋 *Charness 2.0*\n\n' +
-    'Lista de comprobación:\n' +
-    '1️⃣ Hazme admin del grupo con derechos:\n' +
-    '   • Manage Topics, Delete Messages, Pin Messages\n' +
-    '2️⃣ @BotFather → /setprivacy → Disable, luego quítame y vuelve a añadirme\n' +
-    '3️⃣ Ejecuta /doctor para ver qué falta\n' +
-    '4️⃣ En cada hilo temático ejecuta /bind <subdir> e inicia un agente\n\n' +
-    '`WORK_ROOT`: `{workRoot}`',
+    '👋 *{title}*\n\n' +
+    'Ejecuto agentes de Claude Code y OpenCode en los hilos de este grupo: un hilo = una carpeta de proyecto = un agente.\n\n' +
+    'Listo para trabajar en 3 pasos:\n' +
+    '1️⃣ Hazme admin del grupo con los derechos Manage Topics, Delete Messages y Pin Messages\n' +
+    '2️⃣ Ejecuta /doctor para ver qué falta\n' +
+    '3️⃣ Crea un hilo: si su nombre coincide con una carpeta de proyecto, la vinculo yo; si no, elige una carpeta de mi lista (o /bind <subdir>). Luego inicia un agente: /claude u /opencode\n\n' +
+    'Carpetas de proyectos: `{workRoot}`',
 
   'binding.welcome.header': '📁 Vinculado a `{subdir}`',
   'binding.welcome.claude_md': '• CLAUDE.md: {size}',

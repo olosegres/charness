@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+**The greeting the bot posts in General when it is added to a group now names the version that really runs, says in one line what the bot is, and lists only the steps that still apply.**
+Before, it opened with a fixed «Charness 2.0», sent you to @BotFather to switch privacy mode off, told you to run `/bind` in every topic and named the `WORK_ROOT` variable. Now the title is the version this bot started as («👋 Charness 4.2.0»); one line says it runs Claude Code and OpenCode agents in the group's topics — one topic = one project folder = one agent; then three steps — make the bot an admin with Manage Topics, Delete Messages and Pin Messages, run `/doctor` to see what is still missing, and create a topic (a name that matches a project folder binds it by itself, any other name gets the folder list, or `/bind <subdir>`) and start an agent — and last «Project folders: <path>». The BotFather step is gone: Telegram sends a group admin every message whatever the privacy mode says, and the bot needs admin rights anyway. `/doctor` agrees with it: its privacy line is shown only for a bot that is not an admin (before, it failed an admin bot that had left the default mode on). Worded in all 12 languages; SETUP.md and Troubleshooting follow.
+
 **A topic whose agent finished now shows 🟢 at the end of its name in the topic list — the ✅ of 4.2.0 never appeared, because Telegram drops ✅ from topic names.**
 Before, a finished topic showed no mark at all: Telegram removed the ✅ the bot asked for and answered as if nothing had changed, and the bot believed the mark was there. Now «finished» is a green circle (`Deploy 🟢`), and when Telegram keeps a topic's name different from the one the bot asked for — it answers «not modified», or its «renamed» line carries another name — the bot no longer takes the asked name for what the topic shows, so the next mark is still written. `/topic` binds a new topic under the name Telegram stored.
 

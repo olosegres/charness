@@ -138,14 +138,13 @@ export const hiDict: Record<string, string> = {
     'Bot के अधिकार नहीं पढ़ सकते — getChatMember विफल',
 
   'onboarding.welcome':
-    '👋 *Charness 2.0*\n\n' +
-    'तैयारी चेकलिस्ट:\n' +
-    '1️⃣ मुझे ग्रुप एडमिन बनाएँ अधिकारों के साथ:\n' +
-    '   • Manage Topics, Delete Messages, Pin Messages\n' +
-    '2️⃣ @BotFather → /setprivacy → Disable, फिर मुझे हटाकर पुनः जोड़ें\n' +
-    '3️⃣ /doctor चलाएँ और देखें क्या कमी है\n' +
-    '4️⃣ प्रत्येक विषय-वस्तु थ्रेड में /bind <subdir> चलाएँ और एजेंट शुरू करें\n\n' +
-    '`WORK_ROOT`: `{workRoot}`',
+    '👋 *{title}*\n\n' +
+    'इस ग्रुप के थ्रेड्स में Claude Code और OpenCode एजेंट मुझसे चलते हैं: एक थ्रेड = एक प्रोजेक्ट फ़ोल्डर = एक एजेंट।\n\n' +
+    'तीन चरणों में काम के लिए तैयार:\n' +
+    '1️⃣ मुझे ग्रुप एडमिन बनाएँ और अधिकार दें: Manage Topics, Delete Messages, Pin Messages\n' +
+    '2️⃣ /doctor चलाएँ और देखें कि अभी क्या कमी है\n' +
+    '3️⃣ एक थ्रेड बनाएँ: यदि उसका नाम किसी प्रोजेक्ट फ़ोल्डर से मेल खाता है तो वह अपने आप उसी फ़ोल्डर से जुड़ जाता है, नहीं तो मेरी सूची से फ़ोल्डर चुनें (या /bind <subdir>)। फिर एजेंट शुरू करें: /claude या /opencode\n\n' +
+    'प्रोजेक्ट फ़ोल्डर: `{workRoot}`',
 
   'binding.welcome.header': '📁 `{subdir}` से बाउंड',
   'binding.welcome.claude_md': '• CLAUDE.md: {size}',
