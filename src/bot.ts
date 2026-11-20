@@ -501,12 +501,13 @@ import {
   planClaudeAccountAlert,
   renderClaudeAccountAlert,
   type ClaudeAccountAlert,
-  type ClaudeAccountAlertState,
 } from './utils/claudeAccountAlert';
 import type { OperatorAlertChannel } from './platform/operatorAlert';
 import {
-  checkIsClaudeAuthRefusalOver,
+  buildClaudeAuthRefusalMark,
+  checkIsClaudeProfileBackByStatusCheck,
   checkIsClaudeProfileKnownUnusable,
+  getClaudeAuthRefusalEnd,
   claudeAuthRefusalWords,
   describeClaudeProfileUsability,
   getClaudeProfileSignedIn,
@@ -8666,25 +8667,37 @@ function getClaudeConversationPickContext(key: SessionKey | null): { views: Clau
 }
 
 /**
- * @description End the CLI's refusal of the account `name` once it is signed in again (`checkIsClaudeAuthRefusalOver`: the stored
- * login changed, or a bare 401 / 403 was followed by a probe that found it signed in). Cheap — one small file read, only for a refused
- * account — so every launch on the account and every profile scan run it.
+ * @description End the CLI's refusal of the account `name` once it is over (`getClaudeAuthRefusalEnd`): a new login in its folder, or —
+ * a bare 401 / 403 not held until a new login — a probe after it that found the account signed in, which is kept as such (no sign-in
+ * happened: a repeat is held, and nobody is told «signed in again»). Cheap — one small file read, only for a refused account — so every
+ * launch on the account and every profile scan run it.
  */
 function settleClaudeAuthRefusal(name: string): void {
   const record = state.getClaudeProfileInfo(name);
   const refusal = record?.authRefusal;
   if (!record || !refusal) return;
   const loginStamp = readClaudeLoginStamp(resolveClaudeProfileDir(resolveDataDir(), name));
-  if (!checkIsClaudeAuthRefusalOver({ refusal, loginStamp, loggedIn: record.loggedIn, statusCheckedAt: record.statusCheckedAt })) return;
-  void state.setClaudeProfileAuthRefusal(name, null).catch((e) => console.warn(`[accounts] profile ${name}: ending its refusal failed:`, e instanceof Error ? e.message : e));
+  const end = getClaudeAuthRefusalEnd({ refusal, loginStamp, loggedIn: record.loggedIn, statusCheckedAt: record.statusCheckedAt });
+  if (end === null) return;
+  const ending = end === 'statusCheck'
+    ? state.endClaudeProfileAuthRefusalByStatusCheck(name, new Date().toISOString())
+    : state.setClaudeProfileAuthRefusal(name, null);
+  void ending.catch((e) => console.warn(`[accounts] profile ${name}: ending its refusal failed:`, e instanceof Error ? e.message : e));
   noteClaudeProfileUsability();
 }
 
-/** The CLI's refusal of the account `name` now, with the stamp of the login it refused (`readClaudeLoginStamp`) and the CLI's words. */
+/**
+ * The CLI's refusal of the account `name` now (`buildClaudeAuthRefusalMark`): the stamp of the login it refused, the CLI's words, and
+ * held until a new login when it repeats a bare 401 / 403 a status check ended lately.
+ */
 function buildClaudeAuthRefusal(name: string, reason: AgentAuthErrorReason, cliText: string | undefined): ClaudeAuthRefusal {
-  const login = readClaudeLoginStamp(resolveClaudeProfileDir(resolveDataDir(), name));
-  const detail = cliText === undefined ? '' : getClaudeAccountAlertDetail(cliText);
-  return { at: new Date().toISOString(), reason, ...(login !== null ? { login } : {}), ...(detail !== '' ? { detail } : {}) };
+  return buildClaudeAuthRefusalMark({
+    reason,
+    login: readClaudeLoginStamp(resolveClaudeProfileDir(resolveDataDir(), name)),
+    detail: cliText === undefined ? null : getClaudeAccountAlertDetail(cliText),
+    nowMs: Date.now(),
+    endedByStatusCheck: state.getClaudeProfileInfo(name)?.authRefusalEndedByStatusCheck,
+  });
 }
 
 /** The last state of each account the log said ({@link noteClaudeProfileUsability}); in memory — a restart says the unusable ones again. */
@@ -8697,17 +8710,24 @@ const loggedClaudeProfileUsability = new Map<string, ClaudeProfileUsability>();
  */
 function noteClaudeProfileUsability(): void {
   const current = new Map<string, ClaudeProfileUsability>();
-  for (const view of getClaudeProfileUsageViews()) current.set(view.name, getClaudeProfileUsability(state.getClaudeProfileInfo(view.name)));
+  const backByStatusCheck = new Set<string>();
+  const nowMs = Date.now();
+  for (const view of getClaudeProfileUsageViews()) {
+    const record = state.getClaudeProfileInfo(view.name);
+    current.set(view.name, getClaudeProfileUsability(record));
+    if (checkIsClaudeProfileBackByStatusCheck(record, nowMs)) backByStatusCheck.add(view.name);
+  }
   const lines = listClaudeProfileUsabilityLines({
     previous: loggedClaudeProfileUsability,
     current,
     getInstead: (name) => pickClaudeProfileInstead({ ...getClaudeConversationPickContext(null), currentProfile: name }),
+    backByStatusCheck,
   });
   for (const line of lines) console.log(line);
   loggedClaudeProfileUsability.clear();
   for (const [name, usability] of current) loggedClaudeProfileUsability.set(name, usability);
   if (!isOperatorAlertOpen) return;
-  tellOperatorAboutClaudeAccounts(current);
+  tellOperatorAboutClaudeAccounts(current, backByStatusCheck);
   void resumeConversationsWaitingForAccount();
 }
 
@@ -8731,7 +8751,7 @@ function openOperatorAlerts(): void {
  * (`utils/claudeAccountAlert.ts`): the record of what was told is kept in the same tick, so two rounds close together never tell it
  * twice, and a round that changes nothing writes nothing.
  */
-function tellOperatorAboutClaudeAccounts(current: ReadonlyMap<string, ClaudeProfileUsability>): void {
+function tellOperatorAboutClaudeAccounts(current: ReadonlyMap<string, ClaudeProfileUsability>, backByStatusCheck: ReadonlySet<string>): void {
   const details = new Map<string, string>();
   for (const name of current.keys()) {
     const detail = state.getClaudeProfileInfo(name)?.authRefusal?.detail;
@@ -8744,10 +8764,26 @@ function tellOperatorAboutClaudeAccounts(current: ReadonlyMap<string, ClaudeProf
     details,
     defaultProfile: state.getClaudeProfileGlobalDefault(),
     instead: pickClaudeProfileInstead({ ...getClaudeConversationPickContext(null), currentProfile: null }),
+    backByStatusCheck,
   });
   if (alert === null && JSON.stringify(previous) === JSON.stringify(next)) return;
   void state.setClaudeAccountAlertState(next).catch((e) => console.warn('[accounts] keeping what the operator was told failed:', e instanceof Error ? e.message : e));
   if (alert !== null) void deliverClaudeAccountAlert(alert);
+  // An account back by a status check alone leaves quietly: with no told account left, the pin goes all the same.
+  else void releaseClaudeAccountAlertPin();
+}
+
+/**
+ * @description Unpin the account alert in General once no told account is left unusable; nothing while one is, or when none is
+ * pinned. Changes only the pin of the record as it is now.
+ */
+async function releaseClaudeAccountAlertPin(): Promise<void> {
+  const current = state.getClaudeAccountAlertState();
+  const pinnedMessageId = current?.pinnedMessageId;
+  if (!current || current.alerted.length > 0 || pinnedMessageId === undefined) return;
+  await state.setClaudeAccountAlertPinnedMessageId(null);
+  const generalKey = ENV.isTelegramServed ? getOperatorGeneralKey() : null;
+  if (generalKey !== null) void unpinMessageQuiet(generalKey, pinnedMessageId);
 }
 
 /**
@@ -8792,20 +8828,15 @@ async function postClaudeAccountAlertToGeneral(alert: ClaudeAccountAlert): Promi
   }
   const text = withThreadLocale(generalKey, () => renderClaudeAccountAlert(alert, (name) => `/accounts login ${name}`));
   const messageId = await replyToThread(generalKey, text);
-  const alertState = state.getClaudeAccountAlertState();
-  if (!alertState) return;
-  const previousPinnedId = alertState.pinnedMessageId;
-  let nextPinnedId: number | undefined = previousPinnedId;
-  if (alert.lost.length > 0 && messageId !== null) {
-    await pinMessageQuiet(generalKey, messageId, { disableNotification: false });
-    nextPinnedId = messageId;
-  } else if (alertState.alerted.length === 0) {
-    nextPinnedId = undefined;
+  if (alert.lost.length === 0 || messageId === null) {
+    await releaseClaudeAccountAlertPin();
+    return;
   }
-  if (nextPinnedId === previousPinnedId) return;
-  if (previousPinnedId !== undefined) void unpinMessageQuiet(generalKey, previousPinnedId);
-  const updated: ClaudeAccountAlertState = { known: alertState.known, alerted: alertState.alerted, ...(nextPinnedId === undefined ? {} : { pinnedMessageId: nextPinnedId }) };
-  await state.setClaudeAccountAlertState(updated);
+  await pinMessageQuiet(generalKey, messageId, { disableNotification: false });
+  // Read AFTER the waits, and only the pin is written: a round in between may have told another account, and that must stay told.
+  const previousPinnedId = state.getClaudeAccountAlertState()?.pinnedMessageId;
+  await state.setClaudeAccountAlertPinnedMessageId(messageId);
+  if (previousPinnedId !== undefined && previousPinnedId !== messageId) void unpinMessageQuiet(generalKey, previousPinnedId);
 }
 
 /** A resume of the conversations waiting for an account runs one at a time. */
@@ -9888,6 +9919,7 @@ const {
   startClaudeProfileLogin: (key, profile) => startClaudeAuthLogin(key, profile),
   applyClaudeProfile: applyClaudePickToThread,
   applyClaudeProfileEverywhere,
+  noteClaudeAccountsChanged: () => noteClaudeProfileUsability(),
   switchTopicByOperator,
   detectOpenCodeProviders: async () => listOpenCodeProviders((await getAdapter(openCodeAdapterName).getAvailableModels?.()) ?? []),
   listOpenCodeModels: async () => (await getAdapter(openCodeAdapterName).getAvailableModels?.()) ?? [],

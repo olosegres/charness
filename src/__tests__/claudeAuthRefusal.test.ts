@@ -7,7 +7,8 @@
  *     API-credit one of it first, then the soonest weekly reset); with no other usable account it stays;
  *   • the move after a refused turn: the account is marked, the pick reads the mark at once, a replayed error marks nothing;
  *   • the mark: counted as signed out by every view, and over only when the account is signed in again (the stored login
- *     changed) — or, for a bare 401 / 403, when a probe after it finds the account signed in;
+ *     changed) — or, for a bare 401 / 403, when a probe after it finds the account signed in; but the same login refused that way
+ *     again soon after is held until a new login, and a return by a status check alone is no «signed in again»;
  *   • the log: one line per change of an account's state.
  *
  * Test case: N/A — Charness has no Jira tracker.
@@ -21,8 +22,11 @@ import * as path from 'path';
 
 import type { ClaudeProfileRecord } from '../state';
 import {
-  checkIsClaudeAuthRefusalOver,
+  buildClaudeAuthRefusalMark,
+  checkIsClaudeProfileBackByStatusCheck,
   checkIsClaudeProfileKnownUnusable,
+  claudeRejectedRepeatWindowMs,
+  getClaudeAuthRefusalEnd,
   getClaudeProfileSignedIn,
   getClaudeProfileUsability,
   listClaudeProfileUsabilityLines,
@@ -168,17 +172,67 @@ describe('the mark', () => {
 
   it('is over once the account holds another login — a sign-in — whatever the probe says', () => {
     const probedAfter = { loggedIn: true, statusCheckedAt: '2026-11-20T08:30:00.000Z' };
-    assert.equal(checkIsClaudeAuthRefusalOver({ refusal: refusal('signedOut', 'aaaa'), loginStamp: 'bbbb', loggedIn: false, statusCheckedAt: undefined }), true);
-    assert.equal(checkIsClaudeAuthRefusalOver({ refusal: refusal('signedOut'), loginStamp: 'bbbb', loggedIn: undefined, statusCheckedAt: undefined }), true, 'a folder that held no login now holds one');
-    assert.equal(checkIsClaudeAuthRefusalOver({ refusal: refusal('signedOut', 'aaaa'), loginStamp: 'aaaa', ...probedAfter }), false, 'the same login, however signed in the probe finds it');
-    assert.equal(checkIsClaudeAuthRefusalOver({ refusal: refusal('orgDisabled', 'aaaa'), loginStamp: 'aaaa', ...probedAfter }), false, 'the organization\'s switch is no sign-out the probe would see');
-    assert.equal(checkIsClaudeAuthRefusalOver({ refusal: refusal('signedOut', 'aaaa'), loginStamp: null, ...probedAfter }), false, 'no login at all is not a sign-in');
+    assert.equal(getClaudeAuthRefusalEnd({ refusal: refusal('signedOut', 'aaaa'), loginStamp: 'bbbb', loggedIn: false, statusCheckedAt: undefined }), 'newLogin');
+    assert.equal(getClaudeAuthRefusalEnd({ refusal: refusal('signedOut'), loginStamp: 'bbbb', loggedIn: undefined, statusCheckedAt: undefined }), 'newLogin', 'a folder that held no login now holds one');
+    assert.equal(getClaudeAuthRefusalEnd({ refusal: refusal('signedOut', 'aaaa'), loginStamp: 'aaaa', ...probedAfter }), null, 'the same login, however signed in the probe finds it');
+    assert.equal(getClaudeAuthRefusalEnd({ refusal: refusal('orgDisabled', 'aaaa'), loginStamp: 'aaaa', ...probedAfter }), null, 'the organization\'s switch is no sign-out the probe would see');
+    assert.equal(getClaudeAuthRefusalEnd({ refusal: refusal('signedOut', 'aaaa'), loginStamp: null, ...probedAfter }), null, 'no login at all is not a sign-in');
   });
 
   it('a bare 401 / 403 also ends with a probe after it that finds the account signed in — not with one before it', () => {
-    assert.equal(checkIsClaudeAuthRefusalOver({ refusal: refusal('rejected', 'aaaa'), loginStamp: 'aaaa', loggedIn: true, statusCheckedAt: '2026-11-20T08:30:00.000Z' }), true);
-    assert.equal(checkIsClaudeAuthRefusalOver({ refusal: refusal('rejected', 'aaaa'), loginStamp: 'aaaa', loggedIn: true, statusCheckedAt: '2026-11-20T07:30:00.000Z' }), false);
-    assert.equal(checkIsClaudeAuthRefusalOver({ refusal: refusal('rejected', 'aaaa'), loginStamp: 'aaaa', loggedIn: false, statusCheckedAt: '2026-11-20T08:30:00.000Z' }), false);
+    assert.equal(getClaudeAuthRefusalEnd({ refusal: refusal('rejected', 'aaaa'), loginStamp: 'aaaa', loggedIn: true, statusCheckedAt: '2026-11-20T08:30:00.000Z' }), 'statusCheck');
+    assert.equal(getClaudeAuthRefusalEnd({ refusal: refusal('rejected', 'aaaa'), loginStamp: 'aaaa', loggedIn: true, statusCheckedAt: '2026-11-20T07:30:00.000Z' }), null);
+    assert.equal(getClaudeAuthRefusalEnd({ refusal: refusal('rejected', 'aaaa'), loginStamp: 'aaaa', loggedIn: false, statusCheckedAt: '2026-11-20T08:30:00.000Z' }), null);
+  });
+});
+
+describe('a bare 401 / 403 that keeps coming: no swing between «refused» and «usable» every hour', () => {
+  const hourMs = 60 * 60_000;
+  const firstAtMs = Date.parse('2026-11-20T08:00:00.000Z');
+  const forbidden = 'API Error: 403 {"type":"error","error":{"type":"permission_error"}}';
+  const mark = (input: { nowMs: number; login?: string | null; reason?: ClaudeAuthRefusal['reason']; endedAt?: string; endedLogin?: string }): ClaudeAuthRefusal => buildClaudeAuthRefusalMark({
+    reason: input.reason ?? 'rejected',
+    login: input.login === undefined ? 'aaaa' : input.login,
+    detail: forbidden,
+    nowMs: input.nowMs,
+    endedByStatusCheck: input.endedAt === undefined ? undefined : { at: input.endedAt, ...(input.endedLogin !== undefined ? { login: input.endedLogin } : {}) },
+  });
+
+  it('the first refusal may end by a status check; the same login refused again within the window is held until a new login', () => {
+    const first = mark({ nowMs: firstAtMs });
+    assert.deepEqual(first, { at: '2026-11-20T08:00:00.000Z', reason: 'rejected', login: 'aaaa', detail: forbidden });
+    // The hourly probe finds it «signed in»: the refusal ends, by a status check.
+    const endedAt = new Date(firstAtMs + hourMs).toISOString();
+    assert.equal(getClaudeAuthRefusalEnd({ refusal: first, loginStamp: 'aaaa', loggedIn: true, statusCheckedAt: endedAt }), 'statusCheck');
+    // The next conversation on it is refused again: held.
+    const second = mark({ nowMs: firstAtMs + 2 * hourMs, endedAt, endedLogin: 'aaaa' });
+    assert.equal(second.isHeldUntilNewLogin, true);
+    // Every later probe finds it «signed in» again — and changes nothing.
+    for (let hour = 3; hour <= 24; hour += 1) {
+      assert.equal(getClaudeAuthRefusalEnd({ refusal: second, loginStamp: 'aaaa', loggedIn: true, statusCheckedAt: new Date(firstAtMs + hour * hourMs).toISOString() }), null, `hour ${hour}`);
+    }
+    assert.equal(getClaudeAuthRefusalEnd({ refusal: second, loginStamp: 'bbbb', loggedIn: true, statusCheckedAt: endedAt }), 'newLogin', 'a sign-in ends it');
+  });
+
+  it('not held: another login, a repeat past the window, a refusal the CLI named, or no earlier end at all', () => {
+    const endedAt = new Date(firstAtMs).toISOString();
+    assert.equal(mark({ nowMs: firstAtMs + hourMs, endedAt, endedLogin: 'aaaa', login: 'bbbb' }).isHeldUntilNewLogin, undefined, 'another login');
+    assert.equal(mark({ nowMs: firstAtMs + claudeRejectedRepeatWindowMs, endedAt, endedLogin: 'aaaa' }).isHeldUntilNewLogin, undefined, 'past the window');
+    assert.equal(mark({ nowMs: firstAtMs + hourMs, endedAt, endedLogin: 'aaaa', reason: 'signedOut' }).isHeldUntilNewLogin, undefined, 'a named refusal never ends by a probe anyway');
+    assert.equal(mark({ nowMs: firstAtMs + hourMs }).isHeldUntilNewLogin, undefined);
+    assert.equal(mark({ nowMs: firstAtMs + hourMs, endedAt, login: null }).isHeldUntilNewLogin, true, 'no login stamp either time is the same login');
+  });
+
+  it('an account back by a status check alone is said so in the log — only within the window, and never while a refusal stands', () => {
+    const ended = { at: new Date(firstAtMs).toISOString(), login: 'aaaa' };
+    assert.equal(checkIsClaudeProfileBackByStatusCheck({ authRefusalEndedByStatusCheck: ended }, firstAtMs + hourMs), true);
+    assert.equal(checkIsClaudeProfileBackByStatusCheck({ authRefusalEndedByStatusCheck: ended }, firstAtMs + claudeRejectedRepeatWindowMs), false);
+    assert.equal(checkIsClaudeProfileBackByStatusCheck({ authRefusalEndedByStatusCheck: ended, authRefusal: refusal('rejected', 'aaaa') }, firstAtMs + hourMs), false);
+    assert.equal(checkIsClaudeProfileBackByStatusCheck({}, firstAtMs), false);
+    assert.deepEqual(
+      listClaudeProfileUsabilityLines({ previous: new Map([['work', 'rejected']]), current: new Map([['work', 'usable']]), getInstead: () => null, backByStatusCheck: new Set(['work']) }),
+      ['[accounts] profile work: usable again — a status check found it signed in after the API refused it (401/403); the same refusal again holds it until a new sign-in'],
+    );
   });
 });
 

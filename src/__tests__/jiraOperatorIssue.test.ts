@@ -6,7 +6,8 @@
  *   • the boot reads the issue: one the AI account cannot see refuses the start, naming the key's field;
  *   • an alert is a comment there by the AI account — one that asks to act opens with a mention of the operator accounts, a recovery
  *     line mentions nobody; a failed post is a result, never a throw, and is not retried;
- *   • the poller's search never returns the issue: a hand-over, a comment or a mention on it opens no request.
+ *   • the poller never sees the issue — not in the search, not by its key (a 404, as for an issue out of reach): a hand-over, a
+ *     comment or a mention on it opens no request, and what the poller kept for it from before is dropped.
  *
  * Test case: N/A — Charness has no Jira tracker.
  */
@@ -24,7 +25,7 @@ import { getJiraConfigPath } from '../connectors/jira/configFile';
 import { JiraConnectorStartError, jiraOperatorIssueUnseenError, prepareJiraConnector, type JiraConnector } from '../connectors/jira/connector';
 import { createJiraOperatorChannel, hideJiraOperatorIssue } from '../connectors/jira/operatorIssue';
 import { getAdfText, getMentionedAccountIds, type AdfDocument } from '../connectors/jira/adf';
-import type { JiraClient, JiraIssue } from '../connectors/jira/client';
+import { JiraHttpError, type JiraClient, type JiraIssue } from '../connectors/jira/client';
 import { createUnlimitedSlots } from './taskAgentSlotsTestKit';
 
 const isolatedOpenCodeUrl = 'http://127.0.0.1:4196';
@@ -122,20 +123,26 @@ describe('the operator channel', () => {
 describe('hideJiraOperatorIssue', () => {
   const issueOf = (key: string): JiraIssue => ({ id: key, key, fields: {} }) as unknown as JiraIssue;
 
-  it('the search leaves the operator issue out of every page; every other call is the client\'s own', async () => {
+  it('the search leaves the operator issue out of every page; a read of it by its key is a 404 that never reaches Jira; every other call is the client\'s own', async () => {
+    const reads: string[] = [];
     const client = {
       searchIssues: async () => ({ issues: [issueOf('PROJ-1'), issueOf('OPS-12'), issueOf('PROJ-2')], isLast: true, nextPageToken: null }),
-      getIssue: async (issueKey: string) => issueOf(`${issueKey}-read`),
+      getIssue: async (issueKey: string) => {
+        reads.push(issueKey);
+        return issueOf(`${issueKey}-read`);
+      },
     } as unknown as Pick<JiraClient, 'searchIssues' | 'getIssue'>;
     const hidden = hideJiraOperatorIssue(client, 'OPS-12');
     const page = await hidden.searchIssues({ jql: 'x', fields: [], isChangelogExpanded: true, maxResults: 50 });
     assert.deepEqual(page.issues.map((issue) => issue.key), ['PROJ-1', 'PROJ-2']);
     assert.equal(page.isLast, true);
     assert.equal((await hidden.getIssue('PROJ-1', [])).key, 'PROJ-1-read');
+    await assert.rejects(hidden.getIssue('OPS-12', []), (error: unknown) => error instanceof JiraHttpError && error.status === 404);
+    assert.deepEqual(reads, ['PROJ-1'], 'the operator issue is never read for the poller');
   });
 
   it('without an operator issue the client is handed on as it is', () => {
-    const client = { searchIssues: async () => ({ issues: [], isLast: true }) } as unknown as Pick<JiraClient, 'searchIssues'>;
+    const client = { searchIssues: async () => ({ issues: [], isLast: true }), getIssue: async () => issueOf('X-1') } as unknown as Pick<JiraClient, 'searchIssues' | 'getIssue'>;
     assert.equal(hideJiraOperatorIssue(client, null), client);
   });
 });

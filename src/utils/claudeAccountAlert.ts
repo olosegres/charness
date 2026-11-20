@@ -9,7 +9,9 @@
  *
  * What was told is kept in `state.json` (`claudeAccountAlerts`), so a restart — hot mode restarts on every code change — never
  * tells it again. An account seen for the first time is told only when it matters: refused on a turn, or the account new
- * conversations start on (General's pick, else `default`); a folder adopted before its sign-in finished is not.
+ * conversations start on (General's pick, else `default`); a folder adopted before its sign-in finished is not. An account usable
+ * again only because a status check ended its bare 401 / 403 refusal had no sign-in: it leaves the told accounts quietly, with no
+ * «signed in again» (a repeat of that refusal is held until a new login, `utils/claudeAuthRefusal.ts`).
  *
  * Pure: the bot passes the states, the details and the account new conversations go to; the texts come from the active
  * locale (`accounts.alert.*`, `accounts.refusal.*`).
@@ -48,7 +50,8 @@ export interface ClaudeAccountAlert {
  * @description The alert of this round (`null` = nothing to tell) and the state to keep. `current` is every account's state now,
  * `details` the CLI's words of a refusal by account, `defaultProfile` the account new conversations start on, `instead` where they
  * go now. A lost account: usable before and not now — or, seen for the first time, refused on a turn or `defaultProfile`. An account
- * that is not usable stays told until it is usable again; a change from one unusable state to another tells nothing new.
+ * that is not usable stays told until it is usable again; a change from one unusable state to another tells nothing new. A told
+ * account usable again gets its line — unless it is in `backByStatusCheck` (no sign-in happened): then it only leaves the told ones.
  */
 export function planClaudeAccountAlert(input: {
   previous: ClaudeAccountAlertState | undefined;
@@ -56,6 +59,7 @@ export function planClaudeAccountAlert(input: {
   details: ReadonlyMap<string, string>;
   defaultProfile: string;
   instead: string | null;
+  backByStatusCheck?: ReadonlySet<string>;
 }): { alert: ClaudeAccountAlert | null; next: ClaudeAccountAlertState } {
   const previousKnown = input.previous?.known ?? {};
   const alerted = new Set((input.previous?.alerted ?? []).filter((name) => input.current.has(name)));
@@ -64,7 +68,7 @@ export function planClaudeAccountAlert(input: {
   for (const [name, usability] of input.current) {
     const before = Object.hasOwn(previousKnown, name) ? previousKnown[name] : undefined;
     if (usability === 'usable') {
-      if (alerted.delete(name)) back.push(name);
+      if (alerted.delete(name) && input.backByStatusCheck?.has(name) !== true) back.push(name);
       continue;
     }
     if (alerted.has(name)) continue;

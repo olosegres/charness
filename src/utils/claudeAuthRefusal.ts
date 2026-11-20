@@ -6,9 +6,12 @@
  *   - A refusal is kept on the profile's record (`ClaudeProfileRecord.authRefusal`) with a STAMP of the login that was refused
  *     ({@link readClaudeLoginStamp}: a hash of the stored OAuth refresh token and API key, never the secret itself). It counts as
  *     «not signed in» everywhere the profiles are ranked ({@link getClaudeProfileSignedIn}), so the launch pick, the fallback chain
- *     and every screen leave the account out, until it is signed in again ({@link checkIsClaudeAuthRefusalOver}): a new login
+ *     and every screen leave the account out, until it is signed in again ({@link getClaudeAuthRefusalEnd}): a new login
  *     (the stamp changed). A `rejected` refusal — a bare 401 / 403 the CLI named no reason for — also ends once a status probe
- *     after it finds the account signed in: it may have been the API's moment, not the login.
+ *     after it finds the account signed in: it may have been the API's moment, not the login. Only once, though: the same login
+ *     refused that way again within {@link claudeRejectedRepeatWindowMs} of such an end is held until a new login
+ *     (`isHeldUntilNewLogin`), since the CLI reports a revoked login signed in all the same — an account must not swing between
+ *     «refused» and «usable» every hour. An end by a status check alone is no sign-in, so nobody is told «signed in again».
  *   - A conversation never starts or resumes on such an account: it goes where `claude_profiles` would send a session leaving
  *     it (`pickClaudeProfileInstead`, `utils/claudeProfileUsageViews.ts`: the accounts the `/limits` list holds, an API-credit
  *     account of it first, then the subscription whose weekly window resets soonest).
@@ -35,6 +38,47 @@ export interface ClaudeAuthRefusal {
   login?: string;
   /** The CLI's own words of the refusal, one line (`Not logged in · Please run /login`); absent when none were read. */
   detail?: string;
+  /** Only a new login ends it — a status check that finds the account signed in does not (see {@link buildClaudeAuthRefusalMark}). */
+  isHeldUntilNewLogin?: boolean;
+}
+
+/** A bare 401 / 403 refusal a status check ended (`ClaudeProfileRecord.authRefusalEndedByStatusCheck`): when, and the login it was of. */
+export interface ClaudeAuthRefusalStatusCheckEnd {
+  at: string;
+  login?: string;
+}
+
+/**
+ * How long after a status check ended a bare 401 / 403 refusal a new one of the SAME login is held until a new sign-in, and the
+ * account's return by that check stays a quiet one: longer than the hour after which a signed-in account is probed again, so a
+ * refusal that keeps coming is caught on its first repeat.
+ */
+export const claudeRejectedRepeatWindowMs = 6 * 60 * 60_000;
+
+/**
+ * @description The refusal to record for a turn the CLI refused now: `login` is {@link readClaudeLoginStamp} of the folder, `detail`
+ * the CLI's words (`null` = none). A bare 401 / 403 (`rejected`) of the same login a status check already ended once within
+ * {@link claudeRejectedRepeatWindowMs} is held until a new login: the probe that ended it found the login «signed in» and would
+ * again, every hour.
+ */
+export function buildClaudeAuthRefusalMark(input: {
+  reason: AgentAuthErrorReason;
+  login: string | null;
+  detail: string | null;
+  nowMs: number;
+  endedByStatusCheck: ClaudeAuthRefusalStatusCheckEnd | undefined;
+}): ClaudeAuthRefusal {
+  const { endedByStatusCheck } = input;
+  const isRepeat = input.reason === 'rejected' && endedByStatusCheck !== undefined
+    && (endedByStatusCheck.login ?? null) === input.login
+    && input.nowMs - Date.parse(endedByStatusCheck.at) < claudeRejectedRepeatWindowMs;
+  return {
+    at: new Date(input.nowMs).toISOString(),
+    reason: input.reason,
+    ...(input.login !== null ? { login: input.login } : {}),
+    ...(input.detail !== null && input.detail !== '' ? { detail: input.detail } : {}),
+    ...(isRepeat ? { isHeldUntilNewLogin: true } : {}),
+  };
 }
 
 /** Hex digits of a login stamp: enough to tell two logins apart, nothing to recover a secret from. */
@@ -70,23 +114,42 @@ function readOAuthLoginSecret(file: string): string | null {
   return typeof oauth.accessToken === 'string' && oauth.accessToken !== '' ? oauth.accessToken : null;
 }
 
+/** How a refusal ended: a new login in the folder (a sign-in), or a status check alone (a bare 401 / 403 that may have been the API's moment). */
+export type ClaudeAuthRefusalEnd = 'newLogin' | 'statusCheck';
+
 /**
- * @description Whether the refusal is over: the folder holds a login other than the refused one (a sign-in since — `loginStamp` is
- * {@link readClaudeLoginStamp} now), or, for a `rejected` one (a bare 401 / 403), a status probe after it found the account
- * signed in. A refusal the CLI named (`signedOut`, `orgDisabled`) outlives such a probe: the CLI reports a revoked login and an
- * organization's switch as signed in all the same, and believing it would send the next conversation into the same refusal.
+ * @description Whether the refusal is over, and how: `newLogin` — the folder holds a login other than the refused one (a sign-in
+ * since; `loginStamp` is {@link readClaudeLoginStamp} now); `statusCheck` — a `rejected` one (a bare 401 / 403) not held until a new
+ * login, and a status probe after it found the account signed in; `null` — it stands. A refusal the CLI named (`signedOut`,
+ * `orgDisabled`) outlives such a probe: the CLI reports a revoked login and an organization's switch as signed in all the same, and
+ * believing it would send the next conversation into the same refusal.
  */
-export function checkIsClaudeAuthRefusalOver(input: {
+export function getClaudeAuthRefusalEnd(input: {
   refusal: ClaudeAuthRefusal;
   loginStamp: string | null;
   /** The record's last probe. */
   loggedIn: boolean | undefined;
   statusCheckedAt: string | undefined;
-}): boolean {
+}): ClaudeAuthRefusalEnd | null {
   const { refusal, loginStamp } = input;
-  if (loginStamp !== null && loginStamp !== (refusal.login ?? null)) return true;
-  if (refusal.reason !== 'rejected' || input.loggedIn !== true || input.statusCheckedAt === undefined) return false;
-  return Date.parse(input.statusCheckedAt) > Date.parse(refusal.at);
+  if (loginStamp !== null && loginStamp !== (refusal.login ?? null)) return 'newLogin';
+  if (refusal.reason !== 'rejected' || refusal.isHeldUntilNewLogin === true) return null;
+  if (input.loggedIn !== true || input.statusCheckedAt === undefined) return null;
+  return Date.parse(input.statusCheckedAt) > Date.parse(refusal.at) ? 'statusCheck' : null;
+}
+
+/**
+ * @description Whether the account is usable again only because a status check ended its bare 401 / 403 refusal, lately (within
+ * {@link claudeRejectedRepeatWindowMs}): no sign-in happened, so the operator is not told «signed in again» — it is left out of the
+ * told accounts quietly — and the log says what did happen.
+ */
+export function checkIsClaudeProfileBackByStatusCheck(
+  record: Pick<ClaudeProfileRecord, 'authRefusal' | 'authRefusalEndedByStatusCheck'> | undefined,
+  nowMs: number,
+): boolean {
+  const ended = record?.authRefusalEndedByStatusCheck;
+  if (record?.authRefusal !== undefined || ended === undefined) return false;
+  return nowMs - Date.parse(ended.at) < claudeRejectedRepeatWindowMs;
 }
 
 /**
@@ -133,20 +196,24 @@ export function describeClaudeProfileUsability(usability: ClaudeProfileUsability
 /**
  * @description The log lines of the accounts whose state changed from `previous` to `current` (each by name), once per change:
  * `[accounts] profile default: not signed in — new sessions go to second` (`getInstead`: where a conversation leaving that account
- * goes now; `null` = nowhere), `[accounts] profile default: signed in again — usable for new sessions`. An account seen for the
- * first time is said only when it is not usable; one gone from `current` says nothing.
+ * goes now; `null` = nowhere), `[accounts] profile default: signed in again — usable for new sessions` — or, for an account back only
+ * because a status check ended its bare 401 / 403 refusal (`backByStatusCheck`), what did happen. An account seen for the first time is
+ * said only when it is not usable; one gone from `current` says nothing.
  */
 export function listClaudeProfileUsabilityLines(input: {
   previous: ReadonlyMap<string, ClaudeProfileUsability>;
   current: ReadonlyMap<string, ClaudeProfileUsability>;
   getInstead: (name: string) => string | null;
+  backByStatusCheck?: ReadonlySet<string>;
 }): string[] {
   const lines: string[] = [];
   for (const [name, usability] of input.current) {
     const before = input.previous.get(name);
     if (before === usability || (before === undefined && usability === 'usable')) continue;
     if (usability === 'usable') {
-      lines.push(`[accounts] profile ${name}: signed in again — usable for new sessions`);
+      lines.push(input.backByStatusCheck?.has(name) === true
+        ? `[accounts] profile ${name}: usable again — a status check found it signed in after the API refused it (401/403); the same refusal again holds it until a new sign-in`
+        : `[accounts] profile ${name}: signed in again — usable for new sessions`);
       continue;
     }
     const instead = input.getInstead(name);

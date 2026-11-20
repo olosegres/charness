@@ -312,7 +312,9 @@ Jira and Telegram together uses the same values for both); a Jira-only one keeps
 
 An account that cannot work because of its SIGN-IN is never started or resumed on (`utils/claudeAuthRefusal.ts`): one its last status check
 found signed out, or one the CLI refused on a turn — the stream's `authentication_failed` / `oauth_org_not_allowed` code, or its words (signed
-out, a login expired or revoked, «Your organization has disabled Claude subscription access for Claude Code», a bare 401 / 403). The issue's
+out, a login expired or revoked, «Your organization has disabled Claude subscription access for Claude Code», a bare 401 / 403 — which a status
+check that finds the account signed in may end once; the same login refused that way again within six hours is held until a new login,
+`claudeRejectedRepeatWindowMs`). The issue's
 conversation goes to the account `claude_profiles` recommends and keeps it. A turn refused that way is moved at once and goes on, and the issue
 hears it from the bot in plain words, as a `progress` answer to its open requests (`requests.account.movedAnswer`, through the same sink as a
 limit notice): «The AI's Claude account «default» is signed out: its sign-in expired or was revoked. I moved this issue to «second» and will
@@ -333,8 +335,10 @@ again). An alert that asks the operator to act opens with a mention paragraph of
 notifies them); a recovery line mentions nobody. A post is made once and never retried — its outcome may be unknown, and an alert told
 twice is worse than one the log names as not posted. The issue is read at boot (`checkJiraSetup`: 404 → `jiraOperatorIssueUnseenError`,
 the start refused; an outage only delays polling, as for the rest of the setup). It need not be in the allowlist; when it is, it is still
-never a request source: the poller's client leaves it out of every search page (`hideJiraOperatorIssue`, one log line the first time),
-so a hand-over, a comment or a mention on it reaches no agent. Without `operatorIssue` the alerts reach only the bot's log (`[accounts] …`;
+never a request source: the poller's client never sees it (`hideJiraOperatorIssue`, one log line the first time) — it is left out of every
+search page, and a read of it by its key (the poller's re-read of a mention waiting for a slot, a mention held back from its update, an issue
+that left the handed state — one may date from before `operatorIssue` was set) answers 404, so the poller drops what it kept for it as for an
+issue gone. A hand-over, a comment or a mention on it reaches no agent. Without `operatorIssue` the alerts reach only the bot's log (`[accounts] …`;
 the boot says so once).
 
 ## Possible next steps

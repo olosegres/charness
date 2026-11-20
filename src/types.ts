@@ -323,15 +323,6 @@ export interface SetAsideQuestionRecord {
 }
 
 /**
- * @description Classification of a provider-side API error surfaced by either
- * agent backend (Claude terminal "API Error" line or OpenCode `session.error`).
- * Drives the retry/surface decision: `transient` (rate-limit / overloaded —
- * short backoff) vs `usageLimit` (subscription / quota exhausted — long wait)
- * vs `auth` (logged out / bad credentials). `auth` is SURFACED, not retried — a
- * wait never fixes it (the user must re-`/login`, or the OpenCode server needs a
- * restart) — so the bot posts a pinned notice instead of arming a timer.
- */
-/**
  * Why an agent's account was refused (an `auth` error): `signedOut` — no login, or one that expired or was revoked (the Claude
  * CLI's `authentication_failed`); `orgDisabled` — the account's organization turned its use off (`oauth_org_not_allowed`:
  * «Your organization has disabled Claude subscription access for Claude Code»); `rejected` — a bare 401 / 403 that names
@@ -339,6 +330,17 @@ export interface SetAsideQuestionRecord {
  */
 export type AgentAuthErrorReason = 'signedOut' | 'orgDisabled' | 'rejected';
 
+/**
+ * @description Classification of a provider-side API error surfaced by either
+ * agent backend (Claude terminal "API Error" line or OpenCode `session.error`).
+ * Drives the retry/surface decision: `transient` (rate-limit / overloaded —
+ * short backoff) vs `usageLimit` (subscription / quota exhausted — long wait)
+ * vs `auth` (logged out / bad credentials). `auth` is never retried — a wait
+ * never fixes it: a json-stream Claude conversation moves to another account
+ * that can work (`bot.ts` `handleClaudeAuthRefusal`); anything else, or nowhere
+ * to go, is SURFACED as a pinned notice (the user must re-`/login`, or the
+ * OpenCode server needs a restart) instead of arming a timer.
+ */
 export interface AgentApiErrorClass {
   /**
    * `conversationTail` — the provider refused a request whose history ended on the MODEL's turn (Gemini through

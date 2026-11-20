@@ -183,8 +183,12 @@ so one account's usage limit does not stop every topic.
   (`/accounts`, `/limits`, the recommendation; `charness claude-profiles` prints
   `sign-in refused at <time>: <why>`): signed in again means a new login in its folder
   (`/accounts login <name>`, or `claude auth login` by hand), which the usage poll
-  notices within ten minutes; a bare 401 / 403 also ends once the hourly status check
-  finds the account signed in. The bot log says each change once:
+  notices within ten minutes, or at once when you sign it in through `/accounts`. A bare
+  401 / 403 also ends once the hourly status check finds the account signed in — but only
+  once: the same login refused that way again within six hours is held until a new sign-in
+  (the CLI reports some refused logins as signed in, so the account could otherwise swing
+  between refused and usable every hour), and such an end is no sign-in, so you are not told
+  «signed in again» (the pin goes quietly). The bot log says each change once:
   `[accounts] profile default: not signed in — new sessions go to second`,
   `[accounts] profile default: signed in again — usable for new sessions`. The
   deprecated tmux-scrape backend is moved at start only; a refused turn there keeps the

@@ -25,6 +25,7 @@ import {
   type JiraProjectTrigger,
 } from '../connectors/jira/inbound';
 import { JiraTriggerLog, jiraTriggerLogFileName } from '../connectors/jira/triggerLog';
+import { hideJiraOperatorIssue } from '../connectors/jira/operatorIssue';
 import { JiraContextLedger } from '../connectors/jira/contextLedger';
 import { createTestComment } from './jiraIssueTestData';
 import { createJiraConversationKey, createTestSlots, createUnlimitedSlots, createWaitEntry, type TestOpenRequest, type TestSlots } from './taskAgentSlotsTestKit';
@@ -2611,6 +2612,24 @@ describe('JiraInbound', () => {
         assert.deepEqual([...await inbound.pollOnce()], [[issueKey, 'notMatching'], [`${issueKey}#mention:10240`, 'request']]);
         assert.deepEqual(busySlots.getWaitList(), []);
         assert.equal(recorded.origins[0].attributes.mayAct, 'true');
+      });
+
+      it('an acting mention left waiting on an issue that has since become the OPERATOR issue gives its place up and starts nothing', async () => {
+        const busySlots = createTestSlots({ maxConcurrent: 1 });
+        busySlots.setOpenRequests([{ key: createJiraConversationKey('PROJ-77'), kind: 'trackerEvent' }]);
+        comments = [createMentionComment('10240', member)];
+        const client = createMentionClient(() => [createUnhandedIssue(issueKey)]);
+        assert.deepEqual([...await createMentionInbound({ mentionMode: 'act', slots: busySlots.slots, client }).pollOnce()], [[issueKey, 'notMatching'], [`${issueKey}#mention:10240`, 'queued']]);
+        assert.equal(busySlots.getWaitList().length, 1);
+
+        // A restart with jira.json naming that issue `operatorIssue`, and a slot free: the poller's client never sees it — neither
+        // in the search nor by its key (the wait list's re-read), so its place is dropped as for an issue gone, and nothing starts.
+        busySlots.setOpenRequests([]);
+        const restarted = createMentionInbound({ mentionMode: 'act', slots: busySlots.slots, client: hideJiraOperatorIssue(client, issueKey) });
+        assert.deepEqual([...await restarted.pollOnce()], []);
+        assert.deepEqual(busySlots.getWaitList(), [], 'its place is dropped');
+        assert.equal(requestCount, 0, 'no request of the operator issue');
+        assert.ok(!recorded.calls.slice(recorded.calls.lastIndexOf('search')).includes(`getIssue ${issueKey}`), 'the real Jira is never asked for it');
       });
 
       it('a waiting acting mention whose comment was deleted gives its place up; one in answer mode never takes a place (D10)', async () => {

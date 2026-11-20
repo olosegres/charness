@@ -6,14 +6,20 @@
  *     stays unusable, whatever its reason turns into; a restart reads what was told and says nothing new;
  *   • what broke (the account, why, the CLI's own words), what the bot did (the conversations moved to …, or they wait: no account
  *     can work) and what to do (sign it in again — how, where the text is read; an organization's switch asks the admin too);
- *   • an account told and usable again gets one line.
+ *   • an account told and usable again gets one line — unless only a status check ended its bare 401 / 403 refusal: no sign-in
+ *     happened, so it leaves the told accounts quietly, and its repeat (held until a new login) is told once more, then never again;
+ *   • the record keeps what a round wrote: a post that waited on Telegram writes back only its pin.
  *
  * Test case: N/A — Charness has no Jira tracker.
  */
 
-import { describe, it } from 'node:test';
+import { afterEach, beforeEach, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
 
+import { StateStore } from '../state';
 import { localeCodes, runWithLocale, type Locale } from '../i18n';
 import type { ClaudeProfileUsability } from '../utils/claudeAuthRefusal';
 import {
@@ -28,13 +34,18 @@ import {
 const states = (entries: Array<[string, ClaudeProfileUsability]>): Map<string, ClaudeProfileUsability> => new Map(entries);
 const notLoggedIn = 'Not logged in · Please run /login';
 
-function plan(previous: ClaudeAccountAlertState | undefined, current: Array<[string, ClaudeProfileUsability]>, options: { instead?: string | null; details?: Array<[string, string]>; defaultProfile?: string } = {}) {
+function plan(
+  previous: ClaudeAccountAlertState | undefined,
+  current: Array<[string, ClaudeProfileUsability]>,
+  options: { instead?: string | null; details?: Array<[string, string]>; defaultProfile?: string; backByStatusCheck?: string[] } = {},
+) {
   return planClaudeAccountAlert({
     previous,
     current: states(current),
     details: new Map(options.details ?? []),
     defaultProfile: options.defaultProfile ?? 'default',
     instead: options.instead === undefined ? 'second' : options.instead,
+    backByStatusCheck: new Set(options.backByStatusCheck ?? []),
   });
 }
 
@@ -76,6 +87,27 @@ describe('planClaudeAccountAlert: once per change', () => {
     assert.deepEqual(next, { known: { default: 'usable', second: 'usable' }, alerted: [], pinnedMessageId: 77 });
     const silent = plan({ known: { fresh: 'notSignedIn' }, alerted: [] }, [['fresh', 'usable']]);
     assert.equal(silent.alert, null, 'an account never told about has nothing to come back from');
+  });
+
+  it('back only by a status check (a bare 401 / 403 that ended without a sign-in): it leaves the told accounts quietly, no «signed in again»', () => {
+    const told: ClaudeAccountAlertState = { known: { default: 'usable', work: 'rejected' }, alerted: ['work'], pinnedMessageId: 77 };
+    const { alert, next } = plan(told, [['default', 'usable'], ['work', 'usable']], { backByStatusCheck: ['work'] });
+    assert.equal(alert, null);
+    assert.deepEqual(next, { known: { default: 'usable', work: 'usable' }, alerted: [], pinnedMessageId: 77 }, 'the caller unpins: no told account is left');
+  });
+
+  it('a 403 that keeps coming on the same login: told once, quietly usable after the hourly check, told once more when held — then silence', () => {
+    let record = plan(undefined, [['default', 'usable'], ['work', 'usable']]).next;
+    const round = (state: ClaudeProfileUsability, backByStatusCheck: string[] = []) => {
+      const result = plan(record, [['default', 'usable'], ['work', state]], { backByStatusCheck, details: [['work', 'API Error: 403']] });
+      record = result.next;
+      return result.alert;
+    };
+    assert.deepEqual(round('rejected')?.lost.map((loss) => loss.name), ['work'], 'the first refusal');
+    assert.equal(round('usable', ['work']), null, 'the hourly check ends it: no «signed in again»');
+    assert.deepEqual(round('rejected')?.lost.map((loss) => loss.name), ['work'], 'refused again: held until a new login, told once more');
+    for (let hour = 0; hour < 24; hour += 1) assert.equal(round('rejected'), null, 'held: the next day of polls says nothing');
+    assert.deepEqual(round('usable')?.back, ['work'], 'a new login: «signed in again», once');
   });
 
   it('an account removed meanwhile leaves the record', () => {
@@ -143,5 +175,52 @@ describe('getClaudeAccountAlertDetail', () => {
     const long = getClaudeAccountAlertDetail('x'.repeat(500));
     assert.equal(long.length, claudeAccountAlertDetailMaxChars);
     assert.ok(long.endsWith('…'));
+  });
+});
+
+describe('the record of what was told (state.json)', () => {
+  let home = '';
+  let originalHome: string | undefined;
+  beforeEach(() => {
+    originalHome = process.env.HOME;
+    home = fs.mkdtempSync(path.join(os.tmpdir(), 'charness-account-alert-'));
+    process.env.HOME = home;
+  });
+  afterEach(() => {
+    if (originalHome === undefined) delete process.env.HOME;
+    else process.env.HOME = originalHome;
+    fs.rmSync(home, { recursive: true, force: true });
+  });
+  const createStore = async (): Promise<StateStore> => {
+    const store = new StateStore(path.join(home, 'data'), { saveDebounceMs: 5 });
+    await store.init();
+    return store;
+  };
+
+  it('a pin written after a post waited keeps what a round wrote meanwhile — another account told stays told', async () => {
+    const store = await createStore();
+    await store.setClaudeAccountAlertState({ known: { default: 'signedOut', work: 'usable' }, alerted: ['default'] });
+    // The post of «default» waits on Telegram; meanwhile a round tells «work».
+    await store.setClaudeAccountAlertState({ known: { default: 'signedOut', work: 'orgDisabled' }, alerted: ['default', 'work'] });
+    await store.setClaudeAccountAlertPinnedMessageId(41);
+    assert.deepEqual(store.getClaudeAccountAlertState(), { known: { default: 'signedOut', work: 'orgDisabled' }, alerted: ['default', 'work'], pinnedMessageId: 41 });
+    await store.setClaudeAccountAlertPinnedMessageId(null);
+    assert.deepEqual(store.getClaudeAccountAlertState(), { known: { default: 'signedOut', work: 'orgDisabled' }, alerted: ['default', 'work'] });
+    const reread = await createStore();
+    assert.deepEqual(reread.getClaudeAccountAlertState()?.alerted, ['default', 'work'], 'on disk too');
+  });
+
+  it('a status check\'s end of a refusal is kept with its login; a new login clears both', async () => {
+    const store = await createStore();
+    await store.upsertClaudeProfileRecord('work', { createdAt: '2026-11-01T00:00:00.000Z', loggedIn: true });
+    await store.setClaudeProfileAuthRefusal('work', { at: '2026-11-20T08:00:00.000Z', reason: 'rejected', login: 'aaaa' });
+    await store.endClaudeProfileAuthRefusalByStatusCheck('work', '2026-11-20T09:00:00.000Z');
+    assert.equal(store.getClaudeProfileInfo('work')?.authRefusal, undefined);
+    assert.deepEqual(store.getClaudeProfileInfo('work')?.authRefusalEndedByStatusCheck, { at: '2026-11-20T09:00:00.000Z', login: 'aaaa' });
+    await store.setClaudeProfileAuthRefusal('work', { at: '2026-11-20T10:00:00.000Z', reason: 'rejected', login: 'aaaa', isHeldUntilNewLogin: true });
+    assert.ok(store.getClaudeProfileInfo('work')?.authRefusalEndedByStatusCheck, 'kept while the held refusal stands');
+    await store.setClaudeProfileAuthRefusal('work', null);
+    assert.equal(store.getClaudeProfileInfo('work')?.authRefusal, undefined);
+    assert.equal(store.getClaudeProfileInfo('work')?.authRefusalEndedByStatusCheck, undefined);
   });
 });

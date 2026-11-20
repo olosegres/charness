@@ -26,7 +26,7 @@ import { defaultClaudeProfileName, resolveClaudeProfileName as resolveClaudeProf
 import type { ClaudeUsageSnapshot } from './utils/claudeUsage';
 import type { ClaudeApiSpend, ClaudeCostBaseline } from './utils/claudeApiSpend';
 import type { ClaudeApiCreditSpend } from './utils/claudeApiCredit';
-import type { ClaudeAuthRefusal } from './utils/claudeAuthRefusal';
+import type { ClaudeAuthRefusal, ClaudeAuthRefusalStatusCheckEnd } from './utils/claudeAuthRefusal';
 import type { ClaudeAccountAlertState } from './utils/claudeAccountAlert';
 import type { OpenCodeProviderUsageRecord } from './utils/openCodeUsage';
 import { pushRecentModel } from './utils/modelRecentPlan';
@@ -323,6 +323,12 @@ export interface ClaudeProfileRecord {
    * signed in again (the stored login changed), or for a bare 401 / 403 when a status probe after it finds the account signed in.
    */
   authRefusal?: ClaudeAuthRefusal;
+  /**
+   * The last bare 401 / 403 refusal a status check ended — no sign-in — with when and the login it was of: the same login refused that
+   * way again soon after is held until a new login, and the account's quiet return is not told as «signed in again». Cleared by a new
+   * login (`setClaudeProfileAuthRefusal(name, null)`).
+   */
+  authRefusalEndedByStatusCheck?: ClaudeAuthRefusalStatusCheckEnd;
   /**
    * Only on the hidden `default` record: the operator signed `~/.claude` out through `/accounts`. The account
    * is left out of the list and every ranking until a probe finds it signed in again.
@@ -2720,9 +2726,27 @@ export class StateStore {
    */
   async setClaudeProfileAuthRefusal(name: string, refusal: ClaudeAuthRefusal | null): Promise<void> {
     const record = this.touchClaudeProfileInfo(name);
-    if (!record || (refusal === null && record.authRefusal === undefined)) return;
-    if (refusal === null) delete record.authRefusal;
-    else record.authRefusal = refusal;
+    if (!record || (refusal === null && record.authRefusal === undefined && record.authRefusalEndedByStatusCheck === undefined)) return;
+    if (refusal === null) {
+      // `null` is a new login (a sign-in, or the folder's login changed): what a status check ended before no longer counts either.
+      delete record.authRefusal;
+      delete record.authRefusalEndedByStatusCheck;
+    } else {
+      record.authRefusal = refusal;
+    }
+    await this.flush();
+  }
+
+  /**
+   * End a bare 401 / 403 refusal because a status check found the account signed in at `atIso` — no sign-in: the end is kept
+   * ({@link ClaudeProfileRecord.authRefusalEndedByStatusCheck}) with the refused login, so a repeat of that refusal is held. Flushed at once.
+   */
+  async endClaudeProfileAuthRefusalByStatusCheck(name: string, atIso: string): Promise<void> {
+    const record = this.touchClaudeProfileInfo(name);
+    const refusal = record?.authRefusal;
+    if (!record || !refusal) return;
+    delete record.authRefusal;
+    record.authRefusalEndedByStatusCheck = { at: atIso, ...(refusal.login !== undefined ? { login: refusal.login } : {}) };
     await this.flush();
   }
 
@@ -2734,6 +2758,18 @@ export class StateStore {
   /** Keep what the operator was told. Flushed at once: an alert told twice after a crash is what the record exists to prevent. */
   async setClaudeAccountAlertState(alertState: ClaudeAccountAlertState): Promise<void> {
     this.state.claudeAccountAlerts = alertState;
+    await this.flush();
+  }
+
+  /**
+   * Change ONLY the pinned alert of the record as it is now (`null` drops it), never the rest: a post that waited on Telegram must
+   * not write back what it read before — a round in between may have told another account. Flushed at once.
+   */
+  async setClaudeAccountAlertPinnedMessageId(messageId: number | null): Promise<void> {
+    const current = this.state.claudeAccountAlerts;
+    if (!current || (current.pinnedMessageId ?? null) === messageId) return;
+    if (messageId === null) delete current.pinnedMessageId;
+    else current.pinnedMessageId = messageId;
     await this.flush();
   }
 

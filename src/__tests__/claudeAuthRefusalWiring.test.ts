@@ -50,7 +50,7 @@ test('with nowhere to go the conversation waits: marked, its requests no longer 
 
 test('every round of the accounts\' states tells the operator and resumes the waiting conversations — from the end of the boot on', () => {
   const round = getFunctionBody('noteClaudeProfileUsability');
-  assert.match(round, /if \(!isOperatorAlertOpen\) return;\s*tellOperatorAboutClaudeAccounts\(current\);\s*void resumeConversationsWaitingForAccount\(\);/);
+  assert.match(round, /if \(!isOperatorAlertOpen\) return;\s*tellOperatorAboutClaudeAccounts\(current, backByStatusCheck\);\s*void resumeConversationsWaitingForAccount\(\);/);
   const restored = botSource.slice(botSource.indexOf('onSessionsRestored: () => {'));
   assert.ok(restored.indexOf('jiraConnector?.start(') < restored.indexOf('openOperatorAlerts();'), 'the connectors\' channels are known first');
   assert.match(botSource, /operatorAlertChannels = jiraConnector\?\.operatorChannel \? \[jiraConnector\.operatorChannel\] : \[\];/);
@@ -67,4 +67,30 @@ test('the profile scan of the usage poll and of /accounts ends the refusals of a
   const scan = getFunctionBody('syncClaudeProfilesAndRefusals');
   assert.ok(scan.indexOf('claudeProfileSync.sync(options)') < scan.indexOf('settleClaudeAuthRefusal(name)'), 'the probes first, then the refusals they may end');
   assert.match(scan, /noteClaudeProfileUsability\(\);/);
+});
+
+test('the General post writes back ONLY its pin, read after its waits — never the record it read before them', () => {
+  const post = getFunctionBody('postClaudeAccountAlertToGeneral');
+  assert.doesNotMatch(post, /setClaudeAccountAlertState\(/);
+  const pinned = post.indexOf('await pinMessageQuiet(generalKey, messageId');
+  const read = post.indexOf('state.getClaudeAccountAlertState()?.pinnedMessageId');
+  assert.ok(pinned > 0 && read > pinned && read < post.indexOf('await state.setClaudeAccountAlertPinnedMessageId(messageId)'), 'the previous pin is read after the waits');
+  const release = getFunctionBody('releaseClaudeAccountAlertPin');
+  assert.match(release, /current\.alerted\.length > 0/);
+  assert.match(release, /await state\.setClaudeAccountAlertPinnedMessageId\(null\);/);
+  assert.match(getFunctionBody('tellOperatorAboutClaudeAccounts'), /if \(alert !== null\) void deliverClaudeAccountAlert\(alert\);\s*\/\/[^\n]*\n\s*else void releaseClaudeAccountAlertPin\(\);/, 'a quiet return still drops the pin');
+});
+
+test('a refusal a status check ended is kept as such, and a repeat of it is marked from that record', () => {
+  const settle = getFunctionBody('settleClaudeAuthRefusal');
+  assert.match(settle, /const end = getClaudeAuthRefusalEnd\(/);
+  assert.match(settle, /end === 'statusCheck'\s*\? state\.endClaudeProfileAuthRefusalByStatusCheck\(name, new Date\(\)\.toISOString\(\)\)\s*: state\.setClaudeProfileAuthRefusal\(name, null\)/);
+  assert.match(getFunctionBody('buildClaudeAuthRefusal'), /endedByStatusCheck: state\.getClaudeProfileInfo\(name\)\?\.authRefusalEndedByStatusCheck,/);
+  const round = getFunctionBody('noteClaudeProfileUsability');
+  assert.match(round, /if \(checkIsClaudeProfileBackByStatusCheck\(record, nowMs\)\) backByStatusCheck\.add\(view\.name\);/);
+  assert.match(round, /tellOperatorAboutClaudeAccounts\(current, backByStatusCheck\);/);
+});
+
+test('a sign-in through /accounts runs the accounts\' round at once', () => {
+  assert.match(botSource, /noteClaudeAccountsChanged: \(\) => noteClaudeProfileUsability\(\),/);
 });
