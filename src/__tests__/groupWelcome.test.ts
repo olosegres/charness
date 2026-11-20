@@ -78,3 +78,9 @@ test('the greeting in every locale: translated, short, no version or env-var nam
     assert.ok(!rendered.includes('_'), `${locale}: no underscore, which legacy Markdown reads as italics`);
   }
 });
+
+test('the Russian greeting says «топик», the owner\'s word, not «тред»', () => {
+  const rendered = runWithLocale('ru', () => formatGroupWelcome(t, { runningVersion: packageVersion, workRoot }));
+  assert.ok(rendered.includes('топик'), 'it names the topic with the owner\'s word');
+  assert.ok(!rendered.toLowerCase().includes('тред'), 'it does not call it a thread');
+});
