@@ -2,8 +2,8 @@
  * @description `charness remote-run` at PROCESS level, end to end, against a runner made of a throwaway loopback `sshd` (no root) and
  * a private Pueue, all in temp dirs (`remoteRunE2e/remoteRunFlowKit.ts`, shared helpers in `remoteRunFlowHarness.ts`): the built CLI is run
  * as a child process exactly as an agent runs it, with its own HOME, `runners.json` and cache. This file is the first half of the flow, in
- * order, each step on the state the one before left (the second half — kill, time limits, `exec` — is `remoteRunLifecycleE2e.test.ts`,
- * with a runner of its own, so the two run side by side):
+ * order, each step on the state the one before left (the second half — interrupts, time limits, kill, `exec`, `clean` — is the five files `remoteRunLifecycle*E2e.test.ts`,
+ * each with a runner of its own, so they all run side by side):
  *
  *   runners → the stand-in online with its capabilities; a runner whose Pueue is too slow for the probe's version call is online, told so (not
  *     «MISSING») and takes a job; an entry on a closed port offline with its last snapshot; an unknown host key says to connect once by hand

@@ -1,5 +1,5 @@
 /**
- * @description What the two `charness remote-run` flows (`remoteRunE2e.test.ts`, `remoteRunLifecycleE2e.test.ts`) share: the runner built
+ * @description What the `charness remote-run` flows (`remoteRunE2e.test.ts` and the five `remoteRunLifecycle*E2e.test.ts`, which also share `remoteRunLifecycleFlow.ts`) share: the runner built
  * for a flow (`setUpFlow` / `tearDownFlow`), the helpers that run the built CLI in the flow's project, and the decoy / job-cleanup helpers.
  * Each flow file builds a runner of its own (own sshd, Pueue, ports and project), so the two run side by side — one flow was close to the
  * 20 minutes a flow file may take.

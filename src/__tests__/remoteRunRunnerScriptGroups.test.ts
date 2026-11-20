@@ -1,7 +1,7 @@
 /**
  * @description `runner.sh apply-groups <work> <name=parallel,…>`: the Pueue steps of `prepare` and nothing else — the daemon is there, each group exists and has
  * its parallel limit — so a changed «jobs at once» takes effect when the operator sets it, not at the next job's `prepare`. Driven against a Pueue stand-in
- * that records its arguments (the real Pueue is exercised by the lifecycle flow, `remoteRunLifecycleE2e.test.ts`).
+ * that records its arguments (the real Pueue is exercised by the lifecycle flow, `remoteRunLifecycle*E2e.test.ts`).
  *
  * Test case: N/A — Charness has no Jira tracker.
  */
