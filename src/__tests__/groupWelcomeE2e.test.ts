@@ -6,12 +6,12 @@
  *   boot → changes that are not «the bot joined» (another user made an admin, the bot itself leaving) post nothing
  *   → the bot joining posts ONE greeting into General, as Markdown — and the owner's next steps, which Telegram reports too (the
  *     bot made an admin, its rights edited after `/doctor`), post none — and that greeting is exactly the
- *     `onboarding.welcome` text — a title that is the product name alone, no version — and the projects folder in plain words
+ *     `onboarding.welcome` text — an opening sentence that greets and names the bot, no title line, no version — and the projects folder in plain words
  *   → a bot removed and added back (also straight as an admin) is greeted again
  *   → `/doctor` agrees with it: a bot that is not an admin, privacy mode on, fails the admin line and the privacy line; the same
  *     bot made an admin still has privacy mode on and gets no privacy line — nothing red is left for a step the greeting dropped.
  *
- * What the unit tests cover instead: the title's wording and the text in every locale — its length, no BotFather step, no
+ * What the unit tests cover instead: the opening sentence and the text in every locale — its length, no BotFather step, no
  * environment-variable name (`groupWelcome.test.ts`), the privacy line's rule (`doctorLine.test.ts`).
  *
  * Nothing leaves the machine: the Bot API is on loopback and the agent is a fake. Everything the test starts is stopped
@@ -77,9 +77,12 @@ function removeInstanceSync(): void {
   removeIsolatedInstanceSync(layout, charness);
 }
 
-/** The bot's greetings in General, oldest first (the startup status the bot also posts there does not open with the wave). */
+/** The first line the English greeting opens with: one sentence that greets and names the bot. */
+const greetingOpening = "Hi! I'm Charness — I run Claude Code and OpenCode agents in this group's topics: one topic = one project folder = one agent.";
+
+/** The bot's greetings in General, oldest first: told apart from the startup status the bot also posts there by the projects-folder line they end with. */
 function listGreetings(): FakeTelegramMessage[] {
-  return generalTopic.listMessages().filter((message) => message.text.startsWith('👋'));
+  return generalTopic.listMessages().filter((message) => message.text.includes('Project folders: '));
 }
 
 describe('the greeting when the bot is added to the group', () => {
@@ -146,8 +149,9 @@ describe('the greeting when the bot is added to the group', () => {
     const [greeting] = listGreetings();
     assert.equal(listGreetings().length, 1, 'one greeting, for the one change that is the bot joining');
 
-    assert.equal(greeting.parseMode, 'Markdown', 'the title is bold and the folder is code');
-    assert.equal(greeting.text.split('\n')[0], '👋 *Charness*', 'the title is the product name, with no version');
+    assert.equal(greeting.parseMode, 'Markdown', 'the folder is code');
+    assert.equal(greeting.text.split('\n')[0], greetingOpening, 'the greeting opens with one sentence that names the bot — no title line, no version');
+    assert.ok(!greeting.text.includes('👋'), 'no wave title line');
     assert.equal(
       greeting.text,
       enDict['onboarding.welcome'].replace('{workRoot}', getLayout().workRoot),

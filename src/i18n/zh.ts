@@ -138,8 +138,7 @@ export const zhDict: Record<string, string> = {
     '无法读取 bot 权限 — getChatMember 失败',
 
   'onboarding.welcome':
-    '👋 *Charness*\n\n' +
-    '我在本群的话题里运行 Claude Code 和 OpenCode 代理：一个话题 = 一个项目文件夹 = 一个代理。\n\n' +
+    '你好！我是 Charness——我在本群的话题里运行 Claude Code 和 OpenCode 代理：一个话题 = 一个项目文件夹 = 一个代理。\n\n' +
     '三步即可开始工作：\n' +
     '1️⃣ 将我设为群组管理员，并授予 Manage Topics、Delete Messages 和 Pin Messages 权限\n' +
     '2️⃣ 运行 /doctor 查看还缺少什么\n' +

@@ -138,8 +138,7 @@ export const jaDict: Record<string, string> = {
     'Bot の権限を読めません — getChatMember が失敗しました',
 
   'onboarding.welcome':
-    '👋 *Charness*\n\n' +
-    '私はこのグループのトピックで Claude Code と OpenCode のエージェントを動かします。1 トピック = 1 プロジェクトフォルダ = 1 エージェントです。\n\n' +
+    'こんにちは！私は Charness です。このグループのトピックで Claude Code と OpenCode のエージェントを動かします。1 トピック = 1 プロジェクトフォルダ = 1 エージェントです。\n\n' +
     '3 ステップで準備完了:\n' +
     '1️⃣ 私をグループ管理者にして、Manage Topics・Delete Messages・Pin Messages の権限を付与してください\n' +
     '2️⃣ /doctor を実行して、まだ足りないものを確認\n' +

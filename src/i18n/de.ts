@@ -138,8 +138,7 @@ export const deDict: Record<string, string> = {
     'Bot-Rechte nicht lesbar — getChatMember fehlgeschlagen',
 
   'onboarding.welcome':
-    '👋 *Charness*\n\n' +
-    'Ich starte Claude-Code- und OpenCode-Agenten in den Threads dieser Gruppe: ein Thread = ein Projektordner = ein Agent.\n\n' +
+    'Hallo! Ich bin Charness — ich starte Claude-Code- und OpenCode-Agenten in den Threads dieser Gruppe: ein Thread = ein Projektordner = ein Agent.\n\n' +
     'In 3 Schritten startklar:\n' +
     '1️⃣ Mach mich zum Gruppen-Admin mit den Rechten Manage Topics, Delete Messages und Pin Messages\n' +
     '2️⃣ Führe /doctor aus, um zu sehen, was noch fehlt\n' +

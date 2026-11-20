@@ -138,8 +138,7 @@ export const hiDict: Record<string, string> = {
     'Bot के अधिकार नहीं पढ़ सकते — getChatMember विफल',
 
   'onboarding.welcome':
-    '👋 *Charness*\n\n' +
-    'इस ग्रुप के थ्रेड्स में Claude Code और OpenCode एजेंट मुझसे चलते हैं: एक थ्रेड = एक प्रोजेक्ट फ़ोल्डर = एक एजेंट।\n\n' +
+    'नमस्ते! मैं Charness हूँ — इस ग्रुप के थ्रेड्स में Claude Code और OpenCode एजेंट मुझसे चलते हैं: एक थ्रेड = एक प्रोजेक्ट फ़ोल्डर = एक एजेंट।\n\n' +
     'तीन चरणों में काम के लिए तैयार:\n' +
     '1️⃣ मुझे ग्रुप एडमिन बनाएँ और अधिकार दें: Manage Topics, Delete Messages, Pin Messages\n' +
     '2️⃣ /doctor चलाएँ और देखें कि अभी क्या कमी है\n' +

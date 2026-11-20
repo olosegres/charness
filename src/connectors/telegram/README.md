@@ -10,8 +10,8 @@ documented exemption). It translates telegraf updates into the core's `InboundEv
   invalidates the cache at once (`checkShouldInvalidateAdminCache`).
 - **`bindPicker.ts`:** the `/bind` folder keyboard (create row, folder grid, paging), a leaf module `/topic` reuses with its
   callbacks re-targeted (`BindPickerCallbacks`).
-- **`groupWelcome.ts`:** the greeting General gets when the bot is added to the served group (`my_chat_member`). Its title
-  is the product name alone, never a version; no BotFather
+- **`groupWelcome.ts`:** the greeting General gets when the bot is added to the served group (`my_chat_member`). It opens with
+  one sentence that greets and names the bot — no title line, never a version; no BotFather
   privacy step — a group admin receives every message — so `/doctor` checks the privacy flag only for a non-admin bot.
 - **`outbound.ts`:** ordinary turn content streams through the chat-mode transport below; content carrying
   `keepVisible` or tappable `options` finalizes in-flight output FIRST, then posts as its own message, then pins.

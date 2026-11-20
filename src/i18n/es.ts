@@ -138,8 +138,7 @@ export const esDict: Record<string, string> = {
     'no se pueden leer los derechos del bot — getChatMember falló',
 
   'onboarding.welcome':
-    '👋 *Charness*\n\n' +
-    'Ejecuto agentes de Claude Code y OpenCode en los hilos de este grupo: un hilo = una carpeta de proyecto = un agente.\n\n' +
+    '¡Hola! Soy Charness — ejecuto agentes de Claude Code y OpenCode en los hilos de este grupo: un hilo = una carpeta de proyecto = un agente.\n\n' +
     'Listo para trabajar en 3 pasos:\n' +
     '1️⃣ Hazme admin del grupo con los derechos Manage Topics, Delete Messages y Pin Messages\n' +
     '2️⃣ Ejecuta /doctor para ver qué falta\n' +
