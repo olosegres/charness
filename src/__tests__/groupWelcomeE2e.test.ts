@@ -9,12 +9,11 @@
  *     `onboarding.welcome` text with the version this very package says in its title (read from `package.json`, never a number
  *     written into the text) and the projects folder in plain words
  *   → a bot removed and added back (also straight as an admin) is greeted again
- *   → the greeting is short and no longer sends the owner to @BotFather (a group admin gets every message)
  *   → `/doctor` agrees with it: a bot that is not an admin, privacy mode on, fails the admin line and the privacy line; the same
  *     bot made an admin still has privacy mode on and gets no privacy line — nothing red is left for a step the greeting dropped.
  *
- * What the unit tests cover instead: the title's wording and the text in every locale (`groupWelcome.test.ts`), the privacy
- * line's rule (`doctorLine.test.ts`).
+ * What the unit tests cover instead: the title's wording and the text in every locale — its length, no BotFather step, no
+ * environment-variable name (`groupWelcome.test.ts`), the privacy line's rule (`doctorLine.test.ts`).
  *
  * Nothing leaves the machine: the Bot API is on loopback and the agent is a fake. Everything the test starts is stopped
  * in `after`.
@@ -57,8 +56,6 @@ const projectFolder = 'alpha';
 const replyTimeoutMs = 20 * 1000;
 /** The first words of the `/doctor` report (its header, without the Markdown bold). */
 const doctorHeader = 'Charness Doctor';
-/** The most non-blank lines the greeting may have: it is read on a phone, in a group that is just set up. */
-const greetingMaxLines = 8;
 /** How many polls to let pass after the greeting before counting what the bot posted: the updates queued before it have been handled. */
 const settlePolls = 2;
 
@@ -169,17 +166,6 @@ describe('the greeting when the bot is added to the group', () => {
 
     await waitForGreetingCount(2);
     assert.equal(listGreetings().length, 2, 'the removal posts nothing, the re-adding posts one greeting');
-  });
-
-  it('the greeting is short and sends nobody to @BotFather', async () => {
-    const [greeting] = listGreetings();
-    assert.ok(greeting, 'the greeting was posted');
-    const lines = greeting.text.split('\n').filter((line) => line.trim() !== '');
-    assert.ok(lines.length <= greetingMaxLines, `at most ${greetingMaxLines} lines, got ${lines.length}:\n${greeting.text}`);
-    for (const stale of ['BotFather', 'setprivacy', 'WORK_ROOT', 'Charness 2.0']) {
-      assert.ok(!greeting.text.includes(stale), `the greeting no longer mentions «${stale}»`);
-    }
-    assert.ok(greeting.text.includes('/doctor'), 'it still points at /doctor for what is missing');
   });
 
   it('/doctor: a bot that is not an admin fails the admin line and the privacy line', async () => {

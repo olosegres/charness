@@ -23,23 +23,19 @@ const greetingMaxLines = 8;
 const boldMarkerCount = 2;
 const codeMarkerCount = 2;
 
-test('the title is the product and the running version', () => {
-  assert.equal(getGroupWelcomeTitle('4.2.0'), 'Charness 4.2.0');
-  assert.equal(getGroupWelcomeTitle(packageVersion), `Charness ${packageVersion}`);
-});
-
 test('a version that is not known is left out of the title, never shown as «unknown»', () => {
   assert.equal(getGroupWelcomeTitle(undefined), 'Charness');
   assert.equal(getGroupWelcomeTitle(''), 'Charness');
   assert.equal(getGroupWelcomeTitle(unknownRunningVersion), 'Charness');
+  assert.equal(formatGroupWelcome(t, { runningVersion: undefined, workRoot }).split('\n')[0], '👋 *Charness*');
 });
 
-test('the greeting opens with the version it is given — it writes none of its own', () => {
+test('the greeting opens with the product and the version it is given — it writes none of its own', () => {
+  assert.equal(getGroupWelcomeTitle(packageVersion), `Charness ${packageVersion}`);
   const first = formatGroupWelcome(t, { runningVersion: packageVersion, workRoot });
   assert.equal(first.split('\n')[0], `👋 *Charness ${packageVersion}*`);
   const other = formatGroupWelcome(t, { runningVersion: '9.8.7', workRoot });
   assert.equal(other.split('\n')[0], '👋 *Charness 9.8.7*');
-  assert.equal(formatGroupWelcome(t, { runningVersion: undefined, workRoot }).split('\n')[0], '👋 *Charness*');
 });
 
 test('the English greeting says what the bot is, the three steps and the projects folder in plain words', () => {
