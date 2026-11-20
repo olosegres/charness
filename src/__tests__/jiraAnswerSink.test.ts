@@ -640,8 +640,13 @@ describe('whom an answer notifies: the requester of a mention request, and the a
     addComment('10250', colleague);
     addComment('10251', colleague);
     addComment('10252', requester);
-    assert.deepEqual(await deliverMention('final', 'Both of you:', ['10250', '10251', '10250', '10252']), { ok: true });
+    // Three top-level comments are three threads: the answer goes into the first one's, and the result says so.
+    assert.deepEqual(await deliverMention('final', 'Both of you:', ['10250', '10251', '10250', '10252']), {
+      ok: true,
+      warning: buildJiraOtherThreadsWarning('10250', ['10251', '10252']),
+    });
     assert.deepEqual(getLeadingMentions(), [requester.accountId, colleague.accountId], 'requester first; duplicates and the requester again are one mention each');
+    assert.deepEqual(jira.postedParentIds, ['10250']);
   });
 
   it('a hand-over answer may reply too: the mention leads, the "to let me go on" line ends a question', async () => {

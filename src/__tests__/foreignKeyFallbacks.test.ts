@@ -20,7 +20,7 @@ import {
   getTelegramPreambleGroupTitle,
   type TelegramChatLocaleStore,
 } from '../connectors/telegram/foreignKeyFallbacks';
-import { createJiraConnectorOutbound, jiraFileSendRefusal } from '../connectors/jira/outbound';
+import { createJiraConnectorOutbound, jiraFileSendRefusal, type JiraFileSender } from '../connectors/jira/outbound';
 import { getConnectorOutbound, type ConnectorOutbound, type ConnectorOutbounds } from '../platform/outbound';
 import { createTestConnector } from '../connectors/test/connector';
 import { getSchedulerScopePlatform } from '../scheduler/mcpSurface';
@@ -124,7 +124,7 @@ describe('getConnectorOutbound', () => {
 });
 
 describe('the Jira outbound', () => {
-  it('drops stream content and activity, holds nothing to finalize, and refuses files with a reason', async () => {
+  it('drops stream content and activity, holds nothing to finalize, and refuses files with a reason while no connector sends them', async () => {
     const outbound = createJiraConnectorOutbound();
 
     await outbound.deliver(issueKey, { text: 'streamed chunk', keepVisible: true });
@@ -132,8 +132,21 @@ describe('the Jira outbound', () => {
     assert.equal(outbound.checkIsDelivering(issueKey), false);
     assert.deepEqual(outbound.listUnfinalizedKeys(), []);
     assert.deepEqual(await outbound.deliverFile(issueKey, { paths: ['/tmp/report.png'] }), { ok: false, error: jiraFileSendRefusal });
-    assert.equal(outbound.capabilities.attachments, false);
     assert.equal(outbound.capabilities.pinMessages, false);
+  });
+
+  it('files go to the connector\'s sender, read at every send — it is set once the lazily loaded connector is ready', async () => {
+    let sender: JiraFileSender | null = null;
+    const outbound = createJiraConnectorOutbound(() => sender);
+    assert.deepEqual(await outbound.deliverFile(issueKey, { paths: ['out/run.mp4'] }), { ok: false, error: jiraFileSendRefusal }, 'not ready yet');
+    const sent: string[] = [];
+    sender = async (key, request) => {
+      sent.push(`${key.thread} ${request.paths.join(',')}`);
+      return { ok: true, summary: 'Posted in a comment on PROJ-12: run.mp4 (plays in the comment, attachment 9002).', sentKinds: ['video'] };
+    };
+    assert.deepEqual(await outbound.deliverFile(issueKey, { paths: ['out/run.mp4'] }), { ok: true, summary: 'Posted in a comment on PROJ-12: run.mp4 (plays in the comment, attachment 9002).', sentKinds: ['video'] });
+    assert.deepEqual(sent, [`${issueKey.thread} out/run.mp4`]);
+    assert.equal(outbound.capabilities.attachments, true);
   });
 });
 
