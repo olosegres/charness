@@ -120,7 +120,7 @@ import { claudeJsonStreamAdapterName, claudePerTurnAdapterName } from './adapter
 import { checkIsClaudeAutoStopSupported } from '../utils/claudeCodeVersion';
 import { getSessionLaunchOptions, type SessionLaunchDefaultsReader } from './sessionLaunchDefaults';
 import { checkIsNotificationTurnPending, getPendingWorkHoldRemainingMs, getPendingWorkSignals, pendingWorkHoldDefaultMs, type PendingWorkInput } from '../utils/jsonStreamPendingWork';
-import { getInputsAfterEcho, getInputsAfterTurnEnd, getInputsOnTheirWay, type UnconsumedInput } from '../utils/jsonStreamUnconsumedInput';
+import { getInputsAfterEcho, getInputsAfterTurnEnd, getInputsOnTheirWay, getInputsWithOldestEchoMarked, getInputsWithoutEchoMarks, type UnconsumedInput } from '../utils/jsonStreamUnconsumedInput';
 import type { BackgroundWorkSignal } from '../utils/workingSignals';
 import { checkHasLostWork, getLostWorkFromTailRecord, type LostWork } from '../utils/lostWork';
 import {
@@ -359,12 +359,6 @@ export interface StreamSession {
    * See `checkHasUnconsumedInput`.
    */
   unconsumedInputs: UnconsumedInput[];
-  /**
-   * How many echoes of ours that matched nothing on the list arrived in the running turn (capped at what was listed when each
-   * came): messages the turn took in, in a shape no one can match. The turn's end drops that many entries
-   * (`getInputsAfterTurnEnd`); a turn with none (a task's notification) drops none.
-   */
-  unmatchedInputEchoes: number;
   /**
    * The CLI's live background-task list (`system/background_tasks_changed`,
    * re-sent whole on every change), id → the description the agent gave it: a
@@ -728,7 +722,7 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
       pollTimer: null, pollDelayMs: basePollIntervalMs, unchangedStreak: 0,
       isOversizeWarned: false, lastPersistedTailOffset: 0,
       reader: new ClaudeStreamLineReader(),
-      isActive: true, isStopping: false, isSuspending: false, isRespawning: false, isBusy: false, unconsumedInputs: [], unmatchedInputEchoes: 0,
+      isActive: true, isStopping: false, isSuspending: false, isRespawning: false, isBusy: false, unconsumedInputs: [],
       lastStdoutActivityAt: Date.now(), outstandingToolUseIds: new Set(),
       model: opts.model, reportedModel: null, effort: opts.effort,
       configDir: opts.configDir, isConfigDirSwitchPending: false, startCostUsd,
@@ -1061,7 +1055,7 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
       // tool call leaves no frame after the tail offset to rebuild it from. The
       // replayed/live events then keep it right (deltas/toolUse set it, `result`
       // clears it) — see `applyAction`.
-      isActive: true, isStopping: false, isSuspending: false, isRespawning: false, isBusy: isTurnInFlight, unconsumedInputs: [], unmatchedInputEchoes: 0,
+      isActive: true, isStopping: false, isSuspending: false, isRespawning: false, isBusy: isTurnInFlight, unconsumedInputs: [],
       // The outstanding tools come from the record too: they veto the busy-idle watchdog, which would
       // otherwise clear the restored turn after its silence window and let the stale-tool stop kill it.
       lastStdoutActivityAt: Date.now(), outstandingToolUseIds: new Set(outstandingToolUseIds),
@@ -1614,6 +1608,8 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
     // the typing indicator drops immediately. If output resumes, a delta re-arms
     // busy; if a `result` does arrive, `handleTurnEnd` is a harmless no-op.
     session.isBusy = false;
+    // The aborted turn's marks are void, and the marker the CLI writes for the interrupt is not an echo of anything queued.
+    session.unconsumedInputs = getInputsWithoutEchoMarks(session.unconsumedInputs);
     session.outstandingToolUseIds.clear();
     // When the CLI DOES emit a terminal `result{is_error}` for this abort, it
     // carries no text → `claudeStreamJson` labels it the literal `'API error'`.
@@ -1629,7 +1625,7 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
    * write is dropped first: it must not come back to life beside the new message.
    */
   private writeUserMessage(session: StreamSession, content: string, wasBusy: boolean): Promise<void> {
-    const pending: UnconsumedInput = { text: content, since: Date.now() };
+    const pending: UnconsumedInput = { text: content, since: Date.now(), hasUnmatchedEcho: false };
     session.unconsumedInputs = [...getInputsOnTheirWay({ inputs: session.unconsumedInputs, isBusy: wasBusy, now: pending.since }), pending];
     return this.writeStdin(session, { type: 'user', message: { role: 'user', content } }, { userText: content }).catch((error: unknown) => {
       session.unconsumedInputs = session.unconsumedInputs.filter((unconsumed) => unconsumed !== pending);
@@ -1941,12 +1937,10 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
         // mid-turn is taken into the RUNNING turn, so the session is busy from here until the turn's `result`, even if an
         // earlier `result` already cleared it.
         const inputsAfterEcho = getInputsAfterEcho(session.unconsumedInputs, action.text);
-        // An echo that took nothing off the list is a message the turn took in in a shape nothing here matches. Only up to what is
-        // listed counts: a user line of the CLI's own, with nothing listed, takes no message written after it with it.
-        if (inputsAfterEcho.length === session.unconsumedInputs.length) {
-          session.unmatchedInputEchoes = Math.min(session.unmatchedInputEchoes + 1, session.unconsumedInputs.length);
-        }
-        session.unconsumedInputs = inputsAfterEcho;
+        // An echo that took nothing off the list is a message the turn took in in a shape nothing here matches: it is tied to the
+        // oldest entry not yet marked, which the turn's end drops. With nothing listed it marks nothing — a user line of the CLI's
+        // own takes no message written after it with it.
+        session.unconsumedInputs = inputsAfterEcho.length === session.unconsumedInputs.length ? getInputsWithOldestEchoMarked(inputsAfterEcho) : inputsAfterEcho;
         session.isBusy = true;
         return;
     }
@@ -1974,6 +1968,8 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
     // A turn the bot never wrote to (a task's notification, a scheduled job) starting while nothing ran: a running turn counts every
     // listed message as queued behind it, so what went stale before it must not be revived by it.
     if (!session.isBusy) this.getUnconsumedInputsOnTheirWay(session);
+    // What the turn before marked is its own: a turn that never reported a result must not leave marks for a later turn's end to act on.
+    session.unconsumedInputs = getInputsWithoutEchoMarks(session.unconsumedInputs);
     session.isBusy = true;
     session.notificationTurnPendingSince = null;
   }
@@ -2182,9 +2178,8 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
     // switch would never fire. A message still genuinely queued is echoed later (an echo of nothing listed takes
     // nothing off and marks the session busy again), so forgetting them here can only under-count briefly.
     // Otherwise the queue is taken in by the turn that starts next, its wait starting over from this end — less what this turn
-    // took in in a shape nothing matches.
-    session.unconsumedInputs = action.isError ? [] : getInputsAfterTurnEnd(session.unconsumedInputs, Date.now(), session.unmatchedInputEchoes);
-    session.unmatchedInputEchoes = 0;
+    // took in in a shape nothing matches (the marked entries).
+    session.unconsumedInputs = action.isError ? [] : getInputsAfterTurnEnd(session.unconsumedInputs, Date.now());
     session.outstandingToolUseIds.clear();
     this.finishReasoning(session);
     this.clearSubagent(session);

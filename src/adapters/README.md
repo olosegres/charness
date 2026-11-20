@@ -218,8 +218,10 @@ newline (four writes, two echoes). So an echo takes off the run of messages whos
 a user line that matches nothing written (the CLI's own `[Request interrupted…]` marker) takes nothing off, and an error
 `result` forgets the queue (a limit may never echo it). Counting writes minus echoes left such a drain's remainder "working"
 for hours (a topic whose idle compaction never ran). A message the CLI took in in a shape nothing matches (it changed the text)
-is a phantom: the turn that carried that unmatched echo (`unmatchedInputEchoes`, capped at what was listed) DROPS as many of the
-oldest entries at its end (`getInputsAfterTurnEnd`), so the readers that decide AT a turn end (the claude-per-turn stop, a deferred
+is a phantom: the unmatched echo MARKS the oldest unmarked entry (`hasUnmatchedEcho`: tied to the entry, so a message written later
+in the turn, or one a later echo takes off, is never the one that goes), the turn's end DROPS the marked entries
+(`getInputsAfterTurnEnd`), and a new turn's start or an interrupt forgets the marks (a turn that never reported a result leaves
+none behind), so the readers that decide AT a turn end (the claude-per-turn stop, a deferred
 account switch) are not held off by it for good. A turn with NO echo of ours (a finished task's notification, a scheduled job,
 the bot's own `/compact`) took nothing in and drops nothing — it only starts the grace over: a real message the CLI queued behind
 it stays counted until its own echo, or the stop and the switch would kill the process a moment before the turn that takes it

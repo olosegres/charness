@@ -23,6 +23,12 @@ export interface UnconsumedInput {
    * after the turn that ran ahead of it, so the wait for that starts at the turn's end, not at the write.
    */
   since: number;
+  /**
+   * An echo of ours that matched nothing arrived in the running turn, and this is the entry it is counted against (the oldest
+   * unmarked one at that moment): the message the turn took in, in a shape nothing here matches. The turn's end drops marked
+   * entries; a new turn's start forgets the marks (see {@link getInputsAfterTurnEnd}).
+   */
+  hasUnmatchedEcho: boolean;
 }
 
 /** What the CLI joins the texts of messages it takes in together with (measured). */
@@ -53,17 +59,36 @@ export function getInputsAfterEcho(inputs: readonly UnconsumedInput[], echoText:
 }
 
 /**
- * @description The messages after a turn ended. Every one's wait for the turn that takes it in starts from now (the CLI starts it a
- * moment after this end — measured on 2.1.329, its echo follows within a second). Besides, the turn took in as many messages as it
- * carried echoes of ours that matched nothing listed (`unmatchedEchoCount`): the CLI changed their text, wrapped them in something
- * else, so nothing can match them any more and an entry kept would hold the readers that decide at a turn end — the claude-per-turn
- * stop, a deferred account switch — at every turn end for good. Those are dropped, the oldest first (the CLI takes its queue in
- * order). A turn that carried no echo of ours (a finished task's notification, a scheduled job, the bot's own `/compact`) took
- * nothing in: a real message the CLI queued behind it stays counted until its own echo, or its grace is out — dropping it here
- * would let the stop or the account switch kill the process a moment before the turn that takes that message in.
+ * @description The messages after an echo of ours that matched NONE of them: the oldest one not yet marked is marked as the one the
+ * echo carried (the CLI takes its queue in order) — a message the turn took in, in a shape nothing matches. Tied to the entry, not
+ * counted: a message written after the echo, or one a later echo takes off, is never the one that goes.
  */
-export function getInputsAfterTurnEnd(inputs: readonly UnconsumedInput[], now: number, unmatchedEchoCount: number): UnconsumedInput[] {
-  return inputs.slice(unmatchedEchoCount).map((input) => ({ ...input, since: now }));
+export function getInputsWithOldestEchoMarked(inputs: readonly UnconsumedInput[]): UnconsumedInput[] {
+  const unmarkedIndex = inputs.findIndex((input) => !input.hasUnmatchedEcho);
+  return inputs.map((input, index) => (index === unmarkedIndex ? { ...input, hasUnmatchedEcho: true } : input));
+}
+
+/**
+ * @description The messages after a turn ended. Every one's wait for the turn that takes it in starts from now (the CLI starts it a
+ * moment after this end — measured on 2.1.329, its echo follows within a second). The marked ones are DROPPED: the turn took them
+ * in, in a shape nothing matches (the CLI changed their text), so nothing can match them any more and an entry kept would hold the
+ * readers that decide at a turn end — the claude-per-turn stop, a deferred account switch — at every turn end for good. A turn that
+ * carried no echo of ours (a finished task's notification, a scheduled job, the bot's own `/compact`) marked nothing and drops
+ * nothing: a real message the CLI queued behind it stays counted until its own echo, or its grace is out — dropping it here would
+ * let the stop or the account switch kill the process a moment before the turn that takes that message in. (Measured on 2.1.329:
+ * such a turn writes no `user` line of its own at all, and a message written behind it is echoed in its own turn after it.)
+ */
+export function getInputsAfterTurnEnd(inputs: readonly UnconsumedInput[], now: number): UnconsumedInput[] {
+  return inputs.filter((input) => !input.hasUnmatchedEcho).map((input) => ({ ...input, since: now }));
+}
+
+/**
+ * @description The messages as a new turn starts, or the running one is interrupted: the marks of the turn before are forgotten. A
+ * turn that never reported a `result` (an aborted one, one the busy watchdog cleared) must not leave its marks to drop a real message
+ * at some later turn's end, and the interrupt marker the CLI writes after an interrupt is not an echo of anything queued.
+ */
+export function getInputsWithoutEchoMarks(inputs: readonly UnconsumedInput[]): UnconsumedInput[] {
+  return inputs.map((input) => (input.hasUnmatchedEcho ? { ...input, hasUnmatchedEcho: false } : input));
 }
 
 /**

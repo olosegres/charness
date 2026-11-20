@@ -236,6 +236,49 @@ describe('json-stream adapter — the turn-end readers are neither held for good
     assert.deepEqual(session.unconsumedInputs.map((pending) => pending.text), ['the newer message, still queued']);
   });
 
+  it('an unmatched line is tied to the entry it was counted against: a message written LATER in the same turn is not dropped with it (review)', async () => {
+    const { adapter, session } = createAdapter();
+    const workingAtTurnEnds = recordWorkingAtTurnEnds(adapter);
+    await adapter.sendInputAndWait(key, 'M, queued behind the turn');
+    // The CLI's own interrupt marker: array content, so no text, while M is listed — an unmatched line that is not an echo of M.
+    adapter['onStdout'](session, interruptMarkerFrame);
+    // M's turn takes M in (matched) and runs; the user writes N during it.
+    adapter['onStdout'](session, initFrame + echoFrame('M, queued behind the turn'));
+    await adapter.sendInputAndWait(key, 'N, written later in that turn');
+    adapter['onStdout'](session, resultFrame());
+    assert.deepEqual(session.unconsumedInputs.map((pending) => pending.text), ['N, written later in that turn'], 'the line could not have carried N');
+    assert.deepEqual(workingAtTurnEnds, [true], 'N is still queued: the per-turn stop must not kill the process over it');
+  });
+
+  it('an unmatched line of a turn that never reports a result is forgotten when the next turn starts: it does not drop a real message at the next turn end (review)', async () => {
+    const { adapter, session } = createAdapter();
+    await adapter.sendInputAndWait(key, 'M, queued behind an aborted turn');
+    adapter['onStdout'](session, interruptMarkerFrame); // the aborted turn: no `result` follows
+    adapter['onStdout'](session, initFrame);            // the next turn starts
+    adapter['onStdout'](session, resultFrame());        // a turn with no echo of ours
+    assert.deepEqual(session.unconsumedInputs.map((pending) => pending.text), ['M, queued behind an aborted turn']);
+  });
+
+  it('an interrupt forgets what the aborted turn marked: the marker that follows it is not an echo of anything queued (review)', async () => {
+    const { adapter, session } = createAdapter();
+    await adapter.sendInputAndWait(key, 'M, queued behind the turn');
+    adapter['onStdout'](session, unrecognisedEchoFrame); // marks M for the end of this turn
+    adapter.sendEscape(key);
+    adapter['onStdout'](session, resultFrame());
+    assert.deepEqual(session.unconsumedInputs.map((pending) => pending.text), ['M, queued behind the turn']);
+  });
+
+  it('the mark is gone with the turn: a message queued behind the NEXT turn is not dropped at that turn\'s end either (review)', async () => {
+    const { adapter, session } = createAdapter();
+    await adapter.sendInputAndWait(key, 'the message whose echo nothing can match');
+    adapter['onStdout'](session, unrecognisedEchoFrame);
+    adapter['onStdout'](session, resultFrame());
+    assert.equal(session.unconsumedInputs.length, 0, 'dropped at its own turn\'s end');
+    await adapter.sendInputAndWait(key, 'queued behind the next turn');
+    adapter['onStdout'](session, initFrame + resultFrame()); // a turn of the CLI\'s own: no echo of ours
+    assert.deepEqual(session.unconsumedInputs.map((pending) => pending.text), ['queued behind the next turn']);
+  });
+
   it('a user line of the CLI\'s own while nothing is listed takes no message written after it with it', async () => {
     const { adapter, session } = createAdapter();
     adapter['onStdout'](session, echoFrame('<local-command-stdout>nothing of ours</local-command-stdout>'));
