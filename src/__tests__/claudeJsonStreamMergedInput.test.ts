@@ -31,7 +31,7 @@ import assert from 'node:assert/strict';
 import { ClaudeJsonStreamAdapter, type StreamSession } from '../adapters/claudeJsonStreamAdapter';
 import { keyToString, type SessionKey } from '../sessionKey';
 import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
-import { compactionAbsoluteTimeoutMs } from '../utils/jsonStreamBusyWatchdog';
+import { busyIdleWatchdogMs, compactionAbsoluteTimeoutMs } from '../utils/jsonStreamBusyWatchdog';
 import { unconsumedInputGraceMs } from '../utils/jsonStreamPendingWork';
 import { createStreamSessionFixture } from './claudeJsonStreamSessionFixture';
 
@@ -43,6 +43,8 @@ const interruptMarkerFrame = JSON.stringify({ type: 'user', message: { role: 'us
 const resultFrame = (isError = false): string => JSON.stringify({ type: 'result', subtype: isError ? 'error_during_execution' : 'success', is_error: isError, result: isError ? '' : 'done' }) + '\n';
 const initFrame = JSON.stringify({ type: 'system', subtype: 'init', session_id: 'sess-merged', model: 'fake-model' }) + '\n';
 const idleStateFrame = JSON.stringify({ type: 'system', subtype: 'session_state_changed', state: 'idle' }) + '\n';
+/** `session_state_changed`: `running` opens a turn, and comes back in the MIDDLE of one after a permission or a question (`requires_action` → `running`). */
+const stateFrame = (state: 'running' | 'requires_action'): string => JSON.stringify({ type: 'system', subtype: 'session_state_changed', state }) + '\n';
 
 let nowMs = 0;
 const created: Array<{ adapter: ClaudeJsonStreamAdapter; session: StreamSession }> = [];
@@ -242,8 +244,9 @@ describe('json-stream adapter — the turn-end readers are neither held for good
     await adapter.sendInputAndWait(key, 'M, queued behind the turn');
     // The CLI's own interrupt marker: array content, so no text, while M is listed — an unmatched line that is not an echo of M.
     adapter['onStdout'](session, interruptMarkerFrame);
-    // M's turn takes M in (matched) and runs; the user writes N during it.
-    adapter['onStdout'](session, initFrame + echoFrame('M, queued behind the turn'));
+    // M is taken in (matched) later in the same turn — NO turn-start frame between the steps, so what keeps N is the tie of the mark to
+    // M (which leaves with M), not a reset; the user writes N meanwhile.
+    adapter['onStdout'](session, echoFrame('M, queued behind the turn'));
     await adapter.sendInputAndWait(key, 'N, written later in that turn');
     adapter['onStdout'](session, resultFrame());
     assert.deepEqual(session.unconsumedInputs.map((pending) => pending.text), ['N, written later in that turn'], 'the line could not have carried N');
@@ -266,6 +269,51 @@ describe('json-stream adapter — the turn-end readers are neither held for good
     adapter.sendEscape(key);
     adapter['onStdout'](session, resultFrame());
     assert.deepEqual(session.unconsumedInputs.map((pending) => pending.text), ['M, queued behind the turn']);
+  });
+
+  it('a turn that asks for a permission or a question keeps its marks: `requires_action` → `running` inside the turn is no new turn (review)', async () => {
+    const { adapter, session } = createAdapter();
+    const workingAtTurnEnds = recordWorkingAtTurnEnds(adapter);
+    await adapter.sendInputAndWait(key, 'the message whose echo nothing can match');
+    adapter['onStdout'](session, stateFrame('running') + initFrame);
+    adapter['onStdout'](session, unrecognisedEchoFrame);
+    adapter['onStdout'](session, stateFrame('requires_action') + stateFrame('running'));
+    adapter['onStdout'](session, resultFrame());
+    assert.equal(session.unconsumedInputs.length, 0, 'dropped at the end of the turn that echoed it');
+    assert.deepEqual(workingAtTurnEnds, [false], 'the claude-per-turn stop is not held off for the 30 s of a grace nothing re-asks after');
+  });
+
+  it('/esc, then the marker the CLI writes AFTER it, then the next turn: the marker\'s mark is forgotten at that turn\'s start, so its own unmatched echo drops one entry, not two (review)', async () => {
+    const { adapter, session } = createAdapter();
+    await adapter.sendInputAndWait(key, 'M, queued behind the aborted turn');
+    await adapter.sendInputAndWait(key, 'N, queued behind it too');
+    adapter.sendEscape(key);
+    adapter['onStdout'](session, interruptMarkerFrame); // arrives after the interrupt request: marks M
+    adapter['onStdout'](session, initFrame);             // M's turn opens: the marker's mark is void
+    adapter['onStdout'](session, unrecognisedEchoFrame); // M taken in, in a shape nothing matches: marks M again — the oldest unmarked
+    adapter['onStdout'](session, resultFrame());
+    assert.deepEqual(session.unconsumedInputs.map((pending) => pending.text), ['N, queued behind it too']);
+  });
+
+  it('/esc, the marker, then the next turn that takes M in (matched): nothing is dropped', async () => {
+    const { adapter, session } = createAdapter();
+    await adapter.sendInputAndWait(key, 'M, queued behind the aborted turn');
+    await adapter.sendInputAndWait(key, 'N, queued behind it too');
+    adapter.sendEscape(key);
+    adapter['onStdout'](session, interruptMarkerFrame);
+    adapter['onStdout'](session, initFrame + echoFrame('M, queued behind the aborted turn') + resultFrame());
+    assert.deepEqual(session.unconsumedInputs.map((pending) => pending.text), ['N, queued behind it too']);
+  });
+
+  it('a turn the busy watchdog clears (no `result` ever came) leaves no marks behind either (review)', async () => {
+    const { adapter, session } = createAdapter();
+    await adapter.sendInputAndWait(key, 'M, queued behind a turn that never ends');
+    adapter['onStdout'](session, unrecognisedEchoFrame);
+    assert.equal(session.unconsumedInputs[0].hasUnmatchedEcho, true, 'precondition: marked');
+    session.lastStdoutActivityAt = nowMs - busyIdleWatchdogMs;
+    adapter['maybeClearBusyOnIdle'](session);
+    assert.equal(session.isBusy, false, 'precondition: the watchdog cleared the turn');
+    assert.deepEqual(session.unconsumedInputs.map((pending) => [pending.text, pending.hasUnmatchedEcho]), [['M, queued behind a turn that never ends', false]]);
   });
 
   it('the mark is gone with the turn: a message queued behind the NEXT turn is not dropped at that turn\'s end either (review)', async () => {

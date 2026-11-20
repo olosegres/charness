@@ -838,6 +838,8 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
     if (!shouldClear) return;
     console.warn(`[ClaudeJson] busy-idle watchdog: ${keyToString(session.key)} idle ${busyIdleWatchdogMs}ms with nothing in flight — clearing stuck busy (missed terminal result?)`);
     session.isBusy = false;
+    // A turn that never reported its `result` leaves no marks behind.
+    session.unconsumedInputs = getInputsWithoutEchoMarks(session.unconsumedInputs);
     this.finishReasoning(session);
     // The record must not keep saying "turn in flight": an adopt would restore the cleared flag.
     this.jsonStreamTailWriter?.(session.key, buildTailRecord(session, session.lastPersistedTailOffset));
@@ -1608,7 +1610,8 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
     // the typing indicator drops immediately. If output resumes, a delta re-arms
     // busy; if a `result` does arrive, `handleTurnEnd` is a harmless no-op.
     session.isBusy = false;
-    // The aborted turn's marks are void, and the marker the CLI writes for the interrupt is not an echo of anything queued.
+    // The aborted turn's marks are void. (The marker the CLI writes AFTER the interrupt request is no echo of anything queued either, but
+    // it arrives after this and may still mark an entry: the next turn's `init` forgets that mark.)
     session.unconsumedInputs = getInputsWithoutEchoMarks(session.unconsumedInputs);
     session.outstandingToolUseIds.clear();
     // When the CLI DOES emit a terminal `result{is_error}` for this abort, it
@@ -1876,11 +1879,14 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
         // it `/status` and the pinned banner showed no model at all on a default
         // start / resume / adopt (nothing ever set the `--model` pick).
         this.handleInit(session, action);
-        // `init` opens every turn: the turn runs from here, not from its first output.
-        this.markTurnStarted(session);
+        // `init` opens every turn: the turn runs from here, not from its first output. Always a new turn — also after an interrupt, when
+        // the CLI's marker line has set the busy flag again: the marker's mark must not outlive the turn that opens here.
+        this.markTurnStarted(session, { isNewTurn: true });
         return;
       case 'turnStarted':
-        this.markTurnStarted(session);
+        // `session_state_changed` `running` also comes back in the MIDDLE of a turn (after a permission or a question: `requires_action` →
+        // `running`): it opens a turn only when none was running. A job's firing always opens one.
+        this.markTurnStarted(session, { isNewTurn: action.wakeupSource !== null || !session.isBusy });
         if (action.wakeupSource !== null) session.scheduledJobs = getScheduledJobsAfterFiring(session.scheduledJobs, action.wakeupSource);
         return;
       case 'backgroundTasks':
@@ -1963,13 +1969,16 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
     if (session.backgroundTasks.has(action.taskId)) session.notificationTurnPendingSince = Date.now();
   }
 
-  /** A turn began (its `init`, the CLI's running state, a scheduled job firing): busy from here; an announced turn has shown. */
-  private markTurnStarted(session: StreamSession): void {
+  /**
+   * A turn began (its `init`, the CLI's running state, a scheduled job firing): busy from here; an announced turn has shown.
+   * `isNewTurn`: a turn really OPENS here, so the marks of the turn before are forgotten — one that never reported a result must not
+   * leave marks for a later turn's end to act on. A `running` inside a running turn (after a permission or a question) is no new turn.
+   */
+  private markTurnStarted(session: StreamSession, options: { isNewTurn: boolean }): void {
     // A turn the bot never wrote to (a task's notification, a scheduled job) starting while nothing ran: a running turn counts every
     // listed message as queued behind it, so what went stale before it must not be revived by it.
     if (!session.isBusy) this.getUnconsumedInputsOnTheirWay(session);
-    // What the turn before marked is its own: a turn that never reported a result must not leave marks for a later turn's end to act on.
-    session.unconsumedInputs = getInputsWithoutEchoMarks(session.unconsumedInputs);
+    if (options.isNewTurn) session.unconsumedInputs = getInputsWithoutEchoMarks(session.unconsumedInputs);
     session.isBusy = true;
     session.notificationTurnPendingSince = null;
   }

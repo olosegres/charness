@@ -83,9 +83,10 @@ export function getInputsAfterTurnEnd(inputs: readonly UnconsumedInput[], now: n
 }
 
 /**
- * @description The messages as a new turn starts, or the running one is interrupted: the marks of the turn before are forgotten. A
- * turn that never reported a `result` (an aborted one, one the busy watchdog cleared) must not leave its marks to drop a real message
- * at some later turn's end, and the interrupt marker the CLI writes after an interrupt is not an echo of anything queued.
+ * @description The messages as a turn OPENS (its `init`, a job's firing, a `running` after none), or the running one is interrupted or
+ * cleared by the busy watchdog: the marks of the turn before are forgotten. A turn that never reported a `result` (an aborted one,
+ * one the watchdog cleared) must not leave its marks to drop a real message at some later turn's end. The marker the CLI writes for
+ * an interrupt arrives AFTER the interrupt request and may still mark an entry: the next turn's `init` forgets that mark.
  */
 export function getInputsWithoutEchoMarks(inputs: readonly UnconsumedInput[]): UnconsumedInput[] {
   return inputs.map((input) => (input.hasUnmatchedEcho ? { ...input, hasUnmatchedEcho: false } : input));

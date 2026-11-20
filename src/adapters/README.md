@@ -220,8 +220,10 @@ a user line that matches nothing written (the CLI's own `[Request interrupted…
 for hours (a topic whose idle compaction never ran). A message the CLI took in in a shape nothing matches (it changed the text)
 is a phantom: the unmatched echo MARKS the oldest unmarked entry (`hasUnmatchedEcho`: tied to the entry, so a message written later
 in the turn, or one a later echo takes off, is never the one that goes), the turn's end DROPS the marked entries
-(`getInputsAfterTurnEnd`), and a new turn's start or an interrupt forgets the marks (a turn that never reported a result leaves
-none behind), so the readers that decide AT a turn end (the claude-per-turn stop, a deferred
+(`getInputsAfterTurnEnd`), and the marks are forgotten when a turn really opens (`init`, a job's firing, a `running` with none
+running — not the `requires_action` → `running` inside a turn), on an interrupt and when the busy watchdog clears a turn (a turn
+that never reported a result leaves none behind; the interrupt marker arrives after the request, the next turn's `init` forgets
+its mark), so the readers that decide AT a turn end (the claude-per-turn stop, a deferred
 account switch) are not held off by it for good. A turn with NO echo of ours (a finished task's notification, a scheduled job,
 the bot's own `/compact`) took nothing in and drops nothing — it writes no `user` line of its own at all (recorded live on 2.1.329 for
 a cron job, a `ScheduleWakeup` wakeup and a task notification: `claudeSelfStartedTurnFrames.ts`), and a message written behind it
