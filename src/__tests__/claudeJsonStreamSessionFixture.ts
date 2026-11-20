@@ -82,6 +82,7 @@ export function createStreamSessionFixture(overrides: Partial<StreamSession> = {
     swallowNextAbortError: false,
     lastWatermarkOffset: -1,
     unconsumedInputs: [],
+    unmatchedInputEchoes: 0,
     backgroundTasks: new Map(),
     notificationTurnPendingSince: null,
     lastTurnEndedAt: Date.now(),

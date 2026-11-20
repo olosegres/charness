@@ -8,9 +8,9 @@
  * every other message queued by then, as ONE turn whose single echo carries their texts joined by a newline: four writes, two
  * echoes. A bare write-versus-echo count therefore never returns to zero after such a drain, which is how a topic's process was
  * once held "working" for hours. So a message is kept WITH ITS TEXT and taken off by the echo that carries it, and — since no
- * account of the CLI's queue can be exact for ever — it holds a turn-less process only for a bounded time, and is dropped when the
- * turn that should have taken it in has come and gone: the turn end that follows its write may still be followed by that turn, the
- * next one is not (see {@link getInputsAfterTurnEnd}).
+ * account of the CLI's queue can be exact for ever — it holds a turn-less process only for a bounded time, and a message the CLI
+ * took in in a shape nothing here can match (a "phantom") is dropped at the end of the turn that echoed it (see
+ * {@link getInputsAfterTurnEnd}).
  */
 
 import { unconsumedInputGraceMs } from './jsonStreamPendingWork';
@@ -19,12 +19,10 @@ import { unconsumedInputGraceMs } from './jsonStreamPendingWork';
 export interface UnconsumedInput {
   text: string;
   /**
-   * The moment the CLI's chance to take it in last began: its write, then the turn end that follows it — a queued message is taken in
-   * right after the turn that ran ahead of it, so the wait for that starts at the turn's end, not at the write.
+   * The moment the CLI's chance to take it in last began: its write, then every turn end — a queued message is taken in right
+   * after the turn that ran ahead of it, so the wait for that starts at the turn's end, not at the write.
    */
   since: number;
-  /** A turn has ended since the write: the turn that was to take it in has had its chance (see {@link getInputsAfterTurnEnd}). */
-  hasSeenTurnEnd: boolean;
 }
 
 /** What the CLI joins the texts of messages it takes in together with (measured). */
@@ -55,16 +53,17 @@ export function getInputsAfterEcho(inputs: readonly UnconsumedInput[], echoText:
 }
 
 /**
- * @description The messages after a turn ended. Those written since the PREVIOUS turn end start their wait for the turn that takes
- * them in from now (the CLI starts it a moment after this end — measured on 2.1.329, its echo follows within a second). Those that
- * already waited through a whole turn end are DROPPED: that turn started and ended without echoing them, so nothing can match them
- * any more (the CLI changed their text, wrapped them in something else) and an entry kept would hold the readers that decide at a
- * turn end — the claude-per-turn stop, a deferred account switch — at every turn end for good. The one case this under-counts: a
- * turn the CLI ran AHEAD of a still-queued message (a task's notification) drops it a moment before its own turn starts; its echo
- * then marks the session busy again, as an echo of anything unlisted always does.
+ * @description The messages after a turn ended. Every one's wait for the turn that takes it in starts from now (the CLI starts it a
+ * moment after this end — measured on 2.1.329, its echo follows within a second). Besides, the turn took in as many messages as it
+ * carried echoes of ours that matched nothing listed (`unmatchedEchoCount`): the CLI changed their text, wrapped them in something
+ * else, so nothing can match them any more and an entry kept would hold the readers that decide at a turn end — the claude-per-turn
+ * stop, a deferred account switch — at every turn end for good. Those are dropped, the oldest first (the CLI takes its queue in
+ * order). A turn that carried no echo of ours (a finished task's notification, a scheduled job, the bot's own `/compact`) took
+ * nothing in: a real message the CLI queued behind it stays counted until its own echo, or its grace is out — dropping it here
+ * would let the stop or the account switch kill the process a moment before the turn that takes that message in.
  */
-export function getInputsAfterTurnEnd(inputs: readonly UnconsumedInput[], now: number): UnconsumedInput[] {
-  return inputs.filter((input) => !input.hasSeenTurnEnd).map((input) => ({ ...input, since: now, hasSeenTurnEnd: true }));
+export function getInputsAfterTurnEnd(inputs: readonly UnconsumedInput[], now: number, unmatchedEchoCount: number): UnconsumedInput[] {
+  return inputs.slice(unmatchedEchoCount).map((input) => ({ ...input, since: now }));
 }
 
 /**

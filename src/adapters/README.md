@@ -199,7 +199,7 @@ yet echoed, a bot-issued compaction in flight. EVERY signal is bounded, none hol
 turn-less process for good: pending work by the hold below, a compaction by the longest the bot waits
 for one (`compactionAbsoluteTimeoutMs`; the flag alone, without a compaction awaiting it, holds nothing), input
 by the grace the CLI has to start the turn that takes it in (`unconsumedInputGraceMs`, 30 s, counted from the
-write and restarted at the ONE turn end that follows it — a turn running holds it meanwhile). Pending work is:
+write and restarted at every turn end — a turn running holds it meanwhile). Pending work is:
 
 - the live background-task list (`system/background_tasks_changed`) and the
   session-only `CronCreate` jobs — held only while the agent's last turn ended
@@ -217,11 +217,14 @@ ends first — drained with every other message queued by then as ONE turn whose
 newline (four writes, two echoes). So an echo takes off the run of messages whose newline-joined texts are exactly its content;
 a user line that matches nothing written (the CLI's own `[Request interrupted…]` marker) takes nothing off, and an error
 `result` forgets the queue (a limit may never echo it). Counting writes minus echoes left such a drain's remainder "working"
-for hours (a topic whose idle compaction never ran). An entry no echo ever matches (the CLI changed its text) is a phantom:
-it survives the turn end that follows its write (the turn that takes it in may be about to start) and is DROPPED at the next
-(`getInputsAfterTurnEnd`), and every read — plus the start of a turn the bot never wrote to — drops what is past its grace; so
-the readers that decide AT a turn end (the claude-per-turn stop, a deferred account switch) are never held off by one for good.
-`checkHasUnconsumedInput` reads the same bounded judgement.
+for hours (a topic whose idle compaction never ran). A message the CLI took in in a shape nothing matches (it changed the text)
+is a phantom: the turn that carried that unmatched echo (`unmatchedInputEchoes`, capped at what was listed) DROPS as many of the
+oldest entries at its end (`getInputsAfterTurnEnd`), so the readers that decide AT a turn end (the claude-per-turn stop, a deferred
+account switch) are not held off by it for good. A turn with NO echo of ours (a finished task's notification, a scheduled job,
+the bot's own `/compact`) took nothing in and drops nothing — it only starts the grace over: a real message the CLI queued behind
+it stays counted until its own echo, or the stop and the switch would kill the process a moment before the turn that takes it
+in. Every read — and the start of a turn the bot never wrote to — also drops what is past its grace. `checkHasUnconsumedInput`
+reads the same bounded judgement.
 
 The two halves are read apart by the idle fire: a pending interactive question
 excuses the turn (D1: reject, compact, re-ask) but never pending work. An idle

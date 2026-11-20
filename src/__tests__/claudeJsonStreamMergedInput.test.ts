@@ -14,10 +14,11 @@
  *   - input the CLI never echoes holds a turn-less process only briefly (`unconsumedInputGraceMs`) — never for good — and
  *     a running turn still holds it as before;
  *   - the failed-turn reconciliation stays: an error `result` forgets the queue;
- *   - an echo nothing here can match (a "phantom": the CLI changed the text, an array-shaped content) is not graced again at every
- *     turn end: it holds a turn-less process through the ONE turn end that follows its write — the turn that takes it in may be
- *     about to start — and is dropped at the next, so the two readers that decide AT a turn end (the claude-per-turn stop, a deferred
- *     account switch) are not held off by it for good, nor is it revived by a turn the bot never wrote to (a task's notification).
+ *   - an echo nothing here can match (a "phantom": the CLI changed the text, an array-shaped content) is a message the turn that
+ *     echoed it took in: it is dropped at that turn's end, so the two readers that decide AT a turn end (the claude-per-turn stop,
+ *     a deferred account switch) are not held off by it for good. A turn that carried no echo of ours (a finished task's
+ *     notification, run by the CLI ahead of a queued message) took nothing in and drops nothing: the message behind it stays
+ *     counted until its own echo, or its grace is out.
  *
  * Frames are the shapes of that measurement. The FIFO write is the adapter's test seam; no `claude` process is involved.
  *
@@ -179,22 +180,20 @@ function recordWorkingAtTurnEnds(adapter: ClaudeJsonStreamAdapter): boolean[] {
   return workingAtTurnEnds;
 }
 
-describe('json-stream adapter — an echo nothing can match does not hold the turn-end readers for good (review)', () => {
+describe('json-stream adapter — the turn-end readers are neither held for good by an echo nothing can match nor released over a real queued message (review)', () => {
   const unrecognisedEchoFrame = echoFrame('the message, as the CLI echoes it after changing its text');
 
-  it('the claude-per-turn stop: a phantom holds the process at the turn end that follows its write, not at the next', async () => {
+  it('the claude-per-turn stop: a message whose echo nothing can match is dropped at the end of the turn that carried that echo', async () => {
     const { adapter, session } = createAdapter();
     const workingAtTurnEnds = recordWorkingAtTurnEnds(adapter);
     await adapter.sendInputAndWait(key, 'the message as the bot wrote it');
     adapter['onStdout'](session, unrecognisedEchoFrame);
     adapter['onStdout'](session, resultFrame());
-    // A turn nobody wrote to (a task's notification): the phantom has had a whole turn to be echoed.
-    adapter['onStdout'](session, initFrame + resultFrame());
-    assert.deepEqual(workingAtTurnEnds, [true, false], 'the first end may still be followed by the turn that takes it in; the second is past that');
+    assert.deepEqual(workingAtTurnEnds, [false], 'the turn took the message in, in a shape no one can match: nothing is queued, the stop is not held off');
     assert.deepEqual(session.unconsumedInputs, []);
   });
 
-  it('a deferred account switch fires at the next turn end, not only after the grace and a turn end beyond it', async () => {
+  it('a deferred account switch fires at that turn end', async () => {
     const { adapter, session } = createAdapter();
     const respawns: Array<string | null | undefined> = [];
     adapter['respawnWithChange'] = async (_session, change) => { respawns.push(change.configDir); };
@@ -204,16 +203,61 @@ describe('json-stream adapter — an echo nothing can match does not hold the tu
     assert.equal(await adapter.applyClaudeConfigDir(key), 'deferred');
     adapter['onStdout'](session, resultFrame());
     await new Promise((resolve) => setTimeout(resolve, 20));
-    assert.deepEqual(respawns, [], 'the first turn end: the phantom may be a message about to start its turn');
-    adapter['onStdout'](session, initFrame + resultFrame());
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    assert.deepEqual(respawns, ['/profiles/perf'], 'the next one: nothing is waiting any more, the switch is not held off again');
+    assert.deepEqual(respawns, ['/profiles/perf']);
   });
 
-  it('a phantom gone stale while nothing ran is not revived by a turn the bot never wrote to', async () => {
+  it('a REAL message queued behind a turn the CLI runs of its own (a finished task\'s notification) is kept at that turn\'s end: it is not stopped over, not switched over, and its own turn takes it in', async () => {
     const { adapter, session } = createAdapter();
-    await adapter.sendInputAndWait(key, 'the message as the bot wrote it');
+    const workingAtTurnEnds = recordWorkingAtTurnEnds(adapter);
+    const respawns: Array<string | null | undefined> = [];
+    adapter['respawnWithChange'] = async (_session, change) => { respawns.push(change.configDir); };
+    adapter.setClaudeConfigDirReader(() => '/profiles/perf');
+    await adapter.sendInputAndWait(key, 'the user message, queued behind a running turn');
+    assert.equal(await adapter.applyClaudeConfigDir(key), 'deferred');
+    adapter['onStdout'](session, resultFrame());
+    // The CLI runs the task's notification turn ahead of the message: no echo of ours in it, so it cannot have taken the message in.
+    adapter['onStdout'](session, initFrame + resultFrame());
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.deepEqual(workingAtTurnEnds, [true, true], 'the message is still queued at both ends: neither the per-turn stop nor the wake engine may read it as done');
+    assert.deepEqual(respawns, [], 'a re-spawn here would kill the process with the message in its queue');
+    // Its own turn.
+    adapter['onStdout'](session, initFrame + echoFrame('the user message, queued behind a running turn') + resultFrame());
+    assert.deepEqual(workingAtTurnEnds, [true, true, false]);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.deepEqual(respawns, ['/profiles/perf'], 'the switch waits for that one');
+  });
+
+  it('a turn end drops at most as many messages as unmatched echoes arrived in it, the oldest first', async () => {
+    const { adapter, session } = createAdapter();
+    await adapter.sendInputAndWait(key, 'the older message: its echo comes in a shape nothing matches');
+    await adapter.sendInputAndWait(key, 'the newer message, still queued');
     adapter['onStdout'](session, unrecognisedEchoFrame);
+    adapter['onStdout'](session, resultFrame());
+    assert.deepEqual(session.unconsumedInputs.map((pending) => pending.text), ['the newer message, still queued']);
+  });
+
+  it('a user line of the CLI\'s own while nothing is listed takes no message written after it with it', async () => {
+    const { adapter, session } = createAdapter();
+    adapter['onStdout'](session, echoFrame('<local-command-stdout>nothing of ours</local-command-stdout>'));
+    await adapter.sendInputAndWait(key, 'written after that line, queued');
+    adapter['onStdout'](session, resultFrame());
+    assert.deepEqual(session.unconsumedInputs.map((pending) => pending.text), ['written after that line, queued']);
+  });
+
+  it('the bot\'s own /compact turn is not a turn that took a message in: its (swallowed) echo drops nothing queued behind it', async () => {
+    const { adapter, session } = createAdapter();
+    await adapter.sendInputAndWait(key, 'queued behind the compaction');
+    session.compactionInProgress = true;
+    session.pendingCompaction = { resolve: () => {}, timer: null, sawSuccess: false, startedAt: nowMs };
+    adapter['onStdout'](session, echoFrame('/compact'));
+    adapter['onStdout'](session, resultFrame());
+    assert.deepEqual(session.unconsumedInputs.map((pending) => pending.text), ['queued behind the compaction']);
+    assert.equal(adapter.checkHasUnconsumedInput(key), true, 'the compaction\'s end leaves it its grace: its own turn starts a moment later');
+  });
+
+  it('a message the CLI never echoes at all is no longer counted once nothing has run for the grace — and is not revived by a turn the bot never wrote to', async () => {
+    const { adapter, session } = createAdapter();
+    await adapter.sendInputAndWait(key, 'the message the CLI drops');
     adapter['onStdout'](session, resultFrame());
     nowMs += 3 * unconsumedInputGraceMs;
     // A running turn counts every listed message as queued behind it: the one that started with no read before it must not.
@@ -229,15 +273,6 @@ describe('json-stream adapter — an echo nothing can match does not hold the tu
     nowMs += unconsumedInputGraceMs;
     assert.equal(adapter.checkHasUnconsumedInput(key), false);
     assert.deepEqual(session.unconsumedInputs, [], 'dropped by the read');
-  });
-
-  it('a message written after a turn end keeps its own turn end: only what a turn end already passed is dropped by the next', async () => {
-    const { adapter, session } = createAdapter();
-    await adapter.sendInputAndWait(key, 'queued behind the first turn');
-    adapter['onStdout'](session, resultFrame());
-    await adapter.sendInputAndWait(key, 'written between two turns');
-    adapter['onStdout'](session, initFrame + resultFrame());
-    assert.deepEqual(session.unconsumedInputs.map((pending) => pending.text), ['written between two turns']);
   });
 });
 

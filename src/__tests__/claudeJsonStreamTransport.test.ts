@@ -246,7 +246,7 @@ describe('json-stream external transport — exit detection', () => {
     assert.equal(adapter.checkIsWorking(key), true, 'a running turn');
     session.isBusy = false;
 
-    session.unconsumedInputs = [{ text: 'a prompt', since: Date.now(), hasSeenTurnEnd: false }];
+    session.unconsumedInputs = [{ text: 'a prompt', since: Date.now() }];
     assert.equal(adapter.checkIsWorking(key), true, 'a prompt not yet taken in');
     session.unconsumedInputs = [];
 

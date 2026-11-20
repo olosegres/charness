@@ -360,6 +360,12 @@ export interface StreamSession {
    */
   unconsumedInputs: UnconsumedInput[];
   /**
+   * How many echoes of ours that matched nothing on the list arrived in the running turn (capped at what was listed when each
+   * came): messages the turn took in, in a shape no one can match. The turn's end drops that many entries
+   * (`getInputsAfterTurnEnd`); a turn with none (a task's notification) drops none.
+   */
+  unmatchedInputEchoes: number;
+  /**
    * The CLI's live background-task list (`system/background_tasks_changed`,
    * re-sent whole on every change), id → the description the agent gave it: a
    * background Bash / Monitor / sub-agent the process is still running between
@@ -722,7 +728,7 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
       pollTimer: null, pollDelayMs: basePollIntervalMs, unchangedStreak: 0,
       isOversizeWarned: false, lastPersistedTailOffset: 0,
       reader: new ClaudeStreamLineReader(),
-      isActive: true, isStopping: false, isSuspending: false, isRespawning: false, isBusy: false, unconsumedInputs: [],
+      isActive: true, isStopping: false, isSuspending: false, isRespawning: false, isBusy: false, unconsumedInputs: [], unmatchedInputEchoes: 0,
       lastStdoutActivityAt: Date.now(), outstandingToolUseIds: new Set(),
       model: opts.model, reportedModel: null, effort: opts.effort,
       configDir: opts.configDir, isConfigDirSwitchPending: false, startCostUsd,
@@ -1055,7 +1061,7 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
       // tool call leaves no frame after the tail offset to rebuild it from. The
       // replayed/live events then keep it right (deltas/toolUse set it, `result`
       // clears it) — see `applyAction`.
-      isActive: true, isStopping: false, isSuspending: false, isRespawning: false, isBusy: isTurnInFlight, unconsumedInputs: [],
+      isActive: true, isStopping: false, isSuspending: false, isRespawning: false, isBusy: isTurnInFlight, unconsumedInputs: [], unmatchedInputEchoes: 0,
       // The outstanding tools come from the record too: they veto the busy-idle watchdog, which would
       // otherwise clear the restored turn after its silence window and let the stale-tool stop kill it.
       lastStdoutActivityAt: Date.now(), outstandingToolUseIds: new Set(outstandingToolUseIds),
@@ -1623,7 +1629,7 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
    * write is dropped first: it must not come back to life beside the new message.
    */
   private writeUserMessage(session: StreamSession, content: string, wasBusy: boolean): Promise<void> {
-    const pending: UnconsumedInput = { text: content, since: Date.now(), hasSeenTurnEnd: false };
+    const pending: UnconsumedInput = { text: content, since: Date.now() };
     session.unconsumedInputs = [...getInputsOnTheirWay({ inputs: session.unconsumedInputs, isBusy: wasBusy, now: pending.since }), pending];
     return this.writeStdin(session, { type: 'user', message: { role: 'user', content } }, { userText: content }).catch((error: unknown) => {
       session.unconsumedInputs = session.unconsumedInputs.filter((unconsumed) => unconsumed !== pending);
@@ -1934,7 +1940,13 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
         // Claude has read one or SEVERAL of our user messages (those it takes in together are one echo). A message written
         // mid-turn is taken into the RUNNING turn, so the session is busy from here until the turn's `result`, even if an
         // earlier `result` already cleared it.
-        session.unconsumedInputs = getInputsAfterEcho(session.unconsumedInputs, action.text);
+        const inputsAfterEcho = getInputsAfterEcho(session.unconsumedInputs, action.text);
+        // An echo that took nothing off the list is a message the turn took in in a shape nothing here matches. Only up to what is
+        // listed counts: a user line of the CLI's own, with nothing listed, takes no message written after it with it.
+        if (inputsAfterEcho.length === session.unconsumedInputs.length) {
+          session.unmatchedInputEchoes = Math.min(session.unmatchedInputEchoes + 1, session.unconsumedInputs.length);
+        }
+        session.unconsumedInputs = inputsAfterEcho;
         session.isBusy = true;
         return;
     }
@@ -2169,8 +2181,10 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
     // queued behind it, and a list left non-empty would make the session look "working" — a pending account
     // switch would never fire. A message still genuinely queued is echoed later (an echo of nothing listed takes
     // nothing off and marks the session busy again), so forgetting them here can only under-count briefly.
-    // Otherwise the queue is taken in by the turn that starts next, its wait starting over from this end.
-    session.unconsumedInputs = action.isError ? [] : getInputsAfterTurnEnd(session.unconsumedInputs, Date.now());
+    // Otherwise the queue is taken in by the turn that starts next, its wait starting over from this end — less what this turn
+    // took in in a shape nothing matches.
+    session.unconsumedInputs = action.isError ? [] : getInputsAfterTurnEnd(session.unconsumedInputs, Date.now(), session.unmatchedInputEchoes);
+    session.unmatchedInputEchoes = 0;
     session.outstandingToolUseIds.clear();
     this.finishReasoning(session);
     this.clearSubagent(session);
