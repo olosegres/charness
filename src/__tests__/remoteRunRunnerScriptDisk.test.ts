@@ -6,7 +6,7 @@
  * and a refusal that must not measure.
  * The disk and the sizes are faked by a `df` and a `du` on the PATH that read a `fake-kb` file in each copy, so a removal really frees "space" and everything else (find, mv, chmod, rm, ls) is real.
  * The first part; the disk whose free figure does not follow the removals (APFS snapshots), the copies cloned from each other, the seed copy of a submit, the probe that never prunes, the pids that went to a stranger and the put-back are
- * `remoteRunRunnerScriptDiskSeedAndPids.test.ts`; the clones, the hang-up, `clean`, the TMPDIR and the Xcode derived data cases are `remoteRunRunnerScriptDiskCopies.test.ts` and `remoteRunRunnerScriptDiskClones.test.ts`, the sizes of the copies (`measure-copies`)
+ * `remoteRunRunnerScriptDiskSeedAndPids.test.ts`; the clones, the hang-up, `clean`, the TMPDIR and the Xcode derived data cases are `remoteRunRunnerScriptDiskCopies.test.ts` and `remoteRunRunnerScriptDiskClones.test.ts` (the cost of the clones' groups: `remoteRunRunnerScriptDiskClonesCost.test.ts`), the sizes of the copies (`measure-copies`)
  * and the two prunes at once are `remoteRunRunnerScriptDiskSizes.test.ts` (all share `remoteRunRunnerScriptDiskKit.ts`; split because a file runs under one time limit and one file ran 80–90 s alone).
  *
  * Test case: N/A — Charness has no Jira tracker.

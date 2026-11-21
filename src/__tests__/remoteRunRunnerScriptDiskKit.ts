@@ -1,5 +1,5 @@
 /**
- * @description What the disk-upkeep cases of `remoteRun/runner.sh` share (`remoteRunRunnerScriptDisk.test.ts`, `remoteRunRunnerScriptDiskSeedAndPids.test.ts`, `remoteRunRunnerScriptDiskSizes.test.ts`, `remoteRunRunnerScriptDiskCopies.test.ts`, `remoteRunRunnerScriptDiskClones.test.ts`: one file ran 80–90 s alone and a loaded box cut it at the 2-minute cap of a unit
+ * @description What the disk-upkeep cases of `remoteRun/runner.sh` share (`remoteRunRunnerScriptDisk.test.ts`, `remoteRunRunnerScriptDiskSeedAndPids.test.ts`, `remoteRunRunnerScriptDiskSizes.test.ts`, `remoteRunRunnerScriptDiskCopies.test.ts`, `remoteRunRunnerScriptDiskClones.test.ts`, `remoteRunRunnerScriptDiskClonesCost.test.ts`: one file ran 80–90 s alone and a loaded box cut it at the 2-minute cap of a unit
  * file): the fake disk (`df`, `du`, `rm` on the PATH reading a `fake-kb` file in each copy, so a removal really frees "space" and everything else is real), the per-test work root, and the helpers that make copies and jobs and run the script.
  * Matches no test glob.
  */
