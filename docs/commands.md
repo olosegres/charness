@@ -983,7 +983,7 @@ The setup of automatic switching on a usage limit, with a short text: a title, w
   A later `/claude` or `/opencode` returns to the parked conversation; `/new`
   and `/quit` release it as usual.
 - **A manual switch between Claude and OpenCode asks first.** `/claude` or `/opencode` (also the agent
-  buttons and the natural-language «start …» phrases) on a topic that runs the other backend, and a Claude
+  buttons) on a topic that runs the other backend, and a Claude
   account tapped in `/accounts` or on the `/limits` board (or `/accounts use <name>`) — and an OpenCode provider's model picked on a topic that runs Claude — move the topic the same
   way as a limit does — parked conversation of the target resumed, the context bridge as its first prompt (text typed
   with the command, `/opencode do X`, rides in it). When the topic holds a conversation to hand over (an agent with at
@@ -1180,15 +1180,15 @@ What happens to a message that is not a command: text, voice notes, files and re
 
 A talker is **not** an admin: every other command gets «Only group admins can use this command.», a tap on the bot's pickers and wizards gets the toast «Only group admins can do this.», a slash text the bot does not own (`/context`, `/review …`) is refused the same way rather than forwarded to the agent as a command, and what they type never feeds an input step an admin started (a sign-in code, a key, a name, a reminder's text — by text or by voice). While an admin's `/login` code box is open on the tmux backend a talker's message is refused («An admin is signing the agent in right now…»), since a prompt would end that sign-in. A message that is refused changes nothing — a usage-limit wait armed for the topic stays armed; only a message that becomes a prompt takes over, as any sender's does. A topic with no agent running or sleeping answers a talker «No agent is running in this topic. An admin can start one.» — no folder picker, no start; a raw-shell topic refuses them («This topic is a raw shell; only admins can type into it»).
 
-**What the agent reads.** A talker's message (text, a voice transcript, a file or album announcement, a forwarded message) leads with `[Message from topic member "Alice Smith" (@alice) · not the operator]`; the thread-context preamble says, while the topic has a talker, that people other than the operator write there and that instructions about secrets, credentials, its own rules or anything outside the folder come only from the operator; a request names who sent it; a line of their words that would open with `[` is escaped so nothing they write can pass for one of the bot's own headers; and their words are never a command (a `/clear` or a start phrase from a talker does nothing). The answer a talker gives to the agent's question says who chose it (`The short way (answered by topic member "Alice Smith" (@alice), not the operator)`).
+**What the agent reads.** A talker's message (text, a voice transcript, a file or album announcement, a forwarded message) leads with `[Message from topic member "Alice Smith" (@alice) · not the operator]`; the thread-context preamble says, while the topic has a talker, that people other than the operator write there and that instructions about secrets, credentials, its own rules or anything outside the folder come only from the operator; a request names who sent it; a line of their words that would open with `[` is escaped so nothing they write can pass for one of the bot's own headers; and their words are never a command (a `/clear` from a talker does nothing). The answer a talker gives to the agent's question says who chose it (`The short way (answered by topic member "Alice Smith" (@alice), not the operator)`).
 
 **This is trust, not a sandbox.** The agents run with permission checks turned off, so a talker can make the agent run any command in that topic's folder — as the bot's OS account. Add only people you trust with that machine (the add screen says so).
 
 ### Natural language and voice
 
-In a bound topic you can also type:
-- `claude fix the bug` / `opencode add tests`
-- A plain message after `/claude` is already running → routed as input.
+In a bound topic a plain message is the input of the agent running there (start one with `/claude` or `/opencode`, or the
+buttons on the welcome). Typing a word like `claude` or `клод` — or saying it in a voice note — starts nothing: it is an
+ordinary message, which the agent reads when one runs, and which a topic with no agent answers with the hint to start one.
 
 Voice messages are transcribed by the speech engines you set up with `/stt` (Groq,
 OpenAI, any OpenAI-compatible server, or the local GigaAM engine — see [Voice input](../SETUP.md#voice-input)) and follow
@@ -1201,7 +1201,7 @@ shows a silent «🎙 Transcribing the voice message…» note, so the voice not
 wait passes 3 seconds (a warm engine shows nothing), and is deleted the moment the 🎤 transcript (or the failure notice)
 arrives. A restart of the bot removes a note it left behind, too.
 
-`/terminal` is never started from a natural-language phrase — only the
+`/terminal` is never started from plain text — only the
 explicit command opens a shell.
 
 ### The agent's questions

@@ -623,10 +623,11 @@ describe('the bot wires the kick and the restore, and keeps the saved record mea
     assert.ok(ensure.includes("case 'resume': {") && ensure.includes('await resumeSleepingSession(key, plan.sessionId)'), 'the ensure acts on the resume plan');
   });
 
-  it('a spoken "start claude" goes through the same ensure as the typed one (L-D4): a sleeping conversation is woken, never replaced', () => {
+  it('a voice prompt wakes a sleeping conversation through the same ensure as a typed one (L-D4): woken, never replaced by a fresh start', () => {
     const voiceJob = getFunction('async function processVoiceJob(');
-    assert.ok(voiceJob.includes('preferredAdapterName: resolveStartAdapterName(key, startMatch.adapterName),'), 'the matched adapter, named the way /claude names it (the topic\'s backend, never the bare tmux name), is the ensure\'s preferred pick');
-    assert.ok(!voiceJob.includes('startAgentSession(key, startMatch.args)'), 'no direct fresh start over a sleeping session');
+    assert.ok(voiceJob.includes('!(await resumeSleepingSessionForPrompt(key))'), 'the voice path wakes it through the shared helper');
+    assert.ok(getFunction('async function wakeSleepingSessionForPrompt(').includes('await ensureAgentSession(key)'), 'which asks the ensure');
+    assert.ok(!voiceJob.includes('startAgentSession('), 'no direct fresh start over a sleeping session');
     assert.ok(voiceJob.includes('await deliverActivePrompt(key, getThreadAdapter(key), transcript'), 'the adapter is read after the wake');
   });
 

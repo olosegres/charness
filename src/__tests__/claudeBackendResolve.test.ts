@@ -88,9 +88,8 @@ test('resolveClaudeBackendName: a non-Claude pick falls to the json-stream defau
 
 // ── what a start choice opens ("claude" is one choice, several backends) ──
 //
-// `/claude`, the ▶️ Claude button and the spoken / typed start phrases (`claude`, `клод`) all name the user-facing choice
-// "claude"; the bare name is the DEPRECATED tmux backend's own adapter name, so each of them must resolve it to the
-// topic's backend first.
+// `/claude` and the ▶️ Claude button both name the user-facing choice "claude"; the bare name is the DEPRECATED tmux
+// backend's own adapter name, so each of them must resolve it to the topic's backend first.
 
 test('resolveStartAdapterName: "claude" opens the default json-stream backend of a topic with no pick', () => {
   assert.equal(resolveStartAdapterName(key(5), 'claude'), claudeJsonStreamAdapterName);

@@ -259,7 +259,7 @@ describe('message context end to end: built charness, fake Bot API, fake speech 
   it('boots, binds the topic, starts the agent, and the agent answers a first message', async () => {
     charness = await startCharnessOnInstance(getLayout(), fakeTelegram);
     await topic.sendAndAwaitReply(`/bind ${projectFolder}`, `Bound to \`${projectFolder}\``);
-    await topic.sendAndAwaitReply('claude', 'ready in');
+    await topic.sendAndAwaitReply('/claude', 'ready in');
 
     earlierOperatorMessageId = fakeTelegram.pushOperatorMessage(topicThreadId, earlierOperatorText);
     await waitForAgentPrompt(earlierOperatorText);

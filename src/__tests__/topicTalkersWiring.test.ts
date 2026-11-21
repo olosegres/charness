@@ -5,7 +5,7 @@
  *
  *   - ONLY the routes a talker may use ask the speaker gate: the text, voice, file/album and edited-message handlers and the
  *     agent's question taps; every other handler and button keeps asking the admin gate (default-deny);
- *   - a talker's text takes ONE early branch that cannot reach an armed input step, a command, a start phrase, the bind
+ *   - a talker's text takes ONE early branch that cannot reach an armed input step, a command, the bind
  *     picker or a shell;
  *   - a talker's tap on any other button is refused in one middleware with a toast;
  *   - leaving the group and a re-pair drop talkers' entries.
@@ -51,12 +51,12 @@ test('a talker\'s text takes ONE early branch, before any armed step of the admi
   assert.match(handler, /if \(speaker\.role === 'talker'\) \{\s*await handleTalkerText\(ctx, key\);\s*return;\s*\}/);
 });
 
-test('the talker branch reaches no armed input step, no start phrase, no bind picker, no shell, no model or session pick', () => {
+test('the talker branch reaches no armed input step, no bind picker, no shell, no model or session pick', () => {
   const body = getFunctionBody('handleTalkerText');
   const adminOnlyRoutes = [
     'checkIsAuthLoginAwaitingCode', 'checkIsOpenCodeOAuthAwaitingReply', 'checkIsAwaitingProfileName', 'checkIsAwaitingTopicInput',
     'getAwaitedSttStep', 'pendingProviderConnects', 'claimReminderTextCapture', 'handleRunnersAddressText', 'awaitingFolderName',
-    'awaitingModelSelection', 'awaitingSessionSelection', 'checkIsStartAgentPhrase', 'ensureAgentSession', 'buildBindKeyboard',
+    'awaitingModelSelection', 'awaitingSessionSelection', 'ensureAgentSession', 'buildBindKeyboard',
     'listAvailableSubdirs', 'autoBindTopicByName', 'getClaudeReplyRoute', 'adapter.sendInput', 'submit', 'cancelProfileNameCapture',
   ];
   for (const route of adminOnlyRoutes) assert.ok(!body.includes(route), `a talker's text must not reach ${route}`);

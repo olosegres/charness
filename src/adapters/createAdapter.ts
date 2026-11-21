@@ -453,7 +453,7 @@ export function resolveClaudeBackendName(key: SessionKey): string {
 /**
  * @description The adapter a user-facing start choice opens. «Claude Code» is ONE choice with several backends, and the
  * bare name `claude` is the adapter name of the deprecated tmux backend, so every way of choosing it — `/claude`, the ▶️
- * Claude button, a typed or spoken start phrase (`claude`, `клод`) — opens the topic's backend instead
+ * Claude button — opens the topic's backend instead
  * ({@link resolveClaudeBackendName}: its pick, else json-stream). Any other name is opened as named. The one place this
  * mapping lives: a start path that hands the bare name on starts the frozen backend by accident.
  */

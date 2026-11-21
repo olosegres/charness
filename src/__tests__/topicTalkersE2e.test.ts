@@ -308,8 +308,8 @@ describe('topic talkers end to end: built charness, fake Bot API, fake speech en
     for (const [topic, folder] of [[docsTopic(), docsFolder], [apiTopic(), apiFolder], [idleTopic(), idleFolder], [shellTopic(), shellFolder]] as const) {
       await topic.sendAndAwaitReply(`/bind ${folder}`, `Bound to \`${folder}\``);
     }
-    await docsTopic().sendAndAwaitReply('claude', 'ready in');
-    await apiTopic().sendAndAwaitReply('claude', 'ready in');
+    await docsTopic().sendAndAwaitReply('/claude', 'ready in');
+    await apiTopic().sendAndAwaitReply('/claude', 'ready in');
     const shellMessageId = fakeTelegram.pushOperatorMessage(shellThreadId, '/terminal');
     await shellTopic().waitForMessage('the shell to start', (message) => message.message_id > shellMessageId);
     // The operator's own first messages: they carry the pids that tell the two agents apart, and they are unmarked.
@@ -377,7 +377,7 @@ describe('topic talkers end to end: built charness, fake Bot API, fake speech en
     assert.deepEqual(docsList?.invites, [], 'and the invitation is gone');
   });
 
-  it('a talker\'s admin command, a start phrase and a slash text the bot does not own: one refusal line each, nothing changes, the agent reads nothing', async () => {
+  it('a talker\'s admin command and a slash text the bot does not own: one refusal line each, nothing changes, the agent reads nothing', async () => {
     for (const refused of ['/model', '/bind other-folder', '/quit', '/context', '/review the diff', '/clear']) {
       const afterId = Math.max(0, ...docsTopic().listMessages().map((message) => message.message_id));
       fakeTelegram.pushUserMessage(docsThreadId, refused, topicTalker);

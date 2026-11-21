@@ -15,8 +15,8 @@
  *   → a topic a non-admin makes with the name of a folder: nothing is bound; the admin's first message there binds it,
  *     again with the one welcome
  *   → the same two ways onto a folder another topic already uses: the welcome also names that topic
- *   → the admin's first message in such a topic is still read as what it is: a start phrase (`claude`) starts the agent,
- *     next to the one welcome
+ *   → the admin's first message in such a topic is only a message: the plain word `claude` (once a start phrase) binds the
+ *     topic with the one welcome and starts no agent
  *   → the /bind picker is spent by a bind: the message is deleted (its «not bound, pick from the list» text is no longer true),
  *     and a second tap landing while the first is still binding gets a short «already bound», no second welcome
  *   → «Leave current dir» removes the picker it was tapped on as well
@@ -93,7 +93,7 @@ const peerThreadId = 192;
 /** A group member who is no admin: the bot does not serve them, so a topic they make is not bound at once. */
 const stranger: TelegramUser = { id: 515151, is_bot: false, first_name: 'Stranger' };
 const folders = {
-  first: 'bind-first', second: 'bind-second', auto: 'bind-auto', deferred: 'bind-deferred', phrase: 'bind-phrase', phantom: 'bind-phantom', named: 'bind-named', quiet: 'bind-quiet',
+  first: 'bind-first', second: 'bind-second', auto: 'bind-auto', deferred: 'bind-deferred', formerPhrase: 'bind-former-phrase', phantom: 'bind-phantom', named: 'bind-named', quiet: 'bind-quiet',
   late: 'bind-late', waiting: 'bind-waiting', leaving: 'bind-leaving', undeletable: 'bind-undeletable',
   sweepTyped: 'bind-sweep-typed', sweepTap: 'bind-sweep-tap', sweepLeave: 'bind-sweep-leave', sweepAuto: 'bind-sweep-auto',
   sweepSlow: 'bind-sweep-slow', gone: 'bind-gone',
@@ -129,7 +129,7 @@ const adminTopicName = 'Scratch notes';
 const strangerTopicName = 'Quiet notes <b>';
 /** Spellings of `folders.deferred` the bot's name match accepts (case and separators drift) that a non-admin may give a topic. */
 const strangerLooseNames = { first: 'BIND_Deferred', second: 'bind deferred' } as const;
-/** Plain messages of the operator — no start phrase, no command — that must be nobody's folder name; one per step, so a failed step leaves nothing for the next. */
+/** Plain messages of the operator — no command — that must be nobody's folder name; one per step, so a failed step leaves nothing for the next. */
 const plainNotes = { afterBind: 'noted-after-bind', afterLeave: 'noted-after-leave' } as const;
 /** An admin's topic named after `folders.auto` the loose way the bot's name match allows; shown by this name in a shared-folder row. */
 const autoTopicName = 'Bind_Auto';
@@ -145,8 +145,6 @@ const sharedRowStart = enDict['binding.welcome.shared'].split('{threads}')[0];
 /** The log line of the bot setting a non-admin's topic name aside. */
 const nameCachedLogLine = '[security] forum_topic_created';
 const replyTimeoutMs = 20 * 1000;
-/** A session start through the fake agent. */
-const agentStartTimeoutMs = 60 * 1000;
 
 let layout: IsolatedInstanceLayout | null = null;
 let charness: IsolatedCharness | null = null;
@@ -443,15 +441,13 @@ describe('/bind end to end: built charness, fake Bot API', () => {
     await assertOneBoundMessage(sharingTopic, sentId, folders.deferred, { isAutoBound: true, sharedWith: [byName(folders.deferred)] });
   });
 
-  it('a start phrase as the admin\'s first message in a non-admin-made topic binds it AND starts the agent: one welcome, one session', async () => {
-    // The phrase opens the topic's backend, json-stream by default (as `/claude` does), which is a stream-json launch.
-    const listAgentStarts = () => getSessionLaunches(getLayout());
-    const startsBefore = listAgentStarts().length;
-    const { threadId, topic: phraseTopic } = await makeTopicAsStranger(folders.phrase);
+  it('the word `claude` — once a start phrase — as the admin\'s first message in a non-admin-made topic only binds it: one welcome, no agent', async () => {
+    const startsBefore = getSessionLaunches(getLayout()).length;
+    const { threadId, topic: phraseTopic } = await makeTopicAsStranger(folders.formerPhrase);
     const sentId = fakeTelegram.pushOperatorMessage(threadId, 'claude');
-    await assertOneBoundMessage(phraseTopic, sentId, folders.phrase, { isAutoBound: true, isAgentStarting: true });
-    await getCharness().waitFor('the agent the phrase asked for to start', agentStartTimeoutMs, () => listAgentStarts().length > startsBefore);
-    assert.equal(listAgentStarts().length, startsBefore + 1, 'exactly one session started');
+    await assertOneBoundMessage(phraseTopic, sentId, folders.formerPhrase, { isAutoBound: true });
+    assert.equal(getSessionLaunches(getLayout()).length, startsBefore, 'no session started');
+    assert.ok(!phraseTopic.listMessages().some((message) => message.text.includes('ready in')), 'no «ready in» notice of an agent');
   });
 
   it('a topic an admin makes with a name that matches no folder is offered the picker; the bind through it keeps the name, and the next topic on that folder names it', async () => {
@@ -655,7 +651,9 @@ describe('/bind end to end: built charness, fake Bot API', () => {
     fakeTelegram.holdNextResponse('deleteMessage', deletesReleased);
     const bulkCallsBefore = fakeTelegram.listCalls('deleteMessages').length;
     const launchesBefore = getSessionLaunches(getLayout()).length;
-    const sentId = fakeTelegram.pushOperatorMessage(threadId, 'claude');
+    // The first message binds the topic (its welcome starts the sweep of the pickers); the start command right behind it must not wait for it.
+    const sentId = fakeTelegram.pushOperatorMessage(threadId, 'is anyone there');
+    fakeTelegram.pushOperatorMessage(threadId, '/claude');
     try {
       await getCharness().waitFor('the agent to start while the sweep\'s response is still held', startWhileSweepHeldTimeoutMs, () => getSessionLaunches(getLayout()).length > launchesBefore);
     } finally {

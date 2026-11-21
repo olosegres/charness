@@ -1,19 +1,21 @@
 /**
- * @description The spoken and typed start phrases (`claude`, `клод`, …) at PROCESS level: the BUILT charness started the way
- * an isolated instance is (`scripts/run-isolated.sh`) against the fake Bot API (`telegramE2e/fakeTelegram.ts`), a fake speech
- * engine for the voice path and the fake agent. «Claude Code» is one choice with several backends, and the bare name `claude`
- * is the adapter name of the DEPRECATED, frozen tmux backend: `/claude` maps it to the topic's own backend first (json-stream
- * by default, or the one `/claude_mode` picked). The phrases used to hand the bare name on, so `claude` typed or said started
- * the tmux backend. One flow, in order:
+ * @description Starting an agent is the command's job, never a typed or spoken word's: the former start phrases (`claude`,
+ * `клод`, `opencode add tests`, a voice note saying «Claude.») start nothing, and `/claude` still opens the topic's own
+ * backend, at PROCESS level: the BUILT charness started the way an isolated instance is (`scripts/run-isolated.sh`) against the
+ * fake Bot API (`telegramE2e/fakeTelegram.ts`), a fake speech engine for the voice path and the fake agent. «Claude Code» is one
+ * choice with several backends, and the bare name `claude` is the adapter name of the DEPRECATED, frozen tmux backend: `/claude`
+ * maps it to the topic's own backend first (json-stream by default, or the one `/claude_mode` picked). One flow, in order:
  *
  *   boot → a topic is bound to a folder
- *   → the typed phrase `claude` starts the default backend: a json-stream process, the topic's agent is json-stream
- *   → the Russian phrase `клод` does the same (after `/quit`)
- *   → a voice note saying «Claude.» does the same, through the engine chain of `stt.json` (the transcript is echoed)
- *   → a topic that picked the per-turn backend: the phrase starts per-turn, not json-stream and not tmux.
+ *   → each former phrase typed — `claude`, `клод`, `запусти клода`, `claude fix the bug`, `opencode add tests` — is an ordinary
+ *     message: the topic answers with the hint to start an agent, no process starts, the topic has no agent
+ *   → a voice note saying «Claude.» likewise: the transcript is echoed (the engine chain of `stt.json` ran), then the same hint
+ *   → `/claude` starts the default backend: a json-stream process, the topic's agent is json-stream
+ *   → after `/quit` (which releases the conversation) the word `claude` still starts nothing
+ *   → a topic that picked the per-turn backend: `/claude` starts per-turn, not json-stream and not tmux.
  *
- * What the unit tests cover instead: the phrase grammar (`agentTrigger.test.ts`), what a start choice resolves to
- * (`claudeBackendResolve.test.ts`). The tmux backend itself is frozen: no flow starts it here.
+ * What the unit tests cover instead: what a start choice resolves to (`claudeBackendResolve.test.ts`). The tmux backend itself
+ * is frozen: no flow starts it here.
  *
  * Nothing leaves the machine: the Bot API and the speech engine are on loopback and the agent is a fake. Everything the test
  * starts is stopped in `after`.
@@ -44,6 +46,7 @@ import {
 } from './e2e/isolatedCharness';
 import { getSessionLaunches, readPersistedState, startCharnessOnInstance } from './e2e/fallbackFlowKit';
 import { claudeJsonStreamAdapterName, claudePerTurnAdapterName } from '../adapters/adapterNames';
+import { t } from '../i18n';
 import { getTelegramFlowTestTimingsEnv } from './telegramE2e/telegramFlowTimings';
 
 const group = { id: -1001111111111, title: 'ExampleGroup' };
@@ -52,13 +55,15 @@ const operator = { id: 424242, is_bot: false, first_name: 'Operator' };
 const botUser = { id: 7000000001, is_bot: true, first_name: 'Fake bot', username: 'fake_charness_bot' };
 /** Not a Telegram token: the fake Bot API accepts any `/bot<token>/` path, and the real host is never contacted. */
 const fakeBotToken = '1000000001:fake-token-for-the-loopback-bot-api';
-const projectFolder = 'phrase-proj';
+const projectFolder = 'start-proj';
 const threadKeyString = `${group.id}:${topicThreadId}`;
 const voiceFileId = 'voice-phrase-1';
 const voiceFileBytes = 2048;
 const voiceDurationSeconds = 2;
-/** What the fake speech engine «recognises»: a start phrase the way an engine writes it, capitalised and with a full stop. */
+/** What the fake speech engine «recognises»: a former start phrase the way an engine writes it, capitalised and with a full stop. */
 const spokenPhrase = 'Claude.';
+/** The words that used to start an agent when typed: bare, with a verb in front, and with a prompt behind. */
+const formerStartPhrases = ['claude', 'клод', 'запусти клода', 'claude fix the bug', 'opencode add tests'];
 
 const replyTimeoutMs = 20 * 1000;
 const agentStartTimeoutMs = 60 * 1000;
@@ -89,22 +94,42 @@ function readTopicAgentName(): string | undefined {
   return readPersistedState(getLayout()).agents?.[threadKeyString]?.name;
 }
 
+/** What a topic with no agent answers a plain message with. */
+function getNoAgentHint(): string {
+  return t('thread.no_agent_with_binding', { subdir: projectFolder });
+}
+
 /**
- * A start phrase in, an agent out: `trigger` is what makes the bot start it; the topic hears the agent's ready notice, the
- * fake CLI logs exactly one new json-stream process, and the topic's agent is `expectedAgentName`.
+ * A command in, an agent out: `trigger` is what makes the bot start it; the topic hears the agent's ready notice, the fake CLI
+ * logs exactly one new json-stream process, and the topic's agent is `expectedAgentName`.
  */
-async function assertPhraseStartsAgent(trigger: () => Promise<unknown>, expectedAgentName: string): Promise<void> {
+async function assertStartsAgent(trigger: () => Promise<unknown>, expectedAgentName: string): Promise<void> {
   const launchesBefore = getSessionLaunches(getLayout()).length;
   await trigger();
-  await getCharness().waitFor('the agent started by the phrase', agentStartTimeoutMs, () => getSessionLaunches(getLayout()).length > launchesBefore);
+  await getCharness().waitFor('the agent started by the command', agentStartTimeoutMs, () => getSessionLaunches(getLayout()).length > launchesBefore);
   assert.equal(getSessionLaunches(getLayout()).length, launchesBefore + 1, 'exactly one process was started');
   await getCharness().waitFor('the topic\'s agent persisted', replyTimeoutMs, () => readTopicAgentName() === expectedAgentName);
 }
 
-describe('start phrases end to end: built charness, fake Bot API, fake speech engine', () => {
+/**
+ * Words in, no agent out: `trigger` is what the operator says (the bot's answer to it is the hint, which comes at the end of
+ * the message's handling, where an agent start would have come first); no process was launched, the topic's agent is what it
+ * was, and no «ready in» notice was posted after the words.
+ */
+async function assertStartsNoAgent(trigger: () => Promise<unknown>): Promise<void> {
+  const launchesBefore = getSessionLaunches(getLayout()).length;
+  const agentNameBefore = readTopicAgentName();
+  const lastMessageIdBefore = Math.max(0, ...topic.listMessages().map((message) => message.message_id));
+  await trigger();
+  assert.equal(getSessionLaunches(getLayout()).length, launchesBefore, 'no process was started');
+  assert.equal(readTopicAgentName(), agentNameBefore, 'the topic\'s agent did not change');
+  assert.ok(!topic.listMessages().some((message) => message.message_id > lastMessageIdBefore && message.text.includes('ready in')), 'no agent announced itself in the topic');
+}
+
+describe('the start command end to end, and the former start phrases: built charness, fake Bot API, fake speech engine', () => {
   before(async () => {
     if (!fs.existsSync(builtCliPath)) throw new Error('Built CLI is missing. Run `yarn build` before `yarn test`.');
-    layout = createIsolatedInstanceLayout('charness-phrase-', [projectFolder], getFlowDeadlineMs());
+    layout = createIsolatedInstanceLayout('charness-start-', [projectFolder], getFlowDeadlineMs());
     defaultTmuxSessionsBefore = listTmuxSessions([]);
 
     process.on('exit', removeInstanceSync);
@@ -153,29 +178,35 @@ describe('start phrases end to end: built charness, fake Bot API, fake speech en
     await topic.sendAndAwaitReply(`/bind ${projectFolder}`, `Bound to \`${projectFolder}\``);
   });
 
-  it('the typed phrase `claude` starts the topic\'s backend — json-stream by default — not the deprecated tmux one', async () => {
-    await assertPhraseStartsAgent(() => topic.sendAndAwaitReply('claude', 'ready in'), claudeJsonStreamAdapterName);
+  it('a former start phrase typed — bare, with a verb, with a prompt, in either language — starts no agent: the topic answers with the hint', async () => {
+    for (const phrase of formerStartPhrases) {
+      await assertStartsNoAgent(() => topic.sendAndAwaitReply(phrase, getNoAgentHint()));
+    }
   });
 
-  it('the Russian phrase `клод` starts it the same way', async () => {
-    await topic.sendAndAwaitReply('/quit', 'stopped');
-    await assertPhraseStartsAgent(() => topic.sendAndAwaitReply('клод', 'ready in'), claudeJsonStreamAdapterName);
-  });
-
-  it('a voice note saying «Claude.» starts it the same way: the transcript is echoed, and the backend is json-stream', async () => {
-    await topic.sendAndAwaitReply('/quit', 'stopped');
-    await assertPhraseStartsAgent(async () => {
+  it('a voice note saying «Claude.» starts no agent either: the transcript is echoed, then the hint', async () => {
+    await assertStartsNoAgent(async () => {
       const voiceMessageId = fakeTelegram.pushOperatorVoice(topicThreadId, voiceFileId, voiceDurationSeconds);
       await topic.waitForMessage('the transcript echo', (message) => message.message_id > voiceMessageId && message.text === `🎤 ${spokenPhrase}`);
-      await topic.waitForMessage('the ready notice', (message) => message.message_id > voiceMessageId && message.text.includes('ready in'));
-    }, claudeJsonStreamAdapterName);
+      await topic.waitForMessage('the hint', (message) => message.message_id > voiceMessageId && message.text === getNoAgentHint());
+    });
     assert.equal(speechEngine.requests.length, 1, 'the voice note went through the speech engine');
   });
 
-  it('a topic that picked the per-turn backend: the phrase starts per-turn, as `/claude` would', async () => {
+  it('`/claude` starts the topic\'s backend — json-stream by default — not the deprecated tmux one', async () => {
+    await assertStartsAgent(() => topic.sendAndAwaitReply('/claude', 'ready in'), claudeJsonStreamAdapterName);
+  });
+
+  it('after `/quit` the word `claude` still starts nothing, and `/claude` starts the agent again', async () => {
+    await topic.sendAndAwaitReply('/quit', 'stopped');
+    await assertStartsNoAgent(() => topic.sendAndAwaitReply('claude', getNoAgentHint()));
+    await assertStartsAgent(() => topic.sendAndAwaitReply('/claude', 'ready in'), claudeJsonStreamAdapterName);
+  });
+
+  it('a topic that picked the per-turn backend: `/claude` starts per-turn, as it always did', async () => {
     await topic.sendAndAwaitReply('/quit', 'stopped');
     await topic.sendAndAwaitReply('/claude_mode per-turn', 'applies on next start');
     await getCharness().waitFor('the per-turn pick persisted', replyTimeoutMs, () => readTopicAgentName() === claudePerTurnAdapterName);
-    await assertPhraseStartsAgent(() => topic.sendAndAwaitReply('claude', 'ready in'), claudePerTurnAdapterName);
+    await assertStartsAgent(() => topic.sendAndAwaitReply('/claude', 'ready in'), claudePerTurnAdapterName);
   });
 });

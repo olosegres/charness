@@ -1,8 +1,8 @@
 /**
  * @description The pure side of a MANUAL switch of a topic between the two agent backends, Claude and OpenCode
- * (`/claude` and `/opencode`, a Claude account picked in `/accounts` on an OpenCode topic, the natural-language
- * "start …" phrases). A switch that has a conversation to hand over asks once first — the operator is told the
- * context is handed over in compacted form — and a topic with nothing to carry switches at once.
+ * (`/claude` and `/opencode`, a Claude account picked in `/accounts` on an OpenCode topic). A switch that has a
+ * conversation to hand over asks once first — the operator is told the context is handed over in compacted form — and a
+ * topic with nothing to carry switches at once.
  *
  * This module decides WHEN to ask, words the question and owns the two `callback_data` of its one-shot keyboard.
  * The question and the buttons are `connectors/telegram/commands/backendSwitch.ts`; the switch itself is `bot.ts`

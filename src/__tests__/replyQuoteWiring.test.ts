@@ -125,22 +125,14 @@ test('the request ledger keeps the prompt WITH its message context, at every ent
   assert.match(flush, /openTopicRequest\([^;]*,\s*messageContext\s*\)/);
 });
 
-test('a FORWARDED text is content: the text handler never takes it for a command, a pick, a start phrase or a selector answer', () => {
+test('a FORWARDED text is content: the text handler never takes it for a command, a pick or a selector answer', () => {
   const handler = getSourceSlice("bot.on(message('text'), async (ctx) => {", "//  Voice message handler");
   assert.match(handler, /const\s+isForwarded\s*=\s*checkIsTelegramForward\(\s*ctx\.message\s*\)/);
   assert.match(handler, /const\s+isSlashText\s*=\s*!isForwarded\s*&&\s*text\.startsWith\('\/'\)/);
   assert.equal(handler.match(/text\.startsWith\('\/'\)/g)?.length, 1, 'the one definition of «a slash command»; every other route asks isSlashText');
   assert.match(handler, /!isForwarded\s*&&\s*\/\^\\d\+\$\/\.test\(text\)\s*&&\s*awaitingModelSelection/, 'the numeric model pick');
   assert.match(handler, /!isForwarded\s*&&\s*awaitingSessionSelection\.has/, 'the session pick');
-  assert.match(handler, /if\s*\(!isForwarded\s*&&\s*!adapter\.checkIsActive\(key\)\)\s*\{\s*const startMatch\s*=\s*checkIsStartAgentPhrase\(text\)/, 'the natural-language start');
   assert.match(handler, /isQuestionPending:\s*!isForwarded\s*&&/, 'the TUI selector answer');
-});
-
-test('a FORWARDED voice note is content too: its transcript starts no agent', () => {
-  assert.match(
-    getFunctionBody('processVoiceJob'),
-    /if\s*\(!checkIsForeignWords\(messageContext\)\s*&&\s*!getThreadAdapter\(key\)\.checkIsActive\(key\)\)\s*\{\s*const startMatch\s*=\s*checkIsStartAgentPhrase\(transcript\)/,
-  );
 });
 
 test('a FORWARDED message answers no pending question and wipes no context, whatever its words are', () => {
@@ -165,10 +157,7 @@ test('a forwarded /pair re-points the bot to no group, and goes on to the text h
   assert.ok(pairHandler.indexOf('checkIsTelegramForward') < pairHandler.indexOf('const userId'), 'asked before anything else');
 });
 
-test('a topic member\'s words start no agent and wipe no context: the voice start phrase and the /clear purge ask the one foreign-words predicate', () => {
-  const voice = getFunctionBody('processVoiceJob');
-  assert.match(voice, /if\s*\(!checkIsForeignWords\(messageContext\)\s*&&\s*!getThreadAdapter\(key\)\.checkIsActive\(key\)\)\s*\{\s*const startMatch\s*=\s*checkIsStartAgentPhrase\(transcript\)/);
-  assert.doesNotMatch(voice, /messageContext\?\.isForwarded\s*!==\s*true\s*&&\s*!getThreadAdapter/, 'no forward-only start-phrase guard is left');
+test('a topic member\'s words wipe no context: the /clear purge asks the one foreign-words predicate', () => {
   assert.match(getFunctionBody('deliverActivePrompt'), /text\s*===\s*forwardedClearCommand\s*&&\s*!checkIsForeignWords\(messageContext\)/);
 });
 

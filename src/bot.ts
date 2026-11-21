@@ -52,9 +52,6 @@ import {
 // Arms the Jira key codec: a Jira conversation's key read back from `state.json`
 // or a tmux / json-stream name must decode in every boot mode.
 import './connectors/jira/sessionKeyCodec';
-// Pure parser lives in `./agentTrigger` so it can be unit-tested without
-// booting Telegraf (audit S19 / #25).
-import { parseAgentTrigger as checkIsStartAgentPhrase } from './agentTrigger';
 import { checkSessionPickAction } from './sessionPick';
 import { ClaudeCliAdapter, getClaudeReplyRoute, getClaudeTranscriptPath } from './adapters/claudeCliAdapter';
 import { listSavedOpenCodeModelLabels, type OpenCodePendingQuestion } from './adapters/openCodeAdapter';
@@ -5862,7 +5859,7 @@ const adoptedPerTurnStopPollMs = 5000;
 async function startAgentSession(key: SessionKey, args?: string): Promise<string> {
   const kStr = keyToString(key);
   // The bound folder IS the agent's cwd — refuse to start without one. The
-  // command/natural-language callers gate on the binding too, but a binding
+  // command callers gate on the binding too, but a binding
   // can vanish (/unbind) between their check and here, so re-check before any
   // side effect (startup window / markers) opens.
   const workDirDecision = getWorkDirStartDecision(key);
@@ -5976,19 +5973,15 @@ export type EnsureAgentSessionFailureReason = 'unbound' | 'no-adapter' | 'start-
 /**
  * @name EnsureAgentSessionOptions
  * @description Tuning for {@link ensureAgentSession}.
- *  - `preferredAdapterName` — an EXPLICIT user choice that outranks every
- *    resolved name (the natural-language-start path passes the matched
- *    `/claude` vs `/opencode` adapter here).
  *  - `fallbackAdapterName` — the LAST resort when nothing else resolves (the
  *    scheduler passes a job's `lastAdapterName` snapshot for a start after a
  *    rebind, where the thread has no live or persisted adapter). When it too is
  *    absent and nothing resolved, `ensureAgentSession` fails with `no-adapter`
  *    rather than silently launching a default backend.
- *  - `args` — forwarded to `startAgentSession` (e.g. the natural-language
- *    start phrase's trailing args).
+ *  - `args` — forwarded to `startAgentSession` (e.g. the text typed after
+ *    `/claude`; the command picks its adapter with `switchThreadAdapter` first).
  */
 export interface EnsureAgentSessionOptions {
-  preferredAdapterName?: string;
   fallbackAdapterName?: string;
   args?: string;
   /**
@@ -6001,11 +5994,10 @@ export interface EnsureAgentSessionOptions {
 /**
  * @description Ensure the thread `key` has an agent session ready to take a
  * prompt, starting one if needed — the single choke point shared by the
- * natural-language-start path, the `/schedule` command (S7), and the scheduler
+ * `/schedule` command (S7), the voice and text prompt routes, and the scheduler
  * delivery (S4). It does NOT itself send any user-facing reply: it returns the
  * outcome (and the message to show) so each caller decides its own messaging
- * (e.g. the natural-language path adds a General-topic guard + a folder picker
- * on `unbound`, the scheduler annotates the run ledger instead).
+ * (e.g. the scheduler annotates the run ledger instead of replying).
  *
  * Cases:
  *  - already active                → `{ ok: true }` (no message; nothing started).
@@ -6014,11 +6006,10 @@ export interface EnsureAgentSessionOptions {
  *  - no session, has binding, but no adapter resolves (no explicit pick, no
  *    in-memory/persisted choice, no `fallbackAdapterName`) →
  *    `{ ok: false, reason: 'no-adapter' }` — refuse rather than silently launch
- *    a default backend (interactive starts always pass `preferredAdapterName`,
- *    so this only bites a `/schedule`/scheduler fire on a never-started topic).
- *  - no session, has binding       → resolve the adapter name (explicit
- *    `preferredAdapterName` → in-memory thread pick → persisted
- *    `agents[key].name` → `fallbackAdapterName`), `switchThreadAdapter`
+ *    a default backend (an interactive start picks its adapter first, so this
+ *    only bites a `/schedule`/scheduler fire on a never-started topic).
+ *  - no session, has binding       → resolve the adapter name (in-memory
+ *    thread pick → persisted `agents[key].name` → `fallbackAdapterName`), `switchThreadAdapter`
  *    + `startAgentSession`, then report `ok` from whether the session came up.
  */
 async function ensureAgentSession(
@@ -6046,7 +6037,6 @@ async function ensureAgentSessionNow(
   // nothing resolves (bound topic that never picked an agent, no caller
   // fallback) we REFUSE — the user must start/pick an agent first.
   const adapterName =
-    options.preferredAdapterName ??
     getThreadAdapterNameRaw(key) ??
     state.getAgent(key)?.name ??
     options.fallbackAdapterName ??
@@ -6656,12 +6646,6 @@ function getPromptWithThreadMessageContext(key: SessionKey, text: string, messag
     isShellInput: getThreadAdapter(key).name === 'terminal',
   });
 }
-
-// ═══════════════════════════════════════════════════════════════════════════════
-//  Natural-language start phrases (`claude ...`, `opencode ...`)
-// ═══════════════════════════════════════════════════════════════════════════════
-
-// (Parser imported up-top — see `parseAgentTrigger` import.)
 
 // ═══════════════════════════════════════════════════════════════════════════════
 //  Model selection helper — used by /model and the numeric-reply flow
@@ -8124,7 +8108,7 @@ async function sendBindingWelcome(key: SessionKey, subdir: string, notes: Bindin
   });
   if (welcomeMessageId !== null) openWelcomeMessages.remember(keyToString(key), welcomeMessageId, Date.now());
   // Every bind ends in this welcome, so every bind sweeps here — after the welcome, and NOT waited for: what follows a bind
-  // (an agent start, when the first message was a start phrase) must not hang on the deletions and edits, which are paced sends.
+  // (an agent start) must not hang on the deletions and edits, which are paced sends.
   void stripWelcomeKeyboards(key, outdatedWelcomeIds);
   void closeOpenBindMessages(key);
 }
@@ -8360,8 +8344,8 @@ async function handleAgentStart(
     await replyToThread(key, t('error.start_in_general'));
     return;
   }
-  // Refuse to start an agent without a binding — same rationale as the
-  // natural-language path in the text handler (plan §11 Этап 4).
+  // Refuse to start an agent without a binding: starting without one would silently launch against WORK_ROOT,
+  // which is almost never wanted (plan §11 Этап 4).
   if (!state.getBinding(key)) {
     const subdirs = listAvailableSubdirs(ENV.workRoot);
     const extra = buildBindKeyboard(subdirs, 0, BIND_PAGE_SIZE, !!state.getBinding(key));
@@ -9863,7 +9847,7 @@ async function resolveBackendSwitchTarget(key: SessionKey, backend: BackendFamil
 
 /**
  * @description The gate every MANUAL start of the other backend goes through (`/claude`, `/opencode`, the agent
- * buttons, the natural-language "start …" phrases): when the topic runs the other backend and holds a conversation,
+ * buttons): when the topic runs the other backend and holds a conversation,
  * ask first and let the answer make the switch. Returns whether it asked — the caller then stops; `false` means
  * nothing to hand over (a fresh topic, the same backend, a shell) and the caller goes ahead as it always did.
  * `userMessage` is the text typed with the command; the switch passes it on inside the context bridge.
@@ -10866,7 +10850,7 @@ const forwardedClearCommand = '/clear';
 // ═══════════════════════════════════════════════════════════════════════════════
 
 /**
- * @description A talker's text — the one early branch, so no armed step, command, start phrase or guide of the admin path
+ * @description A talker's text — the one early branch, so no armed step, command or guide of the admin path
  * can be reached by checks spread through the handler. What it does: it is refused if it is a slash text (agent slash
  * commands control the conversation, and the commands the bot owns were decided before the message got here); a pasted
  * OAuth callback URL is deleted as a secret, whoever sent it; a raw-shell topic is refused; otherwise it is a prompt like any
@@ -11098,7 +11082,7 @@ bot.on(message('text'), async (ctx) => {
   }
 
   // Set when this very message bound the topic: its welcome is already the answer, so the idle-thread hint at the end
-  // stays out — but the message itself is still read as what it is (a start phrase starts the agent).
+  // stays out.
   let isJustAutoBound = false;
 
   // Audit S2 / #5: if `forum_topic_created` was emitted by a non-allowed
@@ -11151,8 +11135,7 @@ bot.on(message('text'), async (ctx) => {
   // Numeric model selection after `/model`.
   // Audit S12 / #20: previous code returned only when `adapter.setModel` was
   // truthy; on adapters that don't implement it (legacy void return) execution
-  // fell through and the same numeric reply was re-processed as a
-  // natural-language start + forwarded to the agent. `applyNumberedModelPick`
+  // fell through and the same numeric reply was forwarded to the agent as a prompt. `applyNumberedModelPick`
   // always replies (even for the unsupported case), so we always return after a
   // numeric pick — the user clearly intended a model pick, not a prompt.
   if (!isForwarded && /^\d+$/.test(text) && awaitingModelSelection.has(kStr)) {
@@ -11186,40 +11169,6 @@ bot.on(message('text'), async (ctx) => {
     }
     // passthrough: not a number — exit pick-mode and let normal handling run.
     awaitingSessionSelection.delete(kStr);
-  }
-
-  // Natural-language start.
-  if (!isForwarded && !adapter.checkIsActive(key)) {
-    const startMatch = checkIsStartAgentPhrase(text);
-    if (startMatch.isMatch && startMatch.adapterName) {
-      if (checkIsGeneral(key)) {
-        await replyToThread(key, t('error.start_in_general'));
-        return;
-      }
-      // The other backend, with a conversation to hand over: ask first (a shell is no backend to hand over to).
-      const requestedFamily = getBackendFamily(startMatch.adapterName);
-      if (requestedFamily !== null && state.getBinding(key) && await askBeforeCrossBackendSwitch(key, requestedFamily, startMatch.args)) return;
-      // The shared `ensureAgentSession` does the bind-check + switch + start.
-      // The explicit matched adapter wins (`preferredAdapterName`), named the way
-      // `/claude` names it: `claude` is the topic's Claude backend, never the bare
-      // tmux one. The phrase's trailing args ride along. On `unbound` we keep this
-      // path's own reply: the folder picker (plan §11 Этап 4 — starting without a
-      // binding would silently launch against WORK_ROOT, which is almost never wanted).
-      const result = await ensureAgentSession(key, {
-        preferredAdapterName: resolveStartAdapterName(key, startMatch.adapterName),
-        args: startMatch.args,
-      });
-      if (!result.ok && result.reason === 'unbound') {
-        const subdirs = listAvailableSubdirs(ENV.workRoot);
-        const extra = buildBindKeyboard(subdirs, 0, BIND_PAGE_SIZE, !!state.getBinding(key));
-        await replyToThread(key, t('thread.no_binding'), extra);
-        return;
-      }
-      // Empty when a self-greeting agent started (its banner is the cue) — guard
-      // like the /schedule consumer so we never post a blank message.
-      if (result.message) await replyToThread(key, result.message);
-      return;
-    }
   }
 
   // Claude TUI prompt on screen + a bare control reply (option digit or y/n)
@@ -11451,7 +11400,7 @@ async function processVoiceJob(
 
     // `/reminders` step 4 accepts a voice note as well as typed text, so the
     // transcript is routed here — right after the 🎤 echo and BEFORE the
-    // startup-buffer / natural-language-start / binding gates, which would
+    // startup-buffer / binding gates, which would
     // otherwise treat it as a prompt. Same single creation path as the text side.
     // The step is an ADMIN's: a topic member's voice note neither fills it nor closes it when it has expired — it goes on as a prompt.
     const reminderVoiceRoute = checkIsForeignWords(messageContext) ? null : claimReminderTextCapture(key);
@@ -11467,34 +11416,6 @@ async function processVoiceJob(
       return;
     }
 
-    // A FORWARDED voice note saying «Claude», or a topic member's, is somebody else's words, not the operator's order to start an agent.
-    if (!checkIsForeignWords(messageContext) && !getThreadAdapter(key).checkIsActive(key)) {
-      const startMatch = checkIsStartAgentPhrase(transcript);
-      if (startMatch.isMatch && startMatch.adapterName) {
-        if (checkIsGeneral(key)) {
-          await replyToThread(key, t('error.start_in_general'));
-          return;
-        }
-        const requestedFamily = getBackendFamily(startMatch.adapterName);
-        if (requestedFamily !== null && state.getBinding(key) && await askBeforeCrossBackendSwitch(key, requestedFamily, startMatch.args)) return;
-        // Same choke point as the text trigger (L-D4): a sleeping conversation is
-        // woken, never replaced by a fresh start; `unbound` keeps the folder picker.
-        const result = await ensureAgentSession(key, {
-          preferredAdapterName: resolveStartAdapterName(key, startMatch.adapterName),
-          args: startMatch.args,
-        });
-        if (!result.ok && result.reason === 'unbound') {
-          const subdirs = listAvailableSubdirs(ENV.workRoot);
-          const extra = buildBindKeyboard(subdirs, 0, BIND_PAGE_SIZE, !!state.getBinding(key));
-          await replyToThread(key, t('thread.no_binding'), extra);
-          return;
-        }
-        // Empty for a self-greeting agent (Claude self-announces) — the typing
-        // loader covers the gap; show a notice only when there's ready text.
-        if (result.message) await replyToThread(key, result.message);
-        return;
-      }
-    }
     // A voice prompt wakes a sleeping conversation like a text one does (L-D4).
     if (!getThreadAdapter(key).checkIsActive(key) && !(await resumeSleepingSessionForPrompt(key))) {
       await sendNoAgentGuidance(key, messageContext?.nonOperatorSender !== undefined, (text, extra) => replyToThread(key, text, extra));

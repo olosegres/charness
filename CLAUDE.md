@@ -65,7 +65,7 @@ per-backend controls are optional methods the bot checks before calling.
   General's list, in every topic) without making them an admin. DEFAULT-DENY: `authoriseContext` stays the admin-only gate, so every command,
   button and module keeps refusing a talker; only the routes that talk to the agent or answer its questions ask the speaker gate, and the router's
   `isTalkerAllowed` flag opens `/esc` (+ aliases), `/status`, `/whoami`, `/help` (pinned by a test). A talker's text takes ONE early branch
-  (`handleTalkerText`: no armed input step, no start phrase, no folder picker, no raw shell); their words reach the agent under an author mark,
+  (`handleTalkerText`: no armed input step, no folder picker, no raw shell); their words reach the agent under an author mark,
   with line-leading `[` escaped so they can never pass for the bot's own headers (`utils/authorMark.ts`). Foreign words — forwarded or a
   talker's — are content, never control (`checkIsForeignWords`), except answering the agent's question (a button, a bare number, or — for a question
   the bot set aside — a reply to its message that is an option number or an option's own label; a talker's other reply words are an ordinary prompt,
@@ -246,7 +246,7 @@ per-backend controls are optional methods the bot checks before calling.
 | `configDirFile.ts` | The shared mechanics of the JSON files in the config dir (`stt.json`, `settings.json`): location beside the REAL `.env`, stamp-cached load, atomic save, the unwritable / container-disk checks |
 | `outputTrace.ts`, `diagLog.ts`, `instanceLock.ts`, `shutdown.ts`, `bootClassifier.ts` | Always-on trace (`/trace`) + diagnostic log; single-instance lock; ordered graceful shutdown; hot-reload vs cold-start decision |
 | `stt/` | Voice recognition: `stt.json` settings (UI-first, one source of truth), the engine chain with fallback and a timeout proportional to the voice, the local GigaAM engine's installer; its Python sidecar is `stt/gigaam_sidecar.py` at the package root (shipped in `files`). README: contracts and the sidecar protocol |
-| `botFileStorage.ts`, `voiceQueue.ts`, `voiceProgressNote.ts`, `agentTrigger.ts`, `sendErrorClassifier.ts` | File-intake dirs + janitor; per-thread voice queue; the silent «transcribing…» note of a voice that waits (`stt/README.md`); natural-language agent trigger; send-failure classes |
+| `botFileStorage.ts`, `voiceQueue.ts`, `voiceProgressNote.ts`, `sendErrorClassifier.ts` | File-intake dirs + janitor; per-thread voice queue; the silent «transcribing…» note of a voice that waits (`stt/README.md`); send-failure classes |
 | `adapters/` | Backends behind `AgentAdapter`: `claudeJsonStreamAdapter`, `claudeCliAdapter` (tmux scrape, deprecated), `openCodeAdapter`, `terminalAdapter`; `createAdapter.ts` (factory + DI hub), `adapterEventRouting.ts` (foreign-platform event gate), `claudePlatformFlags.ts`, `sessionLaunchDefaults.ts`. README: protocol + traps |
 | `connectors/telegram/` | All code that touches the Telegram library: inbound/outbound translation, HTML, splitting, file intake + send gateway, answer sink, pickers, call guard, `output/` (`CHAT_MODE` transports) |
 | `connectors/jira/` | Jira Cloud connector: config, REST client, poller, trigger rules, prompt, answer sink, ADF |

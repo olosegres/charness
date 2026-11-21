@@ -2,7 +2,7 @@
  * @description Pure decision logic for the `/sessions` number-reply picker.
  *
  * Extracted from `bot.ts` so it can be unit-tested without booting Telegraf
- * (mirrors `agentTrigger.ts` / `threadRouting.ts`). Given the raw reply text
+ * (mirrors `threadRouting.ts`). Given the raw reply text
  * and how many sessions were shown, it decides what the bot should do — it
  * does NOT touch any state or perform the resume itself.
  */

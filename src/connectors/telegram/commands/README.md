@@ -426,7 +426,7 @@ topic from OpenCode to Claude «work»?» + the shared line `handover.note` («T
 over in compacted form.»), buttons `handover.continueButton` / `handover.cancelButton` (the same two for the `/limits`
 questions). `utils/backendSwitchPlan.ts` decides WHEN it is asked (`checkNeedsBackendSwitchConfirmation`: the topic runs
 the other backend AND holds a conversation) and words it; `bot.ts` is the single gate (`askBeforeCrossBackendSwitch`
-for `/claude`, `/opencode`, the agent buttons and the natural-language «start …» phrases, `switchTopicByOperator`
+for `/claude`, `/opencode` and the agent buttons, `switchTopicByOperator`
 for every operator PICK of an account or model — the `/limits` and `/accounts` rows, the model pages, `/accounts use`) and owns the switch itself
 (`executeBackendSwitch`: the usage-limit switch's cross-backend move — the bridge is built from the conversation being left, then the two
 helpers the limit switch uses too: `moveTopicToOtherBackend` (account pick + `switchThreadAdapter`) and `resumeTopicOnNewSession` (ensure, model pin,
