@@ -58,17 +58,25 @@ No clock, no state, no I/O: the caller hands in the report, the record, the sett
   session post (a tracker's request or update, a scheduled run, a fired check's wake). Every other prompt — the retry nudge, the
   hand-over, a wedge replay, a request wake-up, the todo reminder, the lost-work note, a compaction — leaves the flag off
   (`limitNotesWiring.test.ts` pins the list). A buffered carrier is decorated at its replay, with the figures of that moment. The
-  note counts as delivered only once the prompt reached a live session.
+  note counts as delivered only once the prompt reached a live session; until then it is IN FLIGHT: no second note is taken for the
+  conversation (two carrier prompts close together — a voice and a text, a message and a scheduled run — never both carry one), a
+  write that failed or a session that was gone `release`s it, and one whose prompt never reached an end (a forward that threw before
+  the write) is forgotten after `limitNoteInFlightMaxMs` (5 min).
 - **Quiet.** «The session woke up» is `now − lastTurnEnd` while nothing runs (`getAccountsNoteQuietMs`): the persisted turn-end
   stamp, because a person's own message stamps the activity instant the idle timer uses at its arrival, before the forward.
 - **A send tool's result** (`send_messages_to_user`, `send_file_to_user` of a topic and of a Jira issue, `answer_request`): the
   MCP surface appends the note as the last block (`takeLimitNoteForSend`; the conversation is the resolved thread, for
   `answer_request` the request's). Never the reminder; recorded as delivered at once. A failed send gets none.
 - **Hidden from the topic.** The renderer of a tool result cuts the note off a bot tool's output (`checkIsBotMcpToolName`) before it
-  truncates or shows it, for every `/tool_results` mode. The resume context, the fallback hand-over and the session titles strip a
-  stored user turn's trailing note like the preamble: stale figures must not reach a new agent.
+  truncates or shows it, for every `/tool_results` mode. The five readers of a stored user prompt — the resume context, the fallback
+  hand-over, both session-title builders and the OpenCode auto-rename — cut the glue through ONE helper, `getUserPromptWithoutGlue`
+  (the preamble, then every note): stale figures must not reach a new agent. The strip follows the note's SHAPE (`noteText.ts`: a
+  summary is its header line; a reminder its header, at most one `Then …` / `ChatGPT: …` line and the fixed instruction line) wherever
+  it sits, because the CLI merges messages queued behind a prompt into ONE user turn and the person's next message follows the note
+  there. `plan.ts` writes the notes from the same constants.
 - **What makes a conversation orchestrate.** `claude_profiles` (records the call, restarts the reminder clock, stores the fingerprint
-  of the answer) and `schedule_create` with a worker watch (`checkCommand` + `statusWorkerRunDir`). The scope is resolved like the
+  of the NOTES' own report — never of the answer the agent got, which was built for its model and its resumed account and differs from
+  the notes' whenever the call was a resume) and `schedule_create` with a worker watch (`checkCommand` + `statusWorkerRunDir`). The scope is resolved like the
   send tools; a folder token with several bound topics names none and records nothing.
 - **Test windows.** `CHARNESS_TEST_TIMINGS` `limitReminderIntervalMs`, `limitNoteQuietMs`, `limitNoteSummaryFloorMs` (each may only
   shorten its production window). No env var of its own.

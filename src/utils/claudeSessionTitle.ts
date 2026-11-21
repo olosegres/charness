@@ -14,8 +14,7 @@
  * Pure (string-in, string-out) so it is unit-tested in isolation.
  */
 
-import { stripLimitNote } from '../limitNotes/noteText';
-import { stripThreadContextPreamble } from '../threadContextPreamble';
+import { getUserPromptWithoutGlue } from '../threadContextPreamble';
 import { classifyClaudeUserEntry } from './claudeUserEntry';
 
 /**
@@ -59,7 +58,7 @@ const commandEchoRe = /^set (effort level|model) /i;
  */
 export function getSessionTitleLine(rawPrompt: string): string {
   let text = rawPrompt.trim();
-  text = stripLimitNote(stripThreadContextPreamble(text));
+  text = getUserPromptWithoutGlue(text);
   text = text.replace(scheduledRunMarkerRe, '');
   return text.replace(/\s+/g, ' ').trim();
 }

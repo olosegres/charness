@@ -27,6 +27,9 @@ import {
   type OpenCodeProviderUsages,
 } from './plan';
 
+/** How long a turn-start note may be in flight before it is forgotten: well past the longest write into an agent's input (the FIFO stall budget, 2 min). */
+export const limitNoteInFlightMaxMs = 5 * 60 * 1000;
+
 /** @description What the notes read and write. `getReport` is the report `claude_profiles` answers with (no second ranking). */
 export interface LimitNotesPorts {
   getRecord: (key: SessionKey) => LimitNoteRecord | undefined;
@@ -43,10 +46,16 @@ export interface LimitNotesPorts {
   log: (line: string) => void;
 }
 
-/** @description A note worked out for a turn start; `markDelivered` records it once the prompt that carries it reached the session. */
+/**
+ * @description A note worked out for a turn start. While it is in flight — taken, its prompt not yet written — no other note is taken for
+ * the conversation, so two carrier prompts close together (a voice and a text, a message and a scheduled run) never both carry one.
+ * Exactly one of the two ends it: `markDelivered` records it once the prompt that carries it reached the session; `release` gives it
+ * back when the prompt did not (the write failed, the session was gone), so the next carrier prompt carries it.
+ */
 export interface TurnStartNote {
   text: string;
   markDelivered: () => void;
+  release: () => void;
 }
 
 export interface LimitNotes {
@@ -54,8 +63,12 @@ export interface LimitNotes {
   takeTurnStartNote: (key: SessionKey, quietMs: number | null) => TurnStartNote | null;
   /** The note a bot send tool's result carries (recorded as delivered at once: the result goes back to the agent now), or `null`. */
   takeSendResultNote: (key: SessionKey) => string | null;
-  /** The agent called `claude_profiles` and got `report`: it looked, and it orchestrates workers. */
-  noteProfilesCall: (key: SessionKey, report: ClaudeProfilesReport) => void;
+  /**
+   * The agent called `claude_profiles`: it looked, and it orchestrates workers. The picture it is taken to hold is the notes' OWN report
+   * (the one every later decision fingerprints), never the answer it got: that one was built for its model and its resumed account, and
+   * differs from the notes' whenever the call was a resume — a «changed» summary right after the agent looked.
+   */
+  noteProfilesCall: (key: SessionKey) => void;
   /** The agent armed a worker watch: it orchestrates workers. */
   noteWorkerWatch: (key: SessionKey) => void;
 }
@@ -92,6 +105,12 @@ export function getAccountsNoteQuietMs(input: { lastTurnEndAt: number; isBusy: b
 export function createLimitNotes(ports: LimitNotesPorts): LimitNotes {
   /** Whether the «nothing fresh» line was logged since figures last were fresh: said once per spell, not at every prompt. */
   let isNoFreshUsageLogged = false;
+  /**
+   * The turn-start notes in flight, by conversation: when each was taken. A note whose prompt never reached a write that ends it
+   * (a forward that threw before the write) is forgotten after {@link limitNoteInFlightMaxMs}, so one lost path cannot silence the
+   * conversation for good.
+   */
+  const notesInFlight = new Map<string, number>();
 
   function runGuarded<TResult>(key: SessionKey, what: string, fallback: TResult, work: () => TResult): TResult {
     try {
@@ -100,6 +119,14 @@ export function createLimitNotes(ports: LimitNotesPorts): LimitNotes {
       console.error(`[limit-notes] ${keyToString(key)}: ${what} failed, nothing is added:`, error instanceof Error ? error.message : error);
       return fallback;
     }
+  }
+
+  function checkIsNoteInFlight(key: SessionKey, nowMs: number): boolean {
+    const takenAt = notesInFlight.get(keyToString(key));
+    if (takenAt === undefined) return false;
+    if (nowMs - takenAt < limitNoteInFlightMaxMs) return true;
+    notesInFlight.delete(keyToString(key));
+    return false;
   }
 
   /** The note of `moment` for `key`, with what recording it needs; `null` when none is due. */
@@ -112,6 +139,7 @@ export function createLimitNotes(ports: LimitNotesPorts): LimitNotes {
     const intervalMs = ports.getIntervalMs(key);
     if (intervalMs === null) return null;
     const nowMs = ports.getNowMs();
+    if (checkIsNoteInFlight(key, nowMs)) return null;
     const report = ports.getReport(nowMs);
     const openCodeUsage = ports.getOpenCodeUsage();
     const hasFreshUsage = checkHasFreshLimitUsage(report);
@@ -135,7 +163,16 @@ export function createLimitNotes(ports: LimitNotesPorts): LimitNotes {
   return {
     takeTurnStartNote: (key, quietMs) => runGuarded(key, 'the turn-start note', null, () => {
       const note = prepareNote(key, 'turnStart', quietMs);
-      return note === null ? null : { text: note.text, markDelivered: () => runGuarded(key, 'recording the turn-start note', undefined, () => recordNote(key, note.fingerprint)) };
+      if (note === null) return null;
+      notesInFlight.set(keyToString(key), ports.getNowMs());
+      return {
+        text: note.text,
+        markDelivered: () => {
+          notesInFlight.delete(keyToString(key));
+          runGuarded(key, 'recording the turn-start note', undefined, () => recordNote(key, note.fingerprint));
+        },
+        release: () => { notesInFlight.delete(keyToString(key)); },
+      };
     }),
     takeSendResultNote: (key) => runGuarded(key, 'the send-result note', null, () => {
       const note = prepareNote(key, 'sendResult', null);
@@ -143,9 +180,10 @@ export function createLimitNotes(ports: LimitNotesPorts): LimitNotes {
       recordNote(key, note.fingerprint);
       return note.text;
     }),
-    noteProfilesCall: (key, report) => runGuarded(key, 'recording a claude_profiles call', undefined, () => {
-      const fingerprint = buildLimitNoteFingerprint(report, ports.getOpenCodeUsage(), ports.getNowMs());
-      ports.setRecord(key, getLimitNoteRecordAfterProfilesCall(ports.getRecord(key), { atMs: ports.getNowMs(), fingerprint }));
+    noteProfilesCall: (key) => runGuarded(key, 'recording a claude_profiles call', undefined, () => {
+      const nowMs = ports.getNowMs();
+      const fingerprint = buildLimitNoteFingerprint(ports.getReport(nowMs), ports.getOpenCodeUsage(), nowMs);
+      ports.setRecord(key, getLimitNoteRecordAfterProfilesCall(ports.getRecord(key), { atMs: nowMs, fingerprint }));
     }),
     noteWorkerWatch: (key) => runGuarded(key, 'recording a worker watch', undefined, () => {
       ports.setRecord(key, getLimitNoteRecordAfterWorkerWatch(ports.getRecord(key), ports.getNowMs()));

@@ -15,6 +15,7 @@
  * should-inject decision below.
  */
 
+import { stripLimitNote } from './limitNotes/noteText';
 import { keyToString, type SessionKey } from './sessionKey';
 
 /** First line of every preamble — the agent-recognisable marker. */
@@ -142,4 +143,14 @@ export function stripThreadContextPreamble(text: string): string {
   const separatorIndex = text.indexOf(preamblePromptSeparator);
   if (separatorIndex === -1) return text;
   return text.slice(separatorIndex + preamblePromptSeparator.length);
+}
+
+/**
+ * @description A stored user prompt as the person wrote it: the leading thread-context preamble and every accounts note the bot
+ * glued on (`limitNotes/noteText.ts` — figures of the moment they were written, which a new agent must not read as today's) are cut.
+ * THE one rule for every reader that shows or judges a stored user turn: the resume context, the fallback hand-over, both session-title
+ * builders and the OpenCode adapter's auto-rename.
+ */
+export function getUserPromptWithoutGlue(text: string): string {
+  return stripLimitNote(stripThreadContextPreamble(text));
 }

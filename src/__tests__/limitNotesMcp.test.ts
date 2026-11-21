@@ -48,7 +48,7 @@ let clients: Client[];
 /** The notes the fake bot has due, by conversation: taking one empties it, like the real notes do. */
 let dueNotes: Map<string, string>;
 let noteTakes: string[];
-let profilesCalls: Array<{ threadKey: string; report: ClaudeProfilesReport }>;
+let profilesCalls: string[];
 let workerWatchCalls: string[];
 let sendResult: SendMessagesToThreadResult;
 let fileResult: SendFilesToThreadResult;
@@ -99,7 +99,7 @@ beforeEach(async () => {
         : undefined;
     },
     get noteLimitProfilesCall() {
-      return isNotesPortSupplied ? (threadKey: string, report: ClaudeProfilesReport) => { profilesCalls.push({ threadKey, report }); } : undefined;
+      return isNotesPortSupplied ? (threadKey: string) => { profilesCalls.push(threadKey); } : undefined;
     },
     get noteLimitWorkerWatch() {
       return isNotesPortSupplied ? (threadKey: string) => { workerWatchCalls.push(threadKey); } : undefined;
@@ -196,17 +196,17 @@ describe('the send tools\' results carry the note as their last block', () => {
 });
 
 describe('the two calls that make a conversation count as orchestrating workers', () => {
-  it('claude_profiles: the bot is told, for the conversation the scope names, with the report the agent got — and the answer is unchanged', async () => {
+  it('claude_profiles: the bot is told, for the conversation the scope names — and the answer is unchanged', async () => {
     const result = await callTool(await connectAgent(topicScope), 'claude_profiles', {});
     assert.equal(result.isError, false);
     assert.equal(result.text.includes('[Accounts'), false, 'no note rides this answer: the agent just looked');
-    assert.deepEqual(profilesCalls, [{ threadKey: keyToString(topicKey), report: emptyReport }]);
+    assert.deepEqual(profilesCalls, [keyToString(topicKey)], 'the thread only: the picture on record is the notes\' own report, not this answer');
   });
 
   it('a folder token with ONE bound topic names it; with several it names none and nothing is recorded (the call itself still works)', async () => {
     const solo = await callTool(await connectAgent({ kind: 'dir', directory: soloFolder }), 'claude_profiles', {});
     assert.equal(solo.isError, false);
-    assert.deepEqual(profilesCalls.map((call) => call.threadKey), [keyToString(topicKey)]);
+    assert.deepEqual(profilesCalls, [keyToString(topicKey)]);
     const shared = await callTool(await connectAgent({ kind: 'dir', directory: sharedFolder }), 'claude_profiles', {});
     assert.equal(shared.isError, false);
     assert.equal(profilesCalls.length, 1, 'an ambiguous folder scope records nothing');

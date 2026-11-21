@@ -25,7 +25,7 @@ import {
 } from '../openCodeSessionRouting';
 import { t, runWithLocale, defaultLocale } from '../i18n';
 import { formatResumeContext, resumeContextTurnLimit } from '../resumeContext';
-import { stripThreadContextPreamble } from '../threadContextPreamble';
+import { getUserPromptWithoutGlue } from '../threadContextPreamble';
 import { getOpenQuestionForSession } from '../openCodeOpenQuestion';
 import { buildOpenCodeSchedulerMcpRegistration, schedulerMcpServerName } from '../scheduler/injection';
 import { legacySchedulerMcpServerName } from '../legacyNames';
@@ -2741,7 +2741,7 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
     if (!session.isAutoNamePending) return;
     // The text arriving here is the preamble-glued prompt; meaningfulness and
     // the snippet must both be judged on the RAW user text, never the glue.
-    const rawText = stripThreadContextPreamble(input);
+    const rawText = getUserPromptWithoutGlue(input);
     if (!checkIsMeaningfulPrompt(rawText)) return;
 
     // First meaningful prompt: try at most once, regardless of the outcome.

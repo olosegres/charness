@@ -28,6 +28,7 @@ import {
   prependThreadContextPreamble,
 } from '../threadContextPreamble';
 import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
+import { appendLimitNote, limitNoteReminderInstructionLine } from '../limitNotes/noteText';
 import { useStubbedOpenCodeServer, type OpenCodeApiRequest } from './openCodeServerStub';
 import { createOpenCodeSessionFixture, getOpenCodeSession } from './openCodeSessionFixture';
 
@@ -134,6 +135,27 @@ describe('OpenCode fallback session naming', () => {
     adapter.sendInput(key, 'Fix the failing checkout when the cart is empty');
     await drain();
     assert.equal(getCalls(calls, 'PATCH', `/session/${sessionId}`).length, 1, 'the meaningful follow-up renames');
+  });
+
+  it('a trivial prompt that carries the accounts note is still trivial: the note is bot glue, so it does not spend the one rename attempt', async () => {
+    const { adapter, calls } = createNamingAdapter('New session - 2026-06-04T19:07:28.705Z');
+    const key: SessionKey = makeTelegramKey(-100, 6);
+    injectSession(adapter, key, true);
+
+    const preamble = buildThreadContextPreamble({ key, subdir: 'charness' });
+    const note = ['[Accounts · 14:05] Next new Claude worker → work (soonest weekly reset): week 62 % used.', limitNoteReminderInstructionLine].join('\n');
+    adapter.sendInput(key, appendLimitNote(prependThreadContextPreamble(preamble, 'да'), note));
+    await drain();
+
+    assert.equal(getCalls(calls, 'GET', `/session/${sessionId}`).length, 0, 'no title read');
+    assert.equal(getCalls(calls, 'PATCH', `/session/${sessionId}`).length, 0, 'no rename: "да" is not a topic');
+    assert.equal(getOpenCodeSession(adapter, keyToString(key)).isAutoNamePending, true, 'still eligible for a real prompt');
+
+    adapter.sendInput(key, appendLimitNote('Fix the failing checkout when the cart is empty', note));
+    await drain();
+    const patches = getCalls(calls, 'PATCH', `/session/${sessionId}`);
+    assert.equal(patches.length, 1);
+    assert.deepEqual(patches[0].body, { title: 'Fix the failing checkout when the cart is empty' }, 'and the title never carries the note');
   });
 
   it('leaves a session that opencode already auto-titled alone (no PATCH)', async () => {

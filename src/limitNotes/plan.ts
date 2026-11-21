@@ -28,7 +28,7 @@ import {
 } from '../utils/claudeUsage';
 import { chatGptProviderId, type OpenCodeProviderUsageRecord } from '../utils/openCodeUsage';
 import { formatReminderTime } from '../utils/reminderWizard';
-import { limitNoteMarker } from './noteText';
+import { formatLimitNoteHeader, limitNoteChatGptPrefix, limitNoteNextAccountsPrefix, limitNoteReminderInstructionLine } from './noteText';
 import { getZonedWallClock } from '../utils/timezone';
 
 /** What the poller recorded per OpenCode provider (`state.json` `openCodeProviderUsage`); the ChatGPT subscription's figures are read from it. */
@@ -295,15 +295,11 @@ export function buildLimitNoteFingerprint(report: ClaudeProfilesReport, openCode
 
 // ── the texts ──
 
-/** The reminder's last line: the instruction the summary leaves out. */
-const reminderInstructionLine = 'Call claude_profiles right before your next launch or resume — the pick moves as limits fill and reset. No reply is needed.';
-
 const noWorkerAccountSentence = 'No Claude account can take a new worker now';
 const noWorkerAccountClause = 'no Claude account can take a new worker now';
 
 function getNoteHeader(shape: LimitNoteShape, nowMs: number, timezone: string): string {
-  const suffix = shape === 'summary' ? ' · changed' : '';
-  return `${limitNoteMarker} · ${formatReminderTime(getZonedWallClock(timezone, nowMs))}${suffix}]`;
+  return formatLimitNoteHeader(formatReminderTime(getZonedWallClock(timezone, nowMs)), shape === 'summary');
 }
 
 /**
@@ -364,13 +360,13 @@ function formatReminderChatGptSentence(openCodeUsage: OpenCodeProviderUsages, no
   const usage = getChatGptUsage(openCodeUsage);
   if (usage === undefined) return null;
   const weekly = getChatGptWeeklyFigure(usage, nowMs);
-  return `ChatGPT: ${weekly === null ? usageUnknownWords : `week ${weekly.percent} %${weekly.resetIn === null ? '' : `, resets in ${weekly.resetIn}`}`}.`;
+  return `${limitNoteChatGptPrefix}${weekly === null ? usageUnknownWords : `week ${weekly.percent} %${weekly.resetIn === null ? '' : `, resets in ${weekly.resetIn}`}`}.`;
 }
 
 function buildReminderText(report: ClaudeProfilesReport, openCodeUsage: OpenCodeProviderUsages, nowMs: number): string {
   const next = listNextAccountEntries(report).map((entry) => `${entry.name} (${formatReminderNextFigures(entry, nowMs)})`);
-  const alsoSentences = [next.length === 0 ? null : `Then ${next.join(', ')}.`, formatReminderChatGptSentence(openCodeUsage, nowMs)].filter((sentence): sentence is string => sentence !== null);
-  return [formatReminderPickLine(report, nowMs), ...(alsoSentences.length === 0 ? [] : [alsoSentences.join(' ')]), reminderInstructionLine].join('\n');
+  const alsoSentences = [next.length === 0 ? null : `${limitNoteNextAccountsPrefix}${next.join(', ')}.`, formatReminderChatGptSentence(openCodeUsage, nowMs)].filter((sentence): sentence is string => sentence !== null);
+  return [formatReminderPickLine(report, nowMs), ...(alsoSentences.length === 0 ? [] : [alsoSentences.join(' ')]), limitNoteReminderInstructionLine].join('\n');
 }
 
 /** A weekly figure for the summary's one line: `71 % (resets in 1 d 16 h)` for the pick, `20 % (5 d)` for the rest. */

@@ -8,8 +8,8 @@
 
 import { beforeEach, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { checkIsAccountsNoteBackend, checkIsAccountsNoteCarried, createLimitNotes, getAccountsNoteQuietMs, type LimitNotes, type LimitNotesPorts } from '../limitNotes/service';
-import { defaultLimitNoteWindows, limitNoteMinQuietMs, type LimitNoteRecord } from '../limitNotes/plan';
+import { checkIsAccountsNoteBackend, checkIsAccountsNoteCarried, createLimitNotes, getAccountsNoteQuietMs, limitNoteInFlightMaxMs, type LimitNotes, type LimitNotesPorts } from '../limitNotes/service';
+import { buildLimitNoteFingerprint, defaultLimitNoteWindows, limitNoteMinQuietMs, type LimitNoteRecord } from '../limitNotes/plan';
 import { claudePerTurnAdapterName, claudeJsonStreamAdapterName, claudeTmuxAdapterName, openCodeAdapterName, terminalAdapterName } from '../adapters/adapterNames';
 import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
 import { keyToString } from '../sessionKey';
@@ -37,11 +37,15 @@ function buildView(name: string, usage: ClaudeUsageSnapshot): ClaudeProfileUsage
   return { name, configDir: name === 'default' ? null : `/home/user/.charness/claude-profiles/${name}`, loggedIn: true, email: `${name}@example.com`, subscriptionType: 'max', usage, limitedUntil: null, billing: 'subscription', creditExhaustedAt: null };
 }
 
-function buildReport(workWeekly = 62, isStale = false): ClaudeProfilesReport {
-  return buildClaudeProfilesCreditReport([
+function buildViews(workWeekly = 62, isStale = false): ClaudeProfileUsageView[] {
+  return [
     buildView('default', buildUsage({ session: 10, weekly: 20, weeklyResetHours: 120, isStale })),
     buildView('work', buildUsage({ session: 30, weekly: workWeekly, weeklyResetHours: 43, isStale })),
-  ], null, nowMs, { chainScope: null });
+  ];
+}
+
+function buildReport(workWeekly = 62, isStale = false): ClaudeProfilesReport {
+  return buildClaudeProfilesCreditReport(buildViews(workWeekly, isStale), null, nowMs, { chainScope: null });
 }
 
 /** The ports of a fake bot: what each call asked for is kept so a test can say what the notes touched — and what they never could. */
@@ -106,7 +110,8 @@ describe('the turn-start note', () => {
     assert.match(note.text, /^\[Accounts · 14:05\] Next new Claude worker → work \(soonest weekly reset\)/);
     assert.match(note.text, /Call claude_profiles right before your next launch or resume/);
     assert.deepEqual(harness.records.get(keyToString(key)), orchestrating(), 'a forward that failed keeps the note for the next prompt');
-    assert.equal(harness.notes.takeTurnStartNote(key, null)?.text, note.text, 'and the next prompt carries it');
+    note.release();
+    assert.equal(harness.notes.takeTurnStartNote(key, null)?.text, note.text, 'and, given back, the next prompt carries it');
   });
 
   it('delivered: the time and the fingerprint of the picture it showed are recorded, and the next turn start has nothing due', () => {
@@ -157,10 +162,67 @@ describe('the turn-start note', () => {
     assert.equal(harness.logs.length, 1);
     assert.match(harness.logs[0], /no account has a fresh usage figure/);
     harness.state.report = buildReport();
-    assert.ok(harness.notes.takeTurnStartNote(key, null) !== null, 'fresh again: the note comes');
+    const note = harness.notes.takeTurnStartNote(key, null);
+    assert.ok(note !== null, 'fresh again: the note comes');
+    note.release();
     harness.state.report = buildReport(62, true);
     harness.notes.takeTurnStartNote(key, null);
     assert.equal(harness.logs.length, 2, 'a new spell is logged again');
+  });
+});
+
+describe('a turn-start note is in flight until its prompt is written', () => {
+  let harness: ReturnType<typeof createHarness>;
+  const secondKey = makeTelegramKey(-1001111111111, 12);
+  beforeEach(() => {
+    harness = createHarness();
+    harness.records.set(keyToString(key), orchestrating());
+    harness.records.set(keyToString(secondKey), orchestrating());
+  });
+
+  it('two carrier prompts close together: only the first carries a note — the second reads the record the first has not written yet', () => {
+    const first = harness.notes.takeTurnStartNote(key, null);
+    assert.ok(first !== null);
+    assert.equal(harness.notes.takeTurnStartNote(key, null), null, 'a voice and a text, or a message and a scheduled run, never both carry it');
+    first.markDelivered();
+    assert.equal(harness.notes.takeTurnStartNote(key, null), null, 'delivered: recorded, nothing due');
+    assert.equal(harness.records.get(keyToString(key))?.lastNoteAt, nowMs);
+  });
+
+  it('once delivered it is no longer in flight: the next note is held back only by the interval, never by the delivered one', () => {
+    harness.state.intervalMs = minuteMs;
+    harness.notes.takeTurnStartNote(key, null)?.markDelivered();
+    harness.state.nowMs = nowMs + 2 * minuteMs;
+    assert.ok(harness.notes.takeTurnStartNote(key, null) !== null, 'the minute has passed since the last note: due again, and nothing in flight holds it');
+  });
+
+  it('another conversation is not held by it', () => {
+    assert.ok(harness.notes.takeTurnStartNote(key, null) !== null);
+    assert.ok(harness.notes.takeTurnStartNote(secondKey, null) !== null);
+  });
+
+  it('a prompt that did not reach the session gives the note back: nothing is recorded and the next carrier prompt carries it', () => {
+    const first = harness.notes.takeTurnStartNote(key, null);
+    first?.release();
+    assert.deepEqual(harness.records.get(keyToString(key)), orchestrating(), 'a failed write leaves the record as it was');
+    assert.equal(harness.notes.takeTurnStartNote(key, null)?.text, first?.text);
+  });
+
+  it('while one is in flight no send result carries a note either', () => {
+    harness.records.set(keyToString(key), orchestrating({ lastNoteAt: nowMs - 40 * minuteMs }));
+    const note = harness.notes.takeTurnStartNote(key, limitNoteMinQuietMs);
+    assert.ok(note !== null);
+    assert.equal(harness.notes.takeSendResultNote(key), null);
+    note.release();
+    assert.ok(harness.notes.takeSendResultNote(key) !== null, 'given back: free again');
+  });
+
+  it('a note whose prompt never reached any end (a forward that threw before the write) is forgotten after the in-flight window — one lost path never silences the conversation for good', () => {
+    assert.ok(harness.notes.takeTurnStartNote(key, null) !== null);
+    harness.state.nowMs = nowMs + limitNoteInFlightMaxMs - 1;
+    assert.equal(harness.notes.takeTurnStartNote(key, null), null, 'still in flight inside the window');
+    harness.state.nowMs = nowMs + limitNoteInFlightMaxMs;
+    assert.ok(harness.notes.takeTurnStartNote(key, null) !== null, 'forgotten at the window\'s end');
   });
 });
 
@@ -195,9 +257,9 @@ describe('the send-result note', () => {
 });
 
 describe('the two calls that make a conversation orchestrate workers', () => {
-  it('`claude_profiles`: the reminder clock restarts, the conversation orchestrates, the picture the answer showed is on record', () => {
+  it('`claude_profiles`: the reminder clock restarts, the conversation orchestrates, the picture now is on record', () => {
     const harness = createHarness();
-    harness.notes.noteProfilesCall(key, buildReport());
+    harness.notes.noteProfilesCall(key);
     const recorded = harness.records.get(keyToString(key));
     assert.equal(recorded?.lastProfilesCallAt, nowMs);
     assert.equal(recorded?.lastOrchestratedAt, nowMs);
@@ -206,6 +268,22 @@ describe('the two calls that make a conversation orchestrate workers', () => {
     assert.equal(harness.notes.takeTurnStartNote(key, null), null, 'no reminder for the next interval');
     harness.state.nowMs = nowMs + hourMs;
     assert.ok(harness.notes.takeTurnStartNote(key, null) !== null, 'and one an hour later');
+  });
+
+  it('the picture on record is the notes\' OWN, not the answer the agent got: a resume-shaped answer differs from it, yet the next send result carries no «changed» summary', () => {
+    const harness = createHarness();
+    // The agent resumed a worker that ran on `default`: its answer stays on that warm account, the notes' report ranks `work` first.
+    const agentAnswer = buildClaudeProfilesCreditReport(buildViews(), 'sonnet', nowMs, { currentProfile: 'default', chainScope: null });
+    assert.equal(agentAnswer.recommended, 'default');
+    assert.equal(harness.state.report.recommended, 'work');
+    assert.notEqual(buildLimitNoteFingerprint(agentAnswer, {}, nowMs), buildLimitNoteFingerprint(harness.state.report, {}, nowMs), 'precondition: the two pictures differ');
+
+    harness.records.set(keyToString(key), orchestrating({ lastNoteAt: nowMs - 5 * hourMs, fingerprint: undefined }));
+    harness.notes.noteProfilesCall(key);
+    assert.equal(harness.records.get(keyToString(key))?.fingerprint, buildLimitNoteFingerprint(harness.state.report, {}, nowMs));
+    assert.equal(harness.notes.takeSendResultNote(key), null, 'the agent just looked: nothing changed');
+    harness.state.report = buildReport(80);
+    assert.ok(harness.notes.takeSendResultNote(key) !== null, 'and a real change after that is still told');
   });
 
   it('a worker watch: the conversation orchestrates, nothing else moves — and a reminder is due at its next turn start, for an agent that never looked', () => {
@@ -220,7 +298,7 @@ describe('the two calls that make a conversation orchestrate workers', () => {
     const harness = createHarness();
     harness.state.intervalMs = null;
     harness.notes.noteWorkerWatch(key);
-    harness.notes.noteProfilesCall(key, buildReport());
+    harness.notes.noteProfilesCall(key);
     harness.state.intervalMs = hourMs;
     assert.equal(harness.records.get(keyToString(key))?.lastOrchestratedAt, nowMs);
   });
@@ -232,7 +310,7 @@ describe('a note is a passenger, never a cause', () => {
     harness.records.set(keyToString(key), orchestrating({ lastNoteAt: nowMs - 40 * minuteMs }));
     harness.notes.takeTurnStartNote(key, limitNoteMinQuietMs)?.markDelivered();
     harness.notes.takeSendResultNote(key);
-    harness.notes.noteProfilesCall(key, buildReport());
+    harness.notes.noteProfilesCall(key);
     harness.notes.noteWorkerWatch(key);
     const allowed = new Set(['getRecord', 'setRecord', 'getIntervalMs', 'getWindows', 'getReport', 'getOpenCodeUsage', 'getTimezone', 'getBackendName']);
     assert.deepEqual([...new Set(harness.calls)].filter((name) => !allowed.has(name)), []);
@@ -257,7 +335,7 @@ describe('a note is a passenger, never a cause', () => {
       const note = failingWrite.notes.takeTurnStartNote(key, null);
       assert.doesNotThrow(() => note?.markDelivered());
       assert.doesNotThrow(() => failingWrite.notes.noteWorkerWatch(key));
-      assert.doesNotThrow(() => failingWrite.notes.noteProfilesCall(key, buildReport()));
+      assert.doesNotThrow(() => failingWrite.notes.noteProfilesCall(key));
     } finally {
       console.error = original;
     }

@@ -6476,8 +6476,14 @@ async function forwardPromptToLiveAgent(
   // Told only once the prompt carrying the note reached a live session: a forward that failed keeps it for the next.
   const noteToldIfDelivered = (): void => {
     if (lostWorkRecord && adapter.checkIsActive(key)) void state.clearLostWork(key);
-    if (accountsNote !== null && adapter.checkIsActive(key)) accountsNote.markDelivered();
+    // The note is in flight until here: recorded when the session got the prompt, given back when it was gone.
+    if (accountsNote !== null) {
+      if (adapter.checkIsActive(key)) accountsNote.markDelivered();
+      else accountsNote.release();
+    }
   };
+  // A write that failed gives the note back too: the next carrier prompt carries it (the failure itself is handled below, as ever).
+  if (accountsNote !== null) void written.catch(() => accountsNote.release());
   // A person's own message never holds the topic's update queue on its write — a CLI that stops reading its input would
   // keep `/esc` and every tap behind it for minutes —: they are told when it failed. Every other prompt (a tracker's post,
   // a wake-up, a scheduled run, a retry's nudge, the todo reminder) awaits it: one that never arrived is retried.
@@ -15779,9 +15785,9 @@ function wireScheduler(wiring: SchedulerWiringDeps): SchedulerMcpHandle {
       const key = tryKeyFromString(threadKeyStr);
       return key === null ? null : getLimitNotes().takeSendResultNote(key);
     },
-    noteLimitProfilesCall: (threadKeyStr, report) => {
+    noteLimitProfilesCall: (threadKeyStr) => {
       const key = tryKeyFromString(threadKeyStr);
-      if (key !== null) getLimitNotes().noteProfilesCall(key, report);
+      if (key !== null) getLimitNotes().noteProfilesCall(key);
     },
     noteLimitWorkerWatch: (threadKeyStr) => {
       const key = tryKeyFromString(threadKeyStr);

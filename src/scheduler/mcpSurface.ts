@@ -534,8 +534,8 @@ export interface SchedulerMcpDeps {
    * delivered: the result goes back to the agent at once. Absent = no note is ever added.
    */
   takeLimitNoteForSend?: (threadKey: string) => string | null;
-  /** The agent of the conversation `threadKey` called `claude_profiles` and got `report` (it looked, and it orchestrates workers). */
-  noteLimitProfilesCall?: (threadKey: string, report: ClaudeProfilesReport) => void;
+  /** The agent of the conversation `threadKey` called `claude_profiles` (it looked, and it orchestrates workers). */
+  noteLimitProfilesCall?: (threadKey: string) => void;
   /** The agent of the conversation `threadKey` armed a worker watch (`schedule_create` with `statusWorkerRunDir`): it orchestrates workers. */
   noteLimitWorkerWatch?: (threadKey: string) => void;
   /**
@@ -2020,7 +2020,7 @@ function registerClaudeProfilesTool(server: ToolRegistrar, deps: SchedulerMcpDep
       // The agent looked at the accounts, and launching workers is what it does: the reminder clock restarts, the conversation
       // orchestrates (`limitNotes/`). Resolved like the send tools; a `dir` scope with several bound topics names none: nothing is recorded.
       const resolved = resolveTargetThreadKey(scope, undefined, deps.getThreadsForDirectory);
-      if (resolved.ok) deps.noteLimitProfilesCall?.(resolved.threadKey, report);
+      if (resolved.ok) deps.noteLimitProfilesCall?.(resolved.threadKey);
       return textResult(`${buildClaudeProfilesVerdict(report, currentProfile)}\n${JSON.stringify(report, null, 1)}`);
     },
   );

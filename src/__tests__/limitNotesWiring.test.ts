@@ -106,7 +106,13 @@ describe('where the forward attaches the note, and when it counts as delivered',
   });
 
   it('counts as delivered only once the prompt that carries it reached a live session — a failed write keeps it for the next prompt', () => {
-    assert.match(body, /const noteToldIfDelivered = \(\): void => \{[^]*?if \(accountsNote !== null && adapter\.checkIsActive\(key\)\) accountsNote\.markDelivered\(\);\n\s*\};/);
+    assert.match(body, /const noteToldIfDelivered = \(\): void => \{[^]*?if \(adapter\.checkIsActive\(key\)\) accountsNote\.markDelivered\(\);\n\s*else accountsNote\.release\(\);\n\s*\}\n\s*\};/);
+  });
+
+  it('a prompt that did not reach the session gives the note back — a failed write, a session that was gone — so two quick carriers never both carry one and a failed one never loses it', () => {
+    assert.match(body, /if \(accountsNote !== null\) \{\n\s*if \(adapter\.checkIsActive\(key\)\) accountsNote\.markDelivered\(\);\n\s*else accountsNote\.release\(\);\n\s*\}/);
+    assert.match(body, /if \(accountsNote !== null\) void written\.catch\(\(\) => accountsNote\.release\(\)\);/);
+    assert.ok(body.indexOf('void written.catch(() => accountsNote.release());') < body.indexOf('if (options.isPersonInput === true) {'), 'armed before either branch settles the write');
   });
 
   it('adds no activity stamp, typing, busy flag or request of its own: the note block holds none of them', () => {
@@ -129,7 +135,7 @@ describe('the topic never shows the note, and the bot\'s MCP ports reach the not
 
   it('the scheduler\'s MCP deps take the send-result note and record the two orchestration calls through the one notes object', () => {
     assert.match(botSource, /takeLimitNoteForSend: \(threadKeyStr\) => \{\n\s*const key = tryKeyFromString\(threadKeyStr\);\n\s*return key === null \? null : getLimitNotes\(\)\.takeSendResultNote\(key\);\n\s*\},/);
-    assert.match(botSource, /noteLimitProfilesCall: \(threadKeyStr, report\) => \{\n\s*const key = tryKeyFromString\(threadKeyStr\);\n\s*if \(key !== null\) getLimitNotes\(\)\.noteProfilesCall\(key, report\);\n\s*\},/);
+    assert.match(botSource, /noteLimitProfilesCall: \(threadKeyStr\) => \{\n\s*const key = tryKeyFromString\(threadKeyStr\);\n\s*if \(key !== null\) getLimitNotes\(\)\.noteProfilesCall\(key\);\n\s*\},/);
     assert.match(botSource, /noteLimitWorkerWatch: \(threadKeyStr\) => \{\n\s*const key = tryKeyFromString\(threadKeyStr\);\n\s*if \(key !== null\) getLimitNotes\(\)\.noteWorkerWatch\(key\);\n\s*\},/);
   });
 
@@ -144,6 +150,18 @@ describe('the topic never shows the note, and the bot\'s MCP ports reach the not
     assert.match(botSource, /ENV\.testTimings\.limitNoteQuietMs/);
     assert.match(botSource, /ENV\.testTimings\.limitNoteSummaryFloorMs/);
     assert.doesNotMatch(botSource, /process\.env\.CHARNESS_LIMIT/);
+  });
+});
+
+describe('every reader of a stored user prompt cuts the glue through the ONE helper', () => {
+  const readSource = (relativePath: string): string => fs.readFileSync(path.join(__dirname, '..', relativePath), 'utf8');
+
+  it('the resume context, the hand-over, both session-title builders and the OpenCode auto-rename use `getUserPromptWithoutGlue` — none strips the preamble by itself', () => {
+    for (const reader of ['resumeContext.ts', 'utils/fallbackBridge.ts', 'utils/claudeSessionTitle.ts', 'openCodeSessionTitle.ts', 'adapters/openCodeAdapter.ts']) {
+      const source = readSource(reader);
+      assert.match(source, /getUserPromptWithoutGlue\(/, `${reader} cuts the glue through the shared helper`);
+      assert.equal(/stripThreadContextPreamble|stripLimitNote/.test(source), false, `${reader} must not repeat the strip pair`);
+    }
   });
 });
 

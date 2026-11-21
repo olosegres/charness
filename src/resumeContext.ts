@@ -1,6 +1,5 @@
 import { t } from './i18n';
-import { stripLimitNote } from './limitNotes/noteText';
-import { stripThreadContextPreamble } from './threadContextPreamble';
+import { getUserPromptWithoutGlue } from './threadContextPreamble';
 import type { RecentTurn } from './types';
 
 /**
@@ -28,7 +27,7 @@ export function renderTurns(turns: RecentTurn[]): string[] {
   const assistantLabel = t('resume.context_assistant_label');
   return turns.map((turn) => {
     const label = turn.role === 'user' ? userLabel : assistantLabel;
-    const visibleText = turn.role === 'user' ? stripLimitNote(stripThreadContextPreamble(turn.text)) : turn.text;
+    const visibleText = turn.role === 'user' ? getUserPromptWithoutGlue(turn.text) : turn.text;
     return `${label} ${visibleText}`;
   });
 }
