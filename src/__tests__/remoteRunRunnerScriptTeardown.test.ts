@@ -14,6 +14,9 @@ import os from 'os';
 import path from 'path';
 import { detachedRunGraceMs, readDetachedRunPid, removeTestRoot, scriptPath, startStrangerProcess, stopDetachedRuns, stopRunnerStandIns, waitForDetachedRunToEnd, writeFile } from './remoteRunRunnerScriptKit';
 
+/** The kit's stranger is a `sleep 120`, so a wrong wait for it lasts up to 120 s: a test that must see no wait at all asserts it stayed under this, well short of that. */
+const strangerWaitBoundMs = 60_000;
+
 const duDelaySeconds = 0.6;
 
 let root = '';
@@ -71,7 +74,7 @@ describe('the teardown of a test of the runner script', () => {
     assert.ok(checkIsAlive(pid));
     const startedAt = Date.now();
     await waitForDetachedRunToEnd(workDir, 'measure-copies');
-    assert.ok(Date.now() - startedAt > 15_000, 'it waited for the walk, past the grace after which `stopDetachedRuns` ends a run');
+    assert.ok(Date.now() - startedAt > detachedRunGraceMs, 'it waited for the walk, past the grace after which `stopDetachedRuns` ends a run');
     assert.equal(checkIsAlive(pid), false);
     for (const copy of ['one-aaaaaaaaaa', 'two-bbbbbbbbbb']) assert.equal(fs.existsSync(path.join(workDir, 'p', copy, 'size-kb')), true, `${copy} was measured`);
   });
@@ -87,7 +90,8 @@ describe('the teardown of a test of the runner script', () => {
     writeFile(workDir, 'tmp/sweep-tmpdirs.pid', `${strangerPid}\n`);
     assert.equal(readDetachedRunPid(workDir, 'sweep-tmpdirs'), strangerPid);
     await waitForDetachedRunToEnd(workDir, 'sweep-tmpdirs');
-    assert.ok(Date.now() - startedAt < detachedRunGraceMs, 'none of them was waited for: a wait for the stranger would last the whole grace');
+    // `waitForDetachedRunToEnd` has no grace by design: a wrong wait for the stranger lasts as long as the stranger does (`sleep 120`), which this bound, well under it, a real wait cannot meet.
+    assert.ok(Date.now() - startedAt < strangerWaitBoundMs, 'none of them was waited for: a wait for the stranger would last as long as the stranger');
     assert.ok(checkIsAlive(strangerPid), 'and the stranger was left alone');
   });
 
