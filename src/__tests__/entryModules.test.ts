@@ -19,6 +19,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import ts from 'typescript';
+import { unemittedSourcePrefixes } from '../selfUpdate/emittedSource';
 import { entryModules, listImportableModules } from '../selfUpdate/selfCheck';
 
 const sourceRoot = path.resolve(__dirname, '..');
@@ -34,8 +35,11 @@ const startsTheBotWhenImported: readonly string[] = ['bot.js', 'cli/botEntry.js'
 const promiseChainMethods: readonly string[] = ['then', 'catch', 'finally'];
 const mainFunctionName = 'main';
 
-/** The `src/` directories `tsconfig.json` leaves out of the build (their programs are run by `tsx`, never imported by the self-check). */
-const unbuiltSourceDirectories: readonly string[] = ['release', 'walkthrough'].map((name) => path.join(sourceRoot, name));
+/**
+ * The `src/` directories `tsconfig.json` leaves out of the build (their programs are run by `tsx`, never imported by the self-check): the
+ * very list the hot supervisor skips (`emittedSource.test.ts` keeps it equal to `tsconfig.json`), so a directory excluded next is skipped here too.
+ */
+const unbuiltSourceDirectories: readonly string[] = unemittedSourcePrefixes.map((prefix) => path.resolve(sourceRoot, '..', prefix));
 
 function listSourceFiles(directory: string): string[] {
   return fs.readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
