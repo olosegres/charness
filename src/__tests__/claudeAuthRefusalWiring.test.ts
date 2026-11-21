@@ -16,11 +16,23 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { botSource, getFunctionBody } from './botSource';
 
+/**
+ * Assert that `first` stands before `second` in `body`, and that BOTH stand there: `indexOf` answers -1 for a missing text, so a bare
+ * `first.indexOf < second.indexOf` passes without checking anything when `first` was rewritten away.
+ */
+function assertOrder(body: string, first: string, second: string, message: string): void {
+  const firstIndex = body.indexOf(first);
+  const secondIndex = body.indexOf(second);
+  assert.ok(firstIndex >= 0, `${first} is in the source (${message})`);
+  assert.ok(secondIndex >= 0, `${second} is in the source (${message})`);
+  assert.ok(firstIndex < secondIndex, message);
+}
+
 test('every spawn reads its account through the launch pick, which records a move as the conversation\'s own pick', () => {
   assert.match(getFunctionBody('resolveThreadClaudeConfigDir'), /const name = resolveThreadClaudeProfileForLaunch\(key\);/);
   assert.match(botSource, /registerClaudeConfigDirReader\(resolveThreadClaudeConfigDir\);/, 'the adapters\' one reader');
   const launch = getFunctionBody('resolveThreadClaudeProfileForLaunch');
-  assert.ok(launch.indexOf('settleClaudeAuthRefusal(resolved)') < launch.indexOf('checkIsClaudeProfileKnownUnusable(record)'), 'a sign-in since the refusal is read first');
+  assertOrder(launch, 'settleClaudeAuthRefusal(resolved)', 'checkIsClaudeProfileKnownUnusable(record)', 'a sign-in since the refusal is read first');
   assert.match(launch, /resolveClaudeProfileForLaunch\(/);
   assert.match(launch, /state\.setClaudeProfileOverride\(key, launch\.name\)/);
 });
@@ -29,7 +41,7 @@ test('an `auth` error of a json-stream conversation is the move; every other bac
   assert.match(getFunctionBody('handleApiError'), /if \(action\.action === 'surface'\) \{\s*if \(getThreadAdapter\(key\) instanceof ClaudeJsonStreamAdapter\) void handleClaudeAuthRefusal\(key, cls\);\s*else void surfaceLoggedOutNotice\(key\);/);
   const move = getFunctionBody('handleClaudeAuthRefusal');
   assert.match(move, /planClaudeAuthRefusalMove\(/);
-  assert.ok(move.indexOf('state.setClaudeProfileAuthRefusal(from.profile, refusal)') < move.indexOf('switchTopicToFallbackEntry('), 'the account is marked before the move reads the accounts');
+  assertOrder(move, 'state.setClaudeProfileAuthRefusal(from.profile, refusal)', 'switchTopicToFallbackEntry(', 'the account is marked before the move reads the accounts');
   assert.equal(move.match(/surfaceLoggedOutNotice\(key\)/g)?.length, 3, 'no Claude account, nothing to mark, a move that failed');
   assert.match(move, /if \(instead === null\) \{[^]*?await waitForClaudeAccount\(key\);\s*return;/, 'nowhere to go: the conversation waits for an account');
 });
@@ -43,7 +55,7 @@ test('a tracker issue hears the move in plain words before it happens; a topic h
 
 test('with nowhere to go the conversation waits: marked, its requests no longer woken, a tracker issue told why in plain words', () => {
   const wait = getFunctionBody('waitForClaudeAccount');
-  assert.ok(wait.indexOf('state.setWaitingForClaudeAccount(key, true)') < wait.indexOf('stopWakingForLimitWait(key)'));
+  assertOrder(wait, 'state.setWaitingForClaudeAccount(key, true)', 'stopWakingForLimitWait(key)', 'the conversation is marked waiting before its requests stop being woken');
   assert.match(wait, /if \(checkIsTelegramKey\(key\) \|\| !requestLimitWaitAnswerDeps\) \{\s*await surfaceLoggedOutNotice\(key\);/);
   assert.match(wait, /identity: 'claudeAccountWait',\s*body: t\('requests\.account\.noneUsableAnswer', \{ reasons \}\),\s*isWakeStopped: true,/);
 });
@@ -52,36 +64,39 @@ test('every round of the accounts\' states tells the operator and resumes the wa
   const round = getFunctionBody('noteClaudeProfileUsability');
   assert.match(round, /if \(!isOperatorAlertOpen\) return;\s*tellOperatorAboutClaudeAccounts\(current, backByStatusCheck\);\s*void resumeConversationsWaitingForAccount\(\);/);
   const restored = botSource.slice(botSource.indexOf('onSessionsRestored: () => {'));
-  assert.ok(restored.indexOf('jiraConnector?.start(') < restored.indexOf('openOperatorAlerts();'), 'the connectors\' channels are known first');
+  assertOrder(restored, 'jiraConnector?.start(', 'openOperatorAlerts();', 'the connectors\' channels are known first');
   assert.match(botSource, /operatorAlertChannels = jiraConnector\?\.operatorChannel \? \[jiraConnector\.operatorChannel\] : \[\];/);
   const deliver = getFunctionBody('deliverClaudeAccountAlert');
   assert.match(deliver, /if \(ENV\.isTelegramServed\) posts\.push\(postClaudeAccountAlertToTelegram\(alert\)\);/);
   assert.match(deliver, /runWithLocale\('en', \(\) => renderClaudeAccountAlert\(alert, getHostClaudeSignInHow\)\)/, 'a connector\'s channel reads English and the host\'s sign-in');
   const resume = getFunctionBody('resumeConversationsWaitingForAccount');
-  assert.ok(resume.indexOf('applyClaudeProfileToThread(key, { isAfterLimit: true })') < resume.indexOf('resumeTopicOnNewSession(key,'), 'moved onto an account that works before the continue prompt');
+  assertOrder(resume, 'applyClaudeProfileToThread(key, { isAfterLimit: true })', 'resumeTopicOnNewSession(key,', 'moved onto an account that works before the continue prompt');
 });
 
 test('the profile scan of the usage poll and of /accounts ends the refusals of accounts signed in again and logs the changes', () => {
   assert.match(botSource, /syncProfiles: \(\) => syncClaudeProfilesAndRefusals\(\),/);
   assert.match(botSource, /syncClaudeProfiles: \(options\) => syncClaudeProfilesAndRefusals\(options\),/);
   const scan = getFunctionBody('syncClaudeProfilesAndRefusals');
-  assert.ok(scan.indexOf('claudeProfileSync.sync(options)') < scan.indexOf('settleClaudeAuthRefusal(name)'), 'the probes first, then the refusals they may end');
+  assertOrder(scan, 'claudeProfileSync.sync(options)', 'settleClaudeAuthRefusal(name)', 'the probes first, then the refusals they may end');
   assert.match(scan, /noteClaudeProfileUsability\(\);/);
 });
 
 test('the private sign-out messages go BEFORE General\'s post (it must know a refusal), write back only their own ids, and an account signed in again turns its message', () => {
   const telegram = getFunctionBody('postClaudeAccountAlertToTelegram');
-  assert.ok(
-    telegram.indexOf('await sendClaudeAccountSignOutDms(alert)') < telegram.indexOf('postClaudeAccountAlertToGeneral(alert, { isPrivateChatClosed })'),
+  assertOrder(
+    telegram,
+    'await sendClaudeAccountSignOutDms(alert)',
+    'postClaudeAccountAlertToGeneral(alert, { isPrivateChatClosed })',
     'General\'s alert asks for a private chat only when the private message was refused: it needs the outcome first',
   );
   assert.match(telegram, /settleClaudeAccountSignOutDms\(alert\)/);
   const send = getFunctionBody('sendClaudeAccountSignOutDms');
   assert.doesNotMatch(send, /setClaudeAccountAlertState\(/, 'a send that waited on Telegram never writes back the record it read before');
   assert.match(send, /await state\.setClaudeAccountAlertSignOutMessageId\(name, outcome\.messageId\);/);
-  assert.match(send, /outcome\.kind === 'failed' && outcome\.isForbidden === true\) \{\s*isPrivateChatClosed = true;/, 'only Telegram\'s 403 makes General ask for a private chat');
+  assert.match(send, /outcome\.kind === 'failed' && outcome\.isForbidden === true\) \{\s*isPrivateChatClosed = true;/, 'Telegram\'s 403 makes General ask for a private chat');
+  assert.equal(send.match(/isPrivateChatClosed = true/g)?.length, 1, 'and nothing else does: a network error or any other failed send must not');
   const turn = getFunctionBody('markClaudeAccountSignOutDmSignedIn');
-  assert.ok(turn.indexOf('setClaudeAccountAlertSignOutMessageId(name, null)') < turn.indexOf('editThreadMessage(privateKey, messageId, text)'), 'the id is dropped first: a failed edit is never retried');
+  assertOrder(turn, 'setClaudeAccountAlertSignOutMessageId(name, null)', 'editThreadMessage(privateKey, messageId, text)', 'the id is dropped first: a failed edit is never retried');
 });
 
 test('the General post writes back ONLY its pin, read after its waits — never the record it read before them', () => {
