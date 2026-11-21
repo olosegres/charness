@@ -425,19 +425,21 @@ describe('The boot recovery of a parked usage limit end to end: built charness, 
         ...persisted.claudeProfiles,
         default: {
           ...defaultProfile,
-          // Read two hours ago and already marked stale: due again, the refresher re-polls it at boot, finds no sign-in and marks it
-          // stale once more. Stale from the start, not only once that poll is done: this boot's own recovery re-arms the parked error
-          // too (the reply to the boot's `mcp_status` lands in the log after the episode stamp), and decides on the reading as it is
-          // then — a race with the poll the step must not depend on.
-          usage: { fetchedAt: new Date(Date.now() - 2 * 60 * msPerMinute).toISOString(), source: 'api', isStale: true, buckets: [
+          // Read two hours ago: due again, the refresher re-polls it at boot, finds no sign-in and marks it stale.
+          usage: { fetchedAt: new Date(Date.now() - 2 * 60 * msPerMinute).toISOString(), source: 'api', buckets: [
             { kind: 'session', percent: 100, resetsAt: new Date(Date.now() + 2 * 60 * msPerMinute).toISOString(), scopeModel: null },
             { kind: 'weekly_all', percent: 30, resetsAt: new Date(Date.now() + weeklyResetAheadMs).toISOString(), scopeModel: null },
           ] },
         },
       };
     });
+    // The parked error was handled by the previous step's recovery, and stays so though the log has grown since: the reply to the
+    // `mcp_status` each boot sends the adopted session lands after it. Re-armed at this boot, it would be decided at once — on the
+    // 100 % reading above, which the boot's usage poll may not have marked stale yet — as a confirmed limit, with no probe.
+    assert.ok(getCharness().output.includes(`[limitRecovery] ${key}: skipped (alreadyHandled)`), 'the episode the previous boot armed is known as handled');
+    assert.equal(getCharness().output.includes(recoveryLogLine), false, 'and is not armed again');
     await getCharness().waitFor('the snapshot marked stale', agentStartTimeoutMs, () => readPersistedState(getLayout()).claudeProfiles?.default?.usage?.isStale === true);
-    // A NEW turn hits the wording (the operator's message below ends whatever this boot's recovery armed).
+    // A NEW turn hits the wording.
     fs.writeFileSync(path.join(getLayout().fakeStateDir, fakeClaudeApiErrorOnceFileName), "API Error: 429 This request would exceed your account's rate limit. Please try again later.");
     const callsBefore = fakeTelegram.listCalls('sendMessage').length;
     fakeTelegram.pushOperatorMessage(topicThreadId, `${requestLabel}-stalesnapshot one more step`);
@@ -471,10 +473,21 @@ describe('The boot recovery of a parked usage limit end to end: built charness, 
     fs.writeFileSync(path.join(getLayout().fakeStateDir, fakeClaudeApiErrorDelayFileName), resumeTurnErrorDelayMs.toString());
     charness = await restartWithHandledLog((persisted) => {
       // The wait the step before confirmed is gone, and so is the account's limit mark: the boot recovery hands its
-      // parked error — the unconfirmed wording — to the probe again.
+      // parked error — the unconfirmed wording — to the probe again. The reading says 100 % with its window ahead and is not
+      // marked stale yet, but it was taken two hours BEFORE that error: it proves nothing about it, whether or not the boot's
+      // usage poll has re-read the account by the time the recovery decides.
       delete persisted.apiRetries?.[key];
       const { limitedUntil: _confirmedMark, ...defaultProfile } = persisted.claudeProfiles?.default ?? { createdAt: new Date().toISOString() };
-      persisted.claudeProfiles = { ...persisted.claudeProfiles, default: defaultProfile };
+      persisted.claudeProfiles = {
+        ...persisted.claudeProfiles,
+        default: {
+          ...defaultProfile,
+          usage: { fetchedAt: new Date(Date.now() - 2 * 60 * msPerMinute).toISOString(), source: 'api', buckets: [
+            { kind: 'session', percent: 100, resetsAt: new Date(Date.now() + 2 * 60 * msPerMinute).toISOString(), scopeModel: null },
+            { kind: 'weekly_all', percent: 30, resetsAt: new Date(Date.now() + weeklyResetAheadMs).toISOString(), scopeModel: null },
+          ] },
+        },
+      };
     });
     const listProbeNotices = (fromCall: number): string[] => fakeTelegram.listCalls('sendMessage').slice(fromCall)
       .map((call) => (typeof call.payload.text === 'string' ? call.payload.text : ''))

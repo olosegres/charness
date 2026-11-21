@@ -317,10 +317,22 @@ export function checkHasHeadroomForClaudeModel(usage: ClaudeUsageSnapshot | unde
  * @description Whether the usage reading SHOWS a window `model` drains at 100 % NOW (`nowMs`) — the proof an
  * unconfirmed usage-limit wording lacks. Unknown figures prove nothing (`false`), unlike
  * {@link checkHasHeadroomForClaudeModel}, which takes an unknown window as covering the model; neither does an
- * out-of-date reading — a snapshot marked stale, or a 100 % window whose reset has passed since it was read.
+ * out-of-date reading — a snapshot marked stale, a 100 % window whose reset has passed since it was read, or (with
+ * `readNotBeforeMs`) one read BEFORE that instant: the boot recovery of a parked error passes the error's own time, since a
+ * reading older than the error says nothing about it, and the boot's usage poll — which would mark an unreadable one stale —
+ * may not have run yet.
  */
-export function checkIsClaudeUsageExhausted(usage: ClaudeUsageSnapshot | undefined, model: string | null, nowMs: number): boolean {
+export function checkIsClaudeUsageExhausted(
+  usage: ClaudeUsageSnapshot | undefined,
+  model: string | null,
+  nowMs: number,
+  options: { readNotBeforeMs?: number } = {},
+): boolean {
   if (!usage || usage.isStale === true) return false;
+  if (options.readNotBeforeMs !== undefined) {
+    const fetchedAtMs = Date.parse(usage.fetchedAt);
+    if (!Number.isFinite(fetchedAtMs) || fetchedAtMs < options.readNotBeforeMs) return false;
+  }
   return getRelevantClaudeUsageKinds(model).some((kind) => {
     const bucket = getClaudeUsageBucket(usage, kind);
     return bucket !== null && getClaudeUsagePercentAsOf(bucket, nowMs) >= 100;
