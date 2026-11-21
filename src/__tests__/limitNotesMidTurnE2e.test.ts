@@ -29,7 +29,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { FakeTelegram, type FakeTelegramMessage } from './telegramE2e/fakeTelegram';
 import { TopicDriver } from './telegramE2e/topicDriver';
-import { fakeClaudeLogFileNames, fakeClaudeUsageWindowsFileName, type FakeClaudePrompt, type FakeClaudeUsageWindows } from './jiraE2e/fakeClaudeContract';
+import { fakeClaudeLogFileNames } from './jiraE2e/fakeClaudeContract';
 import {
   builtCliPath,
   createIsolatedInstanceLayout,
@@ -46,6 +46,7 @@ import {
   type IsolatedInstanceLayout,
 } from './e2e/isolatedCharness';
 import { getAllAgentTurns, getSessionLaunches, readPersistedState, restartCharnessWithState, startCharnessOnInstance } from './e2e/fallbackFlowKit';
+import { checkIsAccountUsageFresh, getFakePromptText, reminderNoteRe, summaryNoteRe, writeFakeUsageWindows } from './e2e/limitNotesFlowKit';
 import { enDict } from '../i18n/en';
 import type { LimitNoteRecord } from '../limitNotes/plan';
 import { createClaudeProfileLayout } from '../utils/claudeProfiles';
@@ -84,9 +85,6 @@ const idleStopTimeoutMs = 90 * 1000;
 /** How far apart the two topics' idle fires may be measured from their own last answers: a load jitter, never a held or re-armed mark (that is the whole window). */
 const idleSkewToleranceMs = 4 * 1000;
 
-const reminderRe = /\[Accounts · \d{2}:\d{2}\]/;
-const summaryRe = /\[Accounts · \d{2}:\d{2} · changed\]/;
-
 let layout: IsolatedInstanceLayout | null = null;
 let charness: IsolatedCharness | null = null;
 let fakeTelegram: FakeTelegram;
@@ -108,10 +106,6 @@ function removeInstanceSync(): void {
   removeIsolatedInstanceSync(layout, charness);
 }
 
-function listPrompts(): FakeClaudePrompt[] {
-  return readJsonLines<FakeClaudePrompt>(path.join(getLayout().fakeLogDir, fakeClaudeLogFileNames.prompts));
-}
-
 interface HookRecord { issueKey: string; pid: number; sessionId: string; additionalContext: string }
 
 function listHookReads(): HookRecord[] {
@@ -124,19 +118,6 @@ function listToolCalls(): ToolCallRecord[] {
   return readJsonLines<ToolCallRecord>(path.join(getLayout().fakeLogDir, fakeClaudeLogFileNames.toolCalls));
 }
 
-const hoursAhead = (hours: number): string => new Date(Date.now() + hours * 3_600_000).toISOString();
-
-function writeUsageWindows(weeklyPercent: number): void {
-  const windows: FakeClaudeUsageWindows = { [accountName]: { sessionPercent: 30, sessionResetsAt: hoursAhead(3), weeklyPercent, weeklyResetsAt: hoursAhead(72) } };
-  fs.writeFileSync(path.join(getLayout().fakeStateDir, fakeClaudeUsageWindowsFileName), JSON.stringify(windows));
-}
-
-/** Whether the account's figures reached the bot from an agent's frame and are fresh. */
-function checkIsUsageFresh(): boolean {
-  const usage = readPersistedState(getLayout()).claudeProfiles?.[accountName]?.usage;
-  return usage?.source === 'stream' && usage.isStale !== true;
-}
-
 /** The orchestrating topic's note record as the bot saved it (`state.json` `limitNotes`). */
 function readNoteRecord(): LimitNoteRecord | undefined {
   return readPersistedState(getLayout()).limitNotes?.[noteTopicKey];
@@ -147,11 +128,8 @@ function countTurns(label: string): number {
   return getAllAgentTurns(getLayout()).filter((turn) => turn.issueKey === label).length;
 }
 
-/** What the fake agent of a topic read as the user message labelled `label`. */
 function getPromptText(label: string): string {
-  const prompt = listPrompts().find((candidate) => candidate.text.includes(`${label} `));
-  assert.ok(prompt, `the agent read ${label}`);
-  return prompt.text;
+  return getFakePromptText(getLayout(), label);
 }
 
 async function sendBoth(text: (name: 'NOTE' | 'CTRL') => string): Promise<void> {
@@ -202,7 +180,7 @@ describe('An accounts note is a passenger, never a cause, end to end: built char
       SCHEDULER_MCP_PORT: (await getFreeFixedPort()).toString(),
       ...getTelegramFlowTestTimingsEnv({ limitReminderIntervalMs: reminderIntervalMs, limitNoteEnginePollMs: enginePollMs, limitNoteSummaryFloorMs: summaryFloorMs }),
     });
-    writeUsageWindows(10);
+    writeFakeUsageWindows(getLayout(), accountName, 10);
   });
 
   after(async () => {
@@ -239,16 +217,16 @@ describe('An accounts note is a passenger, never a cause, end to end: built char
     fakeTelegram.pushOperatorMessage(noteThreadId, 'NOTE-0 [fake:answer] warm up');
     fakeTelegram.pushOperatorMessage(controlThreadId, 'CTRL-0 [fake:answer] warm up');
     await waitForAnswers(0);
-    await getCharness().waitFor('the account\'s figures to reach the bot from the agents\' frames', agentStartTimeoutMs, checkIsUsageFresh);
-    assert.doesNotMatch(getPromptText('NOTE-0'), reminderRe, 'nothing fresh was known when the warm-up prompt was written: no note');
+    await getCharness().waitFor('the account\'s figures to reach the bot from the agents\' frames', agentStartTimeoutMs, () => checkIsAccountUsageFresh(getLayout(), accountName));
+    assert.doesNotMatch(getPromptText('NOTE-0'), reminderNoteRe, 'nothing fresh was known when the warm-up prompt was written: no note');
   });
 
   it('turn 1: the orchestrating topic\'s prompt carries the reminder, as its last block; the control\'s prompt carries none', async () => {
     await sendBoth((name) => `${name}-1 [fake:answer] [work-ms:1500] first turn`);
     await waitForAnswers(1);
     const noteText = getPromptText('NOTE-1');
-    assert.match(noteText, reminderRe, 'the reminder rides the prompt');
-    assert.ok(noteText.indexOf('first turn') < noteText.search(reminderRe), 'after the person\'s words');
+    assert.match(noteText, reminderNoteRe, 'the reminder rides the prompt');
+    assert.ok(noteText.indexOf('first turn') < noteText.search(reminderNoteRe), 'after the person\'s words');
     assert.doesNotMatch(getPromptText('CTRL-1'), /\[Accounts/);
     assert.equal(noteTopic.listMessages().some((message) => message.text.includes('[Accounts')), false, 'the topic never shows a note');
     assert.equal(typeof readNoteRecord()?.lastNoteAt, 'number', 'the prompt reached the agent: the note is recorded as delivered');
@@ -259,7 +237,7 @@ describe('An accounts note is a passenger, never a cause, end to end: built char
     await sendBoth((name) => `${name}-2 [fake:answer] [work-ms:${longTurnWorkMs}] [tool-after-ms:${longTurnToolAfterMs}] second turn, long`);
     await waitForAnswers(2);
     const reads = listHookReads();
-    const noteReads = reads.filter((read) => reminderRe.test(read.additionalContext));
+    const noteReads = reads.filter((read) => reminderNoteRe.test(read.additionalContext));
     assert.equal(noteReads.length, 1, `exactly one tool call read the reminder: ${JSON.stringify(reads)}`);
     assert.equal(noteReads[0].issueKey, 'NOTE-2');
     assert.equal(reads.some((read) => read.issueKey === 'CTRL-2'), false, 'the control\'s tool call read nothing');
@@ -283,14 +261,14 @@ describe('An accounts note is a passenger, never a cause, end to end: built char
       const finals = readJsonLines<{ issueKey: string; kind: string }>(path.join(getLayout().fakeLogDir, fakeClaudeLogFileNames.answers)).filter((answer) => answer.kind === 'final');
       return earlierLabels.every((label) => finals.some((answer) => answer.issueKey === label));
     });
-    writeUsageWindows(62);
+    writeFakeUsageWindows(getLayout(), accountName, 62);
     await sendBoth((name) => `${name}-3 [fake:send-messages] third turn`);
     await waitForAnswers(3);
     assert.doesNotMatch(getPromptText('NOTE-3'), /It replaces the same requester's earlier requests/, 'precondition: turn 3 supersedes no earlier request, so no answer of its own comes before the digest');
     const noteResult = listToolCalls().find((call) => call.issueKey === 'NOTE-3' && call.tool === 'send_messages_to_user');
     const controlResult = listToolCalls().find((call) => call.issueKey === 'CTRL-3' && call.tool === 'send_messages_to_user');
     assert.ok(noteResult && controlResult, `both agents called the send tool: ${JSON.stringify(listToolCalls())}`);
-    assert.match(noteResult.outcome, summaryRe);
+    assert.match(noteResult.outcome, summaryNoteRe);
     assert.doesNotMatch(controlResult.outcome, /\[Accounts/);
     assert.equal(noteTopic.listMessages().some((message) => message.text.includes('[Accounts')), false, 'the topic never shows it');
   });
@@ -335,7 +313,7 @@ describe('An accounts note is a passenger, never a cause, end to end: built char
 
     await sendBoth((name) => `${name}-4 [fake:answer] back again`);
     await waitForAnswers(4);
-    assert.match(getPromptText('NOTE-4'), reminderRe, 'the first prompt after the sleep carries the reminder that was due');
+    assert.match(getPromptText('NOTE-4'), reminderNoteRe, 'the first prompt after the sleep carries the reminder that was due');
     assert.doesNotMatch(getPromptText('CTRL-4'), /\[Accounts/);
     assert.ok(getSessionLaunches(getLayout()).length > launchesBefore, 'the person\'s message woke the sessions');
   });

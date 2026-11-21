@@ -30,7 +30,6 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { FakeTelegram, generalTopicThreadId, type FakeTelegramMessage } from './telegramE2e/fakeTelegram';
 import { TopicDriver } from './telegramE2e/topicDriver';
-import { fakeClaudeLogFileNames, fakeClaudeUsageWindowsFileName, type FakeClaudePrompt, type FakeClaudeUsageWindows } from './jiraE2e/fakeClaudeContract';
 import {
   builtCliPath,
   createIsolatedInstanceLayout,
@@ -40,13 +39,13 @@ import {
   getUnservedPort,
   IsolatedCharness,
   listTmuxSessions,
-  readJsonLines,
   removeIsolatedInstanceSync,
   writeFakeClaudeLauncher,
   writeInstanceEnvFile,
   type IsolatedInstanceLayout,
 } from './e2e/isolatedCharness';
 import { openLimitsBoard, readPersistedState, restartCharnessWithState, startCharnessOnInstance } from './e2e/fallbackFlowKit';
+import { checkIsAccountUsageFresh, getFakePromptText, reminderNoteRe, writeFakeUsageWindows } from './e2e/limitNotesFlowKit';
 import { createClaudeProfileLayout } from '../utils/claudeProfiles';
 import { getTelegramFlowTestTimingsEnv } from './telegramE2e/telegramFlowTimings';
 
@@ -62,12 +61,13 @@ const fakeBotToken = '1000000001:fake-token-for-the-loopback-bot-api';
 const firstFolder = 'reminders-a';
 const secondFolder = 'reminders-b';
 const accountName = 'work';
+/** The weekly figure the fake agents report; only its presence matters here. */
+const reportedWeeklyPercent = 40;
 const replyTimeoutMs = 30 * 1000;
 const agentStartTimeoutMs = 60 * 1000;
 /** The interval the flow shortens the setting's own to: a note is never held back by the clock here, only by the setting. */
 const shortIntervalMs = 1000;
 
-const reminderRe = /\[Accounts · \d{2}:\d{2}\]/;
 
 let layout: IsolatedInstanceLayout | null = null;
 let charness: IsolatedCharness | null = null;
@@ -97,28 +97,8 @@ function readSettingsFile(): Record<string, unknown> {
   return JSON.parse(fs.readFileSync(path.join(path.dirname(getLayout().envFile), 'settings.json'), 'utf8'));
 }
 
-const hoursAhead = (hours: number): string => new Date(Date.now() + hours * 3_600_000).toISOString();
-
-function writeUsageWindows(): void {
-  const windows: FakeClaudeUsageWindows = { [accountName]: { sessionPercent: 30, sessionResetsAt: hoursAhead(3), weeklyPercent: 40, weeklyResetsAt: hoursAhead(72) } };
-  fs.writeFileSync(path.join(getLayout().fakeStateDir, fakeClaudeUsageWindowsFileName), JSON.stringify(windows));
-}
-
-/** Whether the account's figures reached the bot from an agent's frame and are fresh. */
-function checkIsUsageFresh(): boolean {
-  const usage = readPersistedState(getLayout()).claudeProfiles?.[accountName]?.usage;
-  return usage?.source === 'stream' && usage.isStale !== true;
-}
-
-function listPrompts(): FakeClaudePrompt[] {
-  return readJsonLines<FakeClaudePrompt>(path.join(getLayout().fakeLogDir, fakeClaudeLogFileNames.prompts));
-}
-
-/** What the fake agent read as the user message labelled `label`. */
 function getPromptText(label: string): string {
-  const prompt = listPrompts().find((candidate) => candidate.text.includes(`${label} `));
-  assert.ok(prompt, `the agent read ${label}`);
-  return prompt.text;
+  return getFakePromptText(getLayout(), label);
 }
 
 /** A turn in the topic: a labelled message the agent answers; resolves the label once the agent read it and answered. */
@@ -174,7 +154,7 @@ describe('/limits_reminders and the /limits row end to end: built charness, fake
       SCHEDULER_MCP_PORT: (await getFreeFixedPort()).toString(),
       ...getTelegramFlowTestTimingsEnv({ limitReminderIntervalMs: shortIntervalMs }),
     });
-    writeUsageWindows();
+    writeFakeUsageWindows(getLayout(), accountName, reportedWeeklyPercent);
   });
 
   after(async () => {
@@ -203,7 +183,7 @@ describe('/limits_reminders and the /limits row end to end: built charness, fake
     await second.sendAndAwaitReply('/claude', 'ready in');
     await runTurn(first, firstThreadId, 'AA');
     await runTurn(second, secondThreadId, 'BB');
-    await getCharness().waitFor('the account\'s figures to reach the bot from the agents\' frames', agentStartTimeoutMs, checkIsUsageFresh);
+    await getCharness().waitFor('the account\'s figures to reach the bot from the agents\' frames', agentStartTimeoutMs, () => checkIsAccountUsageFresh(getLayout(), accountName));
   });
 
   it('General\'s picker: «every 1 h (default)», one row of intervals and Off, no «As General»; Off turns it into one line with no buttons and writes settings.json', async () => {
@@ -240,7 +220,7 @@ describe('/limits_reminders and the /limits row end to end: built charness, fake
 
     const firstLabel = await runTurn(first, firstThreadId, 'AA');
     const secondLabel = await runTurn(second, secondThreadId, 'BB');
-    assert.match(getPromptText(firstLabel), reminderRe, 'the topic\'s own interval beats General\'s Off');
+    assert.match(getPromptText(firstLabel), reminderNoteRe, 'the topic\'s own interval beats General\'s Off');
     assert.doesNotMatch(getPromptText(secondLabel), /\[Accounts/, 'the topic that follows General\'s Off gets none');
   });
 
@@ -290,7 +270,7 @@ describe('/limits_reminders and the /limits row end to end: built charness, fake
     const firstLabel = await runTurn(first, firstThreadId, 'AA');
     const secondLabel = await runTurn(second, secondThreadId, 'BB');
     assert.doesNotMatch(getPromptText(firstLabel), /\[Accounts/, 'General says 4 h, the topic says Off: Off');
-    assert.match(getPromptText(secondLabel), reminderRe, 'topic B\'s own 2 h: its reminder is due');
+    assert.match(getPromptText(secondLabel), reminderNoteRe, 'topic B\'s own 2 h: its reminder is due');
   });
 
   it('«As General» drops the topic\'s own choice, names what it follows now, and the next prompt follows General\'s 4 h', async () => {
@@ -302,7 +282,7 @@ describe('/limits_reminders and the /limits row end to end: built charness, fake
     assert.equal(readPersistedState(getLayout()).limitRemindersOverrides?.[firstTopicKey], undefined, 'the topic\'s own choice is gone from state.json');
 
     const firstLabel = await runTurn(first, firstThreadId, 'AA');
-    assert.match(getPromptText(firstLabel), reminderRe, 'General\'s 4 h applies again: the reminder is due');
+    assert.match(getPromptText(firstLabel), reminderNoteRe, 'General\'s 4 h applies again: the reminder is due');
   });
 
   it('in Russian — the chat\'s language — the picker, its confirmation and the board\'s row are worded in it', async () => {
@@ -317,5 +297,12 @@ describe('/limits_reminders and the /limits row end to end: built charness, fake
     assert.equal(confirmation.text, '🔔 Напоминания о лимитах: каждые 2 ч (этот топик).');
     const board = await openLimitsBoard(fakeTelegram, first, firstThreadId);
     assert.equal(first.getKeyboardLabels(board.message).flat().at(-1), '🔔 Напоминания: каждые 2 ч');
+
+    // General's own screen in the same language: the instance value (4 h since the board row's tap above), no «As General».
+    const generalPicker = await general.sendAndAwaitReply('/limits_reminders', 'Напоминания агентам о лимитах');
+    assert.ok(generalPicker.text.endsWith('Сейчас: каждые 4 ч'), generalPicker.text);
+    assert.deepEqual(general.getKeyboardLabels(generalPicker), [['1 ч', '2 ч', '4 ч ✓', 'Выкл']]);
+    const generalConfirmation = await tapPicker(general, generalPicker, 'lrm_240');
+    assert.equal(generalConfirmation.text, '🔔 Напоминания о лимитах: каждые 4 ч (все топики без своего выбора).');
   });
 });
