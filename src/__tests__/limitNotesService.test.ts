@@ -380,10 +380,17 @@ describe('a note is a passenger, never a cause', () => {
     harness.notes.takeSendResultNote(key);
     harness.notes.noteProfilesCall(key);
     harness.notes.noteWorkerWatch(key);
+    harness.notes.noteTurnStart(key, { isBookkeeping: true, isSessionIdle: true });
+    harness.notes.checkIsBookkeepingTurn(key);
+    harness.notes.noteTurnEnd(key);
     const allowed = new Set(['getRecord', 'setRecord', 'getIntervalMs', 'getWindows', 'getReport', 'getOpenCodeUsage', 'getTimezone', 'getBackendName']);
     assert.deepEqual([...new Set(harness.calls)].filter((name) => !allowed.has(name)), []);
     const operations: LimitNotes = createHarness().notes;
-    assert.deepEqual(Object.keys(operations).sort(), ['noteProfilesCall', 'noteWorkerWatch', 'takeMidTurnNote', 'takeSendResultNote', 'takeTurnStartNote'], 'five operations, none of them an activity stamp, a write to an agent or a wake');
+    assert.deepEqual(
+      Object.keys(operations).sort(),
+      ['checkIsBookkeepingTurn', 'noteProfilesCall', 'noteTurnEnd', 'noteTurnStart', 'noteWorkerWatch', 'takeMidTurnNote', 'takeSendResultNote', 'takeTurnStartNote'],
+      'eight operations (the turn-origin mark among them: a set of keys in memory), none of them an activity stamp, a write to an agent or a wake',
+    );
   });
 
   it('a note that cannot be worked out is skipped and logged, the prompt or result goes on — never a throw', () => {

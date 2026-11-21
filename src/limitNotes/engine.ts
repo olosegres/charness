@@ -1,7 +1,7 @@
 import { keyToString, type SessionKey } from '../sessionKey';
 import type { SessionTurnProbe } from '../requests/wakeUpRules';
 import type { MidTurnInbox } from '../utils/midTurnInbox';
-import type { TakenNote } from './service';
+import type { LimitNotes } from './service';
 
 /**
  * @description The timer side of the accounts note's MID-TURN delivery: a running Claude turn learns where the limits stand after its
@@ -14,7 +14,9 @@ import type { TakenNote } from './service';
  * inbox (`utils/midTurnInbox.ts`) is written; the `PostToolUse` hook prints it after the agent's next tool call, and only then does
  * the note count as delivered (`markDelivered`: the record's time and fingerprint). A section whose turn ended, was held open
  * (a question, a compaction, an armed retry, a recovery, a session start) or whose session is gone is withdrawn unseen, and the note
- * stays due — it comes at the next moment the agent works anyway.
+ * stays due — it comes at the next moment the agent works anyway. A turn the bot started for its own bookkeeping (a retry's nudge, a
+ * request wake-up, the todo reminder, the lost-work note, a question's answer — `LimitNotes.noteTurnStart`) is given no reminder:
+ * its start carried none, and the engine must not take at its first tool call what that start was not to.
  *
  * A note is a passenger, never a cause (README § Lifecycle safety): this module has no way to stamp activity, write to an agent's
  * input, wake a session, set «working» or open a request. It READS the turn probe the wake-up and todo engines share and WRITES a
@@ -29,7 +31,7 @@ export interface LimitNotesEngineDeps {
   /** The id of the conversation's Claude json-stream session; `null` for any other backend (and for none): such a conversation gets no mid-turn note. */
   getClaudeSessionId: (key: SessionKey) => string | null;
   probeTurn: (key: SessionKey) => SessionTurnProbe;
-  notes: { takeMidTurnNote: (key: SessionKey) => TakenNote | null };
+  notes: Pick<LimitNotes, 'takeMidTurnNote' | 'checkIsBookkeepingTurn'>;
   inbox: MidTurnInbox;
   pollIntervalMs?: number;
 }
@@ -78,6 +80,10 @@ export class LimitNotesEngine {
     const probe = this.deps.probeTurn(key);
     // No tool call of this session can take the section: a turn that ended, a turn held open, a session that is gone.
     if (!probe.isActive || !probe.isBusy || probe.isTurnEndBlocked) {
+      this.withdraw(key);
+      return;
+    }
+    if (this.deps.notes.checkIsBookkeepingTurn(key)) {
       this.withdraw(key);
       return;
     }

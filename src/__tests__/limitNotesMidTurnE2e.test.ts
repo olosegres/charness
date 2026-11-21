@@ -11,10 +11,13 @@
  *   → turn 1: the first topic's prompt carries the reminder, the control's does not
  *   → turn 2 (long, with a late tool call): the reminder comes due while it works — the engine writes the topic's inbox and the
  *     `PostToolUse` hook gives it to the agent with that tool's result; the control's hook gives nothing
- *   → turn 3: the figures changed; the agent sends a message and the TOOL RESULT carries the «changed» summary — the control's does not
+ *   → turn 3: the figures changed; the agent sends a message and the TOOL RESULT carries the «changed» summary — the control's does not.
+ *     The orchestrating topic runs `/tool_results full`, so the topic shows the tool's result block: it holds the tool's own text and
+ *     no note (the renderer's cut is proven where it can fail: with the default `minimal` no result block is shown at all)
  *   → both topics sit idle: each is compacted and stopped at the idle mark, at the same distance from its last turn's end; neither
  *     was found «working» at the mark, neither holds a held mark; no process was woken or started for a note; the topic never shows one
  *   → L5: the reminder comes due while both sessions sleep: nothing is started or posted; the next person's prompt carries it
+ *   → the same cut in `/tool_results short`: a second change, a second summary in a send result — the short block shows the tool's text only
  *
  * The idle fire is read from the fake Telegram's own store times (`createdAtMs`), never the test's polling. Nothing leaves the machine.
  * The unit-level readers (the engine's poll, the sectioned inbox, the real json-stream adapter's busy / unconsumed-input state) are
@@ -49,6 +52,7 @@ import { getAllAgentTurns, getSessionLaunches, readPersistedState, restartCharne
 import { checkIsAccountUsageFresh, getFakePromptText, reminderNoteRe, summaryNoteRe, writeFakeUsageWindows } from './e2e/limitNotesFlowKit';
 import { enDict } from '../i18n/en';
 import type { LimitNoteRecord } from '../limitNotes/plan';
+import { limitNoteMarker } from '../limitNotes/noteText';
 import { createClaudeProfileLayout } from '../utils/claudeProfiles';
 import { checkIsPidAlive } from '../utils/jsonStreamHost';
 import { getTelegramFlowTestTimingsEnv } from './telegramE2e/telegramFlowTimings';
@@ -130,6 +134,21 @@ function countTurns(label: string): number {
 
 function getPromptText(label: string): string {
   return getFakePromptText(getLayout(), label);
+}
+
+/** The text a bot send tool's result renders as in the topic (`/tool_results` short or full): a block whose header line is `🔧 <tool> →`. */
+const sendToolResultHeaderPart = 'send_messages_to_user →';
+/** What the bot's `send_messages_to_user` answers a one-message digest: the tool's own text, the note (when due) follows it as a last block. */
+const sendToolResultText = 'Delivered 1 message: 1 text.';
+
+/** The newest message the orchestrating topic holds: what a later message must be newer than. */
+function getNewestNoteTopicMessageId(): number {
+  return Math.max(0, ...noteTopic.listMessages().map((message) => message.message_id));
+}
+
+/** The block the send tool's result became in the topic, newer than `afterMessageId` (an earlier turn's block must not stand in for it). */
+async function waitForSendToolResultBlock(afterMessageId: number): Promise<FakeTelegramMessage> {
+  return noteTopic.waitForMessage('the tool-result block of the send tool', (message) => message.message_id > afterMessageId && message.text.includes(sendToolResultHeaderPart));
 }
 
 async function sendBoth(text: (name: 'NOTE' | 'CTRL') => string): Promise<void> {
@@ -261,6 +280,9 @@ describe('An accounts note is a passenger, never a cause, end to end: built char
       const finals = readJsonLines<{ issueKey: string; kind: string }>(path.join(getLayout().fakeLogDir, fakeClaudeLogFileNames.answers)).filter((answer) => answer.kind === 'final');
       return earlierLabels.every((label) => finals.some((answer) => answer.issueKey === label));
     });
+    // The default `minimal` shows no tool-result block at all, so «the topic never shows it» would hold with the renderer's cut deleted.
+    await noteTopic.sendAndAwaitReply('/tool_results full', '✅ Tool-results mode: full');
+    const newestMessageIdBeforeTurn = getNewestNoteTopicMessageId();
     writeFakeUsageWindows(getLayout(), accountName, 62);
     await sendBoth((name) => `${name}-3 [fake:send-messages] third turn`);
     await waitForAnswers(3);
@@ -271,6 +293,9 @@ describe('An accounts note is a passenger, never a cause, end to end: built char
     assert.match(noteResult.outcome, summaryNoteRe);
     assert.doesNotMatch(controlResult.outcome, /\[Accounts/);
     assert.equal(noteTopic.listMessages().some((message) => message.text.includes('[Accounts')), false, 'the topic never shows it');
+    const resultBlock = await waitForSendToolResultBlock(newestMessageIdBeforeTurn);
+    assert.ok(resultBlock.text.includes(sendToolResultText), `the block shows the tool's own result: ${resultBlock.text}`);
+    assert.equal(resultBlock.text.includes(limitNoteMarker), false, `...and not the note the agent got in the same result: ${resultBlock.text}`);
   });
 
   it('L1: both topics go idle the same way — compacted and stopped at the idle mark, neither found «working», no held mark, no process woken', async () => {
@@ -316,5 +341,22 @@ describe('An accounts note is a passenger, never a cause, end to end: built char
     assert.match(getPromptText('NOTE-4'), reminderNoteRe, 'the first prompt after the sleep carries the reminder that was due');
     assert.doesNotMatch(getPromptText('CTRL-4'), /\[Accounts/);
     assert.ok(getSessionLaunches(getLayout()).length > launchesBefore, 'the person\'s message woke the sessions');
+  });
+
+  it('the same cut in `/tool_results short`: the second change is told in a send tool\'s result, and the short block holds the tool\'s own text and no note', async () => {
+    await noteTopic.sendAndAwaitReply('/tool_results short', '✅ Tool-results mode: short');
+    // The reminder is due again by the turn start (one-sided: waiting longer is harmless); the turn works longer than the summary floor
+    // before it sends, so the summary rides the send result and not the prompt.
+    await new Promise((resolve) => setTimeout(resolve, reminderIntervalMs + 2 * 1000));
+    writeFakeUsageWindows(getLayout(), accountName, 85);
+    const newestMessageIdBeforeTurn = getNewestNoteTopicMessageId();
+    fakeTelegram.pushOperatorMessage(noteThreadId, 'NOTE-5 [fake:send-messages] [work-ms:1500] fifth turn');
+    await noteTopic.waitForMessage('the answer to NOTE-5', (message) => message.text.includes('Fake final answer for NOTE-5'));
+    const noteResult = listToolCalls().find((call) => call.issueKey === 'NOTE-5' && call.tool === 'send_messages_to_user');
+    assert.ok(noteResult, `the agent called the send tool: ${JSON.stringify(listToolCalls())}`);
+    assert.match(noteResult.outcome, summaryNoteRe, 'the agent got the summary in the result — so the block below can only be clean by the cut');
+    const resultBlock = await waitForSendToolResultBlock(newestMessageIdBeforeTurn);
+    assert.ok(resultBlock.text.includes(sendToolResultText), `the short block shows the tool's own result: ${resultBlock.text}`);
+    assert.equal(resultBlock.text.includes(limitNoteMarker), false, `...and not the note: ${resultBlock.text}`);
   });
 });

@@ -10,6 +10,8 @@
  *   L6  it leaves busy / working / the unconsumed input / the busy watchdog's clock as they were (the inputs of the self-update idle
  *       verdict, L11, among them; its wiring is `limitNotesWiring.test.ts`'s)
  *   L7  every cause that holds a turn open skips the engine and withdraws a waiting section
+ *   L13 a turn the bot started for its own bookkeeping (a retry's nudge, a wake-up, the todo reminder, …) is given no reminder: the mark
+ *       a forward sets, a turn end clears, and the engine reads
  *   L10 a deferred account switch fires at the turn end after a turn that got a mid-turn note and a send-result note
  *   L12 boot clears every inbox file; the note record survives a restart, so no reminder comes before the interval
  *
@@ -65,6 +67,7 @@ describe('the engine over fakes: which session is offered a due reminder, and wh
   let clockMs: number;
   let workWeeklyPercent: number;
   let engine: LimitNotesEngine;
+  let ports: LimitNotesPorts;
 
   const inboxDir = (): string => getMidTurnInboxDir(dataDir);
   const inboxFile = (id: string = sessionId): string => path.join(inboxDir(), `${id}.json`);
@@ -74,7 +77,10 @@ describe('the engine over fakes: which session is offered a due reminder, and wh
       listConversations: () => [key, secondKey],
       getClaudeSessionId: (target) => sessionIds.get(keyToString(target)) ?? null,
       probeTurn: (target) => probes.get(keyToString(target)) ?? { isActive: false, isBusy: false, hasUnconsumedInput: null, isTurnEndBlocked: false },
-      notes: { takeMidTurnNote: (target) => { takeCalls.push(keyToString(target)); return notes.takeMidTurnNote(target); } },
+      notes: {
+        takeMidTurnNote: (target) => { takeCalls.push(keyToString(target)); return notes.takeMidTurnNote(target); },
+        checkIsBookkeepingTurn: (target) => notes.checkIsBookkeepingTurn(target),
+      },
       inbox,
       pollIntervalMs: 10,
       ...overrides,
@@ -90,7 +96,7 @@ describe('the engine over fakes: which session is offered a due reminder, and wh
     takeCalls = [];
     clockMs = nowMs;
     workWeeklyPercent = 62;
-    const ports: LimitNotesPorts = {
+    ports = {
       getRecord: (target) => records.get(keyToString(target)),
       setRecord: (target, record) => { if (record === null) records.delete(keyToString(target)); else records.set(keyToString(target), record); },
       getIntervalMs: () => hourMs,
@@ -242,6 +248,44 @@ describe('the engine over fakes: which session is offered a due reminder, and wh
     }
   });
 
+  it('L13: a turn the bot started for its own bookkeeping is given no reminder — none is worked out, a waiting one is withdrawn — and the next turn, a person\'s, is', async () => {
+    await engine.poll();
+    assert.equal(fs.existsSync(inboxFile()), true, 'a turn nobody marked is offered the reminder that is due');
+    takeCalls.length = 0;
+    notes.noteTurnStart(key, { isBookkeeping: true, isSessionIdle: true });
+    await engine.poll();
+    assert.equal(fs.existsSync(inboxFile()), false, 'the bookkeeping turn takes the waiting section out');
+    assert.equal(fs.existsSync(inboxFile(secondSessionId)), true, 'another conversation is its own');
+    assert.deepEqual(takeCalls, [], 'and no note is even worked out for the marked one (the other conversation\'s section still waits: asked for nothing)');
+    assert.deepEqual(records.get(keyToString(key)), orchestrating(), 'unseen: the reminder stays due');
+    notes.noteTurnEnd(key);
+    await engine.poll();
+    assert.match(readAdditionalContext(fs.readFileSync(inboxFile(), 'utf8')), /^\[Accounts · 14:05\]/, 'the turn ended: the next one gets the reminder that was due');
+  });
+
+  it('L13: a prompt that opens a turn of its own decides its mark — a bookkeeping prompt sets it, a person\'s clears it — and one queued behind a running turn leaves that turn as it was', () => {
+    notes.noteTurnStart(key, { isBookkeeping: true, isSessionIdle: true });
+    assert.equal(notes.checkIsBookkeepingTurn(key), true);
+    assert.equal(notes.checkIsBookkeepingTurn(secondKey), false, 'per conversation');
+    notes.noteTurnStart(key, { isBookkeeping: false, isSessionIdle: false });
+    assert.equal(notes.checkIsBookkeepingTurn(key), true, 'a person\'s message queued behind the running bookkeeping turn does not change what that turn is');
+    notes.noteTurnStart(key, { isBookkeeping: false, isSessionIdle: true });
+    assert.equal(notes.checkIsBookkeepingTurn(key), false, 'a person\'s message that opens its own turn');
+    notes.noteTurnStart(key, { isBookkeeping: true, isSessionIdle: false });
+    assert.equal(notes.checkIsBookkeepingTurn(key), false, 'a bookkeeping prompt queued behind a person\'s turn does not turn it into one');
+    notes.noteTurnStart(key, { isBookkeeping: true, isSessionIdle: true });
+    notes.noteTurnEnd(key);
+    assert.equal(notes.checkIsBookkeepingTurn(key), false, 'a turn end clears it');
+  });
+
+  it('L13: the mark is kept only for a Claude json-stream conversation: no other backend\'s forward leaves one behind', () => {
+    for (const backendName of [openCodeAdapterName, undefined]) {
+      const otherNotes = createLimitNotes({ ...ports, getBackendName: () => backendName });
+      otherNotes.noteTurnStart(key, { isBookkeeping: true, isSessionIdle: true });
+      assert.equal(otherNotes.checkIsBookkeepingTurn(key), false, String(backendName));
+    }
+  });
+
   it('the timer polls on its interval until it is stopped, is started once, and is the production minute by default', async () => {
     assert.equal(limitNoteEnginePollMs, 60_000);
     engine.start();
@@ -296,7 +340,10 @@ describe('L7: every cause that holds a turn open skips the engine and withdraws 
       listConversations: () => [key],
       getClaudeSessionId: () => sessionId,
       probeTurn: createSessionTurnProbe(probeDeps),
-      notes: { takeMidTurnNote: () => { takeCalls.push('take'); return { text: '[Accounts · 14:05] note', markDelivered: () => {}, release: () => {} }; } },
+      notes: {
+        takeMidTurnNote: () => { takeCalls.push('take'); return { text: '[Accounts · 14:05] note', markDelivered: () => {}, release: () => {} }; },
+        checkIsBookkeepingTurn: () => false,
+      },
       inbox,
     });
     return { engine, inbox, takeCalls };

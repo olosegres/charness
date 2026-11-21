@@ -6223,6 +6223,7 @@ const autoStopUnsupportedLoggedKeys = new Set<string>();
 function handleAgentTurnEnded(key: SessionKey): void {
   // No tool call of this turn is left to take a mid-turn accounts note: withdrawn unseen, it stays due.
   withdrawAccountsInbox(key);
+  getLimitNotes().noteTurnEnd(key);
   noteThreadActivity(key);
   topicIndicator.requestRefresh(key);
   const adapter = getThreadAdapter(key);
@@ -6499,6 +6500,11 @@ async function forwardPromptToLiveAgent(
   // A backend that can tell whether the prompt reached the agent (the json-stream host's stdin write) is asked to: a
   // write that failed rejects this forward, so its caller — a tracker post, a wake-up — knows the prompt never arrived
   // and retries, instead of believing it delivered. The input is handed over synchronously either way; only its outcome is awaited.
+  // The turn this prompt opens on an idle session is a BOOKKEEPING turn unless a person, a tracker or the scheduler started it (a slash
+  // command is neither: a skill's turn does real work, a compaction's is held open anyway): the mid-turn engine gives such a turn no
+  // reminder, as its start carried none. Read after the interrupt above, so a person's prompt that ended a bookkeeping turn is judged
+  // on its own.
+  getLimitNotes().noteTurnStart(key, { isBookkeeping: options.isAccountsNoteCarrier !== true && !isSlashCommand, isSessionIdle: adapter.checkIsBusy?.(key) === false });
   const written = adapter.sendInputAndWait ? adapter.sendInputAndWait(key, promptText) : (adapter.sendInput(key, promptText), Promise.resolve());
   // S2 busy-onset arm: start the Claude liveness loop the moment the prompt is
   // forwarded — driven by `checkIsBusy`, not by waiting for an opportunistic

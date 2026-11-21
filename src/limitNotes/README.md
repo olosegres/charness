@@ -100,6 +100,13 @@ A running Claude turn learns where the limits stand after its NEXT TOOL CALL, no
   input) that is active, busy and not `isTurnEndBlocked` (a question, a compaction, an armed retry, a retry kick, a wedge recovery, a
   session start) and whose reminder is due (`LimitNotes.takeMidTurnNote`: the reminder only, never the summary) gets its `accounts`
   section written.
+- **Never into a bookkeeping turn.** A turn the bot starts for its own bookkeeping — the retry's «continue» nudge, a request wake-up, the
+  todo standalone reminder, the lost-work note, a question's answer, a wedge replay, the hand-over's first prompt — got no note at its
+  start, and the engine gives it none at its first tool call either. The mark is per conversation, in memory (`LimitNotes.noteTurnStart` /
+  `noteTurnEnd` / `checkIsBookkeepingTurn`): the forward sets it right before its write for every prompt that is no carrier and no slash
+  command, and only when the session runs nothing (a prompt queued behind a running turn opens none of its own, so that turn keeps what it
+  was); a person's, tracker's or scheduler's prompt on an idle session clears it; the turn end clears it (`handleAgentTurnEnded`). A
+  waiting section of such a turn is withdrawn. After a restart an adopted turn is simply not marked.
 - **Delivered only when taken.** The record (`lastNoteAt`, the fingerprint) moves when the hook took the file (`onTaken` →
   `markDelivered`). A section withdrawn unseen — the turn ended, was held open, the session ended or changed, a turn start the bot
   makes (its prompt may carry the note itself), a boot — gives the note back (`release`) and it stays due. While it waits, no other
@@ -121,7 +128,7 @@ A running Claude turn learns where the limits stand after its NEXT TOOL CALL, no
   reset. A withdrawal whose rewrite of the file fails removes the file whole and gives every section back. The boot clears every
   inbox file (`clearAll`): what one carried is still due.
 - **Read-only towards every lifecycle module.** The engine imports only the session key and three types; its deps are the conversation
-  list, the Claude session id, the turn probe, the notes' `takeMidTurnNote` and the inbox — a guard pins both.
+  list, the Claude session id, the turn probe, the notes' `takeMidTurnNote` / `checkIsBookkeepingTurn` and the inbox — a guard pins both.
 
 ## Lifecycle safety — a note is a passenger, never a cause
 
@@ -133,6 +140,7 @@ Every later scope of this feature keeps these seven rules; each has a test.
 3. Never wakes: no path calls `ensureAgentSession` or a resume; only a session that is active AND busy gets a mid-turn note
    (`engine.ts`).
 4. Never «working»: no typing, no busy flag, no indicator refresh, no stdout or tool event.
-5. Never into a held turn: compaction, limit wait / retry kick, question wait, wedge recovery, session start.
+5. Never into a held turn: compaction, limit wait / retry kick, question wait, wedge recovery, session start — nor, mid-turn, into a turn
+   the bot started for its own bookkeeping.
 6. The deferred account switch and the self-update idle verdict read nothing a note moves.
 7. Restart-safe: note state persists, a restart neither bursts reminders nor leaves an inbox file behind.

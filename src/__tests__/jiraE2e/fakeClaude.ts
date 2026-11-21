@@ -68,6 +68,7 @@ import {
   getFakeBackgroundTaskFinishedText,
 } from './fakeClaudeContract';
 import {
+  botMcpServerName,
   fakeCancelWatchToken,
   fakeGoneWorkerPid,
   fakeStatusWatchJobName,
@@ -316,8 +317,11 @@ const toolAfterMsRe = /\[tool-after-ms:(\d+)\]/;
 const textCharsRe = /\[text-chars:(\d+)\]/;
 /** What pads a `[text-chars:<n>]` text out: ordinary words, so the bot's splitter finds boundaries to cut at. */
 const streamTextFiller = ' lorem ipsum dolor sit amet consectetur';
-/** The name prefix of a bot MCP tool in a `tool_use` line (the real CLI names it `mcp__<server>__<tool>`); the server's own name is not the flows' concern. */
-const botToolNamePrefix = 'mcp__bot__';
+/**
+ * The name prefix of a bot MCP tool in a `tool_use` line: the real CLI names it `mcp__<server>__<tool>`, and the bot recognises its own
+ * tools by that server name (it cuts the accounts note from their results before the topic shows one), so the fake must say the real one.
+ */
+const botToolNamePrefix = `mcp__${botMcpServerName}__`;
 const sendMessagesToolName = 'send_messages_to_user';
 /** `[skill:<name>]`: the turn loads that project skill with the Skill tool. */
 const skillTokenRe = /\[skill:([A-Za-z0-9:_-]+)\]/g;

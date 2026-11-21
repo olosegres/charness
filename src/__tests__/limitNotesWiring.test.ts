@@ -1,9 +1,11 @@
 /**
  * Wiring guard for the accounts note in `bot.ts` (which a test cannot import: its module-scope `parseEnv()` exits the process).
  * What a flow shows only by luck is pinned here by reading the source, the way `forwardPromptWiring.test.ts` pins the forward:
- *  - WHICH callers of the prompt forward mark their prompt a carrier — a person's message that opened a request, a tracker's post, a
+ *  - L8: WHICH callers of the prompt forward mark their prompt a carrier — a person's message that opened a request, a tracker's post, a
  *    scheduled run — and that no other (a retry's nudge, a hand-over, a wedge replay, a request wake-up, the todo reminder, the lost-work
  *    note, the answer to the agent's question, a held prompt) does;
+ *  - L13: that the forward marks the turn such a non-carrier prompt opens on an idle session, and the turn end clears it, for the
+ *    mid-turn engine to skip (`limitNotesEngine.test.ts` has the engine's side);
  *  - where the forward attaches the note (the last block, after the todo lines, inside the ONE text it writes, no await of its own) and
  *    when it counts as delivered;
  *  - that the renderer hides it from a bot tool's result, and that the bot's MCP ports reach the same notes;
@@ -45,7 +47,7 @@ function listEnclosingDeclarations(needle: string): string[] {
   return [...names].sort();
 }
 
-describe('which callers of the forward mark their prompt a carrier of the accounts note', () => {
+describe('L8: which callers of the forward mark their prompt a carrier of the accounts note', () => {
   it('exactly the person\'s-request routes, the tracker / scheduler post and the plumbing that hands the flag on — no other caller of the forward', () => {
     assert.deepEqual(listEnclosingDeclarations('isAccountsNoteCarrier'), [
       // The routes that SET it: a person's message that opened a request (text, voice, label-less free text, a file, an album, /schedule,
@@ -233,6 +235,25 @@ describe('where the accounts section of the mid-turn inbox is withdrawn unseen',
     const body = getFunctionBody('handleAgentTurnEnded');
     assert.ok(body.indexOf('withdrawAccountsInbox(key);') < body.indexOf('noteThreadActivity(key);'));
     assert.equal(getFunctionBody('withdrawAccountsInbox').includes('noteThread'), false);
+  });
+});
+
+describe('L13: the turn a bookkeeping prompt opens is marked at the forward and cleared at the turn end — for the mid-turn engine to skip', () => {
+  const body = getFunctionBody('forwardPromptToLiveAgent');
+
+  it('the forward marks it right before the write, after the interrupt and the detach awaits — a bookkeeping prompt is one no person, tracker or scheduler sent and no slash command, and only a session that runs nothing opens a turn of its own', () => {
+    const mark = body.indexOf('getLimitNotes().noteTurnStart(key, { isBookkeeping: options.isAccountsNoteCarrier !== true && !isSlashCommand, isSessionIdle: adapter.checkIsBusy?.(key) === false });');
+    assert.ok(mark > 0, 'the mark is set from the carrier flag, the slash test and the idle read');
+    assert.ok(mark > body.indexOf('await adapter.interruptAndWaitIdle(key);') && mark > body.indexOf('await adapter.detachRunningSubagents(key);'), 'after the awaits that may end a running turn');
+    assert.ok(mark < body.indexOf('const written = adapter.sendInputAndWait'), 'before the write');
+    assert.equal(body.slice(mark, body.indexOf('const written = adapter.sendInputAndWait')).includes('await'), false, 'no await between the read of idle and the write');
+  });
+
+  it('it is set in the forward alone and cleared in the turn end alone, which clears it before the activity stamp the person-facing handler makes', () => {
+    assert.deepEqual(listEnclosingDeclarations('getLimitNotes().noteTurnStart('), ['forwardPromptToLiveAgent']);
+    assert.deepEqual(listEnclosingDeclarations('getLimitNotes().noteTurnEnd('), ['handleAgentTurnEnded']);
+    const turnEnd = getFunctionBody('handleAgentTurnEnded');
+    assert.ok(turnEnd.indexOf('getLimitNotes().noteTurnEnd(key);') > 0 && turnEnd.indexOf('getLimitNotes().noteTurnEnd(key);') < turnEnd.indexOf('noteThreadActivity(key);'));
   });
 });
 

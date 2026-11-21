@@ -81,6 +81,18 @@ export interface LimitNotes {
   noteProfilesCall: (key: SessionKey) => void;
   /** The agent armed a worker watch: it orchestrates workers. */
   noteWorkerWatch: (key: SessionKey) => void;
+  /**
+   * A forward is about to write a prompt into the conversation's Claude json-stream session. `isBookkeeping`: the turn it opens is one
+   * the bot starts for its own bookkeeping (a retry's «continue» nudge, a request wake-up, the todo reminder, the lost-work note, a
+   * question's answer, a wedge replay, the hand-over's first prompt) — not a person's, a tracker's or a scheduler's, whose turn starts
+   * are the moments a note rides. `isSessionIdle`: nothing runs, so the prompt opens a turn of its own; a prompt queued behind a running
+   * turn leaves that turn what it was. The mark lasts until {@link noteTurnEnd}.
+   */
+  noteTurnStart: (key: SessionKey, input: { isBookkeeping: boolean; isSessionIdle: boolean }) => void;
+  /** The conversation's turn ended: whatever started it, the next one is decided by its own start. */
+  noteTurnEnd: (key: SessionKey) => void;
+  /** Whether the turn that runs now was started by the bot for its own bookkeeping — the mid-turn engine gives such a turn no reminder, as its start carried none. */
+  checkIsBookkeepingTurn: (key: SessionKey) => boolean;
 }
 
 /**
@@ -123,6 +135,8 @@ export function createLimitNotes(ports: LimitNotesPorts): LimitNotes {
    * Were it forgotten meanwhile, a send result would carry a second note beside it.
    */
   const notesInFlight = new Map<string, { takenAtMs: number; isExpiring: boolean }>();
+  /** The conversations whose running turn the bot started for its own bookkeeping (in memory: after a restart the adopted turn is simply not marked). */
+  const bookkeepingTurns = new Set<string>();
 
   function runGuarded<TResult>(key: SessionKey, what: string, fallback: TResult, work: () => TResult): TResult {
     try {
@@ -207,5 +221,12 @@ export function createLimitNotes(ports: LimitNotesPorts): LimitNotes {
     noteWorkerWatch: (key) => runGuarded(key, 'recording a worker watch', undefined, () => {
       ports.setRecord(key, getLimitNoteRecordAfterWorkerWatch(ports.getRecord(key), ports.getNowMs()));
     }),
+    noteTurnStart: (key, { isBookkeeping, isSessionIdle }) => runGuarded(key, 'marking the turn\'s origin', undefined, () => {
+      if (!isSessionIdle || !checkIsJsonStreamBackend(ports.getBackendName(key) ?? '')) return;
+      if (isBookkeeping) bookkeepingTurns.add(keyToString(key));
+      else bookkeepingTurns.delete(keyToString(key));
+    }),
+    noteTurnEnd: (key) => { bookkeepingTurns.delete(keyToString(key)); },
+    checkIsBookkeepingTurn: (key) => bookkeepingTurns.has(keyToString(key)),
   };
 }
