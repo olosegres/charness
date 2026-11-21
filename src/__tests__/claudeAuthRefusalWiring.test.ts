@@ -55,7 +55,7 @@ test('every round of the accounts\' states tells the operator and resumes the wa
   assert.ok(restored.indexOf('jiraConnector?.start(') < restored.indexOf('openOperatorAlerts();'), 'the connectors\' channels are known first');
   assert.match(botSource, /operatorAlertChannels = jiraConnector\?\.operatorChannel \? \[jiraConnector\.operatorChannel\] : \[\];/);
   const deliver = getFunctionBody('deliverClaudeAccountAlert');
-  assert.match(deliver, /if \(ENV\.isTelegramServed\) posts\.push\(postClaudeAccountAlertToGeneral\(alert\)\);/);
+  assert.match(deliver, /if \(ENV\.isTelegramServed\) posts\.push\(postClaudeAccountAlertToTelegram\(alert\)\);/);
   assert.match(deliver, /runWithLocale\('en', \(\) => renderClaudeAccountAlert\(alert, getHostClaudeSignInHow\)\)/, 'a connector\'s channel reads English and the host\'s sign-in');
   const resume = getFunctionBody('resumeConversationsWaitingForAccount');
   assert.ok(resume.indexOf('applyClaudeProfileToThread(key, { isAfterLimit: true })') < resume.indexOf('resumeTopicOnNewSession(key,'), 'moved onto an account that works before the continue prompt');
@@ -67,6 +67,21 @@ test('the profile scan of the usage poll and of /accounts ends the refusals of a
   const scan = getFunctionBody('syncClaudeProfilesAndRefusals');
   assert.ok(scan.indexOf('claudeProfileSync.sync(options)') < scan.indexOf('settleClaudeAuthRefusal(name)'), 'the probes first, then the refusals they may end');
   assert.match(scan, /noteClaudeProfileUsability\(\);/);
+});
+
+test('the private sign-out messages go BEFORE General\'s post (it must know a refusal), write back only their own ids, and an account signed in again turns its message', () => {
+  const telegram = getFunctionBody('postClaudeAccountAlertToTelegram');
+  assert.ok(
+    telegram.indexOf('await sendClaudeAccountSignOutDms(alert)') < telegram.indexOf('postClaudeAccountAlertToGeneral(alert, { isPrivateChatClosed })'),
+    'General\'s alert asks for a private chat only when the private message was refused: it needs the outcome first',
+  );
+  assert.match(telegram, /settleClaudeAccountSignOutDms\(alert\)/);
+  const send = getFunctionBody('sendClaudeAccountSignOutDms');
+  assert.doesNotMatch(send, /setClaudeAccountAlertState\(/, 'a send that waited on Telegram never writes back the record it read before');
+  assert.match(send, /await state\.setClaudeAccountAlertSignOutMessageId\(name, outcome\.messageId\);/);
+  assert.match(send, /outcome\.kind === 'failed' && outcome\.isForbidden === true\) \{\s*isPrivateChatClosed = true;/, 'only Telegram\'s 403 makes General ask for a private chat');
+  const turn = getFunctionBody('markClaudeAccountSignOutDmSignedIn');
+  assert.ok(turn.indexOf('setClaudeAccountAlertSignOutMessageId(name, null)') < turn.indexOf('editThreadMessage(privateKey, messageId, text)'), 'the id is dropped first: a failed edit is never retried');
 });
 
 test('the General post writes back ONLY its pin, read after its waits — never the record it read before them', () => {
