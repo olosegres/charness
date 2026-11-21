@@ -12,7 +12,7 @@ import { spawnSync } from 'child_process';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { readDetachedRunPid, removeTestRoot, scriptPath, startStrangerProcess, stopDetachedRuns, stopRunnerStandIns, waitForDetachedRunToEnd, writeFile } from './remoteRunRunnerScriptKit';
+import { detachedRunGraceMs, readDetachedRunPid, removeTestRoot, scriptPath, startStrangerProcess, stopDetachedRuns, stopRunnerStandIns, waitForDetachedRunToEnd, writeFile } from './remoteRunRunnerScriptKit';
 
 const duDelaySeconds = 0.6;
 
@@ -87,7 +87,7 @@ describe('the teardown of a test of the runner script', () => {
     writeFile(workDir, 'tmp/sweep-tmpdirs.pid', `${strangerPid}\n`);
     assert.equal(readDetachedRunPid(workDir, 'sweep-tmpdirs'), strangerPid);
     await waitForDetachedRunToEnd(workDir, 'sweep-tmpdirs');
-    assert.ok(Date.now() - startedAt < 3000, 'none of them was waited for');
+    assert.ok(Date.now() - startedAt < detachedRunGraceMs, 'none of them was waited for: a wait for the stranger would last the whole grace');
     assert.ok(checkIsAlive(strangerPid), 'and the stranger was left alone');
   });
 
@@ -103,7 +103,8 @@ describe('the teardown of a test of the runner script', () => {
     writeFile(workDir, 'tmp/measure-copies.pid', `${strangerPid}\n`);
     const startedAt = Date.now();
     stopDetachedRuns(root);
-    assert.ok(Date.now() - startedAt < 3000, 'it did not wait for a process that is not ours');
+    // A wait for a process that is not ours would last the whole grace; a fixed few seconds fails when the `ps` calls of the check are starved on a loaded box.
+    assert.ok(Date.now() - startedAt < detachedRunGraceMs, 'it did not wait for a process that is not ours');
     assert.ok(checkIsAlive(strangerPid), 'and left it alone');
   });
 

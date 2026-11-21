@@ -45,7 +45,8 @@ export function stopRunnerStandIns(): void {
 
 const detachedRunPidPattern = /^(measure-copies|sweep-tmpdirs|prune|simctl-cleanup|settle-queue)\.pid$/;
 const detachedRunSearchDepth = 5;
-const detachedRunGraceMs = 15_000;
+/** How long `stopDetachedRuns` waits for a detached run that is still going before it kills it (a test of the stop measures against it, never against a clock of its own). */
+export const detachedRunGraceMs = 15_000;
 const detachedRunPollMs = 25;
 
 /** Where the detached runs the script starts (`start_detached_run`: measure-copies, sweep-tmpdirs, prune, simctl-cleanup, settle-queue) keep their pid: `<work>/tmp/<name>.pid`, wherever a test put its work dir under `root`. */
