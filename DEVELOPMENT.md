@@ -208,6 +208,44 @@ docker compose logs -f charness             # tail logs
 docker exec charness-main charness-restart-bot   # restart only the bot; agents keep running
 ```
 
+### Walkthrough videos and screenshots (`yarn walkthrough`)
+
+A user-visible change is judged by looking, and a green run does not show what a person would have seen. `yarn walkthrough record
+<flow file>` runs a process-level flow (a `*E2e.test.ts` that starts the built bot against the fake Bot API and a fake agent) with a
+recorder attached, and draws what it recorded: an H.264 `.mp4` of the whole run and, from a list you write, phone-size screenshots.
+
+```bash
+yarn build                                    # a flow runs the built bot
+yarn walkthrough record src/__tests__/limitRemindersE2e.test.ts \
+  [--config cfg.json] [--shots shots.json] [--out dir] [--no-video] [--browser /path/to/chrome]
+yarn walkthrough render agent/tmp/walkthroughs/limitRemindersE2e/limitRemindersE2e.recording.json --shots shots.json   # redraw, no re-run
+```
+
+Nothing is drawn for a flow that fails. The output goes to `agent/tmp/walkthroughs/<flow>/` (the ignored temp dir) unless `--out` says
+otherwise: `<flow>.mp4`, `<flow>.recording.json` (what the recorder saw; `render` draws it again with another config) and
+`screens/<name>.png`. It wants `ffmpeg` on `PATH` and a Chromium for `playwright-core` (`npx playwright install chromium`, or an
+executable named by `--browser`); keep `TMPDIR` short, as for any flow.
+
+**The video** is 1280×720, one picture per change of the screen, held as long as the real time to the next one (between 0.7 and
+3.2 s; a longer wait is shortened and said on screen). **The left columns are the operator's chat**: one column per topic, each message
+as the fake Bot API holds it (the bot's on the left, the operator's on the right, with the inline buttons; a tapped one is outlined),
+so what the topic shows or never shows is on screen. **The right column is what the agent read** and the user never sees: the
+prompts it was sent (with the text the bot glued on), the results of its tool calls, what its hooks handed it and its answers. A
+block that starts with `highlightMarker` (a note the bot hands the agent) is highlighted there, a card without one says so. The bar
+below lists the flow's steps (one dot each: pending, running, passed) and names the running one.
+
+**The config** (`--config`, JSON, all optional): `title`; `topics` — `[{ "thread": 111, "name": "Orchestrating topic" }]`, the columns
+left to right (without it every topic with a message gets one: `General`, `Topic <id>`); `agentLabels` — a card's label by the key prefix
+of its request (`{ "NOTE": "orchestrating" }`); `agentKeep` and `agentWidth` — how many cards stay and how wide the column is;
+`highlightMarker` / `highlightName`. **The screenshots** (`--shots`, a JSON array): `{ "name", "thread", "match" (a regular expression for
+the message's text), "keyboardMatch"?, "isOperatorMessage"?, "topicName", "subtitle"?, "caption", "before"? }` — the first state of the
+chat in which the message matches, cut at it with `before` messages (default 2) above it; a picker the bot later edits into its
+confirmation is found as the picker.
+
+The recorder (`src/walkthrough/recorder.ts`) only reads: it wraps `it`, the fake Bot API's `start` / `stop` / `pushCallback` and reads
+the fake agent's logs, and every wrapped method gives back what the original does, so a flow behaves as without it. The tool is dev
+tooling: `tsconfig.json` leaves `src/walkthrough/` out of the build, and it is not in the package.
+
 ## Releases
 
 Two workflows. **`.github/workflows/test.yml` (`Tests`)** runs typecheck, build and the FULL `yarn test` on every push to

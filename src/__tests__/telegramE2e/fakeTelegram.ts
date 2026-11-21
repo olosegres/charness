@@ -582,6 +582,11 @@ export class FakeTelegram {
       .sort((a, b) => a.message_id - b.message_id);
   }
 
+  /** @description Every message the fake stores — the operator's, the bot's, deleted ones too — oldest first, with its CURRENT text (read-only: the walkthrough recorder's view of the chat). */
+  listAllMessages(): FakeTelegramMessage[] {
+    return [...this.messages.values()].sort((a, b) => a.message_id - b.message_id);
+  }
+
   getMessage(messageId: number): FakeTelegramMessage | undefined {
     return this.messages.get(messageId);
   }
