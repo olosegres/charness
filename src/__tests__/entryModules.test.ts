@@ -34,10 +34,13 @@ const startsTheBotWhenImported: readonly string[] = ['bot.js', 'cli/botEntry.js'
 const promiseChainMethods: readonly string[] = ['then', 'catch', 'finally'];
 const mainFunctionName = 'main';
 
+/** The `src/` directories `tsconfig.json` leaves out of the build (their programs are run by `tsx`, never imported by the self-check). */
+const unbuiltSourceDirectories: readonly string[] = ['release', 'walkthrough'].map((name) => path.join(sourceRoot, name));
+
 function listSourceFiles(directory: string): string[] {
   return fs.readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
     const entryPath = path.join(directory, entry.name);
-    if (entry.isDirectory()) return entry.name === '__tests__' || entryPath === path.join(sourceRoot, 'release') ? [] : listSourceFiles(entryPath);
+    if (entry.isDirectory()) return entry.name === '__tests__' || unbuiltSourceDirectories.includes(entryPath) ? [] : listSourceFiles(entryPath);
     return entry.name.endsWith('.ts') && !entry.name.endsWith('.d.ts') ? [entryPath] : [];
   });
 }

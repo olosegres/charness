@@ -1,7 +1,7 @@
 /** What `tsc -w` turns into files under `dist/` — and so into a worker reload by nodemon (which watches nothing else). */
 const emittedSourceRoot = 'src/';
 /** The `src/` directories `tsconfig.json` excludes (`emittedSource.test.ts` keeps this list equal to its `exclude`). */
-export const unemittedSourcePrefixes = ['src/__tests__/', 'src/release/'];
+export const unemittedSourcePrefixes = ['src/__tests__/', 'src/release/', 'src/walkthrough/'];
 const emittedSourceExtension = '.ts';
 const declarationFileExtension = '.d.ts';
 

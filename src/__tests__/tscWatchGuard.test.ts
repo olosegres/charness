@@ -108,7 +108,7 @@ describe('listStaleSources', () => {
 
   test('tests, the release tooling, declarations and other files the compiler writes nothing for are never listed', () => {
     const oldMs = nowMs - 10 * graceMs;
-    for (const skipped of ['src/__tests__/a.test.ts', 'src/release/plan.ts', 'src/types/ambient.d.ts', 'src/notes.md', 'src/data.json']) writeFile(skipped, oldMs);
+    for (const skipped of ['src/__tests__/a.test.ts', 'src/release/plan.ts', 'src/walkthrough/cli.ts', 'src/types/ambient.d.ts', 'src/notes.md', 'src/data.json']) writeFile(skipped, oldMs);
     assert.deepEqual(listStaleSources(root, nowMs, graceMs), []);
   });
 });
