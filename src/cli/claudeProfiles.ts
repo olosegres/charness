@@ -8,7 +8,10 @@
  *
  *   --best         print ONLY the config directory the next process starts under (the recommended profile's; a hand-over's new worker's) — an EMPTY line for the default
  *                  profile (set nothing) — so `CLAUDE_CONFIG_DIR="$(charness claude-profiles --best)"`
- *                  works as is; exit 1 when no profile is usable (stderr then says which frees up first)
+ *                  works as is; exit 1 when no profile is usable (stderr then says which frees up first). A HAND-OVER
+ *                  (see `--last-run-ended-at`) exits {@link handOverExitCode} — stdout is still the NEW worker's directory, stderr
+ *                  the `hand over: …` line — so a script that resumes the old session under that directory (`set -e`, an
+ *                  `|| …`, a status check) is stopped instead of dragging the worker onto another account
  *   --model <name> the model the child will run (`fable` → the Fable weekly window counts besides the shared ones)
  *   --current <name>  the profile the session being RESUMED last ran on: it stays there while it can run and is warm (see `--last-run-ended-at`)
  *   --stopped-by-limit  that session broke off on a usage limit: leave `--current` out of the answer
@@ -58,6 +61,12 @@ export interface ClaudeProfilesCliArgs {
   /** When the resumed worker's last run ended (epoch ms); `null` = not given. */
   lastRunEndedAtMs: number | null;
 }
+
+/**
+ * The exit code of `--best` (and `--json` with it) when the answer is a hand-over: the old worker must NOT be resumed on another
+ * account, its work goes to a NEW worker on the directory printed. Distinct from 1 (nothing usable) and 2 (a refused flag).
+ */
+export const handOverExitCode = 3;
 
 /** The length of `YYYY-MM-DD`, the day part of an ISO instant. */
 const isoDayLength = 10;
@@ -110,12 +119,13 @@ function formatApiCreditParts(entry: ClaudeProfileReportEntry): string {
   return parts.map((part) => `  ${part}`).join('');
 }
 
-/** One human line: `✓ work  /data/…/work  mail@example.com personal max  5h 12% 🔄 in 2h · week 40% 🔄 in 2d 1h · Fable 3% 🔄 in 2d 1h` (no Fable part for an account without that window; an account billed to API credits says so and has no windows). */
-export function formatClaudeProfileCliLine(entry: ClaudeProfileReportEntry, nowMs: number): string {
+/** One human line (`✓` marks the account the next process goes to): `✓ work  /data/…/work  mail@example.com personal max  5h 12% 🔄 in 2h · week 40% 🔄 in 2d 1h · Fable 3% 🔄 in 2d 1h` (no Fable part for an account without that window; an account billed to API credits says so and has no windows). */
+export function formatClaudeProfileCliLine(entry: ClaudeProfileReportEntry, nowMs: number, pickedName?: string | null): string {
   const find = (kind: ClaudeUsageBucketKind) => entry.buckets.find((bucket) => bucket.kind === kind) ?? null;
   const weeklyBucket = find('weekly_all');
   const read = (kind: ClaudeUsageBucketKind) => formatClaudeUsageBucket(find(kind), nowMs, { fallbackBucket: kind === 'session' ? weeklyBucket : null });
-  const marker = entry.isRecommended ? '✓' : entry.isEligible ? '•' : '✗';
+  // `pickedName`: where the NEXT process goes when that is not the report's `recommended` (a hand-over's new worker).
+  const marker = (pickedName === undefined ? entry.isRecommended : entry.name === pickedName) ? '✓' : entry.isEligible ? '•' : '✗';
   const isApi = entry.billing === 'api';
   const account = entry.authRefusal !== null
     ? `sign-in refused at ${entry.authRefusal.at}: ${claudeAuthRefusalWords[entry.authRefusal.reason]}`
@@ -180,7 +190,8 @@ export async function runClaudeProfilesCli(
   const handOver = describeClaudeResumeHandOver(report, args.currentProfile);
   if (args.isJson) {
     stdout(`${JSON.stringify(report, null, 2)}\n`);
-    return report.recommended === null && args.isBest ? 1 : 0;
+    if (!args.isBest) return 0;
+    return report.recommended === null ? 1 : handOver === null ? 0 : handOverExitCode;
   }
   if (args.isBest) {
     if (report.recommended === null) {
@@ -189,13 +200,16 @@ export async function runClaudeProfilesCli(
     }
     // The account the NEXT process starts under: a hand-over names the NEW worker's (a cold worker's own account stays `recommended`).
     const entry = report.profiles.find((profile) => profile.name === (report.resume?.profile ?? report.recommended));
-    // stdout stays the one config directory a script takes as is; the hand-over is for whoever reads the terminal.
+    // stdout stays the one config directory a script takes as is; a hand-over says why on stderr AND exits with its own code, so
+    // `$(…)` under `set -e` cannot resume the old session under the new worker's directory by accident.
     if (handOver !== null) stderr(`${handOver}\n`);
     stdout(`${entry?.configDir ?? ''}\n`);
-    return 0;
+    return handOver === null ? 0 : handOverExitCode;
   }
-  stdout(`${report.profiles.map((entry) => formatClaudeProfileCliLine(entry, nowMs)).join('\n')}\n`);
-  stdout(`recommended for ${args.model ?? 'any model'}: ${report.recommended ?? 'none'} (${outcome})\n`);
-  if (handOver !== null) stdout(`${handOver}\n`);
+  // A hand-over IS the verdict: the `recommended` line would name the old worker's own account (the launch rule's warm pick).
+  const pickedName = handOver === null ? undefined : report.resume?.profile;
+  stdout(`${report.profiles.map((entry) => formatClaudeProfileCliLine(entry, nowMs, pickedName)).join('\n')}\n`);
+  if (handOver === null) stdout(`recommended for ${args.model ?? 'any model'}: ${report.recommended ?? 'none'} (${outcome})\n`);
+  else stdout(`${handOver}\n`);
   return 0;
 }

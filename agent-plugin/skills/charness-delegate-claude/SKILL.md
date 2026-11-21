@@ -91,6 +91,6 @@ printf '%s\n' "<uuid>" > "<run-dir>/session"
   run's log — never from memory or a shortened prefix.
 - Keep the model, effort and flags of the first run.
 - The account of a resume — where it runs, a hand-over to a NEW worker, a run stopped by a usage limit — is
-  `charness-orchestration` § Accounts and usage limits. Launch under the `configDir` of the account it names and record that name.
+  `charness-orchestration` § Accounts and usage limits. Launch under the `configDir` of `resume.profile` and record that name.
 - To stop a worker: confirm the PID is that worker (`ps -o args= -p <pid>`), `kill -TERM <pid>`, confirm it is
   gone. Never kill by name, never a process you did not start.

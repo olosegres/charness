@@ -80,16 +80,17 @@ kill -0 <pid> 2>/dev/null || { echo "worker <pid> exited"; exit 1; }; [ -n "$(fi
 
 - Before EVERY Claude worker launch or resume call `claude_profiles` — the worker's model; on a resume also `currentProfile` (the
   profile name recorded at launch) and `lastRunEndedAt` (the last write of its log, an ISO instant) — and start the worker with
-  `CLAUDE_CONFIG_DIR=<configDir>` of `recommended` (nothing when its `configDir` is null; without it the worker drains YOUR
-  account). Take it without asking: it follows the operator's /limits auto-switch list — an API-credit account first, then the
+  `CLAUDE_CONFIG_DIR=<configDir>` of `recommended`, on a resume of `resume.profile` (nothing when the `configDir` is null; without
+  it the worker drains YOUR account). Take it without asking: it follows the operator's /limits auto-switch list — an API-credit account first, then the
   soonest weekly reset, so what expires first is spent first. Never reuse an earlier answer. Record the profile name beside the
   worker's session id.
-- `resume: handOver` → do not resume that worker on another account. Give its work to a NEW worker on the account named (brief: the
-  old run's report, the worktree, the findings); a reviewer that already runs on that account may apply its own findings, then a
-  fresh reviewer checks the result. `resume: resume` → resume the session where it ran.
+- `resume.verdict: handOver` → do not resume that worker on another account. Give its work to a NEW worker on `resume.profile` (brief:
+  the old run's report, the worktree, the findings); a reviewer that already runs on that account may apply its own findings, then a
+  fresh reviewer checks the result. `resume.verdict: resume` → resume the session under `resume.profile` (where it ran, unless it
+  stopped on a limit).
 - The exception: a worker cut off MID-RUN by a usage limit («You've hit your session limit», «Credit balance is too low») — a fresh
   worker would redo the unfinished run, so call `claude_profiles` with `currentProfile` and `isStoppedByLimit: true` and resume the
-  SAME session at once under the account it recommends.
+  SAME session at once under `resume.profile`.
 - `recommended: null` → nothing is usable: do not launch. `schedule_create` a one-off resume (`onceAt` = `nextAvailable.at`) whose
   prompt stands on its own (the plan path, the scope, what to launch, «call `claude_profiles` again»), then end the turn.
   `nextAvailable` null too → no account names a time it frees up: ask the user a native question (nothing can run) and

@@ -46,7 +46,8 @@ function printUsage(): void {
       `  charness claude-profiles  Claude account profiles + usage from the bot's cache;\n` +
       `                              --best prints the CLAUDE_CONFIG_DIR to launch under\n` +
       `                              (empty = default), --model <name>, --json,\n` +
-      `                              --current <name> [--stopped-by-limit] for a resumed session\n` +
+      `                              --current <name> [--stopped-by-limit] [--last-run-ended-at <ISO>] for a resumed\n` +
+      `                              session; a hand-over (a NEW worker, not a resume) makes --best exit 3\n` +
       `  charness remote-run       Run a command (tests, builds, e2e) on a runner machine (paired, or reached by ssh):\n` +
       `                              \`remote-run [--bg] <command…>\`, \`remote-run runners\` (see docs/remote-run.md)\n` +
       `  charness runners          Pair and manage runner machines, like /runners in Telegram:\n` +

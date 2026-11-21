@@ -398,10 +398,13 @@ so one account's usage limit does not stop every topic.
   refresh two seconds at most, like `/limits`. The same answer from a shell, for a worker without
   MCP: `charness claude-profiles [--best] [--model <name>] [--current <name>
   [--stopped-by-limit] [--last-run-ended-at <ISO>]] [--json]` — a hand-over prints
-  a `hand over: …` line (on stderr with `--best`, `resume` in `--json`);
-  `--best` prints just the directory (an empty line for the default; for a hand-over the
-  new worker's account; exit 1 and
-  `next: …` on stderr when nothing is usable), so
+  a `hand over: …` line (on stderr with `--best`, `resume` in `--json`) instead of the
+  `recommended` line, and the `✓` marks the new worker's account;
+  `--best` prints just the directory (an empty line for the default; exit 1 and
+  `next: …` on stderr when nothing is usable). **A hand-over makes `--best` exit 3** — stdout is
+  still the new worker's directory, stderr the `hand over: …` line — so a script that would resume the
+  old session under that directory (`set -e`, a status check) stops instead of dragging the worker onto
+  another account; pass `--last-run-ended-at` for a worker that is warm, which resumes (exit 0) where it ran. For a new worker
   `CLAUDE_CONFIG_DIR="$(charness claude-profiles --best --model fable)"`
   works as is; it reads the bot's cache off `DATA_DIR/state.json` and cannot
   re-read an account's usage, so `--stopped-by-limit` only leaves the account out.

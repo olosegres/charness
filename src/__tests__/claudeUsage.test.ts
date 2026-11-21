@@ -702,6 +702,31 @@ describe('the launch pick (getClaudeLaunchPick)', () => {
       assert.equal(describeClaudeProfileLaunch(buildClaudeProfilesReport([view('default', late.usage, { configDir: null })], 'sonnet', nowMs), 'default'), 'default profile, set no CLAUDE_CONFIG_DIR');
     });
 
+    it('a cold worker is never called «warm»: the launch rule\'s `warm` pick reason means «keeps its own account»; with a resume advice the outcome says what the cache is', () => {
+      const keeps = buildClaudeProfilesReport([soon], 'sonnet', nowMs, { currentProfile: 'work', lastRunEndedAtMs: minutes(300) });
+      assert.equal(keeps.resume?.reason, 'coldStays');
+      assert.equal(keeps.pickReason, 'warm', 'the launch rule\'s own word is unchanged');
+      assert.equal(describeClaudeLaunchOutcome(keeps, 'work'), 'stays on its own account — cold, but nothing better is open');
+      const warm = buildClaudeProfilesReport([soon], 'sonnet', nowMs, { currentProfile: 'work', lastRunEndedAtMs: minutes(5) });
+      assert.equal(describeClaudeLaunchOutcome(warm, 'work'), 'stays on the warm account');
+      assert.equal(describeClaudeLaunchOutcome({ pickReason: 'warm', nextAvailable: null }, 'work'), 'stays on the warm account', 'no resume advice (a topic\'s own pick, the notes): as before');
+    });
+
+    it('the CLI line marks the account the NEXT process goes to — a hand-over\'s new worker, not the old worker\'s own account the launch rule kept', () => {
+      const report = buildClaudeProfilesReport([soon, late], 'sonnet', nowMs, { currentProfile: 'spare', lastRunEndedAtMs: minutes(300) });
+      assert.equal(report.resume?.profile, 'work');
+      const entryOf = (name: string) => {
+        const entry = report.profiles.find((candidate) => candidate.name === name);
+        assert.ok(entry, name);
+        return entry;
+      };
+      const workEntry = entryOf('work');
+      const spareEntry = entryOf('spare');
+      assert.ok(formatClaudeProfileCliLine(spareEntry, nowMs).startsWith('✓ spare'), 'by default the report\'s `recommended`');
+      assert.ok(formatClaudeProfileCliLine(spareEntry, nowMs, 'work').startsWith('• spare'));
+      assert.ok(formatClaudeProfileCliLine(workEntry, nowMs, 'work').startsWith('✓ work'));
+    });
+
     it('getClaudeResumeAdvice itself is pure over the two picks: the same inputs, the same advice; a future last-run time (clock skew) counts as warm', () => {
       const warmPick = { pick: 'spare', reason: 'warm' as const, nextAvailable: null };
       const freshPick = { pick: 'work', reason: 'soonestWeeklyReset' as const, nextAvailable: null };

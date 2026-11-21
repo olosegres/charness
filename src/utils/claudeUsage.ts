@@ -852,13 +852,15 @@ export function getClaudeLaunchPick(input: ClaudeLaunchPickOptions & {
 
 /**
  * @description The pick in words, for the first line of the `claude_profiles` answer and the CLI: why the account was chosen
- * (`stays on the warm account`, `moved: <name> stopped on a limit` / `can no longer run`, `soonest weekly reset`, `API credit first`), or that nothing is usable
+ * (`stays on the warm account`, or with a cold worker the resume advice keeps in place `stays on its own account — cold, but nothing better is
+ * open`, `moved: <name> stopped on a limit` / `can no longer run`, `soonest weekly reset`, `API credit first`), or that nothing is usable
  * and which account frees up when. `currentProfile` is the account the caller passed for a resumed session.
  */
-export function describeClaudeLaunchOutcome(report: Pick<ClaudeProfilesReport, 'pickReason' | 'nextAvailable'>, currentProfile: string | null): string {
+export function describeClaudeLaunchOutcome(report: Pick<ClaudeProfilesReport, 'pickReason' | 'nextAvailable' | 'resume'>, currentProfile: string | null): string {
   switch (report.pickReason) {
     case 'warm':
-      return 'stays on the warm account';
+      // `warm` is the launch rule's word for «keeps its own account»; with a resume advice the cache's own state is known.
+      return report.resume?.reason === 'coldStays' ? 'stays on its own account — cold, but nothing better is open' : 'stays on the warm account';
     case 'movedFromLimited':
       return `moved: ${currentProfile ?? 'the warm account'} stopped on a limit`;
     case 'movedFromUnavailable':
@@ -899,7 +901,10 @@ export interface ClaudeResumeAdvice {
   /** `resume`: the account to resume the session under; `handOver`: the account of the NEW worker. */
   profile: string;
   reason: ClaudeResumeReason;
-  /** Why the launch rule named `profile` (a warm session's own account reads `warm`). */
+  /**
+   * Why the launch rule named `profile`. A worker's own account reads `warm` — that only means «the launch rule keeps the worker on its
+   * own account» (it can run there), NOT that its prompt cache is warm: `reason` says that (`warm` against `coldStays`).
+   */
   pickReason: ClaudeLaunchPickReason;
 }
 

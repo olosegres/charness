@@ -176,14 +176,30 @@ test('claude-profiles --current keeps a resumed session on its account; --stoppe
   const workDir = path.join(tmpRoot, 'claude-profiles', 'work');
   const justNow = new Date(Date.now() - 5 * 60_000).toISOString();
   const warm = runCli(['claude-profiles', '--best', '--current', 'work', '--last-run-ended-at', justNow]);
+  assert.equal(warm.status, 0, warm.stderr);
   assert.equal(warm.stdout, `${workDir}\n`, 'warm: the five-hour ceiling does not apply to the session already on «work»');
   assert.equal(warm.stderr, '', 'a resume says nothing more');
-  // The same worker with no last-run time is cold: the soonest-reset rule names «default» for a NEW worker, so its work is handed over.
+  // The same worker with no last-run time is cold: the soonest-reset rule names «default» for a NEW worker, so its work is handed over —
+  // and `--best` says so with an exit code of its own, which `$(…)` under `set -e` cannot miss.
   const cold = runCli(['claude-profiles', '--best', '--current', 'work']);
+  assert.equal(cold.status, 3, 'a hand-over: not 0 (a script would resume the old session), not 1 (nothing usable), not 2 (a refused flag)');
   assert.equal(cold.stdout, '\n', 'cold: --best prints the NEW worker\'s account (the default profile: set nothing)');
   assert.match(cold.stderr, /^hand over: work is cold \(its last run ended 55 min ago or more, or at an unknown time\) and default is the pick now \(soonest weekly reset\) → start a NEW worker on default \(default profile, set no CLAUDE_CONFIG_DIR\); a reviewer already on default may apply its own findings, then a fresh reviewer checks\.\n$/);
   const coldHuman = runCli(['claude-profiles', '--current', 'work', '--last-run-ended-at', new Date(Date.now() - 3 * 3_600_000).toISOString()]);
-  assert.match(coldHuman.stdout, /recommended for any model: work \(stays on the warm account\)\nhand over: work is cold/, 'the human output ends with the hand-over line');
+  assert.equal(coldHuman.status, 0, 'the human output is advice, not a script\'s verdict');
+  assert.doesNotMatch(coldHuman.stdout, /recommended for/, 'the hand-over IS the verdict: no line naming the old worker\'s own account as recommended');
+  assert.match(coldHuman.stdout, /^✓ default /m, 'the mark is where the next process goes');
+  assert.match(coldHuman.stdout, /^• work /m);
+  assert.match(coldHuman.stdout, /\nhand over: work is cold/, 'the human output ends with the hand-over line');
+  // Cold on the account a NEW worker would get too: nothing better is open, so it resumes there — and the line does not call it «warm».
+  const coldStays = runCli(['claude-profiles', '--current', 'default', '--last-run-ended-at', new Date(Date.now() - 3 * 3_600_000).toISOString()]);
+  assert.match(coldStays.stdout, /recommended for any model: default \(stays on its own account — cold, but nothing better is open\)/);
+  assert.doesNotMatch(coldStays.stdout, /warm account|hand over/);
+  assert.equal(runCli(['claude-profiles', '--best', '--current', 'default', '--last-run-ended-at', new Date(Date.now() - 3 * 3_600_000).toISOString()]).status, 0, 'a resume exits 0');
+  const jsonCold = runCli(['claude-profiles', '--json', '--best', '--current', 'work']);
+  assert.equal(jsonCold.status, 3, '--json --best exits with the hand-over code too');
+  assert.equal(JSON.parse(jsonCold.stdout).resume.verdict, 'handOver');
+  assert.equal(runCli(['claude-profiles', '--json', '--current', 'work']).status, 0, 'without --best the JSON is just the report');
   assert.equal(JSON.parse(runCli(['claude-profiles', '--json', '--current', 'work', '--last-run-ended-at', justNow]).stdout).resume.verdict, 'resume');
   assert.equal(JSON.parse(runCli(['claude-profiles', '--json', '--current', 'work']).stdout).resume.verdict, 'handOver');
   assert.equal('resume' in JSON.parse(runCli(['claude-profiles', '--json']).stdout), false, 'a new worker has no `resume`');
@@ -194,15 +210,18 @@ test('claude-profiles --current keeps a resumed session on its account; --stoppe
   assert.equal(moved.stdout, '\n', 'stopped by a limit: «work» is left out whatever its figures say');
   const human = runCli(['claude-profiles', '--current', 'work', '--stopped-by-limit']);
   assert.match(human.stdout, /recommended for any model: default \(moved: work stopped on a limit\)/);
-  assert.match(runCli(['claude-profiles', '--current', 'work']).stdout, /recommended for any model: work \(stays on the warm account\)/);
+  assert.match(runCli(['claude-profiles', '--current', 'work', '--last-run-ended-at', justNow]).stdout, /recommended for any model: work \(stays on the warm account\)/, 'a warm worker, said so');
+  assert.match(runCli(['claude-profiles', '--current', 'work']).stdout, /\nhand over: work is cold/);
   // A resumed worker whose account can no longer run (its weekly window is full) moves, and the line says so.
   writeProfilesState({
     default: [usageBucket('session', 20, inHours(1)), usageBucket('weekly_all', 70, inHours(48))],
     work: [usageBucket('session', 10, inHours(1)), usageBucket('weekly_all', 100, inHours(120))],
   });
-  const full = runCli(['claude-profiles', '--current', 'work']);
-  assert.match(full.stdout, /recommended for any model: default \(moved: work can no longer run\)/);
-  assert.equal(runCli(['claude-profiles', '--best', '--current', 'work']).stdout, '\n');
+  const full = runCli(['claude-profiles', '--current', 'work', '--last-run-ended-at', justNow]);
+  assert.match(full.stdout, /\nhand over: work can no longer run this worker → start a NEW worker on default \(default profile, set no CLAUDE_CONFIG_DIR\)/, 'warm or not: its account cannot run it');
+  const fullBest = runCli(['claude-profiles', '--best', '--current', 'work', '--last-run-ended-at', justNow]);
+  assert.equal(fullBest.stdout, '\n');
+  assert.equal(fullBest.status, 3);
   const withoutCurrent = runCli(['claude-profiles', '--stopped-by-limit']);
   assert.equal(withoutCurrent.status, 2);
   assert.match(withoutCurrent.stderr, /--stopped-by-limit needs --current <name>/);
@@ -427,6 +446,8 @@ test('--help prints usage and exits 0', () => {
   assert.match(stderr, /^ {2}charness {2,}Start the bot/m);
   assert.match(stderr, /~\/\.config\/charness\/\.env/);
   assert.doesNotMatch(stderr, /telegramcode/);
+  // `claude-profiles`: the resume flags, and what a hand-over does to --best (a script reads the exit code, not the stderr line).
+  assert.match(stderr, /--current <name> \[--stopped-by-limit\] \[--last-run-ended-at <ISO>\] for a resumed\n\s+session; a hand-over \(a NEW worker, not a resume\) makes --best exit 3/);
 });
 
 test('--version prints the package version to stdout and exits 0', () => {

@@ -7,7 +7,7 @@ import assert from 'node:assert/strict';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { parseClaudeProfilesCliArgs, runClaudeProfilesCli } from '../cli/claudeProfiles';
+import { handOverExitCode, parseClaudeProfilesCliArgs, runClaudeProfilesCli } from '../cli/claudeProfiles';
 import { writeClaudeApiCreditAnchor } from '../utils/claudeApiCredit';
 
 const hourMs = 3_600_000;
@@ -85,15 +85,21 @@ describe('runClaudeProfilesCli', () => {
       assert.deepEqual(parseClaudeProfilesCliArgs(argv), { ok: false, error: '--last-run-ended-at needs an ISO 8601 instant, e.g. 2026-11-21T12:30:00Z' }, argv.join(' '));
     }
     // «default» is switched off in the chain, so only «work» is offered: a worker that ran on «default» can no longer run there.
-    const run = async (argv: string[]): Promise<{ stdout: string; stderr: string }> => {
+    const run = async (argv: string[]): Promise<{ stdout: string; stderr: string; code: number }> => {
       const out: string[] = [];
       const err: string[] = [];
-      await runClaudeProfilesCli(argv, { stdout: (text) => out.push(text), stderr: (text) => err.push(text) });
-      return { stdout: out.join(''), stderr: err.join('') };
+      const code = await runClaudeProfilesCli(argv, { stdout: (text) => out.push(text), stderr: (text) => err.push(text) });
+      return { stdout: out.join(''), stderr: err.join(''), code };
     };
+    assert.equal(handOverExitCode, 3, 'its own code: not 0 (resumed), 1 (nothing usable) or 2 (a refused flag)');
     const handedOver = await run(['--best', '--current', 'default', '--last-run-ended-at', new Date().toISOString()]);
     assert.equal(handedOver.stdout, `${path.join(dataDir, 'claude-profiles', 'work')}\n`, 'the NEW worker\'s account');
     assert.match(handedOver.stderr, /^hand over: default can no longer run this worker → start a NEW worker on work \(CLAUDE_CONFIG_DIR=/);
+    assert.equal(handedOver.code, handOverExitCode, 'a script that would resume the old session is stopped');
+    const handedOverJson = await run(['--best', '--json', '--current', 'default', '--last-run-ended-at', new Date().toISOString()]);
+    assert.equal(handedOverJson.code, handOverExitCode);
+    assert.equal((JSON.parse(handedOverJson.stdout) as { resume: { verdict: string } }).resume.verdict, 'handOver');
+    assert.equal((await run(['--current', 'default', '--last-run-ended-at', new Date().toISOString()])).code, 0, 'the human output is advice');
     // Without the list «default» resets first (12 h against 24 h): a worker that ran on «work» and went cold is handed over to it.
     const persisted = JSON.parse(fs.readFileSync(path.join(dataDir, 'state.json'), 'utf8'));
     delete persisted.fallbackChain;
@@ -102,10 +108,20 @@ describe('runClaudeProfilesCli', () => {
     const cold = await run(['--best', '--current', 'work', '--last-run-ended-at', new Date(Date.now() - 3 * hourMs).toISOString()]);
     assert.equal(cold.stdout, '\n', 'cold: the NEW worker\'s account is «default» (the default profile, set nothing) — not the old worker\'s «work», which stays `recommended`');
     assert.match(cold.stderr, /^hand over: work is cold /m);
+    assert.equal(cold.code, handOverExitCode);
+    // The human output of the same answer: the hand-over IS the verdict — no `recommended` line naming the old worker's own account.
+    const human = await run(['--current', 'work', '--last-run-ended-at', new Date(Date.now() - 3 * hourMs).toISOString()]);
+    assert.doesNotMatch(human.stdout, /recommended for/);
+    assert.match(human.stdout, /^✓ default /m, 'the mark is where the NEXT process goes');
+    assert.match(human.stdout, /^• work /m);
+    assert.match(human.stdout, /\nhand over: work is cold /);
+    assert.equal(human.code, 0, 'advice, not a script\'s verdict');
     const warmAgain = await run(['--best', '--current', 'work', '--last-run-ended-at', new Date(Date.now() - 10 * 60_000).toISOString()]);
     assert.equal(warmAgain.stdout, `${path.join(dataDir, 'claude-profiles', 'work')}\n`, 'the same worker, warm: it stays');
+    assert.equal(warmAgain.code, 0);
     const resumed = await run(['--best', '--current', 'work', '--last-run-ended-at', new Date().toISOString()]);
     assert.equal(resumed.stdout, `${path.join(dataDir, 'claude-profiles', 'work')}\n`);
+    assert.equal(resumed.code, 0);
     assert.equal(resumed.stderr.split('\n').filter((line) => line.startsWith('hand over')).length, 0);
   });
 });
