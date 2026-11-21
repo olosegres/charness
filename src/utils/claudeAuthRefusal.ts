@@ -174,6 +174,14 @@ export function getClaudeProfileUsability(record: Pick<ClaudeProfileRecord, 'log
   return record?.loggedIn === false ? 'notSignedIn' : 'usable';
 }
 
+/**
+ * Whether signing the account in AGAIN can mend this state: a missing, expired or revoked login and a bare 401 / 403 yes (a new login ends
+ * the refusal); an organization that turned Claude subscription use off no — the same login is refused again.
+ */
+export function checkIsClaudeUsabilityMendedBySignIn(usability: Exclude<ClaudeProfileUsability, 'usable'>): boolean {
+  return usability !== 'orgDisabled';
+}
+
 /** Why the CLI refused an account, in the words of the log and the command line. */
 export const claudeAuthRefusalWords: Readonly<Record<AgentAuthErrorReason, string>> = {
   signedOut: 'not signed in (the login is missing, expired or revoked)',

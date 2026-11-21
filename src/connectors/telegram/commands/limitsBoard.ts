@@ -63,7 +63,7 @@ function buildPageCallback(page: number): string {
  * keyboard can only ever start the sign-in of the account it named and the row is never a switch target.
  */
 function buildRowCallback(row: LimitsBoardRow, index: number): string {
-  if (row.kind === 'claudeSignedOut') return buildAccountSignInCallback(row.id);
+  if (row.kind === 'claudeSignIn') return buildAccountSignInCallback(row.id);
   return row.kind === 'claude' ? buildClaudeRowCallback(index) : buildOpenCodeRowCallback(index);
 }
 

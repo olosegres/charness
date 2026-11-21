@@ -543,11 +543,11 @@ its text gains the same `handover.note` line.
 button). Text, joined by blank lines: the usage block (`formatLimitsUsageBlock` in `utils/limitsBoardPlan.ts`: the heading `limits.usageHeading`, then
 `<name> — <first usage line>` per signed-in Claude account that has a figure or a limit, then per connected OpenCode provider that reports usage
 `openai (ChatGPT) — …`; the lines are `formatClaudeProfileUsageLines`, the ONE renderer `/accounts` uses, so the wording — `⏱ 5h … 🔄 in 3h · week …`,
-`⛔ at its limit until …`, `(stale)` — is never a second copy; a SIGNED-OUT account has the line `<name> — 🔑 sign-in expired` (`limits.signedOutMark`) so it never vanishes from the board; no line at all ⇒ no block and no heading), the two automatic-switching settings (read through
+`⛔ at its limit until …`, `(stale)` — is never a second copy; an account that CANNOT WORK has a line by why (`<name> — 🔑 not signed in` = `account.row.loggedOut`, `🔑 sign-in expired`, `🔑 refused by the API (401/403)`, `🚫 its organization turned it off`; `limits.signedOutMark` / `rejectedMark` / `orgDisabledMark`, by `getClaudeProfileUsability`) so it never vanishes from the board; no line at all ⇒ no block and no heading), the two automatic-switching settings (read through
 `utils/limitSettings.ts`, with a link to `/limits_autoswitch`; General prefixes «Defaults for all topics:») and the caption `limits.boardCaption`
 («Choose the active model:»; General `limits.boardCaptionGeneral`, «Choose the default Claude account:»). Every Claude account (in `/accounts` order)
 and every connected OpenCode provider (catalog order) is one full-width button labelled by `buildLimitsBoardRows` as `[✓ ]<program> · <account or provider>` — the ✓ on
-the active row only, no model, no usage, no ⛔; a signed-out account is the row `🔑 <program> · <account>` (kind `claudeSignedOut`) whose button is NOT an indexed `lim_c_` one but
+the active row only, no model, no usage, no ⛔; an account that cannot work and that a sign-in mends (`checkIsClaudeUsabilityMendedBySignIn`: not an organization's switch) is the row `🔑 <program> · <account>` (kind `claudeSignIn`) whose button is NOT an indexed `lim_c_` one but
 `/accounts`' sign-in callback `acct_signin_<name>` (name baked in, handled by `claudeAccounts.ts`: it starts the same sign-in as 🔑 and leaves the message as it is) — never a switch target. «⏭ Skip once» (the shared `buildSkipArmedRetryCallbackData`) ends the board while a limit wait is armed.
 The usage is refreshed through the `refreshUsage` port when the board OPENS (bounded, `refreshUsageWithinBudget`); a tap re-renders off the cache.
 

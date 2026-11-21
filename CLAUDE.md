@@ -182,7 +182,7 @@ per-backend controls are optional methods the bot checks before calling.
   wording; held until a new login changes the folder's login stamp) — the conversation takes the `claude_profiles` pick as its own pick, and a
   refused json-stream turn makes the limit move at once (`handleClaudeAuthRefusal` → `switchTopicToFallbackEntry` with `reason: 'signIn'`);
   with nowhere to go the conversation WAITS (`claudeAccountWaits`, not woken) until an account can work. The OPERATOR is told once per change
-  (`utils/claudeAccountAlert.ts`, record `claudeAccountAlerts`): General, pinned, a signed-out account also in the operator's PRIVATE chat with a sign-in button (`acct_signin_<name>`; a 403 = they never opened it, General alone), and every connector's `platform/operatorAlert.ts` channel
+  (`utils/claudeAccountAlert.ts`, record `claudeAccountAlerts`): General, pinned, a signed-out account also in the operator's PRIVATE chat with a sign-in button (`acct_signin_<name>`, turned into «signed in again» once it is back; a 403 = they never opened it: General's alert then asks them to), and every connector's `platform/operatorAlert.ts` channel
   (Jira: the `operatorIssue`, never a request source).
 - **Usage limits / fallback chain** (`/limits_autoswitch`, hidden aliases `/fallback` and `/auto_continue_limits`, `utils/fallbackChain.ts`, `commands/fallbackChain.ts`): ONE instance-wide
   priority list of `{claude, profile, model|null}` / `{opencode, providerId, modelId}` rungs in `state.json`
@@ -204,7 +204,7 @@ per-backend controls are optional methods the bot checks before calling.
   ~5 min, a bare `RESOURCE_EXHAUSTED`) is `transient`, and the wording alone of Anthropic's "would exceed your account's
   rate limit" is probed first (`apiErrorRetry.ts`).
 - **`/limits` is the switch board** (`commands/limitsBoard.ts`, rows and labels in `utils/limitsBoardPlan.ts`): one name-only button
-  (`[✓ ]Claude · work`) per signed-in Claude account (a signed-out one stays as a `🔑` sign-in row, never a switch target) and connected OpenCode provider, the usage in the MESSAGE (`formatLimitsUsageBlock`: the `/accounts`
+  (`[✓ ]Claude · work`) per signed-in Claude account (one that cannot work stays as a `🔑` sign-in row where a sign-in mends it, never a switch target) and connected OpenCode provider, the usage in the MESSAGE (`formatLimitsUsageBlock`: the `/accounts`
   wording via the one `formatClaudeProfileUsageLines`, plus the ChatGPT subscription) — no figure fits a phone's button; the limit notice ends `Switch: /limits`. EVERY operator pick —
   a board or `/accounts` row, a model page, `/accounts use` — takes ONE path, `switchTopicByOperator` (`bot.ts`, the move decided by
   `utils/operatorSwitchPlan.ts`): a wait armed ⇒ the limit move (`switchTopicToFallbackEntry`; also a model of the SAME Claude account that the limit's exhausted

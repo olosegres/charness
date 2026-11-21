@@ -8,7 +8,7 @@
  *     accounts), the two settings' state with the link to their screen and the caption «Choose the active model:»; the
  *     buttons are one full-width `[✓ ]<program> · <name>` per account / provider with no figure on them, «skip once» while a
  *     limit wait is armed; General's own caption;
- *   • a SIGNED-OUT account stays on the board: its line `<name> — 🔑 sign-in expired` in the message and a `🔑 Claude · <name>` row whose
+ *   • an account the CLI REFUSED (signed out) stays on the board: its line `<name> — 🔑 sign-in expired` in the message and a `🔑 Claude · <name>` row whose
  *     button is the sign-in callback of `/accounts` (name baked in) — never a switch target, a topic's board and General's alike;
  *   • a tap in a topic: a Claude account goes through the `/accounts` pick (the outcome is the toast, `asked` has none),
  *     the ✓ row and an OpenCode provider open the shared model page (a provider with one model switches at once), a
@@ -61,6 +61,9 @@ const snapshot = (session: number, weekly: number, isStale = false): ClaudeUsage
   ],
   ...(isStale ? { isStale: true } : {}),
 });
+
+/** The CLI refused the account on a turn (its login expired): `loggedIn` is `false` while that stands, as the usage views build it. */
+const signedOutRefusal = { loggedIn: false, authRefusal: { at: new Date(nowMs).toISOString(), reason: 'signedOut' } } satisfies Partial<ClaudeProfileUsageView>;
 
 function buildProfile(name: string, overrides: Partial<ClaudeProfileUsageView> = {}): ClaudeProfileUsageView {
   return { name, configDir: null, loggedIn: true, email: `${name}@example.com`, subscriptionType: 'max', usage: undefined, limitedUntil: null, billing: null, creditExhaustedAt: null, ...overrides };
@@ -157,7 +160,7 @@ describe('limitsBoard: /limits over its ports', () => {
   });
 
   it('a signed-out account stays on the board: its line `<name> — 🔑 sign-in expired` in the message and a 🔑 row that carries the /accounts sign-in callback with its name — in a topic and in General', async () => {
-    detection = { ...detection, claudeProfiles: [buildProfile('perf', { usage: snapshot(5, 78) }), buildProfile('out', { loggedIn: false }), buildProfile('default')] };
+    detection = { ...detection, claudeProfiles: [buildProfile('perf', { usage: snapshot(5, 78) }), buildProfile('out', signedOutRefusal), buildProfile('default')] };
     position = claudePerf();
     try {
       const topicBoard = await openBoard();
@@ -177,11 +180,25 @@ describe('limitsBoard: /limits over its ports', () => {
   });
 
   it('a signed-out account alone is still a board: its line under the heading and its row — it never vanishes', async () => {
-    detection = { ...detection, claudeProfiles: [buildProfile('out', { loggedIn: false })], openCodeModels: [] };
+    detection = { ...detection, claudeProfiles: [buildProfile('out', signedOutRefusal)], openCodeModels: [] };
     try {
       const board = await openBoard();
       assert.equal(board.text.split('\n').slice(0, 2).join('\n'), 'Usage (% used)\nout — 🔑 sign-in expired');
       assert.deepEqual(board.labels, ['🔑 Claude · out', '🔔 Reminders: every 1 h']);
+    } finally {
+      resetDetection();
+    }
+  });
+
+  it('an account its organization turned off is told in the message with no row — a sign-in does not mend it, so there is no button to tap; one refused by the API keeps its 🔑 row', async () => {
+    const refusedFor = (reason: 'orgDisabled' | 'rejected') => ({ loggedIn: false, authRefusal: { at: new Date(nowMs).toISOString(), reason } }) satisfies Partial<ClaudeProfileUsageView>;
+    detection = { ...detection, claudeProfiles: [buildProfile('perf'), buildProfile('org', refusedFor('orgDisabled')), buildProfile('bare', refusedFor('rejected'))], openCodeModels: [] };
+    position = claudePerf();
+    try {
+      const board = await openBoard();
+      assert.deepEqual(board.text.split('\n').slice(0, 3), ['Usage (% used)', 'org — 🚫 its organization turned it off', 'bare — 🔑 refused by the API (401/403)']);
+      assert.deepEqual(board.labels, ['✓ Claude · perf', '🔑 Claude · bare', '🔔 Reminders: every 1 h'], 'the organization\'s account has no row at all');
+      assert.deepEqual(board.data, ['lim_c_0', 'acct_signin_bare', 'lim_rem']);
     } finally {
       resetDetection();
     }
@@ -506,7 +523,7 @@ describe('limitsBoard: /limits over its ports', () => {
   });
 
   it('the board\'s own row callbacks never reach a signed-out account: a lim_c_ tap that lands on its row (an old keyboard) is a stale tap — no pick, no switch', async () => {
-    detection = { ...detection, claudeProfiles: [buildProfile('perf'), buildProfile('out', { loggedIn: false })] };
+    detection = { ...detection, claudeProfiles: [buildProfile('perf'), buildProfile('out', signedOutRefusal)] };
     position = claudePerf();
     claudePicks.length = 0;
     operatorSwitches.length = 0;

@@ -8701,7 +8701,7 @@ const { registerRunnersCommands, registerRunnersCallbacks, handleRunnersAddressT
   applyGroups: (runner) => applyRunnerGroups(runnersHub, runner, runnersCacheDir),
   readRunnerHost: createRunnerHostReader(() => getInstanceSettingsPath(), (line) => console.error(line)),
   saveRunnerHost: (address) => saveInstanceSettingsChange(getInstanceSettingsPath(), { runnerHost: address }),
-  getBotLabel: () => (bot.botInfo?.username === undefined ? os.hostname() : `@${bot.botInfo.username}`),
+  getBotLabel,
   readOverview: (nowMs) => readRunnersOverview(runnersHub, runnersCacheDir, nowMs),
   // The 20 s deadline of the live probe, which the test seam may shorten (a flow that must see a BUSY machine cannot wait it out).
   probeOverview: (overview, nowMs) => probeRunnersOverview(runnersHub, overview, runnersCacheDir, nowMs, ENV.testTimings.remoteRunProbeDeadlineMs),
@@ -8917,7 +8917,7 @@ async function deliverClaudeAccountAlert(alert: ClaudeAccountAlert): Promise<voi
   const lost = alert.lost.map((loss) => `${loss.name} (${loss.usability})`).join(', ');
   console.log(`[accounts] operator alert: ${lost ? `cannot work: ${lost}; conversations go to ${alert.instead ?? 'no account — they wait'}` : ''}${alert.back.length > 0 ? `${lost ? '; ' : ''}usable again: ${alert.back.join(', ')}` : ''}`);
   const posts: Array<Promise<void>> = [];
-  if (ENV.isTelegramServed) posts.push(postClaudeAccountAlertToGeneral(alert), sendClaudeAccountSignOutDms(alert));
+  if (ENV.isTelegramServed) posts.push(postClaudeAccountAlertToTelegram(alert));
   const isActionRequired = alert.lost.length > 0;
   for (const channel of operatorAlertChannels) {
     const text = runWithLocale('en', () => renderClaudeAccountAlert(alert, getHostClaudeSignInHow));
@@ -8931,15 +8931,17 @@ async function deliverClaudeAccountAlert(alert: ClaudeAccountAlert): Promise<voi
 /**
  * @description The account alert in General, like the updater's: worded in that chat's language, the sign-in named as
  * `/accounts login <name>`; an alert that asks to act is pinned (the pin is what reaches a muted operator) in place of the previous
- * one, and once no told account is left unusable the pin goes.
+ * one, and once no told account is left unusable the pin goes. `isPrivateChatClosed`: Telegram refused the private message about a
+ * signed-out account (403) — the alert then also asks the operator to open a private chat with the bot.
  */
-async function postClaudeAccountAlertToGeneral(alert: ClaudeAccountAlert): Promise<void> {
+async function postClaudeAccountAlertToGeneral(alert: ClaudeAccountAlert, options: { isPrivateChatClosed: boolean }): Promise<void> {
   const generalKey = getOperatorGeneralKey();
   if (generalKey === null) {
     console.log('[accounts] no General topic to post the account alert in');
     return;
   }
-  const text = withThreadLocale(generalKey, () => renderClaudeAccountAlert(alert, (name) => `/accounts login ${name}`));
+  const renderOptions = options.isPrivateChatClosed ? { closedPrivateChatBot: getBotLabel() } : {};
+  const text = withThreadLocale(generalKey, () => renderClaudeAccountAlert(alert, (name) => `/accounts login ${name}`, renderOptions));
   const messageId = await replyToThread(generalKey, text);
   if (alert.lost.length === 0 || messageId === null) {
     await releaseClaudeAccountAlertPin();
@@ -8953,29 +8955,70 @@ async function postClaudeAccountAlertToGeneral(alert: ClaudeAccountAlert): Promi
 }
 
 /**
+ * @description The account alert on Telegram. The private messages go FIRST — General's notice has to know whether Telegram refused them
+ * (a person who never opened the bot's private chat), because then it also asks the operator to open one — and the accounts signed in
+ * again get their earlier private message turned into «signed in again» beside General's post.
+ */
+async function postClaudeAccountAlertToTelegram(alert: ClaudeAccountAlert): Promise<void> {
+  const isPrivateChatClosed = await sendClaudeAccountSignOutDms(alert);
+  await Promise.all([postClaudeAccountAlertToGeneral(alert, { isPrivateChatClosed }), settleClaudeAccountSignOutDms(alert)]);
+}
+
+/**
  * @description Tell the operator, in a PRIVATE message from the bot, about each account that is signed out in this alert: one short
  * line naming it and a button that starts its sign-in (`acct_signin_<name>`, the 🔑 of `/accounts`) — General is muted for the operator,
  * a private message is not. It rides the alert, so it is sent once per sign-out (not per refusal), and again only after the account was
- * signed in again and signed out again; the General notice is posted as before. Nothing is sent when the operator's private chat is not
- * a surface the bot serves (no `OWNER_USER_ID`, `CHAT_MODE=group`) or already IS where General's notice went (`CHAT_MODE=dm`); a
- * person who never opened the bot's private chat cannot be written to (Telegram's 403): that is said in the log, General alone told them.
+ * signed in again and signed out again; the General notice is posted as before. The message's id is kept (`signOutMessageIds`) so it can
+ * be turned into «signed in again» later. Nothing is sent when the operator's private chat is not a surface the bot serves (no
+ * `OWNER_USER_ID`, `CHAT_MODE=group`) or already IS where General's notice went (`CHAT_MODE=dm`); a person who never opened the bot's
+ * private chat cannot be written to (Telegram's 403): that is said in the log and returned (`true`), and General's notice says so.
  * Never retried — a second send could tell it twice.
  */
-async function sendClaudeAccountSignOutDms(alert: ClaudeAccountAlert): Promise<void> {
+async function sendClaudeAccountSignOutDms(alert: ClaudeAccountAlert): Promise<boolean> {
   const names = listClaudeAccountSignOutNames(alert);
-  if (names.length === 0) return;
+  if (names.length === 0) return false;
   const privateKey = getOperatorPrivateChatKey();
   if (privateKey === null) {
     console.log(`[accounts] no private chat with the operator to tell them ${names.join(', ')} is signed out (General has it)`);
-    return;
+    return false;
   }
+  let isPrivateChatClosed = false;
   for (const name of names) {
     const dm = withThreadLocale(privateKey, () => renderClaudeAccountSignOutDm(name));
     const outcome = await replyToThreadDetailed(privateKey, dm.text, Markup.inlineKeyboard([[Markup.button.callback(dm.buttonLabel, dm.callbackData)]]));
-    if (outcome.kind === 'sent') console.log(`[accounts] told the operator in a private message that ${name} is signed out`);
-    else if (outcome.kind === 'failed' && outcome.isForbidden === true) console.log(`[accounts] the operator's private chat is closed to the bot (they never opened it, or blocked it): ${name} is signed out, General has it`);
-    else console.warn(`[accounts] the private message to the operator about ${name} did not go out (${outcome.kind})`);
+    if (outcome.kind === 'sent') {
+      console.log(`[accounts] told the operator in a private message that ${name} is signed out`);
+      await state.setClaudeAccountAlertSignOutMessageId(name, outcome.messageId);
+      // The account may have been signed in again while the message was on its way: it is out of date already.
+      if (getClaudeProfileUsability(state.getClaudeProfileInfo(name)) === 'usable') await markClaudeAccountSignOutDmSignedIn(privateKey, name, outcome.messageId);
+    } else if (outcome.kind === 'failed' && outcome.isForbidden === true) {
+      isPrivateChatClosed = true;
+      console.log(`[accounts] the operator's private chat is closed to the bot (they never opened it, or blocked it): ${name} is signed out, General has it`);
+    } else {
+      console.warn(`[accounts] the private message to the operator about ${name} did not go out (${outcome.kind})`);
+    }
   }
+  return isPrivateChatClosed;
+}
+
+/** The earlier private sign-out messages of the accounts this alert says are signed in again become «signed in again» (`alert.backMessageIds`). */
+async function settleClaudeAccountSignOutDms(alert: ClaudeAccountAlert): Promise<void> {
+  const messageIds = Object.entries(alert.backMessageIds ?? {});
+  const privateKey = messageIds.length === 0 ? null : getOperatorPrivateChatKey();
+  if (privateKey === null) return;
+  for (const [name, messageId] of messageIds) await markClaudeAccountSignOutDmSignedIn(privateKey, name, messageId);
+}
+
+/**
+ * @description Turn the private sign-out message of `name` into «signed in again»: its text is the one of General's «signed in again» line
+ * and the edit leaves it no button (the Bot API drops the keyboard of a message edited without one), so a tap on a message that is no
+ * longer true is impossible. Best-effort, never retried: a message that stays as it was is harmless — its button only starts a sign-in.
+ */
+async function markClaudeAccountSignOutDmSignedIn(privateKey: SessionKey, name: string, messageId: number): Promise<void> {
+  await state.setClaudeAccountAlertSignOutMessageId(name, null);
+  const text = withThreadLocale(privateKey, () => t('accounts.alert.back', { name }));
+  if (await editThreadMessage(privateKey, messageId, text)) console.log(`[accounts] the private message about ${name} now says it is signed in again`);
+  else console.warn(`[accounts] the private message about ${name} could not be turned into «signed in again»`);
 }
 
 /** A resume of the conversations waiting for an account runs one at a time. */
@@ -15963,6 +16006,11 @@ function getOperatorGeneralKey(): SessionKey | null {
   if (groupId !== null) return makeTelegramKey(groupId, GENERAL_THREAD_ID);
   const ownerUserId = getOwnerUserId();
   return Number.isFinite(ownerUserId) ? makeTelegramKey(ownerUserId, DM_GENERAL_THREAD_ID) : null;
+}
+
+/** How the bot is named to the operator: its `@username`, else the host it runs on. */
+function getBotLabel(): string {
+  return bot.botInfo?.username === undefined ? os.hostname() : `@${bot.botInfo.username}`;
 }
 
 /** The operator's private chat to message them in (`resolveOperatorPrivateChatKey`); `null` when none would do. */

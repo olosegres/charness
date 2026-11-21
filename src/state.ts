@@ -2895,6 +2895,21 @@ export class StateStore {
     await this.flush();
   }
 
+  /**
+   * Keep (`messageId`) or drop (`null`) ONE account's private sign-out message in the record as it is now, never the rest — the send
+   * waited on Telegram, and a round in between may have told another account. Flushed at once; nothing when no round has run yet.
+   */
+  async setClaudeAccountAlertSignOutMessageId(name: string, messageId: number | null): Promise<void> {
+    const current = this.state.claudeAccountAlerts;
+    if (!current) return;
+    const messageIds = { ...(current.signOutMessageIds ?? {}) };
+    if (messageId === null) delete messageIds[name];
+    else messageIds[name] = messageId;
+    if (Object.keys(messageIds).length === 0) delete current.signOutMessageIds;
+    else current.signOutMessageIds = messageIds;
+    await this.flush();
+  }
+
   /** The conversations waiting for a Claude account that can work (see the persisted field), oldest first. */
   listClaudeAccountWaits(): SessionKey[] {
     return (this.state.claudeAccountWaits ?? []).map((keyStr) => tryKeyFromString(keyStr)).filter((key): key is SessionKey => key !== null);

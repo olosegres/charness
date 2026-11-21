@@ -2,12 +2,14 @@
  * `utils/limitsBoardPlan.ts` — the two pure pieces of the `/limits` switch board.
  *
  *   - the ROWS: order (the Claude accounts, then connected OpenCode providers), a label of `[✓ ]<program> · <name>`
- *     and nothing more — no figure, no reset, no ⛔, no model, even on the active row — the ✓ on the active row only, a
- *     signed-out account kept as a `🔑` row that is no switch target (it stays on the board, never vanishes), the General
- *     board (the default account carries the ✓);
+ *     and nothing more — no figure, no reset, no ⛔, no model, even on the active row — the ✓ on the active row only, an
+ *     account that cannot work kept as a `🔑` row that is no switch target (it stays on the board, never vanishes) where a
+ *     sign-in mends it — signed out, expired, refused by the API — and with NO row where it does not (its organization turned
+ *     Claude subscription use off), the General board (the default account carries the ✓);
  *   - the USAGE BLOCK of the message: the heading and a line per signed-in account / connected provider that has a figure
- *     or a limit, in exactly the wording `/accounts` prints under a row (the one renderer both screens share), a
- *     `<name> — 🔑 sign-in expired` line for a signed-out account, none (and no heading) when there is nothing to show.
+ *     or a limit, in exactly the wording `/accounts` prints under a row (the one renderer both screens share), and for an
+ *     account that cannot work a line worded by WHY (`🔑 not signed in`, `🔑 sign-in expired`, `🔑 refused by the API (401/403)`,
+ *     `🚫 its organization turned it off`), none (and no heading) when there is nothing to show.
  */
 
 /** Test case: N/A — Charness has no Jira tracker. */
@@ -18,6 +20,7 @@ import { runWithLocale } from '../i18n';
 import { buildLimitsBoardRows, formatLimitsUsageBlock, type LimitsBoardInput, type LimitsUsageBlockInput } from '../utils/limitsBoardPlan';
 import { formatClaudeProfileUsageLines } from '../utils/claudeProfileUsageLines';
 import type { ClaudeProfileUsageView, ClaudeUsageBucket, ClaudeUsageSnapshot } from '../utils/claudeUsage';
+import type { AgentAuthErrorReason } from '../types';
 import type { FallbackChainEntry, FallbackDetection } from '../utils/fallbackChain';
 
 const nowMs = Date.parse('2026-10-17T10:00:00Z');
@@ -31,6 +34,11 @@ const usageOf = (session: number, weekly: number): ClaudeUsageSnapshot => snapsh
 
 function profile(name: string, overrides: Partial<ClaudeProfileUsageView> = {}): ClaudeProfileUsageView {
   return { name, configDir: null, loggedIn: true, email: `${name}@example.com`, subscriptionType: 'max', usage: undefined, limitedUntil: null, billing: null, creditExhaustedAt: null, ...overrides };
+}
+
+/** An account the CLI refused on a turn for `reason`: `loggedIn` is `false` while that stands, as the usage views build it. */
+function refused(reason: AgentAuthErrorReason, overrides: Partial<ClaudeProfileUsageView> = {}): Partial<ClaudeProfileUsageView> {
+  return { loggedIn: false, authRefusal: { at: new Date(nowMs).toISOString(), reason }, ...overrides };
 }
 
 function detectionOf(claudeProfiles: ClaudeProfileUsageView[], openCodeModels: string[] = [], openCodeLimits: Record<string, string> = {}): FallbackDetection {
@@ -58,16 +66,34 @@ describe('buildLimitsBoardRows', () => {
     });
     assert.deepEqual(rows.map((row) => [row.kind, row.id, row.label, row.isActive]), [
       ['claude', 'default', 'Claude · default', false],
-      ['claudeSignedOut', 'out', '🔑 Claude · out', false],
+      ['claudeSignIn', 'out', '🔑 Claude · out', false],
       ['claude', 'work', 'Claude · work', false],
       ['opencode', 'openrouter', 'OpenCode · openrouter', false],
       ['opencode', 'openai', 'OpenCode · openai', false],
     ]);
   });
 
+  it('a sign-in row exists where a sign-in mends the account — never signed in, signed out, expired, refused by the API — and not where it does not (its organization turned the use off)', () => {
+    const rows = buildRows({
+      detection: detectionOf([
+        profile('fresh', { loggedIn: false }),
+        profile('signed', refused('signedOut')),
+        profile('bare', refused('rejected')),
+        profile('org', refused('orgDisabled')),
+        profile('work'),
+      ]),
+    });
+    assert.deepEqual(rows.map((row) => [row.kind, row.label]), [
+      ['claudeSignIn', '🔑 Claude · fresh'],
+      ['claudeSignIn', '🔑 Claude · signed'],
+      ['claudeSignIn', '🔑 Claude · bare'],
+      ['claude', 'Claude · work'],
+    ]);
+  });
+
   it('a signed-out account billed to API credits is a plain 🔑 row too: its tap signs in, it never spends', () => {
     const [row] = buildRows({ detection: detectionOf([profile('console', { loggedIn: false, billing: 'api' })]) });
-    assert.deepEqual([row.kind, row.label], ['claudeSignedOut', '🔑 Claude · console']);
+    assert.deepEqual([row.kind, row.label], ['claudeSignIn', '🔑 Claude · console']);
   });
 
   it('an account that was never probed counts as signed in', () => {
@@ -164,8 +190,8 @@ describe('formatLimitsUsageBlock', () => {
     assert.equal(buildBlock(), '');
   });
 
-  it('a signed-out account has the line `<name> — 🔑 sign-in expired` in its place among the accounts, whatever it was last polled at — the board never silently drops it', () => {
-    const block = buildBlock({ detection: detectionOf([profile('default', { usage: usageOf(14, 3) }), profile('out', { loggedIn: false, usage: usageOf(1, 2), limitedUntil: inHours(2) }), profile('work', { usage: usageOf(5, 9) })]) });
+  it('an account the CLI refused as signed out has the line `<name> — 🔑 sign-in expired` in its place among the accounts, whatever it was last polled at — the board never silently drops it', () => {
+    const block = buildBlock({ detection: detectionOf([profile('default', { usage: usageOf(14, 3) }), profile('out', refused('signedOut', { usage: usageOf(1, 2), limitedUntil: inHours(2) })), profile('work', { usage: usageOf(5, 9) })]) });
     assert.deepEqual(block.split('\n'), [
       'Usage (% used)',
       'default — ⏱ 5h 14% 🔄 in 3h · week 3% 🔄 in 6d',
@@ -174,8 +200,26 @@ describe('formatLimitsUsageBlock', () => {
     ]);
   });
 
-  it('a lone signed-out account is the whole block: the heading and its line', () => {
-    assert.deepEqual(buildBlock({ detection: detectionOf([profile('out', { loggedIn: false })]) }).split('\n'), ['Usage (% used)', 'out — 🔑 sign-in expired']);
+  it('every reason an account cannot work has its own words: not signed in (the /accounts words), sign-in expired, refused by the API, its organization turned it off — each with the mark of what the operator can do', () => {
+    const block = buildBlock({
+      detection: detectionOf([
+        profile('fresh', { loggedIn: false }),
+        profile('signed', refused('signedOut')),
+        profile('bare', refused('rejected')),
+        profile('org', refused('orgDisabled')),
+      ]),
+    });
+    assert.deepEqual(block.split('\n'), [
+      'Usage (% used)',
+      'fresh — 🔑 not signed in',
+      'signed — 🔑 sign-in expired',
+      'bare — 🔑 refused by the API (401/403)',
+      'org — 🚫 its organization turned it off',
+    ]);
+  });
+
+  it('a lone account that cannot work is the whole block: the heading and its line', () => {
+    assert.deepEqual(buildBlock({ detection: detectionOf([profile('out', refused('signedOut'))]) }).split('\n'), ['Usage (% used)', 'out — 🔑 sign-in expired']);
   });
 
   it('an account billed to API credits shows its spend and, with the operator\'s Console figure, the bonus credit estimate — the very lines `/accounts` prints', () => {
@@ -225,6 +269,16 @@ describe('formatLimitsUsageBlock', () => {
       openCodeProviderUsage: { openai: { authKind: 'subscription', usage: usageOf(12, 40) }, google: { authKind: 'subscription', usage: usageOf(3, 4) } },
     });
     assert.deepEqual(block.split('\n').slice(1).map((line) => line.split(' — ')[0]), ['google', 'openai (ChatGPT)']);
+  });
+
+  it('the words of an account that cannot work come from the active locale too', () => {
+    const block = runWithLocale('ru', () => buildBlock({ detection: detectionOf([profile('fresh', { loggedIn: false }), profile('signed', refused('signedOut')), profile('bare', refused('rejected')), profile('org', refused('orgDisabled'))]) }));
+    assert.deepEqual(block.split('\n').slice(1), [
+      'fresh — 🔑 не выполнен вход',
+      'signed — 🔑 вход истёк',
+      'bare — 🔑 отклонён API (401/403)',
+      'org — 🚫 организация его отключила',
+    ]);
   });
 
   it('the heading and the words come from the active locale', () => {

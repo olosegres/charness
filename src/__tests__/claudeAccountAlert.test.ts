@@ -12,7 +12,10 @@
  *   • a SIGNED-OUT account (`signedOut`, `notSignedIn`) is also told in a private message with a sign-in button — the list rides the
  *     alert, so once per sign-out episode: told again only after it was signed in again and signed out again; an organization's switch
  *     and a bare 401 / 403 stay in General (a sign-in does not mend them); the message names the account in every locale. The send
- *     itself (the owner's private chat, Telegram's 403) is `signOutDmE2e.test.ts`.
+ *     itself (the owner's private chat, Telegram's 403) is `signOutDmE2e.test.ts`;
+ *   • the id of each private message is KEPT in the record while its account stays told, handed to the alert of the round that finds the
+ *     account usable again (to be turned into «signed in again»), and dropped with it; when the private chat refused the message
+ *     (403) General's alert carries one more line asking the operator to open it — for a signed-out account only, in every locale.
  *
  * Test case: N/A — Charness has no Jira tracker.
  */
@@ -222,6 +225,84 @@ describe('the private sign-out message: which accounts, once per episode, and it
   }
 });
 
+describe('the id of the private sign-out message in the record', () => {
+  const told = (messageIds: Record<string, number>, alerted: string[] = Object.keys(messageIds)): ClaudeAccountAlertState => ({
+    known: { personal: 'notSignedIn', second: 'usable' },
+    alerted,
+    signOutMessageIds: messageIds,
+  });
+
+  it('kept while the account stays told, whatever it turns into', () => {
+    const still = plan(told({ personal: 41 }), [['personal', 'notSignedIn'], ['second', 'usable']]);
+    assert.equal(still.alert, null);
+    assert.deepEqual(still.next.signOutMessageIds, { personal: 41 });
+    const refusedNow = plan(told({ personal: 41 }), [['personal', 'signedOut'], ['second', 'usable']]);
+    assert.deepEqual(refusedNow.next.signOutMessageIds, { personal: 41 }, 'still the same episode: the same message');
+  });
+
+  it('handed to the alert of the round that finds the account usable again, and dropped from the record', () => {
+    const back = plan(told({ personal: 41 }), [['personal', 'usable'], ['second', 'usable']]);
+    assert.deepEqual(back.alert, { lost: [], back: ['personal'], instead: 'second', backMessageIds: { personal: 41 } });
+    assert.equal(back.next.signOutMessageIds, undefined, 'nothing to keep: the message is turned into «signed in again» once');
+  });
+
+  it('only the account that is back gives its message up; another told one keeps its own', () => {
+    const previous: ClaudeAccountAlertState = { known: { personal: 'signedOut', work: 'notSignedIn', second: 'usable' }, alerted: ['personal', 'work'], signOutMessageIds: { personal: 41, work: 52 } };
+    const round = plan(previous, [['personal', 'usable'], ['work', 'notSignedIn'], ['second', 'usable']]);
+    assert.deepEqual(round.alert?.backMessageIds, { personal: 41 });
+    assert.deepEqual(round.next.signOutMessageIds, { work: 52 });
+  });
+
+  it('an account with no private message (the chat was closed, or it was a General-only refusal) adds no id; an account gone from the profiles drops its id', () => {
+    const noMessage = plan({ known: { personal: 'signedOut', second: 'usable' }, alerted: ['personal'] }, [['personal', 'usable'], ['second', 'usable']]);
+    assert.deepEqual(noMessage.alert, { lost: [], back: ['personal'], instead: 'second' }, 'no backMessageIds key at all');
+    const gone = plan(told({ personal: 41 }), [['second', 'usable']]);
+    assert.equal(gone.next.signOutMessageIds, undefined);
+    assert.equal(gone.alert, null, 'an account that was removed is not «signed in again»');
+  });
+
+  it('an account usable again only because a status check ended its refusal leaves quietly: no alert, and its message is dropped with it', () => {
+    const quiet = plan(told({ personal: 41 }), [['personal', 'usable'], ['second', 'usable']], { backByStatusCheck: ['personal'] });
+    assert.equal(quiet.alert, null);
+    assert.equal(quiet.next.signOutMessageIds, undefined);
+  });
+
+  it('a new episode keeps a new message id: told again after a sign-in', () => {
+    const back = plan(told({ personal: 41 }), [['personal', 'usable'], ['second', 'usable']]);
+    const again = plan(back.next, [['personal', 'signedOut'], ['second', 'usable']]);
+    assert.equal(again.alert?.lost[0]?.name, 'personal');
+    assert.equal(again.next.signOutMessageIds, undefined, 'the message of the new episode is not sent yet');
+  });
+});
+
+describe('renderClaudeAccountAlert: the line that asks the operator to open a private chat', () => {
+  const signedOut: ClaudeAccountAlert = { lost: [{ name: 'personal', usability: 'signedOut', detail: null }], back: [], instead: 'second' };
+  const nothingToSignIn: ClaudeAccountAlert = { lost: [{ name: 'work', usability: 'orgDisabled', detail: null }], back: [], instead: 'second' };
+  const render = (alert: ClaudeAccountAlert, options?: { closedPrivateChatBot?: string }): string => renderClaudeAccountAlert(alert, (name) => `/accounts login ${name}`, options);
+
+  it('one more line after where the conversations went, naming the bot — only when the private message was refused', () => {
+    const base = render(signedOut);
+    const asked = render(signedOut, { closedPrivateChatBot: '@example_bot' });
+    assert.equal(asked, `${base}\n\nTo be told about this in a private message next time, open a private chat with @example_bot and press Start.`);
+    assert.ok(!base.includes('private chat'), 'without a refusal the alert is as before');
+  });
+
+  it('only for a signed-out account: a refusal the private message was never for (the organization\'s switch) and a «signed in again» line do not ask', () => {
+    assert.equal(render(nothingToSignIn, { closedPrivateChatBot: '@example_bot' }), render(nothingToSignIn));
+    const back: ClaudeAccountAlert = { lost: [], back: ['personal'], instead: 'second' };
+    assert.equal(render(back, { closedPrivateChatBot: '@example_bot' }), render(back));
+  });
+
+  for (const locale of localeCodes) {
+    it(`${locale}: the line names the bot and leaves no placeholder`, () => {
+      const text = runWithLocale(locale as Locale, () => render(signedOut, { closedPrivateChatBot: '@example_bot' }));
+      assert.ok(text.includes('@example_bot'), text);
+      assert.ok(text.includes('Start'), 'the button of the bot\'s start screen, as Telegram names it');
+      assert.ok(!/\{\w+\}/.test(text), `no placeholder left in ${text}`);
+    });
+  }
+});
+
 describe('getClaudeAccountAlertDetail', () => {
   it('one line, cut to its limit', () => {
     assert.equal(getClaudeAccountAlertDetail('  Not logged in\n · Please run /login  '), 'Not logged in · Please run /login');
@@ -261,6 +342,25 @@ describe('the record of what was told (state.json)', () => {
     assert.deepEqual(store.getClaudeAccountAlertState(), { known: { default: 'signedOut', work: 'orgDisabled' }, alerted: ['default', 'work'] });
     const reread = await createStore();
     assert.deepEqual(reread.getClaudeAccountAlertState()?.alerted, ['default', 'work'], 'on disk too');
+  });
+
+  it('one account\'s private message id is written into the record as it is now and dropped alone — never the rest, and nothing before a first round', async () => {
+    const store = await createStore();
+    await store.setClaudeAccountAlertSignOutMessageId('work', 7);
+    assert.equal(store.getClaudeAccountAlertState(), undefined, 'no record yet: nothing is invented');
+    await store.setClaudeAccountAlertState({ known: { personal: 'signedOut', work: 'signedOut' }, alerted: ['personal', 'work'], pinnedMessageId: 41 });
+    await store.setClaudeAccountAlertSignOutMessageId('personal', 12);
+    // A round in between told another account while the message of «work» was on its way.
+    await store.setClaudeAccountAlertState({ known: { personal: 'signedOut', work: 'signedOut', third: 'orgDisabled' }, alerted: ['personal', 'work', 'third'], pinnedMessageId: 41, signOutMessageIds: { personal: 12 } });
+    await store.setClaudeAccountAlertSignOutMessageId('work', 15);
+    assert.deepEqual(store.getClaudeAccountAlertState()?.signOutMessageIds, { personal: 12, work: 15 });
+    assert.deepEqual(store.getClaudeAccountAlertState()?.alerted, ['personal', 'work', 'third'], 'what the round wrote stays');
+    await store.setClaudeAccountAlertSignOutMessageId('personal', null);
+    assert.deepEqual(store.getClaudeAccountAlertState()?.signOutMessageIds, { work: 15 });
+    await store.setClaudeAccountAlertSignOutMessageId('work', null);
+    assert.equal(store.getClaudeAccountAlertState()?.signOutMessageIds, undefined, 'the last id takes the field with it');
+    const reread = await createStore();
+    assert.equal(reread.getClaudeAccountAlertState()?.pinnedMessageId, 41, 'on disk too');
   });
 
   it('a status check\'s end of a refusal is kept with its login; a new login clears both', async () => {
