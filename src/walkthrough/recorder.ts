@@ -58,31 +58,36 @@ const nodeTest: typeof import('node:test') = require('node:test');
 const originalIt = nodeTest.it;
 let stepCount = 0;
 
-Object.defineProperty(nodeTest, 'it', {
-  configurable: true,
-  writable: true,
-  value: function recordStep(this: unknown, name: string, ...rest: unknown[]) {
-    stepCount += 1;
-    const index = stepCount;
-    const wrappedArguments = [...rest];
-    const bodyIndex = rest.findIndex((argument) => typeof argument === 'function');
-    const body = bodyIndex < 0 ? undefined : rest[bodyIndex];
-    if (typeof body === 'function') {
-      wrappedArguments[bodyIndex] = async function recordedBody(this: unknown, ...bodyArguments: unknown[]) {
-        addEvent({ kind: 'step', atMs: getElapsedMs(), index, name, phase: 'start' });
-        try {
-          const result = await Reflect.apply(body, this, bodyArguments);
-          addEvent({ kind: 'step', atMs: getElapsedMs(), index, name, phase: 'pass' });
-          return result;
-        } catch (error) {
-          addEvent({ kind: 'step', atMs: getElapsedMs(), index, name, phase: 'fail', error: error instanceof Error ? error.message.slice(0, 300) : 'the step failed' });
-          throw error;
-        }
-      };
+/** A test body that takes `(t, done)` is callback-style: the runner waits for `done`, which a wrapper cannot hand on. */
+const callbackStyleBodyArity = 2;
+
+function recordStep(this: unknown, name: string, ...rest: unknown[]) {
+  stepCount += 1;
+  const index = stepCount;
+  const wrappedArguments = [...rest];
+  const bodyIndex = rest.findIndex((argument) => typeof argument === 'function');
+  const body = bodyIndex < 0 ? undefined : rest[bodyIndex];
+  if (typeof body === 'function') {
+    if (body.length >= callbackStyleBodyArity) {
+      throw new Error(`the recorder cannot wrap the callback-style test "${name}" (its body takes \`done\`): rewrite it as an async body, or record another flow`);
     }
-    return Reflect.apply(originalIt, this, [name, ...wrappedArguments]);
-  },
-});
+    wrappedArguments[bodyIndex] = async function recordedBody(this: unknown, ...bodyArguments: unknown[]) {
+      addEvent({ kind: 'step', atMs: getElapsedMs(), index, name, phase: 'start' });
+      try {
+        const result = await Reflect.apply(body, this, bodyArguments);
+        addEvent({ kind: 'step', atMs: getElapsedMs(), index, name, phase: 'pass' });
+        return result;
+      } catch (error) {
+        addEvent({ kind: 'step', atMs: getElapsedMs(), index, name, phase: 'fail', error: error instanceof Error ? error.message.slice(0, 300) : 'the step failed' });
+        throw error;
+      }
+    };
+  }
+  return Reflect.apply(originalIt, this, [name, ...wrappedArguments]);
+}
+
+// `it.skip` / `it.only` / `it.todo` stay what they were (they are not steps of the run, so they are not recorded).
+Object.defineProperty(nodeTest, 'it', { configurable: true, writable: true, value: Object.assign(recordStep, originalIt) });
 
 // ── the agent's logs: the flow's instance directory, found by its prefix ──
 

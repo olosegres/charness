@@ -4,6 +4,7 @@
  * string out; the browser that shoots it is `renderWalkthrough.ts`'s.
  */
 import { generalTopicThreadId } from '../__tests__/telegramE2e/fakeTelegram';
+import { escapeHtmlText } from '../connectors/telegram/renderAgentHtml';
 import type { StepState, TimedFrame } from './buildWalkthroughFrames';
 import { describeAgentCard } from './describeAgentCard';
 import type { RecordedMessage, WalkthroughConfig, WalkthroughShot } from './walkthroughTypes';
@@ -31,11 +32,6 @@ export interface TopicColumn {
   name: string;
 }
 
-/** @description `text` safe to put in HTML. */
-export function escapeHtml(text: string): string {
-  return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-}
-
 /** The tags of Telegram's HTML subset the bot sends: the fake Bot API keeps them as typed, Telegram renders them. */
 const telegramMarkupTagPattern = /<\/?(?:pre|code|blockquote|b|strong|i|em|u|s|a|tg-spoiler)(?:\s[^>]*)?>/g;
 
@@ -53,10 +49,10 @@ export function listTopicColumns(messages: readonly RecordedMessage[], config: W
 
 function renderBubble(message: RecordedMessage, tappedData: string | null, isLarge: boolean): string {
   const rows = message.keyboard
-    .map((row) => `<div class="row">${row.map((button) => `<div class="button${tappedData !== null && button.data === tappedData ? ' tapped' : ''}">${escapeHtml(button.text)}</div>`).join('')}</div>`)
+    .map((row) => `<div class="row">${row.map((button) => `<div class="button${tappedData !== null && button.data === tappedData ? ' tapped' : ''}">${escapeHtmlText(button.text)}</div>`).join('')}</div>`)
     .join('');
   const keyboard = rows === '' ? '' : `<div class="keyboard">${rows}</div>`;
-  const text = escapeHtml(message.isBot ? getBotMessageDisplayText(message.text) : message.text);
+  const text = escapeHtmlText(message.isBot ? getBotMessageDisplayText(message.text) : message.text);
   return `<div class="message ${message.isBot ? 'bot' : 'operator'}${isLarge ? ' large' : ''}"><div class="bubble">${text}</div>${keyboard}</div>`;
 }
 
@@ -79,11 +75,11 @@ function renderAgentCards(frame: TimedFrame['frame'], config: WalkthroughConfig)
   return kept
     .map((event) => {
       const card = describeAgentCard(event, config);
-      const words = card.words === '' ? '' : `<div class="words">${escapeHtml(card.words)}</div>`;
+      const words = card.words === '' ? '' : `<div class="words">${escapeHtmlText(card.words)}</div>`;
       const note = card.note !== null
-        ? `<div class="note">${escapeHtml(card.note)}</div>`
-        : config.highlightMarker === undefined ? '' : `<div class="none">no ${escapeHtml(config.highlightName ?? defaultHighlightName)}</div>`;
-      return `<div class="card"><span class="chip">${escapeHtml(card.label)}</span><span class="kind">${escapeHtml(card.kindText)}</span>${words}${note}</div>`;
+        ? `<div class="note">${escapeHtmlText(card.note)}</div>`
+        : config.highlightMarker === undefined ? '' : `<div class="none">no ${escapeHtmlText(config.highlightName ?? defaultHighlightName)}</div>`;
+      return `<div class="card"><span class="chip">${escapeHtmlText(card.label)}</span><span class="kind">${escapeHtmlText(card.kindText)}</span>${words}${note}</div>`;
     })
     .join('');
 }
@@ -107,7 +103,7 @@ export function buildFramePageHtml(input: { timedFrame: TimedFrame; columns: rea
     .map((column) => {
       const messages = frame.messages.filter((message) => message.thread === column.thread && !(column.thread === generalTopicThreadId && message.text.startsWith(setupWarningPrefix))).slice(-visibleMessagesPerColumn);
       const bubbles = messages.map((message) => renderBubble(message, frame.tapped?.messageId === message.id ? frame.tapped.data : null, false)).join('');
-      return `<div class="column" style="width:${columnWidth}px"><div class="column-head">${escapeHtml(column.name)}</div><div class="chat">${bubbles}</div></div>`;
+      return `<div class="column" style="width:${columnWidth}px"><div class="column-head">${escapeHtmlText(column.name)}</div><div class="chat">${bubbles}</div></div>`;
     })
     .join('');
   const passed = frame.steps.filter((step) => step.status === 'pass').length;
@@ -131,9 +127,9 @@ export function buildFramePageHtml(input: { timedFrame: TimedFrame; columns: rea
 .dot{width:12px;height:12px;border-radius:6px;background:#2a3b4d}.dot.pass{background:#4caf50}.dot.run{background:#ffb74d;box-shadow:0 0 0 3px #ffb74d44}.dot.fail{background:#e53935}
 .wait{margin-left:14px;color:#ffb74d;font-size:12px}
 </style></head><body style="width:${videoWidthPx}px;height:${videoHeightPx}px;position:relative;overflow:hidden">
-<div class="top"><div>${escapeHtml(title)}</div><small>${current === undefined ? '' : `step ${current.index}`}</small></div>
+<div class="top"><div>${escapeHtmlText(title)}</div><small>${current === undefined ? '' : `step ${current.index}`}</small></div>
 <div class="main">${chatColumns}<div class="agent"><div class="column-head">What the agent read — never shown in the topic</div><div class="cards">${renderAgentCards(frame, config)}</div></div></div>
-<div class="foot"><div class="step">${current === undefined ? '' : escapeHtml(`${current.index}. ${current.name}`)}</div><div class="dots">${renderStepDots(frame.steps)}<span style="color:#8fa3b8;font-size:11px;margin-left:8px">${passed}/${frame.steps.length} steps passed</span>${wait}</div></div>
+<div class="foot"><div class="step">${current === undefined ? '' : escapeHtmlText(`${current.index}. ${current.name}`)}</div><div class="dots">${renderStepDots(frame.steps)}<span style="color:#8fa3b8;font-size:11px;margin-left:8px">${passed}/${frame.steps.length} steps passed</span>${wait}</div></div>
 </body></html>`;
 }
 
@@ -147,6 +143,6 @@ body{width:${phoneWidthPx}px;height:${phoneHeightPx}px;display:flex;flex-directi
 .head small{font-weight:400;color:#8fa3b8;margin-left:10px;font-size:13px}
 .chat{flex:1;display:flex;flex-direction:column;justify-content:flex-end;padding:10px 12px;background:linear-gradient(#0e1621,#0b121a)}
 .caption{padding:8px 14px;font-size:13px;color:#8fa3b8;background:#17212b;border-top:1px solid #0a1017}
-</style></head><body><div class="head">${escapeHtml(shot.topicName)}<small>${escapeHtml(shot.subtitle ?? '')}</small></div>
-<div class="chat">${bubbles}</div><div class="caption">${escapeHtml(shot.caption)}</div></body></html>`;
+</style></head><body><div class="head">${escapeHtmlText(shot.topicName)}<small>${escapeHtmlText(shot.subtitle ?? '')}</small></div>
+<div class="chat">${bubbles}</div><div class="caption">${escapeHtmlText(shot.caption)}</div></body></html>`;
 }
