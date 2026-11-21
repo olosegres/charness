@@ -17,7 +17,7 @@ import { appendLimitNote } from '../limitNotes/noteText';
 import { keyFromString, tryKeyFromString, type PlatformId, type SessionKey } from '../sessionKey';
 import { checkIsBotSkillsEnabled } from '../utils/botSkills';
 import { claudeProfileNameMaxLength } from '../utils/claudeProfiles';
-import { describeClaudeChainExclusions, describeClaudeLaunchOutcome, type ClaudeProfilesReport } from '../utils/claudeUsage';
+import { describeClaudeChainExclusions, describeClaudeLaunchOutcome, describeClaudeProfileLaunch, describeClaudeResumeHandOver, type ClaudeProfilesReport } from '../utils/claudeUsage';
 import type { SendFilesToThread } from '../utils/fileSendService';
 import { telegramPhotoMaxSidePx } from '../utils/fileSendPlan';
 import { formatIsoLocalOffset } from '../utils/isoTimestamp';
@@ -216,7 +216,10 @@ function buildTelegramOrchestrationInstruction(isBotSkillsEnabled: boolean): str
     : `${orchestrationInstructionHead} schedule_create to watch EACH worker — ${workerWatchRecipeText}`;
 }
 const claudeProfilesInstruction =
-  '• Before you start or resume a child `claude` process (worker, reviewer, planner) → claude_profiles with the model you will launch, and start the child under the account it names (`CLAUDE_CONFIG_DIR=<configDir>`): without it the child inherits YOUR account and drains the same limits. The tool description has the rest (resuming, `recommended: null`).';
+  '• Before you start or resume a child `claude` (worker, reviewer, planner) → claude_profiles with its model; start it under the account it names (`CLAUDE_CONFIG_DIR=<configDir>`), else it drains YOUR account. An `[Accounts …]` note means the limits moved: ask again before your next launch. More in the tool description (resuming, `recommended: null`).';
+
+/** The longest `lastRunEndedAt` the tool takes: an ISO 8601 instant with fractional seconds and an offset is 35 characters. */
+const claudeResumeInstantMaxLength = 40;
 
 /** What the `claude_profiles` tool asks the bot: the model, and for a resumed session the account it last ran on. */
 export interface ClaudeProfilesQuery {
@@ -225,6 +228,8 @@ export interface ClaudeProfilesQuery {
   currentProfile: string | null;
   /** The resumed session broke off on a usage limit of `currentProfile`. */
   isStoppedByLimit: boolean;
+  /** When the resumed worker's last run ended (epoch ms); `null` = not given, which counts as cold. */
+  lastRunEndedAtMs: number | null;
 }
 
 /**
@@ -1950,13 +1955,14 @@ function registerBotTools(
 
 /** The first line of the `claude_profiles` answer: the pick with how to launch it and why, or that nothing is usable and when something is. */
 function buildClaudeProfilesVerdict(report: ClaudeProfilesReport, currentProfile: string | null): string {
+  // A worker that must not be resumed on another account: the hand-over leads, the pick is in the JSON.
+  const handOver = describeClaudeResumeHandOver(report, currentProfile);
+  if (handOver !== null) return handOver;
   const outcome = describeClaudeLaunchOutcome(report, currentProfile);
   const exclusions = describeClaudeChainExclusions(report);
   const notOffered = exclusions === null ? '' : ` [${exclusions}]`;
   if (report.recommended === null) return `${outcome}${notOffered}`;
-  const dir = report.profiles.find((profile) => profile.name === report.recommended)?.configDir ?? null;
-  const launch = dir === null ? 'default profile, set no CLAUDE_CONFIG_DIR' : `CLAUDE_CONFIG_DIR=${dir}`;
-  return `recommended: ${report.recommended} → ${launch} (${outcome})${notOffered}`;
+  return `recommended: ${report.recommended} → ${describeClaudeProfileLaunch(report, report.recommended)} (${outcome})${notOffered}`;
 }
 
 /**
@@ -1977,12 +1983,17 @@ function registerClaudeProfilesTool(server: ToolRegistrar, deps: SchedulerMcpDep
         'session you resume). A NEW agent (omit `currentProfile`) goes to an `api`-billed account of the list first while its ' +
         'credit lasts (a Claude Console balance, no windows), then to the usable subscription whose weekly limit resets ' +
         'SOONEST — what burns soonest is spent first; an account whose five-hour window is at 90 % or more is skipped until ' +
-        'it resets. Take the account `recommended` names; no need to ask the operator. A session you RESUME (pass ' +
-        '`currentProfile`, the profile it last ran on) stays on it unless that account is signed out, limited, out of the ' +
-        'list or at 100 % on a window the model drains; when it broke off on a usage limit — or on "Credit balance is too ' +
-        'low" — pass `isStoppedByLimit: true` and resume the SAME session at once on the answer (for an `api` account the bot ' +
-        'first checks the balance with one tiny request: it marks the credit used up only if the API refuses for it, else it ' +
-        'keeps the account off agents for an hour). The session window and the shared weekly window bound every model, Fable ' +
+        'it resets. Take the account `recommended` names; no need to ask the operator. Calling it IS looking at the limits: ' +
+        'the bot\'s `[Accounts …]` reminders then wait another interval. A worker you RESUME: pass `currentProfile` (the profile it last ran on) ' +
+        'and `lastRunEndedAt` (when its last run ended — the last write of its log; omitted = cold). The answer then carries ' +
+        '`resume`: `resume` → continue the session under `resume.profile`; `handOver` → do NOT resume that worker on another ' +
+        'account: give its work to a NEW worker on `resume.profile` (a reviewer already running there may apply its own findings, ' +
+        'then a fresh reviewer checks). It hands over when the worker\'s account is signed out, limited, out of the list or at 100 % ' +
+        'on a window the model drains, or when its last run ended 55 min ago or more (the prompt cache is cold) and another ' +
+        'account is now the pick; otherwise it resumes where it ran. A worker cut off MID-RUN by a usage limit — or by "Credit ' +
+        'balance is too low" — is the exception: pass `isStoppedByLimit: true` and resume the SAME session at once on the answer ' +
+        '(for an `api` account the bot first checks the balance with one tiny request: it marks the credit used up only if the API ' +
+        'refuses for it, else it keeps the account off agents for an hour). The session window and the shared weekly window bound every model, Fable ' +
         'included; Fable also drains its own weekly window; signed-out and limited accounts are skipped. An `api` entry ' +
         'also carries the bot\'s own estimate of its API credit — `spentUsd` through the bot in the current credit period, ' +
         '`remainingEstimateUsd` and `expiresOn` when the operator gave a Console figure (null otherwise; `expiresOn` stays null ' +
@@ -2005,6 +2016,11 @@ function registerClaudeProfilesTool(server: ToolRegistrar, deps: SchedulerMcpDep
           .max(claudeProfileNameMaxLength)
           .optional()
           .describe('The profile the session you RESUME last ran on (the `name` you recorded at its launch); omit for a new agent.'),
+        lastRunEndedAt: z
+          .string()
+          .max(claudeResumeInstantMaxLength)
+          .optional()
+          .describe('When the resumed worker\'s last run ended, an ISO 8601 instant (the last write of its log, e.g. 2026-11-21T12:30:00Z). Omit = unknown, so cold. Needs `currentProfile`.'),
         isStoppedByLimit: z
           .boolean()
           .optional()
@@ -2016,7 +2032,13 @@ function registerClaudeProfilesTool(server: ToolRegistrar, deps: SchedulerMcpDep
       if (args.isStoppedByLimit === true && currentProfile === null) {
         return errorResult('isStoppedByLimit needs currentProfile — the profile the session that hit the limit last ran on.');
       }
-      const report = await listClaudeProfiles({ model: args.model?.trim() || null, currentProfile, isStoppedByLimit: args.isStoppedByLimit === true });
+      let lastRunEndedAtMs: number | null = null;
+      if (args.lastRunEndedAt !== undefined) {
+        if (currentProfile === null) return errorResult('lastRunEndedAt needs currentProfile — the profile the worker you resume last ran on.');
+        lastRunEndedAtMs = Date.parse(args.lastRunEndedAt);
+        if (Number.isNaN(lastRunEndedAtMs)) return errorResult('lastRunEndedAt must be an ISO 8601 instant, e.g. 2026-11-21T12:30:00Z.');
+      }
+      const report = await listClaudeProfiles({ model: args.model?.trim() || null, currentProfile, isStoppedByLimit: args.isStoppedByLimit === true, lastRunEndedAtMs });
       // The agent looked at the accounts, and launching workers is what it does: the reminder clock restarts, the conversation
       // orchestrates (`limitNotes/`). Resolved like the send tools; a `dir` scope with several bound topics names none: nothing is recorded.
       const resolved = resolveTargetThreadKey(scope, undefined, deps.getThreadsForDirectory);

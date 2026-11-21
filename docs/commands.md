@@ -360,11 +360,19 @@ so one account's usage limit does not stop every topic.
   the next reset is taken. Resets less than a minute apart count as one moment and
   the lower five-hour percent decides; an unknown reset ranks after every known
   one. A **resumed** worker
-  passes `currentProfile` (the profile it last ran on) and stays on it unless the
-  account is signed out (or its sign-in was refused by the CLI on a turn), marked limited, out of credits, left out of the list or at
-  100 % on a window the model drains; the 90 % ceiling does not apply to it. One that
-  broke off on a usage limit — or on «Credit balance is too low» — passes
-  `isStoppedByLimit` too: the bot re-reads that account's usage (an account billed
+  passes `currentProfile` (the profile it last ran on) and `lastRunEndedAt` (the last write of its
+  log; left out it counts as cold). The answer carries `resume`: the old worker is **never
+  dragged onto another account** — `handOver` says to give its work to a **new** worker on the
+  account named (a reviewer already running there may apply its own findings, then a fresh reviewer
+  checks the result), `resume` to continue the session under the account named. It hands over when the
+  worker's account is signed out (or its sign-in was refused by the CLI on a turn), marked limited, out of
+  credits, left out of the list or at 100 % on a window the model drains — and when its last run ended
+  55 minutes ago or more (the prompt cache is cold, a resume re-reads everything anyway) and the rule
+  above now names another account; otherwise it resumes where it ran and keeps its account (the 90 % ceiling does not apply
+  to it). The first line of the answer then reads `hand over: …`. A topic's own conversation
+  keeps the warm rule unchanged. One that
+  broke off **mid-run** on a usage limit — or on «Credit balance is too low» — is the exception: a new
+  worker would redo the unfinished run, so it passes `isStoppedByLimit` too and the bot re-reads that account's usage (an account billed
   to API credits has none: the bot checks it with one tiny request on the account's own
   key — the credit is marked used up only if the API really refuses for the balance, and
   the daily recheck lifts that mark when the credit is back; if the API answers instead,
@@ -389,8 +397,10 @@ so one account's usage limit does not stop every topic.
   `/accounts` and the switch of a topic that hit a usage limit wait for the same
   refresh two seconds at most, like `/limits`. The same answer from a shell, for a worker without
   MCP: `charness claude-profiles [--best] [--model <name>] [--current <name>
-  [--stopped-by-limit]] [--json]` —
-  `--best` prints just the directory (an empty line for the default; exit 1 and
+  [--stopped-by-limit] [--last-run-ended-at <ISO>]] [--json]` — a hand-over prints
+  a `hand over: …` line (on stderr with `--best`, `resume` in `--json`);
+  `--best` prints just the directory (an empty line for the default; for a hand-over the
+  new worker's account; exit 1 and
   `next: …` on stderr when nothing is usable), so
   `CLAUDE_CONFIG_DIR="$(charness claude-profiles --best --model fable)"`
   works as is; it reads the bot's cache off `DATA_DIR/state.json` and cannot

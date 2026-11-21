@@ -266,6 +266,13 @@ describe('the order of a withdrawal and the record it may write', () => {
   });
 });
 
+describe('the `claude_profiles` port hands the resume advice its inputs', () => {
+  it('the report is built with the query\'s account, limit stop AND last-run time — the three the hand-over verdict reads — over the same `/limits` list as the notes\' report', () => {
+    const body = getFunctionBody('listClaudeProfilesForAgent');
+    assert.match(body, /currentProfile: query\.currentProfile,\n\s*isStoppedByLimit: query\.isStoppedByLimit,\n\s*lastRunEndedAtMs: query\.lastRunEndedAtMs,\n\s*chainScope: getClaudeLaunchChainScope\(state\.getFallbackChain\(\)\),/);
+  });
+});
+
 describe('the mid-turn engine and the inbox cannot reach what a note must never touch', () => {
   const importsOf = (file: string): string[] => [...fs.readFileSync(path.join(__dirname, '..', file), 'utf8').matchAll(/^import [^;]*? from '([^']+)';$/gm)].map((match) => match[1]).sort();
 

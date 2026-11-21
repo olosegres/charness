@@ -314,7 +314,7 @@ describe('the bot-MCP tool digest (lifecycle plan L4)', () => {
       listClaudeProfiles: async ({ model }) => ({ model, relevantBuckets: [], recommended: null, pickReason: 'none', nextAvailable: null, launchOrder: [], profiles: [] }),
     };
     const takenInputs = getBotMcpToolDefinitions(deps, 'telegram').find((definition) => definition.name === 'claude_profiles')?.inputKeys ?? [];
-    assert.deepEqual(takenInputs, ['currentProfile', 'isStoppedByLimit', 'model']);
+    assert.deepEqual(takenInputs, ['currentProfile', 'isStoppedByLimit', 'lastRunEndedAt', 'model']);
     const skillsDir = path.join(__dirname, '..', '..', 'agent-plugin', 'skills');
     const resumeInputs = takenInputs.filter((input) => input !== 'model');
     const namedInputs = new Set<string>();
@@ -323,17 +323,18 @@ describe('the bot-MCP tool digest (lifecycle plan L4)', () => {
       for (const input of resumeInputs) if (text.includes(input)) namedInputs.add(input);
       assert.doesNotMatch(text, /isStoppedBy(?!Limit)|currentProfil(?!e)/, `${folder} misspells a claude_profiles input`);
     }
-    assert.deepEqual([...namedInputs].sort(), ['currentProfile', 'isStoppedByLimit'], 'the skills teach the resume inputs');
+    assert.deepEqual([...namedInputs].sort(), ['currentProfile', 'isStoppedByLimit', 'lastRunEndedAt'], 'the skills teach the resume inputs');
   });
 
-  it('the orchestration add-on and the Claude delegate skill say what to do when nothing is usable AND no account names when it frees up', () => {
+  it('the account rules have ONE home: the orchestration add-on says what to do when nothing is usable AND no account names when it frees up; the Claude delegate skill points there and repeats none of it', () => {
     const skillsDir = path.join(__dirname, '..', '..', 'agent-plugin', 'skills');
-    for (const folder of ['charness-delegate-claude', 'charness-orchestration']) {
-      const text = fs.readFileSync(path.join(skillsDir, folder, 'SKILL.md'), 'utf8');
-      assert.match(text, /`nextAvailable`\s+(?:is\s+)?null\s+too/, `${folder} covers a null nextAvailable`);
-      assert.match(text, /native\s+question/, `${folder} sends the user a native question`);
-      assert.match(text, /30\s+minutes/, `${folder} schedules the retry`);
-    }
+    const orchestration = fs.readFileSync(path.join(skillsDir, 'charness-orchestration', 'SKILL.md'), 'utf8');
+    assert.match(orchestration, /`nextAvailable`\s+(?:is\s+)?null\s+too/, 'it covers a null nextAvailable');
+    assert.match(orchestration, /native\s+question/, 'it sends the user a native question');
+    assert.match(orchestration, /30\s+minutes/, 'it schedules the retry');
+    const delegate = fs.readFileSync(path.join(skillsDir, 'charness-delegate-claude', 'SKILL.md'), 'utf8').replace(/\s+/g, ' ');
+    assert.ok(delegate.includes('`charness-orchestration` § Accounts and usage limits'), 'it points at the one home');
+    assert.doesNotMatch(delegate, /nextAvailable|isStoppedByLimit|currentProfile|recommended/, 'the account rules are not repeated');
   });
 
   it('changes when the instructions change or a tool is added, renamed, re-described or re-shaped; registration order does not matter', () => {
@@ -1119,6 +1120,8 @@ describe('scheduler MCP server end-to-end (real HTTP)', () => {
         const isWarmAccountGone = model === 'gone';
         // The /limits list leaves «work» out for this model: the report says why, and the verdict line repeats it.
         const isWorkUnlisted = model === 'unlisted';
+        // The model `cold`: the worker ran on `work` but its cache is cold and `default` is now the pick — the report says to hand it over.
+        const isColdHandOver = model === 'cold' && currentProfile !== null;
         const pickReason = isNothingUsable ? 'none'
           : currentProfile === null ? 'soonestWeeklyReset'
             : isStoppedByLimit ? 'movedFromLimited'
@@ -1132,6 +1135,7 @@ describe('scheduler MCP server end-to-end (real HTTP)', () => {
           pickReason,
           nextAvailable: model === 'exhausted' ? { profile: 'work', at: '2026-10-20T10:00:00.000Z' } : null,
           launchOrder: recommended === null ? [] : [recommended],
+          ...(isColdHandOver ? { resume: { verdict: 'handOver' as const, profile: 'default', reason: 'cold' as const, pickReason: 'soonestWeeklyReset' as const } } : {}),
           profiles: [
             { name: 'default', configDir: null, email: 'me@example.com', kind: 'personal', subscriptionType: 'max', loggedIn: true, buckets: [], usageFetchedAt: null, isUsageStale: false, limitedUntil: null, authRefusal: null, billing: null, creditExhaustedAt: null, spentUsd: null, remainingEstimateUsd: null, expiresOn: null, probablyUsedUp: false, renewedAt: null, isEligible: true, chainExclusion: null, headroomPercent: 19, isRecommended: recommended === 'default' },
             { name: 'work', configDir: '/data/profiles/work', email: 'w@example.com', kind: 'personal', subscriptionType: 'pro', loggedIn: true, buckets: [], usageFetchedAt: null, isUsageStale: false, limitedUntil: null, authRefusal: null, billing: null, creditExhaustedAt: null, spentUsd: null, remainingEstimateUsd: null, expiresOn: null, probablyUsedUp: false, renewedAt: null, isEligible: !isWorkUnlisted, chainExclusion: isWorkUnlisted ? 'notListed' as const : null, headroomPercent: 90, isRecommended: recommended === 'work' },
@@ -1337,7 +1341,15 @@ describe('scheduler MCP server end-to-end (real HTTP)', () => {
         );
         assert.ok(description.indexOf('/limits auto-switch list') < description.indexOf('A NEW agent'), 'the list is introduced before any "list" wording and before the new-agent rule');
         assert.doesNotMatch(description, /NEVER picked|unless the operator asked|goes to the usable account whose weekly/, 'the old «never an API account unless asked» opening is gone');
-        assert.deepEqual(Object.keys(tool.inputSchema.properties ?? {}).sort(), ['currentProfile', 'isStoppedByLimit', 'model']);
+        assert.deepEqual(Object.keys(tool.inputSchema.properties ?? {}).sort(), ['currentProfile', 'isStoppedByLimit', 'lastRunEndedAt', 'model']);
+        // The resume rules an agent reads: the clock restart of the accounts reminders, the two inputs, the two verdicts, the exception.
+        assert.match(description, /Calling it IS looking at the limits: the bot's `\[Accounts …\]` reminders then wait another interval\./);
+        assert.match(description, /pass `currentProfile` \(the profile it last ran on\) and `lastRunEndedAt` \(when its last run ended — the last write of its log; omitted = cold\)/);
+        assert.match(description, /`handOver` → do NOT resume that worker on another account: give its work to a NEW worker on `resume\.profile`/);
+        assert.match(description, /a reviewer already running there may apply its own findings, then a fresh reviewer checks/);
+        assert.match(description, /last run ended 55 min ago or more \(the prompt cache is cold\) and another account is now the pick; otherwise it resumes where it ran/);
+        assert.match(description, /A worker cut off MID-RUN by a usage limit[^]*?is the exception: pass `isStoppedByLimit: true` and resume the SAME session at once/);
+        assert.equal((tool.inputSchema.properties?.lastRunEndedAt as { maxLength?: number } | undefined)?.maxLength, 40);
         assert.equal((tool.inputSchema.properties?.currentProfile as { maxLength?: number } | undefined)?.maxLength, claudeProfileNameMaxLength, 'a profile name is never longer than the registry allows');
         const [verdict, ...rest] = (await callProfiles(client, { model: 'fable' })).split('\n');
         assert.equal(verdict, 'recommended: work → CLAUDE_CONFIG_DIR=/data/profiles/work (soonest weekly reset)');
@@ -1356,6 +1368,21 @@ describe('scheduler MCP server end-to-end (real HTTP)', () => {
           /^recommended: default → default profile, set no CLAUDE_CONFIG_DIR \(moved: work stopped on a limit\)\n/,
           'a session stopped by a limit moves, and the name is trimmed',
         );
+        // A hand-over leads the answer; the JSON still carries the whole report with `resume`.
+        const coldAnswer = await callProfiles(client, { model: 'cold', currentProfile: 'work', lastRunEndedAt: '2026-11-21T10:00:00Z' });
+        assert.equal(
+          coldAnswer.split('\n')[0],
+          'hand over: work is cold (its last run ended 55 min ago or more, or at an unknown time) and default is the pick now (soonest weekly reset) → start a NEW worker on default (default profile, set no CLAUDE_CONFIG_DIR); a reviewer already on default may apply its own findings, then a fresh reviewer checks.',
+        );
+        assert.deepEqual((JSON.parse(coldAnswer.split('\n').slice(1).join('\n')) as { resume: unknown }).resume, { verdict: 'handOver', profile: 'default', reason: 'cold', pickReason: 'soonestWeeklyReset' });
+        for (const [args, expected] of [
+          [{ lastRunEndedAt: '2026-11-21T10:00:00Z' }, /lastRunEndedAt needs currentProfile/],
+          [{ currentProfile: 'work', lastRunEndedAt: 'a while ago' }, /lastRunEndedAt must be an ISO 8601 instant/],
+        ] as const) {
+          const refusal = await client.callTool({ name: 'claude_profiles', arguments: args });
+          assert.equal(refusal.isError, true, JSON.stringify(args));
+          assert.match((refusal.content as Array<{ type: string; text: string }>)[0].text, expected);
+        }
         const none = await callProfiles(client, { model: 'exhausted' });
         assert.equal(none.split('\n')[0], 'none usable — next: work at 2026-10-20T10:00:00.000Z');
         assert.equal(
@@ -1386,14 +1413,15 @@ describe('scheduler MCP server end-to-end (real HTTP)', () => {
       }
     }
     const callsOfOneScope: ClaudeProfilesQuery[] = [
-      { model: 'fable', currentProfile: null, isStoppedByLimit: false },
-      { model: null, currentProfile: null, isStoppedByLimit: false },
-      { model: null, currentProfile: 'work', isStoppedByLimit: false },
-      { model: null, currentProfile: 'work', isStoppedByLimit: true },
-      { model: 'exhausted', currentProfile: null, isStoppedByLimit: false },
-      { model: 'gone', currentProfile: 'work', isStoppedByLimit: false },
-      { model: 'nowhere', currentProfile: null, isStoppedByLimit: false },
-      { model: 'unlisted', currentProfile: null, isStoppedByLimit: false },
+      { model: 'fable', currentProfile: null, isStoppedByLimit: false, lastRunEndedAtMs: null },
+      { model: null, currentProfile: null, isStoppedByLimit: false, lastRunEndedAtMs: null },
+      { model: null, currentProfile: 'work', isStoppedByLimit: false, lastRunEndedAtMs: null },
+      { model: null, currentProfile: 'work', isStoppedByLimit: true, lastRunEndedAtMs: null },
+      { model: 'cold', currentProfile: 'work', isStoppedByLimit: false, lastRunEndedAtMs: Date.parse('2026-11-21T10:00:00Z') },
+      { model: 'exhausted', currentProfile: null, isStoppedByLimit: false, lastRunEndedAtMs: null },
+      { model: 'gone', currentProfile: 'work', isStoppedByLimit: false, lastRunEndedAtMs: null },
+      { model: 'nowhere', currentProfile: null, isStoppedByLimit: false, lastRunEndedAtMs: null },
+      { model: 'unlisted', currentProfile: null, isStoppedByLimit: false, lastRunEndedAtMs: null },
     ];
     assert.deepEqual(fixture.claudeProfilesCalls, [...callsOfOneScope, ...callsOfOneScope], 'the refused calls never reached the port');
   });

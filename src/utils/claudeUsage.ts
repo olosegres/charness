@@ -34,6 +34,7 @@ import type { ClaudeApiSpend } from './claudeApiSpend';
 import type { ClaudeAuthRefusal } from './claudeAuthRefusal';
 import type { ClaudeApiCreditAnchor, ClaudeApiCreditSpend } from './claudeApiCredit';
 import { checkIsRecord } from './checkIsRecord';
+import { idleCompactMs } from './compactOnIdle';
 
 export const claudeUsageEndpoint = 'https://api.anthropic.com/api/oauth/usage';
 
@@ -448,6 +449,12 @@ export interface ClaudeProfilesReport {
    * really use it: the `/limits` list holds it, it is signed in, not limited, not held off agents, its credit not used up.
    */
   launchOrder: string[];
+  /**
+   * What to do with the worker whose session is being resumed (only when the caller passed `currentProfile`): resume it where it
+   * ran, or hand its work to a NEW worker on another account ({@link getClaudeResumeAdvice}). `null`: nothing is usable, so there is
+   * nothing to advise — `nextAvailable` says when to try again.
+   */
+  resume?: ClaudeResumeAdvice | null;
   profiles: ClaudeProfileReportEntry[];
 }
 
@@ -493,6 +500,11 @@ export interface ClaudeLaunchPickOptions {
   chainScope?: ClaudeLaunchChainScope | null;
   /** API accounts whose credit has run out by the operator's own expiry day: not sent a NEW agent first (the credit module is out of this file's reach, the caller works it out). */
   expiredApiNames?: ReadonlySet<string>;
+}
+
+/** What a report needs besides the pick's own options: when the resumed worker's last run ended (`null` / absent = unknown, so cold). */
+export interface ClaudeProfilesReportOptions extends ClaudeLaunchPickOptions {
+  lastRunEndedAtMs?: number | null;
 }
 
 /**
@@ -863,6 +875,86 @@ export function describeClaudeLaunchOutcome(report: Pick<ClaudeProfilesReport, '
 }
 
 /**
+ * A worker whose last run ended less than this ago still has a warm prompt cache: the idle mark, which sits just inside the cache's
+ * hour (`idleCompactMs`). Past it a resume re-reads everything anyway, so it gains nothing by staying on its account.
+ */
+export const claudeResumeWarmWindowMs = idleCompactMs;
+
+const msPerMinute = 60_000;
+
+/** `resume`: the worker's session goes on under `profile`; `handOver`: its work goes to a NEW worker on `profile`. */
+export type ClaudeResumeVerdict = 'resume' | 'handOver';
+
+/**
+ * Why: `warm` — it can run where it ran and its cache is warm; `coldStays` — cold, but nothing better is open than its own account;
+ * `stoppedByLimit` — it broke off MID-RUN on a usage limit, so its same session goes on at once under the next account (a fresh worker
+ * would redo the unfinished run); `cannotRun` — its account can no longer run it (signed out, limited, out of the `/limits` list,
+ * full); `cold` — its cache is cold and the launch rule now names another account.
+ */
+export type ClaudeResumeReason = 'warm' | 'coldStays' | 'stoppedByLimit' | 'cannotRun' | 'cold';
+
+/** What to do with a worker being resumed, and under which account. */
+export interface ClaudeResumeAdvice {
+  verdict: ClaudeResumeVerdict;
+  /** `resume`: the account to resume the session under; `handOver`: the account of the NEW worker. */
+  profile: string;
+  reason: ClaudeResumeReason;
+  /** Why the launch rule named `profile` (a warm session's own account reads `warm`). */
+  pickReason: ClaudeLaunchPickReason;
+}
+
+/**
+ * @description Resume the worker where it ran, or give its work to a NEW worker on another account — the owner's rule: an old worker is
+ * never dragged onto another account, except one cut off mid-run by a usage limit (its same session resumes at once on the next
+ * account). `warmPick` is {@link getClaudeLaunchPick} with the worker's `currentProfile` (and the limit stop), `freshPick` the same
+ * without them — what a NEW worker would get. In order:
+ *  - nothing usable (`warmPick.pick` null) → `null`;
+ *  - stopped mid-run by a limit → `resume` on `warmPick.pick`;
+ *  - its account can no longer run (`warmPick` names another) → `handOver` to `warmPick.pick`;
+ *  - its last run ended less than {@link claudeResumeWarmWindowMs} ago → `resume` where it ran (the cache is warm, the cheapest step);
+ *  - cold (also when `lastRunEndedAtMs` is unknown) and `freshPick` names another account → `handOver` to it; else `resume` where it ran.
+ */
+export function getClaudeResumeAdvice(input: {
+  warmPick: ClaudeLaunchPick;
+  freshPick: ClaudeLaunchPick;
+  currentProfile: string;
+  lastRunEndedAtMs: number | null;
+  isStoppedByLimit: boolean;
+  nowMs: number;
+}): ClaudeResumeAdvice | null {
+  const { warmPick, freshPick, currentProfile } = input;
+  if (warmPick.pick === null) return null;
+  if (input.isStoppedByLimit) return { verdict: 'resume', profile: warmPick.pick, reason: 'stoppedByLimit', pickReason: warmPick.reason };
+  if (warmPick.pick !== currentProfile) return { verdict: 'handOver', profile: warmPick.pick, reason: 'cannotRun', pickReason: warmPick.reason };
+  const isWarm = input.lastRunEndedAtMs !== null && input.nowMs - input.lastRunEndedAtMs < claudeResumeWarmWindowMs;
+  if (!isWarm && freshPick.pick !== null && freshPick.pick !== currentProfile) {
+    return { verdict: 'handOver', profile: freshPick.pick, reason: 'cold', pickReason: freshPick.reason };
+  }
+  return { verdict: 'resume', profile: currentProfile, reason: isWarm ? 'warm' : 'coldStays', pickReason: warmPick.reason };
+}
+
+/** How to start a process on the account `name`: its `CLAUDE_CONFIG_DIR`, or «set nothing» for the default profile. */
+export function describeClaudeProfileLaunch(report: Pick<ClaudeProfilesReport, 'profiles'>, name: string): string {
+  const configDir = report.profiles.find((profile) => profile.name === name)?.configDir ?? null;
+  return configDir === null ? 'default profile, set no CLAUDE_CONFIG_DIR' : `CLAUDE_CONFIG_DIR=${configDir}`;
+}
+
+/**
+ * @description The hand-over in words, for the first line of the `claude_profiles` answer and the CLI: why the old worker is not resumed
+ * on another account, which account the NEW worker goes to and how it starts, and who may take over the old worker's findings.
+ * `null` for any other verdict (and without `resume`).
+ */
+export function describeClaudeResumeHandOver(report: Pick<ClaudeProfilesReport, 'resume' | 'profiles'>, currentProfile: string | null): string | null {
+  const advice = report.resume;
+  if (advice?.verdict !== 'handOver') return null;
+  const old = currentProfile ?? 'its account';
+  const why = advice.reason === 'cold'
+    ? `${old} is cold (its last run ended ${Math.round(claudeResumeWarmWindowMs / msPerMinute)} min ago or more, or at an unknown time) and ${advice.profile} is the pick now (${describeClaudeLaunchOutcome({ pickReason: advice.pickReason, nextAvailable: null }, currentProfile)})`
+    : `${old} can no longer run this worker`;
+  return `hand over: ${why} → start a NEW worker on ${advice.profile} (${describeClaudeProfileLaunch(report, advice.profile)}); a reviewer already on ${advice.profile} may apply its own findings, then a fresh reviewer checks.`;
+}
+
+/**
  * @description The accounts the `/limits` list keeps agents off, one clause per reason (`not offered — not in the /limits list:
  * a, b; switched off in the /limits list: c`), or `null` when there are none. The first lines of the `claude_profiles` answer
  * and the CLI add it, so an agent that sees a signed-in account missing from `recommended` is told why.
@@ -901,7 +993,7 @@ const emptyClaudeProfileReportCredit: Pick<ClaudeProfileReportEntry, 'spentUsd' 
  * an agent or an operator — the `claude_profiles` tool, `charness claude-profiles` — uses `buildClaudeProfilesCreditReport`
  * (`utils/claudeProfileUsageViews.ts`) instead; this builder is for the ranking (`fallbackChain.ts` reads `isEligible`).
  */
-export function buildClaudeProfilesReport(profiles: readonly ClaudeProfileUsageView[], model: string | null, nowMs: number, options: ClaudeLaunchPickOptions = {}): ClaudeProfilesReport {
+export function buildClaudeProfilesReport(profiles: readonly ClaudeProfileUsageView[], model: string | null, nowMs: number, options: ClaudeProfilesReportOptions = {}): ClaudeProfilesReport {
   const relevantBuckets = getRelevantClaudeUsageKinds(model);
   const entries = profiles.map((profile): ClaudeProfileReportEntry => {
     const relevant = getRelevantClaudeBucketsAsOf(profile, model, nowMs);
@@ -932,7 +1024,20 @@ export function buildClaudeProfilesReport(profiles: readonly ClaudeProfileUsageV
   const launchOrder = getClaudeLaunchOrder({ ...options, profiles, model, nowMs, excludedName: options.currentProfile ?? null }).map((profile) => profile.name);
   const recommended = entries.find((entry) => entry.name === launch.pick);
   if (recommended) recommended.isRecommended = true;
-  return { model, relevantBuckets, recommended: launch.pick, pickReason: launch.reason, nextAvailable: launch.nextAvailable, launchOrder, profiles: entries };
+  const report: ClaudeProfilesReport = { model, relevantBuckets, recommended: launch.pick, pickReason: launch.reason, nextAvailable: launch.nextAvailable, launchOrder, profiles: entries };
+  if (options.currentProfile) {
+    // What a NEW worker would get: the same pick without the warm account and the limit stop.
+    const freshPick = getClaudeLaunchPick({ ...options, currentProfile: null, isStoppedByLimit: false, profiles, model, nowMs });
+    report.resume = getClaudeResumeAdvice({
+      warmPick: launch,
+      freshPick,
+      currentProfile: options.currentProfile,
+      lastRunEndedAtMs: options.lastRunEndedAtMs ?? null,
+      isStoppedByLimit: options.isStoppedByLimit === true,
+      nowMs,
+    });
+  }
+  return report;
 }
 
 /** The profile registry out of a `state.json` already read (`stateFile.ts`): entries without a creation time are dropped. */

@@ -21,8 +21,11 @@ import {
   checkIsClaudeModelClearOfLimit,
   checkIsClaudeProfileLaunchable,
   checkIsClaudeTokenExpired,
+  claudeResumeWarmWindowMs,
   describeClaudeChainExclusions,
   describeClaudeLaunchOutcome,
+  describeClaudeProfileLaunch,
+  describeClaudeResumeHandOver,
   fetchClaudeUsage,
   getClaudeProfileRecordsFromState,
   formatClaudeUsageBucket,
@@ -30,6 +33,7 @@ import {
   formatClaudeUsageResetAt,
   getClaudeLaunchOrder,
   getClaudeLaunchPick,
+  getClaudeResumeAdvice,
   getClaudeUsageBucketAsOf,
   getClaudeUsagePercentAsOf,
   getRelevantClaudeUsageKinds,
@@ -616,6 +620,95 @@ describe('the launch pick (getClaudeLaunchPick)', () => {
       assert.equal(entry.isEligible, true);
       assert.equal(entry.isUsageStale, true, 'the report still says the figures were not re-read');
       assert.equal(entry.usageFetchedAt, frozenUsage.fetchedAt);
+    });
+  });
+
+  describe('resuming a worker: resume where it ran, or hand its work to a NEW worker on another account (getClaudeResumeAdvice)', () => {
+    const minutes = (count: number): number => nowMs - count * 60_000;
+    /** `work` resets in a day, `spare` in five: a NEW worker goes to `work`; a worker that ran on `spare` has a better account. */
+    const soon = view('work', usage({ session: 10, weekly: 40, weeklyResetsAt: days(1) }));
+    const late = view('spare', usage({ session: 0, weekly: 10, weeklyResetsAt: days(5) }));
+    const advise = (profiles: ClaudeProfileUsageView[], currentProfile: string, extra: { lastRunEndedAtMs?: number | null; isStoppedByLimit?: boolean } = {}) =>
+      buildClaudeProfilesReport(profiles, 'sonnet', nowMs, { currentProfile, lastRunEndedAtMs: extra.lastRunEndedAtMs ?? null, isStoppedByLimit: extra.isStoppedByLimit }).resume;
+
+    it('warm (the last run ended under 55 min ago) on an account that can run: resume there, even when another account resets sooner — the cache is the cheapest step', () => {
+      assert.deepEqual(advise([soon, late], 'spare', { lastRunEndedAtMs: minutes(54) }), { verdict: 'resume', profile: 'spare', reason: 'warm', pickReason: 'warm' });
+      assert.equal(advise([soon, late], 'spare', { lastRunEndedAtMs: minutes(0) })?.verdict, 'resume');
+    });
+
+    it('cold (55 min or more, or no time given) and the soonest-reset rule names another account: hand over to it', () => {
+      const expected = { verdict: 'handOver', profile: 'work', reason: 'cold', pickReason: 'soonestWeeklyReset' };
+      assert.deepEqual(advise([soon, late], 'spare', { lastRunEndedAtMs: minutes(55) }), expected, 'the window is 55 min: AT it the worker is cold');
+      assert.deepEqual(advise([soon, late], 'spare', { lastRunEndedAtMs: minutes(300) }), expected);
+      assert.deepEqual(advise([soon, late], 'spare'), expected, 'omitted = cold');
+      assert.equal(claudeResumeWarmWindowMs, 55 * 60_000, 'the idle mark, just inside the prompt cache\'s hour');
+    });
+
+    it('cold on the account a NEW worker would get too: nothing better is open, resume where it ran', () => {
+      assert.deepEqual(advise([soon, late], 'work', { lastRunEndedAtMs: minutes(300) }), { verdict: 'resume', profile: 'work', reason: 'coldStays', pickReason: 'warm' });
+    });
+
+    it('cold with an API-credit account the /limits list holds: the API account is the NEW worker\'s pick (credit first)', () => {
+      const api = view('console', undefined, { billing: 'api', subscriptionType: null });
+      const options = { currentProfile: 'work', lastRunEndedAtMs: minutes(300), chainScope: listScope(['console', 'work']) };
+      assert.deepEqual(buildClaudeProfilesReport([soon, api], 'sonnet', nowMs, options).resume, { verdict: 'handOver', profile: 'console', reason: 'cold', pickReason: 'apiCreditFirst' });
+    });
+
+    it('an account that can no longer run the worker — signed out, limited, out of the list, full — hands over at once, warm or not', () => {
+      const warm = minutes(5);
+      for (const [label, broken] of [
+        ['signed out', view('spare', late.usage, { loggedIn: false })],
+        ['marked limited', view('spare', late.usage, { limitedUntil: hours(3) })],
+        ['a window full', view('spare', usage({ session: 100, weekly: 10, weeklyResetsAt: days(5) }))],
+        ['held off agents', view('spare', late.usage, { agentHoldUntil: hours(1) })],
+      ] as const) {
+        assert.deepEqual(advise([soon, broken], 'spare', { lastRunEndedAtMs: warm }), { verdict: 'handOver', profile: 'work', reason: 'cannotRun', pickReason: 'movedFromUnavailable' }, label);
+      }
+      const options = { currentProfile: 'spare', lastRunEndedAtMs: warm, chainScope: listScope(['work']) };
+      assert.deepEqual(buildClaudeProfilesReport([soon, late], 'sonnet', nowMs, options).resume, { verdict: 'handOver', profile: 'work', reason: 'cannotRun', pickReason: 'movedFromUnavailable' }, 'out of the list');
+      assert.equal(advise([soon, late], 'gone', { lastRunEndedAtMs: warm })?.reason, 'cannotRun', 'an account that is not a profile at all');
+    });
+
+    it('a worker cut off MID-RUN by a limit keeps today\'s rule: its SAME session resumes at once on the pick — never a fresh worker, whatever the clock says', () => {
+      assert.deepEqual(advise([soon, late], 'spare', { isStoppedByLimit: true, lastRunEndedAtMs: minutes(1) }), { verdict: 'resume', profile: 'work', reason: 'stoppedByLimit', pickReason: 'movedFromLimited' });
+      assert.equal(advise([soon, late], 'spare', { isStoppedByLimit: true })?.verdict, 'resume', 'no time given is no reason to hand a cut-off run over');
+    });
+
+    it('nothing usable: no advice (`null`) — the report\'s nextAvailable says when to try again', () => {
+      const full = view('full', usage({ session: 100, weekly: 0, weeklyResetsAt: days(1), sessionResetsAt: hours(2) }));
+      assert.equal(advise([full], 'full', { lastRunEndedAtMs: minutes(5) }), null);
+      assert.equal(advise([full], 'full', { isStoppedByLimit: true }), null);
+    });
+
+    it('only a resume carries it: a NEW worker\'s report has no `resume` at all, and `recommended` is the warm pick as before', () => {
+      assert.equal('resume' in buildClaudeProfilesReport([soon, late], 'sonnet', nowMs), false);
+      const report = buildClaudeProfilesReport([soon, late], 'sonnet', nowMs, { currentProfile: 'spare', lastRunEndedAtMs: null });
+      assert.equal(report.recommended, 'spare', 'the pick itself is unchanged: a topic\'s own conversation pick keeps the warm rule');
+      assert.equal(report.pickReason, 'warm');
+      assert.equal(report.resume?.verdict, 'handOver');
+    });
+
+    it('the hand-over in words: the old account, why, the NEW worker\'s account and how to start it, who may take over the findings — and nothing for a resume', () => {
+      const cold = buildClaudeProfilesReport([soon, late], 'sonnet', nowMs, { currentProfile: 'spare', lastRunEndedAtMs: minutes(300) });
+      assert.equal(
+        describeClaudeResumeHandOver(cold, 'spare'),
+        'hand over: spare is cold (its last run ended 55 min ago or more, or at an unknown time) and work is the pick now (soonest weekly reset) → start a NEW worker on work (CLAUDE_CONFIG_DIR=/data/profiles/work); a reviewer already on work may apply its own findings, then a fresh reviewer checks.',
+      );
+      const gone = buildClaudeProfilesReport([soon, view('spare', late.usage, { loggedIn: false })], 'sonnet', nowMs, { currentProfile: 'spare', lastRunEndedAtMs: minutes(5) });
+      assert.match(describeClaudeResumeHandOver(gone, 'spare') ?? '', /^hand over: spare can no longer run this worker → start a NEW worker on work \(CLAUDE_CONFIG_DIR=\/data\/profiles\/work\); a reviewer already on work/);
+      assert.equal(describeClaudeResumeHandOver(buildClaudeProfilesReport([soon, late], 'sonnet', nowMs, { currentProfile: 'spare', lastRunEndedAtMs: minutes(1) }), 'spare'), null, 'a resume');
+      assert.equal(describeClaudeResumeHandOver(buildClaudeProfilesReport([soon, late], 'sonnet', nowMs), null), null, 'a new worker');
+      assert.equal(describeClaudeProfileLaunch(cold, 'work'), 'CLAUDE_CONFIG_DIR=/data/profiles/work');
+      assert.equal(describeClaudeProfileLaunch(buildClaudeProfilesReport([view('default', late.usage, { configDir: null })], 'sonnet', nowMs), 'default'), 'default profile, set no CLAUDE_CONFIG_DIR');
+    });
+
+    it('getClaudeResumeAdvice itself is pure over the two picks: the same inputs, the same advice; a future last-run time (clock skew) counts as warm', () => {
+      const warmPick = { pick: 'spare', reason: 'warm' as const, nextAvailable: null };
+      const freshPick = { pick: 'work', reason: 'soonestWeeklyReset' as const, nextAvailable: null };
+      const input = { warmPick, freshPick, currentProfile: 'spare', lastRunEndedAtMs: nowMs + 60_000, isStoppedByLimit: false, nowMs };
+      assert.equal(getClaudeResumeAdvice(input)?.reason, 'warm');
+      assert.deepEqual(getClaudeResumeAdvice(input), getClaudeResumeAdvice({ ...input }));
+      assert.equal(getClaudeResumeAdvice({ ...input, freshPick: { ...freshPick, pick: null } , lastRunEndedAtMs: null })?.reason, 'coldStays', 'cold but nothing else usable for a NEW worker');
     });
   });
 });

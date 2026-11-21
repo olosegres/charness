@@ -78,17 +78,26 @@ kill -0 <pid> 2>/dev/null || { echo "worker <pid> exited"; exit 1; }; [ -n "$(fi
 
 ## Accounts and usage limits
 
-- Before every Claude worker launch call `claude_profiles` with the worker's model and start the worker with
-  `CLAUDE_CONFIG_DIR=<configDir>` of `recommended` (nothing when it is null). Take the account it names without
-  asking — it follows the operator's /limits auto-switch list (an API-credit account first, then the soonest weekly reset).
-- Record the profile name beside the worker's session id. Every resume calls `claude_profiles` with
-  `currentProfile` = that name, so a warm worker stays on its account.
-- A worker stopped by a usage limit resumes its SAME session at once, never a fresh worker (which would redo the
-  work): call `claude_profiles` with `currentProfile` and `isStoppedByLimit: true` and resume under the account it
-  recommends. `recommended: null` → nothing is usable: `schedule_create` a one-off resume (`onceAt` =
-  `nextAvailable.at`) whose prompt stands on its own. `nextAvailable` null too → no account names a time it frees
-  up: ask the user a native question (nothing can run) and `schedule_create` the same one-off retry about 30
-  minutes ahead.
+- Before EVERY Claude worker launch or resume call `claude_profiles` — the worker's model; on a resume also `currentProfile` (the
+  profile name recorded at launch) and `lastRunEndedAt` (the last write of its log, an ISO instant) — and start the worker with
+  `CLAUDE_CONFIG_DIR=<configDir>` of `recommended` (nothing when its `configDir` is null; without it the worker drains YOUR
+  account). Take it without asking: it follows the operator's /limits auto-switch list — an API-credit account first, then the
+  soonest weekly reset, so what expires first is spent first. Never reuse an earlier answer. Record the profile name beside the
+  worker's session id.
+- `resume: handOver` → do not resume that worker on another account. Give its work to a NEW worker on the account named (brief: the
+  old run's report, the worktree, the findings); a reviewer that already runs on that account may apply its own findings, then a
+  fresh reviewer checks the result. `resume: resume` → resume the session where it ran.
+- The exception: a worker cut off MID-RUN by a usage limit («You've hit your session limit», «Credit balance is too low») — a fresh
+  worker would redo the unfinished run, so call `claude_profiles` with `currentProfile` and `isStoppedByLimit: true` and resume the
+  SAME session at once under the account it recommends.
+- `recommended: null` → nothing is usable: do not launch. `schedule_create` a one-off resume (`onceAt` = `nextAvailable.at`) whose
+  prompt stands on its own (the plan path, the scope, what to launch, «call `claude_profiles` again»), then end the turn.
+  `nextAvailable` null too → no account names a time it frees up: ask the user a native question (nothing can run) and
+  `schedule_create` the same one-off retry about 30 minutes ahead.
+- An `[Accounts …]` note (at a wake, in a send tool's result, during a turn) says where the limits stand: plan your next launch on it
+  and call `claude_profiles` right before it. No reply is needed; a worker that is running stays where it is.
+- A role that may run on either CLI (a reviewer): start it where the limit resets sooner and still has room.
+- A worker that only waits for a shared lane is not kept running: resume it when the lane frees.
 - Your own usage limit is the bot's business: it waits or switches and then wakes you.
 
 ## Talking to the user

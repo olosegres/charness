@@ -12,15 +12,9 @@ effort per role); this one wins on the launch, the account, detaching and the wa
 
 ## Account, model, effort
 
-- New worker: call `claude_profiles` with the worker's model and no `currentProfile`. Start the worker with
-  `CLAUDE_CONFIG_DIR=<configDir>` of the `recommended` profile (nothing when its `configDir` is null); without it
-  the worker drains YOUR account. The bot picks it from the operator's /limits auto-switch list: take it without asking.
-- `recommended: null`: no account is usable now. Do not launch; `schedule_create` with `onceAt` = `nextAvailable.at`
-  and a prompt that stands on its own (plan path, scope, what to launch), then end the turn. If `nextAvailable` is
-  null too, no account names a time it frees up: ask the user a native question (nothing can run, no time known) and
-  `schedule_create` a one-off retry about 30 minutes ahead, with such a prompt.
-- Before a launch or resume look at the account's five-hour window; a worker that only waits for a shared lane is
-  not kept running: resume it when the lane frees.
+- The account is `charness-orchestration` § Accounts and usage limits: call `claude_profiles` first — never launch or resume a worker
+  without it — and start the worker with `CLAUDE_CONFIG_DIR=<configDir>` of the account it names (nothing when its `configDir` is
+  null); without it the worker drains YOUR account.
 - Confirm the login under that directory: `env -u ANTHROPIC_API_KEY claude auth status --text`.
 - The first `system`/`init` event must name the requested model; on a mismatch stop the worker and tell the user.
 
@@ -39,7 +33,7 @@ Unless the user names others:
 
 ## Launch
 
-0. Call `claude_profiles` first — never launch or resume a worker without it.
+0. Call `claude_profiles` first (§ Account, model, effort) — never launch or resume a worker without it.
 1. Make a private run directory (an absolute path: a resume starts from the checkout), generate a UUID for the
    session, write the brief into `<run-dir>/brief.md`: the task and its context (the worker does not see this
    conversation), the skills it must load by name, every resource another live process holds, and "report every
@@ -96,12 +90,7 @@ printf '%s\n' "<uuid>" > "<run-dir>/session"
 - `<uuid>` comes only from `<run-dir>/session` or the `session_id` of the first (`system`/`init`) event of the first
   run's log — never from memory or a shortened prefix.
 - Keep the model, effort and flags of the first run.
-- The account: call `claude_profiles` with `currentProfile` = the profile name recorded at launch; the worker stays on
-  it unless it can no longer run. Launch under the `recommended` profile's `configDir`, record that name.
-- A run rejected on a usage limit ("You've hit your session limit", "Credit balance is too low"): call `claude_profiles` with `currentProfile` and
-  `isStoppedByLimit: true`, and resume the SAME session at once under the `recommended` profile — never wait while an
-  account is usable. `recommended: null` → `schedule_create` with `onceAt` = `nextAvailable.at` and a prompt that
-  stands on its own (resume this session, call `claude_profiles` again); `nextAvailable` null too → ask the user a
-  native question and `schedule_create` the same one-off retry about 30 minutes ahead.
+- The account of a resume — where it runs, a hand-over to a NEW worker, a run stopped by a usage limit — is
+  `charness-orchestration` § Accounts and usage limits. Launch under the `configDir` of the account it names and record that name.
 - To stop a worker: confirm the PID is that worker (`ps -o args= -p <pid>`), `kill -TERM <pid>`, confirm it is
   gone. Never kill by name, never a process you did not start.

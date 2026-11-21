@@ -9965,7 +9965,12 @@ async function listClaudeProfilesForAgent(query: ClaudeProfilesQuery): Promise<C
     getClaudeProfileUsageViews(),
     query.model,
     Date.now(),
-    { currentProfile: query.currentProfile, isStoppedByLimit: query.isStoppedByLimit, chainScope: getClaudeLaunchChainScope(state.getFallbackChain()) },
+    {
+      currentProfile: query.currentProfile,
+      isStoppedByLimit: query.isStoppedByLimit,
+      lastRunEndedAtMs: query.lastRunEndedAtMs,
+      chainScope: getClaudeLaunchChainScope(state.getFallbackChain()),
+    },
   );
 }
 

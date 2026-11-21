@@ -164,6 +164,28 @@ describe('agent-plugin', () => {
     }
   });
 
+  test('charness-orchestration is the ONE home of the account rules: ask before EVERY launch or resume, take the answer without asking, hand an old worker\'s work to a NEW worker instead of dragging it onto another account, the mid-run limit exception, the `[Accounts …]` note', () => {
+    const flat = readSkill('charness-orchestration').replace(/\s+/g, ' ');
+    assert.match(flat, /Before EVERY Claude worker launch or resume call `claude_profiles` — the worker's model; on a resume also `currentProfile` \(the profile name recorded at launch\) and `lastRunEndedAt` \(the last write of its log, an ISO instant\)/);
+    assert.match(flat, /Take it without asking: it follows the operator's \/limits auto-switch list — an API-credit account first, then the soonest weekly reset, so what expires first is spent first\. Never reuse an earlier answer\./);
+    assert.match(flat, /`resume: handOver` → do not resume that worker on another account\. Give its work to a NEW worker on the account named \(brief: the old run's report, the worktree, the findings\); a reviewer that already runs on that account may apply its own findings, then a fresh reviewer checks the result\. `resume: resume` → resume the session where it ran\./);
+    assert.match(flat, /The exception: a worker cut off MID-RUN by a usage limit .* a fresh worker would redo the unfinished run, so call `claude_profiles` with `currentProfile` and `isStoppedByLimit: true` and resume the SAME session at once under the account it recommends\./);
+    assert.match(flat, /An `\[Accounts …\]` note \(at a wake, in a send tool's result, during a turn\) says where the limits stand: plan your next launch on it and call `claude_profiles` right before it\. No reply is needed; a worker that is running stays where it is\./);
+    assert.match(flat, /A role that may run on either CLI \(a reviewer\): start it where the limit resets sooner and still has room\./);
+    assert.match(flat, /`recommended: null` → nothing is usable: do not launch\./);
+    assert.equal(flat.split('## Accounts and usage limits').length - 1, 1);
+  });
+
+  test('charness-delegate-claude keeps only what is specific to launching `claude -p` and points at the account rules — it repeats none of them', () => {
+    const flat = readSkill('charness-delegate-claude').replace(/\s+/g, ' ');
+    assert.ok(flat.includes('The account is `charness-orchestration` § Accounts and usage limits: call `claude_profiles` first'), 'the pointer, in § Account, model, effort');
+    assert.ok(flat.includes('The account of a resume — where it runs, a hand-over to a NEW worker, a run stopped by a usage limit — is `charness-orchestration` § Accounts and usage limits.'), 'the pointer, in § Resume');
+    for (const specific of ['claude auth status --text', 'The first `system`/`init` event must name the requested model', 'Never `--continue` or `--fork-session`', '`--resume "<uuid>"`']) {
+      assert.ok(flat.includes(specific), `${specific} stays: it is about launching the CLI`);
+    }
+    assert.doesNotMatch(flat, /nextAvailable|isStoppedByLimit|currentProfile|`recommended`|schedule_create/, 'the account rules live in the orchestration skill');
+  });
+
   test('charness-delegate-claude keeps its role defaults under «only when no general delegate skill is listed»; charness-delegate-opencode picks the user\'s model, else a general delegate skill\'s role defaults, else the conversation\'s own', () => {
     const claude = readSkill('charness-delegate-claude');
     const defaultsAt = claude.indexOf('### Role defaults — only when no general delegate skill is listed');

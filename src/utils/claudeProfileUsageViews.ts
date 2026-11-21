@@ -12,7 +12,7 @@ import type { ClaudeProfileRecord } from '../state';
 import { checkIsClaudeProfileKnownUnusable, getClaudeProfileSignedIn, type ClaudeAuthRefusal } from './claudeAuthRefusal';
 import { resolveClaudeProfileDir } from './claudeProfiles';
 import { checkIsClaudeApiCreditMarkCurrent, getClaudeApiCreditEstimate, type ClaudeApiCreditAnchor, type ClaudeApiCreditAnchors, type ClaudeApiCreditEstimate } from './claudeApiCredit';
-import { buildClaudeProfilesReport, type ClaudeLaunchChainScope, type ClaudeLaunchPickOptions, type ClaudeProfileReportEntry, type ClaudeProfilesReport, type ClaudeProfileUsageView } from './claudeUsage';
+import { buildClaudeProfilesReport, type ClaudeLaunchChainScope, type ClaudeProfileReportEntry, type ClaudeProfilesReportOptions, type ClaudeProfilesReport, type ClaudeProfileUsageView } from './claudeUsage';
 
 /** @description One profile's view: its record's usage, marks and spend, plus the operator's credit figure (what `/accounts` and `/limits` render). */
 export function buildClaudeProfileUsageView(input: {
@@ -193,7 +193,7 @@ export function buildClaudeProfilesCreditReport(
   views: readonly ClaudeProfileUsageView[],
   model: string | null,
   nowMs: number,
-  options: ClaudeLaunchPickOptions = {},
+  options: ClaudeProfilesReportOptions = {},
 ): ClaudeProfilesReport {
   const expiredApiNames = listExpiredApiProfileNames(views, nowMs);
   return addClaudeApiCreditToReport(buildClaudeProfilesReport(views, model, nowMs, { ...options, expiredApiNames }), views, nowMs);

@@ -174,8 +174,19 @@ test('claude-profiles --current keeps a resumed session on its account; --stoppe
     work: [usageBucket('session', 95, inHours(1)), usageBucket('weekly_all', 40, inHours(120))],
   });
   const workDir = path.join(tmpRoot, 'claude-profiles', 'work');
-  const warm = runCli(['claude-profiles', '--best', '--current', 'work']);
+  const justNow = new Date(Date.now() - 5 * 60_000).toISOString();
+  const warm = runCli(['claude-profiles', '--best', '--current', 'work', '--last-run-ended-at', justNow]);
   assert.equal(warm.stdout, `${workDir}\n`, 'warm: the five-hour ceiling does not apply to the session already on «work»');
+  assert.equal(warm.stderr, '', 'a resume says nothing more');
+  // The same worker with no last-run time is cold: the soonest-reset rule names «default» for a NEW worker, so its work is handed over.
+  const cold = runCli(['claude-profiles', '--best', '--current', 'work']);
+  assert.equal(cold.stdout, '\n', 'cold: --best prints the NEW worker\'s account (the default profile: set nothing)');
+  assert.match(cold.stderr, /^hand over: work is cold \(its last run ended 55 min ago or more, or at an unknown time\) and default is the pick now \(soonest weekly reset\) → start a NEW worker on default \(default profile, set no CLAUDE_CONFIG_DIR\); a reviewer already on default may apply its own findings, then a fresh reviewer checks\.\n$/);
+  const coldHuman = runCli(['claude-profiles', '--current', 'work', '--last-run-ended-at', new Date(Date.now() - 3 * 3_600_000).toISOString()]);
+  assert.match(coldHuman.stdout, /recommended for any model: work \(stays on the warm account\)\nhand over: work is cold/, 'the human output ends with the hand-over line');
+  assert.equal(JSON.parse(runCli(['claude-profiles', '--json', '--current', 'work', '--last-run-ended-at', justNow]).stdout).resume.verdict, 'resume');
+  assert.equal(JSON.parse(runCli(['claude-profiles', '--json', '--current', 'work']).stdout).resume.verdict, 'handOver');
+  assert.equal('resume' in JSON.parse(runCli(['claude-profiles', '--json']).stdout), false, 'a new worker has no `resume`');
   const newAgent = runCli(['claude-profiles', '--best']);
   assert.equal(newAgent.stdout, '\n', 'a new agent skips «work» (five-hour window at 95 %)');
   const moved = runCli(['claude-profiles', '--best', '--current=work', '--stopped-by-limit']);
@@ -195,6 +206,12 @@ test('claude-profiles --current keeps a resumed session on its account; --stoppe
   const withoutCurrent = runCli(['claude-profiles', '--stopped-by-limit']);
   assert.equal(withoutCurrent.status, 2);
   assert.match(withoutCurrent.stderr, /--stopped-by-limit needs --current <name>/);
+  const lastRunWithoutCurrent = runCli(['claude-profiles', '--last-run-ended-at', justNow]);
+  assert.equal(lastRunWithoutCurrent.status, 2);
+  assert.match(lastRunWithoutCurrent.stderr, /--last-run-ended-at needs --current <name>/);
+  const badInstant = runCli(['claude-profiles', '--current', 'work', '--last-run-ended-at', 'yesterday-ish']);
+  assert.equal(badInstant.status, 2);
+  assert.match(badInstant.stderr, /--last-run-ended-at needs an ISO 8601 instant/);
   const noValue = runCli(['claude-profiles', '--current']);
   assert.equal(noValue.status, 2);
   assert.match(noValue.stderr, /--current needs a profile name/);

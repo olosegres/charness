@@ -131,6 +131,14 @@ describe('the instructions built for a platform', () => {
     }
   });
 
+  it('the claude_profiles bullet — present with the skills on and off — says what an `[Accounts …]` note means: the limits moved, ask again before the next launch', () => {
+    for (const isBotSkillsEnabled of [true, false]) {
+      for (const platform of ['telegram', 'jira', null] as const) {
+        assert.ok(buildMcpServerInstructions(platform, offered, isBotSkillsEnabled).includes('An `[Accounts …]` note means the limits moved: ask again before your next launch. More in the tool description (resuming, `recommended: null`).'), `${platform ?? 'neutral'} ${isBotSkillsEnabled ? 'on' : 'off'}`);
+      }
+    }
+  });
+
   it('only the hint differs: everything else is the same text with the skills on and off', () => {
     const withSkills = buildMcpServerInstructions('telegram', offered, true).split('\n');
     const withoutSkills = buildMcpServerInstructions('telegram', offered, false).split('\n');

@@ -1,17 +1,20 @@
 /**
- * @description `charness claude-profiles [--best] [--model <name>] [--current <name> [--stopped-by-limit]] [--json]` — the
+ * @description `charness claude-profiles [--best] [--model <name>] [--current <name> [--stopped-by-limit] [--last-run-ended-at <ISO>]] [--json]` — the
  * command-line twin of the `claude_profiles` MCP tool, for a worker that has no MCP (a shell script, a child started by
  * hand): which Claude account profile a process should run on — one the `/limits_autoswitch` list holds; a new one goes to
  * an API-credit account of the list first, then to the account whose weekly limit resets soonest. It reads the bot's cache off `DATA_DIR/state.json` (`utils/claudeUsage.ts`; the bot polls every profile's usage
  * on a timer, so the figures are at most a poll old) and never opens the `StateStore` (that would migrate and lock a live
  * bot's file) nor the network — so `--stopped-by-limit` can only leave the account out, not re-read its usage.
  *
- *   --best         print ONLY the recommended profile's config directory — an EMPTY line for the default
+ *   --best         print ONLY the config directory the next process starts under (the recommended profile's; a hand-over's new worker's) — an EMPTY line for the default
  *                  profile (set nothing) — so `CLAUDE_CONFIG_DIR="$(charness claude-profiles --best)"`
  *                  works as is; exit 1 when no profile is usable (stderr then says which frees up first)
  *   --model <name> the model the child will run (`fable` → the Fable weekly window counts besides the shared ones)
- *   --current <name>  the profile the session being RESUMED last ran on: it stays there while it can
+ *   --current <name>  the profile the session being RESUMED last ran on: it stays there while it can run and is warm (see `--last-run-ended-at`)
  *   --stopped-by-limit  that session broke off on a usage limit: leave `--current` out of the answer
+ *   --last-run-ended-at <ISO>  when that worker's last run ended (the last write of its log; absent = cold): the answer then says
+ *                  whether to RESUME it or to hand its work to a NEW worker on another account (`resume` in `--json`; a
+ *                  `hand over: …` line on stdout, on stderr with `--best`)
  *   --json         the full report as JSON (the MCP tool's shape)
  *
  *   credit <profile> <remainingUsd> [--of <grantUsd>] [--expires YYYY-MM-DD] | credit <profile> --clear
@@ -39,6 +42,7 @@ import {
   claudeChainExclusionWords,
   describeClaudeChainExclusions,
   describeClaudeLaunchOutcome,
+  describeClaudeResumeHandOver,
   formatClaudeUsageBucket,
   getClaudeProfileRecordsFromState,
   type ClaudeProfileReportEntry,
@@ -51,12 +55,14 @@ export interface ClaudeProfilesCliArgs {
   model: string | null;
   currentProfile: string | null;
   isStoppedByLimit: boolean;
+  /** When the resumed worker's last run ended (epoch ms); `null` = not given. */
+  lastRunEndedAtMs: number | null;
 }
 
 /** The length of `YYYY-MM-DD`, the day part of an ISO instant. */
 const isoDayLength = 10;
 
-const usageLine = 'Usage: charness claude-profiles [--best] [--model <name>] [--current <name> [--stopped-by-limit]] [--json]\n'
+const usageLine = 'Usage: charness claude-profiles [--best] [--model <name>] [--current <name> [--stopped-by-limit] [--last-run-ended-at <ISO>]] [--json]\n'
   + '       charness claude-profiles credit <profile> <remainingUsd> [--of <grantUsd>] [--expires YYYY-MM-DD] | <profile> --clear';
 
 /** The first argument that turns the command into the one that gives the bot a profile's API credit figure. */
@@ -64,11 +70,12 @@ const creditSubcommand = 'credit';
 
 /** Parse the subcommand's flags; `null` with a message for anything unknown. */
 export function parseClaudeProfilesCliArgs(argv: readonly string[]): { ok: true; args: ClaudeProfilesCliArgs } | { ok: false; error: string } {
-  const args: ClaudeProfilesCliArgs = { isBest: false, isJson: false, model: null, currentProfile: null, isStoppedByLimit: false };
+  const args: ClaudeProfilesCliArgs = { isBest: false, isJson: false, model: null, currentProfile: null, isStoppedByLimit: false, lastRunEndedAtMs: null };
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
     const model = readFlagValue(argv, i, '--model');
     const current = readFlagValue(argv, i, '--current');
+    const lastRun = readFlagValue(argv, i, '--last-run-ended-at');
     if (arg === '--best') args.isBest = true;
     else if (arg === '--json') args.isJson = true;
     else if (arg === '--stopped-by-limit') args.isStoppedByLimit = true;
@@ -80,9 +87,15 @@ export function parseClaudeProfilesCliArgs(argv: readonly string[]): { ok: true;
       if (current.value === undefined || current.value.trim() === '') return { ok: false, error: '--current needs a profile name' };
       args.currentProfile = current.value;
       i += current.consumed;
+    } else if (lastRun !== null) {
+      const instantMs = lastRun.value === undefined ? Number.NaN : Date.parse(lastRun.value);
+      if (Number.isNaN(instantMs)) return { ok: false, error: '--last-run-ended-at needs an ISO 8601 instant, e.g. 2026-11-21T12:30:00Z' };
+      args.lastRunEndedAtMs = instantMs;
+      i += lastRun.consumed;
     } else return { ok: false, error: `unknown option: ${arg}` };
   }
   if (args.isStoppedByLimit && args.currentProfile === null) return { ok: false, error: '--stopped-by-limit needs --current <name>' };
+  if (args.lastRunEndedAtMs !== null && args.currentProfile === null) return { ok: false, error: '--last-run-ended-at needs --current <name>' };
   return { ok: true, args };
 }
 
@@ -156,6 +169,7 @@ export async function runClaudeProfilesCli(
   const report = buildClaudeProfilesCreditReport(buildClaudeProfileUsageViews({ dataDir, records, creditAnchors: readClaudeApiCreditAnchors(dataDir) }), args.model, nowMs, {
     currentProfile: args.currentProfile,
     isStoppedByLimit: args.isStoppedByLimit,
+    lastRunEndedAtMs: args.lastRunEndedAtMs,
     chainScope: getClaudeLaunchChainScope(normaliseFallbackChain(stateFile.fallbackChain)),
   });
   // A worker is started under whichever folder this names (`CLAUDE_CONFIG_DIR="$(charness claude-profiles --best)"`): every folder it
@@ -163,6 +177,7 @@ export async function runClaudeProfilesCli(
   for (const entry of report.profiles) repairClaudeProfileFolderForLaunch({ dataDir, configDir: entry.configDir, log: (line) => stderr(`${line}\n`) });
   const outcome = describeClaudeLaunchOutcome(report, args.currentProfile);
   const exclusions = describeClaudeChainExclusions(report);
+  const handOver = describeClaudeResumeHandOver(report, args.currentProfile);
   if (args.isJson) {
     stdout(`${JSON.stringify(report, null, 2)}\n`);
     return report.recommended === null && args.isBest ? 1 : 0;
@@ -172,11 +187,15 @@ export async function runClaudeProfilesCli(
       stderr(`no usable Claude profile: ${outcome}${exclusions === null ? '' : ` (${exclusions})`}\n`);
       return 1;
     }
-    const entry = report.profiles.find((profile) => profile.name === report.recommended);
+    // The account the NEXT process starts under: a hand-over names the NEW worker's (a cold worker's own account stays `recommended`).
+    const entry = report.profiles.find((profile) => profile.name === (report.resume?.profile ?? report.recommended));
+    // stdout stays the one config directory a script takes as is; the hand-over is for whoever reads the terminal.
+    if (handOver !== null) stderr(`${handOver}\n`);
     stdout(`${entry?.configDir ?? ''}\n`);
     return 0;
   }
   stdout(`${report.profiles.map((entry) => formatClaudeProfileCliLine(entry, nowMs)).join('\n')}\n`);
   stdout(`recommended for ${args.model ?? 'any model'}: ${report.recommended ?? 'none'} (${outcome})\n`);
+  if (handOver !== null) stdout(`${handOver}\n`);
   return 0;
 }

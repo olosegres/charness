@@ -34,6 +34,10 @@ conversations, Claude Code and OpenCode. The operator's own sessions outside the
   those mechanics — and never tell an agent to use them INSTEAD of another manager. `charness-delivery-loop` is the
   fallback for a session with no general manager skill and is never loaded beside one; the role defaults of the delegate
   skills sit under a heading «only when no general delegate skill is listed».
+- **The account rules have ONE home**: `charness-orchestration` § Accounts and usage limits (ask `claude_profiles` before every launch or
+  resume, hand an old worker's work to a NEW worker instead of resuming it on another account, the mid-run limit exception, the
+  `[Accounts …]` note). `charness-delegate-claude` keeps only what is specific to launching `claude -p` and points there;
+  a test holds that it repeats none of it.
 - The watch recipe in `charness-orchestration` is the `workerWatchCheckCommand` constant of
   `src/scheduler/workerWatch.ts` verbatim, with its cron and its status arguments (the bot posts the
   topic's status line; a unit test holds them equal), and every bot tool a skill names must exist on the bot's MCP surface.
