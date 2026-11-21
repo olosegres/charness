@@ -115,6 +115,21 @@ describe('StateStore: the accounts notes and the limit reminders', () => {
       store.setLimitNoteRecord(threadB, null);
     });
 
+    it('removing the binding (an unbind, a deleted topic) drops the topic\'s record and, with the last one, the map; other conversations keep theirs', async () => {
+      const store = await createStore();
+      store.setLimitNoteRecord(threadA, fullRecord);
+      store.setLimitNoteRecord(threadB, { lastNoteAt: 7 });
+      await store.removeBinding(threadA);
+      assert.equal(store.getLimitNoteRecord(threadA), undefined);
+      assert.deepEqual(store.getLimitNoteRecord(threadB), { lastNoteAt: 7 });
+      await store.flush();
+      assert.deepEqual(readStateFile().limitNotes, { [keyToString(threadB)]: { lastNoteAt: 7 } });
+
+      await store.removeBinding(threadB);
+      await store.flush();
+      assert.equal('limitNotes' in readStateFile(), false, 'no empty map is left behind');
+    });
+
     it('a record with nothing valid in it is no record; a field of the wrong type in a hand-edited file counts as absent', async () => {
       const store = await createStore();
       store.setLimitNoteRecord(threadA, {});

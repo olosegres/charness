@@ -633,6 +633,19 @@ test('topicStatusOverrides: a topic\'s own set round-trips through a reload, ano
   assert.equal('topicStatusOverrides' in JSON.parse(fs.readFileSync(path.join(dataDir, 'state.json'), 'utf8')), false, 'an emptied map leaves no field');
 });
 
+test('topicStatusOverrides: the stored set is a copy — the caller changing its object afterwards, or a reader changing what it got, never changes the topic\'s choice', async () => {
+  const store = new StateStore(dataDir, { saveDebounceMs: 5 });
+  await store.init();
+  const own = { question: true, stuck: true, working: false, finished: true, asleep: false, agents: true, queued: false };
+  await store.setTopicStatusOverride(key1, own);
+  own.working = true;
+  assert.equal(store.getTopicStatusOverride(key1)?.working, false, 'the caller\'s later edit does not reach the stored set');
+  const read = store.getTopicStatusOverride(key1);
+  if (read === undefined) throw new Error('the topic\'s set is missing');
+  read.queued = true;
+  assert.equal(store.getTopicStatusOverride(key1)?.queued, false, 'a reader\'s edit does not reach it either');
+});
+
 test('topicStatusOverrides: a set that is not whole booleans (a hand edit) counts as none', async () => {
   fs.mkdirSync(dataDir, { recursive: true });
   const whole = { question: true, stuck: true, working: true, finished: true, asleep: true, agents: false, queued: false };

@@ -1412,9 +1412,11 @@ export class StateStore {
       delete this.state.agents[k];
       delete this.state.messages[k];
       // The thread is gone (unbind / deleted topic) → so is anything a boot
-      // recovery could resume for it, and the record of its pinned answer.
+      // recovery could resume for it, the record of its pinned answer and what
+      // the accounts notes remembered of it.
       this.dropLimitEpisodeRecovered(k);
       this.dropOptionalMapEntry('answerPins', k);
+      this.dropOptionalMapEntry('limitNotes', k);
       this.scheduleSave();
     });
   }
@@ -2485,6 +2487,36 @@ export class StateStore {
     this.scheduleSave();
   }
 
+  /**
+   * Set one topic's own choice in an optional `state.json` map of such choices (`field` of `this.state`, keyed by {@link SessionKey}
+   * string), or, with `null`, drop it — the map with its last entry. Under the topic's lock, saved debounced; writing the value
+   * already stored is no write. ONE body for the choice-typed overrides (`/question_wait`, `/limits_reminders`, `/topic_status`),
+   * so they can never drift apart; the boolean toggles keep {@link dropToggleOverride}.
+   */
+  private async setTopicChoiceOverride<TField extends string, TChoice>(
+    field: TField,
+    key: SessionKey,
+    choice: TChoice | null,
+    overrides: Partial<Record<TField, Record<string, TChoice>>>,
+  ): Promise<void> {
+    const k = keyToString(key);
+    await this.withLock(key, async () => {
+      const map = overrides[field];
+      if (choice === null) {
+        if (!map || !(k in map)) return;
+        delete map[k];
+        if (Object.keys(map).length === 0) delete overrides[field];
+        this.scheduleSave();
+        return;
+      }
+      if (map?.[k] === choice) return;
+      const target = map ?? {};
+      target[k] = choice;
+      overrides[field] = target;
+      this.scheduleSave();
+    });
+  }
+
   // ── «Bot skills» switch (`/bot_skills`) ──
 
   /**
@@ -2534,19 +2566,7 @@ export class StateStore {
 
   /** @description Set the topic's own question wait (`null` = follow the instance value again; an emptied map is dropped). Debounced. */
   async setQuestionWaitOverride(key: SessionKey, choice: QuestionWaitChoice | null): Promise<void> {
-    const k = keyToString(key);
-    await this.withLock(key, async () => {
-      if (choice === null) {
-        if (!this.state.questionWaitOverrides || !(k in this.state.questionWaitOverrides)) return;
-        delete this.state.questionWaitOverrides[k];
-        if (Object.keys(this.state.questionWaitOverrides).length === 0) delete this.state.questionWaitOverrides;
-        this.scheduleSave();
-        return;
-      }
-      if (this.state.questionWaitOverrides?.[k] === choice) return;
-      (this.state.questionWaitOverrides ??= {})[k] = choice;
-      this.scheduleSave();
-    });
+    await this.setTopicChoiceOverride<'questionWaitOverrides', QuestionWaitChoice>('questionWaitOverrides', key, choice, this.state);
   }
 
   // ── The limit reminders (`/limits_reminders`) and the accounts notes (`limitNotes/`) ──
@@ -2559,19 +2579,7 @@ export class StateStore {
 
   /** @description Set the topic's own limit-reminder interval (`null` = follow the instance value again; an emptied map is dropped). Debounced. */
   async setLimitRemindersOverride(key: SessionKey, choice: LimitReminderChoice | null): Promise<void> {
-    const k = keyToString(key);
-    await this.withLock(key, async () => {
-      if (choice === null) {
-        if (!this.state.limitRemindersOverrides || !(k in this.state.limitRemindersOverrides)) return;
-        delete this.state.limitRemindersOverrides[k];
-        if (Object.keys(this.state.limitRemindersOverrides).length === 0) delete this.state.limitRemindersOverrides;
-        this.scheduleSave();
-        return;
-      }
-      if (this.state.limitRemindersOverrides?.[k] === choice) return;
-      (this.state.limitRemindersOverrides ??= {})[k] = choice;
-      this.scheduleSave();
-    });
+    await this.setTopicChoiceOverride<'limitRemindersOverrides', LimitReminderChoice>('limitRemindersOverrides', key, choice, this.state);
   }
 
   /**
@@ -2622,18 +2630,8 @@ export class StateStore {
 
   /** @description Set the topic's own set of status switches (`null` = follow the instance value again; an emptied map is dropped). Debounced. */
   async setTopicStatusOverride(key: SessionKey, prefs: TopicStatusPrefs | null): Promise<void> {
-    const k = keyToString(key);
-    await this.withLock(key, async () => {
-      if (prefs === null) {
-        if (!this.state.topicStatusOverrides || !(k in this.state.topicStatusOverrides)) return;
-        delete this.state.topicStatusOverrides[k];
-        if (Object.keys(this.state.topicStatusOverrides).length === 0) delete this.state.topicStatusOverrides;
-        this.scheduleSave();
-        return;
-      }
-      (this.state.topicStatusOverrides ??= {})[k] = { ...prefs };
-      this.scheduleSave();
-    });
+    // A copy: the stored set is never the caller's object, and it never equals the one stored before, so a set always writes.
+    await this.setTopicChoiceOverride<'topicStatusOverrides', TopicStatusPrefs>('topicStatusOverrides', key, prefs === null ? null : { ...prefs }, this.state);
   }
 
   // ── The cap on tracker task agents (`/task_agents`) and its wait list ──
@@ -3725,7 +3723,9 @@ export class StateStore {
   /**
    * Drop `k` from one of the optional per-conversation maps, and the map itself
    * with its last entry (an idle bot leaves a clean `state.json`). `false` when
-   * there was no entry. Caller must hold the key lock.
+   * there was no entry. Caller must hold the key lock, or do its whole
+   * read-modify-write synchronously in one tick (`setLimitNoteRecord`, like
+   * `setLimitHeldPrompts`), so that no other write can interleave.
    */
   private dropOptionalMapEntry(field: OptionalConversationMapField, k: string): boolean {
     const map = this.state[field];
