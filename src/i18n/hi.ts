@@ -74,6 +74,7 @@ export const hiDict: Record<string, string> = {
     '/update — बॉट अपडेट: ऑटोमैटिक, सिर्फ़ सूचना, बंद\n' +
     '/bot\\_skills — एजेंटों के लिए बॉट के skills: चालू / बंद\n' +
     '/question\\_wait — एजेंट अपने प्रश्न के उत्तर का कितना इंतज़ार करता है, फिर आगे बढ़ता है: हर विषय का डिफ़ॉल्ट\n' +
+    '/limits\\_reminders — workers चलाने वाले एजेंटों को अकाउंट लिमिट की स्थिति कितनी बार बताई जाए: हर टॉपिक का डिफ़ॉल्ट\n' +
     '/task\\_agents — ट्रैकर के कितने टास्क एजेंट एक साथ काम कर सकते हैं\n' +
     '/runners — एजेंटों के टेस्ट और बिल्ड की मशीनें\n' +
     '/todo — हर प्रोजेक्ट के एजेंटों की कार्य सूचियाँ; उनकी सेटिंग्स\n' +
@@ -1183,19 +1184,20 @@ export const hiDict: Record<string, string> = {
   'limits.boardCaptionGeneral': 'डिफ़ॉल्ट Claude खाता चुनें:',
   'limits.boardSettings': '🔁 ऑटो स्विच: {switch}{switchSource} · ⏳ रीसेट का इंतज़ार: {wait}{waitSource} — /limits_autoswitch',
   'limitReminders.titleGeneral': '🔔 एजेंटों को लिमिट रिमाइंडर',
-  'limitReminders.titleTopic': '🔔 एजेंटों को लिमिट रिमाइंडर — यह विषय',
-  'limitReminders.explanationText': 'जो एजेंट workers चलाते हैं उन्हें अकाउंट्स की लिमिट पर एक छोटा नोट मिलता है: अगला कौन-सा अकाउंट इस्तेमाल करना है और हर लिमिट कब रीसेट होती है — ताकि जो लिमिट पहले रीसेट होती है वह पहले खर्च हो। केवल तब जब वे काम कर रहे हों: सोया हुआ या रुका हुआ विषय कुछ नहीं पाता। लिमिट बदलने पर एक पंक्ति भी।',
+  'limitReminders.titleTopic': '🔔 एजेंटों को लिमिट रिमाइंडर — यह टॉपिक',
+  'limitReminders.explanationText': 'जो एजेंट workers चलाते हैं उन्हें अकाउंट्स की लिमिट पर एक छोटा नोट मिलता है: अगला कौन-सा अकाउंट इस्तेमाल करना है और हर लिमिट कब रीसेट होती है — ताकि जो लिमिट पहले रीसेट होती है वह पहले खर्च हो। केवल तब जब वे काम कर रहे हों: सोया हुआ या रुका हुआ टॉपिक कुछ नहीं पाता। लिमिट बदलने पर एक पंक्ति भी।',
   'limitReminders.nowLine': 'अभी: {value}',
   'limitReminders.valueEvery': 'हर {hours} घंटे',
+  'limitReminders.valueEveryHour': 'हर घंटे',
   'limitReminders.valueOff': 'बंद',
   'limitReminders.valueDefaultMark': '{value} (डिफ़ॉल्ट)',
   'limitReminders.valueAsGeneral': 'General जैसा ({value})',
   'limitReminders.hoursButton': '{hours} घंटे',
   'limitReminders.offButton': 'बंद',
   'limitReminders.asGeneralButton': 'General जैसा',
-  'limitReminders.setGeneralConfirmation': '🔔 लिमिट रिमाइंडर: {value} (वे सभी विषय जिनका अपना चुनाव नहीं)।',
-  'limitReminders.setTopicConfirmation': '🔔 लिमिट रिमाइंडर: {value} (यह विषय)।',
-  'limitReminders.followGeneralConfirmation': '🔔 लिमिट रिमाइंडर: General जैसा — {value} (यह विषय)।',
+  'limitReminders.setGeneralConfirmation': '🔔 लिमिट रिमाइंडर: {value} (वे सभी टॉपिक जिनका अपना चुनाव नहीं)।',
+  'limitReminders.setTopicConfirmation': '🔔 लिमिट रिमाइंडर: {value} (यह टॉपिक)।',
+  'limitReminders.followGeneralConfirmation': '🔔 लिमिट रिमाइंडर: General जैसा — {value} (यह टॉपिक)।',
   'limits.remindersRowLabel': '🔔 रिमाइंडर: {value}',
   'limits.autoswitchTitle': '🔁 उपयोग-सीमा पर स्वचालित स्विचिंग',
   'accounts.openCodeSection': '🔌 OpenCode प्रदाता (कनेक्टेड):\n{list}',

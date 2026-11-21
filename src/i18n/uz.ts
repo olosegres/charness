@@ -74,6 +74,7 @@ export const uzDict: Record<string, string> = {
     '/update — bot yangilanishlari: avtomatik, faqat xabar, o‘chiq\n' +
     '/bot\\_skills — botning agentlar uchun skills’lari: yoqish / o‘chirish\n' +
     '/question\\_wait — agent savoliga javobni qancha kutib, so‘ng davom etadi: barcha mavzular uchun standart\n' +
+    '/limits\\_reminders — workers ishga tushiradigan agentlarga akkauntlar limitlari holati qanchalik tez-tez aytilishi: barcha mavzularning standarti\n' +
     '/task\\_agents — tracker vazifalari bo‘yicha nechta agent bir vaqtda ishlashi mumkin\n' +
     '/runners — agentlarning test va buildlari uchun mashinalar\n' +
     '/todo — barcha loyihalar agentlarining vazifa ro\'yxatlari; ularning sozlamalari\n' +
@@ -1188,6 +1189,7 @@ export const uzDict: Record<string, string> = {
   'limitReminders.explanationText': 'Workers ishga tushiradigan agentlar akkauntlar limitlari haqida qisqa eslatma oladi: keyingi qaysi akkauntdan foydalanish va har bir limit qachon tiklanishi — avval tiklanadigan limitlar avval sarflansin. Faqat ular ishlayotganda: uxlayotgan yoki to‘xtatilgan mavzu hech narsa olmaydi. Limitlar o‘zgarganda yana bir satr.',
   'limitReminders.nowLine': 'Hozir: {value}',
   'limitReminders.valueEvery': 'har {hours} soatda',
+  'limitReminders.valueEveryHour': 'har soatda',
   'limitReminders.valueOff': 'o‘chirilgan',
   'limitReminders.valueDefaultMark': '{value} (standart)',
   'limitReminders.valueAsGeneral': 'General kabi ({value})',

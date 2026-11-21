@@ -74,6 +74,7 @@ export const ptDict: Record<string, string> = {
     '/update — atualizações do bot: automáticas, só avisar, desligadas\n' +
     '/bot\\_skills — skills do bot para os agentes: ligar / desligar\n' +
     '/question\\_wait — quanto tempo um agente espera pela resposta à pergunta antes de seguir: padrão de todos os tópicos\n' +
+    '/limits\\_reminders — com que frequência os agentes que lançam workers são avisados do estado dos limites das contas: o padrão de todos os tópicos\n' +
     '/task\\_agents — quantos agentes de tarefas do tracker podem trabalhar ao mesmo tempo\n' +
     '/runners — máquinas para testes e builds dos agentes\n' +
     '/todo — as listas de tarefas dos agentes de cada projeto; suas configurações\n' +
@@ -1189,6 +1190,7 @@ export const ptDict: Record<string, string> = {
   'limitReminders.explanationText': 'Os agentes que lançam workers recebem uma nota curta sobre os limites das contas: qual conta usar a seguir e quando cada limite reinicia — para que os limites que reiniciam primeiro sejam gastos primeiro. Só enquanto trabalham: um tópico adormecido ou em pausa não recebe nada. Também uma linha quando os limites mudam.',
   'limitReminders.nowLine': 'Agora: {value}',
   'limitReminders.valueEvery': 'a cada {hours} h',
+  'limitReminders.valueEveryHour': 'a cada hora',
   'limitReminders.valueOff': 'desligado',
   'limitReminders.valueDefaultMark': '{value} (padrão)',
   'limitReminders.valueAsGeneral': 'como em General ({value})',

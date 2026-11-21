@@ -78,6 +78,7 @@ export const enDict: Record<string, string> = {
     '/update — bot updates: automatic, notify only, off\n' +
     '/bot\\_skills — the bot\'s own skills for agents: on / off\n' +
     '/question\\_wait — how long an agent waits for an answer to its question before going on: the default of every topic\n' +
+    '/limits\\_reminders — how often agents that launch workers are told where the accounts\' limits stand: the default of every topic\n' +
     '/task\\_agents — how many tracker task agents may work at once\n' +
     '/runners — machines for the agents\' tests and builds\n' +
     '/todo — the agents\' todo lists of every project; their settings\n' +
@@ -1232,6 +1233,7 @@ export const enDict: Record<string, string> = {
   'limitReminders.explanationText': 'Agents that launch workers get a short note on the accounts\' limits: which account to use next and when each limit resets — so the limits that reset first are spent first. Only while they work: a sleeping or paused topic gets nothing. Also one line when the limits change.',
   'limitReminders.nowLine': 'Now: {value}',
   'limitReminders.valueEvery': 'every {hours} h',
+  'limitReminders.valueEveryHour': 'every 1 h',
   'limitReminders.valueOff': 'off',
   'limitReminders.valueDefaultMark': '{value} (default)',
   'limitReminders.valueAsGeneral': 'as General ({value})',

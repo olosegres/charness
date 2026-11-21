@@ -56,9 +56,14 @@ export function parseLimitRemindersCallbackData(data: string): LimitRemindersPic
   return limitReminderChoices.find((choice) => choice.toString() === match[1]) ?? null;
 }
 
-/** @description The interval in words: `every 2 h`, or `off`. */
+/**
+ * @description The interval in words: `every 2 h`, `every 1 h`, or `off`. One hour — the default, so the value people see most — has a
+ * phrase of its own: «every {hours} h» with 1 is not grammatical in every language («каждые 1 ч», «toutes les 1 h»).
+ */
 export function formatLimitRemindersValue(minutes: LimitReminderMinutes | null): string {
-  return minutes === null ? t('limitReminders.valueOff') : t('limitReminders.valueEvery', { hours: (minutes / minutesPerHour).toString() });
+  if (minutes === null) return t('limitReminders.valueOff');
+  const hours = minutes / minutesPerHour;
+  return hours === 1 ? t('limitReminders.valueEveryHour') : t('limitReminders.valueEvery', { hours: hours.toString() });
 }
 
 function buildChoiceButton(choice: LimitReminderChoice, isCurrent: boolean): LimitRemindersButton {

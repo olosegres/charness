@@ -74,6 +74,7 @@ export const zhDict: Record<string, string> = {
     '/update — 机器人更新：自动、仅通知、关闭\n' +
     '/bot\\_skills — 机器人提供给智能体的技能：开启 / 关闭\n' +
     '/question\\_wait — 智能体等待其提问的回答多久后继续工作：所有话题的默认值\n' +
+    '/limits\\_reminders — 启动 worker 的智能体多久被告知一次账号用量上限的情况：所有话题的默认值\n' +
     '/task\\_agents — 可同时工作的跟踪器任务智能体数量\n' +
     '/runners — 智能体测试和构建用的机器\n' +
     '/todo — 所有项目中智能体的任务列表及其设置\n' +
@@ -1182,6 +1183,7 @@ export const zhDict: Record<string, string> = {
   'limitReminders.explanationText': '启动 worker 的智能体会收到一条关于账号用量上限的简短说明：接下来用哪个账号、每个上限何时重置 —— 这样先重置的上限会先被用掉。仅在它们工作时发送：休眠或暂停的话题什么都收不到。上限变化时还会多一行。',
   'limitReminders.nowLine': '当前：{value}',
   'limitReminders.valueEvery': '每 {hours} 小时',
+  'limitReminders.valueEveryHour': '每小时',
   'limitReminders.valueOff': '关闭',
   'limitReminders.valueDefaultMark': '{value}（默认）',
   'limitReminders.valueAsGeneral': '同 General（{value}）',

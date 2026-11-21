@@ -74,6 +74,7 @@ export const esDict: Record<string, string> = {
     '/update — actualizaciones del bot: automáticas, solo avisar, apagadas\n' +
     '/bot\\_skills — skills del bot para los agentes: activar / desactivar\n' +
     '/question\\_wait — cuánto espera un agente la respuesta a su pregunta antes de seguir: valor por defecto de cada tema\n' +
+    '/limits\\_reminders — cada cuánto se avisa a los agentes que lanzan workers del estado de los límites de las cuentas: el valor de todos los temas\n' +
     '/task\\_agents — cuántos agentes de tareas del tracker pueden trabajar a la vez\n' +
     '/runners — máquinas para las pruebas y builds de los agentes\n' +
     '/todo — las listas de tareas de los agentes de cada proyecto; sus ajustes\n' +
@@ -1188,6 +1189,7 @@ export const esDict: Record<string, string> = {
   'limitReminders.explanationText': 'Los agentes que lanzan workers reciben una nota breve sobre los límites de las cuentas: qué cuenta usar a continuación y cuándo se reinicia cada límite, para que se gasten primero los límites que se reinician antes. Solo mientras trabajan: un tema dormido o en pausa no recibe nada. Además, una línea cuando cambian los límites.',
   'limitReminders.nowLine': 'Ahora: {value}',
   'limitReminders.valueEvery': 'cada {hours} h',
+  'limitReminders.valueEveryHour': 'cada hora',
   'limitReminders.valueOff': 'desactivado',
   'limitReminders.valueDefaultMark': '{value} (predeterminado)',
   'limitReminders.valueAsGeneral': 'como en General ({value})',

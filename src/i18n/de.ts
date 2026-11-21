@@ -74,6 +74,7 @@ export const deDict: Record<string, string> = {
     '/update — Bot-Updates: automatisch, nur benachrichtigen, aus\n' +
     '/bot\\_skills — Skills des Bots für Agenten: ein / aus\n' +
     '/question\\_wait — wie lange ein Agent auf eine Antwort auf seine Frage wartet, bevor er weitermacht: Standard jedes Themas\n' +
+    '/limits\\_reminders — wie oft Agenten, die Worker starten, über den Stand der Konto-Limits informiert werden: der Standard jedes Themas\n' +
     '/task\\_agents — wie viele Tracker-Aufgaben-Agenten gleichzeitig arbeiten dürfen\n' +
     '/runners — Maschinen für Tests und Builds der Agenten\n' +
     '/todo — die Aufgabenlisten der Agenten aller Projekte; ihre Einstellungen\n' +
@@ -1188,6 +1189,7 @@ export const deDict: Record<string, string> = {
   'limitReminders.explanationText': 'Agenten, die Worker starten, bekommen eine kurze Notiz zu den Limits der Konten: welches Konto als Nächstes dran ist und wann jedes Limit zurückgesetzt wird — so werden die Limits, die zuerst zurückgesetzt werden, zuerst verbraucht. Nur solange sie arbeiten: ein schlafendes oder pausiertes Thema bekommt nichts. Dazu eine Zeile, wenn sich die Limits ändern.',
   'limitReminders.nowLine': 'Jetzt: {value}',
   'limitReminders.valueEvery': 'alle {hours} Std.',
+  'limitReminders.valueEveryHour': 'jede Stunde',
   'limitReminders.valueOff': 'aus',
   'limitReminders.valueDefaultMark': '{value} (Standard)',
   'limitReminders.valueAsGeneral': 'wie in General ({value})',

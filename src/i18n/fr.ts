@@ -74,6 +74,7 @@ export const frDict: Record<string, string> = {
     '/update — mises à jour du bot : automatiques, notifier seulement, désactivées\n' +
     '/bot\\_skills — skills du bot pour les agents : activer / désactiver\n' +
     '/question\\_wait — combien de temps un agent attend une réponse à sa question avant de continuer : valeur par défaut de chaque sujet\n' +
+    '/limits\\_reminders — à quelle fréquence les agents qui lancent des workers sont informés de l’état des limites des comptes : la valeur par défaut de tous les sujets\n' +
     '/task\\_agents — combien d’agents de tâches du tracker peuvent travailler en même temps\n' +
     '/runners — machines pour les tests et builds des agents\n' +
     '/todo — les listes de tâches des agents de chaque projet ; leurs réglages\n' +
@@ -1188,6 +1189,7 @@ export const frDict: Record<string, string> = {
   'limitReminders.explanationText': 'Les agents qui lancent des workers reçoivent une courte note sur les limites des comptes : quel compte utiliser ensuite et quand chaque limite se réinitialise — pour que les limites qui se réinitialisent en premier soient dépensées en premier. Seulement pendant qu’ils travaillent : un sujet endormi ou en pause ne reçoit rien. Aussi une ligne quand les limites changent.',
   'limitReminders.nowLine': 'Maintenant : {value}',
   'limitReminders.valueEvery': 'toutes les {hours} h',
+  'limitReminders.valueEveryHour': 'toutes les heures',
   'limitReminders.valueOff': 'désactivé',
   'limitReminders.valueDefaultMark': '{value} (par défaut)',
   'limitReminders.valueAsGeneral': 'comme dans General ({value})',

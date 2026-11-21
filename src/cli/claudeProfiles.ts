@@ -120,7 +120,7 @@ function formatApiCreditParts(entry: ClaudeProfileReportEntry): string {
 }
 
 /** One human line (`✓` marks the account the next process goes to): `✓ work  /data/…/work  mail@example.com personal max  5h 12% 🔄 in 2h · week 40% 🔄 in 2d 1h · Fable 3% 🔄 in 2d 1h` (no Fable part for an account without that window; an account billed to API credits says so and has no windows). */
-export function formatClaudeProfileCliLine(entry: ClaudeProfileReportEntry, nowMs: number, pickedName?: string | null): string {
+export function formatClaudeProfileCliLine(entry: ClaudeProfileReportEntry, nowMs: number, pickedName?: string): string {
   const find = (kind: ClaudeUsageBucketKind) => entry.buckets.find((bucket) => bucket.kind === kind) ?? null;
   const weeklyBucket = find('weekly_all');
   const read = (kind: ClaudeUsageBucketKind) => formatClaudeUsageBucket(find(kind), nowMs, { fallbackBucket: kind === 'session' ? weeklyBucket : null });

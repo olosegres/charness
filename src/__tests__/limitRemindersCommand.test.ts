@@ -3,15 +3,20 @@
  * (`commandModuleHarness.ts`) and the real state store, with a real `settings.json` in a temp folder:
  *
  *   • the command and its hidden alias, the one button pattern;
- *   • the screen: General's names the value in force («(default)» while nothing was chosen) and marks it; a topic's names where it comes
- *     from — «as General» with General's value, or its own — with ✓ on «As General» or on its own choice;
+ *   • the screen: General's marks the value in force; a topic's names where it comes from — «as General» with General's value, or its
+ *     own — with ✓ on «As General» or on its own choice;
  *   • a ONE-SHOT picker: a tap writes what the button names (a topic: its own choice, `general` drops it; General: `settings.json`
- *     `limitReminders.everyMinutes`, Off as `0`) and edits the picker into the confirmation, the keyboard gone;
- *   • a topic's choice beats General's in either direction; a keyboard that has gone stale still means what it says; a settings file that
- *     cannot be written says so and changes nothing; a refused tap changes nothing;
+ *     `limitReminders.everyMinutes`) and edits the picker into the confirmation, the keyboard gone;
+ *   • a keyboard that has gone stale still means what it says; a settings file that cannot be written says so and changes nothing; a
+ *     refused tap changes nothing;
  *   • what the `/limits` board's row asks for: the opener and the label (the value in force).
  *
  * The value the screens show is the one the notes read (`resolveLimitRemindersMinutes`, over the same settings reader).
+ *
+ * One check, one level: what the built bot shows an operator — General's first screen, a topic's own choice and its confirmation, Off
+ * written as 0, a topic's choice beating General's both ways, «As General», the board's row, a Russian chat — is
+ * `limitRemindersE2e.test.ts`'s. This file keeps what a flow cannot reach cheaply: the settings file beside other fields, a file that
+ * cannot be written, a refused tap, a hand-made callback, a stale keyboard, «As General» in General, the row label's cases.
  */
 
 /** Test case: N/A — Charness has no Jira tracker. */
@@ -88,16 +93,6 @@ describe('/limits_reminders, through the module', () => {
   });
 
   describe('the screen', () => {
-    it('in General with nothing chosen: the explanation, «every 1 h (default)», ✓ on 1 h — and no «as General»', async () => {
-      harness.isGeneral = true;
-      await harness.runCommand('limits_reminders');
-
-      const screen = getSentScreen();
-      assert.equal(screen.text, ['🔔 Limit reminders to agents', enDict['limitReminders.explanationText'], 'Now: every 1 h (default)'].join('\n\n'));
-      assert.deepEqual(screen.labels, [['1 h ✓', '2 h', '4 h', 'Off']]);
-      assert.deepEqual(screen.data, [['lrm_60', 'lrm_120', 'lrm_240', 'lrm_0']]);
-    });
-
     it('in General with a chosen value: no «(default)», ✓ on that value; Off is marked on Off', async () => {
       fs.writeFileSync(settingsPath, JSON.stringify({ limitReminders: { everyMinutes: 240 } }));
       harness.isGeneral = true;
@@ -137,33 +132,12 @@ describe('/limits_reminders, through the module', () => {
   });
 
   describe('a tap — the picker is consumed', () => {
-    it('in a topic: its own choice is stored, the picker becomes «… (this topic).» and the keyboard is gone', async () => {
-      await harness.tapButton(pickerMessageId, 'lrm_120');
-
-      assert.equal(harness.state.getLimitRemindersOverride(harness.key), 120);
-      assert.equal(harness.edits.at(-1)?.messageId, pickerMessageId, 'edited in place');
-      assert.equal(getEditedScreen().text, '🔔 Limit reminders: every 2 h (this topic).');
-      assert.deepEqual(getEditedScreen().labels, noButtons, 'no buttons left');
-      assert.equal(harness.replies.length, 0, 'no second message');
-      assert.equal(getEditedScreen().text.includes('{'), false);
-    });
-
     it('«Off» in a topic is its own choice (stored as 0) and reads «off»', async () => {
       await harness.tapButton(pickerMessageId, 'lrm_0');
 
       assert.equal(harness.state.getLimitRemindersOverride(harness.key), 0);
       assert.equal(getEditedScreen().text, '🔔 Limit reminders: off (this topic).');
       assert.equal(getEffectiveMinutes(), null, 'the notes read it as Off');
-    });
-
-    it('«As General» drops the topic\'s choice and says what it follows now', async () => {
-      fs.writeFileSync(settingsPath, JSON.stringify({ limitReminders: { everyMinutes: 240 } }));
-      await harness.state.setLimitRemindersOverride(harness.key, 0);
-      await harness.tapButton(pickerMessageId, 'lrm_g');
-
-      assert.equal(harness.state.getLimitRemindersOverride(harness.key), undefined);
-      assert.equal(getEditedScreen().text, '🔔 Limit reminders: as General — every 4 h (this topic).');
-      assert.deepEqual(getEditedScreen().labels, noButtons);
     });
 
     it('in General: the value is written to settings.json beside the other fields and the picker says «… (all topics without their own choice).»', async () => {
@@ -179,37 +153,12 @@ describe('/limits_reminders, through the module', () => {
       assert.equal(load.status, 'ok', 'the file stays valid');
     });
 
-    it('«Off» in General is written as 0 and reads «off (all topics without their own choice)»', async () => {
-      harness.isGeneral = true;
-      await harness.tapButton(pickerMessageId, 'lrm_0');
-
-      assert.deepEqual(readSettingsFile(), { limitReminders: { everyMinutes: 0 } });
-      assert.equal(getEditedScreen().text, '🔔 Limit reminders: off (all topics without their own choice).');
-    });
-
     it('«As General» tapped in General changes nothing and writes no file', async () => {
       harness.isGeneral = true;
       await harness.tapButton(pickerMessageId, 'lrm_g');
 
       assert.equal(fs.existsSync(settingsPath), false);
       assert.deepEqual(getEditedScreen().labels, noButtons);
-    });
-
-    it('a topic\'s own choice beats General\'s, in both directions — what the notes read follows', async () => {
-      harness.isGeneral = true;
-      await harness.tapButton(pickerMessageId, 'lrm_0');
-      harness.isGeneral = false;
-      assert.equal(getEffectiveMinutes(), null, 'General Off: a topic without a choice gets nothing');
-      await harness.tapButton(pickerMessageId, 'lrm_60');
-      assert.equal(getEffectiveMinutes(), 60, 'a topic\'s interval beats General\'s Off');
-
-      harness.isGeneral = true;
-      await harness.tapButton(pickerMessageId, 'lrm_240');
-      harness.isGeneral = false;
-      await harness.tapButton(pickerMessageId, 'lrm_0');
-      assert.equal(getEffectiveMinutes(), null, 'a topic\'s Off beats General\'s interval');
-      await harness.tapButton(pickerMessageId, 'lrm_g');
-      assert.equal(getEffectiveMinutes(), 240, 'and following General again gives General\'s');
     });
 
     it('a keyboard that has gone stale still means what its button says: the named choice is applied, whatever is stored now', async () => {

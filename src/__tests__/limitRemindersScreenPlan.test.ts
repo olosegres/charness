@@ -99,14 +99,37 @@ describe('the confirmation and the row', () => {
 describe('in every locale', () => {
   const keys = Object.keys(enDict).filter((key) => key.startsWith('limitReminders.') || key === 'limits.remindersRowLabel');
 
-  it('the strings exist (15 of them), and a language that is not English says them in its own words', () => {
-    assert.equal(keys.length, 15);
+  it('the strings exist (16 of them), and a language that is not English says them in its own words', () => {
+    assert.equal(keys.length, 16);
     for (const locale of localeCodes) {
       for (const key of keys) {
         const text = runWithLocale(locale, () => t(key as keyof typeof enDict));
         assert.ok(text.trim().length > 0, `${locale} ${key}`);
         if (locale !== 'en' && key === 'limitReminders.explanationText') assert.notEqual(text, enDict['limitReminders.explanationText'], `${locale}: the explanation is translated`);
       }
+    }
+  });
+
+  it('one hour — the default, the value people see most — has a phrase of its own that is grammatical in the language: never «every 1 h» pasted into a plural form', () => {
+    const oneHour: Record<string, string> = {
+      en: 'every 1 h', de: 'jede Stunde', es: 'cada hora', fr: 'toutes les heures', hi: 'हर घंटे', ja: '1時間ごと', ka: 'ყოველ საათში',
+      pt: 'a cada hora', ru: 'каждый час', uk: 'щогодини', uz: 'har soatda', zh: '每小时',
+    };
+    assert.deepEqual(Object.keys(oneHour).sort(), [...localeCodes].sort(), 'every locale is named');
+    for (const locale of localeCodes) {
+      assert.equal(runWithLocale(locale, () => formatLimitRemindersValue(60)), oneHour[locale], locale);
+      const twoHours = runWithLocale(locale, () => formatLimitRemindersValue(120));
+      assert.ok(twoHours.includes('2') && twoHours !== oneHour[locale], `${locale}: two hours names the number: ${twoHours}`);
+    }
+    // The places the value is read: the board's row and the picker's «Now» line, in the two languages whose plural made «1» wrong.
+    assert.equal(runWithLocale('ru', () => buildLimitRemindersRowLabel({ generalChoice: null, ownChoice: undefined })), '🔔 Напоминания: каждый час');
+    assert.ok(runWithLocale('fr', () => buildLimitRemindersScreen({ isGeneral: true, generalChoice: null, ownChoice: undefined })).text.endsWith('Maintenant : toutes les heures (par défaut)'));
+  });
+
+  it('/help names the command in General (where it sets every topic\'s default) and in a bound topic, in every locale', () => {
+    for (const locale of localeCodes) {
+      assert.ok(runWithLocale(locale, () => t('help.general')).includes('/limits\\_reminders'), `${locale}: help.general`);
+      assert.ok(runWithLocale(locale, () => t('help.thread_bound', { subdir: 'x' })).includes('/limits_reminders'), `${locale}: help.thread_bound`);
     }
   });
 

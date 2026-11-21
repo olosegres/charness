@@ -12,10 +12,13 @@
  *     THAT topic's next prompt carries the reminder while the topic that follows General's Off still gets none
  *   → the `/limits` board: a row under the accounts names the value in force (`🔔 Reminders: off`); a tap opens the picker as a new
  *     message and leaves the board alone; a pick there shows on the board's row at its next opening; General's row opens General's picker
- *   → a topic's own Off beats General's interval, a topic's own interval beats it the other way — read from the prompts again
+ *   → a topic's own Off beats General's interval — read from the prompts again; «As General» drops the topic's own choice, says what it
+ *     follows now, and the next prompt follows General's 4 h
  *   → the same screens in Russian (the chat's language), picker and board row
  *
- * The strings of all twelve languages are `limitRemindersScreenPlan.test.ts`'s; the module over a harness is `limitRemindersCommand.test.ts`'s.
+ * The strings of all twelve languages are `limitRemindersScreenPlan.test.ts`'s; what a flow cannot reach cheaply — the settings file
+ * beside other fields, an unwritable file, a refused tap, a stale or hand-made callback — is the module's own, over a harness:
+ * `limitRemindersCommand.test.ts`.
  * Nothing leaves the machine: the Bot API is on loopback and the agent is a fake. Everything the test starts is stopped in `after`.
  */
 
@@ -290,13 +293,25 @@ describe('/limits_reminders and the /limits row end to end: built charness, fake
     assert.match(getPromptText(secondLabel), reminderRe, 'topic B\'s own 2 h: its reminder is due');
   });
 
+  it('«As General» drops the topic\'s own choice, names what it follows now, and the next prompt follows General\'s 4 h', async () => {
+    const picker = await first.sendAndAwaitReply('/limits_reminders', 'Limit reminders to agents — this topic');
+    assert.deepEqual(first.getKeyboardLabels(picker), [['As General'], ['1 h', '2 h', '4 h', 'Off ✓']], 'the topic\'s own Off is the one marked');
+    const confirmation = await tapPicker(first, picker, 'lrm_g');
+    assert.equal(confirmation.text, '🔔 Limit reminders: as General — every 4 h (this topic).');
+    assert.deepEqual(first.getKeyboardLabels(confirmation), []);
+    assert.equal(readPersistedState(getLayout()).limitRemindersOverrides?.[firstTopicKey], undefined, 'the topic\'s own choice is gone from state.json');
+
+    const firstLabel = await runTurn(first, firstThreadId, 'AA');
+    assert.match(getPromptText(firstLabel), reminderRe, 'General\'s 4 h applies again: the reminder is due');
+  });
+
   it('in Russian — the chat\'s language — the picker, its confirmation and the board\'s row are worded in it', async () => {
     charness = await restartCharnessWithState(getLayout(), fakeTelegram, getCharness(), (persisted) => {
       persisted.chatLocaleOverrides = { [group.id.toString()]: 'ru' };
     });
     const picker = await first.sendAndAwaitReply('/limits_reminders', 'Напоминания агентам о лимитах — этот топик');
-    assert.ok(picker.text.endsWith('Сейчас: выкл'), picker.text);
-    assert.deepEqual(first.getKeyboardLabels(picker), [['Как в General'], ['1 ч', '2 ч', '4 ч', 'Выкл ✓']]);
+    assert.ok(picker.text.endsWith('Сейчас: как в General (каждые 4 ч)'), picker.text);
+    assert.deepEqual(first.getKeyboardLabels(picker), [['Как в General ✓'], ['1 ч', '2 ч', '4 ч', 'Выкл']]);
     assert.deepEqual(first.getKeyboardData(picker), [['lrm_g'], ['lrm_60', 'lrm_120', 'lrm_240', 'lrm_0']], 'the data does not depend on the language');
     const confirmation = await tapPicker(first, picker, 'lrm_120');
     assert.equal(confirmation.text, '🔔 Напоминания о лимитах: каждые 2 ч (этот топик).');

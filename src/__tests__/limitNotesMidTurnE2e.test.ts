@@ -273,11 +273,20 @@ describe('An accounts note is a passenger, never a cause, end to end: built char
   });
 
   it('turn 3: the figures changed; the send tool\'s result carries the «changed» summary for the orchestrating topic — and nothing for the control', async () => {
+    // The summary rides the FIRST send tool's result after the picture changed — `answer_request` is one too. A turn that still owes
+    // answers to earlier requests (the topic shows an answer's streamed text before its `answer_request(final)` lands, so on a loaded box
+    // turn 3's message can arrive while turn 0–2's requests are open) answers those first, and the summary goes to one of THOSE results
+    // (measured: a run in six, `answer_request` «had just been closed» took it). So the precondition is explicit: every earlier request
+    // is closed before turn 3 starts, and turn 3's first send tool is the digest.
+    const earlierLabels = ['NOTE-0', 'NOTE-1', 'NOTE-2', 'CTRL-0', 'CTRL-1', 'CTRL-2'];
+    await getCharness().waitFor('every earlier request to be answered final', replyTimeoutMs, () => {
+      const finals = readJsonLines<{ issueKey: string; kind: string }>(path.join(getLayout().fakeLogDir, fakeClaudeLogFileNames.answers)).filter((answer) => answer.kind === 'final');
+      return earlierLabels.every((label) => finals.some((answer) => answer.issueKey === label));
+    });
     writeUsageWindows(62);
-    // The turn works 2 s before it calls the send tool: the figures its first frame carries are applied by the bot's stdout poll by then,
-    // also on a loaded box (the poll backs off to 1.5 s) — the result of the call must see the changed picture.
-    await sendBoth((name) => `${name}-3 [fake:send-messages] [work-ms:2000] third turn`);
+    await sendBoth((name) => `${name}-3 [fake:send-messages] third turn`);
     await waitForAnswers(3);
+    assert.doesNotMatch(getPromptText('NOTE-3'), /It replaces the same requester's earlier requests/, 'precondition: turn 3 supersedes no earlier request, so no answer of its own comes before the digest');
     const noteResult = listToolCalls().find((call) => call.issueKey === 'NOTE-3' && call.tool === 'send_messages_to_user');
     const controlResult = listToolCalls().find((call) => call.issueKey === 'CTRL-3' && call.tool === 'send_messages_to_user');
     assert.ok(noteResult && controlResult, `both agents called the send tool: ${JSON.stringify(listToolCalls())}`);

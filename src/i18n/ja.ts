@@ -74,6 +74,7 @@ export const jaDict: Record<string, string> = {
     '/update — ボットの更新：自動、通知のみ、オフ\n' +
     '/bot\\_skills — エージェント向けボットのスキル：オン / オフ\n' +
     '/question\\_wait — エージェントが質問への回答を待つ時間（すべてのトピックの既定値）\n' +
+    '/limits\\_reminders — worker を起動するエージェントにアカウント上限の状況を知らせる間隔：すべてのトピックの既定値\n' +
     '/task\\_agents — トラッカーのタスクエージェントを同時に動かせる数\n' +
     '/runners — エージェントのテストとビルド用マシン\n' +
     '/todo — 全プロジェクトのエージェントのタスクリストと設定\n' +
@@ -1182,6 +1183,7 @@ export const jaDict: Record<string, string> = {
   'limitReminders.explanationText': 'worker を起動するエージェントには、アカウントの上限について短いメモが届きます。次に使うアカウントと各上限のリセット時刻を伝え、先にリセットされる上限から使い切れるようにします。作業中のときだけで、スリープ中や一時停止中のトピックには何も届きません。上限が変わったときは 1 行も届きます。',
   'limitReminders.nowLine': '現在: {value}',
   'limitReminders.valueEvery': '{hours}時間ごと',
+  'limitReminders.valueEveryHour': '1時間ごと',
   'limitReminders.valueOff': 'オフ',
   'limitReminders.valueDefaultMark': '{value}（既定）',
   'limitReminders.valueAsGeneral': 'General と同じ（{value}）',
