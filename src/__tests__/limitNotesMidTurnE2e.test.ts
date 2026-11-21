@@ -274,7 +274,9 @@ describe('An accounts note is a passenger, never a cause, end to end: built char
 
   it('turn 3: the figures changed; the send tool\'s result carries the «changed» summary for the orchestrating topic — and nothing for the control', async () => {
     writeUsageWindows(62);
-    await sendBoth((name) => `${name}-3 [fake:send-messages] third turn`);
+    // The turn works 2 s before it calls the send tool: the figures its first frame carries are applied by the bot's stdout poll by then,
+    // also on a loaded box (the poll backs off to 1.5 s) — the result of the call must see the changed picture.
+    await sendBoth((name) => `${name}-3 [fake:send-messages] [work-ms:2000] third turn`);
     await waitForAnswers(3);
     const noteResult = listToolCalls().find((call) => call.issueKey === 'NOTE-3' && call.tool === 'send_messages_to_user');
     const controlResult = listToolCalls().find((call) => call.issueKey === 'CTRL-3' && call.tool === 'send_messages_to_user');

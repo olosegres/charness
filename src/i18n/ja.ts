@@ -103,6 +103,7 @@ export const jaDict: Record<string, string> = {
     '/todo — エージェントが公開したタスクリストとそのプロジェクト\n' +
     '/limits — 各アカウントとプロバイダーの使用状況。タップするとこのトピックを切り替えます\n' +
     '/limits_autoswitch — 使用量上限でのモデル自動切り替え（予備リスト、切り替え、待機）\n' +
+    '/limits_reminders — worker を起動するエージェントにアカウント上限の状況を知らせる間隔（1 / 2 / 4 時間 / オフ）\n' +
     '/accounts — Claude アカウントと OpenCode プロバイダー（切り替え、追加、再ログイン、削除、接続、切断）\n' +
     '/access — 管理者以外で、このトピックでエージェントと話せる人\n' +
     '/clear — スレッドのメッセージを削除\n' +
@@ -1176,6 +1177,21 @@ export const jaDict: Record<string, string> = {
   'limits.boardCaption': 'アクティブなモデルを選択:',
   'limits.boardCaptionGeneral': '既定の Claude アカウントを選択:',
   'limits.boardSettings': '🔁 自動切替: {switch}{switchSource} · ⏳ リセット待ち: {wait}{waitSource} — /limits_autoswitch',
+  'limitReminders.titleGeneral': '🔔 エージェントへの上限リマインダー',
+  'limitReminders.titleTopic': '🔔 エージェントへの上限リマインダー — このトピック',
+  'limitReminders.explanationText': 'worker を起動するエージェントには、アカウントの上限について短いメモが届きます。次に使うアカウントと各上限のリセット時刻を伝え、先にリセットされる上限から使い切れるようにします。作業中のときだけで、スリープ中や一時停止中のトピックには何も届きません。上限が変わったときは 1 行も届きます。',
+  'limitReminders.nowLine': '現在: {value}',
+  'limitReminders.valueEvery': '{hours}時間ごと',
+  'limitReminders.valueOff': 'オフ',
+  'limitReminders.valueDefaultMark': '{value}（既定）',
+  'limitReminders.valueAsGeneral': 'General と同じ（{value}）',
+  'limitReminders.hoursButton': '{hours}時間',
+  'limitReminders.offButton': 'オフ',
+  'limitReminders.asGeneralButton': 'General と同じ',
+  'limitReminders.setGeneralConfirmation': '🔔 上限リマインダー: {value}（個別に選んでいないすべてのトピック）。',
+  'limitReminders.setTopicConfirmation': '🔔 上限リマインダー: {value}（このトピック）。',
+  'limitReminders.followGeneralConfirmation': '🔔 上限リマインダー: General と同じ — {value}（このトピック）。',
+  'limits.remindersRowLabel': '🔔 リマインダー: {value}',
   'limits.autoswitchTitle': '🔁 使用量上限での自動切り替え',
   'accounts.openCodeSection': '🔌 OpenCode プロバイダー（接続済み）:\n{list}',
   'accounts.openCodeNone': '🔌 OpenCode プロバイダー: まだ接続されていません。「➕ OpenCode プロバイダー」で接続できます。',

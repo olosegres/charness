@@ -103,6 +103,7 @@ export const deDict: Record<string, string> = {
     '/todo — die veröffentlichte Aufgabenliste des Agenten und sein Projekt\n' +
     '/limits — Verbrauch aller Konten und Provider; tippe auf eines, um dieses Thema umzustellen\n' +
     '/limits_autoswitch — automatischer Modellwechsel bei Nutzungslimit (Ersatzliste, Wechsel, Warten)\n' +
+    '/limits_reminders — wie oft Agenten, die Worker starten, über den Stand der Konto-Limits informiert werden (1 / 2 / 4 Std. / aus)\n' +
     '/accounts — Claude-Konten und OpenCode-Provider (wechseln, hinzufügen, neu anmelden, entfernen, verbinden, trennen)\n' +
     '/access — wer außer den Admins in diesem Thema mit dem Agenten sprechen darf\n' +
     '/clear — Thread-Nachrichten löschen\n' +
@@ -1182,6 +1183,21 @@ export const deDict: Record<string, string> = {
   'limits.boardCaption': 'Wähle das aktive Modell:',
   'limits.boardCaptionGeneral': 'Wähle das Standard-Claude-Konto:',
   'limits.boardSettings': '🔁 Auto-Wechsel: {switch}{switchSource} · ⏳ Auf Reset warten: {wait}{waitSource} — /limits_autoswitch',
+  'limitReminders.titleGeneral': '🔔 Limit-Erinnerungen an Agenten',
+  'limitReminders.titleTopic': '🔔 Limit-Erinnerungen an Agenten — dieses Thema',
+  'limitReminders.explanationText': 'Agenten, die Worker starten, bekommen eine kurze Notiz zu den Limits der Konten: welches Konto als Nächstes dran ist und wann jedes Limit zurückgesetzt wird — so werden die Limits, die zuerst zurückgesetzt werden, zuerst verbraucht. Nur solange sie arbeiten: ein schlafendes oder pausiertes Thema bekommt nichts. Dazu eine Zeile, wenn sich die Limits ändern.',
+  'limitReminders.nowLine': 'Jetzt: {value}',
+  'limitReminders.valueEvery': 'alle {hours} Std.',
+  'limitReminders.valueOff': 'aus',
+  'limitReminders.valueDefaultMark': '{value} (Standard)',
+  'limitReminders.valueAsGeneral': 'wie in General ({value})',
+  'limitReminders.hoursButton': '{hours} Std.',
+  'limitReminders.offButton': 'Aus',
+  'limitReminders.asGeneralButton': 'Wie in General',
+  'limitReminders.setGeneralConfirmation': '🔔 Limit-Erinnerungen: {value} (alle Themen ohne eigene Wahl).',
+  'limitReminders.setTopicConfirmation': '🔔 Limit-Erinnerungen: {value} (dieses Thema).',
+  'limitReminders.followGeneralConfirmation': '🔔 Limit-Erinnerungen: wie in General — {value} (dieses Thema).',
+  'limits.remindersRowLabel': '🔔 Erinnerungen: {value}',
   'limits.autoswitchTitle': '🔁 Automatischer Wechsel bei Nutzungslimit',
   'accounts.openCodeSection': '🔌 OpenCode-Provider (verbunden):\n{list}',
   'accounts.openCodeNone': '🔌 OpenCode-Provider: noch keiner verbunden. «➕ OpenCode-Provider» verbindet einen.',

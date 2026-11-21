@@ -103,6 +103,7 @@ export const kaDict: Record<string, string> = {
     '/todo — აგენტის გამოქვეყნებული ამოცანების სია და მისი პროექტი\n' +
     '/limits — ყველა ანგარიშისა და პროვაიდერის გამოყენება; ამ თემის გადასართავად დააჭირეთ ერთ-ერთს\n' +
     '/limits_autoswitch — მოდელის ავტომატური გადართვა გამოყენების ლიმიტზე (სარეზერვო სია, გადართვა, ლოდინი)\n' +
+    '/limits_reminders — რამდენად ხშირად ეცნობება workers-ის გამშვებ აგენტებს ანგარიშების ლიმიტების მდგომარეობა (1 / 2 / 4 სთ / გამორთვა)\n' +
     '/accounts — Claude ანგარიშები და OpenCode პროვაიდერები (გადართვა, დამატება, ხელახლა შესვლა, წაშლა, დაკავშირება, გათიშვა)\n' +
     '/access — ადმინების გარდა ვის შეუძლია აგენტთან საუბარი ამ თემაში\n' +
     '/clear — თემის შეტყობინებების წაშლა\n' +
@@ -1182,6 +1183,21 @@ export const kaDict: Record<string, string> = {
   'limits.boardCaption': 'აირჩიეთ აქტიური მოდელი:',
   'limits.boardCaptionGeneral': 'აირჩიეთ ნაგულისხმევი Claude ანგარიში:',
   'limits.boardSettings': '🔁 ავტო-გადართვა: {switch}{switchSource} · ⏳ განულების ლოდინი: {wait}{waitSource} — /limits_autoswitch',
+  'limitReminders.titleGeneral': '🔔 ლიმიტების შეხსენებები აგენტებისთვის',
+  'limitReminders.titleTopic': '🔔 ლიმიტების შეხსენებები აგენტებისთვის — ეს თემა',
+  'limitReminders.explanationText': 'აგენტები, რომლებიც workers-ს უშვებენ, იღებენ მოკლე შენიშვნას ანგარიშების ლიმიტებზე: რომელი ანგარიში გამოვიყენოთ შემდეგ და როდის განულდება თითოეული ლიმიტი — რომ ჯერ ის ლიმიტები დაიხარჯოს, რომლებიც ადრე განულდება. მხოლოდ მაშინ, როცა ისინი მუშაობენ: მძინარე ან დაპაუზებული თემა არაფერს იღებს. ასევე ერთი ხაზი, როცა ლიმიტები იცვლება.',
+  'limitReminders.nowLine': 'ახლა: {value}',
+  'limitReminders.valueEvery': 'ყოველ {hours} სთ-ში',
+  'limitReminders.valueOff': 'გამორთულია',
+  'limitReminders.valueDefaultMark': '{value} (ნაგულისხმევი)',
+  'limitReminders.valueAsGeneral': 'როგორც General-ში ({value})',
+  'limitReminders.hoursButton': '{hours} სთ',
+  'limitReminders.offButton': 'გამორთვა',
+  'limitReminders.asGeneralButton': 'როგორც General-ში',
+  'limitReminders.setGeneralConfirmation': '🔔 ლიმიტების შეხსენებები: {value} (ყველა თემა საკუთარი არჩევანის გარეშე).',
+  'limitReminders.setTopicConfirmation': '🔔 ლიმიტების შეხსენებები: {value} (ეს თემა).',
+  'limitReminders.followGeneralConfirmation': '🔔 ლიმიტების შეხსენებები: როგორც General-ში — {value} (ეს თემა).',
+  'limits.remindersRowLabel': '🔔 შეხსენებები: {value}',
   'limits.autoswitchTitle': '🔁 გამოყენების ლიმიტზე ავტომატური გადართვა',
   'accounts.openCodeSection': '🔌 OpenCode პროვაიდერები (დაკავშირებული):\n{list}',
   'accounts.openCodeNone': '🔌 OpenCode პროვაიდერები: ჯერ არცერთია დაკავშირებული. «➕ OpenCode პროვაიდერი» აკავშირებს ერთს.',

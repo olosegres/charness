@@ -103,6 +103,7 @@ export const frDict: Record<string, string> = {
     '/todo — la liste de tâches publiée de l\'agent et son projet\n' +
     '/limits — usage de chaque compte et fournisseur ; touchez-en un pour y basculer ce sujet\n' +
     '/limits_autoswitch — bascule automatique de modèle en cas de limite d’usage (liste de secours, bascule, attente)\n' +
+    '/limits_reminders — à quelle fréquence les agents qui lancent des workers sont informés de l’état des limites des comptes (1 / 2 / 4 h / désactivé)\n' +
     '/accounts — comptes Claude et fournisseurs OpenCode (basculer, ajouter, reconnecter, retirer, connecter, déconnecter)\n' +
     '/access — qui, en plus des admins, peut parler à l’agent dans ce sujet\n' +
     '/clear — supprimer les messages du fil\n' +
@@ -1182,6 +1183,21 @@ export const frDict: Record<string, string> = {
   'limits.boardCaption': 'Choisissez le modèle actif :',
   'limits.boardCaptionGeneral': 'Choisissez le compte Claude par défaut :',
   'limits.boardSettings': '🔁 Bascule auto : {switch}{switchSource} · ⏳ Attendre le reset : {wait}{waitSource} — /limits_autoswitch',
+  'limitReminders.titleGeneral': '🔔 Rappels de limites aux agents',
+  'limitReminders.titleTopic': '🔔 Rappels de limites aux agents — ce sujet',
+  'limitReminders.explanationText': 'Les agents qui lancent des workers reçoivent une courte note sur les limites des comptes : quel compte utiliser ensuite et quand chaque limite se réinitialise — pour que les limites qui se réinitialisent en premier soient dépensées en premier. Seulement pendant qu’ils travaillent : un sujet endormi ou en pause ne reçoit rien. Aussi une ligne quand les limites changent.',
+  'limitReminders.nowLine': 'Maintenant : {value}',
+  'limitReminders.valueEvery': 'toutes les {hours} h',
+  'limitReminders.valueOff': 'désactivé',
+  'limitReminders.valueDefaultMark': '{value} (par défaut)',
+  'limitReminders.valueAsGeneral': 'comme dans General ({value})',
+  'limitReminders.hoursButton': '{hours} h',
+  'limitReminders.offButton': 'Désactiver',
+  'limitReminders.asGeneralButton': 'Comme dans General',
+  'limitReminders.setGeneralConfirmation': '🔔 Rappels de limites : {value} (tous les sujets sans choix propre).',
+  'limitReminders.setTopicConfirmation': '🔔 Rappels de limites : {value} (ce sujet).',
+  'limitReminders.followGeneralConfirmation': '🔔 Rappels de limites : comme dans General — {value} (ce sujet).',
+  'limits.remindersRowLabel': '🔔 Rappels : {value}',
   'limits.autoswitchTitle': '🔁 Bascule automatique en cas de limite d’usage',
   'accounts.openCodeSection': '🔌 Providers OpenCode (connectés) :\n{list}',
   'accounts.openCodeNone': '🔌 Providers OpenCode : aucun connecté pour l’instant. «➕ Provider OpenCode» en connecte un.',

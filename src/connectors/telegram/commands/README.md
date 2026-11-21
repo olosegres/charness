@@ -554,6 +554,21 @@ its provider's page (`handleProviderTap`: a provider with one model is switched 
 with `isGeneral`), an OpenCode row only toasts `limits.openCodeInTopicOnly`. Every button indexes a per-MESSAGE snapshot (`buildMessageSnapshotKey`, the newest 50): a tap on a message
 the board knows nothing about — a restart, another chat — answers `accounts.stale`, re-renders and never acts, and a row button on a page (or a page button on the board) is stale too.
 `/limits rebuild|clear|switch|wait …` (the old text forms) go to the `runAutoSwitchCommand` port with the board's own usage text.
+One more row sits under the accounts (and above «skip once»): `lim_rem`, labelled `🔔 Reminders: <value>` by the `getRemindersRowLabel` port (the value in force for the topic,
+read under its locale); a tap answers and calls the `openRemindersPicker` port — the `/limits_reminders` picker as a message of its own, the board neither edited nor
+re-rendered, no account touched. It indexes no snapshot, so an old board's row still works.
+
+## `limitReminders.ts`
+
+`/limits_reminders` (hidden alias `/limit_reminders`) and the buttons `lrm_<minutes>` / `lrm_0` (Off) / `lrm_g` («As General»): how often an agent that launches workers is
+told where the accounts' limits stand (`limitNotes/`). The screens, the codec and the value in words are `utils/limitRemindersScreenPlan.ts` (pure, in every locale); the
+choices and `resolveLimitRemindersMinutes` are `limitNotes/reminderChoices.ts`. In General the picker writes `settings.json` `limitReminders.everyMinutes`
+(`saveInstanceSettingsChange`; Off as `0`; a file that cannot be written is told in the toast and changes nothing, the picker keeps its buttons); in a topic it is that
+topic's own choice (`state.json` `limitRemindersOverrides`, `setLimitRemindersOverride`, `null` drops it) with «As General» — the ✓ on its own choice or on «As General».
+A ONE-SHOT picker, like `/bot_skills`: a tap answers and EDITS the picker into the confirmation line (`… (this topic).` / `… (all topics without their own choice).` /
+`… as General — <value> (this topic).`) with no keyboard. The choice is the button's own data, so a keyboard that has gone stale still means exactly what it says;
+`lrm_g` means nothing in General. Not gated on an adapter or a session; admin-only. The module also hands the `/limits` board its two ports: `openPicker` and `getRowLabel`.
+Nothing is told to the notes after a write: they read the interval at the moment a note is due (`getConversationLimitReminderIntervalMs` in `bot.ts`).
 
 ## `modelPage.ts`
 

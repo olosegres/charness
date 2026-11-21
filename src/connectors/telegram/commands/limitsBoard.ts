@@ -7,7 +7,8 @@
  * topic through the one switch path (`switchTopicByOperator`, `bot.ts`): a Claude account changes the account, an OpenCode
  * provider opens the shared model page and a model pick switches, the ✓ row opens the model page of where the topic runs;
  * in General a Claude row sets the instance default and an OpenCode row only says that a model is picked inside a topic.
- * The old text verbs (`rebuild`, `clear`, `switch`, `wait`) are handed to the `/limits_autoswitch` runner. See README.md
+ * The old text verbs (`rebuild`, `clear`, `switch`, `wait`) are handed to the `/limits_autoswitch` runner. One row under the accounts
+ * (`🔔 Reminders: every 1 h`) opens the `/limits_reminders` picker as a message of its own (`limitReminders.ts`). See README.md
  * in this folder and `utils/limitsBoardPlan.ts`.
  */
 import { Markup, type Context } from 'telegraf';
@@ -36,6 +37,8 @@ const boardOpenCodeRowCallbackRe = /^lim_o_(\d{1,3})$/;
 const boardModelPickCallbackRe = /^lim_m_(\d{1,3})$/;
 const boardPageCallbackRe = /^lim_pg_(\d{1,3})$/;
 const boardBackCallback = 'lim_back';
+/** The row under the accounts that opens the `/limits_reminders` picker: no index, it stands for no account. */
+const boardRemindersCallback = 'lim_rem';
 
 function buildClaudeRowCallback(index: number): string {
   return `lim_c_${index}`;
@@ -87,6 +90,10 @@ export interface LimitsBoardPorts
   runAutoSwitchCommand: (key: SessionKey, verb: string, value: string, usageKey: 'limits.usage') => Promise<void>;
   /** The fire time of the limit wait armed for the topic, or `null` — the board then offers «skip once». */
   getArmedLimitRetryFireAt: (key: SessionKey) => number | null;
+  /** The label of the reminders row for the topic (`🔔 Reminders: every 1 h`, the value in force), worded in its language. */
+  getRemindersRowLabel: (key: SessionKey) => string;
+  /** Open the `/limits_reminders` picker in the topic as a message of its own. */
+  openRemindersPicker: (key: SessionKey) => Promise<void>;
 }
 
 /** The row a board button stands for, as the message listed it. */
@@ -102,7 +109,7 @@ export function createLimitsBoard(ports: LimitsBoardPorts) {
   const {
     bot, command, getState, replyToThread, editThreadMessage, authoriseContext, withThreadLocale, checkIsGeneral,
     getInstanceTimezone, refreshUsage, detectFallbackOptions, getTopicPosition, pickClaudeAccount, switchTopicByOperator,
-    listClaudeModels, runAutoSwitchCommand, getArmedLimitRetryFireAt,
+    listClaudeModels, runAutoSwitchCommand, getArmedLimitRetryFireAt, getRemindersRowLabel, openRemindersPicker,
   } = ports;
   const answerWithWholeText = createWholeTextAnswerer(replyToThread);
 
@@ -170,6 +177,8 @@ export function createLimitsBoard(ports: LimitsBoardPorts) {
     const keyboardRows = rows.map((row, index) => [
       Markup.button.callback(row.label, row.kind === 'claude' ? buildClaudeRowCallback(index) : buildOpenCodeRowCallback(index)),
     ]);
+    // One row under the accounts: the limit-reminders setting (its picker is a message of its own).
+    keyboardRows.push([Markup.button.callback(getRemindersRowLabel(key), boardRemindersCallback)]);
     const armedFireAt = isGeneral ? null : getArmedLimitRetryFireAt(key);
     if (armedFireAt !== null) keyboardRows.push([Markup.button.callback(t('autoContinueLimits.skipButton'), buildSkipArmedRetryCallbackData(armedFireAt))]);
     return { text: parts.join('\n\n'), keyboard: Markup.inlineKeyboard(keyboardRows), rows: rows.map(({ kind, id }) => ({ kind, id })) };
@@ -321,6 +330,12 @@ export function createLimitsBoard(ports: LimitsBoardPorts) {
     bot.action(boardBackCallback, (ctx) => handleTap(ctx, async (key, isGeneral, messageId) => {
       await answerCallbackQuerySafely(ctx);
       await rerenderBoard(key, messageId, isGeneral);
+    }));
+
+    // The reminders row: the picker as a new message. The board stays as it is; its label follows the value at its next render.
+    bot.action(boardRemindersCallback, (ctx) => handleTap(ctx, async (key) => {
+      await answerCallbackQuerySafely(ctx);
+      await openRemindersPicker(key);
     }));
   }
 

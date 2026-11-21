@@ -273,6 +273,29 @@ describe('the `claude_profiles` port hands the resume advice its inputs', () => 
   });
 });
 
+describe('the `/limits_reminders` command in the bot', () => {
+  it('reads General\'s value through the SAME reader the notes read their interval with — so the screen and the notes can never disagree', () => {
+    assert.match(botSource, /createLimitReminders\(\{\n\s*\.\.\.botCore,\n\s*readInstanceLimitReminders: readLimitRemindersSettings,\n\s*getSettingsPath: \(\) => getInstanceSettingsPath\(\),\n\}\);/);
+    assert.match(getFunctionBody('getConversationLimitReminderIntervalMs'), /resolveLimitRemindersMinutes\(readLimitRemindersSettings\(\), state\.getLimitRemindersOverride\(key\)\)/);
+  });
+
+  it('the `/limits` board is handed the module\'s row label and opener — the module is built BEFORE the board', () => {
+    const reminders = botSource.indexOf('createLimitReminders({');
+    const board = botSource.indexOf('createLimitsBoard({');
+    assert.ok(reminders > 0 && board > reminders);
+    assert.match(botSource, /getRemindersRowLabel: getLimitRemindersRowLabel,\n\s*openRemindersPicker: openLimitRemindersPicker,/);
+  });
+
+  it('its command and its buttons are registered, the name and the alias are bot commands (never forwarded to the agent), and the menu lists the command only', () => {
+    assert.match(botSource, /registerLimitsBoardCommands\(\);\nregisterLimitRemindersCommands\(\);/);
+    assert.match(botSource, /registerLimitsBoardCallbacks\(\);\nregisterLimitRemindersCallbacks\(\);/);
+    const commandSet = botSource.slice(botSource.indexOf('const botCommands = new Set(['), botSource.indexOf(']);', botSource.indexOf('const botCommands = new Set([')));
+    assert.ok(commandSet.includes("'limits_reminders'") && commandSet.includes("'limit_reminders'"));
+    assert.ok(botSource.includes("{ command: 'limits_reminders', description:"));
+    assert.equal(botSource.includes("{ command: 'limit_reminders'"), false, 'the alias is hidden');
+  });
+});
+
 describe('the mid-turn engine and the inbox cannot reach what a note must never touch', () => {
   const importsOf = (file: string): string[] => [...fs.readFileSync(path.join(__dirname, '..', file), 'utf8').matchAll(/^import [^;]*? from '([^']+)';$/gm)].map((match) => match[1]).sort();
 

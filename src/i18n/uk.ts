@@ -109,6 +109,7 @@ export const ukDict: Record<string, string> = {
     '/todo — опублікований список завдань агента та його проєкт\n' +
     '/limits — використання кожного облікового запису та провайдера; натисни на один, щоб перемкнути топік\n' +
     '/limits_autoswitch — автоматичне перемикання моделі при ліміті (запасні моделі, перемикання, очікування)\n' +
+    '/limits_reminders — як часто агентам, що запускають воркерів, нагадують про ліміти акаунтів (1 / 2 / 4 год / вимк)\n' +
     '/accounts — акаунти Claude та провайдери OpenCode (перемкнути, додати, увійти знову, видалити, підключити, відключити)\n' +
     '/access — хто, крім адмінів, може писати агенту в цьому топіку\n' +
     '/clear — видалити повідомлення треда\n' +
@@ -1188,6 +1189,21 @@ export const ukDict: Record<string, string> = {
   'limits.boardCaption': 'Обери активну модель:',
   'limits.boardCaptionGeneral': 'Обери типовий обліковий запис Claude:',
   'limits.boardSettings': '🔁 Автоперемикання: {switch}{switchSource} · ⏳ Чекати скидання: {wait}{waitSource} — /limits_autoswitch',
+  'limitReminders.titleGeneral': '🔔 Нагадування агентам про ліміти',
+  'limitReminders.titleTopic': '🔔 Нагадування агентам про ліміти — цей топік',
+  'limitReminders.explanationText': 'Агенти, які запускають воркерів, отримують коротку нотатку про ліміти акаунтів: який акаунт брати наступним і коли скидається кожен ліміт — щоб ліміти, які скидаються раніше, витрачались першими. Лише поки вони працюють: сплячий або призупинений топік нічого не отримує. Ще один рядок, коли ліміти змінюються.',
+  'limitReminders.nowLine': 'Зараз: {value}',
+  'limitReminders.valueEvery': 'кожні {hours} год',
+  'limitReminders.valueOff': 'вимк',
+  'limitReminders.valueDefaultMark': '{value} (за замовчуванням)',
+  'limitReminders.valueAsGeneral': 'як у General ({value})',
+  'limitReminders.hoursButton': '{hours} год',
+  'limitReminders.offButton': 'Вимк',
+  'limitReminders.asGeneralButton': 'Як у General',
+  'limitReminders.setGeneralConfirmation': '🔔 Нагадування про ліміти: {value} (усі топіки без власного вибору).',
+  'limitReminders.setTopicConfirmation': '🔔 Нагадування про ліміти: {value} (цей топік).',
+  'limitReminders.followGeneralConfirmation': '🔔 Нагадування про ліміти: як у General — {value} (цей топік).',
+  'limits.remindersRowLabel': '🔔 Нагадування: {value}',
   'limits.autoswitchTitle': '🔁 Автоматичне перемикання при ліміті використання',
   'accounts.openCodeSection': '🔌 Провайдери OpenCode (підключені):\n{list}',
   'accounts.openCodeNone': '🔌 Провайдери OpenCode: поки жоден не підключено. Кнопка «➕ Провайдер OpenCode» підключає.',

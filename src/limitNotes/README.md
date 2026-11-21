@@ -32,6 +32,9 @@ No clock, no state, no I/O: the caller hands in the report, the record, the sett
 
 ## The setting and what is kept
 
+`/limits_reminders` (`connectors/telegram/commands/limitReminders.ts` over `utils/limitRemindersScreenPlan.ts`) is the picker; the `/limits` board's
+`🔔 Reminders` row opens it.
+
 - **Setting (`reminderChoices.ts`, imports nothing — the instance settings and the state store load before any env file).**
   `/limits_reminders`: every 1 h (default) / 2 h / 4 h / Off, stored as minutes (`0` = Off). `resolveLimitRemindersMinutes(general,
   topic)`: a topic's own choice, else General's, else the default; a stored number no choice names counts as no choice.

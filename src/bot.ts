@@ -553,6 +553,7 @@ import {
 import { buildFallbackBridgePrompt, fallbackBridgeTurnLimit } from './utils/fallbackBridge';
 import { createFallbackChain } from './connectors/telegram/commands/fallbackChain';
 import { createLimitsBoard } from './connectors/telegram/commands/limitsBoard';
+import { createLimitReminders } from './connectors/telegram/commands/limitReminders';
 import { createTodo } from './connectors/telegram/commands/todo';
 import { createBackendSwitch } from './connectors/telegram/commands/backendSwitch';
 import { decideOperatorSwitch, type OperatorSwitchOutcome } from './utils/operatorSwitchPlan';
@@ -9995,6 +9996,13 @@ const { registerTodoCommands, registerTodoCallbacks } = createTodo({
   checkIsConversationAsleep: (conversationKey) => getTodoSessionActivity(conversationKey) === 'asleep',
 });
 
+// ── The limit reminders (`/limits_reminders`): `connectors/telegram/commands/limitReminders.ts`, `utils/limitRemindersScreenPlan.ts` ──
+const { registerLimitRemindersCommands, registerLimitRemindersCallbacks, openPicker: openLimitRemindersPicker, getRowLabel: getLimitRemindersRowLabel } = createLimitReminders({
+  ...botCore,
+  readInstanceLimitReminders: readLimitRemindersSettings,
+  getSettingsPath: () => getInstanceSettingsPath(),
+});
+
 const { registerLimitsBoardCommands, registerLimitsBoardCallbacks } = createLimitsBoard({
   ...botCore,
   getInstanceTimezone: getCurrentTimezone,
@@ -10006,6 +10014,8 @@ const { registerLimitsBoardCommands, registerLimitsBoardCallbacks } = createLimi
   listClaudeModels: async (key) => (await getThreadAdapter(key).getAvailableModels?.()) ?? [],
   runAutoSwitchCommand,
   getArmedLimitRetryFireAt,
+  getRemindersRowLabel: getLimitRemindersRowLabel,
+  openRemindersPicker: openLimitRemindersPicker,
 });
 
 const {
@@ -10090,6 +10100,7 @@ registerTopicCommand();
 registerFallbackChainCommands();
 
 registerLimitsBoardCommands();
+registerLimitRemindersCommands();
 registerTodoCommands();
 
 registerSttCommands();
@@ -10760,7 +10771,7 @@ const botCommands = new Set([
   'start', 'claude', 'opencode', 'oc', 'terminal', 'agent', 'sessions', 'resume', 'cancel', 'model', 'connect',
   'disconnect', 'stop', 'stopall', 'stop-all', 'quit-all', 'status', 'c', 'y', 'n', 'enter', 'up', 'down', 'tab', 'esc', 'escape', 'interrupt', 'output', 'clear_messages',
   'bind', 'topic', 'unbind', 'where', 'ls', 'list', 'new', 'whoami', 'version', 'help', 'language', 'lang',
-  'doctor', 'mcp', 'rename_session', 'compact', 'compact_on_idle', 'compact_summary', 'compact_self_review', 'bot_skills', 'question_wait', 'topic_status', 'task_agents', 'runners', 'auto_continue_limits', 'limits', 'limits_autoswitch', 'trace', 'timestamps', 'timezone', 'schedule', 'reminders', 'todo', 'thinking', 'tool_results',
+  'doctor', 'mcp', 'rename_session', 'compact', 'compact_on_idle', 'compact_summary', 'compact_self_review', 'bot_skills', 'question_wait', 'topic_status', 'task_agents', 'runners', 'auto_continue_limits', 'limits', 'limits_autoswitch', 'limits_reminders', 'limit_reminders', 'trace', 'timestamps', 'timezone', 'schedule', 'reminders', 'todo', 'thinking', 'tool_results',
   'subagent', 'claude_mode', 'effort', 'verbosity', 'quit', 'q', 'quitall', 'pair', 'account', 'accounts', 'fallback', 'stt', 'voice', 'speech', 'update', 'access',
 ]);
 
@@ -12332,6 +12343,7 @@ registerBackendSwitchCallbacks();
 registerClaudeAccountCallbacks();
 registerFallbackChainCallbacks();
 registerLimitsBoardCallbacks();
+registerLimitRemindersCallbacks();
 registerTodoCallbacks();
 registerSttCallbacks();
 
@@ -14452,6 +14464,7 @@ export const COMMANDS_MENU = [
   { command: 'accounts', description: '👤 Claude accounts and OpenCode providers (switch, add, re-login, remove, connect, disconnect)' },
   { command: 'limits', description: '🚧 Usage limits — switch this topic' },
   { command: 'limits_autoswitch', description: '🔁 Automatic switching on a usage limit' },
+  { command: 'limits_reminders', description: '🔔 How often agents are reminded of the accounts\' limits' },
   { command: 'stt', description: '🎙 Voice recognition: engines, language, local engine' },
   { command: 'update', description: '🔄 Bot updates: automatic, notify only, off' },
   { command: 'schedule', description: '⏰ Schedule a prompt (agent does the work)' },

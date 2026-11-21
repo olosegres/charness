@@ -40,6 +40,9 @@ const operatorSwitches: Array<{ key: SessionKey; to: FallbackChainEntry }> = [];
 const longSwitchLine = `Model: stub ${'(the /model reply with the effort note) '.repeat(4)}`;
 let operatorOutcome: OperatorSwitchOutcome = { kind: 'switched', text: longSwitchLine, label: 'stub label' };
 const autoSwitchRuns: Array<{ verb: string; value: string; usageKey: string }> = [];
+/** What the stand-in limit-reminders module answers the board's row with, and the topics it was asked to open its picker in. */
+let remindersRowLabel = '🔔 Reminders: every 1 h';
+const openedReminderPickers: SessionKey[] = [];
 /** What the stand-in bot does after a successful pick: the topic is now where it was sent. */
 let followPicks = true;
 /** What the stand-in bot does with a pick in General: the instance default becomes that account (as the real one does, after re-spawning every session). */
@@ -111,6 +114,8 @@ describe('limitsBoard: /limits over its ports', () => {
       listClaudeModels: async () => ['fable', 'opus', 'sonnet', 'haiku'],
       runAutoSwitchCommand: async (_key, verb, value, usageKey) => { autoSwitchRuns.push({ verb, value, usageKey }); },
       getArmedLimitRetryFireAt: () => armedFireAt,
+      getRemindersRowLabel: () => remindersRowLabel,
+      openRemindersPicker: async (key) => { openedReminderPickers.push(key); },
     });
     board.registerLimitsBoardCommands();
     board.registerLimitsBoardCallbacks();
@@ -121,7 +126,7 @@ describe('limitsBoard: /limits over its ports', () => {
     await harness.stop();
   });
 
-  it('registers /limits and its five buttons', () => {
+  it('registers /limits and its six buttons', () => {
     assert.deepEqual(harness.registeredCommandNames, ['limits']);
     assert.deepEqual(harness.registeredActionPatterns, [
       String(/^lim_c_(\d{1,3})$/),
@@ -129,6 +134,7 @@ describe('limitsBoard: /limits over its ports', () => {
       String(/^lim_pg_(\d{1,3})$/),
       String(/^lim_m_(\d{1,3})$/),
       'lim_back',
+      'lim_rem',
     ]);
   });
 
@@ -142,9 +148,9 @@ describe('limitsBoard: /limits over its ports', () => {
     assert.equal(settingsLine, '🔁 Auto switch: ON (as in General) · ⏳ Wait for reset: ON (as in General) — /limits_autoswitch');
     assert.equal(caption, 'Choose the active model:');
     assert.equal(board.text.split('\n').length, 7, 'nothing else: no legend, no ⚠️ line');
-    assert.deepEqual(harness.getKeyboardLabels(harness.replies.at(-1)).map((row) => row.length), [1, 1, 1, 1, 1], 'one button per row');
-    assert.deepEqual(board.labels, ['✓ Claude · perf', 'Claude · default', 'OpenCode · openai', 'OpenCode · openrouter', 'OpenCode · solo'], 'the name only: no figure, no reset, no ⛔, no model');
-    assert.deepEqual(board.data, ['lim_c_0', 'lim_c_1', 'lim_o_2', 'lim_o_3', 'lim_o_4']);
+    assert.deepEqual(harness.getKeyboardLabels(harness.replies.at(-1)).map((row) => row.length), [1, 1, 1, 1, 1, 1], 'one button per row');
+    assert.deepEqual(board.labels, ['✓ Claude · perf', 'Claude · default', 'OpenCode · openai', 'OpenCode · openrouter', 'OpenCode · solo', '🔔 Reminders: every 1 h'], 'the name only: no figure, no reset, no ⛔, no model — and under them the reminders row');
+    assert.deepEqual(board.data, ['lim_c_0', 'lim_c_1', 'lim_o_2', 'lim_o_3', 'lim_o_4', 'lim_rem']);
     assert.deepEqual(usageRefreshes.at(-1), { maxAgeMs: 60_000 }, 'the usage is refreshed on demand when the screen opens');
   });
 
@@ -157,7 +163,7 @@ describe('limitsBoard: /limits over its ports', () => {
       const lines = board.text.split('\n');
       assert.equal(lines[3], 'openai (ChatGPT) — ⏱ 5h 12% 🔄 in 3h · week 40% 🔄 in 4d');
       assert.equal(lines.some((line) => line.startsWith('openrouter')), false);
-      assert.deepEqual(board.labels.slice(2), ['OpenCode · openai', 'OpenCode · openrouter', 'OpenCode · solo'], 'the buttons carry none of it');
+      assert.deepEqual(board.labels.slice(2, 5), ['OpenCode · openai', 'OpenCode · openrouter', 'OpenCode · solo'], 'the buttons carry none of it');
     } finally {
       harness.state.setOpenCodeProviderUsage('openai', { authKind: 'unknown' });
       harness.state.setOpenCodeProviderUsage('openrouter', { authKind: 'unknown' });
@@ -199,9 +205,34 @@ describe('limitsBoard: /limits over its ports', () => {
       assert.equal(board.labels[0], '✓ Claude · perf', 'no ⚠️ on the button');
       assert.equal(board.data.at(-1), buildSkipArmedRetryCallbackData(armedFireAt), 'the skip button is the last row');
       assert.equal(board.labels.at(-1), '⏭ Skip once');
+      assert.equal(board.labels.at(-2), '🔔 Reminders: every 1 h', 'the reminders row sits above it, under the accounts');
     } finally {
       armedFireAt = null;
       resetDetection();
+    }
+  });
+
+  it('the reminders row: its label is what the limit-reminders module says for the topic; a tap opens the picker in the topic as a message of its own and leaves the board and the accounts alone — in a topic and in General', async () => {
+    position = claudePerf();
+    claudePicks.length = 0;
+    operatorSwitches.length = 0;
+    for (const isGeneral of [false, true]) {
+      isGeneralTopic = isGeneral;
+      remindersRowLabel = isGeneral ? '🔔 Reminders: off' : '🔔 Reminders: every 2 h';
+      openedReminderPickers.length = 0;
+      try {
+        const board = await openBoard();
+        assert.equal(board.labels.at(-1), remindersRowLabel);
+        const messagesBefore = harness.replies.length;
+        await harness.tapButton(board.messageId, 'lim_rem');
+        assert.deepEqual(openedReminderPickers, [harness.key], `${isGeneral ? 'General' : 'topic'}: the picker is asked for in this topic`);
+        assert.equal(harness.replies.length, messagesBefore, 'the module opens the picker; the board sends nothing of its own');
+        assert.deepEqual([claudePicks, operatorSwitches], [[], []], 'no account was touched');
+        assert.equal(harness.edits.some((edit) => edit.messageId === board.messageId && edit.text !== board.text), false, 'the board is not edited by the tap');
+      } finally {
+        isGeneralTopic = false;
+        remindersRowLabel = '🔔 Reminders: every 1 h';
+      }
     }
   });
 
@@ -334,7 +365,7 @@ describe('limitsBoard: /limits over its ports', () => {
       assert.equal(heading, 'Usage (% used)', 'the usage block is on the General board too');
       assert.equal(settingsLine, 'Defaults for all topics: 🔁 Auto switch: ON · ⏳ Wait for reset: ON — /limits_autoswitch');
       assert.equal(caption, 'Choose the default Claude account:');
-      assert.deepEqual(board.labels, ['Claude · perf', '✓ Claude · default', 'OpenCode · openai', 'OpenCode · openrouter', 'OpenCode · solo']);
+      assert.deepEqual(board.labels, ['Claude · perf', '✓ Claude · default', 'OpenCode · openai', 'OpenCode · openrouter', 'OpenCode · solo', '🔔 Reminders: every 1 h'], 'General has the row too');
       assert.equal(board.labels[1].startsWith('✓ Claude · default'), true, 'the default account carries the ✓');
       claudePickLine = '✅ Default Claude account for ALL topics: perf.';
       await harness.tapButton(board.messageId, 'lim_c_0');

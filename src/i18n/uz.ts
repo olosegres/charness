@@ -103,6 +103,7 @@ export const uzDict: Record<string, string> = {
     '/todo — agentning e\'lon qilingan vazifalar ro\'yxati va uning loyihasi\n' +
     '/limits — har bir hisob va provayderning sarfi; bu mavzuni almashtirish uchun birini bosing\n' +
     '/limits_autoswitch — foydalanish limitida modelni avtomatik almashtirish (zaxira ro‘yxat, almashtirish, kutish)\n' +
+    '/limits_reminders — workers ishga tushiradigan agentlarga akkauntlar limitlari holati qanchalik tez-tez aytilishi (1 / 2 / 4 soat / o‘chirilgan)\n' +
     '/accounts — Claude hisoblari va OpenCode provayderlari (almashtirish, qo‘shish, qayta kirish, olib tashlash, ulash, uzish)\n' +
     '/access — adminlardan tashqari kim shu mavzuda agent bilan gaplasha oladi\n' +
     '/clear — mavzu xabarlarini o‘chirish\n' +
@@ -1182,6 +1183,21 @@ export const uzDict: Record<string, string> = {
   'limits.boardCaption': 'Faol modelni tanlang:',
   'limits.boardCaptionGeneral': 'Standart Claude hisobini tanlang:',
   'limits.boardSettings': '🔁 Avto o‘tish: {switch}{switchSource} · ⏳ Tiklanishni kutish: {wait}{waitSource} — /limits_autoswitch',
+  'limitReminders.titleGeneral': '🔔 Agentlarga limit eslatmalari',
+  'limitReminders.titleTopic': '🔔 Agentlarga limit eslatmalari — bu mavzu',
+  'limitReminders.explanationText': 'Workers ishga tushiradigan agentlar akkauntlar limitlari haqida qisqa eslatma oladi: keyingi qaysi akkauntdan foydalanish va har bir limit qachon tiklanishi — avval tiklanadigan limitlar avval sarflansin. Faqat ular ishlayotganda: uxlayotgan yoki to‘xtatilgan mavzu hech narsa olmaydi. Limitlar o‘zgarganda yana bir satr.',
+  'limitReminders.nowLine': 'Hozir: {value}',
+  'limitReminders.valueEvery': 'har {hours} soatda',
+  'limitReminders.valueOff': 'o‘chirilgan',
+  'limitReminders.valueDefaultMark': '{value} (standart)',
+  'limitReminders.valueAsGeneral': 'General kabi ({value})',
+  'limitReminders.hoursButton': '{hours} soat',
+  'limitReminders.offButton': 'O‘chirish',
+  'limitReminders.asGeneralButton': 'General kabi',
+  'limitReminders.setGeneralConfirmation': '🔔 Limit eslatmalari: {value} (o‘z tanlovi bo‘lmagan barcha mavzular).',
+  'limitReminders.setTopicConfirmation': '🔔 Limit eslatmalari: {value} (bu mavzu).',
+  'limitReminders.followGeneralConfirmation': '🔔 Limit eslatmalari: General kabi — {value} (bu mavzu).',
+  'limits.remindersRowLabel': '🔔 Eslatmalar: {value}',
   'limits.autoswitchTitle': '🔁 Foydalanish limitida avtomatik almashtirish',
   'accounts.openCodeSection': '🔌 OpenCode provayderlari (ulangan):\n{list}',
   'accounts.openCodeNone': '🔌 OpenCode provayderlari: hozircha hech biri ulanmagan. «➕ OpenCode provayderi» bittasini ulaydi.',

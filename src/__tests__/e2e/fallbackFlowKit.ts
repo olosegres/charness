@@ -15,6 +15,7 @@ import type { AgentData, BindingData, ClaudeProfileRecord, CompactIdleTrackingEn
 import type { FallbackChainEntry } from '../../utils/fallbackChain';
 import type { ClaudeCostBaseline } from '../../utils/claudeApiSpend';
 import type { LimitNoteRecord } from '../../limitNotes/plan';
+import type { LimitReminderChoice } from '../../limitNotes/reminderChoices';
 import type { PendingQuestionState, ReAskedQuestionRecord, SetAsideQuestionRecord } from '../../types';
 
 /** The line the bot prints once its long polling is up. */
@@ -57,6 +58,8 @@ export interface PersistedState {
   compactIdleTracking?: Record<string, CompactIdleTrackingEntry>;
   /** What the accounts notes keep per conversation (`limitNotes/plan.ts`), keyed by the topic. */
   limitNotes?: Record<string, LimitNoteRecord>;
+  /** The limit-reminder interval each topic chose for itself with `/limits_reminders` (minutes; `0` = Off), keyed by the topic. */
+  limitRemindersOverrides?: Record<string, LimitReminderChoice>;
   [field: string]: unknown;
 }
 

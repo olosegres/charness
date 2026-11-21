@@ -262,7 +262,7 @@ describe('The usage-limit switch notice end to end: built charness, fake Bot API
     assert.deepEqual(general.getKeyboardLabels(setup).slice(-2), [['🔁 Auto switch: ON'], ['⏳ Wait for reset: ON']], 'ON by default, with one account and no chain');
     const board = await openBoard(general, generalTopicThreadId);
     assert.match(board.message.text, /Defaults for all topics: 🔁 Auto switch: ON · ⏳ Wait for reset: ON — \/limits_autoswitch/);
-    assert.deepEqual(general.getKeyboardLabels(board.message).flat(), ['✓ Claude · default'], 'a single signed-in account');
+    assert.deepEqual(general.getKeyboardLabels(board.message).flat(), ['✓ Claude · default', '🔔 Reminders: every 1 h'], 'a single signed-in account, then the reminders row');
     assert.equal(readPersistedState(getLayout()).claudeAutoSwitchOnLimitEnabled, undefined, 'nobody chose it: ON is the default, not a stored value');
     // «Stream + answers»: each message opens a request, whose prompt is what the bot hands the agent again after the switch.
     await firstTopic.sendAndAwaitReply(`/bind ${firstFolder}`, `Bound to \`${firstFolder}\``);
@@ -397,7 +397,7 @@ describe('The usage-limit switch notice end to end: built charness, fake Bot API
 
     const board = await openBoard(fourthTopic, fourthTopicThreadId);
     const rows = fourthTopic.getKeyboardLabels(board.message).flat();
-    assert.equal(rows.length, 3, 'both signed-in accounts, then «skip once» (a limit wait is armed)');
+    assert.equal(rows.length, 4, 'both signed-in accounts, the reminders row, then «skip once» (a limit wait is armed)');
     assert.equal(board.rowLabel(exhaustedAccount), '✓ Claude · default');
     assert.match(board.message.text, /^Usage \(% used\)\ndefault — ⛔ at its limit until [A-Z][a-z]{2} 01:00\n\n/, 'the limit is in the message, not on the button');
     assert.equal(board.rowLabel(takeoverAccount), `Claude · ${takeoverAccount}`);

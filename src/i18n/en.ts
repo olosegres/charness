@@ -107,6 +107,7 @@ export const enDict: Record<string, string> = {
     '/todo — the agent\'s published todo list and the project it shares a board with\n' +
     '/limits — usage of every account and provider; tap one to switch this topic\n' +
     '/limits_autoswitch — automatic model switching on a usage limit (fallback list, switch, wait)\n' +
+    '/limits_reminders — how often agents that launch workers are told where the accounts\' limits stand (1 h / 2 h / 4 h / off)\n' +
     '/accounts — Claude accounts and OpenCode providers (switch, add, re-login, remove, connect, disconnect)\n' +
     '/access — who besides the admins may talk to the agent in this topic\n' +
     '/clear — delete thread messages\n' +
@@ -1226,6 +1227,21 @@ export const enDict: Record<string, string> = {
   'limits.boardCaption': 'Choose the active model:',
   'limits.boardCaptionGeneral': 'Choose the default Claude account:',
   'limits.boardSettings': '🔁 Auto switch: {switch}{switchSource} · ⏳ Wait for reset: {wait}{waitSource} — /limits_autoswitch',
+  'limitReminders.titleGeneral': '🔔 Limit reminders to agents',
+  'limitReminders.titleTopic': '🔔 Limit reminders to agents — this topic',
+  'limitReminders.explanationText': 'Agents that launch workers get a short note on the accounts\' limits: which account to use next and when each limit resets — so the limits that reset first are spent first. Only while they work: a sleeping or paused topic gets nothing. Also one line when the limits change.',
+  'limitReminders.nowLine': 'Now: {value}',
+  'limitReminders.valueEvery': 'every {hours} h',
+  'limitReminders.valueOff': 'off',
+  'limitReminders.valueDefaultMark': '{value} (default)',
+  'limitReminders.valueAsGeneral': 'as General ({value})',
+  'limitReminders.hoursButton': '{hours} h',
+  'limitReminders.offButton': 'Off',
+  'limitReminders.asGeneralButton': 'As General',
+  'limitReminders.setGeneralConfirmation': '🔔 Limit reminders: {value} (all topics without their own choice).',
+  'limitReminders.setTopicConfirmation': '🔔 Limit reminders: {value} (this topic).',
+  'limitReminders.followGeneralConfirmation': '🔔 Limit reminders: as General — {value} (this topic).',
+  'limits.remindersRowLabel': '🔔 Reminders: {value}',
   'limits.autoswitchTitle': '🔁 Automatic switching on a usage limit',
   'accounts.openCodeSection': '🔌 OpenCode providers (connected):\n{list}',
   'accounts.openCodeNone': '🔌 OpenCode providers: none connected yet. «➕ OpenCode provider» connects one.',

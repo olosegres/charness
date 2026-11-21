@@ -103,6 +103,7 @@ export const zhDict: Record<string, string> = {
     '/todo — 智能体发布的任务列表及其所在项目\n' +
     '/limits — 各账号和提供方的用量；点按其中一个即可切换此话题\n' +
     '/limits_autoswitch — 达到用量上限时自动切换模型（备用列表、切换、等待）\n' +
+    '/limits_reminders — 启动 worker 的智能体多久被告知一次账号用量上限的情况（1 / 2 / 4 小时 / 关闭）\n' +
     '/accounts — Claude 账号与 OpenCode 提供商（切换、添加、重新登录、移除、连接、断开）\n' +
     '/access — 除管理员外，谁可以在此话题与代理对话\n' +
     '/clear — 删除话题消息\n' +
@@ -1176,6 +1177,21 @@ export const zhDict: Record<string, string> = {
   'limits.boardCaption': '选择当前使用的模型：',
   'limits.boardCaptionGeneral': '选择默认的 Claude 账号：',
   'limits.boardSettings': '🔁 自动切换：{switch}{switchSource} · ⏳ 等待重置：{wait}{waitSource} — /limits_autoswitch',
+  'limitReminders.titleGeneral': '🔔 向智能体发送上限提醒',
+  'limitReminders.titleTopic': '🔔 向智能体发送上限提醒 — 本话题',
+  'limitReminders.explanationText': '启动 worker 的智能体会收到一条关于账号用量上限的简短说明：接下来用哪个账号、每个上限何时重置 —— 这样先重置的上限会先被用掉。仅在它们工作时发送：休眠或暂停的话题什么都收不到。上限变化时还会多一行。',
+  'limitReminders.nowLine': '当前：{value}',
+  'limitReminders.valueEvery': '每 {hours} 小时',
+  'limitReminders.valueOff': '关闭',
+  'limitReminders.valueDefaultMark': '{value}（默认）',
+  'limitReminders.valueAsGeneral': '同 General（{value}）',
+  'limitReminders.hoursButton': '{hours} 小时',
+  'limitReminders.offButton': '关闭',
+  'limitReminders.asGeneralButton': '同 General',
+  'limitReminders.setGeneralConfirmation': '🔔 上限提醒：{value}（所有没有自己选择的话题）。',
+  'limitReminders.setTopicConfirmation': '🔔 上限提醒：{value}（本话题）。',
+  'limitReminders.followGeneralConfirmation': '🔔 上限提醒：同 General — {value}（本话题）。',
+  'limits.remindersRowLabel': '🔔 提醒：{value}',
   'limits.autoswitchTitle': '🔁 达到用量上限时自动切换',
   'accounts.openCodeSection': '🔌 OpenCode provider（已连接）：\n{list}',
   'accounts.openCodeNone': '🔌 OpenCode provider：尚未连接任何一个。点「➕ OpenCode provider」来连接。',
