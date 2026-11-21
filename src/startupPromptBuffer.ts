@@ -15,14 +15,16 @@ interface BufferedPrompt {
   onSettled?: BufferedPromptSettled;
   /** A person typed (or spoke, or sent) it: its replay does not wait for its write (see `PromptForwardOptions.isPersonInput`). */
   isPersonInput: boolean;
+  /** Its turn may carry the accounts note (`PromptDeliveryOptions.isAccountsNoteCarrier`): decorated at the replay, with the figures of that moment. */
+  isAccountsNoteCarrier: boolean;
 }
 
 /** What {@link StartupPromptBuffer.replayPrompts} replays through. */
 export interface ReplayPromptsOptions {
   /** Whether the session is up now; `false` drops every buffered prompt. */
   isSessionActive: boolean;
-  /** Hand one prompt to the live session; `isPersonInput` as the prompt was buffered with. */
-  forward: (text: string, isPersonInput: boolean) => Promise<void>;
+  /** Hand one prompt to the live session; `isPersonInput` and `isAccountsNoteCarrier` as the prompt was buffered with. */
+  forward: (text: string, isPersonInput: boolean, isAccountsNoteCarrier: boolean) => Promise<void>;
 }
 
 /** A callback that throws must not break the replay or the failed-start path that called it. */
@@ -99,9 +101,9 @@ export class StartupPromptBuffer {
    * @returns `true` if this is the first buffered prompt for the current
    * startup window (the caller uses it to send the ack only once).
    */
-  addPrompt(threadId: string, text: string, onSettled?: BufferedPromptSettled, isPersonInput = false): boolean {
+  addPrompt(threadId: string, text: string, onSettled?: BufferedPromptSettled, isPersonInput = false, isAccountsNoteCarrier = false): boolean {
     const prompts = this.bufferedPrompts.get(threadId) ?? [];
-    prompts.push({ text, onSettled, isPersonInput });
+    prompts.push({ text, onSettled, isPersonInput, isAccountsNoteCarrier });
     this.bufferedPrompts.set(threadId, prompts);
 
     const isFirstForWindow = !this.ackedThreads.has(threadId);
@@ -128,7 +130,7 @@ export class StartupPromptBuffer {
     // Sequential await keeps the forwards in arrival order even when each one awaits its own loader send first.
     for (const prompt of prompts) {
       try {
-        await options.forward(prompt.text, prompt.isPersonInput);
+        await options.forward(prompt.text, prompt.isPersonInput, prompt.isAccountsNoteCarrier);
       } catch (err) {
         console.error('[replayBufferedPrompts] forward failed:', err);
         settleBufferedPrompt(prompt, 'dropped');

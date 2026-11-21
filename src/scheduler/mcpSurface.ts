@@ -13,6 +13,7 @@ import {
 import { z } from 'zod';
 import type { StateStore } from '../state';
 import { openCodeAdapterName } from '../adapters/adapterNames';
+import { appendLimitNote } from '../limitNotes/noteText';
 import { keyFromString, tryKeyFromString, type PlatformId, type SessionKey } from '../sessionKey';
 import { checkIsBotSkillsEnabled } from '../utils/botSkills';
 import { claudeProfileNameMaxLength } from '../utils/claudeProfiles';
@@ -528,6 +529,16 @@ export interface SchedulerMcpDeps {
    */
   listClaudeProfiles?: (query: ClaudeProfilesQuery) => Promise<ClaudeProfilesReport>;
   /**
+   * The accounts note (`limitNotes/`): what the result of a send tool (`send_messages_to_user`, `send_file_to_user`,
+   * `answer_request`) of the conversation `threadKey` carries as its last block, or `null` when none is due. Taking it counts as
+   * delivered: the result goes back to the agent at once. Absent = no note is ever added.
+   */
+  takeLimitNoteForSend?: (threadKey: string) => string | null;
+  /** The agent of the conversation `threadKey` called `claude_profiles` and got `report` (it looked, and it orchestrates workers). */
+  noteLimitProfilesCall?: (threadKey: string, report: ClaudeProfilesReport) => void;
+  /** The agent of the conversation `threadKey` armed a worker watch (`schedule_create` with `statusWorkerRunDir`): it orchestrates workers. */
+  noteLimitWorkerWatch?: (threadKey: string) => void;
+  /**
    * One line per runner `charness remote-run` can use — paired or in `runners.json` (`remoteRun/runnerSummary.ts`): name, OS, what it could do
    * when last probed. Asked at every connect, so a runner added, removed or paused shows in the next session's instructions; absent or empty =
    * the instructions do not mention remote-run.
@@ -1037,6 +1048,15 @@ function errorResult(message: string): CallToolResult {
   return { content: [{ type: 'text', text: message }], isError: true };
 }
 
+/**
+ * The result text of a send tool, with the accounts note as its last block when one is due for the conversation `threadKey`
+ * (`limitNotes/`): the bot cuts it from the tool-result block it shows in the topic. Without the port, the text as it is.
+ */
+function addLimitNoteToResult(deps: SchedulerMcpDeps, threadKey: string, text: string): string {
+  const note = deps.takeLimitNoteForSend?.(threadKey) ?? null;
+  return note === null ? text : appendLimitNote(text, note);
+}
+
 /** Report an ambiguous delivery without inviting MCP clients to retry it. */
 function deliveryUnknownResult(message: string): CallToolResult {
   return {
@@ -1180,6 +1200,8 @@ function registerSchedulerTools(server: ToolRegistrar, deps: SchedulerMcpDeps, s
 
       const record = created.record;
       deps.armJob(record);
+      // A worker watch is what an agent that launches detached workers arms: the conversation orchestrates them (`limitNotes/`).
+      if (isStatusKept && statusWorkerRunDir !== undefined) deps.noteLimitWorkerWatch?.(resolved.threadKey);
       const noteSuffix = notes.map((note) => `\n\nℹ️ ${note}`).join('');
       return textResult(`${summarizeCreated(record)}${noteSuffix}`);
     },
@@ -1316,7 +1338,7 @@ function registerFileSendTool(
         ...(scope.kind === 'dir' ? { authorizedWorkDir: scope.directory } : {}),
         signal,
       });
-      if (result.ok) return textResult(result.summary);
+      if (result.ok) return textResult(addLimitNoteToResult(deps, resolved.threadKey, result.summary));
       return 'kind' in result && result.kind === 'deliveryUnknown'
         ? deliveryUnknownResult(result.error)
         : errorResult(result.error);
@@ -1382,7 +1404,7 @@ function registerMessageSendTool(
         ...(scope.kind === 'dir' ? { authorizedWorkDir: scope.directory } : {}),
         signal,
       });
-      if (result.ok) return textResult(result.summary);
+      if (result.ok) return textResult(addLimitNoteToResult(deps, resolved.threadKey, result.summary));
       return 'kind' in result && result.kind === 'deliveryUnknown'
         ? deliveryUnknownResult(result.error)
         : errorResult(result.error);
@@ -1680,7 +1702,7 @@ function registerAnswerRequestTool(server: ToolRegistrar, deps: SchedulerMcpDeps
       checkIsConversationInScope: (conversationKey) =>
         checkIsConversationInScope(scope, conversationKey, deps.getThreadsForDirectory),
     });
-    return outcome.ok ? textResult(outcome.message) : errorResult(outcome.error);
+    return outcome.ok ? textResult(addLimitNoteToResult(deps, outcome.conversationKey, outcome.message)) : errorResult(outcome.error);
   };
   // The reply field names a tracker's comments: only a Jira session is offered it — and the files, where the connector can attach them.
   if (platform === 'jira' && deps.sendJiraFiles) server.registerTool('answer_request', { ...definition, inputSchema: jiraFilesAnswerRequestInput }, handle);
@@ -1714,7 +1736,7 @@ function registerJiraFileSendTool(server: ToolRegistrar, deps: SchedulerMcpDeps,
       const resolved = resolveTargetThreadKey(scope, undefined, deps.getThreadsForDirectory);
       if (!resolved.ok) return errorResult(resolved.error);
       const result = await sendJiraFiles(resolved.threadKey, { paths: args.paths, caption: args.caption, asFile: args.as_file });
-      if (result.ok) return textResult(result.summary);
+      if (result.ok) return textResult(addLimitNoteToResult(deps, resolved.threadKey, result.summary));
       return 'kind' in result && result.kind === 'deliveryUnknown' ? deliveryUnknownResult(result.error) : errorResult(result.error);
     },
   );
@@ -1923,7 +1945,7 @@ function registerBotTools(
   // A published list belongs to a conversation of a platform that has one (D54): a topic or a Jira issue.
   if (deps.todos && (platform === 'telegram' || platform === 'jira')) registerTodoTools(server, deps, deps.todos, scope);
   registerAnswerRequestTool(server, deps, scope, platform);
-  if (deps.listClaudeProfiles) registerClaudeProfilesTool(server, deps.listClaudeProfiles);
+  if (deps.listClaudeProfiles) registerClaudeProfilesTool(server, deps, deps.listClaudeProfiles, scope);
 }
 
 /** The first line of the `claude_profiles` answer: the pick with how to launch it and why, or that nothing is usable and when something is. */
@@ -1942,7 +1964,7 @@ function buildClaudeProfilesVerdict(report: ClaudeProfilesReport, currentProfile
  * cache (refreshed on demand by the port); touches no conversation, so it needs no scope resolution. The
  * answer is the report as JSON with a one-line verdict first, so an agent can act on it without parsing.
  */
-function registerClaudeProfilesTool(server: ToolRegistrar, listClaudeProfiles: NonNullable<SchedulerMcpDeps['listClaudeProfiles']>): void {
+function registerClaudeProfilesTool(server: ToolRegistrar, deps: SchedulerMcpDeps, listClaudeProfiles: NonNullable<SchedulerMcpDeps['listClaudeProfiles']>, scope: SchedulerScope): void {
   server.registerTool(
     'claude_profiles',
     {
@@ -1995,6 +2017,10 @@ function registerClaudeProfilesTool(server: ToolRegistrar, listClaudeProfiles: N
         return errorResult('isStoppedByLimit needs currentProfile — the profile the session that hit the limit last ran on.');
       }
       const report = await listClaudeProfiles({ model: args.model?.trim() || null, currentProfile, isStoppedByLimit: args.isStoppedByLimit === true });
+      // The agent looked at the accounts, and launching workers is what it does: the reminder clock restarts, the conversation
+      // orchestrates (`limitNotes/`). Resolved like the send tools; a `dir` scope with several bound topics names none: nothing is recorded.
+      const resolved = resolveTargetThreadKey(scope, undefined, deps.getThreadsForDirectory);
+      if (resolved.ok) deps.noteLimitProfilesCall?.(resolved.threadKey, report);
       return textResult(`${buildClaudeProfilesVerdict(report, currentProfile)}\n${JSON.stringify(report, null, 1)}`);
     },
   );

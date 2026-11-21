@@ -94,6 +94,10 @@ import {
   type ShutdownDrainVerdict,
 } from './rateLimiter';
 import { formatTestTimingsBootLine, parseTestTimings, testTimingsEnvName } from './testTimings';
+import { checkIsAccountsNoteCarried, createLimitNotes, getAccountsNoteQuietMs, type LimitNotes } from './limitNotes/service';
+import { appendLimitNote, stripLimitNote } from './limitNotes/noteText';
+import { defaultLimitNoteWindows, type LimitNoteWindows } from './limitNotes/plan';
+import { getLimitReminderIntervalMs, resolveLimitRemindersMinutes } from './limitNotes/reminderChoices';
 import {
   stopOpenCodeServer,
   ensureOpenCodeServer,
@@ -346,7 +350,7 @@ import {
 } from './utils/claudeLivenessAction';
 import { formatIsoLocalOffset } from './utils/isoTimestamp';
 import { getThreadEffortView, setInstanceDefaultEffortReader, type ThreadEffortView } from './effortLevels';
-import { createBotSkillsSettingsReader, createInstanceDefaultEffortReader, createQuestionWaitSettingsReader, createRunnerHostReader, createTaskAgentsMaxConcurrentReader, createTodoSettingsReader, createTopicStatusSettingsReader, createUpdateSettingsReader, getInstanceSettingsPath, saveInstanceSettingsChange } from './instanceSettings';
+import { createBotSkillsSettingsReader, createInstanceDefaultEffortReader, createLimitRemindersSettingsReader, createQuestionWaitSettingsReader, createRunnerHostReader, createTaskAgentsMaxConcurrentReader, createTodoSettingsReader, createTopicStatusSettingsReader, createUpdateSettingsReader, getInstanceSettingsPath, saveInstanceSettingsChange } from './instanceSettings';
 import { readTaskAgentLimit, type TaskAgentLimitSources } from './trackers/taskAgentLimit';
 import { TaskAgentSlots } from './trackers/taskAgentSlots';
 import { checkIsBotSkillsEnabled, createBotSkillsReader, readBotSkillsInstanceValue, setBotSkillsReader, type BotSkillsSources } from './utils/botSkills';
@@ -412,7 +416,7 @@ import {
   type ClaudeProfilesQuery,
   type SchedulerMcpHandle,
 } from './scheduler/mcpSurface';
-import { schedulerMcpServerName } from './scheduler/injection';
+import { checkIsBotMcpToolName, schedulerMcpServerName } from './scheduler/injection';
 import { legacySchedulerMcpServerName } from './legacyNames';
 import { runSessionBootPhase, startSchedulerMcpForBoot } from './scheduler/mcpBoot';
 import { RequestLedger } from './requests/requestLedger';
@@ -1417,6 +1421,47 @@ const readTodoSettings = createTodoSettingsReader(() => getInstanceSettingsPath(
 /** The staleness reminder's interval now; `null` = off (the feature or its reminder). */
 function getTodoReminderIntervalMsNow(): number | null {
   return getTodoReminderIntervalMs(readTodoSettings(), ENV.testTimings.todoReminderIntervalMs);
+}
+
+/** `settings.json`'s `limitReminders` (General's interval for the accounts note), re-read when the file changes. */
+const readLimitRemindersSettings = createLimitRemindersSettingsReader(() => getInstanceSettingsPath(), (line) => console.error(line));
+
+/** The accounts note's interval of a conversation in ms (its own choice, else General's, else 1 h; the test window replaces it); `null` = Off. */
+function getConversationLimitReminderIntervalMs(key: SessionKey): number | null {
+  return getLimitReminderIntervalMs(resolveLimitRemindersMinutes(readLimitRemindersSettings(), state.getLimitRemindersOverride(key)), ENV.testTimings.limitReminderIntervalMs);
+}
+
+/** The quiet period, the summary floor and the orchestration window of the accounts note, with the test windows applied. */
+function getLimitNoteWindows(): LimitNoteWindows {
+  return {
+    ...defaultLimitNoteWindows,
+    minQuietMs: ENV.testTimings.limitNoteQuietMs ?? defaultLimitNoteWindows.minQuietMs,
+    summaryFloorMs: ENV.testTimings.limitNoteSummaryFloorMs ?? defaultLimitNoteWindows.summaryFloorMs,
+  };
+}
+
+let limitNotes: LimitNotes | null = null;
+
+/**
+ * The accounts note (`limitNotes/`): what a carrier prompt, a bot send tool's result and the two orchestration calls
+ * (`claude_profiles`, a worker watch) say to it. It reads the usage cache and the conversation's record and writes only the record —
+ * it never stamps activity, writes to an agent, wakes a session or opens a request (`limitNotes/README.md` § Lifecycle safety).
+ */
+function getLimitNotes(): LimitNotes {
+  limitNotes ??= createLimitNotes({
+    getRecord: (key) => state.getLimitNoteRecord(key),
+    setRecord: (key, record) => state.setLimitNoteRecord(key, record),
+    getIntervalMs: getConversationLimitReminderIntervalMs,
+    getWindows: getLimitNoteWindows,
+    // The report `claude_profiles` answers a new worker's launch with: the same pick and order, never a second ranking.
+    getReport: (nowMs) => buildClaudeProfilesCreditReport(getClaudeProfileUsageViews(), null, nowMs, { chainScope: getClaudeLaunchChainScope(state.getFallbackChain()) }),
+    getOpenCodeUsage: () => state.getOpenCodeProviderUsages(),
+    getTimezone: getCurrentTimezone,
+    getBackendName: (key) => getThreadAdapterNameRaw(key) ?? state.getAgent(key)?.name,
+    getNowMs: Date.now,
+    log: (line) => console.log(line),
+  });
+  return limitNotes;
 }
 
 /**
@@ -6193,7 +6238,7 @@ async function replayBufferedPrompts(key: SessionKey): Promise<void> {
   // like the API-error retry's nudge, hears whether it reached the session).
   await startupPromptBuffer.replayPrompts(keyToString(key), {
     isSessionActive,
-    forward: async (prompt, isPersonInput) => { await forwardPromptToAgent(key, adapter, prompt, undefined, { isPersonInput }); },
+    forward: async (prompt, isPersonInput, isAccountsNoteCarrier) => { await forwardPromptToAgent(key, adapter, prompt, undefined, { isPersonInput, isAccountsNoteCarrier }); },
   });
   if (!isSessionActive) return;
   // R23: prompts held during a usage-limit wait that ended with the previous
@@ -6262,7 +6307,7 @@ async function forwardPromptToAgent(
     buffer: async () => {
       // A bot-made prompt (a wake-up) that waits here counts only once its replay reached the agent, as at any other buffer.
       const buffered = createBufferedOutcome();
-      await deliverPromptOrBuffer(key, `${options.requestHeader ?? ''}${getPromptWithThreadMessageContext(key, text, options.messageContext)}`, true, buffered.settle, { isPersonInput: options.isPersonInput });
+      await deliverPromptOrBuffer(key, `${options.requestHeader ?? ''}${getPromptWithThreadMessageContext(key, text, options.messageContext)}`, true, buffered.settle, { isPersonInput: options.isPersonInput, isAccountsNoteCarrier: options.isAccountsNoteCarrier });
       if (options.isPersonInput !== true) await buffered.assertReplayed();
     },
     wake: () => wakeSleepingSessionForPrompt(key),
@@ -6289,6 +6334,13 @@ interface PromptForwardOptions {
   isRecoveryReplay?: boolean;
   isRequestReminder?: boolean;
   isTechnicalPrompt?: boolean;
+  /**
+   * The prompt starts a turn the person or the scheduler made, so it may carry the accounts note (`limitNotes/`): a person's
+   * message that opened a request, a tracker's post, a scheduled run or a fired check's wake — set by those callers ONLY; a
+   * bookkeeping prompt (a compaction, a retry's nudge, a hand-over, a replay, a wake-up, the todo reminder, the lost-work note, an
+   * answer to the agent's question) leaves it off.
+   */
+  isAccountsNoteCarrier?: boolean;
   messageContext?: MessageContext;
   requestHeader?: string;
 }
@@ -6376,6 +6428,13 @@ async function forwardPromptToLiveAgent(
   if (todoBoardBlock !== null) promptText = `${promptText}\n\n${todoBoardBlock}`;
   const todoReminderLine = isTodoDecorated && !isTechnicalPrompt ? takeTodoPromptReminder(key) : null;
   if (todoReminderLine !== null) promptText = `${promptText}\n\n${todoReminderLine}`;
+  // The accounts note (`limitNotes/`) is the LAST block of a carrier prompt — a turn the person or the scheduler starts — inside the
+  // ONE text written to the agent: never a write of its own, never an activity stamp (`limitNotes/README.md` § Lifecycle safety).
+  // Told only once the prompt that carries it reached a live session, like the lost-work note below.
+  const accountsNote = checkIsAccountsNoteCarried({ isCarrier: options.isAccountsNoteCarrier, isSlashCommand, adapterName: adapter.name })
+    ? getLimitNotes().takeTurnStartNote(key, getAccountsNoteQuietMs({ lastTurnEndAt: state.getCompactIdleTracking(key).lastTurnEndAt, isBusy: adapter.checkIsBusy?.(key), nowMs: Date.now() }))
+    : null;
+  if (accountsNote !== null) promptText = appendLimitNote(promptText, accountsNote.text);
   markNeedsNewMessage(key);
   // A new prompt is a new turn: lift the S2 idle-suppress latch and re-base the
   // working-status elapsed so the next busy period shows a fresh 0:00 counter
@@ -6417,6 +6476,7 @@ async function forwardPromptToLiveAgent(
   // Told only once the prompt carrying the note reached a live session: a forward that failed keeps it for the next.
   const noteToldIfDelivered = (): void => {
     if (lostWorkRecord && adapter.checkIsActive(key)) void state.clearLostWork(key);
+    if (accountsNote !== null && adapter.checkIsActive(key)) accountsNote.markDelivered();
   };
   // A person's own message never holds the topic's update queue on its write — a CLI that stops reading its input would
   // keep `/esc` and every tap behind it for minutes —: they are told when it failed. Every other prompt (a tracker's post,
@@ -10549,7 +10609,7 @@ command('schedule', async (ctx, key, parsed) => {
 
   const isStarting = startupPromptBuffer.checkIsStarting(keyToString(key));
   const opening = await openTopicRequest(key, wrappedPrompt, { source: 'schedule', requesterId: getTopicRequesterId(ctx.from) });
-  const delivery = await deliverPromptOrBuffer(key, `${opening.header}${wrappedPrompt}`, isStarting, undefined, { isPersonInput: true });
+  const delivery = await deliverPromptOrBuffer(key, `${opening.header}${wrappedPrompt}`, isStarting, undefined, { isPersonInput: true, isAccountsNoteCarrier: true });
   await settleTopicRequestAfterDelivery(key, opening, delivery);
 });
 
@@ -11465,7 +11525,7 @@ async function downloadIncomingFile(
  */
 const promptDeliveryDeps: PromptDeliveryDeps = {
   startupBuffer: startupPromptBuffer,
-  forwardPrompt: (key, text, options) => forwardPromptToAgent(key, getThreadAdapter(key), text, undefined, { isPersonInput: options.isPersonInput }),
+  forwardPrompt: (key, text, options) => forwardPromptToAgent(key, getThreadAdapter(key), text, undefined, { isPersonInput: options.isPersonInput, isAccountsNoteCarrier: options.isAccountsNoteCarrier }),
   announceQueued: async (key) => {
     await replyToThread(key, t('agent.queued_starting', { label: getThreadAdapter(key).label }));
   },
@@ -11537,7 +11597,7 @@ const albumCollector = createMediaGroupCollector<AlbumCollectorItem>({
       try {
         const opening = await openTopicRequest(key, promptText, { source: 'album', requesterId: orderedItems[0].requesterId }, messageContext);
         const quotedPrompt = getPromptWithThreadMessageContext(key, promptText, messageContext);
-        const delivery = await deliverPromptOrBuffer(key, `${opening.header}${quotedPrompt}`, isStarting, undefined, { isPersonInput: true });
+        const delivery = await deliverPromptOrBuffer(key, `${opening.header}${quotedPrompt}`, isStarting, undefined, { isPersonInput: true, isAccountsNoteCarrier: true });
         await settleTopicRequestAfterDelivery(key, opening, delivery);
       } catch (err) {
         // The files were downloaded already (each item before the flush): what failed is the album's prompt.
@@ -11643,7 +11703,7 @@ async function handleIncomingFile(
   const messageContext = getMessageContext(key, ctx.message);
   const opening = await openTopicRequest(key, promptText, { source: 'file', requesterId: getTopicRequesterId(ctx.from) }, messageContext);
   const quotedPrompt = getPromptWithThreadMessageContext(key, promptText, messageContext);
-  const delivery = await deliverPromptOrBuffer(key, `${opening.header}${quotedPrompt}`, isStarting, undefined, { isPersonInput: true });
+  const delivery = await deliverPromptOrBuffer(key, `${opening.header}${quotedPrompt}`, isStarting, undefined, { isPersonInput: true, isAccountsNoteCarrier: true });
   await settleTopicRequestAfterDelivery(key, opening, delivery);
 }
 
@@ -12418,7 +12478,7 @@ async function bufferPromptDuringStartup(
   notePersonActivity(key);
   const opening = await openTopicRequest(key, text, intake, messageContext);
   const quotedText = getPromptWithThreadMessageContext(key, text, messageContext);
-  await deliverPromptOrBuffer(key, `${opening.header}${quotedText}`, true, undefined, { isPersonInput: true });
+  await deliverPromptOrBuffer(key, `${opening.header}${quotedText}`, true, undefined, { isPersonInput: true, isAccountsNoteCarrier: true });
   trackTopicRequestTurn(key, opening);
 }
 
@@ -12479,7 +12539,7 @@ async function deliverActivePrompt(
     }
     // Free-form text cancels the question and is a fresh prompt — a request (S7).
     const opening = await openTopicRequest(key, text, intake, messageContext);
-    const delivery = await cancelPendingQuestionAndForward(key, adapter, text, sentAtMs, messageContext, opening.header);
+    const delivery = await cancelPendingQuestionAndForward(key, adapter, text, sentAtMs, messageContext, opening.header, intake !== null);
     await settleTopicRequestAfterDelivery(key, opening, delivery);
     return null;
   }
@@ -12525,6 +12585,9 @@ async function deliverPromptByState(
   sentAtMs?: number,
   messageContext?: MessageContext,
 ): Promise<LatePromptOutcome> {
+  // A person's prompt that opens a request starts a turn that may carry the accounts note; the answer to the agent's own question
+  // (`intake` null) is bookkeeping and never does.
+  const isAccountsNoteCarrier = intake !== null;
   // The request (S7) is opened AFTER the user takeover cancelled an armed limit
   // wait (the handlers' `cancelApiRetry`) and before the forward, so its id is
   // durable by the time the agent reads it.
@@ -12536,10 +12599,10 @@ async function deliverPromptByState(
     checkIsWindowOpen: () => startupPromptBuffer.checkIsStarting(keyToString(key)),
     checkIsSessionActive: () => adapter.checkIsActive(key),
     buffer: async () => {
-      await deliverPromptOrBuffer(key, `${opening.header}${getPromptWithThreadMessageContext(key, text, messageContext)}`, true, undefined, { isPersonInput: true });
+      await deliverPromptOrBuffer(key, `${opening.header}${getPromptWithThreadMessageContext(key, text, messageContext)}`, true, undefined, { isPersonInput: true, isAccountsNoteCarrier });
     },
     wake: () => wakeSleepingSessionForPrompt(key),
-    forward: () => forwardPromptToAgent(key, getThreadAdapter(key), text, sentAtMs, { messageContext, requestHeader: opening.header, isPersonInput: true }),
+    forward: () => forwardPromptToAgent(key, getThreadAdapter(key), text, sentAtMs, { messageContext, requestHeader: opening.header, isPersonInput: true, isAccountsNoteCarrier }),
     reportNoSession: async (isAlreadyTold) => {
       if (!isAlreadyTold) await replyToThread(key, t('agent.no_session'));
     },
@@ -12617,6 +12680,8 @@ async function cancelPendingQuestionAndForward(
   sentAtMs?: number,
   messageContext?: MessageContext,
   requestHeader?: string,
+  /** The prompt opened a request (a person's free text, not the label of a tap): it may carry the accounts note. */
+  isAccountsNoteCarrier = false,
 ): Promise<LatePromptOutcome> {
   // When the question bubble itself was closed with its «not answered» note, that IS the
   // cancellation notice — a second standalone "previous question cancelled" line is
@@ -12637,7 +12702,7 @@ async function cancelPendingQuestionAndForward(
   if (!didLabelQuestionMessage) {
     await replyToThread(key, t('agent.question_cancelled_for_prompt'));
   }
-  return forwardPromptToAgent(key, adapter, text, sentAtMs, { messageContext, requestHeader, isPersonInput: true });
+  return forwardPromptToAgent(key, adapter, text, sentAtMs, { messageContext, requestHeader, isPersonInput: true, isAccountsNoteCarrier });
 }
 
 /**
@@ -13315,9 +13380,11 @@ function handleAgentToolResult(key: SessionKey, payload: ToolResultEvent): void 
   const action = getToolResultRenderAction(state.getDisplayPrefs(key).toolResults);
   if (action === 'drop') return;
 
+  // The accounts note rides the END of a bot send tool's result for the agent only (`limitNotes/noteText.ts`): the topic never shows it.
+  const output = checkIsBotMcpToolName(payload.tool) ? stripLimitNote(payload.output) : payload.output;
   const { text, isTruncated } = action === 'truncated'
-    ? getTruncatedToolResult(payload.output)
-    : { text: payload.output, isTruncated: false };
+    ? getTruncatedToolResult(output)
+    : { text: output, isTruncated: false };
 
   const header = payload.title ? `🔧 ${payload.tool} → ${payload.title}` : `🔧 ${payload.tool} →`;
   const footer = isTruncated ? `\n${t('toolResults.truncated_footer')}` : '';
@@ -15574,7 +15641,7 @@ function createSessionPostDeps(): PostToSessionDeps {
       // post arrives with its request already open and its header in the text.
       const opening = await openTopicRequest(key, text, { source: 'scheduledRun', requesterId: scheduledRunRequester });
       const buffered = createBufferedOutcome();
-      const delivery = await deliverPromptOrBuffer(key, `${opening.header}${text}`, startupPromptBuffer.checkIsStarting(conversationKey), buffered.settle);
+      const delivery = await deliverPromptOrBuffer(key, `${opening.header}${text}`, startupPromptBuffer.checkIsStarting(conversationKey), buffered.settle, { isAccountsNoteCarrier: true });
       await settleTopicRequestAfterDelivery(key, opening, delivery);
       // A prompt that waited for the session's start counts only once it reached it: a replay whose write failed is a failed post.
       if (delivery === 'buffered') await buffered.assertReplayed();
@@ -15707,6 +15774,19 @@ function wireScheduler(wiring: SchedulerWiringDeps): SchedulerMcpHandle {
     sendMessagesToThread,
     compactConversation: (threadKeyStr) => armDeferredCompaction(keyFromString(threadKeyStr)),
     listClaudeProfiles: listClaudeProfilesForAgent,
+    // The accounts note (`limitNotes/`): the send tools' results carry it, and the two calls that mark a conversation as launching workers record it.
+    takeLimitNoteForSend: (threadKeyStr) => {
+      const key = tryKeyFromString(threadKeyStr);
+      return key === null ? null : getLimitNotes().takeSendResultNote(key);
+    },
+    noteLimitProfilesCall: (threadKeyStr, report) => {
+      const key = tryKeyFromString(threadKeyStr);
+      if (key !== null) getLimitNotes().noteProfilesCall(key, report);
+    },
+    noteLimitWorkerWatch: (threadKeyStr) => {
+      const key = tryKeyFromString(threadKeyStr);
+      if (key !== null) getLimitNotes().noteWorkerWatch(key);
+    },
     getRemoteRunRunnerLines: () => getRunnerSummaryLines(),
     // A refused tool call leaves one line in the bounded diagnostic log (agent-diag.log): the SDK refuses before the bot sees it.
     logDiagnostic: appendDiagLog,

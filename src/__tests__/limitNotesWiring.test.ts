@@ -1,0 +1,162 @@
+/**
+ * Wiring guard for the accounts note in `bot.ts` (which a test cannot import: its module-scope `parseEnv()` exits the process).
+ * What a flow shows only by luck is pinned here by reading the source, the way `forwardPromptWiring.test.ts` pins the forward:
+ *  - WHICH callers of the prompt forward mark their prompt a carrier — a person's message that opened a request, a tracker's post, a
+ *    scheduled run — and that no other (a retry's nudge, a hand-over, a wedge replay, a request wake-up, the todo reminder, the lost-work
+ *    note, the answer to the agent's question, a held prompt) does;
+ *  - where the forward attaches the note (the last block, after the todo lines, inside the ONE text it writes, no await of its own) and
+ *    when it counts as delivered;
+ *  - that the renderer hides it from a bot tool's result, and that the bot's MCP ports reach the same notes;
+ *  - that the notes module imports nothing that could stamp activity, write to an agent or wake a session (README § Lifecycle safety).
+ *
+ * Test case: N/A — Charness has no Jira tracker.
+ */
+
+import { describe, it } from 'node:test';
+import assert from 'node:assert/strict';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
+
+const botSource = fs.readFileSync(path.join(__dirname, '..', 'bot.ts'), 'utf8');
+
+/** A top-level function's body — up to the next top-level declaration. */
+function getFunctionBody(name: string): string {
+  const startIdx = botSource.search(new RegExp(`\\n(?:async )?function ${name}\\(`));
+  assert.notEqual(startIdx, -1, `${name} must exist in bot.ts`);
+  const nextIdx = botSource.slice(startIdx + 1).search(/\n(?:async function|function|interface|const|\/\*\*)/);
+  return botSource.slice(startIdx, nextIdx === -1 ? undefined : startIdx + 1 + nextIdx);
+}
+
+/** The top-level declaration each line of `bot.ts` that holds `needle` sits in: `name`, or `command:<name>` for a registered command. */
+function listEnclosingDeclarations(needle: string): string[] {
+  const lines = botSource.split('\n');
+  const declaration = /^(?:async )?function (\w+)\(|^const (\w+)\b|^command\('(\w+)'/;
+  const names = new Set<string>();
+  lines.forEach((line, index) => {
+    if (!line.includes(needle)) return;
+    let at = index;
+    while (at >= 0 && !declaration.test(lines[at])) at -= 1;
+    const match = declaration.exec(lines[at]);
+    if (match === null) return;
+    names.add(match[1] ?? match[2] ?? `command:${match[3]}`);
+  });
+  return [...names].sort();
+}
+
+describe('which callers of the forward mark their prompt a carrier of the accounts note', () => {
+  it('exactly the person\'s-request routes, the tracker / scheduler post and the plumbing that hands the flag on — no other caller of the forward', () => {
+    assert.deepEqual(listEnclosingDeclarations('isAccountsNoteCarrier'), [
+      // The routes that SET it: a person's message that opened a request (text, voice, label-less free text, a file, an album, /schedule,
+      // the one buffered behind a start) and a session post (a tracker's request or update, a scheduled run, a fired check's wake).
+      'albumCollector',
+      'bufferPromptDuringStartup',
+      'cancelPendingQuestionAndForward',
+      'command:schedule',
+      'createSessionPostDeps',
+      'deliverPromptByState',
+      'handleIncomingFile',
+      // The plumbing that carries it from the caller to the live forward, buffered or not.
+      'forwardPromptToAgent',
+      'forwardPromptToLiveAgent',
+      'promptDeliveryDeps',
+      'replayBufferedPrompts',
+    ].sort());
+  });
+
+  it('the answer to the agent\'s own question is no carrier (a tap\'s label arrives with no request), and a person\'s free text is', () => {
+    const delivery = getFunctionBody('deliverPromptByState');
+    assert.match(delivery, /const isAccountsNoteCarrier = intake !== null;/);
+    assert.match(getFunctionBody('deliverActivePrompt'), /cancelPendingQuestionAndForward\(key, adapter, text, sentAtMs, messageContext, opening\.header, intake !== null\)/);
+    assert.match(getFunctionBody('cancelPendingQuestionAndForward'), /isAccountsNoteCarrier = false,/, 'off unless the caller says it opened a request');
+  });
+
+  it('the bookkeeping prompts — a wake-up, the answer tail, the todo reminder, the lost-work note, a wedge replay, a held prompt — never carry the flag', () => {
+    for (const name of ['forwardRequestWakeUp', 'remindAnswerTail', 'postTodoReminder', 'createLostWorkPostDeps', 'handleWedgeRecovery']) {
+      const body = botSource.includes(`function ${name}(`) ? getFunctionBody(name) : '';
+      assert.ok(body.length > 0 || name === 'handleWedgeRecovery', `${name} is in bot.ts`);
+      assert.equal(body.includes('isAccountsNoteCarrier'), false, `${name} must not mark its prompt a carrier`);
+    }
+    assert.doesNotMatch(botSource, /isRecoveryReplay: true,\n\s*isAccountsNoteCarrier/, 'the wedge replay');
+    // The held prompts of a usage-limit wait ride a replayable prompt (`limitHeldPrompts.releaseWithForward`) or are released as the
+    // person's own (isPersonInput), never as a carrier.
+    assert.match(getFunctionBody('replayBufferedPrompts'), /await forwardPromptToAgent\(key, adapter, heldText, undefined, \{ isPersonInput: true \}\);/);
+  });
+
+  it('a tracker\'s post and a scheduled run share one session post that marks the carrier; the lost-work post overrides that forward and does not', () => {
+    const postDeps = botSource.slice(botSource.indexOf('function createSessionPostDeps('), botSource.indexOf('function createSessionPostDeps(') + 3000);
+    assert.match(postDeps, /startupPromptBuffer\.checkIsStarting\(conversationKey\), buffered\.settle, \{ isAccountsNoteCarrier: true \}\);/);
+    assert.match(getFunctionBody('createLostWorkPostDeps'), /\.\.\.createSessionPostDeps\(\),\n\s*forwardPrompt: async \(conversationKey, text\) => \{/);
+  });
+});
+
+describe('where the forward attaches the note, and when it counts as delivered', () => {
+  const body = getFunctionBody('forwardPromptToLiveAgent');
+
+  it('as the LAST block of the text it writes — after the todo board and reminder lines, before anything is sent — and only for a carrier on a backend that gets notes', () => {
+    const todoReminder = body.indexOf('if (todoReminderLine !== null) promptText =');
+    const note = body.indexOf('const accountsNote = checkIsAccountsNoteCarried({ isCarrier: options.isAccountsNoteCarrier, isSlashCommand, adapterName: adapter.name })');
+    const append = body.indexOf('if (accountsNote !== null) promptText = appendLimitNote(promptText, accountsNote.text);');
+    const write = body.indexOf('const written = adapter.sendInputAndWait');
+    assert.ok(todoReminder > 0 && note > todoReminder && append > note && write > append, 'todo lines, then the note, then the one write');
+    assert.equal(body.slice(note, append).includes('await'), false, 'the note is worked out in the caller\'s tick');
+  });
+
+  it('the quiet period is read from the last turn end while the session is idle — never from the activity stamp a person\'s own message moves', () => {
+    assert.match(body, /getAccountsNoteQuietMs\(\{ lastTurnEndAt: state\.getCompactIdleTracking\(key\)\.lastTurnEndAt, isBusy: adapter\.checkIsBusy\?\.\(key\), nowMs: Date\.now\(\) \}\)/);
+  });
+
+  it('counts as delivered only once the prompt that carries it reached a live session — a failed write keeps it for the next prompt', () => {
+    assert.match(body, /const noteToldIfDelivered = \(\): void => \{[^]*?if \(accountsNote !== null && adapter\.checkIsActive\(key\)\) accountsNote\.markDelivered\(\);\n\s*\};/);
+  });
+
+  it('adds no activity stamp, typing, busy flag or request of its own: the note block holds none of them', () => {
+    const block = body.slice(body.indexOf('// The accounts note (`limitNotes/`)'), body.indexOf('markNeedsNewMessage(key);'));
+    for (const forbidden of ['noteThreadActivity', 'noteThreadUserActivity', 'notePersonActivity', 'markThreadTurnProducedOutput', 'setActivity', 'requestRefresh', 'openTopicRequest', 'trackContinuationTurn', 'ensureAgentSession', 'sendInput']) {
+      assert.equal(block.includes(forbidden), false, `the note block must not call ${forbidden}`);
+    }
+  });
+});
+
+describe('the topic never shows the note, and the bot\'s MCP ports reach the notes', () => {
+  it('the tool-result renderer cuts it from a bot tool\'s output, for every verbosity, before the output is truncated or shown', () => {
+    const body = getFunctionBody('handleAgentToolResult');
+    assert.match(body, /const output = checkIsBotMcpToolName\(payload\.tool\) \? stripLimitNote\(payload\.output\) : payload\.output;/);
+    assert.match(body, /getTruncatedToolResult\(output\)/);
+    assert.match(body, /\{ text: output, isTruncated: false \}/);
+    // The raw output is read twice: by the operator's own always-on trace, and by the cut — nothing that reaches the topic reads it.
+    assert.equal(body.match(/payload\.output/g)?.length, 3, 'the trace, the cut and its fallback; the topic gets `output`');
+  });
+
+  it('the scheduler\'s MCP deps take the send-result note and record the two orchestration calls through the one notes object', () => {
+    assert.match(botSource, /takeLimitNoteForSend: \(threadKeyStr\) => \{\n\s*const key = tryKeyFromString\(threadKeyStr\);\n\s*return key === null \? null : getLimitNotes\(\)\.takeSendResultNote\(key\);\n\s*\},/);
+    assert.match(botSource, /noteLimitProfilesCall: \(threadKeyStr, report\) => \{\n\s*const key = tryKeyFromString\(threadKeyStr\);\n\s*if \(key !== null\) getLimitNotes\(\)\.noteProfilesCall\(key, report\);\n\s*\},/);
+    assert.match(botSource, /noteLimitWorkerWatch: \(threadKeyStr\) => \{\n\s*const key = tryKeyFromString\(threadKeyStr\);\n\s*if \(key !== null\) getLimitNotes\(\)\.noteWorkerWatch\(key\);\n\s*\},/);
+  });
+
+  it('the notes\' report is the one `claude_profiles` answers with: the credit report over the same views and `/limits` list, never a second ranking', () => {
+    const notes = getFunctionBody('getLimitNotes');
+    assert.match(notes, /getReport: \(nowMs\) => buildClaudeProfilesCreditReport\(getClaudeProfileUsageViews\(\), null, nowMs, \{ chainScope: getClaudeLaunchChainScope\(state\.getFallbackChain\(\)\) \}\),/);
+    assert.match(notes, /getRecord: \(key\) => state\.getLimitNoteRecord\(key\),/);
+  });
+
+  it('the interval and the windows read the test timings — the seam, never an env var of their own', () => {
+    assert.match(botSource, /ENV\.testTimings\.limitReminderIntervalMs/);
+    assert.match(botSource, /ENV\.testTimings\.limitNoteQuietMs/);
+    assert.match(botSource, /ENV\.testTimings\.limitNoteSummaryFloorMs/);
+    assert.doesNotMatch(botSource, /process\.env\.CHARNESS_LIMIT/);
+  });
+});
+
+describe('the notes module cannot reach what a note must never touch', () => {
+  const importsOf = (file: string): string[] => [...fs.readFileSync(path.join(__dirname, '..', 'limitNotes', file), 'utf8').matchAll(/^import [^;]*? from '([^']+)';$/gm)].map((match) => match[1]).sort();
+
+  it('the service imports only names, the clock-free planner and types: no compaction, forward, session, request or indicator module', () => {
+    assert.deepEqual(importsOf('service.ts'), ['../adapters/adapterNames', '../sessionKey', '../utils/claudeUsage', './plan']);
+  });
+
+  it('the planner and the text helpers import only usage figures and formatting — no state, no adapter, no bot', () => {
+    assert.deepEqual(importsOf('plan.ts'), ['../utils/claudeApiSpend', '../utils/claudeUsage', '../utils/openCodeUsage', '../utils/reminderWizard', '../utils/timezone', './noteText']);
+    assert.deepEqual(importsOf('noteText.ts'), []);
+    assert.deepEqual(importsOf('reminderChoices.ts'), []);
+  });
+});

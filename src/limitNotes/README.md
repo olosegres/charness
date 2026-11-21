@@ -48,6 +48,31 @@ No clock, no state, no I/O: the caller hands in the report, the record, the sett
   `clearLimitNoteFingerprint` clears the fingerprint ONLY, so the next summary is «changed»; the reminder clock (last note, last
   call) and the orchestration mark stay, so a fresh context is never a reason for an early reminder.
 
+## Where a note rides (`service.ts`, wired in `bot.ts`)
+
+- **A turn start (`forwardPromptToLiveAgent`).** The note is the LAST block of the ONE prompt text the forward writes, after the todo
+  lines — never a write of its own (`noteText.ts`: `appendLimitNote` / `stripLimitNote`). Only a prompt its caller marked
+  `isAccountsNoteCarrier`, never a slash command, only on Claude json-stream / per-turn and OpenCode (`checkIsAccountsNoteCarried`).
+  The carriers are exactly: a person's message that opened a request (text, voice, free text that cancels a question, a file, an
+  album, `/schedule`, the one buffered behind a start — the answer to the agent's own question opens none, so it is no carrier) and a
+  session post (a tracker's request or update, a scheduled run, a fired check's wake). Every other prompt — the retry nudge, the
+  hand-over, a wedge replay, a request wake-up, the todo reminder, the lost-work note, a compaction — leaves the flag off
+  (`limitNotesWiring.test.ts` pins the list). A buffered carrier is decorated at its replay, with the figures of that moment. The
+  note counts as delivered only once the prompt reached a live session.
+- **Quiet.** «The session woke up» is `now − lastTurnEnd` while nothing runs (`getAccountsNoteQuietMs`): the persisted turn-end
+  stamp, because a person's own message stamps the activity instant the idle timer uses at its arrival, before the forward.
+- **A send tool's result** (`send_messages_to_user`, `send_file_to_user` of a topic and of a Jira issue, `answer_request`): the
+  MCP surface appends the note as the last block (`takeLimitNoteForSend`; the conversation is the resolved thread, for
+  `answer_request` the request's). Never the reminder; recorded as delivered at once. A failed send gets none.
+- **Hidden from the topic.** The renderer of a tool result cuts the note off a bot tool's output (`checkIsBotMcpToolName`) before it
+  truncates or shows it, for every `/tool_results` mode. The resume context, the fallback hand-over and the session titles strip a
+  stored user turn's trailing note like the preamble: stale figures must not reach a new agent.
+- **What makes a conversation orchestrate.** `claude_profiles` (records the call, restarts the reminder clock, stores the fingerprint
+  of the answer) and `schedule_create` with a worker watch (`checkCommand` + `statusWorkerRunDir`). The scope is resolved like the
+  send tools; a folder token with several bound topics names none and records nothing.
+- **Test windows.** `CHARNESS_TEST_TIMINGS` `limitReminderIntervalMs`, `limitNoteQuietMs`, `limitNoteSummaryFloorMs` (each may only
+  shorten its production window). No env var of its own.
+
 ## Lifecycle safety — a note is a passenger, never a cause
 
 Every later scope of this feature keeps these seven rules; each has a test.

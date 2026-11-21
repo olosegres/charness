@@ -16,6 +16,7 @@
  * preamble first), so it can never carry the service header.
  */
 
+import { stripLimitNote } from './limitNotes/noteText';
 import { stripThreadContextPreamble } from './threadContextPreamble';
 
 /**
@@ -64,7 +65,7 @@ export function checkIsMeaningfulPrompt(rawText: string): boolean {
  * reflects what the USER said, never the bot's glue.
  */
 export function buildSessionTitleSnippet(rawText: string): string {
-  const withoutPreamble = stripThreadContextPreamble(rawText);
+  const withoutPreamble = stripLimitNote(stripThreadContextPreamble(rawText));
   const collapsed = withoutPreamble.replace(/\s+/g, ' ').trim();
   if (collapsed.length <= sessionTitleSnippetMaxLength) return collapsed;
   // Reserve one char for the ellipsis so the result never exceeds the cap.

@@ -67,7 +67,7 @@ export interface AnswerRequestArgs {
 }
 
 /** @description What the tool reports back to the agent. */
-export type AnswerRequestOutcome = { ok: true; message: string } | { ok: false; error: string };
+export type AnswerRequestOutcome = { ok: true; message: string; conversationKey: string } | { ok: false; error: string };
 
 function buildUnknownRequestError(requestId: string): string {
   return `Unknown request id "${requestId}". Answer only the request ids given to you in this conversation; nothing was sent.`;
@@ -138,7 +138,7 @@ export async function answerRequest(deps: AnswerRequestDeps, args: AnswerRequest
 
   if (!lookup.isOpen) {
     deps.onAnswerDelivered?.(key, args.requestId, args.kind);
-    return { ok: true, message: `${buildClosedAnswerMessage(args.requestId, lookup.request)}${warning}` };
+    return { ok: true, message: `${buildClosedAnswerMessage(args.requestId, lookup.request)}${warning}`, conversationKey: lookup.conversationKey };
   }
   const closeReason = closingAnswerReasons[args.kind];
   const changed = closeReason
@@ -153,5 +153,5 @@ export async function answerRequest(deps: AnswerRequestDeps, args: AnswerRequest
   // After the close: whoever hears it sees the request as it now stands.
   deps.onAnswerDelivered?.(key, args.requestId, args.kind);
   const finalNote = args.kind === 'final' ? getFinalAnswerNoteSafely(deps, key, lookup.request.createdAt) : null;
-  return { ok: true, message: `${buildOpenAnswerMessage(args.requestId, args.kind, changed === null)}${warning}${finalNote === null ? '' : ` ${finalNote}`}` };
+  return { ok: true, message: `${buildOpenAnswerMessage(args.requestId, args.kind, changed === null)}${warning}${finalNote === null ? '' : ` ${finalNote}`}`, conversationKey: lookup.conversationKey };
 }

@@ -249,3 +249,14 @@ test('a prompt buffered as a person\'s own is replayed as one, a bot-made one as
   await buffer.replayPrompts(KEY_A, { isSessionActive: true, forward: async (text, isPersonInput) => { forwarded.push([text, isPersonInput]); } });
   assert.deepEqual(forwarded, [['typed', true], ['a wake-up', false]]);
 });
+
+test('a prompt buffered as a carrier of the accounts note replays as one (its note is attached at the replay, with the figures of that moment); every other prompt does not', async () => {
+  const buffer = new StartupPromptBuffer();
+  const forwarded: Array<[string, boolean, boolean]> = [];
+  buffer.markStarting(KEY_A);
+  buffer.addPrompt(KEY_A, 'typed', undefined, true, true);
+  buffer.addPrompt(KEY_A, 'a nudge');
+  buffer.addPrompt(KEY_A, 'a scheduled run', undefined, false, true);
+  await buffer.replayPrompts(KEY_A, { isSessionActive: true, forward: async (text, isPersonInput, isAccountsNoteCarrier) => { forwarded.push([text, isPersonInput, isAccountsNoteCarrier]); } });
+  assert.deepEqual(forwarded, [['typed', true, true], ['a nudge', false, false], ['a scheduled run', false, true]]);
+});

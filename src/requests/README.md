@@ -84,6 +84,8 @@ Numeric bounds are named constants in the files below; this README says only wha
   one its answer belonged to.
 - A `final` to an open request may carry one more line (`getFinalAnswerNote`): the todo registry's reminder when the
   conversation's published list still shows work in progress the request never updated (`../todos/README.md`).
+- An accepted answer's outcome names the request's conversation (`conversationKey`): the MCP surface hangs the accounts
+  note on the result of a conversation it is due for (`../limitNotes/README.md`).
 
 ## Wake-ups (`wakeUpRules.ts` = pure decisions, `wakeUpEngine.ts` = timers)
 

@@ -10,6 +10,7 @@
  * directive. Pure: the turns and labels come from the caller, so the shape is unit-tested.
  */
 
+import { stripLimitNote } from '../limitNotes/noteText';
 import { stripThreadContextPreamble } from '../threadContextPreamble';
 import type { RecentTurn } from '../types';
 
@@ -71,7 +72,8 @@ export function buildFallbackBridgePrompt(input: {
   lines.push('', `--- Last ${input.turns.length} turn(s) of ${input.fromLabel} (oldest first) ---`);
   for (const turn of input.turns) {
     const label = turn.role === 'user' ? 'User' : 'Assistant';
-    const text = turn.role === 'user' ? stripThreadContextPreamble(turn.text) : turn.text;
+    // The accounts note's figures are of the moment it was written: a new agent must not read them as today's.
+    const text = turn.role === 'user' ? stripLimitNote(stripThreadContextPreamble(turn.text)) : turn.text;
     lines.push('', `${label}:`, truncateTurnText(text.trim()));
   }
   lines.push('', '--- End of the previous agent\'s turns ---');

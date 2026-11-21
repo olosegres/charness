@@ -317,7 +317,9 @@ restarts — every hot reload — never touch it. Per-thread host dir
   person's own message (`isPersonInput`: a topic's text, voice, file or album, and its
   buffered replay) is not awaited — a CLI that stops reading would hold the topic's
   update queue, `/esc` included — and its failed write is told in the topic
-  (`agent.prompt_not_delivered`).
+  (`agent.prompt_not_delivered`). A turn the person or the scheduler starts (`isAccountsNoteCarrier`: a person's message
+  that opened a request, a tracker's post, a scheduled run) may carry the accounts note as the LAST block of that ONE
+  text (`../limitNotes/README.md`): the echo matcher takes the prompt in whole, a merged echo included.
   A failed write takes back the turn-start state. A user turn is held until the CLI
   shows it reads (`isReadingInput`: it answered the initialize handshake, or wrote
   any output — a resumed CLI was seen reading nothing for over 20 s, past the 15 s

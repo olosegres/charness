@@ -16,8 +16,10 @@ import {
   buildLimitNoteText,
   checkHasFreshLimitUsage,
   decideLimitNote,
+  getLimitNoteRecordAfterNote,
+  getLimitNoteRecordAfterProfilesCall,
+  getLimitNoteRecordAfterWorkerWatch,
   defaultLimitNoteWindows,
-  limitNoteMarker,
   limitNoteOrchestrationWindowMs,
   limitNoteMinQuietMs,
   limitNoteSkipReasons,
@@ -25,6 +27,7 @@ import {
   type LimitNoteMoment,
   type LimitNoteRecord,
 } from '../limitNotes/plan';
+import { limitNoteMarker } from '../limitNotes/noteText';
 import type { ClaudeLaunchChainScope, ClaudeProfileUsageView, ClaudeProfilesReport, ClaudeUsageSnapshot } from '../utils/claudeUsage';
 import { buildClaudeProfilesCreditReport } from '../utils/claudeProfileUsageViews';
 import type { OpenCodeProviderUsageRecord } from '../utils/openCodeUsage';
@@ -567,5 +570,24 @@ describe('buildLimitNoteText', () => {
     const summary = buildLimitNoteText('summary', buildReport(twoAccounts()), chatGptWeekly40, 'UTC', nowMs);
     assert.ok(reminder.length < 400, `${reminder.length} characters`);
     assert.ok(summary.length < 160, `${summary.length} characters`);
+  });
+});
+
+describe('the record after each thing that can happen to a conversation', () => {
+  const before: LimitNoteRecord = { lastNoteAt: 1, fingerprint: 'rec=old', lastOrchestratedAt: 2, lastProfilesCallAt: 3 };
+
+  it('a note: its time and the picture it showed; the orchestration mark and the last call stay', () => {
+    assert.deepEqual(getLimitNoteRecordAfterNote(before, { atMs: nowMs, fingerprint: 'rec=new' }), { lastNoteAt: nowMs, fingerprint: 'rec=new', lastOrchestratedAt: 2, lastProfilesCallAt: 3 });
+    assert.deepEqual(getLimitNoteRecordAfterNote(undefined, { atMs: nowMs, fingerprint: 'rec=new' }), { lastNoteAt: nowMs, fingerprint: 'rec=new' }, 'a conversation with no record yet');
+  });
+
+  it('a `claude_profiles` call: it looked and it orchestrates, and holds the picture of the answer; the last note\'s time stays', () => {
+    assert.deepEqual(getLimitNoteRecordAfterProfilesCall(before, { atMs: nowMs, fingerprint: 'rec=new' }), { lastNoteAt: 1, fingerprint: 'rec=new', lastOrchestratedAt: nowMs, lastProfilesCallAt: nowMs });
+    assert.deepEqual(getLimitNoteRecordAfterProfilesCall(undefined, { atMs: nowMs, fingerprint: 'x' }), { fingerprint: 'x', lastOrchestratedAt: nowMs, lastProfilesCallAt: nowMs });
+  });
+
+  it('a worker watch: only the orchestration mark moves — it was not a look', () => {
+    assert.deepEqual(getLimitNoteRecordAfterWorkerWatch(before, nowMs), { ...before, lastOrchestratedAt: nowMs });
+    assert.deepEqual(getLimitNoteRecordAfterWorkerWatch(undefined, nowMs), { lastOrchestratedAt: nowMs });
   });
 });

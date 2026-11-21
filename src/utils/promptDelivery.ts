@@ -20,9 +20,13 @@ export interface PromptDeliveryDeps {
  * @description `isPersonInput` — a person typed, spoke or sent it (a topic's text, voice, file or album): its forward does not
  * wait for the write into the agent (the topic's update queue must not hang on it), and a write that fails is told to them.
  * Every other prompt — a wake-up, a scheduled run, a retry's nudge, a tracker's post — waits for it, buffered or not.
+ * `isAccountsNoteCarrier` — the prompt starts a turn the person or the scheduler made (a person's message that opened a request, a
+ * tracker's post, a scheduled run), so its forward may attach the accounts note (`limitNotes/`); kept with the prompt through a startup
+ * buffer, and decorated at the replay with the figures of that moment.
  */
 export interface PromptDeliveryOptions {
   isPersonInput?: boolean;
+  isAccountsNoteCarrier?: boolean;
 }
 
 /**
@@ -73,7 +77,7 @@ export async function deliverPromptOrBuffer(
     // `onBufferedSettled`, so it reads as forwarded, as it always did.
     return (await deps.forwardPrompt(key, text, options)) === 'noSession' ? 'noSession' : 'forwarded';
   }
-  const isFirstBuffered = deps.startupBuffer.addPrompt(keyToString(key), text, onBufferedSettled, options.isPersonInput === true);
+  const isFirstBuffered = deps.startupBuffer.addPrompt(keyToString(key), text, onBufferedSettled, options.isPersonInput === true, options.isAccountsNoteCarrier === true);
   if (isFirstBuffered && checkIsTelegramKey(key)) {
     // The prompt IS buffered by now (and its settle callback registered), so a notice that fails must not
     // read as a delivery that failed: a caller keeping something until the prompt reached a session would

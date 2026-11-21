@@ -1,4 +1,5 @@
 import { t } from './i18n';
+import { stripLimitNote } from './limitNotes/noteText';
 import { stripThreadContextPreamble } from './threadContextPreamble';
 import type { RecentTurn } from './types';
 
@@ -19,15 +20,15 @@ export const resumeContextTurnLimit = 3;
  * looks identical in both. `turns` must be chronological (oldest→newest).
  *
  * Pure (only reads i18n) — the stored user prompts carry the forwarded
- * "[Telegram thread context]" glue, which is service noise when shown back, so
- * it is stripped from user turns only (assistant text is never touched).
+ * "[Telegram thread context]" glue and, at their end, a stale accounts note (`limitNotes/`) — service noise when shown back, and
+ * figures that must not reach a new agent — so both are stripped from user turns only (assistant text is never touched).
  */
 export function renderTurns(turns: RecentTurn[]): string[] {
   const userLabel = t('resume.context_user_label');
   const assistantLabel = t('resume.context_assistant_label');
   return turns.map((turn) => {
     const label = turn.role === 'user' ? userLabel : assistantLabel;
-    const visibleText = turn.role === 'user' ? stripThreadContextPreamble(turn.text) : turn.text;
+    const visibleText = turn.role === 'user' ? stripLimitNote(stripThreadContextPreamble(turn.text)) : turn.text;
     return `${label} ${visibleText}`;
   });
 }

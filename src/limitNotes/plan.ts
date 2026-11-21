@@ -28,6 +28,7 @@ import {
 } from '../utils/claudeUsage';
 import { chatGptProviderId, type OpenCodeProviderUsageRecord } from '../utils/openCodeUsage';
 import { formatReminderTime } from '../utils/reminderWizard';
+import { limitNoteMarker } from './noteText';
 import { getZonedWallClock } from '../utils/timezone';
 
 /** What the poller recorded per OpenCode provider (`state.json` `openCodeProviderUsage`); the ChatGPT subscription's figures are read from it. */
@@ -37,9 +38,6 @@ const msPerMinute = 60 * 1000;
 const msPerDay = 24 * 60 * msPerMinute;
 
 // ── windows and names ──
-
-/** What a note text starts with (`[Accounts · 14:05] …`): the bot cuts a send tool's result from it, and the resume readers strip it. */
-export const limitNoteMarker = '[Accounts';
 
 /** A session quiet for this long «woke up»: its next turn start may carry the summary. */
 export const limitNoteMinQuietMs = 30 * msPerMinute;
@@ -88,6 +86,27 @@ export interface LimitNoteRecord {
   fingerprint?: string;
   lastOrchestratedAt?: number;
   lastProfilesCallAt?: number;
+}
+
+/**
+ * @description `record` after a note of either shape reached the agent: its time and the fingerprint of the picture it showed. The
+ * reminder clock restarts, and the summary's «changed» is measured against this picture from now on.
+ */
+export function getLimitNoteRecordAfterNote(record: LimitNoteRecord | undefined, input: { atMs: number; fingerprint: string }): LimitNoteRecord {
+  return { ...record, lastNoteAt: input.atMs, fingerprint: input.fingerprint };
+}
+
+/**
+ * @description `record` after the agent called `claude_profiles` (it LOOKED: the reminder clock restarts, and it holds the picture
+ * the answer showed) — which is also how a conversation counts as orchestrating workers.
+ */
+export function getLimitNoteRecordAfterProfilesCall(record: LimitNoteRecord | undefined, input: { atMs: number; fingerprint: string }): LimitNoteRecord {
+  return { ...record, lastProfilesCallAt: input.atMs, lastOrchestratedAt: input.atMs, fingerprint: input.fingerprint };
+}
+
+/** @description `record` after the agent armed a worker watch (`schedule_create` with `statusWorkerRunDir`): it orchestrates workers; nothing else moves. */
+export function getLimitNoteRecordAfterWorkerWatch(record: LimitNoteRecord | undefined, atMs: number): LimitNoteRecord {
+  return { ...record, lastOrchestratedAt: atMs };
 }
 
 /** The moment a note may ride: a turn start the person or the scheduler makes, a Claude turn already running, the result of a bot send tool. */

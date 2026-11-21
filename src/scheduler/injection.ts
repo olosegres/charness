@@ -19,6 +19,7 @@
  */
 
 import { randomUUID } from 'node:crypto';
+import { legacySchedulerMcpServerName } from '../legacyNames';
 import { keyToString, type SessionKey } from '../sessionKey';
 import {
   buildSchedulerMcpToken,
@@ -33,6 +34,15 @@ import {
  * entry of it out of the configs the bot generates.
  */
 export const schedulerMcpServerName = 'charness';
+
+/**
+ * @description Whether a tool name, as the agent reports it, is one of the bot's own MCP tools: Claude Code's `mcp__<server>__<tool>`
+ * or OpenCode's `<server>_<tool>`, under the bot's server name or the one it had before the rename (an agent started then keeps
+ * calling the old tool names until it restarts).
+ */
+export function checkIsBotMcpToolName(toolName: string): boolean {
+  return [schedulerMcpServerName, legacySchedulerMcpServerName].some((serverName) => toolName.startsWith(`mcp__${serverName}__`) || toolName.startsWith(`${serverName}_`));
+}
 
 /**
  * @name SchedulerInjectionConfig

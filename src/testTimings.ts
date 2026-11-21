@@ -12,6 +12,8 @@ import { DEFAULT_SAVE_DEBOUNCE_MS } from './state';
 import { pendingWorkHoldDefaultMs } from './utils/jsonStreamPendingWork';
 import { basePollIntervalMs } from './utils/pollBackoff';
 import { claudeApiCreditRecheckIntervalMs, claudeApiCreditRecheckPollMs } from './utils/claudeApiCreditRecheck';
+import { limitNoteMinQuietMs, limitNoteSummaryFloorMs } from './limitNotes/plan';
+import { limitReminderDefaultMinutes } from './limitNotes/reminderChoices';
 import { todoReminderDefaultMinutes } from './todos/nag';
 import { longestQuestionWaitMs, setAsideRetryDelayMs } from './utils/questionWaitChoices';
 import { todoReminderPollMs } from './todos/reminderEngine';
@@ -32,7 +34,7 @@ import { runnerWaitPollMinMs, runnerWaitPollMs } from './remoteRun/runnerWaitTim
  * queue call's 30 s deadline, the
  * Jira poll's 10 s floor, the wake-up engine's 10 s turn poll and its sweep's minute, the first re-post retry's minute, the 30 s stagger of the wakes after a restart, the two-minute probe of an
  * unconfirmed usage limit, `state.json`'s save debounce, the OpenCode server's 60 s of retries, the 6 h pending-work hold, the 300 ms to the first read of an adopted json-stream session's output, the 15-minute gap of a passing check's status lines, the
- * todo reminder's 10 s poll and its interval, the 24 h between two rechecks of a used-up API credit and the 30 min poll that finds one due, the 45 s heartbeat lease of a foreground `charness remote-run` and its 10 s poll while it waits for a paired runner, and — a count, not a window —
+ * todo reminder's 10 s poll and its interval, the limit reminder's interval and the quiet period and floor of its change summary, the 24 h between two rechecks of a used-up API credit and the 30 min poll that finds one due, the 45 s heartbeat lease of a foreground `charness remote-run` and its 10 s poll while it waits for a paired runner, and — a count, not a window —
  * the 200 `/bind` picker claims, the question wait — how long an unanswered agent question waits before it is set aside —, the 5 s / 10 min a prompt the bot delivers waits for a busy session, and the four windows of a topic's status mark: the 20 s a name holds before it is written (a turn runs that long before its ⏳ shows), the 60 s between two renames, the 5-minute sweep and the 5 s the boot's wave waits). It is NOT a setting: no
  * operator sets it and it is documented only for developers (DEVELOPMENT.md); settings live in `settings.json`.
  *
@@ -93,6 +95,12 @@ const testTimingsSchema = z.strictObject({
   todoReminderPollMs: createShorterWindowSchema(todoReminderPollMs).optional(),
   /** The todo reminder's interval, in place of the `settings.json` one (production default: 60 min; off stays off). */
   todoReminderIntervalMs: createShorterWindowSchema(todoReminderDefaultMinutes * 60 * msPerSecond).optional(),
+  /** The limit reminder's interval, in place of the `/limits_reminders` setting (production default: 60 min; off stays off). */
+  limitReminderIntervalMs: createShorterWindowSchema(limitReminderDefaultMinutes * 60 * msPerSecond).optional(),
+  /** How long a session must have been quiet for a turn start to carry the accounts note's change summary (production: `limitNoteMinQuietMs`, 30 min). */
+  limitNoteQuietMs: createShorterWindowSchema(limitNoteMinQuietMs).optional(),
+  /** The least time between two change summaries of the accounts note (production: `limitNoteSummaryFloorMs`, 30 min). */
+  limitNoteSummaryFloorMs: createShorterWindowSchema(limitNoteSummaryFloorMs).optional(),
   /** How many `/bind` picker claims the bot keeps before it drops the oldest — a COUNT, not a window (production: `bindPickerClaimLimit`, 200). */
   bindPickerClaimLimit: z.number().int().positive().max(bindPickerClaimLimit).optional(),
   /** How long a runner waits for the heartbeat of a foreground `charness remote-run` before it kills the job (production: `remoteRunLeaseMs`, 45 s; at least `remoteRunLeaseMinMs`). Read by the remote-run CLI, not by the bot. */

@@ -44,3 +44,10 @@ export function resolveLimitRemindersMinutes(general: number | null | undefined,
   }
   return limitReminderDefaultMinutes;
 }
+
+const msPerMinute = 60 * 1000;
+
+/** @description The interval in ms, or `null` when the reminder is off. `overrideMs` is the test-only timing seam (`CHARNESS_TEST_TIMINGS`); Off stays off. */
+export function getLimitReminderIntervalMs(minutes: LimitReminderMinutes | null, overrideMs: number | undefined): number | null {
+  return minutes === null ? null : overrideMs ?? minutes * msPerMinute;
+}

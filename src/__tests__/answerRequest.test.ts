@@ -119,7 +119,8 @@ describe('answerRequest close rules', () => {
     } finally {
       console.error = originalError;
     }
-    assert.deepEqual(outcome, { ok: true, message: `Delivered. Request ${request.id} is now closed (final).` });
+    // The outcome names the conversation the request belongs to: the bot's send tools hang the accounts note on it (`limitNotes/`).
+    assert.deepEqual(outcome, { ok: true, message: `Delivered. Request ${request.id} is now closed (final).`, conversationKey: keyToString(topicKey) });
     assert.equal(errors.length, 1);
   });
 
@@ -187,6 +188,7 @@ describe('answerRequest close rules', () => {
       new RegExp(`already closed \\(superseded by request ${current.id} from the same requester; its prompt follows — reply only to what it adds`),
       'the result names the request that replaced it, so the agent answers that one',
     );
+    assert.equal(outcome.ok ? outcome.conversationKey : null, keyToString(topicKey), 'a closed request\'s answer names its conversation too');
     assert.equal(sink.deliveries[0]?.delivery.isRequestOpen, false);
     assert.deepEqual(ledger.getNewestOpenRequest(topicKey), current, 'the newer request is untouched');
     const lookup = ledger.getRequest(superseded.id);

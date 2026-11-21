@@ -10,6 +10,7 @@ import assert from 'node:assert/strict';
 import {
   checkIsLimitReminderChoice,
   checkIsLimitReminderMinutes,
+  getLimitReminderIntervalMs,
   limitReminderChoices,
   limitReminderDefaultMinutes,
   limitReminderIntervalOptions,
@@ -57,5 +58,15 @@ describe('the choices', () => {
   it('an interval or Off passes the choice guard, anything else a hand-edited file may hold does not', () => {
     for (const choice of [0, 60, 120, 240]) assert.equal(checkIsLimitReminderChoice(choice), true, `${choice}`);
     for (const stored of [90, -60, 1.5, Number.NaN, 300, undefined, null]) assert.equal(checkIsLimitReminderChoice(stored), false, `${stored}`);
+  });
+});
+
+describe('getLimitReminderIntervalMs: the interval in ms', () => {
+  it('the chosen minutes in ms; Off stays Off; the test window replaces an interval, never Off', () => {
+    assert.equal(getLimitReminderIntervalMs(60, undefined), 3_600_000);
+    assert.equal(getLimitReminderIntervalMs(240, undefined), 14_400_000);
+    assert.equal(getLimitReminderIntervalMs(null, undefined), null);
+    assert.equal(getLimitReminderIntervalMs(120, 5000), 5000, 'a flow shortens the interval');
+    assert.equal(getLimitReminderIntervalMs(null, 5000), null, 'but never turns Off on');
   });
 });
