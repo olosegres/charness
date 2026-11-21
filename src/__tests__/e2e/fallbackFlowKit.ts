@@ -14,6 +14,7 @@ import type { TopicDriver } from '../telegramE2e/topicDriver';
 import type { AgentData, BindingData, ClaudeProfileRecord, CompactIdleTrackingEntry, ParkedSession } from '../../state';
 import type { FallbackChainEntry } from '../../utils/fallbackChain';
 import type { ClaudeCostBaseline } from '../../utils/claudeApiSpend';
+import type { LimitNoteRecord } from '../../limitNotes/plan';
 import type { PendingQuestionState, ReAskedQuestionRecord, SetAsideQuestionRecord } from '../../types';
 
 /** The line the bot prints once its long polling is up. */
@@ -54,6 +55,8 @@ export interface PersistedState {
   questionWaitOverrides?: Record<string, string>;
   /** The compact-on-idle instants each topic's conversation carries (dropped when the conversation ends), keyed by the topic. */
   compactIdleTracking?: Record<string, CompactIdleTrackingEntry>;
+  /** What the accounts notes keep per conversation (`limitNotes/plan.ts`), keyed by the topic. */
+  limitNotes?: Record<string, LimitNoteRecord>;
   [field: string]: unknown;
 }
 

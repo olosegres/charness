@@ -113,6 +113,10 @@ Jira: the platform-specific parts (the `/todo` view, a topic's name) are injecte
 
 ## Mid-turn delivery (`midTurn.ts`)
 
+The inbox itself — the file, the hook, the withdrawal rules — is `utils/midTurnInbox.ts`, shared with the accounts note
+(`limitNotes/README.md` § Mid-turn delivery): one file per session, sections joined into it, the project board's the `todoBoard`
+section. What follows is the board's own use of it.
+
 - **Claude** (probed on Claude Code 2.1.310: a `PostToolUse` hook's `additionalContext` reaches the model in
   `claude -p` stream-json): the launch `--settings` file (`utils/claudeCompactHook.ts`, shared by the json-stream and
   tmux backends and by a key profile's own file) carries a `PostToolUse` command hook with no matcher. With the inbox

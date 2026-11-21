@@ -95,6 +95,7 @@ import {
 } from './rateLimiter';
 import { formatTestTimingsBootLine, parseTestTimings, testTimingsEnvName } from './testTimings';
 import { checkIsAccountsNoteCarried, createLimitNotes, getAccountsNoteQuietMs, type LimitNotes } from './limitNotes/service';
+import { LimitNotesEngine } from './limitNotes/engine';
 import { appendLimitNote, stripLimitNote } from './limitNotes/noteText';
 import { defaultLimitNoteWindows, type LimitNoteWindows } from './limitNotes/plan';
 import { getLimitReminderIntervalMs, resolveLimitRemindersMinutes } from './limitNotes/reminderChoices';
@@ -429,7 +430,8 @@ import { TodoReminderEngine } from './todos/reminderEngine';
 import { createRepositoryIdentityReader, createRepositoryRootCommitFile, groupTodoProjects, runGitInFolder, type RepositoryIdentityReader, type TodoProject, type TodoProjectMember } from './todos/projects';
 import { createTodoBoard, type TodoBoard, type TodoSessionActivity } from './todos/board';
 import { createTodoTools, type TodoTools } from './todos/tools';
-import { createTodoMidTurn, getTodoInboxDir, type TodoMidTurn } from './todos/midTurn';
+import { createTodoMidTurn, type TodoMidTurn } from './todos/midTurn';
+import { createMidTurnInbox, getMidTurnInboxDir, type MidTurnInbox } from './utils/midTurnInbox';
 import { checkIsAgentProseOutput } from './requests/answerTail';
 import { createTelegramAnswerSink } from './connectors/telegram/answerSink';
 import { getAnswerSink, releaseRequestAlert, type AnswerSink, type AnswerSinks } from './platform/answerSink';
@@ -1479,6 +1481,8 @@ function takeTodoPromptReminder(key: SessionKey): string | null {
 
 /** The staleness reminder's poll (`todos/reminderEngine.ts`), built at boot and started once the sessions are restored. */
 let todoReminderEngine: TodoReminderEngine | null = null;
+/** The accounts note's mid-turn delivery (`limitNotes/engine.ts`); built at boot, started with the sessions restored. */
+let limitNotesEngine: LimitNotesEngine | null = null;
 
 let todoRepositories: RepositoryIdentityReader | null = null;
 
@@ -1601,13 +1605,24 @@ function noteTodoFreshContext(key: SessionKey): void {
   }
 }
 
+let midTurnInbox: MidTurnInbox | null = null;
+
+/**
+ * The per-session mid-turn inbox a running Claude agent reads after its next tool call (`utils/midTurnInbox.ts`): the project board's
+ * section and the accounts note's. One `PostToolUse` hook serves both; each section is offered and withdrawn on its own rules.
+ */
+function getMidTurnInbox(): MidTurnInbox {
+  midTurnInbox ??= createMidTurnInbox({ inboxDir: getMidTurnInboxDir(getDataDir()) });
+  return midTurnInbox;
+}
+
 let todoMidTurn: TodoMidTurn | null = null;
 
 /** Mid-turn delivery of the board (`todos/midTurn.ts`): the Claude inbox hook, the note into a running OpenCode turn. */
 function getTodoMidTurn(): TodoMidTurn {
   todoMidTurn ??= createTodoMidTurn({
     board: getTodoBoard(),
-    inboxDir: getTodoInboxDir(getDataDir()),
+    inbox: getMidTurnInbox(),
     getClaudeSessionId: (key) => {
       const adapterName = getThreadAdapterNameRaw(key) ?? state.getAgent(key)?.name;
       return adapterName !== undefined && checkIsClaudeBackend(adapterName) ? getResumableSessionId(key) : null;
@@ -1631,6 +1646,18 @@ function discardTodoInbox(key: SessionKey): void {
     getTodoMidTurn().discardInbox(key);
   } catch (e) {
     console.error(`[todos] ${keyToString(key)}: the mid-turn inbox could not be withdrawn:`, e instanceof Error ? e.message : e);
+  }
+}
+
+/**
+ * A turn start the bot makes, a session boundary: the accounts note's mid-turn section of the inbox is withdrawn unseen — a tool call of
+ * the old turn must not take a note the prompt may carry itself, or one meant for a session that is gone — and the note stays due.
+ */
+function withdrawAccountsInbox(key: SessionKey): void {
+  try {
+    getMidTurnInbox().withdraw(key, 'accounts');
+  } catch (e) {
+    console.error(`[limit-notes] ${keyToString(key)}: the mid-turn inbox could not be withdrawn:`, e instanceof Error ? e.message : e);
   }
 }
 
@@ -3230,8 +3257,10 @@ function clearThreadContextMarker(key: SessionKey): void {
   // this session will take is withdrawn.
   noteTodoFreshContext(key);
   discardTodoInbox(key);
-  // …and for the accounts notes: the agent no longer holds the picture its last note showed (the reminder clock stays).
+  // …and for the accounts notes: the agent no longer holds the picture its last note showed (the reminder clock stays), and a
+  // mid-turn note waiting for a tool call of a session that is going away is withdrawn.
   state.clearLimitNoteFingerprint(key);
+  withdrawAccountsInbox(key);
 }
 
 function getThreadMessageState(key: SessionKey): ThreadMessageState {
@@ -6190,6 +6219,8 @@ const autoStopUnsupportedLoggedKeys = new Set<string>();
  * would let that ensure run beside the stop and forward to the process it ends.
  */
 function handleAgentTurnEnded(key: SessionKey): void {
+  // No tool call of this turn is left to take a mid-turn accounts note: withdrawn unseen, it stays due.
+  withdrawAccountsInbox(key);
   noteThreadActivity(key);
   topicIndicator.requestRefresh(key);
   const adapter = getThreadAdapter(key);
@@ -6423,6 +6454,8 @@ async function forwardPromptToLiveAgent(
   // then the todo list's staleness reminder rides the next real prompt from any source (D11 form a) — never a slash
   // command or a shell line; the reminder never rides the standalone reminder itself.
   const isTodoDecorated = !isSlashCommand && adapter.name !== 'terminal';
+  // Any forward is a turn start (a slash command too: `/compact` opens a held turn): the accounts note's mid-turn section goes.
+  withdrawAccountsInbox(key);
   if (isTodoDecorated) discardTodoInbox(key);
   const todoBoardBlock = isTodoDecorated ? takeTodoPromptBoard(key) : null;
   if (todoBoardBlock !== null) promptText = `${promptText}\n\n${todoBoardBlock}`;
@@ -14063,6 +14096,8 @@ function handleQuestionGone(key: SessionKey): void {
 }
 
 function handleAgentClosed(key: SessionKey): void {
+  // A process that is gone takes no mid-turn accounts note.
+  withdrawAccountsInbox(key);
   // What the process held that died with it (its own background work), taken before the cleanup below.
   const lostWork = takeLostWorkOf(key);
   // Session is gone — the not-yet-sent output gets its ONE final attempt (a 429
@@ -14271,6 +14306,8 @@ function clearForeignSessionState(key: SessionKey): void {
  * and `openCodeAdapter` (`emit('started', key)`).
  */
 function handleAgentStarted(key: SessionKey): void {
+  // A note written for the session this one replaces is never taken by the new one.
+  withdrawAccountsInbox(key);
   updatePinnedStatus(key).catch(() => {});
   // A fresh/adopted session arms the compact-on-idle watchdog (F2); it won't fire
   // until a turn produces output AND the topic then sits idle (no catch-up burst).
@@ -14362,6 +14399,7 @@ function dropLostConversationWatermark(key: SessionKey): void {
  * Posts nothing — `/status` says the agent sleeps.
  */
 function handleAgentSuspended(key: SessionKey): void {
+  withdrawAccountsInbox(key);
   clearGoneProcessFrames(key);
   updatePinnedStatus(key).catch(() => {});
   // An idle stop takes pending work with it only once the hold ran out.
@@ -16235,7 +16273,19 @@ export async function startBot(): Promise<void> {
     midTurn: getTodoMidTurn(),
     pollIntervalMs: ENV.testTimings.todoReminderPollMs,
   });
-  getTodoMidTurn().clearInboxes();
+  // The accounts note's mid-turn delivery polls the same turns, for Claude on the json-stream host only (`limitNotes/engine.ts`).
+  limitNotesEngine = new LimitNotesEngine({
+    listConversations: () => state.listBindings().map(({ key }) => key),
+    getClaudeSessionId: (key) => {
+      const adapterName = getThreadAdapterNameRaw(key) ?? state.getAgent(key)?.name;
+      return adapterName !== undefined && checkIsJsonStreamBackend(adapterName) ? getResumableSessionId(key) : null;
+    },
+    probeTurn: probeThreadTurn,
+    notes: getLimitNotes(),
+    inbox: getMidTurnInbox(),
+    pollIntervalMs: ENV.testTimings.limitNoteEnginePollMs,
+  });
+  getMidTurnInbox().clearAll();
   warmTodoProjects();
 
   // Snapshot the persisted transient status-frame ids (S2) NOW, before reattach
@@ -16526,6 +16576,7 @@ export async function startBot(): Promise<void> {
       // A tracker conversation whose process did not survive the downtime resumes its open request now, not at the backstop.
       scheduleRestartWakesAtBoot(requestLedger);
       todoReminderEngine?.start();
+      limitNotesEngine?.start();
       jiraConnector?.start(createJiraSessionDeps(requestLedger, slots, jiraConnector.adapterName));
       // The accounts' changes found while booting are told now, and the conversations waiting for an account may go on.
       openOperatorAlerts();
@@ -16752,6 +16803,7 @@ export async function startBot(): Promise<void> {
         schedulerEngine?.shutdown();
         requestWakeUpEngine?.stop();
         todoReminderEngine?.stop();
+        limitNotesEngine?.stop();
         topicIndicator.stop();
         jiraConnector?.stop();
         if (isSchedulerMcpStarted) void schedulerMcpHandle.stop().catch(() => {});

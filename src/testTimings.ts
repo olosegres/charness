@@ -12,6 +12,7 @@ import { DEFAULT_SAVE_DEBOUNCE_MS } from './state';
 import { pendingWorkHoldDefaultMs } from './utils/jsonStreamPendingWork';
 import { basePollIntervalMs } from './utils/pollBackoff';
 import { claudeApiCreditRecheckIntervalMs, claudeApiCreditRecheckPollMs } from './utils/claudeApiCreditRecheck';
+import { limitNoteEnginePollMs } from './limitNotes/engine';
 import { limitNoteMinQuietMs, limitNoteSummaryFloorMs } from './limitNotes/plan';
 import { limitReminderDefaultMinutes } from './limitNotes/reminderChoices';
 import { todoReminderDefaultMinutes } from './todos/nag';
@@ -99,6 +100,8 @@ const testTimingsSchema = z.strictObject({
   limitReminderIntervalMs: createShorterWindowSchema(limitReminderDefaultMinutes * 60 * msPerSecond).optional(),
   /** How long a session must have been quiet for a turn start to carry the accounts note's change summary (production: `limitNoteMinQuietMs`, 30 min). */
   limitNoteQuietMs: createShorterWindowSchema(limitNoteMinQuietMs).optional(),
+  /** How often the accounts note's mid-turn engine polls the sessions for a running turn to hand a due reminder (production: `limitNoteEnginePollMs`, 60 s). */
+  limitNoteEnginePollMs: createShorterWindowSchema(limitNoteEnginePollMs).optional(),
   /** The least time between two change summaries of the accounts note (production: `limitNoteSummaryFloorMs`, 30 min). */
   limitNoteSummaryFloorMs: createShorterWindowSchema(limitNoteSummaryFloorMs).optional(),
   /** How many `/bind` picker claims the bot keeps before it drops the oldest — a COUNT, not a window (production: `bindPickerClaimLimit`, 200). */

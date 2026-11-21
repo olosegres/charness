@@ -17,7 +17,7 @@ import { makeJiraKey } from '../connectors/jira/sessionKeyCodec';
 import { applyTodoUpdate } from '../todos/merge';
 import { getTodoItemsInOrder } from '../todos/order';
 import { createEmptyTodoTopicFile, getTodosDir, todoArchiveAfterMs, TodoStore } from '../todos/store';
-import { getTodoInboxDir } from '../todos/midTurn';
+import { getMidTurnInboxDir } from '../utils/midTurnInbox';
 import { createRepositoryRootCommitFile } from '../todos/projects';
 import { formatOwnTodoList, getTodoListView, getTrimmedTodoTitle } from '../todos/format';
 import { createTodoRegistry, todoHistoryMaxItems } from '../todos/registry';
@@ -139,7 +139,7 @@ describe('the file store', () => {
     assert.equal(todosDir, path.join(dataDir, 'todos'));
     new TodoStore(dataDir, () => nowMs).saveTopic(jiraKey, getUpdated(createEmptyTodoTopicFile(jiraKey), { items: [{ title: 'Export to PDF' }] }));
     createRepositoryRootCommitFile(todosDir).save({ '/w/example-repo/.git': 'aaa' });
-    assert.equal(path.dirname(getTodoInboxDir(dataDir)), todosDir);
+    assert.equal(path.dirname(getMidTurnInboxDir(dataDir)), todosDir);
     assert.deepEqual(fs.readdirSync(todosDir).sort(), ['jira_PROJ_PROJ-7.json', 'repositories.json']);
   });
 

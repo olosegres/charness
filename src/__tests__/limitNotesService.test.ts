@@ -14,46 +14,16 @@ import { claudePerTurnAdapterName, claudeJsonStreamAdapterName, claudeTmuxAdapte
 import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
 import { keyToString } from '../sessionKey';
 import { buildClaudeProfilesCreditReport } from '../utils/claudeProfileUsageViews';
-import type { ClaudeProfilesReport, ClaudeProfileUsageView, ClaudeUsageSnapshot } from '../utils/claudeUsage';
+import { buildReport, buildViews, hourMs, minuteMs, nowMs } from './limitNotesFixtures';
 
-const minuteMs = 60 * 1000;
-const hourMs = 60 * minuteMs;
-const nowMs = Date.parse('2026-11-21T14:05:00Z');
 const key = makeTelegramKey(-1001111111111, 11);
 
-function buildUsage(input: { session: number; weekly: number; weeklyResetHours: number; isStale?: boolean }): ClaudeUsageSnapshot {
-  return {
-    fetchedAt: new Date(nowMs).toISOString(),
-    source: 'api',
-    ...(input.isStale === true ? { isStale: true } : {}),
-    buckets: [
-      { kind: 'session', percent: input.session, resetsAt: new Date(nowMs + 3 * hourMs).toISOString(), scopeModel: null },
-      { kind: 'weekly_all', percent: input.weekly, resetsAt: new Date(nowMs + input.weeklyResetHours * hourMs).toISOString(), scopeModel: null },
-    ],
-  };
-}
-
-function buildView(name: string, usage: ClaudeUsageSnapshot): ClaudeProfileUsageView {
-  return { name, configDir: name === 'default' ? null : `/home/user/.charness/claude-profiles/${name}`, loggedIn: true, email: `${name}@example.com`, subscriptionType: 'max', usage, limitedUntil: null, billing: 'subscription', creditExhaustedAt: null };
-}
-
-function buildViews(workWeekly = 62, isStale = false): ClaudeProfileUsageView[] {
-  return [
-    buildView('default', buildUsage({ session: 10, weekly: 20, weeklyResetHours: 120, isStale })),
-    buildView('work', buildUsage({ session: 30, weekly: workWeekly, weeklyResetHours: 43, isStale })),
-  ];
-}
-
-function buildReport(workWeekly = 62, isStale = false): ClaudeProfilesReport {
-  return buildClaudeProfilesCreditReport(buildViews(workWeekly, isStale), null, nowMs, { chainScope: null });
-}
-
 /** The ports of a fake bot: what each call asked for is kept so a test can say what the notes touched — and what they never could. */
-function createHarness(overrides: Partial<LimitNotesPorts> = {}) {
+function createHarness(overrides: Partial<LimitNotesPorts> = {}, backend: string = openCodeAdapterName) {
   const records = new Map<string, LimitNoteRecord>();
   const calls: string[] = [];
   const logs: string[] = [];
-  const state = { report: buildReport(), backend: openCodeAdapterName as string | undefined, intervalMs: hourMs as number | null, nowMs };
+  const state = { report: buildReport(), backend: backend as string | undefined, intervalMs: hourMs as number | null, nowMs };
   const ports: LimitNotesPorts = {
     getRecord: (target) => { calls.push('getRecord'); return records.get(keyToString(target)); },
     setRecord: (target, record) => { calls.push('setRecord'); if (record === null) records.delete(keyToString(target)); else records.set(keyToString(target), record); },
@@ -226,6 +196,64 @@ describe('a turn-start note is in flight until its prompt is written', () => {
   });
 });
 
+describe('the mid-turn note', () => {
+  let harness: ReturnType<typeof createHarness>;
+  beforeEach(() => {
+    harness = createHarness({}, claudeJsonStreamAdapterName);
+    harness.records.set(keyToString(key), orchestrating());
+  });
+
+  it('a reminder that is due is read by the running turn; nothing is recorded until the hook took it, and the record then shows the picture it carried', () => {
+    const note = harness.notes.takeMidTurnNote(key);
+    assert.ok(note !== null, 'the reminder is due');
+    assert.match(note.text, /^\[Accounts · 14:05\] Next new Claude worker → work/);
+    assert.deepEqual(harness.records.get(keyToString(key)), orchestrating(), 'offered is not delivered');
+    note.markDelivered();
+    assert.equal(harness.records.get(keyToString(key))?.lastNoteAt, nowMs);
+    assert.match(harness.records.get(keyToString(key))?.fingerprint ?? '', /^rec=work\|/);
+  });
+
+  it('never the summary: a changed picture inside a turn that is not yet due for a reminder waits for the next turn start or send result', () => {
+    harness.records.set(keyToString(key), orchestrating({ lastNoteAt: nowMs - 40 * minuteMs }));
+    assert.equal(harness.notes.takeMidTurnNote(key), null);
+  });
+
+  it('while it waits in the inbox no other note is taken for the conversation — and withdrawn unseen it is given back and stays due', () => {
+    const note = harness.notes.takeMidTurnNote(key);
+    assert.ok(note !== null);
+    assert.equal(harness.notes.takeMidTurnNote(key), null, 'one in flight');
+    assert.equal(harness.notes.takeTurnStartNote(key, null), null, 'a prompt does not carry a second one');
+    assert.equal(harness.notes.takeSendResultNote(key), null);
+    note.release();
+    assert.deepEqual(harness.records.get(keyToString(key)), orchestrating(), 'a withdrawn note records nothing');
+    assert.equal(harness.notes.takeMidTurnNote(key)?.text, note.text);
+  });
+
+  it('a conversation that never orchestrated, Off, and a backend that gets no notes have none — the same gates as every moment', () => {
+    harness.records.delete(keyToString(key));
+    assert.equal(harness.notes.takeMidTurnNote(key), null);
+    harness.records.set(keyToString(key), orchestrating());
+    harness.state.intervalMs = null;
+    assert.equal(harness.notes.takeMidTurnNote(key), null);
+    harness.state.intervalMs = hourMs;
+    harness.state.backend = terminalAdapterName;
+    assert.equal(harness.notes.takeMidTurnNote(key), null);
+  });
+
+  it('a note that cannot be worked out is skipped, never thrown into the engine\'s poll', () => {
+    const original = console.error;
+    console.error = () => {};
+    try {
+      const failing = createHarness({ getReport: () => { throw new Error('usage cache unreadable'); } }, claudeJsonStreamAdapterName);
+      failing.records.set(keyToString(key), orchestrating());
+      assert.doesNotThrow(() => failing.notes.takeMidTurnNote(key));
+      assert.equal(failing.notes.takeMidTurnNote(key), null);
+    } finally {
+      console.error = original;
+    }
+  });
+});
+
 describe('the send-result note', () => {
   it('a changed picture rides the result and counts as delivered at once — the next result carries nothing', () => {
     const harness = createHarness();
@@ -309,13 +337,14 @@ describe('a note is a passenger, never a cause', () => {
     const harness = createHarness();
     harness.records.set(keyToString(key), orchestrating({ lastNoteAt: nowMs - 40 * minuteMs }));
     harness.notes.takeTurnStartNote(key, limitNoteMinQuietMs)?.markDelivered();
+    harness.notes.takeMidTurnNote(key)?.release();
     harness.notes.takeSendResultNote(key);
     harness.notes.noteProfilesCall(key);
     harness.notes.noteWorkerWatch(key);
     const allowed = new Set(['getRecord', 'setRecord', 'getIntervalMs', 'getWindows', 'getReport', 'getOpenCodeUsage', 'getTimezone', 'getBackendName']);
     assert.deepEqual([...new Set(harness.calls)].filter((name) => !allowed.has(name)), []);
     const operations: LimitNotes = createHarness().notes;
-    assert.deepEqual(Object.keys(operations).sort(), ['noteProfilesCall', 'noteWorkerWatch', 'takeSendResultNote', 'takeTurnStartNote'], 'four operations, none of them an activity stamp, a write to an agent or a wake');
+    assert.deepEqual(Object.keys(operations).sort(), ['noteProfilesCall', 'noteWorkerWatch', 'takeMidTurnNote', 'takeSendResultNote', 'takeTurnStartNote'], 'five operations, none of them an activity stamp, a write to an agent or a wake');
   });
 
   it('a note that cannot be worked out is skipped and logged, the prompt or result goes on — never a throw', () => {

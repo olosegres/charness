@@ -26,9 +26,9 @@
  * the bot started it, so it looks for the flag the bot keeps for the session (`utils/compactSelfReviewFlags.ts`, named by the
  * `session_id` of its stdin) and prints the instruction without the section request while the flag exists.
  *
- * The same launch settings carry the shared todo lists' `PostToolUse` hook
- * (`todos/midTurn.ts`): it prints the session's inbox — the project board's
- * changes — after a tool call, and nothing when there is none.
+ * The same launch settings carry ONE `PostToolUse` hook (`utils/midTurnInbox.ts`): it prints the session's mid-turn inbox — the
+ * project board's changes and the accounts note (`limitNotes/`), as sections of one file — after a tool call, and nothing when
+ * there is none.
  *
  * A json-stream / per-turn launch also carries the skills restore: {@link skillsRestoreSlotCount} `SessionStart` hooks with
  * the matcher `compact`, each printing one part of the skills the session had loaded (`hooks/claudeSkillsRestoreHook.ts`),
@@ -52,7 +52,7 @@ import { getClaudeCompactSelfReviewOffDir } from './compactSelfReviewFlags';
 import { shellSingleQuote } from './tmuxExec';
 import { checkHasClaudeProfileApiKey, claudeProfileLaunchSettingsFileName, claudeProfileSkillsRestoreSettingsFileNames } from './claudeProfiles';
 import { buildClaudeApiKeyHelperSettings } from './claudeApiKeyHelper';
-import { buildTodoInboxHookCommand, getTodoInboxDir } from '../todos/midTurn';
+import { buildMidTurnInboxHookCommand, getMidTurnInboxDir } from './midTurnInbox';
 import { skillsRestoreSlotCount } from './skillsRestore';
 
 /**
@@ -161,9 +161,9 @@ const sessionStartCompactMatcher = 'compact';
 export const skillsRestoreHookTimeoutSeconds = 30;
 
 /**
- * @description The `--settings` payload: the `PreCompact` command hook (auto AND manual compactions), the shared
- * todo lists' `PostToolUse` inbox hook (every tool: the project board's changes reach a working agent with its next
- * tool result, `todos/midTurn.ts`) and, when there are any, the restore's `SessionStart` hooks for the `compact` source.
+ * @description The `--settings` payload: the `PreCompact` command hook (auto AND manual compactions), the ONE `PostToolUse`
+ * inbox hook (every tool: the project board's changes and the accounts note reach a working agent with its next tool result,
+ * `utils/midTurnInbox.ts`) and, when there are any, the restore's `SessionStart` hooks for the `compact` source.
  */
 export function buildClaudeLaunchHookSettings(commands: { preCompact: string; postToolUse: string; sessionStartCompact: readonly string[] }): {
   hooks: { PreCompact: CommandHookGroups; PostToolUse: CommandHookGroups; SessionStart?: CommandHookGroups };
@@ -214,7 +214,7 @@ export function prepareClaudeCompactHookFlags(dataDir: string, configDir: string
       alreadySentMarker: compactionResumeGuidanceWithoutGaps,
       offFlagDir: getClaudeCompactSelfReviewOffDir(dataDir),
     }),
-    postToolUse: buildTodoInboxHookCommand(getTodoInboxDir(dataDir)),
+    postToolUse: buildMidTurnInboxHookCommand(getMidTurnInboxDir(dataDir)),
     sessionStartCompact: skillsRestore === null
       ? []
       : buildSkillsRestoreHookCommands({

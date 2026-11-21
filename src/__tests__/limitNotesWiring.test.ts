@@ -7,7 +7,9 @@
  *  - where the forward attaches the note (the last block, after the todo lines, inside the ONE text it writes, no await of its own) and
  *    when it counts as delivered;
  *  - that the renderer hides it from a bot tool's result, and that the bot's MCP ports reach the same notes;
- *  - that the notes module imports nothing that could stamp activity, write to an agent or wake a session (README § Lifecycle safety).
+ *  - that the notes module imports nothing that could stamp activity, write to an agent or wake a session (README § Lifecycle safety);
+ *  - that the mid-turn engine is built over the shared turn probe for Claude json-stream sessions only, started with the sessions and
+ *    stopped at shutdown, that boot clears the inbox, and WHERE the accounts section of the inbox is withdrawn.
  *
  * Test case: N/A — Charness has no Jira tracker.
  */
@@ -178,3 +180,80 @@ describe('the notes module cannot reach what a note must never touch', () => {
     assert.deepEqual(importsOf('reminderChoices.ts'), []);
   });
 });
+
+describe('the mid-turn engine in the bot: Claude json-stream only, the shared turn probe, started with the sessions', () => {
+  it('is built over the turn probe the wake-up and todo engines share, the one notes object and the one inbox, with the poll interval from the test timings', () => {
+    const start = botSource.indexOf('limitNotesEngine = new LimitNotesEngine({');
+    assert.notEqual(start, -1);
+    const construction = botSource.slice(start, botSource.indexOf('});', start));
+    assert.match(construction, /listConversations: \(\) => state\.listBindings\(\)\.map\(\(\{ key \}\) => key\),/);
+    assert.match(construction, /probeTurn: probeThreadTurn,/);
+    assert.match(construction, /notes: getLimitNotes\(\),/);
+    assert.match(construction, /inbox: getMidTurnInbox\(\),/);
+    assert.match(construction, /pollIntervalMs: ENV\.testTimings\.limitNoteEnginePollMs,/);
+    // Only the deps the engine's contract names: no adapter, no state, no forward, no compaction.
+    assert.deepEqual([...construction.matchAll(/^\s{4}(\w+):/gm)].map((match) => match[1]), ['listConversations', 'getClaudeSessionId', 'probeTurn', 'notes', 'inbox', 'pollIntervalMs']);
+  });
+
+  it('a conversation is offered a note only while its agent is a Claude json-stream session — the OpenCode path has none', () => {
+    assert.match(botSource, /getClaudeSessionId: \(key\) => \{\n\s*const adapterName = getThreadAdapterNameRaw\(key\) \?\? state\.getAgent\(key\)\?\.name;\n\s*return adapterName !== undefined && checkIsJsonStreamBackend\(adapterName\) \? getResumableSessionId\(key\) : null;/);
+  });
+
+  it('starts with the restored sessions, stops at shutdown, and boot clears every inbox file before either', () => {
+    assert.match(botSource, /todoReminderEngine\?\.start\(\);\n\s*limitNotesEngine\?\.start\(\);/);
+    assert.match(botSource, /todoReminderEngine\?\.stop\(\);\n\s*limitNotesEngine\?\.stop\(\);/);
+    assert.ok(botSource.indexOf('getMidTurnInbox().clearAll();') > botSource.indexOf('limitNotesEngine = new LimitNotesEngine({'));
+    assert.ok(botSource.indexOf('getMidTurnInbox().clearAll();') < botSource.indexOf('limitNotesEngine?.start();'));
+    assert.equal(botSource.match(/getMidTurnInbox\(\)\.clearAll\(\)/g)?.length, 1, 'once, at boot');
+  });
+});
+
+describe('where the accounts section of the mid-turn inbox is withdrawn unseen', () => {
+  it('exactly at a turn start the bot makes, a turn\'s end, a session\'s start, close, suspension and stop — nowhere else, and never to deliver', () => {
+    assert.deepEqual(listEnclosingDeclarations('withdrawAccountsInbox(key)'), [
+      'clearThreadContextMarker',
+      'forwardPromptToLiveAgent',
+      'handleAgentClosed',
+      'handleAgentStarted',
+      'handleAgentSuspended',
+      'handleAgentTurnEnded',
+    ]);
+    assert.match(getFunctionBody('withdrawAccountsInbox'), /getMidTurnInbox\(\)\.withdraw\(key, 'accounts'\);/);
+  });
+
+  it('the forward withdraws it BEFORE it works out the turn-start note, so a note in flight is given back and not held against the prompt\'s own', () => {
+    const body = getFunctionBody('forwardPromptToLiveAgent');
+    assert.ok(body.indexOf('withdrawAccountsInbox(key);') > 0 && body.indexOf('withdrawAccountsInbox(key);') < body.indexOf('const accountsNote = checkIsAccountsNoteCarried('));
+  });
+
+  it('the turn end withdraws before the activity stamp the person-facing handler makes, and stamps nothing itself', () => {
+    const body = getFunctionBody('handleAgentTurnEnded');
+    assert.ok(body.indexOf('withdrawAccountsInbox(key);') < body.indexOf('noteThreadActivity(key);'));
+    assert.equal(getFunctionBody('withdrawAccountsInbox').includes('noteThread'), false);
+  });
+});
+
+describe('L11: the self-update idle verdict reads nothing a note moves', () => {
+  it('the person\'s quiet period is stamped in ONE place, the inbound middleware — no note path reaches it — and the verdict reads only the adapters\' working and unconsumed-input state (unmoved by a note: `limitNotesEngine.test.ts`)', () => {
+    assert.equal(botSource.match(/lastHumanInboundAt = /g)?.length, 1, 'one assignment');
+    assert.match(botSource, /bot\.use\(async \(ctx, next\) => \{\n  if \(ctx\.message \|\| ctx\.callbackQuery\) lastHumanInboundAt = Date\.now\(\);/);
+    const verdict = getFunctionBody('getUpdateIdleVerdict');
+    assert.match(verdict, /adapter\.checkIsWorking \? adapter\.checkIsWorking\(key\) : adapter\.checkIsBusy\?\.\(key\) === true/);
+    assert.match(verdict, /hasUnconsumedInput: keys\.some\(\(key\) => getThreadAdapter\(key\)\.checkHasUnconsumedInput\?\.\(key\) === true\),/);
+    assert.match(verdict, /lastHumanMessageAt: lastHumanInboundAt,/);
+    assert.equal(/limitNote|LimitNote|accountsNote/.test(verdict), false, 'the verdict knows nothing of notes');
+  });
+});
+
+describe('the mid-turn engine and the inbox cannot reach what a note must never touch', () => {
+  const importsOf = (file: string): string[] => [...fs.readFileSync(path.join(__dirname, '..', file), 'utf8').matchAll(/^import [^;]*? from '([^']+)';$/gm)].map((match) => match[1]).sort();
+
+  it('the engine imports the session key, the probe\'s type, the inbox type and the notes\' type — no adapter, state, forward, compaction, request or indicator module', () => {
+    assert.deepEqual(importsOf('limitNotes/engine.ts'), ['../requests/wakeUpRules', '../sessionKey', '../utils/midTurnInbox', './service']);
+  });
+
+  it('the inbox imports files, the session key, the todo dir and two process helpers: no activity, adapter or request module', () => {
+    assert.deepEqual(importsOf('utils/midTurnInbox.ts'), ['../sessionKey', '../todos/store', './jsonStreamHost', './tmuxExec', 'fs', 'path']);
+  });
+});
+

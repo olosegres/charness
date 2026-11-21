@@ -30,6 +30,9 @@ import {
 /** How long a turn-start note may be in flight before it is forgotten: well past the longest write into an agent's input (the FIFO stall budget, 2 min). */
 export const limitNoteInFlightMaxMs = 5 * 60 * 1000;
 
+/** The moment's name in a log line. */
+const noteMomentLabels: Record<LimitNoteMoment, string> = { turnStart: 'turn-start', midTurn: 'mid-turn', sendResult: 'send-result' };
+
 /** @description What the notes read and write. `getReport` is the report `claude_profiles` answers with (no second ranking). */
 export interface LimitNotesPorts {
   getRecord: (key: SessionKey) => LimitNoteRecord | undefined;
@@ -47,12 +50,13 @@ export interface LimitNotesPorts {
 }
 
 /**
- * @description A note worked out for a turn start. While it is in flight — taken, its prompt not yet written — no other note is taken for
- * the conversation, so two carrier prompts close together (a voice and a text, a message and a scheduled run) never both carry one.
- * Exactly one of the two ends it: `markDelivered` records it once the prompt that carries it reached the session; `release` gives it
- * back when the prompt did not (the write failed, the session was gone), so the next carrier prompt carries it.
+ * @description A note worked out for a turn start or for a running Claude turn. While it is in flight — taken, not yet delivered — no
+ * other note is taken for the conversation, so two carrier prompts close together (a voice and a text, a message and a scheduled
+ * run), or a prompt and a mid-turn note, never both carry one. Exactly one of the two ends it: `markDelivered` records it once the
+ * prompt that carries it reached the session (or the hook took the inbox file that holds it); `release` gives it back when it did not
+ * (the write failed, the session was gone, the inbox was withdrawn unseen), so the note stays due.
  */
-export interface TurnStartNote {
+export interface TakenNote {
   text: string;
   markDelivered: () => void;
   release: () => void;
@@ -60,7 +64,9 @@ export interface TurnStartNote {
 
 export interface LimitNotes {
   /** The note the prompt of this turn start carries, or `null` (nothing due, not an orchestrator, Off, …). */
-  takeTurnStartNote: (key: SessionKey, quietMs: number | null) => TurnStartNote | null;
+  takeTurnStartNote: (key: SessionKey, quietMs: number | null) => TakenNote | null;
+  /** The reminder a running Claude turn reads after its next tool call (never the summary), or `null`. The caller delivers it, then `markDelivered`s or `release`s it. */
+  takeMidTurnNote: (key: SessionKey) => TakenNote | null;
   /** The note a bot send tool's result carries (recorded as delivered at once: the result goes back to the agent now), or `null`. */
   takeSendResultNote: (key: SessionKey) => string | null;
   /**
@@ -156,24 +162,28 @@ export function createLimitNotes(ports: LimitNotesPorts): LimitNotes {
     return { text: buildLimitNoteText(decision.shape, report, openCodeUsage, ports.getTimezone(), nowMs), fingerprint };
   }
 
+  /** The note of `moment` for `key`, put in flight until its owner delivers or releases it. */
+  function takeNote(key: SessionKey, moment: LimitNoteMoment, quietMs: number | null): TakenNote | null {
+    const note = prepareNote(key, moment, quietMs);
+    if (note === null) return null;
+    notesInFlight.set(keyToString(key), ports.getNowMs());
+    return {
+      text: note.text,
+      markDelivered: () => {
+        notesInFlight.delete(keyToString(key));
+        runGuarded(key, `recording the ${noteMomentLabels[moment]} note`, undefined, () => recordNote(key, note.fingerprint));
+      },
+      release: () => { notesInFlight.delete(keyToString(key)); },
+    };
+  }
+
   function recordNote(key: SessionKey, fingerprint: string): void {
     ports.setRecord(key, getLimitNoteRecordAfterNote(ports.getRecord(key), { atMs: ports.getNowMs(), fingerprint }));
   }
 
   return {
-    takeTurnStartNote: (key, quietMs) => runGuarded(key, 'the turn-start note', null, () => {
-      const note = prepareNote(key, 'turnStart', quietMs);
-      if (note === null) return null;
-      notesInFlight.set(keyToString(key), ports.getNowMs());
-      return {
-        text: note.text,
-        markDelivered: () => {
-          notesInFlight.delete(keyToString(key));
-          runGuarded(key, 'recording the turn-start note', undefined, () => recordNote(key, note.fingerprint));
-        },
-        release: () => { notesInFlight.delete(keyToString(key)); },
-      };
-    }),
+    takeTurnStartNote: (key, quietMs) => runGuarded(key, 'the turn-start note', null, () => takeNote(key, 'turnStart', quietMs)),
+    takeMidTurnNote: (key) => runGuarded(key, 'the mid-turn note', null, () => takeNote(key, 'midTurn', null)),
     takeSendResultNote: (key) => runGuarded(key, 'the send-result note', null, () => {
       const note = prepareNote(key, 'sendResult', null);
       if (note === null) return null;

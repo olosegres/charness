@@ -78,8 +78,39 @@ No clock, no state, no I/O: the caller hands in the report, the record, the sett
   of the NOTES' own report — never of the answer the agent got, which was built for its model and its resumed account and differs from
   the notes' whenever the call was a resume) and `schedule_create` with a worker watch (`checkCommand` + `statusWorkerRunDir`). The scope is resolved like the
   send tools; a folder token with several bound topics names none and records nothing.
-- **Test windows.** `CHARNESS_TEST_TIMINGS` `limitReminderIntervalMs`, `limitNoteQuietMs`, `limitNoteSummaryFloorMs` (each may only
-  shorten its production window). No env var of its own.
+- **Test windows.** `CHARNESS_TEST_TIMINGS` `limitReminderIntervalMs`, `limitNoteQuietMs`, `limitNoteSummaryFloorMs`,
+  `limitNoteEnginePollMs` (each may only shorten its production window). No env var of its own.
+
+## Mid-turn delivery (`engine.ts`) — Claude only
+
+A running Claude turn learns where the limits stand after its NEXT TOOL CALL, not only at its next prompt.
+
+- **The inbox.** `utils/midTurnInbox.ts` is the project board's per-session inbox (`todos/midTurn.ts`) made sectioned: one file
+  `DATA_DIR/todos/inbox/<session id>.json`, the `accounts` section (this feature) joined before the `todoBoard` one. The
+  launch's ONE `PostToolUse` hook (`utils/claudeCompactHook.ts`, unchanged byte for byte) prints the file after the agent's tool
+  call — `additionalContext`, no stdin, so nothing the CLI's input accounting sees. The FILE is taken whole: every section it held
+  counts as taken, each section's `onTaken` fires once; a section's withdrawal rewrites the file without it and never touches the
+  other. A failed write throws and registers nothing.
+- **The engine.** Its own poll (`limitNoteEnginePollMs`, 60 s; the todo engine stops with the lists off, this one does not) over the
+  shared `createSessionTurnProbe`: a Claude json-stream / per-turn conversation (`getClaudeSessionId`, null for OpenCode and the
+  terminal — they get no mid-turn path: OpenCode's only channel is a prompt queued into the running turn, which the backend counts as
+  input) that is active, busy and not `isTurnEndBlocked` (a question, a compaction, an armed retry, a retry kick, a wedge recovery, a
+  session start) and whose reminder is due (`LimitNotes.takeMidTurnNote`: the reminder only, never the summary) gets its `accounts`
+  section written.
+- **Delivered only when taken.** The record (`lastNoteAt`, the fingerprint) moves when the hook took the file (`onTaken` →
+  `markDelivered`). A section withdrawn unseen — the turn ended, was held open, the session ended or changed, a turn start the bot
+  makes (its prompt may carry the note itself), a boot — gives the note back (`release`) and it stays due. While it waits, no other
+  note is taken for the conversation (the in-flight note: it also closes a window in which a send tool's result could carry a
+  second one); a turn start or a session boundary withdraws it first. The in-flight mark of any note is forgotten after
+  `limitNoteInFlightMaxMs` (5 min) whatever its owner did, so one lost path never silences a conversation. A mid-turn note that waits
+  longer than that (no tool call finished for 5 min) stops counting as in flight: the result of the next send tool may then carry a
+  summary beside the reminder the hook gives, two short notes in one moment — never a lost one.
+- **Where it is withdrawn** (`bot.ts` `withdrawAccountsInbox`, a guard in `limitNotesWiring.test.ts` lists the callers): every forward
+  (a slash command too: `/compact` opens a held turn), the adapter's turn end, a session's start / close / suspension / stop
+  (`clearThreadContextMarker`), and the engine's own poll for a session that is no longer busy or is held open. The boot clears every
+  inbox file (`clearAll`): what one carried is still due.
+- **Read-only towards every lifecycle module.** The engine imports only the session key and three types; its deps are the conversation
+  list, the Claude session id, the turn probe, the notes' `takeMidTurnNote` and the inbox — a guard pins both.
 
 ## Lifecycle safety — a note is a passenger, never a cause
 
@@ -88,7 +119,8 @@ Every later scope of this feature keeps these seven rules; each has a test.
 1. Never activity: no `lastActivityAt` stamp, no idle-timer re-arm, no held-mark logic touched.
 2. Never input: no write of its own to an agent (the turn-start note is part of the ONE prompt text, the Claude mid-turn note is
    hook `additionalContext`, the send-result note is tool-result text); no unconsumed-input entry, no request, no working signal.
-3. Never wakes: no path calls `ensureAgentSession` or a resume; only a session that is active AND busy gets a mid-turn note.
+3. Never wakes: no path calls `ensureAgentSession` or a resume; only a session that is active AND busy gets a mid-turn note
+   (`engine.ts`).
 4. Never «working»: no typing, no busy flag, no indicator refresh, no stdout or tool event.
 5. Never into a held turn: compaction, limit wait / retry kick, question wait, wedge recovery, session start.
 6. The deferred account switch and the self-update idle verdict read nothing a note moves.

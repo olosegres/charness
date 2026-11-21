@@ -27,6 +27,7 @@ import { postRetryDelaysMs } from '../requests/wakeUpRules';
 import { DEFAULT_SAVE_DEBOUNCE_MS } from '../state';
 import { pendingWorkHoldDefaultMs } from '../utils/jsonStreamPendingWork';
 import { basePollIntervalMs } from '../utils/pollBackoff';
+import { limitNoteEnginePollMs } from '../limitNotes/engine';
 import { limitNoteMinQuietMs, limitNoteSummaryFloorMs } from '../limitNotes/plan';
 import { limitReminderDefaultMinutes } from '../limitNotes/reminderChoices';
 import { todoReminderDefaultMinutes } from '../todos/nag';
@@ -61,6 +62,7 @@ const productionWindowsMs: Array<[keyof TestTimings, number]> = [
   ['limitReminderIntervalMs', limitReminderDefaultMinutes * 60 * 1000],
   ['limitNoteQuietMs', limitNoteMinQuietMs],
   ['limitNoteSummaryFloorMs', limitNoteSummaryFloorMs],
+  ['limitNoteEnginePollMs', limitNoteEnginePollMs],
   ['creditRecheckIntervalMs', claudeApiCreditRecheckIntervalMs],
   ['creditRecheckPollMs', claudeApiCreditRecheckPollMs],
   ['scheduleMinFireIntervalMs', minFireIntervalMs],

@@ -36,6 +36,7 @@ import {
 } from '../utils/compactOnIdle';
 import { getClaudeCompactSelfReviewOffDir } from '../utils/compactSelfReviewFlags';
 import { resolveDataDir } from '../state';
+import { buildMidTurnInboxHookCommand, getMidTurnInboxDir } from '../utils/midTurnInbox';
 
 function runHook(command: string, hookInput: unknown): string {
   return execFileSync('sh', ['-c', command], {
@@ -263,6 +264,33 @@ test('prepareClaudeCompactHookFlags: a json-stream launch gets the restore\'s 24
     assert.ok(readHooks(withoutBotSkills[1]).SessionStart?.[0].hooks[0].command.endsWith(` 1 24 '/opt/charness/agent-plugin/skills' '${orderDir}'; exit 0`), 'the unavailable folder and the chain\'s folder in DATA_DIR ride the command');
     assert.equal(orderDir, path.join(dataDir, 'skills-restore-order'));
     assert.equal(readHooks(withBotSkills[1]).PreCompact.length, 1, 'the compaction guidance stays');
+  } finally {
+    fs.rmSync(dataDir, { recursive: true, force: true });
+  }
+});
+
+/**
+ * The PostToolUse command of a launch with `/d` as data dir and `/node` as the bot's node, as it was before the accounts note shared
+ * the inbox (the project board's alone): the sections of the inbox change what the files hold, never the hook that prints them.
+ */
+const postToolUseHookSnapshot = [
+  `[ -n "$(ls -A '/d/todos/inbox' 2>/dev/null)" ] || { cat > /dev/null; exit 0; }; '/node' -e 'const fs = require("fs"), path = require("path"); let text = ""; process.stdin.setEncoding("utf8").on("data", (chunk) => { text += chunk; }).on("end", () => {   try {     const input = JSON.parse(text);     if (input === null || typeof input !== "object" || "agent_id" in input) return;     if (typeof input.session_id !== "string" || !/^[A-Za-z0-9_-]+$/.test(input.session_id)) return;     const file = path.join(process.argv[1], input.session_id + ".json"), taken = file + "." + process.pid;     try { fs.renameSync(file, taken); } catch { return; }     process.stdout.write(fs.readFileSync(taken, "utf8"));     fs.rmSync(taken, { force: true });   } catch {} });' '/d/todos/inbox'; exit 0`,
+].join('');
+
+test('L9: the launch settings of a json-stream launch carry the PreCompact hook, the 24 SessionStart restore hooks and exactly ONE PostToolUse hook — the one that was there before the accounts note, byte for byte', () => {
+  assert.equal(buildMidTurnInboxHookCommand(getMidTurnInboxDir('/d'), '/node'), postToolUseHookSnapshot);
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'compact-hook-post-tool-'));
+  try {
+    const [, settingsPath] = prepareClaudeCompactHookFlags(dataDir, null, { skillsRestore: { unavailableSkillsDir: null } });
+    const hooks = JSON.parse(fs.readFileSync(settingsPath, 'utf-8')).hooks;
+    assert.deepEqual(Object.keys(hooks).sort(), ['PostToolUse', 'PreCompact', 'SessionStart'], 'no hook event was added for the note');
+    assert.equal(hooks.PostToolUse.length, 1);
+    assert.equal(hooks.PostToolUse[0].hooks.length, 1, 'ONE command: every tool call starts one shell, never two');
+    assert.equal(hooks.PostToolUse[0].matcher, undefined);
+    assert.equal(hooks.PostToolUse[0].hooks[0].command, buildMidTurnInboxHookCommand(path.join(dataDir, 'todos', 'inbox')));
+    assert.equal(hooks.PreCompact.length, 1);
+    assert.equal(hooks.SessionStart[0].hooks.length, 24);
+    assert.equal(hooks.SessionStart[0].matcher, 'compact');
   } finally {
     fs.rmSync(dataDir, { recursive: true, force: true });
   }
