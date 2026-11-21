@@ -8,7 +8,7 @@ import type { RunnerHomePaths } from './runnerHome';
 /**
  * @description A runner runs on its OWN Node.js, never on a shared one (a system or Homebrew Node is the admin's to change, and a job that wants a
  * package manager or a global package cannot write into a system folder). The official build from nodejs.org is put in place by the package's
- * `remoteRun/ensureNode.sh` (the newest LTS release from 22.12 up to the last line that ships Corepack; download, SHA-256 against nodejs.org's
+ * `runner-scripts/ensureNode.sh` (the newest LTS release from 22.12 up to the last line that ships Corepack; download, SHA-256 against nodejs.org's
  * `SHASUMS256.txt`, unpack, move whole):
  *
  *   the admin line      as ROOT, into `sharedNodeBase` (`serviceCommon.ts`) — a folder only root can write, because root runs that Node (the root step, the pairing
@@ -25,7 +25,7 @@ import type { RunnerHomePaths } from './runnerHome';
  */
 
 /** The package's script (a POSIX path inside it: it is also named in the pasted lines, which are `sh`). */
-export const ensureNodeScriptRelativePath = 'remoteRun/ensureNode.sh';
+export const ensureNodeScriptRelativePath = 'runner-scripts/ensureNode.sh';
 /**
  * The script's own limits add up to 2 × 60 s (the list of releases, the release's checksums) + 900 s (the archive), plus unpacking: this is more than that,
  * so the script ends by its own limits and says why, and this deadline is only the last resort.
@@ -92,7 +92,7 @@ export interface NodeMoveDeps {
   /** The Node this process runs under (`process.execPath`) and its version (`process.versions.node`). */
   currentNodePath: string;
   currentNodeVersion: string;
-  /** The package's `remoteRun/ensureNode.sh` in the app that runs. */
+  /** The package's `runner-scripts/ensureNode.sh` in the app that runs. */
   scriptPath: string;
   /** Where the script downloads from; `null` = nodejs.org (a flow's own mirror otherwise). */
   distUrl: string | null;

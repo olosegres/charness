@@ -16,10 +16,10 @@ export const requiredPackFiles = [
   'package.json',
   'dist/cli.js',
   'stt/gigaam_sidecar.py',
-  'remoteRun/runner-package-lock.json',
+  'runner-scripts/runner-package-lock.json',
   // The lock an `npm install -g` installs the package's tree by (`hubShrinkwrap.ts`); npm 12 would pack none — the release refuses that.
   'npm-shrinkwrap.json',
-  'remoteRun/ensureNode.sh',
+  'runner-scripts/ensureNode.sh',
   'agent-plugin/.claude-plugin/plugin.json',
   'agent-plugin/skills/charness-orchestration/SKILL.md',
   'CHANGELOG.md',

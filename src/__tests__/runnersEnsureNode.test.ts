@@ -1,5 +1,5 @@
 /**
- * @description `remoteRun/ensureNode.sh`: the script that gives a runner its OWN Node.js — the official build from nodejs.org, checked against
+ * @description `runner-scripts/ensureNode.sh`: the script that gives a runner its OWN Node.js — the official build from nodejs.org, checked against
  * `SHASUMS256.txt`, unpacked whole into `<base>/v<version>`. Run here for real in `sh` against a local mirror laid out like `nodejs.org/dist` (its
  * `index.json`, and per release a `SHASUMS256.txt` and a tarball with a stand-in `bin/node`): no network. In `root` mode (the admin line) it must also keep what
  * root requires of the Node it runs — a real path outside every home folder, runnable by the account, NOT writable by the account nor by any folder above
@@ -18,7 +18,7 @@ import { findHomeContaining } from '../runnerUtility/homeFolders';
 import { sharedNodeBase } from '../runnerUtility/serviceCommon';
 import { architectureName, getArchiveName, mirrorRelease, nodeThatIsTooOld, nodeThatRuns, platformName, writeNodeMirror, type MirrorOptions } from './nodeMirrorKit';
 
-const scriptPath = path.resolve(__dirname, '..', '..', 'remoteRun', 'ensureNode.sh');
+const scriptPath = path.resolve(__dirname, '..', '..', 'runner-scripts', 'ensureNode.sh');
 const shellPath = '/bin/sh';
 const systemToolFolders = ['/usr/bin', '/bin', '/usr/sbin', '/sbin'];
 /** What the script runs besides the shell's own builtins (and `cp` for the stand-in `wget`, `ln` for the stand-in `mktemp`); `curl` is linked for the cases that want it. Missing ones are skipped (`ldd`, `sysctl`, `chown` are not everywhere). */

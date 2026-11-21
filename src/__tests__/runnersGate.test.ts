@@ -162,7 +162,7 @@ describe('gate requests', () => {
     const { request, body } = splitMarker(run.stdout);
     assert.equal(request, 'bootstrap');
     const tar = gunzipSync(body).toString('latin1');
-    for (const name of ['package.json', 'remoteRun/runner.sh', 'dist/cli.js', 'dist/runners/example.js']) assert.ok(tar.includes(name), name);
+    for (const name of ['package.json', 'runner-scripts/runner.sh', 'dist/cli.js', 'dist/runners/example.js']) assert.ok(tar.includes(name), name);
     assert.ok(!tar.includes('__tests__'));
 
     const unknown = await runGate(gateArgs('redeem', knownId), 'bootstrap');

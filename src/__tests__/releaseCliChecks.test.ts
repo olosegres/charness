@@ -26,8 +26,8 @@ describe('check-pack', () => {
     fs.chmodSync(path.join(repoDir, 'dist', 'cli.js'), 0o755);
     writeRepoFile(sidecarPath, '# sidecar\n');
     // The lock the hub gives its runners (`runners/runnerLock.ts`): a package without it cannot pair a machine.
-    writeRepoFile('remoteRun/runner-package-lock.json', '{}\n');
-    writeRepoFile('remoteRun/ensureNode.sh', '#!/bin/sh\n');
+    writeRepoFile('runner-scripts/runner-package-lock.json', '{}\n');
+    writeRepoFile('runner-scripts/ensureNode.sh', '#!/bin/sh\n');
     // The skills the bot gives its agents; the manifest sits in a dot-folder npm must still pack.
     writeRepoFile('agent-plugin/.claude-plugin/plugin.json', '{ "name": "charness" }\n');
     writeRepoFile('agent-plugin/skills/charness-orchestration/SKILL.md', '---\nname: charness-orchestration\ndescription: d\n---\n');

@@ -1,5 +1,5 @@
 /**
- * @description `remoteRun/runner.sh` — what it removes from a project copy after a job that SUCCEEDED, because the project's `.remote-run` says so (`clean-after-success:`; off unless it does): `clean_after_success`
+ * @description `runner-scripts/runner.sh` — what it removes from a project copy after a job that SUCCEEDED, because the project's `.remote-run` says so (`clean-after-success:`; off unless it does): `clean_after_success`
  * on its own (a folder goes whole, a glob names several, a read-only folder and a link are handled, `.git` is never entered, a root that leaves the copy is refused, a removal that fails is said and does not stop the
  * rest), and `runner.sh job` end to end (only an exit code 0 cleans, after the files the job's `pull:` names were collected, off without the setting).
  *

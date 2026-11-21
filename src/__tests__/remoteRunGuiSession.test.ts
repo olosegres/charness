@@ -1,5 +1,5 @@
 /**
- * @description The job script's side of the login session's agent (`remoteRun/runner.sh`, «the login session»): on an always-on Mac a job that needs
+ * @description The job script's side of the login session's agent (`runner-scripts/runner.sh`, «the login session»): on an always-on Mac a job that needs
  * iOS (`needs-ios`) is refused with «ios build: needs a login of <account>» when no agent beats, `probe` says the same of `ios`, and with an agent its
  * steps go through the request folders — exit code, output in the job's log, a kill, an agent that stops or restarts under a running step. When the
  * link tried to put the agent in place itself and could not (`gui/install-failure`), the refusal and `probe` say to paste a fresh admin line instead of

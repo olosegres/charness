@@ -46,7 +46,7 @@ function installStubSsh(binDir: string): void {
 }
 
 /**
- * The package's `remoteRun/ensureNode.sh` as these tests have it: a stand-in that records how the line called it and prints a Node to run under — the
+ * The package's `runner-scripts/ensureNode.sh` as these tests have it: a stand-in that records how the line called it and prints a Node to run under — the
  * logging `node` of the admin stand-ins in `root` mode, the Node running this test in `own` mode. The real script is `runnersEnsureNode.test.ts`'s; here only
  * the line's way of calling it and of using its answer is under test. `STUB_ENSURE_NODE_FAILS` makes it fail the way a download that cannot be made does.
  */
@@ -85,7 +85,7 @@ function createBootstrapAnswer(noise: string = ''): Buffer {
     '',
   ].join('\n');
   const archive = gzipSync(createTarArchive([
-    { path: 'remoteRun/ensureNode.sh', content: Buffer.from(ensureNodeStand), mode: 0o755 },
+    { path: 'runner-scripts/ensureNode.sh', content: Buffer.from(ensureNodeStand), mode: 0o755 },
     { path: 'dist/runnerUtility/runnerCli.js', content: Buffer.from(runnerCli), mode: 0o644 },
     { path: 'dist/runnerUtility/rootServiceCli.js', content: Buffer.from(rootServiceCli), mode: 0o644 },
   ]));
@@ -274,7 +274,7 @@ describe('the line without sudo, in the runner account\'s own terminal', () => {
     assert.ok(!/(^|[ ;])node /.test(script), 'the pairing is started by the path the script printed, not by a `node` of the PATH');
     assert.ok(!script.includes('process.versions'), 'and no version of a system Node is judged by the line');
     assert.match(script, /; set -- --bootstrap "\$d\/pkg" --archive "\$d\/package\.tgz" --package-id "\$\{t##\*id=\}" "cr2\.\$u,\$h,\$p,[0-9a-f]+,\$y,\$z,\$k"/);
-    assert.match(script, /else n=\$\(sh "\$d\/pkg\/remoteRun\/ensureNode\.sh" own "\$HOME\/\.charness-runner\/node"\); "\$n" "\$d\/pkg\/dist\/runnerUtility\/runnerCli\.js" pair "\$@"; fi$/);
+    assert.match(script, /else n=\$\(sh "\$d\/pkg\/runner-scripts\/ensureNode\.sh" own "\$HOME\/\.charness-runner\/node"\); "\$n" "\$d\/pkg\/dist\/runnerUtility\/runnerCli\.js" pair "\$@"; fi$/);
   });
 
   it('pairs the account it runs as and nothing else: the pairing program runs from a PRIVATE copy in the account\'s own $TMPDIR, no root step runs, nothing is asked of sudo', () => {
@@ -448,9 +448,9 @@ describe('admin bootstrap line: how it is built', () => {
     // The two ways end in two programs: root's step for the account named, the account's own pairing for the account that runs the line.
     const [, finalSteps] = script.split('; if [ "$r" = 1 ]; then ');
     const [rootStep, accountStep] = finalSteps.split('; else ');
-    assert.equal(rootStep, 'n=$(sh "$d/pkg/remoteRun/ensureNode.sh" root "$a"); "$n" "$d/pkg/dist/runnerUtility/rootServiceCli.js" install "$a" "$@"');
+    assert.equal(rootStep, 'n=$(sh "$d/pkg/runner-scripts/ensureNode.sh" root "$a"); "$n" "$d/pkg/dist/runnerUtility/rootServiceCli.js" install "$a" "$@"');
     assert.ok(!rootStep.includes('runnerCli.js') && !rootStep.includes('.charness-runner') && !rootStep.includes('service install'), 'root is never pointed at the account\'s state folder or launcher, nor asked to run the account\'s program');
-    assert.ok(accountStep.startsWith('n=$(sh "$d/pkg/remoteRun/ensureNode.sh" own "$HOME/.charness-runner/node"); "$n" "$d/pkg/dist/runnerUtility/runnerCli.js" pair "$@"'));
+    assert.ok(accountStep.startsWith('n=$(sh "$d/pkg/runner-scripts/ensureNode.sh" own "$HOME/.charness-runner/node"); "$n" "$d/pkg/dist/runnerUtility/runnerCli.js" pair "$@"'));
     assert.ok(!accountStep.includes('rootServiceCli') && !accountStep.includes('sudo'), 'and the account\'s way has no root step and asks nothing of sudo');
   });
 

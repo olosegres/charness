@@ -1,5 +1,5 @@
 /**
- * `yarn runner-lock`: write `remoteRun/runner-package-lock.json`, the lockfile the hub's package carries for the runner (`runners/runnerLock.ts`), from
+ * `yarn runner-lock`: write `runner-scripts/runner-package-lock.json`, the lockfile the hub's package carries for the runner (`runners/runnerLock.ts`), from
  * `yarn.lock` and `package.json` of the CURRENT directory (the repository root). The integrity hashes are not in `yarn.lock`: those the file already
  * holds for a package at the same version are kept, the missing ones are fetched from the npm registry (the one step that needs the network, with a
  * deadline). Run it after every dependency change; a unit test fails while the committed file does not match `yarn.lock`.

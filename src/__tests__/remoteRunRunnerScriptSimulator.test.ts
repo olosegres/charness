@@ -1,5 +1,5 @@
 /**
- * @description `remoteRun/runner.sh`, a job that needs iOS on a Mac runner: its project copy's OWN Simulator device. `ios-device` (a step of the job, after the dependencies) makes `charness-<slug>` of the
+ * @description `runner-scripts/runner.sh`, a job that needs iOS on a Mac runner: its project copy's OWN Simulator device. `ios-device` (a step of the job, after the dependencies) makes `charness-<slug>` of the
  * device type and runtime the runner's last passing iOS check booted, or keeps the device recorded in `p/<slug>/ios-simulator` while `simctl` still lists it as available, and boots it; the command gets
  * its id as REMOTE_RUN_IOS_SIMULATOR_UDID; at the job's end — also after a kill or a timeout — the device is shut down (never erased, never `all`). The devices of copies that were removed (the retired list)
  * are deleted by the next step, and only those whose name starts `charness-`. Anything that goes wrong costs the job its device, not its run: a line in the log and no variable. Every `simctl` call

@@ -1,5 +1,5 @@
 /**
- * @description What the tests of a job run by `remoteRun/runner.sh` share (`remoteRunRunnerScriptCopies.test.ts`, `remoteRunRunnerScriptSimulator.test.ts`): a paired runner's state folder with its work dir, a job
+ * @description What the tests of a job run by `runner-scripts/runner.sh` share (`remoteRunRunnerScriptCopies.test.ts`, `remoteRunRunnerScriptSimulator.test.ts`): a paired runner's state folder with its work dir, a job
  * folder as `prepare` + `submit` leave it, `runner.sh job` run the way Pueue starts it, and a stand-in for `xcrun` that keeps Simulator devices as files (so what a test reads is the devices' state and the
  * calls made, not a guess). Not a test itself.
  */

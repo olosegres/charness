@@ -30,7 +30,7 @@ import type { RunnerHomePaths } from './runnerHome';
  * keep the id from being handed out again. The same goes for the job script's pid (`owner`, `owner-start`): a reused pid does not make a dead script look alive.
  */
 
-/** How often the agent beats, and how long without a beat is «gone» — `gui_agent_stale_sec` in `remoteRun/runner.sh` is the same number (a test pins both). */
+/** How often the agent beats, and how long without a beat is «gone» — `gui_agent_stale_sec` in `runner-scripts/runner.sh` is the same number (a test pins both). */
 export const guiAgentBeatIntervalMs = 5 * 1000;
 export const guiAgentStaleAfterMs = 20 * 1000;
 const requestPollMs = 300;

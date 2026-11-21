@@ -20,7 +20,7 @@
  *   account paired, pairs nothing twice, CLOSES its own code on the hub (the gate's `cancel`) and installs the service
  *
  * The machine has NO Node.js the line may use: the folder of the Node running the flow is left off the line's PATH, and the package's REAL
- * `remoteRun/ensureNode.sh` (run in `root` mode with this flow's own shared folder and a local mirror of nodejs.org, a copy of the Node running the flow,
+ * `runner-scripts/ensureNode.sh` (run in `root` mode with this flow's own shared folder and a local mirror of nodejs.org, a copy of the Node running the flow,
  * as its test seams) installs the runner its own, checks it the way root requires, and everything — the root step, the account's pairing, its
  * launcher — runs on that one. The retry then finds it already there.
  *

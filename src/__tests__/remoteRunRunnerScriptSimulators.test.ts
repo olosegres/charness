@@ -1,5 +1,5 @@
 /**
- * @description `remoteRun/runner.sh` on a Mac with Xcode (the platform is faked, with a fake `xcrun`): the Simulator runtimes the runner reports as OLDER than the newest one of the same platform and major (information
+ * @description `runner-scripts/runner.sh` on a Mac with Xcode (the platform is faked, with a fake `xcrun`): the Simulator runtimes the runner reports as OLDER than the newest one of the same platform and major (information
  * only — `sim_older_runtimes=` of the probe), and `xcrun simctl delete unavailable`, the only thing the runner ever deletes among the simulators: tried at most once a day, only by the probe of a VIEW of the runners
  * (`probe <work> prune`, never the probe a run or an `exec` makes first), detached so that probe stays fast, bounded in time, and never asking `simctl` for anything else (no erase, no runtime, no device of an
  * installed runtime).

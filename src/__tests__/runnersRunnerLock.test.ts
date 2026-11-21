@@ -184,7 +184,7 @@ describe('the committed lock of this repository', () => {
 
   it('is exactly what yarn.lock and package.json ask for — run `yarn runner-lock` when this fails after a dependency change', () => {
     const regenerated = buildRunnerLock({ yarnLockText, rootPackageJson, integrities: readLockIntegrities(committed) });
-    assert.equal(committedText, renderRunnerLock(regenerated), 'remoteRun/runner-package-lock.json is out of date: run `yarn runner-lock`');
+    assert.equal(committedText, renderRunnerLock(regenerated), 'runner-scripts/runner-package-lock.json is out of date: run `yarn runner-lock`');
   });
 
   it('pins every package by its tarball AND its hash — a version alone is not what the registry later serves', () => {

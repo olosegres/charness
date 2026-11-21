@@ -10,7 +10,7 @@ import * as path from 'path';
  *   keys/         the runner's client key (logs in to the hub) and the host key of its built-in ssh server
  *   app.<id>/     an installed copy of the hub's charness package; `current` points at the one in use
  *   bin/          the `charness-runner` launcher, pueue, pueued, rsync when built, the Corepack shims of `yarn` / `pnpm` and the `corepack` wrapper (`packageManagerShims.ts`), and on a Mac the `xcrun` guard (`simctlGuard.ts`)
- *   node/         the runner's OWN Node.js, when it is not the shared one under `/usr/local/lib/charness-runner/node`: `v<version>/bin/node` (`managedNode.ts`, `remoteRun/ensureNode.sh`)
+ *   node/         the runner's OWN Node.js, when it is not the shared one under `/usr/local/lib/charness-runner/node`: `v<version>/bin/node` (`managedNode.ts`, `runner-scripts/ensureNode.sh`)
  *   node-failure.json  why the last attempt to give the runner a Node of its own (or a newer one) failed, when, and under which app copy; the next attempt waits for a day or the next update (`nodeUpkeep.ts`)
  *   node-current.json  when each Node version folder was last the runner's Node (or first seen): a version is removed a week after it stopped being current (`nodeUpkeep.ts`)
  *   npm/          the jobs' global npm prefix (`npm i -g`; its `bin/` is on a job's PATH), so no job writes into the Node's own folder

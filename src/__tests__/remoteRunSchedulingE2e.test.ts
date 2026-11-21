@@ -16,7 +16,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { removeTestRoot } from './remoteRunRunnerScriptKit';
 
-const scriptPath = path.resolve(__dirname, '..', '..', 'remoteRun', 'runner.sh');
+const scriptPath = path.resolve(__dirname, '..', '..', 'runner-scripts', 'runner.sh');
 const isCi = process.env.CI === 'true' || process.env.CI === '1';
 const missingTools = ['pueue', 'pueued', 'rsync', 'bash'].filter((tool) => spawnSync('which', [tool], { stdio: 'ignore' }).status !== 0);
 const skipReason = !isCi && missingTools.length > 0 ? `missing here: ${missingTools.join(', ')} (CI has them)` : false;

@@ -16,7 +16,7 @@ import {
 
 /**
  * @description One runner as the rest of remote-run uses it: the uploaded script's subcommands as calls, Pueue through the same
- * script, and the pieces rsync needs. The script is `remoteRun/runner.sh` at the package root (shipped in `files`, like the STT
+ * script, and the pieces rsync needs. The script is `runner-scripts/runner.sh` at the package root (shipped in `files`, like the STT
  * sidecar); it is uploaded to `<workDir>/bin/runner-<sha8>.sh` when that file is missing, so two versions of charness on one
  * runner never clash.
  */
@@ -34,9 +34,9 @@ export interface RunnerScript {
   text: string;
 }
 
-/** @description `remoteRun/runner.sh` at the package root, resolved from both `src/remoteRun` (tsx) and `dist/remoteRun` (built): two levels up. */
+/** @description `runner-scripts/runner.sh` at the package root, resolved from both `src/remoteRun` (tsx) and `dist/remoteRun` (built): two levels up. */
 export function getRunnerScriptPath(): string {
-  return path.join(fs.realpathSync(__dirname), '..', '..', 'remoteRun', 'runner.sh');
+  return path.join(fs.realpathSync(__dirname), '..', '..', 'runner-scripts', 'runner.sh');
 }
 
 export function readRunnerScript(scriptPath: string = getRunnerScriptPath()): RunnerScript {

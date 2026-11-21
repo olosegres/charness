@@ -1,5 +1,5 @@
 /**
- * @description What the unit tests of `remoteRun/runner.sh` share (`remoteRunRunnerScript.test.ts`, `remoteRunRunnerScriptProbe.test.ts`, `remoteRunRunnerLock.test.ts`, `remoteRunRunnerScriptDisk.test.ts`,
+ * @description What the unit tests of `runner-scripts/runner.sh` share (`remoteRunRunnerScript.test.ts`, `remoteRunRunnerScriptProbe.test.ts`, `remoteRunRunnerLock.test.ts`, `remoteRunRunnerScriptDisk.test.ts`,
  * `remoteRunRunnerScriptDiskSeedAndPids.test.ts`, `remoteRunRunnerScriptDiskSizes.test.ts`, `remoteRunRunnerScriptDiskCopies.test.ts`, `remoteRunRunnerScriptDiskClones.test.ts`, `remoteRunRunnerScriptDiskClonesCost.test.ts`, the stash files, `remoteRunGuiSession.test.ts`): where the script is, the project and job names the tests use, a file writer, and live processes that stand for the script\'s own (or a stranger).
  */
 
@@ -7,7 +7,7 @@ import { spawn, spawnSync, type ChildProcess } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 
-export const scriptPath = path.resolve(__dirname, '..', '..', 'remoteRun', 'runner.sh');
+export const scriptPath = path.resolve(__dirname, '..', '..', 'runner-scripts', 'runner.sh');
 export const slug = 'app-abc1234567';
 export const jobId = 'box1-aaaaaa';
 

@@ -1,5 +1,5 @@
 /**
- * @description `remoteRun/runner.sh`, the other half of the stash cases (the first is `remoteRunRunnerScriptStash.test.ts`; the two share `remoteRunRunnerScriptStashKit.ts`, split because one file ran past 70 s alone and a loaded box cut it at
+ * @description `runner-scripts/runner.sh`, the other half of the stash cases (the first is `remoteRunRunnerScriptStash.test.ts`; the two share `remoteRunRunnerScriptStashKit.ts`, split because one file ran past 70 s alone and a loaded box cut it at
  * the 2-minute cap of a unit file): a kill never acts on a Pueue number that was not
  * confirmed to be the job's own; the lease watcher's kill of a queued job that Pueue cannot answer about is tried again until Pueue answers; waiting for a job. Driven against a stand-in for Pueue that keeps its task list in files.
  *

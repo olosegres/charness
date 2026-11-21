@@ -69,7 +69,7 @@ the queue), `logs/`, `build/`.
   points `current` at it and exits with 75 — the launcher starts the new copy. A busy runner waits until its last command ends; while the
   update installs the link is closed on purpose and that closing does not start another attempt; a failed update is tried again by the
   next poll after a 10-minute cooldown. Pueue jobs are not commands over the link: a queue never blocks an update.
-- **The runner's own Node.js (`managedNode.ts`, `nodeUpkeep.ts`, `remoteRun/ensureNode.sh`).** No runner runs on a shared Node, and its jobs run on the runner's. The package's
+- **The runner's own Node.js (`managedNode.ts`, `nodeUpkeep.ts`, `runner-scripts/ensureNode.sh`).** No runner runs on a shared Node, and its jobs run on the runner's. The package's
   `ensureNode.sh` (plain `sh`: a machine may have no Node at all) picks the newest LTS release from 22.12 up to 24 (the last line that ships Corepack) out of nodejs.org's
   `index.json` — by number, with a `<major>` it keeps to that line instead —, fetches the release's `SHASUMS256.txt` and the archive (curl, or wget under `timeout`: a total limit on
   each; the outer deadline `moveDeadlineMs` is longer than all the script's limits together), checks the SHA-256 before unpacking, unpacks next to the final place and moves
@@ -160,7 +160,7 @@ service's record. The agents run as this account and can change what this progra
 
 **What the admin line trusts.** Pasting it with `sudo` runs code from the charness host as root on this machine (see `src/runners/README.md`); the same line run
 without `sudo` by the runner account trusts the host only with that account. A Mac's launcher and the daemons' `PATH` carry the Node the line INSTALLED for the runner: the package's
-`remoteRun/ensureNode.sh` (run as root from the root-owned copy) puts the official build in `/usr/local/lib/charness-runner/node/v<version>` — a Node root owns, whose
+`runner-scripts/ensureNode.sh` (run as root from the root-owned copy) puts the official build in `/usr/local/lib/charness-runner/node/v<version>` — a Node root owns, whose
 REAL path is outside every home, that the account can run and cannot write (nor a folder above it), ≥ 22.12 — and refuses with the way out when it cannot be made so; the
 root step asks the same again before it runs anything (`findPathAccountCanWrite`, `findHomeContaining`), and `service install` as the account refuses a Node in ANOTHER user's home. **Homes the account can read**
 (`homeFolders.ts`): the admin line's root step asks AS the account (`sudo -u <account> -H test -r <home> -a -x <home>`) about every folder under `/Users` and

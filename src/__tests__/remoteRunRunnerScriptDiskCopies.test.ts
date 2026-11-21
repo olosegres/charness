@@ -1,5 +1,5 @@
 /**
- * @description `remoteRun/runner.sh` — the disk upkeep of a runner, the second half of `remoteRunRunnerScriptDisk.test.ts` (they share `remoteRunRunnerScriptDiskKit.ts`; split because a file runs under one time limit and one ran 80–90 s alone):
+ * @description `runner-scripts/runner.sh` — the disk upkeep of a runner, the second half of `remoteRunRunnerScriptDisk.test.ts` (they share `remoteRunRunnerScriptDiskKit.ts`; split because a file runs under one time limit and one ran 80–90 s alone):
  * `clean` — the owner of a task removes its project copy on request; the TMPDIR of a project copy is part of the disk upkeep; the Xcode derived data of a copy nobody used for a day goes with the sweep (the clones and the hang-up
  * are `remoteRunRunnerScriptDiskClones.test.ts`, the cost of the clones' groups `remoteRunRunnerScriptDiskClonesCost.test.ts`). Run against the real script and a real shell, with the fake disk of the kit.
  *

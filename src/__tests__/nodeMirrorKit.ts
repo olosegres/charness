@@ -1,5 +1,5 @@
 /**
- * @description A local mirror of `nodejs.org/dist` for the tests of the runner's own Node.js (`remoteRun/ensureNode.sh`): an `index.json` in nodejs.org's
+ * @description A local mirror of `nodejs.org/dist` for the tests of the runner's own Node.js (`runner-scripts/ensureNode.sh`): an `index.json` in nodejs.org's
  * own format (one release per line, with decoys the install must not pick), and for each release that has an archive its `SHASUMS256.txt` and the archive for
  * THIS machine, holding a `bin/node` the test chooses — a stand-in script, or a copy of a real Node binary when a flow has to run the runner on it. No
  * network: the script is given the mirror as a `file://` place to download from.

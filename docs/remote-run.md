@@ -70,7 +70,7 @@ A runner is attached in one of two ways:
      so you can fix the account and paste it again.
    - **Node.** The runner gets **its own Node.js**, whatever the machine has: a Homebrew or system Node is the admin's to change, and a job that
      runs `corepack enable` or `npm i -g` against it fails for lack of rights. The line installs it with a script of the package it has just fetched
-     (`remoteRun/ensureNode.sh`, run as root from the root-owned copy): the newest LTS release of Node.js from 22.12 up to 24 (the last line that ships
+     (`runner-scripts/ensureNode.sh`, run as root from the root-owned copy): the newest LTS release of Node.js from 22.12 up to 24 (the last line that ships
      Corepack) from nodejs.org's list for the machine, downloaded with `curl` or `wget` (a total time limit on each), its SHA-256 checked against the
      release's `SHASUMS256.txt` before it is unpacked (the trust is TLS to nodejs.org), put in place whole as `/usr/local/lib/charness-runner/node/v<version>`.
      Only x86-64 and ARM64 machines, macOS and Linux with glibc can be runners: an Alpine (musl) machine cannot, and nothing offers a system Node instead.

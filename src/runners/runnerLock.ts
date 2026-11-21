@@ -19,13 +19,13 @@ import { z } from 'zod';
  *     the registry and keeps them, so the committed file pins the tarballs and not only the versions;
  *   - {@link renderRunnerPackageJson} is the `package.json` the runner gets: the hub's own, cut down to the runner's dependencies.
  *
- * The committed file is `remoteRun/runner-package-lock.json`; a unit test fails when it no longer matches `yarn.lock` and `package.json`.
+ * The committed file is `runner-scripts/runner-package-lock.json`; a unit test fails when it no longer matches `yarn.lock` and `package.json`.
  */
 
 /** The runner program's runtime dependencies, as the hub's `package.json` names them (a unit test checks them against what the runner's code imports). */
 export const runnerRuntimePackages: readonly string[] = ['ssh2', 'zod'];
 /** Where the hub's package keeps the lock, next to `runner.sh`; the package ships it as `package-lock.json`. */
-export const runnerLockRelativePath = 'remoteRun/runner-package-lock.json';
+export const runnerLockRelativePath = 'runner-scripts/runner-package-lock.json';
 export const registryUrl = 'https://registry.npmjs.org';
 const lockfileVersion = 3;
 const npmRangePrefix = 'npm:';

@@ -55,7 +55,7 @@ describe('planInterrupt', () => {
 });
 
 describe('the hub\'s kill call against the runner\'s kill', () => {
-  const script = fs.readFileSync(path.resolve(__dirname, '..', '..', 'remoteRun', 'runner.sh'), 'utf8');
+  const script = fs.readFileSync(path.resolve(__dirname, '..', '..', 'runner-scripts', 'runner.sh'), 'utf8');
   const readRunnerSeconds = (name: string): number => Number(new RegExp(`^${name}=(\\d+)$`, 'm').exec(script)?.[1]);
 
   it('the numbers the hub keeps are the runner script\'s own: the grace after SIGTERM, and what a job shutting its Simulator down is given on top', () => {

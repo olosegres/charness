@@ -31,10 +31,10 @@
   "files": [
     "dist/",
     "stt/gigaam_sidecar.py",
-    "remoteRun/runner.sh",
-    "remoteRun/runner-package-lock.json",
+    "runner-scripts/runner.sh",
+    "runner-scripts/runner-package-lock.json",
     "npm-shrinkwrap.json",
-    "remoteRun/ensureNode.sh",
+    "runner-scripts/ensureNode.sh",
     "agent-plugin/",
     "CHANGELOG.md",
     "README.md",

@@ -1,5 +1,5 @@
 /**
- * @description `remoteRun/runner.sh`, jobs of different projects side by side: what each PROJECT COPY is given once and keeps — a number (`p/<slug>/index`, the lowest that no other copy holds, under
+ * @description `runner-scripts/runner.sh`, jobs of different projects side by side: what each PROJECT COPY is given once and keeps — a number (`p/<slug>/index`, the lowest that no other copy holds, under
  * `tmp/index.lock`), and from it a block of ports (`REMOTE_RUN_PORT_BASE` = 20000 + 100 × number) and its own TMPDIR (`<work>/t/<number>`, empty for a new copy). The three reach the steps of a job
  * through `$jd/runner-env`: TMPDIR BEFORE the job's own `-e` lines (the job may take it back), REMOTE_RUN_* AFTER them (it may not); `exec` gets none. A copy that is removed (`clean`, the prune) gives
  * its number back at once, takes its TMPDIR with it, and puts its Simulator device on the retired list; a copy that is in use does none of that. The gui agent's side of the env contract is

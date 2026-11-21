@@ -1,5 +1,5 @@
 /**
- * @description `remoteRun/runner.sh`, the time limit of a bounded call (`run_bounded`: a watchdog, there is no `timeout(1)` on a Mac) and the way the script ends a background job of its own. Bash reports a background job
+ * @description `runner-scripts/runner.sh`, the time limit of a bounded call (`run_bounded`: a watchdog, there is no `timeout(1)` on a Mac) and the way the script ends a background job of its own. Bash reports a background job
  * that a SIGNAL ended on ITS stderr (`line N: PID Killed: 9  ( sleep … )`, `Terminated`) — whatever redirections the job itself has — at the first command after the death. Measured: bash 3.2.57 (the stock bash of macOS)
  * reports a job ended by SIGKILL AND one ended by SIGTERM; bash 5.3 reports only one ended by SIGKILL. The script stops its watchdogs and watchers by signal, so every job that made a bounded `simctl` call carried such a line
  * in its output, which reads like a failure. The limit itself must stay what it was: a call that runs past it is cut off, a call that ends in time stops its watchdog at once.

@@ -42,7 +42,7 @@ export const ordinaryRunTimeoutMs = 120_000;
 export const countingInstall = "install: sh -c 'n=$(cat ../deps-counter 2>/dev/null || echo 0); echo $((n+1)) > ../deps-counter'";
 export const baseRemoteRunConfig = `pull: out test-results\n${countingInstall}\n`;
 export const jobIdPattern = /^box1-[a-z2-7]{6}$/;
-export const runnerScriptPath = path.resolve(__dirname, '..', '..', '..', 'remoteRun', 'runner.sh');
+export const runnerScriptPath = path.resolve(__dirname, '..', '..', '..', 'runner-scripts', 'runner.sh');
 
 /** Set by `setUpFlow`; read through the import by the tests (a live binding). */
 export let layout: FlowLayout;

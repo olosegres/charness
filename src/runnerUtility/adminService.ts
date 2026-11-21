@@ -191,7 +191,7 @@ async function resolveServedAccount(accountName: string, deps: AdminServiceDeps)
   const account = await deps.resolveAccount(accountName);
   if (account === null) return fail(`There is no account named «${accountName}», or its home folder cannot be read from the directory service.`);
   if (account.uid === rootUid) return fail('The service must run as a standard account, not as root.');
-  // And a Node the account can change is no Node for root to run: the account runs the agents' code. `remoteRun/ensureNode.sh` asks the same before it prints the Node.
+  // And a Node the account can change is no Node for root to run: the account runs the agents' code. `runner-scripts/ensureNode.sh` asks the same before it prints the Node.
   const changeable = await findPathAccountCanWrite(deps.nodePath, account, deps);
   if (changeable !== null) return fail(`This step runs under the Node.js at ${deps.nodePath}, which the account ${account.name} can change (it can write ${changeable}): root runs nothing the account can change. Paste the admin line again from /runners: it installs the runner its own Node.js in ${sharedNodeBase}.`);
   return account;

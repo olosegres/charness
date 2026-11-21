@@ -1,5 +1,5 @@
 /**
- * @description What the Simulator cases of `remoteRun/runner.sh` share (`remoteRunRunnerScriptSimulator.test.ts`, `remoteRunRunnerScriptSimulatorEnd.test.ts`: one file ran past 80 s alone, and a loaded box cuts a unit file
+ * @description What the Simulator cases of `runner-scripts/runner.sh` share (`remoteRunRunnerScriptSimulator.test.ts`, `remoteRunRunnerScriptSimulatorEnd.test.ts`: one file ran past 80 s alone, and a loaded box cuts a unit file
  * at the 2-minute cap): the per-test root, the runner state, the stand-in for `xcrun simctl`, and a job that needs iOS. `root`, `state` and `sims` are live bindings: `useSimulatorHarness()` assigns them before every test.
  * Matches no test glob.
  */

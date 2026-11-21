@@ -49,7 +49,7 @@ describe('describeSshFailure', () => {
 });
 
 describe('the runner script', () => {
-  it('is remoteRun/runner.sh at the package root, named by a hash of its text', () => {
+  it('is runner-scripts/runner.sh at the package root, named by a hash of its text', () => {
     assert.equal(path.basename(getRunnerScriptPath()), 'runner.sh');
     assert.ok(fs.existsSync(getRunnerScriptPath()));
     const script = readRunnerScript();

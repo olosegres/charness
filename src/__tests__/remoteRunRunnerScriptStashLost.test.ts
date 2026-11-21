@@ -1,5 +1,5 @@
 /**
- * @description `remoteRun/runner.sh` — stashed jobs, the lost-job half of `remoteRunRunnerScriptStash.test.ts` (split because a file runs under one time limit and one ran 70 s alone on a loaded box): a job that Pueue has lost does not
+ * @description `runner-scripts/runner.sh` — stashed jobs, the lost-job half of `remoteRunRunnerScriptStash.test.ts` (split because a file runs under one time limit and one ran 70 s alone on a loaded box): a job that Pueue has lost does not
  * stall its project, a job that is removing paths after it succeeded is still under way, a lost job found by whoever looks at it, and a job that waits for a stashed one is also the safety net.
  *
  * Test case: N/A — Charness has no Jira tracker.

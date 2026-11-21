@@ -93,7 +93,7 @@ escape a backslash in `command="…"`).
    --service-follows`) and then installs the service; the shell runs nothing as the account. Every step that runs as the account has NO
    terminal: a session of its own, `/dev/null` for input, its output piped through the root step with the control characters stripped
    (`runnerUtility/isolatedCommand.ts`) — the account runs the agents' code, and code it can change must not get the admin's terminal. The
-   script also INSTALLS the runner's own Node, which root and the service run under — by the package's own `remoteRun/ensureNode.sh`, run as root from the root-owned copy right after the download (kept out of the pasted line: a Telegram message holds 4096 characters): the newest LTS official nodejs.org build from 22.12 up to 24 (the last line with Corepack), SHA-256 checked, unpacked by root into `/usr/local/lib/charness-runner/node/v<version>` without the archive's owners — the base judged before root writes into it, an install judged before root runs it; never one inside a home folder, judged by its real path (`readlink -f`, or by hand where it is missing), never one the account can WRITE or whose folder it can write (`sudo -u <account> test -w`: root must never run what the account can change; the root step asks the same again). The plain line runs the same script as the account, into `~/.charness-runner/node`.
+   script also INSTALLS the runner's own Node, which root and the service run under — by the package's own `runner-scripts/ensureNode.sh`, run as root from the root-owned copy right after the download (kept out of the pasted line: a Telegram message holds 4096 characters): the newest LTS official nodejs.org build from 22.12 up to 24 (the last line with Corepack), SHA-256 checked, unpacked by root into `/usr/local/lib/charness-runner/node/v<version>` without the archive's owners — the base judged before root writes into it, an install judged before root runs it; never one inside a home folder, judged by its real path (`readlink -f`, or by hand where it is missing), never one the account can WRITE or whose folder it can write (`sudo -u <account> test -w`: root must never run what the account can change; the root step asks the same again). The plain line runs the same script as the account, into `~/.charness-runner/node`.
    The root step warns last about the homes of other users that the account can read (`sudo chmod 700 <home>`). The account is the line's LAST word (editable by hand; `charness runners pair --account`), and
    a second paste for an account that is already paired only installs the service.
 
@@ -205,12 +205,12 @@ is not connected» on stderr and exit 255 (ssh's own «connection failed»).
 
 ## The package (`hubPackage.ts`)
 
-The hub's own `remoteRun/runner.sh`, `LICENSE` (its Notices clause wants the text with every copy) and `dist/` (no tests, `.d.ts`, source maps), a `package.json` CUT DOWN to the runner's own runtime
+The hub's own `runner-scripts/runner.sh`, `LICENSE` (its Notices clause wants the text with every copy) and `dist/` (no tests, `.d.ts`, source maps), a `package.json` CUT DOWN to the runner's own runtime
 dependencies (`ssh2`, `zod`: `runnerRuntimePackages`; the hub's name, version, licence and engines) and the `package-lock.json` that pins them, as a
 deterministic tar (`tarArchive.ts`: fixed times and order) in a gzip. The lock (`runnerLock.ts`) is made from `yarn.lock` for exactly that closure
 (six packages: `ssh2`, its three runtime dependencies, `tweetnacl`, `zod`; optional native add-ons and Yarn's implicit `node-gyp` are left out), pins
 each package by registry tarball AND `sha512` integrity (`yarn.lock` has no such hash: `yarn runner-lock` fetches them once from the registry and keeps
-them), is committed as `remoteRun/runner-package-lock.json` and shipped by the npm package; a unit test fails while it does not match `yarn.lock` /
+them), is committed as `runner-scripts/runner-package-lock.json` and shipped by the npm package; a unit test fails while it does not match `yarn.lock` /
 `package.json`, or when the runner's own code imports a package it lacks. The runner installs it with `npm ci --omit=dev --ignore-scripts`, so what a
 runner runs is what the hub has run and never a version published since (the audit's finding: `npm install` against open ranges would have pulled a
 hijacked release into an always-on process at the next auto-update). Its **id** is the first 16 hex digits of the sha256 of the tar before compression. The cache in

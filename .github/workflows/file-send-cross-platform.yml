@@ -3,7 +3,7 @@ name: File send and PATH lookup on Windows and macOS
 # The agent's file sending opens files by the portable `verifiedPath` strategy on Windows and macOS, and the installed-CLI
 # check reads PATH (with PATHEXT on Windows) itself. Both differ from Linux exactly where Node's file system does
 # (realpath, junctions, inode values, PATHEXT), so their suites run on those systems here. The Linux run is the main
-# test suite. The macOS leg also runs the runner script's bash-3.2-only cases: `remoteRun/runner.sh` runs on a Mac under its
+# test suite. The macOS leg also runs the runner script's bash-3.2-only cases: `runner-scripts/runner.sh` runs on a Mac under its
 # stock /bin/bash 3.2, which reports a background job that SIGTERM ended (bash 5 does not), and only a macOS runner has that bash.
 on:
   push:

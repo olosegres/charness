@@ -67,7 +67,7 @@ describe('hub package', () => {
     const hubPackage = getHubPackage(fixture.ctx);
     assert.match(hubPackage.id, /^[0-9a-f]{16}$/);
     const names = runTar(gunzipSync(fs.readFileSync(hubPackage.filePath)), ['-tf', '-']).trim().split('\n');
-    assert.deepEqual(names, ['package.json', 'package-lock.json', 'LICENSE', 'remoteRun/runner.sh', 'remoteRun/ensureNode.sh', 'dist/cli.js', 'dist/runners/example.js']);
+    assert.deepEqual(names, ['package.json', 'package-lock.json', 'LICENSE', 'runner-scripts/runner.sh', 'runner-scripts/ensureNode.sh', 'dist/cli.js', 'dist/runners/example.js']);
   });
 
   it('carries the hub\'s LICENSE as it is — the license wants its text with every copy of the software, a runner\'s included — and its package.json names that file', () => {
@@ -104,7 +104,7 @@ describe('hub package', () => {
 
   it('is a different package — a different id — when only the lock changes: what a runner installs is part of what it runs', () => {
     const before = getHubPackage(fixture.ctx).id;
-    const lockPath = path.join(fixture.ctx.packageRoot, 'remoteRun', 'runner-package-lock.json');
+    const lockPath = path.join(fixture.ctx.packageRoot, 'runner-scripts', 'runner-package-lock.json');
     const lock = JSON.parse(fs.readFileSync(lockPath, 'utf8'));
     lock.packages['node_modules/zod'].version = '4.4.4';
     fs.writeFileSync(lockPath, `${JSON.stringify(lock, null, 2)}\n`);
@@ -117,14 +117,14 @@ describe('hub package', () => {
     fs.writeFileSync(packageJsonPath, original.replace('"ssh2": "^1.17.0"', '"ssh2": "^1.18.0"'));
     assert.throws(() => getHubPackage(fixture.ctx), /the runner's lock expects ssh2@\^1\.17\.0, but package\.json says \^1\.18\.0: run `yarn runner-lock`/);
     fs.writeFileSync(packageJsonPath, original);
-    fs.rmSync(path.join(fixture.ctx.packageRoot, 'remoteRun', 'runner-package-lock.json'));
+    fs.rmSync(path.join(fixture.ctx.packageRoot, 'runner-scripts', 'runner-package-lock.json'));
     assert.throws(() => getHubPackage(fixture.ctx), /ENOENT/);
   });
 
   it('keeps the executable bit of a script', () => {
     const hubPackage = getHubPackage(fixture.ctx);
     const listing = runTar(gunzipSync(fs.readFileSync(hubPackage.filePath)), ['-tvf', '-']);
-    assert.match(listing, /^-rwxr-xr-x.* remoteRun\/runner\.sh$/m);
+    assert.match(listing, /^-rwxr-xr-x.* runner-scripts\/runner\.sh$/m);
     assert.match(listing, /^-rw-r--r--.* dist\/runners\/example\.js$/m);
   });
 

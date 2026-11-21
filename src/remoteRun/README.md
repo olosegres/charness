@@ -10,7 +10,7 @@ output, exit code and declared result files back as if it had run here. User-fac
 ```
 main box                                                            runner (stock sshd, an account of its own)
 ─────────                                                           ──────────────────────────────────────────
-remoteRunCli.ts → commands.ts ──ssh (one master per runner)──►      <workDir>/bin/runner-<sha8>.sh   (remoteRun/runner.sh, uploaded by hash)
+remoteRunCli.ts → commands.ts ──ssh (one master per runner)──►      <workDir>/bin/runner-<sha8>.sh   (runner-scripts/runner.sh, uploaded by hash)
   submit.ts   rsync --files-from ───────────────────────────►      p/<slug>/stage/<job>/
   foreground.ts / jobFiles.ts ◄── rsync --no-links ─────────        p/<slug>/jobs/<job>/artifacts/
                                                                     Pueue (queue, groups) runs `runner.sh job …`

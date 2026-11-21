@@ -90,7 +90,7 @@ function createHarness(answer: Partial<CommandResult>, overrides: { currentNodeP
     runner,
     currentNodePath: overrides.currentNodePath ?? systemNode,
     currentNodeVersion: overrides.currentNodeVersion ?? systemVersion,
-    scriptPath: '/app/remoteRun/ensureNode.sh',
+    scriptPath: '/app/runner-scripts/ensureNode.sh',
     distUrl: null,
     sharedBase: path.join(root, 'shared'),
     checkScriptExists: () => true,

@@ -117,7 +117,7 @@ describe('the heartbeat file', () => {
   });
 
   it('`runner.sh` carries the same staleness: gui_agent_stale_sec is the agent\'s', () => {
-    const script = fs.readFileSync(path.join(__dirname, '..', '..', 'remoteRun', 'runner.sh'), 'utf8');
+    const script = fs.readFileSync(path.join(__dirname, '..', '..', 'runner-scripts', 'runner.sh'), 'utf8');
     assert.match(script, new RegExp(`^gui_agent_stale_sec=${guiAgentStaleAfterMs / 1000}$`, 'm'));
   });
 });

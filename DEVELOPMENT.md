@@ -144,7 +144,7 @@ yarn test:flows   # the `*E2e.test.ts` flows, 16 files at a time (they mostly wa
                   # runner-link flows and for the flows that name TMUX_SOCKET_NAME (the Jira
                   # ones) once TMPDIR is over about 26 characters; most flows keep tmux's
                   # short «default» socket and have room to spare
-yarn runner-lock  # after ANY dependency change: rewrite remoteRun/runner-package-lock.json (the
+yarn runner-lock  # after ANY dependency change: rewrite runner-scripts/runner-package-lock.json (the
                   # lock the runners install from, made from yarn.lock; fetches the sha512
                   # hashes of new versions from the registry). A unit test fails until you do
 yarn hot          # hot-reload mode: tsc -w + nodemon on dist/ (also
@@ -346,7 +346,7 @@ publish, no tag, no push, the run is red; the next day's run tries again by itse
   quoting the line, otherwise (`changelogFormat.test.ts` fails first on a commit that breaks it). An empty
   `## Unreleased` is filled with the `feat` / `fix` subjects.
 - **Package check** before anything is published: the tarball holds `package.json`, `dist/cli.js`, `stt/gigaam_sidecar.py`,
-  `remoteRun/runner-package-lock.json`, `remoteRun/ensureNode.sh`, `npm-shrinkwrap.json`, the agent plugin's manifest and
+  `runner-scripts/runner-package-lock.json`, `runner-scripts/ensureNode.sh`, `npm-shrinkwrap.json`, the agent plugin's manifest and
   orchestration skill, `CHANGELOG.md`, `README.md`, `LICENSE`, `LICENSE-COMMERCIAL.md` (`requiredPackFiles`) and no `src/` or tests, and installed the way a user installs it — `npm install -g`
   from a loopback registry that serves the tarball and marks its shrinkwrap, as the npm registry does (an install of the
   tarball FILE ignores the shrinkwrap), dependencies passed on to the real registry — `charness --version` prints the new

@@ -1,5 +1,5 @@
 /**
- * @description The project lock of `remoteRun/runner.sh` — what keeps two jobs of one project off one tree: the lock is made with the shell's
+ * @description The project lock of `runner-scripts/runner.sh` — what keeps two jobs of one project off one tree: the lock is made with the shell's
  * own exclusive create (never `mkdir`, which the uutils coreutils do not make exclusive), a stale lock is broken by ONE waiter holding the
  * right to break that very dead holder's lock, and a job gives back only a lock that is still its own. Raced with real concurrent waiters
  * (a lock whose holder is dead, with and without a breaker that died too) and proven one rule at a time. In a file of its own so the

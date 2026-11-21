@@ -1,5 +1,5 @@
 /**
- * @description What a test of `remoteRun/runner.sh` must do before it removes its work dir (`stopDetachedRuns`, `removeTestRoot` of the kit): the script DETACHES some of its work — a refused `prepare` starts `measure-copies`, a `prepare` the
+ * @description What a test of `runner-scripts/runner.sh` must do before it removes its work dir (`stopDetachedRuns`, `removeTestRoot` of the kit): the script DETACHES some of its work — a refused `prepare` starts `measure-copies`, a `prepare` the
  * sweep of idle copies, a probe of a view the prune — so that the ssh call that started it returns, and that work writes into a copy's folder (`size-kb`) for as long as its walk lasts. A teardown that removes the tree meanwhile met a file
  * that appeared between its listing of a folder and its `rmdir`: `ENOTEMPTY`, a failed `afterEach` hook, on a loaded GitHub runner. Here the walk is made slow on purpose (a `du` that sleeps), so the race is not a matter of luck.
  *

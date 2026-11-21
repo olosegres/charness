@@ -26,7 +26,7 @@ import { getPairCodeFields, joinPairCodeFields, privateKeyFooter, privateKeyHead
  *   as ROOT (`sudo …`, the way it is offered) it does everything for the account named by its last word. The runner account runs the agents' code, so ROOT
  *   never executes, reads through or writes into anything that account can change. As root the script (1) checks the account (it exists; not root; not an
  *   admin; the OS is known), (2) downloads the package into a folder of ITS OWN in `/tmp` — root-owned, readable by the account, extracted with
- *   `--no-same-owner` — (3) has the package's `remoteRun/ensureNode.sh` install the runner its own Node.js into a folder only root can write
+ *   `--no-same-owner` — (3) has the package's `runner-scripts/ensureNode.sh` install the runner its own Node.js into a folder only root can write
  *   (`/usr/local/lib/charness-runner/node`; checked again for what root requires of it — outside every home, the account can run it and cannot write it) and
  *   (4) runs the root step with that Node from the same root-owned copy (`rootServiceCli.js install <account> --bootstrap …`: Node built-ins only,
  *   because the copy has no dependencies). The root step has the account pair itself from that copy (`sudo -u <account> -H node

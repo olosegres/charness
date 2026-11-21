@@ -1,5 +1,5 @@
 /**
- * @description `remoteRun/runner.sh` — the disk upkeep of a runner, the clones part of `remoteRunRunnerScriptDiskCopies.test.ts` (they share `remoteRunRunnerScriptDiskKit.ts`; split because a file runs under one time limit and one ran
+ * @description `runner-scripts/runner.sh` — the disk upkeep of a runner, the clones part of `remoteRunRunnerScriptDiskCopies.test.ts` (they share `remoteRunRunnerScriptDiskKit.ts`; split because a file runs under one time limit and one ran
  * 95 s alone on a loaded box; the clones' cost cases live in `remoteRunRunnerScriptDiskClonesCost.test.ts`): what shows the sizes of clones says that `du` counts them in full, and a caller that hangs up while `prepare` removes copies. Run against the real script and a real shell, with the fake disk of the kit.
  *
  * Test case: N/A — Charness has no Jira tracker.

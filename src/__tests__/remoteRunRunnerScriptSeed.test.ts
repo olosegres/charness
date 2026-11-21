@@ -1,5 +1,5 @@
 /**
- * @description `remoteRun/runner.sh`, the first job of a NEW project copy: its dependencies are carried over from a sibling copy of the same REPOSITORY (`seed_new_copy`) instead of being installed from scratch — run against the real
+ * @description `runner-scripts/runner.sh`, the first job of a NEW project copy: its dependencies are carried over from a sibling copy of the same REPOSITORY (`seed_new_copy`) instead of being installed from scratch — run against the real
  * script (`runner.sh job`, as Pueue starts it) and real folders. Siblings are told by the job's `project-key` (the main box's hash of the user and the repository's root commit), never by the folder's name: every sibling below has a
  * folder name of its own, as the worktrees and checkouts of one repository do, and a copy that merely shares a name with another repository's is not one. What these pin: which sibling is taken (the same install key first, then the
  * most recently used; never a copy without the key, nor one whose project lock is held — a job of it may be in its dependencies step — nor one an `exec` runs in), that nothing is seeded where the disk cannot clone (a plain copy

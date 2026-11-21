@@ -1,5 +1,5 @@
 /**
- * @description `remoteRun/runner.sh`, a job that needs iOS on a Mac runner, the other half of the Simulator cases (the first is `remoteRunRunnerScriptSimulator.test.ts`; the two share
+ * @description `runner-scripts/runner.sh`, a job that needs iOS on a Mac runner, the other half of the Simulator cases (the first is `remoteRunRunnerScriptSimulator.test.ts`; the two share
  * `remoteRunRunnerScriptSimulatorKit.ts`, split because one file ran past 80 s alone and a loaded box cuts a unit file at the 2-minute cap): the job's device is shut down when the job ends any way — a failing command,
  * a timeout, a kill, a TERM that reaches the job before its command is forked — a `kill` waits for that shutdown past its grace, a second kill and a late TERM never cut it off, and the shutdown step is deaf to TERM.
  * The Simulator is a stand-in (`remoteRunRunnerJobKit.ts`) that keeps devices as files, so a test reads their state and the calls made.

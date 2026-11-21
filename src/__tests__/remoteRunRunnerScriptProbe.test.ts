@@ -1,5 +1,5 @@
 /**
- * @description `remoteRun/runner.sh` — the script that runs on a runner — as far as `probe` goes (the rest of the script is `remoteRunRunnerScript.test.ts`; a file runs
+ * @description `runner-scripts/runner.sh` — the script that runs on a runner — as far as `probe` goes (the rest of the script is `remoteRunRunnerScript.test.ts`; a file runs
  * under one time limit, and this half is the slow one: every probe asks the machine its questions): `probe` prints what `probe.ts` parses, fits its 20 s however many of
  * its questions hang, says what a paired runner adds (service, boot check, how the link keeps the machine awake, the tools a job runs with), and what a Mac says with fake
  * Xcode and caffeinate.

@@ -66,8 +66,8 @@ function copyBuiltCharness(destination: string): void {
   fs.copyFileSync(path.join(repoRoot, 'package.json'), path.join(destination, 'package.json'));
   // The package the hub packs for a runner carries the license text, and is refused without it (`runners/hubPackage.ts`).
   fs.copyFileSync(path.join(repoRoot, 'LICENSE'), path.join(destination, 'LICENSE'));
-  fs.mkdirSync(path.join(destination, 'remoteRun'));
-  fs.copyFileSync(path.join(repoRoot, 'remoteRun', 'runner.sh'), path.join(destination, 'remoteRun', 'runner.sh'));
+  fs.mkdirSync(path.join(destination, 'runner-scripts'));
+  fs.copyFileSync(path.join(repoRoot, 'runner-scripts', 'runner.sh'), path.join(destination, 'runner-scripts', 'runner.sh'));
   writeNodeInstallerStandIn(path.join(destination, ensureNodeScriptRelativePath));
   // The lock the hub packs for the runner (`runners/runnerLock.ts`): a package is made of it and `package.json`, and refused without it.
   fs.copyFileSync(path.join(repoRoot, runnerLockRelativePath), path.join(destination, runnerLockRelativePath));
@@ -75,7 +75,7 @@ function copyBuiltCharness(destination: string): void {
 }
 
 /**
- * The package's `remoteRun/ensureNode.sh` as a flow has it: no download — the runner's Node is the one running the flow. A flow that is about the Node
+ * The package's `runner-scripts/ensureNode.sh` as a flow has it: no download — the runner's Node is the one running the flow. A flow that is about the Node
  * install itself puts the real script back ({@link placeRealNodeInstaller}, {@link placeRootNodeInstallerWrapper}) and a local mirror of nodejs.org with it.
  */
 function writeNodeInstallerStandIn(scriptPath: string): void {
@@ -89,7 +89,7 @@ export function placeRealNodeInstaller(scriptPath: string): void {
 }
 
 /**
- * @description Make the hub's package carry a `remoteRun/ensureNode.sh` that runs the REAL script in `root` mode (what the admin line runs as root) with this
+ * @description Make the hub's package carry a `runner-scripts/ensureNode.sh` that runs the REAL script in `root` mode (what the admin line runs as root) with this
  * flow's own shared folder instead of `/usr/local` and this flow's mirror of nodejs.org instead of the network — the script's test seams, which the pasted line
  * never passes. Everything the script does is the real thing; only where it reads from and writes to is the flow's.
  */

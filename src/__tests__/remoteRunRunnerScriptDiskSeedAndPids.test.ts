@@ -1,5 +1,5 @@
 /**
- * @description `remoteRun/runner.sh` — the disk upkeep of a runner, the second part of `remoteRunRunnerScriptDisk.test.ts` (they share `remoteRunRunnerScriptDiskKit.ts`; split because a file runs under one time limit and one ran 91 s alone on a loaded box):
+ * @description `runner-scripts/runner.sh` — the disk upkeep of a runner, the second part of `remoteRunRunnerScriptDisk.test.ts` (they share `remoteRunRunnerScriptDiskKit.ts`; split because a file runs under one time limit and one ran 91 s alone on a loaded box):
  * a disk whose free figure does not follow the removals (APFS snapshots, purgeable space) and the copies cloned from each other that share blocks; the copy the first run of a submitted job is seeded from is pruned last;
  * the probe that picks a runner never prunes; a pid that went to a stranger pins nothing and the script's test of "that pid is still one of ours"; a submit waits behind another prune only while its own disk is short; a put-back that
  * meets a folder somebody just made. The disk and the sizes are faked by a `df` and a `du` on the PATH that read a `fake-kb` file in each copy.
@@ -300,7 +300,7 @@ describe('the script\'s test of "that pid is still one of ours" (`check_runner_p
     const named = startNamed;
     assert.equal(alive(named('/work/bin/runner-0a1b2c3d.sh')), 'alive', 'the uploaded script');
     assert.equal(alive(named('/other/version/runner-ffffffff.sh')), 'alive', 'another version of it');
-    assert.equal(alive(named('/repo/remoteRun/runner.sh')), 'alive', 'run from a checkout');
+    assert.equal(alive(named('/repo/runner-scripts/runner.sh')), 'alive', 'run from a checkout');
     assert.equal(alive(named('/Users/user/actions-runner/runsvc.sh')), 'not', 'GitHub\'s runner service, a long-lived process on build Macs');
     assert.equal(alive(named('/opt/some-runner-tool/start.sh')), 'not');
   });

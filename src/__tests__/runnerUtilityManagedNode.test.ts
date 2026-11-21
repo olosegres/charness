@@ -115,7 +115,7 @@ describe('looking after the runner\'s own Node (ensureOwnNode)', () => {
       return { ok: true, exitCode: 0, stdout: '', stderr: '', isTimedOut: false, ...answer };
     };
     return {
-      deps: { runner, currentNodePath: '/opt/homebrew/bin/node', currentNodeVersion: '25.1.0', scriptPath: '/app/remoteRun/ensureNode.sh', distUrl: null, sharedBase: path.join(root, 'shared'), checkScriptExists: () => true, ...overrides },
+      deps: { runner, currentNodePath: '/opt/homebrew/bin/node', currentNodeVersion: '25.1.0', scriptPath: '/app/runner-scripts/ensureNode.sh', distUrl: null, sharedBase: path.join(root, 'shared'), checkScriptExists: () => true, ...overrides },
       calls,
     };
   }
@@ -132,7 +132,7 @@ describe('looking after the runner\'s own Node (ensureOwnNode)', () => {
     const { deps, calls } = createDeps({ stdout: `${installed}\n`, stderr: 'charness-runner: installing Node.js v24.99.0\n' });
     assert.deepEqual(await ensureOwnNode(paths, deps), { kind: 'installed', nodePath: installed, log: 'installing Node.js v24.99.0', isMove: true });
     assert.equal(calls.length, 1);
-    assert.deepEqual([calls[0].file, calls[0].args], ['sh', ['/app/remoteRun/ensureNode.sh', 'own', paths.ownNodeDir]]);
+    assert.deepEqual([calls[0].file, calls[0].args], ['sh', ['/app/runner-scripts/ensureNode.sh', 'own', paths.ownNodeDir]]);
     assert.equal(calls[0].options.timeoutMs, moveDeadlineMs);
   });
 
@@ -140,7 +140,7 @@ describe('looking after the runner\'s own Node (ensureOwnNode)', () => {
     const own = writeFile(path.join(paths.ownNodeDir, 'v22.20.0', 'bin', 'node'));
     const same = createDeps({ stdout: `${own}\n` }, { currentNodePath: own, currentNodeVersion: '22.20.0' });
     assert.deepEqual(await ensureOwnNode(paths, same.deps), { kind: 'current' });
-    assert.deepEqual(same.calls[0].args, ['/app/remoteRun/ensureNode.sh', 'own', paths.ownNodeDir, '', '22']);
+    assert.deepEqual(same.calls[0].args, ['/app/runner-scripts/ensureNode.sh', 'own', paths.ownNodeDir, '', '22']);
     const newer = path.join(paths.ownNodeDir, 'v22.23.4', 'bin', 'node');
     const found = createDeps({ stdout: `${newer}\n` }, { currentNodePath: own, currentNodeVersion: '22.20.0' });
     assert.deepEqual(await ensureOwnNode(paths, found.deps), { kind: 'installed', nodePath: newer, log: '', isMove: false });
@@ -150,11 +150,11 @@ describe('looking after the runner\'s own Node (ensureOwnNode)', () => {
     const installed = path.join(paths.ownNodeDir, 'v22.99.0', 'bin', 'node');
     const withMirror = createDeps({ stdout: `${installed}\n` }, { distUrl: 'file:///mirror' });
     await ensureOwnNode(paths, withMirror.deps);
-    assert.deepEqual(withMirror.calls[0].args, ['/app/remoteRun/ensureNode.sh', 'own', paths.ownNodeDir, 'file:///mirror']);
+    assert.deepEqual(withMirror.calls[0].args, ['/app/runner-scripts/ensureNode.sh', 'own', paths.ownNodeDir, 'file:///mirror']);
     const own = writeFile(path.join(paths.ownNodeDir, 'v22.20.0', 'bin', 'node'));
     const onOwn = createDeps({ stdout: `${installed}\n` }, { distUrl: 'file:///mirror', currentNodePath: own, currentNodeVersion: '22.20.0' });
     await ensureOwnNode(paths, onOwn.deps);
-    assert.deepEqual(onOwn.calls[0].args, ['/app/remoteRun/ensureNode.sh', 'own', paths.ownNodeDir, 'file:///mirror', '22']);
+    assert.deepEqual(onOwn.calls[0].args, ['/app/runner-scripts/ensureNode.sh', 'own', paths.ownNodeDir, 'file:///mirror', '22']);
     assert.equal(createNodeMoveDeps('/app', runCommand, { [testNodeDistEnvName]: 'file:///m' }).distUrl, 'file:///m');
     assert.equal(createNodeMoveDeps('/app', runCommand, {}).distUrl, null);
     assert.equal(createNodeMoveDeps('/app', runCommand, { [testNodeDistEnvName]: '' }).distUrl, null);

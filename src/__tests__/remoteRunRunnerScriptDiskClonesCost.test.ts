@@ -1,5 +1,5 @@
 /**
- * @description `remoteRun/runner.sh` — the disk upkeep of a runner, the clones' COST part of `remoteRunRunnerScriptDiskClones.test.ts` (they share
+ * @description `runner-scripts/runner.sh` — the disk upkeep of a runner, the clones' COST part of `remoteRunRunnerScriptDiskClones.test.ts` (they share
  * `remoteRunRunnerScriptDiskKit.ts`; split because a file runs under one time limit and that one ran 115 s alone on a loaded box): the
  * cost is linear in the number of copies — each copy's group of clones is read once, by the probe and by the refusal that names the
  * biggest copies. Run against the real script and a real shell, with the fake disk of the kit.

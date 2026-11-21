@@ -62,11 +62,11 @@ export function createHubFixture(): HubFixture {
   const packageRoot = path.join(root, 'pkg');
   fs.mkdirSync(path.join(packageRoot, 'dist', 'runners'), { recursive: true });
   fs.mkdirSync(path.join(packageRoot, 'dist', '__tests__'), { recursive: true });
-  fs.mkdirSync(path.join(packageRoot, 'remoteRun'), { recursive: true });
+  fs.mkdirSync(path.join(packageRoot, 'runner-scripts'), { recursive: true });
   fs.writeFileSync(path.join(packageRoot, 'package.json'), `${JSON.stringify(fixturePackageJson, null, 2)}\n`);
-  fs.writeFileSync(path.join(packageRoot, 'remoteRun', 'runner-package-lock.json'), `${JSON.stringify(fixtureRunnerLock, null, 2)}\n`);
+  fs.writeFileSync(path.join(packageRoot, 'runner-scripts', 'runner-package-lock.json'), `${JSON.stringify(fixtureRunnerLock, null, 2)}\n`);
   fs.writeFileSync(path.join(packageRoot, 'LICENSE'), 'Charness License (test fixture)\n');
-  fs.writeFileSync(path.join(packageRoot, 'remoteRun', 'runner.sh'), '#!/usr/bin/env bash\necho runner\n', { mode: 0o755 });
+  fs.writeFileSync(path.join(packageRoot, 'runner-scripts', 'runner.sh'), '#!/usr/bin/env bash\necho runner\n', { mode: 0o755 });
   fs.writeFileSync(path.join(packageRoot, ensureNodeScriptRelativePath), '#!/bin/sh\necho picked\n', { mode: 0o755 });
   fs.writeFileSync(path.join(packageRoot, 'dist', 'cli.js'), 'console.log("cli");\n', { mode: 0o755 });
   fs.writeFileSync(path.join(packageRoot, 'dist', 'runners', 'example.js'), 'module.exports = 1;\n');

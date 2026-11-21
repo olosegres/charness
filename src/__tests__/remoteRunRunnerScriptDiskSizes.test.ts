@@ -1,5 +1,5 @@
 /**
- * @description `remoteRun/runner.sh` — the disk upkeep of a runner, the sizes and the concurrent-prune part of `remoteRunRunnerScriptDisk.test.ts` (they share `remoteRunRunnerScriptDiskKit.ts`; split because a file runs under one time limit
+ * @description `runner-scripts/runner.sh` — the disk upkeep of a runner, the sizes and the concurrent-prune part of `remoteRunRunnerScriptDisk.test.ts` (they share `remoteRunRunnerScriptDiskKit.ts`; split because a file runs under one time limit
  * and one ran 70+ s alone on a loaded box): the sizes of the project copies (`measure-copies`) and what `probe` says of them, and two prunes at once. Run against the real script and a real shell, with the fake disk of the kit.
  *
  * Test case: N/A — Charness has no Jira tracker.

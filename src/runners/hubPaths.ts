@@ -22,7 +22,7 @@ export interface HubContext {
   /** The node binary and the charness `cli.js` the gate wrapper runs. */
   nodePath: string;
   cliPath: string;
-  /** The folder with `package.json`, `dist/` and `remoteRun/` — the package a runner installs. */
+  /** The folder with `package.json`, `dist/` and `runner-scripts/` — the package a runner installs. */
   packageRoot: string;
   /** Where the hub side says that something went wrong which did NOT stop what it was doing (a leftover file it could not clean up). */
   log: (line: string) => void;
