@@ -17,7 +17,7 @@ import {
   buildLimitNoteText,
   checkHasFreshLimitUsage,
   decideLimitNote,
-  getLimitNoteRecordAfterNote,
+  getLimitNoteRecordAfterDeliveredNote,
   getLimitNoteRecordAfterProfilesCall,
   getLimitNoteRecordAfterWorkerWatch,
   limitNoteSkipReasons,
@@ -27,7 +27,10 @@ import {
   type OpenCodeProviderUsages,
 } from './plan';
 
-/** How long a turn-start note may be in flight before it is forgotten: well past the longest write into an agent's input (the FIFO stall budget, 2 min). */
+/**
+ * How long a turn-start or send-result note may be in flight before it is forgotten: well past the longest write into an agent's
+ * input (the FIFO stall budget, 2 min). A mid-turn note has no such expiry: its owner, the inbox, ends it on every exit.
+ */
 export const limitNoteInFlightMaxMs = 5 * 60 * 1000;
 
 /** The moment's name in a log line. */
@@ -54,7 +57,8 @@ export interface LimitNotesPorts {
  * other note is taken for the conversation, so two carrier prompts close together (a voice and a text, a message and a scheduled
  * run), or a prompt and a mid-turn note, never both carry one. Exactly one of the two ends it: `markDelivered` records it once the
  * prompt that carries it reached the session (or the hook took the inbox file that holds it); `release` gives it back when it did not
- * (the write failed, the session was gone, the inbox was withdrawn unseen), so the note stays due.
+ * (the write failed, the session was gone, the inbox was withdrawn unseen), so the note stays due. A note delivered after a newer look
+ * or note was recorded never rolls that record back (`getLimitNoteRecordAfterDeliveredNote`).
  */
 export interface TakenNote {
   text: string;
@@ -112,11 +116,13 @@ export function createLimitNotes(ports: LimitNotesPorts): LimitNotes {
   /** Whether the «nothing fresh» line was logged since figures last were fresh: said once per spell, not at every prompt. */
   let isNoFreshUsageLogged = false;
   /**
-   * The turn-start notes in flight, by conversation: when each was taken. A note whose prompt never reached a write that ends it
-   * (a forward that threw before the write) is forgotten after {@link limitNoteInFlightMaxMs}, so one lost path cannot silence the
-   * conversation for good.
+   * The notes in flight, by conversation: when each was taken, and whether it expires. A turn-start note whose prompt never reached
+   * a write that ends it (a forward that threw before the write) is forgotten after {@link limitNoteInFlightMaxMs}, so one lost
+   * path cannot silence the conversation for good. A mid-turn note never expires: it waits in the inbox for as long as no tool call
+   * finishes (a long watch, a `sleep`), and every way out of the inbox ends it — taken, withdrawn, replaced, cleared, a failed write.
+   * Were it forgotten meanwhile, a send result would carry a second note beside it.
    */
-  const notesInFlight = new Map<string, number>();
+  const notesInFlight = new Map<string, { takenAtMs: number; isExpiring: boolean }>();
 
   function runGuarded<TResult>(key: SessionKey, what: string, fallback: TResult, work: () => TResult): TResult {
     try {
@@ -128,9 +134,9 @@ export function createLimitNotes(ports: LimitNotesPorts): LimitNotes {
   }
 
   function checkIsNoteInFlight(key: SessionKey, nowMs: number): boolean {
-    const takenAt = notesInFlight.get(keyToString(key));
-    if (takenAt === undefined) return false;
-    if (nowMs - takenAt < limitNoteInFlightMaxMs) return true;
+    const inFlight = notesInFlight.get(keyToString(key));
+    if (inFlight === undefined) return false;
+    if (!inFlight.isExpiring || nowMs - inFlight.takenAtMs < limitNoteInFlightMaxMs) return true;
     notesInFlight.delete(keyToString(key));
     return false;
   }
@@ -166,19 +172,22 @@ export function createLimitNotes(ports: LimitNotesPorts): LimitNotes {
   function takeNote(key: SessionKey, moment: LimitNoteMoment, quietMs: number | null): TakenNote | null {
     const note = prepareNote(key, moment, quietMs);
     if (note === null) return null;
-    notesInFlight.set(keyToString(key), ports.getNowMs());
+    const takenAtMs = ports.getNowMs();
+    notesInFlight.set(keyToString(key), { takenAtMs, isExpiring: moment !== 'midTurn' });
     return {
       text: note.text,
       markDelivered: () => {
         notesInFlight.delete(keyToString(key));
-        runGuarded(key, `recording the ${noteMomentLabels[moment]} note`, undefined, () => recordNote(key, note.fingerprint));
+        runGuarded(key, `recording the ${noteMomentLabels[moment]} note`, undefined, () => recordNote(key, note.fingerprint, takenAtMs));
       },
       release: () => { notesInFlight.delete(keyToString(key)); },
     };
   }
 
-  function recordNote(key: SessionKey, fingerprint: string): void {
-    ports.setRecord(key, getLimitNoteRecordAfterNote(ports.getRecord(key), { atMs: ports.getNowMs(), fingerprint }));
+  function recordNote(key: SessionKey, fingerprint: string, takenAtMs: number): void {
+    const record = ports.getRecord(key);
+    const recorded = getLimitNoteRecordAfterDeliveredNote(record, { atMs: ports.getNowMs(), takenAtMs, fingerprint });
+    if (recorded !== record) ports.setRecord(key, recorded);
   }
 
   return {
@@ -187,7 +196,7 @@ export function createLimitNotes(ports: LimitNotesPorts): LimitNotes {
     takeSendResultNote: (key) => runGuarded(key, 'the send-result note', null, () => {
       const note = prepareNote(key, 'sendResult', null);
       if (note === null) return null;
-      recordNote(key, note.fingerprint);
+      recordNote(key, note.fingerprint, ports.getNowMs());
       return note.text;
     }),
     noteProfilesCall: (key) => runGuarded(key, 'recording a claude_profiles call', undefined, () => {

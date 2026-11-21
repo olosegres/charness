@@ -143,7 +143,7 @@ per-backend controls are optional methods the bot checks before calling.
   that streamed summary is tagged `OutboundHints.isCompactionSummary` and obeys the same switch. The
   backends' OWN overflow compaction gets the same summary guidance (name the loaded skills in a hidden `<<<LOADED_SKILLS>>>` block, say they are restored, give a self-review, the session's agent mistakes an instruction change could prevent — posted to the topic even with the summary hidden, and dropped from the request altogether by `/compact_self_review` OFF (a per-session flag file the hook and the plugin read) — and end with a numbered next-steps checklist — one text, `compactionResumeGuidance`, on every compaction path):
   Claude through a `PreCompact` hook (`utils/claudeCompactHook.ts`, `--settings` file in `DATA_DIR`, which also
-  carries the todo lists' `PostToolUse` inbox hook, `todos/midTurn.ts`),
+  carries the ONE `PostToolUse` inbox hook — the todo lists' board and the accounts note are sections of one file, `utils/midTurnInbox.ts`),
   OpenCode through a bot-installed global plugin (`utils/openCodeCompactPlugin.ts`; its file name carries a hash of its
   text, so an instance that loaded an older text does not count as loaded and is recreated); at boot
   `activateCompactionPluginForActiveSessions` recreates idle directory instances that lack it BEFORE the

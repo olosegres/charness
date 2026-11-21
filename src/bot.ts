@@ -3257,10 +3257,11 @@ function clearThreadContextMarker(key: SessionKey): void {
   // this session will take is withdrawn.
   noteTodoFreshContext(key);
   discardTodoInbox(key);
-  // …and for the accounts notes: the agent no longer holds the picture its last note showed (the reminder clock stays), and a
-  // mid-turn note waiting for a tool call of a session that is going away is withdrawn.
-  state.clearLimitNoteFingerprint(key);
+  // …and for the accounts notes: a mid-turn note waiting for a tool call of a session that is going away is withdrawn FIRST — a
+  // file the hook already took is counted as delivered there, and that record must not land after the reset below — then the agent no
+  // longer holds the picture its last note showed (the reminder clock stays).
   withdrawAccountsInbox(key);
+  state.clearLimitNoteFingerprint(key);
 }
 
 function getThreadMessageState(key: SessionKey): ThreadMessageState {
@@ -15533,6 +15534,8 @@ let connectorConversationHooks: ReadonlyMap<PlatformId, ConnectorConversationHoo
 function noteConversationContextReset(key: SessionKey, reason: string): void {
   // A completed compaction or a fresh session: the agent forgot the board too (D20), and the picture of the accounts' limits.
   noteTodoFreshContext(key);
+  // The accounts note's inbox first (see `clearThreadContextMarker`): a note the hook took before the compaction is recorded, then forgotten.
+  withdrawAccountsInbox(key);
   state.clearLimitNoteFingerprint(key);
   connectorConversationHooks.get(key.platform)?.onContextReset(key, reason);
 }
@@ -15825,7 +15828,11 @@ function wireScheduler(wiring: SchedulerWiringDeps): SchedulerMcpHandle {
     },
     noteLimitProfilesCall: (threadKeyStr) => {
       const key = tryKeyFromString(threadKeyStr);
-      if (key !== null) getLimitNotes().noteProfilesCall(key);
+      if (key === null) return;
+      // The agent looks now: a reminder still waiting in its inbox is stale before it is read — the hook runs after this tool's result —
+      // so it is withdrawn (a file the hook already took is recorded first), then the look is recorded over it.
+      withdrawAccountsInbox(key);
+      getLimitNotes().noteProfilesCall(key);
     },
     noteLimitWorkerWatch: (threadKeyStr) => {
       const key = tryKeyFromString(threadKeyStr);

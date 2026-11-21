@@ -63,6 +63,7 @@ describe('the engine over fakes: which session is offered a due reminder, and wh
   let sessionIds: Map<string, string | null>;
   let takeCalls: string[];
   let clockMs: number;
+  let workWeeklyPercent: number;
   let engine: LimitNotesEngine;
 
   const inboxDir = (): string => getMidTurnInboxDir(dataDir);
@@ -88,12 +89,13 @@ describe('the engine over fakes: which session is offered a due reminder, and wh
     sessionIds = new Map([[keyToString(key), sessionId], [keyToString(secondKey), secondSessionId]]);
     takeCalls = [];
     clockMs = nowMs;
+    workWeeklyPercent = 62;
     const ports: LimitNotesPorts = {
       getRecord: (target) => records.get(keyToString(target)),
       setRecord: (target, record) => { if (record === null) records.delete(keyToString(target)); else records.set(keyToString(target), record); },
       getIntervalMs: () => hourMs,
       getWindows: () => defaultLimitNoteWindows,
-      getReport: () => buildReport(),
+      getReport: () => buildReport(workWeeklyPercent),
       getOpenCodeUsage: () => ({}),
       getTimezone: () => 'UTC',
       getBackendName: () => claudeJsonStreamAdapterName,
@@ -118,6 +120,33 @@ describe('the engine over fakes: which session is offered a due reminder, and wh
     assert.equal(records.get(keyToString(key))?.lastNoteAt, nowMs, 'the next poll finds the file taken and records the note');
     assert.match(records.get(keyToString(key))?.fingerprint ?? '', /^rec=work\|/);
     assert.equal(fs.existsSync(inboxFile()), false, 'and offers nothing: not due any more');
+  });
+
+  it('the agent\'s claude_profiles call withdraws a waiting reminder before the hook can hand it over — and the look it records is the record that stands', async () => {
+    await engine.poll();
+    workWeeklyPercent = 75;
+    clockMs = nowMs + minuteMs;
+    // What the bot's port for the tool does, in its order: the stale reminder goes, then the look is recorded.
+    inbox.withdraw(key, 'accounts');
+    notes.noteProfilesCall(key);
+    const afterLook = records.get(keyToString(key));
+    assert.equal(runHook(inboxDir()), '', 'the tool\'s own PostToolUse hook finds nothing: the agent is not told to call the tool right after it did');
+    clockMs = nowMs + 2 * minuteMs;
+    await engine.poll();
+    assert.deepEqual(records.get(keyToString(key)), afterLook, 'and nothing was recorded over the look');
+    assert.equal(fs.existsSync(inboxFile()), false, 'the clock restarted with the look: nothing is due, so nothing is offered again');
+  });
+
+  it('a reminder the hook took AFTER the agent looked (no withdrawal in between) is recorded without rolling the look back', async () => {
+    await engine.poll();
+    workWeeklyPercent = 75;
+    clockMs = nowMs + minuteMs;
+    notes.noteProfilesCall(key);
+    const afterLook = records.get(keyToString(key));
+    assert.ok(readAdditionalContext(runHook(inboxDir())).startsWith('[Accounts'), 'the file was still there for the hook');
+    clockMs = nowMs + 2 * minuteMs;
+    await engine.poll();
+    assert.deepEqual(records.get(keyToString(key)), afterLook, 'the older picture the note carried does not replace the one the agent looked at');
   });
 
   it('a note that waits is not rewritten by the next poll, and another conversation has its own file', async () => {
@@ -412,6 +441,24 @@ describe('on the real json-stream adapter, a real StateStore and the real hook',
     assert.equal(state.getLimitNoteRecord(key)?.lastNoteAt, nowMs, 'its own record is all that moved');
     assert.deepEqual(stdinWrites, [], 'never a write to the agent');
     assert.deepEqual([...new Set(stateCalls)].sort(), ['getLimitNoteRecord', 'setLimitNoteRecord'], 'the only state the notes and the engine ever reach');
+  });
+
+  it('a fresh context after the hook took the note: the withdrawal comes first and records it, then the reset clears the fingerprint — the reset is the last write', async () => {
+    await engine.poll();
+    runHook(getMidTurnInboxDir(dataDir));
+    // The order of `clearThreadContextMarker` / `noteConversationContextReset` in the bot (`limitNotesWiring.test.ts` pins it).
+    inbox.withdraw(key, 'accounts');
+    state.clearLimitNoteFingerprint(key);
+    assert.equal(state.getLimitNoteRecord(key)?.fingerprint, undefined, 'the agent holds no picture of the limits any more');
+    assert.equal(state.getLimitNoteRecord(key)?.lastNoteAt, nowMs, 'the note it read is on the clock');
+  });
+
+  it('the reverse order — what the order guards against — leaves the cleared picture back on record', async () => {
+    await engine.poll();
+    runHook(getMidTurnInboxDir(dataDir));
+    state.clearLimitNoteFingerprint(key);
+    inbox.withdraw(key, 'accounts');
+    assert.notEqual(state.getLimitNoteRecord(key)?.fingerprint, undefined);
   });
 
   it('L2: the poll over an idle, an asleep and a busy session stamps no activity, turn end, compaction or held mark — nor a request', async () => {

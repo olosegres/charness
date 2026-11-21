@@ -229,6 +229,45 @@ describe('the mid-turn note', () => {
     assert.equal(harness.notes.takeMidTurnNote(key)?.text, note.text);
   });
 
+  it('it has no expiry: a note that waits in the inbox for as long as no tool call finishes still holds the conversation — no send-result summary and no turn-start note beside it', () => {
+    const note = harness.notes.takeMidTurnNote(key);
+    assert.ok(note !== null);
+    harness.state.nowMs = nowMs + 3 * limitNoteInFlightMaxMs;
+    assert.equal(harness.notes.takeSendResultNote(key), null, 'the record is due for a changed summary, and still nothing rides the result');
+    assert.equal(harness.notes.takeTurnStartNote(key, null), null);
+    assert.equal(harness.notes.takeMidTurnNote(key), null);
+    note.release();
+    assert.ok(harness.notes.takeSendResultNote(key) !== null, 'given back: free again');
+  });
+
+  it('delivered after the agent called claude_profiles: the look stands — the older picture is not recorded over it, so no «changed» summary reads as news', () => {
+    const note = harness.notes.takeMidTurnNote(key);
+    assert.ok(note !== null);
+    harness.state.nowMs = nowMs + minuteMs;
+    harness.state.report = buildReport(75);
+    harness.notes.noteProfilesCall(key);
+    const afterLook = harness.records.get(keyToString(key));
+    assert.equal(afterLook?.lastProfilesCallAt, nowMs + minuteMs);
+    harness.state.nowMs = nowMs + 2 * minuteMs;
+    note.markDelivered();
+    assert.deepEqual(harness.records.get(keyToString(key)), afterLook, 'the late delivery changes nothing');
+    harness.state.nowMs = nowMs + 40 * minuteMs;
+    assert.equal(harness.notes.takeSendResultNote(key), null, 'nothing moved since the agent looked');
+  });
+
+  it('delivered after a send result already carried a newer summary: that summary\'s record stands', () => {
+    const note = harness.notes.takeMidTurnNote(key);
+    assert.ok(note !== null);
+    note.release();
+    const late = harness.notes.takeMidTurnNote(key);
+    assert.ok(late !== null);
+    harness.state.nowMs = nowMs + minuteMs;
+    harness.records.set(keyToString(key), orchestrating({ lastNoteAt: nowMs + 30 * 1000, fingerprint: 'rec=newer-note' }));
+    late.markDelivered();
+    assert.equal(harness.records.get(keyToString(key))?.fingerprint, 'rec=newer-note');
+    assert.equal(harness.records.get(keyToString(key))?.lastNoteAt, nowMs + 30 * 1000);
+  });
+
   it('a conversation that never orchestrated, Off, and a backend that gets no notes have none — the same gates as every moment', () => {
     harness.records.delete(keyToString(key));
     assert.equal(harness.notes.takeMidTurnNote(key), null);

@@ -97,6 +97,18 @@ export function getLimitNoteRecordAfterNote(record: LimitNoteRecord | undefined,
 }
 
 /**
+ * @description {@link getLimitNoteRecordAfterNote} for a note TAKEN at `takenAtMs` and delivered later (a mid-turn note waits for
+ * the agent's next tool call). A look or a note that came in between — the agent's `claude_profiles` call, a send result's summary —
+ * holds a newer picture and has restarted the reminder clock: recording the older note over it would put its stale fingerprint
+ * back, and the next summary would read as a change although nothing moved since the agent looked. Then the record stays as it is.
+ */
+export function getLimitNoteRecordAfterDeliveredNote(record: LimitNoteRecord | undefined, input: { atMs: number; takenAtMs: number; fingerprint: string }): LimitNoteRecord {
+  const newerStampMs = Math.max(record?.lastNoteAt ?? 0, record?.lastProfilesCallAt ?? 0);
+  if (record !== undefined && newerStampMs > input.takenAtMs) return record;
+  return getLimitNoteRecordAfterNote(record, input);
+}
+
+/**
  * @description `record` after the agent called `claude_profiles` (it LOOKED: the reminder clock restarts, and it holds the picture
  * the answer showed) — which is also how a conversation counts as orchestrating workers.
  */

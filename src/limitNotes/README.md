@@ -101,13 +101,21 @@ A running Claude turn learns where the limits stand after its NEXT TOOL CALL, no
   `markDelivered`). A section withdrawn unseen — the turn ended, was held open, the session ended or changed, a turn start the bot
   makes (its prompt may carry the note itself), a boot — gives the note back (`release`) and it stays due. While it waits, no other
   note is taken for the conversation (the in-flight note: it also closes a window in which a send tool's result could carry a
-  second one); a turn start or a session boundary withdraws it first. The in-flight mark of any note is forgotten after
-  `limitNoteInFlightMaxMs` (5 min) whatever its owner did, so one lost path never silences a conversation. A mid-turn note that waits
-  longer than that (no tool call finished for 5 min) stops counting as in flight: the result of the next send tool may then carry a
-  summary beside the reminder the hook gives, two short notes in one moment — never a lost one.
+  second one); a turn start or a session boundary withdraws it first. The in-flight mark of a turn-start note is forgotten after
+  `limitNoteInFlightMaxMs` (5 min) whatever its owner did, so one lost path never silences a conversation. A MID-TURN note has no
+  expiry: it can wait as long as no tool call finishes (a long watch, a `sleep`), and the inbox ends it on every exit — taken,
+  withdrawn, replaced, cleared at boot, a failed write (the engine gives it back) — so nothing else is carried beside it meanwhile.
+- **A late delivery never rolls the record back.** The note's fingerprint is that of the moment it was TAKEN. When the hook takes the
+  file after a newer look or note was recorded (`lastProfilesCallAt` or `lastNoteAt` later than the take), the record stays as it is
+  (`getLimitNoteRecordAfterDeliveredNote`): the older picture would otherwise make the next summary read as a change although nothing
+  moved since the agent looked. The `claude_profiles` call also withdraws a waiting reminder before its result is returned — the hook
+  runs only after that result, so the agent is not told to call the tool right after it did.
 - **Where it is withdrawn** (`bot.ts` `withdrawAccountsInbox`, a guard in `limitNotesWiring.test.ts` lists the callers): every forward
   (a slash command too: `/compact` opens a held turn), the adapter's turn end, a session's start / close / suspension / stop
-  (`clearThreadContextMarker`), and the engine's own poll for a session that is no longer busy or is held open. The boot clears every
+  (`clearThreadContextMarker`), a conversation's fresh context (`noteConversationContextReset`), the agent's `claude_profiles` call,
+  and the engine's own poll for a session that is no longer busy or is held open. Where the fingerprint is cleared (a fresh context)
+  the withdrawal comes FIRST: a file the hook had already taken is recorded as delivered by it, and that record must not land after the
+  reset. A withdrawal whose rewrite of the file fails removes the file whole and gives every section back. The boot clears every
   inbox file (`clearAll`): what one carried is still due.
 - **Read-only towards every lifecycle module.** The engine imports only the session key and three types; its deps are the conversation
   list, the Claude session id, the turn probe, the notes' `takeMidTurnNote` and the inbox — a guard pins both.

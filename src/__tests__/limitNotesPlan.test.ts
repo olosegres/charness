@@ -16,6 +16,7 @@ import {
   buildLimitNoteText,
   checkHasFreshLimitUsage,
   decideLimitNote,
+  getLimitNoteRecordAfterDeliveredNote,
   getLimitNoteRecordAfterNote,
   getLimitNoteRecordAfterProfilesCall,
   getLimitNoteRecordAfterWorkerWatch,
@@ -579,6 +580,19 @@ describe('the record after each thing that can happen to a conversation', () => 
   it('a note: its time and the picture it showed; the orchestration mark and the last call stay', () => {
     assert.deepEqual(getLimitNoteRecordAfterNote(before, { atMs: nowMs, fingerprint: 'rec=new' }), { lastNoteAt: nowMs, fingerprint: 'rec=new', lastOrchestratedAt: 2, lastProfilesCallAt: 3 });
     assert.deepEqual(getLimitNoteRecordAfterNote(undefined, { atMs: nowMs, fingerprint: 'rec=new' }), { lastNoteAt: nowMs, fingerprint: 'rec=new' }, 'a conversation with no record yet');
+  });
+
+  it('a note taken earlier and delivered now: recorded like any note — unless a newer look or note was recorded since it was taken, which it must never roll back', () => {
+    const takenAtMs = 100;
+    const input = { atMs: 500, takenAtMs, fingerprint: 'rec=taken' };
+    assert.deepEqual(getLimitNoteRecordAfterDeliveredNote(before, input), { lastNoteAt: 500, fingerprint: 'rec=taken', lastOrchestratedAt: 2, lastProfilesCallAt: 3 }, 'nothing newer since the take: as a note');
+    assert.deepEqual(getLimitNoteRecordAfterDeliveredNote(undefined, input), { lastNoteAt: 500, fingerprint: 'rec=taken' });
+    const looked: LimitNoteRecord = { ...before, lastProfilesCallAt: 300, fingerprint: 'rec=looked' };
+    assert.equal(getLimitNoteRecordAfterDeliveredNote(looked, input), looked, 'the agent called claude_profiles after the take: it holds the newer picture');
+    const noted: LimitNoteRecord = { ...before, lastNoteAt: 300, fingerprint: 'rec=noted' };
+    assert.equal(getLimitNoteRecordAfterDeliveredNote(noted, input), noted, 'a newer note (a send result\'s summary) was recorded: its picture stands');
+    const sameInstant: LimitNoteRecord = { ...before, lastProfilesCallAt: takenAtMs };
+    assert.equal(getLimitNoteRecordAfterDeliveredNote(sameInstant, input).fingerprint, 'rec=taken', 'a stamp AT the take is not newer than it');
   });
 
   it('a `claude_profiles` call: it looked and it orchestrates, and holds the picture of the answer; the last note\'s time stays', () => {

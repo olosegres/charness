@@ -239,11 +239,25 @@ export function createMidTurnInbox(deps: MidTurnInboxDeps): MidTurnInbox {
       const withdrawn = pending?.sections.get(section);
       if (pending === undefined || withdrawn === undefined) return;
       pending.sections.delete(section);
-      if (pending.sections.size === 0) {
+      const remaining = midTurnInboxSections.flatMap((name) => pending.sections.get(name) ?? []);
+      try {
+        if (remaining.length === 0) {
+          pendingInboxes.delete(conversationKey);
+          fs.rmSync(pending.filePath, { force: true });
+        } else {
+          writeInbox(pending);
+        }
+      } catch (error) {
+        // The file would keep the withdrawn text — a hook could hand it to the agent in a LATER turn, the double note the withdrawal
+        // exists to prevent. Remove it whole and withdraw every section it held: «withdrawn» only means «stays due / stays unseen».
         pendingInboxes.delete(conversationKey);
-        fs.rmSync(pending.filePath, { force: true });
-      } else {
-        writeInbox(pending);
+        try {
+          fs.rmSync(pending.filePath, { force: true });
+        } finally {
+          for (const offer of remaining) offer.onWithdrawn?.();
+          withdrawn.onWithdrawn?.();
+        }
+        throw error;
       }
       withdrawn.onWithdrawn?.();
     },

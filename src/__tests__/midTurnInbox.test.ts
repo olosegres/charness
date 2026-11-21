@@ -136,6 +136,33 @@ describe('a conversation whose session changed, a session id that is no file nam
   });
 });
 
+describe('a withdrawal whose rewrite of the file fails', () => {
+  it('removes the file whole and gives EVERY section back — the withdrawn text must never be left for a later turn\'s hook; the failure is thrown for the caller to log', () => {
+    offerSection('accounts', 'NOTE');
+    offerSection('todoBoard', 'BOARD');
+    // A directory where the bot\'s temp file goes: the rewrite of the file without the withdrawn section throws.
+    fs.mkdirSync(`${inboxPath()}.${process.pid}.tmp`);
+    assert.throws(() => inbox.withdraw(key, 'accounts'));
+    assert.equal(fs.existsSync(inboxPath()), false, 'no stale text is left for the hook');
+    assert.equal(runHook(), '');
+    assert.deepEqual([...events].sort(), ['withdrawn accounts', 'withdrawn todoBoard'], 'both are told: neither stays «in flight» nor «offered»');
+    assert.equal(inbox.checkIsWaiting(key, 'accounts'), false);
+    assert.equal(inbox.checkIsWaiting(key, 'todoBoard'), false);
+  });
+
+  it('a later offer starts clean after it', () => {
+    offerSection('accounts', 'NOTE');
+    offerSection('todoBoard', 'BOARD');
+    fs.mkdirSync(`${inboxPath()}.${process.pid}.tmp`);
+    assert.throws(() => inbox.withdraw(key, 'accounts'));
+    fs.rmdirSync(`${inboxPath()}.${process.pid}.tmp`);
+    events.length = 0;
+    offerSection('accounts', 'NOTE 2');
+    assert.equal(readContext(), 'NOTE 2');
+    assert.deepEqual(events, []);
+  });
+});
+
 describe('boot and leftovers', () => {
   it('clearAll removes every inbox, a session that ended and left one included, and tells each waiting section it was withdrawn', () => {
     offerSection('accounts', 'NOTE');

@@ -137,7 +137,7 @@ describe('the topic never shows the note, and the bot\'s MCP ports reach the not
 
   it('the scheduler\'s MCP deps take the send-result note and record the two orchestration calls through the one notes object', () => {
     assert.match(botSource, /takeLimitNoteForSend: \(threadKeyStr\) => \{\n\s*const key = tryKeyFromString\(threadKeyStr\);\n\s*return key === null \? null : getLimitNotes\(\)\.takeSendResultNote\(key\);\n\s*\},/);
-    assert.match(botSource, /noteLimitProfilesCall: \(threadKeyStr\) => \{\n\s*const key = tryKeyFromString\(threadKeyStr\);\n\s*if \(key !== null\) getLimitNotes\(\)\.noteProfilesCall\(key\);\n\s*\},/);
+    assert.match(botSource, /noteLimitProfilesCall: \(threadKeyStr\) => \{\n\s*const key = tryKeyFromString\(threadKeyStr\);\n\s*if \(key === null\) return;\n(?:\s*\/\/[^\n]*\n)+\s*withdrawAccountsInbox\(key\);\n\s*getLimitNotes\(\)\.noteProfilesCall\(key\);\n\s*\},/);
     assert.match(botSource, /noteLimitWorkerWatch: \(threadKeyStr\) => \{\n\s*const key = tryKeyFromString\(threadKeyStr\);\n\s*if \(key !== null\) getLimitNotes\(\)\.noteWorkerWatch\(key\);\n\s*\},/);
   });
 
@@ -217,7 +217,10 @@ describe('where the accounts section of the mid-turn inbox is withdrawn unseen',
       'handleAgentStarted',
       'handleAgentSuspended',
       'handleAgentTurnEnded',
-    ]);
+      'noteConversationContextReset',
+      // The `claude_profiles` tool's port, inside the composition root's deps (the enclosing declaration of that block).
+      ...listEnclosingDeclarations('noteLimitProfilesCall: (threadKeyStr) => {'),
+    ].sort());
     assert.match(getFunctionBody('withdrawAccountsInbox'), /getMidTurnInbox\(\)\.withdraw\(key, 'accounts'\);/);
   });
 
@@ -242,6 +245,24 @@ describe('L11: the self-update idle verdict reads nothing a note moves', () => {
     assert.match(verdict, /hasUnconsumedInput: keys\.some\(\(key\) => getThreadAdapter\(key\)\.checkHasUnconsumedInput\?\.\(key\) === true\),/);
     assert.match(verdict, /lastHumanMessageAt: lastHumanInboundAt,/);
     assert.equal(/limitNote|LimitNote|accountsNote/.test(verdict), false, 'the verdict knows nothing of notes');
+  });
+});
+
+describe('the order of a withdrawal and the record it may write', () => {
+  it('a fresh context withdraws BEFORE it clears the fingerprint — a file the hook already took is recorded by the withdrawal, and that record must not land after the reset', () => {
+    for (const name of ['clearThreadContextMarker', 'noteConversationContextReset']) {
+      const body = getFunctionBody(name);
+      const withdraw = body.indexOf('withdrawAccountsInbox(key);');
+      const clear = body.indexOf('state.clearLimitNoteFingerprint(key);');
+      assert.ok(withdraw > 0 && clear > withdraw, `${name}: withdraw, then clear`);
+    }
+  });
+
+  it('the `claude_profiles` port withdraws a waiting reminder first, then records the look: the stale reminder is gone before the tool\'s own hook runs, and the look is the last write', () => {
+    const start = botSource.indexOf('noteLimitProfilesCall: (threadKeyStr) => {');
+    const port = botSource.slice(start, botSource.indexOf('\n    },', start));
+    const withdraw = port.indexOf('withdrawAccountsInbox(key);');
+    assert.ok(withdraw > 0 && port.indexOf('getLimitNotes().noteProfilesCall(key);') > withdraw, 'withdraw, then the look');
   });
 });
 
