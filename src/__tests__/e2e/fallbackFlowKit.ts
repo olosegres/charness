@@ -12,6 +12,7 @@ import { IsolatedCharness, readJsonLines, type IsolatedInstanceLayout } from './
 import type { FakeTelegram, FakeTelegramMessage } from '../telegramE2e/fakeTelegram';
 import type { TopicDriver } from '../telegramE2e/topicDriver';
 import type { AgentData, BindingData, ClaudeProfileRecord, CompactIdleTrackingEntry, ParkedSession } from '../../state';
+import type { ClaudeAccountAlertState } from '../../utils/claudeAccountAlert';
 import type { FallbackChainEntry } from '../../utils/fallbackChain';
 import type { ClaudeCostBaseline } from '../../utils/claudeApiSpend';
 import type { LimitNoteRecord } from '../../limitNotes/plan';
@@ -29,6 +30,8 @@ const resetHourUtc = 1;
 /** The slice of `state.json` the flows read and edit. */
 export interface PersistedState {
   claudeProfiles?: Record<string, ClaudeProfileRecord>;
+  /** What the operator was told of the accounts' sign-ins (`utils/claudeAccountAlert.ts`). */
+  claudeAccountAlerts?: ClaudeAccountAlertState;
   /** The per-topic account picks, keyed by the topic. */
   claudeProfileOverrides?: Record<string, string>;
   fallbackChain?: FallbackChainEntry[];

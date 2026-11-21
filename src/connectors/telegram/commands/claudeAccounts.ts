@@ -52,6 +52,7 @@ import {
   accountFollowDefaultCallback,
   accountLoginCallbackRe,
   accountLoginMenuCallback,
+  accountSignInCallbackRe,
   accountOpenCodeModelCallbackRe,
   accountOpenCodePageCallbackRe,
   accountOpenCodeUseCallbackRe,
@@ -900,6 +901,16 @@ export function createClaudeAccounts(ports: ClaudeAccountsPorts) {
       if (name === null) { await answerCallbackQuerySafely(ctx); return; }
       await answerCallbackQuerySafely(ctx);
       await rerenderPicker(key, messageId, isGeneral); // the sub-picker is consumed back into the main picker
+      const message = await loginProfile(key, name);
+      if (message) await replyToThread(key, message);
+    }));
+
+    // The sign-in tap of a message that is not the picker (the private sign-out message, a signed-out `/limits` row): the same
+    // flow, the message stays as it is.
+    bot.action(accountSignInCallbackRe, (ctx) => handleTap(ctx, async (key) => {
+      const name = parseAccountCallbackName(ctx.match[0], accountSignInCallbackRe, { allowDefault: true });
+      await answerCallbackQuerySafely(ctx);
+      if (name === null) return;
       const message = await loginProfile(key, name);
       if (message) await replyToThread(key, message);
     }));

@@ -8,7 +8,11 @@
  *     can work) and what to do (sign it in again — how, where the text is read; an organization's switch asks the admin too);
  *   • an account told and usable again gets one line — unless only a status check ended its bare 401 / 403 refusal: no sign-in
  *     happened, so it leaves the told accounts quietly, and its repeat (held until a new login) is told once more, then never again;
- *   • the record keeps what a round wrote: a post that waited on Telegram writes back only its pin.
+ *   • the record keeps what a round wrote: a post that waited on Telegram writes back only its pin;
+ *   • a SIGNED-OUT account (`signedOut`, `notSignedIn`) is also told in a private message with a sign-in button — the list rides the
+ *     alert, so once per sign-out episode: told again only after it was signed in again and signed out again; an organization's switch
+ *     and a bare 401 / 403 stay in General (a sign-in does not mend them); the message names the account in every locale. The send
+ *     itself (the owner's private chat, Telegram's 403) is `signOutDmE2e.test.ts`.
  *
  * Test case: N/A — Charness has no Jira tracker.
  */
@@ -25,8 +29,10 @@ import type { ClaudeProfileUsability } from '../utils/claudeAuthRefusal';
 import {
   claudeAccountAlertDetailMaxChars,
   getClaudeAccountAlertDetail,
+  listClaudeAccountSignOutNames,
   planClaudeAccountAlert,
   renderClaudeAccountAlert,
+  renderClaudeAccountSignOutDm,
   type ClaudeAccountAlert,
   type ClaudeAccountAlertState,
 } from '../utils/claudeAccountAlert';
@@ -165,6 +171,53 @@ describe('every locale', () => {
       assert.ok(!/\{\w+\}/.test(text), `no placeholder left in ${text}`);
       const moved = runWithLocale(locale as Locale, () => renderClaudeAccountAlert({ ...alert, instead: 'second' }, (name) => name));
       assert.ok(moved.includes('«second»'), moved);
+    });
+  }
+});
+
+describe('the private sign-out message: which accounts, once per episode, and its words', () => {
+  it('only the accounts SIGNED OUT are in it — an organization\'s switch and a bare 401 / 403 stay in General', () => {
+    const alert: ClaudeAccountAlert = {
+      lost: [
+        { name: 'personal', usability: 'signedOut', detail: notLoggedIn },
+        { name: 'work', usability: 'orgDisabled', detail: null },
+        { name: 'third', usability: 'rejected', detail: null },
+        { name: 'fourth', usability: 'notSignedIn', detail: null },
+      ],
+      back: ['fifth'],
+      instead: null,
+    };
+    assert.deepEqual(listClaudeAccountSignOutNames(alert), ['personal', 'fourth']);
+    assert.deepEqual(listClaudeAccountSignOutNames({ lost: [], back: ['personal'], instead: 'second' }), [], 'a «signed in again» line asks nothing of the operator');
+  });
+
+  it('once per sign-out episode: the list is the alert\'s, so a refusal that repeats says nothing — only a new sign-out after a sign-in does', () => {
+    const signedOut = plan(undefined, [['personal', 'signedOut'], ['second', 'usable']], { details: [['personal', notLoggedIn]] });
+    assert.equal(signedOut.alert === null ? null : listClaudeAccountSignOutNames(signedOut.alert).join(), 'personal', 'the first refusal');
+    const repeated = plan(signedOut.next, [['personal', 'signedOut'], ['second', 'usable']], { details: [['personal', notLoggedIn]] });
+    assert.equal(repeated.alert, null, 'refused again on the next turn, and by the next poll: no alert, so no second private message');
+    const asProbe = plan(signedOut.next, [['personal', 'notSignedIn'], ['second', 'usable']]);
+    assert.equal(asProbe.alert, null, 'the status check finds the same sign-out: still the same episode');
+    const back = plan(signedOut.next, [['personal', 'usable'], ['second', 'usable']]);
+    assert.deepEqual(back.alert && listClaudeAccountSignOutNames(back.alert), [], 'signed in again: the one «signed in again» line, no sign-in message');
+    const again = plan(back.next, [['personal', 'signedOut'], ['second', 'usable']]);
+    assert.equal(again.alert === null ? null : listClaudeAccountSignOutNames(again.alert).join(), 'personal', 'a new sign-out episode is told again');
+  });
+
+  it('the message is the line naming the account plus the button of the /accounts sign-in, with the name baked into its data', () => {
+    const dm = renderClaudeAccountSignOutDm('personal');
+    assert.equal(dm.text, '🔑 Claude account «personal» is signed out — its sign-in expired. Tap the button to sign it in again.');
+    assert.equal(dm.buttonLabel, '🔑 Sign in again');
+    assert.equal(dm.callbackData, 'acct_signin_personal');
+    assert.ok(Buffer.byteLength(renderClaudeAccountSignOutDm('x'.repeat(32)).callbackData) <= 64, 'the longest account name fits Telegram\'s 64 bytes');
+  });
+
+  for (const locale of localeCodes) {
+    it(`${locale}: the message names its account, has a button label and leaves no placeholder`, () => {
+      const dm = runWithLocale(locale as Locale, () => renderClaudeAccountSignOutDm('personal'));
+      assert.ok(dm.text.includes('«personal»'), dm.text);
+      assert.ok(dm.buttonLabel.startsWith('🔑 ') && dm.buttonLabel.length > 3, dm.buttonLabel);
+      assert.ok(!/\{\w+\}/.test(`${dm.text}${dm.buttonLabel}`), `no placeholder left in ${dm.text}`);
     });
   }
 });

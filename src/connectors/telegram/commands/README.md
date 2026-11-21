@@ -456,7 +456,9 @@ port (the live OpenCode catalog; `[]` when unreadable). «➕ OpenCode provider�
 `startOpenCodeConnect` (`showConnectMethodPicker` — the `/connect <provider>` method picker, flow unchanged); a bad id
 keeps the capture armed. The old login / remove sub-pickers and their buttons keep answering. A button BAKES the profile name into its
 data (names are slugs of at most 32 characters, so the data stays under 64 bytes) — an old keyboard can never act
-on another profile. A regular topic sets its own pick, General the instance default; the picker is meant for
+on another profile. `acct_signin_<name>` is the picker's 🔑 for a message that is NOT the picker — the operator's private sign-out message
+(`bot.ts` `sendClaudeAccountSignOutDms`, `utils/claudeAccountAlert.ts`) and a signed-out `/limits` row: it starts the same sign-in (`loginProfile`) in the
+chat it was tapped in and leaves its message as it is, where `acct_login_<name>` re-renders its message as the picker. A regular topic sets its own pick, General the instance default; the picker is meant for
 repeated use and re-renders in place. The module owns no process: it asks the bot through ports to probe
 `claude auth status --json` under a profile's directory (`readClaudeAuthStatus`; every render runs the shared scan
 `syncClaudeProfiles` — `utils/claudeProfileSync.ts`, FORCED: every profile is probed and a profile folder signed in by hand that has
@@ -541,11 +543,12 @@ its text gains the same `handover.note` line.
 button). Text, joined by blank lines: the usage block (`formatLimitsUsageBlock` in `utils/limitsBoardPlan.ts`: the heading `limits.usageHeading`, then
 `<name> — <first usage line>` per signed-in Claude account that has a figure or a limit, then per connected OpenCode provider that reports usage
 `openai (ChatGPT) — …`; the lines are `formatClaudeProfileUsageLines`, the ONE renderer `/accounts` uses, so the wording — `⏱ 5h … 🔄 in 3h · week …`,
-`⛔ at its limit until …`, `(stale)` — is never a second copy; no line at all ⇒ no block and no heading), the two automatic-switching settings (read through
+`⛔ at its limit until …`, `(stale)` — is never a second copy; a SIGNED-OUT account has the line `<name> — 🔑 sign-in expired` (`limits.signedOutMark`) so it never vanishes from the board; no line at all ⇒ no block and no heading), the two automatic-switching settings (read through
 `utils/limitSettings.ts`, with a link to `/limits_autoswitch`; General prefixes «Defaults for all topics:») and the caption `limits.boardCaption`
-(«Choose the active model:»; General `limits.boardCaptionGeneral`, «Choose the default Claude account:»). Every signed-in Claude account (in `/accounts` order)
+(«Choose the active model:»; General `limits.boardCaptionGeneral`, «Choose the default Claude account:»). Every Claude account (in `/accounts` order)
 and every connected OpenCode provider (catalog order) is one full-width button labelled by `buildLimitsBoardRows` as `[✓ ]<program> · <account or provider>` — the ✓ on
-the active row only, no model, no usage, no ⛔; a signed-out account is not listed. «⏭ Skip once» (the shared `buildSkipArmedRetryCallbackData`) ends the board while a limit wait is armed.
+the active row only, no model, no usage, no ⛔; a signed-out account is the row `🔑 <program> · <account>` (kind `claudeSignedOut`) whose button is NOT an indexed `lim_c_` one but
+`/accounts`' sign-in callback `acct_signin_<name>` (name baked in, handled by `claudeAccounts.ts`: it starts the same sign-in as 🔑 and leaves the message as it is) — never a switch target. «⏭ Skip once» (the shared `buildSkipArmedRetryCallbackData`) ends the board while a limit wait is armed.
 The usage is refreshed through the `refreshUsage` port when the board OPENS (bounded, `refreshUsageWithinBudget`); a tap re-renders off the cache.
 
 A tap in a topic: an unbound topic is told to bind a folder first; a Claude row goes through the `pickClaudeAccount` port (the `/accounts` pick: login check, then the

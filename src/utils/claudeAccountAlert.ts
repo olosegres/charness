@@ -5,7 +5,9 @@
  * is usable at all, told ONCE per change: what broke (which account, the CLI's own words), what the bot did (the
  * conversations moved to another account, or they wait) and what the operator must do (sign it in again, and how). An
  * account that is usable again gets one line. The bot posts it in General (Telegram) and on the Jira operator issue
- * (`connectors/jira/operatorIssue.ts`).
+ * (`connectors/jira/operatorIssue.ts`). An account that is SIGNED OUT is also told to the operator in a private message of its
+ * own with a button that starts its sign-in ({@link listClaudeAccountSignOutNames}, {@link renderClaudeAccountSignOutDm}): General is
+ * muted for the operator, a private message is not.
  *
  * What was told is kept in `state.json` (`claudeAccountAlerts`), so a restart — hot mode restarts on every code change — never
  * tells it again. An account seen for the first time is told only when it matters: refused on a turn, or the account new
@@ -18,6 +20,7 @@
  */
 
 import { t } from '../i18n';
+import { buildAccountSignInCallback } from './claudeAccountPickerPlan';
 import type { ClaudeProfileUsability } from './claudeAuthRefusal';
 
 /** What the operator was told of the accounts, as `state.json` keeps it. */
@@ -122,4 +125,30 @@ export function renderClaudeAccountAlert(alert: ClaudeAccountAlert, getSignInHow
   }
   for (const name of alert.back) paragraphs.push(t('accounts.alert.back', { name }));
   return paragraphs.join('\n\n');
+}
+
+/**
+ * @description The accounts of this alert that are SIGNED OUT (`signedOut`: the CLI refused its login on a turn; `notSignedIn`: its status
+ * check finds none) — the ones the operator also gets a private message about, once per sign-out: the alert itself is told once per
+ * change ({@link planClaudeAccountAlert}), so this list is as well. A refusal a sign-in does not mend (`orgDisabled`: its organization
+ * turned the use off) and a bare 401 / 403 (`rejected`) stay in General only.
+ */
+export function listClaudeAccountSignOutNames(alert: ClaudeAccountAlert): string[] {
+  return alert.lost.filter((loss) => loss.usability === 'signedOut' || loss.usability === 'notSignedIn').map((loss) => loss.name);
+}
+
+/** The operator's private message about one signed-out account: the line, and the button that starts its sign-in (`acct_signin_<name>`). */
+export interface ClaudeAccountSignOutDm {
+  text: string;
+  buttonLabel: string;
+  callbackData: string;
+}
+
+/** @description The private message about the signed-out account `name`, in the active locale. */
+export function renderClaudeAccountSignOutDm(name: string): ClaudeAccountSignOutDm {
+  return {
+    text: t('accounts.signOutDm.text', { name }),
+    buttonLabel: t('accounts.signOutDm.button'),
+    callbackData: buildAccountSignInCallback(name),
+  };
 }

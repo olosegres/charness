@@ -34,6 +34,7 @@ import {
   checkIsPrivateChatMainKey,
   getOwnPrivateChatKey,
   createPrivateChatKey,
+  resolveOperatorPrivateChatKey,
   GENERAL_THREAD_ID,
   DM_GENERAL_THREAD_ID,
   type SurfaceRouting,
@@ -529,6 +530,18 @@ test('private chats: the main thread of ANY person\'s chat is the DM main thread
   assert.equal(checkIsPrivateChatMainKey(makeTelegramKey(OWNER_USER_ID, 5)), false, 'a topic of the owner\'s DM has a thread to name');
   assert.equal(checkIsPrivateChatMainKey({ platform: 'jira', space: 'PROJ', thread: 'PROJ-1' }), false, 'a conversation of another platform answers, never throws');
   assert.deepEqual(createPrivateChatKey(7654321), makeTelegramKey(7654321, DM_GENERAL_THREAD_ID));
+});
+
+test('resolveOperatorPrivateChatKey: the operator\'s private chat, only when the DM surface is served and General\'s notice does not go there already', () => {
+  const ownerUserId = 7654321;
+  const groupGeneral = makeTelegramKey(-1001111111111, GENERAL_THREAD_ID);
+  const ownerGeneral = makeTelegramKey(ownerUserId, DM_GENERAL_THREAD_ID);
+  assert.deepEqual(resolveOperatorPrivateChatKey({ isDmSurfaceActive: true, ownerUserId, generalKey: groupGeneral }), ownerGeneral, 'CHAT_MODE=both with a group: the private chat is a second place to tell them');
+  assert.deepEqual(resolveOperatorPrivateChatKey({ isDmSurfaceActive: true, ownerUserId, generalKey: null }), ownerGeneral, 'no General to post in: the private chat still reaches them');
+  assert.equal(resolveOperatorPrivateChatKey({ isDmSurfaceActive: true, ownerUserId, generalKey: ownerGeneral }), null, 'CHAT_MODE=dm: the notice to General IS the private chat — not told twice');
+  assert.equal(resolveOperatorPrivateChatKey({ isDmSurfaceActive: false, ownerUserId, generalKey: groupGeneral }), null, 'CHAT_MODE=group: the DM surface is not served, a button there would be refused');
+  assert.equal(resolveOperatorPrivateChatKey({ isDmSurfaceActive: false, ownerUserId: Number.NaN, generalKey: groupGeneral }), null, 'no OWNER_USER_ID');
+  assert.equal(resolveOperatorPrivateChatKey({ isDmSurfaceActive: true, ownerUserId: Number.NaN, generalKey: groupGeneral }), null, 'no owner to write to, whatever the surface says');
 });
 
 test('getOwnPrivateChatKey: only a group admin in a private chat that is their own gets its key', () => {

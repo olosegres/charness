@@ -1,12 +1,13 @@
 /**
  * `utils/limitsBoardPlan.ts` — the two pure pieces of the `/limits` switch board.
  *
- *   - the ROWS: order (signed-in Claude accounts, then connected OpenCode providers), a label of `[✓ ]<program> · <name>`
+ *   - the ROWS: order (the Claude accounts, then connected OpenCode providers), a label of `[✓ ]<program> · <name>`
  *     and nothing more — no figure, no reset, no ⛔, no model, even on the active row — the ✓ on the active row only, a
- *     signed-out account left out, the General board (the default account carries the ✓);
+ *     signed-out account kept as a `🔑` row that is no switch target (it stays on the board, never vanishes), the General
+ *     board (the default account carries the ✓);
  *   - the USAGE BLOCK of the message: the heading and a line per signed-in account / connected provider that has a figure
- *     or a limit, in exactly the wording `/accounts` prints under a row (the one renderer both screens share), none (and
- *     no heading) when there is nothing to show.
+ *     or a limit, in exactly the wording `/accounts` prints under a row (the one renderer both screens share), a
+ *     `<name> — 🔑 sign-in expired` line for a signed-out account, none (and no heading) when there is nothing to show.
  */
 
 /** Test case: N/A — Charness has no Jira tracker. */
@@ -47,19 +48,26 @@ function buildBlock(overrides: Partial<LimitsUsageBlockInput> = {}): string {
 const claudeHere = (profileName: string, model: string | null = null): FallbackChainEntry => ({ backend: 'claude', profile: profileName, model });
 
 describe('buildLimitsBoardRows', () => {
-  it('lists the signed-in Claude accounts in the order given, then the OpenCode providers in catalog order; a signed-out account is left out', () => {
+  it('lists the Claude accounts in the order given, then the OpenCode providers in catalog order; a signed-out account stays, as a 🔑 sign-in row that is never active', () => {
     const rows = buildRows({
+      current: claudeHere('out'),
       detection: detectionOf(
         [profile('default'), profile('out', { loggedIn: false }), profile('work')],
         ['openrouter/gpt-5-mini', 'openai/gpt-5', 'openrouter/deepseek-chat'],
       ),
     });
-    assert.deepEqual(rows.map((row) => [row.kind, row.id, row.label]), [
-      ['claude', 'default', 'Claude · default'],
-      ['claude', 'work', 'Claude · work'],
-      ['opencode', 'openrouter', 'OpenCode · openrouter'],
-      ['opencode', 'openai', 'OpenCode · openai'],
+    assert.deepEqual(rows.map((row) => [row.kind, row.id, row.label, row.isActive]), [
+      ['claude', 'default', 'Claude · default', false],
+      ['claudeSignedOut', 'out', '🔑 Claude · out', false],
+      ['claude', 'work', 'Claude · work', false],
+      ['opencode', 'openrouter', 'OpenCode · openrouter', false],
+      ['opencode', 'openai', 'OpenCode · openai', false],
     ]);
+  });
+
+  it('a signed-out account billed to API credits is a plain 🔑 row too: its tap signs in, it never spends', () => {
+    const [row] = buildRows({ detection: detectionOf([profile('console', { loggedIn: false, billing: 'api' })]) });
+    assert.deepEqual([row.kind, row.label], ['claudeSignedOut', '🔑 Claude · console']);
   });
 
   it('an account that was never probed counts as signed in', () => {
@@ -151,9 +159,23 @@ describe('formatLimitsUsageBlock', () => {
     assert.match(later, /^later — ⛔ at its limit until [A-Z][a-z]{2} 16:00$/);
   });
 
-  it('an account never polled and not limited, a signed-out account and a past limit mark have no line; with no line at all there is no block and no heading', () => {
-    assert.equal(buildBlock({ detection: detectionOf([profile('fresh'), profile('out', { loggedIn: false, usage: usageOf(1, 2) }), profile('past', { limitedUntil: inHours(-1) })]) }), '');
+  it('an account never polled and not limited and a past limit mark have no line; with no line at all there is no block and no heading', () => {
+    assert.equal(buildBlock({ detection: detectionOf([profile('fresh'), profile('past', { limitedUntil: inHours(-1) })]) }), '');
     assert.equal(buildBlock(), '');
+  });
+
+  it('a signed-out account has the line `<name> — 🔑 sign-in expired` in its place among the accounts, whatever it was last polled at — the board never silently drops it', () => {
+    const block = buildBlock({ detection: detectionOf([profile('default', { usage: usageOf(14, 3) }), profile('out', { loggedIn: false, usage: usageOf(1, 2), limitedUntil: inHours(2) }), profile('work', { usage: usageOf(5, 9) })]) });
+    assert.deepEqual(block.split('\n'), [
+      'Usage (% used)',
+      'default — ⏱ 5h 14% 🔄 in 3h · week 3% 🔄 in 6d',
+      'out — 🔑 sign-in expired',
+      'work — ⏱ 5h 5% 🔄 in 3h · week 9% 🔄 in 6d',
+    ]);
+  });
+
+  it('a lone signed-out account is the whole block: the heading and its line', () => {
+    assert.deepEqual(buildBlock({ detection: detectionOf([profile('out', { loggedIn: false })]) }).split('\n'), ['Usage (% used)', 'out — 🔑 sign-in expired']);
   });
 
   it('an account billed to API credits shows its spend and, with the operator\'s Console figure, the bonus credit estimate — the very lines `/accounts` prints', () => {

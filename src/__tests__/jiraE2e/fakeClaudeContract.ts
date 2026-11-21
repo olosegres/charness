@@ -138,6 +138,12 @@ export const fakeClaudeApiErrorOnceFileName = 'api-error-once';
 export const fakeClaudeMcpServersFileName = 'mcp-servers.json';
 /** The file the fake's `auth login` writes into `CLAUDE_CONFIG_DIR` (`{ method: 'console' | 'claudeai' }`) — its stand-in for a stored login. */
 export const fakeClaudeLoginFileName = 'fake-login.json';
+/**
+ * The `method` a test writes into {@link fakeClaudeLoginFileName} to make the login EXPIRE: `auth status --json` then answers as the real CLI
+ * does for a directory whose login is gone — `{"loggedIn": false, "authMethod": "none", …}` on stdout and exit code 1 — until an
+ * `auth login` records a new one.
+ */
+export const fakeClaudeExpiredLoginMethod = 'expired';
 /** The link the fake's `auth login` prints (the bot relays it into the topic). */
 export const fakeClaudeLoginUrl = 'https://platform.example.test/oauth/authorize?client=fake';
 /** Who a Console login of the fake signs in as. */

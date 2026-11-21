@@ -34,6 +34,7 @@ import {
   fakeClaudeNextOutputWhileAskedFileName,
   fakeClaudeOutputWhileAskedFileName,
   fakeOutputWhileAskedPollMs,
+  fakeClaudeExpiredLoginMethod,
   fakeClaudeLoginFileName,
   fakeClaudeLoginUrl,
   fakeClaudeUsageWindowsFileName,
@@ -193,7 +194,8 @@ import { claudeSessionStateEventsVariableName } from '../../utils/jsonStreamHost
  *  - `auth login [--console|--claudeai]` behaves like the real subcommand in the bot's pty: it prints the sign-in link
  *    and the paste prompt, takes ONE code line, records the login in `CLAUDE_CONFIG_DIR` (`fakeClaudeLoginFileName`) and
  *    exits 0; `auth status --json` then answers for that login — a Console one as the CLI does (`api_key`, `/login
- *    managed key`, the email and organization of `fakeConsoleLogin`), a subscription one as `claude.ai`;
+ *    managed key`, the email and organization of `fakeConsoleLogin`), a subscription one as `claude.ai`; a login a test
+ *    wrote as `fakeClaudeExpiredLoginMethod` answers as the real CLI does for a gone login — `loggedIn: false`, exit code 1;
  *  - (while `fakeClaudeAlwaysUsageLimitFileName` exists in the state dir, EVERY turn ends on a limit, whatever its mode;
  *    `fakeClaudeApiErrorOnceFileName` ends the NEXT turn on the API error its content spells, after the delay in
  *    `fakeClaudeApiErrorDelayFileName` while that exists);
@@ -485,11 +487,11 @@ async function runLateToolCall(argv: readonly string[], sessionId: string, conte
 }
 
 /** The login `auth login` recorded in a config directory (`fakeClaudeLoginFileName`), `null` when there is none. */
-function readFakeLogin(): { method: 'console' | 'claudeai' } | null {
+function readFakeLogin(): { method: 'console' | 'claudeai' | typeof fakeClaudeExpiredLoginMethod } | null {
   const configDir = process.env.CLAUDE_CONFIG_DIR;
   if (!configDir) return null;
   try {
-    return JSON.parse(fs.readFileSync(path.join(configDir, fakeClaudeLoginFileName), 'utf8')) as { method: 'console' | 'claudeai' };
+    return JSON.parse(fs.readFileSync(path.join(configDir, fakeClaudeLoginFileName), 'utf8')) as { method: 'console' | 'claudeai' | typeof fakeClaudeExpiredLoginMethod };
   } catch {
     return null;
   }
@@ -501,6 +503,7 @@ function getFakeAuthStatus(apiKeySource: 'apiKeyHelper' | 'none'): Record<string
   const login = readFakeLogin();
   if (login?.method === 'console') return { loggedIn: true, authMethod: 'api_key', apiProvider: 'firstParty', apiKeySource: '/login managed key', ...fakeConsoleLogin };
   if (login?.method === 'claudeai') return { loggedIn: true, authMethod: 'claude.ai', apiProvider: 'firstParty', email: fakeConsoleLogin.email, subscriptionType: 'max' };
+  if (login?.method === fakeClaudeExpiredLoginMethod) return { loggedIn: false, authMethod: 'none', apiProvider: 'firstParty' };
   return null;
 }
 
@@ -1583,6 +1586,8 @@ async function main(): Promise<void> {
     // Every other call gets the version line it always got (a status the bot cannot parse is "unknown", never "signed out").
     const status = argv.includes('auth') && argv.includes('status') ? getFakeAuthStatus(apiKey.source) : null;
     process.stdout.write(status === null ? `${fakeClaudeVersion}\n` : `${JSON.stringify(status)}\n`);
+    // The real CLI exits 1 for a directory that is not signed in, its JSON still on stdout.
+    if (status?.loggedIn === false) process.exitCode = 1;
     return;
   }
   if (process.env[fakeClaudePlatformEnvName] === 'jira') {

@@ -194,6 +194,20 @@ export function createPrivateChatKey(userId: number): SessionKey {
   return makeTelegramKey(userId, DM_GENERAL_THREAD_ID);
 }
 
+/**
+ * @description The key of the operator's private chat to message them in, or `null` when a message there would not do: the DM surface is
+ * not a served one (no `OWNER_USER_ID`, or `CHAT_MODE=group` — a button in that chat would be refused), or it is where the notice
+ * to General goes already (`CHAT_MODE=dm`, no group: the operator's General IS their private chat), so a second message would only repeat it.
+ * `generalKey` is where the operator's General notice goes (`null`: nowhere). Whether the operator ever opened the chat is Telegram's answer
+ * to the send (403), not known here.
+ */
+export function resolveOperatorPrivateChatKey(input: { isDmSurfaceActive: boolean; ownerUserId: number; generalKey: SessionKey | null }): SessionKey | null {
+  if (!input.isDmSurfaceActive || !Number.isFinite(input.ownerUserId)) return null;
+  const privateKey = createPrivateChatKey(input.ownerUserId);
+  const isGeneralTheSameChat = input.generalKey !== null && getTelegramChatId(input.generalKey) === input.ownerUserId;
+  return isGeneralTheSameChat ? null : privateKey;
+}
+
 /** What {@link getOwnPrivateChatKey} reads of an update. */
 export interface OwnPrivateChatInput {
   chatType: string | undefined;

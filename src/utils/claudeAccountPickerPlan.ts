@@ -25,6 +25,12 @@ export const accountLoginMenuCallback = 'acct_login_menu';
 export const accountRemoveMenuCallback = 'acct_rm_menu';
 /** Start the sign-in of the named profile. */
 export const accountLoginCallbackRe = new RegExp(`^acct_login_${nameGroup}$`);
+/**
+ * Start the sign-in of the named profile from a message that is NOT the picker (the operator's private sign-out message, a signed-out
+ * row of the `/limits` board): the same flow as 🔑 in `/accounts` (`acct_login_`), but the message the button sits on is left as it is —
+ * `acct_login_` turns it into the picker.
+ */
+export const accountSignInCallbackRe = new RegExp(`^acct_signin_${nameGroup}$`);
 /** Ask to confirm the removal of the named profile, then remove it. */
 export const accountRemoveCallbackRe = new RegExp(`^acct_rm_${nameGroup}$`);
 export const accountRemoveConfirmCallbackRe = new RegExp(`^acct_rmok_${nameGroup}$`);
@@ -63,6 +69,10 @@ export function buildAccountUseCallback(name: string): string {
 
 export function buildAccountLoginCallback(name: string): string {
   return `acct_login_${name}`;
+}
+
+export function buildAccountSignInCallback(name: string): string {
+  return `acct_signin_${name}`;
 }
 
 export function buildAccountDisconnectCallback(index: number): string {

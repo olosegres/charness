@@ -181,6 +181,7 @@ import {
   DM_GENERAL_THREAD_ID,
   checkIsPrivateChatMainKey,
   getOwnPrivateChatKey,
+  resolveOperatorPrivateChatKey,
   type ChatMode,
 } from './threadRouting';
 import { AdminCache, ADMIN_CACHE_TTL_MS, getSenderRole, type SenderRole } from './accessControl';
@@ -506,8 +507,10 @@ import { createClaudeProfileSync, type ClaudeProfileSyncResult } from './utils/c
 import {
   formatClaudeAccountRefusal,
   getClaudeAccountAlertDetail,
+  listClaudeAccountSignOutNames,
   planClaudeAccountAlert,
   renderClaudeAccountAlert,
+  renderClaudeAccountSignOutDm,
   type ClaudeAccountAlert,
 } from './utils/claudeAccountAlert';
 import type { OperatorAlertChannel } from './platform/operatorAlert';
@@ -8914,7 +8917,7 @@ async function deliverClaudeAccountAlert(alert: ClaudeAccountAlert): Promise<voi
   const lost = alert.lost.map((loss) => `${loss.name} (${loss.usability})`).join(', ');
   console.log(`[accounts] operator alert: ${lost ? `cannot work: ${lost}; conversations go to ${alert.instead ?? 'no account — they wait'}` : ''}${alert.back.length > 0 ? `${lost ? '; ' : ''}usable again: ${alert.back.join(', ')}` : ''}`);
   const posts: Array<Promise<void>> = [];
-  if (ENV.isTelegramServed) posts.push(postClaudeAccountAlertToGeneral(alert));
+  if (ENV.isTelegramServed) posts.push(postClaudeAccountAlertToGeneral(alert), sendClaudeAccountSignOutDms(alert));
   const isActionRequired = alert.lost.length > 0;
   for (const channel of operatorAlertChannels) {
     const text = runWithLocale('en', () => renderClaudeAccountAlert(alert, getHostClaudeSignInHow));
@@ -8947,6 +8950,32 @@ async function postClaudeAccountAlertToGeneral(alert: ClaudeAccountAlert): Promi
   const previousPinnedId = state.getClaudeAccountAlertState()?.pinnedMessageId;
   await state.setClaudeAccountAlertPinnedMessageId(messageId);
   if (previousPinnedId !== undefined && previousPinnedId !== messageId) void unpinMessageQuiet(generalKey, previousPinnedId);
+}
+
+/**
+ * @description Tell the operator, in a PRIVATE message from the bot, about each account that is signed out in this alert: one short
+ * line naming it and a button that starts its sign-in (`acct_signin_<name>`, the 🔑 of `/accounts`) — General is muted for the operator,
+ * a private message is not. It rides the alert, so it is sent once per sign-out (not per refusal), and again only after the account was
+ * signed in again and signed out again; the General notice is posted as before. Nothing is sent when the operator's private chat is not
+ * a surface the bot serves (no `OWNER_USER_ID`, `CHAT_MODE=group`) or already IS where General's notice went (`CHAT_MODE=dm`); a
+ * person who never opened the bot's private chat cannot be written to (Telegram's 403): that is said in the log, General alone told them.
+ * Never retried — a second send could tell it twice.
+ */
+async function sendClaudeAccountSignOutDms(alert: ClaudeAccountAlert): Promise<void> {
+  const names = listClaudeAccountSignOutNames(alert);
+  if (names.length === 0) return;
+  const privateKey = getOperatorPrivateChatKey();
+  if (privateKey === null) {
+    console.log(`[accounts] no private chat with the operator to tell them ${names.join(', ')} is signed out (General has it)`);
+    return;
+  }
+  for (const name of names) {
+    const dm = withThreadLocale(privateKey, () => renderClaudeAccountSignOutDm(name));
+    const outcome = await replyToThreadDetailed(privateKey, dm.text, Markup.inlineKeyboard([[Markup.button.callback(dm.buttonLabel, dm.callbackData)]]));
+    if (outcome.kind === 'sent') console.log(`[accounts] told the operator in a private message that ${name} is signed out`);
+    else if (outcome.kind === 'failed' && outcome.isForbidden === true) console.log(`[accounts] the operator's private chat is closed to the bot (they never opened it, or blocked it): ${name} is signed out, General has it`);
+    else console.warn(`[accounts] the private message to the operator about ${name} did not go out (${outcome.kind})`);
+  }
 }
 
 /** A resume of the conversations waiting for an account runs one at a time. */
@@ -15934,6 +15963,11 @@ function getOperatorGeneralKey(): SessionKey | null {
   if (groupId !== null) return makeTelegramKey(groupId, GENERAL_THREAD_ID);
   const ownerUserId = getOwnerUserId();
   return Number.isFinite(ownerUserId) ? makeTelegramKey(ownerUserId, DM_GENERAL_THREAD_ID) : null;
+}
+
+/** The operator's private chat to message them in (`resolveOperatorPrivateChatKey`); `null` when none would do. */
+function getOperatorPrivateChatKey(): SessionKey | null {
+  return resolveOperatorPrivateChatKey({ isDmSurfaceActive: checkIsDmSurfaceActive(), ownerUserId: getOwnerUserId(), generalKey: getOperatorGeneralKey() });
 }
 
 /**

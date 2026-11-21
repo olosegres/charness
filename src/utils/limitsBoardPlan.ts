@@ -1,13 +1,15 @@
 /**
  * @description The `/limits` switch board in two pure pieces:
  *
- *   - the ROWS — one per signed-in Claude account (in `/accounts` order), then one per connected OpenCode provider (in
+ *   - the ROWS — one per Claude account (in `/accounts` order), then one per connected OpenCode provider (in
  *     catalog order), each labelled `[✓ ]<program> · <account or provider>` and nothing else: the buttons carry no usage,
  *     no reset and no model (the figures do not fit a phone's button) — only an account billed to API credits ends in
  *     ` 💳` (a tap on it spends money). The `✓` marks the active row only — where the
- *     topic runs now, in General the default Claude account. A signed-out account is not listed.
+ *     topic runs now, in General the default Claude account. A SIGNED-OUT account stays on the board as a row that is no
+ *     switch target — `🔑 <program> · <account>`: a tap signs it in again (the 🔑 of `/accounts`), it never moves a topic.
  *   - the USAGE BLOCK of the message above them — `Usage (% used)` and one line per signed-in Claude account that has
- *     a figure or a limit (an account billed to API credits always: `console — 💳 API · pay per use`), then per
+ *     a figure or a limit (an account billed to API credits always: `console — 💳 API · pay per use`), `<name> — 🔑 sign-in
+ *     expired` for a signed-out one, then per
  *     connected OpenCode provider that reports usage (the ChatGPT subscription), each
  *     `<name> — <first usage line>` in exactly the wording `/accounts` prints under a row
  *     (`formatClaudeProfileUsageLines`, the one renderer both screens share).
@@ -27,11 +29,14 @@ import {
 import { chatGptProviderId, type OpenCodeProviderUsageRecord } from './openCodeUsage';
 
 const activeMark = '✓ ';
+/** Before the label of a signed-out account's row: its tap signs the account in again, like the 🔑 of `/accounts`. */
+const signInMark = '🔑 ';
 /** The ChatGPT subscription's name beside its provider id in the usage block: `openai (ChatGPT)`. */
 const chatGptBrandName = 'ChatGPT';
 
 export interface LimitsBoardRow {
-  kind: 'claude' | 'opencode';
+  /** `claudeSignedOut`: a Claude account that is not signed in — its tap starts the sign-in, it is never a switch target. */
+  kind: 'claude' | 'claudeSignedOut' | 'opencode';
   /** The Claude account's name, or the OpenCode provider's id — what a tap acts on. */
   id: string;
   label: string;
@@ -52,15 +57,19 @@ const meteredMark = ' 💳';
 
 function buildRow(row: Omit<LimitsBoardRow, 'label'> & { program: string; isMetered?: boolean }): LimitsBoardRow {
   const { program, isMetered, ...rest } = row;
-  return { ...rest, label: `${row.isActive ? activeMark : ''}${program} · ${row.id}${isMetered ? meteredMark : ''}` };
+  const mark = row.kind === 'claudeSignedOut' ? signInMark : row.isActive ? activeMark : '';
+  return { ...rest, label: `${mark}${program} · ${row.id}${isMetered ? meteredMark : ''}` };
 }
 
-/** @description The board's rows: signed-in Claude accounts, then connected OpenCode providers. */
+/** @description The board's rows: the Claude accounts (a signed-out one as a sign-in row), then connected OpenCode providers. */
 export function buildLimitsBoardRows(input: LimitsBoardInput): LimitsBoardRow[] {
   const rows: LimitsBoardRow[] = [];
   const { current } = input;
   for (const profile of input.detection.claudeProfiles) {
-    if (profile.loggedIn === false) continue;
+    if (profile.loggedIn === false) {
+      rows.push(buildRow({ kind: 'claudeSignedOut', id: profile.name, program: input.words.claude, isActive: false }));
+      continue;
+    }
     rows.push(buildRow({
       kind: 'claude',
       id: profile.name,
@@ -105,14 +114,18 @@ function formatUsageProviderName(providerId: string): string {
 }
 
 /**
- * @description The usage block of the `/limits` message: the heading and the entries — signed-in Claude accounts in
- * `/accounts` order, then connected OpenCode providers with a recorded usage in catalog order. An account never polled
+ * @description The usage block of the `/limits` message: the heading and the entries — Claude accounts in
+ * `/accounts` order (a signed-out one says so, `<name> — 🔑 sign-in expired`, whatever it was last polled at), then connected
+ * OpenCode providers with a recorded usage in catalog order. A signed-in account never polled
  * and not limited, and a provider without usage, have no entry; with no entry at all there is no block (`''`, no heading).
  */
 export function formatLimitsUsageBlock(input: LimitsUsageBlockInput): string {
   const entries: string[] = [];
   for (const profile of input.detection.claudeProfiles) {
-    if (profile.loggedIn === false) continue;
+    if (profile.loggedIn === false) {
+      entries.push(`${profile.name} — ${t('limits.signedOutMark')}`);
+      continue;
+    }
     const usageLines = formatClaudeProfileUsageLines(profile, input.timezone, input.nowMs);
     // An account billed to API credits has no windows: its entry says how it pays, the used-up mark hangs under it.
     const entry = formatUsageEntry(profile.name, profile.billing === 'api' ? [t('account.kind.api'), ...usageLines] : usageLines);

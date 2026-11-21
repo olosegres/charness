@@ -34,9 +34,11 @@ import {
 import {
   accountLoginCallbackRe,
   accountRemoveCallbackRe,
+  accountSignInCallbackRe,
   accountUseCallbackRe,
   buildAccountPickerRows,
   buildAccountRemoveCallback,
+  buildAccountSignInCallback,
   buildAccountUseCallback,
   countTopicsPerProfile,
   parseAccountCallbackName,
@@ -199,6 +201,15 @@ describe('account picker plan', () => {
     assert.equal(parseAccountCallbackName('acct_rm_default', accountRemoveCallbackRe, { allowDefault: false }), null);
     assert.equal(parseAccountCallbackName('acct_login_work', accountUseCallbackRe, { allowDefault: true }), null, 'foreign button');
     assert.equal(parseAccountCallbackName('acct_login_work', accountLoginCallbackRe, { allowDefault: true }), 'work');
+  });
+
+  it('the sign-in button of a message that is not the picker has its own callback, never the picker\'s 🔑 one', () => {
+    const longest = 'a'.repeat(claudeProfileNameMaxLength);
+    assert.ok(Buffer.byteLength(buildAccountSignInCallback(longest)) <= 64);
+    assert.equal(parseAccountCallbackName(buildAccountSignInCallback('work'), accountSignInCallbackRe, { allowDefault: false }), 'work');
+    assert.equal(parseAccountCallbackName('acct_signin_default', accountSignInCallbackRe, { allowDefault: true }), 'default');
+    assert.equal(parseAccountCallbackName('acct_login_work', accountSignInCallbackRe, { allowDefault: true }), null, 'the picker\'s 🔑 is another button');
+    assert.equal(parseAccountCallbackName('acct_signin_work', accountLoginCallbackRe, { allowDefault: true }), null);
   });
 
   it('rows: default first, then the added profiles in creation order, with the active mark and topic counts', () => {

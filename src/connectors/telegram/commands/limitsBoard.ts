@@ -1,7 +1,7 @@
 /**
- * `/limits` — the switch board: every signed-in Claude account and every connected OpenCode provider on one screen, so a
- * topic moves to another one with a single tap. The MESSAGE carries the figures — the usage of each account and of the
- * ChatGPT subscription in the `/accounts` wording, the state of the two automatic-switching settings (their screen is
+ * `/limits` — the switch board: every Claude account and every connected OpenCode provider on one screen, so a
+ * topic moves to another one with a single tap. A signed-out account stays on it as a `🔑` row that signs it in again (never a
+ * switch target). The MESSAGE carries the figures — the usage of each account and of the ChatGPT subscription in the `/accounts` wording, the state of the two automatic-switching settings (their screen is
  * `/limits_autoswitch`, `fallbackChain.ts`) and the caption «Choose the active model:»; a row is one full-width button
  * with its name only (`[✓ ]Claude · work`) — the figures do not fit a phone's button. A tap in a topic switches the
  * topic through the one switch path (`switchTopicByOperator`, `bot.ts`): a Claude account changes the account, an OpenCode
@@ -16,6 +16,7 @@ import type { SessionKey } from '../../../sessionKey';
 import { t } from '../../../i18n';
 import type { InboundCommand } from '../../../platform/inbound';
 import { buildSkipArmedRetryCallbackData } from '../../../utils/autoContinueOnLimit';
+import { buildAccountSignInCallback } from '../../../utils/claudeAccountPickerPlan';
 import {
   listOpenCodeModelsOfProvider,
   type FallbackChainEntry,
@@ -54,6 +55,16 @@ function buildModelPickCallback(index: number): string {
 
 function buildPageCallback(page: number): string {
   return `lim_pg_${page}`;
+}
+
+/**
+ * The callback of a board row: a Claude or OpenCode row carries an INDEX into the message's snapshot; a signed-out account's row bakes
+ * the account's NAME into the sign-in callback of `/accounts` (`acct_signin_<name>`, handled by `claudeAccounts.ts`), so an old
+ * keyboard can only ever start the sign-in of the account it named and the row is never a switch target.
+ */
+function buildRowCallback(row: LimitsBoardRow, index: number): string {
+  if (row.kind === 'claudeSignedOut') return buildAccountSignInCallback(row.id);
+  return row.kind === 'claude' ? buildClaudeRowCallback(index) : buildOpenCodeRowCallback(index);
 }
 
 /** Screens whose snapshot is kept (the newest); an older keyboard is refused as out of date. */
@@ -175,7 +186,7 @@ export function createLimitsBoard(ports: LimitsBoardPorts) {
       t(isGeneral ? 'limits.boardCaptionGeneral' : 'limits.boardCaption'),
     ];
     const keyboardRows = rows.map((row, index) => [
-      Markup.button.callback(row.label, row.kind === 'claude' ? buildClaudeRowCallback(index) : buildOpenCodeRowCallback(index)),
+      Markup.button.callback(row.label, buildRowCallback(row, index)),
     ]);
     // One row under the accounts: the limit-reminders setting (its picker is a message of its own).
     keyboardRows.push([Markup.button.callback(getRemindersRowLabel(key), boardRemindersCallback)]);

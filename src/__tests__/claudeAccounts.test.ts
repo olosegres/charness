@@ -169,6 +169,7 @@ describe('claudeAccounts: /accounts over its ports', () => {
       'acct_rm_menu',
       'acct_back',
       String(/^acct_login_([a-z0-9][a-z0-9_-]{0,31})$/),
+      String(/^acct_signin_([a-z0-9][a-z0-9_-]{0,31})$/),
       String(/^acct_rm_([a-z0-9][a-z0-9_-]{0,31})$/),
       String(/^acct_rmok_([a-z0-9][a-z0-9_-]{0,31})$/),
       'acct_autosw_on',
@@ -297,6 +298,35 @@ describe('claudeAccounts: /accounts over its ports', () => {
     assert.deepEqual(harness.getKeyboardData(picker)[0], ['acct_use_default', 'acct_login_default', 'acct_rm_default']);
     assert.deepEqual(harness.getKeyboardData(picker)[1], ['acct_use_work', 'acct_login_work', 'acct_rm_work']);
     assert.deepEqual(harness.getKeyboardData(picker)[2], ['acct_use_team', 'acct_login_team', 'acct_rm_team']);
+  });
+
+  it('the sign-in button of a message that is NOT the picker (`acct_signin_<name>`: the private sign-out message, a signed-out /limits row) starts the very sign-in 🔑 starts and leaves its message as it is; 🔑 of the picker turns its message into the picker', async () => {
+    await harness.runCommand('account');
+    const picker = harness.replies.at(-1);
+    const teamDir = path.join(dataDir, 'claude-profiles', 'team');
+    const startedBefore = startedLogins.length;
+    const editsBefore = harness.edits.length;
+
+    await harness.tapButton(picker!.messageId!, 'acct_signin_team');
+    assert.equal(startedLogins.length, startedBefore + 1);
+    assert.deepEqual(startedLogins.at(-1), { key: harness.key, profile: { name: 'team', configDir: teamDir } });
+    assert.equal(harness.edits.length, editsBefore, 'the message the button sits on is not edited');
+
+    await harness.tapButton(picker!.messageId!, 'acct_login_team');
+    assert.deepEqual(startedLogins.at(-1), { key: harness.key, profile: { name: 'team', configDir: teamDir } }, 'the same sign-in');
+    assert.equal(harness.edits.length, editsBefore + 1, '🔑 of the picker re-renders its message as the picker');
+
+    await harness.tapButton(picker!.messageId!, 'acct_signin_default');
+    assert.deepEqual(startedLogins.at(-1), { key: harness.key, profile: { name: 'default', configDir: null } }, '`default` is the plain ~/.claude sign-in');
+  });
+
+  it('the sign-in button of an account that does not exist starts nothing and says so', async () => {
+    await harness.runCommand('account');
+    const picker = harness.replies.at(-1);
+    const startedBefore = startedLogins.length;
+    await harness.tapButton(picker!.messageId!, 'acct_signin_nobody');
+    assert.equal(startedLogins.length, startedBefore);
+    assert.match(harness.replies.at(-1)?.text ?? '', /No profile named nobody/);
   });
 
   it('`use` of a logged-out profile is refused; `use work` in a topic sets the pick and reports the apply outcome', async () => {

@@ -8,6 +8,8 @@
  *     accounts), the two settings' state with the link to their screen and the caption «Choose the active model:»; the
  *     buttons are one full-width `[✓ ]<program> · <name>` per account / provider with no figure on them, «skip once» while a
  *     limit wait is armed; General's own caption;
+ *   • a SIGNED-OUT account stays on the board: its line `<name> — 🔑 sign-in expired` in the message and a `🔑 Claude · <name>` row whose
+ *     button is the sign-in callback of `/accounts` (name baked in) — never a switch target, a topic's board and General's alike;
  *   • a tap in a topic: a Claude account goes through the `/accounts` pick (the outcome is the toast, `asked` has none),
  *     the ✓ row and an OpenCode provider open the shared model page (a provider with one model switches at once), a
  *     page pick goes through the switch path, a refusal stays on the page, anything else returns to the board;
@@ -69,7 +71,7 @@ const manyModels = Array.from({ length: 12 }, (_, index) => `openrouter/model-${
 let detection: FallbackDetection;
 function resetDetection(): void {
   detection = {
-    claudeProfiles: [buildProfile('perf', { usage: snapshot(5, 78) }), buildProfile('default', { limitedUntil: inHours(2) }), buildProfile('out', { loggedIn: false })],
+    claudeProfiles: [buildProfile('perf', { usage: snapshot(5, 78) }), buildProfile('default', { limitedUntil: inHours(2) })],
     openCodeModels: ['openai/gpt-5', 'openai/gpt-5-mini', ...manyModels, 'solo/only-model'],
     recentOpenCodeModels: [],
     openCodeLimits: { 'openai/gpt-5-mini': inHours(3) },
@@ -138,7 +140,7 @@ describe('limitsBoard: /limits over its ports', () => {
     ]);
   });
 
-  it('a topic\'s board: the usage block, the settings with the link to their screen, the caption; one full-width name-only button per account and provider (the signed-out one left out), the ✓ on the row the topic runs on', async () => {
+  it('a topic\'s board: the usage block, the settings with the link to their screen, the caption; one full-width name-only button per account and provider, the ✓ on the row the topic runs on', async () => {
     position = claudePerf();
     const board = await openBoard();
     const [heading, perfLine, defaultLine, , settingsLine, , caption] = board.text.split('\n');
@@ -152,6 +154,37 @@ describe('limitsBoard: /limits over its ports', () => {
     assert.deepEqual(board.labels, ['✓ Claude · perf', 'Claude · default', 'OpenCode · openai', 'OpenCode · openrouter', 'OpenCode · solo', '🔔 Reminders: every 1 h'], 'the name only: no figure, no reset, no ⛔, no model — and under them the reminders row');
     assert.deepEqual(board.data, ['lim_c_0', 'lim_c_1', 'lim_o_2', 'lim_o_3', 'lim_o_4', 'lim_rem']);
     assert.deepEqual(usageRefreshes.at(-1), { maxAgeMs: 60_000 }, 'the usage is refreshed on demand when the screen opens');
+  });
+
+  it('a signed-out account stays on the board: its line `<name> — 🔑 sign-in expired` in the message and a 🔑 row that carries the /accounts sign-in callback with its name — in a topic and in General', async () => {
+    detection = { ...detection, claudeProfiles: [buildProfile('perf', { usage: snapshot(5, 78) }), buildProfile('out', { loggedIn: false }), buildProfile('default')] };
+    position = claudePerf();
+    try {
+      const topicBoard = await openBoard();
+      assert.deepEqual(topicBoard.text.split('\n').slice(0, 3), ['Usage (% used)', 'perf — ⏱ 5h 5% 🔄 in 3h · week 78% 🔄 in 4d', 'out — 🔑 sign-in expired']);
+      assert.deepEqual(topicBoard.labels.slice(0, 3), ['✓ Claude · perf', '🔑 Claude · out', 'Claude · default']);
+      assert.deepEqual(topicBoard.data.slice(0, 3), ['lim_c_0', 'acct_signin_out', 'lim_c_2'], 'the signed-out row bakes the name into the sign-in callback; the others keep indexing the snapshot');
+      assert.equal(topicBoard.data.every((callbackData) => Buffer.byteLength(callbackData) <= 64), true);
+
+      isGeneralTopic = true;
+      const generalBoard = await openBoard();
+      assert.deepEqual(generalBoard.labels.slice(0, 3), ['Claude · perf', '🔑 Claude · out', '✓ Claude · default'], 'General lists it too (the ✓ is the default account)');
+      assert.equal(generalBoard.text.split('\n')[2], 'out — 🔑 sign-in expired');
+    } finally {
+      isGeneralTopic = false;
+      resetDetection();
+    }
+  });
+
+  it('a signed-out account alone is still a board: its line under the heading and its row — it never vanishes', async () => {
+    detection = { ...detection, claudeProfiles: [buildProfile('out', { loggedIn: false })], openCodeModels: [] };
+    try {
+      const board = await openBoard();
+      assert.equal(board.text.split('\n').slice(0, 2).join('\n'), 'Usage (% used)\nout — 🔑 sign-in expired');
+      assert.deepEqual(board.labels, ['🔑 Claude · out', '🔔 Reminders: every 1 h']);
+    } finally {
+      resetDetection();
+    }
   });
 
   it('the ChatGPT subscription\'s usage follows the accounts\' in the message, and a provider the poller recorded no usage for has no line', async () => {
@@ -470,6 +503,22 @@ describe('limitsBoard: /limits over its ports', () => {
     await harness.tapButton(board.messageId, 'lim_pg_1');
     assert.equal(harness.fakeTelegram.callbackAnswers.at(-1), 'This screen is out of date — it is re-rendered.');
     assert.deepEqual(operatorSwitches, []);
+  });
+
+  it('the board\'s own row callbacks never reach a signed-out account: a lim_c_ tap that lands on its row (an old keyboard) is a stale tap — no pick, no switch', async () => {
+    detection = { ...detection, claudeProfiles: [buildProfile('perf'), buildProfile('out', { loggedIn: false })] };
+    position = claudePerf();
+    claudePicks.length = 0;
+    operatorSwitches.length = 0;
+    try {
+      const board = await openBoard();
+      assert.deepEqual(board.data.slice(0, 2), ['lim_c_0', 'acct_signin_out']);
+      await harness.tapButton(board.messageId, 'lim_c_1'); // the index the signed-out row holds in the message's snapshot
+      assert.equal(harness.fakeTelegram.callbackAnswers.at(-1), 'This screen is out of date — it is re-rendered.');
+      assert.deepEqual([claudePicks, operatorSwitches], [[], []]);
+    } finally {
+      resetDetection();
+    }
   });
 
   it('every callback the board and its pages carry fits Telegram\'s 64 bytes', async () => {
