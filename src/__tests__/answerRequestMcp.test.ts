@@ -43,6 +43,7 @@ const sharedFolder = '/home/user/projects/shared';
 let fakeHome: string;
 let originalHome: string | undefined;
 let handle: SchedulerMcpHandle;
+let store: StateStore;
 let ledger: RequestLedger;
 let deliveries: RequestAnswerDelivery[];
 let compactCalls: string[];
@@ -64,7 +65,7 @@ beforeEach(async () => {
   fakeHome = fs.mkdtempSync(path.join(os.tmpdir(), 'tgcode-answer-mcp-'));
   process.env.HOME = fakeHome;
   const dataDir = path.join(fakeHome, 'data');
-  const store = new StateStore(dataDir, { saveDebounceMs: 5 });
+  store = new StateStore(dataDir, { saveDebounceMs: 5 });
   await store.init();
   ledger = new RequestLedger({
     store,
@@ -129,9 +130,12 @@ beforeEach(async () => {
 afterEach(async () => {
   for (const client of clients) await client.close().catch(() => {});
   await handle.stop();
+  // The debounced save of the answer that just closed a request would land in the folder while it is being removed (ENOTEMPTY on a
+  // loaded box): it is written first, and a write that is still on its way is retried against, never raced.
+  await store.flush();
   if (originalHome === undefined) delete process.env.HOME;
   else process.env.HOME = originalHome;
-  fs.rmSync(fakeHome, { recursive: true, force: true });
+  fs.rmSync(fakeHome, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
 });
 
 async function connectAgent(scope: SchedulerScope): Promise<Client> {
