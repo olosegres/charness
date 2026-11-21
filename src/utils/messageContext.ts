@@ -48,8 +48,8 @@ export function joinMessageContextBlocks(blocks: ReadonlyArray<string | null | u
 
 /**
  * @description Whether the words of a message are somebody else's: it was FORWARDED, or a person who is not the operator sent
- * it. Such words are content, never control input — the ONE predicate every control guard asks (a slash command, a start
- * phrase, a context wipe), so none of them can be missed for one kind of sender.
+ * it. Such words are content, never control input — the ONE predicate every control guard asks (a slash command, a reminder
+ * step's capture, a context wipe), so none of them can be missed for one kind of sender.
  */
 export function checkIsForeignWords(context: MessageContext | undefined): boolean {
   return context?.isForwarded === true || context?.nonOperatorSender !== undefined;

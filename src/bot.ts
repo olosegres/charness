@@ -10942,7 +10942,7 @@ bot.on(message('text'), async (ctx) => {
   const text = stripCommandBotMention(ctx.message.text.trim());
   const kStr = keyToString(key);
   // A FORWARDED message is content, never control input: its words are somebody else's, so a `/quit` in it is not an
-  // order, a bare digit is not a pick or an answer, a phrase is not a start — the mark the agent reads says so. The routes
+  // order, a bare digit is not a pick or an answer — the mark the agent reads says so. The routes
   // that take text as an ANSWER the bot asked for (a pasted code, a name, a key, a reminder's text) still take it.
   const isForwarded = checkIsTelegramForward(ctx.message);
   const isSlashText = !isForwarded && text.startsWith('/');
@@ -11318,7 +11318,7 @@ interface VoiceReply {
 
 /**
  * @description Background worker for a single voice note: download → transcribe
- * → status emit → (buffer / start-agent-phrase / binding checks / forward).
+ * → status emit → (buffer / binding checks / forward).
  * Byte-for-byte the old voice handler's post-gate body — moved verbatim out of
  * the handler so it runs OFF the telegraf update loop (per-thread serialized).
  * Uses only `key`/`bot`, never the request `ctx`, so it survives past the

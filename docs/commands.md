@@ -66,7 +66,7 @@ them. How the agents run (the Claude Code backends, OpenCode, restarts, the bot'
   - [`/runners`](#runners)
 - **Plain messages, voice and files**
   - [Who may write in a topic](#who-may-write-in-a-topic)
-  - [Natural language and voice](#natural-language-and-voice)
+  - [Plain messages and voice](#plain-messages-and-voice)
   - [File intake](#file-intake)
   - [Reply context](#reply-context)
   - [Forwarded messages](#forwarded-messages)
@@ -1184,7 +1184,7 @@ A talker is **not** an admin: every other command gets «Only group admins can u
 
 **This is trust, not a sandbox.** The agents run with permission checks turned off, so a talker can make the agent run any command in that topic's folder — as the bot's OS account. Add only people you trust with that machine (the add screen says so).
 
-### Natural language and voice
+### Plain messages and voice
 
 In a bound topic a plain message is the input of the agent running there (start one with `/claude` or `/opencode`, or the
 buttons on the welcome). Typing a word like `claude` or `клод` — or saying it in a voice note — starts nothing: it is an
@@ -1200,9 +1200,6 @@ While the text is not there yet — a local engine that is still loading its mod
 shows a silent «🎙 Transcribing the voice message…» note, so the voice note does not look lost. It appears only when the
 wait passes 3 seconds (a warm engine shows nothing), and is deleted the moment the 🎤 transcript (or the failure notice)
 arrives. A restart of the bot removes a note it left behind, too.
-
-`/terminal` is never started from plain text — only the
-explicit command opens a shell.
 
 ### The agent's questions
 

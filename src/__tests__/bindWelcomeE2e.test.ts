@@ -651,8 +651,11 @@ describe('/bind end to end: built charness, fake Bot API', () => {
     fakeTelegram.holdNextResponse('deleteMessage', deletesReleased);
     const bulkCallsBefore = fakeTelegram.listCalls('deleteMessages').length;
     const launchesBefore = getSessionLaunches(getLayout()).length;
-    // The first message binds the topic (its welcome starts the sweep of the pickers); the start command right behind it must not wait for it.
+    // The first message binds the topic, and its welcome starts the sweep of the pickers (held below). The start command is pushed only
+    // once that welcome is out: the bot then reads it in a LATER batch of updates, one it fetches after the bind's own batch is done, so
+    // the topic is bound by then — and an awaited sweep would keep the bind's batch open, so the command would never be read.
     const sentId = fakeTelegram.pushOperatorMessage(threadId, 'is anyone there');
+    await sweptTopic.waitForMessage('the welcome of the auto-bind', (message) => message.message_id > sentId && message.text.includes(enDict['binding.welcome.start_prompt']));
     fakeTelegram.pushOperatorMessage(threadId, '/claude');
     try {
       await getCharness().waitFor('the agent to start while the sweep\'s response is still held', startWhileSweepHeldTimeoutMs, () => getSessionLaunches(getLayout()).length > launchesBefore);
