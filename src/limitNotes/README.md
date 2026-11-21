@@ -28,9 +28,25 @@ No clock, no state, no I/O: the caller hands in the report, the record, the sett
   and the accounts after it are the report's `launchOrder` — the one list `getClaudeLaunchOrder` builds and the pick is the head
   of; never a second ranking. The pick's reason is `describeClaudeLaunchOutcome`'s wording. A stale figure reads
   «usage unknown», a window whose reset has passed 0 % with no countdown, an API account its credit estimate.
-- **Setting.** `/limits_reminders`: every 1 h (default) / 2 h / 4 h / Off. `resolveLimitRemindersMinutes(general, topic)`: a
-  topic's own choice, else General's, else the default; a stored number no choice names counts as no choice.
 - The three windows (quiet, summary floor, orchestration) travel as `LimitNoteWindows`, so a flow can shorten them.
+
+## The setting and what is kept
+
+- **Setting (`reminderChoices.ts`, imports nothing — the instance settings and the state store load before any env file).**
+  `/limits_reminders`: every 1 h (default) / 2 h / 4 h / Off, stored as minutes (`0` = Off). `resolveLimitRemindersMinutes(general,
+  topic)`: a topic's own choice, else General's, else the default; a stored number no choice names counts as no choice.
+  General's value is `settings.json` `limitReminders.everyMinutes` (`createLimitRemindersSettingsReader`; strict — any other
+  number is an error naming the field; a Jira conversation follows it), a topic's own is `state.json` `limitRemindersOverrides`
+  (`getLimitRemindersOverride` / `setLimitRemindersOverride`). No env var: a window a test shortens goes into
+  `CHARNESS_TEST_TIMINGS`, with the code that reads it.
+- **Record (`state.json` `limitNotes[<conversation key>]`, `LimitNoteRecord`).** Epoch ms: the last note of either shape, its
+  fingerprint, the last `claude_profiles` call / worker watch, the last `claude_profiles` call. Read and written in one tick
+  (`getLimitNoteRecord` / `setLimitNoteRecord`), kept on disk so a restart never bursts reminders; a field of the wrong type in a
+  hand-edited file counts as absent.
+- **Fresh context.** Where the agent loses its context — a session start or stop, `/clear`, a completed compaction, a lost
+  transcript (`bot.ts` `clearThreadContextMarker` and `noteConversationContextReset`, beside the project board's reset) —
+  `clearLimitNoteFingerprint` clears the fingerprint ONLY, so the next summary is «changed»; the reminder clock (last note, last
+  call) and the orchestration mark stay, so a fresh context is never a reason for an early reminder.
 
 ## Lifecycle safety — a note is a passenger, never a cause
 

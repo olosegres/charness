@@ -3185,6 +3185,8 @@ function clearThreadContextMarker(key: SessionKey): void {
   // this session will take is withdrawn.
   noteTodoFreshContext(key);
   discardTodoInbox(key);
+  // …and for the accounts notes: the agent no longer holds the picture its last note showed (the reminder clock stays).
+  state.clearLimitNoteFingerprint(key);
 }
 
 function getThreadMessageState(key: SessionKey): ThreadMessageState {
@@ -15418,8 +15420,9 @@ let connectorConversationHooks: ReadonlyMap<PlatformId, ConnectorConversationHoo
  * {@link clearThreadContextMarker}, which a stop clears too.
  */
 function noteConversationContextReset(key: SessionKey, reason: string): void {
-  // A completed compaction or a fresh session: the agent forgot the board too (D20).
+  // A completed compaction or a fresh session: the agent forgot the board too (D20), and the picture of the accounts' limits.
   noteTodoFreshContext(key);
+  state.clearLimitNoteFingerprint(key);
   connectorConversationHooks.get(key.platform)?.onContextReset(key, reason);
 }
 

@@ -14,6 +14,7 @@ import { taskAgentsMaxConcurrentUpperBound } from './trackers/taskAgentLimit';
 import { hubHostSchema, hubPortSchema } from './runners/hubIds';
 import type { HubAddress } from './runners/hubAddress';
 import { autoUpdateModes, defaultAutoUpdateMode, defaultWhatsNew, type AutoUpdateMode, type UpdateSettings } from './selfUpdate/updateModes';
+import { checkIsLimitReminderChoice, limitReminderChoices, type LimitReminderChoice } from './limitNotes/reminderChoices';
 import { todoReminderDefaultMinutes, type TodoReminderSettings } from './todos/nag';
 import { questionWaitChoices, type QuestionWaitChoice } from './utils/questionWaitChoices';
 import type { TopicStatusPrefs } from './utils/topicIndicatorPlan';
@@ -25,8 +26,9 @@ import type { TopicStatusPrefs } from './utils/topicIndicatorPlan';
  * settings will move here later; today it holds `defaultEffort`, `autoUpdate`, `whatsNew`, `botSkills` (whether the bot's
  * own skills reach the agents: the way an instance without General sets it), `taskAgents` (the cap on tracker task agents
  * running at once — the way an instance without General sets it), `questionWait` (how long an unanswered agent question waits before it is set aside — the instance default a topic's own choice overrides), `topicStatus` (which status marks and counts the topic list shows after a topic's name — the instance default a topic's own set overrides), `todo` (the shared todo lists: on / off and the
- * staleness reminder's interval — also the way an instance without General sets them) and `runnerHost` (the address
- * paired runners dial, chosen once in `/runners`).
+ * staleness reminder's interval — also the way an instance without General sets them), `limitReminders` (how often an agent
+ * that launches workers is told where the account limits stand: General's interval, the one a topic's own choice overrides) and
+ * `runnerHost` (the address paired runners dial, chosen once in `/runners`).
  *
  * Validation is strict and all-or-nothing, like `stt.json`: a typo is an error that NAMES the field. Unlike
  * `stt.json`, an invalid file is NOT served from its last good copy — the built-in defaults apply and one error
@@ -57,6 +59,8 @@ export interface InstanceSettings {
   taskAgents: { maxConcurrent: number | null };
   /** The shared todo lists (`todos/`); a field that is `null` = its default (on, a reminder every hour). */
   todo: { isEnabled: boolean | null; reminderMinutes: number | null };
+  /** The limit reminders (`limitNotes/`): `everyMinutes` is the interval of every topic that has none of its own (`0` = Off); `null` = not set, the built-in default (1 h). */
+  limitReminders: { everyMinutes: LimitReminderChoice | null };
   /** The address paired runners dial to reach this machine's sshd (`/runners` asks once); `null` = not chosen yet. */
   runnerHost: HubAddress | null;
 }
@@ -88,12 +92,16 @@ const rawSettingsSchema = z.strictObject({
     /** `0` = no staleness reminder. */
     reminderMinutes: z.number().int().min(0).max(todoReminderMaxMinutes).optional(),
   }).optional(),
+  limitReminders: z.strictObject({
+    /** `0` = Off; otherwise one of the intervals the `/limits_reminders` picker offers. */
+    everyMinutes: z.number().refine(checkIsLimitReminderChoice, { message: `must be one of ${limitReminderChoices.join(', ')} (minutes; 0 = off)` }).optional(),
+  }).optional(),
   runnerHost: z.strictObject({ host: hubHostSchema, port: hubPortSchema }).optional(),
 });
 
 /** @description The settings of an instance that has no `settings.json`: nothing set. */
 export function createEmptyInstanceSettings(): InstanceSettings {
-  return { defaultEffort: null, autoUpdate: null, whatsNew: null, botSkills: null, questionWait: null, topicStatus: {}, taskAgents: { maxConcurrent: null }, todo: { isEnabled: null, reminderMinutes: null }, runnerHost: null };
+  return { defaultEffort: null, autoUpdate: null, whatsNew: null, botSkills: null, questionWait: null, topicStatus: {}, taskAgents: { maxConcurrent: null }, todo: { isEnabled: null, reminderMinutes: null }, limitReminders: { everyMinutes: null }, runnerHost: null };
 }
 
 /**
@@ -119,6 +127,7 @@ export function validateInstanceSettings(parsedJson: object): ConfigValidation<I
       topicStatus: { ...parsed.data.topicStatus },
       taskAgents: { maxConcurrent: parsed.data.taskAgents?.maxConcurrent ?? null },
       todo: { isEnabled: parsed.data.todo?.isEnabled ?? null, reminderMinutes: parsed.data.todo?.reminderMinutes ?? null },
+      limitReminders: { everyMinutes: parsed.data.limitReminders?.everyMinutes ?? null },
       runnerHost: parsed.data.runnerHost ?? null,
     },
   };
@@ -166,6 +175,7 @@ export function saveInstanceSettings(filePath: string, settings: InstanceSetting
           ...(settings.todo.reminderMinutes === null ? {} : { reminderMinutes: settings.todo.reminderMinutes }),
         },
       }),
+    ...(settings.limitReminders.everyMinutes === null ? {} : { limitReminders: { everyMinutes: settings.limitReminders.everyMinutes } }),
     ...(settings.runnerHost === null ? {} : { runnerHost: { host: settings.runnerHost.host, port: settings.runnerHost.port } }),
   };
   const validation = validateInstanceSettings(body);
@@ -297,6 +307,15 @@ export function createTodoSettingsReader(getFilePath: () => string, logError: (l
     isEnabled: settings.todo.isEnabled ?? true,
     reminderMinutes: settings.todo.reminderMinutes ?? todoReminderDefaultMinutes,
   }));
+}
+
+/**
+ * @description The reader of the instance's limit-reminder interval (`limitNotes/reminderChoices.ts`): `limitReminders.everyMinutes`,
+ * re-read when the file changes — a hand edit applies to the next note. `null` = the file does not say (the built-in default
+ * applies). An invalid file reads as `null`, and `logError` gets ONE line per distinct broken state (not one per read).
+ */
+export function createLimitRemindersSettingsReader(getFilePath: () => string, logError: (line: string) => void): () => LimitReminderChoice | null {
+  return createSettingsPartReader(getFilePath, logError, (settings) => settings.limitReminders.everyMinutes);
 }
 
 /**

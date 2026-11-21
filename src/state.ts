@@ -31,6 +31,8 @@ import type { ClaudeAccountAlertState } from './utils/claudeAccountAlert';
 import type { OpenCodeProviderUsageRecord } from './utils/openCodeUsage';
 import { pushRecentModel } from './utils/modelRecentPlan';
 import { checkIsQuestionWaitChoice, type QuestionWaitChoice } from './utils/questionWaitChoices';
+import { checkIsLimitReminderChoice, type LimitReminderChoice } from './limitNotes/reminderChoices';
+import type { LimitNoteRecord } from './limitNotes/plan';
 import { topicIndicatorSwitches, type TopicStatusPrefs } from './utils/topicIndicatorPlan';
 import { normaliseFallbackChain, type FallbackChainEntry } from './utils/fallbackChain';
 import type { TodoProjectOverride } from './todos/projects';
@@ -735,6 +737,20 @@ export interface StateV1 {
    */
   questionWaitOverrides?: Record<string, QuestionWaitChoice>;
   /**
+   * What the bot remembers of the accounts notes (`limitNotes/`) the agent of a conversation got, keyed by {@link SessionKey}
+   * string: when the last note reached it, the fingerprint of the limits picture that note showed, when it last called
+   * `claude_profiles` or armed a worker watch (it orchestrates workers) and when it last called `claude_profiles` (it looked).
+   * Epoch ms. Survives a restart, so a restart never bursts reminders; a fresh context clears only the fingerprint. Optional so
+   * older state files stay valid — absent for a conversation that never orchestrated.
+   */
+  limitNotes?: Record<string, LimitNoteRecord>;
+  /**
+   * The limit-reminder interval (`/limits_reminders`, `limitNotes/reminderChoices.ts`) a topic chose for itself, keyed by
+   * {@link SessionKey} string: minutes, `0` = Off. A topic with no entry follows the instance value (`settings.json`
+   * `limitReminders`, else the built-in default). Optional so older state files stay valid.
+   */
+  limitRemindersOverrides?: Record<string, LimitReminderChoice>;
+  /**
    * The status marks (`/topic_status`, `utils/topicIndicatorPlan.ts`) a topic chose for itself, keyed by {@link SessionKey} string: its
    * whole set of switches (a tap copies the instance's set into the topic first). A topic with no entry follows the instance value
    * (`settings.json` `topicStatus` over the defaults). Optional so older state files stay valid.
@@ -872,7 +888,27 @@ const schedulerMcpSecretByteLength = 32;
  * The optional `state.json` maps keyed by a serialized {@link SessionKey} that
  * are dropped as a whole once empty — see `StateStore.dropOptionalMapEntry`.
  */
-type OptionalConversationMapField = 'answerPins' | 'limitEpisodesRecovered' | 'limitProbesFired' | 'lostWork' | 'lostWorkResumedAt' | 'openRequests';
+type OptionalConversationMapField = 'answerPins' | 'limitEpisodesRecovered' | 'limitNotes' | 'limitProbesFired' | 'lostWork' | 'lostWorkResumedAt' | 'openRequests';
+
+/** A stored time (epoch ms) when it is a finite number; a hand-edited file may hold anything. */
+function getValidStoredStamp(value: number | undefined): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
+/** `record` with only its valid fields; `undefined` when none is left (a hand-edited file may hold anything). */
+function getValidLimitNoteRecord(record: LimitNoteRecord): LimitNoteRecord | undefined {
+  const lastNoteAt = getValidStoredStamp(record.lastNoteAt);
+  const lastOrchestratedAt = getValidStoredStamp(record.lastOrchestratedAt);
+  const lastProfilesCallAt = getValidStoredStamp(record.lastProfilesCallAt);
+  const fingerprint = typeof record.fingerprint === 'string' && record.fingerprint !== '' ? record.fingerprint : undefined;
+  const clean: LimitNoteRecord = {
+    ...(lastNoteAt === undefined ? {} : { lastNoteAt }),
+    ...(fingerprint === undefined ? {} : { fingerprint }),
+    ...(lastOrchestratedAt === undefined ? {} : { lastOrchestratedAt }),
+    ...(lastProfilesCallAt === undefined ? {} : { lastProfilesCallAt }),
+  };
+  return Object.keys(clean).length === 0 ? undefined : clean;
+}
 
 /**
  * @description Promise-chain per-key lock. The map holds the tail of each
@@ -2511,6 +2547,69 @@ export class StateStore {
       (this.state.questionWaitOverrides ??= {})[k] = choice;
       this.scheduleSave();
     });
+  }
+
+  // ── The limit reminders (`/limits_reminders`) and the accounts notes (`limitNotes/`) ──
+
+  /** @description The topic's own limit-reminder interval (`0` = Off), or `undefined` when it follows the instance value (a value no choice names counts as none). */
+  getLimitRemindersOverride(key: SessionKey): LimitReminderChoice | undefined {
+    const choice = this.state.limitRemindersOverrides?.[keyToString(key)];
+    return checkIsLimitReminderChoice(choice) ? choice : undefined;
+  }
+
+  /** @description Set the topic's own limit-reminder interval (`null` = follow the instance value again; an emptied map is dropped). Debounced. */
+  async setLimitRemindersOverride(key: SessionKey, choice: LimitReminderChoice | null): Promise<void> {
+    const k = keyToString(key);
+    await this.withLock(key, async () => {
+      if (choice === null) {
+        if (!this.state.limitRemindersOverrides || !(k in this.state.limitRemindersOverrides)) return;
+        delete this.state.limitRemindersOverrides[k];
+        if (Object.keys(this.state.limitRemindersOverrides).length === 0) delete this.state.limitRemindersOverrides;
+        this.scheduleSave();
+        return;
+      }
+      if (this.state.limitRemindersOverrides?.[k] === choice) return;
+      (this.state.limitRemindersOverrides ??= {})[k] = choice;
+      this.scheduleSave();
+    });
+  }
+
+  /**
+   * @description What the bot remembers of `key`'s accounts notes ({@link StateV1.limitNotes}), or `undefined` when nothing valid is
+   * stored. A copy; a field of the wrong type (a hand-edited file) counts as absent.
+   */
+  getLimitNoteRecord(key: SessionKey): LimitNoteRecord | undefined {
+    const stored = this.state.limitNotes?.[keyToString(key)];
+    return stored === undefined ? undefined : getValidLimitNoteRecord(stored);
+  }
+
+  /**
+   * @description Replace `key`'s note record (`null`, or a record with nothing valid in it, drops it and, with the last entry, the
+   * map). Synchronous in memory — the caller reads the record, works out the next one and writes it in one tick, so two
+   * recordings never interleave — and saved debounced.
+   */
+  setLimitNoteRecord(key: SessionKey, record: LimitNoteRecord | null): void {
+    const k = keyToString(key);
+    const clean = record === null ? undefined : getValidLimitNoteRecord(record);
+    if (clean === undefined) {
+      if (this.dropOptionalMapEntry('limitNotes', k)) this.scheduleSave();
+      return;
+    }
+    (this.state.limitNotes ??= {})[k] = clean;
+    this.scheduleSave();
+  }
+
+  /**
+   * @description The agent of `key` lost its context (a fresh session, a stop, `/clear`, a completed compaction, a lost
+   * transcript): it no longer holds the picture its last note showed, so the next summary is «changed» whatever it was. Clears the
+   * fingerprint ONLY — the time of the last note and of the last `claude_profiles` call keep the reminder clock, so a fresh context
+   * is never a reason for an early reminder. No-op (no save) without a fingerprint.
+   */
+  clearLimitNoteFingerprint(key: SessionKey): void {
+    const record = this.getLimitNoteRecord(key);
+    if (record?.fingerprint === undefined) return;
+    const { fingerprint: _forgotten, ...rest } = record;
+    this.setLimitNoteRecord(key, rest);
   }
 
   // ── The status marks of a topic's name (`/topic_status`) ──

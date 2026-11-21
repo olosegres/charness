@@ -389,7 +389,7 @@ describe('the guards are wired where they must run', () => {
     const { projectModules, packages } = getModulesLoadedBy('cli/connectorGuards.ts');
     // A module joins this list only once it is known to read no settings at load time.
     const allowed = [
-      'adapters/adapterNames.ts', 'cli/connectorGuards.ts', 'cli/envLoader.ts', 'connectors/jira/configFile.ts', 'legacyNames.ts', 'platform/connectorSet.ts',
+      'adapters/adapterNames.ts', 'cli/connectorGuards.ts', 'cli/envLoader.ts', 'connectors/jira/configFile.ts', 'legacyNames.ts', 'limitNotes/reminderChoices.ts', 'platform/connectorSet.ts',
       'requests/requestGroup.ts', 'sessionKey.ts', 'state.ts', 'stateFile.ts', 'topicTalkers.ts', 'utils/agentEnvironment.ts', 'utils/autoContinueOnLimit.ts',
       'utils/checkIsRecord.ts', 'utils/claudeProfiles.ts', 'utils/claudeUsage.ts', 'utils/compactOnIdle.ts', 'utils/displayVerbosity.ts', 'utils/fallbackChain.ts',
       'utils/minutesOverride.ts', 'utils/modelRecentPlan.ts', 'utils/questionWaitChoices.ts', 'utils/surrogateSafeCut.ts', 'utils/threadToggle.ts', 'utils/topicIndicatorPlan.ts',

@@ -15,7 +15,6 @@ import {
   buildLimitNoteFingerprint,
   buildLimitNoteText,
   checkHasFreshLimitUsage,
-  checkIsLimitReminderMinutes,
   decideLimitNote,
   defaultLimitNoteWindows,
   limitNoteMarker,
@@ -23,10 +22,6 @@ import {
   limitNoteMinQuietMs,
   limitNoteSkipReasons,
   limitNoteSummaryFloorMs,
-  limitReminderDefaultMinutes,
-  limitReminderIntervalOptions,
-  limitReminderOffMinutes,
-  resolveLimitRemindersMinutes,
   type LimitNoteMoment,
   type LimitNoteRecord,
 } from '../limitNotes/plan';
@@ -90,36 +85,6 @@ const twoAccounts = (workWeekly = 62): ClaudeProfileUsageView[] => [
   buildView('default', { usage: buildUsage({ session: 10, weekly: 20, weeklyResetHours: 120 }) }),
   buildView('work', { usage: buildUsage({ session: 30, weekly: workWeekly, weeklyResetHours: 43 }) }),
 ];
-
-describe('resolveLimitRemindersMinutes: the interval a topic is under', () => {
-  it('nobody chose: the default hour; General\'s choice stands for a topic with none', () => {
-    assert.equal(resolveLimitRemindersMinutes(undefined, undefined), limitReminderDefaultMinutes);
-    assert.equal(limitReminderDefaultMinutes, 60);
-    assert.equal(resolveLimitRemindersMinutes(120, undefined), 120);
-    assert.equal(resolveLimitRemindersMinutes(240, undefined), 240);
-  });
-
-  it('a topic\'s own choice beats General in both directions: its interval over General\'s Off, its Off over General\'s interval', () => {
-    assert.equal(resolveLimitRemindersMinutes(120, 240), 240);
-    assert.equal(resolveLimitRemindersMinutes(limitReminderOffMinutes, 60), 60);
-    assert.equal(resolveLimitRemindersMinutes(60, limitReminderOffMinutes), null);
-    assert.equal(resolveLimitRemindersMinutes(limitReminderOffMinutes, undefined), null);
-  });
-
-  it('a stored number no choice names counts as no choice at that level', () => {
-    assert.equal(resolveLimitRemindersMinutes(120, 90), 120, 'a topic value of 90 min is no choice: General decides');
-    assert.equal(resolveLimitRemindersMinutes(45, undefined), limitReminderDefaultMinutes, 'a General value of 45 min is no choice: the default');
-    assert.equal(resolveLimitRemindersMinutes(Number.NaN, Number.NaN), limitReminderDefaultMinutes);
-  });
-
-  it('the offered intervals are 1 h, 2 h and 4 h, and only they pass the guard', () => {
-    assert.deepEqual([...limitReminderIntervalOptions], [60, 120, 240]);
-    assert.equal(checkIsLimitReminderMinutes(120), true);
-    assert.equal(checkIsLimitReminderMinutes(limitReminderOffMinutes), false, 'Off is the picker\'s own button, not an interval');
-    assert.equal(checkIsLimitReminderMinutes(90), false);
-    assert.equal(checkIsLimitReminderMinutes(undefined), false);
-  });
-});
 
 describe('decideLimitNote: which shape of the note, at which moment', () => {
   const orchestratingRecord: LimitNoteRecord = { lastOrchestratedAt: nowMs - hourMs, lastNoteAt: nowMs - 70 * minuteMs, fingerprint: 'rec=old' };

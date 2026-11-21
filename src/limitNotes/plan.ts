@@ -36,38 +36,6 @@ export type OpenCodeProviderUsages = Readonly<Record<string, OpenCodeProviderUsa
 const msPerMinute = 60 * 1000;
 const msPerDay = 24 * 60 * msPerMinute;
 
-// ── the setting ──
-
-/** @name LimitReminderMinutes @description One interval the `/limits_reminders` setting offers. */
-export type LimitReminderMinutes = 60 | 120 | 240;
-
-/** The stored value of «Off» (`settings.json` / `state.json` keep minutes; `0` is no interval). */
-export const limitReminderOffMinutes = 0;
-
-/** The interval nobody chose. */
-export const limitReminderDefaultMinutes: LimitReminderMinutes = 60;
-
-/** The intervals the picker offers, in the order it shows them; «Off» is the picker's own button. */
-export const limitReminderIntervalOptions: readonly LimitReminderMinutes[] = [60, 120, 240];
-
-/** @description Whether a stored number is one of the offered intervals (any other stored value counts as none). */
-export function checkIsLimitReminderMinutes(value: number | undefined): value is LimitReminderMinutes {
-  return limitReminderIntervalOptions.some((option) => option === value);
-}
-
-/**
- * @description The interval a topic is under: its own choice, else General's, else {@link limitReminderDefaultMinutes};
- * `null` = Off. `topic` / `general` are the stored values (`undefined` = no choice made; `0` = Off; a number that is no offered
- * interval counts as no choice). A topic's Off beats General's interval, a topic's interval beats General's Off.
- */
-export function resolveLimitRemindersMinutes(general: number | undefined, topic: number | undefined): LimitReminderMinutes | null {
-  for (const stored of [topic, general]) {
-    if (stored === limitReminderOffMinutes) return null;
-    if (checkIsLimitReminderMinutes(stored)) return stored;
-  }
-  return limitReminderDefaultMinutes;
-}
-
 // ── windows and names ──
 
 /** What a note text starts with (`[Accounts · 14:05] …`): the bot cuts a send tool's result from it, and the resume readers strip it. */

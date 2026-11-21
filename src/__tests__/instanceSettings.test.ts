@@ -50,6 +50,7 @@ import {
   createBotSkillsSettingsReader,
   createEmptyInstanceSettings,
   createInstanceDefaultEffortReader,
+  createLimitRemindersSettingsReader,
   createQuestionWaitSettingsReader,
   createRunnerHostReader,
   createTaskAgentsMaxConcurrentReader,
@@ -65,6 +66,7 @@ import {
   type InstanceSettings,
 } from '../instanceSettings';
 import { taskAgentsMaxConcurrentUpperBound } from '../trackers/taskAgentLimit';
+import { limitReminderChoices } from '../limitNotes/reminderChoices';
 import { questionWaitChoices } from '../utils/questionWaitChoices';
 import { claudeEffortLevels, defaultEffortLevel, getInstanceDefaultEffort, setInstanceDefaultEffortReader } from '../effortLevels';
 
@@ -407,4 +409,56 @@ test('runnerHost: an invalid file reads as not chosen, and a change keeps the ot
   saveInstanceSettings(settingsPath, createSettings({ autoUpdate: 'off', runnerHost: { host: 'host.example', port: 22 } }));
   assert.deepEqual(loadInstanceSettingsForUpdate(settingsPath).runnerHost, { host: 'host.example', port: 22 });
   assert.equal(loadInstanceSettingsForUpdate(settingsPath).autoUpdate, 'off');
+});
+
+test('limitReminders.everyMinutes: each stored choice (Off = 0, 1 h, 2 h, 4 h) is valid, an empty file says nothing, any other number or a non-number is an error naming the field', () => {
+  assert.equal(createEmptyInstanceSettings().limitReminders.everyMinutes, null);
+  for (const choice of limitReminderChoices) {
+    assert.deepEqual(validateInstanceSettings({ limitReminders: { everyMinutes: choice } }), { ok: true, config: createSettings({ limitReminders: { everyMinutes: choice } }) }, `${choice}`);
+  }
+  assert.deepEqual(validateInstanceSettings({}), { ok: true, config: createEmptyInstanceSettings() });
+  assert.deepEqual(validateInstanceSettings({ limitReminders: {} }), { ok: true, config: createEmptyInstanceSettings() }, 'the section without a value says nothing');
+  for (const wrong of [{ everyMinutes: 90 }, { everyMinutes: -60 }, { everyMinutes: '60' }, { everyMinutes: 60.5 }, { every: 60 }]) {
+    const bad = validateInstanceSettings({ limitReminders: wrong });
+    assert.equal(bad.ok, false, JSON.stringify(wrong));
+    assert.match(bad.ok ? '' : bad.errors.join('\n'), /^settings\.json limitReminders/, JSON.stringify(wrong));
+  }
+  const refused = validateInstanceSettings({ limitReminders: { everyMinutes: 90 } });
+  assert.match(refused.ok ? '' : refused.errors.join('\n'), /must be one of 0, 60, 120, 240 \(minutes; 0 = off\)/);
+});
+
+test('limitReminders is written only when set — Off (0) included — and a change elsewhere keeps it', () => {
+  saveInstanceSettings(settingsPath, createSettings({ limitReminders: { everyMinutes: 120 }, autoUpdate: 'off' }));
+  assert.deepEqual(JSON.parse(fs.readFileSync(settingsPath, 'utf8')), { autoUpdate: 'off', limitReminders: { everyMinutes: 120 } });
+  saveInstanceSettings(settingsPath, { ...loadInstanceSettingsForUpdate(settingsPath), defaultEffort: 'high' });
+  assert.deepEqual(JSON.parse(fs.readFileSync(settingsPath, 'utf8')).limitReminders, { everyMinutes: 120 });
+  saveInstanceSettings(settingsPath, createSettings({ limitReminders: { everyMinutes: 0 } }));
+  assert.deepEqual(JSON.parse(fs.readFileSync(settingsPath, 'utf8')), { limitReminders: { everyMinutes: 0 } }, 'Off is a choice and is written, unlike «not set»');
+  saveInstanceSettings(settingsPath, createSettings({ autoUpdate: 'off' }));
+  assert.equal('limitReminders' in JSON.parse(fs.readFileSync(settingsPath, 'utf8')), false, 'not set leaves no field');
+});
+
+test('a value no choice names is never written: the save refuses it before the file changes', () => {
+  saveInstanceSettings(settingsPath, createSettings({ limitReminders: { everyMinutes: 60 } }));
+  // The type forbids the value; a caller that gets past it (a cast, an old build) is still refused by the validation.
+  const invalid: InstanceSettings = createSettings({ limitReminders: JSON.parse('{"everyMinutes": 90}') });
+  assert.throws(() => saveInstanceSettings(settingsPath, invalid), /refusing to write an invalid settings\.json: .*limitReminders/);
+  assert.deepEqual(JSON.parse(fs.readFileSync(settingsPath, 'utf8')), { limitReminders: { everyMinutes: 60 } });
+});
+
+test('the limit-reminders reader: null with no file or field, the file\'s choice (Off included), a hand edit with no restart, a broken file as null with ONE named error', () => {
+  const errors: string[] = [];
+  const read = createLimitRemindersSettingsReader(() => settingsPath, (line) => errors.push(line));
+  assert.equal(read(), null, 'no file');
+  writeRaw('{"autoUpdate":"off"}');
+  assert.equal(read(), null, 'the field left out');
+  writeRaw('{"limitReminders":{"everyMinutes":240}}');
+  assert.equal(read(), 240);
+  writeRaw('{"limitReminders":{"everyMinutes":0}}');
+  assert.equal(read(), 0, 'Off is a value, not «not set»');
+  writeRaw('{"limitReminders":{"everyMinutes":90}}');
+  assert.equal(read(), null, 'a broken file says nothing');
+  read();
+  assert.equal(errors.length, 1);
+  assert.match(errors[0], /limitReminders/);
 });
