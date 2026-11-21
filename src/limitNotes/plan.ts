@@ -16,18 +16,19 @@
 import { formatUsd } from '../utils/claudeApiSpend';
 import {
   claudeLaunchSessionCeilingPercent,
+  describeClaudeLaunchOutcome,
   formatClaudeUsageRelativeReset,
   getClaudeUsageBucket,
   getClaudeUsagePercentAsOf,
-  sortClaudeProfilesByLaunchRank,
   type ClaudeProfileReportEntry,
   type ClaudeProfilesReport,
-  type ClaudeProfileUsageView,
   type ClaudeRelativeResetWords,
   type ClaudeUsageBucket,
   type ClaudeUsageSnapshot,
 } from '../utils/claudeUsage';
 import { chatGptProviderId, type OpenCodeProviderUsageRecord } from '../utils/openCodeUsage';
+import { formatReminderTime } from '../utils/reminderWizard';
+import { getZonedWallClock } from '../utils/timezone';
 
 /** What the poller recorded per OpenCode provider (`state.json` `openCodeProviderUsage`); the ChatGPT subscription's figures are read from it. */
 export type OpenCodeProviderUsages = Readonly<Record<string, OpenCodeProviderUsageRecord>>;
@@ -268,12 +269,14 @@ function getChatGptWeeklyFigure(usage: ClaudeUsageSnapshot, nowMs: number): Week
 }
 
 /**
- * @description Whether the usage cache holds a figure worth a note: some account the operator's list offers is billed to API
- * credits (no windows by design) or has a snapshot that was re-read at its last poll. Nothing fresh at all → no note (a note of
+ * @description Whether the usage cache holds a figure worth a note: some account the operator's list offers has a snapshot that was
+ * re-read at its last poll, or is billed to API credits (no windows by design) AND is one a launch would really use (it is in
+ * `launchOrder`: held by the `/limits` list, not held off agents, its credit not used up). Nothing fresh at all → no note (a note of
  * «usage unknown» only would tell the agent nothing the tool does not).
  */
 export function checkHasFreshLimitUsage(report: ClaudeProfilesReport): boolean {
-  return listOfferedEntries(report).some((entry) => entry.loggedIn !== false && (entry.billing === 'api' || (!entry.isUsageStale && entry.buckets.length > 0)));
+  return listOfferedEntries(report).some((entry) => entry.loggedIn !== false
+    && (entry.billing === 'api' ? report.launchOrder.includes(entry.name) : !entry.isUsageStale && entry.buckets.length > 0));
 }
 
 const unknownStep = '?';
@@ -311,50 +314,37 @@ const reminderInstructionLine = 'Call claude_profiles right before your next lau
 const noWorkerAccountSentence = 'No Claude account can take a new worker now';
 const noWorkerAccountClause = 'no Claude account can take a new worker now';
 
-/** The clock of the note's header in the instance zone: `14:05`. */
-function formatNoteClock(nowMs: number, timezone: string): string {
-  return new Intl.DateTimeFormat('en-GB', { timeZone: timezone, hourCycle: 'h23', hour: '2-digit', minute: '2-digit' }).format(nowMs);
-}
-
 function getNoteHeader(shape: LimitNoteShape, nowMs: number, timezone: string): string {
   const suffix = shape === 'summary' ? ' · changed' : '';
-  return `${limitNoteMarker} · ${formatNoteClock(nowMs, timezone)}${suffix}]`;
-}
-
-/** The report entry as the launch ranking reads a profile: only its windows matter to the order. */
-function getRankView(entry: ClaudeProfileReportEntry): ClaudeProfileUsageView {
-  return {
-    name: entry.name,
-    configDir: entry.configDir,
-    loggedIn: entry.loggedIn ?? undefined,
-    email: entry.email,
-    subscriptionType: entry.subscriptionType,
-    usage: entry.buckets.length === 0 ? undefined : { fetchedAt: entry.usageFetchedAt ?? '', source: 'api', buckets: entry.buckets },
-    limitedUntil: entry.limitedUntil,
-    billing: entry.billing,
-    creditExhaustedAt: entry.creditExhaustedAt,
-  };
+  return `${limitNoteMarker} · ${formatReminderTime(getZonedWallClock(timezone, nowMs))}${suffix}]`;
 }
 
 /**
- * The accounts after the pick, in the order a launch prefers them — the SAME ranking `claude_profiles` uses
- * (`sortClaudeProfilesByLaunchRank`), never a second one: usable ones the pick did not take, with room in the five-hour window.
+ * The accounts after the pick, in the order a launch prefers them — the report's `launchOrder`, the SAME order the pick is the head
+ * of (API credit the list holds first, then the usable subscriptions by the soonest weekly reset), never a second ranking.
  */
-function listNextAccountEntries(report: ClaudeProfilesReport, nowMs: number): ClaudeProfileReportEntry[] {
-  const candidates = listOfferedEntries(report).filter((entry) => entry.isEligible && !entry.isRecommended && !checkIsSessionFull(entry, nowMs));
-  const ranked = sortClaudeProfilesByLaunchRank(candidates.map((entry) => ({ ...getRankView(entry), entry })), null, nowMs);
-  return ranked.slice(0, limitNoteNextAccountCount).map(({ entry }) => entry);
+function listNextAccountEntries(report: ClaudeProfilesReport): ClaudeProfileReportEntry[] {
+  return report.launchOrder
+    .filter((name) => name !== report.recommended)
+    .slice(0, limitNoteNextAccountCount)
+    .flatMap((name) => report.profiles.filter((entry) => entry.name === name));
 }
 
 const usageUnknownWords = 'usage unknown';
 
-function formatApiCreditWords(entry: ClaudeProfileReportEntry): string {
-  return entry.remainingEstimateUsd === null ? 'API credit' : `API credit (≈ ${formatUsd(entry.remainingEstimateUsd)} left)`;
+/** What the bot estimates is left of an API account's credit (`≈ $61.20 left`); `null` when the operator gave it no figure. */
+function formatApiCreditLeft(entry: ClaudeProfileReportEntry): string | null {
+  return entry.remainingEstimateUsd === null ? null : `≈ ${formatUsd(entry.remainingEstimateUsd)} left`;
 }
 
-/** What the reminder says of the account the pick names: `week 62 % used, resets in 1 d 19 h; 5 h 30 %`. */
-function formatReminderPickFigures(entry: ClaudeProfileReportEntry, nowMs: number): string {
-  if (entry.billing === 'api') return formatApiCreditWords(entry);
+function formatApiCreditWords(entry: ClaudeProfileReportEntry): string {
+  const left = formatApiCreditLeft(entry);
+  return left === null ? 'API credit' : `API credit (${left})`;
+}
+
+/** What the reminder says of the account the pick names after its reason: `week 62 % used, resets in 1 d 19 h; 5 h 30 %`; `null` for an API account with no credit figure (its reason says it all). */
+function formatReminderPickFigures(entry: ClaudeProfileReportEntry, nowMs: number): string | null {
+  if (entry.billing === 'api') return formatApiCreditLeft(entry);
   const weekly = getEntryWeeklyFigure(entry, nowMs);
   if (weekly === null) return usageUnknownWords;
   const session = getSessionPercent(entry, nowMs);
@@ -368,10 +358,16 @@ function formatReminderNextFigures(entry: ClaudeProfileReportEntry, nowMs: numbe
   return weekly === null ? usageUnknownWords : `week ${weekly.percent} %${weekly.resetIn === null ? '' : `, resets in ${weekly.resetIn}`}`;
 }
 
-/** The first line: where the next new worker goes, or that nothing can take one and what frees up first. */
+/**
+ * The first line: where the next new worker goes, why (the wording of `describeClaudeLaunchOutcome`, the one `claude_profiles` opens
+ * with) and its figures — or that nothing can take one and what frees up first.
+ */
 function formatReminderPickLine(report: ClaudeProfilesReport, nowMs: number): string {
   const picked = report.profiles.find((entry) => entry.name === report.recommended);
-  if (picked !== undefined) return `Next new Claude worker → ${picked.name}: ${formatReminderPickFigures(picked, nowMs)}.`;
+  if (picked !== undefined) {
+    const figures = formatReminderPickFigures(picked, nowMs);
+    return `Next new Claude worker → ${picked.name} (${describeClaudeLaunchOutcome(report, null)})${figures === null ? '' : `: ${figures}`}.`;
+  }
   const next = report.nextAvailable;
   return next === null ? `${noWorkerAccountSentence}.` : `${noWorkerAccountSentence}; ${next.profile} frees up in ${formatClaudeUsageRelativeReset(next.at, nowMs, limitNoteResetWords)}.`;
 }
@@ -385,7 +381,7 @@ function formatReminderChatGptSentence(openCodeUsage: OpenCodeProviderUsages, no
 }
 
 function buildReminderText(report: ClaudeProfilesReport, openCodeUsage: OpenCodeProviderUsages, nowMs: number): string {
-  const next = listNextAccountEntries(report, nowMs).map((entry) => `${entry.name} (${formatReminderNextFigures(entry, nowMs)})`);
+  const next = listNextAccountEntries(report).map((entry) => `${entry.name} (${formatReminderNextFigures(entry, nowMs)})`);
   const alsoSentences = [next.length === 0 ? null : `Then ${next.join(', ')}.`, formatReminderChatGptSentence(openCodeUsage, nowMs)].filter((sentence): sentence is string => sentence !== null);
   return [formatReminderPickLine(report, nowMs), ...(alsoSentences.length === 0 ? [] : [alsoSentences.join(' ')]), reminderInstructionLine].join('\n');
 }
@@ -407,7 +403,7 @@ function buildSummaryText(report: ClaudeProfilesReport, openCodeUsage: OpenCodeP
   const chatGptUsage = getChatGptUsage(openCodeUsage);
   const items = [
     picked === undefined ? noWorkerAccountClause : formatSummaryEntry(picked, true, nowMs),
-    ...listNextAccountEntries(report, nowMs).map((entry) => formatSummaryEntry(entry, false, nowMs)),
+    ...listNextAccountEntries(report).map((entry) => formatSummaryEntry(entry, false, nowMs)),
     ...(chatGptUsage === undefined ? [] : [`ChatGPT ${formatSummaryFigure(getChatGptWeeklyFigure(chatGptUsage, nowMs), false)}`]),
   ];
   return `${items.join('; ')}.`;

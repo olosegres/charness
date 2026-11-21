@@ -217,7 +217,7 @@ describe('the bot-MCP tool digest (lifecycle plan L4)', () => {
 
   it('the claude_profiles port adds its tool on EVERY platform (a child process is launched the same way everywhere), so each digest moves', () => {
     const without = createDigestDeps();
-    const withPort: SchedulerMcpDeps = { ...without, listClaudeProfiles: async ({ model }) => ({ model, relevantBuckets: [], recommended: null, pickReason: 'none', nextAvailable: null, profiles: [] }) };
+    const withPort: SchedulerMcpDeps = { ...without, listClaudeProfiles: async ({ model }) => ({ model, relevantBuckets: [], recommended: null, pickReason: 'none', nextAvailable: null, launchOrder: [], profiles: [] }) };
     for (const platform of ['telegram', 'jira', null] as const) {
       assert.notEqual(getBotMcpToolDigest(withPort, platform, true), getBotMcpToolDigest(without, platform, true), `${platform ?? 'neutral'} digest`);
     }
@@ -251,7 +251,7 @@ describe('the bot-MCP tool digest (lifecycle plan L4)', () => {
     const deps: SchedulerMcpDeps = {
       ...createDigestDeps(),
       fetchJiraAttachment: async () => ({ ok: false, error: 'unused' }),
-      listClaudeProfiles: async ({ model }) => ({ model, relevantBuckets: [], recommended: null, pickReason: 'none', nextAvailable: null, profiles: [] }),
+      listClaudeProfiles: async ({ model }) => ({ model, relevantBuckets: [], recommended: null, pickReason: 'none', nextAvailable: null, launchOrder: [], profiles: [] }),
     };
     const offered = new Set((['telegram', 'jira'] as const).flatMap((platform) => getBotMcpToolDefinitions(deps, platform).map((definition) => definition.name)));
     const skillsDir = path.join(__dirname, '..', '..', 'agent-plugin', 'skills');
@@ -270,7 +270,7 @@ describe('the bot-MCP tool digest (lifecycle plan L4)', () => {
       ...createDigestDeps(),
       fetchJiraAttachment: async () => ({ ok: false, error: 'unused' }),
       sendJiraFiles: async () => ({ ok: false, error: 'unused' }),
-      listClaudeProfiles: async ({ model }) => ({ model, relevantBuckets: [], recommended: null, pickReason: 'none', nextAvailable: null, profiles: [] }),
+      listClaudeProfiles: async ({ model }) => ({ model, relevantBuckets: [], recommended: null, pickReason: 'none', nextAvailable: null, launchOrder: [], profiles: [] }),
     };
     const offered: OptionalBotTools = { isJiraAttachmentToolOffered: true, isJiraFileSendOffered: true, isTodoToolOffered: true, remoteRunRunnerLines: [] };
     const toolNames = new Set((['telegram', 'jira', null] as const).flatMap((platform) => getBotMcpToolDefinitions(deps, platform).map((definition) => definition.name)));
@@ -311,7 +311,7 @@ describe('the bot-MCP tool digest (lifecycle plan L4)', () => {
   it('every claude_profiles input the shipped skills name is one the tool takes', () => {
     const deps: SchedulerMcpDeps = {
       ...createDigestDeps(),
-      listClaudeProfiles: async ({ model }) => ({ model, relevantBuckets: [], recommended: null, pickReason: 'none', nextAvailable: null, profiles: [] }),
+      listClaudeProfiles: async ({ model }) => ({ model, relevantBuckets: [], recommended: null, pickReason: 'none', nextAvailable: null, launchOrder: [], profiles: [] }),
     };
     const takenInputs = getBotMcpToolDefinitions(deps, 'telegram').find((definition) => definition.name === 'claude_profiles')?.inputKeys ?? [];
     assert.deepEqual(takenInputs, ['currentProfile', 'isStoppedByLimit', 'model']);
@@ -1131,6 +1131,7 @@ describe('scheduler MCP server end-to-end (real HTTP)', () => {
           recommended,
           pickReason,
           nextAvailable: model === 'exhausted' ? { profile: 'work', at: '2026-10-20T10:00:00.000Z' } : null,
+          launchOrder: recommended === null ? [] : [recommended],
           profiles: [
             { name: 'default', configDir: null, email: 'me@example.com', kind: 'personal', subscriptionType: 'max', loggedIn: true, buckets: [], usageFetchedAt: null, isUsageStale: false, limitedUntil: null, authRefusal: null, billing: null, creditExhaustedAt: null, spentUsd: null, remainingEstimateUsd: null, expiresOn: null, probablyUsedUp: false, renewedAt: null, isEligible: true, chainExclusion: null, headroomPercent: 19, isRecommended: recommended === 'default' },
             { name: 'work', configDir: '/data/profiles/work', email: 'w@example.com', kind: 'personal', subscriptionType: 'pro', loggedIn: true, buckets: [], usageFetchedAt: null, isUsageStale: false, limitedUntil: null, authRefusal: null, billing: null, creditExhaustedAt: null, spentUsd: null, remainingEstimateUsd: null, expiresOn: null, probablyUsedUp: false, renewedAt: null, isEligible: !isWorkUnlisted, chainExclusion: isWorkUnlisted ? 'notListed' as const : null, headroomPercent: 90, isRecommended: recommended === 'work' },

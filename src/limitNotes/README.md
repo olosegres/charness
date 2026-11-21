@@ -10,7 +10,7 @@ No clock, no state, no I/O: the caller hands in the report, the record, the sett
 
 - **Who gets notes.** A conversation whose agent called `claude_profiles` or armed a worker watch in the last 7 days
   (`LimitNoteRecord.lastOrchestratedAt`). Plain chat and builder topics never see one.
-- **Two shapes.** `reminder` (the pick with its week and five-hour figures, the next one or two accounts in launch rank, the
+- **Two shapes.** `reminder` (the pick with its reason and its week and five-hour figures, the next one or two accounts in launch order, the
   ChatGPT window, «call `claude_profiles` right before your next launch or resume»; scheduled) and `summary` (one line of the
   same figures, no instruction; only when the picture changed).
 - **`decideLimitNote`** answers the shape or `null` with every reason (`limitNoteSkipReasons`, named so a log line says why
@@ -25,7 +25,8 @@ No clock, no state, no I/O: the caller hands in the report, the record, the sett
   steps, usable now, five-hour window past the 90 % launch ceiling; the ChatGPT weekly use in 10-point steps. A stale figure is
   its own state (`?`).
 - **`buildLimitNoteText`**: from the report `claude_profiles` answers with (`buildClaudeProfilesCreditReport`) — the same pick,
-  and the accounts after it ordered by the same `sortClaudeProfilesByLaunchRank`; never a second ranking. A stale figure reads
+  and the accounts after it are the report's `launchOrder` — the one list `getClaudeLaunchOrder` builds and the pick is the head
+  of; never a second ranking. The pick's reason is `describeClaudeLaunchOutcome`'s wording. A stale figure reads
   «usage unknown», a window whose reset has passed 0 % with no countdown, an API account its credit estimate.
 - **Setting.** `/limits_reminders`: every 1 h (default) / 2 h / 4 h / Off. `resolveLimitRemindersMinutes(general, topic)`: a
   topic's own choice, else General's, else the default; a stored number no choice names counts as no choice.

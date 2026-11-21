@@ -1966,7 +1966,8 @@ function registerClaudeProfilesTool(server: ToolRegistrar, listClaudeProfiles: N
         '`remainingEstimateUsd` and `expiresOn` when the operator gave a Console figure (null otherwise; `expiresOn` stays null ' +
         'after a renewal), `probablyUsedUp` after a refusal for the balance (the bot cannot be sure; it rechecks daily) and ' +
         '`renewedAt` once it saw the credit come back — never the Console balance; past a given `expiresOn` it is not put ' +
-        'first. `recommended: null` means nothing is usable now: ' +
+        'first. `launchOrder` lists the accounts a launch would go to, best first (`recommended` is its head for a new agent). ' +
+        '`recommended: null` means nothing is usable now: ' +
         '`nextAvailable` names the account and instant that frees up first — schedule ONE resume at that time instead ' +
         'of retrying; when `nextAvailable` is null too, tell the user and retry once in about 30 minutes. Call it BEFORE launching or resuming a child `claude` and start the child with ' +
         'CLAUDE_CONFIG_DIR=<configDir> in its environment — configDir null means the default profile: set nothing. ' +

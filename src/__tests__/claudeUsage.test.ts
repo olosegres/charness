@@ -28,6 +28,7 @@ import {
   formatClaudeUsageBucket,
   formatClaudeUsageRelativeReset,
   formatClaudeUsageResetAt,
+  getClaudeLaunchOrder,
   getClaudeLaunchPick,
   getClaudeUsageBucketAsOf,
   getClaudeUsagePercentAsOf,
@@ -484,6 +485,82 @@ describe('the launch pick (getClaudeLaunchPick)', () => {
       assert.equal(pick([view('stopped', undefined)], { currentProfile: 'stopped', isStoppedByLimit: true }).nextAvailable, null, 'no snapshot, no time');
       // Without the stop flag the same account is usable by its figures: it is the pick, not a "next".
       assert.equal(pick([view('stopped', usage({ session: 40, weekly: 0, weeklyResetsAt: days(4), sessionResetsAt: hours(3) }))]).pick, 'stopped');
+    });
+  });
+
+  describe('the launch order (getClaudeLaunchOrder): the one list the pick is the head of, and the report\'s launchOrder', () => {
+    const api = view('console', undefined, { billing: 'api', subscriptionType: null });
+    const second = view('second', undefined, { billing: 'api', subscriptionType: null });
+    const soon = view('soon', usage({ session: 0, weekly: 0, weeklyResetsAt: days(1) }));
+    const late = view('late', usage({ session: 0, weekly: 0, weeklyResetsAt: days(5) }));
+    const orderOf = (profiles: ClaudeProfileUsageView[], extra: Partial<Parameters<typeof getClaudeLaunchOrder>[0]> = {}): string[] =>
+      getClaudeLaunchOrder({ profiles, model: 'sonnet', nowMs, ...extra }).map((profile) => profile.name);
+
+    it('the API accounts the list holds first (in the list\'s order), then the usable subscriptions by the soonest weekly reset', () => {
+      const chainScope = listScope(['late', 'second', 'console', 'soon']);
+      assert.deepEqual(orderOf([late, soon, api, second], { chainScope }), ['second', 'console', 'soon', 'late']);
+      assert.deepEqual(orderOf([late, soon]), ['soon', 'late']);
+    });
+
+    it('an API account is in it only when a launch would really use it: the list holds it, it is not held off agents, not used up, not limited, not signed out, not past its expiry day', () => {
+      const chainScope = listScope(['soon', 'console']);
+      assert.deepEqual(orderOf([soon, api]), ['soon'], 'no list names a Claude account: an API account is never in the implicit order');
+      assert.deepEqual(orderOf([soon, api], { chainScope: listScope(['soon']) }), ['soon'], 'a list that does not hold it');
+      assert.deepEqual(orderOf([soon, api], { chainScope }), ['console', 'soon']);
+      assert.deepEqual(orderOf([soon, { ...api, agentHoldUntil: hours(1) }], { chainScope }), ['soon'], 'held off agents');
+      assert.deepEqual(orderOf([soon, { ...api, agentHoldUntil: hours(-1) }], { chainScope }), ['console', 'soon'], 'a hold that has ended is no hold');
+      assert.deepEqual(orderOf([soon, { ...api, creditExhaustedAt: hours(-2) }], { chainScope }), ['soon'], 'credit used up');
+      assert.deepEqual(orderOf([soon, { ...api, limitedUntil: hours(2) }], { chainScope }), ['soon'], 'limited');
+      assert.deepEqual(orderOf([soon, { ...api, loggedIn: false }], { chainScope }), ['soon'], 'signed out');
+      assert.deepEqual(orderOf([soon, api], { chainScope, expiredApiNames: new Set(['console']) }), ['soon'], 'past the operator\'s expiry day');
+    });
+
+    it('leaves out every account the pick would not take: the five-hour ceiling, a drained window, a limit mark, an account the list keeps off agents', () => {
+      const full = view('full', usage({ session: 90, weekly: 10, weeklyResetsAt: days(2) }));
+      const drained = view('drained', usage({ session: 0, weekly: 100, weeklyResetsAt: days(2) }));
+      const limited = view('limited', usage({ session: 0, weekly: 10, weeklyResetsAt: days(2) }), { limitedUntil: hours(3) });
+      const unlisted = view('unlisted', usage({ session: 0, weekly: 10, weeklyResetsAt: days(2) }));
+      assert.deepEqual(orderOf([full, drained, limited, unlisted, late], { chainScope: listScope(['full', 'drained', 'limited', 'late']) }), ['late']);
+    });
+
+    it('follows the model: Fable\'s own window at 100 % takes the account out for a Fable launch only', () => {
+      const fableFull = view('fableFull', usage({ session: 0, weekly: 10, weeklyResetsAt: days(1), fable: 100 }));
+      assert.deepEqual(orderOf([fableFull, late], { model: 'fable' }), ['late']);
+      assert.deepEqual(orderOf([fableFull, late], { model: 'sonnet' }), ['fableFull', 'late']);
+    });
+
+    it('`excludedName` leaves the account a resumed session moves off out of the order', () => {
+      assert.deepEqual(orderOf([soon, late], { excludedName: 'soon' }), ['late']);
+      assert.deepEqual(orderOf([soon, late], { excludedName: 'gone' }), ['soon', 'late'], 'a name no profile has excludes nothing');
+    });
+
+    it('the pick is its head — for a new agent and for a session that must move — and the report carries it as launchOrder', () => {
+      const chainScope = listScope(['late', 'console', 'soon']);
+      const scenarios: Array<{ profiles: ClaudeProfileUsageView[]; options: Parameters<typeof buildClaudeProfilesReport>[3] }> = [
+        { profiles: [late, soon], options: {} },
+        { profiles: [late, soon, api], options: { chainScope } },
+        { profiles: [late, soon, api], options: { chainScope, currentProfile: 'soon', isStoppedByLimit: true } },
+        { profiles: [late, soon], options: { currentProfile: 'gone' } },
+        { profiles: [view('out', undefined, { loggedIn: false })], options: {} },
+      ];
+      for (const { profiles, options } of scenarios) {
+        const report = buildClaudeProfilesReport(profiles, 'sonnet', nowMs, options);
+        const order = orderOf(profiles, { ...options, excludedName: options?.currentProfile ?? null });
+        assert.deepEqual(report.launchOrder, order);
+        assert.equal(report.recommended, order[0] ?? null, JSON.stringify(options));
+      }
+    });
+
+    it('a warm session stays where it is and the order is where it would go if it had to move: its own account is not in it', () => {
+      const report = buildClaudeProfilesReport([late, soon], 'sonnet', nowMs, { currentProfile: 'late' });
+      assert.equal(report.recommended, 'late');
+      assert.deepEqual(report.launchOrder, ['soon']);
+    });
+
+    it('is empty when nothing is usable', () => {
+      const report = buildClaudeProfilesReport([view('full', usage({ session: 100, weekly: 0, weeklyResetsAt: days(1) }))], 'sonnet', nowMs);
+      assert.equal(report.recommended, null);
+      assert.deepEqual(report.launchOrder, []);
     });
   });
 

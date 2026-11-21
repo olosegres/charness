@@ -442,6 +442,12 @@ export interface ClaudeProfilesReport {
   pickReason: ClaudeLaunchPickReason;
   /** With nothing usable: the account and instant that frees up first, so a resume can be scheduled for it. */
   nextAvailable: ClaudeNextAvailable | null;
+  /**
+   * The accounts a launch of `model` may go to, best first — what `recommended` is the head of for a new agent (a resumed session's
+   * own account is left out of it, see {@link getClaudeLaunchOrder}). An API-billed account is in it only when a launch would
+   * really use it: the `/limits` list holds it, it is signed in, not limited, not held off agents, its credit not used up.
+   */
+  launchOrder: string[];
   profiles: ClaudeProfileReportEntry[];
 }
 
@@ -750,6 +756,34 @@ function checkIsClaudeApiProfileLaunchable(
 }
 
 /**
+ * @description The accounts a launch of `model` may go to, best first — THE one order of the launch rule, which
+ * {@link getClaudeLaunchPick} takes its head from and the report hands to its readers as `launchOrder`: first the accounts billed
+ * to API credits the operator's `/limits` list holds that can launch ({@link checkIsClaudeApiProfileLaunchable}; the list's own
+ * order among them), then the usable subscription accounts in {@link sortClaudeProfilesByLaunchRank} order. An account the list
+ * keeps off agents is never in it; `excludedName` is the account a resumed session leaves.
+ */
+export function getClaudeLaunchOrder(input: Pick<ClaudeLaunchPickOptions, 'chainScope' | 'expiredApiNames'> & {
+  profiles: readonly ClaudeProfileUsageView[];
+  model: string | null;
+  nowMs: number;
+  excludedName?: string | null;
+}): ClaudeProfileUsageView[] {
+  const chainScope = input.chainScope ?? null;
+  const expiredApiNames = input.expiredApiNames ?? new Set<string>();
+  const allowed = input.profiles.filter((profile) => profile.name !== (input.excludedName ?? null) && getClaudeChainExclusion(profile.name, chainScope) === null);
+  const chainOrder = chainScope === null ? [] : [...chainScope.enabledNames];
+  const apiFirst = allowed
+    .filter((profile) => profile.billing === 'api' && checkIsClaudeApiProfileLaunchable(profile, chainScope, expiredApiNames, input.nowMs))
+    .sort((a, b) => chainOrder.indexOf(a.name) - chainOrder.indexOf(b.name));
+  const subscriptions = sortClaudeProfilesByLaunchRank(
+    allowed.filter((profile) => profile.billing !== 'api' && checkIsClaudeProfileLaunchable(profile, input.model, input.nowMs)),
+    input.model,
+    input.nowMs,
+  );
+  return [...apiFirst, ...subscriptions];
+}
+
+/**
  * @description The account a process of `model` should run on.
  *
  * The operator's `/limits` list rules who may be named at all (`chainScope`): once it names any Claude account, only an account
@@ -774,7 +808,7 @@ function checkIsClaudeApiProfileLaunchable(
  * follows the new-agent rule, and the reason says the session moved (`movedFromLimited`, or `movedFromUnavailable` when the
  * account could no longer run by its own figures or the list).
  *
- * Nothing usable → `pick: null` and {@link ClaudeLaunchPick.nextAvailable}.
+ * Whoever is not warm gets the head of {@link getClaudeLaunchOrder}; nothing usable → `pick: null` and {@link ClaudeLaunchPick.nextAvailable}.
  */
 export function getClaudeLaunchPick(input: ClaudeLaunchPickOptions & {
   profiles: readonly ClaudeProfileUsageView[];
@@ -785,24 +819,14 @@ export function getClaudeLaunchPick(input: ClaudeLaunchPickOptions & {
   const expiredApiNames = input.expiredApiNames ?? new Set<string>();
   const current = input.currentProfile ? input.profiles.find((profile) => profile.name === input.currentProfile) : undefined;
   const isStopped = current !== undefined && input.isStoppedByLimit === true;
+  const movedFrom = current?.name ?? null;
   if (current && !isStopped
     && getClaudeChainExclusion(current.name, chainScope) === null
     && !checkIsClaudeProfileHeldFromAgents(current, input.nowMs)
     && checkIsClaudeProfileEligible(current, getRelevantClaudeBucketsAsOf(current, input.model, input.nowMs), input.nowMs)) {
     return { pick: current.name, reason: 'warm', nextAvailable: null };
   }
-  const movedFrom = current?.name ?? null;
-  const allowed = input.profiles.filter((profile) => profile.name !== movedFrom && getClaudeChainExclusion(profile.name, chainScope) === null);
-  const chainOrder = chainScope === null ? [] : [...chainScope.enabledNames];
-  const apiFirst = allowed
-    .filter((profile) => profile.billing === 'api' && checkIsClaudeApiProfileLaunchable(profile, chainScope, expiredApiNames, input.nowMs))
-    .sort((a, b) => chainOrder.indexOf(a.name) - chainOrder.indexOf(b.name));
-  const subscriptions = sortClaudeProfilesByLaunchRank(
-    allowed.filter((profile) => profile.billing !== 'api' && checkIsClaudeProfileLaunchable(profile, input.model, input.nowMs)),
-    input.model,
-    input.nowMs,
-  );
-  const [first] = [...apiFirst, ...subscriptions];
+  const [first] = getClaudeLaunchOrder({ ...input, excludedName: movedFrom });
   if (first) {
     const reason = movedFrom !== null ? (isStopped ? 'movedFromLimited' : 'movedFromUnavailable') : first.billing === 'api' ? 'apiCreditFirst' : 'soonestWeeklyReset';
     return { pick: first.name, reason, nextAvailable: null };
@@ -905,9 +929,10 @@ export function buildClaudeProfilesReport(profiles: readonly ClaudeProfileUsageV
     };
   });
   const launch = getClaudeLaunchPick({ ...options, profiles, model, nowMs });
+  const launchOrder = getClaudeLaunchOrder({ ...options, profiles, model, nowMs, excludedName: options.currentProfile ?? null }).map((profile) => profile.name);
   const recommended = entries.find((entry) => entry.name === launch.pick);
   if (recommended) recommended.isRecommended = true;
-  return { model, relevantBuckets, recommended: launch.pick, pickReason: launch.reason, nextAvailable: launch.nextAvailable, profiles: entries };
+  return { model, relevantBuckets, recommended: launch.pick, pickReason: launch.reason, nextAvailable: launch.nextAvailable, launchOrder, profiles: entries };
 }
 
 /** The profile registry out of a `state.json` already read (`stateFile.ts`): entries without a creation time are dropped. */

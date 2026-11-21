@@ -67,8 +67,8 @@ function buildView(name: string, patch: Partial<ClaudeProfileUsageView> = {}): C
   };
 }
 
-function buildReport(views: readonly ClaudeProfileUsageView[], options: { atMs?: number; chainScope?: ClaudeLaunchChainScope | null } = {}): ClaudeProfilesReport {
-  return buildClaudeProfilesCreditReport(views, null, options.atMs ?? nowMs, { chainScope: options.chainScope ?? null });
+function buildReport(views: readonly ClaudeProfileUsageView[], options: { atMs?: number; chainScope?: ClaudeLaunchChainScope | null; model?: string | null } = {}): ClaudeProfilesReport {
+  return buildClaudeProfilesCreditReport(views, options.model ?? null, options.atMs ?? nowMs, { chainScope: options.chainScope ?? null });
 }
 
 function buildChatGptUsage(percent: number, atMs: number = nowMs, isStale = false): Record<string, OpenCodeProviderUsageRecord> {
@@ -306,6 +306,37 @@ describe('checkHasFreshLimitUsage', () => {
     assert.equal(checkHasFreshLimitUsage(buildReport([buildView('default', { usage: stale }), buildView('work')], { chainScope })), false, 'work is fresh but not offered');
   });
 
+  describe('an API account counts only when a launch would really use it (it is in launchOrder)', () => {
+    const stale = buildUsage({ session: 10, weekly: 20, weeklyResetHours: 120, isStale: true });
+    const staleWork = buildView('work', { usage: stale });
+    const consoleApi = buildView('console', { billing: 'api', usage: undefined });
+    const listWithConsole: ClaudeLaunchChainScope = { enabledNames: new Set(['work', 'console']), disabledNames: new Set() };
+
+    it('no /limits list: an API account nobody approved is no figure — with every subscription stale there is nothing fresh', () => {
+      const report = buildReport([staleWork, consoleApi]);
+      assert.deepEqual(report.launchOrder, ['work']);
+      assert.equal(checkHasFreshLimitUsage(report), false);
+    });
+
+    it('held off agents (an unproven stop report): the account the list holds is no figure either', () => {
+      const report = buildReport([staleWork, { ...consoleApi, agentHoldUntil: inHours(1) }], { chainScope: listWithConsole });
+      assert.deepEqual(report.launchOrder, ['work']);
+      assert.equal(checkHasFreshLimitUsage(report), false);
+    });
+
+    it('credit used up, limited or signed out: no figure', () => {
+      for (const patch of [{ creditExhaustedAt: inHours(-1) }, { limitedUntil: inHours(2) }, { loggedIn: false }]) {
+        assert.equal(checkHasFreshLimitUsage(buildReport([staleWork, { ...consoleApi, ...patch }], { chainScope: listWithConsole })), false, JSON.stringify(patch));
+      }
+    });
+
+    it('the list holds it and a launch would use it: a figure, even with every subscription stale', () => {
+      const report = buildReport([staleWork, consoleApi], { chainScope: listWithConsole });
+      assert.deepEqual(report.launchOrder, ['console', 'work'], 'a stale snapshot still ranks the subscription; only its figure is not fresh');
+      assert.equal(checkHasFreshLimitUsage(report), true);
+    });
+  });
+
   it('an API-billed account the list holds has no windows by design and counts as a figure', () => {
     const chainScope: ClaudeLaunchChainScope = { enabledNames: new Set(['console']), disabledNames: new Set() };
     assert.equal(checkHasFreshLimitUsage(buildReport([buildView('console', { billing: 'api', usage: undefined })], { chainScope })), true);
@@ -395,7 +426,7 @@ describe('buildLimitNoteText', () => {
   it('the reminder: the pick with its week and five-hour figures, the next account, the ChatGPT window, the instruction', () => {
     const text = buildLimitNoteText('reminder', buildReport(twoAccounts()), chatGptWeekly40, 'UTC', nowMs);
     assert.equal(text, [
-      '[Accounts · 14:05] Next new Claude worker → work: week 62 % used, resets in 1 d 19 h; 5 h 30 %.',
+      '[Accounts · 14:05] Next new Claude worker → work (soonest weekly reset): week 62 % used, resets in 1 d 19 h; 5 h 30 %.',
       'Then default (week 20 %, resets in 5 d). ChatGPT: week 40 %, resets in 3 d.',
       'Call claude_profiles right before your next launch or resume — the pick moves as limits fill and reset. No reply is needed.',
     ].join('\n'));
@@ -429,7 +460,7 @@ describe('buildLimitNoteText', () => {
     const report = buildReport(views);
     assert.equal(report.recommended, 'later');
     const text = buildLimitNoteText('reminder', report, {}, 'UTC', nowMs);
-    assert.match(text, /→ later:/);
+    assert.match(text, /→ later \(soonest weekly reset\):/);
     assert.match(text, /Then work \(week 62 %, resets in 1 d 19 h\), default \(week 20 %, resets in 5 d\)\./, 'work (43 h) before default (120 h); spare (160 h) is the fourth account and is left out');
     assert.doesNotMatch(text, /spare/);
   });
@@ -441,7 +472,7 @@ describe('buildLimitNoteText', () => {
       buildView('third', { usage: buildUsage({ session: 30, weekly: 10, weeklyResetHours: 100 }) }),
     ];
     const text = buildLimitNoteText('reminder', buildReport(views), {}, 'UTC', nowMs);
-    assert.match(text, /→ work:/);
+    assert.match(text, /→ work \(soonest weekly reset\):/);
     assert.match(text, /Then third \(/);
     assert.doesNotMatch(text, /default/);
   });
@@ -450,7 +481,7 @@ describe('buildLimitNoteText', () => {
     const stale = buildUsage({ session: 30, weekly: 62, weeklyResetHours: 43, isStale: true });
     const views = [buildView('default', { usage: stale }), buildView('work')];
     const reminder = buildLimitNoteText('reminder', buildReport(views), buildChatGptUsage(40, nowMs, true), 'UTC', nowMs);
-    assert.match(reminder, /→ default: usage unknown\./);
+    assert.match(reminder, /→ default \(soonest weekly reset\): usage unknown\./);
     assert.match(reminder, /Then work \(week 20 %, resets in 5 d\)\. ChatGPT: usage unknown\./);
     const summary = buildLimitNoteText('summary', buildReport(views), buildChatGptUsage(40, nowMs, true), 'UTC', nowMs);
     assert.match(summary, /default usage unknown → next new worker; work 20 % \(5 d\); ChatGPT usage unknown\.$/);
@@ -473,12 +504,12 @@ describe('buildLimitNoteText', () => {
   it('a window that has reset since it was read shows 0 % with no countdown', () => {
     const views = [buildView('default', { usage: buildUsage({ session: 10, weekly: 80, weeklyResetHours: 5, atMs: nowMs - 10 * hourMs }) })];
     const text = buildLimitNoteText('reminder', buildReport(views), {}, 'UTC', nowMs);
-    assert.match(text, /→ default: week 0 % used; 5 h 0 %\./, text);
+    assert.match(text, /→ default \(soonest weekly reset\): week 0 % used; 5 h 0 %\./, text);
   });
 
   it('a weekly window that names no reset shows the percent alone', () => {
     const views = [buildView('default', { usage: buildUsage({ session: 10, weekly: 33, weeklyResetHours: null }) })];
-    assert.match(buildLimitNoteText('reminder', buildReport(views), {}, 'UTC', nowMs), /→ default: week 33 % used; 5 h 10 %\./);
+    assert.match(buildLimitNoteText('reminder', buildReport(views), {}, 'UTC', nowMs), /→ default \(soonest weekly reset\): week 33 % used; 5 h 10 %\./);
     assert.match(buildLimitNoteText('summary', buildReport(views), {}, 'UTC', nowMs), / default 33 % → next new worker\.$/);
   });
 
@@ -489,9 +520,71 @@ describe('buildLimitNoteText', () => {
     const report = buildReport([buildView('default'), apiView], { chainScope });
     assert.equal(report.recommended, 'console');
     const reminder = buildLimitNoteText('reminder', report, {}, 'UTC', nowMs);
-    assert.match(reminder, /→ console: API credit \(≈ \$61\.20 left\)\./);
+    assert.match(reminder, /→ console \(API credit first, as the \/limits list allows\): ≈ \$61\.20 left\./);
     assert.match(reminder, /Then default \(week 20 %, resets in 5 d\)\./);
     assert.match(buildLimitNoteText('summary', report, {}, 'UTC', nowMs), /console API credit \(≈ \$61\.20 left\) → next new worker; default 20 % \(5 d\)\.$/);
+  });
+
+  describe('the accounts after the pick are the launch order — the list `claude_profiles` takes its pick from', () => {
+    const consoleApi = buildView('console', { billing: 'api', usage: undefined });
+    const second = buildView('console2', { billing: 'api', usage: undefined });
+
+    it('an API account no /limits list holds is never named, though it is signed in', () => {
+      const report = buildReport([...twoAccounts(), consoleApi]);
+      assert.deepEqual(report.launchOrder, ['work', 'default']);
+      const reminder = buildLimitNoteText('reminder', report, {}, 'UTC', nowMs);
+      assert.doesNotMatch(reminder, /console/);
+      assert.doesNotMatch(buildLimitNoteText('summary', report, {}, 'UTC', nowMs), /console/);
+      assert.doesNotMatch(buildLimitNoteText('reminder', buildReport([...twoAccounts().map((view) => ({ ...view, usage: undefined })), consoleApi]), {}, 'UTC', nowMs), /console/);
+    });
+
+    it('an API account the list holds but kept off agents is not named', () => {
+      const chainScope: ClaudeLaunchChainScope = { enabledNames: new Set(['work', 'default', 'console']), disabledNames: new Set() };
+      const report = buildReport([...twoAccounts(), { ...consoleApi, agentHoldUntil: inHours(1) }], { chainScope });
+      assert.doesNotMatch(buildLimitNoteText('reminder', report, {}, 'UTC', nowMs), /console/);
+    });
+
+    it('two API accounts the list holds go first in the list\'s order, before the subscriptions — as the pick has them', () => {
+      const chainScope: ClaudeLaunchChainScope = { enabledNames: new Set(['console', 'console2', 'work', 'default']), disabledNames: new Set() };
+      const report = buildReport([...twoAccounts(), second, consoleApi], { chainScope });
+      assert.deepEqual(report.launchOrder, ['console', 'console2', 'work', 'default']);
+      const text = buildLimitNoteText('reminder', report, {}, 'UTC', nowMs);
+      assert.match(text, /→ console \(API credit first, as the \/limits list allows\)\.\n/);
+      assert.match(text, /\nThen console2 \(API credit\), work \(week 62 %, resets in 1 d 19 h\)\.\n/, 'the second API account, then the soonest reset; default is the fourth account');
+      assert.match(buildLimitNoteText('summary', report, {}, 'UTC', nowMs), /console API credit → next new worker; console2 API credit; work 62 % \(1 d 19 h\)\.$/);
+    });
+
+    it('a report built for a model names what that model\'s launch would use: an account whose Fable window is full is left out of a Fable report', () => {
+      const fableFull = buildView('fableFull', {
+        usage: { ...buildUsage({ session: 5, weekly: 10, weeklyResetHours: 20 }), buckets: [
+          { kind: 'session', percent: 5, resetsAt: inHours(3), scopeModel: null },
+          { kind: 'weekly_all', percent: 10, resetsAt: inHours(20), scopeModel: null },
+          { kind: 'weekly_scoped', percent: 100, resetsAt: inHours(30), scopeModel: 'Fable' },
+        ] },
+      });
+      const views = [...twoAccounts(), fableFull];
+      assert.match(buildLimitNoteText('reminder', buildReport(views), {}, 'UTC', nowMs), /→ fableFull/, 'any other model may use it, and it resets first');
+      const forFable = buildReport(views, { model: 'fable' });
+      assert.deepEqual(forFable.launchOrder, ['work', 'default']);
+      assert.doesNotMatch(buildLimitNoteText('reminder', forFable, {}, 'UTC', nowMs), /fableFull/);
+    });
+  });
+
+  it('says why the pick is the pick, in the words `claude_profiles` opens its answer with', () => {
+    const reminder = buildLimitNoteText('reminder', buildReport(twoAccounts()), {}, 'UTC', nowMs);
+    assert.match(reminder, /→ work \(soonest weekly reset\):/);
+    const chainScope: ClaudeLaunchChainScope = { enabledNames: new Set(['console', 'default']), disabledNames: new Set() };
+    const withApiCredit = buildLimitNoteText('reminder', buildReport([buildView('default'), buildView('console', { billing: 'api', usage: undefined })], { chainScope }), {}, 'UTC', nowMs);
+    assert.match(withApiCredit, /^\[Accounts · 14:05\] Next new Claude worker → console \(API credit first, as the \/limits list allows\)\.\n/, 'no credit figure: the reason is the whole statement');
+  });
+
+  describe('the clock in the header (the instance zone through the shared wall-clock helpers)', () => {
+    it('a zone with a half-hour offset, and the first minutes after midnight (00:30, never 24:30)', () => {
+      const header = (timezone: string, atMs: number) => `${buildLimitNoteText('summary', buildReport(twoAccounts(), { atMs }), {}, timezone, atMs).split(']')[0]}]`;
+      assert.equal(header('Asia/Kolkata', nowMs), '[Accounts · 19:35 · changed]');
+      assert.equal(header('Asia/Tbilisi', Date.parse('2026-11-21T20:30:00Z')), '[Accounts · 00:30 · changed]');
+      assert.equal(header('UTC', Date.parse('2026-11-21T23:59:40Z')), '[Accounts · 23:59 · changed]', 'seconds are cut, not rounded up into the next minute');
+    });
   });
 
   it('nothing usable: says so and, when an account names a time, what frees up first', () => {

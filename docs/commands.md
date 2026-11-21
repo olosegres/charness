@@ -375,7 +375,9 @@ so one account's usage limit does not stop every topic.
   `nextAvailable` names the account and the instant that frees up first, for a
   one-off resume (an account a limit just stopped, whose figures show no blocker
   yet, frees up at its five-hour reset); when no account names a time, the manager
-  asks you and retries in about 30 minutes. The first line of the answer states why:
+  asks you and retries in about 30 minutes. `launchOrder` lists the accounts a launch
+  would go to, best first (for a new agent `recommended` is its head; the account a
+  resumed session leaves is not in it). The first line of the answer states why:
   it stays on the warm account, moved (the account stopped on a limit or can no
   longer run), API credit first, soonest weekly reset, or none usable. The agent then
   starts the child with `CLAUDE_CONFIG_DIR=<configDir>` (`null` = the default

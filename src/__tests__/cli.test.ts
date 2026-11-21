@@ -152,10 +152,11 @@ test('claude-profiles reads the bot cache off DATA_DIR/state.json: --best prints
   assert.equal(opus.stdout, '\n', 'opus: «default» resets in 2 d, «work» in 5 d — the default profile is an empty line: set no CLAUDE_CONFIG_DIR');
   const json = runCli(['claude-profiles', '--json', '--model', 'fable']);
   assert.equal(json.status, 0, json.stderr);
-  const report = JSON.parse(json.stdout) as { recommended: string; pickReason: string; nextAvailable: unknown; profiles: Array<{ name: string; configDir: string | null; headroomPercent: number | null }> };
+  const report = JSON.parse(json.stdout) as { recommended: string; pickReason: string; nextAvailable: unknown; launchOrder: string[]; profiles: Array<{ name: string; configDir: string | null; headroomPercent: number | null }> };
   assert.equal(report.recommended, 'work');
   assert.equal(report.pickReason, 'soonestWeeklyReset');
   assert.equal(report.nextAvailable, null);
+  assert.deepEqual(report.launchOrder, ['work'], 'the order a launch of fable goes by: default\'s Fable window is full, so only work');
   assert.deepEqual(report.profiles.map((profile) => [profile.name, profile.configDir === null, profile.headroomPercent]), [['default', true, 0], ['work', false, 60]], 'Fable: default is at 100 % on Fable\'s own window, work at 40 % on the shared weekly one');
   const human = runCli(['claude-profiles']);
   assert.equal(human.status, 0, human.stderr);
@@ -247,8 +248,9 @@ test('claude-profiles follows the /limits list: an API account it holds goes fir
   writeProfilesState(buckets, [{ backend: 'claude', profile: 'work', model: null }, { backend: 'claude', profile: 'console', model: null }], { console: apiRecord });
   const first = runCli(['claude-profiles', '--best']);
   assert.equal(first.stdout, `${consoleDir}\n`, 'the API account the list holds goes first');
-  const json = JSON.parse(runCli(['claude-profiles', '--json']).stdout) as { recommended: string; pickReason: string; profiles: Array<{ name: string; chainExclusion: string | null; isEligible: boolean }> };
+  const json = JSON.parse(runCli(['claude-profiles', '--json']).stdout) as { recommended: string; pickReason: string; launchOrder: string[]; profiles: Array<{ name: string; chainExclusion: string | null; isEligible: boolean }> };
   assert.equal(json.pickReason, 'apiCreditFirst');
+  assert.deepEqual(json.launchOrder, ['console', 'work'], 'the API account the list holds first, then the subscription; «default» is not in the list');
   assert.deepEqual(json.profiles.map((profile) => [profile.name, profile.chainExclusion, profile.isEligible]), [['default', 'notListed', false], ['work', null, true], ['console', null, true]]);
   const human = runCli(['claude-profiles']).stdout;
   assert.match(human, /✗ default .* NOT OFFERED: not in the \/limits list\n/);
