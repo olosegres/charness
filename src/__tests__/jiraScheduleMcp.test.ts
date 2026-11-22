@@ -197,6 +197,8 @@ describe('the schedule tools of a Jira issue: their shape and their words', () =
     assert.match(description, /Never `kill -0` alone/);
     assert.match(description, /answer_request "progress" and END your turn/);
     assert.match(description, /2 h 30 min without a report/);
+    assert.match(description, /A watchdog meant to OUTLIVE the work \(a health check, a daily job\) is armed, and then the request is answered `final`: the job keeps running and its fires say «no request is open»\./);
+    assert.match(description, /task-agent slot held for as long as the job lives/);
     const checkCommand = (create.inputSchema.properties ?? {}).checkCommand;
     assert.match(String(checkCommand && typeof checkCommand === 'object' && 'description' in checkCommand ? checkCommand.description : ''), /it runs in the issue's folder, so a relative path or `~` points elsewhere/);
   });
