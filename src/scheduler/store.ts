@@ -99,7 +99,7 @@ export interface CreateScheduleArgs {
   statusCommand?: string;
   /** Minutes between a `'check'` job's status lines. */
   statusEveryMinutes?: number;
-  /** The request open in the conversation when the agent armed the job (`ScheduleRecord.requestId`). */
+  /** The request the agent was working on when it armed the job (`ScheduleRecord.requestId`, picked by `pickRequestToArmUnder`). */
   requestId?: string;
 }
 

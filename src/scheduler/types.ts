@@ -127,7 +127,8 @@ export interface ScheduleRecord {
   /** Epoch ms of the last status line posted; the next one is due an interval after it (after `createdAt` before the first). */
   lastStatusAt?: number;
   /**
-   * The request that was open in the conversation when `schedule_create` armed this job (the newest, when several were).
+   * The request the agent was working on when `schedule_create` armed this job (`pickRequestToArmUnder`: the request whose turn
+   * the engine watches, else the newest open one, a request a scheduler fire opened being passed over for any other).
    * It is what the job's fires ride in a tracker conversation (`trackerRun.ts`) and what makes the request «wait for its
    * schedule» in the wake-up rules (`requests/scheduleWait.ts`). Absent when no request was open — a topic in the stream
    * view never has one — and on every job created before this field existed (no migration).

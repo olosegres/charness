@@ -118,7 +118,8 @@ per-backend controls are optional methods the bot checks before calling.
   only in a Telegram topic whose view shows the stream (`scheduler/checkStatus.ts`). In a Jira issue the scheduler posts
   NOTHING (a comment always notifies the requester and the issue's watchers): a fire wakes the issue's agent behind a header
   naming the open request it rides, opens no request of its own (`scheduler/trackerRun.ts`), and an open request waits for
-  its armed watch — no follow-ups, no restart wake, no give-up (`requests/scheduleWait.ts`, in a topic with requests too).
+  its armed watch — it is not prodded between turns (no follow-ups, no restart wake); a requester's own message left unanswered
+  still is, and still ends in the give-up (`requests/scheduleWait.ts`, in a topic with requests too).
 - **One instance-wide timezone** (`/timezone`) applied through `process.env.TZ`. After a zone change never
   re-arm schedules with the engine's `rearmAll()` (the boot replay would fire bogus catch-ups).
 - **Prompt decoration** happens at ONE choke point, `forwardPromptToAgent`: the `[Telegram thread context]`
