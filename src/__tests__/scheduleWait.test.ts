@@ -116,12 +116,12 @@ describe('pickRequestToArmUnder — the request a new job is armed under', () =>
     assert.equal(pickRequestToArmUnder([handOver, mention], [mention.id]), mention.id, 'the agent works on the mention now');
   });
 
-  it('of several watched requests the newest; without a watched one the newest open request', () => {
+  it('of several watched requests the newest (the list is oldest first); without a watched one the newest open request', () => {
     const older = makeRequest('req_Older0001', 1000);
     const newer = makeRequest('req_Newer0001', 2000);
     assert.equal(pickRequestToArmUnder([older, newer], [older.id, newer.id]), newer.id);
     assert.equal(pickRequestToArmUnder([older, newer], []), newer.id);
-    assert.equal(pickRequestToArmUnder([newer, older], ['req_Unknown']), newer.id, 'a watched id that is not open is ignored');
+    assert.equal(pickRequestToArmUnder([older, newer], ['req_Unknown']), newer.id, 'a watched id that is not open is ignored');
   });
 
   it('a request a scheduler fire opened is passed over for any other — watched or newest — and is the pick only when it is all there is', () => {

@@ -1,4 +1,4 @@
-import { checkIsJobArmedUnderRequest, getNewestRequest } from '../requests/scheduleWait';
+import { checkIsJobArmedUnderRequest } from '../requests/scheduleWait';
 import type { OpenRequestState } from '../requests/types';
 import type { ScheduleRecord } from './types';
 
@@ -21,12 +21,13 @@ export type ScheduledRunTarget =
 
 /**
  * @description The request a fire of `job` rides: the one it was armed under (still open, or the open one that replaced
- * it — `supersededRequestIds`); else the newest open request of the conversation; else none.
+ * it — `supersededRequestIds`); else the newest open request of the conversation; else none. `openRequests` is oldest first, as
+ * `RequestLedger.listOpenRequestsOf` returns it: the newest of a list is its last.
  */
 export function pickScheduledRunTarget(job: Pick<ScheduleRecord, 'requestId'>, openRequests: readonly OpenRequestState[]): ScheduledRunTarget {
-  const armedUnder = getNewestRequest(openRequests.filter((request) => checkIsJobArmedUnderRequest(job, request)));
+  const armedUnder = openRequests.filter((request) => checkIsJobArmedUnderRequest(job, request)).at(-1);
   if (armedUnder) return { kind: 'request', request: armedUnder };
-  const newest = getNewestRequest(openRequests);
+  const newest = openRequests.at(-1);
   if (newest) return { kind: 'request', request: newest };
   return job.requestId === undefined ? { kind: 'none' } : { kind: 'none', finishedRequestId: job.requestId };
 }
