@@ -828,13 +828,10 @@ describe('Telegram views end to end: built charness, fake Bot API, fake claude (
   it('a tool status frame that its own turn\'s text outran while it waited behind the earlier turns\' unposted text is never posted — no «🔧» line is left under the finished turn', async () => {
     const toolName = 'StaleFrame';
     const statusText = `🔧 ${toolName}`;
-    // The text of a turn goes out as a message of its own, or - when the previous turn's closing text reached the bot after this turn's prompt was
-    // forwarded and was flushed before this turn's text came - appended by edit to the message before it (seen on a loaded runner: «…(answer, turn 1).Working
-    // on TOPIC-30.» in one edit). Whichever call carries it counts, and is held.
-    const textCarryingMethods = ['sendMessage', 'editMessageText'];
-    const isPosted = (text: string): boolean => textCarryingMethods.some((method) => fakeTelegram.listCalls(method).some((call) => String(call.payload.text).includes(text)));
-    // The status frame is the whole text `🔧 <tool>`; the tool's result message, `🔧 <tool> → …`, is not it.
-    const isStatusFramePosted = (): boolean => fakeTelegram.listCalls('sendMessage').some((call) => call.payload.text === statusText);
+    const isPosted = (text: string): boolean => fakeTelegram.listCalls('sendMessage').some((call) => String(call.payload.text).includes(text));
+    // The status frame is the whole text `🔧 <tool>`; the tool's result message, `🔧 <tool> → …`, is not it. A frame may also reach the topic by an
+    // edit of a status frame the step before left on screen (the next turn's first frame is an edit of it), so both calls count.
+    const isStatusFramePosted = (): boolean => ['sendMessage', 'editMessageText'].some((method) => fakeTelegram.listCalls(method).some((call) => call.payload.text === statusText));
     const hasReachedBot = (text: string): boolean => getCharness().output.includes(`output ${group.id}:${topicThreadId} (20): ${text}`);
     // The step before leaves its own text in the bot's output buffer for a few seconds; it lands first, so this step starts from an empty buffer.
     await getCharness().waitFor('the step before to have its text posted', answerTimeoutMs, () => listTopicMessages().some((message) => message.text.includes('Working on TOPIC-14')));
@@ -845,7 +842,7 @@ describe('Telegram views end to end: built charness, fake Bot API, fake claude (
     let releaseRoundTrip: () => void = () => {};
     const roundTripReleased = new Promise<void>((resolve) => { releaseRoundTrip = resolve; });
     try {
-      for (const method of textCarryingMethods) fakeTelegram.holdNextResponse(method, roundTripReleased, (payload) => String(payload.text).includes('Working on TOPIC-30.'));
+      fakeTelegram.holdNextResponse('sendMessage', roundTripReleased, (payload) => String(payload.text).includes('Working on TOPIC-30.'));
       fakeTelegram.pushOperatorMessage(topicThreadId, 'TOPIC-30 [fake:answer]');
       await getCharness().waitFor('turn 1\'s text on its held round trip', answerTimeoutMs, () => isPosted('Working on TOPIC-30.'));
       // Turn 2's text reaches the bot and stays in its output buffer behind the flush that is on the round trip.
@@ -874,6 +871,11 @@ describe('Telegram views end to end: built charness, fake Bot API, fake claude (
     await sendAndAwaitReply('/verbosity stream_answers', 'This topic shows: Stream + answers');
     // The call log, not the topic: the superseded frame, posted late, is deleted again by that flush of output.
     assert.equal(isStatusFramePosted(), false, 'the superseded status frame was not created below the text that replaced it');
+    // The step before ended its turn with its closing text; none of it was carried into this step's turns: no message was ever sent or edited
+    // to hold both that text and turn 1's (they were once glued: «Fake final answer for TOPIC-14 (answer, turn 1).Working on TOPIC-30.»).
+    const gluedTexts = ['sendMessage', 'editMessageText'].flatMap((method) => fakeTelegram.listCalls(method)).map((call) => String(call.payload.text))
+      .filter((text) => text.includes('Fake final answer for TOPIC-14') && text.includes('Working on TOPIC-30.'));
+    assert.deepEqual(gluedTexts, [], 'turn 1\'s text was never glued to the closing text of the turn before');
   });
 
   it('every tmux call named the private server; nothing of the instance runs on the default tmux server', () => {
