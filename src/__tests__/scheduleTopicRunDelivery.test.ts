@@ -56,6 +56,8 @@ interface HarnessOptions {
   isHeld?: boolean;
   /** A LIVE list of open requests in place of the reads: `forwardOwnRequestRun` adds the request it opens, as the ledger does. */
   liveOpenRequests?: OpenRequestState[];
+  /** What the engine's settle of the ended watches does before the pick (`settleEndedTurns`). */
+  onSettle?: () => void;
 }
 
 function createHarness(options: HarnessOptions = {}) {
@@ -107,6 +109,7 @@ function createHarness(options: HarnessOptions = {}) {
     readWorkerActivity: async () => null,
     recordStatusLine: async () => true,
     topicRun,
+    ...(options.onSettle ? { settleEndedTurns: async () => { options.onSettle?.(); } } : {}),
     now: () => firedAtMs,
     sleep: async () => {},
   };
@@ -192,6 +195,14 @@ test('two fires at the same moment with nothing to ride open ONE scheduler\'s re
   assert.deepEqual(getSteps().filter((step) => step === 'forwardOwnRequestRun' || step === 'forwardRun'), ['forwardOwnRequestRun', 'forwardRun']);
   assert.equal(getCall<{ requestId: string }>('forwardRun').requestId, 'req_Opened1');
   assert.equal(liveOpenRequests.length, 1);
+});
+
+test('the engine settles the ended watches BEFORE the pick: the scheduler\'s request its silent end closed is not ridden — the fire opens a new one (review 14 #1)', async () => {
+  const liveOpenRequests: OpenRequestState[] = [makeRequest('req_Sched0001', schedulerOrigin)];
+  const { deps, getSteps } = createHarness({ liveOpenRequests, onSettle: () => { liveOpenRequests.splice(0); } });
+  await createScheduleDelivery(deps)(makeJob(), onTime);
+  assert.ok(!getSteps().includes('forwardRun'), 'the closed request is not ridden');
+  assert.ok(getSteps().includes('forwardOwnRequestRun'));
 });
 
 test('the answers-only view says in the header that the requester sees only the answers', async () => {

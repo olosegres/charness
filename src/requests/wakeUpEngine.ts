@@ -119,8 +119,9 @@ interface WatchedRequestTurn extends WatchedTurn {
   isOwnForward: boolean;
   /**
    * When the own forward that started this watch came (a merge keeps the earlier one; absent without one). The watches present all
-   * belong to the session's current busy period — they end with their turn — so the OLDEST own-forward watch is the request whose
-   * forward started the running turn: what the agent works on, whoever's words or fire joined it later.
+   * belong to the session's current busy period — they end with their turn, and every new prompt first settles the watches whose turn
+   * already ended (`settleEndedTurnsOf`) — so the OLDEST own-forward watch is the request whose forward started the running turn: what
+   * the agent works on, whoever's words or fire joined it later.
    */
   ownForwardStartedAt?: number;
 }
@@ -322,7 +323,8 @@ export class RequestWakeUpEngine {
   /**
    * @description A request's message (or a reminder for it) was just forwarded to
    * the conversation's session: watch the turn it starts. A watch already there
-   * for the SAME request is MERGED with it (the forward joined a busy period): the progress count keeps
+   * for the SAME request is MERGED with it (the forward joined a turn that still runs: one that ended was settled before the write,
+   * `settleEndedTurnsOf`): the progress count keeps
    * its earlier start, and the turn is the alarm's only if both were — except for the bot's own «continue»
    * (`isContinuation`: the nudge after an API error or a limit wait), which keeps the alarm's kind but
    * starts the progress count afresh: a note sent before the error is not this turn's — and for a person's
@@ -542,6 +544,59 @@ export class RequestWakeUpEngine {
     }
   }
 
+  /**
+   * @description A new prompt is about to be written into `key`'s conversation: settle every watch of it whose turn has already
+   * ENDED, on a probe taken now — before the write — exactly as the poll's next tick would have. A prompt that waited behind a running
+   * turn is forwarded within seconds of its end (`postToSession` polls busy every 5 s, this engine every 10 s), usually before the tick
+   * saw the idle; the old watch would then read the NEW turn as its own: arm its jobs under the old request, count its busy time as
+   * the old request's activity, and decide the old request only at the new turn's end. A watch whose turn still runs is left — the
+   * forward joins it (`trackForwardedTurn` merges); a session that is gone is left to the poll.
+   * Synchronous up to the decisions: the ended watches are dropped and decided against the request as it is NOW, so a forward that
+   * does not await (a write must run in its caller's tick) is never read into them. The decisions are applied after, in order; the
+   * returned promise resolves once they are (a post that picks a request awaits it first, so the pick and the header see the result).
+   * Never rejects.
+   */
+  settleEndedTurnsOf(key: SessionKey): Promise<void> {
+    const probe = this.deps.probeTurn(key);
+    const finishing: Array<Promise<void>> = [];
+    for (const turn of this.getWatchedTurnsOf(key)) {
+      const request = this.getOpenRequestOf(key, turn.requestId);
+      if (!request) {
+        this.watched.delete(turn.requestId);
+        continue;
+      }
+      if (probe.isBusy) turn.hasSeenBusy = true;
+      if (getWatchedTurnState(turn, probe) !== 'ended') continue;
+      this.watched.delete(turn.requestId);
+      const decision = this.decideWatchedTurnEnd(turn, request);
+      finishing.push(this.finishEndedTurn(turn, request, probe, decision).catch((e) => logWakeUpFailure(`settling the turn of ${turn.requestId}`, e)));
+    }
+    return Promise.all(finishing).then(() => undefined);
+  }
+
+  /** The decision at the end of `turn`, read against `request` and its jobs as they are now. */
+  private decideWatchedTurnEnd(turn: WatchedRequestTurn, request: OpenRequestState): WakeUpDecision {
+    return decideTurnEnd(request, turn.progressCountAtTurnStart, this.now(), {
+      isScheduledRun: turn.isScheduledRun === true,
+      isRequestJob: turn.isRequestJob !== false,
+      scheduleWait: this.getScheduleWait(turn.key, request),
+      progressFollowUpMs: this.deps.progressFollowUpMs,
+    });
+  }
+
+  /** R21 for a request prompt the ended turn took in (a later wake-up is a reminder), then `decision` applied. */
+  private async finishEndedTurn(turn: WatchedRequestTurn, request: OpenRequestState, probe: SessionTurnProbe, decision: WakeUpDecision): Promise<void> {
+    await this.markPromptTakenIn(turn, request, probe);
+    await this.applyDecision(turn.key, request, decision);
+  }
+
+  /** R21: once the backend took a request prompt in, a wake-up is a reminder — the agent has read the request. */
+  private async markPromptTakenIn(turn: WatchedRequestTurn, request: OpenRequestState, probe: SessionTurnProbe): Promise<void> {
+    if (turn.isRequestPrompt && request.isPromptTakenIn !== true && probe.isActive && checkIsTurnInputConsumed(turn, probe)) {
+      await this.deps.ledger.updateOpenRequest(request.id, { isPromptTakenIn: true });
+    }
+  }
+
   private async pollWatchedTurn(turn: WatchedRequestTurn): Promise<void> {
     // Replaced or dropped since this poll took its snapshot: the newer watch (if any) decides.
     if (this.watched.get(turn.requestId) !== turn) return;
@@ -553,10 +608,9 @@ export class RequestWakeUpEngine {
     }
     const probe = this.deps.probeTurn(turn.key);
     if (probe.isBusy) turn.hasSeenBusy = true;
-    if (turn.isRequestPrompt && request.isPromptTakenIn !== true && probe.isActive && checkIsTurnInputConsumed(turn, probe)) {
-      // R21: from now on a wake-up is a reminder — the agent has read the request.
-      await this.deps.ledger.updateOpenRequest(request.id, { isPromptTakenIn: true });
-    }
+    await this.markPromptTakenIn(turn, request, probe);
+    // Settled by a forward, or replaced by a new watch, during that write: the watch present now decides, not this one.
+    if (this.watched.get(turn.requestId) !== turn) return;
     const turnState = getWatchedTurnState(turn, probe);
     if (turnState === 'running') {
       if (probe.isBusy) {
@@ -571,16 +625,7 @@ export class RequestWakeUpEngine {
     this.watched.delete(turn.requestId);
     // A dead session is not a turn end: the backstop resumes it later.
     if (turnState === 'sessionGone') return;
-    await this.applyDecision(
-      turn.key,
-      request,
-      decideTurnEnd(request, turn.progressCountAtTurnStart, this.now(), {
-        isScheduledRun: turn.isScheduledRun === true,
-        isRequestJob: turn.isRequestJob !== false,
-        scheduleWait: this.getScheduleWait(turn.key, request),
-        progressFollowUpMs: this.deps.progressFollowUpMs,
-      }),
-    );
+    await this.applyDecision(turn.key, request, this.decideWatchedTurnEnd(turn, request));
   }
 
   /** @description One sweep over the open requests nobody watches; exported for tests. */

@@ -2417,3 +2417,78 @@ describe('a request waits for its schedule', () => {
   });
 });
 
+describe('turn boundaries: a forward settles the watches whose turn already ended (review 14 #1)', () => {
+  const issueKey = makeJiraKey('PROJ-7');
+  const handOverOf = (requester: string) => ({ kind: 'trackerEvent' as const, attributes: { issueKey: 'PROJ-7', triggerId: '100', requester } });
+  const mentionOf = (requester: string) => ({ kind: 'trackerMention' as const, attributes: { issueKey: 'PROJ-7', triggerId: 'mention:1', requester } });
+  const busyProbe: SessionTurnProbe = { isActive: true, isBusy: true, hasUnconsumedInput: false, isTurnEndBlocked: false };
+  const idleProbe: SessionTurnProbe = { isActive: true, isBusy: false, hasUnconsumedInput: false, isTurnEndBlocked: false };
+
+  it('a mention forwarded within seconds of the hand-over\'s turn end — before the poll saw the idle — starts a turn of its OWN: its job is armed under it, the hand-over is decided from its own end, and the mention\'s busy time is not the hand-over\'s', async () => {
+    const ledger = await createLedger();
+    const engine = createEngine(ledger);
+    const handOver = await ledger.createRequest(issueKey, handOverOf('ann'));
+    await engine.trackForwardedTurn(issueKey, handOver.id, { isRequestPrompt: true });
+    probe = busyProbe;
+    await engine.pollWatchedTurns();
+    await ledger.updateOpenRequest(handOver.id, (current) => ({ progressAnswerCount: current.progressAnswerCount + 1, isPersonInputUnanswered: undefined }));
+    // The hand-over's turn ends; the mention waited for it and is forwarded a few seconds later, before the 10 s poll tick.
+    probe = idleProbe;
+    const handOverEndAt = nowMs;
+    const settled = engine.settleEndedTurnsOf(issueKey);
+    assert.deepEqual(engine.getWatchedRequestIdsOf(issueKey), [], 'the ended watch is dropped at once, before the write');
+    await settled;
+    const mention = await ledger.createRequest(issueKey, mentionOf('bob'));
+    await engine.trackForwardedTurn(issueKey, mention.id, { isRequestPrompt: true });
+    assert.equal(engine.getArmingRequestIdOf(issueKey), mention.id, 'a watch armed in the mention\'s turn is the mention\'s');
+    assert.equal(ledger.listOpenRequestsOf(issueKey).find((open) => open.id === handOver.id)?.nextWakeAt, handOverEndAt + progressFollowUpDelayMs, 'the hand-over\'s note is followed up from ITS turn\'s end');
+
+    nowMs += 5 * 60 * 1000;
+    probe = busyProbe;
+    await engine.pollWatchedTurns();
+    assert.equal(ledger.listOpenRequestsOf(issueKey).find((open) => open.id === handOver.id)?.lastTurnActivityAt, handOverEndAt, 'the mention\'s busy turn is not the hand-over\'s activity');
+    assert.equal(ledger.listOpenRequestsOf(issueKey).find((open) => open.id === mention.id)?.lastTurnActivityAt, nowMs);
+  });
+
+  it('in a topic: a fire that waited behind the operator\'s ended turn opens the scheduler\'s request — the watch armed while handling it is the scheduler\'s request\'s', async () => {
+    const ledger = await createLedger();
+    const engine = createEngine(ledger);
+    const operator = await ledger.createRequest(topicKey, { kind: 'message', attributes: { requester: '424242' } });
+    await engine.trackForwardedTurn(topicKey, operator.id, { isRequestPrompt: true });
+    probe = busyProbe;
+    await engine.pollWatchedTurns();
+    await ledger.updateOpenRequest(operator.id, (current) => ({ progressAnswerCount: current.progressAnswerCount + 1, isPersonInputUnanswered: undefined }));
+    probe = idleProbe;
+    await engine.settleEndedTurnsOf(topicKey);
+    const fireRequest = await ledger.createRequest(topicKey, { kind: 'scheduledRun', attributes: { requester: 'scheduler' } });
+    await engine.trackForwardedTurn(topicKey, fireRequest.id, { isRequestPrompt: true, isScheduledRun: true });
+    assert.equal(engine.getArmingRequestIdOf(topicKey), fireRequest.id);
+  });
+
+  it('a turn still RUNNING keeps its watch: the forward joins it (the merge rule\'s own premise)', async () => {
+    const ledger = await createLedger();
+    const engine = createEngine(ledger);
+    const handOver = await ledger.createRequest(issueKey, handOverOf('ann'));
+    await engine.trackForwardedTurn(issueKey, handOver.id, { isRequestPrompt: true });
+    probe = busyProbe;
+    await engine.pollWatchedTurns();
+    await engine.settleEndedTurnsOf(issueKey);
+    assert.deepEqual(engine.getWatchedRequestIdsOf(issueKey), [handOver.id], 'still running: nothing is decided');
+    const mention = await ledger.createRequest(issueKey, mentionOf('bob'));
+    await engine.trackForwardedTurn(issueKey, mention.id, { isRequestPrompt: true });
+    assert.equal(engine.getArmingRequestIdOf(issueKey), handOver.id, 'the hand-over started the running turn the mention joined');
+  });
+
+  it('a silent end found by the settle is decided as the poll would have: the reminder is sent — the decision taken before the write, the reminder after it', async () => {
+    const ledger = await createLedger();
+    const engine = createEngine(ledger);
+    const handOver = await ledger.createRequest(issueKey, handOverOf('ann'));
+    await engine.trackForwardedTurn(issueKey, handOver.id, { isRequestPrompt: true });
+    probe = busyProbe;
+    await engine.pollWatchedTurns();
+    probe = idleProbe;
+    await engine.settleEndedTurnsOf(issueKey);
+    assert.deepEqual(getWakeUpReasons(), ['silentTurn']);
+    assert.equal(ledger.getNewestOpenRequest(issueKey)?.silentTurnCount, 1);
+  });
+});

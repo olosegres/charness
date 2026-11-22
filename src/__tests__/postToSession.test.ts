@@ -37,6 +37,31 @@ describe('postToSession', () => {
     assert.deepEqual(bare, ['ensure k -', 'forward k p']);
   });
 
+  it('the engine settles the watches whose turn ended right before the text is built — after the wait for a busy turn — so the pick and the header see what the settle decided, and the new turn never runs under the old watch (review 14 #1)', async () => {
+    const calls: string[] = [];
+    let isBusy = true;
+    const prompt: SessionPromptText = {
+      fullText: 'full',
+      buildText: () => {
+        calls.push('build');
+        return 'built';
+      },
+    };
+    const deps = createDeps(calls, {
+      checkBusy: () => isBusy,
+      sleep: async () => { isBusy = false; },
+      settleEndedTurns: async (conversationKey) => {
+        calls.push(`settle ${conversationKey}`);
+      },
+    });
+    assert.deepEqual(await postToSession(deps, 'k', prompt), { ok: true, isHeld: false });
+    assert.deepEqual(calls, ['ensure k -', 'settle k', 'ensure k -', 'build', 'forward k built']);
+
+    const idle: string[] = [];
+    await postToSession(createDeps(idle, { settleEndedTurns: async () => { idle.push('settle'); } }), 'k', 'p');
+    assert.deepEqual(idle, ['ensure k -', 'settle', 'forward k p'], 'an idle session too: a turn may have ended seconds before');
+  });
+
   it('a session that cannot be ensured is never forwarded to', async () => {
     const calls: string[] = [];
     const deps = createDeps(calls, { ensureSession: async () => ({ ok: false, reason: 'start-failed' }) });

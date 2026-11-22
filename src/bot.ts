@@ -6396,6 +6396,9 @@ async function forwardPromptToLiveAgent(
   sentAtMs?: number,
   options: PromptForwardOptions = {},
 ): Promise<void> {
+  // A new prompt starts or joins a turn: the watches whose turn already ENDED are settled first, synchronously and before the write
+  // (no await may precede it), so the new turn never runs under the watch of the turn before it (`requests/README.md` § Turn starts).
+  void requestWakeUpEngine?.settleEndedTurnsOf(key);
   // A forwarded prompt is thread activity — reset the compact-on-idle watchdog (F2).
   noteThreadActivity(key);
   const isTechnicalPrompt = options.isTechnicalPrompt ?? false;
@@ -15750,6 +15753,8 @@ function createSessionPostDeps(): PostToSessionDeps {
       // A prompt that waited for the session's start counts only once it reached it: a replay whose write failed is a failed post.
       if (delivery === 'buffered') await buffered.assertReplayed();
     },
+    // The watches whose turn ended are settled before the post picks a request and builds its text (`requests/README.md` § Turn starts).
+    settleEndedTurns: (conversationKey) => requestWakeUpEngine?.settleEndedTurnsOf(keyFromString(conversationKey)) ?? Promise.resolve(),
     now: () => Date.now(),
     sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
   };

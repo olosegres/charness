@@ -139,6 +139,28 @@ A topic in the stream view has no requests: its fires are plain prompts.
 - Known limitation: a `progress` note to a scheduler's request the bot gave up on, sent after the next fire replaced it, is delivered
   and changes nothing (the operator was already told it could not finish).
 
+## Turn starts — how the previous watch ends (`wakeUpEngine.ts` `settleEndedTurnsOf`, `trackForwardedTurn`)
+
+A watch ends with its turn. A new prompt reaches the agent through ONE write, `bot.ts` `forwardPromptToLiveAgent`, which first settles
+the conversation's watches whose turn already ENDED: on a probe taken then, they are dropped and decided against the request as it is,
+before the write (synchronously: no await may come before a write, or a stop queued meanwhile would begin first). A watch whose turn
+still RUNS is left, and the new prompt joins that turn (`trackForwardedTurn` merges, for the same request). A post that waited behind a
+running turn (`postToSession`) also awaits the settle before it picks a request and builds its text, so the pick and the header read
+what the ended turn decided (a scheduler's request its silent end closed is not ridden). A session that is gone is left to the poll.
+Without the settle a forward that waited would usually start its turn under the old watch (the post forwards within 5 s of the idle,
+the poll ticks every 10 s), and the old request would get the new turn's jobs, its busy time and its end.
+
+| Path that starts a turn | Where it is written | The previous watch |
+|---|---|---|
+| forward after a wait: a Jira request prompt or issue update, the lost-work resume post (`postToSession`, `waitForIdle`) | `settleEndedTurns` awaited after the wait, then the write | ended (the usual case) → settled before the text is built; still running (the 10-minute wait ran out) → joined |
+| immediate forward: a person's text, voice, file, album, `/schedule` in a topic (`deliverLatePrompt`, the startup buffer) | the write | ended → settled before it; running → joined (Claude queues it into the turn, OpenCode interrupts the turn) |
+| fire: a topic's and a tracker's (`createTopicPost` / `createTrackerPost` over `postToSession`) | as a forward after a wait; a topic's forwards one at a time per conversation | as a forward after a wait; the request it rides is picked after the settle |
+| «continue» after an API error, a limit or account wait, a fallback switch (`apiRetryKick`, `resumeTopicOnNewSession`) | the write, then `trackContinuationTurn` | the turn it continues reads `running` (an armed retry or wait blocks its end, `isTurnEndBlocked`): never settled, the «continue» merges into it (row 14); another request's ended watch → settled |
+| engine reminder: a silent turn, a follow-up, the backstop, a post retry (`applyDecision`) | `forwardRequestWakeUp` → the write | the reminded request's own watch was dropped at its turn's end; another request's ended watch → settled |
+| restart wake at a boot (`wakeAfterRestart`) | `forwardRequestWakeUp` → the write | none survives a restart (watches are in memory); one tracked since → as above |
+| lost-work wake (`scheduleRestartWake(key, { isLostWork: true })`) | as the restart wake | as the restart wake |
+| replay of the prompts buffered during a session start (`replayBufferedPrompts`) | the write, prompt by prompt | the start blocked their turn ends; at the replay an ended watch → settled, a running one → joined |
+
 ## Wake-ups (`wakeUpRules.ts` = pure decisions, `wakeUpEngine.ts` = timers)
 
 - **One watch per REQUEST**, not per conversation: with two requesters' requests open in one topic, each is
@@ -239,9 +261,9 @@ A topic in the stream view has no requests: its fires are plain prompts.
   a result» — so the agent is not left to learn it from the reminder. This is why an agent in a Jira issue can launch a worker, arm its watch, answer
   `progress` and end its turn, and why a Telegram topic in a view with requests is no longer reminded every 15 minutes while its own
   watch passes.
-- **A forward into a turn already watched for the same request MERGES with it** (`trackForwardedTurn`): a fire that waited behind a
-  person's turn (`postToSession` waits up to 10 min, then forwards into the running turn), a reminder behind a silent one, an issue
-  update during a fire, the bot's own «continue». The merged watch keeps the earlier start of the progress count (a «continue» starts it
+- **A forward into a turn already watched for the same request MERGES with it** (`trackForwardedTurn`), when that turn still runs (§ Turn
+  starts: a turn that ended is settled first, so a post that waited normally starts a NEW turn): a fire forwarded into a person's
+  running turn (`postToSession`'s 10-minute wait ran out), an issue update during a fire, the bot's own «continue». The merged watch keeps the earlier start of the progress count (a «continue» starts it
   afresh, and so do a person's words that join the turn: a note sent before them is not their answer), is a request prompt's if either was (R21: the prompt is still marked taken in) and is the alarm's only if BOTH were (a
   «continue» keeps the alarm's kind). A person's words are not a property of the watch: they are owed on the persisted request from the
   moment they are forwarded, so an alarm that joined a requester's turn can never turn that turn's silent end into a quiet one. A fire
@@ -249,8 +271,8 @@ A topic in the stream view has no requests: its fires are plain prompts.
 - **The request a job is armed under** (`pickRequestToArmUnder`, asked through the engine's `getArmingRequestIdOf`): the one the agent is
   working on. Tiers, the first that has a request wins: a request whose watch a forward of its OWN started (its prompt, an issue update,
   a fire riding it, a reminder for it — `isOwnForward`, kept by a merge if either side had it) — the OLDEST of them, the request whose
-  forward STARTED the running turn (the watches present all belong to the session's current busy period; `ownForwardStartedAt`, a merge
-  keeps the earlier), so a hand-over's comment or fire that joins a mention's turn does not take the mention's job and the reverse holds
+  forward STARTED the running turn (the watches present all belong to the session's current busy period — every write first settles the
+  watches whose turn ended, § Turn starts; `ownForwardStartedAt`, a merge keeps the earlier), so a hand-over's comment or fire that joins a mention's turn does not take the mention's job and the reverse holds
   too, and so does the scheduler's request whose fire started the turn (the watch an agent arms while handling that alarm is its); a request watched only because a
   CONVERSATION-WIDE forward carried it along (a «continue» nudge and a restart wake that carried several requests watch EVERY open request,
   which says nothing about the one the agent works on); the open requests. Inside those last two tiers the newest wins, a tracker hand-over
@@ -277,7 +299,7 @@ A topic in the stream view has no requests: its fires are plain prompts.
   | | `trackContinuationTurn` with `isCountersReset` (also zeroes `wakeCount`, the follow-up and `isLimitStopped`) | EVERY open request | **Yes, by design**, for four callers: the end of a limit wait, the account-wait resume, the limit fallback switch AND the operator's manual backend switch, but only when it BRIDGES (`executeBackendSwitch` → `resumeTopicOnNewSession`: no wait ended, but a new agent starts the bookkeeping afresh and `cancelApiRetry` ends a wait armed for the backend left; an unbridged switch has no first prompt, returns before `trackContinuationTurn` and resets nothing). The flag is never touched: what is owed stays owed |
   | | `createRequest` (initial 0) | the new request | No |
   | `lastTurnActivityAt` | `recordTurnActivity` from `trackForwardedTurn` (forced, keyed on the watch it just stored) | the tracked request; a «continue» and a restart wake that carried several requests track each of them; NOT when the watch is another job's fire (`isRequestJob` false: its own forward or a «continue» of it) | **Yes, by design**: one session turn, every request in it is watched, and its end is decided for each. A ridden request is never written by another job's fire or its «continue» |
-  | | `recordTurnActivity` from a busy poll of a watched turn | the watched request itself, unless the watch is another job's fire (`isRequestJob` false: the busy time is that job's) | No |
+  | | `recordTurnActivity` from a busy poll of a watched turn | the watched request itself, unless the watch is another job's fire (`isRequestJob` false: the busy time is that job's) | No — since a write settles the watches whose turn ended (§ Turn starts), a watch present belongs to the running turn: it never records the busy time of the NEXT request's turn |
   | | `recordTurnActivity` from the sweep's busy branch | the unwatched request | **Narrowed** (rows 2, 11): recorded only while NO turn is watched in the conversation, whatever the request owes — then the busy session is the request's own lost turn (or one untracked turn of row 18). With a turn watched the busy time is that turn's: recorded, it would push the backstop of a request whose watch fired and nobody handled (`armed`, or `none` after a dropped watch: no follow-up, the backstop is its only wake). A held request ignores the backstop anyway, and a due follow-up is woken by `nextWakeAt`, which activity does not move |
   | | `decideTurnEnd` / `decideUnwatchedRequest` / `decideRestartWake` updates, applied by `applyDecision` | the decided request; the no-answer quiet end of another job's fire writes nothing (`nextWakeAt` stays too) | No |
   | | `wakeAfterRestart` (writes `decision.update` itself; only its alert goes through `applyDecision`) | each request it wakes, for itself — with `isLostWork` (row 19) also a request a passing watch holds, still only for itself | No |

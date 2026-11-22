@@ -82,6 +82,13 @@ export interface PostToSessionDeps {
   ensureSession: (conversationKey: string, fallbackAdapterName?: string) => Promise<EnsureSessionResult>;
   /** Forward the prompt to the conversation's agent. */
   forwardPrompt: (conversationKey: string, text: string) => Promise<void>;
+  /**
+   * Optional: the wake-up engine settles the conversation's watches whose turn already ENDED (`settleEndedTurnsOf`), awaited right
+   * before the text is built — after the wait for a busy turn, which this post ends within seconds of the idle, usually before the
+   * engine's own tick saw it. The pick of the request a fire rides and its header then read what the ended turn decided (a scheduler's
+   * request that closed is not ridden), and the new turn never runs under the old watch. Never rejects.
+   */
+  settleEndedTurns?: (conversationKey: string) => Promise<void>;
   now: () => number;
   sleep: (ms: number) => Promise<void>;
 }
@@ -120,6 +127,9 @@ export async function postToSession(
   if (!session.ok) return { ok: false, reason: session.reason };
   const isWaitingForTurn = deps.checkBusy(conversationKey);
   if (isWaitingForTurn) await waitForIdle(deps, conversationKey);
+  // Ahead of the second limit check and the ensure: a wake the settle forwards (a silent end's reminder) and a stop it may queue are
+  // then behind us when the session is ensured again and the text is built.
+  await deps.settleEndedTurns?.(conversationKey);
   // Again: the turn waited out above may itself have hit the limit and armed a wait.
   if (deps.holdForLimitResume?.(conversationKey, text, heldText)) return { ok: true, isHeld: true };
   let isFresh = session.isFresh;
