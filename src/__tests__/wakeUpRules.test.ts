@@ -465,7 +465,15 @@ describe('a request that waits for its schedule (scheduleWait) and a scheduled r
     assert.equal(decision.kind === 'wake' ? decision.reason : null, 'restarted');
     const busy: SessionTurnProbe = { ...goneProbe, isBusy: true };
     assert.equal(decideRestartWake(answeredRequest(), busy, nowMs, 'watching', true).kind, 'none', 'a working session is never woken');
-    assert.equal(decideRestartWake(answeredRequest({ nextWakeAt: nowMs + 1 }), goneProbe, nowMs, 'watching', true).kind, 'none', 'a request with its own next step');
+    // A follow-up is the request's own next step only while it can fire (review 14 #2): a passing watch holds the request, so a follow-up
+    // pending under it never fires — the lost-work wake must not wait for it. Not held, the follow-up comes and the wake leaves it to it.
+    const heldFollowUp = decideRestartWake(answeredRequest({ nextWakeAt: nowMs + 1 }), goneProbe, nowMs, 'watching', true);
+    assert.equal(heldFollowUp.kind === 'wake' ? heldFollowUp.reason : heldFollowUp.kind, 'restarted', 'a follow-up a watch holds is no next step');
+    assert.equal(decideRestartWake(answeredRequest({ nextWakeAt: nowMs + 1 }), goneProbe, nowMs, 'watching', false).kind, 'none', 'a boot: held all the same');
+    for (const wait of ['none', 'armed'] as const) {
+      assert.equal(decideRestartWake(answeredRequest({ nextWakeAt: nowMs + 1 }), goneProbe, nowMs, wait, true).kind, 'none', `${wait}: the follow-up fires, its own next step`);
+    }
+    assert.equal(decideRestartWake(answeredRequest({ nextPostRetryAt: nowMs + 1 }), goneProbe, nowMs, 'watching', true).kind, 'none', 'a post retry always runs: its own next step');
     assert.equal(decideRestartWake(answeredRequest({ isWakeStopped: true }), goneProbe, nowMs, 'watching', true).kind, 'none', 'given up on');
     assert.equal(decideRestartWake(answeredRequest({ wakeCount: 10 }), goneProbe, nowMs, 'watching', true).kind, 'alert', 'the cap stays');
   });

@@ -265,8 +265,8 @@ export function decideUnwatchedRequest(
 
 /**
  * @description The wake of an open request whose conversation's process was found gone (`restarted`): at once, not at
- * the backstop. Nothing when the request already has its own next step — a post retry or a progress follow-up — or
- * nothing may wake it, or the session is working or blocked (a pending question, an armed retry or usage-limit wait, a
+ * the backstop. Nothing when the request already has its own next step — a post retry, or a progress follow-up that can fire (one a
+ * passing watch holds never fires, so it is no next step: a lost-work loss still wakes the request) — or nothing may wake it, or the session is working or blocked (a pending question, an armed retry or usage-limit wait, a
  * start under way), or a watch that is not failing holds it while it owes nobody an answer (`checkIsHeldBetweenTurns`: a BOOT
  * wakes nobody then, as in a topic). `isLostWork` — the process ended with the agent's OWN work pending (a build, a scheduled job it
  * had running) — is a different event: a topic resumes on it whatever is armed, so the hold does not apply and the request is woken
@@ -281,8 +281,11 @@ export function decideRestartWake(
   isLostWork = false,
 ): WakeUpDecision {
   if (checkIsWakingStopped(request) || probe.isBusy || probe.isTurnEndBlocked) return { kind: 'none' };
-  if (request.nextPostRetryAt !== undefined || request.nextWakeAt !== undefined) return { kind: 'none' };
-  if (!isLostWork && checkIsHeldBetweenTurns(request, scheduleWait)) return { kind: 'none' };
+  // The request's own next step: a post retry (it always runs), a follow-up only while it can fire — a passing watch that holds the
+  // request keeps a pending follow-up from ever firing (`decideUnwatchedRequest`), so it must not keep the lost-work wake away either.
+  const isHeld = checkIsHeldBetweenTurns(request, scheduleWait);
+  if (request.nextPostRetryAt !== undefined || (request.nextWakeAt !== undefined && !isHeld)) return { kind: 'none' };
+  if (!isLostWork && isHeld) return { kind: 'none' };
   return getWakeOrCapDecision(request, 'restarted', { lastTurnActivityAt: nowMs });
 }
 

@@ -1351,6 +1351,43 @@ describe('the restart wake: a tracker conversation whose process was found gone 
     assert.ok(mixed?.text.includes('only with what the requester must know'), 'ann\'s reminder keeps its own wording');
   });
 
+  it('a follow-up a passing watch holds does not keep the lost-work wake away: a note in its own fire\'s turn under `armed`, the watch passes again, the process dies with its own work pending → woken once, the answer optional (review 14 #2)', async () => {
+    const ledger = await createLedger();
+    let wait: RequestScheduleWait = 'armed';
+    const engine = createEngine(ledger, { getScheduleWait: () => wait });
+    const held = await ledger.createRequest(issueKey, handOver('ann'));
+    await ledger.updateOpenRequest(held.id, { progressAnswerCount: 1 });
+    // The watch fired «silent» during a long compile; its fire rides the hand-over, the agent answers «still running» and keeps the watch.
+    await engine.trackForwardedTurn(issueKey, held.id, { isRequestPrompt: false, isScheduledRun: true, isRequestJob: true });
+    await ledger.updateOpenRequest(held.id, (current) => ({ progressAnswerCount: current.progressAnswerCount + 1 }));
+    await endTurnSilently(engine);
+    assert.notEqual(ledger.getNewestOpenRequest(issueKey)?.nextWakeAt, undefined, 'a note under a watch that fired: followed up');
+    // The compile prints again: the check passes, the watch holds the request — its follow-up will never fire.
+    wait = 'watching';
+    probe = goneProbe;
+    await engine.wakeAfterRestart(issueKey, { isLostWork: true });
+    assert.deepEqual(getWakeUpReasons(), ['restarted'], 'the lost-work wake still comes');
+    assert.equal(wakeUpMessages[0].isAnswerOptional, true);
+  });
+
+  it('a lost-work wake that wakes nobody says so in the log — the bot already promised the wake', async () => {
+    const ledger = await createLedger();
+    const engine = createEngine(ledger);
+    const stopped = await ledger.createRequest(issueKey, handOver('ann'));
+    await ledger.updateOpenRequest(stopped.id, { isWakeStopped: true });
+    probe = goneProbe;
+    const logged: string[] = [];
+    const originalWarn = console.warn;
+    console.warn = (...parts: unknown[]) => { logged.push(parts.join(' ')); };
+    try {
+      await engine.wakeAfterRestart(issueKey, { isLostWork: true });
+    } finally {
+      console.warn = originalWarn;
+    }
+    assert.deepEqual(wakeUps, []);
+    assert.ok(logged.some((line) => line.includes('lost-work wake') && line.includes('woke no request')), logged.join('\n'));
+  });
+
   it('a wake with no lost-work loss behind it — the unheld request of a boot — is the plain reminder', async () => {
     const ledger = await createLedger();
     const engine = createEngine(ledger);

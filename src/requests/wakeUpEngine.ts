@@ -245,7 +245,12 @@ export class RequestWakeUpEngine {
       });
       if (updated && !isStoppedMeanwhile) woken.push(updated);
     }
-    if (woken.length === 0) return;
+    if (woken.length === 0) {
+      // The bot already said the conversation is woken for its lost work: when no request could be, say so (each skip is a decision of
+      // `decideRestartWake`: a request given up on, at the cap, with a post retry or a follow-up that can still fire, busy or blocked).
+      if (options.isLostWork === true) console.warn(`[requests] ${keyToString(key)}: the lost-work wake woke no request; the note rides the next prompt`);
+      return;
+    }
     // A lost-work wake of a request a passing watch holds and that owes nobody: the agent is asked to answer only with what the requester
     // must know (the fire header's wording). Every other request — a boot's, one that owes an answer — gets the plain «answer it».
     const isAnswerOptional = (request: OpenRequestState): boolean =>
