@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+**A message you send just as the agent finishes its turn no longer gets the end of that turn glued to the start of the reply to your message.**
+Before, when your message reached the agent a moment before the bot had read the last lines of the turn that was ending, the bot took the end of that turn for the start of the new one: the previous answer's closing words were posted again as the first lines of the new reply, and the new reply's first words were added to them in the same message. Now each turn's text is settled against that turn's own state, so the closing words go out once, with their own turn, and the new reply starts a message of its own.
+
 **On a runner whose CPUs are busy, a job stuck behind one that was killed is no longer left waiting for the builds to leave the CPU.**
 Before, the check that lets a waiting job go after its predecessor was killed without saying so (`probe` starts it in the background) ran at the lowest CPU priority, so a runner kept busy by builds gave it no time — the waiting job stayed stashed for as long as the builds ran (over 100 s in a test with the CPUs held). It now runs at the priority of the call that started it, like the call itself; the heavy disk walks stay at the lowest.
 

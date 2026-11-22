@@ -339,7 +339,10 @@ restarts — every hot reload — never touch it. Per-thread host dir
   but only once batched answer text has actually been EMITTED — an offset past
   un-emitted text would skip it on replay (live seam-loss 2026-07-05). A turn's end
   emits what its batch holds (an error-ended turn's text too, ahead of its error), so
-  a finished turn leaves the offset at the end of the log. `flushPendingOutput` (optional
+  a finished turn leaves the offset at the end of the log, and the answer cursor empty: the cursor (the text streamed
+  so far, and how much of it was emitted) belongs to the turn that streams it, so a prompt written while a turn
+  runs leaves it alone (that turn's `result` may still be unread, and settles against it) and only a prompt written
+  with no turn running resets it. `flushPendingOutput` (optional
   on `AgentAdapter`, also OpenCode's) does the same mid-turn on demand: it reads the tail
   (the poll lags the process; not from inside the handling of a chunk, as a question event asks,
   nor from an adopted tail the boot still holds — its replay waits for `releaseAdoptedTails`)

@@ -1574,9 +1574,12 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
     }
     const wasBusy = session.isBusy;
     // A fresh user turn begins → reset the answer cursor so its first tail is a
-    // new message (the bot also flips `needsNewMessage` for delta adapters).
-    session.currentResponseText = '';
-    session.emittedLength = 0;
+    // new message (the bot also flips `needsNewMessage` for delta adapters). Only
+    // when no turn is running: the tail is polled, so the `result` of a turn that
+    // has just ended may still be unread, and it settles against THIS cursor —
+    // reset here, its text would be emitted as the start of the new turn's, glued
+    // to it. The running turn's own end resets it (`handleTurnEnd`).
+    if (!wasBusy) this.resetAnswerCursor(session);
     session.apiErrorFired = false;
     session.isBusy = true;
     // A fresh turn resets the idle-watchdog clock: without this a session that
@@ -1593,6 +1596,12 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
       if (session.lastStdoutActivityAt === turnStartedAt) session.isBusy = wasBusy;
       throw error;
     });
+  }
+
+  /** Forget the answer text of the turn in progress: what was streamed so far was emitted (or dropped) and belongs to a turn that is over. */
+  private resetAnswerCursor(session: StreamSession): void {
+    session.currentResponseText = '';
+    session.emittedLength = 0;
   }
 
   sendSignal(key: SessionKey, _signal: string): void {
@@ -2172,6 +2181,8 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
       session.startCostUsd = null;
     }
     this.applyTurnEnd(session, action);
+    // The turn's text has been emitted (or dropped) by now: the next turn starts from an empty cursor, whenever its prompt was written.
+    this.resetAnswerCursor(session);
     // After the handlers above: the bot's per-turn stop (L5) reads the session's state as settled here.
     this.emit('turnEnded', session.key);
     this.applyPendingConfigDirSwitch(session);
