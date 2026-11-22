@@ -1,6 +1,6 @@
 import { keyToString, type SessionKey } from '../sessionKey';
 import type { RequestLedger } from './requestLedger';
-import { checkIsWaitingBetweenTurns, type RequestScheduleWait } from './scheduleWait';
+import { checkIsHeldBetweenTurns, type RequestScheduleWait } from './scheduleWait';
 import type { OpenRequestState, RequestAlertReason, RequestAnswerKind } from './types';
 import { getWakeUpMessage, type WakeUpMessage } from './requestHeader';
 import {
@@ -46,7 +46,9 @@ import {
  *
  * A request waits for its schedule while a job armed under it counts (`scheduleWait.ts`, read through the optional
  * `getScheduleWait` port at every decision): the rules then neither prod it nor wake it at a restart, and a turn a scheduler
- * fire started (`isScheduledRun`) that ends without an answer is not silence.
+ * fire started (`isScheduledRun`) that ends without an answer is not silence. A request that owes a person an answer
+ * (`checkIsAnswerOwed`) is never held: it is read from the persisted request, so a turn whose watch a restart lost still reaches the
+ * backstop. The complete table is `README.md` § Wake-ups.
  */
 
 /** How often a watched turn is polled for its end. */
@@ -171,15 +173,15 @@ export class RequestWakeUpEngine {
    * process that died with its own work pending): wake them `restarted`, a stagger after the last wake scheduled so,
    * instead of at the backstop. One wake per conversation at a time — a second call while one waits changes nothing.
    * Whether the requests still need it is decided when it is due (`decideRestartWake`). Returns `false` when one
-   * was already waiting, or when every open request waits for a watch that is not failing (`scheduleWait`: a restart wakes nobody
-   * then, as in a topic). The timer is unref'd: it never keeps the process alive.
+   * was already waiting, or when every open request is held by a watch that is not failing and owes nobody an answer
+   * (`checkIsHeldBetweenTurns`: a restart wakes nobody then, as in a topic). The timer is unref'd: it never keeps the process alive.
    */
   scheduleRestartWake(key: SessionKey): boolean {
     const conversationKey = keyToString(key);
     if (this.restartWakeTimers.has(conversationKey)) return false;
-    // Every open request waits for a watch that is not failing: nobody is woken, and no stagger slot is spent on it.
+    // Every open request is held by a watch that is not failing and owes nobody an answer: nobody is woken, and no stagger slot is spent on it.
     const openRequests = this.deps.ledger.listOpenRequestsOf(key);
-    if (openRequests.length > 0 && openRequests.every((request) => checkIsWaitingBetweenTurns(this.getScheduleWait(key, request)))) return false;
+    if (openRequests.length > 0 && openRequests.every((request) => checkIsHeldBetweenTurns(request, this.getScheduleWait(key, request)))) return false;
     const staggerMs = this.deps.restartWakeStaggerMs ?? restartWakeStaggerMs;
     const dueAt = Math.max(this.now(), this.lastRestartWakeDueAt) + staggerMs;
     this.lastRestartWakeDueAt = dueAt;
@@ -268,7 +270,8 @@ export class RequestWakeUpEngine {
    * words stay a person's, the progress count keeps its earlier start, and the turn is the
    * alarm's only if both were. Another requester's request in the conversation keeps its own
    * watch. A post retry still pending is moot from now on (R28): the session has the request —
-   * unless the forward is a fire riding the request, which carries none of it.
+   * unless the forward is a fire riding the request, which carries none of it. A forward that carries a person's
+   * words (a request prompt, an issue update) marks the request as owing an answer (`isPersonInputUnanswered`, persisted).
    */
   async trackForwardedTurn(
     key: SessionKey,
@@ -279,11 +282,12 @@ export class RequestWakeUpEngine {
     if (!request) return;
     // The agent works on an open request now: what it writes is owed to that one, not a tail.
     this.answerTails.delete(keyToString(key));
-    // A watch of the SAME request is still there: the forward joined a busy period (a fire that waited behind a person's turn, a
-    // reminder behind a silent one). The turns MERGE — a person's words are never washed out by an alarm or a reminder that joined
-    // them, and the earlier start of the progress count stays. Only a turn that was the alarm's all through is the alarm's.
     const previous = this.watched.get(requestId);
-    const isScheduledRun = options.isScheduledRun === true || request.origin.kind === 'scheduledRun';
+    const isFireForward = options.isScheduledRun === true;
+    // A request a scheduler fire opened (a Telegram topic's `scheduledRun`) is the alarm's: its turn is a scheduled run's, whoever tracks it.
+    const isAlarmRequest = request.origin.kind === 'scheduledRun';
+    const carriesPersonWords = options.isRequestPrompt || options.isPersonInput === true;
+    const isScheduledRun = (isFireForward || isAlarmRequest) && (previous === undefined || previous.isScheduledRun === true);
     this.watched.set(requestId, {
       key,
       requestId,
@@ -291,13 +295,16 @@ export class RequestWakeUpEngine {
       hasSeenBusy: false,
       hasSeenOutput: false,
       isRequestPrompt: options.isRequestPrompt || previous?.isRequestPrompt === true,
-      // A request a scheduler fire opened (a Telegram topic's `scheduledRun`) is the alarm's: its turn is a scheduled run's, whoever tracks it.
-      isScheduledRun: isScheduledRun && (previous === undefined || previous.isScheduledRun === true),
+      isScheduledRun,
       isPersonInput: options.isPersonInput === true || previous?.isPersonInput === true,
     });
-    // The session has the request's message: a pending post retry is moot. A fire riding the request carries none of it.
-    if (request.nextPostRetryAt !== undefined && options.isScheduledRun !== true) {
-      await this.deps.ledger.updateOpenRequest(request.id, { nextPostRetryAt: undefined });
+    const isMoot = request.nextPostRetryAt !== undefined && !isFireForward;
+    const isPersonWordsOwed = carriesPersonWords && !isFireForward && !isAlarmRequest && request.isPersonInputUnanswered !== true;
+    if (isMoot || isPersonWordsOwed) {
+      await this.deps.ledger.updateOpenRequest(request.id, {
+        ...(isMoot ? { nextPostRetryAt: undefined } : {}),
+        ...(isPersonWordsOwed ? { isPersonInputUnanswered: true } : {}),
+      });
     }
     await this.recordTurnActivity(request, true);
   }

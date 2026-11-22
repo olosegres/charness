@@ -175,6 +175,20 @@ describe('answerRequest close rules', () => {
     assert.equal(ledger.getNewestOpenRequest(topicKey)?.nextPostRetryAt, undefined);
   });
 
+  it('a progress answer answers the person\'s words: the persisted «owed» flag is cleared; a failed delivery leaves it', async () => {
+    await ledger.load();
+    const request = await ledger.createRequest(topicKey, origin);
+    await ledger.updateOpenRequest(request.id, { isPersonInputUnanswered: true });
+
+    sink.nextResult = { ok: false, error: 'the surface is down' };
+    await answerRequest({ ledger, answerSinks: sinks }, createArgs(request.id, { kind: 'progress' }));
+    assert.equal(ledger.getNewestOpenRequest(topicKey)?.isPersonInputUnanswered, true, 'nothing reached the person: still owed');
+
+    sink.nextResult = { ok: true };
+    await answerRequest({ ledger, answerSinks: sinks }, createArgs(request.id, { kind: 'progress' }));
+    assert.equal(ledger.getNewestOpenRequest(topicKey)?.isPersonInputUnanswered, undefined, 'delivered: the words are answered');
+  });
+
   it('a late answer to a superseded request is delivered and changes no request', async () => {
     await ledger.load();
     const superseded = await ledger.createRequest(topicKey, origin);

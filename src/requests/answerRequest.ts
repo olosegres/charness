@@ -149,6 +149,8 @@ export async function answerRequest(deps: AnswerRequestDeps, args: AnswerRequest
       // and a post retry still pending is moot (R28).
       ...(current.prompt !== undefined && current.isPromptTakenIn !== true ? { isPromptTakenIn: true } : {}),
       ...(current.nextPostRetryAt !== undefined ? { nextPostRetryAt: undefined } : {}),
+      // The agent spoke to the requester: no person's words are left unanswered (`isPersonInputUnanswered`).
+      ...(current.isPersonInputUnanswered === true ? { isPersonInputUnanswered: undefined } : {}),
     }));
   // After the close: whoever hears it sees the request as it now stands.
   deps.onAnswerDelivered?.(key, args.requestId, args.kind);

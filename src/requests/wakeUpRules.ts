@@ -1,5 +1,5 @@
 import type { OpenRequestState, OpenRequestUpdate, RequestAlertReason, RequestWakeUpReason } from './types';
-import { checkIsWaitingAtTurnEnd, checkIsWaitingBetweenTurns, type RequestScheduleWait } from './scheduleWait';
+import { checkIsAnswerOwed, checkIsHeldBetweenTurns, checkIsWaitingAtTurnEnd, type RequestScheduleWait } from './scheduleWait';
 import { getMinutesOverrideMs } from '../utils/minutesOverride';
 
 /**
@@ -175,9 +175,11 @@ export function decideTurnEnd(
       update: { silentTurnCount: 0, nextWakeAt: nowMs + (context.progressFollowUpMs ?? progressFollowUpDelayMs), lastTurnActivityAt: nowMs },
     };
   }
-  // A request with a silent turn pending is owed an answer: the reminder's turn that follows it is not a person's turn, yet it must
-  // count, or a watch that passes would wipe the count and the rules would never give up on a requester left unanswered.
-  const isQuietWhileWaiting = isWaitingForSchedule && context.isPersonTurn !== true && request.silentTurnCount === 0;
+  // A request that owes a person an answer (a silent turn pending, a person's words not answered yet): the reminder's turn that follows
+  // is not a person's turn, yet it must count, or a watch that passes would wipe the count and the rules would never give up on a
+  // requester left unanswered.
+  // The owed answer is read from the persisted request, so a turn whose watch was lost and rebuilt still counts as a person's.
+  const isQuietWhileWaiting = isWaitingForSchedule && context.isPersonTurn !== true && !checkIsAnswerOwed(request);
   // The follow-up is cleared only where a schedule holds the request. A fire's quiet end alone leaves it: a fire may ride a request
   // that waits for nothing (its own job's request is gone), and an unrelated alarm must not wipe that request's due follow-up.
   const isHeldBySchedule = isProgressSent || isQuietWhileWaiting;
@@ -207,8 +209,9 @@ export function decideTurnEnd(
  * watched: a due progress follow-up, or the backstop. Never while the session is
  * working or blocked — and a live turn counts as activity, which pushes the
  * backstop back (the caller records it). Nothing either while the request is held
- * by a watch that is not failing (`scheduleWait`): the watch wakes the agent, a
- * follow-up would only prod it; a post retry still runs (the agent never saw the request).
+ * by a watch that is not failing and owes nobody an answer (`checkIsHeldBetweenTurns`): the watch wakes the agent, a
+ * follow-up would only prod it; a post retry still runs (the agent never saw the request); a request that owes a person
+ * an answer — its turn's watch lost to a restart or a dead process — is taken back by the backstop as without a watch.
  */
 export function decideUnwatchedRequest(
   request: OpenRequestState,
@@ -224,7 +227,7 @@ export function decideUnwatchedRequest(
       ? { kind: 'wake', reason: 'postRetry', update: { nextPostRetryAt: undefined, lastTurnActivityAt: nowMs } }
       : { kind: 'none' };
   }
-  if (checkIsWaitingBetweenTurns(scheduleWait)) return { kind: 'none' };
+  if (checkIsHeldBetweenTurns(request, scheduleWait)) return { kind: 'none' };
   if (request.nextWakeAt !== undefined) {
     return nowMs >= request.nextWakeAt ? getWakeOrCapDecision(request, 'progressFollowUp', {}) : { kind: 'none' };
   }
@@ -238,7 +241,8 @@ export function decideUnwatchedRequest(
  * @description The wake of an open request whose conversation's process was found gone (`restarted`): at once, not at
  * the backstop. Nothing when the request already has its own next step — a post retry or a progress follow-up — or
  * nothing may wake it, or the session is working or blocked (a pending question, an armed retry or usage-limit wait, a
- * start under way), or a watch that is not failing holds it (`scheduleWait`: a restart wakes nobody then, as in a topic).
+ * start under way), or a watch that is not failing holds it while it owes nobody an answer (`checkIsHeldBetweenTurns`: a restart
+ * wakes nobody then, as in a topic).
  * It counts against the wake-up cap like any wake, and is seen activity: the backstop counts from it.
  */
 export function decideRestartWake(
@@ -249,7 +253,7 @@ export function decideRestartWake(
 ): WakeUpDecision {
   if (checkIsWakingStopped(request) || probe.isBusy || probe.isTurnEndBlocked) return { kind: 'none' };
   if (request.nextPostRetryAt !== undefined || request.nextWakeAt !== undefined) return { kind: 'none' };
-  if (checkIsWaitingBetweenTurns(scheduleWait)) return { kind: 'none' };
+  if (checkIsHeldBetweenTurns(request, scheduleWait)) return { kind: 'none' };
   return getWakeOrCapDecision(request, 'restarted', { lastTurnActivityAt: nowMs });
 }
 

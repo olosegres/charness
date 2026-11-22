@@ -9,6 +9,8 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  checkIsAnswerOwed,
+  checkIsHeldBetweenTurns,
   checkIsJobArmedUnderRequest,
   checkIsWaitingAtTurnEnd,
   checkIsWaitingBetweenTurns,
@@ -91,6 +93,31 @@ describe('what each reading means to the rules', () => {
   it('the end of a watched turn reads `armed` and `watching` as waiting; between turns only `watching` holds the request', () => {
     assert.deepEqual((['none', 'armed', 'watching'] as const).map(checkIsWaitingAtTurnEnd), [false, true, true]);
     assert.deepEqual((['none', 'armed', 'watching'] as const).map(checkIsWaitingBetweenTurns), [false, false, true]);
+  });
+});
+
+describe('checkIsAnswerOwed / checkIsHeldBetweenTurns — what a watch may never hide', () => {
+  type OwedFields = Pick<OpenRequestState, 'silentTurnCount' | 'isPersonInputUnanswered' | 'progressAnswerCount' | 'origin'>;
+  const personRequest: OwedFields = { silentTurnCount: 0, progressAnswerCount: 1, origin: { kind: 'trackerEvent', attributes: {} } };
+
+  it('a pending silent turn, a person\'s words after the last answer, and a person\'s request never answered are each owed; an answered one is not', () => {
+    assert.equal(checkIsAnswerOwed(personRequest), false, 'answered, nothing pending: owes nothing');
+    assert.equal(checkIsAnswerOwed({ ...personRequest, silentTurnCount: 1 }), true, 'a silent turn is pending');
+    assert.equal(checkIsAnswerOwed({ ...personRequest, isPersonInputUnanswered: true }), true, 'a person\'s words are not answered yet');
+    assert.equal(checkIsAnswerOwed({ ...personRequest, isPersonInputUnanswered: false }), false);
+    assert.equal(checkIsAnswerOwed({ ...personRequest, progressAnswerCount: 0 }), true, 'never answered at all');
+  });
+
+  it('a request a scheduler fire opened (`scheduledRun`) is the alarm\'s: never answered, it owes nobody — unless a silent turn is pending', () => {
+    const alarm: OwedFields = { ...personRequest, progressAnswerCount: 0, origin: { kind: 'scheduledRun', attributes: {} } };
+    assert.equal(checkIsAnswerOwed(alarm), false);
+    assert.equal(checkIsAnswerOwed({ ...alarm, silentTurnCount: 1 }), true);
+  });
+
+  it('only `watching` holds a request, and only while it owes nothing', () => {
+    const owed: OwedFields = { ...personRequest, isPersonInputUnanswered: true };
+    assert.deepEqual((['none', 'armed', 'watching'] as const).map((wait) => checkIsHeldBetweenTurns(personRequest, wait)), [false, false, true]);
+    assert.deepEqual((['none', 'armed', 'watching'] as const).map((wait) => checkIsHeldBetweenTurns(owed, wait)), [false, false, false]);
   });
 });
 

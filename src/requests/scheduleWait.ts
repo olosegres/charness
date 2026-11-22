@@ -17,6 +17,10 @@ import type { OpenRequestState } from './types';
  *               (the agent died in the wake) must not hold the request forever, so it does not count there
  *
  * Platform-neutral: a Telegram topic in a view with requests gets the same reading from the jobs its agent armed.
+ *
+ * A reading never decides alone: between turns it holds a request only while the request owes nobody an answer
+ * (`checkIsHeldBetweenTurns`), and at a turn's end it quiets a turn only when that turn carried no person's words and nothing is
+ * owed (`decideTurnEnd`). The complete table is `src/requests/README.md` § Wake-ups.
  */
 export type RequestScheduleWait = 'none' | 'armed' | 'watching';
 
@@ -48,6 +52,32 @@ export function checkIsWaitingAtTurnEnd(wait: RequestScheduleWait): boolean {
 /** @description Whether, between turns, nothing may wake the request: only a watch that is not failing holds it. */
 export function checkIsWaitingBetweenTurns(wait: RequestScheduleWait): boolean {
   return wait === 'watching';
+}
+
+/**
+ * @description Whether the request owes a person an answer — what a watch must never hide. It does while a silent turn is pending
+ * (`silentTurnCount`), while a person's words reached the agent after the last answer (`isPersonInputUnanswered`, persisted), and
+ * for a person's request that was never answered at all. A request a scheduler fire opened (`scheduledRun`) is the alarm's and
+ * owes nobody anything. Everything here is read from the persisted request, so it survives a restart that loses the engine's
+ * in-memory watches.
+ */
+export function checkIsAnswerOwed(
+  request: Pick<OpenRequestState, 'silentTurnCount' | 'isPersonInputUnanswered' | 'progressAnswerCount' | 'origin'>,
+): boolean {
+  if (request.silentTurnCount > 0 || request.isPersonInputUnanswered === true) return true;
+  return request.origin.kind !== 'scheduledRun' && request.progressAnswerCount === 0;
+}
+
+/**
+ * @description Whether, between turns, the request is held by its schedule: a watch that is not failing holds it, but only while it
+ * owes nobody an answer. A person's turn whose watch was lost (a restart, a dead process) is then taken back by the backstop,
+ * as it is without a watch.
+ */
+export function checkIsHeldBetweenTurns(
+  request: Pick<OpenRequestState, 'silentTurnCount' | 'isPersonInputUnanswered' | 'progressAnswerCount' | 'origin'>,
+  wait: RequestScheduleWait,
+): boolean {
+  return checkIsWaitingBetweenTurns(wait) && !checkIsAnswerOwed(request);
 }
 
 /**
