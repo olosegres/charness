@@ -154,7 +154,7 @@ const stopsInFlightByKey = new Map<string, Promise<void>>();
  * `output`/`thinking` emit — the CLI streams per-token, so raw per-delta emits
  * would flood Telegram with edits. Mirrors OpenCode's `sseOutputBatchMs` (500).
  */
-const streamOutputBatchMs = 350;
+export const streamOutputBatchMs = 350;
 
 /** Prefix of the per-turn token accounting line (L-D11); the process-level e2e
  *  and the live cache check read it. */

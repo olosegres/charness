@@ -19,14 +19,14 @@
 import { afterEach, beforeEach, describe, it, mock } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { ClaudeJsonStreamAdapter, type StreamSession } from '../adapters/claudeJsonStreamAdapter';
+import { ClaudeJsonStreamAdapter, streamOutputBatchMs, type StreamSession } from '../adapters/claudeJsonStreamAdapter';
 import { keyToString, type SessionKey } from '../sessionKey';
 import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
 import { createStreamSessionFixture } from './claudeJsonStreamSessionFixture';
 
 const key: SessionKey = makeTelegramKey(-100999555, 81);
 /** The adapter's answer batch window, with a margin: a tick past it emits a text the window still holds. */
-const batchWindowWithMarginMs = 350 + 50;
+const batchWindowWithMarginMs = streamOutputBatchMs + 50;
 
 const initFrame = JSON.stringify({ type: 'system', subtype: 'init', session_id: 'sess-cursor', model: 'fake-model' }) + '\n';
 const echoFrame = (text: string): string => JSON.stringify({ type: 'user', message: { role: 'user', content: text }, parent_tool_use_id: null, isReplay: true }) + '\n';
