@@ -659,6 +659,7 @@ with the thread's last-used backend.
   counted separately, see [`/reminders`](#reminders)).
 - Restart-safe: timers re-arm at boot; a run missed during downtime fires
   one catch-up annotated with the missed time.
+- **When the woken agent has nothing to say** — a scheduled prompt such as «every hour check the deploy, say only if it is broken» — it may simply end its turn: in a topic that shows answers the run closes without a word, with no reminder and no «could not finish» notice (a message of yours that the agent leaves unanswered is still followed up).
 - **In a Jira issue** the agent has the same `schedule_*` tools, but the bot posts NOTHING there — no announcement, no check alert,
   no status line: a Jira comment always notifies the requester and the issue's watchers. A fire wakes the issue's agent, which
   answers in comments (`answer_request`) only when it has a result the requester needs. An agent that launched a worker and armed
