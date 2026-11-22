@@ -388,6 +388,24 @@ describe('a request that waits for its schedule (scheduleWait) and a scheduled r
     assert.equal(answered.kind === 'wake' ? answered.reason : answered.kind, 'silentTurn');
   });
 
+  it('turn end: a fire of ANOTHER job that only rode the request (review 12 #2) is quiet, but neither handles a fired watch nor is the request\'s activity — `nextWakeAt` and `lastTurnActivityAt` untouched, under any reading', () => {
+    const due = answeredRequest({ nextWakeAt: nowMs - 1, lastTurnActivityAt: nowMs - 1000 });
+    for (const scheduleWait of ['none', 'armed', 'watching'] as const) {
+      assert.deepEqual(decideTurnEnd(due, 1, nowMs, { isScheduledRun: true, isRequestJob: false, scheduleWait }), { kind: 'quiet', update: {} }, scheduleWait);
+    }
+    // The request's own job's fire under `armed`: the agent that handled the wake — held, the follow-up cleared, its activity recorded.
+    assert.deepEqual(decideTurnEnd(due, 1, nowMs, { isScheduledRun: true, isRequestJob: true, scheduleWait: 'armed' }), { kind: 'quiet', update: quietUpdate });
+    assert.deepEqual(decideTurnEnd(due, 1, nowMs, { isScheduledRun: true, scheduleWait: 'armed' }), { kind: 'quiet', update: quietUpdate }, 'absent: the request\'s own');
+    // A progress note sent in another job's turn is the agent's answer: under `armed` it is followed up, as any note no watch holds.
+    assert.equal(decideTurnEnd(due, 0, nowMs, { isScheduledRun: true, isRequestJob: false, scheduleWait: 'armed' }).kind, 'followUpLater');
+    // An owed request: another job's fire is a silent turn as any fire's (row 13).
+    const owed = decideTurnEnd(answeredRequest({ isPersonInputUnanswered: true }), 1, nowMs, { isScheduledRun: true, isRequestJob: false, scheduleWait: 'armed' });
+    assert.equal(owed.kind === 'wake' ? owed.reason : owed.kind, 'silentTurn');
+    // The scheduler's request never answered still closes at its silent end, whoever's fire rode it.
+    const unanswered = decideTurnEnd(createRequest({ origin: { kind: 'scheduledRun', attributes: {} } }), 0, nowMs, { isScheduledRun: true, isRequestJob: false });
+    assert.equal(unanswered.kind === 'quiet' ? unanswered.isRequestSettled : null, true);
+  });
+
   it('turn end: nothing armed and not a scheduled run — the silent-turn rules are unchanged', () => {
     assert.equal(decideTurnEnd(createRequest(), 0, nowMs, { scheduleWait: 'none', isScheduledRun: false }).kind, 'wake');
     assert.equal(decideTurnEnd(createRequest({ silentTurnCount: 1 }), 0, nowMs, {}).kind, 'alert');

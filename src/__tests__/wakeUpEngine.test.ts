@@ -2220,6 +2220,76 @@ describe('a request waits for its schedule', () => {
     assert.deepEqual(alerts, [{ requestId: request.id, reason: 'silentTurns' }], 'the give-up, instead of ten reminders ninety minutes apart');
   });
 
+  // Review 12 #2: a fire of ANOTHER job that only rides the request (a tracker's newest open request, a topic's scheduler's request).
+  const otherJobFire = { isRequestPrompt: false, isScheduledRun: true, isRequestJob: false } as const;
+  const thirtyMinutesMs = 30 * 60 * 1000;
+
+  it('under a watch that fired and nobody handled, another job\'s fire every 30 min neither handles it nor counts as the request\'s activity: the backstop still wakes the request 90 min after its OWN last activity', async () => {
+    const ledger = await createLedger();
+    const engine = createEngine(ledger, { getScheduleWait: () => 'armed' });
+    const request = await ledger.createRequest(issueKey, handOver);
+    // Answered `progress` earlier, its watch fired, and the agent died in the wake: only the persisted request is left.
+    await ledger.updateOpenRequest(request.id, { progressAnswerCount: 1, lastTurnActivityAt: nowMs });
+    const ownLastActivityAt = nowMs;
+    for (let fire = 0; fire < 2; fire += 1) {
+      nowMs += thirtyMinutesMs;
+      // «Every 30 min look at CI, comment only if red»: its job was armed under a finished request, so it rides this one.
+      await engine.trackForwardedTurn(issueKey, request.id, otherJobFire);
+      await endTurnSilently(engine);
+      await engine.sweepUnwatchedRequests();
+    }
+    assert.deepEqual(wakeUps, [], 'the fires\' turns are quiet, and 60 min after its own activity the backstop is not due yet');
+    assert.equal(ledger.getNewestOpenRequest(issueKey)?.lastTurnActivityAt, ownLastActivityAt, 'neither the forward, nor the busy turn, nor its quiet end is the request\'s activity');
+    nowMs += thirtyMinutesMs;
+    await engine.sweepUnwatchedRequests();
+    assert.deepEqual(wakeUps, [{ requestId: request.id, reason: 'backstop' }], '90 min after its own last activity: the fired watch nobody handled is taken back');
+  });
+
+  it('another job\'s fire leaves the request\'s due follow-up alone under `armed` too; the request\'s own watch\'s fire still clears it (the agent that handled the wake)', async () => {
+    const ledger = await createLedger();
+    const engine = createEngine(ledger, { getScheduleWait: () => 'armed' });
+    const request = await ledger.createRequest(issueKey, handOver);
+    const followUpAt = nowMs + progressFollowUpDelayMs;
+    await ledger.updateOpenRequest(request.id, { progressAnswerCount: 1, nextWakeAt: followUpAt });
+    await engine.trackForwardedTurn(issueKey, request.id, otherJobFire);
+    await endTurnSilently(engine);
+    assert.equal(ledger.getNewestOpenRequest(issueKey)?.nextWakeAt, followUpAt, 'an unrelated alarm does not wipe the follow-up');
+    nowMs = followUpAt;
+    await engine.sweepUnwatchedRequests();
+    assert.deepEqual(getWakeUpReasons(), ['progressFollowUp']);
+
+    const own = await ledger.createRequest(issueKey, { ...handOver, attributes: { ...handOver.attributes, requester: 'bob' } });
+    await ledger.updateOpenRequest(own.id, { progressAnswerCount: 1, nextWakeAt: nowMs + progressFollowUpDelayMs });
+    await engine.trackForwardedTurn(issueKey, own.id, { isRequestPrompt: false, isScheduledRun: true, isRequestJob: true });
+    await endTurnSilently(engine);
+    assert.equal(ledger.listOpenRequestsOf(issueKey).find((open) => open.id === own.id)?.nextWakeAt, undefined, 'the request\'s own watch fired and was handled: held, nothing due');
+  });
+
+  it('another job\'s fire that joins the request\'s OWN fire turn, and a «continue» of either, keep the turn the request\'s own — a merge is its own if either side is', async () => {
+    const ledger = await createLedger();
+    const engine = createEngine(ledger, { getScheduleWait: () => 'armed' });
+    const request = await ledger.createRequest(issueKey, handOver);
+    await ledger.updateOpenRequest(request.id, { progressAnswerCount: 1, nextWakeAt: nowMs + progressFollowUpDelayMs });
+    await engine.trackForwardedTurn(issueKey, request.id, otherJobFire);
+    await engine.trackForwardedTurn(issueKey, request.id, { isRequestPrompt: false, isScheduledRun: true, isRequestJob: true });
+    await engine.trackContinuationTurn(issueKey, { isCountersReset: false });
+    await endTurnSilently(engine);
+    assert.equal(ledger.getNewestOpenRequest(issueKey)?.nextWakeAt, undefined, 'its own watch\'s fire joined: the wake was handled');
+  });
+
+  it('a «continue» of another job\'s fire alone stays another job\'s turn: the request\'s follow-up stands', async () => {
+    const ledger = await createLedger();
+    const engine = createEngine(ledger, { getScheduleWait: () => 'armed' });
+    const request = await ledger.createRequest(issueKey, handOver);
+    const followUpAt = nowMs + progressFollowUpDelayMs;
+    await ledger.updateOpenRequest(request.id, { progressAnswerCount: 1, nextWakeAt: followUpAt });
+    await engine.trackForwardedTurn(issueKey, request.id, otherJobFire);
+    await engine.trackContinuationTurn(issueKey, { isCountersReset: false });
+    await endTurnSilently(engine);
+    assert.deepEqual(wakeUps, [], 'still a fire\'s turn: quiet');
+    assert.equal(ledger.getNewestOpenRequest(issueKey)?.nextWakeAt, followUpAt);
+  });
+
   it('a restart wake skips a request a watch holds and still wakes the others — the port is asked about each request', async () => {
     const ledger = await createLedger();
     const watched = await ledger.createRequest(issueKey, { ...handOver, attributes: { ...handOver.attributes, requester: 'ann' } });

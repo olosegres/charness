@@ -72,7 +72,7 @@ function createHarness(options: HarnessOptions = {}) {
       readIndex += 1;
       return read;
     },
-    forwardRun: async (threadKey, text, requestId) => { calls.push({ step: 'forwardRun', detail: { threadKey, text, requestId } }); },
+    forwardRun: async (threadKey, text, ridden) => { calls.push({ step: 'forwardRun', detail: { threadKey, text, requestId: ridden.requestId, isRequestJob: ridden.isRequestJob } }); },
     forwardOwnRequestRun: async (threadKey, text) => {
       calls.push({ step: 'forwardOwnRequestRun', detail: { threadKey, text } });
       // The ledger's create is flushed to disk before the forward goes on: the request is open a moment later.
@@ -141,6 +141,7 @@ test('an unrelated job\'s fire RIDES the scheduler\'s request the agent answered
   await createScheduleDelivery(deps)(makeJob({ requestId: undefined }), onTime);
   assert.ok(!getSteps().includes('forwardOwnRequestRun'), 'no new request is opened');
   assert.equal(getCall<{ requestId: string }>('forwardRun').requestId, answered.id);
+  assert.equal(getCall<{ isRequestJob: boolean }>('forwardRun').isRequestJob, false, 'another job\'s fire: it does not handle the request\'s fired watch, nor count as its activity (review 12 #2)');
 });
 
 test('the watch armed under the answered scheduler\'s request fires and rides it: its check block behind that request\'s header (report 11 #2)', async () => {
@@ -148,8 +149,9 @@ test('the watch armed under the answered scheduler\'s request fires and rides it
   const { deps, getSteps, getCall } = createHarness({ openRequestReads: [[answered]] });
   await createScheduleDelivery(deps)(makeJob({ requestId: answered.id, deliveryKind: 'check', checkCommand: 'kill -0 4242' }), onTime);
   assert.deepEqual(getSteps(), ['setCheckFailing', 'announce', 'ensureSession', 'forwardRun'], 'a topic announces its check alert');
-  const { text, requestId } = getCall<{ text: string; requestId: string }>('forwardRun');
+  const { text, requestId, isRequestJob } = getCall<{ text: string; requestId: string; isRequestJob: boolean }>('forwardRun');
   assert.equal(requestId, answered.id);
+  assert.equal(isRequestJob, true, 'the request\'s own watch');
   assert.ok(text.startsWith('[Scheduled run "watch worker" · request req_Sched0001 is open]\n'), text);
   assert.ok(text.includes('[Scheduled check "watch worker" failed]'), text);
   assert.ok(text.includes('tells the topic when it passes again'), 'a topic keeps its own wording');

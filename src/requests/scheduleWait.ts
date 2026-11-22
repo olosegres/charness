@@ -46,13 +46,15 @@ export function getRequestScheduleWait(jobs: readonly ScheduleRecord[], request:
 
 /**
  * @description Whether the end of a watched turn reads the request as waiting for its schedule. `watching` always does. `armed` — a
- * watch that fired and was not re-armed — does only for the turn a FIRE started (`isScheduledRun`, a «continue» of it included): the
- * agent that handled the wake is not silent. A reminder's or a person's turn is not the alarm: nothing else will ever wake the agent
+ * watch that fired and was not re-armed — does only for the turn a fire of the request's OWN job started (`isRequestFire`: a scheduled
+ * run whose job is armed under the request, a «continue» of it included): the agent that handled the wake is not silent. A fire of
+ * another job that only rides the request did not handle that watch (a check forwards only at its first failure, so every later fire
+ * on an `armed` request is another job's). A reminder's or a person's turn is not the alarm: nothing else will ever wake the agent
  * on a request whose watch is gone, so for them `armed` reads as `none` — a silent reminder is a silent turn, and the chain ends in
  * the give-up instead of ten backstop reminders ninety minutes apart.
  */
-export function checkIsWaitingAtTurnEnd(wait: RequestScheduleWait, isScheduledRun: boolean): boolean {
-  return wait === 'watching' || (wait === 'armed' && isScheduledRun);
+export function checkIsWaitingAtTurnEnd(wait: RequestScheduleWait, isRequestFire: boolean): boolean {
+  return wait === 'watching' || (wait === 'armed' && isRequestFire);
 }
 
 /** @description Whether, between turns, nothing may wake the request: only a watch that is not failing holds it. */

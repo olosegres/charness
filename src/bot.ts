@@ -402,6 +402,7 @@ import {
 } from './utils/jsonStreamHost';
 import { RunLedger } from './scheduler/runLedger';
 import { createScheduleDelivery, unboundDeliveryError, type ScheduleDeliveryDeps } from './scheduler/delivery';
+import type { RiddenRequest } from './scheduler/scheduledRunTarget';
 import { runCheckCommand } from './scheduler/checkRun';
 import { getChildProcessEnvironment } from './utils/agentEnvironment';
 import { runGitInAgentFolder } from './utils/folderGit';
@@ -15756,18 +15757,19 @@ function createSessionPostDeps(): PostToSessionDeps {
 
 /**
  * @description Write a scheduled run's prompt into a conversation's session and watch the turn it starts as the scheduled run of
- * the request it RIDES (`requestId`; `null` when none is open — a tracker's — so no turn is watched): a Jira issue's open request, or a
- * topic's job request or scheduler's request. It goes through the buffer-or-forward unit and opens no request: the request it rides owes
- * the answer (`scheduler/scheduledRunTarget.ts`). A prompt that found no session starts no turn, so none is watched.
+ * the request it RIDES (`ridden`; `null` when none is open — a tracker's — so no turn is watched): a Jira issue's open request, or a
+ * topic's job request or scheduler's request, told whether the fire's job is one of that request's own (`isRequestJob`). It goes through
+ * the buffer-or-forward unit and opens no request: the request it rides owes the answer (`scheduler/scheduledRunTarget.ts`). A prompt
+ * that found no session starts no turn, so none is watched.
  */
-async function forwardScheduledRun(conversationKey: string, text: string, requestId: string | null): Promise<void> {
+async function forwardScheduledRun(conversationKey: string, text: string, ridden: RiddenRequest | null): Promise<void> {
   const key = keyFromString(conversationKey);
   const buffered = createBufferedOutcome();
   const delivery = await deliverPromptOrBuffer(key, text, startupPromptBuffer.checkIsStarting(conversationKey), buffered.settle, { isAccountsNoteCarrier: true });
   // A prompt that waited for the session's start counts only once it reached it: a replay whose write failed is a failed post.
   if (delivery === 'buffered') await buffered.assertReplayed();
-  if (requestId !== null && delivery !== 'noSession') {
-    await requestWakeUpEngine?.trackForwardedTurn(key, requestId, { isRequestPrompt: false, isScheduledRun: true });
+  if (ridden !== null && delivery !== 'noSession') {
+    await requestWakeUpEngine?.trackForwardedTurn(key, ridden.requestId, { isRequestPrompt: false, isScheduledRun: true, isRequestJob: ridden.isRequestJob });
   }
 }
 

@@ -138,10 +138,13 @@ function getWakeOrCapDecision(
 /**
  * @name TurnEndContext
  * @description What the end of a watched turn is read against besides the request: whether the turn was a scheduled run's,
- * and the request's reading of its armed jobs (absent: it waits for nothing).
+ * and the request's reading of its armed jobs (absent: it waits for nothing). `isRequestJob` — for a scheduled run's turn: the fire's
+ * job is armed under the request (absent: it is). A fire of ANOTHER job only rode the request: it may end quietly, but it did not handle
+ * the request's fired watch (`armed` does not count for it) and is not the request's activity (its quiet end changes nothing).
  */
 export interface TurnEndContext {
   isScheduledRun?: boolean;
+  isRequestJob?: boolean;
   scheduleWait?: RequestScheduleWait;
   /** The follow-up delay after a progress note, in place of {@link progressFollowUpDelayMs} (a test instance's shorter one). */
   progressFollowUpMs?: number;
@@ -158,6 +161,8 @@ export interface TurnEndContext {
  * the turn, so a lost and rebuilt watch decides alike): a requester's message is never left unanswered because a watch is armed or
  * an alarm fired, and the reminder that follows its silent turn keeps counting towards the give-up. A fire's turn on a request that
  * owes an answer is therefore an ordinary silent turn: the reminder names the request, and a second silence gives up.
+ * A fire of ANOTHER job that only rode the request (`isRequestJob` false) ends quiet the same way, but the request's watch that fired is
+ * not handled by it and its quiet end is no activity of the request: the follow-up and the backstop stand (decision 28's principle).
  * The scheduler's request (`origin.kind` `scheduledRun`) that its agent NEVER answered (`checkIsUnansweredFireRequest`) ends quiet and
  * settles (`isRequestSettled`) at the end of ANY of its turns without an answer — its fire's, a reminder's, a «continue»'s: nobody was told
  * anything, and nobody is owed its answer. Once answered it is read like any request: a fire's turn on it may end quietly, any other
@@ -171,7 +176,8 @@ export function decideTurnEnd(
 ): WakeUpDecision {
   if (checkIsWakingStopped(request)) return { kind: 'none' };
   const isProgressSent = request.progressAnswerCount > progressCountAtTurnStart;
-  const isWaitingForSchedule = checkIsWaitingAtTurnEnd(context.scheduleWait ?? 'none', context.isScheduledRun === true);
+  const isOtherJobFire = context.isScheduledRun === true && context.isRequestJob === false;
+  const isWaitingForSchedule = checkIsWaitingAtTurnEnd(context.scheduleWait ?? 'none', context.isScheduledRun === true && !isOtherJobFire);
   if (isProgressSent && !isWaitingForSchedule) {
     return {
       kind: 'followUpLater',
@@ -192,9 +198,12 @@ export function decideTurnEnd(
   // requester unanswered for as long as it lives. The scheduler's request the agent never answered ends quiet whatever the turn.
   const isUnansweredFireRequest = checkIsUnansweredFireRequest(request);
   if (isHeldBySchedule || ((context.isScheduledRun === true || isUnansweredFireRequest) && !isOwed)) {
+    // Another job's fire that sent nothing is no activity of this request: its follow-up and backstop stand. Nothing is owed here,
+    // so the silent-turn count is already 0.
+    const isRequestUntouched = isOtherJobFire && !isProgressSent;
     return {
       kind: 'quiet',
-      update: {
+      update: isRequestUntouched ? {} : {
         lastTurnActivityAt: nowMs,
         silentTurnCount: 0,
         ...(isHeldBySchedule ? { nextWakeAt: undefined } : {}),
@@ -281,6 +290,11 @@ export interface WatchedTurn {
   isRequestPrompt: boolean;
   /** A scheduler fire started the turn: ending it without an answer is not silence (a woken agent with nothing to report) while nothing is owed. */
   isScheduledRun?: boolean;
+  /**
+   * The turn is the request's OWN (absent: it is): `false` only for a fire of another job that only rides the request — no person's
+   * words, reminder or own job's fire joined it. Such a turn neither handles the request's fired watch nor counts as its activity.
+   */
+  isRequestJob?: boolean;
 }
 
 /**

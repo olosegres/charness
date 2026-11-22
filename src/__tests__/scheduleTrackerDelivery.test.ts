@@ -90,8 +90,8 @@ function createHarness(options: HarnessOptions = {}) {
       readIndex += 1;
       return read;
     },
-    forwardRun: async (threadKey, text, requestId) => {
-      calls.push({ step: 'forwardRun', detail: { threadKey, text, requestId } });
+    forwardRun: async (threadKey, text, ridden) => {
+      calls.push({ step: 'forwardRun', detail: { threadKey, text, requestId: ridden?.requestId ?? null, isRequestJob: ridden?.isRequestJob } });
       if (options.forwardRunThrows) throw new Error('forward boom');
     },
     fallbackAdapterName: connectorAdapterName,
@@ -130,10 +130,10 @@ function createHarness(options: HarnessOptions = {}) {
     sleep: async () => {},
   };
   const getSteps = (): CallStep[] => calls.map((call) => call.step);
-  const getForwardRun = (): { threadKey: string; text: string; requestId: string | null } => {
+  const getForwardRun = (): { threadKey: string; text: string; requestId: string | null; isRequestJob?: boolean } => {
     const call = calls.find((candidate) => candidate.step === 'forwardRun');
     assert.ok(call, 'forwardRun was called');
-    return call.detail as { threadKey: string; text: string; requestId: string | null };
+    return call.detail as { threadKey: string; text: string; requestId: string | null; isRequestJob?: boolean };
   };
   return { deps, calls, getSteps, getForwardRun };
 }
@@ -199,12 +199,25 @@ test('with no request open the header says so, names the finished request, and n
   assert.ok(text.endsWith('[Scheduled run "watch worker"]\nThe worker is done: read its result.'), text);
 });
 
-test('a job armed under no request rides the newest open one', async () => {
+test('a job armed under no request rides the newest open one — as another job\'s fire, which neither handles that request\'s fired watch nor counts as its activity', async () => {
   const { deps, getForwardRun } = createHarness({
     openRequestReads: [[makeRequest('req_Older0001', 1000), makeRequest('req_Newest001', 5000)]],
   });
   await createScheduleDelivery(deps)(makeJob({ requestId: undefined }), onTime);
   assert.equal(getForwardRun().requestId, 'req_Newest001');
+  assert.equal(getForwardRun().isRequestJob, false);
+});
+
+test('a job whose own request is finished rides the newest open one as another job\'s fire too; a job armed under the request it rides (or one that request replaced) is its own', async () => {
+  const finished = createHarness({ openRequestReads: [[makeRequest('req_Newest001', 5000)]] });
+  await createScheduleDelivery(finished.deps)(makeJob({ requestId: 'req_Closed001' }), onTime);
+  assert.deepEqual([finished.getForwardRun().requestId, finished.getForwardRun().isRequestJob], ['req_Newest001', false]);
+  const own = createHarness();
+  await createScheduleDelivery(own.deps)(makeJob(), onTime);
+  assert.deepEqual([own.getForwardRun().requestId, own.getForwardRun().isRequestJob], ['req_Armed001', true]);
+  const replacement = createHarness({ openRequestReads: [[makeRequest('req_Replace01', 3000, { supersededRequestIds: ['req_Armed001'] })]] });
+  await createScheduleDelivery(replacement.deps)(makeJob(), onTime);
+  assert.deepEqual([replacement.getForwardRun().requestId, replacement.getForwardRun().isRequestJob], ['req_Replace01', true]);
 });
 
 test('a run held over a usage-limit wait is held with the header and its due note, and forwards nothing now', async () => {

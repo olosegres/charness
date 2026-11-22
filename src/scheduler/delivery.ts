@@ -33,8 +33,10 @@ import { KeyedTransitionQueue } from '../utils/keyedTransitionQueue';
 import {
   buildTopicScheduledRunHeader,
   buildTrackerScheduledRunHeader,
+  getRiddenRequest,
   pickTopicRunTarget,
   pickTrackerRunTarget,
+  type RiddenRequest,
   type TopicRunTarget,
   type TrackerRunTarget,
 } from './scheduledRunTarget';
@@ -167,13 +169,14 @@ export interface ScheduleDeliveryDeps extends PostToSessionDeps {
  * once per fire: `null` — not a tracker conversation (a Telegram topic), the fire is delivered as there; else the
  * label the header names the conversation by (`Jira issue PROJ-12 (<link>)`). `listOpenRequests` and `forwardRun` are read
  * at forward time, when the post may have waited behind a running turn: `forwardRun` writes the text into the session and
- * watches the turn it starts as the scheduled run of `requestId` (`null`: no request is open, nothing to watch).
+ * watches the turn it starts as the scheduled run of the request it rides (`null`: no request is open, nothing to watch), told whether
+ * the fire's job is one of that request's own (`RiddenRequest.isRequestJob`).
  * `fallbackAdapterName` is the connector's own backend, which a session that cannot be resumed starts on.
  */
 export interface TrackerRunPorts {
   describeConversation: (threadKey: string) => string | null;
   listOpenRequests: (threadKey: string) => OpenRequestState[];
-  forwardRun: (threadKey: string, text: string, requestId: string | null) => Promise<void>;
+  forwardRun: (threadKey: string, text: string, ridden: RiddenRequest | null) => Promise<void>;
   fallbackAdapterName: string;
 }
 
@@ -182,13 +185,13 @@ export interface TrackerRunPorts {
  * @description How a fire meets a topic's requests, all read at FORWARD time (the post may have waited behind a running turn, and the
  * view may have changed). `getRequestView` — `null`: the view has no requests (the stream view), the fire is a plain prompt; else
  * whether the requester sees the agent's plain text. `forwardRun` writes the text into the session and watches the turn it starts as
- * the scheduled run of `requestId`, the request it rides; `forwardOwnRequestRun` opens the scheduler's request for the text, forwards
+ * the scheduled run of the request it rides (`RiddenRequest`, as a tracker's); `forwardOwnRequestRun` opens the scheduler's request for the text, forwards
  * it behind that request's header and watches the turn as the request's own scheduled run.
  */
 export interface TopicRunPorts {
   getRequestView: (threadKey: string) => { isPlainTextHidden: boolean } | null;
   listOpenRequests: (threadKey: string) => OpenRequestState[];
-  forwardRun: (threadKey: string, text: string, requestId: string) => Promise<void>;
+  forwardRun: (threadKey: string, text: string, ridden: RiddenRequest) => Promise<void>;
   forwardOwnRequestRun: (threadKey: string, text: string) => Promise<void>;
 }
 
@@ -355,7 +358,7 @@ function createTrackerPost(
   const heldText = heldPrompt === undefined ? undefined : buildText(heldPrompt);
   const postDeps: PostToSessionDeps = {
     ...deps,
-    forwardPrompt: (conversationKey, text) => ports.forwardRun(conversationKey, text, target.kind === 'request' ? target.request.id : null),
+    forwardPrompt: (conversationKey, text) => ports.forwardRun(conversationKey, text, target.kind === 'request' ? getRiddenRequest(job, target.request) : null),
   };
   return { postDeps, promptText, heldText };
 }
@@ -394,7 +397,7 @@ function createTopicPost(
     const text = buildText(prompt);
     const picked: TopicRunTarget | null = target;
     if (picked === null) return deps.forwardPrompt(conversationKey, text);
-    return picked.kind === 'request' ? ports.forwardRun(conversationKey, text, picked.request.id) : ports.forwardOwnRequestRun(conversationKey, text);
+    return picked.kind === 'request' ? ports.forwardRun(conversationKey, text, getRiddenRequest(job, picked.request)) : ports.forwardOwnRequestRun(conversationKey, text);
   });
   return { postDeps: { ...deps, forwardPrompt }, promptText, heldText };
 }

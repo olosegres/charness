@@ -31,6 +31,23 @@ export type TopicRunTarget =
   | { kind: 'ownRequest' };
 
 /**
+ * @name RiddenRequest
+ * @description The request a fire rides, as its forward watches it. `isRequestJob` — the fire's job is armed under that request
+ * (`checkIsJobArmedUnderRequest`: its own watch or job). A fire of ANOTHER job only rides it (a tracker's newest open request, a
+ * topic's scheduler's request): its turn may end quietly, but it neither handles the request's fired watch nor counts as the request's
+ * own activity, so the request's follow-up and backstop stand (`src/requests/README.md` § Scheduled runs).
+ */
+export interface RiddenRequest {
+  requestId: string;
+  isRequestJob: boolean;
+}
+
+/** @description The request `job`'s fire rides, with whether the job is one of that request's own. */
+export function getRiddenRequest(job: Pick<ScheduleRecord, 'requestId'>, request: OpenRequestState): RiddenRequest {
+  return { requestId: request.id, isRequestJob: checkIsJobArmedUnderRequest(job, request) };
+}
+
+/**
  * @description Whether `request` is the scheduler's request (a topic's `scheduledRun`) the bot GAVE UP on (`isWakeStopped`): the
  * operator was told it could not finish, so no fire rides it — the next one opens a new request in its place.
  */

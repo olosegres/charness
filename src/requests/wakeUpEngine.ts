@@ -330,6 +330,9 @@ export class RequestWakeUpEngine {
    * request in the conversation keeps its own watch. Whether the turn is a scheduled run's (`isScheduledRun`) is said by the FORWARD
    * that started it — a fire riding the request, or the fire that opened the scheduler's request — and never read from the request's
    * state: an answered request's fire turn is a fire's as much as an unanswered one's (`src/requests/README.md` § Scheduled runs).
+   * A fire of ANOTHER job that only rides the request (`isRequestJob` false) is not the request's activity: its forward records none,
+   * and its watch keeps that (a merge is the request's own if either side is; a «continue» keeps what the turn was), so its busy time and
+   * its quiet end leave the request's follow-up and backstop alone (`src/requests/README.md` § Scheduled runs).
    * A post retry still pending is moot from now on (R28): the session has the request — unless the forward is a fire riding the
    * request, which carries none of its prompt. A forward that carries a person's words (a request prompt, an issue update) marks the
    * request as owing an answer (`isPersonInputUnanswered`, persisted): that, not the kind of the turn, is
@@ -338,7 +341,7 @@ export class RequestWakeUpEngine {
   async trackForwardedTurn(
     key: SessionKey,
     requestId: string,
-    options: { isRequestPrompt: boolean; isScheduledRun?: boolean; isPersonInput?: boolean; isContinuation?: boolean; isConversationForward?: boolean } = { isRequestPrompt: false },
+    options: { isRequestPrompt: boolean; isScheduledRun?: boolean; isRequestJob?: boolean; isPersonInput?: boolean; isContinuation?: boolean; isConversationForward?: boolean } = { isRequestPrompt: false },
   ): Promise<void> {
     const request = this.getOpenRequestOf(key, requestId);
     if (!request) return;
@@ -358,6 +361,11 @@ export class RequestWakeUpEngine {
     const isScheduledRun = previous === undefined
       ? isFireForward
       : previous.isScheduledRun === true && (isFireForward || (options.isContinuation === true && !isPersonWordsForward));
+    // Whose turn it is: another job's fire says «not the request's own», a «continue» says nothing (it continues the turn it joins), any
+    // other forward — a person's words, a reminder, the request's own job's fire — is the request's own.
+    const isOtherJobFireForward = isFireForward && options.isRequestJob === false;
+    const isForwardOwn = options.isContinuation === true && !isPersonWordsForward ? undefined : !isOtherJobFireForward;
+    const isRequestJob = previous === undefined ? isForwardOwn !== false : previous.isRequestJob !== false || isForwardOwn === true;
     this.watched.set(requestId, {
       key,
       requestId,
@@ -370,6 +378,7 @@ export class RequestWakeUpEngine {
       hasSeenOutput: false,
       isRequestPrompt: options.isRequestPrompt || previous?.isRequestPrompt === true,
       isScheduledRun,
+      isRequestJob,
       isOwnForward,
       ...(ownForwardStartedAt === undefined ? {} : { ownForwardStartedAt }),
     });
@@ -382,7 +391,7 @@ export class RequestWakeUpEngine {
         ...(isPersonWordsOwed ? { isPersonInputUnanswered: true } : {}),
       });
     }
-    await this.recordTurnActivity(request, true);
+    if (!isOtherJobFireForward) await this.recordTurnActivity(request, true);
   }
 
   /**
@@ -549,9 +558,13 @@ export class RequestWakeUpEngine {
     }
     const turnState = getWatchedTurnState(turn, probe);
     if (turnState === 'running') {
-      if (probe.isBusy) await this.recordTurnActivity(request, false);
-      // Its end can no longer be seen: the sweep's backstop takes the request over.
-      else if (checkIsWatchedTurnStale(request, probe, this.now(), this.deps.backstopMs)) this.watched.delete(turn.requestId);
+      if (probe.isBusy) {
+        // Another job's fire that only rides the request keeps the session busy for its own work, not for this request's.
+        if (turn.isRequestJob !== false) await this.recordTurnActivity(request, false);
+      } else if (checkIsWatchedTurnStale(request, probe, this.now(), this.deps.backstopMs)) {
+        // Its end can no longer be seen: the sweep's backstop takes the request over.
+        this.watched.delete(turn.requestId);
+      }
       return;
     }
     this.watched.delete(turn.requestId);
@@ -562,6 +575,7 @@ export class RequestWakeUpEngine {
       request,
       decideTurnEnd(request, turn.progressCountAtTurnStart, this.now(), {
         isScheduledRun: turn.isScheduledRun === true,
+        isRequestJob: turn.isRequestJob !== false,
         scheduleWait: this.getScheduleWait(turn.key, request),
         progressFollowUpMs: this.deps.progressFollowUpMs,
       }),
