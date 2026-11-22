@@ -63,6 +63,10 @@ the scheduler's would owe an answer nobody asked for.
   or the `[Scheduled check "<name>" failed]` block.
 - **The turn** the fire starts is watched as that request's turn, marked a scheduled run (`trackForwardedTurn`): its silent end is
   no silence (`requests/README.md` § Wake-ups). A fire never counts against the wake-up cap.
+- **Known limitation: a run held over a usage-limit wait.** Its header is built when the fire is held (`holdForLimitResume`) and is
+  replayed by the limit-resume path, not by `forwardRun`: after a long wait the header may name a request that has closed since, and the
+  replayed turn is not tracked as that request's scheduled run, so a silent end is judged by the ordinary rules. Rare; rebuilding the
+  header at replay time would need the hold to carry a builder, which is not worth it for this case.
 - **Paused for a folder.** A fire that finds no usable folder pauses the job (`unbound`) with a log line; the next request of the
   issue whose bind step finds the folder usable resumes it (`resumeSchedulesPausedForUnbound`, the unit `/bind` uses in a topic:
   next run from now, a passed one-shot dropped), again with a log line.
