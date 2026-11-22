@@ -120,8 +120,9 @@ Numeric bounds are named constants in the files below; this README says only wha
   handled the wake is not silent, while a failing check nobody handled (the agent died in the wake) does not hold the request forever
   — between turns it does not count, so the backstop takes it. At a turn's end a request that waits for its schedule is not silent
   (counter 0, no wake) and a progress note schedules no follow-up (`decideTurnEnd` → `quiet`) — except a turn that carried a person's
-  words (the request's own prompt, or an issue update: `isPersonTurn`), which ends with no answer as a silent turn whatever is armed: a
-  watch is for the agent's alarms, never a reason to leave a requester unanswered; when the watch is gone (cancelled, paused,
+  words (the request's own prompt, or an issue update: `isPersonTurn`), which ends with no answer as a silent turn whatever is armed, and
+  a turn that follows a silent turn (the engine's own reminder: no person's words, but an answer is owed — `silentTurnCount` > 0), which
+  keeps counting towards the give-up: a watch is for the agent's alarms, never a reason to leave a requester unanswered for good; when the watch is gone (cancelled, paused,
   its check failing and not re-armed) the normal rules take the request back — the backstop, 90 min from the last activity: a waiting
   turn end clears the follow-up, so none is ever due after it. A turn a scheduler fire started (`trackForwardedTurn` with `isScheduledRun`) that ends without an answer is not silent
   either: a woken agent with nothing to report stays quiet, and the bot never prods it for that. A scheduler fire is not a wake-up and

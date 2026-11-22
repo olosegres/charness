@@ -149,8 +149,9 @@ export interface TurnEndContext {
  * turn began, so an increase means this turn sent a progress note (a `question`
  * or `final` would have closed the request — there is nothing to decide then).
  * A progress note schedules the follow-up unless the request waits for its schedule (then nothing is scheduled). A turn
- * without an answer is not silent when the turn was a scheduled run's, or when the request waits for its schedule and the turn did
- * not carry a person's words (`isPersonTurn`: a requester's message is never left unanswered because a watch is armed).
+ * without an answer is not silent when the turn was a scheduled run's, or when the request waits for its schedule, the turn did
+ * not carry a person's words (`isPersonTurn`) and no silent turn is pending (`silentTurnCount`): a requester's message is never
+ * left unanswered because a watch is armed — the reminder that follows its silent turn keeps counting towards the give-up.
  */
 export function decideTurnEnd(
   request: OpenRequestState,
@@ -167,7 +168,9 @@ export function decideTurnEnd(
       update: { silentTurnCount: 0, nextWakeAt: nowMs + (context.progressFollowUpMs ?? progressFollowUpDelayMs), lastTurnActivityAt: nowMs },
     };
   }
-  const isQuietWhileWaiting = isWaitingForSchedule && context.isPersonTurn !== true;
+  // A request with a silent turn pending is owed an answer: the reminder's turn that follows it is not a person's turn, yet it must
+  // count, or a watch that passes would wipe the count and the rules would never give up on a requester left unanswered.
+  const isQuietWhileWaiting = isWaitingForSchedule && context.isPersonTurn !== true && request.silentTurnCount === 0;
   if (isProgressSent || isQuietWhileWaiting || context.isScheduledRun === true) {
     return { kind: 'quiet', update: { silentTurnCount: 0, nextWakeAt: undefined, lastTurnActivityAt: nowMs } };
   }

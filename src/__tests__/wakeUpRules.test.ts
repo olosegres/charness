@@ -267,9 +267,9 @@ describe('a request that waits for its schedule (scheduleWait) and a scheduled r
     assert.equal(decideTurnEnd(request, 0, nowMs, { scheduleWait: 'none' }).kind, 'followUpLater');
   });
 
-  it('turn end: no answer while the watch is armed is not silence — counter 0, no wake, activity recorded', () => {
+  it('turn end: no answer while the watch is armed is not silence — counter 0, no wake, activity recorded (no silent turn pending)', () => {
     for (const scheduleWait of ['armed', 'watching'] as const) {
-      assert.deepEqual(decideTurnEnd(createRequest({ silentTurnCount: 1 }), 0, nowMs, { scheduleWait }), { kind: 'quiet', update: quietUpdate }, scheduleWait);
+      assert.deepEqual(decideTurnEnd(createRequest(), 0, nowMs, { scheduleWait }), { kind: 'quiet', update: quietUpdate }, scheduleWait);
     }
   });
 
@@ -291,6 +291,16 @@ describe('a request that waits for its schedule (scheduleWait) and a scheduled r
       assert.equal(first.kind === 'wake' ? first.reason : null, 'silentTurn');
       assert.equal(decideTurnEnd(createRequest({ silentTurnCount: 1 }), 0, nowMs, { scheduleWait, isPersonTurn: true }).kind, 'alert', scheduleWait);
     }
+  });
+
+  it('turn end: the reminder\'s turn that follows a silent person turn keeps counting under a watch — it is not a person\'s turn, yet the pending silent turn is owed an answer', () => {
+    for (const scheduleWait of ['armed', 'watching'] as const) {
+      const second = decideTurnEnd(createRequest({ silentTurnCount: 1, wakeCount: 1 }), 0, nowMs, { scheduleWait, isPersonTurn: false });
+      assert.equal(second.kind, 'alert', scheduleWait);
+      assert.equal(second.kind === 'alert' ? second.reason : null, 'silentTurns');
+    }
+    // A scheduled run's own quiet end is the alarm's: it still resets the count.
+    assert.equal(decideTurnEnd(createRequest({ silentTurnCount: 1 }), 0, nowMs, { scheduleWait: 'watching', isScheduledRun: true }).kind, 'quiet');
   });
 
   it('turn end: a person\'s turn that sent a progress note under a watch still schedules no follow-up (the watch holds the request); a scheduled run is never a person\'s turn', () => {

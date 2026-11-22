@@ -1378,6 +1378,22 @@ describe('a request waits for its schedule', () => {
     assert.deepEqual(alerts, [{ requestId: request.id, reason: 'silentTurns' }], 'a requester\'s comment, unanswered twice: the rules give up as ever');
   });
 
+  it('the REAL silent-turn chain under a passing watch ends in the give-up alert: the engine\'s own reminder turn keeps counting — a watch never leaves a requester unanswered for good', async () => {
+    const ledger = await createLedger();
+    const engine = createEngine(ledger, { getScheduleWait: () => 'watching' });
+    const request = await ledger.createRequest(issueKey, handOver);
+    await engine.trackForwardedTurn(issueKey, request.id, { isRequestPrompt: true });
+    await endTurnSilently(engine);
+    assert.deepEqual(wakeUps, [{ requestId: request.id, reason: 'silentTurn' }], 'the request\'s own prompt, unanswered: the engine sends its silentTurn reminder');
+    assert.deepEqual(alerts, []);
+
+    // The reminder's turn was tracked by the engine itself (not a request prompt, no person input) and ends silently too.
+    await endTurnSilently(engine);
+    assert.deepEqual(alerts, [{ requestId: request.id, reason: 'silentTurns' }], 'the second silence gives up, as without a watch');
+    assert.equal(wakeUps.length, 1, 'no third wake');
+    assert.equal(ledger.getNewestOpenRequest(issueKey)?.isWakeStopped, true);
+  });
+
   it('a failing check counts only at a turn\'s end: the agent that handled the wake is not silent, a wake nobody handled falls to the backstop', async () => {
     const ledger = await createLedger();
     const engine = createEngine(ledger, { getScheduleWait: () => 'armed' });
