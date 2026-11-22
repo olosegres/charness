@@ -1009,7 +1009,7 @@ describe('bot.ts wires the Jira connector (J5)', () => {
     const update = deps.slice(deps.indexOf('postUpdate: async (key, prompt, getTargetRequestId) => {'));
     const post = update.indexOf('const posted = await postToSession(sessionPostDeps, keyToString(key), prompt, adapterName);');
     const failed = update.indexOf("if (!posted.ok) throw new Error(posted.reason === 'forward-failed' ? posted.error : `session ${posted.reason}`);");
-    const watch = update.indexOf('if (!posted.isHeld) await requestWakeUpEngine?.trackForwardedTurn(key, getTargetRequestId());');
+    const watch = update.indexOf('if (!posted.isHeld) await requestWakeUpEngine?.trackForwardedTurn(key, getTargetRequestId(), { isRequestPrompt: false, isPersonInput: true });');
     assert.ok(post > 0 && failed > post && watch > failed, 'posted, a failure thrown back to the connector (it decides the comment again), then watched');
     assert.ok(!update.slice(0, watch).includes('createRequest'), 'no request is opened for it');
   });

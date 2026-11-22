@@ -22,8 +22,8 @@ import { getMinutesOverrideMs } from '../utils/minutesOverride';
  * the cap nothing wakes the request again until it closes or is superseded.
  *
  * A request WAITS FOR ITS SCHEDULE while a job armed under it counts (`scheduleWait.ts`): the agent that launched a worker,
- * armed its watch and ended its turn is not prodded — at the end of a watched turn it is not silent (counter 0, no
- * follow-up, no wake), between turns and at a restart nothing wakes the request while a watch that is not failing holds
+ * armed its watch and ended its turn is not prodded — at the end of a watched turn it is not silent, unless that turn carried a
+ * person's words (counter 0, no follow-up, no wake), between turns and at a restart nothing wakes the request while a watch that is not failing holds
  * it. A turn a SCHEDULED RUN started that ends without an answer is not silent either: a woken agent with nothing to
  * report stays quiet. A scheduler fire is never a wake-up of these rules, so it never counts against the cap.
  */
@@ -133,6 +133,11 @@ function getWakeOrCapDecision(
  */
 export interface TurnEndContext {
   isScheduledRun?: boolean;
+  /**
+   * The turn carried a person's words — the request's own prompt, or an issue update (a requester's comment): ending it with no
+   * answer is silence whatever is armed. The watch is for the agent's alarms; it is no reason to leave a requester unanswered.
+   */
+  isPersonTurn?: boolean;
   scheduleWait?: RequestScheduleWait;
   /** The follow-up delay after a progress note, in place of {@link progressFollowUpDelayMs} (a test instance's shorter one). */
   progressFollowUpMs?: number;
@@ -144,7 +149,8 @@ export interface TurnEndContext {
  * turn began, so an increase means this turn sent a progress note (a `question`
  * or `final` would have closed the request — there is nothing to decide then).
  * A progress note schedules the follow-up unless the request waits for its schedule (then nothing is scheduled). A turn
- * without an answer is not silent when the request waits for its schedule or the turn was a scheduled run's.
+ * without an answer is not silent when the turn was a scheduled run's, or when the request waits for its schedule and the turn did
+ * not carry a person's words (`isPersonTurn`: a requester's message is never left unanswered because a watch is armed).
  */
 export function decideTurnEnd(
   request: OpenRequestState,
@@ -161,7 +167,8 @@ export function decideTurnEnd(
       update: { silentTurnCount: 0, nextWakeAt: nowMs + (context.progressFollowUpMs ?? progressFollowUpDelayMs), lastTurnActivityAt: nowMs },
     };
   }
-  if (isProgressSent || isWaitingForSchedule || context.isScheduledRun === true) {
+  const isQuietWhileWaiting = isWaitingForSchedule && context.isPersonTurn !== true;
+  if (isProgressSent || isQuietWhileWaiting || context.isScheduledRun === true) {
     return { kind: 'quiet', update: { silentTurnCount: 0, nextWakeAt: undefined, lastTurnActivityAt: nowMs } };
   }
   const silentTurnCount = request.silentTurnCount + 1;
@@ -238,6 +245,8 @@ export interface WatchedTurn {
   isRequestPrompt: boolean;
   /** A scheduler fire started the turn: ending it without an answer is not silence (a woken agent with nothing to report). */
   isScheduledRun?: boolean;
+  /** The turn carries a person's words that are not the request's own prompt (an issue update): see {@link TurnEndContext.isPersonTurn}. */
+  isPersonInput?: boolean;
 }
 
 /**

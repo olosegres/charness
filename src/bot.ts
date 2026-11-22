@@ -16230,7 +16230,8 @@ function createJiraSessionDeps(requestLedger: RequestLedger, slots: TaskAgentSlo
       notePersonActivity(key);
       const posted = await postToSession(sessionPostDeps, keyToString(key), prompt, adapterName);
       if (!posted.ok) throw new Error(posted.reason === 'forward-failed' ? posted.error : `session ${posted.reason}`);
-      if (!posted.isHeld) await requestWakeUpEngine?.trackForwardedTurn(key, getTargetRequestId());
+      // A requester's comment: a turn that carries a person's words, never quiet because a watch is armed.
+      if (!posted.isHeld) await requestWakeUpEngine?.trackForwardedTurn(key, getTargetRequestId(), { isRequestPrompt: false, isPersonInput: true });
     },
   };
 }

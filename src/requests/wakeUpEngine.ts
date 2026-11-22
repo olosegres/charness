@@ -271,7 +271,7 @@ export class RequestWakeUpEngine {
   async trackForwardedTurn(
     key: SessionKey,
     requestId: string,
-    options: { isRequestPrompt: boolean; isScheduledRun?: boolean } = { isRequestPrompt: false },
+    options: { isRequestPrompt: boolean; isScheduledRun?: boolean; isPersonInput?: boolean } = { isRequestPrompt: false },
   ): Promise<void> {
     const request = this.getOpenRequestOf(key, requestId);
     if (!request) return;
@@ -285,6 +285,7 @@ export class RequestWakeUpEngine {
       hasSeenOutput: false,
       isRequestPrompt: options.isRequestPrompt,
       isScheduledRun: options.isScheduledRun === true,
+      isPersonInput: options.isPersonInput === true,
     });
     if (request.nextPostRetryAt !== undefined) await this.deps.ledger.updateOpenRequest(request.id, { nextPostRetryAt: undefined });
     await this.recordTurnActivity(request, true);
@@ -445,6 +446,7 @@ export class RequestWakeUpEngine {
       request,
       decideTurnEnd(request, turn.progressCountAtTurnStart, this.now(), {
         isScheduledRun: turn.isScheduledRun === true,
+        isPersonTurn: turn.isRequestPrompt || turn.isPersonInput === true,
         scheduleWait: this.getScheduleWait(turn.key, request),
         progressFollowUpMs: this.deps.progressFollowUpMs,
       }),

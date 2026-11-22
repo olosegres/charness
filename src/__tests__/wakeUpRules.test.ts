@@ -284,6 +284,22 @@ describe('a request that waits for its schedule (scheduleWait) and a scheduled r
     assert.equal(decideTurnEnd(request, 0, nowMs, { isScheduledRun: true, scheduleWait: 'watching' }).kind, 'quiet');
   });
 
+  it('turn end: a turn that carried a person\'s words and ended with no answer is SILENT whatever is armed — a watch never leaves a requester unanswered', () => {
+    for (const scheduleWait of ['armed', 'watching'] as const) {
+      const first = decideTurnEnd(createRequest(), 0, nowMs, { scheduleWait, isPersonTurn: true });
+      assert.equal(first.kind, 'wake', scheduleWait);
+      assert.equal(first.kind === 'wake' ? first.reason : null, 'silentTurn');
+      assert.equal(decideTurnEnd(createRequest({ silentTurnCount: 1 }), 0, nowMs, { scheduleWait, isPersonTurn: true }).kind, 'alert', scheduleWait);
+    }
+  });
+
+  it('turn end: a person\'s turn that sent a progress note under a watch still schedules no follow-up (the watch holds the request); a scheduled run is never a person\'s turn', () => {
+    const request = createRequest({ progressAnswerCount: 1 });
+    assert.equal(decideTurnEnd(request, 0, nowMs, { scheduleWait: 'watching', isPersonTurn: true }).kind, 'quiet');
+    assert.equal(decideTurnEnd(request, 0, nowMs, { scheduleWait: 'none', isPersonTurn: true }).kind, 'followUpLater');
+    assert.equal(decideTurnEnd(createRequest(), 0, nowMs, { scheduleWait: 'watching', isPersonTurn: false }).kind, 'quiet', 'the alarm\'s own turn');
+  });
+
   it('turn end: nothing armed and not a scheduled run — the silent-turn rules are unchanged', () => {
     assert.equal(decideTurnEnd(createRequest(), 0, nowMs, { scheduleWait: 'none', isScheduledRun: false }).kind, 'wake');
     assert.equal(decideTurnEnd(createRequest({ silentTurnCount: 1 }), 0, nowMs, {}).kind, 'alert');
