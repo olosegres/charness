@@ -153,6 +153,11 @@ A session that is gone is left to the poll.
 Without the settle a forward that waited would usually start its turn under the old watch (the post forwards within 5 s of the idle,
 the poll ticks every 10 s), and the old request would get the new turn's jobs, its busy time and its end.
 
+The settle also runs at the adapter's own turn-end event (`handleAgentTurnEnded`), on every backend, so a watched turn's end is decided
+at once rather than at the next tick. For `claude-per-turn` it is the only place the end is decided at all: the stop is queued in that
+same tick and its window opens only in a later one, and once the stop is over the session is gone, which the poll reads as «tracking
+lost» (`sessionGone`), never as an end. A reminder decided there resumes the session through the ensure, which queues behind the stop.
+
 A session start and the replay of the prompts buffered during it are ONE start for the turn probe (`isTurnEndBlocked`:
 `StartupPromptBuffer.checkIsStarting` or `checkIsReplaying`, the latter from before the buffer is taken until after the held prompts are
 forwarded, also when a forward throws). A settle at a replayed write therefore reads every watch as `running`: a watch made during the
@@ -195,7 +200,8 @@ written at once and joins the start's turn.
   guards it: a conversation woken so within it is left to the backstop, so a crash loop is no wake loop.
   A Telegram topic keeps its own lost-work resume and is never woken this way. NOT covered: a tracker process that
   crashes while the bot keeps running, with no work of its own pending (no lost-work note) — its watched turn reads
-  `sessionGone` and the request still waits for the backstop.
+  `sessionGone` and the request still waits for the backstop. A `claude-per-turn` process that the bot stops after every turn is
+  not this case: the turn's end is decided at the adapter's turn-end event, before the stop (§ Turn starts).
 - **A request waits for its schedule** (`scheduleWait.ts`, platform-neutral; the engine's optional `getScheduleWait` port reads the
   conversation's jobs at every decision): a job counts when it is armed under the request (`ScheduleRecord.requestId` is the request's id
   or the id of a request it replaced), is an agent job (a prompt job or a check, not a reminder) and is not paused. The reading is `none`

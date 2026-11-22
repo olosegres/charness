@@ -226,6 +226,8 @@ import { claudeSessionStateEventsVariableName } from '../../utils/jsonStreamHost
  *    or, by a marker in the issue's text, `keep-watch` (`fakeKeepWatchWakeMarker`: the turn ends with no tool call and no answer),
  *    `rearm-watch` (`fakeRearmWatchWakeMarker`: arms the next worker's watch, cancels the old one, answers `progress` to the request its
  *    header names) or `drop-watch` (`fakeDropWatchWakeMarker`: cancels the watch and ends the turn with no answer);
+ *  - `hold-silent-once` — the first turn keeps working until the test writes `fakeClaudeHoldReleaseFileName`, then ends with no answer;
+ *    later turns answer `final` (a reminder's turn answers);
  *  - `one-shot-then-final` — the first turn arms a one-shot prompt `fakeOneShotDelaySeconds` ahead (`[fake:answer]`) and answers `final`; the fire
  *    then answers `final` to the request id its header names — a request that is already finished. A marker in the text chooses another
  *    prompt for the one-shot (`fakeOneShotSilentMarker`: the fire says nothing; `fakeOneShotWatchMarker`: the fire arms a status watch);
@@ -279,8 +281,8 @@ import { claudeSessionStateEventsVariableName } from '../../utils/jsonStreamHost
  * `FAKE_CLAUDE_STATE_DIR` (per-request turn counts, the conversations held).
  */
 
-export type FakeClaudeMode = 'answer' | 'silent-once' | 'silent' | 'hang-once' | 'hold-once' | 'hold-progress-once' | 'slow-once' | 'progress' | 'finish-together' | 'answer-after-queued' | 'background' | 'background-notify' | 'compact' | 'overflow' | 'fetch-attachment' | 'run-tool' | 'reply-to' | 'send-file' | 'usage-limit-once' | 'ask' | 'ask-again' | 'ask-two' | 'ask-long' | 'ask-repeat' | 'send-messages' | 'watch-progress' | 'one-shot-then-final';
-const fakeModes: readonly FakeClaudeMode[] = ['answer', 'silent-once', 'silent', 'hang-once', 'hold-once', 'hold-progress-once', 'slow-once', 'progress', 'finish-together', 'answer-after-queued', 'background', 'background-notify', 'compact', 'overflow', 'fetch-attachment', 'run-tool', 'reply-to', 'send-file', 'usage-limit-once', 'ask', 'ask-again', 'ask-two', 'ask-long', 'ask-repeat', 'send-messages', 'watch-progress', 'one-shot-then-final'];
+export type FakeClaudeMode = 'answer' | 'silent-once' | 'silent' | 'hang-once' | 'hold-once' | 'hold-progress-once' | 'slow-once' | 'progress' | 'finish-together' | 'answer-after-queued' | 'background' | 'background-notify' | 'compact' | 'overflow' | 'fetch-attachment' | 'run-tool' | 'reply-to' | 'send-file' | 'usage-limit-once' | 'ask' | 'ask-again' | 'ask-two' | 'ask-long' | 'ask-repeat' | 'send-messages' | 'watch-progress' | 'one-shot-then-final' | 'hold-silent-once';
+const fakeModes: readonly FakeClaudeMode[] = ['answer', 'silent-once', 'silent', 'hang-once', 'hold-once', 'hold-progress-once', 'slow-once', 'progress', 'finish-together', 'answer-after-queued', 'background', 'background-notify', 'compact', 'overflow', 'fetch-attachment', 'run-tool', 'reply-to', 'send-file', 'usage-limit-once', 'ask', 'ask-again', 'ask-two', 'ask-long', 'ask-repeat', 'send-messages', 'watch-progress', 'one-shot-then-final', 'hold-silent-once'];
 /**
  * How long an `answer-after-queued` turn waits for the next message before it answers anyway: four polls of the 10 s
  * floor, or what the launcher sets (`fakeClaudeQueuedWaitMaxMsEnvName`) for the instance's own poll.
@@ -1466,6 +1468,12 @@ async function runTurn(argv: readonly string[], sessionId: string, content: stri
   emitTurnActivity(sessionId, state.issueKey, content);
   const isFirstTurn = state.turnCount === 1;
   if (state.mode === 'silent' || (state.mode === 'silent-once' && isFirstTurn)) {
+    endTurn(sessionId, 'Thinking about it.');
+    return;
+  }
+  if (state.mode === 'hold-silent-once' && isFirstTurn) {
+    // Busy until the test releases it, then ended with no answer: the test reads the request while the turn runs.
+    await waitForHoldRelease();
     endTurn(sessionId, 'Thinking about it.');
     return;
   }

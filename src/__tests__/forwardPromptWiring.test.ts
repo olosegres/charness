@@ -114,6 +114,16 @@ test('the turn probe reads the startup buffer\'s replay as the start, and the he
   assert.ok(replay.indexOf('afterReplay') < replay.indexOf('limitHeldPrompts.releaseAll(key)'), 'the held prompts are the replay\'s after-step');
 });
 
+test('a turn\'s end is decided at the adapter\'s own turn-end event, after a per-turn stop is queued — the stop would otherwise leave the watch to «session gone» (review 15 P1)', () => {
+  const body = getFunctionBody('handleAgentTurnEnded');
+  assert.match(body, /settleEndedTurnsAndRemind\(key\);/);
+  assert.ok(body.indexOf('suspendThreadSession(key)') < body.indexOf('settleEndedTurnsAndRemind(key)'), 'after the stop is queued: its window opens only in a later tick');
+  assert.doesNotMatch(body.slice(0, body.indexOf('settleEndedTurnsAndRemind(key)')), /return;/, 'no early return skips it for another backend');
+  // The helper settles and delivers the reminders once persisted; the write choke point uses the same helper.
+  assert.match(getFunctionBody('settleEndedTurnsAndRemind'), /requestWakeUpEngine\?\.settleEndedTurnsOf\(key\)\.then\(\(deliverSettledWakes\) => deliverSettledWakes\(\)\)/);
+  assert.match(getFunctionBody('forwardPromptToLiveAgent'), /^[^]*?settleEndedTurnsAndRemind\(key\);[^]*?noteThreadActivity\(key\);/);
+});
+
 test('a bot-made prompt that waits for an adopt replay behind a start counts only once replayed', () => {
   const body = getFunctionBody('forwardPromptToAgent');
   const buffer = body.slice(body.indexOf('buffer: async () => {'));

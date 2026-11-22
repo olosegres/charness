@@ -20,6 +20,9 @@
  *     armed under the scheduler's request, whose fire started the turn — and answers it `progress` (the operator is told «working on it»)
  *   → that worker exits: the watch's fire RIDES the scheduler's request instead of replacing it; the agent restarts the worker and says
  *     nothing — the turn is quiet, as on a Jira hand-over: no reminder, no alert, and the request the operator was told about stays open
+ *   → the topic runs per-turn and a message arrives while the process stops after a turn: it is buffered and replayed after the resume.
+ *     Nothing decides its turn before the agent took it in — no reminder while the agent works on it — and its one silent turn,
+ *     decided at the turn's own end although the stop follows it at once, gets ONE reminder, then the answer: no give-up
  *
  * Before the rule, the engine reminded such an agent every 15 minutes whatever its watch said; before the scheduled-run model, every
  * fire opened a request that replaced the previous fire's, and an answered one's «working on it» was lost or chased. Nothing leaves the
@@ -37,6 +40,8 @@ import { FakeTelegram } from './telegramE2e/fakeTelegram';
 import { TopicDriver } from './telegramE2e/topicDriver';
 import {
   fakeClaudeLogFileNames,
+  fakeClaudeExitFlushDelayFileName,
+  fakeClaudeHoldReleaseFileName,
   fakeOneShotDelaySeconds,
   fakeOneShotSilentMarker,
   fakeOneShotWatchIssueKey,
@@ -85,6 +90,10 @@ const agentTimeoutMs = 60 * msPerSecond;
 /** The watch runs every minute (the production minimum is five): a tick is up to a minute and a little away. */
 const watchCronIntervalMs = 60 * msPerSecond;
 const checkRunTimeoutMs = 2 * watchCronIntervalMs;
+/** How long the fake process takes to exit when the per-turn stop asks it to: the stop's window stays open that long. */
+const perTurnStopHoldMs = 8 * msPerSecond;
+/** A buffered message's way to its answer: the stop, the resume, the held turn, the stop again, the reminder's resume and turn. */
+const bufferedFlowTimeoutMs = 3 * 60 * msPerSecond;
 /** A one-shot armed `fakeOneShotDelaySeconds` ahead fires within this (the engine's timer, the post and the turn). */
 const oneShotFireTimeoutMs = (fakeOneShotDelaySeconds + 60) * msPerSecond;
 /** The follow-up a progress note gets after this long (production: 15 min) and the engine's sweep that would deliver it. */
@@ -368,5 +377,41 @@ describe('A request waits for its schedule in a Telegram topic end to end: built
     assert.ok(request, 'still open: «working on it» is not closed silently');
     assert.equal(request.wakeCount, 0);
     assert.equal(request.isWakeStopped, false);
+  });
+
+  it('per-turn: a message that arrives while the process stops after a turn is buffered and replayed — no reminder before the agent took it in; its one silent turn gets ONE reminder, not the give-up (review 15 #1 and P1)', async () => {
+    const topicKeyString = `${group.id}:${topicThreadId}`;
+    await topic.sendAndAwaitReply('/claude_mode per-turn', 'Switched to 🔁 Per-turn');
+    // The fake waits this long before it exits at the stop: the stop's startup window stays open, so a message lands in it.
+    fs.writeFileSync(path.join(getLayout().fakeStateDir, fakeClaudeExitFlushDelayFileName), perTurnStopHoldMs.toString());
+    try {
+      const stopLine = `[compact-on-idle] ${topicKeyString} stopping the idle process`;
+      const stopsBefore = getCharness().output.split(stopLine).length - 1;
+      fakeTelegram.pushOperatorMessage(topicThreadId, 'WE-5 [fake:answer] warm up the per-turn session');
+      await getCharness().waitFor('the per-turn stop after the warm-up turn', bufferedFlowTimeoutMs, () => getCharness().output.split(stopLine).length - 1 > stopsBefore);
+
+      fakeTelegram.pushOperatorMessage(topicThreadId, 'WF-6 [fake:hold-silent-once] a question while it stops');
+      await getCharness().waitFor('the message to be queued behind the stop', replyTimeoutMs, () => topic.listMessages().some((message) => message.text.includes('your message is queued')));
+      await getCharness().waitFor('the agent to take the replayed message in', bufferedFlowTimeoutMs, () => readFakeLog<FakeClaudeTurn>(fakeClaudeLogFileNames.turns).some((turn) => turn.issueKey === 'WF-6'));
+      const bufferedRequestId = readFakeLog<FakeClaudeTurn>(fakeClaudeLogFileNames.turns).find((turn) => turn.issueKey === 'WF-6')?.requestId ?? '';
+      assert.match(bufferedRequestId, /^req_/);
+      // The agent works on it (its turn is held): nothing may have decided that turn yet.
+      await sleep(2 * requestSweepIntervalMs);
+      const whileWorking = Object.values(readState().openRequests ?? {}).find((open) => open.id === bufferedRequestId);
+      assert.ok(whileWorking, 'still open while the agent works on it');
+      assert.equal(whileWorking.silentTurnCount, 0, 'no silent turn decided before the agent took the message in');
+      assert.equal(whileWorking.wakeCount, 0, 'no reminder written before its turn');
+
+      const remindersOf = (): number => getAgentPrompts().filter((prompt) => prompt.text.includes(`[Reminder · request ${bufferedRequestId} is still open]`)).length;
+      assert.equal(remindersOf(), 0);
+      // The turn ends with no answer; the per-turn stop follows at once.
+      fs.writeFileSync(path.join(getLayout().fakeStateDir, fakeClaudeHoldReleaseFileName), '');
+      await getCharness().waitFor('the request to be answered after its reminder', bufferedFlowTimeoutMs, () => readClosedRequests().some((closed) => closed.id === bufferedRequestId));
+      assert.equal(readClosedRequests().find((closed) => closed.id === bufferedRequestId)?.closeReason, 'final');
+      assert.equal(remindersOf(), 1, 'ONE reminder for the one silent turn — decided at the turn\'s end, not lost to the stop');
+      assert.ok(!topic.listMessages().some((message) => message.text.includes('got no answer')), 'no give-up');
+    } finally {
+      fs.rmSync(path.join(getLayout().fakeStateDir, fakeClaudeExitFlushDelayFileName), { force: true });
+    }
   });
 });

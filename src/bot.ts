@@ -6234,11 +6234,15 @@ function handleAgentTurnEnded(key: SessionKey): void {
   noteThreadActivity(key);
   topicIndicator.requestRefresh(key);
   const adapter = getThreadAdapter(key);
-  if (adapter.name !== claudePerTurnAdapterName) return;
-  if (checkIsDeferredCompactionArmed(key) || adapter.checkIsWorking?.(key)) return;
-  void suspendThreadSession(key).catch((e) =>
-    console.warn(`[lifecycle] the per-turn stop of ${keyToString(key)} failed:`, e instanceof Error ? e.message : e),
-  );
+  if (adapter.name === claudePerTurnAdapterName && !checkIsDeferredCompactionArmed(key) && !adapter.checkIsWorking?.(key)) {
+    void suspendThreadSession(key).catch((e) =>
+      console.warn(`[lifecycle] the per-turn stop of ${keyToString(key)} failed:`, e instanceof Error ? e.message : e),
+    );
+  }
+  // The turn's end is decided at the adapter's own turn-end event, on every backend — after the per-turn stop is queued: its window
+  // opens only in a later tick, and once it is over the session is gone, which a watch reads as «tracking lost», never as an end. A
+  // reminder this decides resumes the session through the ensure, which queues behind the stop (`requests/README.md` § Turn starts).
+  settleEndedTurnsAndRemind(key);
 }
 
 /** No reminder to deliver: what a settle resolves while the wake-up engine is not up yet. */
