@@ -74,6 +74,13 @@ export interface WakeUpMessage {
   reason: RequestWakeUpReason;
   text: string;
   isRequestPrompt: boolean;
+  /**
+   * The reminder asks for an answer only with what the requester must know — the request waits for a passing watch and owes nobody an
+   * answer, and the wake is a lost-work one (the agent's own work died with its process): the fire header's wording, so the agent
+   * writes only when it did something. Never for a request's own prompt (R21: the agent never read it). The lost-work note the wake
+   * carries follows it (`buildLostWorkNote`).
+   */
+  isAnswerOptional?: boolean;
 }
 
 /**
@@ -105,23 +112,34 @@ export function joinPromptsNotTakenIn(requests: readonly OpenRequestState[]): st
  * @description R21: a request whose prompt was never taken in by the session gets
  * the prompt itself; a bare reminder would name a request the agent never read.
  */
-export function getWakeUpMessage(request: OpenRequestState, reason: RequestWakeUpReason): WakeUpMessage {
+export function getWakeUpMessage(request: OpenRequestState, reason: RequestWakeUpReason, options: { isAnswerOptional?: boolean } = {}): WakeUpMessage {
   const prompt = getPromptNotTakenIn(request);
   if (prompt !== undefined) return { reason, text: prompt, isRequestPrompt: true };
-  return { reason, text: buildWakeUpReminder({ requestId: request.id, reason }), isRequestPrompt: false };
+  const isAnswerOptional = options.isAnswerOptional === true;
+  return {
+    reason,
+    text: buildWakeUpReminder({ requestId: request.id, reason, isAnswerOptional }),
+    isRequestPrompt: false,
+    ...(isAnswerOptional ? { isAnswerOptional } : {}),
+  };
 }
 
 /**
  * @description The reminder the wake-up engine forwards into the SAME session for
  * an open request. It is not a request itself: it names the open one and asks
- * for the answer through `answer_request`.
+ * for the answer through `answer_request` — or, with `isAnswerOptional`, only for what the requester must know.
  */
-export function buildWakeUpReminder(options: { requestId: string; reason: RequestWakeUpReason }): string {
+export function buildWakeUpReminder(options: { requestId: string; reason: RequestWakeUpReason; isAnswerOptional?: boolean }): string {
+  const answerLine = options.isAnswerOptional === true
+    ? `Your watch for it is still armed and nobody is waiting on you, so answer it with answer_request (requestId "${options.requestId}") ` +
+      'only with what the requester must know — a short "progress" note if what was lost changes what they wait for, "final" if the work is ' +
+      'done — otherwise continue without a comment.'
+    : `Answer it with answer_request (requestId "${options.requestId}"): kind "final" if the work is done, ` +
+      '"question" if you need the requester, or a short "progress" note if you are still working — then continue.';
   return [
     `[Reminder · request ${options.requestId} is still open]`,
     wakeUpReasonLines[options.reason],
-    `Answer it with answer_request (requestId "${options.requestId}"): kind "final" if the work is done, ` +
-      '"question" if you need the requester, or a short "progress" note if you are still working — then continue.',
+    answerLine,
     answerStyleInstruction,
   ].join('\n');
 }

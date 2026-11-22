@@ -1327,6 +1327,41 @@ describe('the restart wake: a tracker conversation whose process was found gone 
     }
   });
 
+  it('the lost-work wake of a request a passing watch holds is worded like the fire header: answer only with what the requester must know; every other wake keeps the plain «answer it»', async () => {
+    const ledger = await createLedger();
+    const engine = createEngine(ledger, { getScheduleWait: () => 'watching' });
+    const held = await ledger.createRequest(issueKey, handOver('ann'));
+    await ledger.updateOpenRequest(held.id, { progressAnswerCount: 1 });
+    probe = goneProbe;
+    await engine.wakeAfterRestart(issueKey, { isLostWork: true });
+    assert.equal(wakeUpMessages.length, 1);
+    assert.equal(wakeUpMessages[0].isAnswerOptional, true, 'nothing is owed and the watch passes: the answer is optional');
+    assert.ok(wakeUpMessages[0].text.includes('only with what the requester must know'), wakeUpMessages[0].text);
+    assert.ok(!wakeUpMessages[0].text.includes('kind "final" if the work is done'));
+
+    // A request that owes an answer is woken with the plain reminder, a lost-work loss or not.
+    wakeUpMessages = [];
+    await endTurnSilently(engine);
+    const owed = await ledger.createRequest(issueKey, handOver('bob'));
+    await ledger.updateOpenRequest(owed.id, { progressAnswerCount: 1, isPersonInputUnanswered: true });
+    await engine.wakeAfterRestart(issueKey, { isLostWork: true });
+    const mixed = wakeUpMessages.at(-1);
+    assert.equal(mixed?.isAnswerOptional, undefined, 'one of the two requests is owed an answer: the forward is not optional as a whole');
+    assert.ok(mixed?.text.includes('kind "final" if the work is done'), 'bob\'s reminder says «answer it»');
+    assert.ok(mixed?.text.includes('only with what the requester must know'), 'ann\'s reminder keeps its own wording');
+  });
+
+  it('a wake with no lost-work loss behind it — the unheld request of a boot — is the plain reminder', async () => {
+    const ledger = await createLedger();
+    const engine = createEngine(ledger);
+    await ledger.createRequest(issueKey, handOver('ann'));
+    probe = goneProbe;
+    await engine.wakeAfterRestart(issueKey);
+    assert.equal(wakeUpMessages.length, 1);
+    assert.notEqual(wakeUpMessages[0].isAnswerOptional, true);
+    assert.ok(!wakeUpMessages[0].text.includes('only with what the requester must know'));
+  });
+
   it('a loss that comes while a boot wake already waits turns that wake into a lost-work one: the request a watch holds is woken with the others', async () => {
     mock.timers.enable({ apis: ['setTimeout', 'Date'], now: nowMs });
     const engines: RequestWakeUpEngine[] = [];

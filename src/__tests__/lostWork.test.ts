@@ -154,6 +154,16 @@ describe('lostWork', () => {
     });
   });
 
+  it('a note for a request a passing watch holds tells the requester only if they must know — the fire header\'s wording — and still bakes the reply language', () => {
+    const note = buildLostWorkNote(record, 'English', { isTellingOptional: true });
+    assert.ok(note.includes('That work died with the process: no notification will ever arrive for it.'), note);
+    assert.ok(note.includes('tell the requester about it only if they must know'), note);
+    assert.ok(note.includes('otherwise carry on without a comment'), note);
+    assert.ok(!note.includes('tell the user in one or two lines'), 'not the plain «tell the user» line');
+    assert.ok(note.endsWith('IN English.'), note);
+    assert.ok(buildLostWorkNote(record, 'English').includes('tell the user in one or two lines what happened'), 'the default note is unchanged (a topic\'s)');
+  });
+
   it('the note names the reason and every lost piece, says no notification will come, and bakes the reply language', () => {
     const note = buildLostWorkNote({ ...record, wasTurnInFlight: true }, 'Русский');
     assert.ok(note.startsWith('[charness] This conversation\'s agent process ended while its own work was still pending (it exited unexpectedly)'), note);

@@ -245,9 +245,19 @@ export class RequestWakeUpEngine {
       if (updated && !isStoppedMeanwhile) woken.push(updated);
     }
     if (woken.length === 0) return;
+    // A lost-work wake of a request a passing watch holds and that owes nobody: the agent is asked to answer only with what the requester
+    // must know (the fire header's wording). Every other request — a boot's, one that owes an answer — gets the plain «answer it».
+    const isAnswerOptional = (request: OpenRequestState): boolean =>
+      options.isLostWork === true && checkIsHeldBetweenTurns(request, this.getScheduleWait(key, request));
     const buildMessage = (requests: readonly OpenRequestState[]): WakeUpMessage => {
-      const messages = requests.map((request) => getWakeUpMessage(request, 'restarted'));
-      return { reason: 'restarted', text: messages.map((message) => message.text).join('\n\n'), isRequestPrompt: messages.some((message) => message.isRequestPrompt) };
+      const messages = requests.map((request) => getWakeUpMessage(request, 'restarted', { isAnswerOptional: isAnswerOptional(request) }));
+      return {
+        reason: 'restarted',
+        text: messages.map((message) => message.text).join('\n\n'),
+        isRequestPrompt: messages.some((message) => message.isRequestPrompt),
+        // The one lost-work note rides the whole forward: optional only when EVERY request in it is.
+        ...(messages.every((message) => message.isAnswerOptional === true) ? { isAnswerOptional: true } : {}),
+      };
     };
     try {
       if (!(await this.deps.prepareWakeUpSession(key, buildMessage(woken)))) {

@@ -165,9 +165,11 @@ function describeLostWorkForAgent(lostWork: LostWork): string {
 
 /**
  * @description The note the agent gets — as the automatic resume's prompt, or ahead of the next prompt. English with
- * the baked reply-language directive (`replyLanguage` is the topic's language endonym).
+ * the baked reply-language directive (`replyLanguage` is the topic's language endonym). `isTellingOptional` — the wake carrying it is a
+ * tracker request's that a passing watch holds and that owes nobody an answer — says to tell the requester only if they must know, as the
+ * fire header does (a comment on the issue notifies the requester and the watchers), instead of «tell the user in one or two lines».
  */
-export function buildLostWorkNote(record: LostWorkRecord, replyLanguage: string): string {
+export function buildLostWorkNote(record: LostWorkRecord, replyLanguage: string, options: { isTellingOptional?: boolean } = {}): string {
   // Only what the other agent could have started again: its tasks and jobs, not a result or a cut-off turn.
   const restartableTold: LostWork | null = record.otherAgentTold
     ? { ...noLostWork, backgroundTasks: record.otherAgentTold.backgroundTasks, scheduledJobCount: record.otherAgentTold.scheduledJobCount }
@@ -178,7 +180,10 @@ export function buildLostWorkNote(record: LostWorkRecord, replyLanguage: string)
     ...(restartableTold && checkHasLostWork(restartableTold)
       ? [`The agent this conversation moved to meanwhile was told first about ${describeLostWorkForAgent(restartableTold)}, and may have started some of it again: look before you start that twice.`]
       : []),
-    `Check its state yourself (output files, processes, the repository), start again what is still needed — prefer the bot's schedule_* tools for anything that must survive a restart — and tell the user in one or two lines what happened, IN ${replyLanguage}.`,
+    options.isTellingOptional === true
+      ? 'Check its state yourself (output files, processes, the repository), start again what is still needed — prefer the bot\'s schedule_* tools for anything that must survive a restart — ' +
+        `and tell the requester about it only if they must know (it changes what they are waiting for): your watch is still armed and nobody is waiting on you, so otherwise carry on without a comment, IN ${replyLanguage}.`
+      : `Check its state yourself (output files, processes, the repository), start again what is still needed — prefer the bot's schedule_* tools for anything that must survive a restart — and tell the user in one or two lines what happened, IN ${replyLanguage}.`,
   ].join('\n');
 }
 

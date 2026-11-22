@@ -96,6 +96,11 @@ test('only a person\'s own prompts are marked as such: the text, voice and label
   assert.match(getFunctionBody('replayBufferedPrompts'), /await forwardPromptToAgent\(key, adapter, heldText, undefined, \{ isPersonInput: true \}\);/);
 });
 
+test('the lost-work wake of a request a passing watch holds tells the requester only if they must know: the wake message\'s flag reaches the note the prompt carries', () => {
+  assert.match(getFunctionBody('forwardRequestWakeUp'), /isLostWorkTellOptional: message\.isAnswerOptional === true,/);
+  assert.match(getFunctionBody('forwardPromptToLiveAgent'), /buildLostWorkNote\(lostWorkRecord, getLocaleEndonym\(getActiveLang\(\)\), \{ isTellingOptional: options\.isLostWorkTellOptional === true \}\)/);
+});
+
 test('a bot-made prompt that waits for an adopt replay behind a start counts only once replayed', () => {
   const body = getFunctionBody('forwardPromptToAgent');
   const buffer = body.slice(body.indexOf('buffer: async () => {'));

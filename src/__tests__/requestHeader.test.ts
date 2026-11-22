@@ -119,6 +119,30 @@ describe('buildWakeUpReminder', () => {
   });
 });
 
+describe('buildWakeUpReminder — an answer that is optional (a lost-work wake of a request a passing watch holds)', () => {
+  it('words the answer like the fire header: only with what the requester must know — and says why nothing is expected', () => {
+    const lines = buildWakeUpReminder({ requestId: 'req_AbCd1234', reason: 'restarted', isAnswerOptional: true }).split('\n');
+    assert.equal(lines[0], '[Reminder · request req_AbCd1234 is still open]');
+    assert.match(lines[2], /^Your watch for it is still armed and nobody is waiting on you, so answer it with answer_request \(requestId "req_AbCd1234"\) only with what the requester must know/);
+    assert.match(lines[2], /otherwise continue without a comment\.$/);
+    assert.ok(!lines[2].includes('kind "final" if the work is done'), 'not the plain «answer it» line');
+    assert.equal(lines[3], answerStyleInstruction);
+  });
+
+  it('only a reminder can be optional: the message says so, a request\'s own prompt (R21) never is', () => {
+    const reminder = getWakeUpMessage(createOpenRequest('req_1', undefined, undefined), 'restarted', { isAnswerOptional: true });
+    assert.equal(reminder.isAnswerOptional, true);
+    assert.ok(reminder.text.includes('only with what the requester must know'));
+    const plain = getWakeUpMessage(createOpenRequest('req_1', undefined, undefined), 'restarted');
+    assert.equal(plain.isAnswerOptional, undefined);
+    assert.ok(plain.text.includes('kind "final" if the work is done'));
+    const prompt = getWakeUpMessage(createOpenRequest('req_2', '[Request req_2] the prompt', false), 'restarted', { isAnswerOptional: true });
+    assert.equal(prompt.isRequestPrompt, true);
+    assert.equal(prompt.isAnswerOptional, undefined, 'the agent never read this request: it is owed its answer');
+    assert.equal(prompt.text, '[Request req_2] the prompt');
+  });
+});
+
 describe('joinPromptsNotTakenIn', () => {
   it('joins the untaken prompts in order and skips taken-in or promptless requests', () => {
     const joined = joinPromptsNotTakenIn([

@@ -6373,6 +6373,8 @@ interface PromptForwardOptions {
   isPersonInput?: boolean;
   isRecoveryReplay?: boolean;
   isRequestReminder?: boolean;
+  /** The lost-work note this prompt carries tells the requester only if they must know (`buildLostWorkNote`): a tracker request a passing watch holds. */
+  isLostWorkTellOptional?: boolean;
   isTechnicalPrompt?: boolean;
   /**
    * The prompt starts a turn the person or the scheduler made, so it may carry the accounts note (`limitNotes/`): a person's
@@ -6433,7 +6435,9 @@ async function forwardPromptToLiveAgent(
   // request's reminder included: the wake of a tracker request whose process a restart left behind is how its agent hears.
   const isLostWorkNoteCarried = (isReplayable || options.isRequestReminder === true) && adapter.name !== 'terminal';
   const lostWorkRecord = isLostWorkNoteCarried ? state.getLostWork(key) : undefined;
-  const body = lostWorkRecord ? `${buildLostWorkNote(lostWorkRecord, getLocaleEndonym(getActiveLang()))}\n\n${messageBody}` : messageBody;
+  const body = lostWorkRecord
+    ? `${buildLostWorkNote(lostWorkRecord, getLocaleEndonym(getActiveLang()), { isTellingOptional: options.isLostWorkTellOptional === true })}\n\n${messageBody}`
+    : messageBody;
   // Cache the (reply-folded) prompt so a wedged OpenCode session can be recovered
   // by restarting fresh and replaying it — replaying WITH the quote is correct.
   // A genuine new prompt also opens a fresh recovery episode (clears the guard).
@@ -15643,6 +15647,7 @@ async function forwardRequestWakeUp(key: SessionKey, _request: OpenRequestState,
   // The request's own prompt re-posted (R21) counts as that prompt, not a reminder.
   await forwardPromptToAgent(key, getThreadAdapter(key), message.text, undefined, {
     isRequestReminder: !message.isRequestPrompt,
+    isLostWorkTellOptional: message.isAnswerOptional === true,
   });
 }
 
