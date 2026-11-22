@@ -256,6 +256,8 @@ describe('checkIsWatchedTurnStale', () => {
 
 describe('a request that waits for its schedule (scheduleWait) and a scheduled run\'s turn', () => {
   const quietUpdate = { silentTurnCount: 0, nextWakeAt: undefined, lastTurnActivityAt: nowMs };
+  /** A fire's quiet end that no schedule holds: the request's own follow-up is none of its business, so the update does not name it. */
+  const quietFireUpdate = { silentTurnCount: 0, lastTurnActivityAt: nowMs };
   const goneProbe: SessionTurnProbe = { isActive: false, isBusy: false, hasUnconsumedInput: null, isTurnEndBlocked: false };
 
   it('turn end: a progress note with an armed watch schedules no follow-up (every reading but `none`)', () => {
@@ -274,8 +276,8 @@ describe('a request that waits for its schedule (scheduleWait) and a scheduled r
   });
 
   it('turn end: a scheduled run\'s turn without an answer is not silence either, even with nothing armed', () => {
-    assert.deepEqual(decideTurnEnd(createRequest({ silentTurnCount: 1 }), 0, nowMs, { isScheduledRun: true }), { kind: 'quiet', update: quietUpdate });
-    assert.deepEqual(decideTurnEnd(createRequest(), 0, nowMs, { isScheduledRun: true, scheduleWait: 'none' }), { kind: 'quiet', update: quietUpdate });
+    assert.deepEqual(decideTurnEnd(createRequest({ silentTurnCount: 1 }), 0, nowMs, { isScheduledRun: true }), { kind: 'quiet', update: quietFireUpdate });
+    assert.deepEqual(decideTurnEnd(createRequest(), 0, nowMs, { isScheduledRun: true, scheduleWait: 'none' }), { kind: 'quiet', update: quietFireUpdate });
   });
 
   it('turn end: a scheduled run\'s turn that sent a progress note is followed up like any, unless a watch is armed', () => {
@@ -308,6 +310,17 @@ describe('a request that waits for its schedule (scheduleWait) and a scheduled r
     assert.equal(decideTurnEnd(request, 0, nowMs, { scheduleWait: 'watching', isPersonTurn: true }).kind, 'quiet');
     assert.equal(decideTurnEnd(request, 0, nowMs, { scheduleWait: 'none', isPersonTurn: true }).kind, 'followUpLater');
     assert.equal(decideTurnEnd(createRequest(), 0, nowMs, { scheduleWait: 'watching', isPersonTurn: false }).kind, 'quiet', 'the alarm\'s own turn');
+  });
+
+  it('turn end: a fire\'s quiet end leaves the follow-up of a request that waits for nothing — an unrelated alarm must not wipe it; a schedule that holds the request still clears it', () => {
+    const dueFollowUp = nowMs + 10 * 60 * 1000;
+    const request = createRequest({ progressAnswerCount: 1, nextWakeAt: dueFollowUp });
+    const fire = decideTurnEnd(request, 1, nowMs, { isScheduledRun: true, scheduleWait: 'none' });
+    assert.equal(fire.kind, 'quiet');
+    assert.ok(fire.kind === 'quiet' && !('nextWakeAt' in fire.update), 'the update does not name the follow-up, so the request keeps it');
+    assert.equal(fire.kind === 'quiet' ? fire.update.lastTurnActivityAt : null, nowMs, 'the activity is still recorded');
+    const held = decideTurnEnd(request, 1, nowMs, { isScheduledRun: true, scheduleWait: 'watching' });
+    assert.ok(held.kind === 'quiet' && 'nextWakeAt' in held.update && held.update.nextWakeAt === undefined, 'held by a watch: nothing is due');
   });
 
   it('turn end: nothing armed and not a scheduled run — the silent-turn rules are unchanged', () => {

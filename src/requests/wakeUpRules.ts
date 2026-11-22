@@ -171,8 +171,14 @@ export function decideTurnEnd(
   // A request with a silent turn pending is owed an answer: the reminder's turn that follows it is not a person's turn, yet it must
   // count, or a watch that passes would wipe the count and the rules would never give up on a requester left unanswered.
   const isQuietWhileWaiting = isWaitingForSchedule && context.isPersonTurn !== true && request.silentTurnCount === 0;
-  if (isProgressSent || isQuietWhileWaiting || context.isScheduledRun === true) {
-    return { kind: 'quiet', update: { silentTurnCount: 0, nextWakeAt: undefined, lastTurnActivityAt: nowMs } };
+  // The follow-up is cleared only where a schedule holds the request. A fire's quiet end alone leaves it: a fire may ride a request
+  // that waits for nothing (its own job's request is gone), and an unrelated alarm must not wipe that request's due follow-up.
+  const isHeldBySchedule = isProgressSent || isQuietWhileWaiting;
+  if (isHeldBySchedule || context.isScheduledRun === true) {
+    return {
+      kind: 'quiet',
+      update: { silentTurnCount: 0, lastTurnActivityAt: nowMs, ...(isHeldBySchedule ? { nextWakeAt: undefined } : {}) },
+    };
   }
   const silentTurnCount = request.silentTurnCount + 1;
   if (silentTurnCount >= maxSilentTurns) {
