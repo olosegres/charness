@@ -1,5 +1,12 @@
 import type { OpenRequestState, OpenRequestUpdate, RequestAlertReason, RequestWakeUpReason } from './types';
-import { checkIsAnswerOwed, checkIsHeldBetweenTurns, checkIsUnansweredFireRequest, checkIsWaitingAtTurnEnd, type RequestScheduleWait } from './scheduleWait';
+import {
+  checkIsAnswerOwed,
+  checkIsHeldBetweenTurns,
+  checkIsUnansweredFireRequest,
+  checkIsWaitingAtTurnEnd,
+  checkIsWaitingBetweenTurns,
+  type RequestScheduleWait,
+} from './scheduleWait';
 import { getMinutesOverrideMs } from '../utils/minutesOverride';
 
 /**
@@ -155,7 +162,8 @@ export interface TurnEndContext {
  * `progressCountAtTurnStart` is the request's progress-answer count when the
  * turn began, so an increase means this turn sent a progress note (a `question`
  * or `final` would have closed the request — there is nothing to decide then).
- * A progress note schedules the follow-up unless the request waits for its schedule (then nothing is scheduled). A turn
+ * A progress note schedules the follow-up unless a watch holds the request between turns (`watching`; then nothing is scheduled — a
+ * watch that fired and was not re-armed, `armed`, holds nothing, so a note in its own fire's turn is followed up too). A turn
  * without an answer is not silent when the turn was a scheduled run's, or when the request waits for its schedule, and in both
  * cases only while the request owes nobody an answer (`checkIsAnswerOwed`, read from the persisted request — never from the kind of
  * the turn, so a lost and rebuilt watch decides alike): a requester's message is never left unanswered because a watch is armed or
@@ -177,8 +185,12 @@ export function decideTurnEnd(
   if (checkIsWakingStopped(request)) return { kind: 'none' };
   const isProgressSent = request.progressAnswerCount > progressCountAtTurnStart;
   const isOtherJobFire = context.isScheduledRun === true && context.isRequestJob === false;
-  const isWaitingForSchedule = checkIsWaitingAtTurnEnd(context.scheduleWait ?? 'none', context.isScheduledRun === true && !isOtherJobFire);
-  if (isProgressSent && !isWaitingForSchedule) {
+  const scheduleWait = context.scheduleWait ?? 'none';
+  const isWaitingForSchedule = checkIsWaitingAtTurnEnd(scheduleWait, context.isScheduledRun === true && !isOtherJobFire);
+  // A progress note is followed up unless a watch HOLDS the request between turns (`watching`). `armed` excuses the fire's turn a
+  // no-answer end only: a note leaves no silence to excuse, and a watch that fired and was not re-armed wakes nobody again — without
+  // the follow-up only the 90-minute backstop would be left (as for a person's turn under `armed`, row 1).
+  if (isProgressSent && !checkIsWaitingBetweenTurns(scheduleWait)) {
     return {
       kind: 'followUpLater',
       update: { silentTurnCount: 0, nextWakeAt: nowMs + (context.progressFollowUpMs ?? progressFollowUpDelayMs), lastTurnActivityAt: nowMs },

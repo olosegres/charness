@@ -262,13 +262,21 @@ describe('a request that waits for its schedule (scheduleWait) and a scheduled r
   /** A request that owes nobody an answer: the person's words were answered (a progress note went out), no silent turn is pending. */
   const answeredRequest = (overrides: Partial<OpenRequestState> = {}): OpenRequestState => createRequest({ progressAnswerCount: 1, ...overrides });
 
-  it('turn end: a progress note under a passing watch schedules no follow-up; under a watch that fired (`armed`) only the turn a fire started is held — any other turn reads it as `none`', () => {
+  it('turn end: a progress note under a passing watch schedules no follow-up; under `none` or `armed` — a watch that fired and was not re-armed, even in the turn of its own fire — it is followed up (review 13 #2)', () => {
     const request = createRequest({ silentTurnCount: 1, progressAnswerCount: 1 });
     assert.deepEqual(decideTurnEnd(request, 0, nowMs, { scheduleWait: 'watching' }), { kind: 'quiet', update: quietUpdate });
-    assert.deepEqual(decideTurnEnd(request, 0, nowMs, { scheduleWait: 'armed', isScheduledRun: true }), { kind: 'quiet', update: quietUpdate }, 'the agent that handled the wake');
+    assert.deepEqual(decideTurnEnd(request, 0, nowMs, { scheduleWait: 'watching', isScheduledRun: true }), { kind: 'quiet', update: quietUpdate });
+    // `armed` excuses the fire's turn a NO-answer end only: a note leaves no silence to excuse, and nothing between turns would wake the
+    // agent («results in, merging now» with no new watch — the merge dies), so the 15-minute follow-up comes, as in row 1.
+    const fireProgress = decideTurnEnd(request, 0, nowMs, { scheduleWait: 'armed', isScheduledRun: true });
+    assert.equal(fireProgress.kind, 'followUpLater', 'the watch\'s own fire, a progress note, nothing re-armed');
+    assert.deepEqual(fireProgress.kind === 'followUpLater' ? fireProgress.update : null, { silentTurnCount: 0, nextWakeAt: nowMs + progressFollowUpDelayMs, lastTurnActivityAt: nowMs });
     // `none` keeps today's follow-up — and so does an `armed` reading for a person\'s or a reminder\'s turn.
     assert.equal(decideTurnEnd(request, 0, nowMs, { scheduleWait: 'none' }).kind, 'followUpLater');
+    assert.equal(decideTurnEnd(request, 0, nowMs, { scheduleWait: 'none', isScheduledRun: true }).kind, 'followUpLater');
     assert.equal(decideTurnEnd(request, 0, nowMs, { scheduleWait: 'armed' }).kind, 'followUpLater', 'a reminder\'s turn under a watch nobody re-armed');
+    // The fire's NO-answer end under `armed` stays quiet: the agent that handled the wake is not silent.
+    assert.equal(decideTurnEnd(createRequest({ progressAnswerCount: 1 }), 1, nowMs, { scheduleWait: 'armed', isScheduledRun: true }).kind, 'quiet');
   });
 
   it('turn end: no answer while the watch passes is not silence — counter 0, no wake, activity recorded; a watch that fired is the alarm\'s turn only, a reminder\'s is silent', () => {
