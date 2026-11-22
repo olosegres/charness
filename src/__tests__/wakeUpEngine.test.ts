@@ -1776,6 +1776,42 @@ describe('a request waits for its schedule', () => {
     assert.equal(ledger.listOpenRequestsOf(topicKey).find((request) => request.id === answered.id)?.lastTurnActivityAt, nowMs, 'nothing owed: as before');
   });
 
+  it('a watch armed in a «continue» turn is recorded under the hand-over the agent works on, not under a mention the nudge only carried along', async () => {
+    const ledger = await createLedger();
+    const engine = createEngine(ledger, { getScheduleWait: () => 'watching' });
+    const handOverOfAnn = await ledger.createRequest(issueKey, handOver);
+    const mentionOfBob = await ledger.createRequest(issueKey, { kind: 'trackerMention', attributes: { ...handOver.attributes, requester: 'bob' } });
+    // The agent works on ann's hand-over: its prompt starts the watch, it answers `progress`, then an API error stops the turn.
+    await engine.trackForwardedTurn(issueKey, handOverOfAnn.id, { isRequestPrompt: true });
+    await ledger.updateOpenRequest(handOverOfAnn.id, (current) => ({ progressAnswerCount: current.progressAnswerCount + 1, isPersonInputUnanswered: undefined }));
+    await engine.trackContinuationTurn(issueKey, { isCountersReset: false });
+    assert.deepEqual(engine.getWatchedRequestIdsOf(issueKey).sort(), [handOverOfAnn.id, mentionOfBob.id].sort(), 'the nudge watches every open request');
+    assert.deepEqual(engine.getOwnForwardWatchedRequestIdsOf(issueKey), [handOverOfAnn.id], 'only the hand-over\'s watch started with a forward of its own');
+
+    assert.equal(engine.getArmingRequestIdOf(issueKey), handOverOfAnn.id, 'the job waits for the request the agent works on');
+  });
+
+  it('a restart wake watches the hand-over and a mention together: the watch armed in that turn goes to the hand-over', async () => {
+    const ledger = await createLedger();
+    const engine = createEngine(ledger);
+    const handOverOfAnn = await ledger.createRequest(issueKey, handOver);
+    const mentionOfBob = await ledger.createRequest(issueKey, { kind: 'trackerMention', attributes: { ...handOver.attributes, requester: 'bob' } });
+    probe = goneProbe;
+    await engine.wakeAfterRestart(issueKey);
+    assert.deepEqual(engine.getWatchedRequestIdsOf(issueKey).sort(), [handOverOfAnn.id, mentionOfBob.id].sort(), 'one forward, both requests watched');
+    assert.deepEqual(engine.getOwnForwardWatchedRequestIdsOf(issueKey), [], 'neither watch started with a forward of its own');
+    assert.equal(engine.getArmingRequestIdOf(issueKey), handOverOfAnn.id, 'a hand-over before a newer mention');
+  });
+
+  it('a request woken alone by a restart is the forward\'s own: the conversation-wide mark is for a forward that carried several requests', async () => {
+    const ledger = await createLedger();
+    const engine = createEngine(ledger);
+    const only = await ledger.createRequest(issueKey, handOver);
+    probe = goneProbe;
+    await engine.wakeAfterRestart(issueKey);
+    assert.deepEqual(engine.getOwnForwardWatchedRequestIdsOf(issueKey), [only.id], 'one request woken: the forward is its alone');
+  });
+
   it('a limit resume that re-posts ONE request\'s prompt marks only that request owed: another requester\'s answered request waiting on its watch gets the plain «continue»', async () => {
     const ledger = await createLedger();
     const engine = createEngine(ledger, { getScheduleWait: () => 'watching' });

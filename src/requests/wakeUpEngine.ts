@@ -1,6 +1,6 @@
 import { keyToString, type SessionKey } from '../sessionKey';
 import type { RequestLedger } from './requestLedger';
-import { checkIsAnswerOwed, checkIsHeldBetweenTurns, type RequestScheduleWait } from './scheduleWait';
+import { checkIsAnswerOwed, checkIsHeldBetweenTurns, pickRequestToArmUnder, type RequestScheduleWait } from './scheduleWait';
 import type { OpenRequestState, RequestAlertReason, RequestAnswerKind } from './types';
 import { getPromptNotTakenIn, getWakeUpMessage, type WakeUpMessage } from './requestHeader';
 import {
@@ -110,6 +110,13 @@ type WakeUpDeliveryOutcome = 'delivered' | 'failed' | 'requestGone';
 
 interface WatchedRequestTurn extends WatchedTurn {
   key: SessionKey;
+  /**
+   * The forward that started this watch was THIS request's own (a request prompt, an issue update, a fire riding it, a reminder for
+   * it), not one nudge or restart wake that carried several requests at once and watched them all. The request a job is armed under
+   * is picked from the own-forward watches first (`pickRequestToArmUnder`): a conversation-wide forward «watches» every open
+   * request, which says nothing about the one the agent is working on. A merge keeps `true` if either side was.
+   */
+  isOwnForward: boolean;
 }
 
 interface WatchedAnswerTail {
@@ -239,7 +246,10 @@ export class RequestWakeUpEngine {
       this.deps.noteRestartWakeDelivered?.(key);
       console.log(`[requests] ${keyToString(key)}: woken after a restart for ${current.map((request) => request.id).join(', ')}`);
       for (const request of current) {
-        await this.trackForwardedTurn(key, request.id, { isRequestPrompt: getWakeUpMessage(request, 'restarted').isRequestPrompt });
+        await this.trackForwardedTurn(key, request.id, {
+          isRequestPrompt: getWakeUpMessage(request, 'restarted').isRequestPrompt,
+          isConversationForward: current.length > 1,
+        });
       }
     } catch (e) {
       logWakeUpFailure(`delivering the restart wake for ${keyToString(key)}`, e);
@@ -255,6 +265,19 @@ export class RequestWakeUpEngine {
   /** The ids of the requests whose turns the engine watches in `key`'s conversation: the requests the agent is working on right now. */
   getWatchedRequestIdsOf(key: SessionKey): string[] {
     return this.getWatchedTurnsOf(key).map((turn) => turn.requestId);
+  }
+
+  /** The watched requests of `key`'s conversation whose watch a forward of their OWN started (not a conversation-wide nudge). */
+  getOwnForwardWatchedRequestIdsOf(key: SessionKey): string[] {
+    return this.getWatchedTurnsOf(key).filter((turn) => turn.isOwnForward).map((turn) => turn.requestId);
+  }
+
+  /**
+   * @description The request a job armed NOW in `key`'s conversation is armed under (`pickRequestToArmUnder` over the ledger's open
+   * requests and this engine's watches); `undefined` when no request is open.
+   */
+  getArmingRequestIdOf(key: SessionKey): string | undefined {
+    return pickRequestToArmUnder(this.deps.ledger.listOpenRequestsOf(key), this.getWatchedRequestIdsOf(key), this.getOwnForwardWatchedRequestIdsOf(key));
   }
 
   /** The watched turns of `key`'s conversation. */
@@ -279,7 +302,7 @@ export class RequestWakeUpEngine {
   async trackForwardedTurn(
     key: SessionKey,
     requestId: string,
-    options: { isRequestPrompt: boolean; isScheduledRun?: boolean; isPersonInput?: boolean; isContinuation?: boolean } = { isRequestPrompt: false },
+    options: { isRequestPrompt: boolean; isScheduledRun?: boolean; isPersonInput?: boolean; isContinuation?: boolean; isConversationForward?: boolean } = { isRequestPrompt: false },
   ): Promise<void> {
     const request = this.getOpenRequestOf(key, requestId);
     if (!request) return;
@@ -301,6 +324,7 @@ export class RequestWakeUpEngine {
       hasSeenOutput: false,
       isRequestPrompt: options.isRequestPrompt || previous?.isRequestPrompt === true,
       isScheduledRun,
+      isOwnForward: options.isConversationForward !== true || previous?.isOwnForward === true,
     });
     const isMoot = request.nextPostRetryAt !== undefined && !isFireForward;
     const isPersonWordsOwed = carriesPersonWords && !isFireForward && !isAlarmRequest && request.isPersonInputUnanswered !== true;
@@ -422,7 +446,7 @@ export class RequestWakeUpEngine {
           limitWaitAnsweredFor: undefined,
         });
       }
-      await this.trackForwardedTurn(key, request.id, { isRequestPrompt: isOwnPromptCarried, isContinuation: true });
+      await this.trackForwardedTurn(key, request.id, { isRequestPrompt: isOwnPromptCarried, isContinuation: true, isConversationForward: true });
     }
   }
 

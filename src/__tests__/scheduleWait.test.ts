@@ -151,6 +151,22 @@ describe('pickRequestToArmUnder — the request a new job is armed under', () =>
     assert.equal(pickRequestToArmUnder([older, newer], ['req_Unknown']), newer.id, 'a watched id that is not open is ignored');
   });
 
+  it('a watch a forward of the request\'s OWN started wins over a request a conversation-wide forward only carried along; inside a tier a hand-over comes before a newer mention', () => {
+    const handOver = makeRequest('req_HandOver1', 1000);
+    const mention = makeRequest('req_Mention01', 2000, 'trackerMention');
+    const both = [handOver.id, mention.id];
+    assert.equal(pickRequestToArmUnder([handOver, mention], both, [handOver.id]), handOver.id, 'a «continue» watched both, the hand-over\'s own forward started its watch');
+    assert.equal(pickRequestToArmUnder([handOver, mention], both, [mention.id]), mention.id, 'the agent works on the mention: its own forward');
+    assert.equal(pickRequestToArmUnder([handOver, mention], both, []), handOver.id, 'a restart wake watched both: the hand-over before the newer mention');
+    assert.equal(pickRequestToArmUnder([handOver, mention], [], []), handOver.id, 'nothing watched: the hand-over before the newer mention');
+    assert.equal(pickRequestToArmUnder([mention, handOver], both, []), handOver.id, 'whatever the order');
+    const newerHandOver = makeRequest('req_HandOver2', 3000);
+    assert.equal(pickRequestToArmUnder([handOver, mention, newerHandOver], [], []), newerHandOver.id, 'two hand-overs: the newest');
+    const operator = makeRequest('req_Operator01', 1000, 'message');
+    const colleague = makeRequest('req_Colleague1', 2000, 'message');
+    assert.equal(pickRequestToArmUnder([operator, colleague], [operator.id, colleague.id], []), colleague.id, 'no tracker origin: the newest, as before');
+  });
+
   it('a request a scheduler fire opened is passed over for any other — watched or newest — and is the pick only when it is all there is', () => {
     const operator = makeRequest('req_Operator01', 1000, 'message');
     const fire = makeRequest('req_Fire000001', 3000, 'scheduledRun');

@@ -15924,7 +15924,7 @@ function wireScheduler(wiring: SchedulerWiringDeps): SchedulerMcpHandle {
     getArmingRequestId: (threadKeyStr) => {
       const key = tryKeyFromString(threadKeyStr);
       if (key === null) return undefined;
-      return pickRequestToArmUnder(wiring.requestLedger.listOpenRequestsOf(key), requestWakeUpEngine?.getWatchedRequestIdsOf(key) ?? []);
+      return requestWakeUpEngine?.getArmingRequestIdOf(key) ?? pickRequestToArmUnder(wiring.requestLedger.listOpenRequestsOf(key), []);
     },
     getRemoteRunRunnerLines: () => getRunnerSummaryLines(),
     // A refused tool call leaves one line in the bounded diagnostic log (agent-diag.log): the SDK refuses before the bot sees it.

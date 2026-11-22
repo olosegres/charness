@@ -82,17 +82,29 @@ export function checkIsHeldBetweenTurns(
 
 /**
  * @description The request a job `schedule_create` arms now is armed under — the one the agent is WORKING ON, which is what must
- * wait for the job: the newest request whose turn the engine is watching, else the newest open one; a request a scheduler fire
- * opened (`scheduledRun`: a Telegram topic's) is passed over for any other. A fire opens such a request and the agent often
- * re-arms in its turn (the next worker, a new watch beside the cancelled one): armed under it, the watch would pass to the
- * scheduler's own chain of requests and leave the operator's request waiting for nothing. In a tracker conversation a newer
- * request of another requester (a mention) never takes a job from the hand-over the agent is working on. `undefined` when no
+ * wait for the job. Tiers, the first that has a request wins: a request whose turn the engine watches because a forward of its OWN
+ * started the watch (`ownForwardRequestIds`: its prompt, an update, a fire riding it, a reminder for it); a request whose turn is
+ * watched only because a conversation-wide forward carried it along (a «continue» nudge, a restart wake — those watch EVERY open
+ * request, which says nothing about the one the agent works on); the open requests. Inside a tier the newest wins, a tracker
+ * HAND-OVER (`trackerEvent`) before a mention (`trackerMention`): a mention hands nothing over and long work belongs to the
+ * hand-over. A request a scheduler fire opened (`scheduledRun`: a Telegram topic's) is passed over for any other. A fire opens such a
+ * request and the agent often re-arms in its turn (the next worker, a new watch beside the cancelled one): armed under it, the watch
+ * would pass to the scheduler's own chain of requests and leave the operator's request waiting for nothing. `undefined` when no
  * request is open (a topic's stream view has none). `openRequests` is oldest first, as `RequestLedger.listOpenRequestsOf` returns
  * it: the newest of a list is its last.
  */
-export function pickRequestToArmUnder(openRequests: readonly OpenRequestState[], watchedRequestIds: readonly string[]): string | undefined {
+export function pickRequestToArmUnder(
+  openRequests: readonly OpenRequestState[],
+  watchedRequestIds: readonly string[],
+  ownForwardRequestIds: readonly string[] = [],
+): string | undefined {
   const isWorkRequest = (request: OpenRequestState): boolean => request.origin.kind !== 'scheduledRun';
+  const getNewestPreferringHandOver = (requests: readonly OpenRequestState[]): OpenRequestState | undefined =>
+    requests.filter((request) => request.origin.kind === 'trackerEvent').at(-1) ?? requests.at(-1);
   const workRequests = openRequests.filter(isWorkRequest);
-  const watched = workRequests.filter((request) => watchedRequestIds.includes(request.id)).at(-1);
-  return (watched ?? workRequests.at(-1) ?? openRequests.at(-1))?.id;
+  const ownForward = workRequests.filter((request) => ownForwardRequestIds.includes(request.id));
+  const watched = workRequests.filter((request) => watchedRequestIds.includes(request.id));
+  return (
+    getNewestPreferringHandOver(ownForward) ?? getNewestPreferringHandOver(watched) ?? getNewestPreferringHandOver(workRequests) ?? openRequests.at(-1)
+  )?.id;
 }
