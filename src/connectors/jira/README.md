@@ -365,7 +365,8 @@ update into the resumed session — it does not wait for the agent's turn to end
   and not given up on after ten wake-ups; the task-agent slot stays held, because the issue IS being worked on
   (`../../requests/README.md` § Wake-ups). A passing recurring job armed under a request keeps it waiting for as long as it lives, and the issue's slot held:
   guidance, not code — an agent that arms a watchdog meant to outlive the work (a health check, a daily job) answers `final` afterwards;
-  the job keeps running and its fires say «no request is open». The tool description and the orchestration skill say so.
+  the job keeps running and its fires say «no request is open», or ride the request open at the time (a later hand-over, a mention: the
+  header names it, and the agent answers it only with what its requester must know). The tool description and the orchestration skill say so.
 - **Fires and the task-agent cap.** A scheduled fire resumes the issue's agent whether or not the issue holds a slot (after the hand-over's
   final answer, during a mention-only request) and is never held by `taskAgents.maxConcurrent`: the cap bounds hand-overs, as a Telegram
   topic's fires have no concurrency cap either (`../../trackers/README.md`). The slot of an issue whose request waits for its watch stays held.

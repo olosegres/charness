@@ -120,7 +120,7 @@ describe('agent-plugin', () => {
     assert.match(section, /A wake you handled with nothing to report ends silently: no comment, no "still waiting"\./);
     assert.match(section, /A header that says `no request is open`: the request you armed the job under is finished\. An answer to it still becomes a comment but hands nothing back/);
     assert.match(section, /cancel the job \(`schedule_cancel`\) if it served only that request/);
-    assert.match(section, /A watchdog meant to outlive the work \(a health check, a daily job\) is armed and then the request is answered `final`: the job keeps running and its fires say `no request is open`\./);
+    assert.match(section, /A watchdog meant to outlive the work \(a health check, a daily job\) is armed and then the request is answered `final`: the job keeps running and its fires say `no request is open`, or ride\s+the request open at the time \(a later hand-over, a mention: answer that request only with what its requester must know, not about the\s+job\)\./);
     assert.match(section, /task-agent slot taken for as long as the job lives/);
     assert.match(section, /its path in `answer_request`'s `files`/, 'the file note stays');
     assert.doesNotMatch(flat, /There are no `schedule_\*` tools|nothing will wake you|Do not end your turn while a worker runs|foreground polls/, 'the polling paragraph is gone');
