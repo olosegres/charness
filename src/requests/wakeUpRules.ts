@@ -1,4 +1,5 @@
 import type { OpenRequestState, OpenRequestUpdate, RequestAlertReason, RequestWakeUpReason } from './types';
+import { checkIsWaitingAtTurnEnd, checkIsWaitingBetweenTurns, type RequestScheduleWait } from './scheduleWait';
 import { getMinutesOverrideMs } from '../utils/minutesOverride';
 
 /**
@@ -19,6 +20,12 @@ import { getMinutesOverrideMs } from '../utils/minutesOverride';
  * blocked on something that is not a turn end (a pending native question, a
  * compaction, an armed API-error retry or usage-limit wait). After the alert or
  * the cap nothing wakes the request again until it closes or is superseded.
+ *
+ * A request WAITS FOR ITS SCHEDULE while a job armed under it counts (`scheduleWait.ts`): the agent that launched a worker,
+ * armed its watch and ended its turn is not prodded — at the end of a watched turn it is not silent (counter 0, no
+ * follow-up, no wake), between turns and at a restart nothing wakes the request while a watch that is not failing holds
+ * it. A turn a SCHEDULED RUN started that ends without an answer is not silent either: a woken agent with nothing to
+ * report stays quiet. A scheduler fire is never a wake-up of these rules, so it never counts against the cap.
  */
 
 /** Silent turns in a row that make the rules give up. */
@@ -83,6 +90,8 @@ export type WakeUpDecision =
   | { kind: 'none' }
   | { kind: 'wake'; reason: RequestWakeUpReason; update: OpenRequestUpdate }
   | { kind: 'followUpLater'; update: OpenRequestUpdate }
+  /** The turn ended without anything to do about the request (it waits for its schedule, or a scheduled run had nothing to report): bookkeeping only. */
+  | { kind: 'quiet'; update: OpenRequestUpdate }
   | { kind: 'alert'; reason: RequestAlertReason; update: OpenRequestUpdate };
 
 /**
@@ -118,18 +127,40 @@ function getWakeOrCapDecision(
 }
 
 /**
+ * @name TurnEndContext
+ * @description What the end of a watched turn is read against besides the request: whether the turn was a scheduled run's,
+ * and the request's reading of its armed jobs (absent: it waits for nothing).
+ */
+export interface TurnEndContext {
+  isScheduledRun?: boolean;
+  scheduleWait?: RequestScheduleWait;
+}
+
+/**
  * @description The decision at the end of a turn the request's message started.
  * `progressCountAtTurnStart` is the request's progress-answer count when the
  * turn began, so an increase means this turn sent a progress note (a `question`
  * or `final` would have closed the request — there is nothing to decide then).
+ * A progress note schedules the follow-up unless the request waits for its schedule (then nothing is scheduled). A turn
+ * without an answer is not silent when the request waits for its schedule or the turn was a scheduled run's.
  */
-export function decideTurnEnd(request: OpenRequestState, progressCountAtTurnStart: number, nowMs: number): WakeUpDecision {
+export function decideTurnEnd(
+  request: OpenRequestState,
+  progressCountAtTurnStart: number,
+  nowMs: number,
+  context: TurnEndContext = {},
+): WakeUpDecision {
   if (checkIsWakingStopped(request)) return { kind: 'none' };
-  if (request.progressAnswerCount > progressCountAtTurnStart) {
+  const isProgressSent = request.progressAnswerCount > progressCountAtTurnStart;
+  const isWaitingForSchedule = checkIsWaitingAtTurnEnd(context.scheduleWait ?? 'none');
+  if (isProgressSent && !isWaitingForSchedule) {
     return {
       kind: 'followUpLater',
       update: { silentTurnCount: 0, nextWakeAt: nowMs + progressFollowUpDelayMs, lastTurnActivityAt: nowMs },
     };
+  }
+  if (isProgressSent || isWaitingForSchedule || context.isScheduledRun === true) {
+    return { kind: 'quiet', update: { silentTurnCount: 0, nextWakeAt: undefined, lastTurnActivityAt: nowMs } };
   }
   const silentTurnCount = request.silentTurnCount + 1;
   if (silentTurnCount >= maxSilentTurns) {
@@ -142,13 +173,16 @@ export function decideTurnEnd(request: OpenRequestState, progressCountAtTurnStar
  * @description The periodic decision for an open request whose turn is NOT being
  * watched: a due progress follow-up, or the backstop. Never while the session is
  * working or blocked — and a live turn counts as activity, which pushes the
- * backstop back (the caller records it).
+ * backstop back (the caller records it). Nothing either while the request is held
+ * by a watch that is not failing (`scheduleWait`): the watch wakes the agent, a
+ * follow-up would only prod it; a post retry still runs (the agent never saw the request).
  */
 export function decideUnwatchedRequest(
   request: OpenRequestState,
   probe: SessionTurnProbe,
   nowMs: number,
   backstopMs: number,
+  scheduleWait: RequestScheduleWait = 'none',
 ): WakeUpDecision {
   if (checkIsWakingStopped(request) || probe.isBusy || probe.isTurnEndBlocked) return { kind: 'none' };
   if (request.nextPostRetryAt !== undefined) {
@@ -157,6 +191,7 @@ export function decideUnwatchedRequest(
       ? { kind: 'wake', reason: 'postRetry', update: { nextPostRetryAt: undefined, lastTurnActivityAt: nowMs } }
       : { kind: 'none' };
   }
+  if (checkIsWaitingBetweenTurns(scheduleWait)) return { kind: 'none' };
   if (request.nextWakeAt !== undefined) {
     return nowMs >= request.nextWakeAt ? getWakeOrCapDecision(request, 'progressFollowUp', {}) : { kind: 'none' };
   }
@@ -170,11 +205,18 @@ export function decideUnwatchedRequest(
  * @description The wake of an open request whose conversation's process was found gone (`restarted`): at once, not at
  * the backstop. Nothing when the request already has its own next step — a post retry or a progress follow-up — or
  * nothing may wake it, or the session is working or blocked (a pending question, an armed retry or usage-limit wait, a
- * start under way). It counts against the wake-up cap like any wake, and is seen activity: the backstop counts from it.
+ * start under way), or a watch that is not failing holds it (`scheduleWait`: a restart wakes nobody then, as in a topic).
+ * It counts against the wake-up cap like any wake, and is seen activity: the backstop counts from it.
  */
-export function decideRestartWake(request: OpenRequestState, probe: SessionTurnProbe, nowMs: number): WakeUpDecision {
+export function decideRestartWake(
+  request: OpenRequestState,
+  probe: SessionTurnProbe,
+  nowMs: number,
+  scheduleWait: RequestScheduleWait = 'none',
+): WakeUpDecision {
   if (checkIsWakingStopped(request) || probe.isBusy || probe.isTurnEndBlocked) return { kind: 'none' };
   if (request.nextPostRetryAt !== undefined || request.nextWakeAt !== undefined) return { kind: 'none' };
+  if (checkIsWaitingBetweenTurns(scheduleWait)) return { kind: 'none' };
   return getWakeOrCapDecision(request, 'restarted', { lastTurnActivityAt: nowMs });
 }
 
@@ -192,6 +234,8 @@ export interface WatchedTurn {
   hasSeenOutput: boolean;
   /** The turn carries the request's own prompt (not a reminder or a "continue" nudge) — R21. */
   isRequestPrompt: boolean;
+  /** A scheduler fire started the turn: ending it without an answer is not silence (a woken agent with nothing to report). */
+  isScheduledRun?: boolean;
 }
 
 /**

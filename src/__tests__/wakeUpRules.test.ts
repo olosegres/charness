@@ -253,3 +253,67 @@ describe('checkIsWatchedTurnStale', () => {
     assert.equal(checkIsWatchedTurnStale(request, { ...idleProbe, isTurnEndBlocked: true }, nowMs, backstopMs), false);
   });
 });
+
+describe('a request that waits for its schedule (scheduleWait) and a scheduled run\'s turn', () => {
+  const quietUpdate = { silentTurnCount: 0, nextWakeAt: undefined, lastTurnActivityAt: nowMs };
+  const goneProbe: SessionTurnProbe = { isActive: false, isBusy: false, hasUnconsumedInput: null, isTurnEndBlocked: false };
+
+  it('turn end: a progress note with an armed watch schedules no follow-up (every reading but `none`)', () => {
+    const request = createRequest({ silentTurnCount: 1, progressAnswerCount: 1 });
+    for (const scheduleWait of ['armed', 'watching'] as const) {
+      assert.deepEqual(decideTurnEnd(request, 0, nowMs, { scheduleWait }), { kind: 'quiet', update: quietUpdate }, scheduleWait);
+    }
+    // `none` keeps today's follow-up.
+    assert.equal(decideTurnEnd(request, 0, nowMs, { scheduleWait: 'none' }).kind, 'followUpLater');
+  });
+
+  it('turn end: no answer while the watch is armed is not silence — counter 0, no wake, activity recorded', () => {
+    for (const scheduleWait of ['armed', 'watching'] as const) {
+      assert.deepEqual(decideTurnEnd(createRequest({ silentTurnCount: 1 }), 0, nowMs, { scheduleWait }), { kind: 'quiet', update: quietUpdate }, scheduleWait);
+    }
+  });
+
+  it('turn end: a scheduled run\'s turn without an answer is not silence either, even with nothing armed', () => {
+    assert.deepEqual(decideTurnEnd(createRequest({ silentTurnCount: 1 }), 0, nowMs, { isScheduledRun: true }), { kind: 'quiet', update: quietUpdate });
+    assert.deepEqual(decideTurnEnd(createRequest(), 0, nowMs, { isScheduledRun: true, scheduleWait: 'none' }), { kind: 'quiet', update: quietUpdate });
+  });
+
+  it('turn end: a scheduled run\'s turn that sent a progress note is followed up like any, unless a watch is armed', () => {
+    const request = createRequest({ progressAnswerCount: 1 });
+    assert.equal(decideTurnEnd(request, 0, nowMs, { isScheduledRun: true }).kind, 'followUpLater');
+    assert.equal(decideTurnEnd(request, 0, nowMs, { isScheduledRun: true, scheduleWait: 'watching' }).kind, 'quiet');
+  });
+
+  it('turn end: nothing armed and not a scheduled run — the silent-turn rules are unchanged', () => {
+    assert.equal(decideTurnEnd(createRequest(), 0, nowMs, { scheduleWait: 'none', isScheduledRun: false }).kind, 'wake');
+    assert.equal(decideTurnEnd(createRequest({ silentTurnCount: 1 }), 0, nowMs, {}).kind, 'alert');
+  });
+
+  it('turn end: a request the rules gave up on stays untouched whatever is armed', () => {
+    assert.deepEqual(decideTurnEnd(createRequest({ isWakeStopped: true }), 0, nowMs, { scheduleWait: 'watching', isScheduledRun: true }), { kind: 'none' });
+    assert.deepEqual(decideTurnEnd(createRequest({ isLimitStopped: true }), 0, nowMs, { scheduleWait: 'armed' }), { kind: 'none' });
+  });
+
+  it('between turns: a watch that is not failing holds off the follow-up and the backstop; `armed` (only failing checks) and `none` do not', () => {
+    const due = createRequest({ nextWakeAt: nowMs - 1 });
+    assert.deepEqual(decideUnwatchedRequest(due, idleProbe, nowMs, backstopMs, 'watching'), { kind: 'none' });
+    assert.equal(decideUnwatchedRequest(due, idleProbe, nowMs, backstopMs, 'armed').kind, 'wake');
+    assert.equal(decideUnwatchedRequest(due, idleProbe, nowMs, backstopMs, 'none').kind, 'wake');
+    const idleForBackstop = createRequest({ lastTurnActivityAt: nowMs - backstopMs });
+    assert.deepEqual(decideUnwatchedRequest(idleForBackstop, idleProbe, nowMs, backstopMs, 'watching'), { kind: 'none' });
+    const backstop = decideUnwatchedRequest(idleForBackstop, idleProbe, nowMs, backstopMs, 'armed');
+    assert.equal(backstop.kind === 'wake' ? backstop.reason : null, 'backstop');
+  });
+
+  it('between turns: a post retry still runs while a watch holds the request (the agent never saw the request)', () => {
+    const decision = decideUnwatchedRequest(createRequest({ nextPostRetryAt: nowMs - 1 }), idleProbe, nowMs, backstopMs, 'watching');
+    assert.equal(decision.kind === 'wake' ? decision.reason : null, 'postRetry');
+  });
+
+  it('restart wake: a watch that is not failing means nobody is woken; `armed` and `none` still wake', () => {
+    assert.deepEqual(decideRestartWake(createRequest(), goneProbe, nowMs, 'watching'), { kind: 'none' });
+    assert.equal(decideRestartWake(createRequest(), goneProbe, nowMs, 'armed').kind, 'wake');
+    assert.equal(decideRestartWake(createRequest(), goneProbe, nowMs, 'none').kind, 'wake');
+  });
+});
+

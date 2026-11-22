@@ -1,5 +1,6 @@
 import { keyToString, type SessionKey } from '../sessionKey';
 import type { RequestLedger } from './requestLedger';
+import type { RequestScheduleWait } from './scheduleWait';
 import type { OpenRequestState, RequestAlertReason, RequestAnswerKind } from './types';
 import { getWakeUpMessage, type WakeUpMessage } from './requestHeader';
 import {
@@ -42,6 +43,10 @@ import {
  *
  * A wake-up is a reminder forwarded into the SAME session — never a request.
  * The answer tails are in memory as well: a restart forgets them.
+ *
+ * A request waits for its schedule while a job armed under it counts (`scheduleWait.ts`, read through the optional
+ * `getScheduleWait` port at every decision): the rules then neither prod it nor wake it at a restart, and a turn a scheduler
+ * fire started (`isScheduledRun`) that ends without an answer is not silence.
  */
 
 /** How often a watched turn is polled for its end. */
@@ -89,6 +94,11 @@ export interface RequestWakeUpEngineDeps {
   checkIsAnswerTailWatched?: (key: SessionKey) => boolean;
   /** Bring the session up (resume only) and forward the answer-tail reminder; `false` when it could not be reached. */
   remindAnswerTail?: (key: SessionKey, text: string) => Promise<boolean>;
+  /**
+   * What the request's armed jobs say about it (`scheduleWait.ts`), read when a decision is made — never cached. Absent: a
+   * request never waits for a schedule.
+   */
+  getScheduleWait?: (key: SessionKey, request: OpenRequestState) => RequestScheduleWait;
   now?: () => number;
 }
 
@@ -189,7 +199,7 @@ export class RequestWakeUpEngine {
     const woken: OpenRequestState[] = [];
     for (const request of this.deps.ledger.listOpenRequestsOf(key)) {
       if (this.watched.has(request.id)) continue;
-      const decision = decideRestartWake(request, probe, nowMs);
+      const decision = decideRestartWake(request, probe, nowMs, this.getScheduleWait(key, request));
       if (decision.kind === 'alert') {
         await this.applyDecision(key, request, decision);
         continue;
@@ -247,7 +257,11 @@ export class RequestWakeUpEngine {
    * another requester's request in the conversation keeps its own watch. A post
    * retry still pending is moot from now on (R28): the session has the request.
    */
-  async trackForwardedTurn(key: SessionKey, requestId: string, options: { isRequestPrompt: boolean } = { isRequestPrompt: false }): Promise<void> {
+  async trackForwardedTurn(
+    key: SessionKey,
+    requestId: string,
+    options: { isRequestPrompt: boolean; isScheduledRun?: boolean } = { isRequestPrompt: false },
+  ): Promise<void> {
     const request = this.getOpenRequestOf(key, requestId);
     if (!request) return;
     // The agent works on an open request now: what it writes is owed to that one, not a tail.
@@ -259,6 +273,7 @@ export class RequestWakeUpEngine {
       hasSeenBusy: false,
       hasSeenOutput: false,
       isRequestPrompt: options.isRequestPrompt,
+      isScheduledRun: options.isScheduledRun === true,
     });
     if (request.nextPostRetryAt !== undefined) await this.deps.ledger.updateOpenRequest(request.id, { nextPostRetryAt: undefined });
     await this.recordTurnActivity(request, true);
@@ -414,7 +429,14 @@ export class RequestWakeUpEngine {
     this.watched.delete(turn.requestId);
     // A dead session is not a turn end: the backstop resumes it later.
     if (turnState === 'sessionGone') return;
-    await this.applyDecision(turn.key, request, decideTurnEnd(request, turn.progressCountAtTurnStart, this.now()));
+    await this.applyDecision(
+      turn.key,
+      request,
+      decideTurnEnd(request, turn.progressCountAtTurnStart, this.now(), {
+        isScheduledRun: turn.isScheduledRun === true,
+        scheduleWait: this.getScheduleWait(turn.key, request),
+      }),
+    );
   }
 
   /** @description One sweep over the open requests nobody watches; exported for tests. */
@@ -446,7 +468,12 @@ export class RequestWakeUpEngine {
       await this.recordTurnActivity(request, false);
       return;
     }
-    await this.applyDecision(key, request, decideUnwatchedRequest(request, probe, this.now(), this.deps.backstopMs));
+    await this.applyDecision(key, request, decideUnwatchedRequest(request, probe, this.now(), this.deps.backstopMs, this.getScheduleWait(key, request)));
+  }
+
+  /** The request's reading of its armed jobs now; `none` when the port is not wired. */
+  private getScheduleWait(key: SessionKey, request: OpenRequestState): RequestScheduleWait {
+    return this.deps.getScheduleWait?.(key, request) ?? 'none';
   }
 
   private async sweepAnswerTail(conversationKey: string, entry: WatchedAnswerTail): Promise<void> {
@@ -486,7 +513,7 @@ export class RequestWakeUpEngine {
     });
     // Closed or superseded while we decided: the decision belonged to the old one.
     if (!updated || isStoppedMeanwhile) return;
-    if (decision.kind === 'followUpLater') return;
+    if (decision.kind === 'followUpLater' || decision.kind === 'quiet') return;
     if (decision.kind === 'alert') {
       await this.raiseAlert(key, updated, decision.reason);
       return;

@@ -19,6 +19,7 @@ import { RequestWakeUpEngine, restartWakeStaggerMs, unwatchedSweepMs } from '../
 import { createSessionTurnProbe } from '../requests/sessionTurnProbe';
 import { maxWakeUpsPerRequest, progressFollowUpDelayMs, type SessionTurnProbe } from '../requests/wakeUpRules';
 import type { OpenRequestState, RequestAlertReason, RequestWakeUpReason } from '../requests/types';
+import type { RequestScheduleWait } from '../requests/scheduleWait';
 import { RotatingJsonlFile } from '../utils/rotatingJsonlFile';
 import type { WakeUpMessage } from '../requests/requestHeader';
 import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
@@ -71,6 +72,7 @@ interface EngineTimings {
   firstPostRetryDelayMs?: number;
   restartWakeStaggerMs?: number;
   noteRestartWakeDelivered?: (key: SessionKey) => void;
+  getScheduleWait?: (key: SessionKey, request: OpenRequestState) => RequestScheduleWait;
 }
 
 function createEngine(ledger: RequestLedger, timings: EngineTimings = {}): RequestWakeUpEngine {
@@ -1289,3 +1291,126 @@ describe('the restart wake: a tracker conversation whose process was found gone 
     }
   });
 });
+
+describe('a request waits for its schedule', () => {
+  const issueKey = makeJiraKey('PROJ-1');
+  const handOver = { kind: 'trackerEvent' as const, attributes: { issueKey: 'PROJ-1', triggerId: '100', requester: 'ann' } };
+  const goneProbe: SessionTurnProbe = { isActive: false, isBusy: false, hasUnconsumedInput: null, isTurnEndBlocked: false };
+
+  it('a progress note with an armed watch: no follow-up, however long it runs — the engine never prods it', async () => {
+    const ledger = await createLedger();
+    let wait: RequestScheduleWait = 'watching';
+    const engine = createEngine(ledger, { getScheduleWait: () => wait });
+    const request = await ledger.createRequest(issueKey, handOver);
+    await engine.trackForwardedTurn(issueKey, request.id);
+    await ledger.updateOpenRequest(request.id, (current) => ({ progressAnswerCount: current.progressAnswerCount + 1 }));
+
+    await endTurnSilently(engine);
+    const settled = ledger.getNewestOpenRequest(issueKey);
+    assert.equal(settled?.nextWakeAt, undefined, 'no follow-up scheduled');
+    assert.equal(settled?.silentTurnCount, 0);
+    assert.equal(settled?.lastTurnActivityAt, nowMs);
+
+    nowMs += backstopMs * 3;
+    await engine.sweepUnwatchedRequests();
+    assert.deepEqual(wakeUps, [], 'neither a follow-up nor the backstop while the watch holds it');
+    assert.deepEqual(alerts, []);
+
+    // The watch is gone (cancelled, ended): the normal rules take the request back — the backstop, counted from the last activity.
+    wait = 'none';
+    await engine.sweepUnwatchedRequests();
+    assert.deepEqual(wakeUps, [{ requestId: request.id, reason: 'backstop' }]);
+  });
+
+  it('a turn that ends with no answer while the watch is armed is not silent: no wake, no counter, no alert — turn after turn', async () => {
+    const ledger = await createLedger();
+    const engine = createEngine(ledger, { getScheduleWait: () => 'watching' });
+    const request = await ledger.createRequest(issueKey, handOver);
+    await engine.trackForwardedTurn(issueKey, request.id);
+    for (let turn = 0; turn < 3; turn += 1) {
+      await endTurnSilently(engine);
+      await engine.trackForwardedTurn(issueKey, request.id);
+    }
+    assert.deepEqual(wakeUps, []);
+    assert.deepEqual(alerts, []);
+    assert.equal(ledger.getNewestOpenRequest(issueKey)?.silentTurnCount, 0);
+    assert.equal(ledger.getNewestOpenRequest(issueKey)?.wakeCount, 0);
+  });
+
+  it('the same silent turn without a watch is woken as before', async () => {
+    const ledger = await createLedger();
+    const engine = createEngine(ledger, { getScheduleWait: () => 'none' });
+    const request = await ledger.createRequest(issueKey, handOver);
+    await engine.trackForwardedTurn(issueKey, request.id);
+    await endTurnSilently(engine);
+    assert.deepEqual(wakeUps, [{ requestId: request.id, reason: 'silentTurn' }]);
+  });
+
+  it('a scheduled run\'s turn that ends without an answer stays quiet (a woken agent with nothing to report); an ordinary one does not', async () => {
+    const ledger = await createLedger();
+    const engine = createEngine(ledger);
+    const request = await ledger.createRequest(issueKey, handOver);
+    await engine.trackForwardedTurn(issueKey, request.id, { isRequestPrompt: false, isScheduledRun: true });
+    await endTurnSilently(engine);
+    await engine.trackForwardedTurn(issueKey, request.id, { isRequestPrompt: false, isScheduledRun: true });
+    await endTurnSilently(engine);
+    assert.deepEqual(wakeUps, [], 'two scheduled turns with nothing to report: no wake, no alert');
+    assert.deepEqual(alerts, []);
+    assert.equal(ledger.getNewestOpenRequest(issueKey)?.silentTurnCount, 0);
+
+    await engine.trackForwardedTurn(issueKey, request.id);
+    await endTurnSilently(engine);
+    assert.deepEqual(wakeUps, [{ requestId: request.id, reason: 'silentTurn' }], 'a turn of any other kind is judged as before');
+  });
+
+  it('a failing check counts only at a turn\'s end: the agent that handled the wake is not silent, a wake nobody handled falls to the backstop', async () => {
+    const ledger = await createLedger();
+    const engine = createEngine(ledger, { getScheduleWait: () => 'armed' });
+    const request = await ledger.createRequest(issueKey, handOver);
+    await engine.trackForwardedTurn(issueKey, request.id, { isRequestPrompt: false, isScheduledRun: true });
+    await endTurnSilently(engine);
+    assert.deepEqual(wakeUps, [], 'the turn that handled the wake: not silent');
+
+    nowMs += backstopMs - 1;
+    await engine.sweepUnwatchedRequests();
+    assert.deepEqual(wakeUps, []);
+    nowMs += 1;
+    await engine.sweepUnwatchedRequests();
+    assert.deepEqual(wakeUps, [{ requestId: request.id, reason: 'backstop' }], 'the check nobody handled does not hold the request forever');
+  });
+
+  it('a restart wake skips a request a watch holds and still wakes the others — the port is asked about each request', async () => {
+    const ledger = await createLedger();
+    const watched = await ledger.createRequest(issueKey, { ...handOver, attributes: { ...handOver.attributes, requester: 'ann' } });
+    const unwatched = await ledger.createRequest(issueKey, { ...handOver, attributes: { ...handOver.attributes, requester: 'bob' } });
+    const asked: string[] = [];
+    const engine = createEngine(ledger, {
+      getScheduleWait: (_key, request) => {
+        asked.push(request.id);
+        return request.id === watched.id ? 'watching' : 'none';
+      },
+    });
+    probe = goneProbe;
+    await engine.wakeAfterRestart(issueKey);
+    assert.deepEqual(wakeUps.map((wakeUp) => wakeUp.requestId), [unwatched.id]);
+    assert.ok(asked.includes(watched.id));
+    assert.equal(ledger.listOpenRequestsOf(issueKey).find((request) => request.id === watched.id)?.wakeCount, 0, 'no wake counted for the watched one');
+  });
+
+  it('a conversation whose only request is watched is not woken at a restart at all, and the follow-up of a progress note stays held too', async () => {
+    const ledger = await createLedger();
+    const engine = createEngine(ledger, { getScheduleWait: () => 'watching' });
+    const request = await ledger.createRequest(issueKey, handOver);
+    probe = goneProbe;
+    await engine.wakeAfterRestart(issueKey);
+    assert.deepEqual(wakeUps, []);
+    assert.deepEqual(preparedFor, [], 'no session was even prepared');
+
+    await ledger.updateOpenRequest(request.id, { nextWakeAt: nowMs + 1 });
+    nowMs += progressFollowUpDelayMs;
+    probe = { isActive: true, isBusy: false, hasUnconsumedInput: false, isTurnEndBlocked: false };
+    await engine.sweepUnwatchedRequests();
+    assert.deepEqual(wakeUps, []);
+  });
+});
+

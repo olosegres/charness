@@ -126,6 +126,13 @@ export interface ScheduleRecord {
   statusMessageId?: number;
   /** Epoch ms of the last status line posted; the next one is due an interval after it (after `createdAt` before the first). */
   lastStatusAt?: number;
+  /**
+   * The request that was open in the conversation when `schedule_create` armed this job (the newest, when several were).
+   * It is what the job's fires ride in a tracker conversation (`trackerRun.ts`) and what makes the request «wait for its
+   * schedule» in the wake-up rules (`requests/scheduleWait.ts`). Absent when no request was open — a topic in the stream
+   * view never has one — and on every job created before this field existed (no migration).
+   */
+  requestId?: string;
 }
 
 /**
