@@ -266,15 +266,15 @@ export class RequestWakeUpEngine {
   /**
    * @description A request's message (or a reminder for it) was just forwarded to
    * the conversation's session: watch the turn it starts. A watch already there
-   * for the SAME request is MERGED with it (the forward joined a busy period): a person's
-   * words stay a person's, the progress count keeps its earlier start, and the turn is the
-   * alarm's only if both were — except for the bot's own «continue» (`isContinuation`: the nudge after an
-   * API error or a limit wait), which keeps the turn's kind (a person's turn stays a person's, the
-   * alarm's stays the alarm's) but starts the progress count afresh: a note sent before the error is
-   * not this turn's. Another requester's request in the conversation keeps its own watch. A post
-   * retry still pending is moot from now on (R28): the session has the request — unless the forward is a
-   * fire riding the request, which carries none of it. A forward that carries a person's words (a request
-   * prompt, an issue update) marks the request as owing an answer (`isPersonInputUnanswered`, persisted).
+   * for the SAME request is MERGED with it (the forward joined a busy period): the progress count keeps
+   * its earlier start, and the turn is the alarm's only if both were — except for the bot's own «continue»
+   * (`isContinuation`: the nudge after an API error or a limit wait), which keeps the alarm's kind but
+   * starts the progress count afresh: a note sent before the error is not this turn's. Another requester's
+   * request in the conversation keeps its own watch. A post retry still pending is moot from now on
+   * (R28): the session has the request — unless the forward is a fire riding the request, which carries
+   * none of it. A forward that carries a person's words (a request prompt, an issue update) marks the
+   * request as owing an answer (`isPersonInputUnanswered`, persisted): that, not the kind of the turn, is
+   * what stops the turn's end from reading as a quiet one (`decideTurnEnd`).
    */
   async trackForwardedTurn(
     key: SessionKey,
@@ -301,7 +301,6 @@ export class RequestWakeUpEngine {
       hasSeenOutput: false,
       isRequestPrompt: options.isRequestPrompt || previous?.isRequestPrompt === true,
       isScheduledRun,
-      isPersonInput: options.isPersonInput === true || previous?.isPersonInput === true,
     });
     const isMoot = request.nextPostRetryAt !== undefined && !isFireForward;
     const isPersonWordsOwed = carriesPersonWords && !isFireForward && !isAlarmRequest && request.isPersonInputUnanswered !== true;
@@ -384,9 +383,10 @@ export class RequestWakeUpEngine {
    * @description The bot itself forwarded a "continue" nudge into the session (an
    * API-error retry fired, or a usage-limit wait ended): watch the turn it starts, so the idle the
    * error left behind is never read as its end. The nudge carries no person's words and is no alarm,
-   * so it KEEPS the kind of the turn it continues (a person's stays a person's, a fire's stays the
-   * alarm's) but its progress count starts afresh: a progress note sent before the error does not make
-   * a silent continuation a «progress» turn.
+   * so it KEEPS the alarm's kind of the turn it continues but its progress count starts afresh: a progress
+   * note sent before the error does not make a silent continuation a «progress» turn. What the turn owes a
+   * person is not its kind but the persisted request (`checkIsAnswerOwed`): words answered before the error
+   * are owed no more, words still unanswered stay owed.
    * `isCountersReset` (the end of a limit wait) starts every open request's
    * wake-up bookkeeping from zero — the wait was not the agent's silence — and
    * lifts a limit stop: the work continues, so does the waking. A request the
@@ -472,7 +472,6 @@ export class RequestWakeUpEngine {
       request,
       decideTurnEnd(request, turn.progressCountAtTurnStart, this.now(), {
         isScheduledRun: turn.isScheduledRun === true,
-        isPersonTurn: !turn.isScheduledRun && (turn.isRequestPrompt || turn.isPersonInput === true),
         scheduleWait: this.getScheduleWait(turn.key, request),
         progressFollowUpMs: this.deps.progressFollowUpMs,
       }),

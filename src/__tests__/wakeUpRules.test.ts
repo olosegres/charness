@@ -289,30 +289,42 @@ describe('a request that waits for its schedule (scheduleWait) and a scheduled r
     assert.equal(decideTurnEnd(request, 0, nowMs, { isScheduledRun: true, scheduleWait: 'watching' }).kind, 'quiet');
   });
 
-  it('turn end: a turn that carried a person\'s words and ended with no answer is SILENT whatever is armed — a watch never leaves a requester unanswered', () => {
-    for (const scheduleWait of ['armed', 'watching'] as const) {
-      const first = decideTurnEnd(createRequest(), 0, nowMs, { scheduleWait, isPersonTurn: true });
-      assert.equal(first.kind, 'wake', scheduleWait);
-      assert.equal(first.kind === 'wake' ? first.reason : null, 'silentTurn');
-      assert.equal(decideTurnEnd(createRequest({ silentTurnCount: 1 }), 0, nowMs, { scheduleWait, isPersonTurn: true }).kind, 'alert', scheduleWait);
+  it('turn end: a turn that ends with no answer while the request owes one is SILENT whatever is armed — a watch never leaves a requester unanswered', () => {
+    const owed: Array<[string, OpenRequestState]> = [
+      ['a person\'s request never answered', createRequest()],
+      ['a person\'s words not answered yet', answeredRequest({ isPersonInputUnanswered: true })],
+    ];
+    for (const [label, request] of owed) {
+      for (const scheduleWait of ['armed', 'watching'] as const) {
+        const first = decideTurnEnd(request, request.progressAnswerCount, nowMs, { scheduleWait });
+        assert.equal(first.kind, 'wake', `${label} ${scheduleWait}`);
+        assert.equal(first.kind === 'wake' ? first.reason : null, 'silentTurn');
+        assert.equal(decideTurnEnd({ ...request, silentTurnCount: 1 }, request.progressAnswerCount, nowMs, { scheduleWait }).kind, 'alert', `${label} ${scheduleWait}`);
+      }
     }
   });
 
-  it('turn end: the reminder\'s turn that follows a silent person turn keeps counting under a watch — it is not a person\'s turn, yet the pending silent turn is owed an answer', () => {
+  it('turn end: nothing owed — the person\'s words were answered before the turn (a continuation after an API error, a reminder\'s turn) — a watch makes a silent end quiet, none does not', () => {
+    // The kind of the turn is not an input any more: the persisted request alone says whether anything is owed.
     for (const scheduleWait of ['armed', 'watching'] as const) {
-      const second = decideTurnEnd(createRequest({ silentTurnCount: 1, wakeCount: 1 }), 0, nowMs, { scheduleWait, isPersonTurn: false });
+      assert.deepEqual(decideTurnEnd(answeredRequest(), 1, nowMs, { scheduleWait }), { kind: 'quiet', update: quietUpdate }, scheduleWait);
+    }
+    const unwatched = decideTurnEnd(answeredRequest(), 1, nowMs, { scheduleWait: 'none' });
+    assert.equal(unwatched.kind === 'wake' ? unwatched.reason : null, 'silentTurn', 'without a watch a silent turn is a silent turn');
+  });
+
+  it('turn end: the reminder\'s turn that follows a silent person turn keeps counting under a watch — the pending silent turn is owed an answer', () => {
+    for (const scheduleWait of ['armed', 'watching'] as const) {
+      const second = decideTurnEnd(createRequest({ silentTurnCount: 1, wakeCount: 1 }), 0, nowMs, { scheduleWait });
       assert.equal(second.kind, 'alert', scheduleWait);
       assert.equal(second.kind === 'alert' ? second.reason : null, 'silentTurns');
     }
-    // A scheduled run's own quiet end is the alarm's: it leaves the pending count alone (see the next test).
-    assert.equal(decideTurnEnd(createRequest({ silentTurnCount: 1 }), 0, nowMs, { scheduleWait: 'watching', isScheduledRun: true }).kind, 'quiet');
   });
 
-  it('turn end: a person\'s turn that sent a progress note under a watch still schedules no follow-up (the watch holds the request); a scheduled run is never a person\'s turn', () => {
+  it('turn end: a person\'s turn that sent a progress note under a watch still schedules no follow-up (the watch holds the request)', () => {
     const request = createRequest({ progressAnswerCount: 1 });
-    assert.equal(decideTurnEnd(request, 0, nowMs, { scheduleWait: 'watching', isPersonTurn: true }).kind, 'quiet');
-    assert.equal(decideTurnEnd(request, 0, nowMs, { scheduleWait: 'none', isPersonTurn: true }).kind, 'followUpLater');
-    assert.equal(decideTurnEnd(answeredRequest(), 1, nowMs, { scheduleWait: 'watching', isPersonTurn: false }).kind, 'quiet', 'the alarm\'s own turn');
+    assert.equal(decideTurnEnd(request, 0, nowMs, { scheduleWait: 'watching' }).kind, 'quiet');
+    assert.equal(decideTurnEnd(request, 0, nowMs, { scheduleWait: 'none' }).kind, 'followUpLater');
   });
 
   it('turn end: a fire\'s quiet end leaves the follow-up of a request that waits for nothing — an unrelated alarm must not wipe it; a schedule that holds the request still clears it', () => {
@@ -405,7 +417,7 @@ describe('a request that waits for its schedule (scheduleWait) and a scheduled r
 
   it('turn end: an owed answer (a person\'s words unanswered, read from the persisted request) makes a turn that carries none silent under a watch too — the lost-and-rebuilt watch', () => {
     for (const scheduleWait of ['armed', 'watching'] as const) {
-      const decision = decideTurnEnd(answeredRequest({ isPersonInputUnanswered: true }), 1, nowMs, { scheduleWait, isPersonTurn: false });
+      const decision = decideTurnEnd(answeredRequest({ isPersonInputUnanswered: true }), 1, nowMs, { scheduleWait });
       assert.equal(decision.kind === 'wake' ? decision.reason : null, 'silentTurn', scheduleWait);
     }
     // A fire's own turn is still the alarm's: quiet, the flag untouched (the backstop chases the words).

@@ -1570,7 +1570,7 @@ describe('a request waits for its schedule', () => {
     assert.equal(ledger.getNewestOpenRequest(issueKey)?.silentTurnCount, 0);
   });
 
-  it('a bot «continue» into a person\'s turn keeps it a person\'s, a request prompt\'s too: left unanswered it is still a silent turn', async () => {
+  it('a bot «continue» into a person\'s turn whose words are still unanswered: left unanswered it is still a silent turn — a request prompt and an issue update alike', async () => {
     for (const person of [{ isRequestPrompt: true }, { isRequestPrompt: false, isPersonInput: true }]) {
       wakeUps = [];
       const ledger = await createLedger();
@@ -1596,6 +1596,20 @@ describe('a request waits for its schedule', () => {
     await endTurnSilently(engine);
     assert.deepEqual(wakeUps, [{ requestId: request.id, reason: 'silentTurn' }], 'the note was before the error: this turn said nothing');
     assert.equal(ledger.getNewestOpenRequest(issueKey)?.nextWakeAt, undefined, 'no follow-up');
+  });
+
+  it('a person\'s words answered with a progress note before an API error are owed no more: under a passing watch the continuation may end silently — no reminder, no give-up', async () => {
+    const ledger = await createLedger();
+    const engine = createEngine(ledger, { getScheduleWait: () => 'watching' });
+    const request = await ledger.createRequest(issueKey, handOver);
+    await engine.trackForwardedTurn(issueKey, request.id, { isRequestPrompt: true });
+    // The note: what `answer_request` does with a progress answer — the count rises and the person's words are answered.
+    await ledger.updateOpenRequest(request.id, (current) => ({ progressAnswerCount: current.progressAnswerCount + 1, isPersonInputUnanswered: undefined }));
+    await engine.trackContinuationTurn(issueKey, { isCountersReset: false });
+    await endTurnSilently(engine);
+    assert.deepEqual(wakeUps, [], 'the agent said «waiting for the worker» and ended the turn: nothing is owed');
+    assert.deepEqual(alerts, []);
+    assert.equal(ledger.getNewestOpenRequest(issueKey)?.silentTurnCount, 0);
   });
 
   it('a continuation that sends a progress note of its own is a progress turn: the follow-up (no watch) or quiet (a watch) as for any', async () => {

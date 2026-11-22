@@ -137,11 +137,6 @@ function getWakeOrCapDecision(
  */
 export interface TurnEndContext {
   isScheduledRun?: boolean;
-  /**
-   * The turn carried a person's words — the request's own prompt, or an issue update (a requester's comment): ending it with no
-   * answer is silence whatever is armed. The watch is for the agent's alarms; it is no reason to leave a requester unanswered.
-   */
-  isPersonTurn?: boolean;
   scheduleWait?: RequestScheduleWait;
   /** The follow-up delay after a progress note, in place of {@link progressFollowUpDelayMs} (a test instance's shorter one). */
   progressFollowUpMs?: number;
@@ -153,9 +148,10 @@ export interface TurnEndContext {
  * turn began, so an increase means this turn sent a progress note (a `question`
  * or `final` would have closed the request — there is nothing to decide then).
  * A progress note schedules the follow-up unless the request waits for its schedule (then nothing is scheduled). A turn
- * without an answer is not silent when the turn was a scheduled run's, or when the request waits for its schedule, the turn did
- * not carry a person's words (`isPersonTurn`) and no silent turn is pending (`silentTurnCount`): a requester's message is never
- * left unanswered because a watch is armed — the reminder that follows its silent turn keeps counting towards the give-up.
+ * without an answer is not silent when the turn was a scheduled run's, or when the request waits for its schedule, and in both
+ * cases only while the request owes nobody an answer (`checkIsAnswerOwed`, read from the persisted request — never from the kind of
+ * the turn, so a lost and rebuilt watch decides alike): a requester's message is never left unanswered because a watch is armed,
+ * and the reminder that follows its silent turn keeps counting towards the give-up.
  * A request a scheduler fire opened (`origin.kind` `scheduledRun`) that its agent leaves with no answer at all settles at the quiet
  * end (`isRequestSettled`): it is the alarm's own request, and nobody is owed its answer. A fire's quiet end alone leaves a pending
  * silent-turn count as it is.
@@ -175,11 +171,11 @@ export function decideTurnEnd(
       update: { silentTurnCount: 0, nextWakeAt: nowMs + (context.progressFollowUpMs ?? progressFollowUpDelayMs), lastTurnActivityAt: nowMs },
     };
   }
-  // A request that owes a person an answer (a silent turn pending, a person's words not answered yet): the reminder's turn that follows
-  // is not a person's turn, yet it must count, or a watch that passes would wipe the count and the rules would never give up on a
-  // requester left unanswered.
-  // The owed answer is read from the persisted request, so a turn whose watch was lost and rebuilt still counts as a person's.
-  const isQuietWhileWaiting = isWaitingForSchedule && context.isPersonTurn !== true && !checkIsAnswerOwed(request);
+  // A request that owes a person an answer (a silent turn pending, a person's words not answered yet, a person's request never
+  // answered): its turn ends silent whatever the turn's kind — a person's own, the reminder's that follows, a continuation of either —
+  // or a watch that passes would wipe the count and the rules would never give up on a requester left unanswered. The answer is read
+  // from the persisted request, so the same turn decides alike whether or not the engine's watch survived a restart.
+  const isQuietWhileWaiting = isWaitingForSchedule && !checkIsAnswerOwed(request);
   // The follow-up is cleared only where a schedule holds the request. A fire's quiet end alone leaves it: a fire may ride a request
   // that waits for nothing (its own job's request is gone), and an unrelated alarm must not wipe that request's due follow-up.
   const isHeldBySchedule = isProgressSent || isQuietWhileWaiting;
@@ -273,8 +269,6 @@ export interface WatchedTurn {
   isRequestPrompt: boolean;
   /** A scheduler fire started the turn: ending it without an answer is not silence (a woken agent with nothing to report). */
   isScheduledRun?: boolean;
-  /** The turn carries a person's words that are not the request's own prompt (an issue update): see {@link TurnEndContext.isPersonTurn}. */
-  isPersonInput?: boolean;
 }
 
 /**
