@@ -345,6 +345,8 @@ restarts — every hot reload — never touch it. Per-thread host dir
   with no turn running resets it. A turn that was in flight at an adopt has an UNKNOWN cursor (`isAnswerCursorUnknown`:
   its old process emitted what it streamed, the replay starts at the saved offset), so the `result` backstop for text
   the stream under-delivered does not run for it - the whole final message would read as the gap and go out twice.
+  The `turnEnded` event carries `hasInputOnItsWay`, read before the turn end is applied (an error `result` forgets the queue),
+  which the bot marks the next turn's boundary from.
   `flushPendingOutput` (optional
   on `AgentAdapter`, also OpenCode's) does the same mid-turn on demand: it reads the tail
   (the poll lags the process; not from inside the handling of a chunk, as a question event asks,

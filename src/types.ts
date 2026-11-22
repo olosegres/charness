@@ -120,6 +120,18 @@ export interface JsonStreamTailOffset {
 }
 
 /**
+ * @description The payload of the `turnEnded` event (json-stream): what the adapter knows at the moment a turn's terminal `result` was
+ * processed and the bot cannot read afterwards.
+ */
+export interface TurnEndedEvent {
+  /**
+   * Input the bot wrote is still on its way to the CLI: the next turn's. Read BEFORE the turn end is applied - an error `result`
+   * forgets the queue, so a reader after the event would see nothing on its way after a turn that failed.
+   */
+  hasInputOnItsWay: boolean;
+}
+
+/**
  * @description Adapter-side callback that persists the {@link JsonStreamTailOffset}
  * as the json-stream tail consumes stdout lines. Same DI seam and inert-until-
  * registered semantics as {@link SeenWatermarkWriter}; wired in `bot.ts` to
@@ -778,7 +790,7 @@ export type SurfaceOpenQuestionOutcome = 'emitted' | 'none' | 'readFailed';
  * - 'started'  (key: SessionKey)                  — session is up and ready
  * - 'stopped'  (key: SessionKey)                  — `stopSession` completed (explicit teardown)
  * - 'suspended' (key: SessionKey)                 — `suspendSession` completed: the process is gone, the session stays resumable (the idle stop; lifecycle plan L3)
- * - 'turnEnded' (key: SessionKey)                 — a turn's terminal `result` was processed (json-stream); the per-turn lifecycle stops the process on it (L5)
+ * - 'turnEnded' (key: SessionKey, event: TurnEndedEvent) — a turn's terminal `result` was processed (json-stream); the per-turn lifecycle stops the process on it (L5); the event says whether input is still on its way (the next turn's)
  * - 'contextCompacted' (key: SessionKey, trigger: string | null) — a compaction COMPLETED (json-stream): one the bot issued, or the CLI's own overflow compaction; the conversation's context was replaced by a summary (Jira prompt context C6)
  * - 'conversationLost' (key: SessionKey)          — a live re-spawn (an account, model or effort change; json-stream) found the conversation's transcript gone and began a NEW conversation under the same id; the bot tells the topic and resets what the conversation was told
  * - 'closed'   (key: SessionKey)                  — session died on its own (process exit, SSE giveup, server crash)

@@ -1,4 +1,4 @@
-import type { AgentAdapter, AgentApiErrorClass, DisplayPrefsReader, JsonStreamTailWriter, SeenWatermarkWriter, SubagentStatusEvent, ThinkingEvent, ThreadLocaleReader, ToolResultEvent } from '../types';
+import type { AgentAdapter, AgentApiErrorClass, DisplayPrefsReader, JsonStreamTailWriter, SeenWatermarkWriter, SubagentStatusEvent, ThinkingEvent, ThreadLocaleReader, ToolResultEvent, TurnEndedEvent } from '../types';
 import type { OutboundHints } from '../platform/outbound';
 import type { SessionKey } from '../sessionKey';
 import { keyToString } from '../sessionKey';
@@ -83,6 +83,7 @@ type SessionKeyHandler = (key: SessionKey) => void;
 type ErrorHandler = (key: SessionKey, error: Error) => void;
 /** `trigger` — the CLI's own word for what started the compaction (`manual`, `auto`), when it gave one. */
 type ContextCompactedHandler = (key: SessionKey, trigger: string | null) => void;
+type TurnEndedHandler = (key: SessionKey, event: TurnEndedEvent) => void;
 
 let onOutput: OutputHandler | null = null;
 let onStatus: StatusHandler | null = null;
@@ -97,7 +98,7 @@ let onClosed: SessionKeyHandler | null = null;
 let onStarted: SessionKeyHandler | null = null;
 let onStopped: SessionKeyHandler | null = null;
 let onSuspended: SessionKeyHandler | null = null;
-let onTurnEnded: SessionKeyHandler | null = null;
+let onTurnEnded: TurnEndedHandler | null = null;
 let onContextCompacted: ContextCompactedHandler | null = null;
 let onConversationLost: SessionKeyHandler | null = null;
 let onError: ErrorHandler | null = null;
@@ -310,7 +311,7 @@ export function registerAdapterEventHandlers(handlers: {
   onStarted?: SessionKeyHandler;
   onStopped?: SessionKeyHandler;
   onSuspended?: SessionKeyHandler;
-  onTurnEnded?: SessionKeyHandler;
+  onTurnEnded?: TurnEndedHandler;
   onContextCompacted?: ContextCompactedHandler;
   onConversationLost?: SessionKeyHandler;
   onError?: ErrorHandler;

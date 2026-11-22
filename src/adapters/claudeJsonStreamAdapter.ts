@@ -19,6 +19,7 @@ import type {
   ResumeSessionOptions,
   SeenWatermark,
   SeenWatermarkWriter,
+  TurnEndedEvent,
 } from '../types';
 import type { OutboundHints } from '../platform/outbound';
 import type { SessionKey } from '../sessionKey';
@@ -2187,11 +2188,13 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
       });
       session.startCostUsd = null;
     }
+    // Read BEFORE the end is applied: an error `result` forgets the queue, and what was queued behind the turn is still the next turn's.
+    const hasInputOnItsWay = getInputsAfterTurnEnd(session.unconsumedInputs, Date.now()).length > 0;
     this.applyTurnEnd(session, action);
     // The turn's text has been emitted (or dropped) by now: the next turn starts from an empty cursor, whenever its prompt was written.
     this.resetAnswerCursor(session);
     // After the handlers above: the bot's per-turn stop (L5) reads the session's state as settled here.
-    this.emit('turnEnded', session.key);
+    this.emit('turnEnded', session.key, { hasInputOnItsWay } satisfies TurnEndedEvent);
     this.applyPendingConfigDirSwitch(session);
   }
 
