@@ -12,7 +12,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'fs';
 import path from 'path';
-import { killDetachedRuns, startRunnerStandIn, writeFile } from './remoteRunRunnerScriptKit';
+import { killDetachedRuns, startRunnerStandIn, stopDetachedRuns, writeFile } from './remoteRunRunnerScriptKit';
 import { slug, otherSlug, root, workDir, pueueDir, Run, runScript, runSourced, probeAndSettle, jobFolder, createJobFolder, submit, waitUntil, isStashed, readTaskId, readCalls, readTaskState, endJob, markRunning, holdPueueStatus, releasePueueStatus, useStashHarness } from './remoteRunRunnerScriptStashKit';
 
 useStashHarness();
@@ -267,6 +267,18 @@ describe('the probe\'s answer never waits for the scheduling safety net', () => 
     releasePueueStatus();
     await waitUntil(() => fs.existsSync(path.join(jobFolder('box1-aaaaaa'), 'exit')), 'the net to end the lost job');
     assert.equal(fs.readFileSync(path.join(jobFolder('box1-aaaaaa'), 'exit'), 'utf8').trim(), '137');
+  });
+
+  it('the net a probe starts runs at its caller\'s priority - a runner busy with jobs must not starve what a stashed job waits for - while the disk walk a view of the runners may start stays at nice 19', () => {
+    submit('box1-aaaaaa');
+    // A `nice` that says what it was asked for and then runs the command: `nice -n <level> bash <script> <subcommand> <work>`.
+    const niceLog = path.join(root, 'nice.log');
+    fs.writeFileSync(path.join(root, 'bin', 'nice'), `#!/bin/bash\nprintf '%s %s\\n' "$5" "$2" >> '${niceLog}'\nshift 2\nexec "$@"\n`, { mode: 0o755 });
+    // `prune` makes the probe a view of the runners: the copy has no size figure, so it starts the measuring walk too.
+    const probed = runScript(['probe', workDir, 'prune'], { PATH: `${path.join(root, 'bin')}:${process.env.PATH}` });
+    assert.equal(probed.status, 0, probed.stderr);
+    stopDetachedRuns(root);
+    assert.deepEqual(fs.readFileSync(niceLog, 'utf8').split('\n').filter((line) => line !== '').sort(), ['measure-copies 19', 'settle-queue 0']);
   });
 
   it('`settle-queue` is the net itself, run by hand like the probe used to: it ends a lost job and enqueues a stashed one', () => {

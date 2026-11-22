@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+**On a runner whose CPUs are busy, a job stuck behind one that was killed is no longer left waiting for the builds to leave the CPU.**
+Before, the check that lets a waiting job go after its predecessor was killed without saying so (`probe` starts it in the background) ran at the lowest CPU priority, so a runner kept busy by builds gave it no time — the waiting job stayed stashed for as long as the builds ran (over 100 s in a test with the CPUs held). It now runs at the priority of the call that started it, like the call itself; the heavy disk walks stay at the lowest.
+
 **Typing or saying «claude», «клод», «opencode» or «запусти клода» no longer starts an agent — only the command does: `/claude`, `/opencode`, or the buttons on the topic's welcome.**
 Before, a plain message that was just an agent's name (or the name followed by a prompt: `claude fix the bug`), typed or spoken in a voice note, started that agent in a bound topic — and an ordinary sentence that began with one of those words could start one by accident. Now such a message is an ordinary message: an agent that runs in the topic reads it as its input, a conversation that sleeps is woken by it like by any other message, and a topic with no agent answers with the usual hint to run `/claude` or `/opencode`. The first message of an admin in a topic that a non-admin made still binds it to the matching folder with the one welcome, but starts nothing. `/claude` and `/opencode` start the agent exactly as before, including the question before a switch to the other backend.
 

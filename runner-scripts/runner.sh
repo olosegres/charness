@@ -1482,14 +1482,17 @@ get_script_path() {
   printf '%s\n' "$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
 }
 
-# Run subcommand $2 of this script on work dir $1 detached (output and input away, so an ssh call that started it returns), unless a run of it is still going.
+# Run subcommand $2 of this script on work dir $1 detached (output and input away, so an ssh call that started it returns), unless a run of it is still going. The walks of the disk (measure, prune, sweep, simulators) run
+# `nice -n 19`: they are heavy and give way to the jobs. `settle-queue` does not: it is a few reads and Pueue questions that a stashed job waits for, and at 19 the jobs it serves starve it for as long as they want the CPU
+# (measured on 2 cores held by 8 busy loops: the probe's net had not enqueued the stashed job after 69 s and 105 s in two runs; with the priority of its caller the same test passed in 19 s).
 start_detached_run() {
   local work_dir=$1 subcommand=$2
-  local pid_file="$work_dir/tmp/$subcommand.pid" running_pid
+  local pid_file="$work_dir/tmp/$subcommand.pid" running_pid niceness=19
   mkdir -p "$work_dir/tmp" 2> /dev/null
   running_pid=$(read_file "$pid_file")
   check_runner_pid_alive "$running_pid" && return 0
-  ( nice -n 19 bash "$(get_script_path)" "$subcommand" "$work_dir" > /dev/null 2>&1 < /dev/null & echo "$!" > "$pid_file" )
+  [ "$subcommand" = settle-queue ] && niceness=0
+  ( nice -n "$niceness" bash "$(get_script_path)" "$subcommand" "$work_dir" > /dev/null 2>&1 < /dev/null & echo "$!" > "$pid_file" )
 }
 
 # The scheduling safety net, run detached by a probe (`start_detached_run`): see `enqueue_idle_stashed`.
