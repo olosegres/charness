@@ -157,10 +157,11 @@ describe('lostWork', () => {
   it('a note for a request a passing watch holds tells the requester only if they must know — the fire header\'s wording — and still bakes the reply language', () => {
     const note = buildLostWorkNote(record, 'English', { isTellingOptional: true });
     assert.ok(note.includes('That work died with the process: no notification will ever arrive for it.'), note);
-    assert.ok(note.includes('tell the requester about it only if they must know'), note);
-    assert.ok(note.includes('otherwise carry on without a comment'), note);
+    assert.ok(note.includes('nothing the requester wrote is waiting for your answer, so carry on without a comment'), note);
+    assert.ok(!note.includes('nobody is waiting'), 'the requester of a hand-over IS waiting for the result: only nothing they wrote is unanswered');
+    // The reply language belongs to what the agent may tell the requester, not to «carry on».
+    assert.ok(note.endsWith('tell the requester about it, IN English, only if they must know (it changes what they are waiting for).'), note);
     assert.ok(!note.includes('tell the user in one or two lines'), 'not the plain «tell the user» line');
-    assert.ok(note.endsWith('IN English.'), note);
     assert.ok(buildLostWorkNote(record, 'English').includes('tell the user in one or two lines what happened'), 'the default note is unchanged (a topic\'s)');
   });
 

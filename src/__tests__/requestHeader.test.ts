@@ -123,7 +123,8 @@ describe('buildWakeUpReminder — an answer that is optional (a lost-work wake o
   it('words the answer like the fire header: only with what the requester must know — and says why nothing is expected', () => {
     const lines = buildWakeUpReminder({ requestId: 'req_AbCd1234', reason: 'restarted', isAnswerOptional: true }).split('\n');
     assert.equal(lines[0], '[Reminder · request req_AbCd1234 is still open]');
-    assert.match(lines[2], /^Your watch for it is still armed and nobody is waiting on you, so answer it with answer_request \(requestId "req_AbCd1234"\) only with what the requester must know/);
+    // «Nobody is waiting» would be false for a hand-over whose requester waits for the result: what is meant is that nothing they wrote is unanswered.
+    assert.match(lines[2], /^Your watch for it is still armed and nothing the requester wrote is waiting for your answer, so answer it with answer_request \(requestId "req_AbCd1234"\) only with what the requester must know/);
     assert.match(lines[2], /otherwise continue without a comment\.$/);
     assert.ok(!lines[2].includes('kind "final" if the work is done'), 'not the plain «answer it» line');
     assert.equal(lines[3], answerStyleInstruction);

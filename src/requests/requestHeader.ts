@@ -132,7 +132,7 @@ export function getWakeUpMessage(request: OpenRequestState, reason: RequestWakeU
  */
 export function buildWakeUpReminder(options: { requestId: string; reason: RequestWakeUpReason; isAnswerOptional?: boolean }): string {
   const answerLine = options.isAnswerOptional === true
-    ? `Your watch for it is still armed and nobody is waiting on you, so answer it with answer_request (requestId "${options.requestId}") ` +
+    ? `Your watch for it is still armed and nothing the requester wrote is waiting for your answer, so answer it with answer_request (requestId "${options.requestId}") ` +
       'only with what the requester must know — a short "progress" note if what was lost changes what they wait for, "final" if the work is ' +
       'done — otherwise continue without a comment.'
     : `Answer it with answer_request (requestId "${options.requestId}"): kind "final" if the work is done, ` +

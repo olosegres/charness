@@ -181,8 +181,9 @@ export function buildLostWorkNote(record: LostWorkRecord, replyLanguage: string,
       ? [`The agent this conversation moved to meanwhile was told first about ${describeLostWorkForAgent(restartableTold)}, and may have started some of it again: look before you start that twice.`]
       : []),
     options.isTellingOptional === true
-      ? 'Check its state yourself (output files, processes, the repository), start again what is still needed — prefer the bot\'s schedule_* tools for anything that must survive a restart — ' +
-        `and tell the requester about it only if they must know (it changes what they are waiting for): your watch is still armed and nobody is waiting on you, so otherwise carry on without a comment, IN ${replyLanguage}.`
+      ? 'Check its state yourself (output files, processes, the repository), start again what is still needed — prefer the bot\'s schedule_* tools for anything that must survive a restart. ' +
+        'Your watch is still armed and nothing the requester wrote is waiting for your answer, so carry on without a comment, ' +
+        `and tell the requester about it, IN ${replyLanguage}, only if they must know (it changes what they are waiting for).`
       : `Check its state yourself (output files, processes, the repository), start again what is still needed — prefer the bot's schedule_* tools for anything that must survive a restart — and tell the user in one or two lines what happened, IN ${replyLanguage}.`,
   ].join('\n');
 }
