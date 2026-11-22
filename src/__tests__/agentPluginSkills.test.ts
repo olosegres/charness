@@ -192,7 +192,7 @@ describe('agent-plugin', () => {
     const claude = readSkill('charness-delegate-claude');
     const defaultsAt = claude.indexOf('### Role defaults — only when no general delegate skill is listed');
     assert.ok(defaultsAt > 0, 'the heading');
-    for (const roleDefault of ['builder (code, tests, debugging, live runs): `--model opus --effort medium`', 'reviewer: `--model opus --effort xhigh`', 'a builder at `--model opus --effort xhigh`', 'Never Fable for a worker']) {
+    for (const roleDefault of ['builder (code, tests, debugging, live runs): `--model opus --effort medium`', 'investigator (a cause still unclear after a builder failed on it twice): `--model opus --effort xhigh`', 'reviewer: `--model opus --effort xhigh`', '`--model opus --effort high`', 'planner and the research feeding a plan: `--model opus --effort xhigh`', 'user data): a builder at `--model opus --effort xhigh`', 'This beats the builder default above.', 'Never Fable for a worker']) {
       assert.ok(claude.indexOf(roleDefault) > defaultsAt, `${roleDefault} sits under that heading`);
     }
     assert.ok(claude.indexOf('The first `system`/`init` event must name the requested model') < defaultsAt, 'the model check is not a role default');

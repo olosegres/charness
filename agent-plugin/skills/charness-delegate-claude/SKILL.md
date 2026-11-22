@@ -28,8 +28,8 @@ Unless the user names others:
   `--model opus --effort high`;
 - planner and the research feeding a plan: `--model opus --effort xhigh`.
 - Work on data persistence (storage, DB schema and migrations, sync, merge and conflict resolution, backups —
-  anything that can lose or corrupt user data): every role on Opus, a builder at `--model opus --effort xhigh`
-  (`max` for a deep investigation). This beats the role defaults above.
+  anything that can lose or corrupt user data): a builder at `--model opus --effort xhigh` (`max` for a deep
+  investigation). This beats the builder default above.
 - Never Fable for a worker: it drains the shared session and weekly limits fastest.
 
 ## Launch
