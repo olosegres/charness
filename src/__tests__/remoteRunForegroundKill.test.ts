@@ -63,18 +63,32 @@ async function interruptRun(killResult: SshRunResult): Promise<{ exitCode: numbe
   return { exitCode, said: said.join(''), killCalls };
 }
 
-/** The lease and the call of the heartbeat test: a beat every 100 ms, a `kill` call that takes six beats' worth, far longer than one lease would allow without them. */
+/** The lease and the call of the heartbeat tests: a beat every 100 ms, a `kill` call that takes six beats' worth, far longer than one lease would allow without them. */
 const slowKillLeaseMs = 900;
 const slowKillCallMs = 600;
 const minBeatsDuringSlowKill = 4;
+/** How long after a refused call the test looks for beats that should have stopped: several beat intervals. */
+const afterRefusedKillMs = 400;
 
-/** How many heartbeat bytes reached the lease session while a `kill` call that takes `slowKillCallMs` was in flight. */
-async function countBeatsDuringSlowKill(): Promise<number> {
-  // `cat` hands every heartbeat byte back on its stdout, where the test counts it; the answer to the `kill` call ends it, like the runner's.
+/** What a slow `kill` call answers at its end: the job was killed, or the runner refused (the lease session is then left running for the test to look at). */
+type SlowKillAnswer = 'killed' | 'refused';
+
+interface SlowKillRun {
+  /** Heartbeat bytes that reached the lease session while the `kill` call was in flight. */
+  beatsDuringKill: number;
+  /** Heartbeat bytes that came after a refused call, within {@link afterRefusedKillMs}. */
+  beatsAfterRefusedKill: number;
+  exitCode: number;
+}
+
+async function runWithSlowKill(answer: SlowKillAnswer): Promise<SlowKillRun> {
+  // `cat` hands every heartbeat byte back on its stdout, where the test counts it; the runner's answer ends it, like the real lease session.
   const child = spawn('cat', [], { stdio: ['pipe', 'pipe', 'pipe'] });
   let beats = 0;
-  child.stdout.on('data', (chunk: Buffer) => { beats += chunk.length; });
+  // `followForeground` sets the encoding, so a chunk is a string of one byte per beat.
+  child.stdout.on('data', (chunk: string) => { beats += Buffer.byteLength(chunk); });
   let beatsDuringKill = -1;
+  let beatsAfterRefusedKill = -1;
   const client: RunnerClient = {
     runner: { name: 'mac', ssh: 'user@mac', workDir: '/work' },
     cacheDir: '/nonexistent-cache',
@@ -85,6 +99,14 @@ async function countBeatsDuringSlowKill(): Promise<number> {
       const beatsAtStart = beats;
       await new Promise((resolve) => setTimeout(resolve, slowKillCallMs));
       beatsDuringKill = beats - beatsAtStart;
+      if (answer === 'refused') {
+        // The runner refuses with the lease session still alive: once the call is over, only the kill itself can have stopped the beat.
+        setTimeout(() => {
+          beatsAfterRefusedKill = beats - beatsAtStart - beatsDuringKill;
+          child.kill('SIGKILL');
+        }, afterRefusedKillMs);
+        return { exitCode: 125, stdout: '', stderr: `${refusal}\n`, isTimedOut: false };
+      }
       child.kill('SIGKILL');
       return { exitCode: 0, stdout: 'killed\n', stderr: '', isTimedOut: false };
     },
@@ -99,13 +121,21 @@ async function countBeatsDuringSlowKill(): Promise<number> {
     leaseMs: slowKillLeaseMs,
   });
   setImmediate(() => process.emit('SIGINT', 'SIGINT'));
-  await running;
-  return beatsDuringKill;
+  const exitCode = await running;
+  return { beatsDuringKill, beatsAfterRefusedKill, exitCode };
 }
 
 describe('a foreground run that is interrupted', () => {
   it('keeps beating while the kill call is in flight: a slow call must not let the runner\'s lease watcher end the job first', async () => {
-    assert.ok(await countBeatsDuringSlowKill() >= minBeatsDuringSlowKill);
+    const run = await runWithSlowKill('killed');
+    assert.ok(run.beatsDuringKill >= minBeatsDuringSlowKill, `beats during the call: ${run.beatsDuringKill}`);
+    assert.equal(run.exitCode, 130);
+  });
+
+  it('stops beating once the kill call is answered, a refusal too — the runner\'s lease watcher takes the job from there', async () => {
+    const run = await runWithSlowKill('refused');
+    assert.ok(run.beatsDuringKill >= minBeatsDuringSlowKill, `beats during the call: ${run.beatsDuringKill}`);
+    assert.equal(run.beatsAfterRefusedKill, 0, 'no beat after the call was answered');
   });
 
   it('says the kill that did not kill - the runner\'s own words, and that its watcher stops the job now that the lease is gone', async () => {
