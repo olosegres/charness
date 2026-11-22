@@ -278,9 +278,9 @@ describe('a request that waits for its schedule (scheduleWait) and a scheduled r
     }
   });
 
-  it('turn end: a scheduled run\'s turn without an answer is not silence either, even with nothing armed', () => {
-    assert.deepEqual(decideTurnEnd(createRequest(), 0, nowMs, { isScheduledRun: true }), { kind: 'quiet', update: quietFireUpdate });
-    assert.deepEqual(decideTurnEnd(createRequest(), 0, nowMs, { isScheduledRun: true, scheduleWait: 'none' }), { kind: 'quiet', update: quietFireUpdate });
+  it('turn end: a scheduled run\'s turn without an answer is not silence either, even with nothing armed — while the request owes nobody an answer', () => {
+    assert.deepEqual(decideTurnEnd(answeredRequest(), 1, nowMs, { isScheduledRun: true }), { kind: 'quiet', update: quietFireUpdate });
+    assert.deepEqual(decideTurnEnd(answeredRequest(), 1, nowMs, { isScheduledRun: true, scheduleWait: 'none' }), { kind: 'quiet', update: quietFireUpdate });
   });
 
   it('turn end: a scheduled run\'s turn that sent a progress note is followed up like any, unless a watch is armed', () => {
@@ -338,19 +338,25 @@ describe('a request that waits for its schedule (scheduleWait) and a scheduled r
     assert.ok(held.kind === 'quiet' && 'nextWakeAt' in held.update && held.update.nextWakeAt === undefined, 'held by a watch: nothing is due');
   });
 
-  it('turn end: a fire\'s quiet end leaves a pending silent-turn count as it is — the alarm is none of the requester\'s business, and the count ends in the give-up', () => {
-    for (const scheduleWait of ['none', 'armed', 'watching'] as const) {
-      const fire = decideTurnEnd(createRequest({ silentTurnCount: 1 }), 0, nowMs, { isScheduledRun: true, scheduleWait });
-      assert.equal(fire.kind, 'quiet', scheduleWait);
-      assert.ok(fire.kind === 'quiet' && !('silentTurnCount' in fire.update), `${scheduleWait}: the update does not name the count, so it stays 1`);
-      assert.equal(fire.kind === 'quiet' ? fire.update.lastTurnActivityAt : null, nowMs);
+  it('turn end: a fire\'s turn on a request that owes an answer is a SILENT turn, not the alarm\'s quiet one — the count grows to the give-up, whatever is armed', () => {
+    const owed: Array<[string, OpenRequestState]> = [
+      ['a silent turn pending', answeredRequest({ silentTurnCount: 1, wakeCount: 1 })],
+      ['a person\'s words not answered yet', answeredRequest({ isPersonInputUnanswered: true })],
+      ['a person\'s request never answered', createRequest()],
+    ];
+    for (const [label, request] of owed) {
+      for (const scheduleWait of ['none', 'armed', 'watching'] as const) {
+        const fire = decideTurnEnd(request, request.progressAnswerCount, nowMs, { isScheduledRun: true, scheduleWait });
+        const expected = request.silentTurnCount > 0 ? 'alert' : 'wake';
+        assert.equal(fire.kind, expected, `${label} ${scheduleWait}`);
+        assert.equal(fire.kind === 'wake' ? fire.reason : fire.kind === 'alert' ? fire.reason : null, request.silentTurnCount > 0 ? 'silentTurns' : 'silentTurn');
+      }
     }
-    // With nothing pending the count is still reset (zero stays zero), and a progress note resets it: an answer was given.
-    assert.deepEqual(decideTurnEnd(createRequest(), 0, nowMs, { isScheduledRun: true }), { kind: 'quiet', update: quietFireUpdate });
+    // With nothing owed the fire is the alarm's and quiet; a progress note answers whatever was owed and resets the count.
+    assert.deepEqual(decideTurnEnd(answeredRequest(), 1, nowMs, { isScheduledRun: true }), { kind: 'quiet', update: quietFireUpdate });
     const withProgress = decideTurnEnd(createRequest({ silentTurnCount: 1, progressAnswerCount: 1 }), 0, nowMs, { isScheduledRun: true, scheduleWait: 'watching' });
     assert.ok(withProgress.kind === 'quiet' && withProgress.update.silentTurnCount === 0);
   });
-
   it('turn end: the alarm\'s own request (a scheduler fire\'s) left with no answer settles at the quiet end — one that sent a progress note, or a hand-over a fire only rides, does not', () => {
     const fireRequest = createRequest({ origin: { kind: 'scheduledRun', attributes: { requester: 'scheduler' } } });
     const silent = decideTurnEnd(fireRequest, 0, nowMs, { isScheduledRun: true });
@@ -358,7 +364,7 @@ describe('a request that waits for its schedule (scheduleWait) and a scheduled r
     assert.equal(silent.kind === 'quiet' ? silent.isRequestSettled : null, true);
     const withProgress = decideTurnEnd({ ...fireRequest, progressAnswerCount: 1 }, 0, nowMs, { isScheduledRun: true });
     assert.notEqual(withProgress.kind === 'quiet' ? withProgress.isRequestSettled : null, true, 'a note was sent: the request stays open');
-    const handOver = decideTurnEnd(createRequest({ origin: { kind: 'trackerEvent', attributes: {} } }), 0, nowMs, { isScheduledRun: true });
+    const handOver = decideTurnEnd(answeredRequest({ origin: { kind: 'trackerEvent', attributes: {} } }), 1, nowMs, { isScheduledRun: true });
     assert.equal(handOver.kind, 'quiet');
     assert.equal(handOver.kind === 'quiet' ? handOver.isRequestSettled : null, undefined, 'a fire only rides a hand-over: it is owed its own answer');
   });
@@ -420,10 +426,9 @@ describe('a request that waits for its schedule (scheduleWait) and a scheduled r
       const decision = decideTurnEnd(answeredRequest({ isPersonInputUnanswered: true }), 1, nowMs, { scheduleWait });
       assert.equal(decision.kind === 'wake' ? decision.reason : null, 'silentTurn', scheduleWait);
     }
-    // A fire's own turn is still the alarm's: quiet, the flag untouched (the backstop chases the words).
+    // A fire's turn on a request that owes the words is no exception: it is silent too (the next test).
     const fire = decideTurnEnd(answeredRequest({ isPersonInputUnanswered: true }), 1, nowMs, { scheduleWait: 'watching', isScheduledRun: true });
-    assert.equal(fire.kind, 'quiet');
-    assert.ok(fire.kind === 'quiet' && !('isPersonInputUnanswered' in fire.update));
+    assert.equal(fire.kind === 'wake' ? fire.reason : null, 'silentTurn');
   });
 
   it('restart wake: a watch that is not failing means nobody is woken; `armed` and `none` still wake', () => {
