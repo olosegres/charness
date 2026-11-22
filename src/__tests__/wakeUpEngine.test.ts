@@ -15,6 +15,8 @@ import * as path from 'path';
 import { StateStore } from '../state';
 import { keyToString, type SessionKey } from '../sessionKey';
 import { RequestLedger, requestHistoryMaxBytes } from '../requests/requestLedger';
+import { answerRequest } from '../requests/answerRequest';
+import type { AnswerSink } from '../platform/answerSink';
 import { RequestWakeUpEngine, restartWakeStaggerMs, unwatchedSweepMs } from '../requests/wakeUpEngine';
 import { createSessionTurnProbe } from '../requests/sessionTurnProbe';
 import { maxWakeUpsPerRequest, progressFollowUpDelayMs, type SessionTurnProbe } from '../requests/wakeUpRules';
@@ -1700,6 +1702,33 @@ describe('a request waits for its schedule', () => {
     await engine.notePersonInputHeld(topicKey, request.id);
     assert.equal(ledger.getNewestOpenRequest(issueKey)?.isPersonInputUnanswered, undefined, 'another conversation\'s request is not touched');
     await engine.notePersonInputHeld(issueKey, 'req_gone0001');
+  });
+
+  it('a progress answer delivered in a turn the restart then lost leaves the request owed no more: the backstop does not take it, the agent waiting on its watch is not given up on', async () => {
+    const ledger = await createLedger();
+    const before = createEngine(ledger, { getScheduleWait: () => 'watching' });
+    const request = await ledger.createRequest(issueKey, handOver);
+    // The first turn on the prompt ended silent: the reminder is out, count 1.
+    await before.trackForwardedTurn(issueKey, request.id, { isRequestPrompt: true });
+    await endTurnSilently(before);
+    assert.equal(ledger.getNewestOpenRequest(issueKey)?.silentTurnCount, 1);
+    wakeUps = [];
+
+    // In the reminder's turn the agent answers `progress` (the real tool), arms its watch and keeps working — then the bot restarts.
+    const sink: AnswerSink = { deliverAnswer: async () => ({ ok: true }), deliverAlert: async () => ({ ok: true }), releaseAlert: async () => {} };
+    const outcome = await answerRequest(
+      { ledger, answerSinks: new Map([['jira', sink]]) },
+      { requestId: request.id, kind: 'progress', body: 'on it', checkIsConversationInScope: (conversationKey) => conversationKey === keyToString(issueKey) },
+    );
+    assert.equal(outcome.ok, true);
+    before.stop();
+
+    const restarted = createEngine(ledger, { getScheduleWait: () => 'watching' });
+    nowMs += 2 * backstopMs;
+    await restarted.sweepUnwatchedRequests();
+    assert.deepEqual(wakeUps, [], 'answered: nothing is owed, the watch holds the request');
+    assert.deepEqual(alerts, []);
+    assert.equal(restarted.scheduleRestartWake(issueKey), false);
   });
 
   it('a limit resume that re-posts ONE request\'s prompt marks only that request owed: another requester\'s answered request waiting on its watch gets the plain «continue»', async () => {
