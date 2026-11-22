@@ -364,6 +364,9 @@ update into the resumed session — it does not wait for the agent's turn to end
 - **The request waits for its watch.** An open request with an armed watch is not reminded every 15 minutes, not woken at a bot restart
   and not given up on after ten wake-ups; the task-agent slot stays held, because the issue IS being worked on
   (`../../requests/README.md` § Wake-ups).
+- **Fires and the task-agent cap.** A scheduled fire resumes the issue's agent whether or not the issue holds a slot (after the hand-over's
+  final answer, during a mention-only request) and is never held by `taskAgents.maxConcurrent`: the cap bounds hand-overs, as a Telegram
+  topic's fires have no concurrency cap either (`../../trackers/README.md`). The slot of an issue whose request waits for its watch stays held.
 - **Paused jobs.** A fire that finds no usable folder pauses the job with a log line (nothing is posted); the next request of the issue
   whose `bindConversation` finds the folder usable resumes it — next run from now, a passed one-shot dropped — as `/bind` does in a topic.
 - `send_messages_to_user` stays Telegram-only: several comments are `answer_request` progress notes, and a second path to the issue would
