@@ -192,6 +192,21 @@ export interface FakeStatusWatchTarget {
 }
 
 /**
+ * `watch-progress` (the Jira schedule flow): the orchestrator of an issue — it arms the STATUS watch of the worker the test named
+ * ({@link fakeStatusWatchTargetFileName}) as `arm-status-watch` does, then answers `progress` and ENDS its turn (nothing to poll:
+ * the watch wakes it). The prompt of the watch's wake is `cancel-watch` ({@link fakeCancelWatchToken}: look at the worker, cancel the
+ * watch, answer `final` to the request the header names) — or, when the issue's text carries {@link fakeKeepWatchWakeMarker}, a
+ * wake that only keeps the watch ({@link fakeKeepWatchToken}): the turn ends with no tool call and no answer.
+ */
+export const fakeKeepWatchToken = '[fake:keep-watch]';
+export const fakeKeepWatchWakeMarker = '[wake:keep]';
+/**
+ * `one-shot-then-final`: the first turn arms a one-shot prompt this many seconds ahead (its prompt is `[fake:answer]`, so the fire
+ * answers `final` to the request id its header names) and answers `final`: the request is finished when the job fires.
+ */
+export const fakeOneShotDelaySeconds = 25;
+
+/**
  * While this file exists, `ask` mode streams its content as one assistant text right after it puts the question, while the
  * turn is still blocked on the answer — as a sub-agent or a parallel branch of the real CLI does. The text lands BELOW
  * the question in the topic, which is what makes the bot bring the question back to the bottom.
@@ -432,7 +447,7 @@ export const fakeSendFileCaption = 'The run, recorded:';
 export interface FakeClaudeToolCall {
   issueKey: string;
   tool: string;
-  args: Record<string, string>;
+  args: Record<string, string | number | boolean>;
   /** The tool's result text (`error: …` for a refusal), or what the program printed. */
   outcome: string;
 }

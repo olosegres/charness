@@ -7,7 +7,8 @@
  *
  * The flows are independent journeys, one file each (`jiraConnectorE2e` — requests and the session lifecycle,
  * `jiraPromptE2e` — what the prompts carry, `jiraTrustE2e` — the trusted group and mentions, `jiraCommentWakeE2e` — a
- * comment on a handed issue, an acting mention, the resume after a restart), so they run in parallel.
+ * comment on a handed issue, an acting mention, the resume after a restart, `jiraScheduleE2e` — the agent's watch on a worker that wakes
+ * it in the issue), so they run in parallel.
  * Each runs in a process of its own: the state below (the layout, the started charness, the fake Jira) is that flow's.
  */
 
