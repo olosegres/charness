@@ -119,7 +119,8 @@ per-backend controls are optional methods the bot checks before calling.
   NOTHING (a comment always notifies the requester and the issue's watchers): a fire wakes the issue's agent behind a header
   naming the open request it rides, opens no request of its own (`scheduler/trackerRun.ts`), and an open request waits for
   its armed watch — it is not prodded between turns (no follow-ups, no restart wake); a requester's own message left unanswered
-  still is, and still ends in the give-up (`requests/scheduleWait.ts`, in a topic with requests too).
+  still is, and still ends in the give-up, after a restart too: what a request owes is persisted (`isPersonInputUnanswered`), so a
+  lost watch never leaves it held (`requests/scheduleWait.ts`, the rule table in `requests/README.md`; in a topic with requests too).
 - **One instance-wide timezone** (`/timezone`) applied through `process.env.TZ`. After a zone change never
   re-arm schedules with the engine's `rearmAll()` (the boot replay would fire bogus catch-ups).
 - **Prompt decoration** happens at ONE choke point, `forwardPromptToAgent`: the `[Telegram thread context]`
