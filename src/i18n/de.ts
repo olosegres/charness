@@ -499,7 +499,7 @@ export const deDict: Record<string, string> = {
   'compactOnIdle.selfReviewLine': '💡 Selbstanalyse des Agents: {state}',
   'compactOnIdle.selfReviewShowButton': '💡 Selbstanalyse zeigen',
   'compactOnIdle.selfReviewHideButton': 'Selbstanalyse ausblenden',
-  'compactOnIdle.growthLine': '📏 Komprimiert, sobald der Kontext seit der letzten Komprimierung um {tokens}+ Tokens gewachsen ist — unten wählen oder eine Zahl eingeben, z. B. 50k.',
+  'compactOnIdle.growthLine': '📏 Komprimiert, sobald der Kontext seit der letzten Komprimierung um {tokens}+ Tokens gewachsen ist — unten wählen oder /compact_on_idle 50k für einen anderen Wert senden.',
   'compactOnIdle.setGrowthThisTopic': '✅ Auto-Komprimierung bei Leerlauf: wartet auf {tokens} Tokens Kontextwachstum, für dieses Thema.',
   'compactOnIdle.setGrowthGlobal': '✅ Auto-Komprimierung bei Leerlauf: wartet auf {tokens} Tokens Kontextwachstum, für ALLE Themen (Überschreibungen pro Thema gelten weiter).',
   'compactOnIdle.growthInvalid': 'Gib das Wachstum als Tokenzahl von 0 bis {max} ein, zum Beispiel 30000 oder 50k.',

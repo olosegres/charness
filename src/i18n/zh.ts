@@ -499,7 +499,7 @@ export const zhDict: Record<string, string> = {
   'compactOnIdle.selfReviewLine': '💡 智能体自我复盘：{state}',
   'compactOnIdle.selfReviewShowButton': '💡 显示自我复盘',
   'compactOnIdle.selfReviewHideButton': '隐藏自我复盘',
-  'compactOnIdle.growthLine': '📏 自上次压缩以来上下文增长达到 {tokens}+ 个 token 时才压缩——点下方按钮选择，或输入数字，例如 50k。',
+  'compactOnIdle.growthLine': '📏 自上次压缩以来上下文增长达到 {tokens}+ 个 token 时才压缩——点下方按钮选择，或发送 /compact_on_idle 50k 设置其他值。',
   'compactOnIdle.setGrowthThisTopic': '✅ 空闲自动压缩：等待上下文增长 {tokens} 个 token（本话题）。',
   'compactOnIdle.setGrowthGlobal': '✅ 空闲自动压缩：等待上下文增长 {tokens} 个 token（所有话题；各话题自己的设置仍然有效）。',
   'compactOnIdle.growthInvalid': '请把增长量输入为 0 到 {max} 之间的 token 数，例如 30000 或 50k。',

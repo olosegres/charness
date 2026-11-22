@@ -11,14 +11,18 @@ import { checkIsRecord } from './checkIsRecord';
 /** How much of the file one read takes. */
 const readChunkBytes = 1024 * 1024;
 const newlineByte = 0x0a;
-/** The key a line must carry to be a compaction boundary: checked on the raw bytes before anything is decoded. */
-const compactBoundaryKey = Buffer.from('"compact_boundary"');
+/** The key a line must carry to be a compaction boundary: checked on the raw line before anything is decoded. */
+const compactBoundaryKeyText = '"compact_boundary"';
+const compactBoundaryKey = Buffer.from(compactBoundaryKeyText);
 
-/** @description Whether the bytes of a transcript line are a compaction boundary record. */
-function checkIsCompactBoundaryLine(lineBytes: Buffer): boolean {
-  if (lineBytes.indexOf(compactBoundaryKey) < 0) return false;
+/**
+ * @description Whether a transcript line (its bytes, or its text) is a compaction boundary record — the ONE epoch rule of every reader
+ * that walks the transcript backwards, so none of them reaches into the epoch before it.
+ */
+export function checkIsCompactBoundaryLine(line: Buffer | string): boolean {
+  if (typeof line === 'string' ? !line.includes(compactBoundaryKeyText) : line.indexOf(compactBoundaryKey) < 0) return false;
   try {
-    const record: unknown = JSON.parse(lineBytes.toString('utf8'));
+    const record: unknown = JSON.parse(typeof line === 'string' ? line : line.toString('utf8'));
     return checkIsRecord(record) && record.type === 'system' && record.subtype === 'compact_boundary';
   } catch {
     return false;

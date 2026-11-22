@@ -510,7 +510,7 @@ export const enDict: Record<string, string> = {
   'compactOnIdle.selfReviewLine': '💡 Agent self-review: {state}',
   'compactOnIdle.selfReviewShowButton': '💡 Show self-review',
   'compactOnIdle.selfReviewHideButton': 'Hide self-review',
-  'compactOnIdle.growthLine': '📏 Compacts once the context has grown by {tokens}+ tokens since the last compaction — pick below or type a number, e.g. 50k.',
+  'compactOnIdle.growthLine': '📏 Compacts once the context has grown by {tokens}+ tokens since the last compaction — pick below, or send /compact_on_idle 50k for another value.',
   'compactOnIdle.setGrowthThisTopic': '✅ Auto-compact on idle: waits for {tokens} tokens of context growth, for this topic.',
   'compactOnIdle.setGrowthGlobal': '✅ Auto-compact on idle: waits for {tokens} tokens of context growth, for ALL topics (per-topic overrides still apply).',
   'compactOnIdle.growthInvalid': 'Type the growth as a number of tokens from 0 to {max}, for example 30000 or 50k.',

@@ -3072,10 +3072,17 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
     this.ownCompactionCounts.delete(conversationKey);
   }
 
-  /** The context size after the newest completed parent call, from what the session holds in memory (no HTTP): `null` without a live session or such a call. */
+  /**
+   * The context size after the newest completed parent call, from what the session holds in memory (no HTTP): `null` without a live
+   * session or such a call — and while the newest message is a compaction's SUMMARY: its input is the whole pre-compaction context, the
+   * compaction's own call, so until the next model call the conversation has no figure.
+   */
   async getContextUsedTokens(key: SessionKey): Promise<number | null> {
     const session = this.sessions.get(keyToString(key));
-    return session?.isActive ? session.latestParentRuntimeContext?.contextUsedTokens ?? null : null;
+    if (!session?.isActive) return null;
+    const latestContext = session.latestParentRuntimeContext;
+    if (latestContext === null || latestContext.messageId === session.compactionSummaryMessageId) return null;
+    return latestContext.contextUsedTokens;
   }
 
   /** The context size the first parent call after the last compaction saw, read from the session's history (one request, made only when the bot has no baseline yet). */

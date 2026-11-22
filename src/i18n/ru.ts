@@ -503,7 +503,7 @@ export const ruDict: Record<string, string> = {
   'compactOnIdle.selfReviewLine': '💡 Самоанализ агента: {state}',
   'compactOnIdle.selfReviewShowButton': '💡 Показывать самоанализ',
   'compactOnIdle.selfReviewHideButton': 'Не показывать самоанализ',
-  'compactOnIdle.growthLine': '📏 Сжимает, когда контекст вырос на {tokens}+ токенов с прошлого сжатия — выбери ниже или введи число, например 50k.',
+  'compactOnIdle.growthLine': '📏 Сжимает, когда контекст вырос на {tokens}+ токенов с прошлого сжатия — выбери ниже или отправь /compact_on_idle 50k для другого значения.',
   'compactOnIdle.setGrowthThisTopic': '✅ Авто-сжатие при простое: ждёт роста контекста на {tokens} токенов, для этого топика.',
   'compactOnIdle.setGrowthGlobal': '✅ Авто-сжатие при простое: ждёт роста контекста на {tokens} токенов, для ВСЕХ топиков (переопределения по топикам продолжают действовать).',
   'compactOnIdle.growthInvalid': 'Введи рост как число токенов от 0 до {max}, например 30000 или 50k.',

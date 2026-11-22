@@ -499,7 +499,7 @@ export const kaDict: Record<string, string> = {
   'compactOnIdle.selfReviewLine': '💡 აგენტის თვითანალიზი: {state}',
   'compactOnIdle.selfReviewShowButton': '💡 თვითანალიზის ჩვენება',
   'compactOnIdle.selfReviewHideButton': 'თვითანალიზის დამალვა',
-  'compactOnIdle.growthLine': '📏 კუმშავს, როცა წინა შეკუმშვის შემდეგ კონტექსტი {tokens}+ ტოკენით გაიზრდება — აირჩიე ქვემოთ ან აკრიფე რიცხვი, მაგ. 50k.',
+  'compactOnIdle.growthLine': '📏 კუმშავს, როცა წინა შეკუმშვის შემდეგ კონტექსტი {tokens}+ ტოკენით გაიზრდება — აირჩიე ქვემოთ ან სხვა მნიშვნელობისთვის გააგზავნე /compact_on_idle 50k.',
   'compactOnIdle.setGrowthThisTopic': '✅ უმოქმედობისას ავტო-შეკუმშვა: ელოდება კონტექსტის {tokens} ტოკენით ზრდას, ამ თემისთვის.',
   'compactOnIdle.setGrowthGlobal': '✅ უმოქმედობისას ავტო-შეკუმშვა: ელოდება კონტექსტის {tokens} ტოკენით ზრდას, ყველა თემისთვის (თემის საკუთარი პარამეტრები მაინც მოქმედებს).',
   'compactOnIdle.growthInvalid': 'ზრდა ჩაწერე ტოკენების რიცხვად 0-დან {max}-მდე, მაგალითად 30000 ან 50k.',

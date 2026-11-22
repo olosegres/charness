@@ -499,7 +499,7 @@ export const ptDict: Record<string, string> = {
   'compactOnIdle.selfReviewLine': '💡 Autoanálise do agente: {state}',
   'compactOnIdle.selfReviewShowButton': '💡 Mostrar autoanálise',
   'compactOnIdle.selfReviewHideButton': 'Ocultar autoanálise',
-  'compactOnIdle.growthLine': '📏 Compacta quando o contexto cresceu {tokens}+ tokens desde a última compactação — escolha abaixo ou digite um número, p. ex. 50k.',
+  'compactOnIdle.growthLine': '📏 Compacta quando o contexto cresceu {tokens}+ tokens desde a última compactação — escolha abaixo ou envie /compact_on_idle 50k para outro valor.',
   'compactOnIdle.setGrowthThisTopic': '✅ Compactação automática por inatividade: espera o contexto crescer {tokens} tokens, para este tópico.',
   'compactOnIdle.setGrowthGlobal': '✅ Compactação automática por inatividade: espera o contexto crescer {tokens} tokens, para TODOS os tópicos (as configurações por tópico continuam valendo).',
   'compactOnIdle.growthInvalid': 'Digite o crescimento como um número de tokens de 0 a {max}, por exemplo 30000 ou 50k.',

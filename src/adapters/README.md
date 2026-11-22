@@ -246,7 +246,7 @@ conversation has no baseline, `getFirstCallContextTokens`: the first main-conver
 session history). Read from the history, so a long first turn does not hide its own growth in the baseline and a conversation that already had turns
 when the bot first looks is measured from its real baseline. Kept per conversation (`compactIdleTracking.baselineContextTokens` / `lastContextTokens`),
 dropped by every bot-issued compaction and by a context smaller than the baseline (the CLI compacted by itself), read again at the next turn's end;
-an unreadable history leaves no baseline, never the turn's end in its place. The mark itself measures again (`sampleThreadContext`, before it decides: a
+an unreadable history leaves no baseline, never the turn's end in its place. The readers of the context in use now stop at the epoch's boundary too (Claude: the `compact_boundary` rule shared with the first-call walk; OpenCode: the compaction's summary message is no reading), so after a compaction the conversation has no figure until its next model call. The mark itself measures again (`sampleThreadContext`, before it decides: a
 state kept before the figures existed or a reading lost with a restart leave none or a stale one; a turn that ended on an API error still reads as its last real
 call — the newest-call reader skips synthetic and error records, as the first-call reader does); a sleeping per-turn session has no live
 adapter state, so it is read from its transcript by the persisted session id and work folder (`readSleepingContext` port, `bot.ts`), and its countdown is armed

@@ -341,3 +341,19 @@ test('readClaudeContextUsedTokens: a real call followed by more than the tail\'s
   const afterCompaction = writeLines([createAssistantRecord({ input: 9, cacheRead: 700_000 }), boundaryRecord, summaryRecord, toolResult, syntheticError]);
   assert.equal(await readClaudeContextUsedTokens(afterCompaction), null, 'nothing since the compaction is a model call');
 });
+
+test('the newest-call readers stop at the last compaction boundary: a big call, a boundary and no call after it is no figure of the conversation now — the tail path and the walk agree', async () => {
+  const bigCall = createAssistantRecord({ input: 3, cacheRead: 150_000, cacheCreation: 9_000, output: 4_000 });
+  const noCallAfterBoundary = [bigCall, boundaryRecord, summaryRecord];
+  assert.equal(parseClaudeNewestCallContextUsedTokens(noCallAfterBoundary.join('\n')), null, 'the tail: the older epoch\'s call is behind the boundary');
+  assert.equal(await readClaudeContextUsedTokens(writeLines(noCallAfterBoundary)), null, 'the file, whose tail holds the boundary');
+
+  // A call after the boundary is the figure; one before it never is.
+  const callAfterBoundary = [bigCall, boundaryRecord, summaryRecord, createAssistantRecord({ input: 2, cacheRead: 20_000, output: 100 })];
+  assert.equal(parseClaudeNewestCallContextUsedTokens(callAfterBoundary.join('\n')), 20_102);
+  assert.equal(await readClaudeContextUsedTokens(writeLines(callAfterBoundary)), 20_102);
+
+  // The same with the error record the fire meets after an interrupted turn (still behind the boundary's epoch, not before it).
+  const errorAfterBoundary = JSON.stringify({ type: 'assistant', isApiErrorMessage: true, message: { role: 'assistant', model: '<synthetic>', content: [], usage: { input_tokens: 0, output_tokens: 0 } } });
+  assert.equal(await readClaudeContextUsedTokens(writeLines([bigCall, boundaryRecord, summaryRecord, errorAfterBoundary])), null);
+});

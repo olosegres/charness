@@ -499,7 +499,7 @@ export const frDict: Record<string, string> = {
   'compactOnIdle.selfReviewLine': '💡 Auto-analyse de l\'agent : {state}',
   'compactOnIdle.selfReviewShowButton': '💡 Afficher l\'auto-analyse',
   'compactOnIdle.selfReviewHideButton': 'Masquer l\'auto-analyse',
-  'compactOnIdle.growthLine': '📏 Compacte dès que le contexte a grandi de {tokens}+ tokens depuis le dernier compactage — choisis ci-dessous ou saisis un nombre, p. ex. 50k.',
+  'compactOnIdle.growthLine': '📏 Compacte dès que le contexte a grandi de {tokens}+ tokens depuis le dernier compactage — choisis ci-dessous ou envoie /compact_on_idle 50k pour une autre valeur.',
   'compactOnIdle.setGrowthThisTopic': '✅ Compactage auto en cas d’inactivité : attend une croissance du contexte de {tokens} tokens, pour ce sujet.',
   'compactOnIdle.setGrowthGlobal': '✅ Compactage auto en cas d’inactivité : attend une croissance du contexte de {tokens} tokens, pour TOUS les sujets (les réglages par sujet restent actifs).',
   'compactOnIdle.growthInvalid': 'Saisis la croissance comme un nombre de tokens de 0 à {max}, par exemple 30000 ou 50k.',

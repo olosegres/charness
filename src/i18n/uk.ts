@@ -505,7 +505,7 @@ export const ukDict: Record<string, string> = {
   'compactOnIdle.selfReviewLine': '💡 Самоаналіз агента: {state}',
   'compactOnIdle.selfReviewShowButton': '💡 Показувати самоаналіз',
   'compactOnIdle.selfReviewHideButton': 'Не показувати самоаналіз',
-  'compactOnIdle.growthLine': '📏 Стискає, коли контекст виріс на {tokens}+ токенів від попереднього стиснення — обери нижче або введи число, наприклад 50k.',
+  'compactOnIdle.growthLine': '📏 Стискає, коли контекст виріс на {tokens}+ токенів від попереднього стиснення — обери нижче або надішли /compact_on_idle 50k для іншого значення.',
   'compactOnIdle.setGrowthThisTopic': '✅ Авто-стиснення під час простою: чекає на зростання контексту на {tokens} токенів, для цієї теми.',
   'compactOnIdle.setGrowthGlobal': '✅ Авто-стиснення під час простою: чекає на зростання контексту на {tokens} токенів, для ВСІХ тем (налаштування окремих тем продовжують діяти).',
   'compactOnIdle.growthInvalid': 'Введи зростання як число токенів від 0 до {max}, наприклад 30000 або 50k.',

@@ -499,7 +499,7 @@ export const esDict: Record<string, string> = {
   'compactOnIdle.selfReviewLine': '💡 Autoanálisis del agente: {state}',
   'compactOnIdle.selfReviewShowButton': '💡 Mostrar autoanálisis',
   'compactOnIdle.selfReviewHideButton': 'Ocultar autoanálisis',
-  'compactOnIdle.growthLine': '📏 Compacta cuando el contexto ha crecido {tokens}+ tokens desde la última compactación — elige abajo o escribe un número, p. ej. 50k.',
+  'compactOnIdle.growthLine': '📏 Compacta cuando el contexto ha crecido {tokens}+ tokens desde la última compactación — elige abajo o envía /compact_on_idle 50k para otro valor.',
   'compactOnIdle.setGrowthThisTopic': '✅ Compactado automático por inactividad: espera un crecimiento del contexto de {tokens} tokens, para este tema.',
   'compactOnIdle.setGrowthGlobal': '✅ Compactado automático por inactividad: espera un crecimiento del contexto de {tokens} tokens, para TODOS los temas (los ajustes por tema siguen vigentes).',
   'compactOnIdle.growthInvalid': 'Escribe el crecimiento como un número de tokens de 0 a {max}, por ejemplo 30000 o 50k.',

@@ -1,7 +1,7 @@
 import * as fs from 'fs';
 import type { AgentRuntimeInfo } from '../types';
 import { checkIsRecord } from './checkIsRecord';
-import { scanClaudeTranscriptEpochBackwards } from './claudeTranscriptEpoch';
+import { checkIsCompactBoundaryLine, scanClaudeTranscriptEpochBackwards } from './claudeTranscriptEpoch';
 
 const claude45ContextWindowTokens = 200_000;
 const claude46AndLaterContextWindowTokens = 1_000_000;
@@ -103,11 +103,13 @@ export async function readClaudeFirstCallContextTokens(filePath: string): Promis
 /**
  * @description The context size after the newest model call of a transcript TAIL (its input, cache and output): what the conversation
  * weighs now. Newest first, the records that are no model call (a synthetic API-error or interrupt record, a sidechain, zero tokens)
- * are skipped — a turn that ended on an error still reads as its last real call. `null` when the tail holds no model call.
+ * are skipped — a turn that ended on an error still reads as its last real call — and the scan stops at a compaction boundary: a call
+ * behind it is the older epoch's, no figure of the conversation now. `null` when the tail holds no model call of the last epoch.
  */
 export function parseClaudeNewestCallContextUsedTokens(transcriptTail: string): number | null {
   const lines = transcriptTail.split('\n');
   for (let index = lines.length - 1; index >= 0; index -= 1) {
+    if (checkIsCompactBoundaryLine(lines[index])) return null;
     const call = parseClaudeModelCallLine(lines[index]);
     if (call !== null) return call.callInputTokens + call.outputTokens;
   }

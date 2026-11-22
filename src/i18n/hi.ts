@@ -499,7 +499,7 @@ export const hiDict: Record<string, string> = {
   'compactOnIdle.selfReviewLine': '💡 एजेंट का आत्म-विश्लेषण: {state}',
   'compactOnIdle.selfReviewShowButton': '💡 आत्म-विश्लेषण दिखाएँ',
   'compactOnIdle.selfReviewHideButton': 'आत्म-विश्लेषण छिपाएँ',
-  'compactOnIdle.growthLine': '📏 पिछले संक्षेपण के बाद संदर्भ {tokens}+ टोकन बढ़ने पर ही संक्षेपित करता है — नीचे चुनें या कोई संख्या लिखें, जैसे 50k।',
+  'compactOnIdle.growthLine': '📏 पिछले संक्षेपण के बाद संदर्भ {tokens}+ टोकन बढ़ने पर ही संक्षेपित करता है — नीचे चुनें, या दूसरे मान के लिए /compact_on_idle 50k भेजें।',
   'compactOnIdle.setGrowthThisTopic': '✅ निष्क्रियता पर स्वतः संक्षेपण: संदर्भ में {tokens} टोकन की वृद्धि की प्रतीक्षा करता है, इस विषय के लिए।',
   'compactOnIdle.setGrowthGlobal': '✅ निष्क्रियता पर स्वतः संक्षेपण: संदर्भ में {tokens} टोकन की वृद्धि की प्रतीक्षा करता है, सभी विषयों के लिए (प्रति-विषय सेटिंग लागू रहती हैं)।',
   'compactOnIdle.growthInvalid': 'वृद्धि को 0 से {max} के बीच टोकन की संख्या के रूप में लिखें, जैसे 30000 या 50k।',

@@ -499,7 +499,7 @@ export const jaDict: Record<string, string> = {
   'compactOnIdle.selfReviewLine': '💡 エージェントの自己分析: {state}',
   'compactOnIdle.selfReviewShowButton': '💡 自己分析を表示',
   'compactOnIdle.selfReviewHideButton': '自己分析を隠す',
-  'compactOnIdle.growthLine': '📏 前回の圧縮からコンテキストが{tokens}トークン以上増えたら圧縮します — 下のボタンで選ぶか、数値を入力（例：50k）。',
+  'compactOnIdle.growthLine': '📏 前回の圧縮からコンテキストが{tokens}トークン以上増えたら圧縮します — 下のボタンで選ぶか、別の値は /compact_on_idle 50k を送ってください。',
   'compactOnIdle.setGrowthThisTopic': '✅ アイドル自動圧縮：コンテキストが{tokens}トークン増えるまで待ちます（このトピック）。',
   'compactOnIdle.setGrowthGlobal': '✅ アイドル自動圧縮：コンテキストが{tokens}トークン増えるまで待ちます（すべてのトピック。トピックごとの設定は引き続き有効）。',
   'compactOnIdle.growthInvalid': '増加量は 0〜{max} のトークン数で入力してください（例：30000 または 50k）。',

@@ -499,7 +499,7 @@ export const uzDict: Record<string, string> = {
   'compactOnIdle.selfReviewLine': '💡 Agentning o‘z-o‘zini tahlili: {state}',
   'compactOnIdle.selfReviewShowButton': '💡 Tahlilni ko‘rsatish',
   'compactOnIdle.selfReviewHideButton': 'Tahlilni yashirish',
-  'compactOnIdle.growthLine': '📏 Oldingi siqishdan beri kontekst {tokens}+ token oshganda siqadi — pastdan tanlang yoki raqam kiriting, masalan 50k.',
+  'compactOnIdle.growthLine': '📏 Oldingi siqishdan beri kontekst {tokens}+ token oshganda siqadi — pastdan tanlang yoki boshqa qiymat uchun /compact_on_idle 50k yuboring.',
   'compactOnIdle.setGrowthThisTopic': '✅ Bo‘sh turganda avtosiqish: kontekst {tokens} token o‘sishini kutadi, shu mavzu uchun.',
   'compactOnIdle.setGrowthGlobal': '✅ Bo‘sh turganda avtosiqish: kontekst {tokens} token o‘sishini kutadi, BARCHA mavzular uchun (mavzuning o‘z sozlamalari amal qiladi).',
   'compactOnIdle.growthInvalid': 'O‘sishni 0 dan {max} gacha token soni sifatida kiriting, masalan 30000 yoki 50k.',

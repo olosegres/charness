@@ -139,6 +139,8 @@ describe('compaction: the compaction flow over its ports', () => {
     ]);
     assert.deepEqual(harness.getKeyboardLabels(picker)[1], ['10k', '20k', '30k ✓', '50k', '100k'], 'the default, 30 000, is checked');
     assert.ok(picker?.text.includes(`Compacts once the context has grown by ${formatTokenCount(30_000)}+ tokens`), 'the line says the threshold in force');
+    assert.ok(picker?.text.includes('send /compact_on_idle 50k for another value'), 'and how to set another one: the command form — a bare number typed in the topic goes to the agent');
+    assert.ok(!/type a number/i.test(picker?.text ?? ''), 'it does not tell the user to type a bare number');
     // The lines follow the rows of the keyboard: the switch, the threshold, the summary, the self-review.
     const text = picker?.text ?? '';
     const lineOrder = [': ON\n', 'Compacts once the context', 'Summary after a compaction', 'Agent self-review'].map((line) => text.indexOf(line));
