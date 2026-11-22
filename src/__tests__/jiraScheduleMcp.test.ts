@@ -195,6 +195,7 @@ describe('the schedule tools of a Jira issue: their shape and their words', () =
     assert.ok(description.includes(`cron \`${workerWatchCheckCron}\``));
     assert.ok(description.includes(`\`${workerWatchStatusArguments}\``));
     assert.match(description, /Never `kill -0` alone/);
+    assert.ok(description.includes('(or when the header says the request still owes the requester an answer)'), 'a fire on an owed request is no quiet one');
     assert.match(description, /answer_request "progress" and END your turn/);
     assert.match(description, /2 h 30 min without a report/);
     assert.match(description, /A watchdog meant to OUTLIVE the work \(a health check, a daily job\) is armed, and then the request is answered `final`: the job keeps running and its fires say «no request is open», or ride the request open at the time \(a later hand-over, a mention: answer that request only with what its requester must know, not about the job\)\./);

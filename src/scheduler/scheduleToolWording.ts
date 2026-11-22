@@ -121,7 +121,8 @@ const jiraWording: ScheduleToolWording = {
   createDescription:
     'Schedule a prompt to be delivered to this issue\'s conversation later. At fire time the bot resumes your session here and ' +
     'forwards the prompt to you under a header that names the request it rides. It posts NOTHING on the issue — a comment would ' +
-    'notify the requester and the issue\'s watchers — so answer through answer_request only when you have a result the requester needs.\n\n' +
+    'notify the requester and the issue\'s watchers — so answer through answer_request only when you have a result the requester needs ' +
+    '(or when the header says the request still owes the requester an answer).\n\n' +
     scheduleModesText +
     workerWatchRecipeHead +
     '(nothing is posted on the issue for it). Never `kill -0` alone: it stays green ' +

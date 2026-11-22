@@ -118,6 +118,7 @@ describe('agent-plugin', () => {
     assert.match(section, /A new comment on the issue reaches you at the bot's next poll of the issue, asleep or not — it does not wait for your turn to end\./);
     assert.match(section, /Answer the request the header names \(`answer_request` with that id\) only with a result the requester needs/);
     assert.match(section, /A wake you handled with nothing to report ends silently: no comment, no "still waiting"\./);
+    assert.match(section, /The exception is a header that says the request still owes the requester an answer\s+\(a comment the bot lost track of\): answer it in this turn\./);
     assert.match(section, /A header that says `no request is open`: the request you armed the job under is finished\. An answer to it still becomes a comment but hands nothing back/);
     assert.match(section, /cancel the job \(`schedule_cancel`\) if it served only that request/);
     assert.match(section, /A watchdog meant to outlive the work \(a health check, a daily job\) is armed and then the request is answered `final`: the job keeps running and its fires say `no request is open`, or ride\s+the request open at the time \(a later hand-over, a mention: answer that request only with what its requester must know, not about the\s+job\)\./);

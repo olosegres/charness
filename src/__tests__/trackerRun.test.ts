@@ -54,17 +54,39 @@ describe('pickScheduledRunTarget', () => {
 describe('buildTrackerScheduledRunHeader', () => {
   const conversationLabel = 'Jira issue PROJ-12 (https://example.atlassian.net/browse/PROJ-12)';
 
-  it('an open request: its id, answer only with a result, nothing shown on the issue', () => {
+  it('an open request that owes nothing: its id, answer only with a result, nothing shown on the issue', () => {
     const header = buildTrackerScheduledRunHeader({
       jobName: 'watch worker',
       conversationLabel,
-      target: { kind: 'request', request: createRequest('req_Armed001') },
+      target: { kind: 'request', request: createRequest('req_Armed001', { progressAnswerCount: 1 }) },
     });
     assert.equal(
       header,
       `[Scheduled run "watch worker" · ${conversationLabel} · request req_Armed001 is open]\n` +
         'Answer it through answer_request (requestId "req_Armed001") only when you have a result the requester needs. Nothing of this run is shown on the issue.\n',
     );
+  });
+
+  it('an open request that still owes the requester an answer says so and asks for it in this turn — the fire\'s turn is no quiet one, so the agent is not left to learn it from the reminder', () => {
+    const owed: Array<[string, Partial<OpenRequestState>]> = [
+      ['a comment whose turn was lost', { progressAnswerCount: 1, isPersonInputUnanswered: true }],
+      ['a silent turn pending', { progressAnswerCount: 1, silentTurnCount: 1 }],
+      ['a request never answered', {}],
+    ];
+    for (const [label, overrides] of owed) {
+      const header = buildTrackerScheduledRunHeader({
+        jobName: 'watch worker',
+        conversationLabel,
+        target: { kind: 'request', request: createRequest('req_Armed001', overrides) },
+      });
+      assert.equal(
+        header,
+        `[Scheduled run "watch worker" · ${conversationLabel} · request req_Armed001 is open]\n` +
+          'It still owes the requester an answer: answer it through answer_request (requestId "req_Armed001") in this turn, whatever this run finds. Nothing of this run is shown on the issue.\n',
+        label,
+      );
+      assert.ok(!header.includes('only when you have a result'), label);
+    }
   });
 
   it('no request open: says so, names the finished one, an answer to it hands nothing back, cancel what served only it', () => {

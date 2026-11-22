@@ -51,7 +51,8 @@ function makeRequest(id: string, createdAt: number, overrides: Partial<OpenReque
     id,
     origin: { kind: 'trackerEvent', attributes: { issueKey: 'PROJ-12', requester: 'ann' } },
     createdAt,
-    progressAnswerCount: 0,
+    // Answered once: the request a fire rides while its worker runs owes nobody anything (an owed one has its own header).
+    progressAnswerCount: 1,
     silentTurnCount: 0,
     wakeCount: 0,
     isWakeStopped: false,
@@ -143,6 +144,14 @@ test('a prompt job in a tracker conversation posts nothing: no announcement, no 
   assert.deepEqual(outcome, { status: 'delivered' });
   assert.deepEqual(getSteps(), ['ensureSession', 'forwardRun'], 'nothing is announced or posted on the issue; the Telegram forward is not used');
   assert.equal(getForwardRun().threadKey, issueThreadKey);
+});
+
+test('a fire that rides a request still owing the requester an answer says so in the header — the turn is the request\'s all the same', async () => {
+  const { deps, getForwardRun } = createHarness({ openRequestReads: [[makeRequest('req_Armed001', 1000, { progressAnswerCount: 0 })]] });
+  await createScheduleDelivery(deps)(makeJob(), onTime);
+  const { text, requestId } = getForwardRun();
+  assert.equal(requestId, 'req_Armed001');
+  assert.ok(text.startsWith(`[Scheduled run "watch worker" · ${conversationLabel} · request req_Armed001 is open]\nIt still owes the requester an answer: answer it through answer_request (requestId "req_Armed001") in this turn`), text);
 });
 
 test('the prompt starts with the tracker header naming the open request, then the marker and the job\'s text; the turn is the request\'s', async () => {

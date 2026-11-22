@@ -132,7 +132,8 @@ arguments only mark it as a worker watch.
   new comment on the issue reaches you at the bot's next poll of the issue, asleep or not — it does not wait for your turn to end.
 - At a wake read the worker's result and decide as above. Answer the request the header names (`answer_request` with that id)
   only with a result the requester needs — a milestone, the final answer. A wake you handled with nothing to report ends
-  silently: no comment, no "still waiting".
+  silently: no comment, no "still waiting". The exception is a header that says the request still owes the requester an answer
+  (a comment the bot lost track of): answer it in this turn.
 - A header that says `no request is open`: the request you armed the job under is finished. An answer to it still becomes a
   comment but hands nothing back — answer only what the requester must know, and cancel the job (`schedule_cancel`) if it
   served only that request.

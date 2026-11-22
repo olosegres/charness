@@ -1,4 +1,4 @@
-import { checkIsJobArmedUnderRequest } from '../requests/scheduleWait';
+import { checkIsAnswerOwed, checkIsJobArmedUnderRequest } from '../requests/scheduleWait';
 import type { OpenRequestState } from '../requests/types';
 import type { ScheduleRecord } from './types';
 
@@ -49,16 +49,23 @@ const nothingShownSentence = 'Nothing of this run is shown on the issue.';
 /**
  * @description The header line (and the one or two sentences under it) a scheduled prompt starts with in a tracker
  * conversation. With an open request it names that request and says to answer it only when there is a result the requester
- * needs; with none open it says so, names the finished request the job was armed under, and tells the agent that an answer
- * to it still becomes a comment but hands nothing back, and to cancel a job that served only that request. Agent-facing,
- * so English; ends with a newline.
+ * needs — unless the request still OWES the requester an answer (`checkIsAnswerOwed`: a comment whose turn a restart lost, a silent
+ * turn pending): then the fire's turn is no quiet one (`decideTurnEnd`), and the header says to answer it in this turn instead of
+ * leaving the agent to find out from the reminder. With none open it says so, names the finished request the job was armed under,
+ * and tells the agent that an answer to it still becomes a comment but hands nothing back, and to cancel a job that served only that
+ * request. Agent-facing, so English; ends with a newline.
  */
 export function buildTrackerScheduledRunHeader(input: TrackerScheduledRunHeaderInput): string {
   const lead = `[Scheduled run "${input.jobName}" · ${input.conversationLabel}`;
   const { target } = input;
   if (target.kind === 'request') {
-    return `${lead} · request ${target.request.id} is open]\n` +
-      `Answer it through answer_request (requestId "${target.request.id}") only when you have a result the requester needs. ${nothingShownSentence}\n`;
+    const { id } = target.request;
+    if (checkIsAnswerOwed(target.request)) {
+      return `${lead} · request ${id} is open]\n` +
+        `It still owes the requester an answer: answer it through answer_request (requestId "${id}") in this turn, whatever this run finds. ${nothingShownSentence}\n`;
+    }
+    return `${lead} · request ${id} is open]\n` +
+      `Answer it through answer_request (requestId "${id}") only when you have a result the requester needs. ${nothingShownSentence}\n`;
   }
   if (target.finishedRequestId === undefined) {
     return `${lead} · no request is open]\n` +
