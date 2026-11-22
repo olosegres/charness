@@ -127,8 +127,9 @@ the scheduler's would owe an answer nobody asked for.
   token names the conversation) and no `isPinSilent`, speaks of «this issue's conversation», says the bot posts NOTHING on the
   issue and that after arming a watch the agent answers `progress` and ENDS its turn; the status arguments stay accepted (one
   recipe for both) and say no line is posted there. `schedule_create` records the request the agent is WORKING ON on the
-  job (`ScheduleRecord.requestId`, the `getArmingRequestId` port → `pickRequestToArmUnder`: the request whose turn the engine watches,
-  else the newest open one; a request a scheduler fire opened is passed over for any other) in every conversation that has one — so a
+  job (`ScheduleRecord.requestId`, the `getArmingRequestId` port → the engine's `getArmingRequestIdOf` → `pickRequestToArmUnder`: the request
+  whose watch a forward of its own started, else one a conversation-wide «continue» or restart wake only carried along, else the newest
+  open one — a hand-over before a newer mention; a request a scheduler fire opened is passed over for any other; `requests/README.md`) in every conversation that has one — so a
   newer mention request of another person never takes a hand-over's job, and a Telegram agent re-arming in the turn of a fire
   arms under the operator's request, not the fire's. A Jira
   session also gets `jira_get_attachment` — only when the Jira connector is loaded, through the

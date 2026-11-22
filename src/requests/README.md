@@ -115,8 +115,9 @@ Numeric bounds are named constants in the files below; this README says only wha
   conversation's jobs at every decision): a job counts when it is armed under the request (`ScheduleRecord.requestId` is the request's id
   or the id of a request it replaced), is an agent job (a prompt job or a check, not a reminder) and is not paused. The reading is `none`
   (no job counts), `watching` (a job counts and is not a failing check) or `armed` (every counting job is a failing check: a watch that
-  just fired). `armed` counts only at the END of a watched turn (the agent that handled the wake is not silent); between turns a failing
-  check nobody handled (the agent died in the wake) does not hold the request, so the backstop takes it. A reading never decides alone:
+  just fired). `armed` counts only at the END of a turn a FIRE started, a «continue» of it included (the agent that handled the wake is not
+  silent); any other turn — a reminder's, a person's — reads it as `none`, since nothing else will wake an agent whose watch is gone;
+  between turns a failing check nobody handled (the agent died in the wake) does not hold the request, so the backstop takes it. A reading never decides alone:
   what a watch may keep quiet is the rule table below, which is the whole rule — change it and its test together.
 - **When a waiting request may stay quiet — the complete rule.** ONE reading decides it, from the PERSISTED request plus the schedule
   wait: *owed* (`checkIsAnswerOwed`) and the reading above. The kind of a turn is NOT an input — a person's turn, a reminder's, a
@@ -129,9 +130,9 @@ Numeric bounds are named constants in the files below; this README says only wha
     count AND the flag together (`answerRequest`: a turn that sent a note is never a silent turn), so an answer whose turn a restart then
     lost leaves nothing owed. A scheduler fire's own request (`scheduledRun`) is the alarm's and owes nobody anything. Everything here is
     persisted, so a restart changes nothing. Each write of these fields belongs to ONE request — the one whose words, answer or turn
-    caused it (`trackForwardedTurn`, `notePersonInputHeld`, `answerRequest`, the decision of that request's turn end) — with deliberate
-    exceptions: the end of a limit wait resets the counters of every open request (the wait was not anyone's silence), and the one session
-    turn a «continue» starts is tracked for every open request (row 17: whose words rode it is decided per request).
+    caused it — with deliberate exceptions, all listed in the self-check below: `isCountersReset` resets the counters of every open
+    request, and the one session turn a «continue» or a restart wake starts is tracked for every open request (row 17: whose words rode
+    it is decided per request; the arming pick tells which of them the agent works on).
   - *Tracked* — the engine holds the request's turn (`watched`, memory only) — or *lost*: a restart, a process that died
     (`sessionGone`) or a stale drop took it, and only the persisted request is left. That is the one thing a restart changes, and why
     *owed* is persisted.
@@ -147,23 +148,24 @@ Numeric bounds are named constants in the files below; this README says only wha
 
   | # | Turn | State | Turn end (tracked) | Between turns |
   |---|------|-------|--------------------|---------------|
-  | 1 | person prompt (the request's own prompt, an R21 re-delivery, a post retry) | tracked, nothing pending | no answer: **silent**, whatever the reading (its words are owed). A `progress` note answers them: reading `none` → follow-up in 15 min; `armed` / `watching` → quiet, the follow-up cleared | after the note nothing is owed: `watching` holds; `none` at the turn's end → follow-up, then backstop; `armed` / `watching` at the turn's end → backstop only |
+  | 1 | person prompt (the request's own prompt, an R21 re-delivery, a post retry) | tracked, nothing pending | no answer: **silent**, whatever the reading (its words are owed). A `progress` note answers them: reading `none` (`armed` too: a watch that fired is the alarm's, not this turn's) → follow-up in 15 min; `watching` → quiet, the follow-up cleared | after the note nothing is owed: `watching` holds; `none` / `armed` at the turn's end → follow-up, then backstop; `watching` at the turn's end → backstop only |
   | 2 | person prompt | tracking lost | no turn end is decided | owed (persisted when the prompt was forwarded) → **taken back** even under `watching`: backstop 90 min after the last activity of THIS request (another request's watched turn — a recurring job's fire — does not count), a restart wake at once for a tracker conversation whose process is gone; the reminder's turn is row 9 |
   | 3 | person prompt | silent count pending | no answer: count +1 → the alert `silentTurns` (give-up), whatever the reading. A `progress` note resets the count | owed → taken back |
-  | 4 | issue update (a requester's comment) | tracked, nothing pending | as row 1 | as row 1 |
+  | 4 | issue update (a requester's comment) | tracked, nothing pending | as row 1. Words that JOIN a turn already running (the update waits up to 10 min for idle, then is forwarded into it) start its progress count afresh: a note sent BEFORE them is not their answer — the turn ends silent, not as a «progress» one; only a note after them answers | as row 1 |
   | 5 | issue update | tracking lost | no turn end is decided | as row 2 |
   | 6 | issue update | silent count pending | as row 3 | as row 3 |
   | 7 | issue update HELD over a usage-limit wait | no turn started for it | owed from the moment it is held (`notePersonInputHeld`, persisted — a restart during the wait changes nothing); the turn that finally carries it (the wait's «continue», a fire, or the next request prompt of the issue) is read against that: no answer → **silent**, under any watch | during the wait nothing wakes it (the session is blocked by the wait); afterwards owed → taken back |
-  | 8 | engine reminder (follow-up, backstop, restart) | tracked, nothing owed (the request was answered) | reading `none` → no answer is **silent**; `armed` / `watching` → quiet, so the agent may say nothing. A `progress` note as in row 1 | as row 1 |
+  | 8 | engine reminder (follow-up, backstop, restart) | tracked, nothing owed (the request was answered) | reading `none` or `armed` → no answer is **silent** (a reminder under a watch nobody re-armed is a silent turn: the give-up comes after two, not after ten backstop wakes); `watching` → quiet, so the agent may say nothing. A `progress` note as in row 1 | as row 1 |
   | 9 | engine reminder | tracking lost | no turn end is decided | owed → taken back; not owed → `watching` holds |
   | 10 | engine reminder | silent count pending (the silent-turn reminder) | no answer: count +1 → the alert `silentTurns`, whatever the reading (an answer is owed) | owed → taken back |
-  | 11 | scheduled fire (`isScheduledRun`; the alarm's turn) | tracked, nothing owed | no answer: **quiet**, whatever the reading (a woken agent with nothing to report is no silent turn); the request's due follow-up is left alone unless a schedule holds it. A fire's own request (`scheduledRun`) that got no answer closes `cancelled` silently. A `progress` note as in row 1 | `watching` holds |
+  | 11 | scheduled fire (`isScheduledRun`; the alarm's turn) | tracked, nothing owed | no answer: **quiet**, whatever the reading (a woken agent with nothing to report is no silent turn); the request's due follow-up is left alone unless a schedule holds it. A fire's own request (`scheduledRun`) that got no answer closes `cancelled` silently. A `progress` note: quiet, the follow-up cleared, under `armed` (the watch that just fired) as under `watching`; a fire's turn with nothing armed is followed up as in row 1 | `watching` holds |
   | 12 | scheduled fire | tracking lost | no turn end is decided | as row 9 |
   | 13 | scheduled fire | the request owes an answer (a silent count pending, a person's words unanswered, a person's request never answered) | **silent** as in rows 3 and 10, whatever the reading: the reminder names the request, the next silence gives up. Never quiet, or each fire would move the backstop ahead and a recurring job would leave the requester unanswered for as long as it lives. A fire that JOINED the person's turn is merged into it (below) and is not the alarm's | owed → taken back |
-  | 14 | bot «continue» (after an API error or a limit wait; a fire held over the wait rides it too) | tracked, nothing pending | merges into the turn it continues and KEEPS the alarm's kind; the progress count restarts, so a note sent before the error is not this turn's. The end is that turn's row read against what is owed: words answered before the error are owed no more (quiet under a watch), words still unanswered stay owed (silent) | as that row |
+  | 14 | bot «continue» (after an API error or a limit wait; a fire held over the wait rides it too) | tracked, nothing pending | merges into the turn it continues and KEEPS the alarm's kind; the progress count restarts, so a note sent before the error is not this turn's. The end is that turn's row read against what is owed: words answered before the error are owed no more (quiet under a watch), words still unanswered stay owed (silent). A watch the agent arms in this turn is recorded under the request whose OWN forward started its watch, not under another one the nudge only carried along (the arming pick, below) | as that row |
   | 15 | bot «continue» | tracking lost | the nudge starts a plain turn (the alarm's only for a `scheduledRun` request). Its end reads the persisted request: owed → silent as in row 10; not owed → row 8 | as row 9 |
-  | 16 | bot «continue» | silent count pending | an API-error retry keeps the count (row 10 applies at the end); the end of a limit wait (`isCountersReset`) zeroes the count, the wake count and the follow-up and lifts the limit stop, but never the person's flag — what is owed stays owed | owed → taken back |
+  | 16 | bot «continue» | silent count pending | an API-error retry keeps the count (row 10 applies at the end); `isCountersReset` — the end of a limit or account wait, a limit fallback switch AND the operator's manual backend switch (a new agent on the other backend starts the request's bookkeeping afresh; `cancelApiRetry` ends a wait armed for the backend left) — zeroes the count, the wake count and the follow-up and lifts the limit stop, but never the person's flag: what is owed stays owed | owed → taken back |
   | 17 | limit / account resume (or a limit fallback switch) that re-posts the prompts the session never took in — a mention that arrived during the wait | tracked, decided PER REQUEST (`trackContinuationTurn`) | a request whose own prompt rode the message (`getPromptNotTakenIn`) is row 1: its words are owed, marked at once. Every other open request gets the plain «continue» of row 14 — an answered hand-over waiting on its watch stays quiet, it is never marked owed because another request's prompt was re-posted | as the row each request falls into |
+  | 18 | turns the engine does not track: a topic's lost-work auto-resume, compaction, a slash command forwarded to the agent in a view with requests (it opens no request), the held prompts replayed after a session start | no turn watched | no turn end is decided | their busy time counts as the activity of a request under the sweep's rule (row 2) — bounded by one such turn; nothing here makes a request owed or answered |
 
   Notes on the table. A woken agent in a tracker conversation may, and preferably should, stay silent about an alarm (rows 11, 12, and 8
   where nothing is owed): that is the only thing a watch buys, and it never reaches a person's words. A post retry still runs while a watch
@@ -178,10 +180,38 @@ Numeric bounds are named constants in the files below; this README says only wha
 - **A forward into a turn already watched for the same request MERGES with it** (`trackForwardedTurn`): a fire that waited behind a
   person's turn (`postToSession` waits up to 10 min, then forwards into the running turn), a reminder behind a silent one, an issue
   update during a fire, the bot's own «continue». The merged watch keeps the earlier start of the progress count (a «continue» starts it
-  afresh), is a request prompt's if either was (R21: the prompt is still marked taken in) and is the alarm's only if BOTH were (a
+  afresh, and so do a person's words that join the turn: a note sent before them is not their answer), is a request prompt's if either was (R21: the prompt is still marked taken in) and is the alarm's only if BOTH were (a
   «continue» keeps the alarm's kind). A person's words are not a property of the watch: they are owed on the persisted request from the
   moment they are forwarded, so an alarm that joined a requester's turn can never turn that turn's silent end into a quiet one. A fire
   riding a request also leaves its pending post retry alone: it carries none of the request's message.
+- **The request a job is armed under** (`pickRequestToArmUnder`, asked through the engine's `getArmingRequestIdOf`): the one the agent is
+  working on. Tiers, the first that has a request wins: a request whose watch a forward of its OWN started (its prompt, an issue update,
+  a fire riding it, a reminder for it — `isOwnForward`, kept by a merge if either side had it); a request watched only because a
+  CONVERSATION-WIDE forward carried it along (a «continue» nudge and a restart wake that carried several requests watch EVERY open request,
+  which says nothing about the one the agent works on); the open requests. Inside a tier the newest wins, a tracker hand-over
+  (`trackerEvent`) before a mention (`trackerMention`): a mention hands nothing over and long work belongs to the hand-over. A request a
+  fire opened (`scheduledRun`) is passed over for any other. Without this the watch armed after an API error would go to another
+  person's mention and the hand-over would wait for nothing.
+- **Self-check — every write of the owed fields** (`progressAnswerCount`, `isPersonInputUnanswered`, `silentTurnCount`,
+  `lastTurnActivityAt`), which request it writes and whether it can write a request other than the one whose words, answer or turn
+  caused it. Keep it next to the table: a new writer is a new row here and, when it can reach another request, a decision.
+
+  | Field | Writer | Request written | Another request? |
+  |-------|--------|-----------------|------------------|
+  | `progressAnswerCount` | `answerRequest` (progress +1) | the answered request (`args.requestId`, conversation-scoped) | No |
+  | | `createRequest` (initial 0) | the new request | No |
+  | `isPersonInputUnanswered` set | `trackForwardedTurn` | the request the forward is tracked for: the posted prompt, the update's target, a topic prompt, the woken request. A conversation-wide forward (`trackContinuationTurn`, `wakeAfterRestart`) tracks every open request, but sets the flag only for the requests whose OWN prompt rode the message (`getPromptNotTakenIn`) | No, since decision 26 |
+  | | `notePersonInputHeld` | the held comment's target request | No |
+  | `isPersonInputUnanswered` cleared | `answerRequest` (progress) | the answered request | No |
+  | `silentTurnCount` | `decideTurnEnd` / `getWakeOrCapDecision`, applied by `applyDecision` | the request whose watched turn ended | No: a session turn watched for several requests is decided for each against its own answer |
+  | | `answerRequest` (progress) | the answered request | No |
+  | | `trackContinuationTurn` with `isCountersReset` (also zeroes `wakeCount`, the follow-up and `isLimitStopped`) | EVERY open request | **Yes, by design**, for four callers: the end of a limit wait, the account-wait resume, the limit fallback switch AND the operator's manual backend switch (`executeBackendSwitch` → `resumeTopicOnNewSession`: no wait ended, but a new agent starts the bookkeeping afresh and `cancelApiRetry` ends a wait armed for the backend left). The flag is never touched: what is owed stays owed |
+  | | `createRequest` (initial 0) | the new request | No |
+  | `lastTurnActivityAt` | `recordTurnActivity` from `trackForwardedTurn` (forced) | the tracked request; a «continue» and a restart wake that carried several requests track each of them | **Yes, by design**: one session turn, every request in it is watched |
+  | | `recordTurnActivity` from a busy poll of a watched turn | the watched request itself | No |
+  | | `recordTurnActivity` from the sweep's busy branch | the unwatched request | Narrowed (row 2): recorded only when no other turn is watched in the conversation, or when the request owes nothing — harmless then, an answered request has its follow-up pending or is held |
+  | | `decideTurnEnd` / `decideUnwatchedRequest` / `decideRestartWake` updates, applied by `applyDecision` | the decided request | No |
+  | | `wakeAfterRestart` (writes `decision.update` itself; only its alert goes through `applyDecision`) | each request it wakes, for itself | No |
 - A request whose prompt could not be posted is retried on `postRetryDelaysMs`, OUTSIDE the wake-up cap
   (`notePostFailed`); a message forwarded any other way drops a pending retry.
 - A failure in one conversation is logged and never stops the others or rejects a timer tick — an unhandled
