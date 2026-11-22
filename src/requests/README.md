@@ -125,14 +125,21 @@ Numeric bounds are named constants in the files below; this README says only wha
   keeps counting towards the give-up: a watch is for the agent's alarms, never a reason to leave a requester unanswered for good; when the watch is gone (cancelled, paused,
   its check failing and not re-armed) the normal rules take the request back — the backstop, 90 min from the last activity: a waiting
   turn end clears the follow-up, so none is ever due after it. A turn a scheduler fire started (`trackForwardedTurn` with `isScheduledRun`) that ends without an answer is not silent
-  either: a woken agent with nothing to report stays quiet, and the bot never prods it for that. Its quiet end records the activity and
-  resets the silent-turn count but leaves the request's own due follow-up alone unless a schedule holds the request (a fire rides the
+  either: a woken agent with nothing to report stays quiet, and the bot never prods it for that. Its quiet end records the activity
+  but leaves a pending silent-turn count as it is (it resets only a count of zero) and the request's own due follow-up alone unless a
+  schedule holds the request (a fire rides the
   newest open request when its job's own request is gone, and an unrelated alarm must not wipe that request's follow-up). In a Telegram
   topic with requests a fire opens a request of its own (`origin.kind` `scheduledRun`): the engine reads the origin, so its turn is a
   scheduled run's whoever tracks it, and when its agent leaves it with no answer at all the request closes `cancelled` at the quiet end —
   nothing posted, nothing owed, no reminder, no «got no answer» alert, no backstop wake. A scheduler fire is not a wake-up and
   never counts against the cap. This is why an agent in a Jira issue can launch a worker, arm its watch, answer `progress` and end its
   turn, and why a Telegram topic in a view with requests is no longer reminded every 15 minutes while its own watch passes.
+- **A forward into a turn already watched for the same request MERGES with it** (`trackForwardedTurn`): a fire that waited behind a
+  person's turn (`postToSession` waits up to 10 min, then forwards into the running turn), a reminder behind a silent one, an issue
+  update during a fire. The merged watch keeps the earlier start of the progress count, is a request prompt's if either was (R21: the
+  prompt is still marked taken in), carries a person's words if either did, and is the alarm's only if BOTH were — so an alarm that
+  joined a requester's turn never turns that turn's silent end into a quiet one. A fire riding a request also leaves its pending post
+  retry alone: it carries none of the request's message.
 - A request whose prompt could not be posted is retried on `postRetryDelaysMs`, OUTSIDE the wake-up cap
   (`notePostFailed`); a message forwarded any other way drops a pending retry.
 - A failure in one conversation is logged and never stops the others or rejects a timer tick — an unhandled

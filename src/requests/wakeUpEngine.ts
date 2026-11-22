@@ -264,9 +264,11 @@ export class RequestWakeUpEngine {
   /**
    * @description A request's message (or a reminder for it) was just forwarded to
    * the conversation's session: watch the turn it starts. A watch already there
-   * for the SAME request is replaced — its newest message is the one that counts;
-   * another requester's request in the conversation keeps its own watch. A post
-   * retry still pending is moot from now on (R28): the session has the request.
+   * for the SAME request is MERGED with it (the forward joined a busy period): a person's
+   * words stay a person's, the progress count keeps its earlier start, and the turn is the
+   * alarm's only if both were. Another requester's request in the conversation keeps its own
+   * watch. A post retry still pending is moot from now on (R28): the session has the request —
+   * unless the forward is a fire riding the request, which carries none of it.
    */
   async trackForwardedTurn(
     key: SessionKey,
@@ -277,18 +279,26 @@ export class RequestWakeUpEngine {
     if (!request) return;
     // The agent works on an open request now: what it writes is owed to that one, not a tail.
     this.answerTails.delete(keyToString(key));
+    // A watch of the SAME request is still there: the forward joined a busy period (a fire that waited behind a person's turn, a
+    // reminder behind a silent one). The turns MERGE — a person's words are never washed out by an alarm or a reminder that joined
+    // them, and the earlier start of the progress count stays. Only a turn that was the alarm's all through is the alarm's.
+    const previous = this.watched.get(requestId);
+    const isScheduledRun = options.isScheduledRun === true || request.origin.kind === 'scheduledRun';
     this.watched.set(requestId, {
       key,
       requestId,
-      progressCountAtTurnStart: request.progressAnswerCount,
+      progressCountAtTurnStart: previous?.progressCountAtTurnStart ?? request.progressAnswerCount,
       hasSeenBusy: false,
       hasSeenOutput: false,
-      isRequestPrompt: options.isRequestPrompt,
+      isRequestPrompt: options.isRequestPrompt || previous?.isRequestPrompt === true,
       // A request a scheduler fire opened (a Telegram topic's `scheduledRun`) is the alarm's: its turn is a scheduled run's, whoever tracks it.
-      isScheduledRun: options.isScheduledRun === true || request.origin.kind === 'scheduledRun',
-      isPersonInput: options.isPersonInput === true,
+      isScheduledRun: isScheduledRun && (previous === undefined || previous.isScheduledRun === true),
+      isPersonInput: options.isPersonInput === true || previous?.isPersonInput === true,
     });
-    if (request.nextPostRetryAt !== undefined) await this.deps.ledger.updateOpenRequest(request.id, { nextPostRetryAt: undefined });
+    // The session has the request's message: a pending post retry is moot. A fire riding the request carries none of it.
+    if (request.nextPostRetryAt !== undefined && options.isScheduledRun !== true) {
+      await this.deps.ledger.updateOpenRequest(request.id, { nextPostRetryAt: undefined });
+    }
     await this.recordTurnActivity(request, true);
   }
 

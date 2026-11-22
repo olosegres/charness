@@ -1426,6 +1426,71 @@ describe('a request waits for its schedule', () => {
     assert.deepEqual(wakeUps, [{ requestId: ordinary.id, reason: 'silentTurn' }]);
   });
 
+  it('a fire that waited behind a person\'s turn joins it, never takes it over: the unanswered request prompt is still a silent turn, the reminder chain still ends in the alert', async () => {
+    const ledger = await createLedger();
+    const engine = createEngine(ledger, { getScheduleWait: () => 'watching' });
+    const request = await ledger.createRequest(issueKey, handOver);
+    await engine.trackForwardedTurn(issueKey, request.id, { isRequestPrompt: true });
+    // The fire's post waited for the busy session and was forwarded into the turn that was still running: the same request id.
+    await engine.trackForwardedTurn(issueKey, request.id, { isRequestPrompt: false, isScheduledRun: true });
+    await endTurnSilently(engine);
+    assert.deepEqual(wakeUps, [{ requestId: request.id, reason: 'silentTurn' }], 'a requester\'s prompt left unanswered, the alarm notwithstanding');
+    assert.deepEqual(alerts, []);
+    await endTurnSilently(engine);
+    assert.deepEqual(alerts, [{ requestId: request.id, reason: 'silentTurns' }], 'the reminder chain gives up as ever');
+  });
+
+  it('the same for a requester\'s issue update and for the engine\'s own reminder turn: a fire that joined them does not wash their words or their count out', async () => {
+    const ledger = await createLedger();
+    const engine = createEngine(ledger, { getScheduleWait: () => 'watching' });
+    const request = await ledger.createRequest(issueKey, handOver);
+    await engine.trackForwardedTurn(issueKey, request.id, { isRequestPrompt: false, isPersonInput: true });
+    await engine.trackForwardedTurn(issueKey, request.id, { isRequestPrompt: false, isScheduledRun: true });
+    await endTurnSilently(engine);
+    assert.deepEqual(wakeUps, [{ requestId: request.id, reason: 'silentTurn' }], 'an issue update, joined by a fire: still a person\'s turn');
+    assert.equal(ledger.getNewestOpenRequest(issueKey)?.silentTurnCount, 1);
+
+    // The reminder's own turn is on; a fire is forwarded into it before it ends: the pending count must survive the fire.
+    await engine.trackForwardedTurn(issueKey, request.id, { isRequestPrompt: false, isScheduledRun: true });
+    await endTurnSilently(engine);
+    assert.deepEqual(alerts, [{ requestId: request.id, reason: 'silentTurns' }], 'the count kept growing: the merged turn is not the alarm\'s');
+  });
+
+  it('a fire\'s own turn, with a silent person turn pending, leaves the count where it was; a turn that was the alarm\'s all through is still quiet', async () => {
+    const ledger = await createLedger();
+    const engine = createEngine(ledger, { getScheduleWait: () => 'watching' });
+    const request = await ledger.createRequest(issueKey, handOver);
+    await ledger.updateOpenRequest(request.id, { silentTurnCount: 1 });
+    await engine.trackForwardedTurn(issueKey, request.id, { isRequestPrompt: false, isScheduledRun: true });
+    await endTurnSilently(engine);
+    assert.deepEqual(wakeUps, []);
+    assert.deepEqual(alerts, []);
+    assert.equal(ledger.getNewestOpenRequest(issueKey)?.silentTurnCount, 1, 'not reset by the alarm');
+  });
+
+  it('a request prompt a fire joined is still marked taken in (R21): the merged watch keeps being a request prompt\'s', async () => {
+    const ledger = await createLedger();
+    const engine = createEngine(ledger, { getScheduleWait: () => 'watching' });
+    const request = await ledger.createRequest(issueKey, handOver, { createPrompt: (id) => `[Request ${id} · from: PROJ-1]` });
+    await engine.trackForwardedTurn(issueKey, request.id, { isRequestPrompt: true });
+    await engine.trackForwardedTurn(issueKey, request.id, { isRequestPrompt: false, isScheduledRun: true });
+    probe = { isActive: true, isBusy: true, hasUnconsumedInput: false, isTurnEndBlocked: false };
+    await engine.pollWatchedTurns();
+    assert.equal(ledger.getNewestOpenRequest(issueKey)?.isPromptTakenIn, true);
+  });
+
+  it('a fire riding a request leaves its pending post retry alone — it carries none of the request\'s message; the request\'s own forward drops it', async () => {
+    const ledger = await createLedger();
+    const engine = createEngine(ledger);
+    const request = await ledger.createRequest(issueKey, handOver, { createPrompt: (id) => `[Request ${id} · from: PROJ-1]` });
+    await engine.notePostFailed(issueKey, request.id);
+    assert.notEqual(ledger.getNewestOpenRequest(issueKey)?.nextPostRetryAt, undefined, 'a retry is scheduled');
+    await engine.trackForwardedTurn(issueKey, request.id, { isRequestPrompt: false, isScheduledRun: true });
+    assert.notEqual(ledger.getNewestOpenRequest(issueKey)?.nextPostRetryAt, undefined, 'the fire\'s forward did not deliver the request\'s prompt');
+    await engine.trackForwardedTurn(issueKey, request.id, { isRequestPrompt: true });
+    assert.equal(ledger.getNewestOpenRequest(issueKey)?.nextPostRetryAt, undefined, 'the request\'s own forward did');
+  });
+
   it('a failing check counts only at a turn\'s end: the agent that handled the wake is not silent, a wake nobody handled falls to the backstop', async () => {
     const ledger = await createLedger();
     const engine = createEngine(ledger, { getScheduleWait: () => 'armed' });

@@ -157,7 +157,8 @@ export interface TurnEndContext {
  * not carry a person's words (`isPersonTurn`) and no silent turn is pending (`silentTurnCount`): a requester's message is never
  * left unanswered because a watch is armed — the reminder that follows its silent turn keeps counting towards the give-up.
  * A request a scheduler fire opened (`origin.kind` `scheduledRun`) that its agent leaves with no answer at all settles at the quiet
- * end (`isRequestSettled`): it is the alarm's own request, and nobody is owed its answer.
+ * end (`isRequestSettled`): it is the alarm's own request, and nobody is owed its answer. A fire's quiet end alone leaves a pending
+ * silent-turn count as it is.
  */
 export function decideTurnEnd(
   request: OpenRequestState,
@@ -181,9 +182,16 @@ export function decideTurnEnd(
   // that waits for nothing (its own job's request is gone), and an unrelated alarm must not wipe that request's due follow-up.
   const isHeldBySchedule = isProgressSent || isQuietWhileWaiting;
   if (isHeldBySchedule || context.isScheduledRun === true) {
+    // A fire's quiet end alone must not wipe a silent turn that is pending: the alarm is none of the requester's business, and the
+    // count is what ends in the give-up if the agent keeps ignoring them.
+    const isCountKept = !isHeldBySchedule && request.silentTurnCount > 0;
     return {
       kind: 'quiet',
-      update: { silentTurnCount: 0, lastTurnActivityAt: nowMs, ...(isHeldBySchedule ? { nextWakeAt: undefined } : {}) },
+      update: {
+        lastTurnActivityAt: nowMs,
+        ...(isCountKept ? {} : { silentTurnCount: 0 }),
+        ...(isHeldBySchedule ? { nextWakeAt: undefined } : {}),
+      },
       ...(request.origin.kind === 'scheduledRun' && !isProgressSent ? { isRequestSettled: true } : {}),
     };
   }

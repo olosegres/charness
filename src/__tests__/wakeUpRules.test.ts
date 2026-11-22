@@ -276,7 +276,7 @@ describe('a request that waits for its schedule (scheduleWait) and a scheduled r
   });
 
   it('turn end: a scheduled run\'s turn without an answer is not silence either, even with nothing armed', () => {
-    assert.deepEqual(decideTurnEnd(createRequest({ silentTurnCount: 1 }), 0, nowMs, { isScheduledRun: true }), { kind: 'quiet', update: quietFireUpdate });
+    assert.deepEqual(decideTurnEnd(createRequest(), 0, nowMs, { isScheduledRun: true }), { kind: 'quiet', update: quietFireUpdate });
     assert.deepEqual(decideTurnEnd(createRequest(), 0, nowMs, { isScheduledRun: true, scheduleWait: 'none' }), { kind: 'quiet', update: quietFireUpdate });
   });
 
@@ -301,7 +301,7 @@ describe('a request that waits for its schedule (scheduleWait) and a scheduled r
       assert.equal(second.kind, 'alert', scheduleWait);
       assert.equal(second.kind === 'alert' ? second.reason : null, 'silentTurns');
     }
-    // A scheduled run's own quiet end is the alarm's: it still resets the count.
+    // A scheduled run's own quiet end is the alarm's: it leaves the pending count alone (see the next test).
     assert.equal(decideTurnEnd(createRequest({ silentTurnCount: 1 }), 0, nowMs, { scheduleWait: 'watching', isScheduledRun: true }).kind, 'quiet');
   });
 
@@ -321,6 +321,19 @@ describe('a request that waits for its schedule (scheduleWait) and a scheduled r
     assert.equal(fire.kind === 'quiet' ? fire.update.lastTurnActivityAt : null, nowMs, 'the activity is still recorded');
     const held = decideTurnEnd(request, 1, nowMs, { isScheduledRun: true, scheduleWait: 'watching' });
     assert.ok(held.kind === 'quiet' && 'nextWakeAt' in held.update && held.update.nextWakeAt === undefined, 'held by a watch: nothing is due');
+  });
+
+  it('turn end: a fire\'s quiet end leaves a pending silent-turn count as it is — the alarm is none of the requester\'s business, and the count ends in the give-up', () => {
+    for (const scheduleWait of ['none', 'armed', 'watching'] as const) {
+      const fire = decideTurnEnd(createRequest({ silentTurnCount: 1 }), 0, nowMs, { isScheduledRun: true, scheduleWait });
+      assert.equal(fire.kind, 'quiet', scheduleWait);
+      assert.ok(fire.kind === 'quiet' && !('silentTurnCount' in fire.update), `${scheduleWait}: the update does not name the count, so it stays 1`);
+      assert.equal(fire.kind === 'quiet' ? fire.update.lastTurnActivityAt : null, nowMs);
+    }
+    // With nothing pending the count is still reset (zero stays zero), and a progress note resets it: an answer was given.
+    assert.deepEqual(decideTurnEnd(createRequest(), 0, nowMs, { isScheduledRun: true }), { kind: 'quiet', update: quietFireUpdate });
+    const withProgress = decideTurnEnd(createRequest({ silentTurnCount: 1, progressAnswerCount: 1 }), 0, nowMs, { isScheduledRun: true, scheduleWait: 'watching' });
+    assert.ok(withProgress.kind === 'quiet' && withProgress.update.silentTurnCount === 0);
   });
 
   it('turn end: the alarm\'s own request (a scheduler fire\'s) left with no answer settles at the quiet end — one that sent a progress note, or a hand-over a fire only rides, does not', () => {
