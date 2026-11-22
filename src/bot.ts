@@ -15885,6 +15885,11 @@ function wireScheduler(wiring: SchedulerWiringDeps): SchedulerMcpHandle {
       const key = tryKeyFromString(threadKeyStr);
       if (key !== null) getLimitNotes().noteWorkerWatch(key);
     },
+    // The request a job is armed under (`ScheduleRecord.requestId`): the newest open one of the conversation, none when a view has no requests.
+    getNewestOpenRequestId: (threadKeyStr) => {
+      const key = tryKeyFromString(threadKeyStr);
+      return key === null ? undefined : wiring.requestLedger.getNewestOpenRequest(key)?.id;
+    },
     getRemoteRunRunnerLines: () => getRunnerSummaryLines(),
     // A refused tool call leaves one line in the bounded diagnostic log (agent-diag.log): the SDK refuses before the bot sees it.
     logDiagnostic: appendDiagLog,

@@ -233,20 +233,29 @@ describe('the boot gate', () => {
   });
 });
 
-describe('the tool set per platform (Jira connector plan J2, D18)', () => {
+describe('the tool set per platform (Jira connector plan J2, D18 — superseded for schedule_* by the Jira scheduling plan)', () => {
   const neutralToolNames = ['answer_request', 'compact_conversation'];
-  const telegramOnlyToolNames = ['schedule_create', 'schedule_list', 'schedule_cancel', 'send_file_to_user', 'send_messages_to_user'];
+  const schedulingToolNames = ['schedule_create', 'schedule_list', 'schedule_cancel'];
+  const telegramOnlyToolNames = ['send_file_to_user', 'send_messages_to_user'];
 
-  it('a Jira session sees answer_request, compact_conversation and jira_get_attachment, with instructions naming no Telegram tool', async () => {
+  it('a Jira session sees answer_request, compact_conversation, the schedule tools and jira_get_attachment, with instructions naming no Telegram-only tool', async () => {
     const client = await connectAgent({ kind: 'thread', threadKey: keyToString(makeJiraKey('PROJ-12')) });
 
     const toolNames = (await client.listTools()).tools.map((tool) => tool.name).sort();
-    assert.deepEqual(toolNames, [...neutralToolNames, 'jira_get_attachment'].sort());
+    assert.deepEqual(toolNames, [...neutralToolNames, ...schedulingToolNames, 'jira_get_attachment'].sort());
     const instructions = client.getInstructions() ?? '';
     assert.match(instructions, /answer_request/);
     assert.match(instructions, /jira_get_attachment/);
+    assert.match(instructions, /schedule_create/);
     for (const name of telegramOnlyToolNames) assert.doesNotMatch(instructions, new RegExp(name), name);
     assert.doesNotMatch(instructions, /Telegram/);
+  });
+
+  it('a session of the test platform, or of a key no codec reads, keeps the neutral set: no schedule tool', async () => {
+    const client = await connectAgent({ kind: 'thread', threadKey: 'a-key-no-codec-reads' });
+    const toolNames = (await client.listTools()).tools.map((tool) => tool.name);
+    for (const name of schedulingToolNames) assert.ok(!toolNames.includes(name), name);
+    assert.doesNotMatch(client.getInstructions() ?? '', /schedule_create/);
   });
 
   describe('replyToCommentIds — the comments an answer replies to (T11)', () => {
@@ -307,7 +316,7 @@ describe('the tool set per platform (Jira connector plan J2, D18)', () => {
       isJiraFileSendOffered = true;
       const client = await connectAgent(jiraScope);
       const tools = (await client.listTools()).tools;
-      assert.deepEqual(tools.map((tool) => tool.name).sort(), [...neutralToolNames, 'jira_get_attachment', 'send_file_to_user'].sort());
+      assert.deepEqual(tools.map((tool) => tool.name).sort(), [...neutralToolNames, ...schedulingToolNames, 'jira_get_attachment', 'send_file_to_user'].sort());
       const fileTool = tools.find((tool) => tool.name === 'send_file_to_user');
       assert.deepEqual(Object.keys(fileTool?.inputSchema.properties ?? {}).sort(), ['as_file', 'caption', 'paths']);
       assert.match(fileTool?.description ?? '', /an H\.264 \.mp4 plays in it/);
@@ -365,7 +374,7 @@ describe('the tool set per platform (Jira connector plan J2, D18)', () => {
   it('C10: a Jira session without the connector\'s port is not offered the tool', async () => {
     isJiraAttachmentOffered = false;
     const client = await connectAgent({ kind: 'thread', threadKey: keyToString(makeJiraKey('PROJ-12')) });
-    assert.deepEqual((await client.listTools()).tools.map((tool) => tool.name).sort(), [...neutralToolNames].sort());
+    assert.deepEqual((await client.listTools()).tools.map((tool) => tool.name).sort(), [...neutralToolNames, ...schedulingToolNames].sort());
     assert.doesNotMatch(client.getInstructions() ?? '', /jira_get_attachment/, 'the instructions name no tool the session lacks');
   });
 
@@ -415,7 +424,7 @@ describe('the tool set per platform (Jira connector plan J2, D18)', () => {
     ]) {
       const client = await connectAgent(scope);
       const toolNames = (await client.listTools()).tools.map((tool) => tool.name);
-      for (const name of [...neutralToolNames, ...telegramOnlyToolNames]) assert.ok(toolNames.includes(name), `${scope.kind}: ${name}`);
+      for (const name of [...neutralToolNames, ...schedulingToolNames, ...telegramOnlyToolNames]) assert.ok(toolNames.includes(name), `${scope.kind}: ${name}`);
       assert.match(client.getInstructions() ?? '', /schedule_create/);
     }
   });

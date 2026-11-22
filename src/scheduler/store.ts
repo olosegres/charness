@@ -99,6 +99,8 @@ export interface CreateScheduleArgs {
   statusCommand?: string;
   /** Minutes between a `'check'` job's status lines. */
   statusEveryMinutes?: number;
+  /** The request open in the conversation when the agent armed the job (`ScheduleRecord.requestId`). */
+  requestId?: string;
 }
 
 /**
@@ -130,6 +132,7 @@ export function createScheduleRecord(args: CreateScheduleArgs): ScheduleRecord {
   if (args.statusWorkerRunDir !== undefined) record.statusWorkerRunDir = args.statusWorkerRunDir;
   if (args.statusCommand !== undefined) record.statusCommand = args.statusCommand;
   if (args.statusEveryMinutes !== undefined) record.statusEveryMinutes = args.statusEveryMinutes;
+  if (args.requestId !== undefined) record.requestId = args.requestId;
   return record;
 }
 

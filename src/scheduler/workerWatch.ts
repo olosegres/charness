@@ -38,7 +38,7 @@ export const workerWatchExitCode = { processGone: 1, runDirSilent: 2, unreported
 
 const minutesPerHour = 60;
 /** The window of the third signal as the recipe's own output says it: `2 h 30 min`. */
-const workerWatchUnreportedWindowText = `${Math.floor(workerWatchUnreportedMinutes / minutesPerHour)} h ${workerWatchUnreportedMinutes % minutesPerHour} min`;
+export const workerWatchUnreportedWindowText = `${Math.floor(workerWatchUnreportedMinutes / minutesPerHour)} h ${workerWatchUnreportedMinutes % minutesPerHour} min`;
 
 /**
  * The `checkCommand` that watches a detached worker (an agent process an orchestrating agent launched), with `<pid>`

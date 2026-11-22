@@ -28,9 +28,8 @@ import {
   type SendMessagesToThread,
 } from '../utils/messageSendService';
 import { getAbortError } from '../utils';
-import { defaultCheckTimeoutSec, maxCheckCommandLength, maxCheckTimeoutSec } from './checkRun';
+import { maxCheckCommandLength, maxCheckTimeoutSec } from './checkRun';
 import {
-  checkStatusCommandTimeoutSec,
   defaultCheckStatusEveryMinutes,
   maxCheckStatusCommandLength,
   maxCheckStatusEveryMinutes,
@@ -38,15 +37,7 @@ import {
   minCheckStatusEveryMinutes,
 } from './checkStatus';
 import { checkIsCheckSchedule, checkIsReminderSchedule } from './deliveryKind';
-import {
-  workerWatchArmedFileName,
-  workerWatchCheckCommand,
-  workerWatchCheckCron,
-  workerWatchSilenceMinutes,
-  workerWatchStatusArguments,
-  workerWatchStatusEveryMinutes,
-  workerWatchUnreportedMinutes,
-} from './workerWatch';
+import { checkTimeoutSecondsDescription, getScheduleToolWording, type ScheduleToolPlatform, type ScheduleToolWording } from './scheduleToolWording';
 import { describePhrasedSchedule, describeSchedule, validateScheduleSpec } from './recurrence';
 import { createStrictToolInput, getUnknownKeysMessageOfUnion, runWithRefusalLogging, type StrictToolInput } from './strictToolInput';
 import { createScheduleForThread } from './store';
@@ -202,11 +193,25 @@ const workerWatchRecipeText =
   'its description has the recipe (checkCommand, cron, status arguments); never `kill -0` alone: it never fires on a hung worker.';
 
 /**
- * The orchestration bullet of a conversation on a tracker, which has no scheduling tools: only the manager-skill hint, so
- * with the bot's skills off (`/bot_skills`) there is nothing left of it and `null` drops it.
+ * The orchestration bullet of a conversation on a tracker that has no scheduling tools (the `test` platform, a key no codec
+ * reads): only the manager-skill hint, so with the bot's skills off (`/bot_skills`) there is nothing left of it and `null` drops it.
  */
 function buildTrackerOrchestrationInstruction(isBotSkillsEnabled: boolean): string | null {
   return isBotSkillsEnabled ? `${orchestrationInstructionHead} ${managerSkillInstruction}.` : null;
+}
+
+/** What a Jira agent does after it armed a worker's watch: the bot stops its idle process and the watch wakes it in the same issue. */
+const jiraEndTurnSentence = 'After the launch answer_request "progress", then END your turn: the watch wakes you in this issue when the worker is done (nothing of it is shown there).';
+
+/**
+ * The orchestration bullet of a Jira issue: Telegram's (the manager-skill hint dropped with the skills off, the worker-watch
+ * recipe — a tool fact — staying) and what differs on an issue: the agent answers `progress`, then ENDS its turn, because the
+ * watch wakes it in the same issue and nothing of the watch is shown there.
+ */
+function buildJiraOrchestrationInstruction(isBotSkillsEnabled: boolean): string {
+  return isBotSkillsEnabled
+    ? `${orchestrationInstructionHead} ${managerSkillInstruction}. Watch EACH worker with schedule_create — ${workerWatchRecipeText} ${jiraEndTurnSentence}`
+    : `${orchestrationInstructionHead} schedule_create to watch EACH worker — ${workerWatchRecipeText} ${jiraEndTurnSentence}`;
 }
 
 /** The orchestration bullet of a Telegram topic: the manager-skill hint (dropped with the skills off) and the worker-watch recipe, which is a tool fact and stays. */
@@ -281,8 +286,12 @@ const jiraAttachmentInstruction =
 const jiraFileSendInstruction =
   '• You made a screenshot, a video or a file the requester should see → put its path in answer_request\'s `files`: it is attached to the issue and shown in your answer\'s comment (an image shown, an H.264 .mp4 playing, any other file linked); send_file_to_user posts files in a comment of their own.';
 
+/** What a Jira session's instructions add for scheduling: nothing a fire, a check or a status does is shown on the issue. */
+const jiraScheduleInstruction =
+  '• Something must happen LATER, or you need a watchdog (a service, build, deploy, URL…) → schedule_create (`onceAt` / `cron` + `prompt`; `checkCommand` runs in this folder, silent while it exits 0, wakes you on the first failure): it resumes you in this issue. The bot posts nothing on the issue for it; answer the open request only with a result the requester needs. schedule_list / schedule_cancel. NEVER build your own watcher (loop, nohup, sleep, tmux, crontab): it dies with your session or a restart. Not CronCreate / ScheduleWakeup.';
+
 /** For a conversation on a tracker: the requester sees nothing but the answers; `extraInstructions` name the platform's own tools. */
-function buildTrackerInstructions(extraInstructions: readonly string[], isBotSkillsEnabled: boolean): string {
+function buildTrackerInstructions(extraInstructions: readonly string[], orchestrationInstruction: string | null): string {
   return `This MCP connects the agent to the conversation that asked for its work.
 
 When to use it:
@@ -291,7 +300,7 @@ ${[
   ...extraInstructions,
   compactConversationInstruction,
   claudeProfilesInstruction,
-  buildTrackerOrchestrationInstruction(isBotSkillsEnabled),
+  orchestrationInstruction,
 ].filter((instruction) => instruction !== null).join('\n')}
 
 Each tool's own description has the exact argument recipe.`;
@@ -305,22 +314,23 @@ Each tool's own description has the exact argument recipe.`;
  * already carries those in full. Kept terse on purpose.
  *
  * @description The connect-time instructions for a session of `platform`: only
- * a Telegram session has the scheduling and send-to-topic tools, so only its
- * instructions name them (Jira connector plan J2, D18); an optional tool is named
- * only where it is offered. With the bot's skills off for the session
+ * a Telegram or a Jira session has the scheduling tools and only a Telegram one the send-to-topic tools, so only their
+ * instructions name them (Jira connector plan J2, D18 — superseded for `schedule_*` by the Jira scheduling plan); an
+ * optional tool is named only where it is offered. With the bot's skills off for the session
  * (`isBotSkillsEnabled`, `/bot_skills`) the orchestration bullet no longer tells it to load `charness-orchestration`.
  */
 export function buildMcpServerInstructions(platform: PlatformId | null, offered: OptionalBotTools, isBotSkillsEnabled: boolean): string {
   const render = (remoteRunInstructionText: string | null): string => {
     if (platform === 'telegram') return buildTelegramInstructions(offered.isTodoToolOffered, remoteRunInstructionText, isBotSkillsEnabled);
     const remoteRunInstructions = remoteRunInstructionText === null ? [] : [remoteRunInstructionText];
-    if (platform !== 'jira') return buildTrackerInstructions(remoteRunInstructions, isBotSkillsEnabled);
+    if (platform !== 'jira') return buildTrackerInstructions(remoteRunInstructions, buildTrackerOrchestrationInstruction(isBotSkillsEnabled));
     return buildTrackerInstructions([
       ...(offered.isJiraAttachmentToolOffered ? [jiraAttachmentInstruction] : []),
       ...(offered.isJiraFileSendOffered ? [jiraFileSendInstruction] : []),
+      jiraScheduleInstruction,
       ...(offered.isTodoToolOffered ? [todoInstruction] : []),
       ...remoteRunInstructions,
-    ], isBotSkillsEnabled);
+    ], buildJiraOrchestrationInstruction(isBotSkillsEnabled));
   };
   const runnerCount = offered.remoteRunRunnerLines.length;
   if (runnerCount === 0) return render(null);
@@ -544,6 +554,12 @@ export interface SchedulerMcpDeps {
   /** The agent of the conversation `threadKey` armed a worker watch (`schedule_create` with `statusWorkerRunDir`): it orchestrates workers. */
   noteLimitWorkerWatch?: (threadKey: string) => void;
   /**
+   * The id of the newest request open in the conversation `threadKey`, or `undefined` when none is: `schedule_create` records
+   * it on the job (`ScheduleRecord.requestId`) — the request the job's fires ride and that waits for it. Absent = no job
+   * carries one.
+   */
+  getNewestOpenRequestId?: (threadKey: string) => string | undefined;
+  /**
    * One line per runner `charness remote-run` can use — paired or in `runners.json` (`remoteRun/runnerSummary.ts`): name, OS, what it could do
    * when last probed. Asked at every connect, so a runner added, removed or paused shows in the next session's instructions; absent or empty =
    * the instructions do not mention remote-run.
@@ -742,116 +758,95 @@ const threadKeyArgSchema = z
   .optional()
   .describe('Target thread "<chatId>:<threadId>". Required when a directory scope has more than one bound thread.');
 
-const scheduleCreateShape = {
-  name: z.string().min(1).max(maxNameLength).describe('Short human name for the job (shown in announcements/lists).'),
-  cron: z
-    .string()
-    .optional()
-    .describe(
-      '5-field host-local cron expression for a RECURRING job (e.g. "0 9 * * 1-5"). ' +
-        'For a single future run use onceAt instead, NOT a cron (a cron has no year and would ' +
-        'fire on the same date every year). Omit onceAt when you pass cron.',
-    ),
-  onceAt: z
-    .string()
-    .optional()
-    .describe(
-      'ISO 8601 instant for a ONE-SHOT run (e.g. "2026-06-07T09:00:00"). This is the right field for ' +
-        '"run it once at <time>". Omit cron AND repeatCount when you pass onceAt — a one-shot always runs ' +
-        'exactly once.',
-    ),
-  repeatCount: z
-    .number()
-    .int()
-    .positive()
-    .optional()
-    .describe(
-      'Number of CRON fires before the job auto-deletes (N-times recurring). ONLY for cron jobs. ' +
-        'Do NOT set it for a one-shot (onceAt) — a one-shot already runs exactly once, so repeatCount ' +
-        'is ignored there.',
-    ),
-  prompt: z
-    .string()
-    .min(1)
-    .max(maxPromptLength)
-    .describe(
-      'The prompt forwarded to the agent at fire time (for a check: only when the check fails, after ' +
-        'the failure details). Make it SELF-CONTAINED — the future run starts ' +
-        'with no memory of this conversation. Bake in everything it needs: the plan file path + scope, ' +
-        'whether to delegate to a sub-agent, and any constraints. Put the WORK in the prompt; do the ' +
-        'investigation later, when it fires.',
-    ),
-  checkCommand: z
-    .string()
-    .max(maxCheckCommandLength)
-    .optional()
-    .describe(
-      'Makes the job a WATCHDOG CHECK: a shell command (run with /bin/sh -c in the bound folder) the bot ' +
-        'executes at every fire instead of waking you. Exit 0 = healthy, nothing is posted. The first ' +
-        'non-zero exit or timeout tells the topic in one line (never the command) and wakes you with `prompt` plus the exit ' +
-        'code and output tail; later failures stay silent until a run passes again (the topic is told). ' +
-        'Keep it a quick probe, e.g. `systemctl --user is-active myapp`, `curl -fsS -m 10 http://127.0.0.1:8080/health`, ' +
-        '`test $(df --output=pcent / | tail -1 | tr -dc 0-9) -lt 90`; a detached worker: the recipe in the tool description. ' +
-        'Use ABSOLUTE paths only: it runs in the topic\'s folder, so a relative path or `~` points elsewhere.',
-    ),
-  checkTimeoutSeconds: z
-    .number()
-    .int()
-    .positive()
-    .max(maxCheckTimeoutSec)
-    .optional()
-    .describe(
-      `Seconds a check run may take before it is stopped and counted as a failure (default ${defaultCheckTimeoutSec}). ` +
-        'Only with checkCommand.',
-    ),
-  statusWorkerRunDir: z
-    .string()
-    .max(maxCheckStatusRunDirLength)
-    .optional()
-    .describe(
-      'A check\'s STATUS SOURCE for a detached worker: its run directory (absolute, or relative to the bound folder). While the ' +
-        'check passes, the BOT itself posts a short silent status line into the topic every statusEveryMinutes — how long the ' +
-        'worker has run and what it did last (its last text or tool call, read from the newest events*.jsonl there) — and ' +
-        'deletes the previous one. No agent wake, no tokens. Only with checkCommand; not together with statusCommand. ' +
-        'A topic on the answers-only view, and a tracker issue, get no line.',
-    ),
-  statusCommand: z
-    .string()
-    .max(maxCheckStatusCommandLength)
-    .optional()
-    .describe(
-      'A check\'s STATUS SOURCE for anything else: a shell command (run in the bound folder, at most ' +
-        `${checkStatusCommandTimeoutSec} s) whose first output line is the «now» of the same bot-posted status line ` +
-        '(e.g. `tail -n 1 build.log`). Only with checkCommand; not together with statusWorkerRunDir.',
-    ),
-  statusEveryMinutes: z
-    .number()
-    .int()
-    .min(minCheckStatusEveryMinutes)
-    .max(maxCheckStatusEveryMinutes)
-    .optional()
-    .describe(
-      `Minutes between two status lines (${minCheckStatusEveryMinutes}-${maxCheckStatusEveryMinutes}, default ${defaultCheckStatusEveryMinutes}). ` +
-        'Only with a status source.',
-    ),
+/**
+ * The arguments of `schedule_create` both platforms take, with `wording`'s own descriptions where the platforms differ. The
+ * key order is the order an agent reads the tool's schema in: Telegram's is the original and must not move.
+ */
+function buildScheduleCreateCommonShape(wording: ScheduleToolWording) {
+  return {
+    name: z.string().min(1).max(maxNameLength).describe(wording.nameDescription),
+    cron: z
+      .string()
+      .optional()
+      .describe(
+        '5-field host-local cron expression for a RECURRING job (e.g. "0 9 * * 1-5"). ' +
+          'For a single future run use onceAt instead, NOT a cron (a cron has no year and would ' +
+          'fire on the same date every year). Omit onceAt when you pass cron.',
+      ),
+    onceAt: z
+      .string()
+      .optional()
+      .describe(
+        'ISO 8601 instant for a ONE-SHOT run (e.g. "2026-06-07T09:00:00"). This is the right field for ' +
+          '"run it once at <time>". Omit cron AND repeatCount when you pass onceAt — a one-shot always runs ' +
+          'exactly once.',
+      ),
+    repeatCount: z
+      .number()
+      .int()
+      .positive()
+      .optional()
+      .describe(
+        'Number of CRON fires before the job auto-deletes (N-times recurring). ONLY for cron jobs. ' +
+          'Do NOT set it for a one-shot (onceAt) — a one-shot already runs exactly once, so repeatCount ' +
+          'is ignored there.',
+      ),
+    prompt: z
+      .string()
+      .min(1)
+      .max(maxPromptLength)
+      .describe(
+        'The prompt forwarded to the agent at fire time (for a check: only when the check fails, after ' +
+          'the failure details). Make it SELF-CONTAINED — the future run starts ' +
+          'with no memory of this conversation. Bake in everything it needs: the plan file path + scope, ' +
+          'whether to delegate to a sub-agent, and any constraints. Put the WORK in the prompt; do the ' +
+          'investigation later, when it fires.',
+      ),
+    checkCommand: z.string().max(maxCheckCommandLength).optional().describe(wording.checkCommandDescription),
+    checkTimeoutSeconds: z
+      .number()
+      .int()
+      .positive()
+      .max(maxCheckTimeoutSec)
+      .optional()
+      .describe(checkTimeoutSecondsDescription),
+    statusWorkerRunDir: z.string().max(maxCheckStatusRunDirLength).optional().describe(wording.statusWorkerRunDirDescription),
+    statusCommand: z.string().max(maxCheckStatusCommandLength).optional().describe(wording.statusCommandDescription),
+    statusEveryMinutes: z
+      .number()
+      .int()
+      .min(minCheckStatusEveryMinutes)
+      .max(maxCheckStatusEveryMinutes)
+      .optional()
+      .describe(wording.statusEveryMinutesDescription),
+  };
+}
+
+/** A Telegram topic's `schedule_create`: the common arguments, the deprecated pin switch and the target thread. */
+const scheduleCreateTelegramInput = createStrictToolInput({
+  ...buildScheduleCreateCommonShape(getScheduleToolWording('telegram')),
   isPinSilent: z
     .boolean()
     .optional()
     .describe('DEPRECATED, has no effect: scheduled messages and check alerts are never pinned. Do not pass it.'),
   threadKey: threadKeyArgSchema,
-};
-const scheduleCreateInput = createStrictToolInput(scheduleCreateShape);
+});
 
-const scheduleListShape = {
-  threadKey: threadKeyArgSchema,
-};
-const scheduleListInput = createStrictToolInput(scheduleListShape);
+/**
+ * A tracker conversation's `schedule_create`: the common arguments only — no `threadKey` (a tracker session's token names
+ * its one conversation, as `send_file_to_user` there) and no `isPinSilent` (deprecated, and nothing is pinned on a tracker).
+ */
+const scheduleCreateTrackerInput = createStrictToolInput(buildScheduleCreateCommonShape(getScheduleToolWording('jira')));
 
-const scheduleCancelShape = {
-  id: z.string().min(1).describe('The schedule id to cancel (from schedule_list).'),
-  threadKey: threadKeyArgSchema,
-};
-const scheduleCancelInput = createStrictToolInput(scheduleCancelShape);
+/** The arguments the `schedule_create` handler reads: a tracker session never passes the two Telegram-only ones. */
+type ScheduleCreateArgs = z.infer<typeof scheduleCreateTelegramInput>;
+
+const scheduleListTelegramInput = createStrictToolInput({ threadKey: threadKeyArgSchema });
+const scheduleListTrackerInput = createStrictToolInput({});
+
+const scheduleCancelIdSchema = z.string().min(1).describe('The schedule id to cancel (from schedule_list).');
+const scheduleCancelTelegramInput = createStrictToolInput({ id: scheduleCancelIdSchema, threadKey: threadKeyArgSchema });
+const scheduleCancelTrackerInput = createStrictToolInput({ id: scheduleCancelIdSchema });
 
 /**
  * Coerces an ARRAY tool argument into an actual array before validation. Some
@@ -1108,188 +1103,147 @@ function summarizeCreated(record: ScheduleRecord): string {
  * @description Register the three scoped tools onto a fresh {@link McpServer}.
  * Every handler resolves the target thread from `scope` first (scope isolation),
  * then operates only on that thread's jobs. Bound to `deps` + the request's
- * verified `scope`.
+ * verified `scope`. `platform` picks the wording and the input shape (`scheduleToolWording.ts`): a Telegram
+ * topic's original, or a tracker conversation's (no `threadKey`, no `isPinSilent`, nothing said of a topic).
  */
-function registerSchedulerTools(server: ToolRegistrar, deps: SchedulerMcpDeps, scope: SchedulerScope): void {
-  server.registerTool(
-    'schedule_create',
-    {
-      title: 'Create a scheduled prompt',
-      description:
-        'Schedule a prompt to be delivered to this topic later. At fire time the bot posts a short silent line ' +
-        '(name and schedule, the prompt folded under it) and forwards the prompt to the agent. The line is never pinned.\n\n' +
-        'Pick exactly ONE mode:\n' +
-        '• one-shot (run once at a time): pass onceAt (ISO 8601); omit cron and repeatCount.\n' +
-        '• recurring: pass cron (5-field); omit onceAt.\n' +
-        '• recurring N times: pass cron AND repeatCount; omit onceAt.\n' +
-        'For a single future run ALWAYS use onceAt — never a cron with repeatCount:1 ' +
-        '(a cron has no year, so it would fire on that date every year). repeatCount counts CRON ' +
-        'fires only and is ignored for a one-shot.\n\n' +
-        'USE THIS whenever the user asks to schedule execution of a plan or task for later ' +
-        "(e.g. \"schedule finishing plan X in 2h\", \"run this plan tomorrow morning\"). " +
-        'Schedule IMMEDIATELY: write the request straight into `prompt` and create the job FIRST — ' +
-        'do NOT read code, explore the repo, or deliberate before scheduling. Plan now, figure out the ' +
-        'details at fire time. The future run does the investigation, not this call.\n\n' +
-        'WATCHDOG: to monitor something (a service, process, build, deploy, disk, URL), pass checkCommand ' +
-        'with a cron — the bot runs it in this folder and wakes you only when it starts failing. This is ' +
-        'the ONLY reliable watcher: it survives bot restarts and crashes. Never build your own (a ' +
-        'background loop, nohup, a sleep loop, a tmux pane, a shell crontab) — it dies with your session ' +
-        'or a restart and then fails silently.\n\n' +
-        `A DETACHED WORKER you launched (a \`claude -p\` / \`opencode run\` process): cron \`${workerWatchCheckCron}\`, ` +
-        `\`${workerWatchStatusArguments}\`, checkCommand \`${workerWatchCheckCommand}\` with its PID and run dir (an absolute path) — it fails when ` +
-        `the worker exits, OR nothing in its run dir changed for ${workerWatchSilenceMinutes} min, OR the watch was armed ${workerWatchUnreportedMinutes} min ago (\`touch <run-dir>/${workerWatchArmedFileName}\` ` +
-        'right before you arm it — a resumed worker\'s reused run dir too — and again when you looked and found the worker fine: the same check then passes and watches on, ' +
-        'so do not arm a second one; a run dir without the file fails at once with exit 4), so the first failure is also the "worker finished" ' +
-        'signal (the topic then reads «worker finished», «worker silent» or «running without a report», never the command). Never `kill -0` alone: it stays green ' +
-        'while a worker hangs. The status arguments make the BOT post a silent status line into the topic every ' +
-        `${workerWatchStatusEveryMinutes} min while the worker lives (works N min, its last action), so the topic never looks frozen — ` +
-        'without waking you or spending tokens: never arm a schedule of your own for status lines. One check per worker run; ' +
-        'schedule_cancel it once its wake is handled (that also deletes its status line).',
-      inputSchema: scheduleCreateInput,
-    },
-    async (args) => {
-      const resolved = resolveTargetThreadKey(scope, args.threadKey, deps.getThreadsForDirectory);
-      if (!resolved.ok) return errorResult(resolved.error);
+function registerSchedulerTools(server: ToolRegistrar, deps: SchedulerMcpDeps, scope: SchedulerScope, platform: ScheduleToolPlatform): void {
+  const wording = getScheduleToolWording(platform);
+  const isTracker = platform === 'jira';
+  const handleCreate = async (args: ScheduleCreateArgs): Promise<CallToolResult> => {
+    const resolved = resolveTargetThreadKey(scope, args.threadKey, deps.getThreadsForDirectory);
+    if (!resolved.ok) return errorResult(resolved.error);
 
-      const nowMs = Date.now();
-      const built = buildSpecFromCreateArgs(args, nowMs);
-      if (!built.ok) return errorResult(built.error);
+    const nowMs = Date.now();
+    const built = buildSpecFromCreateArgs(args, nowMs);
+    if (!built.ok) return errorResult(built.error);
 
-      let threadKey: SessionKey;
-      try {
-        threadKey = keyFromString(resolved.threadKey);
-      } catch {
-        return errorResult(`invalid threadKey "${resolved.threadKey}"`);
-      }
+    let threadKey: SessionKey;
+    try {
+      threadKey = keyFromString(resolved.threadKey);
+    } catch {
+      return errorResult(`invalid threadKey "${resolved.threadKey}"`);
+    }
 
-      const checkCommand = normalizeOptionalArg(args.checkCommand);
-      const statusWorkerRunDir = normalizeOptionalArg(args.statusWorkerRunDir);
-      const statusCommand = normalizeOptionalArg(args.statusCommand);
-      if (statusWorkerRunDir !== undefined && statusCommand !== undefined) {
-        return errorResult('statusWorkerRunDir and statusCommand are alternatives — pass ONE status source.');
-      }
-      const notes = built.note ? [built.note] : [];
-      if (!checkCommand && args.checkTimeoutSeconds !== undefined) {
-        notes.push('checkTimeoutSeconds was ignored — it only applies with checkCommand.');
-      }
-      const hasStatusSource = statusWorkerRunDir !== undefined || statusCommand !== undefined;
-      if (!checkCommand && hasStatusSource) {
-        notes.push('statusWorkerRunDir / statusCommand was ignored — a status line only comes with checkCommand.');
-      }
-      const isStatusKept = checkCommand !== undefined && hasStatusSource;
-      if (args.statusEveryMinutes !== undefined && !isStatusKept) {
-        notes.push('statusEveryMinutes was ignored — it only applies with checkCommand and a status source (statusWorkerRunDir or statusCommand).');
-      }
+    const checkCommand = normalizeOptionalArg(args.checkCommand);
+    const statusWorkerRunDir = normalizeOptionalArg(args.statusWorkerRunDir);
+    const statusCommand = normalizeOptionalArg(args.statusCommand);
+    if (statusWorkerRunDir !== undefined && statusCommand !== undefined) {
+      return errorResult('statusWorkerRunDir and statusCommand are alternatives — pass ONE status source.');
+    }
+    const notes = built.note ? [built.note] : [];
+    if (!checkCommand && args.checkTimeoutSeconds !== undefined) {
+      notes.push('checkTimeoutSeconds was ignored — it only applies with checkCommand.');
+    }
+    const hasStatusSource = statusWorkerRunDir !== undefined || statusCommand !== undefined;
+    if (!checkCommand && hasStatusSource) {
+      notes.push('statusWorkerRunDir / statusCommand was ignored — a status line only comes with checkCommand.');
+    }
+    const isStatusKept = checkCommand !== undefined && hasStatusSource;
+    if (args.statusEveryMinutes !== undefined && !isStatusKept) {
+      notes.push('statusEveryMinutes was ignored — it only applies with checkCommand and a status source (statusWorkerRunDir or statusCommand).');
+    }
 
-      const created = await createScheduleForThread(deps.store, {
-        threadKey,
-        name: args.name,
-        spec: built.spec,
-        prompt: args.prompt,
-        createdBy: 'agent',
-        nowMs,
-        lastAdapterName: deps.getThreadAdapterName(resolved.threadKey),
-        ...(checkCommand
-          ? { deliveryKind: 'check' as const, checkCommand, checkTimeoutSec: args.checkTimeoutSeconds }
-          : {}),
-        ...(isStatusKept ? { statusWorkerRunDir, statusCommand, statusEveryMinutes: args.statusEveryMinutes } : {}),
-      });
-      if (!created.ok) {
-        // The cap counts only the agent-prompt jobs `schedule_list` shows, so the
-        // plain sentence is the whole truth: every slot it names is one this agent
-        // can see and cancel itself.
-        return errorResult(
-          `cannot create: thread already has the maximum of ${created.limit} schedules`,
-        );
-      }
+    // The request this job is armed under: it decides which request a fire rides and whether the request waits for the job.
+    const requestId = deps.getNewestOpenRequestId?.(resolved.threadKey);
+    const created = await createScheduleForThread(deps.store, {
+      threadKey,
+      name: args.name,
+      spec: built.spec,
+      prompt: args.prompt,
+      createdBy: 'agent',
+      nowMs,
+      lastAdapterName: deps.getThreadAdapterName(resolved.threadKey),
+      ...(checkCommand
+        ? { deliveryKind: 'check' as const, checkCommand, checkTimeoutSec: args.checkTimeoutSeconds }
+        : {}),
+      ...(isStatusKept ? { statusWorkerRunDir, statusCommand, statusEveryMinutes: args.statusEveryMinutes } : {}),
+      ...(requestId === undefined ? {} : { requestId }),
+    });
+    if (!created.ok) {
+      // The cap counts only the agent-prompt jobs `schedule_list` shows, so the
+      // plain sentence is the whole truth: every slot it names is one this agent
+      // can see and cancel itself.
+      return errorResult(
+        `cannot create: thread already has the maximum of ${created.limit} schedules`,
+      );
+    }
 
-      const record = created.record;
-      deps.armJob(record);
-      // A worker watch is what an agent that launches detached workers arms: the conversation orchestrates them (`limitNotes/`).
-      if (isStatusKept && statusWorkerRunDir !== undefined) deps.noteLimitWorkerWatch?.(resolved.threadKey);
-      const noteSuffix = notes.map((note) => `\n\nℹ️ ${note}`).join('');
-      return textResult(`${summarizeCreated(record)}${noteSuffix}`);
-    },
-  );
+    const record = created.record;
+    deps.armJob(record);
+    // A worker watch is what an agent that launches detached workers arms: the conversation orchestrates them (`limitNotes/`).
+    if (isStatusKept && statusWorkerRunDir !== undefined) deps.noteLimitWorkerWatch?.(resolved.threadKey);
+    const noteSuffix = notes.map((note) => `\n\nℹ️ ${note}`).join('');
+    return textResult(`${summarizeCreated(record)}${noteSuffix}`);
+  };
+  const createDefinition = { title: 'Create a scheduled prompt', description: wording.createDescription };
+  if (isTracker) server.registerTool('schedule_create', { ...createDefinition, inputSchema: scheduleCreateTrackerInput }, handleCreate);
+  else server.registerTool('schedule_create', { ...createDefinition, inputSchema: scheduleCreateTelegramInput }, handleCreate);
 
-  server.registerTool(
-    'schedule_list',
-    {
-      title: 'List scheduled prompts',
-      description: 'List the scheduled prompts for this topic (id, name, schedule, next run, paused flag).',
-      inputSchema: scheduleListInput,
-    },
-    async (args) => {
-      const resolved = resolveTargetThreadKey(scope, args.threadKey, deps.getThreadsForDirectory);
-      if (!resolved.ok) return errorResult(resolved.error);
+  const handleList = async (args: { threadKey?: string }): Promise<CallToolResult> => {
+    const resolved = resolveTargetThreadKey(scope, args.threadKey, deps.getThreadsForDirectory);
+    if (!resolved.ok) return errorResult(resolved.error);
 
-      let threadKey: SessionKey;
-      try {
-        threadKey = keyFromString(resolved.threadKey);
-      } catch {
-        return errorResult(`invalid threadKey "${resolved.threadKey}"`);
-      }
+    let threadKey: SessionKey;
+    try {
+      threadKey = keyFromString(resolved.threadKey);
+    } catch {
+      return errorResult(`invalid threadKey "${resolved.threadKey}"`);
+    }
 
-      // Reminders are invisible to the agent BY DESIGN: a `/reminders` job is
-      // bot-local (posted + pinned, no session touched), so listing one here
-      // would describe it to the agent as a "scheduled prompt" it could act on —
-      // and `schedule_cancel` below would let it delete something the operator
-      // created with buttons and never handed to any agent.
-      const records = deps.store
-        .getThreadSchedules(threadKey)
-        .filter((record) => !checkIsReminderSchedule(record));
-      if (records.length === 0) {
-        return textResult('No schedules for this topic.');
-      }
-      const lines = records.map((record, index) => `${index + 1}. ${summarizeRecord(record)}`);
-      return textResult(lines.join('\n'));
-    },
-  );
+    // Reminders are invisible to the agent BY DESIGN: a `/reminders` job is
+    // bot-local (posted + pinned, no session touched), so listing one here
+    // would describe it to the agent as a "scheduled prompt" it could act on —
+    // and `schedule_cancel` below would let it delete something the operator
+    // created with buttons and never handed to any agent.
+    const records = deps.store
+      .getThreadSchedules(threadKey)
+      .filter((record) => !checkIsReminderSchedule(record));
+    if (records.length === 0) {
+      return textResult(wording.listEmptyText);
+    }
+    const lines = records.map((record, index) => `${index + 1}. ${summarizeRecord(record)}`);
+    return textResult(lines.join('\n'));
+  };
+  const listDefinition = { title: 'List scheduled prompts', description: wording.listDescription };
+  if (isTracker) server.registerTool('schedule_list', { ...listDefinition, inputSchema: scheduleListTrackerInput }, handleList);
+  else server.registerTool('schedule_list', { ...listDefinition, inputSchema: scheduleListTelegramInput }, handleList);
 
-  server.registerTool(
-    'schedule_cancel',
-    {
-      title: 'Cancel a scheduled prompt',
-      description:
-        'Cancel (delete) a scheduled prompt by its id. Only schedules owned by this topic can be cancelled. Cancelling a ' +
-        'watchdog check also deletes its status line — cancel a worker watch once its wake is handled, so a finished worker ' +
-        'leaves no status line behind.',
-      inputSchema: scheduleCancelInput,
-    },
-    async (args) => {
-      const resolved = resolveTargetThreadKey(scope, args.threadKey, deps.getThreadsForDirectory);
-      if (!resolved.ok) return errorResult(resolved.error);
+  const handleCancel = async (args: { id: string; threadKey?: string }): Promise<CallToolResult> => {
+    const resolved = resolveTargetThreadKey(scope, args.threadKey, deps.getThreadsForDirectory);
+    if (!resolved.ok) return errorResult(resolved.error);
 
-      const record = deps.store.getSchedules()[args.id];
-      // Scope isolation: the record must exist AND belong to the resolved thread.
-      // A reminder answers the SAME "not found" as a missing id rather than a new
-      // error kind: `schedule_list` never showed it, so from the agent's side it
-      // genuinely does not exist, and a distinct refusal would only tell it there
-      // is an id here worth retrying.
-      if (!record || record.threadKey !== resolved.threadKey || checkIsReminderSchedule(record)) {
-        return errorResult(`no schedule with id "${args.id}" in this topic`);
-      }
+    const record = deps.store.getSchedules()[args.id];
+    // Scope isolation: the record must exist AND belong to the resolved thread.
+    // A reminder answers the SAME "not found" as a missing id rather than a new
+    // error kind: `schedule_list` never showed it, so from the agent's side it
+    // genuinely does not exist, and a distinct refusal would only tell it there
+    // is an id here worth retrying.
+    if (!record || record.threadKey !== resolved.threadKey || checkIsReminderSchedule(record)) {
+      return errorResult(wording.getCancelNotFoundText(args.id));
+    }
 
-      await deps.store.removeSchedule(args.id);
-      deps.disarmJob(args.id);
-      const cleanedUp: string[] = [];
-      // Nothing pins a check alert any more, but a job made by an earlier version may still carry the ids of the ones it pinned.
-      const alertPins = record.alertPinMessageIds ?? [];
-      if (alertPins.length > 0) {
-        const stillPinned = await deps.unpinMessages(record.threadKey, alertPins);
-        const unpinnedCount = alertPins.length - stillPinned.length;
-        if (unpinnedCount > 0) cleanedUp.push(`its ${unpinnedCount} pinned alert(s) unpinned`);
-        if (stillPinned.length > 0) cleanedUp.push(`${stillPinned.length} pinned alert(s) could not be unpinned (Telegram did not answer — unpin by hand)`);
-      }
-      // A "⏳ works …" line left under a cancelled watch would be wrong: the watch no longer says anything.
-      if (record.statusMessageId !== undefined) {
-        await deps.deleteMessage(record.threadKey, record.statusMessageId);
-        cleanedUp.push('its status line deleted');
-      }
-      const cleanupNote = cleanedUp.length > 0 ? `; ${cleanedUp.join('; ')}` : '';
-      return textResult(`Cancelled "${record.name}" (id: ${record.id})${cleanupNote}.`);
-    },
-  );
+    await deps.store.removeSchedule(args.id);
+    deps.disarmJob(args.id);
+    const cleanedUp: string[] = [];
+    // Nothing pins a check alert any more, but a job made by an earlier version may still carry the ids of the ones it pinned.
+    const alertPins = record.alertPinMessageIds ?? [];
+    if (alertPins.length > 0) {
+      const stillPinned = await deps.unpinMessages(record.threadKey, alertPins);
+      const unpinnedCount = alertPins.length - stillPinned.length;
+      if (unpinnedCount > 0) cleanedUp.push(`its ${unpinnedCount} pinned alert(s) unpinned`);
+      if (stillPinned.length > 0) cleanedUp.push(`${stillPinned.length} pinned alert(s) could not be unpinned (Telegram did not answer — unpin by hand)`);
+    }
+    // A "⏳ works …" line left under a cancelled watch would be wrong: the watch no longer says anything.
+    if (record.statusMessageId !== undefined) {
+      await deps.deleteMessage(record.threadKey, record.statusMessageId);
+      cleanedUp.push('its status line deleted');
+    }
+    const cleanupNote = cleanedUp.length > 0 ? `; ${cleanedUp.join('; ')}` : '';
+    return textResult(`Cancelled "${record.name}" (id: ${record.id})${cleanupNote}.`);
+  };
+  const cancelDefinition = { title: 'Cancel a scheduled prompt', description: wording.cancelDescription };
+  if (isTracker) server.registerTool('schedule_cancel', { ...cancelDefinition, inputSchema: scheduleCancelTrackerInput }, handleCancel);
+  else server.registerTool('schedule_cancel', { ...cancelDefinition, inputSchema: scheduleCancelTelegramInput }, handleCancel);
 }
 
 /**
@@ -1928,6 +1882,14 @@ function buildRequestServer(
   return server;
 }
 
+/**
+ * @description Whether a conversation of `platform` gets the `schedule_*` tools: a Telegram topic and a Jira issue (the wording
+ * of each is `scheduleToolWording.ts`). The `test` platform and a key no codec reads keep the platform-neutral tool set.
+ */
+export function checkIsSchedulingPlatform(platform: PlatformId | null): platform is ScheduleToolPlatform {
+  return platform === 'telegram' || platform === 'jira';
+}
+
 /** The tools a session of `platform` gets — the one list the request path serves and the digest records. */
 function registerBotTools(
   server: ToolRegistrar,
@@ -1936,9 +1898,11 @@ function registerBotTools(
   platform: PlatformId | null,
   requestSignal: AbortSignal | undefined,
 ): void {
-  // These deliver into a Telegram topic; for another platform's key they would throw (D18).
+  // Scheduling belongs to a conversation of a platform that can be woken by it: a topic or a Jira issue (this superseded D18 for
+  // the `schedule_*` tools). A key no codec reads, or the test platform, keeps the neutral set.
+  if (checkIsSchedulingPlatform(platform)) registerSchedulerTools(server, deps, scope, platform);
+  // These deliver into a Telegram topic; for another platform's key they would throw (D18 stands for them).
   if (platform === 'telegram') {
-    registerSchedulerTools(server, deps, scope);
     registerFileSendTool(server, deps, scope, requestSignal);
     registerMessageSendTool(server, deps, scope, requestSignal);
   }

@@ -1,8 +1,8 @@
 /**
  * @description What the «Bot skills» switch (`/bot_skills`) does to the bot MCP's instructions — the hint to load
  * `charness-orchestration` — per scope, over the REAL server (HTTP + the SDK client, the way an agent connects): a Telegram
- * topic with the skills off loses the hint but keeps the worker-watch recipe (a tool fact); a tracker conversation, whose
- * bullet is the hint alone, loses the bullet; a `dir:` scope (the OpenCode registration of a folder) counts the folder's
+ * topic or a Jira issue with the skills off loses the hint but keeps the worker-watch recipe (a tool fact); a conversation
+ * with no scheduling tools, whose bullet is the hint alone, loses the bullet; a `dir:` scope (the OpenCode registration of a folder) counts the folder's
  * OpenCode topics alone — a Claude topic bound to the same folder has its own scope — and keeps the hint while any of
  * them has the skills on. The digest an adopted process is compared by moves with it.
  *
@@ -119,16 +119,34 @@ describe('the instructions built for a platform', () => {
     assert.match(bullet, /→ schedule_create to watch EACH worker — /, 'the arrow leads to a tool, like every other bullet');
   });
 
-  it('a tracker conversation (Jira, or any other platform) has no scheduling tools: its bullet is the hint alone, so the bullet goes', () => {
-    for (const platform of ['jira', null] as const) {
-      const withSkills = buildMcpServerInstructions(platform, offered, true);
-      assert.ok(withSkills.includes(orchestrationBullet) && withSkills.includes(managerSkillHint), `${platform ?? 'neutral'}`);
-      const withoutSkills = buildMcpServerInstructions(platform, offered, false);
-      assert.ok(!withoutSkills.includes(orchestrationBullet), `${platform ?? 'neutral'}`);
-      assert.ok(!withoutSkills.includes('charness-orchestration'), `${platform ?? 'neutral'}`);
-      assert.match(withoutSkills, /answer_request/, 'the rest of the instructions is untouched');
-      assert.match(withoutSkills, /claude_profiles/);
-    }
+  it('a conversation with no scheduling tools (the test platform, a key no codec reads) has its bullet as the hint alone, so the bullet goes with the skills', () => {
+    const withSkills = buildMcpServerInstructions(null, offered, true);
+    assert.ok(withSkills.includes(orchestrationBullet) && withSkills.includes(managerSkillHint));
+    assert.doesNotMatch(withSkills, /schedule_create/);
+    const withoutSkills = buildMcpServerInstructions(null, offered, false);
+    assert.ok(!withoutSkills.includes(orchestrationBullet));
+    assert.ok(!withoutSkills.includes('charness-orchestration'));
+    assert.match(withoutSkills, /answer_request/, 'the rest of the instructions is untouched');
+    assert.match(withoutSkills, /claude_profiles/);
+  });
+
+  it('a Jira conversation has the scheduling tools: the hint (skills on) and the worker-watch recipe — a tool fact that stays with the skills off — and the end-the-turn sentence', () => {
+    const endTurnSentence = 'After the launch answer_request "progress", then END your turn: the watch wakes you in this issue when the worker is done (nothing of it is shown there).';
+    const withSkills = buildMcpServerInstructions('jira', offered, true);
+    const skillsBullet = withSkills.split('\n').find((line) => line.includes(orchestrationBullet)) ?? '';
+    assert.ok(skillsBullet.includes(managerSkillHint) && skillsBullet.includes('Watch EACH worker with schedule_create') && skillsBullet.includes(workerWatchRecipe), skillsBullet);
+    assert.ok(skillsBullet.includes(endTurnSentence), skillsBullet);
+
+    const withoutSkills = buildMcpServerInstructions('jira', offered, false);
+    assert.ok(!withoutSkills.includes(managerSkillHint));
+    assert.ok(!withoutSkills.includes('charness-orchestration'));
+    const bullet = withoutSkills.split('\n').find((line) => line.includes(orchestrationBullet)) ?? '';
+    assert.match(bullet, /→ schedule_create to watch EACH worker — /, 'the arrow leads to a tool, like Telegram\'s');
+    assert.match(bullet, /checkCommand, cron, status arguments/);
+    assert.match(bullet, /never `kill -0` alone/);
+    assert.ok(bullet.includes(endTurnSentence), bullet);
+    assert.match(withoutSkills, /answer_request/, 'the rest of the instructions is untouched');
+    assert.match(withoutSkills, /claude_profiles/);
   });
 
   it('the claude_profiles bullet — present with the skills on and off — says what an `[Accounts …]` note means: the limits moved, ask again before the next launch', () => {
@@ -170,9 +188,9 @@ describe('the instructions a connecting agent gets, per scope', () => {
   it('a Jira conversation follows the instance value', async () => {
     isInstanceValueOn = false;
     skillsOffKeys.add(keyToString(jiraConversation));
-    assert.ok(!(await readInstructions(threadScope(jiraConversation))).includes(orchestrationBullet));
+    assert.ok(!(await readInstructions(threadScope(jiraConversation))).includes(managerSkillHint));
     skillsOffKeys.delete(keyToString(jiraConversation));
-    assert.ok((await readInstructions(threadScope(jiraConversation))).includes(orchestrationBullet));
+    assert.ok((await readInstructions(threadScope(jiraConversation))).includes(managerSkillHint));
   });
 
   it('a dir scope keeps the hint while any OpenCode topic of the folder has the skills on, and drops it when every one is off', async () => {

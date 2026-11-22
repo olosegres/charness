@@ -238,13 +238,21 @@ describe('the bot-MCP tool digest (lifecycle plan L4)', () => {
     assert.match(description, /Never `kill -0` alone/);
   });
 
-  it('a tracker conversation is pointed at the orchestration add-on but gets no scheduling recipe — it has no scheduling tools', () => {
-    for (const platform of ['jira', null] as const) {
-      const instructions = buildMcpServerInstructions(platform, { isJiraAttachmentToolOffered: false, isJiraFileSendOffered: false, isTodoToolOffered: false, remoteRunRunnerLines: [] }, true);
-      assert.ok(instructions.includes('`charness-orchestration`'), `${platform ?? 'neutral'}`);
-      assert.ok(!instructions.includes(workerWatchCheckCommand), `${platform ?? 'neutral'}`);
-      assert.doesNotMatch(instructions, /schedule_create/);
-    }
+  it('a conversation with no scheduling tools is pointed at the orchestration add-on but gets no scheduling recipe', () => {
+    const instructions = buildMcpServerInstructions(null, { isJiraAttachmentToolOffered: false, isJiraFileSendOffered: false, isTodoToolOffered: false, remoteRunRunnerLines: [] }, true);
+    assert.ok(instructions.includes('`charness-orchestration`'));
+    assert.ok(!instructions.includes(workerWatchCheckCommand));
+    assert.doesNotMatch(instructions, /schedule_create/);
+  });
+
+  it('a Jira conversation is pointed at the add-on AND told to schedule: one scheduling bullet, the recipe pointer, no pin, no topic', () => {
+    const instructions = buildMcpServerInstructions('jira', { isJiraAttachmentToolOffered: false, isJiraFileSendOffered: false, isTodoToolOffered: false, remoteRunRunnerLines: [] }, true);
+    assert.ok(instructions.includes('`charness-orchestration`'));
+    assert.match(instructions, /• Something must happen LATER, or you need a watchdog .* → schedule_create /);
+    assert.match(instructions, /The bot posts nothing on the issue for it/);
+    assert.match(instructions, /Not CronCreate \/ ScheduleWakeup/);
+    assert.ok(!instructions.includes(workerWatchCheckCommand), 'the recipe itself stays in the tool description, as on Telegram');
+    assert.doesNotMatch(instructions, /Telegram|topic|isPinSilent|pinned/i);
   });
 
   it('every bot tool the shipped skills name is one a bot session really gets', () => {
