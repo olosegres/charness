@@ -125,8 +125,9 @@ A topic in the stream view has no requests: its fires are plain prompts.
     turn, and the second ends in the give-up, which tells the operator.
 
   It closes by the agent's `final` / `question`, a cancel of the conversation, the silent close above, or, once given up, by the
-  next fire's new request. Nothing passes from one scheduler's request to the next. Only one is open at a time, and a fire that finds it
-  open rides it.
+  next fire's new request. No answered state passes from one scheduler's request to the next. The jobs armed under the replaced one
+  follow it, as on any supersede (`supersededRequestIds`): the new request counts them and their fires ride it. Only one is open at a
+  time, and a fire that finds it open rides it.
 - **Who closes what.** A request a fire rides is closed only by the agent's answer, a cancel of the conversation, or (the scheduler's,
   never answered) the silent close above. A fire itself replaces only a scheduler's request the bot gave up on, and never closes or
   replaces a person's request.

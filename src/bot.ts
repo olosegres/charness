@@ -15957,7 +15957,8 @@ function wireScheduler(wiring: SchedulerWiringDeps): SchedulerMcpHandle {
       const key = tryKeyFromString(threadKeyStr);
       if (key !== null) getLimitNotes().noteWorkerWatch(key);
     },
-    // The request a job is armed under (`ScheduleRecord.requestId`): the one the agent works on — its watched turn, never a request a fire opened.
+    // The request a job is armed under (`ScheduleRecord.requestId`): the one the agent works on — the request whose forward started the
+    // running turn (the scheduler's request too, when its fire did); the scheduler's request is passed over only where no turn tells.
     getArmingRequestId: (threadKeyStr) => {
       const key = tryKeyFromString(threadKeyStr);
       if (key === null) return undefined;
