@@ -2,7 +2,7 @@ import { keyToString, type SessionKey } from '../sessionKey';
 import type { RequestLedger } from './requestLedger';
 import { checkIsHeldBetweenTurns, type RequestScheduleWait } from './scheduleWait';
 import type { OpenRequestState, RequestAlertReason, RequestAnswerKind } from './types';
-import { getWakeUpMessage, type WakeUpMessage } from './requestHeader';
+import { getPromptNotTakenIn, getWakeUpMessage, type WakeUpMessage } from './requestHeader';
 import {
   addAnswerTailOutput,
   answerTailMaxReminders,
@@ -405,9 +405,14 @@ export class RequestWakeUpEngine {
    * lifts a limit stop: the work continues, so does the waking. A request the
    * rules already gave up on stays given up. The one session turn the nudge
    * starts is watched for every open request of the conversation.
+   * `isRequestPrompt` — the message carries the prompts the session never took in (R21: a limit or account resume re-posts
+   * them) — is a fact about EACH request, not about the conversation: only a request whose prompt was not taken in has its words
+   * in the message (they are owed an answer, as any request prompt's), every other open request gets the plain «continue».
    */
   async trackContinuationTurn(key: SessionKey, options: { isCountersReset: boolean; isRequestPrompt?: boolean }): Promise<void> {
     for (const request of this.deps.ledger.listOpenRequestsOf(key)) {
+      // Read before the counters update below: it never touches `isPromptTakenIn`, but the request's words are what is asked here.
+      const isOwnPromptCarried = options.isRequestPrompt === true && getPromptNotTakenIn(request) !== undefined;
       if (options.isCountersReset) {
         await this.deps.ledger.updateOpenRequest(request.id, {
           silentTurnCount: 0,
@@ -417,7 +422,7 @@ export class RequestWakeUpEngine {
           limitWaitAnsweredFor: undefined,
         });
       }
-      await this.trackForwardedTurn(key, request.id, { isRequestPrompt: options.isRequestPrompt === true, isContinuation: true });
+      await this.trackForwardedTurn(key, request.id, { isRequestPrompt: isOwnPromptCarried, isContinuation: true });
     }
   }
 

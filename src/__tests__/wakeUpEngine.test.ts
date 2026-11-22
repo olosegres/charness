@@ -1702,6 +1702,25 @@ describe('a request waits for its schedule', () => {
     await engine.notePersonInputHeld(issueKey, 'req_gone0001');
   });
 
+  it('a limit resume that re-posts ONE request\'s prompt marks only that request owed: another requester\'s answered request waiting on its watch gets the plain «continue»', async () => {
+    const ledger = await createLedger();
+    const engine = createEngine(ledger, { getScheduleWait: () => 'watching' });
+    const handOverOfBob = { ...handOver, attributes: { ...handOver.attributes, requester: 'bob' } };
+    const answered = await ledger.createRequest(issueKey, handOver, { createPrompt: (id) => `[Request ${id} · from ann]` });
+    await ledger.updateOpenRequest(answered.id, { progressAnswerCount: 1, isPromptTakenIn: true });
+    // A mention that came during the wait: its prompt was held, the session never took it in.
+    const held = await ledger.createRequest(issueKey, handOverOfBob, { createPrompt: (id) => `[Request ${id} · from bob]` });
+
+    await engine.trackContinuationTurn(issueKey, { isCountersReset: true, isRequestPrompt: true });
+    assert.equal(ledger.listOpenRequestsOf(issueKey).find((request) => request.id === answered.id)?.isPersonInputUnanswered, undefined, 'ann\'s answered request owes nothing');
+    assert.equal(ledger.listOpenRequestsOf(issueKey).find((request) => request.id === held.id)?.isPersonInputUnanswered, true, 'bob\'s words rode the message: owed');
+
+    await endTurnSilently(engine);
+    assert.deepEqual(wakeUps, [{ requestId: held.id, reason: 'silentTurn' }], 'only the request whose prompt was re-posted is reminded; the waiting one stays quiet');
+    assert.deepEqual(alerts, []);
+    assert.equal(ledger.listOpenRequestsOf(issueKey).find((request) => request.id === answered.id)?.silentTurnCount, 0);
+  });
+
   it('the end of a limit wait zeroes the counters but never the person\'s unanswered words: what was owed stays owed', async () => {
     const ledger = await createLedger();
     const engine = createEngine(ledger, { getScheduleWait: () => 'watching' });
