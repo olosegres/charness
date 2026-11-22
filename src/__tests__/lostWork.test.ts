@@ -155,7 +155,7 @@ describe('lostWork', () => {
   });
 
   it('a note for a request a passing watch holds tells the requester only if they must know — the fire header\'s wording — and still bakes the reply language', () => {
-    const note = buildLostWorkNote(record, 'English', { isTellingOptional: true });
+    const note = buildLostWorkNote(record, 'English', { telling: 'watchHeld' });
     assert.ok(note.includes('That work died with the process: no notification will ever arrive for it.'), note);
     assert.ok(note.includes('nothing the requester wrote is waiting for your answer, so carry on without a comment'), note);
     assert.ok(!note.includes('nobody is waiting'), 'the requester of a hand-over IS waiting for the result: only nothing they wrote is unanswered');
@@ -163,6 +163,14 @@ describe('lostWork', () => {
     assert.ok(note.endsWith('tell the requester about it, IN English, only if they must know (it changes what they are waiting for).'), note);
     assert.ok(!note.includes('tell the user in one or two lines'), 'not the plain «tell the user» line');
     assert.ok(buildLostWorkNote(record, 'English').includes('tell the user in one or two lines what happened'), 'the default note is unchanged (a topic\'s)');
+  });
+
+  it('a note that rides a tracker fire claims no watch: the run\'s header says when to answer — a check that just failed, a one-shot or a fire with no request open would make the watch sentence false (review 15 #3)', () => {
+    const note = buildLostWorkNote(record, 'English', { telling: 'runHeader' });
+    assert.ok(note.includes('This run\'s header says when to answer'), note);
+    assert.ok(note.includes('tell the requester about the loss, IN English, only if it changes what they are waiting for.'), note);
+    assert.ok(!note.includes('Your watch is still armed'), 'no claim about a watch');
+    assert.ok(!note.includes('tell the user in one or two lines'), 'not the plain line');
   });
 
   it('the note names the reason and every lost piece, says no notification will come, and bakes the reply language', () => {

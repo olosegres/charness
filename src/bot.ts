@@ -298,7 +298,7 @@ import { AgentBackendUnavailableError } from './adapters/backendUnavailableError
 import { getPerTurnRefusedVersion, minAutoStopClaudeCodeVersion } from './utils/claudeCodeVersion';
 import { KeyedTransitionQueue } from './utils/keyedTransitionQueue';
 import { checkIsAdoptedToolListStale } from './utils/adoptedToolList';
-import { buildLostWorkNote, checkHasLostBackgroundWork, checkHasLostWork, type LostWorkRecord, formatLostWorkTopicLine, getHeldLostWorkPlan, getLostWorkFromTailRecord, getLostWorkPlan, getTailRecordWithoutPendingWork, lostWorkResumeCooldownMs, mergeLostWorkRecords, type LostWork, type LostWorkReason } from './utils/lostWork';
+import { buildLostWorkNote, checkHasLostBackgroundWork, checkHasLostWork, type LostWorkRecord, type LostWorkTelling, formatLostWorkTopicLine, getHeldLostWorkPlan, getLostWorkFromTailRecord, getLostWorkPlan, getTailRecordWithoutPendingWork, lostWorkResumeCooldownMs, mergeLostWorkRecords, type LostWork, type LostWorkReason } from './utils/lostWork';
 import { pendingWorkHoldDefaultMs } from './utils/jsonStreamPendingWork';
 import { getAgentIdleMs } from './utils/compactOnIdle';
 import { getCompactSelfReviewFlagDirs } from './utils/compactSelfReviewFlags';
@@ -6389,8 +6389,8 @@ interface PromptForwardOptions {
   isPersonInput?: boolean;
   isRecoveryReplay?: boolean;
   isRequestReminder?: boolean;
-  /** The lost-work note this prompt carries tells the requester only if they must know (`buildLostWorkNote`): a tracker request a passing watch holds. */
-  isLostWorkTellOptional?: boolean;
+  /** How the lost-work note this prompt carries asks to tell about the loss (`LostWorkTelling`; absent: `plain`). */
+  lostWorkTelling?: LostWorkTelling;
   isTechnicalPrompt?: boolean;
   /**
    * The prompt starts a turn the person or the scheduler made, so it may carry the accounts note (`limitNotes/`): a person's
@@ -6456,7 +6456,7 @@ async function forwardPromptToLiveAgent(
   const isLostWorkNoteCarried = (isReplayable || options.isRequestReminder === true) && adapter.name !== 'terminal';
   const lostWorkRecord = isLostWorkNoteCarried ? state.getLostWork(key) : undefined;
   const body = lostWorkRecord
-    ? `${buildLostWorkNote(lostWorkRecord, getLocaleEndonym(getActiveLang()), { isTellingOptional: options.isLostWorkTellOptional === true })}\n\n${messageBody}`
+    ? `${buildLostWorkNote(lostWorkRecord, getLocaleEndonym(getActiveLang()), { telling: options.lostWorkTelling ?? 'plain' })}\n\n${messageBody}`
     : messageBody;
   // Cache the (reply-folded) prompt so a wedged OpenCode session can be recovered
   // by restarting fresh and replaying it — replaying WITH the quote is correct.
@@ -11617,7 +11617,7 @@ async function downloadIncomingFile(
  */
 const promptDeliveryDeps: PromptDeliveryDeps = {
   startupBuffer: startupPromptBuffer,
-  forwardPrompt: (key, text, options) => forwardPromptToAgent(key, getThreadAdapter(key), text, undefined, { isPersonInput: options.isPersonInput, isAccountsNoteCarrier: options.isAccountsNoteCarrier, isLostWorkTellOptional: options.isLostWorkTellOptional }),
+  forwardPrompt: (key, text, options) => forwardPromptToAgent(key, getThreadAdapter(key), text, undefined, { isPersonInput: options.isPersonInput, isAccountsNoteCarrier: options.isAccountsNoteCarrier, lostWorkTelling: options.lostWorkTelling }),
   announceQueued: async (key) => {
     await replyToThread(key, t('agent.queued_starting', { label: getThreadAdapter(key).label }));
   },
@@ -15667,7 +15667,7 @@ async function forwardRequestWakeUp(key: SessionKey, _request: OpenRequestState,
   // The request's own prompt re-posted (R21) counts as that prompt, not a reminder.
   await forwardPromptToAgent(key, getThreadAdapter(key), message.text, undefined, {
     isRequestReminder: !message.isRequestPrompt,
-    isLostWorkTellOptional: message.isAnswerOptional === true,
+    lostWorkTelling: message.isAnswerOptional === true ? 'watchHeld' : 'plain',
   });
 }
 
@@ -15788,10 +15788,10 @@ function createSessionPostDeps(): PostToSessionDeps {
 async function forwardScheduledRun(conversationKey: string, text: string, ridden: RiddenRequest | null): Promise<void> {
   const key = keyFromString(conversationKey);
   const buffered = createBufferedOutcome();
-  // A tracker fire whose ridden request owes nothing, or with none open: its header says to answer only with a result, so a lost-work
-  // note riding it asks the same (a comment notifies the requester and the issue's watchers). A topic keeps its own resume and wording.
-  const isLostWorkTellOptional = !checkIsTelegramKey(key) && ridden?.isAnswerOwed !== true;
-  const delivery = await deliverPromptOrBuffer(key, text, startupPromptBuffer.checkIsStarting(conversationKey), buffered.settle, { isAccountsNoteCarrier: true, isLostWorkTellOptional });
+  // A tracker fire whose ridden request owes nothing, or with none open: its header says when to answer, so a lost-work note riding it
+  // defers to it and claims no watch (a comment notifies the requester and the issue's watchers). A topic keeps its own resume and wording.
+  const lostWorkTelling: LostWorkTelling = !checkIsTelegramKey(key) && ridden?.isAnswerOwed !== true ? 'runHeader' : 'plain';
+  const delivery = await deliverPromptOrBuffer(key, text, startupPromptBuffer.checkIsStarting(conversationKey), buffered.settle, { isAccountsNoteCarrier: true, lostWorkTelling });
   // A prompt that waited for the session's start counts only once it reached it: a replay whose write failed is a failed post.
   if (delivery === 'buffered') await buffered.assertReplayed();
   if (ridden !== null && delivery !== 'noSession') {

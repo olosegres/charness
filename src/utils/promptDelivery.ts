@@ -1,6 +1,7 @@
 import { keyToString, type SessionKey } from '../sessionKey';
 import { checkIsTelegramKey } from '../connectors/telegram/sessionKeyCodec';
 import type { BufferedPromptSettled, StartupPromptBuffer } from '../startupPromptBuffer';
+import type { LostWorkTelling } from './lostWork';
 
 /**
  * @name PromptDeliveryDeps
@@ -23,14 +24,14 @@ export interface PromptDeliveryDeps {
  * `isAccountsNoteCarrier` — the prompt starts a turn the person or the scheduler made (a person's message that opened a request, a
  * tracker's post, a scheduled run), so its forward may attach the accounts note (`limitNotes/`); kept with the prompt through a startup
  * buffer, and decorated at the replay with the figures of that moment.
- * `isLostWorkTellOptional` — a lost-work note that rides this prompt asks the agent to tell the requester only if they must know (a
- * tracker fire whose ridden request owes nothing, or with none open: its header already says to answer only with a result); kept
- * through a startup buffer as well.
+ * `lostWorkTelling` — how a lost-work note that rides this prompt asks to tell about the loss (`LostWorkTelling`; a tracker fire whose
+ * ridden request owes nothing, or with none open, asks `runHeader`: its header already says when to answer); kept through a startup
+ * buffer as well.
  */
 export interface PromptDeliveryOptions {
   isPersonInput?: boolean;
   isAccountsNoteCarrier?: boolean;
-  isLostWorkTellOptional?: boolean;
+  lostWorkTelling?: LostWorkTelling;
 }
 
 /**

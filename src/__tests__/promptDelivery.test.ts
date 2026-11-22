@@ -56,13 +56,13 @@ describe('deliverPromptOrBuffer: what a buffered prompt keeps', () => {
   it('the options travel with a buffered prompt to its replay — the accounts note\'s carrier flag, and the lost-work note\'s optional wording (review 14 #3) — and a prompt without them replays without them', async () => {
     startupBuffer.markStarting(keyToString(topicKey));
     await deliverPromptOrBuffer(deps, topicKey, 'a person\'s message', true, undefined, { isPersonInput: true, isAccountsNoteCarrier: true });
-    await deliverPromptOrBuffer(deps, topicKey, 'a tracker fire', true, undefined, { isAccountsNoteCarrier: true, isLostWorkTellOptional: true });
+    await deliverPromptOrBuffer(deps, topicKey, 'a tracker fire', true, undefined, { isAccountsNoteCarrier: true, lostWorkTelling: 'runHeader' });
     await deliverPromptOrBuffer(deps, topicKey, 'a retry nudge', true);
     const replayed: Array<[string, PromptDeliveryOptions]> = [];
     await startupBuffer.replayPrompts(keyToString(topicKey), { isSessionActive: true, forward: async (text, options) => { replayed.push([text, options]); } });
     assert.deepEqual(replayed, [
       ['a person\'s message', { isPersonInput: true, isAccountsNoteCarrier: true }],
-      ['a tracker fire', { isAccountsNoteCarrier: true, isLostWorkTellOptional: true }],
+      ['a tracker fire', { isAccountsNoteCarrier: true, lostWorkTelling: 'runHeader' }],
       ['a retry nudge', {}],
     ]);
   });
@@ -216,7 +216,7 @@ describe('the bot buffers a prompt for a starting session through it, in one pla
   });
 
   it('the forward ports return where the prompt went, with no wrapper that throws the answer away', () => {
-    assert.ok(botSource.includes('forwardPrompt: (key, text, options) => forwardPromptToAgent(key, getThreadAdapter(key), text, undefined, { isPersonInput: options.isPersonInput, isAccountsNoteCarrier: options.isAccountsNoteCarrier, isLostWorkTellOptional: options.isLostWorkTellOptional }),'));
+    assert.ok(botSource.includes('forwardPrompt: (key, text, options) => forwardPromptToAgent(key, getThreadAdapter(key), text, undefined, { isPersonInput: options.isPersonInput, isAccountsNoteCarrier: options.isAccountsNoteCarrier, lostWorkTelling: options.lostWorkTelling }),'));
     assert.ok(botSource.includes('forward: async (prompt, options) => { await forwardPromptToAgent(key, adapter, prompt, undefined, options); },'), 'a buffered prompt is replayed with the options it was buffered with');
     assert.doesNotMatch(botSource, /forwardPrompt: async \(key, text\) => \{ await forwardPromptToAgent/);
     const cancel = botSource.slice(botSource.indexOf('async function cancelPendingQuestionAndForward('), botSource.indexOf('async function applyQuestionAnswer('));

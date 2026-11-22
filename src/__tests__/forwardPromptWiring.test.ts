@@ -97,14 +97,14 @@ test('only a person\'s own prompts are marked as such: the text, voice and label
 });
 
 test('the lost-work wake of a request a passing watch holds tells the requester only if they must know: the wake message\'s flag reaches the note the prompt carries', () => {
-  assert.match(getFunctionBody('forwardRequestWakeUp'), /isLostWorkTellOptional: message\.isAnswerOptional === true,/);
-  assert.match(getFunctionBody('forwardPromptToLiveAgent'), /buildLostWorkNote\(lostWorkRecord, getLocaleEndonym\(getActiveLang\(\)\), \{ isTellingOptional: options\.isLostWorkTellOptional === true \}\)/);
+  assert.match(getFunctionBody('forwardRequestWakeUp'), /lostWorkTelling: message\.isAnswerOptional === true \? 'watchHeld' : 'plain',/);
+  assert.match(getFunctionBody('forwardPromptToLiveAgent'), /buildLostWorkNote\(lostWorkRecord, getLocaleEndonym\(getActiveLang\(\)\), \{ telling: options\.lostWorkTelling \?\? 'plain' \}\)/);
 });
 
 test('a tracker fire whose ridden request owes nothing, or with no request open, asks for the lost-work note\'s optional wording — the fire\'s header already says to answer only if the requester must know (review 14 #3)', () => {
   const body = getFunctionBody('forwardScheduledRun');
-  assert.match(body, /const isLostWorkTellOptional = !checkIsTelegramKey\(key\) && ridden\?\.isAnswerOwed !== true;/);
-  assert.match(body, /\{ isAccountsNoteCarrier: true, isLostWorkTellOptional \}/);
+  assert.match(body, /const lostWorkTelling: LostWorkTelling = !checkIsTelegramKey\(key\) && ridden\?\.isAnswerOwed !== true \? 'runHeader' : 'plain';/);
+  assert.match(body, /\{ isAccountsNoteCarrier: true, lostWorkTelling \}/);
 });
 
 test('the turn probe reads the startup buffer\'s replay as the start, and the held prompts of a limit wait are forwarded inside the replay (review 15 #1)', () => {

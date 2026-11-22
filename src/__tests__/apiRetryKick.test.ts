@@ -642,7 +642,7 @@ describe('the bot wires the kick and the restore, and keeps the saved record mea
     // The buffer-or-forward unit the whole bot shares: buffered text replays in order once the start finishes.
     assert.ok(getFunction('function deliverPromptOrBuffer(').includes('return deliverPromptWithDeps(promptDeliveryDeps, key, promptText, isStarting, onBufferedSettled, options);'));
     // A nudge is no person's message: its forward waits for the write (no `isPersonInput` from the kick's port).
-    assert.match(botSource, /startupBuffer: startupPromptBuffer,\n\s*forwardPrompt: \(key, text, options\) => forwardPromptToAgent\(key, getThreadAdapter\(key\), text, undefined, \{ isPersonInput: options\.isPersonInput, isAccountsNoteCarrier: options\.isAccountsNoteCarrier, isLostWorkTellOptional: options\.isLostWorkTellOptional \}\),/);
+    assert.match(botSource, /startupBuffer: startupPromptBuffer,\n\s*forwardPrompt: \(key, text, options\) => forwardPromptToAgent\(key, getThreadAdapter\(key\), text, undefined, \{ isPersonInput: options\.isPersonInput, isAccountsNoteCarrier: options\.isAccountsNoteCarrier, lostWorkTelling: options\.lostWorkTelling \}\),/);
   });
 
   it('both ways out of a startup window settle what it held: the replay on a started session, the discard on a failed start', () => {
