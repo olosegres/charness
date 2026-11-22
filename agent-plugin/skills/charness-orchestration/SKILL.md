@@ -139,8 +139,8 @@ arguments only mark it as a worker watch.
 - A job outlives its request: when the work it served is done, cancel it. A watchdog meant to outlive the work (a health check, a
   daily job) is armed and then the request is answered `final`: the job keeps running and its fires say `no request is open`, or ride
   the request open at the time (a later hand-over, a mention: answer that request only with what its requester must know, not about the
-  job). A job left armed under a request you keep open holds that request waiting — never reminded, never given up on — and its task-agent
-  slot taken for as long as the job lives.
+  job). A job left armed under a request you keep open holds that request waiting — not reminded between turns while it owes nobody an
+  answer; a requester's comment you leave unanswered still is — and its task-agent slot taken for as long as the job lives.
 - A screenshot or the passing-run video goes into the answer itself: its path in `answer_request`'s `files` (an H.264
   `.mp4` plays in the comment); `send_file_to_user` posts files in a comment of their own.
 

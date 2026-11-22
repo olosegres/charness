@@ -133,7 +133,8 @@ const jiraWording: ScheduleToolWording = {
     'A watchdog meant to OUTLIVE the work (a health check, a daily job) is armed, and then the request is answered `final`: the job keeps ' +
     'running and its fires say «no request is open», or ride the request open at the time (a later hand-over, a mention: answer that ' +
     'request only with what its requester must know, not about the job). Left armed under a request that stays open, it would keep that request waiting ' +
-    '(never reminded, never given up on) and its task-agent slot held for as long as the job lives.',
+    '(not reminded between turns while it owes nobody an answer; a requester\'s comment you leave unanswered still is) and its task-agent slot ' +
+    'held for as long as the job lives.',
   nameDescription: 'Short human name for the job (shown in lists and in the header of its fires).',
   checkCommandDescription:
     'Makes the job a WATCHDOG CHECK: a shell command (run with /bin/sh -c in the bound folder) the bot ' +
