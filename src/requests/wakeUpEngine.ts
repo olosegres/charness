@@ -334,16 +334,21 @@ export class RequestWakeUpEngine {
     this.answerTails.delete(keyToString(key));
     const previous = this.watched.get(requestId);
     const isFireForward = options.isScheduledRun === true;
-    // A request a scheduler fire opened (a Telegram topic's `scheduledRun`) is the alarm's: its turn is a scheduled run's, whoever tracks it.
-    const isAlarmRequest = request.origin.kind === 'scheduledRun';
+    // A request a scheduler fire opened (a Telegram topic's `scheduledRun`) owes no person anything, whatever its state.
+    const isFireOwnRequest = request.origin.kind === 'scheduledRun';
+    // While the agent has NEVER answered it, its turn is the alarm's whoever tracks it (a woken agent with nothing to report may stay
+    // silent). Once answered `progress` the operator was told «working on it»: it stops being the alarm's, and its later turns — the
+    // follow-up reminder, a «continue» — are read like any request's (a silent one is a silent turn).
+    const isAlarmRequest = isFireOwnRequest && request.progressAnswerCount === 0;
+    const isAnsweredFireOwnRequest = isFireOwnRequest && !isAlarmRequest;
     const carriesPersonWords = options.isRequestPrompt || options.isPersonInput === true;
-    // A person's words that reach the agent — not a fire's prompt, not an alarm request's.
-    const isPersonWordsForward = carriesPersonWords && !isFireForward && !isAlarmRequest;
+    // A person's words that reach the agent — not a fire's prompt, not a fire's own request's.
+    const isPersonWordsForward = carriesPersonWords && !isFireForward && !isFireOwnRequest;
     const isOwnForward = options.isConversationForward !== true || previous?.isOwnForward === true;
     const ownForwardStartedAt = previous?.ownForwardStartedAt ?? (isOwnForward ? this.now() : undefined);
     const isScheduledRun = previous === undefined
       ? isFireForward || isAlarmRequest
-      : previous.isScheduledRun === true && (isFireForward || isAlarmRequest || (options.isContinuation === true && !carriesPersonWords));
+      : previous.isScheduledRun === true && (isFireForward || isAlarmRequest || (options.isContinuation === true && !carriesPersonWords && !isAnsweredFireOwnRequest));
     this.watched.set(requestId, {
       key,
       requestId,

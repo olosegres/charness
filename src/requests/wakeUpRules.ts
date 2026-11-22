@@ -96,7 +96,8 @@ export type WakeUpDecision =
   /**
    * The turn ended without anything to do about the request (it waits for its schedule, or a scheduled run had nothing to report):
    * bookkeeping only. `isRequestSettled` — the request is one a scheduler fire opened (a Telegram topic's `scheduledRun`) and the
-   * agent left it unanswered: nobody is owed its answer and nothing waits for it, so it closes silently instead of waiting for the backstop.
+   * agent NEVER answered it (`progressAnswerCount` 0): nobody is owed its answer and nothing waits for it, so it closes silently
+   * instead of waiting for the backstop. One the agent answered `progress` is no such request: the operator was told «working on it».
    */
   | { kind: 'quiet'; update: OpenRequestUpdate; isRequestSettled?: boolean }
   | { kind: 'alert'; reason: RequestAlertReason; update: OpenRequestUpdate };
@@ -156,8 +157,9 @@ export interface TurnEndContext {
  * the turn, so a lost and rebuilt watch decides alike): a requester's message is never left unanswered because a watch is armed or
  * an alarm fired, and the reminder that follows its silent turn keeps counting towards the give-up. A fire's turn on a request that
  * owes an answer is therefore an ordinary silent turn: the reminder names the request, and a second silence gives up.
- * A request a scheduler fire opened (`origin.kind` `scheduledRun`) that its agent leaves with no answer at all settles at the quiet
- * end (`isRequestSettled`): it is the alarm's own request, and nobody is owed its answer.
+ * A request a scheduler fire opened (`origin.kind` `scheduledRun`) that its agent NEVER answered (`progressAnswerCount` 0) settles at
+ * the quiet end (`isRequestSettled`): it is the alarm's own request, and nobody is owed its answer. Once answered it is read like any
+ * request (the engine stops tracking its turns as the alarm's): a later silent turn is a silent turn.
  */
 export function decideTurnEnd(
   request: OpenRequestState,
@@ -194,7 +196,7 @@ export function decideTurnEnd(
         silentTurnCount: 0,
         ...(isHeldBySchedule ? { nextWakeAt: undefined } : {}),
       },
-      ...(request.origin.kind === 'scheduledRun' && !isProgressSent ? { isRequestSettled: true } : {}),
+      ...(request.origin.kind === 'scheduledRun' && request.progressAnswerCount === 0 ? { isRequestSettled: true } : {}),
     };
   }
   const silentTurnCount = request.silentTurnCount + 1;

@@ -1490,6 +1490,52 @@ describe('a request waits for its schedule', () => {
     assert.deepEqual(wakeUps, [{ requestId: ordinary.id, reason: 'silentTurn' }]);
   });
 
+  it('a Telegram fire\'s request the agent already answered `progress` is no longer the alarm\'s: its follow-up reminder ending silent is a silent turn, then the give-up — never a silent close', async () => {
+    const ledger = await createLedger();
+    const engine = createEngine(ledger);
+    const fireRequest = await ledger.createRequest(topicKey, { kind: 'scheduledRun', attributes: { requester: 'scheduler' } });
+    await engine.trackForwardedTurn(topicKey, fireRequest.id, { isRequestPrompt: true });
+    // «Found a broken migration, fixing it»: the real update of a progress answer, then the turn ends — a follow-up is due in 15 minutes.
+    await ledger.updateOpenRequest(fireRequest.id, (current) => ({ progressAnswerCount: current.progressAnswerCount + 1 }));
+    await endTurnSilently(engine);
+    assert.equal(ledger.listOpenRequestsOf(topicKey).length, 1, 'the request stays open');
+    assert.equal(ledger.getNewestOpenRequest(topicKey)?.nextWakeAt, nowMs + progressFollowUpDelayMs);
+
+    nowMs += progressFollowUpDelayMs;
+    await engine.sweepUnwatchedRequests();
+    assert.deepEqual(getWakeUpReasons(), ['progressFollowUp']);
+    // The follow-up reminder\'s turn: the agent lost the thread and says nothing. The operator was told «working on it»: not a quiet end.
+    await endTurnSilently(engine);
+    assert.equal(ledger.listOpenRequestsOf(topicKey).length, 1, 'still open: nothing closed it silently');
+    assert.deepEqual(getWakeUpReasons(), ['progressFollowUp', 'silentTurn'], 'a reminder for the silence');
+    await endTurnSilently(engine);
+    assert.deepEqual(alerts, [{ requestId: fireRequest.id, reason: 'silentTurns' }], 'the second silence tells the operator, as for any answered request');
+  });
+
+  it('the continuation variant: a fire\'s request answered `progress`, then an API error and the bot\'s «continue» ending silent, stays open and is reminded', async () => {
+    const ledger = await createLedger();
+    const engine = createEngine(ledger);
+    const fireRequest = await ledger.createRequest(topicKey, { kind: 'scheduledRun', attributes: { requester: 'scheduler' } });
+    await engine.trackForwardedTurn(topicKey, fireRequest.id, { isRequestPrompt: true });
+    await ledger.updateOpenRequest(fireRequest.id, (current) => ({ progressAnswerCount: current.progressAnswerCount + 1 }));
+    await engine.trackContinuationTurn(topicKey, { isCountersReset: false });
+    await endTurnSilently(engine);
+    assert.equal(ledger.listOpenRequestsOf(topicKey).length, 1, 'answered earlier: the silent continuation does not settle it');
+    assert.deepEqual(wakeUps, [{ requestId: fireRequest.id, reason: 'silentTurn' }]);
+  });
+
+  it('a fire\'s request never answered is still the alarm\'s through a «continue»: closed silently when the agent has nothing to report', async () => {
+    const ledger = await createLedger();
+    const engine = createEngine(ledger);
+    const fireRequest = await ledger.createRequest(topicKey, { kind: 'scheduledRun', attributes: { requester: 'scheduler' } });
+    await engine.trackForwardedTurn(topicKey, fireRequest.id, { isRequestPrompt: true });
+    await engine.trackContinuationTurn(topicKey, { isCountersReset: false });
+    await endTurnSilently(engine);
+    assert.deepEqual(ledger.listOpenRequestsOf(topicKey), [], 'nothing was ever answered: settled');
+    assert.deepEqual(wakeUps, []);
+    assert.deepEqual(alerts, []);
+  });
+
   it('a fire that waited behind a person\'s turn joins it, never takes it over: the unanswered request prompt is still a silent turn, the reminder chain still ends in the alert', async () => {
     const ledger = await createLedger();
     const engine = createEngine(ledger, { getScheduleWait: () => 'watching' });

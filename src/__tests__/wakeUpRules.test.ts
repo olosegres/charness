@@ -366,6 +366,10 @@ describe('a request that waits for its schedule (scheduleWait) and a scheduled r
     assert.equal(silent.kind === 'quiet' ? silent.isRequestSettled : null, true);
     const withProgress = decideTurnEnd({ ...fireRequest, progressAnswerCount: 1 }, 0, nowMs, { isScheduledRun: true });
     assert.notEqual(withProgress.kind === 'quiet' ? withProgress.isRequestSettled : null, true, 'a note was sent: the request stays open');
+    // A note sent in an EARLIER turn counts as well: a quiet end of a later turn (a «continue» that kept the alarm\'s kind) never closes it.
+    const answeredEarlier = decideTurnEnd({ ...fireRequest, progressAnswerCount: 1 }, 1, nowMs, { isScheduledRun: true });
+    assert.equal(answeredEarlier.kind, 'quiet');
+    assert.equal(answeredEarlier.kind === 'quiet' ? answeredEarlier.isRequestSettled : null, undefined, 'answered earlier: it stays open');
     const handOver = decideTurnEnd(answeredRequest({ origin: { kind: 'trackerEvent', attributes: {} } }), 1, nowMs, { isScheduledRun: true });
     assert.equal(handOver.kind, 'quiet');
     assert.equal(handOver.kind === 'quiet' ? handOver.isRequestSettled : null, undefined, 'a fire only rides a hand-over: it is owed its own answer');
