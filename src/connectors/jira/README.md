@@ -364,7 +364,8 @@ update into the resumed session; while a turn runs it waits up to 10 minutes for
   fire starts is watched as that request's scheduled run. No job is cancelled when its request closes (as in a topic): «check the
   deploy tomorrow» must survive the final answer.
 - **The request waits for its watch.** An open request with an armed watch that owes nobody an answer is not reminded every 15 minutes,
-  not woken at a bot restart and not given up on after ten wake-ups; a requester's comment left unanswered still is — also after a restart,
+  not woken at a bot restart (a process that died with the agent's OWN work pending is woken once, with the lost-work note) and not
+  given up on after ten wake-ups; a requester's comment left unanswered still is — also after a restart,
   and also when it was held over a usage-limit wait or an alarm fires meanwhile. The task-agent slot stays held, because the issue IS being
   worked on (`../../requests/README.md` § Wake-ups, the rule table). A passing recurring job armed under a request keeps it waiting for as long as it lives, and the issue's slot held:
   guidance, not code — an agent that arms a watchdog meant to outlive the work (a health check, a daily job) answers `final` afterwards;
