@@ -17,6 +17,10 @@
  *     ONE comment, the issue handed back, the request closed, the job gone
  *   → a third issue: a one-shot armed, then `final`, then it fires: its header says no request is open and names the finished
  *     one; the agent's answer is a comment and hands nothing back
+ *   → a fourth issue: the agent, woken by its failed check, drops the watch and says nothing: the request is no longer waiting, and
+ *     the normal rules take it back (the backstop wakes it)
+ *   → a fifth issue: the project's folder goes missing, a fire pauses the job (a log line, nothing on the issue); the folder is back
+ *     and the issue is handed over again: the next request's bind step resumes the job, its next run counted from then
  *   → the instance invariants (R11, R32, and R6 — no Telegram primitive was reached, which is what a status line, an
  *     announcement or an alert posted for an issue would have hit)
  *
@@ -33,10 +37,12 @@ import * as fs from 'fs';
 import * as path from 'path';
 import {
   fakeClaudeLogFileNames,
+  fakeDropWatchWakeMarker,
   fakeKeepWatchWakeMarker,
   fakeOneShotDelaySeconds,
   fakeStatusWatchJobName,
   fakeStatusWatchTargetFileName,
+  type FakeClaudePrompt,
   type FakeStatusWatchTarget,
 } from './jiraE2e/fakeClaudeContract';
 import {
@@ -54,6 +60,7 @@ import {
   getToolCalls,
   getTurns,
   handIssueToAi,
+  projectFolder,
   handOverAndAwaitAnswer,
   idleStopTimeoutMs,
   itHoldsIsolationBeforeBoot,
@@ -61,6 +68,7 @@ import {
   readFakeLog,
   registerJiraFlowHooks,
   requester,
+  resumeTimeoutMs,
   startCharness,
   waitFor,
 } from './jiraE2e/jiraFlowKit';
@@ -81,15 +89,26 @@ const passingRunCount = 3;
 const restartWakeStaggerMs = 2 * msPerSecond;
 /** After the restart, the engine's boot wake would come this much later, plus the sweep: nothing may have started by then. */
 const restartObservationMs = 4 * restartWakeStaggerMs + 10 * msPerSecond;
-/** The backstop of the whole flow: far beyond it, so a failing check nobody handles is not woken by it while the quiet is judged. */
-const longBackstopMinutes = '30';
+/**
+ * The request backstop of this flow: longer than the quiet the flow observes after a wake (a failing check nobody handled falls to
+ * it, as it should), shorter than what the dropped-watch case waits for it.
+ */
+const flowBackstopMinutes = '1.5';
+const backstopMs = 90 * msPerSecond;
 const keepIssueKey = 'PROJ-1';
 const cancelIssueKey = 'PROJ-2';
 const oneShotIssueKey = 'PROJ-3';
+const dropIssueKey = 'PROJ-4';
+const folderIssueKey = 'PROJ-5';
+/** What the bot says of a job a fire paused for an unusable folder, and of the resume; both lines name the conversation. */
+const pausedLogMark = 'paused: its folder is not usable';
+const resumedLogMark = 'resumed: its folder is usable again';
 const jiraConversationKey = (issueKey: string): string => `jira:PROJ:${issueKey}`;
 
 let keptWorker: ChildProcess | null = null;
 let cancelledWorker: ChildProcess | null = null;
+let droppedWorker: ChildProcess | null = null;
+let folderWorker: ChildProcess | null = null;
 let keepRunDir = '';
 let keepRequestId = '';
 
@@ -138,6 +157,14 @@ function getPromptTexts(issueKey: string): string[] {
   return getPrompts(issueKey).map((prompt) => prompt.text);
 }
 
+/**
+ * Every prompt that names the request, in order: its own prompt, a scheduled run's header, and the engine's reminders — which carry
+ * the request's id but no issue key, so `getPromptTexts(issueKey)` does not see them.
+ */
+function getRequestPromptTexts(requestId: string): string[] {
+  return readFakeLog<FakeClaudePrompt>(fakeClaudeLogFileNames.prompts).filter((prompt) => prompt.requestId === requestId).map((prompt) => prompt.text);
+}
+
 /** The comments the AI wrote on the issue, oldest first. */
 function getAiComments(issueKey: string): string[] {
   return getCommentTexts(fakeJira.getIssue(issueKey));
@@ -148,7 +175,7 @@ describe('Scheduling in a Jira issue end to end: built charness, fake Jira, fake
     layoutPrefix: 'charness-jira-schedule-',
     config: {
       adapter: 'claude-json-stream',
-      backstopMinutes: longBackstopMinutes,
+      backstopMinutes: flowBackstopMinutes,
       extraTimings: {
         scheduleMinFireIntervalMs: 60 * msPerSecond,
         progressFollowUpMs,
@@ -162,6 +189,8 @@ describe('Scheduling in a Jira issue end to end: built charness, fake Jira, fake
   after(() => {
     keptWorker?.kill('SIGKILL');
     cancelledWorker?.kill('SIGKILL');
+    droppedWorker?.kill('SIGKILL');
+    folderWorker?.kill('SIGKILL');
   });
 
   itHoldsIsolationBeforeBoot();
@@ -199,13 +228,13 @@ describe('Scheduling in a Jira issue end to end: built charness, fake Jira, fake
   it('the watch passes for several runs and the follow-up window passes: nothing is posted, nobody is woken, and the idle process stops — the conversation sleeps', async () => {
     const watch = readPersistedSchedules().find((record) => record.name === fakeStatusWatchJobName);
     assert.ok(watch);
-    const promptsAfterArming = getPromptTexts(keepIssueKey).length;
+    const promptsAfterArming = getRequestPromptTexts(keepRequestId).length;
     const turnsAfterArming = getTurns(keepIssueKey).length;
     const agentPid = getTurns(keepIssueKey)[0].pid;
     await waitFor(`${passingRunCount} passing runs of the watch`, passingRunCount * watchTickTimeoutMs, () => countFinishedRunsOf(watch.id) >= passingRunCount);
     await sleep(quietObservationMs);
 
-    assert.equal(getPromptTexts(keepIssueKey).length, promptsAfterArming, 'no prompt: neither the engine\'s follow-up nor a check wake');
+    assert.equal(getRequestPromptTexts(keepRequestId).length, promptsAfterArming, 'no prompt: neither the engine\'s follow-up nor a check wake');
     assert.equal(getTurns(keepIssueKey).length, turnsAfterArming, 'no turn started');
     assert.equal(getAiComments(keepIssueKey).length, 1, 'no comment: no status line, no announcement, no reminder');
     assert.equal(readOpenRequests().find((request) => request.id === keepRequestId)?.nextWakeAt, undefined, 'a progress note under a watch schedules no follow-up');
@@ -216,7 +245,7 @@ describe('Scheduling in a Jira issue end to end: built charness, fake Jira, fake
   it('a bot restart while it waits: the job is re-armed and no `restarted` wake starts a turn', async () => {
     const watch = readPersistedSchedules().find((record) => record.name === fakeStatusWatchJobName);
     assert.ok(watch);
-    const promptsBefore = getPromptTexts(keepIssueKey).length;
+    const promptsBefore = getRequestPromptTexts(keepRequestId).length;
     const runsBefore = countFinishedRunsOf(watch.id);
     await getCharness().stop();
     const outputStart = getCharness().output.length;
@@ -226,17 +255,17 @@ describe('Scheduling in a Jira issue end to end: built charness, fake Jira, fake
 
     const bootOutput = getCharness().output.slice(outputStart);
     assert.ok(!bootOutput.includes(`${jiraConversationKey(keepIssueKey)}: woken after a restart`), 'the request waits for its watch: a restart wakes nobody');
-    assert.equal(getPromptTexts(keepIssueKey).length, promptsBefore, 'no prompt reached the agent');
+    assert.equal(getRequestPromptTexts(keepRequestId).length, promptsBefore, 'no prompt reached the agent');
     assert.equal(getAiComments(keepIssueKey).length, 1);
   });
 
   it('the worker exits: the sleeping session is resumed by id, behind the tracker header naming the open request and the failed check; the agent only keeps the watch — no comment, no reminder, no alert', async () => {
-    const promptsBefore = getPromptTexts(keepIssueKey).length;
+    const promptsBefore = getRequestPromptTexts(keepRequestId).length;
     const launchesBefore = readFakeLog<{ argv: string[]; isSessionLaunch: boolean }>(fakeClaudeLogFileNames.launches).filter((launch) => launch.isSessionLaunch).length;
     keptWorker?.kill('SIGKILL');
-    await waitFor('the failed check to wake the agent', watchTickTimeoutMs, () => getPromptTexts(keepIssueKey).length > promptsBefore);
+    await waitFor('the failed check to wake the agent', watchTickTimeoutMs, () => getRequestPromptTexts(keepRequestId).length > promptsBefore);
 
-    const wakePrompt = getPromptTexts(keepIssueKey)[promptsBefore];
+    const wakePrompt = getRequestPromptTexts(keepRequestId)[promptsBefore];
     // After the issue-context preamble the first prompt of a started process carries, the tracker header leads the run.
     assert.ok(wakePrompt.includes(`[Scheduled run "${fakeStatusWatchJobName}" · Jira issue ${keepIssueKey} (`), wakePrompt);
     assert.ok(wakePrompt.includes(`· request ${keepRequestId} is open]`), 'the header names the open request');
@@ -252,7 +281,7 @@ describe('Scheduling in a Jira issue end to end: built charness, fake Jira, fake
 
     // The woken agent kept the watch and ended silently: nothing follows — no reminder, no silent-turn wake, no alert comment.
     await sleep(quietObservationMs);
-    assert.equal(getPromptTexts(keepIssueKey).length, promptsBefore + 1, 'one wake, no reminder after it');
+    assert.equal(getRequestPromptTexts(keepRequestId).length, promptsBefore + 1, 'one wake, no reminder after it');
     assert.equal(getAiComments(keepIssueKey).length, 1, 'no comment: a woken agent with nothing to report stays silent');
     assert.equal(getClosedRequest(keepRequestId), undefined, 'the request is still open');
     const request = readOpenRequests().find((open) => open.id === keepRequestId);
@@ -301,6 +330,76 @@ describe('Scheduling in a Jira issue end to end: built charness, fake Jira, fake
     assert.equal(countAssigneeChanges(oneShotIssueKey), handBacksAfterFinal, 'an answer to a finished request hands nothing back');
     await waitFor('the one-shot to leave state.json after its fire', answerTimeoutMs, () => readPersistedSchedules().every((record) => record.threadKey !== jiraConversationKey(oneShotIssueKey)));
     assert.ok(Date.now() - issueStartedAt > fakeOneShotDelaySeconds * msPerSecond, 'it fired at its time, not at once');
+  });
+
+  it('a fourth issue: the woken agent drops its watch and says nothing — that turn is quiet, then the request is no longer waiting and the backstop takes it', async () => {
+    const started = await startWorker('worker-dropped');
+    droppedWorker = started.worker;
+    nameWatchTarget({ pid: started.pid, runDir: started.runDir });
+    createIssue(dropIssueKey, 'watch-progress', ` ${fakeDropWatchWakeMarker}`);
+    handIssueToAi(dropIssueKey, requester);
+    await waitFor(`${dropIssueKey}: the progress note answered`, answerTimeoutMs, () => getAiComments(dropIssueKey).length === 1);
+    const requestId = getTurns(dropIssueKey)[0].requestId ?? '';
+    await waitFor('the watch to be persisted', answerTimeoutMs, () => readPersistedSchedules().some((record) => record.threadKey === jiraConversationKey(dropIssueKey)));
+    const promptsBefore = getRequestPromptTexts(requestId).length;
+
+    droppedWorker?.kill('SIGKILL');
+    await waitFor(`${dropIssueKey}: the watch cancelled by its agent, which said nothing`, watchTickTimeoutMs, () =>
+      getToolCalls(dropIssueKey).some((call) => call.tool === 'schedule_cancel' && !call.outcome.startsWith('error:')));
+    await waitFor('the dropped job to leave state.json', answerTimeoutMs, () => readPersistedSchedules().every((record) => record.threadKey !== jiraConversationKey(dropIssueKey)));
+    assert.equal(getRequestPromptTexts(requestId).length, promptsBefore + 1, 'the check\'s wake was the only prompt so far: that quiet turn drew no silent-turn wake');
+    assert.equal(getAiComments(dropIssueKey).length, 1, 'no comment: the agent said nothing');
+    assert.equal(getClosedRequest(requestId), undefined, 'the request is still open');
+
+    // Nothing waits for it any more: the normal rules take the request back — the backstop, counted from the last turn.
+    await waitFor(`${dropIssueKey}: the request woken by the normal rules`, backstopMs + resumeTimeoutMs, () => getRequestPromptTexts(requestId).length > promptsBefore + 1);
+    const reminder = getRequestPromptTexts(requestId)[promptsBefore + 1];
+    assert.ok(reminder.includes(`[Reminder · request ${requestId} is still open]`), reminder);
+    assert.ok(reminder.includes('Nothing has been seen working on it for a long time'), 'the backstop\'s reason');
+    await waitFor(`${dropIssueKey}: answered and handed back`, answerTimeoutMs, () => getClosedRequest(requestId)?.closeReason === 'final');
+  });
+
+  it('a fifth issue: the folder goes missing and a fire pauses the job — a log line, nothing on the issue; the folder is back and the next hand-over resumes it, its next run counted from then', async () => {
+    const started = await startWorker('worker-folder');
+    folderWorker = started.worker;
+    nameWatchTarget({ pid: started.pid, runDir: started.runDir });
+    createIssue(folderIssueKey, 'watch-progress');
+    handIssueToAi(folderIssueKey, requester);
+    await waitFor(`${folderIssueKey}: the progress note answered`, answerTimeoutMs, () => getAiComments(folderIssueKey).length === 1);
+    await waitFor('the watch to be persisted', answerTimeoutMs, () => readPersistedSchedules().some((record) => record.threadKey === jiraConversationKey(folderIssueKey)));
+    const job = readPersistedSchedules().find((record) => record.threadKey === jiraConversationKey(folderIssueKey));
+    assert.ok(job);
+
+    const folderPath = path.join(getLayout().workRoot, projectFolder);
+    const awayPath = `${folderPath}-away`;
+    fs.renameSync(folderPath, awayPath);
+    try {
+      await waitFor('the job paused for the folder', watchTickTimeoutMs, () => {
+        const persisted = readPersistedSchedules().find((record) => record.id === job.id);
+        return persisted?.isPaused === true && persisted.pauseReason === 'unbound';
+      });
+      assert.ok(getCharness().output.includes(`[scheduler] job ${job.id} of ${jiraConversationKey(folderIssueKey)} ${pausedLogMark}`), 'the pause is one log line');
+      assert.equal(getAiComments(folderIssueKey).length, 1, 'nothing is posted on the issue for the pause');
+    } finally {
+      fs.renameSync(awayPath, folderPath);
+    }
+
+    const runsBefore = countFinishedRunsOf(job.id);
+    const outputBefore = getCharness().output.length;
+    const resumedAfterMs = Date.now();
+    // The same issue is handed over again: a new request, and its bind step finds the folder usable.
+    handIssueToAi(folderIssueKey, requester);
+    await waitFor('the job resumed', answerTimeoutMs, () => {
+      const persisted = readPersistedSchedules().find((record) => record.id === job.id);
+      return persisted !== undefined && persisted.isPaused !== true;
+    });
+    const resumed = readPersistedSchedules().find((record) => record.id === job.id);
+    assert.ok(resumed);
+    assert.ok((resumed.nextRunAt ?? 0) > resumedAfterMs, 'its next run is counted from the resume, not replayed from the pause');
+    assert.ok(getCharness().output.slice(outputBefore).includes(`${jiraConversationKey(folderIssueKey)} ${resumedLogMark}`), 'the resume is one log line');
+    await waitFor('a run of the resumed job to finish', watchTickTimeoutMs, () => countFinishedRunsOf(job.id) > runsBefore);
+    await waitFor(`${folderIssueKey}: the new request answered`, answerTimeoutMs, () => getAiComments(folderIssueKey).length === 2);
+    assert.equal(getAiComments(folderIssueKey).length, 2, 'the progress note and the new request\'s answer — the pause and the resume posted nothing');
   });
 
   itHoldsTheInstanceInvariants();

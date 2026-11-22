@@ -217,7 +217,7 @@ import { claudeSessionStateEventsVariableName } from '../../utils/jsonStreamHost
  *  - `arm-status-watch` — the same orchestrator on a worker the TEST started (the pid and run directory in
  *    `fakeStatusWatchTargetFileName`), the marker touched first: the real recipe plus its status arguments, so the bot's status line rides the watch;
  *    the wake of the watch's failure is `cancel-watch`, which finds this watch too;
- *  - `watch-progress` — an orchestrator in an ISSUE (the Jira schedule flow): the first turn `touch`es the marker, arms the status
+ *  - `watch-progress` — an orchestrator in an ISSUE (the Jira schedule flow): the issue's FIRST request's first turn `touch`es the marker, arms the status
  *    watch of the worker the TEST named (`fakeStatusWatchTargetFileName`) like `arm-status-watch`, answers `progress` and ends the
  *    turn — nothing to poll. The watch's wake prompt carries `cancel-watch` (cancel it, answer `final` to the request its header names)
  *    or, by a marker in the issue's text, `keep-watch` (`fakeKeepWatchWakeMarker`: the turn ends with no tool call and no answer),
@@ -1554,7 +1554,9 @@ async function runTurn(argv: readonly string[], sessionId: string, content: stri
     const ran = spawnSync(probeToolName, [], { encoding: 'utf8' });
     logToolCall(probeToolName, {}, ran.error ? `error: ${ran.error.message}` : ran.stdout.trim());
   }
-  if (state.mode === 'watch-progress' && isFirstTurn && server) {
+  // Only the issue's FIRST request arms the watch: a later request (a new hand-over of the same issue) just answers.
+  const isArmingWatch = state.mode === 'watch-progress' && isFirstTurn && listKnownRequests(state.issueKey).length === 1;
+  if (isArmingWatch && server) {
     const wakeToken = content.includes(fakeKeepWatchWakeMarker) ? fakeKeepWatchToken
       : content.includes(fakeRearmWatchWakeMarker) ? fakeRearmWatchToken
         : content.includes(fakeDropWatchWakeMarker) ? fakeDropWatchToken
@@ -1566,7 +1568,7 @@ async function runTurn(argv: readonly string[], sessionId: string, content: stri
     const args = { name: 'check the deploy', onceAt: new Date(Date.now() + fakeOneShotDelaySeconds * 1000).toISOString(), prompt: '[fake:answer] Check the deploy and tell the requester.' };
     appendJsonLine(fakeClaudeLogFileNames.toolCalls, { issueKey: state.issueKey, tool: 'schedule_create', args, outcome: await callBotTool(server, 'schedule_create', args) });
   }
-  const kind = state.mode === 'progress' || (state.mode === 'hold-progress-once' && isFirstTurn) || (state.mode === 'watch-progress' && isFirstTurn) ? 'progress' : 'final';
+  const kind = state.mode === 'progress' || (state.mode === 'hold-progress-once' && isFirstTurn) || isArmingWatch ? 'progress' : 'final';
   endTurn(sessionId, await answer(requestId, kind, state.turnCount));
   if (state.mode === 'background') {
     // Reported AFTER the result, as the CLI does for a task the turn left running.

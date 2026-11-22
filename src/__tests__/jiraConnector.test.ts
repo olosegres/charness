@@ -1066,19 +1066,6 @@ describe('bot.ts wires the Jira connector (J5)', () => {
     assert.match(startBody, /if \(jiraConnector\) \{\s*jiraFileSender = \(key, request\) => jiraConnector\.sendFiles\(key, request\);/);
   });
 
-  it('scheduled runs: a Jira issue\'s fires post nothing and ride its open request — the scheduler gets the connector\'s ports, the turn is watched as the request\'s scheduled run', () => {
-    const wiring = botSource.slice(botSource.indexOf('function wireScheduler('), botSource.indexOf('export async function startBot('));
-    assert.match(wiring, /trackerRun: \{\s*describeConversation: \(threadKeyStr: string\) => \{\s*const key = keyFromString\(threadKeyStr\);\s*return key\.platform === 'jira' \? jiraConnector\.describeConversation\(key\) : null;/);
-    assert.ok(wiring.includes('listOpenRequests: (threadKeyStr: string) => wiring.requestLedger.listOpenRequestsOf(keyFromString(threadKeyStr)),'));
-    assert.ok(wiring.includes('forwardRun: forwardTrackerScheduledRun,'));
-    assert.ok(wiring.includes('fallbackAdapterName: jiraConnector.adapterName,'), 'a session that cannot be resumed starts on the connector\'s backend');
-    const forward = botSource.slice(botSource.indexOf('async function forwardTrackerScheduledRun('), botSource.indexOf('function wireScheduler('));
-    const buffered = forward.indexOf('await deliverPromptOrBuffer(key, text, startupPromptBuffer.checkIsStarting(conversationKey)');
-    const track = forward.indexOf('await requestWakeUpEngine?.trackForwardedTurn(key, requestId, { isRequestPrompt: false, isScheduledRun: true });');
-    assert.ok(buffered > 0 && track > buffered, 'written first, then watched');
-    assert.ok(!forward.includes('openTopicRequest') && !forward.includes('createRequest'), 'a fire opens no request');
-  });
-
   it('C5: a Jira post is told whether its session is fresh — a fresh start or a failed resume\'s fallback start is, a running or resumed one is not', () => {
     const ensure = botSource.slice(botSource.indexOf('async function ensureAgentSessionNow('), botSource.indexOf('function getResumableSessionId('));
     assert.match(ensure, /case 'ready':\s*return \{ ok: true, message: '', isFresh: false \};/);

@@ -1,19 +1,17 @@
 /**
  * @description Resuming the jobs a conversation's unbound pause parked (`scheduler/rebindResume.ts`): the one unit a Telegram
  * topic's `/bind` and a Jira issue's next usable bind both run — next run counted from now (no catch-up), a passed one-shot
- * dropped, one announcement with the count — and the bot's own wiring of it (a notice in a topic, a log line on an issue).
+ * dropped, one announcement with the count. The bot's wiring of it (a notice in a topic, a log line on an issue, the Jira bind step)
+ * is proven by `jiraScheduleE2e`'s paused-folder case.
  */
 
 /** Test case: N/A — Charness has no Jira tracker. */
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import * as fs from 'fs';
-import * as path from 'path';
 import { resumeSchedulesPausedForUnbound, type RebindResumePorts } from '../scheduler/rebindResume';
 import type { ScheduleRecord } from '../scheduler/types';
 import { makeJiraKey } from '../connectors/jira/sessionKeyCodec';
-import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
 import { keyToString } from '../sessionKey';
 
 const nowMs = Date.parse('2026-06-07T10:00:00.000Z');
@@ -80,36 +78,5 @@ describe('resumeSchedulesPausedForUnbound', () => {
     const { ports, log } = createPorts([makeJob({ id: 'running-abc123', isPaused: undefined, pauseReason: undefined, nextRunAt: nowMs + 1000 })]);
     assert.equal(await resumeSchedulesPausedForUnbound(ports, issueKey), 0);
     assert.deepEqual(log, []);
-  });
-});
-
-describe('the bot wires the resume for both platforms', () => {
-  const botSource = fs.readFileSync(path.join(__dirname, '..', 'bot.ts'), 'utf8');
-
-  it('a topic\'s /bind announces with its notice; an issue\'s resume is a log line, and nothing is posted on it', () => {
-    assert.match(botSource, /async function resumeThreadSchedulesOnRebind\(key: SessionKey\): Promise<void> \{\s*await resumeSchedulesPausedForUnbound\(\s*createRebindResumePorts\(\(count\) => replyToThread\(key, t\('schedule\.resumedRebind', \{ count \}\)\)/);
-    const tracker = botSource.slice(botSource.indexOf('async function resumeTrackerSchedulesOnRebind('));
-    const body = tracker.slice(0, tracker.indexOf('\n}\n'));
-    assert.ok(body.includes('console.log('), body);
-    assert.ok(!body.includes('replyToThread'), 'no notice on an issue');
-  });
-
-  it('the Jira connector\'s bind step resumes the parked jobs once the folder resolves — after the binding is written, never before', () => {
-    const deps = botSource.slice(botSource.indexOf('function createJiraSessionDeps('), botSource.indexOf('export async function startBot('));
-    const bind = deps.slice(deps.indexOf('bindConversation: async (key, folder) => {'), deps.indexOf('createRequest:'));
-    const setBinding = bind.indexOf('await state.setBinding(key, folder);');
-    const usable = bind.indexOf("resolveBoundWorkDir(ENV.workRoot, state.getBinding(key)).kind === 'proceed'");
-    const resume = bind.indexOf('await resumeTrackerSchedulesOnRebind(key)');
-    assert.ok(setBinding > 0 && usable > setBinding && resume > usable, bind);
-  });
-
-  it('a fire that finds no usable folder pauses the job: a Telegram topic is told, an issue gets a log line', () => {
-    const deliver = botSource.slice(botSource.indexOf('const deliver = async (job: ScheduleRecord, fireContext: FireContext)'), botSource.indexOf('schedulerEngine = createSchedulerEngine({'));
-    assert.match(deliver, /if \(checkIsTelegramKey\(key\)\) await withThreadLocale\(key, \(\) => replyToThread\(key, t\('schedule\.pausedUnbound', \{ count: 1 \}\)\)\)\.catch\(\(\) => \{\}\);\s*else console\.log\(/);
-  });
-
-  it('the topic key is a Telegram key and the issue key is not (the premise of the split)', () => {
-    assert.equal(makeTelegramKey(-1001234567890, 42).platform, 'telegram');
-    assert.equal(issueKey.platform, 'jira');
   });
 });
