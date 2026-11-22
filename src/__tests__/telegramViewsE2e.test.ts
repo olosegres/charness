@@ -828,7 +828,11 @@ describe('Telegram views end to end: built charness, fake Bot API, fake claude (
   it('a tool status frame that its own turn\'s text outran while it waited behind the earlier turns\' unposted text is never posted — no «🔧» line is left under the finished turn', async () => {
     const toolName = 'StaleFrame';
     const statusText = `🔧 ${toolName}`;
-    const isPosted = (text: string): boolean => fakeTelegram.listCalls('sendMessage').some((call) => String(call.payload.text).includes(text));
+    // The text of a turn goes out as a message of its own, or - when the previous turn's closing text reached the bot after this turn's prompt was
+    // forwarded and was flushed before this turn's text came - appended by edit to the message before it (seen on a loaded runner: «…(answer, turn 1).Working
+    // on TOPIC-30.» in one edit). Whichever call carries it counts, and is held.
+    const textCarryingMethods = ['sendMessage', 'editMessageText'];
+    const isPosted = (text: string): boolean => textCarryingMethods.some((method) => fakeTelegram.listCalls(method).some((call) => String(call.payload.text).includes(text)));
     // The status frame is the whole text `🔧 <tool>`; the tool's result message, `🔧 <tool> → …`, is not it.
     const isStatusFramePosted = (): boolean => fakeTelegram.listCalls('sendMessage').some((call) => call.payload.text === statusText);
     const hasReachedBot = (text: string): boolean => getCharness().output.includes(`output ${group.id}:${topicThreadId} (20): ${text}`);
@@ -841,7 +845,7 @@ describe('Telegram views end to end: built charness, fake Bot API, fake claude (
     let releaseRoundTrip: () => void = () => {};
     const roundTripReleased = new Promise<void>((resolve) => { releaseRoundTrip = resolve; });
     try {
-      fakeTelegram.holdNextResponse('sendMessage', roundTripReleased, (payload) => String(payload.text).includes('Working on TOPIC-30.'));
+      for (const method of textCarryingMethods) fakeTelegram.holdNextResponse(method, roundTripReleased, (payload) => String(payload.text).includes('Working on TOPIC-30.'));
       fakeTelegram.pushOperatorMessage(topicThreadId, 'TOPIC-30 [fake:answer]');
       await getCharness().waitFor('turn 1\'s text on its held round trip', answerTimeoutMs, () => isPosted('Working on TOPIC-30.'));
       // Turn 2's text reaches the bot and stays in its output buffer behind the flush that is on the round trip.
