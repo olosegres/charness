@@ -6289,22 +6289,25 @@ async function replayBufferedPrompts(key: SessionKey): Promise<void> {
   const isSessionActive = adapter.checkIsActive(key);
   // The buffer closes the window synchronously and settles every prompt it held (a sender waiting on one,
   // like the API-error retry's nudge, hears whether it reached the session).
+  // The whole replay — the buffered prompts and the held ones after them — is still the start for the wake-up engine's turn probe
+  // (`StartupPromptBuffer.checkIsReplaying`): no watch made during the start is read as a turn that ended (`requests/README.md` § Turn starts).
   await startupPromptBuffer.replayPrompts(keyToString(key), {
     isSessionActive,
     forward: async (prompt, options) => { await forwardPromptToAgent(key, adapter, prompt, undefined, options); },
+    afterReplay: async () => {
+      // R23: prompts held during a usage-limit wait that ended with the previous
+      // session go to this one — on their own when nothing above carried them. They
+      // are what people asked for meanwhile: a write that fails is told in the topic
+      // like a person's own message, never only logged.
+      const heldText = limitHeldPrompts.releaseAll(key);
+      if (heldText === null) return;
+      try {
+        await forwardPromptToAgent(key, adapter, heldText, undefined, { isPersonInput: true });
+      } catch (err) {
+        console.error('[replayBufferedPrompts] forwarding the held prompts failed:', err);
+      }
+    },
   });
-  if (!isSessionActive) return;
-  // R23: prompts held during a usage-limit wait that ended with the previous
-  // session go to this one — on their own when nothing above carried them. They
-  // are what people asked for meanwhile: a write that fails is told in the topic
-  // like a person's own message, never only logged.
-  const heldText = limitHeldPrompts.releaseAll(key);
-  if (heldText === null) return;
-  try {
-    await forwardPromptToAgent(key, adapter, heldText, undefined, { isPersonInput: true });
-  } catch (err) {
-    console.error('[replayBufferedPrompts] forwarding the held prompts failed:', err);
-  }
 }
 
 /**
@@ -15693,6 +15696,7 @@ const probeThreadTurn = createSessionTurnProbe({
   checkIsWedgeRecoveryInFlight: (keyString) => wedgeRecoveriesInFlight.has(keyString),
   checkIsRetryKickInFlight: (keyString) => apiRetryKicksInFlight.has(keyString),
   checkIsSessionStarting: (keyString) => startupPromptBuffer.checkIsStarting(keyString),
+  checkIsReplayingBufferedPrompts: (keyString) => startupPromptBuffer.checkIsReplaying(keyString),
   serializeKey: keyToString,
 });
 

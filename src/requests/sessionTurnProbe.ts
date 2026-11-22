@@ -24,7 +24,11 @@ import type { SessionTurnProbe } from './wakeUpRules';
  *  - a session START under way: a request's first post is starting the session it
  *    will run in, so nothing has gone quiet — without this the sweep reads the
  *    request as one nobody works on and wakes it (or raises an alert) once the
- *    backstop window is shorter than the start.
+ *    backstop window is shorter than the start;
+ *  - the REPLAY of the prompts buffered during that start: the window closes before
+ *    the first replayed write, and a fresh session reports nothing unread, so without
+ *    this every watch made while the session started reads as an ENDED turn at the
+ *    replay's first write — a silent turn the agent never had.
  *
  * A session still starting has not taken in what was forwarded to it either: the
  * prompt waits in the startup buffer, while a backend may already report itself
@@ -50,6 +54,8 @@ export interface SessionTurnProbeDeps {
   checkIsRetryKickInFlight: (keyString: string) => boolean;
   /** The session is in its startup window: prompts forwarded now are buffered, not written. */
   checkIsSessionStarting: (keyString: string) => boolean;
+  /** The prompts buffered during the start are being written now (`StartupPromptBuffer.checkIsReplaying`): still the start. */
+  checkIsReplayingBufferedPrompts: (keyString: string) => boolean;
   serializeKey: (key: SessionKey) => string;
 }
 
@@ -59,6 +65,7 @@ export function createSessionTurnProbe(deps: SessionTurnProbeDeps): (key: Sessio
     const keyString = deps.serializeKey(key);
     const adapter = deps.getAdapter(key);
     const isActive = adapter.checkIsActive(key);
+    const isStarting = deps.checkIsSessionStarting(keyString) || deps.checkIsReplayingBufferedPrompts(keyString);
     const isTurnEndBlocked =
       deps.checkHasPendingQuestion(keyString) ||
       deps.checkHasQuestionPin(keyString) ||
@@ -68,11 +75,11 @@ export function createSessionTurnProbe(deps: SessionTurnProbeDeps): (key: Sessio
       Boolean(deps.getApiRetryTimer(keyString)) ||
       deps.checkIsWedgeRecoveryInFlight(keyString) ||
       deps.checkIsRetryKickInFlight(keyString) ||
-      deps.checkIsSessionStarting(keyString);
+      isStarting;
     return {
       isActive,
       isBusy: isActive && (adapter.checkIsBusy?.(key) ?? false),
-      hasUnconsumedInput: deps.checkIsSessionStarting(keyString)
+      hasUnconsumedInput: isStarting
         ? true
         : adapter.checkHasUnconsumedInput ? adapter.checkHasUnconsumedInput(key) : null,
       isTurnEndBlocked,

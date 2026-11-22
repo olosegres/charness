@@ -28,6 +28,11 @@ export interface ReplayPromptsOptions {
   isSessionActive: boolean;
   /** Hand one prompt to the live session, with the options it was buffered with. */
   forward: (text: string, options: PromptDeliveryOptions) => Promise<void>;
+  /**
+   * Written after the buffered prompts, still inside the replay (only into a live session): what the start carries besides them — the
+   * bot's prompts held over a usage-limit wait. A throw rejects the replay, which still ends.
+   */
+  afterReplay?: () => Promise<void>;
 }
 
 /** A callback that throws must not break the replay or the failed-start path that called it. */
@@ -67,6 +72,8 @@ export class StartupPromptBuffer {
   /** Threads that already received the "queued while starting" ack, so we
    *  ack once per startup window rather than on every buffered prompt. */
   private ackedThreads = new Set<string>();
+  /** Threads whose buffered prompts are being written, by how many replays run (one at a time in practice). */
+  private replayingThreads = new Map<string, number>();
 
   /** Mark a thread as mid-startup; inbound text should now be buffered. */
   markStarting(threadId: string): void {
@@ -76,6 +83,15 @@ export class StartupPromptBuffer {
   /** Whether a thread's session is currently starting. */
   checkIsStarting(threadId: string): boolean {
     return this.startingThreads.has(threadId);
+  }
+
+  /**
+   * Whether a thread's buffered prompts are being replayed into its new session. The window is already closed (a prompt arriving now
+   * is forwarded, not buffered again), but for the wake-up engine's turn probe the replay is still the start: nothing it writes has
+   * started a turn yet, so no watch made during the start may be read as a turn that ended.
+   */
+  checkIsReplaying(threadId: string): boolean {
+    return this.replayingThreads.has(threadId);
   }
 
   /** Whether any thread is mid-startup or holds prompts that wait for a session: they live in memory, a restart would lose them. */
@@ -126,21 +142,31 @@ export class StartupPromptBuffer {
    * forward — or `dropped` when that forward threw (logged; the rest still go).
    */
   async replayPrompts(threadId: string, options: ReplayPromptsOptions): Promise<void> {
-    const prompts = this.takePrompts(threadId);
-    if (!options.isSessionActive) {
-      for (const prompt of prompts) settleBufferedPrompt(prompt, 'dropped');
-      return;
-    }
-    // Sequential await keeps the forwards in arrival order even when each one awaits its own loader send first.
-    for (const prompt of prompts) {
-      try {
-        await options.forward(prompt.text, prompt.options);
-      } catch (err) {
-        console.error('[replayBufferedPrompts] forward failed:', err);
-        settleBufferedPrompt(prompt, 'dropped');
-        continue;
+    // Marked replaying BEFORE the window closes, and until the last write and the after-step: the turn probe sees no gap between the
+    // start and the replay.
+    this.replayingThreads.set(threadId, (this.replayingThreads.get(threadId) ?? 0) + 1);
+    try {
+      const prompts = this.takePrompts(threadId);
+      if (!options.isSessionActive) {
+        for (const prompt of prompts) settleBufferedPrompt(prompt, 'dropped');
+        return;
       }
-      settleBufferedPrompt(prompt, 'replayed');
+      // Sequential await keeps the forwards in arrival order even when each one awaits its own loader send first.
+      for (const prompt of prompts) {
+        try {
+          await options.forward(prompt.text, prompt.options);
+        } catch (err) {
+          console.error('[replayBufferedPrompts] forward failed:', err);
+          settleBufferedPrompt(prompt, 'dropped');
+          continue;
+        }
+        settleBufferedPrompt(prompt, 'replayed');
+      }
+      await options.afterReplay?.();
+    } finally {
+      const count = (this.replayingThreads.get(threadId) ?? 1) - 1;
+      if (count > 0) this.replayingThreads.set(threadId, count);
+      else this.replayingThreads.delete(threadId);
     }
   }
 

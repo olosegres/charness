@@ -107,6 +107,13 @@ test('a tracker fire whose ridden request owes nothing, or with no request open,
   assert.match(body, /\{ isAccountsNoteCarrier: true, isLostWorkTellOptional \}/);
 });
 
+test('the turn probe reads the startup buffer\'s replay as the start, and the held prompts of a limit wait are forwarded inside the replay (review 15 #1)', () => {
+  assert.ok(botSource.includes('checkIsReplayingBufferedPrompts: (keyString) => startupPromptBuffer.checkIsReplaying(keyString),'));
+  const replay = getFunctionBody('replayBufferedPrompts');
+  assert.match(replay, /afterReplay: async \(\) => \{/);
+  assert.ok(replay.indexOf('afterReplay') < replay.indexOf('limitHeldPrompts.releaseAll(key)'), 'the held prompts are the replay\'s after-step');
+});
+
 test('a bot-made prompt that waits for an adopt replay behind a start counts only once replayed', () => {
   const body = getFunctionBody('forwardPromptToAgent');
   const buffer = body.slice(body.indexOf('buffer: async () => {'));

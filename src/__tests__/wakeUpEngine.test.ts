@@ -928,6 +928,7 @@ describe('a request whose first post is still starting its session (J7b)', () =>
       checkIsWedgeRecoveryInFlight: () => false,
       checkIsRetryKickInFlight: () => false,
       checkIsSessionStarting: () => isStarting,
+      checkIsReplayingBufferedPrompts: () => false,
       serializeKey: keyToString,
     })(topicKey);
   }
@@ -2533,5 +2534,30 @@ describe('turn boundaries: a forward settles the watches whose turn already ende
     await deliverWakes();
     assert.deepEqual(getWakeUpReasons(), ['silentTurn']);
     assert.equal(engine.getArmingRequestIdOf(issueKey), mention.id, 'the mention started the turn: a watch armed in it is the mention\'s');
+  });
+
+  it('a watch made while the session starts — its prompt waits in the startup buffer — is never decided by the replay\'s settle: the start is held, and the turn is decided at its REAL end (review 15 #1)', async () => {
+    const ledger = await createLedger();
+    const engine = createEngine(ledger);
+    const startingProbe: SessionTurnProbe = { isActive: true, isBusy: false, hasUnconsumedInput: true, isTurnEndBlocked: true };
+    probe = startingProbe;
+    const operator = await ledger.createRequest(topicKey, { kind: 'message', attributes: { requester: '424242' } });
+    // Buffered during the start, tracked at once (the old behaviour the poll alone never mistook).
+    await engine.trackForwardedTurn(topicKey, operator.id, { isRequestPrompt: true });
+    // The replay's own write settles first: the probe reads the replay as the start.
+    await (await engine.settleEndedTurnsOf(topicKey))();
+    await engine.pollWatchedTurns();
+    assert.deepEqual(engine.getWatchedRequestIdsOf(topicKey), [operator.id], 'still watched through the replay');
+    assert.equal(ledger.getNewestOpenRequest(topicKey)?.silentTurnCount, 0);
+    // After the replay the prompt is written and not yet read, then the agent works on it, then the turn ends silent.
+    probe = { ...idleProbe, hasUnconsumedInput: true };
+    await engine.pollWatchedTurns();
+    probe = busyProbe;
+    await engine.pollWatchedTurns();
+    assert.deepEqual(wakeUps, [], 'no reminder before the agent\'s turn');
+    probe = idleProbe;
+    await (await engine.settleEndedTurnsOf(topicKey))();
+    assert.deepEqual(getWakeUpReasons(), ['silentTurn'], 'one silent turn, one reminder');
+    assert.deepEqual(alerts, [], 'not the give-up');
   });
 });

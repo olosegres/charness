@@ -648,7 +648,7 @@ describe('the bot wires the kick and the restore, and keeps the saved record mea
   it('both ways out of a startup window settle what it held: the replay on a started session, the discard on a failed start', () => {
     // The kick keeps the saved record while its nudge waits in the buffer; only these two can end that wait.
     const replay = getFunction('async function replayBufferedPrompts(');
-    assert.match(replay, /await startupPromptBuffer\.replayPrompts\(keyToString\(key\), \{\n\s*isSessionActive,\n\s*forward: async \(prompt, options\) => \{ await forwardPromptToAgent\(key, adapter, prompt, undefined, options\); \},\n\s*\}\);/);
+    assert.match(replay, /await startupPromptBuffer\.replayPrompts\(keyToString\(key\), \{\n\s*isSessionActive,\n\s*forward: async \(prompt, options\) => \{ await forwardPromptToAgent\(key, adapter, prompt, undefined, options\); \},\n\s*afterReplay: async \(\) => \{/);
     assert.match(getFunction('async function startAgentSession('), /startupPromptBuffer\.discardPrompts\(kStr\);/);
     assert.doesNotMatch(botSource, /startupPromptBuffer\s*\.drainPrompts\(/, 'a drain that settles nothing would leave a waiting nudge waiting for good');
   });

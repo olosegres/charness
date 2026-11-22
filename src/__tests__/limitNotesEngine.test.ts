@@ -334,6 +334,7 @@ describe('L7: every cause that holds a turn open skips the engine and withdraws 
       checkIsWedgeRecoveryInFlight: () => activeCauses.has('wedgeRecovery'),
       checkIsRetryKickInFlight: () => activeCauses.has('retryKick'),
       checkIsSessionStarting: () => activeCauses.has('sessionStarting'),
+      checkIsReplayingBufferedPrompts: () => false,
       serializeKey: keyToString,
     };
     const engine = new LimitNotesEngine({
@@ -419,6 +420,7 @@ describe('on the real json-stream adapter, a real StateStore and the real hook',
       checkIsWedgeRecoveryInFlight: () => false,
       checkIsRetryKickInFlight: () => false,
       checkIsSessionStarting: () => false,
+      checkIsReplayingBufferedPrompts: () => false,
       serializeKey: keyToString,
     };
     return new LimitNotesEngine({

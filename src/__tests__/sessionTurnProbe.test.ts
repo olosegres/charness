@@ -27,6 +27,7 @@ interface ProbeScenario {
   wedgeRecoveryKeys: Set<string>;
   retryKickKeys: Set<string>;
   startingKeys: Set<string>;
+  replayingKeys: Set<string>;
   hasUnconsumedInput: boolean | undefined;
 }
 
@@ -48,6 +49,7 @@ function createProbe(): ReturnType<typeof createSessionTurnProbe> {
     checkIsWedgeRecoveryInFlight: (keyString) => scenario.wedgeRecoveryKeys.has(keyString),
     checkIsRetryKickInFlight: (keyString) => scenario.retryKickKeys.has(keyString),
     checkIsSessionStarting: (keyString) => scenario.startingKeys.has(keyString),
+    checkIsReplayingBufferedPrompts: (keyString) => scenario.replayingKeys.has(keyString),
     serializeKey: keyToString,
   };
   return createSessionTurnProbe(deps);
@@ -66,6 +68,7 @@ beforeEach(() => {
     wedgeRecoveryKeys: new Set(),
     retryKickKeys: new Set(),
     startingKeys: new Set(),
+    replayingKeys: new Set(),
     hasUnconsumedInput: undefined,
   };
 });
@@ -142,6 +145,19 @@ describe('createSessionTurnProbe', () => {
 
     scenario.startingKeys.delete(topicKeyString);
     assert.equal(createProbe()(topicKey).isTurnEndBlocked, false, 'started or failed: nothing holds it any more');
+  });
+
+  it('the replay of the prompts buffered during the start is still the start: the turn end is held and the input reads unconsumed, whatever the adapter says (review 15 #1)', () => {
+    // The window is closed before the first replayed write, and a fresh session reports nothing unread: without this every watch made
+    // while the session started read `ended` at the replay's first write, and was decided as a silent turn the agent never had.
+    scenario.hasUnconsumedInput = false;
+    scenario.replayingKeys.add(topicKeyString);
+    const probe = createProbe()(topicKey);
+    assert.equal(probe.isTurnEndBlocked, true);
+    assert.equal(probe.hasUnconsumedInput, true);
+    scenario.replayingKeys.delete(topicKeyString);
+    assert.equal(createProbe()(topicKey).isTurnEndBlocked, false, 'the replay over: the adapter decides again');
+    assert.equal(createProbe()(topicKey).hasUnconsumedInput, false);
   });
 
   it('another thread\'s start never holds this one', () => {

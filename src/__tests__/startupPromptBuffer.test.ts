@@ -260,3 +260,40 @@ test('a prompt buffered as a carrier of the accounts note replays as one (its no
   await buffer.replayPrompts(KEY_A, { isSessionActive: true, forward: async (text, options) => { forwarded.push([text, options.isPersonInput === true, options.isAccountsNoteCarrier === true]); } });
   assert.deepEqual(forwarded, [['typed', true, true], ['a nudge', false, false], ['a scheduled run', false, true]]);
 });
+
+test('the replay is still the start for the turn probe: «replaying» holds during every forward and the after-step, and ends after them — also when a forward throws; a prompt arriving meanwhile is not buffered again (review 15 #1)', async () => {
+  const buffer = new StartupPromptBuffer();
+  const seen: Array<[string, boolean, boolean]> = [];
+  buffer.markStarting(KEY_A);
+  buffer.addPrompt(KEY_A, 'first');
+  buffer.addPrompt(KEY_A, 'breaks');
+  assert.equal(buffer.checkIsReplaying(KEY_A), false, 'not before the replay');
+  const errorMock = mock.method(console, 'error', () => {});
+  try {
+    await buffer.replayPrompts(KEY_A, {
+      isSessionActive: true,
+      forward: async (text) => {
+        seen.push([text, buffer.checkIsReplaying(KEY_A), buffer.checkIsStarting(KEY_A)]);
+        if (text === 'breaks') throw new Error('write failed');
+      },
+      afterReplay: async () => { seen.push(['after', buffer.checkIsReplaying(KEY_A), buffer.checkIsStarting(KEY_A)]); },
+    });
+  } finally {
+    errorMock.mock.restore();
+  }
+  assert.deepEqual(seen, [['first', true, false], ['breaks', true, false], ['after', true, false]], 'replaying, and the window already closed: a new prompt is forwarded, not buffered');
+  assert.equal(buffer.checkIsReplaying(KEY_A), false, 'over once the last forward and the after-step are done');
+  assert.equal(buffer.checkIsReplaying(KEY_B), false, 'another thread is never replaying');
+
+  // A forward that throws out of the after-step still ends the replay.
+  buffer.markStarting(KEY_A);
+  buffer.addPrompt(KEY_A, 'one');
+  await assert.rejects(buffer.replayPrompts(KEY_A, { isSessionActive: true, forward: async () => {}, afterReplay: async () => { throw new Error('held prompts failed'); } }));
+  assert.equal(buffer.checkIsReplaying(KEY_A), false);
+  // No session: nothing replays, nothing is left marked.
+  buffer.markStarting(KEY_A);
+  buffer.addPrompt(KEY_A, 'lost', () => {});
+  await buffer.replayPrompts(KEY_A, { isSessionActive: false, forward: async () => {}, afterReplay: async () => { seen.push(['after-inactive', true, true]); } });
+  assert.equal(buffer.checkIsReplaying(KEY_A), false);
+  assert.ok(!seen.some(([text]) => text === 'after-inactive'), 'the after-step runs only into a live session');
+});
