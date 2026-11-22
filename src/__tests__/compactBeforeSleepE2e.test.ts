@@ -4,8 +4,9 @@
  * the fake Bot API of `telegramE2e/fakeTelegram.ts`, with the fake `claude` as the agent — it writes the context size the test sets
  * (`fakeClaudeContextTokensFileName`) into each turn's transcript record, as the real CLI leaves it — and the idle window cut to seconds
  * (`AGENT_IDLE_MINUTES`). The owner's rules (2026-11-22): «compaction first, then the topic goes to sleep» — but «if the context did not
- * grow much there is no point in compacting»: the baseline is the context of the FIRST turn after the last compaction (instructions and
- * skills loaded again), and growth of 30 000 tokens over it is what makes a compaction worth it. The incident behind it: a live
+ * grow much there is no point in compacting»: the baseline is the context of the FIRST model call after the last compaction (the
+ * summary, the instructions and skills loaded again, the prompt), read from the transcript, and growth of 30 000 tokens over it is what
+ * makes a compaction worth it. The incident behind it: a live
  * orchestrating topic, woken only by its own checks and worker watches, slept at every idle mark for 31 hours and was never compacted
  * again. One flow, in order:
  *
@@ -17,8 +18,9 @@
  *   → the context grows to 80 000 and the scheduler job — not a person — wakes the sleeping conversation: the agent takes one turn
  *   → the topic sits idle again: it grew by 40 000, so the idle mark compacts it (a notice, the agent's `/compact`) BEFORE the second
  *     stop and the second 💤; the baseline is dropped with the compaction
- *   → a person's turn (context 45 000) starts the baseline over — the first turn after the compaction, not the compaction's own
- *     `post=` figure — and the next idle mark, with no growth since, only stops the process
+ *   → a person's turn after the compaction is one big task: its first call saw 45 000, it ended at 120 000. The baseline starts over from
+ *     the FIRST CALL — not the compaction's own `post=` figure, not where the turn ended — so at the next idle mark the context has grown
+ *     by 75 000 and is compacted again before the third sleep (a baseline taken at the turn's end would have let it sleep at 120 000)
  *
  * Nothing leaves the machine: the Bot API is on loopback and the agent is a fake. Everything the test starts is stopped in `after`.
  * The decision's branches and the module's reading of the context are `compactOnIdle.test.ts`'s and `compactOnIdleGrowth.test.ts`'s.
@@ -86,10 +88,14 @@ const schedulerJobLabel = 'SCHED-1';
 const schedulerJobPrompt = `${schedulerJobLabel} [fake:answer] scheduled`;
 /** The job's turn, with room for the wait for the job itself. */
 const schedulerWakeTimeoutMs = (schedulerJobDelaySeconds + 60) * 1000;
-/** The context size of the conversation's turns, in tokens: the baseline, what the scheduler job's turn grows it to, and the first turn after the compaction. */
+/**
+ * The context sizes of the conversation's turns, in tokens: the baseline (the first turn's first and last calls both), what the
+ * scheduler job's turn grows it to, and the big task after the compaction — whose first call saw 45 000 and last call 120 000.
+ */
 const baselineContextTokens = 40_000;
 const grownContextTokens = baselineContextTokens + defaultCompactGrowthTokens + 10_000;
-const afterCompactionContextTokens = 45_000;
+const bigTaskFirstCallTokens = 45_000;
+const bigTaskLastCallTokens = 120_000;
 
 let layout: IsolatedInstanceLayout | null = null;
 let charness: IsolatedCharness | null = null;
@@ -139,9 +145,9 @@ function getNotGrownSkipLine(): string {
   return `[compact-on-idle] ${topicKey} timer fired but the compaction is skipped: the context grew by`;
 }
 
-/** The context size the fake agent writes into the transcript of every turn it ends from now on. */
-function setContextTokens(tokens: number): void {
-  fs.writeFileSync(path.join(getLayout().fakeStateDir, fakeClaudeContextTokensFileName), tokens.toString());
+/** The context sizes the fake agent writes into the transcript of every turn it ends from now on: its first model call's and its last's. */
+function setContextTokens(firstCallTokens: number, lastCallTokens: number = firstCallTokens): void {
+  fs.writeFileSync(path.join(getLayout().fakeStateDir, fakeClaudeContextTokensFileName), `${firstCallTokens} ${lastCallTokens}`);
 }
 
 /** The topic's idle-compaction bookkeeping as the bot saved it. */
@@ -265,16 +271,22 @@ describe('The idle compaction waits for the context to grow, and a topic woken o
     assert.equal(tracking?.lastContextTokens, undefined);
   });
 
-  it('a person\'s turn after the compaction (45 000) is the new baseline — the first turn, not the compaction\'s own figure — and the next idle mark, with no growth, only stops the process', async () => {
-    setContextTokens(afterCompactionContextTokens);
-    const wakeMessageId = fakeTelegram.pushOperatorMessage(topicThreadId, 'WAKE-1 [fake:answer] are you there?');
+  it('a person\'s big task after the compaction — its first call saw 45 000, it ended at 120 000 — gives a baseline of 45 000, the FIRST call, and the next idle mark compacts again BEFORE the third sleep', async () => {
+    setContextTokens(bigTaskFirstCallTokens, bigTaskLastCallTokens);
+    const wakeMessageId = fakeTelegram.pushOperatorMessage(topicThreadId, 'WAKE-1 [fake:answer] a big task: read the repository');
     await topic.waitForMessage('the answer of the woken agent', (message) => message.message_id > wakeMessageId && message.text.includes('WAKE-1'));
-    await getCharness().waitFor('the bot to read the turn\'s context size', replyTimeoutMs, () => readTracking()?.baselineContextTokens === afterCompactionContextTokens);
-    assert.equal(readTracking()?.lastContextTokens, afterCompactionContextTokens);
+    await getCharness().waitFor('the bot to read the turn\'s context size', replyTimeoutMs, () => readTracking()?.lastContextTokens === bigTaskLastCallTokens);
+    assert.equal(readTracking()?.baselineContextTokens, bigTaskFirstCallTokens, 'the baseline is the first call after the compaction — not the compaction\'s own figure, not where the turn ended');
 
     await getCharness().waitFor('the third idle stop', idleStopTimeoutMs, () => countConsoleLines(getStopLine()) === 3);
-    assert.equal(countCompactions(), 1, 'no second compaction: the context has not grown since the new baseline');
-    assert.equal(countIdleNotices(), 1);
-    assert.equal(countConsoleLines(getNotGrownSkipLine()), 2, 'the console says so again, once');
+    assert.equal(countCompactions(), 2, 'the context grew by 75 000 since the first call: compacted again before the sleep');
+    assert.equal(countConsoleLines(getCompactedLine()), 2);
+    assert.equal(countIdleNotices(), 2);
+    assert.equal(countConsoleLines(getNotGrownSkipLine()), 1, 'only the first idle mark found no growth');
+    const output = getCharness().output;
+    const secondCompactedAt = output.indexOf(getCompactedLine(), output.indexOf(getCompactedLine()) + 1);
+    const thirdStopAt = output.indexOf(getStopLine(), output.indexOf(getStopLine(), output.indexOf(getStopLine()) + 1) + 1);
+    assert.ok(secondCompactedAt >= 0 && secondCompactedAt < thirdStopAt, 'the second compaction completed BEFORE the third stop');
+    assert.equal(readTracking()?.baselineContextTokens, undefined, 'dropped again by the compaction');
   });
 });

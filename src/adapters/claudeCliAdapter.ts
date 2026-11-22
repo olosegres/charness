@@ -92,7 +92,7 @@ import {
   parseTmuxSessionName as parseTmuxSessionNameWithPrefix,
 } from '../utils/tmuxSessionName';
 import { getEffortStartupKeystroke } from '../utils/effortStartupKeystroke';
-import { readClaudeRuntimeInfo } from '../utils/claudeRuntimeInfo';
+import { readClaudeContextUsedTokens, readClaudeFirstCallContextTokens, readClaudeRuntimeInfo } from '../utils/claudeRuntimeInfo';
 import { checkIsRecord } from '../utils/checkIsRecord';
 import { getDefaultDisplayPrefs } from '../utils/displayVerbosity';
 import {
@@ -3551,6 +3551,22 @@ export class ClaudeCliAdapter extends EventEmitter implements AgentAdapter {
     } catch {
       return { version: null, model: null, contextWindowTokens: null, contextUsedTokens: null };
     }
+  }
+
+  /** The transcript of the live session of `key`, `null` when it has none or is not active — read in the caller's tick (see `AgentAdapter.getContextUsedTokens`). */
+  private getActiveTranscriptPath(key: SessionKey): string | null {
+    const session = this.sessions.get(keyToString(key));
+    return session?.isActive ? getClaudeTranscriptPath(session.workDir, session.claudeSessionId) : null;
+  }
+
+  async getContextUsedTokens(key: SessionKey): Promise<number | null> {
+    const filePath = this.getActiveTranscriptPath(key);
+    return filePath === null ? null : readClaudeContextUsedTokens(filePath);
+  }
+
+  async getFirstCallContextTokens(key: SessionKey): Promise<number | null> {
+    const filePath = this.getActiveTranscriptPath(key);
+    return filePath === null ? null : readClaudeFirstCallContextTokens(filePath);
   }
 
   /**

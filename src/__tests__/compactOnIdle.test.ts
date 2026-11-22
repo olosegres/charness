@@ -78,6 +78,7 @@ const fireBase = {
   isLimitWaitArmed: false,
   contextGrowthTokens: growthThreshold + 5_000,
   growthThresholdTokens: growthThreshold,
+  hasEarlierCompaction: false,
   canSuspend: true,
 } as const;
 
@@ -361,13 +362,19 @@ test('getIdleFireDecision: the context must have GROWN by the threshold over the
   const short = getIdleFireDecision({ ...fireBase, contextGrowthTokens: growthThreshold - 1 });
   assert.equal(short.shouldCompact, false);
   assert.equal(short.compactionSkipReasons.length, 1);
-  assert.equal(short.compactionSkipReasons[0], `the context grew by ${formatTokenCount(29_999)} tokens since its first turn after the last compaction, ${formatTokenCount(30_000)} are needed`, 'the log says how much it grew and how much is needed');
+  assert.equal(short.compactionSkipReasons[0], `the context grew by ${formatTokenCount(29_999)} tokens since its first call after the last compaction, ${formatTokenCount(30_000)} are needed`, 'the log says how much it grew and how much is needed');
   assert.equal(short.shouldSuspend, true, 'a skipped compaction still sleeps');
   // A conversation that has not grown at all, and one whose threshold is 0 («at every idle mark with a new turn»).
   assert.equal(getIdleFireDecision({ ...fireBase, contextGrowthTokens: 0 }).shouldCompact, false);
   assert.equal(getIdleFireDecision({ ...fireBase, contextGrowthTokens: 0, growthThresholdTokens: 0 }).shouldCompact, true);
-  // No reading (a backend that cannot say, a state saved before the figures were kept): not held back by the gate.
+  // No reading of a conversation never compacted: nothing to measure from yet, not held back by the gate — but one that was compacted
+  // before is: nothing is known to have grown (a backend that raises no signal of its own for a compaction would otherwise be compacted at every mark).
   assert.equal(getIdleFireDecision({ ...fireBase, contextGrowthTokens: null }).shouldCompact, true);
+  const unknownAfterCompaction = getIdleFireDecision({ ...fireBase, contextGrowthTokens: null, hasEarlierCompaction: true });
+  assert.equal(unknownAfterCompaction.shouldCompact, false);
+  assert.deepEqual(unknownAfterCompaction.compactionSkipReasons, ['the context size since the last compaction is not known yet, so nothing is known to have grown']);
+  assert.equal(unknownAfterCompaction.shouldSuspend, true, 'the stop still follows');
+  assert.equal(getIdleFireDecision({ ...fireBase, contextGrowthTokens: growthThreshold, hasEarlierCompaction: true }).shouldCompact, true, 'a known growth decides, whatever the history');
   // The other guards stay: grown enough but nothing new to compress is still no compaction, and the reasons add up.
   const both = getIdleFireDecision({ ...fireBase, contextGrowthTokens: 100, hasCompletedTurnSinceCompaction: false });
   assert.equal(both.compactionSkipReasons.length, 2);
@@ -406,16 +413,21 @@ test('getContextGrowthTokens: from the baseline up to the newest reading, never 
   assert.equal(getContextGrowthTokens({ baselineContextTokens: 40_000, lastContextTokens: null }), null);
 });
 
-test('getContextBaselineAfterReading: the first reading is the baseline, a smaller one moves it down (the CLI compacted by itself), a larger one leaves it', () => {
-  assert.equal(getContextBaselineAfterReading(null, 41_000), 41_000, 'the first turn after a compaction (or of a conversation never compacted)');
-  assert.equal(getContextBaselineAfterReading(41_000, 80_000), 41_000, 'growth never moves the baseline');
-  assert.equal(getContextBaselineAfterReading(200_000, 60_000), 60_000, 'a shrink the bot did not make: growth is counted from the new size');
+test('getContextBaselineAfterReading: with none yet it is the epoch\'s FIRST call (not the turn\'s end), unknown while that cannot be told; a larger context leaves it, a smaller one drops it (the CLI compacted by itself)', () => {
+  assert.equal(getContextBaselineAfterReading({ baselineContextTokens: null, lastContextTokens: 120_000, firstCallContextTokens: 25_000 }), 25_000, 'the first call after the compaction, even though the turn ended at 120 000');
+  assert.equal(getContextBaselineAfterReading({ baselineContextTokens: null, lastContextTokens: 120_000, firstCallContextTokens: null }), null, 'the history could not be read: no baseline, never the turn\'s end');
+  assert.equal(getContextBaselineAfterReading({ baselineContextTokens: 25_000, lastContextTokens: 80_000, firstCallContextTokens: null }), 25_000, 'growth never moves the baseline');
+  assert.equal(getContextBaselineAfterReading({ baselineContextTokens: 25_000, lastContextTokens: 25_000, firstCallContextTokens: null }), 25_000);
+  assert.equal(getContextBaselineAfterReading({ baselineContextTokens: 200_000, lastContextTokens: 60_000, firstCallContextTokens: null }), null, 'a shrink the bot did not make: the baseline is of the older epoch, read again from the new one');
 });
 
-test('checkIsContextGrownEnough: the threshold reached or no reading; the single place both the fire and the per-turn wake-up ask', () => {
-  assert.equal(checkIsContextGrownEnough({ contextGrowthTokens: 30_000, growthThresholdTokens: 30_000 }), true);
-  assert.equal(checkIsContextGrownEnough({ contextGrowthTokens: 29_999, growthThresholdTokens: 30_000 }), false);
-  assert.equal(checkIsContextGrownEnough({ contextGrowthTokens: null, growthThresholdTokens: 30_000 }), true);
+test('checkIsContextGrownEnough: the threshold reached; no reading passes only for a conversation never compacted — the single place both the fire and the per-turn wake-up ask', () => {
+  const base = { growthThresholdTokens: 30_000, hasEarlierCompaction: false };
+  assert.equal(checkIsContextGrownEnough({ ...base, contextGrowthTokens: 30_000 }), true);
+  assert.equal(checkIsContextGrownEnough({ ...base, contextGrowthTokens: 29_999 }), false);
+  assert.equal(checkIsContextGrownEnough({ ...base, contextGrowthTokens: 29_999, hasEarlierCompaction: true }), false);
+  assert.equal(checkIsContextGrownEnough({ ...base, contextGrowthTokens: null }), true, 'never compacted: nothing to measure from yet');
+  assert.equal(checkIsContextGrownEnough({ ...base, contextGrowthTokens: null, hasEarlierCompaction: true }), false, 'compacted before and unknown: nothing is known to have grown');
 });
 
 test('getIdleFireDecision: a backend that cannot be suspended keeps its process (L-D8) — the compaction alone', () => {

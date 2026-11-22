@@ -499,9 +499,9 @@ export const enDict: Record<string, string> = {
   'compactOnIdle.on': 'ON',
   'compactOnIdle.off': 'OFF',
   'compactOnIdle.title':
-    '🧹 Auto-compact on idle for this topic: {state}\n{summaryLine}\n{selfReviewLine}\n{growthLine}\n\nWhen the session sits idle for ~55 min its context is compacted automatically to save tokens (the prompt cache is still warm).\n\nTo switch it for ALL topics at once, run this in the General topic.',
+    '🧹 Auto-compact on idle for this topic: {state}\n{growthLine}\n{summaryLine}\n{selfReviewLine}\n\nWhen the session sits idle for ~55 min its context is compacted automatically to save tokens (the prompt cache is still warm).\n\nTo switch it for ALL topics at once, run this in the General topic.',
   'compactOnIdle.titleGeneral':
-    '🧹 Auto-compact on idle — default for ALL topics: {state}\n{summaryLine}\n{selfReviewLine}\n{growthLine}\n\nWhen a session sits idle for ~55 min its context is compacted automatically to save tokens.\n\nEach topic can still override this with its own /compact_on_idle.',
+    '🧹 Auto-compact on idle — default for ALL topics: {state}\n{growthLine}\n{summaryLine}\n{selfReviewLine}\n\nWhen a session sits idle for ~55 min its context is compacted automatically to save tokens.\n\nEach topic can still override this with its own /compact_on_idle.',
   'compactOnIdle.enableButton': 'Enable',
   'compactOnIdle.disableButton': 'Disable',
   'compactOnIdle.summaryLine': '📄 Summary after a compaction: {state}',

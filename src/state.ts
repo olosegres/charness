@@ -415,13 +415,16 @@ export interface CompactIdleTrackingEntry {
   lastCompactionAt?: number;
   lastHeldMarkAt?: number;
   /**
-   * The context size, in tokens, the conversation held at its FIRST turn after its last compaction (every instruction and skill
-   * loaded again, the compaction's own `post=` figure left out) — what the idle compaction measures growth from
-   * ({@link getContextGrowthTokens}). Absent after a compaction until the next turn ends; for a conversation never compacted, its
-   * first turn. Moved DOWN (never up) when a later reading is smaller: the CLI's own compaction shrank the context.
+   * The context size, in tokens, of the conversation's FIRST model call after its last compaction (input + cache read + cache write
+   * of that call: the compacted summary, every instruction and skill loaded again and the prompt — not the compaction's own `post=`
+   * figure, and not the end of a turn that may have read half a repository) — what the idle compaction measures growth from
+   * ({@link getContextGrowthTokens}). Read from the conversation's history at the first turn's end after a compaction (or at the
+   * first turn the bot reads, from the history: a conversation that already had turns is not measured from now); for a conversation
+   * never compacted, its first call. Dropped by every compaction, and when a later context is smaller than it (the CLI's own
+   * compaction shrank the context) to be read again from the new epoch.
    */
   baselineContextTokens?: number;
-  /** The context size at the end of the newest turn read, in tokens: what the growth is measured up to. */
+  /** The context size after the newest turn read, in tokens (the last call's input, cache and output): what the growth is measured up to. */
   lastContextTokens?: number;
 }
 
@@ -595,7 +598,7 @@ export interface StateV1 {
   compactIdleLatchedThreads?: string[];
   /**
    * The growth, in context tokens, that makes an idle compaction worth running (`/compact_on_idle`): the conversation must have
-   * grown by at least this much since its first turn after the last compaction. `compactGrowthTokens` is the INSTANCE-WIDE
+   * grown by at least this much since its first model call after the last compaction. `compactGrowthTokens` is the INSTANCE-WIDE
    * default, driven from the General topic; absent ⇒ {@link defaultCompactGrowthTokens}. `compactGrowthOverrides` holds the topics'
    * own values keyed by {@link SessionKey} string; a present entry wins over the default. Both optional so older state files stay
    * valid; lifecycle-independent (only `/compact_on_idle` mutates them).
@@ -2370,20 +2373,23 @@ export class StateStore {
   }
 
   /**
-   * @description Record the context size read at the end of a turn of `key` (tokens in the model's context after it): it becomes
-   * the growth's upper end, and the baseline when there is none yet — the first turn after a compaction, or of a conversation
-   * never compacted — or when it is SMALLER than the baseline (the CLI's own compaction shrank the context: growth is measured
-   * from the new, smaller size). Rare — once per turn — so it always schedules a save: a restart must keep the baseline.
+   * @description Record what was read at the end of a turn of `key`: the context size after it (`lastContextTokens`, the growth's
+   * upper end) and, when the conversation had no baseline, the size its epoch's FIRST model call saw (`firstCallContextTokens`, `null`
+   * while it cannot be told). The baseline is then that figure; one that is already there stays, unless the context is now smaller
+   * than it — the CLI compacted by itself — and it is dropped to be read from the new epoch ({@link getContextBaselineAfterReading}).
+   * Rare — once per turn — so it always schedules a save: a restart must keep the baseline.
    */
-  noteCompactIdleContext(key: SessionKey, contextTokens: number): void {
+  noteCompactIdleContext(key: SessionKey, reading: { lastContextTokens: number; firstCallContextTokens: number | null }): void {
     const k = keyToString(key);
     const sessionId = this.getAgentSessionId(k);
     if (!sessionId) return; // nothing to bind the figures to — see `getAgentSessionId`
     const tracking = (this.state.compactIdleTracking ??= {});
     const existing = tracking[k];
     const entry: CompactIdleTrackingEntry = existing?.sessionId === sessionId ? existing : { sessionId };
-    entry.baselineContextTokens = getContextBaselineAfterReading(entry.baselineContextTokens ?? null, contextTokens);
-    entry.lastContextTokens = contextTokens;
+    const baseline = getContextBaselineAfterReading({ baselineContextTokens: entry.baselineContextTokens ?? null, lastContextTokens: reading.lastContextTokens, firstCallContextTokens: reading.firstCallContextTokens });
+    if (baseline === null) delete entry.baselineContextTokens;
+    else entry.baselineContextTokens = baseline;
+    entry.lastContextTokens = reading.lastContextTokens;
     tracking[k] = entry;
     this.scheduleSave();
   }

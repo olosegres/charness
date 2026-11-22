@@ -212,7 +212,7 @@ function buildCompactOnIdleKeyboard(picker: CompactOnIdlePickerState) {
 export interface CompactionPorts
   extends Pick<
     BotCore,
-    'bot' | 'command' | 'getState' | 'replyToThread' | 'editThreadKeyboard' | 'authoriseContext' | 'authoriseSpeaker' | 'withThreadLocale' | 'checkIsGeneral' | 'wakeSleepingSession'
+    'bot' | 'command' | 'getState' | 'replyToThread' | 'editThreadMessage' | 'editThreadKeyboard' | 'authoriseContext' | 'authoriseSpeaker' | 'withThreadLocale' | 'checkIsGeneral' | 'wakeSleepingSession'
   > {
   startTypingLoader: (key: SessionKey) => void;
   forwardPromptToAgent: (key: SessionKey, adapter: AgentAdapter, text: string) => Promise<void>;
@@ -272,7 +272,7 @@ export interface CompactionPorts
  * state the typing loop and the request probe read, and the `register…()` calls.
  */
 export function createCompaction(ports: CompactionPorts) {
-  const { startTypingLoader, forwardPromptToAgent, pendingQuestions, clearPendingQuestion, closeQuestionMessage, setQuestionAsideAtIdle, idleWindowMs, checkIsLimitWaitArmed, suspendThreadSession, resumeSleepingSessionForCompaction, getThreadAdapter, deliverLabel, resumeSleepingSessionForPrompt, checkIsStarting, closeOrphanQuestionMessage, notePersonActivity, compactSelfReviewFlagDirs, bot, command, getState, replyToThread, editThreadKeyboard, authoriseContext, authoriseSpeaker, withThreadLocale, checkIsGeneral, wakeSleepingSession } = ports;
+  const { startTypingLoader, forwardPromptToAgent, pendingQuestions, clearPendingQuestion, closeQuestionMessage, setQuestionAsideAtIdle, idleWindowMs, checkIsLimitWaitArmed, suspendThreadSession, resumeSleepingSessionForCompaction, getThreadAdapter, deliverLabel, resumeSleepingSessionForPrompt, checkIsStarting, closeOrphanQuestionMessage, notePersonActivity, compactSelfReviewFlagDirs, bot, command, getState, replyToThread, editThreadMessage, editThreadKeyboard, authoriseContext, authoriseSpeaker, withThreadLocale, checkIsGeneral, wakeSleepingSession } = ports;
 
   /**
    * @description Resolve the `/compact` route for a thread's current backend — the
@@ -666,28 +666,34 @@ export function createCompaction(ports: CompactionPorts) {
   }
 
   /**
-   * @description Read the context size the conversation holds now and record it (`noteCompactIdleContext`): the baseline of the idle
-   * compaction's growth gate on the first reading after a compaction, and the figure the growth is measured up to. Not for the
-   * compaction's own turn, and a reading that a compaction overtook while the backend answered is dropped — it describes the context
-   * of before. A backend that cannot say (no runtime info, a transcript not written yet) leaves the figures as they were, and a
-   * conversation with none is not held back by the gate.
+   * @description Read what the conversation weighs now and record it (`noteCompactIdleContext`): the context after its newest model call
+   * (`getContextUsedTokens`, the figure the idle compaction's growth is measured up to) and, while it has no baseline, the context its
+   * epoch's FIRST model call saw (`getFirstCallContextTokens`, read from the conversation's history — the baseline). Both reads start
+   * in the same tick, before a per-turn process is stopped. Not for the compaction's own turn, and a reading that a compaction
+   * overtook while the backend answered is dropped — it describes the context of before. A backend that cannot say leaves the figures as
+   * they were: a conversation never compacted is not held back by the gate then, one that was compacted is
+   * ({@link checkIsContextGrownEnough}).
    */
   async function sampleThreadContext(key: SessionKey): Promise<void> {
     const kStr = keyToString(key);
     if (threadsCompacting.has(kStr)) return;
     const adapter = getThreadAdapter(key);
-    if (!adapter.getRuntimeInfo) return;
-    const compactedAtBefore = getState().getCompactIdleTracking(key).lastCompactionAt;
-    let contextTokens: number | null;
+    if (!adapter.getContextUsedTokens) return;
+    const { lastCompactionAt: compactedAtBefore, baselineContextTokens } = getState().getCompactIdleTracking(key);
+    let lastContextTokens: number | null;
+    let firstCallContextTokens: number | null;
     try {
-      contextTokens = (await adapter.getRuntimeInfo(key)).contextUsedTokens;
+      [lastContextTokens, firstCallContextTokens] = await Promise.all([
+        adapter.getContextUsedTokens(key),
+        baselineContextTokens === null ? adapter.getFirstCallContextTokens?.(key) ?? null : null,
+      ]);
     } catch (error) {
       console.warn(`[compact-on-idle] ${kStr} reading the context size failed: ${error instanceof Error ? error.message : error}`);
       return;
     }
-    if (contextTokens === null || contextTokens <= 0) return;
+    if (lastContextTokens === null || lastContextTokens <= 0) return;
     if (threadsCompacting.has(kStr) || getState().getCompactIdleTracking(key).lastCompactionAt !== compactedAtBefore) return;
-    getState().noteCompactIdleContext(key, contextTokens);
+    getState().noteCompactIdleContext(key, { lastContextTokens, firstCallContextTokens });
   }
 
   /** A turn of a json-stream conversation ended: read its context size right away — a per-turn process is stopped within moments. */
@@ -758,7 +764,11 @@ export function createCompaction(ports: CompactionPorts) {
     if (!getState().checkIsCompactOnIdleEnabled(key)) return false;
     const { lastTurnEndAt, lastCompactionAt, baselineContextTokens, lastContextTokens } = getState().getCompactIdleTracking(key);
     return lastTurnEndAt > lastCompactionAt
-      && checkIsContextGrownEnough({ contextGrowthTokens: getContextGrowthTokens({ baselineContextTokens, lastContextTokens }), growthThresholdTokens: getState().getCompactGrowthTokens(key) });
+      && checkIsContextGrownEnough({
+        contextGrowthTokens: getContextGrowthTokens({ baselineContextTokens, lastContextTokens }),
+        growthThresholdTokens: getState().getCompactGrowthTokens(key),
+        hasEarlierCompaction: lastCompactionAt > 0,
+      });
   }
 
   /**
@@ -815,6 +825,7 @@ export function createCompaction(ports: CompactionPorts) {
       isLimitWaitArmed: checkIsLimitWaitArmed(key),
       contextGrowthTokens: getContextGrowthTokens({ baselineContextTokens, lastContextTokens }),
       growthThresholdTokens: getState().getCompactGrowthTokens(key),
+      hasEarlierCompaction: lastCompactionAt > 0,
       canSuspend: typeof adapter.suspendSession === 'function',
     });
     if (decision.isIdleMarkHeld) await noteIdleMarkHeld(key, decision.heldNoticeReason);
@@ -1528,10 +1539,25 @@ export function createCompaction(ports: CompactionPorts) {
       };
   }
 
+  /** The picker's text: a line for each setting, in the order of its keyboard's rows, from the settings as they stand. */
+  function buildCompactOnIdleTitle(isGeneral: boolean, picker: CompactOnIdlePickerState): string {
+    const vars = {
+      state: picker.isIdleEnabled ? t('compactOnIdle.on') : t('compactOnIdle.off'),
+      growthLine: t('compactOnIdle.growthLine', { tokens: formatTokenCount(picker.growthTokens) }),
+      summaryLine: t('compactOnIdle.summaryLine', {
+        state: picker.isSummaryEnabled ? t('compactSummary.on') : t('compactSummary.off'),
+      }),
+      selfReviewLine: t('compactOnIdle.selfReviewLine', {
+        state: picker.isSelfReviewEnabled ? t('compactSelfReview.on') : t('compactSelfReview.off'),
+      }),
+    };
+    return isGeneral ? t('compactOnIdle.titleGeneral', vars) : t('compactOnIdle.title', vars);
+  }
+
   /**
    * @description A tap on the `/compact_on_idle` picker — either row. `apply` writes
-   * the setting and posts its confirmation; the keyboard is then re-rendered from the
-   * stored state so the ✓ of BOTH rows is right.
+   * the setting and posts its confirmation; the picker — its text, whose lines name the settings, and its keyboard — is then re-rendered
+   * from the stored state, so the ✓ and every figure shown are right.
    */
   async function handleCompactOnIdleCallback(
     ctx: Context,
@@ -1544,11 +1570,13 @@ export function createCompaction(ports: CompactionPorts) {
     // outlive the callback, and a late answer throws — skipping the keyboard re-render below.
     await ctx.answerCbQuery();
     await withThreadLocale(key, () => apply(key, isGeneral));
-    // Re-render the picker keyboard so the ✓ follows the new state.
+    // Re-render the picker, its text with it: the lines say the threshold and the switches, and must not keep the old ones under a ✓ that moved.
     const pickerMessageId = getCallbackMessageId(ctx);
     if (pickerMessageId !== null) {
-      const keyboard = withThreadLocale(key, () => buildCompactOnIdleKeyboard(getCompactOnIdlePickerState(key, isGeneral)));
-      await editThreadKeyboard(key, pickerMessageId, keyboard.reply_markup, 'coi_cb');
+      await withThreadLocale(key, async () => {
+        const picker = getCompactOnIdlePickerState(key, isGeneral);
+        await editThreadMessage(key, pickerMessageId, buildCompactOnIdleTitle(isGeneral, picker), buildCompactOnIdleKeyboard(picker));
+      });
     }
   }
 
@@ -1703,11 +1731,11 @@ export function createCompaction(ports: CompactionPorts) {
       const arg = parsed.args.join(' ').toLowerCase();
       const isGeneral = checkIsGeneral(key);
 
-      if (!isGeneral) {
-        if (!getThreadAdapter(key).checkIsActive(key) || getThreadCompactRoute(key) === 'notSupported') {
-          await replyToThread(key, t('compactOnIdle.unsupported'));
-          return;
-        }
+      // Only a raw shell, with no context to compact, is refused — like `/compact_summary`: the threshold and the toggles are read when
+      // the idle mark fires, so they are as meaningful in a sleeping topic (a json-stream one is asleep most of the time) as in a live one.
+      if (!isGeneral && getThreadCompactRoute(key) === 'notSupported') {
+        await replyToThread(key, t('compactOnIdle.unsupported'));
+        return;
       }
 
       if (arg === 'on' || arg === 'off') {
@@ -1727,18 +1755,7 @@ export function createCompaction(ports: CompactionPorts) {
       }
 
       const picker = getCompactOnIdlePickerState(key, isGeneral);
-      const vars = {
-        state: picker.isIdleEnabled ? t('compactOnIdle.on') : t('compactOnIdle.off'),
-        growthLine: t('compactOnIdle.growthLine', { tokens: formatTokenCount(picker.growthTokens) }),
-        summaryLine: t('compactOnIdle.summaryLine', {
-          state: picker.isSummaryEnabled ? t('compactSummary.on') : t('compactSummary.off'),
-        }),
-        selfReviewLine: t('compactOnIdle.selfReviewLine', {
-          state: picker.isSelfReviewEnabled ? t('compactSelfReview.on') : t('compactSelfReview.off'),
-        }),
-      };
-      const title = isGeneral ? t('compactOnIdle.titleGeneral', vars) : t('compactOnIdle.title', vars);
-      await replyToThread(key, title, buildCompactOnIdleKeyboard(picker));
+      await replyToThread(key, buildCompactOnIdleTitle(isGeneral, picker), buildCompactOnIdleKeyboard(picker));
     });
 
     // `/compact_summary` — toggle writing the agent's FULL compaction summary into the

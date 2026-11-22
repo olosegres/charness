@@ -237,13 +237,18 @@ excuses the turn (D1: reject, compact, re-ask) but never pending work. An idle
 fire kept ONLY by pending work looks again at the next idle window or when the
 hold runs out (`getPendingWorkRecheckDelayMs`); a turn's end restarts the idle
 countdown. The idle COMPACTION belongs to the idle mark alone (the prompt cache is
-cold later) and to a conversation whose context GREW by the threshold (`/compact_on_idle`, 30 000 tokens by default) since its first turn after
-the last compaction: the context size is read when a json-stream turn ends (`noteThreadTurnContext` → `getRuntimeInfo().contextUsedTokens`, the
-transcript's last assistant usage — not the `result` frame's `usage`, which sums every API call of the turn) or once a backend's output has settled
-(`markThreadTurnProducedOutput`, debounced), kept per conversation (`compactIdleTracking.baselineContextTokens` / `lastContextTokens`, dropped by every
-bot-issued compaction so the next turn starts the baseline over, moved down by a smaller reading); no reading holds nothing back
-(`getContextGrowthTokens`, `getIdleFireDecision`'s `contextGrowthTokens`). There is no once-per-active-period latch: the growth is what keeps
-a compaction from repeating. A process held at the mark forgoes it (`getIdleFireDecision`'s
+cold later) and to a conversation whose context GREW by the threshold (`/compact_on_idle`, 30 000 tokens by default) over what its FIRST model call
+after the last compaction saw (the summary, the instructions, the skills, the prompt): at a json-stream turn's end (`noteThreadTurnContext`) or once a
+backend's output has settled (`markThreadTurnProducedOutput`, debounced) the bot reads `AgentAdapter.getContextUsedTokens` — the transcript's last
+assistant usage, not the `result` frame's `usage`, which sums every API call of the turn; OpenCode's from memory, no request — and, while the
+conversation has no baseline, `getFirstCallContextTokens`: the first main-conversation assistant record after the transcript's last `compact_boundary`
+(`readClaudeFirstCallContextTokens`, a backwards walk of the last epoch only; OpenCode: the first parent message after the newest summary in the
+session history). Read from the history, so a long first turn does not hide its own growth in the baseline and a conversation that already had turns
+when the bot first looks is measured from its real baseline. Kept per conversation (`compactIdleTracking.baselineContextTokens` / `lastContextTokens`),
+dropped by every bot-issued compaction and by a context smaller than the baseline (the CLI compacted by itself), read again at the next turn's end;
+an unreadable history leaves no baseline, never the turn's end in its place. No reading holds a conversation back only while it was never
+compacted (`checkIsContextGrownEnough`): a compacted one with none is not compacted again, so a backend whose compaction raises no signal (the tmux
+Claude) cannot loop. There is no once-per-active-period latch: the growth is what keeps a compaction from repeating. A process held at the mark forgoes it (`getIdleFireDecision`'s
 `isIdleMarkHeld`; the topic gets ONE silent line, `compactOnIdle.skipped.*Notice`, naming what holds
 it — background work or a message not taken in; a bare running turn holds the mark without a line), the mark is remembered as held (`lastHeldMarkAt`, persisted: a restart repeats nothing and
 compacts nothing late) until the next activity opens a new idle period, and the looks again

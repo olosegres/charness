@@ -106,10 +106,12 @@ export const fakeClaudeAlwaysUsageLimitFileName = 'always-usage-limit';
 export const fakeClaudeUsageWindowsFileName = 'usage-windows.json';
 
 /**
- * A file in the fake's state dir whose content is a number of tokens: while it exists, every turn the fake ends writes an `assistant`
- * record carrying that `usage` (all of it as `input_tokens`) into the conversation's transcript just before its `result` — what the
- * real CLI leaves there, and what the bot reads as the size of the context (`utils/claudeRuntimeInfo.ts`) for the idle compaction's
- * growth gate. No file: the transcript holds no such record, the bot can tell no size, and the gate holds nothing back.
+ * A file in the fake's state dir whose content is one number of tokens, or two — `<first call> <last call>`: while it exists, every
+ * turn the fake ends writes two `assistant` records into the conversation's transcript just before its `result` — the first carrying
+ * the first number as its `usage` (all of it as `input_tokens`), the last the second (one number is both) — as the real CLI leaves a
+ * turn of several model calls. The bot reads the size of the context there (`utils/claudeRuntimeInfo.ts`) for the idle compaction's
+ * growth gate: the FIRST call after a compaction is its baseline, the last call of a turn what the growth is measured up to. No file:
+ * the transcript holds no such record, the bot can tell no size, and the gate does not hold a conversation never compacted back.
  */
 export const fakeClaudeContextTokensFileName = 'context-tokens';
 

@@ -1,6 +1,7 @@
 import * as fs from 'fs';
 import type { AgentRuntimeInfo } from '../types';
 import { checkIsRecord } from './checkIsRecord';
+import { scanClaudeTranscriptEpochBackwards } from './claudeTranscriptEpoch';
 
 const claude45ContextWindowTokens = 200_000;
 const claude46AndLaterContextWindowTokens = 1_000_000;
@@ -23,6 +24,73 @@ function getClaudeContextUsedTokens(usage: unknown): number | null {
     return null;
   }
   return usage.input_tokens + (cacheReadTokens ?? 0) + (cacheCreationTokens ?? 0) + (outputTokens ?? 0);
+}
+
+/**
+ * What a model call SAW as its context: the input and both cache counters — the output is what it wrote, which only the next call
+ * sees. `null` for a usage that is no valid token record.
+ */
+function getClaudeCallInputTokens(usage: unknown): number | null {
+  if (!checkIsRecord(usage) || !checkIsTokenCount(usage.input_tokens)) return null;
+  const cacheReadTokens = usage.cache_read_input_tokens;
+  const cacheCreationTokens = usage.cache_creation_input_tokens;
+  if ((cacheReadTokens !== undefined && !checkIsTokenCount(cacheReadTokens)) || (cacheCreationTokens !== undefined && !checkIsTokenCount(cacheCreationTokens))) return null;
+  return usage.input_tokens + (cacheReadTokens ?? 0) + (cacheCreationTokens ?? 0);
+}
+
+/** The key a transcript line must carry to be an assistant record: checked on the raw bytes before the line is decoded. */
+const assistantRecordKey = Buffer.from('"type":"assistant"');
+
+/**
+ * @description The context size a transcript LINE's model call saw, when the line is a main-conversation assistant record with a
+ * usage — the sub-agents' sidechain, a synthetic error message and a record with no tokens are not model calls of the conversation.
+ */
+function getClaudeAssistantLineCallInputTokens(lineBytes: Buffer): number | null {
+  if (lineBytes.indexOf(assistantRecordKey) < 0) return null;
+  let entry: unknown;
+  try {
+    entry = JSON.parse(lineBytes.toString('utf8'));
+  } catch {
+    return null; // a line half written
+  }
+  if (!checkIsRecord(entry) || entry.type !== 'assistant' || entry.isSidechain === true || entry.isApiErrorMessage === true || !checkIsRecord(entry.message)) return null;
+  const model = entry.message.model;
+  if (typeof model !== 'string' || !model.trim() || model.startsWith(syntheticModelPrefix)) return null;
+  const callInputTokens = getClaudeCallInputTokens(entry.message.usage);
+  return callInputTokens !== null && callInputTokens > 0 ? callInputTokens : null;
+}
+
+/** Claude Code names the model of the messages it writes itself (an interrupt notice, an API error) `<synthetic>`: no model call. */
+const syntheticModelPrefix = '<synthetic>';
+
+/**
+ * @description The context size, in tokens, of the FIRST model call after the transcript's last compaction — the compacted summary,
+ * the system prompt and CLAUDE.md, the skills restored, the prompt: input + cache read + cache write of the first main-conversation
+ * assistant record after the last `compact_boundary` (of the whole file when it was never compacted). This is what the conversation
+ * weighs with everything loaded, the figure the idle compaction measures its growth from. The walk goes backwards from the end of the
+ * file and keeps the oldest record it meets, so a long first turn — which pushes that record far out of any tail — costs the epoch's
+ * reading, not the file's, and memory for one record. `null` when the file cannot be read or the epoch holds no model call yet.
+ */
+export async function readClaudeFirstCallContextTokens(filePath: string): Promise<number | null> {
+  let firstCallTokens: number | null = null;
+  const isRead = await scanClaudeTranscriptEpochBackwards(filePath, (lineBytes) => {
+    // Newest to oldest: every record that qualifies replaces the one before, so the oldest is left.
+    const callInputTokens = getClaudeAssistantLineCallInputTokens(lineBytes);
+    if (callInputTokens !== null) firstCallTokens = callInputTokens;
+  });
+  return isRead ? firstCallTokens : null;
+}
+
+/**
+ * @description The context size after the transcript's newest main-conversation model call (its input, cache and output): what the
+ * conversation weighs now. `null` when it cannot be told (a file that cannot be read, no such record in the tail).
+ */
+export async function readClaudeContextUsedTokens(filePath: string): Promise<number | null> {
+  try {
+    return (await readClaudeRuntimeInfo(filePath)).contextUsedTokens;
+  } catch {
+    return null;
+  }
 }
 
 /**

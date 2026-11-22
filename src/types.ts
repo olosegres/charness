@@ -855,6 +855,24 @@ export interface AgentAdapter extends EventEmitter {
   getRuntimeInfo?(key: SessionKey): Promise<AgentRuntimeInfo>;
 
   /**
+   * @description The context size, in tokens, the live conversation holds after its newest completed model call (input + cache +
+   * output): what the idle compaction measures its growth up to. Read from what the adapter already holds or from the on-disk
+   * transcript — never a server round trip. `null` when it cannot be told. The read starts at once, in the call's own tick: a
+   * per-turn process is stopped within moments of its turn's end. Optional: a backend with no such figure omits it.
+   */
+  getContextUsedTokens?(key: SessionKey): Promise<number | null>;
+
+  /**
+   * @description The context size, in tokens, the FIRST model call after the conversation's last compaction saw — the compacted
+   * summary, the system prompt and instructions, the skills restored and the prompt: input + cache read + cache write (the output
+   * is not what a call saw) — or of the conversation's first call when it was never compacted. The idle compaction measures its
+   * growth from it, so it is read from the conversation's history, not from the end of a turn that may have read half a repository
+   * (and, for a conversation that already has turns when the bot learns of the figure, not from whenever the bot first looked).
+   * `null` when it cannot be told. Same «starts at once» rule as {@link getContextUsedTokens}. Optional.
+   */
+  getFirstCallContextTokens?(key: SessionKey): Promise<number | null>;
+
+  /**
    * @description Whether the session bound to `key` is mid-turn (an in-progress
    * reply). `false` when there is no session or it is idle. Sync and read from
    * in-memory state only (no tmux/HTTP call) so a caller can poll it cheaply —

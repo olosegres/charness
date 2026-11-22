@@ -898,28 +898,38 @@ test('compactIdleTracking: a session swap reads as no history (not the old marke
   assert.deepEqual(store.getCompactIdleTracking(key1), noTracking);
 });
 
-test('compactIdleTracking: the context baseline is the first reading, survives a reload, moves down on a shrink and starts over after a compaction', async () => {
+test('compactIdleTracking: the context baseline is the epoch\'s FIRST call, not the end of the first turn; it survives a reload, is dropped by a shrink and by a compaction', async () => {
   const first = new StateStore(dataDir, { saveDebounceMs: 5 });
   await first.init();
   await first.setAgent(key1, { name: 'claude', claudeSessionId: sessionIdA });
-  first.noteCompactIdleContext(key1, 41_000);
-  assert.deepEqual([first.getCompactIdleTracking(key1).baselineContextTokens, first.getCompactIdleTracking(key1).lastContextTokens], [41_000, 41_000], 'the first turn is the baseline');
-  first.noteCompactIdleContext(key1, 80_000);
-  assert.deepEqual([first.getCompactIdleTracking(key1).baselineContextTokens, first.getCompactIdleTracking(key1).lastContextTokens], [41_000, 80_000], 'growth moves the newest reading only');
+  const figures = (store: StateStore) => [store.getCompactIdleTracking(key1).baselineContextTokens, store.getCompactIdleTracking(key1).lastContextTokens];
+
+  // The first turn that ends after the compaction (or that the bot reads of a conversation that already had turns): the baseline is
+  // what its first call saw — 25 000 — though the turn ended at 120 000.
+  first.noteCompactIdleContext(key1, { lastContextTokens: 120_000, firstCallContextTokens: 25_000 });
+  assert.deepEqual(figures(first), [25_000, 120_000]);
+  // A later turn: the baseline stays, the newest figure moves; a first-call figure offered again changes nothing.
+  first.noteCompactIdleContext(key1, { lastContextTokens: 150_000, firstCallContextTokens: 99_999 });
+  assert.deepEqual(figures(first), [25_000, 150_000], 'growth moves the newest figure only');
   await first.flush();
 
   const second = new StateStore(dataDir, { saveDebounceMs: 5 });
   await second.init();
-  assert.deepEqual([second.getCompactIdleTracking(key1).baselineContextTokens, second.getCompactIdleTracking(key1).lastContextTokens], [41_000, 80_000], 'a restart keeps the baseline');
+  assert.deepEqual(figures(second), [25_000, 150_000], 'a restart keeps the baseline');
 
-  second.noteCompactIdleContext(key1, 30_000);
-  assert.equal(second.getCompactIdleTracking(key1).baselineContextTokens, 30_000, 'a context below the baseline: the CLI compacted by itself');
+  second.noteCompactIdleContext(key1, { lastContextTokens: 20_000, firstCallContextTokens: null });
+  assert.deepEqual(figures(second), [null, 20_000], 'a context below the baseline: the CLI compacted by itself, the baseline is read again from the new epoch');
+  second.noteCompactIdleContext(key1, { lastContextTokens: 61_000, firstCallContextTokens: 18_000 });
+  assert.deepEqual(figures(second), [18_000, 61_000]);
 
   await second.setCompactIdleCompactedAt(key1, activityAt);
   const afterCompaction = second.getCompactIdleTracking(key1);
-  assert.deepEqual([afterCompaction.baselineContextTokens, afterCompaction.lastContextTokens, afterCompaction.lastCompactionAt], [null, null, activityAt], 'a compaction drops both figures: the next turn that ends starts them over');
-  second.noteCompactIdleContext(key1, 52_000);
-  assert.equal(second.getCompactIdleTracking(key1).baselineContextTokens, 52_000, 'the first turn after the compaction, instructions and skills reloaded');
+  assert.deepEqual([afterCompaction.baselineContextTokens, afterCompaction.lastContextTokens, afterCompaction.lastCompactionAt], [null, null, activityAt], 'a compaction drops both figures');
+  // The history could not be read yet: no baseline, and never the turn\'s end in its place.
+  second.noteCompactIdleContext(key1, { lastContextTokens: 52_000, firstCallContextTokens: null });
+  assert.deepEqual(figures(second), [null, 52_000]);
+  second.noteCompactIdleContext(key1, { lastContextTokens: 70_000, firstCallContextTokens: 22_000 });
+  assert.deepEqual(figures(second), [22_000, 70_000], 'read at a later turn\'s end');
   assert.equal(second.getCompactIdleTracking(key1).lastCompactionAt, activityAt, 'the compaction stamp is kept');
 });
 

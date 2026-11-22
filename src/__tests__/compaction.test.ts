@@ -14,8 +14,9 @@
  *     `/compact_self_review` setting, ON until turned off;
  *   • `/compact_self_review` itself: the picker, the typed form, the General default and a topic's own switch, and the flags the
  *     CLI's and OpenCode's own compactions read following each of them;
- *   • a regular topic without a session is told the switch needs one, and the hooks the bot's prompt and
- *     output paths call are harmless on such a topic.
+ *   • a regular topic with no live session — a json-stream topic is asleep most of the time — gets the picker, the threshold and the
+ *     toggles all the same; only a raw shell, with no context to compact, is refused; and the hooks the bot's prompt and output paths
+ *     call are harmless on such a topic.
  */
 
 /** Test case: N/A — Charness has no Jira tracker. */
@@ -24,7 +25,8 @@ import { after, before, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'fs';
 import path from 'path';
-import { getThreadAdapter } from '../adapters/createAdapter';
+import { getThreadAdapter, setThreadAdapter } from '../adapters/createAdapter';
+import { claudeJsonStreamAdapterName, terminalAdapterName } from '../adapters/adapterNames';
 import { createCompaction } from '../connectors/telegram/commands/compaction';
 import { keyToString } from '../sessionKey';
 import { formatTokenCount } from '../utils/compactOnIdle';
@@ -39,6 +41,14 @@ let compaction: ReturnType<typeof createCompaction>;
 let isGeneralTopic = false;
 /** How many button taps the fake Bot API had answered when each topic reply was posted. */
 const callbackAnswersAtReply: number[] = [];
+
+/** The last re-render of the idle picker on `messageId`: its text and keyboard rows (the harness records an edit of a message instead of sending it). */
+function getRenderedPicker(messageId: number): { text: string; rows: Array<Array<{ text: string }>> } | undefined {
+  const edit = harness.edits.filter((candidate) => candidate.messageId === messageId).at(-1);
+  if (!edit) return undefined;
+  const markup = (edit.extra as { reply_markup?: { inline_keyboard: Array<Array<{ text: string }>> } } | undefined)?.reply_markup;
+  return { text: edit.text, rows: markup?.inline_keyboard ?? [] };
+}
 
 async function waitUntil(description: string, check: () => boolean): Promise<void> {
   const deadline = Date.now() + waitTimeoutMs;
@@ -91,10 +101,29 @@ describe('compaction: the compaction flow over its ports', () => {
     ]);
   });
 
-  it('a regular topic without a session is told the switch needs one', async () => {
+  it('a regular topic with no live session still gets the picker, the threshold and the toggles; only a shell, with no context to compact, is told it cannot', async () => {
+    isGeneralTopic = false;
+    assert.equal(getThreadAdapter(harness.key).checkIsActive(harness.key), false, 'precondition: nothing runs in this topic');
     await harness.runCommand('compact_on_idle');
-    assert.match(harness.replies.at(-1)?.text ?? '', /active agent session/);
-    assert.deepEqual(harness.getKeyboardData(harness.replies.at(-1)), [], 'no picker for a switch that cannot apply');
+    assert.equal(harness.getKeyboardData(harness.replies.at(-1)).length, 4, 'the picker, all four rows, for a sleeping topic');
+    await harness.runCommand('compact_on_idle', '50k');
+    assert.equal(harness.state.getCompactGrowthOverride(harness.key), 50_000, 'the typed threshold is this topic\'s own');
+    assert.equal(harness.state.getCompactGrowthGlobalDefault(), 30_000, 'General\'s default is untouched');
+    await harness.runCommand('compact_on_idle', 'on');
+    assert.equal(harness.state.checkIsCompactOnIdleEnabled(harness.key), true);
+    await harness.runCommand('compact_on_idle', 'off');
+    assert.equal(harness.state.checkIsCompactOnIdleEnabled(harness.key), false);
+
+    setThreadAdapter(harness.key, terminalAdapterName);
+    try {
+      await harness.runCommand('compact_on_idle');
+      assert.match(harness.replies.at(-1)?.text ?? '', /active agent session/);
+      assert.deepEqual(harness.getKeyboardData(harness.replies.at(-1)), [], 'no picker for a switch that cannot apply');
+      await harness.runCommand('compact_on_idle', '10k');
+      assert.equal(harness.state.getCompactGrowthOverride(harness.key), 50_000, 'a shell\'s threshold is not taken');
+    } finally {
+      setThreadAdapter(harness.key, claudeJsonStreamAdapterName);
+    }
   });
 
   it('in General the bare command shows the instance-wide switch, the growth threshold, the summary row and the self-review row', async () => {
@@ -109,6 +138,10 @@ describe('compaction: the compaction flow over its ports', () => {
     ]);
     assert.deepEqual(harness.getKeyboardLabels(picker)[1], ['10k', '20k', '30k ✓', '50k', '100k'], 'the default, 30 000, is checked');
     assert.ok(picker?.text.includes(`Compacts once the context has grown by ${formatTokenCount(30_000)}+ tokens`), 'the line says the threshold in force');
+    // The lines follow the rows of the keyboard: the switch, the threshold, the summary, the self-review.
+    const text = picker?.text ?? '';
+    const lineOrder = [': ON\n', 'Compacts once the context', 'Summary after a compaction', 'Agent self-review'].map((line) => text.indexOf(line));
+    assert.ok(lineOrder.every((index) => index >= 0) && [...lineOrder].sort((left, right) => left - right).join() === lineOrder.join(), `the text's lines are in the order of the keyboard's rows: ${lineOrder.join()}`);
     assert.match(picker?.text ?? '', /: ON\n/, 'the instance-wide default is on until somebody turns it off');
     assert.match(picker?.text ?? '', /Summary after a compaction: OFF/, 'the summary is off until somebody turns it on');
     assert.match(picker?.text ?? '', /Agent self-review: ON/, 'the self-review is on until somebody turns it off');
@@ -124,7 +157,7 @@ describe('compaction: the compaction flow over its ports', () => {
     assert.equal(harness.state.getCompactSummaryGlobalDefault(), true);
     assert.match(harness.replies.at(-1)?.text ?? '', /Compaction summary: ON for ALL topics/);
     await waitUntil('both picker rows to be re-rendered', () => {
-      const rows = harness.fakeTelegram.getMessage(picker)?.reply_markup?.inline_keyboard ?? [];
+      const rows = getRenderedPicker(picker)?.rows ?? [];
       return rows.length === 4 && (rows[2]?.[0]?.text.endsWith('✓') ?? false);
     });
 
@@ -159,7 +192,7 @@ describe('compaction: the compaction flow over its ports', () => {
     await harness.tapButton(picker, 'coi_on');
     assert.equal(harness.fakeTelegram.callbackAnswers.length, answersBefore + 1, 'the tap was answered');
     assert.equal(harness.state.getCompactOnIdleGlobalDefault(), true);
-    await waitUntil('the picker keyboard to be re-rendered', () => (harness.fakeTelegram.getMessage(picker)?.reply_markup?.inline_keyboard[0] ?? []).length === 2);
+    await waitUntil('the picker keyboard to be re-rendered', () => (getRenderedPicker(picker)?.rows[0] ?? []).length === 2);
 
     await harness.tapButton(picker, 'coi_off');
     assert.equal(harness.state.getCompactOnIdleGlobalDefault(), false);
@@ -207,7 +240,9 @@ describe('compaction: the compaction flow over its ports', () => {
     assert.equal(harness.fakeTelegram.callbackAnswers.length, answersBefore + 1, 'the tap was answered');
     assert.equal(harness.state.getCompactGrowthGlobalDefault(), 100_000);
     assert.ok(harness.replies.at(-1)?.text.includes(`waits for ${formatTokenCount(100_000)} tokens of context growth, for ALL topics`));
-    await waitUntil('the ✓ to move to 100k', () => (harness.fakeTelegram.getMessage(picker)?.reply_markup?.inline_keyboard[1] ?? []).some((button) => button.text === '100k ✓'));
+    await waitUntil('the ✓ to move to 100k', () => (getRenderedPicker(picker)?.rows[1] ?? []).some((button) => button.text === '100k ✓'));
+    // The text is re-rendered with the keyboard: its threshold line says the new figure, not the one the picker was opened with.
+    await waitUntil('the picker text to say 100 000', () => getRenderedPicker(picker)?.text.includes(`grown by ${formatTokenCount(100_000)}+ tokens`) ?? false);
 
     await harness.tapButton(picker, 'coi_gr_12345');
     assert.equal(harness.state.getCompactGrowthGlobalDefault(), 100_000, 'a forged value is no preset');
@@ -252,7 +287,7 @@ describe('compaction: the compaction flow over its ports', () => {
     assert.equal(harness.state.getCompactSelfReviewGlobalDefault(), false);
     assert.match(harness.replies.at(-1)?.text ?? '', /Agent self-review on compaction: OFF for ALL topics/);
     await waitUntil('the self-review row to show «Hide self-review» checked', () => {
-      const rows = harness.fakeTelegram.getMessage(picker)?.reply_markup?.inline_keyboard ?? [];
+      const rows = getRenderedPicker(picker)?.rows ?? [];
       return rows.length === 4 && (rows[3]?.[1]?.text.endsWith('✓') ?? false) && !(rows[3]?.[0]?.text.endsWith('✓') ?? true);
     });
 
