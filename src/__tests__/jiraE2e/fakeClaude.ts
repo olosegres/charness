@@ -227,7 +227,9 @@ import { claudeSessionStateEventsVariableName } from '../../utils/jsonStreamHost
  * tool call (its status frame, the landing of the text ahead of it) before the tool's own request arrives. A `[work-ms:<n>]` token makes a turn that gets that far work n ms (busy, silent) before it answers; a
  * `[tool-after-ms:<n>]` token makes one more tool call n ms later, after which the launch's `PostToolUse` hooks (its
  * last `--settings`) run as the real CLI runs them — what one gives the agent as `additionalContext` is logged to
- * `hooks.jsonl`.
+ * `hooks.jsonl`. A `[closing-hold]` token makes a turn of the plain `answer` kind hold after its answer until the test writes
+ * `fakeClaudeHoldReleaseFileName`, then stream the answer's text as the turn's closing message (text deltas) and end: the window in
+ * which a message the person sends is forwarded while the turn has not ended.
  *
  * Every compaction (a `/compact` turn and the overflow mode's own) runs the launch's `PreCompact` hooks first, as the real
  * CLI does: each gets the hook input on stdin (`custom_instructions` is what followed `/compact`, null for the CLI's own),
@@ -317,6 +319,7 @@ const todoTouchToken = '[todo-touch]';
 const workMsRe = /\[work-ms:(\d+)\]/;
 const toolAfterMsRe = /\[tool-after-ms:(\d+)\]/;
 const textCharsRe = /\[text-chars:(\d+)\]/;
+const closingHoldToken = '[closing-hold]';
 /** What pads a `[text-chars:<n>]` text out: ordinary words, so the bot's splitter finds boundaries to cut at. */
 const streamTextFiller = ' lorem ipsum dolor sit amet consectetur';
 /**
@@ -994,6 +997,16 @@ async function waitForHoldRelease(): Promise<void> {
   fs.rmSync(releasePath, { force: true });
 }
 
+/**
+ * A `[closing-hold]` token: once it has answered, the turn keeps working (busy, silent) until the test writes the release file, then
+ * streams the answer's words as the closing message of the turn - text deltas, as the real CLI streams what it writes after a tool call -
+ * before it ends. A message the person sends meanwhile is read by the fake and waits behind this turn.
+ */
+async function streamClosingText(text: string): Promise<void> {
+  await waitForHoldRelease();
+  writeStdout({ type: 'stream_event', event: { type: 'content_block_delta', index: 2, delta: { type: 'text_delta', text } } });
+}
+
 /** A finished background task: its end, then the turn the CLI starts for it, whose first output waits out the API round-trip. */
 async function runBackgroundTaskTurn(argv: readonly string[], sessionId: string, taskId: string, description: string, issueKey: string): Promise<void> {
   writeStdout({ type: 'system', subtype: 'task_updated', session_id: sessionId, task_id: taskId, patch: { status: 'completed', end_time: Date.now() } });
@@ -1517,7 +1530,9 @@ async function runTurn(argv: readonly string[], sessionId: string, content: stri
     logToolCall(probeToolName, {}, ran.error ? `error: ${ran.error.message}` : ran.stdout.trim());
   }
   const kind = state.mode === 'progress' || (state.mode === 'hold-progress-once' && isFirstTurn) ? 'progress' : 'final';
-  endTurn(sessionId, await answer(requestId, kind, state.turnCount));
+  const closingText = await answer(requestId, kind, state.turnCount);
+  if (content.includes(closingHoldToken)) await streamClosingText(closingText);
+  endTurn(sessionId, closingText);
   if (state.mode === 'background') {
     // Reported AFTER the result, as the CLI does for a task the turn left running.
     writeStdout({ type: 'system', subtype: 'background_tasks_changed', session_id: sessionId, tasks: [{ task_id: backgroundTaskId, task_type: 'local_bash', description: 'sleep', status: 'running' }] });

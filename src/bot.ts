@@ -265,7 +265,7 @@ import { renderAgentFrame, renderAgentHtml, type AgentFrame } from './connectors
 import { splitMessage, MAX_MESSAGE_LEN } from './connectors/telegram/messageSplit';
 import { buildFoldedMessage } from './connectors/telegram/foldedMessage';
 import { unpinMessagesReportingRetryable } from './connectors/telegram/unpinMessages';
-import { addPendingOutput, checkHasPendingOutput, getNewestPendingSeq, getOutputFlushPlan } from './connectors/telegram/outputFlushPlan';
+import { addPendingOutput, checkHasPendingOutput, checkShouldMarkNewMessageAfterTurnEnd, getNewestPendingSeq, getOutputFlushPlan } from './connectors/telegram/outputFlushPlan';
 import { getCallerEditResult, sendOutputChunks, type ThreadEditOutcome, type ThreadSendOutcome } from './connectors/telegram/sendOutcome';
 import { getFailedSendOutcome } from './connectors/telegram/telegramFailureRetry';
 import { releasePinnedNoticeSlot, surfacePinnedNotice, type PinnedNoticePorts, type PinnedNoticeSlots } from './connectors/telegram/pinnedNoticeSlot';
@@ -6223,6 +6223,10 @@ const autoStopUnsupportedLoggedKeys = new Set<string>();
  * `postToSession` that polled the session idle and ensures it again (`postToSession.ts`) therefore always finds
  * the stop already on the transition queue and runs after it. Keep it that way — an await ahead of the queueing
  * would let that ensure run beside the stop and forward to the process it ends.
+ *
+ * It is also where the next turn's boundary is marked when a prompt was forwarded before this turn ended
+ * (`checkShouldMarkNewMessageAfterTurnEnd`): the adapter emits the turn's closing text synchronously BEFORE this event,
+ * and the group transport queues it in the same tick, so the mark set here is the one the next turn's first text takes.
  */
 function handleAgentTurnEnded(key: SessionKey): void {
   // No tool call of this turn is left to take a mid-turn accounts note: withdrawn unseen, it stays due.
@@ -6231,6 +6235,9 @@ function handleAgentTurnEnded(key: SessionKey): void {
   noteThreadActivity(key);
   topicIndicator.requestRefresh(key);
   const adapter = getThreadAdapter(key);
+  // The boundary of the next turn, reported by the adapter: the turn's closing text was queued before this event (the adapter emits it first,
+  // in the same tick), so a mark the forward of the next prompt set earlier is spent by now. Input still on its way is that turn's.
+  if (checkIsTelegramKey(key) && checkShouldMarkNewMessageAfterTurnEnd({ outputsDeltas: adapter.outputsDeltas === true, hasInputOnItsWay: adapter.checkHasUnconsumedInput?.(key) === true })) markNeedsNewMessage(key);
   if (adapter.name !== claudePerTurnAdapterName) return;
   if (checkIsDeferredCompactionArmed(key) || adapter.checkIsWorking?.(key)) return;
   void suspendThreadSession(key).catch((e) =>

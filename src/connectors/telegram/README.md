@@ -33,6 +33,11 @@ Chosen once at boot by `CHAT_MODE` — an internal detail of this connector, not
   before them. Each of them waits for at most `streamedOutputLandingLimitMs` (60 s,
   `utils/streamedOutputLanding.ts`), then posts anyway. A stop gives the backlog ONE final attempt (a 429 then
   drops what it keeps, logged) and drops only the pending status frame (`utils/clearStatusCoalescer.ts`).
+  The boundary of a turn is the adapter's to report: a forwarded prompt marks that the next text opens a message of its
+  own, but a prompt forwarded before its predecessor turn ended sets the mark early and that turn's closing text spends
+  it, so the turn's end (`handleAgentTurnEnded`) marks it again when input is still on its way
+  (`checkShouldMarkNewMessageAfterTurnEnd`, only for an adapter whose output is deltas). Without it the next turn's
+  first text, a delta continuation, was appended to the closing words by an edit.
 - **dm** — a live "cursor": ONE accumulating native `sendMessageDraft` holds the whole current reply and is
   FINALIZED to a permanent `sendMessage` on boundaries (idle, 4096 overflow, `isFinal`, a new response, status,
   teardown). Claude's scrape adapter emits deltas with no continuation meta, so the transport synthesises it

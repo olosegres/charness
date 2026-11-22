@@ -155,6 +155,18 @@ export interface NewMessageMark {
   needsNewMessage: boolean;
 }
 
+/**
+ * @description Whether a turn's end marks that the NEXT text opens a message of its own. A prompt forwarded before its predecessor
+ * turn ended sets the mark too early: the predecessor's closing text (its last deltas, read after the forward) spends it, and the new
+ * turn's first text - a delta continuation - would be appended to those closing words («…(answer, turn 1).Working on …» in one
+ * message). The adapter knows where a turn ends: input still on its way at that moment is the next turn's, so the mark is set again,
+ * after the closing text was queued and before the next turn's text is. Only for an adapter whose output is deltas (the transport
+ * synthesises its continuations); one that marks them itself needs no such guess.
+ */
+export function checkShouldMarkNewMessageAfterTurnEnd(input: { outputsDeltas: boolean; hasInputOnItsWay: boolean }): boolean {
+  return input.outputsDeltas && input.hasInputOnItsWay;
+}
+
 /** @description The number of the newest segment queued so far (pending, or already taken out to be sent). */
 export function getNewestPendingSeq(buffer: PendingOutputBuffer): number {
   return buffer.firstSeq + buffer.pendingSegments.length - 1;

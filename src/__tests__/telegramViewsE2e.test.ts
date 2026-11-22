@@ -54,7 +54,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { FakeTelegram, type FakeTelegramCall, type FakeTelegramMessage } from './telegramE2e/fakeTelegram';
-import { fakeClaudeLogFileNames, getFakeDigestMessageText, getFakeStreamTextEnd, type FakeClaudeAnswer, type FakeClaudeTurn } from './jiraE2e/fakeClaudeContract';
+import { fakeClaudeHoldReleaseFileName, fakeClaudeLogFileNames, getFakeDigestMessageText, getFakeStreamTextEnd, type FakeClaudeAnswer, type FakeClaudePrompt, type FakeClaudeTurn } from './jiraE2e/fakeClaudeContract';
 import type { ClosedRequestRecord, OpenRequestState } from '../requests/types';
 import type { ScheduleRecord } from '../scheduler/types';
 import {
@@ -876,6 +876,27 @@ describe('Telegram views end to end: built charness, fake Bot API, fake claude (
     const gluedTexts = ['sendMessage', 'editMessageText'].flatMap((method) => fakeTelegram.listCalls(method)).map((call) => String(call.payload.text))
       .filter((text) => text.includes('Fake final answer for TOPIC-14') && text.includes('Working on TOPIC-30.'));
     assert.deepEqual(gluedTexts, [], 'turn 1\'s text was never glued to the closing text of the turn before');
+  });
+
+  it('the closing text a turn streams after its answer is a message of its own and never carries the next turn\'s text, also when the operator\'s next message was forwarded before that turn ended', async () => {
+    const closingTurnLabel = 'TOPIC-40';
+    const nextTurnLabel = 'TOPIC-41';
+    const closingText = `Fake final answer for ${closingTurnLabel} (answer, turn 1).`;
+    const nextTurnText = `Working on ${nextTurnLabel}.`;
+    // The turn answers, then holds before it streams its closing words, as a real CLI's last message after a tool call comes late.
+    fakeTelegram.pushOperatorMessage(topicThreadId, `${closingTurnLabel} [closing-hold] [fake:answer]`);
+    await waitForFakeAnswer(closingTurnLabel);
+    // The next message is forwarded NOW, while that turn has not ended: the mark that opens a message for it is set before the closing text comes.
+    fakeTelegram.pushOperatorMessage(topicThreadId, `${nextTurnLabel} [fake:answer]`);
+    await getCharness().waitFor('the agent to have read the next message behind the holding turn', answerTimeoutMs, () =>
+      readFakeLog<FakeClaudePrompt>(fakeClaudeLogFileNames.prompts).some((prompt) => prompt.issueKey === nextTurnLabel));
+    fs.writeFileSync(path.join(getLayout().fakeStateDir, fakeClaudeHoldReleaseFileName), '');
+    await waitForFakeAnswer(nextTurnLabel);
+    await waitForTopicMessage('the next turn\'s text in the topic', (message) => message.text.includes(nextTurnText));
+
+    const carriedTexts = ['sendMessage', 'editMessageText'].flatMap((method) => fakeTelegram.listCalls(method)).map((call) => String(call.payload.text));
+    assert.deepEqual(carriedTexts.filter((text) => text.includes(closingText) && text.includes(nextTurnText)), [], 'no message was sent or edited to hold the closing words and the next turn\'s text together');
+    assert.equal(listTopicMessages().find((message) => message.text.includes(nextTurnText))?.text, nextTurnText, 'the next turn\'s text is a message of its own');
   });
 
   it('every tmux call named the private server; nothing of the instance runs on the default tmux server', () => {

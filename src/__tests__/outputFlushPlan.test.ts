@@ -22,6 +22,7 @@ import assert from 'node:assert/strict';
 import {
   addPendingOutput,
   checkHasPendingOutput,
+  checkShouldMarkNewMessageAfterTurnEnd,
   getNewestPendingSeq,
   getOutputFlushPlan,
   appendPendingOutput,
@@ -325,6 +326,30 @@ describe('addPendingOutput / takePendingOutput (the new-message mark belongs to 
     const plan = planTakenSegment(resumed.segment, { id: thread.lastMessageId, text: thread.lastMessageText });
     assert.equal(plan.isEditInPlace, false, 'a new message, not an edit of the interrupted turn\'s');
     assert.deepEqual(plan.chunks, ['Working on LIM-7.']);
+  });
+
+  it('a prompt forwarded before its predecessor turn ended: that turn\'s closing text spends the mark, the turn\'s end marks the boundary again, and the new turn\'s first text opens a message of its own', () => {
+    // The agent\'s last words of a turn reach the bot after the next prompt was forwarded (the prompt marked the boundary first). They are
+    // queued behind that mark and spend it; nothing else says the next turn starts, so its first text would continue the closing words
+    // («…(answer, turn 1).Working on …» in one message). The adapter reports the boundary at the turn\'s end: input still on its way is the
+    // next turn\'s, and the mark is set again, before that turn\'s text is queued.
+    const thread = { needsNewMessage: false, lastMessageId: 80 as number | null, lastMessageText: 'Working on TOPIC-14.' as string | null };
+    const buffer = createEmptyBuffer();
+    thread.needsNewMessage = true; // the prompt of the next turn is forwarded while the turn runs
+    addPendingOutput(buffer, thread, { output: 'The closing words.', ...midReplyBatch }); // the ending turn's last text
+    assert.equal(thread.needsNewMessage, false, 'the closing words spent the forward\'s mark');
+    thread.needsNewMessage = checkShouldMarkNewMessageAfterTurnEnd({ outputsDeltas: true, hasInputOnItsWay: true }) || thread.needsNewMessage;
+    addPendingOutput(buffer, thread, { output: 'The next turn.', ...midReplyBatch });
+    assert.deepEqual(buffer.pendingSegments, [
+      { output: 'The closing words.', isContinuation: true, startsNewMessage: true },
+      { output: 'The next turn.', isContinuation: true, startsNewMessage: true },
+    ], 'two messages: the closing words, and the next turn\'s text on its own');
+  });
+
+  it('a turn\'s end marks a boundary only for an adapter whose output is deltas, and only when input is on its way', () => {
+    assert.equal(checkShouldMarkNewMessageAfterTurnEnd({ outputsDeltas: true, hasInputOnItsWay: true }), true);
+    assert.equal(checkShouldMarkNewMessageAfterTurnEnd({ outputsDeltas: true, hasInputOnItsWay: false }), false, 'nothing follows: the next prompt marks its own boundary when it is forwarded');
+    assert.equal(checkShouldMarkNewMessageAfterTurnEnd({ outputsDeltas: false, hasInputOnItsWay: true }), false, 'an adapter that marks its continuations itself needs no guess');
   });
 
   it('empty output queues nothing and spends no mark', () => {
