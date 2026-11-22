@@ -223,7 +223,7 @@ Numeric bounds are named constants in the files below; this README says only wha
   | | `recordTurnActivity` from a busy poll of a watched turn | the watched request itself | No |
   | | `recordTurnActivity` from the sweep's busy branch | the unwatched request | Narrowed (row 2): recorded only when no other turn is watched in the conversation, or when the request owes nothing — harmless then, an answered request has its follow-up pending or is held |
   | | `decideTurnEnd` / `decideUnwatchedRequest` / `decideRestartWake` updates, applied by `applyDecision` | the decided request | No |
-  | | `wakeAfterRestart` (writes `decision.update` itself; only its alert goes through `applyDecision`) | each request it wakes, for itself | No |
+  | | `wakeAfterRestart` (writes `decision.update` itself; only its alert goes through `applyDecision`) | each request it wakes, for itself — with `isLostWork` (row 19) also a request a passing watch holds, still only for itself | No |
 - A request whose prompt could not be posted is retried on `postRetryDelaysMs`, OUTSIDE the wake-up cap
   (`notePostFailed`); a message forwarded any other way drops a pending retry.
 - A failure in one conversation is logged and never stops the others or rejects a timer tick — an unhandled
