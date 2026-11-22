@@ -13,6 +13,9 @@
  *     moves on to the NEXT worker — arms its watch, cancels the old one: the new job is armed under the OPERATOR's request (the one it
  *     works on), not under the request the fire opened, so the operator's request still waits for it: nothing prods it
  *   → the second worker exits: the agent is woken again, cancels the watch and answers
+ *   → a third watch (a new message of the operator): the worker exits, the agent is woken and has NOTHING to report — it ends the turn
+ *     with no answer. The fire's own request is the alarm's, not a person's: no reminder, no «got no answer» alert, and the request
+ *     closes silently; the operator's request, whose watch it is, stays open
  *
  * Before the rule, the engine reminded such an agent every 15 minutes whatever its watch said. Nothing leaves the machine: the Bot
  * API is on loopback and the agent is a fake. Everything the test starts is stopped in `after`.
@@ -29,6 +32,7 @@ import { FakeTelegram } from './telegramE2e/fakeTelegram';
 import { TopicDriver } from './telegramE2e/topicDriver';
 import {
   fakeClaudeLogFileNames,
+  fakeKeepWatchWakeMarker,
   fakeRearmWatchWakeMarker,
   fakeStatusWatchJobName,
   fakeStatusWatchTargetFileName,
@@ -86,6 +90,7 @@ let topic: TopicDriver;
 let defaultTmuxSessionsBefore: string[] = [];
 let worker: ChildProcess | null = null;
 let nextWorker: ChildProcess | null = null;
+let thirdWorker: ChildProcess | null = null;
 let openRequestId = '';
 let watchId = '';
 
@@ -102,6 +107,7 @@ function getCharness(): IsolatedCharness {
 function removeInstanceSync(): void {
   worker?.kill('SIGKILL');
   nextWorker?.kill('SIGKILL');
+  thirdWorker?.kill('SIGKILL');
   removeIsolatedInstanceSync(layout, charness);
 }
 
@@ -184,6 +190,7 @@ describe('A request waits for its schedule in a Telegram topic end to end: built
   after(async () => {
     worker?.kill('SIGKILL');
     nextWorker?.kill('SIGKILL');
+    thirdWorker?.kill('SIGKILL');
     await charness?.stop();
     removeInstanceSync();
     await fakeTelegram?.stop();
@@ -205,7 +212,7 @@ describe('A request waits for its schedule in a Telegram topic end to end: built
   it('the agent arms the watch on a running worker and answers `progress`; the job is stored with the request the operator\'s message opened', async () => {
     worker = await startNamedWorker('worker-run');
 
-    fakeTelegram.pushOperatorMessage(topicThreadId, `W-1 [fake:watch-progress] ${fakeRearmWatchWakeMarker} watch the builder you just launched`);
+    fakeTelegram.pushOperatorMessage(topicThreadId, `WA-1 [fake:watch-progress] ${fakeRearmWatchWakeMarker} watch the builder you just launched`);
     await getCharness().waitFor('the agent to arm the watch and answer progress', agentTimeoutMs, () =>
       getToolCalls('schedule_create').length === 1 && readFakeLog<{ kind: string }>(fakeClaudeLogFileNames.answers).some((answer) => answer.kind === 'progress'));
     const [created] = getToolCalls('schedule_create');
@@ -278,5 +285,33 @@ describe('A request waits for its schedule in a Telegram topic end to end: built
     await getCharness().waitFor('the failed check to wake the agent again', checkRunTimeoutMs, () => getAgentPrompts().length > promptsAfterWake);
     await getCharness().waitFor('the agent to cancel the watch', agentTimeoutMs, () => getToolCalls('schedule_cancel').length === 2);
     await getCharness().waitFor('the watch to be gone from the persisted state', replyTimeoutMs, () => readPersistedSchedules().every((record) => record.name !== fakeStatusWatchJobName));
+  });
+
+  it('a third watch whose wake the agent ends silently: the fire\'s request is closed without a word — no reminder, no alert — and the operator\'s request stays open', async () => {
+    thirdWorker = await startNamedWorker('worker-third-run');
+    const createsBefore = getToolCalls('schedule_create').length;
+    fakeTelegram.pushOperatorMessage(topicThreadId, `WB-2 [fake:watch-progress] ${fakeKeepWatchWakeMarker} watch the third builder you just launched`);
+    await getCharness().waitFor('the agent to arm the third watch', agentTimeoutMs, () => getToolCalls('schedule_create').length === createsBefore + 1);
+    const operatorTurn = readFakeLog<FakeClaudeTurn>(fakeClaudeLogFileNames.turns).find((turn) => turn.issueKey === 'WB-2');
+    const operatorRequestId = operatorTurn?.requestId ?? '';
+    assert.match(operatorRequestId, /^req_/);
+    await getCharness().waitFor('the third watch to be persisted', replyTimeoutMs, () => readPersistedSchedules().some((record) => record.name === fakeStatusWatchJobName && record.requestId === operatorRequestId));
+    await getCharness().waitFor('the progress note of the third request', agentTimeoutMs, () => readFakeLog<{ requestId: string; kind: string }>(fakeClaudeLogFileNames.answers).some((answer) => answer.requestId === operatorRequestId && answer.kind === 'progress'));
+    const promptsBeforeWake = getAgentPrompts().length;
+
+    thirdWorker?.kill('SIGKILL');
+    await getCharness().waitFor('the failed check to wake the agent', checkRunTimeoutMs, () => getAgentPrompts().length > promptsBeforeWake);
+    const wakePrompt = getAgentPrompts()[promptsBeforeWake].text;
+    assert.ok(wakePrompt.includes(`[Scheduled check "${fakeStatusWatchJobName}" failed]`), wakePrompt);
+    const fireRequestId = wakePrompt.match(/req_[A-Za-z0-9_-]+/)?.[0] ?? '';
+    assert.notEqual(fireRequestId, operatorRequestId, 'the fire opened a request of its own');
+
+    // The agent keeps the watch and says nothing: the turn's end is the alarm\'s, so nothing prods it and nothing gives up on it.
+    await sleep(quietObservationMs);
+    assert.equal(getAgentPrompts().length, promptsBeforeWake + 1, 'no reminder: the wake was the only prompt');
+    assert.ok(!topic.listMessages().some((message) => message.text.includes('got no answer')), 'no «got no answer» alert in the topic');
+    const openIds = Object.values(readState().openRequests ?? {}).map((open) => open.id);
+    assert.ok(!openIds.includes(fireRequestId), 'the fire\'s request closed silently at its quiet end');
+    assert.ok(openIds.includes(operatorRequestId), 'the operator\'s request, whose watch it is, is still open');
   });
 });

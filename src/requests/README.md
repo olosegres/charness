@@ -125,7 +125,12 @@ Numeric bounds are named constants in the files below; this README says only wha
   keeps counting towards the give-up: a watch is for the agent's alarms, never a reason to leave a requester unanswered for good; when the watch is gone (cancelled, paused,
   its check failing and not re-armed) the normal rules take the request back — the backstop, 90 min from the last activity: a waiting
   turn end clears the follow-up, so none is ever due after it. A turn a scheduler fire started (`trackForwardedTurn` with `isScheduledRun`) that ends without an answer is not silent
-  either: a woken agent with nothing to report stays quiet, and the bot never prods it for that. A scheduler fire is not a wake-up and
+  either: a woken agent with nothing to report stays quiet, and the bot never prods it for that. Its quiet end records the activity and
+  resets the silent-turn count but leaves the request's own due follow-up alone unless a schedule holds the request (a fire rides the
+  newest open request when its job's own request is gone, and an unrelated alarm must not wipe that request's follow-up). In a Telegram
+  topic with requests a fire opens a request of its own (`origin.kind` `scheduledRun`): the engine reads the origin, so its turn is a
+  scheduled run's whoever tracks it, and when its agent leaves it with no answer at all the request closes `cancelled` at the quiet end —
+  nothing posted, nothing owed, no reminder, no «got no answer» alert, no backstop wake. A scheduler fire is not a wake-up and
   never counts against the cap. This is why an agent in a Jira issue can launch a worker, arm its watch, answer `progress` and end its
   turn, and why a Telegram topic in a view with requests is no longer reminded every 15 minutes while its own watch passes.
 - A request whose prompt could not be posted is retried on `postRetryDelaysMs`, OUTSIDE the wake-up cap

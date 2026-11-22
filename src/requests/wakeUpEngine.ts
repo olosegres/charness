@@ -284,7 +284,8 @@ export class RequestWakeUpEngine {
       hasSeenBusy: false,
       hasSeenOutput: false,
       isRequestPrompt: options.isRequestPrompt,
-      isScheduledRun: options.isScheduledRun === true,
+      // A request a scheduler fire opened (a Telegram topic's `scheduledRun`) is the alarm's: its turn is a scheduled run's, whoever tracks it.
+      isScheduledRun: options.isScheduledRun === true || request.origin.kind === 'scheduledRun',
       isPersonInput: options.isPersonInput === true,
     });
     if (request.nextPostRetryAt !== undefined) await this.deps.ledger.updateOpenRequest(request.id, { nextPostRetryAt: undefined });
@@ -446,7 +447,7 @@ export class RequestWakeUpEngine {
       request,
       decideTurnEnd(request, turn.progressCountAtTurnStart, this.now(), {
         isScheduledRun: turn.isScheduledRun === true,
-        isPersonTurn: turn.isRequestPrompt || turn.isPersonInput === true,
+        isPersonTurn: !turn.isScheduledRun && (turn.isRequestPrompt || turn.isPersonInput === true),
         scheduleWait: this.getScheduleWait(turn.key, request),
         progressFollowUpMs: this.deps.progressFollowUpMs,
       }),
@@ -519,6 +520,11 @@ export class RequestWakeUpEngine {
 
   private async applyDecision(key: SessionKey, request: OpenRequestState, decision: WakeUpDecision): Promise<void> {
     if (decision.kind === 'none') return;
+    if (decision.kind === 'quiet' && decision.isRequestSettled === true) {
+      // The alarm's own request, left unanswered by an agent with nothing to report: closed without a word, never woken at the backstop.
+      await this.deps.ledger.closeRequest(request.id, 'cancelled');
+      return;
+    }
     let isStoppedMeanwhile = false;
     const updated = await this.deps.ledger.updateOpenRequest(request.id, (current) => {
       // `request` is a snapshot: a limit wait may have stopped the wake-ups since (no alert either).

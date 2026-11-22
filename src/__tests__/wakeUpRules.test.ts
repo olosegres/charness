@@ -323,6 +323,18 @@ describe('a request that waits for its schedule (scheduleWait) and a scheduled r
     assert.ok(held.kind === 'quiet' && 'nextWakeAt' in held.update && held.update.nextWakeAt === undefined, 'held by a watch: nothing is due');
   });
 
+  it('turn end: the alarm\'s own request (a scheduler fire\'s) left with no answer settles at the quiet end — one that sent a progress note, or a hand-over a fire only rides, does not', () => {
+    const fireRequest = createRequest({ origin: { kind: 'scheduledRun', attributes: { requester: 'scheduler' } } });
+    const silent = decideTurnEnd(fireRequest, 0, nowMs, { isScheduledRun: true });
+    assert.equal(silent.kind, 'quiet');
+    assert.equal(silent.kind === 'quiet' ? silent.isRequestSettled : null, true);
+    const withProgress = decideTurnEnd({ ...fireRequest, progressAnswerCount: 1 }, 0, nowMs, { isScheduledRun: true });
+    assert.notEqual(withProgress.kind === 'quiet' ? withProgress.isRequestSettled : null, true, 'a note was sent: the request stays open');
+    const handOver = decideTurnEnd(createRequest({ origin: { kind: 'trackerEvent', attributes: {} } }), 0, nowMs, { isScheduledRun: true });
+    assert.equal(handOver.kind, 'quiet');
+    assert.equal(handOver.kind === 'quiet' ? handOver.isRequestSettled : null, undefined, 'a fire only rides a hand-over: it is owed its own answer');
+  });
+
   it('turn end: nothing armed and not a scheduled run — the silent-turn rules are unchanged', () => {
     assert.equal(decideTurnEnd(createRequest(), 0, nowMs, { scheduleWait: 'none', isScheduledRun: false }).kind, 'wake');
     assert.equal(decideTurnEnd(createRequest({ silentTurnCount: 1 }), 0, nowMs, {}).kind, 'alert');

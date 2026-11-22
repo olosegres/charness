@@ -90,8 +90,12 @@ export type WakeUpDecision =
   | { kind: 'none' }
   | { kind: 'wake'; reason: RequestWakeUpReason; update: OpenRequestUpdate }
   | { kind: 'followUpLater'; update: OpenRequestUpdate }
-  /** The turn ended without anything to do about the request (it waits for its schedule, or a scheduled run had nothing to report): bookkeeping only. */
-  | { kind: 'quiet'; update: OpenRequestUpdate }
+  /**
+   * The turn ended without anything to do about the request (it waits for its schedule, or a scheduled run had nothing to report):
+   * bookkeeping only. `isRequestSettled` — the request is one a scheduler fire opened (a Telegram topic's `scheduledRun`) and the
+   * agent left it unanswered: nobody is owed its answer and nothing waits for it, so it closes silently instead of waiting for the backstop.
+   */
+  | { kind: 'quiet'; update: OpenRequestUpdate; isRequestSettled?: boolean }
   | { kind: 'alert'; reason: RequestAlertReason; update: OpenRequestUpdate };
 
 /**
@@ -152,6 +156,8 @@ export interface TurnEndContext {
  * without an answer is not silent when the turn was a scheduled run's, or when the request waits for its schedule, the turn did
  * not carry a person's words (`isPersonTurn`) and no silent turn is pending (`silentTurnCount`): a requester's message is never
  * left unanswered because a watch is armed — the reminder that follows its silent turn keeps counting towards the give-up.
+ * A request a scheduler fire opened (`origin.kind` `scheduledRun`) that its agent leaves with no answer at all settles at the quiet
+ * end (`isRequestSettled`): it is the alarm's own request, and nobody is owed its answer.
  */
 export function decideTurnEnd(
   request: OpenRequestState,
@@ -178,6 +184,7 @@ export function decideTurnEnd(
     return {
       kind: 'quiet',
       update: { silentTurnCount: 0, lastTurnActivityAt: nowMs, ...(isHeldBySchedule ? { nextWakeAt: undefined } : {}) },
+      ...(request.origin.kind === 'scheduledRun' && !isProgressSent ? { isRequestSettled: true } : {}),
     };
   }
   const silentTurnCount = request.silentTurnCount + 1;
