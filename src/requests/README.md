@@ -111,6 +111,20 @@ Numeric bounds are named constants in the files below; this README says only wha
   A Telegram topic keeps its own lost-work resume and is never woken this way. NOT covered: a tracker process that
   crashes while the bot keeps running, with no work of its own pending (no lost-work note) — its watched turn reads
   `sessionGone` and the request still waits for the backstop.
+- **A request waits for its schedule** (`scheduleWait.ts`, platform-neutral; the engine's optional `getScheduleWait` port reads the
+  conversation's jobs at every decision): a job counts when it is armed under the request (`ScheduleRecord.requestId` is the request's id
+  or the id of a request it replaced), is an agent job (a prompt job or a check, not a reminder) and is not paused. Reading `watching` —
+  a job that is not a failing check — means that, BETWEEN turns, nothing wakes the request: no progress follow-up, no backstop, no
+  restart wake (`scheduleRestartWake` is not even scheduled when every request of the conversation is watched, so it spends no
+  stagger slot). Reading `armed` — only failing checks, a watch that just fired — counts only at the END of a watched turn: the agent that
+  handled the wake is not silent, while a failing check nobody handled (the agent died in the wake) does not hold the request forever
+  — between turns it does not count, so the backstop takes it. At a turn's end a request that waits for its schedule is not silent
+  (counter 0, no wake) and a progress note schedules no follow-up (`decideTurnEnd` → `quiet`); when the watch is gone (cancelled, paused,
+  its check failing and not re-armed) the normal rules take the request back — a due follow-up, or the backstop 90 min from the last
+  activity. A turn a scheduler fire started (`trackForwardedTurn` with `isScheduledRun`) that ends without an answer is not silent
+  either: a woken agent with nothing to report stays quiet, and the bot never prods it for that. A scheduler fire is not a wake-up and
+  never counts against the cap. This is why an agent in a Jira issue can launch a worker, arm its watch, answer `progress` and end its
+  turn, and why a Telegram topic in a view with requests is no longer reminded every 15 minutes while its own watch passes.
 - A request whose prompt could not be posted is retried on `postRetryDelaysMs`, OUTSIDE the wake-up cap
   (`notePostFailed`); a message forwarded any other way drops a pending retry.
 - A failure in one conversation is logged and never stops the others or rejects a timer tick — an unhandled

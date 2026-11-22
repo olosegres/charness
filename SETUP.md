@@ -910,6 +910,11 @@ connector behaves is described in [`src/connectors/jira/README.md`](src/connecto
    into that thread — so do the notices about it (queued, over the budget). An answer that replies to a comment goes
    into that comment's thread; anything else is a new comment, as before.
 
+   **Scheduling.** The agent in an issue can schedule itself (`schedule_create`) and watch the workers it launches: it ends
+   its turn and the bot wakes it in the same issue when a worker is done. Nothing of it is written on the issue — no
+   announcement, no status line — because a Jira comment always notifies the requester and the issue's watchers; the agent
+   comments only through its answers. The jobs live in `state.json` and survive a restart.
+
    **Screenshots and videos in answers.** The agent can attach files of the project folder to its answer: they are
    uploaded to the issue and shown in the answer's comment — an image shown, an H.264 `.mp4` playing, anything else
    linked. The AI account needs the *Create Attachments* permission in the project, and attachments must be on for the

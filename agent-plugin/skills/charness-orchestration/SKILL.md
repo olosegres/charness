@@ -121,11 +121,24 @@ kill -0 <pid> 2>/dev/null || { echo "worker <pid> exited"; exit 1; }; [ -n "$(fi
 
 ## A tracker conversation (Jira)
 
-There are no `schedule_*` tools and nothing will wake you. Do not end your turn while a worker runs: wait in the
-turn with foreground polls of at most 10 minutes each, checking the same signals (the PID, the run directory
-changing, 2 h 30 min since you started waiting without a report), report interim progress with `answer_request` kind `progress`, and end with kind `final`.
-A screenshot or the passing-run video goes into the answer itself: its path in `answer_request`'s `files` (an H.264
-`.mp4` plays in the comment); `send_file_to_user` posts files in a comment of their own.
+The same tools and the same watch recipe as in a topic (the sections above). What differs on an issue: the bot posts NOTHING
+there for a scheduled run, a check or a status — a comment always notifies the requester and the issue's watchers — so none
+of the topic's lines exist (no status line, no «worker finished» sentence, no «working again»), and the check's status
+arguments only mark it as a worker watch.
+
+- After the launch and the armed check, answer `answer_request` kind `progress` (what you launched, where, what you wait for),
+  then END your turn. Do not poll the worker. The bot stops your idle process; when the check fails (the worker finished, went
+  silent, or ran 2 h 30 min without a report) it resumes you in THIS issue, behind a header that names the request open then. A
+  new comment on the issue reaches you at once, asleep or not.
+- At a wake read the worker's result and decide as above. Answer the request the header names (`answer_request` with that id)
+  only with a result the requester needs — a milestone, the final answer. A wake you handled with nothing to report ends
+  silently: no comment, no "still waiting".
+- A header that says `no request is open`: the request you armed the job under is finished. An answer to it still becomes a
+  comment but hands nothing back — answer only what the requester must know, and cancel the job (`schedule_cancel`) if it
+  served only that request.
+- A job outlives its request: when the work it served is done, cancel it.
+- A screenshot or the passing-run video goes into the answer itself: its path in `answer_request`'s `files` (an H.264
+  `.mp4` plays in the comment); `send_file_to_user` posts files in a comment of their own.
 
 ## Closing a task that ran on a runner
 

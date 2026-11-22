@@ -45,6 +45,28 @@ constants in the code; this README keeps what the code cannot say.
   the wrong timezone shows at once; a cron nothing phrases shows only the stamp, a one-shot only its own time. The command and
   the status rhythm are in `schedule_list`, for the agent.
 
+## A tracker conversation's fires (Jira; `delivery.ts` `trackerRun`, `trackerRun.ts`)
+
+A Jira comment always notifies the requester and the issue's watchers — there is no silent one — so the scheduler posts NOTHING on
+an issue: no announcement, no «back to normal» line, no status line, no check alert (the delivery reads
+`describeConversation` once per fire; a topic is delivered as before). A fire only wakes the agent, resuming the issue's
+sleeping session by id (a fresh one starts on the connector's own backend, not the job's adapter snapshot), and opens NO request
+of its own: the only party on an issue is the requester whose hand-over request owes the answer and the hand-back, and a request of
+the scheduler's would owe an answer nobody asked for.
+
+- **The request it rides** (`pickScheduledRunTarget`, read at forward time — the post may wait behind a running turn): the one the
+  job was armed under, or the open request that replaced it (`supersededRequestIds`); else the newest open request; else none.
+- **The prompt** starts with a header (`buildTrackerScheduledRunHeader`): the job, the issue and its link, and either the request
+  it rides («answer through `answer_request` only when you have a result the requester needs; nothing of this run is shown on the
+  issue») or «no request is open», naming the request the job was armed under as finished (an answer to it still becomes a
+  comment and hands nothing back; cancel the job if it served only that request). Then the usual `[Scheduled run]` marker and prompt,
+  or the `[Scheduled check "<name>" failed]` block.
+- **The turn** the fire starts is watched as that request's turn, marked a scheduled run (`trackForwardedTurn`): its silent end is
+  no silence (`requests/README.md` § Wake-ups). A fire never counts against the wake-up cap.
+- **Paused for a folder.** A fire that finds no usable folder pauses the job (`unbound`) with a log line; the next request of the
+  issue whose bind step finds the folder usable resumes it (`resumeSchedulesPausedForUnbound`, the unit `/bind` uses in a topic:
+  next run from now, a passed one-shot dropped), again with a log line.
+
 ## Restart and time
 
 - Timers re-arm from `state.json` at boot; a run missed while the bot was down fires ONE catch-up annotated
@@ -92,9 +114,16 @@ constants in the code; this README keeps what the code cannot say.
   key(s) [...]`) in `agent-diag.log`. A client that fails every call because of a key of its own is then visible. The digest hashes only the shape's keys, so closing the
   objects did not move it. `schedulerMcpStrictInput.test.ts` walks every tool a session gets over the real server.
 - Bearer tokens are HMAC-signed and scoped `thread:` (Claude, one conversation) or `dir:` (OpenCode, every
-  thread bound to the folder). `getSchedulerScopePlatform` reads the scope's platform: only a Telegram session
-  gets `schedule_*`, `send_file_to_user` and `send_messages_to_user`; any other platform sees just
-  `answer_request` + `compact_conversation`, and `buildMcpServerInstructions` names no Telegram tool. A Jira
+  thread bound to the folder). `getSchedulerScopePlatform` reads the scope's platform: a Telegram AND a Jira session get
+  `schedule_*` (`checkIsSchedulingPlatform`), only a Telegram one `send_file_to_user` and `send_messages_to_user` (a Jira one has its
+  own `send_file_to_user`); any other platform (the `test` one, a key no codec reads) sees just
+  `answer_request` + `compact_conversation`, and `buildMcpServerInstructions` names no Telegram tool. The wording and shape of
+  the three `schedule_*` tools are per platform (`scheduleToolWording.ts`): Telegram's is the original and byte-identical to what
+  it was (a moved word moves the tool digest and reconnects every adopted process), a Jira issue's has no `threadKey` (its
+  token names the conversation) and no `isPinSilent`, speaks of «this issue's conversation», says the bot posts NOTHING on the
+  issue and that after arming a watch the agent answers `progress` and ENDS its turn; the status arguments stay accepted (one
+  recipe for both) and say no line is posted there. `schedule_create` records the newest open request of the conversation on the
+  job (`ScheduleRecord.requestId`, the `getNewestOpenRequestId` port) in every conversation that has one. A Jira
   session also gets `jira_get_attachment` — only when the Jira connector is loaded, through the
   `fetchJiraAttachment` port it supplies (the connector stays lazily loaded); the issue is the session's own
   conversation, taken from its token, never from an argument. The tool changes the Jira digest, so an adopted

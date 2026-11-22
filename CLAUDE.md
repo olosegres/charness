@@ -94,8 +94,8 @@ per-backend controls are optional methods the bot checks before calling.
 - **Bot-injected MCP server `charness`** (HTTP, loopback, per-session HMAC tokens scoped `thread:` /
   `dir:`; the one constant `schedulerMcpServerName`, so the tools read `mcp__charness__<tool>` in Claude Code and `charness_<tool>` in OpenCode;
   the name is the bot's: `mcpConfig.ts` drops an operator's entry of it from the copies it hands Claude, the OpenCode adapter registers its own over a config-defined one) goes into EVERY bot-started session: `schedule_*`, `compact_conversation`, `answer_request`,
-  `send_file_to_user`, `send_messages_to_user` (a non-Telegram session sees only `answer_request` +
-  `compact_conversation`, plus `jira_get_attachment` and its own `send_file_to_user` for a Jira one). It is bot plumbing, separate from the user-editable MCP hierarchy (mostly dormant,
+  `send_file_to_user`, `send_messages_to_user` (a Jira session gets `schedule_*` too, with its own wording and no `threadKey`, but not `send_messages_to_user`; any other non-Telegram session sees only `answer_request` +
+  `compact_conversation`, plus for a Jira one `jira_get_attachment` and its own `send_file_to_user`). It is bot plumbing, separate from the user-editable MCP hierarchy (mostly dormant,
   undocumented). Clients cache `instructions` and tool descriptions at connect: a running agent sees an edit
   only after reconnecting; tool RESULTS reflect live code.
 - **Bot-shipped skills** (`agent-plugin/`, a Claude Code plugin `charness`; `utils/agentPlugin.ts`): every bot-started
@@ -115,7 +115,10 @@ per-backend controls are optional methods the bot checks before calling.
   pierces a muted topic; a prompt job's fire is one silent line with its prompt folded in an expandable quotation.
   A check with a status source (`statusWorkerRunDir` / `statusCommand`) also posts ONE silent status line per
   `statusEveryMinutes` (15) while it passes, replacing the previous one — the bot's own message, no agent wake,
-  only in a Telegram topic whose view shows the stream (`scheduler/checkStatus.ts`).
+  only in a Telegram topic whose view shows the stream (`scheduler/checkStatus.ts`). In a Jira issue the scheduler posts
+  NOTHING (a comment always notifies the requester and the issue's watchers): a fire wakes the issue's agent behind a header
+  naming the open request it rides, opens no request of its own (`scheduler/trackerRun.ts`), and an open request waits for
+  its armed watch — no follow-ups, no restart wake, no give-up (`requests/scheduleWait.ts`, in a topic with requests too).
 - **One instance-wide timezone** (`/timezone`) applied through `process.env.TZ`. After a zone change never
   re-arm schedules with the engine's `rearmAll()` (the boot replay would fire bogus catch-ups).
 - **Prompt decoration** happens at ONE choke point, `forwardPromptToAgent`: the `[Telegram thread context]`

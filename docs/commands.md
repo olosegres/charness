@@ -589,7 +589,7 @@ Reasoning effort. **In a topic:** shows the level its session runs and where the
 
 ### `/verbosity`
 
-Output-verbosity macro (`minimal|short|full`): sets the thinking, tool-results and sub-agent display prefs at once; `/thinking`, `/tool_results`, `/subagent` point-override afterwards. Mixed prefs show as "custom" in the picker. The picker's second row (or `/verbosity stream|stream_answers|answers`) sets what the topic SHOWS — "Stream only" (default), "Stream + answers" (the stream plus the agent's pinned answers) or "Answers only" (the pinned answers, no stream; an agent that keeps writing after its final answer is reminded once to send what matters); the answers are written like for a manager or QA — brief and to the point; a switch applies from the next message, and `/status` names the view.
+Output-verbosity macro (`minimal|short|full`): sets the thinking, tool-results and sub-agent display prefs at once; `/thinking`, `/tool_results`, `/subagent` point-override afterwards. Mixed prefs show as "custom" in the picker. The picker's second row (or `/verbosity stream|stream_answers|answers`) sets what the topic SHOWS — "Stream only" (default), "Stream + answers" (the stream plus the agent's pinned answers) or "Answers only" (the pinned answers, no stream; an agent that keeps writing after its final answer is reminded once to send what matters); the answers are written like for a manager or QA — brief and to the point; a switch applies from the next message, and `/status` names the view. In a view that shows the answers, an agent that answered `progress` and is waiting on a worker watch of its own (`schedule_create` with a check) is not reminded every 15 minutes while the watch passes — the watch wakes it when there is something to do.
 
 ### `/thinking`
 
@@ -659,6 +659,10 @@ with the thread's last-used backend.
   counted separately, see [`/reminders`](#reminders)).
 - Restart-safe: timers re-arm at boot; a run missed during downtime fires
   one catch-up annotated with the missed time.
+- **In a Jira issue** the agent has the same `schedule_*` tools, but the bot posts NOTHING there — no announcement, no check alert,
+  no status line: a Jira comment always notifies the requester and the issue's watchers. A fire wakes the issue's agent, which
+  answers in comments (`answer_request`) only when it has a result the requester needs. An agent that launched a worker and armed
+  its watch is not reminded or given up on while the watch passes; it is woken in the issue when the worker is done.
 - Leaving a folder pauses the topic's scheduled prompts; `/bind` resumes
   them (an expired one-shot is dropped). Reminders keep running — see
   [`/reminders`](#reminders). Run history: `DATA_DIR/scheduler-runs.jsonl`.
