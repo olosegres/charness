@@ -1916,6 +1916,25 @@ describe('a request waits for its schedule', () => {
     assert.deepEqual(wakeUps, [{ requestId: request.id, reason: 'backstop' }], 'the check nobody handled does not hold the request forever');
   });
 
+  it('a watch that fired and nobody re-armed: the fire\'s turn (its «continue» too) stays quiet, but the backstop\'s reminders are silent turns — the give-up comes after two, not after ten wakes', async () => {
+    const ledger = await createLedger();
+    const engine = createEngine(ledger, { getScheduleWait: () => 'armed' });
+    const request = await ledger.createRequest(issueKey, handOver);
+    await ledger.updateOpenRequest(request.id, { progressAnswerCount: 1 });
+    await engine.trackForwardedTurn(issueKey, request.id, { isRequestPrompt: false, isScheduledRun: true });
+    await engine.trackContinuationTurn(issueKey, { isCountersReset: false });
+    await endTurnSilently(engine);
+    assert.deepEqual(wakeUps, [], 'the turn that handled the wake, an API error and its «continue» included: not silent');
+
+    nowMs += backstopMs;
+    await engine.sweepUnwatchedRequests();
+    assert.deepEqual(wakeUps, [{ requestId: request.id, reason: 'backstop' }]);
+    await endTurnSilently(engine);
+    assert.deepEqual(getWakeUpReasons(), ['backstop', 'silentTurn'], 'the reminder\'s turn ended silent: no quiet turn for a reminder under a watch nobody re-armed');
+    await endTurnSilently(engine);
+    assert.deepEqual(alerts, [{ requestId: request.id, reason: 'silentTurns' }], 'the give-up, instead of ten reminders ninety minutes apart');
+  });
+
   it('a restart wake skips a request a watch holds and still wakes the others — the port is asked about each request', async () => {
     const ledger = await createLedger();
     const watched = await ledger.createRequest(issueKey, { ...handOver, attributes: { ...handOver.attributes, requester: 'ann' } });

@@ -90,8 +90,9 @@ describe('getRequestScheduleWait', () => {
 });
 
 describe('what each reading means to the rules', () => {
-  it('the end of a watched turn reads `armed` and `watching` as waiting; between turns only `watching` holds the request', () => {
-    assert.deepEqual((['none', 'armed', 'watching'] as const).map(checkIsWaitingAtTurnEnd), [false, true, true]);
+  it('the end of a watched turn reads `watching` as waiting, and `armed` only for the turn a fire started; between turns only `watching` holds the request', () => {
+    assert.deepEqual((['none', 'armed', 'watching'] as const).map((wait) => checkIsWaitingAtTurnEnd(wait, false)), [false, false, true], 'a person\'s or a reminder\'s turn');
+    assert.deepEqual((['none', 'armed', 'watching'] as const).map((wait) => checkIsWaitingAtTurnEnd(wait, true)), [false, true, true], 'the turn a fire started');
     assert.deepEqual((['none', 'armed', 'watching'] as const).map(checkIsWaitingBetweenTurns), [false, false, true]);
   });
 });

@@ -12,9 +12,9 @@ import type { OpenRequestState } from './types';
  *
  *   none      — no job counts: the normal rules apply
  *   watching  — a job counts and is not a failing check: between turns nothing wakes the request
- *   armed     — every counting job is a failing check: a watch that just fired. Only the END of a watched turn reads it as
- *               waiting (the agent that handled the wake is not silent); between turns a failing check nobody handled
- *               (the agent died in the wake) must not hold the request forever, so it does not count there
+ *   armed     — every counting job is a failing check: a watch that just fired. Only the END of a turn a FIRE started reads it
+ *               as waiting (the agent that handled the wake is not silent; any other turn reads it as `none`); between turns a
+ *               failing check nobody handled (the agent died in the wake) must not hold the request forever, so it does not count there
  *
  * Platform-neutral: a Telegram topic in a view with requests gets the same reading from the jobs its agent armed.
  *
@@ -44,9 +44,15 @@ export function getRequestScheduleWait(jobs: readonly ScheduleRecord[], request:
   return wait;
 }
 
-/** @description Whether the end of a watched turn reads the request as waiting for its schedule: `armed` and `watching` both do. */
-export function checkIsWaitingAtTurnEnd(wait: RequestScheduleWait): boolean {
-  return wait !== 'none';
+/**
+ * @description Whether the end of a watched turn reads the request as waiting for its schedule. `watching` always does. `armed` — a
+ * watch that fired and was not re-armed — does only for the turn a FIRE started (`isScheduledRun`, a «continue» of it included): the
+ * agent that handled the wake is not silent. A reminder's or a person's turn is not the alarm: nothing else will ever wake the agent
+ * on a request whose watch is gone, so for them `armed` reads as `none` — a silent reminder is a silent turn, and the chain ends in
+ * the give-up instead of ten backstop reminders ninety minutes apart.
+ */
+export function checkIsWaitingAtTurnEnd(wait: RequestScheduleWait, isScheduledRun: boolean): boolean {
+  return wait === 'watching' || (wait === 'armed' && isScheduledRun);
 }
 
 /** @description Whether, between turns, nothing may wake the request: only a watch that is not failing holds it. */

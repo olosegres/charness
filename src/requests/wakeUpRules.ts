@@ -167,7 +167,7 @@ export function decideTurnEnd(
 ): WakeUpDecision {
   if (checkIsWakingStopped(request)) return { kind: 'none' };
   const isProgressSent = request.progressAnswerCount > progressCountAtTurnStart;
-  const isWaitingForSchedule = checkIsWaitingAtTurnEnd(context.scheduleWait ?? 'none');
+  const isWaitingForSchedule = checkIsWaitingAtTurnEnd(context.scheduleWait ?? 'none', context.isScheduledRun === true);
   if (isProgressSent && !isWaitingForSchedule) {
     return {
       kind: 'followUpLater',
