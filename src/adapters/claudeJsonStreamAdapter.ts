@@ -295,6 +295,12 @@ export interface StreamSession {
   // — answer accumulation —
   currentResponseText: string;
   emittedLength: number;
+  /**
+   * The turn in progress was already under way when this process was adopted (a bot restart): its first part was emitted by the
+   * old process, and the replay starts at the saved offset, so the cursor above says nothing of it. The `result` backstop would
+   * take the whole final message for text the stream under-delivered; it is skipped until the turn's end clears this.
+   */
+  isAnswerCursorUnknown: boolean;
   outputTimer: NodeJS.Timeout | null;
   // — reasoning —
   reasoningText: string;
@@ -733,7 +739,7 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
       lastStdoutActivityAt: Date.now(), outstandingToolUseIds: new Set(),
       model: opts.model, reportedModel: null, effort: opts.effort,
       configDir: opts.configDir, isConfigDirSwitchPending: false, startCostUsd,
-      currentResponseText: '', emittedLength: 0, outputTimer: null,
+      currentResponseText: '', emittedLength: 0, isAnswerCursorUnknown: false, outputTimer: null,
       reasoningText: '', reasoningStartedAt: null, reasoningTimer: null, reasoningActive: false,
       toolNamesById: new Map(), questionToolUseIds: new Set(),
       subagentActive: false, childResponseText: '', childEmittedLength: 0, childOutputTimer: null,
@@ -1074,7 +1080,7 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
       // The account the surviving process runs on is in its own wrapper; the bot compares it with the topic's pick.
       // A switch the user picked while the process worked survives the reload: it still applies at the turn's end.
       configDir: readWrapperScriptConfigDir(paths.wrapperFile), isConfigDirSwitchPending: adoptedTail.isConfigDirSwitchPending, startCostUsd: null,
-      currentResponseText: '', emittedLength: 0, outputTimer: null,
+      currentResponseText: '', emittedLength: 0, isAnswerCursorUnknown: isTurnInFlight, outputTimer: null,
       reasoningText: '', reasoningStartedAt: null, reasoningTimer: null, reasoningActive: false,
       toolNamesById: new Map(), questionToolUseIds: new Set(),
       subagentActive: false, childResponseText: '', childEmittedLength: 0, childOutputTimer: null,
@@ -1602,6 +1608,7 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
   private resetAnswerCursor(session: StreamSession): void {
     session.currentResponseText = '';
     session.emittedLength = 0;
+    session.isAnswerCursorUnknown = false;
   }
 
   sendSignal(key: SessionKey, _signal: string): void {
@@ -2259,8 +2266,10 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
     }
 
     // Reconciliation backstop: if the delta stream under-delivered vs the final
-    // `result` text, append the gap so the answer is never short.
-    if (action.resultText && action.resultText.length > session.currentResponseText.length
+    // `result` text, append the gap so the answer is never short. Not for a turn
+    // adopted in flight: what its old process emitted is not in the cursor, so the
+    // whole final message would read as the gap and go out a second time.
+    if (action.resultText && !session.isAnswerCursorUnknown && action.resultText.length > session.currentResponseText.length
         && action.resultText.startsWith(session.currentResponseText)) {
       session.currentResponseText = action.resultText;
     }

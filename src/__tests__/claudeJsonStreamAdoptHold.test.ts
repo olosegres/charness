@@ -28,6 +28,7 @@ import { ClaudeJsonStreamAdapter, type StreamSession } from '../adapters/claudeJ
 import { keyToString, type SessionKey } from '../sessionKey';
 import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
 import { buildJsonStreamTmuxSessionName, getJsonStreamSessionPaths, resolveJsonStreamSessionDir } from '../utils/jsonStreamHost';
+import type { JsonStreamTailOffset } from '../types';
 import { createStreamSessionFixture } from './claudeJsonStreamSessionFixture';
 
 const key: SessionKey = makeTelegramKey(-100999781, 81);
@@ -38,6 +39,8 @@ const textDeltaLine =
 /** The turn that ran into a usage limit while the bot was down, the way the CLI ends it. */
 const usageLimitResultLine =
   JSON.stringify({ type: 'result', subtype: 'success', is_error: true, result: "You've hit your session limit · resets 10:20am (UTC)" }) + '\n';
+/** The end of the turn that was in flight at the restart: the whole final message, as the CLI repeats it in the `result`. */
+const finalResultLine = JSON.stringify({ type: 'result', subtype: 'success', is_error: false, result: 'The final message.' }) + '\n';
 /** A release whose first read never comes within a test: what the release itself does is looked at, not the poll. */
 const distantFirstReadMs = 60_000;
 /** The bound of a wait that must settle at once; a hang fails the test instead of the file's timeout. */
@@ -112,6 +115,28 @@ describe('a json-stream session adopted at a restart is read only from the boot\
     for (const dir of fixtureDirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
   });
 
+  /** The real adopt of a live stand-in process whose stdout log holds `log`, resuming from `persistedTail`: the held session it leaves. */
+  async function adoptLiveProcess(adapter: ClaudeJsonStreamAdapter, log: string, persistedTail: JsonStreamTailOffset): Promise<StreamSession> {
+    const paths = getJsonStreamSessionPaths(resolveJsonStreamSessionDir(dataDir, key));
+    fs.mkdirSync(paths.dir, { recursive: true });
+    // The session folder is the key's own, shared by the tests of this file: removed after each, so the next one makes its FIFO afresh.
+    fixtureDirs.push(paths.dir);
+    const agentProcess = spawn('sleep', ['60'], { stdio: 'ignore' });
+    children.push(agentProcess);
+    assert.ok(agentProcess.pid, 'the stand-in process started');
+    fs.writeFileSync(paths.pidFile, `${agentProcess.pid}\n`);
+    assert.equal(spawnSync('mkfifo', [paths.stdinFifo]).status, 0, 'the stdin FIFO was made');
+    // The CLI holds its stdin FIFO open: without a reader the adopt reads the process as dead.
+    openFds.push(fs.openSync(paths.stdinFifo, fs.constants.O_RDONLY | fs.constants.O_NONBLOCK));
+    fs.writeFileSync(paths.stdoutFile, log);
+    const isAdopted = await adapter.adoptExistingTmuxSession(key, sessionName, '/tmp/jsonstream-adopthold-work', claudeSessionId, persistedTail);
+    assert.equal(isAdopted, true, 'the live process is adopted');
+    const session: StreamSession | undefined = adapter['sessions'].get(keyToString(key));
+    assert.ok(session, 'the adopted session is tracked');
+    sessions.push(session);
+    return session;
+  }
+
   /** A held session as the adopt leaves it, on a stdout log holding `log`; `catchUpBytes` behind the tail (`null`: none). */
   function createHeldSession(adapter: ClaudeJsonStreamAdapter, log: string, catchUpBytes: number | null): StreamSession {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'jsonstream-adopthold-session-'));
@@ -131,27 +156,12 @@ describe('a json-stream session adopted at a restart is read only from the boot\
   }
 
   it('the adopt of a live process leaves its tail held — no read armed — and the downtime replay comes only after the release', async () => {
-    const paths = getJsonStreamSessionPaths(resolveJsonStreamSessionDir(dataDir, key));
-    fs.mkdirSync(paths.dir, { recursive: true });
-    const agentProcess = spawn('sleep', ['60'], { stdio: 'ignore' });
-    children.push(agentProcess);
-    assert.ok(agentProcess.pid, 'the stand-in process started');
-    fs.writeFileSync(paths.pidFile, `${agentProcess.pid}\n`);
-    assert.equal(spawnSync('mkfifo', [paths.stdinFifo]).status, 0, 'the stdin FIFO was made');
-    // The CLI holds its stdin FIFO open: without a reader the adopt reads the process as dead.
-    openFds.push(fs.openSync(paths.stdinFifo, fs.constants.O_RDONLY | fs.constants.O_NONBLOCK));
-    // The turn that ran to a usage limit while the bot was down, after the offset the last bot saved (the log's start).
-    fs.writeFileSync(paths.stdoutFile, textDeltaLine + usageLimitResultLine);
-
     const adapter = new ClaudeJsonStreamAdapter();
     const errors = recordApiErrors(adapter);
     const outputs: string[] = [];
     adapter.on('output', (_key: SessionKey, text: string) => outputs.push(text));
-    const isAdopted = await adapter.adoptExistingTmuxSession(key, sessionName, '/tmp/jsonstream-adopthold-work', claudeSessionId, { sessionId: claudeSessionId, offsetBytes: 0 });
-    assert.equal(isAdopted, true, 'the live process is adopted');
-    const session: StreamSession | undefined = adapter['sessions'].get(keyToString(key));
-    assert.ok(session, 'the adopted session is tracked');
-    sessions.push(session);
+    // The turn that ran to a usage limit while the bot was down, after the offset the last bot saved (the log's start).
+    const session = await adoptLiveProcess(adapter, textDeltaLine + usageLimitResultLine, { sessionId: claudeSessionId, offsetBytes: 0 });
 
     assert.equal(session.isTailHeld, true, 'the adopt holds the tail');
     assert.equal(session.pollTimer, null, 'no read is armed until the boot releases it');
@@ -164,6 +174,26 @@ describe('a json-stream session adopted at a restart is read only from the boot\
     assert.equal(await checkSettlesSoon(replayed), true, 'the replay is read once released');
     assert.deepEqual(errors.map((error) => [error.kind, error.isReplayed === true]), [['usageLimit', true]], 'the limit error, read after the release, as a replayed one');
     assert.ok(outputs.some((text) => text.includes('replayed text')), 'the downtime text is delivered too');
+  });
+
+  it('a turn in flight at the restart is adopted with an UNKNOWN answer cursor: what it streamed before the restart was emitted by the old process, so its replayed `result` does not emit the whole final message again', async () => {
+    // The restart landed after the turn's last text was emitted (the saved offset is past it) and before its `result` was read.
+    const adapter = new ClaudeJsonStreamAdapter();
+    const outputs: string[] = [];
+    adapter.on('output', (_key: SessionKey, text: string) => outputs.push(text));
+    const session = await adoptLiveProcess(adapter, finalResultLine, { sessionId: claudeSessionId, offsetBytes: 0, isTurnInFlight: true });
+    assert.equal(session.isAnswerCursorUnknown, true, 'a turn in flight at the adopt has no known cursor');
+
+    adapter.releaseAdoptedTails(1);
+    assert.equal(await checkSettlesSoon(adapter.whenAdoptReplayed(key)), true, 'the replay is read once released');
+    assert.deepEqual(outputs, [], 'nothing of a message the old process emitted is emitted again');
+    assert.equal(session.isAnswerCursorUnknown, false, 'the turn\'s end makes the cursor known again');
+  });
+
+  it('a session adopted with no turn in flight has a known cursor: its next turn is settled against that turn\'s own text', async () => {
+    const adapter = new ClaudeJsonStreamAdapter();
+    const session = await adoptLiveProcess(adapter, '', { sessionId: claudeSessionId, offsetBytes: 0, isTurnInFlight: false });
+    assert.equal(session.isAnswerCursorUnknown, false);
   });
 
   it('refreshWorkingState — the automatic stop\'s last look — reads nothing of a held tail; once released it reads the replay', () => {

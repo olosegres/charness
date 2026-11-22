@@ -9,7 +9,8 @@
  * Load-bearing intent:
  *   - a prompt written while a turn runs leaves its cursor alone: the unread `result` emits only the text the turn had not emitted yet, once, before the new turn's text, which goes out on its own;
  *   - a prompt written while no turn runs (idle, or after an interrupt that left no `result`) starts from an empty cursor, so the new turn's own backstop works on its own text;
- *   - a turn's end leaves the cursor empty.
+ *   - a turn's end leaves the cursor empty;
+ *   - a turn that was in flight at an adopt (a bot restart) has an UNKNOWN cursor: the old process emitted what it streamed, the replay starts at the saved offset, so its `result` does not re-emit the whole final message.
  *
  * Frames are the shapes of the CLI's stream-json; the FIFO write is the adapter's test seam, no `claude` process is involved.
  *
@@ -83,6 +84,19 @@ describe('json-stream adapter — the answer cursor belongs to the turn that str
     adapter['onStdout'](session, initFrame + echoFrame('again') + textDeltaFrame('Fre') + resultFrame('Fresh'));
 
     assert.deepEqual(outputs, ['Partial', 'Fresh'], 'the second turn\'s text is completed from its own `result`, nothing of the first one is in it');
+  });
+
+  it('a turn in flight at an adopt has an unknown cursor: its `result` emits nothing the old process already emitted, and the turn after it is settled against its own text as usual', async () => {
+    const { adapter, session, outputs } = createAdapter();
+    // The state an adopt leaves for a turn that was in flight: busy, with a cursor that knows nothing of what the old process emitted.
+    session.isBusy = true;
+    session.isAnswerCursorUnknown = true;
+    adapter['onStdout'](session, resultFrame('The final message.'));
+    assert.deepEqual(outputs, [], 'the final message was emitted before the restart: it is not emitted again');
+
+    await adapter.sendInputAndWait(key, 'next');
+    adapter['onStdout'](session, initFrame + echoFrame('next') + textDeltaFrame('Fre') + resultFrame('Fresh'));
+    assert.deepEqual(outputs, ['Fresh'], 'the next turn\'s backstop works on its own text');
   });
 
   it('a turn\'s end leaves the cursor empty, so the next turn\'s text starts a tail of its own', async () => {
