@@ -6241,6 +6241,18 @@ function handleAgentTurnEnded(key: SessionKey): void {
   );
 }
 
+/** No reminder to deliver: what a settle resolves while the wake-up engine is not up yet. */
+const deliverNoSettledWakes = async (): Promise<void> => {};
+
+/**
+ * @description Settle `key`'s watches whose turn already ended (`RequestWakeUpEngine.settleEndedTurnsOf`, synchronous up to the
+ * decisions) and deliver the reminders they decided once persisted — for a caller with no write of its own after it, or one that
+ * writes in this tick (the reminder then follows the write). Never rejects.
+ */
+function settleEndedTurnsAndRemind(key: SessionKey): void {
+  void requestWakeUpEngine?.settleEndedTurnsOf(key).then((deliverSettledWakes) => deliverSettledWakes());
+}
+
 /**
  * @description A prompt (text, voice, file, a re-asked question's answer) arrives
  * in a topic whose conversation sleeps: resume it so the prompt continues it.
@@ -6398,7 +6410,8 @@ async function forwardPromptToLiveAgent(
 ): Promise<void> {
   // A new prompt starts or joins a turn: the watches whose turn already ENDED are settled first, synchronously and before the write
   // (no await may precede it), so the new turn never runs under the watch of the turn before it (`requests/README.md` § Turn starts).
-  void requestWakeUpEngine?.settleEndedTurnsOf(key);
+  // Their reminders are delivered once persisted: after this write, which runs in this tick.
+  settleEndedTurnsAndRemind(key);
   // A forwarded prompt is thread activity — reset the compact-on-idle watchdog (F2).
   noteThreadActivity(key);
   const isTechnicalPrompt = options.isTechnicalPrompt ?? false;
@@ -15753,8 +15766,9 @@ function createSessionPostDeps(): PostToSessionDeps {
       // A prompt that waited for the session's start counts only once it reached it: a replay whose write failed is a failed post.
       if (delivery === 'buffered') await buffered.assertReplayed();
     },
-    // The watches whose turn ended are settled before the post picks a request and builds its text (`requests/README.md` § Turn starts).
-    settleEndedTurns: (conversationKey) => requestWakeUpEngine?.settleEndedTurnsOf(keyFromString(conversationKey)) ?? Promise.resolve(),
+    // The watches whose turn ended are settled before the post picks a request and builds its text; the reminders they decided are
+    // delivered after the post's own write (`requests/README.md` § Turn starts).
+    settleEndedTurns: (conversationKey) => requestWakeUpEngine?.settleEndedTurnsOf(keyFromString(conversationKey)) ?? Promise.resolve(deliverNoSettledWakes),
     now: () => Date.now(),
     sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
   };

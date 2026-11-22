@@ -2474,7 +2474,7 @@ describe('turn boundaries: a forward settles the watches whose turn already ende
     const handOverEndAt = nowMs;
     const settled = engine.settleEndedTurnsOf(issueKey);
     assert.deepEqual(engine.getWatchedRequestIdsOf(issueKey), [], 'the ended watch is dropped at once, before the write');
-    await settled;
+    await (await settled)();
     const mention = await ledger.createRequest(issueKey, mentionOf('bob'));
     await engine.trackForwardedTurn(issueKey, mention.id, { isRequestPrompt: true });
     assert.equal(engine.getArmingRequestIdOf(issueKey), mention.id, 'a watch armed in the mention\'s turn is the mention\'s');
@@ -2496,7 +2496,7 @@ describe('turn boundaries: a forward settles the watches whose turn already ende
     await engine.pollWatchedTurns();
     await ledger.updateOpenRequest(operator.id, (current) => ({ progressAnswerCount: current.progressAnswerCount + 1, isPersonInputUnanswered: undefined }));
     probe = idleProbe;
-    await engine.settleEndedTurnsOf(topicKey);
+    await (await engine.settleEndedTurnsOf(topicKey))();
     const fireRequest = await ledger.createRequest(topicKey, { kind: 'scheduledRun', attributes: { requester: 'scheduler' } });
     await engine.trackForwardedTurn(topicKey, fireRequest.id, { isRequestPrompt: true, isScheduledRun: true });
     assert.equal(engine.getArmingRequestIdOf(topicKey), fireRequest.id);
@@ -2509,14 +2509,14 @@ describe('turn boundaries: a forward settles the watches whose turn already ende
     await engine.trackForwardedTurn(issueKey, handOver.id, { isRequestPrompt: true });
     probe = busyProbe;
     await engine.pollWatchedTurns();
-    await engine.settleEndedTurnsOf(issueKey);
+    await (await engine.settleEndedTurnsOf(issueKey))();
     assert.deepEqual(engine.getWatchedRequestIdsOf(issueKey), [handOver.id], 'still running: nothing is decided');
     const mention = await ledger.createRequest(issueKey, mentionOf('bob'));
     await engine.trackForwardedTurn(issueKey, mention.id, { isRequestPrompt: true });
     assert.equal(engine.getArmingRequestIdOf(issueKey), handOver.id, 'the hand-over started the running turn the mention joined');
   });
 
-  it('a silent end found by the settle is decided as the poll would have: the reminder is sent — the decision taken before the write, the reminder after it', async () => {
+  it('a silent end found by the settle is decided and persisted before the write, and its reminder is delivered only when the caller says — after the new prompt\'s write, as the tick would have (review 15 #2)', async () => {
     const ledger = await createLedger();
     const engine = createEngine(ledger);
     const handOver = await ledger.createRequest(issueKey, handOverOf('ann'));
@@ -2524,8 +2524,14 @@ describe('turn boundaries: a forward settles the watches whose turn already ende
     probe = busyProbe;
     await engine.pollWatchedTurns();
     probe = idleProbe;
-    await engine.settleEndedTurnsOf(issueKey);
+    const deliverWakes = await engine.settleEndedTurnsOf(issueKey);
+    assert.equal(ledger.getNewestOpenRequest(issueKey)?.silentTurnCount, 1, 'decided and persisted');
+    assert.deepEqual(wakeUps, [], 'the reminder waits for the caller: the waited prompt is written first and starts the turn');
+    // The waited mention is written and tracked here; then the reminder joins its turn.
+    const mention = await ledger.createRequest(issueKey, mentionOf('bob'));
+    await engine.trackForwardedTurn(issueKey, mention.id, { isRequestPrompt: true });
+    await deliverWakes();
     assert.deepEqual(getWakeUpReasons(), ['silentTurn']);
-    assert.equal(ledger.getNewestOpenRequest(issueKey)?.silentTurnCount, 1);
+    assert.equal(engine.getArmingRequestIdOf(issueKey), mention.id, 'the mention started the turn: a watch armed in it is the mention\'s');
   });
 });

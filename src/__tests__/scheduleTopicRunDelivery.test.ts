@@ -109,7 +109,7 @@ function createHarness(options: HarnessOptions = {}) {
     readWorkerActivity: async () => null,
     recordStatusLine: async () => true,
     topicRun,
-    ...(options.onSettle ? { settleEndedTurns: async () => { options.onSettle?.(); } } : {}),
+    ...(options.onSettle ? { settleEndedTurns: async () => { options.onSettle?.(); return async () => {}; } } : {}),
     now: () => firedAtMs,
     sleep: async () => {},
   };

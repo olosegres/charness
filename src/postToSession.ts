@@ -86,9 +86,11 @@ export interface PostToSessionDeps {
    * Optional: the wake-up engine settles the conversation's watches whose turn already ENDED (`settleEndedTurnsOf`), awaited right
    * before the text is built — after the wait for a busy turn, which this post ends within seconds of the idle, usually before the
    * engine's own tick saw it. The pick of the request a fire rides and its header then read what the ended turn decided (a scheduler's
-   * request that closed is not ridden), and the new turn never runs under the old watch. Never rejects.
+   * request that closed is not ridden), and the new turn never runs under the old watch. It resolves the delivery of the wake-ups it
+   * decided, which this post runs AFTER its own forward — on every way out once the settle ran — so the post's prompt starts the turn
+   * and a reminder joins it. Neither rejects.
    */
-  settleEndedTurns?: (conversationKey: string) => Promise<void>;
+  settleEndedTurns?: (conversationKey: string) => Promise<() => Promise<void>>;
   now: () => number;
   sleep: (ms: number) => Promise<void>;
 }
@@ -127,12 +129,27 @@ export async function postToSession(
   if (!session.ok) return { ok: false, reason: session.reason };
   const isWaitingForTurn = deps.checkBusy(conversationKey);
   if (isWaitingForTurn) await waitForIdle(deps, conversationKey);
-  // Ahead of the second limit check and the ensure: a wake the settle forwards (a silent end's reminder) and a stop it may queue are
-  // then behind us when the session is ensured again and the text is built.
-  await deps.settleEndedTurns?.(conversationKey);
+  // Ahead of the second limit check, the ensure and the text: the decisions are persisted now, their reminders delivered after the forward.
+  const deliverSettledWakes = await deps.settleEndedTurns?.(conversationKey);
+  try {
+    return await forwardAfterSettle(deps, conversationKey, prompt, fallbackAdapterName, { text, heldText, isWaitingForTurn, isFresh: session.isFresh });
+  } finally {
+    await deliverSettledWakes?.();
+  }
+}
+
+/** The rest of {@link postToSession} once the ended turns are settled: the second limit check, the second ensure, the forward. */
+async function forwardAfterSettle(
+  deps: PostToSessionDeps,
+  conversationKey: string,
+  prompt: string | SessionPromptText,
+  fallbackAdapterName: string | undefined,
+  context: { text: string; heldText: string | undefined; isWaitingForTurn: boolean; isFresh: boolean },
+): Promise<PostToSessionResult> {
+  const { text, heldText, isWaitingForTurn } = context;
   // Again: the turn waited out above may itself have hit the limit and armed a wait.
   if (deps.holdForLimitResume?.(conversationKey, text, heldText)) return { ok: true, isHeld: true };
-  let isFresh = session.isFresh;
+  let { isFresh } = context;
   if (isWaitingForTurn) {
     // The session found live may be asleep by now: a per-turn conversation stops its process right after the turn
     // waited out above, and a prompt written to the stopped process is dropped. The ensure queues behind a stop in

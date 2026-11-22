@@ -1,7 +1,7 @@
 import { keyToString, type SessionKey } from '../sessionKey';
 import type { RequestLedger } from './requestLedger';
 import { checkIsHeldBetweenTurns, pickRequestToArmUnder, type RequestScheduleWait } from './scheduleWait';
-import type { OpenRequestState, RequestAlertReason, RequestAnswerKind } from './types';
+import type { OpenRequestState, RequestAlertReason, RequestAnswerKind, RequestWakeUpReason } from './types';
 import { getPromptNotTakenIn, getWakeUpMessage, type WakeUpMessage } from './requestHeader';
 import {
   addAnswerTailOutput,
@@ -557,13 +557,15 @@ export class RequestWakeUpEngine {
    * the old request's activity, and decide the old request only at the new turn's end. A watch whose turn still runs is left — the
    * forward joins it (`trackForwardedTurn` merges); a session that is gone is left to the poll.
    * Synchronous up to the decisions: the ended watches are dropped and decided against the request as it is NOW, so a forward that
-   * does not await (a write must run in its caller's tick) is never read into them. The decisions are applied after, in order; the
-   * returned promise resolves once they are (a post that picks a request awaits it first, so the pick and the header see the result).
-   * Never rejects.
+   * does not await (a write must run in its caller's tick) is never read into them. The decisions are persisted after, in order; the
+   * returned promise resolves once they are (a post that picks a request awaits it first, so the pick and the header see the result)
+   * with the delivery of the wake-ups they decided. The CALLER delivers them — after its own write, so the prompt it writes starts the
+   * turn and a reminder joins it, as the tick would have reminded seconds later; a call with no write of its own (a turn's end) delivers
+   * at once. Never rejects, and neither does the delivery.
    */
-  settleEndedTurnsOf(key: SessionKey): Promise<void> {
+  settleEndedTurnsOf(key: SessionKey): Promise<() => Promise<void>> {
     const probe = this.deps.probeTurn(key);
-    const finishing: Array<Promise<void>> = [];
+    const persisting: Array<Promise<(() => Promise<void>) | null>> = [];
     for (const turn of this.getWatchedTurnsOf(key)) {
       const request = this.getOpenRequestOf(key, turn.requestId);
       if (!request) {
@@ -574,9 +576,14 @@ export class RequestWakeUpEngine {
       if (getWatchedTurnState(turn, probe) !== 'ended') continue;
       this.watched.delete(turn.requestId);
       const decision = this.decideWatchedTurnEnd(turn, request);
-      finishing.push(this.finishEndedTurn(turn, request, probe, decision).catch((e) => logWakeUpFailure(`settling the turn of ${turn.requestId}`, e)));
+      persisting.push(this.persistEndedTurn(turn, request, probe, decision).catch((e) => {
+        logWakeUpFailure(`settling the turn of ${turn.requestId}`, e);
+        return null;
+      }));
     }
-    return Promise.all(finishing).then(() => undefined);
+    return Promise.all(persisting).then((deliveries) => async () => {
+      for (const deliver of deliveries) await deliver?.().catch((e) => logWakeUpFailure(`delivering a settled turn's wake-up in ${keyToString(key)}`, e));
+    });
   }
 
   /** The decision at the end of `turn`, read against `request` and its jobs as they are now. */
@@ -589,10 +596,10 @@ export class RequestWakeUpEngine {
     });
   }
 
-  /** R21 for a request prompt the ended turn took in (a later wake-up is a reminder), then `decision` applied. */
-  private async finishEndedTurn(turn: WatchedRequestTurn, request: OpenRequestState, probe: SessionTurnProbe, decision: WakeUpDecision): Promise<void> {
+  /** R21 for a request prompt the ended turn took in (a later wake-up is a reminder), then `decision` persisted; resolves its wake's delivery. */
+  private async persistEndedTurn(turn: WatchedRequestTurn, request: OpenRequestState, probe: SessionTurnProbe, decision: WakeUpDecision): Promise<(() => Promise<void>) | null> {
     await this.markPromptTakenIn(turn, request, probe);
-    await this.applyDecision(turn.key, request, decision);
+    return this.persistDecision(turn.key, request, decision);
   }
 
   /** R21: once the backend took a request prompt in, a wake-up is a reminder — the agent has read the request. */
@@ -703,11 +710,20 @@ export class RequestWakeUpEngine {
   }
 
   private async applyDecision(key: SessionKey, request: OpenRequestState, decision: WakeUpDecision): Promise<void> {
-    if (decision.kind === 'none') return;
+    const deliverWake = await this.persistDecision(key, request, decision);
+    await deliverWake?.();
+  }
+
+  /**
+   * Persist `decision` (an alert is raised here too) and resolve the delivery of its wake-up, or `null` when it decided none or the
+   * request changed meanwhile. Split from the delivery so a settle before a write can persist at once and deliver after the write.
+   */
+  private async persistDecision(key: SessionKey, request: OpenRequestState, decision: WakeUpDecision): Promise<(() => Promise<void>) | null> {
+    if (decision.kind === 'none') return null;
     if (decision.kind === 'quiet' && decision.isRequestSettled === true) {
       // The alarm's own request, left unanswered by an agent with nothing to report: closed without a word, never woken at the backstop.
       await this.deps.ledger.closeRequest(request.id, 'cancelled');
-      return;
+      return null;
     }
     let isStoppedMeanwhile = false;
     const updated = await this.deps.ledger.updateOpenRequest(request.id, (current) => {
@@ -716,20 +732,26 @@ export class RequestWakeUpEngine {
       return isStoppedMeanwhile ? {} : decision.update;
     });
     // Closed or superseded while we decided: the decision belonged to the old one.
-    if (!updated || isStoppedMeanwhile) return;
-    if (decision.kind === 'followUpLater' || decision.kind === 'quiet') return;
+    if (!updated || isStoppedMeanwhile) return null;
+    if (decision.kind === 'followUpLater' || decision.kind === 'quiet') return null;
     if (decision.kind === 'alert') {
       await this.raiseAlert(key, updated, decision.reason);
-      return;
+      return null;
     }
-    const message = getWakeUpMessage(updated, decision.reason);
+    const { reason } = decision;
+    return () => this.deliverWake(key, updated, reason);
+  }
+
+  /** Deliver a persisted wake-up: the reminder (or the request's prompt again, R21), then its turn watched, or the failure handled. */
+  private async deliverWake(key: SessionKey, updated: OpenRequestState, reason: RequestWakeUpReason): Promise<void> {
+    const message = getWakeUpMessage(updated, reason);
     const outcome = await this.deliverWakeUpSafely(key, updated, message);
     if (outcome === 'delivered') {
       await this.trackForwardedTurn(key, updated.id, { isRequestPrompt: message.isRequestPrompt });
       return;
     }
     if (outcome === 'requestGone') return;
-    if (decision.reason === 'postRetry') {
+    if (reason === 'postRetry') {
       // R28: a retry that failed again tries later; once spent, the backstop decides — no alert yet.
       const retry = getPostRetryUpdate(updated, this.now(), this.deps.firstPostRetryDelayMs);
       if (retry) await this.deps.ledger.updateOpenRequest(updated.id, retry);

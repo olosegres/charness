@@ -144,16 +144,19 @@ A topic in the stream view has no requests: its fires are plain prompts.
 A watch ends with its turn. A new prompt reaches the agent through ONE write, `bot.ts` `forwardPromptToLiveAgent`, which first settles
 the conversation's watches whose turn already ENDED: on a probe taken then, they are dropped and decided against the request as it is,
 before the write (synchronously: no await may come before a write, or a stop queued meanwhile would begin first). A watch whose turn
-still RUNS is left, and the new prompt joins that turn (`trackForwardedTurn` merges, for the same request). A post that waited behind a
-running turn (`postToSession`) also awaits the settle before it picks a request and builds its text, so the pick and the header read
-what the ended turn decided (a scheduler's request its silent end closed is not ridden). A session that is gone is left to the poll.
+still RUNS is left, and the new prompt joins that turn (`trackForwardedTurn` merges, for the same request). A reminder the settle decides
+is persisted first and written AFTER the caller's own write, so the new prompt starts the turn and the reminder joins it, as the tick
+would have reminded seconds later. A post that waited behind a running turn (`postToSession`) also awaits the settle (the decisions, not
+their reminders) before it picks a request and builds its text, so the pick and the header read what the ended turn decided (a
+scheduler's request its silent end closed is not ridden); it delivers the settled reminders after its own forward, on every way out.
+A session that is gone is left to the poll.
 Without the settle a forward that waited would usually start its turn under the old watch (the post forwards within 5 s of the idle,
 the poll ticks every 10 s), and the old request would get the new turn's jobs, its busy time and its end.
 
 | Path that starts a turn | Where it is written | The previous watch |
 |---|---|---|
-| forward after a wait: a Jira request prompt or issue update, the lost-work resume post (`postToSession`, `waitForIdle`) | `settleEndedTurns` awaited after the wait, then the write | ended (the usual case) → settled before the text is built; still running (the 10-minute wait ran out) → joined |
-| immediate forward: a person's text, voice, file, album, `/schedule` in a topic (`deliverLatePrompt`, the startup buffer) | the write | ended → settled before it; running → joined (Claude queues it into the turn, OpenCode interrupts the turn) |
+| forward after a wait: a Jira request prompt or issue update, the lost-work resume post (`postToSession`, `waitForIdle`) | `settleEndedTurns` awaited after the wait, then the write; the settled reminders after it | ended (the usual case) → settled before the text is built, its reminder written after the post's prompt; still running (the 10-minute wait ran out) → joined |
+| immediate forward: a person's text, voice, file, album, `/schedule` in a topic (`deliverLatePrompt`, the startup buffer) | the write; a settled reminder right after it, in the same tick | ended → settled before it; running → joined (Claude queues it into the turn, OpenCode interrupts the turn) |
 | fire: a topic's and a tracker's (`createTopicPost` / `createTrackerPost` over `postToSession`) | as a forward after a wait; a topic's forwards one at a time per conversation | as a forward after a wait; the request it rides is picked after the settle |
 | «continue» after an API error, a limit or account wait, a fallback switch (`apiRetryKick`, `resumeTopicOnNewSession`) | the write, then `trackContinuationTurn` | the turn it continues reads `running` (an armed retry or wait blocks its end, `isTurnEndBlocked`): never settled, the «continue» merges into it (row 14); another request's ended watch → settled |
 | engine reminder: a silent turn, a follow-up, the backstop, a post retry (`applyDecision`) | `forwardRequestWakeUp` → the write | the reminded request's own watch was dropped at its turn's end; another request's ended watch → settled |
@@ -304,7 +307,7 @@ the poll ticks every 10 s), and the old request would get the new turn's jobs, i
   | `lastTurnActivityAt` | `recordTurnActivity` from `trackForwardedTurn` (forced, keyed on the watch it just stored) | the tracked request; a «continue» and a restart wake that carried several requests track each of them; NOT when the watch is another job's fire (`isRequestJob` false: its own forward or a «continue» of it) | **Yes, by design**: one session turn, every request in it is watched, and its end is decided for each. A ridden request is never written by another job's fire or its «continue» |
   | | `recordTurnActivity` from a busy poll of a watched turn | the watched request itself, unless the watch is another job's fire (`isRequestJob` false: the busy time is that job's) | No — since a write settles the watches whose turn ended (§ Turn starts), a watch present belongs to the running turn: it never records the busy time of the NEXT request's turn |
   | | `recordTurnActivity` from the sweep's busy branch | the unwatched request | **Narrowed** (rows 2, 11): recorded only while NO turn is watched in the conversation, whatever the request owes — then the busy session is the request's own lost turn (or one untracked turn of row 18). With a turn watched the busy time is that turn's: recorded, it would push the backstop of a request whose watch fired and nobody handled (`armed`, or `none` after a dropped watch: no follow-up, the backstop is its only wake). A held request ignores the backstop anyway, and a due follow-up is woken by `nextWakeAt`, which activity does not move |
-  | | `decideTurnEnd` / `decideUnwatchedRequest` / `decideRestartWake` updates, applied by `applyDecision` | the decided request; the no-answer quiet end of another job's fire writes nothing (`nextWakeAt` stays too) | No |
+  | | `decideTurnEnd` / `decideUnwatchedRequest` / `decideRestartWake` updates, applied by `applyDecision` (a settle's by `persistDecision`, its reminder written after the caller's write) | the decided request; the no-answer quiet end of another job's fire writes nothing (`nextWakeAt` stays too) | No |
   | | `wakeAfterRestart` (writes `decision.update` itself; only its alert goes through `applyDecision`) | each request it wakes, for itself — with `isLostWork` (row 19) also a request a passing watch holds, still only for itself | No |
 
   The one reader that decides more than the owed reading from these fields: `progressAnswerCount` 0 on the scheduler's request

@@ -52,14 +52,30 @@ describe('postToSession', () => {
       sleep: async () => { isBusy = false; },
       settleEndedTurns: async (conversationKey) => {
         calls.push(`settle ${conversationKey}`);
+        return async () => { calls.push('deliver the settled wakes'); };
       },
     });
     assert.deepEqual(await postToSession(deps, 'k', prompt), { ok: true, isHeld: false });
-    assert.deepEqual(calls, ['ensure k -', 'settle k', 'ensure k -', 'build', 'forward k built']);
+    // The settle's reminders come AFTER the waited prompt: that prompt starts the turn (review 15 #2).
+    assert.deepEqual(calls, ['ensure k -', 'settle k', 'ensure k -', 'build', 'forward k built', 'deliver the settled wakes']);
 
     const idle: string[] = [];
-    await postToSession(createDeps(idle, { settleEndedTurns: async () => { idle.push('settle'); } }), 'k', 'p');
-    assert.deepEqual(idle, ['ensure k -', 'settle', 'forward k p'], 'an idle session too: a turn may have ended seconds before');
+    await postToSession(createDeps(idle, { settleEndedTurns: async () => { idle.push('settle'); return async () => { idle.push('deliver'); }; } }), 'k', 'p');
+    assert.deepEqual(idle, ['ensure k -', 'settle', 'forward k p', 'deliver'], 'an idle session too: a turn may have ended seconds before');
+  });
+
+  it('the settled wakes are delivered on every way out after the settle — a hold, a failed ensure, a forward that throws: a decision already persisted is never left undelivered', async () => {
+    const outcomes: string[] = [];
+    const withSettle = (overrides: Partial<PostToSessionDeps>): PostToSessionDeps => createDeps(outcomes, {
+      settleEndedTurns: async () => async () => { outcomes.push('deliver'); },
+      ...overrides,
+    });
+    let holds = 0;
+    await postToSession(withSettle({ holdForLimitResume: () => { holds += 1; return holds > 1; } }), 'k', 'p');
+    assert.deepEqual(outcomes.at(-1), 'deliver', 'held after the settle');
+    outcomes.length = 0;
+    await postToSession(withSettle({ forwardPrompt: async () => { throw new Error('write failed'); } }), 'k', 'p');
+    assert.deepEqual(outcomes.at(-1), 'deliver', 'a forward that failed');
   });
 
   it('a session that cannot be ensured is never forwarded to', async () => {
