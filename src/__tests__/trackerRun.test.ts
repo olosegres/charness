@@ -38,9 +38,9 @@ describe('pickScheduledRunTarget', () => {
   });
 
   it('with no request of its own open, rides the newest open one — the last of the oldest-first list the ledger returns', () => {
-    const older = createRequest('req_Older001', 1000);
-    const middle = createRequest('req_Middle01', 3000);
-    const newest = createRequest('req_Newest01', 5000);
+    const older = createRequest('req_Older001', { createdAt: 1000 });
+    const middle = createRequest('req_Middle01', { createdAt: 3000 });
+    const newest = createRequest('req_Newest01', { createdAt: 5000 });
     assert.deepEqual(pickScheduledRunTarget({ requestId: 'req_Closed001' }, [older, middle, newest]), { kind: 'request', request: newest });
     assert.deepEqual(pickScheduledRunTarget({ requestId: undefined }, [older, newest]), { kind: 'request', request: newest });
   });
