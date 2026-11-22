@@ -290,11 +290,16 @@ test('getIdleFireDecision: the overdue boot fire (the bot was down past the wind
 
 test('getIdleFireDecision: a compaction that was not due anyway is not "held" — no notice for a skip the hold did not cause', () => {
   const working = [{ kind: 'backgroundTasks', count: 1 }] as const;
-  for (const override of [{ isEnabled: false }, { isLatched: true }, { hasCompletedTurnSinceCompaction: false }, { isLimitWaitArmed: true }, { isSessionActive: false }]) {
+  // The latch is a compaction blocker only where the process stays alive (see the latch tests below).
+  for (const override of [{ isEnabled: false }, { isLatched: true, canSuspend: false }, { hasCompletedTurnSinceCompaction: false }, { isLimitWaitArmed: true }, { isSessionActive: false }]) {
     const decision = getIdleFireDecision({ ...fireBase, ...override, workingSignals: working });
     assert.equal(decision.isIdleMarkHeld, false, JSON.stringify(override));
     assert.equal(decision.heldNoticeReason, null, JSON.stringify(override));
   }
+  // A latched but suspendable process held at the mark WOULD have compacted: the hold costs it, so it is held and told.
+  const latchedSuspendable = getIdleFireDecision({ ...fireBase, isLatched: true, workingSignals: working });
+  assert.equal(latchedSuspendable.isIdleMarkHeld, true);
+  assert.equal(latchedSuspendable.heldNoticeReason, 'backgroundWork');
 });
 
 test('getIdleCompactionArmDecision: a shortened window shortens the overdue floor and spread in proportion — a test\'s 12 s window does not wait out a minute', () => {
@@ -331,7 +336,6 @@ test('getIdleFireDecision: a RE-CHECK of a held mark never compacts — a compac
 test('getIdleFireDecision: each compaction guard skips the compaction but the stop still happens (L-D1, L-D6)', () => {
   const cases: Array<[Partial<IdleFireInput>, string]> = [
     [{ isEnabled: false }, 'disabled'],
-    [{ isLatched: true }, 'latched (D2)'],
     [{ hasCompletedTurnSinceCompaction: false }, 'nothing to compress'],
     [{ isLimitWaitArmed: true }, 'a usage-limit wait is armed (L-D6)'],
   ];
@@ -341,6 +345,24 @@ test('getIdleFireDecision: each compaction guard skips the compaction but the st
     assert.deepEqual(decision.compactionSkipReasons, [reason]);
     assert.equal(decision.shouldSuspend, true, `${reason}: the stop happens regardless`);
   }
+});
+
+test('getIdleFireDecision: the user-latch (D2) blocks the compaction only on a backend that is not stopped — a stopped one compacts at every idle mark, then sleeps (owner, 2026-11-22)', () => {
+  // A topic woken only by its own checks and worker watches never clears the latch: the stop must still be preceded by a compaction.
+  const stopped = getIdleFireDecision({ ...fireBase, isLatched: true });
+  assert.equal(stopped.shouldCompact, true, 'latched + suspendable + a turn since the last compaction: compact first');
+  assert.deepEqual(stopped.compactionSkipReasons, []);
+  assert.equal(stopped.shouldSuspend, true, 'and then the stop');
+  // Nothing new to compress is still a skip, latched or not: no loop of compactions on a stopped backend.
+  const nothingNew = getIdleFireDecision({ ...fireBase, isLatched: true, hasCompletedTurnSinceCompaction: false });
+  assert.equal(nothingNew.shouldCompact, false);
+  assert.deepEqual(nothingNew.compactionSkipReasons, ['nothing to compress']);
+  assert.equal(nothingNew.shouldSuspend, true);
+  // An always-alive backend (tmux TUI, OpenCode) keeps the owner's D2: at most one idle compaction per user-active period.
+  const alive = getIdleFireDecision({ ...fireBase, isLatched: true, canSuspend: false });
+  assert.equal(alive.shouldCompact, false);
+  assert.deepEqual(alive.compactionSkipReasons, ['latched (D2)']);
+  assert.equal(alive.shouldSuspend, false);
 });
 
 test('getIdleFireDecision: a backend that cannot be suspended keeps its process (L-D8) — the compaction alone', () => {

@@ -1170,7 +1170,8 @@ function endTurnAfterSetAsideQuestion(sessionId: string): void {
 
 /**
  * `[fake:schedule-once <seconds> <label>]` (see `fakeScheduleOnceToken`): create the one-shot prompt schedule the token names,
- * on the bot's MCP, BEFORE the turn asks its question — the bot then delivers a prompt of its own while the question waits.
+ * on the bot's MCP, early in the turn — BEFORE it asks its question, when it asks one — so the bot delivers a prompt of its own
+ * later, whether the turn waits on a question or has long ended.
  */
 const scheduleOnceRe = /\[fake:schedule-once (\d+) ([^\]]+)\]/;
 
@@ -1382,6 +1383,7 @@ async function runTurn(argv: readonly string[], sessionId: string, content: stri
     await runTodoTokens(getBotMcpServer(argv), content, noRequestIssueKey);
     await waitTurnWork(content);
     await runLateToolCall(argv, sessionId, content, noRequestIssueKey);
+    await armScheduledPrompt(argv, content, noRequestIssueKey);
     // A turn without a request honours three modes, by the token in ITS OWN text: `ask` (a question needs no request
     // to be put to the user), `usage-limit-once` (a limit needs none to stop the turn; the bot's later "continue"
     // nudge carries no token, so it is answered — the "once") and `overflow` (the CLI's own compaction needs none).
@@ -1393,7 +1395,6 @@ async function runTurn(argv: readonly string[], sessionId: string, content: stri
     }
     const noRequestAskVariant = noRequestMode === undefined ? undefined : fakeAskVariantByMode[noRequestMode as FakeClaudeMode];
     if (noRequestAskVariant) {
-      await armScheduledPrompt(argv, content, noRequestIssueKey);
       const asked = await askUserQuestion(noRequestAskVariant, { isAskedAgainWhenSetAside: noRequestMode === 'ask-again', questionVariant: getFakeQuestionVariant(content) });
       appendJsonLine(fakeClaudeLogFileNames.toolCalls, { issueKey: noRequestIssueKey, tool: fakeAskToolName, args: { question: fakeAskQuestion.question }, outcome: asked.outcome });
       if (asked.isSetAside) {
@@ -1441,6 +1442,7 @@ async function runTurn(argv: readonly string[], sessionId: string, content: stri
   await runTodoTokens(server, content, state.issueKey);
   await waitTurnWork(content);
   await runLateToolCall(argv, sessionId, content, state.issueKey);
+  await armScheduledPrompt(argv, content, state.issueKey);
   const replyToCommentIds = state.mode === 'reply-to' ? (replyToIdsRe.exec(content)?.[1] ?? '').split(',').filter(Boolean) : [];
   const answerFiles = (answerFilesRe.exec(content)?.[1] ?? '').split(',').filter(Boolean);
   const answer = async (answeredRequestId: string, kind: string, turnCount: number, body = `Fake ${kind} answer for ${state.issueKey} (${state.mode}, turn ${turnCount}).`): Promise<string> => {
@@ -1504,7 +1506,6 @@ async function runTurn(argv: readonly string[], sessionId: string, content: stri
   }
   const askVariant = fakeAskVariantByMode[state.mode];
   if (askVariant) {
-    await armScheduledPrompt(argv, content, state.issueKey);
     const asked = await askUserQuestion(askVariant, { isAskedAgainWhenSetAside: state.mode === 'ask-again', questionVariant: getFakeQuestionVariant(content) });
     logToolCall(fakeAskToolName, { question: fakeAskQuestion.question }, asked.outcome);
     if (asked.isSetAside) {

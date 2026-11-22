@@ -272,12 +272,15 @@ export interface IdleFireDecision {
  * {@link checkIsBusyForRealTurn}; D1); the next activity re-arms the timer. The reasons name WHICH signals hold the
  * process (`working (busy turn, unconsumed input 2)`).
  *
- * The compaction runs only when the feature is enabled for the thread, the
- * per-thread user-latch is NOT already spent (D2 — after a fire it stays latched
- * until the next genuine USER message re-arms it, so idle compaction runs at most
- * once per user-active period), at least one agent turn has completed since the
- * last compaction (otherwise there is nothing new to compress), and no
- * usage-limit wait is armed (L-D6: a compaction turn would hit the limit).
+ * The compaction runs only when the feature is enabled for the thread, at least one agent turn has completed since the
+ * last compaction (otherwise there is nothing new to compress), and no usage-limit wait is armed (L-D6: a compaction turn
+ * would hit the limit). On a backend that is NOT stopped at the idle mark (`!canSuspend`: the tmux TUI, OpenCode) the
+ * per-thread user-latch must also be unspent (D2 — after a fire it stays latched until the next genuine USER message re-arms
+ * it, so idle compaction runs at most once per user-active period). On a backend that IS stopped the latch blocks nothing
+ * (owner, 2026-11-22: «compaction first, then the topic goes to sleep»): the stop ends the idle period, so a compaction at
+ * every idle mark that has a completed turn since the last one cannot loop, and a topic woken only by its own checks and
+ * worker watches — no person message to clear the latch — is still compacted before each sleep. This revises the earlier
+ * rule that listed «latched» among the cases where the stop happens WITHOUT the compaction (L-D1).
  *
  * The compaction belongs to the IDLE MARK alone: it exists to read the still-warm prompt cache, which is gone a little after the
  * idle window (`idleCompactMs`), so a compaction later than the mark is only an expensive one. A process held at the mark
@@ -302,6 +305,7 @@ export function getIdleFireDecision(input: {
   /** This fire's countdown was armed (the overdue arm) when the idle mark had already passed: the prompt cache is cold. */
   isIdleMarkMissed: boolean;
   isEnabled: boolean;
+  /** The user-latch (D2) is spent; it blocks the compaction only where the process is not stopped at the mark (`canSuspend: false`). */
   isLatched: boolean;
   hasCompletedTurnSinceCompaction: boolean;
   isLimitWaitArmed: boolean;
@@ -310,7 +314,8 @@ export function getIdleFireDecision(input: {
   const isWorking = input.workingSignals.length > 0;
   const compactionBlockers = [
     !input.isEnabled && 'disabled',
-    input.isLatched && 'latched (D2)',
+    // D2 holds only for a backend that stays alive; one that is stopped at the mark compacts, then sleeps.
+    input.isLatched && !input.canSuspend && 'latched (D2)',
     !input.hasCompletedTurnSinceCompaction && 'nothing to compress',
     input.isLimitWaitArmed && 'a usage-limit wait is armed (L-D6)',
     input.isIdleMarkMissed && 'the idle mark had already passed when the countdown was armed (the prompt cache is cold by now)',

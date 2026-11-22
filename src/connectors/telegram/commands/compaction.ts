@@ -581,7 +581,9 @@ export function createCompaction(ports: CompactionPorts) {
    * compaction is in flight. On a backend that is STOPPED at the idle mark
    * (`suspendSession`, L3) the timer is armed regardless of the compaction toggle
    * and the user-latch: the stop happens either way (L-D1), and the fire decides
-   * the compaction. On any other backend the timer exists for the compaction
+   * the compaction — and the latch does not hold it back there (owner, 2026-11-22: the
+   * compaction runs at every idle mark with a turn since the last one, then the stop).
+   * On any other backend the timer exists for the compaction
    * alone, so it is armed only when the feature is enabled for the thread AND the
    * user-latch is NOT spent (D2): once an idle-compaction has fired this
    * user-active period the thread stays latched — agent output resets nothing, and
@@ -607,7 +609,8 @@ export function createCompaction(ports: CompactionPorts) {
     // activity worth recording — the latch only suppresses the TIMER.
     if (opts.isRealActivity) getState().noteCompactIdleActivity(key, now);
     // D2: a spent latch means idle-compaction already fired this user-active period
-    // — do NOT re-arm until a genuine USER message clears the latch.
+    // — do NOT re-arm until a genuine USER message clears the latch. Only for a
+    // backend that stays alive: a stopped one is armed and compacts at every mark.
     if (!isSuspendable && getState().checkIsCompactIdleLatched(key)) return;
     const { lastActivityAt } = getState().getCompactIdleTracking(key);
     const { delayMs, kind } = getIdleCompactionArmDecision({ threadKeyString: kStr, lastActivityAt, now, idleWindowMs });
@@ -647,7 +650,10 @@ export function createCompaction(ports: CompactionPorts) {
    * start (D2): clear the spent idle-compaction latch so the next idle period can
    * compact again, THEN reset/arm the idle timer. Distinct from
    * {@link noteThreadActivity} — which agent output and bot-initiated forwards also
-   * call — because those must NEVER re-arm the latch, only a real user does.
+   * call — because those must NEVER re-arm the latch, only a real user does. The latch
+   * matters only to a backend that stays alive (tmux TUI, OpenCode): a stopped one
+   * (json-stream, per-turn) compacts at every idle mark whatever the latch says, so a
+   * topic woken only by its own checks and worker watches is still compacted before it sleeps.
    */
   function noteThreadUserActivity(key: SessionKey): void {
     if (getState().checkIsCompactIdleLatched(key)) {
@@ -709,19 +715,25 @@ export function createCompaction(ports: CompactionPorts) {
   }
 
   /**
-   * @description The idle timer fired (F2 + lifecycle plan L3): nothing while the
-   * process works; else compact once when the guard allows (D1/D2, L-D6), then — on
-   * a backend that can be suspended — stop the process, the session kept resumable
-   * (L-D1: whether or not the compaction ran). The stop re-checks "working" after
-   * the compaction: a prompt taken in meanwhile keeps the process.
+   * Whether the idle compaction has something to do for a SLEEPING per-turn session (L-D7): enabled and a turn since the last
+   * compaction. Not the user-latch (D2): a per-turn session is stopped at the mark, so the latch blocks nothing there and a
+   * session woken only by the bot's own checks is resumed for its compaction too ({@link getIdleFireDecision}).
    */
-  /** Whether the idle compaction has something to do for the topic: enabled, not latched (D2), a turn since the last compaction. */
   function checkIsCompactionDue(key: SessionKey): boolean {
-    if (!getState().checkIsCompactOnIdleEnabled(key) || getState().checkIsCompactIdleLatched(key)) return false;
+    if (!getState().checkIsCompactOnIdleEnabled(key)) return false;
     const { lastTurnEndAt, lastCompactionAt } = getState().getCompactIdleTracking(key);
     return lastTurnEndAt > lastCompactionAt;
   }
 
+  /**
+   * @description The idle timer fired (F2 + lifecycle plan L3): nothing while the
+   * process works; else compact once when the guard allows (D1/D2, L-D6), then — on
+   * a backend that can be suspended — stop the process, the session kept resumable.
+   * The compaction comes first and the stop follows it whether or not it ran (L-D1); the
+   * user-latch (D2) holds the compaction back only where the process is not stopped.
+   * The stop re-checks "working" after the compaction: a prompt taken in meanwhile
+   * keeps the process.
+   */
   async function onIdleCompactionTimerFired(key: SessionKey): Promise<void> {
     const kStr = keyToString(key);
     const adapter = getThreadAdapter(key);
@@ -780,10 +792,10 @@ export function createCompaction(ports: CompactionPorts) {
     }
     if (!decision.shouldSuspend) {
       // D2: no reschedule. A real running turn resets the timer via
-      // `noteThreadActivity` with its output and its end; every other miss re-arms
-      // only on the next genuine USER message (which clears the latch) — except a
-      // process kept only by the agent's own pending work, which is looked at
-      // again (bounded hold).
+      // `noteThreadActivity` with its output and its end; on a backend that stays alive
+      // every other miss re-arms only on the next genuine USER message (which clears the
+      // latch) — except a process kept only by the agent's own pending work, which is
+      // looked at again (bounded hold).
       console.log(`[compact-on-idle] ${kStr} process kept: ${decision.suspendSkipReasons.join(', ')}`);
       armPendingWorkRecheck(key, adapter);
       return;
@@ -850,9 +862,10 @@ export function createCompaction(ports: CompactionPorts) {
     const hasPendingQuestion = pendingQuestions.has(kStr);
 
     // D2: latch the thread the instant the fire is decided (BEFORE any output) and
-    // persist it, so a bot restart can't re-fire and no second compaction runs this
-    // user-active period. Stamp `lastCompactionAt` too so the re-fire guard holds
-    // even if the compaction itself runs long.
+    // persist it, so a bot restart can't re-fire and, on a backend that stays alive, no
+    // second compaction runs this user-active period (a stopped backend compacts again at
+    // its next idle mark: the latch does not block it). Stamp `lastCompactionAt` too so the
+    // re-fire guard holds even if the compaction itself runs long.
     void getState().setCompactIdleLatched(key, true);
     // Awaited (unlike the latch): the stamp must be in place BEFORE the compaction
     // starts, since it is what closes the "has an un-compacted turn" guard.
