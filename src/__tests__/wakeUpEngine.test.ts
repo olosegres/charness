@@ -1298,6 +1298,61 @@ describe('the restart wake: a tracker conversation whose process was found gone 
       mock.timers.reset();
     }
   });
+  it('a process that ended with the agent\'s OWN work pending wakes a request a passing watch holds — once, the watch notwithstanding; a boot does not', async () => {
+    mock.timers.enable({ apis: ['setTimeout', 'Date'], now: nowMs });
+    const engines: RequestWakeUpEngine[] = [];
+    try {
+      const ledger = await createLedger();
+      const engine = createEngine(ledger, { restartWakeStaggerMs: 30_000, getScheduleWait: () => 'watching' });
+      engines.push(engine);
+      const request = await ledger.createRequest(issueKey, handOver('ann'));
+      await ledger.updateOpenRequest(request.id, { progressAnswerCount: 1 });
+      probe = goneProbe;
+
+      assert.equal(engine.scheduleRestartWake(issueKey), false, 'a boot: held by the watch, nobody is woken');
+      assert.equal(engine.scheduleRestartWake(issueKey, { isLostWork: true }), true, 'the agent\'s own work died with the process: scheduled');
+      mock.timers.tick(30_000);
+      for (let round = 0; round < 10; round += 1) await new Promise((resolve) => setImmediate(resolve));
+      assert.deepEqual(wakeUps, [{ requestId: request.id, reason: 'restarted' }], 'woken once, the lost-work note rides this wake');
+      assert.equal(ledger.getNewestOpenRequest(issueKey)?.wakeCount, 1, 'it counts against the wake-up cap like any wake');
+
+      // The wake\'s turn: nothing is owed and the watch passes — the agent reads the note and may stay silent.
+      await endTurnSilently(engine);
+      assert.deepEqual(wakeUps, [{ requestId: request.id, reason: 'restarted' }], 'a quiet end: no reminder for it');
+      assert.deepEqual(alerts, []);
+      assert.equal(ledger.getNewestOpenRequest(issueKey)?.silentTurnCount, 0);
+    } finally {
+      for (const engine of engines) engine.stop();
+      mock.timers.reset();
+    }
+  });
+
+  it('a loss that comes while a boot wake already waits turns that wake into a lost-work one: the request a watch holds is woken with the others', async () => {
+    mock.timers.enable({ apis: ['setTimeout', 'Date'], now: nowMs });
+    const engines: RequestWakeUpEngine[] = [];
+    try {
+      const ledger = await createLedger();
+      const engine = createEngine(ledger, {
+        restartWakeStaggerMs: 30_000,
+        getScheduleWait: (_key, request) => (request.origin.attributes.requester === 'ann' ? 'watching' : 'none'),
+      });
+      engines.push(engine);
+      const held = await ledger.createRequest(issueKey, handOver('ann'));
+      await ledger.updateOpenRequest(held.id, { progressAnswerCount: 1 });
+      const unheld = await ledger.createRequest(issueKey, handOver('bob'));
+      probe = goneProbe;
+      assert.equal(engine.scheduleRestartWake(issueKey), true, 'a boot wake: bob\'s request is not held');
+      assert.equal(engine.scheduleRestartWake(issueKey, { isLostWork: true }), false, 'one wake per conversation at a time');
+      mock.timers.tick(30_000);
+      for (let round = 0; round < 10; round += 1) await new Promise((resolve) => setImmediate(resolve));
+      const wakeCounts = new Map(ledger.listOpenRequestsOf(issueKey).map((request) => [request.id, request.wakeCount]));
+      assert.equal(wakeCounts.get(unheld.id), 1);
+      assert.equal(wakeCounts.get(held.id), 1, 'the loss was remembered: ann\'s request, held by its watch, is woken too');
+    } finally {
+      for (const engine of engines) engine.stop();
+      mock.timers.reset();
+    }
+  });
 });
 
 describe('a request waits for its schedule', () => {

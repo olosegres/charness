@@ -141,6 +141,8 @@ export class RequestWakeUpEngine {
   private isSweeping = false;
   /** The `restarted` wakes waiting for their turn, by serialized conversation key (one per conversation). */
   private readonly restartWakeTimers = new Map<string, NodeJS.Timeout>();
+  /** Conversations whose pending restart wake was asked for by a LOST-WORK loss, not by a boot: no watch holds that one. */
+  private readonly lostWorkWakes = new Set<string>();
   /** When the last scheduled `restarted` wake is due: the next one is a stagger after it. */
   private lastRestartWakeDueAt = 0;
 
@@ -173,6 +175,7 @@ export class RequestWakeUpEngine {
     this.sweepTimer = null;
     for (const timer of this.restartWakeTimers.values()) clearTimeout(timer);
     this.restartWakeTimers.clear();
+    this.lostWorkWakes.clear();
   }
 
   /**
@@ -181,20 +184,28 @@ export class RequestWakeUpEngine {
    * instead of at the backstop. One wake per conversation at a time — a second call while one waits changes nothing.
    * Whether the requests still need it is decided when it is due (`decideRestartWake`). Returns `false` when one
    * was already waiting, or when every open request is held by a watch that is not failing and owes nobody an answer
-   * (`checkIsHeldBetweenTurns`: a restart wakes nobody then, as in a topic). The timer is unref'd: it never keeps the process alive.
+   * (`checkIsHeldBetweenTurns`: a BOOT wakes nobody then, as in a topic). `isLostWork` — the process ended with the agent's own work
+   * pending — is the other event: a topic resumes on it whatever is armed, so no watch holds the wake, and a boot wake already
+   * waiting becomes one (the flag is remembered, the call still returns `false`). The timer is unref'd: it never keeps the process alive.
    */
-  scheduleRestartWake(key: SessionKey): boolean {
+  scheduleRestartWake(key: SessionKey, options: { isLostWork?: boolean } = {}): boolean {
     const conversationKey = keyToString(key);
-    if (this.restartWakeTimers.has(conversationKey)) return false;
-    // Every open request is held by a watch that is not failing and owes nobody an answer: nobody is woken, and no stagger slot is spent on it.
+    const isLostWork = options.isLostWork === true;
+    if (this.restartWakeTimers.has(conversationKey)) {
+      if (isLostWork) this.lostWorkWakes.add(conversationKey);
+      return false;
+    }
+    // Every open request is held by a watch that is not failing and owes nobody an answer: nobody is woken at a boot, and no stagger slot is spent on it.
     const openRequests = this.deps.ledger.listOpenRequestsOf(key);
-    if (openRequests.length > 0 && openRequests.every((request) => checkIsHeldBetweenTurns(request, this.getScheduleWait(key, request)))) return false;
+    if (!isLostWork && openRequests.length > 0 && openRequests.every((request) => checkIsHeldBetweenTurns(request, this.getScheduleWait(key, request)))) return false;
+    if (isLostWork) this.lostWorkWakes.add(conversationKey);
     const staggerMs = this.deps.restartWakeStaggerMs ?? restartWakeStaggerMs;
     const dueAt = Math.max(this.now(), this.lastRestartWakeDueAt) + staggerMs;
     this.lastRestartWakeDueAt = dueAt;
     const timer = setTimeout(() => {
       this.restartWakeTimers.delete(conversationKey);
-      void this.wakeAfterRestart(key).catch((e) => logWakeUpFailure(`the restart wake of ${conversationKey}`, e));
+      const isLostWorkWake = this.lostWorkWakes.delete(conversationKey);
+      void this.wakeAfterRestart(key, { isLostWork: isLostWorkWake }).catch((e) => logWakeUpFailure(`the restart wake of ${conversationKey}`, e));
     }, dueAt - this.now());
     timer.unref?.();
     this.restartWakeTimers.set(conversationKey, timer);
@@ -208,13 +219,13 @@ export class RequestWakeUpEngine {
    * continuation nudge's turn is. A request at the cap gets its alert instead. A delivery that fails is logged and
    * left to the backstop (counted from now): no alert of its own. Exported for tests (the timer calls it).
    */
-  async wakeAfterRestart(key: SessionKey): Promise<void> {
+  async wakeAfterRestart(key: SessionKey, options: { isLostWork?: boolean } = {}): Promise<void> {
     const probe = this.deps.probeTurn(key);
     const nowMs = this.now();
     const woken: OpenRequestState[] = [];
     for (const request of this.deps.ledger.listOpenRequestsOf(key)) {
       if (this.watched.has(request.id)) continue;
-      const decision = decideRestartWake(request, probe, nowMs, this.getScheduleWait(key, request));
+      const decision = decideRestartWake(request, probe, nowMs, this.getScheduleWait(key, request), options.isLostWork === true);
       if (decision.kind === 'alert') {
         await this.applyDecision(key, request, decision);
         continue;

@@ -416,6 +416,17 @@ describe('a request that waits for its schedule (scheduleWait) and a scheduled r
     assert.equal(decideUnwatchedRequest(dueFollowUp, idleProbe, nowMs, backstopMs, 'watching').kind, 'wake');
   });
 
+  it('restart wake: a LOST-WORK loss (the agent\'s own work died with the process) wakes a request a passing watch holds — the hold is for a boot; every other guard stays', () => {
+    assert.deepEqual(decideRestartWake(answeredRequest(), goneProbe, nowMs, 'watching'), { kind: 'none' }, 'a boot: held');
+    const decision = decideRestartWake(answeredRequest(), goneProbe, nowMs, 'watching', true);
+    assert.equal(decision.kind === 'wake' ? decision.reason : null, 'restarted');
+    const busy: SessionTurnProbe = { ...goneProbe, isBusy: true };
+    assert.equal(decideRestartWake(answeredRequest(), busy, nowMs, 'watching', true).kind, 'none', 'a working session is never woken');
+    assert.equal(decideRestartWake(answeredRequest({ nextWakeAt: nowMs + 1 }), goneProbe, nowMs, 'watching', true).kind, 'none', 'a request with its own next step');
+    assert.equal(decideRestartWake(answeredRequest({ isWakeStopped: true }), goneProbe, nowMs, 'watching', true).kind, 'none', 'given up on');
+    assert.equal(decideRestartWake(answeredRequest({ wakeCount: 10 }), goneProbe, nowMs, 'watching', true).kind, 'alert', 'the cap stays');
+  });
+
   it('restart wake: a request that owes an answer is woken at once though a watch passes; one that owes nothing is not', () => {
     assert.equal(decideRestartWake(answeredRequest({ isPersonInputUnanswered: true }), goneProbe, nowMs, 'watching').kind, 'wake');
     assert.equal(decideRestartWake(answeredRequest({ silentTurnCount: 1 }), goneProbe, nowMs, 'watching').kind, 'wake');

@@ -14217,7 +14217,7 @@ async function noteLostWork(key: SessionKey, lostWork: LostWork | null, reason: 
   let planText = plan.isAutoResume ? 'resuming it with a note' : 'the note rides the next prompt';
   if (plan.isRequestWake) planText = 'its open request is woken, and the note rides that wake';
   console.log(`[lost-work] ${kStr}: the process ended (${reason}) with the agent's own work pending (${record.backgroundTasks.length} background task(s), ${record.scheduledJobCount} scheduled job(s)${record.hasUnreadTaskResult ? ', an unread task result' : ''}${record.wasTurnInFlight ? ', a cut-off turn' : ''}); ${planText}`);
-  if (plan.isRequestWake) scheduleTrackerRestartWake(key, `its process ended (${reason}) with its own work pending`);
+  if (plan.isRequestWake) scheduleTrackerRestartWake(key, `its process ended (${reason}) with its own work pending`, { isLostWork: true });
   let linePlan = plan;
   if (plan.isAutoResume) {
     await state.setLostWorkResumedAt(key, now);
@@ -14233,14 +14233,19 @@ async function noteLostWork(key: SessionKey, lostWork: LostWork | null, reason: 
  * lost-work path and is never woken here. The lost-work cooldown guards it as well: a conversation woken
  * automatically within it is left to the backstop, so a crash loop is no wake loop.
  */
-function scheduleTrackerRestartWake(key: SessionKey, why: string): void {
+function scheduleTrackerRestartWake(key: SessionKey, why: string, options: { isLostWork?: boolean } = {}): void {
   if (checkIsTelegramKey(key) || !requestWakeUpEngine) return;
   const lastAutoResumeAt = state.getLostWorkResumedAt(key);
   if (lastAutoResumeAt !== undefined && Date.now() - lastAutoResumeAt < lostWorkResumeCooldownMs) {
     console.log(`[requests] ${keyToString(key)}: ${why}; it was woken automatically less than ${lostWorkResumeCooldownMs / 60_000} min ago, so the backstop takes it`);
     return;
   }
-  if (requestWakeUpEngine.scheduleRestartWake(key)) console.log(`[requests] ${keyToString(key)}: ${why}; its open request is woken shortly`);
+  if (requestWakeUpEngine.scheduleRestartWake(key, options)) {
+    console.log(`[requests] ${keyToString(key)}: ${why}; its open request is woken shortly`);
+    return;
+  }
+  // Said, not silent: the caller's own line may have promised a wake (`noteLostWork`).
+  console.log(`[requests] ${keyToString(key)}: ${why}; no wake was scheduled (one is already waiting, or no open request needs it: each is held by a watch that owes nobody an answer, as at a boot)`);
 }
 
 /**

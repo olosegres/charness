@@ -241,8 +241,10 @@ export function decideUnwatchedRequest(
  * @description The wake of an open request whose conversation's process was found gone (`restarted`): at once, not at
  * the backstop. Nothing when the request already has its own next step — a post retry or a progress follow-up — or
  * nothing may wake it, or the session is working or blocked (a pending question, an armed retry or usage-limit wait, a
- * start under way), or a watch that is not failing holds it while it owes nobody an answer (`checkIsHeldBetweenTurns`: a restart
- * wakes nobody then, as in a topic).
+ * start under way), or a watch that is not failing holds it while it owes nobody an answer (`checkIsHeldBetweenTurns`: a BOOT
+ * wakes nobody then, as in a topic). `isLostWork` — the process ended with the agent's OWN work pending (a build, a scheduled job it
+ * had running) — is a different event: a topic resumes on it whatever is armed, so the hold does not apply and the request is woken
+ * once, the lost-work note riding the wake.
  * It counts against the wake-up cap like any wake, and is seen activity: the backstop counts from it.
  */
 export function decideRestartWake(
@@ -250,10 +252,11 @@ export function decideRestartWake(
   probe: SessionTurnProbe,
   nowMs: number,
   scheduleWait: RequestScheduleWait = 'none',
+  isLostWork = false,
 ): WakeUpDecision {
   if (checkIsWakingStopped(request) || probe.isBusy || probe.isTurnEndBlocked) return { kind: 'none' };
   if (request.nextPostRetryAt !== undefined || request.nextWakeAt !== undefined) return { kind: 'none' };
-  if (checkIsHeldBetweenTurns(request, scheduleWait)) return { kind: 'none' };
+  if (!isLostWork && checkIsHeldBetweenTurns(request, scheduleWait)) return { kind: 'none' };
   return getWakeOrCapDecision(request, 'restarted', { lastTurnActivityAt: nowMs });
 }
 
