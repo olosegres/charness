@@ -266,13 +266,13 @@ function buildTelegramInstructions(isTodoToolOffered: boolean, remoteRunInstruct
 
 When to use it:
 • The user asks to run/finish a plan or task LATER ("in 2h", "tomorrow 9am", "every weekday") → schedule_create. Put the work in \`prompt\`; the future run is a fresh session with no memory of this chat. Not CronCreate / ScheduleWakeup for anything that must happen: they die with your process, which the bot stops after a long idle stretch.
-• You produced a file/chart/screenshot/video to deliver → send_file_to_user (images over ${telegramPhotoMaxSidePx} px go as a file). Videos MUST be H.264 .mp4, never as_file/document/.webm/.mov (they render as GIFs or don't play); transcode if needed (see tool description).
-• You want to deliver SEVERAL discrete messages (each its own message, e.g. a per-item news digest) → send_messages_to_user; an item may attach ONE file (the text becomes its caption).
+• You produced a file/chart/screenshot/video to deliver → send_file_to_user (images over ${telegramPhotoMaxSidePx} px go as a file). Videos MUST be H.264 .mp4, never as_file/document/.webm/.mov (they render as GIFs or don't play); transcode if needed.
+• You want to deliver SEVERAL discrete messages (e.g. a per-item news digest) → send_messages_to_user; an item may attach ONE file (the text becomes its caption).
 ${compactConversationInstruction}
 ${isTodoToolOffered ? `${todoInstruction}\n` : ''}• You need to review or remove scheduled jobs → schedule_list / schedule_cancel.
 • You need a watchdog — keep an eye on a service, build, deploy, disk, URL… → schedule_create with \`checkCommand\` (cron): the bot runs it in this folder, stays silent while it exits 0, and on the first failure posts a notice and wakes you with \`prompt\` + the exit code and output tail. Checks survive restarts and crashes. NEVER build your own watcher (background loop, nohup, sleep loop, tmux pane, shell crontab): it dies with your session or a restart, silently.
 ${buildTelegramOrchestrationInstruction(isBotSkillsEnabled)}
-${answerRequestInstruction} The requester may not see your plain text: anything they must read goes through answer_request — yet your plain text is relayed into the topic too, so end the turn WITHOUT a recap of what you answered (it would show twice).
+${answerRequestInstruction} An "only when you have a result" header may go unanswered. The requester may not see your plain text: anything they must read goes through answer_request — yet your plain text reaches the topic too, so end the turn WITHOUT a recap of your answer (it would show twice).
 ${claudeProfilesInstruction}${remoteRunInstructionText === null ? '' : `\n${remoteRunInstructionText}`}
 
 Tool descriptions hold the argument recipes.`;

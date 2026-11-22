@@ -1,5 +1,5 @@
 import { checkIsAnswerOwed, checkIsJobArmedUnderRequest } from '../requests/scheduleWait';
-import { plainTextHiddenSentence } from '../requests/requestHeader';
+import { buildResultOnlyAnswerLine, plainTextHiddenSentence } from '../requests/requestHeader';
 import type { OpenRequestState } from '../requests/types';
 import type { ScheduleRecord } from './types';
 
@@ -74,7 +74,7 @@ export function pickTopicRunTarget(job: Pick<ScheduleRecord, 'requestId'>, openR
 function buildRiddenRequestLine(request: OpenRequestState): string {
   return checkIsAnswerOwed(request)
     ? `It still owes the requester an answer: answer it through answer_request (requestId "${request.id}") in this turn, whatever this run finds.`
-    : `Answer it through answer_request (requestId "${request.id}") only when you have a result the requester needs.`;
+    : buildResultOnlyAnswerLine(request.id);
 }
 
 /**

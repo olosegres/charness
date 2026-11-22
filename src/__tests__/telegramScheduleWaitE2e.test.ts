@@ -326,6 +326,8 @@ describe('A request waits for its schedule in a Telegram topic end to end: built
     const firePrompt = getAgentPrompts()[promptsBeforeFire].text;
     const fireRequestId = /\[Request (req_[A-Za-z0-9_-]+) · from: a scheduled run in this topic\]/.exec(firePrompt)?.[1] ?? '';
     assert.match(fireRequestId, /^req_/, `nothing to ride: the fire opened the scheduler's request\n${firePrompt}`);
+    assert.ok(firePrompt.includes(`Answer it through answer_request (requestId "${fireRequestId}") only when you have a result the requester needs.`), 'the scheduler\'s request asks for an answer only with a result');
+    assert.ok(!firePrompt.includes('kind "final" with the full result at the end of your turn'), 'not the «final at the end of every turn» of a person\'s request: every answer here is pinned, which notifies');
 
     await sleep(quietObservationMs);
     assert.equal(getAgentPrompts().length, promptsBeforeFire + 1, 'no reminder: the fire was the only prompt');

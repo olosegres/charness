@@ -211,6 +211,11 @@ describe('how the agent is told to write an answer', () => {
     assert.match(instructions, /Not CronCreate \/ ScheduleWakeup for anything that must happen: they die with your process, which the bot stops after a long idle stretch/);
   });
 
+  it('a Telegram topic\'s instructions let a scheduled run\'s header that asks for an answer only with a result go unanswered — a woken agent with nothing to report stays silent', async () => {
+    const client = await connectAgent({ kind: 'thread', threadKey: keyToString(topicKey) });
+    assert.match(client.getInstructions() ?? '', /An "only when you have a result" header may go unanswered\./);
+  });
+
   it('a Jira session without the attachment tool gets the neutral instructions, the style sentence still in them', async () => {
     isJiraAttachmentOffered = false;
     const client = await connectAgent({ kind: 'thread', threadKey: keyToString(makeJiraKey('PROJ-12')) });

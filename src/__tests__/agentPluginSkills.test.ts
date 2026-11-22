@@ -127,6 +127,12 @@ describe('agent-plugin', () => {
     assert.doesNotMatch(flat, /There are no `schedule_\*` tools|nothing will wake you|Do not end your turn while a worker runs|foreground polls/, 'the polling paragraph is gone');
   });
 
+  test('charness-orchestration lets a scheduled run\'s header that asks for an answer only with a result go unanswered — a woken agent with nothing to report ends silently, in a topic too', () => {
+    const flat = readSkill('charness-orchestration').replace(/\s+/g, ' ');
+    const section = flat.slice(flat.indexOf('## Talking to the user'), flat.indexOf('## ', flat.indexOf('## Talking to the user') + 3));
+    assert.match(section, /A header that says to answer only when you have a result \(a scheduled run\) may be left unanswered: with nothing to report, end the turn silently\./);
+  });
+
   test('charness-orchestration cleans the runner copy when the LAST open task of a project folder is done — in that folder, before the folder goes, before the report — and leaves the copies of other tasks alone', () => {
     const text = readSkill('charness-orchestration').replace(/\s+/g, ' ');
     assert.match(text, /the LAST open task of its project folder \(the tasks of one folder share ONE copy on a runner\)/);

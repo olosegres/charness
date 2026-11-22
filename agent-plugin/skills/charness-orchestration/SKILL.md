@@ -108,7 +108,8 @@ kill -0 <pid> 2>/dev/null || { echo "worker <pid> exited"; exit 1; }; [ -n "$(fi
   question tool); the bot pins it, and the pin notifies. In autonomous mode stop and report instead.
 - A question never stops your work: when the bot sets it aside, go on; the answer comes later as a message.
 - A message headed `[Request <id> · from: …]` is answered through `answer_request` (`progress`, `question`,
-  `final`); do not repeat its text as plain text afterwards.
+  `final`); do not repeat its text as plain text afterwards. A header that says to answer only when you have a result
+  (a scheduled run) may be left unanswered: with nothing to report, end the turn silently.
 - The passing-run video of a new e2e test → `send_file_to_user` (H.264 `.mp4`, sent as a video). Several
   separate items, e.g. one per finished scope → `send_messages_to_user`.
 - Work the user wants later → `schedule_create` with `onceAt` and a prompt that stands on its own.

@@ -106,8 +106,10 @@ A topic in the stream view has no requests: its fires are plain prompts.
   by its own job's fire: the next fire opens a new one (3), the only replace a fire ever causes.
 - **The turn a fire starts is a scheduled run of the request it rides** (`isScheduledRun`, set by the forward that rides it or opens
   it, never read from the request): it may end without an answer while nothing is owed, and a watch that just fired (`armed`) counts
-  for it (rows 11–13). The prompt starts with a header that names the request and asks for an answer only with a result the requester
-  needs, or in this turn when the request owes one (`build*ScheduledRunHeader`). A fire is never a wake-up and never counts against the cap.
+  for it (rows 11–13). The prompt starts with a header that names the request and asks for an answer only with a result the requester needs (`buildResultOnlyAnswerLine`), or in this turn
+  when the request owes one (`build*ScheduledRunHeader`) — the scheduler's request a fire opens too (`buildRequestHeader`'s
+  `isAnswerOnlyWithResult`: no «`final` at the end of your turn», no line naming the given-up request it replaced), so silence is what
+  the agent is told it may do, not only what the rules accept. A fire is never a wake-up and never counts against the cap.
 - **The scheduler's request** (a topic only) is no person's, so it never owes their words, and it has two states:
   - *never answered* (`progressAnswerCount` 0, `checkIsUnansweredFireRequest`): nobody was told anything, so ANY turn of it that ends
     without an answer (its fire's, a riding fire's, a reminder's after a lost turn, a «continue»'s) closes it `cancelled` silently.

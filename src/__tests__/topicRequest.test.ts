@@ -115,6 +115,25 @@ describe('buildTopicRequestHeader', () => {
     assert.doesNotMatch(buildTopicRequestHeader('req_abc', 'text', 'streamAnswers'), / from topic member| from group member/);
   });
 
+  it('a scheduled run\'s request asks for an answer only with a result — never «final … at the end of your turn», never «say briefly that the answer is above»: a woken agent with nothing to report stays silent', () => {
+    for (const view of ['answers', 'streamAnswers'] as const) {
+      const header = buildTopicRequestHeader('req_run', 'scheduledRun', view, ['req_givenUp']);
+      const lines = header.split('\n');
+      assert.equal(lines[0], '[Request req_run · from: a scheduled run in this topic]', view);
+      assert.equal(lines[1], 'Answer it through answer_request (requestId "req_run") only when you have a result the requester needs.', view);
+      assert.equal(lines[2], answerStyleInstruction, view);
+      assert.doesNotMatch(header, /kind "final" with the full result at the end of your turn/, view);
+      assert.doesNotMatch(header, /replaces|answer is above/, `${view}: the only request it replaces is one the bot gave up on — nothing of it is repeated`);
+      assert.ok(header.endsWith('\n\n'), view);
+    }
+    assert.match(buildTopicRequestHeader('req_run', 'scheduledRun', 'answers'), /does not see your plain text output or your thinking/, 'the answers-only sentence stays');
+    // The kept prompt — what an R21 re-post sends again — has the same header.
+    const kept = buildTopicRequestPrompt({ requestId: 'req_run', source: 'scheduledRun', view: 'answers', supersededRequestIds: ['req_givenUp'], promptBody: '[Scheduled run "hourly"]\ncheck' });
+    assert.equal(kept, `${buildTopicRequestHeader('req_run', 'scheduledRun', 'answers')}[Scheduled run "hourly"]\ncheck`);
+    // A person's request keeps the plain «answer it».
+    assert.match(buildTopicRequestHeader('req_abc', 'schedule', 'answers'), /kind "final" with the full result at the end of your turn/);
+  });
+
   it('every entry point has its own description', () => {
     const descriptions = new Set(sources.map((source) => /from: ([^\]]+)\]/.exec(buildTopicRequestHeader('req_abc', source, 'answers'))?.[1]));
     assert.equal(descriptions.size, sources.length);

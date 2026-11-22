@@ -23,12 +23,25 @@ import type { OpenRequestState, RequestWakeUpReason } from './types';
  * mid-turn and gives one answer, or — Claude Code delivers a message written
  * mid-turn only after that turn ends — it has already answered the replaced
  * request and must not do the work twice.
+ * `isAnswerOnlyWithResult` — a scheduled run's request (the scheduler's own, `src/requests/README.md` § Scheduled runs): a woken agent
+ * with nothing to report stays silent, so the answer line asks for an answer only with a result ({@link buildResultOnlyAnswerLine}),
+ * not a `final` at the end of every turn, and no superseded line is added (the only request it replaces is one the bot gave up on, and
+ * nothing of that one is to be repeated).
  */
 export interface RequestHeaderOptions {
   requestId: string;
   originDescription: string;
   isPlainTextHidden: boolean;
   supersededRequestIds?: readonly string[];
+  isAnswerOnlyWithResult?: boolean;
+}
+
+/**
+ * @description The answer line of every scheduled run's header — the scheduler's own request's and the one of a request a fire rides —
+ * so the two cannot drift: answer only with a result the requester needs, else stay silent (a woken agent with nothing to report).
+ */
+export function buildResultOnlyAnswerLine(requestId: string): string {
+  return `Answer it through answer_request (requestId "${requestId}") only when you have a result the requester needs.`;
 }
 
 /** The line that tells the agent its requester sees only its answers (a Telegram topic's answers-only view). */
@@ -45,13 +58,16 @@ export function buildSupersededRequestsLine(supersededRequestIds: readonly strin
 
 /** @description The header block, ending with a blank line before the request's own text. */
 export function buildRequestHeader(options: RequestHeaderOptions): string {
+  const isAnswerOnlyWithResult = options.isAnswerOnlyWithResult === true;
   const lines = [
     `[Request ${options.requestId} · from: ${options.originDescription}]`,
-    `Answer it with the answer_request tool (requestId "${options.requestId}"): kind "final" with the full result at the end of your turn, ` +
-      '"question" if you need the requester before you can go on, "progress" for an interim note.',
+    isAnswerOnlyWithResult
+      ? buildResultOnlyAnswerLine(options.requestId)
+      : `Answer it with the answer_request tool (requestId "${options.requestId}"): kind "final" with the full result at the end of your turn, ` +
+        '"question" if you need the requester before you can go on, "progress" for an interim note.',
     answerStyleInstruction,
   ];
-  const supersededLine = buildSupersededRequestsLine(options.supersededRequestIds ?? []);
+  const supersededLine = isAnswerOnlyWithResult ? '' : buildSupersededRequestsLine(options.supersededRequestIds ?? []);
   if (supersededLine !== '') lines.push(supersededLine);
   if (options.isPlainTextHidden) lines.push(plainTextHiddenSentence);
   return `${lines.join('\n')}\n\n`;
