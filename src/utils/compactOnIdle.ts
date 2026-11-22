@@ -274,13 +274,14 @@ export interface IdleFireDecision {
  *
  * The compaction runs only when the feature is enabled for the thread, at least one agent turn has completed since the
  * last compaction (otherwise there is nothing new to compress), and no usage-limit wait is armed (L-D6: a compaction turn
- * would hit the limit). On a backend that is NOT stopped at the idle mark (`!canSuspend`: the tmux TUI, OpenCode) the
- * per-thread user-latch must also be unspent (D2 — after a fire it stays latched until the next genuine USER message re-arms
- * it, so idle compaction runs at most once per user-active period). On a backend that IS stopped the latch blocks nothing
- * (owner, 2026-11-22: «compaction first, then the topic goes to sleep»): the stop ends the idle period, so a compaction at
- * every idle mark that has a completed turn since the last one cannot loop, and a topic woken only by its own checks and
- * worker watches — no person message to clear the latch — is still compacted before each sleep. This revises the earlier
- * rule that listed «latched» among the cases where the stop happens WITHOUT the compaction (L-D1).
+ * would hit the limit). Where the process is NOT stopped at the idle mark (`!isStoppedAtMark`: the tmux TUI, OpenCode, a Claude
+ * Code too old or not yet known to be stopped automatically, L-D10) the per-thread user-latch must also be unspent (D2 — after a
+ * fire it stays latched until the next genuine USER message re-arms it, so idle compaction runs at most once per user-active
+ * period). Where the process IS stopped the latch blocks nothing (owner, 2026-11-22: «compaction first, then the topic goes to
+ * sleep»): the stop ends the idle period, so a compaction at every idle mark that has a completed turn since the last one cannot
+ * loop, and a topic woken only by its own checks and worker watches — no person message to clear the latch — is still compacted
+ * before each sleep. This revises the earlier rule that listed «latched» among the cases where the stop happens WITHOUT the
+ * compaction (L-D1).
  *
  * The compaction belongs to the IDLE MARK alone: it exists to read the still-warm prompt cache, which is gone a little after the
  * idle window (`idleCompactMs`), so a compaction later than the mark is only an expensive one. A process held at the mark
@@ -305,17 +306,24 @@ export function getIdleFireDecision(input: {
   /** This fire's countdown was armed (the overdue arm) when the idle mark had already passed: the prompt cache is cold. */
   isIdleMarkMissed: boolean;
   isEnabled: boolean;
-  /** The user-latch (D2) is spent; it blocks the compaction only where the process is not stopped at the mark (`canSuspend: false`). */
+  /** The user-latch (D2) is spent; it blocks the compaction only where the process is not stopped at the mark (`isStoppedAtMark: false`). */
   isLatched: boolean;
   hasCompletedTurnSinceCompaction: boolean;
   isLimitWaitArmed: boolean;
+  /** The backend can be suspended: the decision's stop half follows it. */
   canSuspend: boolean;
+  /**
+   * The bot WILL stop this process after the fire — the backend is suspendable AND its CLI may be stopped automatically (L-D10),
+   * the very test the stop itself applies — so the stop ends the idle period and the user-latch has nothing to guard. Not the same
+   * as `canSuspend`: a suspendable process of a CLI too old to be stopped stays alive, and keeps the latch.
+   */
+  isStoppedAtMark: boolean;
 }): IdleFireDecision {
   const isWorking = input.workingSignals.length > 0;
   const compactionBlockers = [
     !input.isEnabled && 'disabled',
-    // D2 holds only for a backend that stays alive; one that is stopped at the mark compacts, then sleeps.
-    input.isLatched && !input.canSuspend && 'latched (D2)',
+    // D2 holds only where the process stays alive; one that is stopped at the mark compacts, then sleeps.
+    input.isLatched && !input.isStoppedAtMark && 'latched (D2)',
     !input.hasCompletedTurnSinceCompaction && 'nothing to compress',
     input.isLimitWaitArmed && 'a usage-limit wait is armed (L-D6)',
     input.isIdleMarkMissed && 'the idle mark had already passed when the countdown was armed (the prompt cache is cold by now)',

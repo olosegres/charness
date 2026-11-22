@@ -70,7 +70,13 @@ const fireBase = {
   hasCompletedTurnSinceCompaction: true,
   isLimitWaitArmed: false,
   canSuspend: true,
+  isStoppedAtMark: true,
 } as const;
+
+/** A process the bot does not stop at the mark: a backend that cannot be suspended (tmux TUI, OpenCode). */
+const notStoppedBackend = { canSuspend: false, isStoppedAtMark: false } as const;
+/** A suspendable process whose CLI is too old (or not yet known) to be stopped automatically (L-D10): the stop is attempted and declined. */
+const notStoppedOldCli = { canSuspend: true, isStoppedAtMark: false } as const;
 
 test('idleCompactMs is 55 minutes', () => {
   assert.equal(idleCompactMs, 55 * 60 * 1000);
@@ -291,7 +297,7 @@ test('getIdleFireDecision: the overdue boot fire (the bot was down past the wind
 test('getIdleFireDecision: a compaction that was not due anyway is not "held" — no notice for a skip the hold did not cause', () => {
   const working = [{ kind: 'backgroundTasks', count: 1 }] as const;
   // The latch is a compaction blocker only where the process stays alive (see the latch tests below).
-  for (const override of [{ isEnabled: false }, { isLatched: true, canSuspend: false }, { hasCompletedTurnSinceCompaction: false }, { isLimitWaitArmed: true }, { isSessionActive: false }]) {
+  for (const override of [{ isEnabled: false }, { isLatched: true, ...notStoppedBackend }, { isLatched: true, ...notStoppedOldCli }, { hasCompletedTurnSinceCompaction: false }, { isLimitWaitArmed: true }, { isSessionActive: false }]) {
     const decision = getIdleFireDecision({ ...fireBase, ...override, workingSignals: working });
     assert.equal(decision.isIdleMarkHeld, false, JSON.stringify(override));
     assert.equal(decision.heldNoticeReason, null, JSON.stringify(override));
@@ -347,7 +353,7 @@ test('getIdleFireDecision: each compaction guard skips the compaction but the st
   }
 });
 
-test('getIdleFireDecision: the user-latch (D2) blocks the compaction only on a backend that is not stopped — a stopped one compacts at every idle mark, then sleeps (owner, 2026-11-22)', () => {
+test('getIdleFireDecision: the user-latch (D2) blocks the compaction only where the process is not stopped at the mark — a stopped one compacts at every idle mark, then sleeps (owner, 2026-11-22)', () => {
   // A topic woken only by its own checks and worker watches never clears the latch: the stop must still be preceded by a compaction.
   const stopped = getIdleFireDecision({ ...fireBase, isLatched: true });
   assert.equal(stopped.shouldCompact, true, 'latched + suspendable + a turn since the last compaction: compact first');
@@ -359,14 +365,22 @@ test('getIdleFireDecision: the user-latch (D2) blocks the compaction only on a b
   assert.deepEqual(nothingNew.compactionSkipReasons, ['nothing to compress']);
   assert.equal(nothingNew.shouldSuspend, true);
   // An always-alive backend (tmux TUI, OpenCode) keeps the owner's D2: at most one idle compaction per user-active period.
-  const alive = getIdleFireDecision({ ...fireBase, isLatched: true, canSuspend: false });
+  const alive = getIdleFireDecision({ ...fireBase, isLatched: true, ...notStoppedBackend });
   assert.equal(alive.shouldCompact, false);
   assert.deepEqual(alive.compactionSkipReasons, ['latched (D2)']);
   assert.equal(alive.shouldSuspend, false);
+  // A suspendable process whose CLI is too old (or not yet known) to be stopped automatically stays alive, so it keeps D2 too — while
+  // the decision's stop half still follows `canSuspend`: the stop is attempted, and the stop itself declines it (L-D10).
+  const oldCli = getIdleFireDecision({ ...fireBase, isLatched: true, ...notStoppedOldCli });
+  assert.equal(oldCli.shouldCompact, false);
+  assert.deepEqual(oldCli.compactionSkipReasons, ['latched (D2)']);
+  assert.equal(oldCli.shouldSuspend, true);
+  // Not latched, such a process is compacted as before: the latch is the only thing that differs.
+  assert.equal(getIdleFireDecision({ ...fireBase, ...notStoppedOldCli }).shouldCompact, true);
 });
 
 test('getIdleFireDecision: a backend that cannot be suspended keeps its process (L-D8) — the compaction alone', () => {
-  const decision = getIdleFireDecision({ ...fireBase, canSuspend: false });
+  const decision = getIdleFireDecision({ ...fireBase, ...notStoppedBackend });
   assert.equal(decision.shouldCompact, true);
   assert.equal(decision.shouldSuspend, false);
   assert.deepEqual(decision.suspendSkipReasons, ['the backend is not suspended']);

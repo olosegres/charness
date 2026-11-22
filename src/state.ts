@@ -574,9 +574,14 @@ export interface StateV1 {
   /**
    * Threads whose compact-on-idle user-LATCH is spent (D2). A thread lands here
    * the instant an idle-compaction FIRES and is removed only by the next genuine
-   * USER message — so idle compaction runs at most once per user-active period,
-   * and (crucially) a bot restart cannot re-enable a second fire: the reattach
-   * re-arms the idle timer ONLY for threads absent from this set. Same
+   * USER message — so, WHERE THE PROCESS IS NOT STOPPED at the idle mark (the tmux
+   * TUI, OpenCode, a Claude Code too old to be stopped automatically), idle
+   * compaction runs at most once per user-active period, and (crucially) a bot
+   * restart cannot re-enable a second fire: the reattach re-arms the idle timer
+   * ONLY for such a thread when it is absent from this set. Where the process IS
+   * stopped at the mark (json-stream, per-turn) the latch blocks nothing — every
+   * idle mark with a turn since the last compaction compacts, and the restart guard
+   * is the compaction's own stamp (`lastCompactionAt`). Same
    * deduped/sorted {@link SessionKey}-string shape as `timestampThreads` (dropped
    * when empty), and equally lifecycle-independent — only a fire and a user
    * message mutate it, never session teardown. Optional so older state files stay
@@ -2224,8 +2229,10 @@ export class StateStore {
    * @description Whether `key`'s compact-on-idle user-latch is spent (D2): an
    * idle-compaction already fired this user-active period and no genuine USER
    * message has re-armed it since. Read by the idle watchdog's fire guard and by
-   * the timer-arming path (a latched thread never re-arms — so a restart can't
-   * re-fire). Default `false` (never latched).
+   * the timer-arming path (where the process is not stopped at the idle mark, a
+   * latched thread never re-arms — so a restart can't re-fire; a process that is
+   * stopped there compacts at every idle mark whatever the latch says).
+   * Default `false` (never latched).
    */
   checkIsCompactIdleLatched(key: SessionKey): boolean {
     return this.state.compactIdleLatchedThreads?.includes(keyToString(key)) ?? false;
