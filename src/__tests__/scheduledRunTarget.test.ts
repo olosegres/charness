@@ -11,7 +11,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import type { OpenRequestState } from '../requests/types';
 import { plainTextHiddenSentence } from '../requests/requestHeader';
-import { buildTopicScheduledRunHeader, buildTrackerScheduledRunHeader, pickTopicRunTarget, pickTrackerRunTarget } from '../scheduler/scheduledRunTarget';
+import { buildTopicScheduledRunHeader, buildTrackerScheduledRunHeader, getRiddenRequest, pickTopicRunTarget, pickTrackerRunTarget } from '../scheduler/scheduledRunTarget';
 
 function createRequest(id: string, overrides: Partial<OpenRequestState> = {}): OpenRequestState {
   return {
@@ -87,6 +87,15 @@ describe('pickTopicRunTarget — a topic with requests: a fire rides, and opens 
     assert.deepEqual(pickTopicRunTarget({ requestId: 'req_Closed001' }, []), { kind: 'ownRequest' });
     const unrelated = createRequest('req_Operator1', { origin: operator });
     assert.deepEqual(pickTopicRunTarget({ requestId: undefined }, [unrelated]), { kind: 'ownRequest' }, 'a person\'s request is ridden only by its own job');
+  });
+});
+
+describe('getRiddenRequest', () => {
+  it('says whether the fire\'s job is the request\'s own and whether the request owes its requester an answer (review 14 #3: the lost-work note\'s wording follows it)', () => {
+    const answered = createRequest('req_Armed001', { progressAnswerCount: 1 });
+    assert.deepEqual(getRiddenRequest({ requestId: 'req_Armed001' }, answered), { requestId: 'req_Armed001', isRequestJob: true, isAnswerOwed: false });
+    assert.deepEqual(getRiddenRequest({ requestId: 'req_Other0001' }, answered), { requestId: 'req_Armed001', isRequestJob: false, isAnswerOwed: false });
+    assert.deepEqual(getRiddenRequest({ requestId: 'req_Armed001' }, { ...answered, isPersonInputUnanswered: true }), { requestId: 'req_Armed001', isRequestJob: true, isAnswerOwed: true });
   });
 });
 

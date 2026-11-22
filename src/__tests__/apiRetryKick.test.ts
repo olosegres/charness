@@ -642,13 +642,13 @@ describe('the bot wires the kick and the restore, and keeps the saved record mea
     // The buffer-or-forward unit the whole bot shares: buffered text replays in order once the start finishes.
     assert.ok(getFunction('function deliverPromptOrBuffer(').includes('return deliverPromptWithDeps(promptDeliveryDeps, key, promptText, isStarting, onBufferedSettled, options);'));
     // A nudge is no person's message: its forward waits for the write (no `isPersonInput` from the kick's port).
-    assert.match(botSource, /startupBuffer: startupPromptBuffer,\n\s*forwardPrompt: \(key, text, options\) => forwardPromptToAgent\(key, getThreadAdapter\(key\), text, undefined, \{ isPersonInput: options\.isPersonInput, isAccountsNoteCarrier: options\.isAccountsNoteCarrier \}\),/);
+    assert.match(botSource, /startupBuffer: startupPromptBuffer,\n\s*forwardPrompt: \(key, text, options\) => forwardPromptToAgent\(key, getThreadAdapter\(key\), text, undefined, \{ isPersonInput: options\.isPersonInput, isAccountsNoteCarrier: options\.isAccountsNoteCarrier, isLostWorkTellOptional: options\.isLostWorkTellOptional \}\),/);
   });
 
   it('both ways out of a startup window settle what it held: the replay on a started session, the discard on a failed start', () => {
     // The kick keeps the saved record while its nudge waits in the buffer; only these two can end that wait.
     const replay = getFunction('async function replayBufferedPrompts(');
-    assert.match(replay, /await startupPromptBuffer\.replayPrompts\(keyToString\(key\), \{\n\s*isSessionActive,\n\s*forward: async \(prompt, isPersonInput, isAccountsNoteCarrier\) => \{ await forwardPromptToAgent\(key, adapter, prompt, undefined, \{ isPersonInput, isAccountsNoteCarrier \}\); \},\n\s*\}\);/);
+    assert.match(replay, /await startupPromptBuffer\.replayPrompts\(keyToString\(key\), \{\n\s*isSessionActive,\n\s*forward: async \(prompt, options\) => \{ await forwardPromptToAgent\(key, adapter, prompt, undefined, options\); \},\n\s*\}\);/);
     assert.match(getFunction('async function startAgentSession('), /startupPromptBuffer\.discardPrompts\(kStr\);/);
     assert.doesNotMatch(botSource, /startupPromptBuffer\s*\.drainPrompts\(/, 'a drain that settles nothing would leave a waiting nudge waiting for good');
   });

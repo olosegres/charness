@@ -244,9 +244,9 @@ test('a prompt buffered as a person\'s own is replayed as one, a bot-made one as
   const buffer = new StartupPromptBuffer();
   const forwarded: Array<[string, boolean]> = [];
   buffer.markStarting(KEY_A);
-  buffer.addPrompt(KEY_A, 'typed', undefined, true);
+  buffer.addPrompt(KEY_A, 'typed', undefined, { isPersonInput: true });
   buffer.addPrompt(KEY_A, 'a wake-up');
-  await buffer.replayPrompts(KEY_A, { isSessionActive: true, forward: async (text, isPersonInput) => { forwarded.push([text, isPersonInput]); } });
+  await buffer.replayPrompts(KEY_A, { isSessionActive: true, forward: async (text, options) => { forwarded.push([text, options.isPersonInput === true]); } });
   assert.deepEqual(forwarded, [['typed', true], ['a wake-up', false]]);
 });
 
@@ -254,9 +254,9 @@ test('a prompt buffered as a carrier of the accounts note replays as one (its no
   const buffer = new StartupPromptBuffer();
   const forwarded: Array<[string, boolean, boolean]> = [];
   buffer.markStarting(KEY_A);
-  buffer.addPrompt(KEY_A, 'typed', undefined, true, true);
+  buffer.addPrompt(KEY_A, 'typed', undefined, { isPersonInput: true, isAccountsNoteCarrier: true });
   buffer.addPrompt(KEY_A, 'a nudge');
-  buffer.addPrompt(KEY_A, 'a scheduled run', undefined, false, true);
-  await buffer.replayPrompts(KEY_A, { isSessionActive: true, forward: async (text, isPersonInput, isAccountsNoteCarrier) => { forwarded.push([text, isPersonInput, isAccountsNoteCarrier]); } });
+  buffer.addPrompt(KEY_A, 'a scheduled run', undefined, { isAccountsNoteCarrier: true });
+  await buffer.replayPrompts(KEY_A, { isSessionActive: true, forward: async (text, options) => { forwarded.push([text, options.isPersonInput === true, options.isAccountsNoteCarrier === true]); } });
   assert.deepEqual(forwarded, [['typed', true, true], ['a nudge', false, false], ['a scheduled run', false, true]]);
 });

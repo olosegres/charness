@@ -23,10 +23,14 @@ export interface PromptDeliveryDeps {
  * `isAccountsNoteCarrier` — the prompt starts a turn the person or the scheduler made (a person's message that opened a request, a
  * tracker's post, a scheduled run), so its forward may attach the accounts note (`limitNotes/`); kept with the prompt through a startup
  * buffer, and decorated at the replay with the figures of that moment.
+ * `isLostWorkTellOptional` — a lost-work note that rides this prompt asks the agent to tell the requester only if they must know (a
+ * tracker fire whose ridden request owes nothing, or with none open: its header already says to answer only with a result); kept
+ * through a startup buffer as well.
  */
 export interface PromptDeliveryOptions {
   isPersonInput?: boolean;
   isAccountsNoteCarrier?: boolean;
+  isLostWorkTellOptional?: boolean;
 }
 
 /**
@@ -77,7 +81,7 @@ export async function deliverPromptOrBuffer(
     // `onBufferedSettled`, so it reads as forwarded, as it always did.
     return (await deps.forwardPrompt(key, text, options)) === 'noSession' ? 'noSession' : 'forwarded';
   }
-  const isFirstBuffered = deps.startupBuffer.addPrompt(keyToString(key), text, onBufferedSettled, options.isPersonInput === true, options.isAccountsNoteCarrier === true);
+  const isFirstBuffered = deps.startupBuffer.addPrompt(keyToString(key), text, onBufferedSettled, options);
   if (isFirstBuffered && checkIsTelegramKey(key)) {
     // The prompt IS buffered by now (and its settle callback registered), so a notice that fails must not
     // read as a delivery that failed: a caller keeping something until the prompt reached a session would

@@ -6279,7 +6279,7 @@ async function replayBufferedPrompts(key: SessionKey): Promise<void> {
   // like the API-error retry's nudge, hears whether it reached the session).
   await startupPromptBuffer.replayPrompts(keyToString(key), {
     isSessionActive,
-    forward: async (prompt, isPersonInput, isAccountsNoteCarrier) => { await forwardPromptToAgent(key, adapter, prompt, undefined, { isPersonInput, isAccountsNoteCarrier }); },
+    forward: async (prompt, options) => { await forwardPromptToAgent(key, adapter, prompt, undefined, options); },
   });
   if (!isSessionActive) return;
   // R23: prompts held during a usage-limit wait that ended with the previous
@@ -11601,7 +11601,7 @@ async function downloadIncomingFile(
  */
 const promptDeliveryDeps: PromptDeliveryDeps = {
   startupBuffer: startupPromptBuffer,
-  forwardPrompt: (key, text, options) => forwardPromptToAgent(key, getThreadAdapter(key), text, undefined, { isPersonInput: options.isPersonInput, isAccountsNoteCarrier: options.isAccountsNoteCarrier }),
+  forwardPrompt: (key, text, options) => forwardPromptToAgent(key, getThreadAdapter(key), text, undefined, { isPersonInput: options.isPersonInput, isAccountsNoteCarrier: options.isAccountsNoteCarrier, isLostWorkTellOptional: options.isLostWorkTellOptional }),
   announceQueued: async (key) => {
     await replyToThread(key, t('agent.queued_starting', { label: getThreadAdapter(key).label }));
   },
@@ -15770,7 +15770,10 @@ function createSessionPostDeps(): PostToSessionDeps {
 async function forwardScheduledRun(conversationKey: string, text: string, ridden: RiddenRequest | null): Promise<void> {
   const key = keyFromString(conversationKey);
   const buffered = createBufferedOutcome();
-  const delivery = await deliverPromptOrBuffer(key, text, startupPromptBuffer.checkIsStarting(conversationKey), buffered.settle, { isAccountsNoteCarrier: true });
+  // A tracker fire whose ridden request owes nothing, or with none open: its header says to answer only with a result, so a lost-work
+  // note riding it asks the same (a comment notifies the requester and the issue's watchers). A topic keeps its own resume and wording.
+  const isLostWorkTellOptional = !checkIsTelegramKey(key) && ridden?.isAnswerOwed !== true;
+  const delivery = await deliverPromptOrBuffer(key, text, startupPromptBuffer.checkIsStarting(conversationKey), buffered.settle, { isAccountsNoteCarrier: true, isLostWorkTellOptional });
   // A prompt that waited for the session's start counts only once it reached it: a replay whose write failed is a failed post.
   if (delivery === 'buffered') await buffered.assertReplayed();
   if (ridden !== null && delivery !== 'noSession') {

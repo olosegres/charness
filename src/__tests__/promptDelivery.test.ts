@@ -18,7 +18,7 @@ import { keyToString, type SessionKey } from '../sessionKey';
 import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
 import { makeJiraKey } from '../connectors/jira/sessionKeyCodec';
 import { StartupPromptBuffer, type BufferedPromptOutcome } from '../startupPromptBuffer';
-import { deliverLatePrompt, deliverPromptOrBuffer, getLatePromptRoute, type LatePromptDeliveryPorts, type LatePromptOutcome, type PromptDeliveryDeps } from '../utils/promptDelivery';
+import { deliverLatePrompt, deliverPromptOrBuffer, getLatePromptRoute, type LatePromptDeliveryPorts, type LatePromptOutcome, type PromptDeliveryDeps, type PromptDeliveryOptions } from '../utils/promptDelivery';
 
 const topicKey: SessionKey = makeTelegramKey(-1001234567890, 42);
 const issueKey: SessionKey = makeJiraKey('PROJ-7');
@@ -53,13 +53,18 @@ beforeEach(() => {
 });
 
 describe('deliverPromptOrBuffer: what a buffered prompt keeps', () => {
-  it('the carrier flag of the accounts note travels with a buffered prompt to its replay, and a prompt without it replays without it', async () => {
+  it('the options travel with a buffered prompt to its replay — the accounts note\'s carrier flag, and the lost-work note\'s optional wording (review 14 #3) — and a prompt without them replays without them', async () => {
     startupBuffer.markStarting(keyToString(topicKey));
     await deliverPromptOrBuffer(deps, topicKey, 'a person\'s message', true, undefined, { isPersonInput: true, isAccountsNoteCarrier: true });
+    await deliverPromptOrBuffer(deps, topicKey, 'a tracker fire', true, undefined, { isAccountsNoteCarrier: true, isLostWorkTellOptional: true });
     await deliverPromptOrBuffer(deps, topicKey, 'a retry nudge', true);
-    const replayed: Array<[string, boolean, boolean]> = [];
-    await startupBuffer.replayPrompts(keyToString(topicKey), { isSessionActive: true, forward: async (text, isPersonInput, isAccountsNoteCarrier) => { replayed.push([text, isPersonInput, isAccountsNoteCarrier]); } });
-    assert.deepEqual(replayed, [['a person\'s message', true, true], ['a retry nudge', false, false]]);
+    const replayed: Array<[string, PromptDeliveryOptions]> = [];
+    await startupBuffer.replayPrompts(keyToString(topicKey), { isSessionActive: true, forward: async (text, options) => { replayed.push([text, options]); } });
+    assert.deepEqual(replayed, [
+      ['a person\'s message', { isPersonInput: true, isAccountsNoteCarrier: true }],
+      ['a tracker fire', { isAccountsNoteCarrier: true, isLostWorkTellOptional: true }],
+      ['a retry nudge', {}],
+    ]);
   });
 
   it('forwarded at once, the options reach the forward as they are', async () => {
@@ -211,7 +216,8 @@ describe('the bot buffers a prompt for a starting session through it, in one pla
   });
 
   it('the forward ports return where the prompt went, with no wrapper that throws the answer away', () => {
-    assert.ok(botSource.includes('forwardPrompt: (key, text, options) => forwardPromptToAgent(key, getThreadAdapter(key), text, undefined, { isPersonInput: options.isPersonInput, isAccountsNoteCarrier: options.isAccountsNoteCarrier }),'));
+    assert.ok(botSource.includes('forwardPrompt: (key, text, options) => forwardPromptToAgent(key, getThreadAdapter(key), text, undefined, { isPersonInput: options.isPersonInput, isAccountsNoteCarrier: options.isAccountsNoteCarrier, isLostWorkTellOptional: options.isLostWorkTellOptional }),'));
+    assert.ok(botSource.includes('forward: async (prompt, options) => { await forwardPromptToAgent(key, adapter, prompt, undefined, options); },'), 'a buffered prompt is replayed with the options it was buffered with');
     assert.doesNotMatch(botSource, /forwardPrompt: async \(key, text\) => \{ await forwardPromptToAgent/);
     const cancel = botSource.slice(botSource.indexOf('async function cancelPendingQuestionAndForward('), botSource.indexOf('async function applyQuestionAnswer('));
     assert.match(cancel, /\): Promise<LatePromptOutcome> \{/);

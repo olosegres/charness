@@ -40,11 +40,13 @@ export type TopicRunTarget =
 export interface RiddenRequest {
   requestId: string;
   isRequestJob: boolean;
+  /** The request owes its requester an answer (`checkIsAnswerOwed`) as the fire is forwarded: the header asks for it in this turn. */
+  isAnswerOwed: boolean;
 }
 
-/** @description The request `job`'s fire rides, with whether the job is one of that request's own. */
+/** @description The request `job`'s fire rides, with whether the job is one of that request's own and whether the request owes an answer. */
 export function getRiddenRequest(job: Pick<ScheduleRecord, 'requestId'>, request: OpenRequestState): RiddenRequest {
-  return { requestId: request.id, isRequestJob: checkIsJobArmedUnderRequest(job, request) };
+  return { requestId: request.id, isRequestJob: checkIsJobArmedUnderRequest(job, request), isAnswerOwed: checkIsAnswerOwed(request) };
 }
 
 /**

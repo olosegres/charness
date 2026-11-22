@@ -90,8 +90,8 @@ test('only a person\'s own prompts are marked as such: the text, voice and label
   for (const name of ['forwardRequestWakeUp', 'remindAnswerTail', 'postTodoReminder']) {
     assert.ok(!getFunctionBody(name).includes('isPersonInput'), `${name} awaits its write`);
   }
-  // A buffered prompt replays with the flag it was buffered with.
-  assert.ok(botSource.includes('forward: async (prompt, isPersonInput, isAccountsNoteCarrier) => { await forwardPromptToAgent(key, adapter, prompt, undefined, { isPersonInput, isAccountsNoteCarrier }); },'));
+  // A buffered prompt replays with the options it was buffered with (its person flag among them).
+  assert.ok(botSource.includes('forward: async (prompt, options) => { await forwardPromptToAgent(key, adapter, prompt, undefined, options); },'));
   // R23: what people asked for during a usage-limit wait, released to the next session — a failed write was only logged.
   assert.match(getFunctionBody('replayBufferedPrompts'), /await forwardPromptToAgent\(key, adapter, heldText, undefined, \{ isPersonInput: true \}\);/);
 });
@@ -99,6 +99,12 @@ test('only a person\'s own prompts are marked as such: the text, voice and label
 test('the lost-work wake of a request a passing watch holds tells the requester only if they must know: the wake message\'s flag reaches the note the prompt carries', () => {
   assert.match(getFunctionBody('forwardRequestWakeUp'), /isLostWorkTellOptional: message\.isAnswerOptional === true,/);
   assert.match(getFunctionBody('forwardPromptToLiveAgent'), /buildLostWorkNote\(lostWorkRecord, getLocaleEndonym\(getActiveLang\(\)\), \{ isTellingOptional: options\.isLostWorkTellOptional === true \}\)/);
+});
+
+test('a tracker fire whose ridden request owes nothing, or with no request open, asks for the lost-work note\'s optional wording — the fire\'s header already says to answer only if the requester must know (review 14 #3)', () => {
+  const body = getFunctionBody('forwardScheduledRun');
+  assert.match(body, /const isLostWorkTellOptional = !checkIsTelegramKey\(key\) && ridden\?\.isAnswerOwed !== true;/);
+  assert.match(body, /\{ isAccountsNoteCarrier: true, isLostWorkTellOptional \}/);
 });
 
 test('a bot-made prompt that waits for an adopt replay behind a start counts only once replayed', () => {

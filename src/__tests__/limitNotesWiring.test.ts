@@ -67,8 +67,9 @@ describe('L8: which callers of the forward mark their prompt a carrier of the ac
       'forwardScheduledRun',
       'forwardTopicSchedulerRequestRun',
       'promptDeliveryDeps',
-      'replayBufferedPrompts',
     ].sort());
+    // The startup buffer's replay hands every buffered prompt's options on whole, the carrier flag among them.
+    assert.ok(getFunctionBody('replayBufferedPrompts').includes('forward: async (prompt, options) => { await forwardPromptToAgent(key, adapter, prompt, undefined, options); },'));
   });
 
   it('the answer to the agent\'s own question is no carrier (a tap\'s label arrives with no request), and a person\'s free text is', () => {
@@ -93,7 +94,7 @@ describe('L8: which callers of the forward mark their prompt a carrier of the ac
   it('a tracker\'s post shares one session post that marks the carrier, a scheduled run\'s forwards mark it the same way; the lost-work post overrides that forward and does not', () => {
     const postDeps = botSource.slice(botSource.indexOf('function createSessionPostDeps('), botSource.indexOf('function createSessionPostDeps(') + 3000);
     assert.match(postDeps, /startupPromptBuffer\.checkIsStarting\(conversationKey\), buffered\.settle, \{ isAccountsNoteCarrier: true \}\);/);
-    assert.match(getFunctionBody('forwardScheduledRun'), /startupPromptBuffer\.checkIsStarting\(conversationKey\), buffered\.settle, \{ isAccountsNoteCarrier: true \}\);/);
+    assert.match(getFunctionBody('forwardScheduledRun'), /startupPromptBuffer\.checkIsStarting\(conversationKey\), buffered\.settle, \{ isAccountsNoteCarrier: true, isLostWorkTellOptional \}\);/);
     assert.match(getFunctionBody('forwardTopicSchedulerRequestRun'), /startupPromptBuffer\.checkIsStarting\(conversationKey\), buffered\.settle, \{ isAccountsNoteCarrier: true \}\);/);
     assert.match(getFunctionBody('createLostWorkPostDeps'), /\.\.\.createSessionPostDeps\(\),\n\s*forwardPrompt: async \(conversationKey, text\) => \{/);
   });
