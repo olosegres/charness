@@ -292,7 +292,8 @@ export class RequestWakeUpEngine {
    * for the SAME request is MERGED with it (the forward joined a busy period): the progress count keeps
    * its earlier start, and the turn is the alarm's only if both were — except for the bot's own «continue»
    * (`isContinuation`: the nudge after an API error or a limit wait), which keeps the alarm's kind but
-   * starts the progress count afresh: a note sent before the error is not this turn's. Another requester's
+   * starts the progress count afresh: a note sent before the error is not this turn's — and for a person's
+   * words that join the running turn, which start the count afresh too: a note sent before them is not their answer. Another requester's
    * request in the conversation keeps its own watch. A post retry still pending is moot from now on
    * (R28): the session has the request — unless the forward is a fire riding the request, which carries
    * none of it. A forward that carries a person's words (a request prompt, an issue update) marks the
@@ -313,13 +314,19 @@ export class RequestWakeUpEngine {
     // A request a scheduler fire opened (a Telegram topic's `scheduledRun`) is the alarm's: its turn is a scheduled run's, whoever tracks it.
     const isAlarmRequest = request.origin.kind === 'scheduledRun';
     const carriesPersonWords = options.isRequestPrompt || options.isPersonInput === true;
+    // A person's words that reach the agent — not a fire's prompt, not an alarm request's.
+    const isPersonWordsForward = carriesPersonWords && !isFireForward && !isAlarmRequest;
     const isScheduledRun = previous === undefined
       ? isFireForward || isAlarmRequest
       : previous.isScheduledRun === true && (isFireForward || isAlarmRequest || (options.isContinuation === true && !carriesPersonWords));
     this.watched.set(requestId, {
       key,
       requestId,
-      progressCountAtTurnStart: options.isContinuation === true ? request.progressAnswerCount : (previous?.progressCountAtTurnStart ?? request.progressAnswerCount),
+      // The progress count starts afresh at a «continue» and at words that join a turn already running: a note sent before them is
+      // not their answer (it would end the turn as a «progress» one — quiet under a watch, and the words left to the 90-minute backstop).
+      progressCountAtTurnStart: options.isContinuation === true || (previous !== undefined && isPersonWordsForward)
+        ? request.progressAnswerCount
+        : (previous?.progressCountAtTurnStart ?? request.progressAnswerCount),
       hasSeenBusy: false,
       hasSeenOutput: false,
       isRequestPrompt: options.isRequestPrompt || previous?.isRequestPrompt === true,
@@ -327,7 +334,7 @@ export class RequestWakeUpEngine {
       isOwnForward: options.isConversationForward !== true || previous?.isOwnForward === true,
     });
     const isMoot = request.nextPostRetryAt !== undefined && !isFireForward;
-    const isPersonWordsOwed = carriesPersonWords && !isFireForward && !isAlarmRequest && request.isPersonInputUnanswered !== true;
+    const isPersonWordsOwed = isPersonWordsForward && request.isPersonInputUnanswered !== true;
     if (isMoot || isPersonWordsOwed) {
       await this.deps.ledger.updateOpenRequest(request.id, {
         ...(isMoot ? { nextPostRetryAt: undefined } : {}),

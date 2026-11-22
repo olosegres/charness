@@ -1812,6 +1812,37 @@ describe('a request waits for its schedule', () => {
     assert.deepEqual(engine.getOwnForwardWatchedRequestIdsOf(issueKey), [only.id], 'one request woken: the forward is its alone');
   });
 
+  it('a requester\'s comment forwarded into a running turn AFTER the agent\'s progress note is not answered by that note: the turn ends silent, reminded at once — not left to the 90-minute backstop', async () => {
+    for (const person of [{ isRequestPrompt: false, isPersonInput: true }, { isRequestPrompt: true }]) {
+      wakeUps = [];
+      const ledger = await createLedger();
+      const engine = createEngine(ledger, { getScheduleWait: () => 'watching' });
+      const request = await ledger.createRequest(issueKey, handOver);
+      await engine.trackForwardedTurn(issueKey, request.id, { isRequestPrompt: true });
+      // The agent answers early (the real update of `answer_request`) and keeps working; the comment joins the running turn.
+      await ledger.updateOpenRequest(request.id, (current) => ({ progressAnswerCount: current.progressAnswerCount + 1, isPersonInputUnanswered: undefined }));
+      await engine.trackForwardedTurn(issueKey, request.id, person);
+      assert.equal(ledger.getNewestOpenRequest(issueKey)?.isPersonInputUnanswered, true, 'the new words are owed an answer');
+
+      await endTurnSilently(engine);
+      assert.deepEqual(wakeUps, [{ requestId: request.id, reason: 'silentTurn' }], `${JSON.stringify(person)}: an earlier note is not their answer`);
+      engine.stop();
+    }
+  });
+
+  it('a note sent AFTER the comment joined the turn does answer it: the turn ends as a progress one', async () => {
+    const ledger = await createLedger();
+    const engine = createEngine(ledger, { getScheduleWait: () => 'watching' });
+    const request = await ledger.createRequest(issueKey, handOver);
+    await engine.trackForwardedTurn(issueKey, request.id, { isRequestPrompt: true });
+    await ledger.updateOpenRequest(request.id, (current) => ({ progressAnswerCount: current.progressAnswerCount + 1, isPersonInputUnanswered: undefined }));
+    await engine.trackForwardedTurn(issueKey, request.id, { isRequestPrompt: false, isPersonInput: true });
+    await ledger.updateOpenRequest(request.id, (current) => ({ progressAnswerCount: current.progressAnswerCount + 1, isPersonInputUnanswered: undefined }));
+    await endTurnSilently(engine);
+    assert.deepEqual(wakeUps, [], 'answered after the words arrived: quiet under the watch');
+    assert.equal(ledger.getNewestOpenRequest(issueKey)?.silentTurnCount, 0);
+  });
+
   it('a limit resume that re-posts ONE request\'s prompt marks only that request owed: another requester\'s answered request waiting on its watch gets the plain «continue»', async () => {
     const ledger = await createLedger();
     const engine = createEngine(ledger, { getScheduleWait: () => 'watching' });
