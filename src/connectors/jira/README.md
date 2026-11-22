@@ -347,8 +347,8 @@ An agent in an issue has the same `schedule_create` / `schedule_list` / `schedul
 to a Jira conversation: no `threadKey` — its token names the issue — no `isPinSilent`), including the worker-watch recipe, so after
 launching a worker and arming its watch it answers `progress` and ENDS its turn instead of polling for hours. The bot stops the idle
 process; the watch (bot-side, restart-safe, in `state.json` `schedules` under the issue's key) resumes the issue's own session when the
-worker finishes, goes silent or runs 2 h 30 min without a report. A comment on the issue still reaches the agent at once, as an issue
-update into the resumed session.
+worker finishes, goes silent or runs 2 h 30 min without a report. A new comment on the issue still reaches the agent at the connector's next poll of the issue, asleep or not, as an issue
+update into the resumed session — it does not wait for the agent's turn to end.
 
 - **Nothing of it is shown on the issue.** A Jira comment always notifies the requester and the issue's watchers — there is no silent
   one — so a fire posts no announcement, a check no alert and no «back to normal» line, a status argument no status line: the

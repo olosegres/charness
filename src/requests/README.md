@@ -122,8 +122,8 @@ Numeric bounds are named constants in the files below; this README says only wha
   (counter 0, no wake) and a progress note schedules no follow-up (`decideTurnEnd` → `quiet`) — except a turn that carried a person's
   words (the request's own prompt, or an issue update: `isPersonTurn`), which ends with no answer as a silent turn whatever is armed: a
   watch is for the agent's alarms, never a reason to leave a requester unanswered; when the watch is gone (cancelled, paused,
-  its check failing and not re-armed) the normal rules take the request back — a due follow-up, or the backstop 90 min from the last
-  activity. A turn a scheduler fire started (`trackForwardedTurn` with `isScheduledRun`) that ends without an answer is not silent
+  its check failing and not re-armed) the normal rules take the request back — the backstop, 90 min from the last activity: a waiting
+  turn end clears the follow-up, so none is ever due after it. A turn a scheduler fire started (`trackForwardedTurn` with `isScheduledRun`) that ends without an answer is not silent
   either: a woken agent with nothing to report stays quiet, and the bot never prods it for that. A scheduler fire is not a wake-up and
   never counts against the cap. This is why an agent in a Jira issue can launch a worker, arm its watch, answer `progress` and end its
   turn, and why a Telegram topic in a view with requests is no longer reminded every 15 minutes while its own watch passes.

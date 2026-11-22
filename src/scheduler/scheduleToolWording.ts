@@ -129,7 +129,7 @@ const jiraWording: ScheduleToolWording = {
     'arm no schedule of your own for status. One check per worker run; schedule_cancel it once its wake is handled. ' +
     'Once the watch is armed, answer_request "progress" and END your turn — do not poll the worker: the bot stops your idle process and the ' +
     `failure wakes you in this issue when the worker finished, went silent, or ran ${workerWatchUnreportedWindowText} without a report. ` +
-    'A comment on the issue reaches you at once, asleep or not.',
+    'A new comment on the issue reaches you at the bot\'s next poll of the issue, asleep or not — it does not wait for your turn to end.',
   nameDescription: 'Short human name for the job (shown in lists and in the header of its fires).',
   checkCommandDescription:
     'Makes the job a WATCHDOG CHECK: a shell command (run with /bin/sh -c in the bound folder) the bot ' +

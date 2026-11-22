@@ -115,7 +115,7 @@ describe('agent-plugin', () => {
     assert.match(section, /the bot posts NOTHING there for a scheduled run, a check or a status/);
     assert.match(section, /answer `answer_request` kind `progress` .*, then END your turn\. Do not poll the worker\./);
     assert.match(section, /it resumes you in THIS issue, behind a header that names the request open then/);
-    assert.match(section, /A new comment on the issue reaches you at once, asleep or not\./);
+    assert.match(section, /A new comment on the issue reaches you at the bot's next poll of the issue, asleep or not — it does not wait for your turn to end\./);
     assert.match(section, /Answer the request the header names \(`answer_request` with that id\) only with a result the requester needs/);
     assert.match(section, /A wake you handled with nothing to report ends silently: no comment, no "still waiting"\./);
     assert.match(section, /A header that says `no request is open`: the request you armed the job under is finished\. An answer to it still becomes a comment but hands nothing back/);
