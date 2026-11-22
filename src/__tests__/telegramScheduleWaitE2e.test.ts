@@ -9,7 +9,10 @@
  *     (`requestId`)
  *   → the progress follow-up would be due 15 s after the note (this instance's window; production: 15 min) and the engine's sweep
  *     runs every 10 s: both pass, and the agent is NOT prompted — no follow-up, no reminder: it waits for its watch
- *   → the worker exits: the check fails and the agent IS woken by it (the scheduled run), cancels the watch and answers
+ *   → the worker exits: the check fails and the agent IS woken by it (the scheduled run, which opens a request of its own); the agent
+ *     moves on to the NEXT worker — arms its watch, cancels the old one: the new job is armed under the OPERATOR's request (the one it
+ *     works on), not under the request the fire opened, so the operator's request still waits for it: nothing prods it
+ *   → the second worker exits: the agent is woken again, cancels the watch and answers
  *
  * Before the rule, the engine reminded such an agent every 15 minutes whatever its watch said. Nothing leaves the machine: the Bot
  * API is on loopback and the agent is a fake. Everything the test starts is stopped in `after`.
@@ -26,6 +29,7 @@ import { FakeTelegram } from './telegramE2e/fakeTelegram';
 import { TopicDriver } from './telegramE2e/topicDriver';
 import {
   fakeClaudeLogFileNames,
+  fakeRearmWatchWakeMarker,
   fakeStatusWatchJobName,
   fakeStatusWatchTargetFileName,
   type FakeClaudePrompt,
@@ -81,6 +85,7 @@ let fakeTelegram: FakeTelegram;
 let topic: TopicDriver;
 let defaultTmuxSessionsBefore: string[] = [];
 let worker: ChildProcess | null = null;
+let nextWorker: ChildProcess | null = null;
 let openRequestId = '';
 let watchId = '';
 
@@ -96,6 +101,7 @@ function getCharness(): IsolatedCharness {
 
 function removeInstanceSync(): void {
   worker?.kill('SIGKILL');
+  nextWorker?.kill('SIGKILL');
   removeIsolatedInstanceSync(layout, charness);
 }
 
@@ -123,6 +129,22 @@ function readPersistedSchedules(): ScheduleRecord[] {
 function countFinishedRunsSince(sinceMs: number): number {
   return readJsonLines<ScheduleRunRecord>(path.join(getLayout().dataDir, 'scheduler-runs.jsonl'))
     .filter((run) => run.jobId === watchId && run.deliveredAt !== undefined && run.firedAt > sinceMs).length;
+}
+
+/** A real worker process with its run directory, named as the worker the fake agent's next watch is armed on. */
+async function startNamedWorker(runDirName: string): Promise<ChildProcess> {
+  const startedWorker = spawn('sleep', ['3600'], { stdio: 'ignore' });
+  await new Promise<void>((resolve, reject) => {
+    startedWorker.once('spawn', resolve);
+    startedWorker.once('error', reject);
+  });
+  const runDir = path.join(getLayout().testRoot, runDirName);
+  fs.mkdirSync(runDir);
+  fs.writeFileSync(path.join(runDir, 'events.jsonl'), `${JSON.stringify({ type: 'assistant', message: { content: [{ type: 'tool_use', name: 'Bash', input: { command: 'yarn test' } }] } })}\n`);
+  const target: FakeStatusWatchTarget = { pid: startedWorker.pid ?? 0, runDir };
+  assert.ok(target.pid > 0, 'the worker has a process id');
+  fs.writeFileSync(path.join(getLayout().fakeStateDir, fakeStatusWatchTargetFileName), JSON.stringify(target));
+  return startedWorker;
 }
 
 function sleep(ms: number): Promise<void> {
@@ -161,6 +183,7 @@ describe('A request waits for its schedule in a Telegram topic end to end: built
 
   after(async () => {
     worker?.kill('SIGKILL');
+    nextWorker?.kill('SIGKILL');
     await charness?.stop();
     removeInstanceSync();
     await fakeTelegram?.stop();
@@ -180,20 +203,9 @@ describe('A request waits for its schedule in a Telegram topic end to end: built
   });
 
   it('the agent arms the watch on a running worker and answers `progress`; the job is stored with the request the operator\'s message opened', async () => {
-    const startedWorker = spawn('sleep', ['3600'], { stdio: 'ignore' });
-    worker = startedWorker;
-    await new Promise<void>((resolve, reject) => {
-      startedWorker.once('spawn', resolve);
-      startedWorker.once('error', reject);
-    });
-    const runDir = path.join(getLayout().testRoot, 'worker-run');
-    fs.mkdirSync(runDir);
-    fs.writeFileSync(path.join(runDir, 'events.jsonl'), `${JSON.stringify({ type: 'assistant', message: { content: [{ type: 'tool_use', name: 'Bash', input: { command: 'yarn test' } }] } })}\n`);
-    const target: FakeStatusWatchTarget = { pid: startedWorker.pid ?? 0, runDir };
-    assert.ok(target.pid > 0, 'the worker has a process id');
-    fs.writeFileSync(path.join(getLayout().fakeStateDir, fakeStatusWatchTargetFileName), JSON.stringify(target));
+    worker = await startNamedWorker('worker-run');
 
-    fakeTelegram.pushOperatorMessage(topicThreadId, 'W-1 [fake:watch-progress] watch the builder you just launched');
+    fakeTelegram.pushOperatorMessage(topicThreadId, `W-1 [fake:watch-progress] ${fakeRearmWatchWakeMarker} watch the builder you just launched`);
     await getCharness().waitFor('the agent to arm the watch and answer progress', agentTimeoutMs, () =>
       getToolCalls('schedule_create').length === 1 && readFakeLog<{ kind: string }>(fakeClaudeLogFileNames.answers).some((answer) => answer.kind === 'progress'));
     const [created] = getToolCalls('schedule_create');
@@ -226,13 +238,45 @@ describe('A request waits for its schedule in a Telegram topic end to end: built
     assert.equal(request.isWakeStopped, false);
   });
 
-  it('the worker exits: the failed check wakes the agent (the scheduled run), which cancels the watch', async () => {
+  let promptsAfterWake = 0;
+  let nextWatchId = '';
+
+  it('the worker exits: the agent is woken by the failed check and moves on to the next worker — its watch is armed under the OPERATOR\'s request, not under the request the fire opened', async () => {
+    nextWorker = await startNamedWorker('worker-next-run');
     worker?.kill('SIGKILL');
     await getCharness().waitFor('the failed check to wake the agent', checkRunTimeoutMs, () => getAgentPrompts().length > promptsAfterArming);
     const wakePrompt = getAgentPrompts()[promptsAfterArming].text;
     assert.ok(wakePrompt.includes(`[Scheduled check "${fakeStatusWatchJobName}" failed]`), wakePrompt);
     assert.ok(wakePrompt.includes('tells the topic when it passes again'), 'a topic keeps its own wording');
-    await getCharness().waitFor('the agent to cancel the watch', agentTimeoutMs, () => getToolCalls('schedule_cancel').length === 1);
+    const wakeRequestId = wakePrompt.match(/req_[A-Za-z0-9_-]+/)?.[0] ?? '';
+    assert.notEqual(wakeRequestId, openRequestId, 'the fire opened a request of its own, as in any topic with requests');
+    await getCharness().waitFor('the agent to arm the next watch and cancel the old one', agentTimeoutMs, () =>
+      getToolCalls('schedule_create').length === 2 && getToolCalls('schedule_cancel').length === 1);
+    await getCharness().waitFor('the persisted jobs to be the next watch alone', replyTimeoutMs, () => {
+      const watches = readPersistedSchedules().filter((record) => record.name === fakeStatusWatchJobName);
+      return watches.length === 1 && watches[0].id !== watchId;
+    });
+    const nextWatch = readPersistedSchedules().find((record) => record.name === fakeStatusWatchJobName);
+    assert.ok(nextWatch);
+    nextWatchId = nextWatch.id;
+    assert.equal(nextWatch.requestId, openRequestId, 'armed under the request the operator\'s message opened — the one the agent works on — not under the scheduler\'s');
+    promptsAfterWake = getAgentPrompts().length;
+  });
+
+  it('the operator\'s request still waits for the next watch: the follow-up window and several sweeps pass and nothing prods the agent', async () => {
+    await sleep(quietObservationMs);
+    assert.equal(getAgentPrompts().length, promptsAfterWake, 'no follow-up and no reminder: the request waits for the watch that replaced the first');
+    const request = Object.values(readState().openRequests ?? {}).find((open) => open.id === openRequestId);
+    assert.ok(request, 'the operator\'s request is still open');
+    assert.equal(request.isWakeStopped, false);
+    assert.equal(request.wakeCount, 0);
+  });
+
+  it('the second worker exits: the agent is woken again, cancels the watch and answers', async () => {
+    watchId = nextWatchId;
+    nextWorker?.kill('SIGKILL');
+    await getCharness().waitFor('the failed check to wake the agent again', checkRunTimeoutMs, () => getAgentPrompts().length > promptsAfterWake);
+    await getCharness().waitFor('the agent to cancel the watch', agentTimeoutMs, () => getToolCalls('schedule_cancel').length === 2);
     await getCharness().waitFor('the watch to be gone from the persisted state', replyTimeoutMs, () => readPersistedSchedules().every((record) => record.name !== fakeStatusWatchJobName));
   });
 });

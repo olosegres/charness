@@ -122,8 +122,11 @@ the scheduler's would owe an answer nobody asked for.
   it was (a moved word moves the tool digest and reconnects every adopted process), a Jira issue's has no `threadKey` (its
   token names the conversation) and no `isPinSilent`, speaks of «this issue's conversation», says the bot posts NOTHING on the
   issue and that after arming a watch the agent answers `progress` and ENDS its turn; the status arguments stay accepted (one
-  recipe for both) and say no line is posted there. `schedule_create` records the newest open request of the conversation on the
-  job (`ScheduleRecord.requestId`, the `getNewestOpenRequestId` port) in every conversation that has one. A Jira
+  recipe for both) and say no line is posted there. `schedule_create` records the request the agent is WORKING ON on the
+  job (`ScheduleRecord.requestId`, the `getArmingRequestId` port → `pickRequestToArmUnder`: the request whose turn the engine watches,
+  else the newest open one; a request a scheduler fire opened is passed over for any other) in every conversation that has one — so a
+  newer mention request of another person never takes a hand-over's job, and a Telegram agent re-arming in the turn of a fire
+  arms under the operator's request, not the fire's. A Jira
   session also gets `jira_get_attachment` — only when the Jira connector is loaded, through the
   `fetchJiraAttachment` port it supplies (the connector stays lazily loaded); the issue is the session's own
   conversation, taken from its token, never from an argument. The tool changes the Jira digest, so an adopted

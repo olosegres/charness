@@ -355,7 +355,7 @@ update into the resumed session.
   scheduler's delivery has no feed for a tracker conversation (`ScheduleDeliveryDeps.trackerRun`). The agent writes in the issue only
   through `answer_request`, and a woken agent with nothing to report stays silent — the bot never prods it for that.
 - **A fire rides the open request, opens none.** Its prompt starts with a header naming the request it rides (the one the job was armed
-  under — `ScheduleRecord.requestId`, recorded by `schedule_create` — or the open one that replaced it, else the newest open one) or
+  under — `ScheduleRecord.requestId`, recorded by `schedule_create`: the request the agent was working on, not a newer mention of another person — or the open one that replaced it, else the newest open one) or
   saying «no request is open» and naming the finished request: an `answer_request` to that one still becomes a comment but hands
   nothing back, so the agent answers only what the requester must know and cancels a job that served only that request. The issue key
   and link (`JiraConnector.describeConversation`) are in the header, so a session that started fresh knows where it is. The turn the

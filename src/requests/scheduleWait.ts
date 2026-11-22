@@ -49,3 +49,24 @@ export function checkIsWaitingAtTurnEnd(wait: RequestScheduleWait): boolean {
 export function checkIsWaitingBetweenTurns(wait: RequestScheduleWait): boolean {
   return wait === 'watching';
 }
+
+/** @description The newest request of `requests` by creation time (the later one of equal times). */
+export function getNewestRequest(requests: readonly OpenRequestState[]): OpenRequestState | undefined {
+  return requests.reduce<OpenRequestState | undefined>((newest, request) => (newest === undefined || request.createdAt >= newest.createdAt ? request : newest), undefined);
+}
+
+/**
+ * @description The request a job `schedule_create` arms now is armed under — the one the agent is WORKING ON, which is what must
+ * wait for the job: the newest request whose turn the engine is watching, else the newest open one; a request a scheduler fire
+ * opened (`scheduledRun`: a Telegram topic's) is passed over for any other. A fire opens such a request and the agent often
+ * re-arms in its turn (the next worker, a new watch beside the cancelled one): armed under it, the watch would pass to the
+ * scheduler's own chain of requests and leave the operator's request waiting for nothing. In a tracker conversation a newer
+ * request of another requester (a mention) never takes a job from the hand-over the agent is working on. `undefined` when no
+ * request is open (a topic's stream view has none).
+ */
+export function pickRequestToArmUnder(openRequests: readonly OpenRequestState[], watchedRequestIds: readonly string[]): string | undefined {
+  const isWorkRequest = (request: OpenRequestState): boolean => request.origin.kind !== 'scheduledRun';
+  const workRequests = openRequests.filter(isWorkRequest);
+  const watched = getNewestRequest(workRequests.filter((request) => watchedRequestIds.includes(request.id)));
+  return (watched ?? getNewestRequest(workRequests) ?? getNewestRequest(openRequests))?.id;
+}

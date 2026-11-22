@@ -1431,6 +1431,22 @@ describe('a request waits for its schedule', () => {
     engine.stop();
   });
 
+  it('names the requests whose turns it watches — the ones the agent works on — and drops them when the turn ends or the request closes', async () => {
+    const ledger = await createLedger();
+    const engine = createEngine(ledger);
+    const handedOver = await ledger.createRequest(issueKey, handOver);
+    const mention = await ledger.createRequest(issueKey, { kind: 'trackerMention', attributes: { issueKey: 'PROJ-1', triggerId: 'mention:1', requester: 'bob' } });
+    assert.deepEqual(engine.getWatchedRequestIdsOf(issueKey), []);
+    await engine.trackForwardedTurn(issueKey, handedOver.id, { isRequestPrompt: true });
+    assert.deepEqual(engine.getWatchedRequestIdsOf(issueKey), [handedOver.id], 'not the newer request: only the one whose turn runs');
+    await engine.trackForwardedTurn(issueKey, mention.id);
+    assert.deepEqual(engine.getWatchedRequestIdsOf(issueKey).sort(), [handedOver.id, mention.id].sort());
+    assert.deepEqual(engine.getWatchedRequestIdsOf(topicKey), [], 'another conversation has none');
+    await ledger.closeRequest(mention.id, 'final');
+    await engine.pollWatchedTurns();
+    assert.deepEqual(engine.getWatchedRequestIdsOf(issueKey), [handedOver.id], 'a closed request is dropped by the next poll');
+  });
+
   it('a test instance\'s shorter follow-up delay is the one a progress note waits for', async () => {
     const ledger = await createLedger();
     const engine = createEngine(ledger, { progressFollowUpMs: 5_000 });

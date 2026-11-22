@@ -554,11 +554,11 @@ export interface SchedulerMcpDeps {
   /** The agent of the conversation `threadKey` armed a worker watch (`schedule_create` with `statusWorkerRunDir`): it orchestrates workers. */
   noteLimitWorkerWatch?: (threadKey: string) => void;
   /**
-   * The id of the newest request open in the conversation `threadKey`, or `undefined` when none is: `schedule_create` records
-   * it on the job (`ScheduleRecord.requestId`) — the request the job's fires ride and that waits for it. Absent = no job
-   * carries one.
+   * The id of the request a job armed now is armed under in the conversation `threadKey` — the one its agent works on
+   * (`pickRequestToArmUnder`), or `undefined` when none is open: `schedule_create` records it on the job
+   * (`ScheduleRecord.requestId`) — the request the job's fires ride and that waits for it. Absent = no job carries one.
    */
-  getNewestOpenRequestId?: (threadKey: string) => string | undefined;
+  getArmingRequestId?: (threadKey: string) => string | undefined;
   /**
    * One line per runner `charness remote-run` can use — paired or in `runners.json` (`remoteRun/runnerSummary.ts`): name, OS, what it could do
    * when last probed. Asked at every connect, so a runner added, removed or paused shows in the next session's instructions; absent or empty =
@@ -1144,7 +1144,7 @@ function registerSchedulerTools(server: ToolRegistrar, deps: SchedulerMcpDeps, s
     }
 
     // The request this job is armed under: it decides which request a fire rides and whether the request waits for the job.
-    const requestId = deps.getNewestOpenRequestId?.(resolved.threadKey);
+    const requestId = deps.getArmingRequestId?.(resolved.threadKey);
     const created = await createScheduleForThread(deps.store, {
       threadKey,
       name: args.name,

@@ -250,6 +250,11 @@ export class RequestWakeUpEngine {
     return entry && keyToString(entry.key) === keyToString(key) ? entry.request : undefined;
   }
 
+  /** The ids of the requests whose turns the engine watches in `key`'s conversation: the requests the agent is working on right now. */
+  getWatchedRequestIdsOf(key: SessionKey): string[] {
+    return this.getWatchedTurnsOf(key).map((turn) => turn.requestId);
+  }
+
   /** The watched turns of `key`'s conversation. */
   private getWatchedTurnsOf(key: SessionKey): WatchedRequestTurn[] {
     const conversationKey = keyToString(key);

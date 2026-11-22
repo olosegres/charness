@@ -1,4 +1,4 @@
-import { checkIsJobArmedUnderRequest } from '../requests/scheduleWait';
+import { checkIsJobArmedUnderRequest, getNewestRequest } from '../requests/scheduleWait';
 import type { OpenRequestState } from '../requests/types';
 import type { ScheduleRecord } from './types';
 
@@ -18,11 +18,6 @@ import type { ScheduleRecord } from './types';
 export type ScheduledRunTarget =
   | { kind: 'request'; request: OpenRequestState }
   | { kind: 'none'; finishedRequestId?: string };
-
-/** @description The newest request of `requests` by creation time (the later one of equal times). */
-function getNewestRequest(requests: readonly OpenRequestState[]): OpenRequestState | undefined {
-  return requests.reduce<OpenRequestState | undefined>((newest, request) => (newest === undefined || request.createdAt >= newest.createdAt ? request : newest), undefined);
-}
 
 /**
  * @description The request a fire of `job` rides: the one it was armed under (still open, or the open one that replaced

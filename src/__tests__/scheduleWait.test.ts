@@ -13,7 +13,9 @@ import {
   checkIsWaitingAtTurnEnd,
   checkIsWaitingBetweenTurns,
   getRequestScheduleWait,
+  pickRequestToArmUnder,
 } from '../requests/scheduleWait';
+import type { OpenRequestState } from '../requests/types';
 import type { ScheduleRecord } from '../scheduler/types';
 
 const request = { id: 'req_Current1', supersededRequestIds: ['req_Older001', 'req_Older002'] };
@@ -91,3 +93,43 @@ describe('what each reading means to the rules', () => {
     assert.deepEqual((['none', 'armed', 'watching'] as const).map(checkIsWaitingBetweenTurns), [false, false, true]);
   });
 });
+
+describe('pickRequestToArmUnder — the request a new job is armed under', () => {
+  const makeRequest = (id: string, createdAt: number, kind: OpenRequestState['origin']['kind'] = 'trackerEvent'): OpenRequestState => ({
+    id,
+    origin: { kind, attributes: {} },
+    createdAt,
+    progressAnswerCount: 0,
+    silentTurnCount: 0,
+    wakeCount: 0,
+    isWakeStopped: false,
+  });
+
+  it('none open: no request', () => {
+    assert.equal(pickRequestToArmUnder([], []), undefined);
+  });
+
+  it('the request whose turn is watched wins over a newer one — a mention of another person does not take a hand-over\'s job', () => {
+    const handOver = makeRequest('req_HandOver1', 1000);
+    const mention = makeRequest('req_Mention01', 2000, 'trackerMention');
+    assert.equal(pickRequestToArmUnder([handOver, mention], [handOver.id]), handOver.id);
+    assert.equal(pickRequestToArmUnder([handOver, mention], [mention.id]), mention.id, 'the agent works on the mention now');
+  });
+
+  it('of several watched requests the newest; without a watched one the newest open request', () => {
+    const older = makeRequest('req_Older0001', 1000);
+    const newer = makeRequest('req_Newer0001', 2000);
+    assert.equal(pickRequestToArmUnder([older, newer], [older.id, newer.id]), newer.id);
+    assert.equal(pickRequestToArmUnder([older, newer], []), newer.id);
+    assert.equal(pickRequestToArmUnder([newer, older], ['req_Unknown']), newer.id, 'a watched id that is not open is ignored');
+  });
+
+  it('a request a scheduler fire opened is passed over for any other — watched or newest — and is the pick only when it is all there is', () => {
+    const operator = makeRequest('req_Operator01', 1000, 'message');
+    const fire = makeRequest('req_Fire000001', 3000, 'scheduledRun');
+    assert.equal(pickRequestToArmUnder([operator, fire], [fire.id]), operator.id, 'the fire\'s turn is the one watched, the operator\'s request is the one that waits');
+    assert.equal(pickRequestToArmUnder([operator, fire], []), operator.id);
+    assert.equal(pickRequestToArmUnder([fire], [fire.id]), fire.id);
+  });
+});
+

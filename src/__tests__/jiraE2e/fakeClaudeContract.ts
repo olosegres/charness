@@ -201,6 +201,16 @@ export interface FakeStatusWatchTarget {
 export const fakeKeepWatchToken = '[fake:keep-watch]';
 export const fakeKeepWatchWakeMarker = '[wake:keep]';
 /**
+ * The other two wakes a `watch-progress` orchestrator can have, chosen by a marker in the request's text: `rearm-watch` — the
+ * worker finished, so it arms the watch of the NEXT worker (the one the test names in {@link fakeStatusWatchTargetFileName} by then),
+ * cancels the old watch and answers `final` to the request its header names (the next worker's watch then belongs to the request the
+ * agent works on, not to the one a scheduler fire opened); `drop-watch` — it cancels its watch and ends the turn without any answer.
+ */
+export const fakeRearmWatchToken = '[fake:rearm-watch]';
+export const fakeRearmWatchWakeMarker = '[wake:rearm]';
+export const fakeDropWatchToken = '[fake:drop-watch]';
+export const fakeDropWatchWakeMarker = '[wake:drop]';
+/**
  * `one-shot-then-final`: the first turn arms a one-shot prompt this many seconds ahead (its prompt is `[fake:answer]`, so the fire
  * answers `final` to the request id its header names) and answers `final`: the request is finished when the job fires.
  */

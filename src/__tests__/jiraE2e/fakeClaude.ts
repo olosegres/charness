@@ -71,9 +71,13 @@ import {
 import {
   botMcpServerName,
   fakeCancelWatchToken,
+  fakeDropWatchToken,
+  fakeDropWatchWakeMarker,
   fakeGoneWorkerPid,
   fakeKeepWatchToken,
   fakeKeepWatchWakeMarker,
+  fakeRearmWatchToken,
+  fakeRearmWatchWakeMarker,
   fakeOneShotDelaySeconds,
   fakeStatusWatchJobName,
   fakeStatusWatchTargetFileName,
@@ -216,7 +220,9 @@ import { claudeSessionStateEventsVariableName } from '../../utils/jsonStreamHost
  *  - `watch-progress` — an orchestrator in an ISSUE (the Jira schedule flow): the first turn `touch`es the marker, arms the status
  *    watch of the worker the TEST named (`fakeStatusWatchTargetFileName`) like `arm-status-watch`, answers `progress` and ends the
  *    turn — nothing to poll. The watch's wake prompt carries `cancel-watch` (cancel it, answer `final` to the request its header names)
- *    or, when the issue's text carries `fakeKeepWatchWakeMarker`, `keep-watch` (`fakeKeepWatchToken`): the turn ends with no tool call and no answer;
+ *    or, by a marker in the issue's text, `keep-watch` (`fakeKeepWatchWakeMarker`: the turn ends with no tool call and no answer),
+ *    `rearm-watch` (`fakeRearmWatchWakeMarker`: arms the next worker's watch, cancels the old one, answers `final` to the request its
+ *    header names) or `drop-watch` (`fakeDropWatchWakeMarker`: cancels the watch and ends the turn with no answer);
  *  - `one-shot-then-final` — the first turn arms a one-shot prompt `fakeOneShotDelaySeconds` ahead (`[fake:answer]`) and answers `final`; the fire
  *    then answers `final` to the request id its header names — a request that is already finished;
  *  - `usage-limit-once` — its first turn ends the way a subscription limit does: an error `result` saying the
@@ -859,7 +865,7 @@ function buildStatusWatchArguments(prompt: string): Record<string, string | numb
 }
 
 /** @description `arm-watch` / `arm-status-watch` / `cancel-watch`: what an orchestrator does about one worker's watch (see the module). */
-async function runWatchMode(server: McpServerConfig, mode: 'arm-watch' | 'arm-status-watch' | 'cancel-watch', issueKey: string): Promise<void> {
+async function runWatchMode(server: McpServerConfig, mode: 'arm-watch' | 'arm-status-watch' | 'cancel-watch' | 'rearm-watch' | 'drop-watch', issueKey: string): Promise<void> {
   const logToolCall = (tool: string, args: Record<string, string | number | boolean>, outcome: string): void => {
     appendJsonLine(fakeClaudeLogFileNames.toolCalls, { issueKey, tool, args, outcome });
   };
@@ -884,6 +890,11 @@ async function runWatchMode(server: McpServerConfig, mode: 'arm-watch' | 'arm-st
   const listed = await callBotTool(server, 'schedule_list', {});
   logToolCall('schedule_list', {}, listed);
   const jobId = new RegExp(`(?:${fakeWatchJobName}|${fakeStatusWatchJobName}) \\(id: ([^)]+)\\)`).exec(listed)?.[1];
+  if (mode === 'rearm-watch') {
+    // The worker finished: the NEXT worker's watch is armed before the old one is cancelled, as an orchestrator moving on does.
+    const args = buildStatusWatchArguments(`${fakeCancelWatchToken} The worker S3 finished or stalled: read its result.`);
+    logToolCall('schedule_create', args, await callBotTool(server, 'schedule_create', args));
+  }
   if (jobId) logToolCall('schedule_cancel', { id: jobId }, await callBotTool(server, 'schedule_cancel', { id: jobId }));
 }
 
@@ -1390,13 +1401,14 @@ async function runTurn(argv: readonly string[], sessionId: string, content: stri
     endTurn(sessionId, 'The worker is still being watched.');
     return;
   }
-  if (watchMode === 'arm-watch' || watchMode === 'arm-status-watch' || watchMode === 'cancel-watch') {
+  if (watchMode === 'arm-watch' || watchMode === 'arm-status-watch' || watchMode === 'cancel-watch' || watchMode === 'rearm-watch' || watchMode === 'drop-watch') {
     const watchIssueKey = getPromptIssueKey(content) ?? 'unknown';
     appendJsonLine(fakeClaudeLogFileNames.turns, { requestId: requestId ?? null, issueKey: watchIssueKey, isRequestPrompt: false, isPlainTextHidden: false, supersededRequestIds: [], turnCount: 1, pid: process.pid });
     emitTurnActivity(sessionId, watchIssueKey);
     const server = getBotMcpServer(argv);
     if (server) await runWatchMode(server, watchMode, watchIssueKey);
-    if (requestId && server) await callAnswerRequest(server, sessionId, { requestId, kind: 'final', body: `Watch ${watchMode} done.` });
+    // `drop-watch` ends the turn with no answer: a woken agent that drops its watch and says nothing.
+    if (requestId && server && watchMode !== 'drop-watch') await callAnswerRequest(server, sessionId, { requestId, kind: 'final', body: `Watch ${watchMode} done.` });
     endTurn(sessionId, `Watch ${watchMode} done.`);
     return;
   }
@@ -1543,7 +1555,10 @@ async function runTurn(argv: readonly string[], sessionId: string, content: stri
     logToolCall(probeToolName, {}, ran.error ? `error: ${ran.error.message}` : ran.stdout.trim());
   }
   if (state.mode === 'watch-progress' && isFirstTurn && server) {
-    const wakeToken = content.includes(fakeKeepWatchWakeMarker) ? fakeKeepWatchToken : fakeCancelWatchToken;
+    const wakeToken = content.includes(fakeKeepWatchWakeMarker) ? fakeKeepWatchToken
+      : content.includes(fakeRearmWatchWakeMarker) ? fakeRearmWatchToken
+        : content.includes(fakeDropWatchWakeMarker) ? fakeDropWatchToken
+          : fakeCancelWatchToken;
     const args = buildStatusWatchArguments(`${wakeToken} The worker S2 finished or stalled: read its result.`);
     appendJsonLine(fakeClaudeLogFileNames.toolCalls, { issueKey: state.issueKey, tool: 'schedule_create', args, outcome: await callBotTool(server, 'schedule_create', args) });
   }

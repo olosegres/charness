@@ -29,6 +29,7 @@ import {
 } from '../scheduler/mcpSurface';
 import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
 import { makeJiraKey } from '../connectors/jira/sessionKeyCodec';
+import { pickRequestToArmUnder } from '../requests/scheduleWait';
 import { workerWatchCheckCommand, workerWatchCheckCron, workerWatchStatusArguments } from '../scheduler/workerWatch';
 
 const secret = 'd'.repeat(64);
@@ -45,6 +46,8 @@ let ledger: RequestLedger;
 let clients: Client[];
 /** Whether the port that tells `schedule_create` which request is open is wired (an older wiring has none). */
 let isRequestPortWired: boolean;
+/** The requests whose turns the engine is watching (`getWatchedRequestIdsOf`): the ones the agent is working on. */
+let watchedRequestIds: string[];
 /** The conversations of every worker watch noted (`noteLimitWorkerWatch`). */
 let workerWatchNotes: string[];
 let armedJobIds: string[];
@@ -61,6 +64,7 @@ beforeEach(async () => {
   await ledger.load();
   clients = [];
   isRequestPortWired = true;
+  watchedRequestIds = [];
   workerWatchNotes = [];
   armedJobIds = [];
   disarmedJobIds = [];
@@ -77,9 +81,11 @@ beforeEach(async () => {
     compactConversation: () => ({ ok: true, message: 'unused' }),
     answerRequest: async () => ({ ok: false, error: 'unused' }),
     noteLimitWorkerWatch: (threadKey) => { workerWatchNotes.push(threadKey); },
-    // The real lookup the bot wires: the newest open request of the conversation.
-    get getNewestOpenRequestId() {
-      return isRequestPortWired ? (threadKey: string) => ledger.getNewestOpenRequest(keyFromSerialized(threadKey))?.id : undefined;
+    // The real pick the bot wires over the real ledger: the request the agent works on, from the engine's watched turns.
+    get getArmingRequestId() {
+      return isRequestPortWired
+        ? (threadKey: string) => pickRequestToArmUnder(ledger.listOpenRequestsOf(keyFromSerialized(threadKey)), watchedRequestIds)
+        : undefined;
     },
     whenSessionsRestored: async () => {},
     getSecret: async () => secret,
@@ -259,12 +265,22 @@ describe('what the Jira schedule tools do', () => {
 });
 
 describe('the request a job is armed under (requestId)', () => {
-  it('a Jira job records the newest open request of its issue', async () => {
+  it('a Jira job records the newest open request of its issue when none is being worked on', async () => {
     await ledger.createRequest(issueKey, handOver('PROJ-12'));
     const open = await ledger.createRequest(issueKey, { ...handOver('PROJ-12'), attributes: { ...handOver('PROJ-12').attributes, requester: 'bob' } });
     await callTool(await connectAgent(issueKey), 'schedule_create', { name: 'Armed', cron: '0 9 * * *', prompt: 'p' });
     const [record] = Object.values(store.getSchedules());
     assert.equal(record.requestId, open.id, 'the newest of the two requesters\' open requests');
+  });
+
+  it('a Jira job is armed under the request the agent is working on — a newer mention request of another person never takes it', async () => {
+    const handedOver = await ledger.createRequest(issueKey, handOver('PROJ-12'));
+    const mention = await ledger.createRequest(issueKey, { kind: 'trackerMention', attributes: { issueKey: 'PROJ-12', triggerId: 'mention:1', requester: 'bob' } });
+    assert.ok(mention.createdAt >= handedOver.createdAt, 'the mention is the newer request');
+    watchedRequestIds = [handedOver.id];
+    await callTool(await connectAgent(issueKey), 'schedule_create', { name: 'Armed', cron: '0 9 * * *', prompt: 'p' });
+    const [record] = Object.values(store.getSchedules());
+    assert.equal(record.requestId, handedOver.id, 'the hand-over the agent works on, not the newest request');
   });
 
   it('another issue\'s open request is never recorded', async () => {
@@ -291,5 +307,15 @@ describe('the request a job is armed under (requestId)', () => {
     const records = Object.values(store.getSchedules());
     assert.equal('requestId' in records.find((record) => record.name === 'Stream view')!, false);
     assert.equal(records.find((record) => record.name === 'Answers view')?.requestId, request.id);
+  });
+
+  it('a Telegram agent that re-arms in the turn of a scheduler fire arms under the OPERATOR\'s request, not under the request the fire opened', async () => {
+    const operatorRequest = await ledger.createRequest(topicKey, { kind: 'message', attributes: { requester: '424242' } });
+    const fireRequest = await ledger.createRequest(topicKey, { kind: 'scheduledRun', attributes: { requester: 'scheduler' } });
+    assert.ok(fireRequest.createdAt >= operatorRequest.createdAt, 'the fire\'s request is the newest, and its turn is the one being watched');
+    watchedRequestIds = [fireRequest.id];
+    await callTool(await connectAgent(topicKey), 'schedule_create', { name: 'Next worker', cron: '0 9 * * *', prompt: 'p' });
+    const [record] = Object.values(store.getSchedules());
+    assert.equal(record.requestId, operatorRequest.id);
   });
 });

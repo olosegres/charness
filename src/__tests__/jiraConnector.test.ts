@@ -1079,12 +1079,6 @@ describe('bot.ts wires the Jira connector (J5)', () => {
     assert.ok(!forward.includes('openTopicRequest') && !forward.includes('createRequest'), 'a fire opens no request');
   });
 
-  it('a request waits for its schedule: the wake-up engine reads the conversation\'s jobs when it decides, and a test instance may shorten the follow-up', () => {
-    assert.match(startBody, /getScheduleWait: \(key, request\) => getRequestScheduleWait\(state\.getThreadSchedules\(key\), request\),/);
-    assert.match(startBody, /progressFollowUpMs: ENV\.testTimings\.progressFollowUpMs,/);
-    assert.match(botSource, /getNewestOpenRequestId: \(threadKeyStr\) => \{\s*const key = tryKeyFromString\(threadKeyStr\);\s*return key === null \? undefined : wiring\.requestLedger\.getNewestOpenRequest\(key\)\?\.id;/);
-  });
-
   it('C5: a Jira post is told whether its session is fresh — a fresh start or a failed resume\'s fallback start is, a running or resumed one is not', () => {
     const ensure = botSource.slice(botSource.indexOf('async function ensureAgentSessionNow('), botSource.indexOf('function getResumableSessionId('));
     assert.match(ensure, /case 'ready':\s*return \{ ok: true, message: '', isFresh: false \};/);

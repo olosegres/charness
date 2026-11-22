@@ -444,7 +444,7 @@ import {
 } from './requests/limitWaitAnswer';
 import { formatLocalClockWithDateIfNotToday } from './utils/localClock';
 import { RequestWakeUpEngine } from './requests/wakeUpEngine';
-import { getRequestScheduleWait } from './requests/scheduleWait';
+import { getRequestScheduleWait, pickRequestToArmUnder } from './requests/scheduleWait';
 import { checkIsWakingStopped, getRequestBackstopMs } from './requests/wakeUpRules';
 import { joinPromptsNotTakenIn, type WakeUpMessage } from './requests/requestHeader';
 import type { OpenRequestState, RequestAlertReason, RequestPromptOutcome } from './requests/types';
@@ -15919,10 +15919,11 @@ function wireScheduler(wiring: SchedulerWiringDeps): SchedulerMcpHandle {
       const key = tryKeyFromString(threadKeyStr);
       if (key !== null) getLimitNotes().noteWorkerWatch(key);
     },
-    // The request a job is armed under (`ScheduleRecord.requestId`): the newest open one of the conversation, none when a view has no requests.
-    getNewestOpenRequestId: (threadKeyStr) => {
+    // The request a job is armed under (`ScheduleRecord.requestId`): the one the agent works on — its watched turn, never a request a fire opened.
+    getArmingRequestId: (threadKeyStr) => {
       const key = tryKeyFromString(threadKeyStr);
-      return key === null ? undefined : wiring.requestLedger.getNewestOpenRequest(key)?.id;
+      if (key === null) return undefined;
+      return pickRequestToArmUnder(wiring.requestLedger.listOpenRequestsOf(key), requestWakeUpEngine?.getWatchedRequestIdsOf(key) ?? []);
     },
     getRemoteRunRunnerLines: () => getRunnerSummaryLines(),
     // A refused tool call leaves one line in the bounded diagnostic log (agent-diag.log): the SDK refuses before the bot sees it.
