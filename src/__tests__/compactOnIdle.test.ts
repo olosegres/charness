@@ -15,6 +15,12 @@ import {
   compactIdleOverdueMinDelayMs,
   compactIdleOverdueSpreadMs,
   resolveCompactOnIdleEnabled,
+  defaultCompactGrowthTokens,
+  resolveCompactGrowthTokens,
+  parseCompactGrowthTokens,
+  getContextGrowthTokens,
+  getContextBaselineAfterReading,
+  checkIsContextGrownEnough,
   getAgentIdleMs,
   getIdleFireDecision,
   checkIsBusyForRealTurn,
@@ -59,24 +65,21 @@ import { t } from '../i18n';
 
 type IdleFireInput = Parameters<typeof getIdleFireDecision>[0];
 
-/** The all-conditions-met base for the idle-fire decision (D1/D2, L3): compact AND stop. */
+const growthThreshold = 30_000;
+
+/** The all-conditions-met base for the idle-fire decision (D1, L3): compact AND stop, the context grown past the threshold. */
 const fireBase = {
   isSessionActive: true,
   workingSignals: [],
   isIdleMarkSpent: false,
   isIdleMarkMissed: false,
   isEnabled: true,
-  isLatched: false,
   hasCompletedTurnSinceCompaction: true,
   isLimitWaitArmed: false,
+  contextGrowthTokens: growthThreshold + 5_000,
+  growthThresholdTokens: growthThreshold,
   canSuspend: true,
-  isStoppedAtMark: true,
 } as const;
-
-/** A process the bot does not stop at the mark: a backend that cannot be suspended (tmux TUI, OpenCode). */
-const notStoppedBackend = { canSuspend: false, isStoppedAtMark: false } as const;
-/** A suspendable process whose CLI is too old (or not yet known) to be stopped automatically (L-D10): the stop is attempted and declined. */
-const notStoppedOldCli = { canSuspend: true, isStoppedAtMark: false } as const;
 
 test('idleCompactMs is 55 minutes', () => {
   assert.equal(idleCompactMs, 55 * 60 * 1000);
@@ -296,16 +299,15 @@ test('getIdleFireDecision: the overdue boot fire (the bot was down past the wind
 
 test('getIdleFireDecision: a compaction that was not due anyway is not "held" — no notice for a skip the hold did not cause', () => {
   const working = [{ kind: 'backgroundTasks', count: 1 }] as const;
-  // The latch is a compaction blocker only where the process stays alive (see the latch tests below).
-  for (const override of [{ isEnabled: false }, { isLatched: true, ...notStoppedBackend }, { isLatched: true, ...notStoppedOldCli }, { hasCompletedTurnSinceCompaction: false }, { isLimitWaitArmed: true }, { isSessionActive: false }]) {
+  for (const override of [{ isEnabled: false }, { contextGrowthTokens: growthThreshold - 1 }, { hasCompletedTurnSinceCompaction: false }, { isLimitWaitArmed: true }, { isSessionActive: false }]) {
     const decision = getIdleFireDecision({ ...fireBase, ...override, workingSignals: working });
     assert.equal(decision.isIdleMarkHeld, false, JSON.stringify(override));
     assert.equal(decision.heldNoticeReason, null, JSON.stringify(override));
   }
-  // A latched but suspendable process held at the mark WOULD have compacted: the hold costs it, so it is held and told.
-  const latchedSuspendable = getIdleFireDecision({ ...fireBase, isLatched: true, workingSignals: working });
-  assert.equal(latchedSuspendable.isIdleMarkHeld, true);
-  assert.equal(latchedSuspendable.heldNoticeReason, 'backgroundWork');
+  // The context grew enough, so the hold at the mark costs a compaction that was due: it is held and told.
+  const grownAndHeld = getIdleFireDecision({ ...fireBase, workingSignals: working });
+  assert.equal(grownAndHeld.isIdleMarkHeld, true);
+  assert.equal(grownAndHeld.heldNoticeReason, 'backgroundWork');
 });
 
 test('getIdleCompactionArmDecision: a shortened window shortens the overdue floor and spread in proportion — a test\'s 12 s window does not wait out a minute', () => {
@@ -353,34 +355,71 @@ test('getIdleFireDecision: each compaction guard skips the compaction but the st
   }
 });
 
-test('getIdleFireDecision: the user-latch (D2) blocks the compaction only where the process is not stopped at the mark — a stopped one compacts at every idle mark, then sleeps (owner, 2026-11-22)', () => {
-  // A topic woken only by its own checks and worker watches never clears the latch: the stop must still be preceded by a compaction.
-  const stopped = getIdleFireDecision({ ...fireBase, isLatched: true });
-  assert.equal(stopped.shouldCompact, true, 'latched + suspendable + a turn since the last compaction: compact first');
-  assert.deepEqual(stopped.compactionSkipReasons, []);
-  assert.equal(stopped.shouldSuspend, true, 'and then the stop');
-  // Nothing new to compress is still a skip, latched or not: no loop of compactions on a stopped backend.
-  const nothingNew = getIdleFireDecision({ ...fireBase, isLatched: true, hasCompletedTurnSinceCompaction: false });
-  assert.equal(nothingNew.shouldCompact, false);
-  assert.deepEqual(nothingNew.compactionSkipReasons, ['nothing to compress']);
-  assert.equal(nothingNew.shouldSuspend, true);
-  // An always-alive backend (tmux TUI, OpenCode) keeps the owner's D2: at most one idle compaction per user-active period.
-  const alive = getIdleFireDecision({ ...fireBase, isLatched: true, ...notStoppedBackend });
-  assert.equal(alive.shouldCompact, false);
-  assert.deepEqual(alive.compactionSkipReasons, ['latched (D2)']);
-  assert.equal(alive.shouldSuspend, false);
-  // A suspendable process whose CLI is too old (or not yet known) to be stopped automatically stays alive, so it keeps D2 too — while
-  // the decision's stop half still follows `canSuspend`: the stop is attempted, and the stop itself declines it (L-D10).
-  const oldCli = getIdleFireDecision({ ...fireBase, isLatched: true, ...notStoppedOldCli });
-  assert.equal(oldCli.shouldCompact, false);
-  assert.deepEqual(oldCli.compactionSkipReasons, ['latched (D2)']);
-  assert.equal(oldCli.shouldSuspend, true);
-  // Not latched, such a process is compacted as before: the latch is the only thing that differs.
-  assert.equal(getIdleFireDecision({ ...fireBase, ...notStoppedOldCli }).shouldCompact, true);
+test('getIdleFireDecision: the context must have GROWN by the threshold over the baseline — less is not worth a compaction, the stop still follows (owner, 2026-11-22)', () => {
+  // Exactly the threshold is enough (the owner's «about 30 000»); one token short is not.
+  assert.equal(getIdleFireDecision({ ...fireBase, contextGrowthTokens: growthThreshold }).shouldCompact, true, 'reaching the threshold compacts');
+  const short = getIdleFireDecision({ ...fireBase, contextGrowthTokens: growthThreshold - 1 });
+  assert.equal(short.shouldCompact, false);
+  assert.equal(short.compactionSkipReasons.length, 1);
+  assert.equal(short.compactionSkipReasons[0], `the context grew by ${formatTokenCount(29_999)} tokens since its first turn after the last compaction, ${formatTokenCount(30_000)} are needed`, 'the log says how much it grew and how much is needed');
+  assert.equal(short.shouldSuspend, true, 'a skipped compaction still sleeps');
+  // A conversation that has not grown at all, and one whose threshold is 0 («at every idle mark with a new turn»).
+  assert.equal(getIdleFireDecision({ ...fireBase, contextGrowthTokens: 0 }).shouldCompact, false);
+  assert.equal(getIdleFireDecision({ ...fireBase, contextGrowthTokens: 0, growthThresholdTokens: 0 }).shouldCompact, true);
+  // No reading (a backend that cannot say, a state saved before the figures were kept): not held back by the gate.
+  assert.equal(getIdleFireDecision({ ...fireBase, contextGrowthTokens: null }).shouldCompact, true);
+  // The other guards stay: grown enough but nothing new to compress is still no compaction, and the reasons add up.
+  const both = getIdleFireDecision({ ...fireBase, contextGrowthTokens: 100, hasCompletedTurnSinceCompaction: false });
+  assert.equal(both.compactionSkipReasons.length, 2);
+});
+
+test('getIdleFireDecision: no latch of an earlier compaction keeps a grown conversation from its compaction before the sleep — a topic only its own checks wake is compacted again', () => {
+  // The decision has no memory of an earlier compaction beyond the growth since it: a conversation that grew compacts at any mark.
+  const decision = getIdleFireDecision({ ...fireBase, contextGrowthTokens: 2 * growthThreshold });
+  assert.equal(decision.shouldCompact, true);
+  assert.equal(decision.shouldSuspend, true, 'compaction first, then the stop');
+  assert.deepEqual(decision.compactionSkipReasons, []);
+});
+
+test('resolveCompactGrowthTokens: the topic\'s own value wins, then the instance default, then 30 000', () => {
+  assert.equal(defaultCompactGrowthTokens, 30_000);
+  assert.equal(resolveCompactGrowthTokens(undefined, undefined), 30_000);
+  assert.equal(resolveCompactGrowthTokens(50_000, undefined), 50_000, 'General\'s value for a topic with none of its own');
+  assert.equal(resolveCompactGrowthTokens(50_000, 10_000), 10_000, 'the topic\'s own value wins');
+  assert.equal(resolveCompactGrowthTokens(50_000, 0), 0, 'a topic\'s 0 is a value, not «unset»');
+});
+
+test('parseCompactGrowthTokens: a whole number of tokens, `k` for thousands, separators ignored; anything else or out of range is no threshold', () => {
+  for (const [typed, tokens] of [['30000', 30_000], ['50k', 50_000], ['50K', 50_000], ['50 000', 50_000], ['50,000', 50_000], ['50_000', 50_000], ['0', 0], ['1000000', 1_000_000], ['1000k', 1_000_000], ['  20k ', 20_000]] as const) {
+    assert.equal(parseCompactGrowthTokens(typed), tokens, typed);
+  }
+  for (const typed of ['', 'k', 'lots', '-5', '1.5k', '30000x', '1000001', '2000k', '99999999999999999999']) {
+    assert.equal(parseCompactGrowthTokens(typed), null, typed);
+  }
+});
+
+test('getContextGrowthTokens: from the baseline up to the newest reading, never negative, unknown without either', () => {
+  assert.equal(getContextGrowthTokens({ baselineContextTokens: 40_000, lastContextTokens: 73_500 }), 33_500);
+  assert.equal(getContextGrowthTokens({ baselineContextTokens: 40_000, lastContextTokens: 40_000 }), 0);
+  assert.equal(getContextGrowthTokens({ baselineContextTokens: 40_000, lastContextTokens: 38_000 }), 0, 'a smaller context has not grown');
+  assert.equal(getContextGrowthTokens({ baselineContextTokens: null, lastContextTokens: 40_000 }), null);
+  assert.equal(getContextGrowthTokens({ baselineContextTokens: 40_000, lastContextTokens: null }), null);
+});
+
+test('getContextBaselineAfterReading: the first reading is the baseline, a smaller one moves it down (the CLI compacted by itself), a larger one leaves it', () => {
+  assert.equal(getContextBaselineAfterReading(null, 41_000), 41_000, 'the first turn after a compaction (or of a conversation never compacted)');
+  assert.equal(getContextBaselineAfterReading(41_000, 80_000), 41_000, 'growth never moves the baseline');
+  assert.equal(getContextBaselineAfterReading(200_000, 60_000), 60_000, 'a shrink the bot did not make: growth is counted from the new size');
+});
+
+test('checkIsContextGrownEnough: the threshold reached or no reading; the single place both the fire and the per-turn wake-up ask', () => {
+  assert.equal(checkIsContextGrownEnough({ contextGrowthTokens: 30_000, growthThresholdTokens: 30_000 }), true);
+  assert.equal(checkIsContextGrownEnough({ contextGrowthTokens: 29_999, growthThresholdTokens: 30_000 }), false);
+  assert.equal(checkIsContextGrownEnough({ contextGrowthTokens: null, growthThresholdTokens: 30_000 }), true);
 });
 
 test('getIdleFireDecision: a backend that cannot be suspended keeps its process (L-D8) — the compaction alone', () => {
-  const decision = getIdleFireDecision({ ...fireBase, ...notStoppedBackend });
+  const decision = getIdleFireDecision({ ...fireBase, canSuspend: false });
   assert.equal(decision.shouldCompact, true);
   assert.equal(decision.shouldSuspend, false);
   assert.deepEqual(decision.suspendSkipReasons, ['the backend is not suspended']);

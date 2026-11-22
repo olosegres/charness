@@ -105,6 +105,14 @@ export const fakeClaudeAlwaysUsageLimitFileName = 'always-usage-limit';
  */
 export const fakeClaudeUsageWindowsFileName = 'usage-windows.json';
 
+/**
+ * A file in the fake's state dir whose content is a number of tokens: while it exists, every turn the fake ends writes an `assistant`
+ * record carrying that `usage` (all of it as `input_tokens`) into the conversation's transcript just before its `result` — what the
+ * real CLI leaves there, and what the bot reads as the size of the context (`utils/claudeRuntimeInfo.ts`) for the idle compaction's
+ * growth gate. No file: the transcript holds no such record, the bot can tell no size, and the gate holds nothing back.
+ */
+export const fakeClaudeContextTokensFileName = 'context-tokens';
+
 /** The account name of a process started without `CLAUDE_CONFIG_DIR`. */
 export const fakeDefaultAccountName = 'default';
 

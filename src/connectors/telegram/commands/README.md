@@ -115,7 +115,9 @@ General change (a burst of edits would queue ahead of agent output).
 
 ## `compaction.ts`
 
-`/compact`, `/compact_on_idle` (its buttons `coi_on` / `coi_off`, plus `coi_sum_on` / `coi_sum_off` for the
+`/compact`, `/compact_on_idle` (its buttons `coi_on` / `coi_off`, `coi_gr_<tokens>` — a preset of
+`compactGrowthPresetTokens` — for the growth threshold, whose other values are typed (`parseCompactGrowthTokens`; per topic, General's value the default,
+30 000 until set; the one write path is `applyCompactGrowth`), plus `coi_sum_on` / `coi_sum_off` for the
 `/compact_summary` switch and `coi_sr_on` / `coi_sr_off` for the `/compact_self_review` switch on the same picker), `/compact_summary` (`csum_on` / `csum_off`; OFF by default; read
 when a compaction finishes, so unlike `/compact_on_idle` it needs no live session), `/compact_self_review` (`csr_on` / `csr_off`; ON by default;
 read the same way; the one write path is `applyCompactSelfReview`), the compact-on-idle

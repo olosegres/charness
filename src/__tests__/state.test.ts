@@ -757,39 +757,45 @@ test('timestamps: off removes the thread and drops an empty list on disk', async
   assert.equal('timestampThreads' in raw, false, 'empty list must be absent on disk');
 });
 
-// ── compact-on-idle user latch (/compact_on_idle, D2) ──
+// ── compact-on-idle growth threshold (/compact_on_idle) ──
 
-test('compactIdleLatch: default un-latched on a fresh state file', async () => {
-  const store = new StateStore(dataDir, { saveDebounceMs: 5 });
-  await store.init();
-  assert.equal(store.checkIsCompactIdleLatched(key1), false);
-});
-
-test('compactIdleLatch: latching persists, survives a reload, and is per-thread', async () => {
-  // THE restart guard — a spent latch must survive a bot restart so a second
-  // idle-compaction cannot fire without a new user message.
+test('compactGrowth: 30 000 on a fresh state file; the General value is the default of every topic, a topic\'s own wins, both survive a reload', async () => {
   const first = new StateStore(dataDir, { saveDebounceMs: 5 });
   await first.init();
-  await first.setCompactIdleLatched(key1, true);
-  assert.equal(first.checkIsCompactIdleLatched(key1), true);
-  assert.equal(first.checkIsCompactIdleLatched(key2), false, 'latch is per-thread');
+  assert.equal(first.getCompactGrowthGlobalDefault(), 30_000);
+  assert.equal(first.getCompactGrowthTokens(key1), 30_000);
+  assert.equal(first.getCompactGrowthOverride(key1), undefined);
+
+  await first.setCompactGrowthGlobalDefault(50_000);
+  assert.equal(first.getCompactGrowthTokens(key1), 50_000, 'a topic with none of its own follows General');
+  await first.setCompactGrowthOverride(key1, 10_000);
+  assert.equal(first.getCompactGrowthTokens(key1), 10_000, 'the topic\'s own value wins');
+  assert.equal(first.getCompactGrowthTokens(key2), 50_000, 'per topic');
+  await first.setCompactGrowthOverride(key2, 0);
+  assert.equal(first.getCompactGrowthTokens(key2), 0, '0 is a value, not «unset»');
   await first.flush();
 
   const second = new StateStore(dataDir, { saveDebounceMs: 5 });
   await second.init();
-  assert.equal(second.checkIsCompactIdleLatched(key1), true, 'latch survives reload');
-  assert.equal(second.checkIsCompactIdleLatched(key2), false);
+  assert.equal(second.getCompactGrowthGlobalDefault(), 50_000);
+  assert.equal(second.getCompactGrowthTokens(key1), 10_000);
+  assert.equal(second.getCompactGrowthTokens(key2), 0);
 });
 
-test('compactIdleLatch: clearing (user message) drops an empty list on disk', async () => {
-  const store = new StateStore(dataDir, { saveDebounceMs: 5 });
-  await store.init();
-  await store.setCompactIdleLatched(key1, true);
-  await store.setCompactIdleLatched(key1, false);
-  assert.equal(store.checkIsCompactIdleLatched(key1), false);
-  await store.flush();
-  const raw = JSON.parse(fs.readFileSync(path.join(dataDir, 'state.json'), 'utf8'));
-  assert.equal('compactIdleLatchedThreads' in raw, false, 'empty list must be absent on disk');
+test('the retired idle-compaction latch: its dead key is dropped from an older state file on load', async () => {
+  const first = new StateStore(dataDir, { saveDebounceMs: 5 });
+  await first.init();
+  await first.setAgent(key1, { name: 'claude', claudeSessionId: '11111111-1111-4111-8111-111111111111' });
+  await first.flush();
+  const statePath = path.join(dataDir, 'state.json');
+  const older = { ...JSON.parse(fs.readFileSync(statePath, 'utf8')), compactIdleLatchedThreads: [keyToString(key1)] };
+  fs.writeFileSync(statePath, JSON.stringify(older));
+
+  const second = new StateStore(dataDir, { saveDebounceMs: 5 });
+  await second.init();
+  await second.setCompactGrowthGlobalDefault(40_000);
+  await second.flush();
+  assert.equal('compactIdleLatchedThreads' in JSON.parse(fs.readFileSync(statePath, 'utf8')), false);
 });
 
 // ── compactIdleTracking (the idle COUNTDOWN's restart guard) ──
@@ -798,6 +804,8 @@ test('compactIdleLatch: clearing (user message) drops an empty list on disk', as
 const sessionIdA = '11111111-1111-4111-8111-111111111111';
 const sessionIdB = '22222222-2222-4222-8222-222222222222';
 const activityAt = 1_800_000_000_000;
+/** What an untracked thread reads back as: every instant 0, no context reading (a context size has no zero). */
+const noTracking = { lastActivityAt: 0, lastTurnEndAt: 0, lastCompactionAt: 0, lastHeldMarkAt: 0, baselineContextTokens: null, lastContextTokens: null };
 
 test('compactIdleTracking: an untracked thread reads back as all zeros', async () => {
   // `0` is the explicit "no history" value: the arming path takes it as "use the
@@ -806,12 +814,7 @@ test('compactIdleTracking: an untracked thread reads back as all zeros', async (
   const store = new StateStore(dataDir, { saveDebounceMs: 5 });
   await store.init();
   await store.setAgent(key1, { name: 'claude', claudeSessionId: sessionIdA });
-  assert.deepEqual(store.getCompactIdleTracking(key1), {
-    lastActivityAt: 0,
-    lastTurnEndAt: 0,
-    lastCompactionAt: 0,
-    lastHeldMarkAt: 0,
-  });
+  assert.deepEqual(store.getCompactIdleTracking(key1), noTracking);
 });
 
 test('compactIdleTracking: the instants survive a reload (THE restart guard)', async () => {
@@ -835,17 +838,15 @@ test('compactIdleTracking: the instants survive a reload (THE restart guard)', a
     lastTurnEndAt: turnEndAt,
     lastCompactionAt: compactedAt,
     lastHeldMarkAt: 0,
+    baselineContextTokens: null,
+    lastContextTokens: null,
   });
   assert.ok(
     second.getCompactIdleTracking(key1).lastTurnEndAt >
       second.getCompactIdleTracking(key1).lastCompactionAt,
     'after a restart the "something to compress" evidence still holds',
   );
-  assert.deepEqual(
-    second.getCompactIdleTracking(key2),
-    { lastActivityAt: 0, lastTurnEndAt: 0, lastCompactionAt: 0, lastHeldMarkAt: 0 },
-    'tracking is per-thread',
-  );
+  assert.deepEqual(second.getCompactIdleTracking(key2), noTracking, 'tracking is per-thread');
 });
 
 test('compactIdleTracking: a sub-step bump still updates what a reader sees', async () => {
@@ -894,12 +895,32 @@ test('compactIdleTracking: a session swap reads as no history (not the old marke
   assert.equal(store.getCompactIdleTracking(key1).lastTurnEndAt, activityAt, 'precondition: stamped');
 
   await store.setAgent(key1, { name: 'claude', claudeSessionId: sessionIdB });
-  assert.deepEqual(store.getCompactIdleTracking(key1), {
-    lastActivityAt: 0,
-    lastTurnEndAt: 0,
-    lastCompactionAt: 0,
-    lastHeldMarkAt: 0,
-  });
+  assert.deepEqual(store.getCompactIdleTracking(key1), noTracking);
+});
+
+test('compactIdleTracking: the context baseline is the first reading, survives a reload, moves down on a shrink and starts over after a compaction', async () => {
+  const first = new StateStore(dataDir, { saveDebounceMs: 5 });
+  await first.init();
+  await first.setAgent(key1, { name: 'claude', claudeSessionId: sessionIdA });
+  first.noteCompactIdleContext(key1, 41_000);
+  assert.deepEqual([first.getCompactIdleTracking(key1).baselineContextTokens, first.getCompactIdleTracking(key1).lastContextTokens], [41_000, 41_000], 'the first turn is the baseline');
+  first.noteCompactIdleContext(key1, 80_000);
+  assert.deepEqual([first.getCompactIdleTracking(key1).baselineContextTokens, first.getCompactIdleTracking(key1).lastContextTokens], [41_000, 80_000], 'growth moves the newest reading only');
+  await first.flush();
+
+  const second = new StateStore(dataDir, { saveDebounceMs: 5 });
+  await second.init();
+  assert.deepEqual([second.getCompactIdleTracking(key1).baselineContextTokens, second.getCompactIdleTracking(key1).lastContextTokens], [41_000, 80_000], 'a restart keeps the baseline');
+
+  second.noteCompactIdleContext(key1, 30_000);
+  assert.equal(second.getCompactIdleTracking(key1).baselineContextTokens, 30_000, 'a context below the baseline: the CLI compacted by itself');
+
+  await second.setCompactIdleCompactedAt(key1, activityAt);
+  const afterCompaction = second.getCompactIdleTracking(key1);
+  assert.deepEqual([afterCompaction.baselineContextTokens, afterCompaction.lastContextTokens, afterCompaction.lastCompactionAt], [null, null, activityAt], 'a compaction drops both figures: the next turn that ends starts them over');
+  second.noteCompactIdleContext(key1, 52_000);
+  assert.equal(second.getCompactIdleTracking(key1).baselineContextTokens, 52_000, 'the first turn after the compaction, instructions and skills reloaded');
+  assert.equal(second.getCompactIdleTracking(key1).lastCompactionAt, activityAt, 'the compaction stamp is kept');
 });
 
 test('compactIdleTracking: no session id on the agent record → zeros regardless', async () => {
@@ -928,12 +949,7 @@ test('compactIdleTracking: a compaction stamp under a new session starts the ent
 
   await store.setAgent(key1, { name: 'claude', claudeSessionId: sessionIdB });
   await store.setCompactIdleCompactedAt(key1, activityAt + 120_000);
-  assert.deepEqual(store.getCompactIdleTracking(key1), {
-    lastActivityAt: 0,
-    lastTurnEndAt: 0,
-    lastCompactionAt: activityAt + 120_000,
-    lastHeldMarkAt: 0,
-  });
+  assert.deepEqual(store.getCompactIdleTracking(key1), { ...noTracking, lastCompactionAt: activityAt + 120_000 });
 });
 
 test('compactIdleTracking: stamping under a new session overwrites, never merges', async () => {
@@ -947,12 +963,7 @@ test('compactIdleTracking: stamping under a new session overwrites, never merges
 
   await store.setAgent(key1, { name: 'claude', claudeSessionId: sessionIdB });
   store.noteCompactIdleActivity(key1, activityAt + 120_000);
-  assert.deepEqual(store.getCompactIdleTracking(key1), {
-    lastActivityAt: activityAt + 120_000,
-    lastTurnEndAt: 0,
-    lastCompactionAt: 0,
-    lastHeldMarkAt: 0,
-  });
+  assert.deepEqual(store.getCompactIdleTracking(key1), { ...noTracking, lastActivityAt: activityAt + 120_000 });
 });
 
 test('compactIdleTracking: the held idle mark survives a reload, rides beside the other instants, and is reset by a session swap', async () => {
@@ -966,7 +977,7 @@ test('compactIdleTracking: the held idle mark survives a reload, rides beside th
   first.noteCompactIdleTurnEnd(key1, activityAt);
   await first.setCompactIdleMarkHeldAt(key1, heldAt);
   first.noteCompactIdleActivity(key1, heldAt + 1_000);
-  assert.deepEqual(first.getCompactIdleTracking(key1), { lastActivityAt: heldAt + 1_000, lastTurnEndAt: activityAt, lastCompactionAt: 0, lastHeldMarkAt: heldAt }, 'stamping activity leaves the held mark alone');
+  assert.deepEqual(first.getCompactIdleTracking(key1), { ...noTracking, lastActivityAt: heldAt + 1_000, lastTurnEndAt: activityAt, lastHeldMarkAt: heldAt }, 'stamping activity leaves the held mark alone');
   await first.flush();
 
   const second = new StateStore(dataDir, { saveDebounceMs: 5 });

@@ -157,7 +157,7 @@ describe('the self-review section of a compaction summary, through the compactio
       resumeSleepingSessionForPrompt: async () => false,
       checkIsStarting: () => false,
       closeOrphanQuestionMessage: async () => true,
-      notePersonActivity: (activeKey) => { compaction.noteThreadUserActivity(activeKey); },
+      notePersonActivity: (activeKey) => { compaction.noteThreadActivity(activeKey); },
     });
     compaction.registerCompactionCommands();
     compaction.registerCompactionCallbacks();
@@ -180,7 +180,6 @@ describe('the self-review section of a compaction summary, through the compactio
     await harness.state.setCompactSelfReviewOverride(key, true);
     await harness.state.setCompactSelfReviewGlobalDefault(true);
     await harness.state.clearCompactIdleTracking(key);
-    await harness.state.setCompactIdleLatched(key, false);
     await harness.state.setAgent(key, { name: adapter.name, claudeSessionId: 'session-gaps' });
   });
 

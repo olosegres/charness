@@ -38,6 +38,7 @@ import {
   fakeClaudeLoginFileName,
   fakeClaudeLoginUrl,
   fakeClaudeUsageWindowsFileName,
+  fakeClaudeContextTokensFileName,
   fakeDefaultAccountName,
   fakeConsoleLogin,
   fakeClaudePlatformEnvName,
@@ -201,6 +202,8 @@ import { claudeSessionStateEventsVariableName } from '../../utils/jsonStreamHost
  *    `fakeClaudeApiErrorDelayFileName` while that exists);
  *  - while `fakeClaudeUsageWindowsFileName` exists in the state dir, every turn starts with the `rate_limit_event` frame the
  *    real CLI streams: the usage windows the file lists for the account the process runs on;
+ *  - while `fakeClaudeContextTokensFileName` exists in the state dir, every turn ends with an assistant record in the transcript
+ *    whose usage is the number of tokens the file holds: the context size the bot reads for the idle compaction's growth gate;
  *  - `arm-watch`   — an orchestrator watching a worker the way `charness-orchestration` says: `touch` the run directory's
  *    `watch-armed` marker, then `schedule_create` with the real worker-watch recipe (`scheduler/workerWatch.ts`) on a worker that
  *    is gone — or, while `fakeStatusWatchTargetFileName` exists in the state dir, on the live worker the TEST names there —
@@ -1040,7 +1043,19 @@ function emitUsageWindows(sessionId: string): void {
   });
 }
 
+/** The turn's assistant record of the real CLI's transcript, with the context size the test set ({@link fakeClaudeContextTokensFileName}). */
+function recordAssistantContext(sessionId: string, text: string): void {
+  const contextPath = path.join(getStateDir(), fakeClaudeContextTokensFileName);
+  if (!fs.existsSync(contextPath)) return;
+  const inputTokens = Number(fs.readFileSync(contextPath, 'utf8').trim());
+  const usage = { input_tokens: inputTokens, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 };
+  const transcriptPath = getTranscriptPath(sessionId);
+  fs.mkdirSync(path.dirname(transcriptPath), { recursive: true });
+  fs.appendFileSync(transcriptPath, `${JSON.stringify({ type: 'assistant', sessionId, isSidechain: false, message: { role: 'assistant', model: 'fake-model', content: [{ type: 'text', text }], usage } })}\n`);
+}
+
 function endTurn(sessionId: string, resultText: string): void {
+  recordAssistantContext(sessionId, resultText);
   writeStdout({ type: 'result', subtype: 'success', is_error: false, result: resultText, session_id: sessionId, usage: fakeTurnUsage, total_cost_usd: addConversationCost(fakeTurnCostUsd) });
 }
 

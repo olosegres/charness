@@ -18,7 +18,7 @@ test('`opt_<n>` — a Claude TUI selector\'s button, which no code builds any mo
 });
 
 test('every other button is the admins\': pickers, wizards, settings and the unknown — and a near miss is not a match', () => {
-  const adminButtons = ['bind_docs', 'bind_page_2', 'lang_ru', 'agent_claude', 'resume_3', 'mdlp_1_0', 'fbk_x', 'coi_on', 'csum_off', 'skip_retry_5', 'tlk_a_3', 'acl_skip_1'];
+  const adminButtons = ['bind_docs', 'bind_page_2', 'lang_ru', 'agent_claude', 'resume_3', 'mdlp_1_0', 'fbk_x', 'coi_on', 'coi_gr_30000', 'csum_off', 'skip_retry_5', 'tlk_a_3', 'acl_skip_1'];
   for (const data of adminButtons) assert.equal(checkIsTalkerCallback(data), false, data);
   for (const data of ['qa_0', 'qa_a_b', 'qa_0_0_0', 'xqa_0_0', 'reask_', 'reask_1x', 'qs_', 'qs_1', 'qs__0', 'qs_A_0', 'qs_1_0_0', 'xqs_1_0', 'qs_1_x', '']) assert.equal(checkIsTalkerCallback(data), false, JSON.stringify(data));
   assert.equal(checkIsTalkerCallback(undefined), false, 'a tap with no data (a game or a url button) is never a talker\'s');

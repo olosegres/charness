@@ -499,9 +499,9 @@ export const enDict: Record<string, string> = {
   'compactOnIdle.on': 'ON',
   'compactOnIdle.off': 'OFF',
   'compactOnIdle.title':
-    '🧹 Auto-compact on idle for this topic: {state}\n{summaryLine}\n{selfReviewLine}\n\nWhen the session sits idle for ~55 min its context is compacted automatically to save tokens (the prompt cache is still warm).\n\nTo switch it for ALL topics at once, run this in the General topic.',
+    '🧹 Auto-compact on idle for this topic: {state}\n{summaryLine}\n{selfReviewLine}\n{growthLine}\n\nWhen the session sits idle for ~55 min its context is compacted automatically to save tokens (the prompt cache is still warm).\n\nTo switch it for ALL topics at once, run this in the General topic.',
   'compactOnIdle.titleGeneral':
-    '🧹 Auto-compact on idle — default for ALL topics: {state}\n{summaryLine}\n{selfReviewLine}\n\nWhen a session sits idle for ~55 min its context is compacted automatically to save tokens.\n\nEach topic can still override this with its own /compact_on_idle.',
+    '🧹 Auto-compact on idle — default for ALL topics: {state}\n{summaryLine}\n{selfReviewLine}\n{growthLine}\n\nWhen a session sits idle for ~55 min its context is compacted automatically to save tokens.\n\nEach topic can still override this with its own /compact_on_idle.',
   'compactOnIdle.enableButton': 'Enable',
   'compactOnIdle.disableButton': 'Disable',
   'compactOnIdle.summaryLine': '📄 Summary after a compaction: {state}',
@@ -510,6 +510,10 @@ export const enDict: Record<string, string> = {
   'compactOnIdle.selfReviewLine': '💡 Agent self-review: {state}',
   'compactOnIdle.selfReviewShowButton': '💡 Show self-review',
   'compactOnIdle.selfReviewHideButton': 'Hide self-review',
+  'compactOnIdle.growthLine': '📏 Compacts once the context has grown by {tokens}+ tokens since the last compaction — pick below or type a number, e.g. 50k.',
+  'compactOnIdle.setGrowthThisTopic': '✅ Auto-compact on idle: waits for {tokens} tokens of context growth, for this topic.',
+  'compactOnIdle.setGrowthGlobal': '✅ Auto-compact on idle: waits for {tokens} tokens of context growth, for ALL topics (per-topic overrides still apply).',
+  'compactOnIdle.growthInvalid': 'Type the growth as a number of tokens from 0 to {max}, for example 30000 or 50k.',
   'compactOnIdle.setThisTopic': '✅ Auto-compact on idle: {state} for this topic.',
   'compactOnIdle.setGlobal': '✅ Auto-compact on idle: {state} for ALL topics (per-topic overrides still apply).',
   'compactOnIdle.unsupported': 'Auto-compact on idle applies to an active agent session. Start /claude or /opencode in a bound topic first.',

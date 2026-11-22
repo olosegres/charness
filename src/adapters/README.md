@@ -237,7 +237,13 @@ excuses the turn (D1: reject, compact, re-ask) but never pending work. An idle
 fire kept ONLY by pending work looks again at the next idle window or when the
 hold runs out (`getPendingWorkRecheckDelayMs`); a turn's end restarts the idle
 countdown. The idle COMPACTION belongs to the idle mark alone (the prompt cache is
-cold later): a process held at the mark forgoes it (`getIdleFireDecision`'s
+cold later) and to a conversation whose context GREW by the threshold (`/compact_on_idle`, 30 000 tokens by default) since its first turn after
+the last compaction: the context size is read when a json-stream turn ends (`noteThreadTurnContext` → `getRuntimeInfo().contextUsedTokens`, the
+transcript's last assistant usage — not the `result` frame's `usage`, which sums every API call of the turn) or once a backend's output has settled
+(`markThreadTurnProducedOutput`, debounced), kept per conversation (`compactIdleTracking.baselineContextTokens` / `lastContextTokens`, dropped by every
+bot-issued compaction so the next turn starts the baseline over, moved down by a smaller reading); no reading holds nothing back
+(`getContextGrowthTokens`, `getIdleFireDecision`'s `contextGrowthTokens`). There is no once-per-active-period latch: the growth is what keeps
+a compaction from repeating. A process held at the mark forgoes it (`getIdleFireDecision`'s
 `isIdleMarkHeld`; the topic gets ONE silent line, `compactOnIdle.skipped.*Notice`, naming what holds
 it — background work or a message not taken in; a bare running turn holds the mark without a line), the mark is remembered as held (`lastHeldMarkAt`, persisted: a restart repeats nothing and
 compacts nothing late) until the next activity opens a new idle period, and the looks again

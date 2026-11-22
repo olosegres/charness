@@ -4,10 +4,12 @@
  * recording topic sends). The default Claude backend has no running session here, so what is pinned is what
  * needs none:
  *
- *   • WIRING — the four commands, the ten switch buttons and the re-ask buttons the module registers, in order
+ *   • WIRING — the four commands, the ten switch buttons, the growth-threshold buttons and the re-ask buttons the module registers, in order
  *     (the re-asked question itself is `reAskedQuestion.test.ts`);
  *   • the compact-on-idle switch as the General topic uses it — the instance-wide default: the picker, the
  *     typed form, a button tap that persists, answers and re-renders the ✓;
+ *   • the idle compaction's growth threshold — the picker's presets row and the typed form (`50k`, `50000`), 30 000 until somebody
+ *     sets another: General's value is the default of every topic, a topic's own tap wins, and a word that is no number is refused;
  *   • the picker's summary row — the same `/compact_summary` setting, OFF until turned on — and its self-review row — the same
  *     `/compact_self_review` setting, ON until turned off;
  *   • `/compact_self_review` itself: the picker, the typed form, the General default and a topic's own switch, and the flags the
@@ -25,6 +27,7 @@ import path from 'path';
 import { getThreadAdapter } from '../adapters/createAdapter';
 import { createCompaction } from '../connectors/telegram/commands/compaction';
 import { keyToString } from '../sessionKey';
+import { formatTokenCount } from '../utils/compactOnIdle';
 import { createCommandHarness, harnessThreadId, type CommandHarness } from './commandModuleHarness';
 
 const waitStepMs = 25;
@@ -81,10 +84,10 @@ describe('compaction: the compaction flow over its ports', () => {
     await harness.stop();
   });
 
-  it('registers /compact /compact_on_idle /compact_summary /compact_self_review, the ten switch buttons and the re-ask buttons, in order', () => {
+  it('registers /compact /compact_on_idle /compact_summary /compact_self_review, the ten switch buttons, the growth buttons and the re-ask buttons, in order', () => {
     assert.deepEqual(harness.registeredCommandNames, ['compact', 'compact_on_idle', 'compact_summary', 'compact_self_review']);
     assert.deepEqual(harness.registeredActionPatterns, [
-      'coi_on', 'coi_off', 'coi_sum_on', 'coi_sum_off', 'coi_sr_on', 'coi_sr_off', 'csum_on', 'csum_off', 'csr_on', 'csr_off', String(/^reask_(\d+)$/),
+      'coi_on', 'coi_off', String(/^coi_gr_(\d+)$/), 'coi_sum_on', 'coi_sum_off', 'coi_sr_on', 'coi_sr_off', 'csum_on', 'csum_off', 'csr_on', 'csr_off', String(/^reask_(\d+)$/),
     ]);
   });
 
@@ -94,18 +97,25 @@ describe('compaction: the compaction flow over its ports', () => {
     assert.deepEqual(harness.getKeyboardData(harness.replies.at(-1)), [], 'no picker for a switch that cannot apply');
   });
 
-  it('in General the bare command shows the instance-wide switch, the summary row and the self-review row', async () => {
+  it('in General the bare command shows the instance-wide switch, the growth threshold, the summary row and the self-review row', async () => {
     isGeneralTopic = true;
     await harness.runCommand('compact_on_idle');
     const picker = harness.replies.at(-1);
-    assert.deepEqual(harness.getKeyboardData(picker), [['coi_on', 'coi_off'], ['coi_sum_on', 'coi_sum_off'], ['coi_sr_on', 'coi_sr_off']]);
+    assert.deepEqual(harness.getKeyboardData(picker), [
+      ['coi_on', 'coi_off'],
+      ['coi_gr_10000', 'coi_gr_20000', 'coi_gr_30000', 'coi_gr_50000', 'coi_gr_100000'],
+      ['coi_sum_on', 'coi_sum_off'],
+      ['coi_sr_on', 'coi_sr_off'],
+    ]);
+    assert.deepEqual(harness.getKeyboardLabels(picker)[1], ['10k', '20k', '30k ✓', '50k', '100k'], 'the default, 30 000, is checked');
+    assert.ok(picker?.text.includes(`Compacts once the context has grown by ${formatTokenCount(30_000)}+ tokens`), 'the line says the threshold in force');
     assert.match(picker?.text ?? '', /: ON\n/, 'the instance-wide default is on until somebody turns it off');
     assert.match(picker?.text ?? '', /Summary after a compaction: OFF/, 'the summary is off until somebody turns it on');
     assert.match(picker?.text ?? '', /Agent self-review: ON/, 'the self-review is on until somebody turns it off');
     const markup = (picker?.extra as { reply_markup?: { inline_keyboard: Array<Array<{ text: string }>> } } | undefined)?.reply_markup;
-    assert.ok(markup?.inline_keyboard[1]?.[1]?.text.endsWith('✓'), 'the ✓ sits on «Hide summary»');
-    assert.ok(markup?.inline_keyboard[2]?.[0]?.text.endsWith('✓'), 'the ✓ sits on «Show self-review»');
-    assert.ok(!markup?.inline_keyboard[2]?.[1]?.text.endsWith('✓'));
+    assert.ok(markup?.inline_keyboard[2]?.[1]?.text.endsWith('✓'), 'the ✓ sits on «Hide summary»');
+    assert.ok(markup?.inline_keyboard[3]?.[0]?.text.endsWith('✓'), 'the ✓ sits on «Show self-review»');
+    assert.ok(!markup?.inline_keyboard[3]?.[1]?.text.endsWith('✓'));
   });
 
   it('in General a tap on the summary row sets the same switch /compact_summary shows', async () => {
@@ -115,7 +125,7 @@ describe('compaction: the compaction flow over its ports', () => {
     assert.match(harness.replies.at(-1)?.text ?? '', /Compaction summary: ON for ALL topics/);
     await waitUntil('both picker rows to be re-rendered', () => {
       const rows = harness.fakeTelegram.getMessage(picker)?.reply_markup?.inline_keyboard ?? [];
-      return rows.length === 3 && (rows[1]?.[0]?.text.endsWith('✓') ?? false);
+      return rows.length === 4 && (rows[2]?.[0]?.text.endsWith('✓') ?? false);
     });
 
     await harness.tapButton(picker, 'coi_sum_off');
@@ -167,6 +177,51 @@ describe('compaction: the compaction flow over its ports', () => {
     assert.equal(harness.state.checkIsCompactOnIdleEnabled(harness.key), false);
   });
 
+  it('in General the growth threshold is typed as a number of tokens (`50k`, `50 000`, `0`) and persisted; what is no number, or out of range, is refused and changes nothing', async () => {
+    isGeneralTopic = true;
+    assert.equal(harness.state.getCompactGrowthGlobalDefault(), 30_000, 'precondition: the default');
+    await harness.runCommand('compact_on_idle', '50k');
+    assert.equal(harness.state.getCompactGrowthGlobalDefault(), 50_000);
+    assert.ok(harness.replies.at(-1)?.text.includes(`waits for ${formatTokenCount(50_000)} tokens of context growth, for ALL topics`));
+    await harness.runCommand('compact_on_idle', '45 000');
+    assert.equal(harness.state.getCompactGrowthGlobalDefault(), 45_000, 'a typed value outside the presets is kept as typed');
+    await harness.runCommand('compact_on_idle', '0');
+    assert.equal(harness.state.getCompactGrowthGlobalDefault(), 0, '0: a compaction at every idle mark with a new turn');
+
+    for (const typed of ['lots', '-5', '2000000']) {
+      await harness.runCommand('compact_on_idle', typed);
+      assert.ok(harness.replies.at(-1)?.text.includes(`number of tokens from 0 to ${formatTokenCount(1_000_000)}, for example 30000 or 50k`), typed);
+      assert.equal(harness.state.getCompactGrowthGlobalDefault(), 0, `${typed} changed nothing`);
+    }
+    const refused = harness.replies.at(-1);
+    assert.deepEqual(harness.getKeyboardData(refused), [], 'a refused value is no picker');
+    await harness.runCommand('compact_on_idle', '30k');
+    assert.equal(harness.state.getCompactGrowthGlobalDefault(), 30_000);
+  });
+
+  it('a tap on a growth preset persists it, answers the tap and moves the ✓; a value that is no preset changes nothing', async () => {
+    isGeneralTopic = true;
+    const picker = harness.fakeTelegram.pushOperatorMessage(harnessThreadId, 'growth picker');
+    const answersBefore = harness.fakeTelegram.callbackAnswers.length;
+    await harness.tapButton(picker, 'coi_gr_100000');
+    assert.equal(harness.fakeTelegram.callbackAnswers.length, answersBefore + 1, 'the tap was answered');
+    assert.equal(harness.state.getCompactGrowthGlobalDefault(), 100_000);
+    assert.ok(harness.replies.at(-1)?.text.includes(`waits for ${formatTokenCount(100_000)} tokens of context growth, for ALL topics`));
+    await waitUntil('the ✓ to move to 100k', () => (harness.fakeTelegram.getMessage(picker)?.reply_markup?.inline_keyboard[1] ?? []).some((button) => button.text === '100k ✓'));
+
+    await harness.tapButton(picker, 'coi_gr_12345');
+    assert.equal(harness.state.getCompactGrowthGlobalDefault(), 100_000, 'a forged value is no preset');
+
+    // In a regular topic the tap sets that topic's own value and leaves General's alone; the topic's value wins.
+    isGeneralTopic = false;
+    await harness.tapButton(picker, 'coi_gr_10000');
+    assert.equal(harness.state.getCompactGrowthOverride(harness.key), 10_000);
+    assert.equal(harness.state.getCompactGrowthTokens(harness.key), 10_000, 'the topic\'s own value wins');
+    assert.equal(harness.state.getCompactGrowthGlobalDefault(), 100_000, 'General\'s value is untouched');
+    assert.ok(harness.replies.at(-1)?.text.includes(`waits for ${formatTokenCount(10_000)} tokens of context growth, for this topic`));
+    await harness.state.setCompactGrowthGlobalDefault(30_000);
+  });
+
   it('in General /compact_summary shows the instance-wide switch, and its typed form and buttons persist it', async () => {
     isGeneralTopic = true;
     await harness.runCommand('compact_summary');
@@ -198,7 +253,7 @@ describe('compaction: the compaction flow over its ports', () => {
     assert.match(harness.replies.at(-1)?.text ?? '', /Agent self-review on compaction: OFF for ALL topics/);
     await waitUntil('the self-review row to show «Hide self-review» checked', () => {
       const rows = harness.fakeTelegram.getMessage(picker)?.reply_markup?.inline_keyboard ?? [];
-      return rows.length === 3 && (rows[2]?.[1]?.text.endsWith('✓') ?? false) && !(rows[2]?.[0]?.text.endsWith('✓') ?? true);
+      return rows.length === 4 && (rows[3]?.[1]?.text.endsWith('✓') ?? false) && !(rows[3]?.[0]?.text.endsWith('✓') ?? true);
     });
 
     await harness.tapButton(picker, 'coi_sr_on');
@@ -316,7 +371,7 @@ describe('compaction: the compaction flow over its ports', () => {
   it('the hooks the prompt, output and lifecycle paths call are harmless on a topic with no session', () => {
     assert.equal(compaction.checkIsThreadCompacting(harness.key), false);
     compaction.noteThreadActivity(harness.key);
-    compaction.noteThreadUserActivity(harness.key);
+    compaction.noteThreadTurnContext(harness.key);
     compaction.markThreadTurnProducedOutput(harness.key);
     compaction.clearThreadCompaction(harness.key);
     assert.equal(compaction.threadsCompacting.has(keyToString(harness.key)), false);

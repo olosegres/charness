@@ -1,7 +1,7 @@
 import { Markup, type Context } from 'telegraf';
 // Decides whether the D3 summary guidance rides the compaction instruction: OpenCode bakes it into its fork
 // compaction prompt (covering auto/overflow compaction too), the Claude backends need it every time.
-import { claudePerTurnAdapterName, openCodeAdapterName } from '../../../adapters/adapterNames';
+import { checkIsJsonStreamBackend, claudePerTurnAdapterName, openCodeAdapterName } from '../../../adapters/adapterNames';
 import type { AgentAdapter, PendingQuestionState, OpenCodeQuestion, ReAskedQuestionRecord } from '../../../types';
 import type { SessionKey } from '../../../sessionKey';
 import { keyToString } from '../../../sessionKey';
@@ -27,6 +27,12 @@ import {
   checkIsIdleMarkSpent,
   getIdleFireDecision,
   getPendingWorkRecheckDelayMs,
+  checkIsContextGrownEnough,
+  compactGrowthPresetTokens,
+  contextSampleDebounceMs,
+  getContextGrowthTokens,
+  maxCompactGrowthTokens,
+  parseCompactGrowthTokens,
 } from '../../../utils/compactOnIdle';
 import { describeWorkingSignals, type IdleHeldNoticeReason, type WorkingSignal } from '../../../utils/workingSignals';
 import { createStreamedSummaryTracker } from '../../../utils/streamedCompactionSummary';
@@ -120,6 +126,8 @@ interface ThreadCompactionResult {
  */
 interface ThreadCompactionState {
   idleTimer: NodeJS.Timeout | null;
+  /** The pending read of the context size, for a backend that signals no turn end (see {@link contextSampleDebounceMs}). */
+  contextSampleTimer: NodeJS.Timeout | null;
   /**
    * The armed countdown is the OVERDUE arm's: the idle mark it fires for had already passed when it was armed (the bot came back
    * from downtime past the idle window, a re-spawn or a per-turn wake found the topic idle for longer than that), so the fire
@@ -160,18 +168,24 @@ export interface ReAskedQuestion {
   isAnswerPending: boolean;
 }
 
-/** The three switches the `/compact_on_idle` picker shows: the idle compaction itself, the summary post and the self-review section. */
+/** The settings the `/compact_on_idle` picker shows: the idle compaction itself, its growth threshold, the summary post and the self-review section. */
 interface CompactOnIdlePickerState {
   isIdleEnabled: boolean;
+  /** The context growth, in tokens, an idle compaction waits for (`getCompactGrowthTokens`): the preset in force gets the ✓. */
+  growthTokens: number;
   /** The `/compact_summary` setting — the same one, so the two pickers can never disagree. */
   isSummaryEnabled: boolean;
   /** The `/compact_self_review` setting — the same one, so the two pickers can never disagree. */
   isSelfReviewEnabled: boolean;
 }
 
+/** The callback data of a growth-threshold button: `coi_gr_<tokens>` — a preset of {@link compactGrowthPresetTokens}, so the data is short and never a free value. */
+const growthButtonPrefix = 'coi_gr_';
+const tokensPerThousand = 1000;
+
 /**
- * Build the `/compact_on_idle` picker keyboard: Enable / Disable, then Show / Hide
- * summary, then Show / Hide self-review, ✓ on the current value of each.
+ * Build the `/compact_on_idle` picker keyboard: Enable / Disable, then the growth threshold's presets, then Show / Hide
+ * summary, then Show / Hide self-review, ✓ on the current value of each (a threshold typed outside the presets has none).
  */
 function buildCompactOnIdleKeyboard(picker: CompactOnIdlePickerState) {
   return Markup.inlineKeyboard([
@@ -179,6 +193,7 @@ function buildCompactOnIdleKeyboard(picker: CompactOnIdlePickerState) {
       Markup.button.callback(t('compactOnIdle.enableButton') + (picker.isIdleEnabled ? ' ✓' : ''), 'coi_on'),
       Markup.button.callback(t('compactOnIdle.disableButton') + (!picker.isIdleEnabled ? ' ✓' : ''), 'coi_off'),
     ],
+    compactGrowthPresetTokens.map((tokens) => Markup.button.callback(`${tokens / tokensPerThousand}k${tokens === picker.growthTokens ? ' ✓' : ''}`, `${growthButtonPrefix}${tokens}`)),
     [
       Markup.button.callback(t('compactOnIdle.summaryShowButton') + (picker.isSummaryEnabled ? ' ✓' : ''), 'coi_sum_on'),
       Markup.button.callback(t('compactOnIdle.summaryHideButton') + (!picker.isSummaryEnabled ? ' ✓' : ''), 'coi_sum_off'),
@@ -245,7 +260,7 @@ export interface CompactionPorts
    * removal of the buttons landed); when not, its buttons are still there and the next tap tries again.
    */
   closeOrphanQuestionMessage: (key: SessionKey, messageId: number, messageText: string | null) => Promise<boolean>;
-  /** A person wrote in the topic: the bot-wide effects of that (the idle latch, the todo registry) — and the re-asked question's own end. */
+  /** A person wrote in the topic: the bot-wide effects of that (the idle countdown, the todo registry) — and the re-asked question's own end. */
   notePersonActivity: (key: SessionKey) => void;
   /** Where the flags of `/compact_self_review` live, for the compactions the agent's own process runs (`utils/compactSelfReviewFlags.ts`). */
   compactSelfReviewFlagDirs: CompactSelfReviewFlagDirs;
@@ -522,7 +537,7 @@ export function createCompaction(ports: CompactionPorts) {
   function getThreadCompactionState(kStr: string): ThreadCompactionState {
     let existing = threadCompactionStates.get(kStr);
     if (!existing) {
-      existing = { idleTimer: null, isIdleMarkMissed: false };
+      existing = { idleTimer: null, contextSampleTimer: null, isIdleMarkMissed: false };
       threadCompactionStates.set(kStr, existing);
     }
     return existing;
@@ -579,18 +594,13 @@ export function createCompaction(ports: CompactionPorts) {
    * {@link rearmThreadIdleTimer} — one body so the two entry points can only differ
    * in whether they count as activity. Arms when an agent session is active and no
    * compaction is in flight. On a backend that is STOPPED at the idle mark
-   * (`suspendSession`, L3) the timer is armed regardless of the compaction toggle
-   * and the user-latch: the stop happens either way (L-D1), and the fire decides
-   * the compaction — and, where the process really is stopped there (its CLI may be stopped
-   * automatically), the latch does not hold it back (owner, 2026-11-22: the compaction runs at
-   * every idle mark with a turn since the last one, then the stop; {@link checkIsStoppedAtMark}).
-   * On any other backend the timer exists for the compaction
-   * alone, so it is armed only when the feature is enabled for the thread AND the
-   * user-latch is NOT spent (D2): once an idle-compaction has fired this
-   * user-active period the thread stays latched — agent output resets nothing, and
-   * only a genuine USER message (via {@link noteThreadUserActivity}) clears the
-   * latch. That latch, being persisted, is also what stops a restart from
-   * re-firing.
+   * (`suspendSession`, L3) the timer is armed regardless of the compaction toggle:
+   * the stop happens either way (L-D1), and the fire decides the compaction. On any other
+   * backend the timer exists for the compaction alone, so it is armed only when the
+   * feature is enabled for the thread. Nothing else holds the arming back: how often a
+   * conversation is compacted is the fire's decision (`getIdleFireDecision`: a turn since
+   * the last compaction, and the context grown enough), so a restart cannot re-fire either —
+   * the compaction's own stamp and the saved baseline are persisted.
    */
   function armThreadIdleTimer(key: SessionKey, opts: { isRealActivity: boolean }): void {
     const kStr = keyToString(key);
@@ -605,15 +615,8 @@ export function createCompaction(ports: CompactionPorts) {
     // compacts it, and stops it again; every other sleeping or idle-less session has no timer.
     if (!adapter.checkIsActive(key) && !(adapter.name === claudePerTurnAdapterName && checkIsCompactionDue(key))) return;
     const now = Date.now();
-    // Stamp AFTER the enabled/active guards (a disabled or session-less topic has no
-    // countdown to measure) but BEFORE the latch guard: a latched thread still has
-    // activity worth recording — the latch only suppresses the TIMER.
+    // Stamp AFTER the enabled/active guards: a disabled or session-less topic has no countdown to measure.
     if (opts.isRealActivity) getState().noteCompactIdleActivity(key, now);
-    // D2: a spent latch means idle-compaction already fired this user-active period
-    // — do NOT re-arm until a genuine USER message clears the latch. Only for a
-    // backend that stays alive: a suspendable one is armed and the fire decides — it
-    // compacts at every mark where the process is then stopped (`checkIsStoppedAtMark`).
-    if (!isSuspendable && getState().checkIsCompactIdleLatched(key)) return;
     const { lastActivityAt } = getState().getCompactIdleTracking(key);
     const { delayMs, kind } = getIdleCompactionArmDecision({ threadKeyString: kStr, lastActivityAt, now, idleWindowMs });
     getThreadCompactionState(kStr).isIdleMarkMissed = kind === 'overdue';
@@ -648,24 +651,6 @@ export function createCompaction(ports: CompactionPorts) {
   }
 
   /**
-   * @description A genuine USER message (text / voice / file) or a fresh session
-   * start (D2): clear the spent idle-compaction latch so the next idle period can
-   * compact again, THEN reset/arm the idle timer. Distinct from
-   * {@link noteThreadActivity} — which agent output and bot-initiated forwards also
-   * call — because those must NEVER re-arm the latch, only a real user does. The latch
-   * matters only where the process is not stopped at the idle mark (tmux TUI, OpenCode, a
-   * Claude Code too old to be stopped automatically): a stopped one (json-stream, per-turn)
-   * compacts at every idle mark whatever the latch says, so a topic woken only by its own
-   * checks and worker watches is still compacted before it sleeps.
-   */
-  function noteThreadUserActivity(key: SessionKey): void {
-    if (getState().checkIsCompactIdleLatched(key)) {
-      void getState().setCompactIdleLatched(key, false);
-    }
-    noteThreadActivity(key);
-  }
-
-  /**
    * Mark that an agent turn produced output — there is now something to compress.
    * PERSISTED: the fire guard compares this against the last compaction, and after a
    * restart an in-memory-only stamp read back as 0, which read as "nothing to
@@ -675,6 +660,51 @@ export function createCompaction(ports: CompactionPorts) {
     const kStr = keyToString(key);
     if (threadsCompacting.has(kStr)) return; // the compaction's own output isn't a turn
     getState().noteCompactIdleTurnEnd(key);
+    // The json-stream backends say when a turn ends (`noteThreadTurnContext`); the others only stream output, so the context size
+    // is read once that output has settled.
+    if (!checkIsJsonStreamBackend(getThreadAdapter(key).name)) scheduleThreadContextSample(key);
+  }
+
+  /**
+   * @description Read the context size the conversation holds now and record it (`noteCompactIdleContext`): the baseline of the idle
+   * compaction's growth gate on the first reading after a compaction, and the figure the growth is measured up to. Not for the
+   * compaction's own turn, and a reading that a compaction overtook while the backend answered is dropped — it describes the context
+   * of before. A backend that cannot say (no runtime info, a transcript not written yet) leaves the figures as they were, and a
+   * conversation with none is not held back by the gate.
+   */
+  async function sampleThreadContext(key: SessionKey): Promise<void> {
+    const kStr = keyToString(key);
+    if (threadsCompacting.has(kStr)) return;
+    const adapter = getThreadAdapter(key);
+    if (!adapter.getRuntimeInfo) return;
+    const compactedAtBefore = getState().getCompactIdleTracking(key).lastCompactionAt;
+    let contextTokens: number | null;
+    try {
+      contextTokens = (await adapter.getRuntimeInfo(key)).contextUsedTokens;
+    } catch (error) {
+      console.warn(`[compact-on-idle] ${kStr} reading the context size failed: ${error instanceof Error ? error.message : error}`);
+      return;
+    }
+    if (contextTokens === null || contextTokens <= 0) return;
+    if (threadsCompacting.has(kStr) || getState().getCompactIdleTracking(key).lastCompactionAt !== compactedAtBefore) return;
+    getState().noteCompactIdleContext(key, contextTokens);
+  }
+
+  /** A turn of a json-stream conversation ended: read its context size right away — a per-turn process is stopped within moments. */
+  function noteThreadTurnContext(key: SessionKey): void {
+    void sampleThreadContext(key);
+  }
+
+  /** The debounced read of {@link sampleThreadContext}: every output of the thread moves it back. */
+  function scheduleThreadContextSample(key: SessionKey): void {
+    const compactionState = getThreadCompactionState(keyToString(key));
+    if (compactionState.contextSampleTimer) clearTimeout(compactionState.contextSampleTimer);
+    const timer = setTimeout(() => {
+      compactionState.contextSampleTimer = null;
+      void sampleThreadContext(key);
+    }, contextSampleDebounceMs);
+    timer.unref?.();
+    compactionState.contextSampleTimer = timer;
   }
 
   /** Whether the agent's `compact_conversation` armed a compaction for when the turn ends (F1). */
@@ -687,6 +717,7 @@ export function createCompaction(ports: CompactionPorts) {
     const kStr = keyToString(key);
     const compactionState = threadCompactionStates.get(kStr);
     if (compactionState?.idleTimer) clearTimeout(compactionState.idleTimer);
+    if (compactionState?.contextSampleTimer) clearTimeout(compactionState.contextSampleTimer);
     threadCompactionStates.delete(kStr);
     streamedSummaryTracker.clear(kStr);
     // Drop the persisted instants too, so the NEXT session in this topic starts with
@@ -718,36 +749,24 @@ export function createCompaction(ports: CompactionPorts) {
   }
 
   /**
-   * Whether the idle compaction has something to do for a SLEEPING per-turn session (L-D7): enabled and a turn since the last
-   * compaction. Not the user-latch (D2), and no auto-stop test either: a per-turn session is asleep only because the bot stopped
-   * it automatically, so it is stopped again after the compaction and the latch blocks nothing there; a session woken only by
-   * the bot's own checks is resumed for its compaction too ({@link getIdleFireDecision}, {@link checkIsStoppedAtMark}).
+   * Whether the idle compaction has something to do for a SLEEPING per-turn session (L-D7): enabled, a turn since the last
+   * compaction and the context grown enough since it ({@link getIdleFireDecision} decides the same way, so a session is never
+   * resumed for a compaction the fire would then refuse). A session woken only by the bot's own checks is resumed for its
+   * compaction too: nothing depends on who woke it.
    */
   function checkIsCompactionDue(key: SessionKey): boolean {
     if (!getState().checkIsCompactOnIdleEnabled(key)) return false;
-    const { lastTurnEndAt, lastCompactionAt } = getState().getCompactIdleTracking(key);
-    return lastTurnEndAt > lastCompactionAt;
-  }
-
-  /**
-   * Whether the bot WILL stop the topic's process at the idle mark: the backend is suspendable AND its CLI may be stopped
-   * automatically (L-D10) — the very test `suspendThreadSession` applies before it stops anything. Only then does the stop end the
-   * idle period, and the user-latch (D2) has nothing to guard ({@link getIdleFireDecision}). A per-turn session just resumed for
-   * its compaction counts as stopped without asking: it can only be asleep because it was stopped automatically, and the process
-   * it was just given has not reported its CLI version yet (`system/init` comes with its first turn).
-   */
-  function checkIsStoppedAtMark(key: SessionKey, adapter: AgentAdapter, isResumedForCompaction: boolean): boolean {
-    if (typeof adapter.suspendSession !== 'function') return false;
-    return isResumedForCompaction || (adapter.checkIsAutoStopSupported?.(key) ?? false);
+    const { lastTurnEndAt, lastCompactionAt, baselineContextTokens, lastContextTokens } = getState().getCompactIdleTracking(key);
+    return lastTurnEndAt > lastCompactionAt
+      && checkIsContextGrownEnough({ contextGrowthTokens: getContextGrowthTokens({ baselineContextTokens, lastContextTokens }), growthThresholdTokens: getState().getCompactGrowthTokens(key) });
   }
 
   /**
    * @description The idle timer fired (F2 + lifecycle plan L3): nothing while the
-   * process works; else compact once when the guard allows (D1/D2, L-D6), then — on
-   * a backend that can be suspended — stop the process, the session kept resumable.
-   * The compaction comes first and the stop follows it whether or not it ran (L-D1); the
-   * user-latch (D2) holds the compaction back only where the process is not stopped.
-   * The stop re-checks "working" after the compaction: a prompt taken in meanwhile
+   * process works; else compact once when the guard allows (D1, L-D6: a turn since the last
+   * compaction, the context grown enough), then — on a backend that can be suspended — stop the
+   * process, the session kept resumable. The compaction comes first and the stop follows it
+   * whether or not it ran (L-D1). The stop re-checks "working" after the compaction: a prompt taken in meanwhile
    * keeps the process.
    */
   async function onIdleCompactionTimerFired(key: SessionKey): Promise<void> {
@@ -765,7 +784,6 @@ export function createCompaction(ports: CompactionPorts) {
       }
     }
     const isIdleMarkMissed = getThreadCompactionState(kStr).isIdleMarkMissed;
-    let isResumedForCompaction = false;
     // L-D7: a sleeping per-turn session is resumed for its compaction; the stop below puts it back to sleep. Not for a fire that
     // missed the idle mark: it compacts nothing, so waking the session only to stop it again would be for nothing.
     if (!adapter.checkIsActive(key) && adapter.name === claudePerTurnAdapterName && checkIsCompactionDue(key) && !isIdleMarkMissed) {
@@ -773,7 +791,6 @@ export function createCompaction(ports: CompactionPorts) {
         console.log(`[compact-on-idle] ${kStr} sleeping per-turn session could not be resumed for its compaction`);
         return;
       }
-      isResumedForCompaction = true;
       console.log(`[compact-on-idle] ${kStr} sleeping per-turn session resumed for its compaction`);
     }
     // A question that still waits at the idle mark is SET ASIDE, not rejected: the agent goes on (its turn ends the way any turn does,
@@ -786,7 +803,7 @@ export function createCompaction(ports: CompactionPorts) {
     // Both instants come from the store, so a restart no longer erases the evidence
     // that this session has an un-compacted turn (the bug: two in-memory zeros made
     // `0 > 0` false, and D2's no-reschedule rule then left the feature dead).
-    const { lastTurnEndAt, lastCompactionAt, lastActivityAt, lastHeldMarkAt } = getState().getCompactIdleTracking(key);
+    const { lastTurnEndAt, lastCompactionAt, lastActivityAt, lastHeldMarkAt, baselineContextTokens, lastContextTokens } = getState().getCompactIdleTracking(key);
     const workingSignals = getThreadWorkingSignals(key, adapter);
     const decision = getIdleFireDecision({
       isSessionActive: adapter.checkIsActive(key),
@@ -794,11 +811,11 @@ export function createCompaction(ports: CompactionPorts) {
       isIdleMarkSpent: checkIsIdleMarkSpent({ lastActivityAt, lastHeldMarkAt }),
       isIdleMarkMissed,
       isEnabled: getState().checkIsCompactOnIdleEnabled(key),
-      isLatched: getState().checkIsCompactIdleLatched(key),
       hasCompletedTurnSinceCompaction: lastTurnEndAt > lastCompactionAt,
       isLimitWaitArmed: checkIsLimitWaitArmed(key),
+      contextGrowthTokens: getContextGrowthTokens({ baselineContextTokens, lastContextTokens }),
+      growthThresholdTokens: getState().getCompactGrowthTokens(key),
       canSuspend: typeof adapter.suspendSession === 'function',
-      isStoppedAtMark: checkIsStoppedAtMark(key, adapter, isResumedForCompaction),
     });
     if (decision.isIdleMarkHeld) await noteIdleMarkHeld(key, decision.heldNoticeReason);
     if (decision.shouldCompact) {
@@ -810,11 +827,9 @@ export function createCompaction(ports: CompactionPorts) {
       console.log(`[compact-on-idle] ${kStr} timer fired but the compaction is skipped: ${decision.compactionSkipReasons.join(', ')}`);
     }
     if (!decision.shouldSuspend) {
-      // D2: no reschedule. A real running turn resets the timer via
-      // `noteThreadActivity` with its output and its end; where the process stays alive
-      // every other miss re-arms only on the next genuine USER message (which clears the
-      // latch) — except a process kept only by the agent's own pending work, which is
-      // looked at again (bounded hold).
+      // No reschedule. A real running turn resets the timer via `noteThreadActivity` with its output and its
+      // end, and any later activity re-arms it — except a process kept only by the agent's own pending work,
+      // which is looked at again (bounded hold).
       console.log(`[compact-on-idle] ${kStr} process kept: ${decision.suspendSkipReasons.join(', ')}`);
       armPendingWorkRecheck(key, adapter);
       return;
@@ -875,19 +890,14 @@ export function createCompaction(ports: CompactionPorts) {
     setIdleFireTimer(key, delayMs);
   }
 
-  /** The idle compaction itself (D1/D2): latch, stamp, re-ask a pending question after it, post the outcome. */
+  /** The idle compaction itself (D1): stamp, re-ask a pending question after it, post the outcome. */
   async function runIdleCompaction(key: SessionKey, adapter: AgentAdapter): Promise<void> {
     const kStr = keyToString(key);
     const hasPendingQuestion = pendingQuestions.has(kStr);
 
-    // D2: latch the thread the instant the fire is decided (BEFORE any output) and
-    // persist it, so a bot restart can't re-fire and, where the process stays alive, no
-    // second compaction runs this user-active period (a process stopped at the mark compacts
-    // again at its next idle mark: the latch does not block it). Stamp `lastCompactionAt` too so the
-    // re-fire guard holds even if the compaction itself runs long.
-    void getState().setCompactIdleLatched(key, true);
-    // Awaited (unlike the latch): the stamp must be in place BEFORE the compaction
-    // starts, since it is what closes the "has an un-compacted turn" guard.
+    // Stamp `lastCompactionAt` the instant the fire is decided (BEFORE any output), persisted, so a bot restart or a compaction
+    // that runs long can't fire a second one: the stamp closes the «has an un-compacted turn» guard, and clears the growth
+    // baseline — the next turn that ends starts it over. Awaited: it must be in place BEFORE the compaction starts.
     await getState().setCompactIdleCompactedAt(key);
 
     // D1: a pending question at idle → reject it server-side to UNBLOCK the turn
@@ -1360,7 +1370,7 @@ export function createCompaction(ports: CompactionPorts) {
     // Taken before anything is awaited, so no other path uses or closes it, but with no result written yet: the label may reach no
     // session, and a re-ask that lands meanwhile is left as it is until that is known.
     takeReAskedQuestionForAnswer(key);
-    // A person wrote — the latch clears like for any message; the record is gone, so nothing is closed as «not answered».
+    // A person wrote — the record is gone, so nothing is closed as «not answered».
     notePersonActivity(key);
     const outcome = await deliverLabel(key, label, messageContext);
     if (outcome === 'noSession') {
@@ -1459,6 +1469,21 @@ export function createCompaction(ports: CompactionPorts) {
   }
 
   /**
+   * @description The growth threshold of the `/compact_on_idle` command (typed value or preset button): regular topic → the
+   * per-thread value; General topic → the instance-wide default. Read when the idle mark fires, so nothing is re-armed.
+   */
+  async function applyCompactGrowth(key: SessionKey, isGeneral: boolean, tokens: number): Promise<void> {
+    const vars = { tokens: formatTokenCount(tokens) };
+    if (isGeneral) {
+      await getState().setCompactGrowthGlobalDefault(tokens);
+      await replyToThread(key, t('compactOnIdle.setGrowthGlobal', vars));
+      return;
+    }
+    await getState().setCompactGrowthOverride(key, tokens);
+    await replyToThread(key, t('compactOnIdle.setGrowthThisTopic', vars));
+  }
+
+  /**
    * @description Shared core of the `/compact_on_idle` command + its inline
    * callback. Regular topic → the per-thread override; General topic → the
    * instance-wide default. Applies the toggle, confirms, and re-arms/disarms the
@@ -1491,11 +1516,13 @@ export function createCompaction(ports: CompactionPorts) {
     return isGeneral
       ? {
         isIdleEnabled: getState().getCompactOnIdleGlobalDefault(),
+        growthTokens: getState().getCompactGrowthGlobalDefault(),
         isSummaryEnabled: getState().getCompactSummaryGlobalDefault(),
         isSelfReviewEnabled: getState().getCompactSelfReviewGlobalDefault(),
       }
       : {
         isIdleEnabled: getState().checkIsCompactOnIdleEnabled(key),
+        growthTokens: getState().getCompactGrowthTokens(key),
         isSummaryEnabled: getState().checkIsCompactSummaryEnabled(key),
         isSelfReviewEnabled: getState().checkIsCompactSelfReviewEnabled(key),
       };
@@ -1688,9 +1715,21 @@ export function createCompaction(ports: CompactionPorts) {
         return;
       }
 
+      // Anything else typed is the growth threshold (`50000`, `50k`); a word that is no number is refused, never shown as a picker.
+      if (arg !== '') {
+        const tokens = parseCompactGrowthTokens(arg);
+        if (tokens === null) {
+          await replyToThread(key, t('compactOnIdle.growthInvalid', { max: formatTokenCount(maxCompactGrowthTokens) }));
+          return;
+        }
+        await applyCompactGrowth(key, isGeneral, tokens);
+        return;
+      }
+
       const picker = getCompactOnIdlePickerState(key, isGeneral);
       const vars = {
         state: picker.isIdleEnabled ? t('compactOnIdle.on') : t('compactOnIdle.off'),
+        growthLine: t('compactOnIdle.growthLine', { tokens: formatTokenCount(picker.growthTokens) }),
         summaryLine: t('compactOnIdle.summaryLine', {
           state: picker.isSummaryEnabled ? t('compactSummary.on') : t('compactSummary.off'),
         }),
@@ -1767,6 +1806,14 @@ export function createCompaction(ports: CompactionPorts) {
 
     bot.action('coi_off', (ctx) => handleCompactOnIdleCallback(ctx, (key, isGeneral) => applyCompactOnIdle(key, isGeneral, false)));
 
+    bot.action(new RegExp(`^${growthButtonPrefix}(\\d+)$`), (ctx) => {
+      const tokens = Number(ctx.match[1]);
+      // Only a preset the picker offers: a stale or forged value changes nothing.
+      return handleCompactOnIdleCallback(ctx, async (key, isGeneral) => {
+        if (compactGrowthPresetTokens.includes(tokens)) await applyCompactGrowth(key, isGeneral, tokens);
+      });
+    });
+
     bot.action('coi_sum_on', (ctx) => handleCompactOnIdleCallback(ctx, async (key, isGeneral) => {
       await replyToThread(key, await applyCompactSummary(key, isGeneral, true));
     }));
@@ -1797,7 +1844,7 @@ export function createCompaction(ports: CompactionPorts) {
   return {
     checkIsThreadCompacting,
     noteThreadActivity,
-    noteThreadUserActivity,
+    noteThreadTurnContext,
     markThreadTurnProducedOutput,
     postOwnCompactionInstructionGaps,
     syncThreadCompactSelfReviewFlags,

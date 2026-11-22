@@ -1087,11 +1087,11 @@ describe('bot.ts wires the Jira connector (J5)', () => {
     assert.ok(!deps.includes('resumeSession:'), 'no Jira-only resume path: the ensure resumes a sleeping conversation for every platform');
     assert.ok(deps.includes('const sessionPostDeps = createSessionPostDeps();'));
     const postRequest = deps.slice(deps.indexOf('postRequest: async (key, requestId, prompt) => {'));
-    const latchClear = postRequest.indexOf('notePersonActivity(key);');
+    const personActivityCall = postRequest.indexOf('notePersonActivity(key);');
     const post = postRequest.indexOf('await postToSession(sessionPostDeps, keyToString(key), prompt, adapterName);');
-    assert.ok(latchClear > 0 && post > latchClear, 'the idle-compaction latch is cleared (and the todo reminder\'s silence lifted) before the request is posted');
+    assert.ok(personActivityCall > 0 && post > personActivityCall, 'the idle countdown restarts (and the todo reminder\'s silence is lifted) before the request is posted');
     const personActivity = botSource.slice(botSource.indexOf('function notePersonActivity('));
-    assert.match(personActivity, /^function notePersonActivity\(key: SessionKey\): void \{\n {2}noteThreadUserActivity\(key\);/, 'the person\'s activity clears the latch');
+    assert.match(personActivity, /^function notePersonActivity\(key: SessionKey\): void \{\n {2}noteThreadActivity\(key\);/, 'the person\'s activity restarts the idle countdown');
     assert.ok(!botSource.includes('async function ensureSessionByResume('), 'the separate resume helper is gone');
   });
 

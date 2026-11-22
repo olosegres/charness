@@ -121,7 +121,7 @@ describe('where the forward attaches the note, and when it counts as delivered',
 
   it('adds no activity stamp, typing, busy flag or request of its own: the note block holds none of them', () => {
     const block = body.slice(body.indexOf('// The accounts note (`limitNotes/`)'), body.indexOf('markNeedsNewMessage(key);'));
-    for (const forbidden of ['noteThreadActivity', 'noteThreadUserActivity', 'notePersonActivity', 'markThreadTurnProducedOutput', 'setActivity', 'requestRefresh', 'openTopicRequest', 'trackContinuationTurn', 'ensureAgentSession', 'sendInput']) {
+    for (const forbidden of ['noteThreadActivity', 'notePersonActivity', 'markThreadTurnProducedOutput', 'setActivity', 'requestRefresh', 'openTopicRequest', 'trackContinuationTurn', 'ensureAgentSession', 'sendInput']) {
       assert.equal(block.includes(forbidden), false, `the note block must not call ${forbidden}`);
     }
   });

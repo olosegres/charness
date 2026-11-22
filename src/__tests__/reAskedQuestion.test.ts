@@ -225,7 +225,7 @@ describe('the question the idle compaction asked again, through the compaction m
         if (throwingOrphanCloses.has(messageId)) throw new Error('the close could not be sent');
         return !refusedOrphanCloses.has(messageId);
       },
-      notePersonActivity: (activeKey) => { compaction.noteThreadUserActivity(activeKey); },
+      notePersonActivity: (activeKey) => { compaction.noteThreadActivity(activeKey); },
     });
     compaction.registerCompactionCallbacks();
   });
@@ -257,7 +257,6 @@ describe('the question the idle compaction asked again, through the compaction m
     pendingQuestions.clear();
     harness.replies.length = 0;
     await harness.state.clearCompactIdleTracking(key);
-    await harness.state.setCompactIdleLatched(key, false);
     await harness.state.setAgent(key, { name: adapter.name, claudeSessionId: 'session-reask' });
   });
 

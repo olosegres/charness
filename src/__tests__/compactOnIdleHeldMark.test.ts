@@ -133,7 +133,6 @@ describe('the idle mark of a held process: told once, compacted never later', ()
     console.log = originalLog;
     for (const module of modules.splice(0)) module.clearThreadCompaction(key);
     await harness.state.clearCompactIdleTracking(key);
-    await harness.state.setCompactIdleLatched(key, false);
     adapter.signals = [];
     adapter.isBusy = false;
     pendingQuestions.clear();

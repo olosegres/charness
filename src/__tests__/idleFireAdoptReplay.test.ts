@@ -134,7 +134,6 @@ describe('the idle fire of an adopted session waits for its replay', () => {
     adapter.finishReplay();
     compaction.clearThreadCompaction(key);
     await harness.state.clearCompactIdleTracking(key);
-    await harness.state.setCompactIdleLatched(key, false);
   });
 
   /**
