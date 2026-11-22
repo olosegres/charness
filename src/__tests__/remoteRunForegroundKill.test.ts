@@ -1,7 +1,9 @@
 /**
  * @description A foreground run that is interrupted kills its job over a `kill` call (`foreground.ts`). A call that does not kill - the runner refuses it («Pueue did not answer…» for a queued job it could not look up)
  * or the connection is gone - is SAID, with what the runner answered, and that the runner's own lease watcher stops the job now that the lease is gone: the run used to swallow the result and leave the user
- * thinking the job was stopped. The run is driven with a fake ssh child and a fake runner client; the runner's side of the retry is `remoteRunRunnerScriptStashWaiting.test.ts`.
+ * thinking the job was stopped. The heartbeat that keeps the runner's lease watcher from ending the job first goes on while the `kill` call is in flight, so a
+ * limit that ran out is recorded as the limit (124) and not as a kill (137) when that call is slow on a loaded runner. The run is driven with a fake ssh child and a fake runner client; the runner's side of the retry is `remoteRunRunnerScriptStashWaiting.test.ts`,
+ * the whole thing against a real runner `remoteRunLifecycleLimitsE2e.test.ts`.
  *
  * Test case: N/A — Charness has no Jira tracker.
  */
@@ -61,7 +63,51 @@ async function interruptRun(killResult: SshRunResult): Promise<{ exitCode: numbe
   return { exitCode, said: said.join(''), killCalls };
 }
 
+/** The lease and the call of the heartbeat test: a beat every 100 ms, a `kill` call that takes six beats' worth, far longer than one lease would allow without them. */
+const slowKillLeaseMs = 900;
+const slowKillCallMs = 600;
+const minBeatsDuringSlowKill = 4;
+
+/** How many heartbeat bytes reached the lease session while a `kill` call that takes `slowKillCallMs` was in flight. */
+async function countBeatsDuringSlowKill(): Promise<number> {
+  // `cat` hands every heartbeat byte back on its stdout, where the test counts it; the answer to the `kill` call ends it, like the runner's.
+  const child = spawn('cat', [], { stdio: ['pipe', 'pipe', 'pipe'] });
+  let beats = 0;
+  child.stdout.on('data', (chunk: Buffer) => { beats += chunk.length; });
+  let beatsDuringKill = -1;
+  const client: RunnerClient = {
+    runner: { name: 'mac', ssh: 'user@mac', workDir: '/work' },
+    cacheDir: '/nonexistent-cache',
+    rsyncSshCommand: 'ssh',
+    ensureScript: async () => undefined,
+    getAbsoluteWorkDir: async () => '/work',
+    call: async () => {
+      const beatsAtStart = beats;
+      await new Promise((resolve) => setTimeout(resolve, slowKillCallMs));
+      beatsDuringKill = beats - beatsAtStart;
+      child.kill('SIGKILL');
+      return { exitCode: 0, stdout: 'killed\n', stderr: '', isTimedOut: false };
+    },
+    callOrThrow: async (): Promise<never> => { throw new Error('not used by a foreground run'); },
+    stream: () => child,
+  };
+  const running = followForeground({
+    client,
+    staged: { jobId, slug: 'app-aaaaaaaaaa', group: 'default', timeoutSeconds: 3600, workDir: '/work' },
+    target: createFetchTarget('/nonexistent-project', 'app-aaaaaaaaaa', []),
+    io: { stdout: () => undefined, stderr: () => undefined, cwd: '/', env: {}, homeDir: '/' },
+    leaseMs: slowKillLeaseMs,
+  });
+  setImmediate(() => process.emit('SIGINT', 'SIGINT'));
+  await running;
+  return beatsDuringKill;
+}
+
 describe('a foreground run that is interrupted', () => {
+  it('keeps beating while the kill call is in flight: a slow call must not let the runner\'s lease watcher end the job first', async () => {
+    assert.ok(await countBeatsDuringSlowKill() >= minBeatsDuringSlowKill);
+  });
+
   it('says the kill that did not kill - the runner\'s own words, and that its watcher stops the job now that the lease is gone', async () => {
     const outcome = await interruptRun({ exitCode: 125, stdout: '', stderr: `${refusal}\n`, isTimedOut: false });
     assert.deepEqual(outcome.killCalls[0].slice(0, 3), ['kill', 'app-aaaaaaaaaa', jobId]);

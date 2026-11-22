@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+**A `charness remote-run` job that hits its `--timeout` is now always recorded as «timed out» (exit 124) — before, when the runner was very slow to answer the kill it could end up as «killed» (exit 137).**
+Before, when the time limit of a foreground run ran out, the command stopped its keep-alive beat and only then asked the runner to kill the job; if that call took longer than the runner's lease (45 s), the runner's own lease watcher ended the job first, as a plain kill, and `charness remote-run ls` said «killed exit 137» although the command itself reported the timeout. Now the keep-alive goes on until the runner has answered the kill.
+
 **A topic that only its own checks and worker watches wake is now compacted again before it goes to sleep — before, once its first idle compaction had run, such a topic went to sleep at every idle mark without one for as long as you did not write in it.**
 Before, an agent that kept being woken by its own scheduled checks and «worker finished» watches never got its conversation compacted again after the first time: each time it went idle it was put to sleep as it was, its context only growing, until you wrote in the topic yourself (one such topic went more than a day without a compaction). Now, on the Claude backends whose process the bot stops when the agent goes idle (the default and the per-turn one), the idle mark compacts the conversation first whenever the agent has finished a turn since the last compaction — whoever woke it — and only then puts it to sleep; with nothing new to compress it just goes to sleep, so compactions never repeat for nothing. A sleeping per-turn topic that only the bot woke is resumed for its compaction the same way. Where the process is not stopped at the idle mark — the tmux Claude, OpenCode, a Claude Code older than 2.1.287 — nothing changes: one idle compaction until you write again.
 

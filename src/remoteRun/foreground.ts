@@ -90,10 +90,16 @@ export async function followForeground(params: {
 
   const killJob = (): Promise<void> => {
     killing ??= (async () => {
-      clearInterval(heartbeatTimer);
-      // A kill because the limit ran out is recorded as the limit (124), as the runner's own watchdog records it when it gets there first.
-      const killed = await client.call('kill', [staged.slug, staged.jobId, ...(isTimedOut ? [killReasonTimeout] : [])], { timeoutMs: killCallTimeoutMs });
-      if (killed.exitCode !== 0) sayOwn(io, describeFailedKill(staged.jobId, client.runner.name, killed));
+      try {
+        // A kill because the limit ran out is recorded as the limit (124), as the runner's own watchdog records it when it gets there first.
+        // The heartbeat goes on until the runner has answered: stopped at once, a kill call that is slow on a loaded runner (longer than the
+        // lease) lets the runner's lease watcher end the job first, as a plain kill (137) — the limit would then read «killed». A call that
+        // never answers stops it at its own timeout, and the lease watcher takes over as before.
+        const killed = await client.call('kill', [staged.slug, staged.jobId, ...(isTimedOut ? [killReasonTimeout] : [])], { timeoutMs: killCallTimeoutMs });
+        if (killed.exitCode !== 0) sayOwn(io, describeFailedKill(staged.jobId, client.runner.name, killed));
+      } finally {
+        clearInterval(heartbeatTimer);
+      }
       setTimeout(() => child.kill('SIGKILL'), streamEndGraceMs).unref();
     })();
     return killing;
