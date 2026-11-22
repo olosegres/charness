@@ -421,9 +421,10 @@ export interface CompactIdleTrackingEntry {
    * ({@link getContextGrowthTokens}). Read from the conversation's history at the first turn's end after a compaction (or at the
    * first turn the bot reads, from the history: a conversation that already had turns is not measured from now); for a conversation
    * never compacted, its first call. Dropped by every compaction; replaced when the CLI's or the server's own compaction replaced the epoch
-   * (`AgentAdapter.getOwnCompactionCount`, a per-conversation count, differs from the last reading's — or from 0 at the first reading
-   * after a restart); dropped when a later context is smaller than it (a compaction nothing counted) to be read
-   * again from the new epoch.
+   * (`AgentAdapter.getOwnCompactionCount`, a per-conversation count within one bot lifetime, differs from the last reading's); replaced
+   * by the first call read AGAIN at the first reading of a bot lifetime and at every read of a sleeping conversation (a compaction around
+   * a restart is not in the count; the re-read keeps the baseline when it gives none); dropped when a later context is smaller than it
+   * (a compaction nothing counted) to be read again from the new epoch.
    */
   baselineContextTokens?: number;
   /** The context size after the newest turn read, in tokens (the last call's input, cache and output): what the growth is measured up to. */
@@ -2379,10 +2380,11 @@ export class StateStore {
    * upper end) and, when the conversation had no baseline, the size its epoch's FIRST model call saw (`firstCallContextTokens`, `null`
    * while it cannot be told). The baseline is then that figure; one that is already there stays, unless a compaction the bot did not
    * issue replaced the epoch since the last reading (`isNewEpoch`) or the context is now smaller than it — it is replaced or dropped
-   * to be read from the new epoch ({@link getContextBaselineAfterReading}). Rare — once per turn — so it always schedules a save: a
-   * restart must keep the baseline.
+   * to be read from the new epoch; a RECHECK (`isBaselineRecheck`, the first call read again beside a baseline) replaces it with a
+   * figure that was read and keeps it when none was ({@link getContextBaselineAfterReading}). Rare — once per turn — so it always
+   * schedules a save: a restart must keep the baseline.
    */
-  noteCompactIdleContext(key: SessionKey, reading: { lastContextTokens: number; firstCallContextTokens: number | null; isNewEpoch?: boolean }): void {
+  noteCompactIdleContext(key: SessionKey, reading: { lastContextTokens: number; firstCallContextTokens: number | null; isNewEpoch?: boolean; isBaselineRecheck?: boolean }): void {
     const k = keyToString(key);
     const sessionId = this.getAgentSessionId(k);
     if (!sessionId) return; // nothing to bind the figures to — see `getAgentSessionId`
@@ -2394,6 +2396,7 @@ export class StateStore {
       lastContextTokens: reading.lastContextTokens,
       firstCallContextTokens: reading.firstCallContextTokens,
       isNewEpoch: reading.isNewEpoch ?? false,
+      isBaselineRecheck: reading.isBaselineRecheck ?? false,
     });
     if (baseline === null) delete entry.baselineContextTokens;
     else entry.baselineContextTokens = baseline;

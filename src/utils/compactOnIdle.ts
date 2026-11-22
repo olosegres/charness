@@ -258,12 +258,17 @@ export function checkIsContextGrownEnough(input: { contextGrowthTokens: number |
  * bot has no figures of, a measure at the idle mark) it is the context of the epoch's FIRST model call — the compacted summary, the
  * instructions, the skills and the prompt, read from the conversation's history — and `null` while that cannot be told (it is read
  * again at the next reading). A compaction the bot did NOT issue since the last reading (`isNewEpoch`: the CLI's own overflow
- * compaction, the server's own) replaced the epoch, so the baseline it had is the older epoch's: the new epoch's first call takes its
- * place, `null` while there is none yet. Otherwise a baseline stays — except that a context SMALLER than it is the same sign for a
- * compaction nothing counted (the tmux Claude's own): it is dropped, to be read again from the new epoch.
+ * compaction, the server's own, counted by the adapter) replaced the epoch, so the baseline it had is the older epoch's: the new
+ * epoch's first call takes its place, `null` while there is none yet. A RECHECK (`isBaselineRecheck`: the first call is read again
+ * although a baseline is there — the first reading of a bot lifetime, a sleeping conversation's every read — because a compaction may
+ * have gone by that no count saw) replaces the baseline with the figure when the read gave one and keeps it when it gave none: the
+ * first call of the epoch the conversation is in IS its baseline, and a failed read says nothing against the old one. Otherwise a
+ * baseline stays — except that a context SMALLER than it is the same sign for a compaction nothing counted (the tmux Claude's own): it
+ * is dropped, to be read again from the new epoch.
  */
-export function getContextBaselineAfterReading(input: { baselineContextTokens: number | null; lastContextTokens: number; firstCallContextTokens: number | null; isNewEpoch: boolean }): number | null {
+export function getContextBaselineAfterReading(input: { baselineContextTokens: number | null; lastContextTokens: number; firstCallContextTokens: number | null; isNewEpoch: boolean; isBaselineRecheck?: boolean }): number | null {
   if (input.isNewEpoch || input.baselineContextTokens === null) return input.firstCallContextTokens;
+  if (input.isBaselineRecheck && input.firstCallContextTokens !== null) return input.firstCallContextTokens;
   return input.lastContextTokens < input.baselineContextTokens ? null : input.baselineContextTokens;
 }
 

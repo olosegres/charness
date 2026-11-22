@@ -8,8 +8,10 @@
  *   • when a json-stream turn ends, the context after it is recorded (the figure growth is measured up to) and, while there is no
  *     baseline, the first call of the epoch is read from the conversation's history: a first turn that read half a repository does
  *     not hide its own growth in the baseline; a history that cannot be read leaves NO baseline, never the turn's end in its place;
- *   • a baseline that is there is not read again; a smaller context drops it (the CLI compacted by itself) to be read from the new
- *     epoch; the compaction's own turn is never read, and a reading a compaction overtook while the backend answered is dropped;
+ *   • a baseline that is there is read again only as a RECHECK — the first reading of a bot lifetime (a compaction around a restart is
+ *     in no count) and every read of a sleeping conversation: a first call that was read replaces it, none keeps it; a counted
+ *     compaction of the CLI's or the server's own replaces it, a smaller context drops it, to be read from the new epoch; the
+ *     compaction's own turn is never read, and a reading a compaction overtook while the backend answered is dropped;
  *   • a backend that signals no turn end (OpenCode, the tmux Claude) is read once its output has settled;
  *   • the fire compacts a conversation that grew enough and only sleeps one that did not (the stop follows either way, nothing is
  *     posted); a conversation never compacted with no reading is not held back, one that WAS compacted is — a tmux-style topic whose
@@ -131,8 +133,11 @@ describe('the idle compaction waits for the context to grow, through the compact
   /** What the bot reads of a STOPPED session's transcript by its persisted session (`readSleepingContext`); `null`: nothing readable. */
   let sleepingReading: ThreadContextReading | null = null;
   let sleepingReads = 0;
+  /** Whether each read of a sleeping session asked for the epoch's first call. */
+  let sleepingBaselineAsks: boolean[] = [];
   const readSleepingContext = (isBaselineNeeded: boolean): ThreadContextReading | null => {
     sleepingReads += 1;
+    sleepingBaselineAsks.push(isBaselineNeeded);
     return sleepingReading === null ? null : { lastContextTokens: sleepingReading.lastContextTokens, firstCallContextTokens: isBaselineNeeded ? sleepingReading.firstCallContextTokens : null };
   };
   const modules: Array<ReturnType<typeof createCompaction>> = [];
@@ -214,6 +219,7 @@ describe('the idle compaction waits for the context to grow, through the compact
     forwardedPrompts = [];
     sleepingReading = null;
     sleepingReads = 0;
+    sleepingBaselineAsks = [];
   });
 
   it('a turn that ends is read: the baseline is the epoch\'s FIRST call though the turn ended far above it; a baseline that is there is not read again', async () => {
@@ -446,7 +452,7 @@ describe('the idle compaction waits for the context to grow, through the compact
     armTopicAfterTurn(module, { baseline: baselineTokens, last: baselineTokens + 1_000 });
     await waitUntil('the compaction and the stop', () => steps.includes('stop'));
     assert.equal(growthAdapter().compactions, 1);
-    assert.equal(growthAdapter().firstCallReads, 0, 'the baseline was there: only the context now was read');
+    assert.equal(growthAdapter().firstCallReads, 1, 'the persisted baseline is checked against the history once, as the first reading of this bot lifetime — and the same epoch gives the same figure');
   });
 
   it('the deploy for a SLEEPING per-turn session: measured from its transcript by the persisted session — resumed for its compaction only when it grew, and never woken when it did not or cannot be read', async () => {
@@ -531,6 +537,48 @@ describe('the idle compaction waits for the context to grow, through the compact
     assert.equal(stub.firstCallReads, 1);
   });
 
+  it('a restart in the middle of an epoch the bot did not see: the first reading of a fresh module re-reads the epoch\'s first call — the count says nothing (0 against 0) — and replaces the old baseline with it, once per bot lifetime', async () => {
+    adapter = new GrowthStubAdapter(claudeJsonStreamAdapterName);
+    const stub = growthAdapter();
+    const module = createModule();
+    // The persisted figures are the old epoch's. The CLI overflowed mid-turn before the restart: its boundary is behind the replay's
+    // offset, so the new process counts 0, and the epoch's first call saw 60 000.
+    noteFigures(20_000, 24_000);
+    stub.ownCompactions = 0;
+    stub.contextTokens = 70_000;
+    stub.firstCallTokens = 60_000;
+    module.noteThreadTurnContext(key);
+    await waitUntil('the first reading after the restart', () => getTracking().lastContextTokens === 70_000);
+    assert.deepEqual(getFigures(), [60_000, 70_000], 'growth is 10 000, not 50 000');
+    assert.equal(stub.firstCallReads, 1);
+
+    // Once per lifetime: the baseline that is there now is not read again.
+    stub.contextTokens = 75_000;
+    stub.firstCallTokens = 1_234;
+    module.noteThreadTurnContext(key);
+    await waitUntil('the next reading', () => getTracking().lastContextTokens === 75_000);
+    assert.deepEqual(getFigures(), [60_000, 75_000]);
+    assert.equal(stub.firstCallReads, 1, 'no second history read');
+  });
+
+  it('the re-read after a restart that cannot be answered keeps the persisted baseline — it is not dropped — and is not repeated at every turn', async () => {
+    adapter = new GrowthStubAdapter(claudeJsonStreamAdapterName);
+    const stub = growthAdapter();
+    const module = createModule();
+    noteFigures(20_000, 24_000);
+    stub.contextTokens = 70_000;
+    stub.firstCallTokens = null;
+    module.noteThreadTurnContext(key);
+    await waitUntil('the first reading after the restart', () => getTracking().lastContextTokens === 70_000);
+    assert.deepEqual(getFigures(), [20_000, 70_000], 'the history could not be read: the baseline stays');
+    assert.equal(stub.firstCallReads, 1, 'it was asked for');
+
+    stub.contextTokens = 71_000;
+    module.noteThreadTurnContext(key);
+    await waitUntil('the next reading', () => getTracking().lastContextTokens === 71_000);
+    assert.equal(stub.firstCallReads, 1, 'once per bot lifetime, not at every turn');
+  });
+
   it('every change of the count is a new epoch, and a count that did not move is not: 0 → 1 → 2 re-reads twice, a repeat reads nothing', async () => {
     adapter = new GrowthStubAdapter(claudeJsonStreamAdapterName);
     const stub = growthAdapter();
@@ -580,6 +628,57 @@ describe('the idle compaction waits for the context to grow, through the compact
     await waitUntil('the next reading', () => getTracking().lastContextTokens === 21_000);
     assert.deepEqual(getFigures(), [12_000, 21_000], 'and kept: the count did not move again');
     assert.equal(stub.firstCallReads, 1);
+  });
+
+  it('a sleeping per-turn session re-reads its transcript\'s first call at EVERY read: an epoch the bot did not see (the turn-end reading was lost) is measured from its own first call, and a read that gives none keeps the baseline', async () => {
+    adapter = new GrowthStubAdapter(claudePerTurnAdapterName);
+    growthAdapter().isActive = false;
+    const module = createModule();
+    await harness.state.setCompactIdleCompactedAt(key, Date.now() - compactedAgoMs);
+
+    // The persisted baseline is the old epoch's first call, 20 000; the transcript's last epoch started at 60 000 and the conversation
+    // is at 70 000 — it grew 10 000, not 50 000: not woken for nothing.
+    sleepingReading = { lastContextTokens: 70_000, firstCallContextTokens: 60_000 };
+    armTopicAfterTurn(module, { baseline: 20_000, last: 24_000 });
+    await waitUntil('the measure at the mark', () => sleepingReads === 1);
+    await new Promise((resolve) => setTimeout(resolve, quietMs));
+    assert.deepEqual(steps, [], 'not woken');
+    assert.equal(growthAdapter().compactions, 0);
+    assert.deepEqual(getFigures(), [60_000, 70_000], 'the baseline of the epoch it is in');
+    assert.deepEqual(sleepingBaselineAsks, [true], 'asked for although a baseline was there');
+
+    // The next mark asks again (the transcript may have changed under it) — and a read that gives no first call keeps what is there:
+    // 70 000 → 95 000 is 35 000 from the 60 000 baseline, so the sleeper is resumed and compacted.
+    sleepingReading = { lastContextTokens: 95_000, firstCallContextTokens: null };
+    harness.state.noteCompactIdleActivity(key, Date.now() - idleWindowMs + windowLeftMs);
+    module.rearmThreadIdleTimer(key);
+    await waitUntil('the compaction and the stop', () => steps.includes('stop'));
+    assert.deepEqual(sleepingBaselineAsks, [true, true], 'every sleeping read asks');
+    assert.equal(growthAdapter().compactions, 1);
+  });
+
+  it('a conversation read LIVE earlier in this bot lifetime and then put to sleep is still re-read at its sleeping marks: what it saw while live does not stand in for the transcript', async () => {
+    adapter = new GrowthStubAdapter(claudePerTurnAdapterName);
+    const stub = growthAdapter();
+    const module = createModule();
+    await harness.state.setCompactIdleCompactedAt(key, Date.now() - compactedAgoMs);
+
+    // A live turn ends: the first call is 20 000, the module has now seen this conversation (its count is recorded).
+    stub.contextTokens = 24_000;
+    stub.firstCallTokens = 20_000;
+    module.noteThreadTurnContext(key);
+    await waitUntil('the live reading', () => getTracking().lastContextTokens === 24_000);
+    assert.deepEqual(getFigures(), [20_000, 24_000]);
+
+    // It sleeps. Its next turn's CLI compacted by itself and the turn-end reading was lost: the transcript's epoch starts at 60 000.
+    stub.isActive = false;
+    sleepingReading = { lastContextTokens: 70_000, firstCallContextTokens: 60_000 };
+    armTopicAfterTurn(module, null);
+    await waitUntil('the measure at the mark', () => sleepingReads === 1);
+    await new Promise((resolve) => setTimeout(resolve, quietMs));
+    assert.deepEqual(sleepingBaselineAsks, [true], 'asked for although the module had a count and the figures had a baseline');
+    assert.deepEqual(getFigures(), [60_000, 70_000]);
+    assert.deepEqual(steps, [], 'grew 10 000: not woken');
   });
 
   it('a sleeping per-turn session woken only by the bot, once measured, is compacted again only when the context grew enough — and nothing is left to wake it after the compaction', async () => {

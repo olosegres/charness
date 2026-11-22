@@ -933,6 +933,22 @@ test('compactIdleTracking: the context baseline is the epoch\'s FIRST call, not 
   assert.equal(second.getCompactIdleTracking(key1).lastCompactionAt, activityAt, 'the compaction stamp is kept');
 });
 
+test('compactIdleTracking: a baseline RECHECK replaces the stored baseline with the first call read again, and a read that gave none keeps it', async () => {
+  const store = new StateStore(dataDir, { saveDebounceMs: 5 });
+  await store.init();
+  await store.setAgent(key1, { name: 'claude', claudeSessionId: sessionIdA });
+  const figures = () => [store.getCompactIdleTracking(key1).baselineContextTokens, store.getCompactIdleTracking(key1).lastContextTokens];
+  store.noteCompactIdleContext(key1, { lastContextTokens: 24_000, firstCallContextTokens: 20_000 });
+  assert.deepEqual(figures(), [20_000, 24_000]);
+  // The CLI overflowed while the bot was not watching: the first call of the epoch now saw 60 000.
+  store.noteCompactIdleContext(key1, { lastContextTokens: 70_000, firstCallContextTokens: 60_000, isBaselineRecheck: true });
+  assert.deepEqual(figures(), [60_000, 70_000]);
+  store.noteCompactIdleContext(key1, { lastContextTokens: 75_000, firstCallContextTokens: null, isBaselineRecheck: true });
+  assert.deepEqual(figures(), [60_000, 75_000], 'a read that gave none keeps the baseline');
+  store.noteCompactIdleContext(key1, { lastContextTokens: 80_000, firstCallContextTokens: 1_234 });
+  assert.deepEqual(figures(), [60_000, 80_000], 'a reading that is no recheck never replaces it');
+});
+
 test('compactIdleTracking: no session id on the agent record → zeros regardless', async () => {
   // A raw `/terminal` shell has no session id and cannot be compacted anyway, so
   // there is nothing to bind the marker to: reads are zeros and stamps are skipped.

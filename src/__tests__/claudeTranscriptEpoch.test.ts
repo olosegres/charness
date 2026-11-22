@@ -12,7 +12,7 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 
-import { readClaudeTranscriptEpochLines } from '../utils/claudeTranscriptEpoch';
+import { readClaudeTranscriptEpochLines, scanClaudeTranscriptEpochBackwards } from '../utils/claudeTranscriptEpoch';
 
 const boundaryLine = JSON.stringify({ type: 'system', subtype: 'compact_boundary', content: 'Conversation compacted', compactMetadata: { trigger: 'auto' } });
 /** A key every test line holds: the reader keeps them all. */
@@ -58,4 +58,19 @@ test('readClaudeTranscriptEpochLines: over several read chunks, with multi-byte 
   assert.equal(read.length, epochLines.length + 1);
   assert.deepEqual(read.slice(0, -1), epochLines);
   assert.equal(read.at(-1), tailLine, 'a line longer than a read chunk comes back whole');
+});
+
+test('scanClaudeTranscriptEpochBackwards: hands the lines of the last epoch newest first, and stops at once when the callback returns true — however far back the rest of the epoch reaches', async () => {
+  const bigLine = (label: string): string => `${label} ${'x'.repeat(600_000)}`; // the epoch spans several read chunks
+  const filePath = writeTranscript(['older epoch', boundaryLine, bigLine('first'), bigLine('second'), 'third', 'fourth']);
+
+  const all: string[] = [];
+  assert.equal(await scanClaudeTranscriptEpochBackwards(filePath, (lineBytes) => { all.push(lineBytes.toString('utf8').split(' ')[0]); return false; }), true);
+  assert.deepEqual(all, ['fourth', 'third', 'second', 'first'], 'newest first, the older epoch never handed');
+
+  const handed: string[] = [];
+  assert.equal(await scanClaudeTranscriptEpochBackwards(filePath, (lineBytes) => { handed.push(lineBytes.toString('utf8').split(' ')[0]); return handed.length === 2; }), true);
+  assert.deepEqual(handed, ['fourth', 'third'], 'told to stop, the walk hands nothing more');
+
+  assert.equal(await scanClaudeTranscriptEpochBackwards('/nonexistent/session.jsonl', () => false), false);
 });

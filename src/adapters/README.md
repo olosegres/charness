@@ -254,8 +254,12 @@ whenever a turn is pending (`checkIsCompactionPending`), the fire deciding to re
 compaction (json-stream), the server's own (OpenCode `session.compacted` with no bot compaction open) — is counted (`AgentAdapter.getOwnCompactionCount`); a change between two
 readings replaces the baseline with the new epoch's first call (the new epoch starts about as high as the old first call, so a smaller context cannot show it); the tmux Claude counts
 none, and keeps only the smaller-context rule. The count belongs to the CONVERSATION, not to a process (a map in the adapter, kept across spawn, idle stop, resume and adopt, dropped
-by an explicit stop or release): two processes in a row that each compacted by themselves read 1, then 2. The module keeps no count over a bot restart, so the first reading is
-compared with 0 — a compaction that happened while the bot was down (the adopt replays its boundary) is seen. An OpenCode bot compaction's own `session.compacted` can reach the bot a few ms after its
+by an explicit stop or release): two processes in a row that each compacted by themselves read 1, then 2. The count lives only within a bot lifetime, and it does NOT make a compaction
+around a restart seen: json-stream's downtime replay counts a boundary only when it lies after the persisted tail offset (one consumed just before a hot reload does not), and
+OpenCode never replays `session.compacted` for a compaction made while the bot was down. That case is caught by a RECHECK instead — the first reading of a bot lifetime and every
+read of a sleeping conversation read the epoch's first call again and replace the baseline with it (`getContextBaselineAfterReading`'s `isBaselineRecheck`; a read that gives none
+keeps the baseline). The cost is one history read per conversation per restart (json-stream: the backwards epoch walk; OpenCode: one `GET /session/:id/message`) and one transcript
+walk per sleeping idle mark. An OpenCode bot compaction's own `session.compacted` can reach the bot a few ms after its
 `/summarize` call returned (measured against the fake server) and is then counted too: harmless, the bot's compaction dropped the baseline, which is read again anyway. No reading holds a conversation back only while it was never
 compacted (`checkIsContextGrownEnough`): a compacted one with none is not compacted again, so a backend whose compaction raises no signal (the tmux
 Claude) cannot loop. There is no once-per-active-period latch: the growth is what keeps a compaction from repeating. A process held at the mark forgoes it (`getIdleFireDecision`'s

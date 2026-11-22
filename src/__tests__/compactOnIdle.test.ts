@@ -426,6 +426,17 @@ test('getContextBaselineAfterReading: with none yet it is the epoch\'s FIRST cal
   assert.equal(getContextBaselineAfterReading({ isNewEpoch: true, baselineContextTokens: 20_000, lastContextTokens: 52_000, firstCallContextTokens: null }), null, 'and none until that call exists — never the old epoch\'s');
 });
 
+test('getContextBaselineAfterReading: a RECHECK (the first call read again though a baseline is there) replaces the baseline when the read gave a figure and keeps it when it gave none', () => {
+  const recheck = { isNewEpoch: false, isBaselineRecheck: true };
+  assert.equal(getContextBaselineAfterReading({ ...recheck, baselineContextTokens: 20_000, lastContextTokens: 70_000, firstCallContextTokens: 60_000 }), 60_000, 'the epoch the bot did not see replaced: the first call is the baseline of the epoch now');
+  assert.equal(getContextBaselineAfterReading({ ...recheck, baselineContextTokens: 20_000, lastContextTokens: 70_000, firstCallContextTokens: 20_000 }), 20_000, 'the same epoch: the same figure');
+  assert.equal(getContextBaselineAfterReading({ ...recheck, baselineContextTokens: 20_000, lastContextTokens: 70_000, firstCallContextTokens: null }), 20_000, 'the history could not be read: the baseline stays, it is not dropped');
+  assert.equal(getContextBaselineAfterReading({ ...recheck, baselineContextTokens: 200_000, lastContextTokens: 60_000, firstCallContextTokens: null }), null, 'a context smaller than the baseline still drops it: that is no failed read');
+  assert.equal(getContextBaselineAfterReading({ ...recheck, baselineContextTokens: null, lastContextTokens: 70_000, firstCallContextTokens: null }), null, 'no baseline and none read: still none');
+  assert.equal(getContextBaselineAfterReading({ isNewEpoch: true, isBaselineRecheck: true, baselineContextTokens: 20_000, lastContextTokens: 70_000, firstCallContextTokens: null }), null, 'a counted change of the epoch says the old baseline is wrong: it is dropped, recheck or not');
+  assert.equal(getContextBaselineAfterReading({ isNewEpoch: false, baselineContextTokens: 20_000, lastContextTokens: 70_000, firstCallContextTokens: 60_000 }), 20_000, 'without the flag a baseline that is there stays');
+});
+
 test('checkIsContextGrownEnough: the threshold reached; no reading passes only for a conversation never compacted — the single place both the fire and the per-turn wake-up ask', () => {
   const base = { growthThresholdTokens: 30_000, hasEarlierCompaction: false };
   assert.equal(checkIsContextGrownEnough({ ...base, contextGrowthTokens: 30_000 }), true);

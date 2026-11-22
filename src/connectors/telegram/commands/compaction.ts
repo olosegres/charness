@@ -129,9 +129,10 @@ interface ThreadCompactionState {
   /** The pending read of the context size, for a backend that signals no turn end (see {@link contextSampleDebounceMs}). */
   contextSampleTimer: NodeJS.Timeout | null;
   /**
-   * `AgentAdapter.getOwnCompactionCount` at the last context reading recorded; `null` before the first since the bot started, which
-   * compares with 0 (a count is per bot lifetime, and the downtime replay of an adopted process counts a compaction the CLI made
-   * meanwhile): a difference since means the epoch was replaced.
+   * `AgentAdapter.getOwnCompactionCount` at the last context reading recorded of a live session; `null` before the first since the bot
+   * started (and for a sleeping conversation, which has no count): a difference since means the epoch was replaced, and the first
+   * reading is compared with 0. A compaction around a restart is not necessarily in that count — which is why `null` also makes the
+   * first reading read the epoch's first call again (`isBaselineRecheck`).
    */
   ownCompactionsSeen: number | null;
   /**
@@ -686,8 +687,9 @@ export function createCompaction(ports: CompactionPorts) {
   /**
    * @description Read what the conversation weighs now and record it (`noteCompactIdleContext`): the context after its newest model call
    * (`getContextUsedTokens`, the figure the idle compaction's growth is measured up to) and, while it has no baseline or a compaction
-   * the bot did not issue replaced its epoch (`getOwnCompactionCount` moved), the context its epoch's FIRST model call saw
-   * (`getFirstCallContextTokens`, read from the conversation's history — the baseline). Both reads start in the same tick, before a
+   * the bot did not issue replaced its epoch (`getOwnCompactionCount` moved) or may have (the first reading of a bot lifetime, every
+   * read of a sleeping conversation: the baseline is a RECHECK, replaced by what is read and kept when nothing is), the context its
+   * epoch's FIRST model call saw (`getFirstCallContextTokens`, read from the conversation's history — the baseline). Both reads start in the same tick, before a
    * per-turn process is stopped; a conversation whose process IS stopped is read from its transcript by its persisted session
    * (`readSleepingContext`). Not for the compaction's own turn, and a reading that a compaction overtook while the backend answered is
    * dropped — it describes the context of before. A backend that cannot say leaves the figures as they were: a conversation never
@@ -704,7 +706,12 @@ export function createCompaction(ports: CompactionPorts) {
     // A live session's count of the compactions it did not issue: a change since the last reading is a replaced epoch.
     const ownCompactions = isAsleep ? null : adapter.getOwnCompactionCount?.(key) ?? 0;
     const isNewEpoch = ownCompactions !== null && ownCompactions !== (compactionState.ownCompactionsSeen ?? 0);
-    const isBaselineNeeded = isNewEpoch || baselineContextTokens === null;
+    // A compaction the count cannot show — one the CLI made before a restart whose boundary the replay no longer reaches, one the
+    // server made while the bot was down, one of a sleeping conversation — is caught by reading the epoch's first call again: once per
+    // bot lifetime (nothing seen yet) and at every read of a sleeping conversation. It costs a history read and changes nothing when
+    // the epoch is the same.
+    const isBaselineRecheck = baselineContextTokens !== null && !isNewEpoch && (isAsleep || compactionState.ownCompactionsSeen === null);
+    const isBaselineNeeded = isNewEpoch || isBaselineRecheck || baselineContextTokens === null;
     let reading: ThreadContextReading | null;
     try {
       reading = isAsleep
@@ -716,7 +723,7 @@ export function createCompaction(ports: CompactionPorts) {
     }
     if (reading === null || reading.lastContextTokens === null || reading.lastContextTokens <= 0) return;
     if (threadsCompacting.has(kStr) || getState().getCompactIdleTracking(key).lastCompactionAt !== compactedAtBefore) return;
-    getState().noteCompactIdleContext(key, { lastContextTokens: reading.lastContextTokens, firstCallContextTokens: reading.firstCallContextTokens, isNewEpoch });
+    getState().noteCompactIdleContext(key, { lastContextTokens: reading.lastContextTokens, firstCallContextTokens: reading.firstCallContextTokens, isNewEpoch, isBaselineRecheck });
     if (ownCompactions !== null) compactionState.ownCompactionsSeen = ownCompactions;
   }
 

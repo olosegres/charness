@@ -320,3 +320,24 @@ test('readClaudeContextUsedTokens: a turn that ended on a SYNTHETIC record (an A
   assert.equal(parseClaudeNewestCallContextUsedTokens(''), null);
   assert.equal(parseClaudeNewestCallContextUsedTokens(`${createAssistantRecord({ input: 1, cacheRead: 5_000 })}\n{"type":"assistant","half`), 5_001, 'a half-written last line is skipped');
 });
+
+test('readClaudeContextUsedTokens: a real call followed by more than the tail\'s 128 KiB of lines that are no call (a huge tool result, then an API-error record) is still found — the walk goes back through the epoch, and not past its boundary', async () => {
+  const syntheticError = JSON.stringify({ type: 'assistant', isApiErrorMessage: true, error: 'invalid_request', message: { role: 'assistant', model: '<synthetic>', content: [{ type: 'text', text: 'Prompt is too long' }], usage: { input_tokens: 0, output_tokens: 0 } } });
+  const toolResult = createClaudeTailPaddingRecord(3 * claudeRuntimeInfoTailBytes);
+  const filePath = writeLines([
+    createAssistantRecord({ input: 9, cacheRead: 700_000 }), // an older epoch
+    boundaryRecord,
+    summaryRecord,
+    createAssistantRecord({ input: 3, cacheRead: 40_000, cacheCreation: 9_000, output: 1_500 }), // the epoch's real calls
+    createAssistantRecord({ input: 4, cacheRead: 120_000, cacheCreation: 2_000, output: 800 }), // the newest real call
+    toolResult,
+    syntheticError,
+  ]);
+  assert.ok(fs.statSync(filePath).size > 3 * claudeRuntimeInfoTailBytes);
+  assert.equal(parseClaudeNewestCallContextUsedTokens(fs.readFileSync(filePath, 'utf8').split('\n').slice(-3).join('\n')), null, 'the tail alone holds no call: that is the case');
+  assert.equal(await readClaudeContextUsedTokens(filePath), 4 + 120_000 + 2_000 + 800, 'the newest real call, found past the long tool result');
+
+  // The walk ends at the epoch's boundary: a call of the OLDER epoch is no figure of the conversation now.
+  const afterCompaction = writeLines([createAssistantRecord({ input: 9, cacheRead: 700_000 }), boundaryRecord, summaryRecord, toolResult, syntheticError]);
+  assert.equal(await readClaudeContextUsedTokens(afterCompaction), null, 'nothing since the compaction is a model call');
+});

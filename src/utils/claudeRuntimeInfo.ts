@@ -95,6 +95,7 @@ export async function readClaudeFirstCallContextTokens(filePath: string): Promis
     // Newest to oldest: every record that qualifies replaces the one before, so the oldest is left.
     const call = parseClaudeModelCallLine(lineBytes);
     if (call !== null) firstCallTokens = call.callInputTokens;
+    return false; // the OLDEST record is wanted: the walk goes on to the boundary
   });
   return isRead ? firstCallTokens : null;
 }
@@ -115,12 +116,23 @@ export function parseClaudeNewestCallContextUsedTokens(transcriptTail: string): 
 
 /**
  * @description The context size after the transcript's newest main-conversation model call (its input, cache and output): what the
- * conversation weighs now ({@link parseClaudeNewestCallContextUsedTokens}, over the last {@link claudeRuntimeInfoTailBytes} of the
- * file). `null` when it cannot be told (a file that cannot be read, no such record in the tail).
+ * conversation weighs now. First from the last {@link claudeRuntimeInfoTailBytes} of the file ({@link parseClaudeNewestCallContextUsedTokens});
+ * when that tail holds no model call — a real call followed by more than the tail of lines that are none, a huge tool result and an
+ * API-error record after it — the epoch is walked backwards and the walk stops at the first record that is one. `null` when it cannot be
+ * told (a file that cannot be read, no model call since the last compaction).
  */
 export async function readClaudeContextUsedTokens(filePath: string): Promise<number | null> {
   try {
-    return parseClaudeNewestCallContextUsedTokens(await readClaudeTranscriptTail(filePath));
+    const tailTokens = parseClaudeNewestCallContextUsedTokens(await readClaudeTranscriptTail(filePath));
+    if (tailTokens !== null) return tailTokens;
+    let newestCallTokens: number | null = null;
+    await scanClaudeTranscriptEpochBackwards(filePath, (lineBytes) => {
+      const call = parseClaudeModelCallLine(lineBytes);
+      if (call === null) return false;
+      newestCallTokens = call.callInputTokens + call.outputTokens;
+      return true;
+    });
+    return newestCallTokens;
   } catch {
     return null;
   }

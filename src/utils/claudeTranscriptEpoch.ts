@@ -90,9 +90,10 @@ export function readClaudeTranscriptEpochLines(transcriptPath: string, wantedKey
  * the NEWEST to the oldest, handing each to `onLine` — the same walk as {@link readClaudeTranscriptEpochLines} (a line is split only
  * at newline bytes, a last line without a newline is handed as it is), but asynchronous and holding no line beyond the one in hand, so
  * the bot can look for one record of an epoch of tens of megabytes without blocking its event loop or keeping the epoch in memory.
- * Resolves `false` for a file that cannot be read (what was handed before the failure stands).
+ * `onLine` returns `true` to stop the walk (the record it looked for was found), `false` to go on. Resolves `false` for a file that
+ * cannot be read (what was handed before the failure stands).
  */
-export async function scanClaudeTranscriptEpochBackwards(transcriptPath: string, onLine: (lineBytes: Buffer) => void): Promise<boolean> {
+export async function scanClaudeTranscriptEpochBackwards(transcriptPath: string, onLine: (lineBytes: Buffer) => boolean): Promise<boolean> {
   let file: fs.promises.FileHandle;
   try {
     file = await fs.promises.open(transcriptPath, 'r');
@@ -104,8 +105,7 @@ export async function scanClaudeTranscriptEpochBackwards(transcriptPath: string,
     let carry: Buffer = Buffer.alloc(0);
     const takeLine = (lineBytes: Buffer): boolean => {
       if (checkIsCompactBoundaryLine(lineBytes)) return true;
-      if (lineBytes.length > 0) onLine(lineBytes);
-      return false;
+      return lineBytes.length > 0 && onLine(lineBytes);
     };
     while (position > 0) {
       const length = Math.min(readChunkBytes, position);
