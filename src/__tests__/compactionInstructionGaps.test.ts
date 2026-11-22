@@ -151,6 +151,7 @@ describe('the self-review section of a compaction summary, through the compactio
       checkIsLimitWaitArmed: () => false,
       // The last step of the idle fire (after the compaction and the posts): the stop of the conversation.
       suspendThreadSession: async () => { idleFireFinished.resolve(); },
+      readSleepingContext: async () => null,
       resumeSleepingSessionForCompaction: async () => false,
       getThreadAdapter: () => adapter,
       deliverLabel: async () => 'forwarded',

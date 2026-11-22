@@ -505,7 +505,7 @@ export const jaDict: Record<string, string> = {
   'compactOnIdle.growthInvalid': '増加量は 0〜{max} のトークン数で入力してください（例：30000 または 50k）。',
   'compactOnIdle.setThisTopic': '✅ アイドル自動圧縮：このトピックで {state}。',
   'compactOnIdle.setGlobal': '✅ アイドル自動圧縮：すべてのトピックで {state}（トピックごとの上書きは引き続き有効）。',
-  'compactOnIdle.unsupported': 'アイドル自動圧縮はアクティブなエージェントセッションに適用されます。まずバインド済みのトピックで /claude か /opencode を開始してください。',
+  'compactOnIdle.unsupported': 'アイドル自動圧縮はエージェントのトピック向けです。素のシェルには圧縮するコンテキストがありません。',
   'compactOnIdle.pendingQuestionReask': '❓ 未回答の質問が残っています。オプションをタップして回答し、続行してください：',
   'compactOnIdle.skipped.backgroundWorkNotice': '🧹 アイドル時の圧縮をスキップしました：エージェントのバックグラウンド作業がまだ実行中のため、会話はそのままです。',
   'compactOnIdle.skipped.unconsumedInputNotice': '🧹 アイドル時の圧縮をスキップしました：エージェントへのメッセージがまだ受け取られていないため、会話はそのままです。',

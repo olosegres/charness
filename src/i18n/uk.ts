@@ -511,7 +511,7 @@ export const ukDict: Record<string, string> = {
   'compactOnIdle.growthInvalid': 'Введи зростання як число токенів від 0 до {max}, наприклад 30000 або 50k.',
   'compactOnIdle.setThisTopic': '✅ Авто-стиснення під час простою: {state} для цієї теми.',
   'compactOnIdle.setGlobal': '✅ Авто-стиснення під час простою: {state} для ВСІХ тем (перевизначення по темах діють далі).',
-  'compactOnIdle.unsupported': 'Авто-стиснення під час простою застосовується до активної сесії агента. Спочатку запусти /claude або /opencode у прив’язаній темі.',
+  'compactOnIdle.unsupported': 'Авто-стиснення під час простою — для теми з агентом: у звичайному shell немає контексту для стиснення.',
   'compactOnIdle.pendingQuestionReask': '❓ У тебе лишилося запитання без відповіді. Натисни варіант, щоб відповісти та продовжити:',
   'compactOnIdle.skipped.backgroundWorkNotice': '🧹 Стиснення під час простою пропущено: фонова робота агента ще триває, розмову залишено як є.',
   'compactOnIdle.skipped.unconsumedInputNotice': '🧹 Стиснення під час простою пропущено: агент ще не прийняв повідомлення, розмову залишено як є.',

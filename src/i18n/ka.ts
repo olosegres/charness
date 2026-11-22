@@ -505,7 +505,7 @@ export const kaDict: Record<string, string> = {
   'compactOnIdle.growthInvalid': 'ზრდა ჩაწერე ტოკენების რიცხვად 0-დან {max}-მდე, მაგალითად 30000 ან 50k.',
   'compactOnIdle.setThisTopic': '✅ უმოქმედობისას ავტო-შეკუმშვა: {state} ამ თემისთვის.',
   'compactOnIdle.setGlobal': '✅ უმოქმედობისას ავტო-შეკუმშვა: {state} ყველა თემისთვის (თემების მიხედვით გადაფარვები კვლავ მოქმედებს).',
-  'compactOnIdle.unsupported': 'უმოქმედობისას ავტო-შეკუმშვა მოქმედებს აქტიურ აგენტის სესიაზე. ჯერ დაბმულ თემაში გაუშვი /claude ან /opencode.',
+  'compactOnIdle.unsupported': 'უმოქმედობისას ავტო-შეკუმშვა აგენტის თემისთვისაა: უბრალო shell-ს შესაკუმშავი კონტექსტი არ აქვს.',
   'compactOnIdle.pendingQuestionReask': '❓ შენ ჯერ კიდევ გაქვს უპასუხო კითხვა. შეეხე ვარიანტს, რომ უპასუხო და გააგრძელო:',
   'compactOnIdle.skipped.backgroundWorkNotice': '🧹 უმოქმედობისას შეკუმშვა გამოტოვებულია: აგენტის ფონური სამუშაო ჯერ კიდევ მიმდინარეობს, საუბარი უცვლელად დარჩა.',
   'compactOnIdle.skipped.unconsumedInputNotice': '🧹 უმოქმედობისას შეკუმშვა გამოტოვებულია: აგენტისთვის გაგზავნილი შეტყობინება ჯერ არ არის მიღებული, საუბარი უცვლელად დარჩა.',

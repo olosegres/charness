@@ -128,6 +128,8 @@ interface ThreadCompactionState {
   idleTimer: NodeJS.Timeout | null;
   /** The pending read of the context size, for a backend that signals no turn end (see {@link contextSampleDebounceMs}). */
   contextSampleTimer: NodeJS.Timeout | null;
+  /** `AgentAdapter.getOwnCompactionCount` at the last context reading recorded; `null` before the first: a change since means the epoch was replaced. */
+  ownCompactionsSeen: number | null;
   /**
    * The armed countdown is the OVERDUE arm's: the idle mark it fires for had already passed when it was armed (the bot came back
    * from downtime past the idle window, a re-spawn or a per-turn wake found the topic idle for longer than that), so the fire
@@ -166,6 +168,12 @@ export interface ReAskedQuestion {
    * again): a re-ask that lands meanwhile is left as it is, and the idle compaction leaves the predecessor alone.
    */
   isAnswerPending: boolean;
+}
+
+/** What a conversation weighs: the context after its newest model call and the one its epoch's first call saw, each `null` when it cannot be told. */
+export interface ThreadContextReading {
+  lastContextTokens: number | null;
+  firstCallContextTokens: number | null;
 }
 
 /** The settings the `/compact_on_idle` picker shows: the idle compaction itself, its growth threshold, the summary post and the self-review section. */
@@ -215,6 +223,12 @@ export interface CompactionPorts
     'bot' | 'command' | 'getState' | 'replyToThread' | 'editThreadMessage' | 'editThreadKeyboard' | 'authoriseContext' | 'authoriseSpeaker' | 'withThreadLocale' | 'checkIsGeneral' | 'wakeSleepingSession'
   > {
   startTypingLoader: (key: SessionKey) => void;
+  /**
+   * What a conversation whose process is STOPPED (a sleeping per-turn session) weighs, read from its transcript by the session id and
+   * work folder the bot persisted — a stopped session has no live adapter state to ask. `isBaselineNeeded` asks for the first call of
+   * the epoch as well. `null` when it cannot be told (no session id or folder, no transcript).
+   */
+  readSleepingContext: (key: SessionKey, isBaselineNeeded: boolean) => Promise<ThreadContextReading | null>;
   forwardPromptToAgent: (key: SessionKey, adapter: AgentAdapter, text: string) => Promise<void>;
   pendingQuestions: Map<string, PendingQuestionState>;
   /** Clear the topic's pending question and unpin it; its message is left as it is (the idle re-ask closes it once the re-ask is posted). */
@@ -272,7 +286,7 @@ export interface CompactionPorts
  * state the typing loop and the request probe read, and the `register…()` calls.
  */
 export function createCompaction(ports: CompactionPorts) {
-  const { startTypingLoader, forwardPromptToAgent, pendingQuestions, clearPendingQuestion, closeQuestionMessage, setQuestionAsideAtIdle, idleWindowMs, checkIsLimitWaitArmed, suspendThreadSession, resumeSleepingSessionForCompaction, getThreadAdapter, deliverLabel, resumeSleepingSessionForPrompt, checkIsStarting, closeOrphanQuestionMessage, notePersonActivity, compactSelfReviewFlagDirs, bot, command, getState, replyToThread, editThreadMessage, editThreadKeyboard, authoriseContext, authoriseSpeaker, withThreadLocale, checkIsGeneral, wakeSleepingSession } = ports;
+  const { startTypingLoader, readSleepingContext, forwardPromptToAgent, pendingQuestions, clearPendingQuestion, closeQuestionMessage, setQuestionAsideAtIdle, idleWindowMs, checkIsLimitWaitArmed, suspendThreadSession, resumeSleepingSessionForCompaction, getThreadAdapter, deliverLabel, resumeSleepingSessionForPrompt, checkIsStarting, closeOrphanQuestionMessage, notePersonActivity, compactSelfReviewFlagDirs, bot, command, getState, replyToThread, editThreadMessage, editThreadKeyboard, authoriseContext, authoriseSpeaker, withThreadLocale, checkIsGeneral, wakeSleepingSession } = ports;
 
   /**
    * @description Resolve the `/compact` route for a thread's current backend — the
@@ -537,7 +551,7 @@ export function createCompaction(ports: CompactionPorts) {
   function getThreadCompactionState(kStr: string): ThreadCompactionState {
     let existing = threadCompactionStates.get(kStr);
     if (!existing) {
-      existing = { idleTimer: null, contextSampleTimer: null, isIdleMarkMissed: false };
+      existing = { idleTimer: null, contextSampleTimer: null, ownCompactionsSeen: null, isIdleMarkMissed: false };
       threadCompactionStates.set(kStr, existing);
     }
     return existing;
@@ -613,7 +627,7 @@ export function createCompaction(ports: CompactionPorts) {
     if (!isSuspendable && !getState().checkIsCompactOnIdleEnabled(key)) return;
     // L-D7: a SLEEPING per-turn session keeps its countdown while a compaction is due — the fire wakes it,
     // compacts it, and stops it again; every other sleeping or idle-less session has no timer.
-    if (!adapter.checkIsActive(key) && !(adapter.name === claudePerTurnAdapterName && checkIsCompactionDue(key))) return;
+    if (!adapter.checkIsActive(key) && !(adapter.name === claudePerTurnAdapterName && checkIsCompactionPending(key))) return;
     const now = Date.now();
     // Stamp AFTER the enabled/active guards: a disabled or session-less topic has no countdown to measure.
     if (opts.isRealActivity) getState().noteCompactIdleActivity(key, now);
@@ -667,33 +681,47 @@ export function createCompaction(ports: CompactionPorts) {
 
   /**
    * @description Read what the conversation weighs now and record it (`noteCompactIdleContext`): the context after its newest model call
-   * (`getContextUsedTokens`, the figure the idle compaction's growth is measured up to) and, while it has no baseline, the context its
-   * epoch's FIRST model call saw (`getFirstCallContextTokens`, read from the conversation's history — the baseline). Both reads start
-   * in the same tick, before a per-turn process is stopped. Not for the compaction's own turn, and a reading that a compaction
-   * overtook while the backend answered is dropped — it describes the context of before. A backend that cannot say leaves the figures as
-   * they were: a conversation never compacted is not held back by the gate then, one that was compacted is
-   * ({@link checkIsContextGrownEnough}).
+   * (`getContextUsedTokens`, the figure the idle compaction's growth is measured up to) and, while it has no baseline or a compaction
+   * the bot did not issue replaced its epoch (`getOwnCompactionCount` moved), the context its epoch's FIRST model call saw
+   * (`getFirstCallContextTokens`, read from the conversation's history — the baseline). Both reads start in the same tick, before a
+   * per-turn process is stopped; a conversation whose process IS stopped is read from its transcript by its persisted session
+   * (`readSleepingContext`). Not for the compaction's own turn, and a reading that a compaction overtook while the backend answered is
+   * dropped — it describes the context of before. A backend that cannot say leaves the figures as they were: a conversation never
+   * compacted is not held back by the gate then, one that was compacted is ({@link checkIsContextGrownEnough}).
    */
   async function sampleThreadContext(key: SessionKey): Promise<void> {
     const kStr = keyToString(key);
     if (threadsCompacting.has(kStr)) return;
     const adapter = getThreadAdapter(key);
-    if (!adapter.getContextUsedTokens) return;
+    const isAsleep = !adapter.checkIsActive(key);
+    if (isAsleep ? !checkIsJsonStreamBackend(adapter.name) : !adapter.getContextUsedTokens) return;
     const { lastCompactionAt: compactedAtBefore, baselineContextTokens } = getState().getCompactIdleTracking(key);
-    let lastContextTokens: number | null;
-    let firstCallContextTokens: number | null;
+    const compactionState = getThreadCompactionState(kStr);
+    // A live session's count of the compactions it did not issue: a change since the last reading is a replaced epoch.
+    const ownCompactions = isAsleep ? null : adapter.getOwnCompactionCount?.(key) ?? 0;
+    const isNewEpoch = ownCompactions !== null && compactionState.ownCompactionsSeen !== null && ownCompactions !== compactionState.ownCompactionsSeen;
+    const isBaselineNeeded = isNewEpoch || baselineContextTokens === null;
+    let reading: ThreadContextReading | null;
     try {
-      [lastContextTokens, firstCallContextTokens] = await Promise.all([
-        adapter.getContextUsedTokens(key),
-        baselineContextTokens === null ? adapter.getFirstCallContextTokens?.(key) ?? null : null,
-      ]);
+      reading = isAsleep
+        ? await readSleepingContext(key, isBaselineNeeded)
+        : await readLiveContext(key, adapter, isBaselineNeeded);
     } catch (error) {
       console.warn(`[compact-on-idle] ${kStr} reading the context size failed: ${error instanceof Error ? error.message : error}`);
       return;
     }
-    if (lastContextTokens === null || lastContextTokens <= 0) return;
+    if (reading === null || reading.lastContextTokens === null || reading.lastContextTokens <= 0) return;
     if (threadsCompacting.has(kStr) || getState().getCompactIdleTracking(key).lastCompactionAt !== compactedAtBefore) return;
-    getState().noteCompactIdleContext(key, { lastContextTokens, firstCallContextTokens });
+    getState().noteCompactIdleContext(key, { lastContextTokens: reading.lastContextTokens, firstCallContextTokens: reading.firstCallContextTokens, isNewEpoch });
+    if (ownCompactions !== null) compactionState.ownCompactionsSeen = ownCompactions;
+  }
+
+  /** What a live session weighs, from its adapter: both reads started in the caller's tick. */
+  function readLiveContext(key: SessionKey, adapter: AgentAdapter, isBaselineNeeded: boolean): Promise<ThreadContextReading> {
+    return Promise.all([
+      adapter.getContextUsedTokens?.(key) ?? null,
+      isBaselineNeeded ? adapter.getFirstCallContextTokens?.(key) ?? null : null,
+    ]).then(([lastContextTokens, firstCallContextTokens]) => ({ lastContextTokens, firstCallContextTokens }));
   }
 
   /** A turn of a json-stream conversation ended: read its context size right away — a per-turn process is stopped within moments. */
@@ -755,20 +783,31 @@ export function createCompaction(ports: CompactionPorts) {
   }
 
   /**
-   * Whether the idle compaction has something to do for a SLEEPING per-turn session (L-D7): enabled, a turn since the last
-   * compaction and the context grown enough since it ({@link getIdleFireDecision} decides the same way, so a session is never
-   * resumed for a compaction the fire would then refuse). A session woken only by the bot's own checks is resumed for its
+   * Whether a SLEEPING per-turn session could have something to compress (L-D7): enabled and a turn since the last compaction. What it
+   * weighs is not asked here — a stopped session is read when the countdown fires ({@link sampleThreadContext}), and the figures
+   * saved may be missing (a state kept before they were) or a turn's reading lost — so the countdown is armed whenever there is a turn
+   * to compress, and the fire decides ({@link checkIsCompactionDue}).
+   */
+  function checkIsCompactionPending(key: SessionKey): boolean {
+    if (!getState().checkIsCompactOnIdleEnabled(key)) return false;
+    const { lastTurnEndAt, lastCompactionAt } = getState().getCompactIdleTracking(key);
+    return lastTurnEndAt > lastCompactionAt;
+  }
+
+  /**
+   * Whether the idle compaction has something to do for a SLEEPING per-turn session (L-D7), once it has been measured at the fire:
+   * pending, and the context grown enough since the last compaction ({@link getIdleFireDecision} decides the same way, so a session
+   * is never resumed for a compaction the fire would then refuse). A session woken only by the bot's own checks is resumed for its
    * compaction too: nothing depends on who woke it.
    */
   function checkIsCompactionDue(key: SessionKey): boolean {
-    if (!getState().checkIsCompactOnIdleEnabled(key)) return false;
-    const { lastTurnEndAt, lastCompactionAt, baselineContextTokens, lastContextTokens } = getState().getCompactIdleTracking(key);
-    return lastTurnEndAt > lastCompactionAt
-      && checkIsContextGrownEnough({
-        contextGrowthTokens: getContextGrowthTokens({ baselineContextTokens, lastContextTokens }),
-        growthThresholdTokens: getState().getCompactGrowthTokens(key),
-        hasEarlierCompaction: lastCompactionAt > 0,
-      });
+    if (!checkIsCompactionPending(key)) return false;
+    const { lastCompactionAt, baselineContextTokens, lastContextTokens } = getState().getCompactIdleTracking(key);
+    return checkIsContextGrownEnough({
+      contextGrowthTokens: getContextGrowthTokens({ baselineContextTokens, lastContextTokens }),
+      growthThresholdTokens: getState().getCompactGrowthTokens(key),
+      hasEarlierCompaction: lastCompactionAt > 0,
+    });
   }
 
   /**
@@ -794,6 +833,11 @@ export function createCompaction(ports: CompactionPorts) {
       }
     }
     const isIdleMarkMissed = getThreadCompactionState(kStr).isIdleMarkMissed;
+    // What the conversation weighs is read NOW, at the mark that decides on it — from its live adapter, or from its transcript when it
+    // sleeps — never taken on trust from the last turn's reading alone: a state kept before the figures existed has none (every topic
+    // idle when this was deployed), a restart can fall between a turn's end and its reading, and a turn that ended on an API error
+    // leaves none. Without it a conversation compacted before and not yet measured would sleep uncompacted at its mark.
+    if (!isIdleMarkMissed && checkIsCompactionPending(key)) await sampleThreadContext(key);
     // L-D7: a sleeping per-turn session is resumed for its compaction; the stop below puts it back to sleep. Not for a fire that
     // missed the idle mark: it compacts nothing, so waking the session only to stop it again would be for nothing.
     if (!adapter.checkIsActive(key) && adapter.name === claudePerTurnAdapterName && checkIsCompactionDue(key) && !isIdleMarkMissed) {

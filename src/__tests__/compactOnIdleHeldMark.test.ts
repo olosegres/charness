@@ -107,6 +107,7 @@ describe('the idle mark of a held process: told once, compacted never later', ()
         steps.push('stop');
         if (adapter.isBusy) module.rearmThreadIdleTimer(suspendedKey);
       },
+      readSleepingContext: async () => null,
       resumeSleepingSessionForCompaction: async () => false,
       getThreadAdapter: () => adapter,
       deliverLabel: async () => null,

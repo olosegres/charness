@@ -482,7 +482,8 @@ import { createDisplayModes, formatTopicView } from './connectors/telegram/comma
 import { createReminders, type ReminderWizardSession } from './connectors/telegram/commands/reminders';
 import { createModelProviders, type PendingProviderConnect } from './connectors/telegram/commands/modelProviders';
 import { answerCallbackWithFittedText, answerCallbackWithWholeText } from './connectors/telegram/commands/callbackToast';
-import { createCompaction } from './connectors/telegram/commands/compaction';
+import { createCompaction, type ThreadContextReading } from './connectors/telegram/commands/compaction';
+import { readClaudeContextUsedTokens, readClaudeFirstCallContextTokens } from './utils/claudeRuntimeInfo';
 import { createAutoContinueLimits, appendAutoContinueLimitsHint } from './connectors/telegram/commands/autoContinueLimits';
 import { createBotSkills } from './connectors/telegram/commands/botSkills';
 import { createQuestionWait } from './connectors/telegram/commands/questionWait';
@@ -6202,7 +6203,7 @@ const autoStopUnsupportedLoggedKeys = new Set<string>();
 /**
  * @description `turnEnded` from a json-stream adapter. The idle countdown runs from
  * the end of the last turn: an idle fire that found the turn still running is not
- * rescheduled (D2), and a turn whose answer went out through `answer_request`
+ * rescheduled (the turn's own end re-arms it), and a turn whose answer went out through `answer_request`
  * produces no later output to re-arm it — the process would never reach its idle
  * compaction and stop, and its pending-work hold would never be enforced. (A
  * bot-issued compaction's own turn end is skipped by the arming's loop guard.)
@@ -6778,6 +6779,7 @@ const {
   suspendThreadSession,
   // L-D7: a sleeping per-turn session is woken for its idle compaction — a resume only, never a fresh start.
   resumeSleepingSessionForCompaction: async (key) => (await ensureAgentSession(key, { isResumeOnly: true })).ok && getThreadAdapter(key).checkIsActive(key),
+  readSleepingContext: readSleepingConversationContext,
   getThreadAdapter,
   // An answer to the agent's own question is never a request (S7), even delivered as a prompt.
   // The label of a re-asked question reaches the agent as a prompt; a topic member's carries their mark, the operator's stays bare.
@@ -15172,6 +15174,23 @@ function markLimitEpisodeSettled(key: SessionKey): void {
   void state
     .setLimitEpisodeRecovered(key, buildLimitEpisodeMarker(evidence.log, evidence.parked))
     .catch((e) => console.error('[limitRecovery] marker persist failed:', e));
+}
+
+/**
+ * @description What a conversation whose process is STOPPED (a sleeping per-turn session) weighs, read from its Claude transcript by the
+ * session id and work folder the bot persisted — a stopped session has no live adapter state to ask. The idle compaction measures it
+ * at its mark, before it decides to resume the session for a compaction. `null` when there is no session id or folder or no transcript.
+ */
+async function readSleepingConversationContext(key: SessionKey, isBaselineNeeded: boolean): Promise<ThreadContextReading | null> {
+  const claudeSessionId = state.getAgent(key)?.claudeSessionId;
+  const workDirDecision = getWorkDirStartDecision(key);
+  if (!claudeSessionId || !workDirDecision.ok) return null;
+  const transcriptPath = getClaudeTranscriptPath(workDirDecision.workDir, claudeSessionId);
+  const [lastContextTokens, firstCallContextTokens] = await Promise.all([
+    readClaudeContextUsedTokens(transcriptPath),
+    isBaselineNeeded ? readClaudeFirstCallContextTokens(transcriptPath) : null,
+  ]);
+  return { lastContextTokens, firstCallContextTokens };
 }
 
 /**

@@ -254,14 +254,16 @@ export function checkIsContextGrownEnough(input: { contextGrowthTokens: number |
 }
 
 /**
- * @description The baseline after the context read at the end of a turn. With none yet (the first turn that ends after a compaction,
- * or in a conversation the bot has no figures of) it is the context of the epoch's FIRST model call — the compacted summary, the
+ * @description The baseline after a context reading. With none yet (the first turn that ends after a compaction, a conversation the
+ * bot has no figures of, a measure at the idle mark) it is the context of the epoch's FIRST model call — the compacted summary, the
  * instructions, the skills and the prompt, read from the conversation's history — and `null` while that cannot be told (it is read
- * again at the next turn's end). With one, it stays — except that a context SMALLER than it means the conversation was compacted by
- * the CLI itself, so the baseline belongs to the older epoch: it is dropped, and read again from the new epoch's history.
+ * again at the next reading). A compaction the bot did NOT issue since the last reading (`isNewEpoch`: the CLI's own overflow
+ * compaction, the server's own) replaced the epoch, so the baseline it had is the older epoch's: the new epoch's first call takes its
+ * place, `null` while there is none yet. Otherwise a baseline stays — except that a context SMALLER than it is the same sign for a
+ * compaction nothing counted (the tmux Claude's own): it is dropped, to be read again from the new epoch.
  */
-export function getContextBaselineAfterReading(input: { baselineContextTokens: number | null; lastContextTokens: number; firstCallContextTokens: number | null }): number | null {
-  if (input.baselineContextTokens === null) return input.firstCallContextTokens;
+export function getContextBaselineAfterReading(input: { baselineContextTokens: number | null; lastContextTokens: number; firstCallContextTokens: number | null; isNewEpoch: boolean }): number | null {
+  if (input.isNewEpoch || input.baselineContextTokens === null) return input.firstCallContextTokens;
   return input.lastContextTokens < input.baselineContextTokens ? null : input.baselineContextTokens;
 }
 

@@ -22,6 +22,14 @@
  *     the FIRST CALL — not the compaction's own `post=` figure, not where the turn ended — so at the next idle mark the context has grown
  *     by 75 000 and is compacted again before the third sleep (a baseline taken at the turn's end would have let it sleep at 120 000)
  *
+ *   → the deploy: a turn grows the context again, then the bot is stopped and started with the saved figures removed — what every idle topic
+ *     holds when a bot that has never kept them is replaced by one that does — and the idle mark reads the conversation's transcript AT the
+ *     mark: it grew by 50 000 since its first call after the last compaction, so it is compacted (a bot that read the figures only at a turn's
+ *     end would find none, and put the topic to sleep uncompacted)
+ *   → the CLI's own overflow compaction replaces the epoch: a turn gives a baseline of 30 000; the next turn overflows (the CLI compacts by
+ *     itself, the bot issued nothing) and its first call after that saw 52 000 — NOT below the old baseline, so no shrink shows it — and the
+ *     baseline becomes the new epoch's 52 000, not the old epoch's 30 000 (which would read 22 000 of growth that did not happen)
+ *
  * Nothing leaves the machine: the Bot API is on loopback and the agent is a fake. Everything the test starts is stopped in `after`.
  * The decision's branches and the module's reading of the context are `compactOnIdle.test.ts`'s and `compactOnIdleGrowth.test.ts`'s.
  */
@@ -50,7 +58,7 @@ import {
   writeInstanceEnvFile,
   type IsolatedInstanceLayout,
 } from './e2e/isolatedCharness';
-import { getAgentTurns, startCharnessOnInstance } from './e2e/fallbackFlowKit';
+import { getAgentTurns, restartCharnessWithState, startCharnessOnInstance } from './e2e/fallbackFlowKit';
 import { enDict } from '../i18n/en';
 import { defaultCompactGrowthTokens } from '../utils/compactOnIdle';
 import type { CompactIdleTrackingEntry } from '../state';
@@ -288,5 +296,46 @@ describe('The idle compaction waits for the context to grow, and a topic woken o
     const thirdStopAt = output.indexOf(getStopLine(), output.indexOf(getStopLine(), output.indexOf(getStopLine()) + 1) + 1);
     assert.ok(secondCompactedAt >= 0 && secondCompactedAt < thirdStopAt, 'the second compaction completed BEFORE the third stop');
     assert.equal(readTracking()?.baselineContextTokens, undefined, 'dropped again by the compaction');
+  });
+  it('the deploy: the bot is replaced while the topic holds no figures (a state kept before they existed) — the idle mark measures the conversation from its transcript and compacts it, though it was compacted before', async () => {
+    setContextTokens(50_000, 100_000);
+    const wakeMessageId = fakeTelegram.pushOperatorMessage(topicThreadId, 'WAKE-2 [fake:answer] one more task');
+    await topic.waitForMessage('the answer of the woken agent', (message) => message.message_id > wakeMessageId && message.text.includes('WAKE-2'));
+    await getCharness().waitFor('the bot to read the turn\'s context size', replyTimeoutMs, () => readTracking()?.lastContextTokens === 100_000);
+    assert.equal(readTracking()?.baselineContextTokens, 50_000, 'the first call after the second compaction');
+    assert.equal(countCompactions(), 2, 'precondition: compacted twice, the third idle mark is still to come');
+
+    // The bot goes down and comes back with no figures in its state — the compaction stamps and the turn marks stay. The saved activity is
+    // dated ahead, so the countdown it arms on boot is a full window, never an overdue one (a box that boots slowly would otherwise
+    // find the mark passed): the mark is the one this step looks at.
+    charness = await restartCharnessWithState(getLayout(), fakeTelegram, getCharness(), (persisted) => {
+      const tracking = persisted.compactIdleTracking?.[topicKey];
+      assert.ok(tracking, 'the topic has saved compact-on-idle instants');
+      assert.ok(tracking.lastCompactionAt !== undefined && tracking.lastTurnEndAt !== undefined, 'a compaction and a turn since are saved');
+      delete tracking.baselineContextTokens;
+      delete tracking.lastContextTokens;
+      tracking.lastActivityAt = Date.now() + 2 * 60 * 1000;
+    });
+    await getCharness().waitFor('the compaction at the idle mark, from the figures it measured', idleStopTimeoutMs, () => countConsoleLines(getCompactedLine()) === 1);
+    await getCharness().waitFor('the stop after it', idleStopTimeoutMs, () => countConsoleLines(getStopLine()) === 1);
+    assert.equal(countCompactions(), 3, 'compacted at the mark although it had no figures: it was measured there');
+    assert.equal(countIdleNotices(), 3);
+    assert.equal(countConsoleLines('the context size since the last compaction is not known yet'), 0, 'never held back as «not measured»');
+  });
+  it('the CLI\'s own overflow compaction replaces the epoch: the baseline becomes the new epoch\'s first call (52 000), though that is no smaller than the old baseline (30 000)', async () => {
+    setContextTokens(30_000, 60_000);
+    const firstMessageId = fakeTelegram.pushOperatorMessage(topicThreadId, 'WAKE-3 [fake:answer] a task');
+    await topic.waitForMessage('the answer of the woken agent', (message) => message.message_id > firstMessageId && message.text.includes('WAKE-3'));
+    await getCharness().waitFor('the bot to read the turn\'s context size', replyTimeoutMs, () => readTracking()?.lastContextTokens === 60_000);
+    assert.equal(readTracking()?.baselineContextTokens, 30_000, 'precondition: the first call of this epoch');
+
+    // The next turn overflows: the CLI compacts by itself (no `/compact` of the bot's), and the turn goes on in the new epoch.
+    const compactionsBefore = countCompactions();
+    setContextTokens(52_000, 70_000);
+    const overflowMessageId = fakeTelegram.pushOperatorMessage(topicThreadId, 'OVER-1 [fake:overflow] a task so big the CLI compacts by itself');
+    await topic.waitForMessage('the answer of the overflowing turn', (message) => message.message_id > overflowMessageId && message.text.includes('OVER-1'));
+    await getCharness().waitFor('the bot to read the overflowing turn\'s context size', replyTimeoutMs, () => readTracking()?.lastContextTokens === 70_000);
+    assert.equal(readTracking()?.baselineContextTokens, 52_000, 'measured from the new epoch\'s first call: the growth is 18 000, not the 40 000 the old baseline would read');
+    assert.equal(countCompactions(), compactionsBefore, 'the bot issued no compaction: the CLI\'s own is not one of its `/compact` turns');
   });
 });

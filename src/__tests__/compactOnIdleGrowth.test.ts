@@ -29,6 +29,7 @@ import assert from 'node:assert/strict';
 import { createCompaction } from '../connectors/telegram/commands/compaction';
 import { claudeJsonStreamAdapterName, claudePerTurnAdapterName, openCodeAdapterName } from '../adapters/adapterNames';
 import type { AgentAdapter, AgentSession, CompactionResult, PendingQuestionState } from '../types';
+import type { ThreadContextReading } from '../connectors/telegram/commands/compaction';
 import { keyToString, type SessionKey } from '../sessionKey';
 import { contextSampleDebounceMs, defaultCompactGrowthTokens } from '../utils/compactOnIdle';
 import { createCommandHarness, harnessGroup, harnessThreadId, type CommandHarness } from './commandModuleHarness';
@@ -43,6 +44,9 @@ const windowLeftMs = 20;
 const quietMs = 3 * idleWindowMs;
 /** The slow backend's answer in the overtaken-reading test: longer than the compaction stamp takes. */
 const slowReadingMs = 150;
+
+/** How long ago the earlier compaction of a test's topic was: the turn after it, stamped now, is a turn since. */
+const compactedAgoMs = 5_000;
 
 /** What the first call of an epoch saw, what the conversation weighs once it grew by the threshold, and a first turn's big task. */
 const baselineTokens = 41_000;
@@ -69,6 +73,8 @@ class GrowthStubAdapter extends EventEmitter implements AgentAdapter {
   /** What the epoch's first call saw, as the conversation's history tells; `null`: the history cannot be read. */
   firstCallTokens: number | null = null;
   firstCallReads = 0;
+  /** `getOwnCompactionCount`: the compactions the CLI or the server started that completed in this session. */
+  ownCompactions = 0;
   /** How long the reads take to answer. */
   readingDelayMs = 0;
 
@@ -84,6 +90,7 @@ class GrowthStubAdapter extends EventEmitter implements AgentAdapter {
   sendInput(): void {}
   sendSignal(): void {}
   async getSessions(): Promise<AgentSession[]> { return []; }
+  getOwnCompactionCount(): number { return this.ownCompactions; }
   async getContextUsedTokens(): Promise<number | null> {
     const contextTokens = this.contextTokens;
     if (this.readingDelayMs > 0) await new Promise((resolve) => setTimeout(resolve, this.readingDelayMs));
@@ -121,6 +128,13 @@ describe('the idle compaction waits for the context to grow, through the compact
   let steps: string[] = [];
   let logs: string[] = [];
   let forwardedPrompts: string[] = [];
+  /** What the bot reads of a STOPPED session's transcript by its persisted session (`readSleepingContext`); `null`: nothing readable. */
+  let sleepingReading: ThreadContextReading | null = null;
+  let sleepingReads = 0;
+  const readSleepingContext = (isBaselineNeeded: boolean): ThreadContextReading | null => {
+    sleepingReads += 1;
+    return sleepingReading === null ? null : { lastContextTokens: sleepingReading.lastContextTokens, firstCallContextTokens: isBaselineNeeded ? sleepingReading.firstCallContextTokens : null };
+  };
   const modules: Array<ReturnType<typeof createCompaction>> = [];
   const pendingQuestions = new Map<string, PendingQuestionState>();
   const originalLog = console.log;
@@ -142,6 +156,7 @@ describe('the idle compaction waits for the context to grow, through the compact
         steps.push('stop');
         if (adapter instanceof GrowthStubAdapter) adapter.isActive = false;
       },
+      readSleepingContext: async (_key, isBaselineNeeded) => readSleepingContext(isBaselineNeeded),
       resumeSleepingSessionForCompaction: async () => {
         steps.push('resume');
         if (adapter instanceof GrowthStubAdapter) adapter.isActive = true;
@@ -197,6 +212,8 @@ describe('the idle compaction waits for the context to grow, through the compact
     for (const module of modules.splice(0)) module.clearThreadCompaction(key);
     await harness.state.clearCompactIdleTracking(key);
     forwardedPrompts = [];
+    sleepingReading = null;
+    sleepingReads = 0;
   });
 
   it('a turn that ends is read: the baseline is the epoch\'s FIRST call though the turn ended far above it; a baseline that is there is not read again', async () => {
@@ -394,26 +411,130 @@ describe('the idle compaction waits for the context to grow, through the compact
     assert.equal(growthAdapter().compactions, 2, 'grown by the threshold since the first call after the last compaction: compacted again');
   });
 
-  it('a sleeping per-turn session woken only by the bot is resumed for its compaction only when the context grew enough — and nothing is armed after the compaction', async () => {
+  it('the deploy: a topic compacted before and idle with NO figures yet (a state kept before they existed) is measured at its mark — compacted when its context grew, only stopped when it did not', async () => {
+    adapter = new GrowthStubAdapter(claudeJsonStreamAdapterName);
+    const module = createModule();
+    // Compacted once, a turn since, and the bot has never read the context of this conversation: the tracking holds no figures.
+    await harness.state.setCompactIdleCompactedAt(key, Date.now() - compactedAgoMs);
+    assert.deepEqual(getFigures(), [null, null], 'precondition: no figures');
+    growthAdapter().contextTokens = grownTokens + 20_000;
+    growthAdapter().firstCallTokens = baselineTokens;
+    armTopicAfterTurn(module, null);
+    await waitUntil('the compaction and the stop', () => steps.includes('stop'));
+    assert.equal(growthAdapter().compactions, 1, 'the context grew by far more than the threshold since its first call: compacted before the sleep');
+    assert.equal(growthAdapter().firstCallReads, 1, 'the baseline was read from the history at the mark');
+
+    // The same topic, the same state, but its transcript says it did not grow: nothing is compacted, the process is only stopped.
+    adapter = new GrowthStubAdapter(claudeJsonStreamAdapterName);
+    await harness.state.clearCompactIdleTracking(key);
+    await harness.state.setCompactIdleCompactedAt(key, Date.now() - compactedAgoMs);
+    growthAdapter().contextTokens = baselineTokens + 5_000;
+    growthAdapter().firstCallTokens = baselineTokens;
+    armTopicAfterTurn(module, null);
+    await waitUntil('the stop', () => steps.includes('stop'));
+    assert.equal(growthAdapter().compactions, 0, 'it did not grow: only the stop');
+    assert.ok(logs.some((line) => line.includes('the context grew by')), `the log says by how much:\n${logs.join('\n')}`);
+  });
+
+  it('a turn\'s reading that was lost (a restart between its end and its read) leaves a STALE figure: the mark measures again — a context that grew since is compacted', async () => {
+    adapter = new GrowthStubAdapter(claudeJsonStreamAdapterName);
+    const module = createModule();
+    // The figures the bot has are the last read turn's; the turn after it ended unread, and the context is far above them.
+    harness.replies.length = 0;
+    growthAdapter().contextTokens = grownTokens + 10_000;
+    growthAdapter().firstCallTokens = baselineTokens;
+    armTopicAfterTurn(module, { baseline: baselineTokens, last: baselineTokens + 1_000 });
+    await waitUntil('the compaction and the stop', () => steps.includes('stop'));
+    assert.equal(growthAdapter().compactions, 1);
+    assert.equal(growthAdapter().firstCallReads, 0, 'the baseline was there: only the context now was read');
+  });
+
+  it('the deploy for a SLEEPING per-turn session: measured from its transcript by the persisted session — resumed for its compaction only when it grew, and never woken when it did not or cannot be read', async () => {
+    adapter = new GrowthStubAdapter(claudePerTurnAdapterName);
+    growthAdapter().isActive = false;
+    const module = createModule();
+    await harness.state.setCompactIdleCompactedAt(key, Date.now() - compactedAgoMs);
+
+    // It did not grow: no wake-up for nothing.
+    sleepingReading = { lastContextTokens: baselineTokens + 5_000, firstCallContextTokens: baselineTokens };
+    armTopicAfterTurn(module, null);
+    await waitUntil('the measure at the mark', () => sleepingReads === 1);
+    await new Promise((resolve) => setTimeout(resolve, quietMs));
+    assert.deepEqual(steps, [], 'not woken');
+    assert.equal(growthAdapter().compactions, 0);
+    assert.deepEqual(getFigures(), [baselineTokens, baselineTokens + 5_000], 'the figures are saved for the next mark');
+
+    // Nothing readable: not woken either (it would be for nothing).
+    await harness.state.clearCompactIdleTracking(key);
+    await harness.state.setCompactIdleCompactedAt(key, Date.now() - compactedAgoMs);
+    sleepingReading = null;
+    sleepingReads = 0;
+    armTopicAfterTurn(module, null);
+    await waitUntil('the second measure', () => sleepingReads === 1);
+    await new Promise((resolve) => setTimeout(resolve, quietMs));
+    assert.deepEqual(steps, [], 'unreadable: not woken');
+
+    // It grew: the fire resumes it, compacts it and stops it again.
+    await harness.state.clearCompactIdleTracking(key);
+    await harness.state.setCompactIdleCompactedAt(key, Date.now() - compactedAgoMs);
+    sleepingReading = { lastContextTokens: grownTokens + 20_000, firstCallContextTokens: baselineTokens };
+    armTopicAfterTurn(module, null);
+    await waitUntil('the compaction and the stop', () => steps.includes('stop'));
+    assert.deepEqual(steps, ['resume', 'stop'], 'resumed for the compaction, then put back to sleep');
+    assert.equal(growthAdapter().compactions, 1);
+  });
+
+  it('a compaction the CLI or the server started replaces the epoch: the baseline becomes the NEW epoch\'s first call even though the context is not smaller than the old baseline', async () => {
+    adapter = new GrowthStubAdapter(claudeJsonStreamAdapterName);
+    const stub = growthAdapter();
+    const module = createModule();
+
+    // The conversation's first call saw 20 000; the first turn ended at 24 000.
+    stub.contextTokens = 24_000;
+    stub.firstCallTokens = 20_000;
+    module.noteThreadTurnContext(key);
+    await waitUntil('the first reading', () => getTracking().lastContextTokens === 24_000);
+    assert.deepEqual(getFigures(), [20_000, 24_000]);
+
+    // The CLI's own overflow compaction: the new epoch's first call saw 45 000 — NOT below the old baseline, so no shrink shows it.
+    stub.ownCompactions = 1;
+    stub.contextTokens = 52_000;
+    stub.firstCallTokens = 45_000;
+    module.noteThreadTurnContext(key);
+    await waitUntil('the reading after the CLI\'s compaction', () => getTracking().lastContextTokens === 52_000);
+    assert.deepEqual(getFigures(), [45_000, 52_000], 'measured from the new epoch: growth is 7 000, not 32 000');
+
+    // A later turn, no compaction since: the baseline stays and is not read again.
+    stub.contextTokens = 60_000;
+    stub.firstCallTokens = 99_999;
+    const readsBefore = stub.firstCallReads;
+    module.noteThreadTurnContext(key);
+    await waitUntil('the later reading', () => getTracking().lastContextTokens === 60_000);
+    assert.deepEqual(getFigures(), [45_000, 60_000]);
+    assert.equal(stub.firstCallReads, readsBefore, 'the history is not read again');
+  });
+
+  it('a sleeping per-turn session woken only by the bot, once measured, is compacted again only when the context grew enough — and nothing is left to wake it after the compaction', async () => {
     adapter = new GrowthStubAdapter(claudePerTurnAdapterName);
     growthAdapter().isActive = false;
     const module = createModule();
 
-    // Not grown enough: no countdown for a sleeping session, nobody is woken for nothing.
+    // Not grown enough: the mark measures, nobody is woken for nothing.
     armTopicAfterTurn(module, { baseline: baselineTokens, last: grownTokens - 1 });
+    sleepingReading = { lastContextTokens: grownTokens - 1, firstCallContextTokens: null };
     await new Promise((resolve) => setTimeout(resolve, quietMs));
     assert.deepEqual(steps, [], 'not woken');
     assert.equal(growthAdapter().compactions, 0);
 
     // Grown enough: the fire resumes it, compacts it and stops it again.
-    harness.state.noteCompactIdleContext(key, { lastContextTokens: grownTokens, firstCallContextTokens: null });
+    sleepingReading = { lastContextTokens: grownTokens, firstCallContextTokens: null };
     harness.state.noteCompactIdleActivity(key, Date.now() - idleWindowMs + windowLeftMs);
     module.rearmThreadIdleTimer(key);
     await waitUntil('the compaction and the stop', () => steps.includes('stop'));
     assert.deepEqual(steps, ['resume', 'stop'], 'resumed for the compaction, then put back to sleep');
     assert.equal(growthAdapter().compactions, 1);
 
-    // The compaction closed the guard: a sleeping session with nothing new is not woken again.
+    // The compaction closed the guard (a turn since it is needed): a sleeping session with nothing new is not woken again.
     module.rearmThreadIdleTimer(key);
     await new Promise((resolve) => setTimeout(resolve, quietMs));
     assert.deepEqual(steps, ['resume', 'stop'], 'no second wake-up for nothing: the compactions cannot loop');

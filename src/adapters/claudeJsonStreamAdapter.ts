@@ -392,6 +392,8 @@ export interface StreamSession {
   /** The CLI version reported on `system/init` (`claude_code_version`); the
    *  auto-stop gate (L-D10) reads it. `null` until the first init / on an adopt. */
   claudeCodeVersion: string | null;
+  /** The compactions the bot did NOT issue that completed in this process (the CLI's own overflow compaction): `AgentAdapter.getOwnCompactionCount`. */
+  ownCompactionCount: number;
   /**
    * Set while `onStdout` applies the lines of one chunk. The line reader hands
    * the WHOLE chunk's lines over at once, so the line-boundary offset already
@@ -742,7 +744,7 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
       pendingQuestion: null, apiErrorFired: false, rejectedResetAtMs: null, turnApiErrorCode: null, swallowNextAbortError: false,
       lastWatermarkOffset: -1,
       backgroundTasks: new Map(), notificationTurnPendingSince: null, lastTurnEndedAt: Date.now(), isCompactionResultPending: false, scheduledJobs: new Map(),
-      claudeCodeVersion: null, applyingChunk: null,
+      claudeCodeVersion: null, ownCompactionCount: 0, applyingChunk: null,
       adoptCatchUpOffset: null, adoptCatchUpResolvers: [], isTailHeld: false,
     };
     this.sessions.set(keyToString(key), session);
@@ -1091,7 +1093,7 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
       lastTurnEndedAt: adoptedTail.lastTurnEndedAtMs ?? Date.now(),
       isCompactionResultPending: false,
       scheduledJobs: new Map(adoptedTail.scheduledJobs.map((job) => [job.jobId, job])),
-      claudeCodeVersion, applyingChunk: null,
+      claudeCodeVersion, ownCompactionCount: 0, applyingChunk: null,
       // Nothing to catch up on when the tail already sits at EOF.
       adoptCatchUpOffset: startOffset < size ? size : null, adoptCatchUpResolvers: [],
       // Read from `releaseAdoptedTails` on: the boot restores its state first.
@@ -1460,6 +1462,10 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
   private getActiveTranscriptPath(key: SessionKey): string | null {
     const session = this.sessions.get(keyToString(key));
     return session?.isActive ? getClaudeTranscriptPath(session.workDir, session.sessionId) : null;
+  }
+
+  getOwnCompactionCount(key: SessionKey): number {
+    return this.sessions.get(keyToString(key))?.ownCompactionCount ?? 0;
   }
 
   async getContextUsedTokens(key: SessionKey): Promise<number | null> {
@@ -2030,6 +2036,7 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
     if (!session.pendingCompaction) {
       // The CLI's own compaction (a context overflow mid-turn, or one met while replaying the downtime tail):
       // nobody waits for it, but the conversation's context was replaced all the same.
+      session.ownCompactionCount += 1;
       this.emit('contextCompacted', session.key, action.trigger);
       return;
     }

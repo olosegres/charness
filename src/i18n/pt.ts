@@ -505,7 +505,7 @@ export const ptDict: Record<string, string> = {
   'compactOnIdle.growthInvalid': 'Digite o crescimento como um número de tokens de 0 a {max}, por exemplo 30000 ou 50k.',
   'compactOnIdle.setThisTopic': '✅ Compactação automática por inatividade: {state} para este tópico.',
   'compactOnIdle.setGlobal': '✅ Compactação automática por inatividade: {state} para TODOS os tópicos (substituições por tópico ainda se aplicam).',
-  'compactOnIdle.unsupported': 'A compactação automática por inatividade aplica-se a uma sessão de agente ativa. Inicie /claude ou /opencode em um tópico vinculado primeiro.',
+  'compactOnIdle.unsupported': 'A compactação automática por inatividade é para um tópico de agente: um shell simples não tem contexto para compactar.',
   'compactOnIdle.pendingQuestionReask': '❓ Você ainda tem uma pergunta pendente. Toque em uma opção para respondê-la e continuar:',
   'compactOnIdle.skipped.backgroundWorkNotice': '🧹 Compactação por inatividade ignorada: o trabalho em segundo plano do agente ainda está em andamento, a conversa foi deixada como estava.',
   'compactOnIdle.skipped.unconsumedInputNotice': '🧹 Compactação por inatividade ignorada: uma mensagem para o agente ainda não foi recebida, a conversa foi deixada como estava.',

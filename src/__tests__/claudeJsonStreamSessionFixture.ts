@@ -89,6 +89,7 @@ export function createStreamSessionFixture(overrides: Partial<StreamSession> = {
     isCompactionResultPending: false,
     scheduledJobs: new Map(),
     claudeCodeVersion: null,
+    ownCompactionCount: 0,
     applyingChunk: null,
     adoptCatchUpOffset: null,
     adoptCatchUpResolvers: [],

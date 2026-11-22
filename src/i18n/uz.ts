@@ -505,7 +505,7 @@ export const uzDict: Record<string, string> = {
   'compactOnIdle.growthInvalid': 'O‘sishni 0 dan {max} gacha token soni sifatida kiriting, masalan 30000 yoki 50k.',
   'compactOnIdle.setThisTopic': '✅ Bo‘sh turganda avtosiqish: bu mavzu uchun {state}.',
   'compactOnIdle.setGlobal': '✅ Bo‘sh turganda avtosiqish: BARCHA mavzular uchun {state} (mavzu bo‘yicha bekor qilishlar amal qiladi).',
-  'compactOnIdle.unsupported': 'Bo‘sh turganda avtosiqish faol agent seansiga taalluqli. Avval bog‘langan mavzuda /claude yoki /opencode ni ishga tushiring.',
+  'compactOnIdle.unsupported': 'Bo‘sh turganda avtosiqish agentli mavzu uchun: oddiy shellda siqiladigan kontekst yo‘q.',
   'compactOnIdle.pendingQuestionReask': '❓ Sizda hali javob berilmagan savol bor. Javob berib davom etish uchun variantni bosing:',
   'compactOnIdle.skipped.backgroundWorkNotice': '🧹 Bo‘sh turganda siqish o‘tkazib yuborildi: agentning fon ishi hali davom etmoqda, suhbat o‘z holicha qoldirildi.',
   'compactOnIdle.skipped.unconsumedInputNotice': '🧹 Bo‘sh turganda siqish o‘tkazib yuborildi: agentga yuborilgan xabar hali qabul qilinmagan, suhbat o‘z holicha qoldirildi.',

@@ -78,6 +78,7 @@ describe('compaction: the compaction flow over its ports', () => {
       idleWindowMs: 55 * 60 * 1000,
       checkIsLimitWaitArmed: () => false,
       suspendThreadSession: async () => {},
+      readSleepingContext: async () => null,
       resumeSleepingSessionForCompaction: async () => false,
       getThreadAdapter,
       deliverLabel: async () => 'forwarded',
@@ -117,7 +118,7 @@ describe('compaction: the compaction flow over its ports', () => {
     setThreadAdapter(harness.key, terminalAdapterName);
     try {
       await harness.runCommand('compact_on_idle');
-      assert.match(harness.replies.at(-1)?.text ?? '', /active agent session/);
+      assert.match(harness.replies.at(-1)?.text ?? '', /plain shell has no context to compact/);
       assert.deepEqual(harness.getKeyboardData(harness.replies.at(-1)), [], 'no picker for a switch that cannot apply');
       await harness.runCommand('compact_on_idle', '10k');
       assert.equal(harness.state.getCompactGrowthOverride(harness.key), 50_000, 'a shell\'s threshold is not taken');

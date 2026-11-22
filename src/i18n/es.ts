@@ -505,7 +505,7 @@ export const esDict: Record<string, string> = {
   'compactOnIdle.growthInvalid': 'Escribe el crecimiento como un número de tokens de 0 a {max}, por ejemplo 30000 o 50k.',
   'compactOnIdle.setThisTopic': '✅ Compactado automático por inactividad: {state} para este tema.',
   'compactOnIdle.setGlobal': '✅ Compactado automático por inactividad: {state} para TODOS los temas (las anulaciones por tema siguen aplicándose).',
-  'compactOnIdle.unsupported': 'El compactado automático por inactividad se aplica a una sesión de agente activa. Inicia primero /claude o /opencode en un tema vinculado.',
+  'compactOnIdle.unsupported': 'El compactado automático por inactividad es para un tema de agente: un shell simple no tiene contexto que compactar.',
   'compactOnIdle.pendingQuestionReask': '❓ Aún tienes una pregunta pendiente. Toca una opción para responderla y continuar:',
   'compactOnIdle.skipped.backgroundWorkNotice': '🧹 Compactación por inactividad omitida: el trabajo en segundo plano del agente sigue en curso, la conversación se dejó como estaba.',
   'compactOnIdle.skipped.unconsumedInputNotice': '🧹 Compactación por inactividad omitida: el agente aún no ha recibido un mensaje, la conversación se dejó como estaba.',

@@ -509,7 +509,7 @@ export const ruDict: Record<string, string> = {
   'compactOnIdle.growthInvalid': 'Введи рост как число токенов от 0 до {max}, например 30000 или 50k.',
   'compactOnIdle.setThisTopic': '✅ Авто-сжатие при простое: {state} для этого топика.',
   'compactOnIdle.setGlobal': '✅ Авто-сжатие при простое: {state} для ВСЕХ топиков (переопределения по топикам продолжают действовать).',
-  'compactOnIdle.unsupported': 'Авто-сжатие при простое работает для активной сессии агента. Сначала запусти /claude или /opencode в привязанном топике.',
+  'compactOnIdle.unsupported': 'Авто-сжатие при простое — для топика с агентом: у обычного shell нет контекста, который можно сжать.',
   'compactOnIdle.pendingQuestionReask': '❓ У тебя остался неотвеченный вопрос. Нажми на вариант, чтобы ответить и продолжить:',
   'compactOnIdle.skipped.backgroundWorkNotice': '🧹 Сжатие при простое пропущено: фоновая работа агента ещё идёт, разговор оставлен как есть.',
   'compactOnIdle.skipped.unconsumedInputNotice': '🧹 Сжатие при простое пропущено: агент ещё не принял сообщение, разговор оставлен как есть.',

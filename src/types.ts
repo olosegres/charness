@@ -873,6 +873,14 @@ export interface AgentAdapter extends EventEmitter {
   getFirstCallContextTokens?(key: SessionKey): Promise<number | null>;
 
   /**
+   * @description How many compactions the bot did NOT issue have completed in the live session — the CLI's own overflow compaction,
+   * the server's own — a count the bot compares between two readings of the context: a change means the epoch was replaced, so the
+   * baseline it measures growth from is the older one's. Per live session (a new process counts from 0: any difference between two
+   * readings is a change, and a needless one only costs a re-read). Optional: a backend that cannot tell omits it.
+   */
+  getOwnCompactionCount?(key: SessionKey): number;
+
+  /**
    * @description Whether the session bound to `key` is mid-turn (an in-progress
    * reply). `false` when there is no session or it is idle. Sync and read from
    * in-memory state only (no tmux/HTTP call) so a caller can poll it cheaply —

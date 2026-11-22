@@ -270,7 +270,7 @@ export const fakeAskSetAsideTurnText = 'Went on without the answer.';
  * fake creates a one-shot prompt schedule (`schedule_create` on the bot's MCP) that fires after that many seconds with the prompt
  * `<label> [fake:answer] scheduled` — a prompt the BOT delivers to the agent, not a person: while its question waits it is not an
  * answer to it and does not cancel it (a message the operator types does), and in a topic whose process sleeps it wakes the
- * conversation without clearing the idle-compaction latch (a person's message does).
+ * conversation like any other message — nothing in the idle compaction depends on who woke it.
  */
 export const fakeScheduleOnceToken = (seconds: number, label: string): string => `[fake:schedule-once ${seconds} ${label}]`;
 

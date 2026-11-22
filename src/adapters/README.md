@@ -246,7 +246,13 @@ conversation has no baseline, `getFirstCallContextTokens`: the first main-conver
 session history). Read from the history, so a long first turn does not hide its own growth in the baseline and a conversation that already had turns
 when the bot first looks is measured from its real baseline. Kept per conversation (`compactIdleTracking.baselineContextTokens` / `lastContextTokens`),
 dropped by every bot-issued compaction and by a context smaller than the baseline (the CLI compacted by itself), read again at the next turn's end;
-an unreadable history leaves no baseline, never the turn's end in its place. No reading holds a conversation back only while it was never
+an unreadable history leaves no baseline, never the turn's end in its place. The mark itself measures again (`sampleThreadContext`, before it decides: a
+state kept before the figures existed, a reading lost with a restart, a turn that ended on an error leave none or a stale one); a sleeping per-turn session has no live
+adapter state, so it is read from its transcript by the persisted session id and work folder (`readSleepingContext` port, `bot.ts`), and its countdown is armed
+whenever a turn is pending (`checkIsCompactionPending`), the fire deciding to resume it (`checkIsCompactionDue`). A compaction nobody at the bot issued — the CLI's own overflow
+compaction (json-stream), the server's own (OpenCode `session.compacted` with no bot compaction open) — is counted (`AgentAdapter.getOwnCompactionCount`); a change between two
+readings replaces the baseline with the new epoch's first call (the new epoch starts about as high as the old first call, so a smaller context cannot show it); the tmux Claude counts
+none, and keeps only the smaller-context rule. No reading holds a conversation back only while it was never
 compacted (`checkIsContextGrownEnough`): a compacted one with none is not compacted again, so a backend whose compaction raises no signal (the tmux
 Claude) cannot loop. There is no once-per-active-period latch: the growth is what keeps a compaction from repeating. A process held at the mark forgoes it (`getIdleFireDecision`'s
 `isIdleMarkHeld`; the topic gets ONE silent line, `compactOnIdle.skipped.*Notice`, naming what holds

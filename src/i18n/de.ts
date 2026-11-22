@@ -505,7 +505,7 @@ export const deDict: Record<string, string> = {
   'compactOnIdle.growthInvalid': 'Gib das Wachstum als Tokenzahl von 0 bis {max} ein, zum Beispiel 30000 oder 50k.',
   'compactOnIdle.setThisTopic': '✅ Auto-Komprimierung bei Leerlauf: {state} für dieses Thema.',
   'compactOnIdle.setGlobal': '✅ Auto-Komprimierung bei Leerlauf: {state} für ALLE Themen (themenspezifische Überschreibungen gelten weiterhin).',
-  'compactOnIdle.unsupported': 'Auto-Komprimierung bei Leerlauf gilt für eine aktive Agent-Sitzung. Starte zuerst /claude oder /opencode in einem gebundenen Thema.',
+  'compactOnIdle.unsupported': 'Auto-Komprimierung bei Leerlauf gibt es nur in einem Agent-Thema: eine reine Shell hat keinen Kontext zum Komprimieren.',
   'compactOnIdle.pendingQuestionReask': '❓ Du hast noch eine offene Frage. Tippe auf eine Option, um sie zu beantworten und fortzufahren:',
   'compactOnIdle.skipped.backgroundWorkNotice': '🧹 Kompression bei Leerlauf übersprungen: Die Hintergrundarbeit des Agenten läuft noch, das Gespräch blieb unverändert.',
   'compactOnIdle.skipped.unconsumedInputNotice': '🧹 Kompression bei Leerlauf übersprungen: Eine Nachricht an den Agenten wurde noch nicht aufgenommen, das Gespräch blieb unverändert.',

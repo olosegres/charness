@@ -516,7 +516,7 @@ export const enDict: Record<string, string> = {
   'compactOnIdle.growthInvalid': 'Type the growth as a number of tokens from 0 to {max}, for example 30000 or 50k.',
   'compactOnIdle.setThisTopic': '✅ Auto-compact on idle: {state} for this topic.',
   'compactOnIdle.setGlobal': '✅ Auto-compact on idle: {state} for ALL topics (per-topic overrides still apply).',
-  'compactOnIdle.unsupported': 'Auto-compact on idle applies to an active agent session. Start /claude or /opencode in a bound topic first.',
+  'compactOnIdle.unsupported': 'Auto-compact on idle is for an agent topic: a plain shell has no context to compact.',
   'compactOnIdle.pendingQuestionReask': '❓ You still have a pending question. Tap an option to answer it and continue:',
   'compactOnIdle.skipped.backgroundWorkNotice': '🧹 Idle compaction skipped: the agent\'s background work is still running, so the conversation was left as it is.',
   'compactOnIdle.skipped.unconsumedInputNotice': '🧹 Idle compaction skipped: a message to the agent has not been taken in yet, so the conversation was left as it is.',

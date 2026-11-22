@@ -235,6 +235,8 @@ export interface OpenCodeSession {
   compactionSummaryMessageId: string | null;
   /** The bot's own `compactContext` call is open: a summary message announced now is the one that call writes. */
   isBotCompactionInFlight: boolean;
+  /** The compactions the SERVER started that completed in this session (`session.compacted` with no bot compaction open): `AgentAdapter.getOwnCompactionCount`. */
+  ownCompactionCount: number;
   /** The id of the summary message the bot's own compaction wrote (learned while its call was open), kept after the call returned: the last of its text may stream later. */
   botCompactionSummaryMessageId: string | null;
   /** The message the text in {@link currentResponseText} belongs to (the `messageID` of its deltas); `null` before the first delta. Reset alongside it. */
@@ -2321,6 +2323,7 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
           outputTimer: null,
           compactionSummaryMessageId: null,
           isBotCompactionInFlight: false,
+          ownCompactionCount: 0,
           botCompactionSummaryMessageId: null,
           responseMessageId: null,
           isResponseCompactionSummary: false,
@@ -3041,6 +3044,19 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
     };
   }
 
+  /**
+   * A compaction completed in the session: counted when the SERVER started it — none of the bot's own is open — so the bot can tell its
+   * context replaced under it. Only `session.compacted` counts (`…compaction.ended` may come with it for the same compaction).
+   */
+  private noteOwnCompactionCompleted(key: SessionKey, eventType: string): void {
+    const session = this.sessions.get(keyToString(key));
+    if (session && eventType === 'session.compacted' && !session.isBotCompactionInFlight) session.ownCompactionCount += 1;
+  }
+
+  getOwnCompactionCount(key: SessionKey): number {
+    return this.sessions.get(keyToString(key))?.ownCompactionCount ?? 0;
+  }
+
   /** The context size after the newest completed parent call, from what the session holds in memory (no HTTP): `null` without a live session or such a call. */
   async getContextUsedTokens(key: SessionKey): Promise<number | null> {
     const session = this.sessions.get(keyToString(key));
@@ -3629,6 +3645,7 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
         outputTimer: null,
         compactionSummaryMessageId: null,
         isBotCompactionInFlight: false,
+        ownCompactionCount: 0,
         botCompactionSummaryMessageId: null,
         responseMessageId: null,
         isResponseCompactionSummary: false,
@@ -4771,6 +4788,7 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
 
       case 'session.next.compaction.ended':
       case 'session.compacted':
+        this.noteOwnCompactionCompleted(key, eventType);
         this.setCompacting(key, false);
         break;
 

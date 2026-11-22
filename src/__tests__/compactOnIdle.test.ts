@@ -413,12 +413,17 @@ test('getContextGrowthTokens: from the baseline up to the newest reading, never 
   assert.equal(getContextGrowthTokens({ baselineContextTokens: 40_000, lastContextTokens: null }), null);
 });
 
-test('getContextBaselineAfterReading: with none yet it is the epoch\'s FIRST call (not the turn\'s end), unknown while that cannot be told; a larger context leaves it, a smaller one drops it (the CLI compacted by itself)', () => {
-  assert.equal(getContextBaselineAfterReading({ baselineContextTokens: null, lastContextTokens: 120_000, firstCallContextTokens: 25_000 }), 25_000, 'the first call after the compaction, even though the turn ended at 120 000');
-  assert.equal(getContextBaselineAfterReading({ baselineContextTokens: null, lastContextTokens: 120_000, firstCallContextTokens: null }), null, 'the history could not be read: no baseline, never the turn\'s end');
-  assert.equal(getContextBaselineAfterReading({ baselineContextTokens: 25_000, lastContextTokens: 80_000, firstCallContextTokens: null }), 25_000, 'growth never moves the baseline');
-  assert.equal(getContextBaselineAfterReading({ baselineContextTokens: 25_000, lastContextTokens: 25_000, firstCallContextTokens: null }), 25_000);
-  assert.equal(getContextBaselineAfterReading({ baselineContextTokens: 200_000, lastContextTokens: 60_000, firstCallContextTokens: null }), null, 'a shrink the bot did not make: the baseline is of the older epoch, read again from the new one');
+test('getContextBaselineAfterReading: with none yet it is the epoch\'s FIRST call (not the turn\'s end), unknown while that cannot be told; a compaction the bot did not issue replaces it; a larger context leaves it, a smaller one drops it', () => {
+  const same = { isNewEpoch: false };
+  assert.equal(getContextBaselineAfterReading({ ...same, baselineContextTokens: null, lastContextTokens: 120_000, firstCallContextTokens: 25_000 }), 25_000, 'the first call after the compaction, even though the turn ended at 120 000');
+  assert.equal(getContextBaselineAfterReading({ ...same, baselineContextTokens: null, lastContextTokens: 120_000, firstCallContextTokens: null }), null, 'the history could not be read: no baseline, never the turn\'s end');
+  assert.equal(getContextBaselineAfterReading({ ...same, baselineContextTokens: 25_000, lastContextTokens: 80_000, firstCallContextTokens: null }), 25_000, 'growth never moves the baseline');
+  assert.equal(getContextBaselineAfterReading({ ...same, baselineContextTokens: 25_000, lastContextTokens: 25_000, firstCallContextTokens: null }), 25_000);
+  assert.equal(getContextBaselineAfterReading({ ...same, baselineContextTokens: 200_000, lastContextTokens: 60_000, firstCallContextTokens: null }), null, 'a compaction nothing counted: the baseline is of the older epoch, read again from the new one');
+  // The CLI's own overflow compaction: the new epoch starts about as high as the old first call (a new summary, the same instructions),
+  // so the context is NOT smaller than the old baseline — the count is what tells the epoch was replaced.
+  assert.equal(getContextBaselineAfterReading({ isNewEpoch: true, baselineContextTokens: 20_000, lastContextTokens: 52_000, firstCallContextTokens: 45_000 }), 45_000, 'replaced by the new epoch\'s first call');
+  assert.equal(getContextBaselineAfterReading({ isNewEpoch: true, baselineContextTokens: 20_000, lastContextTokens: 52_000, firstCallContextTokens: null }), null, 'and none until that call exists — never the old epoch\'s');
 });
 
 test('checkIsContextGrownEnough: the threshold reached; no reading passes only for a conversation never compacted — the single place both the fire and the per-turn wake-up ask', () => {

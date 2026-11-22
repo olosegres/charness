@@ -215,6 +215,7 @@ describe('the question the idle compaction asked again, through the compaction m
       checkIsLimitWaitArmed: () => false,
       // The last step of the idle fire (after the compaction and the re-ask): the stop of the conversation.
       suspendThreadSession: async () => { suspendCalls += 1; idleFireFinished.resolve(); },
+      readSleepingContext: async () => null,
       resumeSleepingSessionForCompaction: async () => false,
       getThreadAdapter: () => adapter,
       deliverLabel: (_key, label, messageContext) => new Promise((resolve) => { deliveries.push({ label, messageContext, settle: resolve }); }),
