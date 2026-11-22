@@ -353,7 +353,8 @@ update into the resumed session — it does not wait for the agent's turn to end
 - **Nothing of it is shown on the issue.** A Jira comment always notifies the requester and the issue's watchers — there is no silent
   one — so a fire posts no announcement, a check no alert and no «back to normal» line, a status argument no status line: the
   scheduler's delivery has no feed for a tracker conversation (`ScheduleDeliveryDeps.trackerRun`). The agent writes in the issue only
-  through `answer_request`, and a woken agent with nothing to report stays silent — the bot never prods it for that.
+  through `answer_request`, and a woken agent with nothing to report stays silent — the bot never prods it for that, unless the request still owes
+  the requester an answer (a comment left unanswered is reminded and given up on even by a fire's turn: `../../requests/README.md` row 13).
 - **A fire rides the open request, opens none.** Its prompt starts with a header naming the request it rides (the one the job was armed
   under — `ScheduleRecord.requestId`, recorded by `schedule_create`: the request the agent was working on, not a newer mention of another person — or the open one that replaced it, else the newest open one) or
   saying «no request is open» and naming the finished request: an `answer_request` to that one still becomes a comment but hands
@@ -361,9 +362,10 @@ update into the resumed session — it does not wait for the agent's turn to end
   and link (`JiraConnector.describeConversation`) are in the header, so a session that started fresh knows where it is. The turn the
   fire starts is watched as that request's scheduled run. No job is cancelled when its request closes (as in a topic): «check the
   deploy tomorrow» must survive the final answer.
-- **The request waits for its watch.** An open request with an armed watch is not reminded every 15 minutes, not woken at a bot restart
-  and not given up on after ten wake-ups; the task-agent slot stays held, because the issue IS being worked on
-  (`../../requests/README.md` § Wake-ups). A passing recurring job armed under a request keeps it waiting for as long as it lives, and the issue's slot held:
+- **The request waits for its watch.** An open request with an armed watch that owes nobody an answer is not reminded every 15 minutes,
+  not woken at a bot restart and not given up on after ten wake-ups; a requester's comment left unanswered still is — also after a restart,
+  and also when it was held over a usage-limit wait or an alarm fires meanwhile. The task-agent slot stays held, because the issue IS being
+  worked on (`../../requests/README.md` § Wake-ups, the rule table). A passing recurring job armed under a request keeps it waiting for as long as it lives, and the issue's slot held:
   guidance, not code — an agent that arms a watchdog meant to outlive the work (a health check, a daily job) answers `final` afterwards;
   the job keeps running and its fires say «no request is open», or ride the request open at the time (a later hand-over, a mention: the
   header names it, and the agent answers it only with what its requester must know). The tool description and the orchestration skill say so.

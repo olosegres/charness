@@ -62,7 +62,7 @@ the scheduler's would owe an answer nobody asked for.
   comment and hands nothing back; cancel the job if it served only that request). Then the usual `[Scheduled run]` marker and prompt,
   or the `[Scheduled check "<name>" failed]` block.
 - **The turn** the fire starts is watched as that request's turn, marked a scheduled run (`trackForwardedTurn`): its silent end is
-  no silence (`requests/README.md` § Wake-ups). A fire never counts against the wake-up cap.
+  no silence while the request owes nobody an answer, and an ordinary silent turn when it does (`requests/README.md` § Wake-ups, rows 11 and 13). A fire never counts against the wake-up cap.
 - **Known limitation: a run held over a usage-limit wait.** Its header is built when the fire is held (`holdForLimitResume`) and is
   replayed by the limit-resume path, not by `forwardRun`: after a long wait the header may name a request that has closed since, and the
   replayed turn is not tracked as that request's scheduled run, so a silent end is judged by the ordinary rules. Rare; rebuilding the
