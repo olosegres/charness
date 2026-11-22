@@ -117,6 +117,13 @@ export interface JsonStreamTailOffset {
   scheduledJobs?: ScheduledJob[];
   /** An account switch the user picked while the process worked, still waiting for its turn to end: a reload keeps it. */
   isConfigDirSwitchPending?: boolean;
+  /**
+   * While a turn is in flight: whether answer text of that turn had been EMITTED as of `offsetBytes`. The offset is held back until
+   * the emitted text has left the adapter, so a replay from it starts after everything emitted: with `false` the replay holds the
+   * turn's whole stream and its answer cursor is complete, with `true` the cursor of the adopted session knows nothing of what the old
+   * process emitted. A record written before this was kept has none while a turn is in flight: read as `true`, the safe side.
+   */
+  isAnswerEmittedInTurn?: boolean;
 }
 
 /**

@@ -23,6 +23,7 @@ import assert from 'node:assert/strict';
 import { ClaudeJsonStreamAdapter, streamOutputBatchMs, type StreamSession } from '../adapters/claudeJsonStreamAdapter';
 import { keyToString, type SessionKey } from '../sessionKey';
 import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
+import type { JsonStreamTailOffset } from '../types';
 import { createStreamSessionFixture } from './claudeJsonStreamSessionFixture';
 
 const key: SessionKey = makeTelegramKey(-100999555, 81);
@@ -97,6 +98,25 @@ describe('json-stream adapter — the answer cursor belongs to the turn that str
     await adapter.sendInputAndWait(key, 'next');
     adapter['onStdout'](session, initFrame + echoFrame('next') + textDeltaFrame('Fre') + resultFrame('Fresh'));
     assert.deepEqual(outputs, ['Fresh'], 'the next turn\'s backstop works on its own text');
+  });
+
+  it('the tail record of a turn in flight says whether answer text of that turn was emitted: false at the write that starts it, true once a tail went out', async () => {
+    const { adapter, session, outputs } = createAdapter();
+    const tailWrites: JsonStreamTailOffset[] = [];
+    adapter.setJsonStreamTailWriter((_key, tail) => tailWrites.push(tail));
+    await adapter.sendInputAndWait(key, 'first');
+    assert.equal(tailWrites.at(-1)?.isTurnInFlight, true);
+    assert.equal(tailWrites.at(-1)?.isAnswerEmittedInTurn, false, 'nothing of the turn was emitted yet');
+
+    adapter['onStdout'](session, initFrame + echoFrame('first') + textDeltaFrame('The ans'));
+    mock.timers.tick(batchWindowWithMarginMs);
+    assert.deepEqual(outputs, ['The ans']);
+    await adapter.sendInputAndWait(key, 'second');
+    assert.equal(tailWrites.at(-1)?.isAnswerEmittedInTurn, true, 'a tail of the turn went out: an adopt must not trust its cursor');
+
+    adapter['onStdout'](session, resultFrame('The answer is 42.'));
+    await adapter.sendInputAndWait(key, 'third');
+    assert.equal(tailWrites.at(-1)?.isAnswerEmittedInTurn, false, 'the turn ended: the next turn starts with nothing emitted');
   });
 
   it('a turn\'s end leaves the cursor empty, so the next turn\'s text starts a tail of its own', async () => {

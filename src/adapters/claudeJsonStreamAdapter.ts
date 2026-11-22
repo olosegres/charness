@@ -299,9 +299,13 @@ export interface StreamSession {
   /**
    * The turn in progress was already under way when this process was adopted (a bot restart): its first part was emitted by the
    * old process, and the replay starts at the saved offset, so the cursor above says nothing of it. The `result` backstop would
-   * take the whole final message for text the stream under-delivered; it is skipped until the turn's end clears this.
+   * take the whole final message for text the stream under-delivered; it is skipped until the turn's end clears this. Set only for
+   * a turn whose answer text WAS emitted before the adopt (`isAnswerEmittedInTurn` of the persisted record): one that had emitted
+   * nothing is replayed whole, and its cursor is complete.
    */
   isAnswerCursorUnknown: boolean;
+  /** Answer text of the turn in progress has been emitted (so far); persisted with the tail offset for an adopt, cleared with the cursor. */
+  isAnswerEmittedInTurn: boolean;
   outputTimer: NodeJS.Timeout | null;
   // — reasoning —
   reasoningText: string;
@@ -740,7 +744,7 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
       lastStdoutActivityAt: Date.now(), outstandingToolUseIds: new Set(),
       model: opts.model, reportedModel: null, effort: opts.effort,
       configDir: opts.configDir, isConfigDirSwitchPending: false, startCostUsd,
-      currentResponseText: '', emittedLength: 0, isAnswerCursorUnknown: false, outputTimer: null,
+      currentResponseText: '', emittedLength: 0, isAnswerCursorUnknown: false, isAnswerEmittedInTurn: false, outputTimer: null,
       reasoningText: '', reasoningStartedAt: null, reasoningTimer: null, reasoningActive: false,
       toolNamesById: new Map(), questionToolUseIds: new Set(),
       subagentActive: false, childResponseText: '', childEmittedLength: 0, childOutputTimer: null,
@@ -1081,7 +1085,7 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
       // The account the surviving process runs on is in its own wrapper; the bot compares it with the topic's pick.
       // A switch the user picked while the process worked survives the reload: it still applies at the turn's end.
       configDir: readWrapperScriptConfigDir(paths.wrapperFile), isConfigDirSwitchPending: adoptedTail.isConfigDirSwitchPending, startCostUsd: null,
-      currentResponseText: '', emittedLength: 0, isAnswerCursorUnknown: isTurnInFlight, outputTimer: null,
+      currentResponseText: '', emittedLength: 0, isAnswerCursorUnknown: adoptedTail.isAnswerEmittedInTurn, isAnswerEmittedInTurn: adoptedTail.isAnswerEmittedInTurn, outputTimer: null,
       reasoningText: '', reasoningStartedAt: null, reasoningTimer: null, reasoningActive: false,
       toolNamesById: new Map(), questionToolUseIds: new Set(),
       subagentActive: false, childResponseText: '', childEmittedLength: 0, childOutputTimer: null,
@@ -1610,6 +1614,7 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
     session.currentResponseText = '';
     session.emittedLength = 0;
     session.isAnswerCursorUnknown = false;
+    session.isAnswerEmittedInTurn = false;
   }
 
   sendSignal(key: SessionKey, _signal: string): void {
@@ -2071,6 +2076,7 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
     const tail = session.currentResponseText.slice(session.emittedLength);
     if (tail) {
       session.emittedLength = session.currentResponseText.length;
+      session.isAnswerEmittedInTurn = true;
       const meta: OutboundHints = isFinal ? { isFinal: true } : {};
       // NO isContinuation: `outputsDeltas` adapters let the transports synthesise it.
       this.emit('output', session.key, tail, meta);
@@ -2743,6 +2749,8 @@ function buildTailRecord(session: StreamSession, offsetBytes: number): JsonStrea
     ...(session.scheduledJobs.size > 0 ? { scheduledJobs: [...session.scheduledJobs.values()] } : {}),
     ...(session.notificationTurnPendingSince !== null ? { notificationTurnPendingSinceMs: session.notificationTurnPendingSince } : {}),
     ...(session.isConfigDirSwitchPending ? { isConfigDirSwitchPending: true } : {}),
+    // Only while a turn is in flight (an idle record stays as it was): written both ways, since an absent flag reads as "emitted".
+    ...(session.isBusy ? { isAnswerEmittedInTurn: session.isAnswerEmittedInTurn } : {}),
   };
 }
 

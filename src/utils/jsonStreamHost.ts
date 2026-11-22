@@ -458,6 +458,8 @@ export interface AdoptedTailStart {
   lastTurnEndedAtMs: number | null;
   scheduledJobs: ScheduledJob[];
   isConfigDirSwitchPending: boolean;
+  /** Answer text of the turn in flight was emitted before the offset (see `JsonStreamTailOffset.isAnswerEmittedInTurn`); only meaningful with `isTurnInFlight`. */
+  isAnswerEmittedInTurn: boolean;
 }
 
 /**
@@ -481,7 +483,7 @@ export function resolveAdoptedTail(
   if (persistedTail === null || persistedTail.sessionId !== claudeSessionId) {
     return {
       startOffset: stdoutSizeBytes, backgroundTasks: [], isTurnInFlight: false, outstandingToolUseIds: [], claudeCodeVersion: null,
-      notificationTurnPendingSinceMs: null, lastTurnEndedAtMs: null, scheduledJobs: [], isConfigDirSwitchPending: false,
+      notificationTurnPendingSinceMs: null, lastTurnEndedAtMs: null, scheduledJobs: [], isConfigDirSwitchPending: false, isAnswerEmittedInTurn: false,
     };
   }
   return {
@@ -495,6 +497,9 @@ export function resolveAdoptedTail(
     lastTurnEndedAtMs: persistedTail.lastTurnEndedAtMs ?? null,
     scheduledJobs: persistedTail.scheduledJobs ?? [],
     isConfigDirSwitchPending: persistedTail.isConfigDirSwitchPending ?? false,
+    // Only a turn in flight has an answer cursor to trust. A record written before the flag was kept reads as "emitted" (the unknown cursor
+    // skips a backstop, a known one could repeat a message).
+    isAnswerEmittedInTurn: (persistedTail.isTurnInFlight ?? false) && (persistedTail.isAnswerEmittedInTurn ?? true),
   };
 }
 

@@ -197,7 +197,7 @@ describe('json-stream external transport — exit detection', () => {
     assert.deepEqual(
       tailWrites,
       // The delta marked a turn in flight: the record says so, for an adopt in a later silent stretch.
-      [{ sessionId: 'sess-transport', offsetBytes: Buffer.byteLength(textDeltaLine), backgroundTaskIds: [], isTurnInFlight: true, outstandingToolUseIds: [] }],
+      [{ sessionId: 'sess-transport', offsetBytes: Buffer.byteLength(textDeltaLine), backgroundTaskIds: [], isTurnInFlight: true, outstandingToolUseIds: [], isAnswerEmittedInTurn: true }],
       'the flush releases the boundary at the consumed line',
     );
   });
@@ -298,7 +298,7 @@ describe('json-stream external transport — exit detection', () => {
     } finally {
       console.error = originalError;
     }
-    assert.deepEqual(tailWrites.at(-1), { sessionId: 'sess-transport', offsetBytes: 0, backgroundTaskIds: [], isTurnInFlight: true, outstandingToolUseIds: [] },
+    assert.deepEqual(tailWrites.at(-1), { sessionId: 'sess-transport', offsetBytes: 0, backgroundTaskIds: [], isTurnInFlight: true, outstandingToolUseIds: [], isAnswerEmittedInTurn: false },
       'written at once, at the current offset: a restart in a silent tool call finds no frame to rebuild it from');
 
     fs.writeFileSync(session.paths.stdoutFile, resultLine);
@@ -632,7 +632,7 @@ describe('json-stream idle watchdog — the stuck-busy / hung-typing backstop', 
     adapter.setJsonStreamTailWriter((_k, tail) => tailWrites.push(tail));
     fs.writeFileSync(session.paths.stdoutFile, toolUseLine);
     adapter['drainStdoutTail'](session);
-    assert.deepEqual(tailWrites.at(-1), { sessionId: 'sess-transport', offsetBytes: Buffer.byteLength(toolUseLine), backgroundTaskIds: [], isTurnInFlight: true, outstandingToolUseIds: ['toolu_1'] },
+    assert.deepEqual(tailWrites.at(-1), { sessionId: 'sess-transport', offsetBytes: Buffer.byteLength(toolUseLine), backgroundTaskIds: [], isTurnInFlight: true, outstandingToolUseIds: ['toolu_1'], isAnswerEmittedInTurn: false },
       'the long silent Bash is in the record: nothing after this offset will replay it');
 
     // An adopt seeded from that record (busy, one tool in flight, no frame since): silent past the

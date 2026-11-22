@@ -41,6 +41,9 @@ const usageLimitResultLine =
   JSON.stringify({ type: 'result', subtype: 'success', is_error: true, result: "You've hit your session limit · resets 10:20am (UTC)" }) + '\n';
 /** The end of the turn that was in flight at the restart: the whole final message, as the CLI repeats it in the `result`. */
 const finalResultLine = JSON.stringify({ type: 'result', subtype: 'success', is_error: false, result: 'The final message.' }) + '\n';
+/** What the stream delivered of a turn's final message before it stopped short, and the `result` that carries the whole message. */
+const partialDeltaLine = JSON.stringify({ type: 'stream_event', event: { type: 'content_block_delta', delta: { type: 'text_delta', text: 'The ans' } } }) + '\n';
+const underDeliveredResultLine = JSON.stringify({ type: 'result', subtype: 'success', is_error: false, result: 'The answer is 42.' }) + '\n';
 /** A release whose first read never comes within a test: what the release itself does is looked at, not the poll. */
 const distantFirstReadMs = 60_000;
 /** The bound of a wait that must settle at once; a hang fails the test instead of the file's timeout. */
@@ -176,18 +179,37 @@ describe('a json-stream session adopted at a restart is read only from the boot\
     assert.ok(outputs.some((text) => text.includes('replayed text')), 'the downtime text is delivered too');
   });
 
-  it('a turn in flight at the restart is adopted with an UNKNOWN answer cursor: what it streamed before the restart was emitted by the old process, so its replayed `result` does not emit the whole final message again', async () => {
+  it('a turn in flight at the restart that had EMITTED answer text is adopted with an UNKNOWN cursor: what it streamed was emitted by the old process, so its replayed `result` does not emit the whole final message again', async () => {
     // The restart landed after the turn's last text was emitted (the saved offset is past it) and before its `result` was read.
     const adapter = new ClaudeJsonStreamAdapter();
     const outputs: string[] = [];
     adapter.on('output', (_key: SessionKey, text: string) => outputs.push(text));
-    const session = await adoptLiveProcess(adapter, finalResultLine, { sessionId: claudeSessionId, offsetBytes: 0, isTurnInFlight: true });
-    assert.equal(session.isAnswerCursorUnknown, true, 'a turn in flight at the adopt has no known cursor');
+    const session = await adoptLiveProcess(adapter, finalResultLine, { sessionId: claudeSessionId, offsetBytes: 0, isTurnInFlight: true, isAnswerEmittedInTurn: true });
+    assert.equal(session.isAnswerCursorUnknown, true, 'text of the turn was emitted before the restart: the cursor knows nothing of it');
 
     adapter.releaseAdoptedTails(1);
     assert.equal(await checkSettlesSoon(adapter.whenAdoptReplayed(key)), true, 'the replay is read once released');
     assert.deepEqual(outputs, [], 'nothing of a message the old process emitted is emitted again');
     assert.equal(session.isAnswerCursorUnknown, false, 'the turn\'s end makes the cursor known again');
+  });
+
+  it('a turn in flight at the restart that had emitted NOTHING keeps a known cursor: the replay holds its whole stream, so the `result` still repairs a gap in it', async () => {
+    // A hot reload in a long tool call, before the turn's first text: the replay starts before every delta of the turn.
+    const adapter = new ClaudeJsonStreamAdapter();
+    const outputs: string[] = [];
+    adapter.on('output', (_key: SessionKey, text: string) => outputs.push(text));
+    const session = await adoptLiveProcess(adapter, partialDeltaLine + underDeliveredResultLine, { sessionId: claudeSessionId, offsetBytes: 0, isTurnInFlight: true, isAnswerEmittedInTurn: false });
+    assert.equal(session.isAnswerCursorUnknown, false, 'nothing of the turn was emitted: its cursor is known from the replay');
+
+    adapter.releaseAdoptedTails(1);
+    assert.equal(await checkSettlesSoon(adapter.whenAdoptReplayed(key)), true, 'the replay is read once released');
+    assert.deepEqual(outputs, ['The answer is 42.'], 'the stream stopped short of the final message and the result completed it, once');
+  });
+
+  it('a record written before the flag was kept, with a turn in flight, is read as "emitted": the unknown cursor is the safe side', async () => {
+    const adapter = new ClaudeJsonStreamAdapter();
+    const session = await adoptLiveProcess(adapter, finalResultLine, { sessionId: claudeSessionId, offsetBytes: 0, isTurnInFlight: true });
+    assert.equal(session.isAnswerCursorUnknown, true);
   });
 
   it('a session adopted with no turn in flight has a known cursor: its next turn is settled against that turn\'s own text', async () => {

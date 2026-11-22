@@ -60,6 +60,7 @@ export function createStreamSessionFixture(overrides: Partial<StreamSession> = {
     currentResponseText: '',
     emittedLength: 0,
     isAnswerCursorUnknown: false,
+    isAnswerEmittedInTurn: false,
     outputTimer: null,
     reasoningText: '',
     reasoningStartedAt: null,
