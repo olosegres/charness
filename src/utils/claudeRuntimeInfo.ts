@@ -39,29 +39,47 @@ function getClaudeCallInputTokens(usage: unknown): number | null {
 }
 
 /** The key a transcript line must carry to be an assistant record: checked on the raw bytes before the line is decoded. */
-const assistantRecordKey = Buffer.from('"type":"assistant"');
+const assistantRecordKeyText = '"type":"assistant"';
+const assistantRecordKey = Buffer.from(assistantRecordKeyText);
+
+/** Claude Code names the model of the messages it writes itself (an interrupt notice, an API error) `<synthetic>`: no model call. */
+const syntheticModelPrefix = '<synthetic>';
+
+/** What one model call of the conversation held: what it SAW (input + both caches) and what it wrote. */
+interface ClaudeModelCallUsage {
+  callInputTokens: number;
+  outputTokens: number;
+}
 
 /**
- * @description The context size a transcript LINE's model call saw, when the line is a main-conversation assistant record with a
- * usage — the sub-agents' sidechain, a synthetic error message and a record with no tokens are not model calls of the conversation.
+ * @description The usage of a parsed transcript record when it IS a model call of the conversation: a main-conversation assistant
+ * record with a usage that is valid and non-empty. The sub-agents' sidechain, a synthetic message (an API error, an interrupt
+ * notice, model `<synthetic>`) and a record with no tokens are not — the ONE predicate of the first-call and the newest-call reader,
+ * so a turn that ended on an error record reads as the last real call, never as 0.
  */
-function getClaudeAssistantLineCallInputTokens(lineBytes: Buffer): number | null {
-  if (lineBytes.indexOf(assistantRecordKey) < 0) return null;
-  let entry: unknown;
-  try {
-    entry = JSON.parse(lineBytes.toString('utf8'));
-  } catch {
-    return null; // a line half written
-  }
+function parseClaudeModelCallUsage(entry: unknown): ClaudeModelCallUsage | null {
   if (!checkIsRecord(entry) || entry.type !== 'assistant' || entry.isSidechain === true || entry.isApiErrorMessage === true || !checkIsRecord(entry.message)) return null;
   const model = entry.message.model;
   if (typeof model !== 'string' || !model.trim() || model.startsWith(syntheticModelPrefix)) return null;
   const callInputTokens = getClaudeCallInputTokens(entry.message.usage);
-  return callInputTokens !== null && callInputTokens > 0 ? callInputTokens : null;
+  if (callInputTokens === null || callInputTokens <= 0 || !checkIsRecord(entry.message.usage)) return null;
+  const outputTokens = entry.message.usage.output_tokens;
+  if (outputTokens !== undefined && !checkIsTokenCount(outputTokens)) return null;
+  return { callInputTokens, outputTokens: outputTokens ?? 0 };
 }
 
-/** Claude Code names the model of the messages it writes itself (an interrupt notice, an API error) `<synthetic>`: no model call. */
-const syntheticModelPrefix = '<synthetic>';
+/**
+ * The model call a transcript LINE holds, `null` when it is none (or half written). The raw key is checked first — on the bytes when the
+ * line is bytes — so a line that cannot be an assistant record (a tool result of megabytes, say) is never decoded.
+ */
+function parseClaudeModelCallLine(line: string | Buffer): ClaudeModelCallUsage | null {
+  if (typeof line === 'string' ? !line.includes(assistantRecordKeyText) : line.indexOf(assistantRecordKey) < 0) return null;
+  try {
+    return parseClaudeModelCallUsage(JSON.parse(typeof line === 'string' ? line : line.toString('utf8')));
+  } catch {
+    return null; // a line half written
+  }
+}
 
 /**
  * @description The context size, in tokens, of the FIRST model call after the transcript's last compaction — the compacted summary,
@@ -75,19 +93,34 @@ export async function readClaudeFirstCallContextTokens(filePath: string): Promis
   let firstCallTokens: number | null = null;
   const isRead = await scanClaudeTranscriptEpochBackwards(filePath, (lineBytes) => {
     // Newest to oldest: every record that qualifies replaces the one before, so the oldest is left.
-    const callInputTokens = getClaudeAssistantLineCallInputTokens(lineBytes);
-    if (callInputTokens !== null) firstCallTokens = callInputTokens;
+    const call = parseClaudeModelCallLine(lineBytes);
+    if (call !== null) firstCallTokens = call.callInputTokens;
   });
   return isRead ? firstCallTokens : null;
 }
 
 /**
+ * @description The context size after the newest model call of a transcript TAIL (its input, cache and output): what the conversation
+ * weighs now. Newest first, the records that are no model call (a synthetic API-error or interrupt record, a sidechain, zero tokens)
+ * are skipped — a turn that ended on an error still reads as its last real call. `null` when the tail holds no model call.
+ */
+export function parseClaudeNewestCallContextUsedTokens(transcriptTail: string): number | null {
+  const lines = transcriptTail.split('\n');
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    const call = parseClaudeModelCallLine(lines[index]);
+    if (call !== null) return call.callInputTokens + call.outputTokens;
+  }
+  return null;
+}
+
+/**
  * @description The context size after the transcript's newest main-conversation model call (its input, cache and output): what the
- * conversation weighs now. `null` when it cannot be told (a file that cannot be read, no such record in the tail).
+ * conversation weighs now ({@link parseClaudeNewestCallContextUsedTokens}, over the last {@link claudeRuntimeInfoTailBytes} of the
+ * file). `null` when it cannot be told (a file that cannot be read, no such record in the tail).
  */
 export async function readClaudeContextUsedTokens(filePath: string): Promise<number | null> {
   try {
-    return (await readClaudeRuntimeInfo(filePath)).contextUsedTokens;
+    return parseClaudeNewestCallContextUsedTokens(await readClaudeTranscriptTail(filePath));
   } catch {
     return null;
   }
@@ -159,21 +192,29 @@ export function parseClaudeRuntimeInfo(transcript: string): AgentRuntimeInfo {
  * first line is discarded before parsing.
  */
 export async function readClaudeRuntimeInfo(filePath: string): Promise<AgentRuntimeInfo> {
+  return parseClaudeRuntimeInfo(await readClaudeTranscriptTail(filePath));
+}
+
+/**
+ * @description The last {@link claudeRuntimeInfoTailBytes} of a transcript as text, from the first complete line (a nonzero read
+ * offset can start in a JSONL record, so that partial first line is discarded); `''` for an empty file. The descriptor is always closed.
+ */
+async function readClaudeTranscriptTail(filePath: string): Promise<string> {
   let fileHandle: fs.promises.FileHandle | null = null;
   try {
     fileHandle = await fs.promises.open(filePath, 'r');
     const { size } = await fileHandle.stat();
     const bytesToRead = Math.min(size, claudeRuntimeInfoTailBytes);
-    if (bytesToRead === 0) return parseClaudeRuntimeInfo('');
+    if (bytesToRead === 0) return '';
 
     const offset = size - bytesToRead;
     const buffer = Buffer.alloc(bytesToRead);
     const { bytesRead } = await fileHandle.read(buffer, 0, bytesToRead, offset);
     const text = buffer.toString('utf8', 0, bytesRead);
-    if (offset === 0) return parseClaudeRuntimeInfo(text);
+    if (offset === 0) return text;
 
     const firstLineBreak = text.indexOf('\n');
-    return parseClaudeRuntimeInfo(firstLineBreak === -1 ? '' : text.slice(firstLineBreak + 1));
+    return firstLineBreak === -1 ? '' : text.slice(firstLineBreak + 1);
   } finally {
     if (fileHandle) await fileHandle.close();
   }

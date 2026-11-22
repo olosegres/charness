@@ -873,10 +873,12 @@ export interface AgentAdapter extends EventEmitter {
   getFirstCallContextTokens?(key: SessionKey): Promise<number | null>;
 
   /**
-   * @description How many compactions the bot did NOT issue have completed in the live session — the CLI's own overflow compaction,
+   * @description How many compactions the bot did NOT issue have completed in the conversation — the CLI's own overflow compaction,
    * the server's own — a count the bot compares between two readings of the context: a change means the epoch was replaced, so the
-   * baseline it measures growth from is the older one's. Per live session (a new process counts from 0: any difference between two
-   * readings is a change, and a needless one only costs a re-read). Optional: a backend that cannot tell omits it.
+   * baseline it measures growth from is the older one's. The count belongs to the CONVERSATION, not to a process: a spawn, an idle
+   * stop and resume, a re-spawn and an adopt keep it, so «any difference» is always a compaction; only the conversation's release
+   * (an explicit stop) and a restart of the bot start it over — and the downtime replay of an adopted process counts what the CLI
+   * compacted meanwhile, against the 0 a bot that has no earlier reading compares with. Optional: a backend that cannot tell omits it.
    */
   getOwnCompactionCount?(key: SessionKey): number;
 

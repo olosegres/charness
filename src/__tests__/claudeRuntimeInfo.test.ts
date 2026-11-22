@@ -6,6 +6,7 @@ import * as path from 'node:path';
 import {
   claudeRuntimeInfoTailBytes,
   getClaudeContextWindowTokens,
+  parseClaudeNewestCallContextUsedTokens,
   parseClaudeRuntimeInfo,
   readClaudeContextUsedTokens,
   readClaudeFirstCallContextTokens,
@@ -300,4 +301,22 @@ test('readClaudeFirstCallContextTokens: nothing when the epoch holds no model ca
   assert.equal(await readClaudeFirstCallContextTokens(path.join(os.tmpdir(), 'no-such-dir', 'session.jsonl')), null);
   assert.equal(await readClaudeFirstCallContextTokens(writeLines([])), null);
   assert.equal(await readClaudeContextUsedTokens(path.join(os.tmpdir(), 'no-such-dir', 'session.jsonl')), null);
+});
+
+test('readClaudeContextUsedTokens: a turn that ended on a SYNTHETIC record (an API error, an interrupt notice, zero tokens) still reads as its last real model call, never as 0 — the first-call reader skips them too', async () => {
+  const syntheticError = JSON.stringify({ type: 'assistant', isApiErrorMessage: true, error: 'rate_limit', message: { role: 'assistant', model: '<synthetic>', content: [{ type: 'text', text: 'Rate limited' }], usage: { input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 } } });
+  const syntheticNotice = JSON.stringify({ type: 'assistant', message: { role: 'assistant', model: '<synthetic>', content: [{ type: 'text', text: 'Request interrupted' }], usage: { input_tokens: 0, output_tokens: 0 } } });
+  const sidechain = createAssistantRecord({ input: 9, cacheRead: 900_000 }, { isSidechain: true });
+  const filePath = writeLines([
+    boundaryRecord,
+    createAssistantRecord({ input: 3, cacheRead: 40_000, cacheCreation: 9_000, output: 1_500 }), // a real call: 49 003 seen, 1 500 written
+    syntheticError,
+    sidechain,
+    syntheticNotice,
+  ]);
+  assert.equal(await readClaudeContextUsedTokens(filePath), 3 + 40_000 + 9_000 + 1_500, 'the real call before the error records, output included');
+  assert.equal(await readClaudeFirstCallContextTokens(filePath), 49_003, 'and the first call is the same real call');
+  assert.equal(parseClaudeNewestCallContextUsedTokens([syntheticError, syntheticNotice].join('\n')), null, 'a tail of nothing but such records holds no model call');
+  assert.equal(parseClaudeNewestCallContextUsedTokens(''), null);
+  assert.equal(parseClaudeNewestCallContextUsedTokens(`${createAssistantRecord({ input: 1, cacheRead: 5_000 })}\n{"type":"assistant","half`), 5_001, 'a half-written last line is skipped');
 });

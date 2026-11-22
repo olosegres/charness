@@ -235,8 +235,6 @@ export interface OpenCodeSession {
   compactionSummaryMessageId: string | null;
   /** The bot's own `compactContext` call is open: a summary message announced now is the one that call writes. */
   isBotCompactionInFlight: boolean;
-  /** The compactions the SERVER started that completed in this session (`session.compacted` with no bot compaction open): `AgentAdapter.getOwnCompactionCount`. */
-  ownCompactionCount: number;
   /** The id of the summary message the bot's own compaction wrote (learned while its call was open), kept after the call returned: the last of its text may stream later. */
   botCompactionSummaryMessageId: string | null;
   /** The message the text in {@link currentResponseText} belongs to (the `messageID` of its deltas); `null` before the first delta. Reset alongside it. */
@@ -1797,6 +1795,12 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
    * `Map` compares object identity, not structural equality.
    */
   private sessions: Map<string, OpenCodeSession> = new Map();
+  /**
+   * The compactions the SERVER started that completed in each conversation (`session.compacted` with no bot compaction open), by
+   * conversation key: `AgentAdapter.getOwnCompactionCount`. Kept beside the sessions, not on them — a session object that is re-created
+   * (a server restart that restores it) would start the count over. Dropped with the session ({@link dropSession}).
+   */
+  private ownCompactionCounts = new Map<string, number>();
 
   /**
    * The ONE `/global/event` SSE stream for the whole adapter (plan 2026-06-17).
@@ -2074,7 +2078,7 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
           this.emit('closed', sessionKey);
           // Defensive: stopSessionInner deletes from `this.sessions`, but
           // emit order matters for downstream cleanup races.
-          this.sessions.delete(k);
+          this.dropSession(k);
         }
       }
       return true;
@@ -2094,7 +2098,7 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
           // This teardown bypasses stopSessionInner, so the replacement bound
           // has to be dropped here or it outlives the session it belonged to.
           this.clearProviderRetryReplacementStartTimer(session);
-          this.sessions.delete(k);
+          this.dropSession(k);
           this.emit('stopped', session.key);
         }
       }
@@ -2323,7 +2327,6 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
           outputTimer: null,
           compactionSummaryMessageId: null,
           isBotCompactionInFlight: false,
-          ownCompactionCount: 0,
           botCompactionSummaryMessageId: null,
           responseMessageId: null,
           isResponseCompactionSummary: false,
@@ -2461,7 +2464,7 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
     this.apiRequest('POST', `/session/${session.sessionId}/abort`)
       .catch(e => console.warn(`[OpenCode] abort on stopSession failed:`, e instanceof Error ? e.message : e));
 
-    this.sessions.delete(k);
+    this.dropSession(k);
     this.emit('stopped', key);
   }
 
@@ -3047,14 +3050,26 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
   /**
    * A compaction completed in the session: counted when the SERVER started it — none of the bot's own is open — so the bot can tell its
    * context replaced under it. Only `session.compacted` counts (`…compaction.ended` may come with it for the same compaction).
+   * Measured against the fake server (`skillsRestoreOpenCodeE2e`): a bot compaction's `session.compacted` can arrive a few ms AFTER
+   * its `/summarize` call returned — then no bot compaction is open any more and it counts as the server's own. That costs nothing: the
+   * bot's own compaction drops the baseline, so the compaction module reads it from the new epoch anyway.
    */
   private noteOwnCompactionCompleted(key: SessionKey, eventType: string): void {
-    const session = this.sessions.get(keyToString(key));
-    if (session && eventType === 'session.compacted' && !session.isBotCompactionInFlight) session.ownCompactionCount += 1;
+    const conversationKey = keyToString(key);
+    const session = this.sessions.get(conversationKey);
+    if (session && eventType === 'session.compacted' && !session.isBotCompactionInFlight) {
+      this.ownCompactionCounts.set(conversationKey, (this.ownCompactionCounts.get(conversationKey) ?? 0) + 1);
+    }
   }
 
   getOwnCompactionCount(key: SessionKey): number {
-    return this.sessions.get(keyToString(key))?.ownCompactionCount ?? 0;
+    return this.ownCompactionCounts.get(keyToString(key)) ?? 0;
+  }
+
+  /** Forget a session the adapter lets go of for good: what was counted of its server's own compactions goes with it. */
+  private dropSession(conversationKey: string): void {
+    this.sessions.delete(conversationKey);
+    this.ownCompactionCounts.delete(conversationKey);
   }
 
   /** The context size after the newest completed parent call, from what the session holds in memory (no HTTP): `null` without a live session or such a call. */
@@ -3645,7 +3660,6 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
         outputTimer: null,
         compactionSummaryMessageId: null,
         isBotCompactionInFlight: false,
-        ownCompactionCount: 0,
         botCompactionSummaryMessageId: null,
         responseMessageId: null,
         isResponseCompactionSummary: false,
@@ -4919,7 +4933,7 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
     this.clearProviderRetryReplacementStartTimer(session);
     // Tear down the directory's SSE stream if this was its last active session.
     this.disconnectSse(key);
-    this.sessions.delete(k);
+    this.dropSession(k);
     this.emit('stopped', key);
   }
 

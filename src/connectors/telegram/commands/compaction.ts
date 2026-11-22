@@ -128,7 +128,11 @@ interface ThreadCompactionState {
   idleTimer: NodeJS.Timeout | null;
   /** The pending read of the context size, for a backend that signals no turn end (see {@link contextSampleDebounceMs}). */
   contextSampleTimer: NodeJS.Timeout | null;
-  /** `AgentAdapter.getOwnCompactionCount` at the last context reading recorded; `null` before the first: a change since means the epoch was replaced. */
+  /**
+   * `AgentAdapter.getOwnCompactionCount` at the last context reading recorded; `null` before the first since the bot started, which
+   * compares with 0 (a count is per bot lifetime, and the downtime replay of an adopted process counts a compaction the CLI made
+   * meanwhile): a difference since means the epoch was replaced.
+   */
   ownCompactionsSeen: number | null;
   /**
    * The armed countdown is the OVERDUE arm's: the idle mark it fires for had already passed when it was armed (the bot came back
@@ -699,7 +703,7 @@ export function createCompaction(ports: CompactionPorts) {
     const compactionState = getThreadCompactionState(kStr);
     // A live session's count of the compactions it did not issue: a change since the last reading is a replaced epoch.
     const ownCompactions = isAsleep ? null : adapter.getOwnCompactionCount?.(key) ?? 0;
-    const isNewEpoch = ownCompactions !== null && compactionState.ownCompactionsSeen !== null && ownCompactions !== compactionState.ownCompactionsSeen;
+    const isNewEpoch = ownCompactions !== null && ownCompactions !== (compactionState.ownCompactionsSeen ?? 0);
     const isBaselineNeeded = isNewEpoch || baselineContextTokens === null;
     let reading: ThreadContextReading | null;
     try {
@@ -835,8 +839,9 @@ export function createCompaction(ports: CompactionPorts) {
     const isIdleMarkMissed = getThreadCompactionState(kStr).isIdleMarkMissed;
     // What the conversation weighs is read NOW, at the mark that decides on it — from its live adapter, or from its transcript when it
     // sleeps — never taken on trust from the last turn's reading alone: a state kept before the figures existed has none (every topic
-    // idle when this was deployed), a restart can fall between a turn's end and its reading, and a turn that ended on an API error
-    // leaves none. Without it a conversation compacted before and not yet measured would sleep uncompacted at its mark.
+    // idle when this was deployed), a restart can fall between a turn's end and its reading, and a reading can miss (a transcript
+    // not written yet). A turn that ended on an API error is no such case: the reader skips the error record and reads the last real
+    // call. Without it a conversation compacted before and not yet measured would sleep uncompacted at its mark.
     if (!isIdleMarkMissed && checkIsCompactionPending(key)) await sampleThreadContext(key);
     // L-D7: a sleeping per-turn session is resumed for its compaction; the stop below puts it back to sleep. Not for a fire that
     // missed the idle mark: it compacts nothing, so waking the session only to stop it again would be for nothing.

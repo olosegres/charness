@@ -514,6 +514,74 @@ describe('the idle compaction waits for the context to grow, through the compact
     assert.equal(stub.firstCallReads, readsBefore, 'the history is not read again');
   });
 
+  it('after a bot restart the first reading of a conversation whose CLI compacted by itself meanwhile re-reads the baseline: a count of 1 against a module that has seen nothing is a change', async () => {
+    adapter = new GrowthStubAdapter(claudeJsonStreamAdapterName);
+    const stub = growthAdapter();
+    // A fresh module is what a restart leaves: it knows no count. The persisted figures are the old epoch's: its first call saw 20 000.
+    const module = createModule();
+    noteFigures(20_000, 24_000);
+
+    // The CLI overflowed while the bot was down (the adopt replays the boundary: the count is 1); the new epoch's first call saw 60 000.
+    stub.ownCompactions = 1;
+    stub.contextTokens = 62_000;
+    stub.firstCallTokens = 60_000;
+    module.noteThreadTurnContext(key);
+    await waitUntil('the first reading after the restart', () => getTracking().lastContextTokens === 62_000);
+    assert.deepEqual(getFigures(), [60_000, 62_000], 'the new epoch\'s baseline: growth is 2 000, not 42 000');
+    assert.equal(stub.firstCallReads, 1);
+  });
+
+  it('every change of the count is a new epoch, and a count that did not move is not: 0 → 1 → 2 re-reads twice, a repeat reads nothing', async () => {
+    adapter = new GrowthStubAdapter(claudeJsonStreamAdapterName);
+    const stub = growthAdapter();
+    const module = createModule();
+    const readLastContext = async (contextTokens: number, firstCallTokens: number): Promise<void> => {
+      stub.contextTokens = contextTokens;
+      stub.firstCallTokens = firstCallTokens;
+      module.noteThreadTurnContext(key);
+      await waitUntil(`the reading of ${contextTokens}`, () => getTracking().lastContextTokens === contextTokens);
+    };
+
+    await readLastContext(24_000, 20_000);
+    assert.deepEqual(getFigures(), [20_000, 24_000], 'no compaction of its own yet: the first call of the history');
+
+    // The count is the conversation's, not a process's: the next process compacts by itself and the count goes on, 1 → 2.
+    stub.ownCompactions = 1;
+    await readLastContext(52_000, 45_000);
+    assert.deepEqual(getFigures(), [45_000, 52_000]);
+    stub.ownCompactions = 2;
+    await readLastContext(90_000, 80_000);
+    assert.deepEqual(getFigures(), [80_000, 90_000], 'the second compaction is seen too');
+
+    const readsBefore = stub.firstCallReads;
+    await readLastContext(95_000, 99_999);
+    assert.deepEqual(getFigures(), [80_000, 95_000], 'the count did not move: the baseline stays');
+    assert.equal(stub.firstCallReads, readsBefore);
+  });
+
+  it('a bot compaction whose `session.compacted` was counted late as the server\'s own (OpenCode: it can reach the bot a few ms after the call returned) costs nothing: the baseline is read once, from the new epoch, as it is after any compaction', async () => {
+    adapter = new GrowthStubAdapter(claudeJsonStreamAdapterName);
+    const stub = growthAdapter();
+    const module = createModule();
+    noteFigures(20_000, 24_000);
+
+    // The bot's compaction: it drops both figures; the late event then moves the count although the epoch is the one the bot made.
+    await harness.state.setCompactIdleCompactedAt(key, Date.now() - compactedAgoMs);
+    stub.ownCompactions = 1;
+    stub.contextTokens = 15_000;
+    stub.firstCallTokens = 12_000;
+    module.noteThreadTurnContext(key);
+    await waitUntil('the reading after the compaction', () => getTracking().lastContextTokens === 15_000);
+    assert.deepEqual(getFigures(), [12_000, 15_000]);
+    assert.equal(stub.firstCallReads, 1, 'read once, not twice');
+
+    stub.contextTokens = 21_000;
+    module.noteThreadTurnContext(key);
+    await waitUntil('the next reading', () => getTracking().lastContextTokens === 21_000);
+    assert.deepEqual(getFigures(), [12_000, 21_000], 'and kept: the count did not move again');
+    assert.equal(stub.firstCallReads, 1);
+  });
+
   it('a sleeping per-turn session woken only by the bot, once measured, is compacted again only when the context grew enough — and nothing is left to wake it after the compaction', async () => {
     adapter = new GrowthStubAdapter(claudePerTurnAdapterName);
     growthAdapter().isActive = false;

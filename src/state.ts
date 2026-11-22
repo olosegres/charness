@@ -421,7 +421,8 @@ export interface CompactIdleTrackingEntry {
    * ({@link getContextGrowthTokens}). Read from the conversation's history at the first turn's end after a compaction (or at the
    * first turn the bot reads, from the history: a conversation that already had turns is not measured from now); for a conversation
    * never compacted, its first call. Dropped by every compaction; replaced when the CLI's or the server's own compaction replaced the epoch
-   * (`AgentAdapter.getOwnCompactionCount` moved); dropped when a later context is smaller than it (a compaction nothing counted) to be read
+   * (`AgentAdapter.getOwnCompactionCount`, a per-conversation count, differs from the last reading's — or from 0 at the first reading
+   * after a restart); dropped when a later context is smaller than it (a compaction nothing counted) to be read
    * again from the new epoch.
    */
   baselineContextTokens?: number;
