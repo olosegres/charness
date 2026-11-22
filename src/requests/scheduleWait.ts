@@ -75,6 +75,19 @@ export function checkIsAnswerOwed(
 }
 
 /**
+ * @description Whether `request` is a scheduler fire's own request (a Telegram topic's `scheduledRun`) the agent NEVER answered — and
+ * did not replace one it answered (`isSupersededRequestAnswered`: every fire of a topic shares one requester, so the next fire
+ * supersedes the open one and starts at count 0). Such a request is the alarm's: its turns are a scheduled run's (a woken agent with nothing
+ * to report may stay silent) and a quiet end closes it without a word. Once the operator was told «working on it» it is an ordinary answered
+ * request and a later silence is chased. The ONE place this is decided: the engine reads it for the turn's kind, the rules for the close.
+ */
+export function checkIsUnansweredFireRequest(
+  request: Pick<OpenRequestState, 'origin' | 'progressAnswerCount' | 'isSupersededRequestAnswered'>,
+): boolean {
+  return request.origin.kind === 'scheduledRun' && request.progressAnswerCount === 0 && request.isSupersededRequestAnswered !== true;
+}
+
+/**
  * @description Whether, between turns, the request is held by its schedule: a watch that is not failing holds it, but only while it
  * owes nobody an answer. A person's turn whose watch was lost (a restart, a dead process) is then taken back by the backstop,
  * as it is without a watch.

@@ -1512,6 +1512,43 @@ describe('a request waits for its schedule', () => {
     assert.deepEqual(alerts, [{ requestId: fireRequest.id, reason: 'silentTurns' }], 'the second silence tells the operator, as for any answered request');
   });
 
+  it('the next fire\'s request replaces an answered one and does not lose its «answered»: the watch\'s own fire, silent, is a silent turn — never a silent close', async () => {
+    const ledger = await createLedger();
+    let wait: RequestScheduleWait = 'watching';
+    const engine = createEngine(ledger, { getScheduleWait: () => wait });
+    const fireOrigin = { kind: 'scheduledRun' as const, attributes: { requester: 'scheduler' } };
+    // The recipe: a fire (S1), arm a watch, answer `progress`, end the turn — the watch passes and holds S1.
+    const first = await ledger.createRequest(topicKey, fireOrigin);
+    await engine.trackForwardedTurn(topicKey, first.id, { isRequestPrompt: true });
+    await ledger.updateOpenRequest(first.id, (current) => ({ progressAnswerCount: current.progressAnswerCount + 1 }));
+    await endTurnSilently(engine);
+    assert.deepEqual(wakeUps, [], 'held by the watch');
+
+    // The watch fires (its check fails: `armed`): the bot opens S2, which supersedes S1 (all fires of a topic share one requester).
+    wait = 'armed';
+    const second = await ledger.createRequest(topicKey, fireOrigin);
+    assert.deepEqual(second.supersededRequestIds, [first.id]);
+    await engine.trackForwardedTurn(topicKey, second.id, { isRequestPrompt: true });
+    await endTurnSilently(engine);
+    assert.equal(ledger.listOpenRequestsOf(topicKey).length, 1, 'S2 is still open: the operator has «working on it» and nothing was closed silently');
+    assert.deepEqual(wakeUps, [{ requestId: second.id, reason: 'silentTurn' }], 'a reminder for the silence');
+    await endTurnSilently(engine);
+    assert.deepEqual(alerts, [{ requestId: second.id, reason: 'silentTurns' }], 'the second silence tells the operator');
+  });
+
+  it('the same with ANY second fire while an answered one is open — an unrelated hourly job\'s request replaces it just the same', async () => {
+    const ledger = await createLedger();
+    const engine = createEngine(ledger);
+    const fireOrigin = { kind: 'scheduledRun' as const, attributes: { requester: 'scheduler' } };
+    const first = await ledger.createRequest(topicKey, fireOrigin);
+    await ledger.updateOpenRequest(first.id, { progressAnswerCount: 1 });
+    const second = await ledger.createRequest(topicKey, fireOrigin);
+    await engine.trackForwardedTurn(topicKey, second.id, { isRequestPrompt: true });
+    await endTurnSilently(engine);
+    assert.deepEqual(wakeUps, [{ requestId: second.id, reason: 'silentTurn' }]);
+    assert.equal(ledger.listOpenRequestsOf(topicKey).length, 1);
+  });
+
   it('the continuation variant: a fire\'s request answered `progress`, then an API error and the bot\'s «continue» ending silent, stays open and is reminded', async () => {
     const ledger = await createLedger();
     const engine = createEngine(ledger);

@@ -370,6 +370,10 @@ describe('a request that waits for its schedule (scheduleWait) and a scheduled r
     const answeredEarlier = decideTurnEnd({ ...fireRequest, progressAnswerCount: 1 }, 1, nowMs, { isScheduledRun: true });
     assert.equal(answeredEarlier.kind, 'quiet');
     assert.equal(answeredEarlier.kind === 'quiet' ? answeredEarlier.isRequestSettled : null, undefined, 'answered earlier: it stays open');
+    // A fire request that REPLACED one the agent had answered is no more settled silently than the answered one: the operator has «working on it».
+    const afterAnswered = decideTurnEnd({ ...fireRequest, isSupersededRequestAnswered: true }, 0, nowMs, { isScheduledRun: true });
+    assert.equal(afterAnswered.kind, 'quiet');
+    assert.equal(afterAnswered.kind === 'quiet' ? afterAnswered.isRequestSettled : null, undefined, 'it replaced an answered fire request: stays open');
     const handOver = decideTurnEnd(answeredRequest({ origin: { kind: 'trackerEvent', attributes: {} } }), 1, nowMs, { isScheduledRun: true });
     assert.equal(handOver.kind, 'quiet');
     assert.equal(handOver.kind === 'quiet' ? handOver.isRequestSettled : null, undefined, 'a fire only rides a hand-over: it is owed its own answer');

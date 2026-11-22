@@ -1,6 +1,6 @@
 import { keyToString, type SessionKey } from '../sessionKey';
 import type { RequestLedger } from './requestLedger';
-import { checkIsAnswerOwed, checkIsHeldBetweenTurns, pickRequestToArmUnder, type RequestScheduleWait } from './scheduleWait';
+import { checkIsAnswerOwed, checkIsHeldBetweenTurns, checkIsUnansweredFireRequest, pickRequestToArmUnder, type RequestScheduleWait } from './scheduleWait';
 import type { OpenRequestState, RequestAlertReason, RequestAnswerKind } from './types';
 import { getPromptNotTakenIn, getWakeUpMessage, type WakeUpMessage } from './requestHeader';
 import {
@@ -339,7 +339,7 @@ export class RequestWakeUpEngine {
     // While the agent has NEVER answered it, its turn is the alarm's whoever tracks it (a woken agent with nothing to report may stay
     // silent). Once answered `progress` the operator was told «working on it»: it stops being the alarm's, and its later turns — the
     // follow-up reminder, a «continue» — are read like any request's (a silent one is a silent turn).
-    const isAlarmRequest = isFireOwnRequest && request.progressAnswerCount === 0;
+    const isAlarmRequest = checkIsUnansweredFireRequest(request);
     const isAnsweredFireOwnRequest = isFireOwnRequest && !isAlarmRequest;
     const carriesPersonWords = options.isRequestPrompt || options.isPersonInput === true;
     // A person's words that reach the agent — not a fire's prompt, not a fire's own request's.

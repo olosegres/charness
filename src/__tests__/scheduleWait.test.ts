@@ -9,6 +9,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  checkIsUnansweredFireRequest,
   checkIsAnswerOwed,
   checkIsHeldBetweenTurns,
   checkIsJobArmedUnderRequest,
@@ -94,6 +95,20 @@ describe('what each reading means to the rules', () => {
     assert.deepEqual((['none', 'armed', 'watching'] as const).map((wait) => checkIsWaitingAtTurnEnd(wait, false)), [false, false, true], 'a person\'s or a reminder\'s turn');
     assert.deepEqual((['none', 'armed', 'watching'] as const).map((wait) => checkIsWaitingAtTurnEnd(wait, true)), [false, true, true], 'the turn a fire started');
     assert.deepEqual((['none', 'armed', 'watching'] as const).map(checkIsWaitingBetweenTurns), [false, false, true]);
+  });
+});
+
+describe('checkIsUnansweredFireRequest — the alarm\'s own request the agent never answered', () => {
+  type FireFields = Pick<OpenRequestState, 'origin' | 'progressAnswerCount' | 'isSupersededRequestAnswered'>;
+  const fire: FireFields = { origin: { kind: 'scheduledRun', attributes: {} }, progressAnswerCount: 0 };
+
+  it('only a scheduled run\'s request, never answered, and not one that replaced an answered request', () => {
+    assert.equal(checkIsUnansweredFireRequest(fire), true);
+    assert.equal(checkIsUnansweredFireRequest({ ...fire, progressAnswerCount: 1 }), false, 'answered `progress`');
+    assert.equal(checkIsUnansweredFireRequest({ ...fire, isSupersededRequestAnswered: true }), false, 'it replaced a fire request the agent had answered: the operator was told «working on it»');
+    assert.equal(checkIsUnansweredFireRequest({ ...fire, isSupersededRequestAnswered: false }), true);
+    assert.equal(checkIsUnansweredFireRequest({ ...fire, origin: { kind: 'message', attributes: {} } }), false, 'a person\'s request is never the alarm\'s');
+    assert.equal(checkIsUnansweredFireRequest({ ...fire, origin: { kind: 'trackerEvent', attributes: {} } }), false);
   });
 });
 

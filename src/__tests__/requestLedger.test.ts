@@ -165,6 +165,28 @@ describe('RequestLedger requests', () => {
     ]);
   });
 
+  it('a request that supersedes an ANSWERED one remembers it (`isSupersededRequestAnswered`): the fact survives the supersede, a chain of them and a restart; one that replaced a never-answered request does not carry it', async () => {
+    const store = await createStore();
+    const ledger = await createLoadedLedger(store);
+    const fireOrigin: RequestOrigin = { kind: 'scheduledRun', attributes: { [requestRequesterAttribute]: 'scheduler' } };
+    const neverAnswered = await ledger.createRequest(topicKey, fireOrigin);
+    const afterNeverAnswered = await ledger.createRequest(topicKey, fireOrigin);
+    assert.equal(afterNeverAnswered.isSupersededRequestAnswered, undefined, 'the replaced request was never answered: nothing to carry');
+    assert.deepEqual(afterNeverAnswered.supersededRequestIds, [neverAnswered.id]);
+
+    await ledger.updateOpenRequest(afterNeverAnswered.id, { progressAnswerCount: 1 });
+    const afterAnswered = await ledger.createRequest(topicKey, fireOrigin);
+    assert.equal(afterAnswered.progressAnswerCount, 0, 'the new request itself starts at zero');
+    assert.equal(afterAnswered.isSupersededRequestAnswered, true, 'but it replaced one the agent had answered');
+
+    const third = await ledger.createRequest(topicKey, fireOrigin);
+    assert.equal(third.isSupersededRequestAnswered, true, 'the chain keeps it: the one it replaced carried the fact, though it never got an answer of its own');
+
+    await store.flush();
+    const reloaded = await createLoadedLedger(await createStore());
+    assert.equal(reloaded.getNewestOpenRequest(topicKey)?.isSupersededRequestAnswered, true, 'persisted whole with the open request: a restart keeps it');
+  });
+
   it('requests created within the same millisecond stay oldest first, a superseding one included', async () => {
     // A frozen clock: every request gets the same millisecond, as two people writing at once can. Sorted by `createdAt`
     // alone, the tie fell back to the store's key order — where the operator's slot sits before the colleague's because
