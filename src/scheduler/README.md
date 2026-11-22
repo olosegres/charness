@@ -45,7 +45,18 @@ constants in the code; this README keeps what the code cannot say.
   the wrong timezone shows at once; a cron nothing phrases shows only the stamp, a one-shot only its own time. The command and
   the status rhythm are in `schedule_list`, for the agent.
 
-## A tracker conversation's fires (Jira; `delivery.ts` `trackerRun`, `trackerRun.ts`)
+## A topic's fires and its requests (`delivery.ts` `topicRun`, `scheduledRunTarget.ts`)
+
+In a topic whose view has requests a fire meets them by the model a Jira issue uses (`../requests/README.md` § Scheduled runs): it
+never replaces a live request, it RIDES one, picked at forward time (`pickTopicRunTarget`). That is the request its job was armed
+under (or the open one that replaced it), else the scheduler's own open request, unless the bot gave up on it. The prompt then starts
+with a header naming it (`buildTopicScheduledRunHeader`: answer it only with a result the requester needs, or in this turn when it owes
+one; in the answers-only view, that only answers are seen), and the turn is watched as that request's scheduled run (`forwardRun`).
+With none to ride, the fire opens the scheduler's request (`forwardOwnRequestRun`, the request's own header, settled as its scheduled
+run). A view without requests forwards the plain prompt. The topic still sees the announcement, the check alert and the status line.
+A run held over a usage-limit wait keeps the header of its build, with the tracker's limitation below.
+
+## A tracker conversation's fires (Jira; `delivery.ts` `trackerRun`, `scheduledRunTarget.ts`)
 
 A Jira comment always notifies the requester and the issue's watchers — there is no silent one — so the scheduler posts NOTHING on
 an issue: no announcement, no «back to normal» line, no status line, no check alert (the delivery reads
@@ -54,7 +65,7 @@ sleeping session by id (a fresh one starts on the connector's own backend, not t
 of its own: the only party on an issue is the requester whose hand-over request owes the answer and the hand-back, and a request of
 the scheduler's would owe an answer nobody asked for.
 
-- **The request it rides** (`pickScheduledRunTarget`, read at forward time — the post may wait behind a running turn): the one the
+- **The request it rides** (`pickTrackerRunTarget`, read at forward time — the post may wait behind a running turn): the one the
   job was armed under, or the open request that replaced it (`supersededRequestIds`); else the newest open request; else none.
 - **The prompt** starts with a header (`buildTrackerScheduledRunHeader`): the job, the issue and its link, and either the request
   it rides («answer through `answer_request` only when you have a result the requester needs; nothing of this run is shown on the

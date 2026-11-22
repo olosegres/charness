@@ -98,16 +98,14 @@ describe('what each reading means to the rules', () => {
   });
 });
 
-describe('checkIsUnansweredFireRequest — the alarm\'s own request the agent never answered', () => {
-  type FireFields = Pick<OpenRequestState, 'origin' | 'progressAnswerCount' | 'isSupersededRequestAnswered'>;
+describe('checkIsUnansweredFireRequest — the scheduler\'s request the agent never answered', () => {
+  type FireFields = Pick<OpenRequestState, 'origin' | 'progressAnswerCount'>;
   const fire: FireFields = { origin: { kind: 'scheduledRun', attributes: {} }, progressAnswerCount: 0 };
 
-  it('only a scheduled run\'s request, never answered, and not one that replaced an answered request', () => {
+  it('only the scheduler\'s request, and only while it was never answered', () => {
     assert.equal(checkIsUnansweredFireRequest(fire), true);
-    assert.equal(checkIsUnansweredFireRequest({ ...fire, progressAnswerCount: 1 }), false, 'answered `progress`');
-    assert.equal(checkIsUnansweredFireRequest({ ...fire, isSupersededRequestAnswered: true }), false, 'it replaced a fire request the agent had answered: the operator was told «working on it»');
-    assert.equal(checkIsUnansweredFireRequest({ ...fire, isSupersededRequestAnswered: false }), true);
-    assert.equal(checkIsUnansweredFireRequest({ ...fire, origin: { kind: 'message', attributes: {} } }), false, 'a person\'s request is never the alarm\'s');
+    assert.equal(checkIsUnansweredFireRequest({ ...fire, progressAnswerCount: 1 }), false, 'answered `progress`: the operator was told «working on it»');
+    assert.equal(checkIsUnansweredFireRequest({ ...fire, origin: { kind: 'message', attributes: {} } }), false, 'a person\'s request is never the scheduler\'s');
     assert.equal(checkIsUnansweredFireRequest({ ...fire, origin: { kind: 'trackerEvent', attributes: {} } }), false);
   });
 });
@@ -186,10 +184,17 @@ describe('pickRequestToArmUnder — the request a new job is armed under', () =>
     assert.equal(pickRequestToArmUnder([operator, colleague], [operator.id, colleague.id], []), colleague.id, 'no tracker origin: the newest, as before');
   });
 
-  it('a request a scheduler fire opened is passed over for any other — watched or newest — and is the pick only when it is all there is', () => {
+  it('the scheduler\'s request whose fire STARTED the turn gets the job armed in it — the watch the agent arms while handling that alarm is the alarm\'s, not an unrelated request\'s', () => {
     const operator = makeRequest('req_Operator01', 1000, 'message');
     const fire = makeRequest('req_Fire000001', 3000, 'scheduledRun');
-    assert.equal(pickRequestToArmUnder([operator, fire], [fire.id]), operator.id, 'the fire\'s turn is the one watched, the operator\'s request is the one that waits');
+    assert.equal(pickRequestToArmUnder([operator, fire], [fire.id], [fire.id]), fire.id, 'the fire opened the scheduler\'s request and started the turn');
+    assert.equal(pickRequestToArmUnder([operator, fire], [operator.id, fire.id], [operator.id, fire.id]), operator.id, 'the operator\'s turn started first, the fire joined it');
+  });
+
+  it('where nothing tells the turn, the scheduler\'s request is passed over for any other — watched by a conversation-wide forward, or newest — and is the pick only when it is all there is', () => {
+    const operator = makeRequest('req_Operator01', 1000, 'message');
+    const fire = makeRequest('req_Fire000001', 3000, 'scheduledRun');
+    assert.equal(pickRequestToArmUnder([operator, fire], [fire.id]), operator.id, 'a «continue» watched it: a person\'s work outlives an alarm');
     assert.equal(pickRequestToArmUnder([operator, fire], []), operator.id);
     assert.equal(pickRequestToArmUnder([fire], [fire.id]), fire.id);
   });

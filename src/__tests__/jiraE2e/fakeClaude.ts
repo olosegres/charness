@@ -79,6 +79,9 @@ import {
   fakeRearmWatchToken,
   fakeRearmWatchWakeMarker,
   fakeOneShotDelaySeconds,
+  fakeOneShotSilentMarker,
+  fakeOneShotWatchIssueKey,
+  fakeOneShotWatchMarker,
   fakeStatusWatchJobName,
   fakeStatusWatchTargetFileName,
   fakeWatchJobName,
@@ -221,10 +224,11 @@ import { claudeSessionStateEventsVariableName } from '../../utils/jsonStreamHost
  *    watch of the worker the TEST named (`fakeStatusWatchTargetFileName`) like `arm-status-watch`, answers `progress` and ends the
  *    turn — nothing to poll. The watch's wake prompt carries `cancel-watch` (cancel it, answer `final` to the request its header names)
  *    or, by a marker in the issue's text, `keep-watch` (`fakeKeepWatchWakeMarker`: the turn ends with no tool call and no answer),
- *    `rearm-watch` (`fakeRearmWatchWakeMarker`: arms the next worker's watch, cancels the old one, answers `final` to the request its
+ *    `rearm-watch` (`fakeRearmWatchWakeMarker`: arms the next worker's watch, cancels the old one, answers `progress` to the request its
  *    header names) or `drop-watch` (`fakeDropWatchWakeMarker`: cancels the watch and ends the turn with no answer);
  *  - `one-shot-then-final` — the first turn arms a one-shot prompt `fakeOneShotDelaySeconds` ahead (`[fake:answer]`) and answers `final`; the fire
- *    then answers `final` to the request id its header names — a request that is already finished;
+ *    then answers `final` to the request id its header names — a request that is already finished. A marker in the text chooses another
+ *    prompt for the one-shot (`fakeOneShotSilentMarker`: the fire says nothing; `fakeOneShotWatchMarker`: the fire arms a status watch);
  *  - `usage-limit-once` — its first turn ends the way a subscription limit does: an error `result` saying the
  *    session limit is hit and when it resets (the text of a `[limit-resets:<ISO instant or clock>]` token in the
  *    request's text); the next turn — the one the bot sends after it moved the topic to another account —
@@ -1407,8 +1411,11 @@ async function runTurn(argv: readonly string[], sessionId: string, content: stri
     emitTurnActivity(sessionId, watchIssueKey);
     const server = getBotMcpServer(argv);
     if (server) await runWatchMode(server, watchMode, watchIssueKey);
-    // `drop-watch` ends the turn with no answer: a woken agent that drops its watch and says nothing.
-    if (requestId && server && watchMode !== 'drop-watch') await callAnswerRequest(server, sessionId, { requestId, kind: 'final', body: `Watch ${watchMode} done.` });
+    // `drop-watch` ends the turn with no answer: a woken agent that drops its watch and says nothing. `rearm-watch` moves on to the next
+    // worker: the request still waits, for the next watch.
+    if (requestId && server && watchMode !== 'drop-watch') {
+      await callAnswerRequest(server, sessionId, { requestId, kind: watchMode === 'rearm-watch' ? 'progress' : 'final', body: `Watch ${watchMode} done.` });
+    }
     endTurn(sessionId, `Watch ${watchMode} done.`);
     return;
   }
@@ -1565,7 +1572,10 @@ async function runTurn(argv: readonly string[], sessionId: string, content: stri
     appendJsonLine(fakeClaudeLogFileNames.toolCalls, { issueKey: state.issueKey, tool: 'schedule_create', args, outcome: await callBotTool(server, 'schedule_create', args) });
   }
   if (state.mode === 'one-shot-then-final' && isFirstTurn && server) {
-    const args = { name: 'check the deploy', onceAt: new Date(Date.now() + fakeOneShotDelaySeconds * 1000).toISOString(), prompt: '[fake:answer] Check the deploy and tell the requester.' };
+    const oneShotPrompt = content.includes(fakeOneShotSilentMarker) ? `${fakeKeepWatchToken} Check the deploy; nothing to report.`
+      : content.includes(fakeOneShotWatchMarker) ? `${fakeOneShotWatchIssueKey} [fake:watch-progress] ${fakeKeepWatchWakeMarker} The deploy broke: launch the fix and watch it.`
+        : '[fake:answer] Check the deploy and tell the requester.';
+    const args = { name: 'check the deploy', onceAt: new Date(Date.now() + fakeOneShotDelaySeconds * 1000).toISOString(), prompt: oneShotPrompt };
     appendJsonLine(fakeClaudeLogFileNames.toolCalls, { issueKey: state.issueKey, tool: 'schedule_create', args, outcome: await callBotTool(server, 'schedule_create', args) });
   }
   const kind = state.mode === 'progress' || (state.mode === 'hold-progress-once' && isFirstTurn) || isArmingWatch ? 'progress' : 'final';

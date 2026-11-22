@@ -117,7 +117,8 @@ per-backend controls are optional methods the bot checks before calling.
   `statusEveryMinutes` (15) while it passes, replacing the previous one — the bot's own message, no agent wake,
   only in a Telegram topic whose view shows the stream (`scheduler/checkStatus.ts`). In a Jira issue the scheduler posts
   NOTHING (a comment always notifies the requester and the issue's watchers): a fire wakes the issue's agent behind a header
-  naming the open request it rides, opens no request of its own (`scheduler/trackerRun.ts`), and an open request waits for
+  naming the open request it rides, opens no request of its own (`scheduler/scheduledRunTarget.ts`; a topic with requests rides the same
+  way and opens the scheduler's request only with none to ride — `requests/README.md` § Scheduled runs), and an open request waits for
   its armed watch — it is not prodded between turns (no follow-ups, no boot wake; a process that died with the agent's own work pending is woken once
   with the lost-work note, as a topic is resumed); a requester's own message left unanswered
   still is, and still ends in the give-up, after a restart too: what a request owes is persisted (`isPersonInputUnanswered`), so a

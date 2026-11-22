@@ -102,14 +102,6 @@ export interface OpenRequestState {
    */
   isPersonInputUnanswered?: boolean;
   /**
-   * The request this one SUPERSEDED had been answered (`progressAnswerCount` > 0, or it carried this fact itself): persisted at
-   * creation, so it survives the supersede, a chain of them and a restart. The new request starts at `progressAnswerCount` 0, which would
-   * read a scheduled fire's request as «never answered» again — and every fire of a topic shares one requester, so the next fire always
-   * supersedes the open one — while the operator was already told «working on it» (`checkIsUnansweredFireRequest`). Absent = it replaced
-   * nothing answered.
-   */
-  isSupersededRequestAnswered?: boolean;
-  /**
    * Which limit wait the bot already answered this request about (see
    * `getUsageLimitWaitIdentity`), so each request hears about each wait once.
    */

@@ -660,6 +660,7 @@ with the thread's last-used backend.
 - Restart-safe: timers re-arm at boot; a run missed during downtime fires
   one catch-up annotated with the missed time.
 - **When the woken agent has nothing to say** — a scheduled prompt such as «every hour check the deploy, say only if it is broken» — it may simply end its turn: in a topic that shows answers the run closes without a word, with no reminder and no «could not finish» notice (a message of yours that the agent leaves unanswered is still followed up).
+- **In a topic that shows answers, a run belongs to the request it was set up for.** A watch the agent armed while working on your message wakes it as part of that request, so its result arrives as the answer to your message, not under a separate «scheduled run». A run with no such request opens one of its own. Once the agent told you «working on it» there, the next run continues that same request instead of replacing it, and silence after that is followed up as for any request.
 - **In a Jira issue** the agent has the same `schedule_*` tools, but the bot posts NOTHING there — no announcement, no check alert,
   no status line: a Jira comment always notifies the requester and the issue's watchers. A fire wakes the issue's agent, which
   answers in comments (`answer_request`) only when it has a result the requester needs. An agent that launched a worker and armed

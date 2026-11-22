@@ -359,24 +359,33 @@ describe('a request that waits for its schedule (scheduleWait) and a scheduled r
     const withProgress = decideTurnEnd(createRequest({ silentTurnCount: 1, progressAnswerCount: 1 }), 0, nowMs, { isScheduledRun: true, scheduleWait: 'watching' });
     assert.ok(withProgress.kind === 'quiet' && withProgress.update.silentTurnCount === 0);
   });
-  it('turn end: the alarm\'s own request (a scheduler fire\'s) left with no answer settles at the quiet end — one that sent a progress note, or a hand-over a fire only rides, does not', () => {
+  it('turn end: the scheduler\'s request left with no answer settles at the quiet end — one that sent a progress note, or a hand-over a fire only rides, does not', () => {
     const fireRequest = createRequest({ origin: { kind: 'scheduledRun', attributes: { requester: 'scheduler' } } });
     const silent = decideTurnEnd(fireRequest, 0, nowMs, { isScheduledRun: true });
     assert.equal(silent.kind, 'quiet');
     assert.equal(silent.kind === 'quiet' ? silent.isRequestSettled : null, true);
     const withProgress = decideTurnEnd({ ...fireRequest, progressAnswerCount: 1 }, 0, nowMs, { isScheduledRun: true });
     assert.notEqual(withProgress.kind === 'quiet' ? withProgress.isRequestSettled : null, true, 'a note was sent: the request stays open');
-    // A note sent in an EARLIER turn counts as well: a quiet end of a later turn (a «continue» that kept the alarm\'s kind) never closes it.
+    // A note sent in an EARLIER turn counts as well: a quiet end of a later fire's turn (the watch's own fire that rides it, a «continue»
+    // that kept the fire's kind) never closes it.
     const answeredEarlier = decideTurnEnd({ ...fireRequest, progressAnswerCount: 1 }, 1, nowMs, { isScheduledRun: true });
     assert.equal(answeredEarlier.kind, 'quiet');
     assert.equal(answeredEarlier.kind === 'quiet' ? answeredEarlier.isRequestSettled : null, undefined, 'answered earlier: it stays open');
-    // A fire request that REPLACED one the agent had answered is no more settled silently than the answered one: the operator has «working on it».
-    const afterAnswered = decideTurnEnd({ ...fireRequest, isSupersededRequestAnswered: true }, 0, nowMs, { isScheduledRun: true });
-    assert.equal(afterAnswered.kind, 'quiet');
-    assert.equal(afterAnswered.kind === 'quiet' ? afterAnswered.isRequestSettled : null, undefined, 'it replaced an answered fire request: stays open');
     const handOver = decideTurnEnd(answeredRequest({ origin: { kind: 'trackerEvent', attributes: {} } }), 1, nowMs, { isScheduledRun: true });
     assert.equal(handOver.kind, 'quiet');
     assert.equal(handOver.kind === 'quiet' ? handOver.isRequestSettled : null, undefined, 'a fire only rides a hand-over: it is owed its own answer');
+  });
+
+  it('turn end: the scheduler\'s request never answered settles at the end of ANY of its turns — a reminder\'s or a «continue»\'s too, under any reading: nobody was told anything', () => {
+    const fireRequest = createRequest({ origin: { kind: 'scheduledRun', attributes: { requester: 'scheduler' } } });
+    for (const scheduleWait of ['none', 'armed', 'watching'] as const) {
+      const notAFire = decideTurnEnd(fireRequest, 0, nowMs, { isScheduledRun: false, scheduleWait });
+      assert.equal(notAFire.kind, 'quiet', scheduleWait);
+      assert.equal(notAFire.kind === 'quiet' ? notAFire.isRequestSettled : null, true, scheduleWait);
+    }
+    // Answered, the same turn of it that is not a fire's is a silent turn: the operator was told «working on it».
+    const answered = decideTurnEnd({ ...fireRequest, progressAnswerCount: 1 }, 1, nowMs, { isScheduledRun: false, scheduleWait: 'none' });
+    assert.equal(answered.kind === 'wake' ? answered.reason : answered.kind, 'silentTurn');
   });
 
   it('turn end: nothing armed and not a scheduled run — the silent-turn rules are unchanged', () => {

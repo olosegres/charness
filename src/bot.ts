@@ -327,7 +327,7 @@ import {
   checkShouldEnqueueSubagentStatus,
   checkShouldExpireSubagentStatus,
 } from './utils/subagentStatusRender';
-import { checkIsAgentEventShown, checkIsStreamShown, type AgentStreamEvent } from './utils/topicView';
+import { checkAreRequestsEnabled, checkIsAgentEventShown, checkIsStreamShown, type AgentStreamEvent } from './utils/topicView';
 import {
   buildTopicRequestHeader,
   buildTopicRequestPrompt,
@@ -1360,8 +1360,8 @@ async function openTopicRequest(
  * session closes the request it opened. Both ports are read at call time: the engine and the ledger are assigned at boot.
  */
 const { trackTurn: trackTopicRequestTurn, settleAfterDelivery: settleTopicRequestAfterDelivery } = createTopicRequestSettler({
-  trackTurn: async (key, requestId) => {
-    await requestWakeUpEngine?.trackForwardedTurn(key, requestId, { isRequestPrompt: true });
+  trackTurn: async (key, requestId, { isScheduledRun }) => {
+    await requestWakeUpEngine?.trackForwardedTurn(key, requestId, { isRequestPrompt: true, isScheduledRun });
   },
   cancelRequest: async (requestId) => {
     await topicRequestLedger?.closeRequest(requestId, 'cancelled');
@@ -15724,7 +15724,9 @@ interface SchedulerWiringDeps {
 /**
  * @description How a prompt is posted into a conversation's session — the deps of
  * {@link postToSession}, shared by the scheduler's fire and the Jira connector's
- * requests (Jira plan J5, D21).
+ * requests (Jira plan J5, D21). The forward opens no request: a Jira request arrives with its request open and its header in the
+ * text, and a scheduled run meets a topic's requests through the scheduler's own topic ports ({@link forwardScheduledRun},
+ * {@link forwardTopicSchedulerRequestRun}).
  */
 function createSessionPostDeps(): PostToSessionDeps {
   return {
@@ -15742,13 +15744,8 @@ function createSessionPostDeps(): PostToSessionDeps {
       return { ok: false, reason };
     },
     forwardPrompt: async (conversationKey, text) => {
-      const key = keyFromString(conversationKey);
-      // A scheduled run in a topic with requests on is a request (S7); a tracker's
-      // post arrives with its request already open and its header in the text.
-      const opening = await openTopicRequest(key, text, { source: 'scheduledRun', requesterId: scheduledRunRequester });
       const buffered = createBufferedOutcome();
-      const delivery = await deliverPromptOrBuffer(key, `${opening.header}${text}`, startupPromptBuffer.checkIsStarting(conversationKey), buffered.settle, { isAccountsNoteCarrier: true });
-      await settleTopicRequestAfterDelivery(key, opening, delivery);
+      const delivery = await deliverPromptOrBuffer(keyFromString(conversationKey), text, startupPromptBuffer.checkIsStarting(conversationKey), buffered.settle, { isAccountsNoteCarrier: true });
       // A prompt that waited for the session's start counts only once it reached it: a replay whose write failed is a failed post.
       if (delivery === 'buffered') await buffered.assertReplayed();
     },
@@ -15758,12 +15755,12 @@ function createSessionPostDeps(): PostToSessionDeps {
 }
 
 /**
- * @description Write a scheduled run's prompt into a tracker conversation's session and watch the turn it starts as the
- * scheduled run of the request it rides (`requestId`; `null` when none is open, so no turn is watched). Like a topic's fire
- * it goes through the buffer-or-forward unit, but opens no request of its own: the open request owes the answer
- * (`scheduler/trackerRun.ts`). A prompt that found no session starts no turn, so none is watched.
+ * @description Write a scheduled run's prompt into a conversation's session and watch the turn it starts as the scheduled run of
+ * the request it RIDES (`requestId`; `null` when none is open — a tracker's — so no turn is watched): a Jira issue's open request, or a
+ * topic's job request or scheduler's request. It goes through the buffer-or-forward unit and opens no request: the request it rides owes
+ * the answer (`scheduler/scheduledRunTarget.ts`). A prompt that found no session starts no turn, so none is watched.
  */
-async function forwardTrackerScheduledRun(conversationKey: string, text: string, requestId: string | null): Promise<void> {
+async function forwardScheduledRun(conversationKey: string, text: string, requestId: string | null): Promise<void> {
   const key = keyFromString(conversationKey);
   const buffered = createBufferedOutcome();
   const delivery = await deliverPromptOrBuffer(key, text, startupPromptBuffer.checkIsStarting(conversationKey), buffered.settle, { isAccountsNoteCarrier: true });
@@ -15772,6 +15769,21 @@ async function forwardTrackerScheduledRun(conversationKey: string, text: string,
   if (requestId !== null && delivery !== 'noSession') {
     await requestWakeUpEngine?.trackForwardedTurn(key, requestId, { isRequestPrompt: false, isScheduledRun: true });
   }
+}
+
+/**
+ * @description A topic's scheduled run with no request to ride (`pickTopicRunTarget` → `ownRequest`): open the scheduler's request
+ * (S7, the scheduler's requester — it replaces only one the bot gave up on), forward the prompt behind its header and settle it as
+ * the request's own scheduled run — the turn is tracked as one, a prompt that found no session closes the request.
+ */
+async function forwardTopicSchedulerRequestRun(conversationKey: string, text: string): Promise<void> {
+  const key = keyFromString(conversationKey);
+  const opening = await openTopicRequest(key, text, { source: 'scheduledRun', requesterId: scheduledRunRequester });
+  const buffered = createBufferedOutcome();
+  const delivery = await deliverPromptOrBuffer(key, `${opening.header}${text}`, startupPromptBuffer.checkIsStarting(conversationKey), buffered.settle, { isAccountsNoteCarrier: true });
+  await settleTopicRequestAfterDelivery(key, { ...opening, isScheduledRun: true }, delivery);
+  // A prompt that waited for the session's start counts only once it reached it: a replay whose write failed is a failed post.
+  if (delivery === 'buffered') await buffered.assertReplayed();
 }
 
 /**
@@ -15842,7 +15854,20 @@ function wireScheduler(wiring: SchedulerWiringDeps): SchedulerMcpHandle {
       return decision.kind === 'proceed' ? readWorkerActivity(path.resolve(decision.workDir, runDir)) : null;
     },
     statusIntervalOverrideMs: ENV.testTimings.checkStatusIntervalMs,
-    // A Jira issue's fires post nothing there and ride the open request (`scheduler/trackerRun.ts`).
+    // A topic whose view has requests: a fire rides the job's request or the scheduler's, and opens the scheduler's only when there is
+    // none to ride (`scheduler/scheduledRunTarget.ts`).
+    topicRun: {
+      getRequestView: (threadKeyStr) => {
+        const key = keyFromString(threadKeyStr);
+        if (!checkIsTelegramKey(key)) return null;
+        const { view } = state.getDisplayPrefs(key);
+        return checkAreRequestsEnabled(view) ? { isPlainTextHidden: !checkIsStreamShown(view) } : null;
+      },
+      listOpenRequests: (threadKeyStr) => wiring.requestLedger.listOpenRequestsOf(keyFromString(threadKeyStr)),
+      forwardRun: forwardScheduledRun,
+      forwardOwnRequestRun: forwardTopicSchedulerRequestRun,
+    },
+    // A Jira issue's fires post nothing there and ride the open request (`scheduler/scheduledRunTarget.ts`).
     ...(jiraConnector
       ? {
         trackerRun: {
@@ -15851,7 +15876,7 @@ function wireScheduler(wiring: SchedulerWiringDeps): SchedulerMcpHandle {
             return key.platform === 'jira' ? jiraConnector.describeConversation(key) : null;
           },
           listOpenRequests: (threadKeyStr: string) => wiring.requestLedger.listOpenRequestsOf(keyFromString(threadKeyStr)),
-          forwardRun: forwardTrackerScheduledRun,
+          forwardRun: forwardScheduledRun,
           fallbackAdapterName: jiraConnector.adapterName,
         },
       }

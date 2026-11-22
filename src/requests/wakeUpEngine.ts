@@ -1,6 +1,6 @@
 import { keyToString, type SessionKey } from '../sessionKey';
 import type { RequestLedger } from './requestLedger';
-import { checkIsAnswerOwed, checkIsHeldBetweenTurns, checkIsUnansweredFireRequest, pickRequestToArmUnder, type RequestScheduleWait } from './scheduleWait';
+import { checkIsAnswerOwed, checkIsHeldBetweenTurns, pickRequestToArmUnder, type RequestScheduleWait } from './scheduleWait';
 import type { OpenRequestState, RequestAlertReason, RequestAnswerKind } from './types';
 import { getPromptNotTakenIn, getWakeUpMessage, type WakeUpMessage } from './requestHeader';
 import {
@@ -327,9 +327,11 @@ export class RequestWakeUpEngine {
    * (`isContinuation`: the nudge after an API error or a limit wait), which keeps the alarm's kind but
    * starts the progress count afresh: a note sent before the error is not this turn's — and for a person's
    * words that join the running turn, which start the count afresh too: a note sent before them is not their answer. Another requester's
-   * request in the conversation keeps its own watch. A post retry still pending is moot from now on
-   * (R28): the session has the request — unless the forward is a fire riding the request, which carries
-   * none of it. A forward that carries a person's words (a request prompt, an issue update) marks the
+   * request in the conversation keeps its own watch. Whether the turn is a scheduled run's (`isScheduledRun`) is said by the FORWARD
+   * that started it — a fire riding the request, or the fire that opened the scheduler's request — and never read from the request's
+   * state: an answered request's fire turn is a fire's as much as an unanswered one's (`src/requests/README.md` § Scheduled runs).
+   * A post retry still pending is moot from now on (R28): the session has the request — unless the forward is a fire riding the
+   * request, which carries none of its prompt. A forward that carries a person's words (a request prompt, an issue update) marks the
    * request as owing an answer (`isPersonInputUnanswered`, persisted): that, not the kind of the turn, is
    * what stops the turn's end from reading as a quiet one (`decideTurnEnd`).
    */
@@ -344,21 +346,18 @@ export class RequestWakeUpEngine {
     this.answerTails.delete(keyToString(key));
     const previous = this.watched.get(requestId);
     const isFireForward = options.isScheduledRun === true;
-    // A request a scheduler fire opened (a Telegram topic's `scheduledRun`) owes no person anything, whatever its state.
-    const isFireOwnRequest = request.origin.kind === 'scheduledRun';
-    // While the agent has NEVER answered it, its turn is the alarm's whoever tracks it (a woken agent with nothing to report may stay
-    // silent). Once answered `progress` the operator was told «working on it»: it stops being the alarm's, and its later turns — the
-    // follow-up reminder, a «continue» — are read like any request's (a silent one is a silent turn).
-    const isAlarmRequest = checkIsUnansweredFireRequest(request);
-    const isAnsweredFireOwnRequest = isFireOwnRequest && !isAlarmRequest;
+    // The scheduler's request (a Telegram topic's `scheduledRun`) is no person's: its prompt carries no person's words.
+    const isSchedulerRequest = request.origin.kind === 'scheduledRun';
     const carriesPersonWords = options.isRequestPrompt || options.isPersonInput === true;
-    // A person's words that reach the agent — not a fire's prompt, not a fire's own request's.
-    const isPersonWordsForward = carriesPersonWords && !isFireForward && !isFireOwnRequest;
+    // A person's words that reach the agent — not a fire's prompt, not the scheduler's request's.
+    const isPersonWordsForward = carriesPersonWords && !isFireForward && !isSchedulerRequest;
     const isOwnForward = options.isConversationForward !== true || previous?.isOwnForward === true;
     const ownForwardStartedAt = previous?.ownForwardStartedAt ?? (isOwnForward ? this.now() : undefined);
+    // A fire's turn stays one through a fire that joins it and through the bot's «continue»; a person's words or a reminder that joined
+    // it make it theirs.
     const isScheduledRun = previous === undefined
-      ? isFireForward || isAlarmRequest
-      : previous.isScheduledRun === true && (isFireForward || isAlarmRequest || (options.isContinuation === true && !carriesPersonWords && !isAnsweredFireOwnRequest));
+      ? isFireForward
+      : previous.isScheduledRun === true && (isFireForward || (options.isContinuation === true && !isPersonWordsForward));
     this.watched.set(requestId, {
       key,
       requestId,
@@ -374,7 +373,8 @@ export class RequestWakeUpEngine {
       isOwnForward,
       ...(ownForwardStartedAt === undefined ? {} : { ownForwardStartedAt }),
     });
-    const isMoot = request.nextPostRetryAt !== undefined && !isFireForward;
+    // A fire RIDING the request carries none of its prompt; the fire that opened the scheduler's request carries its own.
+    const isMoot = request.nextPostRetryAt !== undefined && (!isFireForward || options.isRequestPrompt);
     const isPersonWordsOwed = isPersonWordsForward && request.isPersonInputUnanswered !== true;
     if (isMoot || isPersonWordsOwed) {
       await this.deps.ledger.updateOpenRequest(request.id, {

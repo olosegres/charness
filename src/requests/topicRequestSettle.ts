@@ -8,14 +8,19 @@ import type { LatePromptOutcome } from '../utils/promptDelivery';
  * never started. A module of its own, over ports, so both outcomes are tested for real; `bot.ts` wires the engine and the ledger.
  */
 
-/** The part of a request's opening the settle needs: its id, `null` when no request was opened (a slash command, requests off). */
+/**
+ * The part of a request's opening the settle needs: its id, `null` when no request was opened (a slash command, requests off).
+ * `isScheduledRun` — a scheduler fire opened it (the scheduler's request): its turn is that fire's scheduled run, said by the forward
+ * that started it — the wake-up rules never read a turn's kind from the request (`src/requests/README.md` § Scheduled runs).
+ */
 export interface TopicRequestRef {
   requestId: string | null;
+  isScheduledRun?: boolean;
 }
 
 export interface TopicRequestSettlePorts {
-  /** The wake-up engine starts watching the turn the request's prompt began (`trackForwardedTurn`, as a request prompt). */
-  trackTurn: (key: SessionKey, requestId: string) => Promise<void>;
+  /** The wake-up engine starts watching the turn the request's prompt began (`trackForwardedTurn`, as a request prompt — a scheduled run's too with `isScheduledRun`). */
+  trackTurn: (key: SessionKey, requestId: string, options: { isScheduledRun: boolean }) => Promise<void>;
   /** The ledger closes the request as cancelled (`closeRequest(id, 'cancelled')`). */
   cancelRequest: (requestId: string) => Promise<void>;
   warn: (message: string) => void;
@@ -35,7 +40,7 @@ export function createTopicRequestSettler(ports: TopicRequestSettlePorts): Topic
   const trackTurn = (key: SessionKey, opening: TopicRequestRef): void => {
     const { requestId } = opening;
     if (requestId === null) return;
-    ports.trackTurn(key, requestId).catch((error) =>
+    ports.trackTurn(key, requestId, { isScheduledRun: opening.isScheduledRun === true }).catch((error) =>
       ports.warn(`[requests] tracking the turn of ${requestId} failed: ${error instanceof Error ? error.message : error}`),
     );
   };

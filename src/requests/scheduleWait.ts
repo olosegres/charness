@@ -63,8 +63,8 @@ export function checkIsWaitingBetweenTurns(wait: RequestScheduleWait): boolean {
 /**
  * @description Whether the request owes a person an answer — what a watch must never hide. It does while a silent turn is pending
  * (`silentTurnCount`), while a person's words reached the agent after the last answer (`isPersonInputUnanswered`, persisted), and
- * for a person's request that was never answered at all. A request a scheduler fire opened (`scheduledRun`) is the alarm's and
- * owes nobody anything. Everything here is read from the persisted request, so it survives a restart that loses the engine's
+ * for a person's request that was never answered at all. The scheduler's request (`scheduledRun`) is no person's, so it owes nobody
+ * their words. Everything here is read from the persisted request, so it survives a restart that loses the engine's
  * in-memory watches.
  */
 export function checkIsAnswerOwed(
@@ -75,16 +75,13 @@ export function checkIsAnswerOwed(
 }
 
 /**
- * @description Whether `request` is a scheduler fire's own request (a Telegram topic's `scheduledRun`) the agent NEVER answered — and
- * did not replace one it answered (`isSupersededRequestAnswered`: every fire of a topic shares one requester, so the next fire
- * supersedes the open one and starts at count 0). Such a request is the alarm's: its turns are a scheduled run's (a woken agent with nothing
- * to report may stay silent) and a quiet end closes it without a word. Once the operator was told «working on it» it is an ordinary answered
- * request and a later silence is chased. The ONE place this is decided: the engine reads it for the turn's kind, the rules for the close.
+ * @description Whether `request` is the scheduler's request (a Telegram topic's `scheduledRun`) the agent NEVER answered: nobody was told
+ * anything about it and nobody is owed its answer, so any turn of it that ends without an answer closes it without a word
+ * (`decideTurnEnd`). Once the operator was told «working on it» it is an ordinary answered request and a later silence is chased. Nothing
+ * else reads a request to decide what its turns are: a turn's kind is said by its forward (`src/requests/README.md` § Scheduled runs).
  */
-export function checkIsUnansweredFireRequest(
-  request: Pick<OpenRequestState, 'origin' | 'progressAnswerCount' | 'isSupersededRequestAnswered'>,
-): boolean {
-  return request.origin.kind === 'scheduledRun' && request.progressAnswerCount === 0 && request.isSupersededRequestAnswered !== true;
+export function checkIsUnansweredFireRequest(request: Pick<OpenRequestState, 'origin' | 'progressAnswerCount'>): boolean {
+  return request.origin.kind === 'scheduledRun' && request.progressAnswerCount === 0;
 }
 
 /**
@@ -107,11 +104,11 @@ export function checkIsHeldBetweenTurns(
  * a request whose turn is watched only because a conversation-wide forward carried it along (a «continue» nudge, a restart wake —
  * those watch EVERY open request, which says nothing about the one the agent works on); the open requests. Inside those last two
  * tiers the newest wins, a tracker HAND-OVER (`trackerEvent`) before a mention (`trackerMention`): a mention hands nothing over and
- * long work belongs to the hand-over. A request a scheduler fire opened (`scheduledRun`: a Telegram topic's) is passed over for any other. A fire opens such a
- * request and the agent often re-arms in its turn (the next worker, a new watch beside the cancelled one): armed under it, the watch
- * would pass to the scheduler's own chain of requests and leave the operator's request waiting for nothing. `undefined` when no
- * request is open (a topic's stream view has none). `openRequests` is oldest first, as `RequestLedger.listOpenRequestsOf` returns
- * it: the newest of a list is its last.
+ * long work belongs to the hand-over. The scheduler's request (`scheduledRun`: a Telegram topic's) counts in the first tier — the
+ * watch an agent arms while handling the alarm that started the turn belongs to that alarm — and is passed over for any other in the
+ * two tiers that do not know the turn: a person's work outlives an alarm. (A watch's own fire rides the request the watch was armed
+ * under, so re-arming in that turn keeps the job where it was.) `undefined` when no request is open (a topic's stream view has none).
+ * `openRequests` is oldest first, as `RequestLedger.listOpenRequestsOf` returns it: the newest of a list is its last.
  */
 export function pickRequestToArmUnder(
   openRequests: readonly OpenRequestState[],
@@ -123,7 +120,7 @@ export function pickRequestToArmUnder(
     requests.filter((request) => request.origin.kind === 'trackerEvent').at(-1) ?? requests.at(-1);
   const workRequests = openRequests.filter(isWorkRequest);
   const watched = workRequests.filter((request) => watchedRequestIds.includes(request.id));
-  // The starter of the running turn: the first own-forward id (the engine lists them oldest first) that is an open work request.
-  const turnStarter = ownForwardRequestIds.map((id) => workRequests.find((request) => request.id === id)).find((request) => request !== undefined);
+  // The starter of the running turn: the first own-forward id (the engine lists them oldest first) that is an open request.
+  const turnStarter = ownForwardRequestIds.map((id) => openRequests.find((request) => request.id === id)).find((request) => request !== undefined);
   return (turnStarter ?? getNewestPreferringHandOver(watched) ?? getNewestPreferringHandOver(workRequests) ?? openRequests.at(-1))?.id;
 }

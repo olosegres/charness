@@ -31,6 +31,9 @@ export interface RequestHeaderOptions {
   supersededRequestIds?: readonly string[];
 }
 
+/** The line that tells the agent its requester sees only its answers (a Telegram topic's answers-only view). */
+export const plainTextHiddenSentence = 'The requester does not see your plain text output or your thinking — only what you send through answer_request reaches them.';
+
 /** @description The header's line naming the requests this one replaced; empty when it replaced none. */
 export function buildSupersededRequestsLine(supersededRequestIds: readonly string[]): string {
   if (supersededRequestIds.length === 0) return '';
@@ -50,9 +53,7 @@ export function buildRequestHeader(options: RequestHeaderOptions): string {
   ];
   const supersededLine = buildSupersededRequestsLine(options.supersededRequestIds ?? []);
   if (supersededLine !== '') lines.push(supersededLine);
-  if (options.isPlainTextHidden) {
-    lines.push('The requester does not see your plain text output or your thinking — only what you send through answer_request reaches them.');
-  }
+  if (options.isPlainTextHidden) lines.push(plainTextHiddenSentence);
   return `${lines.join('\n')}\n\n`;
 }
 

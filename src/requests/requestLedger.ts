@@ -460,10 +460,6 @@ export class RequestLedger {
       const supersededRequestIds = [requesterless, current]
         .flatMap((replaced) => (replaced ? [...(replaced.supersededRequestIds ?? []), replaced.id] : []))
         .slice(-supersededRequestIdsMaxLength);
-      // The answered fact is carried across the supersede (see `OpenRequestState.isSupersededRequestAnswered`).
-      const isSupersededRequestAnswered = [requesterless, current].some(
-        (replaced) => replaced !== undefined && (replaced.progressAnswerCount > 0 || replaced.isSupersededRequestAnswered === true),
-      );
       const prompt = options.createPrompt?.(id, supersededRequestIds);
       if (prompt !== undefined && prompt.length > requestPromptMaxLength) {
         console.warn(`[requests] ${id}: prompt of ${prompt.length} chars not kept (over ${requestPromptMaxLength}); a wake-up sends a reminder instead`);
@@ -478,7 +474,6 @@ export class RequestLedger {
         isWakeStopped: false,
         ...(prompt !== undefined && prompt.length <= requestPromptMaxLength ? { prompt } : {}),
         ...(supersededRequestIds.length > 0 ? { supersededRequestIds } : {}),
-        ...(isSupersededRequestAnswered ? { isSupersededRequestAnswered } : {}),
       };
       if (current) closeSuperseded(current);
       request = created;

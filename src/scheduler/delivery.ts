@@ -29,7 +29,15 @@ import type { CheckStatusLine, DeliveryOutcome, FireContext, ScheduleRecord } fr
 import { getWorkerWatchEnd, workerWatchSilenceMinutes, workerWatchUnreportedMinutes } from './workerWatch';
 import { postToSession, type PostToSessionDeps, type SessionPromptText } from '../postToSession';
 import type { OpenRequestState } from '../requests/types';
-import { buildTrackerScheduledRunHeader, pickScheduledRunTarget, type ScheduledRunTarget } from './trackerRun';
+import { KeyedTransitionQueue } from '../utils/keyedTransitionQueue';
+import {
+  buildTopicScheduledRunHeader,
+  buildTrackerScheduledRunHeader,
+  pickTopicRunTarget,
+  pickTrackerRunTarget,
+  type TopicRunTarget,
+  type TrackerRunTarget,
+} from './scheduledRunTarget';
 
 /**
  * @description Scheduler delivery (plan S4): the real `deliver(job, fireContext)`
@@ -66,8 +74,12 @@ import { buildTrackerScheduledRunHeader, pickScheduledRunTarget, type ScheduledR
  * A TRACKER conversation (a Jira issue, `ScheduleDeliveryDeps.trackerRun`) has no feed the bot may post into — a comment
  * always notifies the requester and the issue's watchers — so the scheduler posts NOTHING there: no announcement, no
  * «back to normal» line, no status line, no check alert. A fire only wakes the agent, and the prompt it is woken with rides
- * the request that is open (`trackerRun.ts`): it starts with a header naming that request, and the turn it starts is
+ * the request that is open (`scheduledRunTarget.ts`): it starts with a header naming that request, and the turn it starts is
  * watched as that request's turn (a scheduled run's). A job armed under a request that is finished says so in its header.
+ *
+ * A TOPIC whose view has requests (`ScheduleDeliveryDeps.topicRun`) meets them by the same model: the fire rides the request its job
+ * was armed under, else the scheduler's own open request, behind a header naming it — and opens the scheduler's request only when
+ * there is none to ride (`scheduledRunTarget.ts`, `src/requests/README.md` § Scheduled runs). A fire never replaces a live request.
  *
  * It owns NO bot.ts import: every side effect is injected via
  * {@link ScheduleDeliveryDeps} (announce / pin / busy probe / ensure-session /
@@ -145,6 +157,8 @@ export interface ScheduleDeliveryDeps extends PostToSessionDeps {
   statusIntervalOverrideMs?: number;
   /** What a TRACKER conversation's fires need; absent: every conversation is a topic the bot posts into. */
   trackerRun?: TrackerRunPorts;
+  /** How a TOPIC's fires meet its requests; absent: a topic's fire is the shared `forwardPrompt` as it is. */
+  topicRun?: TopicRunPorts;
 }
 
 /**
@@ -161,6 +175,21 @@ export interface TrackerRunPorts {
   listOpenRequests: (threadKey: string) => OpenRequestState[];
   forwardRun: (threadKey: string, text: string, requestId: string | null) => Promise<void>;
   fallbackAdapterName: string;
+}
+
+/**
+ * @name TopicRunPorts
+ * @description How a fire meets a topic's requests, all read at FORWARD time (the post may have waited behind a running turn, and the
+ * view may have changed). `getRequestView` — `null`: the view has no requests (the stream view), the fire is a plain prompt; else
+ * whether the requester sees the agent's plain text. `forwardRun` writes the text into the session and watches the turn it starts as
+ * the scheduled run of `requestId`, the request it rides; `forwardOwnRequestRun` opens the scheduler's request for the text, forwards
+ * it behind that request's header and watches the turn as the request's own scheduled run.
+ */
+export interface TopicRunPorts {
+  getRequestView: (threadKey: string) => { isPlainTextHidden: boolean } | null;
+  listOpenRequests: (threadKey: string) => OpenRequestState[];
+  forwardRun: (threadKey: string, text: string, requestId: string) => Promise<void>;
+  forwardOwnRequestRun: (threadKey: string, text: string) => Promise<void>;
 }
 
 /**
@@ -317,9 +346,9 @@ function createTrackerPost(
   prompt: string,
   heldPrompt: string | undefined,
 ): { postDeps: PostToSessionDeps; promptText: SessionPromptText; heldText: string | undefined } {
-  let target: ScheduledRunTarget = { kind: 'none' };
+  let target: TrackerRunTarget = { kind: 'none' };
   const buildText = (body: string): string => {
-    target = pickScheduledRunTarget(job, ports.listOpenRequests(job.threadKey));
+    target = pickTrackerRunTarget(job, ports.listOpenRequests(job.threadKey));
     return `${buildTrackerScheduledRunHeader({ jobName: job.name, conversationLabel, target })}${body}`;
   };
   const promptText: SessionPromptText = { fullText: buildText(prompt), buildText: () => buildText(prompt) };
@@ -332,10 +361,50 @@ function createTrackerPost(
 }
 
 /**
+ * One topic fire's forward at a time per conversation: the pick and the forward run together, so two fires at the same moment (two
+ * hourly jobs at :00) cannot both find nothing to ride and both open the scheduler's request — the second would replace the first, and
+ * an answer to the first would be lost. Module-wide: the serialisation is per conversation, whichever delivery instance forwards.
+ */
+const topicRunForwardQueue = new KeyedTransitionQueue();
+
+/**
+ * @description A topic's post of one fire (`TopicRunPorts`): picked each time the text is built, as a tracker's — the request it rides
+ * gets its header in front of the prompt and the forward watches the turn as that request's scheduled run; with none to ride the
+ * forward opens the scheduler's request (its header is that request's, added by the forward); a view without requests forwards the
+ * prompt as it is. The forward picks once more inside {@link topicRunForwardQueue}, so it rides what another fire opened a moment
+ * before. A held run keeps the text of its build, like a tracker's.
+ */
+function createTopicPost(
+  deps: ScheduleDeliveryDeps,
+  ports: TopicRunPorts,
+  job: ScheduleRecord,
+  prompt: string,
+  heldPrompt: string | undefined,
+): { postDeps: PostToSessionDeps; promptText: SessionPromptText; heldText: string | undefined } {
+  let target: TopicRunTarget | null = null;
+  const buildText = (body: string): string => {
+    const view = ports.getRequestView(job.threadKey);
+    target = view === null ? null : pickTopicRunTarget(job, ports.listOpenRequests(job.threadKey));
+    if (target?.kind !== 'request' || view === null) return body;
+    return `${buildTopicScheduledRunHeader({ jobName: job.name, request: target.request, isPlainTextHidden: view.isPlainTextHidden })}${body}`;
+  };
+  const promptText: SessionPromptText = { fullText: buildText(prompt), buildText: () => buildText(prompt) };
+  const heldText = heldPrompt === undefined ? undefined : buildText(heldPrompt);
+  const forwardPrompt = (conversationKey: string): Promise<void> => topicRunForwardQueue.run(conversationKey, () => {
+    const text = buildText(prompt);
+    const picked: TopicRunTarget | null = target;
+    if (picked === null) return deps.forwardPrompt(conversationKey, text);
+    return picked.kind === 'request' ? ports.forwardRun(conversationKey, text, picked.request.id) : ports.forwardOwnRequestRun(conversationKey, text);
+  });
+  return { postDeps: { ...deps, forwardPrompt }, promptText, heldText };
+}
+
+/**
  * @description Steps 3–4: post `prompt` (already carrying its marker) into the
  * thread's session through {@link postToSession} and map its outcome onto the
  * engine's delivery outcome. In a tracker conversation (`trackerLabel` is its label) the prompt goes behind the tracker
- * header and the forward watches the request's turn ({@link createTrackerPost}).
+ * header and the forward watches the request's turn ({@link createTrackerPost}); in a topic with the topic ports it meets the
+ * topic's requests the same way ({@link createTopicPost}).
  */
 async function deliverToAgent(
   deps: ScheduleDeliveryDeps,
@@ -347,7 +416,7 @@ async function deliverToAgent(
   const ports = deps.trackerRun;
   const posted = ports !== undefined && options.trackerLabel !== undefined && options.trackerLabel !== null
     ? await postTrackerRun(deps, ports, job, options.trackerLabel, prompt, options.heldText)
-    : await postToSession(deps, job.threadKey, prompt, job.lastAdapterName, { heldText: options.heldText });
+    : await postTopicRun(deps, job, prompt, options.heldText);
   if (posted.ok) {
     // A run held during a usage-limit wait reaches the agent once the wait ends —
     // with its resume, the operator's next message, or the next session (R23).
@@ -380,6 +449,13 @@ function postTrackerRun(
 ): ReturnType<typeof postToSession> {
   const { postDeps, promptText, heldText } = createTrackerPost(deps, ports, job, conversationLabel, prompt, heldPrompt);
   return postToSession(postDeps, job.threadKey, promptText, ports.fallbackAdapterName, { heldText });
+}
+
+/** A topic's post: through its request ports when it has them ({@link createTopicPost}), else the shared forward as it is. */
+function postTopicRun(deps: ScheduleDeliveryDeps, job: ScheduleRecord, prompt: string, heldPrompt: string | undefined): ReturnType<typeof postToSession> {
+  if (deps.topicRun === undefined) return postToSession(deps, job.threadKey, prompt, job.lastAdapterName, { heldText: heldPrompt });
+  const { postDeps, promptText, heldText } = createTopicPost(deps, deps.topicRun, job, prompt, heldPrompt);
+  return postToSession(postDeps, job.threadKey, promptText, job.lastAdapterName, { heldText });
 }
 
 /**

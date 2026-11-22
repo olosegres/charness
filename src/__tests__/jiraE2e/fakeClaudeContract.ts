@@ -203,8 +203,8 @@ export const fakeKeepWatchWakeMarker = '[wake:keep]';
 /**
  * The other two wakes a `watch-progress` orchestrator can have, chosen by a marker in the request's text: `rearm-watch` — the
  * worker finished, so it arms the watch of the NEXT worker (the one the test names in {@link fakeStatusWatchTargetFileName} by then),
- * cancels the old watch and answers `final` to the request its header names (the next worker's watch then belongs to the request the
- * agent works on, not to the one a scheduler fire opened); `drop-watch` — it cancels its watch and ends the turn without any answer.
+ * cancels the old watch and answers `progress` to the request its header names (an orchestrator moving on to the next worker: the
+ * request still waits, now for the next watch); `drop-watch` — it cancels its watch and ends the turn without any answer.
  */
 export const fakeRearmWatchToken = '[fake:rearm-watch]';
 export const fakeRearmWatchWakeMarker = '[wake:rearm]';
@@ -215,6 +215,15 @@ export const fakeDropWatchWakeMarker = '[wake:drop]';
  * answers `final` to the request id its header names) and answers `final`: the request is finished when the job fires.
  */
 export const fakeOneShotDelaySeconds = 25;
+/**
+ * Markers in a `one-shot-then-final` request's text that choose its one-shot's prompt instead of `[fake:answer]`:
+ * {@link fakeOneShotSilentMarker} — the fire's turn has nothing to report and ends with no answer ({@link fakeKeepWatchToken});
+ * {@link fakeOneShotWatchMarker} — the fire's turn is a `watch-progress` orchestrator of {@link fakeOneShotWatchIssueKey}: it arms the
+ * status watch of the worker the test named and answers `progress`, and the watch's wake only keeps the watch.
+ */
+export const fakeOneShotSilentMarker = '[one-shot:silent]';
+export const fakeOneShotWatchMarker = '[one-shot:watch]';
+export const fakeOneShotWatchIssueKey = 'WD-4';
 
 /**
  * While this file exists, `ask` mode streams its content as one assistant text right after it puts the question, while the

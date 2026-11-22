@@ -6,6 +6,8 @@
  *   • a prompt that found NO session (it waited for a bot restart's replay and the person was told) closes the request it opened
  *     as cancelled and tracks nothing — or the wake-up engine would prod the agent later for a turn that never started;
  *   • a prompt that opened no request (a slash command, requests off) settles nothing either way;
+ *   • the scheduler's request a fire opened is tracked as that fire's scheduled run — the forward says so, the engine never reads it
+ *     from the request (a turn's kind read from the request's answered state made the watch's own fire a silent turn, report 11 #2);
  *   • a failed track or a failed close is logged, never thrown into the caller's delivery, and tracking never holds the caller.
  * The wiring in `bot.ts` (every opening site settles through it) is pinned by `promptDelivery.test.ts`.
  *
@@ -21,7 +23,7 @@ import type { LatePromptOutcome } from '../utils/promptDelivery';
 const key = makeTelegramKey(-1001111111111, 11);
 const requestId = 'req-1';
 
-let tracked: Array<{ requestId: string }>;
+let tracked: Array<{ requestId: string; isScheduledRun?: boolean }>;
 let cancelled: string[];
 let warnings: string[];
 let trackResult: Promise<void>;
@@ -29,8 +31,8 @@ let cancelResult: Promise<void>;
 
 function createSettler() {
   const ports: TopicRequestSettlePorts = {
-    trackTurn: (_key, trackedRequestId) => {
-      tracked.push({ requestId: trackedRequestId });
+    trackTurn: (_key, trackedRequestId, options) => {
+      tracked.push({ requestId: trackedRequestId, ...(options.isScheduledRun ? { isScheduledRun: true } : {}) });
       return trackResult;
     },
     cancelRequest: (cancelledRequestId) => {
@@ -58,6 +60,15 @@ describe('a prompt that reached a session', () => {
       assert.deepEqual(cancelled, []);
     });
   }
+});
+
+describe('the scheduler\'s request a fire opened', () => {
+  test('its turn is tracked as the fire\'s scheduled run; a person\'s request prompt is not one', async () => {
+    const settler = createSettler();
+    await settler.settleAfterDelivery(key, { requestId, isScheduledRun: true }, 'forwarded');
+    await settler.settleAfterDelivery(key, { requestId: 'req-2' }, 'forwarded');
+    assert.deepEqual(tracked, [{ requestId, isScheduledRun: true }, { requestId: 'req-2' }]);
+  });
 });
 
 describe('a prompt that found no session', () => {

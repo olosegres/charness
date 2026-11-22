@@ -95,10 +95,10 @@ export type WakeUpDecision =
   | { kind: 'followUpLater'; update: OpenRequestUpdate }
   /**
    * The turn ended without anything to do about the request (it waits for its schedule, or a scheduled run had nothing to report):
-   * bookkeeping only. `isRequestSettled` — the request is one a scheduler fire opened (a Telegram topic's `scheduledRun`) and the
-   * agent NEVER answered it (`checkIsUnansweredFireRequest`: count 0, and it replaced no answered fire request): nobody is owed its
-   * answer and nothing waits for it, so it closes silently instead of waiting for the backstop. One the agent answered `progress`, or
-   * one that replaced an answered one, is no such request: the operator was told «working on it».
+   * bookkeeping only. `isRequestSettled` — the request is the scheduler's (a Telegram topic's `scheduledRun`) and the agent NEVER
+   * answered it (`checkIsUnansweredFireRequest`): nobody was told anything and nothing waits for it, so it closes silently instead of
+   * waiting for the backstop — at the end of ANY turn of it. One the agent answered `progress` is no such request: the operator was told
+   * «working on it».
    */
   | { kind: 'quiet'; update: OpenRequestUpdate; isRequestSettled?: boolean }
   | { kind: 'alert'; reason: RequestAlertReason; update: OpenRequestUpdate };
@@ -158,9 +158,10 @@ export interface TurnEndContext {
  * the turn, so a lost and rebuilt watch decides alike): a requester's message is never left unanswered because a watch is armed or
  * an alarm fired, and the reminder that follows its silent turn keeps counting towards the give-up. A fire's turn on a request that
  * owes an answer is therefore an ordinary silent turn: the reminder names the request, and a second silence gives up.
- * A request a scheduler fire opened (`origin.kind` `scheduledRun`) that its agent NEVER answered (`checkIsUnansweredFireRequest`) settles at
- * the quiet end (`isRequestSettled`): it is the alarm's own request, and nobody is owed its answer. Once answered it is read like any
- * request (the engine stops tracking its turns as the alarm's): a later silent turn is a silent turn.
+ * The scheduler's request (`origin.kind` `scheduledRun`) that its agent NEVER answered (`checkIsUnansweredFireRequest`) ends quiet and
+ * settles (`isRequestSettled`) at the end of ANY of its turns without an answer — its fire's, a reminder's, a «continue»'s: nobody was told
+ * anything, and nobody is owed its answer. Once answered it is read like any request: a fire's turn on it may end quietly, any other
+ * silent turn is a silent turn. The turn's kind comes from the forward (`isScheduledRun`), never from the request.
  */
 export function decideTurnEnd(
   request: OpenRequestState,
@@ -188,8 +189,9 @@ export function decideTurnEnd(
   const isHeldBySchedule = isProgressSent || isQuietWhileWaiting;
   // A fire's turn is the alarm's: a woken agent with nothing to report may stay silent — but not about a person's words it still
   // owes an answer to. Each fire's quiet end would also push the backstop 90 minutes ahead, and a recurring job would leave the
-  // requester unanswered for as long as it lives.
-  if (isHeldBySchedule || (context.isScheduledRun === true && !isOwed)) {
+  // requester unanswered for as long as it lives. The scheduler's request the agent never answered ends quiet whatever the turn.
+  const isUnansweredFireRequest = checkIsUnansweredFireRequest(request);
+  if (isHeldBySchedule || ((context.isScheduledRun === true || isUnansweredFireRequest) && !isOwed)) {
     return {
       kind: 'quiet',
       update: {
@@ -197,7 +199,7 @@ export function decideTurnEnd(
         silentTurnCount: 0,
         ...(isHeldBySchedule ? { nextWakeAt: undefined } : {}),
       },
-      ...(checkIsUnansweredFireRequest(request) ? { isRequestSettled: true } : {}),
+      ...(isUnansweredFireRequest ? { isRequestSettled: true } : {}),
     };
   }
   const silentTurnCount = request.silentTurnCount + 1;

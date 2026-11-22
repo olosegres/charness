@@ -9,16 +9,21 @@
  *     (`requestId`)
  *   → the progress follow-up would be due 15 s after the note (this instance's window; production: 15 min) and the engine's sweep
  *     runs every 10 s: both pass, and the agent is NOT prompted — no follow-up, no reminder: it waits for its watch
- *   → the worker exits: the check fails and the agent IS woken by it (the scheduled run, which opens a request of its own); the agent
- *     moves on to the NEXT worker — arms its watch, cancels the old one: the new job is armed under the OPERATOR's request (the one it
- *     works on), not under the request the fire opened, so the operator's request still waits for it: nothing prods it
- *   → the second worker exits: the agent is woken again, cancels the watch and answers
- *   → a third watch (a new message of the operator): the worker exits, the agent is woken and has NOTHING to report — it ends the turn
- *     with no answer. The fire's own request is the alarm's, not a person's: no reminder, no «got no answer» alert, and the request
- *     closes silently; the operator's request, whose watch it is, stays open
+ *   → the worker exits: the check fails and the agent IS woken by it — the scheduled run RIDES the operator's request its watch was
+ *     armed under (the header names it; no request of its own is opened, `src/requests/README.md` § Scheduled runs); the agent moves on
+ *     to the NEXT worker — arms its watch, cancels the old one, answers `progress`: the new job is armed under the operator's request,
+ *     which still waits for it: nothing prods it
+ *   → the second worker exits: the agent is woken again behind the same request, cancels the watch and answers it `final`
+ *   → a one-shot armed under an operator's request that is finished when it fires: with nothing to ride the fire opens the scheduler's
+ *     request, the agent has NOTHING to report and says nothing — the request closes silently: no reminder, no «got no answer» alert
+ *   → another such one-shot whose fire finds the deploy broken: it opens the scheduler's request, launches the fix, arms its watch —
+ *     armed under the scheduler's request, whose fire started the turn — and answers it `progress` (the operator is told «working on it»)
+ *   → that worker exits: the watch's fire RIDES the scheduler's request instead of replacing it; the agent restarts the worker and says
+ *     nothing — the turn is quiet, as on a Jira hand-over: no reminder, no alert, and the request the operator was told about stays open
  *
- * Before the rule, the engine reminded such an agent every 15 minutes whatever its watch said. Nothing leaves the machine: the Bot
- * API is on loopback and the agent is a fake. Everything the test starts is stopped in `after`.
+ * Before the rule, the engine reminded such an agent every 15 minutes whatever its watch said; before the scheduled-run model, every
+ * fire opened a request that replaced the previous fire's, and an answered one's «working on it» was lost or chased. Nothing leaves the
+ * machine: the Bot API is on loopback and the agent is a fake. Everything the test starts is stopped in `after`.
  */
 
 /** Test case: N/A — Charness has no Jira tracker. */
@@ -32,7 +37,10 @@ import { FakeTelegram } from './telegramE2e/fakeTelegram';
 import { TopicDriver } from './telegramE2e/topicDriver';
 import {
   fakeClaudeLogFileNames,
-  fakeKeepWatchWakeMarker,
+  fakeOneShotDelaySeconds,
+  fakeOneShotSilentMarker,
+  fakeOneShotWatchIssueKey,
+  fakeOneShotWatchMarker,
   fakeRearmWatchWakeMarker,
   fakeStatusWatchJobName,
   fakeStatusWatchTargetFileName,
@@ -59,7 +67,7 @@ import {
 import { getTelegramFlowTestTimingsEnv } from './telegramE2e/telegramFlowTimings';
 import type { ScheduleRunRecord } from '../scheduler/runLedger';
 import type { ScheduleRecord } from '../scheduler/types';
-import type { OpenRequestState } from '../requests/types';
+import type { ClosedRequestRecord, OpenRequestState } from '../requests/types';
 
 const group = { id: -1001111111111, title: 'ExampleGroup' };
 const topicThreadId = 152;
@@ -77,6 +85,8 @@ const agentTimeoutMs = 60 * msPerSecond;
 /** The watch runs every minute (the production minimum is five): a tick is up to a minute and a little away. */
 const watchCronIntervalMs = 60 * msPerSecond;
 const checkRunTimeoutMs = 2 * watchCronIntervalMs;
+/** A one-shot armed `fakeOneShotDelaySeconds` ahead fires within this (the engine's timer, the post and the turn). */
+const oneShotFireTimeoutMs = (fakeOneShotDelaySeconds + 60) * msPerSecond;
 /** The follow-up a progress note gets after this long (production: 15 min) and the engine's sweep that would deliver it. */
 const progressFollowUpMs = 15 * msPerSecond;
 const requestSweepIntervalMs = 10 * msPerSecond;
@@ -91,6 +101,7 @@ let defaultTmuxSessionsBefore: string[] = [];
 let worker: ChildProcess | null = null;
 let nextWorker: ChildProcess | null = null;
 let thirdWorker: ChildProcess | null = null;
+const schedulerRequester = 'scheduler';
 let openRequestId = '';
 let watchId = '';
 
@@ -126,6 +137,11 @@ function getAgentPrompts(): FakeClaudePrompt[] {
 
 function readState(): { schedules?: Record<string, ScheduleRecord>; openRequests?: Record<string, OpenRequestState> } {
   return JSON.parse(fs.readFileSync(path.join(getLayout().dataDir, 'state.json'), 'utf8'));
+}
+
+/** The request history (`DATA_DIR/requests.jsonl`): every request that closed, and why. */
+function readClosedRequests(): ClosedRequestRecord[] {
+  return readJsonLines<ClosedRequestRecord>(path.join(getLayout().dataDir, 'requests.jsonl'));
 }
 
 function readPersistedSchedules(): ScheduleRecord[] {
@@ -248,15 +264,15 @@ describe('A request waits for its schedule in a Telegram topic end to end: built
   let promptsAfterWake = 0;
   let nextWatchId = '';
 
-  it('the worker exits: the agent is woken by the failed check and moves on to the next worker — its watch is armed under the OPERATOR\'s request, not under the request the fire opened', async () => {
+  it('the worker exits: the agent is woken by the failed check RIDING the operator\'s request — no request of its own — and moves on to the next worker, armed under that request', async () => {
     nextWorker = await startNamedWorker('worker-next-run');
     worker?.kill('SIGKILL');
     await getCharness().waitFor('the failed check to wake the agent', checkRunTimeoutMs, () => getAgentPrompts().length > promptsAfterArming);
     const wakePrompt = getAgentPrompts()[promptsAfterArming].text;
     assert.ok(wakePrompt.includes(`[Scheduled check "${fakeStatusWatchJobName}" failed]`), wakePrompt);
     assert.ok(wakePrompt.includes('tells the topic when it passes again'), 'a topic keeps its own wording');
-    const wakeRequestId = wakePrompt.match(/req_[A-Za-z0-9_-]+/)?.[0] ?? '';
-    assert.notEqual(wakeRequestId, openRequestId, 'the fire opened a request of its own, as in any topic with requests');
+    assert.ok(wakePrompt.includes(`[Scheduled run "${fakeStatusWatchJobName}" · request ${openRequestId} is open]`), 'the fire rides the request its watch was armed under');
+    assert.ok(!wakePrompt.includes('[Request req_'), 'no request of its own was opened');
     await getCharness().waitFor('the agent to arm the next watch and cancel the old one', agentTimeoutMs, () =>
       getToolCalls('schedule_create').length === 2 && getToolCalls('schedule_cancel').length === 1);
     await getCharness().waitFor('the persisted jobs to be the next watch alone', replyTimeoutMs, () => {
@@ -266,7 +282,10 @@ describe('A request waits for its schedule in a Telegram topic end to end: built
     const nextWatch = readPersistedSchedules().find((record) => record.name === fakeStatusWatchJobName);
     assert.ok(nextWatch);
     nextWatchId = nextWatch.id;
-    assert.equal(nextWatch.requestId, openRequestId, 'armed under the request the operator\'s message opened — the one the agent works on — not under the scheduler\'s');
+    assert.equal(nextWatch.requestId, openRequestId, 'armed under the request the operator\'s message opened — the one the fire rode');
+    await getCharness().waitFor('the progress note to the operator\'s request', agentTimeoutMs, () =>
+      Object.values(readState().openRequests ?? {}).find((open) => open.id === openRequestId)?.progressAnswerCount === 2);
+    assert.ok(!Object.values(readState().openRequests ?? {}).some((open) => open.origin.attributes.requester === schedulerRequester), 'no scheduler\'s request is open');
     promptsAfterWake = getAgentPrompts().length;
   });
 
@@ -279,39 +298,73 @@ describe('A request waits for its schedule in a Telegram topic end to end: built
     assert.equal(request.wakeCount, 0);
   });
 
-  it('the second worker exits: the agent is woken again, cancels the watch and answers', async () => {
+  it('the second worker exits: the agent is woken again behind the same request, cancels the watch and answers it `final`', async () => {
     watchId = nextWatchId;
     nextWorker?.kill('SIGKILL');
     await getCharness().waitFor('the failed check to wake the agent again', checkRunTimeoutMs, () => getAgentPrompts().length > promptsAfterWake);
+    assert.ok(getAgentPrompts()[promptsAfterWake].text.includes(`request ${openRequestId} is open]`), 'it rides the operator\'s request again');
     await getCharness().waitFor('the agent to cancel the watch', agentTimeoutMs, () => getToolCalls('schedule_cancel').length === 2);
     await getCharness().waitFor('the watch to be gone from the persisted state', replyTimeoutMs, () => readPersistedSchedules().every((record) => record.name !== fakeStatusWatchJobName));
+    await getCharness().waitFor('the operator\'s request to close with the result', agentTimeoutMs, () =>
+      readClosedRequests().some((closed) => closed.id === openRequestId));
+    assert.equal(readClosedRequests().find((closed) => closed.id === openRequestId)?.closeReason, 'final', 'the result is the answer to the operator\'s own request');
   });
 
-  it('a third watch whose wake the agent ends silently: the fire\'s request is closed without a word — no reminder, no alert — and the operator\'s request stays open', async () => {
-    thirdWorker = await startNamedWorker('worker-third-run');
+  /** Arm a one-shot under an operator's request the agent then answers `final`: the request is finished when the job fires. */
+  async function armOneShotUnderFinishedRequest(issueKey: string, marker: string): Promise<number> {
     const createsBefore = getToolCalls('schedule_create').length;
-    fakeTelegram.pushOperatorMessage(topicThreadId, `WB-2 [fake:watch-progress] ${fakeKeepWatchWakeMarker} watch the third builder you just launched`);
-    await getCharness().waitFor('the agent to arm the third watch', agentTimeoutMs, () => getToolCalls('schedule_create').length === createsBefore + 1);
-    const operatorTurn = readFakeLog<FakeClaudeTurn>(fakeClaudeLogFileNames.turns).find((turn) => turn.issueKey === 'WB-2');
-    const operatorRequestId = operatorTurn?.requestId ?? '';
-    assert.match(operatorRequestId, /^req_/);
-    await getCharness().waitFor('the third watch to be persisted', replyTimeoutMs, () => readPersistedSchedules().some((record) => record.name === fakeStatusWatchJobName && record.requestId === operatorRequestId));
-    await getCharness().waitFor('the progress note of the third request', agentTimeoutMs, () => readFakeLog<{ requestId: string; kind: string }>(fakeClaudeLogFileNames.answers).some((answer) => answer.requestId === operatorRequestId && answer.kind === 'progress'));
-    const promptsBeforeWake = getAgentPrompts().length;
+    fakeTelegram.pushOperatorMessage(topicThreadId, `${issueKey} [fake:one-shot-then-final] ${marker} check the deploy in a moment`);
+    await getCharness().waitFor('the agent to arm the one-shot', agentTimeoutMs, () => getToolCalls('schedule_create').length === createsBefore + 1);
+    await getCharness().waitFor('the operator\'s request to be answered `final`', agentTimeoutMs, () =>
+      readFakeLog<{ issueKey: string; kind: string }>(fakeClaudeLogFileNames.answers).some((answer) => answer.issueKey === issueKey && answer.kind === 'final'));
+    return getAgentPrompts().length;
+  }
 
+  it('a one-shot whose request is finished when it fires, with nothing to report: the fire opens the scheduler\'s request and the agent says nothing — closed silently, no reminder, no alert', async () => {
+    const promptsBeforeFire = await armOneShotUnderFinishedRequest('WB-2', fakeOneShotSilentMarker);
+    await getCharness().waitFor('the one-shot to wake the agent', oneShotFireTimeoutMs, () => getAgentPrompts().length > promptsBeforeFire);
+    const firePrompt = getAgentPrompts()[promptsBeforeFire].text;
+    const fireRequestId = /\[Request (req_[A-Za-z0-9_-]+) · from: a scheduled run in this topic\]/.exec(firePrompt)?.[1] ?? '';
+    assert.match(fireRequestId, /^req_/, `nothing to ride: the fire opened the scheduler's request\n${firePrompt}`);
+
+    await sleep(quietObservationMs);
+    assert.equal(getAgentPrompts().length, promptsBeforeFire + 1, 'no reminder: the fire was the only prompt');
+    assert.ok(!topic.listMessages().some((message) => message.text.includes('got no answer')), 'no «got no answer» alert in the topic');
+    assert.deepEqual(Object.values(readState().openRequests ?? {}).map((open) => open.id), [], 'the scheduler\'s request nobody was told about closed silently');
+    assert.equal(readClosedRequests().find((closed) => closed.id === fireRequestId)?.closeReason, 'cancelled', 'closed without an answer, nothing posted');
+  });
+
+  let schedulerRequestId = '';
+
+  it('a one-shot whose fire finds the deploy broken: the scheduler\'s request it opens gets the fix\'s watch (its fire started the turn) and a `progress` note', async () => {
+    thirdWorker = await startNamedWorker('worker-third-run');
+    const promptsBeforeFire = await armOneShotUnderFinishedRequest('WC-3', fakeOneShotWatchMarker);
+    await getCharness().waitFor('the one-shot to wake the agent', oneShotFireTimeoutMs, () => getAgentPrompts().length > promptsBeforeFire);
+    schedulerRequestId = /\[Request (req_[A-Za-z0-9_-]+) · from: a scheduled run in this topic\]/.exec(getAgentPrompts()[promptsBeforeFire].text)?.[1] ?? '';
+    assert.match(schedulerRequestId, /^req_/);
+    await getCharness().waitFor('the fix\'s watch to be persisted', replyTimeoutMs, () => readPersistedSchedules().some((record) => record.name === fakeStatusWatchJobName));
+    const watch = readPersistedSchedules().find((record) => record.name === fakeStatusWatchJobName);
+    assert.equal(watch?.requestId, schedulerRequestId, 'armed under the request the alarm that started the turn rides');
+    await getCharness().waitFor('the `progress` note to the scheduler\'s request', agentTimeoutMs, () =>
+      readFakeLog<{ requestId: string; kind: string }>(fakeClaudeLogFileNames.answers).some((answer) => answer.requestId === schedulerRequestId && answer.kind === 'progress'));
+    assert.ok(Object.values(readState().openRequests ?? {}).some((open) => open.id === schedulerRequestId), 'answered `progress`: it stays open');
+    assert.ok(readFakeLog<FakeClaudeTurn>(fakeClaudeLogFileNames.turns).some((turn) => turn.issueKey === fakeOneShotWatchIssueKey));
+  });
+
+  it('that worker exits: the watch\'s fire RIDES the scheduler\'s request it was armed under; the agent says nothing — quiet: no reminder, no alert, and the request the operator was told about stays open', async () => {
+    const promptsBeforeWake = getAgentPrompts().length;
     thirdWorker?.kill('SIGKILL');
     await getCharness().waitFor('the failed check to wake the agent', checkRunTimeoutMs, () => getAgentPrompts().length > promptsBeforeWake);
     const wakePrompt = getAgentPrompts()[promptsBeforeWake].text;
-    assert.ok(wakePrompt.includes(`[Scheduled check "${fakeStatusWatchJobName}" failed]`), wakePrompt);
-    const fireRequestId = wakePrompt.match(/req_[A-Za-z0-9_-]+/)?.[0] ?? '';
-    assert.notEqual(fireRequestId, operatorRequestId, 'the fire opened a request of its own');
+    assert.ok(wakePrompt.includes(`[Scheduled run "${fakeStatusWatchJobName}" · request ${schedulerRequestId} is open]`), wakePrompt);
+    assert.ok(!wakePrompt.includes('[Request req_'), 'no new request replaces the one the operator was told about');
 
-    // The agent keeps the watch and says nothing: the turn's end is the alarm\'s, so nothing prods it and nothing gives up on it.
     await sleep(quietObservationMs);
-    assert.equal(getAgentPrompts().length, promptsBeforeWake + 1, 'no reminder: the wake was the only prompt');
+    assert.equal(getAgentPrompts().length, promptsBeforeWake + 1, 'no reminder: the agent that handled the alarm is not silent');
     assert.ok(!topic.listMessages().some((message) => message.text.includes('got no answer')), 'no «got no answer» alert in the topic');
-    const openIds = Object.values(readState().openRequests ?? {}).map((open) => open.id);
-    assert.ok(!openIds.includes(fireRequestId), 'the fire\'s request closed silently at its quiet end');
-    assert.ok(openIds.includes(operatorRequestId), 'the operator\'s request, whose watch it is, is still open');
+    const request = Object.values(readState().openRequests ?? {}).find((open) => open.id === schedulerRequestId);
+    assert.ok(request, 'still open: «working on it» is not closed silently');
+    assert.equal(request.wakeCount, 0);
+    assert.equal(request.isWakeStopped, false);
   });
 });

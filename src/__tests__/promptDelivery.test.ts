@@ -223,7 +223,7 @@ describe('the bot buffers a prompt for a starting session through it, in one pla
     // a bot restart's replay; the person was told) must not leave a request open, or the wake-up engine prods the agent later for a
     // turn that never started. Here: the bot wires the engine and the ledger into it, and every site settles through it.
     assert.match(botSource, /const \{ trackTurn: trackTopicRequestTurn, settleAfterDelivery: settleTopicRequestAfterDelivery \} = createTopicRequestSettler\(\{/);
-    assert.ok(botSource.includes("await requestWakeUpEngine?.trackForwardedTurn(key, requestId, { isRequestPrompt: true });"), 'the engine watches the turn as a request prompt');
+    assert.ok(botSource.includes("await requestWakeUpEngine?.trackForwardedTurn(key, requestId, { isRequestPrompt: true, isScheduledRun });"), 'the engine watches the turn as a request prompt — a scheduled run\'s when the opening says so');
     assert.ok(botSource.includes("await topicRequestLedger?.closeRequest(requestId, 'cancelled');"), 'the ledger closes the request as cancelled');
     // Every site that opens a request and hands its prompt on settles it through the helper — the turn is never tracked directly,
     // except for the prompt buffered at capture time, which cannot find a session gone.
@@ -233,15 +233,20 @@ describe('the bot buffers a prompt for a starting session through it, in one pla
       // A person's own prompt (typed, sent, a /schedule they wrote): its forward does not wait for the write — `isPersonInput`.
       { name: '/schedule', call: 'deliverPromptOrBuffer(key, `${opening.header}${wrappedPrompt}`, isStarting, undefined, { isPersonInput: true, isAccountsNoteCarrier: true })', count: 1 },
       { name: 'an album and a file', call: 'deliverPromptOrBuffer(key, `${opening.header}${quotedPrompt}`, isStarting, undefined, { isPersonInput: true, isAccountsNoteCarrier: true })', count: 2 },
-      // A session post waits for the buffered prompt's replay as well (it must not count a prompt that never arrived): `buffered.settle`.
-      { name: 'a scheduled run', call: 'deliverPromptOrBuffer(key, `${opening.header}${text}`, startupPromptBuffer.checkIsStarting(conversationKey), buffered.settle, { isAccountsNoteCarrier: true })', count: 1 },
       { name: 'free text that cancels a pending question', call: 'cancelPendingQuestionAndForward(key, adapter, text, sentAtMs, messageContext, opening.header, intake !== null)', count: 1 },
     ];
     for (const { name, call, count } of sites) {
       const settled = new RegExp(`const delivery = await ${call.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')};\\n\\s*await settleTopicRequestAfterDelivery\\(key, opening, delivery\\);`, 'g');
       assert.equal(botSource.match(settled)?.length, count, `${name} settles its request by where the prompt went`);
     }
-    assert.equal(botSource.match(/await settleTopicRequestAfterDelivery\(key, opening, /g)?.length, 6, 'the five above and the text handler, no other');
+    assert.equal(botSource.match(/await settleTopicRequestAfterDelivery\(key, opening, /g)?.length, 5, 'the four above and the text handler, no other');
+    // The scheduler's request a fire opened settles the same way, as that fire's scheduled run (`src/requests/README.md` § Scheduled
+    // runs); a session post waits for the buffered prompt's replay as well (it must not count a prompt that never arrived): `buffered.settle`.
+    assert.match(
+      botSource.slice(botSource.indexOf('async function forwardTopicSchedulerRequestRun('), botSource.indexOf('async function forwardTopicSchedulerRequestRun(') + 1500),
+      /const delivery = await deliverPromptOrBuffer\(key, `\$\{opening\.header\}\$\{text\}`, startupPromptBuffer\.checkIsStarting\(conversationKey\), buffered\.settle, \{ isAccountsNoteCarrier: true \}\);\n\s*await settleTopicRequestAfterDelivery\(key, \{ \.\.\.opening, isScheduledRun: true \}, delivery\);/,
+    );
+    assert.equal(botSource.match(/await settleTopicRequestAfterDelivery\(key, \{ \.\.\.opening, isScheduledRun: true \}, /g)?.length, 1, 'only the scheduler\'s request');
   });
 });
 
