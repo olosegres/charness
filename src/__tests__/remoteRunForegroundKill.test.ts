@@ -67,7 +67,12 @@ async function interruptRun(killResult: SshRunResult): Promise<{ exitCode: numbe
 const slowKillLeaseMs = 900;
 const slowKillCallMs = 600;
 const minBeatsDuringSlowKill = 4;
-/** How long after a refused call the test looks for beats that should have stopped: several beat intervals. */
+/**
+ * How long the test waits after the refused answer before it counts: a beat written just before the answer is still on its way through
+ * `cat`'s pipe and lands in the count after it (the box is loaded, a pipe's echo is no instant) — it is no beat «after the answer». Then
+ * it looks for beats over several beat intervals.
+ */
+const echoGraceMs = 150;
 const afterRefusedKillMs = 400;
 
 /** What a slow `kill` call answers at its end: the job was killed, or the runner refused (the lease session is then left running for the test to look at). */
@@ -76,7 +81,7 @@ type SlowKillAnswer = 'killed' | 'refused';
 interface SlowKillRun {
   /** Heartbeat bytes that reached the lease session while the `kill` call was in flight. */
   beatsDuringKill: number;
-  /** Heartbeat bytes that came after a refused call, within {@link afterRefusedKillMs}. */
+  /** Heartbeat bytes that came within {@link afterRefusedKillMs} after the refused answer's echo grace ({@link echoGraceMs}) was over. */
   beatsAfterRefusedKill: number;
   exitCode: number;
 }
@@ -89,6 +94,7 @@ async function runWithSlowKill(answer: SlowKillAnswer): Promise<SlowKillRun> {
   child.stdout.on('data', (chunk: string) => { beats += Buffer.byteLength(chunk); });
   let beatsDuringKill = -1;
   let beatsAfterRefusedKill = -1;
+  let beatsAtGraceEnd = -1;
   const client: RunnerClient = {
     runner: { name: 'mac', ssh: 'user@mac', workDir: '/work' },
     cacheDir: '/nonexistent-cache',
@@ -101,10 +107,11 @@ async function runWithSlowKill(answer: SlowKillAnswer): Promise<SlowKillRun> {
       beatsDuringKill = beats - beatsAtStart;
       if (answer === 'refused') {
         // The runner refuses with the lease session still alive: once the call is over, only the kill itself can have stopped the beat.
+        setTimeout(() => { beatsAtGraceEnd = beats; }, echoGraceMs);
         setTimeout(() => {
-          beatsAfterRefusedKill = beats - beatsAtStart - beatsDuringKill;
+          beatsAfterRefusedKill = beats - beatsAtGraceEnd;
           child.kill('SIGKILL');
-        }, afterRefusedKillMs);
+        }, echoGraceMs + afterRefusedKillMs);
         return { exitCode: 125, stdout: '', stderr: `${refusal}\n`, isTimedOut: false };
       }
       child.kill('SIGKILL');
