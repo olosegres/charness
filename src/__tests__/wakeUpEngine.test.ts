@@ -2006,7 +2006,7 @@ describe('a request waits for its schedule', () => {
     assert.deepEqual(wakeUps, [{ requestId: lost.id, reason: 'backstop' }], 'measured from its own last activity, the backstop takes the owed request back');
   });
 
-  it('the busy session is still the request\'s own activity when nothing else is watched (a long lost turn is not prodded mid-work), and for a request that owes nothing', async () => {
+  it('the busy session is still the request\'s own activity when nothing else is watched (a long lost turn is not prodded mid-work); with another request\'s turn watched it is that turn\'s, whatever the request owes', async () => {
     const ledger = await createLedger();
     const engine = createEngine(ledger, { getScheduleWait: () => 'watching' });
     const lost = await ledger.createRequest(topicKey, { kind: 'message', attributes: { requester: '424242' } });
@@ -2016,15 +2016,43 @@ describe('a request waits for its schedule', () => {
     await engine.sweepUnwatchedRequests();
     assert.equal(ledger.listOpenRequestsOf(topicKey).find((request) => request.id === lost.id)?.lastTurnActivityAt, nowMs, 'its own lost turn: activity recorded');
 
-    // With another request\'s turn watched, a request that owes nothing records the activity as before.
+    // With another request\'s turn watched, a request that owes nothing records nothing either (review 13 #1): under `watching` it is held
+    // anyway, a pending follow-up is woken by `nextWakeAt`, which activity does not move — and under `armed` / `none` without a
+    // follow-up the backstop is its only wake, which another request\'s turn must not push.
     const answered = await ledger.createRequest(topicKey, { kind: 'message', attributes: { requester: '535353' } });
-    await ledger.updateOpenRequest(answered.id, { progressAnswerCount: 1, lastTurnActivityAt: nowMs - 1 });
+    const answeredActivityAt = nowMs - 1;
+    await ledger.updateOpenRequest(answered.id, { progressAnswerCount: 1, lastTurnActivityAt: answeredActivityAt });
     const other = await ledger.createRequest(topicKey, { kind: 'scheduledRun', attributes: { requester: 'scheduler' } });
     await engine.trackForwardedTurn(topicKey, other.id, { isRequestPrompt: true });
     nowMs += 60 * 60 * 1000;
     await engine.sweepUnwatchedRequests();
-    assert.equal(ledger.listOpenRequestsOf(topicKey).find((request) => request.id === answered.id)?.lastTurnActivityAt, nowMs, 'nothing owed: as before');
+    assert.equal(ledger.listOpenRequestsOf(topicKey).find((request) => request.id === answered.id)?.lastTurnActivityAt, answeredActivityAt, 'another request\'s turn: not this request\'s activity');
   });
+
+  for (const wait of ['armed', 'none'] as const) {
+    it(`a request that owes nothing and has no follow-up (${wait}: ${wait === 'armed' ? 'its watch fired and nobody handled it' : 'its watch was dropped'}) keeps its backstop while an unrelated job fires every 30 min: the sweep does not count the other turns as its activity (review 13 #1)`, async () => {
+      const ledger = await createLedger();
+      const answered = await ledger.createRequest(topicKey, { kind: 'message', attributes: { requester: '424242' } });
+      const engine = createEngine(ledger, { getScheduleWait: (_key, request) => (request.id === answered.id ? wait : 'none') });
+      const ownLastActivityAt = nowMs;
+      await ledger.updateOpenRequest(answered.id, { progressAnswerCount: 1, lastTurnActivityAt: ownLastActivityAt });
+      const fireOrigin = { kind: 'scheduledRun' as const, attributes: { requester: 'scheduler' } };
+      for (let fire = 0; fire < 3; fire += 1) {
+        nowMs += 30 * 60 * 1000;
+        // «Check the deploy, say only if broken»: nothing to ride, so the fire opens the scheduler's request; its turn is the one watched.
+        const fireRequest = await ledger.createRequest(topicKey, fireOrigin);
+        await engine.trackForwardedTurn(topicKey, fireRequest.id, { isRequestPrompt: true, isScheduledRun: true });
+        probe = { isActive: true, isBusy: true, hasUnconsumedInput: false, isTurnEndBlocked: false };
+        await engine.pollWatchedTurns();
+        await engine.sweepUnwatchedRequests();
+        assert.equal(ledger.listOpenRequestsOf(topicKey).find((request) => request.id === answered.id)?.lastTurnActivityAt, ownLastActivityAt, `fire ${fire + 1}: not the answered request's activity`);
+        probe = { ...probe, isBusy: false };
+        await engine.pollWatchedTurns();
+        await engine.sweepUnwatchedRequests();
+      }
+      assert.deepEqual(wakeUps, [{ requestId: answered.id, reason: 'backstop' }], '90 min after its OWN last activity the backstop takes it back, the fires notwithstanding');
+    });
+  }
 
   it('a watch armed in a «continue» turn is recorded under the hand-over the agent works on, not under a mention the nudge only carried along', async () => {
     const ledger = await createLedger();
@@ -2275,6 +2303,20 @@ describe('a request waits for its schedule', () => {
     await engine.trackContinuationTurn(issueKey, { isCountersReset: false });
     await endTurnSilently(engine);
     assert.equal(ledger.getNewestOpenRequest(issueKey)?.nextWakeAt, undefined, 'its own watch\'s fire joined: the wake was handled');
+  });
+
+  it('a «continue» of another job\'s fire writes no activity on the ridden request either — its forward, like the fire\'s, is not the request\'s (review 13 #3)', async () => {
+    const ledger = await createLedger();
+    const engine = createEngine(ledger, { getScheduleWait: () => 'armed' });
+    const request = await ledger.createRequest(issueKey, handOver);
+    const ownLastActivityAt = nowMs;
+    await ledger.updateOpenRequest(request.id, { progressAnswerCount: 1, lastTurnActivityAt: ownLastActivityAt });
+    nowMs += 10 * 60 * 1000;
+    await engine.trackForwardedTurn(issueKey, request.id, otherJobFire);
+    nowMs += 60 * 1000;
+    // The fire's turn hit an API error: the bot's «continue» joins the watch, which stays another job's.
+    await engine.trackContinuationTurn(issueKey, { isCountersReset: false });
+    assert.equal(ledger.getNewestOpenRequest(issueKey)?.lastTurnActivityAt, ownLastActivityAt, 'the «continue» forward recorded nothing');
   });
 
   it('a «continue» of another job\'s fire alone stays another job\'s turn: the request\'s follow-up stands', async () => {

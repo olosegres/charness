@@ -1,6 +1,6 @@
 import { keyToString, type SessionKey } from '../sessionKey';
 import type { RequestLedger } from './requestLedger';
-import { checkIsAnswerOwed, checkIsHeldBetweenTurns, pickRequestToArmUnder, type RequestScheduleWait } from './scheduleWait';
+import { checkIsHeldBetweenTurns, pickRequestToArmUnder, type RequestScheduleWait } from './scheduleWait';
 import type { OpenRequestState, RequestAlertReason, RequestAnswerKind } from './types';
 import { getPromptNotTakenIn, getWakeUpMessage, type WakeUpMessage } from './requestHeader';
 import {
@@ -391,7 +391,8 @@ export class RequestWakeUpEngine {
         ...(isPersonWordsOwed ? { isPersonInputUnanswered: true } : {}),
       });
     }
-    if (!isOtherJobFireForward) await this.recordTurnActivity(request, true);
+    // Keyed on the watch just stored, so a fire of another job AND a «continue» of its turn alike write nothing on the request.
+    if (isRequestJob) await this.recordTurnActivity(request, true);
   }
 
   /**
@@ -608,11 +609,12 @@ export class RequestWakeUpEngine {
   private async sweepOpenRequest(key: SessionKey, request: OpenRequestState): Promise<void> {
     const probe = this.deps.probeTurn(key);
     if (probe.isBusy) {
-      // A busy session is activity of THIS request's own lost turn — so a long-running one is not prodded mid-work. When the engine
-      // watches another request's turn in the conversation the busy time is that turn's, not this request's: a request that owes an
-      // answer must not have its backstop pushed ahead by it (a recurring job's fires keep the session busy every few minutes, and
-      // the requester's lost message would never be followed up).
-      if (this.getWatchedTurnsOf(key).length === 0 || !checkIsAnswerOwed(request)) await this.recordTurnActivity(request, false);
+      // A busy session is activity of THIS request's own lost turn — so a long-running one is not prodded mid-work — but only while no
+      // turn is watched in the conversation: then the busy time is that turn's, never this request's, whatever it owes. A recurring
+      // job's fires keep the session busy every few minutes, so recorded they would push this request's backstop ahead for good — a
+      // requester's lost message, or a watch that fired and nobody handled (`armed`), would never be taken back. A request a watch
+      // holds ignores the backstop anyway, and a due follow-up is woken by `nextWakeAt`, which activity does not move.
+      if (this.getWatchedTurnsOf(key).length === 0) await this.recordTurnActivity(request, false);
       return;
     }
     await this.applyDecision(key, request, decideUnwatchedRequest(request, probe, this.now(), this.deps.backstopMs, this.getScheduleWait(key, request)));
