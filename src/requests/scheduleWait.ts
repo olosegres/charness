@@ -19,8 +19,8 @@ import type { OpenRequestState } from './types';
  * Platform-neutral: a Telegram topic in a view with requests gets the same reading from the jobs its agent armed.
  *
  * A reading never decides alone: between turns it holds a request only while the request owes nobody an answer
- * (`checkIsHeldBetweenTurns`), and at a turn's end it quiets a turn only when that turn carried no person's words and nothing is
- * owed (`decideTurnEnd`). The complete table is `src/requests/README.md` § Wake-ups.
+ * (`checkIsHeldBetweenTurns`), and at a turn's end it quiets a turn only while nothing is owed (`decideTurnEnd`) — the owed reading
+ * and the schedule wait decide, whatever the kind of the turn. The complete table is `src/requests/README.md` § Wake-ups.
  */
 export type RequestScheduleWait = 'none' | 'armed' | 'watching';
 

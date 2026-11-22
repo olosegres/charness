@@ -22,10 +22,13 @@ import { getMinutesOverrideMs } from '../utils/minutesOverride';
  * the cap nothing wakes the request again until it closes or is superseded.
  *
  * A request WAITS FOR ITS SCHEDULE while a job armed under it counts (`scheduleWait.ts`): the agent that launched a worker,
- * armed its watch and ended its turn is not prodded — at the end of a watched turn it is not silent, unless that turn carried a
- * person's words (counter 0, no follow-up, no wake), between turns and at a restart nothing wakes the request while a watch that is not failing holds
- * it. A turn a SCHEDULED RUN started that ends without an answer is not silent either: a woken agent with nothing to
- * report stays quiet. A scheduler fire is never a wake-up of these rules, so it never counts against the cap.
+ * armed its watch and ended its turn is not prodded — at the end of a watched turn it is not silent while the request owes nobody
+ * an answer (counter 0, no follow-up, no wake), between turns and at a restart nothing wakes the request while a watch that is not
+ * failing holds it and it owes nobody an answer. What a request owes (`checkIsAnswerOwed`) is read from the persisted request,
+ * never from the kind of the turn; the owed reading plus the schedule wait decide, and the one turn input is a SCHEDULED RUN: its
+ * turn that ends without an answer is not silent either, while nothing is owed — a woken agent with nothing to report stays quiet.
+ * A scheduler fire is never a wake-up of these rules, so it never counts against the cap. The complete table is
+ * `src/requests/README.md` § Wake-ups.
  */
 
 /** Silent turns in a row that make the rules give up. */
@@ -268,7 +271,7 @@ export interface WatchedTurn {
   hasSeenOutput: boolean;
   /** The turn carries the request's own prompt (not a reminder or a "continue" nudge) — R21. */
   isRequestPrompt: boolean;
-  /** A scheduler fire started the turn: ending it without an answer is not silence (a woken agent with nothing to report). */
+  /** A scheduler fire started the turn: ending it without an answer is not silence (a woken agent with nothing to report) while nothing is owed. */
   isScheduledRun?: boolean;
 }
 

@@ -58,7 +58,7 @@ the scheduler's would owe an answer nobody asked for.
   job was armed under, or the open request that replaced it (`supersededRequestIds`); else the newest open request; else none.
 - **The prompt** starts with a header (`buildTrackerScheduledRunHeader`): the job, the issue and its link, and either the request
   it rides («answer through `answer_request` only when you have a result the requester needs; nothing of this run is shown on the
-  issue») or «no request is open», naming the request the job was armed under as finished (an answer to it still becomes a
+  issue» — or, when the request still owes the requester an answer, «answer it in this turn») or «no request is open», naming the request the job was armed under as finished (an answer to it still becomes a
   comment and hands nothing back; cancel the job if it served only that request). Then the usual `[Scheduled run]` marker and prompt,
   or the `[Scheduled check "<name>" failed]` block.
 - **The turn** the fire starts is watched as that request's turn, marked a scheduled run (`trackForwardedTurn`): its silent end is

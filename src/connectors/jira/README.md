@@ -357,7 +357,8 @@ update into the resumed session — it does not wait for the agent's turn to end
   the requester an answer (a comment left unanswered is reminded and given up on even by a fire's turn: `../../requests/README.md` row 13).
 - **A fire rides the open request, opens none.** Its prompt starts with a header naming the request it rides (the one the job was armed
   under — `ScheduleRecord.requestId`, recorded by `schedule_create`: the request the agent was working on, not a newer mention of another person — or the open one that replaced it, else the newest open one) or
-  saying «no request is open» and naming the finished request: an `answer_request` to that one still becomes a comment but hands
+  saying «no request is open» and naming the finished request (a request that still owes the requester an answer says so, and asks for it
+  in this turn): an `answer_request` to that one still becomes a comment but hands
   nothing back, so the agent answers only what the requester must know and cancels a job that served only that request. The issue key
   and link (`JiraConnector.describeConversation`) are in the header, so a session that started fresh knows where it is. The turn the
   fire starts is watched as that request's scheduled run. No job is cancelled when its request closes (as in a topic): «check the
