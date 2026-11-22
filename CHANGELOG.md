@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+**Your agents now start every worker they launch on Claude Opus: the builder at medium effort, the reviewer, planner and investigator at extra-high, a small review at high.**
+This is the bot's own default for an agent that hands work to a separate Claude process and has no delegation rules of its own; before, its builder ran on Sonnet. Work that can lose or corrupt data still puts the builder at extra-high effort, and a worker still never runs on Fable. A model you name for a worker, or your own project's delegation rules, still win.
+
 **Typing or saying «claude», «клод», «opencode» or «запусти клода» no longer starts an agent — only the command does: `/claude`, `/opencode`, or the buttons on the topic's welcome.**
 Before, a plain message that was just an agent's name (or the name followed by a prompt: `claude fix the bug`), typed or spoken in a voice note, started that agent in a bound topic — and an ordinary sentence that began with one of those words could start one by accident. Now such a message is an ordinary message: an agent that runs in the topic reads it as its input, a conversation that sleeps is woken by it like by any other message, and a topic with no agent answers with the usual hint to run `/claude` or `/opencode`. The first message of an admin in a topic that a non-admin made still binds it to the matching folder with the one welcome, but starts nothing. `/claude` and `/opencode` start the agent exactly as before, including the question before a switch to the other backend.
 
