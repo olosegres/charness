@@ -1,6 +1,6 @@
 import { keyToString, type SessionKey } from '../sessionKey';
 import type { RequestLedger } from './requestLedger';
-import { checkIsHeldBetweenTurns, type RequestScheduleWait } from './scheduleWait';
+import { checkIsAnswerOwed, checkIsHeldBetweenTurns, type RequestScheduleWait } from './scheduleWait';
 import type { OpenRequestState, RequestAlertReason, RequestAnswerKind } from './types';
 import { getPromptNotTakenIn, getWakeUpMessage, type WakeUpMessage } from './requestHeader';
 import {
@@ -522,7 +522,11 @@ export class RequestWakeUpEngine {
   private async sweepOpenRequest(key: SessionKey, request: OpenRequestState): Promise<void> {
     const probe = this.deps.probeTurn(key);
     if (probe.isBusy) {
-      await this.recordTurnActivity(request, false);
+      // A busy session is activity of THIS request's own lost turn — so a long-running one is not prodded mid-work. When the engine
+      // watches another request's turn in the conversation the busy time is that turn's, not this request's: a request that owes an
+      // answer must not have its backstop pushed ahead by it (a recurring job's fires keep the session busy every few minutes, and
+      // the requester's lost message would never be followed up).
+      if (this.getWatchedTurnsOf(key).length === 0 || !checkIsAnswerOwed(request)) await this.recordTurnActivity(request, false);
       return;
     }
     await this.applyDecision(key, request, decideUnwatchedRequest(request, probe, this.now(), this.deps.backstopMs, this.getScheduleWait(key, request)));

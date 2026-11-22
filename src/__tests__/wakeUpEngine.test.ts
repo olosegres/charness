@@ -1731,6 +1731,51 @@ describe('a request waits for its schedule', () => {
     assert.equal(restarted.scheduleRestartWake(issueKey), false);
   });
 
+  it('another request\'s watched turn does not push an owed request\'s backstop ahead: a recurring job\'s fires cannot keep a lost message unanswered for as long as the job lives', async () => {
+    const ledger = await createLedger();
+    const engine = createEngine(ledger, { getScheduleWait: () => 'watching' });
+    // The operator's request: its turn was lost to a restart before the agent answered (nothing is watched for it).
+    const lost = await ledger.createRequest(topicKey, { kind: 'message', attributes: { requester: '424242' } });
+    const lostActivityAt = nowMs;
+    await ledger.updateOpenRequest(lost.id, { progressAnswerCount: 1, isPersonInputUnanswered: true, lastTurnActivityAt: lostActivityAt });
+
+    // A cron job fires every 30 min for two hours; each fire opens its own request, whose turn is the one watched, and the busy
+    // session is sampled by the sweep meanwhile.
+    for (let fire = 0; fire < 4; fire += 1) {
+      nowMs += 30 * 60 * 1000;
+      const fireRequest = await ledger.createRequest(topicKey, { kind: 'scheduledRun', attributes: { requester: 'scheduler' } });
+      await engine.trackForwardedTurn(topicKey, fireRequest.id, { isRequestPrompt: true });
+      probe = { isActive: true, isBusy: true, hasUnconsumedInput: false, isTurnEndBlocked: false };
+      await engine.sweepUnwatchedRequests();
+      await endTurnSilently(engine);
+    }
+    assert.equal(ledger.listOpenRequestsOf(topicKey).find((request) => request.id === lost.id)?.lastTurnActivityAt, lostActivityAt, 'the fires\' busy time is not the lost request\'s activity');
+
+    probe = { isActive: true, isBusy: false, hasUnconsumedInput: false, isTurnEndBlocked: false };
+    await engine.sweepUnwatchedRequests();
+    assert.deepEqual(wakeUps, [{ requestId: lost.id, reason: 'backstop' }], 'measured from its own last activity, the backstop takes the owed request back');
+  });
+
+  it('the busy session is still the request\'s own activity when nothing else is watched (a long lost turn is not prodded mid-work), and for a request that owes nothing', async () => {
+    const ledger = await createLedger();
+    const engine = createEngine(ledger, { getScheduleWait: () => 'watching' });
+    const lost = await ledger.createRequest(topicKey, { kind: 'message', attributes: { requester: '424242' } });
+    await ledger.updateOpenRequest(lost.id, { progressAnswerCount: 1, isPersonInputUnanswered: true, lastTurnActivityAt: nowMs });
+    nowMs += 60 * 60 * 1000;
+    probe = { isActive: true, isBusy: true, hasUnconsumedInput: false, isTurnEndBlocked: false };
+    await engine.sweepUnwatchedRequests();
+    assert.equal(ledger.listOpenRequestsOf(topicKey).find((request) => request.id === lost.id)?.lastTurnActivityAt, nowMs, 'its own lost turn: activity recorded');
+
+    // With another request\'s turn watched, a request that owes nothing records the activity as before.
+    const answered = await ledger.createRequest(topicKey, { kind: 'message', attributes: { requester: '535353' } });
+    await ledger.updateOpenRequest(answered.id, { progressAnswerCount: 1, lastTurnActivityAt: nowMs - 1 });
+    const other = await ledger.createRequest(topicKey, { kind: 'scheduledRun', attributes: { requester: 'scheduler' } });
+    await engine.trackForwardedTurn(topicKey, other.id, { isRequestPrompt: true });
+    nowMs += 60 * 60 * 1000;
+    await engine.sweepUnwatchedRequests();
+    assert.equal(ledger.listOpenRequestsOf(topicKey).find((request) => request.id === answered.id)?.lastTurnActivityAt, nowMs, 'nothing owed: as before');
+  });
+
   it('a limit resume that re-posts ONE request\'s prompt marks only that request owed: another requester\'s answered request waiting on its watch gets the plain «continue»', async () => {
     const ledger = await createLedger();
     const engine = createEngine(ledger, { getScheduleWait: () => 'watching' });
