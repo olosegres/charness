@@ -268,15 +268,18 @@ export class RequestWakeUpEngine {
    * the conversation's session: watch the turn it starts. A watch already there
    * for the SAME request is MERGED with it (the forward joined a busy period): a person's
    * words stay a person's, the progress count keeps its earlier start, and the turn is the
-   * alarm's only if both were. Another requester's request in the conversation keeps its own
-   * watch. A post retry still pending is moot from now on (R28): the session has the request —
-   * unless the forward is a fire riding the request, which carries none of it. A forward that carries a person's
-   * words (a request prompt, an issue update) marks the request as owing an answer (`isPersonInputUnanswered`, persisted).
+   * alarm's only if both were — except for the bot's own «continue» (`isContinuation`: the nudge after an
+   * API error or a limit wait), which keeps the turn's kind (a person's turn stays a person's, the
+   * alarm's stays the alarm's) but starts the progress count afresh: a note sent before the error is
+   * not this turn's. Another requester's request in the conversation keeps its own watch. A post
+   * retry still pending is moot from now on (R28): the session has the request — unless the forward is a
+   * fire riding the request, which carries none of it. A forward that carries a person's words (a request
+   * prompt, an issue update) marks the request as owing an answer (`isPersonInputUnanswered`, persisted).
    */
   async trackForwardedTurn(
     key: SessionKey,
     requestId: string,
-    options: { isRequestPrompt: boolean; isScheduledRun?: boolean; isPersonInput?: boolean } = { isRequestPrompt: false },
+    options: { isRequestPrompt: boolean; isScheduledRun?: boolean; isPersonInput?: boolean; isContinuation?: boolean } = { isRequestPrompt: false },
   ): Promise<void> {
     const request = this.getOpenRequestOf(key, requestId);
     if (!request) return;
@@ -287,11 +290,13 @@ export class RequestWakeUpEngine {
     // A request a scheduler fire opened (a Telegram topic's `scheduledRun`) is the alarm's: its turn is a scheduled run's, whoever tracks it.
     const isAlarmRequest = request.origin.kind === 'scheduledRun';
     const carriesPersonWords = options.isRequestPrompt || options.isPersonInput === true;
-    const isScheduledRun = (isFireForward || isAlarmRequest) && (previous === undefined || previous.isScheduledRun === true);
+    const isScheduledRun = previous === undefined
+      ? isFireForward || isAlarmRequest
+      : previous.isScheduledRun === true && (isFireForward || isAlarmRequest || (options.isContinuation === true && !carriesPersonWords));
     this.watched.set(requestId, {
       key,
       requestId,
-      progressCountAtTurnStart: previous?.progressCountAtTurnStart ?? request.progressAnswerCount,
+      progressCountAtTurnStart: options.isContinuation === true ? request.progressAnswerCount : (previous?.progressCountAtTurnStart ?? request.progressAnswerCount),
       hasSeenBusy: false,
       hasSeenOutput: false,
       isRequestPrompt: options.isRequestPrompt || previous?.isRequestPrompt === true,
@@ -377,8 +382,11 @@ export class RequestWakeUpEngine {
 
   /**
    * @description The bot itself forwarded a "continue" nudge into the session (an
-   * API-error retry fired, or a usage-limit wait ended): watch the turn it starts
-   * as a fresh one, so the idle the error left behind is never read as its end.
+   * API-error retry fired, or a usage-limit wait ended): watch the turn it starts, so the idle the
+   * error left behind is never read as its end. The nudge carries no person's words and is no alarm,
+   * so it KEEPS the kind of the turn it continues (a person's stays a person's, a fire's stays the
+   * alarm's) but its progress count starts afresh: a progress note sent before the error does not make
+   * a silent continuation a «progress» turn.
    * `isCountersReset` (the end of a limit wait) starts every open request's
    * wake-up bookkeeping from zero — the wait was not the agent's silence — and
    * lifts a limit stop: the work continues, so does the waking. A request the
@@ -396,7 +404,7 @@ export class RequestWakeUpEngine {
           limitWaitAnsweredFor: undefined,
         });
       }
-      await this.trackForwardedTurn(key, request.id, { isRequestPrompt: options.isRequestPrompt === true });
+      await this.trackForwardedTurn(key, request.id, { isRequestPrompt: options.isRequestPrompt === true, isContinuation: true });
     }
   }
 

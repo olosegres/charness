@@ -1557,6 +1557,59 @@ describe('a request waits for its schedule', () => {
     assert.deepEqual(wakeUps, [{ requestId: request.id, reason: 'restarted' }]);
   });
 
+  it('a bot «continue» into a fire\'s turn keeps it the alarm\'s: a woken agent whose turn hit an API error is not reminded for staying silent', async () => {
+    const ledger = await createLedger();
+    const engine = createEngine(ledger, { getScheduleWait: () => 'none' });
+    const request = await ledger.createRequest(issueKey, handOver);
+    await ledger.updateOpenRequest(request.id, { progressAnswerCount: 1 });
+    await engine.trackForwardedTurn(issueKey, request.id, { isRequestPrompt: false, isScheduledRun: true });
+    await engine.trackContinuationTurn(issueKey, { isCountersReset: false });
+    await endTurnSilently(engine);
+    assert.deepEqual(wakeUps, [], 'still the alarm\'s turn: quiet');
+    assert.deepEqual(alerts, []);
+    assert.equal(ledger.getNewestOpenRequest(issueKey)?.silentTurnCount, 0);
+  });
+
+  it('a bot «continue» into a person\'s turn keeps it a person\'s, a request prompt\'s too: left unanswered it is still a silent turn', async () => {
+    for (const person of [{ isRequestPrompt: true }, { isRequestPrompt: false, isPersonInput: true }]) {
+      wakeUps = [];
+      const ledger = await createLedger();
+      const engine = createEngine(ledger, { getScheduleWait: () => 'watching' });
+      const request = await ledger.createRequest(issueKey, handOver);
+      await ledger.updateOpenRequest(request.id, { progressAnswerCount: 1 });
+      await engine.trackForwardedTurn(issueKey, request.id, person);
+      await engine.trackContinuationTurn(issueKey, { isCountersReset: false });
+      await endTurnSilently(engine);
+      assert.deepEqual(wakeUps, [{ requestId: request.id, reason: 'silentTurn' }], JSON.stringify(person));
+      engine.stop();
+    }
+  });
+
+  it('a continuation after an error does not inherit «progress sent» from before the error: it ends silently → a silent turn, no 15-minute follow-up', async () => {
+    const ledger = await createLedger();
+    const engine = createEngine(ledger, { getScheduleWait: () => 'none' });
+    const request = await ledger.createRequest(issueKey, handOver);
+    await engine.trackForwardedTurn(issueKey, request.id, { isRequestPrompt: true });
+    // The turn sent a progress note, then hit an API error and went idle; the retry nudges it to continue.
+    await ledger.updateOpenRequest(request.id, (current) => ({ progressAnswerCount: current.progressAnswerCount + 1, isPersonInputUnanswered: undefined }));
+    await engine.trackContinuationTurn(issueKey, { isCountersReset: false });
+    await endTurnSilently(engine);
+    assert.deepEqual(wakeUps, [{ requestId: request.id, reason: 'silentTurn' }], 'the note was before the error: this turn said nothing');
+    assert.equal(ledger.getNewestOpenRequest(issueKey)?.nextWakeAt, undefined, 'no follow-up');
+  });
+
+  it('a continuation that sends a progress note of its own is a progress turn: the follow-up (no watch) or quiet (a watch) as for any', async () => {
+    const ledger = await createLedger();
+    const engine = createEngine(ledger, { getScheduleWait: () => 'none' });
+    const request = await ledger.createRequest(issueKey, handOver);
+    await engine.trackForwardedTurn(issueKey, request.id, { isRequestPrompt: true });
+    await engine.trackContinuationTurn(issueKey, { isCountersReset: false });
+    await ledger.updateOpenRequest(request.id, (current) => ({ progressAnswerCount: current.progressAnswerCount + 1, isPersonInputUnanswered: undefined }));
+    await endTurnSilently(engine);
+    assert.deepEqual(wakeUps, []);
+    assert.notEqual(ledger.getNewestOpenRequest(issueKey)?.nextWakeAt, undefined, 'the follow-up of a progress note');
+  });
+
   it('a bot «continue» with no watch left (the restart lost it) starts a plain turn that reads the persisted request: owed → silent, not owed → quiet under a watch', async () => {
     const ledger = await createLedger();
     const owedKey = issueKey;
