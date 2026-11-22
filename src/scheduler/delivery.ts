@@ -27,7 +27,9 @@ import { checkIsFinalRun } from './recurrence';
 import { getAnnouncedScheduleText } from './scheduleText';
 import type { CheckStatusLine, DeliveryOutcome, FireContext, ScheduleRecord } from './types';
 import { getWorkerWatchEnd, workerWatchSilenceMinutes, workerWatchUnreportedMinutes } from './workerWatch';
-import { postToSession, type PostToSessionDeps } from '../postToSession';
+import { postToSession, type PostToSessionDeps, type SessionPromptText } from '../postToSession';
+import type { OpenRequestState } from '../requests/types';
+import { buildTrackerScheduledRunHeader, pickScheduledRunTarget, type ScheduledRunTarget } from './trackerRun';
 
 /**
  * @description Scheduler delivery (plan S4): the real `deliver(job, fireContext)`
@@ -60,6 +62,12 @@ import { postToSession, type PostToSessionDeps } from '../postToSession';
  * the command, the failure details and the output ahead of the job's prompt. An
  * unbound topic fails with the same distinct error as a prompt job, so it is
  * paused the same way.
+ *
+ * A TRACKER conversation (a Jira issue, `ScheduleDeliveryDeps.trackerRun`) has no feed the bot may post into — a comment
+ * always notifies the requester and the issue's watchers — so the scheduler posts NOTHING there: no announcement, no
+ * «back to normal» line, no status line, no check alert. A fire only wakes the agent, and the prompt it is woken with rides
+ * the request that is open (`trackerRun.ts`): it starts with a header naming that request, and the turn it starts is
+ * watched as that request's turn (a scheduled run's). A job armed under a request that is finished says so in its header.
  *
  * It owns NO bot.ts import: every side effect is injected via
  * {@link ScheduleDeliveryDeps} (announce / pin / busy probe / ensure-session /
@@ -135,6 +143,24 @@ export interface ScheduleDeliveryDeps extends PostToSessionDeps {
   recordStatusLine: (jobId: string, line: CheckStatusLine | null) => Promise<boolean>;
   /** Test seam (`CHARNESS_TEST_TIMINGS`): the status interval in place of the job's `statusEveryMinutes`. */
   statusIntervalOverrideMs?: number;
+  /** What a TRACKER conversation's fires need; absent: every conversation is a topic the bot posts into. */
+  trackerRun?: TrackerRunPorts;
+}
+
+/**
+ * @name TrackerRunPorts
+ * @description How a fire is delivered in a tracker conversation (see the module header). `describeConversation` is read
+ * once per fire: `null` — not a tracker conversation (a Telegram topic), the fire is delivered as there; else the
+ * label the header names the conversation by (`Jira issue PROJ-12 (<link>)`). `listOpenRequests` and `forwardRun` are read
+ * at forward time, when the post may have waited behind a running turn: `forwardRun` writes the text into the session and
+ * watches the turn it starts as the scheduled run of `requestId` (`null`: no request is open, nothing to watch).
+ * `fallbackAdapterName` is the connector's own backend, which a session that cannot be resumed starts on.
+ */
+export interface TrackerRunPorts {
+  describeConversation: (threadKey: string) => string | null;
+  listOpenRequests: (threadKey: string) => OpenRequestState[];
+  forwardRun: (threadKey: string, text: string, requestId: string | null) => Promise<void>;
+  fallbackAdapterName: string;
 }
 
 /**
@@ -278,18 +304,50 @@ async function releaseLegacyAlertPins(deps: ScheduleDeliveryDeps, job: ScheduleR
 }
 
 /**
+ * @description A tracker conversation's post of one fire: the prompt behind its header, and the forward that watches the
+ * turn as the picked request's. The target is picked each time the text is built — at forward time the post may have
+ * waited behind a running turn, so the request the job was armed under may have closed or been replaced — and the forward
+ * carries whatever the LAST build picked. `heldText` is the same text for a run held over a usage-limit wait.
+ */
+function createTrackerPost(
+  deps: ScheduleDeliveryDeps,
+  ports: TrackerRunPorts,
+  job: ScheduleRecord,
+  conversationLabel: string,
+  prompt: string,
+  heldPrompt: string | undefined,
+): { postDeps: PostToSessionDeps; promptText: SessionPromptText; heldText: string | undefined } {
+  let target: ScheduledRunTarget = { kind: 'none' };
+  const buildText = (body: string): string => {
+    target = pickScheduledRunTarget(job, ports.listOpenRequests(job.threadKey));
+    return `${buildTrackerScheduledRunHeader({ jobName: job.name, conversationLabel, target })}${body}`;
+  };
+  const promptText: SessionPromptText = { fullText: buildText(prompt), buildText: () => buildText(prompt) };
+  const heldText = heldPrompt === undefined ? undefined : buildText(heldPrompt);
+  const postDeps: PostToSessionDeps = {
+    ...deps,
+    forwardPrompt: (conversationKey, text) => ports.forwardRun(conversationKey, text, target.kind === 'request' ? target.request.id : null),
+  };
+  return { postDeps, promptText, heldText };
+}
+
+/**
  * @description Steps 3–4: post `prompt` (already carrying its marker) into the
  * thread's session through {@link postToSession} and map its outcome onto the
- * engine's delivery outcome.
+ * engine's delivery outcome. In a tracker conversation (`trackerLabel` is its label) the prompt goes behind the tracker
+ * header and the forward watches the request's turn ({@link createTrackerPost}).
  */
 async function deliverToAgent(
   deps: ScheduleDeliveryDeps,
   job: ScheduleRecord,
   prompt: string,
-  options: { heldText?: string } = {},
+  options: { heldText?: string; trackerLabel?: string | null } = {},
 ): Promise<DeliveryOutcome> {
   // 3–4. ensure a session, let a busy one finish its turn, forward the prefixed prompt
-  const posted = await postToSession(deps, job.threadKey, prompt, job.lastAdapterName, options);
+  const ports = deps.trackerRun;
+  const posted = ports !== undefined && options.trackerLabel !== undefined && options.trackerLabel !== null
+    ? await postTrackerRun(deps, ports, job, options.trackerLabel, prompt, options.heldText)
+    : await postToSession(deps, job.threadKey, prompt, job.lastAdapterName, { heldText: options.heldText });
   if (posted.ok) {
     // A run held during a usage-limit wait reaches the agent once the wait ends —
     // with its resume, the operator's next message, or the next session (R23).
@@ -309,6 +367,19 @@ async function deliverToAgent(
     case 'forward-failed':
       return { status: 'failed', error: posted.error };
   }
+}
+
+/** A tracker conversation's post: a session that cannot be resumed starts on the connector's own backend, not the job's snapshot. */
+function postTrackerRun(
+  deps: ScheduleDeliveryDeps,
+  ports: TrackerRunPorts,
+  job: ScheduleRecord,
+  conversationLabel: string,
+  prompt: string,
+  heldPrompt: string | undefined,
+): ReturnType<typeof postToSession> {
+  const { postDeps, promptText, heldText } = createTrackerPost(deps, ports, job, conversationLabel, prompt, heldPrompt);
+  return postToSession(postDeps, job.threadKey, promptText, ports.fallbackAdapterName, { heldText });
 }
 
 /**
@@ -382,7 +453,7 @@ async function updateCheckStatus(deps: ScheduleDeliveryDeps, job: ScheduleRecord
  * stored BEFORE the agent is woken, so a restart mid-delivery cannot raise the
  * same alert twice.
  */
-async function deliverCheck(deps: ScheduleDeliveryDeps, job: ScheduleRecord): Promise<DeliveryOutcome> {
+async function deliverCheck(deps: ScheduleDeliveryDeps, job: ScheduleRecord, trackerLabel: string | null): Promise<DeliveryOutcome> {
   const timeoutSec = job.checkTimeoutSec ?? defaultCheckTimeoutSec;
   const command = job.checkCommand ?? '';
   await releaseLegacyAlertPins(deps, job);
@@ -398,13 +469,17 @@ async function deliverCheck(deps: ScheduleDeliveryDeps, job: ScheduleRecord): Pr
   const decision = getCheckAlertDecision({ isPassing, wasFailing: job.isCheckFailing === true });
   if (decision === 'quiet') {
     // `quiet` is also a failure that keeps failing: its line went with the alert, and a failing check posts none.
-    if (isPassing) await updateCheckStatus(deps, job);
+    // A tracker conversation has no status line at all: its status arguments are accepted and do nothing.
+    if (isPassing && trackerLabel === null) await updateCheckStatus(deps, job);
     return { status: 'delivered' };
   }
   if (decision === 'recovered') {
     await deps.setCheckFailing(job.id, false);
-    await deps.announce(job.threadKey, buildCheckRecoveredText(job), { isSilent: true });
-    await updateCheckStatus(deps, job);
+    // A tracker conversation has no feed: the check passing again is no comment on the issue.
+    if (trackerLabel === null) {
+      await deps.announce(job.threadKey, buildCheckRecoveredText(job), { isSilent: true });
+      await updateCheckStatus(deps, job);
+    }
     return { status: 'delivered' };
   }
 
@@ -412,12 +487,15 @@ async function deliverCheck(deps: ScheduleDeliveryDeps, job: ScheduleRecord): Pr
   await clearCheckStatusLine(deps, job);
   await deps.setCheckFailing(job.id, true);
   const failure = describeCheckFailure(result, timeoutSec);
-  const alert = buildCheckFailedAnnouncement({ job, result, failure, nowMs: deps.now() });
-  await deps.announce(job.threadKey, alert.text, { isSilent: true, foldedDetail: alert.foldedDetail });
+  if (trackerLabel === null) {
+    const alert = buildCheckFailedAnnouncement({ job, result, failure, nowMs: deps.now() });
+    await deps.announce(job.threadKey, alert.text, { isSilent: true, foldedDetail: alert.foldedDetail });
+  }
   return deliverToAgent(
     deps,
     job,
-    buildCheckFailurePrompt({ name: job.name, command, failure, output: result.output, prompt: job.prompt }),
+    buildCheckFailurePrompt({ name: job.name, command, failure, output: result.output, prompt: job.prompt, isTracker: trackerLabel !== null }),
+    { trackerLabel },
   );
 }
 
@@ -429,7 +507,9 @@ export function createScheduleDelivery(
   deps: ScheduleDeliveryDeps,
 ): (job: ScheduleRecord, fireContext: FireContext) => Promise<DeliveryOutcome> {
   return async (job, fireContext) => {
-    if (checkIsCheckSchedule(job)) return deliverCheck(deps, job);
+    // Read once per fire: a tracker conversation posts nothing, whatever the kind of the job.
+    const trackerLabel = deps.trackerRun?.describeConversation(job.threadKey) ?? null;
+    if (checkIsCheckSchedule(job)) return deliverCheck(deps, job, trackerLabel);
     // Read before the paced announce, which can take a while under load:
     // a run held over a usage-limit wait says when it was due (R27).
     const dueAtMs = fireContext.kind === 'catch-up' && fireContext.missedAtMs !== undefined ? fireContext.missedAtMs : deps.now();
@@ -444,12 +524,13 @@ export function createScheduleDelivery(
       await announceAndPinReminder(deps, job, announcement.text);
       return { status: 'delivered' };
     }
-    await deps.announce(job.threadKey, announcement.text, { isSilent: true, foldedDetail: announcement.foldedDetail });
+    if (trackerLabel === null) await deps.announce(job.threadKey, announcement.text, { isSilent: true, foldedDetail: announcement.foldedDetail });
 
     // 3–4. wake the agent with the prompt. A run held over a usage-limit wait
     // reaches the agent later: it says when it was due (R27).
     return deliverToAgent(deps, job, prependScheduledRunMarker(job.name, job.prompt), {
       heldText: prependScheduledRunMarker(job.name, job.prompt, { dueAtMs }),
+      trackerLabel,
     });
   };
 }

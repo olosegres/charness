@@ -91,10 +91,15 @@ export function getOutputTail(text: string, maxChars: number): string {
   return `…${text.slice(text.length - maxChars + 1)}`;
 }
 
+/** What the failure prompt says the bot does while a check keeps failing and when it passes again, per kind of conversation. */
+const checkKeepsFailingTopicLine = 'The bot stays silent while the check keeps failing and tells the topic when it passes again.';
+const checkKeepsFailingTrackerLine = 'The bot stays silent while the check keeps failing and posts nothing on the issue when it passes again.';
+
 /**
  * @description The prompt the agent is woken with: what failed and how, the
  * output tail, then the job's own prompt (what to do about it). English, like the
  * `[Scheduled run]` marker — it is read by the agent, never shown in the topic.
+ * `isTracker` — the conversation is a tracker issue, where the bot posts nothing for a check (it has no feed).
  */
 export function buildCheckFailurePrompt(input: {
   name: string;
@@ -102,6 +107,7 @@ export function buildCheckFailurePrompt(input: {
   failure: string;
   output: string;
   prompt: string;
+  isTracker?: boolean;
 }): string {
   const output = input.output.trim() || '(no output)';
   return [
@@ -113,7 +119,7 @@ export function buildCheckFailurePrompt(input: {
     output,
     '```',
     '',
-    'The bot stays silent while the check keeps failing and tells the topic when it passes again.',
+    input.isTracker === true ? checkKeepsFailingTrackerLine : checkKeepsFailingTopicLine,
     '',
     input.prompt,
   ].join('\n');

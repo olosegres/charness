@@ -54,23 +54,17 @@ describe('pickScheduledRunTarget', () => {
 describe('buildTrackerScheduledRunHeader', () => {
   const conversationLabel = 'Jira issue PROJ-12 (https://example.atlassian.net/browse/PROJ-12)';
 
-  it('an open request: its id, who it is from, answer only with a result, nothing shown on the issue', () => {
+  it('an open request: its id, answer only with a result, nothing shown on the issue', () => {
     const header = buildTrackerScheduledRunHeader({
       jobName: 'watch worker',
       conversationLabel,
       target: { kind: 'request', request: createRequest('req_Armed001') },
-      requesterLabel: 'Ann',
     });
     assert.equal(
       header,
-      `[Scheduled run "watch worker" · ${conversationLabel} · request req_Armed001 is open (from: Ann)]\n` +
+      `[Scheduled run "watch worker" · ${conversationLabel} · request req_Armed001 is open]\n` +
         'Answer it through answer_request (requestId "req_Armed001") only when you have a result the requester needs. Nothing of this run is shown on the issue.\n',
     );
-  });
-
-  it('an open request of an unnamed requester has no "from"', () => {
-    const header = buildTrackerScheduledRunHeader({ jobName: 'job', conversationLabel, target: { kind: 'request', request: createRequest('req_Armed001') } });
-    assert.ok(header.startsWith(`[Scheduled run "job" · ${conversationLabel} · request req_Armed001 is open]\n`), header);
   });
 
   it('no request open: says so, names the finished one, an answer to it hands nothing back, cancel what served only it', () => {

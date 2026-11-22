@@ -51,7 +51,8 @@ describe('L8: which callers of the forward mark their prompt a carrier of the ac
   it('exactly the person\'s-request routes, the tracker / scheduler post and the plumbing that hands the flag on — no other caller of the forward', () => {
     assert.deepEqual(listEnclosingDeclarations('isAccountsNoteCarrier'), [
       // The routes that SET it: a person's message that opened a request (text, voice, label-less free text, a file, an album, /schedule,
-      // the one buffered behind a start) and a session post (a tracker's request or update, a scheduled run, a fired check's wake).
+      // the one buffered behind a start) and a session post (a tracker's request or update, a scheduled run, a fired check's wake — a
+      // tracker conversation's scheduled run has its own forward, `forwardTrackerScheduledRun`: it opens no request).
       'albumCollector',
       'bufferPromptDuringStartup',
       'cancelPendingQuestionAndForward',
@@ -62,6 +63,7 @@ describe('L8: which callers of the forward mark their prompt a carrier of the ac
       // The plumbing that carries it from the caller to the live forward, buffered or not.
       'forwardPromptToAgent',
       'forwardPromptToLiveAgent',
+      'forwardTrackerScheduledRun',
       'promptDeliveryDeps',
       'replayBufferedPrompts',
     ].sort());
@@ -86,9 +88,10 @@ describe('L8: which callers of the forward mark their prompt a carrier of the ac
     assert.match(getFunctionBody('replayBufferedPrompts'), /await forwardPromptToAgent\(key, adapter, heldText, undefined, \{ isPersonInput: true \}\);/);
   });
 
-  it('a tracker\'s post and a scheduled run share one session post that marks the carrier; the lost-work post overrides that forward and does not', () => {
+  it('a tracker\'s post and a topic\'s scheduled run share one session post that marks the carrier, a tracker conversation\'s scheduled run marks it the same way; the lost-work post overrides that forward and does not', () => {
     const postDeps = botSource.slice(botSource.indexOf('function createSessionPostDeps('), botSource.indexOf('function createSessionPostDeps(') + 3000);
     assert.match(postDeps, /startupPromptBuffer\.checkIsStarting\(conversationKey\), buffered\.settle, \{ isAccountsNoteCarrier: true \}\);/);
+    assert.match(getFunctionBody('forwardTrackerScheduledRun'), /startupPromptBuffer\.checkIsStarting\(conversationKey\), buffered\.settle, \{ isAccountsNoteCarrier: true \}\);/);
     assert.match(getFunctionBody('createLostWorkPostDeps'), /\.\.\.createSessionPostDeps\(\),\n\s*forwardPrompt: async \(conversationKey, text\) => \{/);
   });
 });

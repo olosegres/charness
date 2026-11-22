@@ -1,6 +1,6 @@
 import { keyToString, type SessionKey } from '../sessionKey';
 import type { RequestLedger } from './requestLedger';
-import type { RequestScheduleWait } from './scheduleWait';
+import { checkIsWaitingBetweenTurns, type RequestScheduleWait } from './scheduleWait';
 import type { OpenRequestState, RequestAlertReason, RequestAnswerKind } from './types';
 import { getWakeUpMessage, type WakeUpMessage } from './requestHeader';
 import {
@@ -86,6 +86,8 @@ export interface RequestWakeUpEngineDeps {
   pollIntervalMs?: number;
   /** The first retry of a prompt that could not be posted; absent: `postRetryDelaysMs[0]` (a test instance shortens it). */
   firstPostRetryDelayMs?: number;
+  /** How long after a progress note the agent is reminded; absent: {@link progressFollowUpDelayMs} (a test instance shortens it). */
+  progressFollowUpMs?: number;
   /** The gap between two `restarted` wakes, and before the first; absent: {@link restartWakeStaggerMs} (a test instance shortens it). */
   restartWakeStaggerMs?: number;
   /** A `restarted` wake reached the conversation's session (the bot keeps the stamp its crash-loop guard reads). */
@@ -169,11 +171,15 @@ export class RequestWakeUpEngine {
    * process that died with its own work pending): wake them `restarted`, a stagger after the last wake scheduled so,
    * instead of at the backstop. One wake per conversation at a time — a second call while one waits changes nothing.
    * Whether the requests still need it is decided when it is due (`decideRestartWake`). Returns `false` when one
-   * was already waiting. The timer is unref'd: it never keeps the process alive.
+   * was already waiting, or when every open request waits for a watch that is not failing (`scheduleWait`: a restart wakes nobody
+   * then, as in a topic). The timer is unref'd: it never keeps the process alive.
    */
   scheduleRestartWake(key: SessionKey): boolean {
     const conversationKey = keyToString(key);
     if (this.restartWakeTimers.has(conversationKey)) return false;
+    // Every open request waits for a watch that is not failing: nobody is woken, and no stagger slot is spent on it.
+    const openRequests = this.deps.ledger.listOpenRequestsOf(key);
+    if (openRequests.length > 0 && openRequests.every((request) => checkIsWaitingBetweenTurns(this.getScheduleWait(key, request)))) return false;
     const staggerMs = this.deps.restartWakeStaggerMs ?? restartWakeStaggerMs;
     const dueAt = Math.max(this.now(), this.lastRestartWakeDueAt) + staggerMs;
     this.lastRestartWakeDueAt = dueAt;
@@ -435,6 +441,7 @@ export class RequestWakeUpEngine {
       decideTurnEnd(request, turn.progressCountAtTurnStart, this.now(), {
         isScheduledRun: turn.isScheduledRun === true,
         scheduleWait: this.getScheduleWait(turn.key, request),
+        progressFollowUpMs: this.deps.progressFollowUpMs,
       }),
     );
   }

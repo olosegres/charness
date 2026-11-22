@@ -134,6 +134,8 @@ function getWakeOrCapDecision(
 export interface TurnEndContext {
   isScheduledRun?: boolean;
   scheduleWait?: RequestScheduleWait;
+  /** The follow-up delay after a progress note, in place of {@link progressFollowUpDelayMs} (a test instance's shorter one). */
+  progressFollowUpMs?: number;
 }
 
 /**
@@ -156,7 +158,7 @@ export function decideTurnEnd(
   if (isProgressSent && !isWaitingForSchedule) {
     return {
       kind: 'followUpLater',
-      update: { silentTurnCount: 0, nextWakeAt: nowMs + progressFollowUpDelayMs, lastTurnActivityAt: nowMs },
+      update: { silentTurnCount: 0, nextWakeAt: nowMs + (context.progressFollowUpMs ?? progressFollowUpDelayMs), lastTurnActivityAt: nowMs },
     };
   }
   if (isProgressSent || isWaitingForSchedule || context.isScheduledRun === true) {

@@ -39,14 +39,12 @@ export function pickScheduledRunTarget(job: Pick<ScheduleRecord, 'requestId'>, o
 /**
  * @name TrackerScheduledRunHeaderInput
  * @description `conversationLabel` names where the agent is (`Jira issue PROJ-12 (<link>)`) — a fresh session, one a
- * failed resume started, learns it from here; `requesterLabel` is who the open request is from, when the connector can
- * say.
+ * failed resume started, learns it from here.
  */
 export interface TrackerScheduledRunHeaderInput {
   jobName: string;
   conversationLabel: string;
   target: ScheduledRunTarget;
-  requesterLabel?: string;
 }
 
 /** Said under every header: a fire writes nothing on the issue, so the agent speaks only with a result. */
@@ -63,8 +61,7 @@ export function buildTrackerScheduledRunHeader(input: TrackerScheduledRunHeaderI
   const lead = `[Scheduled run "${input.jobName}" · ${input.conversationLabel}`;
   const { target } = input;
   if (target.kind === 'request') {
-    const from = input.requesterLabel === undefined ? '' : ` (from: ${input.requesterLabel})`;
-    return `${lead} · request ${target.request.id} is open${from}]\n` +
+    return `${lead} · request ${target.request.id} is open]\n` +
       `Answer it through answer_request (requestId "${target.request.id}") only when you have a result the requester needs. ${nothingShownSentence}\n`;
   }
   if (target.finishedRequestId === undefined) {

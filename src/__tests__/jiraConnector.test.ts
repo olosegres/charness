@@ -361,6 +361,12 @@ describe('prepareJiraConnector', () => {
     assert.deepEqual(JiraContextLedger.createForDataDir(dataDir).getSnapshot('PROJ-1'), { generation: 1, sent: {} });
   });
 
+  it('a scheduled run\'s header names the issue and its link on the connector\'s site, whatever trailing slashes the config\'s URL has', async () => {
+    writeConfig();
+    connector = await prepare();
+    assert.equal(connector.describeConversation(makeJiraKey('PROJ-1')), `Jira issue PROJ-1 (${baseUrl}/browse/PROJ-1)`);
+  });
+
   it('C10: the attachment tool saves the issue\'s file under the conversation\'s files dir (jira/) and refuses any id the issue does not list', async () => {
     issueAttachments = [{ id: '10', filename: 'screen shot.png', mimeType: 'image/png', size: attachmentBytes.length }];
     writeConfig();
@@ -1058,6 +1064,25 @@ describe('bot.ts wires the Jira connector (J5)', () => {
     assert.match(ports, /^\.\.\.\(jiraConnector\s*\?\s*\{[\s\S]*?sendJiraFiles: \(threadKeyStr: string, request: OutboundFileRequest\) => \{\s*const key = keyFromString\(threadKeyStr\);\s*return getOutboundFor\(key\)\.deliverFile\(key, request\);\s*\},\s*\}\s*:\s*\{\}\),/);
     assert.match(botSource, /\['jira', createJiraConnectorOutbound\(\(\) => jiraFileSender\)\],/);
     assert.match(startBody, /if \(jiraConnector\) \{\s*jiraFileSender = \(key, request\) => jiraConnector\.sendFiles\(key, request\);/);
+  });
+
+  it('scheduled runs: a Jira issue\'s fires post nothing and ride its open request — the scheduler gets the connector\'s ports, the turn is watched as the request\'s scheduled run', () => {
+    const wiring = botSource.slice(botSource.indexOf('function wireScheduler('), botSource.indexOf('export async function startBot('));
+    assert.match(wiring, /trackerRun: \{\s*describeConversation: \(threadKeyStr: string\) => \{\s*const key = keyFromString\(threadKeyStr\);\s*return key\.platform === 'jira' \? jiraConnector\.describeConversation\(key\) : null;/);
+    assert.ok(wiring.includes('listOpenRequests: (threadKeyStr: string) => wiring.requestLedger.listOpenRequestsOf(keyFromString(threadKeyStr)),'));
+    assert.ok(wiring.includes('forwardRun: forwardTrackerScheduledRun,'));
+    assert.ok(wiring.includes('fallbackAdapterName: jiraConnector.adapterName,'), 'a session that cannot be resumed starts on the connector\'s backend');
+    const forward = botSource.slice(botSource.indexOf('async function forwardTrackerScheduledRun('), botSource.indexOf('function wireScheduler('));
+    const buffered = forward.indexOf('await deliverPromptOrBuffer(key, text, startupPromptBuffer.checkIsStarting(conversationKey)');
+    const track = forward.indexOf('await requestWakeUpEngine?.trackForwardedTurn(key, requestId, { isRequestPrompt: false, isScheduledRun: true });');
+    assert.ok(buffered > 0 && track > buffered, 'written first, then watched');
+    assert.ok(!forward.includes('openTopicRequest') && !forward.includes('createRequest'), 'a fire opens no request');
+  });
+
+  it('a request waits for its schedule: the wake-up engine reads the conversation\'s jobs when it decides, and a test instance may shorten the follow-up', () => {
+    assert.match(startBody, /getScheduleWait: \(key, request\) => getRequestScheduleWait\(state\.getThreadSchedules\(key\), request\),/);
+    assert.match(startBody, /progressFollowUpMs: ENV\.testTimings\.progressFollowUpMs,/);
+    assert.match(botSource, /getNewestOpenRequestId: \(threadKeyStr\) => \{\s*const key = tryKeyFromString\(threadKeyStr\);\s*return key === null \? undefined : wiring\.requestLedger\.getNewestOpenRequest\(key\)\?\.id;/);
   });
 
   it('C5: a Jira post is told whether its session is fresh — a fresh start or a failed resume\'s fallback start is, a running or resumed one is not', () => {

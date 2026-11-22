@@ -72,6 +72,7 @@ interface EngineTimings {
   firstPostRetryDelayMs?: number;
   restartWakeStaggerMs?: number;
   noteRestartWakeDelivered?: (key: SessionKey) => void;
+  progressFollowUpMs?: number;
   getScheduleWait?: (key: SessionKey, request: OpenRequestState) => RequestScheduleWait;
 }
 
@@ -1411,6 +1412,36 @@ describe('a request waits for its schedule', () => {
     probe = { isActive: true, isBusy: false, hasUnconsumedInput: false, isTurnEndBlocked: false };
     await engine.sweepUnwatchedRequests();
     assert.deepEqual(wakeUps, []);
+  });
+
+  it('the boot\'s restart wake is not even scheduled for a conversation whose every request a watch holds — it spends no stagger slot; one with an unheld request still is', async () => {
+    const ledger = await createLedger();
+    const heldKey = makeJiraKey('PROJ-1');
+    const mixedKey = makeJiraKey('PROJ-2');
+    const held = await ledger.createRequest(heldKey, { ...handOver, attributes: { ...handOver.attributes, issueKey: 'PROJ-1' } });
+    const mixedHeld = await ledger.createRequest(mixedKey, { ...handOver, attributes: { ...handOver.attributes, issueKey: 'PROJ-2', requester: 'ann' } });
+    await ledger.createRequest(mixedKey, { ...handOver, attributes: { ...handOver.attributes, issueKey: 'PROJ-2', requester: 'bob' } });
+    const engine = createEngine(ledger, {
+      getScheduleWait: (_key, request) => (request.id === held.id || request.id === mixedHeld.id ? 'watching' : 'none'),
+    });
+    assert.equal(engine.scheduleRestartWake(heldKey), false, 'nothing to wake: no timer');
+    assert.equal(engine.scheduleRestartWake(mixedKey), true, 'bob\'s request is not held');
+    // The one scheduled wake takes the first stagger: a held conversation did not push it back.
+    assert.equal(engine.scheduleRestartWake(heldKey), false);
+    engine.stop();
+  });
+
+  it('a test instance\'s shorter follow-up delay is the one a progress note waits for', async () => {
+    const ledger = await createLedger();
+    const engine = createEngine(ledger, { progressFollowUpMs: 5_000 });
+    const request = await ledger.createRequest(issueKey, handOver);
+    await engine.trackForwardedTurn(issueKey, request.id);
+    await ledger.updateOpenRequest(request.id, (current) => ({ progressAnswerCount: current.progressAnswerCount + 1 }));
+    await endTurnSilently(engine);
+    assert.equal(ledger.getNewestOpenRequest(issueKey)?.nextWakeAt, nowMs + 5_000);
+    nowMs += 5_000;
+    await engine.sweepUnwatchedRequests();
+    assert.deepEqual(wakeUps, [{ requestId: request.id, reason: 'progressFollowUp' }]);
   });
 });
 

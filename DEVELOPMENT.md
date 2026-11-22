@@ -188,7 +188,7 @@ A flow does not wait out the production windows in real time: its env file sets 
 of named overrides (`src/testTimings.ts`: `telegramSendIntervalMs` — the global send pacer's 2 s, `telegramSendOperationDeadlineMs` — a send
 queue call's 30 s deadline, `jiraPollIntervalMs` —
 below the 10 s floor of `jira.json`, `requestTurnPollMs` — the wake-up engine's 10 s poll of the turns it watches,
-`requestSweepIntervalMs` and `requestFirstPostRetryDelayMs` — the wake-up engine's minutes, `requestRestartWakeStaggerMs` — the 30 s between the wakes of tracker requests whose process a boot found gone, `limitProbeDelayMs` — the two-minute probe of an unconfirmed usage limit, `stateSaveDebounceMs` — `state.json`'s
+`requestSweepIntervalMs`, `requestFirstPostRetryDelayMs` and `progressFollowUpMs` — the wake-up engine's minutes (its sweep, the first re-post retry, the 15 min before a progress note is followed up), `requestRestartWakeStaggerMs` — the 30 s between the wakes of tracker requests whose process a boot found gone, `limitProbeDelayMs` — the two-minute probe of an unconfirmed usage limit, `stateSaveDebounceMs` — `state.json`'s
 500 ms save debounce, `openCodeServerUpBudgetMs` — the OpenCode server's 60 s of retries, `backgroundHoldMaxMs` — the 6 h the
 agent's own pending work holds a json-stream process, `adoptedTailFirstReadMs` — the 300 ms from the boot's release of an
 adopted json-stream session to the first read of its output, `todoReminderPollMs` and `todoReminderIntervalMs` — the todo

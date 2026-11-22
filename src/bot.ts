@@ -444,11 +444,12 @@ import {
 } from './requests/limitWaitAnswer';
 import { formatLocalClockWithDateIfNotToday } from './utils/localClock';
 import { RequestWakeUpEngine } from './requests/wakeUpEngine';
+import { getRequestScheduleWait } from './requests/scheduleWait';
 import { checkIsWakingStopped, getRequestBackstopMs } from './requests/wakeUpRules';
 import { joinPromptsNotTakenIn, type WakeUpMessage } from './requests/requestHeader';
 import type { OpenRequestState, RequestAlertReason, RequestPromptOutcome } from './requests/types';
 import { getThreadKeysForDirectory } from './scheduler/directoryThreads';
-import { getRebindResumeAction } from './scheduler/rebindResume';
+import { resumeSchedulesPausedForUnbound, type RebindResumePorts } from './scheduler/rebindResume';
 import { clearCheckAlertPins, recordCheckStatusLine } from './scheduler/store';
 import { pauseSchedulesOnUnbind } from './scheduler/unbindPause';
 import type { DeliveryOutcome, FireContext, ScheduleRecord } from './scheduler/types';
@@ -7421,43 +7422,43 @@ async function pauseThreadSchedulesOnUnbind(key: SessionKey): Promise<number> {
 }
 
 /**
- * @description Resume the schedules paused for `'unbound'` on `key` when its
- * topic is rebound (S8): recompute each `nextRunAt` FROM NOW (no catch-up for a
- * deliberate pause), then either un-pause + re-arm, or — for a one-shot whose
- * instant already passed while unbound — drop the record (a past one-shot has no
- * future occurrence, so it cannot be resumed). Posts ONE notice with the resumed
- * count (only when > 0). Jobs paused for other reasons (none exist in v1) are
- * left alone.
+ * @description The scheduler's ports for resuming a conversation's unbound-paused jobs (`scheduler/rebindResume.ts`);
+ * `announceResumed` is the platform's way of saying so.
+ */
+function createRebindResumePorts(announceResumed: (count: number) => Promise<void>): RebindResumePorts {
+  return {
+    listThreadSchedules: (key) => state.getThreadSchedules(key),
+    removeSchedule: (jobId) => state.removeSchedule(jobId),
+    upsertSchedule: (record) => state.upsertSchedule(record),
+    armJob: (record) => schedulerEngine?.armJob(record),
+    disarmJob: (jobId) => schedulerEngine?.disarmJob(jobId),
+    announceResumed,
+    now: () => Date.now(),
+  };
+}
+
+/**
+ * @description Resume the schedules paused for `'unbound'` on `key` when its topic is rebound (S8), with ONE notice in the
+ * topic carrying the resumed count (`scheduler/rebindResume.ts`).
  */
 async function resumeThreadSchedulesOnRebind(key: SessionKey): Promise<void> {
-  const paused = state
-    .getThreadSchedules(key)
-    .filter((record) => record.isPaused && record.pauseReason === 'unbound');
-  if (paused.length === 0) return;
+  await resumeSchedulesPausedForUnbound(
+    createRebindResumePorts((count) => replyToThread(key, t('schedule.resumedRebind', { count })).then(() => undefined)),
+    key,
+  );
+}
 
-  const nowMs = Date.now();
-  let resumed = 0;
-  for (const record of paused) {
-    const action = getRebindResumeAction(record, nowMs);
-    if (action.kind === 'remove') {
-      await state.removeSchedule(record.id);
-      schedulerEngine?.disarmJob(record.id);
-      continue;
-    }
-    const updated: ScheduleRecord = {
-      ...record,
-      nextRunAt: action.nextRunAt,
-      updatedAt: new Date(nowMs).toISOString(),
-    };
-    delete updated.isPaused;
-    delete updated.pauseReason;
-    await state.upsertSchedule(updated);
-    schedulerEngine?.armJob(updated);
-    resumed += 1;
-  }
-  if (resumed > 0) {
-    await replyToThread(key, t('schedule.resumedRebind', { count: resumed }));
-  }
+/**
+ * @description Resume the jobs a tracker conversation's fire paused for a folder it could not use, once a request of the issue
+ * finds the folder usable again — what `/bind` does in a topic. The bot posts nothing on an issue: the resume is one log line.
+ */
+async function resumeTrackerSchedulesOnRebind(key: SessionKey): Promise<void> {
+  await resumeSchedulesPausedForUnbound(
+    createRebindResumePorts(async (count) => {
+      console.log(`[scheduler] ${count} job(s) of ${keyToString(key)} resumed: its folder is usable again`);
+    }),
+    key,
+  );
 }
 
 /**
@@ -15746,6 +15747,23 @@ function createSessionPostDeps(): PostToSessionDeps {
 }
 
 /**
+ * @description Write a scheduled run's prompt into a tracker conversation's session and watch the turn it starts as the
+ * scheduled run of the request it rides (`requestId`; `null` when none is open, so no turn is watched). Like a topic's fire
+ * it goes through the buffer-or-forward unit, but opens no request of its own: the open request owes the answer
+ * (`scheduler/trackerRun.ts`). A prompt that found no session starts no turn, so none is watched.
+ */
+async function forwardTrackerScheduledRun(conversationKey: string, text: string, requestId: string | null): Promise<void> {
+  const key = keyFromString(conversationKey);
+  const buffered = createBufferedOutcome();
+  const delivery = await deliverPromptOrBuffer(key, text, startupPromptBuffer.checkIsStarting(conversationKey), buffered.settle, { isAccountsNoteCarrier: true });
+  // A prompt that waited for the session's start counts only once it reached it: a replay whose write failed is a failed post.
+  if (delivery === 'buffered') await buffered.assertReplayed();
+  if (requestId !== null && delivery !== 'noSession') {
+    await requestWakeUpEngine?.trackForwardedTurn(key, requestId, { isRequestPrompt: false, isScheduledRun: true });
+  }
+}
+
+/**
  * @description Construct the scheduler stack (S8): run ledger → delivery (thin
  * lambdas over the bot's existing send/session functions) → timer engine
  * (assigned to the module-level {@link schedulerEngine}) → the bot-owned MCP
@@ -15813,6 +15831,20 @@ function wireScheduler(wiring: SchedulerWiringDeps): SchedulerMcpHandle {
       return decision.kind === 'proceed' ? readWorkerActivity(path.resolve(decision.workDir, runDir)) : null;
     },
     statusIntervalOverrideMs: ENV.testTimings.checkStatusIntervalMs,
+    // A Jira issue's fires post nothing there and ride the open request (`scheduler/trackerRun.ts`).
+    ...(jiraConnector
+      ? {
+        trackerRun: {
+          describeConversation: (threadKeyStr: string) => {
+            const key = keyFromString(threadKeyStr);
+            return key.platform === 'jira' ? jiraConnector.describeConversation(key) : null;
+          },
+          listOpenRequests: (threadKeyStr: string) => wiring.requestLedger.listOpenRequestsOf(keyFromString(threadKeyStr)),
+          forwardRun: forwardTrackerScheduledRun,
+          fallbackAdapterName: jiraConnector.adapterName,
+        },
+      }
+      : {}),
   });
 
   /**
@@ -15827,7 +15859,9 @@ function wireScheduler(wiring: SchedulerWiringDeps): SchedulerMcpHandle {
     if (outcome.status === 'failed' && outcome.error === unboundDeliveryError) {
       await state.setSchedulePaused(job.id, true, 'unbound');
       schedulerEngine?.disarmJob(job.id);
-      await withThreadLocale(key, () => replyToThread(key, t('schedule.pausedUnbound', { count: 1 }))).catch(() => {});
+      // The bot posts nothing on an issue: a tracker conversation's pause is a log line, and its jobs resume with its next usable bind.
+      if (checkIsTelegramKey(key)) await withThreadLocale(key, () => replyToThread(key, t('schedule.pausedUnbound', { count: 1 }))).catch(() => {});
+      else console.log(`[scheduler] job ${job.id} of ${job.threadKey} paused: its folder is not usable; it resumes when a request finds the folder usable again`);
     }
     return outcome;
   };
@@ -16170,6 +16204,10 @@ function createJiraSessionDeps(requestLedger: RequestLedger, slots: TaskAgentSlo
     slots,
     bindConversation: async (key, folder) => {
       if (state.getBinding(key)?.subdir !== folder) await state.setBinding(key, folder);
+      // A fire that found no usable folder paused its job; a request that finds it usable resumes it, as `/bind` does in a topic.
+      if (resolveBoundWorkDir(ENV.workRoot, state.getBinding(key)).kind === 'proceed') {
+        await resumeTrackerSchedulesOnRebind(key).catch((e) => console.warn(`[scheduler] resume-on-rebind failed for ${keyToString(key)}:`, e));
+      }
     },
     createRequest: (key, origin, createPrompt) => requestLedger.createRequest(key, origin, { createPrompt }),
     listOpenRequests: (key) => requestLedger.listOpenRequestsOf(key),
@@ -16320,6 +16358,9 @@ export async function startBot(): Promise<void> {
     pollIntervalMs: ENV.testTimings.requestTurnPollMs,
     sweepIntervalMs: ENV.testTimings.requestSweepIntervalMs,
     firstPostRetryDelayMs: ENV.testTimings.requestFirstPostRetryDelayMs,
+    progressFollowUpMs: ENV.testTimings.progressFollowUpMs,
+    // A request waits for its schedule while a job armed under it counts (`requests/scheduleWait.ts`): read when a decision is made.
+    getScheduleWait: (key, request) => getRequestScheduleWait(state.getThreadSchedules(key), request),
     // Only a Telegram topic in the answers-only view hides the stream from someone who expects to see the work.
     checkIsAnswerTailWatched: (key) => checkIsTelegramKey(key) && !checkIsStreamShown(state.getDisplayPrefs(key).view),
     remindAnswerTail,
