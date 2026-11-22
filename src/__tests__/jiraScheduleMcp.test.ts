@@ -195,6 +195,8 @@ describe('the schedule tools of a Jira issue: their shape and their words', () =
     assert.ok(description.includes(`cron \`${workerWatchCheckCron}\``));
     assert.ok(description.includes(`\`${workerWatchStatusArguments}\``));
     assert.match(description, /Never `kill -0` alone/);
+    assert.ok(description.includes('asleep or not; while a turn runs it waits up to 10 minutes for it to end, then joins it.'), 'a comment waits for a running turn');
+    assert.ok(!description.includes('does not wait for your turn to end'));
     assert.ok(description.includes('(or when the header says the request still owes the requester an answer)'), 'a fire on an owed request is no quiet one');
     assert.match(description, /answer_request "progress" and END your turn/);
     assert.match(description, /2 h 30 min without a report/);

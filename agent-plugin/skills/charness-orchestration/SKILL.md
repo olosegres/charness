@@ -129,7 +129,8 @@ arguments only mark it as a worker watch.
 - After the launch and the armed check, answer `answer_request` kind `progress` (what you launched, where, what you wait for),
   then END your turn. Do not poll the worker. The bot stops your idle process; when the check fails (the worker finished, went
   silent, or ran 2 h 30 min without a report) it resumes you in THIS issue, behind a header that names the request open then. A
-  new comment on the issue reaches you at the bot's next poll of the issue, asleep or not — it does not wait for your turn to end.
+  new comment on the issue reaches you at the bot's next poll of the issue, asleep or not; while a turn runs it waits up to 10 minutes
+  for it to end, then joins it.
 - At a wake read the worker's result and decide as above. Answer the request the header names (`answer_request` with that id)
   only with a result the requester needs — a milestone, the final answer. A wake you handled with nothing to report ends
   silently: no comment, no "still waiting". The exception is a header that says the request still owes the requester an answer

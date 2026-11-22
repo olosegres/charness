@@ -130,7 +130,7 @@ const jiraWording: ScheduleToolWording = {
     'arm no schedule of your own for status. One check per worker run; schedule_cancel it once its wake is handled. ' +
     'Once the watch is armed, answer_request "progress" and END your turn — do not poll the worker: the bot stops your idle process and the ' +
     `failure wakes you in this issue when the worker finished, went silent, or ran ${workerWatchUnreportedWindowText} without a report. ` +
-    'A new comment on the issue reaches you at the bot\'s next poll of the issue, asleep or not — it does not wait for your turn to end. ' +
+    'A new comment on the issue reaches you at the bot\'s next poll of the issue, asleep or not; while a turn runs it waits up to 10 minutes for it to end, then joins it. ' +
     'A watchdog meant to OUTLIVE the work (a health check, a daily job) is armed, and then the request is answered `final`: the job keeps ' +
     'running and its fires say «no request is open», or ride the request open at the time (a later hand-over, a mention: answer that ' +
     'request only with what its requester must know, not about the job). Left armed under a request that stays open, it would keep that request waiting ' +
