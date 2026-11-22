@@ -158,6 +158,9 @@ describe('pickRequestToArmUnder — the request a new job is armed under', () =>
     const both = [handOver.id, mention.id];
     assert.equal(pickRequestToArmUnder([handOver, mention], both, [handOver.id]), handOver.id, 'a «continue» watched both, the hand-over\'s own forward started its watch');
     assert.equal(pickRequestToArmUnder([handOver, mention], both, [mention.id]), mention.id, 'the agent works on the mention: its own forward');
+    // Both requests have a watch a forward of their own started: the OLDEST (the list is oldest first) started the running turn.
+    assert.equal(pickRequestToArmUnder([handOver, mention], both, [mention.id, handOver.id]), mention.id, 'the mention started the turn, the hand-over\'s comment joined it');
+    assert.equal(pickRequestToArmUnder([handOver, mention], both, [handOver.id, mention.id]), handOver.id, 'the hand-over started the turn, the mention joined it');
     assert.equal(pickRequestToArmUnder([handOver, mention], both, []), handOver.id, 'a restart wake watched both: the hand-over before the newer mention');
     assert.equal(pickRequestToArmUnder([handOver, mention], [], []), handOver.id, 'nothing watched: the hand-over before the newer mention');
     assert.equal(pickRequestToArmUnder([mention, handOver], both, []), handOver.id, 'whatever the order');

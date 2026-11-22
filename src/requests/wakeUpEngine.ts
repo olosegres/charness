@@ -117,6 +117,12 @@ interface WatchedRequestTurn extends WatchedTurn {
    * request, which says nothing about the one the agent is working on. A merge keeps `true` if either side was.
    */
   isOwnForward: boolean;
+  /**
+   * When the own forward that started this watch came (a merge keeps the earlier one; absent without one). The watches present all
+   * belong to the session's current busy period — they end with their turn — so the OLDEST own-forward watch is the request whose
+   * forward started the running turn: what the agent works on, whoever's words or fire joined it later.
+   */
+  ownForwardStartedAt?: number;
 }
 
 interface WatchedAnswerTail {
@@ -278,9 +284,15 @@ export class RequestWakeUpEngine {
     return this.getWatchedTurnsOf(key).map((turn) => turn.requestId);
   }
 
-  /** The watched requests of `key`'s conversation whose watch a forward of their OWN started (not a conversation-wide nudge). */
+  /**
+   * The watched requests of `key`'s conversation whose watch a forward of their OWN started (not a conversation-wide nudge), the
+   * oldest own forward first: the first is the request whose forward started the running turn.
+   */
   getOwnForwardWatchedRequestIdsOf(key: SessionKey): string[] {
-    return this.getWatchedTurnsOf(key).filter((turn) => turn.isOwnForward).map((turn) => turn.requestId);
+    return this.getWatchedTurnsOf(key)
+      .filter((turn) => turn.isOwnForward)
+      .sort((first, second) => (first.ownForwardStartedAt ?? 0) - (second.ownForwardStartedAt ?? 0))
+      .map((turn) => turn.requestId);
   }
 
   /**
@@ -327,6 +339,8 @@ export class RequestWakeUpEngine {
     const carriesPersonWords = options.isRequestPrompt || options.isPersonInput === true;
     // A person's words that reach the agent — not a fire's prompt, not an alarm request's.
     const isPersonWordsForward = carriesPersonWords && !isFireForward && !isAlarmRequest;
+    const isOwnForward = options.isConversationForward !== true || previous?.isOwnForward === true;
+    const ownForwardStartedAt = previous?.ownForwardStartedAt ?? (isOwnForward ? this.now() : undefined);
     const isScheduledRun = previous === undefined
       ? isFireForward || isAlarmRequest
       : previous.isScheduledRun === true && (isFireForward || isAlarmRequest || (options.isContinuation === true && !carriesPersonWords));
@@ -342,7 +356,8 @@ export class RequestWakeUpEngine {
       hasSeenOutput: false,
       isRequestPrompt: options.isRequestPrompt || previous?.isRequestPrompt === true,
       isScheduledRun,
-      isOwnForward: options.isConversationForward !== true || previous?.isOwnForward === true,
+      isOwnForward,
+      ...(ownForwardStartedAt === undefined ? {} : { ownForwardStartedAt }),
     });
     const isMoot = request.nextPostRetryAt !== undefined && !isFireForward;
     const isPersonWordsOwed = isPersonWordsForward && request.isPersonInputUnanswered !== true;

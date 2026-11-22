@@ -89,11 +89,12 @@ export function checkIsHeldBetweenTurns(
 /**
  * @description The request a job `schedule_create` arms now is armed under — the one the agent is WORKING ON, which is what must
  * wait for the job. Tiers, the first that has a request wins: a request whose turn the engine watches because a forward of its OWN
- * started the watch (`ownForwardRequestIds`: its prompt, an update, a fire riding it, a reminder for it); a request whose turn is
- * watched only because a conversation-wide forward carried it along (a «continue» nudge, a restart wake — those watch EVERY open
- * request, which says nothing about the one the agent works on); the open requests. Inside a tier the newest wins, a tracker
- * HAND-OVER (`trackerEvent`) before a mention (`trackerMention`): a mention hands nothing over and long work belongs to the
- * hand-over. A request a scheduler fire opened (`scheduledRun`: a Telegram topic's) is passed over for any other. A fire opens such a
+ * started the watch (`ownForwardRequestIds`, OLDEST first: its prompt, an update, a fire riding it, a reminder for it) — the first is
+ * the request whose forward STARTED the running turn, which is what the agent works on, whoever's words or fire joined the turn later;
+ * a request whose turn is watched only because a conversation-wide forward carried it along (a «continue» nudge, a restart wake —
+ * those watch EVERY open request, which says nothing about the one the agent works on); the open requests. Inside those last two
+ * tiers the newest wins, a tracker HAND-OVER (`trackerEvent`) before a mention (`trackerMention`): a mention hands nothing over and
+ * long work belongs to the hand-over. A request a scheduler fire opened (`scheduledRun`: a Telegram topic's) is passed over for any other. A fire opens such a
  * request and the agent often re-arms in its turn (the next worker, a new watch beside the cancelled one): armed under it, the watch
  * would pass to the scheduler's own chain of requests and leave the operator's request waiting for nothing. `undefined` when no
  * request is open (a topic's stream view has none). `openRequests` is oldest first, as `RequestLedger.listOpenRequestsOf` returns
@@ -108,9 +109,8 @@ export function pickRequestToArmUnder(
   const getNewestPreferringHandOver = (requests: readonly OpenRequestState[]): OpenRequestState | undefined =>
     requests.filter((request) => request.origin.kind === 'trackerEvent').at(-1) ?? requests.at(-1);
   const workRequests = openRequests.filter(isWorkRequest);
-  const ownForward = workRequests.filter((request) => ownForwardRequestIds.includes(request.id));
   const watched = workRequests.filter((request) => watchedRequestIds.includes(request.id));
-  return (
-    getNewestPreferringHandOver(ownForward) ?? getNewestPreferringHandOver(watched) ?? getNewestPreferringHandOver(workRequests) ?? openRequests.at(-1)
-  )?.id;
+  // The starter of the running turn: the first own-forward id (the engine lists them oldest first) that is an open work request.
+  const turnStarter = ownForwardRequestIds.map((id) => workRequests.find((request) => request.id === id)).find((request) => request !== undefined);
+  return (turnStarter ?? getNewestPreferringHandOver(watched) ?? getNewestPreferringHandOver(workRequests) ?? openRequests.at(-1))?.id;
 }

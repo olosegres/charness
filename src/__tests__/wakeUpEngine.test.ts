@@ -1846,6 +1846,41 @@ describe('a request waits for its schedule', () => {
     assert.equal(engine.getArmingRequestIdOf(issueKey), handOverOfAnn.id, 'the job waits for the request the agent works on');
   });
 
+  it('the job goes to the request whose own forward STARTED the turn, whoever\'s words or fire joined it later — a mention\'s turn is not taken over by the hand-over\'s comment', async () => {
+    const ledger = await createLedger();
+    const engine = createEngine(ledger, { getScheduleWait: () => 'watching' });
+    const handOverOfAnn = await ledger.createRequest(issueKey, handOver);
+    const mentionOfBob = await ledger.createRequest(issueKey, { kind: 'trackerMention', attributes: { ...handOver.attributes, requester: 'bob' } });
+    await ledger.updateOpenRequest(handOverOfAnn.id, { progressAnswerCount: 1 });
+
+    // Bob's mention starts a turn; ann's comment on the hand-over is forwarded into it a few minutes later.
+    await engine.trackForwardedTurn(issueKey, mentionOfBob.id, { isRequestPrompt: true });
+    nowMs += 5 * 60 * 1000;
+    await engine.trackForwardedTurn(issueKey, handOverOfAnn.id, { isRequestPrompt: false, isPersonInput: true });
+    assert.deepEqual(engine.getOwnForwardWatchedRequestIdsOf(issueKey), [mentionOfBob.id, handOverOfAnn.id], 'both are own forwards, the oldest first');
+    assert.equal(engine.getArmingRequestIdOf(issueKey), mentionOfBob.id, 'the agent works on bob\'s request: the benchmark\'s watch is its');
+
+    // A recurring job riding the hand-over joins the turn the same way, and a merge keeps the earlier start.
+    nowMs += 5 * 60 * 1000;
+    await engine.trackForwardedTurn(issueKey, handOverOfAnn.id, { isRequestPrompt: false, isScheduledRun: true });
+    assert.deepEqual(engine.getOwnForwardWatchedRequestIdsOf(issueKey), [mentionOfBob.id, handOverOfAnn.id]);
+    assert.equal(engine.getArmingRequestIdOf(issueKey), mentionOfBob.id);
+  });
+
+  it('the reverse case: the hand-over\'s turn, a mention joining it — the job stays the hand-over\'s, and a merge never moves a watch\'s start', async () => {
+    const ledger = await createLedger();
+    const engine = createEngine(ledger, { getScheduleWait: () => 'watching' });
+    const handOverOfAnn = await ledger.createRequest(issueKey, handOver);
+    const mentionOfBob = await ledger.createRequest(issueKey, { kind: 'trackerMention', attributes: { ...handOver.attributes, requester: 'bob' } });
+    await engine.trackForwardedTurn(issueKey, handOverOfAnn.id, { isRequestPrompt: true });
+    nowMs += 60 * 1000;
+    await engine.trackForwardedTurn(issueKey, mentionOfBob.id, { isRequestPrompt: true });
+    nowMs += 60 * 1000;
+    await engine.trackForwardedTurn(issueKey, handOverOfAnn.id, { isRequestPrompt: false, isPersonInput: true });
+    assert.deepEqual(engine.getOwnForwardWatchedRequestIdsOf(issueKey), [handOverOfAnn.id, mentionOfBob.id]);
+    assert.equal(engine.getArmingRequestIdOf(issueKey), handOverOfAnn.id);
+  });
+
   it('a restart wake watches the hand-over and a mention together: the watch armed in that turn goes to the hand-over', async () => {
     const ledger = await createLedger();
     const engine = createEngine(ledger);
