@@ -227,6 +227,7 @@ import { postToIdleSession, postToSession, registerPostWaitWindows, type PostToS
 import { getLimitResumeMessage } from './utils/limitHeldPrompts';
 import { waitForAdoptedReplay } from './utils/adoptReplayGate';
 import { createTopicRequestSettler } from './requests/topicRequestSettle';
+import { createTrackerTurnPoster } from './requests/trackerTurnPoster';
 import { deliverLatePrompt, deliverPromptOrBuffer as deliverPromptWithDeps, type LatePromptOutcome, type LateWakeResult, type PromptDelivery, type PromptDeliveryDeps, type PromptDeliveryOptions } from './utils/promptDelivery';
 import { restoreApiRetryTimers, restoreFiredLimitProbes, runApiRetryKick, type ApiRetryKickDeps, type ApiRetryTimerEntry } from './apiRetryKick';
 import { LimitHeldPromptQueue } from './utils/limitHeldPromptQueue';
@@ -16212,27 +16213,14 @@ function createJiraSessionDeps(requestLedger: RequestLedger, slots: TaskAgentSlo
     },
     createRequest: (key, origin, createPrompt) => requestLedger.createRequest(key, origin, { createPrompt }),
     listOpenRequests: (key) => requestLedger.listOpenRequestsOf(key),
-    postRequest: async (key, requestId, prompt) => {
-      // A request is the issue's "user message" (L-D5): it clears the spent idle-compaction
-      // latch like a topic's message does, or the issue would never compact again.
-      notePersonActivity(key);
-      const posted = await postToSession(sessionPostDeps, keyToString(key), prompt, adapterName);
-      if (!posted.ok) {
-        // R28: retried at about 1, 5 and 15 min, outside the wake-up cap.
-        await requestWakeUpEngine?.notePostFailed(key, requestId);
-        throw new Error(posted.reason === 'forward-failed' ? posted.error : `session ${posted.reason}`);
-      }
-      // A held request is tracked when the wait's resume, or else its next wake-up, posts its prompt (R21).
-      if (!posted.isHeld) await requestWakeUpEngine?.trackForwardedTurn(key, requestId, { isRequestPrompt: true });
-    },
-    // An issue update (a comment for an open hand-over request) opens no request: the turn it starts is that request's.
-    postUpdate: async (key, prompt, getTargetRequestId) => {
-      notePersonActivity(key);
-      const posted = await postToSession(sessionPostDeps, keyToString(key), prompt, adapterName);
-      if (!posted.ok) throw new Error(posted.reason === 'forward-failed' ? posted.error : `session ${posted.reason}`);
-      // A requester's comment: a turn that carries a person's words, never quiet because a watch is armed.
-      if (!posted.isHeld) await requestWakeUpEngine?.trackForwardedTurn(key, getTargetRequestId(), { isRequestPrompt: false, isPersonInput: true });
-    },
+    // A request is the issue's "user message" (L-D5): posting it clears the spent idle-compaction latch like a topic's message
+    // does, or the issue would never compact again. An issue update (a comment for an open hand-over request) opens no request:
+    // the turn it starts is that request's.
+    ...createTrackerTurnPoster({
+      post: (key, prompt) => postToSession(sessionPostDeps, keyToString(key), prompt, adapterName),
+      notePersonActivity,
+      getEngine: () => requestWakeUpEngine,
+    }),
   };
 }
 

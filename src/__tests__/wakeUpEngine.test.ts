@@ -1673,6 +1673,35 @@ describe('a request waits for its schedule', () => {
     assert.deepEqual(alerts, [{ requestId: request.id, reason: 'silentTurns' }]);
   });
 
+  it('a requester\'s comment held over a usage-limit wait is owed from the moment it is held: after a restart the wait\'s «continue» that carries it ends silent, not quiet under a watch', async () => {
+    const ledger = await createLedger();
+    const before = createEngine(ledger, { getScheduleWait: () => 'watching' });
+    const request = await ledger.createRequest(issueKey, handOver);
+    await ledger.updateOpenRequest(request.id, { progressAnswerCount: 1 });
+    await before.notePersonInputHeld(issueKey, request.id);
+    assert.equal(ledger.getNewestOpenRequest(issueKey)?.isPersonInputUnanswered, true);
+    before.stop();
+
+    const restarted = createEngine(ledger, { getScheduleWait: () => 'watching' });
+    await restarted.trackContinuationTurn(issueKey, { isCountersReset: true });
+    await endTurnSilently(restarted);
+    assert.deepEqual(wakeUps, [{ requestId: request.id, reason: 'silentTurn' }]);
+    await endTurnSilently(restarted);
+    assert.deepEqual(alerts, [{ requestId: request.id, reason: 'silentTurns' }], 'the chain gives up as ever');
+  });
+
+  it('a held comment marks only an open request of that conversation that does not owe it already, and never a scheduler fire\'s own request', async () => {
+    const ledger = await createLedger();
+    const engine = createEngine(ledger);
+    const fireRequest = await ledger.createRequest(topicKey, { kind: 'scheduledRun', attributes: { requester: 'scheduler' } });
+    await engine.notePersonInputHeld(topicKey, fireRequest.id);
+    assert.equal(ledger.getNewestOpenRequest(topicKey)?.isPersonInputUnanswered, undefined, 'the alarm\'s request owes nobody');
+    const request = await ledger.createRequest(issueKey, handOver);
+    await engine.notePersonInputHeld(topicKey, request.id);
+    assert.equal(ledger.getNewestOpenRequest(issueKey)?.isPersonInputUnanswered, undefined, 'another conversation\'s request is not touched');
+    await engine.notePersonInputHeld(issueKey, 'req_gone0001');
+  });
+
   it('the end of a limit wait zeroes the counters but never the person\'s unanswered words: what was owed stays owed', async () => {
     const ledger = await createLedger();
     const engine = createEngine(ledger, { getScheduleWait: () => 'watching' });

@@ -314,6 +314,19 @@ export class RequestWakeUpEngine {
   }
 
   /**
+   * @description A person's words for the request were HELD — an armed usage-limit wait keeps them back, and they reach the agent
+   * only inside whatever prompt the wait's end forwards first (a «continue», a scheduled run, the operator's next message). No
+   * turn starts for them now, so nothing is tracked, but the request owes an answer from this moment: persisted, so the turn
+   * that finally carries the words — under any watch, or none after a restart during the wait — is read against it
+   * (`checkIsAnswerOwed`). A request that owes it already, and a scheduler fire's own request, are left as they are.
+   */
+  async notePersonInputHeld(key: SessionKey, requestId: string): Promise<void> {
+    const request = this.getOpenRequestOf(key, requestId);
+    if (!request || request.isPersonInputUnanswered === true || request.origin.kind === 'scheduledRun') return;
+    await this.deps.ledger.updateOpenRequest(request.id, { isPersonInputUnanswered: true });
+  }
+
+  /**
    * @description The request's prompt could not be posted to the session (no
    * session came up, the forward failed): try again soon (R28). Once the retries
    * are spent nothing is scheduled — the backstop and its alert take over. Never
