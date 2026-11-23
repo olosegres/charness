@@ -438,6 +438,12 @@ describe('a startup window\'s prompts on every way out of it (review 19 #1)', ()
     assert.match(getBody('function runCommandSessionTransition<TResult>(', 'async function waitForPendingRespawn('), /await waitForPendingRespawn\(key\);\n\s*return transition\(\);/, 'the command\'s start or resume too');
   });
 
+  it('the wake a /model, /effort or /compact makes goes through the queue whenever the conversation has an id: a stop under way is waited for and the conversation resumed after it, so a model pick is never refused as «no agent» in the seconds after a per-turn answer (review 23 nit 3)', () => {
+    const wake = getBody('async function wakeSleepingSession(', 'async function suspendThreadSession(');
+    assert.match(wake, /if \(getResumableSessionId\(key\) === null\) return null;\n(?:\s*\/\/[^\n]*\n)*\s*return \(await ensureAgentSession\(key\)\)\.message;/);
+    assert.doesNotMatch(wake.slice(wake.indexOf('async function wakeSleepingSession(')), /\.checkIsActive\(key\)/, 'a process that still looks live while it is stopped is no reason to skip the queue');
+  });
+
   it('the stop\'s transition waits for a json-stream re-spawn first, and no way out of a stop leaves its held prompts in a closed buffer: a conversation already live gets them replayed (review 22 #1 b, c)', () => {
     const stop = getBody('async function suspendThreadSession(', 'async function resumeForHeldPrompts(');
     const transition = stop.slice(stop.indexOf('await sessionTransitions.run(kStr, async () => {'));

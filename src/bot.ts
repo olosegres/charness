@@ -6267,12 +6267,16 @@ async function resumeSleepingSession(
 
 /**
  * @description A command that needs a live agent (`/compact`, `/model`, `/effort`)
- * on a topic whose session sleeps: wake it first. Returns the notice to post
- * (only when the resume failed and a fresh session took its place), `''` when
- * nothing was said, `null` when there was nothing to wake.
+ * on a topic whose session sleeps, or is being stopped: wake it first, through the
+ * conversation's queue. Returns the notice to post (only when the resume failed and
+ * a fresh session took its place), `''` when nothing was said (a live session too),
+ * `null` when there is no conversation to wake.
  */
 async function wakeSleepingSession(key: SessionKey): Promise<string | null> {
-  if (getThreadAdapter(key).checkIsActive(key) || getResumableSessionId(key) === null) return null;
+  if (getResumableSessionId(key) === null) return null;
+  // Through the queue even when the process still looks live: a stop under way (the seconds after every per-turn answer) is waited for
+  // and the conversation resumed after it, so the pick that follows applies to the resumed process; a live one is `ready` at once
+  // (review 23 nit 3).
   return (await ensureAgentSession(key)).message;
 }
 
