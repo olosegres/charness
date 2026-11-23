@@ -176,22 +176,12 @@ describe('deliverPromptOrBuffer', () => {
     assert.deepEqual(reported, [[false, { isPersonInput: true }]]);
   });
 
-  it('a buffer that refuses the prompt (its window closed between the read and the add) routes it again at once: it is forwarded, never lost', async () => {
-    let windowReads = 0;
-    const refusingBuffer: PromptDeliveryDeps['startupBuffer'] = {
-      // Open at the first read only: the window closes right after it.
-      checkIsStarting: () => {
-        windowReads += 1;
-        return windowReads === 1;
-      },
-      addPrompt: () => 'refused',
-    };
+  it('a buffer that refuses a prompt in the tick its window read open is a bug: the delivery throws instead of losing the prompt without a word (review 20 nit 5)', async () => {
+    const refusingBuffer: PromptDeliveryDeps['startupBuffer'] = { checkIsStarting: () => true, addPrompt: () => 'refused' };
 
-    const delivery = await deliverPromptOrBuffer({ ...deps, startupBuffer: refusingBuffer }, topicKey, 'hello');
-
-    assert.equal(delivery, 'forwarded');
-    assert.deepEqual(forwarded, [{ key: topicKey, text: 'hello' }]);
-    assert.deepEqual(announced, [], 'nothing was queued, so nothing is announced');
+    await assert.rejects(deliverPromptOrBuffer({ ...deps, startupBuffer: refusingBuffer }, topicKey, 'hello'), /refused a prompt in the tick its window read open/);
+    assert.deepEqual(forwarded, []);
+    assert.deepEqual(announced, []);
   });
 
   it('a first buffered prompt resolves `buffered` without waiting for its «queued» notice: its caller watches the turn before any replay can write the prompt (review 20 #2)', async () => {

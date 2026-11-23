@@ -57,8 +57,8 @@ export type PromptDelivery = 'forwarded' | 'buffered' | 'noSession';
  * `bot.ts`), a scheduled run, a tracker's post, the lost-work post, a retry's «continue», a move's first prompt.
  *
  * Nothing a caller read before an await decides it: a window that closed during the caller's awaits (its request opened, a file
- * downloaded) never takes the prompt — the buffer refuses a closed window ({@link StartupPromptBuffer.addPrompt}), so a refused prompt
- * is routed again, here, at once.
+ * downloaded) never takes the prompt. The buffer is read and added to in the same tick, so it never refuses a prompt here
+ * ({@link StartupPromptBuffer.addPrompt} refuses a closed window); a refusal would be a bug and throws.
  *
  * The "queued while starting" notice is posted once per startup window, and only
  * for a Telegram conversation: a tracker issue has no topic to say it in (R6). It is
@@ -83,15 +83,14 @@ export async function deliverPromptOrBuffer(
 ): Promise<PromptDelivery> {
   const threadId = keyToString(key);
   let isBuffered = false;
-  let isRefused = false;
-  const route = (isWindowClosed: boolean): Promise<LatePromptOutcome> => deliverLatePrompt({
-    checkIsWindowOpen: () => !isWindowClosed && deps.startupBuffer.checkIsStarting(threadId),
+  const outcome = await deliverLatePrompt({
+    checkIsWindowOpen: () => deps.startupBuffer.checkIsStarting(threadId),
     checkIsSessionActive: () => deps.checkIsSessionActive(key),
     buffer: async () => {
-      // Called in the tick the window was read open, so it is not refused; a refusal is routed again below all the same.
+      // Called in the tick the window was read open (`deliverLatePrompt` awaits nothing between), so it cannot be refused.
       const added = deps.startupBuffer.addPrompt(threadId, text, onBufferedSettled, options);
-      isRefused = added === 'refused';
-      isBuffered = !isRefused;
+      if (added === 'refused') throw new Error(`[promptDelivery] the startup buffer of ${threadId} refused a prompt in the tick its window read open`);
+      isBuffered = true;
       if (added !== 'firstInWindow' || !checkIsTelegramKey(key)) return;
       // The prompt IS buffered by now (and its settle callback registered), so a notice that fails must not read as a delivery
       // that failed: a caller keeping something until the prompt reached a session would otherwise treat it as spent.
@@ -101,9 +100,6 @@ export async function deliverPromptOrBuffer(
     forward: () => deps.forwardPrompt(key, text, options),
     reportNoSession: (isAlreadyTold) => deps.reportNoSession(key, isAlreadyTold, options),
   });
-  let outcome = await route(false);
-  // A refused add says the window is closed now: routed again as such, once.
-  if (isRefused) outcome = await route(true);
   if (isBuffered) return 'buffered';
   // A forward that re-routed the prompt behind a stop window itself registered no `onBufferedSettled`: it reads as forwarded.
   return outcome === 'noSession' ? 'noSession' : 'forwarded';

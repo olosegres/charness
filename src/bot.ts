@@ -6510,7 +6510,8 @@ async function forwardPromptToLiveAgent(
   // Their reminders are delivered once persisted — after this write, which runs in this tick, or, while a post is on its way to its
   // write, after that post's prompt (the todo reminder written at a turn end is such a write).
   settleEndedTurnsAndHandOver(key);
-  // The replay of a start's buffer writes the prompts that waited in it into this process (`noteReplayedWrite`); no other write does.
+  // Any write during the replay of a start's buffer — a replayed prompt, the held prompts after them, a prompt written at once while it
+  // runs — goes to the process the replay writes the buffer into (`noteReplayedWrite`); no write outside a replay names anything.
   if (startupPromptBuffer.checkIsReplaying(keyToString(key))) requestWakeUpEngine?.noteReplayedWrite(key);
   // A forwarded prompt is thread activity — reset the compact-on-idle watchdog (F2).
   noteThreadActivity(key);
@@ -12840,15 +12841,6 @@ function deliverPersonPromptAtWrite(
 }
 
 /**
- * @description Deliver a LATE ANSWER to the agent — what the owner chose for a question the bot set aside, worded by
- * `buildLateAnswerPrompt` — as a message of the owner's: written to a live session behind whatever it is doing, buffered behind a
- * start, or waking a sleeping conversation. Unlike {@link deliverActivePrompt} it is NOT free text for the question the agent may be
- * waiting on NOW (that one is a different question, and the owner has not answered it): it never cancels it and never aborts a
- * wedged turn. It cancels an armed usage-limit wait first, as typed text does. It carries no message context: the text is the bot's
- * block, and a topic member's answer says who gave it inside the answer itself (an author mark ahead of it would end at the block's
- * own header).
- */
-/**
  * @description The settle of a person's prompt that waits in a startup buffer. One its window's end DROPPED — the start failed, nothing
  * started after a failed resume, its replay's write threw — never reached the agent, and nothing else will post it: the request it
  * opened closes (`cancelled`, like a prompt that found no session; its watch goes with it) and the person, who was told it is queued, is
@@ -12869,6 +12861,15 @@ async function reportDroppedPersonPrompt(key: SessionKey, requestId: string | nu
   await replyToThread(key, t('agent.queued_prompt_dropped', { label: getThreadAdapter(key).label }));
 }
 
+/**
+ * @description Deliver a LATE ANSWER to the agent — what the owner chose for a question the bot set aside, worded by
+ * `buildLateAnswerPrompt` — as a message of the owner's: written to a live session behind whatever it is doing, buffered behind a
+ * start, or waking a sleeping conversation. Unlike {@link deliverActivePrompt} it is NOT free text for the question the agent may be
+ * waiting on NOW (that one is a different question, and the owner has not answered it): it never cancels it and never aborts a
+ * wedged turn. It cancels an armed usage-limit wait first, as typed text does. It carries no message context: the text is the bot's
+ * block, and a topic member's answer says who gave it inside the answer itself (an author mark ahead of it would end at the block's
+ * own header).
+ */
 async function deliverLateAnswerPrompt(key: SessionKey, text: string): Promise<LatePromptOutcome> {
   // The owner took over, like with any message they type: an armed usage-limit wait is over (the answer is not written INTO it, and its
   // own «continue» nudge would come on top of the answer later).

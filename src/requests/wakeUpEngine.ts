@@ -643,12 +643,14 @@ export class RequestWakeUpEngine {
   }
 
   /**
-   * @description The replay of a start's buffer writes into `key`'s live process now (the write choke point, right after its settle; the
-   * bot calls it only while `StartupPromptBuffer.checkIsReplaying`). A watch tracked while its prompt waited in that buffer names no process
-   * yet, and the replay took the whole buffer to write it into this process, so its prompt is in this one. Never called for any other
-   * write: a watch whose buffer was DROPPED stays unnamed — its prompt reached no process (`checkIsTurnInputConsumed`), and the request
-   * it opened is closed with the person told (`bot.ts`, the person's buffered prompt's settle). Synchronous; a session with no process
-   * named does nothing.
+   * @description A write into `key`'s live process during the replay of a start's buffer (the write choke point, right after its settle;
+   * the bot calls it at every write while `StartupPromptBuffer.checkIsReplaying`: a replayed prompt, the held prompts after them, a prompt
+   * written at once while the replay runs — all go to the process the replay writes into). A watch tracked while its prompt waited in that
+   * buffer names no process yet, and the replay took the whole buffer to write it into this process, so its prompt is in this one. Never
+   * called for a write outside a replay: a watch whose buffer was DROPPED stays unnamed — its prompt reached no process
+   * (`checkIsPromptNeverWritten`) — and the request it opened is closed with the person told (`bot.ts`, the person's buffered prompt's
+   * settle). Only a person's prompt is tracked before its replay: every bot-made caller watches its turn once its prompt reached a session
+   * (`src/requests/README.md`, the callers table). Synchronous; a session with no process named does nothing.
    */
   noteReplayedWrite(key: SessionKey): void {
     const { processGeneration } = this.deps.probeTurn(key);

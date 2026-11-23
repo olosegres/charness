@@ -734,10 +734,6 @@ function writeExitMetadata(sessionId: string): void {
   fs.appendFileSync(transcriptPath, entries.map((entry) => `${JSON.stringify(entry)}\n`).join(''));
 }
 
-/**
- * How long after a stop signal the exit flush runs: the content of {@link fakeClaudeExitFlushDelayFileName} while a test
- * keeps one, else `null` (no flush: the process dies at once).
- */
 /** How long a launch the fake refuses waits first ({@link fakeClaudeLaunchRefusalDelayFileName}); at once without the file. */
 async function waitBeforeRefusal(): Promise<void> {
   const delayPath = path.join(getStateDir(), fakeClaudeLaunchRefusalDelayFileName);
@@ -746,6 +742,10 @@ async function waitBeforeRefusal(): Promise<void> {
   await new Promise<void>((resolve) => setTimeout(resolve, delayMs));
 }
 
+/**
+ * How long after a stop signal the exit flush runs: the content of {@link fakeClaudeExitFlushDelayFileName} while a test
+ * keeps one, else `null` (no flush: the process dies at once).
+ */
 function getExitFlushDelayMs(): number | null {
   const delayPath = path.join(getStateDir(), fakeClaudeExitFlushDelayFileName);
   return fs.existsSync(delayPath) ? Number(fs.readFileSync(delayPath, 'utf8').trim()) : null;
