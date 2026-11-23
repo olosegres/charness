@@ -10,7 +10,8 @@
  *     (teardown) — owned by the bot and passed in;
  *   • the provider-credential flow's guards: a key that cannot be real is never taken for a secret, and
  *     arming a pending connect cancels the other single-purpose input modes;
- *   • the method picker's OAuth button reaching the sign-in driver port.
+ *   • the method picker's OAuth button reaching the sign-in driver port;
+ *   • a model or effort pick goes to the adapter the topic runs once the wake is over, not the one it ran before it.
  */
 
 /** Test case: N/A — Charness has no Jira tracker. */
@@ -26,7 +27,8 @@ import { getInstanceDefaultEffort, setInstanceDefaultEffortReader } from '../eff
 import { createInstanceDefaultEffortReader, resetInstanceSettingsCache } from '../instanceSettings';
 import { clearEffortPref, saveEffortPref } from '../adapters/claudeCliAdapter';
 import { ClaudeJsonStreamAdapter } from '../adapters/claudeJsonStreamAdapter';
-import { getThreadAdapter } from '../adapters/createAdapter';
+import { getThreadAdapter, setThreadAdapter } from '../adapters/createAdapter';
+import { claudeJsonStreamAdapterName, terminalAdapterName } from '../adapters/adapterNames';
 import { createStreamSessionFixture } from './claudeJsonStreamSessionFixture';
 import { effortSameCallback } from '../utils/effortPickerPlan';
 import type { OpenCodeAuthMethod } from '../utils/openCodeAuthLogin';
@@ -79,6 +81,8 @@ const pendingProviderConnects = new Map<string, PendingProviderConnect>();
 const connectMethodLists = new Map<string, { providerId: string; methods: OpenCodeAuthMethod[] }>();
 const disconnectProviderLists = new Map<string, string[]>();
 const signInRequests: SignInRequest[] = [];
+/** The wake port a pick awaits first (`wakeSleepingSession`): nothing to wake, unless a test puts a move behind it. */
+let wakeBeforePick: (key: SessionKey) => Promise<string | null> = async () => null;
 /** `settings.json` of the test instance: a throwaway dir, never the operator's config dir. */
 let settingsDir = '';
 let settingsPath = '';
@@ -112,6 +116,7 @@ describe('modelProviders: the model, effort and provider flows over their ports'
         signInRequests.push({ key, providerId, methodLabel });
       },
       getInstanceSettingsPath: () => settingsPath,
+      wakeSleepingSession: (key) => wakeBeforePick(key),
     });
     modelProviders.registerProviderCommands();
     modelProviders.registerModelCommands();
@@ -549,5 +554,25 @@ describe('modelProviders: the model, effort and provider flows over their ports'
     });
     await harness.tapButton(message, 'connm_0');
     assert.deepEqual(signInRequests, [{ key: harness.key, providerId: 'openai', methodLabel: 'ChatGPT Pro/Plus (browser)' }]);
+  });
+
+  // Last in the file: it leaves the thread's adapter named explicitly.
+  it('a model or effort pick goes to the agent the topic runs once its wake is over: a move queued ahead of the wake has the topic on another backend, and the pick is that backend\'s to take or refuse (review 24 nit 2)', async () => {
+    // The wake waits in the conversation's queue behind a move, which hands the topic to another adapter (here a shell, which takes no model).
+    wakeBeforePick = async (key) => {
+      setThreadAdapter(key, terminalAdapterName);
+      return '';
+    };
+    try {
+      await harness.runCommand('model', 'opus');
+      assert.equal(harness.replies.at(-1)?.text, 'Model switching not supported for Terminal', 'the pick reached the adapter the topic runs now, not the Claude one it was typed on');
+      setThreadAdapter(harness.key, claudeJsonStreamAdapterName);
+      await harness.runCommand('effort', 'high');
+      assert.equal(harness.replies.at(-1)?.text, 'Effort control is not supported for Terminal.', 'so did the effort');
+    } finally {
+      wakeBeforePick = async () => null;
+      setThreadAdapter(harness.key, claudeJsonStreamAdapterName);
+      clearEffortPref(harness.key);
+    }
   });
 });

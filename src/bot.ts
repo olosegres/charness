@@ -6243,12 +6243,16 @@ async function resumeSleepingSession(
  * a fresh session took its place), `''` when nothing was said (a live session too),
  * `null` when there is no conversation to wake.
  */
-async function wakeSleepingSession(key: SessionKey): Promise<string | null> {
-  if (getResumableSessionId(key) === null) return null;
+function wakeSleepingSession(key: SessionKey): Promise<string | null> {
   // Through the queue even when the process still looks live: a stop under way (the seconds after every per-turn answer) is waited for
   // and the conversation resumed after it, so the pick that follows applies to the resumed process; a live one is `ready` at once
-  // (review 23 nit 3).
-  return (await ensureAgentSession(key)).message;
+  // (review 23 nit 3). Whether there is a conversation to wake is read INSIDE the queue: a release queued ahead (`/quitall` from General)
+  // leaves none, and a fresh agent is not started for the pick; a move hands the topic over first, and the caller reads the adapter
+  // after this (review 24 nit 2). A resume that fails still starts fresh, as any ensure's does.
+  return sessionTransitions.run(keyToString(key), async () => {
+    if (getResumableSessionId(key) === null) return null;
+    return (await ensureAgentSessionNow(key, {})).message;
+  });
 }
 
 /**
@@ -10237,8 +10241,7 @@ async function switchTopicByOperator(key: SessionKey, to: FallbackChainEntry): P
     }
     case 'sameFamily': {
       if (to.backend === 'opencode') {
-        const adapter = getThreadAdapter(key);
-        const { isOk, message, setModelError } = await applyModelSelection(adapter, key, buildOpenCodeModelLabel(to));
+        const { isOk, message, setModelError } = await applyModelSelection(key, buildOpenCodeModelLabel(to));
         return isOk ? { kind: 'switched', text: message, label } : { kind: 'refused', text: t('cb.model_error', { error: setModelError ?? message }) };
       }
       const runningModel = readRunningModelBeforeMove(key, from, to);
@@ -10253,7 +10256,7 @@ async function switchTopicByOperator(key: SessionKey, to: FallbackChainEntry): P
       }
       const modelToPin = getFallbackModelToPin(to, runningModel);
       if (modelToPin === null) return { kind: 'switched', text: switchedText === '' && to.model !== null ? t('cb.model_set', { model: to.model }) : switchedText, label };
-      const { isOk, message, setModelError } = await applyModelSelection(getThreadAdapter(key), key, modelToPin);
+      const { isOk, message, setModelError } = await applyModelSelection(key, modelToPin);
       if (!isOk) return { kind: 'refused', text: t('cb.model_error', { error: setModelError ?? message }) };
       return { kind: 'switched', text: switchedText === '' ? message : `${switchedText}\n${message}`, label };
     }
@@ -11449,7 +11452,7 @@ bot.on(message('text'), async (ctx) => {
   // always replies (even for the unsupported case), so we always return after a
   // numeric pick — the user clearly intended a model pick, not a prompt.
   if (!isForwarded && /^\d+$/.test(text) && awaitingModelSelection.has(kStr)) {
-    await applyNumberedModelPick(adapter, key, parseInt(text, 10));
+    await applyNumberedModelPick(key, parseInt(text, 10));
     return;
   }
 
