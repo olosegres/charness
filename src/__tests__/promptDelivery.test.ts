@@ -517,7 +517,12 @@ describe('a startup window\'s prompts on every way out of it (review 19 #1)', ()
     assert.match(execute, /isStoppingBackground = await moveTopicToOtherBackend\(key, ending, /);
     const fallback = getBody('async function switchTopicToFallbackEntry(', 'async function moveTopicToOtherBackend(');
     const crossBackend = fallback.slice(indexIn(fallback, "} else {\n    // Onto the other backend"));
-    assert.ok(indexIn(crossBackend, 'const ending = conversationEndings.hold(key);') < indexIn(crossBackend, 'bridge = await buildFallbackBridge('), 'the limit move onto the other backend: held ahead of its bridge');
+    assert.ok(indexIn(crossBackend, 'const ending = options.ending ?? conversationEndings.hold(key);') < indexIn(crossBackend, 'bridge = await buildFallbackBridge('), 'the limit move onto the other backend: held ahead of its bridge, unless its caller held it already');
+    assert.match(fallback, /\} else if \(to\.backend === 'opencode' && !checkIsFallbackMoveAcrossBackends\(key, from, to\)\) \{/, 'the ways are told apart by the one predicate the callers read too');
+    const balance = getBody('async function handleBalanceExhausted(', 'function retargetLimitWait(');
+    const balanceMove = balance.slice(indexIn(balance, "if (plan.action === 'auto') {"));
+    assert.ok(indexIn(balanceMove, 'const ending = checkIsFallbackMoveAcrossBackends(key, plan.from, to) ? conversationEndings.hold(key) : undefined;') < indexIn(balanceMove, 'if (checkIsTelegramKey(key)) await replyToThread(key, notice);'), 'a used-up balance\'s move onto the other backend: held ahead of its paced notice (own pass)');
+    assert.match(balanceMove, /switchTopicToFallbackEntry\(key, plan\.from, to, \{ isAnnounced: true, isAutomatic: true, ending \}\)/);
     assert.doesNotMatch(fallback.slice(indexIn(fallback, '): Promise<{ isSwitched: boolean; notice: string; isFailed?: boolean }> {'), indexIn(fallback, "if (from?.backend === 'claude' && to.backend === 'claude') {")), /^ {2}\S[^\n]*\bawait /m, 'and nothing is awaited in the move before its branches (its `say` and `fail` only define what runs later)');
     assert.match(crossBackend, /isStoppingBackground = await moveTopicToOtherBackend\(key, ending, /);
     const operatorSwitch = getBody('async function switchTopicByOperator(', 'const { askBackendSwitch, registerBackendSwitchCallbacks }');

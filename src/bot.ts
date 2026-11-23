@@ -2821,11 +2821,19 @@ async function handleBalanceExhausted(key: SessionKey, cls: AgentApiErrorClass):
   }
   if (plan.action === 'auto') {
     const to = plan.to;
-    if (checkIsTelegramKey(key)) await replyToThread(key, notice);
-    const outcome = await switchTopicToFallbackEntry(key, plan.from, to, { isAnnounced: true, isAutomatic: true }).catch((e) => {
-      console.warn(`[fallback] ${k}: the auto-switch to ${formatFallbackEntry(to)} failed:`, e instanceof Error ? e.message : e);
-      return { isSwitched: false };
-    });
+    // A move onto the other backend ends the conversation it leaves, known now: held ahead of the paced notice, so a stop under way
+    // drops what it held instead of resuming the backend whose credit is used up (review 24, own pass).
+    const ending = checkIsFallbackMoveAcrossBackends(key, plan.from, to) ? conversationEndings.hold(key) : undefined;
+    let outcome: { isSwitched: boolean };
+    try {
+      if (checkIsTelegramKey(key)) await replyToThread(key, notice);
+      outcome = await switchTopicToFallbackEntry(key, plan.from, to, { isAnnounced: true, isAutomatic: true, ending }).catch((e) => {
+        console.warn(`[fallback] ${k}: the auto-switch to ${formatFallbackEntry(to)} failed:`, e instanceof Error ? e.message : e);
+        return { isSwitched: false };
+      });
+    } finally {
+      ending?.release();
+    }
     // The notice is already in the topic; an open request still hears that the work stopped.
     if (!outcome.isSwitched) await announceLimitWait(key, stopped, texts, false);
     return;
@@ -9946,14 +9954,12 @@ async function switchTopicToFallbackEntry(
   key: SessionKey,
   from: FallbackChainEntry | null,
   to: FallbackChainEntry,
-  options: { isAnnounced: boolean; isAutomatic?: boolean; reason?: FallbackSwitchReason },
+  options: { isAnnounced: boolean; isAutomatic?: boolean; reason?: FallbackSwitchReason; ending?: ConversationEnding },
 ): Promise<{ isSwitched: boolean; notice: string; isFailed?: boolean }> {
   const reason = options.reason ?? 'limit';
   const k = keyToString(key);
   const fromLabel = from ? formatFallbackEntry(from) : '?';
   const toLabel = formatFallbackEntry(to);
-  // An OpenCode topic on the server's default model has no rung (`from` is null), yet it is on OpenCode all the same.
-  const isSameFamily = (from?.backend ?? getTopicBackendFamily(key)) === to.backend;
   const runningModel = readRunningModelBeforeMove(key, from, to);
   // The notice is a topic message: a conversation of another platform (a Jira issue) hears nothing — the log line below says it — and
   // its work simply continues.
@@ -9988,13 +9994,13 @@ async function switchTopicToFallbackEntry(
     const cutOffWork = takeLostWorkOf(key);
     isStoppingBackground = checkHasLostBackgroundWork(cutOffWork);
     if (cutOffWork) await foldLostWorkIntoNextPrompt(key, { ...cutOffWork, reason: 'restarted', lostAt: Date.now() });
-  } else if (isSameFamily && to.backend === 'opencode') {
+  } else if (to.backend === 'opencode' && !checkIsFallbackMoveAcrossBackends(key, from, to)) {
     const error = await getThreadAdapter(key).setModel?.(key, buildOpenCodeModelLabel(to));
     if (error) return fail(error);
   } else {
     // Onto the other backend, which ends the conversation the move leaves: held from here — nothing above awaits —, ahead of the bridge,
-    // so a stop under way drops what it held instead of resuming the backend being left (review 24 #1).
-    const ending = conversationEndings.hold(key);
+    // unless the caller held it already, so a stop under way drops what it held instead of resuming the backend being left (review 24 #1).
+    const ending = options.ending ?? conversationEndings.hold(key);
     let bridge: string;
     try {
       bridge = await buildFallbackBridge(key, {
@@ -10036,6 +10042,17 @@ async function switchTopicToFallbackEntry(
   } finally {
     if (isHoldingTurnEnd) apiRetryKicksInFlight.delete(k);
   }
+}
+
+/**
+ * @description Whether {@link switchTopicToFallbackEntry} moves `key` from `from` onto `to` ACROSS backends — the move that ends the
+ * conversation it leaves — rather than to another Claude account or another OpenCode model of the same conversation.
+ */
+function checkIsFallbackMoveAcrossBackends(key: SessionKey, from: FallbackChainEntry | null, to: FallbackChainEntry): boolean {
+  if (from?.backend === 'claude' && to.backend === 'claude') return false;
+  // An OpenCode topic on the server's default model has no rung (`from` is null), yet it is on OpenCode all the same.
+  const isSameFamily = (from?.backend ?? getTopicBackendFamily(key)) === to.backend;
+  return !(isSameFamily && to.backend === 'opencode');
 }
 
 /**

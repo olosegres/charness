@@ -339,8 +339,8 @@ not that the agent was starting (review 24 nit 5).
 A stop that ends while the command still waits on a toast, a paced send or a bridge would otherwise find no mark and resume the
 conversation (review 24 #1). So the tap holds it, ahead of its toast: «Leave current dir» (also ahead of the unpin and the question's
 retirement), a `/resume` button, an agent button onto a shell, the hand-over question's «switch» (also ahead of its «switching» edit);
-a move across backends holds it at its top, ahead of its bridge (`switchTopicToFallbackEntry`, `executeBackendSwitch`), and an
-operator's pick on the other backend during a limit wait reads nothing before it. Where a READ decides whether the command ends the
+a move across backends holds it at its top, ahead of its bridge (`switchTopicToFallbackEntry`, `executeBackendSwitch`), a used-up
+credit balance's move ahead of its notice, and an operator's pick on the other backend during a limit wait reads nothing before it. Where a READ decides whether the command ends the
 conversation, the mark follows the read: the hand-over read of `/claude`, `/opencode`, an agent button or a pick on the other backend
 (it finds a conversation → the question, which ends nothing; none → the switch at once: a conversation with no turn yet, so no per-turn
 stop of it runs), a provider row's model list. **The automatic limit move is the one such read that takes seconds** — its plan reads fresh
