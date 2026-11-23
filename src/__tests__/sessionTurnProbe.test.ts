@@ -11,7 +11,7 @@ import assert from 'node:assert/strict';
 import { keyToString, type SessionKey } from '../sessionKey';
 import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
 import { createSessionTurnProbe, type SessionTurnProbeDeps } from '../requests/sessionTurnProbe';
-import { unnumberedProcessGeneration } from '../requests/wakeUpRules';
+import { unnumberedProcessGeneration } from '../types';
 
 const topicKey: SessionKey = makeTelegramKey(-1001234567890, 42);
 const topicKeyString = keyToString(topicKey);

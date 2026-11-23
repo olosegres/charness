@@ -1,6 +1,6 @@
 import type { SessionKey } from '../sessionKey';
-import type { AgentAdapter } from '../types';
-import { unnumberedProcessGeneration, type SessionTurnProbe } from './wakeUpRules';
+import { unnumberedProcessGeneration, type AgentAdapter } from '../types';
+import type { SessionTurnProbe } from './wakeUpRules';
 
 /**
  * @description How the wake-up engine sees a conversation's session right now

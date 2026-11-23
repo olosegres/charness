@@ -20,6 +20,7 @@ import type {
   SeenWatermark,
   SeenWatermarkWriter,
 } from '../types';
+import { unnumberedProcessGeneration } from '../types';
 import type { OutboundHints } from '../platform/outbound';
 import type { SessionKey } from '../sessionKey';
 import { keyToString } from '../sessionKey';
@@ -124,7 +125,6 @@ import { checkIsNotificationTurnPending, getPendingWorkHoldRemainingMs, getPendi
 import { getInputsAfterEcho, getInputsAfterTurnEnd, getInputsOnTheirWay, getInputsWithOldestEchoMarked, getInputsWithoutEchoMarks, type UnconsumedInput } from '../utils/jsonStreamUnconsumedInput';
 import type { BackgroundWorkSignal } from '../utils/workingSignals';
 import { checkHasLostWork, getLostWorkFromTailRecord, type LostWork } from '../utils/lostWork';
-import { unnumberedProcessGeneration } from '../requests/wakeUpRules';
 import {
   cronCreateToolName,
   cronDeleteToolName,

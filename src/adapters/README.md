@@ -527,6 +527,23 @@ reader); after a bot restart an adopted process reports the directory recovered 
 its own wrapper script / `pane_start_command` (`getSessionClaudeConfigDir`), and a
 mismatch with the topic's current pick is corrected at the next idle point.
 
+A re-spawn (`respawnWithChange`: a model, effort or account change, and a deferred
+account switch one timer tick after the turn end that releases it) runs inside the
+adapter, outside the bot's session queue, with the process down for seconds. Every
+re-spawn under way or about to start is recorded per conversation, across both
+instances (module-level, like `stopsInFlightByKey`), and `waitForRespawn` resolves once
+the last is over: the bot's ensure, its command transitions, its stop and its releases
+wait there first (`AgentAdapter.waitForRespawn`). The other way round, no change re-spawns
+a process being stopped (`isStopping`: an account or effort pick waits for the next
+start, a model pick is refused), and a per-turn instance whose CLI supports the
+auto-stop releases no deferred switch at a turn end — the bot's per-turn stop of that
+same end ends the process, and the resume after it spawns on the new account; a CLI
+too old for the auto-stop keeps the switch. Every spawn, re-spawn and adopt numbers its
+process from ONE counter shared by both instances (`getProcessGeneration`; the wake-up
+engine reads a prompt as taken in only off the process it was written to), and never
+hands out `unnumberedProcessGeneration` (`types.ts`), the name of a live session of a
+backend that cannot number its processes.
+
 The json-stream adapter also reports every `rate_limit_event` frame to the
 `ClaudeRateLimitSink` registered at boot (`registerClaudeRateLimitSink`), attributed to
 the `configDir` the session runs under: the bot folds the frame's `unifiedWindows` into

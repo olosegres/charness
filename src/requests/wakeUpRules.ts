@@ -75,15 +75,6 @@ export function getRequestBackstopMs(overrideMinutes: string | undefined): numbe
 }
 
 /**
- * The process the probe names for a live session of a backend that cannot tell its processes apart (no
- * `AgentAdapter.getProcessGeneration`: the tmux Claude, OpenCode). A prompt written there is named it — never left unnamed, which reads
- * «never written» once a numbering backend takes the conversation over (`/claude_mode`) — and no numbered process ever gets it, so such a
- * switch reads as another process (`src/requests/README.md` § Turn starts, «What a watch names»). All the processes of such a backend
- * share it: a restart within it reads as the same process, as that backend cannot tell.
- */
-export const unnumberedProcessGeneration = 0;
-
-/**
  * @name SessionTurnProbe
  * @description What the session of a conversation looks like right now.
  * `hasUnconsumedInput` is `null` for a backend that cannot tell (tmux Claude).
@@ -105,7 +96,7 @@ export interface SessionTurnProbe {
    */
   isCliOwnTurn?: boolean;
   /**
-   * The live process a prompt written now goes to (`AgentAdapter.getProcessGeneration`; {@link unnumberedProcessGeneration} on a backend
+   * The live process a prompt written now goes to (`AgentAdapter.getProcessGeneration`; `unnumberedProcessGeneration` (`types.ts`) on a backend
    * that cannot tell its processes apart). Absent while a start's or a stop's window is open (a prompt forwarded then waits in the
    * buffer, for the process the replay writes it to) or with no live process.
    */
@@ -342,7 +333,7 @@ export interface WatchedTurn {
    * or a stop's buffer: the replay's write names it (`RequestWakeUpEngine.noteReplayedWrite`). A request-prompt watch with none named
    * while the probe names a process has not reached any process (its buffer was dropped): its input reads not taken in
    * ({@link checkIsTurnInputConsumed}). A prompt written to a backend that cannot number its processes names
-   * {@link unnumberedProcessGeneration}, so it never reads as unwritten once a numbering backend takes the conversation over.
+   * `unnumberedProcessGeneration` (`types.ts`), so it never reads as unwritten once a numbering backend takes the conversation over.
    */
   writtenToProcess?: number;
 }

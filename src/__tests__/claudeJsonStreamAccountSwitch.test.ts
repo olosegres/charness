@@ -26,7 +26,7 @@ import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
 import { type UnconsumedInput } from '../utils/jsonStreamUnconsumedInput';
 import { unconsumedInputGraceMs } from '../utils/jsonStreamPendingWork';
 import { createStreamSessionFixture } from './claudeJsonStreamSessionFixture';
-import { unnumberedProcessGeneration } from '../requests/wakeUpRules';
+import { unnumberedProcessGeneration } from '../types';
 import { minAutoStopClaudeCodeVersion } from '../utils/claudeCodeVersion';
 import { t } from '../i18n';
 
