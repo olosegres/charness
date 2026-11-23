@@ -63,7 +63,7 @@ import assert from 'node:assert/strict';
 import { spawn, type ChildProcess } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
-import { FakeTelegram } from './telegramE2e/fakeTelegram';
+import { FakeTelegram, generalTopicThreadId } from './telegramE2e/fakeTelegram';
 import { TopicDriver } from './telegramE2e/topicDriver';
 import {
   fakeClaudeLogFileNames,
@@ -105,6 +105,7 @@ import {
   type IsolatedInstanceLayout,
 } from './e2e/isolatedCharness';
 import { getTelegramFlowTestTimingsEnv } from './telegramE2e/telegramFlowTimings';
+import { bindLeaveCurrentCallback } from '../connectors/telegram/bindPicker';
 import { checkIsProcessAlive } from './recordedProcess';
 import { getAccountConfigDir, getSessionLaunches, restartCharnessWithState } from './e2e/fallbackFlowKit';
 import { createClaudeProfileLayout } from '../utils/claudeProfiles';
@@ -814,6 +815,80 @@ describe('A request waits for its schedule in a Telegram topic end to end: built
     } finally {
       fs.rmSync(exitFlushDelayPath, { force: true });
     }
+  });
+
+  it('/quitall from General while the topic\'s process stops: a message sent to the topic in those seconds is no prompt for the exiting process — it wakes the conversation, and the fresh one the release leaves room for takes it (review 24 nit 3)', async () => {
+    const exitFlushDelayPath = path.join(getLayout().fakeStateDir, fakeClaudeExitFlushDelayFileName);
+    // An idle session keeps its process between turns: the one /quitall stops.
+    await topic.sendAndAwaitReply('/claude_mode json', '⚡ JSON-stream');
+    fakeTelegram.pushOperatorMessage(topicThreadId, 'XI-39 [fake:answer] warm up the idle session before /quitall');
+    await getCharness().waitFor('the warm-up turn', agentTimeoutMs, () => readFakeLog<FakeClaudeTurn>(fakeClaudeLogFileNames.turns).some((turn) => turn.issueKey === 'XI-39'));
+    const warmUpPid = getAgentPromptsWith('XI-39').at(-1)?.pid ?? 0;
+    assert.ok(checkIsProcessAlive(warmUpPid), 'the idle process is up');
+    try {
+      fs.writeFileSync(exitFlushDelayPath, perTurnStopHoldMs.toString());
+      const launchesBefore = getSessionLaunches(getLayout()).length;
+      const notDeliveredBefore = countTopicMessages('The agent did not get your last message');
+      fakeTelegram.pushOperatorMessage(generalTopicThreadId, '/quitall');
+      await getCharness().waitFor('/quitall to stop the topic\'s process', replyTimeoutMs, () =>
+        readFakeLog<{ pid: number }>(fakeClaudeLogFileNames.stopSignals).some((record) => record.pid === warmUpPid));
+      fakeTelegram.pushOperatorMessage(topicThreadId, 'XJ-40 [fake:answer] a message sent while /quitall stops the process');
+      assert.ok(checkIsProcessAlive(warmUpPid), 'the process is still exiting when the message comes');
+      await getCharness().waitFor('the message to reach an agent', agentTimeoutMs, () => getAgentPromptsWith('XJ-40').length > 0);
+      assert.ok(getAgentPromptsWith('XJ-40').every((prompt) => prompt.pid !== warmUpPid), 'never written into the process being stopped');
+      const launches = getSessionLaunches(getLayout()).slice(launchesBefore);
+      assert.equal(launches.length, 1, 'one process came up for it');
+      assert.ok(!launches[0].argv.includes('--resume'), 'a fresh conversation: /quitall released the old one');
+      assert.equal(countTopicMessages('The agent did not get your last message'), notDeliveredBefore, 'the operator is not told it was lost');
+    } finally {
+      fs.rmSync(exitFlushDelayPath, { force: true });
+    }
+    // The steps after this one work with a per-turn agent.
+    await topic.sendAndAwaitReply('/claude_mode per-turn', '🔁 Per-turn');
+  });
+
+  it('per-turn: a message the stop holds, then «Leave current dir» whose toast comes back only once the stop is over — the tap marks the conversation ahead of its toast, so the stop starts nothing for it: no process is launched, its request is closed and the operator is told (review 24 #1)', async () => {
+    const topicKeyString = `${group.id}:${topicThreadId}`;
+    const stopLine = `[compact-on-idle] ${topicKeyString} stopping the idle process`;
+    const stoppedLine = `[compact-on-idle] ${topicKeyString} process stopped`;
+    const exitFlushDelayPath = path.join(getLayout().fakeStateDir, fakeClaudeExitFlushDelayFileName);
+    // The picker is posted before the turn: its post is paced, and the tap must land while the stop still runs.
+    const picker = await topic.sendAndAwaitReply('/bind', `Currently bound: \`${topicFolder}\``);
+    try {
+      fs.writeFileSync(exitFlushDelayPath, perTurnStopHoldMs.toString());
+      const stopsBefore = countOutputLines(stopLine);
+      fakeTelegram.pushOperatorMessage(topicThreadId, 'XG-37 [fake:answer] warm up the per-turn session before leaving the folder');
+      await getCharness().waitFor('the per-turn stop after the warm-up turn', bufferedFlowTimeoutMs, () => countOutputLines(stopLine) > stopsBefore);
+      const stoppedBefore = countOutputLines(stoppedLine);
+      const queuedBefore = countTopicMessages('your message is queued');
+      const droppedBefore = countTopicMessages(endingCommandDropLine);
+      const unboundBefore = countTopicMessages('Binding cleared');
+      const openBefore = new Set(Object.values(readState().openRequests ?? {}).map((open) => open.id));
+      fakeTelegram.pushOperatorMessage(topicThreadId, 'XH-38 [fake:answer] a message the stop holds before the folder is left');
+      await getCharness().waitFor('the message to be queued behind the stop', replyTimeoutMs, () => countTopicMessages('your message is queued') > queuedBefore);
+      assert.equal(countOutputLines(stoppedLine), stoppedBefore, 'the stop is still under way: the message waits in its window');
+      const requestId = Object.values(readState().openRequests ?? {}).map((open) => open.id).find((id) => !openBefore.has(id)) ?? '';
+      assert.match(requestId, /^req_/, 'the message opened its request');
+      const launchesBefore = getSessionLaunches(getLayout()).length;
+      // The tap's toast is a Bot API round trip, and the leave's unpin and delete after it are paced sends: the toast is held here until
+      // the stop is over, as those seconds would in production, so a mark taken only after them comes too late for the stop.
+      const stopEnded = getCharness().waitFor('the stop to end', bufferedFlowTimeoutMs, () => countOutputLines(stoppedLine) > stoppedBefore);
+      fakeTelegram.holdNextResponse('answerCallbackQuery', stopEnded.catch(() => undefined));
+      fakeTelegram.pushCallback(picker.message_id, bindLeaveCurrentCallback);
+      await getCharness().waitFor('the operator to be told the message did not reach the agent', bufferedFlowTimeoutMs, () => countTopicMessages(endingCommandDropLine) > droppedBefore);
+      await getCharness().waitFor('the topic to be unbound', replyTimeoutMs, () => countTopicMessages('Binding cleared') > unboundBefore);
+      assert.deepEqual(getSessionLaunches(getLayout()).slice(launchesBefore), [], 'nothing was resumed or started for it in the folder being left');
+      assert.deepEqual(getAgentPromptsWith('XH-38'), [], 'the agent never got it');
+      assert.equal(readClosedRequests().find((closed) => closed.id === requestId)?.closeReason, 'cancelled');
+      assert.deepEqual(Object.keys(readState().openRequests ?? {}).filter((stateKey) => stateKey.startsWith(topicKeyString)), [], 'no request is left open for a backstop to post later');
+    } finally {
+      fs.rmSync(exitFlushDelayPath, { force: true });
+    }
+    // The steps after this one work in the folder with a per-turn agent and the answers view: the operator sets them up again.
+    await topic.sendAndAwaitReply(`/bind ${topicFolder}`, `Bound to \`${topicFolder}\``);
+    await topic.sendAndAwaitReply('/claude', 'ready in');
+    await topic.sendAndAwaitReply('/claude_mode per-turn', '🔁 Per-turn');
+    await topic.sendAndAwaitReply('/verbosity answers', 'This topic shows: Answers only');
   });
 
   /**

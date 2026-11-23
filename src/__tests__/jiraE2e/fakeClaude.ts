@@ -762,6 +762,7 @@ function exitOnStopSignal(sessionId: string): void {
   const onSignal = (signal: NodeJS.Signals): void => {
     if (isExiting || fs.existsSync(path.join(getStateDir(), fakeClaudeIgnoreStopSignalsFileName))) return;
     isExiting = true;
+    appendJsonLine(fakeClaudeLogFileNames.stopSignals, { pid: process.pid, signal });
     const exitCode = 128 + (signal === 'SIGHUP' ? 1 : 15);
     const flushDelayMs = getExitFlushDelayMs();
     if (lastRecordedPrompt === null || flushDelayMs === null) process.exit(exitCode);

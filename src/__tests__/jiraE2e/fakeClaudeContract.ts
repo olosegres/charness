@@ -391,6 +391,8 @@ export const fakeClaudeLogFileNames = {
   controlResponses: 'control-responses.jsonl',
   /** One record per `control_request` the bot wrote that the fake READ (an interrupt among them): `{ readAt, pid, subtype }`. */
   controlRequests: 'control-requests.jsonl',
+  /** One record per stop signal a process took, as it took it — its exit may come later (the exit flush): `{ pid, signal }`. */
+  stopSignals: 'stop-signals.jsonl',
 } as const;
 
 /**
