@@ -6261,14 +6261,16 @@ function handleAgentTurnEnded(key: SessionKey): void {
   // queued: its window opens only in a later tick, and once it is over the session is gone, which a watch reads as «tracking lost», never
   // as an end. A reminder this decides is handed to a post waiting for this turn, which writes its own prompt first; with none waiting it
   // resumes the session through the ensure, which queues behind the stop (`requests/README.md` § Turn starts).
-  settleTurnEnd(key);
+  settleEndedTurnsAndHandOver(key);
 }
 
 /**
- * @description Settle `key`'s watches at the adapter's turn end ({@link handleAgentTurnEnded}): the reminders they decided go to a post
- * on its way to its write (`RequestWakeUpEngine.deliverOrHandOverWake`), else out at once — no write of this caller follows. Never rejects.
+ * @description Settle `key`'s watches whose turn already ended (`RequestWakeUpEngine.settleEndedTurnsOf`, synchronous up to the
+ * decisions) and hand the reminders they decided, once persisted, to a post on its way to its write (`deliverOrHandOverWake`), else
+ * deliver them at once — at the adapter's turn end ({@link handleAgentTurnEnded}) and at the write choke point, whose write runs in
+ * this tick, so a reminder follows that write, and a post that waited writes its prompt first. Never rejects.
  */
-function settleTurnEnd(key: SessionKey): void {
+function settleEndedTurnsAndHandOver(key: SessionKey): void {
   const engine = requestWakeUpEngine;
   if (!engine) return;
   void engine.settleEndedTurnsOf(key).then((deliverSettledWakes) => engine.deliverOrHandOverWake(key, deliverSettledWakes));
@@ -6276,15 +6278,6 @@ function settleTurnEnd(key: SessionKey): void {
 
 /** No reminder to deliver: what a settle resolves, and what a post's release is, while the wake-up engine is not up yet. */
 const deliverNoSettledWakes = async (): Promise<void> => {};
-
-/**
- * @description Settle `key`'s watches whose turn already ended (`RequestWakeUpEngine.settleEndedTurnsOf`, synchronous up to the
- * decisions) and deliver the reminders they decided once persisted — for the write choke point, whose write runs in this tick: the
- * reminder then follows the write. Never rejects.
- */
-function settleEndedTurnsAndRemind(key: SessionKey): void {
-  void requestWakeUpEngine?.settleEndedTurnsOf(key).then((deliverSettledWakes) => deliverSettledWakes());
-}
 
 /**
  * @description A prompt (text, voice, file, a re-asked question's answer) arrives
@@ -6446,8 +6439,9 @@ async function forwardPromptToLiveAgent(
 ): Promise<void> {
   // A new prompt starts or joins a turn: the watches whose turn already ENDED are settled first, synchronously and before the write
   // (no await may precede it), so the new turn never runs under the watch of the turn before it (`requests/README.md` § Turn starts).
-  // Their reminders are delivered once persisted: after this write, which runs in this tick.
-  settleEndedTurnsAndRemind(key);
+  // Their reminders are delivered once persisted — after this write, which runs in this tick, or, while a post is on its way to its
+  // write, after that post's prompt (the todo reminder written at a turn end is such a write).
+  settleEndedTurnsAndHandOver(key);
   // A forwarded prompt is thread activity — reset the compact-on-idle watchdog (F2).
   noteThreadActivity(key);
   const isTechnicalPrompt = options.isTechnicalPrompt ?? false;

@@ -116,16 +116,16 @@ test('the turn probe reads the startup buffer\'s replay as the start, and the he
 
 test('a turn\'s end is decided at the adapter\'s own turn-end event, after a per-turn stop is queued — the stop would otherwise leave the watch to «session gone» (review 15 P1)', () => {
   const body = getFunctionBody('handleAgentTurnEnded');
-  assert.match(body, /settleTurnEnd\(key\);/);
-  assert.ok(body.indexOf('suspendThreadSession(key)') < body.indexOf('settleTurnEnd(key)'), 'after the stop is queued: its window opens only in a later tick');
-  assert.doesNotMatch(body.slice(0, body.indexOf('settleTurnEnd(key)')), /return;/, 'no early return skips it for another backend');
-  // The write choke point settles before its write and delivers right after it.
-  assert.match(getFunctionBody('settleEndedTurnsAndRemind'), /requestWakeUpEngine\?\.settleEndedTurnsOf\(key\)\.then\(\(deliverSettledWakes\) => deliverSettledWakes\(\)\)/);
-  assert.match(getFunctionBody('forwardPromptToLiveAgent'), /^[^]*?settleEndedTurnsAndRemind\(key\);[^]*?noteThreadActivity\(key\);/);
+  assert.match(body, /settleEndedTurnsAndHandOver\(key\);/);
+  assert.ok(body.indexOf('suspendThreadSession(key)') < body.indexOf('settleEndedTurnsAndHandOver(key)'), 'after the stop is queued: its window opens only in a later tick');
+  assert.doesNotMatch(body.slice(0, body.indexOf('settleEndedTurnsAndHandOver(key)')), /return;/, 'no early return skips it for another backend');
+  // The write choke point settles before its write, the same way.
+  assert.match(getFunctionBody('forwardPromptToLiveAgent'), /^[^]*?settleEndedTurnsAndHandOver\(key\);[^]*?noteThreadActivity\(key\);/);
 });
 
-test('a turn end\'s reminders are handed to a post waiting for that turn; the post\'s settle takes them, and the post registers itself in flight (review 16 #2)', () => {
-  assert.match(getFunctionBody('settleTurnEnd'), /engine\.settleEndedTurnsOf\(key\)\.then\(\(deliverSettledWakes\) => engine\.deliverOrHandOverWake\(key, deliverSettledWakes\)\)/);
+test('a settle\'s reminders — at a turn end and at the write choke point (a todo reminder written at the turn end included) — are handed to a post waiting for that turn; the post\'s settle takes them, and the post registers itself in flight (review 16 #2, review 17 nit 6)', () => {
+  assert.match(getFunctionBody('settleEndedTurnsAndHandOver'), /engine\.settleEndedTurnsOf\(key\)\.then\(\(deliverSettledWakes\) => engine\.deliverOrHandOverWake\(key, deliverSettledWakes\)\)/);
+  assert.doesNotMatch(botSource, /settleEndedTurnsOf\(key\)\.then\(\(deliverSettledWakes\) => deliverSettledWakes\(\)\)/, 'no settle delivers past a post in flight');
   const postDeps = getFunctionBody('createSessionPostDeps');
   assert.match(postDeps, /settleEndedTurns: \(conversationKey\) => requestWakeUpEngine\?\.settleEndedTurnsForPost\(keyFromString\(conversationKey\)\)/);
   assert.match(postDeps, /notePostInFlight: \(conversationKey\) => requestWakeUpEngine\?\.notePostInFlight\(keyFromString\(conversationKey\)\)/);
