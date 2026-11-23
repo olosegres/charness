@@ -873,6 +873,95 @@ describe('a request whose prompt never reached the agent is re-posted, not remin
     assert.deepEqual(getWakeUpReasons(), ['silentTurn']);
   });
 
+  it('a prompt written to a process that a re-spawn replaced is never read as taken in off the new one: the turn\'s end posts it again, never a bare reminder (review 18 #2)', async () => {
+    const ledger = await createLedger();
+    const engine = createEngine(ledger);
+    const request = await ledger.createRequest(topicKey, { kind: 'message', attributes: { requester: '424242' } }, { createPrompt: () => prompt });
+    // Written into process 1 while its turn runs, queued there.
+    probe = { isActive: true, isBusy: true, hasUnconsumedInput: true, isTurnEndBlocked: false, processGeneration: 1 };
+    await engine.trackForwardedTurn(topicKey, request.id, { isRequestPrompt: true });
+    // The account move after a limit re-spawns it at once: process 2 lists nothing unread, and the move still holds the turn end.
+    probe = { isActive: true, isBusy: false, hasUnconsumedInput: false, isTurnEndBlocked: true, processGeneration: 2 };
+    await engine.pollWatchedTurns();
+    assert.equal(ledger.getNewestOpenRequest(topicKey)?.isPromptTakenIn, undefined, 'not read off the process that replaced the one it was written to');
+    // Nothing carried it into process 2: the turn end is decided, and its wake is the prompt itself.
+    probe = { isActive: true, isBusy: false, hasUnconsumedInput: false, isTurnEndBlocked: false, processGeneration: 2 };
+    await engine.deliverOrHandOverWake(topicKey, await engine.settleEndedTurnsOf(topicKey));
+    assert.equal(ledger.getNewestOpenRequest(topicKey)?.isPromptTakenIn, undefined);
+    assert.deepEqual(wakeUpMessages, [{ reason: 'silentTurn', text: prompt, isRequestPrompt: true }]);
+  });
+
+  it('a forward that carries the prompt again names the process of that write — it is read off that one; a forward that does not carry it leaves it where it was (review 18 #2)', async () => {
+    const ledger = await createLedger();
+    const engine = createEngine(ledger);
+    const request = await ledger.createRequest(topicKey, { kind: 'message', attributes: { requester: '424242' } }, { createPrompt: () => prompt });
+    probe = { isActive: true, isBusy: true, hasUnconsumedInput: true, isTurnEndBlocked: false, processGeneration: 1 };
+    await engine.trackForwardedTurn(topicKey, request.id, { isRequestPrompt: true });
+    probe = { isActive: true, isBusy: true, hasUnconsumedInput: false, isTurnEndBlocked: false, processGeneration: 2 };
+    // A plain «continue» into process 2 joins the watch: the prompt is not in it.
+    await engine.trackForwardedTurn(topicKey, request.id, { isRequestPrompt: false, isContinuation: true, isConversationForward: true });
+    await engine.pollWatchedTurns();
+    assert.equal(ledger.getNewestOpenRequest(topicKey)?.isPromptTakenIn, undefined, 'still in process 1, which is gone');
+    // The resume's «continue» carries the prompt (R21: not taken in), written to process 2, which takes it in.
+    await engine.trackForwardedTurn(topicKey, request.id, { isRequestPrompt: true, isContinuation: true, isConversationForward: true });
+    await engine.pollWatchedTurns();
+    assert.equal(ledger.getNewestOpenRequest(topicKey)?.isPromptTakenIn, true);
+  });
+
+  /** A prompt buffered behind a start's window, written by the replay into process 2, then read off process `readOffProcess`. */
+  async function readBufferedPromptOff(readOffProcess: number): Promise<boolean | undefined> {
+    const ledger = await createLedger();
+    const engine = createEngine(ledger);
+    const request = await ledger.createRequest(topicKey, { kind: 'message', attributes: { requester: '424242' } }, { createPrompt: () => prompt });
+    // The window is open: the prompt waits in the buffer, and the probe names no process.
+    probe = { isActive: true, isBusy: false, hasUnconsumedInput: true, isTurnEndBlocked: true };
+    await engine.trackForwardedTurn(topicKey, request.id, { isRequestPrompt: true });
+    // The replay writes it into process 2 (still the start for the probe).
+    probe = { isActive: true, isBusy: false, hasUnconsumedInput: true, isTurnEndBlocked: true, processGeneration: 2 };
+    engine.noteSessionWrite(topicKey);
+    probe = { isActive: true, isBusy: true, hasUnconsumedInput: false, isTurnEndBlocked: false, processGeneration: readOffProcess };
+    await engine.pollWatchedTurns();
+    return ledger.getNewestOpenRequest(topicKey)?.isPromptTakenIn;
+  }
+
+  it('a prompt that waited in a buffer names no process until the replay writes it, and is read off the process the replay wrote it to (review 18 #2)', async () => {
+    assert.equal(await readBufferedPromptOff(2), true);
+  });
+
+  it('a buffered prompt the replay wrote into a process that was replaced before it read it is not read off the replacing one (review 18 #2)', async () => {
+    assert.equal(await readBufferedPromptOff(3), undefined);
+  });
+
+  it('a prompt the live process took in is marked at the settle of a turn end it holds — the re-spawn of a deferred switch right after it, or the per-turn stop, does not make it read as unread (review 18 #2: the turn end is where it is seen)', async () => {
+    const ledger = await createLedger();
+    const engine = createEngine(ledger);
+    const request = await ledger.createRequest(topicKey, { kind: 'message', attributes: { requester: '424242' } }, { createPrompt: () => prompt });
+    probe = { isActive: true, isBusy: true, hasUnconsumedInput: true, isTurnEndBlocked: false, processGeneration: 1 };
+    await engine.trackForwardedTurn(topicKey, request.id, { isRequestPrompt: true });
+    // Process 1 took it in, and its turn ends held (a re-spawn about to start): the turn-end settle decides nothing, but sees the prompt read.
+    probe = { isActive: true, isBusy: false, hasUnconsumedInput: false, isTurnEndBlocked: true, processGeneration: 1 };
+    await engine.deliverOrHandOverWake(topicKey, await engine.settleEndedTurnsOf(topicKey));
+    assert.deepEqual(engine.getWatchedRequestIdsOf(topicKey), [request.id], 'held: not decided');
+    assert.equal(ledger.getNewestOpenRequest(topicKey)?.isPromptTakenIn, true);
+    // One tick later the re-spawn replaces the process; its turn end is decided off process 2: a reminder, not the prompt again.
+    probe = { isActive: true, isBusy: false, hasUnconsumedInput: false, isTurnEndBlocked: false, processGeneration: 2 };
+    await engine.deliverOrHandOverWake(topicKey, await engine.settleEndedTurnsOf(topicKey));
+    assert.equal(wakeUpMessages.length, 1);
+    assert.equal(wakeUpMessages[0].isRequestPrompt, false);
+    assert.match(wakeUpMessages[0].text, new RegExp(`^\\[Reminder · request ${request.id} is still open\\]`));
+  });
+
+  it('a backend that cannot tell its processes apart is read as before', async () => {
+    const ledger = await createLedger();
+    const engine = createEngine(ledger);
+    const request = await ledger.createRequest(topicKey, { kind: 'message', attributes: { requester: '424242' } }, { createPrompt: () => prompt });
+    probe = { isActive: true, isBusy: true, hasUnconsumedInput: true, isTurnEndBlocked: false };
+    await engine.trackForwardedTurn(topicKey, request.id, { isRequestPrompt: true });
+    probe = { isActive: true, isBusy: true, hasUnconsumedInput: false, isTurnEndBlocked: false };
+    await engine.pollWatchedTurns();
+    assert.equal(ledger.getNewestOpenRequest(topicKey)?.isPromptTakenIn, true);
+  });
+
   it('a reminder\'s turn never marks the prompt taken in; a request without a prompt is reminded as before', async () => {
     const ledger = await createLedger();
     const engine = createEngine(ledger);

@@ -915,6 +915,15 @@ export interface AgentAdapter extends EventEmitter {
   checkIsRespawnPending?(key: SessionKey): boolean;
 
   /**
+   * Which of the adapter's processes is live for the conversation (json-stream Claude): a number that changes whenever a process
+   * replaces the last one — a spawn, a resume, a re-spawn for a model, effort or account change, an adopt at boot; `undefined` with none
+   * live. The request wake-up engine reads a prompt as taken in only off the process it was written to: a re-spawn that killed a message
+   * still queued in the old process leaves nothing unread in the new one, and that must not read as the message read. Optional: a
+   * backend that cannot tell its processes apart omits it.
+   */
+  getProcessGeneration?(key: SessionKey): number | undefined;
+
+  /**
    * Whether a turn the CLI starts by itself is on its way while none runs (json-stream Claude): a background task that finished in the
    * last turn announced its own turn, which starts ~0.1 s after that turn's `result` (bounded by `notificationTurnGraceMs`). The
    * request wake-up probe reads it as busy, so a watched turn runs on into it and is decided at its end — an answer the agent sends

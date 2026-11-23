@@ -6442,6 +6442,8 @@ async function forwardPromptToLiveAgent(
   // Their reminders are delivered once persisted — after this write, which runs in this tick, or, while a post is on its way to its
   // write, after that post's prompt (the todo reminder written at a turn end is such a write).
   settleEndedTurnsAndHandOver(key);
+  // A prompt that waited in a start's or a stop's buffer is in the process this write goes to (`noteSessionWrite`).
+  requestWakeUpEngine?.noteSessionWrite(key);
   // A forwarded prompt is thread activity — reset the compact-on-idle watchdog (F2).
   noteThreadActivity(key);
   const isTechnicalPrompt = options.isTechnicalPrompt ?? false;

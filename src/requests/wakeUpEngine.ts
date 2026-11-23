@@ -124,6 +124,13 @@ interface WatchedRequestTurn extends WatchedTurn {
    * the agent works on, whoever's words or fire joined it later.
    */
   ownForwardStartedAt?: number;
+  /**
+   * The process the request's prompt was written to (`SessionTurnProbe.processGeneration`), named by the forward that carried it — a
+   * merge that carries it again names the process of that write, one that does not keeps it. Absent while the prompt waits in a start's
+   * or a stop's buffer (the replay's write names it, {@link RequestWakeUpEngine.noteSessionWrite}), or on a backend that cannot tell its
+   * processes apart. The prompt is read as taken in only off that process ({@link RequestWakeUpEngine.markPromptTakenIn}).
+   */
+  writtenToProcess?: number;
 }
 
 interface WatchedAnswerTail {
@@ -377,6 +384,9 @@ export class RequestWakeUpEngine {
     const isOtherJobFireForward = isFireForward && options.isRequestJob === false;
     const isForwardOwn = options.isContinuation === true && !isPersonWordsForward ? undefined : !isOtherJobFireForward;
     const isRequestJob = previous === undefined ? isForwardOwn !== false : previous.isRequestJob !== false || isForwardOwn === true;
+    // Where the request's prompt now is: a forward that carries it was written to the live process (none named while a window holds it
+    // in the buffer); one that does not carry it leaves the prompt where it was.
+    const writtenToProcess = previous === undefined || options.isRequestPrompt ? this.deps.probeTurn(key).processGeneration : previous.writtenToProcess;
     this.watched.set(requestId, {
       key,
       requestId,
@@ -392,6 +402,7 @@ export class RequestWakeUpEngine {
       isRequestJob,
       isOwnForward,
       ...(ownForwardStartedAt === undefined ? {} : { ownForwardStartedAt }),
+      ...(writtenToProcess === undefined ? {} : { writtenToProcess }),
     });
     // A fire RIDING the request carries none of its prompt; the fire that opened the scheduler's request carries its own.
     const isMoot = request.nextPostRetryAt !== undefined && (!isFireForward || options.isRequestPrompt);
@@ -559,7 +570,8 @@ export class RequestWakeUpEngine {
    * turn is forwarded within seconds of its end (`postToSession` polls busy every 5 s, this engine every 10 s), usually before the tick
    * saw the idle; the old watch would then read the NEW turn as its own: arm its jobs under the old request, count its busy time as
    * the old request's activity, and decide the old request only at the new turn's end. A watch whose turn still runs is left — the
-   * forward joins it (`trackForwardedTurn` merges); a session that is gone is left to the poll.
+   * forward joins it (`trackForwardedTurn` merges), its prompt marked taken in if the live process took it (R21, as the poll marks); a
+   * session that is gone is left to the poll.
    * Synchronous up to the decisions: the ended watches are dropped and decided against the request as it is NOW, so a forward that
    * does not await (a write must run in its caller's tick) is never read into them. The decisions are persisted after, in order; the
    * returned promise resolves once they are (a post that picks a request awaits it first, so the pick and the header see the result)
@@ -578,7 +590,16 @@ export class RequestWakeUpEngine {
         continue;
       }
       if (probe.isBusy) turn.hasSeenBusy = true;
-      if (getWatchedTurnState(turn, probe) !== 'ended') continue;
+      if (getWatchedTurnState(turn, probe) !== 'ended') {
+        // A turn still running, or held, may have taken its prompt in already: marked now (R21), as the poll would. The process that took
+        // it may be gone before the poll's next tick — a deferred account switch re-spawns it one timer tick after the turn's end, the
+        // per-turn stop ends it — and a prompt is read as taken in only off the process it was written to.
+        persisting.push(this.markPromptTakenIn(turn, request, probe).then(() => null, (e) => {
+          logWakeUpFailure(`marking the prompt of ${turn.requestId} taken in`, e);
+          return null;
+        }));
+        continue;
+      }
       this.watched.delete(turn.requestId);
       const decision = this.decideWatchedTurnEnd(turn, request);
       persisting.push(this.persistEndedTurn(turn, request, probe, decision).catch((e) => {
@@ -628,6 +649,19 @@ export class RequestWakeUpEngine {
   }
 
   /**
+   * @description A prompt is written into `key`'s live process now (the write choke point, right after its settle): a watch tracked while
+   * its prompt waited in a start's or a stop's buffer names no process yet, and this write is that buffer's replay — the first write into
+   * the process the start brought up — so its prompt is in this process. Synchronous; a session with no process named does nothing.
+   */
+  noteSessionWrite(key: SessionKey): void {
+    const { processGeneration } = this.deps.probeTurn(key);
+    if (processGeneration === undefined) return;
+    for (const turn of this.getWatchedTurnsOf(key)) {
+      if (turn.writtenToProcess === undefined) turn.writtenToProcess = processGeneration;
+    }
+  }
+
+  /**
    * @description The settle of a post about to write ({@link settleEndedTurnsOf}): resolves ONE delivery for the post to run after its
    * write — the wake-ups handed to it so far, in order, then this settle's own. Never rejects, and neither does the delivery.
    */
@@ -667,11 +701,15 @@ export class RequestWakeUpEngine {
   /**
    * R21: once the backend took a request prompt in, a wake-up is a reminder — the agent has read the request. A held turn end is read like
    * any other: what the backend still lists as unread is unread. A prompt queued behind a turn that ended in an error result stays listed
-   * until its own echo (the json-stream adapter keeps it, `isQueuedBehindFailedTurn`; the CLI runs it as its next turn, measured), and
-   * the prompt of the turn that failed was read by it — a resume that posted it again would repeat words the agent already has.
+   * until its own echo (the json-stream adapter keeps it; the CLI runs it as its next turn, measured), and the prompt of the turn that
+   * failed was read by it — a resume that posted it again would repeat words the agent already has.
+   * Read only off the process the prompt was written to (`writtenToProcess`): a re-spawn that replaced it — an account move after a limit,
+   * a model change — kills a message still queued there, and the new process lists nothing unread. Left unmarked, the prompt is posted
+   * again: by the resume's «continue» (`getPromptNotTakenIn`), or as the wake-up of the turn's end.
    */
   private async markPromptTakenIn(turn: WatchedRequestTurn, request: OpenRequestState, probe: SessionTurnProbe): Promise<void> {
-    if (turn.isRequestPrompt && request.isPromptTakenIn !== true && probe.isActive && checkIsTurnInputConsumed(turn, probe)) {
+    const isAnotherProcess = turn.writtenToProcess !== undefined && probe.processGeneration !== undefined && turn.writtenToProcess !== probe.processGeneration;
+    if (turn.isRequestPrompt && request.isPromptTakenIn !== true && probe.isActive && !isAnotherProcess && checkIsTurnInputConsumed(turn, probe)) {
       await this.deps.ledger.updateOpenRequest(request.id, { isPromptTakenIn: true });
     }
   }

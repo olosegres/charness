@@ -260,6 +260,11 @@ export interface StreamSession {
   isSuspending: boolean;
   /** True while re-spawning for a model/effort change → suppress closed/stopped. */
   isRespawning: boolean;
+  /**
+   * Which process of the adapter this is (`AgentAdapter.getProcessGeneration`): a new number for every spawn, re-spawn and adopt, so a
+   * prompt written to one process is never read as taken in by the one that replaced it.
+   */
+  processGeneration: number;
   /** True from a user turn sent until its `result` → drives `checkIsBusy`. */
   isBusy: boolean;
   /** `Date.now()` of the last consumed stdout byte / turn-start kick. Feeds the
@@ -528,6 +533,8 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
   readonly selfGreetsOnStart = false;
 
   private readonly sessions = new Map<string, StreamSession>();
+  /** The number the next spawned or adopted process gets ({@link StreamSession.processGeneration}). */
+  private nextProcessGeneration = 1;
   private readonly claudePath = resolveClaudeBinary();
   private readonly writeFifo: typeof writeFifoText;
   /** How long a user turn waits for a CLI that reads nothing, and a write for a reader that takes nothing (tests shorten it). */
@@ -752,7 +759,7 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
       pollTimer: null, pollDelayMs: basePollIntervalMs, unchangedStreak: 0,
       isOversizeWarned: false, lastPersistedTailOffset: 0,
       reader: new ClaudeStreamLineReader(),
-      isActive: true, isStopping: false, isSuspending: false, isRespawning: false, isBusy: false, unconsumedInputs: [],
+      isActive: true, isStopping: false, isSuspending: false, isRespawning: false, processGeneration: this.createProcessGeneration(), isBusy: false, unconsumedInputs: [],
       lastStdoutActivityAt: Date.now(), outstandingToolUseIds: new Set(),
       model: opts.model, reportedModel: null, effort: opts.effort,
       configDir: opts.configDir, isConfigDirSwitchPending: false, isConfigDirSwitchReleased: false, startCostUsd,
@@ -1087,7 +1094,7 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
       // tool call leaves no frame after the tail offset to rebuild it from. The
       // replayed/live events then keep it right (deltas/toolUse set it, `result`
       // clears it) — see `applyAction`.
-      isActive: true, isStopping: false, isSuspending: false, isRespawning: false, isBusy: isTurnInFlight, unconsumedInputs: [],
+      isActive: true, isStopping: false, isSuspending: false, isRespawning: false, processGeneration: this.createProcessGeneration(), isBusy: isTurnInFlight, unconsumedInputs: [],
       // The outstanding tools come from the record too: they veto the busy-idle watchdog, which would
       // otherwise clear the restored turn after its silence window and let the stale-tool stop kill it.
       lastStdoutActivityAt: Date.now(), outstandingToolUseIds: new Set(outstandingToolUseIds),
@@ -2233,10 +2240,10 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
     // `--model`; an HTTP 400, and an HTTP 429 after its ten retries, from a loopback API — `utils/jsonStreamUnconsumedInput.ts`
     // `getInputsAfterTurnEnd` has the command), the CLI writes a new `init` 0.02–0.2 s after the error `result` and runs the queued
     // message as its own turn; in a turn that fails, the echo comes at its end, right before its `result`. Emptied, the list read that message as taken
-    // in before its turn began: the per-turn stop killed the process ahead of it, and the bot decided its request's turn ended. Each entry
-    // is marked `isQueuedBehindFailedTurn` and still bounded by the grace (`unconsumedInputGraceMs`), so one the CLI never echoes holds
-    // nothing for good, and a deferred account switch looks past them (`checkIsConfigDirSwitchDue`): a limit's switch must still fire.
-    session.unconsumedInputs = getInputsAfterTurnEnd(session.unconsumedInputs, Date.now(), { isFailedTurn: action.isError });
+    // in before its turn began: the per-turn stop killed the process ahead of it, and the bot decided its request's turn ended. The grace
+    // (`unconsumedInputGraceMs`) still bounds each entry, so one the CLI never echoes holds nothing for good — a deferred account switch
+    // included: it waits for that turn's end like any work (`checkIsConfigDirSwitchDue`), and fires at it.
+    session.unconsumedInputs = getInputsAfterTurnEnd(session.unconsumedInputs, Date.now());
     session.isCliOwnTurn = false;
     session.outstandingToolUseIds.clear();
     this.finishReasoning(session);
@@ -2707,9 +2714,9 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
       session.isConfigDirSwitchPending = false;
       return 'unchanged';
     }
-    // Messages queued behind a turn that ended in an error result do not defer it (`checkIsConfigDirSwitchDue`): after a limit the switch
-    // is what lets them run, and their requests post them again if the re-spawn ends them (R21: still unread).
-    if (!options.isAfterLimit && this.checkIsWorkingBesidesFailedTurnQueue(session)) {
+    // A message queued behind the turn defers it like any work — one behind a turn that ended in an error result too: the CLI runs it as
+    // its next turn within a fraction of a second (measured, `applyTurnEnd`), and a re-spawn now would kill it unread.
+    if (!options.isAfterLimit && this.checkIsWorking(key)) {
       session.isConfigDirSwitchPending = true;
       // Recorded now: a reload before the turn ends must not drop the user's pick.
       this.jsonStreamTailWriter?.(key, buildTailRecord(session, session.lastPersistedTailOffset));
@@ -2722,18 +2729,26 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
   }
 
   /**
-   * A deferred account switch that the process's idle releases now: pending, on a live process that no longer works — messages queued
-   * behind a turn that ended in an error result aside (`isQueuedBehindFailedTurn`): after a limit, the switch is what lets them run.
+   * A deferred account switch that the process's idle releases now: pending, on a live process that no longer works — a message queued
+   * behind the turn, one behind a turn that ended in an error result included, holds it until its own turn's end (the grace bounds it).
    */
   private checkIsConfigDirSwitchDue(session: StreamSession): boolean {
-    return session.isConfigDirSwitchPending && session.isActive && !this.checkIsWorkingBesidesFailedTurnQueue(session);
+    return session.isConfigDirSwitchPending && session.isActive && !this.checkIsWorking(session.key);
   }
 
-  /** {@link checkIsWorking} with the messages queued behind a failed turn left out. */
-  private checkIsWorkingBesidesFailedTurnQueue(session: StreamSession): boolean {
-    if (session.isBusy) return true;
-    const isOtherWorkPending = this.getBackgroundWorkSignals(session.key).some((signal) => signal.kind !== 'unconsumedInput');
-    return isOtherWorkPending || this.getUnconsumedInputsOnTheirWay(session).some((input) => input.isQueuedBehindFailedTurn !== true);
+  /**
+   * @description Which process of this conversation is live (`AgentAdapter.getProcessGeneration`): a new number for each spawn, re-spawn
+   * and adopt; `undefined` with none live (stopped, or down for a re-spawn).
+   */
+  getProcessGeneration(key: SessionKey): number | undefined {
+    const session = this.sessions.get(keyToString(key));
+    return session?.isActive ? session.processGeneration : undefined;
+  }
+
+  private createProcessGeneration(): number {
+    const generation = this.nextProcessGeneration;
+    this.nextProcessGeneration += 1;
+    return generation;
   }
 
   /**

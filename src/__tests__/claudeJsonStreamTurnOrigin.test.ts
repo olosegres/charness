@@ -75,7 +75,7 @@ describe('a message queued behind a turn that ends in an error result (review 17
     });
     adapter['onStdout'](session, unclassifiedErrorResult);
     assert.deepEqual(atTurnEnd, [{ isWorking: true, state: 'running', isConsumed: false }], 'what the per-turn stop and the turn-end settle read');
-    assert.equal(session.unconsumedInputs[0]?.isQueuedBehindFailedTurn, true);
+    assert.deepEqual(session.unconsumedInputs.map((input) => input.text), [queuedText]);
 
     // Past the grace a message the CLI never echoes holds nothing any more.
     session.unconsumedInputs = session.unconsumedInputs.map((input) => ({ ...input, since: Date.now() - unconsumedInputGraceMs - 1 }));

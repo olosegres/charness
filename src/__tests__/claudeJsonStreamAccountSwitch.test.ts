@@ -4,8 +4,9 @@
  * Live incident: a fresh process got a batch of messages, the first turn failed with a usage limit, and the
  * CLI never echoed the queued messages — the unconsumed-input list stayed non-empty, the session looked working
  * for good, and the deferred switch never fired. Load-bearing intent:
- * - an error `result` keeps the messages queued behind it (the CLI runs them as its next turn, measured on 2.1.330), and a pending
- *   switch still applies at that turn end: it looks past them;
+ * - an error `result` keeps the messages queued behind it (the CLI runs them as its next turn, measured on 2.1.330), and a deferred
+ *   switch waits for that turn: it fires at its end, never at the failed turn's, which would kill them unread (review 18 #2); one the CLI
+ *   never echoes holds it only within the grace;
  * - a switch answering a limit (`isAfterLimit`) re-spawns now even over a busy / input-holding session, while a
  *   plain apply still defers;
  * - a deferred switch reads as a re-spawn about to start from the turn's end on, and the re-spawn as one under way
@@ -16,16 +17,23 @@
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
 
 import { ClaudeJsonStreamAdapter } from '../adapters/claudeJsonStreamAdapter';
 import { keyToString, type SessionKey } from '../sessionKey';
 import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
 import { type UnconsumedInput } from '../utils/jsonStreamUnconsumedInput';
+import { unconsumedInputGraceMs } from '../utils/jsonStreamPendingWork';
 import { createStreamSessionFixture } from './claudeJsonStreamSessionFixture';
 
 const key: SessionKey = makeTelegramKey(-100999222, 78);
 const limitResult = JSON.stringify({ type: 'result', is_error: true, result: "You've hit your weekly limit" }) + '\n';
 const okResult = JSON.stringify({ type: 'result', is_error: false, result: 'done' }) + '\n';
+const initFrame = JSON.stringify({ type: 'system', subtype: 'init', session_id: 'sess-acct', model: 'claude-test' }) + '\n';
+const echoFrame = (text: string): string => JSON.stringify({ type: 'user', message: { role: 'user', content: text }, session_id: 'sess-acct' }) + '\n';
+/** Past a timer tick: the deferred switch re-spawns one tick after the turn end that releases it. */
+const afterTimerTick = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 20));
 
 /** `count` messages written to the CLI and not echoed back. */
 const queuedInputs = (count: number): UnconsumedInput[] => Array.from({ length: count }, (_unused, index) => ({ text: `queued ${index}`, since: Date.now(), hasUnmatchedEcho: false }));
@@ -39,6 +47,26 @@ function setup(): { adapter: ClaudeJsonStreamAdapter; respawns: Array<string | n
   adapter['respawnWithChange'] = async (_s, change) => { respawns.push(change.configDir); };
   return { adapter, respawns };
 }
+
+describe('the process number the wake-up engine reads a prompt off (review 18 #2)', () => {
+  it('every process the adapter spawns or adopts gets a number of its own; none is named for a session with no live process', () => {
+    const adapter = new ClaudeJsonStreamAdapter();
+    const first = adapter['createProcessGeneration']();
+    assert.notEqual(adapter['createProcessGeneration'](), first);
+    const session = createStreamSessionFixture({ key, workDir: '/tmp/jsonstream-account-work', sessionId: 'sess-acct', processGeneration: 5 });
+    adapter['sessions'].set(keyToString(key), session);
+    assert.equal(adapter.getProcessGeneration(key), 5);
+    session.isActive = false;
+    assert.equal(adapter.getProcessGeneration(key), undefined, 'stopped, or down for a re-spawn');
+    assert.equal(adapter.getProcessGeneration(makeTelegramKey(-100999222, 79)), undefined, 'another topic');
+  });
+
+  it('a spawn (a resume and a re-spawn spawn too) and an adopt each number the process they build', () => {
+    const adapterSource = fs.readFileSync(path.join(__dirname, '..', 'adapters', 'claudeJsonStreamAdapter.ts'), 'utf8');
+    assert.equal(adapterSource.match(/processGeneration: this\.createProcessGeneration\(\),/g)?.length, 2);
+    assert.match(adapterSource, /private async replaceSessionProcess\([^]*?await this\.spawnSession\(/, 'a re-spawn builds its process through the spawn');
+  });
+});
 
 describe('claude-json-stream account switch after a limit', () => {
   it('a plain apply over a session holding unconsumed input defers', async () => {
@@ -57,17 +85,16 @@ describe('claude-json-stream account switch after a limit', () => {
     assert.deepEqual(respawns, ['/profiles/perf']);
   });
 
-  it('an error result keeps the messages queued behind it (the CLI runs them next, measured on 2.1.330), marked as queued behind a failed turn: still working within the grace, and a deferred switch looks past them (regression: the switch never fired)', async () => {
+  it('an error result keeps the messages queued behind it (the CLI runs them next, measured on 2.1.330): still working within the grace, so a switch picked now defers — a re-spawn would kill them unread (review 18 #2)', async () => {
     const { adapter, respawns } = setup();
     const session = adapter['sessions'].get(keyToString(key))!;
     session.isBusy = true;
     session.unconsumedInputs = queuedInputs(4); // four queued messages, the CLI echoed none of them yet
     adapter['onStdout'](session, limitResult);
     assert.equal(session.unconsumedInputs.length, 4);
-    assert.ok(session.unconsumedInputs.every((input) => input.isQueuedBehindFailedTurn === true));
     assert.equal(adapter.checkIsWorking(key), true, 'the per-turn stop waits for the turn that takes them in');
-    assert.equal(await adapter.applyClaudeConfigDir(key), 'respawned', 'a switch picked now is not held off by them');
-    assert.deepEqual(respawns, ['/profiles/perf']);
+    assert.equal(await adapter.applyClaudeConfigDir(key), 'deferred');
+    assert.deepEqual(respawns, []);
   });
 
   it('a normal result keeps the count of messages still queued', () => {
@@ -119,14 +146,45 @@ describe('claude-json-stream account switch after a limit', () => {
     assert.equal(session.isConfigDirSwitchPending, true, 'still pending for the next turn end');
   });
 
-  it('a pending switch fires at the limit-error turn end', async () => {
+  it('a deferred switch, an error result with M queued behind it, then M\'s own turn: no re-spawn before that turn\'s end, the re-spawn after it (review 18 #2)', async () => {
     const { adapter, respawns } = setup();
     const session = adapter['sessions'].get(keyToString(key))!;
     session.isBusy = true;
-    session.unconsumedInputs = queuedInputs(4);
+    session.unconsumedInputs = [{ text: 'M', since: Date.now(), hasUnmatchedEcho: false }];
+    assert.equal(await adapter.applyClaudeConfigDir(key), 'deferred');
+
+    adapter['onStdout'](session, limitResult);
+    await afterTimerTick();
+    assert.deepEqual(respawns, [], 'the failed turn\'s end: M waits for its own turn, the switch with it');
+    assert.equal(adapter.checkIsRespawnPending(key), false, 'no re-spawn coming: nothing holds the turn probe');
+
+    adapter['onStdout'](session, initFrame + echoFrame('M'));
+    await afterTimerTick();
+    assert.deepEqual(respawns, [], 'M\'s turn runs');
+    assert.deepEqual(session.unconsumedInputs, [], 'the CLI took M in');
+
+    adapter['onStdout'](session, okResult);
+    await afterTimerTick();
+    assert.deepEqual(respawns, ['/profiles/perf'], 'M\'s turn ended: the switch fires');
+  });
+
+  it('a message queued behind a failed turn that the CLI never echoes holds the switch only within the grace: the next turn end past it fires it', async () => {
+    const { adapter, respawns } = setup();
+    const session = adapter['sessions'].get(keyToString(key))!;
+    session.isBusy = true;
+    session.unconsumedInputs = queuedInputs(1);
     assert.equal(await adapter.applyClaudeConfigDir(key), 'deferred');
     adapter['onStdout'](session, limitResult);
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await afterTimerTick();
+    assert.deepEqual(respawns, []);
+
+    // The grace passes with no turn: the next read (the poll's, the stop's) drops it — it was never on its way.
+    session.unconsumedInputs = session.unconsumedInputs.map((input) => ({ ...input, since: Date.now() - unconsumedInputGraceMs - 1 }));
+    assert.equal(adapter.checkIsWorking(key), false);
+    // The next prompt's turn ends: nothing holds the switch any more.
+    session.isBusy = true;
+    adapter['onStdout'](session, okResult);
+    await afterTimerTick();
     assert.deepEqual(respawns, ['/profiles/perf']);
   });
 });

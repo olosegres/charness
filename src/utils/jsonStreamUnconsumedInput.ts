@@ -30,12 +30,6 @@ export interface UnconsumedInput {
    * interrupt or the busy watchdog forgets the marks (see {@link getInputsWithoutEchoMarks}).
    */
   hasUnmatchedEcho: boolean;
-  /**
-   * Written before a turn that ended in an error result, and not taken in since: the CLI still runs it as its own next turn
-   * (measured on 2.1.330, see {@link getInputsAfterTurnEnd}), so it counts as on its way like any other — only a deferred account
-   * switch looks past it, so a limit's switch is never held off by a message the limited account cannot run anyway.
-   */
-  isQueuedBehindFailedTurn?: boolean;
 }
 
 /** What the CLI joins the texts of messages it takes in together with (measured). */
@@ -84,8 +78,8 @@ export function getInputsWithOldestEchoMarked(inputs: readonly UnconsumedInput[]
  * nothing: a real message the CLI queued behind it stays counted until its own echo, or its grace is out — dropping it here would
  * let the stop or the account switch kill the process a moment before the turn that takes that message in. (Measured on 2.1.329:
  * such a turn writes no `user` line of its own at all, and a message written behind it is echoed in its own turn after it.)
- * A turn that ended in an ERROR result (`isFailedTurn`) keeps its queue too, each message marked `isQueuedBehindFailedTurn`. Measured on
- * 2.1.330 with `claude -p --input-format stream-json --output-format stream-json --verbose --replay-user-messages --permission-mode default`
+ * A turn that ended in an ERROR result keeps its queue too, like any other turn end. Measured on 2.1.330 with
+ * `claude -p --input-format stream-json --output-format stream-json --verbose --replay-user-messages --permission-mode default`
  * (no `CLAUDE_CONFIG_DIR`, the default sign-in, a throwaway folder; a second user message written 0.3 s after the first, stdin held open),
  * the first turn failing on `--model claude-nonexistent-model-x`, and on an HTTP 400 and an HTTP 429 (after the CLI's ten retries) from a
  * loopback API through `ANTHROPIC_BASE_URL`: the CLI wrote a new `system/init` 0.02–0.2 s after the error `result` and ran the queued
@@ -93,10 +87,8 @@ export function getInputsWithOldestEchoMarked(inputs: readonly UnconsumedInput[]
  * list read the message as taken in before its turn began: the per-turn stop killed the process ahead of that turn, and the bot decided
  * the request's turn ended.
  */
-export function getInputsAfterTurnEnd(inputs: readonly UnconsumedInput[], now: number, options: { isFailedTurn?: boolean } = {}): UnconsumedInput[] {
-  return inputs
-    .filter((input) => !input.hasUnmatchedEcho)
-    .map((input) => ({ ...input, since: now, ...(options.isFailedTurn === true ? { isQueuedBehindFailedTurn: true } : {}) }));
+export function getInputsAfterTurnEnd(inputs: readonly UnconsumedInput[], now: number): UnconsumedInput[] {
+  return inputs.filter((input) => !input.hasUnmatchedEcho).map((input) => ({ ...input, since: now }));
 }
 
 /**

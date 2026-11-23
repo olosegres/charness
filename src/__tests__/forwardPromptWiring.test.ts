@@ -126,6 +126,15 @@ test('a turn\'s end is decided at the adapter\'s own turn-end event, after a per
   assert.match(getFunctionBody('forwardPromptToLiveAgent'), /^[^]*?settleEndedTurnsAndHandOver\(key\);[^]*?noteThreadActivity\(key\);/);
 });
 
+test('the write choke point names the process a buffered prompt\'s replay writes into: right after its settle, before the write, in the same tick (review 18 #2)', () => {
+  const body = getFunctionBody('forwardPromptToLiveAgent');
+  const settle = body.indexOf('settleEndedTurnsAndHandOver(key);');
+  const named = body.indexOf('requestWakeUpEngine?.noteSessionWrite(key);');
+  assert.ok(settle > 0 && named > settle, 'after the settle, which decides the ended watches by what they had');
+  assert.equal(body.slice(settle, named).includes('await'), false, 'nothing awaited between them');
+  assert.ok(named < body.indexOf('noteThreadActivity(key);'), 'ahead of the write');
+});
+
 test('a settle\'s reminders — at a turn end and at the write choke point (a todo reminder written at the turn end included) — are handed to a post waiting for that turn; the post\'s settle takes them, and the post registers itself in flight (review 16 #2, review 17 nit 6)', () => {
   assert.match(getFunctionBody('settleEndedTurnsAndHandOver'), /engine\.settleEndedTurnsOf\(key\)\.then\(\(deliverSettledWakes\) => engine\.deliverOrHandOverWake\(key, deliverSettledWakes\)\)/);
   assert.doesNotMatch(botSource, /settleEndedTurnsOf\(key\)\.then\(\(deliverSettledWakes\) => deliverSettledWakes\(\)\)/, 'no settle delivers past a post in flight');

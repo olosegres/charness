@@ -33,6 +33,8 @@ interface ProbeScenario {
   startingKeys: Set<string>;
   replayingKeys: Set<string>;
   hasUnconsumedInput: boolean | undefined;
+  /** What the adapter's `getProcessGeneration` answers; `undefined`: an adapter without it. */
+  processGeneration: number | undefined;
 }
 
 let scenario: ProbeScenario;
@@ -48,6 +50,7 @@ function createProbe(): ReturnType<typeof createSessionTurnProbe> {
       checkIsTurnOnItsWay: () => scenario.isTurnOnItsWay,
       checkIsCliOwnTurn: () => scenario.isCliOwnTurn,
       ...(scenario.hasUnconsumedInput === undefined ? {} : { checkHasUnconsumedInput: () => scenario.hasUnconsumedInput === true }),
+      ...(scenario.processGeneration === undefined ? {} : { getProcessGeneration: () => scenario.processGeneration }),
     }),
     checkHasPendingQuestion: (keyString) => scenario.pendingQuestionKeys.has(keyString),
     checkHasQuestionPin: (keyString) => scenario.questionPinKeys.has(keyString),
@@ -82,6 +85,7 @@ beforeEach(() => {
     startingKeys: new Set(),
     replayingKeys: new Set(),
     hasUnconsumedInput: undefined,
+    processGeneration: undefined,
   };
 });
 
@@ -209,6 +213,20 @@ describe('createSessionTurnProbe', () => {
     assert.equal(createProbe()(topicKey).isCliOwnTurn, true);
     scenario.isCliOwnTurn = false;
     assert.equal(createProbe()(topicKey).isCliOwnTurn, undefined, 'the bot\'s turn');
+  });
+
+  it('names the live process a prompt written now goes to — during the replay of a start\'s buffer too — and none while a start\'s or a stop\'s window is open, with no live process, or on a backend that cannot tell (review 18 #2)', () => {
+    assert.equal(createProbe()(topicKey).processGeneration, undefined, 'a backend without process numbers');
+    scenario.processGeneration = 7;
+    assert.equal(createProbe()(topicKey).processGeneration, 7);
+    scenario.startingKeys.add(topicKeyString);
+    assert.equal(createProbe()(topicKey).processGeneration, undefined, 'a window is open: a prompt forwarded now waits in the buffer');
+    scenario.startingKeys.delete(topicKeyString);
+    scenario.replayingKeys.add(topicKeyString);
+    assert.equal(createProbe()(topicKey).processGeneration, 7, 'the replay writes into the process the start brought up');
+    scenario.replayingKeys.delete(topicKeyString);
+    scenario.isActive = false;
+    assert.equal(createProbe()(topicKey).processGeneration, undefined, 'no live process');
   });
 
   it('another thread\'s start never holds this one', () => {

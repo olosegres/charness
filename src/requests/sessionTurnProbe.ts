@@ -54,7 +54,7 @@ export interface SessionTurnProbeDeps {
   getAdapter: (key: SessionKey) => Pick<
     AgentAdapter,
     'checkIsActive' | 'checkIsBusy' | 'checkHasUnconsumedInput' | 'isQuestionPending' | 'isLoginPastePending' | 'checkIsRespawnPending'
-    | 'checkIsTurnOnItsWay' | 'checkIsCliOwnTurn'
+    | 'checkIsTurnOnItsWay' | 'checkIsCliOwnTurn' | 'getProcessGeneration'
   >;
   checkHasPendingQuestion: (keyString: string) => boolean;
   checkHasQuestionPin: (keyString: string) => boolean;
@@ -77,7 +77,8 @@ export function createSessionTurnProbe(deps: SessionTurnProbeDeps): (key: Sessio
     const keyString = deps.serializeKey(key);
     const adapter = deps.getAdapter(key);
     const isActive = adapter.checkIsActive(key);
-    const isStarting = deps.checkIsSessionStarting(keyString) || deps.checkIsReplayingBufferedPrompts(keyString);
+    const isWindowOpen = deps.checkIsSessionStarting(keyString);
+    const isStarting = isWindowOpen || deps.checkIsReplayingBufferedPrompts(keyString);
     const isTurnEndBlocked =
       deps.checkHasPendingQuestion(keyString) ||
       deps.checkHasQuestionPin(keyString) ||
@@ -92,10 +93,13 @@ export function createSessionTurnProbe(deps: SessionTurnProbeDeps): (key: Sessio
       isStarting;
     // A finished task's own turn on its way is busy already: the watched turn runs on into it (the agent may answer there).
     const isBusy = isActive && ((adapter.checkIsBusy?.(key) ?? false) || (adapter.checkIsTurnOnItsWay?.(key) ?? false));
+    // The replay writes into the process the start brought up, so it is named during the replay; an open window names none.
+    const processGeneration = isActive && !isWindowOpen ? adapter.getProcessGeneration?.(key) : undefined;
     return {
       isActive,
       isBusy,
       ...(isBusy && (adapter.checkIsCliOwnTurn?.(key) ?? false) ? { isCliOwnTurn: true } : {}),
+      ...(processGeneration === undefined ? {} : { processGeneration }),
       hasUnconsumedInput: isStarting
         ? true
         : adapter.checkHasUnconsumedInput ? adapter.checkHasUnconsumedInput(key) : null,

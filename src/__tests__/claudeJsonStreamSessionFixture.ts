@@ -48,6 +48,7 @@ export function createStreamSessionFixture(overrides: Partial<StreamSession> = {
     isStopping: false,
     isSuspending: false,
     isRespawning: false,
+    processGeneration: 1,
     isBusy: false,
     lastStdoutActivityAt: Date.now(),
     outstandingToolUseIds: new Set(),

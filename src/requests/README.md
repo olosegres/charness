@@ -201,8 +201,9 @@ start, a wedge recovery) and that took the turn's prompt in — a message queued
 its own turn (events-list item 1) — so none of them decides a turn that has not started:
 
 1. The settle at the write (`forwardPromptToLiveAgent`): synchronously right before the adapter write (after an immediate forward's wake
-   and the adopted-replay wait in `forwardPromptToAgent`), its reminders after the write. At a replayed write, and at a prompt that
-   arrives during the replay, the probe reads the start: nothing is decided.
+   and the adopted-replay wait in `forwardPromptToAgent`), its reminders after the write. Right after it, a watch whose prompt waited in a
+   buffer is named the process this write goes to (`noteSessionWrite`): the replay's write is that prompt's. At a replayed write, and at
+   a prompt that arrives during the replay, the probe reads the start: nothing is decided.
 2. The settle at a post (`postToSession`): after the busy wait and the first ensure, before the second limit check, the second ensure,
    the pick and `buildText`; the decisions are persisted before the write, the reminders — with the ones handed to the post while it was
    in flight — delivered after the post's forward and its caller's `afterForward`. The ensure returns once the session is up, and its
@@ -211,10 +212,14 @@ its own turn (events-list item 1) — so none of them decides a turn that has no
    queued and before its window opens; no write of its own, so its reminders are handed to a post in flight, else go at once (through
    the ensure, behind the stop). A turn end held by an API error the bot still handles (`checkIsApiErrorInHandling`) or by an armed
    retry, one during a replay, and one with a written prompt not yet read (`hasUnconsumedInput`) read `running`: nothing is decided.
+   Every settle still marks the prompt of a watch it leaves running as taken in when the live process took it (R21), as the poll does:
+   the turn's end is where that is seen before a deferred switch's re-spawn or the per-turn stop replaces the process, and a prompt is
+   read as taken in only off the process it was written to (item 4).
 4. The poll (`pollWatchedTurn`, every 10 s): between writes, on its own probe and the same rule; during a start or a replay every watch
    reads `running`. Its R21 write reads what the backend still lists as unread, the turn end held or not (a message queued behind a failed
-   turn stays listed until its own turn echoes it: events-list item 1), and it re-checks its watch after that write, so a watch a settle
-   took meanwhile is not decided twice. What it decides is handed to a post in flight, like the turn end's.
+   turn stays listed until its own turn echoes it: events-list item 1) — and only off the process the prompt was written to: a process
+   that replaced it (a re-spawn) lists nothing unread, and that is not the prompt read. It re-checks its watch after that write, so a
+   watch a settle took meanwhile is not decided twice. What it decides is handed to a post in flight, like the turn end's.
 5. `sessionGone` (the poll only; every settle leaves such a watch): dropped without a decision when the session is inactive and nothing
    blocks it — never during a start or a replay, which block it.
 6. The stale drop (the poll only): a `running` watch whose session is idle, unblocked and not busy for the whole backstop window is handed
@@ -229,13 +234,12 @@ What can run between a json-stream `turnEnded` and the next write, in the order 
 (item 3). In the `result`'s own `applyTurnEnd`, before `turnEnded`:
 
 1. **The unconsumed inputs are re-based:** every message written behind the turn waits for the next turn from this end, and one the turn
-   took in in a shape nothing matches goes. A turn that ended in an ERROR result keeps its queue too, each entry marked
-   `isQueuedBehindFailedTurn`. Measured on CLI 2.1.330 (`-p`, stream-json, `--replay-user-messages`; a second message written 0.3 s after
-   the first; the first turn failing on an unknown `--model`, on an HTTP 400, and on an HTTP 429 after its ten retries, the last two from
-   a loopback API through `ANTHROPIC_BASE_URL`): the CLI wrote a new `system/init` 0.02–0.2 s after the error `result` and ran the queued
-   message as its own turn. So such a message's watch reads `running` (unconsumed) until its own turn took it in, the per-turn stop waits
-   for that turn (`checkIsWorking`), and R21 marks the prompt only once it is echoed. One never echoed holds nothing past the grace (30 s).
-   Only a deferred account switch looks past these entries (item 9).
+   took in in a shape nothing matches goes. A turn that ended in an ERROR result keeps its queue too. Measured on CLI 2.1.330 (`-p`,
+   stream-json, `--replay-user-messages`; a second message written 0.3 s after the first; the first turn failing on an unknown `--model`,
+   on an HTTP 400, and on an HTTP 429 after its ten retries, the last two from a loopback API through `ANTHROPIC_BASE_URL`): the CLI wrote
+   a new `system/init` 0.02–0.2 s after the error `result` and ran the queued message as its own turn. So such a message's watch reads
+   `running` (unconsumed) until its own turn took it in, the per-turn stop and a deferred account switch wait for that turn
+   (`checkIsWorking`), and R21 marks the prompt only once it is echoed. One never echoed holds nothing past the grace (30 s).
 2. **The API error the turn ended on** (`apiError`, emitted there too, so `handleApiError`'s synchronous part runs before `turnEnded`):
    - a branch that arms a retry (a transient error, a usage limit with «wait for reset» on, an unconfirmed limit's probe, a repeat while
      one is armed): its timer holds the turn end, and the «continue» merges into the turn (row 14);
@@ -280,8 +284,11 @@ After `turnEnded`:
      the poll decide nothing during it, and the reminder, decided after it, goes into the new process; written during it, its ensure
      would have resumed the conversation a second time beside the re-spawn. The hold covers the engine's own wake-ups only: a person's
      message or a post that lands in that window meets the re-spawn as before;
-   - messages queued behind a turn that ended in an error result do not defer the switch: after a limit the switch is what lets them run,
-     and a re-spawn that ends them leaves their requests' prompts unread (R21), so the next wake-up posts them again.
+   - messages queued behind a turn that ended in an error result defer the switch like any work: the CLI runs them as its next turn
+     within 0.2 s (item 1), and the switch fires at that turn's end. Only a switch that answers a limit (`isAfterLimit`) re-spawns over
+     them at once; the new process lists nothing unread, and R21 reads a prompt as taken in only off the process it was written to (the
+     watch's `writtenToProcess` against the probe's `processGeneration`), so the resume's «continue» posts it again
+     (`getPromptNotTakenIn`), or, when nothing carries it, the wake of its turn's end does.
 10. **Turns the CLI starts by itself:**
     - a finished background task's own turn: its `task_notification` came in the turn, and the CLI starts that turn ~0.1 s after the
       `result`. The adapter reports it on its way until its `init` (`checkIsTurnOnItsWay`, bounded by `notificationTurnGraceMs`), and the

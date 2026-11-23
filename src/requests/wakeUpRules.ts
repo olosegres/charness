@@ -95,6 +95,12 @@ export interface SessionTurnProbe {
    * own turn, or a backend that cannot tell.
    */
   isCliOwnTurn?: boolean;
+  /**
+   * The live process a prompt written now goes to (`AgentAdapter.getProcessGeneration`). Absent while a start's or a stop's window is
+   * open (a prompt forwarded then waits in the buffer, for the process the replay writes it to), with no live process, or on a backend
+   * that cannot tell its processes apart.
+   */
+  processGeneration?: number;
 }
 
 /**
