@@ -798,30 +798,29 @@ describe('a request whose prompt never reached the agent is re-posted, not remin
     assert.equal(ledger.getNewestOpenRequest(topicKey)?.isPromptTakenIn, true);
   });
 
-  it('a HELD turn end is no proof the prompt was read: the poll marks nothing while a retry or limit wait, an API error in hand or a pending question holds it — the error result emptied the queue — and marks it once the turn runs on unheld (report 6, not fixed 1)', async () => {
+  it('a held turn end is read like any other: a prompt the backend still lists as unread stays unread, one it took in is marked — the prompt of the turn that failed was read (review 17 #3: decision 45 (a) revisited after the CLI was measured)', async () => {
     const ledger = await createLedger();
     const engine = createEngine(ledger);
     const request = await ledger.createRequest(topicKey, { kind: 'trackerEvent', attributes: {} }, { createPrompt: () => prompt });
     await engine.trackForwardedTurn(topicKey, request.id, { isRequestPrompt: true });
-    // The turn behind which the prompt was queued failed: the adapter reports nothing unread, and the failure holds the turn end.
-    probe = { isActive: true, isBusy: false, hasUnconsumedInput: false, isTurnEndBlocked: true };
+    // Queued behind the turn that failed: the adapter keeps it listed until its own turn echoes it.
+    probe = { isActive: true, isBusy: false, hasUnconsumedInput: true, isTurnEndBlocked: true };
     await engine.pollWatchedTurns();
     await engine.deliverOrHandOverWake(topicKey, await engine.settleEndedTurnsOf(topicKey));
+    assert.equal(ledger.getNewestOpenRequest(topicKey)?.isPromptTakenIn, undefined, 'still listed: unread');
+    // Its own turn took it in (the CLI runs a message queued behind a failed turn as its next turn); the hold still stands.
+    probe = { isActive: true, isBusy: false, hasUnconsumedInput: false, isTurnEndBlocked: true };
     await engine.pollWatchedTurns();
-    assert.equal(ledger.getNewestOpenRequest(topicKey)?.isPromptTakenIn, undefined, 'held: not marked, so a resume still posts the prompt');
-    assert.deepEqual(engine.getWatchedRequestIdsOf(topicKey), [request.id]);
-    // The hold ends (a question answered, a «continue» written) and the turn runs and takes the prompt in: marked.
-    probe = { isActive: true, isBusy: true, hasUnconsumedInput: false, isTurnEndBlocked: false };
-    await engine.pollWatchedTurns();
-    assert.equal(ledger.getNewestOpenRequest(topicKey)?.isPromptTakenIn, true);
+    assert.equal(ledger.getNewestOpenRequest(topicKey)?.isPromptTakenIn, true, 'read: a resume reminds instead of repeating it');
+    assert.deepEqual(engine.getWatchedRequestIdsOf(topicKey), [request.id], 'held: not decided');
   });
 
-  it('a request whose held turn the bot then stops waking — «wait for reset» off — keeps its prompt unread: the resume posts it again (report 6, not fixed 1)', async () => {
+  it('a request whose held turn the bot then stops waking — «wait for reset» off — keeps a prompt still listed as unread unread: the resume posts it again', async () => {
     const ledger = await createLedger();
     const engine = createEngine(ledger);
     const request = await ledger.createRequest(topicKey, { kind: 'trackerEvent', attributes: {} }, { createPrompt: () => prompt });
     await engine.trackForwardedTurn(topicKey, request.id, { isRequestPrompt: true });
-    probe = { isActive: true, isBusy: false, hasUnconsumedInput: false, isTurnEndBlocked: true };
+    probe = { isActive: true, isBusy: false, hasUnconsumedInput: true, isTurnEndBlocked: true };
     await engine.pollWatchedTurns();
     await engine.stopWakingForLimitWait(topicKey);
     probe = { isActive: true, isBusy: false, hasUnconsumedInput: false, isTurnEndBlocked: false };
