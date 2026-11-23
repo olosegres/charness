@@ -6203,7 +6203,10 @@ async function wakeSleepingSession(key: SessionKey): Promise<string | null> {
  * The startup window is held open while the process stops, so a prompt arriving
  * meanwhile is buffered instead of written to a dying process; once the process
  * is gone the window closes WITHOUT dropping those prompts, and if any wait the
- * session is resumed for them at once (its own window replays them). The
+ * session is resumed for them at once (its own window replays them) — also when
+ * the stop threw, so a held prompt never waits in a closed buffer. A conversation
+ * released during the stop (`/quit`, `/new`, leaving the folder: no id is left to
+ * resume) starts nothing for them: they are dropped (a person is told). The
  * "working" check is repeated inside the transition: a turn may have started
  * while the fire waited its turn in the queue.
  */
@@ -6221,22 +6224,40 @@ async function suspendThreadSession(key: SessionKey): Promise<void> {
     return;
   }
   autoStopUnsupportedLoggedKeys.delete(kStr);
-  await sessionTransitions.run(kStr, async () => {
-    // Decide on what the process wrote up to now, not on the last tail poll: a background task's turn may have just begun.
-    adapter.refreshWorkingState?.(key);
-    if (!adapter.checkIsActive(key) || adapter.checkIsWorking?.(key)) return;
-    startupPromptBuffer.markStarting(kStr);
-    console.log(`[compact-on-idle] ${kStr} stopping the idle process; a prompt that comes meanwhile is held`);
-    try {
-      await adapter.suspendSession!(key);
-      console.log(`[compact-on-idle] ${kStr} process stopped; the session sleeps and resumes on the next message`);
-    } finally {
-      startupPromptBuffer.closeWindow(kStr);
-    }
-  });
-  // A sleeping per-turn session with a compaction due gets its idle timer from the persisted stamps (L-D7).
-  rearmThreadIdleTimer(key);
-  if (startupPromptBuffer.checkHasPrompts(kStr)) await ensureAgentSession(key);
+  try {
+    await sessionTransitions.run(kStr, async () => {
+      // Decide on what the process wrote up to now, not on the last tail poll: a background task's turn may have just begun.
+      adapter.refreshWorkingState?.(key);
+      if (!adapter.checkIsActive(key) || adapter.checkIsWorking?.(key)) return;
+      startupPromptBuffer.markStarting(kStr);
+      console.log(`[compact-on-idle] ${kStr} stopping the idle process; a prompt that comes meanwhile is held`);
+      try {
+        await adapter.suspendSession!(key);
+        console.log(`[compact-on-idle] ${kStr} process stopped; the session sleeps and resumes on the next message`);
+      } finally {
+        startupPromptBuffer.closeWindow(kStr);
+      }
+    });
+  } finally {
+    // A sleeping per-turn session with a compaction due gets its idle timer from the persisted stamps (L-D7).
+    rearmThreadIdleTimer(key);
+    await resumeForHeldPrompts(key);
+  }
+}
+
+/**
+ * @description After an idle stop, whatever its end: the prompts its window held go to the conversation resumed for them. A conversation
+ * released during the stop has no id left to resume, and a fresh session nobody asked for must not start for them: they are dropped.
+ */
+async function resumeForHeldPrompts(key: SessionKey): Promise<void> {
+  const kStr = keyToString(key);
+  if (!startupPromptBuffer.checkHasPrompts(kStr)) return;
+  if (getResumableSessionId(key) === null) {
+    console.log(`[compact-on-idle] ${kStr}: the conversation was released during the stop; the prompts it held are dropped`);
+    startupPromptBuffer.discardPrompts(kStr);
+    return;
+  }
+  await ensureAgentSession(key);
 }
 
 /** Conversations already told once that their CLI is too old for the auto-stop (L-D10). */

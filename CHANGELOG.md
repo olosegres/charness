@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+**`/quit` no longer brings the agent back by itself: a message sent while the agent's process was stopping used to start a new session right after the quit.**
+In a topic that runs Claude per turn, a message that arrives while the process stops after a turn waits for the stop to end, and the bot then resumes the conversation for it. When you quit (or started a new conversation, or left the folder) in that moment, there was nothing left to resume, and the bot started a fresh session for the waiting message. Now the message is not delivered and the topic says so. A stop that fails no longer leaves such a message waiting until the conversation's next start either.
+
 **A message you send while a sleeping conversation is being resumed is no longer lost when the resume fails: it reaches the fresh session that replaces it — and a queued message that reaches no agent at all is now said so.**
 When the bot could not resume a conversation (its transcript was gone, the agent did not come up), it started a fresh session but dropped the messages that had queued meanwhile, right after saying they were queued. In a topic that shows answers the agent then got a reminder of a request whose words it never saw, and its next silence ended in «could not finish». Now those messages go to the fresh session. When no session comes up at all, a queued message is not left hanging: the topic says «A message you sent while … was starting did not reach it. Send it again.», and its request is closed.
 

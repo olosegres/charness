@@ -369,6 +369,13 @@ describe('a startup window\'s prompts on every way out of it (review 19 #1)', ()
     assert.equal(start.match(/startupPromptBuffer\.discardPrompts\(kStr\);/g)?.length, 2, 'that, and the start that threw');
   });
 
+  it('an idle stop\'s held prompts go to the resume whatever the stop\'s end — also when it threw — and a conversation released during the stop starts nothing for them (review 19 nit 3)', () => {
+    const suspend = getBody('async function suspendThreadSession(', 'const autoStopUnsupportedLoggedKeys');
+    assert.match(suspend, /\n  \} finally \{\n(?:\s*\/\/[^\n]*\n)*\s*rearmThreadIdleTimer\(key\);\n\s*await resumeForHeldPrompts\(key\);\n\s*\}\n\}/, 'after the transition, in a finally');
+    const resume = getBody('async function resumeForHeldPrompts(', 'const autoStopUnsupportedLoggedKeys');
+    assert.match(resume, /if \(!startupPromptBuffer\.checkHasPrompts\(kStr\)\) return;\n\s*if \(getResumableSessionId\(key\) === null\) \{\n[^]*?startupPromptBuffer\.discardPrompts\(kStr\);\n\s*return;\n\s*\}\n\s*await ensureAgentSession\(key\);/);
+  });
+
   it('a person\'s prompt that waited in a buffer and was dropped closes its request and the person is told — at the person\'s own buffer and at the adopt-replay re-route', () => {
     const settle = getBody('function createPersonBufferedSettle(', 'async function deliverLateAnswerPrompt(');
     assert.match(settle, /if \(outcome !== 'dropped'\) return;/);
