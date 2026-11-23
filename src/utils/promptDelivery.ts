@@ -168,23 +168,39 @@ export interface LatePromptDeliveryPorts {
 export type LatePromptOutcome = 'buffered' | 'forwarded' | 'noSession' | 'dropped';
 
 /**
+ * How many times one prompt may wake its conversation: a wake awaits (its start, the notice it posts), and the session it brought up
+ * may be stopping again, or gone, by the time it resolves — the prompt is then routed once more, and woken for at most once more.
+ */
+const latePromptMaxWakes = 2;
+
+/**
  * @description Deliver a prompt whose handler decided, when it arrived, that the session is live — routed again by
  * {@link getLatePromptRoute} now, after the handler's awaits. A wake that finds nothing never forwards: the forward
- * would show the topic as working while the adapter drops the text.
+ * would show the topic as working while the adapter drops the text. A wake that brought a session up is followed by
+ * one more routing by the state at that moment, never a blind forward: during its awaits (a fresh start's notice is a
+ * paced topic send) a prompt it replayed can end its turn and the per-turn stop open its window — a prompt written
+ * into that stopping process would be lost (review 19 nit 2).
  */
-export async function deliverLatePrompt(ports: LatePromptDeliveryPorts): Promise<LatePromptOutcome> {
+export function deliverLatePrompt(ports: LatePromptDeliveryPorts): Promise<LatePromptOutcome> {
+  return routeLatePrompt(ports, latePromptMaxWakes);
+}
+
+async function routeLatePrompt(ports: LatePromptDeliveryPorts, wakesLeft: number): Promise<LatePromptOutcome> {
   const route = getLatePromptRoute({ isWindowOpen: ports.checkIsWindowOpen(), isSessionActive: ports.checkIsSessionActive(), isTechnical: ports.isTechnical });
   if (route === 'drop') return 'dropped';
   if (route === 'buffer') {
     await ports.buffer();
     return 'buffered';
   }
-  if (route === 'wake') {
-    const wake = await ports.wake();
-    if (!wake.isAwake) {
-      await ports.reportNoSession(wake.isNoticePosted);
-      return 'noSession';
-    }
+  if (route === 'forward') return ports.forward();
+  if (wakesLeft === 0) {
+    await ports.reportNoSession(false);
+    return 'noSession';
   }
-  return ports.forward();
+  const wake = await ports.wake();
+  if (!wake.isAwake) {
+    await ports.reportNoSession(wake.isNoticePosted);
+    return 'noSession';
+  }
+  return routeLatePrompt(ports, wakesLeft - 1);
 }

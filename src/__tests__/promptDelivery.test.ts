@@ -59,6 +59,8 @@ beforeEach(() => {
     checkIsSessionActive: () => isSessionActive,
     wakeSession: async () => {
       steps.push('wake');
+      // A wake that works brings the session up.
+      if (isWakeOk) isSessionActive = true;
       return { isAwake: isWakeOk, isNoticePosted: false };
     },
     reportNoSession: async (_key, isAlreadyTold) => { steps.push(`reportNoSession(${isAlreadyTold})`); },
@@ -379,8 +381,10 @@ describe('a startup window\'s prompts on every way out of it (review 19 #1)', ()
 });
 
 describe('deliverLatePrompt: a prompt decided on at arrival, delivered by what the session is NOW', () => {
-  function createPorts(state: { isWindowOpen: boolean; isSessionActive: boolean; isWakeOk?: boolean; isWakeNoticePosted?: boolean; isTechnical?: boolean; forwardOutcome?: LatePromptOutcome }): { ports: LatePromptDeliveryPorts; steps: string[] } {
+  /** `afterWake`: what the session is when a wake that brought it up resolves (absent: live, no window). */
+  function createPorts(state: { isWindowOpen: boolean; isSessionActive: boolean; isWakeOk?: boolean; isWakeNoticePosted?: boolean; isTechnical?: boolean; forwardOutcome?: LatePromptOutcome; afterWake?: Array<{ isWindowOpen: boolean; isSessionActive: boolean }> }): { ports: LatePromptDeliveryPorts; steps: string[] } {
     const steps: string[] = [];
+    const afterWake = [...(state.afterWake ?? [])];
     return {
       steps,
       ports: {
@@ -388,7 +392,12 @@ describe('deliverLatePrompt: a prompt decided on at arrival, delivered by what t
         checkIsWindowOpen: () => state.isWindowOpen,
         checkIsSessionActive: () => state.isSessionActive,
         buffer: async () => { steps.push('buffer'); },
-        wake: async () => { steps.push('wake'); return { isAwake: state.isWakeOk ?? true, isNoticePosted: state.isWakeNoticePosted ?? false }; },
+        wake: async () => {
+          steps.push('wake');
+          const isAwake = state.isWakeOk ?? true;
+          if (isAwake) Object.assign(state, afterWake.shift() ?? { isWindowOpen: false, isSessionActive: true });
+          return { isAwake, isNoticePosted: state.isWakeNoticePosted ?? false };
+        },
         forward: async () => {
           steps.push('forward');
           return state.forwardOutcome ?? 'forwarded';
@@ -428,6 +437,21 @@ describe('deliverLatePrompt: a prompt decided on at arrival, delivered by what t
       assert.equal(await deliverLatePrompt(ports), 'noSession', JSON.stringify(state));
       assert.ok(!steps.includes('reportNoSession') && !steps.includes('reportNoSession(alreadyTold)'), `the forward told the person already: ${JSON.stringify(state)}`);
     }
+  });
+
+  it('a wake routes the prompt once more by what the session is when it resolves: a stop that began during the wake\'s awaits (its notice) takes it into its window, never the stopping process (review 19 nit 2)', async () => {
+    const { ports, steps } = createPorts({ isWindowOpen: false, isSessionActive: false, afterWake: [{ isWindowOpen: true, isSessionActive: true }] });
+    assert.equal(await deliverLatePrompt(ports), 'buffered');
+    assert.deepEqual(steps, ['wake', 'buffer']);
+  });
+
+  it('a session gone again by the time its wake resolves is woken once more; gone after that too, the prompt reaches no session and that is said', async () => {
+    const once = createPorts({ isWindowOpen: false, isSessionActive: false, afterWake: [{ isWindowOpen: false, isSessionActive: false }, { isWindowOpen: false, isSessionActive: true }] });
+    assert.equal(await deliverLatePrompt(once.ports), 'forwarded');
+    assert.deepEqual(once.steps, ['wake', 'wake', 'forward']);
+    const never = createPorts({ isWindowOpen: false, isSessionActive: false, afterWake: [{ isWindowOpen: false, isSessionActive: false }, { isWindowOpen: false, isSessionActive: false }] });
+    assert.equal(await deliverLatePrompt(never.ports), 'noSession');
+    assert.deepEqual(never.steps, ['wake', 'wake', 'reportNoSession'], 'bounded: never a third wake, never a blind forward');
   });
 
   it('a live process: forwarded at once', async () => {
