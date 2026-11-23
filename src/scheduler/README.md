@@ -202,6 +202,10 @@ the scheduler's would owe an answer nobody asked for.
   exit codes back, for a check with a `statusWorkerRunDir`), never the command and never
   a pin; a worker watch that passes again says «Worker "builder S2" is working again.», any other check «… is back to normal».
   Any other check says «🔔 Check "<name>" fired — waking the agent.» with the failure and the output tail folded under it;
+  only the FIRST failure after a pass says so and wakes the agent (`deliverCheck`: `isCheckFailing` is stored before the wake, so a
+  restart never repeats it). A wake whose post failed at its forward — a startup window dropped it, its write failed, or no session was
+  left to take it — clears the flag again, so the next failing run says so and wakes the agent once more; a wake that could not start a
+  session keeps it (`requests/README.md`, «Every forward's success value»);
   the command and the full output go to the AGENT's prompt only. The folded message (`connectors/telegram/foldedMessage.ts`)
   carries its plain-text twin: if Telegram refuses the markup, `replyToThread` resends THOSE words (`plainFallbackText`), never
   the tags shown literally — every `parse_mode: 'HTML'` caller of `replyToThread` passes its twin (the rendered agent chunks, the

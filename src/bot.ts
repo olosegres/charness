@@ -14498,8 +14498,9 @@ function createLostWorkPostDeps(): PostToSessionDeps {
 
 /**
  * @description How a prompt that waited in the startup buffer ended, for a post that must know it reached the session:
- * `settle` is the buffer's callback, `assertReplayed` resolves once it was replayed into the session and rejects when it
- * was dropped — the start failed, or its write did not reach the agent.
+ * `settle` is the buffer's callback; `getOutcome` resolves with that outcome (`replayed` or `dropped`) for a caller that acts on
+ * either (the scheduler's request a fire opened closes on `dropped`); `assertReplayed` resolves once it was replayed into the session
+ * and rejects when it was dropped — the start failed, or its write did not reach the agent.
  */
 function createBufferedOutcome(): { settle: BufferedPromptSettled; getOutcome: () => Promise<BufferedPromptOutcome>; assertReplayed: () => Promise<void> } {
   let settle: BufferedPromptSettled = () => {};
