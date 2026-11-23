@@ -15953,7 +15953,9 @@ function createSessionPostDeps(): PostToSessionDeps {
  * the request it RIDES (`ridden`; `null` when none is open — a tracker's — so no turn is watched): a Jira issue's open request, or a
  * topic's job request or scheduler's request, told whether the fire's job is one of that request's own (`isRequestJob`). It goes through
  * the buffer-or-forward unit and opens no request: the request it rides owes the answer (`scheduler/scheduledRunTarget.ts`). A prompt
- * that found no session starts no turn, so none is watched.
+ * that never reached the agent — its window dropped it, or it found no session and nothing to wake — fails the post, as every session
+ * post does: its run records the error, and a check's failure wake clears `isCheckFailing` so its next failing run wakes the agent again
+ * (review 21 #2). No turn is watched for it.
  */
 async function forwardScheduledRun(conversationKey: string, text: string, ridden: RiddenRequest | null): Promise<void> {
   const key = keyFromString(conversationKey);
@@ -15964,7 +15966,8 @@ async function forwardScheduledRun(conversationKey: string, text: string, ridden
   const delivery = await deliverPromptOrBuffer(key, text, buffered.settle, { isAccountsNoteCarrier: true, lostWorkTelling });
   // A prompt that waited for the session's start counts only once it reached it: a replay whose write failed is a failed post.
   if (delivery === 'buffered') await buffered.assertReplayed();
-  if (ridden !== null && delivery !== 'noSession') {
+  if (delivery === 'noSession') throw new Error(noSessionForPostError);
+  if (ridden !== null) {
     await requestWakeUpEngine?.trackForwardedTurn(key, ridden.requestId, { isRequestPrompt: false, isScheduledRun: true, isRequestJob: ridden.isRequestJob });
   }
 }
@@ -15972,7 +15975,8 @@ async function forwardScheduledRun(conversationKey: string, text: string, ridden
 /**
  * @description A topic's scheduled run with no request to ride (`pickTopicRunTarget` → `ownRequest`): open the scheduler's request
  * (S7, the scheduler's requester — it replaces only one the bot gave up on), forward the prompt behind its header and settle it as
- * the request's own scheduled run — the turn is tracked as one, a prompt that found no session closes the request.
+ * the request's own scheduled run — the turn is tracked as one. A prompt that never reached the agent (its window dropped it, or it
+ * found no session) closes the request nobody was told about and fails the post, as {@link forwardScheduledRun} does (review 21 #2).
  */
 async function forwardTopicSchedulerRequestRun(conversationKey: string, text: string): Promise<void> {
   const key = keyFromString(conversationKey);
@@ -15987,6 +15991,8 @@ async function forwardTopicSchedulerRequestRun(conversationKey: string, text: st
     throw new Error(bufferedPromptDroppedError);
   }
   await settleTopicRequestAfterDelivery(key, { ...opening, isScheduledRun: true }, delivery);
+  // Closed by the settle when no session was left to take the prompt: the post fails, not read as delivered.
+  if (delivery === 'noSession') throw new Error(noSessionForPostError);
 }
 
 /**

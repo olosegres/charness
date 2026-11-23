@@ -341,6 +341,18 @@ describe('the bot buffers a prompt for a starting session through it, in one pla
     assert.match(getBody('async function cancelPendingQuestionAndForward(', 'async function applyQuestionAnswer('), /\): Promise<LatePromptOutcome> \{/);
   });
 
+  it('a scheduled run\'s two forwards fail when their prompt found no session, like every session post: the run records the error, and a check\'s lost failure wake clears its flag (review 21 #2)', () => {
+    const ridingFire = getBody('async function forwardScheduledRun(', 'async function forwardTopicSchedulerRequestRun(');
+    assert.match(ridingFire, /if \(delivery === 'noSession'\) throw new Error\(noSessionForPostError\);/, 'a fire riding a request');
+    assert.ok(ridingFire.indexOf('throw new Error(noSessionForPostError)') < ridingFire.indexOf('trackForwardedTurn'), 'it fails before any watch is made');
+    const openingFire = getBody('async function forwardTopicSchedulerRequestRun(', 'function wireScheduler(');
+    assert.match(openingFire, /if \(delivery === 'noSession'\) throw new Error\(noSessionForPostError\);/, 'a fire that opens the scheduler\'s request');
+    assert.ok(
+      openingFire.indexOf('await settleTopicRequestAfterDelivery(key, { ...opening, isScheduledRun: true }, delivery);') < openingFire.indexOf('throw new Error(noSessionForPostError)'),
+      'the scheduler\'s request nobody was told about is closed first, then the fire fails',
+    );
+  });
+
   it('a request is settled by where its prompt went: tracked, or closed when no session was left to take it', () => {
     // The behaviour is `requests/topicRequestSettle.ts`'s (`topicRequestSettle.test.ts`): a prompt that found no session (it waited for
     // a bot restart's replay; the person was told) must not leave a request open, or the wake-up engine prods the agent later for a
