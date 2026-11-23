@@ -1354,18 +1354,41 @@ describe('one progress comment per request: the first progress answer posts it, 
       requestId: 'req_1', kind: 'progress', body, origin, isRequestOpen: true, isBotNotice: true, ...(repeatKey === undefined ? {} : { repeatKey }),
     });
 
-    it('a notice that repeats for the request (the same repeat key) edits the earlier one — in a slot of its own, apart from the agent\'s notes', async () => {
+    it('a notice that repeats for the request (the same repeat key) edits the earlier one — in a slot of its own, apart from the agent\'s notes — as long as the agent has said nothing in between', async () => {
       await deliver('progress', 'Working.');
       await deliverNotice('Usage limit: the AI goes on at 14:00.', 'usageLimitWait');
       await deliverNotice('Usage limit: the AI goes on at 19:00.', 'usageLimitWait');
-      await deliver('progress', 'Working, more.');
-      await deliverNotice('Usage limit: the AI goes on at 21:00.', 'usageLimitWait');
+      await deliverNotice('Usage limit: the AI goes on at 20:00.', 'usageLimitWait');
       assert.deepEqual(jira.postedTexts, ['Working.', 'Usage limit: the AI goes on at 14:00.']);
       assert.deepEqual(jira.edits.map((edit) => [edit.commentId, edit.text.split('\n')[0]]), [
         ['c2', 'Usage limit: the AI goes on at 19:00.'],
-        ['c1', 'Working, more.'],
-        ['c2', 'Usage limit: the AI goes on at 21:00.'],
+        ['c2', 'Usage limit: the AI goes on at 20:00.'],
       ]);
+    });
+
+    it('the agent\'s own answer — a note edited, a note posted, a question or a final — lets the notice go: the next limit, hours later, is a new comment below it, with a notification', async () => {
+      await deliver('progress', 'Working.');
+      await deliverNotice('Usage limit: the AI goes on at 14:00.', 'usageLimitWait');
+      await deliver('progress', 'Working, after the resume.');
+      assert.deepEqual(jira.edits.map((edit) => edit.commentId), ['c1'], 'the agent\'s note edited ITS comment');
+      await deliverNotice('Usage limit: the AI goes on at 21:00.', 'usageLimitWait');
+      assert.deepEqual(jira.postedTexts, ['Working.', 'Usage limit: the AI goes on at 14:00.', 'Usage limit: the AI goes on at 21:00.'], 'a new comment, not an edit of the first notice');
+      assert.equal(jira.edits.length, 1);
+      // Back-to-back repeats edit the new notice again.
+      await deliverNotice('Usage limit: the AI goes on at 22:00.', 'usageLimitWait');
+      assert.deepEqual(jira.edits.map((edit) => edit.commentId), ['c1', 'c3']);
+
+      // A note the agent POSTS (the first of a request, or after the progress comment was let go) does the same, and so does a final.
+      for (const kind of ['progress-posted', 'final'] as const) {
+        const requestId = `req_${kind}`;
+        const answer = (body: string) => sink().deliverAnswer(key, { requestId, kind: kind === 'final' ? 'final' : 'progress', body, origin, isRequestOpen: true });
+        const notice = (body: string) => sink().deliverAnswer(key, { requestId, kind: 'progress', body, origin, isRequestOpen: true, isBotNotice: true, repeatKey: 'usageLimitWait' });
+        await notice(`${kind}: first limit.`);
+        await answer(`${kind}: the agent speaks.`);
+        const postsBefore = jira.postedTexts.length;
+        await notice(`${kind}: second limit.`);
+        assert.equal(jira.postedTexts.length, postsBefore + 1, `${kind}: the second limit is a new comment`);
+      }
     });
 
     it('a notice with no repeat key (an account move) is a comment every time and touches no slot', async () => {

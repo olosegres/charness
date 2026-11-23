@@ -146,8 +146,9 @@ Numeric bounds are named constants in the files below; this README says only wha
   answers every open request of the conversation itself with a `progress` answer ("the answer will come after HH:MM") — not through
   `answer_request`, so it is not the agent's note and starts no follow-up. Its delivery carries `isBotNotice`, so a sink
   keeps what the agent's own answer still owes (the Jira sink: the thread an issue update put the next answer in). The limit wait's
-  notice also carries `repeatKey` (`usageLimitWaitRepeatKey`): a later wait of the same request says it anew, and a sink that can
-  edit what it delivered (Jira: its comment) edits the earlier notice instead of delivering another; the account-moved and
+  notice also carries `repeatKey` (`usageLimitWaitRepeatKey`): a back-to-back wait of the same request says it anew, and a sink that
+  can edit what it delivered (Jira: its comment) edits the earlier notice instead of delivering another (until the agent's own
+  answer is delivered: then the next one is delivered anew); the account-moved and
   no-account notices carry none. It replaces the plain notice, is
   deduplicated per request and per wait, and a request opened mid-wait is told by the ledger's
   `onRequestCreated` hook.

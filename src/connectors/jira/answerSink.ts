@@ -62,7 +62,9 @@ import { getJiraNoticeSlot, jiraProgressSlot, type JiraProgressComments } from '
  * own, like a question, and the progress comment is let go, so the next note starts below it. So is an issue update the request
  * receives (`noteIssueUpdate`, a reply or a top-level comment): what the agent answers to the person is a new comment below theirs
  * — in the thread it asked for — and the notes after it edit that one. The bot's own notice that repeats for a request (`RequestAnswerDelivery.repeatKey`: a
- * usage-limit wait once more) is kept the same way, in a slot of its own; a bot notice without a key is a comment each time.
+ * usage-limit wait once more) is kept the same way, in a slot of its own — but only for back-to-back repeats: once the agent's own
+ * answer is delivered (posted or edited) or an issue update arrives, the notice is let go and the next one is a new comment below;
+ * a bot notice without a key is a comment each time.
  */
 
 /** How many of the issue's newest comments R18's read-back looks through. */
@@ -592,7 +594,11 @@ export function createJiraAnswerSink(deps: JiraAnswerSinkDeps): JiraAnswerSink {
       const kept = slot === null ? null : deps.progressComments.get(delivery.requestId, slot);
       if (slot !== null && kept !== null) {
         const edited = await editCommentText(issueKey, kept.commentId, getBodyWithUpdatedLine(bodies[0], deps.now()));
-        if (edited === 'edited') return { ok: true };
+        if (edited === 'edited') {
+          // The agent has spoken since the bot's notices: the next one of them is a new comment below, not an edit above.
+          if (!delivery.isBotNotice) deps.progressComments.forgetAll(delivery.requestId, slot);
+          return { ok: true };
+        }
         // The text goes into a new comment in the thread the old one stood in, which stays the progress comment's.
         console.warn(`[jira] ${issueKey}: comment ${kept.commentId} could not be edited (${edited.detail}); posting the progress as a new comment`);
         threadRootId = kept.threadRootId;
@@ -603,12 +609,10 @@ export function createJiraAnswerSink(deps: JiraAnswerSinkDeps): JiraAnswerSink {
       // A notice the bot wrote (a usage limit, a refused sign-in) goes into that thread too but uses nothing up: the agent's
       // answer to the reply is still owed, and comes after the resume.
       if (!delivery.isBotNotice) deps.answerThreads.consume(delivery.requestId);
-      if (slot !== null) {
-        deps.progressComments.remember(delivery.requestId, slot, posted.commentIds[0], posted.refusedThreadRootId === null ? threadRootId : null);
-      } else if (!delivery.isBotNotice) {
-        // A question, a final answer, or a note that is a comment of its own: the progress comment stays as it is, the next note starts below.
-        deps.progressComments.forget(delivery.requestId, jiraProgressSlot);
-      }
+      if (slot !== null) deps.progressComments.remember(delivery.requestId, slot, posted.commentIds[0], posted.refusedThreadRootId === null ? threadRootId : null);
+      // The agent has spoken: the bot's notices stay where they are and the next one is a new comment below. And a question, a final
+      // answer or a note that is a comment of its own lets the progress comment go too: the next note starts below it.
+      if (!delivery.isBotNotice) deps.progressComments.forgetAll(delivery.requestId, slot ?? undefined);
       const warnings: string[] = [...(files?.notes ?? [])];
       if (leftOutCommentIds.length > 0) warnings.push(buildJiraReplyLeftOutWarning(leftOutCommentIds));
       if (replies.threadRootId !== null && replies.otherThreadCommentIds.length > 0) {

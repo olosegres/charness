@@ -507,9 +507,11 @@ another platform's state.
     the comment scan, the mention scan's twin), `jiraIssueDelta.test.ts` (C7) and the flow `jiraProgressCommentE2e.test.ts`.
   - **The bot's own notices.** A bot notice is a `progress` answer with `isBotNotice` (the usage-limit wait, an account moved, no
     account usable — `requests/limitWaitAnswer.ts`). CHANGED: the usage-limit wait's notice carries a `repeatKey`
-    (`usageLimitWait`): a later wait of the same request — the next attempt of a wait whose reset time is unknown, the next limit
-    after a resume — says the same thing anew, so it EDITS the earlier notice (a slot of its own, apart from the agent's notes: the
-    edit keeps its «last updated» line) instead of adding a comment per wait. LEFT AS COMMENTS: the account-moved and the
+    (`usageLimitWait`): a later wait of the same request that follows it BACK-TO-BACK — the next attempt of a wait whose reset time
+    is unknown — says the same thing anew, so it EDITS the earlier notice (a slot of its own, apart from the agent's notes: the
+    edit keeps its «last updated» line) instead of adding a comment per attempt. Once the agent's OWN answer is delivered (posted or
+    edited, a question or a final too) or an issue update arrives, the notice is let go: a limit hours later, after the agent has
+    spoken, is a new comment below — the requester is notified of it — never a silent edit of a notice buried above. LEFT AS COMMENTS: the account-moved and the
     no-account-usable notices (each names a different account or state, so an edit would erase what the earlier one said), the
     queued notice (one per place in the wait list and tied to a trigger, not a request — there is none yet; a trigger joins the
     list once), the park, mention-park and untrusted notices (recorded as a trigger decision BEFORE the notice, so each trigger
