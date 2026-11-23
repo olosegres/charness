@@ -733,6 +733,7 @@ describe('A request waits for its schedule in a Telegram topic end to end: built
     try {
       fs.writeFileSync(exitFlushDelayPath, perTurnStopHoldMs.toString());
       const stopsBefore = countOutputLines(stopLine);
+      const droppedBefore = countTopicMessages('did not reach it');
       const unfinishedStopsBefore = stopsBefore - countOutputLines(stoppedLine);
       fakeTelegram.pushOperatorMessage(topicThreadId, 'XA-31 [fake:hold-silent-once] a turn the account changes under');
       await getCharness().waitFor('the agent to work on it', agentTimeoutMs, () => readFakeLog<FakeClaudeTurn>(fakeClaudeLogFileNames.turns).some((turn) => turn.issueKey === 'XA-31'));
@@ -765,7 +766,7 @@ describe('A request waits for its schedule in a Telegram topic end to end: built
       assert.ok(launches.length >= 1, 'the next turn runs in a new process');
       assert.deepEqual(launches.map((launch) => launch.claudeConfigDir), launches.map(() => null), 'every process since the pick runs on the account picked (the first one: no directory of its own)');
       assert.deepEqual(launches.map((launch) => launch.overlapsPid ?? null), launches.map(() => null), 'none started while another process of the conversation still ran');
-      assert.ok(!topic.listMessages().some((message) => message.text.includes('did not reach it')), 'nothing was dropped');
+      assert.equal(countTopicMessages('did not reach it'), droppedBefore, 'nothing was dropped');
       // The next step starts from a conversation that sleeps.
       await getCharness().waitFor('the conversation to sleep after the answers', bufferedFlowTimeoutMs, () => {
         const lastLaunch = getSessionLaunches(getLayout()).at(-1);
@@ -806,6 +807,8 @@ describe('A request waits for its schedule in a Telegram topic end to end: built
       assert.deepEqual(getAgentPromptsWith('XF-36'), [], 'the agent never got it');
       assert.equal(readClosedRequests().find((closed) => closed.id === requestId)?.closeReason, 'cancelled');
       assert.deepEqual(Object.keys(readState().openRequests ?? {}).filter((stateKey) => stateKey.startsWith(topicKeyString)), [], 'no request is left open for a backstop to post later');
+      // The steps after this one work with an agent: the operator starts one again, as after any `/quit`.
+      await topic.sendAndAwaitReply('/claude', 'ready in');
     } finally {
       fs.rmSync(exitFlushDelayPath, { force: true });
     }
@@ -852,6 +855,8 @@ describe('A request waits for its schedule in a Telegram topic end to end: built
 
   it('per-turn: a message that waits while a sleeping conversation is resumed reaches the fresh session that replaces a failed resume — never dropped, no reminder of words the agent never got (review 19 #1)', async () => {
     await topic.sendAndAwaitReply('/claude_mode per-turn', '🔁 Per-turn');
+    // Counted from here: an earlier step's dropped message said so in the same topic.
+    const droppedBefore = countTopicMessages('did not reach it');
     try {
       const requestId = await sendMessageIntoFailingResume('WU-21', 'WV-22', false);
       await getCharness().waitFor('the message to reach the fresh session in a turn of its own', bufferedFlowTimeoutMs, () =>
@@ -860,17 +865,19 @@ describe('A request waits for its schedule in a Telegram topic end to end: built
       assert.equal(readClosedRequests().find((closed) => closed.id === requestId)?.closeReason, 'final');
       assert.equal(getAgentPromptsWith('WV-22').length, 1, 'the agent read the message once');
       assert.deepEqual(getAgentPromptsWith(`[Reminder · request ${requestId} is still open]`), [], 'no reminder');
-      assert.ok(!topic.listMessages().some((message) => message.text.includes('did not reach it')), 'nothing was dropped');
+      assert.equal(countTopicMessages('did not reach it'), droppedBefore, 'nothing was dropped');
     } finally {
       removeRefusalFiles();
     }
   });
 
   it('per-turn: when the fresh start after a failed resume fails too, a message that waited there is dropped — its request closes and the operator is told to send it again (review 19 #1)', async () => {
+    // Counted from here: an earlier step's dropped message said so in the same topic.
+    const droppedBefore = countTopicMessages('did not reach it. Send it again.');
     try {
       const requestId = await sendMessageIntoFailingResume('WW-23', 'WX-24', true);
       await getCharness().waitFor('the operator to be told the message did not reach the agent', bufferedFlowTimeoutMs, () =>
-        topic.listMessages().some((message) => message.text.includes('did not reach it. Send it again.')));
+        countTopicMessages('did not reach it. Send it again.') > droppedBefore);
       await getCharness().waitFor('its request to close', replyTimeoutMs, () => readClosedRequests().some((closed) => closed.id === requestId));
       assert.equal(readClosedRequests().find((closed) => closed.id === requestId)?.closeReason, 'cancelled');
       assert.deepEqual(getAgentPromptsWith('WX-24'), [], 'no agent got it');
