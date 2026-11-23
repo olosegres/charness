@@ -1288,6 +1288,23 @@ describe('one progress comment per request: the first progress answer posts it, 
       assert.deepEqual(jira.edits.map((edit) => edit.commentId), ['c2', 'c2']);
     });
 
+    it('an update from a LINKED issue lets go of what the request keeps up to date, but notes no thread — a thread this issue\'s own update is still owed stays', async () => {
+      await deliver('progress', 'Working.');
+      await sink().deliverAnswer(key, { requestId: 'req_1', kind: 'progress', body: 'Usage limit: the AI goes on at 14:00.', origin, isRequestOpen: true, isBotNotice: true, repeatKey: 'usageLimitWait' });
+      answerThreads.note('req_1', '10900');
+      sink().noteLinkedIssueUpdate('req_1');
+      assert.equal(answerThreads.get('req_1'), '10900', 'the thread is not touched');
+      await deliver('progress', 'About the comment on the linked issue.');
+      assert.equal(jira.edits.length, 0, 'a new comment below, not a silent edit above');
+      assert.deepEqual(jira.postedTexts, ['Working.', 'Usage limit: the AI goes on at 14:00.', 'About the comment on the linked issue.']);
+      assert.deepEqual(jira.postedParentIds, [null, null, '10900']);
+      // Another request is not touched.
+      await deliverFor('req_2', 'progress', 'Other request.');
+      sink().noteLinkedIssueUpdate('req_1');
+      await deliverFor('req_2', 'progress', 'Other request, more.');
+      assert.deepEqual(jira.edits.map((edit) => edit.commentId), ['c4']);
+    });
+
     it('the update is remembered on disk: a restarted process starts the next note below the person\'s comment too', async () => {
       await deliver('progress', 'Working.');
       sink().noteIssueUpdate('req_1', null);

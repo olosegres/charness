@@ -108,6 +108,8 @@ interface Recorded {
   noticeThreads: Array<{ notice: 'park' | 'mentionPark' | 'queued'; threadRootId: string | null }>;
   /** Each issue update that reached its session: the request it went to and the thread its next answer goes into. */
   answerThreads: Array<{ requestId: string; threadRootId: string | null }>;
+  /** The requests an update of a LINKED issue reached: what they keep up to date is let go. */
+  linkedUpdateNotes: string[];
 }
 
 describe('JiraInbound', () => {
@@ -128,7 +130,7 @@ describe('JiraInbound', () => {
 
   beforeEach(async () => {
     dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'jira-inbound-'));
-    recorded = { calls: [], searches: [], issueReads: [], origins: [], prompts: [], storedPrompts: [], parked: [], untrusted: [], mentionParked: [], queued: [], updates: [], pausedNotices: [], noticeThreads: [], answerThreads: [] };
+    recorded = { calls: [], searches: [], issueReads: [], origins: [], prompts: [], storedPrompts: [], parked: [], untrusted: [], mentionParked: [], queued: [], updates: [], pausedNotices: [], noticeThreads: [], answerThreads: [], linkedUpdateNotes: [] };
     searchPages = [];
     changelogPages = new Map();
     triggerLog = await createLoadedTriggerLog();
@@ -247,6 +249,9 @@ describe('JiraInbound', () => {
       },
       noteAnswerThread: (requestId, threadRootId) => {
         recorded.answerThreads.push({ requestId, threadRootId });
+      },
+      noteLinkedIssueUpdate: (requestId) => {
+        recorded.linkedUpdateNotes.push(requestId);
       },
       ...overrides,
     });
@@ -2444,6 +2449,10 @@ describe('JiraInbound', () => {
         assert.ok(text.includes(`Jira issue ${issueKey} — its new comments:`) && text.includes('> why does the export fail on empty rows?'), text);
         assert.ok(!text.includes('Fields:'), 'only the new comments: that conversation knows its own issue');
         assert.equal(triggerLog.checkIsSeen(issueKey, 'comment:10240'), true);
+        // The update reached the request: what it keeps up to date is let go — its next answer is a new comment below the person's, not a
+        // silent edit above it. No thread is noted: the comment's thread is the OTHER issue's.
+        assert.deepEqual(recorded.linkedUpdateNotes, ['req_x']);
+        assert.deepEqual(recorded.answerThreads, []);
 
         // Nothing linked works on it any more: only now does a comment open the issue's own request.
         openRequestOrigins.delete(otherIssueKey);

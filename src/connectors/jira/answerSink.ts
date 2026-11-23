@@ -285,6 +285,12 @@ export interface JiraAnswerSink extends AnswerSink {
    * Never throws.
    */
   noteIssueUpdate(requestId: string, threadRootId: string | null): void;
+  /**
+   * An issue update of ANOTHER issue — a comment on an issue linked to the request's own — reached request `requestId`'s session: the
+   * comments the request keeps up to date are let go, as by {@link noteIssueUpdate}, but no thread is noted (the update's thread
+   * belongs to the other issue; noting none would also clear a thread this issue's own update is still owed). Never throws.
+   */
+  noteLinkedIssueUpdate(requestId: string): void;
   /** Over the run budget (D12): the park notice, then the hand-back. Never rejects. */
   parkIssue(issueKey: string, requester: JiraAccount | null, threadRootId?: string | null): Promise<void>;
   /** A mention over the run budget (D10): the park notice, no hand-back (nothing was handed over). Never rejects. */
@@ -587,6 +593,10 @@ export function createJiraAnswerSink(deps: JiraAnswerSinkDeps): JiraAnswerSink {
   return {
     noteIssueUpdate(requestId, threadRootId) {
       deps.answerThreads.note(requestId, threadRootId);
+      deps.progressComments.forgetAll(requestId);
+    },
+
+    noteLinkedIssueUpdate(requestId) {
       deps.progressComments.forgetAll(requestId);
     },
 

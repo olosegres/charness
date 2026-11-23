@@ -231,6 +231,13 @@ export interface JiraInboundDeps {
    * update's newest comment is a reply there — or, `null`, where its answers go by default (the answer side). Never throws.
    */
   noteAnswerThread: (requestId: string, threadRootId: string | null) => void;
+  /**
+   * An issue update of ANOTHER issue (a comment on an issue linked to the request's own, `postLinkedIssueUpdate`) reached request
+   * `requestId`'s session: the comments the request keeps up to date are let go, so its next answer is a new comment below the
+   * person's — never a silent edit above it. No thread is noted: a thread of the other issue means nothing here (the answer side).
+   * Never throws.
+   */
+  noteLinkedIssueUpdate: (requestId: string) => void;
   /** A hand-over that has to wait for a slot: the short comment saying so (the answer side), in the trigger's thread when it has one. Never rejects. */
   postQueuedNotice: (issueKey: string, queue: Extract<TaskAgentSlotDecision, { kind: 'queued' }>, threadRootId: string | null) => Promise<void>;
 }
@@ -1118,7 +1125,7 @@ export class JiraInbound {
       at,
       requestId,
       newestCommentId,
-    })));
+    })), undefined, (requestId) => deps.noteLinkedIssueUpdate(requestId));
     return 'update';
   }
 

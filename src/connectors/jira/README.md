@@ -487,11 +487,15 @@ another platform's state.
     `files` (attached and shown in a NEW comment — an edit would wipe them at the next note —, the progress comment let go so the
     note after it starts below), one that replies to comments (`replyToCommentIds`: the mention notifies its author, an edit would
     not), and one too long for one comment (several comments, never cut). Each lets the progress comment go.
-  - **An issue update the request receives lets everything it keeps up to date go** (`noteIssueUpdate`, which `inbound.ts` calls for
-    EVERY update: a reply in a thread, in the progress comment's own thread too, and a top-level comment). The agent's next note is
-    then a new comment below the person's comment — in the update's thread when it is a reply, where the request's answers go by
-    default when it is top-level — and the notes after it edit that one. An edit would answer the person silently, above their own
-    comment, and the agent would look as if it had ignored them. An update of another request lets nothing of this one go.
+  - **An issue update the request receives lets everything it keeps up to date go** — every one, whichever issue it is about.
+    A comment on the request's OWN issue (`noteIssueUpdate`, which `inbound.ts` calls for every such update: a reply in a thread, in
+    the progress comment's own thread too, and a top-level comment) notes the update's thread and lets go. A comment on an issue
+    LINKED to it that the update path routes to the request (`postLinkedIssueUpdate`, the self-handed issue the agent created or took
+    up: `noteLinkedIssueUpdate`) lets go too but notes NO thread — a thread of the other issue means nothing here, and noting none
+    would clear a thread this issue's own update is still owed. The agent's next note is then a new comment below the person's
+    comment — in the update's thread when it is a reply on the own issue, where the request's answers go by default otherwise — and
+    the notes after it edit that one. An edit would answer the person silently, above their own comment, and the agent would look as
+    if it had ignored them. An update of another request lets nothing of this one go.
   - **An edit that fails.** A refusal that changed nothing — 404 (the comment was deleted), 400, 403 (the AI account may not edit
     it), a rate limit — posts the text as a new comment instead, in the thread the old one stood in (400 → top-level, as any post),
     with R18's read-back; THAT comment is remembered from then on, and the old one stays as it was. An outcome Jira did not confirm

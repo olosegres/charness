@@ -374,6 +374,7 @@ export async function prepareJiraConnector(context: {
       postUpdatesPausedNotice: (issueKey, untilMs) => answerSink.postUpdatesPausedNotice(issueKey, jiraIssueUpdatesPer24hMax, untilMs),
       postQueuedNotice: (issueKey, queue, threadRootId) => answerSink.postQueuedNotice(issueKey, queue, threadRootId),
       noteAnswerThread: (requestId, threadRootId) => answerSink.noteIssueUpdate(requestId, threadRootId),
+      noteLinkedIssueUpdate: (requestId) => answerSink.noteLinkedIssueUpdate(requestId),
       noteShownSummary: (issueKey, summary) => shownSummaries.set(issueKey, summary),
     });
     inbound.start();
