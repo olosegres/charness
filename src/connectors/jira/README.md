@@ -501,7 +501,7 @@ another platform's state.
     (`isOwn`: author AND last editor the AI account; only a person's edit of it is told, as «edited … by»). What an edit does move is
     the issue's `updated`, so the next poll of a handed issue reads its newest comments once more (the scan's «updated moved»
     check) and decides nothing — the same cost as any comment the AI posts. Proven by `jiraInbound.test.ts` (the (6b) test for
-    the comment scan, the mention scan's twin), `jiraIssueDelta.test.ts` (C7).
+    the comment scan, the mention scan's twin), `jiraIssueDelta.test.ts` (C7) and the flow `jiraProgressCommentE2e.test.ts`.
   - **The bot's own notices.** A bot notice is a `progress` answer with `isBotNotice` (the usage-limit wait, an account moved, no
     account usable — `requests/limitWaitAnswer.ts`). CHANGED: the usage-limit wait's notice carries a `repeatKey`
     (`usageLimitWait`): a later wait of the same request — the next attempt of a wait whose reset time is unknown, the next limit
@@ -736,6 +736,9 @@ What the connector relies on, probed with a throw-away issue (REST v3 unless not
 real Jira-only instance each (`scripts/run-isolated.sh`) against `__tests__/jiraE2e/fakeJira.ts` (which also serves
 groups and their members) and `fakeClaude.ts`: `jiraConnectorE2e.test.ts` (requests and the session lifecycle, an answer that shows files and `send_file_to_user`; the fake Jira takes
 uploads and redirects an attachment's content to its media file as Jira Cloud does),
+`jiraProgressCommentE2e.test.ts` (with a group: three progress notes and a final answer are two comments, the first edited twice,
+and the edits wake nothing; a refused edit falls back to a new comment, which the next note edits; a restart between two notes
+edits the same comment — the unit side is `jiraProgressComments.test.ts` and `jiraAnswerSink.test.ts`),
 `jiraPromptE2e.test.ts` (what the prompts carry), `jiraTrustE2e.test.ts` (with a `trustedGroup` and no `trustedApps`: the
 filter, the notice, an automation's hand-over and mentions, a mention in a comment thread answered in it), `jiraTrustedAppsE2e.test.ts` (with a `trustedApps`: a listed
 app starts the agent, an unlisted one — a group member — is refused and its text withheld) and `jiraCommentWakeE2e.test.ts`

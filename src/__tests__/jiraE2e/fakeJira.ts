@@ -30,6 +30,10 @@ import type { JiraAccount } from '../../connectors/jira/client';
  * statuses, and the issues with a comment that holds a mention node of the AI account and changed within
  * the window — so a connector that forgot the branch finds no mention. Every change of an issue moves its
  * `updated` (strictly forward), as in Jira.
+ *
+ * A comment edit by the connector (`PUT …/comment/{id}`, the answer sink keeping a request's progress note up to date) is the AI
+ * account's own edit: the comment's text, `updated` and `updateAuthor` change and the issue's `updated` moves, as in Jira. The
+ * test can make the next edits fail ({@link FakeJira.editRefusals}); every edit is kept in {@link FakeJira.editRequests}.
  */
 
 export interface FakeJiraStatus {
@@ -177,6 +181,10 @@ export class FakeJira {
   readonly refusedAssigneeIssueKeys = new Set<string>();
   /** The site's upload limit in bytes, as `GET /attachment/meta` states it. */
   attachmentUploadLimitBytes = 10 * 1024 * 1024;
+  /** The status each next comment edit is refused with, in order (404: the comment is gone, 400, 403); an edit takes the next one, and succeeds once the list is empty. */
+  editRefusals: number[] = [];
+  /** Every comment edit the connector sent, in order — the query parameter that says whether anyone is notified included. */
+  readonly editRequests: Array<{ issueKey: string; commentId: string; notifyUsers: string | null }> = [];
 
   constructor(private readonly options: FakeJiraOptions) {
     this.server = http.createServer((request, response) => {
@@ -499,6 +507,29 @@ export class FakeJira {
       issue.comments.push(comment);
       this.touch(issue);
       send(201, { id: comment.id, ...(comment.parentId === undefined ? {} : { parentId: comment.parentId }) });
+    } else if (method === 'PUT' && subresource === 'comment' && subresourceId !== undefined) {
+      const commentId = decodeURIComponent(subresourceId);
+      this.editRequests.push({ issueKey: issue.key, commentId, notifyUsers: url.searchParams.get('notifyUsers') });
+      const refusal = this.editRefusals.shift();
+      if (refusal !== undefined) {
+        send(refusal, { errorMessages: [refusal === 404 ? `Can not find a comment with id ${commentId}` : 'The comment cannot be edited.'] });
+        return;
+      }
+      const comment = issue.comments.find((candidate) => candidate.id === commentId);
+      if (!comment) {
+        send(404, { errorMessages: [`Can not find a comment with id ${commentId}`] });
+        return;
+      }
+      const parsedBody = commentBodySchema.safeParse(requestBody.body);
+      if (!parsedBody.success || checkHasEmptyTextNode(parsedBody.data.content)) {
+        send(400, { errorMessages: ['INVALID_INPUT'] });
+        return;
+      }
+      comment.body = parsedBody.data;
+      comment.updated = new Date().toISOString();
+      comment.updateAuthor = this.options.aiAccount;
+      this.touch(issue);
+      send(200, comment);
     } else if (method === 'GET' && subresource === 'comment' && subresourceId !== undefined) {
       const comment = issue.comments.find((candidate) => candidate.id === decodeURIComponent(subresourceId));
       if (comment) send(200, comment);

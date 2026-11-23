@@ -64,6 +64,7 @@ import {
   fakeClaudeMcpServersFileName,
   fakeClaudeBackgroundReleaseFileName,
   fakeClaudeHoldReleaseFileName,
+  fakeProgressEditsBody,
   fakeNotificationTurnLatencyMs,
   getFakeBackgroundTaskDescription,
   getFakeBackgroundTaskFinishedText,
@@ -134,6 +135,9 @@ import { claudeSessionStateEventsVariableName } from '../../utils/jsonStreamHost
  *  - `slow-once`   — its first turn works in SILENCE (a long tool call: no frame)
  *    for 45 s, then answers; later turns answer at once;
  *  - `progress`    — sends a `progress` note and ends the turn;
+ *  - `progress-edits` — sends `fakeProgressEditsBody(<key>, 1)` as a `progress` note, HOLDS until the test writes
+ *    `fakeClaudeHoldReleaseFileName`, sends note 2, holds again, sends note 3, then answers `final` — what a long task of
+ *    the answer sink's one-comment-per-request rule looks like, with the test's polls and restarts in between;
  *  - `finish-together` — the first request of an issue gets a `progress` note
  *    (it stays open); the turn of a LATER request of the same issue answers
  *    `final` for every request of the issue still owed one, oldest first,
@@ -260,8 +264,8 @@ import { claudeSessionStateEventsVariableName } from '../../utils/jsonStreamHost
  * `FAKE_CLAUDE_STATE_DIR` (per-request turn counts, the conversations held).
  */
 
-export type FakeClaudeMode = 'answer' | 'silent-once' | 'silent' | 'hang-once' | 'hold-once' | 'hold-progress-once' | 'slow-once' | 'progress' | 'finish-together' | 'answer-after-queued' | 'background' | 'background-notify' | 'compact' | 'overflow' | 'fetch-attachment' | 'run-tool' | 'reply-to' | 'send-file' | 'usage-limit-once' | 'ask' | 'ask-again' | 'ask-two' | 'ask-long' | 'ask-repeat' | 'send-messages';
-const fakeModes: readonly FakeClaudeMode[] = ['answer', 'silent-once', 'silent', 'hang-once', 'hold-once', 'hold-progress-once', 'slow-once', 'progress', 'finish-together', 'answer-after-queued', 'background', 'background-notify', 'compact', 'overflow', 'fetch-attachment', 'run-tool', 'reply-to', 'send-file', 'usage-limit-once', 'ask', 'ask-again', 'ask-two', 'ask-long', 'ask-repeat', 'send-messages'];
+export type FakeClaudeMode = 'answer' | 'silent-once' | 'silent' | 'hang-once' | 'hold-once' | 'hold-progress-once' | 'slow-once' | 'progress' | 'progress-edits' | 'finish-together' | 'answer-after-queued' | 'background' | 'background-notify' | 'compact' | 'overflow' | 'fetch-attachment' | 'run-tool' | 'reply-to' | 'send-file' | 'usage-limit-once' | 'ask' | 'ask-again' | 'ask-two' | 'ask-long' | 'ask-repeat' | 'send-messages';
+const fakeModes: readonly FakeClaudeMode[] = ['answer', 'silent-once', 'silent', 'hang-once', 'hold-once', 'hold-progress-once', 'slow-once', 'progress', 'progress-edits', 'finish-together', 'answer-after-queued', 'background', 'background-notify', 'compact', 'overflow', 'fetch-attachment', 'run-tool', 'reply-to', 'send-file', 'usage-limit-once', 'ask', 'ask-again', 'ask-two', 'ask-long', 'ask-repeat', 'send-messages'];
 /**
  * How long an `answer-after-queued` turn waits for the next message before it answers anyway: four polls of the 10 s
  * floor, or what the launcher sets (`fakeClaudeQueuedWaitMaxMsEnvName`) for the instance's own poll.
@@ -1456,6 +1460,15 @@ async function runTurn(argv: readonly string[], sessionId: string, content: stri
     appendJsonLine(fakeClaudeLogFileNames.answers, { requestId: answeredRequestId, issueKey: state.issueKey, kind, outcome });
     return body;
   };
+  if (state.mode === 'progress-edits' && isFirstTurn) {
+    await answer(requestId, 'progress', state.turnCount, fakeProgressEditsBody(state.issueKey, 1));
+    await waitForHoldRelease();
+    await answer(requestId, 'progress', state.turnCount, fakeProgressEditsBody(state.issueKey, 2));
+    await waitForHoldRelease();
+    await answer(requestId, 'progress', state.turnCount, fakeProgressEditsBody(state.issueKey, 3));
+    endTurn(sessionId, await answer(requestId, 'final', state.turnCount));
+    return;
+  }
   if (state.mode === 'answer-after-queued') {
     if (supersededRequestIds.length > 0) {
       // The header's rule: the replaced requests were answered in the turn before — a pointer, not the result again.

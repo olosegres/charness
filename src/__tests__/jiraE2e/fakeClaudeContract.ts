@@ -429,6 +429,11 @@ export interface FakeClaudeControlRequest {
 /** The caption the fake's `send-file` mode sends its files with (`send_file_to_user`). */
 export const fakeSendFileCaption = 'The run, recorded:';
 
+/** The text of progress note `noteNumber` (1–3) the fake's `progress-edits` mode sends for the issue. */
+export function fakeProgressEditsBody(issueKey: string, noteNumber: number): string {
+  return `Progress ${noteNumber} of ${issueKey}.`;
+}
+
 export interface FakeClaudeToolCall {
   issueKey: string;
   tool: string;
