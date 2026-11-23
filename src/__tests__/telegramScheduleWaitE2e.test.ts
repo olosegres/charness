@@ -48,6 +48,8 @@
  *     own — no reminder of a request whose words the agent never got
  *   → the same, and the fresh start fails too: the message reaches no agent, its request closes, and the operator is told to send it
  *     again
+ *   → per turn, a message the stop holds and then `/quit`: the stop starts nothing for it — no process is launched, the agent never gets
+ *     it, its request is closed and the operator is told to send it again
  *
  * Before the rule, the engine reminded such an agent every 15 minutes whatever its watch said; before the scheduled-run model, every
  * fire opened a request that replaced the previous fire's, and an answered one's «working on it» was lost or chased. Nothing leaves the
@@ -242,6 +244,11 @@ function sleep(ms: number): Promise<void> {
 /** How many times the bot's output has `line` so far. */
 function countOutputLines(line: string): number {
   return getCharness().output.split(line).length - 1;
+}
+
+/** How many of the topic's messages so far carry `text`. */
+function countTopicMessages(text: string): number {
+  return topic.listMessages().filter((message) => message.text.includes(text)).length;
 }
 
 /**
@@ -738,7 +745,11 @@ describe('A request waits for its schedule in a Telegram topic end to end: built
       // The turn ends with no answer; the per-turn stop follows at once and holds its window open while the process exits.
       fs.writeFileSync(path.join(getLayout().fakeStateDir, fakeClaudeHoldReleaseFileName), '');
       await getCharness().waitFor('the per-turn stop after the turn', bufferedFlowTimeoutMs, () => countOutputLines(stopLine) > stopsBefore);
+      const queuedBefore = countTopicMessages('your message is queued');
       fakeTelegram.pushOperatorMessage(topicThreadId, 'XB-32 [fake:answer] a message the stop holds');
+      // Load-bearing: the message waited in the stop's window — one that came after the exit would wake the conversation by itself
+      // and pass every assertion below (review 23 nit 5).
+      await getCharness().waitFor('the message to be queued behind the stop', replyTimeoutMs, () => countTopicMessages('your message is queued') > queuedBefore);
       await getCharness().waitFor('the held message to reach the agent', bufferedFlowTimeoutMs, () =>
         readFakeLog<FakeClaudeTurn>(fakeClaudeLogFileNames.turns).some((turn) => turn.issueKey === 'XB-32'));
       const heldRequestId = readFakeLog<FakeClaudeTurn>(fakeClaudeLogFileNames.turns).find((turn) => turn.issueKey === 'XB-32')?.requestId ?? '';
@@ -833,6 +844,40 @@ describe('A request waits for its schedule in a Telegram topic end to end: built
       assert.deepEqual(getAgentPromptsWith(`[Reminder · request ${requestId} is still open]`), [], 'no reminder of a request nobody got');
     } finally {
       removeRefusalFiles();
+    }
+  });
+
+  it('per-turn: a message the stop holds, then /quit — the stop starts nothing for it: no process is launched, the agent never gets it, its request is closed and the operator is told to send it again (review 23 #1)', async () => {
+    const topicKeyString = `${group.id}:${topicThreadId}`;
+    const stopLine = `[compact-on-idle] ${topicKeyString} stopping the idle process`;
+    const stoppedLine = `[compact-on-idle] ${topicKeyString} process stopped`;
+    const exitFlushDelayPath = path.join(getLayout().fakeStateDir, fakeClaudeExitFlushDelayFileName);
+    await topic.sendAndAwaitReply('/claude_mode per-turn', '🔁 Per-turn');
+    try {
+      fs.writeFileSync(exitFlushDelayPath, perTurnStopHoldMs.toString());
+      const stopsBefore = countOutputLines(stopLine);
+      fakeTelegram.pushOperatorMessage(topicThreadId, 'XE-35 [fake:answer] warm up the per-turn session');
+      await getCharness().waitFor('the per-turn stop after the warm-up turn', bufferedFlowTimeoutMs, () => countOutputLines(stopLine) > stopsBefore);
+      const stoppedBefore = countOutputLines(stoppedLine);
+      const queuedBefore = countTopicMessages('your message is queued');
+      const droppedBefore = countTopicMessages('did not reach it. Send it again.');
+      const openBefore = new Set(Object.values(readState().openRequests ?? {}).map((open) => open.id));
+      fakeTelegram.pushOperatorMessage(topicThreadId, 'XF-36 [fake:answer] a message the stop holds');
+      await getCharness().waitFor('the message to be queued behind the stop', replyTimeoutMs, () => countTopicMessages('your message is queued') > queuedBefore);
+      assert.equal(countOutputLines(stoppedLine), stoppedBefore, 'the stop is still under way: the message waits in its window');
+      const requestId = Object.values(readState().openRequests ?? {}).map((open) => open.id).find((id) => !openBefore.has(id)) ?? '';
+      assert.match(requestId, /^req_/, 'the message opened its request');
+      const launchesBefore = getSessionLaunches(getLayout()).length;
+      // /quit queues behind the stop, marked as ending the conversation.
+      fakeTelegram.pushOperatorMessage(topicThreadId, '/quit');
+      await getCharness().waitFor('the operator to be told the message did not reach the agent', bufferedFlowTimeoutMs, () => countTopicMessages('did not reach it. Send it again.') > droppedBefore);
+      await getCharness().waitFor('/quit to release the conversation', replyTimeoutMs, () => countTopicMessages('The sleeping session was released') > 0);
+      assert.deepEqual(getSessionLaunches(getLayout()).slice(launchesBefore), [], 'nothing was resumed or started for it');
+      assert.deepEqual(getAgentPromptsWith('XF-36'), [], 'the agent never got it');
+      assert.equal(readClosedRequests().find((closed) => closed.id === requestId)?.closeReason, 'cancelled');
+      assert.deepEqual(Object.keys(readState().openRequests ?? {}).filter((stateKey) => stateKey.startsWith(topicKeyString)), [], 'no request is left open for a backstop to post later');
+    } finally {
+      fs.rmSync(exitFlushDelayPath, { force: true });
     }
   });
 });
