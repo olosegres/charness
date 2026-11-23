@@ -6083,6 +6083,25 @@ function runCommandSessionTransition<TResult>(key: SessionKey, transition: () =>
 }
 
 /**
+ * Conversations a command is about to REPLACE (`/new`, a `/resume` pick), from the command until its transition ran: a stop under way
+ * drops the prompts it held instead of resuming the conversation the command leaves — resumed, they would start a turn there only for the
+ * command's transition to kill it, unread and untold (review 21 nit 4; the `/resume` pick found by the round's own pass). Not
+ * `/claude_mode`: it keeps the conversation, and a prompt written to the old backend's process is posted again by the turn's wake (R21).
+ */
+const conversationsBeingReplaced = new Set<string>();
+
+/** Run `replace` — a command's transition that replaces the conversation — with the conversation marked as being replaced meanwhile. */
+async function runReplacingConversation<TResult>(key: SessionKey, replace: () => Promise<TResult>): Promise<TResult> {
+  const conversationKey = keyToString(key);
+  conversationsBeingReplaced.add(conversationKey);
+  try {
+    return await replace();
+  } finally {
+    conversationsBeingReplaced.delete(conversationKey);
+  }
+}
+
+/**
  * @description A json-stream re-spawn (a model, effort or account change, a deferred one at a turn's end) replaces the process inside the
  * adapter, outside this queue, with the process down for seconds: an ensure or a command transition waits for it first, and then reads the
  * re-spawned process live instead of starting or resuming a second one beside it (review 21 nit 6).
@@ -6237,9 +6256,10 @@ async function wakeSleepingSession(key: SessionKey): Promise<string | null> {
  * is gone the window closes WITHOUT dropping those prompts, and if any wait the
  * session is resumed for them at once (its own window replays them) — also when
  * the stop threw, so a held prompt never waits in a closed buffer. A conversation
- * released during the stop — `/quit`, leaving the folder, or `/new`, which clears the
- * ids before it waits for the stop: no id is left to resume — starts nothing for
- * them: they are dropped (a person is told). The
+ * released during the stop (`/quit`, leaving the folder: no id is left to resume), or
+ * replaced — `/new` and a `/resume` pick, which mark the conversation as being replaced
+ * before they wait for the stop — starts nothing for them: they are dropped (a person
+ * is told). The
  * "working" check is repeated inside the transition: a turn may have started
  * while the fire waited its turn in the queue.
  */
@@ -6284,13 +6304,14 @@ async function suspendThreadSession(key: SessionKey): Promise<void> {
  * @description After an idle stop, whatever its end, inside the stop's own transition: the prompts its window held go to the
  * conversation resumed for them (`ensureAgentSessionNow`: the queued ensure would wait for this very transition). A conversation
  * released during the stop (`/quit`, leaving the folder) has no id left to resume, and a fresh session nobody asked for must not start
- * for them: they are dropped.
+ * for them; one a command is replacing (`/new`, a `/resume` pick: {@link conversationsBeingReplaced}) must not be resumed only to be
+ * killed by that command: they are dropped, a person told to send theirs again.
  */
 async function resumeForHeldPrompts(key: SessionKey): Promise<void> {
   const kStr = keyToString(key);
   if (!startupPromptBuffer.checkHasPrompts(kStr)) return;
-  if (getResumableSessionId(key) === null) {
-    console.log(`[compact-on-idle] ${kStr}: the conversation was released during the stop; the prompts it held are dropped`);
+  if (getResumableSessionId(key) === null || conversationsBeingReplaced.has(kStr)) {
+    console.log(`[compact-on-idle] ${kStr}: the conversation was released, or is being replaced, during the stop; the prompts it held are dropped`);
     startupPromptBuffer.discardPrompts(kStr);
     return;
   }
@@ -7941,10 +7962,6 @@ command('new', async (_ctx, key) => {
   }
   // A fresh session does not know the old one's request: it closes silently.
   cancelConversationRequest(key);
-  // The ids go first, before the transition below waits for a stop under way: that stop then finds no conversation to resume for the
-  // prompts it held and drops them, a person told to send theirs again. Resumed, they would start a turn of the old conversation only for
-  // this transition to kill it (review 21 nit 4). `releaseThreadSession` releases the rest inside the transition.
-  await state.clearAgentSessionIds(key);
   // Release the current session (sweep + clear ids) via `releaseThreadSession`.
   // The fresh start below uses the thread's current adapter, so we keep the
   // adapter selection untouched. Both as the conversation's one transition: an idle stop under way ends first (with the resume for
@@ -7952,12 +7969,18 @@ command('new', async (_ctx, key) => {
   // `startAgentSession` handles startup buffering, the typing-loader boot, and
   // the preamble-marker reset. It returns `''` for a self-greeting agent (Claude
   // prints its own banner) — show a notice only for a non-empty ready text.
-  const msg = await runCommandSessionTransition(key, async () => {
-    await releaseThreadSession(key);
-    return startAgentSession(key);
-  });
+  // Marked as being replaced while it waits: a stop under way drops what it held instead of resuming the old conversation (review 21 nit 4).
+  const msg = await startFreshSessionForNew(key);
   if (msg) await replyToThread(key, msg);
 });
+
+/** `/new`'s release and fresh start, as the conversation's one transition, the conversation marked as being replaced until it ran. */
+function startFreshSessionForNew(key: SessionKey): Promise<string> {
+  return runReplacingConversation(key, () => runCommandSessionTransition(key, async () => {
+    await releaseThreadSession(key);
+    return startAgentSession(key);
+  }));
+}
 
 // ═══════════════════════════════════════════════════════════════════════════════
 //  /whoami /version /help /status (global) — debug & onboarding
@@ -10468,7 +10491,7 @@ async function resumeSessionByIndex(
   const sessionId = list[idx];
   // As the conversation's one transition: no ensure resumes the old conversation beside the pick, and no idle stop runs under it
   // (review 20 nit 3). A prompt that comes meanwhile routes to a wake, whose ensure waits for the pick in the same queue.
-  return runCommandSessionTransition(key, () => resumePickedSession(key, sessionId));
+  return runReplacingConversation(key, () => runCommandSessionTransition(key, () => resumePickedSession(key, sessionId)));
 }
 
 /** {@link resumeSessionByIndex}'s resume of the picked session, inside the conversation's transition. */
