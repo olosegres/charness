@@ -6591,6 +6591,9 @@ async function forwardPromptToLiveAgent(
   // Any write during the replay of a start's buffer — a replayed prompt, the held prompts after them, a prompt written at once while it
   // runs — goes to the process the replay writes the buffer into (`noteReplayedWrite`); no write outside a replay names anything.
   if (startupPromptBuffer.checkIsReplaying(keyToString(key))) requestWakeUpEngine?.noteReplayedWrite(key);
+  // Every write stamps the process it goes to, so a watch tracked once that process went down (a re-spawn right after a post's write)
+  // is named from the write (review 22 nit 2).
+  requestWakeUpEngine?.noteWrite(key);
   // A forwarded prompt is thread activity — reset the compact-on-idle watchdog (F2).
   noteThreadActivity(key);
   const isTechnicalPrompt = options.isTechnicalPrompt ?? false;

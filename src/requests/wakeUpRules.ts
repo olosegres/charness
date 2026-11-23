@@ -110,6 +110,11 @@ export interface SessionTurnProbe {
    * buffer, for the process the replay writes it to) or with no live process.
    */
   processGeneration?: number;
+  /**
+   * A start's or a stop's window is open: a prompt forwarded now waits in its buffer, for the process its replay writes it to. Absent
+   * without one. It tells a prompt that waits for its replay from one whose process went down after its write (review 22 nit 2).
+   */
+  isWindowOpen?: boolean;
 }
 
 /**

@@ -1019,6 +1019,41 @@ describe('a request whose prompt never reached the agent is re-posted, not remin
     assert.deepEqual(wakeUpMessages, [{ reason: 'silentTurn', text: prompt, isRequestPrompt: true }], 'its wake posts the prompt again');
   });
 
+  it('a request prompt whose process went down for a re-spawn between its write and its track is named from the write: decided at the new process\'s idle and posted again, never held as «never written» (review 22 nit 2)', async () => {
+    const ledger = await createLedger();
+    const engine = createEngine(ledger);
+    const request = await ledger.createRequest(topicKey, { kind: 'message', attributes: { requester: '424242' } }, { createPrompt: () => prompt });
+    // Written into process 5 (the write choke point stamps it)…
+    probe = { isActive: true, isBusy: true, hasUnconsumedInput: true, isTurnEndBlocked: false, processGeneration: 5 };
+    engine.noteWrite(topicKey);
+    // …then a re-spawn takes 5 down before the post's track reads the probe: no live process, no window.
+    probe = { isActive: false, isBusy: false, hasUnconsumedInput: null, isTurnEndBlocked: true };
+    await engine.trackForwardedTurn(topicKey, request.id, { isRequestPrompt: true, isPersonInput: true });
+    // Process 6 is up, idle, with nothing unread: the prompt died with 5.
+    probe = { isActive: true, isBusy: false, hasUnconsumedInput: false, isTurnEndBlocked: false, processGeneration: 6 };
+    await engine.deliverOrHandOverWake(topicKey, await engine.settleEndedTurnsOf(topicKey));
+    assert.equal(ledger.getNewestOpenRequest(topicKey)?.silentTurnCount, 1, 'decided at 6\'s idle, not held for the stale drop');
+    assert.equal(ledger.getNewestOpenRequest(topicKey)?.isPromptTakenIn, undefined);
+    assert.deepEqual(wakeUpMessages, [{ reason: 'silentTurn', text: prompt, isRequestPrompt: true }], 'its wake posts the prompt again');
+  });
+
+  it('a prompt tracked while a window holds it is never named from an earlier write: its replay names it (review 22 nit 2)', async () => {
+    const ledger = await createLedger();
+    const engine = createEngine(ledger);
+    const request = await ledger.createRequest(topicKey, { kind: 'message', attributes: { requester: '424242' } }, { createPrompt: () => prompt });
+    probe = { isActive: true, isBusy: false, hasUnconsumedInput: false, isTurnEndBlocked: false, processGeneration: 5 };
+    engine.noteWrite(topicKey);
+    // A stop's window opens; the prompt waits in it.
+    probe = { isActive: true, isBusy: false, hasUnconsumedInput: true, isTurnEndBlocked: true, isWindowOpen: true };
+    await engine.trackForwardedTurn(topicKey, request.id, { isRequestPrompt: true, isPersonInput: true });
+    // The replay writes it into process 7, which takes it in.
+    probe = { isActive: true, isBusy: false, hasUnconsumedInput: true, isTurnEndBlocked: true, processGeneration: 7 };
+    engine.noteReplayedWrite(topicKey);
+    probe = { isActive: true, isBusy: true, hasUnconsumedInput: false, isTurnEndBlocked: false, processGeneration: 7 };
+    await engine.pollWatchedTurns();
+    assert.equal(ledger.getNewestOpenRequest(topicKey)?.isPromptTakenIn, true, 'named 7 by the replay, not 5 by the earlier write');
+  });
+
   it('a backend that cannot tell its processes apart is read as before', async () => {
     const ledger = await createLedger();
     const engine = createEngine(ledger);

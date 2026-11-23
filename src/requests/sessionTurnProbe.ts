@@ -104,6 +104,7 @@ export function createSessionTurnProbe(deps: SessionTurnProbeDeps): (key: Sessio
       isBusy,
       ...(isBusy && (adapter.checkIsCliOwnTurn?.(key) ?? false) ? { isCliOwnTurn: true } : {}),
       ...(processGeneration === undefined ? {} : { processGeneration }),
+      ...(isWindowOpen ? { isWindowOpen: true } : {}),
       hasUnconsumedInput: isStarting
         ? true
         : adapter.checkHasUnconsumedInput ? adapter.checkHasUnconsumedInput(key) : null,

@@ -234,6 +234,9 @@ describe('createSessionTurnProbe', () => {
     scenario.isActive = true;
     scenario.startingKeys.add(topicKeyString);
     assert.equal(createProbe()(topicKey).processGeneration, undefined, 'its window open: none');
+    assert.equal(createProbe()(topicKey).isWindowOpen, true, 'and it says a window holds what is forwarded now (review 22 nit 2)');
+    scenario.startingKeys.delete(topicKeyString);
+    assert.equal(createProbe()(topicKey).isWindowOpen, undefined, 'no window: absent');
   });
 
   it('another thread\'s start never holds this one', () => {

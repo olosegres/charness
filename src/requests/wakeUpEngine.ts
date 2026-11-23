@@ -137,6 +137,12 @@ export class RequestWakeUpEngine {
   private readonly now: () => number;
   /** The watched turns by REQUEST id (a conversation may hold one per requester). */
   private readonly watched = new Map<string, WatchedRequestTurn>();
+  /**
+   * The process the last prompt written into each conversation went to (serialized key → process), stamped at the write choke point
+   * ({@link noteWrite}): a watch tracked after that process went down — a re-spawn takes it down right after a post's write, and the
+   * post tracks several awaits later — is named from it, never left unnamed (review 22 nit 2).
+   */
+  private readonly writtenProcesses = new Map<string, number>();
   /** Last persisted live-turn activity per request id, for the persist step. */
   private readonly activityPersistedAt = new Map<string, number>();
   /** The tail after the latest final answer, by serialized conversation key. */
@@ -379,8 +385,11 @@ export class RequestWakeUpEngine {
     const isForwardOwn = options.isContinuation === true && !isPersonWordsForward ? undefined : !isOtherJobFireForward;
     const isRequestJob = previous === undefined ? isForwardOwn !== false : previous.isRequestJob !== false || isForwardOwn === true;
     // Where the request's prompt now is: a forward that carries it was written to the live process (none named while a window holds it
-    // in the buffer); one that does not carry it leaves the prompt where it was.
-    const writtenToProcess = previous === undefined || options.isRequestPrompt ? this.deps.probeTurn(key).processGeneration : previous.writtenToProcess;
+    // in the buffer, for its replay to name); one that does not carry it leaves the prompt where it was. A process that went down since
+    // the write — no live one, and no window — is the one the write stamped.
+    const probe = this.deps.probeTurn(key);
+    const writtenNow = probe.processGeneration ?? (probe.isWindowOpen === true ? undefined : this.writtenProcesses.get(keyToString(key)));
+    const writtenToProcess = previous === undefined || options.isRequestPrompt ? writtenNow : previous.writtenToProcess;
     this.watched.set(requestId, {
       key,
       requestId,
@@ -654,6 +663,16 @@ export class RequestWakeUpEngine {
    * settle). Only a person's prompt is tracked before its replay: every bot-made caller watches its turn once its prompt reached a session
    * (`src/requests/README.md`, the callers table). Synchronous; a session with no process named does nothing.
    */
+  /**
+   * @description A write into `key`'s live process (the write choke point, synchronously before the adapter write): the process it goes
+   * to is stamped, for a watch that is tracked only after that process went down ({@link writtenProcesses}). Synchronous; a probe that
+   * names no process (a window holds the prompt) stamps nothing.
+   */
+  noteWrite(key: SessionKey): void {
+    const { processGeneration } = this.deps.probeTurn(key);
+    if (processGeneration !== undefined) this.writtenProcesses.set(keyToString(key), processGeneration);
+  }
+
   noteReplayedWrite(key: SessionKey): void {
     const { processGeneration } = this.deps.probeTurn(key);
     if (processGeneration === undefined) return;

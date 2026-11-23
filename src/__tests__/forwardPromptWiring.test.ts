@@ -136,6 +136,15 @@ test('the write choke point names the process a buffered prompt\'s replay writes
   assert.ok(named < body.indexOf('noteThreadActivity(key);'), 'ahead of the write');
 });
 
+test('the write choke point stamps every write with the process it goes to, before the write and in the same tick: a watch tracked after that process went down is named from it (review 22 nit 2)', () => {
+  const body = getFunctionBody('forwardPromptToLiveAgent');
+  const stamped = body.indexOf('requestWakeUpEngine?.noteWrite(key);');
+  const settle = body.indexOf('settleEndedTurnsAndHandOver(key);');
+  assert.ok(settle > 0 && stamped > settle, 'after the settle');
+  assert.equal(body.slice(settle, stamped).includes('await'), false, 'nothing awaited between them');
+  assert.ok(stamped < body.indexOf('noteThreadActivity(key);'), 'ahead of the write');
+});
+
 test('a settle\'s reminders — at a turn end and at the write choke point (a todo reminder written at the turn end included) — are handed to a post waiting for that turn; the post\'s settle takes them, and the post registers itself in flight (review 16 #2, review 17 nit 6)', () => {
   assert.match(getFunctionBody('settleEndedTurnsAndHandOver'), /engine\.settleEndedTurnsOf\(key\)\.then\(\(deliverSettledWakes\) => engine\.deliverOrHandOverWake\(key, deliverSettledWakes\)\)/);
   assert.doesNotMatch(botSource, /settleEndedTurnsOf\(key\)\.then\(\(deliverSettledWakes\) => deliverSettledWakes\(\)\)/, 'no settle delivers past a post in flight');
