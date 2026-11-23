@@ -70,7 +70,7 @@ describe('the comments the answer sink edits', () => {
     store.remember('req_1', 'progress', '10500', null);
     store.remember('req_1', 'notice:usageLimitWait', '10501', null);
     store.remember('req_2', 'progress', '10502', null);
-    store.forgetAll('req_1', 'progress');
+    store.forgetAll('req_1', ['progress']);
     assert.equal(store.get('req_1', 'progress')?.commentId, '10500');
     assert.equal(store.get('req_1', 'notice:usageLimitWait'), null);
     store.forgetAll('req_1');
@@ -78,6 +78,12 @@ describe('the comments the answer sink edits', () => {
     assert.equal(restarted.get('req_1', 'progress'), null);
     assert.equal(restarted.get('req_2', 'progress')?.commentId, '10502', 'another request\'s comments are not touched');
     restarted.forgetAll('req_3');
+    // Several slots can be kept.
+    restarted.remember('req_4', 'progress', '10600', null);
+    restarted.remember('req_4', 'notice:a', '10601', null);
+    restarted.remember('req_4', 'notice:b', '10602', null);
+    restarted.forgetAll('req_4', ['progress', 'notice:b']);
+    assert.deepEqual(['progress', 'notice:a', 'notice:b'].map((slot) => restarted.get('req_4', slot)?.commentId ?? null), ['10600', null, '10602']);
   });
 
   it('letting go what is not remembered writes nothing', async () => {

@@ -42,7 +42,7 @@ export interface RequestAnswerDelivery {
   /**
    * With {@link isBotNotice}: notices of one request that carry the same key say the same thing again (a usage-limit wait that
    * came round once more). A sink that can edit what it delivered (Jira: its comment) edits the earlier one instead of
-   * delivering another — while the agent has said nothing since; one that cannot ignores it. Absent — every such notice is
+   * delivering another — while nothing else has been said since (by the agent, or by another notice); one that cannot ignores it. Absent — every such notice is
    * delivered on its own.
    */
   repeatKey?: string;

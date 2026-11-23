@@ -1435,6 +1435,32 @@ describe('one progress comment per request: the first progress answer posts it, 
       }
     });
 
+    it('another bot comment of its own between two limit notices ends the chain: an account moved, no account usable, the give-up alert — the next limit is a new comment below it, never an edit of the notice above', async () => {
+      const notice = (requestId: string, body: string, repeatKey?: string) => sink().deliverAnswer(key, {
+        requestId, kind: 'progress', body, origin, isRequestOpen: true, isBotNotice: true, ...(repeatKey === undefined ? {} : { repeatKey }),
+      });
+      const limit = (requestId: string, time: string) => notice(requestId, `Usage limit: the AI goes on at ${time}.`, 'usageLimitWait');
+      // The account-moved and the no-account-usable notices carry no repeat key.
+      await limit('req_1', '14:00');
+      await notice('req_1', 'The AI\'s account was moved to «second».');
+      await limit('req_1', '21:00');
+      assert.deepEqual(jira.postedTexts, ['Usage limit: the AI goes on at 14:00.', 'The AI\'s account was moved to «second».', 'Usage limit: the AI goes on at 21:00.']);
+      assert.equal(jira.edits.length, 0, 'no edit of the first notice, buried above the move');
+      await limit('req_1', '22:00');
+      assert.deepEqual(jira.edits.map((edit) => edit.commentId), ['c3'], 'back-to-back again: the newest notice is edited');
+      // The give-up alert.
+      await limit('req_2', '14:00');
+      await sink().deliverAlert(key, { requestId: 'req_2', reason: 'silentTurns', origin });
+      const postsBefore = jira.postedTexts.length;
+      await limit('req_2', '21:00');
+      assert.equal(jira.postedTexts.length, postsBefore + 1, 'a new comment below the alert');
+      // The agent\'s own progress note is not the bot\'s business: a bot comment of its own leaves it, and its edits go on.
+      await deliverFor('req_3', 'progress', 'Working.');
+      await notice('req_3', 'The AI\'s account was moved to «third».');
+      await deliverFor('req_3', 'progress', 'Working, more.');
+      assert.deepEqual(jira.edits.map((edit) => edit.text.split('\n')[0]), ['Usage limit: the AI goes on at 22:00.', 'Working, more.']);
+    });
+
     it('a notice with no repeat key (an account move) is a comment every time and touches no slot', async () => {
       await deliver('progress', 'Working.');
       await deliverNotice('The AI\'s account was moved to «second».');

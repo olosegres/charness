@@ -514,8 +514,10 @@ another platform's state.
     (`usageLimitWait`): a later wait of the same request that follows it BACK-TO-BACK — the next attempt of a wait whose reset time
     is unknown — says the same thing anew, so it EDITS the earlier notice (a slot of its own, apart from the agent's notes: the
     edit keeps its «last updated» line) instead of adding a comment per attempt. Once the agent's OWN answer is delivered (posted or
-    edited, a question or a final too) or an issue update arrives, the notice is let go: a limit hours later, after the agent has
-    spoken, is a new comment below — the requester is notified of it — never a silent edit of a notice buried above. LEFT AS COMMENTS: the account-moved and the
+    edited, a question or a final too), another bot comment of its own stands below it (the account-moved and no-account-usable
+    notices, the give-up alert) or an issue update arrives, the notice is let go: a limit hours later, after the agent has spoken or
+    the bot said something else, is a new comment below — the requester is notified of it — never a silent edit of a notice buried
+    above. Such a bot comment leaves the AGENT's progress comment alone (it has nothing to do with it); only the alert ends that too. LEFT AS COMMENTS: the account-moved and the
     no-account-usable notices (each names a different account or state, so an edit would erase what the earlier one said), the
     queued notice (one per place in the wait list and tied to a trigger, not a request — there is none yet; a trigger joins the
     list once), the park, mention-park and untrusted notices (recorded as a trigger decision BEFORE the notice, so each trigger

@@ -95,13 +95,13 @@ export class JiraProgressComments {
     this.write({ requestId, slot, commentId: null, threadRootId: null, at: this.now() });
   }
 
-  /** @description Let go of every comment request `requestId` keeps up to date, except the one under `exceptSlot`. */
-  forgetAll(requestId: string, exceptSlot?: string): void {
+  /** @description Let go of every comment request `requestId` keeps up to date, except the ones under `keepSlots`. */
+  forgetAll(requestId: string, keepSlots: readonly string[] = []): void {
     const prefix = getIdentity(requestId, '');
     for (const identity of [...this.entries.keys()]) {
       if (!identity.startsWith(prefix)) continue;
       const slot = identity.slice(prefix.length);
-      if (slot !== exceptSlot) this.forget(requestId, slot);
+      if (!keepSlots.includes(slot)) this.forget(requestId, slot);
     }
   }
 

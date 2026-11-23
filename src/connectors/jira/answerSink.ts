@@ -64,8 +64,9 @@ import { getJiraNoticeSlot, jiraProgressSlot, type JiraProgressComments } from '
  * receives (`noteIssueUpdate`, a reply or a top-level comment): what the agent answers to the person is a new comment below theirs
  * — in the thread it asked for — and the notes after it edit that one. The bot's own notice that repeats for a request (`RequestAnswerDelivery.repeatKey`: a
  * usage-limit wait once more) is kept the same way, in a slot of its own — but only for back-to-back repeats: once the agent's own
- * answer is delivered (posted or edited) or an issue update arrives, the notice is let go and the next one is a new comment below;
- * a bot notice without a key is a comment each time.
+ * answer is delivered (posted or edited), another bot comment of its own stands below it (an account moved, no account usable, the
+ * give-up alert) or an issue update arrives, the notice is let go and the next one is a new comment below; a bot notice without a
+ * key is a comment each time.
  */
 
 /** How many of the issue's newest comments R18's read-back looks through. */
@@ -190,7 +191,7 @@ export interface JiraAnswerSinkDeps {
   /** The thread an issue update put a request's next answer in; consumed by the answer delivered. */
   answerThreads: Pick<JiraAnswerThreads, 'get' | 'note' | 'consume'>;
   /** The comments kept up to date instead of posting another: a request's progress note, a repeating bot notice. */
-  progressComments: Pick<JiraProgressComments, 'get' | 'remember' | 'forget' | 'forgetAll'>;
+  progressComments: Pick<JiraProgressComments, 'get' | 'remember' | 'forgetAll'>;
   /**
    * Attach files of the issue's project folder to the issue and say how a comment shows them (`outgoingFiles.ts`);
    * absent where files cannot be sent — an answer that carries some is then refused, nothing posted.
@@ -615,7 +616,7 @@ export function createJiraAnswerSink(deps: JiraAnswerSinkDeps): JiraAnswerSink {
         const edited = await editCommentText(issueKey, kept.commentId, getBodyWithUpdatedLine(bodies[0], deps.now()));
         if (edited === 'edited') {
           // The agent has spoken since the bot's notices: the next one of them is a new comment below, not an edit above.
-          if (!delivery.isBotNotice) deps.progressComments.forgetAll(delivery.requestId, slot);
+          if (!delivery.isBotNotice) deps.progressComments.forgetAll(delivery.requestId, [slot]);
           return { ok: true };
         }
         // An edit that may have landed: nothing is posted, the comment stays the kept one and the resend edits it again.
@@ -631,9 +632,11 @@ export function createJiraAnswerSink(deps: JiraAnswerSinkDeps): JiraAnswerSink {
       // answer to the reply is still owed, and comes after the resume.
       if (!delivery.isBotNotice) deps.answerThreads.consume(delivery.requestId);
       if (slot !== null) deps.progressComments.remember(delivery.requestId, slot, posted.commentIds[0], posted.refusedThreadRootId === null ? threadRootId : null);
-      // The agent has spoken: the bot's notices stay where they are and the next one is a new comment below. And a question, a final
-      // answer or a note that is a comment of its own lets the progress comment go too: the next note starts below it.
-      if (!delivery.isBotNotice) deps.progressComments.forgetAll(delivery.requestId, slot ?? undefined);
+      // A comment was added: every chain of edits that stands above it ends, so the next of each is a new comment below — a notice
+      // of the bot's own is one chain, the agent's progress note another. The agent's answer ends the bot's notices (a question, a
+      // final answer or a note that is a comment of its own ends its progress comment too); a bot comment that stands on its own
+      // (an account moved, no account usable) ends the notices and leaves the agent's note, which it has nothing to do with.
+      deps.progressComments.forgetAll(delivery.requestId, [...(slot === null ? [] : [slot]), ...(delivery.isBotNotice ? [jiraProgressSlot] : [])]);
       const warnings: string[] = [...(files?.notes ?? [])];
       if (leftOutCommentIds.length > 0) warnings.push(buildJiraReplyLeftOutWarning(leftOutCommentIds));
       if (replies.threadRootId !== null && replies.otherThreadCommentIds.length > 0) {
@@ -654,9 +657,9 @@ export function createJiraAnswerSink(deps: JiraAnswerSinkDeps): JiraAnswerSink {
       const issueKey = key.thread;
       const posted = await postComments(issueKey, [convertMarkdownToAdf(buildJiraAlertText(alert.reason))], alert.requestId, getOriginThreadRootId(alert.origin));
       if (posted.postedCount === 0 && posted.failure) return { ok: false, error: getNothingPostedError(posted.failure) };
-      // The comment names no request: the log does. The progress comment above it stays as it is: a later note starts below.
+      // The comment names no request: the log does. Everything kept up to date above it stays as it is: later notes start below.
       console.log(`[jira] ${issueKey}: request ${alert.requestId} given up (${alert.reason}); the alert comment is posted`);
-      deps.progressComments.forget(alert.requestId, jiraProgressSlot);
+      deps.progressComments.forgetAll(alert.requestId);
       if (alert.origin.kind === 'trackerEvent') {
         const handBackWarning = await handBack(issueKey, getRequestRequester(alert.origin));
         if (handBackWarning) console.warn(`[jira] ${issueKey}: alert for ${alert.requestId}: ${handBackWarning}`);
