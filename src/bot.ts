@@ -9922,7 +9922,11 @@ async function resumeTopicOnNewSession(
   }
   const prompt = options.getFirstPrompt();
   if (prompt === null) return;
-  await deliverPromptOrBuffer(key, prompt.text);
+  // A first prompt that reached no session starts no turn: nothing is reset, lifted or watched for it, as at a retry's kick.
+  if ((await deliverPromptOrBuffer(key, prompt.text)) === 'noSession') {
+    console.warn(`[fallback] ${keyToString(key)}: the first prompt after the move reached no session; no turn is tracked for it`);
+    return;
+  }
   await requestWakeUpEngine?.trackContinuationTurn(key, { isCountersReset: true, isRequestPrompt: prompt.isRequestPrompt });
 }
 

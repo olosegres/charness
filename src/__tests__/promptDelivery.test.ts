@@ -376,6 +376,11 @@ describe('a startup window\'s prompts on every way out of it (review 19 #1)', ()
     assert.match(resume, /if \(!startupPromptBuffer\.checkHasPrompts\(kStr\)\) return;\n\s*if \(getResumableSessionId\(key\) === null\) \{\n[^]*?startupPromptBuffer\.discardPrompts\(kStr\);\n\s*return;\n\s*\}\n\s*await ensureAgentSession\(key\);/);
   });
 
+  it('a move\'s first prompt that reached no session tracks no continuation: nothing is reset, lifted or watched for a turn that never starts (review 19 nit 4)', () => {
+    const resume = getBody('async function resumeTopicOnNewSession(', 'function getTopicBackendFamily(');
+    assert.match(resume, /if \(\(await deliverPromptOrBuffer\(key, prompt\.text\)\) === 'noSession'\) \{\n[^]*?return;\n\s*\}\n\s*await requestWakeUpEngine\?\.trackContinuationTurn\(key, \{ isCountersReset: true, isRequestPrompt: prompt\.isRequestPrompt \}\);/);
+  });
+
   it('a person\'s prompt that waited in a buffer and was dropped closes its request and the person is told — at the person\'s own buffer and at the adopt-replay re-route', () => {
     const settle = getBody('function createPersonBufferedSettle(', 'async function deliverLateAnswerPrompt(');
     assert.match(settle, /if \(outcome !== 'dropped'\) return;/);
