@@ -7818,21 +7818,26 @@ async function unbindThread(key: SessionKey): Promise<void> {
     if (pendingQuestions.has(kStr)) await retirePendingQuestion(key);
 
     // Stop any running session before discarding the binding so we don't leave
-    // an orphan tmux/SSE stream pointing at a directory we no longer track.
-    const adapter = getThreadAdapter(key);
-    if (adapter.checkIsActive(key)) {
-      // Close any still-pending OpenCode question on the server BEFORE stopping
-      // the session — a stopped session can't accept the reject, and an
-      // unrejected question re-surfaces on the next reattach. No-op for Claude /
-      // no pending question.
-      adapter.rejectQuestion?.(key);
-      try { adapter.stopSession(key); } catch (e) {
-        console.warn(`[unbind] stopSession failed for ${kStr}:`, e);
+    // an orphan tmux/SSE stream pointing at a directory we no longer track. As the
+    // conversation's one transition, after a re-spawn: a start, a resume or a
+    // re-spawn in flight is over first, so none brings a process back for the
+    // conversation released here (review 22, own pass).
+    await runCommandSessionTransition(key, async () => {
+      const adapter = getThreadAdapter(key);
+      if (adapter.checkIsActive(key)) {
+        // Close any still-pending OpenCode question on the server BEFORE stopping
+        // the session — a stopped session can't accept the reject, and an
+        // unrejected question re-surfaces on the next reattach. No-op for Claude /
+        // no pending question.
+        adapter.rejectQuestion?.(key);
+        try { adapter.stopSession(key); } catch (e) {
+          console.warn(`[unbind] stopSession failed for ${kStr}:`, e);
+        }
       }
-    }
-    // Release persisted session ids too — otherwise re-binding this thread
-    // later + a bot restart would resurrect the old session the user unbound.
-    await releaseConversationIds(key);
+      // Release persisted session ids too — otherwise re-binding this thread
+      // later + a bot restart would resurrect the old session the user unbound.
+      await releaseConversationIds(key);
+    });
     // Pause this thread's schedules BEFORE dropping the binding: a fire against
     // an unbound topic can't deliver, so the jobs park (paused + disarmed) and
     // the next /bind resumes them. `removeBinding` only touches bindings/agents/
@@ -9983,7 +9988,10 @@ async function switchTopicToFallbackEntry(
  */
 async function moveTopicToOtherBackend(key: SessionKey, backend: BackendFamily, account: string | null, options: { isConversationKept?: boolean } = {}): Promise<boolean> {
   if (account !== null) await state.setClaudeProfileOverride(key, account);
-  return checkHasLostBackgroundWork(await switchThreadAdapter(key, backend === 'claude' ? resolveClaudeBackendName(key) : openCodeAdapterName, options));
+  // The old backend's stop and the id parking run as the conversation's one transition, after a re-spawn: a start or resume of the
+  // old backend in flight is over first, and none comes back beside the new one (review 22, own pass).
+  const lostWork = await runCommandSessionTransition(key, () => switchThreadAdapter(key, backend === 'claude' ? resolveClaudeBackendName(key) : openCodeAdapterName, options));
+  return checkHasLostBackgroundWork(lostWork);
 }
 
 /**
@@ -10569,11 +10577,15 @@ command('quitall', async (_ctx, key) => {
   // A Telegram command stops Telegram sessions only: a Jira issue's work is not this topic's to stop (J2b, R3).
   for (const { key: bKey } of getTelegramConversations(state.listBindings())) {
     cancelConversationRequest(bKey);
-    const result = stopAllAdaptersFor(bKey);
+    // Each topic as its one transition, after a re-spawn, as `/quit` (review 22, own pass).
+    const result = await runCommandSessionTransition(bKey, async () => {
+      const swept = stopAllAdaptersFor(bKey);
+      // Same release-for-good semantics as `/quit`, per swept thread.
+      await releaseConversationIds(bKey);
+      return swept;
+    });
     active += result.attempted;
     stopped += result.stopped.length;
-    // Same release-for-good semantics as `/quit`, per swept thread.
-    await releaseConversationIds(bKey);
   }
 
   if (active === 0) {
@@ -10619,53 +10631,54 @@ command(['quit', 'q'], async (_ctx, key) => {
   cancelClaudeAuthLogin(key); // /quit teardown → kill any in-flight /login pty
   cancelOpenCodeOAuthLogin(key); // /quit teardown → kill any in-flight /connect oauth pty
   clearAuthNotice(key); // /quit teardown → retire any pinned logged-out notice
-  const adapter = getThreadAdapter(key);
-  const adapterName = getThreadAdapterNameRaw(key);
-  const primaryActive = adapter.checkIsActive(key);
+  // As the conversation's one transition (it waits for a json-stream re-spawn first): a start, a resume or a re-spawn in flight is
+  // over before /quit reads what runs, so none brings a process back for a conversation /quit released (review 22, own pass), and a
+  // start or resume that comes after waits behind it.
+  const reply = await runCommandSessionTransition(key, async () => {
+    const adapter = getThreadAdapter(key);
+    const adapterName = getThreadAdapterNameRaw(key);
+    const primaryActive = adapter.checkIsActive(key);
 
-  // Defensive: any *other* adapter that's also active for this thread is
-  // a leftover from a previous botched switch. Kill it first so it can't
-  // keep streaming after the user's "quit". Re-using the sweep helper
-  // instead of an open-coded loop avoids drift between the call sites.
-  const otherAdapters = getKnownAdapterNames().filter(n => n !== adapterName);
-  stopAllAdaptersFor(key, otherAdapters);
+    // Defensive: any *other* adapter that's also active for this thread is
+    // a leftover from a previous botched switch. Kill it first so it can't
+    // keep streaming after the user's "quit". Re-using the sweep helper
+    // instead of an open-coded loop avoids drift between the call sites.
+    const otherAdapters = getKnownAdapterNames().filter(n => n !== adapterName);
+    stopAllAdaptersFor(key, otherAdapters);
 
-  if (!primaryActive) {
-    // A sleeping conversation is released for good: the next message starts a fresh one.
-    if (getResumableSessionId(key) !== null) {
-      await releaseConversationIds(key);
-      await replyToThread(key, t('agent.sleeping_released'));
-      return;
+    if (!primaryActive) {
+      // A sleeping conversation is released for good: the next message starts a fresh one.
+      if (getResumableSessionId(key) !== null) {
+        await releaseConversationIds(key);
+        return t('agent.sleeping_released');
+      }
+      return 'No agent running';
     }
-    await replyToThread(key, 'No agent running');
-    return;
-  }
-  markNeedsNewMessage(key);
+    markNeedsNewMessage(key);
 
-  // Close any still-pending OpenCode question on the server BEFORE the teardown
-  // below (a stopped session can't accept the reject; an unrejected question
-  // re-surfaces on the next reattach). No-op for Claude / no pending question.
-  adapter.rejectQuestion?.(key);
+    // Close any still-pending OpenCode question on the server BEFORE the teardown
+    // below (a stopped session can't accept the reject; an unrejected question
+    // re-surfaces on the next reattach). No-op for Claude / no pending question.
+    adapter.rejectQuestion?.(key);
 
-  if (adapterName === 'claude') {
-    adapter.sendSignal(key, 'SIGINT');
-    await new Promise((r) => setTimeout(r, CLAUDE_DOUBLE_SIGINT_GAP_MS));
-    adapter.sendSignal(key, 'SIGINT');
-    // Explicit quit releases the session for good — no auto-reattach later.
-    await state.clearAgentSessionIds(key);
-    await replyToThread(key, t('agent.exit_signal_sent', { label: adapter.label }));
-    return;
-  }
+    if (adapterName === 'claude') {
+      adapter.sendSignal(key, 'SIGINT');
+      await new Promise((r) => setTimeout(r, CLAUDE_DOUBLE_SIGINT_GAP_MS));
+      adapter.sendSignal(key, 'SIGINT');
+      // Explicit quit releases the session for good — no auto-reattach later.
+      await state.clearAgentSessionIds(key);
+      return t('agent.exit_signal_sent', { label: adapter.label });
+    }
 
-  // OpenCode, terminal, any future adapter: tear down via stopSession. «Stopped» is said once it is: a `/claude` sent on the
-  // reply must find the session gone, not «already running» — as one transition, so a start or resume waits behind it.
-  await sessionTransitions.run(keyToString(key), async () => {
+    // OpenCode, terminal, any future adapter: tear down via stopSession. «Stopped» is said once it is: a `/claude` sent on the
+    // reply must find the session gone, not «already running».
     if (adapter.stopSessionAndWait) await adapter.stopSessionAndWait(key);
     else adapter.stopSession(key);
+    // Explicit quit releases the session for good — no auto-reattach later.
+    await state.clearAgentSessionIds(key);
+    return t('agent.stopped', { label: adapter.label });
   });
-  // Explicit quit releases the session for good — no auto-reattach later.
-  await state.clearAgentSessionIds(key);
-  await replyToThread(key, t('agent.stopped', { label: adapter.label }));
+  await replyToThread(key, reply);
 });
 
 // ── tmux-style controls (Claude CLI) ──

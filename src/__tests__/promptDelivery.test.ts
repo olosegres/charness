@@ -446,6 +446,19 @@ describe('a startup window\'s prompts on every way out of it (review 19 #1)', ()
     assert.match(held, /const ensured = await ensureAgentSessionNow\(key, \{\}\);\n(?:\s*\/\/[^\n]*\n)*\s*if \(ensured\.ok && startupPromptBuffer\.checkHasPrompts\(kStr\) && !startupPromptBuffer\.checkIsStarting\(kStr\)\) void replayBufferedPrompts\(key\);/, 'a live conversation the ensure only found ready still gets them — not awaited inside the transition, as a resume\'s replay');
   });
 
+  it('a release — /quit, leaving the folder, /quitall — and a move across backends run as the conversation\'s one transition, after a re-spawn: none reads «nothing runs» while a start, a resume or a re-spawn in flight is about to bring a process back (review 22, own pass)', () => {
+    const quit = getBody("command(['quit', 'q']", "command('c', async");
+    assert.ok(quit.indexOf('await runCommandSessionTransition(key, async () => {') > 0 && quit.indexOf('await runCommandSessionTransition(key, async () => {') < quit.indexOf('const primaryActive = adapter.checkIsActive(key);'), '/quit reads what runs inside the transition');
+    assert.ok(quit.indexOf('await state.clearAgentSessionIds(key);') > quit.indexOf('await runCommandSessionTransition('), 'and releases inside it');
+    assert.doesNotMatch(quit, /sessionTransitions\.run\(/, 'no nested queue: it would wait for itself');
+    const unbind = getBody('async function unbindThread(', "command('ls', async");
+    assert.ok(unbind.indexOf('await runCommandSessionTransition(key, async () => {') > 0 && unbind.indexOf('await runCommandSessionTransition(key, async () => {') < unbind.indexOf('if (adapter.checkIsActive(key)) {'), 'leaving the folder');
+    assert.ok(unbind.indexOf('await releaseConversationIds(key);') > unbind.indexOf('await runCommandSessionTransition('));
+    const quitAll = getBody("command('quitall'", "command(['quit', 'q']");
+    assert.match(quitAll, /const result = await runCommandSessionTransition\(bKey, async \(\) => \{\n\s*const swept = stopAllAdaptersFor\(bKey\);/, '/quitall, each topic');
+    assert.match(getBody('async function moveTopicToOtherBackend(', 'async function resumeTopicOnNewSession('), /await runCommandSessionTransition\(key, \(\) => switchThreadAdapter\(/, 'a move across backends');
+  });
+
   it('/new and a /resume pick mark the conversation as being replaced BEFORE they wait for a stop under way: the stop drops what it held, with the line, instead of resuming the conversation they leave only to kill it (review 21 nit 4, and the /resume pick found by the round\'s own pass)', () => {
     const fresh = getBody("command('new', async", '//  /whoami /version /help /status');
     assert.match(fresh, /return runReplacingConversation\(key, \(\) => runCommandSessionTransition\(key, async \(\) => \{\n\s*await releaseThreadSession\(key\);\n\s*return startAgentSession\(key\);\n\s*\}\)\);/, '/new');

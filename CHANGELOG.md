@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+**`/quit`, leaving the folder and `/quitall` no longer leave an agent running when it was starting or restarting at that moment.**
+They checked whether an agent was running before a start, a resume or a restart of its process had finished: they released the conversation, and the process that came up a moment later kept running for it. Now they wait for that to finish, then stop it. A switch onto the other backend waits the same way.
+
 **An account picked while a per-turn topic's agent works no longer restarts its process beside the bot's own stop.**
 On a topic that runs Claude per turn, an account picked during a turn was applied by restarting the agent's process at the end of that turn — the very moment the bot stops the process after every turn. The two could leave a second process running, or a message you sent in those seconds unsent. Now the turn ends with the usual stop, and the next turn starts on the new account.
 
