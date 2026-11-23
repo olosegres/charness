@@ -26,6 +26,7 @@ import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
 import { type UnconsumedInput } from '../utils/jsonStreamUnconsumedInput';
 import { unconsumedInputGraceMs } from '../utils/jsonStreamPendingWork';
 import { createStreamSessionFixture } from './claudeJsonStreamSessionFixture';
+import { unnumberedProcessGeneration } from '../requests/wakeUpRules';
 
 const key: SessionKey = makeTelegramKey(-100999222, 78);
 const limitResult = JSON.stringify({ type: 'result', is_error: true, result: "You've hit your weekly limit" }) + '\n';
@@ -59,6 +60,14 @@ describe('the process number the wake-up engine reads a prompt off (review 18 #2
     session.isActive = false;
     assert.equal(adapter.getProcessGeneration(key), undefined, 'stopped, or down for a re-spawn');
     assert.equal(adapter.getProcessGeneration(makeTelegramKey(-100999222, 79)), undefined, 'another topic');
+  });
+
+  it('the json-stream and the per-turn instance never hand out the same number: `/claude_mode` keeps the watches across them, and a number both gave out would read the new process as the one a message died unread in (review 21 #1 a)', () => {
+    const jsonStream = new ClaudeJsonStreamAdapter({ lifecycle: 'idle' });
+    const perTurn = new ClaudeJsonStreamAdapter({ lifecycle: 'perTurn' });
+    const numbers = [jsonStream['createProcessGeneration'](), perTurn['createProcessGeneration'](), perTurn['createProcessGeneration'](), jsonStream['createProcessGeneration']()];
+    assert.equal(new Set(numbers).size, numbers.length, `every number once: ${numbers.join(', ')}`);
+    assert.ok(numbers.every((generation) => generation !== unnumberedProcessGeneration), 'never the name of a backend that cannot number its processes');
   });
 
   it('a spawn (a resume and a re-spawn spawn too) and an adopt each number the process they build', () => {

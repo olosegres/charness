@@ -1,6 +1,6 @@
 import type { SessionKey } from '../sessionKey';
 import type { AgentAdapter } from '../types';
-import type { SessionTurnProbe } from './wakeUpRules';
+import { unnumberedProcessGeneration, type SessionTurnProbe } from './wakeUpRules';
 
 /**
  * @description How the wake-up engine sees a conversation's session right now
@@ -93,8 +93,11 @@ export function createSessionTurnProbe(deps: SessionTurnProbeDeps): (key: Sessio
       isStarting;
     // A finished task's own turn on its way is busy already: the watched turn runs on into it (the agent may answer there).
     const isBusy = isActive && ((adapter.checkIsBusy?.(key) ?? false) || (adapter.checkIsTurnOnItsWay?.(key) ?? false));
-    // The replay writes into the process the start brought up, so it is named during the replay; an open window names none.
-    const processGeneration = isActive && !isWindowOpen ? adapter.getProcessGeneration?.(key) : undefined;
+    // The replay writes into the process the start brought up, so it is named during the replay; an open window names none. A backend
+    // that cannot number its processes names its live one all the same: a prompt written there is never left unnamed (review 21 #1 b).
+    const processGeneration = isActive && !isWindowOpen
+      ? (adapter.getProcessGeneration ? adapter.getProcessGeneration(key) : unnumberedProcessGeneration)
+      : undefined;
     return {
       isActive,
       isBusy,

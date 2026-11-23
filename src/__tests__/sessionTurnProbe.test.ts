@@ -11,6 +11,7 @@ import assert from 'node:assert/strict';
 import { keyToString, type SessionKey } from '../sessionKey';
 import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
 import { createSessionTurnProbe, type SessionTurnProbeDeps } from '../requests/sessionTurnProbe';
+import { unnumberedProcessGeneration } from '../requests/wakeUpRules';
 
 const topicKey: SessionKey = makeTelegramKey(-1001234567890, 42);
 const topicKeyString = keyToString(topicKey);
@@ -94,6 +95,7 @@ describe('createSessionTurnProbe', () => {
     assert.deepEqual(createProbe()(topicKey), {
       isActive: true,
       isBusy: false,
+      processGeneration: unnumberedProcessGeneration,
       hasUnconsumedInput: null,
       isTurnEndBlocked: false,
     });
@@ -215,8 +217,8 @@ describe('createSessionTurnProbe', () => {
     assert.equal(createProbe()(topicKey).isCliOwnTurn, undefined, 'the bot\'s turn');
   });
 
-  it('names the live process a prompt written now goes to — during the replay of a start\'s buffer too — and none while a start\'s or a stop\'s window is open, with no live process, or on a backend that cannot tell (review 18 #2)', () => {
-    assert.equal(createProbe()(topicKey).processGeneration, undefined, 'a backend without process numbers');
+  it('names the live process a prompt written now goes to — during the replay of a start\'s buffer too — and none while a start\'s or a stop\'s window is open or with no live process (review 18 #2); a backend that cannot number its processes is named `unnumberedProcessGeneration`, never nothing (review 21 #1 b)', () => {
+    assert.equal(createProbe()(topicKey).processGeneration, unnumberedProcessGeneration, 'a backend without process numbers: a prompt written there is named');
     scenario.processGeneration = 7;
     assert.equal(createProbe()(topicKey).processGeneration, 7);
     scenario.startingKeys.add(topicKeyString);
@@ -227,6 +229,11 @@ describe('createSessionTurnProbe', () => {
     scenario.replayingKeys.delete(topicKeyString);
     scenario.isActive = false;
     assert.equal(createProbe()(topicKey).processGeneration, undefined, 'no live process');
+    scenario.processGeneration = undefined;
+    assert.equal(createProbe()(topicKey).processGeneration, undefined, 'no live process on a backend without numbers either');
+    scenario.isActive = true;
+    scenario.startingKeys.add(topicKeyString);
+    assert.equal(createProbe()(topicKey).processGeneration, undefined, 'its window open: none');
   });
 
   it('another thread\'s start never holds this one', () => {

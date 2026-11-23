@@ -987,6 +987,38 @@ describe('a request whose prompt never reached the agent is re-posted, not remin
     assert.equal(ledger.getNewestOpenRequest(topicKey)?.lastTurnActivityAt, activityAtTrack, 'another turn\'s busy time is not this request\'s');
   });
 
+  it('a prompt written to the tmux Claude, which cannot number its processes, is decided at the turn\'s end once `/claude_mode` moved the conversation to json-stream: read as written to another process and posted again, never held for the stale drop as «never written» (review 21 #1 b)', async () => {
+    const ledger = await createLedger();
+    const engine = createEngine(ledger);
+    const request = await ledger.createRequest(topicKey, { kind: 'message', attributes: { requester: '424242' } }, { createPrompt: () => prompt });
+    // The real probe, over the thread's adapter as the switch replaces it: the tmux Claude has no process numbers and cannot tell unread input.
+    type ProbedAdapter = ReturnType<Parameters<typeof createSessionTurnProbe>[0]['getAdapter']>;
+    let threadAdapter: ProbedAdapter = { checkIsActive: () => true, checkIsBusy: () => true };
+    const readProbe = createSessionTurnProbe({
+      getAdapter: () => threadAdapter,
+      checkHasPendingQuestion: () => false,
+      checkHasQuestionPin: () => false,
+      checkIsCompacting: () => false,
+      getApiRetryTimer: () => undefined,
+      checkIsWedgeRecoveryInFlight: () => false,
+      checkIsRetryKickInFlight: () => false,
+      checkIsApiErrorInHandling: () => false,
+      checkIsSessionStarting: () => false,
+      checkIsReplayingBufferedPrompts: () => false,
+      serializeKey: keyToString,
+    });
+    // Written into the tmux session while its turn runs.
+    probe = readProbe(topicKey);
+    await engine.trackForwardedTurn(topicKey, request.id, { isRequestPrompt: true, isPersonInput: true });
+    // `/claude_mode` stops the tmux process and resumes the conversation on json-stream: its process 7 is idle and lists nothing unread.
+    threadAdapter = { checkIsActive: () => true, checkIsBusy: () => false, checkHasUnconsumedInput: () => false, getProcessGeneration: () => 7 };
+    probe = readProbe(topicKey);
+    await engine.deliverOrHandOverWake(topicKey, await engine.settleEndedTurnsOf(topicKey));
+    assert.equal(ledger.getNewestOpenRequest(topicKey)?.silentTurnCount, 1, 'decided at the new process\'s idle, not held');
+    assert.equal(ledger.getNewestOpenRequest(topicKey)?.isPromptTakenIn, undefined, 'not read off a process it was not written to');
+    assert.deepEqual(wakeUpMessages, [{ reason: 'silentTurn', text: prompt, isRequestPrompt: true }], 'its wake posts the prompt again');
+  });
+
   it('a backend that cannot tell its processes apart is read as before', async () => {
     const ledger = await createLedger();
     const engine = createEngine(ledger);

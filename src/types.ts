@@ -918,8 +918,10 @@ export interface AgentAdapter extends EventEmitter {
    * Which of the adapter's processes is live for the conversation (json-stream Claude): a number that changes whenever a process
    * replaces the last one — a spawn, a resume, a re-spawn for a model, effort or account change, an adopt at boot; `undefined` with none
    * live. The request wake-up engine reads a prompt as taken in only off the process it was written to: a re-spawn that killed a message
-   * still queued in the old process leaves nothing unread in the new one, and that must not read as the message read. Optional: a
-   * backend that cannot tell its processes apart omits it.
+   * still queued in the old process leaves nothing unread in the new one, and that must not read as the message read. The number is
+   * unique across EVERY adapter instance (a `/claude_mode` switch keeps the conversation's watches) and never
+   * `unnumberedProcessGeneration` (`requests/wakeUpRules.ts`), the name the wake-up probe gives the live session of a backend that omits
+   * this method because it cannot tell its processes apart.
    */
   getProcessGeneration?(key: SessionKey): number | undefined;
 

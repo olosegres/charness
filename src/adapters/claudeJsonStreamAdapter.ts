@@ -124,6 +124,7 @@ import { checkIsNotificationTurnPending, getPendingWorkHoldRemainingMs, getPendi
 import { getInputsAfterEcho, getInputsAfterTurnEnd, getInputsOnTheirWay, getInputsWithOldestEchoMarked, getInputsWithoutEchoMarks, type UnconsumedInput } from '../utils/jsonStreamUnconsumedInput';
 import type { BackgroundWorkSignal } from '../utils/workingSignals';
 import { checkHasLostWork, getLostWorkFromTailRecord, type LostWork } from '../utils/lostWork';
+import { unnumberedProcessGeneration } from '../requests/wakeUpRules';
 import {
   cronCreateToolName,
   cronDeleteToolName,
@@ -148,6 +149,15 @@ export type JsonStreamLifecycle = 'idle' | 'perTurn';
  * stops the process on one instance while the other spawns the next.
  */
 const stopsInFlightByKey = new Map<string, Promise<void>>();
+
+/**
+ * The number the next spawned, re-spawned or adopted process gets ({@link StreamSession.processGeneration}). MODULE-level for the same
+ * reason as {@link stopsInFlightByKey}: a `/claude_mode` switch between the idle and the per-turn instance keeps the conversation's request
+ * watches, and a number both instances handed out would read the new process as the one a prompt was written to — a message that died
+ * unread with the old process would read as taken in (review 21 #1 a). It starts above `unnumberedProcessGeneration`, the name the
+ * wake-up probe gives a live session of a backend that cannot number its processes.
+ */
+let nextProcessGeneration = unnumberedProcessGeneration + 1;
 
 /**
  * @description Coalesce window for streamed answer/thinking deltas before an
@@ -261,8 +271,8 @@ export interface StreamSession {
   /** True while re-spawning for a model/effort change → suppress closed/stopped. */
   isRespawning: boolean;
   /**
-   * Which process of the adapter this is (`AgentAdapter.getProcessGeneration`): a new number for every spawn, re-spawn and adopt, so a
-   * prompt written to one process is never read as taken in by the one that replaced it.
+   * Which process this is (`AgentAdapter.getProcessGeneration`): a new number for every spawn, re-spawn and adopt, unique across both
+   * instances of the adapter, so a prompt written to one process is never read as taken in by the one that replaced it.
    */
   processGeneration: number;
   /** True from a user turn sent until its `result` → drives `checkIsBusy`. */
@@ -533,8 +543,6 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
   readonly selfGreetsOnStart = false;
 
   private readonly sessions = new Map<string, StreamSession>();
-  /** The number the next spawned or adopted process gets ({@link StreamSession.processGeneration}). */
-  private nextProcessGeneration = 1;
   private readonly claudePath = resolveClaudeBinary();
   private readonly writeFifo: typeof writeFifoText;
   /** How long a user turn waits for a CLI that reads nothing, and a write for a reader that takes nothing (tests shorten it). */
@@ -2745,9 +2753,10 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
     return session?.isActive ? session.processGeneration : undefined;
   }
 
+  /** A number no other process of any instance of this adapter got ({@link nextProcessGeneration}). */
   private createProcessGeneration(): number {
-    const generation = this.nextProcessGeneration;
-    this.nextProcessGeneration += 1;
+    const generation = nextProcessGeneration;
+    nextProcessGeneration += 1;
     return generation;
   }
 
