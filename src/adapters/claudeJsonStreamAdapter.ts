@@ -292,6 +292,12 @@ export interface StreamSession {
   startCostUsd: number | null;
   /** The topic's profile changed while the process worked: re-spawn under the reader's directory at turn end. */
   isConfigDirSwitchPending: boolean;
+  /**
+   * A turn's end found the deferred account switch due and released it: its re-spawn starts one timer tick later. Set before the bot
+   * hears of that end (`turnEnded`), cleared when the apply is over (a re-spawn, a no-op, deferred again): what `checkIsRespawnPending`
+   * reads as «about to start» — a switch merely pending on an idle process is no re-spawn coming.
+   */
+  isConfigDirSwitchReleased: boolean;
   // — answer accumulation —
   currentResponseText: string;
   emittedLength: number;
@@ -749,7 +755,7 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
       isActive: true, isStopping: false, isSuspending: false, isRespawning: false, isBusy: false, unconsumedInputs: [],
       lastStdoutActivityAt: Date.now(), outstandingToolUseIds: new Set(),
       model: opts.model, reportedModel: null, effort: opts.effort,
-      configDir: opts.configDir, isConfigDirSwitchPending: false, startCostUsd,
+      configDir: opts.configDir, isConfigDirSwitchPending: false, isConfigDirSwitchReleased: false, startCostUsd,
       currentResponseText: '', emittedLength: 0, outputTimer: null,
       reasoningText: '', reasoningStartedAt: null, reasoningTimer: null, reasoningActive: false,
       toolNamesById: new Map(), questionToolUseIds: new Set(),
@@ -1090,7 +1096,7 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
       model: launchFlags.model, reportedModel: null, effort: launchFlags.effort,
       // The account the surviving process runs on is in its own wrapper; the bot compares it with the topic's pick.
       // A switch the user picked while the process worked survives the reload: it still applies at the turn's end.
-      configDir: readWrapperScriptConfigDir(paths.wrapperFile), isConfigDirSwitchPending: adoptedTail.isConfigDirSwitchPending, startCostUsd: null,
+      configDir: readWrapperScriptConfigDir(paths.wrapperFile), isConfigDirSwitchPending: adoptedTail.isConfigDirSwitchPending, isConfigDirSwitchReleased: false, startCostUsd: null,
       currentResponseText: '', emittedLength: 0, outputTimer: null,
       reasoningText: '', reasoningStartedAt: null, reasoningTimer: null, reasoningActive: false,
       toolNamesById: new Map(), questionToolUseIds: new Set(),
@@ -1180,6 +1186,7 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
     session.adoptCatchUpOffset = null;
     resolveAdoptReplayWaiters(session);
     // A switch the user picked before the reload, whose turn ended meanwhile, applies now that the state is current.
+    this.releasePendingConfigDirSwitch(session);
     this.applyPendingConfigDirSwitch(session);
   }
 
@@ -2199,6 +2206,8 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
       session.startCostUsd = null;
     }
     this.applyTurnEnd(session, action);
+    // Released before the bot hears of this end, applied after its handlers: its turn probe reads the re-spawn as coming from here.
+    this.releasePendingConfigDirSwitch(session);
     // After the handlers above: the bot's per-turn stop (L5) reads the session's state as settled here.
     this.emit('turnEnded', session.key);
     this.applyPendingConfigDirSwitch(session);
@@ -2729,13 +2738,13 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
 
   /**
    * @description Whether this conversation's process is being re-spawned, or is about to be (`AgentAdapter.checkIsRespawnPending`):
-   * a re-spawn under way (`isRespawning`, also while the process is down for it), or a deferred account switch its idle releases —
-   * from the `turnEnded` that releases it, one timer tick ahead of the re-spawn ({@link applyPendingConfigDirSwitch}).
+   * a re-spawn under way (`isRespawning`, also while the process is down for it), or a deferred account switch a turn's end released
+   * (`isConfigDirSwitchReleased`: set before that `turnEnded`, one timer tick ahead of the re-spawn, {@link applyPendingConfigDirSwitch}).
    */
   checkIsRespawnPending(key: SessionKey): boolean {
     const session = this.sessions.get(keyToString(key));
     if (!session) return false;
-    return session.isRespawning || this.checkIsConfigDirSwitchDue(session);
+    return session.isRespawning || session.isConfigDirSwitchReleased;
   }
 
   /**
@@ -2758,15 +2767,25 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
     return session.isBusy ? session.isCliOwnTurn : this.checkIsTurnOnItsWay(key);
   }
 
+  /** At a turn's end: a deferred switch that is due now is released (`isConfigDirSwitchReleased`), before the bot hears of the end. */
+  private releasePendingConfigDirSwitch(session: StreamSession): void {
+    session.isConfigDirSwitchReleased = this.checkIsConfigDirSwitchDue(session);
+  }
+
   /** A deferred profile switch runs once the turn that held it off has ended (and nothing else works). */
   private applyPendingConfigDirSwitch(session: StreamSession): void {
-    // A background task still running keeps it pending: the next turn end looks again.
-    if (!this.checkIsConfigDirSwitchDue(session)) return;
+    if (!session.isConfigDirSwitchReleased) return;
+    // A write in the turn end's handlers (the todo reminder) made the process work again: the next turn end looks again.
+    if (!this.checkIsConfigDirSwitchDue(session)) {
+      session.isConfigDirSwitchReleased = false;
+      return;
+    }
     // Detached from the tail poll that delivered the `result`: the re-spawn tears this very session down.
     setTimeout(() => {
-      void this.applyClaudeConfigDir(session.key).catch((e) =>
-        console.warn(`[ClaudeJson] ${keyToString(session.key)}: the deferred profile switch failed:`, e instanceof Error ? e.message : e),
-      );
+      void this.applyClaudeConfigDir(session.key)
+        .catch((e) => console.warn(`[ClaudeJson] ${keyToString(session.key)}: the deferred profile switch failed:`, e instanceof Error ? e.message : e))
+        // Over: re-spawned (this session is replaced, `isRespawning` covered the way), a no-op, or deferred again.
+        .finally(() => { session.isConfigDirSwitchReleased = false; });
     }, 0).unref?.();
   }
 

@@ -96,6 +96,29 @@ describe('claude-json-stream account switch after a limit', () => {
     assert.equal(adapter.checkIsRespawnPending(makeTelegramKey(-100999222, 79)), false, 'another topic');
   });
 
+  it('a switch pending on a process that stops working with NO turn end (a task hold lapsing, an input past its grace) is no re-spawn coming: nothing holds the turn (review 17 nit 5)', async () => {
+    const { adapter, respawns } = setup();
+    const session = adapter['sessions'].get(keyToString(key))!;
+    session.isBusy = true;
+    assert.equal(await adapter.applyClaudeConfigDir(key), 'deferred');
+    session.isBusy = false;
+    assert.equal(adapter.checkIsRespawnPending(key), false);
+    assert.deepEqual(respawns, []);
+  });
+
+  it('a write in the turn end\'s own handlers (the todo reminder) takes the release back: the switch waits for the next turn end, and nothing is held meanwhile (review 17 nit 5)', async () => {
+    const { adapter, respawns } = setup();
+    const session = adapter['sessions'].get(keyToString(key))!;
+    session.isBusy = true;
+    assert.equal(await adapter.applyClaudeConfigDir(key), 'deferred');
+    adapter.on('turnEnded', () => { session.isBusy = true; });
+    adapter['onStdout'](session, okResult);
+    assert.equal(adapter.checkIsRespawnPending(key), false);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.deepEqual(respawns, []);
+    assert.equal(session.isConfigDirSwitchPending, true, 'still pending for the next turn end');
+  });
+
   it('a pending switch fires at the limit-error turn end', async () => {
     const { adapter, respawns } = setup();
     const session = adapter['sessions'].get(keyToString(key))!;
