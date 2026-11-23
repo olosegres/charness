@@ -28,6 +28,9 @@
  *     that turn is the fire's request's, not the reminded one's
  *   → «wait for reset» off: a request's reminder turn ends on a usage limit. The bot answers the request and stops waking it before
  *     that turn is decided: it is no second silent turn — no reminder into the limit, no «got no answer»
+ *   → still per turn: a turn ends in an error the bot does not classify while the operator's next message waits behind it. The CLI runs
+ *     that message as its next turn (measured on 2.1.330), so the process is not stopped and nothing decides its turn before it ran:
+ *     it is answered in the same process, with no reminder and no give-up
  *   → a second Claude account, the idle lifecycle: the operator moves the topic to it while the agent works, and that turn ends silent.
  *     The switch re-spawns the process onto the new account right after the turn, and the turn's reminder waits for that re-spawn:
  *     one launch, nothing started beside it, the reminder in the new process
@@ -48,6 +51,7 @@ import { FakeTelegram } from './telegramE2e/fakeTelegram';
 import { TopicDriver } from './telegramE2e/topicDriver';
 import {
   fakeClaudeLogFileNames,
+  fakeClaudeApiErrorDelayFileName,
   fakeClaudeApiErrorOnceFileName,
   fakeClaudeExitFlushDelayFileName,
   fakeClaudeHoldReleaseFileName,
@@ -111,6 +115,12 @@ const bufferedFlowTimeoutMs = 3 * 60 * msPerSecond;
 const firePostStartMarginMs = 5 * msPerSecond;
 /** A usage limit the fake ends a turn on: the CLI's own wording, read as a confirmed limit (no probe retry is armed for it). */
 const usageLimitErrorText = "You've hit your session limit · resets 11:00pm";
+/** An error result the bot classifies as no API error (`classifyAgentApiError` → null): nothing holds the turn end. */
+const unclassifiedErrorText = 'The agent runner stopped unexpectedly';
+/** How long the turn that ends in that error runs first: the operator's next message is written into it meanwhile. */
+const failingTurnRunMs = 6 * msPerSecond;
+/** The `slow-once` turn of the message queued behind it works this long in silence (the fake's default) before it answers. */
+const slowTurnTimeoutMs = 2 * 60 * msPerSecond;
 /** A one-shot armed `fakeOneShotDelaySeconds` ahead fires within this (the engine's timer, the post and the turn). */
 const oneShotFireTimeoutMs = (fakeOneShotDelaySeconds + 60) * msPerSecond;
 /** The follow-up a progress note gets after this long (production: 15 min) and the engine's sweep that would deliver it. */
@@ -504,6 +514,35 @@ describe('A request waits for its schedule in a Telegram topic end to end: built
       assert.ok(!topic.listMessages().some((message) => message.text.includes('got no answer')), 'no «got no answer»');
     } finally {
       fs.rmSync(apiErrorOncePath, { force: true });
+    }
+  });
+
+  it('per-turn: a message written while a turn runs that then ends in an error the bot does not classify is answered in its own turn — the process waits for it, nothing decides it ahead of that turn: no reminder, no give-up (review 17 #1)', async () => {
+    // Still per turn (since the buffered-message step): the conversation sleeps between turns.
+    const apiErrorOncePath = path.join(getLayout().fakeStateDir, fakeClaudeApiErrorOnceFileName);
+    const apiErrorDelayPath = path.join(getLayout().fakeStateDir, fakeClaudeApiErrorDelayFileName);
+    fs.writeFileSync(apiErrorDelayPath, failingTurnRunMs.toString());
+    fs.writeFileSync(apiErrorOncePath, unclassifiedErrorText);
+    try {
+      fakeTelegram.pushOperatorMessage(topicThreadId, 'WL-12 [fake:answer] a turn that will fail');
+      await getCharness().waitFor('the failing turn to start', agentTimeoutMs, () => readFakeLog<FakeClaudeTurn>(fakeClaudeLogFileNames.turns).some((turn) => turn.issueKey === 'WL-12' && turn.requestId === null));
+      const launchesWhileItRuns = getSessionLaunches(getLayout()).length;
+      // Open requests are kept per requester: the operator's new message replaces the entry of the request it supersedes.
+      const listOpenRequestIds = (): string[] => Object.values(readState().openRequests ?? {}).map((open) => open.id);
+      const openBefore = new Set(listOpenRequestIds());
+      fakeTelegram.pushOperatorMessage(topicThreadId, 'WM-13 [fake:slow-once] a message written while the turn runs');
+      await getCharness().waitFor('the message to open its request', replyTimeoutMs, () => listOpenRequestIds().some((id) => !openBefore.has(id)));
+      const requestId = listOpenRequestIds().find((id) => !openBefore.has(id)) ?? '';
+      assert.match(requestId, /^req_/);
+
+      await getCharness().waitFor('the queued message to be answered in its own turn', slowTurnTimeoutMs, () => readClosedRequests().some((closed) => closed.id === requestId));
+      assert.equal(readClosedRequests().find((closed) => closed.id === requestId)?.closeReason, 'final');
+      assert.equal(getSessionLaunches(getLayout()).length, launchesWhileItRuns, 'answered in the process the error left: the per-turn stop waited for its turn');
+      assert.deepEqual(getAgentPrompts().filter((prompt) => prompt.text.includes(`[Reminder · request ${requestId} is still open]`)), [], 'no reminder decided ahead of its turn');
+      assert.ok(!topic.listMessages().some((message) => message.text.includes('got no answer')), 'no give-up');
+    } finally {
+      fs.rmSync(apiErrorOncePath, { force: true });
+      fs.rmSync(apiErrorDelayPath, { force: true });
     }
   });
 

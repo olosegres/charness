@@ -829,6 +829,28 @@ describe('a request whose prompt never reached the agent is re-posted, not remin
     assert.equal(ledger.getNewestOpenRequest(topicKey)?.isPromptTakenIn, undefined);
   });
 
+  it('a watch whose prompt is still listed as unread after a turn that ended in an error result is neither decided nor marked at the turn-end settle; its own turn decides it (review 17 #1)', async () => {
+    const ledger = await createLedger();
+    const engine = createEngine(ledger);
+    const request = await ledger.createRequest(topicKey, { kind: 'message', attributes: { requester: '424242' } }, { createPrompt: () => prompt });
+    await engine.trackForwardedTurn(topicKey, request.id, { isRequestPrompt: true });
+    // The turn ahead of it ended in an error the bot does not hold: idle, nothing held, the message still listed.
+    probe = { isActive: true, isBusy: false, hasUnconsumedInput: true, isTurnEndBlocked: false };
+    await engine.deliverOrHandOverWake(topicKey, await engine.settleEndedTurnsOf(topicKey));
+    await engine.pollWatchedTurns();
+    assert.deepEqual(engine.getWatchedRequestIdsOf(topicKey), [request.id], 'running: its turn has not started');
+    assert.equal(ledger.getNewestOpenRequest(topicKey)?.isPromptTakenIn, undefined);
+    assert.equal(ledger.getNewestOpenRequest(topicKey)?.silentTurnCount, 0);
+    assert.deepEqual(getWakeUpReasons(), []);
+    // Its turn runs, takes it in and ends silent: now it is decided, and the prompt marked read.
+    probe = { isActive: true, isBusy: true, hasUnconsumedInput: false, isTurnEndBlocked: false };
+    await engine.pollWatchedTurns();
+    probe = { isActive: true, isBusy: false, hasUnconsumedInput: false, isTurnEndBlocked: false };
+    await engine.deliverOrHandOverWake(topicKey, await engine.settleEndedTurnsOf(topicKey));
+    assert.equal(ledger.getNewestOpenRequest(topicKey)?.isPromptTakenIn, true);
+    assert.deepEqual(getWakeUpReasons(), ['silentTurn']);
+  });
+
   it('a reminder\'s turn never marks the prompt taken in; a request without a prompt is reminded as before', async () => {
     const ledger = await createLedger();
     const engine = createEngine(ledger);

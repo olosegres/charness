@@ -11,6 +11,9 @@ In a Telegram topic that shows answers (and in a Jira issue on a per-turn instan
 **After a usage-limit wait, a message that reached the agent only behind the turn that hit the limit is sent to it again with the resume.**
 When a turn fails on a usage limit or an API error, the bot cannot tell which of the messages written behind it the agent took in — the Claude CLI may drop them with the failed turn. While the retry or the limit wait was armed, the bot could still count such a message as read, and the resume then sent only «continue»: the words of a mention or a comment could be lost. Now a message counts as read only once the agent's turn runs on with nothing holding it.
 
+**In a topic that runs Claude per turn, a message you send while the agent's turn ends on an error is no longer lost: the agent's process now stays for the turn that takes it in.**
+When a turn ended in an error result, the bot forgot every message written behind it, although the Claude CLI still runs them as its next turn (measured on 2.1.330). The per-turn stop then ended the process a moment before that turn, so the message never reached the agent — in a topic that shows answers, its request then waited for the hour-and-a-half backstop. A deferred account switch still applies at that turn's end.
+
 **Switching to another Claude account while the agent works no longer risks a second agent process when that turn ends without an answer.**
 The switch waits for the turn's end, then restarts the agent's process on the new account. A reminder for that silent turn could arrive during the restart and start the conversation a second time beside it. Now the reminder waits until the restart is done and goes to the new process.
 

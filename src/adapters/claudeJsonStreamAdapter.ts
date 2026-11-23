@@ -2203,13 +2203,15 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
     // stop kill the process in that gap.
     if (!session.isCompactionResultPending) session.lastTurnEndedAt = Date.now();
     session.isCompactionResultPending = false;
-    // Self-healing accounting: a FAILED turn (usage limit, API error) may never echo the messages that were
-    // queued behind it, and a list left non-empty would make the session look "working" — a pending account
-    // switch would never fire. A message still genuinely queued is echoed later (an echo of nothing listed takes
-    // nothing off and marks the session busy again), so forgetting them here can only under-count briefly.
-    // Otherwise the queue is taken in by the turn that starts next, its wait starting over from this end — less what this turn
-    // took in in a shape nothing matches (the marked entries).
-    session.unconsumedInputs = action.isError ? [] : getInputsAfterTurnEnd(session.unconsumedInputs, Date.now());
+    // The queue is taken in by the turn that starts next, its wait starting over from this end — less what this turn took in in a shape
+    // nothing matches (the marked entries). A FAILED turn (usage limit, API error) keeps its queue too: measured on 2.1.330 (an unknown
+    // `--model`; an HTTP 400, and an HTTP 429 after its ten retries, from a loopback API — `utils/jsonStreamUnconsumedInput.ts`
+    // `getInputsAfterTurnEnd` has the command), the CLI writes a new `init` 0.07–0.6 s after the error `result` and runs the queued
+    // message as its own turn; in a turn that fails, the echo comes at its end, right before its `result`. Emptied, the list read that message as taken
+    // in before its turn began: the per-turn stop killed the process ahead of it, and the bot decided its request's turn ended. Each entry
+    // is marked `isQueuedBehindFailedTurn` and still bounded by the grace (`unconsumedInputGraceMs`), so one the CLI never echoes holds
+    // nothing for good, and a deferred account switch looks past them (`checkIsConfigDirSwitchDue`): a limit's switch must still fire.
+    session.unconsumedInputs = getInputsAfterTurnEnd(session.unconsumedInputs, Date.now(), { isFailedTurn: action.isError });
     session.outstandingToolUseIds.clear();
     this.finishReasoning(session);
     this.clearSubagent(session);
@@ -2679,7 +2681,9 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
       session.isConfigDirSwitchPending = false;
       return 'unchanged';
     }
-    if (!options.isAfterLimit && this.checkIsWorking(key)) {
+    // Messages queued behind a turn that ended in an error result do not defer it (`checkIsConfigDirSwitchDue`): after a limit the switch
+    // is what lets them run, and their requests post them again if the re-spawn ends them (R21: still unread).
+    if (!options.isAfterLimit && this.checkIsWorkingBesidesFailedTurnQueue(session)) {
       session.isConfigDirSwitchPending = true;
       // Recorded now: a reload before the turn ends must not drop the user's pick.
       this.jsonStreamTailWriter?.(key, buildTailRecord(session, session.lastPersistedTailOffset));
@@ -2691,9 +2695,19 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
     return 'respawned';
   }
 
-  /** A deferred account switch that the process's idle releases now: pending, on a live process that no longer works. */
+  /**
+   * A deferred account switch that the process's idle releases now: pending, on a live process that no longer works — messages queued
+   * behind a turn that ended in an error result aside (`isQueuedBehindFailedTurn`): after a limit, the switch is what lets them run.
+   */
   private checkIsConfigDirSwitchDue(session: StreamSession): boolean {
-    return session.isConfigDirSwitchPending && session.isActive && !this.checkIsWorking(session.key);
+    return session.isConfigDirSwitchPending && session.isActive && !this.checkIsWorkingBesidesFailedTurnQueue(session);
+  }
+
+  /** {@link checkIsWorking} with the messages queued behind a failed turn left out. */
+  private checkIsWorkingBesidesFailedTurnQueue(session: StreamSession): boolean {
+    if (session.isBusy) return true;
+    const isOtherWorkPending = this.getBackgroundWorkSignals(session.key).some((signal) => signal.kind !== 'unconsumedInput');
+    return isOtherWorkPending || this.getUnconsumedInputsOnTheirWay(session).some((input) => input.isQueuedBehindFailedTurn !== true);
   }
 
   /**

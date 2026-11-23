@@ -4,7 +4,8 @@
  * Live incident: a fresh process got a batch of messages, the first turn failed with a usage limit, and the
  * CLI never echoed the queued messages — the unconsumed-input list stayed non-empty, the session looked working
  * for good, and the deferred switch never fired. Load-bearing intent:
- * - an error `result` reconciles the unconsumed-input count so a pending switch applies at that turn end;
+ * - an error `result` keeps the messages queued behind it (the CLI runs them as its next turn, measured on 2.1.330), and a pending
+ *   switch still applies at that turn end: it looks past them;
  * - a switch answering a limit (`isAfterLimit`) re-spawns now even over a busy / input-holding session, while a
  *   plain apply still defers;
  * - a deferred switch reads as a re-spawn about to start from the turn's end on, and the re-spawn as one under way
@@ -56,14 +57,17 @@ describe('claude-json-stream account switch after a limit', () => {
     assert.deepEqual(respawns, ['/profiles/perf']);
   });
 
-  it('an error result zeroes a stuck unconsumed-input count (regression: the switch never fired)', () => {
-    const { adapter } = setup();
+  it('an error result keeps the messages queued behind it (the CLI runs them next, measured on 2.1.330), marked as queued behind a failed turn: still working within the grace, and a deferred switch looks past them (regression: the switch never fired)', async () => {
+    const { adapter, respawns } = setup();
     const session = adapter['sessions'].get(keyToString(key))!;
     session.isBusy = true;
-    session.unconsumedInputs = queuedInputs(4); // four queued messages, the CLI echoed none of them
+    session.unconsumedInputs = queuedInputs(4); // four queued messages, the CLI echoed none of them yet
     adapter['onStdout'](session, limitResult);
-    assert.deepEqual(session.unconsumedInputs, []);
-    assert.equal(adapter.checkIsWorking(key), false);
+    assert.equal(session.unconsumedInputs.length, 4);
+    assert.ok(session.unconsumedInputs.every((input) => input.isQueuedBehindFailedTurn === true));
+    assert.equal(adapter.checkIsWorking(key), true, 'the per-turn stop waits for the turn that takes them in');
+    assert.equal(await adapter.applyClaudeConfigDir(key), 'respawned', 'a switch picked now is not held off by them');
+    assert.deepEqual(respawns, ['/profiles/perf']);
   });
 
   it('a normal result keeps the count of messages still queued', () => {
