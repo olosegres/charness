@@ -1037,6 +1037,16 @@ describe('a request whose prompt never reached the agent is re-posted, not remin
     assert.deepEqual(wakeUpMessages, [{ reason: 'silentTurn', text: prompt, isRequestPrompt: true }], 'its wake posts the prompt again');
   });
 
+  it('a cancelled conversation\'s write stamp goes with it: no watch of the next conversation is named from a write of the one before (review 23 nit 6)', async () => {
+    const ledger = await createLedger();
+    const engine = createEngine(ledger);
+    probe = { isActive: true, isBusy: false, hasUnconsumedInput: false, isTurnEndBlocked: false, processGeneration: 5 };
+    engine.noteWrite(topicKey);
+    assert.equal(engine['writtenProcesses'].get(keyToString(topicKey)), 5);
+    await engine.cancelConversation(topicKey);
+    assert.equal(engine['writtenProcesses'].has(keyToString(topicKey)), false);
+  });
+
   it('a prompt tracked while a window holds it is never named from an earlier write: its replay names it (review 22 nit 2)', async () => {
     const ledger = await createLedger();
     const engine = createEngine(ledger);

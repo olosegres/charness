@@ -496,6 +496,8 @@ export class RequestWakeUpEngine {
    */
   async cancelConversation(key: SessionKey): Promise<void> {
     this.unwatchConversation(key);
+    // The conversation's writes end with it: its next watch is named from a write of the next conversation (review 23 nit 6).
+    this.writtenProcesses.delete(keyToString(key));
     for (const request of this.deps.ledger.listOpenRequestsOf(key)) await this.deps.ledger.closeRequest(request.id, 'cancelled');
   }
 
@@ -654,16 +656,6 @@ export class RequestWakeUpEngine {
   }
 
   /**
-   * @description A write into `key`'s live process during the replay of a start's buffer (the write choke point, right after its settle;
-   * the bot calls it at every write while `StartupPromptBuffer.checkIsReplaying`: a replayed prompt, the held prompts after them, a prompt
-   * written at once while the replay runs — all go to the process the replay writes into). A watch tracked while its prompt waited in that
-   * buffer names no process yet, and the replay took the whole buffer to write it into this process, so its prompt is in this one. Never
-   * called for a write outside a replay: a watch whose buffer was DROPPED stays unnamed — its prompt reached no process
-   * (`checkIsPromptNeverWritten`) — and the request it opened is closed with the person told (`bot.ts`, the person's buffered prompt's
-   * settle). Only a person's prompt is tracked before its replay: every bot-made caller watches its turn once its prompt reached a session
-   * (`src/requests/README.md`, the callers table). Synchronous; a session with no process named does nothing.
-   */
-  /**
    * @description A write into `key`'s live process (the write choke point, synchronously before the adapter write): the process it goes
    * to is stamped, for a watch that is tracked only after that process went down ({@link writtenProcesses}). Synchronous; a probe that
    * names no process (a window holds the prompt) stamps nothing.
@@ -673,6 +665,16 @@ export class RequestWakeUpEngine {
     if (processGeneration !== undefined) this.writtenProcesses.set(keyToString(key), processGeneration);
   }
 
+  /**
+   * @description A write into `key`'s live process during the replay of a start's buffer (the write choke point, right after its settle;
+   * the bot calls it at every write while `StartupPromptBuffer.checkIsReplaying`: a replayed prompt, the held prompts after them, a prompt
+   * written at once while the replay runs — all go to the process the replay writes into). A watch tracked while its prompt waited in that
+   * buffer names no process yet, and the replay took the whole buffer to write it into this process, so its prompt is in this one. Never
+   * called for a write outside a replay: a watch whose buffer was DROPPED stays unnamed — its prompt reached no process
+   * (`checkIsPromptNeverWritten`) — and the request it opened is closed with the person told (`bot.ts`, the person's buffered prompt's
+   * settle). Only a person's prompt is tracked before its replay: every bot-made caller watches its turn once its prompt reached a session
+   * (`src/requests/README.md`, the callers table). Synchronous; a session with no process named does nothing.
+   */
   noteReplayedWrite(key: SessionKey): void {
     const { processGeneration } = this.deps.probeTurn(key);
     if (processGeneration === undefined) return;
