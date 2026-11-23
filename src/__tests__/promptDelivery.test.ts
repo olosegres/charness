@@ -194,6 +194,26 @@ describe('deliverPromptOrBuffer', () => {
     assert.deepEqual(announced, [], 'nothing was queued, so nothing is announced');
   });
 
+  it('a first buffered prompt resolves `buffered` without waiting for its «queued» notice: its caller watches the turn before any replay can write the prompt (review 20 #2)', async () => {
+    const threadId = keyToString(topicKey);
+    const order: string[] = [];
+    let finishNotice: () => void = () => {};
+    const notice = new Promise<void>((resolve) => { finishNotice = resolve; });
+    startupBuffer.markStarting(threadId);
+
+    const delivery = deliverPromptOrBuffer({ ...deps, announceQueued: () => notice }, topicKey, 'the first message of the window').then((result) => {
+      // The caller's next step: `settleTopicRequestAfterDelivery` watches the request's turn.
+      order.push(`tracked (${result})`);
+      return result;
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+    // The paced notice is still on its way when the start ends and its replay writes the prompt.
+    await startupBuffer.replayPrompts(threadId, { isSessionActive: true, forward: async (text) => { order.push(`replayed: ${text}`); } });
+    finishNotice();
+    assert.equal(await delivery, 'buffered');
+    assert.deepEqual(order, ['tracked (buffered)', 'replayed: the first message of the window'], 'watched before its replay, whatever the notice takes');
+  });
+
   it('tells a buffered prompt\'s caller how the wait ended: replayed once the session is up, dropped when the start fails', async () => {
     const outcomes: BufferedPromptOutcome[] = [];
     startupBuffer.markStarting(keyToString(topicKey));
@@ -220,6 +240,8 @@ describe('deliverPromptOrBuffer', () => {
         'the nudge',
         (outcome) => outcomes.push(outcome),
       );
+      // Not awaited by the delivery: its failure is logged once it lands.
+      await new Promise((resolve) => setImmediate(resolve));
       assert.equal(logged.mock.calls.length, 1);
     } finally {
       logged.mock.restore();

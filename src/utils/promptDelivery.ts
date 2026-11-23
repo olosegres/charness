@@ -61,7 +61,11 @@ export type PromptDelivery = 'forwarded' | 'buffered' | 'noSession';
  * is routed again, here, at once.
  *
  * The "queued while starting" notice is posted once per startup window, and only
- * for a Telegram conversation: a tracker issue has no topic to say it in (R6).
+ * for a Telegram conversation: a tracker issue has no topic to say it in (R6). It is
+ * NOT awaited (a topic send through the process-wide pacer can take seconds): this
+ * resolves `buffered` in the tick the buffer took the prompt, so a caller that watches
+ * the prompt's turn does so before any replay can write it, and before the agent can
+ * answer it (review 20 #2). The pacer keeps the notice's place in the topic.
  *
  * A buffered prompt lives in memory, so a restart before the start ends loses it.
  * A caller that must know how the wait ended — to keep what would re-send the prompt
@@ -91,11 +95,7 @@ export async function deliverPromptOrBuffer(
       if (added !== 'firstInWindow' || !checkIsTelegramKey(key)) return;
       // The prompt IS buffered by now (and its settle callback registered), so a notice that fails must not read as a delivery
       // that failed: a caller keeping something until the prompt reached a session would otherwise treat it as spent.
-      try {
-        await deps.announceQueued(key);
-      } catch (err) {
-        console.error(`[promptDelivery] queued notice for ${threadId} failed:`, err);
-      }
+      deps.announceQueued(key).catch((err) => console.error(`[promptDelivery] queued notice for ${threadId} failed:`, err));
     },
     wake: () => deps.wakeSession(key),
     forward: () => deps.forwardPrompt(key, text, options),

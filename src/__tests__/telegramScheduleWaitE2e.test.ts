@@ -37,6 +37,10 @@
  *   → a second Claude account, the idle lifecycle: the operator moves the topic to it while the agent works, and that turn ends silent.
  *     The switch re-spawns the process onto the new account right after the turn, and the turn's reminder waits for that re-spawn:
  *     one launch, nothing started beside it, the reminder in the new process
+ *   → per turn, right after it (so no per-turn step's leftovers share its windows): a first message that waits behind the stop, whose
+ *     «queued» notice the Bot API holds until the next stop: it is watched before its replay, not after the notice — its silent turn
+ *     is counted while the notice is still held and reminded at once (the late watch was made in the next stop's window, named no
+ *     process and waited for good); the step ends once the conversation sleeps again
  *   → per turn again: a one-shot fire resumes the sleeping conversation, and the CLI refuses the resume slowly; a message the operator
  *     sends meanwhile waits in the resume's window. The bot starts a fresh session instead, and the message reaches it in a turn of its
  *     own — no reminder of a request whose words the agent never got
@@ -97,6 +101,7 @@ import {
   type IsolatedInstanceLayout,
 } from './e2e/isolatedCharness';
 import { getTelegramFlowTestTimingsEnv } from './telegramE2e/telegramFlowTimings';
+import { checkIsProcessAlive } from './recordedProcess';
 import { getAccountConfigDir, getSessionLaunches, restartCharnessWithState } from './e2e/fallbackFlowKit';
 import { createClaudeProfileLayout } from '../utils/claudeProfiles';
 import type { ScheduleRunRecord } from '../scheduler/runLedger';
@@ -656,6 +661,56 @@ describe('A request waits for its schedule in a Telegram topic end to end: built
     assert.equal(reminders.length, 1, 'one reminder for the one silent turn');
     assert.equal(reminders[0].pid, launches[0].pid, 'the reminder went into the re-spawned process');
     assert.ok(!topic.listMessages().some((message) => message.text.includes('got no answer')), 'no give-up');
+  });
+
+  it('per-turn: a first message queued behind the stop is watched before its replay, not once its paced «queued» notice is out — its silent turn is reminded at once (review 20 #2)', async () => {
+    const topicKeyString = `${group.id}:${topicThreadId}`;
+    const stopLine = `[compact-on-idle] ${topicKeyString} stopping the idle process`;
+    const stoppedLine = `[compact-on-idle] ${topicKeyString} process stopped`;
+    const exitFlushDelayPath = path.join(getLayout().fakeStateDir, fakeClaudeExitFlushDelayFileName);
+    let releaseNotice: () => void = () => {};
+    let isNoticeHeld = false;
+    // Right after the idle-lifecycle step, so no per-turn step's leftovers (a trailing stop, a fire posted again) share its windows.
+    await topic.sendAndAwaitReply('/claude_mode per-turn', '🔁 Per-turn');
+    try {
+      fs.writeFileSync(exitFlushDelayPath, perTurnStopHoldMs.toString());
+      const stopsBefore = countOutputLines(stopLine);
+      const unfinishedStopsBefore = stopsBefore - countOutputLines(stoppedLine);
+      fakeTelegram.pushOperatorMessage(topicThreadId, 'WY-25 [fake:answer] warm up the per-turn session');
+      await getCharness().waitFor('the per-turn stop after the warm-up turn', bufferedFlowTimeoutMs, () => countOutputLines(stopLine) > stopsBefore);
+      // The «queued» notice is held, as a busy process-wide pacer would hold it, until the message's own turn has ended and the next
+      // stop's window is open.
+      fakeTelegram.holdNextResponse('sendMessage', new Promise<void>((resolve) => { releaseNotice = resolve; }), (payload) => {
+        const isNotice = typeof payload.text === 'string' && payload.text.includes('your message is queued');
+        if (isNotice) isNoticeHeld = true;
+        return isNotice;
+      });
+      const openBefore = new Set(Object.values(readState().openRequests ?? {}).map((open) => open.id));
+      fakeTelegram.pushOperatorMessage(topicThreadId, 'WZ-26 [fake:silent-once] a message whose notice is slow');
+      await getCharness().waitFor('the agent to take the replayed message in', bufferedFlowTimeoutMs, () =>
+        readFakeLog<FakeClaudeTurn>(fakeClaudeLogFileNames.turns).some((turn) => turn.issueKey === 'WZ-26'));
+      assert.ok(isNoticeHeld, 'the message was the first of the stop\'s window: its «queued» notice is the one held');
+      const requestId = Object.values(readState().openRequests ?? {}).map((open) => open.id).find((id) => !openBefore.has(id)) ?? '';
+      assert.match(requestId, /^req_/);
+      await getCharness().waitFor('the stop after its silent turn', bufferedFlowTimeoutMs, () => countOutputLines(stopLine) > stopsBefore + 1);
+      // Decided at its own end, while the notice is still held: the watch was there before the replay wrote the message.
+      await getCharness().waitFor('its silent turn to be counted while the notice is held', replyTimeoutMs, () =>
+        Object.values(readState().openRequests ?? {}).find((open) => open.id === requestId)?.silentTurnCount === 1);
+      releaseNotice();
+      // Its silent turn was decided at its end: the reminder brings the answer.
+      await getCharness().waitFor('the request to be answered after its reminder', bufferedFlowTimeoutMs, () => readClosedRequests().some((closed) => closed.id === requestId));
+      assert.equal(readClosedRequests().find((closed) => closed.id === requestId)?.closeReason, 'final');
+      assert.equal(getAgentPromptsWith(`[Reminder · request ${requestId} is still open]`).length, 1, 'one reminder for the one silent turn');
+      assert.ok(!topic.listMessages().some((message) => message.text.includes('got no answer')), 'no give-up');
+      // The next step starts from a conversation that sleeps: the stop after the answer's turn has ended.
+      await getCharness().waitFor('the conversation to sleep after the answer', bufferedFlowTimeoutMs, () => {
+        const lastLaunch = getSessionLaunches(getLayout()).at(-1);
+        return countOutputLines(stopLine) - countOutputLines(stoppedLine) === unfinishedStopsBefore && (lastLaunch === undefined || !checkIsProcessAlive(lastLaunch.pid));
+      });
+    } finally {
+      releaseNotice();
+      fs.rmSync(exitFlushDelayPath, { force: true });
+    }
   });
 
   /**

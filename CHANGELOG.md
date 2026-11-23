@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+**A message you send while the agent's process stops after a turn is followed up like any other: if the agent's turn on it ends without an answer, it is reminded at once, not an hour and a half later.**
+In a topic that shows answers and runs Claude per turn, the bot started watching such a message's turn only once its «your message is queued» notice had gone out. When the bot was busy sending elsewhere, the agent could have read the message and ended its turn by then, and the bot lost track of that turn: the request waited for the 90-minute backstop. Now the turn is watched the moment the message is queued.
+
 **A failing check whose wake never reached the agent wakes it again at its next failing run.**
 When a watched worker failed and the bot's wake to the agent was lost on its way (the agent's process was being started or stopped and the wake was dropped, or writing it failed), the check stayed marked as failing: every later failing run stayed quiet, and the agent waited for the hour-and-a-half backstop. Now a lost wake clears the mark, so the next failing run alerts and wakes the agent again.
 
