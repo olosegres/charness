@@ -28,11 +28,10 @@ export interface TopicRequestSettlePorts {
 
 export interface TopicRequestSettler {
   /**
-   * The request's prompt was handed to the prompt path (forwarded, or buffered behind a session start — the turn probe holds a
-   * starting session, so tracking now is right either way). Fire and forget: a failed track is logged, never thrown.
+   * The prompt came back from the prompt path with `delivery`: track its turn, or close the request when no session took it. A prompt
+   * forwarded, or buffered behind a session start (the turn probe holds a starting session, so tracking now is right either way), has its
+   * turn tracked fire and forget: a failed track is logged, never thrown.
    */
-  trackTurn: (key: SessionKey, opening: TopicRequestRef) => void;
-  /** The prompt came back from the prompt path with `delivery`: track its turn, or close the request when no session took it. */
   settleAfterDelivery: (key: SessionKey, opening: TopicRequestRef, delivery: LatePromptOutcome) => Promise<void>;
 }
 
@@ -57,5 +56,5 @@ export function createTopicRequestSettler(ports: TopicRequestSettlePorts): Topic
     );
   };
 
-  return { trackTurn, settleAfterDelivery };
+  return { settleAfterDelivery };
 }

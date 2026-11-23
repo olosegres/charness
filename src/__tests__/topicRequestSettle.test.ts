@@ -92,7 +92,6 @@ describe('a prompt that opened no request', () => {
     for (const delivery of ['forwarded', 'buffered', 'dropped', 'noSession'] as const satisfies readonly LatePromptOutcome[]) {
       await settler.settleAfterDelivery(key, { requestId: null }, delivery);
     }
-    settler.trackTurn(key, { requestId: null });
     assert.deepEqual(tracked, []);
     assert.deepEqual(cancelled, []);
   });
@@ -113,8 +112,8 @@ describe('tracking a turn', () => {
     assert.equal(warnings.length, 1);
     assert.match(warnings[0], /tracking the turn of req-1 failed: engine is not up/);
 
-    settler.trackTurn(key, { requestId });
+    await settler.settleAfterDelivery(key, { requestId }, 'buffered');
     await new Promise((resolve) => setImmediate(resolve));
-    assert.equal(warnings.length, 2, 'the capture-time buffer\'s direct track reports the same way');
+    assert.equal(warnings.length, 2, 'a prompt buffered behind a start is tracked, and its failed track reports the same way');
   });
 });
