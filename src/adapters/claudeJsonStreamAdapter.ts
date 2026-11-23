@@ -2604,7 +2604,7 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
 
   async setModel(key: SessionKey, modelId: string): Promise<string | null> {
     const session = this.sessions.get(keyToString(key));
-    if (!session?.isActive) return t('model.start_agent_first');
+    if (!session || !this.checkIsLiveForRespawn(session)) return t('model.start_agent_first');
     await this.respawnWithChange(session, { model: modelId, effort: session.effort });
     return null;
   }
@@ -2633,7 +2633,7 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
     }
     saveEffortPref(key, level);
     const session = this.sessions.get(keyToString(key));
-    if (!session?.isActive) return { status: 'stored', notice: t('effort.start_agent_first') };
+    if (!session || !this.checkIsLiveForRespawn(session)) return { status: 'stored', notice: t('effort.start_agent_first') };
     await this.respawnWithChange(session, { model: session.model, effort: level });
     return { status: 'applied' };
   }
@@ -2661,7 +2661,7 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
   async clearEffort(key: SessionKey): Promise<void> {
     clearEffortPref(key);
     const session = this.sessions.get(keyToString(key));
-    if (!session?.isActive) return;
+    if (!session || !this.checkIsLiveForRespawn(session)) return;
     const { effort } = this.getLaunchOptions(key);
     if (session.effort !== effort) await this.respawnWithChange(session, { model: session.model, effort });
   }
@@ -2740,7 +2740,8 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
    */
   async applyClaudeConfigDir(key: SessionKey, options: { isAfterLimit?: boolean } = {}): Promise<ClaudeConfigDirApplyResult> {
     const session = this.sessions.get(keyToString(key));
-    if (!session?.isActive) return 'inactive';
+    // A process being stopped is as good as gone: its next resume reads the account the conversation resolves to then.
+    if (!session || !this.checkIsLiveForRespawn(session)) return 'inactive';
     const wanted = this.resolveConfigDir(key);
     if (checkIsSameClaudeConfigDir(wanted, session.configDir)) {
       session.isConfigDirSwitchPending = false;
@@ -2765,7 +2766,20 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
    * behind the turn, one behind a turn that ended in an error result included, holds it until its own turn's end (the grace bounds it).
    */
   private checkIsConfigDirSwitchDue(session: StreamSession): boolean {
+    // On the per-turn lifecycle the bot stops this very process at the same turn end (L5): a re-spawn there would race that stop, and
+    // the resume after it spawns on the account the conversation resolves to then anyway (review 22 #1 a). A CLI too old for the
+    // auto-stop is never stopped by the bot, so its switch still re-spawns.
+    if (this.lifecycle === 'perTurn' && this.checkIsAutoStopSupported(session.key)) return false;
     return session.isConfigDirSwitchPending && session.isActive && !this.checkIsWorking(session.key);
+  }
+
+  /**
+   * @description Whether a change may re-spawn `session`'s process now: it is live and not being stopped. A re-spawn that met a stop
+   * would terminate the same process twice and bring one back the stop's caller believes gone (review 22 #1 a): a process being
+   * stopped takes the change at its next start instead (an effort or account pick is read then; a model pick is refused).
+   */
+  private checkIsLiveForRespawn(session: StreamSession): boolean {
+    return session.isActive && !session.isStopping;
   }
 
   /**

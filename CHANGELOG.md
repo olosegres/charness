@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+**An account picked while a per-turn topic's agent works no longer restarts its process beside the bot's own stop.**
+On a topic that runs Claude per turn, an account picked during a turn was applied by restarting the agent's process at the end of that turn — the very moment the bot stops the process after every turn. The two could leave a second process running, or a message you sent in those seconds unsent. Now the turn ends with the usual stop, and the next turn starts on the new account.
+
 **Changing the model, the effort or the account while a message comes in no longer starts a second agent process.**
 `/model`, `/effort` and an account switch restart the agent's process of a Claude topic (the default backend), with the process down for a few seconds. A message, a scheduled run or a reminder that arrived in those seconds could start a second process of the same conversation beside it. Now it waits for the restart and goes to the new process.
 

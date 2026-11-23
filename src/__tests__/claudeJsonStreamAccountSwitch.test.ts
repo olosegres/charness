@@ -27,6 +27,8 @@ import { type UnconsumedInput } from '../utils/jsonStreamUnconsumedInput';
 import { unconsumedInputGraceMs } from '../utils/jsonStreamPendingWork';
 import { createStreamSessionFixture } from './claudeJsonStreamSessionFixture';
 import { unnumberedProcessGeneration } from '../requests/wakeUpRules';
+import { minAutoStopClaudeCodeVersion } from '../utils/claudeCodeVersion';
+import { t } from '../i18n';
 
 const key: SessionKey = makeTelegramKey(-100999222, 78);
 const limitResult = JSON.stringify({ type: 'result', is_error: true, result: "You've hit your weekly limit" }) + '\n';
@@ -74,6 +76,57 @@ describe('the process number the wake-up engine reads a prompt off (review 18 #2
     const adapterSource = fs.readFileSync(path.join(__dirname, '..', 'adapters', 'claudeJsonStreamAdapter.ts'), 'utf8');
     assert.equal(adapterSource.match(/processGeneration: this\.createProcessGeneration\(\),/g)?.length, 2);
     assert.match(adapterSource, /private async replaceSessionProcess\([^]*?await this\.spawnSession\(/, 'a re-spawn builds its process through the spawn');
+  });
+});
+
+describe('a re-spawn never races a stop (review 22 #1 a)', () => {
+  /** A per-turn instance whose process reports `cliVersion`; its re-spawns are recorded, not run. */
+  function setupPerTurn(cliVersion: string | null): { adapter: ClaudeJsonStreamAdapter; respawns: Array<string | null | undefined> } {
+    const adapter = new ClaudeJsonStreamAdapter({ lifecycle: 'perTurn' });
+    adapter.setClaudeConfigDirReader(() => '/profiles/perf');
+    adapter['sessions'].set(keyToString(key), createStreamSessionFixture({ key, workDir: '/tmp/jsonstream-account-work', sessionId: 'sess-acct', claudeCodeVersion: cliVersion }));
+    const respawns: Array<string | null | undefined> = [];
+    adapter['respawnWithChange'] = async (_session, change) => { respawns.push(change.configDir); };
+    return { adapter, respawns };
+  }
+
+  it('a per-turn instance that auto-stops releases no deferred switch at a turn end: the stop of that end ends the process alone, and the next resume reads the new account', async () => {
+    const { adapter, respawns } = setupPerTurn(minAutoStopClaudeCodeVersion);
+    const session = adapter['sessions'].get(keyToString(key))!;
+    session.isBusy = true;
+    assert.equal(await adapter.applyClaudeConfigDir(key), 'deferred');
+    const pendingAtTurnEnd: boolean[] = [];
+    // The bot's per-turn stop starts in the turn end's own tick (`handleAgentTurnEnded`): the process is being stopped.
+    adapter.on('turnEnded', () => {
+      pendingAtTurnEnd.push(adapter.checkIsRespawnPending(key));
+      session.isStopping = true;
+    });
+    adapter['onStdout'](session, okResult);
+    await afterTimerTick();
+    assert.deepEqual(pendingAtTurnEnd, [false], 'no re-spawn comes: the turn end is decided at once, as any per-turn end');
+    assert.deepEqual(respawns, [], 'one process end, no re-spawn beside the stop');
+    assert.equal(adapter['resolveConfigDir'](key), '/profiles/perf', 'the resume after the stop spawns on the new account');
+  });
+
+  it('a per-turn instance on a CLI too old for the auto-stop keeps the deferred switch: the bot never stops that process, so the re-spawn applies it', async () => {
+    const { adapter, respawns } = setupPerTurn(null);
+    const session = adapter['sessions'].get(keyToString(key))!;
+    session.isBusy = true;
+    assert.equal(await adapter.applyClaudeConfigDir(key), 'deferred');
+    adapter['onStdout'](session, okResult);
+    await afterTimerTick();
+    assert.deepEqual(respawns, ['/profiles/perf']);
+  });
+
+  it('no change re-spawns a process being stopped: an account switch reads it as inactive, an effort pick is stored for the next start, a model pick is refused as with no agent running', async () => {
+    const { adapter, respawns } = setupPerTurn(minAutoStopClaudeCodeVersion);
+    const session = adapter['sessions'].get(keyToString(key))!;
+    session.isStopping = true;
+    assert.equal(await adapter.applyClaudeConfigDir(key, { isAfterLimit: true }), 'inactive');
+    assert.equal((await adapter.setEffort(key, 'high')).status, 'stored');
+    assert.equal(await adapter.setModel(key, 'opus'), t('model.start_agent_first'));
+    await adapter.clearEffort(key);
+    assert.deepEqual(respawns, []);
   });
 });
 
