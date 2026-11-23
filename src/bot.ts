@@ -1314,7 +1314,7 @@ let topicRequestLedger: RequestLedger | null = null;
  * @name TopicRequestOpening
  * @description What {@link openTopicRequest} decided for one prompt: the header
  * to put ahead of the prompt's text (empty when no request was opened) and the
- * request's id for {@link trackTopicRequestTurn} (`null` when none).
+ * request's id for {@link settleTopicRequestAfterDelivery} (`null` when none).
  */
 interface TopicRequestOpening {
   header: string;
@@ -1360,7 +1360,7 @@ async function openTopicRequest(
  * wake-up engine watches the turn of a prompt that reached a session (or waits behind its start), and a prompt that found no
  * session closes the request it opened. Both ports are read at call time: the engine and the ledger are assigned at boot.
  */
-const { trackTurn: trackTopicRequestTurn, settleAfterDelivery: settleTopicRequestAfterDelivery } = createTopicRequestSettler({
+const { settleAfterDelivery: settleTopicRequestAfterDelivery } = createTopicRequestSettler({
   trackTurn: async (key, requestId, { isScheduledRun }) => {
     await requestWakeUpEngine?.trackForwardedTurn(key, requestId, { isRequestPrompt: true, isScheduledRun });
   },
@@ -2680,7 +2680,7 @@ const apiRetryKickDeps: ApiRetryKickDeps = {
   // `ensureAgentSession` is already satisfied by a start ANOTHER caller has under way — the session is
   // not there to take the nudge yet, so it goes through the startup buffer, not straight to the adapter.
   // The buffer is in memory: the kick keeps the saved record until the buffer settles the nudge.
-  deliverNudge: (key, text, onBufferedSettled) => deliverPromptOrBuffer(key, text, startupPromptBuffer.checkIsStarting(keyToString(key)), onBufferedSettled),
+  deliverNudge: (key, text, onBufferedSettled) => deliverPromptOrBuffer(key, text, onBufferedSettled),
   trackContinuation: async (key, options) => {
     await requestWakeUpEngine?.trackContinuationTurn(key, options);
   },
@@ -6389,7 +6389,7 @@ async function forwardPromptToAgent(
     buffer: async () => {
       // A bot-made prompt (a wake-up) that waits here counts only once its replay reached the agent, as at any other buffer.
       const buffered = createBufferedOutcome();
-      await deliverPromptOrBuffer(key, `${options.requestHeader ?? ''}${getPromptWithThreadMessageContext(key, text, options.messageContext)}`, true, buffered.settle, { isPersonInput: options.isPersonInput, isAccountsNoteCarrier: options.isAccountsNoteCarrier, lostWorkTelling: options.lostWorkTelling });
+      await deliverPromptOrBuffer(key, `${options.requestHeader ?? ''}${getPromptWithThreadMessageContext(key, text, options.messageContext)}`, buffered.settle, { isPersonInput: options.isPersonInput, isAccountsNoteCarrier: options.isAccountsNoteCarrier, lostWorkTelling: options.lostWorkTelling });
       if (options.isPersonInput !== true) await buffered.assertReplayed();
     },
     wake: () => wakeSleepingSessionForPrompt(key),
@@ -9875,7 +9875,7 @@ async function resumeTopicOnNewSession(
   }
   const prompt = options.getFirstPrompt();
   if (prompt === null) return;
-  await deliverPromptOrBuffer(key, prompt.text, startupPromptBuffer.checkIsStarting(k));
+  await deliverPromptOrBuffer(key, prompt.text);
   await requestWakeUpEngine?.trackContinuationTurn(key, { isCountersReset: true, isRequestPrompt: prompt.isRequestPrompt });
 }
 
@@ -10759,8 +10759,8 @@ command('timestamps', async (_ctx, key, parsed) => {
  * Routing mirrors the plain-text handler via the shared choke points:
  * `ensureAgentSession` does the bind-check + start (returns `unbound` →
  * bind-required reply, same as every agent-facing path), then
- * `deliverPromptOrBuffer` forwards (active) or buffers (mid-startup), reading
- * the startup window AFTER the ensure so a freshly-started session forwards.
+ * `deliverPromptByState` opens the request and routes the prompt at its write:
+ * forwarded (active) or buffered (mid-startup, or behind a stop).
  */
 command('schedule', async (ctx, key, parsed) => {
   const text = parsed.argsText;
@@ -10789,10 +10789,7 @@ command('schedule', async (ctx, key, parsed) => {
   // Fresh-start notice (empty when the session was already active / starting).
   if (result.message) await replyToThread(key, result.message);
 
-  const isStarting = startupPromptBuffer.checkIsStarting(keyToString(key));
-  const opening = await openTopicRequest(key, wrappedPrompt, { source: 'schedule', requesterId: getTopicRequesterId(ctx.from) });
-  const delivery = await deliverPromptOrBuffer(key, `${opening.header}${wrappedPrompt}`, isStarting, undefined, { isPersonInput: true, isAccountsNoteCarrier: true });
-  await settleTopicRequestAfterDelivery(key, opening, delivery);
+  await deliverPromptByState(key, wrappedPrompt, { source: 'schedule', requesterId: getTopicRequesterId(ctx.from) });
 });
 
 const reminderWizards = new Map<string, ReminderWizardSession>();
@@ -10952,7 +10949,7 @@ async function handleTalkerText(ctx: NarrowedContext<Context, Update.MessageUpda
   const intake: TopicRequestIntake = { source: 'text', requesterId: getTopicRequesterId(ctx.from) };
   const sentAtMs = ctx.message.date * 1000;
   if (startupPromptBuffer.checkIsStarting(keyToString(key))) {
-    await bufferPromptDuringStartup(key, text, intake, messageContext);
+    await deliverPromptDuringStartup(key, text, intake, messageContext);
     return;
   }
   if (adapter.checkIsActive(key)) {
@@ -11141,7 +11138,7 @@ bot.on(message('text'), async (ctx) => {
   // Session is mid-startup → buffer the prompt and replay it once the agent is
   // ready, instead of dropping it into the "no agent running" guidance below.
   if (startupPromptBuffer.checkIsStarting(kStr)) {
-    await bufferPromptDuringStartup(key, text, { source: 'text', requesterId: getTopicRequesterId(ctx.from) }, getMessageContext(key, ctx.message));
+    await deliverPromptDuringStartup(key, text, { source: 'text', requesterId: getTopicRequesterId(ctx.from) }, getMessageContext(key, ctx.message));
     return;
   }
 
@@ -11476,7 +11473,7 @@ async function processVoiceJob(
 
     // Session is mid-startup → buffer the transcript and replay it once ready.
     if (startupPromptBuffer.checkIsStarting(keyToString(key))) {
-      await bufferPromptDuringStartup(key, transcript, { source: 'voice', requesterId }, messageContext);
+      await deliverPromptDuringStartup(key, transcript, { source: 'voice', requesterId }, messageContext);
       return;
     }
 
@@ -11565,12 +11562,10 @@ async function sendNoAgentGuidance(
  */
 async function checkFileIntakeGatePassed(
   key: SessionKey,
-  isStarting: boolean,
   sendHint: (text: string, extra?: SendExtra) => Promise<unknown>,
   isFromTalker: boolean,
 ): Promise<boolean> {
-  const adapter = getThreadAdapter(key);
-  if (isStarting || adapter.checkIsActive(key)) return true;
+  if (startupPromptBuffer.checkIsStarting(keyToString(key)) || getThreadAdapter(key).checkIsActive(key)) return true;
   // A file sent to a sleeping conversation wakes it (L-D4) and is taken in by the resumed session.
   if (await resumeSleepingSessionForPrompt(key, sendHint)) return true;
 
@@ -11634,17 +11629,26 @@ async function downloadIncomingFile(
 }
 
 /**
- * @description Deliver one already-built prompt to the thread's agent,
- * honouring the startup window (`utils/promptDelivery.ts`): mid-startup the
- * prompt is buffered, otherwise it is forwarded immediately through the normal
- * choke point. This is the single "buffer-or-forward" unit shared by the text and
- * voice handlers' mid-startup buffering, file/album intake, the `/schedule` command
- * (S7), the Jira connector's posts and an API-error retry's "continue" nudge, so the
- * startup-window handling never drifts between them.
+ * @description Deliver one already-built prompt to the thread's agent, routed at the moment of the write
+ * (`utils/promptDelivery.ts`): behind an open start or stop window it is buffered, into a live session it is forwarded through the
+ * normal choke point, and a conversation with neither is woken first. The single "buffer-or-forward" unit of every prompt that may
+ * meet a start or a stop — the person's prompts through {@link deliverPromptByState}'s buffer step, a scheduled run, the Jira
+ * connector's posts, the lost-work post, an API-error retry's "continue" nudge and a move's first prompt — so the window handling
+ * never drifts between them, and no caller hands it a state it read before an await.
  */
 const promptDeliveryDeps: PromptDeliveryDeps = {
   startupBuffer: startupPromptBuffer,
   forwardPrompt: (key, text, options) => forwardPromptToAgent(key, getThreadAdapter(key), text, undefined, { isPersonInput: options.isPersonInput, isAccountsNoteCarrier: options.isAccountsNoteCarrier, lostWorkTelling: options.lostWorkTelling }),
+  checkIsSessionActive: (key) => getThreadAdapter(key).checkIsActive(key),
+  // A tracker conversation has no topic to say a resume's notice in: it is logged.
+  wakeSession: (key) => (checkIsTelegramKey(key)
+    ? wakeSleepingSessionForPrompt(key)
+    : wakeSleepingSessionForPrompt(key, async (notice) => { console.log(`[promptDelivery] ${keyToString(key)}: ${notice}`); })),
+  reportNoSession: async (key, isAlreadyTold, options) => {
+    console.warn(`[promptDelivery] ${keyToString(key)}: no session is left to take the prompt, and nothing could be woken for it`);
+    // Only a person's own prompt is theirs to be told about; what the bot made says so in its own way (its caller reads `noSession`).
+    if (options.isPersonInput === true && !isAlreadyTold) await replyToThread(key, t('agent.no_session'));
+  },
   announceQueued: async (key) => {
     await replyToThread(key, t('agent.queued_starting', { label: getThreadAdapter(key).label }));
   },
@@ -11653,11 +11657,10 @@ const promptDeliveryDeps: PromptDeliveryDeps = {
 function deliverPromptOrBuffer(
   key: SessionKey,
   promptText: string,
-  isStarting: boolean,
   onBufferedSettled?: BufferedPromptSettled,
   options: PromptDeliveryOptions = {},
 ): Promise<PromptDelivery> {
-  return deliverPromptWithDeps(promptDeliveryDeps, key, promptText, isStarting, onBufferedSettled, options);
+  return deliverPromptWithDeps(promptDeliveryDeps, key, promptText, onBufferedSettled, options);
 }
 
 /**
@@ -11690,9 +11693,10 @@ interface AlbumCollectorItem {
  * @description Per-(thread, media_group) album batcher. Telegram delivers an
  * album as N messages sharing `media_group_id` in a quick burst; this coalesces
  * them so the agent gets ONE combined prompt after the burst settles, and gating
- * / error hints fire once per album. The flush forwards the combined prompt
- * through {@link deliverPromptOrBuffer}, re-reading the startup state AT FLUSH TIME
- * so a session that finished booting mid-burst forwards instead of buffers.
+ * / error hints fire once per album. The flush delivers the combined prompt
+ * through {@link deliverPromptByState}, routed at its write — after the flush's
+ * request is opened — so a session that finished booting (or stopping) mid-burst
+ * takes it the way it stands then.
  */
 const albumCollector = createMediaGroupCollector<AlbumCollectorItem>({
   debounceMs: ALBUM_DEBOUNCE_MS,
@@ -11707,17 +11711,13 @@ const albumCollector = createMediaGroupCollector<AlbumCollectorItem>({
       const caption = orderedItems.find((item) => item.caption && item.caption.trim())?.caption;
       const messageContext = orderedItems.find((item) => item.messageContext)?.messageContext;
       const promptText = buildAlbumPromptText(files, caption);
-      const isStarting = startupPromptBuffer.checkIsStarting(keyToString(key));
       // User took over (album upload) before a pending API-error retry fired →
       // cancel it silently, like the text/voice handlers.
       cancelApiRetry(key);
       // A user album is genuine user activity → clear the compact-on-idle latch (D2).
       notePersonActivity(key);
       try {
-        const opening = await openTopicRequest(key, promptText, { source: 'album', requesterId: orderedItems[0].requesterId }, messageContext);
-        const quotedPrompt = getPromptWithThreadMessageContext(key, promptText, messageContext);
-        const delivery = await deliverPromptOrBuffer(key, `${opening.header}${quotedPrompt}`, isStarting, undefined, { isPersonInput: true, isAccountsNoteCarrier: true });
-        await settleTopicRequestAfterDelivery(key, opening, delivery);
+        await deliverPromptByState(key, promptText, { source: 'album', requesterId: orderedItems[0].requesterId }, undefined, messageContext);
       } catch (err) {
         // The files were downloaded already (each item before the flush): what failed is the album's prompt.
         console.error('[Bot] album flush failed:', err);
@@ -11755,11 +11755,10 @@ async function handleAlbumFile(
   isFromTalker: boolean,
 ): Promise<void> {
   const groupKey = buildAlbumGroupKey(key, mediaGroupId);
-  const isStarting = startupPromptBuffer.checkIsStarting(keyToString(key));
 
   // Gate per item, but reply at most once per album. The guard is claimed
   // lazily so a passing gate never burns the one-shot slot.
-  const gatePassed = await checkFileIntakeGatePassed(key, isStarting, async (text, extra) => {
+  const gatePassed = await checkFileIntakeGatePassed(key, async (text, extra) => {
     if (albumCollector.checkShouldAnnounceOnce(groupKey)) {
       await replyToThread(key, text, extra);
     }
@@ -11801,9 +11800,7 @@ async function handleIncomingFile(
     return;
   }
 
-  const isStarting = startupPromptBuffer.checkIsStarting(keyToString(key));
-
-  const gatePassed = await checkFileIntakeGatePassed(key, isStarting, (text, extra) =>
+  const gatePassed = await checkFileIntakeGatePassed(key, (text, extra) =>
     replyToThread(key, text, extra),
     isFromTalker,
   );
@@ -11820,10 +11817,7 @@ async function handleIncomingFile(
   notePersonActivity(key);
   // A file sent as a REPLY carries the message it answers, a forwarded one its origin, as a typed or spoken message does.
   const messageContext = getMessageContext(key, ctx.message);
-  const opening = await openTopicRequest(key, promptText, { source: 'file', requesterId: getTopicRequesterId(ctx.from) }, messageContext);
-  const quotedPrompt = getPromptWithThreadMessageContext(key, promptText, messageContext);
-  const delivery = await deliverPromptOrBuffer(key, `${opening.header}${quotedPrompt}`, isStarting, undefined, { isPersonInput: true, isAccountsNoteCarrier: true });
-  await settleTopicRequestAfterDelivery(key, opening, delivery);
+  await deliverPromptByState(key, promptText, { source: 'file', requesterId: getTopicRequesterId(ctx.from) }, undefined, messageContext);
 }
 
 bot.on(
@@ -12574,14 +12568,14 @@ bot.action(/^qa_(\d+)_(\d+)$/, async (ctx) => {
 });
 
 /**
- * @description Buffer a free-form prompt (text OR voice) that arrived while the
- * thread's session is starting — the startup twin of {@link deliverActivePrompt}.
- * The request is opened at capture time (S7), so the buffered text carries its
- * header; the message-context block is folded in here too, since the replay forwards
- * the buffered text as is and a REPLY or a FORWARD made during the boot would
- * otherwise reach the agent without the message it points at, or as the operator's own words.
+ * @description Deliver a free-form prompt (text OR voice) that ARRIVED while the thread's session is starting or being stopped — the
+ * startup twin of {@link deliverActivePrompt}: no pending question or wedged turn is looked at (a session in its window has none to
+ * answer). The window it arrived in only chose this route: the prompt itself is routed by {@link deliverPromptByState} when it is
+ * written, after its request was opened, so a window that closed meanwhile never keeps it — it goes to the session that
+ * window brought up, or wakes the one its stop left asleep. A buffered prompt carries its request's header and its message-context
+ * block (`deliverPersonPromptAtWrite`), since the replay forwards the buffered text as is.
  */
-async function bufferPromptDuringStartup(
+async function deliverPromptDuringStartup(
   key: SessionKey,
   text: string,
   intake: TopicRequestIntake,
@@ -12596,10 +12590,7 @@ async function bufferPromptDuringStartup(
   // `deliverActivePrompt` — the idle latch clears, and a question the idle compaction re-asked is closed (the idle fire
   // posts it just before the stop, so this window is where a message instead of a tap most often lands).
   notePersonActivity(key);
-  const opening = await openTopicRequest(key, text, intake, messageContext);
-  const quotedText = getPromptWithThreadMessageContext(key, text, messageContext);
-  await deliverPromptOrBuffer(key, `${opening.header}${quotedText}`, true, undefined, { isPersonInput: true, isAccountsNoteCarrier: true });
-  trackTopicRequestTurn(key, opening);
+  await deliverPromptByState(key, text, intake, undefined, messageContext);
 }
 
 /**
@@ -12688,47 +12679,60 @@ async function deliverActivePrompt(
     adapter.sendSignal(key, 'SIGINT');
     await replyToThread(key, t('agent.question_cancelled_for_prompt'));
   }
-  return deliverPromptByState(key, adapter, text, intake, sentAtMs, messageContext);
+  return deliverPromptByState(key, text, intake, sentAtMs, messageContext);
 }
 
 /**
- * @description The end of {@link deliverActivePrompt}, shared with the delivery of a late answer ({@link deliverLateAnswerPrompt}): open
- * the request the prompt belongs to (none for `intake` null — an answer to the agent's own question is never a request), deliver it by
- * the state of the session NOW — buffered behind a start, waking a sleeping conversation, or forwarded to the live one — and settle
- * the request. It touches no pending question and no wedged turn: that is the caller's.
+ * @description The ONE way a person's prompt is delivered — text, voice, a file, an album, `/schedule`, a re-asked question's label, a
+ * late answer (the end of {@link deliverActivePrompt} and {@link deliverPromptDuringStartup}): open the request the prompt belongs to
+ * (none for `intake` null — an answer to the agent's own question is never a request), deliver it by the state of the session at the
+ * write ({@link deliverPersonPromptAtWrite}), and settle the request. It touches no pending question and no wedged turn: that is the
+ * caller's.
  */
 async function deliverPromptByState(
   key: SessionKey,
-  adapter: AgentAdapter,
   text: string,
   intake: TopicRequestIntake | null,
   sentAtMs?: number,
   messageContext?: MessageContext,
 ): Promise<LatePromptOutcome> {
-  // A person's prompt that opens a request starts a turn that may carry the accounts note; the answer to the agent's own question
-  // (`intake` null) is bookkeeping and never does.
-  const isAccountsNoteCarrier = intake !== null;
   // The request (S7) is opened AFTER the user takeover cancelled an armed limit
   // wait (the handlers' `cancelApiRetry`) and before the forward, so its id is
   // durable by the time the agent reads it.
   const opening = await openTopicRequest(key, text, intake, messageContext);
-  // Routed now, not when the message arrived: the idle stop may have begun or ended during the awaits since.
-  // The forward can itself end in no session — a prompt that waited for an adopt replay found the session gone and nothing to wake;
-  // it has told the person already (`forwardPromptToAgent`), so what is left here is the request this prompt opened.
-  const outcome = await deliverLatePrompt({
+  // A person's prompt that opens a request starts a turn that may carry the accounts note; the answer to the agent's own question
+  // (`intake` null) is bookkeeping and never does.
+  const outcome = await deliverPersonPromptAtWrite(key, text, { requestHeader: opening.header, sentAtMs, messageContext, isAccountsNoteCarrier: intake !== null });
+  await settleTopicRequestAfterDelivery(key, opening, outcome);
+  return outcome;
+}
+
+/**
+ * @description Write a person's prompt by the state of the session NOW (`deliverLatePrompt`), never by one read before an await: the
+ * idle stop or a start may have begun or ended during the caller's awaits (its request opened, a file downloaded, a question
+ * cancelled). A start's or a stop's window open → buffered behind it, its header and message-context block folded in (the replay
+ * forwards the text as is); a live session → forwarded; neither → the sleeping conversation is woken, then forwarded. A wake that finds
+ * nothing tells the person, unless it said why itself. The forward can itself end in no session — a prompt that waited for an adopt
+ * replay found the session gone and nothing to wake; it has told the person already (`forwardPromptToAgent`).
+ */
+function deliverPersonPromptAtWrite(
+  key: SessionKey,
+  text: string,
+  options: { requestHeader: string; sentAtMs?: number; messageContext?: MessageContext; isAccountsNoteCarrier: boolean },
+): Promise<LatePromptOutcome> {
+  const { requestHeader, sentAtMs, messageContext, isAccountsNoteCarrier } = options;
+  return deliverLatePrompt({
     checkIsWindowOpen: () => startupPromptBuffer.checkIsStarting(keyToString(key)),
-    checkIsSessionActive: () => adapter.checkIsActive(key),
+    checkIsSessionActive: () => getThreadAdapter(key).checkIsActive(key),
     buffer: async () => {
-      await deliverPromptOrBuffer(key, `${opening.header}${getPromptWithThreadMessageContext(key, text, messageContext)}`, true, undefined, { isPersonInput: true, isAccountsNoteCarrier });
+      await deliverPromptOrBuffer(key, `${requestHeader}${getPromptWithThreadMessageContext(key, text, messageContext)}`, undefined, { isPersonInput: true, isAccountsNoteCarrier });
     },
     wake: () => wakeSleepingSessionForPrompt(key),
-    forward: () => forwardPromptToAgent(key, getThreadAdapter(key), text, sentAtMs, { messageContext, requestHeader: opening.header, isPersonInput: true, isAccountsNoteCarrier }),
+    forward: () => forwardPromptToAgent(key, getThreadAdapter(key), text, sentAtMs, { messageContext, requestHeader, isPersonInput: true, isAccountsNoteCarrier }),
     reportNoSession: async (isAlreadyTold) => {
       if (!isAlreadyTold) await replyToThread(key, t('agent.no_session'));
     },
   });
-  await settleTopicRequestAfterDelivery(key, opening, outcome);
-  return outcome;
 }
 
 /**
@@ -12745,7 +12749,7 @@ async function deliverLateAnswerPrompt(key: SessionKey, text: string): Promise<L
   // own «continue» nudge would come on top of the answer later).
   cancelApiRetry(key);
   noteThreadUserActivity(key);
-  return deliverPromptByState(key, getThreadAdapter(key), text, null);
+  return deliverPromptByState(key, text, null);
 }
 
 /**
@@ -12822,7 +12826,8 @@ async function cancelPendingQuestionAndForward(
   if (!didLabelQuestionMessage) {
     await replyToThread(key, t('agent.question_cancelled_for_prompt'));
   }
-  return forwardPromptToAgent(key, adapter, text, sentAtMs, { messageContext, requestHeader, isPersonInput: true, isAccountsNoteCarrier });
+  // Routed at the write: the SIGINT ended the turn, and a per-turn topic's stop may have begun (or ended) during the notice.
+  return deliverPersonPromptAtWrite(key, text, { requestHeader: requestHeader ?? '', sentAtMs, messageContext, isAccountsNoteCarrier });
 }
 
 /**
@@ -14331,14 +14336,18 @@ async function resumeConversationForLostWork(key: SessionKey): Promise<boolean> 
   return false;
 }
 
+/** Why a session post failed when its prompt found no session at the write and nothing to wake (`deliverPromptOrBuffer` → `noSession`). */
+const noSessionForPostError = 'the session went away before the prompt was written, and nothing could be woken for it';
+
 /** The session post of a lost-work note: a bot note to the agent, not a request — no request is opened for it. */
 function createLostWorkPostDeps(): PostToSessionDeps {
   return {
     ...createSessionPostDeps(),
     forwardPrompt: async (conversationKey, text) => {
       const buffered = createBufferedOutcome();
-      const delivery = await deliverPromptOrBuffer(keyFromString(conversationKey), text, startupPromptBuffer.checkIsStarting(conversationKey), buffered.settle);
+      const delivery = await deliverPromptOrBuffer(keyFromString(conversationKey), text, buffered.settle);
       if (delivery === 'buffered') await buffered.assertReplayed();
+      if (delivery === 'noSession') throw new Error(noSessionForPostError);
     },
   };
 }
@@ -15794,9 +15803,11 @@ function createSessionPostDeps(): PostToSessionDeps {
     },
     forwardPrompt: async (conversationKey, text) => {
       const buffered = createBufferedOutcome();
-      const delivery = await deliverPromptOrBuffer(keyFromString(conversationKey), text, startupPromptBuffer.checkIsStarting(conversationKey), buffered.settle, { isAccountsNoteCarrier: true });
+      const delivery = await deliverPromptOrBuffer(keyFromString(conversationKey), text, buffered.settle, { isAccountsNoteCarrier: true });
       // A prompt that waited for the session's start counts only once it reached it: a replay whose write failed is a failed post.
       if (delivery === 'buffered') await buffered.assertReplayed();
+      // The session the post ensured went to sleep before the write, and nothing could be woken for it: no turn will take the prompt.
+      if (delivery === 'noSession') throw new Error(noSessionForPostError);
     },
     // The watches whose turn ended are settled before the post picks a request and builds its text; the reminders they decided, and the
     // ones handed to the post while it waited, are delivered after the post's own write (`requests/README.md` § Turn starts).
@@ -15820,7 +15831,7 @@ async function forwardScheduledRun(conversationKey: string, text: string, ridden
   // A tracker fire whose ridden request owes nothing, or with none open: its header says when to answer, so a lost-work note riding it
   // defers to it and claims no watch (a comment notifies the requester and the issue's watchers). A topic keeps its own resume and wording.
   const lostWorkTelling: LostWorkTelling = !checkIsTelegramKey(key) && ridden?.isAnswerOwed !== true ? 'runHeader' : 'plain';
-  const delivery = await deliverPromptOrBuffer(key, text, startupPromptBuffer.checkIsStarting(conversationKey), buffered.settle, { isAccountsNoteCarrier: true, lostWorkTelling });
+  const delivery = await deliverPromptOrBuffer(key, text, buffered.settle, { isAccountsNoteCarrier: true, lostWorkTelling });
   // A prompt that waited for the session's start counts only once it reached it: a replay whose write failed is a failed post.
   if (delivery === 'buffered') await buffered.assertReplayed();
   if (ridden !== null && delivery !== 'noSession') {
@@ -15837,7 +15848,7 @@ async function forwardTopicSchedulerRequestRun(conversationKey: string, text: st
   const key = keyFromString(conversationKey);
   const opening = await openTopicRequest(key, text, { source: 'scheduledRun', requesterId: scheduledRunRequester });
   const buffered = createBufferedOutcome();
-  const delivery = await deliverPromptOrBuffer(key, `${opening.header}${text}`, startupPromptBuffer.checkIsStarting(conversationKey), buffered.settle, { isAccountsNoteCarrier: true });
+  const delivery = await deliverPromptOrBuffer(key, `${opening.header}${text}`, buffered.settle, { isAccountsNoteCarrier: true });
   await settleTopicRequestAfterDelivery(key, { ...opening, isScheduledRun: true }, delivery);
   // A prompt that waited for the session's start counts only once it reached it: a replay whose write failed is a failed post.
   if (delivery === 'buffered') await buffered.assertReplayed();

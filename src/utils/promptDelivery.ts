@@ -5,14 +5,18 @@ import type { LostWorkTelling } from './lostWork';
 
 /**
  * @name PromptDeliveryDeps
- * @description What {@link deliverPromptOrBuffer} acts through. `forwardPrompt` says where the
- * forward put the prompt ({@link LatePromptOutcome}); `announceQueued` tells the person their
- * prompt waits for the session to come up — a topic message, so it is only called for a
- * Telegram conversation.
+ * @description What {@link deliverPromptOrBuffer} acts through, every state read at the moment of the write. `forwardPrompt` says
+ * where the forward put the prompt ({@link LatePromptOutcome}); `checkIsSessionActive` and `wakeSession` let a prompt that finds no
+ * window and no live session wake the conversation first; `reportNoSession` runs when that wake found nothing (the person is told,
+ * unless the wake already said why; a bot-made prompt is only logged); `announceQueued` tells the person their prompt waits for the
+ * session to come up — a topic message, so it is only called for a Telegram conversation.
  */
 export interface PromptDeliveryDeps {
-  startupBuffer: Pick<StartupPromptBuffer, 'addPrompt'>;
+  startupBuffer: Pick<StartupPromptBuffer, 'addPrompt' | 'checkIsStarting'>;
   forwardPrompt: (key: SessionKey, text: string, options: PromptDeliveryOptions) => Promise<LatePromptOutcome>;
+  checkIsSessionActive: (key: SessionKey) => boolean;
+  wakeSession: (key: SessionKey) => Promise<LateWakeResult>;
+  reportNoSession: (key: SessionKey, isAlreadyTold: boolean, options: PromptDeliveryOptions) => Promise<void>;
   announceQueued: (key: SessionKey) => Promise<void>;
 }
 
@@ -46,18 +50,15 @@ export interface PromptDeliveryOptions {
 export type PromptDelivery = 'forwarded' | 'buffered' | 'noSession';
 
 /**
- * @description Deliver `text` to a conversation's agent while honouring the startup
- * window: mid-startup the prompt is buffered (it replays in order once the session
- * is up, exactly like a text typed during boot); otherwise it is forwarded at once.
- * The one "buffer-or-forward" unit shared by the text and voice handlers' mid-startup
- * buffering, file/album intake, `/schedule`, the Jira connector's posts and an
- * API-error retry's "continue" nudge — the last two reach it with a session another
- * caller's start may still be bringing up, where a direct forward would hit an
- * adapter that is not there yet.
+ * @description Deliver `text` to a conversation's agent, routed at the MOMENT OF THE WRITE ({@link deliverLatePrompt}): a start's or a
+ * stop's window open → buffered behind it (it replays in order once the session is up, exactly like a text typed during boot); a live
+ * session → forwarded; no window and no live session → the conversation is woken first, then forwarded. The one "buffer-or-forward"
+ * unit of every prompt that may meet a session another caller is starting or stopping: a person's prompt (`deliverPromptByState` in
+ * `bot.ts`), a scheduled run, a tracker's post, the lost-work post, a retry's «continue», a move's first prompt.
  *
- * `isStarting` is passed in (not read here) because the album collector captures
- * it AT FLUSH TIME — a session that finished booting mid-burst must forward, not
- * buffer.
+ * Nothing a caller read before an await decides it: a window that closed during the caller's awaits (its request opened, a file
+ * downloaded) never takes the prompt — the buffer refuses a closed window ({@link StartupPromptBuffer.addPrompt}), so a refused prompt
+ * is routed again, here, at once.
  *
  * The "queued while starting" notice is posted once per startup window, and only
  * for a Telegram conversation: a tracker issue has no topic to say it in (R6).
@@ -73,27 +74,39 @@ export async function deliverPromptOrBuffer(
   deps: PromptDeliveryDeps,
   key: SessionKey,
   text: string,
-  isStarting: boolean,
   onBufferedSettled?: BufferedPromptSettled,
   options: PromptDeliveryOptions = {},
 ): Promise<PromptDelivery> {
-  if (!isStarting) {
-    // Only `noSession` is told apart: a forward that re-routed the prompt behind a stop window itself registered no
-    // `onBufferedSettled`, so it reads as forwarded, as it always did.
-    return (await deps.forwardPrompt(key, text, options)) === 'noSession' ? 'noSession' : 'forwarded';
-  }
-  const isFirstBuffered = deps.startupBuffer.addPrompt(keyToString(key), text, onBufferedSettled, options);
-  if (isFirstBuffered && checkIsTelegramKey(key)) {
-    // The prompt IS buffered by now (and its settle callback registered), so a notice that fails must not
-    // read as a delivery that failed: a caller keeping something until the prompt reached a session would
-    // otherwise treat the buffered prompt as spent.
-    try {
-      await deps.announceQueued(key);
-    } catch (err) {
-      console.error(`[promptDelivery] queued notice for ${keyToString(key)} failed:`, err);
-    }
-  }
-  return 'buffered';
+  const threadId = keyToString(key);
+  let isBuffered = false;
+  let isRefused = false;
+  const route = (isWindowClosed: boolean): Promise<LatePromptOutcome> => deliverLatePrompt({
+    checkIsWindowOpen: () => !isWindowClosed && deps.startupBuffer.checkIsStarting(threadId),
+    checkIsSessionActive: () => deps.checkIsSessionActive(key),
+    buffer: async () => {
+      // Called in the tick the window was read open, so it is not refused; a refusal is routed again below all the same.
+      const added = deps.startupBuffer.addPrompt(threadId, text, onBufferedSettled, options);
+      isRefused = added === 'refused';
+      isBuffered = !isRefused;
+      if (added !== 'firstInWindow' || !checkIsTelegramKey(key)) return;
+      // The prompt IS buffered by now (and its settle callback registered), so a notice that fails must not read as a delivery
+      // that failed: a caller keeping something until the prompt reached a session would otherwise treat it as spent.
+      try {
+        await deps.announceQueued(key);
+      } catch (err) {
+        console.error(`[promptDelivery] queued notice for ${threadId} failed:`, err);
+      }
+    },
+    wake: () => deps.wakeSession(key),
+    forward: () => deps.forwardPrompt(key, text, options),
+    reportNoSession: (isAlreadyTold) => deps.reportNoSession(key, isAlreadyTold, options),
+  });
+  let outcome = await route(false);
+  // A refused add says the window is closed now: routed again as such, once.
+  if (isRefused) outcome = await route(true);
+  if (isBuffered) return 'buffered';
+  // A forward that re-routed the prompt behind a stop window itself registered no `onBufferedSettled`: it reads as forwarded.
+  return outcome === 'noSession' ? 'noSession' : 'forwarded';
 }
 
 /**

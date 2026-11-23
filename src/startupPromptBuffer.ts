@@ -44,6 +44,9 @@ function settleBufferedPrompt(prompt: BufferedPrompt, outcome: BufferedPromptOut
   }
 }
 
+/** @description What {@link StartupPromptBuffer.addPrompt} did with a prompt. */
+export type PromptBufferAddResult = 'refused' | 'firstInWindow' | 'added';
+
 /**
  * @description FIFO buffer for prompts typed while an agent session is still
  * starting up.
@@ -115,20 +118,24 @@ export class StartupPromptBuffer {
   }
 
   /**
-   * Buffer one prompt for a starting thread.
+   * Buffer one prompt for a starting thread — only while its window is OPEN (a start, or a stop under way). A closed window is
+   * refused: its start or stop has already taken, or looked for, what it holds, so a prompt added now would wait for a replay
+   * nobody starts (a person's message lost until the conversation's next start, and lost for good with a restart). The caller
+   * routes a refused prompt again at that moment (`utils/promptDelivery.ts` `deliverPromptOrBuffer`).
    * @param onSettled Told once how the prompt's wait ended ({@link BufferedPromptOutcome}).
    * @param options How it is forwarded at the replay (`PromptDeliveryOptions`), kept with it.
-   * @returns `true` if this is the first buffered prompt for the current
-   * startup window (the caller uses it to send the ack only once).
+   * @returns `refused` (no window is open), `firstInWindow` (the first buffered prompt of this window: the caller sends the
+   * ack once) or `added`.
    */
-  addPrompt(threadId: string, text: string, onSettled?: BufferedPromptSettled, options: PromptDeliveryOptions = {}): boolean {
+  addPrompt(threadId: string, text: string, onSettled?: BufferedPromptSettled, options: PromptDeliveryOptions = {}): PromptBufferAddResult {
+    if (!this.startingThreads.has(threadId)) return 'refused';
     const prompts = this.bufferedPrompts.get(threadId) ?? [];
     prompts.push({ text, onSettled, options });
     this.bufferedPrompts.set(threadId, prompts);
 
     const isFirstForWindow = !this.ackedThreads.has(threadId);
     this.ackedThreads.add(threadId);
-    return isFirstForWindow;
+    return isFirstForWindow ? 'firstInWindow' : 'added';
   }
 
   /**

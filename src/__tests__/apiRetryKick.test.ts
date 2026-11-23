@@ -108,11 +108,14 @@ function createKickDeps(): ApiRetryKickDeps {
             if (world.forwardOutcome !== 'noSession') world.nudges.push({ key: keyToString(target), text: prompt });
             return world.forwardOutcome;
           },
+          // The kick ensured the session before it delivers: a window still open buffers the nudge, else it is forwarded.
+          checkIsSessionActive: () => true,
+          wakeSession: async () => ({ isAwake: false, isNoticePosted: false }),
+          reportNoSession: async () => {},
           announceQueued: async () => {},
         },
         key,
         text,
-        world.startupBuffer.checkIsStarting(keyToString(key)),
         onBufferedSettled,
       );
     },
@@ -637,10 +640,10 @@ describe('the bot wires the kick and the restore, and keeps the saved record mea
   });
 
   it('it reaches a session another start has under way through the startup buffer, never straight to the adapter', () => {
-    assert.ok(kickPorts.includes('deliverNudge: (key, text, onBufferedSettled) => deliverPromptOrBuffer(key, text, startupPromptBuffer.checkIsStarting(keyToString(key)), onBufferedSettled),'));
+    assert.ok(kickPorts.includes('deliverNudge: (key, text, onBufferedSettled) => deliverPromptOrBuffer(key, text, onBufferedSettled),'), 'routed at its write: no window read before an await');
     assert.doesNotMatch(kickPorts, /forwardPromptToAgent\(/, 'a direct forward hits an adapter that is not there yet');
     // The buffer-or-forward unit the whole bot shares: buffered text replays in order once the start finishes.
-    assert.ok(getFunction('function deliverPromptOrBuffer(').includes('return deliverPromptWithDeps(promptDeliveryDeps, key, promptText, isStarting, onBufferedSettled, options);'));
+    assert.ok(getFunction('function deliverPromptOrBuffer(').includes('return deliverPromptWithDeps(promptDeliveryDeps, key, promptText, onBufferedSettled, options);'));
     // A nudge is no person's message: its forward waits for the write (no `isPersonInput` from the kick's port).
     assert.match(botSource, /startupBuffer: startupPromptBuffer,\n\s*forwardPrompt: \(key, text, options\) => forwardPromptToAgent\(key, getThreadAdapter\(key\), text, undefined, \{ isPersonInput: options\.isPersonInput, isAccountsNoteCarrier: options\.isAccountsNoteCarrier, lostWorkTelling: options\.lostWorkTelling \}\),/);
   });

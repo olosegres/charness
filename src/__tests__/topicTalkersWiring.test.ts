@@ -67,7 +67,7 @@ test('the talker branch refuses a slash text (a forward\'s is words), deletes a 
   assert.match(body, /!checkIsTelegramForward\(ctx\.message\)\s*&&\s*text\.startsWith\('\/'\)\)\s*\{\s*await replyToThread\(key, t\('access\.adminOnlyCommandRefusal'\)\);\s*return;/);
   assert.match(body, /parseOAuthCallbackFromReply\(text\)\)\s*\{\s*await deleteThreadMessage/);
   assert.match(body, /if \(await refuseTalkerInTerminalTopic\(key\)\) return;/);
-  assert.match(body, /bufferPromptDuringStartup\(key, text, intake, messageContext\)/);
+  assert.match(body, /deliverPromptDuringStartup\(key, text, intake, messageContext\)/);
   assert.match(body, /deliverActivePrompt\(key, adapter, text, intake, sentAtMs, messageContext, \{ replyToMessageId: getTelegramReplyTargetId\(ctx\.message\) \}\)/);
   assert.match(body, /resumeSleepingSessionForPrompt\(key\)/);
   assert.match(body, /t\('access\.noAgentForTalkerNotice'\)/);
@@ -142,7 +142,7 @@ test('a talker\'s voice note feeds no reminder step of an admin — it neither f
 });
 
 test('an answer a topic member chose says so, on every route that gives one: the button, the typed number, the re-asked question\'s tap and number', () => {
-  const tap = getSourceSlice("bot.action(/^qa_(\\d+)_(\\d+)$/, async (ctx) => {", 'Buffer a free-form prompt');
+  const tap = getSourceSlice("bot.action(/^qa_(\\d+)_(\\d+)$/, async (ctx) => {", 'async function deliverPromptDuringStartup(');
   assert.match(tap, /const answeredBy = speaker\.role === 'talker' && ctx\.from \? getTelegramTalkerContext\(ctx\.from\)\.nonOperatorSender : undefined;/);
   assert.match(tap, /applyQuestionAnswer\(key, \[selectedLabel\], answeredBy\)/);
   assert.match(getFunctionBody('deliverActivePrompt'), /await applyQuestionAnswer\(key, route\.labels, messageContext\?\.nonOperatorSender\);/);

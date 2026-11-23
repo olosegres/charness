@@ -81,12 +81,15 @@ test('the live forward awaits the write\'s outcome — except for a person\'s ow
 });
 
 test('only a person\'s own prompts are marked as such: the text, voice and label path, the buffered startup prompt, a file, an album, /schedule and what a usage-limit wait held — a wake-up, a nudge or a reminder is not', () => {
-  // The state-routed delivery both a person's prompt (`deliverActivePrompt`) and a late answer end in.
-  assert.match(getFunctionBody('deliverPromptByState'), /forward: \(\) => forwardPromptToAgent\(key, getThreadAdapter\(key\), text, sentAtMs, \{ messageContext, requestHeader: opening\.header, isPersonInput: true, isAccountsNoteCarrier \}\),/);
-  assert.match(getFunctionBody('deliverActivePrompt'), /return deliverPromptByState\(key, adapter, text, intake, sentAtMs, messageContext\);/, 'a person\'s prompt ends in it');
-  assert.match(getFunctionBody('deliverPromptByState'), /, true, undefined, \{ isPersonInput: true, isAccountsNoteCarrier \}\);/, 'and its buffered twin');
-  assert.match(getFunctionBody('bufferPromptDuringStartup'), /, true, undefined, \{ isPersonInput: true, isAccountsNoteCarrier: true \}\);/);
-  assert.match(getFunctionBody('cancelPendingQuestionAndForward'), /isPersonInput: true, isAccountsNoteCarrier \}\);/);
+  // The state-routed write every person's prompt ends in (`deliverPromptByState`: text, voice, a file, an album, /schedule, a label, a
+  // late answer), and the question-cancelling free text.
+  const atWrite = getFunctionBody('deliverPersonPromptAtWrite');
+  assert.match(atWrite, /forward: \(\) => forwardPromptToAgent\(key, getThreadAdapter\(key\), text, sentAtMs, \{ messageContext, requestHeader, isPersonInput: true, isAccountsNoteCarrier \}\),/);
+  assert.match(atWrite, /, undefined, \{ isPersonInput: true, isAccountsNoteCarrier \}\);/, 'and its buffered twin');
+  assert.match(getFunctionBody('deliverPromptByState'), /await deliverPersonPromptAtWrite\(key, text, /);
+  assert.match(getFunctionBody('deliverActivePrompt'), /return deliverPromptByState\(key, text, intake, sentAtMs, messageContext\);/, 'a person\'s prompt ends in it');
+  assert.match(getFunctionBody('deliverPromptDuringStartup'), /await deliverPromptByState\(key, text, intake, undefined, messageContext\);/, 'one that arrived in a window too');
+  assert.match(getFunctionBody('cancelPendingQuestionAndForward'), /return deliverPersonPromptAtWrite\(key, text, \{/);
   for (const name of ['forwardRequestWakeUp', 'remindAnswerTail', 'postTodoReminder']) {
     assert.ok(!getFunctionBody(name).includes('isPersonInput'), `${name} awaits its write`);
   }
@@ -149,7 +152,7 @@ test('a prompt that waits for an adopted replay keeps its lost-work wording when
 test('a bot-made prompt that waits for an adopt replay behind a start counts only once replayed', () => {
   const body = getFunctionBody('forwardPromptToAgent');
   const buffer = body.slice(body.indexOf('buffer: async () => {'));
-  assert.match(buffer, /const buffered = createBufferedOutcome\(\);\n\s*await deliverPromptOrBuffer\([^\n]*, true, buffered\.settle, \{ isPersonInput: options\.isPersonInput, isAccountsNoteCarrier: options\.isAccountsNoteCarrier, lostWorkTelling: options\.lostWorkTelling \}\);\n\s*if \(options\.isPersonInput !== true\) await buffered\.assertReplayed\(\);/);
+  assert.match(buffer, /const buffered = createBufferedOutcome\(\);\n\s*await deliverPromptOrBuffer\([^\n]*, buffered\.settle, \{ isPersonInput: options\.isPersonInput, isAccountsNoteCarrier: options\.isAccountsNoteCarrier, lostWorkTelling: options\.lostWorkTelling \}\);\n\s*if \(options\.isPersonInput !== true\) await buffered\.assertReplayed\(\);/);
 });
 
 test('a session post (a tracker\'s request or update, a scheduled run, the lost-work note) whose prompt waited for the session start counts only once it was replayed', () => {

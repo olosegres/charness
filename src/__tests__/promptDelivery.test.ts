@@ -1,11 +1,10 @@
 /**
- * @description The "buffer-or-forward" unit (`utils/promptDelivery.ts`) every
- * prompt that may reach a session still starting goes through — file intake,
- * `/schedule`, the Jira connector's posts and an API-error retry's "continue"
- * nudge. Load-bearing: a prompt for a starting session is BUFFERED (a direct
- * forward would hit an adapter that is not there yet and be lost), replays in
- * order, and the "queued" notice is a topic message — it must not be sent for a
- * Jira issue (R6).
+ * @description The "buffer-or-forward" unit (`utils/promptDelivery.ts`) every prompt that may meet a session another caller is
+ * starting or stopping goes through — a person's prompts (their buffer step), a scheduled run, the Jira connector's posts, the lost-work
+ * post, an API-error retry's "continue" nudge, a move's first prompt. Load-bearing: the prompt is routed at the moment of its write —
+ * BUFFERED behind an open window (a direct forward would hit an adapter that is not there yet and be lost), replayed in order, and NEVER
+ * left in a window that closed while its caller awaited (it is forwarded, or the sleeping conversation woken for it); the "queued"
+ * notice is a topic message — it must not be sent for a Jira issue (R6).
  */
 
 /** Test case: N/A — Charness has no Jira tracker. */
@@ -33,21 +32,36 @@ async function replayTexts(buffer: StartupPromptBuffer, key: SessionKey): Promis
 let startupBuffer: StartupPromptBuffer;
 let forwarded: Array<{ key: SessionKey; text: string }>;
 let announced: SessionKey[];
+/** What the delivery did besides forwarding, in order: `wake`, `reportNoSession(<alreadyTold>)`. */
+let steps: string[];
 /** Where the bot's forward puts a prompt (`forwardPromptToAgent`); only a prompt that waited for an adopt replay can come out as anything but `forwarded`. */
 let forwardOutcome: LatePromptOutcome;
+/** Whether the conversation's session is live at the moment of the write. */
+let isSessionActive: boolean;
+/** Whether a wake brings a session up (`wakeSleepingSessionForPrompt`). */
+let isWakeOk: boolean;
 let deps: PromptDeliveryDeps;
 
 beforeEach(() => {
   startupBuffer = new StartupPromptBuffer();
   forwarded = [];
   announced = [];
+  steps = [];
   forwardOutcome = 'forwarded';
+  isSessionActive = true;
+  isWakeOk = true;
   deps = {
     startupBuffer,
     forwardPrompt: async (key, text) => {
       forwarded.push({ key, text });
       return forwardOutcome;
     },
+    checkIsSessionActive: () => isSessionActive,
+    wakeSession: async () => {
+      steps.push('wake');
+      return { isAwake: isWakeOk, isNoticePosted: false };
+    },
+    reportNoSession: async (_key, isAlreadyTold) => { steps.push(`reportNoSession(${isAlreadyTold})`); },
     announceQueued: async (key) => { announced.push(key); },
   };
 });
@@ -55,9 +69,9 @@ beforeEach(() => {
 describe('deliverPromptOrBuffer: what a buffered prompt keeps', () => {
   it('the options travel with a buffered prompt to its replay — the accounts note\'s carrier flag, and the lost-work note\'s optional wording (review 14 #3) — and a prompt without them replays without them', async () => {
     startupBuffer.markStarting(keyToString(topicKey));
-    await deliverPromptOrBuffer(deps, topicKey, 'a person\'s message', true, undefined, { isPersonInput: true, isAccountsNoteCarrier: true });
-    await deliverPromptOrBuffer(deps, topicKey, 'a tracker fire', true, undefined, { isAccountsNoteCarrier: true, lostWorkTelling: 'runHeader' });
-    await deliverPromptOrBuffer(deps, topicKey, 'a retry nudge', true);
+    await deliverPromptOrBuffer(deps, topicKey, 'a person\'s message', undefined, { isPersonInput: true, isAccountsNoteCarrier: true });
+    await deliverPromptOrBuffer(deps, topicKey, 'a tracker fire', undefined, { isAccountsNoteCarrier: true, lostWorkTelling: 'runHeader' });
+    await deliverPromptOrBuffer(deps, topicKey, 'a retry nudge');
     const replayed: Array<[string, PromptDeliveryOptions]> = [];
     await startupBuffer.replayPrompts(keyToString(topicKey), { isSessionActive: true, forward: async (text, options) => { replayed.push([text, options]); } });
     assert.deepEqual(replayed, [
@@ -69,62 +83,125 @@ describe('deliverPromptOrBuffer: what a buffered prompt keeps', () => {
 
   it('forwarded at once, the options reach the forward as they are', async () => {
     const seen: Array<{ isAccountsNoteCarrier?: boolean }> = [];
-    await deliverPromptOrBuffer({ ...deps, forwardPrompt: async (_key, _text, options) => { seen.push(options); return 'forwarded'; } }, topicKey, 'hi', false, undefined, { isAccountsNoteCarrier: true });
+    await deliverPromptOrBuffer({ ...deps, forwardPrompt: async (_key, _text, options) => { seen.push(options); return 'forwarded'; } }, topicKey, 'hi', undefined, { isAccountsNoteCarrier: true });
     assert.deepEqual(seen, [{ isAccountsNoteCarrier: true }]);
   });
 });
 
 describe('deliverPromptOrBuffer', () => {
-  it('forwards at once to a session that is not starting — nothing buffered, nothing announced', async () => {
-    const delivery = await deliverPromptOrBuffer(deps, topicKey, 'hello', false);
+  it('forwards at once to a live session with no window open — nothing buffered, nothing announced, nothing woken', async () => {
+    const delivery = await deliverPromptOrBuffer(deps, topicKey, 'hello');
 
     assert.equal(delivery, 'forwarded');
     assert.deepEqual(forwarded, [{ key: topicKey, text: 'hello' }]);
     assert.deepEqual(announced, []);
+    assert.deepEqual(steps, []);
     assert.deepEqual(await replayTexts(startupBuffer, topicKey), []);
   });
 
   it('a forward that finds no session (the prompt waited for a bot restart\'s replay) reads as noSession, so the caller opens no turn for it', async () => {
     forwardOutcome = 'noSession';
 
-    assert.equal(await deliverPromptOrBuffer(deps, topicKey, 'hello', false), 'noSession');
-    assert.equal(await deliverPromptOrBuffer(deps, issueKey, 'the nudge', false), 'noSession', 'whatever the platform');
+    assert.equal(await deliverPromptOrBuffer(deps, topicKey, 'hello'), 'noSession');
+    assert.equal(await deliverPromptOrBuffer(deps, issueKey, 'the nudge'), 'noSession', 'whatever the platform');
   });
 
   it('a forward that routed the prompt behind a stop window itself still reads as forwarded: no settle callback was registered for that buffer', async () => {
     forwardOutcome = 'buffered';
 
-    assert.equal(await deliverPromptOrBuffer(deps, topicKey, 'hello', false), 'forwarded');
+    assert.equal(await deliverPromptOrBuffer(deps, topicKey, 'hello'), 'forwarded');
   });
 
   it('a prompt buffered for a starting session never reads as noSession — the forward is not reached', async () => {
     forwardOutcome = 'noSession';
+    startupBuffer.markStarting(keyToString(topicKey));
 
-    assert.equal(await deliverPromptOrBuffer(deps, topicKey, 'hello', true), 'buffered');
+    assert.equal(await deliverPromptOrBuffer(deps, topicKey, 'hello'), 'buffered');
     assert.deepEqual(forwarded, []);
   });
 
   it('buffers for a starting session instead of forwarding — it replays in arrival order once the session is up', async () => {
     startupBuffer.markStarting(keyToString(topicKey));
 
-    const first = await deliverPromptOrBuffer(deps, topicKey, 'first', true);
-    await deliverPromptOrBuffer(deps, topicKey, 'second', true);
+    const first = await deliverPromptOrBuffer(deps, topicKey, 'first');
+    await deliverPromptOrBuffer(deps, topicKey, 'second');
 
     assert.equal(first, 'buffered');
     assert.deepEqual(forwarded, [], 'a direct forward would reach an adapter that is not there yet');
     assert.deepEqual(await replayTexts(startupBuffer, topicKey), ['first', 'second']);
   });
 
+  it('a stop\'s window that closed after the caller read it open never keeps the prompt: the sleeping conversation is woken and the prompt forwarded — nothing is left in the buffer (review 18 #1)', async () => {
+    const outcomes: BufferedPromptOutcome[] = [];
+    const threadId = keyToString(topicKey);
+    startupBuffer.markStarting(threadId);
+    assert.equal(startupBuffer.checkIsStarting(threadId), true, 'the caller read the window open when the prompt arrived');
+    // During the caller's awaits (its request opened, a file downloaded) the stop ends: the process is gone.
+    startupBuffer.closeWindow(threadId);
+    isSessionActive = false;
+
+    const delivery = await deliverPromptOrBuffer(deps, topicKey, 'a file sent while the process stopped', (outcome) => outcomes.push(outcome));
+
+    assert.equal(delivery, 'forwarded');
+    assert.deepEqual(steps, ['wake']);
+    assert.deepEqual(forwarded, [{ key: topicKey, text: 'a file sent while the process stopped' }]);
+    assert.equal(startupBuffer.checkHasPrompts(threadId), false, 'not orphaned in a buffer nobody replays');
+    assert.equal(startupBuffer.checkIsAnyPending(), false);
+    assert.deepEqual(outcomes, [], 'forwarded: no buffered wait to settle');
+    assert.deepEqual(announced, [], 'no «queued» notice for a window that is gone');
+  });
+
+  it('a start\'s window whose replay already ran when the prompt is written: forwarded to the session it brought up, not added behind the replay (review 18 #1)', async () => {
+    const threadId = keyToString(topicKey);
+    startupBuffer.markStarting(threadId);
+    await replayTexts(startupBuffer, topicKey);
+
+    assert.equal(await deliverPromptOrBuffer(deps, topicKey, 'typed during the boot, written after it'), 'forwarded');
+    assert.deepEqual(forwarded, [{ key: topicKey, text: 'typed during the boot, written after it' }]);
+    assert.deepEqual(steps, [], 'the session is up: nothing to wake');
+    assert.equal(startupBuffer.checkHasPrompts(threadId), false);
+  });
+
+  it('no window and nothing to wake: noSession, and the miss is reported with the prompt\'s own options', async () => {
+    isSessionActive = false;
+    isWakeOk = false;
+    const reported: Array<[boolean, PromptDeliveryOptions]> = [];
+
+    const delivery = await deliverPromptOrBuffer({ ...deps, reportNoSession: async (_key, isAlreadyTold, options) => { reported.push([isAlreadyTold, options]); } }, topicKey, 'hello', undefined, { isPersonInput: true });
+
+    assert.equal(delivery, 'noSession');
+    assert.deepEqual(forwarded, [], 'a forward would show the topic working over a dropped text');
+    assert.deepEqual(reported, [[false, { isPersonInput: true }]]);
+  });
+
+  it('a buffer that refuses the prompt (its window closed between the read and the add) routes it again at once: it is forwarded, never lost', async () => {
+    let windowReads = 0;
+    const refusingBuffer: PromptDeliveryDeps['startupBuffer'] = {
+      // Open at the first read only: the window closes right after it.
+      checkIsStarting: () => {
+        windowReads += 1;
+        return windowReads === 1;
+      },
+      addPrompt: () => 'refused',
+    };
+
+    const delivery = await deliverPromptOrBuffer({ ...deps, startupBuffer: refusingBuffer }, topicKey, 'hello');
+
+    assert.equal(delivery, 'forwarded');
+    assert.deepEqual(forwarded, [{ key: topicKey, text: 'hello' }]);
+    assert.deepEqual(announced, [], 'nothing was queued, so nothing is announced');
+  });
+
   it('tells a buffered prompt\'s caller how the wait ended: replayed once the session is up, dropped when the start fails', async () => {
     const outcomes: BufferedPromptOutcome[] = [];
     startupBuffer.markStarting(keyToString(topicKey));
-    await deliverPromptOrBuffer(deps, topicKey, 'replayed one', true, (outcome) => outcomes.push(outcome));
+    await deliverPromptOrBuffer(deps, topicKey, 'replayed one', (outcome) => outcomes.push(outcome));
     assert.equal(outcomes.length, 0, 'not before the window ends');
     await replayTexts(startupBuffer, topicKey);
     assert.deepEqual(outcomes, ['replayed']);
 
     startupBuffer.markStarting(keyToString(topicKey));
-    await deliverPromptOrBuffer(deps, topicKey, 'dropped one', true, (outcome) => outcomes.push(outcome));
+    await deliverPromptOrBuffer(deps, topicKey, 'dropped one', (outcome) => outcomes.push(outcome));
     startupBuffer.discardPrompts(keyToString(topicKey));
     assert.deepEqual(outcomes, ['replayed', 'dropped']);
   });
@@ -139,7 +216,6 @@ describe('deliverPromptOrBuffer', () => {
         { ...deps, announceQueued: async () => { throw new Error('notice failed'); } },
         topicKey,
         'the nudge',
-        true,
         (outcome) => outcomes.push(outcome),
       );
       assert.equal(logged.mock.calls.length, 1);
@@ -153,27 +229,27 @@ describe('deliverPromptOrBuffer', () => {
 
   it('a prompt forwarded at once has no wait to tell about: the callback is not called', async () => {
     const outcomes: BufferedPromptOutcome[] = [];
-    await deliverPromptOrBuffer(deps, topicKey, 'now', false, (outcome) => outcomes.push(outcome));
+    await deliverPromptOrBuffer(deps, topicKey, 'now', (outcome) => outcomes.push(outcome));
     assert.equal(outcomes.length, 0);
   });
 
   it('tells a Telegram topic once per startup window that the prompt is queued', async () => {
     startupBuffer.markStarting(keyToString(topicKey));
 
-    await deliverPromptOrBuffer(deps, topicKey, 'first', true);
-    await deliverPromptOrBuffer(deps, topicKey, 'second', true);
+    await deliverPromptOrBuffer(deps, topicKey, 'first');
+    await deliverPromptOrBuffer(deps, topicKey, 'second');
     assert.deepEqual(announced, [topicKey]);
 
     await replayTexts(startupBuffer, topicKey);
     startupBuffer.markStarting(keyToString(topicKey));
-    await deliverPromptOrBuffer(deps, topicKey, 'next window', true);
+    await deliverPromptOrBuffer(deps, topicKey, 'next window');
     assert.deepEqual(announced, [topicKey, topicKey], 'a new startup window announces again');
   });
 
   it('buffers a Jira issue\'s prompt without the topic notice — an issue has no topic to say it in (R6)', async () => {
     startupBuffer.markStarting(keyToString(issueKey));
 
-    await deliverPromptOrBuffer(deps, issueKey, 'the nudge', true);
+    await deliverPromptOrBuffer(deps, issueKey, 'the nudge');
 
     assert.deepEqual(announced, []);
     assert.deepEqual(forwarded, []);
@@ -181,7 +257,7 @@ describe('deliverPromptOrBuffer', () => {
   });
 
   it('forwards a Jira issue\'s prompt to a session that is up', async () => {
-    await deliverPromptOrBuffer(deps, issueKey, 'the nudge', false);
+    await deliverPromptOrBuffer(deps, issueKey, 'the nudge');
 
     assert.deepEqual(forwarded, [{ key: issueKey, text: 'the nudge' }]);
   });
@@ -189,68 +265,83 @@ describe('deliverPromptOrBuffer', () => {
 
 describe('the bot buffers a prompt for a starting session through it, in one place', () => {
   const botSource = fs.readFileSync(path.join(__dirname, '..', 'bot.ts'), 'utf8');
+  const getBody = (start: string, end: string): string => botSource.slice(botSource.indexOf(start), botSource.indexOf(end));
 
   it('there is no second copy of the buffer-and-announce logic', () => {
     assert.doesNotMatch(botSource, /startupPromptBuffer\.addPrompt\(/);
     assert.equal(botSource.match(/agent\.queued_starting/g)?.length, 1, 'the notice is built in one place');
   });
 
-  it('the text and voice handlers hand a mid-startup prompt to it, with the request header opened at capture time (S7)', () => {
-    // Through one shared unit, which also folds the reply quote in at capture time
-    // (`replyQuoteWiring.test.ts`): the replay forwards the buffered text as is.
-    assert.match(botSource, /await bufferPromptDuringStartup\(key, text, \{ source: 'text'/);
-    assert.match(botSource, /await bufferPromptDuringStartup\(key, transcript, \{ source: 'voice'/);
-    assert.match(botSource, /await deliverPromptOrBuffer\(key, `\$\{opening\.header\}\$\{quotedText\}`, true, undefined, \{ isPersonInput: true, isAccountsNoteCarrier: true \}\);/);
+  it('every person prompt — text, voice, a file, an album, `/schedule` — is routed at its write, through one helper: nothing hands the delivery a window read before an await (review 18 #1)', () => {
+    // A prompt that arrived in a window only takes the route that does not look at a pending question; its write is routed later.
+    assert.match(botSource, /await deliverPromptDuringStartup\(key, text, \{ source: 'text'/);
+    assert.match(botSource, /await deliverPromptDuringStartup\(key, transcript, \{ source: 'voice'/);
+    assert.match(getBody('async function deliverPromptDuringStartup(', 'async function deliverActivePrompt('), /notePersonActivity\(key\);\n\s*await deliverPromptByState\(key, text, intake, undefined, messageContext\);\n\}/);
+    for (const call of [
+      "await deliverPromptByState(key, wrappedPrompt, { source: 'schedule', requesterId: getTopicRequesterId(ctx.from) });",
+      "await deliverPromptByState(key, promptText, { source: 'album', requesterId: orderedItems[0].requesterId }, undefined, messageContext);",
+      "await deliverPromptByState(key, promptText, { source: 'file', requesterId: getTopicRequesterId(ctx.from) }, undefined, messageContext);",
+    ]) assert.ok(botSource.includes(call), call);
+    // The helper opens the request first and routes the write after it, by what the session is then.
+    assert.match(
+      getBody('async function deliverPromptByState(', 'function deliverPersonPromptAtWrite('),
+      /const opening = await openTopicRequest\(key, text, intake, messageContext\);\n(?:\s*\/\/[^\n]*\n)*\s*const outcome = await deliverPersonPromptAtWrite\(key, text, \{ requestHeader: opening\.header, sentAtMs, messageContext, isAccountsNoteCarrier: intake !== null \}\);\n\s*await settleTopicRequestAfterDelivery\(key, opening, outcome\);\n\s*return outcome;/,
+    );
+    // No delivery is given a window state at all; the one stale read the file path had is gone (its gate reads the window itself).
+    assert.doesNotMatch(botSource, /deliverPromptOrBuffer\([^;]*checkIsStarting/);
+    assert.doesNotMatch(botSource, /deliverPromptOrBuffer\([^;]*`,\s*(?:true|false|isStarting),/);
+    assert.doesNotMatch(botSource, /const isStarting = /);
+    assert.ok(getBody('function deliverPromptOrBuffer(', 'interface AlbumCollectorItem').includes('return deliverPromptWithDeps(promptDeliveryDeps, key, promptText, onBufferedSettled, options);'));
   });
 
-  it('a prompt for an active session is delivered through the late route, read after the last await before the forward', () => {
+  it('a person\'s prompt is written by what the session is at the write: buffered behind a window, forwarded to a live session, a sleeping one woken', () => {
     // The race the re-ask flow hit: a tap read a live process, the idle stop ran during the tap's awaits, and the label
     // was forwarded to a session that was gone — dropped. The behaviour is `deliverLatePrompt`'s (below) and the e2e's.
-    const deliver = botSource.slice(botSource.indexOf('async function deliverActivePrompt('), botSource.indexOf('async function cancelPendingQuestionAndForward('));
-    assert.match(deliver, /const opening = await openTopicRequest\(key, text, intake, messageContext\);\n(?:\s*\/\/[^\n]*\n)+\s*const outcome = await deliverLatePrompt\(\{/);
-    assert.ok(deliver.includes('forward: () => forwardPromptToAgent(key, getThreadAdapter(key), text, sentAtMs, { messageContext, requestHeader: opening.header, isPersonInput: true, isAccountsNoteCarrier }),'), 'the forward\'s own outcome is the answer');
-    assert.match(deliver, /reportNoSession: async \(isAlreadyTold\) => \{\n\s*if \(!isAlreadyTold\) await replyToThread\(key, t\('agent\.no_session'\)\);\n\s*\},/, 'the topic is told once; the request is settled below, for the wake and the forward alike');
-    assert.ok(deliver.includes('wake: () => wakeSleepingSessionForPrompt(key),'), 'the wake says whether its start already posted why it failed');
-    assert.doesNotMatch(deliver, /closeRequest|trackTopicRequestTurn/, 'the request is closed or tracked in one place');
-    assert.match(deliver, /\}\);\n\s*await settleTopicRequestAfterDelivery\(key, opening, outcome\);\n\s*return outcome;/);
+    const atWrite = getBody('function deliverPersonPromptAtWrite(', 'async function deliverLateAnswerPrompt(');
+    assert.ok(atWrite.includes('return deliverLatePrompt({'));
+    assert.ok(atWrite.includes('checkIsWindowOpen: () => startupPromptBuffer.checkIsStarting(keyToString(key)),'));
+    assert.ok(atWrite.includes('checkIsSessionActive: () => getThreadAdapter(key).checkIsActive(key),'), 'the adapter the topic runs NOW');
+    assert.ok(atWrite.includes('await deliverPromptOrBuffer(key, `${requestHeader}${getPromptWithThreadMessageContext(key, text, messageContext)}`, undefined, { isPersonInput: true, isAccountsNoteCarrier });'), 'buffered with its header and context folded in');
+    assert.ok(atWrite.includes('forward: () => forwardPromptToAgent(key, getThreadAdapter(key), text, sentAtMs, { messageContext, requestHeader, isPersonInput: true, isAccountsNoteCarrier }),'), 'the forward\'s own outcome is the answer');
+    assert.match(atWrite, /reportNoSession: async \(isAlreadyTold\) => \{\n\s*if \(!isAlreadyTold\) await replyToThread\(key, t\('agent\.no_session'\)\);\n\s*\},/, 'the topic is told once; the request is settled by the caller, for the wake and the forward alike');
+    assert.ok(atWrite.includes('wake: () => wakeSleepingSessionForPrompt(key),'), 'the wake says whether its start already posted why it failed');
+    assert.doesNotMatch(atWrite, /closeRequest|trackTopicRequestTurn|settleTopicRequestAfterDelivery/, 'the request is closed or tracked in one place');
+    // The free text that cancels a pending question is written the same way: the SIGINT ended the turn, and a per-turn stop may follow.
+    const cancel = getBody('async function cancelPendingQuestionAndForward(', 'async function applyQuestionAnswer(');
+    assert.ok(cancel.includes("return deliverPersonPromptAtWrite(key, text, { requestHeader: requestHeader ?? '', sentAtMs, messageContext, isAccountsNoteCarrier });"));
+    assert.doesNotMatch(cancel, /forwardPromptToAgent\(/);
   });
 
-  it('the forward ports return where the prompt went, with no wrapper that throws the answer away', () => {
+  it('the delivery ports read the session at the write and return where the prompt went, with no wrapper that throws the answer away', () => {
     assert.ok(botSource.includes('forwardPrompt: (key, text, options) => forwardPromptToAgent(key, getThreadAdapter(key), text, undefined, { isPersonInput: options.isPersonInput, isAccountsNoteCarrier: options.isAccountsNoteCarrier, lostWorkTelling: options.lostWorkTelling }),'));
+    assert.ok(botSource.includes('checkIsSessionActive: (key) => getThreadAdapter(key).checkIsActive(key),'));
+    assert.match(botSource, /wakeSession: \(key\) => \(checkIsTelegramKey\(key\)\n\s*\? wakeSleepingSessionForPrompt\(key\)\n\s*: wakeSleepingSessionForPrompt\(key, async \(notice\) => \{ console\.log\(/, 'a tracker conversation\'s resume notice is logged, never sent to Telegram');
+    // A session post whose prompt found no session and nothing to wake is a failed post (its caller retries it), never one that reads as written.
+    for (const name of ['createSessionPostDeps', 'createLostWorkPostDeps']) {
+      assert.match(getBody(`function ${name}(`, name === 'createSessionPostDeps' ? 'async function forwardScheduledRun(' : 'function createBufferedOutcome('), /if \(delivery === 'noSession'\) throw new Error\(noSessionForPostError\);/, name);
+    }
+    assert.match(botSource, /if \(options\.isPersonInput === true && !isAlreadyTold\) await replyToThread\(key, t\('agent\.no_session'\)\);/, 'only a person\'s own prompt is told about in the topic');
     assert.ok(botSource.includes('forward: async (prompt, options) => { await forwardPromptToAgent(key, adapter, prompt, undefined, options); },'), 'a buffered prompt is replayed with the options it was buffered with');
     assert.doesNotMatch(botSource, /forwardPrompt: async \(key, text\) => \{ await forwardPromptToAgent/);
-    const cancel = botSource.slice(botSource.indexOf('async function cancelPendingQuestionAndForward('), botSource.indexOf('async function applyQuestionAnswer('));
-    assert.match(cancel, /\): Promise<LatePromptOutcome> \{/);
-    assert.ok(cancel.includes('return forwardPromptToAgent(key, adapter, text, sentAtMs, { messageContext, requestHeader, isPersonInput: true, isAccountsNoteCarrier });'));
+    assert.match(getBody('async function cancelPendingQuestionAndForward(', 'async function applyQuestionAnswer('), /\): Promise<LatePromptOutcome> \{/);
   });
 
   it('a request is settled by where its prompt went: tracked, or closed when no session was left to take it', () => {
     // The behaviour is `requests/topicRequestSettle.ts`'s (`topicRequestSettle.test.ts`): a prompt that found no session (it waited for
     // a bot restart's replay; the person was told) must not leave a request open, or the wake-up engine prods the agent later for a
     // turn that never started. Here: the bot wires the engine and the ledger into it, and every site settles through it.
-    assert.match(botSource, /const \{ trackTurn: trackTopicRequestTurn, settleAfterDelivery: settleTopicRequestAfterDelivery \} = createTopicRequestSettler\(\{/);
+    assert.match(botSource, /const \{ settleAfterDelivery: settleTopicRequestAfterDelivery \} = createTopicRequestSettler\(\{/);
     assert.ok(botSource.includes("await requestWakeUpEngine?.trackForwardedTurn(key, requestId, { isRequestPrompt: true, isScheduledRun });"), 'the engine watches the turn as a request prompt — a scheduled run\'s when the opening says so');
     assert.ok(botSource.includes("await topicRequestLedger?.closeRequest(requestId, 'cancelled');"), 'the ledger closes the request as cancelled');
-    // Every site that opens a request and hands its prompt on settles it through the helper — the turn is never tracked directly,
-    // except for the prompt buffered at capture time, which cannot find a session gone.
-    assert.equal(botSource.match(/trackTopicRequestTurn\(key, opening\)/g)?.length, 1, 'only the capture-time buffer; the settle module tracks for the rest');
-    assert.match(botSource.slice(botSource.indexOf('async function bufferPromptDuringStartup(')), /^[^]*?await deliverPromptOrBuffer\(key, `\$\{opening\.header\}\$\{quotedText\}`, true, undefined, \{ isPersonInput: true, isAccountsNoteCarrier: true \}\);\n\s*trackTopicRequestTurn\(key, opening\);/);
-    const sites: Array<{ name: string; call: string; count: number }> = [
-      // A person's own prompt (typed, sent, a /schedule they wrote): its forward does not wait for the write — `isPersonInput`.
-      { name: '/schedule', call: 'deliverPromptOrBuffer(key, `${opening.header}${wrappedPrompt}`, isStarting, undefined, { isPersonInput: true, isAccountsNoteCarrier: true })', count: 1 },
-      { name: 'an album and a file', call: 'deliverPromptOrBuffer(key, `${opening.header}${quotedPrompt}`, isStarting, undefined, { isPersonInput: true, isAccountsNoteCarrier: true })', count: 2 },
-      { name: 'free text that cancels a pending question', call: 'cancelPendingQuestionAndForward(key, adapter, text, sentAtMs, messageContext, opening.header, intake !== null)', count: 1 },
-    ];
-    for (const { name, call, count } of sites) {
-      const settled = new RegExp(`const delivery = await ${call.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')};\\n\\s*await settleTopicRequestAfterDelivery\\(key, opening, delivery\\);`, 'g');
-      assert.equal(botSource.match(settled)?.length, count, `${name} settles its request by where the prompt went`);
-    }
-    assert.equal(botSource.match(/await settleTopicRequestAfterDelivery\(key, opening, /g)?.length, 5, 'the four above and the text handler, no other');
+    // Every site that opens a request and hands its prompt on settles it through the helper — the turn is never tracked directly.
+    assert.doesNotMatch(botSource, /trackTopicRequestTurn/);
+    assert.ok(botSource.includes('const delivery = await cancelPendingQuestionAndForward(key, adapter, text, sentAtMs, messageContext, opening.header, intake !== null);\n    await settleTopicRequestAfterDelivery(key, opening, delivery);'), 'free text that cancels a pending question');
+    assert.equal(botSource.match(/await settleTopicRequestAfterDelivery\(key, opening, /g)?.length, 2, 'the person\'s one helper and the question-cancelling text, no other');
     // The scheduler's request a fire opened settles the same way, as that fire's scheduled run (`src/requests/README.md` § Scheduled
     // runs); a session post waits for the buffered prompt's replay as well (it must not count a prompt that never arrived): `buffered.settle`.
     assert.match(
       botSource.slice(botSource.indexOf('async function forwardTopicSchedulerRequestRun('), botSource.indexOf('async function forwardTopicSchedulerRequestRun(') + 1500),
-      /const delivery = await deliverPromptOrBuffer\(key, `\$\{opening\.header\}\$\{text\}`, startupPromptBuffer\.checkIsStarting\(conversationKey\), buffered\.settle, \{ isAccountsNoteCarrier: true \}\);\n\s*await settleTopicRequestAfterDelivery\(key, \{ \.\.\.opening, isScheduledRun: true \}, delivery\);/,
+      /const delivery = await deliverPromptOrBuffer\(key, `\$\{opening\.header\}\$\{text\}`, buffered\.settle, \{ isAccountsNoteCarrier: true \}\);\n\s*await settleTopicRequestAfterDelivery\(key, \{ \.\.\.opening, isScheduledRun: true \}, delivery\);/,
     );
     assert.equal(botSource.match(/await settleTopicRequestAfterDelivery\(key, \{ \.\.\.opening, isScheduledRun: true \}, /g)?.length, 1, 'only the scheduler\'s request');
   });

@@ -50,22 +50,45 @@ test('replay clears the buffer — a second replay yields nothing (no double-sen
   assert.deepEqual(await replayTexts(buffer, KEY_A), []);
 });
 
-test('addPrompt reports first-of-window once, then false (ack only once)', () => {
+test('addPrompt reports first-of-window once, then added (ack only once)', () => {
   const buffer = new StartupPromptBuffer();
   buffer.markStarting(KEY_A);
-  assert.equal(buffer.addPrompt(KEY_A, 'a'), true);
-  assert.equal(buffer.addPrompt(KEY_A, 'b'), false);
-  assert.equal(buffer.addPrompt(KEY_A, 'c'), false);
+  assert.equal(buffer.addPrompt(KEY_A, 'a'), 'firstInWindow');
+  assert.equal(buffer.addPrompt(KEY_A, 'b'), 'added');
+  assert.equal(buffer.addPrompt(KEY_A, 'c'), 'added');
 });
 
 test('a fresh startup window acks again after a replay', async () => {
   const buffer = new StartupPromptBuffer();
   buffer.markStarting(KEY_A);
-  assert.equal(buffer.addPrompt(KEY_A, 'a'), true);
+  assert.equal(buffer.addPrompt(KEY_A, 'a'), 'firstInWindow');
   await replayTexts(buffer, KEY_A);
 
   buffer.markStarting(KEY_A);
-  assert.equal(buffer.addPrompt(KEY_A, 'b'), true);
+  assert.equal(buffer.addPrompt(KEY_A, 'b'), 'firstInWindow');
+});
+
+test('a closed window refuses a prompt: nothing is kept that no replay would take (review 18 #1)', async () => {
+  const buffer = new StartupPromptBuffer();
+  const outcomes: BufferedPromptOutcome[] = [];
+  assert.equal(buffer.addPrompt(KEY_A, 'no window was ever open', (outcome) => outcomes.push(outcome)), 'refused');
+
+  // A stop's window: it closed (the process is gone) and looked once for what it holds — a prompt added now would wait for good.
+  buffer.markStarting(KEY_A);
+  buffer.closeWindow(KEY_A);
+  assert.equal(buffer.addPrompt(KEY_A, 'after the stop ended', (outcome) => outcomes.push(outcome)), 'refused');
+  // A start's window: its replay took the buffer.
+  buffer.markStarting(KEY_B);
+  await replayTexts(buffer, KEY_B);
+  assert.equal(buffer.addPrompt(KEY_B, 'after the replay took the buffer'), 'refused');
+
+  assert.equal(buffer.checkHasPrompts(KEY_A), false);
+  assert.equal(buffer.checkHasPrompts(KEY_B), false);
+  assert.equal(buffer.checkIsAnyPending(), false, 'nothing held in memory: a self-update is not refused for a prompt nobody will replay');
+  assert.deepEqual(outcomes, [], 'a refused prompt was never buffered: no wait to settle');
+  // The next window takes prompts again.
+  buffer.markStarting(KEY_A);
+  assert.equal(buffer.addPrompt(KEY_A, 'in the next window'), 'firstInWindow');
 });
 
 test('discard drops buffered prompts and closes the window (failed start)', async () => {

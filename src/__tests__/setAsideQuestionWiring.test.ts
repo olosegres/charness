@@ -62,9 +62,10 @@ test('the buttons of a set-aside question are registered once, beside the compac
 
 test('a late answer is delivered without the free-text route of a waiting question: it cancels none and aborts no turn', () => {
   const late = getFunctionBody('deliverLateAnswerPrompt');
-  assert.match(late, /deliverPromptByState\(\s*key\s*,\s*getThreadAdapter\(key\)\s*,\s*text\s*,\s*null\s*\)/, 'no request opened for it, and no message context: a member\'s attribution travels inside the answer');
+  assert.match(late, /deliverPromptByState\(\s*key\s*,\s*text\s*,\s*null\s*\)/, 'no request opened for it, and no message context: a member\'s attribution travels inside the answer');
   assert.doesNotMatch(late, /cancelPendingQuestionAndForward|checkIsWedgedOnQuestion|pendingQuestions/);
   assert.doesNotMatch(getFunctionBody('deliverPromptByState'), /cancelPendingQuestionAndForward|checkIsWedgedOnQuestion/);
+  assert.doesNotMatch(getFunctionBody('deliverPersonPromptAtWrite'), /cancelPendingQuestionAndForward|checkIsWedgedOnQuestion|pendingQuestions/);
 });
 
 test('a late answer cancels an armed usage-limit wait first, like typed text — before anything is written to the session', () => {

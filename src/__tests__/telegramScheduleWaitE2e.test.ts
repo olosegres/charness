@@ -31,6 +31,9 @@
  *   → still per turn: a turn ends in an error the bot does not classify while the operator's next message waits behind it. The CLI runs
  *     that message as its next turn (measured on 2.1.330), so the process is not stopped and nothing decides its turn before it ran:
  *     it is answered in the same process, with no reminder and no give-up
+ *   → still per turn: a file the operator sends while the process stops after a turn, whose download lasts past the stop's end. The
+ *     window it arrived in is closed by the time its prompt is written: the prompt is routed then, so it wakes the sleeping session and
+ *     gets its own turn — no reminder (in the answers view) — and in the stream view, which opens no request, it reaches the agent too
  *   → a second Claude account, the idle lifecycle: the operator moves the topic to it while the agent works, and that turn ends silent.
  *     The switch re-spawns the process onto the new account right after the turn, and the turn's reminder waits for that re-spawn:
  *     one launch, nothing started beside it, the reminder in the new process
@@ -121,6 +124,8 @@ const unclassifiedErrorText = 'The agent runner stopped unexpectedly';
 const failingTurnRunMs = 6 * msPerSecond;
 /** The `slow-once` turn of the message queued behind it works this long in silence (the fake's default) before it answers. */
 const slowTurnTimeoutMs = 2 * 60 * msPerSecond;
+/** The size of the file whose download the per-turn file steps hold. */
+const heldFileBytes = 64;
 /** A one-shot armed `fakeOneShotDelaySeconds` ahead fires within this (the engine's timer, the post and the turn). */
 const oneShotFireTimeoutMs = (fakeOneShotDelaySeconds + 60) * msPerSecond;
 /** The follow-up a progress note gets after this long (production: 15 min) and the engine's sweep that would deliver it. */
@@ -211,6 +216,45 @@ async function startNamedWorker(runDirName: string): Promise<ChildProcess> {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/** How many times the bot's output has `line` so far. */
+function countOutputLines(line: string): number {
+  return getCharness().output.split(line).length - 1;
+}
+
+/**
+ * A per-turn topic: a warm-up turn ends and its stop is held open (the fake waits `perTurnStopHoldMs` before it exits); the operator
+ * sends a file inside that window, and its download is held until the stop has ended. So the window the file ARRIVED in is closed
+ * by the time its prompt is written, and the conversation sleeps. Resolves once the download was released.
+ */
+async function sendFileAcrossThePerTurnStop(warmUpIssueKey: string, fileIssueKey: string): Promise<void> {
+  const topicKeyString = `${group.id}:${topicThreadId}`;
+  const stopLine = `[compact-on-idle] ${topicKeyString} stopping the idle process`;
+  const stoppedLine = `[compact-on-idle] ${topicKeyString} process stopped`;
+  const exitFlushDelayPath = path.join(getLayout().fakeStateDir, fakeClaudeExitFlushDelayFileName);
+  fs.writeFileSync(exitFlushDelayPath, perTurnStopHoldMs.toString());
+  const releaseDownloads = fakeTelegram.holdFileDownloads();
+  try {
+    const stopsBefore = countOutputLines(stopLine);
+    const stoppedBefore = countOutputLines(stoppedLine);
+    fakeTelegram.pushOperatorMessage(topicThreadId, `${warmUpIssueKey} [fake:answer] warm up the per-turn session`);
+    await getCharness().waitFor('the per-turn stop after the warm-up turn', bufferedFlowTimeoutMs, () => countOutputLines(stopLine) > stopsBefore);
+    const fileId = `file-${fileIssueKey.toLowerCase()}`;
+    fakeTelegram.registerFile(fileId, Buffer.alloc(heldFileBytes, 5));
+    fakeTelegram.pushOperatorFile(topicThreadId, 'document', fileId, { fileName: 'notes.txt', caption: `${fileIssueKey} [fake:answer] a file sent while the process stops` });
+    await getCharness().waitFor('the file\'s download to begin', replyTimeoutMs, () => fakeTelegram.getHeldFileDownloadCount() > 0);
+    assert.equal(countOutputLines(stoppedLine), stoppedBefore, 'the stop is still under way: the file arrived inside its window');
+    await getCharness().waitFor('the stop to end while the download is held', bufferedFlowTimeoutMs, () => countOutputLines(stoppedLine) > stoppedBefore);
+  } finally {
+    releaseDownloads();
+    fs.rmSync(exitFlushDelayPath, { force: true });
+  }
+}
+
+/** Every user message the fake agent read that carries `text`. */
+function getAgentPromptsWith(text: string): FakeClaudePrompt[] {
+  return getAgentPrompts().filter((prompt) => prompt.text.includes(text));
 }
 
 describe('A request waits for its schedule in a Telegram topic end to end: built charness, fake Bot API, a fake orchestrating agent, a real worker process', () => {
@@ -544,6 +588,27 @@ describe('A request waits for its schedule in a Telegram topic end to end: built
       fs.rmSync(apiErrorOncePath, { force: true });
       fs.rmSync(apiErrorDelayPath, { force: true });
     }
+  });
+
+  it('per-turn: a file sent while the process stops after a turn, whose download outlasts the stop, gets its own turn — the stop\'s window that closed meanwhile does not keep it: the session wakes for it, no reminder (review 18 #1)', async () => {
+    await sendFileAcrossThePerTurnStop('WN-14', 'WO-15');
+    await getCharness().waitFor('the file to reach the agent in a turn of its own', bufferedFlowTimeoutMs, () => readFakeLog<FakeClaudeTurn>(fakeClaudeLogFileNames.turns).some((turn) => turn.issueKey === 'WO-15'));
+    const requestId = readFakeLog<FakeClaudeTurn>(fakeClaudeLogFileNames.turns).find((turn) => turn.issueKey === 'WO-15')?.requestId ?? '';
+    assert.match(requestId, /^req_/, 'the file opened its request');
+    await getCharness().waitFor('the file\'s request to be answered', agentTimeoutMs, () => readClosedRequests().some((closed) => closed.id === requestId));
+    assert.equal(readClosedRequests().find((closed) => closed.id === requestId)?.closeReason, 'final');
+    assert.equal(getAgentPromptsWith('WO-15').length, 1, 'the agent read the file once: its own turn, not a re-post of an unread prompt');
+    assert.deepEqual(getAgentPromptsWith(`[Reminder · request ${requestId} is still open]`), [], 'no reminder');
+    assert.ok(!topic.listMessages().some((message) => message.text.includes('got no answer')), 'no give-up');
+  });
+
+  it('per-turn, the stream view: the same file reaches the agent — no request brings it back, so nothing but its own write can (review 18 #1)', async () => {
+    await topic.sendAndAwaitReply('/verbosity stream', 'This topic shows: Stream only');
+    await sendFileAcrossThePerTurnStop('WP-16', 'WQ-17');
+    await getCharness().waitFor('the file to reach the agent', bufferedFlowTimeoutMs, () => readFakeLog<FakeClaudeTurn>(fakeClaudeLogFileNames.turns).some((turn) => turn.issueKey === 'WQ-17'));
+    assert.equal(readFakeLog<FakeClaudeTurn>(fakeClaudeLogFileNames.turns).find((turn) => turn.issueKey === 'WQ-17')?.requestId, null, 'the stream view opens no request');
+    assert.equal(getAgentPromptsWith('WQ-17').length, 1);
+    await topic.sendAndAwaitReply('/verbosity answers', 'This topic shows: Answers only');
   });
 
   it('a deferred account switch: the turn the operator moved to another account ends silent and its process is re-spawned onto it right after — the reminder waits for the re-spawn: one launch, nothing beside it, the reminder in the new process (report 6, not fixed 2)', async () => {
