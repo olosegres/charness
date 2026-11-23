@@ -184,8 +184,15 @@ describe('The usage-limit switch of a Jira conversation end to end: built charne
 
     const comments = getCommentTexts(issue);
     assert.ok(comments.every((text) => !/Usage limit reached/.test(text)), `the requester was told of no wait: ${comments.join(' | ')}`);
+    // `state.json` is saved by a trailing debounce, so what the switch recorded reaches the file a moment after the answer: wait for
+    // it instead of reading the file once (a loaded box — a test run at the lowest priority — read it before the save).
+    const limitIssueStateKey = keyToString(makeJiraKey(limitIssueKey));
+    await waitFor('the switch and the limit persisted to state.json', answerTimeoutMs, () => {
+      const saved = readPersistedState(getLayout());
+      return saved.claudeProfileOverrides?.[limitIssueStateKey] === handSignedAccount && saved.claudeProfiles?.[exhaustedAccount]?.limitedUntil === resetsAtIso;
+    });
     const persisted = readPersistedState(getLayout());
-    assert.equal(persisted.claudeProfileOverrides?.[keyToString(makeJiraKey(limitIssueKey))], handSignedAccount, 'the issue now follows the adopted account');
+    assert.equal(persisted.claudeProfileOverrides?.[limitIssueStateKey], handSignedAccount, 'the issue now follows the adopted account');
     assert.equal(persisted.claudeProfiles?.[exhaustedAccount]?.limitedUntil, resetsAtIso, 'the exhausted account is marked limited until the reset the error named');
     const output = getCharness().output;
     assert.match(output, new RegExp(`\\[fallback\\] ${keyToString(makeJiraKey(limitIssueKey))}: usage limit on .*; switch plan: auto → .*${handSignedAccount}`));
