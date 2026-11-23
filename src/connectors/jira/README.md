@@ -752,8 +752,9 @@ real Jira-only instance each (`scripts/run-isolated.sh`) against `__tests__/jira
 groups and their members) and `fakeClaude.ts`: `jiraConnectorE2e.test.ts` (requests and the session lifecycle, an answer that shows files and `send_file_to_user`; the fake Jira takes
 uploads and redirects an attachment's content to its media file as Jira Cloud does),
 `jiraProgressCommentE2e.test.ts` (with a group: three progress notes and a final answer are two comments, the first edited twice,
-and the edits wake nothing; a refused edit falls back to a new comment, which the next note edits; a restart between two notes
-edits the same comment — the unit side is `jiraProgressComments.test.ts` and `jiraAnswerSink.test.ts`),
+and the edits wake nothing; a refused edit falls back to a new comment, which the next note edits; a person's comment between
+two notes is answered by a new comment below it, and the note after that edits it; a restart between two notes edits the same
+comment — the unit side is `jiraProgressComments.test.ts` and `jiraAnswerSink.test.ts`),
 `jiraPromptE2e.test.ts` (what the prompts carry), `jiraTrustE2e.test.ts` (with a `trustedGroup` and no `trustedApps`: the
 filter, the notice, an automation's hand-over and mentions, a mention in a comment thread answered in it), `jiraTrustedAppsE2e.test.ts` (with a `trustedApps`: a listed
 app starts the agent, an unlisted one — a group member — is refused and its text withheld) and `jiraCommentWakeE2e.test.ts`

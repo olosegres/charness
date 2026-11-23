@@ -12,6 +12,8 @@
  *     NOTHING: no update for the agent, no request, no comment decision (an edit by the AI account triggers nothing); the
  *     comment's id is on disk, and let go with the final answer
  *   → the edit is refused (the comment is gone): the next note is a NEW comment with the newest text, and the one after edits THAT one
+ *   → a person comments between two notes (an issue update reaches the request): the next note is a NEW comment below theirs, never a
+ *     silent edit above it, and the note after it edits that one
  *   → charness restarted between two notes: the next note edits the SAME comment
  *   → no Telegram path was reached
  *
@@ -166,6 +168,40 @@ describe('Jira connector end to end — one progress comment per request, edited
     assert.deepEqual(fakeJira.editRequests.filter((edit) => edit.issueKey === issueKey).map((edit) => edit.commentId), [firstComment.id, secondComment.id]);
     assert.equal(countRequests('POST', issueKey), 3);
     assert.equal(getTurns(issueKey).length, 1);
+  });
+
+  it('a person comments between two progress notes: the next note is a NEW comment below theirs — never a silent edit above it — and the note after it edits that one', async () => {
+    const issueKey = 'PROJ-53';
+    createIssue(issueKey, 'progress-after-update');
+    handIssueToAi(issueKey, requester);
+    const issue = fakeJira.getIssue(issueKey);
+    await waitFor(`${issueKey}: the first progress note commented`, answerTimeoutMs, () => issue.comments.length === 1);
+    assert.equal(issue.assignee?.accountId, aiAccount.accountId, 'the request is open and the issue still handed to the AI');
+    const [firstTurn] = getTurns(issueKey);
+
+    const personsText = 'Also check the totals row, please.';
+    const personsCommentId = fakeJira.addComment(issueKey, colleague, personsText);
+    await waitFor(`${issueKey}: answered and handed back`, answerTimeoutMs, () => issue.assignee?.accountId === requester.accountId && getAnswers(issueKey).length === 4);
+    // The person's comment reached the SAME request as an issue update, and nothing else opened one.
+    const turns = getTurns(issueKey);
+    assert.equal(turns.length, 2);
+    assert.equal(turns[1].requestId, firstTurn.requestId);
+    assert.equal(turns[1].isRequestPrompt, false, 'an update, not a request\'s prompt');
+    assert.ok(getPrompts(issueKey)[1].text.includes(`comment ${personsCommentId} by Colleague`), getPrompts(issueKey)[1].text);
+    assert.deepEqual(getAnswers(issueKey).map((answer) => answer.kind), ['progress', 'progress', 'progress', 'final']);
+
+    // Four comments in the order of the issue: note 1, the person's, the notes after it as ONE comment, the final answer.
+    const texts = getCommentTexts(issue);
+    assert.equal(issue.comments.length, 4, texts.join(' | '));
+    assert.equal(texts[0], fakeProgressEditsBody(issueKey, 1), 'note 1 was never edited');
+    assert.equal(issue.comments[0].updated, undefined);
+    assert.equal(texts[1], personsText);
+    assert.match(texts[2], new RegExp(`^${fakeProgressEditsBody(issueKey, 3).replace('.', '\\.')}`), 'note 2 was a new comment below the person\'s; note 3 edited it');
+    assert.match(texts[2], updatedLineSuffix);
+    assert.equal(texts[3], `Fake final answer for ${issueKey} (progress-after-update, turn 2).`);
+    assert.deepEqual(fakeJira.editRequests.filter((edit) => edit.issueKey === issueKey).map((edit) => edit.commentId), [issue.comments[2].id], 'one edit: of the new comment, not of note 1');
+    assert.equal(countRequests('POST', issueKey), 3, 'note 1, note 2, the final answer');
+    assert.equal(countAssigneeChanges(issueKey), 1);
   });
 
   it('charness restarted between two progress notes: the next note edits the SAME comment — it is remembered on disk', async () => {
