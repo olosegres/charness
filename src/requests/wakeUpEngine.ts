@@ -737,8 +737,10 @@ export class RequestWakeUpEngine {
       // turn is watched in the conversation: then the busy time is that turn's, never this request's, whatever it owes. A recurring
       // job's fires keep the session busy every few minutes, so recorded they would push this request's backstop ahead for good — a
       // requester's lost message, or a watch that fired and nobody handled (`armed`), would never be taken back. A request a watch
-      // holds ignores the backstop anyway, and a due follow-up is woken by `nextWakeAt`, which activity does not move.
-      if (this.getWatchedTurnsOf(key).length === 0) await this.recordTurnActivity(request, false);
+      // holds ignores the backstop anyway, and a due follow-up is woken by `nextWakeAt`, which activity does not move. The same for a
+      // turn the CLI started by itself (`isCliOwnTurn`: a finished task's, a session `CronCreate` job's): only a turn the bot wrote can
+      // be the request's lost one, and a looping job would otherwise push an owed request's backstop ahead for as long as it loops.
+      if (this.getWatchedTurnsOf(key).length === 0 && probe.isCliOwnTurn !== true) await this.recordTurnActivity(request, false);
       return;
     }
     await this.applyDecision(key, request, decideUnwatchedRequest(request, probe, this.now(), this.deps.backstopMs, this.getScheduleWait(key, request)));

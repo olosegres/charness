@@ -86,9 +86,15 @@ export interface SessionTurnProbe {
   /**
    * A pending native question, a compaction, an armed retry / limit wait, a
    * wedged-turn recovery in flight, a retry whose "continue" nudge is on its way,
-   * or a session start under way.
+   * an API error the bot still handles, a re-spawn, or a session start under way.
    */
   isTurnEndBlocked: boolean;
+  /**
+   * The busy session runs, or is about to start, a turn the CLI started by itself — a finished background task's, a session job's —
+   * that no write of the bot started (`AgentAdapter.checkIsCliOwnTurn`): its busy time is no request's activity. Absent: the bot's
+   * own turn, or a backend that cannot tell.
+   */
+  isCliOwnTurn?: boolean;
 }
 
 /**

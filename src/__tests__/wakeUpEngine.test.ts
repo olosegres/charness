@@ -655,6 +655,29 @@ describe('the backstop', () => {
     assert.deepEqual(wakeUps, [{ requestId: request.id, reason: 'backstop' }]);
   });
 
+  it('a busy session counts as an unwatched request\'s activity only while the turn running is one the bot wrote — a turn the CLI started by itself (a finished task\'s, a looping session job\'s) pushes no backstop ahead (review 17 #4)', async () => {
+    const ledger = await createLedger();
+    const engine = createEngine(ledger);
+    const request = await ledger.createRequest(topicKey, { kind: 'message', attributes: {} });
+    const createdAt = ledger.getNewestOpenRequest(topicKey)?.createdAt ?? 0;
+    // The CLI's own job loops: every sweep finds its turn busy.
+    probe = { isActive: true, isBusy: true, hasUnconsumedInput: false, isTurnEndBlocked: false, isCliOwnTurn: true };
+    for (let sweep = 0; sweep < 3; sweep += 1) {
+      nowMs += backstopMs / 3;
+      await engine.sweepUnwatchedRequests();
+    }
+    assert.equal(ledger.getNewestOpenRequest(topicKey)?.lastTurnActivityAt, undefined, 'no activity of this request');
+    probe = { isActive: true, isBusy: false, hasUnconsumedInput: false, isTurnEndBlocked: false };
+    await engine.sweepUnwatchedRequests();
+    assert.deepEqual(wakeUps, [{ requestId: request.id, reason: 'backstop' }], `the backstop counted from the request's creation (${createdAt})`);
+
+    // A turn the bot wrote is the request's lost turn: its busy time still counts.
+    const other = await ledger.createRequest(makeTelegramKey(-1001234567890, 77), { kind: 'message', attributes: {} });
+    probe = { isActive: true, isBusy: true, hasUnconsumedInput: false, isTurnEndBlocked: false };
+    await engine.sweepUnwatchedRequests();
+    assert.equal(ledger.listOpenRequestsOf(makeTelegramKey(-1001234567890, 77)).find((open) => open.id === other.id)?.lastTurnActivityAt, nowMs);
+  });
+
   it('a watch whose turn end can never be seen is handed to the backstop', async () => {
     const ledger = await createLedger();
     const engine = createEngine(ledger);

@@ -380,6 +380,12 @@ export interface StreamSession {
    * gap between the task's end and its turn's first output read as idle once.
    */
   notificationTurnPendingSince: number | null;
+  /**
+   * The running turn is one the CLI started by itself, with no write of the bot behind it: a finished background task's turn, a session
+   * `CronCreate` job's firing, a turn that opened with nothing of ours listed. An echo of one of our messages makes it ours. Read only
+   * while busy (`checkIsCliOwnTurn`): the bot counts no request's activity for such a turn.
+   */
+  isCliOwnTurn: boolean;
   /** When the agent's last turn ended (the process start before its first turn): the pending-work hold counts from it. */
   lastTurnEndedAt: number;
   /**
@@ -752,7 +758,7 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
       compactionInProgress: false, pendingCompaction: null,
       pendingQuestion: null, apiErrorFired: false, rejectedResetAtMs: null, turnApiErrorCode: null, swallowNextAbortError: false,
       lastWatermarkOffset: -1,
-      backgroundTasks: new Map(), notificationTurnPendingSince: null, lastTurnEndedAt: Date.now(), isCompactionResultPending: false, scheduledJobs: new Map(),
+      backgroundTasks: new Map(), notificationTurnPendingSince: null, isCliOwnTurn: false, lastTurnEndedAt: Date.now(), isCompactionResultPending: false, scheduledJobs: new Map(),
       claudeCodeVersion: null, applyingChunk: null,
       adoptCatchUpOffset: null, adoptCatchUpResolvers: [], isTailHeld: false,
     };
@@ -1099,6 +1105,8 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
       // rest of the pending work (a turn announced, the hold's start, scheduled jobs).
       backgroundTasks: new Map(adoptedTail.backgroundTasks.map((task) => [task.taskId, task.description])),
       notificationTurnPendingSince: adoptedTail.notificationTurnPendingSinceMs,
+      // A turn in flight at the adopt is taken for the bot's own: nothing tells otherwise from the record.
+      isCliOwnTurn: false,
       lastTurnEndedAt: adoptedTail.lastTurnEndedAtMs ?? Date.now(),
       isCompactionResultPending: false,
       scheduledJobs: new Map(adoptedTail.scheduledJobs.map((job) => [job.jobId, job])),
@@ -1904,7 +1912,7 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
       case 'turnStarted':
         // `session_state_changed` `running` also comes back in the MIDDLE of a turn (after a permission or a question: `requires_action` →
         // `running`): it opens a turn only when none was running. A job's firing always opens one.
-        this.markTurnStarted(session, { isNewTurn: action.wakeupSource !== null || !session.isBusy });
+        this.markTurnStarted(session, { isNewTurn: action.wakeupSource !== null || !session.isBusy, isJobFiring: action.wakeupSource !== null });
         if (action.wakeupSource !== null) session.scheduledJobs = getScheduledJobsAfterFiring(session.scheduledJobs, action.wakeupSource);
         return;
       case 'backgroundTasks':
@@ -1963,6 +1971,8 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
         // Claude has read one or SEVERAL of our user messages (those it takes in together are one echo). A message written
         // mid-turn is taken into the RUNNING turn, so the session is busy from here until the turn's `result`, even if an
         // earlier `result` already cleared it.
+        // With anything of ours listed, the echo is one of ours (matched, or tied to the oldest entry below): the turn is the bot's.
+        if (session.unconsumedInputs.length > 0) session.isCliOwnTurn = false;
         const inputsAfterEcho = getInputsAfterEcho(session.unconsumedInputs, action.text);
         // An echo that took nothing off the list is a message the turn took in in a shape nothing here matches: it is tied to the
         // oldest entry not yet marked, which the turn's end drops. With nothing listed it marks nothing — a user line of the CLI's
@@ -1995,11 +2005,17 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
    * `isNewTurn`: a turn really OPENS here, so the marks of the turn before are forgotten — one that never reported a result must not
    * leave marks for a later turn's end to act on. A `running` inside a running turn (after a permission or a question) is no new turn.
    */
-  private markTurnStarted(session: StreamSession, options: { isNewTurn: boolean }): void {
+  private markTurnStarted(session: StreamSession, options: { isNewTurn: boolean; isJobFiring?: boolean }): void {
     // A turn the bot never wrote to (a task's notification, a scheduled job) starting while nothing ran: a running turn counts every
     // listed message as queued behind it, so what went stale before it must not be revived by it.
     if (!session.isBusy) this.getUnconsumedInputsOnTheirWay(session);
-    if (options.isNewTurn) session.unconsumedInputs = getInputsWithoutEchoMarks(session.unconsumedInputs);
+    if (options.isNewTurn) {
+      session.unconsumedInputs = getInputsWithoutEchoMarks(session.unconsumedInputs);
+      // Whose turn opens: the CLI's own when a finished task or a job starts it, or when nothing of ours waits to be taken in; an
+      // echo of ours later in the turn makes it ours (`userEcho`). A bot-issued `/compact` is the bot's.
+      const isStartedByCli = options.isJobFiring === true || session.notificationTurnPendingSince !== null || session.unconsumedInputs.length === 0;
+      session.isCliOwnTurn = !session.compactionInProgress && isStartedByCli;
+    }
     session.isBusy = true;
     session.notificationTurnPendingSince = null;
   }
@@ -2212,6 +2228,7 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
     // is marked `isQueuedBehindFailedTurn` and still bounded by the grace (`unconsumedInputGraceMs`), so one the CLI never echoes holds
     // nothing for good, and a deferred account switch looks past them (`checkIsConfigDirSwitchDue`): a limit's switch must still fire.
     session.unconsumedInputs = getInputsAfterTurnEnd(session.unconsumedInputs, Date.now(), { isFailedTurn: action.isError });
+    session.isCliOwnTurn = false;
     session.outstandingToolUseIds.clear();
     this.finishReasoning(session);
     this.clearSubagent(session);
@@ -2719,6 +2736,26 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
     const session = this.sessions.get(keyToString(key));
     if (!session) return false;
     return session.isRespawning || this.checkIsConfigDirSwitchDue(session);
+  }
+
+  /**
+   * @description Whether a finished background task's own turn is on its way: its `task_notification` came, the turn has not opened
+   * yet, within the grace (`AgentAdapter.checkIsTurnOnItsWay`). The CLI starts it ~0.1 s after the `result` of the turn it ended in.
+   */
+  checkIsTurnOnItsWay(key: SessionKey): boolean {
+    const session = this.sessions.get(keyToString(key));
+    if (session?.isActive !== true || session.isBusy) return false;
+    return checkIsNotificationTurnPending({ now: Date.now(), notificationTurnPendingSince: session.notificationTurnPendingSince });
+  }
+
+  /**
+   * @description Whether the turn that runs, or is on its way, is one the CLI started by itself (`AgentAdapter.checkIsCliOwnTurn`): a
+   * finished task's, a session job's, one with nothing of ours behind it — `isCliOwnTurn` while busy, a task's turn on its way between.
+   */
+  checkIsCliOwnTurn(key: SessionKey): boolean {
+    const session = this.sessions.get(keyToString(key));
+    if (session?.isActive !== true) return false;
+    return session.isBusy ? session.isCliOwnTurn : this.checkIsTurnOnItsWay(key);
   }
 
   /** A deferred profile switch runs once the turn that held it off has ended (and nothing else works). */

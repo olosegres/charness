@@ -915,6 +915,22 @@ export interface AgentAdapter extends EventEmitter {
   checkIsRespawnPending?(key: SessionKey): boolean;
 
   /**
+   * Whether a turn the CLI starts by itself is on its way while none runs (json-stream Claude): a background task that finished in the
+   * last turn announced its own turn, which starts ~0.1 s after that turn's `result` (bounded by `notificationTurnGraceMs`). The
+   * request wake-up probe reads it as busy, so a watched turn runs on into it and is decided at its end — an answer the agent sends
+   * there counts. Optional: a backend without such turns omits it.
+   */
+  checkIsTurnOnItsWay?(key: SessionKey): boolean;
+
+  /**
+   * Whether the turn that runs, or is on its way, is one the CLI started by itself, with no write of the bot behind it (json-stream
+   * Claude): a finished background task's, a session `CronCreate` job's. The request engine's sweep counts no request's activity for
+   * it — a looping job would otherwise push an owed request's backstop ahead for as long as it loops. Optional: absent, every busy
+   * turn reads as the bot's.
+   */
+  checkIsCliOwnTurn?(key: SessionKey): boolean;
+
+  /**
    * The part of "working" that is NOT the running turn, by name: a background task or a scheduled job the
    * process still runs, a finished task's turn on its way, input written but not yet taken in, a compaction in
    * flight — each only for a bounded time, so none holds a turn-less process for good. Empty when there is none.

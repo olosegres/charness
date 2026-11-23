@@ -21,6 +21,8 @@ interface ProbeScenario {
   isTuiQuestionPending: boolean;
   isLoginPastePending: boolean;
   isRespawnPending: boolean;
+  isTurnOnItsWay: boolean;
+  isCliOwnTurn: boolean;
   pendingQuestionKeys: Set<string>;
   questionPinKeys: Set<string>;
   compactingKeys: Set<string>;
@@ -43,6 +45,8 @@ function createProbe(): ReturnType<typeof createSessionTurnProbe> {
       isQuestionPending: () => scenario.isTuiQuestionPending,
       isLoginPastePending: () => scenario.isLoginPastePending,
       checkIsRespawnPending: () => scenario.isRespawnPending,
+      checkIsTurnOnItsWay: () => scenario.isTurnOnItsWay,
+      checkIsCliOwnTurn: () => scenario.isCliOwnTurn,
       ...(scenario.hasUnconsumedInput === undefined ? {} : { checkHasUnconsumedInput: () => scenario.hasUnconsumedInput === true }),
     }),
     checkHasPendingQuestion: (keyString) => scenario.pendingQuestionKeys.has(keyString),
@@ -66,6 +70,8 @@ beforeEach(() => {
     isTuiQuestionPending: false,
     isLoginPastePending: false,
     isRespawnPending: false,
+    isTurnOnItsWay: false,
+    isCliOwnTurn: false,
     pendingQuestionKeys: new Set(),
     questionPinKeys: new Set(),
     compactingKeys: new Set(),
@@ -186,6 +192,23 @@ describe('createSessionTurnProbe', () => {
     scenario.isActive = true;
     scenario.isRespawnPending = false;
     assert.equal(createProbe()(topicKey).isTurnEndBlocked, false, 're-spawned: the new process decides');
+  });
+
+  it('a finished task\'s own turn on its way reads BUSY — a watched turn runs on into it — and only for a live session (review 17 #2)', () => {
+    scenario.isTurnOnItsWay = true;
+    assert.equal(createProbe()(topicKey).isBusy, true);
+    assert.equal(createProbe()(topicKey).isTurnEndBlocked, false, 'busy, not held: the sweep still sees a busy session');
+    scenario.isActive = false;
+    assert.equal(createProbe()(topicKey).isBusy, false);
+  });
+
+  it('a turn the CLI started by itself is named only while the session is busy — its busy time is no request\'s activity (review 17 #4)', () => {
+    scenario.isCliOwnTurn = true;
+    assert.equal(createProbe()(topicKey).isCliOwnTurn, undefined, 'not busy: nothing runs');
+    scenario.isBusy = true;
+    assert.equal(createProbe()(topicKey).isCliOwnTurn, true);
+    scenario.isCliOwnTurn = false;
+    assert.equal(createProbe()(topicKey).isCliOwnTurn, undefined, 'the bot\'s turn');
   });
 
   it('another thread\'s start never holds this one', () => {

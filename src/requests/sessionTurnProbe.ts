@@ -54,6 +54,7 @@ export interface SessionTurnProbeDeps {
   getAdapter: (key: SessionKey) => Pick<
     AgentAdapter,
     'checkIsActive' | 'checkIsBusy' | 'checkHasUnconsumedInput' | 'isQuestionPending' | 'isLoginPastePending' | 'checkIsRespawnPending'
+    | 'checkIsTurnOnItsWay' | 'checkIsCliOwnTurn'
   >;
   checkHasPendingQuestion: (keyString: string) => boolean;
   checkHasQuestionPin: (keyString: string) => boolean;
@@ -89,9 +90,12 @@ export function createSessionTurnProbe(deps: SessionTurnProbeDeps): (key: Sessio
       deps.checkIsRetryKickInFlight(keyString) ||
       deps.checkIsApiErrorInHandling(keyString) ||
       isStarting;
+    // A finished task's own turn on its way is busy already: the watched turn runs on into it (the agent may answer there).
+    const isBusy = isActive && ((adapter.checkIsBusy?.(key) ?? false) || (adapter.checkIsTurnOnItsWay?.(key) ?? false));
     return {
       isActive,
-      isBusy: isActive && (adapter.checkIsBusy?.(key) ?? false),
+      isBusy,
+      ...(isBusy && (adapter.checkIsCliOwnTurn?.(key) ?? false) ? { isCliOwnTurn: true } : {}),
       hasUnconsumedInput: isStarting
         ? true
         : adapter.checkHasUnconsumedInput ? adapter.checkHasUnconsumedInput(key) : null,

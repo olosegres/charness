@@ -3,7 +3,11 @@
  * CLI's own frames and read through the real turn probe (`requests/sessionTurnProbe.ts`). Load-bearing facts proven here:
  * - an ERROR result keeps the messages queued behind the failed turn (the CLI runs them as its next turn, measured on 2.1.330):
  *   they read unread and working, so the watch of such a message reads `running` and the per-turn stop waits; past the grace they
- *   hold nothing, and their echo takes them off (review 17 #1).
+ *   hold nothing, and their echo takes them off (review 17 #1);
+ * - a background task that finished inside a turn announces its own turn: from that turn's `result` to the task turn's `init` the
+ *   probe reads the session busy, so a watched turn runs on into the task's turn (review 17 #2);
+ * - a turn the CLI started by itself (a finished task's, a session job's, one with nothing of ours listed) is told apart from one the
+ *   bot wrote, until an echo of ours shows (review 17 #4).
  *
  * Test case: N/A — Charness has no Jira tracker.
  */
@@ -16,7 +20,7 @@ import { keyToString, type SessionKey } from '../sessionKey';
 import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
 import { createSessionTurnProbe } from '../requests/sessionTurnProbe';
 import { getWatchedTurnState, checkIsTurnInputConsumed, type WatchedTurn } from '../requests/wakeUpRules';
-import { unconsumedInputGraceMs } from '../utils/jsonStreamPendingWork';
+import { unconsumedInputGraceMs, notificationTurnGraceMs } from '../utils/jsonStreamPendingWork';
 import { type UnconsumedInput } from '../utils/jsonStreamUnconsumedInput';
 import { createStreamSessionFixture } from './claudeJsonStreamSessionFixture';
 
@@ -26,6 +30,10 @@ const queuedText = 'M: a message written while the turn ran';
 const unclassifiedErrorResult = `${JSON.stringify({ type: 'result', is_error: true, result: 'The agent runner stopped unexpectedly' })}\n`;
 const okResult = `${JSON.stringify({ type: 'result', is_error: false, result: 'done' })}\n`;
 const initFrame = `${JSON.stringify({ type: 'system', subtype: 'init', session_id: sessionId, model: 'claude-test' })}\n`;
+const taskId = 'task-1';
+const backgroundTaskFrame = `${JSON.stringify({ type: 'system', subtype: 'background_tasks_changed', session_id: sessionId, tasks: [{ task_id: taskId, description: 'yarn build', status: 'running' }] })}\n`;
+const taskNotificationFrame = `${JSON.stringify({ type: 'system', subtype: 'task_notification', session_id: sessionId, task_id: taskId, status: 'completed' })}\n`;
+const jobFiringFrame = `${JSON.stringify({ type: 'command_lifecycle', state: 'started', wakeup_source: 'schedule_wakeup' })}\n`;
 const echoFrame = (text: string): string => `${JSON.stringify({ type: 'user', message: { role: 'user', content: text }, session_id: sessionId })}\n`;
 
 function queued(text: string): UnconsumedInput {
@@ -86,5 +94,61 @@ describe('a message queued behind a turn that ends in an error result (review 17
     assert.equal(getWatchedTurnState({ ...queuedMessageWatch, hasSeenBusy: true }, probe(key)), 'running', 'its turn runs');
     adapter['onStdout'](session, okResult);
     assert.equal(getWatchedTurnState({ ...queuedMessageWatch, hasSeenBusy: true }, probe(key)), 'ended');
+  });
+});
+
+describe('a finished background task\'s own turn on its way (review 17 #2)', () => {
+  it('from the result of the turn it finished in to its own `init` the probe reads busy, so the watched turn runs on into it; the grace bounds it', () => {
+    const { adapter, probe } = setup();
+    const session = adapter['sessions'].get(keyToString(key))!;
+    session.isBusy = true;
+    adapter['onStdout'](session, backgroundTaskFrame + taskNotificationFrame);
+    const busyAtTurnEnd: boolean[] = [];
+    adapter.on('turnEnded', () => { busyAtTurnEnd.push(probe(key).isBusy); });
+    adapter['onStdout'](session, okResult);
+    assert.deepEqual(busyAtTurnEnd, [true], 'the task\'s turn is on its way: not an end');
+    assert.equal(adapter.checkIsTurnOnItsWay(key), true);
+    adapter['onStdout'](session, initFrame);
+    assert.equal(adapter.checkIsTurnOnItsWay(key), false, 'it opened');
+    assert.equal(probe(key).isBusy, true);
+    adapter['onStdout'](session, okResult);
+    assert.equal(probe(key).isBusy, false, 'the task\'s turn ended: now the watched turn ends');
+
+    session.notificationTurnPendingSince = Date.now() - notificationTurnGraceMs - 1;
+    assert.equal(adapter.checkIsTurnOnItsWay(key), false, 'a notification whose turn never showed holds nothing past the grace');
+  });
+});
+
+describe('whose turn runs: the CLI\'s own, or the bot\'s (review 17 #4)', () => {
+  it('a finished task\'s turn, a session job\'s firing and a turn with nothing of ours listed are the CLI\'s own; one opened behind our message, or that echoed it, is the bot\'s', () => {
+    const { adapter, probe } = setup();
+    const session = adapter['sessions'].get(keyToString(key))!;
+    // A task finished in the last turn: its turn on its way, then running, is the CLI's own.
+    session.isBusy = true;
+    adapter['onStdout'](session, backgroundTaskFrame + taskNotificationFrame + okResult);
+    assert.equal(probe(key).isCliOwnTurn, true, 'on its way');
+    session.unconsumedInputs = [queued(queuedText)];
+    adapter['onStdout'](session, initFrame);
+    assert.equal(probe(key).isCliOwnTurn, true, 'the task started it, whatever is queued behind it');
+    adapter['onStdout'](session, okResult);
+    assert.equal(probe(key).isCliOwnTurn, undefined, 'no turn runs');
+
+    // The bot's message opens the next turn.
+    adapter['onStdout'](session, initFrame);
+    assert.equal(probe(key).isCliOwnTurn, undefined, 'opened with our message listed: the bot\'s');
+    adapter['onStdout'](session, echoFrame(queuedText) + okResult);
+
+    // Nothing of ours listed: the CLI's own; a session job firing: the CLI's own.
+    adapter['onStdout'](session, initFrame);
+    assert.equal(probe(key).isCliOwnTurn, true);
+    adapter['onStdout'](session, okResult + jobFiringFrame);
+    assert.equal(probe(key).isCliOwnTurn, true, 'a job firing');
+    adapter['onStdout'](session, okResult);
+
+    // A turn the CLI opened with nothing listed, that then echoes a message of ours written meanwhile, is the bot's.
+    adapter['onStdout'](session, initFrame);
+    session.unconsumedInputs = [queued('written as it opened')];
+    adapter['onStdout'](session, echoFrame('written as it opened'));
+    assert.equal(probe(key).isCliOwnTurn, undefined);
   });
 });

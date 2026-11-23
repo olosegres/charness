@@ -85,6 +85,7 @@ export function createStreamSessionFixture(overrides: Partial<StreamSession> = {
     unconsumedInputs: [],
     backgroundTasks: new Map(),
     notificationTurnPendingSince: null,
+    isCliOwnTurn: false,
     lastTurnEndedAt: Date.now(),
     isCompactionResultPending: false,
     scheduledJobs: new Map(),
