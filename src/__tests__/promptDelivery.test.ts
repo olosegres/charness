@@ -409,13 +409,13 @@ describe('a startup window\'s prompts on every way out of it (review 19 #1)', ()
     assert.match(suspend, /\} finally \{\n\s*startupPromptBuffer\.closeWindow\(kStr\);\n(?:\s*\/\/[^\n]*\n)*\s*await resumeForHeldPrompts\(key\);\n\s*\}\n\s*\}\);/, 'inside the stop\'s own transition, in the finally of the stop (review 20 nit 3)');
     assert.match(suspend, /\} finally \{\n(?:\s*\/\/[^\n]*\n)*\s*rearmThreadIdleTimer\(key\);\n\s*\}\n\}/);
     const resume = getBody('async function resumeForHeldPrompts(', 'const autoStopUnsupportedLoggedKeys');
-    assert.match(resume, /if \(!startupPromptBuffer\.checkHasPrompts\(kStr\)\) return;\n\s*if \(getResumableSessionId\(key\) === null \|\| conversationsBeingReplaced\.has\(kStr\)\) \{\n[^]*?startupPromptBuffer\.discardPrompts\(kStr\);\n\s*return;\n\s*\}\n\s*const ensured = await ensureAgentSessionNow\(key, \{\}\);/, 'the transition\'s own ensure: the queued one would wait for itself');
+    assert.match(resume, /if \(!startupPromptBuffer\.checkHasPrompts\(kStr\)\) return;\n\s*if \(getResumableSessionId\(key\) === null \|\| checkIsConversationBeingReplaced\(kStr\)\) \{\n[^]*?startupPromptBuffer\.discardPrompts\(kStr\);\n\s*return;\n\s*\}\n\s*const ensured = await ensureAgentSessionNow\(key, \{\}\);/, 'the transition\'s own ensure: the queued one would wait for itself');
   });
 
   it('every start or resume a command makes runs as the conversation\'s one transition, so none shares a startup window with an ensure or a stop (review 20 nit 3)', () => {
     assert.match(getBody('function runCommandSessionTransition<TResult>(', 'async function waitForPendingRespawn('), /return sessionTransitions\.run\(keyToString\(key\), async \(\) => \{\n\s*await waitForPendingRespawn\(key\);\n\s*return transition\(\);\n\s*\}\);/);
     const fresh = getBody("command('new', async", '//  /whoami /version /help /status');
-    assert.match(fresh, /runCommandSessionTransition\(key, async \(\) => \{\n\s*await releaseThreadSession\(key\);\n\s*return startAgentSession\(key\);\n\s*\}\)/, '/new');
+    assert.match(fresh, /runReplacingConversation\(key, async \(\) => \{\n\s*await releaseThreadSession\(key\);\n\s*return startAgentSession\(key\);\n\s*\}\)/, '/new (queued by `runReplacingConversation`, below)');
     assert.match(getBody('async function handleAgentStart(', 'function handleStartCommand('), /: await runCommandSessionTransition\(key, async \(\) => \(getThreadAdapter\(key\)\.checkIsActive\(key\)\n\s*\? t\('agent\.already_active', \{ label: getThreadAdapter\(key\)\.label \}\)\n\s*: startAgentSession\(key, args\)\)\);/, 'a first /claude or /opencode, finding a session another trigger started meanwhile');
     const wedge = getBody('async function handleNoResponseWithLocale(', '/**\n * @description Surface a logged-out');
     assert.equal(wedge.match(/await runCommandSessionTransition\(key, async \(\) => \{/g)?.length, 2, 'the wedge recovery\'s fork and restart');
@@ -425,7 +425,8 @@ describe('a startup window\'s prompts on every way out of it (review 19 #1)', ()
     assert.ok(switchNow.includes('if ((await resumeSleepingSession(key, sessionId, { isWithRecentContext: true })) === null) {'), 'its resume opens a window, as a wake\'s does');
     assert.match(switchNow, /startupPromptBuffer\.discardBotPrompts\(keyToString\(key\)\);\n\s*\}\n\s*const msg = await startAgentSession\(key\);/, 'the fresh start takes the failed resume\'s window over');
     assert.doesNotMatch(switchNow, /\.resumeSession\(/, 'no resume without a window');
-    assert.match(getBody('async function resumeSessionByIndex(', 'async function resumePickedSession('), /runCommandSessionTransition\(key, \(\) => resumePickedSession\(key, sessionId\)\)/, '/resume\'s pick');
+    assert.match(getBody('async function resumeSessionByIndex(', 'async function resumePickedSession('), /runReplacingConversation\(key, \(\) => resumePickedSession\(key, sessionId\)\)/, '/resume\'s pick');
+    assert.match(getBody('async function runReplacingConversation<TResult>(', 'async function waitForPendingRespawn('), /return await runCommandSessionTransition\(key, \(\) => \{/, 'which queues them as the one transition');
     // Every start outside the ensure is one of those.
     assert.equal(botSource.match(/startAgentSession\(key(?:, (?:options\.)?args)?\)/g)?.length, 7, 'the ensure\'s two, /new, the first /claude, the wedge recovery\'s two, /claude_mode\'s fallback');
   });
@@ -459,15 +460,20 @@ describe('a startup window\'s prompts on every way out of it (review 19 #1)', ()
     assert.match(getBody('async function moveTopicToOtherBackend(', 'async function resumeTopicOnNewSession('), /await runCommandSessionTransition\(key, \(\) => switchThreadAdapter\(/, 'a move across backends');
   });
 
-  it('/new and a /resume pick mark the conversation as being replaced BEFORE they wait for a stop under way: the stop drops what it held, with the line, instead of resuming the conversation they leave only to kill it (review 21 nit 4, and the /resume pick found by the round\'s own pass)', () => {
+  it('/new and a /resume pick mark the conversation as being replaced from the command until their OWN transition begins: a stop queued ahead drops what it held, and a start or resume queued ahead drops its window instead of replaying it into the conversation they leave — a person told (review 21 nit 4, review 22 nit 3)', () => {
     const fresh = getBody("command('new', async", '//  /whoami /version /help /status');
-    assert.match(fresh, /return runReplacingConversation\(key, \(\) => runCommandSessionTransition\(key, async \(\) => \{\n\s*await releaseThreadSession\(key\);\n\s*return startAgentSession\(key\);\n\s*\}\)\);/, '/new');
-    assert.match(getBody('async function resumeSessionByIndex(', 'async function resumePickedSession('), /return runReplacingConversation\(key, \(\) => runCommandSessionTransition\(key, \(\) => resumePickedSession\(key, sessionId\)\)\);/, 'the /resume pick');
+    assert.match(fresh, /return runReplacingConversation\(key, async \(\) => \{\n\s*await releaseThreadSession\(key\);\n\s*return startAgentSession\(key\);\n\s*\}\);/, '/new');
+    assert.match(getBody('async function resumeSessionByIndex(', 'async function resumePickedSession('), /return runReplacingConversation\(key, \(\) => resumePickedSession\(key, sessionId\)\);/, 'the /resume pick');
     const replacing = getBody('async function runReplacingConversation<TResult>(', 'async function waitForPendingRespawn(');
-    assert.ok(replacing.indexOf('conversationsBeingReplaced.add(conversationKey);') < replacing.indexOf('return await replace();'), 'marked before it waits in the queue');
-    assert.match(replacing, /\} finally \{\n\s*conversationsBeingReplaced\.delete\(conversationKey\);/, 'unmarked whatever the end');
+    assert.ok(replacing.indexOf('conversationsBeingReplaced.set(conversationKey, (conversationsBeingReplaced.get(conversationKey) ?? 0) + 1);') >= 0, 'a count: two overlapping commands keep the mark');
+    assert.ok(replacing.indexOf('conversationsBeingReplaced.set(conversationKey, (') < replacing.indexOf('return await runCommandSessionTransition(key, () => {'), 'marked before it waits in the queue');
+    assert.match(replacing, /return await runCommandSessionTransition\(key, \(\) => \{\n\s*unmark\(\);\n\s*return transition\(\);\n\s*\}\);/, 'unmarked once its own transition begins: what it starts itself is not dropped');
+    assert.match(replacing, /\} finally \{\n\s*unmark\(\);/, 'and whatever the end');
     const held = getBody('async function resumeForHeldPrompts(', 'const autoStopUnsupportedLoggedKeys');
-    assert.match(held, /if \(getResumableSessionId\(key\) === null \|\| conversationsBeingReplaced\.has\(kStr\)\) \{[^]*?startupPromptBuffer\.discardPrompts\(kStr\);/, 'released or being replaced: dropped');
+    assert.match(held, /if \(getResumableSessionId\(key\) === null \|\| checkIsConversationBeingReplaced\(kStr\)\) \{[^]*?startupPromptBuffer\.discardPrompts\(kStr\);/, 'a stop\'s held prompts: released or being replaced, dropped');
+    const replay = getBody('async function replayBufferedPrompts(', 'async function forwardPromptToLiveAgent(');
+    assert.ok(replay.indexOf('if (checkIsConversationBeingReplaced(keyToString(key))) {') >= 0 && replay.indexOf('if (checkIsConversationBeingReplaced(keyToString(key))) {') < replay.indexOf('await startupPromptBuffer.replayPrompts('), 'a start\'s or a resume\'s window: dropped before any write');
+    assert.match(replay, /if \(checkIsConversationBeingReplaced\(keyToString\(key\)\)\) \{[^]*?startupPromptBuffer\.discardPrompts\(keyToString\(key\)\);\n\s*return;/);
     const stopDoc = getBody(' * @description The idle stop (lifecycle plan L3)', 'async function suspendThreadSession(');
     assert.match(stopDoc.replace(/\n \* /g, ' '), /`\/new` and a `\/resume` pick, which mark the conversation as being replaced before they wait for the stop/, 'the JSDoc says how they are a release during the stop');
   });

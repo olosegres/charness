@@ -6083,21 +6083,42 @@ function runCommandSessionTransition<TResult>(key: SessionKey, transition: () =>
 }
 
 /**
- * Conversations a command is about to REPLACE (`/new`, a `/resume` pick), from the command until its transition ran: a stop under way
- * drops the prompts it held instead of resuming the conversation the command leaves — resumed, they would start a turn there only for the
- * command's transition to kill it, unread and untold (review 21 nit 4; the `/resume` pick found by the round's own pass). Not
- * `/claude_mode`: it keeps the conversation, and a prompt written to the old backend's process is posted again by the turn's wake (R21).
+ * Conversations a command is about to REPLACE (`/new`, a `/resume` pick), counted per conversation, from the command until its OWN
+ * transition begins: a transition queued ahead of it — a stop's resume for the prompts it held, a start's or a resume's replay of its
+ * window — drops those prompts instead of writing them into the conversation the command leaves, where they would start a turn the
+ * command then kills, unread and untold; a person is told to send theirs again (review 21 nit 4, review 22 nit 3). A count, so two
+ * overlapping commands keep the mark. Not `/claude_mode`: it keeps the conversation, and a prompt written to the old backend's process
+ * is posted again by the turn's wake (R21).
  */
-const conversationsBeingReplaced = new Set<string>();
+const conversationsBeingReplaced = new Map<string, number>();
 
-/** Run `replace` — a command's transition that replaces the conversation — with the conversation marked as being replaced meanwhile. */
-async function runReplacingConversation<TResult>(key: SessionKey, replace: () => Promise<TResult>): Promise<TResult> {
+/** Whether a command waits in the queue to replace `conversationKey`'s conversation ({@link conversationsBeingReplaced}). */
+function checkIsConversationBeingReplaced(conversationKey: string): boolean {
+  return (conversationsBeingReplaced.get(conversationKey) ?? 0) > 0;
+}
+
+/**
+ * Queue `transition` — a command's start or resume that replaces the conversation — as the conversation's one transition, the
+ * conversation marked as being replaced until it begins: what it starts itself is the conversation that comes next, never dropped.
+ */
+async function runReplacingConversation<TResult>(key: SessionKey, transition: () => Promise<TResult>): Promise<TResult> {
   const conversationKey = keyToString(key);
-  conversationsBeingReplaced.add(conversationKey);
+  conversationsBeingReplaced.set(conversationKey, (conversationsBeingReplaced.get(conversationKey) ?? 0) + 1);
+  let isMarked = true;
+  const unmark = (): void => {
+    if (!isMarked) return;
+    isMarked = false;
+    const count = (conversationsBeingReplaced.get(conversationKey) ?? 1) - 1;
+    if (count > 0) conversationsBeingReplaced.set(conversationKey, count);
+    else conversationsBeingReplaced.delete(conversationKey);
+  };
   try {
-    return await replace();
+    return await runCommandSessionTransition(key, () => {
+      unmark();
+      return transition();
+    });
   } finally {
-    conversationsBeingReplaced.delete(conversationKey);
+    unmark();
   }
 }
 
@@ -6315,7 +6336,7 @@ async function suspendThreadSession(key: SessionKey): Promise<void> {
 async function resumeForHeldPrompts(key: SessionKey): Promise<void> {
   const kStr = keyToString(key);
   if (!startupPromptBuffer.checkHasPrompts(kStr)) return;
-  if (getResumableSessionId(key) === null || conversationsBeingReplaced.has(kStr)) {
+  if (getResumableSessionId(key) === null || checkIsConversationBeingReplaced(kStr)) {
     console.log(`[compact-on-idle] ${kStr}: the conversation was released, or is being replaced, during the stop; the prompts it held are dropped`);
     startupPromptBuffer.discardPrompts(kStr);
     return;
@@ -6414,6 +6435,14 @@ async function wakeSleepingSessionForPrompt(
  * routine as a live message (new-message marker + loader + `sendInput`).
  */
 async function replayBufferedPrompts(key: SessionKey): Promise<void> {
+  // A command that replaces the conversation (`/new`, a `/resume` pick) waits behind the start or resume replaying this window: what
+  // the window holds was sent for the conversation that comes next, so it is dropped — a person told to send it again — not written
+  // into the one the command then ends (review 22 nit 3).
+  if (checkIsConversationBeingReplaced(keyToString(key))) {
+    console.log(`[startup] ${keyToString(key)}: a command replaces the conversation; the prompts its window held are dropped`);
+    startupPromptBuffer.discardPrompts(keyToString(key));
+    return;
+  }
   const adapter = getThreadAdapter(key);
   const isSessionActive = adapter.checkIsActive(key);
   // The buffer closes the window synchronously and settles every prompt it held (a sender waiting on one,
@@ -7990,10 +8019,10 @@ command('new', async (_ctx, key) => {
 
 /** `/new`'s release and fresh start, as the conversation's one transition, the conversation marked as being replaced until it ran. */
 function startFreshSessionForNew(key: SessionKey): Promise<string> {
-  return runReplacingConversation(key, () => runCommandSessionTransition(key, async () => {
+  return runReplacingConversation(key, async () => {
     await releaseThreadSession(key);
     return startAgentSession(key);
-  }));
+  });
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -10508,7 +10537,7 @@ async function resumeSessionByIndex(
   const sessionId = list[idx];
   // As the conversation's one transition: no ensure resumes the old conversation beside the pick, and no idle stop runs under it
   // (review 20 nit 3). A prompt that comes meanwhile routes to a wake, whose ensure waits for the pick in the same queue.
-  return runReplacingConversation(key, () => runCommandSessionTransition(key, () => resumePickedSession(key, sessionId)));
+  return runReplacingConversation(key, () => resumePickedSession(key, sessionId));
 }
 
 /** {@link resumeSessionByIndex}'s resume of the picked session, inside the conversation's transition. */
