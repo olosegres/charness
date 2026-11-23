@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+**A failing check whose wake never reached the agent wakes it again at its next failing run.**
+When a watched worker failed and the bot's wake to the agent was lost on its way (the agent's process was being started or stopped and the wake was dropped, or writing it failed), the check stayed marked as failing: every later failing run stayed quiet, and the agent waited for the hour-and-a-half backstop. Now a lost wake clears the mark, so the next failing run alerts and wakes the agent again.
+
 **A scheduled run that a session start dropped no longer comes back to the agent later on its own.**
 In a topic that shows answers, a scheduled run that waited behind a session start was watched as soon as it was queued. When the start then dropped it, its request waited for a turn that never came: the agent could later be reminded of a run it never read, or get the run again on its own up to an hour and a half after its time. Now such a run fails like any run that could not reach the agent (its run records the error), and its request is closed.
 

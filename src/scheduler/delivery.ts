@@ -415,11 +415,24 @@ async function deliverToAgent(
   prompt: string,
   options: { heldText?: string; trackerLabel?: string | null } = {},
 ): Promise<DeliveryOutcome> {
-  // 3–4. ensure a session, let a busy one finish its turn, forward the prefixed prompt
+  return getDeliveryOutcome(job, await postRunToAgent(deps, job, prompt, options));
+}
+
+/** Steps 3–4 of {@link deliverToAgent}: ensure a session, let a busy one finish its turn, forward the prefixed prompt. */
+function postRunToAgent(
+  deps: ScheduleDeliveryDeps,
+  job: ScheduleRecord,
+  prompt: string,
+  options: { heldText?: string; trackerLabel?: string | null },
+): ReturnType<typeof postToSession> {
   const ports = deps.trackerRun;
-  const posted = ports !== undefined && options.trackerLabel !== undefined && options.trackerLabel !== null
-    ? await postTrackerRun(deps, ports, job, options.trackerLabel, prompt, options.heldText)
-    : await postTopicRun(deps, job, prompt, options.heldText);
+  return ports !== undefined && options.trackerLabel !== undefined && options.trackerLabel !== null
+    ? postTrackerRun(deps, ports, job, options.trackerLabel, prompt, options.heldText)
+    : postTopicRun(deps, job, prompt, options.heldText);
+}
+
+/** The engine's delivery outcome of a run's post ({@link postRunToAgent}). */
+function getDeliveryOutcome(job: ScheduleRecord, posted: Awaited<ReturnType<typeof postToSession>>): DeliveryOutcome {
   if (posted.ok) {
     // A run held during a usage-limit wait reaches the agent once the wait ends —
     // with its resume, the operator's next message, or the next session (R23).
@@ -530,7 +543,9 @@ async function updateCheckStatus(deps: ScheduleDeliveryDeps, job: ScheduleRecord
  * @description The check flow: run the command, then stay quiet, post the
  * "back to normal" line, or raise the alert and wake the agent. The failing flag is
  * stored BEFORE the agent is woken, so a restart mid-delivery cannot raise the
- * same alert twice.
+ * same alert twice — and cleared again when the wake's post failed at its forward
+ * (a startup window dropped it, its write failed), so the next failing run wakes
+ * the agent, whom nothing else would tell.
  */
 async function deliverCheck(deps: ScheduleDeliveryDeps, job: ScheduleRecord, trackerLabel: string | null): Promise<DeliveryOutcome> {
   const timeoutSec = job.checkTimeoutSec ?? defaultCheckTimeoutSec;
@@ -570,12 +585,17 @@ async function deliverCheck(deps: ScheduleDeliveryDeps, job: ScheduleRecord, tra
     const alert = buildCheckFailedAnnouncement({ job, result, failure, nowMs: deps.now() });
     await deps.announce(job.threadKey, alert.text, { isSilent: true, foldedDetail: alert.foldedDetail });
   }
-  return deliverToAgent(
+  const posted = await postRunToAgent(
     deps,
     job,
     buildCheckFailurePrompt({ name: job.name, command, failure, output: result.output, prompt: job.prompt, isTracker: trackerLabel !== null }),
     { trackerLabel },
   );
+  // The wake reached a session but not the agent — a startup window dropped it, its write failed: nothing else tells the agent, and the
+  // flag would keep every later failing run quiet. Cleared, the next failing run alerts and wakes it again. A session that could not be
+  // started (or no agent, no folder) keeps the flag: its alert stands, and the next runs would only repeat it.
+  if (!posted.ok && posted.reason === 'forward-failed') await deps.setCheckFailing(job.id, false);
+  return getDeliveryOutcome(job, posted);
 }
 
 /**
