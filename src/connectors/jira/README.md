@@ -492,12 +492,16 @@ another platform's state.
     then a new comment below the person's comment — in the update's thread when it is a reply, where the request's answers go by
     default when it is top-level — and the notes after it edit that one. An edit would answer the person silently, above their own
     comment, and the agent would look as if it had ignored them. An update of another request lets nothing of this one go.
-  - **An edit that fails** posts the text as a new comment instead, in the thread the old one stood in (400 → top-level, as any
-    post), with R18's read-back; THAT comment is remembered from then on, and the old one stays as it was. A refusal that changed
-    nothing — 404 (the comment was deleted), 400, 403 (the AI account may not edit it), a rate limit — falls back at once. An
-    outcome Jira did not confirm (a timeout, a 5xx after the client's retries; the PUT repeats harmlessly, so the client retries
-    it) is read back after `jiraReadBackDelayMs`: the new text on the comment counts as edited, anything else (the old text, an
-    unreadable comment) posts the new comment — a text shown twice is better than one lost.
+  - **An edit that fails.** A refusal that changed nothing — 404 (the comment was deleted), 400, 403 (the AI account may not edit
+    it), a rate limit — posts the text as a new comment instead, in the thread the old one stood in (400 → top-level, as any post),
+    with R18's read-back; THAT comment is remembered from then on, and the old one stays as it was. An outcome Jira did not confirm
+    (a timeout, a 5xx after the client's retries; the PUT repeats harmlessly, so the client retries it) is read back after
+    `jiraReadBackDelayMs`: the new text on the comment counts as edited; the OLD text gets ONE more edit (the first may still be
+    committing, or was lost) and only if that does not land either — refused, or unconfirmed again — is the text posted as a new
+    comment; a comment that is gone (404 on the read) cannot have been edited, so a new comment at once. A comment that cannot be
+    READ leaves the outcome open: NOTHING is posted — a post would show the text twice if the edit landed — and the answer is an
+    error telling the agent to send it again, unchanged (`getEditUnknownError`; for a bot notice the limit wait's answer is
+    unclaimed and tried at the next error). The kept comment stays, so the resend edits it again.
   - **No self-trigger.** An edit by the AI account is not an event for the bot: the poll reads no changelog entry for a comment
     (a comment edit makes none, so `trigger.ts` finds nothing), the comment and mention scans skip every comment whose AUTHOR is
     the AI account, edited or not (`getMentionDecisions`, `listNewComments`), and the prompt's delta leaves an own comment out

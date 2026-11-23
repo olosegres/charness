@@ -13,7 +13,7 @@ import {
   type AdfNode,
 } from './adf';
 import { getSingleLineText } from './promptText';
-import { getCommentThreadRootId, JiraAuthError, JiraHttpError, type JiraAccount, type JiraClient } from './client';
+import { getCommentThreadRootId, JiraAuthError, JiraHttpError, type JiraAccount, type JiraClient, type JiraComment } from './client';
 import { getCommentBodyHash, type JiraUnconfirmedPosts } from './unconfirmedPosts';
 import { jiraReplyThreadAttribute, mentionTriggerIdPrefix, checkIsPersonAccount } from './trigger';
 import { checkIsCommentTrusted } from './issueBlocks';
@@ -55,9 +55,10 @@ import { getJiraNoticeSlot, jiraProgressSlot, type JiraProgressComments } from '
  * One progress comment per request (`progressComments.ts`): the first `progress` answer of a request posts a comment and the sink
  * remembers it (on disk); each next one EDITS it to the newest text, with a line saying when it was last updated, in the thread
  * the first stood in — an edit moves nothing and notifies nobody. A `question` or `final` answer is a new comment as ever and the
- * progress comment is left as it is. An edit Jira refuses (the comment is gone, 400, 403), or one whose outcome is unknown and
- * whose read-back does not show the new text, posts the text as a new comment instead (with R18's read-back) and that one is
- * remembered — the text is never lost. A progress answer is kept as that one comment only when it is a plain note: it carries no
+ * progress comment is left as it is. An edit Jira refuses (the comment is gone, 400, 403), or one of unknown outcome whose read-back
+ * shows the old text and whose one repeat does not land, posts the text as a new comment instead (with R18's read-back) and that one
+ * is remembered — the text is never lost. An edit of unknown outcome whose comment cannot be read is an error that tells the agent
+ * to send it again: nothing is posted, and the resend edits the same comment (a new comment would show the text twice). A progress answer is kept as that one comment only when it is a plain note: it carries no
  * files, replies to no comment (an edit notifies nobody, a reply is meant to) and fits one comment; any other is a comment of its
  * own, like a question, and the progress comment is let go, so the next note starts below it. So is an issue update the request
  * receives (`noteIssueUpdate`, a reply or a top-level comment): what the agent answers to the person is a new comment below theirs
@@ -374,31 +375,43 @@ export function createJiraAnswerSink(deps: JiraAnswerSinkDeps): JiraAnswerSink {
     return { postedCount: commentIds.length, commentIds, failure: null, refusedThreadRootId };
   }
 
-  /**
-   * Replace the text of comment `commentId` with `body`. `'edited'` — it is there now; otherwise why it is not and the caller
-   * posts the text as a new comment. A refusal (the comment is gone: 404; 400; 403; a rate limit) changed nothing. An outcome Jira
-   * did not confirm (a timeout, a 5xx after the client's retries) may have landed: after the read-back's wait the comment is read,
-   * and the new text on it counts as edited — a new comment would show the text twice. A comment that cannot be read leaves the
-   * new comment: a text shown twice is better than one lost.
-   */
-  async function editCommentText(issueKey: string, commentId: string, body: AdfDocument): Promise<'edited' | { detail: string }> {
+  /** One try at the edit: `edited`, a refusal that changed nothing (404, 400, 403, a rate limit), or an outcome Jira did not confirm. */
+  async function sendEdit(issueKey: string, commentId: string, body: AdfDocument): Promise<'edited' | { kind: 'refused' | 'unconfirmed'; detail: string }> {
     try {
       await client.editComment(issueKey, commentId, body);
       return 'edited';
     } catch (error) {
-      const detail = error instanceof Error ? error.message : String(error);
       const status = error instanceof JiraHttpError || error instanceof JiraAuthError ? error.status : 0;
       const isRefused = error instanceof JiraAuthError || (status >= 400 && status < 500);
-      if (isRefused) return { detail };
-      await deps.wait(jiraReadBackDelayMs);
-      try {
-        const comment = await client.getComment(issueKey, commentId);
-        if (getComparableText(comment.body) === getComparableText(body)) return 'edited';
-      } catch (readError) {
-        console.warn(`[jira] ${issueKey}: read-back of comment ${commentId} after an edit of unknown outcome failed: ${readError instanceof Error ? readError.message : String(readError)}`);
-      }
-      return { detail };
+      return { kind: isRefused ? 'refused' : 'unconfirmed', detail: error instanceof Error ? error.message : String(error) };
     }
+  }
+
+  /**
+   * Replace the text of comment `commentId` with `body`. `edited` — it is there now. `notEdited` — it is not (the comment is gone, Jira
+   * refuses the edit): the caller posts the text as a new comment. `unknown` — Jira did not confirm the edit and the comment could not
+   * be read to check: nothing may be posted (the edit may have landed — the text would stand twice), and the agent is told to send it
+   * again, which edits the same comment again. An edit repeats harmlessly, so after an outcome Jira did not confirm (a timeout, a 5xx
+   * after the client's retries) the comment is read after the read-back's wait: the new text on it counts as edited, the OLD text
+   * gets ONE more edit (the first may still be committing, or was lost) before the text goes into a new comment.
+   */
+  async function editCommentText(issueKey: string, commentId: string, body: AdfDocument): Promise<'edited' | { kind: 'notEdited' | 'unknown'; detail: string }> {
+    const first = await sendEdit(issueKey, commentId, body);
+    if (first === 'edited') return first;
+    if (first.kind === 'refused') return { kind: 'notEdited', detail: first.detail };
+    await deps.wait(jiraReadBackDelayMs);
+    let shown: JiraComment;
+    try {
+      shown = await client.getComment(issueKey, commentId);
+    } catch (readError) {
+      // A comment that is gone cannot have been edited; one that cannot be read leaves the outcome open.
+      if (readError instanceof JiraHttpError && readError.status === 404) return { kind: 'notEdited', detail: `${first.detail}; the comment is gone` };
+      console.warn(`[jira] ${issueKey}: read-back of comment ${commentId} after an edit of unknown outcome failed: ${readError instanceof Error ? readError.message : String(readError)}`);
+      return { kind: 'unknown', detail: first.detail };
+    }
+    if (getComparableText(shown.body) === getComparableText(body)) return 'edited';
+    const second = await sendEdit(issueKey, commentId, body);
+    return second === 'edited' ? second : { kind: 'notEdited', detail: second.detail };
   }
 
   /**
@@ -550,6 +563,12 @@ export function createJiraAnswerSink(deps: JiraAnswerSinkDeps): JiraAnswerSink {
     }
   }
 
+  /** The edit of the progress comment was not confirmed and the comment could not be read: nothing was posted, the resend edits it again. */
+  function getEditUnknownError(detail: string): string {
+    return `Jira did not confirm the edit of your progress comment and the comment could not be read to check it (${detail}); it may be edited already. ` +
+      'Nothing was posted. Send the progress again, unchanged: the same comment is edited again, which is safe to repeat';
+  }
+
   /** A failure after some comments landed: where the unposted rest starts, so only that rest is sent again. */
   function getMissingPartsWarning(bodies: readonly AdfDocument[], posted: CommentsPosted, failure: CommentPostFailure): string {
     const restStart = `"${getTextPreview(bodies[posted.postedCount])}"`;
@@ -599,6 +618,8 @@ export function createJiraAnswerSink(deps: JiraAnswerSinkDeps): JiraAnswerSink {
           if (!delivery.isBotNotice) deps.progressComments.forgetAll(delivery.requestId, slot);
           return { ok: true };
         }
+        // An edit that may have landed: nothing is posted, the comment stays the kept one and the resend edits it again.
+        if (edited.kind === 'unknown') return { ok: false, error: getEditUnknownError(edited.detail) };
         // The text goes into a new comment in the thread the old one stood in, which stays the progress comment's.
         console.warn(`[jira] ${issueKey}: comment ${kept.commentId} could not be edited (${edited.detail}); posting the progress as a new comment`);
         threadRootId = kept.threadRootId;

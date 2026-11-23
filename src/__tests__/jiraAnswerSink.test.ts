@@ -1142,16 +1142,60 @@ describe('one progress comment per request: the first progress answer posts it, 
       assert.deepEqual(jira.edits.map((edit) => edit.commentId), ['c1', 'c1'], 'still the same comment');
     });
 
-    it('an outcome Jira did not confirm and the old text on the comment (or an unreadable comment): the text is posted as a new comment — never lost', async () => {
+    it('an outcome Jira did not confirm and the OLD text on the comment: the edit is sent once more — it repeats harmlessly — and a second edit that lands is no new comment', async () => {
       await deliver('progress', 'First note.');
-      jira.editFailures = [new JiraHttpError(0, 'PUT', editUrl, 'the request timed out')];
+      jira.editFailures = [new JiraHttpError(0, 'PUT', editUrl, 'the request timed out'), undefined];
       setReadBackText('c1', 'First note.');
       assert.deepEqual(await deliver('progress', 'Second note.'), { ok: true });
+      assert.deepEqual(jira.calls, ['comment PROJ-12', 'edit PROJ-12 c1', `wait ${jiraReadBackDelayMs}`, 'getComment PROJ-12 c1', 'edit PROJ-12 c1']);
+      assert.deepEqual(jira.postedTexts, ['First note.']);
+      assert.deepEqual(jira.edits.map((edit) => edit.text), [`Second note.\n${updatedLine}`, `Second note.\n${updatedLine}`], 'the same edit, twice');
+    });
+
+    it('…and when that second edit does not land either — refused, or unconfirmed again — the text is posted as a new comment: never lost', async () => {
+      await deliver('progress', 'First note.');
+      setReadBackText('c1', 'First note.');
+      jira.editFailures = [new JiraHttpError(503, 'PUT', editUrl, 'unavailable'), new JiraHttpError(404, 'PUT', editUrl, 'gone')];
+      assert.deepEqual(await deliver('progress', 'Second note.'), { ok: true });
       assert.deepEqual(jira.postedTexts, ['First note.', 'Second note.']);
-      jira.editFailures = [new JiraHttpError(502, 'PUT', '/rest/api/3/issue/PROJ-12/comment/c2', 'bad gateway')];
-      jira.commentsById.delete('c2');
+      setReadBackText('c2', 'Second note.');
+      jira.editFailures = [new JiraHttpError(502, 'PUT', '/rest/api/3/issue/PROJ-12/comment/c2', 'bad gateway'), new JiraHttpError(0, 'PUT', '/rest/api/3/issue/PROJ-12/comment/c2', 'timed out')];
       assert.deepEqual(await deliver('progress', 'Third note.'), { ok: true });
       assert.deepEqual(jira.postedTexts, ['First note.', 'Second note.', 'Third note.']);
+    });
+
+    it('an outcome Jira did not confirm and the comment is gone when it is read: it cannot have been edited — a new comment, no second edit', async () => {
+      await deliver('progress', 'First note.');
+      jira.editFailures = [new JiraHttpError(503, 'PUT', editUrl, 'unavailable')];
+      jira.commentsById.set('c1', new JiraHttpError(404, 'GET', editUrl, 'Can not find a comment with id c1'));
+      assert.deepEqual(await deliver('progress', 'Second note.'), { ok: true });
+      assert.equal(jira.edits.length, 1);
+      assert.deepEqual(jira.postedTexts, ['First note.', 'Second note.']);
+    });
+
+    it('an outcome Jira did not confirm and the comment cannot be read either: NOTHING is posted — the agent is told to send it again, and the resend edits the same comment', async () => {
+      await deliver('progress', 'First note.');
+      jira.editFailures = [new JiraHttpError(503, 'PUT', editUrl, 'unavailable')];
+      jira.commentsById.set('c1', new JiraHttpError(503, 'GET', editUrl, 'unavailable'));
+      const result = await deliver('progress', 'Second note.');
+      assert.equal(result.ok, false);
+      assert.match(result.ok ? '' : result.error, /Jira did not confirm the edit of your progress comment and the comment could not be read to check it/);
+      assert.match(result.ok ? '' : result.error, /Nothing was posted\. Send the progress again, unchanged: the same comment is edited again/);
+      assert.deepEqual(jira.postedTexts, ['First note.'], 'no second comment');
+      // Jira is back: the resend edits the kept comment — still c1 — and posts nothing.
+      jira.commentsById.delete('c1');
+      assert.deepEqual(await deliver('progress', 'Second note.'), { ok: true });
+      assert.deepEqual(jira.edits.map((edit) => edit.commentId), ['c1', 'c1']);
+      assert.deepEqual(jira.postedTexts, ['First note.']);
+    });
+
+    it('a bot notice whose edit cannot be confirmed or read is an error too — the limit wait\'s answer retries it — and posts nothing', async () => {
+      const notice = (body: string) => sink().deliverAnswer(key, { requestId: 'req_1', kind: 'progress', body, origin, isRequestOpen: true, isBotNotice: true, repeatKey: 'usageLimitWait' });
+      await notice('Usage limit: the AI goes on at 14:00.');
+      jira.editFailures = [new JiraHttpError(0, 'PUT', editUrl, 'timed out')];
+      jira.commentsById.set('c1', new Error('Jira GET comment c1 failed'));
+      assert.equal((await notice('Usage limit: the AI goes on at 19:00.')).ok, false);
+      assert.deepEqual(jira.postedTexts, ['Usage limit: the AI goes on at 14:00.']);
     });
 
     it('the new comment is posted with R18\'s read-back: one of unknown outcome that did land is not posted twice', async () => {
