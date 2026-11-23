@@ -2231,7 +2231,7 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
     // The queue is taken in by the turn that starts next, its wait starting over from this end — less what this turn took in in a shape
     // nothing matches (the marked entries). A FAILED turn (usage limit, API error) keeps its queue too: measured on 2.1.330 (an unknown
     // `--model`; an HTTP 400, and an HTTP 429 after its ten retries, from a loopback API — `utils/jsonStreamUnconsumedInput.ts`
-    // `getInputsAfterTurnEnd` has the command), the CLI writes a new `init` 0.07–0.6 s after the error `result` and runs the queued
+    // `getInputsAfterTurnEnd` has the command), the CLI writes a new `init` 0.02–0.2 s after the error `result` and runs the queued
     // message as its own turn; in a turn that fails, the echo comes at its end, right before its `result`. Emptied, the list read that message as taken
     // in before its turn began: the per-turn stop killed the process ahead of it, and the bot decided its request's turn ended. Each entry
     // is marked `isQueuedBehindFailedTurn` and still bounded by the grace (`unconsumedInputGraceMs`), so one the CLI never echoes holds

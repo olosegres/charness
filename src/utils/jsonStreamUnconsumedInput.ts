@@ -88,7 +88,7 @@ export function getInputsWithOldestEchoMarked(inputs: readonly UnconsumedInput[]
  * 2.1.330 with `claude -p --input-format stream-json --output-format stream-json --verbose --replay-user-messages --permission-mode default`
  * (no `CLAUDE_CONFIG_DIR`, the default sign-in, a throwaway folder; a second user message written 0.3 s after the first, stdin held open),
  * the first turn failing on `--model claude-nonexistent-model-x`, and on an HTTP 400 and an HTTP 429 (after the CLI's ten retries) from a
- * loopback API through `ANTHROPIC_BASE_URL`: the CLI wrote a new `system/init` 0.07–0.6 s after the error `result` and ran the queued
+ * loopback API through `ANTHROPIC_BASE_URL`: the CLI wrote a new `system/init` 0.02–0.2 s after the error `result` and ran the queued
  * message as its own turn (in a turn that fails, the echo comes at its end, right before its `result`). Emptied here as it once was, the
  * list read the message as taken in before its turn began: the per-turn stop killed the process ahead of that turn, and the bot decided
  * the request's turn ended.

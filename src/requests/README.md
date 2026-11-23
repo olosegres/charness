@@ -232,7 +232,7 @@ What can run between a json-stream `turnEnded` and the next write, in the order 
    took in in a shape nothing matches goes. A turn that ended in an ERROR result keeps its queue too, each entry marked
    `isQueuedBehindFailedTurn`. Measured on CLI 2.1.330 (`-p`, stream-json, `--replay-user-messages`; a second message written 0.3 s after
    the first; the first turn failing on an unknown `--model`, on an HTTP 400, and on an HTTP 429 after its ten retries, the last two from
-   a loopback API through `ANTHROPIC_BASE_URL`): the CLI wrote a new `system/init` 0.07–0.6 s after the error `result` and ran the queued
+   a loopback API through `ANTHROPIC_BASE_URL`): the CLI wrote a new `system/init` 0.02–0.2 s after the error `result` and ran the queued
    message as its own turn. So such a message's watch reads `running` (unconsumed) until its own turn took it in, the per-turn stop waits
    for that turn (`checkIsWorking`), and R21 marks the prompt only once it is echoed. One never echoed holds nothing past the grace (30 s).
    Only a deferred account switch looks past these entries (item 9).
