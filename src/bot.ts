@@ -6076,13 +6076,26 @@ const sessionTransitions = new KeyedTransitionQueue();
  * itself.
  */
 function runCommandSessionTransition<TResult>(key: SessionKey, transition: () => Promise<TResult>): Promise<TResult> {
-  return sessionTransitions.run(keyToString(key), transition);
+  return sessionTransitions.run(keyToString(key), async () => {
+    await waitForPendingRespawn(key);
+    return transition();
+  });
+}
+
+/**
+ * @description A json-stream re-spawn (a model, effort or account change, a deferred one at a turn's end) replaces the process inside the
+ * adapter, outside this queue, with the process down for seconds: an ensure or a command transition waits for it first, and then reads the
+ * re-spawned process live instead of starting or resuming a second one beside it (review 21 nit 6).
+ */
+async function waitForPendingRespawn(key: SessionKey): Promise<void> {
+  await getThreadAdapter(key).waitForRespawn?.(key);
 }
 
 async function ensureAgentSessionNow(
   key: SessionKey,
   options: EnsureAgentSessionOptions,
 ): Promise<EnsureAgentSessionResult> {
+  await waitForPendingRespawn(key);
   // Resolve which adapter to run. `getThreadAdapterNameRaw` returns the
   // in-memory pick WITHOUT any default fallback, so "no pick yet" stays
   // distinguishable and the chain never silently defaults to a backend. When

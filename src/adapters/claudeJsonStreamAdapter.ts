@@ -160,6 +160,26 @@ const stopsInFlightByKey = new Map<string, Promise<void>>();
 let nextProcessGeneration = unnumberedProcessGeneration + 1;
 
 /**
+ * The re-spawns of each conversation that are under way or about to start ({@link ClaudeJsonStreamAdapter.waitForRespawn}): a model,
+ * effort or account change replaces the process outside the bot's session queue, with the process down for seconds. MODULE-level, like
+ * {@link stopsInFlightByKey}: the bot asks whichever instance the topic runs now. Each entry settles (never rejects) once its re-spawn
+ * is over, whatever its end.
+ */
+const respawnsInFlightByKey = new Map<string, Set<Promise<void>>>();
+
+/** Record `respawn` as under way for `conversationKey` until it settles. */
+function noteRespawnInFlight(conversationKey: string, respawn: Promise<unknown>): void {
+  const settled = respawn.then(() => undefined, () => undefined);
+  const inFlight = respawnsInFlightByKey.get(conversationKey) ?? new Set<Promise<void>>();
+  inFlight.add(settled);
+  respawnsInFlightByKey.set(conversationKey, inFlight);
+  void settled.then(() => {
+    inFlight.delete(settled);
+    if (inFlight.size === 0 && respawnsInFlightByKey.get(conversationKey) === inFlight) respawnsInFlightByKey.delete(conversationKey);
+  });
+}
+
+/**
  * @description Coalesce window for streamed answer/thinking deltas before an
  * `output`/`thinking` emit — the CLI streams per-token, so raw per-delta emits
  * would flood Telegram with edits. Mirrors OpenCode's `sseOutputBatchMs` (500).
@@ -2657,10 +2677,14 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
    * intermediate exit is suppressed (`isRespawning`) so the bot sees no
    * closed/stopped churn.
    */
-  private async respawnWithChange(
-    session: StreamSession,
-    change: SessionRespawnChange,
-  ): Promise<void> {
+  private respawnWithChange(session: StreamSession, change: SessionRespawnChange): Promise<void> {
+    const respawn = this.runRespawnWithChange(session, change);
+    noteRespawnInFlight(keyToString(session.key), respawn);
+    return respawn;
+  }
+
+  /** {@link respawnWithChange}'s work, recorded as under way for {@link waitForRespawn} while it runs. */
+  private async runRespawnWithChange(session: StreamSession, change: SessionRespawnChange): Promise<void> {
     session.isRespawning = true;
     try {
       await this.replaceSessionProcess(session, change);
@@ -2772,6 +2796,19 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
   }
 
   /**
+   * @description Resolves once no re-spawn of this conversation's process is under way or about to start
+   * (`AgentAdapter.waitForRespawn`): at once with none; else when the last one is over, whatever its end — re-spawned, a no-op, deferred
+   * again, failed. The bot's ensure and command transitions wait here, so none resumes a second process beside a re-spawn whose process
+   * is down for it (review 21 nit 6).
+   */
+  async waitForRespawn(key: SessionKey): Promise<void> {
+    const conversationKey = keyToString(key);
+    for (let inFlight = respawnsInFlightByKey.get(conversationKey); inFlight !== undefined; inFlight = respawnsInFlightByKey.get(conversationKey)) {
+      await Promise.all(inFlight);
+    }
+  }
+
+  /**
    * @description Whether a finished background task's own turn is on its way: its `task_notification` came, the turn has not opened
    * yet, within the grace (`AgentAdapter.checkIsTurnOnItsWay`). The CLI starts it ~0.1 s after the `result` of the turn it ended in.
    */
@@ -2804,13 +2841,20 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
       session.isConfigDirSwitchReleased = false;
       return;
     }
-    // Detached from the tail poll that delivered the `result`: the re-spawn tears this very session down.
-    setTimeout(() => {
-      void this.applyClaudeConfigDir(session.key)
-        .catch((e) => console.warn(`[ClaudeJson] ${keyToString(session.key)}: the deferred profile switch failed:`, e instanceof Error ? e.message : e))
-        // Over: re-spawned (this session is replaced, `isRespawning` covered the way), a no-op, or deferred again.
-        .finally(() => { session.isConfigDirSwitchReleased = false; });
-    }, 0).unref?.();
+    // Detached from the tail poll that delivered the `result`: the re-spawn tears this very session down. Recorded as under way from
+    // now, the turn end's own tick, so an ensure that comes before the re-spawn starts already waits for it (`waitForRespawn`).
+    const applied = new Promise<void>((resolve) => {
+      setTimeout(() => {
+        void this.applyClaudeConfigDir(session.key)
+          .catch((e) => console.warn(`[ClaudeJson] ${keyToString(session.key)}: the deferred profile switch failed:`, e instanceof Error ? e.message : e))
+          // Over: re-spawned (this session is replaced, `isRespawning` covered the way), a no-op, or deferred again.
+          .finally(() => {
+            session.isConfigDirSwitchReleased = false;
+            resolve();
+          });
+      }, 0).unref?.();
+    });
+    noteRespawnInFlight(keyToString(session.key), applied);
   }
 
   private clearTimers(session: StreamSession): void {

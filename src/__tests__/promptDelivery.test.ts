@@ -413,7 +413,7 @@ describe('a startup window\'s prompts on every way out of it (review 19 #1)', ()
   });
 
   it('every start or resume a command makes runs as the conversation\'s one transition, so none shares a startup window with an ensure or a stop (review 20 nit 3)', () => {
-    assert.match(getBody('function runCommandSessionTransition<TResult>(', 'async function ensureAgentSessionNow('), /return sessionTransitions\.run\(keyToString\(key\), transition\);/);
+    assert.match(getBody('function runCommandSessionTransition<TResult>(', 'async function waitForPendingRespawn('), /return sessionTransitions\.run\(keyToString\(key\), async \(\) => \{\n\s*await waitForPendingRespawn\(key\);\n\s*return transition\(\);\n\s*\}\);/);
     const fresh = getBody("command('new', async", '//  /whoami /version /help /status');
     assert.match(fresh, /const msg = await runCommandSessionTransition\(key, async \(\) => \{\n\s*await releaseThreadSession\(key\);\n\s*return startAgentSession\(key\);\n\s*\}\);/, '/new');
     assert.match(getBody('async function handleAgentStart(', 'function handleStartCommand('), /: await runCommandSessionTransition\(key, async \(\) => \(getThreadAdapter\(key\)\.checkIsActive\(key\)\n\s*\? t\('agent\.already_active', \{ label: getThreadAdapter\(key\)\.label \}\)\n\s*: startAgentSession\(key, args\)\)\);/, 'a first /claude or /opencode, finding a session another trigger started meanwhile');
@@ -428,6 +428,13 @@ describe('a startup window\'s prompts on every way out of it (review 19 #1)', ()
     assert.match(getBody('async function resumeSessionByIndex(', 'async function resumePickedSession('), /return runCommandSessionTransition\(key, \(\) => resumePickedSession\(key, sessionId\)\);/, '/resume\'s pick');
     // Every start outside the ensure is one of those.
     assert.equal(botSource.match(/startAgentSession\(key(?:, (?:options\.)?args)?\)/g)?.length, 7, 'the ensure\'s two, /new, the first /claude, the wedge recovery\'s two, /claude_mode\'s fallback');
+  });
+
+  it('every ensure and every command transition waits for a json-stream re-spawn first: none resumes a second process beside the one a model, effort or account change has down (review 21 nit 6)', () => {
+    assert.match(getBody('async function waitForPendingRespawn(', 'async function ensureAgentSessionNow('), /await getThreadAdapter\(key\)\.waitForRespawn\?\.\(key\);/);
+    const ensure = getBody('async function ensureAgentSessionNow(', 'function getResumableSessionId(');
+    assert.ok(ensure.indexOf('await waitForPendingRespawn(key);') >= 0 && ensure.indexOf('await waitForPendingRespawn(key);') < ensure.indexOf('getEnsureSessionPlan({'), 'before the plan reads whether the session is live');
+    assert.match(getBody('function runCommandSessionTransition<TResult>(', 'async function waitForPendingRespawn('), /await waitForPendingRespawn\(key\);\n\s*return transition\(\);/, 'the command\'s start or resume too');
   });
 
   it('/new releases the conversation\'s ids BEFORE it waits for a stop under way: the stop drops what it held, with the line, instead of resuming the old conversation for it only to kill it (review 21 nit 4)', () => {

@@ -908,11 +908,19 @@ export interface AgentAdapter extends EventEmitter {
   /**
    * Whether the adapter re-spawns the process now, or is about to (json-stream Claude): a re-spawn under way (a model, effort or
    * account change), or an account switch deferred while the process worked that the turn's end releases — it starts one timer tick
-   * after `turnEnded`. The request wake-up probe reads it as «not a turn end»: a reminder delivered meanwhile would meet the process
-   * down for the re-spawn, and its ensure would start a second launch of the conversation beside it. Optional: a backend that never
+   * after `turnEnded`. The request wake-up probe reads it as «not a turn end»: the turn is decided once the new process is up, and its
+   * reminder goes into it (an ensure waits for the re-spawn, {@link waitForRespawn}). Optional: a backend that never
    * re-spawns on its own omits it.
    */
   checkIsRespawnPending?(key: SessionKey): boolean;
+
+  /**
+   * Resolves once no re-spawn of the conversation's process is under way or about to start (json-stream Claude; the span
+   * {@link checkIsRespawnPending} reads, also when it ends in a no-op or a failure). A re-spawn runs inside the adapter, outside the bot's
+   * session queue, with the process down for seconds: the bot's ensure and command transitions wait here first, so none starts or
+   * resumes a second process beside it. Optional: a backend that never re-spawns on its own omits it.
+   */
+  waitForRespawn?(key: SessionKey): Promise<void>;
 
   /**
    * Which of the adapter's processes is live for the conversation (json-stream Claude): a number that changes whenever a process

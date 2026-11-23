@@ -77,6 +77,52 @@ describe('the process number the wake-up engine reads a prompt off (review 18 #2
   });
 });
 
+describe('an ensure waits for a re-spawn under way or about to start (review 21 nit 6)', () => {
+  /** Whether `waiting` has settled by now (after a few microtasks). */
+  async function checkIsSettled(waiting: Promise<void>): Promise<boolean> {
+    let isSettled = false;
+    void waiting.then(() => { isSettled = true; });
+    for (let tick = 0; tick < 5; tick += 1) await Promise.resolve();
+    return isSettled;
+  }
+
+  it('with none under way it resolves at once; a re-spawn for a model or effort change holds it until the new process is spawned', async () => {
+    const adapter = new ClaudeJsonStreamAdapter();
+    adapter['sessions'].set(keyToString(key), createStreamSessionFixture({ key, workDir: '/tmp/jsonstream-account-work', sessionId: 'sess-acct' }));
+    assert.equal(await checkIsSettled(adapter.waitForRespawn(key)), true, 'nothing under way');
+    let finishReplace: () => void = () => {};
+    adapter['replaceSessionProcess'] = () => new Promise<void>((resolve) => { finishReplace = resolve; });
+    const modelChange = adapter.setModel(key, 'opus');
+    const waiting = adapter.waitForRespawn(key);
+    assert.equal(await checkIsSettled(waiting), false, 'the process is down for the re-spawn: an ensure must not resume a second one beside it');
+    assert.equal(await checkIsSettled(adapter.waitForRespawn(makeTelegramKey(-100999222, 79))), true, 'another topic does not wait');
+    finishReplace();
+    await modelChange;
+    assert.equal(await checkIsSettled(waiting), true, 'the re-spawned process is there');
+  });
+
+  it('a re-spawn that fails releases it too', async () => {
+    const adapter = new ClaudeJsonStreamAdapter();
+    adapter['sessions'].set(keyToString(key), createStreamSessionFixture({ key, workDir: '/tmp/jsonstream-account-work', sessionId: 'sess-acct' }));
+    adapter['replaceSessionProcess'] = async () => { throw new Error('the CLI did not come up'); };
+    await assert.rejects(adapter.setModel(key, 'opus'));
+    assert.equal(await checkIsSettled(adapter.waitForRespawn(key)), true);
+  });
+
+  it('a deferred account switch holds it from the turn end that releases it — one timer tick ahead of the re-spawn — until its apply is over', async () => {
+    const { adapter, respawns } = setup();
+    const session = adapter['sessions'].get(keyToString(key))!;
+    session.isBusy = true;
+    assert.equal(await adapter.applyClaudeConfigDir(key), 'deferred');
+    adapter['onStdout'](session, okResult);
+    const waiting = adapter.waitForRespawn(key);
+    assert.equal(await checkIsSettled(waiting), false, 'released at the turn end, not started yet');
+    await afterTimerTick();
+    assert.deepEqual(respawns, ['/profiles/perf']);
+    assert.equal(await checkIsSettled(waiting), true);
+  });
+});
+
 describe('claude-json-stream account switch after a limit', () => {
   it('a plain apply over a session holding unconsumed input defers', async () => {
     const { adapter, respawns } = setup();

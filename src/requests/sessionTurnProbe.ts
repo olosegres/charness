@@ -28,8 +28,9 @@ import { unnumberedProcessGeneration, type SessionTurnProbe } from './wakeUpRule
  *    session and end on the same error, the give-up;
  *  - a RE-SPAWN of the process under way or about to start (`checkIsRespawnPending`: a model, effort
  *    or account change; an account switch deferred while the turn worked starts one tick after its
- *    end): a reminder delivered meanwhile would meet the process down for it, and its ensure would
- *    start a second launch of the conversation beside the re-spawn;
+ *    end): the turn is decided once the new process is up, and its reminder goes into it — the process
+ *    down for the re-spawn would otherwise read as a session gone (an ensure waits for the re-spawn:
+ *    `waitForRespawn`);
  *  - a session START under way: a request's first post is starting the session it
  *    will run in, so nothing has gone quiet — without this the sweep reads the
  *    request as one nobody works on and wakes it (or raises an alert) once the

@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+**Changing the model, the effort or the account while a message comes in no longer starts a second agent process.**
+`/model`, `/effort` and an account switch restart the agent's process of a Claude topic (the default backend), with the process down for a few seconds. A message, a scheduled run or a reminder that arrived in those seconds could start a second process of the same conversation beside it. Now it waits for the restart and goes to the new process.
+
 **A reminder that reached no agent is no longer counted as one the agent ignored.**
 Right after a bot restart, a reminder to the agent could wait for its session to replay what it wrote while the bot was down, and then find no session left. The bot still counted the reminder as delivered and watched for a turn that never came, which could later read as the agent staying silent. Now such a reminder counts as not delivered: it is tried again later, or reported as one that could not be delivered.
 
