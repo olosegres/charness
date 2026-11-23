@@ -142,6 +142,10 @@ export class RequestWakeUpEngine {
   private readonly answerTails = new Map<string, WatchedAnswerTail>();
   /** The request whose tail was last reminded and how often, by serialized conversation key (the reminder cap). */
   private readonly answerTailReminders = new Map<string, { requestId: string; count: number }>();
+  /** How many posts are on their way to their write, by serialized conversation key ({@link notePostInFlight}). */
+  private readonly postsInFlight = new Map<string, number>();
+  /** The wake-up deliveries handed to a post in flight, by serialized conversation key, in the order they were decided. */
+  private readonly wakesHandedToPost = new Map<string, Array<() => Promise<void>>>();
   private pollTimer: NodeJS.Timeout | null = null;
   private sweepTimer: NodeJS.Timeout | null = null;
   private isPolling = false;
@@ -560,8 +564,9 @@ export class RequestWakeUpEngine {
    * does not await (a write must run in its caller's tick) is never read into them. The decisions are persisted after, in order; the
    * returned promise resolves once they are (a post that picks a request awaits it first, so the pick and the header see the result)
    * with the delivery of the wake-ups they decided. The CALLER delivers them — after its own write, so the prompt it writes starts the
-   * turn and a reminder joins it, as the tick would have reminded seconds later; a call with no write of its own (a turn's end) delivers
-   * at once. Never rejects, and neither does the delivery.
+   * turn and a reminder joins it, as the tick would have reminded seconds later; a call with no write of its own (the adapter's turn end)
+   * hands them to a post on its way to its write, else delivers them at once ({@link deliverOrHandOverWake}). Never rejects, and neither
+   * does the delivery.
    */
   settleEndedTurnsOf(key: SessionKey): Promise<() => Promise<void>> {
     const probe = this.deps.probeTurn(key);
@@ -584,6 +589,63 @@ export class RequestWakeUpEngine {
     return Promise.all(persisting).then((deliveries) => async () => {
       for (const deliver of deliveries) await deliver?.().catch((e) => logWakeUpFailure(`delivering a settled turn's wake-up in ${keyToString(key)}`, e));
     });
+  }
+
+  /**
+   * @description A post (`postToSession`) is on its way to write a prompt into `key`'s conversation, waiting for the running turn's
+   * idle maybe. Until the returned release, a wake-up decided for the conversation — at the adapter's turn end, by the poll, by the sweep
+   * ({@link deliverOrHandOverWake}) — is HANDED to the post instead of written at once: the post takes it with its settle
+   * ({@link settleEndedTurnsForPost}) and delivers it after its own write, so the prompt that waited for the turn starts the next one and
+   * the reminder joins it (written first, the reminder would start that turn and the reminded request would read as its starter). The
+   * release delivers what is still handed over once the last post in flight is done: one that never took it (held over a limit wait,
+   * an ensure that failed) or a wake decided after its settle. It never rejects, and a second call does nothing.
+   */
+  notePostInFlight(key: SessionKey): () => Promise<void> {
+    const conversationKey = keyToString(key);
+    this.postsInFlight.set(conversationKey, (this.postsInFlight.get(conversationKey) ?? 0) + 1);
+    let isReleased = false;
+    return async () => {
+      if (isReleased) return;
+      isReleased = true;
+      const count = (this.postsInFlight.get(conversationKey) ?? 1) - 1;
+      if (count > 0) {
+        this.postsInFlight.set(conversationKey, count);
+        return;
+      }
+      this.postsInFlight.delete(conversationKey);
+      await this.takeWakesHandedToPost(conversationKey)();
+    };
+  }
+
+  /** @description Deliver a decided wake-up now, or hand it to a post in flight in `key`'s conversation ({@link notePostInFlight}). Never rejects. */
+  async deliverOrHandOverWake(key: SessionKey, deliver: () => Promise<void>): Promise<void> {
+    const conversationKey = keyToString(key);
+    if (this.postsInFlight.has(conversationKey)) {
+      this.wakesHandedToPost.set(conversationKey, [...(this.wakesHandedToPost.get(conversationKey) ?? []), deliver]);
+      return;
+    }
+    await deliver().catch((e) => logWakeUpFailure(`delivering a wake-up in ${conversationKey}`, e));
+  }
+
+  /**
+   * @description The settle of a post about to write ({@link settleEndedTurnsOf}): resolves ONE delivery for the post to run after its
+   * write — the wake-ups handed to it so far, in order, then this settle's own. Never rejects, and neither does the delivery.
+   */
+  settleEndedTurnsForPost(key: SessionKey): Promise<() => Promise<void>> {
+    const deliverHandedOver = this.takeWakesHandedToPost(keyToString(key));
+    return this.settleEndedTurnsOf(key).then((deliverSettled) => async () => {
+      await deliverHandedOver();
+      await deliverSettled();
+    });
+  }
+
+  /** The delivery of the wake-ups handed to a post in `conversationKey`, taken (a later post or release finds none of them). */
+  private takeWakesHandedToPost(conversationKey: string): () => Promise<void> {
+    const handedOver = this.wakesHandedToPost.get(conversationKey) ?? [];
+    this.wakesHandedToPost.delete(conversationKey);
+    return async () => {
+      for (const deliver of handedOver) await deliver().catch((e) => logWakeUpFailure(`delivering a wake-up handed to a post in ${conversationKey}`, e));
+    };
   }
 
   /** The decision at the end of `turn`, read against `request` and its jobs as they are now. */
@@ -711,7 +773,8 @@ export class RequestWakeUpEngine {
 
   private async applyDecision(key: SessionKey, request: OpenRequestState, decision: WakeUpDecision): Promise<void> {
     const deliverWake = await this.persistDecision(key, request, decision);
-    await deliverWake?.();
+    // A post on its way to its write takes it and writes it after its own prompt (`notePostInFlight`).
+    if (deliverWake) await this.deliverOrHandOverWake(key, deliverWake);
   }
 
   /**

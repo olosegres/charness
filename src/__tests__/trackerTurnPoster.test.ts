@@ -46,6 +46,8 @@ let alerts: Array<{ requestId: string; reason: RequestAlertReason }>;
 let createdStores: StateStore[] = [];
 let engines: RequestWakeUpEngine[] = [];
 let nextPostResult: PostToSessionResult;
+/** The requests the engine watched in the issue as the faked post returned: what was tracked INSIDE the post. */
+let watchedAsPostReturned: string[];
 
 async function createLedger(): Promise<RequestLedger> {
   const store = new StateStore(dataDir, { saveDebounceMs: 5 });
@@ -82,8 +84,11 @@ function createEngine(ledger: RequestLedger): RequestWakeUpEngine {
 
 function createPoster(engine: RequestWakeUpEngine): TrackerTurnPoster {
   return createTrackerTurnPoster({
-    post: async (key) => {
+    post: async (key, _prompt, options) => {
       posts.push(keyToString(key));
+      // As `postToSession` does: the caller's step once the prompt is written, before the settled reminders and the return.
+      if (nextPostResult.ok && !nextPostResult.isHeld) await options.afterForward?.();
+      watchedAsPostReturned = engine.getWatchedRequestIdsOf(key);
       return nextPostResult;
     },
     notePersonActivity: (key) => { activity.push(`${keyToString(key)} @${posts.length} posts`); },
@@ -117,6 +122,7 @@ beforeEach(() => {
   wakeUps = [];
   alerts = [];
   nextPostResult = { ok: true, isHeld: false };
+  watchedAsPostReturned = [];
 });
 
 afterEach(async () => {
@@ -140,6 +146,14 @@ describe('postRequest', () => {
     assert.equal(ledger.getNewestOpenRequest(issueKey)?.isPersonInputUnanswered, true);
     await endTurnSilently(engine);
     assert.deepEqual(wakeUps, [{ requestId: request.id, reason: 'silentTurn' }], 'a watch passing does not excuse a silent turn on a request prompt');
+  });
+
+  it('the turn is watched INSIDE the post, right after the write — before the post delivers the reminders it was handed — so a reminder that joins the turn is watched after this request, which started it (review 16 #2)', async () => {
+    const ledger = await createLedger();
+    const engine = createEngine(ledger);
+    const request = await ledger.createRequest(issueKey, handOver);
+    await createPoster(engine).postRequest(issueKey, request.id, prompt);
+    assert.deepEqual(watchedAsPostReturned, [request.id]);
   });
 
   it('a held request prompt is not tracked — its prompt rides the wait\'s resume (R21)', async () => {
@@ -172,6 +186,14 @@ describe('postUpdate', () => {
     assert.equal(ledger.getNewestOpenRequest(issueKey)?.isPersonInputUnanswered, true);
     await endTurnSilently(engine);
     assert.deepEqual(wakeUps, [{ requestId: request.id, reason: 'silentTurn' }], 'a comment left unanswered is reminded though a watch passes');
+  });
+
+  it('the update\'s turn is watched inside the post too, for the request its text names (read once the update is written) (review 16 #2)', async () => {
+    const ledger = await createLedger();
+    const engine = createEngine(ledger);
+    const request = await createAnsweredRequest(ledger);
+    await createPoster(engine).postUpdate(issueKey, prompt, () => request.id);
+    assert.deepEqual(watchedAsPostReturned, [request.id]);
   });
 
   it('a failure is thrown back to the connector, which decides the comment again — nothing is watched or marked owed', async () => {

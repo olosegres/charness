@@ -6239,19 +6239,30 @@ function handleAgentTurnEnded(key: SessionKey): void {
       console.warn(`[lifecycle] the per-turn stop of ${keyToString(key)} failed:`, e instanceof Error ? e.message : e),
     );
   }
-  // The turn's end is decided at the adapter's own turn-end event, on every backend — after the per-turn stop is queued: its window
-  // opens only in a later tick, and once it is over the session is gone, which a watch reads as «tracking lost», never as an end. A
-  // reminder this decides resumes the session through the ensure, which queues behind the stop (`requests/README.md` § Turn starts).
-  settleEndedTurnsAndRemind(key);
+  // The turn's end is decided at the adapter's own turn-end event (json-stream Claude, both lifecycles) — after the per-turn stop is
+  // queued: its window opens only in a later tick, and once it is over the session is gone, which a watch reads as «tracking lost», never
+  // as an end. A reminder this decides is handed to a post waiting for this turn, which writes its own prompt first; with none waiting it
+  // resumes the session through the ensure, which queues behind the stop (`requests/README.md` § Turn starts).
+  settleTurnEnd(key);
 }
 
-/** No reminder to deliver: what a settle resolves while the wake-up engine is not up yet. */
+/**
+ * @description Settle `key`'s watches at the adapter's turn end ({@link handleAgentTurnEnded}): the reminders they decided go to a post
+ * on its way to its write (`RequestWakeUpEngine.deliverOrHandOverWake`), else out at once — no write of this caller follows. Never rejects.
+ */
+function settleTurnEnd(key: SessionKey): void {
+  const engine = requestWakeUpEngine;
+  if (!engine) return;
+  void engine.settleEndedTurnsOf(key).then((deliverSettledWakes) => engine.deliverOrHandOverWake(key, deliverSettledWakes));
+}
+
+/** No reminder to deliver: what a settle resolves, and what a post's release is, while the wake-up engine is not up yet. */
 const deliverNoSettledWakes = async (): Promise<void> => {};
 
 /**
  * @description Settle `key`'s watches whose turn already ended (`RequestWakeUpEngine.settleEndedTurnsOf`, synchronous up to the
- * decisions) and deliver the reminders they decided once persisted — for a caller with no write of its own after it, or one that
- * writes in this tick (the reminder then follows the write). Never rejects.
+ * decisions) and deliver the reminders they decided once persisted — for the write choke point, whose write runs in this tick: the
+ * reminder then follows the write. Never rejects.
  */
 function settleEndedTurnsAndRemind(key: SessionKey): void {
   void requestWakeUpEngine?.settleEndedTurnsOf(key).then((deliverSettledWakes) => deliverSettledWakes());
@@ -15774,9 +15785,10 @@ function createSessionPostDeps(): PostToSessionDeps {
       // A prompt that waited for the session's start counts only once it reached it: a replay whose write failed is a failed post.
       if (delivery === 'buffered') await buffered.assertReplayed();
     },
-    // The watches whose turn ended are settled before the post picks a request and builds its text; the reminders they decided are
-    // delivered after the post's own write (`requests/README.md` § Turn starts).
-    settleEndedTurns: (conversationKey) => requestWakeUpEngine?.settleEndedTurnsOf(keyFromString(conversationKey)) ?? Promise.resolve(deliverNoSettledWakes),
+    // The watches whose turn ended are settled before the post picks a request and builds its text; the reminders they decided, and the
+    // ones handed to the post while it waited, are delivered after the post's own write (`requests/README.md` § Turn starts).
+    settleEndedTurns: (conversationKey) => requestWakeUpEngine?.settleEndedTurnsForPost(keyFromString(conversationKey)) ?? Promise.resolve(deliverNoSettledWakes),
+    notePostInFlight: (conversationKey) => requestWakeUpEngine?.notePostInFlight(keyFromString(conversationKey)) ?? deliverNoSettledWakes,
     now: () => Date.now(),
     sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
   };
@@ -16285,7 +16297,7 @@ function createJiraSessionDeps(requestLedger: RequestLedger, slots: TaskAgentSlo
     // does, or the issue would never compact again. An issue update (a comment for an open hand-over request) opens no request:
     // the turn it starts is that request's.
     ...createTrackerTurnPoster({
-      post: (key, prompt) => postToSession(sessionPostDeps, keyToString(key), prompt, adapterName),
+      post: (key, prompt, options) => postToSession(sessionPostDeps, keyToString(key), prompt, adapterName, options),
       notePersonActivity,
       getEngine: () => requestWakeUpEngine,
     }),

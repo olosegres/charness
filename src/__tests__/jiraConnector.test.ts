@@ -1000,7 +1000,8 @@ describe('bot.ts wires the Jira connector (J5)', () => {
   it('the connector\'s request and update posts go through the tracker turn poster, over the shared session post and the wake-up engine (its behaviour: trackerTurnPoster.test.ts)', () => {
     const deps = botSource.slice(botSource.indexOf('function createJiraSessionDeps('), botSource.indexOf('export async function startBot('));
     assert.ok(deps.includes('...createTrackerTurnPoster({'));
-    assert.ok(deps.includes('post: (key, prompt) => postToSession(sessionPostDeps, keyToString(key), prompt, adapterName),'));
+    // The poster's `afterForward` (it watches the turn) rides into the post, which runs it right after the write.
+    assert.ok(deps.includes('post: (key, prompt, options) => postToSession(sessionPostDeps, keyToString(key), prompt, adapterName, options),'));
     assert.ok(deps.includes('notePersonActivity,'));
     assert.ok(deps.includes('getEngine: () => requestWakeUpEngine,'));
     assert.ok(!deps.includes('postRequest:') && !deps.includes('postUpdate:'), 'no second, hand-written copy of either post');

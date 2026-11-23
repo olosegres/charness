@@ -149,6 +149,12 @@ is persisted first and written AFTER the caller's own write, so the new prompt s
 would have reminded seconds later. A post that waited behind a running turn (`postToSession`) also awaits the settle (the decisions, not
 their reminders) before it picks a request and builds its text, so the pick and the header read what the ended turn decided (a
 scheduler's request its silent end closed is not ridden); it delivers the settled reminders after its own forward, on every way out.
+A post is IN FLIGHT from its first step to its last (`notePostInFlight`): a reminder the engine decides for the conversation meanwhile —
+at the adapter's turn end, by the poll, by the sweep — is HANDED to it (`deliverOrHandOverWake`) and written after the post's prompt and
+after its caller watched the turn that prompt started (`afterForward`: a tracker request prompt or issue update is tracked inside the
+post). So the prompt that waited for a turn starts the next one on both json-stream lifecycles, and the reminded request joins it: a
+job the agent arms there is the waited request's (the arming pick's oldest own forward). Written first, the reminder would start that
+turn, and a post that waited for the idle would wait for the reminder's whole turn or, per turn, join it as the second forward.
 The settle never decides a watch whose session is gone (`sessionGone`: left to the poll), but a write rarely meets one: every path brings
 a dead process back before it writes (a post's ensure, an immediate forward's wake), so the dead turn's watch then reads the new idle
 process as an ended turn and is decided at the settle, unless the poll dropped it first.
@@ -158,7 +164,8 @@ the poll ticks every 10 s), and the old request would get the new turn's jobs, i
 The settle also runs at the adapter's own turn-end event (`handleAgentTurnEnded`), on every backend, so a watched turn's end is decided
 at once rather than at the next tick. For `claude-per-turn` it is the only place the end is decided at all: the stop is queued in that
 same tick and its window opens only in a later one, and once the stop is over the session is gone, which the poll reads as «tracking
-lost» (`sessionGone`), never as an end. A reminder decided there resumes the session through the ensure, which queues behind the stop.
+lost» (`sessionGone`), never as an end. A reminder decided there goes to a post waiting for that turn, else resumes the session
+through the ensure, which queues behind the stop.
 
 A session start and the replay of the prompts buffered during it are ONE start for the turn probe (`isTurnEndBlocked`:
 `StartupPromptBuffer.checkIsStarting` or `checkIsReplaying`, the latter from before the buffer is taken until after the held prompts are
@@ -169,7 +176,7 @@ written at once and joins the start's turn.
 
 | Path that starts a turn | Where it is written | The previous watch |
 |---|---|---|
-| forward after a wait: a Jira request prompt or issue update, the lost-work resume post (`postToSession`, `waitForIdle`) | `settleEndedTurns` awaited after the wait and the ensure, then the write; the settled reminders after it | ended (the usual case) → settled before the text is built, its reminder written after the post's prompt; still running (the 10-minute wait ran out) → joined; a process that died → the ensure has already brought it back, so its watch reads the new idle process as an ended turn and is decided at the settle |
+| forward after a wait: a Jira request prompt or issue update, the lost-work resume post (`postToSession`, `waitForIdle`) | `settleEndedTurns` awaited after the wait and the ensure, then the write and the caller's `afterForward`; the settled reminders, and the ones handed to the post, after them | ended (the usual case) → settled before the text is built, its reminder written after the post's prompt; still running (the 10-minute wait ran out) → joined; a process that died → the ensure has already brought it back, so its watch reads the new idle process as an ended turn and is decided at the settle |
 | immediate forward: a person's text, voice, file, album, `/schedule` in a topic (`deliverLatePrompt`), and the bot's writes through the same path — the answer-tail reminder (`remindAnswerTail`), the todo list's standalone reminder (`postTodoReminder`), a late answer to a question the bot set aside (`deliverLateAnswerPrompt`), the bot's own `/compact` | the write; a settled reminder right after it, in the same tick | ended → settled before it; running → joined: the json-stream Claude and OpenCode queue the prompt into the turn (OpenCode's `prompt_async`; only its retry wait is aborted). The frozen tmux Claude INTERRUPTS the turn (`interruptAndWaitIdle`), after the settle, so the interrupted turn's watch survives into the new turn and is decided at that turn's end. A session that is gone → woken first (`wakeSleepingSessionForPrompt`), then written: as on the post path, the dead turn's watch is decided at the settle as an ended turn. A session still starting → the prompt waits in the start's buffer, and the replay is its write (last rows) |
 | fire: a topic's and a tracker's (`createTopicPost` / `createTrackerPost` over `postToSession`) | as a forward after a wait; a topic's forwards one at a time per conversation | as a forward after a wait; the request it rides is picked after the settle |
 | «continue» after an API error, a limit or account wait, a fallback switch (`apiRetryKick`, `resumeTopicOnNewSession`) | the write, then `trackContinuationTurn` | the turn it continues reads `running` (an armed retry or wait blocks its end, `isTurnEndBlocked`; a nudge buffered behind a session start is blocked by the start and its replay): never settled, the «continue» merges into it (row 14); another request's ended watch → settled |
@@ -188,14 +195,16 @@ of them decides a turn that has not started:
    and the adopted-replay wait in `forwardPromptToAgent`), its reminders after the write. At a replayed write, and at a prompt that
    arrives during the replay, the probe reads the start: nothing is decided.
 2. The settle at a post (`postToSession`): after the busy wait and the first ensure, before the second limit check, the second ensure,
-   the pick and `buildText`; the decisions are persisted before the write, the reminders delivered after the post's forward. The ensure
-   returns once the session is up, and its replay runs on: a settle that lands while the start's buffered prompts are still being
-   written reads the start and decides nothing.
+   the pick and `buildText`; the decisions are persisted before the write, the reminders — with the ones handed to the post while it was
+   in flight — delivered after the post's forward and its caller's `afterForward`. The ensure returns once the session is up, and its
+   replay runs on: a settle that lands while the start's buffered prompts are still being written reads the start and decides nothing.
 3. The settle at a turn end (`handleAgentTurnEnded`): at the adapter's turn-end event, after the per-turn stop is queued and before its
-   window opens; no write of its own, so its reminders go at once (through the ensure, behind the stop). A turn end during a replay
-   reads the start, one with a written prompt not yet read reads `running` (`hasUnconsumedInput`): nothing is decided.
+   window opens; no write of its own, so its reminders are handed to a post in flight, else go at once (through the ensure, behind the
+   stop). A turn end during a replay reads the start, one with a written prompt not yet read reads `running` (`hasUnconsumedInput`):
+   nothing is decided.
 4. The poll (`pollWatchedTurn`, every 10 s): between writes, on its own probe and the same rule; during a start or a replay every watch
-   reads `running`. It re-checks its watch after the R21 write, so a watch a settle took meanwhile is not decided twice.
+   reads `running`. It re-checks its watch after the R21 write, so a watch a settle took meanwhile is not decided twice. What it decides
+   is handed to a post in flight, like the turn end's.
 5. `sessionGone` (the poll only; every settle leaves such a watch): dropped without a decision when the session is inactive and nothing
    blocks it — never during a start or a replay, which block it.
 6. The stale drop (the poll only): a `running` watch whose session is idle, unblocked and not busy for the whole backstop window is handed

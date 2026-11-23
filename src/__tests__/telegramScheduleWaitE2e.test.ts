@@ -23,6 +23,9 @@
  *   → the topic runs per-turn and a message arrives while the process stops after a turn: it is buffered and replayed after the resume.
  *     Nothing decides its turn before the agent took it in — no reminder while the agent works on it — and its one silent turn,
  *     decided at the turn's own end although the stop follows it at once, gets ONE reminder, then the answer: no give-up
+ *   → still per-turn: a one-shot fires while the agent works on the operator's message, and its post waits for that turn, which ends
+ *     silent. The fire is written first and starts the next turn; the operator's reminder follows it. So the watch the agent arms in
+ *     that turn is the fire's request's, not the reminded one's
  *
  * Before the rule, the engine reminded such an agent every 15 minutes whatever its watch said; before the scheduled-run model, every
  * fire opened a request that replaced the previous fire's, and an answered one's «working on it» was lost or chased. Nothing leaves the
@@ -43,6 +46,8 @@ import {
   fakeClaudeExitFlushDelayFileName,
   fakeClaudeHoldReleaseFileName,
   fakeOneShotDelaySeconds,
+  fakeOneShotNextWatchIssueKey,
+  fakeOneShotNextWatchMarker,
   fakeOneShotSilentMarker,
   fakeOneShotWatchIssueKey,
   fakeOneShotWatchMarker,
@@ -94,6 +99,8 @@ const checkRunTimeoutMs = 2 * watchCronIntervalMs;
 const perTurnStopHoldMs = 8 * msPerSecond;
 /** A buffered message's way to its answer: the stop, the resume, the held turn, the stop again, the reminder's resume and turn. */
 const bufferedFlowTimeoutMs = 3 * 60 * msPerSecond;
+/** Past a job's own instant its fire's post has started (the engine's timer delivers at once): a post behind a running turn waits. */
+const firePostStartMarginMs = 5 * msPerSecond;
 /** A one-shot armed `fakeOneShotDelaySeconds` ahead fires within this (the engine's timer, the post and the turn). */
 const oneShotFireTimeoutMs = (fakeOneShotDelaySeconds + 60) * msPerSecond;
 /** The follow-up a progress note gets after this long (production: 15 min) and the engine's sweep that would deliver it. */
@@ -110,6 +117,7 @@ let defaultTmuxSessionsBefore: string[] = [];
 let worker: ChildProcess | null = null;
 let nextWorker: ChildProcess | null = null;
 let thirdWorker: ChildProcess | null = null;
+let fourthWorker: ChildProcess | null = null;
 const schedulerRequester = 'scheduler';
 let openRequestId = '';
 let watchId = '';
@@ -128,6 +136,7 @@ function removeInstanceSync(): void {
   worker?.kill('SIGKILL');
   nextWorker?.kill('SIGKILL');
   thirdWorker?.kill('SIGKILL');
+  fourthWorker?.kill('SIGKILL');
   removeIsolatedInstanceSync(layout, charness);
 }
 
@@ -216,6 +225,7 @@ describe('A request waits for its schedule in a Telegram topic end to end: built
     worker?.kill('SIGKILL');
     nextWorker?.kill('SIGKILL');
     thirdWorker?.kill('SIGKILL');
+    fourthWorker?.kill('SIGKILL');
     await charness?.stop();
     removeInstanceSync();
     await fakeTelegram?.stop();
@@ -413,5 +423,48 @@ describe('A request waits for its schedule in a Telegram topic end to end: built
     } finally {
       fs.rmSync(path.join(getLayout().fakeStateDir, fakeClaudeExitFlushDelayFileName), { force: true });
     }
+  });
+
+  it('per-turn: a fire whose post waited behind the operator\'s silent turn starts the next turn and the operator\'s reminder follows it — the watch the agent arms in that turn is the fire\'s request\'s (review 16 #2)', async () => {
+    // A clean slate: the scheduler's request of the earlier steps closes, so this fire opens a request of its own.
+    fakeTelegram.pushOperatorMessage(topicThreadId, '/esc');
+    await getCharness().waitFor('every open request to close', replyTimeoutMs, () => Object.keys(readState().openRequests ?? {}).length === 0);
+    fourthWorker = await startNamedWorker('worker-fourth-run');
+    const watchIdsBefore = new Set(readPersistedSchedules().map((record) => record.id));
+    await armOneShotUnderFinishedRequest('WG-7', fakeOneShotNextWatchMarker);
+    const fireAt = getToolCalls('schedule_create').filter((call) => call.issueKey === 'WG-7').at(-1)?.args.onceAt;
+    assert.equal(typeof fireAt, 'string', 'the one-shot names its instant');
+
+    fakeTelegram.pushOperatorMessage(topicThreadId, 'WH-8 [fake:hold-silent-then-progress] a question that keeps the agent busy');
+    await getCharness().waitFor('the agent to work on the operator\'s message', agentTimeoutMs, () => readFakeLog<FakeClaudeTurn>(fakeClaudeLogFileNames.turns).some((turn) => turn.issueKey === 'WH-8'));
+    const operatorRequestId = readFakeLog<FakeClaudeTurn>(fakeClaudeLogFileNames.turns).find((turn) => turn.issueKey === 'WH-8')?.requestId ?? '';
+    assert.match(operatorRequestId, /^req_/);
+    // The one-shot fires while that turn runs: its post waits for the turn.
+    await sleep(Math.max(Date.parse(fireAt?.toString() ?? '') + firePostStartMarginMs - Date.now(), 0));
+    const isFirePrompt = (prompt: FakeClaudePrompt): boolean => prompt.text.includes(fakeOneShotNextWatchIssueKey);
+    assert.ok(!getAgentPrompts().some(isFirePrompt), 'the fire waits behind the running turn');
+
+    // The operator's turn ends with no answer; the per-turn stop follows at once and is held open for a while, so the waiting post
+    // sees the session idle and goes on while the stop runs: the fire and the operator's reminder both queue behind the stop.
+    const exitFlushDelayPath = path.join(getLayout().fakeStateDir, fakeClaudeExitFlushDelayFileName);
+    fs.writeFileSync(exitFlushDelayPath, perTurnStopHoldMs.toString());
+    try {
+      fs.writeFileSync(path.join(getLayout().fakeStateDir, fakeClaudeHoldReleaseFileName), '');
+      await getCharness().waitFor('the watch the fire\'s turn arms', bufferedFlowTimeoutMs, () =>
+        readPersistedSchedules().some((record) => record.name === fakeStatusWatchJobName && !watchIdsBefore.has(record.id)));
+    } finally {
+      fs.rmSync(exitFlushDelayPath, { force: true });
+    }
+    const prompts = getAgentPrompts();
+    const firePromptIndex = prompts.findIndex(isFirePrompt);
+    const fireRequestId = /\[Request (req_[A-Za-z0-9_-]+) · from: a scheduled run in this topic\]/.exec(prompts[firePromptIndex]?.text ?? '')?.[1] ?? '';
+    assert.match(fireRequestId, /^req_/, 'with nothing to ride, the fire opened the scheduler\'s request');
+    const watch = readPersistedSchedules().find((record) => record.name === fakeStatusWatchJobName && !watchIdsBefore.has(record.id));
+    assert.equal(watch?.requestId, fireRequestId, 'armed under the request whose fire started the turn — not the reminded operator\'s request');
+
+    await getCharness().waitFor('the operator\'s request to be answered after its reminder and follow-up', bufferedFlowTimeoutMs, () => readClosedRequests().some((closed) => closed.id === operatorRequestId));
+    const reminderIndex = getAgentPrompts().findIndex((prompt) => prompt.text.includes(`[Reminder · request ${operatorRequestId} is still open]`));
+    assert.ok(reminderIndex > firePromptIndex, `the waited fire was written first and the reminder followed it (fire ${firePromptIndex}, reminder ${reminderIndex})`);
+    assert.ok(!topic.listMessages().some((message) => message.text.includes('got no answer')), 'no give-up');
   });
 });

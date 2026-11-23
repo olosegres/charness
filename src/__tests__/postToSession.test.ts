@@ -78,6 +78,43 @@ describe('postToSession', () => {
     assert.deepEqual(outcomes.at(-1), 'deliver', 'a forward that failed');
   });
 
+  it('the post is IN FLIGHT from its first step to its last: a reminder decided meanwhile waits for its write, the caller\'s `afterForward` (it watches the turn the write started) runs before the settled reminders, and the release comes after everything (review 16 #2)', async () => {
+    const calls: string[] = [];
+    let isBusy = true;
+    const deps = createDeps(calls, {
+      checkBusy: () => isBusy,
+      sleep: async () => { isBusy = false; },
+      notePostInFlight: (conversationKey) => {
+        calls.push(`in flight ${conversationKey}`);
+        return async () => { calls.push('release'); };
+      },
+      settleEndedTurns: async () => {
+        calls.push('settle');
+        return async () => { calls.push('deliver the settled and handed-over wakes'); };
+      },
+    });
+    const afterForward = async (): Promise<void> => { calls.push('watch the post\'s turn'); };
+    assert.deepEqual(await postToSession(deps, 'k', 'p', undefined, { afterForward }), { ok: true, isHeld: false });
+    assert.deepEqual(calls, ['in flight k', 'ensure k -', 'settle', 'ensure k -', 'forward k p', 'watch the post\'s turn', 'deliver the settled and handed-over wakes', 'release']);
+  });
+
+  it('`afterForward` runs only for a prompt that was written — never for a hold or a failed forward — and every way out releases the post (review 16 #2)', async () => {
+    const calls: string[] = [];
+    const withPorts = (overrides: Partial<PostToSessionDeps>): PostToSessionDeps => createDeps(calls, {
+      notePostInFlight: () => async () => { calls.push('release'); },
+      ...overrides,
+    });
+    const afterForward = async (): Promise<void> => { calls.push('afterForward'); };
+    await postToSession(withPorts({ holdForLimitResume: () => true }), 'k', 'p', undefined, { afterForward });
+    await postToSession(withPorts({ ensureSession: async () => ({ ok: false, reason: 'start-failed' }) }), 'k', 'p', undefined, { afterForward });
+    await postToSession(withPorts({ forwardPrompt: async () => { throw new Error('write failed'); } }), 'k', 'p', undefined, { afterForward });
+    assert.deepEqual(calls.filter((call) => call === 'release' || call === 'afterForward'), ['release', 'release', 'release'], 'released three times, never past a write that did not happen');
+    const thrown: string[] = [];
+    const failingWatch = async (): Promise<void> => { throw new Error('the watch could not be stored'); };
+    await assert.rejects(postToSession(createDeps(thrown, { notePostInFlight: () => async () => { thrown.push('release'); } }), 'k', 'p', undefined, { afterForward: failingWatch }), /could not be stored/);
+    assert.deepEqual(thrown.at(-1), 'release', 'a failing `afterForward` is the post\'s error, and the post is still released');
+  });
+
   it('a session that cannot be ensured is never forwarded to', async () => {
     const calls: string[] = [];
     const deps = createDeps(calls, { ensureSession: async () => ({ ok: false, reason: 'start-failed' }) });

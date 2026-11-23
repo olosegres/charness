@@ -2536,6 +2536,53 @@ describe('turn boundaries: a forward settles the watches whose turn already ende
     assert.equal(engine.getArmingRequestIdOf(issueKey), mention.id, 'the mention started the turn: a watch armed in it is the mention\'s');
   });
 
+  it('a turn end\'s reminder is HANDED to a post on its way to its write: it is delivered after the post\'s own prompt, so the request that waited starts the turn (review 16 #2)', async () => {
+    const ledger = await createLedger();
+    const engine = createEngine(ledger);
+    const handOver = await ledger.createRequest(issueKey, handOverOf('ann'));
+    await engine.trackForwardedTurn(issueKey, handOver.id, { isRequestPrompt: true });
+    probe = busyProbe;
+    await engine.pollWatchedTurns();
+    // A mention's post waits for the hand-over's turn; that turn ends silent and the adapter's turn end settles it.
+    const releasePost = engine.notePostInFlight(issueKey);
+    probe = idleProbe;
+    await engine.deliverOrHandOverWake(issueKey, await engine.settleEndedTurnsOf(issueKey));
+    assert.equal(ledger.listOpenRequestsOf(issueKey).find((open) => open.id === handOver.id)?.silentTurnCount, 1, 'decided and persisted at the turn end');
+    assert.deepEqual(getWakeUpReasons(), [], 'handed to the post: nothing written yet');
+    // The post's settle takes it; the post writes the mention and watches its turn, then delivers.
+    const deliverAfterWrite = await engine.settleEndedTurnsForPost(issueKey);
+    assert.deepEqual(getWakeUpReasons(), []);
+    const mention = await ledger.createRequest(issueKey, mentionOf('bob'));
+    await engine.trackForwardedTurn(issueKey, mention.id, { isRequestPrompt: true });
+    await deliverAfterWrite();
+    assert.deepEqual(getWakeUpReasons(), ['silentTurn'], 'the reminder follows the mention');
+    assert.equal(wakeUps.at(0)?.requestId, handOver.id);
+    assert.equal(engine.getArmingRequestIdOf(issueKey), mention.id, 'the mention started the turn the reminder joined: a watch armed in it is the mention\'s');
+    await releasePost();
+    assert.equal(getWakeUpReasons().length, 1, 'the release has nothing left to deliver');
+  });
+
+  it('while a post is in flight the poll\'s decision is handed to it too; a release delivers what no post took — a post held over a limit, an ensure that failed (review 16 #2)', async () => {
+    const ledger = await createLedger();
+    const engine = createEngine(ledger);
+    const handOver = await ledger.createRequest(issueKey, handOverOf('ann'));
+    await engine.trackForwardedTurn(issueKey, handOver.id, { isRequestPrompt: true });
+    probe = busyProbe;
+    await engine.pollWatchedTurns();
+    const releaseFirst = engine.notePostInFlight(issueKey);
+    const releaseSecond = engine.notePostInFlight(issueKey);
+    probe = idleProbe;
+    await engine.pollWatchedTurns();
+    assert.deepEqual(getWakeUpReasons(), [], 'the poll found the silent end and handed its reminder to the posts in flight');
+    await releaseFirst();
+    assert.deepEqual(getWakeUpReasons(), [], 'another post is still on its way: it may take it');
+    await releaseFirst();
+    await releaseSecond();
+    assert.deepEqual(getWakeUpReasons(), ['silentTurn'], 'the last post left without taking it: delivered at its release, once');
+    await engine.deliverOrHandOverWake(issueKey, async () => { wakeUps.push({ requestId: 'req_later', reason: 'progressFollowUp' }); });
+    assert.equal(getWakeUpReasons().length, 2, 'no post in flight: a wake-up goes out at once');
+  });
+
   it('a watch made while the session starts — its prompt waits in the startup buffer — is never decided by the replay\'s settle: the start is held, and the turn is decided at its REAL end (review 15 #1)', async () => {
     const ledger = await createLedger();
     const engine = createEngine(ledger);

@@ -82,6 +82,8 @@ import {
   fakeOneShotSilentMarker,
   fakeOneShotWatchIssueKey,
   fakeOneShotWatchMarker,
+  fakeOneShotNextWatchIssueKey,
+  fakeOneShotNextWatchMarker,
   fakeStatusWatchJobName,
   fakeStatusWatchTargetFileName,
   fakeWatchJobName,
@@ -228,9 +230,12 @@ import { claudeSessionStateEventsVariableName } from '../../utils/jsonStreamHost
  *    header names) or `drop-watch` (`fakeDropWatchWakeMarker`: cancels the watch and ends the turn with no answer);
  *  - `hold-silent-once` — the first turn keeps working until the test writes `fakeClaudeHoldReleaseFileName`, then ends with no answer;
  *    later turns answer `final` (a reminder's turn answers);
+ *  - `hold-silent-then-progress` — the same first turn; the second answers `progress` (the request stays open, its follow-up comes),
+ *    later turns answer `final`;
  *  - `one-shot-then-final` — the first turn arms a one-shot prompt `fakeOneShotDelaySeconds` ahead (`[fake:answer]`) and answers `final`; the fire
  *    then answers `final` to the request id its header names — a request that is already finished. A marker in the text chooses another
- *    prompt for the one-shot (`fakeOneShotSilentMarker`: the fire says nothing; `fakeOneShotWatchMarker`: the fire arms a status watch);
+ *    prompt for the one-shot (`fakeOneShotSilentMarker`: the fire says nothing; `fakeOneShotWatchMarker`, `fakeOneShotNextWatchMarker`: the
+ *    fire arms a status watch);
  *  - `usage-limit-once` — its first turn ends the way a subscription limit does: an error `result` saying the
  *    session limit is hit and when it resets (the text of a `[limit-resets:<ISO instant or clock>]` token in the
  *    request's text); the next turn — the one the bot sends after it moved the topic to another account —
@@ -281,8 +286,8 @@ import { claudeSessionStateEventsVariableName } from '../../utils/jsonStreamHost
  * `FAKE_CLAUDE_STATE_DIR` (per-request turn counts, the conversations held).
  */
 
-export type FakeClaudeMode = 'answer' | 'silent-once' | 'silent' | 'hang-once' | 'hold-once' | 'hold-progress-once' | 'slow-once' | 'progress' | 'finish-together' | 'answer-after-queued' | 'background' | 'background-notify' | 'compact' | 'overflow' | 'fetch-attachment' | 'run-tool' | 'reply-to' | 'send-file' | 'usage-limit-once' | 'ask' | 'ask-again' | 'ask-two' | 'ask-long' | 'ask-repeat' | 'send-messages' | 'watch-progress' | 'one-shot-then-final' | 'hold-silent-once';
-const fakeModes: readonly FakeClaudeMode[] = ['answer', 'silent-once', 'silent', 'hang-once', 'hold-once', 'hold-progress-once', 'slow-once', 'progress', 'finish-together', 'answer-after-queued', 'background', 'background-notify', 'compact', 'overflow', 'fetch-attachment', 'run-tool', 'reply-to', 'send-file', 'usage-limit-once', 'ask', 'ask-again', 'ask-two', 'ask-long', 'ask-repeat', 'send-messages', 'watch-progress', 'one-shot-then-final', 'hold-silent-once'];
+export type FakeClaudeMode = 'answer' | 'silent-once' | 'silent' | 'hang-once' | 'hold-once' | 'hold-progress-once' | 'slow-once' | 'progress' | 'finish-together' | 'answer-after-queued' | 'background' | 'background-notify' | 'compact' | 'overflow' | 'fetch-attachment' | 'run-tool' | 'reply-to' | 'send-file' | 'usage-limit-once' | 'ask' | 'ask-again' | 'ask-two' | 'ask-long' | 'ask-repeat' | 'send-messages' | 'watch-progress' | 'one-shot-then-final' | 'hold-silent-once' | 'hold-silent-then-progress';
+const fakeModes: readonly FakeClaudeMode[] = ['answer', 'silent-once', 'silent', 'hang-once', 'hold-once', 'hold-progress-once', 'slow-once', 'progress', 'finish-together', 'answer-after-queued', 'background', 'background-notify', 'compact', 'overflow', 'fetch-attachment', 'run-tool', 'reply-to', 'send-file', 'usage-limit-once', 'ask', 'ask-again', 'ask-two', 'ask-long', 'ask-repeat', 'send-messages', 'watch-progress', 'one-shot-then-final', 'hold-silent-once', 'hold-silent-then-progress'];
 /**
  * How long an `answer-after-queued` turn waits for the next message before it answers anyway: four polls of the 10 s
  * floor, or what the launcher sets (`fakeClaudeQueuedWaitMaxMsEnvName`) for the instance's own poll.
@@ -1471,7 +1476,7 @@ async function runTurn(argv: readonly string[], sessionId: string, content: stri
     endTurn(sessionId, 'Thinking about it.');
     return;
   }
-  if (state.mode === 'hold-silent-once' && isFirstTurn) {
+  if ((state.mode === 'hold-silent-once' || state.mode === 'hold-silent-then-progress') && isFirstTurn) {
     // Busy until the test releases it, then ended with no answer: the test reads the request while the turn runs.
     await waitForHoldRelease();
     endTurn(sessionId, 'Thinking about it.');
@@ -1582,11 +1587,13 @@ async function runTurn(argv: readonly string[], sessionId: string, content: stri
   if (state.mode === 'one-shot-then-final' && isFirstTurn && server) {
     const oneShotPrompt = content.includes(fakeOneShotSilentMarker) ? `${fakeKeepWatchToken} Check the deploy; nothing to report.`
       : content.includes(fakeOneShotWatchMarker) ? `${fakeOneShotWatchIssueKey} [fake:watch-progress] ${fakeKeepWatchWakeMarker} The deploy broke: launch the fix and watch it.`
-        : '[fake:answer] Check the deploy and tell the requester.';
+        : content.includes(fakeOneShotNextWatchMarker) ? `${fakeOneShotNextWatchIssueKey} [fake:watch-progress] ${fakeKeepWatchWakeMarker} The deploy broke again: launch the fix and watch it.`
+          : '[fake:answer] Check the deploy and tell the requester.';
     const args = { name: 'check the deploy', onceAt: new Date(Date.now() + fakeOneShotDelaySeconds * 1000).toISOString(), prompt: oneShotPrompt };
     appendJsonLine(fakeClaudeLogFileNames.toolCalls, { issueKey: state.issueKey, tool: 'schedule_create', args, outcome: await callBotTool(server, 'schedule_create', args) });
   }
-  const kind = state.mode === 'progress' || (state.mode === 'hold-progress-once' && isFirstTurn) || isArmingWatch ? 'progress' : 'final';
+  const isProgressTurn = state.mode === 'progress' || (state.mode === 'hold-progress-once' && isFirstTurn) || (state.mode === 'hold-silent-then-progress' && state.turnCount === 2);
+  const kind = isProgressTurn || isArmingWatch ? 'progress' : 'final';
   endTurn(sessionId, await answer(requestId, kind, state.turnCount));
   if (state.mode === 'background') {
     // Reported AFTER the result, as the CLI does for a task the turn left running.

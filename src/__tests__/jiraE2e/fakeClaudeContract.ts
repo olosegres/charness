@@ -219,11 +219,15 @@ export const fakeOneShotDelaySeconds = 25;
  * Markers in a `one-shot-then-final` request's text that choose its one-shot's prompt instead of `[fake:answer]`:
  * {@link fakeOneShotSilentMarker} — the fire's turn has nothing to report and ends with no answer ({@link fakeKeepWatchToken});
  * {@link fakeOneShotWatchMarker} — the fire's turn is a `watch-progress` orchestrator of {@link fakeOneShotWatchIssueKey}: it arms the
- * status watch of the worker the test named and answers `progress`, and the watch's wake only keeps the watch.
+ * status watch of the worker the test named and answers `progress`, and the watch's wake only keeps the watch;
+ * {@link fakeOneShotNextWatchMarker} — the same orchestrator under {@link fakeOneShotNextWatchIssueKey}, for a second such fire in one
+ * flow (`watch-progress` arms only for the first request of its key).
  */
 export const fakeOneShotSilentMarker = '[one-shot:silent]';
 export const fakeOneShotWatchMarker = '[one-shot:watch]';
 export const fakeOneShotWatchIssueKey = 'WD-4';
+export const fakeOneShotNextWatchMarker = '[one-shot:watch-next]';
+export const fakeOneShotNextWatchIssueKey = 'WI-9';
 
 /**
  * While this file exists, `ask` mode streams its content as one assistant text right after it puts the question, while the

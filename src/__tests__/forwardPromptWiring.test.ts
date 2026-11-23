@@ -116,12 +116,19 @@ test('the turn probe reads the startup buffer\'s replay as the start, and the he
 
 test('a turn\'s end is decided at the adapter\'s own turn-end event, after a per-turn stop is queued — the stop would otherwise leave the watch to «session gone» (review 15 P1)', () => {
   const body = getFunctionBody('handleAgentTurnEnded');
-  assert.match(body, /settleEndedTurnsAndRemind\(key\);/);
-  assert.ok(body.indexOf('suspendThreadSession(key)') < body.indexOf('settleEndedTurnsAndRemind(key)'), 'after the stop is queued: its window opens only in a later tick');
-  assert.doesNotMatch(body.slice(0, body.indexOf('settleEndedTurnsAndRemind(key)')), /return;/, 'no early return skips it for another backend');
-  // The helper settles and delivers the reminders once persisted; the write choke point uses the same helper.
+  assert.match(body, /settleTurnEnd\(key\);/);
+  assert.ok(body.indexOf('suspendThreadSession(key)') < body.indexOf('settleTurnEnd(key)'), 'after the stop is queued: its window opens only in a later tick');
+  assert.doesNotMatch(body.slice(0, body.indexOf('settleTurnEnd(key)')), /return;/, 'no early return skips it for another backend');
+  // The write choke point settles before its write and delivers right after it.
   assert.match(getFunctionBody('settleEndedTurnsAndRemind'), /requestWakeUpEngine\?\.settleEndedTurnsOf\(key\)\.then\(\(deliverSettledWakes\) => deliverSettledWakes\(\)\)/);
   assert.match(getFunctionBody('forwardPromptToLiveAgent'), /^[^]*?settleEndedTurnsAndRemind\(key\);[^]*?noteThreadActivity\(key\);/);
+});
+
+test('a turn end\'s reminders are handed to a post waiting for that turn; the post\'s settle takes them, and the post registers itself in flight (review 16 #2)', () => {
+  assert.match(getFunctionBody('settleTurnEnd'), /engine\.settleEndedTurnsOf\(key\)\.then\(\(deliverSettledWakes\) => engine\.deliverOrHandOverWake\(key, deliverSettledWakes\)\)/);
+  const postDeps = getFunctionBody('createSessionPostDeps');
+  assert.match(postDeps, /settleEndedTurns: \(conversationKey\) => requestWakeUpEngine\?\.settleEndedTurnsForPost\(keyFromString\(conversationKey\)\)/);
+  assert.match(postDeps, /notePostInFlight: \(conversationKey\) => requestWakeUpEngine\?\.notePostInFlight\(keyFromString\(conversationKey\)\)/);
 });
 
 test('a bot-made prompt that waits for an adopt replay behind a start counts only once replayed', () => {
