@@ -6224,8 +6224,9 @@ async function wakeSleepingSession(key: SessionKey): Promise<string | null> {
  * is gone the window closes WITHOUT dropping those prompts, and if any wait the
  * session is resumed for them at once (its own window replays them) — also when
  * the stop threw, so a held prompt never waits in a closed buffer. A conversation
- * released during the stop (`/quit`, `/new`, leaving the folder: no id is left to
- * resume) starts nothing for them: they are dropped (a person is told). The
+ * released during the stop — `/quit`, leaving the folder, or `/new`, which clears the
+ * ids before it waits for the stop: no id is left to resume — starts nothing for
+ * them: they are dropped (a person is told). The
  * "working" check is repeated inside the transition: a turn may have started
  * while the fire waited its turn in the queue.
  */
@@ -7927,6 +7928,10 @@ command('new', async (_ctx, key) => {
   }
   // A fresh session does not know the old one's request: it closes silently.
   cancelConversationRequest(key);
+  // The ids go first, before the transition below waits for a stop under way: that stop then finds no conversation to resume for the
+  // prompts it held and drops them, a person told to send theirs again. Resumed, they would start a turn of the old conversation only for
+  // this transition to kill it (review 21 nit 4). `releaseThreadSession` releases the rest inside the transition.
+  await state.clearAgentSessionIds(key);
   // Release the current session (sweep + clear ids) via `releaseThreadSession`.
   // The fresh start below uses the thread's current adapter, so we keep the
   // adapter selection untouched. Both as the conversation's one transition: an idle stop under way ends first (with the resume for

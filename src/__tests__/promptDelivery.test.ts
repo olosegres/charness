@@ -430,6 +430,16 @@ describe('a startup window\'s prompts on every way out of it (review 19 #1)', ()
     assert.equal(botSource.match(/startAgentSession\(key(?:, (?:options\.)?args)?\)/g)?.length, 7, 'the ensure\'s two, /new, the first /claude, the wedge recovery\'s two, /claude_mode\'s fallback');
   });
 
+  it('/new releases the conversation\'s ids BEFORE it waits for a stop under way: the stop drops what it held, with the line, instead of resuming the old conversation for it only to kill it (review 21 nit 4)', () => {
+    const fresh = getBody("command('new', async", '//  /whoami /version /help /status');
+    const released = fresh.indexOf('await state.clearAgentSessionIds(key);');
+    assert.ok(released > 0, 'the ids go first');
+    assert.ok(released < fresh.indexOf('await runCommandSessionTransition(key, async () => {'), 'before the transition is queued behind the stop');
+    const stopDoc = getBody(' * @description The idle stop (lifecycle plan L3)', 'async function suspendThreadSession(');
+    assert.match(stopDoc.replace(/\n \* /g, ' '), /`\/new`, which clears the ids before it waits for the stop/, 'the JSDoc says how `/new` is a release during the stop');
+    assert.match(getBody('async function resumeForHeldPrompts(', 'const autoStopUnsupportedLoggedKeys'), /if \(getResumableSessionId\(key\) === null\) \{[^]*?startupPromptBuffer\.discardPrompts\(kStr\);/, 'no id left: dropped');
+  });
+
   it('a move\'s first prompt that reached no session tracks no continuation: nothing is reset, lifted or watched for a turn that never starts (review 19 nit 4)', () => {
     const resume = getBody('async function resumeTopicOnNewSession(', 'function getTopicBackendFamily(');
     assert.match(resume, /const delivery = await deliverPromptOrBuffer\(key, prompt\.text, \(outcome\) => \{\n\s*if \(outcome === 'replayed'\) \{\n\s*trackContinuation\(\)\.catch\(/, 'a buffered first prompt is tracked at its replay, and only then (review 20 #1)');
