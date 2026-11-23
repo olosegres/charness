@@ -1037,14 +1037,23 @@ describe('a request whose prompt never reached the agent is re-posted, not remin
     assert.deepEqual(wakeUpMessages, [{ reason: 'silentTurn', text: prompt, isRequestPrompt: true }], 'its wake posts the prompt again');
   });
 
-  it('a cancelled conversation\'s write stamp goes with it: no watch of the next conversation is named from a write of the one before (review 23 nit 6)', async () => {
+  it('a cancelled conversation\'s write stamp goes with it: a watch of the next conversation tracked while no process is live and no window holds its prompt names no process — never read as written into the one before, so not decided at the next idle as its silent turn (review 23 nit 6, review 24 nit 6)', async () => {
     const ledger = await createLedger();
     const engine = createEngine(ledger);
+    // The conversation's last write, into process 5; then the conversation ends (`/new`, a release).
     probe = { isActive: true, isBusy: false, hasUnconsumedInput: false, isTurnEndBlocked: false, processGeneration: 5 };
     engine.noteWrite(topicKey);
-    assert.equal(engine['writtenProcesses'].get(keyToString(topicKey)), 5);
     await engine.cancelConversation(topicKey);
-    assert.equal(engine['writtenProcesses'].has(keyToString(topicKey)), false);
+    // The next conversation's request, tracked with no live process and no window — the case the stamp names a watch from.
+    const request = await ledger.createRequest(topicKey, { kind: 'message', attributes: { requester: '424242' } }, { createPrompt: () => prompt });
+    probe = { isActive: false, isBusy: false, hasUnconsumedInput: null, isTurnEndBlocked: true };
+    await engine.trackForwardedTurn(topicKey, request.id, { isRequestPrompt: true, isPersonInput: true });
+    probe = { isActive: true, isBusy: false, hasUnconsumedInput: false, isTurnEndBlocked: false, processGeneration: 6 };
+    await engine.deliverOrHandOverWake(topicKey, await engine.settleEndedTurnsOf(topicKey));
+    // Named from a stamp of 5, it would read 6's idle as the end of a turn its prompt died in (the re-spawn case above): a silent turn,
+    // posted again. Unnamed, it is a prompt never written, which an idle does not decide.
+    assert.equal(ledger.getNewestOpenRequest(topicKey)?.silentTurnCount, 0, 'not decided as a silent turn');
+    assert.deepEqual(wakeUpMessages, [], 'nothing posted again');
   });
 
   it('a prompt tracked while a window holds it is never named from an earlier write: its replay names it (review 22 nit 2)', async () => {
