@@ -664,9 +664,14 @@ export class RequestWakeUpEngine {
     return this.persistDecision(turn.key, request, decision);
   }
 
-  /** R21: once the backend took a request prompt in, a wake-up is a reminder — the agent has read the request. */
+  /**
+   * R21: once the backend took a request prompt in, a wake-up is a reminder — the agent has read the request. A HELD turn end (an armed
+   * retry or limit wait, an API error in hand, a pending question, a start, a re-spawn, …) proves nothing: an error result empties the
+   * adapter's list of unconsumed inputs, so a prompt queued behind the failed turn reads as taken in, and marked then, the limit's resume
+   * would not post it again. Every hold leads to a turn end that is no longer held (the stop that drops the watch leaves the prompt unread).
+   */
   private async markPromptTakenIn(turn: WatchedRequestTurn, request: OpenRequestState, probe: SessionTurnProbe): Promise<void> {
-    if (turn.isRequestPrompt && request.isPromptTakenIn !== true && probe.isActive && checkIsTurnInputConsumed(turn, probe)) {
+    if (turn.isRequestPrompt && request.isPromptTakenIn !== true && probe.isActive && !probe.isTurnEndBlocked && checkIsTurnInputConsumed(turn, probe)) {
       await this.deps.ledger.updateOpenRequest(request.id, { isPromptTakenIn: true });
     }
   }

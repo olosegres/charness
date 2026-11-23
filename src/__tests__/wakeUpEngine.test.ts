@@ -798,6 +798,37 @@ describe('a request whose prompt never reached the agent is re-posted, not remin
     assert.equal(ledger.getNewestOpenRequest(topicKey)?.isPromptTakenIn, true);
   });
 
+  it('a HELD turn end is no proof the prompt was read: the poll marks nothing while a retry or limit wait, an API error in hand or a pending question holds it — the error result emptied the queue — and marks it once the turn runs on unheld (report 6, not fixed 1)', async () => {
+    const ledger = await createLedger();
+    const engine = createEngine(ledger);
+    const request = await ledger.createRequest(topicKey, { kind: 'trackerEvent', attributes: {} }, { createPrompt: () => prompt });
+    await engine.trackForwardedTurn(topicKey, request.id, { isRequestPrompt: true });
+    // The turn behind which the prompt was queued failed: the adapter reports nothing unread, and the failure holds the turn end.
+    probe = { isActive: true, isBusy: false, hasUnconsumedInput: false, isTurnEndBlocked: true };
+    await engine.pollWatchedTurns();
+    await engine.deliverOrHandOverWake(topicKey, await engine.settleEndedTurnsOf(topicKey));
+    await engine.pollWatchedTurns();
+    assert.equal(ledger.getNewestOpenRequest(topicKey)?.isPromptTakenIn, undefined, 'held: not marked, so a resume still posts the prompt');
+    assert.deepEqual(engine.getWatchedRequestIdsOf(topicKey), [request.id]);
+    // The hold ends (a question answered, a «continue» written) and the turn runs and takes the prompt in: marked.
+    probe = { isActive: true, isBusy: true, hasUnconsumedInput: false, isTurnEndBlocked: false };
+    await engine.pollWatchedTurns();
+    assert.equal(ledger.getNewestOpenRequest(topicKey)?.isPromptTakenIn, true);
+  });
+
+  it('a request whose held turn the bot then stops waking — «wait for reset» off — keeps its prompt unread: the resume posts it again (report 6, not fixed 1)', async () => {
+    const ledger = await createLedger();
+    const engine = createEngine(ledger);
+    const request = await ledger.createRequest(topicKey, { kind: 'trackerEvent', attributes: {} }, { createPrompt: () => prompt });
+    await engine.trackForwardedTurn(topicKey, request.id, { isRequestPrompt: true });
+    probe = { isActive: true, isBusy: false, hasUnconsumedInput: false, isTurnEndBlocked: true };
+    await engine.pollWatchedTurns();
+    await engine.stopWakingForLimitWait(topicKey);
+    probe = { isActive: true, isBusy: false, hasUnconsumedInput: false, isTurnEndBlocked: false };
+    await engine.pollWatchedTurns();
+    assert.equal(ledger.getNewestOpenRequest(topicKey)?.isPromptTakenIn, undefined);
+  });
+
   it('a reminder\'s turn never marks the prompt taken in; a request without a prompt is reminded as before', async () => {
     const ledger = await createLedger();
     const engine = createEngine(ledger);

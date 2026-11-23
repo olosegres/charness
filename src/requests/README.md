@@ -41,7 +41,8 @@ Numeric bounds are named constants in the files below; this README says only wha
 - **Alerts are durable.** A request's alert handle is stored with it. When the request closes by any path, the
   handle joins `unreleasedRequestAlerts` in the close's own save and leaves only once `releaseAlert`
   succeeded; `load` releases every leftover, so a crash never leaves an alert pinned for good.
-- **The prompt is kept** (`createPrompt`) until the agent took it in (`isPromptTakenIn`), so a failed post, a
+- **The prompt is kept** (`createPrompt`) until the agent took it in (`isPromptTakenIn`, read only on a turn end the bot does not hold:
+  § Turn starts), so a failed post, a
   restart or a limit wait re-delivers the real prompt — a bare reminder would name a request the agent never
   read. It is never written to the closed history. A prompt can wait for hours before it is delivered, so a
   connector whose prompt states something that changes meanwhile registers ONE refresher
@@ -211,8 +212,9 @@ turn's prompt in — so none of them decides a turn that has not started:
    the ensure, behind the stop). A turn end held by an API error the bot still handles (`checkIsApiErrorInHandling`) or by an armed
    retry, one during a replay, and one with a written prompt not yet read (`hasUnconsumedInput`) read `running`: nothing is decided.
 4. The poll (`pollWatchedTurn`, every 10 s): between writes, on its own probe and the same rule; during a start or a replay every watch
-   reads `running`. It re-checks its watch after the R21 write, so a watch a settle took meanwhile is not decided twice. What it decides
-   is handed to a post in flight, like the turn end's.
+   reads `running`. Its R21 write waits for a turn end that is not held (any hold, a pending question included, ends in such a turn end,
+   or in a stop that drops the watch with the prompt unread), and it re-checks its watch after that write, so a watch a settle took
+   meanwhile is not decided twice. What it decides is handed to a post in flight, like the turn end's.
 5. `sessionGone` (the poll only; every settle leaves such a watch): dropped without a decision when the session is inactive and nothing
    blocks it — never during a start or a replay, which block it.
 6. The stale drop (the poll only): a `running` watch whose session is idle, unblocked and not busy for the whole backstop window is handed
@@ -237,9 +239,9 @@ What can run between a json-stream `turnEnded` and the next write, checked again
    - a transient error's give-up: nothing is armed or stopped, so the turn is decided silent at once, as the poll decided it a tick later
      before the turn-end settle; its reminder starts a new retry cycle if the error persists;
    - the error result also empties the adapter's list of unconsumed inputs, so a prompt queued behind the failed turn reads as taken in.
-     The settle decides nothing while the error is in hand. NOT covered: the poll's R21 marking (`markPromptTakenIn`, run before its
-     state check) does not wait for a held turn end, so during an armed limit wait a request prompt queued behind the failed turn may be
-     marked taken in, and the resume then does not post it again — as before the turn-end settle.
+     The settle decides nothing while the error is in hand, and R21 marks nothing on a held turn end (`markPromptTakenIn`, the poll's
+     and the settle's): a prompt is marked once its turn runs on unheld and has taken it in, so after a limit wait the resume posts a
+     request prompt the failed turn may have dropped, and a stop that drops the watch leaves it unread.
 2. A post waiting for the turn (`postToSession` in `waitForIdle`, in flight): the settle's reminders are handed to it; its prompt is
    written first, its caller watches that turn (`afterForward`), then the reminders follow — on both lifecycles.
 3. The per-turn stop: queued in the same tick before the settle, its transition starts in a later microtask, so the settle reads the
