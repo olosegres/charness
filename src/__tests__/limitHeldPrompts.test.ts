@@ -257,6 +257,6 @@ describe('the bot holds and releases them (R23)', () => {
   });
 
   it('a held Jira request is watched when its prompt is posted, not when it was held — through the tracker turn poster (trackerTurnPoster.test.ts runs it)', () => {
-    assert.match(getFunction('function createJiraSessionDeps('), /\.\.\.createTrackerTurnPoster\(\{\n\s+post: \(key, prompt\) => postToSession\(sessionPostDeps, keyToString\(key\), prompt, adapterName\),/);
+    assert.match(getFunction('function createJiraSessionDeps('), /\.\.\.createTrackerTurnPoster\(\{\n\s+post: \(key, prompt, options\) => postToSession\(sessionPostDeps, keyToString\(key\), prompt, adapterName, options\),/);
   });
 });
