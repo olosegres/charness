@@ -9,7 +9,9 @@
  *     and drops the keyboard; ✖️ Cancel changes nothing and drops it too;
  *   • one-shot: a second tap, a question replaced by a newer one, one left in the history after the topic changed
  *     backend, or one the bot knows nothing about (a restart) only says it is out of date;
- *   • a switch that fails is reported in the same message.
+ *   • a switch that fails is reported in the same message;
+ *   • ✅ Continue holds the conversation as ending ahead of its toast and its «switching» edit, and hands the hold to the switch;
+ *     ✖️ Cancel holds nothing (review 24, own pass).
  */
 
 /** Test case: N/A — Charness has no Jira tracker. */
@@ -18,13 +20,20 @@ import { after, before, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { createBackendSwitch } from '../connectors/telegram/commands/backendSwitch';
 import type { BackendFamily, BackendSwitchTarget } from '../utils/backendSwitchPlan';
+import { ConversationEndings } from '../utils/conversationEnding';
+import { KeyedTransitionQueue } from '../utils/keyedTransitionQueue';
+import { keyToString, type SessionKey } from '../sessionKey';
 import { createCommandHarness, type CommandHarness } from './commandModuleHarness';
 
 let harness: CommandHarness;
 let currentFamily: BackendFamily | null = 'opencode';
 let switchError: Error | null = null;
-const switches: Array<{ target: BackendSwitchTarget; userMessage: string | undefined }> = [];
+const switches: Array<{ target: BackendSwitchTarget; userMessage: string | undefined; isHeldAtSwitch: boolean }> = [];
 let feature: ReturnType<typeof createBackendSwitch>;
+const transitions = new KeyedTransitionQueue();
+const endings = new ConversationEndings<SessionKey>({ toConversationKey: keyToString, runTransition: (key, transition) => transitions.run(keyToString(key), transition) });
+/** Each hold the tap took, with how many toasts and edits had gone out by then. */
+const holds: Array<{ answersAtHold: number; editsAtHold: number }> = [];
 
 /** What `/claude` asks for: the account the topic follows, not a pick. */
 const toClaude: BackendSwitchTarget = { backend: 'claude', profile: 'default', isProfilePicked: false, model: null };
@@ -43,9 +52,15 @@ describe('backendSwitch: the question over its ports', () => {
     feature = createBackendSwitch({
       ...harness.core,
       getCurrentFamily: () => currentFamily,
-      performBackendSwitch: async (_key, target, options) => {
-        switches.push({ target, userMessage: options.userMessage });
+      holdConversationEnding: (key) => {
+        holds.push({ answersAtHold: harness.fakeTelegram.callbackAnswers.length, editsAtHold: harness.edits.length });
+        return endings.hold(key);
+      },
+      performBackendSwitch: async (key, target, options) => {
+        switches.push({ target, userMessage: options.userMessage, isHeldAtSwitch: endings.checkIsEnding(keyToString(key)) });
         if (switchError) throw switchError;
+        // The move's own transition ends the hold, as `moveTopicToOtherBackend` does.
+        await options.ending.run(async () => undefined);
       },
     });
     feature.registerBackendSwitchCallbacks();
@@ -73,10 +88,34 @@ describe('backendSwitch: the question over its ports', () => {
     switches.length = 0;
     const messageId = await ask({ from: 'claude', target: toOpenCode, userMessage: 'fix the flaky test' });
     await harness.tapButton(messageId, 'bsw_ok');
-    assert.deepEqual(switches, [{ target: toOpenCode, userMessage: 'fix the flaky test' }]);
+    assert.deepEqual(switches, [{ target: toOpenCode, userMessage: 'fix the flaky test', isHeldAtSwitch: true }]);
     const edits = harness.edits.filter((edit) => edit.messageId === messageId);
     assert.deepEqual(edits.map((edit) => edit.text), ['🔁 Switching this topic to OpenCode openai/gpt-5…', '🔁 Switched this topic to OpenCode openai/gpt-5.']);
     for (const edit of edits) assert.deepEqual(harness.getKeyboardData(edit), [], 'the keyboard is consumed');
+  });
+
+  it('✅ Continue holds the conversation as ending ahead of its toast and its «switching» edit, and lets go once the switch is over; ✖️ Cancel holds nothing (review 24, own pass)', async () => {
+    currentFamily = 'claude';
+    switches.length = 0;
+    holds.length = 0;
+    const cancelled = await ask({ from: 'claude', target: toOpenCode });
+    await harness.tapButton(cancelled, 'bsw_no');
+    assert.deepEqual(holds, [], 'a cancel ends nothing');
+    const messageId = await ask({ from: 'claude', target: toOpenCode });
+    const answersBefore = harness.fakeTelegram.callbackAnswers.length;
+    const editsBefore = harness.edits.length;
+    await harness.tapButton(messageId, 'bsw_ok');
+    assert.deepEqual(holds, [{ answersAtHold: answersBefore, editsAtHold: editsBefore }], 'held before the toast and the edit went out');
+    assert.ok(harness.fakeTelegram.callbackAnswers.length > answersBefore && harness.edits.length > editsBefore, 'the toast and the edits did go out');
+    assert.equal(switches.at(-1)?.isHeldAtSwitch, true, 'still held when the switch starts');
+    assert.equal(endings.checkIsEnding(keyToString(harness.key)), false, 'let go once it is over');
+    switchError = new Error('the OpenCode server is down');
+    try {
+      await harness.tapButton(await ask({ from: 'claude', target: toOpenCode }), 'bsw_ok');
+    } finally {
+      switchError = null;
+    }
+    assert.equal(endings.checkIsEnding(keyToString(harness.key)), false, 'a failed switch lets go too');
   });
 
   it('a second tap on the same question only says it is out of date and switches nothing more', async () => {

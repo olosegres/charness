@@ -21,6 +21,7 @@ import {
   type BackendFamily,
   type BackendSwitchTarget,
 } from '../../../utils/backendSwitchPlan';
+import type { ConversationEnding } from '../../../utils/conversationEnding';
 import { buildMessageSnapshotKey, getCallbackMessageId } from './callbackMessage';
 import type { BotCore } from './botCore';
 
@@ -33,10 +34,16 @@ export interface BackendSwitchPorts
   /** The backend family the topic's agent runs on now; `null` for no agent, a shell or an unknown name. */
   getCurrentFamily: (key: SessionKey) => BackendFamily | null;
   /**
-   * Make the switch the operator confirmed: move the topic to `target` and hand the conversation over (the context
-   * bridge is the new agent's first prompt). `userMessage` is the text typed with the command (`/opencode do X`).
+   * Hold the topic's conversation as ending (`utils/conversationEnding.ts`): the «switch» tap ends it, and holds it ahead of its toast
+   * and its «switching» edit, so a stop under way drops what it held instead of resuming the backend being left.
    */
-  performBackendSwitch: (key: SessionKey, target: BackendSwitchTarget, options: { userMessage?: string }) => Promise<void>;
+  holdConversationEnding: (key: SessionKey) => ConversationEnding;
+  /**
+   * Make the switch the operator confirmed: move the topic to `target` and hand the conversation over (the context
+   * bridge is the new agent's first prompt). `userMessage` is the text typed with the command (`/opencode do X`);
+   * `ending` is the tap's hold, which the move's own transition ends.
+   */
+  performBackendSwitch: (key: SessionKey, target: BackendSwitchTarget, options: { userMessage?: string; ending: ConversationEnding }) => Promise<void>;
 }
 
 /** What a question remembers, per MESSAGE: where the topic was asked to go from, and what the tap should do. */
@@ -49,7 +56,7 @@ interface PendingSwitch {
 
 /** @description Build the question and its buttons over their ports. */
 export function createBackendSwitch(ports: BackendSwitchPorts) {
-  const { bot, replyToThread, editThreadMessage, authoriseContext, withThreadLocale, getCurrentFamily, performBackendSwitch } = ports;
+  const { bot, replyToThread, editThreadMessage, authoriseContext, withThreadLocale, getCurrentFamily, holdConversationEnding, performBackendSwitch } = ports;
 
   /** Per MESSAGE, keyed by chat + message id (`buildMessageSnapshotKey`): a message id is unique only within one chat. */
   const pendingByMessage = new Map<string, PendingSwitch>();
@@ -107,19 +114,27 @@ export function createBackendSwitch(ports: BackendSwitchPorts) {
         return;
       }
       forget(snapshotKey);
-      await ctx.answerCbQuery();
       const to = formatBackendSwitchTarget(pending.target);
       if (ctx.match[0] === backendSwitchCancelCallback) {
+        await ctx.answerCbQuery();
         await editThreadMessage(key, messageId, t('backendSwitch.cancelled', { from: formatBackendFamily(pending.from) }));
         return;
       }
-      await editThreadMessage(key, messageId, t('backendSwitch.switching', { to }));
+      // The switch ends the conversation the topic leaves, known at the tap: held ahead of the toast and the paced «switching» edit
+      // (review 24, own pass).
+      const ending = holdConversationEnding(key);
       try {
-        await performBackendSwitch(key, pending.target, { userMessage: pending.userMessage });
-        await editThreadMessage(key, messageId, t('backendSwitch.switched', { to }));
-      } catch (e) {
-        console.error(`[backendSwitch] ${keyToString(key)}: the switch to ${to} failed:`, e instanceof Error ? e.message : e);
-        await editThreadMessage(key, messageId, t('backendSwitch.failed', { to, error: e instanceof Error ? e.message : 'unknown error' }));
+        await ctx.answerCbQuery();
+        await editThreadMessage(key, messageId, t('backendSwitch.switching', { to }));
+        try {
+          await performBackendSwitch(key, pending.target, { userMessage: pending.userMessage, ending });
+          await editThreadMessage(key, messageId, t('backendSwitch.switched', { to }));
+        } catch (e) {
+          console.error(`[backendSwitch] ${keyToString(key)}: the switch to ${to} failed:`, e instanceof Error ? e.message : e);
+          await editThreadMessage(key, messageId, t('backendSwitch.failed', { to, error: e instanceof Error ? e.message : 'unknown error' }));
+        }
+      } finally {
+        ending.release();
       }
     }));
   }

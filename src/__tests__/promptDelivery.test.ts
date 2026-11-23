@@ -409,13 +409,13 @@ describe('a startup window\'s prompts on every way out of it (review 19 #1)', ()
     assert.match(suspend, /\} finally \{\n\s*startupPromptBuffer\.closeWindow\(kStr\);\n(?:\s*\/\/[^\n]*\n)*\s*await resumeForHeldPrompts\(key\);\n\s*\}\n\s*\}\);/, 'inside the stop\'s own transition, in the finally of the stop (review 20 nit 3)');
     assert.match(suspend, /\} finally \{\n(?:\s*\/\/[^\n]*\n)*\s*rearmThreadIdleTimer\(key\);\n\s*\}\n\}/);
     const resume = getBody('async function resumeForHeldPrompts(', 'const autoStopUnsupportedLoggedKeys');
-    assert.match(resume, /if \(!startupPromptBuffer\.checkHasPrompts\(kStr\)\) return;\n\s*if \(checkIsConversationBeingEnded\(kStr\) \|\| getResumableSessionId\(key\) === null\) \{\n[^]*?startupPromptBuffer\.discardPrompts\(kStr\);\n\s*return;\n\s*\}\n\s*const ensured = await ensureAgentSessionNow\(key, \{\}\);/, 'the transition\'s own ensure: the queued one would wait for itself');
+    assert.match(resume, /if \(!startupPromptBuffer\.checkHasPrompts\(kStr\)\) return;\n\s*if \(conversationEndings\.checkIsEnding\(kStr\) \|\| getResumableSessionId\(key\) === null\) \{\n[^]*?startupPromptBuffer\.discardPrompts\(kStr\);\n\s*return;\n\s*\}\n\s*const ensured = await ensureAgentSessionNow\(key, \{\}\);/, 'the transition\'s own ensure: the queued one would wait for itself');
   });
 
   it('every start or resume a command makes runs as the conversation\'s one transition, so none shares a startup window with an ensure or a stop (review 20 nit 3)', () => {
     assert.match(getBody('function runCommandSessionTransition<TResult>(', 'async function waitForPendingRespawn('), /return sessionTransitions\.run\(keyToString\(key\), async \(\) => \{\n\s*await waitForPendingRespawn\(key\);\n\s*return transition\(\);\n\s*\}\);/);
     const fresh = getBody("command('new', async", '//  /whoami /version /help /status');
-    assert.match(fresh, /runEndingConversation\(key, async \(\) => \{\n\s*await releaseThreadSession\(key\);\n\s*return startAgentSession\(key\);\n\s*\}\)/, '/new (queued by `runEndingConversation`, below)');
+    assert.match(fresh, /conversationEndings\.hold\(key\)\.run\(async \(\) => \{\n\s*await releaseThreadSession\(key\);\n\s*return startAgentSession\(key\);\n\s*\}\)/, '/new (queued by its hold, below)');
     assert.match(getBody('async function handleAgentStart(', 'function handleStartCommand('), /: await runCommandSessionTransition\(key, async \(\) => \(getThreadAdapter\(key\)\.checkIsActive\(key\)\n\s*\? t\('agent\.already_active', \{ label: getThreadAdapter\(key\)\.label \}\)\n\s*: startAgentSession\(key, args\)\)\);/, 'a first /claude or /opencode, finding a session another trigger started meanwhile');
     const wedge = getBody('async function handleNoResponseWithLocale(', '/**\n * @description Surface a logged-out');
     assert.equal(wedge.match(/await runCommandSessionTransition\(key, async \(\) => \{/g)?.length, 2, 'the wedge recovery\'s fork and restart');
@@ -425,8 +425,8 @@ describe('a startup window\'s prompts on every way out of it (review 19 #1)', ()
     assert.ok(switchNow.includes('if ((await resumeSleepingSession(key, sessionId, { isWithRecentContext: true })) === null) {'), 'its resume opens a window, as a wake\'s does');
     assert.match(switchNow, /startupPromptBuffer\.discardBotPrompts\(keyToString\(key\)\);\n\s*\}\n\s*const msg = await startAgentSession\(key\);/, 'the fresh start takes the failed resume\'s window over');
     assert.doesNotMatch(switchNow, /\.resumeSession\(/, 'no resume without a window');
-    assert.match(getBody('async function resumeSessionByIndex(', 'async function resumePickedSession('), /runEndingConversation\(key, \(\) => resumePickedSession\(key, sessionId\)\)/, '/resume\'s pick');
-    assert.match(getBody('async function runEndingConversation<TResult>(', 'async function waitForPendingRespawn('), /return await runCommandSessionTransition\(key, \(\) => \{/, 'which queues them as the one transition');
+    assert.match(getBody('async function resumeSessionByIndex(', 'async function resumePickedSession('), /\(ending \?\? conversationEndings\.hold\(key\)\)\.run\(\(\) => resumePickedSession\(key, sessionId\)\)/, '/resume\'s pick');
+    assert.match(botSource, /const conversationEndings = new ConversationEndings<SessionKey>\(\{ toConversationKey: keyToString, runTransition: runCommandSessionTransition \}\);/, 'which queues them as the one transition');
     // Every start outside the ensure is one of those.
     assert.equal(botSource.match(/startAgentSession\(key(?:, (?:options\.)?args)?\)/g)?.length, 7, 'the ensure\'s two, /new, the first /claude, the wedge recovery\'s two, /claude_mode\'s fallback');
   });
@@ -455,41 +455,82 @@ describe('a startup window\'s prompts on every way out of it (review 19 #1)', ()
 
   it('a release — /quit, leaving the folder, /quitall — a move across backends and a start onto another agent run as the conversation\'s one transition, after a re-spawn, MARKED as ending it: a stop queued ahead drops what it held and starts nothing (review 22 own pass, review 23 #1, nits 2 and 4)', () => {
     const quit = getBody("command(['quit', 'q']", "command('c', async");
-    assert.ok(quit.indexOf('await runEndingConversation(key, async () => {') > 0 && quit.indexOf('await runEndingConversation(key, async () => {') < quit.indexOf('const primaryActive = adapter.checkIsActive(key);'), '/quit reads what runs inside its marked transition');
-    assert.ok(quit.indexOf('await state.clearAgentSessionIds(key);') > quit.indexOf('await runEndingConversation('), 'and releases inside it');
+    assert.ok(quit.indexOf('await conversationEndings.hold(key).run(async () => {') > 0 && quit.indexOf('await conversationEndings.hold(key).run(async () => {') < quit.indexOf('const primaryActive = adapter.checkIsActive(key);'), '/quit reads what runs inside its marked transition');
+    assert.ok(quit.indexOf('await state.clearAgentSessionIds(key);') > quit.indexOf('await conversationEndings.hold(key).run('), 'and releases inside it');
     assert.doesNotMatch(quit, /sessionTransitions\.run\(|runCommandSessionTransition\(/, 'no nested queue: it would wait for itself');
     const unbind = getBody('async function unbindThread(', "command('ls', async");
-    assert.ok(unbind.indexOf('await runEndingConversation(key, async () => {') > 0 && unbind.indexOf('await runEndingConversation(key, async () => {') < unbind.indexOf('if (adapter.checkIsActive(key)) {'), 'leaving the folder');
-    assert.ok(unbind.indexOf('await releaseConversationIds(key);') > unbind.indexOf('await runEndingConversation('));
+    assert.ok(unbind.indexOf('await ending.run(async () => {') > 0 && unbind.indexOf('await ending.run(async () => {') < unbind.indexOf('if (adapter.checkIsActive(key)) {'), 'leaving the folder, under the tap\'s hold');
+    assert.ok(unbind.indexOf('await releaseConversationIds(key);') > unbind.indexOf('await ending.run('));
     assert.match(unbind, /if \(adapter\.stopSessionAndWait\) await adapter\.stopSessionAndWait\(key\);\n\s*else adapter\.stopSession\(key\);/, 'it waits for the exit (review 23 nit 4)');
     const quitAll = getBody("command('quitall'", "command(['quit', 'q']");
-    assert.match(quitAll, /await Promise\.all\(conversations\.map\(async \(\{ key: bKey \}\) => \{\n\s*cancelConversationRequest\(bKey\);\n\s*const result = await runEndingConversation\(bKey, async \(\) => \{/, '/quitall: each topic marked and queued, side by side (review 23 nit 4)');
+    assert.match(quitAll, /await Promise\.all\(conversations\.map\(async \(\{ key: bKey \}\) => \{\n\s*cancelConversationRequest\(bKey\);\n\s*const result = await conversationEndings\.hold\(bKey\)\.run\(async \(\) => \{/, '/quitall: each topic marked and queued, side by side (review 23 nit 4)');
     assert.match(quitAll, /const swept = await stopAndWaitAllAdaptersFor\(bKey\);/, 'each waits for its exits');
-    assert.match(getBody('async function moveTopicToOtherBackend(', 'async function resumeTopicOnNewSession('), /await runEndingConversation\(key, \(\) => switchThreadAdapter\(/, 'a move across backends');
+    assert.match(getBody('async function moveTopicToOtherBackend(', 'async function resumeTopicOnNewSession('), /await ending\.run\(\(\) => switchThreadAdapter\(/, 'a move across backends, under the hold its caller took ahead of the bridge');
     const start = getBody('async function handleAgentStart(', 'function handleStartCommand(');
-    assert.match(start, /const isConversationEnded = previousName !== undefined && !checkIsSameConversationSwitch\(previousName, adapterName\);/, 'a start onto another agent or a shell ends the conversation (review 23 nit 2)');
-    assert.match(start, /await \(isConversationEnded \? runEndingConversation\(key, switchAdapter\) : runCommandSessionTransition\(key, switchAdapter\)\);/, 'its switch queued, marked when it ends the conversation');
+    assert.match(getBody('function checkIsStartLeavingConversation(', 'function handleStartCommand('), /return previousName !== undefined && !checkIsSameConversationSwitch\(previousName, startAdapterName\);/, 'a start onto another agent or a shell ends the conversation (review 23 nit 2)');
+    assert.match(start, /if \(checkIsStartLeavingConversation\(key, adapterName\)\) \{\n\s*await \(ending \?\? conversationEndings\.hold\(key\)\)\.run\(switchAdapter\);\n\s*\} else \{\n\s*ending\?\.release\(\);\n\s*await runCommandSessionTransition\(key, switchAdapter\);\n\s*\}/, 'its switch queued, held as ending when it leaves the conversation — under the caller\'s hold when it took one');
     const held = getBody('async function resumeForHeldPrompts(', 'const autoStopUnsupportedLoggedKeys');
-    assert.match(held, /if \(checkIsConversationBeingEnded\(kStr\) \|\| getResumableSessionId\(key\) === null\) \{[^]*?startupPromptBuffer\.discardPrompts\(kStr\);\n\s*return;/, 'a stop\'s held prompts: a conversation being ended drops them; no id left is the same drop, as a guard');
+    assert.match(held, /if \(conversationEndings\.checkIsEnding\(kStr\) \|\| getResumableSessionId\(key\) === null\) \{[^]*?startupPromptBuffer\.discardPrompts\(kStr\);\n\s*return;/, 'a stop\'s held prompts: a conversation being ended drops them; no id left is the same drop, as a guard');
     assert.doesNotMatch(held, /released during the stop/, 'no release can happen during a stop any more: it waits behind it');
   });
 
   it('every command that ends or replaces the conversation — /new and a /resume pick among them — marks it from the command until its OWN transition begins: a stop queued ahead drops what it held, and a start or resume queued ahead drops its window instead of replaying it into the conversation they leave — a person told (review 21 nit 4, review 22 nit 3)', () => {
     const fresh = getBody("command('new', async", '//  /whoami /version /help /status');
-    assert.match(fresh, /return runEndingConversation\(key, async \(\) => \{\n\s*await releaseThreadSession\(key\);\n\s*return startAgentSession\(key\);\n\s*\}\);/, '/new');
-    assert.match(getBody('async function resumeSessionByIndex(', 'async function resumePickedSession('), /return runEndingConversation\(key, \(\) => resumePickedSession\(key, sessionId\)\);/, 'the /resume pick');
-    const replacing = getBody('async function runEndingConversation<TResult>(', 'async function waitForPendingRespawn(');
-    assert.ok(replacing.indexOf('conversationsBeingEnded.set(conversationKey, (conversationsBeingEnded.get(conversationKey) ?? 0) + 1);') >= 0, 'a count: two overlapping commands keep the mark');
-    assert.ok(replacing.indexOf('conversationsBeingEnded.set(conversationKey, (') < replacing.indexOf('return await runCommandSessionTransition(key, () => {'), 'marked before it waits in the queue');
-    assert.match(replacing, /return await runCommandSessionTransition\(key, \(\) => \{\n\s*unmark\(\);\n\s*return transition\(\);\n\s*\}\);/, 'unmarked once its own transition begins: what it starts itself is not dropped');
-    assert.match(replacing, /\} finally \{\n\s*unmark\(\);/, 'and whatever the end');
+    assert.match(fresh, /return conversationEndings\.hold\(key\)\.run\(async \(\) => \{\n\s*await releaseThreadSession\(key\);\n\s*return startAgentSession\(key\);\n\s*\}\);/, '/new');
+    assert.match(getBody('async function resumeSessionByIndex(', 'async function resumePickedSession('), /return \(ending \?\? conversationEndings\.hold\(key\)\)\.run\(\(\) => resumePickedSession\(key, sessionId\)\);/, 'the /resume pick');
+    // The hold itself — a count, taken before the queue, ended as the command's own transition begins and whatever the end — is
+    // `conversationEnding.test.ts`'s.
     const held = getBody('async function resumeForHeldPrompts(', 'const autoStopUnsupportedLoggedKeys');
-    assert.match(held, /if \(checkIsConversationBeingEnded\(kStr\) \|\| getResumableSessionId\(key\) === null\) \{[^]*?startupPromptBuffer\.discardPrompts\(kStr\);/, 'a stop\'s held prompts: a conversation being ended drops them');
+    assert.match(held, /if \(conversationEndings\.checkIsEnding\(kStr\) \|\| getResumableSessionId\(key\) === null\) \{[^]*?startupPromptBuffer\.discardPrompts\(kStr\);/, 'a stop\'s held prompts: a conversation being ended drops them');
     const replay = getBody('async function replayBufferedPrompts(', 'async function forwardPromptToLiveAgent(');
-    assert.ok(replay.indexOf('if (checkIsConversationBeingEnded(keyToString(key))) {') >= 0 && replay.indexOf('if (checkIsConversationBeingEnded(keyToString(key))) {') < replay.indexOf('await startupPromptBuffer.replayPrompts('), 'a start\'s or a resume\'s window: dropped before any write');
-    assert.match(replay, /if \(checkIsConversationBeingEnded\(keyToString\(key\)\)\) \{[^]*?startupPromptBuffer\.discardPrompts\(keyToString\(key\)\);\n\s*return;/);
+    assert.ok(replay.indexOf('if (conversationEndings.checkIsEnding(keyToString(key))) {') >= 0 && replay.indexOf('if (conversationEndings.checkIsEnding(keyToString(key))) {') < replay.indexOf('await startupPromptBuffer.replayPrompts('), 'a start\'s or a resume\'s window: dropped before any write');
+    assert.match(replay, /if \(conversationEndings\.checkIsEnding\(keyToString\(key\)\)\) \{[^]*?startupPromptBuffer\.discardPrompts\(keyToString\(key\)\);\n\s*return;/);
     const stopDoc = getBody(' * @description The idle stop (lifecycle plan L3)', 'async function suspendThreadSession(');
-    assert.match(stopDoc.replace(/\n \* /g, ' '), /a command queued behind it ends or replaces \(every release, `\/new`, the `\/resume` pick, a move or a start onto another backend: marked from the command until its own transition begins\)/, 'the JSDoc says which commands end the conversation the stop resumes nothing for');
+    assert.match(stopDoc.replace(/\n \* /g, ' '), /a command queued behind it ends or replaces \(every release, `\/new`, the `\/resume` pick, a move or a start onto another backend: held from the moment the bot knows the command ends it until its own transition begins\)/, 'the JSDoc says which commands end the conversation the stop resumes nothing for');
+  });
+
+  it('every command that ends or replaces the conversation holds it the moment the bot knows, ahead of anything it awaits after that — a toast, a paced send, a move\'s bridge — so a stop that ends meanwhile finds the mark (review 24 #1, own pass)', () => {
+    const indexIn = (body: string, text: string): number => {
+      const index = body.indexOf(text);
+      assert.ok(index >= 0, `missing: ${text}`);
+      return index;
+    };
+    const leave = getBody('bot.action(bindLeaveCurrentCallback, async (ctx) => {', '// `/topic`\'s buttons');
+    const leaveWork = leave.slice(indexIn(leave, 'bindPickerClaims.runClaimed(key, pickerMessageId, async () => {'));
+    assert.ok(indexIn(leaveWork, 'const ending = conversationEndings.hold(key);') < indexIn(leaveWork, 'await answerCallbackQuerySafely(ctx);'), '«Leave current dir»: held ahead of its toast');
+    assert.doesNotMatch(leaveWork.slice(0, indexIn(leaveWork, 'const ending = conversationEndings.hold(key);')), /await /, 'nothing awaited in the claimed work before it');
+    assert.ok(indexIn(leaveWork, 'await unbindThread(key, ending);') > 0, 'and handed to the leave, whose unpin and question retirement follow it');
+    const unbind = getBody('async function unbindThread(', "command('ls', async");
+    assert.ok(indexIn(unbind, 'await clearPinnedStatus(key);') < indexIn(unbind, 'await ending.run(async () => {'), 'the paced unpin runs under the tap\'s hold');
+    const resumeButton = getBody('bot.action(/^resume_(\\d+)$/, async (ctx) => {', '// The agent\'s own question buttons');
+    assert.ok(indexIn(resumeButton, 'const ending = getListedSessionId(key, idx) === null ? undefined : conversationEndings.hold(key);') < indexIn(resumeButton, 'await ctx.answerCbQuery();'), 'a /resume button: held ahead of its toast');
+    assert.match(resumeButton, /const result = await resumeSessionByIndex\(key, idx, async \(\) => \{\n[^]*?\}, ending\);/);
+    const byIndex = getBody('async function resumeSessionByIndex(', 'function getListedSessionId(');
+    assert.match(byIndex, /if \(sessionId === null\) \{\n\s*ending\?\.release\(\);\n\s*await onExpired\(\);\n\s*return null;\n\s*\}/, 'a row the list no longer has lets go before it says so');
+    const agentButton = getBody('bot.action(/^agent_(.+)$/, async (ctx) => {', 'bot.action(/^resume_(\\d+)$/');
+    assert.ok(indexIn(agentButton, 'conversationEndings.hold(key)') < indexIn(agentButton, "await ctx.answerCbQuery(t('cb.agent_switched'"), 'an agent button onto a shell: held ahead of its toast');
+    assert.match(agentButton, /const ending = getBackendFamily\(startAdapterName\) === null && checkIsStartLeavingConversation\(key, startAdapterName\) \? conversationEndings\.hold\(key\) : undefined;/, 'only where the tap alone decides: onto the other agent the hand-over read decides first');
+    const execute = getBody('async function executeBackendSwitch(', 'async function checkIsPickBeyondLimit(');
+    assert.ok(indexIn(execute, 'const ending = options.ending ?? conversationEndings.hold(key);') < indexIn(execute, 'await buildFallbackBridge('), 'the operator\'s move: held ahead of its bridge');
+    assert.doesNotMatch(execute.slice(0, indexIn(execute, 'const ending = options.ending ?? conversationEndings.hold(key);')), /await /);
+    assert.match(execute, /isStoppingBackground = await moveTopicToOtherBackend\(key, ending, /);
+    const fallback = getBody('async function switchTopicToFallbackEntry(', 'async function moveTopicToOtherBackend(');
+    const crossBackend = fallback.slice(indexIn(fallback, "} else {\n    // Onto the other backend"));
+    assert.ok(indexIn(crossBackend, 'const ending = conversationEndings.hold(key);') < indexIn(crossBackend, 'bridge = await buildFallbackBridge('), 'the limit move onto the other backend: held ahead of its bridge');
+    assert.doesNotMatch(fallback.slice(indexIn(fallback, '): Promise<{ isSwitched: boolean; notice: string; isFailed?: boolean }> {'), indexIn(fallback, "if (from?.backend === 'claude' && to.backend === 'claude') {")), /^ {2}\S[^\n]*\bawait /m, 'and nothing is awaited in the move before its branches (its `say` and `fail` only define what runs later)');
+    assert.match(crossBackend, /isStoppingBackground = await moveTopicToOtherBackend\(key, ending, /);
+    const operatorSwitch = getBody('async function switchTopicByOperator(', 'const { askBackendSwitch, registerBackendSwitchCallbacks }');
+    assert.match(operatorSwitch, /hasConversation: !isUsageLimitWaitArmed && currentFamily !== null && currentFamily !== to\.backend && await checkHasConversationToHandOver\(key\),/, 'a pick on the other backend during a limit wait reads nothing ahead of the move');
+    const wiring = getBody('const { askBackendSwitch, registerBackendSwitchCallbacks } = createBackendSwitch({', 'async function takeFallbackSwitchOffer(');
+    assert.match(wiring, /holdConversationEnding: \(key\) => conversationEndings\.hold\(key\),/, 'the hand-over question\'s tap holds it (`backendSwitch.test.ts` pins the order)');
+    assert.match(wiring, /executeBackendSwitch\(key, target, \{ isBridged: true, userMessage: options\.userMessage, ending: options\.ending \}\)/);
+    // The commands that marked in their own tick still do.
+    const quit = getBody("command(['quit', 'q']", "command('c', async");
+    assert.doesNotMatch(quit.slice(0, indexIn(quit, 'await conversationEndings.hold(key).run(')), /await /, '/quit');
+    const fresh = getBody("command('new', async", '//  /whoami /version /help /status');
+    assert.doesNotMatch(fresh.slice(indexIn(fresh, 'cancelConversationRequest(key);'), indexIn(fresh, 'const msg = await startFreshSessionForNew(key);')), /await /, '/new');
+    assert.match(getBody("command('quitall'", "command(['quit', 'q']"), /cancelConversationRequest\(bKey\);\n\s*const result = await conversationEndings\.hold\(bKey\)\.run\(/, '/quitall');
+    assert.doesNotMatch(byIndex.slice(0, indexIn(byIndex, 'if (sessionId === null) {')), /await /, 'the digit pick');
   });
 
   it('a move\'s first prompt that reached no session tracks no continuation: nothing is reset, lifted or watched for a turn that never starts (review 19 nit 4)', () => {

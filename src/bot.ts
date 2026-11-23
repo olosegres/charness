@@ -263,6 +263,7 @@ import {
 import { formatPinnedStatus } from './pinnedStatus';
 import { checkIsProgressChunk, collapseProgressChunk } from './progressLine';
 import { StartupPromptBuffer, type BufferedPromptOutcome, type BufferedPromptSettled } from './startupPromptBuffer';
+import { ConversationEndings, type ConversationEnding } from './utils/conversationEnding';
 import { renderAgentFrame, renderAgentHtml, type AgentFrame } from './connectors/telegram/renderAgentHtml';
 import { splitMessage, MAX_MESSAGE_LEN } from './connectors/telegram/messageSplit';
 import { buildFoldedMessage } from './connectors/telegram/foldedMessage';
@@ -6090,44 +6091,14 @@ function runCommandSessionTransition<TResult>(key: SessionKey, transition: () =>
 
 /**
  * Conversations a command is about to END or REPLACE — `/new`, a `/resume` pick, `/quit`, leaving the folder, `/quitall`, a move across
- * backends, a start onto another agent or a shell — counted per conversation, from the command until its OWN transition begins: a
- * transition queued ahead of it — a stop's resume for the prompts it held, a start's or a resume's replay of its window — drops those
- * prompts instead of writing them into the conversation the command ends, where they would start a turn the command then kills, unread
- * and untold; a person is told to send theirs again, and nothing is resumed or started for them (review 21 nit 4, review 22 nit 3,
- * review 23 #1). A count, so two overlapping commands keep the mark. Not `/claude_mode`: it keeps the conversation, and a prompt written
- * to the old backend's process is posted again by the turn's wake (R21).
+ * backends, a start onto another agent or a shell —, each held from the moment the bot knows the command ends it (ahead of the toast of
+ * its tap, a paced send, a move's bridge: review 24 #1) until its OWN transition begins (`utils/conversationEnding.ts`): a transition
+ * queued ahead of it — a stop's resume for the prompts it held, a start's or a resume's replay of its window — drops those prompts instead
+ * of writing them into the conversation the command ends, where they would start a turn the command then kills, unread and untold; a
+ * person is told, and nothing is resumed or started for them (review 21 nit 4, review 22 nit 3, review 23 #1). Not `/claude_mode`: it
+ * keeps the conversation, and a prompt written to the old backend's process is posted again by the turn's wake (R21).
  */
-const conversationsBeingEnded = new Map<string, number>();
-
-/** Whether a command waits in the queue to end or replace `conversationKey`'s conversation ({@link conversationsBeingEnded}). */
-function checkIsConversationBeingEnded(conversationKey: string): boolean {
-  return (conversationsBeingEnded.get(conversationKey) ?? 0) > 0;
-}
-
-/**
- * Queue `transition` — a command's release, move or start that ends or replaces the conversation — as the conversation's one transition,
- * the conversation marked as being ended until it begins: what it starts itself is the conversation that comes next, never dropped.
- */
-async function runEndingConversation<TResult>(key: SessionKey, transition: () => Promise<TResult>): Promise<TResult> {
-  const conversationKey = keyToString(key);
-  conversationsBeingEnded.set(conversationKey, (conversationsBeingEnded.get(conversationKey) ?? 0) + 1);
-  let isMarked = true;
-  const unmark = (): void => {
-    if (!isMarked) return;
-    isMarked = false;
-    const count = (conversationsBeingEnded.get(conversationKey) ?? 1) - 1;
-    if (count > 0) conversationsBeingEnded.set(conversationKey, count);
-    else conversationsBeingEnded.delete(conversationKey);
-  };
-  try {
-    return await runCommandSessionTransition(key, () => {
-      unmark();
-      return transition();
-    });
-  } finally {
-    unmark();
-  }
-}
+const conversationEndings = new ConversationEndings<SessionKey>({ toConversationKey: keyToString, runTransition: runCommandSessionTransition });
 
 /**
  * @description A json-stream re-spawn (a model, effort or account change, a deferred one at a turn's end) replaces the process inside the
@@ -6289,8 +6260,8 @@ async function wakeSleepingSession(key: SessionKey): Promise<string | null> {
  * session is resumed for them at once (its own window replays them) — also when
  * the stop threw, so a held prompt never waits in a closed buffer. A conversation
  * a command queued behind it ends or replaces (every release, `/new`, the `/resume` pick,
- * a move or a start onto another backend: marked from the command until its own
- * transition begins) starts nothing for them: they are dropped (a person is told). The
+ * a move or a start onto another backend: held from the moment the bot knows the command
+ * ends it until its own transition begins) starts nothing for them: they are dropped (a person is told). The
  * "working" check is repeated inside the transition: a turn may have started
  * while the fire waited its turn in the queue.
  */
@@ -6339,7 +6310,7 @@ async function suspendThreadSession(key: SessionKey): Promise<void> {
  * @description After an idle stop, whatever its end, inside the stop's own transition: the prompts its window held go to the
  * conversation resumed for them (`ensureAgentSessionNow`: the queued ensure would wait for this very transition). A conversation a
  * command queued behind the stop ends or replaces — a release, `/new`, a `/resume` pick, a move or a start onto another backend:
- * {@link conversationsBeingEnded} — must not be resumed only to be killed by that command: they are dropped, a person told to send
+ * {@link conversationEndings} — must not be resumed only to be killed by that command: they are dropped, a person told to send
  * theirs again, and nothing starts (review 23 #1). A conversation with no id left (its topic deleted) is the same drop, as a guard. A
  * conversation that is already live when the ensure returns (it found it `ready`) gets them replayed into it; one the ensure could not
  * bring up without discarding them has them dropped — no way out of a stop leaves them in a closed buffer.
@@ -6347,7 +6318,7 @@ async function suspendThreadSession(key: SessionKey): Promise<void> {
 async function resumeForHeldPrompts(key: SessionKey): Promise<void> {
   const kStr = keyToString(key);
   if (!startupPromptBuffer.checkHasPrompts(kStr)) return;
-  if (checkIsConversationBeingEnded(kStr) || getResumableSessionId(key) === null) {
+  if (conversationEndings.checkIsEnding(kStr) || getResumableSessionId(key) === null) {
     console.log(`[compact-on-idle] ${kStr}: a command ends the conversation (or it has no id left); the prompts the stop held are dropped`);
     startupPromptBuffer.discardPrompts(kStr);
     return;
@@ -6453,7 +6424,7 @@ async function replayBufferedPrompts(key: SessionKey): Promise<void> {
   // A command that ends or replaces the conversation (a release, `/new`, a `/resume` pick, a move or a start onto another backend) waits
   // behind the start or resume replaying this window: what the window holds was not sent for the conversation the command ends, so it is
   // dropped — a person told to send it again — not written there (review 22 nit 3, review 23 #1).
-  if (checkIsConversationBeingEnded(keyToString(key))) {
+  if (conversationEndings.checkIsEnding(keyToString(key))) {
     console.log(`[startup] ${keyToString(key)}: a command ends the conversation; the prompts its window held are dropped`);
     startupPromptBuffer.discardPrompts(keyToString(key));
     return;
@@ -7844,9 +7815,10 @@ command('bind', async (_ctx, key, parsed) => {
  * pinned banner, release persisted session ids, pause the thread's schedules,
  * then wipe the binding. Shared by the `/bind` picker's «leave current dir»
  * button (the old `/unbind` command was folded into it). Safe to call only on a
- * BOUND, non-General topic — the leave button only renders there.
+ * BOUND, non-General topic — the leave button only renders there. `ending` is the
+ * tap's hold on the conversation, taken ahead of its toast (review 24 #1).
  */
-async function unbindThread(key: SessionKey): Promise<void> {
+async function unbindThread(key: SessionKey, ending: ConversationEnding): Promise<void> {
   // Mark this thread as in-flight unbinding so the adapter's synchronous
   // `stopped` event doesn't race us and re-pin a stale "idle" banner over
   // the message we're about to delete.
@@ -7868,10 +7840,11 @@ async function unbindThread(key: SessionKey): Promise<void> {
     // an orphan tmux/SSE stream pointing at a directory we no longer track. As the
     // conversation's one transition, after a re-spawn: a start, a resume or a
     // re-spawn in flight is over first, so none brings a process back for the
-    // conversation released here (review 22, own pass). Marked as ending it: a stop
-    // queued ahead drops what it held (review 23 #1). The stop is waited for, so
-    // nothing queued behind writes into a process still exiting (review 23 nit 4).
-    await runEndingConversation(key, async () => {
+    // conversation released here (review 22, own pass). Held as ending it since the
+    // tap, ahead of the toast, the unpin and the question's retirement above: a stop
+    // queued ahead drops what it held (review 23 #1, review 24 #1). The stop is waited
+    // for, so nothing queued behind writes into a process still exiting (review 23 nit 4).
+    await ending.run(async () => {
       const adapter = getThreadAdapter(key);
       if (adapter.checkIsActive(key)) {
         // Close any still-pending OpenCode question on the server BEFORE stopping
@@ -8035,14 +8008,15 @@ command('new', async (_ctx, key) => {
   // `startAgentSession` handles startup buffering, the typing-loader boot, and
   // the preamble-marker reset. It returns `''` for a self-greeting agent (Claude
   // prints its own banner) — show a notice only for a non-empty ready text.
-  // Marked as being replaced while it waits: a stop under way drops what it held instead of resuming the old conversation (review 21 nit 4).
+  // Held as ending the conversation while it waits: a stop under way drops what it held instead of resuming the old conversation (review
+  // 21 nit 4).
   const msg = await startFreshSessionForNew(key);
   if (msg) await replyToThread(key, msg);
 });
 
-/** `/new`'s release and fresh start, as the conversation's one transition, the conversation marked as being replaced until it ran. */
+/** `/new`'s release and fresh start, as the conversation's one transition, the conversation held as ending until that transition begins. */
 function startFreshSessionForNew(key: SessionKey): Promise<string> {
-  return runEndingConversation(key, async () => {
+  return conversationEndings.hold(key).run(async () => {
     await releaseThreadSession(key);
     return startAgentSession(key);
   });
@@ -8583,12 +8557,16 @@ command('mcp', async (_ctx, key) => {
  *
  * `adapterName` is typed `string` because the button passes a raw callback match;
  * an unknown name makes `getThreadAdapter` throw, which the caller wrapping this
- * (the `agent_*` action) turns into a "unknown agent" answer.
+ * (the `agent_*` action) turns into a "unknown agent" answer. `ending` is the
+ * caller's hold on the conversation when it already knows the start leaves it
+ * (an agent button onto a shell, held ahead of its toast); without one the start
+ * holds it itself once it knows.
  */
 async function handleAgentStart(
   key: SessionKey,
   adapterName: string,
   args?: string,
+  ending?: ConversationEnding,
 ): Promise<void> {
   if (checkIsGeneral(key)) {
     await replyToThread(key, t('error.start_in_general'));
@@ -8609,12 +8587,15 @@ async function handleAgentStart(
   const targetFamily = getBackendFamily(adapterName);
   if (targetFamily !== null && await askBeforeCrossBackendSwitch(key, targetFamily, args)) return;
   // The switch runs as the conversation's one transition, after a re-spawn — a start or resume of the old backend in flight is over first
-  // and none comes back beside the new one — and, when it leaves the conversation (another agent or a shell), marked as ending it, as a
-  // move is (review 23 nit 2).
-  const previousName = getThreadAdapterNameRaw(key);
-  const isConversationEnded = previousName !== undefined && !checkIsSameConversationSwitch(previousName, adapterName);
+  // and none comes back beside the new one — and, when it leaves the conversation (another agent or a shell), held as ending it from here,
+  // as a move is (review 23 nit 2), unless the caller held it already.
   const switchAdapter = (): Promise<LostWork | null> => switchThreadAdapter(key, adapterName);
-  await (isConversationEnded ? runEndingConversation(key, switchAdapter) : runCommandSessionTransition(key, switchAdapter));
+  if (checkIsStartLeavingConversation(key, adapterName)) {
+    await (ending ?? conversationEndings.hold(key)).run(switchAdapter);
+  } else {
+    ending?.release();
+    await runCommandSessionTransition(key, switchAdapter);
+  }
   const adapter = getThreadAdapter(key);
   if (adapter.checkIsActive(key)) {
     await replyToThread(key, t('agent.already_active', { label: adapter.label }));
@@ -8628,6 +8609,15 @@ async function handleAgentStart(
       ? t('agent.already_active', { label: getThreadAdapter(key).label })
       : startAgentSession(key, args)));
   if (msg) await replyToThread(key, msg);
+}
+
+/**
+ * @description Whether starting `startAdapterName` (already resolved, `resolveStartAdapterName`) leaves the conversation the topic holds:
+ * onto another agent or a shell. A switch within the Claude family keeps it (`checkIsSameConversationSwitch`).
+ */
+function checkIsStartLeavingConversation(key: SessionKey, startAdapterName: string): boolean {
+  const previousName = getThreadAdapterNameRaw(key);
+  return previousName !== undefined && !checkIsSameConversationSwitch(previousName, startAdapterName);
 }
 
 /**
@@ -9998,14 +9988,22 @@ async function switchTopicToFallbackEntry(
     const error = await getThreadAdapter(key).setModel?.(key, buildOpenCodeModelLabel(to));
     if (error) return fail(error);
   } else {
-    const bridge = await buildFallbackBridge(key, {
-      fromLabel: from ? formatFallbackEntry(from) : formatThreadBackend(key),
-      toLabel: toLabel,
-      reason: 'limit',
-      resetsAtText: getFallbackResetTime(from),
-    });
-    // An automatic fallback keeps the conversation (parked, bridged): the questions it had set aside stay open for a late answer.
-    isStoppingBackground = await moveTopicToOtherBackend(key, to.backend, to.backend === 'claude' ? to.profile : null, { isConversationKept: options.isAutomatic === true });
+    // Onto the other backend, which ends the conversation the move leaves: held from here — nothing above awaits —, ahead of the bridge,
+    // so a stop under way drops what it held instead of resuming the backend being left (review 24 #1).
+    const ending = conversationEndings.hold(key);
+    let bridge: string;
+    try {
+      bridge = await buildFallbackBridge(key, {
+        fromLabel: from ? formatFallbackEntry(from) : formatThreadBackend(key),
+        toLabel: toLabel,
+        reason: 'limit',
+        resetsAtText: getFallbackResetTime(from),
+      });
+      // An automatic fallback keeps the conversation (parked, bridged): the questions it had set aside stay open for a late answer.
+      isStoppingBackground = await moveTopicToOtherBackend(key, ending, to.backend, to.backend === 'claude' ? to.profile : null, { isConversationKept: options.isAutomatic === true });
+    } finally {
+      ending.release();
+    }
     if (to.backend === 'opencode') {
       const error = await getThreadAdapter(key).setModel?.(key, buildOpenCodeModelLabel(to));
       if (error) return fail(error);
@@ -10041,16 +10039,17 @@ async function switchTopicToFallbackEntry(
  * half: record `account` as the topic's own Claude pick when one is given (the chain's rung, the operator's pick — a
  * switch that only names the account the topic follows passes `null`), then `switchThreadAdapter` stops the old
  * session, parks its id and brings back the target family's parked one. The context bridge is built BEFORE this, while
- * the adapter being left still runs. Resolves whether the stop took background work with it — the caller tells the
- * operator (the agent is told by the next prompt, `switchThreadAdapter`).
+ * the adapter being left still runs, and the caller's `ending` holds the conversation from before the bridge. Resolves
+ * whether the stop took background work with it — the caller tells the operator (the agent is told by the next prompt,
+ * `switchThreadAdapter`).
  */
-async function moveTopicToOtherBackend(key: SessionKey, backend: BackendFamily, account: string | null, options: { isConversationKept?: boolean } = {}): Promise<boolean> {
+async function moveTopicToOtherBackend(key: SessionKey, ending: ConversationEnding, backend: BackendFamily, account: string | null, options: { isConversationKept?: boolean } = {}): Promise<boolean> {
   if (account !== null) await state.setClaudeProfileOverride(key, account);
   // The old backend's stop and the id parking run as the conversation's one transition, after a re-spawn: a start or resume of the
-  // old backend in flight is over first, and none comes back beside the new one (review 22, own pass). Marked as ending the conversation
+  // old backend in flight is over first, and none comes back beside the new one (review 22, own pass). Held as ending the conversation
   // it leaves: what a stop queued ahead held is dropped with the line, never resumed into the backend being left — the bridge was built
-  // before the move and never carries it (review 23 #1).
-  const lostWork = await runEndingConversation(key, () => switchThreadAdapter(key, backend === 'claude' ? resolveClaudeBackendName(key) : openCodeAdapterName, options));
+  // before the move and never carries it (review 23 #1, review 24 #1).
+  const lostWork = await ending.run(() => switchThreadAdapter(key, backend === 'claude' ? resolveClaudeBackendName(key) : openCodeAdapterName, options));
   return checkHasLostBackgroundWork(lostWork);
 }
 
@@ -10149,17 +10148,26 @@ async function askBeforeCrossBackendSwitch(key: SessionKey, backend: BackendFami
  * the topic following General. A topic with nothing to hand over (`isBridged: false`) just starts the target the way
  * `/claude` / `/opencode` do. `userMessage` rides inside the bridge.
  */
-async function executeBackendSwitch(key: SessionKey, target: BackendSwitchTarget, options: { isBridged: boolean; userMessage?: string }): Promise<void> {
-  const bridge = options.isBridged
-    ? await buildFallbackBridge(key, {
-      fromLabel: formatThreadBackend(key),
-      toLabel: formatBackendSwitchBridgeLabel(target),
-      reason: 'manual',
-      resetsAtText: null,
-      userMessage: options.userMessage,
-    })
-    : null;
-  const isStoppingBackground = await moveTopicToOtherBackend(key, target.backend, target.backend === 'claude' && target.isProfilePicked ? target.profile : null);
+async function executeBackendSwitch(key: SessionKey, target: BackendSwitchTarget, options: { isBridged: boolean; userMessage?: string; ending?: ConversationEnding }): Promise<void> {
+  // The move ends the conversation it leaves: held from here, ahead of the bridge, unless the tap that asked for it holds it already —
+  // a stop under way drops what it held instead of resuming the backend being left (review 24 #1).
+  const ending = options.ending ?? conversationEndings.hold(key);
+  let bridge: string | null;
+  let isStoppingBackground: boolean;
+  try {
+    bridge = options.isBridged
+      ? await buildFallbackBridge(key, {
+        fromLabel: formatThreadBackend(key),
+        toLabel: formatBackendSwitchBridgeLabel(target),
+        reason: 'manual',
+        resetsAtText: null,
+        userMessage: options.userMessage,
+      })
+      : null;
+    isStoppingBackground = await moveTopicToOtherBackend(key, ending, target.backend, target.backend === 'claude' && target.isProfilePicked ? target.profile : null);
+  } finally {
+    ending.release();
+  }
   // The operator hears that the background work died with the old session; its agent hears it in the first prompt.
   if (isStoppingBackground) await replyToThread(key, t('fallback.backgroundStopped'));
   cancelApiRetry(key); // a wait armed for the backend just left is over
@@ -10213,7 +10221,9 @@ async function switchTopicByOperator(key: SessionKey, to: FallbackChainEntry): P
     from,
     to,
     currentFamily,
-    hasConversation: currentFamily !== null && currentFamily !== to.backend && await checkHasConversationToHandOver(key),
+    // Read only where it decides: with a wait armed a pick on the other backend is the limit move whatever it finds, so nothing is read
+    // ahead of the move's hold on the conversation (review 24, own pass).
+    hasConversation: !isUsageLimitWaitArmed && currentFamily !== null && currentFamily !== to.backend && await checkHasConversationToHandOver(key),
     isPickBeyondLimit: isUsageLimitWaitArmed && await checkIsPickBeyondLimit(from, to),
   });
   const target = buildBackendSwitchTargetOfRung(to);
@@ -10263,7 +10273,8 @@ async function switchTopicByOperator(key: SessionKey, to: FallbackChainEntry): P
 const { askBackendSwitch, registerBackendSwitchCallbacks } = createBackendSwitch({
   ...botCore,
   getCurrentFamily: getTopicBackendFamily,
-  performBackendSwitch: (key, target, options) => executeBackendSwitch(key, target, { isBridged: true, userMessage: options.userMessage }),
+  holdConversationEnding: (key) => conversationEndings.hold(key),
+  performBackendSwitch: (key, target, options) => executeBackendSwitch(key, target, { isBridged: true, userMessage: options.userMessage, ending: options.ending }),
 });
 /**
  * @description A tap on a «switch to …» button of a limit notice: honoured only while the thread's open offer
@@ -10553,22 +10564,31 @@ async function handleSessionsList(key: SessionKey): Promise<void> {
  * Recovers the full session id from `threadSessionLists`; if the cache was
  * lost (bot restarted between showing the list and the pick), reports it
  * via `onExpired`. Returns the user-facing result message to send, or
- * `null` when `onExpired` already handled the stale-cache case.
+ * `null` when `onExpired` already handled the stale-cache case. `ending` is the
+ * button's hold on the conversation, taken ahead of its toast; the digit reply
+ * has none, and the pick holds it here (review 24 #1).
  */
 async function resumeSessionByIndex(
   key: SessionKey,
   idx: number,
   onExpired: () => Promise<void>,
+  ending?: ConversationEnding,
 ): Promise<string | null> {
-  const list = threadSessionLists.get(keyToString(key));
-  if (!list || idx < 0 || idx >= list.length) {
+  const sessionId = getListedSessionId(key, idx);
+  if (sessionId === null) {
+    ending?.release();
     await onExpired();
     return null;
   }
-  const sessionId = list[idx];
   // As the conversation's one transition: no ensure resumes the old conversation beside the pick, and no idle stop runs under it
   // (review 20 nit 3). A prompt that comes meanwhile routes to a wake, whose ensure waits for the pick in the same queue.
-  return runEndingConversation(key, () => resumePickedSession(key, sessionId));
+  return (ending ?? conversationEndings.hold(key)).run(() => resumePickedSession(key, sessionId));
+}
+
+/** The session id at `idx` in the thread's last shown `/sessions` list; `null` when that list is gone (a restart) or holds no such row. */
+function getListedSessionId(key: SessionKey, idx: number): string | null {
+  const list = threadSessionLists.get(keyToString(key));
+  return list !== undefined && idx >= 0 && idx < list.length ? list[idx] : null;
 }
 
 /** {@link resumeSessionByIndex}'s resume of the picked session, inside the conversation's transition. */
@@ -10640,7 +10660,7 @@ command('quitall', async (_ctx, key) => {
   // by side, so one waiting behind a long resume holds no other back, and each waits for its own processes' exits (review 23 nit 4).
   await Promise.all(conversations.map(async ({ key: bKey }) => {
     cancelConversationRequest(bKey);
-    const result = await runEndingConversation(bKey, async () => {
+    const result = await conversationEndings.hold(bKey).run(async () => {
       const swept = await stopAndWaitAllAdaptersFor(bKey);
       // Same release-for-good semantics as `/quit`, per swept thread.
       await releaseConversationIds(bKey);
@@ -10697,7 +10717,7 @@ command(['quit', 'q'], async (_ctx, key) => {
   // over before /quit reads what runs, so none brings a process back for a conversation /quit released (review 22, own pass), and a
   // start or resume that comes after waits behind it. Marked as ending the conversation: a stop queued ahead drops what it held instead
   // of resuming the conversation for it (review 23 #1).
-  const reply = await runEndingConversation(key, async () => {
+  const reply = await conversationEndings.hold(key).run(async () => {
     const adapter = getThreadAdapter(key);
     const adapterName = getThreadAdapterNameRaw(key);
     const primaryActive = adapter.checkIsActive(key);
@@ -12445,8 +12465,15 @@ bot.action(bindLeaveCurrentCallback, async (ctx) => {
   // Claimed like a bind: two taps in a row unbind once, and a picker a bind holds is no more a place to leave from.
   const pickerMessageId = getCallbackMessageId(ctx);
   const run = await bindPickerClaims.runClaimed(key, pickerMessageId, async () => {
-    await answerCallbackQuerySafely(ctx);
-    await unbindThread(key);
+    // Leaving the folder ends the conversation, known at the tap: held from here, ahead of the toast and the leave's paced sends, so a stop
+    // under way drops what it held instead of resuming the conversation for it in the folder being left (review 24 #1).
+    const ending = conversationEndings.hold(key);
+    try {
+      await answerCallbackQuerySafely(ctx);
+      await unbindThread(key, ending);
+    } finally {
+      ending.release();
+    }
     if (pickerMessageId !== null) await removeBindPicker(key, pickerMessageId);
     await closeOpenBindMessages(key);
     // The welcome's buttons have no folder to act on now.
@@ -12696,12 +12723,20 @@ bot.action(/^agent_(.+)$/, async (ctx) => {
     // Resolve up-front so an unknown name throws into the catch (→ "unknown
     // agent") before any side effect, and so the toast can name the label.
     const adapter = getAdapter(adapterName);
-    await ctx.answerCbQuery(t('cb.agent_switched', { label: adapter.label }));
-    // One-tap start: switch + start the agent (was select-only — the user then
-    // had to type /claude). `handleAgentStart` owns the General / binding /
-    // already-active guards and the self-greeting ready-text suppression, and
-    // `switchThreadAdapter` inside it persists the adapter choice.
-    await handleAgentStart(key, adapterName);
+    // A tap onto a shell from an agent's conversation ends it, known now: held ahead of the toast, so a stop under way drops what it held
+    // instead of resuming the conversation for it (review 24, own pass). Onto the other agent the hand-over read decides first.
+    const startAdapterName = resolveStartAdapterName(key, adapterName);
+    const ending = getBackendFamily(startAdapterName) === null && checkIsStartLeavingConversation(key, startAdapterName) ? conversationEndings.hold(key) : undefined;
+    try {
+      await ctx.answerCbQuery(t('cb.agent_switched', { label: adapter.label }));
+      // One-tap start: switch + start the agent (was select-only — the user then
+      // had to type /claude). `handleAgentStart` owns the General / binding /
+      // already-active guards and the self-greeting ready-text suppression, and
+      // `switchThreadAdapter` inside it persists the adapter choice.
+      await handleAgentStart(key, adapterName, undefined, ending);
+    } finally {
+      ending?.release();
+    }
     if (state.getBinding(key)) {
       await updatePinnedStatus(key).catch(() => {});
     }
@@ -12726,14 +12761,21 @@ bot.action(/^agent_(.+)$/, async (ctx) => {
 bot.action(/^resume_(\d+)$/, async (ctx) => {
   const key = await authoriseContext(ctx);
   if (!key) { await ctx.answerCbQuery(t('cb.access_denied')); return; }
-  await ctx.answerCbQuery();
   const idx = Number(ctx.match[1]);
-  // A pick from the button also closes pick-mode (mirrors a digit reply).
-  awaitingSessionSelection.delete(keyToString(key));
-  const result = await resumeSessionByIndex(key, idx, async () => {
-    await replyToThread(key, t('session.expired'));
-  });
-  if (result !== null) await replyToThread(key, result);
+  // The pick replaces the conversation, known at the tap: held ahead of the toast, so a stop under way drops what it held instead of
+  // resuming the conversation the pick leaves (review 24 #1). A row the list no longer has replaces nothing.
+  const ending = getListedSessionId(key, idx) === null ? undefined : conversationEndings.hold(key);
+  try {
+    await ctx.answerCbQuery();
+    // A pick from the button also closes pick-mode (mirrors a digit reply).
+    awaitingSessionSelection.delete(keyToString(key));
+    const result = await resumeSessionByIndex(key, idx, async () => {
+      await replyToThread(key, t('session.expired'));
+    }, ending);
+    if (result !== null) await replyToThread(key, result);
+  } finally {
+    ending?.release();
+  }
 });
 
 // The agent's own question buttons (`qa_`, and `reask_` in the compaction module) are the taps a talker may make: they answer the
