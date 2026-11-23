@@ -309,6 +309,23 @@ After `turnEnded`:
     the compaction starts; a reminder starts a new turn and the compaction waits for that turn's end. Nothing is lost.
 13. **Any other write** (a person's message, a fire, a reminder): the write choke point's settle (settle-list item 1).
 
+**The startup buffer's life** (`startupPromptBuffer.ts`, `bot.ts`). Every way a window opens and ends, and what becomes of each prompt
+waiting in it. A prompt goes into the buffer only while a window is open at its WRITE (`addPrompt` refuses a closed one, and every caller
+routes at the write: rows 2 and 4 of the path table). A person's prompt that waits there carries a settle of its own
+(`createPersonBufferedSettle`): `dropped` closes its request (`cancelled`, like a prompt that found no session) and tells the person to
+send it again. A bot-made one is settled by its caller: a post fails (`assertReplayed`), a retry's nudge keeps its saved record. A watch
+tracked while its prompt waited names no process; only the replay's write names it (settle-list item 1).
+
+| Way | The window | The prompts it holds |
+|---|---|---|
+| fresh start (`startAgentSession`) | opens before the first await (`markStarting`); ends when the replay takes the buffer (`replayPrompts`, before its first write) | written into the new session in arrival order, each `replayed` (`dropped` if its write threw); their watches named by that replay and decided at the end of the turn they start |
+| fresh start that fails (it throws, the session did not come up, or the folder can no longer be used) | ends in `discardPrompts`, or in a replay into a session that is not active | all `dropped`: a person's request closed and the person told; a bot-made prompt's caller told |
+| resume (`resumeSleepingSession`) that comes up | as a fresh start | as a fresh start |
+| resume that fails or does not come up, a fresh start following (`startFresh`) | NOT ended: the resume leaves it open, and the fresh start takes the same window over (one «queued» notice) | a person's: written into the fresh session by the start's replay — never dropped between the two (review 19 #1). A bot-made one was built for the conversation that is lost (a tracker post's issue text, a «continue»): dropped first (`discardBotPrompts`), its caller posts it again its own way |
+| resume that fails, nothing following (`fail`: a resume-only caller; `reportUnavailable`: the backend's server is down) | ended by the caller (`discardPrompts`) | all `dropped`, as a failed start |
+| idle or per-turn stop (`suspendThreadSession`) | opens before the stop; ends once the process exited (`closeWindow`, KEEPING the prompts) — also when the stop throws | the conversation is resumed for them (`resumeForHeldPrompts` in a `finally`) and the resume's rows follow; a conversation released during the stop (`/quit`, `/new`, leaving the folder: no id to resume) starts nothing — they are dropped |
+| a bot restart while prompts wait | the buffer lives in memory | lost. The bot's own update waits for them (`checkIsAnyPending`); a crash or a restart by hand does not. A person's request keeps its stored prompt, never taken in, so the backstop posts it again (rule table row 2; a tracker conversation whose process is gone is woken at once); the stream view opens no request, and the message is lost. A retry's nudge fires again from its saved record |
+
 ## Wake-ups (`wakeUpRules.ts` = pure decisions, `wakeUpEngine.ts` = timers)
 
 - **One watch per REQUEST**, not per conversation: with two requesters' requests open in one topic, each is
