@@ -927,6 +927,7 @@ describe('a request whose first post is still starting its session (J7b)', () =>
       getApiRetryTimer: () => undefined,
       checkIsWedgeRecoveryInFlight: () => false,
       checkIsRetryKickInFlight: () => false,
+      checkIsApiErrorInHandling: () => false,
       checkIsSessionStarting: () => isStarting,
       checkIsReplayingBufferedPrompts: () => false,
       serializeKey: keyToString,
@@ -2581,6 +2582,32 @@ describe('turn boundaries: a forward settles the watches whose turn already ende
     assert.deepEqual(getWakeUpReasons(), ['silentTurn'], 'the last post left without taking it: delivered at its release, once');
     await engine.deliverOrHandOverWake(issueKey, async () => { wakeUps.push({ requestId: 'req_later', reason: 'progressFollowUp' }); });
     assert.equal(getWakeUpReasons().length, 2, 'no post in flight: a wake-up goes out at once');
+  });
+
+  it('a watch whose turn ends while the bot still handles its API error is not decided — not at the turn end, not by the poll — and the stop drops it: no reminder, no give-up (review 16 #1)', async () => {
+    const ledger = await createLedger();
+    const engine = createEngine(ledger);
+    const handOver = await ledger.createRequest(issueKey, { ...handOverOf('ann') });
+    await ledger.updateOpenRequest(handOver.id, { silentTurnCount: 1, wakeCount: 1 });
+    await engine.trackForwardedTurn(issueKey, handOver.id, { isRequestPrompt: false });
+    probe = busyProbe;
+    await engine.pollWatchedTurns();
+    // The reminder's turn ended on a usage limit with «wait for reset» off: the error result left nothing unconsumed.
+    probe = { ...idleProbe, isTurnEndBlocked: true };
+    await engine.deliverOrHandOverWake(issueKey, await engine.settleEndedTurnsOf(issueKey));
+    await engine.pollWatchedTurns();
+    assert.deepEqual(engine.getWatchedRequestIdsOf(issueKey), [handOver.id], 'held: the turn that ended on the error is not decided');
+    // The bot's handling lands: the open request is answered and no longer woken.
+    await engine.stopWakingForLimitWait(issueKey);
+    probe = idleProbe;
+    await engine.pollWatchedTurns();
+    await engine.sweepUnwatchedRequests();
+    assert.deepEqual(engine.getWatchedRequestIdsOf(issueKey), []);
+    assert.deepEqual(getWakeUpReasons(), [], 'no reminder written into the limited session');
+    assert.deepEqual(alerts, [], 'no «could not finish»');
+    const request = ledger.listOpenRequestsOf(issueKey).find((open) => open.id === handOver.id);
+    assert.equal(request?.silentTurnCount, 1, 'the turn that ended on the error was no silent turn');
+    assert.equal(request?.isLimitStopped, true);
   });
 
   it('a watch made while the session starts — its prompt waits in the startup buffer — is never decided by the replay\'s settle: the start is held, and the turn is decided at its REAL end (review 15 #1)', async () => {

@@ -26,6 +26,7 @@ interface ProbeScenario {
   apiRetryTimers: Map<string, NodeJS.Timeout | null>;
   wedgeRecoveryKeys: Set<string>;
   retryKickKeys: Set<string>;
+  apiErrorKeys: Set<string>;
   startingKeys: Set<string>;
   replayingKeys: Set<string>;
   hasUnconsumedInput: boolean | undefined;
@@ -48,6 +49,7 @@ function createProbe(): ReturnType<typeof createSessionTurnProbe> {
     getApiRetryTimer: (keyString) => scenario.apiRetryTimers.get(keyString),
     checkIsWedgeRecoveryInFlight: (keyString) => scenario.wedgeRecoveryKeys.has(keyString),
     checkIsRetryKickInFlight: (keyString) => scenario.retryKickKeys.has(keyString),
+    checkIsApiErrorInHandling: (keyString) => scenario.apiErrorKeys.has(keyString),
     checkIsSessionStarting: (keyString) => scenario.startingKeys.has(keyString),
     checkIsReplayingBufferedPrompts: (keyString) => scenario.replayingKeys.has(keyString),
     serializeKey: keyToString,
@@ -67,6 +69,7 @@ beforeEach(() => {
     apiRetryTimers: new Map(),
     wedgeRecoveryKeys: new Set(),
     retryKickKeys: new Set(),
+    apiErrorKeys: new Set(),
     startingKeys: new Set(),
     replayingKeys: new Set(),
     hasUnconsumedInput: undefined,
@@ -158,6 +161,16 @@ describe('createSessionTurnProbe', () => {
     scenario.replayingKeys.delete(topicKeyString);
     assert.equal(createProbe()(topicKey).isTurnEndBlocked, false, 'the replay over: the adapter decides again');
     assert.equal(createProbe()(topicKey).hasUnconsumedInput, false);
+  });
+
+  it('an API error the bot still handles with nothing armed holds the turn — «wait for reset» off, a used-up balance, an account refusal: the turn that ended on it is no silent one until the stop, move or wait has landed (review 16 #1)', () => {
+    // The error result also empties the adapter's queue of inputs: without the hold the turn reads ended with everything taken in.
+    scenario.hasUnconsumedInput = false;
+    scenario.apiErrorKeys.add(topicKeyString);
+    assert.equal(createProbe()(topicKey).isTurnEndBlocked, true);
+    scenario.apiErrorKeys.add(keyToString(makeTelegramKey(-1001234567890, 43)));
+    scenario.apiErrorKeys.delete(topicKeyString);
+    assert.equal(createProbe()(topicKey).isTurnEndBlocked, false, 'handled — and another thread\'s error holds nothing here');
   });
 
   it('another thread\'s start never holds this one', () => {

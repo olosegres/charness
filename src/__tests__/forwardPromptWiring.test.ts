@@ -131,6 +131,16 @@ test('a turn end\'s reminders are handed to a post waiting for that turn; the po
   assert.match(postDeps, /notePostInFlight: \(conversationKey\) => requestWakeUpEngine\?\.notePostInFlight\(keyFromString\(conversationKey\)\)/);
 });
 
+test('an API error that arms nothing holds the turn end until its stop, move or wait has landed — «wait for reset» off, a used-up balance, an account refusal or a logged-out notice (review 16 #1)', () => {
+  const handler = getFunctionBody('handleApiError');
+  assert.match(handler, /holdTurnEndWhileHandlingApiError\(key, handleBalanceExhausted\(key, cls\)\);/);
+  assert.match(handler, /holdTurnEndWhileHandlingApiError\(key, announceUsageLimitOrSwitch\(key, cls, Date\.now\(\), wait, 0, isFirstOffNotice\)\);/);
+  assert.match(handler, /holdTurnEndWhileHandlingApiError\(key, getThreadAdapter\(key\) instanceof ClaudeJsonStreamAdapter \? handleClaudeAuthRefusal\(key, cls\) : surfaceLoggedOutNotice\(key\)\);/);
+  assert.doesNotMatch(handler, /void (handleBalanceExhausted|handleClaudeAuthRefusal|surfaceLoggedOutNotice)\(/, 'no branch that arms nothing is left fire-and-forget');
+  assert.match(getFunctionBody('holdTurnEndWhileHandlingApiError'), /apiErrorsInHandling\.set\(k, \(apiErrorsInHandling\.get\(k\) \?\? 0\) \+ 1\);\s*void handling\.finally\(/, 'held from the synchronous branch to the handling\'s end');
+  assert.ok(botSource.includes('checkIsApiErrorInHandling: (keyString) => apiErrorsInHandling.has(keyString),'), 'the probe reads it');
+});
+
 test('a bot-made prompt that waits for an adopt replay behind a start counts only once replayed', () => {
   const body = getFunctionBody('forwardPromptToAgent');
   const buffer = body.slice(body.indexOf('buffer: async () => {'));

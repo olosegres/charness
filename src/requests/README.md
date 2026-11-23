@@ -167,6 +167,13 @@ same tick and its window opens only in a later one, and once the stop is over th
 lost» (`sessionGone`), never as an end. A reminder decided there goes to a post waiting for that turn, else resumes the session
 through the ensure, which queues behind the stop.
 
+A turn that ended on an API error is decided only once the bot has armed its retry, stopped the waking or moved the conversation. The
+adapter reports the error (`apiError`) right before the turn's end, and `handleApiError` runs first: a branch that arms a retry holds the
+turn end through its timer; one that arms nothing — «wait for reset» off, a used-up credit balance, an account refusal or a logged-out
+notice — through `checkIsApiErrorInHandling` (`bot.ts` `apiErrorsInHandling`), from the error until that handling has landed. Decided at
+once, the turn would be a silent one, and its reminder, written into the limited or refused session, would end on the same error: the
+second silent turn, the give-up.
+
 A session start and the replay of the prompts buffered during it are ONE start for the turn probe (`isTurnEndBlocked`:
 `StartupPromptBuffer.checkIsStarting` or `checkIsReplaying`, the latter from before the buffer is taken until after the held prompts are
 forwarded, also when a forward throws). A settle at a replayed write therefore reads every watch as `running`: a watch made during the
@@ -188,8 +195,8 @@ written at once and joins the start's turn.
 
 Where a watch is settled or ended, and when that runs relative to the prompt write and to a buffered replay. Only the first four DECIDE
 a turn's end, all on `getWatchedTurnState`, which reads `ended` only for an active, idle session that nothing blocks (a start or its
-replay, a pending question, a compaction, an armed retry or limit wait, a wedge recovery) and that took the turn's prompt in — so none
-of them decides a turn that has not started:
+replay, a pending question, a compaction, an armed retry or limit wait, an API error still in hand, a wedge recovery) and that took the
+turn's prompt in — so none of them decides a turn that has not started:
 
 1. The settle at the write (`forwardPromptToLiveAgent`): synchronously right before the adapter write (after an immediate forward's wake
    and the adopted-replay wait in `forwardPromptToAgent`), its reminders after the write. At a replayed write, and at a prompt that
@@ -200,8 +207,8 @@ of them decides a turn that has not started:
    replay runs on: a settle that lands while the start's buffered prompts are still being written reads the start and decides nothing.
 3. The settle at a turn end (`handleAgentTurnEnded`): at the adapter's turn-end event, after the per-turn stop is queued and before its
    window opens; no write of its own, so its reminders are handed to a post in flight, else go at once (through the ensure, behind the
-   stop). A turn end during a replay reads the start, one with a written prompt not yet read reads `running` (`hasUnconsumedInput`):
-   nothing is decided.
+   stop). A turn end held by an API error the bot still handles (`checkIsApiErrorInHandling`) or by an armed retry, one during a
+   replay, and one with a written prompt not yet read (`hasUnconsumedInput`) read `running`: nothing is decided.
 4. The poll (`pollWatchedTurn`, every 10 s): between writes, on its own probe and the same rule; during a start or a replay every watch
    reads `running`. It re-checks its watch after the R21 write, so a watch a settle took meanwhile is not decided twice. What it decides
    is handed to a post in flight, like the turn end's.
@@ -221,7 +228,7 @@ A merge (`trackForwardedTurn`, `trackContinuationTurn`) replaces a watch by its 
   followed to its own turn end — the answered one closes, the silent one is woken. The sweep skips only
   requests that are watched.
 - A turn has ENDED only when the session is idle, nothing blocks it (pending question, compaction, armed
-  retry or limit wait, session start, wedge recovery) and the backend has TAKEN IN the request's message
+  retry or limit wait, an API error still in hand, session start or its replay, wedge recovery) and the backend has TAKEN IN the request's message
   (`checkHasUnconsumedInput`) — otherwise an earlier turn's idle reads as the end of this request's turn.
 - A silent turn wakes the agent at once; the second silent turn in a row alerts and stops; a `progress` note
   resets the counter and schedules a follow-up; every wake passes `maxWakeUpsPerRequest`. Requests nobody
@@ -277,6 +284,8 @@ A merge (`trackForwardedTurn`, `trackContinuationTurn`) replaces a watch by its 
   back» = the request is not held, so a due follow-up, else the backstop (90 min after the last activity OF THIS REQUEST — the busy
   time of another request's watched turn is never its activity, whatever it owes: the sweep records a busy session only while no turn
   is watched in the conversation), else the restart wake applies, exactly as without a schedule. A request the rules gave up on or a limit wait stopped (`checkIsWakingStopped`) is left alone in EVERY row.
+  A turn that ended on an API error is decided only once the bot has armed its retry, stopped the waking or moved the conversation
+  (§ Turn starts): until then it is held, in every row.
 
   | # | Turn | State | Turn end (tracked) | Between turns |
   |---|------|-------|--------------------|---------------|

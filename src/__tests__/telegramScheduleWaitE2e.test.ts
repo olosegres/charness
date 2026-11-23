@@ -26,6 +26,8 @@
  *   → still per-turn: a one-shot fires while the agent works on the operator's message, and its post waits for that turn, which ends
  *     silent. The fire is written first and starts the next turn; the operator's reminder follows it. So the watch the agent arms in
  *     that turn is the fire's request's, not the reminded one's
+ *   → «wait for reset» off: a request's reminder turn ends on a usage limit. The bot answers the request and stops waking it before
+ *     that turn is decided: it is no second silent turn — no reminder into the limit, no «got no answer»
  *
  * Before the rule, the engine reminded such an agent every 15 minutes whatever its watch said; before the scheduled-run model, every
  * fire opened a request that replaced the previous fire's, and an answered one's «working on it» was lost or chased. Nothing leaves the
@@ -43,6 +45,7 @@ import { FakeTelegram } from './telegramE2e/fakeTelegram';
 import { TopicDriver } from './telegramE2e/topicDriver';
 import {
   fakeClaudeLogFileNames,
+  fakeClaudeApiErrorOnceFileName,
   fakeClaudeExitFlushDelayFileName,
   fakeClaudeHoldReleaseFileName,
   fakeOneShotDelaySeconds,
@@ -101,6 +104,8 @@ const perTurnStopHoldMs = 8 * msPerSecond;
 const bufferedFlowTimeoutMs = 3 * 60 * msPerSecond;
 /** Past a job's own instant its fire's post has started (the engine's timer delivers at once): a post behind a running turn waits. */
 const firePostStartMarginMs = 5 * msPerSecond;
+/** A usage limit the fake ends a turn on: the CLI's own wording, read as a confirmed limit (no probe retry is armed for it). */
+const usageLimitErrorText = "You've hit your session limit · resets 11:00pm";
 /** A one-shot armed `fakeOneShotDelaySeconds` ahead fires within this (the engine's timer, the post and the turn). */
 const oneShotFireTimeoutMs = (fakeOneShotDelaySeconds + 60) * msPerSecond;
 /** The follow-up a progress note gets after this long (production: 15 min) and the engine's sweep that would deliver it. */
@@ -466,5 +471,32 @@ describe('A request waits for its schedule in a Telegram topic end to end: built
     const reminderIndex = getAgentPrompts().findIndex((prompt) => prompt.text.includes(`[Reminder · request ${operatorRequestId} is still open]`));
     assert.ok(reminderIndex > firePromptIndex, `the waited fire was written first and the reminder followed it (fire ${firePromptIndex}, reminder ${reminderIndex})`);
     assert.ok(!topic.listMessages().some((message) => message.text.includes('got no answer')), 'no give-up');
+  });
+
+  it('«wait for reset» off: a reminder\'s turn that ends on a usage limit is no second silent turn — the bot answers the request and stops waking it first: no reminder into the limit, no «got no answer» (review 16 #1)', async () => {
+    await topic.sendAndAwaitReply('/auto_continue_limits off', 'Auto-resume after a usage limit: OFF for this topic');
+    const apiErrorOncePath = path.join(getLayout().fakeStateDir, fakeClaudeApiErrorOnceFileName);
+    try {
+      fakeTelegram.pushOperatorMessage(topicThreadId, 'WJ-10 [fake:hold-silent-once] a request whose agent goes quiet once');
+      await getCharness().waitFor('the agent to work on the request', agentTimeoutMs, () => readFakeLog<FakeClaudeTurn>(fakeClaudeLogFileNames.turns).some((turn) => turn.issueKey === 'WJ-10'));
+      const requestId = readFakeLog<FakeClaudeTurn>(fakeClaudeLogFileNames.turns).find((turn) => turn.issueKey === 'WJ-10')?.requestId ?? '';
+      assert.match(requestId, /^req_/);
+      // Its first turn ends silent and is reminded; the reminder's turn ends on the usage limit.
+      fs.writeFileSync(apiErrorOncePath, usageLimitErrorText);
+      fs.writeFileSync(path.join(getLayout().fakeStateDir, fakeClaudeHoldReleaseFileName), '');
+      const readRequest = (): OpenRequestState | undefined => Object.values(readState().openRequests ?? {}).find((open) => open.id === requestId);
+      await getCharness().waitFor('the bot to stop waking the limited request', bufferedFlowTimeoutMs, () => readRequest()?.isLimitStopped === true);
+      assert.ok(!fs.existsSync(apiErrorOncePath), 'the reminder\'s turn is the one that met the limit');
+      await sleep(2 * requestSweepIntervalMs);
+
+      const request = readRequest();
+      assert.ok(request, 'still open: its answer comes after the operator writes');
+      assert.equal(request.silentTurnCount, 1, 'only the first turn was silent: the one that ended on the limit is not');
+      assert.equal(request.isWakeStopped, false, 'not given up');
+      assert.equal(getAgentPrompts().filter((prompt) => prompt.text.includes(`[Reminder · request ${requestId} is still open]`)).length, 1, 'no reminder written into the limited session');
+      assert.ok(!topic.listMessages().some((message) => message.text.includes('got no answer')), 'no «got no answer»');
+    } finally {
+      fs.rmSync(apiErrorOncePath, { force: true });
+    }
   });
 });

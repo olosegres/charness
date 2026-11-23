@@ -2362,6 +2362,25 @@ const wedgeRecoveryTier = new Map<string, number>();
  * like one, and a reminder on top would be a second recovery of the same turn.
  */
 const wedgeRecoveriesInFlight = new Set<string>();
+/**
+ * Threads whose API error the bot is still handling with NOTHING armed — «wait for reset» off, a used-up credit balance, an account
+ * refusal or a logged-out notice ({@link handleApiError}), by how many such errors are in hand: from the error, which the adapter
+ * reports right before the turn's end, until that handling's stop, move or wait has landed. The request wake-up probe reads it as «not
+ * a turn end»: decided at once, the turn that ended on the error would be a silent one, and its reminder written into the limited or
+ * refused session would end on the same error — the second silent turn, the give-up. A branch that arms a retry is held by the timer.
+ */
+const apiErrorsInHandling = new Map<string, number>();
+
+/** Hold `key`'s turn end ({@link apiErrorsInHandling}) until `handling` — an API error's stop, move or wait — has settled. */
+function holdTurnEndWhileHandlingApiError(key: SessionKey, handling: Promise<void>): void {
+  const k = keyToString(key);
+  apiErrorsInHandling.set(k, (apiErrorsInHandling.get(k) ?? 0) + 1);
+  void handling.finally(() => {
+    const count = (apiErrorsInHandling.get(k) ?? 1) - 1;
+    if (count > 0) apiErrorsInHandling.set(k, count);
+    else apiErrorsInHandling.delete(k);
+  });
+}
 
 /** @description Where an {@link handleApiError} call comes from, when it is not a live `apiError`. */
 interface HandleApiErrorOptions {
@@ -2401,7 +2420,7 @@ function handleApiError(key: SessionKey, cls: AgentApiErrorClass, options: Handl
   }
   // A used-up API credit balance: no wait refills it — the account is marked, and the chain or the operator takes over.
   if (cls.kind === 'usageLimit' && cls.isBalanceExhausted === true) {
-    void handleBalanceExhausted(key, cls);
+    holdTurnEndWhileHandlingApiError(key, handleBalanceExhausted(key, cls));
     return;
   }
   // An unconfirmed usage limit is probed first; it reaches the wait below only once confirmed.
@@ -2413,7 +2432,7 @@ function handleApiError(key: SessionKey, cls: AgentApiErrorClass, options: Handl
     // Each repeat is offered to the open request: the dedup is per request, so one
     // opened after the first notice still hears about the limit (and is stopped).
     const wait: UsageLimitWait = { kind: 'autoResumeOff' };
-    void announceUsageLimitOrSwitch(key, cls, Date.now(), wait, 0, isFirstOffNotice);
+    holdTurnEndWhileHandlingApiError(key, announceUsageLimitOrSwitch(key, cls, Date.now(), wait, 0, isFirstOffNotice));
     return;
   }
   const entry = apiRetryTimers.get(k);
@@ -2433,8 +2452,7 @@ function handleApiError(key: SessionKey, cls: AgentApiErrorClass, options: Handl
   // there (`handleClaudeAuthRefusal`; the frozen tmux backend keeps the notice alone); anything else, or nowhere to go,
   // surfaces a pinned notice — deduped to one per episode inside `surfaceLoggedOutNotice`.
   if (action.action === 'surface') {
-    if (getThreadAdapter(key) instanceof ClaudeJsonStreamAdapter) void handleClaudeAuthRefusal(key, cls);
-    else void surfaceLoggedOutNotice(key);
+    holdTurnEndWhileHandlingApiError(key, getThreadAdapter(key) instanceof ClaudeJsonStreamAdapter ? handleClaudeAuthRefusal(key, cls) : surfaceLoggedOutNotice(key));
     return;
   }
 
@@ -15710,6 +15728,7 @@ const probeThreadTurn = createSessionTurnProbe({
   getApiRetryTimer: (keyString) => apiRetryTimers.get(keyString)?.timer,
   checkIsWedgeRecoveryInFlight: (keyString) => wedgeRecoveriesInFlight.has(keyString),
   checkIsRetryKickInFlight: (keyString) => apiRetryKicksInFlight.has(keyString),
+  checkIsApiErrorInHandling: (keyString) => apiErrorsInHandling.has(keyString),
   checkIsSessionStarting: (keyString) => startupPromptBuffer.checkIsStarting(keyString),
   checkIsReplayingBufferedPrompts: (keyString) => startupPromptBuffer.checkIsReplaying(keyString),
   serializeKey: keyToString,

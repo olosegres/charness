@@ -21,6 +21,11 @@ import type { SessionTurnProbe } from './wakeUpRules';
  *  - an API-error retry or limit resume being KICKED: from the moment its timer
  *    fired until its "continue" nudge was forwarded the retry is no longer armed,
  *    yet the idle the error left behind is not a turn end either;
+ *  - an API error the bot is still HANDLING with nothing armed («wait for reset» off,
+ *    a used-up credit balance, an account refusal): the adapter reports the error right
+ *    before the turn's end, and until the bot's stop, move or wait has landed that turn
+ *    is no silent one — decided at once, its reminder would go into the limited or refused
+ *    session and end on the same error, the give-up;
  *  - a session START under way: a request's first post is starting the session it
  *    will run in, so nothing has gone quiet — without this the sweep reads the
  *    request as one nobody works on and wakes it (or raises an alert) once the
@@ -52,6 +57,8 @@ export interface SessionTurnProbeDeps {
   getApiRetryTimer: (keyString: string) => NodeJS.Timeout | null | undefined;
   checkIsWedgeRecoveryInFlight: (keyString: string) => boolean;
   checkIsRetryKickInFlight: (keyString: string) => boolean;
+  /** An API error that armed nothing is being handled: its stop, move or wait has not landed yet. */
+  checkIsApiErrorInHandling: (keyString: string) => boolean;
   /** The session is in its startup window: prompts forwarded now are buffered, not written. */
   checkIsSessionStarting: (keyString: string) => boolean;
   /** The prompts buffered during the start are being written now (`StartupPromptBuffer.checkIsReplaying`): still the start. */
@@ -75,6 +82,7 @@ export function createSessionTurnProbe(deps: SessionTurnProbeDeps): (key: Sessio
       Boolean(deps.getApiRetryTimer(keyString)) ||
       deps.checkIsWedgeRecoveryInFlight(keyString) ||
       deps.checkIsRetryKickInFlight(keyString) ||
+      deps.checkIsApiErrorInHandling(keyString) ||
       isStarting;
     return {
       isActive,
