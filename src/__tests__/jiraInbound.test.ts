@@ -1667,6 +1667,20 @@ describe('JiraInbound', () => {
       assert.equal(requestCount, 0);
     });
 
+    it('an edit of the AI account\'s own comment that mentions someone — its progress note naming a requester — wakes nothing, however often the answer sink edits it: the comment and the issue\'s `updated` move, and the mention scan decides nothing', async () => {
+      const aiAccount: JiraAccount = { accountId: aiAccountId, accountType: 'atlassian', displayName: 'AI' };
+      // Its search match (`comment ~ currentUser()`) is the AI\'s own mention node here; the author decides.
+      const inbound = createMentionInbound();
+      for (const [index, editedMinutesAgo] of [4, 2, 0].entries()) {
+        comments = [createMentionComment('10240', aiAccount, { minutesAgo: 6, editedMinutesAgo })];
+        issueUpdated = `updated-edit-${index}`;
+        assert.deepEqual([...await inbound.pollOnce()], [[issueKey, 'notMatching']], `edit ${index + 1}`);
+      }
+      assert.equal(countCommentReads(), 3, 'every edit moved the issue, so every poll read its comments');
+      assert.equal(requestCount, 0);
+      assert.equal(triggerLog.checkIsSeen(issueKey, 'mention:10240'), false, 'not even decided');
+    });
+
     it('a comment that names the AI in plain text, or mentions someone else, is not a mention', async () => {
       // The display text says "@AI", the id says someone else: the id decides.
       const mentionOfSomeoneElse: AdfDocument = {
@@ -2172,6 +2186,38 @@ describe('JiraInbound', () => {
         assert.deepEqual([...await createCommentInbound().pollOnce()], [[issueKey, 'seen']]);
         assert.deepEqual(recorded.updates, []);
         assert.equal(triggerLog.checkIsSeen(issueKey, 'comment:10241'), false);
+      });
+
+      it('(6b) an EDIT of the AI account\'s own comment — its progress note, kept up to date by the answer sink — is no update: the comment and the issue\'s `updated` move, the scan reads them, and nothing wakes, opens or is recorded', async () => {
+        openHandOver();
+        const aiAccount: JiraAccount = { accountId: aiAccountId, accountType: 'atlassian', displayName: 'AI' };
+        // The AI\'s progress note, newer than everything the hand-over\'s prompt carried, posted a minute ago.
+        comments = [plain('10240', aiAccount, { minutesAgo: 10 })];
+        const inbound = createCommentInbound();
+        assert.deepEqual([...await inbound.pollOnce()], [[issueKey, 'seen']]);
+        const readsAfterPost = countCommentReads();
+        // The answer sink edits it three times: each edit moves the comment's `updated` and the issue's.
+        for (const [index, editedMinutesAgo] of [8, 5, 0].entries()) {
+          comments = [{ ...plain('10240', aiAccount, { minutesAgo: 10 }), updated: agoIso(editedMinutesAgo), updateAuthor: aiAccount }];
+          issueUpdated = `updated-edit-${index}`;
+          assert.deepEqual([...await inbound.pollOnce()], [[issueKey, 'seen']], `edit ${index + 1}`);
+        }
+        await flushPosts();
+        assert.equal(countCommentReads() - readsAfterPost, 3, 'each edit moved the issue, so the scan read the comments — and found nothing to decide');
+        assert.deepEqual(recorded.updates, [], 'no issue update for the hand-over\'s agent');
+        assert.equal(requestCount, 0, 'no request of its own');
+        assert.equal(triggerLog.checkIsSeen(issueKey, 'comment:10240'), false, 'not decided: it rides the next prompt, if at all');
+        assert.equal(triggerLog.getNewestShownCommentId(issueKey), shownUpToId, 'the watermark of what the conversation was shown did not move');
+        assert.equal(triggerLog.getRequestCountLastDay(issueKey, nowMs), 1, 'nothing counted in the run budget');
+      });
+
+      it('(6c) a PERSON\'s edit of the AI\'s comment wakes nothing either — it is the AI\'s comment: only the next prompt\'s delta tells the agent, as «edited … by» (`jiraIssueDelta.test.ts` C7; the AI\'s own edit is not told there at all)', async () => {
+        openHandOver();
+        const aiAccount: JiraAccount = { accountId: aiAccountId, accountType: 'atlassian', displayName: 'AI' };
+        comments = [{ ...plain('10240', aiAccount, { minutesAgo: 10 }), updated: agoIso(2), updateAuthor: member }];
+        assert.deepEqual([...await createCommentInbound().pollOnce()], [[issueKey, 'seen']]);
+        assert.deepEqual(recorded.updates, []);
+        assert.equal(requestCount, 0);
       });
 
       it('(7) a post in flight holds the scan: the comment that came meanwhile is taken by the next poll', async () => {
