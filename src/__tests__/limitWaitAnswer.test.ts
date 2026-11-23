@@ -20,6 +20,7 @@ import {
   answerOpenRequestsWithBotNotice,
   getLimitWaitForNewRequest,
   getUsageLimitWaitIdentity,
+  usageLimitWaitRepeatKey,
   type LimitEpisodeState,
   type LimitWaitAnswerDeps,
   type UsageLimitWait,
@@ -96,6 +97,8 @@ describe('answerOpenRequestForLimitWait', () => {
       isRequestOpen: true,
       // The bot's own words: a sink must not take it for the agent's reply (Jira keeps the thread an update owes an answer in).
       isBotNotice: true,
+      // A later wait of the same request says it anew: a sink that edits what it delivered (Jira) edits this notice.
+      repeatKey: usageLimitWaitRepeatKey,
     }]);
     const open = deps.ledger.getNewestOpenRequest(topicKey);
     assert.equal(open?.id, request.id);
@@ -242,6 +245,7 @@ describe('answerOpenRequestsWithBotNotice — the bot\'s own notice of an accoun
     assert.equal(await answerOpenRequestsWithBotNotice(deps, topicKey, moved), 'answered');
     assert.equal(await answerOpenRequestsWithBotNotice(deps, topicKey, moved), 'alreadyAnswered');
     assert.deepEqual(deliveries.map((delivery) => [delivery.requestId, delivery.kind, delivery.body, delivery.isBotNotice]), [[request.id, 'progress', 'Moved to «second».', true]]);
+    assert.equal(deliveries[0].repeatKey, undefined, 'a move names a new account each time: its notices are never edited into one another');
     assert.equal(deps.ledger.listOpenRequestsOf(topicKey)[0].isLimitStopped, undefined, 'the work goes on: still woken');
 
     const waiting = { identity: 'claudeAccountWait', body: 'No account can work.', isWakeStopped: true };

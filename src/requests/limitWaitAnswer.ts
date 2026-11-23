@@ -29,6 +29,9 @@ export type UsageLimitWait =
   | { kind: 'nextAttempt'; fireAt: number }
   | { kind: 'autoResumeOff' };
 
+/** The {@link RequestAnswerDelivery.repeatKey} of a limit wait's notice. */
+export const usageLimitWaitRepeatKey = 'usageLimitWait';
+
 /**
  * @description Identifies one limit wait across its repeated errors: an armed
  * wait by its resume instant (every arming gets a new one), the auto-resume-off
@@ -102,7 +105,13 @@ export async function answerOpenRequestForLimitWait(
   wait: UsageLimitWait,
   body: string,
 ): Promise<LimitWaitAnswerOutcome> {
-  return answerOpenRequestsWithBotNotice(deps, key, { identity: getUsageLimitWaitIdentity(wait), body, isWakeStopped: wait.kind === 'autoResumeOff' });
+  return answerOpenRequestsWithBotNotice(deps, key, {
+    identity: getUsageLimitWaitIdentity(wait),
+    body,
+    isWakeStopped: wait.kind === 'autoResumeOff',
+    // A later wait of the same request (the next attempt, the next limit) says the same thing anew: a sink that edits does.
+    repeatKey: usageLimitWaitRepeatKey,
+  });
 }
 
 /**
@@ -114,7 +123,7 @@ export async function answerOpenRequestForLimitWait(
 export async function answerOpenRequestsWithBotNotice(
   deps: LimitWaitAnswerDeps,
   key: SessionKey,
-  notice: { identity: string; body: string; isWakeStopped: boolean },
+  notice: { identity: string; body: string; isWakeStopped: boolean; repeatKey?: string },
 ): Promise<LimitWaitAnswerOutcome> {
   const outcomes: LimitWaitAnswerOutcome[] = [];
   for (const request of deps.ledger.listOpenRequestsOf(key)) {
@@ -128,7 +137,7 @@ async function answerOneRequestWithBotNotice(
   deps: LimitWaitAnswerDeps,
   key: SessionKey,
   request: OpenRequestState,
-  notice: { identity: string; body: string; isWakeStopped: boolean },
+  notice: { identity: string; body: string; isWakeStopped: boolean; repeatKey?: string },
 ): Promise<LimitWaitAnswerOutcome> {
   const { identity, body } = notice;
   // The common repeat (another frame of the same error) costs no state write.
@@ -153,6 +162,7 @@ async function answerOneRequestWithBotNotice(
       isRequestOpen: true,
       // The bot's own words: a sink keeps whatever the agent's real answer is still owed (`RequestAnswerDelivery.isBotNotice`).
       isBotNotice: true,
+      ...(notice.repeatKey === undefined ? {} : { repeatKey: notice.repeatKey }),
     })
     : lookup;
   if (!result.ok) {

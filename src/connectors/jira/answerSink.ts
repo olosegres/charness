@@ -10,9 +10,10 @@ import {
   createPlainTextAdf,
   getAdfText,
   type AdfDocument,
+  type AdfNode,
 } from './adf';
 import { getSingleLineText } from './promptText';
-import { getCommentThreadRootId, JiraHttpError, type JiraAccount, type JiraClient } from './client';
+import { getCommentThreadRootId, JiraAuthError, JiraHttpError, type JiraAccount, type JiraClient } from './client';
 import { getCommentBodyHash, type JiraUnconfirmedPosts } from './unconfirmedPosts';
 import { jiraReplyThreadAttribute, mentionTriggerIdPrefix, checkIsPersonAccount } from './trigger';
 import { checkIsCommentTrusted } from './issueBlocks';
@@ -22,6 +23,7 @@ import type { TaskAgentSlotDecision } from '../../trackers/taskAgentSlots';
 import type { SendFilesToThreadResult } from '../../utils/fileSendService';
 import { appendNodesToBodies, type JiraFilesAttachResult } from './outgoingFiles';
 import type { JiraAnswerThreads } from './answerThreads';
+import type { JiraProgressComments } from './progressComments';
 
 /**
  * @description The Jira connector's answer sink (plan J6, D20, R18): an answer
@@ -49,6 +51,18 @@ import type { JiraAnswerThreads } from './answerThreads';
  * Files: an answer's `files` are attached to the issue BEFORE its comment is posted and shown in it, after its text
  * (`outgoingFiles.ts`); a file that cannot be attached fails the answer with nothing posted. `postFiles` is
  * `send_file_to_user` on an issue: the files, and the caption as text, in a comment of their own.
+ *
+ * One progress comment per request (`progressComments.ts`): the first `progress` answer of a request posts a comment and the sink
+ * remembers it (on disk); each next one EDITS it to the newest text, with a line saying when it was last updated, in the thread
+ * the first stood in — an edit moves nothing and notifies nobody. A `question` or `final` answer is a new comment as ever and the
+ * progress comment is left as it is. An edit Jira refuses (the comment is gone, 400, 403), or one whose outcome is unknown and
+ * whose read-back does not show the new text, posts the text as a new comment instead (with R18's read-back) and that one is
+ * remembered — the text is never lost. A progress answer is kept as that one comment only when it is a plain note: it carries no
+ * files, replies to no comment (an edit notifies nobody, a reply is meant to) and fits one comment; any other is a comment of its
+ * own, like a question, and the progress comment is let go, so the next note starts below it. A progress answer the request's
+ * issue update put in another thread than the comment's is a comment of its own in that thread (the person who replied hears
+ * it), and the next notes edit that one. The bot's own notice that repeats for a request (`RequestAnswerDelivery.repeatKey`: a
+ * usage-limit wait once more) is kept the same way, in a slot of its own; a bot notice without a key is a comment each time.
  */
 
 /** How many of the issue's newest comments R18's read-back looks through. */
@@ -142,6 +156,11 @@ export function buildJiraThreadRefusedWarning(threadRootId: string): string {
   return `The thread of comment ${threadRootId} no longer takes replies (Jira refused it), so the answer was posted as a new comment instead.`;
 }
 
+/** @description The line an edited progress comment ends with: when it was last updated (UTC, to the minute, as the other notices tell time). */
+export function buildJiraProgressUpdatedText(atMs: number): string {
+  return `Last updated ${new Date(atMs).toISOString().slice(0, 16).replace('T', ' ')} UTC`;
+}
+
 /** @description The last paragraph of a hand-over's `question` comment: how the requester lets the agent go on. */
 export const jiraQuestionContinueText = 'To let me go on, answer in a comment and assign the issue back to me.';
 
@@ -154,7 +173,7 @@ export function buildJiraUntrustedText(groupName: string): string {
 }
 
 export interface JiraAnswerSinkDeps {
-  client: Pick<JiraClient, 'addComment' | 'getRecentComments' | 'getIssue' | 'assignIssue' | 'getComment'>;
+  client: Pick<JiraClient, 'addComment' | 'editComment' | 'getRecentComments' | 'getIssue' | 'assignIssue' | 'getComment'>;
   aiAccountId: string;
   /** What each issue's conversation was shown: only a comment it was shown can be replied to. */
   contextLedger: Pick<JiraContextLedger, 'getShownBlock'>;
@@ -167,6 +186,8 @@ export interface JiraAnswerSinkDeps {
   unconfirmedPosts: Pick<JiraUnconfirmedPosts, 'getPostedAt' | 'recordUnconfirmed' | 'settle'>;
   /** The thread an issue update put a request's next answer in; consumed by the answer delivered. */
   answerThreads: Pick<JiraAnswerThreads, 'get' | 'consume'>;
+  /** The comments kept up to date instead of posting another: a request's progress note, a repeating bot notice. */
+  progressComments: Pick<JiraProgressComments, 'get' | 'remember' | 'forget'>;
   /**
    * Attach files of the issue's project folder to the issue and say how a comment shows them (`outgoingFiles.ts`);
    * absent where files cannot be sent — an answer that carries some is then refused, nothing posted.
@@ -188,18 +209,46 @@ interface CommentPostFailure {
   status?: number;
 }
 
+/** A comment that landed, with its id (the progress comment is edited by it). */
+interface CommentPosted {
+  kind: 'posted';
+  commentId: string;
+}
+
 /**
- * What posting an answer's comments did: how many landed, why the next one did not, and the thread Jira refused when
- * the comments went top-level instead (`null` when they went where they were meant to).
+ * What posting an answer's comments did: how many landed (and their ids, in order), why the next one did not, and the thread
+ * Jira refused when the comments went top-level instead (`null` when they went where they were meant to).
  */
 interface CommentsPosted {
   postedCount: number;
+  commentIds: string[];
   failure: CommentPostFailure | null;
   refusedThreadRootId: string | null;
 }
 
 /** Jira's answer to a reply whose thread it does not have: the request is refused, nothing was posted. */
 const threadRefusedStatus = 400;
+
+/** What a request's own progress note is kept as (`progressComments.ts`). */
+const progressSlot = 'progress';
+const getNoticeSlot = (repeatKey: string): string => `notice:${repeatKey}`;
+
+/**
+ * The slot an answer is kept in as ONE comment edited by the next such answer, or `null` when it is a comment of its own: only a
+ * plain `progress` note — no files, no reply to a comment — and, of the bot's notices, one that carries a repeat key.
+ */
+function getEditableSlot(delivery: RequestAnswerDelivery): string | null {
+  const isPlain = delivery.kind === 'progress' && (delivery.files?.length ?? 0) === 0 && (delivery.replyToCommentIds?.length ?? 0) === 0;
+  if (!isPlain) return null;
+  if (!delivery.isBotNotice) return progressSlot;
+  return delivery.repeatKey === undefined ? null : getNoticeSlot(delivery.repeatKey);
+}
+
+/** `body` with the line saying when it was last updated as one more paragraph, in italics. */
+function getBodyWithUpdatedLine(body: AdfDocument, atMs: number): AdfDocument {
+  const updatedParagraph: AdfNode = { type: 'paragraph', content: [{ type: 'text', text: buildJiraProgressUpdatedText(atMs), marks: [{ type: 'em' }] }] };
+  return { ...body, content: [...body.content, updatedParagraph] };
+}
 
 /** The thread a request's answers go into by default: the origin's {@link jiraReplyThreadAttribute}, when it is a comment id. */
 export function getOriginThreadRootId(origin: RequestOrigin): string | null {
@@ -249,14 +298,15 @@ export interface JiraAnswerSink extends AnswerSink {
 export function createJiraAnswerSink(deps: JiraAnswerSinkDeps): JiraAnswerSink {
   const { client } = deps;
 
-  /** Is the comment on the issue, by the AI account, dated from the post's start on? `null` — the issue could not be read. */
-  async function checkIsCommentOnIssue(issueKey: string, comparableText: string, postStartedAt: number): Promise<boolean | null> {
+  /** The comment on the issue, by the AI account, dated from the post's start on, with this text: its id; `false` — none; `null` — the issue could not be read. */
+  async function findCommentOnIssue(issueKey: string, comparableText: string, postStartedAt: number): Promise<string | false | null> {
     try {
       const comments = await client.getRecentComments(issueKey, jiraReadBackCommentCount);
-      return comments.some((comment) =>
+      const found = comments.find((comment) =>
         comment.author?.accountId === deps.aiAccountId
         && Date.parse(comment.created) >= postStartedAt - jiraReadBackClockSkewMs
         && getComparableText(comment.body) === comparableText);
+      return found ? found.id : false;
     } catch (error) {
       console.warn(`[jira] ${issueKey}: read-back failed: ${error instanceof Error ? error.message : String(error)}`);
       return null;
@@ -267,17 +317,17 @@ export function createJiraAnswerSink(deps: JiraAnswerSinkDeps): JiraAnswerSink {
    * Post one comment, in the thread of `parentId` (a top-level comment's id) or top-level (`null`). With a
    * `requestId`, a post left unconfirmed is remembered, and a resend of a remembered one reads the issue first (R29).
    */
-  async function postComment(issueKey: string, body: AdfDocument, requestId: string | null, parentId: string | null): Promise<CommentPostFailure | 'posted'> {
+  async function postComment(issueKey: string, body: AdfDocument, requestId: string | null, parentId: string | null): Promise<CommentPostFailure | CommentPosted> {
     const comparableText = getComparableText(body);
     const bodyHash = getCommentBodyHash(comparableText);
     const earlierPostedAt = requestId === null ? null : deps.unconfirmedPosts.getPostedAt(requestId, bodyHash);
     if (requestId !== null && earlierPostedAt !== null) {
-      const isEarlierOnIssue = await checkIsCommentOnIssue(issueKey, comparableText, earlierPostedAt);
-      if (isEarlierOnIssue === null) {
+      const earlierCommentId = await findCommentOnIssue(issueKey, comparableText, earlierPostedAt);
+      if (earlierCommentId === null) {
         return { kind: 'unchecked', detail: 'the issue could not be read to check whether the earlier attempt landed' };
       }
       deps.unconfirmedPosts.settle(requestId, bodyHash);
-      if (isEarlierOnIssue) return 'posted';
+      if (earlierCommentId !== false) return { kind: 'posted', commentId: earlierCommentId };
     }
     const postStartedAt = deps.now();
     let result: Awaited<ReturnType<JiraClient['addComment']>>;
@@ -286,13 +336,13 @@ export function createJiraAnswerSink(deps: JiraAnswerSinkDeps): JiraAnswerSink {
     } catch (error) {
       return { kind: 'refused', detail: error instanceof Error ? error.message : String(error), status: error instanceof JiraHttpError ? error.status : 0 };
     }
-    if (result.outcome === 'created') return 'posted';
+    if (result.outcome === 'created') return { kind: 'posted', commentId: result.id };
     // R18: a post that timed out or met a 5xx may still be committing on Jira's side.
     await deps.wait(jiraReadBackDelayMs);
-    const isOnIssue = await checkIsCommentOnIssue(issueKey, comparableText, postStartedAt);
-    if (isOnIssue === true) return 'posted';
+    const landedCommentId = await findCommentOnIssue(issueKey, comparableText, postStartedAt);
+    if (landedCommentId !== false && landedCommentId !== null) return { kind: 'posted', commentId: landedCommentId };
     if (requestId !== null) deps.unconfirmedPosts.recordUnconfirmed(requestId, bodyHash, postStartedAt);
-    return isOnIssue === false
+    return landedCommentId === false
       ? { kind: 'notPosted', detail: `${result.reason}; it was not on the issue ${jiraReadBackDelayMs / 1000} s later` }
       : { kind: 'unknown', detail: result.reason };
   }
@@ -302,21 +352,48 @@ export function createJiraAnswerSink(deps: JiraAnswerSinkDeps): JiraAnswerSink {
    * thread's comments are gone — is posted top-level instead, and so is the rest of the answer: a refusal posted nothing.
    */
   async function postComments(issueKey: string, bodies: readonly AdfDocument[], requestId: string | null, threadRootId: string | null): Promise<CommentsPosted> {
-    let postedCount = 0;
+    const commentIds: string[] = [];
     let parentId = threadRootId;
     let refusedThreadRootId: string | null = null;
     for (const body of bodies) {
       let outcome = await postComment(issueKey, body, requestId, parentId);
-      if (outcome !== 'posted' && outcome.kind === 'refused' && outcome.status === threadRefusedStatus && parentId !== null) {
+      if (outcome.kind === 'refused' && outcome.status === threadRefusedStatus && parentId !== null) {
         console.warn(`[jira] ${issueKey}: the thread of comment ${parentId} was refused (${outcome.detail}); posting top-level`);
         refusedThreadRootId = parentId;
         parentId = null;
         outcome = await postComment(issueKey, body, requestId, null);
       }
-      if (outcome !== 'posted') return { postedCount, failure: outcome, refusedThreadRootId };
-      postedCount += 1;
+      if (outcome.kind !== 'posted') return { postedCount: commentIds.length, commentIds, failure: outcome, refusedThreadRootId };
+      commentIds.push(outcome.commentId);
     }
-    return { postedCount, failure: null, refusedThreadRootId };
+    return { postedCount: commentIds.length, commentIds, failure: null, refusedThreadRootId };
+  }
+
+  /**
+   * Replace the text of comment `commentId` with `body`. `'edited'` — it is there now; otherwise why it is not and the caller
+   * posts the text as a new comment. A refusal (the comment is gone: 404; 400; 403; a rate limit) changed nothing. An outcome Jira
+   * did not confirm (a timeout, a 5xx after the client's retries) may have landed: after the read-back's wait the comment is read,
+   * and the new text on it counts as edited — a new comment would show the text twice. A comment that cannot be read leaves the
+   * new comment: a text shown twice is better than one lost.
+   */
+  async function editCommentText(issueKey: string, commentId: string, body: AdfDocument): Promise<'edited' | { detail: string }> {
+    try {
+      await client.editComment(issueKey, commentId, body);
+      return 'edited';
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      const status = error instanceof JiraHttpError || error instanceof JiraAuthError ? error.status : 0;
+      const isRefused = error instanceof JiraAuthError || (status >= 400 && status < 500);
+      if (isRefused) return { detail };
+      await deps.wait(jiraReadBackDelayMs);
+      try {
+        const comment = await client.getComment(issueKey, commentId);
+        if (getComparableText(comment.body) === getComparableText(body)) return 'edited';
+      } catch (readError) {
+        console.warn(`[jira] ${issueKey}: read-back of comment ${commentId} after an edit of unknown outcome failed: ${readError instanceof Error ? readError.message : String(readError)}`);
+      }
+      return { detail };
+    }
   }
 
   /**
@@ -489,7 +566,8 @@ export function createJiraAnswerSink(deps: JiraAnswerSinkDeps): JiraAnswerSink {
       const { targets, leftOutCommentIds } = replies;
       // The comment the agent replies to decides the thread; else the thread an update of the request came from; else the
       // thread the request was opened in; else top-level.
-      const threadRootId = replies.threadRootId ?? deps.answerThreads.get(delivery.requestId) ?? getOriginThreadRootId(delivery.origin);
+      const updateThreadRootId = deps.answerThreads.get(delivery.requestId);
+      let threadRootId = replies.threadRootId ?? updateThreadRootId ?? getOriginThreadRootId(delivery.origin);
       const textBodies = targets.length > 0
         ? createCommentBodiesWithLeadingNode(delivery.body, createMentionParagraph(targets))
         : createCommentBodies(delivery.body);
@@ -502,12 +580,35 @@ export function createJiraAnswerSink(deps: JiraAnswerSinkDeps): JiraAnswerSink {
       // and only while its request is open: a superseded request's question hands nothing back.
       const isHandOver = delivery.origin.kind === 'trackerEvent';
       if (isHandOver && delivery.isRequestOpen && delivery.kind === 'question') bodies[bodies.length - 1] = getBodyWithContinueLine(bodies[bodies.length - 1]);
+      // A plain note that fits one comment is kept as that comment: edited by the next one, unless an update of the request
+      // put the answer in another thread (a comment of its own there, and the one the next notes edit).
+      const slot = bodies.length === 1 ? getEditableSlot(delivery) : null;
+      const kept = slot === null ? null : deps.progressComments.get(delivery.requestId, slot);
+      if (slot !== null && kept !== null) {
+        if (updateThreadRootId === null || updateThreadRootId === kept.threadRootId) {
+          const edited = await editCommentText(issueKey, kept.commentId, getBodyWithUpdatedLine(bodies[0], deps.now()));
+          if (edited === 'edited') {
+            // The answer stands in the thread the update asked for (or no update asked for another): it is used up, as by a post.
+            if (!delivery.isBotNotice) deps.answerThreads.consume(delivery.requestId);
+            return { ok: true };
+          }
+          // The text goes into a new comment in the thread the old one stood in, which stays the progress comment's.
+          console.warn(`[jira] ${issueKey}: comment ${kept.commentId} could not be edited (${edited.detail}); posting the progress as a new comment`);
+          threadRootId = kept.threadRootId;
+        }
+      }
       const posted = await postComments(issueKey, bodies, delivery.requestId, threadRootId);
       if (posted.postedCount === 0 && posted.failure) return { ok: false, error: getNothingPostedError(posted.failure) };
       // The agent's answer is there: the thread an update put it in is used up, the next answer goes where they go by default.
       // A notice the bot wrote (a usage limit, a refused sign-in) goes into that thread too but uses nothing up: the agent's
       // answer to the reply is still owed, and comes after the resume.
       if (!delivery.isBotNotice) deps.answerThreads.consume(delivery.requestId);
+      if (slot !== null) {
+        deps.progressComments.remember(delivery.requestId, slot, posted.commentIds[0], posted.refusedThreadRootId === null ? threadRootId : null);
+      } else if (!delivery.isBotNotice) {
+        // A question, a final answer, or a note that is a comment of its own: the progress comment stays as it is, the next note starts below.
+        deps.progressComments.forget(delivery.requestId, progressSlot);
+      }
       const warnings: string[] = [...(files?.notes ?? [])];
       if (leftOutCommentIds.length > 0) warnings.push(buildJiraReplyLeftOutWarning(leftOutCommentIds));
       if (replies.threadRootId !== null && replies.otherThreadCommentIds.length > 0) {
@@ -528,8 +629,9 @@ export function createJiraAnswerSink(deps: JiraAnswerSinkDeps): JiraAnswerSink {
       const issueKey = key.thread;
       const posted = await postComments(issueKey, [convertMarkdownToAdf(buildJiraAlertText(alert.reason))], alert.requestId, getOriginThreadRootId(alert.origin));
       if (posted.postedCount === 0 && posted.failure) return { ok: false, error: getNothingPostedError(posted.failure) };
-      // The comment names no request: the log does.
+      // The comment names no request: the log does. The progress comment above it stays as it is: a later note starts below.
       console.log(`[jira] ${issueKey}: request ${alert.requestId} given up (${alert.reason}); the alert comment is posted`);
+      deps.progressComments.forget(alert.requestId, progressSlot);
       if (alert.origin.kind === 'trackerEvent') {
         const handBackWarning = await handBack(issueKey, getRequestRequester(alert.origin));
         if (handBackWarning) console.warn(`[jira] ${issueKey}: alert for ${alert.requestId}: ${handBackWarning}`);

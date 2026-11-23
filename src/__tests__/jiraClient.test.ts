@@ -224,6 +224,39 @@ describe('createJiraClient', () => {
       assert.deepEqual(JSON.parse(requests[1].body), { accountId: 'placeholder-requester' });
     });
 
+    it('editComment PUTs {body: ADF} to the comment without notifying anyone, and accepts the comment Jira answers with', async () => {
+      const adf = convertMarkdownToAdf('Edited.');
+      respondWith({ status: 200, body: json({ id: '20001', body: adf }) });
+      await createClient().editComment('PROJ-7', '20001', adf);
+      assert.deepEqual(requests.map((request) => `${request.method} ${request.url}`), ['PUT /rest/api/3/issue/PROJ-7/comment/20001?notifyUsers=false']);
+      assert.deepEqual(JSON.parse(requests[0].body), { body: adf });
+    });
+
+    it('editComment is safe to repeat, so a 5xx and a timeout are retried like a read; a 404 (the comment is gone), 400 and 403 are not', async () => {
+      const adf = convertMarkdownToAdf('Edited.');
+      respondWith({ status: 503 }, { status: 502 }, { status: 200, body: json({ id: '20001' }) });
+      await createClient().editComment('PROJ-7', '20001', adf);
+      assert.equal(requests.length, 3);
+      assert.deepEqual(sleeps, [...jiraBackoffMs]);
+
+      requests = [];
+      respondWith({ status: 404, body: json({ errorMessages: ['Can not find a comment with id 20001'] }) }, { status: 200 });
+      await assert.rejects(createClient().editComment('PROJ-7', '20001', adf), (error: Error) =>
+        error instanceof JiraHttpError && error.status === 404 && /Can not find a comment/.test(error.message));
+      respondWith({ status: 400, body: json({ errorMessages: ['INVALID_INPUT'] }) }, { status: 200 });
+      await assert.rejects(createClient().editComment('PROJ-7', '20001', adf), (error: Error) => error instanceof JiraHttpError && error.status === 400);
+      respondWith({ status: 403 }, { status: 200 });
+      await assert.rejects(createClient().editComment('PROJ-7', '20001', adf), (error: Error) => error instanceof JiraAuthError && error.status === 403);
+      assert.equal(requests.length, 3, 'one attempt each');
+    });
+
+    it('editComment that never gets an answer: every attempt is made, then the failure is thrown with no status — the caller reads the comment', async () => {
+      respondWith({ status: 503 }, { status: 503 }, { status: 503 });
+      await assert.rejects(createClient().editComment('PROJ-7', '20001', convertMarkdownToAdf('x')), (error: Error) =>
+        error instanceof JiraHttpError && error.status === 503);
+      assert.equal(requests.length, jiraMaxAttempts);
+    });
+
     it('addComment with a parentId posts a reply in that thread: {body, parentId}; without one the body is as before', async () => {
       const adf = convertMarkdownToAdf('In the thread.');
       respondWith({ status: 201, body: json({ id: '20002', parentId: 20001 }) }, { status: 201, body: json({ id: '20003' }) });

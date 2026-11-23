@@ -538,6 +538,12 @@ describe('the Jira context preamble (R5)', () => {
     assert.ok(preamble.split('\n').includes(answerStyleInstruction));
   });
 
+  it('says that the progress answers are ONE comment, each replacing the text of the last — so each is the full current status', () => {
+    const preamble = buildJiraContextPreamble({ key: makeJiraKey('PROJ-12'), subdir: 'proj-work' });
+    assert.match(preamble, /Your progress answers on this issue are ONE comment: the first posts it, each next one replaces its text/);
+    assert.match(preamble, /write each progress note as the full current status, never as an addition to the one before\. A question or a final answer is always a comment of its own\./);
+  });
+
   it('C12: the standing rule — never quote or paraphrase a restricted or internal comment; and C10: the tool that reaches the original files', () => {
     const preamble = buildJiraContextPreamble({ key: makeJiraKey('PROJ-12'), subdir: 'proj-work' });
     assert.match(preamble, /A comment marked \[restricted to …\] or \[internal\] is not for everyone who can read this issue: never quote or paraphrase it, or what it says, in an answer\./);

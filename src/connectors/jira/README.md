@@ -3,7 +3,8 @@
 A `jira` instance (`CONNECTORS` lists `jira`) turns issues assigned to a dedicated AI account into
 conversations with an agent. One issue = one conversation, keyed `jira:<PROJECT>:<ISSUE-KEY>`
 (`sessionKeyCodec.ts`). The agent hears nothing but the request; it talks back only through `answer_request`,
-which the answer sink posts as comments. The streamed output never reaches the issue (`outbound.ts` drops it).
+which the answer sink posts as comments — a request's `progress` answers as ONE comment it keeps edited (see «Answer sink»). The
+streamed output never reaches the issue (`outbound.ts` drops it).
 The `D*` / `R*` / `J*` / `C*` ids cited in code comments are decisions of the connector's plans, kept outside this public repo.
 
 ## Setup contract (`config.ts`, `configFile.ts`)
@@ -469,6 +470,48 @@ another platform's state.
   (`buildJiraOtherThreadsWarning`), whose authors are still mentioned. A reply Jira refuses with 400 — its thread is
   gone — is posted top-level instead, with the rest of the answer, and the result says so
   (`buildJiraThreadRefusedWarning`); any other refusal stays the answer's error.
+- **One progress comment per request** (`progressComments.ts`, `DATA_DIR/jira-progress-comments.jsonl`). The agent's `progress`
+  answers (the wake-up reminder, the orchestration skill and its own choice all produce them) used to be a comment each; now the
+  FIRST of a request posts a comment and the sink remembers its id and thread, and each next one EDITS that comment
+  (`client.editComment`: `PUT /issue/{key}/comment/{id}?notifyUsers=false`) to the newest text, ending it with an italic paragraph —
+  `Last updated 2026-11-23 21:14 UTC` (bot text, English; the first post carries no such line). An edit moves nothing, so the
+  comment stays in the thread the first one was posted in, and it notifies nobody. The store is one line per comment remembered and
+  one per comment let go, replayed at boot like `unconfirmedPosts.ts` / `answerThreads.ts`, so a restart (a hot reload among them)
+  between two notes keeps editing the SAME comment; an entry a week old is forgotten (a request quiet that long gets a new
+  comment). The agent is told in the context preamble that each progress note replaces the last, so it writes the full status.
+  - **What ends it.** A `question` or `final` answer delivered is a new comment as ever and LETS GO of the progress comment (no
+    more edits; a later note of the same request starts a new one, below the final). A later REQUEST has its own — requests never
+    edit each other's. The give-up alert lets it go too (a later note starts below it).
+  - **What is a comment of its own, never an edit.** Only a plain note is kept as the one comment: a progress answer with
+    `files` (attached and shown in a NEW comment — an edit would wipe them at the next note —, the progress comment let go so the
+    note after it starts below), one that replies to comments (`replyToCommentIds`: the mention notifies its author, an edit would
+    not), and one too long for one comment (several comments, never cut). Each lets the progress comment go.
+  - **An issue update that points elsewhere.** An update whose newest comment is a reply in ANOTHER thread than the progress
+    comment's (`answerThreads.ts`) pulls the next note there: a new comment in that thread, which then is the progress comment.
+    An update thread that IS the comment's own thread is satisfied by the edit and used up.
+  - **An edit that fails** posts the text as a new comment instead, in the thread the old one stood in (400 → top-level, as any
+    post), with R18's read-back; THAT comment is remembered from then on, and the old one stays as it was. A refusal that changed
+    nothing — 404 (the comment was deleted), 400, 403 (the AI account may not edit it), a rate limit — falls back at once. An
+    outcome Jira did not confirm (a timeout, a 5xx after the client's retries; the PUT repeats harmlessly, so the client retries
+    it) is read back after `jiraReadBackDelayMs`: the new text on the comment counts as edited, anything else (the old text, an
+    unreadable comment) posts the new comment — a text shown twice is better than one lost.
+  - **No self-trigger.** An edit by the AI account is not an event for the bot: the poll reads no changelog entry for a comment
+    (a comment edit makes none, so `trigger.ts` finds nothing), the comment and mention scans skip every comment whose AUTHOR is
+    the AI account, edited or not (`getMentionDecisions`, `listNewComments`), and the prompt's delta leaves an own comment out
+    (`isOwn`: author AND last editor the AI account; only a person's edit of it is told, as «edited … by»). What an edit does move is
+    the issue's `updated`, so the next poll of a handed issue reads its newest comments once more (the scan's «updated moved»
+    check) and decides nothing — the same cost as any comment the AI posts. Proven by `jiraInbound.test.ts` (the (6b) test for
+    the comment scan, the mention scan's twin), `jiraIssueDelta.test.ts` (C7).
+  - **The bot's own notices.** A bot notice is a `progress` answer with `isBotNotice` (the usage-limit wait, an account moved, no
+    account usable — `requests/limitWaitAnswer.ts`). CHANGED: the usage-limit wait's notice carries a `repeatKey`
+    (`usageLimitWait`): a later wait of the same request — the next attempt of a wait whose reset time is unknown, the next limit
+    after a resume — says the same thing anew, so it EDITS the earlier notice (a slot of its own, apart from the agent's notes: the
+    edit keeps its «last updated» line) instead of adding a comment per wait. LEFT AS COMMENTS: the account-moved and the
+    no-account-usable notices (each names a different account or state, so an edit would erase what the earlier one said), the
+    queued notice (one per place in the wait list and tied to a trigger, not a request — there is none yet; a trigger joins the
+    list once), the park, mention-park and untrusted notices (recorded as a trigger decision BEFORE the notice, so each trigger
+    posts at most one) and the updates-paused notice (at most one per rolling 24 h by its own record), and the give-up alert (once
+    per request). `send_file_to_user` is a comment of its own and touches no progress comment. Telegram ignores `repeatKey`.
 - A hand-over's `question` to an OPEN request (the one that hands the issue back) ends with one more paragraph,
   plain text on the last comment: "To let me go on, answer in a comment and assign the issue back to me." A reply
   that only mentions the AI wakes it for an answer (with `mentionMode: "act"`, an explicit ask in it is carried out); a
@@ -481,7 +524,8 @@ another platform's state.
   already, so it is not repeated); and the mention's park notice, which hands nothing back.
 - The first comment refused → an error (nothing posted, safe to send again). A later part that did not land →
   delivered with a warning saying where the unposted rest starts.
-- `addComment` is never retried by the client (a second POST would post twice). A post of UNKNOWN outcome
+- `addComment` is never retried by the client (a second POST would post twice); `editComment` is a PUT that repeats harmlessly,
+  so it is retried like a read. A post of UNKNOWN outcome
   (timeout, dropped connection, 5xx) is read back once after `jiraReadBackDelayMs` through
   `getRecentComments`; every failure message says what to send again, because the agent cannot look at the
   issue. The post is remembered (`unconfirmedPosts.ts`): resending the same text for the same request checks the

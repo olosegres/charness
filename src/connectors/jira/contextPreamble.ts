@@ -31,6 +31,9 @@ export function buildJiraContextPreamble(input: JiraContextPreambleInput): strin
       'To reply to someone\'s comment, put its id in answer_request\'s replyToCommentIds: the bot then mentions its author, so they are notified, ' +
       'and posts your answer in that comment\'s thread. A request that a reply in a thread opened is answered in that thread by itself.',
     answerStyleInstruction,
+    // Your progress answers on this issue are ONE comment (the answer sink edits it): each replaces the text of the last.
+    'Your progress answers on this issue are ONE comment: the first posts it, each next one replaces its text (it then shows when it was last updated), ' +
+      'so write each progress note as the full current status, never as an addition to the one before. A question or a final answer is always a comment of its own.',
     // C12: restricted and internal comments are given to the agent, marked; what they say stays among those who may read them.
     'A comment marked [restricted to …] or [internal] is not for everyone who can read this issue: ' +
       'never quote or paraphrase it, or what it says, in an answer.',

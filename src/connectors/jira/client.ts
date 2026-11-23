@@ -20,7 +20,8 @@ import { adfNodeSchema, attributeValueSchema, type AdfAttributeValue, type AdfDo
  *    its request may have reached Jira (a timeout, a connection dropped
  *    mid-response, a 5xx, an unreadable 2xx) `addComment` reports
  *    `deliveryUnknown` instead (R18) — a second POST would post the answer
- *    twice — and only a failure before anything was sent is an error;
+ *    twice — and only a failure before anything was sent is an error. A comment EDIT (`editComment`) is a PUT that
+ *    repeats harmlessly, so it is retried like a read;
  *  - 401 / 403 — never retried: {@link JiraAuthError}, which the poller turns
  *    into one loud line and a stop.
  *
@@ -445,6 +446,13 @@ export interface JiraClient {
   getAttachmentMediaId(attachmentId: string): Promise<string | null>;
   /** The issue's newest comments, newest first — R18's read-back after a post of unknown outcome. */
   getRecentComments(issueKey: string, maxResults: number): Promise<JiraComment[]>;
+  /**
+   * Replace the text of comment `commentId` (`PUT /issue/{key}/comment/{id}`), WITHOUT notifying anyone (`notifyUsers=false`: an
+   * edited progress note is not news). Repeating it changes nothing more, so it is retried like a read. A refusal is a
+   * {@link JiraHttpError} (404: the comment is gone; 400) or a {@link JiraAuthError} (403: the AI account may not edit it); an
+   * outcome Jira did not confirm after the retries is a {@link JiraHttpError} with `status` 0 or a 5xx — the caller reads the comment.
+   */
+  editComment(issueKey: string, commentId: string, body: AdfDocument): Promise<void>;
   /** One comment of the issue by its id; a comment that is gone is a {@link JiraHttpError} with `status` 404. */
   getComment(issueKey: string, commentId: string): Promise<JiraComment>;
   assignIssue(issueKey: string, accountId: string): Promise<void>;
@@ -762,6 +770,15 @@ export function createJiraClient(options: JiraClientOptions): JiraClient {
         { method: 'GET', path: `/rest/api/3/issue/${encode(issueKey)}/comment/${encode(commentId)}`, isIdempotent: true },
         commentSchema,
       ),
+
+    editComment: async (issueKey, commentId, body) => {
+      await send({
+        method: 'PUT',
+        path: `/rest/api/3/issue/${encode(issueKey)}/comment/${encode(commentId)}?notifyUsers=false`,
+        isIdempotent: true,
+        body: { body },
+      });
+    },
 
     assignIssue: async (issueKey, accountId) => {
       await send({ method: 'PUT', path: `/rest/api/3/issue/${encode(issueKey)}/assignee`, isIdempotent: true, body: { accountId } });

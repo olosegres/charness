@@ -910,6 +910,16 @@ connector behaves is described in [`src/connectors/jira/README.md`](src/connecto
    into that thread — so do the notices about it (queued, over the budget). An answer that replies to a comment goes
    into that comment's thread; anything else is a new comment, as before.
 
+   **One progress comment per request.** While the AI works it may send interim notes. They do not fill the issue: the
+   first note of a request is a comment, each next one **edits** that comment to the newest text and ends it with a line
+   saying when it was last updated (UTC) — in the same thread, and without notifying anyone (an edit is not news). The
+   question or final answer that closes the request is a new comment, as before, and the progress comment stays as it
+   was; a later request gets its own. A note that carries files, or replies to a comment (which notifies its author, an
+   edit would not), or is too long for one comment, is a comment of its own. If Jira refuses an edit (the comment was
+   deleted, or the AI account may not edit its own comments — *Edit own comments*), the text is posted as a new comment
+   instead, and that one is kept up to date from then on. The bot's note that the AI waits for a usage limit to reset
+   is kept the same way: a later wait of the same request edits it. An edit by the AI account never wakes the agent.
+
    **Screenshots and videos in answers.** The agent can attach files of the project folder to its answer: they are
    uploaded to the issue and shown in the answer's comment — an image shown, an H.264 `.mp4` playing, anything else
    linked. The AI account needs the *Create Attachments* permission in the project, and attachments must be on for the

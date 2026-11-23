@@ -39,6 +39,12 @@ export interface RequestAnswerDelivery {
    * whatever state an answer of the agent's uses up (Jira: the thread an issue update put the next answer in) stays.
    */
   isBotNotice?: true;
+  /**
+   * With {@link isBotNotice}: notices of one request that carry the same key say the same thing again (a usage-limit wait that
+   * came round once more). A sink that can edit what it delivered (Jira: its comment) edits the earlier one instead of
+   * delivering another; one that cannot ignores it. Absent — every such notice is delivered on its own.
+   */
+  repeatKey?: string;
 }
 
 /**

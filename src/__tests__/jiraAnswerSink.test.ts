@@ -37,6 +37,7 @@ import { makeJiraKey } from '../connectors/jira/sessionKeyCodec';
 import { JiraAuthError, JiraHttpError, type JiraClient, type JiraComment, type JiraCommentPostResult, type JiraIssue } from '../connectors/jira/client';
 import { getCommentBodyHash, JiraUnconfirmedPosts, jiraUnconfirmedPostsFileName } from '../connectors/jira/unconfirmedPosts';
 import { JiraAnswerThreads, jiraAnswerThreadsFileName } from '../connectors/jira/answerThreads';
+import { JiraProgressComments, jiraProgressCommentsFileName } from '../connectors/jira/progressComments';
 import type { RequestAnswerKind, RequestOrigin } from '../requests/types';
 
 const aiAccountId = 'ai-account';
@@ -65,6 +66,10 @@ interface FakeJira {
   assignee: string;
   /** Per comment post, in order: what Jira answers; `created` when the list runs out. */
   postOutcomes: Array<JiraCommentPostResult | Error>;
+  /** Every edit made, in order: the comment, its body and its plain text. */
+  edits: Array<{ commentId: string; body: AdfDocument; text: string }>;
+  /** Per edit, in order: the failure Jira gives; the edit succeeds when the list runs out. */
+  editFailures: Array<Error | undefined>;
   /** What the read-back sees (newest first), or an error. */
   recentComments: JiraComment[] | Error;
   isAssignFailing: boolean;
@@ -77,6 +82,15 @@ let dataDir: string;
 let unconfirmedPosts: JiraUnconfirmedPosts;
 /** The thread an issue update put a request's next answer in — the real store, over a file in `dataDir`. */
 let answerThreads: JiraAnswerThreads;
+/** The comments kept up to date (a request's progress note) — the real store, over a file in `dataDir`. */
+let progressComments: JiraProgressComments;
+
+/** The store as a restarted process finds it: read back from its file. */
+async function loadProgressComments(): Promise<JiraProgressComments> {
+  const store = JiraProgressComments.createForDataDir(path.join(dataDir, jiraProgressCommentsFileName), () => nowMs);
+  await store.load();
+  return store;
+}
 
 /** The store as a restarted process finds it: read back from its file. */
 async function loadUnconfirmedPosts(): Promise<JiraUnconfirmedPosts> {
@@ -85,7 +99,7 @@ async function loadUnconfirmedPosts(): Promise<JiraUnconfirmedPosts> {
   return store;
 }
 
-function createClient(): Pick<JiraClient, 'addComment' | 'getRecentComments' | 'getIssue' | 'assignIssue' | 'getComment'> {
+function createClient(): Pick<JiraClient, 'addComment' | 'editComment' | 'getRecentComments' | 'getIssue' | 'assignIssue' | 'getComment'> {
   return {
     getComment: async (issue, commentId) => {
       jira.calls.push(`getComment ${issue} ${commentId}`);
@@ -102,6 +116,12 @@ function createClient(): Pick<JiraClient, 'addComment' | 'getRecentComments' | '
       const outcome = jira.postOutcomes.shift() ?? { outcome: 'created', id: `c${jira.postedTexts.length}` };
       if (outcome instanceof Error) throw outcome;
       return outcome;
+    },
+    editComment: async (issue, commentId, body: AdfDocument) => {
+      jira.calls.push(`edit ${issue} ${commentId}`);
+      jira.edits.push({ commentId, body, text: getAdfText(body) });
+      const failure = jira.editFailures.shift();
+      if (failure) throw failure;
     },
     getRecentComments: async (issue) => {
       jira.calls.push(`read-back ${issue}`);
@@ -132,17 +152,19 @@ const sink = () => createJiraAnswerSink({
   },
   unconfirmedPosts,
   answerThreads,
+  progressComments,
   ...(jira.attachFiles ? { attachFiles: jira.attachFiles } : {}),
 });
 const deliver = (kind: RequestAnswerKind, body: string, isRequestOpen = true) =>
   sink().deliverAnswer(key, { requestId: 'req_1', kind, body, origin, isRequestOpen });
 
 beforeEach(async () => {
-  jira = { calls: [], postedTexts: [], postedBodies: [], postedParentIds: [], commentsById: new Map(), sentBlocks: {}, trust: null, assignee: aiAccountId, postOutcomes: [], recentComments: [], isAssignFailing: false };
+  jira = { calls: [], postedTexts: [], postedBodies: [], postedParentIds: [], commentsById: new Map(), sentBlocks: {}, trust: null, assignee: aiAccountId, postOutcomes: [], edits: [], editFailures: [], recentComments: [], isAssignFailing: false };
   dataDir = mkdtempSync(path.join(os.tmpdir(), 'jira-sink-'));
   unconfirmedPosts = await loadUnconfirmedPosts();
   answerThreads = JiraAnswerThreads.createForDataDir(path.join(dataDir, jiraAnswerThreadsFileName), () => nowMs);
   await answerThreads.load();
+  progressComments = await loadProgressComments();
 });
 
 afterEach(() => {
@@ -856,10 +878,10 @@ describe('comment threads: an answer goes where it was asked, or into the thread
   it('an issue update whose newest comment is a reply puts the request\'s NEXT answer in that thread — ahead of the request\'s own; the answer uses it up', async () => {
     answerThreads.note('req_1', '10900');
     assert.deepEqual(await deliver('progress', 'About your reply:'), { ok: true });
-    assert.deepEqual(await deliver('progress', 'Back to the work.'), { ok: true });
+    assert.deepEqual(await deliver('final', 'Back to the work.'), { ok: true });
     answerThreads.note('req_3', '10900');
     await deliverInThread('progress', 'In the update\'s thread, not the one the request was opened in.');
-    await deliverInThread('progress', 'Back in the request\'s own thread.');
+    await deliverInThread('final', 'Back in the request\'s own thread.');
     assert.deepEqual(jira.postedParentIds, ['10900', null, '10900', '10200']);
   });
 
@@ -885,7 +907,7 @@ describe('comment threads: an answer goes where it was asked, or into the thread
     assert.equal(answerThreads.get('req_1'), '10900', 'still owed to the agent\'s answer');
     await deliver('progress', 'About your reply, after the resume:');
     assert.equal(answerThreads.get('req_1'), null, 'the agent\'s answer used it up');
-    await deliver('progress', 'Back to the work.');
+    await deliver('final', 'Back to the work.');
     assert.deepEqual(jira.postedParentIds, ['10900', '10900', null]);
   });
 
@@ -1041,5 +1063,304 @@ describe('send_file_to_user on an issue: the files in a comment of their own', (
     assert.equal(askedInline, false);
     jira.attachFiles = undefined;
     assert.deepEqual(await sink().postFiles(issueKey, { paths: ['run.mp4'], isAsLinks: false }, null), { ok: false, error: jiraFilesUnavailableError });
+  });
+});
+
+describe('one progress comment per request: the first progress answer posts it, each next one edits it', () => {
+  const updatedLine = 'Last updated 2026-10-03 12:00 UTC';
+  const threadOrigin: RequestOrigin = { kind: 'trackerEvent', attributes: { issueKey, triggerId: '10300', requester: 'requester-account', threadCommentId: '10200' } };
+  const colleague = { accountId: 'colleague-account', accountType: 'atlassian', displayName: 'Colleague' };
+  const deliverFor = (requestId: string, kind: RequestAnswerKind, body: string, answerOrigin: RequestOrigin = origin) =>
+    sink().deliverAnswer(key, { requestId, kind, body, origin: answerOrigin, isRequestOpen: true });
+  const getEditedLine = (editIndex: number): unknown => jira.edits[editIndex].body.content.at(-1);
+  /** A comment body as Jira returns it: a `doc` node holding one paragraph. */
+  const getCommentBody = (text: string): NonNullable<JiraComment['body']> => ({ type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text }] }] });
+  /** What the issue holds when an edit of unknown outcome is read back: the comment with this text. */
+  const setReadBackText = (commentId: string, text: string): void => {
+    jira.commentsById.set(commentId, { id: commentId, author: { accountId: aiAccountId }, created: '2026-10-03T11:59:00.000+0000', body: getCommentBody(text) });
+  };
+
+  it('progress → progress → final is two comments, the first edited to the newest text, with a line saying when it was updated; the final is new and hands the issue back', async () => {
+    assert.deepEqual(await deliver('progress', 'Reading the code.'), { ok: true });
+    assert.deepEqual(await deliver('progress', 'Halfway: **tests** written.'), { ok: true });
+    assert.deepEqual(await deliver('progress', 'Almost done.'), { ok: true });
+    assert.deepEqual(await deliver('final', 'Done.'), { ok: true });
+    assert.deepEqual(jira.calls, [
+      'comment PROJ-12', 'edit PROJ-12 c1', 'edit PROJ-12 c1', 'comment PROJ-12', 'assignee? PROJ-12', 'assign PROJ-12 requester-account',
+    ]);
+    assert.deepEqual(jira.postedTexts, ['Reading the code.', 'Done.'], 'two comments: the progress one without a line, the final');
+    assert.deepEqual(jira.edits.map((edit) => edit.text), [`Halfway: tests written.\n${updatedLine}`, `Almost done.\n${updatedLine}`]);
+    assert.deepEqual(getEditedLine(1), { type: 'paragraph', content: [{ type: 'text', text: updatedLine, marks: [{ type: 'em' }] }] });
+  });
+
+  it('after a question or a final answer the progress comment is left as it is: later notes of the request start a new one', async () => {
+    await deliver('progress', 'Working.');
+    await deliver('question', 'Which branch?');
+    jira.assignee = aiAccountId;
+    await deliver('progress', 'Back on it, on main.');
+    await deliver('progress', 'Still on main.');
+    assert.deepEqual(jira.postedTexts, ['Working.', `Which branch?\n${jiraQuestionContinueText}`, 'Back on it, on main.']);
+    assert.deepEqual(jira.edits.map((edit) => [edit.commentId, edit.text]), [['c3', `Still on main.\n${updatedLine}`]]);
+  });
+
+  it('a later request has its own progress comment — requests never edit each other\'s', async () => {
+    await deliverFor('req_1', 'progress', 'First request, working.');
+    await deliverFor('req_2', 'progress', 'Second request, working.');
+    await deliverFor('req_1', 'progress', 'First request, more.');
+    await deliverFor('req_2', 'progress', 'Second request, more.');
+    assert.deepEqual(jira.postedTexts, ['First request, working.', 'Second request, working.']);
+    assert.deepEqual(jira.edits.map((edit) => edit.commentId), ['c1', 'c2']);
+  });
+
+  describe('an edit that does not land posts the text as a new comment, which is the one remembered', () => {
+    const editUrl = '/rest/api/3/issue/PROJ-12/comment/c1';
+    const refusals: Array<[string, Error]> = [
+      ['the comment is gone (404)', new JiraHttpError(404, 'PUT', editUrl, "Can not find a comment with id c1")],
+      ['Jira refuses the edit (400)', new JiraHttpError(400, 'PUT', editUrl, 'INVALID_INPUT')],
+      ['the AI account may not edit it (403)', new JiraAuthError(403, 'PUT', editUrl)],
+    ];
+    for (const [name, failure] of refusals) {
+      it(`${name}: a new comment with the newest text, and the next note edits THAT one`, async () => {
+        await deliver('progress', 'First note.');
+        jira.editFailures = [failure];
+        assert.deepEqual(await deliver('progress', 'Second note.'), { ok: true });
+        assert.deepEqual(await deliver('progress', 'Third note.'), { ok: true });
+        assert.deepEqual(jira.postedTexts, ['First note.', 'Second note.'], 'the text was not lost; the new comment carries no updated line');
+        assert.deepEqual(jira.calls, ['comment PROJ-12', 'edit PROJ-12 c1', 'comment PROJ-12', 'edit PROJ-12 c2']);
+        assert.equal(jira.calls.filter((call) => call.startsWith('read-back') || call.startsWith('getComment')).length, 0, 'a refusal changed nothing: nothing to read back');
+      });
+    }
+
+    it('an outcome Jira did not confirm: the comment is read after the wait — the new text on it counts as edited, no second comment', async () => {
+      await deliver('progress', 'First note.');
+      jira.editFailures = [new JiraHttpError(503, 'PUT', editUrl, 'unavailable')];
+      setReadBackText('c1', `Second note.\n${updatedLine}`);
+      assert.deepEqual(await deliver('progress', 'Second note.'), { ok: true });
+      assert.deepEqual(jira.calls, ['comment PROJ-12', 'edit PROJ-12 c1', `wait ${jiraReadBackDelayMs}`, 'getComment PROJ-12 c1']);
+      assert.deepEqual(jira.postedTexts, ['First note.']);
+      await deliver('progress', 'Third note.');
+      assert.deepEqual(jira.edits.map((edit) => edit.commentId), ['c1', 'c1'], 'still the same comment');
+    });
+
+    it('an outcome Jira did not confirm and the old text on the comment (or an unreadable comment): the text is posted as a new comment — never lost', async () => {
+      await deliver('progress', 'First note.');
+      jira.editFailures = [new JiraHttpError(0, 'PUT', editUrl, 'the request timed out')];
+      setReadBackText('c1', 'First note.');
+      assert.deepEqual(await deliver('progress', 'Second note.'), { ok: true });
+      assert.deepEqual(jira.postedTexts, ['First note.', 'Second note.']);
+      jira.editFailures = [new JiraHttpError(502, 'PUT', '/rest/api/3/issue/PROJ-12/comment/c2', 'bad gateway')];
+      jira.commentsById.delete('c2');
+      assert.deepEqual(await deliver('progress', 'Third note.'), { ok: true });
+      assert.deepEqual(jira.postedTexts, ['First note.', 'Second note.', 'Third note.']);
+    });
+
+    it('the new comment is posted with R18\'s read-back: one of unknown outcome that did land is not posted twice', async () => {
+      await deliver('progress', 'First note.');
+      jira.editFailures = [new JiraHttpError(404, 'PUT', editUrl, 'gone')];
+      jira.postOutcomes = [{ outcome: 'deliveryUnknown', reason: 'timed out' }];
+      jira.recentComments = [{ id: 'c77', author: { accountId: aiAccountId }, created: new Date(nowMs).toISOString(), body: getCommentBody('Second note.') }];
+      assert.deepEqual(await deliver('progress', 'Second note.'), { ok: true });
+      assert.equal(jira.postedTexts.length, 2, 'posted once, found on the issue, not posted again');
+      await deliver('progress', 'Third note.');
+      assert.deepEqual(jira.edits.map((edit) => edit.commentId), ['c1', 'c77'], 'the comment the read-back found is the progress comment now');
+    });
+
+    it('a failed edit AND a refused post: the answer is not delivered, so the agent sends it again — and the old progress comment is still the one edited', async () => {
+      await deliver('progress', 'First note.');
+      jira.editFailures = [new JiraHttpError(404, 'PUT', editUrl, 'gone')];
+      jira.postOutcomes = [new JiraHttpError(400, 'POST', '/rest/api/3/issue/PROJ-12/comment', 'INVALID_INPUT')];
+      assert.equal((await deliver('progress', 'Second note.')).ok, false);
+      await deliver('progress', 'Second note, again.');
+      assert.deepEqual(jira.edits.map((edit) => [edit.commentId, edit.text.split('\n')[0]]), [['c1', 'Second note.'], ['c1', 'Second note, again.']]);
+    });
+  });
+
+  describe('threads: an edit moves nothing', () => {
+    it('the note stays in the thread the first one was posted in — the request\'s thread, and a thread Jira refused (then top-level)', async () => {
+      await deliverFor('req_3', 'progress', 'In the thread.', threadOrigin);
+      await deliverFor('req_3', 'progress', 'Still in the thread.', threadOrigin);
+      assert.deepEqual(jira.postedParentIds, ['10200']);
+      assert.deepEqual(jira.edits.map((edit) => edit.commentId), ['c1']);
+      // The thread is gone: the first note is top-level, and so is everything after it.
+      jira.postOutcomes = [new JiraHttpError(400, 'POST', '/rest/api/3/issue/PROJ-12/comment', 'Parent comment not found')];
+      await deliverFor('req_4', 'progress', 'Thread refused.', { ...threadOrigin, attributes: { ...threadOrigin.attributes, threadCommentId: '10250' } });
+      await deliverFor('req_4', 'progress', 'Edited, wherever it stands.', { ...threadOrigin, attributes: { ...threadOrigin.attributes, threadCommentId: '10250' } });
+      assert.deepEqual(jira.postedParentIds, ['10200', '10250', null]);
+      assert.deepEqual(jira.edits.map((edit) => edit.commentId), ['c1', 'c3']);
+    });
+
+    it('where the default thread would be another one the note is still edited where it stands: a first note posted top-level, a request opened in a thread later', async () => {
+      await deliverFor('req_3', 'progress', 'Top-level first.', origin);
+      await deliverFor('req_3', 'progress', 'Edited, not moved.', threadOrigin);
+      assert.deepEqual(jira.postedParentIds, [null]);
+      assert.deepEqual(jira.edits.map((edit) => edit.commentId), ['c1']);
+    });
+
+    it('a new comment after a failed edit goes into the thread the old one stood in', async () => {
+      await deliverFor('req_3', 'progress', 'In the thread.', threadOrigin);
+      jira.editFailures = [new JiraHttpError(404, 'PUT', '/rest/api/3/issue/PROJ-12/comment/c1', 'gone')];
+      await deliverFor('req_3', 'progress', 'Back in the thread.', threadOrigin);
+      assert.deepEqual(jira.postedParentIds, ['10200', '10200']);
+      // …and a thread that no longer takes replies: top-level, remembered as such.
+      jira.editFailures = [new JiraHttpError(404, 'PUT', '/rest/api/3/issue/PROJ-12/comment/c2', 'gone')];
+      jira.postOutcomes = [new JiraHttpError(400, 'POST', '/rest/api/3/issue/PROJ-12/comment', 'Parent comment not found')];
+      await deliverFor('req_3', 'progress', 'The thread is gone.', threadOrigin);
+      assert.deepEqual(jira.postedParentIds, ['10200', '10200', '10200', null], 'the refused try, then top-level');
+    });
+
+    it('a person\'s reply in another thread (an issue update) pulls the next note there as a comment of its own — and the notes after it edit that one', async () => {
+      await deliver('progress', 'Working.');
+      answerThreads.note('req_1', '10900');
+      assert.deepEqual(await deliver('progress', 'About your reply.'), { ok: true });
+      assert.equal(answerThreads.get('req_1'), null, 'the answer used the update\'s thread up');
+      await deliver('progress', 'More work.');
+      assert.deepEqual(jira.postedParentIds, [null, '10900']);
+      assert.deepEqual(jira.edits.map((edit) => edit.commentId), ['c2'], 'the one in the thread');
+    });
+
+    it('an update thread that is the one the note stands in is satisfied by the edit: used up, nothing new', async () => {
+      await deliverFor('req_3', 'progress', 'In the thread.', threadOrigin);
+      answerThreads.note('req_3', '10200');
+      await deliverFor('req_3', 'progress', 'Answering your reply, in place.', threadOrigin);
+      assert.deepEqual(jira.postedTexts, ['In the thread.']);
+      assert.equal(answerThreads.get('req_3'), null);
+    });
+  });
+
+  describe('a restart between two progress answers still edits the same comment', () => {
+    it('the comment is remembered on disk: a process that reads the file edits it; one let go after a final answer is not edited', async () => {
+      await deliver('progress', 'Before the restart.');
+      progressComments = await loadProgressComments();
+      await deliver('progress', 'After the restart.');
+      assert.deepEqual(jira.postedTexts, ['Before the restart.']);
+      assert.deepEqual(jira.edits.map((edit) => edit.commentId), ['c1']);
+      await deliver('final', 'Done.');
+      progressComments = await loadProgressComments();
+      await deliver('progress', 'A note after the final answer.');
+      assert.deepEqual(jira.postedTexts, ['Before the restart.', 'Done.', 'A note after the final answer.'], 'a new comment: the old one was let go');
+    });
+
+    it('the thread survives it too, and so does a comment that took over after a failed edit', async () => {
+      await deliverFor('req_3', 'progress', 'In the thread.', threadOrigin);
+      jira.editFailures = [new JiraHttpError(404, 'PUT', '/rest/api/3/issue/PROJ-12/comment/c1', 'gone')];
+      await deliverFor('req_3', 'progress', 'Second.', threadOrigin);
+      progressComments = await loadProgressComments();
+      jira.editFailures = [new JiraHttpError(404, 'PUT', '/rest/api/3/issue/PROJ-12/comment/c2', 'gone')];
+      await deliverFor('req_3', 'progress', 'Third.', threadOrigin);
+      assert.deepEqual(jira.edits.map((edit) => edit.commentId), ['c1', 'c2']);
+      assert.deepEqual(jira.postedParentIds, ['10200', '10200', '10200']);
+    });
+
+    it('a post of unknown outcome that landed late: the resend finds it, and it is the progress comment from then on', async () => {
+      jira.postOutcomes = [{ outcome: 'deliveryUnknown', reason: 'timed out' }];
+      jira.recentComments = [];
+      assert.equal((await deliver('progress', 'First note.')).ok, false);
+      jira.recentComments = [{ id: 'c88', author: { accountId: aiAccountId }, created: new Date(nowMs).toISOString(), body: getCommentBody('First note.') }];
+      unconfirmedPosts = await loadUnconfirmedPosts();
+      assert.deepEqual(await deliver('progress', 'First note.'), { ok: true });
+      await deliver('progress', 'Second note.');
+      assert.equal(jira.postedTexts.length, 1, 'posted once, found by the resend');
+      assert.deepEqual(jira.edits.map((edit) => edit.commentId), ['c88']);
+    });
+  });
+
+  describe('what is not a plain note is a comment of its own, and the progress comment is let go', () => {
+    const shownNode = { type: 'mediaSingle', attrs: { layout: 'center' }, content: [{ type: 'media', attrs: { type: 'file', id: 'm-1', collection: '' } }] };
+
+    it('files: attached and shown in a new comment — never put into an edited one that the next note would wipe; the note after it starts below', async () => {
+      const attachCalls: string[] = [];
+      jira.attachFiles = async (issue, paths) => {
+        attachCalls.push(`attach ${issue} ${paths.join(',')}`);
+        return { ok: true, files: [], nodes: [shownNode], summary: 'shot.png', notes: [], sentKinds: ['photo'] };
+      };
+      await deliver('progress', 'Working.');
+      await sink().deliverAnswer(key, { requestId: 'req_1', kind: 'progress', body: 'Here is the screenshot.', origin, isRequestOpen: true, files: ['shot.png'] });
+      await deliver('progress', 'Going on.');
+      await deliver('progress', 'Still going.');
+      assert.deepEqual(attachCalls, ['attach PROJ-12 shot.png']);
+      assert.deepEqual(jira.postedTexts, ['Working.', 'Here is the screenshot.', 'Going on.']);
+      assert.deepEqual(jira.postedBodies[1].content.map((node) => node.type), ['paragraph', 'mediaSingle']);
+      assert.deepEqual(jira.edits.map((edit) => edit.commentId), ['c3']);
+    });
+
+    it('a note that replies to a comment notifies its author, which an edit never does: a comment of its own, in that comment\'s thread', async () => {
+      jira.commentsById.set('10950', { id: '10950', author: colleague, created: '2026-10-03T10:00:00.000+0000' });
+      jira.sentBlocks['comment:10950'] = { hash: 'hash-10950' };
+      await deliver('progress', 'Working.');
+      await sink().deliverAnswer(key, { requestId: 'req_1', kind: 'progress', body: 'To your comment: yes.', origin, isRequestOpen: true, replyToCommentIds: ['10950'] });
+      await deliver('progress', 'Back to the work.');
+      assert.deepEqual(jira.postedTexts, ['Working.', '@Colleague\nTo your comment: yes.', 'Back to the work.']);
+      assert.deepEqual(jira.postedParentIds, [null, '10950', null]);
+      assert.deepEqual(jira.edits, []);
+    });
+
+    it('a note too long for one comment is several comments, as ever — not an edit that would cut it', async () => {
+      const paragraphs = Array.from({ length: 2 }, (_, index) => `${index}`.repeat(paragraphLength));
+      await deliver('progress', 'Working.');
+      assert.deepEqual(await deliver('progress', paragraphs.join('\n\n')), { ok: true });
+      assert.deepEqual(jira.postedTexts.map((text) => text[0]), ['W', '0', '1']);
+      assert.deepEqual(jira.edits, []);
+      await deliver('progress', 'Short again.');
+      assert.deepEqual(jira.postedTexts.length, 4, 'the one before the long note was let go: a new comment');
+    });
+
+    it('the alert: the request\'s later notes start a new comment below it', async () => {
+      await deliver('progress', 'Working.');
+      await sink().deliverAlert(key, { requestId: 'req_1', reason: 'silentTurns', origin });
+      await deliver('progress', 'Back.');
+      await deliver('progress', 'Still here.');
+      assert.deepEqual(jira.postedTexts.length, 3);
+      assert.deepEqual(jira.edits.map((edit) => edit.commentId), ['c3']);
+    });
+
+    it('a mention request keeps its mention on the edited comment', async () => {
+      const requester = { accountId: 'requester-account', accountType: 'atlassian', displayName: 'Requester' };
+      jira.commentsById.set('10240', { id: '10240', author: requester, created: '2026-10-03T10:00:00.000+0000' });
+      await deliverFor('req_2', 'progress', 'Looking into it.', mentionOrigin);
+      await deliverFor('req_2', 'progress', 'Found it.', mentionOrigin);
+      assert.deepEqual(jira.edits.map((edit) => edit.text), [`@Requester\nFound it.\n${updatedLine}`]);
+      assert.deepEqual(getMentionedAccountIds(jira.edits[0].body.content[0]), [requester.accountId]);
+    });
+  });
+
+  describe('the bot\'s own notices', () => {
+    const deliverNotice = (body: string, repeatKey?: string) => sink().deliverAnswer(key, {
+      requestId: 'req_1', kind: 'progress', body, origin, isRequestOpen: true, isBotNotice: true, ...(repeatKey === undefined ? {} : { repeatKey }),
+    });
+
+    it('a notice that repeats for the request (the same repeat key) edits the earlier one — in a slot of its own, apart from the agent\'s notes', async () => {
+      await deliver('progress', 'Working.');
+      await deliverNotice('Usage limit: the AI goes on at 14:00.', 'usageLimitWait');
+      await deliverNotice('Usage limit: the AI goes on at 19:00.', 'usageLimitWait');
+      await deliver('progress', 'Working, more.');
+      await deliverNotice('Usage limit: the AI goes on at 21:00.', 'usageLimitWait');
+      assert.deepEqual(jira.postedTexts, ['Working.', 'Usage limit: the AI goes on at 14:00.']);
+      assert.deepEqual(jira.edits.map((edit) => [edit.commentId, edit.text.split('\n')[0]]), [
+        ['c2', 'Usage limit: the AI goes on at 19:00.'],
+        ['c1', 'Working, more.'],
+        ['c2', 'Usage limit: the AI goes on at 21:00.'],
+      ]);
+    });
+
+    it('a notice with no repeat key (an account move) is a comment every time and touches no slot', async () => {
+      await deliver('progress', 'Working.');
+      await deliverNotice('The AI\'s account was moved to «second».');
+      await deliverNotice('The AI\'s account was moved to «third».');
+      await deliver('progress', 'Working, more.');
+      assert.deepEqual(jira.postedTexts, ['Working.', 'The AI\'s account was moved to «second».', 'The AI\'s account was moved to «third».']);
+      assert.deepEqual(jira.edits.map((edit) => edit.commentId), ['c1']);
+    });
+
+    it('the update\'s thread stays owed to the agent\'s answer: an edited notice uses nothing up', async () => {
+      await deliverNotice('Usage limit: the AI goes on at 14:00.', 'usageLimitWait');
+      answerThreads.note('req_1', null);
+      await deliverNotice('Usage limit: the AI goes on at 19:00.', 'usageLimitWait');
+      assert.deepEqual(jira.edits.map((edit) => edit.commentId), ['c1']);
+      answerThreads.note('req_1', '10200');
+      jira.postedParentIds = [];
+      await deliverNotice('Usage limit: the AI goes on at 21:00.', 'usageLimitWait');
+      assert.deepEqual(jira.postedParentIds, ['10200'], 'the update asked for another thread: a comment there');
+      assert.equal(answerThreads.get('req_1'), '10200', 'and it is still owed to the agent\'s answer');
+    });
   });
 });

@@ -21,6 +21,7 @@ import type { RequestPromptOutcome } from '../../requests/types';
 import { JiraUnconfirmedPosts, jiraUnconfirmedPostsFileName } from './unconfirmedPosts';
 import { JiraUploadedFiles, jiraUploadedFilesFileName } from './uploadedFiles';
 import { JiraAnswerThreads, jiraAnswerThreadsFileName } from './answerThreads';
+import { JiraProgressComments, jiraProgressCommentsFileName } from './progressComments';
 import { sleep } from '../../utils';
 
 /**
@@ -292,6 +293,8 @@ export async function prepareJiraConnector(context: {
   await uploadedFiles.load();
   const answerThreads = JiraAnswerThreads.createForDataDir(path.join(context.dataDir, jiraAnswerThreadsFileName), now);
   await answerThreads.load();
+  const progressComments = JiraProgressComments.createForDataDir(path.join(context.dataDir, jiraProgressCommentsFileName), now);
+  await progressComments.load();
 
   /** The connector's own folder inside a conversation's files dir. */
   const getJiraFilesDir = (key: SessionKey): string => path.join(resolveThreadFilesDir(context.dataDir, key), jiraFilesDirName);
@@ -320,6 +323,7 @@ export async function prepareJiraConnector(context: {
     wait: sleep,
     unconfirmedPosts,
     answerThreads,
+    progressComments,
     attachFiles,
   });
   let inbound: JiraInbound | null = null;
