@@ -66,7 +66,7 @@ describe('L8: which callers of the forward mark their prompt a carrier of the ac
       'promptDeliveryDeps',
     ].sort());
     // The startup buffer's replay hands every buffered prompt's options on whole, the carrier flag among them.
-    assert.ok(getFunctionBody('replayBufferedPrompts').includes('forward: async (prompt, options) => { await forwardPromptToAgent(key, adapter, prompt, undefined, options); },'));
+    assert.ok(getFunctionBody('replayBufferedPrompts').includes('const outcome = await forwardPromptToAgent(key, adapter, prompt, undefined, options);'));
   });
 
   it('the answer to the agent\'s own question is no carrier (a tap\'s label arrives with no request), and a person\'s free text is', () => {

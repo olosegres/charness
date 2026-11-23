@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+**A reminder that reached no agent is no longer counted as one the agent ignored.**
+Right after a bot restart, a reminder to the agent could wait for its session to replay what it wrote while the bot was down, and then find no session left. The bot still counted the reminder as delivered and watched for a turn that never came, which could later read as the agent staying silent. Now such a reminder counts as not delivered: it is tried again later, or reported as one that could not be delivered.
+
 **Starting, restarting or switching the agent while its process is still stopping or starting no longer risks a second agent process.**
 `/new`, a first `/claude` or `/opencode`, `/claude_mode`, a `/resume` pick and the bot's own recovery of a stuck session now wait for a start or stop already under way, like every other start. Before, one of them could run beside it, and a scheduled run or a retry that came in that moment could start the conversation a second time.
 

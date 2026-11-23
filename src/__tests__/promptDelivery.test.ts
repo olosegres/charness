@@ -336,7 +336,7 @@ describe('the bot buffers a prompt for a starting session through it, in one pla
       assert.match(getBody(`function ${name}(`, name === 'createSessionPostDeps' ? 'async function forwardScheduledRun(' : 'function createBufferedOutcome('), /if \(delivery === 'noSession'\) throw new Error\(noSessionForPostError\);/, name);
     }
     assert.match(botSource, /if \(options\.isPersonInput === true && !isAlreadyTold\) await replyToThread\(key, t\('agent\.no_session'\)\);/, 'only a person\'s own prompt is told about in the topic');
-    assert.ok(botSource.includes('forward: async (prompt, options) => { await forwardPromptToAgent(key, adapter, prompt, undefined, options); },'), 'a buffered prompt is replayed with the options it was buffered with');
+    assert.ok(botSource.includes('const outcome = await forwardPromptToAgent(key, adapter, prompt, undefined, options);'), 'a buffered prompt is replayed with the options it was buffered with');
     assert.doesNotMatch(botSource, /forwardPrompt: async \(key, text\) => \{ await forwardPromptToAgent/);
     assert.match(getBody('async function cancelPendingQuestionAndForward(', 'async function applyQuestionAnswer('), /\): Promise<LatePromptOutcome> \{/);
   });
@@ -351,6 +351,16 @@ describe('the bot buffers a prompt for a starting session through it, in one pla
       openingFire.indexOf('await settleTopicRequestAfterDelivery(key, { ...opening, isScheduledRun: true }, delivery);') < openingFire.indexOf('throw new Error(noSessionForPostError)'),
       'the scheduler\'s request nobody was told about is closed first, then the fire fails',
     );
+  });
+
+  it('the engine\'s wake, the answer-tail reminder and the replay\'s write fail when their prompt found no session: no watch for a turn that never started, no «replayed» for a prompt no agent got (review 21, own pass)', () => {
+    const wake = getBody('async function forwardRequestWakeUp(', 'async function remindAnswerTail(');
+    assert.match(wake, /const outcome = await forwardPromptToAgent\(key, getThreadAdapter\(key\), message\.text, undefined, \{/);
+    assert.match(wake, /if \(outcome === 'noSession'\) throw new Error\(noSessionForPostError\);/, 'a wake that reached no session is a failed wake (R28 retry, the backstop, or `wakeFailed`), never tracked');
+    const tail = getBody('async function remindAnswerTail(', 'const probeThreadTurn =');
+    assert.match(tail, /return \(await forwardPromptToAgent\(key, getThreadAdapter\(key\), text, undefined, \{ isRequestReminder: true \}\)\) !== 'noSession';/, 'the answer tail reads as not reached');
+    const replay = getBody('async function replayBufferedPrompts(', 'async function forwardPromptToLiveAgent(');
+    assert.match(replay, /forward: async \(prompt, options\) => \{\n\s*const outcome = await forwardPromptToAgent\(key, adapter, prompt, undefined, options\);\n(?:\s*\/\/[^\n]*\n)*\s*if \(outcome === 'noSession'\) throw new Error\(noSessionForPostError\);\n\s*\},/, 'the buffer settles it `dropped`');
   });
 
   it('a request is settled by where its prompt went: tracked, or closed when no session was left to take it', () => {

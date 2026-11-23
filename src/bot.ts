@@ -6378,7 +6378,12 @@ async function replayBufferedPrompts(key: SessionKey): Promise<void> {
   // (`StartupPromptBuffer.checkIsReplaying`): no watch made during the start is read as a turn that ended (`requests/README.md` § Turn starts).
   await startupPromptBuffer.replayPrompts(keyToString(key), {
     isSessionActive,
-    forward: async (prompt, options) => { await forwardPromptToAgent(key, adapter, prompt, undefined, options); },
+    forward: async (prompt, options) => {
+      const outcome = await forwardPromptToAgent(key, adapter, prompt, undefined, options);
+      // A guard: the replay writes into the process the start brought up, never an adopted one, so no wake can come up empty here. If
+      // one did, the buffer settles the prompt `dropped` — never «replayed» for a prompt no agent got (review 21, own pass).
+      if (outcome === 'noSession') throw new Error(noSessionForPostError);
+    },
     afterReplay: async () => {
       // R23: prompts held during a usage-limit wait that ended with the previous
       // session go to this one — on their own when nothing above carried them. They
@@ -15831,10 +15836,13 @@ async function prepareRequestWakeUpSession(key: SessionKey, message: WakeUpMessa
  */
 async function forwardRequestWakeUp(key: SessionKey, _request: OpenRequestState, message: WakeUpMessage): Promise<void> {
   // The request's own prompt re-posted (R21) counts as that prompt, not a reminder.
-  await forwardPromptToAgent(key, getThreadAdapter(key), message.text, undefined, {
+  const outcome = await forwardPromptToAgent(key, getThreadAdapter(key), message.text, undefined, {
     isRequestReminder: !message.isRequestPrompt,
     lostWorkTelling: message.isAnswerOptional === true ? 'watchHeld' : 'plain',
   });
+  // A wake that waited for an adopted session's replay and then found no session reached no agent: a failed wake (a post retry later,
+  // the backstop for a restart wake, else `wakeFailed`), never a delivered one whose turn the engine would watch (review 21, own pass).
+  if (outcome === 'noSession') throw new Error(noSessionForPostError);
 }
 
 /**
@@ -15845,8 +15853,8 @@ async function forwardRequestWakeUp(key: SessionKey, _request: OpenRequestState,
 async function remindAnswerTail(key: SessionKey, text: string): Promise<boolean> {
   const ensured = await ensureAgentSession(key, { isResumeOnly: true });
   if (!ensured.ok || !getThreadAdapter(key).checkIsActive(key)) return false;
-  await forwardPromptToAgent(key, getThreadAdapter(key), text, undefined, { isRequestReminder: true });
-  return true;
+  // `false` when it waited for an adopted session's replay and then found no session (review 21, own pass).
+  return (await forwardPromptToAgent(key, getThreadAdapter(key), text, undefined, { isRequestReminder: true })) !== 'noSession';
 }
 
 /**

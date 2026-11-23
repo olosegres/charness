@@ -94,7 +94,7 @@ test('only a person\'s own prompts are marked as such: the text, voice and label
     assert.ok(!getFunctionBody(name).includes('isPersonInput'), `${name} awaits its write`);
   }
   // A buffered prompt replays with the options it was buffered with (its person flag among them).
-  assert.ok(botSource.includes('forward: async (prompt, options) => { await forwardPromptToAgent(key, adapter, prompt, undefined, options); },'));
+  assert.ok(botSource.includes('const outcome = await forwardPromptToAgent(key, adapter, prompt, undefined, options);'));
   // R23: what people asked for during a usage-limit wait, released to the next session — a failed write was only logged.
   assert.match(getFunctionBody('replayBufferedPrompts'), /await forwardPromptToAgent\(key, adapter, heldText, undefined, \{ isPersonInput: true \}\);/);
 });
