@@ -296,3 +296,16 @@ describe('claude-json-stream account switch after a limit', () => {
     assert.deepEqual(respawns, ['/profiles/perf']);
   });
 });
+
+describe('a process being stopped takes no input (review 24 nit 3)', () => {
+  it('a live process takes a prompt; one a release or a move is stopping still reads active until it exits, but takes none; with no session nothing does', () => {
+    const adapter = new ClaudeJsonStreamAdapter();
+    assert.equal(adapter.checkIsAcceptingInput(key), false, 'no session');
+    const session = createStreamSessionFixture({ key, workDir: '/tmp/jsonstream-account-work', sessionId: 'sess-acct' });
+    adapter['sessions'].set(keyToString(key), session);
+    assert.equal(adapter.checkIsAcceptingInput(key), true, 'live');
+    session.isStopping = true;
+    assert.equal(adapter.checkIsActive(key), true, 'the process has not exited yet');
+    assert.equal(adapter.checkIsAcceptingInput(key), false, 'so a prompt that meets it is routed as one that found no live session');
+  });
+});

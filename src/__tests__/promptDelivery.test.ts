@@ -314,7 +314,7 @@ describe('the bot buffers a prompt for a starting session through it, in one pla
     const atWrite = getBody('function deliverPersonPromptAtWrite(', 'function createPersonBufferedSettle(');
     assert.ok(atWrite.includes('return deliverLatePrompt({'));
     assert.ok(atWrite.includes('checkIsWindowOpen: () => startupPromptBuffer.checkIsStarting(keyToString(key)),'));
-    assert.ok(atWrite.includes('checkIsSessionActive: () => getThreadAdapter(key).checkIsActive(key),'), 'the adapter the topic runs NOW');
+    assert.ok(atWrite.includes('checkIsSessionActive: () => checkIsAcceptingInput(key),'), 'the adapter the topic runs NOW (`checkIsAcceptingInput` reads it at the call)');
     assert.ok(atWrite.includes('const bufferedText = `${requestHeader}${getPromptWithThreadMessageContext(key, text, messageContext)}`;'), 'buffered with its header and context folded in');
     assert.ok(atWrite.includes('await deliverPromptOrBuffer(key, bufferedText, createPersonBufferedSettle(key, requestId), { isPersonInput: true, isAccountsNoteCarrier });'), 'a dropped one is told about and closes its request');
     assert.ok(atWrite.includes('forward: () => forwardPromptToAgent(key, getThreadAdapter(key), text, sentAtMs, { messageContext, requestHeader, requestId, isPersonInput: true, isAccountsNoteCarrier }),'), 'the forward\'s own outcome is the answer');
@@ -329,7 +329,7 @@ describe('the bot buffers a prompt for a starting session through it, in one pla
 
   it('the delivery ports read the session at the write and return where the prompt went, with no wrapper that throws the answer away', () => {
     assert.ok(botSource.includes('forwardPrompt: (key, text, options) => forwardPromptToAgent(key, getThreadAdapter(key), text, undefined, { isPersonInput: options.isPersonInput, isAccountsNoteCarrier: options.isAccountsNoteCarrier, lostWorkTelling: options.lostWorkTelling }),'));
-    assert.ok(botSource.includes('checkIsSessionActive: (key) => getThreadAdapter(key).checkIsActive(key),'));
+    assert.ok(botSource.includes('checkIsSessionActive: (key) => checkIsAcceptingInput(key),'));
     assert.match(botSource, /wakeSession: \(key\) => \(checkIsTelegramKey\(key\)\n\s*\? wakeSleepingSessionForPrompt\(key\)\n\s*: wakeSleepingSessionForPrompt\(key, async \(notice\) => \{ console\.log\(/, 'a tracker conversation\'s resume notice is logged, never sent to Telegram');
     // A session post whose prompt found no session and nothing to wake is a failed post (its caller retries it), never one that reads as written.
     for (const name of ['createSessionPostDeps', 'createLostWorkPostDeps']) {
@@ -532,6 +532,12 @@ describe('a startup window\'s prompts on every way out of it (review 19 #1)', ()
     assert.doesNotMatch(fresh.slice(indexIn(fresh, 'cancelConversationRequest(key);'), indexIn(fresh, 'const msg = await startFreshSessionForNew(key);')), /await /, '/new');
     assert.match(getBody("command('quitall'", "command(['quit', 'q']"), /cancelConversationRequest\(bKey\);\n\s*const result = await conversationEndings\.hold\(bKey\)\.run\(/, '/quitall');
     assert.doesNotMatch(byIndex.slice(0, indexIn(byIndex, 'if (sessionId === null) {')), /await /, 'the digit pick');
+  });
+
+  it('a process a release or a move is stopping is no live session for a prompt: a person\'s prompt and every buffer-or-forward prompt route on whether the process takes input, so they wake the conversation and wait behind that stop instead of being written into a process that abandons them (review 24 nit 3)', () => {
+    assert.match(getBody('function checkIsAcceptingInput(', 'function deliverPromptOrBuffer('), /return adapter\.checkIsAcceptingInput\?\.\(key\) \?\? adapter\.checkIsActive\(key\);/, 'a backend with no such check: as live as it is active');
+    assert.match(getBody('function deliverPersonPromptAtWrite(', 'function createPersonBufferedSettle('), /checkIsSessionActive: \(\) => checkIsAcceptingInput\(key\),/, 'a person\'s prompt, routed at its write');
+    assert.match(getBody('const promptDeliveryDeps: PromptDeliveryDeps = {', 'function checkIsAcceptingInput('), /checkIsSessionActive: \(key\) => checkIsAcceptingInput\(key\),/, 'a scheduled run, a tracker post, a nudge, a move\'s first prompt');
   });
 
   it('a move\'s first prompt that reached no session tracks no continuation: nothing is reset, lifted or watched for a turn that never starts (review 19 nit 4)', () => {

@@ -11891,7 +11891,7 @@ async function downloadIncomingFile(
 const promptDeliveryDeps: PromptDeliveryDeps = {
   startupBuffer: startupPromptBuffer,
   forwardPrompt: (key, text, options) => forwardPromptToAgent(key, getThreadAdapter(key), text, undefined, { isPersonInput: options.isPersonInput, isAccountsNoteCarrier: options.isAccountsNoteCarrier, lostWorkTelling: options.lostWorkTelling }),
-  checkIsSessionActive: (key) => getThreadAdapter(key).checkIsActive(key),
+  checkIsSessionActive: (key) => checkIsAcceptingInput(key),
   // A tracker conversation has no topic to say a resume's notice in: it is logged.
   wakeSession: (key) => (checkIsTelegramKey(key)
     ? wakeSleepingSessionForPrompt(key)
@@ -11905,6 +11905,16 @@ const promptDeliveryDeps: PromptDeliveryDeps = {
     await replyToThread(key, t('agent.queued_starting', { label: getThreadAdapter(key).label }));
   },
 };
+
+/**
+ * @description Whether a prompt written now reaches `key`'s live process (`AgentAdapter.checkIsAcceptingInput`, else `checkIsActive`): a
+ * process a release or a move is stopping opens no window, and a prompt written into it is abandoned while its request reads it as
+ * written — routed as no live session, it wakes the conversation, whose ensure waits behind that stop (review 24 nit 3).
+ */
+function checkIsAcceptingInput(key: SessionKey): boolean {
+  const adapter = getThreadAdapter(key);
+  return adapter.checkIsAcceptingInput?.(key) ?? adapter.checkIsActive(key);
+}
 
 function deliverPromptOrBuffer(
   key: SessionKey,
@@ -12998,7 +13008,7 @@ function deliverPersonPromptAtWrite(
   const { header: requestHeader, requestId } = opening;
   return deliverLatePrompt({
     checkIsWindowOpen: () => startupPromptBuffer.checkIsStarting(keyToString(key)),
-    checkIsSessionActive: () => getThreadAdapter(key).checkIsActive(key),
+    checkIsSessionActive: () => checkIsAcceptingInput(key),
     buffer: async () => {
       const bufferedText = `${requestHeader}${getPromptWithThreadMessageContext(key, text, messageContext)}`;
       await deliverPromptOrBuffer(key, bufferedText, createPersonBufferedSettle(key, requestId), { isPersonInput: true, isAccountsNoteCarrier });

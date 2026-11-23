@@ -535,7 +535,10 @@ instances (module-level, like `stopsInFlightByKey`), and `waitForRespawn` resolv
 the last is over: the bot's ensure, its command transitions, its stop and its releases
 wait there first (`AgentAdapter.waitForRespawn`). The other way round, no change re-spawns
 a process being stopped (`isStopping`: an account or effort pick waits for the next
-start, a model pick is refused), and a per-turn instance whose CLI supports the
+start, a model pick is refused), nor does a prompt reach it: `checkIsAcceptingInput` reads
+such a process as taking no input while `checkIsActive` still reads it live until its exit,
+so the bot routes the prompt as one that found no live session — it wakes the conversation
+and waits behind the stop in the bot's queue —, and a per-turn instance whose CLI supports the
 auto-stop releases no deferred switch at a turn end — the bot's per-turn stop of that
 same end ends the process, and the resume after it spawns on the new account; a CLI
 too old for the auto-stop keeps the switch. Every spawn, re-spawn and adopt numbers its

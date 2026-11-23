@@ -1334,6 +1334,12 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
     return session?.isActive === true;
   }
 
+  /** A process being stopped stays active until its exit, but takes no more input (`writeStdin` abandons a write on `isStopping`). */
+  checkIsAcceptingInput(key: SessionKey): boolean {
+    const session = this.sessions.get(keyToString(key));
+    return session !== undefined && this.checkIsLiveForRespawn(session);
+  }
+
   flushPendingOutput(key: SessionKey): void {
     const session = this.sessions.get(keyToString(key));
     if (!session?.isActive) return;

@@ -856,6 +856,13 @@ export interface AgentAdapter extends EventEmitter {
   /** Whether an adopted session is not read yet or still replaying the downtime tail — {@link whenAdoptReplayed} would wait. */
   checkIsAdoptReplayPending?(key: SessionKey): boolean;
   checkIsActive(key: SessionKey): boolean;
+  /**
+   * @description Whether a prompt written now reaches the live process: live and not being stopped. A process a release or a move is
+   * stopping reads {@link checkIsActive} true until it exits, yet abandons every write — the bot routes a prompt that meets it as one
+   * that found no live session, so it wakes the conversation and waits behind that stop in the conversation's queue
+   * (`requests/README.md` § Turn starts). Optional: a backend whose stop drops the session at once omits it, and `checkIsActive` is read.
+   */
+  checkIsAcceptingInput?(key: SessionKey): boolean;
 
   /**
    * @description Read runtime metadata for the live session without sending the
