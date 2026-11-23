@@ -480,15 +480,18 @@ another platform's state.
   between two notes keeps editing the SAME comment; an entry a week old is forgotten (a request quiet that long gets a new
   comment). The agent is told in the context preamble that each progress note replaces the last, so it writes the full status.
   - **What ends it.** A `question` or `final` answer delivered is a new comment as ever and LETS GO of the progress comment (no
-    more edits; a later note of the same request starts a new one, below the final). A later REQUEST has its own — requests never
-    edit each other's. The give-up alert lets it go too (a later note starts below it).
+    more edits; a later note of the same request starts a new one, below the final). So does any ISSUE UPDATE the request receives
+    (below). A later REQUEST has its own — requests never edit each other's. The give-up alert lets it go too (a later note
+    starts below it).
   - **What is a comment of its own, never an edit.** Only a plain note is kept as the one comment: a progress answer with
     `files` (attached and shown in a NEW comment — an edit would wipe them at the next note —, the progress comment let go so the
     note after it starts below), one that replies to comments (`replyToCommentIds`: the mention notifies its author, an edit would
     not), and one too long for one comment (several comments, never cut). Each lets the progress comment go.
-  - **An issue update that points elsewhere.** An update whose newest comment is a reply in ANOTHER thread than the progress
-    comment's (`answerThreads.ts`) pulls the next note there: a new comment in that thread, which then is the progress comment.
-    An update thread that IS the comment's own thread is satisfied by the edit and used up.
+  - **An issue update the request receives lets everything it keeps up to date go** (`noteIssueUpdate`, which `inbound.ts` calls for
+    EVERY update: a reply in a thread, in the progress comment's own thread too, and a top-level comment). The agent's next note is
+    then a new comment below the person's comment — in the update's thread when it is a reply, where the request's answers go by
+    default when it is top-level — and the notes after it edit that one. An edit would answer the person silently, above their own
+    comment, and the agent would look as if it had ignored them. An update of another request lets nothing of this one go.
   - **An edit that fails** posts the text as a new comment instead, in the thread the old one stood in (400 → top-level, as any
     post), with R18's read-back; THAT comment is remembered from then on, and the old one stays as it was. A refusal that changed
     nothing — 404 (the comment was deleted), 400, 403 (the AI account may not edit it), a rate limit — falls back at once. An

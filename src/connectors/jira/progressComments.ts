@@ -7,12 +7,19 @@ import { RotatingJsonlFile } from '../../utils/rotatingJsonlFile';
  * same thing again for a request (a usage-limit wait). This is where the sink remembers which comment that is, per request and
  * per slot (the agent's progress note, or a repeating bot notice), and in which thread it stands (an edit never moves it).
  * `DATA_DIR/jira-progress-comments.jsonl`: one line when a comment is remembered and one when it is let go (the request's
- * `question` / `final` answer: the comment stays as it is, no more edits), so a restart — a hot reload among them — between two
+ * `question` / `final` answer, an issue update the request received, the agent's own answer for a notice: the comment stays as
+ * it is, no more edits), so a restart — a hot reload among them — between two
  * progress answers keeps editing the SAME comment. An entry older than {@link jiraProgressCommentMaxAgeMs} is forgotten: a request
  * quiet for that long gets a new comment.
  */
 
 export const jiraProgressCommentsFileName = 'jira-progress-comments.jsonl';
+/** The slot of a request's own progress note. */
+export const jiraProgressSlot = 'progress';
+/** The slot of a bot notice that repeats for a request (`RequestAnswerDelivery.repeatKey`). */
+export function getJiraNoticeSlot(repeatKey: string): string {
+  return `notice:${repeatKey}`;
+}
 const progressCommentsMaxBytes = 1024 * 1024;
 export const jiraProgressCommentMaxAgeMs = 7 * 24 * 60 * 60 * 1000;
 
@@ -86,6 +93,16 @@ export class JiraProgressComments {
   forget(requestId: string, slot: string): void {
     if (!this.entries.has(getIdentity(requestId, slot))) return;
     this.write({ requestId, slot, commentId: null, threadRootId: null, at: this.now() });
+  }
+
+  /** @description Let go of every comment request `requestId` keeps up to date, except the one under `exceptSlot`. */
+  forgetAll(requestId: string, exceptSlot?: string): void {
+    const prefix = getIdentity(requestId, '');
+    for (const identity of [...this.entries.keys()]) {
+      if (!identity.startsWith(prefix)) continue;
+      const slot = identity.slice(prefix.length);
+      if (slot !== exceptSlot) this.forget(requestId, slot);
+    }
   }
 
   private write(line: ProgressCommentLine): void {

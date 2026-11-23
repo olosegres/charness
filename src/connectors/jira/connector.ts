@@ -373,7 +373,7 @@ export async function prepareJiraConnector(context: {
       parkMention: (issueKey, threadRootId) => answerSink.parkMention(issueKey, threadRootId),
       postUpdatesPausedNotice: (issueKey, untilMs) => answerSink.postUpdatesPausedNotice(issueKey, jiraIssueUpdatesPer24hMax, untilMs),
       postQueuedNotice: (issueKey, queue, threadRootId) => answerSink.postQueuedNotice(issueKey, queue, threadRootId),
-      noteAnswerThread: (requestId, threadRootId) => answerThreads.note(requestId, threadRootId),
+      noteAnswerThread: (requestId, threadRootId) => answerSink.noteIssueUpdate(requestId, threadRootId),
       noteShownSummary: (issueKey, summary) => shownSummaries.set(issueKey, summary),
     });
     inbound.start();

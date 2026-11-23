@@ -337,6 +337,11 @@ describe('prepareJiraConnector', () => {
     assert.deepEqual(sentKeys(), [], 'a dropped build is gone');
   });
 
+  it('the poller\'s note of an issue update goes to the answer sink — which lets the request\'s progress comments go — not to the thread store alone', () => {
+    const source = fs.readFileSync(path.join(__dirname, '..', 'connectors', 'jira', 'connector.ts'), 'utf8');
+    assert.match(source, /noteAnswerThread: \(requestId, threadRootId\) => answerSink\.noteIssueUpdate\(requestId, threadRootId\)/);
+  });
+
   it('C4: a prompt taken in counts as sent, on disk', async () => {
     writeConfig();
     connector = await prepare();

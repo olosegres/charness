@@ -65,6 +65,21 @@ describe('the comments the answer sink edits', () => {
     assert.equal(store.get('req_1', 'notice:usageLimitWait')?.commentId, '10501');
   });
 
+  it('forgetAll lets go of every slot of ONE request — after a restart too — except the slot it is told to keep', async () => {
+    const store = await openStore();
+    store.remember('req_1', 'progress', '10500', null);
+    store.remember('req_1', 'notice:usageLimitWait', '10501', null);
+    store.remember('req_2', 'progress', '10502', null);
+    store.forgetAll('req_1', 'progress');
+    assert.equal(store.get('req_1', 'progress')?.commentId, '10500');
+    assert.equal(store.get('req_1', 'notice:usageLimitWait'), null);
+    store.forgetAll('req_1');
+    const restarted = await openStore();
+    assert.equal(restarted.get('req_1', 'progress'), null);
+    assert.equal(restarted.get('req_2', 'progress')?.commentId, '10502', 'another request\'s comments are not touched');
+    restarted.forgetAll('req_3');
+  });
+
   it('letting go what is not remembered writes nothing', async () => {
     const store = await openStore();
     store.forget('req_1', 'progress');

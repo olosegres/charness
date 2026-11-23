@@ -1208,9 +1208,9 @@ describe('one progress comment per request: the first progress answer posts it, 
       assert.deepEqual(jira.postedParentIds, ['10200', '10200', '10200', null], 'the refused try, then top-level');
     });
 
-    it('a person\'s reply in another thread (an issue update) pulls the next note there as a comment of its own — and the notes after it edit that one', async () => {
+    it('a person\'s reply in another thread (an issue update) lets the progress comment go: the next note is a new comment in that thread — and the notes after it edit that one', async () => {
       await deliver('progress', 'Working.');
-      answerThreads.note('req_1', '10900');
+      sink().noteIssueUpdate('req_1', '10900');
       assert.deepEqual(await deliver('progress', 'About your reply.'), { ok: true });
       assert.equal(answerThreads.get('req_1'), null, 'the answer used the update\'s thread up');
       await deliver('progress', 'More work.');
@@ -1218,12 +1218,38 @@ describe('one progress comment per request: the first progress answer posts it, 
       assert.deepEqual(jira.edits.map((edit) => edit.commentId), ['c2'], 'the one in the thread');
     });
 
-    it('an update thread that is the one the note stands in is satisfied by the edit: used up, nothing new', async () => {
+    it('a reply in the thread the note stands in is no exception: the person hears the answer as a comment below theirs, never as a silent edit above it', async () => {
       await deliverFor('req_3', 'progress', 'In the thread.', threadOrigin);
-      answerThreads.note('req_3', '10200');
-      await deliverFor('req_3', 'progress', 'Answering your reply, in place.', threadOrigin);
-      assert.deepEqual(jira.postedTexts, ['In the thread.']);
-      assert.equal(answerThreads.get('req_3'), null);
+      sink().noteIssueUpdate('req_3', '10200');
+      await deliverFor('req_3', 'progress', 'Answering your reply.', threadOrigin);
+      assert.deepEqual(jira.postedTexts, ['In the thread.', 'Answering your reply.']);
+      assert.deepEqual(jira.postedParentIds, ['10200', '10200']);
+      assert.equal(jira.edits.length, 0, 'no edit');
+      assert.equal(answerThreads.get('req_3'), null, 'used up by the answer');
+      await deliverFor('req_3', 'progress', 'Back to the work.', threadOrigin);
+      assert.deepEqual(jira.edits.map((edit) => edit.commentId), ['c2'], 'the notes after it edit the new one');
+    });
+
+    it('a top-level comment of a person (an update with no thread) lets it go too: the next note is a new comment where the request\'s answers go by default, and the notes after it edit that one', async () => {
+      await deliver('progress', 'Working.');
+      sink().noteIssueUpdate('req_1', null);
+      assert.deepEqual(await deliver('progress', 'About your comment.'), { ok: true });
+      await deliver('progress', 'More work.');
+      assert.deepEqual(jira.postedTexts, ['Working.', 'About your comment.']);
+      assert.deepEqual(jira.postedParentIds, [null, null]);
+      assert.deepEqual(jira.edits.map((edit) => edit.commentId), ['c2']);
+      // An update of another request lets nothing of this one go.
+      sink().noteIssueUpdate('req_9', null);
+      await deliver('progress', 'Still on it.');
+      assert.deepEqual(jira.edits.map((edit) => edit.commentId), ['c2', 'c2']);
+    });
+
+    it('the update is remembered on disk: a restarted process starts the next note below the person\'s comment too', async () => {
+      await deliver('progress', 'Working.');
+      sink().noteIssueUpdate('req_1', null);
+      progressComments = await loadProgressComments();
+      await deliver('progress', 'About your comment.');
+      assert.deepEqual(jira.postedTexts, ['Working.', 'About your comment.']);
     });
   });
 
@@ -1351,16 +1377,17 @@ describe('one progress comment per request: the first progress answer posts it, 
       assert.deepEqual(jira.edits.map((edit) => edit.commentId), ['c1']);
     });
 
-    it('the update\'s thread stays owed to the agent\'s answer: an edited notice uses nothing up', async () => {
+    it('a person\'s comment (an issue update) lets the notice go too: the next notice is a new comment in the update\'s thread, which stays owed to the agent\'s answer', async () => {
       await deliverNotice('Usage limit: the AI goes on at 14:00.', 'usageLimitWait');
-      answerThreads.note('req_1', null);
       await deliverNotice('Usage limit: the AI goes on at 19:00.', 'usageLimitWait');
       assert.deepEqual(jira.edits.map((edit) => edit.commentId), ['c1']);
-      answerThreads.note('req_1', '10200');
+      sink().noteIssueUpdate('req_1', '10200');
       jira.postedParentIds = [];
       await deliverNotice('Usage limit: the AI goes on at 21:00.', 'usageLimitWait');
-      assert.deepEqual(jira.postedParentIds, ['10200'], 'the update asked for another thread: a comment there');
-      assert.equal(answerThreads.get('req_1'), '10200', 'and it is still owed to the agent\'s answer');
+      assert.deepEqual(jira.postedParentIds, ['10200'], 'a comment of its own, in the update\'s thread');
+      assert.equal(answerThreads.get('req_1'), '10200', 'and the thread is still owed to the agent\'s answer');
+      await deliverNotice('Usage limit: the AI goes on at 23:00.', 'usageLimitWait');
+      assert.deepEqual(jira.edits.map((edit) => edit.commentId), ['c1', 'c2'], 'the next repeat edits the new one');
     });
   });
 });
