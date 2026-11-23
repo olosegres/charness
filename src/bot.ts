@@ -6396,7 +6396,7 @@ async function forwardPromptToAgent(
     buffer: async () => {
       // A bot-made prompt (a wake-up) that waits here counts only once its replay reached the agent, as at any other buffer.
       const buffered = createBufferedOutcome();
-      await deliverPromptOrBuffer(key, `${options.requestHeader ?? ''}${getPromptWithThreadMessageContext(key, text, options.messageContext)}`, true, buffered.settle, { isPersonInput: options.isPersonInput, isAccountsNoteCarrier: options.isAccountsNoteCarrier });
+      await deliverPromptOrBuffer(key, `${options.requestHeader ?? ''}${getPromptWithThreadMessageContext(key, text, options.messageContext)}`, true, buffered.settle, { isPersonInput: options.isPersonInput, isAccountsNoteCarrier: options.isAccountsNoteCarrier, lostWorkTelling: options.lostWorkTelling });
       if (options.isPersonInput !== true) await buffered.assertReplayed();
     },
     wake: () => wakeSleepingSessionForPrompt(key),

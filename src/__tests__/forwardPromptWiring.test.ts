@@ -141,10 +141,15 @@ test('an API error that arms nothing holds the turn end until its stop, move or 
   assert.ok(botSource.includes('checkIsApiErrorInHandling: (keyString) => apiErrorsInHandling.has(keyString),'), 'the probe reads it');
 });
 
+test('a prompt that waits for an adopted replay keeps its lost-work wording when it lands in a start window (review 16 nit 7)', () => {
+  const body = getFunctionBody('forwardPromptToAgent');
+  assert.match(body, /buffered\.settle, \{ isPersonInput: options\.isPersonInput, isAccountsNoteCarrier: options\.isAccountsNoteCarrier, lostWorkTelling: options\.lostWorkTelling \}\);/);
+});
+
 test('a bot-made prompt that waits for an adopt replay behind a start counts only once replayed', () => {
   const body = getFunctionBody('forwardPromptToAgent');
   const buffer = body.slice(body.indexOf('buffer: async () => {'));
-  assert.match(buffer, /const buffered = createBufferedOutcome\(\);\n\s*await deliverPromptOrBuffer\([^\n]*, true, buffered\.settle, \{ isPersonInput: options\.isPersonInput, isAccountsNoteCarrier: options\.isAccountsNoteCarrier \}\);\n\s*if \(options\.isPersonInput !== true\) await buffered\.assertReplayed\(\);/);
+  assert.match(buffer, /const buffered = createBufferedOutcome\(\);\n\s*await deliverPromptOrBuffer\([^\n]*, true, buffered\.settle, \{ isPersonInput: options\.isPersonInput, isAccountsNoteCarrier: options\.isAccountsNoteCarrier, lostWorkTelling: options\.lostWorkTelling \}\);\n\s*if \(options\.isPersonInput !== true\) await buffered\.assertReplayed\(\);/);
 });
 
 test('a session post (a tracker\'s request or update, a scheduled run, the lost-work note) whose prompt waited for the session start counts only once it was replayed', () => {
