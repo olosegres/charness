@@ -14441,18 +14441,22 @@ function createLostWorkPostDeps(): PostToSessionDeps {
  * `settle` is the buffer's callback, `assertReplayed` resolves once it was replayed into the session and rejects when it
  * was dropped — the start failed, or its write did not reach the agent.
  */
-function createBufferedOutcome(): { settle: BufferedPromptSettled; assertReplayed: () => Promise<void> } {
+function createBufferedOutcome(): { settle: BufferedPromptSettled; getOutcome: () => Promise<BufferedPromptOutcome>; assertReplayed: () => Promise<void> } {
   let settle: BufferedPromptSettled = () => {};
   const outcome = new Promise<BufferedPromptOutcome>((resolve) => {
     settle = resolve;
   });
   return {
     settle: (result) => settle(result),
+    getOutcome: () => outcome,
     assertReplayed: async () => {
-      if ((await outcome) !== 'replayed') throw new Error('the prompt waited for the session to start and never reached the agent');
+      if ((await outcome) !== 'replayed') throw new Error(bufferedPromptDroppedError);
     },
   };
 }
+
+/** Why a post whose prompt waited for a session start failed: the window dropped it. */
+const bufferedPromptDroppedError = 'the prompt waited for the session to start and never reached the agent';
 
 function handleAgentError(key: SessionKey, error: Error): void {
   console.error(`[Bot] adapter error ${keyToString(key)}:`, error.message);
@@ -15933,9 +15937,14 @@ async function forwardTopicSchedulerRequestRun(conversationKey: string, text: st
   const opening = await openTopicRequest(key, text, { source: 'scheduledRun', requesterId: scheduledRunRequester });
   const buffered = createBufferedOutcome();
   const delivery = await deliverPromptOrBuffer(key, `${opening.header}${text}`, buffered.settle, { isAccountsNoteCarrier: true });
+  // A prompt that waited for the session's start counts only once it reached it, and only then is its turn watched (a watch made in
+  // the window would wait for good if the window dropped it). Dropped, the scheduler's request nobody was told about closes like one
+  // that found no session, and the post fails.
+  if (delivery === 'buffered' && (await buffered.getOutcome()) === 'dropped') {
+    await settleTopicRequestAfterDelivery(key, opening, 'noSession');
+    throw new Error(bufferedPromptDroppedError);
+  }
   await settleTopicRequestAfterDelivery(key, { ...opening, isScheduledRun: true }, delivery);
-  // A prompt that waited for the session's start counts only once it reached it: a replay whose write failed is a failed post.
-  if (delivery === 'buffered') await buffered.assertReplayed();
 }
 
 /**

@@ -339,12 +339,13 @@ describe('the bot buffers a prompt for a starting session through it, in one pla
     // Every site that opens a request and hands its prompt on settles it through the helper — the turn is never tracked directly.
     assert.doesNotMatch(botSource, /trackTopicRequestTurn/);
     assert.ok(botSource.includes('const delivery = await cancelPendingQuestionAndForward(key, adapter, text, sentAtMs, messageContext, opening, intake !== null);\n    await settleTopicRequestAfterDelivery(key, opening, delivery);'), 'free text that cancels a pending question');
-    assert.equal(botSource.match(/await settleTopicRequestAfterDelivery\(key, opening, /g)?.length, 2, 'the person\'s one helper and the question-cancelling text, no other');
+    assert.equal(botSource.match(/await settleTopicRequestAfterDelivery\(key, opening, /g)?.length, 3, 'the person\'s one helper, the question-cancelling text, and the scheduler\'s request whose prompt a window dropped');
     // The scheduler's request a fire opened settles the same way, as that fire's scheduled run (`src/requests/README.md` § Scheduled
     // runs); a session post waits for the buffered prompt's replay as well (it must not count a prompt that never arrived): `buffered.settle`.
     assert.match(
       botSource.slice(botSource.indexOf('async function forwardTopicSchedulerRequestRun('), botSource.indexOf('async function forwardTopicSchedulerRequestRun(') + 1500),
-      /const delivery = await deliverPromptOrBuffer\(key, `\$\{opening\.header\}\$\{text\}`, buffered\.settle, \{ isAccountsNoteCarrier: true \}\);\n\s*await settleTopicRequestAfterDelivery\(key, \{ \.\.\.opening, isScheduledRun: true \}, delivery\);/,
+      /const delivery = await deliverPromptOrBuffer\(key, `\$\{opening\.header\}\$\{text\}`, buffered\.settle, \{ isAccountsNoteCarrier: true \}\);\n(?:\s*\/\/[^\n]*\n)*\s*if \(delivery === 'buffered' && \(await buffered\.getOutcome\(\)\) === 'dropped'\) \{\n\s*await settleTopicRequestAfterDelivery\(key, opening, 'noSession'\);\n\s*throw new Error\(bufferedPromptDroppedError\);\n\s*\}\n\s*await settleTopicRequestAfterDelivery\(key, \{ \.\.\.opening, isScheduledRun: true \}, delivery\);/,
+      'watched only once its prompt reached the session; a dropped one closes the scheduler\'s request (review 20 #1)',
     );
     assert.equal(botSource.match(/await settleTopicRequestAfterDelivery\(key, \{ \.\.\.opening, isScheduledRun: true \}, /g)?.length, 1, 'only the scheduler\'s request');
   });

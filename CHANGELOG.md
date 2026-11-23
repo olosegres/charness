@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+**A scheduled run that a session start dropped no longer comes back to the agent later on its own.**
+In a topic that shows answers, a scheduled run that waited behind a session start was watched as soon as it was queued. When the start then dropped it, its request waited for a turn that never came: the agent could later be reminded of a run it never read, or get the run again on its own up to an hour and a half after its time. Now such a run fails like any run that could not reach the agent (its run records the error), and its request is closed.
+
 **A request is no longer held for good when the «continue» after a retry, a usage limit or an account move never reached the agent.**
 The bot watched the turn of such a «continue» as soon as it was queued behind a session start. When the start then dropped it, every open request kept waiting for a turn that never came, and a request whose words rode that «continue» could be held for as long as the agent kept working. Now the turn is watched only once the «continue» reached the agent; a lost one leaves the requests to the usual reminders.
 
