@@ -265,6 +265,7 @@ export const zhDict: Record<string, string> = {
   'agent.already_active': '{label} 已在此运行。发送消息或 /quit。',
   'agent.starting': '正在 `{subdir}` 中启动 {label}…',
   'agent.queued_starting': '⏳ {label} 仍在启动中 — 你的消息已排队，就绪后发送。',
+  'agent.queued_prompt_dropped': '⚠️ 你在 {label} 启动期间发送的一条消息没有送达。请重新发送。',
   'agent.question_hint': 'ℹ️ 回复选项编号（如 1）或 y/n。还有：/up /down 移动，/enter 确认，/c 取消。',
   'agent.start_failed': '启动 {label} 失败：{error}',
   'agent.no_response': '⚠️ 智能体已接收你的请求但一直没有开始回复——会话可能已卡住。请重新发送，或用 /new 开启新会话。',

@@ -285,7 +285,7 @@ describe('the bot buffers a prompt for a starting session through it, in one pla
     // The helper opens the request first and routes the write after it, by what the session is then.
     assert.match(
       getBody('async function deliverPromptByState(', 'function deliverPersonPromptAtWrite('),
-      /const opening = await openTopicRequest\(key, text, intake, messageContext\);\n(?:\s*\/\/[^\n]*\n)*\s*const outcome = await deliverPersonPromptAtWrite\(key, text, \{ requestHeader: opening\.header, sentAtMs, messageContext, isAccountsNoteCarrier: intake !== null \}\);\n\s*await settleTopicRequestAfterDelivery\(key, opening, outcome\);\n\s*return outcome;/,
+      /const opening = await openTopicRequest\(key, text, intake, messageContext\);\n(?:\s*\/\/[^\n]*\n)*\s*const outcome = await deliverPersonPromptAtWrite\(key, text, \{ opening, sentAtMs, messageContext, isAccountsNoteCarrier: intake !== null \}\);\n\s*await settleTopicRequestAfterDelivery\(key, opening, outcome\);\n\s*return outcome;/,
     );
     // No delivery is given a window state at all; the one stale read the file path had is gone (its gate reads the window itself).
     assert.doesNotMatch(botSource, /deliverPromptOrBuffer\([^;]*checkIsStarting/);
@@ -297,18 +297,19 @@ describe('the bot buffers a prompt for a starting session through it, in one pla
   it('a person\'s prompt is written by what the session is at the write: buffered behind a window, forwarded to a live session, a sleeping one woken', () => {
     // The race the re-ask flow hit: a tap read a live process, the idle stop ran during the tap's awaits, and the label
     // was forwarded to a session that was gone — dropped. The behaviour is `deliverLatePrompt`'s (below) and the e2e's.
-    const atWrite = getBody('function deliverPersonPromptAtWrite(', 'async function deliverLateAnswerPrompt(');
+    const atWrite = getBody('function deliverPersonPromptAtWrite(', 'function createPersonBufferedSettle(');
     assert.ok(atWrite.includes('return deliverLatePrompt({'));
     assert.ok(atWrite.includes('checkIsWindowOpen: () => startupPromptBuffer.checkIsStarting(keyToString(key)),'));
     assert.ok(atWrite.includes('checkIsSessionActive: () => getThreadAdapter(key).checkIsActive(key),'), 'the adapter the topic runs NOW');
-    assert.ok(atWrite.includes('await deliverPromptOrBuffer(key, `${requestHeader}${getPromptWithThreadMessageContext(key, text, messageContext)}`, undefined, { isPersonInput: true, isAccountsNoteCarrier });'), 'buffered with its header and context folded in');
-    assert.ok(atWrite.includes('forward: () => forwardPromptToAgent(key, getThreadAdapter(key), text, sentAtMs, { messageContext, requestHeader, isPersonInput: true, isAccountsNoteCarrier }),'), 'the forward\'s own outcome is the answer');
+    assert.ok(atWrite.includes('const bufferedText = `${requestHeader}${getPromptWithThreadMessageContext(key, text, messageContext)}`;'), 'buffered with its header and context folded in');
+    assert.ok(atWrite.includes('await deliverPromptOrBuffer(key, bufferedText, createPersonBufferedSettle(key, requestId), { isPersonInput: true, isAccountsNoteCarrier });'), 'a dropped one is told about and closes its request');
+    assert.ok(atWrite.includes('forward: () => forwardPromptToAgent(key, getThreadAdapter(key), text, sentAtMs, { messageContext, requestHeader, requestId, isPersonInput: true, isAccountsNoteCarrier }),'), 'the forward\'s own outcome is the answer');
     assert.match(atWrite, /reportNoSession: async \(isAlreadyTold\) => \{\n\s*if \(!isAlreadyTold\) await replyToThread\(key, t\('agent\.no_session'\)\);\n\s*\},/, 'the topic is told once; the request is settled by the caller, for the wake and the forward alike');
     assert.ok(atWrite.includes('wake: () => wakeSleepingSessionForPrompt(key),'), 'the wake says whether its start already posted why it failed');
     assert.doesNotMatch(atWrite, /closeRequest|trackTopicRequestTurn|settleTopicRequestAfterDelivery/, 'the request is closed or tracked in one place');
     // The free text that cancels a pending question is written the same way: the SIGINT ended the turn, and a per-turn stop may follow.
     const cancel = getBody('async function cancelPendingQuestionAndForward(', 'async function applyQuestionAnswer(');
-    assert.ok(cancel.includes("return deliverPersonPromptAtWrite(key, text, { requestHeader: requestHeader ?? '', sentAtMs, messageContext, isAccountsNoteCarrier });"));
+    assert.ok(cancel.includes('return deliverPersonPromptAtWrite(key, text, { opening, sentAtMs, messageContext, isAccountsNoteCarrier });'));
     assert.doesNotMatch(cancel, /forwardPromptToAgent\(/);
   });
 
@@ -335,7 +336,7 @@ describe('the bot buffers a prompt for a starting session through it, in one pla
     assert.ok(botSource.includes("await topicRequestLedger?.closeRequest(requestId, 'cancelled');"), 'the ledger closes the request as cancelled');
     // Every site that opens a request and hands its prompt on settles it through the helper — the turn is never tracked directly.
     assert.doesNotMatch(botSource, /trackTopicRequestTurn/);
-    assert.ok(botSource.includes('const delivery = await cancelPendingQuestionAndForward(key, adapter, text, sentAtMs, messageContext, opening.header, intake !== null);\n    await settleTopicRequestAfterDelivery(key, opening, delivery);'), 'free text that cancels a pending question');
+    assert.ok(botSource.includes('const delivery = await cancelPendingQuestionAndForward(key, adapter, text, sentAtMs, messageContext, opening, intake !== null);\n    await settleTopicRequestAfterDelivery(key, opening, delivery);'), 'free text that cancels a pending question');
     assert.equal(botSource.match(/await settleTopicRequestAfterDelivery\(key, opening, /g)?.length, 2, 'the person\'s one helper and the question-cancelling text, no other');
     // The scheduler's request a fire opened settles the same way, as that fire's scheduled run (`src/requests/README.md` § Scheduled
     // runs); a session post waits for the buffered prompt's replay as well (it must not count a prompt that never arrived): `buffered.settle`.
@@ -344,6 +345,36 @@ describe('the bot buffers a prompt for a starting session through it, in one pla
       /const delivery = await deliverPromptOrBuffer\(key, `\$\{opening\.header\}\$\{text\}`, buffered\.settle, \{ isAccountsNoteCarrier: true \}\);\n\s*await settleTopicRequestAfterDelivery\(key, \{ \.\.\.opening, isScheduledRun: true \}, delivery\);/,
     );
     assert.equal(botSource.match(/await settleTopicRequestAfterDelivery\(key, \{ \.\.\.opening, isScheduledRun: true \}, /g)?.length, 1, 'only the scheduler\'s request');
+  });
+});
+
+describe('a startup window\'s prompts on every way out of it (review 19 #1)', () => {
+  const botSource = fs.readFileSync(path.join(__dirname, '..', 'bot.ts'), 'utf8');
+  const getBody = (start: string, end: string): string => botSource.slice(botSource.indexOf(start), botSource.indexOf(end));
+
+  it('a failed resume keeps its window and what it holds: a fresh start that follows takes it over, a way that starts nothing discards it', () => {
+    const resume = getBody('async function resumeSleepingSession(', 'async function wakeSleepingSession(');
+    assert.doesNotMatch(resume, /discardPrompts/, 'the resume drops nothing itself');
+    assert.ok(resume.indexOf("if (!adapter.checkIsActive(key)) return 'refused';") > 0 && resume.indexOf("if (!adapter.checkIsActive(key)) return 'refused';") < resume.indexOf('void replayBufferedPrompts(key);'), 'a resume that did not come up replays nothing (a replay into a dead session drops every prompt)');
+    const ensure = getBody('async function ensureAgentSessionNow(', 'function getResumableSessionId(');
+    const resumeCase = ensure.slice(ensure.indexOf("case 'resume': {"), ensure.indexOf("case 'start': {"));
+    assert.match(resumeCase, /if \(failureAction === 'reportUnavailable'\) \{\n\s*startupPromptBuffer\.discardPrompts\(keyToString\(key\)\);/);
+    assert.match(resumeCase, /if \(failureAction === 'fail'\) \{\n\s*startupPromptBuffer\.discardPrompts\(keyToString\(key\)\);/);
+    assert.equal(resumeCase.match(/discardPrompts\(/g)?.length, 2, 'the fresh start is not preceded by a discard: its replay writes the people\'s prompts the resume held');
+    assert.match(resumeCase, /startupPromptBuffer\.discardBotPrompts\(keyToString\(key\)\);\n\s*const startMessage = await startAgentSession\(key, options\.args\);/, 'what the bot made for the lost conversation is dropped first, for its caller to post again');
+    const start = getBody('async function startAgentSession(', 'function getAgentStartFailureText(');
+    assert.match(start, /if \(!workDirDecision\.ok\) \{\n(?:\s*\/\/[^\n]*\n)*\s*startupPromptBuffer\.discardPrompts\(kStr\);\n\s*return workDirDecision\.message;/, 'a start that cannot run discards the window it was to take over');
+    assert.equal(start.match(/startupPromptBuffer\.discardPrompts\(kStr\);/g)?.length, 2, 'that, and the start that threw');
+  });
+
+  it('a person\'s prompt that waited in a buffer and was dropped closes its request and the person is told — at the person\'s own buffer and at the adopt-replay re-route', () => {
+    const settle = getBody('function createPersonBufferedSettle(', 'async function deliverLateAnswerPrompt(');
+    assert.match(settle, /if \(outcome !== 'dropped'\) return;/);
+    assert.ok(settle.includes("await settleTopicRequestAfterDelivery(key, { requestId }, 'noSession');"), 'closed `cancelled`, like a prompt that found no session');
+    assert.ok(settle.includes("await replyToThread(key, t('agent.queued_prompt_dropped', { label: getThreadAdapter(key).label }));"));
+    const adopt = getBody('async function forwardPromptToAgent(', 'interface PromptForwardOptions');
+    assert.ok(adopt.includes('await deliverPromptOrBuffer(key, bufferedText, createPersonBufferedSettle(key, options.requestId ?? null), bufferedOptions);'));
+    assert.equal(botSource.match(/createPersonBufferedSettle\(key, /g)?.length, 2, 'every buffer a person\'s prompt can wait in');
   });
 });
 

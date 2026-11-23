@@ -186,6 +186,22 @@ export class StartupPromptBuffer {
     for (const prompt of this.takePrompts(threadId)) settleBufferedPrompt(prompt, 'dropped');
   }
 
+  /**
+   * Settle `dropped` every buffered prompt the bot made, keeping a person's own (`PromptDeliveryOptions.isPersonInput`) and the window
+   * as it is. Called when a fresh start replaces a resume that failed: a person's words stand on their own in the fresh session, while a
+   * bot-made prompt was built for the conversation that is lost (a tracker post's issue text, a «continue») — its caller posts it again
+   * its own way, as for any prompt a window dropped.
+   */
+  discardBotPrompts(threadId: string): void {
+    const prompts = this.bufferedPrompts.get(threadId) ?? [];
+    const kept = prompts.filter((prompt) => prompt.options.isPersonInput === true);
+    if (kept.length > 0) this.bufferedPrompts.set(threadId, kept);
+    else this.bufferedPrompts.delete(threadId);
+    for (const prompt of prompts) {
+      if (prompt.options.isPersonInput !== true) settleBufferedPrompt(prompt, 'dropped');
+    }
+  }
+
   /** Close the window and take what it held, clearing all per-thread state. */
   private takePrompts(threadId: string): BufferedPrompt[] {
     const prompts = this.bufferedPrompts.get(threadId) ?? [];

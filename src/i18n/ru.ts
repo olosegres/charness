@@ -269,6 +269,7 @@ export const ruDict: Record<string, string> = {
   'agent.already_active': '{label} уже работает в этом треде. Отправь сообщение или /quit.',
   'agent.starting': 'Запускаю {label} в `{subdir}`…',
   'agent.queued_starting': '⏳ {label} ещё запускается — сообщение в очереди, отправлю как только будет готов.',
+  'agent.queued_prompt_dropped': '⚠️ Сообщение, отправленное, пока {label} запускался, до него не дошло. Отправьте его ещё раз.',
   'agent.question_hint': 'ℹ️ Ответь цифрой варианта (например 1) или y/n. Также: /up /down — выбор, /enter — подтвердить, /c — отмена.',
   'agent.start_failed': 'Не удалось запустить {label}: {error}',
   'agent.no_response': '⚠️ Агент принял запрос, но так и не начал отвечать — возможно, сессия зависла. Отправьте ещё раз или /new для новой сессии.',

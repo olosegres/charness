@@ -54,6 +54,12 @@ export const fakeClaudeIgnoreStopSignalsFileName = 'ignore-stop-signals';
  * reads anything: a CLI that cannot start (broken install, refused account) — the bot's start of the conversation fails.
  */
 export const fakeClaudeRefuseLaunchFileName = 'refuse-launch';
+/**
+ * A file in the fake's state dir whose content (ms) makes a launch the fake REFUSES wait that long first, as a slow CLI does: a `--resume`
+ * of a conversation it cannot restore (`getFakeClaudeUnrestorableConversationFileName`) and any launch while {@link fakeClaudeRefuseLaunchFileName}
+ * exists. A flow lands a message inside the bot's resume or start that is about to fail.
+ */
+export const fakeClaudeLaunchRefusalDelayFileName = 'launch-refusal-delay-ms';
 /** The CLI version the fake reports on `system/init` — the first one whose stream carries the background-task list (L-D10). */
 export const fakeClaudeCodeVersion = '2.1.287';
 export const fakeClaudeVersion = `${fakeClaudeCodeVersion} (Claude Code)`;

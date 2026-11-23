@@ -84,8 +84,8 @@ test('only a person\'s own prompts are marked as such: the text, voice and label
   // The state-routed write every person's prompt ends in (`deliverPromptByState`: text, voice, a file, an album, /schedule, a label, a
   // late answer), and the question-cancelling free text.
   const atWrite = getFunctionBody('deliverPersonPromptAtWrite');
-  assert.match(atWrite, /forward: \(\) => forwardPromptToAgent\(key, getThreadAdapter\(key\), text, sentAtMs, \{ messageContext, requestHeader, isPersonInput: true, isAccountsNoteCarrier \}\),/);
-  assert.match(atWrite, /, undefined, \{ isPersonInput: true, isAccountsNoteCarrier \}\);/, 'and its buffered twin');
+  assert.match(atWrite, /forward: \(\) => forwardPromptToAgent\(key, getThreadAdapter\(key\), text, sentAtMs, \{ messageContext, requestHeader, requestId, isPersonInput: true, isAccountsNoteCarrier \}\),/);
+  assert.match(atWrite, /, createPersonBufferedSettle\(key, requestId\), \{ isPersonInput: true, isAccountsNoteCarrier \}\);/, 'and its buffered twin');
   assert.match(getFunctionBody('deliverPromptByState'), /await deliverPersonPromptAtWrite\(key, text, /);
   assert.match(getFunctionBody('deliverActivePrompt'), /return deliverPromptByState\(key, text, intake, sentAtMs, messageContext\);/, 'a person\'s prompt ends in it');
   assert.match(getFunctionBody('deliverPromptDuringStartup'), /await deliverPromptByState\(key, text, intake, undefined, messageContext\);/, 'one that arrived in a window too');
@@ -126,10 +126,11 @@ test('a turn\'s end is decided at the adapter\'s own turn-end event, after a per
   assert.match(getFunctionBody('forwardPromptToLiveAgent'), /^[^]*?settleEndedTurnsAndHandOver\(key\);[^]*?noteThreadActivity\(key\);/);
 });
 
-test('the write choke point names the process a buffered prompt\'s replay writes into: right after its settle, before the write, in the same tick (review 18 #2)', () => {
+test('the write choke point names the process a buffered prompt\'s replay writes into — at a replayed write only: right after its settle, before the write, in the same tick (review 18 #2, review 19 #1)', () => {
   const body = getFunctionBody('forwardPromptToLiveAgent');
   const settle = body.indexOf('settleEndedTurnsAndHandOver(key);');
-  const named = body.indexOf('requestWakeUpEngine?.noteSessionWrite(key);');
+  const named = body.indexOf('if (startupPromptBuffer.checkIsReplaying(keyToString(key))) requestWakeUpEngine?.noteReplayedWrite(key);');
+  assert.doesNotMatch(botSource, /noteSessionWrite/, 'no write that is not a replay names anything');
   assert.ok(settle > 0 && named > settle, 'after the settle, which decides the ended watches by what they had');
   assert.equal(body.slice(settle, named).includes('await'), false, 'nothing awaited between them');
   assert.ok(named < body.indexOf('noteThreadActivity(key);'), 'ahead of the write');
@@ -155,13 +156,16 @@ test('an API error that arms nothing holds the turn end until its stop, move or 
 
 test('a prompt that waits for an adopted replay keeps its lost-work wording when it lands in a start window (review 16 nit 7)', () => {
   const body = getFunctionBody('forwardPromptToAgent');
-  assert.match(body, /buffered\.settle, \{ isPersonInput: options\.isPersonInput, isAccountsNoteCarrier: options\.isAccountsNoteCarrier, lostWorkTelling: options\.lostWorkTelling \}\);/);
+  assert.ok(body.includes('const bufferedOptions: PromptDeliveryOptions = { isPersonInput: options.isPersonInput, isAccountsNoteCarrier: options.isAccountsNoteCarrier, lostWorkTelling: options.lostWorkTelling };'));
+  assert.equal(body.match(/, bufferedOptions\);/g)?.length, 2, 'a person\'s prompt and a bot-made one alike');
 });
 
 test('a bot-made prompt that waits for an adopt replay behind a start counts only once replayed', () => {
   const body = getFunctionBody('forwardPromptToAgent');
   const buffer = body.slice(body.indexOf('buffer: async () => {'));
-  assert.match(buffer, /const buffered = createBufferedOutcome\(\);\n\s*await deliverPromptOrBuffer\([^\n]*, buffered\.settle, \{ isPersonInput: options\.isPersonInput, isAccountsNoteCarrier: options\.isAccountsNoteCarrier, lostWorkTelling: options\.lostWorkTelling \}\);\n\s*if \(options\.isPersonInput !== true\) await buffered\.assertReplayed\(\);/);
+  assert.match(buffer, /const buffered = createBufferedOutcome\(\);\n\s*await deliverPromptOrBuffer\(key, bufferedText, buffered\.settle, bufferedOptions\);\n\s*await buffered\.assertReplayed\(\);/);
+  // A person's prompt there has the person's own settle (review 19 #1): told and its request closed when it is dropped.
+  assert.match(buffer, /if \(options\.isPersonInput === true\) \{\n\s*await deliverPromptOrBuffer\(key, bufferedText, createPersonBufferedSettle\(key, options\.requestId \?\? null\), bufferedOptions\);\n\s*return;\n\s*\}/);
 });
 
 test('a session post (a tracker\'s request or update, a scheduled run, the lost-work note) whose prompt waited for the session start counts only once it was replayed', () => {

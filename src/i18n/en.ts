@@ -269,6 +269,7 @@ export const enDict: Record<string, string> = {
   'agent.already_active': '{label} is already running here. Send a message or /quit.',
   'agent.starting': 'Starting {label} in `{subdir}`…',
   'agent.queued_starting': '⏳ {label} is still starting — your message is queued and will be sent once it is ready.',
+  'agent.queued_prompt_dropped': '⚠️ A message you sent while {label} was starting did not reach it. Send it again.',
   'agent.question_hint': 'ℹ️ Reply with the option number (e.g. 1) or y/n. Also: /up /down to move, /enter to confirm, /c to cancel.',
   'agent.start_failed': 'Failed to start {label}: {error}',
   'agent.no_response': '⚠️ The agent accepted your request but never started responding — the session may be stuck. Send it again, or /new to start a fresh session.',

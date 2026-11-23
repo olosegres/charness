@@ -918,7 +918,7 @@ describe('a request whose prompt never reached the agent is re-posted, not remin
     await engine.trackForwardedTurn(topicKey, request.id, { isRequestPrompt: true });
     // The replay writes it into process 2 (still the start for the probe).
     probe = { isActive: true, isBusy: false, hasUnconsumedInput: true, isTurnEndBlocked: true, processGeneration: 2 };
-    engine.noteSessionWrite(topicKey);
+    engine.noteReplayedWrite(topicKey);
     probe = { isActive: true, isBusy: true, hasUnconsumedInput: false, isTurnEndBlocked: false, processGeneration: readOffProcess };
     await engine.pollWatchedTurns();
     return ledger.getNewestOpenRequest(topicKey)?.isPromptTakenIn;
@@ -949,6 +949,28 @@ describe('a request whose prompt never reached the agent is re-posted, not remin
     assert.equal(wakeUpMessages.length, 1);
     assert.equal(wakeUpMessages[0].isRequestPrompt, false);
     assert.match(wakeUpMessages[0].text, new RegExp(`^\\[Reminder · request ${request.id} is still open\\]`));
+  });
+
+  it('a request prompt whose buffer was dropped is neither decided nor marked at an unrelated write into a new process; its wake, when the stale drop hands it to the backstop, posts the prompt again (review 19 #1)', async () => {
+    const ledger = await createLedger();
+    const engine = createEngine(ledger);
+    const request = await ledger.createRequest(topicKey, { kind: 'message', attributes: { requester: '424242' } }, { createPrompt: () => prompt });
+    // A resume's window is open: the prompt waits in the buffer, and the probe names no process.
+    probe = { isActive: false, isBusy: false, hasUnconsumedInput: true, isTurnEndBlocked: true };
+    await engine.trackForwardedTurn(topicKey, request.id, { isRequestPrompt: true, isPersonInput: true });
+    // The buffer is dropped and a new process comes up; an unrelated prompt is written into it (no replay runs: nothing is named).
+    probe = { isActive: true, isBusy: false, hasUnconsumedInput: false, isTurnEndBlocked: false, processGeneration: 2 };
+    await engine.deliverOrHandOverWake(topicKey, await engine.settleEndedTurnsOf(topicKey));
+    await engine.pollWatchedTurns();
+    assert.deepEqual(engine.getWatchedRequestIdsOf(topicKey), [request.id], 'not decided: its turn never started');
+    assert.equal(ledger.getNewestOpenRequest(topicKey)?.isPromptTakenIn, undefined);
+    assert.equal(ledger.getNewestOpenRequest(topicKey)?.silentTurnCount, 0);
+    assert.equal(wakeUpMessages.length, 0, 'no bare reminder');
+    // Nothing works on it for the whole backstop window: the stale drop hands it to the sweep, whose wake re-posts the prompt.
+    nowMs += backstopMs;
+    await engine.pollWatchedTurns();
+    await engine.sweepUnwatchedRequests();
+    assert.deepEqual(wakeUpMessages.map((message) => ({ text: message.text, isRequestPrompt: message.isRequestPrompt })), [{ text: prompt, isRequestPrompt: true }]);
   });
 
   it('a backend that cannot tell its processes apart is read as before', async () => {

@@ -124,13 +124,6 @@ interface WatchedRequestTurn extends WatchedTurn {
    * the agent works on, whoever's words or fire joined it later.
    */
   ownForwardStartedAt?: number;
-  /**
-   * The process the request's prompt was written to (`SessionTurnProbe.processGeneration`), named by the forward that carried it — a
-   * merge that carries it again names the process of that write, one that does not keeps it. Absent while the prompt waits in a start's
-   * or a stop's buffer (the replay's write names it, {@link RequestWakeUpEngine.noteSessionWrite}), or on a backend that cannot tell its
-   * processes apart. The prompt is read as taken in only off that process ({@link RequestWakeUpEngine.markPromptTakenIn}).
-   */
-  writtenToProcess?: number;
 }
 
 interface WatchedAnswerTail {
@@ -649,11 +642,14 @@ export class RequestWakeUpEngine {
   }
 
   /**
-   * @description A prompt is written into `key`'s live process now (the write choke point, right after its settle): a watch tracked while
-   * its prompt waited in a start's or a stop's buffer names no process yet, and this write is that buffer's replay — the first write into
-   * the process the start brought up — so its prompt is in this process. Synchronous; a session with no process named does nothing.
+   * @description The replay of a start's buffer writes into `key`'s live process now (the write choke point, right after its settle; the
+   * bot calls it only while `StartupPromptBuffer.checkIsReplaying`). A watch tracked while its prompt waited in that buffer names no process
+   * yet, and the replay took the whole buffer to write it into this process, so its prompt is in this one. Never called for any other
+   * write: a watch whose buffer was DROPPED stays unnamed — its prompt reached no process (`checkIsTurnInputConsumed`), and the request
+   * it opened is closed with the person told (`bot.ts`, the person's buffered prompt's settle). Synchronous; a session with no process
+   * named does nothing.
    */
-  noteSessionWrite(key: SessionKey): void {
+  noteReplayedWrite(key: SessionKey): void {
     const { processGeneration } = this.deps.probeTurn(key);
     if (processGeneration === undefined) return;
     for (const turn of this.getWatchedTurnsOf(key)) {
@@ -705,7 +701,8 @@ export class RequestWakeUpEngine {
    * failed was read by it — a resume that posted it again would repeat words the agent already has.
    * Read only off the process the prompt was written to (`writtenToProcess`): a re-spawn that replaced it — an account move after a limit,
    * a model change — kills a message still queued there, and the new process lists nothing unread. Left unmarked, the prompt is posted
-   * again: by the resume's «continue» (`getPromptNotTakenIn`), or as the wake-up of the turn's end.
+   * again: by the resume's «continue» (`getPromptNotTakenIn`), or as the wake-up of the turn's end. A prompt that names no process while
+   * one is live never reached any (`checkIsTurnInputConsumed`): nothing is marked.
    */
   private async markPromptTakenIn(turn: WatchedRequestTurn, request: OpenRequestState, probe: SessionTurnProbe): Promise<void> {
     const isAnotherProcess = turn.writtenToProcess !== undefined && probe.processGeneration !== undefined && turn.writtenToProcess !== probe.processGeneration;

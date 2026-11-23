@@ -271,6 +271,7 @@ export const ukDict: Record<string, string> = {
   'agent.already_active': '{label} вже працює тут. Надішли повідомлення або /quit.',
   'agent.starting': 'Запускаю {label} у `{subdir}`…',
   'agent.queued_starting': '⏳ {label} ще запускається — твоє повідомлення в черзі й буде надіслане, щойно він буде готовий.',
+  'agent.queued_prompt_dropped': '⚠️ Повідомлення, надіслане, поки {label} запускався, до нього не дійшло. Надішли його ще раз.',
   'agent.question_hint': 'ℹ️ Відповідай номером варіанта (наприклад 1) або y/n. Також: /up /down — рух, /enter — підтвердити, /c — скасувати.',
   'agent.start_failed': 'Не вдалося запустити {label}: {error}',
   'agent.no_response': '⚠️ Агент прийняв запит, але так і не почав відповідати — можливо, сесія зависла. Надішліть ще раз або /new для нової сесії.',

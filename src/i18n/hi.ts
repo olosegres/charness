@@ -265,6 +265,7 @@ export const hiDict: Record<string, string> = {
   'agent.already_active': '{label} पहले से यहाँ चल रहा है। संदेश भेजें या /quit।',
   'agent.starting': '`{subdir}` में {label} शुरू हो रहा है…',
   'agent.queued_starting': '⏳ {label} अभी शुरू हो रहा है — आपका संदेश कतार में है, तैयार होने पर भेजा जाएगा।',
+  'agent.queued_prompt_dropped': '⚠️ {label} के शुरू होते समय भेजा गया एक संदेश उस तक नहीं पहुँचा। उसे फिर से भेजें।',
   'agent.question_hint': 'ℹ️ विकल्प नंबर (जैसे 1) या y/n से उत्तर दें। और भी: /up /down चलाने के लिए, /enter पुष्टि करने, /c रद्द करने।',
   'agent.start_failed': '{label} शुरू करने में विफल: {error}',
   'agent.no_response': '⚠️ एजेंट ने आपका अनुरोध स्वीकार किया पर जवाब देना शुरू नहीं किया — सत्र अटका हो सकता है। इसे फिर भेजें, या नए सत्र के लिए /new करें।',

@@ -228,6 +228,27 @@ test('a settle callback that throws is logged and never breaks the replay or the
   assert.deepEqual(forwarded, ['first', 'second']);
 });
 
+test('a fresh start that replaces a failed resume keeps the people\'s prompts and drops what the bot made for the lost conversation; the window stays (review 19 #1)', async () => {
+  const buffer = new StartupPromptBuffer();
+  const outcomes: string[] = [];
+  buffer.markStarting(KEY_A);
+  buffer.addPrompt(KEY_A, 'a person\'s words', (outcome) => outcomes.push(`person ${outcome}`), { isPersonInput: true });
+  buffer.addPrompt(KEY_A, 'a tracker post built for the lost conversation', (outcome) => outcomes.push(`post ${outcome}`));
+  buffer.addPrompt(KEY_A, 'another person\'s words', undefined, { isPersonInput: true });
+
+  buffer.discardBotPrompts(KEY_A);
+  assert.deepEqual(outcomes, ['post dropped'], 'its caller hears at once');
+  assert.equal(buffer.checkIsStarting(KEY_A), true, 'the window is the fresh start\'s now');
+  assert.deepEqual(await replayTexts(buffer, KEY_A), ['a person\'s words', 'another person\'s words'], 'in arrival order');
+  assert.deepEqual(outcomes, ['post dropped', 'person replayed']);
+
+  buffer.markStarting(KEY_B);
+  buffer.addPrompt(KEY_B, 'only a bot prompt');
+  buffer.discardBotPrompts(KEY_B);
+  assert.equal(buffer.checkHasPrompts(KEY_B), false);
+  assert.equal(buffer.checkIsStarting(KEY_B), true);
+});
+
 test('L3: closing the window keeps its prompts for the next window — the idle stop holds a prompt, the resume replays it', async () => {
   const buffer = new StartupPromptBuffer();
   buffer.markStarting('t');

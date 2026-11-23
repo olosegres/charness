@@ -11,6 +11,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import type { OpenRequestState } from '../requests/types';
 import {
+  checkIsTurnInputConsumed,
   checkIsWatchedTurnStale,
   decideRestartWake,
   decideTurnEnd,
@@ -232,6 +233,17 @@ describe('getWatchedTurnState', () => {
     assert.equal(getWatchedTurnState(createTurn(), noSignalProbe), 'running');
     assert.equal(getWatchedTurnState(createTurn({ hasSeenBusy: true }), noSignalProbe), 'ended');
     assert.equal(getWatchedTurnState(createTurn({ hasSeenOutput: true }), noSignalProbe), 'ended');
+  });
+
+  it('a request prompt that names no process while the backend names its live one never reached a process: not taken in, not ended (review 19 #1)', () => {
+    const namedProbe: SessionTurnProbe = { ...idleProbe, processGeneration: 2 };
+    const unnamedPrompt = createTurn({ isRequestPrompt: true });
+    assert.equal(checkIsTurnInputConsumed(unnamedPrompt, namedProbe), false, 'its buffer was dropped: nothing in process 2 says it was read');
+    assert.equal(getWatchedTurnState(unnamedPrompt, namedProbe), 'running');
+    assert.equal(checkIsTurnInputConsumed(createTurn({ isRequestPrompt: true, writtenToProcess: 2 }), namedProbe), true, 'written to the live process and taken in');
+    assert.equal(checkIsTurnInputConsumed(createTurn({ isRequestPrompt: true, writtenToProcess: 1 }), namedProbe), true, 'a replaced process: its turn is over (R21 reads the mark off its own process only)');
+    assert.equal(checkIsTurnInputConsumed(createTurn(), namedProbe), true, 'a reminder\'s or a «continue»\'s watch is read as before');
+    assert.equal(checkIsTurnInputConsumed(unnamedPrompt, idleProbe), true, 'a backend without process numbers is read as before');
   });
 });
 

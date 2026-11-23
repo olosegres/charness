@@ -37,6 +37,11 @@
  *   → a second Claude account, the idle lifecycle: the operator moves the topic to it while the agent works, and that turn ends silent.
  *     The switch re-spawns the process onto the new account right after the turn, and the turn's reminder waits for that re-spawn:
  *     one launch, nothing started beside it, the reminder in the new process
+ *   → per turn again: a one-shot fire resumes the sleeping conversation, and the CLI refuses the resume slowly; a message the operator
+ *     sends meanwhile waits in the resume's window. The bot starts a fresh session instead, and the message reaches it in a turn of its
+ *     own — no reminder of a request whose words the agent never got
+ *   → the same, and the fresh start fails too: the message reaches no agent, its request closes, and the operator is told to send it
+ *     again
  *
  * Before the rule, the engine reminded such an agent every 15 minutes whatever its watch said; before the scheduled-run model, every
  * fire opened a request that replaced the previous fire's, and an answered one's «working on it» was lost or chased. Nothing leaves the
@@ -58,7 +63,11 @@ import {
   fakeClaudeApiErrorOnceFileName,
   fakeClaudeExitFlushDelayFileName,
   fakeClaudeHoldReleaseFileName,
+  fakeClaudeLaunchRefusalDelayFileName,
+  fakeClaudeRefuseLaunchFileName,
   fakeOneShotDelaySeconds,
+  getFakeClaudeUnrestorableConversationFileName,
+  getLaunchSessionId,
   fakeOneShotNextWatchIssueKey,
   fakeOneShotNextWatchMarker,
   fakeOneShotSilentMarker,
@@ -124,6 +133,11 @@ const unclassifiedErrorText = 'The agent runner stopped unexpectedly';
 const failingTurnRunMs = 6 * msPerSecond;
 /** The `slow-once` turn of the message queued behind it works this long in silence (the fake's default) before it answers. */
 const slowTurnTimeoutMs = 2 * 60 * msPerSecond;
+/**
+ * How long the fake takes to refuse a resume or a start in the failed-resume steps: a message lands inside that window. Under the
+ * adapter's 15 s initialize handshake, after which a start that has not answered is taken as up.
+ */
+const launchRefusalDelayMs = 10 * msPerSecond;
 /** The size of the file whose download the per-turn file steps hold. */
 const heldFileBytes = 64;
 /** A one-shot armed `fakeOneShotDelaySeconds` ahead fires within this (the engine's timer, the post and the turn). */
@@ -642,5 +656,75 @@ describe('A request waits for its schedule in a Telegram topic end to end: built
     assert.equal(reminders.length, 1, 'one reminder for the one silent turn');
     assert.equal(reminders[0].pid, launches[0].pid, 'the reminder went into the re-spawned process');
     assert.ok(!topic.listMessages().some((message) => message.text.includes('got no answer')), 'no give-up');
+  });
+
+  /**
+   * Per turn: a one-shot armed by `armingIssueKey`'s turn fires after the conversation went to sleep, and its post resumes it. The CLI
+   * refuses that resume after {@link launchRefusalDelayMs} (the conversation cannot be restored), and — with `isFreshStartRefused` — the
+   * fresh start that follows as well. Meanwhile the operator's `messageIssueKey` message arrives and waits in the resume's window.
+   * Resolves the message's request id once the bot has said it is queued; the fake's refusal files are removed by the caller.
+   */
+  async function sendMessageIntoFailingResume(armingIssueKey: string, messageIssueKey: string, isFreshStartRefused: boolean): Promise<string> {
+    const stoppedLine = `[compact-on-idle] ${group.id}:${topicThreadId} process stopped`;
+    const stoppedBefore = countOutputLines(stoppedLine);
+    await armOneShotUnderFinishedRequest(armingIssueKey, '');
+    await getCharness().waitFor('the conversation to sleep after the arming turn', bufferedFlowTimeoutMs, () => countOutputLines(stoppedLine) > stoppedBefore);
+    const armingTurn = readFakeLog<FakeClaudeTurn>(fakeClaudeLogFileNames.turns).filter((turn) => turn.issueKey === armingIssueKey).at(-1);
+    const sessionId = getLaunchSessionId(getSessionLaunches(getLayout()).find((launch) => launch.pid === armingTurn?.pid)?.argv ?? []) ?? '';
+    assert.ok(sessionId, 'the sleeping conversation\'s id');
+    fs.writeFileSync(path.join(getLayout().fakeStateDir, fakeClaudeLaunchRefusalDelayFileName), launchRefusalDelayMs.toString());
+    fs.writeFileSync(path.join(getLayout().fakeStateDir, getFakeClaudeUnrestorableConversationFileName(sessionId)), '');
+    if (isFreshStartRefused) fs.writeFileSync(path.join(getLayout().fakeStateDir, fakeClaudeRefuseLaunchFileName), '');
+    const launchesBefore = getSessionLaunches(getLayout()).length;
+    await getCharness().waitFor('the fire to resume the sleeping conversation', oneShotFireTimeoutMs, () =>
+      getSessionLaunches(getLayout()).slice(launchesBefore).some((launch) => getLaunchSessionId(launch.argv) === sessionId));
+    const queuedBefore = topic.listMessages().filter((message) => message.text.includes('your message is queued')).length;
+    const openBefore = new Set(Object.values(readState().openRequests ?? {}).map((open) => open.id));
+    fakeTelegram.pushOperatorMessage(topicThreadId, `${messageIssueKey} [fake:answer] a message written while the conversation resumes`);
+    await getCharness().waitFor('the message to wait in the resume\'s window', replyTimeoutMs, () =>
+      topic.listMessages().filter((message) => message.text.includes('your message is queued')).length > queuedBefore);
+    const requestId = Object.values(readState().openRequests ?? {}).map((open) => open.id).find((id) => !openBefore.has(id)) ?? '';
+    assert.match(requestId, /^req_/, 'the message opened its request');
+    assert.equal(getSessionLaunches(getLayout()).length, launchesBefore + 1, 'still inside the resume: no fresh start yet');
+    return requestId;
+  }
+
+  function removeRefusalFiles(): void {
+    for (const fileName of fs.readdirSync(getLayout().fakeStateDir)) {
+      if (fileName === fakeClaudeLaunchRefusalDelayFileName || fileName === fakeClaudeRefuseLaunchFileName || fileName.startsWith(getFakeClaudeUnrestorableConversationFileName(''))) {
+        fs.rmSync(path.join(getLayout().fakeStateDir, fileName), { force: true });
+      }
+    }
+  }
+
+  it('per-turn: a message that waits while a sleeping conversation is resumed reaches the fresh session that replaces a failed resume — never dropped, no reminder of words the agent never got (review 19 #1)', async () => {
+    await topic.sendAndAwaitReply('/claude_mode per-turn', '🔁 Per-turn');
+    try {
+      const requestId = await sendMessageIntoFailingResume('WU-21', 'WV-22', false);
+      await getCharness().waitFor('the message to reach the fresh session in a turn of its own', bufferedFlowTimeoutMs, () =>
+        readFakeLog<FakeClaudeTurn>(fakeClaudeLogFileNames.turns).some((turn) => turn.issueKey === 'WV-22' && turn.requestId === requestId));
+      await getCharness().waitFor('its request to be answered', agentTimeoutMs, () => readClosedRequests().some((closed) => closed.id === requestId));
+      assert.equal(readClosedRequests().find((closed) => closed.id === requestId)?.closeReason, 'final');
+      assert.equal(getAgentPromptsWith('WV-22').length, 1, 'the agent read the message once');
+      assert.deepEqual(getAgentPromptsWith(`[Reminder · request ${requestId} is still open]`), [], 'no reminder');
+      assert.ok(!topic.listMessages().some((message) => message.text.includes('did not reach it')), 'nothing was dropped');
+    } finally {
+      removeRefusalFiles();
+    }
+  });
+
+  it('per-turn: when the fresh start after a failed resume fails too, a message that waited there is dropped — its request closes and the operator is told to send it again (review 19 #1)', async () => {
+    try {
+      const requestId = await sendMessageIntoFailingResume('WW-23', 'WX-24', true);
+      await getCharness().waitFor('the operator to be told the message did not reach the agent', bufferedFlowTimeoutMs, () =>
+        topic.listMessages().some((message) => message.text.includes('did not reach it. Send it again.')));
+      await getCharness().waitFor('its request to close', replyTimeoutMs, () => readClosedRequests().some((closed) => closed.id === requestId));
+      assert.equal(readClosedRequests().find((closed) => closed.id === requestId)?.closeReason, 'cancelled');
+      assert.deepEqual(getAgentPromptsWith('WX-24'), [], 'no agent got it');
+      await sleep(2 * requestSweepIntervalMs);
+      assert.deepEqual(getAgentPromptsWith(`[Reminder · request ${requestId} is still open]`), [], 'no reminder of a request nobody got');
+    } finally {
+      removeRefusalFiles();
+    }
   });
 });

@@ -201,9 +201,12 @@ start, a wedge recovery) and that took the turn's prompt in — a message queued
 its own turn (events-list item 1) — so none of them decides a turn that has not started:
 
 1. The settle at the write (`forwardPromptToLiveAgent`): synchronously right before the adapter write (after an immediate forward's wake
-   and the adopted-replay wait in `forwardPromptToAgent`), its reminders after the write. Right after it, a watch whose prompt waited in a
-   buffer is named the process this write goes to (`noteSessionWrite`): the replay's write is that prompt's. At a replayed write, and at
-   a prompt that arrives during the replay, the probe reads the start: nothing is decided.
+   and the adopted-replay wait in `forwardPromptToAgent`), its reminders after the write. Right after it, at a REPLAYED write only
+   (`checkIsReplaying`), a watch whose prompt waited in the buffer is named the process the replay writes into (`noteReplayedWrite`):
+   the replay took the whole buffer for that process. No other write names anything: a watch whose buffer was dropped stays unnamed,
+   its request prompt reads not taken in (`checkIsTurnInputConsumed`: unnamed while the probe names a process), so it is never decided
+   or marked off a process it never reached — and the person's dropped prompt closes its request anyway (the buffer's life, below). At
+   a replayed write, and at a prompt that arrives during the replay, the probe reads the start: nothing is decided.
 2. The settle at a post (`postToSession`): after the busy wait and the first ensure, before the second limit check, the second ensure,
    the pick and `buildText`; the decisions are persisted before the write, the reminders — with the ones handed to the post while it was
    in flight — delivered after the post's forward and its caller's `afterForward`. The ensure returns once the session is up, and its

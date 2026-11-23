@@ -322,6 +322,14 @@ export interface WatchedTurn {
    * words, reminder or own job's fire joined it. Such a turn neither handles the request's fired watch nor counts as its activity.
    */
   isRequestJob?: boolean;
+  /**
+   * The process the request's prompt was written to (`SessionTurnProbe.processGeneration`), named by the forward that carried it — a
+   * merge that carries it again names the process of that write, one that does not keeps it. Absent while the prompt waits in a start's
+   * or a stop's buffer: the replay's write names it (`RequestWakeUpEngine.noteReplayedWrite`). A request-prompt watch with none named
+   * while the probe names a process has not reached any process (its buffer was dropped): its input reads not taken in
+   * ({@link checkIsTurnInputConsumed}). Absent too on a backend that cannot tell its processes apart.
+   */
+  writtenToProcess?: number;
 }
 
 /**
@@ -340,9 +348,13 @@ export type WatchedTurnState = 'running' | 'ended' | 'sessionGone';
 /**
  * @description Has the backend taken in what was forwarded for this turn? Its own
  * signal when it has one (nothing written is still unread), else busy or output
- * seen since the forward.
+ * seen since the forward. A request prompt that names no process while the backend
+ * names its live one never reached a process — it waited in a buffer that was
+ * dropped — so nothing the live process lists says it was read: not taken in, so the
+ * turn is not decided and R21 marks nothing (the stale drop and the backstop re-post it).
  */
 export function checkIsTurnInputConsumed(turn: WatchedTurn, probe: SessionTurnProbe): boolean {
+  if (turn.isRequestPrompt && turn.writtenToProcess === undefined && probe.processGeneration !== undefined) return false;
   return probe.hasUnconsumedInput === null ? turn.hasSeenBusy || turn.hasSeenOutput : !probe.hasUnconsumedInput;
 }
 

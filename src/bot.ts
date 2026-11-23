@@ -5895,10 +5895,15 @@ async function startAgentSession(key: SessionKey, args?: string): Promise<string
   // can vanish (/unbind) between their check and here, so re-check before any
   // side effect (startup window / markers) opens.
   const workDirDecision = getWorkDirStartDecision(key);
-  if (!workDirDecision.ok) return workDirDecision.message;
+  if (!workDirDecision.ok) {
+    // A failed resume's window this start was to take over has nowhere to go either (a start with no window discards nothing).
+    startupPromptBuffer.discardPrompts(kStr);
+    return workDirDecision.message;
+  }
   const workDir = workDirDecision.workDir;
   // Open the startup window synchronously (before the first await) so text
-  // typed right after `/claude` / `/opencode` is buffered, not dropped.
+  // typed right after `/claude` / `/opencode` is buffered, not dropped. A failed resume's window may be open already: this start takes
+  // it over, and its replay writes what the resume held.
   startupPromptBuffer.markStarting(kStr);
   // A fresh session is a new conversation — clear any spent compact-on-idle latch
   // (D2) so this session can idle-compact even if the PREVIOUS session in this
@@ -6103,14 +6108,20 @@ async function ensureAgentSessionNow(
       const resumeFailure = await resumeSleepingSession(key, plan.sessionId);
       if (resumeFailure === null) return { ok: true, message: '', isFresh: false };
       const failureAction = getResumeFailureAction(resumeFailure, options.isResumeOnly === true);
+      // The failed resume's window is still open with what it holds (`resumeSleepingSession`): a way that starts nothing ends it here,
+      // its prompts dropped; a fresh start takes it over and its replay writes them into the fresh session.
       if (failureAction === 'reportUnavailable') {
+        startupPromptBuffer.discardPrompts(keyToString(key));
         return { ok: false, reason: 'start-failed', message: t('agent.serverUnavailableNotice', { label: getThreadAdapter(key).label }) };
       }
       if (failureAction === 'fail') {
+        startupPromptBuffer.discardPrompts(keyToString(key));
         return { ok: false, reason: 'resume-failed', message: t('agent.resume_failed_fresh') };
       }
       // The previous conversation is lost to this topic: say so in one line, then start fresh. A fresh start that
-      // fails too says only why: "a fresh session was started" would be false.
+      // fails too says only why: "a fresh session was started" would be false. The fresh start writes the people's prompts the resume
+      // held; what the bot made for the lost conversation is dropped, for its caller to post again its own way.
+      startupPromptBuffer.discardBotPrompts(keyToString(key));
       const startMessage = await startAgentSession(key, options.args);
       if (!getThreadAdapter(key).checkIsActive(key)) return { ok: false, reason: 'start-failed', message: startMessage };
       const message = [t('agent.resume_failed_fresh'), startMessage].filter(Boolean).join('\n');
@@ -6147,6 +6158,10 @@ function getResumableSessionId(key: SessionKey): string | null {
  * `null` once resumed, else how it failed — the backend refused the id or the
  * process did not come up, or the backend's server could not be brought up; the
  * caller decides what follows ({@link getResumeFailureAction}).
+ *
+ * A failed resume leaves its window OPEN, with every prompt it holds: the caller ends it — a fresh start that follows takes it over
+ * (its replay writes them into the fresh session), and a way that starts nothing discards them. Settled `dropped` here, they were lost
+ * although a fresh session came up a moment later (review 19 #1).
  */
 async function resumeSleepingSession(key: SessionKey, sessionId: string): Promise<ResumeFailureKind | null> {
   const kStr = keyToString(key);
@@ -6160,13 +6175,13 @@ async function resumeSleepingSession(key: SessionKey, sessionId: string): Promis
     const isConversationRecorded = checkIsConversationRecorded(state.getAgent(key)?.seenWatermark, sessionId);
     await adapter.resumeSession(key, workDirDecision.workDir, sessionId, { isConversationRecorded });
     await persistSessionStart(key, adapter);
+    // A resume that did not come up takes nothing: the window stays for the caller's fresh start, or its discard.
+    if (!adapter.checkIsActive(key)) return 'refused';
     console.log(`[ensure] resumed the sleeping session of ${kStr}`);
     void replayBufferedPrompts(key);
-    return adapter.checkIsActive(key) ? null : 'refused';
+    return null;
   } catch (e) {
     console.warn(`[ensure] could not resume the sleeping session of ${kStr}:`, e instanceof Error ? e.message : e);
-    // A fresh start (if the caller takes one) re-opens its own window; otherwise the held prompts have nowhere to go.
-    startupPromptBuffer.discardPrompts(kStr);
     return e instanceof AgentBackendUnavailableError ? 'backendUnavailable' : 'refused';
   }
 }
@@ -6387,10 +6402,17 @@ async function forwardPromptToAgent(
     checkIsWindowOpen: () => startupPromptBuffer.checkIsStarting(keyToString(key)),
     checkIsSessionActive: () => adapter.checkIsActive(key) && !(isTechnicalPrompt && (adapter.checkIsBusy?.(key) ?? false)),
     buffer: async () => {
+      const bufferedText = `${options.requestHeader ?? ''}${getPromptWithThreadMessageContext(key, text, options.messageContext)}`;
+      const bufferedOptions: PromptDeliveryOptions = { isPersonInput: options.isPersonInput, isAccountsNoteCarrier: options.isAccountsNoteCarrier, lostWorkTelling: options.lostWorkTelling };
+      // A person's prompt that is dropped there is told about and closes its request, as at the person's own buffer.
+      if (options.isPersonInput === true) {
+        await deliverPromptOrBuffer(key, bufferedText, createPersonBufferedSettle(key, options.requestId ?? null), bufferedOptions);
+        return;
+      }
       // A bot-made prompt (a wake-up) that waits here counts only once its replay reached the agent, as at any other buffer.
       const buffered = createBufferedOutcome();
-      await deliverPromptOrBuffer(key, `${options.requestHeader ?? ''}${getPromptWithThreadMessageContext(key, text, options.messageContext)}`, buffered.settle, { isPersonInput: options.isPersonInput, isAccountsNoteCarrier: options.isAccountsNoteCarrier, lostWorkTelling: options.lostWorkTelling });
-      if (options.isPersonInput !== true) await buffered.assertReplayed();
+      await deliverPromptOrBuffer(key, bufferedText, buffered.settle, bufferedOptions);
+      await buffered.assertReplayed();
     },
     wake: () => wakeSleepingSessionForPrompt(key),
     forward: async () => {
@@ -6427,6 +6449,8 @@ interface PromptForwardOptions {
   isAccountsNoteCarrier?: boolean;
   messageContext?: MessageContext;
   requestHeader?: string;
+  /** The request a person's prompt opened (absent or `null`: none) — closed if the prompt waits in a startup buffer and is dropped there. */
+  requestId?: string | null;
 }
 
 /** @description The forward itself, for a session that is ready to take the prompt: {@link forwardPromptToAgent} minus the replay wait. */
@@ -6442,8 +6466,8 @@ async function forwardPromptToLiveAgent(
   // Their reminders are delivered once persisted — after this write, which runs in this tick, or, while a post is on its way to its
   // write, after that post's prompt (the todo reminder written at a turn end is such a write).
   settleEndedTurnsAndHandOver(key);
-  // A prompt that waited in a start's or a stop's buffer is in the process this write goes to (`noteSessionWrite`).
-  requestWakeUpEngine?.noteSessionWrite(key);
+  // The replay of a start's buffer writes the prompts that waited in it into this process (`noteReplayedWrite`); no other write does.
+  if (startupPromptBuffer.checkIsReplaying(keyToString(key))) requestWakeUpEngine?.noteReplayedWrite(key);
   // A forwarded prompt is thread activity — reset the compact-on-idle watchdog (F2).
   noteThreadActivity(key);
   const isTechnicalPrompt = options.isTechnicalPrompt ?? false;
@@ -12652,7 +12676,7 @@ async function deliverActivePrompt(
     }
     // Free-form text cancels the question and is a fresh prompt — a request (S7).
     const opening = await openTopicRequest(key, text, intake, messageContext);
-    const delivery = await cancelPendingQuestionAndForward(key, adapter, text, sentAtMs, messageContext, opening.header, intake !== null);
+    const delivery = await cancelPendingQuestionAndForward(key, adapter, text, sentAtMs, messageContext, opening, intake !== null);
     await settleTopicRequestAfterDelivery(key, opening, delivery);
     return null;
   }
@@ -12704,7 +12728,7 @@ async function deliverPromptByState(
   const opening = await openTopicRequest(key, text, intake, messageContext);
   // A person's prompt that opens a request starts a turn that may carry the accounts note; the answer to the agent's own question
   // (`intake` null) is bookkeeping and never does.
-  const outcome = await deliverPersonPromptAtWrite(key, text, { requestHeader: opening.header, sentAtMs, messageContext, isAccountsNoteCarrier: intake !== null });
+  const outcome = await deliverPersonPromptAtWrite(key, text, { opening, sentAtMs, messageContext, isAccountsNoteCarrier: intake !== null });
   await settleTopicRequestAfterDelivery(key, opening, outcome);
   return outcome;
 }
@@ -12720,17 +12744,19 @@ async function deliverPromptByState(
 function deliverPersonPromptAtWrite(
   key: SessionKey,
   text: string,
-  options: { requestHeader: string; sentAtMs?: number; messageContext?: MessageContext; isAccountsNoteCarrier: boolean },
+  options: { opening: TopicRequestOpening; sentAtMs?: number; messageContext?: MessageContext; isAccountsNoteCarrier: boolean },
 ): Promise<LatePromptOutcome> {
-  const { requestHeader, sentAtMs, messageContext, isAccountsNoteCarrier } = options;
+  const { opening, sentAtMs, messageContext, isAccountsNoteCarrier } = options;
+  const { header: requestHeader, requestId } = opening;
   return deliverLatePrompt({
     checkIsWindowOpen: () => startupPromptBuffer.checkIsStarting(keyToString(key)),
     checkIsSessionActive: () => getThreadAdapter(key).checkIsActive(key),
     buffer: async () => {
-      await deliverPromptOrBuffer(key, `${requestHeader}${getPromptWithThreadMessageContext(key, text, messageContext)}`, undefined, { isPersonInput: true, isAccountsNoteCarrier });
+      const bufferedText = `${requestHeader}${getPromptWithThreadMessageContext(key, text, messageContext)}`;
+      await deliverPromptOrBuffer(key, bufferedText, createPersonBufferedSettle(key, requestId), { isPersonInput: true, isAccountsNoteCarrier });
     },
     wake: () => wakeSleepingSessionForPrompt(key),
-    forward: () => forwardPromptToAgent(key, getThreadAdapter(key), text, sentAtMs, { messageContext, requestHeader, isPersonInput: true, isAccountsNoteCarrier }),
+    forward: () => forwardPromptToAgent(key, getThreadAdapter(key), text, sentAtMs, { messageContext, requestHeader, requestId, isPersonInput: true, isAccountsNoteCarrier }),
     reportNoSession: async (isAlreadyTold) => {
       if (!isAlreadyTold) await replyToThread(key, t('agent.no_session'));
     },
@@ -12746,6 +12772,27 @@ function deliverPersonPromptAtWrite(
  * block, and a topic member's answer says who gave it inside the answer itself (an author mark ahead of it would end at the block's
  * own header).
  */
+/**
+ * @description The settle of a person's prompt that waits in a startup buffer. One its window's end DROPPED — the start failed, nothing
+ * started after a failed resume, its replay's write threw — never reached the agent, and nothing else will post it: the request it
+ * opened closes (`cancelled`, like a prompt that found no session; its watch goes with it) and the person, who was told it is queued, is
+ * told to send it again. Fire and forget: a failure is logged.
+ */
+function createPersonBufferedSettle(key: SessionKey, requestId: string | null): BufferedPromptSettled {
+  return (outcome) => {
+    if (outcome !== 'dropped') return;
+    void withThreadLocale(key, () => reportDroppedPersonPrompt(key, requestId)).catch((e) =>
+      console.error(`[startupPromptBuffer] ${keyToString(key)}: reporting a dropped message failed:`, e),
+    );
+  };
+}
+
+async function reportDroppedPersonPrompt(key: SessionKey, requestId: string | null): Promise<void> {
+  console.warn(`[startupPromptBuffer] ${keyToString(key)}: a message that waited for the session never reached it; ${requestId ?? 'no request'} is closed`);
+  await settleTopicRequestAfterDelivery(key, { requestId }, 'noSession');
+  await replyToThread(key, t('agent.queued_prompt_dropped', { label: getThreadAdapter(key).label }));
+}
+
 async function deliverLateAnswerPrompt(key: SessionKey, text: string): Promise<LatePromptOutcome> {
   // The owner took over, like with any message they type: an armed usage-limit wait is over (the answer is not written INTO it, and its
   // own «continue» nudge would come on top of the answer later).
@@ -12805,7 +12852,7 @@ async function cancelPendingQuestionAndForward(
   text: string,
   sentAtMs?: number,
   messageContext?: MessageContext,
-  requestHeader?: string,
+  opening: TopicRequestOpening = noTopicRequest,
   /** The prompt opened a request (a person's free text, not the label of a tap): it may carry the accounts note. */
   isAccountsNoteCarrier = false,
 ): Promise<LatePromptOutcome> {
@@ -12829,7 +12876,7 @@ async function cancelPendingQuestionAndForward(
     await replyToThread(key, t('agent.question_cancelled_for_prompt'));
   }
   // Routed at the write: the SIGINT ended the turn, and a per-turn topic's stop may have begun (or ended) during the notice.
-  return deliverPersonPromptAtWrite(key, text, { requestHeader: requestHeader ?? '', sentAtMs, messageContext, isAccountsNoteCarrier });
+  return deliverPersonPromptAtWrite(key, text, { opening, sentAtMs, messageContext, isAccountsNoteCarrier });
 }
 
 /**

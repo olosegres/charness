@@ -59,8 +59,11 @@ function setup(): { adapter: ClaudeJsonStreamAdapter; probe: ReturnType<typeof c
   return { adapter, probe };
 }
 
-/** The watch of the queued message: its forward came while the turn ran, nothing was seen of it since. */
-const queuedMessageWatch: WatchedTurn = { requestId: 'req_M', progressCountAtTurnStart: 0, hasSeenBusy: false, hasSeenOutput: false, isRequestPrompt: true };
+/**
+ * The watch of the queued message: its forward came while the turn ran, nothing was seen of it since. Written to the live process (the
+ * session fixture's process 1), as the engine names a forward tracked on a live process.
+ */
+const queuedMessageWatch: WatchedTurn = { requestId: 'req_M', progressCountAtTurnStart: 0, hasSeenBusy: false, hasSeenOutput: false, isRequestPrompt: true, writtenToProcess: 1 };
 
 describe('a message queued behind a turn that ends in an error result (review 17 #1)', () => {
   it('stays unread and working through the turn end — its watch reads `running`, no R21 mark — and holds nothing past the grace', () => {

@@ -53,6 +53,7 @@ import {
   fakeClaudeExitFlushDelayFileName,
   fakeClaudeIgnoreStopSignalsFileName,
   fakeClaudeRefuseLaunchFileName,
+  fakeClaudeLaunchRefusalDelayFileName,
   getFakeClaudeTranscriptPath,
   getFakeClaudeUnrestorableConversationFileName,
   getFlagValues,
@@ -737,6 +738,14 @@ function writeExitMetadata(sessionId: string): void {
  * How long after a stop signal the exit flush runs: the content of {@link fakeClaudeExitFlushDelayFileName} while a test
  * keeps one, else `null` (no flush: the process dies at once).
  */
+/** How long a launch the fake refuses waits first ({@link fakeClaudeLaunchRefusalDelayFileName}); at once without the file. */
+async function waitBeforeRefusal(): Promise<void> {
+  const delayPath = path.join(getStateDir(), fakeClaudeLaunchRefusalDelayFileName);
+  if (!fs.existsSync(delayPath)) return;
+  const delayMs = Number(fs.readFileSync(delayPath, 'utf8').trim());
+  await new Promise<void>((resolve) => setTimeout(resolve, delayMs));
+}
+
 function getExitFlushDelayMs(): number | null {
   const delayPath = path.join(getStateDir(), fakeClaudeExitFlushDelayFileName);
   return fs.existsSync(delayPath) ? Number(fs.readFileSync(delayPath, 'utf8').trim()) : null;
@@ -772,6 +781,7 @@ function exitOnStopSignal(sessionId: string): void {
 async function getSessionViolation(argv: readonly string[]): Promise<string | null> {
   const resumeId = getFlagValues(argv, '--resume')[0];
   if (resumeId !== undefined && (!(await checkIsConversationHeld(resumeId)) || fs.existsSync(path.join(getStateDir(), getFakeClaudeUnrestorableConversationFileName(resumeId))))) {
+    await waitBeforeRefusal();
     const reason = `No conversation found with session ID: ${resumeId}`;
     writeStdout({ type: 'result', subtype: 'error_during_execution', is_error: true, num_turns: 0, session_id: resumeId, usage: { input_tokens: 0, output_tokens: 0 }, errors: [reason] });
     return reason;
@@ -1685,6 +1695,7 @@ async function main(): Promise<void> {
     }
   }
   if (fs.existsSync(path.join(getStateDir(), fakeClaudeRefuseLaunchFileName))) {
+    await waitBeforeRefusal();
     process.stderr.write('fake claude: refused to start\n');
     process.exit(1);
   }
