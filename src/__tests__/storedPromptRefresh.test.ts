@@ -8,7 +8,7 @@
 import { afterEach, describe, it, mock } from 'node:test';
 import assert from 'node:assert/strict';
 import { clearStoredPromptRefresher, refreshStoredPrompt, setStoredPromptRefresher } from '../requests/storedPromptRefresh';
-import { getPromptNotTakenIn, getWakeUpMessage, joinPromptsNotTakenIn } from '../requests/requestHeader';
+import { getPromptNotTakenIn, getPromptsNotTakenIn, getWakeUpMessage } from '../requests/requestHeader';
 import type { OpenRequestState } from '../requests/types';
 
 const storedText = '[Request req_1 · from: PROJ-1: you were mentioned] the note as it was';
@@ -72,7 +72,7 @@ describe('refreshStoredPrompt', () => {
     const untaken = createOpenRequest('req_1', storedText, false);
     assert.equal(getPromptNotTakenIn(untaken), freshText);
     assert.deepEqual(getWakeUpMessage(untaken, 'postRetry'), { reason: 'postRetry', text: freshText, isRequestPrompt: true });
-    assert.equal(joinPromptsNotTakenIn([untaken, createOpenRequest('req_2', '[Request req_2] other', false)]), `${freshText}\n\n[Request req_2] other`);
+    assert.equal(getPromptsNotTakenIn([untaken, createOpenRequest('req_2', '[Request req_2] other', false)])?.text, `${freshText}\n\n[Request req_2] other`);
     assert.equal(getPromptNotTakenIn(createOpenRequest('req_1', storedText, true)), undefined);
     assert.equal(getPromptNotTakenIn(createOpenRequest('req_1', undefined, undefined)), undefined);
   });

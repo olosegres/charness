@@ -81,11 +81,12 @@ export interface ApiRetryKickDeps {
   ensureSession: (key: SessionKey) => Promise<ApiRetryEnsureOutcome>;
   postTopicNotice: (key: SessionKey, notice: ApiRetryTopicNotice) => void;
   /** The nudge, or the open request's own prompt the agent never took in (R21). */
-  getResumeMessage: (key: SessionKey, retryKind: AgentApiErrorClass['kind']) => { text: string; isRequestPrompt: boolean };
+  getResumeMessage: (key: SessionKey, retryKind: AgentApiErrorClass['kind']) => { text: string; carriedRequestIds: readonly string[] };
   /** Through the startup buffer when another caller's start is still under way; a `buffered` nudge
    *  tells `onBufferedSettled` how its wait ended. */
   deliverNudge: (key: SessionKey, text: string, onBufferedSettled: BufferedPromptSettled) => Promise<PromptDelivery>;
-  trackContinuation: (key: SessionKey, options: { isCountersReset: boolean; isRequestPrompt: boolean }) => Promise<void>;
+  /** `carriedRequestIds`: the requests whose prompts the nudge carries, as named when it was built (`getResumeMessage`). */
+  trackContinuation: (key: SessionKey, options: { isCountersReset: boolean; carriedRequestIds: readonly string[] }) => Promise<void>;
   /**
    * Move the topic onto `rung` and continue its work there (`switchTopicToFallbackEntry`: it delivers its own
    * continue prompt and ends the retry). `true` when it did — the kick is then done; `false` (already on that
@@ -176,7 +177,7 @@ export async function runApiRetryKick(deps: ApiRetryKickDeps, key: SessionKey): 
     // starts no turn, and a watch tracked for it would wait for a turn that never comes (review 20 #1).
     const trackContinuation = (): Promise<void> => deps.trackContinuation(key, {
       isCountersReset: entry.kind === 'usageLimit',
-      isRequestPrompt: resume.isRequestPrompt,
+      carriedRequestIds: resume.carriedRequestIds,
     });
     const delivery = await deps.deliverNudge(key, resume.text, (outcome) => {
       if (outcome === 'replayed') {

@@ -434,7 +434,7 @@ describe('a startup window\'s prompts on every way out of it (review 19 #1)', ()
     const resume = getBody('async function resumeTopicOnNewSession(', 'function getTopicBackendFamily(');
     assert.match(resume, /const delivery = await deliverPromptOrBuffer\(key, prompt\.text, \(outcome\) => \{\n\s*if \(outcome === 'replayed'\) \{\n\s*trackContinuation\(\)\.catch\(/, 'a buffered first prompt is tracked at its replay, and only then (review 20 #1)');
     assert.match(resume, /if \(delivery === 'noSession'\) \{\n[^]*?return;\n\s*\}\n\s*if \(delivery === 'forwarded'\) await trackContinuation\(\);\n\}/, 'one forwarded at once is tracked at once; one that reached no session, never');
-    assert.ok(resume.includes('requestWakeUpEngine?.trackContinuationTurn(key, { isCountersReset: true, isRequestPrompt: prompt.isRequestPrompt })'));
+    assert.ok(resume.includes('requestWakeUpEngine?.trackContinuationTurn(key, { isCountersReset: true, carriedRequestIds: prompt.carriedRequestIds })'), 'the requests it carries, named as it was built (review 21 nit 3)');
   });
 
   it('a person\'s prompt that waited in a buffer and was dropped closes its request and the person is told — at the person\'s own buffer and at the adopt-replay re-route', () => {

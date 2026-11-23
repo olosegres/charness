@@ -95,11 +95,11 @@ describe('getTextWithHeldPrompts / getHeldPromptsText', () => {
 
 describe('getLimitResumeMessage', () => {
   it('the "continue" nudge resumes the interrupted turn — held prompts ride it, they never replace it', () => {
-    assert.deepEqual(getLimitResumeMessage({ continueNudge: 'continue', untakenRequestPrompt: undefined }), { text: 'continue', isRequestPrompt: false });
+    assert.deepEqual(getLimitResumeMessage({ continueNudge: 'continue', untakenRequestPrompts: undefined }), { text: 'continue', carriedRequestIds: [] });
   });
 
-  it('a request whose prompt never reached the agent gets that prompt instead (R21)', () => {
-    assert.deepEqual(getLimitResumeMessage({ continueNudge: 'continue', untakenRequestPrompt: 'req' }), { text: 'req', isRequestPrompt: true });
+  it('a request whose prompt never reached the agent gets that prompt instead (R21), naming the requests it carries', () => {
+    assert.deepEqual(getLimitResumeMessage({ continueNudge: 'continue', untakenRequestPrompts: { text: 'req', requestIds: ['req_1'] } }), { text: 'req', carriedRequestIds: ['req_1'] });
   });
 });
 

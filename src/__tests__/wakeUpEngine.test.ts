@@ -1124,7 +1124,7 @@ describe('a request whose post failed is retried soon, outside the wake-up cap (
     const ledger = await createLedger();
     const engine = createEngine(ledger);
     const request = await createFailedPost(ledger, engine);
-    await engine.trackContinuationTurn(topicKey, { isCountersReset: true, isRequestPrompt: true });
+    await engine.trackContinuationTurn(topicKey, { isCountersReset: true, carriedRequestIds: [request.id] });
     assert.equal(ledger.getNewestOpenRequest(topicKey)?.nextPostRetryAt, undefined);
 
     // The resumed turn sends a progress note and ends: the follow-up is the next wake-up, not a retry.
@@ -2436,7 +2436,7 @@ describe('a request waits for its schedule', () => {
     // A mention that came during the wait: its prompt was held, the session never took it in.
     const held = await ledger.createRequest(issueKey, handOverOfBob, { createPrompt: (id) => `[Request ${id} · from bob]` });
 
-    await engine.trackContinuationTurn(issueKey, { isCountersReset: true, isRequestPrompt: true });
+    await engine.trackContinuationTurn(issueKey, { isCountersReset: true, carriedRequestIds: [held.id] });
     assert.equal(ledger.listOpenRequestsOf(issueKey).find((request) => request.id === answered.id)?.isPersonInputUnanswered, undefined, 'ann\'s answered request owes nothing');
     assert.equal(ledger.listOpenRequestsOf(issueKey).find((request) => request.id === held.id)?.isPersonInputUnanswered, true, 'bob\'s words rode the message: owed');
 
@@ -2444,6 +2444,27 @@ describe('a request waits for its schedule', () => {
     assert.deepEqual(wakeUps, [{ requestId: held.id, reason: 'silentTurn' }], 'only the request whose prompt was re-posted is reminded; the waiting one stays quiet');
     assert.deepEqual(alerts, []);
     assert.equal(ledger.listOpenRequestsOf(issueKey).find((request) => request.id === answered.id)?.silentTurnCount, 0);
+  });
+
+  it('a «continue» carries only the requests named when it was BUILT: one opened before its replay is no request prompt of it — not owed for it, not read as taken in with it (review 21 nit 3)', async () => {
+    const ledger = await createLedger();
+    const engine = createEngine(ledger);
+    const handOverOfBob = { ...handOver, attributes: { ...handOver.attributes, requester: 'bob' } };
+    // A mention held over the wait: the limit resume's message is built with its prompt, and waits in a startup window.
+    const held = await ledger.createRequest(issueKey, handOver, { createPrompt: (id) => `[Request ${id} · from ann]` });
+    const carriedRequestIds = [held.id];
+    // Bob's comment opens a request meanwhile; its own post waits for the idle behind the nudge's turn.
+    const later = await ledger.createRequest(issueKey, handOverOfBob, { createPrompt: (id) => `[Request ${id} · from bob]` });
+    // The replay writes the message into process 3 and the continuation is tracked, with the requests named at the build.
+    probe = { isActive: true, isBusy: true, hasUnconsumedInput: false, isTurnEndBlocked: false, processGeneration: 3 };
+    await engine.trackContinuationTurn(issueKey, { isCountersReset: true, carriedRequestIds });
+    const readOpen = (requestId: string): OpenRequestState | undefined => ledger.listOpenRequestsOf(issueKey).find((request) => request.id === requestId);
+    assert.equal(readOpen(held.id)?.isPersonInputUnanswered, true, 'ann\'s words rode the message: owed');
+    assert.equal(readOpen(later.id)?.isPersonInputUnanswered, undefined, 'bob\'s did not');
+    // The message's turn took what it carried in: ann's prompt is read, bob's — still waiting for its own write — is not.
+    await engine.pollWatchedTurns();
+    assert.equal(readOpen(held.id)?.isPromptTakenIn, true);
+    assert.equal(readOpen(later.id)?.isPromptTakenIn, undefined, 'never marked off a message it was not in');
   });
 
   it('the end of a limit wait zeroes the counters but never the person\'s unanswered words: what was owed stays owed', async () => {

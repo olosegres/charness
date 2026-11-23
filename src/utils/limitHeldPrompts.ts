@@ -8,6 +8,8 @@
  * share the hold through `postToSession`.
  */
 
+import type { PromptsNotTakenIn } from '../requests/requestHeader';
+
 /** Held per conversation at most; a scheduler firing all through a long wait must not flood the resume. */
 export const limitHeldPromptsMax = 10;
 /** Between two prompts delivered as one: each carries its own header. */
@@ -71,17 +73,27 @@ export function getHeldPromptsText(held: readonly LimitHeldPrompt[]): string | n
 }
 
 /**
+ * @name LimitResumeMessage
+ * @description What a resume forwards, and the requests whose own prompts it carries (`carriedRequestIds`, named as it is built:
+ * empty for the plain «continue» nudge and for a context bridge).
+ */
+export interface LimitResumeMessage {
+  text: string;
+  carriedRequestIds: readonly string[];
+}
+
+/**
  * @description What the resume of a usage-limit wait forwards: the open
- * request's prompt when the agent never took it in (R21 — it arrived during the
- * wait, or its post failed), else the "continue" nudge, which resumes the turn
- * the limit interrupted. Held prompts are not part of it: they ride whichever is
- * forwarded. `isRequestPrompt` — the turn carries the request's prompt.
+ * requests' prompts when the agent never took them in (R21 — they arrived during
+ * the wait, or their post failed), else the "continue" nudge, which resumes the
+ * turn the limit interrupted. Held prompts are not part of it: they ride whichever
+ * is forwarded.
  */
 export function getLimitResumeMessage(input: {
   continueNudge: string;
-  untakenRequestPrompt: string | undefined;
-}): { text: string; isRequestPrompt: boolean } {
-  return input.untakenRequestPrompt === undefined
-    ? { text: input.continueNudge, isRequestPrompt: false }
-    : { text: input.untakenRequestPrompt, isRequestPrompt: true };
+  untakenRequestPrompts: PromptsNotTakenIn | undefined;
+}): LimitResumeMessage {
+  return input.untakenRequestPrompts === undefined
+    ? { text: input.continueNudge, carriedRequestIds: [] }
+    : { text: input.untakenRequestPrompts.text, carriedRequestIds: input.untakenRequestPrompts.requestIds };
 }

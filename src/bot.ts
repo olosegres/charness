@@ -224,7 +224,7 @@ import { createBotApiHttpAgent, createBotApiHttpsAgent, wireBotApiClient } from 
 import { getPersistedConversations, getUnservedStateError } from './platform/unservedStateGuard';
 import { buildJiraContextPreamble } from './connectors/jira/contextPreamble';
 import { postToIdleSession, postToSession, registerPostWaitWindows, type PostToSessionDeps } from './postToSession';
-import { getLimitResumeMessage } from './utils/limitHeldPrompts';
+import { getLimitResumeMessage, type LimitResumeMessage } from './utils/limitHeldPrompts';
 import { waitForAdoptedReplay } from './utils/adoptReplayGate';
 import { createTopicRequestSettler } from './requests/topicRequestSettle';
 import { createTrackerTurnPoster } from './requests/trackerTurnPoster';
@@ -448,7 +448,7 @@ import { formatLocalClockWithDateIfNotToday } from './utils/localClock';
 import { RequestWakeUpEngine } from './requests/wakeUpEngine';
 import { getRequestScheduleWait, pickRequestToArmUnder } from './requests/scheduleWait';
 import { checkIsWakingStopped, getRequestBackstopMs } from './requests/wakeUpRules';
-import { joinPromptsNotTakenIn, type WakeUpMessage } from './requests/requestHeader';
+import { getPromptsNotTakenIn, type WakeUpMessage } from './requests/requestHeader';
 import type { OpenRequestState, RequestAlertReason, RequestPromptOutcome } from './requests/types';
 import { getThreadKeysForDirectory } from './scheduler/directoryThreads';
 import { resumeSchedulesPausedForUnbound, type RebindResumePorts } from './scheduler/rebindResume';
@@ -2673,8 +2673,8 @@ const apiRetryKickDeps: ApiRetryKickDeps = {
   },
   getResumeMessage: (key, retryKind) => getLimitResumeMessage({
     continueNudge: t('apiRetry.continueNudge'),
-    untakenRequestPrompt: retryKind === 'usageLimit'
-      ? joinPromptsNotTakenIn(requestLimitWaitAnswerDeps?.ledger.listOpenRequestsOf(key) ?? [])
+    untakenRequestPrompts: retryKind === 'usageLimit'
+      ? getPromptsNotTakenIn(requestLimitWaitAnswerDeps?.ledger.listOpenRequestsOf(key) ?? [])
       : undefined,
   }),
   // `ensureAgentSession` is already satisfied by a start ANOTHER caller has under way — the session is
@@ -9182,7 +9182,7 @@ async function resumeConversationsWaitingForAccount(): Promise<void> {
           modelToPin: null,
           getFirstPrompt: () => getLimitResumeMessage({
             continueNudge: t('apiRetry.continueNudge'),
-            untakenRequestPrompt: joinPromptsNotTakenIn(requestLimitWaitAnswerDeps?.ledger.listOpenRequestsOf(key) ?? []),
+            untakenRequestPrompts: getPromptsNotTakenIn(requestLimitWaitAnswerDeps?.ledger.listOpenRequestsOf(key) ?? []),
           }),
         });
       } catch (e) {
@@ -9858,7 +9858,7 @@ async function switchTopicToFallbackEntry(
     await say(notice);
     return { isSwitched: false, notice, isFailed: true };
   };
-  let firstPrompt: FirstPromptAfterMove | null = null;
+  let firstPrompt: LimitResumeMessage | null = null;
   let isStoppingBackground = false;
   if (from?.backend === 'claude' && to.backend === 'claude') {
     // The same account on another model (a pick beyond the limit's scope) is no account pick: the topic keeps following General.
@@ -9897,7 +9897,7 @@ async function switchTopicToFallbackEntry(
       const error = await getThreadAdapter(key).setModel?.(key, buildOpenCodeModelLabel(to));
       if (error) return fail(error);
     }
-    firstPrompt = { text: bridge, isRequestPrompt: false };
+    firstPrompt = { text: bridge, carriedRequestIds: [] };
   }
   // From the end of the wait until the continue prompt is forwarded, the idle the limit left behind is not a turn end (the
   // same hold a retry kick has): the model pin below re-spawns the session for seconds, and a wake-up engine that polled
@@ -9914,19 +9914,13 @@ async function switchTopicToFallbackEntry(
       // Read after the session is up: the open requests may have changed while it started.
       getFirstPrompt: () => firstPrompt ?? getLimitResumeMessage({
         continueNudge: t('apiRetry.continueNudge'),
-        untakenRequestPrompt: joinPromptsNotTakenIn(requestLimitWaitAnswerDeps?.ledger.listOpenRequestsOf(key) ?? []),
+        untakenRequestPrompts: getPromptsNotTakenIn(requestLimitWaitAnswerDeps?.ledger.listOpenRequestsOf(key) ?? []),
       }),
     });
     return { isSwitched: true, notice };
   } finally {
     if (isHoldingTurnEnd) apiRetryKicksInFlight.delete(k);
   }
-}
-
-/** The message that starts the work on a topic's new session, and whether it is the request's own prompt. */
-interface FirstPromptAfterMove {
-  text: string;
-  isRequestPrompt: boolean;
 }
 
 /**
@@ -9950,7 +9944,7 @@ async function moveTopicToOtherBackend(key: SessionKey, backend: BackendFamily, 
  */
 async function resumeTopicOnNewSession(
   key: SessionKey,
-  options: { modelToPin: string | null; getFirstPrompt: () => FirstPromptAfterMove | null; args?: string },
+  options: { modelToPin: string | null; getFirstPrompt: () => LimitResumeMessage | null; args?: string },
 ): Promise<void> {
   const k = keyToString(key);
   const ensured = await ensureAgentSession(key, { args: options.args });
@@ -9965,7 +9959,8 @@ async function resumeTopicOnNewSession(
   // The move's continuation is tracked — every open request's counters reset, a limit stop lifted — only once its first prompt reached a
   // session: at once when forwarded, at its replay when it waited in a startup window. One that reached none (no session left, or a
   // window that dropped it) starts no turn, and a watch tracked for it would wait for good (review 20 #1).
-  const trackContinuation = (): Promise<void> => requestWakeUpEngine?.trackContinuationTurn(key, { isCountersReset: true, isRequestPrompt: prompt.isRequestPrompt }) ?? Promise.resolve();
+  // The requests whose prompts it carries are named as it was built, never read again at its replay (review 21 nit 3).
+  const trackContinuation = (): Promise<void> => requestWakeUpEngine?.trackContinuationTurn(key, { isCountersReset: true, carriedRequestIds: prompt.carriedRequestIds }) ?? Promise.resolve();
   const delivery = await deliverPromptOrBuffer(key, prompt.text, (outcome) => {
     if (outcome === 'replayed') {
       trackContinuation().catch((e) => console.error(`[fallback] ${k}: tracking the move's replayed first prompt failed:`, e instanceof Error ? e.message : e));
@@ -10052,7 +10047,7 @@ async function executeBackendSwitch(key: SessionKey, target: BackendSwitchTarget
   cancelApiRetry(key); // a wait armed for the backend just left is over
   await resumeTopicOnNewSession(key, {
     modelToPin: getBackendSwitchModelToPin(target),
-    getFirstPrompt: () => (bridge === null ? null : { text: bridge, isRequestPrompt: false }),
+    getFirstPrompt: () => (bridge === null ? null : { text: bridge, carriedRequestIds: [] }),
     args: bridge === null ? options.userMessage : undefined,
   });
 }

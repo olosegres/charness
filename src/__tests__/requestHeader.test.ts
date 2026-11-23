@@ -18,7 +18,7 @@ import {
   buildSupersededRequestsLine,
   buildWakeUpReminder,
   getWakeUpMessage,
-  joinPromptsNotTakenIn,
+  getPromptsNotTakenIn,
 } from '../requests/requestHeader';
 import type { OpenRequestState } from '../requests/types';
 
@@ -144,19 +144,19 @@ describe('buildWakeUpReminder — an answer that is optional (a lost-work wake o
   });
 });
 
-describe('joinPromptsNotTakenIn', () => {
-  it('joins the untaken prompts in order and skips taken-in or promptless requests', () => {
-    const joined = joinPromptsNotTakenIn([
+describe('getPromptsNotTakenIn', () => {
+  it('joins the untaken prompts in order and skips taken-in or promptless requests, naming the requests it carries (review 21 nit 3)', () => {
+    const joined = getPromptsNotTakenIn([
       createOpenRequest('req_1', '[Request req_1] first', undefined),
       createOpenRequest('req_2', '[Request req_2] taken', true),
       createOpenRequest('req_3', undefined, undefined),
       createOpenRequest('req_4', '[Request req_4] fourth', false),
     ]);
-    assert.equal(joined, '[Request req_1] first\n\n[Request req_4] fourth');
+    assert.deepEqual(joined, { text: '[Request req_1] first\n\n[Request req_4] fourth', requestIds: ['req_1', 'req_4'] });
   });
 
   it('is undefined when nothing is left to post', () => {
-    assert.equal(joinPromptsNotTakenIn([]), undefined);
-    assert.equal(joinPromptsNotTakenIn([createOpenRequest('req_2', '[Request req_2] taken', true)]), undefined);
+    assert.equal(getPromptsNotTakenIn([]), undefined);
+    assert.equal(getPromptsNotTakenIn([createOpenRequest('req_2', '[Request req_2] taken', true)]), undefined);
   });
 });

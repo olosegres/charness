@@ -503,14 +503,16 @@ export class RequestWakeUpEngine {
    * lifts a limit stop: the work continues, so does the waking. A request the
    * rules already gave up on stays given up. The one session turn the nudge
    * starts is watched for every open request of the conversation.
-   * `isRequestPrompt` — the message carries the prompts the session never took in (R21: a limit or account resume re-posts
-   * them) — is a fact about EACH request, not about the conversation: only a request whose prompt was not taken in has its words
-   * in the message (they are owed an answer, as any request prompt's), every other open request gets the plain «continue».
+   * `carriedRequestIds` — the requests whose prompts the message carries, never taken in (R21: a limit or account resume re-posts
+   * them) — is a fact about EACH request, named when the message was BUILT (`getPromptsNotTakenIn`): only such a request has its words
+   * in the message (they are owed an answer, as any request prompt's), every other open request gets the plain «continue». It is
+   * never read again here: a buffered message is tracked at its replay, and a request opened in between did not ride it (review 21
+   * nit 3). A carried request whose prompt the session took in meanwhile is a plain «continue» too.
    */
-  async trackContinuationTurn(key: SessionKey, options: { isCountersReset: boolean; isRequestPrompt?: boolean }): Promise<void> {
+  async trackContinuationTurn(key: SessionKey, options: { isCountersReset: boolean; carriedRequestIds?: readonly string[] }): Promise<void> {
     for (const request of this.deps.ledger.listOpenRequestsOf(key)) {
       // Read before the counters update below: it never touches `isPromptTakenIn`, but the request's words are what is asked here.
-      const isOwnPromptCarried = options.isRequestPrompt === true && getPromptNotTakenIn(request) !== undefined;
+      const isOwnPromptCarried = options.carriedRequestIds?.includes(request.id) === true && getPromptNotTakenIn(request) !== undefined;
       if (options.isCountersReset) {
         await this.deps.ledger.updateOpenRequest(request.id, {
           silentTurnCount: 0,

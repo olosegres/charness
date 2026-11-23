@@ -48,6 +48,8 @@ const topicKey: SessionKey = makeTelegramKey(-1001234567890, 42);
 const issueKey: SessionKey = makeJiraKey('PROJ-7');
 const otherTopicKey: SessionKey = makeTelegramKey(-1001234567890, 43);
 const continueNudge = 'continue';
+/** The request whose prompt a usage-limit resume carries, when the world has one untaken. */
+const untakenRequestId = 'req_1';
 const fireAtInThePast = 1_000;
 const clockMs = 1_000_000;
 
@@ -62,7 +64,7 @@ interface World {
   nudges: Array<{ key: string; text: string }>;
   /** The bot's startup buffer — in memory only, so a "restart" empties it. */
   startupBuffer: StartupPromptBuffer;
-  continuations: Array<{ key: string; isCountersReset: boolean; isRequestPrompt: boolean }>;
+  continuations: Array<{ key: string; isCountersReset: boolean; carriedRequestIds: readonly string[] }>;
   /** The session steps in the order the kick took them. */
   sessionSteps: Array<'ensureSession'>;
   clears: string[];
@@ -94,8 +96,8 @@ function createKickDeps(): ApiRetryKickDeps {
     },
     postTopicNotice: (key, notice) => { world.notices.push({ key: keyToString(key), notice }); },
     getResumeMessage: () => world.untakenRequestPrompt === undefined
-      ? { text: continueNudge, isRequestPrompt: false }
-      : { text: world.untakenRequestPrompt, isRequestPrompt: true },
+      ? { text: continueNudge, carriedRequestIds: [] }
+      : { text: world.untakenRequestPrompt, carriedRequestIds: [untakenRequestId] },
     // The bot's own buffer-or-forward unit over a real startup buffer, so what the kick learns about a
     // buffered nudge is what the bot would tell it.
     deliverNudge: async (key, text, onBufferedSettled) => {
@@ -318,7 +320,7 @@ for (const [label, key] of [['a Telegram topic', topicKey], ['a Jira issue', iss
       await world.startupBuffer.replayPrompts(keyString, { isSessionActive: true, forward: forwardToSession(key) });
       await new Promise((resolve) => setImmediate(resolve));
       assert.equal(world.nudges.length, 1);
-      assert.deepEqual(world.continuations, [{ key: keyString, isCountersReset: true, isRequestPrompt: false }], 'tracked once the nudge was written');
+      assert.deepEqual(world.continuations, [{ key: keyString, isCountersReset: true, carriedRequestIds: [] }], 'tracked once the nudge was written');
     });
 
     it('a buffered nudge the window drops tracks, resets and lifts nothing: no watch waits for a turn that never comes (review 20 #1)', async () => {
@@ -485,14 +487,14 @@ for (const [label, key] of [['a Telegram topic', topicKey], ['a Jira issue', iss
       await runDueTimers();
 
       assert.deepEqual(world.nudges, [{ key: keyString, text: '[Request req_1] the whole task' }]);
-      assert.deepEqual(world.continuations, [{ key: keyString, isCountersReset: true, isRequestPrompt: true }]);
+      assert.deepEqual(world.continuations, [{ key: keyString, isCountersReset: true, carriedRequestIds: [untakenRequestId] }], 'the request it carries, named as it was built');
     });
 
     it('a transient retry does not restart the wake-up counters; a limit wait does', async () => {
       saveRetry(key, { kind: 'transient' });
       boot();
       await runDueTimers();
-      assert.deepEqual(world.continuations, [{ key: keyString, isCountersReset: false, isRequestPrompt: false }]);
+      assert.deepEqual(world.continuations, [{ key: keyString, isCountersReset: false, carriedRequestIds: [] }]);
       assert.deepEqual(
         world.notices.map(({ notice }) => notice),
         isTelegram ? [{ kind: 'resuming', retryKind: 'transient' }] : [],
@@ -664,7 +666,7 @@ describe('the bot wires the kick and the restore, and keeps the saved record mea
   });
 
   it('what it hands over is the nudge, or the open request\'s prompt the agent never took in — only for a limit wait (R21)', () => {
-    assert.match(kickPorts, /getResumeMessage: \(key, retryKind\) => getLimitResumeMessage\(\{\n\s*continueNudge: t\('apiRetry\.continueNudge'\),\n\s*untakenRequestPrompt: retryKind === 'usageLimit'\n\s*\? joinPromptsNotTakenIn\(requestLimitWaitAnswerDeps\?\.ledger\.listOpenRequestsOf\(key\) \?\? \[\]\)\n\s*: undefined,\n\s*\}\),/);
+    assert.match(kickPorts, /getResumeMessage: \(key, retryKind\) => getLimitResumeMessage\(\{\n\s*continueNudge: t\('apiRetry\.continueNudge'\),\n\s*untakenRequestPrompts: retryKind === 'usageLimit'\n\s*\? getPromptsNotTakenIn\(requestLimitWaitAnswerDeps\?\.ledger\.listOpenRequestsOf\(key\) \?\? \[\]\)\n\s*: undefined,\n\s*\}\),/);
     assert.ok(kickPorts.includes('await requestWakeUpEngine?.trackContinuationTurn(key, options);'));
   });
 
@@ -680,7 +682,7 @@ describe('the bot wires the kick and the restore, and keeps the saved record mea
   it('both ways out of a startup window settle what it held: the replay on a started session, the discard on a failed start', () => {
     // The kick keeps the saved record while its nudge waits in the buffer; only these two can end that wait.
     const replay = getFunction('async function replayBufferedPrompts(');
-    assert.match(replay, /await startupPromptBuffer\.replayPrompts\(keyToString\(key\), \{\n\s*isSessionActive,\n\s*forward: async \(prompt, options\) => \{ await forwardPromptToAgent\(key, adapter, prompt, undefined, options\); \},\n\s*afterReplay: async \(\) => \{/);
+    assert.match(replay, /await startupPromptBuffer\.replayPrompts\(keyToString\(key\), \{\n\s*isSessionActive,\n\s*forward: async \(prompt, options\) => \{\n\s*const outcome = await forwardPromptToAgent\(key, adapter, prompt, undefined, options\);\n(?:\s*\/\/[^\n]*\n)*\s*if \(outcome === 'noSession'\) throw new Error\(noSessionForPostError\);\n\s*\},\n\s*afterReplay: async \(\) => \{/);
     assert.match(getFunction('async function startAgentSession('), /startupPromptBuffer\.discardPrompts\(kStr\);/);
     assert.doesNotMatch(botSource, /startupPromptBuffer\s*\.drainPrompts\(/, 'a drain that settles nothing would leave a waiting nudge waiting for good');
   });

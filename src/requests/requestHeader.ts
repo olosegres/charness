@@ -115,14 +115,29 @@ export function getPromptNotTakenIn(request: OpenRequestState | null | undefined
 const joinedPromptsSeparator = '\n\n';
 
 /**
+ * @name PromptsNotTakenIn
+ * @description The prompts a resume re-posts in ONE text, and the requests they are: what the message carries is named when it is
+ * built, and the turn it starts is tracked with those ids — never read again when it is tracked, which for a buffered message is its
+ * replay, after other requests may have opened (review 21 nit 3).
+ */
+export interface PromptsNotTakenIn {
+  text: string;
+  requestIds: string[];
+}
+
+/**
  * @description The prompts of every request in `requests` the session never took
  * in, in the given order, as ONE text to post — a conversation may hold one open
- * request per requester, and a resume must re-post each of them. `undefined` when
- * none is left to post.
+ * request per requester, and a resume must re-post each of them — with the ids of
+ * those requests. `undefined` when none is left to post.
  */
-export function joinPromptsNotTakenIn(requests: readonly OpenRequestState[]): string | undefined {
-  const prompts = requests.map(getPromptNotTakenIn).filter((prompt): prompt is string => prompt !== undefined);
-  return prompts.length === 0 ? undefined : prompts.join(joinedPromptsSeparator);
+export function getPromptsNotTakenIn(requests: readonly OpenRequestState[]): PromptsNotTakenIn | undefined {
+  const untaken = requests.flatMap((request) => {
+    const prompt = getPromptNotTakenIn(request);
+    return prompt === undefined ? [] : [{ requestId: request.id, prompt }];
+  });
+  if (untaken.length === 0) return undefined;
+  return { text: untaken.map((entry) => entry.prompt).join(joinedPromptsSeparator), requestIds: untaken.map((entry) => entry.requestId) };
 }
 
 /**
