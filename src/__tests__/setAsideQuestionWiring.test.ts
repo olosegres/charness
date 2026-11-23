@@ -28,7 +28,7 @@ const closeCall = /closeSetAsideQuestionsInBackground\(\s*key\s*\)/;
 test('the conversations that end or are replaced close their set-aside questions', () => {
   assert.match(getFunctionBody('releaseConversationIds'), closeCall, '/new, /quit, /quitall, leaving the folder');
   assert.match(getFunctionBody('switchThreadAdapter'), closeCall, 'another backend');
-  assert.match(getFunctionBody('resumeSessionByIndex'), closeCall, 'another conversation');
+  assert.match(getFunctionBody('resumePickedSession'), closeCall, 'another conversation');
   assert.match(getFunctionBody('closeSetAsideQuestionsInBackground'), /closeSetAsideQuestions\(\s*key\s*\)\.catch\(/, 'not awaited, a failure is logged');
 });
 

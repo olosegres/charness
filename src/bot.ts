@@ -39,7 +39,7 @@ import {
 import { ClaudeJsonStreamAdapter } from './adapters/claudeJsonStreamAdapter';
 import { claudeJsonStreamAdapterName, claudePerTurnAdapterName, claudeTmuxAdapterName, checkIsJsonStreamBackend, openCodeAdapterName, terminalAdapterName } from './adapters/adapterNames';
 import { checkShouldPostReattachRecap, formatReattachRecap } from './resumeContext';
-import type { AgentAdapter, AgentRuntimeInfo, AgentSession, DisplayVerbosityMode, OutputTransport, PendingQuestionState, AgentApiErrorClass, AgentAuthErrorReason, LimitEpisodeMarker, OpenCodeQuestion, RecentTurn, SeenWatermark, SubagentStatusEvent, ThinkingEvent, ToolResultEvent } from './types';
+import type { AgentAdapter, AgentRuntimeInfo, AgentSession, DisplayVerbosityMode, OutputTransport, PendingQuestionState, AgentApiErrorClass, AgentAuthErrorReason, LimitEpisodeMarker, OpenCodeQuestion, RecentTurn, ResumeSessionOptions, SeenWatermark, SubagentStatusEvent, ThinkingEvent, ToolResultEvent } from './types';
 import type { PlatformId, SessionKey } from './sessionKey';
 import { createOutputTransport } from './connectors/telegram/output/createOutputTransport';
 import { keyToString, keyFromString, tryKeyFromString } from './sessionKey';
@@ -3016,22 +3016,26 @@ async function handleNoResponseWithLocale(key: SessionKey): Promise<void> {
       // Transient-stall retry: same session, dialog fully intact.
       await replyToThread(key, t('agent.session_recovering'));
     } else if (action === 'fork') {
-      // Restore the last dialog into a fresh, unwedged session.
+      // Restore the last dialog into a fresh, unwedged session — as the conversation's one transition, like every start.
       await replyToThread(key, t('agent.session_recovering'));
-      const forkedId = await adapter.forkSession!(key);
-      if (forkedId) {
-        await persistSessionStart(key, adapter);
-      } else {
+      const startMsg = await runCommandSessionTransition(key, async () => {
+        const forkedId = await adapter.forkSession!(key);
+        if (forkedId) {
+          await persistSessionStart(key, adapter);
+          return '';
+        }
         // Fork failed → fall back immediately to a blank restart this tier.
         await releaseThreadSession(key);
-        const startMsg = await startAgentSession(key);
-        if (startMsg) await replyToThread(key, startMsg);
-      }
+        return startAgentSession(key);
+      });
+      if (startMsg) await replyToThread(key, startMsg);
     } else {
       // action === 'restart': blank fresh session (dialog dropped).
       await replyToThread(key, t('agent.session_restarting'));
-      await releaseThreadSession(key);
-      const startMsg = await startAgentSession(key);
+      const startMsg = await runCommandSessionTransition(key, async () => {
+        await releaseThreadSession(key);
+        return startAgentSession(key);
+      });
       if (startMsg) await replyToThread(key, startMsg);
     }
     // Re-trigger the original prompt into the (same / forked / fresh) session.
@@ -6064,6 +6068,17 @@ async function ensureAgentSession(
  */
 const sessionTransitions = new KeyedTransitionQueue();
 
+/**
+ * @description Run a start or resume a COMMAND makes — `/new`, a first `/claude` / `/opencode`, `/claude_mode`'s switch, `/resume`'s
+ * pick, the wedge recovery's restart or fork — as the conversation's one transition, like an ensure or an idle stop. No two of them
+ * overlap, so no startup window is opened by one and ended by another, and an ensure that comes meanwhile waits for it instead of
+ * starting or resuming a second session beside it (review 20 nit 3). Never call it from inside a transition: the queue would wait for
+ * itself.
+ */
+function runCommandSessionTransition<TResult>(key: SessionKey, transition: () => Promise<TResult>): Promise<TResult> {
+  return sessionTransitions.run(keyToString(key), transition);
+}
+
 async function ensureAgentSessionNow(
   key: SessionKey,
   options: EnsureAgentSessionOptions,
@@ -6163,7 +6178,11 @@ function getResumableSessionId(key: SessionKey): string | null {
  * (its replay writes them into the fresh session), and a way that starts nothing discards them. Settled `dropped` here, they were lost
  * although a fresh session came up a moment later (review 19 #1).
  */
-async function resumeSleepingSession(key: SessionKey, sessionId: string): Promise<ResumeFailureKind | null> {
+async function resumeSleepingSession(
+  key: SessionKey,
+  sessionId: string,
+  resumeOptions: Partial<Pick<ResumeSessionOptions, 'isWithRecentContext'>> = {},
+): Promise<ResumeFailureKind | null> {
   const kStr = keyToString(key);
   const workDirDecision = getWorkDirStartDecision(key);
   if (!workDirDecision.ok) return 'refused';
@@ -6173,7 +6192,7 @@ async function resumeSleepingSession(key: SessionKey, sessionId: string): Promis
   try {
     // A conversation the bot saw take a turn whose transcript is now missing is lost, not new: the resume fails.
     const isConversationRecorded = checkIsConversationRecorded(state.getAgent(key)?.seenWatermark, sessionId);
-    await adapter.resumeSession(key, workDirDecision.workDir, sessionId, { isConversationRecorded });
+    await adapter.resumeSession(key, workDirDecision.workDir, sessionId, { ...resumeOptions, isConversationRecorded });
     await persistSessionStart(key, adapter);
     // A resume that did not come up takes nothing: the window stays for the caller's fresh start, or its discard.
     if (!adapter.checkIsActive(key)) return 'refused';
@@ -6236,18 +6255,22 @@ async function suspendThreadSession(key: SessionKey): Promise<void> {
         console.log(`[compact-on-idle] ${kStr} process stopped; the session sleeps and resumes on the next message`);
       } finally {
         startupPromptBuffer.closeWindow(kStr);
+        // Still the stop's transition, also when the stop threw: a start or resume a command makes (`/new`, …) waits for it in the
+        // queue, so the prompts the stop held go to the conversation they were written in (review 20 nit 3).
+        await resumeForHeldPrompts(key);
       }
     });
   } finally {
     // A sleeping per-turn session with a compaction due gets its idle timer from the persisted stamps (L-D7).
     rearmThreadIdleTimer(key);
-    await resumeForHeldPrompts(key);
   }
 }
 
 /**
- * @description After an idle stop, whatever its end: the prompts its window held go to the conversation resumed for them. A conversation
- * released during the stop has no id left to resume, and a fresh session nobody asked for must not start for them: they are dropped.
+ * @description After an idle stop, whatever its end, inside the stop's own transition: the prompts its window held go to the
+ * conversation resumed for them (`ensureAgentSessionNow`: the queued ensure would wait for this very transition). A conversation
+ * released during the stop (`/quit`, leaving the folder) has no id left to resume, and a fresh session nobody asked for must not start
+ * for them: they are dropped.
  */
 async function resumeForHeldPrompts(key: SessionKey): Promise<void> {
   const kStr = keyToString(key);
@@ -6257,7 +6280,7 @@ async function resumeForHeldPrompts(key: SessionKey): Promise<void> {
     startupPromptBuffer.discardPrompts(kStr);
     return;
   }
-  await ensureAgentSession(key);
+  await ensureAgentSessionNow(key, {});
 }
 
 /** Conversations already told once that their CLI is too old for the auto-stop (L-D10). */
@@ -7900,12 +7923,15 @@ command('new', async (_ctx, key) => {
   cancelConversationRequest(key);
   // Release the current session (sweep + clear ids) via `releaseThreadSession`.
   // The fresh start below uses the thread's current adapter, so we keep the
-  // adapter selection untouched.
-  await releaseThreadSession(key);
+  // adapter selection untouched. Both as the conversation's one transition: an idle stop under way ends first (with the resume for
+  // what it held), and no ensure starts a second session beside this one.
   // `startAgentSession` handles startup buffering, the typing-loader boot, and
   // the preamble-marker reset. It returns `''` for a self-greeting agent (Claude
   // prints its own banner) — show a notice only for a non-empty ready text.
-  const msg = await startAgentSession(key);
+  const msg = await runCommandSessionTransition(key, async () => {
+    await releaseThreadSession(key);
+    return startAgentSession(key);
+  });
   if (msg) await replyToThread(key, msg);
 });
 
@@ -8475,10 +8501,13 @@ async function handleAgentStart(
     await replyToThread(key, t('agent.already_active', { label: adapter.label }));
     return;
   }
-  // A sleeping conversation is woken, not replaced (L-D4): `/new` is the fresh start.
+  // A sleeping conversation is woken, not replaced (L-D4): `/new` is the fresh start. A first start is the conversation's one
+  // transition too, and finds a session another trigger started meanwhile instead of starting a second one beside it.
   const msg = getResumableSessionId(key) !== null
     ? (await ensureAgentSession(key, { args })).message
-    : await startAgentSession(key, args);
+    : await runCommandSessionTransition(key, async () => (getThreadAdapter(key).checkIsActive(key)
+      ? t('agent.already_active', { label: getThreadAdapter(key).label })
+      : startAgentSession(key, args)));
   if (msg) await replyToThread(key, msg);
 }
 
@@ -8572,6 +8601,13 @@ async function applyClaudeBackendSwitch(key: SessionKey, target: string): Promis
     const refusal = getPerTurnRefusal(key);
     if (refusal) return t('claudeMode.perTurn_refused', { version: refusal.version, min: minAutoStopClaudeCodeVersion });
   }
+  // As the conversation's one transition: the stop of the old backend and the resume on the new one never overlap an ensure or an idle
+  // stop (review 20 nit 3).
+  return runCommandSessionTransition(key, () => switchClaudeBackendNow(key, target, label));
+}
+
+/** {@link applyClaudeBackendSwitch}'s switch itself, inside the conversation's transition. */
+async function switchClaudeBackendNow(key: SessionKey, target: string, label: string): Promise<string> {
   const wasActive = getThreadAdapter(key).checkIsActive(key);
   const sessionId = state.getAgent(key)?.claudeSessionId;
 
@@ -8584,18 +8620,16 @@ async function applyClaudeBackendSwitch(key: SessionKey, target: string): Promis
 
   const decision = getWorkDirStartDecision(key);
   if (!decision.ok) return `${decision.message}${backgroundStoppedSuffix}`;
-  const targetAdapter = getThreadAdapter(key);
   sendThreadTypingIndicator(key).catch(() => {});
-  if (sessionId && targetAdapter.resumeSession) {
-    markNeedsNewMessage(key);
+  if (sessionId) {
     clearThreadContextMarker(key);
-    try {
-      await targetAdapter.resumeSession(key, decision.workDir, sessionId, { isWithRecentContext: true });
-      await persistSessionStart(key, targetAdapter);
+    // The resume opens its startup window as a wake's does: a prompt that comes meanwhile waits and is replayed (review 20 nit 3).
+    if ((await resumeSleepingSession(key, sessionId, { isWithRecentContext: true })) === null) {
       return `${t('claudeMode.switched_resumed', { label })}${backgroundStoppedSuffix}`;
-    } catch (e) {
-      console.error('[claude_mode] resume failed, starting fresh:', e instanceof Error ? e.message : e);
     }
+    console.error(`[claude_mode] ${keyToString(key)}: the resume on the new backend failed; starting fresh`);
+    // The fresh start takes the failed resume's window over, as after a failed wake: the people's prompts go to the fresh session.
+    startupPromptBuffer.discardBotPrompts(keyToString(key));
   }
   const msg = await startAgentSession(key);
   return `${msg || t('claudeMode.switched_fresh', { label })}${backgroundStoppedSuffix}`;
@@ -10413,6 +10447,13 @@ async function resumeSessionByIndex(
     return null;
   }
   const sessionId = list[idx];
+  // As the conversation's one transition: no ensure resumes the old conversation beside the pick, and no idle stop runs under it
+  // (review 20 nit 3). A prompt that comes meanwhile routes to a wake, whose ensure waits for the pick in the same queue.
+  return runCommandSessionTransition(key, () => resumePickedSession(key, sessionId));
+}
+
+/** {@link resumeSessionByIndex}'s resume of the picked session, inside the conversation's transition. */
+async function resumePickedSession(key: SessionKey, sessionId: string): Promise<string> {
   // Pick-mode is armed only by `handleSessionsList` (binding-gated), but a
   // binding can vanish (/unbind) between listing and picking — resume must
   // never run against an unbound thread (no WORK_ROOT fallback).

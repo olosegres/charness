@@ -394,9 +394,28 @@ describe('a startup window\'s prompts on every way out of it (review 19 #1)', ()
 
   it('an idle stop\'s held prompts go to the resume whatever the stop\'s end — also when it threw — and a conversation released during the stop starts nothing for them (review 19 nit 3)', () => {
     const suspend = getBody('async function suspendThreadSession(', 'const autoStopUnsupportedLoggedKeys');
-    assert.match(suspend, /\n  \} finally \{\n(?:\s*\/\/[^\n]*\n)*\s*rearmThreadIdleTimer\(key\);\n\s*await resumeForHeldPrompts\(key\);\n\s*\}\n\}/, 'after the transition, in a finally');
+    assert.match(suspend, /\} finally \{\n\s*startupPromptBuffer\.closeWindow\(kStr\);\n(?:\s*\/\/[^\n]*\n)*\s*await resumeForHeldPrompts\(key\);\n\s*\}\n\s*\}\);/, 'inside the stop\'s own transition, in the finally of the stop (review 20 nit 3)');
+    assert.match(suspend, /\} finally \{\n(?:\s*\/\/[^\n]*\n)*\s*rearmThreadIdleTimer\(key\);\n\s*\}\n\}/);
     const resume = getBody('async function resumeForHeldPrompts(', 'const autoStopUnsupportedLoggedKeys');
-    assert.match(resume, /if \(!startupPromptBuffer\.checkHasPrompts\(kStr\)\) return;\n\s*if \(getResumableSessionId\(key\) === null\) \{\n[^]*?startupPromptBuffer\.discardPrompts\(kStr\);\n\s*return;\n\s*\}\n\s*await ensureAgentSession\(key\);/);
+    assert.match(resume, /if \(!startupPromptBuffer\.checkHasPrompts\(kStr\)\) return;\n\s*if \(getResumableSessionId\(key\) === null\) \{\n[^]*?startupPromptBuffer\.discardPrompts\(kStr\);\n\s*return;\n\s*\}\n\s*await ensureAgentSessionNow\(key, \{\}\);/, 'the transition\'s own ensure: the queued one would wait for itself');
+  });
+
+  it('every start or resume a command makes runs as the conversation\'s one transition, so none shares a startup window with an ensure or a stop (review 20 nit 3)', () => {
+    assert.match(getBody('function runCommandSessionTransition<TResult>(', 'async function ensureAgentSessionNow('), /return sessionTransitions\.run\(keyToString\(key\), transition\);/);
+    const fresh = getBody("command('new', async", '//  /whoami /version /help /status');
+    assert.match(fresh, /const msg = await runCommandSessionTransition\(key, async \(\) => \{\n\s*await releaseThreadSession\(key\);\n\s*return startAgentSession\(key\);\n\s*\}\);/, '/new');
+    assert.match(getBody('async function handleAgentStart(', 'function handleStartCommand('), /: await runCommandSessionTransition\(key, async \(\) => \(getThreadAdapter\(key\)\.checkIsActive\(key\)\n\s*\? t\('agent\.already_active', \{ label: getThreadAdapter\(key\)\.label \}\)\n\s*: startAgentSession\(key, args\)\)\);/, 'a first /claude or /opencode, finding a session another trigger started meanwhile');
+    const wedge = getBody('async function handleNoResponseWithLocale(', '/**\n * @description Surface a logged-out');
+    assert.equal(wedge.match(/await runCommandSessionTransition\(key, async \(\) => \{/g)?.length, 2, 'the wedge recovery\'s fork and restart');
+    assert.equal(wedge.match(/startAgentSession\(/g)?.length, 2);
+    assert.match(getBody('async function applyClaudeBackendSwitch(', 'async function switchClaudeBackendNow('), /return runCommandSessionTransition\(key, \(\) => switchClaudeBackendNow\(key, target, label\)\);/, '/claude_mode');
+    const switchNow = getBody('async function switchClaudeBackendNow(', "command('claude_mode'");
+    assert.ok(switchNow.includes('if ((await resumeSleepingSession(key, sessionId, { isWithRecentContext: true })) === null) {'), 'its resume opens a window, as a wake\'s does');
+    assert.match(switchNow, /startupPromptBuffer\.discardBotPrompts\(keyToString\(key\)\);\n\s*\}\n\s*const msg = await startAgentSession\(key\);/, 'the fresh start takes the failed resume\'s window over');
+    assert.doesNotMatch(switchNow, /\.resumeSession\(/, 'no resume without a window');
+    assert.match(getBody('async function resumeSessionByIndex(', 'async function resumePickedSession('), /return runCommandSessionTransition\(key, \(\) => resumePickedSession\(key, sessionId\)\);/, '/resume\'s pick');
+    // Every start outside the ensure is one of those.
+    assert.equal(botSource.match(/startAgentSession\(key(?:, (?:options\.)?args)?\)/g)?.length, 7, 'the ensure\'s two, /new, the first /claude, the wedge recovery\'s two, /claude_mode\'s fallback');
   });
 
   it('a move\'s first prompt that reached no session tracks no continuation: nothing is reset, lifted or watched for a turn that never starts (review 19 nit 4)', () => {

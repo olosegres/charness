@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+**Starting, restarting or switching the agent while its process is still stopping or starting no longer risks a second agent process.**
+`/new`, a first `/claude` or `/opencode`, `/claude_mode`, a `/resume` pick and the bot's own recovery of a stuck session now wait for a start or stop already under way, like every other start. Before, one of them could run beside it, and a scheduled run or a retry that came in that moment could start the conversation a second time.
+
 **A message you send while the agent's process stops after a turn is followed up like any other: if the agent's turn on it ends without an answer, it is reminded at once, not an hour and a half later.**
 In a topic that shows answers and runs Claude per turn, the bot started watching such a message's turn only once its «your message is queued» notice had gone out. When the bot was busy sending elsewhere, the agent could have read the message and ended its turn by then, and the bot lost track of that turn: the request waited for the 90-minute backstop. Now the turn is watched the moment the message is queued.
 
