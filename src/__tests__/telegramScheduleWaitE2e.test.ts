@@ -42,7 +42,7 @@
  *     is counted while the notice is still held and reminded at once (the late watch was made in the next stop's window, named no
  *     process and waited for good); the step ends once the conversation sleeps again
  *   → per turn: an account picked while a turn works is applied by the per-turn stop at that turn's end, never by a re-spawn beside
- *     it: a message the stop holds reaches the next process, on the new account — once, both requests answered, no re-spawn
+ *     it: a message the stop holds reaches the next process, on the new account — once, its request answered, no re-spawn
  *   → per turn again: a one-shot fire resumes the sleeping conversation, and the CLI refuses the resume slowly; a message the operator
  *     sends meanwhile waits in the resume's window. The bot starts a fresh session instead, and the message reaches it in a turn of its
  *     own — no reminder of a request whose words the agent never got
@@ -743,9 +743,10 @@ describe('A request waits for its schedule in a Telegram topic end to end: built
         readFakeLog<FakeClaudeTurn>(fakeClaudeLogFileNames.turns).some((turn) => turn.issueKey === 'XB-32'));
       const heldRequestId = readFakeLog<FakeClaudeTurn>(fakeClaudeLogFileNames.turns).find((turn) => turn.issueKey === 'XB-32')?.requestId ?? '';
       assert.match(heldRequestId, /^req_/);
-      await getCharness().waitFor('both requests to be answered', bufferedFlowTimeoutMs, () =>
-        [heldRequestId, silentRequestId].every((requestId) => readClosedRequests().some((closed) => closed.id === requestId)));
-      for (const requestId of [heldRequestId, silentRequestId]) assert.equal(readClosedRequests().find((closed) => closed.id === requestId)?.closeReason, 'final');
+      await getCharness().waitFor('the held message\'s request to be answered', bufferedFlowTimeoutMs, () => readClosedRequests().some((closed) => closed.id === heldRequestId));
+      assert.equal(readClosedRequests().find((closed) => closed.id === heldRequestId)?.closeReason, 'final');
+      // One open request per requester: the operator's newer message replaced their silent one.
+      assert.equal(readClosedRequests().find((closed) => closed.id === silentRequestId)?.closeReason, 'superseded');
       assert.equal(getAgentPromptsWith('XB-32').length, 1, 'the held message is written once');
       assert.ok(getAgentPromptsWith(`[Reminder · request ${silentRequestId} is still open]`).length <= 1, 'at most one reminder for the silent turn');
       assert.equal(countOutputLines(respawnLine), respawnsBefore, 'no re-spawn: the stop ended the process, the resume took the new account');
