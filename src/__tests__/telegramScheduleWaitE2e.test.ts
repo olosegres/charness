@@ -41,6 +41,8 @@
  *     «queued» notice the Bot API holds until the next stop: it is watched before its replay, not after the notice — its silent turn
  *     is counted while the notice is still held and reminded at once (the late watch was made in the next stop's window, named no
  *     process and waited for good); the step ends once the conversation sleeps again
+ *   → per turn: an account picked while a turn works is applied by the per-turn stop at that turn's end, never by a re-spawn beside
+ *     it: a message the stop holds reaches the next process, on the new account — once, both requests answered, no re-spawn
  *   → per turn again: a one-shot fire resumes the sleeping conversation, and the CLI refuses the resume slowly; a message the operator
  *     sends meanwhile waits in the resume's window. The bot starts a fresh session instead, and the message reaches it in a turn of its
  *     own — no reminder of a request whose words the agent never got
@@ -710,6 +712,56 @@ describe('A request waits for its schedule in a Telegram topic end to end: built
     } finally {
       releaseNotice();
       fs.rmSync(exitFlushDelayPath, { force: true });
+    }
+  });
+
+  it('per-turn: an account picked while the turn works is applied by the stop at the turn\'s end, never by a re-spawn beside it — a message that stop holds reaches the next process, on the new account (review 22 #1)', async () => {
+    const topicKeyString = `${group.id}:${topicThreadId}`;
+    const stopLine = `[compact-on-idle] ${topicKeyString} stopping the idle process`;
+    const stoppedLine = `[compact-on-idle] ${topicKeyString} process stopped`;
+    const respawnLine = `[ClaudeJson] ${topicKeyString}: re-spawning under configDir=`;
+    const exitFlushDelayPath = path.join(getLayout().fakeStateDir, fakeClaudeExitFlushDelayFileName);
+    // Already per turn after the step before (which leaves the conversation asleep), still on the second account.
+    await topic.sendAndAwaitReply('/claude_mode per-turn', '🔁 Per-turn');
+    try {
+      fs.writeFileSync(exitFlushDelayPath, perTurnStopHoldMs.toString());
+      const stopsBefore = countOutputLines(stopLine);
+      const unfinishedStopsBefore = stopsBefore - countOutputLines(stoppedLine);
+      fakeTelegram.pushOperatorMessage(topicThreadId, 'XA-31 [fake:hold-silent-once] a turn the account changes under');
+      await getCharness().waitFor('the agent to work on it', agentTimeoutMs, () => readFakeLog<FakeClaudeTurn>(fakeClaudeLogFileNames.turns).some((turn) => turn.issueKey === 'XA-31'));
+      const silentRequestId = readFakeLog<FakeClaudeTurn>(fakeClaudeLogFileNames.turns).find((turn) => turn.issueKey === 'XA-31')?.requestId ?? '';
+      assert.match(silentRequestId, /^req_/);
+      // The process works: the pick waits for the turn's end.
+      await topic.sendAndAwaitReply('/accounts use default', 'Claude account for this topic: default');
+      const launchesBefore = getSessionLaunches(getLayout()).length;
+      const respawnsBefore = countOutputLines(respawnLine);
+      // The turn ends with no answer; the per-turn stop follows at once and holds its window open while the process exits.
+      fs.writeFileSync(path.join(getLayout().fakeStateDir, fakeClaudeHoldReleaseFileName), '');
+      await getCharness().waitFor('the per-turn stop after the turn', bufferedFlowTimeoutMs, () => countOutputLines(stopLine) > stopsBefore);
+      fakeTelegram.pushOperatorMessage(topicThreadId, 'XB-32 [fake:answer] a message the stop holds');
+      await getCharness().waitFor('the held message to reach the agent', bufferedFlowTimeoutMs, () =>
+        readFakeLog<FakeClaudeTurn>(fakeClaudeLogFileNames.turns).some((turn) => turn.issueKey === 'XB-32'));
+      const heldRequestId = readFakeLog<FakeClaudeTurn>(fakeClaudeLogFileNames.turns).find((turn) => turn.issueKey === 'XB-32')?.requestId ?? '';
+      assert.match(heldRequestId, /^req_/);
+      await getCharness().waitFor('both requests to be answered', bufferedFlowTimeoutMs, () =>
+        [heldRequestId, silentRequestId].every((requestId) => readClosedRequests().some((closed) => closed.id === requestId)));
+      for (const requestId of [heldRequestId, silentRequestId]) assert.equal(readClosedRequests().find((closed) => closed.id === requestId)?.closeReason, 'final');
+      assert.equal(getAgentPromptsWith('XB-32').length, 1, 'the held message is written once');
+      assert.ok(getAgentPromptsWith(`[Reminder · request ${silentRequestId} is still open]`).length <= 1, 'at most one reminder for the silent turn');
+      assert.equal(countOutputLines(respawnLine), respawnsBefore, 'no re-spawn: the stop ended the process, the resume took the new account');
+      const launches = getSessionLaunches(getLayout()).slice(launchesBefore);
+      assert.ok(launches.length >= 1, 'the next turn runs in a new process');
+      assert.deepEqual(launches.map((launch) => launch.claudeConfigDir), launches.map(() => null), 'every process since the pick runs on the account picked (the first one: no directory of its own)');
+      assert.deepEqual(launches.map((launch) => launch.overlapsPid ?? null), launches.map(() => null), 'none started while another process of the conversation still ran');
+      assert.ok(!topic.listMessages().some((message) => message.text.includes('did not reach it')), 'nothing was dropped');
+      // The next step starts from a conversation that sleeps.
+      await getCharness().waitFor('the conversation to sleep after the answers', bufferedFlowTimeoutMs, () => {
+        const lastLaunch = getSessionLaunches(getLayout()).at(-1);
+        return countOutputLines(stopLine) - countOutputLines(stoppedLine) === unfinishedStopsBefore && (lastLaunch === undefined || !checkIsProcessAlive(lastLaunch.pid));
+      });
+    } finally {
+      fs.rmSync(exitFlushDelayPath, { force: true });
+      fs.rmSync(path.join(getLayout().fakeStateDir, fakeClaudeHoldReleaseFileName), { force: true });
     }
   });
 
