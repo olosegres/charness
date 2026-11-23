@@ -302,6 +302,7 @@ describe('a request that waits for its schedule (scheduleWait) and a scheduled r
   });
 
   it('turn end: a turn that ends with no answer while the request owes one is SILENT whatever is armed — a watch never leaves a requester unanswered', () => {
+    // The README's rule table, row 10 (and rows 2 and 5, whose reminder's turn it is): owed with no silent count pending as well.
     const owed: Array<[string, OpenRequestState]> = [
       ['a person\'s request never answered', createRequest()],
       ['a person\'s words not answered yet', answeredRequest({ isPersonInputUnanswered: true })],
