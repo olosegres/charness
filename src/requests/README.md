@@ -41,8 +41,7 @@ Numeric bounds are named constants in the files below; this README says only wha
 - **Alerts are durable.** A request's alert handle is stored with it. When the request closes by any path, the
   handle joins `unreleasedRequestAlerts` in the close's own save and leaves only once `releaseAlert`
   succeeded; `load` releases every leftover, so a crash never leaves an alert pinned for good.
-- **The prompt is kept** (`createPrompt`) until the agent took it in (`isPromptTakenIn`, read only on a turn end the bot does not hold:
-  § Turn starts), so a failed post, a
+- **The prompt is kept** (`createPrompt`) until the agent took it in (`isPromptTakenIn`), so a failed post, a
   restart or a limit wait re-delivers the real prompt — a bare reminder would name a request the agent never
   read. It is never written to the closed history. A prompt can wait for hours before it is delivered, so a
   connector whose prompt states something that changes meanwhile registers ONE refresher
@@ -198,7 +197,8 @@ written at once and joins the start's turn.
 Where a watch is settled or ended, and when that runs relative to the prompt write and to a buffered replay. Only the first four DECIDE
 a turn's end, all on `getWatchedTurnState`, which reads `ended` only for an active, idle session that nothing blocks (a start or its
 replay, a pending question, a compaction, an armed retry or limit wait, an API error still in hand, a re-spawn under way or about to
-start, a wedge recovery) and that took the turn's prompt in — so none of them decides a turn that has not started:
+start, a wedge recovery) and that took the turn's prompt in — a message queued behind a turn that ended in an error stays unread until
+its own turn (events-list item 1) — so none of them decides a turn that has not started:
 
 1. The settle at the write (`forwardPromptToLiveAgent`): synchronously right before the adapter write (after an immediate forward's wake
    and the adopted-replay wait in `forwardPromptToAgent`), its reminders after the write. At a replayed write, and at a prompt that
@@ -212,9 +212,9 @@ start, a wedge recovery) and that took the turn's prompt in — so none of them 
    the ensure, behind the stop). A turn end held by an API error the bot still handles (`checkIsApiErrorInHandling`) or by an armed
    retry, one during a replay, and one with a written prompt not yet read (`hasUnconsumedInput`) read `running`: nothing is decided.
 4. The poll (`pollWatchedTurn`, every 10 s): between writes, on its own probe and the same rule; during a start or a replay every watch
-   reads `running`. Its R21 write waits for a turn end that is not held (any hold, a pending question included, ends in such a turn end,
-   or in a stop that drops the watch with the prompt unread), and it re-checks its watch after that write, so a watch a settle took
-   meanwhile is not decided twice. What it decides is handed to a post in flight, like the turn end's.
+   reads `running`. Its R21 write reads what the backend still lists as unread, the turn end held or not (a message queued behind a failed
+   turn stays listed until its own turn echoes it: events-list item 1), and it re-checks its watch after that write, so a watch a settle
+   took meanwhile is not decided twice. What it decides is handed to a post in flight, like the turn end's.
 5. `sessionGone` (the poll only; every settle leaves such a watch): dropped without a decision when the session is inactive and nothing
    blocks it — never during a start or a replay, which block it.
 6. The stale drop (the poll only): a `running` watch whose session is idle, unblocked and not busy for the whole backstop window is handed
@@ -225,44 +225,76 @@ start, a wedge recovery) and that took the turn's prompt in — so none of them 
 
 A merge (`trackForwardedTurn`, `trackContinuationTurn`) replaces a watch by its union with the new forward and decides nothing.
 
-What can run between a json-stream `turnEnded` and the next write, checked against the turn-end settle (item 3):
+What can run between a json-stream `turnEnded` and the next write, in the order it can happen, checked against the turn-end settle
+(item 3). In the `result`'s own `applyTurnEnd`, before `turnEnded`:
 
-1. The API error the turn ended on (`apiError`, emitted in the same `applyTurnEnd` right before `turnEnded`, so `handleApiError`'s
-   synchronous part runs first):
+1. **The unconsumed inputs are re-based:** every message written behind the turn waits for the next turn from this end, and one the turn
+   took in in a shape nothing matches goes. A turn that ended in an ERROR result keeps its queue too, each entry marked
+   `isQueuedBehindFailedTurn`. Measured on CLI 2.1.330 (`-p`, stream-json, `--replay-user-messages`; a second message written 0.3 s after
+   the first; the first turn failing on an unknown `--model`, on an HTTP 400, and on an HTTP 429 after its ten retries, the last two from
+   a loopback API through `ANTHROPIC_BASE_URL`): the CLI wrote a new `system/init` 0.07–0.6 s after the error `result` and ran the queued
+   message as its own turn. So such a message's watch reads `running` (unconsumed) until its own turn took it in, the per-turn stop waits
+   for that turn (`checkIsWorking`), and R21 marks the prompt only once it is echoed. One never echoed holds nothing past the grace (30 s).
+   Only a deferred account switch looks past these entries (item 9).
+2. **The API error the turn ended on** (`apiError`, emitted there too, so `handleApiError`'s synchronous part runs before `turnEnded`):
    - a branch that arms a retry (a transient error, a usage limit with «wait for reset» on, an unconfirmed limit's probe, a repeat while
      one is armed): its timer holds the turn end, and the «continue» merges into the turn (row 14);
    - a branch that arms nothing: held by `checkIsApiErrorInHandling` until its stop (`stopWakingForLimitWait` drops the watch), its move
      (the account move's «continue» merges into the held turn) or its wait (`waitForClaudeAccount` stops the waking) has landed. A
      handling that stops nothing (the logged-out notice of a backend without accounts, a limit answer that could not be delivered)
-     leaves the watch to the poll after it, as before the turn-end settle;
+     leaves the watch to the poll after it;
    - the usage limit's give-up (its attempts spent): `stopWakingForLimitWait` drops the watch synchronously, before the settle;
-   - a transient error's give-up: nothing is armed or stopped, so the turn is decided silent at once, as the poll decided it a tick later
-     before the turn-end settle; its reminder starts a new retry cycle if the error persists;
-   - the error result also empties the adapter's list of unconsumed inputs, so a prompt queued behind the failed turn reads as taken in.
-     The settle decides nothing while the error is in hand, and R21 marks nothing on a held turn end (`markPromptTakenIn`, the poll's
-     and the settle's): a prompt is marked once its turn runs on unheld and has taken it in, so after a limit wait the resume posts a
-     request prompt the failed turn may have dropped, and a stop that drops the watch leaves it unread.
-2. A post waiting for the turn (`postToSession` in `waitForIdle`, in flight): the settle's reminders are handed to it; its prompt is
+   - a transient error's give-up, and a second `conversationTail` error's: nothing is armed or stopped, so the turn that failed is decided
+     silent at once; a message queued behind it waits for its own turn (item 1);
+   - an error text the bot does not classify (`classifyAgentApiError` → null: the adapter posts «Claude error: …» and emits no `apiError`):
+     nothing holds the turn end; the failed turn is decided like any ended turn, a message queued behind it as in item 1;
+   - our own interrupt's error result (`/esc` and its aliases): swallowed, no `apiError`; the interrupt has closed the conversation's
+     requests and dropped their watches (`cancelConversation`).
+3. **A deferred account switch that is due is released** (`isConfigDirSwitchReleased`), still before `turnEnded`: item 9.
+
+In the `turnEnded` dispatch, in this order:
+
+4. **The todo list's standalone reminder** (`noteAdapterTurnEnd`, called first): it reads the same probe, so the same holds apply. When
+   due, it is written in that same synchronous call, through the write choke point. That write's settle then decides the ended watches
+   (settle-list item 1) and hands their reminders to a post in flight, else writes them right after the todo prompt; the turn-end settle
+   that follows finds nothing new.
+5. **The per-turn stop** (`handleAgentTurnEnded`): queued before the settle unless the process still works (a background task, a task's
+   turn on its way, a message queued behind the turn: item 1, a deferred compaction). Its transition starts in a later microtask, so the
+   settle reads the session active and idle; a reminder no post takes resumes the session through the ensure, behind the stop, and a
+   waiting post's second ensure queues behind it too.
+6. **The turn-end settle** (settle-list item 3): its reminders go to a post in flight, else out at once.
+
+After `turnEnded`:
+
+7. **A post waiting for the turn** (`postToSession` in `waitForIdle`, in flight): the settle's reminders are handed to it; its prompt is
    written first, its caller watches that turn (`afterForward`), then the reminders follow — on both lifecycles.
-3. The per-turn stop: queued in the same tick before the settle, its transition starts in a later microtask, so the settle reads the
-   session active and idle; a reminder no post takes resumes the session through the ensure, behind the stop, and a waiting post's
-   second ensure queues behind it too.
-4. The poll: the settle drops the ended watches synchronously, the poll re-checks its watch after its await, and what it decides later
-   is handed to a post in flight as well.
-5. A buffered replay: a message that arrived during the stop's window is replayed after the resume, and the probe reads the replay as
-   the start (`checkIsReplaying`): nothing is decided.
-6. The todo list's standalone reminder (`noteAdapterTurnEnd`, the same `turnEnded`): it reads the same probe, so the same holds apply;
-   written, it is a write like any other (item 1): its settle finds nothing new, and a settled reminder follows it.
-7. A deferred compaction (`compact_conversation` armed in the turn, polled every 3 s): the turn's end is decided at `turnEnded`, before
-   the compaction starts; a reminder starts a new turn and the compaction waits for that turn's end (the poll used to come after the
-   compaction had begun, so the reminder came after it). Nothing is lost.
-8. A deferred account switch (`applyPendingConfigDirSwitch`, right after `turnEnded`; the re-spawn starts one timer tick later): the
-   adapter reads a re-spawn about to start from that `turnEnded` on and one under way until the new process is spawned
-   (`checkIsRespawnPending`, json-stream; a re-spawn that fails is over), and the probe holds the turn end meanwhile — the process down
-   for it reads `running`, not `sessionGone`. So the settle and the poll decide nothing during the re-spawn, and the reminder, decided
-   after it, goes into the new process; written during it, its ensure would have resumed the conversation a second time beside the
-   re-spawn. The hold covers the engine's own wake-ups only: a person's message or a post that lands in that window meets the re-spawn
-   as before.
+8. **The poll** (10 s): the settle drops the ended watches synchronously, the poll re-checks its watch after its await, and what it
+   decides later is handed to a post in flight as well.
+9. **A deferred account switch** (`applyPendingConfigDirSwitch`, right after `turnEnded`; the re-spawn starts one timer tick later):
+   - the adapter reads a re-spawn about to start from its release (item 3, before `turnEnded`) and one under way until the new process is
+     spawned (`checkIsRespawnPending`, json-stream); the release ends with the apply: a re-spawn, a no-op, or deferred again by a write in
+     `turnEnded`'s own handlers (item 4). A re-spawn that fails is over;
+   - a switch merely pending on a process that stops working with no turn end (a task hold lapsing, an input past its grace) is no
+     re-spawn coming and holds nothing;
+   - the probe holds the turn end meanwhile, and the process down for the re-spawn reads `running`, not `sessionGone`. So the settle and
+     the poll decide nothing during it, and the reminder, decided after it, goes into the new process; written during it, its ensure
+     would have resumed the conversation a second time beside the re-spawn. The hold covers the engine's own wake-ups only: a person's
+     message or a post that lands in that window meets the re-spawn as before;
+   - messages queued behind a turn that ended in an error result do not defer the switch: after a limit the switch is what lets them run,
+     and a re-spawn that ends them leaves their requests' prompts unread (R21), so the next wake-up posts them again.
+10. **Turns the CLI starts by itself:**
+    - a finished background task's own turn: its `task_notification` came in the turn, and the CLI starts that turn ~0.1 s after the
+      `result`. The adapter reports it on its way until its `init` (`checkIsTurnOnItsWay`, bounded by `notificationTurnGraceMs`), and the
+      probe reads the session busy: a watched turn runs on into it and is decided at its end, so an answer the agent sends there counts;
+    - a session `CronCreate` job's firing (`command_lifecycle` `started`), whenever it comes: one at a turn's end opens after the settle
+      decided the ended watches. It is no request's turn;
+    - the busy time of both is no unwatched request's activity (`checkIsCliOwnTurn`, the probe's `isCliOwnTurn`; row 18). A turn the CLI
+      opens with a message of ours listed is ours, and so is one that echoes our message.
+11. **A buffered replay:** a message that arrived during the stop's window is replayed after the resume, and the probe reads the replay as
+    the start (`checkIsReplaying`): nothing is decided.
+12. **A deferred compaction** (`compact_conversation` armed in the turn, polled every 3 s): the turn's end is decided at `turnEnded`, before
+    the compaction starts; a reminder starts a new turn and the compaction waits for that turn's end. Nothing is lost.
+13. **Any other write** (a person's message, a fire, a reminder): the write choke point's settle (settle-list item 1).
 
 ## Wake-ups (`wakeUpRules.ts` = pure decisions, `wakeUpEngine.ts` = timers)
 
@@ -349,7 +381,7 @@ What can run between a json-stream `turnEnded` and the next write, checked again
   | 15 | bot «continue» | tracking lost | the nudge starts a plain turn. Its end reads the persisted request: owed → silent as in row 10; the scheduler's request never answered → closed silently; else row 8 | as row 9 |
   | 16 | bot «continue» | silent count pending | an API-error retry keeps the count (row 10 applies at the end); `isCountersReset` — the end of a limit wait, the account-wait resume, a limit fallback switch WITHIN its backend (another Claude account or model, another OpenCode model) — zeroes the count, the wake count and the follow-up and lifts the limit stop, but never the person's flag: what is owed stays owed. A switch ACROSS backends (the limit fallback onto the other backend, the operator's bridged manual switch) resets too, but finds no request: `switchThreadAdapter` has already closed every open one `cancelled` (`cancelConversation`), so its context bridge continues none of them; an unbridged switch has no first prompt and tracks no continuation (row 18) | owed → taken back |
   | 17 | limit / account resume (or a limit fallback switch WITHIN its backend; one across backends has closed the requests and sends the context bridge instead) that re-posts the prompts the session never took in — a mention that arrived during the wait | tracked, decided PER REQUEST (`trackContinuationTurn`) | a request whose own prompt rode the message (`getPromptNotTakenIn`) is row 1: its words are owed, marked at once. Every other open request gets the plain «continue» of row 14 — an answered hand-over waiting on its watch stays quiet, it is never marked owed because another request's prompt was re-posted | as the row each request falls into |
-  | 18 | turns the engine does not track: a topic's lost-work auto-resume, compaction, a slash command forwarded to the agent in a view with requests (it opens no request), the held prompts replayed after a session start, a tracker fire that rides no request (`requestId` null), the first turn of an UNBRIDGED manual backend switch (the operator's text goes in as the session start's `args`, no continuation is tracked), the answer-tail reminder (only with no open request), a late answer to a question the bot set aside (`deliverLateAnswerPrompt`: the owner's pick, written as their message but opening no request), the todo list's standalone reminder (`postTodoReminder`: a technical prompt into a live idle session, in a topic and in an issue — a `progress` the agent sends in that turn clears the flag and the count but schedules no follow-up) | no turn watched | no turn end is decided | their busy time counts as the activity of a request under the sweep's rule (row 2) — bounded by one such turn; nothing here makes a request owed or answered |
+  | 18 | turns the engine does not track: a topic's lost-work auto-resume, compaction, a slash command forwarded to the agent in a view with requests (it opens no request), the held prompts replayed after a session start, a tracker fire that rides no request (`requestId` null), the first turn of an UNBRIDGED manual backend switch (the operator's text goes in as the session start's `args`, no continuation is tracked), the answer-tail reminder (only with no open request), a late answer to a question the bot set aside (`deliverLateAnswerPrompt`: the owner's pick, written as their message but opening no request), the todo list's standalone reminder (`postTodoReminder`: a technical prompt into a live idle session, in a topic and in an issue — a `progress` the agent sends in that turn clears the flag and the count but schedules no follow-up); and the turns the CLI starts by itself, which no write of the bot started — a finished background task's own turn, a session `CronCreate` job's firing (§ Turn starts, events-list item 10) | no turn watched | no turn end is decided | the busy time of a turn the bot wrote counts as the activity of a request under the sweep's rule (row 2), bounded by one such turn; the CLI's own turns count for no request (`isCliOwnTurn`): a job that loops would otherwise push an owed request's backstop ahead for as long as it loops. Nothing here makes a request owed or answered |
   | 19 | the process ended with the agent's OWN work pending (a background build, a scheduled job it ran: lost work), between turns | tracking lost | no turn end is decided | a BOOT wakes nobody under a passing watch, but this loss is a different event: the request is woken ONCE with the lost-work note whatever is armed (`scheduleRestartWake(key, { isLostWork: true })`, a boot wake already waiting is turned into one; a topic resumes on it the same way). The wake's turn under `watching` with nothing owed is row 8 → quiet, and the agent is ASKED for little: for a request a passing watch holds that owes nobody an answer the wake is worded like the fire header — the reminder says the watch is still armed and nothing the requester wrote is waiting for an answer, so answer only with what the requester must know and otherwise continue without a comment (`WakeUpMessage.isAnswerOptional`), and the lost-work note says the same (`buildLostWorkNote`, telling `watchHeld`); a request that owes an answer, or whose prompt the agent never read, keeps the plain «answer it», and a forward carrying several requests is optional only when every one of them is. The lost-work note riding a TRACKER FIRE, when the request it rides owes nothing or none is open, claims no watch — the fire may be a check's failure, a one-shot job's, or ride no request at all — and defers to the run's header, which already says when to answer: tell the requester about the loss only if it changes what they wait for (`PromptDeliveryOptions.lostWorkTelling` `runHeader`). Only the request's own next step keeps the wake away: a post retry, or a follow-up that can fire — not one a passing watch holds, which never fires. A lost-work wake that wakes nobody says so in the log. The lost-work cooldown (10 min) and the wake cap stay |
 
   A follow-up pending while a passing watch holds the request (a note under `armed`, then the check passed again; a job armed after the
@@ -411,7 +443,7 @@ What can run between a json-stream `turnEnded` and the next write, checked again
   | | `createRequest` (initial 0) | the new request | No |
   | `lastTurnActivityAt` | `recordTurnActivity` from `trackForwardedTurn` (forced, keyed on the watch it just stored) | the tracked request; a «continue» and a restart wake that carried several requests track each of them; NOT when the watch is another job's fire (`isRequestJob` false: its own forward or a «continue» of it) | **Yes, by design**: one session turn, every request in it is watched, and its end is decided for each. A ridden request is never written by another job's fire or its «continue» |
   | | `recordTurnActivity` from a busy poll of a watched turn | the watched request itself, unless the watch is another job's fire (`isRequestJob` false: the busy time is that job's) | No — a write first settles the watches whose turn ended (§ Turn starts), so a watch present belongs to the current busy period, a prompt joined into it included (json-stream and OpenCode queue another request's prompt into a running turn, and the earlier watch stays `running` on the unconsumed input through the next CLI turn; the tmux Claude's interrupt keeps it too): the busy time it records is that period's, and its end is decided at the same turn's end |
-  | | `recordTurnActivity` from the sweep's busy branch | the unwatched request | **Narrowed** (rows 2, 11): recorded only while NO turn is watched in the conversation, whatever the request owes — then the busy session is the request's own lost turn (or one untracked turn of row 18). With a turn watched the busy time is that turn's: recorded, it would push the backstop of a request whose watch fired and nobody handled (`armed`, or `none` after a dropped watch: no follow-up, the backstop is its only wake). A held request ignores the backstop anyway, and a due follow-up is woken by `nextWakeAt`, which activity does not move |
+  | | `recordTurnActivity` from the sweep's busy branch | the unwatched request | **Narrowed** (rows 2, 11): recorded only while NO turn is watched in the conversation, whatever the request owes, AND the running turn is one the bot wrote (not `isCliOwnTurn`: a finished task's turn or a session job's, row 18) — then the busy session is the request's own lost turn (or one untracked turn of row 18). With a turn watched the busy time is that turn's: recorded, it would push the backstop of a request whose watch fired and nobody handled (`armed`, or `none` after a dropped watch: no follow-up, the backstop is its only wake). A held request ignores the backstop anyway, and a due follow-up is woken by `nextWakeAt`, which activity does not move |
   | | `decideTurnEnd` / `decideUnwatchedRequest` / `decideRestartWake` updates, applied by `applyDecision` (a settle's by `persistDecision`, its reminder written after the caller's write) | the decided request; `decideTurnEnd` only at the end of a turn that STARTED — it runs on a watch that reads `ended`, and a turn whose prompt still waits in the startup buffer or is being replayed reads `running` (`checkIsReplaying`, § Turn starts); the no-answer quiet end of another job's fire writes nothing (`nextWakeAt` stays too) | No |
   | | `wakeAfterRestart` (writes `decision.update` itself; only its alert goes through `applyDecision`) | each request it wakes, for itself — with `isLostWork` (row 19) also a request a passing watch holds, still only for itself | No |
 
