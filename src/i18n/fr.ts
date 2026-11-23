@@ -266,6 +266,7 @@ export const frDict: Record<string, string> = {
   'agent.starting': 'Démarrage de {label} dans `{subdir}`…',
   'agent.queued_starting': '⏳ {label} démarre encore — votre message est en file d\'attente et sera envoyé dès qu\'il sera prêt.',
   'agent.queued_prompt_dropped': '⚠️ Un message envoyé pendant le démarrage de {label} ne lui est pas parvenu. Renvoyez-le.',
+  'agent.queued_prompt_dropped_by_command': '⚠️ Un message envoyé pendant que cette conversation se terminait ou changeait n\'est pas parvenu à l\'agent. Renvoyez-le si vous en avez encore besoin.',
   'agent.question_hint': 'ℹ️ Répondez avec le numéro d\'option (ex. 1) ou y/n. Aussi : /up /down pour naviguer, /enter pour confirmer, /c pour annuler.',
   'agent.start_failed': 'Échec du démarrage de {label} : {error}',
   'agent.no_response': '⚠️ L’agent a accepté votre demande mais n’a jamais commencé à répondre — la session est peut-être bloquée. Renvoyez-la, ou /new pour une nouvelle session.',

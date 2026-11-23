@@ -130,6 +130,8 @@ const watchCronIntervalMs = 60 * msPerSecond;
 const checkRunTimeoutMs = 2 * watchCronIntervalMs;
 /** How long the fake process takes to exit when the per-turn stop asks it to: the stop's window stays open that long. */
 const perTurnStopHoldMs = 8 * msPerSecond;
+/** What a person is told when a command that ends or replaces the conversation dropped their message (not «while it was starting»). */
+const endingCommandDropLine = 'while this conversation was being ended or switched did not reach the agent';
 /** A buffered message's way to its answer: the stop, the resume, the held turn, the stop again, the reminder's resume and turn. */
 const bufferedFlowTimeoutMs = 3 * 60 * msPerSecond;
 /** Past a job's own instant its fire's post has started (the engine's timer delivers at once): a post behind a running turn waits. */
@@ -791,7 +793,7 @@ describe('A request waits for its schedule in a Telegram topic end to end: built
       await getCharness().waitFor('the per-turn stop after the warm-up turn', bufferedFlowTimeoutMs, () => countOutputLines(stopLine) > stopsBefore);
       const stoppedBefore = countOutputLines(stoppedLine);
       const queuedBefore = countTopicMessages('your message is queued');
-      const droppedBefore = countTopicMessages('did not reach it. Send it again.');
+      const droppedBefore = countTopicMessages(endingCommandDropLine);
       const openBefore = new Set(Object.values(readState().openRequests ?? {}).map((open) => open.id));
       fakeTelegram.pushOperatorMessage(topicThreadId, 'XF-36 [fake:answer] a message the stop holds');
       await getCharness().waitFor('the message to be queued behind the stop', replyTimeoutMs, () => countTopicMessages('your message is queued') > queuedBefore);
@@ -801,7 +803,7 @@ describe('A request waits for its schedule in a Telegram topic end to end: built
       const launchesBefore = getSessionLaunches(getLayout()).length;
       // /quit queues behind the stop, marked as ending the conversation.
       fakeTelegram.pushOperatorMessage(topicThreadId, '/quit');
-      await getCharness().waitFor('the operator to be told the message did not reach the agent', bufferedFlowTimeoutMs, () => countTopicMessages('did not reach it. Send it again.') > droppedBefore);
+      await getCharness().waitFor('the operator to be told the message did not reach the agent', bufferedFlowTimeoutMs, () => countTopicMessages(endingCommandDropLine) > droppedBefore);
       await getCharness().waitFor('/quit to release the conversation', replyTimeoutMs, () => countTopicMessages('The sleeping session was released') > 0);
       assert.deepEqual(getSessionLaunches(getLayout()).slice(launchesBefore), [], 'nothing was resumed or started for it');
       assert.deepEqual(getAgentPromptsWith('XF-36'), [], 'the agent never got it');

@@ -266,6 +266,7 @@ export const jaDict: Record<string, string> = {
   'agent.starting': '`{subdir}` で {label} を起動中…',
   'agent.queued_starting': '⏳ {label} はまだ起動中 — メッセージはキューに入り、準備完了次第送信されます。',
   'agent.queued_prompt_dropped': '⚠️ {label} の起動中に送ったメッセージは届きませんでした。もう一度送ってください。',
+  'agent.queued_prompt_dropped_by_command': '⚠️ この会話の終了または切り替え中に送ったメッセージはエージェントに届きませんでした。まだ必要ならもう一度送ってください。',
   'agent.question_hint': 'ℹ️ オプション番号（例: 1）または y/n で返答してください。他: /up /down で移動、/enter で確定、/c でキャンセル。',
   'agent.start_failed': '{label} の起動に失敗: {error}',
   'agent.no_response': '⚠️ エージェントはリクエストを受け付けましたが、応答を開始しませんでした。セッションが停止している可能性があります。もう一度送信するか、/new で新しいセッションを開始してください。',

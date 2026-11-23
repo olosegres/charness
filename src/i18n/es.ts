@@ -266,6 +266,7 @@ export const esDict: Record<string, string> = {
   'agent.starting': 'Iniciando {label} en `{subdir}`…',
   'agent.queued_starting': '⏳ {label} aún está iniciando — tu mensaje está en cola y se enviará cuando esté listo.',
   'agent.queued_prompt_dropped': '⚠️ Un mensaje que enviaste mientras {label} se iniciaba no le llegó. Envíalo de nuevo.',
+  'agent.queued_prompt_dropped_by_command': '⚠️ Un mensaje que enviaste mientras esta conversación se cerraba o se cambiaba no llegó al agente. Envíalo de nuevo si aún lo necesitas.',
   'agent.question_hint': 'ℹ️ Responde con el número de opción (ej. 1) o y/n. También: /up /down para mover, /enter para confirmar, /c para cancelar.',
   'agent.start_failed': 'Error al iniciar {label}: {error}',
   'agent.no_response': '⚠️ El agente aceptó tu solicitud pero no empezó a responder: puede que la sesión esté bloqueada. Vuelve a enviarla o usa /new para una sesión nueva.',

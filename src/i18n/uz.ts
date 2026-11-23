@@ -266,6 +266,7 @@ export const uzDict: Record<string, string> = {
   'agent.starting': '`{subdir}` da {label} boshlanmoqda…',
   'agent.queued_starting': '⏳ {label} hali boshlanmoqda — xabarizingiz navbatda va tayyor bo‘lgach yuboriladi.',
   'agent.queued_prompt_dropped': '⚠️ {label} ishga tushayotganda yuborgan xabaringiz unga yetib bormadi. Uni qayta yuboring.',
+  'agent.queued_prompt_dropped_by_command': '⚠️ Bu suhbat yakunlanayotgan yoki almashtirilayotgan paytda yuborgan xabaringiz agentga yetib bormadi. Hali kerak bo‘lsa, uni qayta yuboring.',
   'agent.question_hint': 'ℹ️ variant raqami bilan javob bering (masalan 1) yoki y/n. Shuningdek: /up /down harakat, /enter tasdiqlash, /c bekor qilish.',
   'agent.start_failed': '{label} ni boshlab bo‘lmadi: {error}',
   'agent.no_response': '⚠️ Agent so‘rovingizni qabul qildi, lekin javob berishni boshlamadi — sessiya qotib qolgan bo‘lishi mumkin. Qayta yuboring yoki yangi sessiya uchun /new.',

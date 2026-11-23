@@ -266,6 +266,7 @@ export const deDict: Record<string, string> = {
   'agent.starting': 'Starte {label} in `{subdir}`…',
   'agent.queued_starting': '⏳ {label} startet noch — deine Nachricht ist in der Warteschlange und wird gesendet, sobald der Agent bereit ist.',
   'agent.queued_prompt_dropped': '⚠️ Eine Nachricht, die du gesendet hast, während {label} startete, hat ihn nicht erreicht. Sende sie noch einmal.',
+  'agent.queued_prompt_dropped_by_command': '⚠️ Eine Nachricht, die du gesendet hast, während dieses Gespräch beendet oder gewechselt wurde, hat den Agenten nicht erreicht. Sende sie noch einmal, wenn du sie noch brauchst.',
   'agent.question_hint': 'ℹ️ Antworte mit der Optionsnummer (z.B. 1) oder y/n. Auch: /up /down zum Bewegen, /enter zum Bestätigen, /c zum Abbrechen.',
   'agent.start_failed': '{label} konnte nicht gestartet werden: {error}',
   'agent.no_response': '⚠️ Der Agent hat deine Anfrage angenommen, aber nicht begonnen zu antworten – die Sitzung hängt möglicherweise. Sende sie erneut oder /new für eine neue Sitzung.',

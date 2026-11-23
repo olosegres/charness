@@ -266,6 +266,7 @@ export const ptDict: Record<string, string> = {
   'agent.starting': 'A iniciar {label} em `{subdir}`…',
   'agent.queued_starting': '⏳ {label} ainda está a iniciar — a tua mensagem está na fila e será enviada quando estiver pronto.',
   'agent.queued_prompt_dropped': '⚠️ Uma mensagem que enviaste enquanto {label} estava a iniciar não lhe chegou. Envia-a de novo.',
+  'agent.queued_prompt_dropped_by_command': '⚠️ Uma mensagem que enviaste enquanto esta conversa estava a ser terminada ou trocada não chegou ao agente. Envia-a de novo se ainda precisares dela.',
   'agent.question_hint': 'ℹ️ Responde com o número da opção (ex. 1) ou y/n. Também: /up /down para mover, /enter para confirmar, /c para cancelar.',
   'agent.start_failed': 'Falha ao iniciar {label}: {error}',
   'agent.no_response': '⚠️ O agente aceitou seu pedido mas não começou a responder — a sessão pode estar travada. Envie novamente ou use /new para uma sessão nova.',

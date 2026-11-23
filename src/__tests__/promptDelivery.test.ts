@@ -540,6 +540,13 @@ describe('a startup window\'s prompts on every way out of it (review 19 #1)', ()
     assert.match(getBody('const promptDeliveryDeps: PromptDeliveryDeps = {', 'function checkIsAcceptingInput('), /checkIsSessionActive: \(key\) => checkIsAcceptingInput\(key\),/, 'a scheduled run, a tracker post, a nudge, a move\'s first prompt');
   });
 
+  it('a person whose message an ending command dropped is told the conversation was being ended or switched, not that the agent was starting — read at the drop, while the command holds the conversation (review 24 nit 5)', () => {
+    const settle = getBody('function createPersonBufferedSettle(', 'async function reportDroppedPersonPrompt(');
+    assert.match(settle, /if \(outcome !== 'dropped'\) return;\n\s*const isDroppedForEndingCommand = conversationEndings\.checkIsEnding\(keyToString\(key\)\);\n\s*void withThreadLocale\(key, \(\) => reportDroppedPersonPrompt\(key, requestId, isDroppedForEndingCommand\)\)/, 'read in the drop\'s own tick: the report awaits before it posts, and the hold may be gone by then');
+    const report = getBody('async function reportDroppedPersonPrompt(', '/**\n * @description Deliver a LATE ANSWER');
+    assert.match(report, /isDroppedForEndingCommand\n\s*\? t\('agent\.queued_prompt_dropped_by_command'\)\n\s*: t\('agent\.queued_prompt_dropped', \{ label: getThreadAdapter\(key\)\.label \}\)/);
+  });
+
   it('a move\'s first prompt that reached no session tracks no continuation: nothing is reset, lifted or watched for a turn that never starts (review 19 nit 4)', () => {
     const resume = getBody('async function resumeTopicOnNewSession(', 'function getTopicBackendFamily(');
     assert.match(resume, /const delivery = await deliverPromptOrBuffer\(key, prompt\.text, \(outcome\) => \{\n\s*if \(outcome === 'replayed'\) \{\n\s*trackContinuation\(\)\.catch\(/, 'a buffered first prompt is tracked at its replay, and only then (review 20 #1)');
@@ -551,7 +558,7 @@ describe('a startup window\'s prompts on every way out of it (review 19 #1)', ()
     const settle = getBody('function createPersonBufferedSettle(', 'async function deliverLateAnswerPrompt(');
     assert.match(settle, /if \(outcome !== 'dropped'\) return;/);
     assert.ok(settle.includes("await settleTopicRequestAfterDelivery(key, { requestId }, 'noSession');"), 'closed `cancelled`, like a prompt that found no session');
-    assert.ok(settle.includes("await replyToThread(key, t('agent.queued_prompt_dropped', { label: getThreadAdapter(key).label }));"));
+    assert.ok(settle.includes("await replyToThread(key, isDroppedForEndingCommand\n    ? t('agent.queued_prompt_dropped_by_command')\n    : t('agent.queued_prompt_dropped', { label: getThreadAdapter(key).label }));"), 'the line says why (the ending command\'s own, review 24 nit 5)');
     const adopt = getBody('async function forwardPromptToAgent(', 'interface PromptForwardOptions');
     assert.ok(adopt.includes('await deliverPromptOrBuffer(key, bufferedText, createPersonBufferedSettle(key, options.requestId ?? null), bufferedOptions);'));
     assert.equal(botSource.match(/createPersonBufferedSettle\(key, /g)?.length, 2, 'every buffer a person\'s prompt can wait in');

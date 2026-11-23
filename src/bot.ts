@@ -13023,23 +13023,28 @@ function deliverPersonPromptAtWrite(
 
 /**
  * @description The settle of a person's prompt that waits in a startup buffer. One its window's end DROPPED — the start failed, nothing
- * started after a failed resume, its replay's write threw — never reached the agent, and nothing else will post it: the request it
- * opened closes (`cancelled`, like a prompt that found no session; its watch goes with it) and the person, who was told it is queued, is
- * told to send it again. Fire and forget: a failure is logged.
+ * started after a failed resume, its replay's write threw, a command that ends or replaces the conversation waits behind it — never
+ * reached the agent, and nothing else will post it: the request it opened closes (`cancelled`, like a prompt that found no session; its
+ * watch goes with it) and the person, who was told it is queued, is told why: that the agent was starting, or — read at the drop, while
+ * the command holds the conversation — that the conversation was being ended or switched (review 24 nit 5). Fire and forget: a failure
+ * is logged.
  */
 function createPersonBufferedSettle(key: SessionKey, requestId: string | null): BufferedPromptSettled {
   return (outcome) => {
     if (outcome !== 'dropped') return;
-    void withThreadLocale(key, () => reportDroppedPersonPrompt(key, requestId)).catch((e) =>
+    const isDroppedForEndingCommand = conversationEndings.checkIsEnding(keyToString(key));
+    void withThreadLocale(key, () => reportDroppedPersonPrompt(key, requestId, isDroppedForEndingCommand)).catch((e) =>
       console.error(`[startupPromptBuffer] ${keyToString(key)}: reporting a dropped message failed:`, e),
     );
   };
 }
 
-async function reportDroppedPersonPrompt(key: SessionKey, requestId: string | null): Promise<void> {
-  console.warn(`[startupPromptBuffer] ${keyToString(key)}: a message that waited for the session never reached it; ${requestId ?? 'no request'} is closed`);
+async function reportDroppedPersonPrompt(key: SessionKey, requestId: string | null, isDroppedForEndingCommand: boolean): Promise<void> {
+  console.warn(`[startupPromptBuffer] ${keyToString(key)}: a message that waited for the session never reached it${isDroppedForEndingCommand ? ' (a command ends the conversation)' : ''}; ${requestId ?? 'no request'} is closed`);
   await settleTopicRequestAfterDelivery(key, { requestId }, 'noSession');
-  await replyToThread(key, t('agent.queued_prompt_dropped', { label: getThreadAdapter(key).label }));
+  await replyToThread(key, isDroppedForEndingCommand
+    ? t('agent.queued_prompt_dropped_by_command')
+    : t('agent.queued_prompt_dropped', { label: getThreadAdapter(key).label }));
 }
 
 /**
