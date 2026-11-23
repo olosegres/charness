@@ -346,15 +346,22 @@ export interface WatchedTurn {
 export type WatchedTurnState = 'running' | 'ended' | 'sessionGone';
 
 /**
+ * @description Whether a watch's request prompt has reached no process: it names none while the backend names its live one — it waits
+ * in a startup window still (its replay names it), or that window dropped it. Nothing the live process lists or does is about it.
+ */
+export function checkIsPromptNeverWritten(turn: WatchedTurn, probe: SessionTurnProbe): boolean {
+  return turn.isRequestPrompt && turn.writtenToProcess === undefined && probe.processGeneration !== undefined;
+}
+
+/**
  * @description Has the backend taken in what was forwarded for this turn? Its own
  * signal when it has one (nothing written is still unread), else busy or output
- * seen since the forward. A request prompt that names no process while the backend
- * names its live one never reached a process — it waited in a buffer that was
- * dropped — so nothing the live process lists says it was read: not taken in, so the
- * turn is not decided and R21 marks nothing (the stale drop and the backstop re-post it).
+ * seen since the forward. A request prompt that never reached a process
+ * ({@link checkIsPromptNeverWritten}) is not taken in, so the turn is not decided and R21
+ * marks nothing (the stale drop and the backstop re-post it).
  */
 export function checkIsTurnInputConsumed(turn: WatchedTurn, probe: SessionTurnProbe): boolean {
-  if (turn.isRequestPrompt && turn.writtenToProcess === undefined && probe.processGeneration !== undefined) return false;
+  if (checkIsPromptNeverWritten(turn, probe)) return false;
   return probe.hasUnconsumedInput === null ? turn.hasSeenBusy || turn.hasSeenOutput : !probe.hasUnconsumedInput;
 }
 

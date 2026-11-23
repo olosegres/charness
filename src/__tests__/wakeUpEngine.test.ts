@@ -973,6 +973,20 @@ describe('a request whose prompt never reached the agent is re-posted, not remin
     assert.deepEqual(wakeUpMessages.map((message) => ({ text: message.text, isRequestPrompt: message.isRequestPrompt })), [{ text: prompt, isRequestPrompt: true }]);
   });
 
+  it('a request prompt that reached no process takes no other turn\'s busy time as its activity: its stale drop is not pushed ahead (review 20, self-check)', async () => {
+    const ledger = await createLedger();
+    const engine = createEngine(ledger);
+    const request = await ledger.createRequest(topicKey, { kind: 'message', attributes: { requester: '424242' } }, { createPrompt: () => prompt });
+    probe = { isActive: false, isBusy: false, hasUnconsumedInput: true, isTurnEndBlocked: true };
+    await engine.trackForwardedTurn(topicKey, request.id, { isRequestPrompt: true, isPersonInput: true });
+    const activityAtTrack = ledger.getNewestOpenRequest(topicKey)?.lastTurnActivityAt;
+    // Its window dropped it; process 2 runs other turns.
+    nowMs += 60_000;
+    probe = { isActive: true, isBusy: true, hasUnconsumedInput: false, isTurnEndBlocked: false, processGeneration: 2 };
+    await engine.pollWatchedTurns();
+    assert.equal(ledger.getNewestOpenRequest(topicKey)?.lastTurnActivityAt, activityAtTrack, 'another turn\'s busy time is not this request\'s');
+  });
+
   it('a backend that cannot tell its processes apart is read as before', async () => {
     const ledger = await createLedger();
     const engine = createEngine(ledger);

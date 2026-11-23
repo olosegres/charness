@@ -12,6 +12,7 @@ import {
   type AnswerTail,
 } from './answerTail';
 import {
+  checkIsPromptNeverWritten,
   checkIsTurnInputConsumed,
   checkIsWakingStopped,
   checkIsWatchedTurnStale,
@@ -728,8 +729,9 @@ export class RequestWakeUpEngine {
     const turnState = getWatchedTurnState(turn, probe);
     if (turnState === 'running') {
       if (probe.isBusy) {
-        // Another job's fire that only rides the request keeps the session busy for its own work, not for this request's.
-        if (turn.isRequestJob !== false) await this.recordTurnActivity(request, false);
+        // Another job's fire that only rides the request keeps the session busy for its own work, not for this request's — and so does
+        // any turn while this request's prompt has reached no process (`checkIsPromptNeverWritten`): that busy time is another turn's.
+        if (turn.isRequestJob !== false && !checkIsPromptNeverWritten(turn, probe)) await this.recordTurnActivity(request, false);
       } else if (checkIsWatchedTurnStale(request, probe, this.now(), this.deps.backstopMs)) {
         // Its end can no longer be seen: the sweep's backstop takes the request over.
         this.watched.delete(turn.requestId);
