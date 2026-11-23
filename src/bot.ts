@@ -9922,12 +9922,22 @@ async function resumeTopicOnNewSession(
   }
   const prompt = options.getFirstPrompt();
   if (prompt === null) return;
-  // A first prompt that reached no session starts no turn: nothing is reset, lifted or watched for it, as at a retry's kick.
-  if ((await deliverPromptOrBuffer(key, prompt.text)) === 'noSession') {
-    console.warn(`[fallback] ${keyToString(key)}: the first prompt after the move reached no session; no turn is tracked for it`);
+  // The move's continuation is tracked — every open request's counters reset, a limit stop lifted — only once its first prompt reached a
+  // session: at once when forwarded, at its replay when it waited in a startup window. One that reached none (no session left, or a
+  // window that dropped it) starts no turn, and a watch tracked for it would wait for good (review 20 #1).
+  const trackContinuation = (): Promise<void> => requestWakeUpEngine?.trackContinuationTurn(key, { isCountersReset: true, isRequestPrompt: prompt.isRequestPrompt }) ?? Promise.resolve();
+  const delivery = await deliverPromptOrBuffer(key, prompt.text, (outcome) => {
+    if (outcome === 'replayed') {
+      trackContinuation().catch((e) => console.error(`[fallback] ${k}: tracking the move's replayed first prompt failed:`, e instanceof Error ? e.message : e));
+      return;
+    }
+    console.warn(`[fallback] ${k}: the first prompt after the move waited for a session start that dropped it; no turn is tracked for it`);
+  });
+  if (delivery === 'noSession') {
+    console.warn(`[fallback] ${k}: the first prompt after the move reached no session; no turn is tracked for it`);
     return;
   }
-  await requestWakeUpEngine?.trackContinuationTurn(key, { isCountersReset: true, isRequestPrompt: prompt.isRequestPrompt });
+  if (delivery === 'forwarded') await trackContinuation();
 }
 
 // ── a MANUAL switch between the two backends (`utils/backendSwitchPlan.ts`, `commands/backendSwitch.ts`) ──

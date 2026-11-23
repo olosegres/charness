@@ -172,8 +172,16 @@ export async function runApiRetryKick(deps: ApiRetryKickDeps, key: SessionKey): 
     // request whose prompt never reached the agent — the wait held it (R23) — gets
     // that prompt instead (R21). Prompts held during the wait ride whichever it is.
     const resume = deps.getResumeMessage(key, entry.kind);
+    // The continuation is tracked — and a limit's counters reset — only once the nudge reached a session: a nudge a startup window drops
+    // starts no turn, and a watch tracked for it would wait for a turn that never comes (review 20 #1).
+    const trackContinuation = (): Promise<void> => deps.trackContinuation(key, {
+      isCountersReset: entry.kind === 'usageLimit',
+      isRequestPrompt: resume.isRequestPrompt,
+    });
     const delivery = await deps.deliverNudge(key, resume.text, (outcome) => {
-      if (outcome === 'dropped') {
+      if (outcome === 'replayed') {
+        trackContinuation().catch((e) => console.error(`[apiRetry] tracking the replayed nudge's turn in ${k} failed:`, e instanceof Error ? e.message : e));
+      } else {
         console.warn(`[apiRetry] nudge for ${k} dropped: the session did not come up; the retry is spent and an open request is left to the wake-up engine`);
       }
       clearSavedRetryIfLive();
@@ -190,10 +198,8 @@ export async function runApiRetryKick(deps: ApiRetryKickDeps, key: SessionKey): 
     // rest (R6). A conversation-tail retry follows its "continuing…" notice within seconds: a second line would only repeat it.
     if (checkIsTelegramKey(key) && entry.kind !== 'conversationTail') deps.postTopicNotice(key, { kind: 'resuming', retryKind: entry.kind });
     isNudgeBuffered = delivery === 'buffered';
-    await deps.trackContinuation(key, {
-      isCountersReset: entry.kind === 'usageLimit',
-      isRequestPrompt: resume.isRequestPrompt,
-    });
+    // A buffered nudge is tracked by its settle, at its replay.
+    if (!isNudgeBuffered) await trackContinuation();
   } catch (e) {
     console.error('[apiRetry] kick failed:', e instanceof Error ? e.message : e);
   } finally {

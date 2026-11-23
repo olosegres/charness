@@ -308,6 +308,35 @@ for (const [label, key] of [['a Telegram topic', topicKey], ['a Jira issue', iss
       assert.equal(boot(), 0);
     });
 
+    it('a buffered nudge\'s continuation is tracked — and a limit\'s counters reset — only at its replay, never before it reached a session (review 20 #1)', async () => {
+      saveRetry(key);
+      boot();
+      world.startupBuffer.markStarting(keyString); // another caller's session start is under way
+      await runDueTimers();
+      assert.deepEqual(world.continuations, [], 'waiting in the buffer: no turn started yet, nothing watched or reset');
+
+      await world.startupBuffer.replayPrompts(keyString, { isSessionActive: true, forward: forwardToSession(key) });
+      await new Promise((resolve) => setImmediate(resolve));
+      assert.equal(world.nudges.length, 1);
+      assert.deepEqual(world.continuations, [{ key: keyString, isCountersReset: true, isRequestPrompt: false }], 'tracked once the nudge was written');
+    });
+
+    it('a buffered nudge the window drops tracks, resets and lifts nothing: no watch waits for a turn that never comes (review 20 #1)', async () => {
+      saveRetry(key);
+      boot();
+      world.startupBuffer.markStarting(keyString);
+      await runDueTimers();
+      const warned = mock.method(console, 'warn', () => {});
+      try {
+        world.startupBuffer.discardPrompts(keyString);
+      } finally {
+        warned.mock.restore();
+      }
+      await new Promise((resolve) => setImmediate(resolve));
+      assert.deepEqual(world.continuations, []);
+      assert.deepEqual(world.saved, {}, 'the retry is spent');
+    });
+
     it('buffered, then drained into a session that is not active: dropped for good, the record goes', async () => {
       saveRetry(key);
       boot();

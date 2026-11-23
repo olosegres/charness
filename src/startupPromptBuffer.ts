@@ -189,8 +189,10 @@ export class StartupPromptBuffer {
   /**
    * Settle `dropped` every buffered prompt the bot made, keeping a person's own (`PromptDeliveryOptions.isPersonInput`) and the window
    * as it is. Called when a fresh start replaces a resume that failed: a person's words stand on their own in the fresh session, while a
-   * bot-made prompt was built for the conversation that is lost (a tracker post's issue text, a «continue») — its caller posts it again
-   * its own way, as for any prompt a window dropped.
+   * bot-made prompt was built for the conversation that is lost (a tracker post's issue text, a «continue»). Its caller settles the drop
+   * as for any prompt a window dropped, each its own way: a tracker request prompt is retried (R28), an issue update goes back to the
+   * connector, the lost-work note keeps its record, a retry's or a move's «continue» is spent with nothing tracked, a fire is not run
+   * again (`src/requests/README.md`, the callers table).
    */
   discardBotPrompts(threadId: string): void {
     const prompts = this.bufferedPrompts.get(threadId) ?? [];

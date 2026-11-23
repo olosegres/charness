@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+**A request is no longer held for good when the «continue» after a retry, a usage limit or an account move never reached the agent.**
+The bot watched the turn of such a «continue» as soon as it was queued behind a session start. When the start then dropped it, every open request kept waiting for a turn that never came, and a request whose words rode that «continue» could be held for as long as the agent kept working. Now the turn is watched only once the «continue» reached the agent; a lost one leaves the requests to the usual reminders.
+
 **`/quit` no longer brings the agent back by itself: a message sent while the agent's process was stopping used to start a new session right after the quit.**
 In a topic that runs Claude per turn, a message that arrives while the process stops after a turn waits for the stop to end, and the bot then resumes the conversation for it. When you quit (or started a new conversation, or left the folder) in that moment, there was nothing left to resume, and the bot started a fresh session for the waiting message. Now the message is not delivered and the topic says so. A stop that fails no longer leaves such a message waiting until the conversation's next start either.
 
