@@ -6279,6 +6279,10 @@ async function suspendThreadSession(key: SessionKey): Promise<void> {
   autoStopUnsupportedLoggedKeys.delete(kStr);
   try {
     await sessionTransitions.run(kStr, async () => {
+      // A json-stream re-spawn under way or about to start (a model, effort or account change) is over first, as for every transition
+      // in the queue: a stop beside it would terminate the process it replaces, and the prompts it held would be left in a closed
+      // buffer (review 22 #1 b). The stop then reads the re-spawned process.
+      await waitForPendingRespawn(key);
       // Decide on what the process wrote up to now, not on the last tail poll: a background task's turn may have just begun.
       adapter.refreshWorkingState?.(key);
       if (!adapter.checkIsActive(key) || adapter.checkIsWorking?.(key)) return;
@@ -6305,7 +6309,8 @@ async function suspendThreadSession(key: SessionKey): Promise<void> {
  * conversation resumed for them (`ensureAgentSessionNow`: the queued ensure would wait for this very transition). A conversation
  * released during the stop (`/quit`, leaving the folder) has no id left to resume, and a fresh session nobody asked for must not start
  * for them; one a command is replacing (`/new`, a `/resume` pick: {@link conversationsBeingReplaced}) must not be resumed only to be
- * killed by that command: they are dropped, a person told to send theirs again.
+ * killed by that command: they are dropped, a person told to send theirs again. A conversation that is already live when the ensure
+ * returns (it found it `ready`) gets them replayed into it.
  */
 async function resumeForHeldPrompts(key: SessionKey): Promise<void> {
   const kStr = keyToString(key);
@@ -6315,7 +6320,11 @@ async function resumeForHeldPrompts(key: SessionKey): Promise<void> {
     startupPromptBuffer.discardPrompts(kStr);
     return;
   }
-  await ensureAgentSessionNow(key, {});
+  const ensured = await ensureAgentSessionNow(key, {});
+  // A resume replays them; an ensure that found the conversation already live (`ready`) replays nothing — they are written into it
+  // here, so no way out of a stop leaves them in a closed buffer nobody replays (review 22 #1 c). Not awaited, as a resume's replay:
+  // a write on the adopted-session path may wake the conversation, and that ensure queues behind this very transition.
+  if (ensured.ok && startupPromptBuffer.checkHasPrompts(kStr) && !startupPromptBuffer.checkIsStarting(kStr)) void replayBufferedPrompts(key);
 }
 
 /** Conversations already told once that their CLI is too old for the auto-stop (L-D10). */

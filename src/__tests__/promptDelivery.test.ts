@@ -409,7 +409,7 @@ describe('a startup window\'s prompts on every way out of it (review 19 #1)', ()
     assert.match(suspend, /\} finally \{\n\s*startupPromptBuffer\.closeWindow\(kStr\);\n(?:\s*\/\/[^\n]*\n)*\s*await resumeForHeldPrompts\(key\);\n\s*\}\n\s*\}\);/, 'inside the stop\'s own transition, in the finally of the stop (review 20 nit 3)');
     assert.match(suspend, /\} finally \{\n(?:\s*\/\/[^\n]*\n)*\s*rearmThreadIdleTimer\(key\);\n\s*\}\n\}/);
     const resume = getBody('async function resumeForHeldPrompts(', 'const autoStopUnsupportedLoggedKeys');
-    assert.match(resume, /if \(!startupPromptBuffer\.checkHasPrompts\(kStr\)\) return;\n\s*if \(getResumableSessionId\(key\) === null \|\| conversationsBeingReplaced\.has\(kStr\)\) \{\n[^]*?startupPromptBuffer\.discardPrompts\(kStr\);\n\s*return;\n\s*\}\n\s*await ensureAgentSessionNow\(key, \{\}\);/, 'the transition\'s own ensure: the queued one would wait for itself');
+    assert.match(resume, /if \(!startupPromptBuffer\.checkHasPrompts\(kStr\)\) return;\n\s*if \(getResumableSessionId\(key\) === null \|\| conversationsBeingReplaced\.has\(kStr\)\) \{\n[^]*?startupPromptBuffer\.discardPrompts\(kStr\);\n\s*return;\n\s*\}\n\s*const ensured = await ensureAgentSessionNow\(key, \{\}\);/, 'the transition\'s own ensure: the queued one would wait for itself');
   });
 
   it('every start or resume a command makes runs as the conversation\'s one transition, so none shares a startup window with an ensure or a stop (review 20 nit 3)', () => {
@@ -435,6 +435,15 @@ describe('a startup window\'s prompts on every way out of it (review 19 #1)', ()
     const ensure = getBody('async function ensureAgentSessionNow(', 'function getResumableSessionId(');
     assert.ok(ensure.indexOf('await waitForPendingRespawn(key);') >= 0 && ensure.indexOf('await waitForPendingRespawn(key);') < ensure.indexOf('getEnsureSessionPlan({'), 'before the plan reads whether the session is live');
     assert.match(getBody('function runCommandSessionTransition<TResult>(', 'async function waitForPendingRespawn('), /await waitForPendingRespawn\(key\);\n\s*return transition\(\);/, 'the command\'s start or resume too');
+  });
+
+  it('the stop\'s transition waits for a json-stream re-spawn first, and no way out of a stop leaves its held prompts in a closed buffer: a conversation already live gets them replayed (review 22 #1 b, c)', () => {
+    const stop = getBody('async function suspendThreadSession(', 'async function resumeForHeldPrompts(');
+    const transition = stop.slice(stop.indexOf('await sessionTransitions.run(kStr, async () => {'));
+    assert.ok(transition.indexOf('await waitForPendingRespawn(key);') > 0, 'the stop waits for a re-spawn');
+    assert.ok(transition.indexOf('await waitForPendingRespawn(key);') < transition.indexOf('adapter.checkIsActive(key)'), 'before it reads whether a process is there to stop');
+    const held = getBody('async function resumeForHeldPrompts(', 'const autoStopUnsupportedLoggedKeys');
+    assert.match(held, /const ensured = await ensureAgentSessionNow\(key, \{\}\);\n(?:\s*\/\/[^\n]*\n)*\s*if \(ensured\.ok && startupPromptBuffer\.checkHasPrompts\(kStr\) && !startupPromptBuffer\.checkIsStarting\(kStr\)\) void replayBufferedPrompts\(key\);/, 'a live conversation the ensure only found ready still gets them — not awaited inside the transition, as a resume\'s replay');
   });
 
   it('/new and a /resume pick mark the conversation as being replaced BEFORE they wait for a stop under way: the stop drops what it held, with the line, instead of resuming the conversation they leave only to kill it (review 21 nit 4, and the /resume pick found by the round\'s own pass)', () => {
