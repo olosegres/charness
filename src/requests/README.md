@@ -197,8 +197,8 @@ written at once and joins the start's turn.
 
 Where a watch is settled or ended, and when that runs relative to the prompt write and to a buffered replay. Only the first four DECIDE
 a turn's end, all on `getWatchedTurnState`, which reads `ended` only for an active, idle session that nothing blocks (a start or its
-replay, a pending question, a compaction, an armed retry or limit wait, an API error still in hand, a wedge recovery) and that took the
-turn's prompt in — so none of them decides a turn that has not started:
+replay, a pending question, a compaction, an armed retry or limit wait, an API error still in hand, a re-spawn under way or about to
+start, a wedge recovery) and that took the turn's prompt in — so none of them decides a turn that has not started:
 
 1. The settle at the write (`forwardPromptToLiveAgent`): synchronously right before the adapter write (after an immediate forward's wake
    and the adopted-replay wait in `forwardPromptToAgent`), its reminders after the write. At a replayed write, and at a prompt that
@@ -256,10 +256,13 @@ What can run between a json-stream `turnEnded` and the next write, checked again
 7. A deferred compaction (`compact_conversation` armed in the turn, polled every 3 s): the turn's end is decided at `turnEnded`, before
    the compaction starts; a reminder starts a new turn and the compaction waits for that turn's end (the poll used to come after the
    compaction had begun, so the reminder came after it). Nothing is lost.
-8. A deferred account switch (`applyPendingConfigDirSwitch`, right after `turnEnded`; the re-spawn starts one timer tick later). NOT
-   covered: the settle decides before the re-spawn starts, and the reminder it decides, delivered once persisted, can meet the process
-   while it is re-spawned (inactive, `isRespawning`): its ensure then resumes the conversation beside the re-spawn. Any write in that
-   window races it the same way; the turn-end settle makes the window likely.
+8. A deferred account switch (`applyPendingConfigDirSwitch`, right after `turnEnded`; the re-spawn starts one timer tick later): the
+   adapter reads a re-spawn about to start from that `turnEnded` on and one under way until the new process is spawned
+   (`checkIsRespawnPending`, json-stream; a re-spawn that fails is over), and the probe holds the turn end meanwhile — the process down
+   for it reads `running`, not `sessionGone`. So the settle and the poll decide nothing during the re-spawn, and the reminder, decided
+   after it, goes into the new process; written during it, its ensure would have resumed the conversation a second time beside the
+   re-spawn. The hold covers the engine's own wake-ups only: a person's message or a post that lands in that window meets the re-spawn
+   as before.
 
 ## Wake-ups (`wakeUpRules.ts` = pure decisions, `wakeUpEngine.ts` = timers)
 
@@ -267,7 +270,8 @@ What can run between a json-stream `turnEnded` and the next write, checked again
   followed to its own turn end — the answered one closes, the silent one is woken. The sweep skips only
   requests that are watched.
 - A turn has ENDED only when the session is idle, nothing blocks it (pending question, compaction, armed
-  retry or limit wait, an API error still in hand, session start or its replay, wedge recovery) and the backend has TAKEN IN the request's message
+  retry or limit wait, an API error still in hand, a re-spawn under way or about to start, session start or its replay, wedge recovery) and
+  the backend has TAKEN IN the request's message
   (`checkHasUnconsumedInput`) — otherwise an earlier turn's idle reads as the end of this request's turn.
 - A silent turn wakes the agent at once; the second silent turn in a row alerts and stops; a `progress` note
   resets the counter and schedules a follow-up; every wake passes `maxWakeUpsPerRequest`. Requests nobody

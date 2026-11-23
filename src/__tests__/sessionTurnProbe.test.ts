@@ -20,6 +20,7 @@ interface ProbeScenario {
   isBusy: boolean;
   isTuiQuestionPending: boolean;
   isLoginPastePending: boolean;
+  isRespawnPending: boolean;
   pendingQuestionKeys: Set<string>;
   questionPinKeys: Set<string>;
   compactingKeys: Set<string>;
@@ -41,6 +42,7 @@ function createProbe(): ReturnType<typeof createSessionTurnProbe> {
       checkIsBusy: () => scenario.isBusy,
       isQuestionPending: () => scenario.isTuiQuestionPending,
       isLoginPastePending: () => scenario.isLoginPastePending,
+      checkIsRespawnPending: () => scenario.isRespawnPending,
       ...(scenario.hasUnconsumedInput === undefined ? {} : { checkHasUnconsumedInput: () => scenario.hasUnconsumedInput === true }),
     }),
     checkHasPendingQuestion: (keyString) => scenario.pendingQuestionKeys.has(keyString),
@@ -63,6 +65,7 @@ beforeEach(() => {
     isBusy: false,
     isTuiQuestionPending: false,
     isLoginPastePending: false,
+    isRespawnPending: false,
     pendingQuestionKeys: new Set(),
     questionPinKeys: new Set(),
     compactingKeys: new Set(),
@@ -171,6 +174,18 @@ describe('createSessionTurnProbe', () => {
     scenario.apiErrorKeys.add(keyToString(makeTelegramKey(-1001234567890, 43)));
     scenario.apiErrorKeys.delete(topicKeyString);
     assert.equal(createProbe()(topicKey).isTurnEndBlocked, false, 'handled — and another thread\'s error holds nothing here');
+  });
+
+  it('a re-spawn under way or about to start (a deferred account switch at the turn\'s end) holds the turn — also while the process is down for it, which is not a gone session: no reminder may start a second launch beside it (report 6, not fixed 2)', () => {
+    scenario.isRespawnPending = true;
+    assert.equal(createProbe()(topicKey).isTurnEndBlocked, true);
+    scenario.isActive = false;
+    const respawning = createProbe()(topicKey);
+    assert.equal(respawning.isActive, false);
+    assert.equal(respawning.isTurnEndBlocked, true, 'held, so the watch reads `running`, not `sessionGone`');
+    scenario.isActive = true;
+    scenario.isRespawnPending = false;
+    assert.equal(createProbe()(topicKey).isTurnEndBlocked, false, 're-spawned: the new process decides');
   });
 
   it('another thread\'s start never holds this one', () => {

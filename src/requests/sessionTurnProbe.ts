@@ -26,6 +26,10 @@ import type { SessionTurnProbe } from './wakeUpRules';
  *    before the turn's end, and until the bot's stop, move or wait has landed that turn
  *    is no silent one — decided at once, its reminder would go into the limited or refused
  *    session and end on the same error, the give-up;
+ *  - a RE-SPAWN of the process under way or about to start (`checkIsRespawnPending`: a model, effort
+ *    or account change; an account switch deferred while the turn worked starts one tick after its
+ *    end): a reminder delivered meanwhile would meet the process down for it, and its ensure would
+ *    start a second launch of the conversation beside the re-spawn;
  *  - a session START under way: a request's first post is starting the session it
  *    will run in, so nothing has gone quiet — without this the sweep reads the
  *    request as one nobody works on and wakes it (or raises an alert) once the
@@ -49,7 +53,7 @@ import type { SessionTurnProbe } from './wakeUpRules';
 export interface SessionTurnProbeDeps {
   getAdapter: (key: SessionKey) => Pick<
     AgentAdapter,
-    'checkIsActive' | 'checkIsBusy' | 'checkHasUnconsumedInput' | 'isQuestionPending' | 'isLoginPastePending'
+    'checkIsActive' | 'checkIsBusy' | 'checkHasUnconsumedInput' | 'isQuestionPending' | 'isLoginPastePending' | 'checkIsRespawnPending'
   >;
   checkHasPendingQuestion: (keyString: string) => boolean;
   checkHasQuestionPin: (keyString: string) => boolean;
@@ -78,6 +82,7 @@ export function createSessionTurnProbe(deps: SessionTurnProbeDeps): (key: Sessio
       deps.checkHasQuestionPin(keyString) ||
       (adapter.isQuestionPending?.(key) ?? false) ||
       (adapter.isLoginPastePending?.(key) ?? false) ||
+      (adapter.checkIsRespawnPending?.(key) ?? false) ||
       deps.checkIsCompacting(keyString) ||
       Boolean(deps.getApiRetryTimer(keyString)) ||
       deps.checkIsWedgeRecoveryInFlight(keyString) ||

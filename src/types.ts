@@ -906,6 +906,15 @@ export interface AgentAdapter extends EventEmitter {
   checkIsWorking?(key: SessionKey): boolean;
 
   /**
+   * Whether the adapter re-spawns the process now, or is about to (json-stream Claude): a re-spawn under way (a model, effort or
+   * account change), or an account switch deferred while the process worked that the turn's end releases — it starts one timer tick
+   * after `turnEnded`. The request wake-up probe reads it as «not a turn end»: a reminder delivered meanwhile would meet the process
+   * down for the re-spawn, and its ensure would start a second launch of the conversation beside it. Optional: a backend that never
+   * re-spawns on its own omits it.
+   */
+  checkIsRespawnPending?(key: SessionKey): boolean;
+
+  /**
    * The part of "working" that is NOT the running turn, by name: a background task or a scheduled job the
    * process still runs, a finished task's turn on its way, input written but not yet taken in, a compaction in
    * flight — each only for a bounded time, so none holds a turn-less process for good. Empty when there is none.

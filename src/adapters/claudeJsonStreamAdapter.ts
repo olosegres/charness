@@ -440,6 +440,17 @@ function resolveAdoptReplayWaiters(session: StreamSession): void {
 }
 
 /**
+ * @name SessionRespawnChange
+ * @description What a re-spawn changes: the model and effort the new process runs with, and the account's config directory
+ * (`undefined`: the one it runs with now, `null`: the default account's).
+ */
+interface SessionRespawnChange {
+  model: string | null;
+  effort: string | null;
+  configDir?: string | null;
+}
+
+/**
  * @description SECOND Claude backend: drives the `claude` CLI over its
  * documented `--input-format stream-json --output-format stream-json` protocol
  * (typed events, no TUI scrape) as an EXTERNAL tmux-hosted process per
@@ -2605,11 +2616,26 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
    */
   private async respawnWithChange(
     session: StreamSession,
-    change: { model: string | null; effort: string | null; configDir?: string | null },
+    change: SessionRespawnChange,
+  ): Promise<void> {
+    session.isRespawning = true;
+    try {
+      await this.replaceSessionProcess(session, change);
+    } catch (e) {
+      // The re-spawn is over: the old session stays as a stopped one (the next prompt's ensure starts the conversation again), not
+      // as a re-spawn still under way, which holds every watch of the conversation (`checkIsRespawnPending`).
+      session.isRespawning = false;
+      throw e;
+    }
+  }
+
+  /** {@link respawnWithChange}'s steps: the old process ended, the new one spawned with `--resume` and `change`. */
+  private async replaceSessionProcess(
+    session: StreamSession,
+    change: SessionRespawnChange,
   ): Promise<void> {
     const { key, workDir, sessionId } = session;
     const configDir = change.configDir === undefined ? session.configDir : change.configDir;
-    session.isRespawning = true;
     // The re-spawned process starts with none of the old one's background tasks or jobs, and the turn it cuts off is
     // re-prompted by nothing else.
     this.storeLostWork(key, this.describePendingWork(session, { isTurnCutOff: true }));
@@ -2665,10 +2691,26 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
     return 'respawned';
   }
 
+  /** A deferred account switch that the process's idle releases now: pending, on a live process that no longer works. */
+  private checkIsConfigDirSwitchDue(session: StreamSession): boolean {
+    return session.isConfigDirSwitchPending && session.isActive && !this.checkIsWorking(session.key);
+  }
+
+  /**
+   * @description Whether this conversation's process is being re-spawned, or is about to be (`AgentAdapter.checkIsRespawnPending`):
+   * a re-spawn under way (`isRespawning`, also while the process is down for it), or a deferred account switch its idle releases —
+   * from the `turnEnded` that releases it, one timer tick ahead of the re-spawn ({@link applyPendingConfigDirSwitch}).
+   */
+  checkIsRespawnPending(key: SessionKey): boolean {
+    const session = this.sessions.get(keyToString(key));
+    if (!session) return false;
+    return session.isRespawning || this.checkIsConfigDirSwitchDue(session);
+  }
+
   /** A deferred profile switch runs once the turn that held it off has ended (and nothing else works). */
   private applyPendingConfigDirSwitch(session: StreamSession): void {
-    if (!session.isConfigDirSwitchPending || !session.isActive) return;
-    if (this.checkIsWorking(session.key)) return; // a background task still runs: the next turn end looks again
+    // A background task still running keeps it pending: the next turn end looks again.
+    if (!this.checkIsConfigDirSwitchDue(session)) return;
     // Detached from the tail poll that delivered the `result`: the re-spawn tears this very session down.
     setTimeout(() => {
       void this.applyClaudeConfigDir(session.key).catch((e) =>

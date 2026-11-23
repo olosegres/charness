@@ -28,6 +28,9 @@
  *     that turn is the fire's request's, not the reminded one's
  *   → «wait for reset» off: a request's reminder turn ends on a usage limit. The bot answers the request and stops waking it before
  *     that turn is decided: it is no second silent turn — no reminder into the limit, no «got no answer»
+ *   → a second Claude account, the idle lifecycle: the operator moves the topic to it while the agent works, and that turn ends silent.
+ *     The switch re-spawns the process onto the new account right after the turn, and the turn's reminder waits for that re-spawn:
+ *     one launch, nothing started beside it, the reminder in the new process
  *
  * Before the rule, the engine reminded such an agent every 15 minutes whatever its watch said; before the scheduled-run model, every
  * fire opened a request that replaced the previous fire's, and an answered one's «working on it» was lost or chased. Nothing leaves the
@@ -78,6 +81,8 @@ import {
   type IsolatedInstanceLayout,
 } from './e2e/isolatedCharness';
 import { getTelegramFlowTestTimingsEnv } from './telegramE2e/telegramFlowTimings';
+import { getAccountConfigDir, getSessionLaunches, restartCharnessWithState } from './e2e/fallbackFlowKit';
+import { createClaudeProfileLayout } from '../utils/claudeProfiles';
 import type { ScheduleRunRecord } from '../scheduler/runLedger';
 import type { ScheduleRecord } from '../scheduler/types';
 import type { ClosedRequestRecord, OpenRequestState } from '../requests/types';
@@ -124,6 +129,8 @@ let nextWorker: ChildProcess | null = null;
 let thirdWorker: ChildProcess | null = null;
 let fourthWorker: ChildProcess | null = null;
 const schedulerRequester = 'scheduler';
+/** The second Claude account the last step moves the topic to. */
+const secondAccount = 'second';
 let openRequestId = '';
 let watchId = '';
 
@@ -498,5 +505,38 @@ describe('A request waits for its schedule in a Telegram topic end to end: built
     } finally {
       fs.rmSync(apiErrorOncePath, { force: true });
     }
+  });
+
+  it('a deferred account switch: the turn the operator moved to another account ends silent and its process is re-spawned onto it right after — the reminder waits for the re-spawn: one launch, nothing beside it, the reminder in the new process (report 6, not fixed 2)', async () => {
+    // A clean slate, a second signed-in account, and the idle lifecycle: per turn, the stop would end the process the switch re-spawns.
+    fakeTelegram.pushOperatorMessage(topicThreadId, '/esc');
+    await getCharness().waitFor('every open request to close', replyTimeoutMs, () => Object.keys(readState().openRequests ?? {}).length === 0);
+    createClaudeProfileLayout({ dataDir: getLayout().dataDir, name: secondAccount, homeClaudeDir: path.join(getLayout().instanceHome, '.claude') });
+    charness = await restartCharnessWithState(getLayout(), fakeTelegram, getCharness(), (persisted) => {
+      persisted.claudeProfiles = { ...persisted.claudeProfiles, [secondAccount]: { createdAt: new Date().toISOString(), loggedIn: true, email: 'second@example.com', subscriptionType: 'max' } };
+    });
+    // A sleeping per-turn session switches at its next start, a live one at once: both replies name the backend.
+    await topic.sendAndAwaitReply('/claude_mode json', '⚡ JSON-stream');
+
+    fakeTelegram.pushOperatorMessage(topicThreadId, 'WK-11 [fake:hold-silent-once] a question while the account changes');
+    await getCharness().waitFor('the agent to work on the request', agentTimeoutMs, () => readFakeLog<FakeClaudeTurn>(fakeClaudeLogFileNames.turns).some((turn) => turn.issueKey === 'WK-11'));
+    const requestId = readFakeLog<FakeClaudeTurn>(fakeClaudeLogFileNames.turns).find((turn) => turn.issueKey === 'WK-11')?.requestId ?? '';
+    assert.match(requestId, /^req_/);
+    // The process works: the switch waits for the turn's end.
+    await topic.sendAndAwaitReply(`/accounts use ${secondAccount}`, `Claude account for this topic: ${secondAccount}`);
+    const launchesBefore = getSessionLaunches(getLayout()).length;
+
+    // The turn ends with no answer; the switch re-spawns the process at once, and the turn's reminder follows the re-spawn.
+    fs.writeFileSync(path.join(getLayout().fakeStateDir, fakeClaudeHoldReleaseFileName), '');
+    await getCharness().waitFor('the request to be answered after its reminder', bufferedFlowTimeoutMs, () => readClosedRequests().some((closed) => closed.id === requestId));
+    assert.equal(readClosedRequests().find((closed) => closed.id === requestId)?.closeReason, 'final');
+    const launches = getSessionLaunches(getLayout()).slice(launchesBefore);
+    assert.equal(launches.length, 1, `one launch: the re-spawn onto the new account\n${JSON.stringify(launches)}`);
+    assert.equal(launches[0].claudeConfigDir, getAccountConfigDir(getLayout(), secondAccount));
+    assert.deepEqual(launches.map((launch) => launch.overlapsPid ?? null), [null], 'nothing of the conversation still ran when it started');
+    const reminders = getAgentPrompts().filter((prompt) => prompt.text.includes(`[Reminder · request ${requestId} is still open]`));
+    assert.equal(reminders.length, 1, 'one reminder for the one silent turn');
+    assert.equal(reminders[0].pid, launches[0].pid, 'the reminder went into the re-spawned process');
+    assert.ok(!topic.listMessages().some((message) => message.text.includes('got no answer')), 'no give-up');
   });
 });

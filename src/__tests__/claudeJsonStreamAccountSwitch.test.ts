@@ -6,7 +6,9 @@
  * for good, and the deferred switch never fired. Load-bearing intent:
  * - an error `result` reconciles the unconsumed-input count so a pending switch applies at that turn end;
  * - a switch answering a limit (`isAfterLimit`) re-spawns now even over a busy / input-holding session, while a
- *   plain apply still defers.
+ *   plain apply still defers;
+ * - a deferred switch reads as a re-spawn about to start from the turn's end on, and the re-spawn as one under way
+ *   (`checkIsRespawnPending`): the turn probe holds the turn end meanwhile, so no reminder starts a launch beside it.
  *
  * Test case: N/A — Charness has no Jira tracker.
  */
@@ -70,6 +72,24 @@ describe('claude-json-stream account switch after a limit', () => {
     session.unconsumedInputs = queuedInputs(2);
     adapter['onStdout'](session, okResult);
     assert.equal(session.unconsumedInputs.length, 2);
+  });
+
+  it('a deferred switch is a re-spawn about to start from the turnEnded event on, and the re-spawn one under way; a turn still working, or no switch, is none (report 6, not fixed 2)', async () => {
+    const { adapter } = setup();
+    const session = adapter['sessions'].get(keyToString(key))!;
+    assert.equal(adapter.checkIsRespawnPending(key), false, 'no switch');
+    session.isBusy = true;
+    assert.equal(await adapter.applyClaudeConfigDir(key), 'deferred');
+    assert.equal(adapter.checkIsRespawnPending(key), false, 'the turn still works: the switch waits for its end');
+    const pendingAtTurnEnd: boolean[] = [];
+    adapter.on('turnEnded', () => { pendingAtTurnEnd.push(adapter.checkIsRespawnPending(key)); });
+    adapter['onStdout'](session, okResult);
+    assert.deepEqual(pendingAtTurnEnd, [true], 'what the bot reads at the turn end: the re-spawn is about to start');
+    session.isConfigDirSwitchPending = false;
+    session.isRespawning = true;
+    session.isActive = false;
+    assert.equal(adapter.checkIsRespawnPending(key), true, 'under way, the process down for it');
+    assert.equal(adapter.checkIsRespawnPending(makeTelegramKey(-100999222, 79)), false, 'another topic');
   });
 
   it('a pending switch fires at the limit-error turn end', async () => {
