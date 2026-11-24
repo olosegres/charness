@@ -1,5 +1,5 @@
 {
-  "$comment": "Machine-readable summary of the Charness License for people and AI agents deciding whether a licence is needed and what it costs. LICENSE is the binding text; src/__tests__/licensingData.test.ts keeps the two in agreement.",
+  "$comment": "Machine-readable summary of the Charness License for people and AI agents deciding whether a licence is needed and what it costs. LICENSE is the binding text; the repository's tests keep the two in agreement.",
   "license": "Charness License 2.0",
   "licenseText": "https://github.com/olosegres/charness/blob/license-2.0/LICENSE",
   "latestLicenseText": "https://github.com/olosegres/charness/blob/main/LICENSE",
@@ -15,7 +15,8 @@
     },
     "educationAndPublicBenefit": true,
     "evaluationDaysLessThan": 32,
-    "growthTransitionDays": 90
+    "growthTransitionDays": 90,
+    "earlierMitUsersDays": 90
   },
   "organizationLicence": {
     "rule": "Find the band of R and the band of H separately and pay the higher price.",
@@ -31,10 +32,13 @@
   },
   "aiTraining": {
     "allowed": true,
-    "fee": "the group's band price (organizationLicence), yearly, for every year the group uses, sells or offers a model trained on Charness code or commits, on top of the organization licence; $0 only in the Free band; an individual counts as a group of its own",
-    "proof": "the paid invoice or receipt"
+    "fee": "the group's band price (organizationLicence), yearly, for every year the group uses, sells or offers a model trained on Charness code or commits; $0 only in the Free band; an individual counts as a group of its own",
+    "onTopOfOrganizationLicence": true,
+    "discountsApply": false,
+    "proof": "the paid invoice and its receipt"
   },
   "oem": {
+    "rule": "The supplier pays the greater of its organization licence fee and the OEM amount, never their sum.",
     "bands": [
       { "embeddedProductRevenueUpToUsd": 500000, "pricePerYearUsd": 0 },
       { "embeddedProductRevenueUpToUsd": 2000000, "pricePerYearUsd": 2000 },
@@ -55,11 +59,11 @@
     "checkout": null,
     "agentsMayBuy": true,
     "steps": [
-      "Check whether the group is free (LICENSE Part 1); if it is, nothing is needed.",
-      "Work out the band from the latest month-end R and H, and any discount (LICENSE 3.1, 3.6).",
-      "E-mail an order to the contact: legal name and country, covered group, R and H bands, term (1, 2 or 3 years), discounts, invoice e-mail.",
-      "Pay the invoice.",
-      "Keep the invoice and the receipt: they are the licence."
+      "Check Part 1. If your group is free, you need nothing.",
+      "Work out the price: your band (section 3.1) from the latest month-end figures, and any discount (section 3.6).",
+      "Send an order to charnesshub@gmail.com with: the organization's legal name and country, the group it covers, its R and H bands, the term (1, 2 or 3 years), the discounts wanted, and the e-mail for the invoice. For the AI training licence (section 3.3), say so.",
+      "Pay the invoice you get back.",
+      "Keep the invoice and the receipt: together they are your licence and its proof. There is no key and nothing to install."
     ]
   }
 }
