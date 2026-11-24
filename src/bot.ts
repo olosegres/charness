@@ -6470,6 +6470,10 @@ async function replayBufferedPrompts(key: SessionKey): Promise<void> {
       if (outcome === 'noSession') throw new Error(noSessionForPostError);
     },
     afterReplay: async () => {
+      // A command that ends or replaces the conversation runs (a move's own start among them): the held prompts wait for the first
+      // prompt it hands over — a replayable one, which carries them after its own text (R23) — instead of reaching the new agent ahead of
+      // the move's bridge; with none, the next prompt carries them (review 26 #5).
+      if (conversationEndings.checkIsRefusingMessages(keyToString(key))) return;
       // R23: prompts held during a usage-limit wait that ended with the previous
       // session go to this one — on their own when nothing above carried them. They
       // are what people asked for meanwhile: a write that fails is told in the topic
@@ -16289,6 +16293,9 @@ function createSessionPostDeps(): PostToSessionDeps {
     // ones handed to the post while it waited, are delivered after the post's own write (`requests/README.md` § Turn starts).
     settleEndedTurns: (conversationKey) => requestWakeUpEngine?.settleEndedTurnsForPost(keyFromString(conversationKey)) ?? Promise.resolve(deliverNoSettledWakes),
     notePostInFlight: (conversationKey) => requestWakeUpEngine?.notePostInFlight(keyFromString(conversationKey)) ?? deliverNoSettledWakes,
+    // A command that ends or replaces the conversation runs: the post waits for it to be over, then goes to what follows — in a move,
+    // after the bridge its own ensure would otherwise overtake (review 26 #5).
+    waitForConversationChange: (conversationKey) => conversationEndings.waitForMessagesAccepted(conversationKey),
     now: () => Date.now(),
     sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
   };

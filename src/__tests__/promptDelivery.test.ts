@@ -671,6 +671,16 @@ describe('a startup window\'s prompts on every way out of it (review 19 #1)', ()
     assert.match(report, /\} finally \{\n\s*if \(requestId !== null\) personDropsBeingTold\.delete\(requestId\);\n\s*\}/, 'until the request is closed and the line out');
   });
 
+  it('a bot-made post waits while a command ends or replaces the conversation, and a replay during one leaves the limit-held prompts for the command\'s first prompt — so nothing reaches the new agent ahead of a move\'s bridge (review 26 #5)', () => {
+    const postDeps = getBody('function createSessionPostDeps(', '/**\n * @description Write a scheduled run\'s prompt');
+    assert.match(postDeps, /waitForConversationChange: \(conversationKey\) => conversationEndings\.waitForMessagesAccepted\(conversationKey\),/, 'every session post — a fire, a check\'s wake, a tracker post, the lost-work post — builds on these deps (`postToSession.test.ts` pins where the post waits)');
+    assert.match(getBody('function createLostWorkPostDeps(', 'function createBufferedOutcome('), /\.\.\.createSessionPostDeps\(\),/);
+    const replay = getBody('async function replayBufferedPrompts(', 'async function forwardPromptToLiveAgent(');
+    const afterReplay = replay.slice(replay.indexOf('afterReplay: async () => {'));
+    assert.ok(afterReplay.indexOf('if (conversationEndings.checkIsRefusingMessages(keyToString(key))) return;') >= 0, 'the held prompts are left for the command\'s first prompt');
+    assert.ok(afterReplay.indexOf('if (conversationEndings.checkIsRefusingMessages(keyToString(key))) return;') < afterReplay.indexOf('limitHeldPrompts.releaseAll(key)'), 'before they are taken');
+  });
+
   it('every routing point reads whether the process takes input, and so does the ensure\'s plan: the adapter\'s own suspend after a torn frame is resumed for the prompt, not read `ready` while the prompt meets a dying process (review 25 nits 4 and 7)', () => {
     assert.match(getBody('async function ensureAgentSessionNow(', 'function getResumableSessionId('), /const plan = getEnsureSessionPlan\(\{\n(?:\s*\/\/[^\n]*\n)*\s*isActive: checkIsAcceptingInput\(key\),/);
     assert.match(getBody('async function forwardPromptToAgent(', 'interface PromptForwardOptions'), /checkIsSessionActive: \(\) => checkIsAcceptingInput\(key\) && !\(isTechnicalPrompt && \(adapter\.checkIsBusy\?\.\(key\) \?\? false\)\),/, 'the adopt-replay re-route, the technical prompt\'s idle test kept');

@@ -83,6 +83,13 @@ export interface PostToSessionDeps {
   /** Forward the prompt to the conversation's agent. */
   forwardPrompt: (conversationKey: string, text: string) => Promise<void>;
   /**
+   * Optional: resolves once no command ends or replaces the conversation (`ConversationEndings.waitForMessagesAccepted`). Awaited before
+   * the post's first ensure and again before its second ensure and its write: a post that comes during a move to the other backend would otherwise
+   * start the new backend with its own ensure and reach it AHEAD of the move's bridge (review 26 #5); after a release it goes to what
+   * follows. Never called inside the conversation's transition queue, so no transition waits for it.
+   */
+  waitForConversationChange?: (conversationKey: string) => Promise<void>;
+  /**
    * Optional: the wake-up engine settles the conversation's watches whose turn already ENDED (`settleEndedTurnsOf`), awaited right
    * before the text is built — after the wait for a busy turn, which this post ends within seconds of the idle, usually before the
    * engine's own tick saw it. The pick of the request a fire rides and its header then read what the ended turn decided (a scheduler's
@@ -159,6 +166,8 @@ async function postWhileInFlight(
   // What is held is read only once the wait is over: a caller may say when it was due (R27).
   const { heldText, afterForward } = options;
   const text = typeof prompt === 'string' ? prompt : prompt.fullText;
+  // A command that ends or replaces the conversation first: what the post ensures and writes into is the conversation that follows it.
+  await deps.waitForConversationChange?.(conversationKey);
   // Checked first: no session is started or resumed into a limit.
   if (deps.holdForLimitResume?.(conversationKey, text, heldText)) return { ok: true, isHeld: true };
   const session = await deps.ensureSession(conversationKey, fallbackAdapterName);
@@ -196,6 +205,9 @@ async function forwardAfterSettle(
   context: ForwardAfterSettleContext,
 ): Promise<PostToSessionResult> {
   const { text, heldText, isWaitingForTurn } = context;
+  // Again before the second ensure and the write: a move that began while the post waited for the busy turn starts the new backend and
+  // writes its bridge first — an ensure of this post's own would start it ahead of the move's, with the move's start text left out.
+  await deps.waitForConversationChange?.(conversationKey);
   // Again: the turn waited out above may itself have hit the limit and armed a wait.
   if (deps.holdForLimitResume?.(conversationKey, text, heldText)) return { ok: true, isHeld: true };
   let { isFresh } = context;

@@ -28,6 +28,27 @@ function createDeps(calls: string[], overrides: Partial<PostToSessionDeps> = {})
 }
 
 describe('postToSession', () => {
+  it('waits while a command ends or replaces the conversation — before its first ensure, and again before its write — so a post during a move reaches the new agent after the move\'s bridge (review 26 #5)', async () => {
+    const calls: string[] = [];
+    let isMoving = true;
+    let endMove = (): void => {};
+    const moveOver = new Promise<void>((resolve) => { endMove = resolve; });
+    const deps = createDeps(calls, {
+      waitForConversationChange: async (conversationKey) => {
+        calls.push(`wait ${conversationKey}`);
+        if (isMoving) await moveOver;
+      },
+    });
+    const posting = postToSession(deps, 'k', 'p');
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.deepEqual(calls, ['wait k'], 'nothing ensured while the move runs: its own ensure starts the new backend, and the bridge goes first');
+    isMoving = false;
+    calls.push('move over');
+    endMove();
+    assert.deepEqual(await posting, { ok: true, isHeld: false });
+    assert.deepEqual(calls, ['wait k', 'move over', 'ensure k -', 'wait k', 'forward k p']);
+  });
+
   it('ensures a session (with the caller\'s fallback adapter), then forwards — one session step, no separate resume', async () => {
     const calls: string[] = [];
     assert.deepEqual(await postToSession(createDeps(calls), 'jira:PROJ:PROJ-1', 'the prompt', 'claude-json-stream'), { ok: true, isHeld: false });

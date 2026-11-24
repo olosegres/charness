@@ -8,6 +8,9 @@ Claude's process takes a few seconds to exit, and a message that came in those s
 **A message sent in the moment Claude's process is restarted after a broken input no longer fails to reach the agent.**
 When the bot could not finish writing a message into Claude's process (the default backend), it stops that process and the conversation resumes in a new one. A message that came in those seconds was refused with «did not reach the agent». Now it resumes the conversation and reaches the new process.
 
+**A scheduled run or a check's wake that comes while a topic switches to the other backend now reaches the new agent after the conversation is handed over.**
+The switch stops the old agent, starts the new one and gives it the conversation's context first. A post that came in those seconds could start the new agent by itself and reach it before that hand-over, so the new agent read it without knowing the conversation. Now it waits for the switch, and goes to the new agent right after the hand-over.
+
 **`/quit` on a sleeping conversation now says how to start a fresh one.**
 It said that the next message would start a fresh session, but the next message only got the hint to start an agent. Now it says that /claude or /opencode starts a fresh one.
 

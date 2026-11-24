@@ -129,3 +129,38 @@ describe('ConversationEndings: a person\'s message is refused while a command en
     assert.equal(endings.checkIsRefusingMessages('chat:1'), false, 'and an idempotent end');
   });
 });
+
+describe('ConversationEndings: a bot-made post waits while a command refuses messages, and goes to what follows (review 26 #5)', () => {
+  it('resolves at once when nothing refuses messages', async () => {
+    const { endings } = createEndings();
+    await endings.waitForMessagesAccepted('chat:1');
+  });
+
+  it('waits until every refusal of the conversation has ended — a move\'s own and a hold\'s, whichever ends last — and only for its own conversation', async () => {
+    const { endings } = createEndings();
+    const stopRefusing = endings.refuseMessages('chat:1');
+    const ending = endings.hold('chat:1');
+    let isDone = false;
+    const waiting = endings.waitForMessagesAccepted('chat:1').then(() => { isDone = true; });
+    await endings.waitForMessagesAccepted('chat:2');
+    await ending.run(async () => undefined);
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(isDone, false, 'the move still refuses: its first prompt has not reached the other backend');
+    stopRefusing();
+    await waiting;
+    assert.equal(isDone, true);
+  });
+
+  it('a refusal taken again in the tick the last one ended keeps it waiting', async () => {
+    const { endings } = createEndings();
+    const first = endings.refuseMessages('chat:1');
+    let isDone = false;
+    const waiting = endings.waitForMessagesAccepted('chat:1').then(() => { isDone = true; });
+    first();
+    const second = endings.refuseMessages('chat:1');
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(isDone, false);
+    second();
+    await waiting;
+  });
+});

@@ -32,6 +32,8 @@ export interface ConversationEndingsPorts<TKey> {
 export class ConversationEndings<TKey> {
   private readonly holdCounts = new Map<string, number>();
   private readonly refusalCounts = new Map<string, number>();
+  /** The posts waiting for a conversation to take messages again ({@link waitForMessagesAccepted}), woken when its last refusal ends. */
+  private readonly acceptedWaiters = new Map<string, Array<() => void>>();
 
   constructor(private readonly ports: ConversationEndingsPorts<TKey>) {}
 
@@ -49,11 +51,27 @@ export class ConversationEndings<TKey> {
     return (this.refusalCounts.get(conversationKey) ?? 0) > 0;
   }
 
+  /**
+   * Resolves once nothing refuses messages to the conversation — at once when nothing does. A bot-made post (a fire, a check's wake, a
+   * tracker post) waits here while a command ends or replaces the conversation, and then goes to what follows: in a move, after the
+   * move's bridge, which the post's own ensure would otherwise overtake (review 26 #5). A refusal taken again before the waiter runs keeps
+   * it waiting.
+   */
+  async waitForMessagesAccepted(conversationKey: string): Promise<void> {
+    while (this.checkIsRefusingMessages(conversationKey)) {
+      await new Promise<void>((resolve) => {
+        const waiters = this.acceptedWaiters.get(conversationKey) ?? [];
+        waiters.push(resolve);
+        this.acceptedWaiters.set(conversationKey, waiters);
+      });
+    }
+  }
+
   /** Hold `key`'s conversation as ending from now on, refusing a person's message until the command's transition settled. */
   hold(key: TKey): ConversationEnding {
     const conversationKey = this.ports.toConversationKey(key);
     const endHold = this.takeCount(this.holdCounts, conversationKey);
-    const endRefusal = this.takeCount(this.refusalCounts, conversationKey);
+    const endRefusal = this.takeRefusal(conversationKey);
     const release = (): void => {
       endHold();
       endRefusal();
@@ -77,19 +95,35 @@ export class ConversationEndings<TKey> {
    * first, a message would reach the new agent ahead of the move's bridge, or meet no agent at all while the new one starts.
    */
   refuseMessages(key: TKey): () => void {
-    return this.takeCount(this.refusalCounts, this.ports.toConversationKey(key));
+    return this.takeRefusal(this.ports.toConversationKey(key));
   }
 
-  /** Count one more in `counts` for `conversationKey`; the returned end counts it off once, and does nothing after that. */
-  private takeCount(counts: Map<string, number>, conversationKey: string): () => void {
+  /** One more refusal of `conversationKey`'s messages; its end wakes the posts waiting for the conversation once none is left. */
+  private takeRefusal(conversationKey: string): () => void {
+    return this.takeCount(this.refusalCounts, conversationKey, () => {
+      const waiters = this.acceptedWaiters.get(conversationKey) ?? [];
+      this.acceptedWaiters.delete(conversationKey);
+      for (const wake of waiters) wake();
+    });
+  }
+
+  /**
+   * Count one more in `counts` for `conversationKey`; the returned end counts it off once, and does nothing after that. `onCleared` runs
+   * when the end leaves none.
+   */
+  private takeCount(counts: Map<string, number>, conversationKey: string, onCleared?: () => void): () => void {
     counts.set(conversationKey, (counts.get(conversationKey) ?? 0) + 1);
     let isTaken = true;
     return () => {
       if (!isTaken) return;
       isTaken = false;
       const count = (counts.get(conversationKey) ?? 1) - 1;
-      if (count > 0) counts.set(conversationKey, count);
-      else counts.delete(conversationKey);
+      if (count > 0) {
+        counts.set(conversationKey, count);
+        return;
+      }
+      counts.delete(conversationKey);
+      onCleared?.();
     };
   }
 }
