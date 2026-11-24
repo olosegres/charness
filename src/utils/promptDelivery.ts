@@ -175,8 +175,8 @@ export interface LatePromptDeliveryPorts {
   reportNoSession: (isAlreadyTold: boolean) => Promise<void>;
   /**
    * The prompt was refused (a command ends or replaces the conversation), or its wake found the conversation ended by a release while it
-   * waited: the person is told the command's line; whatever the prompt opened is closed by its caller (`noSession`). Absent: reported as
-   * no session.
+   * waited: the person is told the command's line. The delivery answers `noSession`, so whatever the prompt opened is closed by its caller
+   * too (a report that closed it already leaves nothing to close). Absent: reported as no session.
    */
   reportRefused?: () => Promise<void>;
 }
