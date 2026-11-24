@@ -30,7 +30,7 @@
   },
   "aiTraining": {
     "allowed": true,
-    "fee": "the group's band price, yearly, for every year it sells or offers a model trained on Charness code or commits; free for groups in the Free band",
+    "fee": "the group's band price (organizationLicence), yearly, for every year the group uses, sells or offers a model trained on Charness code or commits, on top of the organization licence; $0 only in the Free band; an individual counts as a group of its own",
     "proof": "the paid invoice or receipt"
   },
   "oem": {

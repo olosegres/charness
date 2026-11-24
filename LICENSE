@@ -69,17 +69,22 @@ licence, and charge for that service, but not for the software. Selling copies, 
 offering it as a hosted service needs section 3.4 or 3.5, even at no charge.
 
 2.3. **Derived code.** Code written on the basis of Charness code or commits, taking over its approaches and solutions,
-is a work based on Charness and is subject to this licence like Charness itself, whoever or whatever wrote it. That
-includes code an AI model wrote with Charness code or commits in its context.
+is a work based on Charness and is subject to this licence like Charness itself, whoever or whatever wrote it, including
+such code an AI model wrote with Charness code or commits in its context.
 
 2.4. **Output.** Work you only produce by running Charness, such as your own code, documents or other deliverables that
 contain no Charness code and are not derived under section 2.3, is yours. The licensor claims no ownership or royalty in
-it.
+it. The prompts, skills and tool descriptions Charness gives an agent while it works on your project do not make that
+work derived; section 2.3 covers code that takes over Charness's own approaches and solutions.
 
 2.5. **AI training.** Training or fine-tuning a machine-learning model on Charness code or commits is allowed for
-payment under section 3.3.
+payment under section 3.3. Part 1 does not make free the training of a model that is used, sold or offered under section
+3.3.
 
-2.6. **Names.** These terms grant no right to the name Charness or the licensor's marks beyond the required notices and
+2.6. **Earlier MIT code.** Code and commits published under the MIT licence (every release before 4.0) stay under MIT;
+sections 2.3, 2.5 and 3.3 do not reach code built on them or a model trained on them alone.
+
+2.7. **Names.** These terms grant no right to the name Charness or the licensor's marks beyond the required notices and
 uses the law allows without permission. Section 3.6(a) adds one limited permission.
 
 ## Part 3. Commercial terms
@@ -110,10 +115,12 @@ up or down a band, or back to free. A merger or acquisition needs a reassessment
 completion and the positive difference, prorated for the rest of the term, with overlapping fees already paid credited.
 A wrong initial figure is corrected to the price that was due.
 
-3.3. **AI training licence.** An organization that trains or fine-tunes a model on Charness code or commits pays, for
-every year in which it sells or offers to others a model so trained, the price of its band in section 3.1. A group in
-the Free band trains free. This fee is separate from the fee for using Charness. The paid invoice or receipt is the
-training licence; keep it as proof.
+3.3. **AI training licence.** An organization group whose member trains or fine-tunes a model on Charness code or
+commits pays, for every year in which the group uses, sells or offers to others a model so trained, the price of its
+group's band in section 3.1, whatever Part 1 would otherwise allow. A group in the Free band pays $0 by that table. An
+individual who trains such a model counts, for this section, as an organization group of its own, with its own R and H.
+This fee is on top of the organization licence for using Charness. The paid invoice or receipt is the training licence;
+keep it as proof.
 
 3.4. **Embedded products (OEM).** A product that includes or runs Charness, or supplies its agent orchestration as a
 feature, on premises or hosted, needs a signed OEM addendum before it ships, even at $0. The yearly OEM amount follows
@@ -216,6 +223,7 @@ licence already paid. A renewal at a new price needs 30 days' notice.
 
 4.9. **Definitions.**
 
+- **Charness:** the software, documentation and agent skills the licensor publishes under this licence.
 - **Organization:** a company, sole proprietorship, partnership or any group working together, incorporated or not.
 - **Organization group (group):** the organization together with every organization that controls it, is controlled by
   it or is under common control with it, worldwide. **Control** is more than 50 % of the votes or the actual power to
