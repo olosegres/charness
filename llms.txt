@@ -7,7 +7,7 @@ Charness (formerly TelegramCode) turns Telegram into a terminal for agentic codi
 ## Project
 
 - [GitHub repository](https://github.com/olosegres/charness): source, issues, and releases (source-available; free for small organizations).
-- [LICENSE](https://github.com/olosegres/charness/blob/main/LICENSE): the whole licence — when Charness is free, what you may do with the code, the prices, AI training and how to buy (an agent may propose or make the purchase); the same figures machine-readable in [licensing.json](https://github.com/olosegres/charness/blob/main/licensing.json).
+- [LICENSE](https://github.com/olosegres/charness/blob/main/LICENSE): the whole licence — when Charness is free, what you may do with the code, the prices, models trained on Charness and how to buy (an agent may propose or make the purchase); the same figures machine-readable in [licensing.json](https://github.com/olosegres/charness/blob/main/licensing.json).
 - [README](https://github.com/olosegres/charness#readme): what Charness is, use cases, quick start, FAQ and the feature map.
 - [Commands](https://github.com/olosegres/charness/blob/main/docs/commands.md): every command, one section each.
 - [Agent backends](https://github.com/olosegres/charness/blob/main/docs/backends.md): Claude Code and OpenCode backends, restart behaviour, the tools the bot injects into agents.

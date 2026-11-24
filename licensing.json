@@ -34,18 +34,19 @@
     "codeWrittenWithCharnessIsYours": true,
     "terms": "LICENSE 2.3–2.4"
   },
-  "aiTraining": {
-    "allowed": true,
-    "fee": "the group's band price (organizationLicence) for every licence year in which it uses, sells or offers a model trained or fine-tuned on Charness code or commits; $0 in the Free band; the exact terms are LICENSE 3.3",
-    "whoeverTrainedIt": true,
-    "requestsToAnIndependentServiceExempt": true,
-    "runsFromWhenTheGroupKnows": true,
-    "trainerWhoKnowinglyIncludedCharnessPays": true,
-    "usersOfGeneralModelsWhoseDataMerelyIncludesCharnessExempt": true,
+  "modelsTrainedOnCharness": {
+    "trainingAllowed": true,
+    "summary": "one licence covers Charness and the models trained on it: a model trained on purpose on Charness is published only with this licence and used under Charness's rules; only a group that sells or offers such a model, or a general model it trained, needs its organization licence for that, whatever Part 1 allows; the exact terms are LICENSE 2.5 and 3.3",
+    "oneLicenceCoversModels": true,
+    "publishOnlyWithThisLicence": true,
+    "usersFollowCharnessRules": true,
+    "noSecondFeeForUsers": true,
+    "sellersAndOfferersNeedTheirBandLicence": true,
+    "generalModelTrainerPays": true,
+    "generalModelUsersExempt": true,
     "ownAgentSessionsExempt": true,
-    "onTopOfOrganizationLicence": true,
-    "discountsApply": false,
-    "proof": "the receipt or the paid invoice"
+    "requestsToAnIndependentServiceExempt": true,
+    "runsFromWhenTheGroupKnows": true
   },
   "oem": {
     "rule": "The supplier pays the greater of its organization licence fee and the OEM amount, never their sum.",
@@ -70,9 +71,9 @@
     "checkout": null,
     "agentsMayBuy": true,
     "steps": [
-      "Check Part 1 and sections 3.3–3.5. If your use is free under Part 1, section 3.3 charges you no training fee (none is due in the Free band, or for only sending requests to a model that an independent organization runs as a service and did not train for you), and you neither embed Charness in a product nor offer it to others as a hosted, managed or resold service, you need nothing and send no order; running Charness on your own computers or servers for your own work is neither. Embedding it in a product, or offering it as a service, needs its signed agreement first (sections 3.4–3.5), even at $0.",
+      "Check Part 1 and sections 3.3–3.5. If your use is free under Part 1, you sell or offer to others no model you trained on Charness (section 3.3; using one is covered like using Charness), and you neither embed Charness in a product nor offer it to others as a hosted, managed or resold service, you need nothing and send no order; running Charness on your own computers or servers for your own work is neither. Embedding it in a product, or offering it as a service, needs its signed agreement first (sections 3.4–3.5), even at $0.",
       "Work out the price: your band (section 3.1) from the latest month-end figures, and any discount (section 3.6).",
-      "Send an order to charnesshub@gmail.com with: the organization's legal name and country, the organization at the top of its group (section 4.10), its R and H bands, the term (1, 2 or 3 years), the discounts wanted, and the e-mail for the invoice. For the AI training licence (section 3.3), say so.",
+      "Send an order to charnesshub@gmail.com with: the organization's legal name and country, the organization at the top of its group (section 4.10), its R and H bands, the term (1, 2 or 3 years), the discounts wanted, and the e-mail for the invoice. If you sell or offer a model trained on Charness (section 3.3), say so.",
       "Pay the invoice you get back.",
       "Keep the paid invoice or its receipt: either is your licence and its proof. There is no key and nothing to install."
     ]

@@ -1,7 +1,7 @@
 /**
  * @description `licensing.json` is the machine-readable twin of `LICENSE` that people and AI agents read to decide whether
  * Charness needs a licence and what it costs. The binding text is `LICENSE`; these checks fail when the two disagree on a
- * figure or rule (the notice's fixed text URL, the free limits, the band and OEM tables, the AI training fee's terms, the
+ * figure or rule (the notice's fixed text URL, the free limits, the band and OEM tables, the rules on models trained on Charness, the
  * discounts, the refund window, the contact, the buying steps), and when an example price in `LICENSE` does not follow
  * from its own discounts or a band does not start where the one before it ends.
  *
@@ -23,19 +23,21 @@ type FreeUse = {
   growthTransitionDays: number;
   earlierMitUsersDays: number;
 };
-type AiTraining = {
-  allowed: boolean;
-  fee: string;
-  whoeverTrainedIt: boolean;
-  requestsToAnIndependentServiceExempt: boolean;
-  runsFromWhenTheGroupKnows: boolean;
-  trainerWhoKnowinglyIncludedCharnessPays: boolean;
-  usersOfGeneralModelsWhoseDataMerelyIncludesCharnessExempt: boolean;
-  ownAgentSessionsExempt: boolean;
-  onTopOfOrganizationLicence: boolean;
-  discountsApply: boolean;
-  proof: string;
-};
+/** Each yes-or-no rule of `licensing.json` about models trained on Charness, and the LICENSE sentence that states it. */
+const modelRuleSentences = {
+  trainingAllowed: 'Training or fine-tuning a machine-learning model on Charness code or commits is allowed.',
+  oneLicenceCoversModels: 'One licence covers Charness and the models trained on it.',
+  publishOnlyWithThisLicence: 'Such a model may be published, open weights included, only together with this licence',
+  usersFollowCharnessRules: 'Whoever uses it follows the same rules as a user of Charness',
+  noSecondFeeForUsers: 'owes no second fee for using a model trained on Charness',
+  sellersAndOfferersNeedTheirBandLicence: 'holds its organization licence for its band for every year in which it does so, whatever Part 1 would otherwise allow',
+  generalModelTrainerPays: 'the organization that trained it pays as in (d) while it sells or offers the model',
+  generalModelUsersExempt: 'The groups that only use it, by sending it requests or by running its weights, owe nothing for it.',
+  ownAgentSessionsExempt: "A model trained on the group's own code, documents or agent sessions is not trained on Charness merely because Charness ran those agents",
+  requestsToAnIndependentServiceExempt: 'only sends requests to a model trained on Charness that another, independent organization runs as a service, and that was not trained for it, owes nothing for that use',
+  runsFromWhenTheGroupKnows: 'the day the group knows, or the licensor tells it in writing, that the model was trained on Charness',
+} as const;
+type ModelsTrainedOnCharness = Record<keyof typeof modelRuleSentences, boolean> & { summary: string };
 type LicensingData = {
   license: string;
   licenseText: string;
@@ -45,7 +47,7 @@ type LicensingData = {
   free: FreeUse;
   organizationLicence: { perUserOrSeatPricing: boolean; bands: PriceBand[] };
   derivedCode: { codeWrittenWithCharnessIsYours: boolean; terms: string };
-  aiTraining: AiTraining;
+  modelsTrainedOnCharness: ModelsTrainedOnCharness;
   oem: { rule: string; bands: OemBand[] };
   discounts: { poweredByCharnessMarkPercent: number; prepaidTwoOrThreeYearsPercent: number; combined: string };
   refundWithinDays: number;
@@ -145,21 +147,17 @@ test('the OEM table of LICENSE 3.4 is the one in licensing.json', () => {
   assert.match(flatLicenseText, /pays the \*\*greater\*\* of its organization licence fee \(section 3\.1\) and the OEM amount, never their sum/);
 });
 
-test('the AI training terms of LICENSE 3.3 and 3.6 are the ones in licensing.json', () => {
-  const { fee, whoeverTrainedIt, requestsToAnIndependentServiceExempt, runsFromWhenTheGroupKnows, onTopOfOrganizationLicence, discountsApply, proof } = licensingData.aiTraining;
-  const { trainerWhoKnowinglyIncludedCharnessPays, usersOfGeneralModelsWhoseDataMerelyIncludesCharnessExempt, ownAgentSessionsExempt } = licensingData.aiTraining;
-  assert.match(fee, /LICENSE 3\.3/, 'the fee text points at the clause it summarises');
-  assert.equal(whoeverTrainedIt, flatLicenseText.includes('a model trained or fine-tuned on Charness code or commits, whoever trained it, pays'));
-  assert.equal(requestsToAnIndependentServiceExempt, flatLicenseText.includes('A group that only sends requests to a model trained on Charness that another, independent organization runs as a service, and that was not trained for it, does not pay for that use'));
-  assert.equal(trainerWhoKnowinglyIncludedCharnessPays, flatLicenseText.includes('a training set built from them or known to include them, or a fine-tune on them; whoever trains such a model pays under this section while it uses, sells or offers it'));
-  assert.equal(usersOfGeneralModelsWhoseDataMerelyIncludesCharnessExempt, flatLicenseText.includes('on a general collection of public code that merely includes Charness owes nothing for that use; this exempts the user, not the organization that trained the model'));
-  assert.equal(ownAgentSessionsExempt, flatLicenseText.includes("A model trained on the group's own code, documents or agent sessions is not trained on Charness code or commits merely because Charness ran those agents"));
-  assert.equal(runsFromWhenTheGroupKnows, flatLicenseText.includes('The fee runs from when the group knows, or the licensor tells it in writing'));
-  assert.equal(onTopOfOrganizationLicence, flatLicenseText.includes('This fee is on top of the organization licence for using Charness.'));
-  assert.equal(discountsApply, !flatLicenseText.includes('never to $0 or to the training fee'));
-  const trainingProof = flatLicenseText.match(/The (receipt) \(or the (paid invoice)\) is the training licence/);
-  assert.ok(trainingProof, 'LICENSE 3.3 lost its proof sentence');
-  assert.equal(proof, `the ${trainingProof[1]} or the ${trainingProof[2]}`);
+test('the rules on models trained on Charness (LICENSE 2.5 and 3.3) are the ones in licensing.json', () => {
+  const { summary, ...rules } = licensingData.modelsTrainedOnCharness;
+  assert.match(summary, /LICENSE 2\.5 and 3\.3/, 'the summary points at the clauses it summarises');
+  assert.deepEqual(Object.keys(rules).sort(), Object.keys(modelRuleSentences).sort(), 'every rule has its LICENSE sentence');
+  const sentences = new Map<string, string>(Object.entries(modelRuleSentences));
+  for (const [rule, isStated] of Object.entries(rules)) {
+    const sentence = sentences.get(rule);
+    assert.ok(sentence !== undefined, `${rule} has no LICENSE sentence`);
+    assert.equal(isStated, flatLicenseText.includes(sentence), `${rule}: ${sentence}`);
+  }
+  assert.ok(!flatLicenseText.includes('on top of the organization licence'), 'no second fee on top of the licence');
   assert.ok(flatLicenseText.includes('Keep the paid invoice or its receipt: either is your licence'), 'LICENSE 3.7 asks for more than one proof');
 });
 
@@ -204,14 +202,13 @@ test('the buying steps of licensing.json are the numbered steps of LICENSE 3.7, 
 });
 
 test('the yes-or-no facts of licensing.json are what LICENSE says', () => {
-  const { free, aiTraining, buy } = licensingData;
+  const { free, buy } = licensingData;
   assert.equal(licensingData.sourceAvailable, flatLicenseText.includes('Charness is **source available**, not open source'));
   assert.equal(licensingData.openSource, !flatLicenseText.includes('not open source'));
   assert.equal(licensingData.telemetry, !flatLicenseText.includes('There are no licence keys, activation, compliance telemetry or remote shutdown'));
   assert.equal(free.personalUse, flatLicenseText.includes('1.1. **Personal use.**'));
   assert.equal(free.organizationGroup.bothRequired, flatLicenseText.includes('Both must hold'));
   assert.equal(free.educationAndPublicBenefit, flatLicenseText.includes('1.3. **Education and public benefit.**'));
-  assert.equal(aiTraining.allowed, flatLicenseText.includes('Training or fine-tuning a machine-learning model on Charness code or commits is allowed'));
   assert.equal(buy.agentsMayBuy, flatLicenseText.includes('An agent may buy on its own when the organization lets it spend'));
   assert.equal(licensingData.derivedCode.codeWrittenWithCharnessIsYours, flatLicenseText.includes('2.4. **Your own work.** Using Charness to write code never makes that code derived from Charness.'));
   assert.equal(licensingData.derivedCode.terms, 'LICENSE 2.3–2.4');
