@@ -480,7 +480,12 @@ another platform's state.
   between two notes keeps editing the SAME comment; an entry a week old is forgotten (a request quiet that long gets a new
   comment). The agent is told in the context preamble that each progress note replaces the last, so it writes the full status.
   - **What ends it.** A `question` or `final` answer delivered is a new comment as ever and LETS GO of the progress comment (no
-    more edits; a later note of the same request starts a new one, below the final). So does any ISSUE UPDATE the request receives
+    more edits; a later note of the same request starts a new one, below the final) — after CLOSING it: the comment is read and
+    edited once more with a line on top (`buildJiraProgressClosedText`: «✅ Done <time> UTC: these were interim notes, the answer
+    is in a newer comment», «⏸ Paused … for a question …»), so a note such as «the pipeline is running now, I'll report when it
+    finishes» never stands as the issue's latest word on the work. The same answer closes the progress comments of the requests
+    it superseded (`RequestAnswerDelivery.supersededRequestIds`: a mention the hand-over replaced). Cosmetic: a read or edit
+    that fails is a warning, the answer stands; a comment already carrying the line is left alone. So does any ISSUE UPDATE the request receives
     (below). A later REQUEST has its own — requests never edit each other's. The give-up alert lets it go too (a later note
     starts below it).
   - **What is a comment of its own, never an edit.** Only a plain note is kept as the one comment: a progress answer with

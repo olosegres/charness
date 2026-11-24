@@ -913,8 +913,9 @@ connector behaves is described in [`src/connectors/jira/README.md`](src/connecto
    **One progress comment per request.** While the AI works it may send interim notes. They do not fill the issue: the
    first note of a request is a comment, each next one **edits** that comment to the newest text and ends it with a line
    saying when it was last updated (UTC) — in the same thread, and without notifying anyone (an edit is not news). The
-   question or final answer that closes the request is a new comment, as before, and the progress comment stays as it
-   was; a later request gets its own. A note that carries files, or replies to a comment (which notifies its author, an
+   question or final answer that closes the request is a new comment, as before, and the progress comment gets a line on
+   top saying it held interim notes and the answer (or the question) is in a newer comment — so it never still reads as
+   work under way once the work is done; a later request gets its own. A note that carries files, or replies to a comment (which notifies its author, an
    edit would not), or is too long for one comment, is a comment of its own. If Jira refuses an edit (the comment was
    deleted, or the AI account may not edit its own comments — *Edit own comments*), the text is posted as a new comment
    instead, and that one is kept up to date from then on. The bot's note that the AI waits for a usage limit to reset

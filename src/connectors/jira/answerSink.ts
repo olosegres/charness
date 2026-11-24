@@ -54,10 +54,12 @@ import { getJiraNoticeSlot, jiraProgressSlot, type JiraProgressComments } from '
  *
  * One progress comment per request (`progressComments.ts`): the first `progress` answer of a request posts a comment and the sink
  * remembers it (on disk); each next one EDITS it to the newest text, with a line saying when it was last updated, in the thread
- * the first stood in — an edit moves nothing and notifies nobody. A `question` or `final` answer is a new comment as ever and the
- * progress comment is left as it is. An edit Jira refuses (the comment is gone, 400, 403), or one of unknown outcome whose read-back
- * shows the old text and whose one repeat does not land, posts the text as a new comment instead (with R18's read-back) and that one
- * is remembered — the text is never lost. An edit of unknown outcome whose comment cannot be read is an error that tells the agent
+ * the first stood in — an edit moves nothing and notifies nobody. A `question` or `final` answer is a new comment as ever, and it
+ * closes the progress comment it ends — its request's and those of the requests it replaced: a line on top says the notes were
+ * interim and the answer (or the question) is in a newer comment, so no note still reads as work under way ("pipeline 42 is running
+ * now, I'll report when it finishes") once the answer stands below it. An edit Jira refuses (the comment is gone, 400, 403), or
+ * one of unknown outcome whose read-back shows the old text and whose one repeat does not land, posts the text as a new comment
+ * instead (with R18's read-back) and that one is remembered — the text is never lost. An edit of unknown outcome whose comment cannot be read is an error that tells the agent
  * to send it again: nothing is posted, and the resend edits the same comment (a new comment would show the text twice). A progress answer is kept as that one comment only when it is a plain note: it carries no
  * files, replies to no comment (an edit notifies nobody, a reply is meant to) and fits one comment; any other is a comment of its
  * own, like a question, and the progress comment is let go, so the next note starts below it. So is an issue update the request
@@ -160,9 +162,27 @@ export function buildJiraThreadRefusedWarning(threadRootId: string): string {
   return `The thread of comment ${threadRootId} no longer takes replies (Jira refused it), so the answer was posted as a new comment instead.`;
 }
 
-/** @description The line an edited progress comment ends with: when it was last updated (UTC, to the minute, as the other notices tell time). */
+/** A moment as the notices tell time: UTC, to the minute. */
+function formatUtcMinute(atMs: number): string {
+  return `${new Date(atMs).toISOString().slice(0, 16).replace('T', ' ')} UTC`;
+}
+
+/** @description The line an edited progress comment ends with: when it was last updated. */
 export function buildJiraProgressUpdatedText(atMs: number): string {
-  return `Last updated ${new Date(atMs).toISOString().slice(0, 16).replace('T', ' ')} UTC`;
+  return `Last updated ${formatUtcMinute(atMs)}`;
+}
+
+const progressDoneMark = '✅ Done';
+const progressPausedMark = '⏸ Paused';
+
+/**
+ * @description The line a progress comment gets on top once its request has its answer (`final`) or asks the requester (`question`):
+ * the notes below it were interim, and where to read on.
+ */
+export function buildJiraProgressClosedText(kind: 'final' | 'question', atMs: number): string {
+  return kind === 'final'
+    ? `${progressDoneMark} ${formatUtcMinute(atMs)}: these were interim notes, the answer is in a newer comment.`
+    : `${progressPausedMark} ${formatUtcMinute(atMs)} for a question: these were interim notes, the question is in a newer comment.`;
 }
 
 /** @description The last paragraph of a hand-over's `question` comment: how the requester lets the agent go on. */
@@ -422,6 +442,25 @@ export function createJiraAnswerSink(deps: JiraAnswerSinkDeps): JiraAnswerSink {
   }
 
   /**
+   * Put the closing line on top of each progress comment an answer of `kind` ends. Cosmetic: the answer has landed, so a comment that
+   * cannot be read or edited stays as it is, with a warning; one that already carries a closing line is left alone.
+   */
+  async function closeProgressComments(issueKey: string, commentIds: readonly string[], kind: 'final' | 'question'): Promise<void> {
+    const [closedParagraph] = createPlainTextAdf(buildJiraProgressClosedText(kind, deps.now())).content;
+    for (const commentId of commentIds) {
+      try {
+        const shown = await client.getComment(issueKey, commentId);
+        const content = shown.body?.content ?? [];
+        const firstLine = getAdfText(content[0] ?? null);
+        if (firstLine.startsWith(progressDoneMark) || firstLine.startsWith(progressPausedMark)) continue;
+        await client.editComment(issueKey, commentId, { version: 1, type: 'doc', content: [closedParagraph, ...content] });
+      } catch (error) {
+        console.warn(`[jira] ${issueKey}: progress comment ${commentId} could not be marked ${kind === 'final' ? 'done' : 'paused'}: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+  }
+
+  /**
    * The person a mention request is about: its comment's author, when it is the request's requester and a person
    * (an app cannot be notified). `null` — nobody to mention; the answer goes without.
    */
@@ -635,6 +674,12 @@ export function createJiraAnswerSink(deps: JiraAnswerSinkDeps): JiraAnswerSink {
         console.warn(`[jira] ${issueKey}: comment ${kept.commentId} could not be edited (${edited.detail}); posting the progress as a new comment`);
         threadRootId = kept.threadRootId;
       }
+      // The progress comments this answer ends, read before they are let go: its request's, and those of the requests it replaced.
+      const isEndingAnswer = !delivery.isBotNotice && (delivery.kind === 'final' || delivery.kind === 'question');
+      const endedProgressCommentIds = isEndingAnswer
+        ? [...new Set([delivery.requestId, ...(delivery.supersededRequestIds ?? [])]
+          .flatMap((requestId) => deps.progressComments.get(requestId, jiraProgressSlot)?.commentId ?? []))]
+        : [];
       const posted = await postComments(issueKey, bodies, delivery.requestId, threadRootId);
       if (posted.postedCount === 0 && posted.failure) return { ok: false, error: getNothingPostedError(posted.failure) };
       // The agent's answer is there: the thread an update put it in is used up, the next answer goes where they go by default.
@@ -647,6 +692,10 @@ export function createJiraAnswerSink(deps: JiraAnswerSinkDeps): JiraAnswerSink {
       // final answer or a note that is a comment of its own ends its progress comment too); a bot comment that stands on its own
       // (an account moved, no account usable) ends the notices and leaves the agent's note, which it has nothing to do with.
       deps.progressComments.forgetAll(delivery.requestId, [...(slot === null ? [] : [slot]), ...(delivery.isBotNotice ? [jiraProgressSlot] : [])]);
+      if (isEndingAnswer) {
+        for (const requestId of delivery.supersededRequestIds ?? []) deps.progressComments.forgetAll(requestId);
+        await closeProgressComments(issueKey, endedProgressCommentIds.filter((commentId) => !posted.commentIds.includes(commentId)), delivery.kind === 'final' ? 'final' : 'question');
+      }
       const warnings: string[] = [...(files?.notes ?? [])];
       if (leftOutCommentIds.length > 0) warnings.push(buildJiraReplyLeftOutWarning(leftOutCommentIds));
       if (replies.threadRootId !== null && replies.otherThreadCommentIds.length > 0) {

@@ -8,10 +8,12 @@
  *   isolation checked before the boot
  *   → progress → progress → progress → final: the first note is a comment, the next two EDIT it (to the newest text, ending
  *     with a line saying when it was updated; the edit notifies nobody), the final answer is a second comment and hands the
- *     issue back; between the notes the polls read the issue's comments — the edit moved the issue's `updated` — and decide
+ *     issue back, and the progress comment gets a line on top saying it was interim and the answer is newer — so it never
+ *     still reads as work under way once the answer stands; between the notes the polls read the issue's comments — the edit moved the issue's `updated` — and decide
  *     NOTHING: no update for the agent, no request, no comment decision (an edit by the AI account triggers nothing); the
  *     comment's id is on disk, and let go with the final answer
- *   → the edit is refused (the comment is gone): the next note is a NEW comment with the newest text, and the one after edits THAT one
+ *   → the edit is refused (the comment is gone): the next note is a NEW comment with the newest text, and the one after edits THAT one;
+ *     the final answer closes that one, the old one is left as it was
  *   → a person comments between two notes (an issue update reaches the request): the next note is a NEW comment below theirs, never a
  *     silent edit above it, and the note after it edits that one
  *   → charness restarted between two notes: the next note edits the SAME comment
@@ -59,6 +61,15 @@ import {
 } from './jiraE2e/jiraFlowKit';
 
 const updatedLineSuffix = /\nLast updated \d{4}-\d{2}-\d{2} \d{2}:\d{2} UTC$/;
+/** The line a progress comment gets on top once its request's final answer stands below it. */
+const closedLinePrefix = /^✅ Done \d{4}-\d{2}-\d{2} \d{2}:\d{2} UTC: these were interim notes, the answer is in a newer comment\.\n/;
+
+/** A progress comment closed by the final answer: the closing line on top, then the newest note as it was. */
+function assertClosedProgressComment(text: string, newestNote: string): void {
+  assert.match(text, closedLinePrefix, 'the closing line on top: the notes were interim, the answer is newer');
+  assert.ok(text.replace(closedLinePrefix, '').startsWith(newestNote), text);
+  assert.match(text, updatedLineSuffix, 'the line saying when the notes were last updated stays');
+}
 
 /** Wait for the instance's next `pollCount` polls to END (each is a search, and the next starts a poll interval after it). */
 async function waitForPolls(pollCount: number): Promise<void> {
@@ -94,7 +105,7 @@ describe('Jira connector end to end — one progress comment per request, edited
     await bootJiraOnly();
   });
 
-  it('progress → progress → progress → final is two comments, the first edited twice; an edit by the AI account moves the issue and triggers nothing', async () => {
+  it('progress → progress → progress → final is two comments, the first edited twice and closed by the final answer; an edit by the AI account moves the issue and triggers nothing', async () => {
     const issueKey = 'PROJ-50';
     createIssue(issueKey, 'progress-edits');
     handIssueToAi(issueKey, requester);
@@ -129,11 +140,11 @@ describe('Jira connector end to end — one progress comment per request, edited
     assert.deepEqual(getAnswers(issueKey).map((answer) => answer.kind), ['progress', 'progress', 'progress', 'final']);
     assert.equal(issue.comments.length, 2, 'two comments in all: the progress note, edited, and the final answer');
     assert.equal(issue.comments[0].id, progressComment.id);
-    assert.match(getCommentTexts(issue)[0], new RegExp(`^${fakeProgressEditsBody(issueKey, 3).replace('.', '\\.')}`), 'the newest note');
-    assert.match(getCommentTexts(issue)[0], updatedLineSuffix);
+    assertClosedProgressComment(getCommentTexts(issue)[0], fakeProgressEditsBody(issueKey, 3));
     assert.equal(getCommentTexts(issue)[1], `Fake final answer for ${issueKey} (progress-edits, turn 1).`, 'the final answer is a new comment');
     assert.equal(countRequests('POST', issueKey), 2);
-    assert.equal(countRequests('PUT', issueKey, progressComment.id), 2);
+    assert.equal(countRequests('PUT', issueKey, progressComment.id), 3, 'two notes and the closing line');
+    assert.ok(fakeJira.editRequests.filter((edit) => edit.issueKey === issueKey).every((edit) => edit.notifyUsers === 'false'), 'no edit notifies anyone');
     assert.equal(countAssigneeChanges(issueKey), 1, 'one hand-back, with the final answer');
     assert.deepEqual(readClosedRequests().filter((record) => record.origin.attributes.issueKey === issueKey).map((record) => record.closeReason), ['final']);
     assert.equal(getTurns(issueKey).length, 1, 'one turn from start to end');
@@ -163,9 +174,8 @@ describe('Jira connector end to end — one progress comment per request, edited
     await waitFor(`${issueKey}: answered and handed back`, answerTimeoutMs, () => issue.assignee?.accountId === requester.accountId && getAnswers(issueKey).length === 4);
     assert.equal(issue.comments.length, 3, 'the old progress comment, the one that took over, the final answer');
     assert.equal(getCommentTexts(issue)[0], fakeProgressEditsBody(issueKey, 1), 'the old one is left as it was');
-    assert.match(getCommentTexts(issue)[1], new RegExp(`^${fakeProgressEditsBody(issueKey, 3).replace('.', '\\.')}`), 'note 3 edited the new comment');
-    assert.match(getCommentTexts(issue)[1], updatedLineSuffix);
-    assert.deepEqual(fakeJira.editRequests.filter((edit) => edit.issueKey === issueKey).map((edit) => edit.commentId), [firstComment.id, secondComment.id]);
+    assertClosedProgressComment(getCommentTexts(issue)[1], fakeProgressEditsBody(issueKey, 3));
+    assert.deepEqual(fakeJira.editRequests.filter((edit) => edit.issueKey === issueKey).map((edit) => edit.commentId), [firstComment.id, secondComment.id, secondComment.id], 'the refused edit, note 3, the closing line');
     assert.equal(countRequests('POST', issueKey), 3);
     assert.equal(getTurns(issueKey).length, 1);
   });
@@ -196,10 +206,9 @@ describe('Jira connector end to end — one progress comment per request, edited
     assert.equal(texts[0], fakeProgressEditsBody(issueKey, 1), 'note 1 was never edited');
     assert.equal(issue.comments[0].updated, undefined);
     assert.equal(texts[1], personsText);
-    assert.match(texts[2], new RegExp(`^${fakeProgressEditsBody(issueKey, 3).replace('.', '\\.')}`), 'note 2 was a new comment below the person\'s; note 3 edited it');
-    assert.match(texts[2], updatedLineSuffix);
+    assertClosedProgressComment(texts[2], fakeProgressEditsBody(issueKey, 3));
     assert.equal(texts[3], `Fake final answer for ${issueKey} (progress-after-update, turn 2).`);
-    assert.deepEqual(fakeJira.editRequests.filter((edit) => edit.issueKey === issueKey).map((edit) => edit.commentId), [issue.comments[2].id], 'one edit: of the new comment, not of note 1');
+    assert.deepEqual(fakeJira.editRequests.filter((edit) => edit.issueKey === issueKey).map((edit) => edit.commentId), [issue.comments[2].id, issue.comments[2].id], 'note 3 and the closing line: of the new comment, never of note 1');
     assert.equal(countRequests('POST', issueKey), 3, 'note 1, note 2, the final answer');
     assert.equal(countAssigneeChanges(issueKey), 1);
   });
@@ -230,7 +239,7 @@ describe('Jira connector end to end — one progress comment per request, edited
     releaseHeldTurn();
     await waitFor(`${issueKey}: answered and handed back`, answerTimeoutMs, () => issue.assignee?.accountId === requester.accountId && getAnswers(issueKey).length === 4);
     assert.equal(issue.comments.length, 2, 'the progress note, edited, and the final answer');
-    assert.match(getCommentTexts(issue)[0], new RegExp(`^${fakeProgressEditsBody(issueKey, 3).replace('.', '\\.')}`));
+    assertClosedProgressComment(getCommentTexts(issue)[0], fakeProgressEditsBody(issueKey, 3));
     assert.equal(getTurns(issueKey).length, 1);
   });
 

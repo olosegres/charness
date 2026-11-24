@@ -24,6 +24,11 @@ export interface RequestAnswerDelivery {
   origin: RequestOrigin;
   isRequestOpen: boolean;
   /**
+   * The requests this one replaced (`OpenRequestState.supersededRequestIds`), oldest first: this answer covers them too. A sink that
+   * keeps something per request (Jira: its progress comment) settles theirs with this request's closing answer. Absent: none.
+   */
+  supersededRequestIds?: readonly string[];
+  /**
    * Platform-owned: the ids of the conversation's comments this answer replies to, as the agent named them. The
    * core passes it through untouched; a sink that has no such notion ignores it.
    */

@@ -128,6 +128,7 @@ export async function answerRequest(deps: AnswerRequestDeps, args: AnswerRequest
     body: args.body,
     origin: lookup.request.origin,
     isRequestOpen: lookup.isOpen,
+    ...(lookup.request.supersededRequestIds === undefined ? {} : { supersededRequestIds: lookup.request.supersededRequestIds }),
     ...(args.replyToCommentIds === undefined ? {} : { replyToCommentIds: args.replyToCommentIds }),
     ...(args.files === undefined ? {} : { files: args.files }),
   });
