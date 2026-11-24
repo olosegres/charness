@@ -605,7 +605,7 @@ Sub-agent transcript: status-only with a ticking elapsed counter (`minimal`/`sho
 
 ### `/sessions`
 
-List & resume previous sessions in this folder. Picking one ends the conversation the topic runs: a message the agent had not read yet when the command ran — written behind a turn it was still working on — closes with the same line; one it had read does not.
+List & resume previous sessions in this folder. Picking one ends the conversation the topic runs: a message the agent had not read yet when you picked it — written behind a turn it was still working on — is said not to have reached the agent, so you can send it again; one it had read is not.
 
 ### `/rename_session`
 
@@ -613,11 +613,11 @@ Rename the current live session (OpenCode; Claude transcripts have no title).
 
 ### `/quit`, `/q`
 
-End the session — Claude: graceful double Ctrl+C; OpenCode/terminal: `stopSession`. Releases the persisted session id, so a bot restart won't auto-reattach it (resume later via `/sessions`). A topic whose agent process is gone but whose session is kept (it "sleeps": the next message, file, voice note, `/compact`, `/model` or `/effort` resumes it by itself) is released the same way. After it, `/claude` or `/opencode` starts a fresh session. A message sent to the topic while `/quit`, `/quitall`, `/new`, leaving the folder or a switch to the other backend is ending or replacing the conversation is not delivered and starts nothing: the topic says it did not reach the agent, so you can send it again once that is done. A message the agent had not read yet when the command ran — written behind a turn it was still working on — closes with the same line; one it had read does not.
+End the session — Claude: graceful double Ctrl+C; OpenCode/terminal: `stopSession`. Releases the persisted session id, so a bot restart won't auto-reattach it (resume later via `/sessions`). A topic whose agent process is gone but whose session is kept (it "sleeps": the next message, file, voice note, `/compact`, `/model` or `/effort` resumes it by itself) is released the same way. After it, `/claude` or `/opencode` starts a fresh session. A message sent to the topic while `/quit`, `/quitall`, `/new`, leaving the folder or a switch to the other backend is ending or replacing the conversation is not delivered and starts nothing: the topic says it did not reach the agent, so you can send it again once that is done. A message the agent had not read yet when you quit — written behind a turn it was still working on — is said not to have reached the agent, so you can send it again; one it had read is not.
 
 ### `/new`
 
-End the current session and start a fresh one (same adapter). A message the agent had not read yet when the command ran — written behind a turn it was still working on — closes with the same line; one it had read does not.
+End the current session and start a fresh one (same adapter). A message the agent had not read yet when you ran it — written behind a turn it was still working on — is said not to have reached the agent, so you can send it again; one it had read is not.
 
 ### `/status`
 
@@ -1015,7 +1015,7 @@ How often an agent that **launches workers** is told where the accounts' limits 
 
 ### `/bind`
 
-Bare: current binding + folder picker, with «leave current dir» (the old `/unbind`) and «create new folder» buttons. Leaving the folder ends the conversation: a message sent while it runs is not delivered and is said so, and a message the agent had not read yet when you left — written behind a turn it was still working on — closes with the same line; one it had read does not.
+Bare: current binding + folder picker, with «leave current dir» (the old `/unbind`) and «create new folder» buttons. Leaving the folder ends the conversation: a message sent while it runs is not delivered, and neither is a message the agent had not read yet when you left — written behind a turn it was still working on; each is said not to have reached the agent, so you can send it again. One it had read is not.
 
 ### `/topic`
 
@@ -1158,7 +1158,7 @@ creator is gone, set `OWNER_USER_ID` (or `ALLOWED_GROUP_ID`) and restart.
 
 ### `/quitall`
 
-End every active agent in every bound topic (also releases their session ids). In each topic, a message sent while it runs is not delivered and is said so, and a message the agent had not read yet when the command ran — written behind a turn it was still working on — closes with the same line; one it had read does not.
+End every active agent in every bound topic (also releases their session ids). In each topic, a message sent while it runs is not delivered, and neither is a message the agent had not read yet when you ran it — written behind a turn it was still working on; each is said not to have reached the agent, so you can send it again. One it had read is not.
 
 ### `/runners`
 

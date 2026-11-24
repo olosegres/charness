@@ -5683,6 +5683,10 @@ function closeSetAsideQuestionsInBackground(key: SessionKey): void {
  *
  * Resolves the work the stop cut off that the agent's next prompt is told about (`null`: none), so a caller's line to
  * the operator is derived from the very record the note lists.
+ *
+ * Onto another agent or a shell it closes the conversation's requests (`cancelEndingConversationRequests`), telling a person whose words
+ * the agent never took in; `options.promptsReachedOrHeld` is a reading of «taken in» a bridged move took ahead of its bridge (absent: read
+ * here, before the old process is stopped). `options.isConversationKept` keeps the set-aside questions (an automatic move).
  */
 async function switchThreadAdapter(key: SessionKey, newName: string, options: { isConversationKept?: boolean; promptsReachedOrHeld?: ReadonlySet<string> } = {}): Promise<LostWork | null> {
   const prevName = getThreadAdapterNameRaw(key);
@@ -10135,7 +10139,9 @@ function checkIsFallbackMoveAcrossBackends(key: SessionKey, from: FallbackChainE
  * half: record `account` as the topic's own Claude pick when one is given (the chain's rung, the operator's pick — a
  * switch that only names the account the topic follows passes `null`), then `switchThreadAdapter` stops the old
  * session, parks its id and brings back the target family's parked one. The context bridge is built BEFORE this, while
- * the adapter being left still runs, and the caller's `ending` holds the conversation from before the bridge. Resolves
+ * the adapter being left still runs, and the caller's `ending` holds the conversation from before the bridge.
+ * `options.promptsReachedOrHeld` is what the agent took in, read when the bridge was built: it is handed to `switchThreadAdapter`'s close
+ * of the requests, so a message is either carried by the bridge or told, never neither (review 27 nit 5). Resolves
  * whether the stop took background work with it — the caller tells the operator (the agent is told by the next prompt,
  * `switchThreadAdapter`).
  */
@@ -16294,9 +16300,12 @@ function cancelConversationRequest(key: SessionKey): void {
  * whose words the agent never took in is told: nobody reads them (review 25 #3; one rule for every such command, review 26 #2). A request
  * the agent took in closes in silence: its words are in the conversation it had. «Taken in» is the persisted mark or what the live process
  * says NOW (`readPromptsReachedOrHeld`, read synchronously here — call it before the command stops the process — or handed in by a command
- * that replaces the process before it closes the requests, the `/resume` pick): the mark lags until a settle or the 10-second poll (review
- * 26 #1). A prompt waiting in a window is told by that window's drop, and a request whose drop is already being told
- * (`personDropsBeingTold`) is not told twice. Fire and forget. An interrupt keeps {@link cancelConversationRequest}'s silent close.
+ * that reads it earlier: the `/resume` pick ahead of the resume that replaces the process, a bridged move ahead of its bridge, so the
+ * reading and the bridge describe the same moment): the mark lags until a settle or the 10-second poll (review 26 #1, review 27 nit 5).
+ * Three prompts are not told here, so each person is told once: one waiting in a window — that window's drop tells it; one on its way to
+ * its write ({@link personPromptsInDelivery}) — its own route refuses it, also once this command is over, since its request is closed here
+ * ({@link personPromptsEndedInDelivery}, marked at this call; review 27 #1, review 28 nit 4); and one whose drop is already being told
+ * (`personDropsBeingTold`). Fire and forget. An interrupt keeps {@link cancelConversationRequest}'s silent close.
  */
 function cancelEndingConversationRequests(key: SessionKey, reachedOrHeld?: ReadonlySet<string>): void {
   const engine = requestWakeUpEngine;
