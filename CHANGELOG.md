@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+**An agent on a Jira issue now gets the right instructions for waiting on a worker, a pipeline or a test run: before, the bot's own skill told it that nothing would wake it and that it must never end its turn while a worker ran.**
+That was wrong: in a Jira conversation the end of the agent's own background command does start its next turn, and the bot reminds it 15 minutes after each progress note. The skill now gives both ways (wait in the turn, or a background poll that ends with the run), forbids polls shorter than the run and wakeup fallbacks, and asks for a progress note that names the run and when it should end.
+
 **On a Jira issue, the AI's progress comment no longer keeps saying «running now, I'll report when it finishes» after the answer is there: its final answer (or its question) now marks the progress comment as done.**
 Before, a request's progress comment stayed exactly as the last note left it, so an issue whose work was finished long ago still showed «the pipeline is running now» above the answer and looked hung to whoever read it. Now, once the answer or the question is posted, the progress comment gets a line on top — «✅ Done …: these were interim notes, the answer is in a newer comment» (or «⏸ Paused … for a question») — and so does the progress comment of an earlier request the answer covers (a mention the hand-over replaced). The edit notifies nobody.
 

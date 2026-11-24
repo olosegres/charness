@@ -64,7 +64,8 @@ kill -0 <pid> 2>/dev/null || { echo "worker <pid> exited"; exit 1; }; [ -n "$(fi
 - Then cancel the check (`schedule_list` → `schedule_cancel`) — unless you kept it for a worker that is fine — which
   also deletes its status line, so a finished worker leaves nothing behind. A new run gets a new check.
 - Never build your own watcher: no sleep loop, `CronCreate`, `ScheduleWakeup`, background job or tmux pane. They
-  live in your process, which the bot stops after an idle stretch.
+  live in your process, which the bot stops after an idle stretch. (A tracker conversation has no bot check: see
+  «A tracker conversation (Jira)» below.)
 
 ## Between wakes
 
@@ -121,9 +122,19 @@ kill -0 <pid> 2>/dev/null || { echo "worker <pid> exited"; exit 1; }; [ -n "$(fi
 
 ## A tracker conversation (Jira)
 
-There are no `schedule_*` tools and nothing will wake you. Do not end your turn while a worker runs: wait in the
-turn with foreground polls of at most 10 minutes each, checking the same signals (the PID, the run directory
-changing, 2 h 30 min since you started waiting without a report), report interim progress with `answer_request` kind `progress`, and end with kind `final`.
+There are no `schedule_*` tools, so no bot check watches a worker for you. Here, and only here, you watch it
+yourself — a worker, a pipeline or a test run alike — in one of two ways:
+
+- in the turn: foreground polls of at most 10 minutes each;
+- or a background command that polls the same signals every 30–60 s (the PID or the run's state, the run directory
+  changing, 2 h 30 min since you started waiting without a report) and EXITS the moment one fires; then you may end
+  your turn. Its end starts your next turn: the bot keeps your process while your own background work runs (up to
+  6 h after your last turn). A wait that ended before the run did → see why and start the next one in that turn.
+
+Never a poll with a fixed count shorter than the run, and no `ScheduleWakeup` or `CronCreate` as a fallback: the bot
+reminds you 15 minutes after each `progress` answer. Read a run's result the moment it ends, never at the next
+reminder, and never give a `final` answer with a run you have not read. Each `progress` answer names what runs, its
+link and when it should end, never only «I'll report when it finishes». End with kind `final`.
 A screenshot or the passing-run video goes into the answer itself: its path in `answer_request`'s `files` (an H.264
 `.mp4` plays in the comment); `send_file_to_user` posts files in a comment of their own.
 
