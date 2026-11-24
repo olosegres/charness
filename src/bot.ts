@@ -6552,7 +6552,7 @@ async function forwardPromptToAgent(
     checkIsSessionActive: () => checkIsAcceptingInput(key) && !(isTechnicalPrompt && (adapter.checkIsBusy?.(key) ?? false)),
     // A person's prompt is refused while a command ends or replaces the conversation, as at its own write (review 25 #1).
     ...(isPersonInput ? {
-      checkIsRefused: () => conversationEndings.checkIsRefusingMessages(keyToString(key)),
+      checkIsRefused: () => checkIsPersonPromptRefused(key, options.requestId ?? null),
       reportRefused: () => reportDroppedPersonPrompt(key, options.requestId ?? null, true),
     } : {}),
     buffer: async () => {
@@ -13120,12 +13120,20 @@ async function deliverPromptByState(
 }
 
 /**
- * Request ids of the person's prompts on their way to their write: from the moment the request is created — inside the create,
- * synchronously with it appearing open — until the prompt's delivery is settled. An ending command's cancel does not tell them: the
- * prompt's own route tells its person (refused while the command runs, or with no session) or delivers it to the conversation that
- * follows, and the command telling it too gave the person the line twice, or a false one (review 27 #1).
+ * The person's prompts on their way to their write, request id → conversation: from the moment the request is created — inside the
+ * create, synchronously with it appearing open — until the prompt's delivery is settled. An ending command's cancel does not tell them:
+ * the prompt's own route tells its person (refused while the command runs, refused once it is over because the command closed its request
+ * — {@link personPromptsEndedInDelivery} —, or with no session), and the command telling it too gave the person the line twice, or a false
+ * one (review 27 #1).
  */
-const personPromptsInDelivery = new Set<string>();
+const personPromptsInDelivery = new Map<string, string>();
+
+/**
+ * The requests of {@link personPromptsInDelivery} an ending command closed (`cancelEndingConversationRequests`, marked at its call): the
+ * prompt is refused at its write even once the command is over, never written into the conversation that follows under a request that is
+ * closed — unwatched, and naming a request its agent cannot answer (review 28 nit 4).
+ */
+const personPromptsEndedInDelivery = new Set<string>();
 
 /**
  * @description Open a person's prompt's request (`openTopicRequest`), `deliver` the prompt and settle the request by where it went,
@@ -13143,14 +13151,25 @@ async function deliverPersonPromptInRequest(
   try {
     const opening = await openTopicRequest(key, text, intake, messageContext, (requestId) => {
       marked.requestId = requestId;
-      personPromptsInDelivery.add(requestId);
+      personPromptsInDelivery.set(requestId, keyToString(key));
     });
     const outcome = await deliver(opening);
     await settleTopicRequestAfterDelivery(key, opening, outcome);
     return outcome;
   } finally {
-    if (marked.requestId !== null) personPromptsInDelivery.delete(marked.requestId);
+    if (marked.requestId !== null) {
+      personPromptsInDelivery.delete(marked.requestId);
+      personPromptsEndedInDelivery.delete(marked.requestId);
+    }
   }
+}
+
+/**
+ * @description Whether a person's prompt is refused at its write: a command ends or replaces the conversation now (review 25 #1), or one
+ * closed the prompt's request while it was in delivery — then it is refused once the command is over as well (review 28 nit 4).
+ */
+function checkIsPersonPromptRefused(key: SessionKey, requestId: string | null): boolean {
+  return conversationEndings.checkIsRefusingMessages(keyToString(key)) || (requestId !== null && personPromptsEndedInDelivery.has(requestId));
 }
 
 /**
@@ -13173,8 +13192,9 @@ function deliverPersonPromptAtWrite(
   return deliverLatePrompt({
     checkIsWindowOpen: () => startupPromptBuffer.checkIsStarting(keyToString(key)),
     checkIsSessionActive: () => checkIsAcceptingInput(key),
-    // A command ends or replaces the conversation: the prompt is not delivered — read ahead of any window (review 25 #1).
-    checkIsRefused: () => conversationEndings.checkIsRefusingMessages(keyToString(key)),
+    // A command ends or replaces the conversation, or one closed this prompt's request while it was in delivery: the prompt is not
+    // delivered — read ahead of any window (review 25 #1, review 28 nit 4).
+    checkIsRefused: () => checkIsPersonPromptRefused(key, requestId),
     // The request closes here, ahead of the line, so a switch closing the conversation's requests meanwhile does not tell it again; the
     // caller's own close of a `noSession` prompt then finds it closed.
     reportRefused: () => reportDroppedPersonPrompt(key, requestId, true),
@@ -16281,8 +16301,12 @@ function cancelConversationRequest(key: SessionKey): void {
 function cancelEndingConversationRequests(key: SessionKey, reachedOrHeld?: ReadonlySet<string>): void {
   const engine = requestWakeUpEngine;
   if (!engine) return;
-  // Not the cancel's to tell: what the live process took in or a window holds, and a person's prompt on its way to its write (review 27 #1).
-  const promptsReachedOrHeld = new Set([...(reachedOrHeld ?? engine.readPromptsReachedOrHeld(key)), ...personPromptsInDelivery]);
+  // Not the cancel's to tell: what the live process took in or a window holds, and a person's prompt on its way to its write (review 27 #1)
+  // — which its own route refuses, even once this command is over, since the cancel closes its request (review 28 nit 4).
+  const promptsReachedOrHeld = new Set([...(reachedOrHeld ?? engine.readPromptsReachedOrHeld(key)), ...personPromptsInDelivery.keys()]);
+  for (const [requestId, conversationKey] of personPromptsInDelivery) {
+    if (conversationKey === keyToString(key)) personPromptsEndedInDelivery.add(requestId);
+  }
   void (async () => {
     const unreadRequestIds = (await engine.cancelConversation(key, promptsReachedOrHeld)).filter((requestId) => !personDropsBeingTold.has(requestId));
     // A topic line: a tracker conversation never moves to another agent (its fallback stays within Claude).

@@ -620,10 +620,11 @@ describe('a startup window\'s prompts on every way out of it (review 19 #1)', ()
     assert.match(deps, /checkIsRefusingMessages: \(key\) => conversationEndings\.checkIsRefusingMessages\(keyToString\(key\)\),/);
     assert.match(deps, /reportRefused: async \(key, options\) => \{\n[^]*?if \(options\.isPersonInput === true\) await replyToThread\(key, t\('agent\.queued_prompt_dropped_by_command'\)\);/, 'only a person is told; `deliverPromptOrBuffer` asks only for a person\'s prompt (`utils/promptDelivery.ts`)');
     const write = getBody('function deliverPersonPromptAtWrite(', 'function createPersonBufferedSettle(');
-    assert.match(write, /checkIsRefused: \(\) => conversationEndings\.checkIsRefusingMessages\(keyToString\(key\)\),/, 'a person\'s prompt at its write');
+    assert.match(write, /checkIsRefused: \(\) => checkIsPersonPromptRefused\(key, requestId\),/, 'a person\'s prompt at its write');
+    assert.match(getBody('function checkIsPersonPromptRefused(', '/**\n * @description Write a person\'s prompt by the state of the session NOW'), /return conversationEndings\.checkIsRefusingMessages\(keyToString\(key\)\) \|\|/);
     assert.match(write, /reportRefused: \(\) => reportDroppedPersonPrompt\(key, requestId, true\),/, 'its request closed, the ending command\'s line');
     const adopt = getBody('async function forwardPromptToAgent(', 'interface PromptForwardOptions');
-    assert.match(adopt, /\.\.\.\(isPersonInput \? \{\n\s*checkIsRefused: \(\) => conversationEndings\.checkIsRefusingMessages\(keyToString\(key\)\),\n\s*reportRefused: \(\) => reportDroppedPersonPrompt\(key, options\.requestId \?\? null, true\),\n\s*\} : \{\}\),/, 'and at the adopt-replay re-route');
+    assert.match(adopt, /\.\.\.\(isPersonInput \? \{\n\s*checkIsRefused: \(\) => checkIsPersonPromptRefused\(key, options\.requestId \?\? null\),\n\s*reportRefused: \(\) => reportDroppedPersonPrompt\(key, options\.requestId \?\? null, true\),\n\s*\} : \{\}\),/, 'and at the adopt-replay re-route');
     assert.match(getBody('function checkIsArrivalRoutedAtWrite(', 'async function deliverPromptDuringStartup('), /return startupPromptBuffer\.checkIsStarting\(conversationKey\) \|\| conversationEndings\.checkIsRefusingMessages\(conversationKey\);/);
     assert.equal(botSource.match(/if \(checkIsArrivalRoutedAtWrite\(key\)\) \{\n\s*await deliverPromptDuringStartup\(/g)?.length, 3, 'an admin\'s text, a talker\'s text, a voice note\'s transcript');
     assert.doesNotMatch(botSource, /if \(startupPromptBuffer\.checkIsStarting\([^)]*\)\) \{\n\s*await deliverPromptDuringStartup\(/, 'no arrival branch reads the window alone');
@@ -668,7 +669,7 @@ describe('a startup window\'s prompts on every way out of it (review 19 #1)', ()
     // The interrupts keep the silent close: the conversation goes on.
     assert.equal(botSource.match(/^\s*cancelConversationRequest\(key\);/gm)?.length, 2, '`/c` and `/esc`');
     const onEnding = getBody('function cancelEndingConversationRequests(', '/**\n * @name SchedulerWiringDeps');
-    assert.match(onEnding, /\): void \{\n\s*const engine = requestWakeUpEngine;\n\s*if \(!engine\) return;\n(?:\s*\/\/[^\n]*\n)*\s*const promptsReachedOrHeld = new Set\(\[\.\.\.\(reachedOrHeld \?\? engine\.readPromptsReachedOrHeld\(key\)\), \.\.\.personPromptsInDelivery\]\);\n\s*void \(async \(\) => \{/, 'the live reading is taken synchronously, at the call');
+    assert.match(onEnding, /\): void \{\n\s*const engine = requestWakeUpEngine;\n\s*if \(!engine\) return;\n(?:\s*\/\/[^\n]*\n)*\s*const promptsReachedOrHeld = new Set\(\[\.\.\.\(reachedOrHeld \?\? engine\.readPromptsReachedOrHeld\(key\)\), \.\.\.personPromptsInDelivery\.keys\(\)\]\);\n(?:\s*for \([^\n]*\n[^\n]*\n\s*\}\n)\s*void \(async \(\) => \{/, 'the live reading is taken synchronously, at the call');
     assert.match(onEnding, /const unreadRequestIds = \(await engine\.cancelConversation\(key, promptsReachedOrHeld\)\)\.filter\(\(requestId\) => !personDropsBeingTold\.has\(requestId\)\);\n(?:\s*\/\/[^\n]*\n)*\s*if \(unreadRequestIds\.length === 0 \|\| !checkIsTelegramKey\(key\)\) return;/, 'the engine names them (`wakeUpEngine.test.ts`)');
     assert.match(onEnding, /replyToThread\(key, t\('agent\.queued_prompt_dropped_by_command'\)\)/);
     const report = getBody('async function reportDroppedPersonPrompt(', '/**\n * @description Deliver a LATE ANSWER');
@@ -690,13 +691,13 @@ describe('a startup window\'s prompts on every way out of it (review 19 #1)', ()
     const open = getBody('async function openTopicRequest(', 'const { settleAfterDelivery: settleTopicRequestAfterDelivery }');
     assert.match(open, /createPrompt: \(requestId, supersededRequestIds\) => \{\n\s*onCreated\?\.\(requestId\);/, 'marked inside the create, synchronously with the request appearing open — no reader sees it open and unmarked');
     const inRequest = getBody('async function deliverPersonPromptInRequest(', '/**\n * @description Write a person\'s prompt by the state of the session NOW');
-    assert.match(inRequest, /personPromptsInDelivery\.add\(requestId\);/);
-    assert.match(inRequest, /const outcome = await deliver\(opening\);\n\s*await settleTopicRequestAfterDelivery\(key, opening, outcome\);\n\s*return outcome;\n\s*\} finally \{\n\s*if \(marked\.requestId !== null\) personPromptsInDelivery\.delete\(marked\.requestId\);/, 'until the settle is over, on every way out');
+    assert.match(inRequest, /personPromptsInDelivery\.set\(requestId, keyToString\(key\)\);/);
+    assert.match(inRequest, /const outcome = await deliver\(opening\);\n\s*await settleTopicRequestAfterDelivery\(key, opening, outcome\);\n\s*return outcome;\n\s*\} finally \{\n\s*if \(marked\.requestId !== null\) \{\n\s*personPromptsInDelivery\.delete\(marked\.requestId\);/, 'until the settle is over, on every way out');
     assert.match(getBody('async function deliverPromptByState(', 'async function deliverPersonPromptInRequest('), /return deliverPersonPromptInRequest\(key, text, intake, messageContext, \(opening\) => deliverPersonPromptAtWrite\(/, 'every person\'s prompt');
     assert.match(getBody('async function deliverActivePrompt(', 'async function deliverPromptByState('), /await deliverPersonPromptInRequest\(key, text, intake, messageContext, \(opening\) => cancelPendingQuestionAndForward\(/, 'and the free text that cancels a question');
     assert.equal(botSource.match(/await openTopicRequest\(key, text, intake, messageContext/g)?.length, 1, 'no person\'s request opened outside it');
     const onEnding = getBody('function cancelEndingConversationRequests(', '/**\n * @name SchedulerWiringDeps');
-    assert.match(onEnding, /const promptsReachedOrHeld = new Set\(\[\.\.\.\(reachedOrHeld \?\? engine\.readPromptsReachedOrHeld\(key\)\), \.\.\.personPromptsInDelivery\]\);/, 'read synchronously at the call, beside the live reading');
+    assert.match(onEnding, /const promptsReachedOrHeld = new Set\(\[\.\.\.\(reachedOrHeld \?\? engine\.readPromptsReachedOrHeld\(key\)\), \.\.\.personPromptsInDelivery\.keys\(\)\]\);/, 'read synchronously at the call, beside the live reading');
   });
 
   it('a bot-made post waits a last time as the last await before its write — after a topic fire\'s forward queue and the scheduler\'s request it opens — with only synchronous code between the wait and the write (review 27 nit 2)', () => {
@@ -731,6 +732,18 @@ describe('a startup window\'s prompts on every way out of it (review 19 #1)', ()
       assert.match(body, /await moveTopicToOtherBackend\([^;]*promptsReachedOrHeld \}\);/, `${name}: handed to the move`);
     }
     assert.match(getBody('async function switchThreadAdapter(', '/**\n * @description The post-start "ready" notice'), /cancelEndingConversationRequests\(key, options\.promptsReachedOrHeld\);/);
+  });
+
+  it('a message whose request an ending command closed while it was in delivery is refused at its write — also once the command is over — never written into the conversation that follows under the closed request (review 28 nit 4)', () => {
+    const onEnding = getBody('function cancelEndingConversationRequests(', '/**\n * @name SchedulerWiringDeps');
+    assert.match(onEnding, /for \(const \[requestId, conversationKey\] of personPromptsInDelivery\) \{\n\s*if \(conversationKey === keyToString\(key\)\) personPromptsEndedInDelivery\.add\(requestId\);\n\s*\}/, 'the command marks its own conversation\'s in-delivery prompts, synchronously at its call');
+    const write = getBody('function deliverPersonPromptAtWrite(', 'function createPersonBufferedSettle(');
+    assert.match(write, /checkIsRefused: \(\) => checkIsPersonPromptRefused\(key, requestId\),/);
+    assert.match(getBody('function checkIsPersonPromptRefused(', '/**\n * @description Write a person\'s prompt by the state of the session NOW'), /return conversationEndings\.checkIsRefusingMessages\(keyToString\(key\)\) \|\| \(requestId !== null && personPromptsEndedInDelivery\.has\(requestId\)\);/);
+    assert.match(getBody('async function forwardPromptToAgent(', 'interface PromptForwardOptions'), /checkIsRefused: \(\) => checkIsPersonPromptRefused\(key, options\.requestId \?\? null\),/, 'and at the adopt-replay re-route');
+    const inRequest = getBody('async function deliverPersonPromptInRequest(', 'function checkIsPersonPromptRefused(');
+    assert.match(inRequest, /personPromptsInDelivery\.set\(requestId, keyToString\(key\)\);/);
+    assert.match(inRequest, /\} finally \{\n\s*if \(marked\.requestId !== null\) \{\n\s*personPromptsInDelivery\.delete\(marked\.requestId\);\n\s*personPromptsEndedInDelivery\.delete\(marked\.requestId\);/, 'both marks end with the delivery');
   });
 
   it('every routing point reads whether the process takes input, and so does the ensure\'s plan: the adapter\'s own suspend after a torn frame is resumed for the prompt, not read `ready` while the prompt meets a dying process (review 25 nits 4 and 7)', () => {
