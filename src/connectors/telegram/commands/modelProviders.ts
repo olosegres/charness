@@ -363,16 +363,6 @@ export function createModelProviders(ports: ModelProvidersPorts) {
   const answerWithWholeText = createWholeTextAnswerer(replyToThread);
 
   /**
-   * @description Single choke point for the four `/model`-set paths (the
-   * `/model <num>` and `/model <name>` commands, the text-handler numeric pick,
-   * and the `model_<id>` button callback). Drives the thread's adapter and turns
-   * the outcome into a ready reply via the pure {@link getModelSetReplyDecision}.
-   *
-   * No session gate here: each adapter decides what "no session" means
-   * (OpenCode persists the pick for the next start and succeeds; Claude refuses
-   * with a notice). On success the pinned banner is refreshed best-effort.
-   */
-  /**
    * @description Wake a sleeping conversation first (L-D4), then set `level` on the agent the topic runs once it is up — read after the
    * wake, which waited in the conversation's queue: a move across backends queued ahead has the topic on the other adapter now (review 24
    * nit 2). An adapter with no effort contract there refuses it.
@@ -385,6 +375,16 @@ export function createModelProviders(ports: ModelProvidersPorts) {
     return adapter.setEffort(key, level);
   }
 
+  /**
+   * @description Single choke point for the four `/model`-set paths (the
+   * `/model <num>` and `/model <name>` commands, the text-handler numeric pick,
+   * and the `model_<id>` button callback). Drives the thread's adapter and turns
+   * the outcome into a ready reply via the pure {@link getModelSetReplyDecision}.
+   *
+   * No session gate here: each adapter decides what "no session" means
+   * (OpenCode persists the pick for the next start and succeeds; Claude refuses
+   * with a notice). On success the pinned banner is refreshed best-effort.
+   */
   async function applyModelSelection(
     key: SessionKey,
     modelId: string,
