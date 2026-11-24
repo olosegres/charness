@@ -134,18 +134,19 @@ already paid credited. A wrong initial figure is corrected to the price that was
 
 (a) A model is trained on Charness on purpose where Charness code or commits were chosen for its training: a fine-tune
 on them, or a training set built or picked to include them. Training done by a group's people, its contractors or anyone
-it engages for it is that group's training. Such a model may be published, open weights included, only together with
-this licence: its `Required Notice:` lines and this file. Whoever uses it follows the same rules as a user of Charness:
-the use is free where Part 1 makes it free, and otherwise covered by the group's organization licence (section 3.1).
+it engages for it is that group's training. Such a model may be published or offered to others, as open weights or as a
+service, only together with this licence: its weights or its service terms carry its `Required Notice:` lines and this
+file and say that the model was trained on Charness. Whoever uses it, by running its weights or by sending it requests,
+follows the same rules as a user of Charness: the use is free where Part 1 makes it free, and otherwise covered by the
+group's organization licence (section 3.1). A group owes nothing for its use of such a model before it knows, or the
+licensor tells it in writing, that the model was trained on Charness.
 
 (b) A general model that an independent organization trained, not for the group, on a broad collection of public code
 that merely includes Charness: the organization that trained it pays as in (d) while it sells or offers the model. The
 groups that only use it, by sending it requests or by running its weights, owe nothing for it.
 
 (c) A model trained on the group's own code, documents or agent sessions is not trained on Charness merely because
-Charness ran those agents and the prompts, skills and tool descriptions it gave them appear in that data. A group that
-only sends requests to a model trained on Charness that another, independent organization runs as a service, and that
-was not trained for it, owes nothing for that use.
+Charness ran those agents and the prompts, skills and tool descriptions it gave them appear in that data.
 
 (d) A group whose use of Charness is free under Part 1, or that holds its organization licence, owes no second fee for
 using a model trained on Charness. A group that sells or offers to others a model it trained on Charness, under (a) or

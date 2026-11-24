@@ -27,14 +27,15 @@ type FreeUse = {
 const modelRuleSentences = {
   trainingAllowed: 'Training or fine-tuning a machine-learning model on Charness code or commits is allowed.',
   oneLicenceCoversModels: 'One licence covers Charness and the models trained on it.',
-  publishOnlyWithThisLicence: 'Such a model may be published, open weights included, only together with this licence',
-  usersFollowCharnessRules: 'Whoever uses it follows the same rules as a user of Charness',
+  publishOnlyWithThisLicence: 'Such a model may be published or offered to others, as open weights or as a service, only together with this licence',
+  usersFollowCharnessRules: 'follows the same rules as a user of Charness: the use is free where Part 1 makes it free',
   noSecondFeeForUsers: 'owes no second fee for using a model trained on Charness',
   sellersAndOfferersNeedTheirBandLicence: 'holds its organization licence for its band for every year in which it does so, whatever Part 1 would otherwise allow',
   generalModelTrainerPays: 'the organization that trained it pays as in (d) while it sells or offers the model',
   generalModelUsersExempt: 'The groups that only use it, by sending it requests or by running its weights, owe nothing for it.',
   ownAgentSessionsExempt: "A model trained on the group's own code, documents or agent sessions is not trained on Charness merely because Charness ran those agents",
-  requestsToAnIndependentServiceExempt: 'only sends requests to a model trained on Charness that another, independent organization runs as a service, and that was not trained for it, owes nothing for that use',
+  serviceUsersFollowCharnessRules: 'Whoever uses it, by running its weights or by sending it requests, follows the same rules as a user of Charness',
+  usersOweNothingBeforeTheyKnow: 'A group owes nothing for its use of such a model before it knows, or the licensor tells it in writing, that the model was trained on Charness.',
   runsFromWhenTheGroupKnows: 'the day the group knows, or the licensor tells it in writing, that the model was trained on Charness',
 } as const;
 type ModelsTrainedOnCharness = Record<keyof typeof modelRuleSentences, boolean> & { summary: string };

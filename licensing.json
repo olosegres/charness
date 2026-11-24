@@ -45,7 +45,8 @@
     "generalModelTrainerPays": true,
     "generalModelUsersExempt": true,
     "ownAgentSessionsExempt": true,
-    "requestsToAnIndependentServiceExempt": true,
+    "serviceUsersFollowCharnessRules": true,
+    "usersOweNothingBeforeTheyKnow": true,
     "runsFromWhenTheGroupKnows": true
   },
   "oem": {
