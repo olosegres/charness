@@ -519,8 +519,11 @@ export function getPublishDryRunProblems(npmOutput: string): string[] {
 
 /** The Required Notice line of `LICENSE` that names the fixed copy of the licence text: `…: https://github.com/<repo>/blob/<tag>/LICENSE`. */
 const licenseTextNoticePattern = /^Required Notice: Licensed under the .+?: https:\/\/github\.com\/[^/\s]+\/[^/\s]+\/blob\/([^/\s]+)\/LICENSE$/m;
-/** Moving refs a fixed licence URL may never name: a copy would then point at whatever text the branch holds later. */
-const movingLicenseRefs = ['main', 'master', 'HEAD'];
+/** The licence's title line, `# Charness License 2.0`: its version names the fixed-text tag. */
+const licenseTitleVersionPattern = /^# .+ License (\d+(?:\.\d+)*)$/m;
+/** The only tag name a fixed licence URL may name (`license-2.0`): never a branch, never a misspelt tag the release would then create for good. */
+const licenseTagPattern = /^license-\d+(?:\.\d+)*$/;
+const licenseTagPrefix = 'license-';
 
 /**
  * @description The tag of the fixed copy of the licence text that `LICENSE`'s Required Notice names (`license-2.0` in
@@ -539,7 +542,10 @@ export function getLicenseTextTag(licenseText: string): string | null {
 export function getLicenseTagProblems(licenseText: string, tagLicenseText: string | null): string[] {
   const tag = getLicenseTextTag(licenseText);
   if (tag === null) return ['LICENSE has no "Required Notice: Licensed under the … : https://github.com/…/blob/<tag>/LICENSE" line naming a fixed copy of its text'];
-  if (movingLicenseRefs.includes(tag)) return [`the Required Notice of LICENSE names "${tag}", a moving ref, not a fixed tag`];
+  if (!licenseTagPattern.test(tag)) return [`the Required Notice of LICENSE names "${tag}", not a tag of the form license-<version>`];
+  const titleVersion = licenseText.match(licenseTitleVersionPattern)?.[1];
+  if (titleVersion === undefined) return ['LICENSE has no "# … License <version>" title line to check the tag against'];
+  if (tag !== `${licenseTagPrefix}${titleVersion}`) return [`the Required Notice of LICENSE names "${tag}", but its title's version ${titleVersion} gives ${licenseTagPrefix}${titleVersion}`];
   if (tagLicenseText !== null && tagLicenseText !== licenseText) return [`tag ${tag} holds another LICENSE text than this commit: a changed licence needs a new version and a new tag`];
   return [];
 }

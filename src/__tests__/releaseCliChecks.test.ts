@@ -322,7 +322,7 @@ describe('check-license-tag', () => {
     commitFile('LICENSE', licenseText.replace(`blob/${licenseTag}/`, 'blob/main/'), 'docs: a moving licence link');
     const result = runCli('check-license-tag');
     assert.equal(result.status, 1);
-    assert.match(result.stderr, /names "main", a moving ref, not a fixed tag/);
+    assert.match(result.stderr, /names "main", not a tag of the form license-<version>/);
   });
 
   test('the tag on the remote with this LICENSE passes; a LICENSE changed after the tag is refused', () => {

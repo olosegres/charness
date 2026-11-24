@@ -615,8 +615,12 @@ describe('getLicenseTextTag and getLicenseTagProblems', () => {
     assert.match(getLicenseTagProblems(licenseText, `${licenseText}changed\n`)[0], /tag license-2\.0 holds another LICENSE text/);
   });
 
-  test('a notice naming a branch instead of a tag, or no fixed copy at all, is refused', () => {
-    assert.match(getLicenseTagProblems(licenseText.replace('blob/license-2.0/', 'blob/main/'), null)[0], /names "main", a moving ref/);
+  test('a notice naming a branch, a misspelt tag or a tag of another version, or no fixed copy at all, is refused', () => {
+    assert.match(getLicenseTagProblems(licenseText.replace('blob/license-2.0/', 'blob/main/'), null)[0], /names "main", not a tag of the form license-<version>/);
+    assert.match(getLicenseTagProblems(licenseText.replace('blob/license-2.0/', 'blob/develop/'), null)[0], /names "develop", not a tag of the form/);
+    assert.match(getLicenseTagProblems(licenseText.replace('blob/license-2.0/', 'blob/licence-2.0/'), null)[0], /names "licence-2\.0", not a tag of the form/);
+    assert.match(getLicenseTagProblems(licenseText.replace('blob/license-2.0/', 'blob/license-2.1/'), null)[0], /names "license-2\.1", but its title's version 2\.0 gives license-2\.0/);
+    assert.match(getLicenseTagProblems(licenseText.replace('# Charness License 2.0', '# Charness License'), null)[0], /no "# … License <version>" title line/);
     assert.match(getLicenseTagProblems('# A licence with no notice\n', null)[0], /has no "Required Notice: Licensed under the/);
   });
 
@@ -624,6 +628,6 @@ describe('getLicenseTextTag and getLicenseTagProblems', () => {
     const ownLicense = fs.readFileSync(path.resolve(__dirname, '..', '..', 'LICENSE'), 'utf8');
     const tag = getLicenseTextTag(ownLicense);
     assert.notEqual(tag, null);
-    assert.ok(!['main', 'master', 'HEAD'].includes(tag ?? ''));
+    assert.deepEqual(getLicenseTagProblems(ownLicense, null), [], 'the notice names license-<the title\'s version>');
   });
 });
