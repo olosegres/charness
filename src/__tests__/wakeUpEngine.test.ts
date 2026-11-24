@@ -177,6 +177,20 @@ describe('two requesters in one conversation', () => {
     await endTurnSilently(engine);
     assert.deepEqual(wakeUps, [], 'nothing left to wake');
   });
+
+  it('the cancel names the person\'s requests it closed whose words the agent never took in — a switch to another agent tells them, the bridge carries only what the transcript holds (review 25 #3)', async () => {
+    const ledger = await createLedger();
+    const engine = createEngine(ledger);
+    const unread = await ledger.createRequest(topicKey, operatorOrigin, { createPrompt: () => 'fix the build' });
+    const read = await ledger.createRequest(topicKey, colleagueOrigin, { createPrompt: () => 'and the docs' });
+    await ledger.updateOpenRequest(read.id, { isPromptTakenIn: true });
+    const fire = await ledger.createRequest(topicKey, { kind: 'scheduledRun', attributes: { requester: 'scheduler' } }, { createPrompt: () => 'the scheduled run' });
+    for (const request of [unread, read, fire]) await engine.trackForwardedTurn(topicKey, request.id, { isRequestPrompt: true });
+
+    assert.deepEqual(await engine.cancelConversation(topicKey), [unread.id], 'not the one taken in (its words are in the transcript), not the scheduler\'s (no person\'s words)');
+    assert.deepEqual(ledger.listOpenRequestsOf(topicKey), [], 'all of them closed');
+    assert.deepEqual(await engine.cancelConversation(topicKey), [], 'a second cancel closes nothing, so it names nothing');
+  });
 });
 
 describe('silent turns', () => {

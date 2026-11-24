@@ -492,13 +492,24 @@ export class RequestWakeUpEngine {
   /**
    * @description The person took over (interrupted, quit, restarted, switched or
    * resumed the session, left the folder): every open request of the
-   * conversation closes silently and nothing wakes them.
+   * conversation closes and nothing wakes them. Resolves the ids of the requests
+   * this call closed that carry a person's words the agent never took in (not the
+   * scheduler's request, whose prompt is no person's): a caller that ends the
+   * conversation for another agent tells those people, since their words are in no
+   * transcript the next agent reads (review 25 #3); every other caller closes silently.
    */
-  async cancelConversation(key: SessionKey): Promise<void> {
+  async cancelConversation(key: SessionKey): Promise<string[]> {
     this.unwatchConversation(key);
     // The conversation's writes end with it: its next watch is named from a write of the next conversation (review 23 nit 6).
     this.writtenProcesses.delete(keyToString(key));
-    for (const request of this.deps.ledger.listOpenRequestsOf(key)) await this.deps.ledger.closeRequest(request.id, 'cancelled');
+    const unreadRequestIds: string[] = [];
+    for (const request of this.deps.ledger.listOpenRequestsOf(key)) {
+      const isUnreadPersonWords = request.origin.kind !== 'scheduledRun' && getPromptNotTakenIn(request) !== undefined;
+      // Named only when THIS close closed it: one another path closed meanwhile is that path's to tell.
+      const closed = await this.deps.ledger.closeRequest(request.id, 'cancelled');
+      if (closed !== null && isUnreadPersonWords) unreadRequestIds.push(request.id);
+    }
+    return unreadRequestIds;
   }
 
   /**

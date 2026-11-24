@@ -643,6 +643,17 @@ describe('a startup window\'s prompts on every way out of it (review 19 #1)', ()
     assert.match(wake, /const ensured = await sessionTransitions\.run\(keyToString\(key\), async \(\) => \{\n\s*if \(!state\.getBinding\(key\) \|\| getResumableSessionId\(key\) === null\) return null;\n\s*return ensureAgentSessionNow\(key, \{\}\);\n\s*\}\);\n\s*if \(ensured === null\) return \{ isAwake: false, isNoticePosted: false, isEnded: true \};/, 'read again once the transitions ahead are over; the ensure inside is the queue\'s own; a failed resume still starts fresh');
     assert.doesNotMatch(wake, /ensureAgentSession\(key\)|isResumeOnly/, 'no ensure queued with its decision read before the wait');
   });
+
+  it('a switch to another agent closes the requests and tells a person whose words the agent never read — once, not on top of a drop already being told (review 25 #3)', () => {
+    const switchAdapter = getBody('async function switchThreadAdapter(', '/**\n * @description The post-start "ready" notice');
+    assert.match(switchAdapter, /if \(prevName && !checkIsSameConversationSwitch\(prevName, newName\)\) \{\n\s*cancelConversationRequestOnSwitch\(key\);/);
+    const onSwitch = getBody('function cancelConversationRequestOnSwitch(', '/**\n * @name SchedulerWiringDeps');
+    assert.match(onSwitch, /const unreadRequestIds = \(await engine\.cancelConversation\(key\)\)\.filter\(\(requestId\) => !personDropsBeingTold\.has\(requestId\)\);\n(?:\s*\/\/[^\n]*\n)*\s*if \(unreadRequestIds\.length === 0 \|\| !checkIsTelegramKey\(key\)\) return;/, 'the engine names them (`wakeUpEngine.test.ts`)');
+    assert.match(onSwitch, /replyToThread\(key, t\('agent\.queued_prompt_dropped_by_command'\)\)/);
+    const report = getBody('async function reportDroppedPersonPrompt(', '/**\n * @description Deliver a LATE ANSWER');
+    assert.match(report, /\): Promise<void> \{\n\s*if \(requestId !== null\) personDropsBeingTold\.add\(requestId\);\n\s*try \{/, 'marked in the drop\'s own tick, before its first await');
+    assert.match(report, /\} finally \{\n\s*if \(requestId !== null\) personDropsBeingTold\.delete\(requestId\);\n\s*\}/, 'until the request is closed and the line out');
+  });
 });
 
 describe('deliverLatePrompt: a prompt decided on at arrival, delivered by what the session is NOW', () => {

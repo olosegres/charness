@@ -5682,10 +5682,11 @@ function closeSetAsideQuestionsInBackground(key: SessionKey): void {
 async function switchThreadAdapter(key: SessionKey, newName: string, options: { isConversationKept?: boolean } = {}): Promise<LostWork | null> {
   const prevName = getThreadAdapterNameRaw(key);
   // Another agent or a shell takes the topic over: the open request belonged to
-  // the old conversation, so it closes silently instead of a later wake-up
-  // reminding (or, in a terminal, TYPING into) a session that never saw it.
+  // the old conversation, so it closes instead of a later wake-up reminding (or,
+  // in a terminal, TYPING into) a session that never saw it — and a person whose
+  // words the agent never read is told (review 25 #3).
   if (prevName && !checkIsSameConversationSwitch(prevName, newName)) {
-    cancelConversationRequest(key);
+    cancelConversationRequestOnSwitch(key);
     // Nor does the conversation left behind get its re-asked question answered: its buttons would send the label into the new one.
     closeReAskedQuestion(key);
     // The same for the questions it had set aside — unless the bot moved the conversation itself (an automatic usage-limit
@@ -13145,13 +13146,27 @@ function createPersonBufferedSettle(key: SessionKey, requestId: string | null): 
   };
 }
 
+/**
+ * @description A person's prompt that never reached the agent — dropped from a window, or refused while a command ends or replaces the
+ * conversation: its request closes and the person is told why. Marked in {@link personDropsBeingTold} from the call (synchronously, in the
+ * drop's own tick) until the request is closed and the line out, so a switch that closes the conversation's requests meanwhile does not
+ * tell the same message again.
+ */
 async function reportDroppedPersonPrompt(key: SessionKey, requestId: string | null, isDroppedForEndingCommand: boolean): Promise<void> {
-  console.warn(`[startupPromptBuffer] ${keyToString(key)}: a message that waited for the session never reached it${isDroppedForEndingCommand ? ' (a command ends the conversation)' : ''}; ${requestId ?? 'no request'} is closed`);
-  await settleTopicRequestAfterDelivery(key, { requestId }, 'noSession');
-  await replyToThread(key, isDroppedForEndingCommand
-    ? t('agent.queued_prompt_dropped_by_command')
-    : t('agent.queued_prompt_dropped', { label: getThreadAdapter(key).label }));
+  if (requestId !== null) personDropsBeingTold.add(requestId);
+  try {
+    console.warn(`[startupPromptBuffer] ${keyToString(key)}: a message never reached the agent${isDroppedForEndingCommand ? ' (a command ends the conversation)' : ''}; ${requestId ?? 'no request'} is closed`);
+    await settleTopicRequestAfterDelivery(key, { requestId }, 'noSession');
+    await replyToThread(key, isDroppedForEndingCommand
+      ? t('agent.queued_prompt_dropped_by_command')
+      : t('agent.queued_prompt_dropped', { label: getThreadAdapter(key).label }));
+  } finally {
+    if (requestId !== null) personDropsBeingTold.delete(requestId);
+  }
 }
+
+/** The requests whose person's drop is being told right now ({@link reportDroppedPersonPrompt}): a switch's close tells none of them. */
+const personDropsBeingTold = new Set<string>();
 
 /**
  * @description Deliver a LATE ANSWER to the agent — what the owner chose for a question the bot set aside, worded by
@@ -16188,6 +16203,26 @@ async function postTodoReminder(key: SessionKey, text: string): Promise<boolean>
 function cancelConversationRequest(key: SessionKey): void {
   void requestWakeUpEngine?.cancelConversation(key).catch((e) =>
     console.warn(`[requests] cancelling the request of ${keyToString(key)} failed:`, e instanceof Error ? e.message : e),
+  );
+}
+
+/**
+ * @description Another agent or a shell takes the conversation over (`switchThreadAdapter`: a move across backends, a start onto another
+ * agent or a shell): its open requests close as at any takeover, and a person whose words the agent never took in is told — they are in no
+ * transcript the next agent reads, the move's bridge included (review 25 #3). A request the agent took in closes in silence: its words
+ * ride the bridge's recent turns. A request whose drop is already being told (`personDropsBeingTold`) is not told twice. Fire and forget.
+ */
+function cancelConversationRequestOnSwitch(key: SessionKey): void {
+  const engine = requestWakeUpEngine;
+  if (!engine) return;
+  void (async () => {
+    const unreadRequestIds = (await engine.cancelConversation(key)).filter((requestId) => !personDropsBeingTold.has(requestId));
+    // A topic line: a tracker conversation never moves to another agent (its fallback stays within Claude).
+    if (unreadRequestIds.length === 0 || !checkIsTelegramKey(key)) return;
+    console.warn(`[requests] ${keyToString(key)}: switched to another agent before it read ${unreadRequestIds.join(', ')}; the requests are closed and the topic told`);
+    await withThreadLocale(key, () => replyToThread(key, t('agent.queued_prompt_dropped_by_command')));
+  })().catch((e) =>
+    console.warn(`[requests] cancelling the requests of ${keyToString(key)} at a switch failed:`, e instanceof Error ? e.message : e),
   );
 }
 
