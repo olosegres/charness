@@ -267,8 +267,8 @@ publish, no tag, no push, the run is red; the next day's run tries again by itse
   it checks the tarball's sha256 and publishes THAT file, `npm publish <tarball> --provenance`) → `release` (the only job that can
   write: `commit-release --prepare --tarball` makes the release commit — the tested commit plus `package.json`,
   `npm-shrinkwrap.json` and `CHANGELOG.md` taken out of the very tarball npm has (npm packs them byte for byte) —, the tag and
-  the merge with a moved `main`, locally and without the token; then a plain `git push --atomic` of `main` and the tag, and the
-  GitHub Release. Its checkout keeps no credentials; the token is in the environment of the push step (git only) and the Release
+  the merge with a moved `main`, locally and without the token; then a plain `git push --atomic` of `main`, the tag and,
+  when GitHub has none yet, `license-<version>`, and the GitHub Release. Its checkout keeps no credentials; the token is in the environment of the push step (git only) and the Release
   step (`gh`) alone. A step is not a boundary against code that ran earlier in the same job — such a process runs as the same
   user and could read a later step's environment —, so what runs there is pinned by hash: Yarn by `packageManager`
   (`yarn@4.9.2+sha512.…`, which corepack checks), its packages by `yarn.lock`, the actions by commit). Every job but `test` installs
@@ -297,7 +297,8 @@ publish, no tag, no push, the run is red; the next day's run tries again by itse
        `npm pack charness@X.Y.Z`, then `yarn tsx src/release/cli.ts commit-release X.Y.Z --tarball charness-X.Y.Z.tgz --base <SHA>`
        (`--remote <name>` when GitHub is not your `origin`)
        — it commits that commit plus the tarball's version files and nothing else, merges `main` and pushes; a real conflict
-       with `main` is resolved by hand, then push `main` and the tag —, and `yarn tsx src/release/cli.ts notes X.Y.Z > notes.md`,
+       with `main` is resolved by hand, then push `main`, the tag and the `license-<version>` tag it created
+       (`git tag --list 'license-*'`) —, and `yarn tsx src/release/cli.ts notes X.Y.Z > notes.md`,
        `gh release create vX.Y.Z --verify-tag --title vX.Y.Z --notes-file notes.md`.
   - A version with no release run — published by hand, or its tag only on another remote (a clone whose `origin` is not
     GitHub) — stops the runs the same way: push its `vX.Y.Z` tag to GitHub.
