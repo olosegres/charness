@@ -221,6 +221,7 @@ test("LICENSE says plainly that using Charness to write code never makes that co
   assert.ok(flatLicenseText.includes('2.4. **Your own work.** Using Charness to write code never makes that code derived from Charness.'));
   assert.ok(flatLicenseText.includes('never because Charness was used to write it'));
   assert.ok(flatLicenseText.includes("What Charness itself gives an agent while it runs — its prompts, skills, tool descriptions, instructions and compaction guidance — and the agent's following them never make the agent's work derived, even where that work applies the approaches they describe"));
-  assert.ok(flatLicenseText.includes("Section 2.3 reaches only work built on Charness's source code or commits, and a copy or adaptation of Charness's own prompts, skills or descriptions themselves."));
+  assert.ok(flatLicenseText.includes("Section 2.3 reaches only work built on Charness code or commits, and a copy or adaptation of the texts of Charness's own prompts, skills or descriptions as such (for example a skill or prompt made from them)."));
+  assert.ok(flatLicenseText.includes('The commands, settings and files an agent writes while following them, in the work they guide, are following them, not a copy.'));
   assert.ok(flatLicenseText.includes('**Charness code or commits:** the source and the commit history the licensor publishes for Charness.'));
 });
