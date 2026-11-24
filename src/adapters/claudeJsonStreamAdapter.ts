@@ -1420,6 +1420,9 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
   refreshWorkingState(key: SessionKey): void {
     const session = this.sessions.get(keyToString(key));
     if (!session?.isActive) return;
+    // Not from inside the handling of a chunk: that read is going on right now, and a second one would handle the lines behind the
+    // chunk ahead of the rest of it.
+    if (session.applyingChunk) return;
     // A held tail is read only from the boot's release on; a caller that decides on the state waits for `whenAdoptReplayed`.
     if (session.isTailHeld) {
       console.warn(`[ClaudeJson] ${keyToString(key)}: the working state was asked for before the boot released the adopted session; its output is not read yet`);

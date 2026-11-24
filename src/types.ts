@@ -986,8 +986,10 @@ export interface AgentAdapter extends EventEmitter {
 
   /**
    * Bring the in-memory working state up to what the process wrote so far (the json-stream tail is polled with a
-   * backoff). An automatic stop calls it right before its last look. An adopted session the boot has not released yet is
-   * not read — its caller waits for {@link whenAdoptReplayed} first. Optional: a backend whose state is current omits it.
+   * backoff). An automatic stop calls it right before its last look, and an ending command's reading of what the agent took
+   * in right before it decides (`RequestWakeUpEngine.readPromptsReachedOrHeld`). An adopted session the boot has not
+   * released yet is not read — its caller waits for {@link whenAdoptReplayed} first —, nor one whose output is being handled
+   * right now (that read is the current one). Optional: a backend whose state is current omits it.
    */
   refreshWorkingState?(key: SessionKey): void;
 

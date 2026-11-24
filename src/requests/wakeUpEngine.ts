@@ -78,6 +78,12 @@ export const restartWakeStaggerMs = 30_000;
 export interface RequestWakeUpEngineDeps {
   ledger: Pick<RequestLedger, 'getOpenRequestById' | 'listOpenRequestsOf' | 'listOpenRequests' | 'updateOpenRequest' | 'closeRequest' | 'recordAlert'>;
   probeTurn: (key: SessionKey) => SessionTurnProbe;
+  /**
+   * Bring what the bot knows of the conversation's live process up to what it wrote so far, right before
+   * {@link RequestWakeUpEngine.readPromptsReachedOrHeld} probes it: the json-stream tail is polled with a backoff, so an echo the
+   * process already wrote may not be read yet (review 28, own pass). Absent: the probe is current.
+   */
+  refreshProcessState?: (key: SessionKey) => void;
   prepareWakeUpSession: (key: SessionKey, message: WakeUpMessage) => Promise<boolean>;
   /** Forward the wake-up's message (the request's prompt again, or a reminder) into the session. */
   forwardWakeUp: (key: SessionKey, request: OpenRequestState, message: WakeUpMessage) => Promise<void>;
@@ -517,12 +523,15 @@ export class RequestWakeUpEngine {
 
   /**
    * @description The requests of `key` whose prompt is NOT lost if the conversation ends now, read off its live process at this moment:
-   * a prompt the process took in — R21's own test ({@link checkIsPromptTakenInNow}) on a probe taken now, which the persisted mark lags
-   * behind until a settle or the 10-second poll (review 26 #1) — and a prompt still waiting in a start's or a stop's window, whose window's
-   * drop tells its person. Synchronous: a command reads it BEFORE it stops or replaces the process (the default of
-   * {@link cancelConversation}; the `/resume` pick ahead of its resume).
+   * a prompt the process took in — R21's own test ({@link checkIsPromptTakenInNow}) on a probe taken now, once what the process wrote so
+   * far is read (`refreshProcessState`), which the persisted mark lags behind until a settle or the 10-second poll (review 26 #1) — and a
+   * prompt still waiting in a start's or a stop's window, whose window's drop tells its person. Synchronous: a command reads it BEFORE it
+   * stops or replaces the process (the default of {@link cancelConversation}; the `/resume` pick ahead of its resume).
    */
   readPromptsReachedOrHeld(key: SessionKey): ReadonlySet<string> {
+    // What the process already wrote counts: a switch moments after a message, before the poll read its echo, told its person the
+    // agent never read it while the bridge carried it.
+    this.deps.refreshProcessState?.(key);
     const probe = this.deps.probeTurn(key);
     const requestIds = new Set<string>();
     for (const turn of this.getWatchedTurnsOf(key)) {

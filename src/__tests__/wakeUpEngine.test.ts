@@ -71,6 +71,7 @@ const recordWakeUp = async (_key: SessionKey, request: OpenRequestState, message
 
 /** The windows a test instance may shorten (`CHARNESS_TEST_TIMINGS`); absent: the production ones. */
 interface EngineTimings {
+  refreshProcessState?: (key: SessionKey) => void;
   sweepIntervalMs?: number;
   firstPostRetryDelayMs?: number;
   restartWakeStaggerMs?: number;
@@ -247,6 +248,21 @@ describe('two requesters in one conversation', () => {
       probe = { isActive: true, isBusy: false, hasUnconsumedInput: false, isTurnEndBlocked: true, isWindowOpen: true };
       await engine.trackForwardedTurn(topicKey, request.id, { isRequestPrompt: true });
       assert.deepEqual(await engine.cancelConversation(topicKey), [], 'told once, by the drop');
+    });
+
+    it('an echo the process already wrote, though no poll has read it yet, takes its prompt in: the reading reads the process first (review 28, own pass)', async () => {
+      const ledger = await createLedger();
+      const refreshed: string[] = [];
+      const engine = createEngine(ledger, {
+        refreshProcessState: (key) => {
+          refreshed.push(keyToString(key));
+          // The echo sat in the process's output log, unread: reading it is what takes the prompt in.
+          probe = { ...probe, hasUnconsumedInput: false };
+        },
+      });
+      await trackWrittenRequest(ledger, engine);
+      assert.deepEqual(await engine.cancelConversation(topicKey), [], 'the agent read it: the bridge carries it, nobody is told it was lost');
+      assert.deepEqual(refreshed, [keyToString(topicKey)], 'read once, by the reading');
     });
 
     it('a reading taken before the command replaced the process decides, not the probe of the process that replaced it (the /resume pick)', async () => {

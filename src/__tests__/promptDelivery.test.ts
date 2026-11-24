@@ -746,6 +746,10 @@ describe('a startup window\'s prompts on every way out of it (review 19 #1)', ()
     assert.match(inRequest, /\} finally \{\n\s*if \(marked\.requestId !== null\) \{\n\s*personPromptsInDelivery\.delete\(marked\.requestId\);\n\s*personPromptsEndedInDelivery\.delete\(marked\.requestId\);/, 'both marks end with the delivery');
   });
 
+  it('the reading of what the agent took in reads what its process already wrote first: a switch moments after a message does not tell its person the agent never read it while the bridge carries it (review 28, own pass)', () => {
+    assert.match(botSource, /requestWakeUpEngine = new RequestWakeUpEngine\(\{\n\s*ledger: requestLedger,\n\s*probeTurn: probeThreadTurn,\n\s*refreshProcessState: \(key\) => getThreadAdapter\(key\)\.refreshWorkingState\?\.\(key\),/, 'the engine reads it first (`wakeUpEngine.test.ts`), the adapter drains its tail (`claudeJsonStreamRefreshWorkingState.test.ts`)');
+  });
+
   it('every routing point reads whether the process takes input, and so does the ensure\'s plan: the adapter\'s own suspend after a torn frame is resumed for the prompt, not read `ready` while the prompt meets a dying process (review 25 nits 4 and 7)', () => {
     assert.match(getBody('async function ensureAgentSessionNow(', 'function getResumableSessionId('), /const plan = getEnsureSessionPlan\(\{\n(?:\s*\/\/[^\n]*\n)*\s*isActive: checkIsAcceptingInput\(key\),/);
     assert.match(getBody('async function forwardPromptToAgent(', 'interface PromptForwardOptions'), /checkIsSessionActive: \(\) => checkIsAcceptingInput\(key\) && !\(isTechnicalPrompt && \(adapter\.checkIsBusy\?\.\(key\) \?\? false\)\),/, 'the adopt-replay re-route, the technical prompt\'s idle test kept');

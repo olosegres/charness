@@ -17021,6 +17021,7 @@ export async function startBot(): Promise<void> {
   requestWakeUpEngine = new RequestWakeUpEngine({
     ledger: requestLedger,
     probeTurn: probeThreadTurn,
+    refreshProcessState: (key) => getThreadAdapter(key).refreshWorkingState?.(key),
     prepareWakeUpSession: (key, message) =>
       prepareRequestWakeUpSession(key, message, key.platform === 'jira' ? jiraConnector?.adapterName : undefined),
     forwardWakeUp: forwardRequestWakeUp,

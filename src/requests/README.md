@@ -376,12 +376,15 @@ written a moment before the command — closes with the line: nobody reads its w
 what the live process says at the command — R21's own test, on a probe read BEFORE the command stops or replaces the process
 (`RequestWakeUpEngine.readPromptsReachedOrHeld`; the `/resume` pick reads it ahead of its resume, and a bridged move ahead of its
 bridge, so the reading and the bridge describe the same moment — review 27 nit 5): the mark is written only at a settle or the 10-second
-poll, and a message the agent echoed seconds ago would otherwise be told it did not reach it (review 26 #1). The json-stream Claude and
-OpenCode each read their own unread signal (OpenCode counts the prompts not yet seen as a user message); the tmux Claude has none, and
-holds what was written to it in its own conversation: written is taken in there (review 27 nit 3). Three prompts are not the cancel's to
-tell, so each person is told once: one still waiting in a start's or a stop's window — that window drops it under the command's hold and
-tells its person; one on its way to its write (`personPromptsInDelivery`: from the moment its request is created, synchronously with it,
-until its delivery is settled) — its own route tells it: refused while the command runs, with no session, or — once the command is
+poll, and a message the agent echoed seconds ago would otherwise be told it did not reach it (review 26 #1). The reading first reads what
+the process already wrote (`refreshProcessState` → `AgentAdapter.refreshWorkingState`): the json-stream tail is polled with a backoff, and a
+switch a moment after a message read «unread» from an echo the process had written, while the bridge carried it (review 28, own pass).
+The json-stream Claude and OpenCode each read their own unread signal (OpenCode counts the prompts not yet seen as a user message); the
+tmux Claude has none, and holds what was written to it in its own conversation: written is taken in there (review 27 nit 3). Three
+prompts are not the cancel's to tell, so each person is told once: one still waiting in a start's or a stop's window — that window drops
+it under the command's hold and tells its person; one on its way to its write (`personPromptsInDelivery`: from the moment its request
+is created, synchronously with it, until its delivery is settled) — its own route tells it: refused while the command runs, with no
+session, or — once the command is
 over — refused all the same, because the command closed its request (`personPromptsEndedInDelivery`, marked by the command's cancel): a
 message the command's conversation was meant to take is never written into the one that follows under a closed request, unwatched and
 naming a request its agent cannot answer (review 27 #1: `/quit`, `/new`, `/quitall` and leaving the folder tell from their handler, ahead
