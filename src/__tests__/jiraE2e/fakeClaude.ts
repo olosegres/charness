@@ -54,6 +54,7 @@ import {
   fakeClaudeIgnoreStopSignalsFileName,
   fakeClaudeRefuseLaunchFileName,
   fakeClaudeLaunchRefusalDelayFileName,
+  fakeClaudeLaunchDelayFileName,
   getFakeClaudeTranscriptPath,
   getFakeClaudeUnrestorableConversationFileName,
   getFlagValues,
@@ -736,7 +737,17 @@ function writeExitMetadata(sessionId: string): void {
 
 /** How long a launch the fake refuses waits first ({@link fakeClaudeLaunchRefusalDelayFileName}); at once without the file. */
 async function waitBeforeRefusal(): Promise<void> {
-  const delayPath = path.join(getStateDir(), fakeClaudeLaunchRefusalDelayFileName);
+  await waitForDelayFile(fakeClaudeLaunchRefusalDelayFileName);
+}
+
+/** How long a launch that runs waits before it reads stdin ({@link fakeClaudeLaunchDelayFileName}); at once without the file. */
+async function waitBeforeLaunch(): Promise<void> {
+  await waitForDelayFile(fakeClaudeLaunchDelayFileName);
+}
+
+/** Wait the milliseconds the state dir's `fileName` holds; at once without the file. */
+async function waitForDelayFile(fileName: string): Promise<void> {
+  const delayPath = path.join(getStateDir(), fileName);
   if (!fs.existsSync(delayPath)) return;
   const delayMs = Number(fs.readFileSync(delayPath, 'utf8').trim());
   await new Promise<void>((resolve) => setTimeout(resolve, delayMs));
@@ -1712,6 +1723,7 @@ async function main(): Promise<void> {
   const sessionId = getLaunchSessionId(argv) ?? randomUUID();
   if (getFlagValues(argv, '--resume')[0] === sessionId) conversationCostUsd = readRestoredConversationCost(sessionId);
   exitOnStopSignal(sessionId);
+  await waitBeforeLaunch();
 
   const lines = readline.createInterface({ input: process.stdin });
   lines.on('line', (line) => {

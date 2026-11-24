@@ -128,6 +128,8 @@ const unreadBeforeQuit = { threadId: 119, folder: 'oc-unread-quit' };
 const scheduledRunDelaySeconds = 20;
 /** Past a run's own instant its post has started: the engine's timer delivers at once. */
 const firePostStartMarginMs = 5000;
+/** One send pacer interval and a margin: a line already on its way is in the topic after it. */
+const pacerSettleMs = 5000;
 
 const fakeOpenCodeVersion = '1.17.11';
 /** The model OpenCode runs by default, and the ones the chain names. */
@@ -912,8 +914,16 @@ describe('The usage-limit switch to and from OpenCode end to end: built charness
     const readFolderPath = path.join(getLayout().workRoot, readBeforeEnding.folder);
     await getCharness().waitFor('the bridge to reach the OpenCode session', agentStartTimeoutMs, () => fakeOpenCode.prompts.some((prompt) => prompt.directory === readFolderPath && prompt.text.includes('[Backend switch]')));
     await getCharness().waitFor('the request to close at the switch', replyTimeoutMs, () => readRequestCloseReasons().get(readRequestId) === 'cancelled');
+    // A later marker before the negative: the new agent's reply to the bridge goes through the topic's send queue after any line the
+    // switch's close would have posted (review 27 nit 8).
+    const session = getOpenCodeSessionOf(readBeforeEnding.folder);
+    const bridgeReply = 'RD-1 taken over: the work goes on here.';
+    fakeOpenCode.emitSessionBusy(session.id);
+    fakeOpenCode.emitAssistantText(session.id, 'msg_rd1_bridge_reply', bridgeReply);
+    fakeOpenCode.emitSessionIdle(session.id);
+    await readTopic.waitForMessage('the new agent\'s reply to the bridge', (message) => message.text.includes(bridgeReply));
     // Load-bearing: before, the switch read only the mark the poll writes, and told this person their message did not reach the agent.
-    assert.ok(!readTopic.listMessages().some((message) => message.text === droppedLine), 'the person whose message the agent read is told nothing');
+    assert.equal(readTopic.listMessages().filter((message) => message.text === droppedLine).length, 0, 'the person whose message the agent read is told nothing');
   });
 
   it('a message the agent never read — queued behind a turn that works — is told at /quit, once, and only that one (review 26 #2)', async () => {
@@ -932,7 +942,11 @@ describe('The usage-limit switch to and from OpenCode end to end: built charness
     const unreadRequestId = [...readRequestCloseReasons()].find(([id, reason]) => !requestsBefore.has(id) && reason === null)?.[0] ?? '';
     await unreadTopic.sendAndAwaitReply('/quit', enDict['agent.stopped'].replace('{label}', 'Claude Code (stream)'));
     // Load-bearing: before, /quit closed every request in silence, the unread one included.
-    await getCharness().waitFor('the operator to be told the queued message did not reach the agent', replyTimeoutMs, () => countDropped() === 1);
+    await getCharness().waitFor('the operator to be told the queued message did not reach the agent', replyTimeoutMs, () => countDropped() > 0);
+    // «Only that one»: a second line — for the turn the agent did read — would be out after /quit's reply and one pacer interval (review 27
+    // nit 8).
+    await new Promise((resolve) => setTimeout(resolve, pacerSettleMs));
+    assert.equal(countDropped(), 1, 'told once, for the message the agent never read');
     assert.equal(readRequestCloseReasons().get(unreadRequestId), 'cancelled');
     assert.ok(!readTurns().some((turn) => turn.issueKey === 'UQ-2'), 'the agent never read it');
   });

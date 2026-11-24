@@ -70,6 +70,7 @@ import {
   fakeClaudeApiErrorDelayFileName,
   fakeClaudeApiErrorOnceFileName,
   fakeClaudeExitFlushDelayFileName,
+  fakeClaudeLaunchDelayFileName,
   fakeClaudeHoldReleaseFileName,
   fakeClaudeLaunchRefusalDelayFileName,
   fakeClaudeRefuseLaunchFileName,
@@ -131,6 +132,10 @@ const watchCronIntervalMs = 60 * msPerSecond;
 const checkRunTimeoutMs = 2 * watchCronIntervalMs;
 /** How long the fake process takes to exit when the per-turn stop asks it to: the stop's window stays open that long. */
 const perTurnStopHoldMs = 8 * msPerSecond;
+/** How long the fake takes to start a session in the step that lands /quitall inside a wake: well past /quitall's own handling. */
+const slowLaunchMs = 8 * msPerSecond;
+/** One send pacer interval and a margin: a line already on its way is in the topic after it. */
+const pacerSettleMs = 5 * msPerSecond;
 /** What a person is told when a command that ends or replaces the conversation dropped their message (not «while it was starting»). */
 const endingCommandDropLine = 'this conversation was ended or switched before the agent read it';
 /** A buffered message's way to its answer: the stop, the resume, the held turn, the stop again, the reminder's resume and turn. */
@@ -852,6 +857,36 @@ describe('A request waits for its schedule in a Telegram topic end to end: built
     }
     // The steps after this one work with a per-turn agent: the operator starts one again, as after any quit.
     await topic.sendAndAwaitReply('/claude_mode per-turn', '🔁 Per-turn');
+    await topic.sendAndAwaitReply('/claude', 'ready in');
+  });
+
+  it('per-turn: a file whose prompt wakes the sleeping conversation, then /quitall from General while that wake is under way — its person is told ONCE that it did not reach the agent, not by /quitall and again by its own refused write (review 27 #1)', async () => {
+    const launchDelayPath = path.join(getLayout().fakeStateDir, fakeClaudeLaunchDelayFileName);
+    const countQuitSummaries = (): number => fakeTelegram.listBotMessages(generalTopicThreadId).filter((message) => message.text.includes('🚪 Quit')).length;
+    // The resume the file's prompt makes is held: a CLI slow to start, so /quitall lands while the prompt is on its way to its write.
+    fs.writeFileSync(launchDelayPath, slowLaunchMs.toString());
+    try {
+      const droppedBefore = countTopicMessages(endingCommandDropLine);
+      const quitSummariesBefore = countQuitSummaries();
+      const launchesBefore = getSessionLaunches(getLayout()).length;
+      const openBefore = new Set(Object.values(readState().openRequests ?? {}).map((open) => open.id));
+      // The per-turn agent from the step before takes a warm-up turn; the file arrives in its stop's window and is written after the stop:
+      // its request opens, and its write wakes the conversation.
+      await sendFileAcrossThePerTurnStop('XO-45', 'XP-46');
+      await getCharness().waitFor('the wake to begin resuming the conversation', replyTimeoutMs, () => getSessionLaunches(getLayout()).length > launchesBefore);
+      await getCharness().waitFor('the file\'s request to be open', replyTimeoutMs, () => Object.values(readState().openRequests ?? {}).some((open) => !openBefore.has(open.id)));
+      fakeTelegram.pushOperatorMessage(generalTopicThreadId, '/quitall');
+      await getCharness().waitFor('/quitall to finish', bufferedFlowTimeoutMs, () => countQuitSummaries() > quitSummariesBefore);
+      await getCharness().waitFor('the operator to be told the file did not reach the agent', replyTimeoutMs, () => countTopicMessages(endingCommandDropLine) > droppedBefore);
+      // Load-bearing: before, /quitall told it from its handler and the refused write told it again once the wake was over. Both lines would
+      // be out by now; one more pacer interval to be sure.
+      await sleep(pacerSettleMs);
+      assert.equal(countTopicMessages(endingCommandDropLine) - droppedBefore, 1, 'told once');
+      assert.deepEqual(getAgentPromptsWith('XP-46'), [], 'it never reached the agent');
+    } finally {
+      fs.rmSync(launchDelayPath, { force: true });
+    }
+    // The steps after this one work with a per-turn agent: the operator starts one again, as after any quit.
     await topic.sendAndAwaitReply('/claude', 'ready in');
   });
 

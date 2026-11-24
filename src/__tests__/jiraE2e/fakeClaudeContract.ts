@@ -60,6 +60,12 @@ export const fakeClaudeRefuseLaunchFileName = 'refuse-launch';
  * exists. A flow lands a message inside the bot's resume or start that is about to fail.
  */
 export const fakeClaudeLaunchRefusalDelayFileName = 'launch-refusal-delay-ms';
+/**
+ * A file in the fake's state dir whose content (ms) makes every session launch that RUNS wait that long before it reads stdin — a CLI
+ * slow to start: the bot's start or resume of the conversation (its `initialize` handshake) is under way that long. A flow lands a
+ * command inside the wake a message makes.
+ */
+export const fakeClaudeLaunchDelayFileName = 'launch-delay-ms';
 /** The CLI version the fake reports on `system/init` — the first one whose stream carries the background-task list (L-D10). */
 export const fakeClaudeCodeVersion = '2.1.287';
 export const fakeClaudeVersion = `${fakeClaudeCodeVersion} (Claude Code)`;
