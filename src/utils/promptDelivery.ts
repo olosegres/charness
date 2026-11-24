@@ -100,7 +100,7 @@ export async function deliverPromptOrBuffer(
     ...(options.isPersonInput === true ? { checkIsRefused: () => deps.checkIsRefusingMessages(key) } : {}),
     buffer: async () => {
       // Called in the tick the window was read open (`deliverLatePrompt` awaits nothing between), so it cannot be refused.
-      const added = deps.startupBuffer.addPrompt(threadId, text, onBufferedSettled, options);
+      const added = deps.startupBuffer.addPrompt(threadId, text, onBufferedSettled, getBufferedPromptOptions(options));
       if (added === 'refused') throw new Error(`[promptDelivery] the startup buffer of ${threadId} refused a prompt in the tick its window read open`);
       isBuffered = true;
       if (added !== 'firstInWindow' || !checkIsTelegramKey(key)) return;
@@ -116,6 +116,17 @@ export async function deliverPromptOrBuffer(
   if (isBuffered) return 'buffered';
   // A forward that re-routed the prompt behind a stop window itself registered no `onBufferedSettled`: it reads as forwarded.
   return outcome === 'noSession' ? 'noSession' : 'forwarded';
+}
+
+/**
+ * @description The options a prompt is buffered with, for its replay: all of them but a bot post's wait for a command
+ * (`waitBeforeRoute`), which is its own routing's. A replay writes what its window held one after another, at once, into the process
+ * its start brought up; a wait carried into it would hold every prompt behind the post for a whole ending command, while the turn probe
+ * reads the conversation as still starting (mini-review of round 28, #1).
+ */
+function getBufferedPromptOptions(options: PromptDeliveryOptions): PromptDeliveryOptions {
+  const { waitBeforeRoute: _ownRoutingWait, ...bufferedOptions } = options;
+  return bufferedOptions;
 }
 
 /**

@@ -91,6 +91,17 @@ describe('deliverPromptOrBuffer: what a buffered prompt keeps', () => {
     ]);
   });
 
+  it('a bot post\'s wait for a command stays with the post\'s own routing and never travels into the buffer: its replay writes it at once, with the rest of the window, instead of holding the replay for a command (mini-review of round 28, #1)', async () => {
+    startupBuffer.markStarting(keyToString(topicKey));
+    const waits: string[] = [];
+    const waitBeforeRoute = async (): Promise<void> => { waits.push('waited'); };
+    assert.equal(await deliverPromptOrBuffer(deps, topicKey, 'a scheduled run', undefined, { isAccountsNoteCarrier: true, waitBeforeRoute }), 'buffered');
+    assert.deepEqual(waits, ['waited'], 'its own routing waited');
+    const replayed: Array<[string, PromptDeliveryOptions]> = [];
+    await startupBuffer.replayPrompts(keyToString(topicKey), { isSessionActive: true, forward: async (text, options) => { replayed.push([text, options]); } });
+    assert.deepEqual(replayed, [['a scheduled run', { isAccountsNoteCarrier: true }]], 'the buffer kept no wait');
+  });
+
   it('forwarded at once, the options reach the forward as they are', async () => {
     const seen: Array<{ isAccountsNoteCarrier?: boolean }> = [];
     await deliverPromptOrBuffer({ ...deps, forwardPrompt: async (_key, _text, options) => { seen.push(options); return 'forwarded'; } }, topicKey, 'hi', undefined, { isAccountsNoteCarrier: true });

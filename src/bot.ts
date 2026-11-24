@@ -6561,6 +6561,7 @@ async function forwardPromptToAgent(
     } : {}),
     buffer: async () => {
       const bufferedText = `${options.requestHeader ?? ''}${getPromptWithThreadMessageContext(key, text, options.messageContext)}`;
+      // A post's wait is for this delivery's own routing; the startup buffer keeps none for the replay (`deliverPromptOrBuffer`).
       const bufferedOptions: PromptDeliveryOptions = { isPersonInput: options.isPersonInput, isAccountsNoteCarrier: options.isAccountsNoteCarrier, lostWorkTelling: options.lostWorkTelling, waitBeforeRoute: options.waitBeforeRoute };
       // A person's prompt that is dropped there is told about and closes its request, as at the person's own buffer.
       if (isPersonInput) {
