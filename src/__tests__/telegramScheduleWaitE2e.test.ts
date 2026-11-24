@@ -132,7 +132,7 @@ const checkRunTimeoutMs = 2 * watchCronIntervalMs;
 /** How long the fake process takes to exit when the per-turn stop asks it to: the stop's window stays open that long. */
 const perTurnStopHoldMs = 8 * msPerSecond;
 /** What a person is told when a command that ends or replaces the conversation dropped their message (not «while it was starting»). */
-const endingCommandDropLine = 'while this conversation was being ended or switched did not reach the agent';
+const endingCommandDropLine = 'this conversation was ended or switched before the agent read it';
 /** A buffered message's way to its answer: the stop, the resume, the held turn, the stop again, the reminder's resume and turn. */
 const bufferedFlowTimeoutMs = 3 * 60 * msPerSecond;
 /** Past a job's own instant its fire's post has started (the engine's timer delivers at once): a post behind a running turn waits. */
@@ -817,7 +817,8 @@ describe('A request waits for its schedule in a Telegram topic end to end: built
     }
   });
 
-  it('/quitall from General while the topic\'s process stops: a message sent to the topic in those seconds is no prompt for the exiting process — it wakes the conversation, and the fresh one the release leaves room for takes it (review 24 nit 3)', async () => {
+  it('/quitall from General while the topic\'s process stops: a message sent to the topic in those seconds is not delivered — never written into the exiting process, no fresh agent started for it after the quit; its request is closed and the operator told (review 24 nit 3, review 25 #2)', async () => {
+    const topicKeyString = `${group.id}:${topicThreadId}`;
     const exitFlushDelayPath = path.join(getLayout().fakeStateDir, fakeClaudeExitFlushDelayFileName);
     // An idle session keeps its process between turns: the one /quitall stops.
     await topic.sendAndAwaitReply('/claude_mode json', '⚡ JSON-stream');
@@ -828,23 +829,30 @@ describe('A request waits for its schedule in a Telegram topic end to end: built
     try {
       fs.writeFileSync(exitFlushDelayPath, perTurnStopHoldMs.toString());
       const launchesBefore = getSessionLaunches(getLayout()).length;
-      const notDeliveredBefore = countTopicMessages('The agent did not get your last message');
+      const droppedBefore = countTopicMessages(endingCommandDropLine);
+      const closedBefore = new Set(readClosedRequests().map((closed) => closed.id));
+      const countQuitSummaries = (): number => fakeTelegram.listBotMessages(generalTopicThreadId).filter((message) => message.text.includes('🚪 Quit')).length;
+      const quitSummariesBefore = countQuitSummaries();
       fakeTelegram.pushOperatorMessage(generalTopicThreadId, '/quitall');
       await getCharness().waitFor('/quitall to stop the topic\'s process', replyTimeoutMs, () =>
         readFakeLog<{ pid: number }>(fakeClaudeLogFileNames.stopSignals).some((record) => record.pid === warmUpPid));
       fakeTelegram.pushOperatorMessage(topicThreadId, 'XJ-40 [fake:answer] a message sent while /quitall stops the process');
       assert.ok(checkIsProcessAlive(warmUpPid), 'the process is still exiting when the message comes');
-      await getCharness().waitFor('the message to reach an agent', agentTimeoutMs, () => getAgentPromptsWith('XJ-40').length > 0);
-      assert.ok(getAgentPromptsWith('XJ-40').every((prompt) => prompt.pid !== warmUpPid), 'never written into the process being stopped');
-      const launches = getSessionLaunches(getLayout()).slice(launchesBefore);
-      assert.equal(launches.length, 1, 'one process came up for it');
-      assert.ok(!launches[0].argv.includes('--resume'), 'a fresh conversation: /quitall released the old one');
-      assert.equal(countTopicMessages('The agent did not get your last message'), notDeliveredBefore, 'the operator is not told it was lost');
+      await getCharness().waitFor('the operator to be told the message did not reach the agent', replyTimeoutMs, () => countTopicMessages(endingCommandDropLine) > droppedBefore);
+      await getCharness().waitFor('/quitall to finish', bufferedFlowTimeoutMs, () => !checkIsProcessAlive(warmUpPid) && countQuitSummaries() > quitSummariesBefore);
+      // Load-bearing: before, the message woke the conversation, and the wake's ensure — queued behind the release — found no id and
+      // started a fresh agent with it right after the quit. Its request is closed only once the bot decided it goes nowhere.
+      await getCharness().waitFor('the message\'s request to be closed', replyTimeoutMs, () =>
+        readClosedRequests().some((closed) => !closedBefore.has(closed.id) && closed.closeReason === 'cancelled' && closed.conversationKey === topicKeyString));
+      assert.deepEqual(getAgentPromptsWith('XJ-40'), [], 'never written into the process being stopped, nor into any other');
+      assert.deepEqual(getSessionLaunches(getLayout()).slice(launchesBefore), [], 'no fresh agent was started after the quit');
+      assert.deepEqual(Object.keys(readState().openRequests ?? {}).filter((stateKey) => stateKey.startsWith(topicKeyString)), [], 'no request is left open for a backstop to post later');
     } finally {
       fs.rmSync(exitFlushDelayPath, { force: true });
     }
-    // The steps after this one work with a per-turn agent.
+    // The steps after this one work with a per-turn agent: the operator starts one again, as after any quit.
     await topic.sendAndAwaitReply('/claude_mode per-turn', '🔁 Per-turn');
+    await topic.sendAndAwaitReply('/claude', 'ready in');
   });
 
   it('per-turn: a message the stop holds, then «Leave current dir» whose toast comes back only once the stop is over — the tap marks the conversation ahead of its toast, so the stop starts nothing for it: no process is launched, its request is closed and the operator is told (review 24 #1)', async () => {

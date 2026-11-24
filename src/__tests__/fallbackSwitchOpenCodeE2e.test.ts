@@ -25,6 +25,10 @@
  *   E  A Claude topic whose agent asked a question nobody answered (set aside after the instance's shortened wait) hits a limit and
  *      moves to OpenCode BY ITSELF: the question stays open — its message with its buttons and its pin, its record in `state.json` —
  *      and a tap on it, long after, reaches the OpenCode conversation as a late-answer message, AFTER the context bridge.
+ *   F  A Claude topic hits a limit and moves to OpenCode by itself; a message the operator sends while the move runs (its switch
+ *      notice held in the fake Bot API, so the topic already runs OpenCode and no session is up) is not delivered: its request is
+ *      closed and the topic says it did not reach the agent — it is never written into either agent, and the topic never says to
+ *      start one (review 25 #1).
  *
  * Then the operator's own picks on topic A, from the screens (`/limits` board, `/accounts`):
  *   · `/limits` → an OpenCode provider → a model (the shared model page) on a Claude topic with a conversation ASKS naming the
@@ -61,6 +65,7 @@ import {
   getFreePort,
   IsolatedCharness,
   listTmuxSessions,
+  readJsonLines,
   removeIsolatedInstanceSync,
   writeFakeClaudeLauncher,
   writeInstanceEnvFile,
@@ -85,6 +90,8 @@ import { legacySchedulerMcpServerName } from '../legacyNames';
 import { enDict } from '../i18n/en';
 import { claudeJsonStreamAdapterName, openCodeAdapterName } from '../adapters/adapterNames';
 import { getTelegramFlowTestTimingsEnv } from './telegramE2e/telegramFlowTimings';
+import { fakeClaudeLogFileNames, type FakeClaudePrompt } from './jiraE2e/fakeClaudeContract';
+import type { ClosedRequestRecord, OpenRequestState } from '../requests/types';
 
 const group = { id: -1001111111111, title: 'ExampleGroup' };
 const operator = { id: 424242, is_bot: false, first_name: 'Operator' };
@@ -103,6 +110,8 @@ const openCodeToOpenCode = { threadId: 113, folder: 'oc-to-oc' };
 const freshSwitch = { threadId: 114, folder: 'oc-fresh' };
 /** The topic whose agent asks a question nobody answers, then hits a limit: bound at the end of the flow. */
 const keptQuestionSwitch = { threadId: 115, folder: 'oc-question' };
+/** The topic a message is sent to while a limit moves it to OpenCode: bound at the end of the flow. */
+const messageDuringMove = { threadId: 116, folder: 'oc-moving' };
 
 const fakeOpenCodeVersion = '1.17.11';
 /** The model OpenCode runs by default, and the ones the chain names. */
@@ -142,6 +151,7 @@ let toClaudeTopic: TopicDriver;
 let openCodeTopic: TopicDriver;
 let freshTopic: TopicDriver;
 let keptQuestionTopic: TopicDriver;
+let movingTopic: TopicDriver;
 let defaultTmuxSessionsBefore: string[] = [];
 let resetsAtIso = '';
 let resetClock = '';
@@ -227,6 +237,15 @@ function appendCompactionSummary(folder: string, sessionId: string): void {
 }
 
 /** The OpenCode session the fake created for the topic's folder (the newest one). */
+/** Every request the instance knows of — open in `state.json`, or closed in the history — by id: its close reason, `null` while open. */
+function readRequestCloseReasons(): Map<string, string | null> {
+  const reasons = new Map<string, string | null>();
+  const state = JSON.parse(fs.readFileSync(path.join(getLayout().dataDir, 'state.json'), 'utf8')) as { openRequests?: Record<string, OpenRequestState> };
+  for (const open of Object.values(state.openRequests ?? {})) reasons.set(open.id, null);
+  for (const closed of readJsonLines<ClosedRequestRecord>(path.join(getLayout().dataDir, 'requests.jsonl'))) reasons.set(closed.id, closed.closeReason);
+  return reasons;
+}
+
 function getOpenCodeSessionOf(folder: string): { id: string } {
   const folderPath = path.join(getLayout().workRoot, folder);
   const session = [...fakeOpenCode.sessions.values()].filter((candidate) => candidate.directory === folderPath).at(-1);
@@ -237,7 +256,7 @@ function getOpenCodeSessionOf(folder: string): { id: string } {
 describe('The usage-limit switch to and from OpenCode end to end: built charness, fake Bot API, fake claude, fake OpenCode', () => {
   before(async () => {
     if (!fs.existsSync(builtCliPath)) throw new Error('Built CLI is missing. Run `yarn build` before `yarn test`.');
-    layout = createIsolatedInstanceLayout('charness-fbopencode-', [claudeToOpenCode.folder, openCodeToClaude.folder, openCodeToOpenCode.folder, freshSwitch.folder, keptQuestionSwitch.folder], getFlowDeadlineMs());
+    layout = createIsolatedInstanceLayout('charness-fbopencode-', [claudeToOpenCode.folder, openCodeToClaude.folder, openCodeToOpenCode.folder, freshSwitch.folder, keptQuestionSwitch.folder, messageDuringMove.folder], getFlowDeadlineMs());
     defaultTmuxSessionsBefore = listTmuxSessions([]);
     resetsAtIso = computeResetsAtIso(takeoverDaysAhead);
     resetClock = getResetClock(resetsAtIso);
@@ -253,6 +272,7 @@ describe('The usage-limit switch to and from OpenCode end to end: built charness
     openCodeTopic = new TopicDriver(fakeTelegram, getCharness, openCodeToOpenCode.threadId, replyTimeoutMs);
     freshTopic = new TopicDriver(fakeTelegram, getCharness, freshSwitch.threadId, replyTimeoutMs);
     keptQuestionTopic = new TopicDriver(fakeTelegram, getCharness, keptQuestionSwitch.threadId, setAsideTimeoutMs);
+    movingTopic = new TopicDriver(fakeTelegram, getCharness, messageDuringMove.threadId, replyTimeoutMs);
     const apiRoot = await fakeTelegram.start();
 
     // The OpenCode server the bot adopts, and the `opencode` CLI it shells out to, on the instance's private PATH.
@@ -760,5 +780,47 @@ describe('The usage-limit switch to and from OpenCode end to end: built charness
     await keptQuestionTopic.waitForMessageText('the answer under the question', question, (text) => text.endsWith(`\n\n${enDict['agent.question_answered_note'].replace('{answer}', fakeAskQuestion.shortOptionLabel)}`));
     await getCharness().waitFor('the pin to be released', replyTimeoutMs, () => !fakeTelegram.listPinnedMessageIds().includes(question.message_id));
     await getCharness().waitFor('the record to be gone', replyTimeoutMs, () => (readPersistedState(getLayout()).setAsideQuestions?.[topicKey] ?? []).length === 0);
+  });
+
+  it('a message sent while an AUTOMATIC limit switch moves the topic to OpenCode is not delivered: never written into either agent, no «start an agent» hint — its request is closed and the topic says it did not reach the agent (review 25 #1)', async () => {
+    // The accounts the earlier steps left limited are usable again, and the chain's one rung is the OpenCode model.
+    await restartWithState((persisted) => {
+      for (const profile of Object.values(persisted.claudeProfiles ?? {})) delete profile.limitedUntil;
+      persisted.fallbackChain = [{ backend: 'opencode', providerId: 'openai', modelId: 'gpt-5' }];
+    });
+    await movingTopic.sendAndAwaitReply(`/bind ${messageDuringMove.folder}`, `Bound to \`${messageDuringMove.folder}\``);
+    await movingTopic.sendAndAwaitReply('/verbosity stream_answers', 'This topic shows: Stream + answers');
+    await movingTopic.sendAndAwaitReply('/claude', 'ready in');
+    const movingFolderPath = path.join(getLayout().workRoot, messageDuringMove.folder);
+    const droppedLine = enDict['agent.queued_prompt_dropped_by_command'];
+    const noAgentHint = 'to start the dialog';
+    assert.ok(enDict['thread.no_agent_with_binding'].includes(noAgentHint), 'the hint this step must never see');
+
+    // The switch notice is the move's paced send between the old backend's stop and the new one's start: held, the move waits there,
+    // with the topic already on OpenCode and no session up — the gap a message used to meet as «Run /claude or /opencode».
+    let releaseNotice = (): void => {};
+    fakeTelegram.holdNextResponse('sendMessage', new Promise<void>((resolve) => { releaseNotice = resolve; }), (payload) => payload.message_thread_id === messageDuringMove.threadId && String(payload.text).startsWith('🔁'));
+    try {
+      fakeTelegram.pushOperatorMessage(messageDuringMove.threadId, `LIM-M [fake:usage-limit-once] [limit-resets:${resetsAtIso}] please carry on`);
+      await movingTopic.waitForMessage('the switch notice', (message) => message.text.startsWith('🔁'));
+      assert.equal(readAgent(messageDuringMove.threadId)?.name, openCodeAdapterName, 'precondition: the topic runs OpenCode, the move is waiting on its notice');
+      assert.ok(!fakeOpenCode.prompts.some((prompt) => prompt.directory === movingFolderPath), 'precondition: the bridge is not sent yet');
+      const requestsBefore = readRequestCloseReasons();
+      fakeTelegram.pushOperatorMessage(messageDuringMove.threadId, 'MOV-1 a message sent while the topic moves');
+      // Load-bearing: before, the message met the no-agent hint and opened no request at all; one that reached either agent stays open.
+      await getCharness().waitFor('the message\'s request to be closed while the move still waits', replyTimeoutMs, () =>
+        [...readRequestCloseReasons()].some(([id, reason]) => !requestsBefore.has(id) && reason === 'cancelled'));
+    } finally {
+      releaseNotice();
+    }
+    await getCharness().waitFor('the bridge to reach the OpenCode session', agentStartTimeoutMs, () => fakeOpenCode.prompts.some((prompt) => prompt.directory === movingFolderPath));
+    await movingTopic.waitForMessage('the line that the message did not reach the agent', (message) => message.text === droppedLine);
+    const session = getOpenCodeSessionOf(messageDuringMove.folder);
+    const sessionPrompts = fakeOpenCode.prompts.filter((prompt) => prompt.sessionId === session.id);
+    assert.ok(sessionPrompts[0]?.text.includes('[Backend switch]'), 'the new agent\'s first prompt is the bridge');
+    assert.ok(!sessionPrompts.some((prompt) => prompt.text.includes('MOV-1')), 'not written into the new agent');
+    assert.ok(!readJsonLines<FakeClaudePrompt>(path.join(getLayout().fakeLogDir, fakeClaudeLogFileNames.prompts)).some((prompt) => prompt.text.includes('MOV-1')), 'nor into the agent being left');
+    assert.ok(!movingTopic.listMessages().some((message) => message.text.includes(noAgentHint)), 'the topic never says to start an agent the move is starting');
+    assert.equal(movingTopic.listMessages().filter((message) => message.text === droppedLine).length, 1, 'told once');
   });
 });
