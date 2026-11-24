@@ -206,3 +206,8 @@ test('the yes-or-no facts of licensing.json are what LICENSE says', () => {
   assert.equal(aiTraining.allowed, flatLicenseText.includes('Training or fine-tuning a machine-learning model on Charness code or commits is allowed'));
   assert.equal(buy.agentsMayBuy, flatLicenseText.includes('An agent may buy on its own when the organization lets it spend'));
 });
+
+test("LICENSE says plainly that using Charness to write code never makes that code derived (the owner's rule)", () => {
+  assert.ok(flatLicenseText.includes('2.4. **Your own work.** Using Charness to write code never makes that code derived from Charness.'));
+  assert.ok(flatLicenseText.includes('never because Charness was used to write it'));
+});

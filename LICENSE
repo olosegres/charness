@@ -78,12 +78,14 @@ allows for section 1.3.
 
 2.3. **Derived code.** Code, skills or prompts written on the basis of Charness code or commits, taking over its
 approaches and solutions, are works based on Charness and are subject to this licence like Charness itself, whoever or
-whatever wrote them, including such code an AI model wrote with Charness code or commits in its context.
+whatever wrote them, including such code an AI model wrote with Charness code or commits in its context. Section 2.4
+says what is not derived.
 
-2.4. **Output.** Work you only produce by running Charness, such as your own code, documents or other deliverables that
-contain no Charness code and are not derived under section 2.3, is yours. The licensor claims no ownership or royalty in
-it. Unless the work takes over Charness's own approaches and solutions (section 2.3), it is not derived merely because
-Charness gave your agents its prompts, skills and tool descriptions while they worked on your project.
+2.4. **Your own work.** Using Charness to write code never makes that code derived from Charness. Your own code,
+documents and other deliverables that you or your agents produce with Charness are yours, and the licensor claims no
+ownership or royalty in them, even though Charness ran the agents and gave them its prompts, skills and tool
+descriptions while they worked. Such work is derived only for what it takes over from Charness's own code, approaches
+and solutions under section 2.3, never because Charness was used to write it.
 
 2.5. **AI training.** Training or fine-tuning a machine-learning model on Charness code or commits is allowed for
 payment under section 3.3. Part 1 does not make free the training of a model that is used, sold or offered under section
