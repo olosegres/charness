@@ -10,7 +10,8 @@ import { getMinutesOverrideMs } from '../utils/minutesOverride';
  *          counter < 2                → wake the same session at once
  *          counter = 2                → alert a person, stop waking
  *     └─ the turn sent a progress     → counters = 0, wake again after 15 min;
- *                                       a request open 12 h: no more reminders
+ *                                       a request open 12 h: no follow-up armed,
+ *                                       only the backstop below
  *   cap: 10 wake-ups in a row with no  → alert, stop waking (loop guard)
  *        answer to them
  *   backstop: nothing seen working on it for 90 min (a dead process, tracking
@@ -34,9 +35,10 @@ export const maxWakeUpsPerRequest = 10;
 /** After a progress answer, how long before the agent is reminded again. */
 export const progressFollowUpDelayMs = 15 * 60 * 1000;
 /**
- * How long a request is reminded after its progress notes: the bound on an agent that only ever reports progress. Past it the
- * reminders stop without an alert — the agent did answer — and its own answers still land; its progress notes show how old
- * its last word is.
+ * How long a request gets a reminder 15 min after each progress note: the bound on an agent that only ever reports progress.
+ * Past it no follow-up is armed, and nothing else changes: the request is NOT given up (no alert — the agent did answer — and
+ * `isWakeStopped` stays false), so it keeps its task-agent slot and its issue updates, and the backstop still wakes it once
+ * nothing was seen working on it for the backstop window (a process that died, an agent that went quiet).
  */
 export const progressFollowUpMaxAgeMs = 12 * 60 * 60 * 1000;
 /**
@@ -139,7 +141,7 @@ export function decideTurnEnd(request: OpenRequestState, progressCountAtTurnStar
   if (checkIsWakingStopped(request)) return { kind: 'none' };
   if (request.progressAnswerCount > progressCountAtTurnStart) {
     const answeredUpdate: OpenRequestUpdate = { silentTurnCount: 0, wakeCount: 0, lastTurnActivityAt: nowMs };
-    if (nowMs - request.createdAt >= progressFollowUpMaxAgeMs) return { kind: 'followUpLater', update: { ...answeredUpdate, ...stopWakingUpdate } };
+    if (nowMs - request.createdAt >= progressFollowUpMaxAgeMs) return { kind: 'followUpLater', update: { ...answeredUpdate, nextWakeAt: undefined } };
     return { kind: 'followUpLater', update: { ...answeredUpdate, nextWakeAt: nowMs + progressFollowUpDelayMs } };
   }
   const silentTurnCount = request.silentTurnCount + 1;

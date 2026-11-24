@@ -17,7 +17,7 @@ import { keyToString, type SessionKey } from '../sessionKey';
 import { RequestLedger, requestHistoryMaxBytes } from '../requests/requestLedger';
 import { RequestWakeUpEngine, restartWakeStaggerMs, unwatchedSweepMs } from '../requests/wakeUpEngine';
 import { createSessionTurnProbe } from '../requests/sessionTurnProbe';
-import { maxWakeUpsPerRequest, progressFollowUpDelayMs, type SessionTurnProbe } from '../requests/wakeUpRules';
+import { maxWakeUpsPerRequest, progressFollowUpDelayMs, progressFollowUpMaxAgeMs, type SessionTurnProbe } from '../requests/wakeUpRules';
 import type { OpenRequestState, RequestAlertReason, RequestWakeUpReason } from '../requests/types';
 import { RotatingJsonlFile } from '../utils/rotatingJsonlFile';
 import type { WakeUpMessage } from '../requests/requestHeader';
@@ -395,6 +395,44 @@ describe('progress answers', () => {
     assert.equal(open?.isWakeStopped, false);
     assert.equal(open?.wakeCount, 0);
     assert.equal(open?.nextWakeAt, nowMs + progressFollowUpDelayMs);
+  });
+
+  it('at hour 12 a progress note arms no more follow-up, but the request is not given up: no alert, no wake stop (the slot stays), the backstop still wakes it', async () => {
+    const wakeStopped: string[] = [];
+    const store = new StateStore(dataDir, { saveDebounceMs: 5 });
+    await store.init();
+    createdStores.push(store);
+    const ledger = new RequestLedger({
+      store,
+      history: new RotatingJsonlFile(path.join(dataDir, 'requests.jsonl'), requestHistoryMaxBytes),
+      now: () => nowMs,
+      onRequestWakeStopped: (_key, request) => { wakeStopped.push(request.id); },
+    });
+    await ledger.load();
+    const engine = createEngine(ledger);
+    const request = await ledger.createRequest(makeJiraKey('PROJ-12'), { kind: 'trackerEvent', attributes: { issueKey: 'PROJ-12', triggerId: '1', requester: 'r' } });
+    const key = makeJiraKey('PROJ-12');
+
+    // Twelve hours of a long run, the agent reporting at the end of each turn.
+    nowMs += progressFollowUpMaxAgeMs;
+    await engine.trackForwardedTurn(key, request.id);
+    await ledger.updateOpenRequest(request.id, (current) => ({ progressAnswerCount: current.progressAnswerCount + 1 }));
+    await endTurnSilently(engine);
+
+    const open = ledger.getNewestOpenRequest(key);
+    assert.equal(open?.isWakeStopped, false, 'not given up');
+    assert.equal(open?.nextWakeAt, undefined, 'no follow-up armed');
+    assert.deepEqual(alerts, []);
+    assert.deepEqual(wakeStopped, [], 'the ledger never reported a wake stop: the task-agent slot stays held');
+
+    nowMs += progressFollowUpDelayMs;
+    await engine.sweepUnwatchedRequests();
+    assert.deepEqual(wakeUps, [], 'no reminder 15 min later any more');
+
+    nowMs += backstopMs - progressFollowUpDelayMs;
+    await engine.sweepUnwatchedRequests();
+    assert.deepEqual(wakeUps, [{ requestId: request.id, reason: 'backstop' }], 'nothing seen working on it for the backstop window: woken');
+    assert.deepEqual(alerts, []);
   });
 
   it('the follow-up time survives a restart', async () => {

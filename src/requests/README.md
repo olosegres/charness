@@ -98,8 +98,9 @@ Numeric bounds are named constants in the files below; this README says only wha
 - A silent turn wakes the agent at once; the second silent turn in a row alerts and stops; a `progress` note
   resets both counters and schedules a follow-up; every wake passes `maxWakeUpsPerRequest`, which so counts the
   wakes in a row no progress note answered — an agent that reports at every reminder while it waits on a long run
-  is never told off as silent. The follow-ups end, without an alert, once the request is `progressFollowUpMaxAgeMs`
-  (12 h) old. Requests nobody watches get a backstop wake (`getRequestBackstopMs`).
+  is never told off as silent. Once the request is `progressFollowUpMaxAgeMs` (12 h) old no follow-up is armed
+  after a progress note, and nothing else changes: not given up (no alert, `isWakeStopped` stays false — the task-agent slot
+  and the issue updates stay), only the backstop wakes it then. Requests nobody watches get a backstop wake (`getRequestBackstopMs`).
 - **A tracker conversation whose process is gone is woken at once, not at the backstop** (`restarted`,
   `decideRestartWake`, `scheduleRestartWake`): at a boot that did not find its process (not adopted, the
   conversation sleeps) while it holds an open request that waits for nothing of its own (no post retry, no

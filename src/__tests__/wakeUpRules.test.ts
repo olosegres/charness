@@ -96,12 +96,15 @@ describe('decideTurnEnd', () => {
     assert.equal(decision.kind === 'followUpLater' ? decision.update.nextWakeAt : null, nowMs + progressFollowUpDelayMs);
   });
 
-  it('a request open 12 h gets no more reminders after its progress note, and no alert: the agent did answer', () => {
-    const request = createRequest({ createdAt: nowMs - progressFollowUpMaxAgeMs, progressAnswerCount: 1 });
+  it('a request open 12 h gets no follow-up armed after its progress note — and is NOT given up: no alert, no wake stop, the backstop still applies', () => {
+    const request = createRequest({ createdAt: nowMs - progressFollowUpMaxAgeMs, progressAnswerCount: 1, nextWakeAt: nowMs - 1 });
     assert.deepEqual(decideTurnEnd(request, 0, nowMs), {
       kind: 'followUpLater',
-      update: { silentTurnCount: 0, wakeCount: 0, lastTurnActivityAt: nowMs, isWakeStopped: true, nextWakeAt: undefined },
+      update: { silentTurnCount: 0, wakeCount: 0, lastTurnActivityAt: nowMs, nextWakeAt: undefined },
     });
+    const afterIt = createRequest({ createdAt: nowMs - progressFollowUpMaxAgeMs, progressAnswerCount: 1, lastTurnActivityAt: nowMs });
+    assert.equal(decideUnwatchedRequest(afterIt, idleProbe, nowMs + backstopMs - 1, backstopMs).kind, 'none');
+    assert.equal(decideUnwatchedRequest(afterIt, idleProbe, nowMs + backstopMs, backstopMs).kind, 'wake', 'the backstop');
     assert.equal(progressFollowUpMaxAgeMs, 12 * 60 * 60 * 1000);
     const younger = decideTurnEnd(createRequest({ createdAt: nowMs - progressFollowUpMaxAgeMs + 1, progressAnswerCount: 1 }), 0, nowMs);
     assert.equal(younger.kind === 'followUpLater' ? younger.update.nextWakeAt : null, nowMs + progressFollowUpDelayMs);
