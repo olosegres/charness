@@ -373,7 +373,7 @@ describe('the bot buffers a prompt for a starting session through it, in one pla
   });
 
   it('the delivery ports read the session at the write and return where the prompt went, with no wrapper that throws the answer away', () => {
-    assert.ok(botSource.includes('forwardPrompt: (key, text, options) => forwardPromptToAgent(key, getThreadAdapter(key), text, undefined, { isPersonInput: options.isPersonInput, isAccountsNoteCarrier: options.isAccountsNoteCarrier, lostWorkTelling: options.lostWorkTelling }),'));
+    assert.ok(botSource.includes('forwardPrompt: (key, text, options) => forwardPromptToAgent(key, getThreadAdapter(key), text, undefined, { isPersonInput: options.isPersonInput, isAccountsNoteCarrier: options.isAccountsNoteCarrier, lostWorkTelling: options.lostWorkTelling, waitBeforeRoute: options.waitBeforeRoute }),'));
     assert.ok(botSource.includes('checkIsSessionActive: (key) => checkIsAcceptingInput(key),'));
     assert.match(botSource, /wakeSession: \(key\) => \(checkIsTelegramKey\(key\)\n\s*\? wakeSleepingSessionForPrompt\(key\)\n\s*: wakeSleepingSessionForPrompt\(key, async \(notice\) => \{ console\.log\(/, 'a tracker conversation\'s resume notice is logged, never sent to Telegram');
     // A session post whose prompt found no session and nothing to wake is a failed post (its caller retries it), never one that reads as written.
@@ -700,8 +700,12 @@ describe('a startup window\'s prompts on every way out of it (review 19 #1)', ()
   });
 
   it('a bot-made post waits a last time as the last await before its write — after a topic fire\'s forward queue and the scheduler\'s request it opens — with only synchronous code between the wait and the write (review 27 nit 2)', () => {
-    assert.match(getBody('async function deliverPostPrompt(', '/**\n * @description Write a scheduled run\'s prompt'), /\): Promise<PromptDelivery> \{\n\s*await conversationEndings\.waitForMessagesAccepted\(keyToString\(key\)\);\n\s*return deliverPromptOrBuffer\(key, text, onBufferedSettled, options\);\n\}/);
-    const postDeps = getBody('function createSessionPostDeps(', 'async function deliverPostPrompt(');
+    assert.match(getBody('function deliverPostPrompt(', '/**\n * @description Write a scheduled run\'s prompt'), /\): Promise<PromptDelivery> \{\n\s*return deliverPromptOrBuffer\(key, text, onBufferedSettled, \{ \.\.\.options, waitBeforeRoute: \(\) => conversationEndings\.waitForMessagesAccepted\(keyToString\(key\)\) \}\);\n\}/, 'handed to the route, which awaits it before each routing (`deliverLatePrompt`, unit-tested above; review 28 nit 2)');
+    assert.match(getBody('const promptDeliveryDeps: PromptDeliveryDeps = {', 'function checkIsAcceptingInput('), /forwardPrompt: \(key, text, options\) => forwardPromptToAgent\([^\n]*waitBeforeRoute: options\.waitBeforeRoute \}\),/, 'and on to the forward');
+    const adopt = getBody('async function forwardPromptToAgent(', 'interface PromptForwardOptions');
+    assert.ok(adopt.indexOf('waitBeforeRoute: options.waitBeforeRoute,') > adopt.indexOf('await waitForAdoptedReplay(adapter, key);'), 'whose routing after an adopt replay waits again');
+    assert.match(adopt, /const bufferedOptions: PromptDeliveryOptions = \{[^}]*waitBeforeRoute: options\.waitBeforeRoute \};/);
+    const postDeps = getBody('function createSessionPostDeps(', 'function deliverPostPrompt(');
     assert.match(postDeps, /const delivery = await deliverPostPrompt\(keyFromString\(conversationKey\), text, buffered\.settle, \{ isAccountsNoteCarrier: true \}\);/, 'a session post: a tracker post, a stream-view topic fire');
     assert.match(getBody('function createLostWorkPostDeps(', 'function createBufferedOutcome('), /const delivery = await deliverPostPrompt\(keyFromString\(conversationKey\), text, buffered\.settle\);/, 'the lost-work post');
     assert.match(getBody('async function forwardScheduledRun(', 'async function forwardTopicSchedulerRequestRun('), /const delivery = await deliverPostPrompt\(key, text, buffered\.settle, \{ isAccountsNoteCarrier: true, lostWorkTelling \}\);/, 'a fire riding a request');
@@ -850,6 +854,57 @@ describe('deliverLatePrompt: a prompt decided on at arrival, delivered by what t
     };
     assert.equal(await deliverLatePrompt(ports), 'noSession');
     assert.deepEqual(steps, ['wake', 'reportRefused'], 'never written into the conversation a command now ends');
+  });
+
+  it('a bot-made post waits before EVERY routing of its write: a move that began while the post\'s wake brought the conversation back is waited out, and only then is the post forwarded (review 28 nit 2)', async () => {
+    const steps: string[] = [];
+    let isMoving = false;
+    let endMove = (): void => {};
+    const moveOver = new Promise<void>((resolve) => { endMove = resolve; });
+    let isSessionActive = false;
+    const delivering = deliverLatePrompt({
+      checkIsWindowOpen: () => false,
+      checkIsSessionActive: () => isSessionActive,
+      waitBeforeRoute: async () => {
+        steps.push('waitBeforeRoute');
+        if (isMoving) await moveOver;
+      },
+      buffer: async () => { steps.push('buffer'); },
+      wake: async () => {
+        steps.push('wake');
+        // The wake's resume brings the old backend back — and the operator's switch takes its hold meanwhile.
+        isSessionActive = true;
+        isMoving = true;
+        return { isAwake: true, isNoticePosted: false };
+      },
+      forward: async () => {
+        steps.push('forward');
+        return 'forwarded';
+      },
+      reportNoSession: async () => { steps.push('reportNoSession'); },
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.deepEqual(steps, ['waitBeforeRoute', 'wake', 'waitBeforeRoute'], 'not written into the backend the move is leaving');
+    isMoving = false;
+    endMove();
+    assert.equal(await delivering, 'forwarded');
+    assert.deepEqual(steps, ['waitBeforeRoute', 'wake', 'waitBeforeRoute', 'forward']);
+  });
+
+  it('a prompt with no wait is routed in its caller\'s tick, as before: no await ahead of its first routing', () => {
+    const steps: string[] = [];
+    void deliverLatePrompt({
+      checkIsWindowOpen: () => false,
+      checkIsSessionActive: () => true,
+      buffer: async () => { steps.push('buffer'); },
+      wake: async () => ({ isAwake: false, isNoticePosted: false }),
+      forward: async () => {
+        steps.push('forward');
+        return 'forwarded';
+      },
+      reportNoSession: async () => {},
+    });
+    assert.deepEqual(steps, ['forward'], 'written synchronously');
   });
 
   it('a wake that found the conversation ended by a release while it waited: the ending command\'s line, not «no agent running» (review 25 #2)', async () => {

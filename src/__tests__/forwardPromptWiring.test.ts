@@ -165,7 +165,7 @@ test('an API error that arms nothing holds the turn end until its stop, move or 
 
 test('a prompt that waits for an adopted replay keeps its lost-work wording when it lands in a start window (review 16 nit 7)', () => {
   const body = getFunctionBody('forwardPromptToAgent');
-  assert.ok(body.includes('const bufferedOptions: PromptDeliveryOptions = { isPersonInput: options.isPersonInput, isAccountsNoteCarrier: options.isAccountsNoteCarrier, lostWorkTelling: options.lostWorkTelling };'));
+  assert.ok(body.includes('const bufferedOptions: PromptDeliveryOptions = { isPersonInput: options.isPersonInput, isAccountsNoteCarrier: options.isAccountsNoteCarrier, lostWorkTelling: options.lostWorkTelling, waitBeforeRoute: options.waitBeforeRoute };'));
   assert.equal(body.match(/, bufferedOptions\);/g)?.length, 2, 'a person\'s prompt and a bot-made one alike');
 });
 

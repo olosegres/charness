@@ -6544,6 +6544,8 @@ async function forwardPromptToAgent(
   const isPersonInput = options.isPersonInput === true;
   const outcome = await deliverLatePrompt({
     isTechnical: isTechnicalPrompt,
+    // A post waits again here, after the replay wait: a move may have begun during it (review 28 nit 2).
+    waitBeforeRoute: options.waitBeforeRoute,
     checkIsWindowOpen: () => startupPromptBuffer.checkIsStarting(keyToString(key)),
     // Whether the process takes input, as every routing point reads it: one a release or a move is stopping takes nothing (review 25
     // nit 7). A technical prompt goes only into an idle one.
@@ -6555,7 +6557,7 @@ async function forwardPromptToAgent(
     } : {}),
     buffer: async () => {
       const bufferedText = `${options.requestHeader ?? ''}${getPromptWithThreadMessageContext(key, text, options.messageContext)}`;
-      const bufferedOptions: PromptDeliveryOptions = { isPersonInput: options.isPersonInput, isAccountsNoteCarrier: options.isAccountsNoteCarrier, lostWorkTelling: options.lostWorkTelling };
+      const bufferedOptions: PromptDeliveryOptions = { isPersonInput: options.isPersonInput, isAccountsNoteCarrier: options.isAccountsNoteCarrier, lostWorkTelling: options.lostWorkTelling, waitBeforeRoute: options.waitBeforeRoute };
       // A person's prompt that is dropped there is told about and closes its request, as at the person's own buffer.
       if (isPersonInput) {
         await deliverPromptOrBuffer(key, bufferedText, createPersonBufferedSettle(key, options.requestId ?? null), bufferedOptions);
@@ -6603,6 +6605,8 @@ interface PromptForwardOptions {
   requestHeader?: string;
   /** The request a person's prompt opened (absent or `null`: none) — closed if the prompt waits in a startup buffer and is dropped there. */
   requestId?: string | null;
+  /** A bot-made post's wait while a command ends or replaces the conversation, before the routing after an adopt replay (review 28 nit 2). */
+  waitBeforeRoute?: () => Promise<void>;
 }
 
 /** @description The forward itself, for a session that is ready to take the prompt: {@link forwardPromptToAgent} minus the replay wait. */
@@ -12001,7 +12005,7 @@ async function downloadIncomingFile(
  */
 const promptDeliveryDeps: PromptDeliveryDeps = {
   startupBuffer: startupPromptBuffer,
-  forwardPrompt: (key, text, options) => forwardPromptToAgent(key, getThreadAdapter(key), text, undefined, { isPersonInput: options.isPersonInput, isAccountsNoteCarrier: options.isAccountsNoteCarrier, lostWorkTelling: options.lostWorkTelling }),
+  forwardPrompt: (key, text, options) => forwardPromptToAgent(key, getThreadAdapter(key), text, undefined, { isPersonInput: options.isPersonInput, isAccountsNoteCarrier: options.isAccountsNoteCarrier, lostWorkTelling: options.lostWorkTelling, waitBeforeRoute: options.waitBeforeRoute }),
   checkIsSessionActive: (key) => checkIsAcceptingInput(key),
   // A tracker conversation has no topic to say a resume's notice in: it is logged.
   wakeSession: (key) => (checkIsTelegramKey(key)
@@ -16347,15 +16351,16 @@ function createSessionPostDeps(): PostToSessionDeps {
 }
 
 /**
- * @description A bot-made post's write: its LAST await waits while a command ends or replaces the conversation
- * (`ConversationEndings.waitForMessagesAccepted`), and the prompt is routed right after, with only synchronous code between
- * (`deliverPromptOrBuffer`). The post's earlier waits (`postToSession`) come before its ensures; after them a topic fire still queues
- * behind the topic's previous fire and may open the scheduler's request — a move that began meanwhile would otherwise get the prompt
- * written into the backend it leaves, past the bridge it already built, and the run lost while recorded as delivered (review 27 nit 2).
+ * @description A bot-made post's write: the last await before EACH routing of it waits while a command ends or replaces the
+ * conversation (`ConversationEndings.waitForMessagesAccepted`, handed to the route as `waitBeforeRoute`) — before the first routing, and
+ * again after a wake brought the conversation back or an adopt replay was waited out, with only synchronous code between each wait and
+ * its routing. The post's earlier waits (`postToSession`) come before its ensures; after them a topic fire still queues behind the
+ * topic's previous fire, may open the scheduler's request, or wakes the conversation — a move that began meanwhile would otherwise get
+ * the prompt written into the backend it leaves, past the bridge it already built, and the run lost while recorded as delivered (review 27
+ * nit 2, review 28 nit 2).
  */
-async function deliverPostPrompt(key: SessionKey, text: string, onBufferedSettled: BufferedPromptSettled, options: PromptDeliveryOptions = {}): Promise<PromptDelivery> {
-  await conversationEndings.waitForMessagesAccepted(keyToString(key));
-  return deliverPromptOrBuffer(key, text, onBufferedSettled, options);
+function deliverPostPrompt(key: SessionKey, text: string, onBufferedSettled: BufferedPromptSettled, options: PromptDeliveryOptions = {}): Promise<PromptDelivery> {
+  return deliverPromptOrBuffer(key, text, onBufferedSettled, { ...options, waitBeforeRoute: () => conversationEndings.waitForMessagesAccepted(keyToString(key)) });
 }
 
 /**

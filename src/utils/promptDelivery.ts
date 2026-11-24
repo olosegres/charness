@@ -40,6 +40,11 @@ export interface PromptDeliveryOptions {
   isPersonInput?: boolean;
   isAccountsNoteCarrier?: boolean;
   lostWorkTelling?: LostWorkTelling;
+  /**
+   * A bot-made post's wait while a command ends or replaces the conversation: awaited before EACH routing of the write — the first one,
+   * and again after a wake or an adopt-replay wait, either of which may outlast the start of a move ({@link LatePromptDeliveryPorts}).
+   */
+  waitBeforeRoute?: () => Promise<void>;
 }
 
 /**
@@ -90,6 +95,7 @@ export async function deliverPromptOrBuffer(
   const outcome = await deliverLatePrompt({
     checkIsWindowOpen: () => deps.startupBuffer.checkIsStarting(threadId),
     checkIsSessionActive: () => deps.checkIsSessionActive(key),
+    waitBeforeRoute: options.waitBeforeRoute,
     // Only a person's prompt is refused while a command ends or replaces the conversation: a bot-made one is settled by its caller.
     ...(options.isPersonInput === true ? { checkIsRefused: () => deps.checkIsRefusingMessages(key) } : {}),
     buffer: async () => {
@@ -168,6 +174,12 @@ export interface LatePromptDeliveryPorts {
   checkIsSessionActive: () => boolean;
   /** A person's prompt only: whether a command ends or replaces the conversation now (absent: never refused). */
   checkIsRefused?: () => boolean;
+  /**
+   * A bot-made post only: awaited before EACH routing — the first, and again after a wake — while a command ends or replaces the
+   * conversation, so the post is routed into the conversation that follows, never into the one a move began leaving during its wake
+   * (review 28 nit 2). Absent: the first routing runs in the caller's tick, with no await ahead of it.
+   */
+  waitBeforeRoute?: () => Promise<void>;
   buffer: () => Promise<void>;
   wake: () => Promise<LateWakeResult>;
   /** Where the forward put the prompt: `forwarded`, or what a forward that routes it again itself (a prompt that waited for an adopt replay) ended in — passed on as the answer. */
@@ -207,6 +219,8 @@ export function deliverLatePrompt(ports: LatePromptDeliveryPorts): Promise<LateP
 }
 
 async function routeLatePrompt(ports: LatePromptDeliveryPorts, wakesLeft: number): Promise<LatePromptOutcome> {
+  // Only when there is one: an await here would move every other prompt's routing out of its caller's tick.
+  if (ports.waitBeforeRoute) await ports.waitBeforeRoute();
   const route = getLatePromptRoute({
     isWindowOpen: ports.checkIsWindowOpen(),
     isSessionActive: ports.checkIsSessionActive(),
