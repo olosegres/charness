@@ -423,7 +423,7 @@ describe('the bot buffers a prompt for a starting session through it, in one pla
     // runs); a session post waits for the buffered prompt's replay as well (it must not count a prompt that never arrived): `buffered.settle`.
     assert.match(
       botSource.slice(botSource.indexOf('async function forwardTopicSchedulerRequestRun('), botSource.indexOf('async function forwardTopicSchedulerRequestRun(') + 1500),
-      /const delivery = await deliverPromptOrBuffer\(key, `\$\{opening\.header\}\$\{text\}`, buffered\.settle, \{ isAccountsNoteCarrier: true \}\);\n(?:\s*\/\/[^\n]*\n)*\s*if \(delivery === 'buffered' && \(await buffered\.getOutcome\(\)\) === 'dropped'\) \{\n\s*await settleTopicRequestAfterDelivery\(key, opening, 'noSession'\);\n\s*throw new Error\(bufferedPromptDroppedError\);\n\s*\}\n\s*await settleTopicRequestAfterDelivery\(key, \{ \.\.\.opening, isScheduledRun: true \}, delivery\);/,
+      /const delivery = await deliverPostPrompt\(key, `\$\{opening\.header\}\$\{text\}`, buffered\.settle, \{ isAccountsNoteCarrier: true \}\);\n(?:\s*\/\/[^\n]*\n)*\s*if \(delivery === 'buffered' && \(await buffered\.getOutcome\(\)\) === 'dropped'\) \{\n\s*await settleTopicRequestAfterDelivery\(key, opening, 'noSession'\);\n\s*throw new Error\(bufferedPromptDroppedError\);\n\s*\}\n\s*await settleTopicRequestAfterDelivery\(key, \{ \.\.\.opening, isScheduledRun: true \}, delivery\);/,
       'watched only once its prompt reached the session; a dropped one closes the scheduler\'s request (review 20 #1)',
     );
     assert.equal(botSource.match(/await settleTopicRequestAfterDelivery\(key, \{ \.\.\.opening, isScheduledRun: true \}, /g)?.length, 1, 'only the scheduler\'s request');
@@ -697,6 +697,17 @@ describe('a startup window\'s prompts on every way out of it (review 19 #1)', ()
     assert.equal(botSource.match(/await openTopicRequest\(key, text, intake, messageContext/g)?.length, 1, 'no person\'s request opened outside it');
     const onEnding = getBody('function cancelEndingConversationRequests(', '/**\n * @name SchedulerWiringDeps');
     assert.match(onEnding, /const promptsReachedOrHeld = new Set\(\[\.\.\.\(reachedOrHeld \?\? engine\.readPromptsReachedOrHeld\(key\)\), \.\.\.personPromptsInDelivery\]\);/, 'read synchronously at the call, beside the live reading');
+  });
+
+  it('a bot-made post waits a last time as the last await before its write — after a topic fire\'s forward queue and the scheduler\'s request it opens — with only synchronous code between the wait and the write (review 27 nit 2)', () => {
+    assert.match(getBody('async function deliverPostPrompt(', '/**\n * @description Write a scheduled run\'s prompt'), /\): Promise<PromptDelivery> \{\n\s*await conversationEndings\.waitForMessagesAccepted\(keyToString\(key\)\);\n\s*return deliverPromptOrBuffer\(key, text, onBufferedSettled, options\);\n\}/);
+    const postDeps = getBody('function createSessionPostDeps(', 'async function deliverPostPrompt(');
+    assert.match(postDeps, /const delivery = await deliverPostPrompt\(keyFromString\(conversationKey\), text, buffered\.settle, \{ isAccountsNoteCarrier: true \}\);/, 'a session post: a tracker post, a stream-view topic fire');
+    assert.match(getBody('function createLostWorkPostDeps(', 'function createBufferedOutcome('), /const delivery = await deliverPostPrompt\(keyFromString\(conversationKey\), text, buffered\.settle\);/, 'the lost-work post');
+    assert.match(getBody('async function forwardScheduledRun(', 'async function forwardTopicSchedulerRequestRun('), /const delivery = await deliverPostPrompt\(key, text, buffered\.settle, \{ isAccountsNoteCarrier: true, lostWorkTelling \}\);/, 'a fire riding a request');
+    const ownRequestRun = getBody('async function forwardTopicSchedulerRequestRun(', 'function wireScheduler(');
+    assert.ok(ownRequestRun.indexOf('await openTopicRequest(') < ownRequestRun.indexOf('await deliverPostPrompt('), 'a fire opening the scheduler\'s request: the wait after the request is open');
+    for (const body of [postDeps, ownRequestRun]) assert.doesNotMatch(body, /deliverPromptOrBuffer\(/, 'no post writes without the last wait');
   });
 
   it('every routing point reads whether the process takes input, and so does the ensure\'s plan: the adapter\'s own suspend after a torn frame is resumed for the prompt, not read `ready` while the prompt meets a dying process (review 25 nits 4 and 7)', () => {
