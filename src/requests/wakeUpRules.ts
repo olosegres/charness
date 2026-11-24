@@ -9,8 +9,10 @@ import { getMinutesOverrideMs } from '../utils/minutesOverride';
  *     └─ the turn sent NO answer      → silent-turn counter +1
  *          counter < 2                → wake the same session at once
  *          counter = 2                → alert a person, stop waking
- *     └─ the turn sent a progress     → counter = 0, wake again after 15 min
- *   cap: 10 wake-ups per request      → alert, stop waking (loop guard)
+ *     └─ the turn sent a progress     → counters = 0, wake again after 15 min;
+ *                                       a request open 12 h: no more reminders
+ *   cap: 10 wake-ups in a row with no  → alert, stop waking (loop guard)
+ *        answer to them
  *   backstop: nothing seen working on it for 90 min (a dead process, tracking
  *             lost across a restart or a watch that never saw its turn end)
  *                                     → resume / wake the session
@@ -23,10 +25,20 @@ import { getMinutesOverrideMs } from '../utils/minutesOverride';
 
 /** Silent turns in a row that make the rules give up. */
 export const maxSilentTurns = 2;
-/** Wake-ups one request may receive before the loop guard gives up. */
+/**
+ * Wake-ups in a row one request may receive with no progress note answering them before the loop guard gives up. A
+ * reminder the agent answers with a progress note starts the count again: an agent that reports while it waits on a
+ * long run is working, and an alert saying it gave no answer would be false.
+ */
 export const maxWakeUpsPerRequest = 10;
 /** After a progress answer, how long before the agent is reminded again. */
 export const progressFollowUpDelayMs = 15 * 60 * 1000;
+/**
+ * How long a request is reminded after its progress notes: the bound on an agent that only ever reports progress. Past it the
+ * reminders stop without an alert — the agent did answer — and its own answers still land; its progress notes show how old
+ * its last word is.
+ */
+export const progressFollowUpMaxAgeMs = 12 * 60 * 60 * 1000;
 /**
  * After a request's prompt could not be posted (no session, a forward that
  * failed), when to try again (R28): soon, then less soon — these retries are not
@@ -126,10 +138,9 @@ function getWakeOrCapDecision(
 export function decideTurnEnd(request: OpenRequestState, progressCountAtTurnStart: number, nowMs: number): WakeUpDecision {
   if (checkIsWakingStopped(request)) return { kind: 'none' };
   if (request.progressAnswerCount > progressCountAtTurnStart) {
-    return {
-      kind: 'followUpLater',
-      update: { silentTurnCount: 0, nextWakeAt: nowMs + progressFollowUpDelayMs, lastTurnActivityAt: nowMs },
-    };
+    const answeredUpdate: OpenRequestUpdate = { silentTurnCount: 0, wakeCount: 0, lastTurnActivityAt: nowMs };
+    if (nowMs - request.createdAt >= progressFollowUpMaxAgeMs) return { kind: 'followUpLater', update: { ...answeredUpdate, ...stopWakingUpdate } };
+    return { kind: 'followUpLater', update: { ...answeredUpdate, nextWakeAt: nowMs + progressFollowUpDelayMs } };
   }
   const silentTurnCount = request.silentTurnCount + 1;
   if (silentTurnCount >= maxSilentTurns) {

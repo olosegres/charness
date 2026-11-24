@@ -96,8 +96,10 @@ Numeric bounds are named constants in the files below; this README says only wha
   retry or limit wait, session start, wedge recovery) and the backend has TAKEN IN the request's message
   (`checkHasUnconsumedInput`) — otherwise an earlier turn's idle reads as the end of this request's turn.
 - A silent turn wakes the agent at once; the second silent turn in a row alerts and stops; a `progress` note
-  resets the counter and schedules a follow-up; every wake passes `maxWakeUpsPerRequest`. Requests nobody
-  watches get a backstop wake (`getRequestBackstopMs`).
+  resets both counters and schedules a follow-up; every wake passes `maxWakeUpsPerRequest`, which so counts the
+  wakes in a row no progress note answered — an agent that reports at every reminder while it waits on a long run
+  is never told off as silent. The follow-ups end, without an alert, once the request is `progressFollowUpMaxAgeMs`
+  (12 h) old. Requests nobody watches get a backstop wake (`getRequestBackstopMs`).
 - **A tracker conversation whose process is gone is woken at once, not at the backstop** (`restarted`,
   `decideRestartWake`, `scheduleRestartWake`): at a boot that did not find its process (not adopted, the
   conversation sleeps) while it holds an open request that waits for nothing of its own (no post retry, no

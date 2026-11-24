@@ -65,7 +65,7 @@ export interface OpenRequestState {
   progressAnswerCount: number;
   /** Consecutive turns that ended without any answer. */
   silentTurnCount: number;
-  /** Wake-ups delivered for this request (the loop-guard cap counts these). */
+  /** Wake-ups delivered since the agent last answered one with a progress note (the loop-guard cap counts these). */
   wakeCount: number;
   /** Epoch ms of the next scheduled wake-up, when one is armed. */
   nextWakeAt?: number;

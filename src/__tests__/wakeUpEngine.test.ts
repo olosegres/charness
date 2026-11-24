@@ -372,6 +372,31 @@ describe('progress answers', () => {
     assert.deepEqual(wakeUps, [{ requestId: request.id, reason: 'progressFollowUp' }]);
   });
 
+  it('an agent that answers every reminder with a progress note is never given up on: the cap counts reminders it left unanswered', async () => {
+    // A long pipeline or e2e run: the agent waits on it and reports at each reminder, well past the cap of reminders.
+    const ledger = await createLedger();
+    const engine = createEngine(ledger);
+    const request = await ledger.createRequest(topicKey, { kind: 'message', attributes: {} });
+    await engine.trackForwardedTurn(topicKey, request.id);
+    const answerWithProgress = () => ledger.updateOpenRequest(request.id, (current) => ({ progressAnswerCount: current.progressAnswerCount + 1 }));
+    await answerWithProgress();
+    await endTurnSilently(engine);
+
+    for (let reminder = 1; reminder <= maxWakeUpsPerRequest + 2; reminder += 1) {
+      nowMs += progressFollowUpDelayMs;
+      await engine.sweepUnwatchedRequests();
+      assert.equal(wakeUps.length, reminder, `reminder ${reminder} is delivered`);
+      await answerWithProgress();
+      await endTurnSilently(engine);
+    }
+
+    assert.deepEqual(alerts, [], 'no alert: the agent answered every reminder');
+    const open = ledger.getNewestOpenRequest(topicKey);
+    assert.equal(open?.isWakeStopped, false);
+    assert.equal(open?.wakeCount, 0);
+    assert.equal(open?.nextWakeAt, nowMs + progressFollowUpDelayMs);
+  });
+
   it('the follow-up time survives a restart', async () => {
     const ledger = await createLedger();
     const engine = createEngine(ledger);

@@ -21,6 +21,7 @@ import {
   getWatchedTurnState,
   maxWakeUpsPerRequest,
   progressFollowUpDelayMs,
+  progressFollowUpMaxAgeMs,
   type SessionTurnProbe,
   type WatchedTurn,
 } from '../requests/wakeUpRules';
@@ -78,13 +79,32 @@ describe('decideTurnEnd', () => {
     });
   });
 
-  it('a progress answer resets the counter and schedules the follow-up 15 min later', () => {
-    const request = createRequest({ silentTurnCount: 1, progressAnswerCount: 2 });
+  it('a progress answer resets the counters and schedules the follow-up 15 min later', () => {
+    const request = createRequest({ silentTurnCount: 1, progressAnswerCount: 2, wakeCount: 3 });
     assert.deepEqual(decideTurnEnd(request, 1, nowMs), {
       kind: 'followUpLater',
-      update: { silentTurnCount: 0, nextWakeAt: nowMs + progressFollowUpDelayMs, lastTurnActivityAt: nowMs },
+      update: { silentTurnCount: 0, wakeCount: 0, lastTurnActivityAt: nowMs, nextWakeAt: nowMs + progressFollowUpDelayMs },
     });
     assert.equal(progressFollowUpDelayMs, 15 * 60 * 1000);
+  });
+
+  it('a reminder answered with a progress note at the cap is followed up, not given up on: the agent is working', () => {
+    const request = createRequest({ progressAnswerCount: 10, wakeCount: maxWakeUpsPerRequest });
+    const decision = decideTurnEnd(request, 9, nowMs);
+    assert.equal(decision.kind, 'followUpLater');
+    assert.equal(decision.kind === 'followUpLater' ? decision.update.wakeCount : null, 0);
+    assert.equal(decision.kind === 'followUpLater' ? decision.update.nextWakeAt : null, nowMs + progressFollowUpDelayMs);
+  });
+
+  it('a request open 12 h gets no more reminders after its progress note, and no alert: the agent did answer', () => {
+    const request = createRequest({ createdAt: nowMs - progressFollowUpMaxAgeMs, progressAnswerCount: 1 });
+    assert.deepEqual(decideTurnEnd(request, 0, nowMs), {
+      kind: 'followUpLater',
+      update: { silentTurnCount: 0, wakeCount: 0, lastTurnActivityAt: nowMs, isWakeStopped: true, nextWakeAt: undefined },
+    });
+    assert.equal(progressFollowUpMaxAgeMs, 12 * 60 * 60 * 1000);
+    const younger = decideTurnEnd(createRequest({ createdAt: nowMs - progressFollowUpMaxAgeMs + 1, progressAnswerCount: 1 }), 0, nowMs);
+    assert.equal(younger.kind === 'followUpLater' ? younger.update.nextWakeAt : null, nowMs + progressFollowUpDelayMs);
   });
 
   it('a silent turn after the wake-up cap alerts instead of waking', () => {
