@@ -8,6 +8,8 @@
 
 import { describe, test } from 'node:test';
 import * as assert from 'node:assert/strict';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
 import {
   ReleaseError,
   checkHasShippedChange,
@@ -21,6 +23,8 @@ import {
   getNextVersion,
   getPackViolations,
   getPublishDryRunProblems,
+  getLicenseTagProblems,
+  getLicenseTextTag,
   getReleaseBump,
   getReleaseDate,
   getReleaseNotes,
@@ -590,5 +594,36 @@ describe('getPublishDryRunProblems', () => {
 
   test('a clean dry run (notices only) has no problems', () => {
     assert.deepEqual(getPublishDryRunProblems(['npm notice', 'npm notice 📦  probe@1.0.0', '+ probe@1.0.0'].join('\n')), []);
+  });
+});
+
+describe('getLicenseTextTag and getLicenseTagProblems', () => {
+  const noticeLine = 'Required Notice: Licensed under the Charness License 2.0: https://github.com/example/charness/blob/license-2.0/LICENSE';
+  const licenseText = `Required Notice: Copyright 2026 Someone (https://github.com/example/charness)\n${noticeLine}\n\n# Charness License 2.0\n`;
+
+  test('the tag is read from the Required Notice line that names the fixed copy of the text', () => {
+    assert.equal(getLicenseTextTag(licenseText), 'license-2.0');
+    assert.equal(getLicenseTextTag('# A licence with no notice\n'), null);
+  });
+
+  test('a tag on the remote that holds this very text passes', () => {
+    assert.deepEqual(getLicenseTagProblems(licenseText, licenseText), []);
+  });
+
+  test('a tag missing from the remote, or holding another text, is refused', () => {
+    assert.match(getLicenseTagProblems(licenseText, null)[0], /tag license-2\.0, which the Required Notice of LICENSE names, is not on the remote/);
+    assert.match(getLicenseTagProblems(licenseText, `${licenseText}changed\n`)[0], /tag license-2\.0 holds another LICENSE text/);
+  });
+
+  test('a notice naming a branch instead of a tag, or no fixed copy at all, is refused', () => {
+    assert.match(getLicenseTagProblems(licenseText.replace('blob/license-2.0/', 'blob/main/'), null)[0], /names "main", a moving ref/);
+    assert.match(getLicenseTagProblems('# A licence with no notice\n', null)[0], /has no "Required Notice: Licensed under the/);
+  });
+
+  test("the repository's own LICENSE names a fixed tag", () => {
+    const ownLicense = fs.readFileSync(path.resolve(__dirname, '..', '..', 'LICENSE'), 'utf8');
+    const tag = getLicenseTextTag(ownLicense);
+    assert.notEqual(tag, null);
+    assert.ok(!['main', 'master', 'HEAD'].includes(tag ?? ''));
   });
 });

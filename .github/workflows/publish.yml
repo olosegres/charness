@@ -224,6 +224,9 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
       - name: Package check (contents; the install is the next job's)
         run: yarn tsx src/release/cli.ts check-pack --version "$VERSION" --skip-install
+      # Every copy names its licence by the tag in LICENSE's Required Notice: that tag must be on GitHub and hold this LICENSE.
+      - name: The licence text's fixed tag
+        run: yarn tsx src/release/cli.ts check-license-tag
       - name: Pack
         id: pack
         run: |

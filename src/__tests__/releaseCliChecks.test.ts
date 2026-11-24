@@ -12,7 +12,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import * as http from 'node:http';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { cliTimeoutMs, initialPackage, initialChangelog, pinnedDependency, createFixtureShrinkwrap, transpiledCliPath, sandboxDir, repoDir, homeDir, createChildEnv, runGit, writeRepoFile, commitFile, runCli, useReleaseSandbox } from './releaseCliKit';
+import { cliTimeoutMs, initialPackage, initialChangelog, pinnedDependency, createFixtureShrinkwrap, transpiledCliPath, sandboxDir, repoDir, homeDir, createChildEnv, createGitEnv, runGit, writeRepoFile, commitFile, runCli, useReleaseSandbox } from './releaseCliKit';
 
 useReleaseSandbox();
 
@@ -296,5 +296,39 @@ describe('check-registry', () => {
     const result = await runRegistryCheck('3.3.1');
     assert.equal(result.status, 1, result.stdout);
     assert.match(result.stderr, /npm holds demo-package 3\.2\.1/);
+  });
+});
+
+describe('check-license-tag', () => {
+  const licenseTag = 'license-2.0';
+  const licenseText = `Required Notice: Licensed under the Demo License 2.0: https://github.com/example/demo/blob/${licenseTag}/LICENSE\n\n# Demo License 2.0\n`;
+  let remoteDir: string;
+
+  beforeEach(() => {
+    remoteDir = path.join(sandboxDir, 'license-remote.git');
+    const init = spawnSync('git', ['init', '-q', '--bare', '-b', 'main', remoteDir], { env: createGitEnv(), encoding: 'utf8' });
+    assert.equal(init.status, 0, init.stderr);
+    runGit('remote', 'add', 'origin', remoteDir);
+    commitFile('LICENSE', licenseText, 'docs: the licence');
+  });
+
+  test('the tag the notice names, missing from the remote, is refused, telling how to fix it', () => {
+    const result = runCli('check-license-tag');
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /tag license-2\.0, which the Required Notice of LICENSE names, is not on the remote: create it/);
+  });
+
+  test('the tag on the remote with this LICENSE passes; a LICENSE changed after the tag is refused', () => {
+    runGit('tag', licenseTag);
+    runGit('push', '-q', 'origin', licenseTag);
+    runGit('tag', '-d', licenseTag);
+    const passing = runCli('check-license-tag');
+    assert.equal(passing.status, 0, passing.stderr);
+    assert.match(passing.stdout, /tag license-2\.0 on origin holds this very text/);
+
+    commitFile('LICENSE', `${licenseText}A changed clause.\n`, 'docs: change the licence');
+    const changed = runCli('check-license-tag');
+    assert.equal(changed.status, 1);
+    assert.match(changed.stderr, /tag license-2\.0 holds another LICENSE text than this commit/);
   });
 });

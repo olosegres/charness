@@ -35,6 +35,8 @@ import {
   createReleasePlan,
   getChangelogFallback,
   getInvalidBinPaths,
+  getLicenseTagProblems,
+  getLicenseTextTag,
   getPackViolations,
   getPublishDryRunProblems,
   getReleaseDate,
@@ -767,6 +769,30 @@ function runCommitRelease(args: string[]): number {
   return 0;
 }
 
+const licenseFileName = 'LICENSE';
+
+/**
+ * The fixed copy of the licence text: the tag the Required Notice of `LICENSE` names must be on `remote` and hold this commit's
+ * `LICENSE` byte for byte, or every copy the release publishes would name its licence by a dead or wrong link.
+ */
+function runCheckLicenseTag(args: string[]): number {
+  const { values } = parseArgs({ args, options: { remote: { type: 'string' } } });
+  const remote = values.remote ?? defaultRemote;
+  const licenseText = fs.readFileSync(licenseFileName, 'utf8');
+  const tag = getLicenseTextTag(licenseText);
+  let tagLicenseText: string | null = null;
+  if (tag !== null && git('ls-remote', '--tags', remote, `refs/tags/${tag}`).trim() !== '') {
+    git('fetch', '--no-tags', remote, `+refs/tags/${tag}:refs/tags/${tag}`);
+    tagLicenseText = readFileAt(`refs/tags/${tag}`, licenseFileName);
+  }
+  const problems = getLicenseTagProblems(licenseText, tagLicenseText);
+  if (problems.length > 0) {
+    throw new ReleaseError(`The licence text is not fixed for this release:\n${problems.map((line) => `  ${line}`).join('\n')}`);
+  }
+  process.stdout.write(`${licenseFileName}: tag ${tag} on ${remote} holds this very text.\n`);
+  return 0;
+}
+
 async function main(argv: string[]): Promise<number> {
   const [subcommand, ...args] = argv;
   switch (subcommand) {
@@ -784,6 +810,8 @@ async function main(argv: string[]): Promise<number> {
       return runCheckInstall(args);
     case 'check-publish':
       return runCheckPublish();
+    case 'check-license-tag':
+      return runCheckLicenseTag(args);
     case 'commit-release':
       return runCommitRelease(args);
     case 'test-gate':
@@ -793,7 +821,7 @@ async function main(argv: string[]): Promise<number> {
     case 'check-registry':
       return runCheckRegistry(args);
     default:
-      throw new ReleaseError(`Unknown subcommand "${subcommand}". Use plan | apply | changelog | notes | check-pack | check-install | check-publish | test-gate | verify-delta | check-registry | commit-release.`);
+      throw new ReleaseError(`Unknown subcommand "${subcommand}". Use plan | apply | changelog | notes | check-pack | check-install | check-publish | check-license-tag | test-gate | verify-delta | check-registry | commit-release.`);
   }
 }
 
