@@ -1,5 +1,5 @@
 Required Notice: Copyright 2026 Sergei Solo (https://github.com/olosegres/charness)
-Required Notice: Licensed under the Charness License 2.0: https://github.com/olosegres/charness/blob/main/LICENSE
+Required Notice: Licensed under the Charness License 2.0: https://github.com/olosegres/charness/blob/license-2.0/LICENSE
 
 # Charness License 2.0
 
@@ -227,8 +227,10 @@ liability that the law does not allow to be limited.
 not apply. The courts of Tbilisi decide disputes, unless mandatory law says otherwise. If a merchant of record sells a
 licence, its buyer terms govern that purchase and these terms the software rights.
 
-4.8. **Changes.** The licensor may publish new terms; they apply to code published with them, never silently to a
-licence already paid. A renewal at a new price needs 30 days' notice.
+4.8. **Changes and versions.** The licensor may publish new terms; they apply to code published with them, never
+silently to a licence already paid. Any change of these terms gets a new version number, and the text of each version
+stays unchanged at https://github.com/olosegres/charness/blob/license-<version>/LICENSE (this one: license-2.0). A
+renewal at a new price needs 30 days' notice.
 
 4.9. **Definitions.**
 

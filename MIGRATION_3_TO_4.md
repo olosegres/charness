@@ -12,8 +12,8 @@ retroactively, and you may keep running it for as long as you like.
 
 ## What changed
 
-- 4.0 and later are under the [Charness License 1.0.0](https://github.com/olosegres/charness/blob/v4.2.0/LICENSE) — **source-available, not open source**. It is PolyForm
-  Small Business 1.0.0 with its "small business" grant replaced by the terms below.
+- 4.0.0 moved Charness to the [Charness License 1.0.0](https://github.com/olosegres/charness/blob/v4.2.0/LICENSE) — **source-available, not
+  open source**. It is PolyForm Small Business 1.0.0 with its "small business" grant replaced by the terms below.
 - Charness stays **free** for:
   - personal use — hobby projects and study;
   - any organization group whose **revenue plus funding** (R) is at most **$500,000** AND whose **people** (H) are at most

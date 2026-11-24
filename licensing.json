@@ -1,7 +1,8 @@
 {
   "$comment": "Machine-readable summary of the Charness License for people and AI agents deciding whether a licence is needed and what it costs. LICENSE is the binding text; src/__tests__/licensingData.test.ts keeps the two in agreement.",
   "license": "Charness License 2.0",
-  "licenseText": "https://github.com/olosegres/charness/blob/main/LICENSE",
+  "licenseText": "https://github.com/olosegres/charness/blob/license-2.0/LICENSE",
+  "latestLicenseText": "https://github.com/olosegres/charness/blob/main/LICENSE",
   "sourceAvailable": true,
   "openSource": false,
   "currency": "USD",
