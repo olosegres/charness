@@ -6141,7 +6141,10 @@ async function ensureAgentSessionNow(
     console.log(`[lifecycle] ${keyToString(key)}: the per-turn pick is kept; this session runs without the per-turn stop`);
   }
   const plan = getEnsureSessionPlan({
-    isActive: getThreadAdapter(key).checkIsActive(key),
+    // Whether the process takes input, as a prompt reads it: a process the adapter is stopping by itself (a torn stdin frame's suspend,
+    // outside this queue) is resumed — the resume joins that stop — instead of read `ready` while the prompt meets a dying process (review
+    // 25 nit 4). Every other stop runs in this queue and is over before the plan reads.
+    isActive: checkIsAcceptingInput(key),
     isStarting: startupPromptBuffer.checkIsStarting(keyToString(key)),
     hasBinding: state.getBinding(key) !== undefined,
     adapterName,

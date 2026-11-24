@@ -654,6 +654,11 @@ describe('a startup window\'s prompts on every way out of it (review 19 #1)', ()
     assert.match(report, /\): Promise<void> \{\n\s*if \(requestId !== null\) personDropsBeingTold\.add\(requestId\);\n\s*try \{/, 'marked in the drop\'s own tick, before its first await');
     assert.match(report, /\} finally \{\n\s*if \(requestId !== null\) personDropsBeingTold\.delete\(requestId\);\n\s*\}/, 'until the request is closed and the line out');
   });
+
+  it('every routing point reads whether the process takes input, and so does the ensure\'s plan: the adapter\'s own suspend after a torn frame is resumed for the prompt, not read `ready` while the prompt meets a dying process (review 25 nits 4 and 7)', () => {
+    assert.match(getBody('async function ensureAgentSessionNow(', 'function getResumableSessionId('), /const plan = getEnsureSessionPlan\(\{\n(?:\s*\/\/[^\n]*\n)*\s*isActive: checkIsAcceptingInput\(key\),/);
+    assert.match(getBody('async function forwardPromptToAgent(', 'interface PromptForwardOptions'), /checkIsSessionActive: \(\) => checkIsAcceptingInput\(key\) && !\(isTechnicalPrompt && \(adapter\.checkIsBusy\?\.\(key\) \?\? false\)\),/, 'the adopt-replay re-route, the technical prompt\'s idle test kept');
+  });
 });
 
 describe('deliverLatePrompt: a prompt decided on at arrival, delivered by what the session is NOW', () => {
