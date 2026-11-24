@@ -111,8 +111,9 @@ Newline-delimited JSON, one object per line, parsed in
   `CronCreate` job, `"loop_wakeup"` for the `ScheduleWakeup` (`/loop`) one (both
   probed live on 2.1.310). The `CronCreate` / `CronDelete` / `ScheduleWakeup` tool
   results name what was scheduled (`utils/claudeScheduledJobs.ts`); the CLI keeps
-  such jobs in memory only and never lists them as background tasks. A cancelled
-  `/loop` wakeup's wording is unknown: it is held until the hold runs out. A cron
+  such jobs in memory only and never lists them as background tasks. A stopped
+  `/loop` wakeup (`ScheduleWakeup {stop: true}` → `Loop stopped — cancelled 1 pending
+  wakeup(s); …`, seen on 2.1.306) takes the wakeup off (`checkIsLoopStoppedResult`). A cron
   firing beside a recurring job could be either job's: nothing is taken off then
   (a fired one-shot job stays counted within the hold, never a pending one lost).
 
