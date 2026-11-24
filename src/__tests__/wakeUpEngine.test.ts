@@ -69,8 +69,11 @@ const recordWakeUp = async (_key: SessionKey, request: OpenRequestState, message
   wakeUpMessages.push(message);
 };
 
-/** The windows a test instance may shorten (`CHARNESS_TEST_TIMINGS`); absent: the production ones. */
-interface EngineTimings {
+/**
+ * What a test instance changes in the engine's dependencies: the windows it shortens (`CHARNESS_TEST_TIMINGS`) and the optional ports it
+ * supplies; absent: the production ones.
+ */
+interface EngineOverrides {
   refreshProcessState?: (key: SessionKey) => void;
   sweepIntervalMs?: number;
   firstPostRetryDelayMs?: number;
@@ -80,7 +83,7 @@ interface EngineTimings {
   getScheduleWait?: (key: SessionKey, request: OpenRequestState) => RequestScheduleWait;
 }
 
-function createEngine(ledger: RequestLedger, timings: EngineTimings = {}): RequestWakeUpEngine {
+function createEngine(ledger: RequestLedger, overrides: EngineOverrides = {}): RequestWakeUpEngine {
   return new RequestWakeUpEngine({
     ledger,
     probeTurn: () => probe,
@@ -95,7 +98,7 @@ function createEngine(ledger: RequestLedger, timings: EngineTimings = {}): Reque
       return alertMessageRef;
     },
     backstopMs,
-    ...timings,
+    ...overrides,
     now: () => nowMs,
   });
 }
