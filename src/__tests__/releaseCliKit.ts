@@ -22,7 +22,7 @@ export const cliTimeoutMs = 90_000;
 export const initialPackage = {
   name: 'demo-package',
   version: '3.2.0',
-  files: ['dist/', 'stt/gigaam_sidecar.py', 'runner-scripts/runner-package-lock.json', 'runner-scripts/ensureNode.sh', 'agent-plugin/', 'README.md', 'LICENSE', 'LICENSE-COMMERCIAL.md', 'CHANGELOG.md'],
+  files: ['dist/', 'stt/gigaam_sidecar.py', 'runner-scripts/runner-package-lock.json', 'runner-scripts/ensureNode.sh', 'agent-plugin/', 'README.md', 'LICENSE', 'licensing.json', 'CHANGELOG.md'],
   // No "./": npm >= 11.10 drops a "./dist/…" bin entry at publish, and check-pack refuses it.
   bin: { charness: 'dist/cli.js' },
   scripts: { version: 'tsx src/release/cli.ts changelog && git add CHANGELOG.md', test: 'node --test' },

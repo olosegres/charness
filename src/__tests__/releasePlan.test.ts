@@ -76,7 +76,7 @@ describe('what ships', () => {
     assert.equal(checkIsShippedPath('agent-plugin/skills/charness-orchestration/SKILL.md'), true, 'a skill-only change is a release change');
     assert.equal(checkIsShippedPath('agent-plugin/.claude-plugin/plugin.json'), true);
     assert.equal(checkIsShippedPath('LICENSE'), true, 'a change of the license is a release change');
-    assert.equal(checkIsShippedPath('LICENSE-COMMERCIAL.md'), true);
+    assert.equal(checkIsShippedPath('licensing.json'), true, 'the licence figures agents read ship with the license');
     assert.equal(checkIsShippedPath('docs/commercial/index.html'), false, 'the commercial pages are the site, not the package');
     assert.equal(checkIsShippedPath('docs/license/1.0.0/index.html'), false);
     assert.equal(checkIsShippedPath('src/__tests__/bot.test.ts'), false);
@@ -109,7 +109,7 @@ describe('what ships', () => {
     assert.equal(checkHasShippedChange(createNetDiff(['package.json'], true)), true);
     assert.equal(checkHasShippedChange(createNetDiff(['package.json'], false)), false);
     assert.equal(checkHasShippedChange(createNetDiff(['README.md', 'LICENSE'])), true);
-    assert.equal(checkHasShippedChange(createNetDiff(['LICENSE-COMMERCIAL.md'])), true);
+    assert.equal(checkHasShippedChange(createNetDiff(['licensing.json'])), true);
   });
 });
 
@@ -182,21 +182,21 @@ describe('the plan of a run', () => {
   test('a commit that changes only the license text or the license field is released — it is not "nothing shipped"', () => {
     const textOnly = createCommit('docs(license): reword a clause', ['LICENSE']);
     assert.deepEqual(plan([textOnly]), { kind: 'release', version: '3.2.1', bump: 'patch' });
-    const commercialOnly = createCommit('docs(license): reword the commercial terms', ['LICENSE-COMMERCIAL.md']);
-    assert.deepEqual(plan([commercialOnly]), { kind: 'release', version: '3.2.1', bump: 'patch' });
+    const figuresOnly = createCommit('docs(license): change a price', ['licensing.json']);
+    assert.deepEqual(plan([figuresOnly]), { kind: 'release', version: '3.2.1', bump: 'patch' });
     const fieldOnly = createCommit('chore: the license field', ['package.json'], { changesShippedManifest: true });
     assert.deepEqual(plan([fieldOnly], { netDiff: createNetDiff(['package.json'], true) }), { kind: 'release', version: '3.2.1', bump: 'patch' });
   });
 
   test('the license switch itself — a commit with a BREAKING CHANGE footer over the license files — is never an automatic release', () => {
-    const switchCommit = createCommit('feat(license)!: free for small organizations', ['LICENSE', 'LICENSE-COMMERCIAL.md', 'package.json'], {
+    const switchCommit = createCommit('feat(license)!: free for small organizations', ['LICENSE', 'licensing.json', 'package.json'], {
       body: 'The reason.\n\nBREAKING CHANGE: Charness 4.0 and later are released under the Charness License 1.0.0.',
       changesShippedManifest: true,
     });
-    const automatic = plan([switchCommit], { netDiff: createNetDiff(['LICENSE', 'LICENSE-COMMERCIAL.md', 'package.json'], true) });
+    const automatic = plan([switchCommit], { netDiff: createNetDiff(['LICENSE', 'licensing.json', 'package.json'], true) });
     assert.equal(automatic.kind, 'fail');
     assert.ok((automatic.kind === 'fail' ? automatic.message : '').includes('bump=major'));
-    const dispatched = plan([switchCommit], { netDiff: createNetDiff(['LICENSE', 'LICENSE-COMMERCIAL.md', 'package.json'], true), input: { bump: 'major', force: false } });
+    const dispatched = plan([switchCommit], { netDiff: createNetDiff(['LICENSE', 'licensing.json', 'package.json'], true), input: { bump: 'major', force: false } });
     assert.deepEqual(dispatched, { kind: 'release', version: '4.0.0', bump: 'major' });
   });
 
@@ -521,10 +521,10 @@ describe('the pack check', () => {
     assert.deepEqual(getPackViolations(createListing(goodFiles), '3.3.0'), []);
   });
 
-  test('the license files are required: a package without LICENSE or LICENSE-COMMERCIAL.md is refused', () => {
+  test('the license files are required: a package without LICENSE or licensing.json is refused', () => {
     assert.ok(requiredPackFiles.includes('LICENSE'));
-    assert.ok(requiredPackFiles.includes('LICENSE-COMMERCIAL.md'));
-    assert.deepEqual(getPackViolations(createListing(goodFiles.filter((path) => path !== 'LICENSE-COMMERCIAL.md')), '3.3.0'), ['missing from the package: LICENSE-COMMERCIAL.md']);
+    assert.ok(requiredPackFiles.includes('licensing.json'));
+    assert.deepEqual(getPackViolations(createListing(goodFiles.filter((path) => path !== 'licensing.json')), '3.3.0'), ['missing from the package: licensing.json']);
     assert.deepEqual(getPackViolations(createListing(goodFiles.filter((path) => path !== 'LICENSE')), '3.3.0'), ['missing from the package: LICENSE']);
   });
 

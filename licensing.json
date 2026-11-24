@@ -1,0 +1,64 @@
+{
+  "$comment": "Machine-readable summary of the Charness License for people and AI agents deciding whether a licence is needed and what it costs. LICENSE is the binding text; src/__tests__/licensingData.test.ts keeps the two in agreement.",
+  "license": "Charness License 2.0",
+  "licenseText": "https://github.com/olosegres/charness/blob/main/LICENSE",
+  "sourceAvailable": true,
+  "openSource": false,
+  "currency": "USD",
+  "free": {
+    "personalUse": true,
+    "organizationGroup": {
+      "maxRevenuePlusFundingUsd": 500000,
+      "maxGroupPeople": 20,
+      "bothRequired": true
+    },
+    "educationAndPublicBenefit": true,
+    "evaluationDaysLessThan": 32,
+    "growthTransitionDays": 90
+  },
+  "organizationLicence": {
+    "rule": "Find the band of R and the band of H separately and pay the higher price.",
+    "perUserOrSeatPricing": false,
+    "bands": [
+      { "name": "Small", "revenuePlusFundingUpToUsd": 2000000, "groupPeopleUpTo": 50, "pricePerYearUsd": 500 },
+      { "name": "Growing", "revenuePlusFundingUpToUsd": 10000000, "groupPeopleUpTo": 250, "pricePerYearUsd": 2000 },
+      { "name": "Established", "revenuePlusFundingUpToUsd": 50000000, "groupPeopleUpTo": 1000, "pricePerYearUsd": 6000 },
+      { "name": "Large", "revenuePlusFundingUpToUsd": 250000000, "groupPeopleUpTo": 5000, "pricePerYearUsd": 15000 },
+      { "name": "Very large", "revenuePlusFundingUpToUsd": 1000000000, "groupPeopleUpTo": 10000, "pricePerYearUsd": 30000 },
+      { "name": "Global", "revenuePlusFundingUpToUsd": null, "groupPeopleUpTo": null, "pricePerYearUsd": 60000 }
+    ]
+  },
+  "aiTraining": {
+    "allowed": true,
+    "fee": "the group's band price, yearly, for every year it sells or offers a model trained on Charness code or commits; free for groups in the Free band",
+    "proof": "the paid invoice or receipt"
+  },
+  "oem": {
+    "bands": [
+      { "embeddedProductRevenueUpToUsd": 500000, "pricePerYearUsd": 0 },
+      { "embeddedProductRevenueUpToUsd": 2000000, "pricePerYearUsd": 2000 },
+      { "embeddedProductRevenueUpToUsd": 10000000, "pricePerYearUsd": 6000 },
+      { "embeddedProductRevenueUpToUsd": 50000000, "pricePerYearUsd": 15000 },
+      { "embeddedProductRevenueUpToUsd": 250000000, "pricePerYearUsd": 30000 },
+      { "embeddedProductRevenueUpToUsd": null, "pricePerYearUsd": 60000 }
+    ]
+  },
+  "discounts": {
+    "poweredByCharnessMarkPercent": 20,
+    "prepaidTwoOrThreeYearsPercent": 15
+  },
+  "refundWithinDays": 30,
+  "telemetry": false,
+  "buy": {
+    "contact": "charnesshub@gmail.com",
+    "checkout": null,
+    "agentsMayBuy": true,
+    "steps": [
+      "Check whether the group is free (LICENSE Part 1); if it is, nothing is needed.",
+      "Work out the band from the latest month-end R and H, and any discount (LICENSE 3.1, 3.6).",
+      "E-mail an order to the contact: legal name and country, covered group, R and H bands, term (1, 2 or 3 years), discounts, invoice e-mail.",
+      "Pay the invoice.",
+      "Keep the invoice and the receipt: they are the licence."
+    ]
+  }
+}

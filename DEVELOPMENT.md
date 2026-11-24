@@ -329,7 +329,7 @@ publish, no tag, no push, the run is red; the next day's run tries again by itse
   major is released only by dispatching the workflow with `bump=major`.
 - **Nothing to release** (green, nothing tagged): no commits since the last tag, `HEAD` already tagged, or no shipped
   path in the net diff from the tag — `src/**/*.ts` outside `src/__tests__` and `src/release`, `stt/gigaam_sidecar.py`,
-  `npm-shrinkwrap.json`, `LICENSE`, `LICENSE-COMMERCIAL.md`, everything under `agent-plugin/`, and `package.json` only when
+  `npm-shrinkwrap.json`, `LICENSE`, `licensing.json`, everything under `agent-plugin/`, and `package.json` only when
   `dependencies`, `bin`, `engines`, `files`, `main` or `license` differ. A docs-only or tests-only day, or a change and its
   revert, publishes nothing; README / SETUP changes reach the npm page with the next code release. A change to the license
   texts or the `license` field does count: it is a release (`releasePlan.ts` is the source of truth for both lists).
@@ -347,7 +347,7 @@ publish, no tag, no push, the run is red; the next day's run tries again by itse
   `## Unreleased` is filled with the `feat` / `fix` subjects.
 - **Package check** before anything is published: the tarball holds `package.json`, `dist/cli.js`, `stt/gigaam_sidecar.py`,
   `runner-scripts/runner-package-lock.json`, `runner-scripts/ensureNode.sh`, `npm-shrinkwrap.json`, the agent plugin's manifest and
-  orchestration skill, `CHANGELOG.md`, `README.md`, `LICENSE`, `LICENSE-COMMERCIAL.md` (`requiredPackFiles`) and no `src/` or tests, and installed the way a user installs it — `npm install -g`
+  orchestration skill, `CHANGELOG.md`, `README.md`, `LICENSE`, `licensing.json` (`requiredPackFiles`) and no `src/` or tests, and installed the way a user installs it — `npm install -g`
   from a loopback registry that serves the tarball and marks its shrinkwrap, as the npm registry does (an install of the
   tarball FILE ignores the shrinkwrap), dependencies passed on to the real registry — `charness --version` prints the new
   version and every package sits at the version the shrinkwrap pins (`yarn tsx src/release/cli.ts check-pack`, after

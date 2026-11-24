@@ -32,7 +32,7 @@ describe('check-pack', () => {
     writeRepoFile('agent-plugin/.claude-plugin/plugin.json', '{ "name": "charness" }\n');
     writeRepoFile('agent-plugin/skills/charness-orchestration/SKILL.md', '---\nname: charness-orchestration\ndescription: d\n---\n');
     writeRepoFile('LICENSE', 'MIT\n');
-    writeRepoFile('LICENSE-COMMERCIAL.md', '# Commercial terms\n');
+    writeRepoFile('licensing.json', '{}\n');
   }
 
   test('a sound package passes the listing check and installs the way a user installs it — from a registry, by its shrinkwrap — printing the new version', () => {
