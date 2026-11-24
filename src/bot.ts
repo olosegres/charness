@@ -1336,13 +1336,16 @@ const noTopicRequest: TopicRequestOpening = { header: '', requestId: null };
  * `null` intake is a prompt that is not a request by rule — an answer to the
  * agent's own question, delivered as a prompt. The intake's requester decides
  * which open request, if any, the new one supersedes (`requestGroup.ts`); the
- * header then names the replaced ones.
+ * header then names the replaced ones. `onCreated` runs with the new id inside
+ * the create, synchronously with the request appearing open (a person's prompt
+ * marks itself in delivery there: {@link deliverPersonPromptInRequest}).
  */
 async function openTopicRequest(
   key: SessionKey,
   text: string,
   intake: TopicRequestIntake | null,
   messageContext?: MessageContext,
+  onCreated?: (requestId: string) => void,
 ): Promise<TopicRequestOpening> {
   if (intake === null || !topicRequestLedger || !checkIsTelegramKey(key)) return noTopicRequest;
   const view = state.getDisplayPrefs(key).view;
@@ -1351,8 +1354,10 @@ async function openTopicRequest(
   // AGAIN when the session never took it in; the raw text would come back without the forwarded mark or the quote.
   const promptBody = getPromptWithThreadMessageContext(key, text, messageContext);
   const request = await topicRequestLedger.createRequest(key, getTopicRequestOrigin(intake), {
-    createPrompt: (requestId, supersededRequestIds) =>
-      buildTopicRequestPrompt({ requestId, source: intake.source, view, supersededRequestIds, promptBody, sender: messageContext?.nonOperatorSender }),
+    createPrompt: (requestId, supersededRequestIds) => {
+      onCreated?.(requestId);
+      return buildTopicRequestPrompt({ requestId, source: intake.source, view, supersededRequestIds, promptBody, sender: messageContext?.nonOperatorSender });
+    },
   });
   return { header: buildTopicRequestHeader(request.id, intake.source, view, request.supersededRequestIds, messageContext?.nonOperatorSender), requestId: request.id };
 }
@@ -13047,9 +13052,7 @@ async function deliverActivePrompt(
       return null;
     }
     // Free-form text cancels the question and is a fresh prompt — a request (S7).
-    const opening = await openTopicRequest(key, text, intake, messageContext);
-    const delivery = await cancelPendingQuestionAndForward(key, adapter, text, sentAtMs, messageContext, opening, intake !== null);
-    await settleTopicRequestAfterDelivery(key, opening, delivery);
+    await deliverPersonPromptInRequest(key, text, intake, messageContext, (opening) => cancelPendingQuestionAndForward(key, adapter, text, sentAtMs, messageContext, opening, intake !== null));
     return null;
   }
 
@@ -13097,12 +13100,43 @@ async function deliverPromptByState(
   // The request (S7) is opened AFTER the user takeover cancelled an armed limit
   // wait (the handlers' `cancelApiRetry`) and before the forward, so its id is
   // durable by the time the agent reads it.
-  const opening = await openTopicRequest(key, text, intake, messageContext);
   // A person's prompt that opens a request starts a turn that may carry the accounts note; the answer to the agent's own question
   // (`intake` null) is bookkeeping and never does.
-  const outcome = await deliverPersonPromptAtWrite(key, text, { opening, sentAtMs, messageContext, isAccountsNoteCarrier: intake !== null });
-  await settleTopicRequestAfterDelivery(key, opening, outcome);
-  return outcome;
+  return deliverPersonPromptInRequest(key, text, intake, messageContext, (opening) => deliverPersonPromptAtWrite(key, text, { opening, sentAtMs, messageContext, isAccountsNoteCarrier: intake !== null }));
+}
+
+/**
+ * Request ids of the person's prompts on their way to their write: from the moment the request is created — inside the create,
+ * synchronously with it appearing open — until the prompt's delivery is settled. An ending command's cancel does not tell them: the
+ * prompt's own route tells its person (refused while the command runs, or with no session) or delivers it to the conversation that
+ * follows, and the command telling it too gave the person the line twice, or a false one (review 27 #1).
+ */
+const personPromptsInDelivery = new Set<string>();
+
+/**
+ * @description Open a person's prompt's request (`openTopicRequest`), `deliver` the prompt and settle the request by where it went,
+ * the request marked in delivery ({@link personPromptsInDelivery}) from its creation until the settle is over, on every way out. The one
+ * way a person's prompt that may open a request is delivered: {@link deliverPromptByState} and the free text that cancels a question.
+ */
+async function deliverPersonPromptInRequest(
+  key: SessionKey,
+  text: string,
+  intake: TopicRequestIntake | null,
+  messageContext: MessageContext | undefined,
+  deliver: (opening: TopicRequestOpening) => Promise<LatePromptOutcome>,
+): Promise<LatePromptOutcome> {
+  const marked: { requestId: string | null } = { requestId: null };
+  try {
+    const opening = await openTopicRequest(key, text, intake, messageContext, (requestId) => {
+      marked.requestId = requestId;
+      personPromptsInDelivery.add(requestId);
+    });
+    const outcome = await deliver(opening);
+    await settleTopicRequestAfterDelivery(key, opening, outcome);
+    return outcome;
+  } finally {
+    if (marked.requestId !== null) personPromptsInDelivery.delete(marked.requestId);
+  }
 }
 
 /**
@@ -16233,7 +16267,8 @@ function cancelConversationRequest(key: SessionKey): void {
 function cancelEndingConversationRequests(key: SessionKey, reachedOrHeld?: ReadonlySet<string>): void {
   const engine = requestWakeUpEngine;
   if (!engine) return;
-  const promptsReachedOrHeld = reachedOrHeld ?? engine.readPromptsReachedOrHeld(key);
+  // Not the cancel's to tell: what the live process took in or a window holds, and a person's prompt on its way to its write (review 27 #1).
+  const promptsReachedOrHeld = new Set([...(reachedOrHeld ?? engine.readPromptsReachedOrHeld(key)), ...personPromptsInDelivery]);
   void (async () => {
     const unreadRequestIds = (await engine.cancelConversation(key, promptsReachedOrHeld)).filter((requestId) => !personDropsBeingTold.has(requestId));
     // A topic line: a tracker conversation never moves to another agent (its fallback stays within Claude).

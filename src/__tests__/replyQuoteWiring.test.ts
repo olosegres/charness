@@ -116,8 +116,9 @@ test('the request ledger keeps the prompt WITH its message context, at every ent
   assert.match(opener, /buildTopicRequestPrompt\(\{[^}]*\bpromptBody\b[^}]*\}\)/);
   assert.match(getFunctionBody('deliverPromptDuringStartup'), /deliverPromptByState\(\s*key\s*,\s*text\s*,\s*intake\s*,\s*undefined\s*,\s*messageContext\s*\)/);
   const active = getFunctionBody('deliverActivePrompt');
-  assert.equal(active.match(/openTopicRequest\(\s*key\s*,\s*text\s*,\s*intake\s*,\s*messageContext\s*\)/g)?.length, 1, 'the question-cancel route');
-  assert.match(getFunctionBody('deliverPromptByState'), /openTopicRequest\(\s*key\s*,\s*text\s*,\s*intake\s*,\s*messageContext\s*\)/, 'and the plain route, which a late answer shares');
+  assert.equal(active.match(/deliverPersonPromptInRequest\(\s*key\s*,\s*text\s*,\s*intake\s*,\s*messageContext\s*,/g)?.length, 1, 'the question-cancel route');
+  assert.match(getFunctionBody('deliverPromptByState'), /deliverPersonPromptInRequest\(\s*key\s*,\s*text\s*,\s*intake\s*,\s*messageContext\s*,/, 'and the plain route, which a late answer shares');
+  assert.match(getFunctionBody('deliverPersonPromptInRequest'), /openTopicRequest\(\s*key\s*,\s*text\s*,\s*intake\s*,\s*messageContext\s*,/, 'which opens the request with the context');
   assert.match(active, /return\s+deliverPromptByState\(\s*key\s*,\s*text\s*,\s*intake\s*,\s*sentAtMs\s*,\s*messageContext\s*\)/, 'that deliverActivePrompt ends in');
   // A file, an album and `/schedule` open theirs in that one helper too, with the context they carry.
   assert.match(getFunctionBody('handleIncomingFile'), /deliverPromptByState\([^;]*,\s*messageContext\s*\)/);

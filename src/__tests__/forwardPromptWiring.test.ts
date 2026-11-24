@@ -86,7 +86,7 @@ test('only a person\'s own prompts are marked as such: the text, voice and label
   const atWrite = getFunctionBody('deliverPersonPromptAtWrite');
   assert.match(atWrite, /forward: \(\) => forwardPromptToAgent\(key, getThreadAdapter\(key\), text, sentAtMs, \{ messageContext, requestHeader, requestId, isPersonInput: true, isAccountsNoteCarrier \}\),/);
   assert.match(atWrite, /, createPersonBufferedSettle\(key, requestId\), \{ isPersonInput: true, isAccountsNoteCarrier \}\);/, 'and its buffered twin');
-  assert.match(getFunctionBody('deliverPromptByState'), /await deliverPersonPromptAtWrite\(key, text, /);
+  assert.match(getFunctionBody('deliverPromptByState'), /\(opening\) => deliverPersonPromptAtWrite\(key, text, /, 'inside its request, marked in delivery (review 27 #1)');
   assert.match(getFunctionBody('deliverActivePrompt'), /return deliverPromptByState\(key, text, intake, sentAtMs, messageContext\);/, 'a person\'s prompt ends in it');
   assert.match(getFunctionBody('deliverPromptDuringStartup'), /await deliverPromptByState\(key, text, intake, undefined, messageContext\);/, 'one that arrived in a window too');
   assert.match(getFunctionBody('cancelPendingQuestionAndForward'), /return deliverPersonPromptAtWrite\(key, text, \{/);

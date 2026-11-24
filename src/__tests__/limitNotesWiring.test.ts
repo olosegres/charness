@@ -71,7 +71,7 @@ describe('L8: which callers of the forward mark their prompt a carrier of the ac
 
   it('the answer to the agent\'s own question is no carrier (a tap\'s label arrives with no request), and a person\'s free text is', () => {
     const delivery = getFunctionBody('deliverPromptByState');
-    assert.match(delivery, /await deliverPersonPromptAtWrite\(key, text, \{ opening, sentAtMs, messageContext, isAccountsNoteCarrier: intake !== null \}\);/);
+    assert.match(delivery, /\(opening\) => deliverPersonPromptAtWrite\(key, text, \{ opening, sentAtMs, messageContext, isAccountsNoteCarrier: intake !== null \}\)/);
     assert.match(getFunctionBody('deliverActivePrompt'), /cancelPendingQuestionAndForward\(key, adapter, text, sentAtMs, messageContext, opening, intake !== null\)/);
     assert.match(getFunctionBody('cancelPendingQuestionAndForward'), /isAccountsNoteCarrier = false,/, 'off unless the caller says it opened a request');
   });
