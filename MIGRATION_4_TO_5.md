@@ -17,7 +17,8 @@ Two new obligations (LICENSE sections 2.3 and 3.3):
   own people, by anyone for it, or by whoever it got the model's weights from — pays its yearly band price for it, on top
   of its licence (section 3.3).
 
-Everything else keeps its substance: the free tier, the band prices, the OEM table, the discounts and the refund. The
+The free tier, the band prices, the OEM table, the discounts and the refund are unchanged; the rest is the 1.0.0 terms
+in fewer words, so compare the two texts if you rely on a detail of them. The
 paid terms that lived in `LICENSE-COMMERCIAL.md` are now Part 3 of `LICENSE`. Code and commits published under MIT stay
 MIT; a copy keeps the licence file it came with.
 
