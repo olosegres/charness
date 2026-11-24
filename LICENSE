@@ -149,12 +149,14 @@ licensor tells it in writing, that the model was trained on Charness.
 (b) A general model that an independent organization trained, not for the group, on a broad collection of public code
 that merely includes Charness: the organization that trained it pays as in (d) while it sells or offers the model. The
 groups that only use it, by sending it requests or by running its weights, owe nothing for it. That stays so when they
-further train it on other data (section 3.3(c) included) and use, sell or offer the result; that does not make them its
-trainer.
+further train it on other data — the group's own data of (c) included, but not sessions that (c) counts under (a) — and
+use, sell or offer the result; that does not make them its trainer.
 
 (c) A model trained on the group's own code, documents or agent sessions is not trained on Charness merely because
-Charness ran those agents and the prompts, skills and tool descriptions it gave them appear in that data, unless the
-group picked them for what Charness gave its agents.
+Charness ran those agents and the prompts, skills and tool descriptions it gave them appear in that data. Sessions
+picked in order to teach a model what Charness gave its agents (its prompts, skills, tool descriptions and guidance, or
+how its agents follow them) are a training set picked to include Charness: such a model is trained on Charness on
+purpose, under (a).
 
 (d) A group whose use of Charness is free under Part 1, or that holds its organization licence, owes no second fee for
 using a model trained on Charness. A group that sells or offers to others a model it trained on Charness, under (a) or
