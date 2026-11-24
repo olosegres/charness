@@ -5,15 +5,16 @@
  * toast of its tap, a paced send, a move's bridge). While it is held, a transition queued ahead of the command drops the prompts it would
  * write into the conversation instead of resuming it for them (`requests/README.md` § Turn starts). It ends when the command's own
  * transition begins — what that transition starts is the conversation that comes next, never dropped — or by `release` when the command
- * stops short of it.
+ * stops short of it. From the hold until that transition has SETTLED, a person's message is refused
+ * ({@link ConversationEndings.checkIsRefusingMessages}): it is meant for a conversation that is going away, or for one not there yet.
  */
 export interface ConversationEnding {
   /**
-   * Queue the command's transition as the conversation's one transition: the hold ends as it begins, and at the latest once it settled.
-   * Called once.
+   * Queue the command's transition as the conversation's one transition: the hold ends as it begins, and at the latest once it settled;
+   * the refusal of a person's message once it settled. Called once.
    */
   run<TResult>(transition: () => Promise<TResult>): Promise<TResult>;
-  /** End the hold of a command that stops short of its transition; nothing once it has ended. */
+  /** End the hold and the refusal of a command that stops short of its transition; nothing once they have ended. */
   release(): void;
 }
 
@@ -25,34 +26,42 @@ export interface ConversationEndingsPorts<TKey> {
 
 /**
  * @description The conversations commands hold as ending ({@link ConversationEnding}), by how many holds each has: two overlapping commands
- * keep it held until both let go.
+ * keep it held until both let go. And the conversations that refuse a person's message, by how many commands refuse it: every hold until
+ * its transition settled, and a move of its own from its top until its first prompt reached the other backend ({@link refuseMessages}).
  */
 export class ConversationEndings<TKey> {
   private readonly holdCounts = new Map<string, number>();
+  private readonly refusalCounts = new Map<string, number>();
 
   constructor(private readonly ports: ConversationEndingsPorts<TKey>) {}
 
-  /** Whether a command holds the conversation as ending. */
+  /** Whether a command holds the conversation as ending: what a transition queued ahead of it would write into it is dropped. */
   checkIsEnding(conversationKey: string): boolean {
     return (this.holdCounts.get(conversationKey) ?? 0) > 0;
   }
 
-  /** Hold `key`'s conversation as ending from now on. */
+  /**
+   * Whether a person's message to the conversation is refused now — not written, buffered, woken or started for, its request closed and the
+   * person told: a command ends or replaces the conversation, from its hold until its transition settled, or a move has not yet handed its
+   * first prompt to the other backend (`requests/README.md` § Turn starts, review 25 #1, #2).
+   */
+  checkIsRefusingMessages(conversationKey: string): boolean {
+    return (this.refusalCounts.get(conversationKey) ?? 0) > 0;
+  }
+
+  /** Hold `key`'s conversation as ending from now on, refusing a person's message until the command's transition settled. */
   hold(key: TKey): ConversationEnding {
     const conversationKey = this.ports.toConversationKey(key);
-    this.holdCounts.set(conversationKey, (this.holdCounts.get(conversationKey) ?? 0) + 1);
-    let isHeld = true;
+    const endHold = this.takeCount(this.holdCounts, conversationKey);
+    const endRefusal = this.takeCount(this.refusalCounts, conversationKey);
     const release = (): void => {
-      if (!isHeld) return;
-      isHeld = false;
-      const count = (this.holdCounts.get(conversationKey) ?? 1) - 1;
-      if (count > 0) this.holdCounts.set(conversationKey, count);
-      else this.holdCounts.delete(conversationKey);
+      endHold();
+      endRefusal();
     };
     const run = async <TResult>(transition: () => Promise<TResult>): Promise<TResult> => {
       try {
         return await this.ports.runTransition(key, () => {
-          release();
+          endHold();
           return transition();
         });
       } finally {
@@ -60,5 +69,27 @@ export class ConversationEndings<TKey> {
       }
     };
     return { run, release };
+  }
+
+  /**
+   * Refuse a person's message to `key`'s conversation until the returned end is called (idempotent): a move across backends, whose hold's
+   * transition is only the old backend's stop, refuses from its top until its first prompt has reached the other backend — written there
+   * first, a message would reach the new agent ahead of the move's bridge, or meet no agent at all while the new one starts.
+   */
+  refuseMessages(key: TKey): () => void {
+    return this.takeCount(this.refusalCounts, this.ports.toConversationKey(key));
+  }
+
+  /** Count one more in `counts` for `conversationKey`; the returned end counts it off once, and does nothing after that. */
+  private takeCount(counts: Map<string, number>, conversationKey: string): () => void {
+    counts.set(conversationKey, (counts.get(conversationKey) ?? 0) + 1);
+    let isTaken = true;
+    return () => {
+      if (!isTaken) return;
+      isTaken = false;
+      const count = (counts.get(conversationKey) ?? 1) - 1;
+      if (count > 0) counts.set(conversationKey, count);
+      else counts.delete(conversationKey);
+    };
   }
 }

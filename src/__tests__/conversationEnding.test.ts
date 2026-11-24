@@ -81,3 +81,51 @@ describe('ConversationEndings: a command holds its conversation as ending from t
     assert.equal(refusing.checkIsEnding('chat:1'), false, 'never left held');
   });
 });
+
+describe('ConversationEndings: a person\'s message is refused while a command ends or replaces the conversation (review 25 #1, #2)', () => {
+  it('refused from the hold until the command\'s transition has SETTLED — past the moment its hold ends, through the release\'s own stop', async () => {
+    const { endings, holdQueue } = createEndings();
+    const finishAhead = holdQueue('chat:1');
+    const ending = endings.hold('chat:1');
+    assert.equal(endings.checkIsRefusingMessages('chat:1'), true, 'refused from the tap, ahead of the transition');
+    assert.equal(endings.checkIsRefusingMessages('chat:2'), false, 'another conversation takes messages');
+    let finishOwn = (): void => {};
+    let seenInOwn: { isEnding: boolean; isRefusing: boolean } | null = null;
+    const own = ending.run(() => {
+      seenInOwn = { isEnding: endings.checkIsEnding('chat:1'), isRefusing: endings.checkIsRefusingMessages('chat:1') };
+      return new Promise<void>((resolve) => { finishOwn = resolve; });
+    });
+    finishAhead();
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.deepEqual(seenInOwn, { isEnding: false, isRefusing: true }, 'the hold ends as the transition begins; the refusal does not: the process it stops takes no message');
+    assert.equal(endings.checkIsRefusingMessages('chat:1'), true, 'still refused while the release stops the process');
+    finishOwn();
+    await own;
+    assert.equal(endings.checkIsRefusingMessages('chat:1'), false, 'the next message, after the command, is the next conversation\'s');
+  });
+
+  it('a command that stops short lets go of both; a transition that throws or a queue that rejects too', async () => {
+    const { endings } = createEndings();
+    const shortOne = endings.hold('chat:1');
+    shortOne.release();
+    assert.equal(endings.checkIsRefusingMessages('chat:1'), false);
+    await assert.rejects(endings.hold('chat:1').run(async () => { throw new Error('the stop failed'); }), /the stop failed/);
+    assert.equal(endings.checkIsRefusingMessages('chat:1'), false);
+    const refusing = new ConversationEndings<string>({ toConversationKey: (key) => key, runTransition: () => Promise.reject(new Error('the re-spawn wait threw')) });
+    await assert.rejects(refusing.hold('chat:1').run(async () => 'never'), /the re-spawn wait threw/);
+    assert.equal(refusing.checkIsRefusingMessages('chat:1'), false);
+  });
+
+  it('a move refuses messages of its own until its first prompt reached the other backend — beyond its hold\'s transition, which is only the old backend\'s stop', async () => {
+    const { endings } = createEndings();
+    const stopRefusing = endings.refuseMessages('chat:1');
+    const ending = endings.hold('chat:1');
+    await ending.run(async () => undefined);
+    ending.release();
+    assert.equal(endings.checkIsEnding('chat:1'), false, 'nothing queued ahead is dropped any more');
+    assert.equal(endings.checkIsRefusingMessages('chat:1'), true, 'a message still meets the move');
+    stopRefusing();
+    stopRefusing();
+    assert.equal(endings.checkIsRefusingMessages('chat:1'), false, 'and an idempotent end');
+  });
+});

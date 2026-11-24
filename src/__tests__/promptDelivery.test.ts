@@ -40,6 +40,10 @@ let forwardOutcome: LatePromptOutcome;
 let isSessionActive: boolean;
 /** Whether a wake brings a session up (`wakeSleepingSessionForPrompt`). */
 let isWakeOk: boolean;
+/** Whether the wake found the conversation ended by a release while it waited in the queue. */
+let isWakeEnded: boolean;
+/** Whether a command ends or replaces the conversation now (`ConversationEndings.checkIsRefusingMessages`). */
+let isRefusingMessages: boolean;
 let deps: PromptDeliveryDeps;
 
 beforeEach(() => {
@@ -50,6 +54,8 @@ beforeEach(() => {
   forwardOutcome = 'forwarded';
   isSessionActive = true;
   isWakeOk = true;
+  isWakeEnded = false;
+  isRefusingMessages = false;
   deps = {
     startupBuffer,
     forwardPrompt: async (key, text) => {
@@ -61,9 +67,11 @@ beforeEach(() => {
       steps.push('wake');
       // A wake that works brings the session up.
       if (isWakeOk) isSessionActive = true;
-      return { isAwake: isWakeOk, isNoticePosted: false };
+      return { isAwake: isWakeOk, isNoticePosted: false, ...(isWakeEnded ? { isEnded: true } : {}) };
     },
+    checkIsRefusingMessages: () => isRefusingMessages,
     reportNoSession: async (_key, isAlreadyTold) => { steps.push(`reportNoSession(${isAlreadyTold})`); },
+    reportRefused: async (_key, options) => { steps.push(`reportRefused(${options.isPersonInput === true ? 'person' : 'bot'})`); },
     announceQueued: async (key) => { announced.push(key); },
   };
 });
@@ -277,6 +285,38 @@ describe('deliverPromptOrBuffer', () => {
   });
 });
 
+describe('deliverPromptOrBuffer while a command ends or replaces the conversation (review 25 #1, #2)', () => {
+  it('a person\'s prompt is refused ahead of everything — even an open window: nothing buffered, forwarded or woken, and the person told the ending command\'s line', async () => {
+    isRefusingMessages = true;
+    startupBuffer.markStarting(keyToString(topicKey));
+    assert.equal(await deliverPromptOrBuffer(deps, topicKey, 'hello', undefined, { isPersonInput: true }), 'noSession');
+    assert.deepEqual(steps, ['reportRefused(person)']);
+    assert.deepEqual(forwarded, []);
+    assert.equal(startupBuffer.checkHasPrompts(keyToString(topicKey)), false, 'never waits in the window of what the command starts');
+  });
+
+  it('a bot-made prompt is not refused: the move\'s own first prompt, a fire, a «continue» go their usual way and are settled by their callers', async () => {
+    isRefusingMessages = true;
+    assert.equal(await deliverPromptOrBuffer(deps, topicKey, 'the bridge'), 'forwarded');
+    assert.deepEqual(forwarded.map((entry) => entry.text), ['the bridge']);
+    startupBuffer.markStarting(keyToString(topicKey));
+    assert.equal(await deliverPromptOrBuffer(deps, topicKey, 'a fire'), 'buffered');
+    assert.deepEqual(steps, []);
+  });
+
+  it('a wake that found the conversation released while it waited in the queue: nothing is forwarded; a person told the ending command\'s line, a bot prompt\'s miss reported as no session', async () => {
+    isSessionActive = false;
+    isWakeOk = false;
+    isWakeEnded = true;
+    assert.equal(await deliverPromptOrBuffer(deps, topicKey, 'hello', undefined, { isPersonInput: true }), 'noSession');
+    assert.deepEqual(steps, ['wake', 'reportRefused(person)']);
+    steps = [];
+    assert.equal(await deliverPromptOrBuffer(deps, topicKey, 'a fire'), 'noSession');
+    assert.deepEqual(steps, ['wake', 'reportRefused(bot)']);
+    assert.deepEqual(forwarded, []);
+  });
+});
+
 describe('the bot buffers a prompt for a starting session through it, in one place', () => {
   const botSource = fs.readFileSync(path.join(__dirname, '..', 'bot.ts'), 'utf8');
   const getBody = (start: string, end: string): string => botSource.slice(botSource.indexOf(start), botSource.indexOf(end));
@@ -469,7 +509,8 @@ describe('a startup window\'s prompts on every way out of it (review 19 #1)', ()
     assert.match(getBody('async function moveTopicToOtherBackend(', 'async function resumeTopicOnNewSession('), /await ending\.run\(\(\) => switchThreadAdapter\(/, 'a move across backends, under the hold its caller took ahead of the bridge');
     const start = getBody('async function handleAgentStart(', 'function handleStartCommand(');
     assert.match(getBody('function checkIsStartLeavingConversation(', 'function handleStartCommand('), /return previousName !== undefined && !checkIsSameConversationSwitch\(previousName, startAdapterName\);/, 'a start onto another agent or a shell ends the conversation (review 23 nit 2)');
-    assert.match(start, /if \(checkIsStartLeavingConversation\(key, adapterName\)\) \{\n\s*await \(ending \?\? conversationEndings\.hold\(key\)\)\.run\(switchAdapter\);\n\s*\} else \{\n\s*ending\?\.release\(\);\n\s*await runCommandSessionTransition\(key, switchAdapter\);\n\s*\}/, 'its switch queued, held as ending when it leaves the conversation — under the caller\'s hold when it took one');
+    assert.match(start, /const isLeavingConversation = checkIsStartLeavingConversation\(key, adapterName\);/);
+    assert.match(start, /if \(isLeavingConversation\) \{\n\s*await \(ending \?\? conversationEndings\.hold\(key\)\)\.run\(switchAdapter\);\n\s*\} else \{\n\s*ending\?\.release\(\);\n\s*await runCommandSessionTransition\(key, switchAdapter\);\n\s*\}/, 'its switch queued, held as ending when it leaves the conversation — under the caller\'s hold when it took one');
     const held = getBody('async function resumeForHeldPrompts(', 'const autoStopUnsupportedLoggedKeys');
     assert.match(held, /if \(conversationEndings\.checkIsEnding\(kStr\) \|\| getResumableSessionId\(key\) === null\) \{[^]*?startupPromptBuffer\.discardPrompts\(kStr\);\n\s*return;/, 'a stop\'s held prompts: a conversation being ended drops them; no id left is the same drop, as a guard');
     assert.doesNotMatch(held, /released during the stop/, 'no release can happen during a stop any more: it waits behind it');
@@ -563,16 +604,50 @@ describe('a startup window\'s prompts on every way out of it (review 19 #1)', ()
     const settle = getBody('function createPersonBufferedSettle(', 'async function deliverLateAnswerPrompt(');
     assert.match(settle, /if \(outcome !== 'dropped'\) return;/);
     assert.ok(settle.includes("await settleTopicRequestAfterDelivery(key, { requestId }, 'noSession');"), 'closed `cancelled`, like a prompt that found no session');
-    assert.ok(settle.includes("await replyToThread(key, isDroppedForEndingCommand\n    ? t('agent.queued_prompt_dropped_by_command')\n    : t('agent.queued_prompt_dropped', { label: getThreadAdapter(key).label }));"), 'the line says why (the ending command\'s own, review 24 nit 5)');
+    assert.match(settle, /await replyToThread\(key, isDroppedForEndingCommand\n\s*\? t\('agent\.queued_prompt_dropped_by_command'\)\n\s*: t\('agent\.queued_prompt_dropped', \{ label: getThreadAdapter\(key\)\.label \}\)\);/, 'the line says why (the ending command\'s own, review 24 nit 5)');
     const adopt = getBody('async function forwardPromptToAgent(', 'interface PromptForwardOptions');
     assert.ok(adopt.includes('await deliverPromptOrBuffer(key, bufferedText, createPersonBufferedSettle(key, options.requestId ?? null), bufferedOptions);'));
     assert.equal(botSource.match(/createPersonBufferedSettle\(key, /g)?.length, 2, 'every buffer a person\'s prompt can wait in');
+  });
+
+  it('a person\'s message is refused while a command ends or replaces the conversation — at its arrival (text, a voice note\'s transcript, a file: ahead of the no-agent hint) and at every write of a person\'s prompt, ahead of any window; a bot-made prompt is not (review 25 #1)', () => {
+    const deps = getBody('const promptDeliveryDeps: PromptDeliveryDeps = {', 'function checkIsAcceptingInput(');
+    assert.match(deps, /checkIsRefusingMessages: \(key\) => conversationEndings\.checkIsRefusingMessages\(keyToString\(key\)\),/);
+    assert.match(deps, /reportRefused: async \(key, options\) => \{\n[^]*?if \(options\.isPersonInput === true\) await replyToThread\(key, t\('agent\.queued_prompt_dropped_by_command'\)\);/, 'only a person is told; `deliverPromptOrBuffer` asks only for a person\'s prompt (`utils/promptDelivery.ts`)');
+    const write = getBody('function deliverPersonPromptAtWrite(', 'function createPersonBufferedSettle(');
+    assert.match(write, /checkIsRefused: \(\) => conversationEndings\.checkIsRefusingMessages\(keyToString\(key\)\),/, 'a person\'s prompt at its write');
+    assert.match(write, /reportRefused: \(\) => reportDroppedPersonPrompt\(key, requestId, true\),/, 'its request closed, the ending command\'s line');
+    const adopt = getBody('async function forwardPromptToAgent(', 'interface PromptForwardOptions');
+    assert.match(adopt, /\.\.\.\(isPersonInput \? \{\n\s*checkIsRefused: \(\) => conversationEndings\.checkIsRefusingMessages\(keyToString\(key\)\),\n\s*reportRefused: \(\) => reportDroppedPersonPrompt\(key, options\.requestId \?\? null, true\),\n\s*\} : \{\}\),/, 'and at the adopt-replay re-route');
+    assert.match(getBody('function checkIsArrivalRoutedAtWrite(', 'async function deliverPromptDuringStartup('), /return startupPromptBuffer\.checkIsStarting\(conversationKey\) \|\| conversationEndings\.checkIsRefusingMessages\(conversationKey\);/);
+    assert.equal(botSource.match(/if \(checkIsArrivalRoutedAtWrite\(key\)\) \{\n\s*await deliverPromptDuringStartup\(/g)?.length, 3, 'an admin\'s text, a talker\'s text, a voice note\'s transcript');
+    assert.doesNotMatch(botSource, /if \(startupPromptBuffer\.checkIsStarting\([^)]*\)\) \{\n\s*await deliverPromptDuringStartup\(/, 'no arrival branch reads the window alone');
+    const fileGate = getBody('async function checkFileIntakeGatePassed(', 'async function downloadIncomingFile(');
+    assert.ok(fileGate.indexOf('if (conversationEndings.checkIsRefusingMessages(keyToString(key))) {') >= 0 && fileGate.indexOf('if (conversationEndings.checkIsRefusingMessages(keyToString(key))) {') < fileGate.indexOf('startupPromptBuffer.checkIsStarting('), 'a file: told before anything is downloaded');
+    assert.match(fileGate, /await sendHint\(t\('agent\.queued_prompt_dropped_by_command'\)\);\n\s*return false;/);
+  });
+
+  it('a move onto the other backend, and a start onto another agent or a shell, refuse a person\'s message from their top until the new agent took its first prompt — the bridge, or the start (review 25 #1)', () => {
+    const fallback = getBody('async function switchTopicToFallbackEntry(', 'async function switchTopicToFallbackEntryNow(');
+    assert.match(fallback, /\): Promise<\{ isSwitched: boolean; notice: string; isFailed\?: boolean \}> \{\n\s*const stopRefusingMessages = checkIsFallbackMoveAcrossBackends\(key, from, to\) \? conversationEndings\.refuseMessages\(key\) : null;\n\s*try \{\n\s*return await switchTopicToFallbackEntryNow\(key, from, to, options\);\n\s*\} finally \{\n\s*stopRefusingMessages\?\.\(\);\n\s*\}\n\}/, 'the limit move: from its first statement to its very end, the second half\'s first prompt included');
+    const execute = getBody('async function executeBackendSwitch(', 'async function checkIsPickBeyondLimit(');
+    assert.match(execute, /\): Promise<void> \{\n(?:\s*\/\/[^\n]*\n)*\s*const stopRefusingMessages = conversationEndings\.refuseMessages\(key\);\n\s*try \{/, 'the operator\'s move: first');
+    assert.ok(execute.indexOf('await resumeTopicOnNewSession(') < execute.indexOf('stopRefusingMessages();'), 'until its second half is over');
+    const start = getBody('async function handleAgentStart(', 'function checkIsStartLeavingConversation(');
+    assert.ok(start.indexOf('const stopRefusingMessages = isLeavingConversation ? conversationEndings.refuseMessages(key) : null;') < start.indexOf('await (ending ?? conversationEndings.hold(key)).run(switchAdapter);'), 'a start that leaves the conversation: ahead of its switch');
+    assert.ok(start.indexOf('startAgentSession(key, args)') < start.indexOf('stopRefusingMessages?.();'), 'until the new agent\'s start is over');
+  });
+
+  it('a person\'s wake decides inside the queue whether there is a conversation to wake: a release ahead leaves none, nothing is started, and the person is told the release ended it (review 25 #2)', () => {
+    const wake = getBody('async function wakeSleepingSessionForPrompt(', 'async function replayBufferedPrompts(');
+    assert.match(wake, /const ensured = await sessionTransitions\.run\(keyToString\(key\), async \(\) => \{\n\s*if \(!state\.getBinding\(key\) \|\| getResumableSessionId\(key\) === null\) return null;\n\s*return ensureAgentSessionNow\(key, \{\}\);\n\s*\}\);\n\s*if \(ensured === null\) return \{ isAwake: false, isNoticePosted: false, isEnded: true \};/, 'read again once the transitions ahead are over; the ensure inside is the queue\'s own; a failed resume still starts fresh');
+    assert.doesNotMatch(wake, /ensureAgentSession\(key\)|isResumeOnly/, 'no ensure queued with its decision read before the wait');
   });
 });
 
 describe('deliverLatePrompt: a prompt decided on at arrival, delivered by what the session is NOW', () => {
   /** `afterWake`: what the session is when a wake that brought it up resolves (absent: live, no window). */
-  function createPorts(state: { isWindowOpen: boolean; isSessionActive: boolean; isWakeOk?: boolean; isWakeNoticePosted?: boolean; isTechnical?: boolean; forwardOutcome?: LatePromptOutcome; afterWake?: Array<{ isWindowOpen: boolean; isSessionActive: boolean }> }): { ports: LatePromptDeliveryPorts; steps: string[] } {
+  function createPorts(state: { isWindowOpen: boolean; isSessionActive: boolean; isWakeOk?: boolean; isWakeNoticePosted?: boolean; isWakeEnded?: boolean; isRefused?: boolean; isTechnical?: boolean; forwardOutcome?: LatePromptOutcome; afterWake?: Array<{ isWindowOpen: boolean; isSessionActive: boolean }> }): { ports: LatePromptDeliveryPorts; steps: string[] } {
     const steps: string[] = [];
     const afterWake = [...(state.afterWake ?? [])];
     return {
@@ -586,8 +661,10 @@ describe('deliverLatePrompt: a prompt decided on at arrival, delivered by what t
           steps.push('wake');
           const isAwake = state.isWakeOk ?? true;
           if (isAwake) Object.assign(state, afterWake.shift() ?? { isWindowOpen: false, isSessionActive: true });
-          return { isAwake, isNoticePosted: state.isWakeNoticePosted ?? false };
+          return { isAwake, isNoticePosted: state.isWakeNoticePosted ?? false, ...(state.isWakeEnded === true ? { isEnded: true } : {}) };
         },
+        ...(state.isRefused === undefined ? {} : { checkIsRefused: () => state.isRefused === true }),
+        reportRefused: async () => { steps.push('reportRefused'); },
         forward: async () => {
           steps.push('forward');
           return state.forwardOutcome ?? 'forwarded';
@@ -663,6 +740,33 @@ describe('deliverLatePrompt: a prompt decided on at arrival, delivered by what t
     assert.equal(await deliverLatePrompt(ports), 'forwarded');
     assert.deepEqual(steps, ['forward']);
   });
+
+  it('a person\'s prompt while a command ends or replaces the conversation is refused, whatever the session reads as — a window, a live process, none: the ending command\'s line, nothing done for it (review 25 #1)', async () => {
+    for (const state of [{ isWindowOpen: true, isSessionActive: true }, { isWindowOpen: false, isSessionActive: true }, { isWindowOpen: false, isSessionActive: false }]) {
+      const { ports, steps } = createPorts({ ...state, isRefused: true });
+      assert.equal(await deliverLatePrompt(ports), 'noSession', JSON.stringify(state));
+      assert.deepEqual(steps, ['reportRefused'], JSON.stringify(state));
+    }
+  });
+
+  it('a wake that brought the session up is routed again, and a command that began meanwhile refuses the prompt there', async () => {
+    const state = { isWindowOpen: false, isSessionActive: false, isRefused: false };
+    const { ports, steps } = createPorts(state);
+    const wake = ports.wake;
+    ports.wake = async () => {
+      const result = await wake();
+      state.isRefused = true;
+      return result;
+    };
+    assert.equal(await deliverLatePrompt(ports), 'noSession');
+    assert.deepEqual(steps, ['wake', 'reportRefused'], 'never written into the conversation a command now ends');
+  });
+
+  it('a wake that found the conversation ended by a release while it waited: the ending command\'s line, not «no agent running» (review 25 #2)', async () => {
+    const { ports, steps } = createPorts({ isWindowOpen: false, isSessionActive: false, isWakeOk: false, isWakeEnded: true });
+    assert.equal(await deliverLatePrompt(ports), 'noSession');
+    assert.deepEqual(steps, ['wake', 'reportRefused']);
+  });
 });
 
 describe('getLatePromptRoute: how a prompt decided on at arrival is delivered at forward time', () => {
@@ -674,6 +778,12 @@ describe('getLatePromptRoute: how a prompt decided on at arrival is delivered at
   it('no window, the process gone → wake the conversation; a live process → forward', () => {
     assert.equal(getLatePromptRoute({ isWindowOpen: false, isSessionActive: false }), 'wake');
     assert.equal(getLatePromptRoute({ isWindowOpen: false, isSessionActive: true }), 'forward');
+  });
+
+  it('a person\'s prompt while a command ends or replaces the conversation → refuse, ahead of any window (review 25 #1)', () => {
+    for (const isWindowOpen of [true, false]) for (const isSessionActive of [true, false]) {
+      assert.equal(getLatePromptRoute({ isWindowOpen, isSessionActive, isRefused: true }), 'refuse', JSON.stringify({ isWindowOpen, isSessionActive }));
+    }
   });
 
   it('a technical prompt is never buffered or woken for: forward into a live session with no window, else drop', () => {

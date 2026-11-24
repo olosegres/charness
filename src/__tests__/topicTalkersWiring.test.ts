@@ -183,7 +183,7 @@ test('a talker\'s message that is refused changes nothing: the pending API-error
     assert.notEqual(refusalAt, -1, refusal);
     assert.ok(refusalAt < cancelAt, `${refusal} must come BEFORE the retry is cancelled: a refused message leaves a usage-limit wait armed`);
   }
-  assert.ok(cancelAt < body.indexOf('startupPromptBuffer.checkIsStarting'), 'and before the prompt is buffered, delivered or resumed');
+  assert.ok(cancelAt < body.indexOf('checkIsArrivalRoutedAtWrite(key)'), 'and before the prompt is buffered, delivered, refused or resumed');
 });
 
 test('a talker\'s message is refused while an admin\'s tmux /login code box is open — a prompt would press Escape and end that sign-in', () => {

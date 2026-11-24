@@ -50,7 +50,7 @@ test('a technical prompt is routed as one after the wait, and the reminder that 
   const body = getFunctionBody('forwardPromptToAgent');
   const route = body.slice(body.indexOf('await deliverLatePrompt({'));
   assert.match(route, /isTechnical: isTechnicalPrompt,/, 'the routing knows the prompt is technical (no buffer, no wake, no report)');
-  assert.match(route, /checkIsSessionActive: \(\) => adapter\.checkIsActive\(key\) && !\(isTechnicalPrompt && \(adapter\.checkIsBusy\?\.\(key\) \?\? false\)\),/, 'and wants a session that is idle as well as live');
+  assert.match(route, /checkIsSessionActive: \(\) => checkIsAcceptingInput\(key\) && !\(isTechnicalPrompt && \(adapter\.checkIsBusy\?\.\(key\) \?\? false\)\),/, 'and wants a session that takes input and is idle (review 25 nit 7)');
   const reminder = getFunctionBody('postTodoReminder');
   assert.match(reminder, /=== 'dropped'/, 'the reminder reads the outcome');
   assert.match(reminder, /return isPosted && !isDropped;/, 'a dropped reminder is not posted');
@@ -174,7 +174,7 @@ test('a bot-made prompt that waits for an adopt replay behind a start counts onl
   const buffer = body.slice(body.indexOf('buffer: async () => {'));
   assert.match(buffer, /const buffered = createBufferedOutcome\(\);\n\s*await deliverPromptOrBuffer\(key, bufferedText, buffered\.settle, bufferedOptions\);\n\s*await buffered\.assertReplayed\(\);/);
   // A person's prompt there has the person's own settle (review 19 #1): told and its request closed when it is dropped.
-  assert.match(buffer, /if \(options\.isPersonInput === true\) \{\n\s*await deliverPromptOrBuffer\(key, bufferedText, createPersonBufferedSettle\(key, options\.requestId \?\? null\), bufferedOptions\);\n\s*return;\n\s*\}/);
+  assert.match(buffer, /if \(isPersonInput\) \{\n\s*await deliverPromptOrBuffer\(key, bufferedText, createPersonBufferedSettle\(key, options\.requestId \?\? null\), bufferedOptions\);\n\s*return;\n\s*\}/);
 });
 
 test('a session post (a tracker\'s request or update, a scheduled run, the lost-work note) whose prompt waited for the session start counts only once it was replayed', () => {

@@ -2,8 +2,11 @@
 
 ## Unreleased
 
-**A message sent to a topic while its agent is being stopped by `/quitall` or a switch to the other backend is no longer lost.**
-Claude's process takes a few seconds to exit, and a message that came in those seconds was written into the exiting process: it never reached the agent and you were told so, while its request still waited for an answer and could bring the message back to a new agent by itself much later. Now the message waits for the stop and goes to the topic's next conversation: the fresh one after `/quitall`, the other backend after a switch.
+**A message sent to a topic while `/quit`, `/quitall` or a switch to the other backend ends its conversation is no longer lost without a word.**
+Claude's process takes a few seconds to exit, and a message that came in those seconds was written into the exiting process: it never reached the agent, while its request still waited for an answer and could bring the message back to a new agent by itself much later. During a switch a message could also be written into the agent being left and dropped in silence, or get «Run /claude or /opencode» while the other backend was starting; and a voice note that finished transcribing during `/quit` could start a fresh agent right after the quit. Now such a message is not delivered: the topic says at once that it did not reach the agent because the conversation was ended or switched, so you can send it again once that is done. When an automatic switch to the other backend moves the topic, a message the agent had not read yet is said so too.
+
+**`/quit` on a sleeping conversation now says how to start a fresh one.**
+It said that the next message would start a fresh session, but the next message only got the hint to start an agent. Now it says that /claude or /opencode starts a fresh one.
 
 **`/quit`, leaving the folder and `/quitall` no longer leave an agent running when it was starting or restarting at that moment.**
 They checked whether an agent was running before a start, a resume or a restart of its process had finished: they released the conversation, and the process that came up a moment later kept running for it. Now they wait for that to finish, then stop it. A switch onto the other backend, or onto a shell, waits the same way. A message you sent while the agent's process was stopping in that moment does not go to the conversation you are leaving: you are told it did not reach the agent because the conversation was being ended or switched.

@@ -6416,13 +6416,23 @@ async function resumeSleepingSessionForPrompt(
   return (await wakeSleepingSessionForPrompt(key, sendNotice)).isAwake;
 }
 
-/** @description {@link resumeSleepingSessionForPrompt}, also saying whether it posted a notice (a start that failed says why). */
+/**
+ * @description {@link resumeSleepingSessionForPrompt}, also saying whether it posted a notice (a start that failed says why). Whether there
+ * is a conversation to wake is read again INSIDE the conversation's queue, as the wake of `/model`, `/effort` and `/compact` does: a release
+ * queued ahead (`/quitall` from General, a `/quit` that a voice note's transcript waited behind) clears the ids, and the wake then starts
+ * nothing — `isEnded`, which a person's prompt is told as the release's refusal — instead of a fresh conversation the operator just quit
+ * (review 25 #2). A resume that fails still starts fresh, as any ensure's does.
+ */
 async function wakeSleepingSessionForPrompt(
   key: SessionKey,
   sendNotice: (text: string) => Promise<unknown> = (text) => replyToThread(key, text),
 ): Promise<LateWakeResult> {
   if (checkIsGeneral(key) || !state.getBinding(key) || getResumableSessionId(key) === null) return { isAwake: false, isNoticePosted: false };
-  const ensured = await ensureAgentSession(key);
+  const ensured = await sessionTransitions.run(keyToString(key), async () => {
+    if (!state.getBinding(key) || getResumableSessionId(key) === null) return null;
+    return ensureAgentSessionNow(key, {});
+  });
+  if (ensured === null) return { isAwake: false, isNoticePosted: false, isEnded: true };
   if (ensured.message) await sendNotice(ensured.message);
   return { isAwake: ensured.ok && getThreadAdapter(key).checkIsActive(key), isNoticePosted: Boolean(ensured.message) };
 }
@@ -6517,15 +6527,23 @@ async function forwardPromptToAgent(
   // A technical prompt (the standalone todo reminder) goes only into a session that is live and idle now, and is otherwise
   // dropped without a word: never buffered, never a resume, never a "no session" line to the person.
   const isTechnicalPrompt = options.isTechnicalPrompt === true;
+  const isPersonInput = options.isPersonInput === true;
   const outcome = await deliverLatePrompt({
     isTechnical: isTechnicalPrompt,
     checkIsWindowOpen: () => startupPromptBuffer.checkIsStarting(keyToString(key)),
-    checkIsSessionActive: () => adapter.checkIsActive(key) && !(isTechnicalPrompt && (adapter.checkIsBusy?.(key) ?? false)),
+    // Whether the process takes input, as every routing point reads it: one a release or a move is stopping takes nothing (review 25
+    // nit 7). A technical prompt goes only into an idle one.
+    checkIsSessionActive: () => checkIsAcceptingInput(key) && !(isTechnicalPrompt && (adapter.checkIsBusy?.(key) ?? false)),
+    // A person's prompt is refused while a command ends or replaces the conversation, as at its own write (review 25 #1).
+    ...(isPersonInput ? {
+      checkIsRefused: () => conversationEndings.checkIsRefusingMessages(keyToString(key)),
+      reportRefused: () => reportDroppedPersonPrompt(key, options.requestId ?? null, true),
+    } : {}),
     buffer: async () => {
       const bufferedText = `${options.requestHeader ?? ''}${getPromptWithThreadMessageContext(key, text, options.messageContext)}`;
       const bufferedOptions: PromptDeliveryOptions = { isPersonInput: options.isPersonInput, isAccountsNoteCarrier: options.isAccountsNoteCarrier, lostWorkTelling: options.lostWorkTelling };
       // A person's prompt that is dropped there is told about and closes its request, as at the person's own buffer.
-      if (options.isPersonInput === true) {
+      if (isPersonInput) {
         await deliverPromptOrBuffer(key, bufferedText, createPersonBufferedSettle(key, options.requestId ?? null), bufferedOptions);
         return;
       }
@@ -8015,13 +8033,14 @@ command('new', async (_ctx, key) => {
   cancelConversationRequest(key);
   // Release the current session (sweep + clear ids) via `releaseThreadSession`.
   // The fresh start below uses the thread's current adapter, so we keep the
-  // adapter selection untouched. Both as the conversation's one transition: an idle stop under way ends first (with the resume for
-  // what it held), and no ensure starts a second session beside this one.
+  // adapter selection untouched. Both as the conversation's one transition: an idle stop under way ends first — dropping what it held,
+  // the person told, since this command holds the conversation as ending (review 25 nit 6) —, and no ensure starts a second session beside
+  // this one.
   // `startAgentSession` handles startup buffering, the typing-loader boot, and
   // the preamble-marker reset. It returns `''` for a self-greeting agent (Claude
   // prints its own banner) — show a notice only for a non-empty ready text.
   // Held as ending the conversation while it waits: a stop under way drops what it held instead of resuming the old conversation (review
-  // 21 nit 4).
+  // 21 nit 4); a person's message is refused until the fresh start is over (review 25 #1).
   const msg = await startFreshSessionForNew(key);
   if (msg) await replyToThread(key, msg);
 });
@@ -8602,24 +8621,34 @@ async function handleAgentStart(
   // and none comes back beside the new one — and, when it leaves the conversation (another agent or a shell), held as ending it from here,
   // as a move is (review 23 nit 2), unless the caller held it already.
   const switchAdapter = (): Promise<LostWork | null> => switchThreadAdapter(key, adapterName);
-  if (checkIsStartLeavingConversation(key, adapterName)) {
-    await (ending ?? conversationEndings.hold(key)).run(switchAdapter);
-  } else {
-    ending?.release();
-    await runCommandSessionTransition(key, switchAdapter);
+  const isLeavingConversation = checkIsStartLeavingConversation(key, adapterName);
+  // A start that leaves the conversation refuses a person's message until the new agent's start is over, as a move does until its first
+  // prompt reached the other backend: between the switch and that start no agent takes it, and the start's window belongs to an agent that
+  // does not know the conversation (review 25 #1, own pass).
+  const stopRefusingMessages = isLeavingConversation ? conversationEndings.refuseMessages(key) : null;
+  let msg: string;
+  try {
+    if (isLeavingConversation) {
+      await (ending ?? conversationEndings.hold(key)).run(switchAdapter);
+    } else {
+      ending?.release();
+      await runCommandSessionTransition(key, switchAdapter);
+    }
+    const adapter = getThreadAdapter(key);
+    if (adapter.checkIsActive(key)) {
+      await replyToThread(key, t('agent.already_active', { label: adapter.label }));
+      return;
+    }
+    // A sleeping conversation is woken, not replaced (L-D4): `/new` is the fresh start. A first start is the conversation's one
+    // transition too, and finds a session another trigger started meanwhile instead of starting a second one beside it.
+    msg = getResumableSessionId(key) !== null
+      ? (await ensureAgentSession(key, { args })).message
+      : await runCommandSessionTransition(key, async () => (getThreadAdapter(key).checkIsActive(key)
+        ? t('agent.already_active', { label: getThreadAdapter(key).label })
+        : startAgentSession(key, args)));
+  } finally {
+    stopRefusingMessages?.();
   }
-  const adapter = getThreadAdapter(key);
-  if (adapter.checkIsActive(key)) {
-    await replyToThread(key, t('agent.already_active', { label: adapter.label }));
-    return;
-  }
-  // A sleeping conversation is woken, not replaced (L-D4): `/new` is the fresh start. A first start is the conversation's one
-  // transition too, and finds a session another trigger started meanwhile instead of starting a second one beside it.
-  const msg = getResumableSessionId(key) !== null
-    ? (await ensureAgentSession(key, { args })).message
-    : await runCommandSessionTransition(key, async () => (getThreadAdapter(key).checkIsActive(key)
-      ? t('agent.already_active', { label: getThreadAdapter(key).label })
-      : startAgentSession(key, args)));
   if (msg) await replyToThread(key, msg);
 }
 
@@ -9949,8 +9978,28 @@ function formatThreadBackend(key: SessionKey): string {
  * the work continues now and the notice that says so (posted here only when `isAnnounced` — the auto-switch has no
  * other voice, while a tapped button's notice is edited into the same line by its handler). `reason: 'signIn'` is the same
  * move off a Claude account the CLI refused ({@link handleClaudeAuthRefusal}): only its notices and log line differ.
+ *
+ * A move onto the other backend refuses a person's message from here — nothing is awaited before — until it ends: its first prompt has
+ * reached the new backend, or it failed (`ConversationEndings.refuseMessages`, review 25 #1). Written into the backend being left, the
+ * message would be lost with it; written into the new one ahead of the bridge, it would reach an agent that does not know the
+ * conversation yet; and between the two there is no agent to take it.
  */
 async function switchTopicToFallbackEntry(
+  key: SessionKey,
+  from: FallbackChainEntry | null,
+  to: FallbackChainEntry,
+  options: { isAnnounced: boolean; isAutomatic?: boolean; reason?: FallbackSwitchReason; ending?: ConversationEnding },
+): Promise<{ isSwitched: boolean; notice: string; isFailed?: boolean }> {
+  const stopRefusingMessages = checkIsFallbackMoveAcrossBackends(key, from, to) ? conversationEndings.refuseMessages(key) : null;
+  try {
+    return await switchTopicToFallbackEntryNow(key, from, to, options);
+  } finally {
+    stopRefusingMessages?.();
+  }
+}
+
+/** @description {@link switchTopicToFallbackEntry} itself, under the refusal its caller took for a move onto the other backend. */
+async function switchTopicToFallbackEntryNow(
   key: SessionKey,
   from: FallbackChainEntry | null,
   to: FallbackChainEntry,
@@ -10170,33 +10219,40 @@ async function askBeforeCrossBackendSwitch(key: SessionKey, backend: BackendFami
  * `/claude` / `/opencode` do. `userMessage` rides inside the bridge.
  */
 async function executeBackendSwitch(key: SessionKey, target: BackendSwitchTarget, options: { isBridged: boolean; userMessage?: string; ending?: ConversationEnding }): Promise<void> {
-  // The move ends the conversation it leaves: held from here, ahead of the bridge, unless the tap that asked for it holds it already —
-  // a stop under way drops what it held instead of resuming the backend being left (review 24 #1).
-  const ending = options.ending ?? conversationEndings.hold(key);
-  let bridge: string | null;
-  let isStoppingBackground: boolean;
+  // A person's message is refused from here until the new backend took the move's first prompt (the bridge, or the start that carries the
+  // text typed with the command), as in the limit move (review 25 #1) — the tap's hold refuses it until this takes over.
+  const stopRefusingMessages = conversationEndings.refuseMessages(key);
   try {
-    bridge = options.isBridged
-      ? await buildFallbackBridge(key, {
-        fromLabel: formatThreadBackend(key),
-        toLabel: formatBackendSwitchBridgeLabel(target),
-        reason: 'manual',
-        resetsAtText: null,
-        userMessage: options.userMessage,
-      })
-      : null;
-    isStoppingBackground = await moveTopicToOtherBackend(key, ending, target.backend, target.backend === 'claude' && target.isProfilePicked ? target.profile : null);
+    // The move ends the conversation it leaves: held from here, ahead of the bridge, unless the tap that asked for it holds it already —
+    // a stop under way drops what it held instead of resuming the backend being left (review 24 #1).
+    const ending = options.ending ?? conversationEndings.hold(key);
+    let bridge: string | null;
+    let isStoppingBackground: boolean;
+    try {
+      bridge = options.isBridged
+        ? await buildFallbackBridge(key, {
+          fromLabel: formatThreadBackend(key),
+          toLabel: formatBackendSwitchBridgeLabel(target),
+          reason: 'manual',
+          resetsAtText: null,
+          userMessage: options.userMessage,
+        })
+        : null;
+      isStoppingBackground = await moveTopicToOtherBackend(key, ending, target.backend, target.backend === 'claude' && target.isProfilePicked ? target.profile : null);
+    } finally {
+      ending.release();
+    }
+    // The operator hears that the background work died with the old session; its agent hears it in the first prompt.
+    if (isStoppingBackground) await replyToThread(key, t('fallback.backgroundStopped'));
+    cancelApiRetry(key); // a wait armed for the backend just left is over
+    await resumeTopicOnNewSession(key, {
+      modelToPin: getBackendSwitchModelToPin(target),
+      getFirstPrompt: () => (bridge === null ? null : { text: bridge, carriedRequestIds: [] }),
+      args: bridge === null ? options.userMessage : undefined,
+    });
   } finally {
-    ending.release();
+    stopRefusingMessages();
   }
-  // The operator hears that the background work died with the old session; its agent hears it in the first prompt.
-  if (isStoppingBackground) await replyToThread(key, t('fallback.backgroundStopped'));
-  cancelApiRetry(key); // a wait armed for the backend just left is over
-  await resumeTopicOnNewSession(key, {
-    modelToPin: getBackendSwitchModelToPin(target),
-    getFirstPrompt: () => (bridge === null ? null : { text: bridge, carriedRequestIds: [] }),
-    args: bridge === null ? options.userMessage : undefined,
-  });
 }
 
 /**
@@ -10750,7 +10806,7 @@ command(['quit', 'q'], async (_ctx, key) => {
     stopAllAdaptersFor(key, otherAdapters);
 
     if (!primaryActive) {
-      // A sleeping conversation is released for good: the next message starts a fresh one.
+      // A sleeping conversation is released for good: the next message gets the no-agent hint, /claude or /opencode starts a fresh one.
       if (getResumableSessionId(key) !== null) {
         await releaseConversationIds(key);
         return t('agent.sleeping_released');
@@ -11217,7 +11273,7 @@ async function handleTalkerText(ctx: NarrowedContext<Context, Update.MessageUpda
   const messageContext = getMessageContext(key, ctx.message);
   const intake: TopicRequestIntake = { source: 'text', requesterId: getTopicRequesterId(ctx.from) };
   const sentAtMs = ctx.message.date * 1000;
-  if (startupPromptBuffer.checkIsStarting(keyToString(key))) {
+  if (checkIsArrivalRoutedAtWrite(key)) {
     await deliverPromptDuringStartup(key, text, intake, messageContext);
     return;
   }
@@ -11405,8 +11461,10 @@ bot.on(message('text'), async (ctx) => {
   if (ctx.from !== undefined && (await handleRunnersAddressText(key, text, ctx.from))) return;
 
   // Session is mid-startup → buffer the prompt and replay it once the agent is
-  // ready, instead of dropping it into the "no agent running" guidance below.
-  if (startupPromptBuffer.checkIsStarting(kStr)) {
+  // ready, instead of dropping it into the "no agent running" guidance below. A
+  // command ending or replacing the conversation → refused at the write, never the
+  // guidance nor a write into the agent it ends (review 25 #1).
+  if (checkIsArrivalRoutedAtWrite(key)) {
     await deliverPromptDuringStartup(key, text, { source: 'text', requesterId: getTopicRequesterId(ctx.from) }, getMessageContext(key, ctx.message));
     return;
   }
@@ -11740,8 +11798,9 @@ async function processVoiceJob(
     }
     if (reminderVoiceRoute === 'expired') await expireReminderWizard(key);
 
-    // Session is mid-startup → buffer the transcript and replay it once ready.
-    if (startupPromptBuffer.checkIsStarting(keyToString(key))) {
+    // Session is mid-startup → buffer the transcript and replay it once ready; a command ends or replaces the conversation → refused at
+    // the write (review 25 #1: a transcript is ready seconds after its voice note, often while a move or a release runs).
+    if (checkIsArrivalRoutedAtWrite(key)) {
       await deliverPromptDuringStartup(key, transcript, { source: 'voice', requesterId }, messageContext);
       return;
     }
@@ -11834,6 +11893,11 @@ async function checkFileIntakeGatePassed(
   sendHint: (text: string, extra?: SendExtra) => Promise<unknown>,
   isFromTalker: boolean,
 ): Promise<boolean> {
+  // A command ends or replaces the conversation: the file is not delivered, and nothing is downloaded for it (review 25 #1).
+  if (conversationEndings.checkIsRefusingMessages(keyToString(key))) {
+    await sendHint(t('agent.queued_prompt_dropped_by_command'));
+    return false;
+  }
   if (startupPromptBuffer.checkIsStarting(keyToString(key)) || getThreadAdapter(key).checkIsActive(key)) return true;
   // A file sent to a sleeping conversation wakes it (L-D4) and is taken in by the resumed session.
   if (await resumeSleepingSessionForPrompt(key, sendHint)) return true;
@@ -11913,10 +11977,15 @@ const promptDeliveryDeps: PromptDeliveryDeps = {
   wakeSession: (key) => (checkIsTelegramKey(key)
     ? wakeSleepingSessionForPrompt(key)
     : wakeSleepingSessionForPrompt(key, async (notice) => { console.log(`[promptDelivery] ${keyToString(key)}: ${notice}`); })),
+  checkIsRefusingMessages: (key) => conversationEndings.checkIsRefusingMessages(keyToString(key)),
   reportNoSession: async (key, isAlreadyTold, options) => {
     console.warn(`[promptDelivery] ${keyToString(key)}: no session is left to take the prompt, and nothing could be woken for it`);
     // Only a person's own prompt is theirs to be told about; what the bot made says so in its own way (its caller reads `noSession`).
     if (options.isPersonInput === true && !isAlreadyTold) await replyToThread(key, t('agent.no_session'));
+  },
+  reportRefused: async (key, options) => {
+    console.warn(`[promptDelivery] ${keyToString(key)}: a command ends or replaces the conversation; the prompt is not delivered`);
+    if (options.isPersonInput === true) await replyToThread(key, t('agent.queued_prompt_dropped_by_command'));
   },
   announceQueued: async (key) => {
     await replyToThread(key, t('agent.queued_starting', { label: getThreadAdapter(key).label }));
@@ -12869,12 +12938,25 @@ bot.action(/^qa_(\d+)_(\d+)$/, async (ctx) => {
 });
 
 /**
- * @description Deliver a free-form prompt (text OR voice) that ARRIVED while the thread's session is starting or being stopped — the
- * startup twin of {@link deliverActivePrompt}: no pending question or wedged turn is looked at (a session in its window has none to
- * answer). The window it arrived in only chose this route: the prompt itself is routed by {@link deliverPromptByState} when it is
- * written, after its request was opened, so a window that closed meanwhile never keeps it — it goes to the session that
- * window brought up, or wakes the one its stop left asleep. A buffered prompt carries its request's header and its message-context
- * block (`deliverPersonPromptAtWrite`), since the replay forwards the buffered text as is.
+ * @description Whether a person's text or voice note that arrives now takes {@link deliverPromptDuringStartup}'s route — routed only at
+ * its write — rather than the live-agent route or the no-agent guidance: the session is starting or being stopped (its window open), or a
+ * command ends or replaces the conversation (`ConversationEndings.checkIsRefusingMessages`: the write refuses it, its request closed and
+ * the person told — never written into the agent the command ends, never «Run /claude or /opencode» while a move starts the next one,
+ * review 25 #1).
+ */
+function checkIsArrivalRoutedAtWrite(key: SessionKey): boolean {
+  const conversationKey = keyToString(key);
+  return startupPromptBuffer.checkIsStarting(conversationKey) || conversationEndings.checkIsRefusingMessages(conversationKey);
+}
+
+/**
+ * @description Deliver a free-form prompt (text OR voice) that ARRIVED while the thread's session is starting or being stopped, or while a
+ * command ends or replaces the conversation ({@link checkIsArrivalRoutedAtWrite}) — the startup twin of {@link deliverActivePrompt}: no
+ * pending question or wedged turn is looked at (a session in its window has none to answer). The window it arrived in only chose this
+ * route: the prompt itself is routed by {@link deliverPromptByState} when it is written, after its request was opened, so a window that
+ * closed meanwhile never keeps it — it goes to the session that window brought up, or wakes the one its stop left asleep — and a command
+ * still running then refuses it. A buffered prompt carries its request's header and its message-context block
+ * (`deliverPersonPromptAtWrite`), since the replay forwards the buffered text as is.
  */
 async function deliverPromptDuringStartup(
   key: SessionKey,
@@ -13011,10 +13093,12 @@ async function deliverPromptByState(
 /**
  * @description Write a person's prompt by the state of the session NOW (`deliverLatePrompt`), never by one read before an await: the
  * idle stop or a start may have begun or ended during the caller's awaits (its request opened, a file downloaded, a question
- * cancelled). A start's or a stop's window open → buffered behind it, its header and message-context block folded in (the replay
+ * cancelled). A command that ends or replaces the conversation runs → refused, ahead of any window: its request closed, the person told
+ * (review 25 #1); a start's or a stop's window open → buffered behind it, its header and message-context block folded in (the replay
  * forwards the text as is); a live session → forwarded; neither → the sleeping conversation is woken, then forwarded. A wake that finds
- * nothing tells the person, unless it said why itself. The forward can itself end in no session — a prompt that waited for an adopt
- * replay found the session gone and nothing to wake; it has told the person already (`forwardPromptToAgent`).
+ * nothing tells the person, unless it said why itself; one that found the conversation ended by a release while it waited says that
+ * (review 25 #2). The forward can itself end in no session — a prompt that waited for an adopt replay found the session gone and nothing
+ * to wake; it has told the person already (`forwardPromptToAgent`).
  */
 function deliverPersonPromptAtWrite(
   key: SessionKey,
@@ -13026,6 +13110,11 @@ function deliverPersonPromptAtWrite(
   return deliverLatePrompt({
     checkIsWindowOpen: () => startupPromptBuffer.checkIsStarting(keyToString(key)),
     checkIsSessionActive: () => checkIsAcceptingInput(key),
+    // A command ends or replaces the conversation: the prompt is not delivered — read ahead of any window (review 25 #1).
+    checkIsRefused: () => conversationEndings.checkIsRefusingMessages(keyToString(key)),
+    // The request closes here, ahead of the line, so a switch closing the conversation's requests meanwhile does not tell it again; the
+    // caller's own close of a `noSession` prompt then finds it closed.
+    reportRefused: () => reportDroppedPersonPrompt(key, requestId, true),
     buffer: async () => {
       const bufferedText = `${requestHeader}${getPromptWithThreadMessageContext(key, text, messageContext)}`;
       await deliverPromptOrBuffer(key, bufferedText, createPersonBufferedSettle(key, requestId), { isPersonInput: true, isAccountsNoteCarrier });

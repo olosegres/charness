@@ -113,7 +113,10 @@ function createKickDeps(): ApiRetryKickDeps {
           // The kick ensured the session before it delivers: a window still open buffers the nudge, else it is forwarded.
           checkIsSessionActive: () => true,
           wakeSession: async () => ({ isAwake: false, isNoticePosted: false }),
+          // A bot-made nudge is never refused: only a person's prompt is.
+          checkIsRefusingMessages: () => false,
           reportNoSession: async () => {},
+          reportRefused: async () => {},
           announceQueued: async () => {},
         },
         key,
@@ -660,7 +663,7 @@ describe('the bot wires the kick and the restore, and keeps the saved record mea
   it('a voice prompt wakes a sleeping conversation through the same ensure as a typed one (L-D4): woken, never replaced by a fresh start', () => {
     const voiceJob = getFunction('async function processVoiceJob(');
     assert.ok(voiceJob.includes('!(await resumeSleepingSessionForPrompt(key))'), 'the voice path wakes it through the shared helper');
-    assert.ok(getFunction('async function wakeSleepingSessionForPrompt(').includes('await ensureAgentSession(key)'), 'which asks the ensure');
+    assert.ok(getFunction('async function wakeSleepingSessionForPrompt(').includes('return ensureAgentSessionNow(key, {});'), 'which asks the ensure, inside the conversation\'s queue (review 25 #2)');
     assert.ok(!voiceJob.includes('startAgentSession('), 'no direct fresh start over a sleeping session');
     assert.ok(voiceJob.includes('await deliverActivePrompt(key, getThreadAdapter(key), transcript'), 'the adapter is read after the wake');
   });

@@ -8,15 +8,19 @@ import type { LostWorkTelling } from './lostWork';
  * @description What {@link deliverPromptOrBuffer} acts through, every state read at the moment of the write. `forwardPrompt` says
  * where the forward put the prompt ({@link LatePromptOutcome}); `checkIsSessionActive` and `wakeSession` let a prompt that finds no
  * window and no live session wake the conversation first; `reportNoSession` runs when that wake found nothing (the person is told,
- * unless the wake already said why; a bot-made prompt is only logged); `announceQueued` tells the person their prompt waits for the
- * session to come up — a topic message, so it is only called for a Telegram conversation.
+ * unless the wake already said why; a bot-made prompt is only logged); `checkIsRefusingMessages` — a command ends or replaces the
+ * conversation now, so a person's prompt is not delivered at all — and `reportRefused`, which tells the person so (also when the wake
+ * found the conversation ended by a release while it waited; a bot-made prompt is only logged); `announceQueued` tells the person their
+ * prompt waits for the session to come up — a topic message, so it is only called for a Telegram conversation.
  */
 export interface PromptDeliveryDeps {
   startupBuffer: Pick<StartupPromptBuffer, 'addPrompt' | 'checkIsStarting'>;
   forwardPrompt: (key: SessionKey, text: string, options: PromptDeliveryOptions) => Promise<LatePromptOutcome>;
   checkIsSessionActive: (key: SessionKey) => boolean;
   wakeSession: (key: SessionKey) => Promise<LateWakeResult>;
+  checkIsRefusingMessages: (key: SessionKey) => boolean;
   reportNoSession: (key: SessionKey, isAlreadyTold: boolean, options: PromptDeliveryOptions) => Promise<void>;
+  reportRefused: (key: SessionKey, options: PromptDeliveryOptions) => Promise<void>;
   announceQueued: (key: SessionKey) => Promise<void>;
 }
 
@@ -86,6 +90,8 @@ export async function deliverPromptOrBuffer(
   const outcome = await deliverLatePrompt({
     checkIsWindowOpen: () => deps.startupBuffer.checkIsStarting(threadId),
     checkIsSessionActive: () => deps.checkIsSessionActive(key),
+    // Only a person's prompt is refused while a command ends or replaces the conversation: a bot-made one is settled by its caller.
+    ...(options.isPersonInput === true ? { checkIsRefused: () => deps.checkIsRefusingMessages(key) } : {}),
     buffer: async () => {
       // Called in the tick the window was read open (`deliverLatePrompt` awaits nothing between), so it cannot be refused.
       const added = deps.startupBuffer.addPrompt(threadId, text, onBufferedSettled, options);
@@ -99,6 +105,7 @@ export async function deliverPromptOrBuffer(
     wake: () => deps.wakeSession(key),
     forward: () => deps.forwardPrompt(key, text, options),
     reportNoSession: (isAlreadyTold) => deps.reportNoSession(key, isAlreadyTold, options),
+    reportRefused: () => deps.reportRefused(key, options),
   });
   if (isBuffered) return 'buffered';
   // A forward that re-routed the prompt behind a stop window itself registered no `onBufferedSettled`: it reads as forwarded.
@@ -110,22 +117,27 @@ export async function deliverPromptOrBuffer(
  * @description How a prompt decided on when it ARRIVED is delivered once its handler is ready to forward it:
  * `buffer` — a start or the idle stop is under way (its window is open: the prompt waits there, and the stop resumes the
  * session for it); `wake` — the process is gone meanwhile (the conversation sleeps: wake it, then forward); `forward`;
- * `drop` — only for a technical prompt that finds no live session without a window: nothing is done for it.
+ * `drop` — only for a technical prompt that finds no live session without a window: nothing is done for it;
+ * `refuse` — only for a person's prompt while a command ends or replaces the conversation: it is not delivered, and the person is told.
  */
-export type LatePromptRoute = 'buffer' | 'wake' | 'forward' | 'drop';
+export type LatePromptRoute = 'buffer' | 'wake' | 'forward' | 'drop' | 'refuse';
 
 /**
  * @description The {@link LatePromptRoute} of a prompt, read at the moment it is forwarded. The idle stop posts a
  * re-asked question just before it stops the process, and a handler awaits between reading the session's state and the
  * forward (the tap's toast, the request it opens): written into a process being stopped the prompt was lost, and
- * into one already gone it was dropped.
+ * into one already gone it was dropped. A person's prompt that meets a command ending or replacing the conversation
+ * (`isRefused`) is refused, whatever the session reads as (`requests/README.md` § Turn starts, review 25 #1).
  *
  * A bot-made TECHNICAL prompt (the todo list's standalone reminder) is posted only into a live session that is idle at
  * this moment — never a resume, never held for a later one, never reported to the person: where a user's prompt would be
  * buffered or wake the conversation, it is dropped.
  */
-export function getLatePromptRoute(input: { isWindowOpen: boolean; isSessionActive: boolean; isTechnical?: boolean }): LatePromptRoute {
+export function getLatePromptRoute(input: { isWindowOpen: boolean; isSessionActive: boolean; isTechnical?: boolean; isRefused?: boolean }): LatePromptRoute {
   if (input.isTechnical === true) return input.isWindowOpen || !input.isSessionActive ? 'drop' : 'forward';
+  // Ahead of any window: the window open now is the stop of the conversation the command ends, or the start of the one it begins — a
+  // message for the first is lost with it, and one for the second would reach that agent ahead of what the command hands it first.
+  if (input.isRefused === true) return 'refuse';
   if (input.isWindowOpen) return 'buffer';
   return input.isSessionActive ? 'forward' : 'wake';
 }
@@ -135,6 +147,11 @@ export interface LateWakeResult {
   isAwake: boolean;
   /** The wake posted a notice of its own (a start that failed says why): the report adds none. */
   isNoticePosted: boolean;
+  /**
+   * The conversation was there when the wake began and gone once its turn in the queue came: a release queued ahead ended it, so nothing
+   * was started (review 25 #2). Reported as the release's refusal, not as a conversation that was never there.
+   */
+  isEnded?: boolean;
 }
 
 /**
@@ -149,11 +166,19 @@ export interface LatePromptDeliveryPorts {
   isTechnical?: boolean;
   checkIsWindowOpen: () => boolean;
   checkIsSessionActive: () => boolean;
+  /** A person's prompt only: whether a command ends or replaces the conversation now (absent: never refused). */
+  checkIsRefused?: () => boolean;
   buffer: () => Promise<void>;
   wake: () => Promise<LateWakeResult>;
   /** Where the forward put the prompt: `forwarded`, or what a forward that routes it again itself (a prompt that waited for an adopt replay) ended in — passed on as the answer. */
   forward: () => Promise<LatePromptOutcome>;
   reportNoSession: (isAlreadyTold: boolean) => Promise<void>;
+  /**
+   * The prompt was refused (a command ends or replaces the conversation), or its wake found the conversation ended by a release while it
+   * waited: the person is told the command's line; whatever the prompt opened is closed by its caller (`noSession`). Absent: reported as
+   * no session.
+   */
+  reportRefused?: () => Promise<void>;
 }
 
 /**
@@ -182,8 +207,14 @@ export function deliverLatePrompt(ports: LatePromptDeliveryPorts): Promise<LateP
 }
 
 async function routeLatePrompt(ports: LatePromptDeliveryPorts, wakesLeft: number): Promise<LatePromptOutcome> {
-  const route = getLatePromptRoute({ isWindowOpen: ports.checkIsWindowOpen(), isSessionActive: ports.checkIsSessionActive(), isTechnical: ports.isTechnical });
+  const route = getLatePromptRoute({
+    isWindowOpen: ports.checkIsWindowOpen(),
+    isSessionActive: ports.checkIsSessionActive(),
+    isTechnical: ports.isTechnical,
+    isRefused: ports.checkIsRefused?.() === true,
+  });
   if (route === 'drop') return 'dropped';
+  if (route === 'refuse') return reportRefused(ports);
   if (route === 'buffer') {
     await ports.buffer();
     return 'buffered';
@@ -194,9 +225,15 @@ async function routeLatePrompt(ports: LatePromptDeliveryPorts, wakesLeft: number
     return 'noSession';
   }
   const wake = await ports.wake();
+  if (wake.isEnded === true) return reportRefused(ports);
   if (!wake.isAwake) {
     await ports.reportNoSession(wake.isNoticePosted);
     return 'noSession';
   }
   return routeLatePrompt(ports, wakesLeft - 1);
+}
+
+async function reportRefused(ports: LatePromptDeliveryPorts): Promise<LatePromptOutcome> {
+  await (ports.reportRefused ? ports.reportRefused() : ports.reportNoSession(false));
+  return 'noSession';
 }
