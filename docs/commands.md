@@ -613,7 +613,7 @@ Rename the current live session (OpenCode; Claude transcripts have no title).
 
 ### `/quit`, `/q`
 
-End the session — Claude: graceful double Ctrl+C; OpenCode/terminal: `stopSession`. Releases the persisted session id, so a bot restart won't auto-reattach it (resume later via `/sessions`). A topic whose agent process is gone but whose session is kept (it "sleeps": the next message, file, voice note, `/compact`, `/model` or `/effort` resumes it by itself) is released the same way.
+End the session — Claude: graceful double Ctrl+C; OpenCode/terminal: `stopSession`. Releases the persisted session id, so a bot restart won't auto-reattach it (resume later via `/sessions`). A topic whose agent process is gone but whose session is kept (it "sleeps": the next message, file, voice note, `/compact`, `/model` or `/effort` resumes it by itself) is released the same way. After it, `/claude` or `/opencode` starts a fresh session. A message sent to the topic while `/quit`, `/quitall`, `/new`, leaving the folder or a switch to the other backend is ending or replacing the conversation is not delivered and starts nothing: the topic says it did not reach the agent, so you can send it again once that is done.
 
 ### `/new`
 
