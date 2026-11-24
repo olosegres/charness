@@ -88,7 +88,7 @@ test('a VOICE reply to a set-aside question is a late answer: its transcript goe
 test('a backend switch closes the set-aside questions only when the operator chose it: an AUTOMATIC usage-limit fallback keeps the conversation, parked and bridged', () => {
   assert.match(getFunctionBody('switchThreadAdapter'), /if\s*\(options\.isConversationKept\s*!==\s*true\)\s*closeSetAsideQuestionsInBackground\(key\)/);
   assert.match(getFunctionBody('moveTopicToOtherBackend'), /switchThreadAdapter\([^;]*,\s*options\)/, 'the flag is handed on');
-  assert.match(getFunctionBody('switchTopicToFallbackEntryNow'), /moveTopicToOtherBackend\([^;]*\{\s*isConversationKept:\s*options\.isAutomatic\s*===\s*true\s*\}\)/);
+  assert.match(getFunctionBody('switchTopicToFallbackEntryNow'), /moveTopicToOtherBackend\([^;]*\{\s*isConversationKept:\s*options\.isAutomatic\s*===\s*true,\s*promptsReachedOrHeld\s*\}\)/);
   // The automatic callers say so …
   assert.match(botSource, /resumeOnRung:[^}]*switchTopicToFallbackEntry\(key,\s*from,\s*rung,\s*\{\s*isAnnounced:\s*true,\s*isAutomatic:\s*true\s*\}\)/s, 'the wait that ends on another rung');
   assert.equal(botSource.match(/switchTopicToFallbackEntry\(key,\s*plan\.from,\s*to,\s*\{\s*isAnnounced:\s*true,\s*isAutomatic:\s*true(?:,\s*ending)?\s*\}\)/g)?.length, 2, 'the two auto-switch paths (a used-up balance\'s hands its hold on the conversation along)');

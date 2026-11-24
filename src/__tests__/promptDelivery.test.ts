@@ -651,8 +651,8 @@ describe('a startup window\'s prompts on every way out of it (review 19 #1)', ()
 
   it('every command that ends or replaces the conversation closes its requests and tells a person whose words the agent never read — read off the live process before the command stops or replaces it; an interrupt closes silently; each person is told once (review 25 #3, review 26 #1, #2)', () => {
     const switchAdapter = getBody('async function switchThreadAdapter(', '/**\n * @description The post-start "ready" notice');
-    assert.match(switchAdapter, /if \(prevName && !checkIsSameConversationSwitch\(prevName, newName\)\) \{\n\s*cancelEndingConversationRequests\(key\);/, 'a switch, ahead of its stop');
-    assert.ok(switchAdapter.indexOf('cancelEndingConversationRequests(key);') < switchAdapter.indexOf('prev.stopSession(key);'));
+    assert.match(switchAdapter, /if \(prevName && !checkIsSameConversationSwitch\(prevName, newName\)\) \{\n(?:\s*\/\/[^\n]*\n)*\s*cancelEndingConversationRequests\(key, options\.promptsReachedOrHeld\);/, 'a switch, ahead of its stop');
+    assert.ok(switchAdapter.indexOf('cancelEndingConversationRequests(key, options.promptsReachedOrHeld);') < switchAdapter.indexOf('prev.stopSession(key);'));
     const quit = getBody("command(['quit', 'q']", "command('c', async");
     assert.ok(quit.indexOf('cancelEndingConversationRequests(key);') >= 0 && quit.indexOf('cancelEndingConversationRequests(key);') < quit.indexOf('conversationEndings.hold(key)'), '/quit, in the handler\'s tick, ahead of its transition');
     const fresh = getBody("command('new', async", '//  /whoami /version /help /status');
@@ -715,6 +715,18 @@ describe('a startup window\'s prompts on every way out of it (review 19 #1)', ()
     assert.ok(unbind.indexOf('const stopRefusingMessages = conversationEndings.refuseMessages(key);') >= 0 && unbind.indexOf('const stopRefusingMessages = conversationEndings.refuseMessages(key);') < unbind.indexOf('await clearPinnedStatus(key);'), 'from its top, before its first await');
     assert.ok(unbind.indexOf('await state.removeBinding(key);') < unbind.indexOf('stopRefusingMessages();'), 'until the binding is gone');
     assert.match(unbind, /\} finally \{\n\s*stopRefusingMessages\(\);/, 'on every way out');
+  });
+
+  it('a bridged move reads what the agent took in at the moment its bridge reads the transcript, and hands it to the cancel (review 27 nit 5)', () => {
+    for (const [name, body] of [
+      ['the limit move', getBody('async function switchTopicToFallbackEntryNow(', 'function checkIsFallbackMoveAcrossBackends(')],
+      ['the operator\'s move', getBody('async function executeBackendSwitch(', 'async function checkIsPickBeyondLimit(')],
+    ] as const) {
+      const readAt = body.indexOf('const promptsReachedOrHeld = requestWakeUpEngine?.readPromptsReachedOrHeld(key);');
+      assert.ok(readAt >= 0 && readAt < body.indexOf('await buildFallbackBridge('), `${name}: read before the bridge`);
+      assert.match(body, /await moveTopicToOtherBackend\([^;]*promptsReachedOrHeld \}\);/, `${name}: handed to the move`);
+    }
+    assert.match(getBody('async function switchThreadAdapter(', '/**\n * @description The post-start "ready" notice'), /cancelEndingConversationRequests\(key, options\.promptsReachedOrHeld\);/);
   });
 
   it('every routing point reads whether the process takes input, and so does the ensure\'s plan: the adapter\'s own suspend after a torn frame is resumed for the prompt, not read `ready` while the prompt meets a dying process (review 25 nits 4 and 7)', () => {

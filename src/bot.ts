@@ -5684,14 +5684,15 @@ function closeSetAsideQuestionsInBackground(key: SessionKey): void {
  * Resolves the work the stop cut off that the agent's next prompt is told about (`null`: none), so a caller's line to
  * the operator is derived from the very record the note lists.
  */
-async function switchThreadAdapter(key: SessionKey, newName: string, options: { isConversationKept?: boolean } = {}): Promise<LostWork | null> {
+async function switchThreadAdapter(key: SessionKey, newName: string, options: { isConversationKept?: boolean; promptsReachedOrHeld?: ReadonlySet<string> } = {}): Promise<LostWork | null> {
   const prevName = getThreadAdapterNameRaw(key);
   // Another agent or a shell takes the topic over: the open request belonged to
   // the old conversation, so it closes instead of a later wake-up reminding (or,
   // in a terminal, TYPING into) a session that never saw it — and a person whose
   // words the agent never read is told (review 25 #3).
   if (prevName && !checkIsSameConversationSwitch(prevName, newName)) {
-    cancelEndingConversationRequests(key);
+    // A bridged move hands in what it read ahead of its bridge, so the reading and the bridge describe the same moment (review 27 nit 5).
+    cancelEndingConversationRequests(key, options.promptsReachedOrHeld);
     // Nor does the conversation left behind get its re-asked question answered: its buttons would send the label into the new one.
     closeReAskedQuestion(key);
     // The same for the questions it had set aside — unless the bot moved the conversation itself (an automatic usage-limit
@@ -10068,6 +10069,9 @@ async function switchTopicToFallbackEntryNow(
     // Onto the other backend, which ends the conversation the move leaves: held from here — nothing above awaits —, ahead of the bridge,
     // unless the caller held it already, so a stop under way drops what it held instead of resuming the backend being left (review 24 #1).
     const ending = options.ending ?? conversationEndings.hold(key);
+    // What the agent took in, read at the moment the bridge reads its transcript: a message it takes in later is in neither (review 27
+    // nit 5).
+    const promptsReachedOrHeld = requestWakeUpEngine?.readPromptsReachedOrHeld(key);
     let bridge: string;
     try {
       bridge = await buildFallbackBridge(key, {
@@ -10077,7 +10081,7 @@ async function switchTopicToFallbackEntryNow(
         resetsAtText: getFallbackResetTime(from),
       });
       // An automatic fallback keeps the conversation (parked, bridged): the questions it had set aside stay open for a late answer.
-      isStoppingBackground = await moveTopicToOtherBackend(key, ending, to.backend, to.backend === 'claude' ? to.profile : null, { isConversationKept: options.isAutomatic === true });
+      isStoppingBackground = await moveTopicToOtherBackend(key, ending, to.backend, to.backend === 'claude' ? to.profile : null, { isConversationKept: options.isAutomatic === true, promptsReachedOrHeld });
     } finally {
       ending.release();
     }
@@ -10131,7 +10135,7 @@ function checkIsFallbackMoveAcrossBackends(key: SessionKey, from: FallbackChainE
  * whether the stop took background work with it — the caller tells the operator (the agent is told by the next prompt,
  * `switchThreadAdapter`).
  */
-async function moveTopicToOtherBackend(key: SessionKey, ending: ConversationEnding, backend: BackendFamily, account: string | null, options: { isConversationKept?: boolean } = {}): Promise<boolean> {
+async function moveTopicToOtherBackend(key: SessionKey, ending: ConversationEnding, backend: BackendFamily, account: string | null, options: { isConversationKept?: boolean; promptsReachedOrHeld?: ReadonlySet<string> } = {}): Promise<boolean> {
   if (account !== null) await state.setClaudeProfileOverride(key, account);
   // The old backend's stop and the id parking run as the conversation's one transition, after a re-spawn: a start or resume of the
   // old backend in flight is over first, and none comes back beside the new one (review 22, own pass). Held as ending the conversation
@@ -10244,6 +10248,8 @@ async function executeBackendSwitch(key: SessionKey, target: BackendSwitchTarget
     // The move ends the conversation it leaves: held from here, ahead of the bridge, unless the tap that asked for it holds it already —
     // a stop under way drops what it held instead of resuming the backend being left (review 24 #1).
     const ending = options.ending ?? conversationEndings.hold(key);
+    // What the agent took in, read at the moment the bridge reads its transcript (review 27 nit 5).
+    const promptsReachedOrHeld = requestWakeUpEngine?.readPromptsReachedOrHeld(key);
     let bridge: string | null;
     let isStoppingBackground: boolean;
     try {
@@ -10256,7 +10262,7 @@ async function executeBackendSwitch(key: SessionKey, target: BackendSwitchTarget
           userMessage: options.userMessage,
         })
         : null;
-      isStoppingBackground = await moveTopicToOtherBackend(key, ending, target.backend, target.backend === 'claude' && target.isProfilePicked ? target.profile : null);
+      isStoppingBackground = await moveTopicToOtherBackend(key, ending, target.backend, target.backend === 'claude' && target.isProfilePicked ? target.profile : null, { promptsReachedOrHeld });
     } finally {
       ending.release();
     }
