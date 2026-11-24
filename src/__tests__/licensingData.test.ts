@@ -216,7 +216,7 @@ test('the yes-or-no facts of licensing.json are what LICENSE says', () => {
   assert.equal(buy.agentsMayBuy, flatLicenseText.includes('An agent may buy on its own when the organization lets it spend'));
   assert.equal(licensingData.derivedCode.codeWrittenWithCharnessIsYours, flatLicenseText.includes('2.4. **Your own work.** Using Charness to write code never makes that code derived from Charness.'));
   assert.equal(licensingData.derivedCode.terms, 'LICENSE 2.3–2.4');
-  assert.equal(licensingData.derivedCode.generalModelOutputNotDerived, flatLicenseText.includes("Nor does an AI model's having learned from a general collection of public code that merely includes Charness (section 3.3(b)) make what it writes derived."));
+  assert.equal(licensingData.derivedCode.generalModelOutputNotDerived, flatLicenseText.includes("Nor does an AI model's having learned from a general collection of public code that merely includes Charness (section 3.3(b)) make what it writes derived, unless the work was asked for on the basis of Charness; then section 2.3 reaches it as if Charness code were in the model's context."));
   assert.equal(licensingData.derivedCode.purposeTrainedModelOutputDerivedOnlyAsAPersonsWouldBe, flatLicenseText.includes("is derived only where section 2.3 would reach the same work written by a person who had read Charness's code; ordinary code written with such a model stays the user's."));
 });
 

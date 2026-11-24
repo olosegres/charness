@@ -92,9 +92,10 @@ deliverables that you or your agents produce with Charness are yours, and the li
 them, even though Charness ran the agents and gave them its prompts, skills and tool descriptions while they worked.
 Such work is derived only where section 2.3 reaches it, never because Charness was used to write it. Nor does an AI
 model's having learned from a general collection of public code that merely includes Charness (section 3.3(b)) make what
-it writes derived. Code written with a model trained on Charness on purpose (section 3.3(a)) is derived only where
-section 2.3 would reach the same work written by a person who had read Charness's code; ordinary code written with such
-a model stays the user's.
+it writes derived, unless the work was asked for on the basis of Charness; then section 2.3 reaches it as if Charness
+code were in the model's context. Code written with a model trained on Charness on purpose (section 3.3(a)) is derived
+only where section 2.3 would reach the same work written by a person who had read Charness's code; ordinary code written
+with such a model stays the user's.
 
 2.5. **Models trained on Charness.** Training or fine-tuning a machine-learning model on Charness code or commits is
 allowed. Section 3.3 says when a model counts as trained on Charness, how such a model may be published, and who pays;
