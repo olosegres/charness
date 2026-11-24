@@ -32,6 +32,8 @@
   },
   "derivedCode": {
     "codeWrittenWithCharnessIsYours": true,
+    "generalModelOutputNotDerived": true,
+    "purposeTrainedModelOutputDerivedOnlyAsAPersonsWouldBe": true,
     "terms": "LICENSE 2.3–2.4"
   },
   "modelsTrainedOnCharness": {
