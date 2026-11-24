@@ -50,7 +50,8 @@
   },
   "discounts": {
     "poweredByCharnessMarkPercent": 20,
-    "prepaidTwoOrThreeYearsPercent": 15
+    "prepaidTwoOrThreeYearsPercent": 15,
+    "combined": "multiply: 0.80 × 0.85 = 68 % of the price"
   },
   "refundWithinDays": 30,
   "telemetry": false,

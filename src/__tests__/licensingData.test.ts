@@ -16,22 +16,27 @@ import * as path from 'node:path';
 type PriceBand = { name: string; revenuePlusFundingUpToUsd: number | null; groupPeopleUpTo: number | null; pricePerYearUsd: number };
 type OemBand = { embeddedProductRevenueUpToUsd: number | null; pricePerYearUsd: number };
 type FreeUse = {
-  organizationGroup: { maxRevenuePlusFundingUsd: number; maxGroupPeople: number };
+  personalUse: boolean;
+  organizationGroup: { maxRevenuePlusFundingUsd: number; maxGroupPeople: number; bothRequired: boolean };
+  educationAndPublicBenefit: boolean;
   evaluationDaysLessThan: number;
   growthTransitionDays: number;
   earlierMitUsersDays: number;
 };
-type AiTraining = { onTopOfOrganizationLicence: boolean; discountsApply: boolean; proof: string };
+type AiTraining = { allowed: boolean; onTopOfOrganizationLicence: boolean; discountsApply: boolean; proof: string };
 type LicensingData = {
   license: string;
   licenseText: string;
+  sourceAvailable: boolean;
+  openSource: boolean;
+  telemetry: boolean;
   free: FreeUse;
   organizationLicence: { perUserOrSeatPricing: boolean; bands: PriceBand[] };
   aiTraining: AiTraining;
   oem: { rule: string; bands: OemBand[] };
-  discounts: { poweredByCharnessMarkPercent: number; prepaidTwoOrThreeYearsPercent: number };
+  discounts: { poweredByCharnessMarkPercent: number; prepaidTwoOrThreeYearsPercent: number; combined: string };
   refundWithinDays: number;
-  buy: { contact: string; checkout: string | null; steps: string[] };
+  buy: { contact: string; checkout: string | null; agentsMayBuy: boolean; steps: string[] };
 };
 
 const repoRoot = path.resolve(__dirname, '..', '..');
@@ -146,6 +151,7 @@ test('the discounts of LICENSE 3.6 are the ones in licensing.json, and every exa
   const prepaidFactor = 1 - prepaidTwoOrThreeYearsPercent / percentBase;
   const bothFactor = markFactor * prepaidFactor;
   assert.match(licenseText, new RegExp(`times ${markFactor.toFixed(2)} times ${prepaidFactor.toFixed(2)}, that is ${Math.round(bothFactor * percentBase)} %`));
+  assert.equal(licensingData.discounts.combined, `multiply: ${markFactor.toFixed(2)} × ${prepaidFactor.toFixed(2)} = ${Math.round(bothFactor * percentBase)} % of the price`);
 
   const examples = [...licenseText.matchAll(/\$([\d,]+) becomes \$([\d,]+)(?: with the\s+mark)?, \$([\d,]+)(?: prepaid)?,? (?:or )?\$([\d,]+)/g)];
   assert.equal(examples.length, 2, 'LICENSE 3.6 should give two worked examples');
@@ -174,4 +180,16 @@ test('the buying steps of licensing.json are the numbered steps of LICENSE 3.7, 
   const stepsFromLicense = [...howToBuy.matchAll(/^\d+\. ([\s\S]*?)(?=\n\d+\. |\n\n|(?![\s\S]))/gm)].map(([, step]) => step.replace(/\s+/g, ' ').trim());
   assert.ok(stepsFromLicense.length > 0, 'LICENSE 3.7 lost its steps');
   assert.deepEqual(licensingData.buy.steps, stepsFromLicense);
+});
+
+test('the yes-or-no facts of licensing.json are what LICENSE says', () => {
+  const { free, aiTraining, buy } = licensingData;
+  assert.equal(licensingData.sourceAvailable, flatLicenseText.includes('Charness is **source available**, not open source'));
+  assert.equal(licensingData.openSource, !flatLicenseText.includes('not open source'));
+  assert.equal(licensingData.telemetry, !flatLicenseText.includes('There are no licence keys, activation, compliance telemetry or remote shutdown'));
+  assert.equal(free.personalUse, flatLicenseText.includes('1.1. **Personal use.**'));
+  assert.equal(free.organizationGroup.bothRequired, flatLicenseText.includes('Both must hold'));
+  assert.equal(free.educationAndPublicBenefit, flatLicenseText.includes('1.3. **Education and public benefit.**'));
+  assert.equal(aiTraining.allowed, flatLicenseText.includes('Training or fine-tuning a machine-learning model on Charness code or commits is allowed'));
+  assert.equal(buy.agentsMayBuy, flatLicenseText.includes('An agent may buy on its own when the organization lets it spend'));
 });
