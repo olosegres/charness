@@ -23,7 +23,16 @@ type FreeUse = {
   growthTransitionDays: number;
   earlierMitUsersDays: number;
 };
-type AiTraining = { allowed: boolean; onTopOfOrganizationLicence: boolean; discountsApply: boolean; proof: string };
+type AiTraining = {
+  allowed: boolean;
+  fee: string;
+  whoeverTrainedIt: boolean;
+  requestsToAnIndependentServiceExempt: boolean;
+  runsFromWhenTheGroupKnows: boolean;
+  onTopOfOrganizationLicence: boolean;
+  discountsApply: boolean;
+  proof: string;
+};
 type LicensingData = {
   license: string;
   licenseText: string;
@@ -133,7 +142,11 @@ test('the OEM table of LICENSE 3.4 is the one in licensing.json', () => {
 });
 
 test('the AI training terms of LICENSE 3.3 and 3.6 are the ones in licensing.json', () => {
-  const { onTopOfOrganizationLicence, discountsApply, proof } = licensingData.aiTraining;
+  const { fee, whoeverTrainedIt, requestsToAnIndependentServiceExempt, runsFromWhenTheGroupKnows, onTopOfOrganizationLicence, discountsApply, proof } = licensingData.aiTraining;
+  assert.match(fee, /LICENSE 3\.3/, 'the fee text points at the clause it summarises');
+  assert.equal(whoeverTrainedIt, flatLicenseText.includes('a model trained or fine-tuned on Charness code or commits, whoever trained it, pays'));
+  assert.equal(requestsToAnIndependentServiceExempt, flatLicenseText.includes('another, independent organization runs as a service, and that was not trained for it, does not pay for that use'));
+  assert.equal(runsFromWhenTheGroupKnows, flatLicenseText.includes('The fee runs from when the group knows, or the licensor tells it in writing'));
   assert.equal(onTopOfOrganizationLicence, flatLicenseText.includes('This fee is on top of the organization licence for using Charness.'));
   assert.equal(discountsApply, !flatLicenseText.includes('never to $0 or to the training fee'));
   const trainingProof = flatLicenseText.match(/The (receipt) \(or the (paid invoice)\) is the training licence/);

@@ -120,14 +120,16 @@ completion and the positive difference, prorated for the rest of the term, with 
 A wrong initial figure is corrected to the price that was due.
 
 3.3. **AI training licence.** An organization group that uses, sells or offers to others a model trained or fine-tuned
-on Charness code or commits — by its members, by anyone for it, or by whoever it got the model's weights from — pays the
-price of its group's band in section 3.1 for every licence year in which it does so, whatever Part 1 would otherwise
-allow. A licence year is 12 months from the invoice start date; the first begins when the model is first used, sold or
-offered, and each year's band follows the latest month-end figures before that year starts. A group in the Free band
-pays $0 by that table and sends no order. Training done by a group's people, its contractors or anyone it engages for it
-is that group's training. An individual who trains such a model on their own account, not for an employer or client,
-counts, for this section, as an organization group of its own, with its own R and H. This fee is on top of the
-organization licence for using Charness. The receipt (or the paid invoice) is the training licence; keep it as proof.
+on Charness code or commits, whoever trained it, pays the price of its group's band in section 3.1 for every licence
+year in which it does so, whatever Part 1 would otherwise allow. A group that only sends requests to such a model that
+another, independent organization runs as a service, and that was not trained for it, does not pay for that use. The fee
+runs from when the group knows, or the licensor tells it in writing, that the model was trained on Charness. A licence
+year is 12 months from the invoice start date; the first begins when the model is first used, sold or offered, and each
+year's band follows the latest month-end figures before that year starts. A group in the Free band pays $0 by that table
+and sends no order. Training done by a group's people, its contractors or anyone it engages for it is that group's
+training. An individual who trains such a model on their own account, not for an employer or client, counts, for this
+section, as an organization group of its own, with its own R and H. This fee is on top of the organization licence for
+using Charness. The receipt (or the paid invoice) is the training licence; keep it as proof.
 
 3.4. **Embedded products (OEM).** A product that includes or runs Charness, or supplies its agent orchestration as a
 feature, on premises or hosted, needs a signed OEM addendum before it ships, even at $0. An independently written

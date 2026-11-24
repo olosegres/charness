@@ -13,8 +13,9 @@ Two new obligations (2.0's sections 2.3 and 3.3):
   and solutions, are under the licence like Charness itself, including such code an AI model wrote with Charness code or
   commits in its context. Unless your work takes over those approaches, it is not derived merely because Charness gave
   your agents its prompts, skills and tool descriptions (2.0's sections 2.3–2.4).
-- **AI training.** A group that uses, sells or offers a model trained or fine-tuned on Charness code or commits — by its
-  own people, by anyone for it, or by whoever it got the model's weights from — pays its yearly band price for it, on top of its licence (2.0's section 3.3).
+- **AI training.** A group that uses, sells or offers a model trained or fine-tuned on Charness code or commits, whoever
+  trained it, pays its yearly band price for it, on top of its licence; only sending requests to such a model that an
+  independent organization runs as a service costs nothing (2.0's section 3.3).
 
 The free tier, the band prices, the OEM table, the discounts and the refund are unchanged; the rest is the 1.0.0 terms
 in fewer words, so compare the two texts if you rely on a detail of them. The

@@ -32,7 +32,10 @@
   },
   "aiTraining": {
     "allowed": true,
-    "fee": "the group's band price (organizationLicence) for every licence year in which the group uses, sells or offers a model trained or fine-tuned on Charness code or commits, whoever trained it (its people, anyone for it, or whoever it got the weights from), whatever the free uses would otherwise allow; $0 only in the Free band; an individual training on their own account counts as a group of its own",
+    "fee": "the group's band price (organizationLicence) for every licence year in which it uses, sells or offers such a model; $0 in the Free band; the exact terms are LICENSE 3.3",
+    "whoeverTrainedIt": true,
+    "requestsToAnIndependentServiceExempt": true,
+    "runsFromWhenTheGroupKnows": true,
     "onTopOfOrganizationLicence": true,
     "discountsApply": false,
     "proof": "the receipt or the paid invoice"
