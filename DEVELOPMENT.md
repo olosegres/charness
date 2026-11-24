@@ -350,8 +350,9 @@ publish, no tag, no push, the run is red; the next day's run tries again by itse
   `https://github.com/olosegres/charness/blob/license-<version>/LICENSE`, and every copy names its licence by it. Nobody
   tags it by hand: the release creates `license-<version>` on the release commit when GitHub has no such tag yet and
   pushes it with `main` and the `v*` tag (a hand-pushed `v*` tag's run creates and pushes it too). Before anything is
-  published, `yarn tsx src/release/cli.ts check-license-tag` refuses a notice that names a branch, and a
-  `license-<version>` tag already on GitHub that holds another `LICENSE` text than the release: a commit that changes the
+  published, `yarn tsx src/release/cli.ts check-license-tag` refuses a notice that names anything but
+  `license-<version>` for the version in the title `# Charness License <version>`, and a `license-<version>` tag already
+  on GitHub that holds another `LICENSE` text than the release: a commit that changes the
   terms gives the licence a new version (title, notice, `licensing.json`). Run by hand against another remote with
   `--remote <name>`.
 - **Package check** before anything is published: the tarball holds `package.json`, `dist/cli.js`, `stt/gigaam_sidecar.py`,
