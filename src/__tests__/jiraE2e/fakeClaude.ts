@@ -1221,7 +1221,8 @@ function endTurnAfterSetAsideQuestion(sessionId: string): void {
 
 /**
  * `[fake:schedule-once <seconds> <label>]` (see `fakeScheduleOnceToken`): create the one-shot prompt schedule the token names,
- * on the bot's MCP, BEFORE the turn asks its question — the bot then delivers a prompt of its own while the question waits.
+ * on the bot's MCP — in a turn that asks, BEFORE its question (the bot then delivers a prompt of its own while the question waits);
+ * in a turn of a request in any other mode, at the turn's start.
  */
 const scheduleOnceRe = /\[fake:schedule-once (\d+) ([^\]]+)\]/;
 
@@ -1507,6 +1508,8 @@ async function runTurn(argv: readonly string[], sessionId: string, content: stri
     await new Promise<void>((resolve) => setTimeout(resolve, slowTurnMs));
   }
   const server = getBotMcpServer(argv);
+  // A turn that asks arms its schedule right before its question (below); any other turn arms it at its start.
+  if (!fakeAskVariantByMode[state.mode]) await armScheduledPrompt(argv, content, state.issueKey);
   await runTodoTokens(server, content, state.issueKey);
   await waitTurnWork(content);
   await runLateToolCall(argv, sessionId, content, state.issueKey);

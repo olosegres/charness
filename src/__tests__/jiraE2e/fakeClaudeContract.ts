@@ -300,10 +300,10 @@ export const fakeAskSetAsideOutcome = 'set aside';
 export const fakeAskSetAsideTurnText = 'Went on without the answer.';
 
 /**
- * `[fake:schedule-once <seconds> <label>]` in a prompt: before it puts its question, the fake creates a one-shot prompt schedule
- * (`schedule_create` on the bot's MCP) that fires after that many seconds with the prompt `<label> [fake:answer] scheduled` — a
- * prompt the BOT delivers to the agent while its question waits, which is not an answer to it and does not cancel it (a message
- * the operator types does).
+ * `[fake:schedule-once <seconds> <label>]` in a prompt: the fake creates a one-shot prompt schedule (`schedule_create` on the bot's
+ * MCP) that fires after that many seconds with the prompt `<label> [fake:answer] scheduled` — in an asking turn before it puts its
+ * question (a prompt the BOT delivers to the agent while its question waits, which is not an answer to it and does not cancel it, as a
+ * message the operator types does), in a request's turn of any other mode at the turn's start.
  */
 export const fakeScheduleOnceToken = (seconds: number, label: string): string => `[fake:schedule-once ${seconds} ${label}]`;
 
