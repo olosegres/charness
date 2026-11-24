@@ -171,6 +171,29 @@ describe('json-stream pending work — the agent\'s own background tasks and sch
     assert.equal(adapter.checkIsWorking(key), false);
   });
 
+  it('a ScheduleWakeup the agent stopped holds the process no more: its stop cancels the pending wakeup', () => {
+    // Seen on a tracker agent: a fallback wakeup armed while it waited, stopped once the wait ended — and the stopped
+    // wakeup kept its idle process ("kept only by scheduled jobs 1, no turn runs") until the hold ran out.
+    const { adapter, append } = createAdapterWithSession();
+    const toolUse = (id: string, input: Record<string, unknown>): string =>
+      toLine({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'tool_use', id, name: 'ScheduleWakeup', input }] } });
+    const toolResult = (id: string, text: string): string =>
+      toLine({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, content: text }] } });
+    const jobCount = (): number => adapter['sessions'].get(keyToString(key))!.scheduledJobs.size;
+
+    append(toolUse('w1', { delaySeconds: 1500, prompt: 'check the run' })
+      + toolResult('w1', 'Next wakeup scheduled for 16:13:00 (in 1543s). If you owe the user a status update this tick, write it now as ordinary response text; then end the turn.')
+      + resultLine);
+    assert.equal(jobCount(), 1);
+    assert.equal(adapter.checkIsWorking(key), true, 'a pending wakeup holds the process');
+
+    append(toolUse('w2', { stop: true })
+      + toolResult('w2', 'Loop stopped — cancelled 1 pending wakeup(s); no further dynamic-loop wakeups scheduled. If you armed a Monitor for this loop, TaskStop it now. Then write the loop\'s outcome for the user as ordinary visible response text — and end the turn.')
+      + resultLine);
+    assert.equal(jobCount(), 0, 'the stop cancelled it');
+    assert.equal(adapter.checkIsWorking(key), false, 'nothing of its own holds the idle process any more');
+  });
+
   it('a task that finished during the agent\'s turn gets its own turn right after that turn\'s result: held across the gap', () => {
     const { adapter, session, append } = createAdapterWithSession();
     append(resultLine + backgroundStartedLines + initLine + backgroundFinishedLines);

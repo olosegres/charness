@@ -8,6 +8,9 @@ Before, a request's progress comment stayed exactly as the last note left it, so
 **An agent that answers every reminder with a progress note is no longer given up on: before, the tenth reminder of a long task posted «The AI was reminded as many times as allowed and still gave no answer» although it had answered each one.**
 The reminder cap now counts only the reminders in a row the agent left unanswered; a progress note starts the count again, so a task that waits on a long pipeline or test run is never told off as silent — and keeps its place among the running tracker tasks. A request still open 12 hours after it started gets no more reminders after its progress notes, without an alert.
 
+**A Claude agent that cancels its own `ScheduleWakeup` no longer keeps its idle process running for hours.**
+Before, the bot did not recognise the stop («Loop stopped — cancelled 1 pending wakeup(s)»), so it went on counting the cancelled wakeup as pending work: the idle process was kept for the whole hold with its idle compaction skipped («kept only by scheduled jobs»), and its end was then told to the agent as lost work.
+
 **What the agent tells you just before it asks a question (or runs a tool) now reaches the topic: before, Claude Code sometimes sent those sentences as «thinking», and the topic showed them only as a «•••» that disappeared.**
 Newer Claude models narrate their work to you in a block Claude Code marks as thinking — the explanation right before a question, «checking X now» before a command. The bot hid it like reasoning, so a question could arrive with no explanation above it. Such narration is now shown as the agent's normal text, whatever the thinking display is set to; real reasoning stays hidden as before. Jira issues are not affected: there only the agent's answers are posted.
 

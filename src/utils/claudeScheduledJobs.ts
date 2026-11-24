@@ -9,10 +9,12 @@
  *                     → `Scheduled recurring job 99a38c99 (Every 3 hours at :17). … Auto-expires after 7 days. …`
  *   CronDelete        → `Cancelled job 99a38c99.`
  *   ScheduleWakeup    → `Next wakeup scheduled for 15:05:00 (in 63s). …`
+ *   ScheduleWakeup {stop: true} → `Loop stopped — cancelled 1 pending wakeup(s); no further dynamic-loop wakeups scheduled. …`
+ *                                 (seen on 2.1.306 in a tracker agent's transcript)
  * A job firing starts a turn with a `command_lifecycle` frame naming its source, not the job: `schedule_wakeup` for a
  * `CronCreate` job, `loop_wakeup` for the `ScheduleWakeup` one. An unrecognised wording tracks nothing — the process
- * is then held exactly as before this tracking (a cancelled wakeup's wording is not known: it is held until the hold
- * runs out).
+ * is then held exactly as before this tracking. A stopped wakeup that stayed tracked held an idle process for the whole
+ * hold, its compaction skipped ("kept only by scheduled jobs"), and its stop was then told to the agent as lost work.
  */
 
 export const cronCreateToolName = 'CronCreate';
@@ -41,6 +43,7 @@ export const loopWakeupJobId = 'loop-wakeup';
 const cronCreateResultRe = /^Scheduled (one-shot|recurring) (?:task|job) ([0-9a-z]+)\b/;
 const cronDeleteResultRe = /^Cancelled job ([0-9a-z]+)\b/;
 const loopWakeupResultRe = /^Next wakeup scheduled for /;
+const loopStoppedResultRe = /^Loop stopped\b/;
 
 /** @description The job a `CronCreate` result scheduled, `null` for any other text (an error, a new wording). */
 export function getScheduledJobFromCronCreateResult(output: string): ScheduledJob | null {
@@ -56,6 +59,11 @@ export function getCancelledJobIdFromCronDeleteResult(output: string): string | 
 /** @description The wakeup a `ScheduleWakeup` result scheduled, `null` for any other text. */
 export function getScheduledJobFromLoopWakeupResult(output: string): ScheduledJob | null {
   return loopWakeupResultRe.test(output.trim()) ? { jobId: loopWakeupJobId, kind: 'loopWakeup' } : null;
+}
+
+/** @description Whether a `ScheduleWakeup` result says the loop was stopped: the pending wakeup is cancelled. */
+export function checkIsLoopStoppedResult(output: string): boolean {
+  return loopStoppedResultRe.test(output.trim());
 }
 
 /**

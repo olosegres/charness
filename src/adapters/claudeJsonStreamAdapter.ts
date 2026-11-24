@@ -125,12 +125,14 @@ import { getInputsAfterEcho, getInputsAfterTurnEnd, getInputsOnTheirWay, getInpu
 import type { BackgroundWorkSignal } from '../utils/workingSignals';
 import { checkHasLostWork, getLostWorkFromTailRecord, type LostWork } from '../utils/lostWork';
 import {
+  checkIsLoopStoppedResult,
   cronCreateToolName,
   cronDeleteToolName,
   getCancelledJobIdFromCronDeleteResult,
   getScheduledJobFromCronCreateResult,
   getScheduledJobFromLoopWakeupResult,
   getScheduledJobsAfterFiring,
+  loopWakeupJobId,
   loopWakeupToolName,
   type ScheduledJob,
 } from '../utils/claudeScheduledJobs';
@@ -2115,7 +2117,9 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
 
   /** A `CronCreate` / `CronDelete` / `ScheduleWakeup` result changes the session-only jobs the process holds. */
   private trackScheduledJob(session: StreamSession, tool: string, output: string): void {
-    if (tool === cronCreateToolName || tool === loopWakeupToolName) {
+    if (tool === loopWakeupToolName && checkIsLoopStoppedResult(output)) {
+      session.scheduledJobs.delete(loopWakeupJobId);
+    } else if (tool === cronCreateToolName || tool === loopWakeupToolName) {
       const job = tool === cronCreateToolName ? getScheduledJobFromCronCreateResult(output) : getScheduledJobFromLoopWakeupResult(output);
       if (job) session.scheduledJobs.set(job.jobId, job);
     } else if (tool === cronDeleteToolName) {

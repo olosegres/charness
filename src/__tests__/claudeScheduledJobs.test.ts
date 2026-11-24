@@ -8,6 +8,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  checkIsLoopStoppedResult,
   getCancelledJobIdFromCronDeleteResult,
   getScheduledJobFromCronCreateResult,
   getScheduledJobFromLoopWakeupResult,
@@ -32,6 +33,13 @@ describe('claudeScheduledJobs', () => {
   it('reads the ScheduleWakeup (/loop) wakeup from its result, in its one slot; anything else is none', () => {
     assert.deepEqual(getScheduledJobFromLoopWakeupResult('Next wakeup scheduled for 15:05:00 (in 63s). If you owe the user a status update this tick, write it now.'), { jobId: loopWakeupJobId, kind: 'loopWakeup' });
     assert.equal(getScheduledJobFromLoopWakeupResult('Loop stopped.'), null);
+  });
+
+  it('reads a ScheduleWakeup stop from its result (the wording of 2.1.306); a scheduled wakeup or an error is no stop', () => {
+    assert.equal(checkIsLoopStoppedResult('Loop stopped — cancelled 1 pending wakeup(s); no further dynamic-loop wakeups scheduled. If you armed a Monitor for this loop, TaskStop it now.'), true);
+    assert.equal(checkIsLoopStoppedResult('Loop stopped.'), true);
+    assert.equal(checkIsLoopStoppedResult('Next wakeup scheduled for 15:05:00 (in 63s).'), false);
+    assert.equal(checkIsLoopStoppedResult('<tool_use_error>InputValidationError</tool_use_error>'), false);
   });
 
   it('a CronCreate firing takes the oldest one-shot job off when no recurring job could have fired; beside one it takes nothing off; a loop firing takes the wakeup alone', () => {
