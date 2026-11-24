@@ -659,10 +659,10 @@ function mergeMovedBranch(remote: string, branch: string, version: string, conse
  * retried, up to {@link pushAttemptLimit} times. A real merge conflict, or a refusal with nothing to merge (not a
  * race: permissions, protection), fails the run; `consequence` says what that leaves behind.
  */
-function pushReleaseWithMergeRetry(remote: string, branch: string, tag: string, version: string, consequence: string): void {
+function pushReleaseWithMergeRetry(remote: string, branch: string, tag: string, version: string, consequence: string, extraTags: string[] = []): void {
   for (let attempt = 1; ; attempt += 1) {
     try {
-      gitPush('--atomic', remote, `HEAD:refs/heads/${branch}`, `refs/tags/${tag}`);
+      gitPush('--atomic', remote, `HEAD:refs/heads/${branch}`, `refs/tags/${tag}`, ...extraTags.map((extraTag) => `refs/tags/${extraTag}`));
       return;
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
@@ -674,6 +674,68 @@ function pushReleaseWithMergeRetry(remote: string, branch: string, tag: string, 
       }
     }
   }
+}
+
+const licenseFileName = 'LICENSE';
+
+/** What the remote's tag holds: `isOnRemote` false when the remote has no such tag; `licenseText` null also for a tag without a LICENSE. */
+function readRemoteTagLicense(remote: string, tag: string): { isOnRemote: boolean; licenseText: string | null } {
+  if (git('ls-remote', '--tags', remote, `refs/tags/${tag}`).trim() === '') return { isOnRemote: false, licenseText: null };
+  git('fetch', '--quiet', '--no-tags', remote, `+refs/tags/${tag}:refs/tags/${tag}`);
+  return { isOnRemote: true, licenseText: readFileAt(`refs/tags/${tag}`, licenseFileName) ?? '' };
+}
+
+/**
+ * The fixed copy of the licence text (the tag `LICENSE`'s Required Notice names) for the release commit `target`: refuses a notice
+ * that names no fixed tag, or a tag the remote holds with another text; creates the tag on `target` when the remote has none yet and
+ * returns its name, for the release's push. Null when the remote's tag holds this text already, or when `target`'s LICENSE names no
+ * tag at all (a repository without such a notice; `check-license-tag` refuses that before anything is published).
+ */
+function prepareLicenseTag(remote: string, target: string): string | null {
+  const licenseText = readFileAt(target, licenseFileName);
+  if (licenseText === null) return null;
+  const tag = getLicenseTextTag(licenseText);
+  if (tag === null) return null;
+  const remoteTag = readRemoteTagLicense(remote, tag);
+  const problems = getLicenseTagProblems(licenseText, remoteTag.licenseText);
+  if (problems.length > 0) {
+    throw new ReleaseError(`The licence text is not fixed for this release; nothing is pushed:\n${problems.map((line) => `  ${line}`).join('\n')}`);
+  }
+  if (remoteTag.isOnRemote) return null;
+  git(...releaseBotIdentity, 'tag', '-f', '-a', tag, '-m', tag, target);
+  return tag;
+}
+
+/**
+ * Before anything is published: the licence names a fixed tag, and a tag of that name already on `remote` holds this commit's
+ * `LICENSE` byte for byte. A tag the remote does not have yet is no problem: the release creates and pushes it.
+ */
+function runCheckLicenseTag(args: string[]): number {
+  const { values } = parseArgs({ args, options: { remote: { type: 'string' } } });
+  const remote = values.remote ?? defaultRemote;
+  const licenseText = fs.readFileSync(licenseFileName, 'utf8');
+  const tag = getLicenseTextTag(licenseText);
+  const tagLicenseText = tag === null ? null : readRemoteTagLicense(remote, tag).licenseText;
+  const problems = getLicenseTagProblems(licenseText, tagLicenseText);
+  if (problems.length > 0) {
+    throw new ReleaseError(`The licence text is not fixed for this release:\n${problems.map((line) => `  ${line}`).join('\n')}`);
+  }
+  process.stdout.write(tagLicenseText === null
+    ? `${licenseFileName}: ${remote} has no tag ${tag} yet; the release creates it on the release commit and pushes it.\n`
+    : `${licenseFileName}: tag ${tag} on ${remote} holds this very text.\n`);
+  return 0;
+}
+
+/**
+ * The release of a hand-pushed `v*` tag (the workflow's push event, where `commit-release` does not run): creates the licence's tag
+ * on HEAD when the remote has none, and says its name in `$GITHUB_OUTPUT` (`licenseTag`, empty when none is due) for the push step.
+ */
+function runPrepareLicenseTag(args: string[]): number {
+  const { values } = parseArgs({ args, options: { remote: { type: 'string' } } });
+  const licenseTag = prepareLicenseTag(values.remote ?? defaultRemote, 'HEAD');
+  writeGithubOutput('licenseTag', licenseTag ?? '');
+  process.stdout.write(licenseTag === null ? 'No licence tag to push.\n' : `Created ${licenseTag}; push it.\n`);
+  return 0;
 }
 
 /** The files a release commit changes; the shrinkwrap only in a repository that has one. */
@@ -756,40 +818,19 @@ function runCommitRelease(args: string[]): number {
   git('add', ...listReleaseFileNames());
   git(...releaseBotIdentity, 'commit', '--quiet', '-m', `chore(release): ${version}`);
   git(...releaseBotIdentity, 'tag', '-a', tag, '-m', tag);
+  const licenseTag = prepareLicenseTag(remote, 'HEAD');
+  if (values.prepare) writeGithubOutput('licenseTag', licenseTag ?? '');
   if (values.check || values.prepare) {
     const isMerged = mergeMovedBranch(remote, branch, version, values.check ? 'nothing is published or pushed.' : afterPublish);
     if (values.prepare) writeGithubOutput('isPushed', 'false');
-    const nextStep = values.check ? 'Nothing pushed (--check).' : `Nothing pushed yet (--prepare): push HEAD to ${branch} and ${tag}.`;
+    const pushedTags = licenseTag === null ? tag : `${tag} and ${licenseTag}`;
+    const nextStep = values.check ? 'Nothing pushed (--check).' : `Nothing pushed yet (--prepare): push HEAD to ${branch} and ${pushedTags}.`;
     process.stdout.write(isMerged ? `${branch} moved during the run; the release merges into it. ${nextStep}\n` : `${branch} has not moved: the push will be a fast-forward. ${nextStep}\n`);
     return 0;
   }
-  pushReleaseWithMergeRetry(remote, branch, tag, version, afterPublish);
+  pushReleaseWithMergeRetry(remote, branch, tag, version, afterPublish, licenseTag === null ? [] : [licenseTag]);
   writeGithubOutput('tag', tag);
-  process.stdout.write(`Pushed ${tag}.\n`);
-  return 0;
-}
-
-const licenseFileName = 'LICENSE';
-
-/**
- * The fixed copy of the licence text: the tag the Required Notice of `LICENSE` names must be on `remote` and hold this commit's
- * `LICENSE` byte for byte, or every copy the release publishes would name its licence by a dead or wrong link.
- */
-function runCheckLicenseTag(args: string[]): number {
-  const { values } = parseArgs({ args, options: { remote: { type: 'string' } } });
-  const remote = values.remote ?? defaultRemote;
-  const licenseText = fs.readFileSync(licenseFileName, 'utf8');
-  const tag = getLicenseTextTag(licenseText);
-  let tagLicenseText: string | null = null;
-  if (tag !== null && git('ls-remote', '--tags', remote, `refs/tags/${tag}`).trim() !== '') {
-    git('fetch', '--no-tags', remote, `+refs/tags/${tag}:refs/tags/${tag}`);
-    tagLicenseText = readFileAt(`refs/tags/${tag}`, licenseFileName);
-  }
-  const problems = getLicenseTagProblems(licenseText, tagLicenseText);
-  if (problems.length > 0) {
-    throw new ReleaseError(`The licence text is not fixed for this release:\n${problems.map((line) => `  ${line}`).join('\n')}`);
-  }
-  process.stdout.write(`${licenseFileName}: tag ${tag} on ${remote} holds this very text.\n`);
+  process.stdout.write(licenseTag === null ? `Pushed ${tag}.\n` : `Pushed ${tag} and ${licenseTag}.\n`);
   return 0;
 }
 
@@ -812,6 +853,8 @@ async function main(argv: string[]): Promise<number> {
       return runCheckPublish();
     case 'check-license-tag':
       return runCheckLicenseTag(args);
+    case 'prepare-license-tag':
+      return runPrepareLicenseTag(args);
     case 'commit-release':
       return runCommitRelease(args);
     case 'test-gate':
@@ -821,7 +864,7 @@ async function main(argv: string[]): Promise<number> {
     case 'check-registry':
       return runCheckRegistry(args);
     default:
-      throw new ReleaseError(`Unknown subcommand "${subcommand}". Use plan | apply | changelog | notes | check-pack | check-install | check-publish | check-license-tag | test-gate | verify-delta | check-registry | commit-release.`);
+      throw new ReleaseError(`Unknown subcommand "${subcommand}". Use plan | apply | changelog | notes | check-pack | check-install | check-publish | check-license-tag | prepare-license-tag | test-gate | verify-delta | check-registry | commit-release.`);
   }
 }
 

@@ -531,15 +531,15 @@ export function getLicenseTextTag(licenseText: string): string | null {
 }
 
 /**
- * @description Why a release must not ship this `LICENSE`: every copy names its licence by the URL in the Required Notice, so the
- * tag that URL names must be on the remote and hold this very text, or each published copy points at a 404 or at other terms.
- * `tagLicenseText` is the tag's `LICENSE` (null: the tag is not on the remote).
+ * @description Why a release must not ship this `LICENSE`: every copy names its licence by the URL in the Required Notice, so that
+ * URL must name a fixed tag, and a tag of that name already on the remote must hold this very text (a changed licence needs a new
+ * version and a new tag). `tagLicenseText` is the tag's `LICENSE`; null when the remote has no such tag yet, which is no problem:
+ * the release creates and pushes it with the release commit.
  */
 export function getLicenseTagProblems(licenseText: string, tagLicenseText: string | null): string[] {
   const tag = getLicenseTextTag(licenseText);
   if (tag === null) return ['LICENSE has no "Required Notice: Licensed under the … : https://github.com/…/blob/<tag>/LICENSE" line naming a fixed copy of its text'];
   if (movingLicenseRefs.includes(tag)) return [`the Required Notice of LICENSE names "${tag}", a moving ref, not a fixed tag`];
-  if (tagLicenseText === null) return [`tag ${tag}, which the Required Notice of LICENSE names, is not on the remote: create it on a commit with this LICENSE and push it (DEVELOPMENT.md § Releases)`];
-  if (tagLicenseText !== licenseText) return [`tag ${tag} holds another LICENSE text than this commit: a changed licence needs a new version and a new tag`];
+  if (tagLicenseText !== null && tagLicenseText !== licenseText) return [`tag ${tag} holds another LICENSE text than this commit: a changed licence needs a new version and a new tag`];
   return [];
 }

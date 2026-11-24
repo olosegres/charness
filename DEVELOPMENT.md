@@ -346,11 +346,13 @@ publish, no tag, no push, the run is red; the next day's run tries again by itse
   quoting the line, otherwise (`changelogFormat.test.ts` fails first on a commit that breaks it). An empty
   `## Unreleased` is filled with the `feat` / `fix` subjects.
 - **The licence's fixed tag.** `LICENSE`'s second Required Notice line names the fixed copy of its text,
-  `https://github.com/olosegres/charness/blob/license-<version>/LICENSE`, and every copy names its licence by it. When a
-  commit changes the terms, give the licence a new version (title, notice, `licensing.json`), and on the commit pushed as
-  `main` create `git tag license-<version>` and push it with that push to GitHub and to GitLab `origin`. The release
-  refuses to publish (`yarn tsx src/release/cli.ts check-license-tag`) while that tag is missing from GitHub or holds
-  another `LICENSE` text than the release.
+  `https://github.com/olosegres/charness/blob/license-<version>/LICENSE`, and every copy names its licence by it. Nobody
+  tags it by hand: the release creates `license-<version>` on the release commit when GitHub has no such tag yet and
+  pushes it with `main` and the `v*` tag (a hand-pushed `v*` tag's run creates and pushes it too). Before anything is
+  published, `yarn tsx src/release/cli.ts check-license-tag` refuses a notice that names a branch, and a
+  `license-<version>` tag already on GitHub that holds another `LICENSE` text than the release: a commit that changes the
+  terms gives the licence a new version (title, notice, `licensing.json`). Run by hand against another remote with
+  `--remote <name>`.
 - **Package check** before anything is published: the tarball holds `package.json`, `dist/cli.js`, `stt/gigaam_sidecar.py`,
   `runner-scripts/runner-package-lock.json`, `runner-scripts/ensureNode.sh`, `npm-shrinkwrap.json`, the agent plugin's manifest and
   orchestration skill, `CHANGELOG.md`, `README.md`, `LICENSE`, `licensing.json` (`requiredPackFiles`) and no `src/` or tests, and installed the way a user installs it — `npm install -g`

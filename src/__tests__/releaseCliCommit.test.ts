@@ -348,4 +348,67 @@ describe('commit-release', () => {
     assert.equal(result.status, 1);
     assert.match(result.stderr, /Expected a version X\.Y\.Z/);
   });
+
+  describe('the licence\'s fixed-text tag', () => {
+    const licenseTag = 'license-2.0';
+    const licenseText = `Required Notice: Licensed under the Demo License 2.0: https://github.com/example/demo/blob/${licenseTag}/LICENSE\n\n# Demo License 2.0\n`;
+
+    test('a release whose remote has no licence tag creates it on the release commit and pushes it with main and the v tag', () => {
+      commitFile('LICENSE', licenseText, 'docs: the licence');
+      applyRelease('3.3.0');
+      const result = runCli('commit-release', '3.3.0');
+      assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+      assert.match(result.stdout, /Pushed v3\.3\.0 and license-2\.0\./);
+      assert.equal(runGitIn(remoteDir, 'rev-parse', `${licenseTag}^{commit}`), runGitIn(remoteDir, 'rev-parse', 'v3.3.0^{commit}'));
+      assert.equal(runGitIn(remoteDir, 'show', `${licenseTag}:LICENSE`), licenseText.trimEnd());
+    });
+
+    test('--prepare creates the licence tag locally and names it for the push step; a remote tag with this text is left alone', () => {
+      commitFile('LICENSE', licenseText, 'docs: the licence');
+      applyRelease('3.3.0');
+      const prepared = runCli('commit-release', '3.3.0', '--prepare');
+      assert.equal(prepared.status, 0, `${prepared.stdout}\n${prepared.stderr}`);
+      assert.equal(readGithubOutput().licenseTag, licenseTag);
+      assert.match(prepared.stdout, /push HEAD to main and v3\.3\.0 and license-2\.0/);
+      assert.equal(checkHasRemoteTag(licenseTag), false, 'nothing pushed by --prepare');
+      assert.equal(runGit('rev-parse', `${licenseTag}^{commit}`), runGit('rev-parse', 'v3.3.0^{commit}'));
+
+      // A re-run of the release, the licence tag on GitHub already: back to the tested commit, the same release applied again.
+      runGit('push', '-q', 'origin', `refs/tags/${licenseTag}`);
+      runGit('tag', '-d', 'v3.3.0');
+      runGit('reset', '-q', '--hard', 'HEAD~1');
+      assert.equal(runCli('apply', '3.3.0').status, 0);
+      fs.rmSync(githubOutputPath);
+      const again = runCli('commit-release', '3.3.0', '--prepare');
+      assert.equal(again.status, 0, `${again.stdout}\n${again.stderr}`);
+      assert.equal(readGithubOutput().licenseTag, '', 'GitHub has the tag with this very text: nothing to push');
+    });
+
+    test('a licence tag the remote holds with another text refuses the release before anything is pushed', () => {
+      commitFile('LICENSE', `${licenseText}An older clause.\n`, 'docs: the older licence text');
+      runGit('tag', licenseTag);
+      runGit('push', '-q', 'origin', `refs/tags/${licenseTag}`);
+      runGit('tag', '-d', licenseTag);
+      commitFile('LICENSE', licenseText, 'docs: the licence changed without a new version');
+      applyRelease('3.3.0');
+      const result = runCli('commit-release', '3.3.0');
+      assert.equal(result.status, 1);
+      assert.match(result.stderr, /tag license-2\.0 holds another LICENSE text than this commit: a changed licence needs a new version and a new tag/);
+      assert.equal(checkHasRemoteTag('v3.3.0'), false);
+    });
+
+    test('prepare-license-tag (a hand-pushed v tag): creates the tag on HEAD when the remote has none, and names nothing once it is there', () => {
+      commitFile('LICENSE', licenseText, 'docs: the licence');
+      const first = runCli('prepare-license-tag');
+      assert.equal(first.status, 0, `${first.stdout}\n${first.stderr}`);
+      assert.equal(readGithubOutput().licenseTag, licenseTag);
+      assert.equal(runGit('rev-parse', `${licenseTag}^{commit}`), runGit('rev-parse', 'HEAD'));
+
+      runGit('push', '-q', 'origin', `refs/tags/${licenseTag}`);
+      fs.rmSync(githubOutputPath);
+      const second = runCli('prepare-license-tag');
+      assert.equal(second.status, 0, `${second.stdout}\n${second.stderr}`);
+      assert.equal(readGithubOutput().licenseTag, '');
+    });
+  });
 });

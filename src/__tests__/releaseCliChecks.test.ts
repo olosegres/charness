@@ -312,10 +312,17 @@ describe('check-license-tag', () => {
     commitFile('LICENSE', licenseText, 'docs: the licence');
   });
 
-  test('the tag the notice names, missing from the remote, is refused, telling how to fix it', () => {
+  test('a tag the notice names that the remote does not have yet passes: the release creates it', () => {
+    const result = runCli('check-license-tag');
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /origin has no tag license-2\.0 yet; the release creates it on the release commit and pushes it/);
+  });
+
+  test('a notice that names a branch is refused', () => {
+    commitFile('LICENSE', licenseText.replace(`blob/${licenseTag}/`, 'blob/main/'), 'docs: a moving licence link');
     const result = runCli('check-license-tag');
     assert.equal(result.status, 1);
-    assert.match(result.stderr, /tag license-2\.0, which the Required Notice of LICENSE names, is not on the remote: create it/);
+    assert.match(result.stderr, /names "main", a moving ref, not a fixed tag/);
   });
 
   test('the tag on the remote with this LICENSE passes; a LICENSE changed after the tag is refused', () => {

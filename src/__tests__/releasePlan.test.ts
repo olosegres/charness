@@ -610,8 +610,8 @@ describe('getLicenseTextTag and getLicenseTagProblems', () => {
     assert.deepEqual(getLicenseTagProblems(licenseText, licenseText), []);
   });
 
-  test('a tag missing from the remote, or holding another text, is refused', () => {
-    assert.match(getLicenseTagProblems(licenseText, null)[0], /tag license-2\.0, which the Required Notice of LICENSE names, is not on the remote/);
+  test('a tag the remote does not have yet is no problem (the release creates it); a tag holding another text is refused', () => {
+    assert.deepEqual(getLicenseTagProblems(licenseText, null), []);
     assert.match(getLicenseTagProblems(licenseText, `${licenseText}changed\n`)[0], /tag license-2\.0 holds another LICENSE text/);
   });
 
