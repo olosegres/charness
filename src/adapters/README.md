@@ -537,8 +537,11 @@ wait there first (`AgentAdapter.waitForRespawn`). The other way round, no change
 a process being stopped (`isStopping`: an account or effort pick waits for the next
 start, a model pick is refused), nor does a prompt reach it: `checkIsAcceptingInput` reads
 such a process as taking no input while `checkIsActive` still reads it live until its exit,
-so the bot routes the prompt as one that found no live session — it wakes the conversation
-and waits behind the stop in the bot's queue —, and a per-turn instance whose CLI supports the
+so the bot routes the prompt as one that found no live session and plans its ensure on the
+same read: the prompt wakes the conversation and waits behind a stop in the bot's queue, and
+behind the adapter's own suspend after a torn stdin frame its resume joins that stop in flight
+(a person's message that meets a release or a move is not delivered at all: the bot refuses it
+while the command runs, `requests/README.md` § Turn starts), and a per-turn instance whose CLI supports the
 auto-stop releases no deferred switch at a turn end — the bot's per-turn stop of that
 same end ends the process, and the resume after it spawns on the new account; a CLI
 too old for the auto-stop keeps the switch. Every spawn, re-spawn and adopt numbers its
