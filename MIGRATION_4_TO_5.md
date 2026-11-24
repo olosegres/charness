@@ -9,10 +9,10 @@ because this file is new.
 
 Two new obligations (LICENSE sections 2.3 and 3.3):
 
-- **Derived code.** Code written on the basis of Charness code or commits, taking over its approaches and solutions, is
-  under the licence like Charness itself, including such code an AI model wrote with Charness code or commits in its
-  context. The prompts, skills and tool descriptions Charness gives your agents do not make your own project's code
-  derived (section 2.4).
+- **Derived code.** Code, skills or prompts written on the basis of Charness code or commits, taking over its approaches
+  and solutions, are under the licence like Charness itself, including such code an AI model wrote with Charness code or
+  commits in its context. Unless your work takes over those approaches, it is not derived merely because Charness gave
+  your agents its prompts, skills and tool descriptions (sections 2.3–2.4).
 - **AI training.** A group that uses, sells or offers a model trained or fine-tuned on Charness code or commits — by its
   own people, by anyone for it, or by whoever it got the model's weights from — pays its yearly band price for it, on top
   of its licence (section 3.3).

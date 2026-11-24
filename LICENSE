@@ -70,14 +70,14 @@ and must qualify for their own use. You may install or maintain Charness for a c
 licence (section 1.8), and charge for that service, but not for the software. Selling copies, embedding Charness in a
 product, or offering it as a hosted service needs section 3.4 or 3.5, even at no charge.
 
-2.3. **Derived code.** Code written on the basis of Charness code or commits, taking over its approaches and solutions,
-is a work based on Charness and is subject to this licence like Charness itself, whoever or whatever wrote it, including
-such code an AI model wrote with Charness code or commits in its context.
+2.3. **Derived code.** Code, skills or prompts written on the basis of Charness code or commits, taking over its
+approaches and solutions, is a work based on Charness and is subject to this licence like Charness itself, whoever or
+whatever wrote it, including such code an AI model wrote with Charness code or commits in its context.
 
 2.4. **Output.** Work you only produce by running Charness, such as your own code, documents or other deliverables that
 contain no Charness code and are not derived under section 2.3, is yours. The licensor claims no ownership or royalty in
-it. The prompts, skills and tool descriptions Charness gives an agent while it works on your project do not make that
-work derived; section 2.3 covers code that takes over Charness's own approaches and solutions.
+it. Unless the work takes over Charness's own approaches and solutions (section 2.3), it is not derived merely because
+Charness gave your agents its prompts, skills and tool descriptions while they worked on your project.
 
 2.5. **AI training.** Training or fine-tuning a machine-learning model on Charness code or commits is allowed for
 payment under section 3.3. Part 1 does not make free the training of a model that is used, sold or offered under section

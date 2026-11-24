@@ -173,6 +173,6 @@ Charness is **source available** under the [Charness License](LICENSE) — not o
 
 - **Free** for personal use, for small organizations, for education, charities and public bodies' core work, and for an evaluation — [LICENSE](LICENSE), Part 1.
 - **A larger organization pays one yearly licence** for the whole group, by the higher of its revenue band and its people band, with unlimited users, agents and machines — [LICENSE](LICENSE), Part 3, which also covers products that embed Charness, hosting, AI training and discounts.
-- Code derived from Charness code or commits, taking over its approaches and solutions, is under the same licence, including such code an AI model wrote with Charness code in its context ([LICENSE](LICENSE), 2.3). The prompts, skills and tool descriptions Charness gives your agents do not make your own project's code derived (2.4).
+- Code derived from Charness, including code an AI model wrote from it, is under the licence — [LICENSE](LICENSE), 2.3–2.6, which also say what is not derived.
 - Releases published under MIT (everything before 4.0) stay MIT; a copy keeps the licence file it came with. Moving from 3.x: [MIGRATION_3_TO_4.md](MIGRATION_3_TO_4.md); from 4.x: [MIGRATION_4_TO_5.md](MIGRATION_4_TO_5.md).
 - Pull requests are welcome: by opening one you agree to the [Contributor License Agreement](CLA.md) — see [CONTRIBUTING.md](CONTRIBUTING.md).
