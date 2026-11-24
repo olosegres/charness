@@ -30,6 +30,10 @@
       { "name": "Global", "revenuePlusFundingUpToUsd": null, "groupPeopleUpTo": null, "pricePerYearUsd": 60000 }
     ]
   },
+  "derivedCode": {
+    "codeWrittenWithCharnessIsYours": true,
+    "terms": "LICENSE 2.3–2.4"
+  },
   "aiTraining": {
     "allowed": true,
     "fee": "the group's band price (organizationLicence) for every licence year in which it uses, sells or offers a model trained or fine-tuned on Charness code or commits; $0 in the Free band; the exact terms are LICENSE 3.3",
