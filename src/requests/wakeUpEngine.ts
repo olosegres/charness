@@ -132,6 +132,31 @@ interface WatchedAnswerTail {
   tail: AnswerTail;
 }
 
+/**
+ * R21's test: the live process the request prompt was written to has taken it in (a process that replaced it — a re-spawn — lists
+ * nothing unread, and that is not the prompt read; one never written to any process is not taken in).
+ */
+function checkIsPromptConsumedByLiveProcess(turn: WatchedTurn, probe: SessionTurnProbe): boolean {
+  const isAnotherProcess = turn.writtenToProcess !== undefined && probe.processGeneration !== undefined && turn.writtenToProcess !== probe.processGeneration;
+  return turn.isRequestPrompt && probe.isActive && !isAnotherProcess && checkIsTurnInputConsumed(turn, probe);
+}
+
+/**
+ * Whether a request prompt is in the conversation the agent had at this moment — what an ending command reads to tell a person whose
+ * words nobody will read ({@link RequestWakeUpEngine.readPromptsReachedOrHeld}): taken in by the live process it was written to (R21),
+ * or, on a backend that cannot tell unread input (OpenCode, the tmux Claude), written to it — such a backend keeps what was written in
+ * its own conversation, where the move's bridge or a later resume reads it, busy or output seen yet or not.
+ */
+function checkIsPromptTakenInNow(turn: WatchedTurn, probe: SessionTurnProbe): boolean {
+  if (probe.hasUnconsumedInput !== null) return checkIsPromptConsumedByLiveProcess(turn, probe);
+  return turn.isRequestPrompt && probe.isActive && turn.writtenToProcess !== undefined && turn.writtenToProcess === probe.processGeneration;
+}
+
+/** Whether a request prompt waits in a start's or a stop's window (no process named yet): that window's end delivers or drops it. */
+function checkIsPromptWaitingInWindow(turn: WatchedTurn, probe: SessionTurnProbe): boolean {
+  return turn.isRequestPrompt && turn.writtenToProcess === undefined && probe.isWindowOpen === true;
+}
+
 export class RequestWakeUpEngine {
   private readonly deps: RequestWakeUpEngineDeps;
   private readonly now: () => number;
@@ -490,21 +515,39 @@ export class RequestWakeUpEngine {
   }
 
   /**
+   * @description The requests of `key` whose prompt is NOT lost if the conversation ends now, read off its live process at this moment:
+   * a prompt the process took in — R21's own test ({@link checkIsPromptTakenInNow}) on a probe taken now, which the persisted mark lags
+   * behind until a settle or the 10-second poll (review 26 #1) — and a prompt still waiting in a start's or a stop's window, whose window's
+   * drop tells its person. Synchronous: a command reads it BEFORE it stops or replaces the process (the default of
+   * {@link cancelConversation}; the `/resume` pick ahead of its resume).
+   */
+  readPromptsReachedOrHeld(key: SessionKey): ReadonlySet<string> {
+    const probe = this.deps.probeTurn(key);
+    const requestIds = new Set<string>();
+    for (const turn of this.getWatchedTurnsOf(key)) {
+      if (checkIsPromptTakenInNow(turn, probe) || checkIsPromptWaitingInWindow(turn, probe)) requestIds.add(turn.requestId);
+    }
+    return requestIds;
+  }
+
+  /**
    * @description The person took over (interrupted, quit, restarted, switched or
    * resumed the session, left the folder): every open request of the
    * conversation closes and nothing wakes them. Resolves the ids of the requests
    * this call closed that carry a person's words the agent never took in (not the
-   * scheduler's request, whose prompt is no person's): a caller that ends the
-   * conversation for another agent tells those people, since their words are in no
-   * transcript the next agent reads (review 25 #3); every other caller closes silently.
+   * scheduler's request, whose prompt is no person's): a command that ends or replaces the
+   * conversation tells those people, since nobody reads their words (review 25 #3, review 26 #2);
+   * an interrupt closes silently. «Never taken in» reads the persisted mark and `reachedOrHeld`
+   * ({@link readPromptsReachedOrHeld}), read by default when this is called — synchronously, before
+   * the first await, so off the process the command has not stopped yet.
    */
-  async cancelConversation(key: SessionKey): Promise<string[]> {
+  async cancelConversation(key: SessionKey, reachedOrHeld: ReadonlySet<string> = this.readPromptsReachedOrHeld(key)): Promise<string[]> {
     this.unwatchConversation(key);
     // The conversation's writes end with it: its next watch is named from a write of the next conversation (review 23 nit 6).
     this.writtenProcesses.delete(keyToString(key));
     const unreadRequestIds: string[] = [];
     for (const request of this.deps.ledger.listOpenRequestsOf(key)) {
-      const isUnreadPersonWords = request.origin.kind !== 'scheduledRun' && getPromptNotTakenIn(request) !== undefined;
+      const isUnreadPersonWords = request.origin.kind !== 'scheduledRun' && getPromptNotTakenIn(request) !== undefined && !reachedOrHeld.has(request.id);
       // Named only when THIS close closed it: one another path closed meanwhile is that path's to tell.
       const closed = await this.deps.ledger.closeRequest(request.id, 'cancelled');
       if (closed !== null && isUnreadPersonWords) unreadRequestIds.push(request.id);
@@ -742,8 +785,7 @@ export class RequestWakeUpEngine {
    * one is live never reached any (`checkIsTurnInputConsumed`): nothing is marked.
    */
   private async markPromptTakenIn(turn: WatchedRequestTurn, request: OpenRequestState, probe: SessionTurnProbe): Promise<void> {
-    const isAnotherProcess = turn.writtenToProcess !== undefined && probe.processGeneration !== undefined && turn.writtenToProcess !== probe.processGeneration;
-    if (turn.isRequestPrompt && request.isPromptTakenIn !== true && probe.isActive && !isAnotherProcess && checkIsTurnInputConsumed(turn, probe)) {
+    if (request.isPromptTakenIn !== true && checkIsPromptConsumedByLiveProcess(turn, probe)) {
       await this.deps.ledger.updateOpenRequest(request.id, { isPromptTakenIn: true });
     }
   }

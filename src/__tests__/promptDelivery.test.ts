@@ -504,7 +504,7 @@ describe('a startup window\'s prompts on every way out of it (review 19 #1)', ()
     assert.ok(unbind.indexOf('await releaseConversationIds(key);') > unbind.indexOf('await ending.run('));
     assert.match(unbind, /if \(adapter\.stopSessionAndWait\) await adapter\.stopSessionAndWait\(key\);\n\s*else adapter\.stopSession\(key\);/, 'it waits for the exit (review 23 nit 4)');
     const quitAll = getBody("command('quitall'", "command(['quit', 'q']");
-    assert.match(quitAll, /await Promise\.all\(conversations\.map\(async \(\{ key: bKey \}\) => \{\n\s*cancelConversationRequest\(bKey\);\n\s*const result = await conversationEndings\.hold\(bKey\)\.run\(async \(\) => \{/, '/quitall: each topic marked and queued, side by side (review 23 nit 4)');
+    assert.match(quitAll, /await Promise\.all\(conversations\.map\(async \(\{ key: bKey \}\) => \{\n\s*cancelEndingConversationRequests\(bKey\);\n\s*const result = await conversationEndings\.hold\(bKey\)\.run\(async \(\) => \{/, '/quitall: each topic marked and queued, side by side (review 23 nit 4)');
     assert.match(quitAll, /const swept = await stopAndWaitAllAdaptersFor\(bKey\);/, 'each waits for its exits');
     assert.match(getBody('async function moveTopicToOtherBackend(', 'async function resumeTopicOnNewSession('), /await ending\.run\(\(\) => switchThreadAdapter\(/, 'a move across backends, under the hold its caller took ahead of the bridge');
     const start = getBody('async function handleAgentStart(', 'function handleStartCommand(');
@@ -575,8 +575,8 @@ describe('a startup window\'s prompts on every way out of it (review 19 #1)', ()
     const quit = getBody("command(['quit', 'q']", "command('c', async");
     assert.doesNotMatch(quit.slice(0, indexIn(quit, 'await conversationEndings.hold(key).run(')), /await /, '/quit');
     const fresh = getBody("command('new', async", '//  /whoami /version /help /status');
-    assert.doesNotMatch(fresh.slice(indexIn(fresh, 'cancelConversationRequest(key);'), indexIn(fresh, 'const msg = await startFreshSessionForNew(key);')), /await /, '/new');
-    assert.match(getBody("command('quitall'", "command(['quit', 'q']"), /cancelConversationRequest\(bKey\);\n\s*const result = await conversationEndings\.hold\(bKey\)\.run\(/, '/quitall');
+    assert.doesNotMatch(fresh.slice(indexIn(fresh, 'cancelEndingConversationRequests(key);'), indexIn(fresh, 'const msg = await startFreshSessionForNew(key);')), /await /, '/new');
+    assert.match(getBody("command('quitall'", "command(['quit', 'q']"), /cancelEndingConversationRequests\(bKey\);\n\s*const result = await conversationEndings\.hold\(bKey\)\.run\(/, '/quitall');
     assert.doesNotMatch(byIndex.slice(0, indexIn(byIndex, 'if (sessionId === null) {')), /await /, 'the digit pick');
   });
 
@@ -644,12 +644,28 @@ describe('a startup window\'s prompts on every way out of it (review 19 #1)', ()
     assert.doesNotMatch(wake, /ensureAgentSession\(key\)|isResumeOnly/, 'no ensure queued with its decision read before the wait');
   });
 
-  it('a switch to another agent closes the requests and tells a person whose words the agent never read — once, not on top of a drop already being told (review 25 #3)', () => {
+  it('every command that ends or replaces the conversation closes its requests and tells a person whose words the agent never read — read off the live process before the command stops or replaces it; an interrupt closes silently; each person is told once (review 25 #3, review 26 #1, #2)', () => {
     const switchAdapter = getBody('async function switchThreadAdapter(', '/**\n * @description The post-start "ready" notice');
-    assert.match(switchAdapter, /if \(prevName && !checkIsSameConversationSwitch\(prevName, newName\)\) \{\n\s*cancelConversationRequestOnSwitch\(key\);/);
-    const onSwitch = getBody('function cancelConversationRequestOnSwitch(', '/**\n * @name SchedulerWiringDeps');
-    assert.match(onSwitch, /const unreadRequestIds = \(await engine\.cancelConversation\(key\)\)\.filter\(\(requestId\) => !personDropsBeingTold\.has\(requestId\)\);\n(?:\s*\/\/[^\n]*\n)*\s*if \(unreadRequestIds\.length === 0 \|\| !checkIsTelegramKey\(key\)\) return;/, 'the engine names them (`wakeUpEngine.test.ts`)');
-    assert.match(onSwitch, /replyToThread\(key, t\('agent\.queued_prompt_dropped_by_command'\)\)/);
+    assert.match(switchAdapter, /if \(prevName && !checkIsSameConversationSwitch\(prevName, newName\)\) \{\n\s*cancelEndingConversationRequests\(key\);/, 'a switch, ahead of its stop');
+    assert.ok(switchAdapter.indexOf('cancelEndingConversationRequests(key);') < switchAdapter.indexOf('prev.stopSession(key);'));
+    const quit = getBody("command(['quit', 'q']", "command('c', async");
+    assert.ok(quit.indexOf('cancelEndingConversationRequests(key);') >= 0 && quit.indexOf('cancelEndingConversationRequests(key);') < quit.indexOf('conversationEndings.hold(key)'), '/quit, in the handler\'s tick, ahead of its transition');
+    const fresh = getBody("command('new', async", '//  /whoami /version /help /status');
+    assert.ok(fresh.indexOf('cancelEndingConversationRequests(key);') >= 0 && fresh.indexOf('cancelEndingConversationRequests(key);') < fresh.indexOf('startFreshSessionForNew(key)'), '/new');
+    const quitAll = getBody("command('quitall'", "command(['quit', 'q']");
+    assert.match(quitAll, /cancelEndingConversationRequests\(bKey\);\n\s*const result = await conversationEndings\.hold\(bKey\)\.run\(/, 'each /quitall topic');
+    const unbind = getBody('async function unbindThread(', "command('ls', async");
+    assert.ok(unbind.indexOf('cancelEndingConversationRequests(key);') >= 0 && unbind.indexOf('cancelEndingConversationRequests(key);') < unbind.indexOf('await clearPinnedStatus(key);'), 'leaving the folder, at its top');
+    const pick = getBody('async function resumePickedSession(', "command(['sessions', 'resume']");
+    assert.ok(pick.indexOf('const promptsReachedOrHeld = requestWakeUpEngine?.readPromptsReachedOrHeld(key);') < pick.indexOf('await adapter.resumeSession('), 'the /resume pick reads the old process before the resume replaces it');
+    assert.ok(pick.indexOf('cancelEndingConversationRequests(key, promptsReachedOrHeld);') > pick.indexOf('await adapter.resumeSession('), 'and closes the requests only once the pick came up (decision 70)');
+    assert.equal(botSource.match(/cancelEndingConversationRequests\(/g)?.length, 7, 'those six commands, and the definition');
+    // The interrupts keep the silent close: the conversation goes on.
+    assert.equal(botSource.match(/^\s*cancelConversationRequest\(key\);/gm)?.length, 2, '`/c` and `/esc`');
+    const onEnding = getBody('function cancelEndingConversationRequests(', '/**\n * @name SchedulerWiringDeps');
+    assert.match(onEnding, /\): void \{\n\s*const engine = requestWakeUpEngine;\n\s*if \(!engine\) return;\n\s*const promptsReachedOrHeld = reachedOrHeld \?\? engine\.readPromptsReachedOrHeld\(key\);\n\s*void \(async \(\) => \{/, 'the live reading is taken synchronously, at the call');
+    assert.match(onEnding, /const unreadRequestIds = \(await engine\.cancelConversation\(key, promptsReachedOrHeld\)\)\.filter\(\(requestId\) => !personDropsBeingTold\.has\(requestId\)\);\n(?:\s*\/\/[^\n]*\n)*\s*if \(unreadRequestIds\.length === 0 \|\| !checkIsTelegramKey\(key\)\) return;/, 'the engine names them (`wakeUpEngine.test.ts`)');
+    assert.match(onEnding, /replyToThread\(key, t\('agent\.queued_prompt_dropped_by_command'\)\)/);
     const report = getBody('async function reportDroppedPersonPrompt(', '/**\n * @description Deliver a LATE ANSWER');
     assert.match(report, /\): Promise<void> \{\n\s*if \(requestId !== null\) personDropsBeingTold\.add\(requestId\);\n\s*try \{/, 'marked in the drop\'s own tick, before its first await');
     assert.match(report, /\} finally \{\n\s*if \(requestId !== null\) personDropsBeingTold\.delete\(requestId\);\n\s*\}/, 'until the request is closed and the line out');

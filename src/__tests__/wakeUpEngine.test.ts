@@ -13,6 +13,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { StateStore } from '../state';
+import { unnumberedProcessGeneration } from '../types';
 import { keyToString, type SessionKey } from '../sessionKey';
 import { RequestLedger, requestHistoryMaxBytes } from '../requests/requestLedger';
 import { answerRequest } from '../requests/answerRequest';
@@ -186,10 +187,77 @@ describe('two requesters in one conversation', () => {
     await ledger.updateOpenRequest(read.id, { isPromptTakenIn: true });
     const fire = await ledger.createRequest(topicKey, { kind: 'scheduledRun', attributes: { requester: 'scheduler' } }, { createPrompt: () => 'the scheduled run' });
     for (const request of [unread, read, fire]) await engine.trackForwardedTurn(topicKey, request.id, { isRequestPrompt: true });
+    // The live process still lists what was written as unread: the agent has read none of it yet (review 26 #1 reads that too).
+    probe = { ...probe, hasUnconsumedInput: true };
 
     assert.deepEqual(await engine.cancelConversation(topicKey), [unread.id], 'not the one taken in (its words are in the transcript), not the scheduler\'s (no person\'s words)');
     assert.deepEqual(ledger.listOpenRequestsOf(topicKey), [], 'all of them closed');
     assert.deepEqual(await engine.cancelConversation(topicKey), [], 'a second cancel closes nothing, so it names nothing');
+  });
+
+  describe('what the live process says at the command decides «never taken in», not only the mark the poll writes (review 26 #1)', () => {
+    const livePid = 7;
+    /** A person's request whose prompt was written to the live process `livePid`, tracked; its mark not yet written by any poll. */
+    async function trackWrittenRequest(ledger: RequestLedger, engine: RequestWakeUpEngine, origin = operatorOrigin): Promise<string> {
+      const request = await ledger.createRequest(topicKey, origin, { createPrompt: () => 'fix the build' });
+      probe = { isActive: true, isBusy: true, hasUnconsumedInput: true, isTurnEndBlocked: false, processGeneration: livePid };
+      await engine.trackForwardedTurn(topicKey, request.id, { isRequestPrompt: true });
+      assert.equal(ledger.getOpenRequestById(request.id)?.request.isPromptTakenIn, undefined, 'precondition: no poll has marked it');
+      return request.id;
+    }
+
+    it('a prompt the live process has echoed (nothing unread) is taken in: its person is not told, though no poll marked it yet', async () => {
+      const ledger = await createLedger();
+      const engine = createEngine(ledger);
+      await trackWrittenRequest(ledger, engine);
+      probe = { ...probe, hasUnconsumedInput: false };
+      assert.deepEqual(await engine.cancelConversation(topicKey), [], 'the agent read it: its words are in the conversation it had');
+    });
+
+    it('one the live process still lists as unread is named', async () => {
+      const ledger = await createLedger();
+      const engine = createEngine(ledger);
+      const requestId = await trackWrittenRequest(ledger, engine);
+      assert.deepEqual(await engine.cancelConversation(topicKey), [requestId]);
+    });
+
+    it('a backend that cannot tell unread input holds what was written to it in its own conversation: written is taken in', async () => {
+      const ledger = await createLedger();
+      const engine = createEngine(ledger);
+      // OpenCode or the tmux Claude: no unread signal, every live session named `unnumberedProcessGeneration`; no busy or output seen yet.
+      probe = { isActive: true, isBusy: false, hasUnconsumedInput: null, isTurnEndBlocked: false, processGeneration: unnumberedProcessGeneration };
+      const request = await ledger.createRequest(topicKey, operatorOrigin, { createPrompt: () => 'fix the build' });
+      await engine.trackForwardedTurn(topicKey, request.id, { isRequestPrompt: true });
+      assert.deepEqual(await engine.cancelConversation(topicKey), [], 'OpenCode stored it in its session; the bridge reads it from there');
+    });
+
+    it('a prompt written to a process a re-spawn replaced died unread there: named, whatever the new process lists', async () => {
+      const ledger = await createLedger();
+      const engine = createEngine(ledger);
+      const requestId = await trackWrittenRequest(ledger, engine);
+      probe = { isActive: true, isBusy: false, hasUnconsumedInput: false, isTurnEndBlocked: false, processGeneration: livePid + 1 };
+      assert.deepEqual(await engine.cancelConversation(topicKey), [requestId]);
+    });
+
+    it('a prompt still waiting in a start\'s or a stop\'s window is not the cancel\'s to tell: that window drops it and tells its person', async () => {
+      const ledger = await createLedger();
+      const engine = createEngine(ledger);
+      const request = await ledger.createRequest(topicKey, operatorOrigin, { createPrompt: () => 'held by the stop' });
+      probe = { isActive: true, isBusy: false, hasUnconsumedInput: false, isTurnEndBlocked: true, isWindowOpen: true };
+      await engine.trackForwardedTurn(topicKey, request.id, { isRequestPrompt: true });
+      assert.deepEqual(await engine.cancelConversation(topicKey), [], 'told once, by the drop');
+    });
+
+    it('a reading taken before the command replaced the process decides, not the probe of the process that replaced it (the /resume pick)', async () => {
+      const ledger = await createLedger();
+      const engine = createEngine(ledger);
+      await trackWrittenRequest(ledger, engine);
+      probe = { ...probe, hasUnconsumedInput: false };
+      const reading = engine.readPromptsReachedOrHeld(topicKey);
+      // The picked conversation's process replaced the old one: a new number, nothing unread.
+      probe = { isActive: true, isBusy: false, hasUnconsumedInput: false, isTurnEndBlocked: false, processGeneration: livePid + 1 };
+      assert.deepEqual(await engine.cancelConversation(topicKey, reading), [], 'read off the old process while it was live');
+    });
   });
 });
 

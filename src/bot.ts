@@ -5686,7 +5686,7 @@ async function switchThreadAdapter(key: SessionKey, newName: string, options: { 
   // in a terminal, TYPING into) a session that never saw it — and a person whose
   // words the agent never read is told (review 25 #3).
   if (prevName && !checkIsSameConversationSwitch(prevName, newName)) {
-    cancelConversationRequestOnSwitch(key);
+    cancelEndingConversationRequests(key);
     // Nor does the conversation left behind get its re-asked question answered: its buttons would send the label into the new one.
     closeReAskedQuestion(key);
     // The same for the questions it had set aside — unless the bot moved the conversation itself (an automatic usage-limit
@@ -7858,8 +7858,9 @@ async function unbindThread(key: SessionKey, ending: ConversationEnding): Promis
   // the message we're about to delete.
   const kStr = keyToString(key);
   unbindingKeys.add(kStr);
-  // Leaving the folder ends the conversation's work: its open request closes silently.
-  cancelConversationRequest(key);
+  // Leaving the folder ends the conversation's work: its open requests close, a person whose words the agent never read told (review 26
+  // #2) — read now, ahead of the stop.
+  cancelEndingConversationRequests(key);
   try {
     // Order matters: drop the pin FIRST (while binding.pinnedStatusMessageId
     // is still readable), then stop the session, then wipe the binding.
@@ -8033,8 +8034,8 @@ command('new', async (_ctx, key) => {
     await replyToThread(key, t('thread.bind_required'));
     return;
   }
-  // A fresh session does not know the old one's request: it closes silently.
-  cancelConversationRequest(key);
+  // A fresh session does not know the old one's requests: they close, a person whose words the agent never read told (review 26 #2).
+  cancelEndingConversationRequests(key);
   // Release the current session (sweep + clear ids) via `releaseThreadSession`.
   // The fresh start below uses the thread's current adapter, so we keep the
   // adapter selection untouched. Both as the conversation's one transition: an idle stop under way ends first — dropping what it held,
@@ -10681,13 +10682,17 @@ async function resumePickedSession(key: SessionKey, sessionId: string): Promise<
   const workDir = workDirDecision.workDir;
   const adapter = getThreadAdapter(key);
   markNeedsNewMessage(key);
+  // What the conversation being left took in, read off its process before the resume replaces it: the requests close only once the pick
+  // came up (a failed pick keeps the conversation it meant to leave), and by then the probe reads the picked one (review 26 #1).
+  const promptsReachedOrHeld = requestWakeUpEngine?.readPromptsReachedOrHeld(key);
   try {
     // The ONLY resume path that posts the "last N messages" context block —
     // silent re-attach (bot restart) and crash recovery must stay quiet.
     await adapter.resumeSession(key, workDir, sessionId, { isWithRecentContext: true });
-    // Another session took over this topic; it does not know the open request, and the question the idle compaction re-asked
-    // for the conversation it replaces would send its label into the picked one.
-    cancelConversationRequest(key);
+    // Another session took over this topic; it does not know the open requests — a person whose words the agent never read is told
+    // (review 26 #2) —, and the question the idle compaction re-asked for the conversation it replaces would send its label into the
+    // picked one.
+    cancelEndingConversationRequests(key, promptsReachedOrHeld);
     closeReAskedQuestion(key);
     closeSetAsideQuestionsInBackground(key);
     // Persist the PICKED id — without this the next restart re-attaches to
@@ -10739,7 +10744,7 @@ command('quitall', async (_ctx, key) => {
   // Each topic as its one transition, after a re-spawn and marked as ended, as `/quit` (review 22 own pass, review 23 #1); the topics side
   // by side, so one waiting behind a long resume holds no other back, and each waits for its own processes' exits (review 23 nit 4).
   await Promise.all(conversations.map(async ({ key: bKey }) => {
-    cancelConversationRequest(bKey);
+    cancelEndingConversationRequests(bKey);
     const result = await conversationEndings.hold(bKey).run(async () => {
       const swept = await stopAndWaitAllAdaptersFor(bKey);
       // Same release-for-good semantics as `/quit`, per swept thread.
@@ -10789,7 +10794,9 @@ command(['quit', 'q'], async (_ctx, key) => {
   // does NOT go through releaseThreadSession (it stops adapters + clears ids
   // inline), so the cancel is wired here explicitly.
   cancelApiRetry(key);
-  cancelConversationRequest(key); // /quit ends the work → its open request closes silently
+  // /quit ends the work: its open requests close, a person whose words the agent never read told (review 26 #2) — read now, while the
+  // process is still the one that took them in or not.
+  cancelEndingConversationRequests(key);
   cancelClaudeAuthLogin(key); // /quit teardown → kill any in-flight /login pty
   cancelOpenCodeOAuthLogin(key); // /quit teardown → kill any in-flight /connect oauth pty
   clearAuthNotice(key); // /quit teardown → retire any pinned logged-out notice
@@ -16198,10 +16205,10 @@ async function postTodoReminder(key: SessionKey, text: string): Promise<boolean>
 }
 
 /**
- * @description The person took over the conversation (interrupt, quit, restart,
- * switch or resume of the session, a switch to another agent or a shell, leaving
- * the folder): its open request closes silently and nothing wakes it. Safe before
- * the engine exists (early boot).
+ * @description The person interrupted the turn (`/esc` and its aliases, `/c`): the conversation goes on, but its open requests close
+ * silently and nothing wakes them. A command that ends or replaces the conversation closes them through
+ * {@link cancelEndingConversationRequests} instead, which tells a person whose words were never read. Safe before the engine exists
+ * (early boot).
  */
 function cancelConversationRequest(key: SessionKey): void {
   void requestWakeUpEngine?.cancelConversation(key).catch((e) =>
@@ -16210,22 +16217,27 @@ function cancelConversationRequest(key: SessionKey): void {
 }
 
 /**
- * @description Another agent or a shell takes the conversation over (`switchThreadAdapter`: a move across backends, a start onto another
- * agent or a shell): its open requests close as at any takeover, and a person whose words the agent never took in is told — they are in no
- * transcript the next agent reads, the move's bridge included (review 25 #3). A request the agent took in closes in silence: its words
- * ride the bridge's recent turns. A request whose drop is already being told (`personDropsBeingTold`) is not told twice. Fire and forget.
+ * @description A command that ends or replaces the conversation — `/new`, the `/resume` pick, `/quit`, leaving the folder, each `/quitall`
+ * topic, a move across backends, a start onto another agent or a shell (`switchThreadAdapter`) — closes its open requests, and a person
+ * whose words the agent never took in is told: nobody reads them (review 25 #3; one rule for every such command, review 26 #2). A request
+ * the agent took in closes in silence: its words are in the conversation it had. «Taken in» is the persisted mark or what the live process
+ * says NOW (`readPromptsReachedOrHeld`, read synchronously here — call it before the command stops the process — or handed in by a command
+ * that replaces the process before it closes the requests, the `/resume` pick): the mark lags until a settle or the 10-second poll (review
+ * 26 #1). A prompt waiting in a window is told by that window's drop, and a request whose drop is already being told
+ * (`personDropsBeingTold`) is not told twice. Fire and forget. An interrupt keeps {@link cancelConversationRequest}'s silent close.
  */
-function cancelConversationRequestOnSwitch(key: SessionKey): void {
+function cancelEndingConversationRequests(key: SessionKey, reachedOrHeld?: ReadonlySet<string>): void {
   const engine = requestWakeUpEngine;
   if (!engine) return;
+  const promptsReachedOrHeld = reachedOrHeld ?? engine.readPromptsReachedOrHeld(key);
   void (async () => {
-    const unreadRequestIds = (await engine.cancelConversation(key)).filter((requestId) => !personDropsBeingTold.has(requestId));
+    const unreadRequestIds = (await engine.cancelConversation(key, promptsReachedOrHeld)).filter((requestId) => !personDropsBeingTold.has(requestId));
     // A topic line: a tracker conversation never moves to another agent (its fallback stays within Claude).
     if (unreadRequestIds.length === 0 || !checkIsTelegramKey(key)) return;
-    console.warn(`[requests] ${keyToString(key)}: switched to another agent before it read ${unreadRequestIds.join(', ')}; the requests are closed and the topic told`);
+    console.warn(`[requests] ${keyToString(key)}: the conversation ended before its agent read ${unreadRequestIds.join(', ')}; the requests are closed and the topic told`);
     await withThreadLocale(key, () => replyToThread(key, t('agent.queued_prompt_dropped_by_command')));
   })().catch((e) =>
-    console.warn(`[requests] cancelling the requests of ${keyToString(key)} at a switch failed:`, e instanceof Error ? e.message : e),
+    console.warn(`[requests] cancelling the requests of ${keyToString(key)} as its conversation ends failed:`, e instanceof Error ? e.message : e),
   );
 }
 
