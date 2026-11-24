@@ -24,8 +24,8 @@ MIT; a copy keeps the licence file it came with.
 
 ## What you have to do
 
-- **You do not use, sell or offer a model trained on Charness and do not build code on Charness's own code:** nothing
-  new; update when you like.
+- **You owe no training fee under 2.0's section 3.3 and do not build code on Charness's own code:** nothing new; update
+  when you like.
 - **You do either:** read 2.0's sections 2.3–2.6 and 3.3 before you update, and buy the training licence if it applies
   (2.0's section 3.7).
 - **You want to stay on the 1.0.0 terms:** stay on a 4.x release; its own licence files keep applying to it.
