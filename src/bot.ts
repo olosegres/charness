@@ -7870,6 +7870,9 @@ async function unbindThread(key: SessionKey, ending: ConversationEnding): Promis
   // Leaving the folder ends the conversation's work: its open requests close, a person whose words the agent never read told (review 26
   // #2) — read now, ahead of the stop.
   cancelEndingConversationRequests(key);
+  // Refused until the binding is gone, past the hold's transition: a post that waited (`waitForConversationChange`) then meets an unbound
+  // topic and pauses its job, instead of starting a fresh agent in the folder being left (review 27 nit 4).
+  const stopRefusingMessages = conversationEndings.refuseMessages(key);
   try {
     // Order matters: drop the pin FIRST (while binding.pinnedStatusMessageId
     // is still readable), then stop the session, then wipe the binding.
@@ -7921,6 +7924,7 @@ async function unbindThread(key: SessionKey, ending: ConversationEnding): Promis
     clearInMemoryThreadState(key);
     await replyToThread(key, t('thread.unbound'));
   } finally {
+    stopRefusingMessages();
     unbindingKeys.delete(kStr);
   }
 }

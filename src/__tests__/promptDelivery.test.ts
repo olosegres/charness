@@ -710,6 +710,13 @@ describe('a startup window\'s prompts on every way out of it (review 19 #1)', ()
     for (const body of [postDeps, ownRequestRun]) assert.doesNotMatch(body, /deliverPromptOrBuffer\(/, 'no post writes without the last wait');
   });
 
+  it('leaving the folder refuses messages until the binding is gone, so a post that waited meets an unbound topic instead of starting a fresh agent in the folder being left (review 27 nit 4)', () => {
+    const unbind = getBody('async function unbindThread(', "command('ls', async");
+    assert.ok(unbind.indexOf('const stopRefusingMessages = conversationEndings.refuseMessages(key);') >= 0 && unbind.indexOf('const stopRefusingMessages = conversationEndings.refuseMessages(key);') < unbind.indexOf('await clearPinnedStatus(key);'), 'from its top, before its first await');
+    assert.ok(unbind.indexOf('await state.removeBinding(key);') < unbind.indexOf('stopRefusingMessages();'), 'until the binding is gone');
+    assert.match(unbind, /\} finally \{\n\s*stopRefusingMessages\(\);/, 'on every way out');
+  });
+
   it('every routing point reads whether the process takes input, and so does the ensure\'s plan: the adapter\'s own suspend after a torn frame is resumed for the prompt, not read `ready` while the prompt meets a dying process (review 25 nits 4 and 7)', () => {
     assert.match(getBody('async function ensureAgentSessionNow(', 'function getResumableSessionId('), /const plan = getEnsureSessionPlan\(\{\n(?:\s*\/\/[^\n]*\n)*\s*isActive: checkIsAcceptingInput\(key\),/);
     assert.match(getBody('async function forwardPromptToAgent(', 'interface PromptForwardOptions'), /checkIsSessionActive: \(\) => checkIsAcceptingInput\(key\) && !\(isTechnicalPrompt && \(adapter\.checkIsBusy\?\.\(key\) \?\? false\)\),/, 'the adopt-replay re-route, the technical prompt\'s idle test kept');

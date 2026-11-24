@@ -11,6 +11,9 @@ When the bot could not finish writing a message into Claude's process (the defau
 **A scheduled run or a check's wake that comes while a topic switches to the other backend now reaches the new agent after the conversation is handed over.**
 The switch stops the old agent, starts the new one and gives it the conversation's context first. A post that came in those seconds could start the new agent by itself and reach it before that hand-over, so the new agent read it without knowing the conversation. Now it waits for the switch, and goes to the new agent right after the hand-over.
 
+**A scheduled run that comes while you leave a topic's folder no longer starts an agent in the folder you left.**
+A run that came in those seconds could start a fresh agent in the folder after the topic had let it go, and that agent kept running with no topic to report to. Now the run finds the topic unbound, and its job pauses until the next `/bind`, as any job of an unbound topic does.
+
 **`/quit` on a sleeping conversation now says how to start a fresh one.**
 It said that the next message would start a fresh session, but the next message only got the hint to start an agent. Now it says that /claude or /opencode starts a fresh one.
 
