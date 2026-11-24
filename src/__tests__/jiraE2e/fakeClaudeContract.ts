@@ -269,6 +269,14 @@ export const fakeScheduleOnceToken = (seconds: number, label: string): string =>
  * an open one). `ask-again` puts the very same text a second time.
  */
 export const fakeQuestionVariantToken = (variant: number): string => `[fake:question-variant ${variant}]`;
+/**
+ * `[fake:narrate]` in a prompt: before its question, the turn narrates to the user the way Claude Code 2.1.304 streams it under
+ * the `updates` thinking display — an empty reasoning block, then {@link fakeNarrationText} in a THINKING block whose frames
+ * carry `thinking_display: "updates"` — then puts the question.
+ */
+export const fakeNarrateToken = '[fake:narrate]';
+/** The narration a `[fake:narrate]` turn writes before its question: the user must read it above the question. */
+export const fakeNarrationText = 'The issue has no assignee and the comment mentions nobody, so it was never seen. Here is how to fix it:';
 /** The text of the question an `ask` turn put for `variant` (`undefined`: no token, the bare text). */
 export const getFakeAskQuestionText = (variant?: number): string => (variant === undefined ? fakeAskQuestion.question : `${fakeAskQuestion.question} (${variant})`);
 

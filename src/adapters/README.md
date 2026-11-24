@@ -69,7 +69,13 @@ Newline-delimited JSON, one object per line, parsed in
 - `system` — `subtype:"init"` carries `session_id`; `subtype:"api_retry"` for
   retryable provider errors (has an `error` category enum).
 - `stream_event` — `event.type:"content_block_delta"` with
-  `event.delta.type:"text_delta"` = live token deltas.
+  `event.delta.type:"text_delta"` = live token deltas; `"thinking_delta"` =
+  reasoning, EXCEPT on a frame tagged `thinking_display:"updates"` (measured on
+  2.1.304 with Opus 5.5): there the reasoning block streams no text and the only
+  thinking text is the model's narration TO THE USER (the explanation before an
+  `AskUserQuestion`, «checking X» before a command), so the classifier turns it
+  into answer text. Shown as thinking it sat behind the topic's thinking display
+  (a «•••» that is deleted) and never reached the user.
 - `assistant` — the settled text of the turn.
 - `result` — turn end (usage, cost, `session_id`). The adapter logs every
   turn's `usage` as `[ClaudeJson] usage <key>: input=… cacheRead=… cacheWrite=…

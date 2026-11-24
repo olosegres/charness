@@ -77,7 +77,7 @@ export type ClaudeStreamAction =
   | { kind: 'init'; sessionId: string | null; model: string | null; apiKeySource: string | null; claudeCodeVersion: string | null }
   /** A streamed answer-text delta (`content_block_delta` `text_delta`). */
   | { kind: 'textDelta'; text: string; isSubagent: boolean }
-  /** A streamed reasoning delta (`content_block_delta` `thinking_delta`). */
+  /** A streamed reasoning delta (`content_block_delta` `thinking_delta`; a narration one is a `textDelta`). */
   | { kind: 'thinkingDelta'; text: string; isSubagent: boolean }
   /** A settled assistant `tool_use` block → drives the transient tool status. */
   | { kind: 'toolUse'; tool: string; toolUseId: string; isSubagent: boolean }
@@ -313,6 +313,13 @@ function extractToolResultOutput(content: unknown): string {
 }
 
 /**
+ * @description The `thinking_display` a `stream_event` frame carries when the model narrates its work to the user in thinking
+ * blocks (measured on Claude Code 2.1.304, Opus 5.5: the real reasoning block streams no text, the narration block streams the
+ * sentences the user is meant to read — the CLI's own transcript keeps them as `thinking` too).
+ */
+export const claudeNarrationThinkingDisplay = 'updates';
+
+/**
  * @description Map ONE parsed stream-json message to zero or more
  * {@link ClaudeStreamAction}s. Pure: no accumulation, no timers, no IO. An
  * unrecognized / uninteresting message (status, thinking_tokens, message_start,
@@ -407,7 +414,12 @@ export function classifyClaudeStreamMessage(msg: Record<string, unknown>): Claud
       return delta.text ? [{ kind: 'textDelta', text: delta.text, isSubagent }] : [];
     }
     if (delta.type === 'thinking_delta' && typeof delta.thinking === 'string') {
-      return delta.thinking ? [{ kind: 'thinkingDelta', text: delta.thinking, isSubagent }] : [];
+      if (!delta.thinking) return [];
+      // Under the `updates` display the reasoning itself never streams (its block stays empty); the only thinking text that arrives
+      // is the model's narration to the user (what it found, what it does next), written just before a tool call such as a question.
+      // It is answer text: shown as thinking, it would sit behind the thinking display and never reach the user.
+      if (msg.thinking_display === claudeNarrationThinkingDisplay) return [{ kind: 'textDelta', text: delta.thinking, isSubagent }];
+      return [{ kind: 'thinkingDelta', text: delta.thinking, isSubagent }];
     }
     return [];
   }

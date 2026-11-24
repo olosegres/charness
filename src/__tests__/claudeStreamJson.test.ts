@@ -103,6 +103,21 @@ describe('classifyClaudeStreamMessage — real captured events', () => {
     assert.deepEqual(classify(msg), [{ kind: 'thinkingDelta', text: 'The user is asking', isSubagent: false }]);
   });
 
+  it('thinking_delta under the `updates` display is the narration to the user → textDelta, an empty one → nothing', () => {
+    // The frames of a turn that wrote its explanation, then asked a question (Claude Code 2.1.304): the reasoning block streams
+    // nothing, the narration block streams the sentences the user must read before the question.
+    const getFrame = (thinking: string, parentToolUseId: string | null = null) => ({
+      type: 'stream_event',
+      event: { type: 'content_block_delta', index: 1, delta: { type: 'thinking_delta', thinking, estimated_tokens: null } },
+      parent_tool_use_id: parentToolUseId,
+      thinking_display: 'updates',
+      api_message_id: 'msg_1',
+    });
+    assert.deepEqual(classify(getFrame('The task has no assignee, so it is not seen.\n\n')), [{ kind: 'textDelta', text: 'The task has no assignee, so it is not seen.\n\n', isSubagent: false }]);
+    assert.deepEqual(classify(getFrame('')), []);
+    assert.deepEqual(classify(getFrame('child narration', 'toolu_parent')), [{ kind: 'textDelta', text: 'child narration', isSubagent: true }]);
+  });
+
   it('flags sub-agent content via non-null parent_tool_use_id', () => {
     const msg = {
       type: 'stream_event',

@@ -79,6 +79,8 @@ import {
   getBotMcpServer,
   getFakeDigestMessageText,
   getFakeStreamTextEnd,
+  fakeNarrateToken,
+  fakeNarrationText,
   type FakeClaudeMcpServer,
   type FakeStatusWatchTarget,
   type McpServerConfig,
@@ -184,6 +186,8 @@ import { claudeSessionStateEventsVariableName } from '../../utils/jsonStreamHost
  *    ask it again» and puts the SAME question a second time, then goes on once that is answered too (the bot's second verdict
  *    is in `control-responses.jsonl`);
  *    `[fake:question-variant <n>]` in the prompt (`fakeQuestionVariantToken`) makes the question read `<question> (<n>)`;
+ *    `[fake:narrate]` (`fakeNarrateToken`) streams `fakeNarrationText` before the question as a thinking block under the
+ *    `updates` thinking display, the way the real CLI streams the model's narration to the user;
  *  - `ask-two`     — the same, with `fakeAskSecondQuestion` as a second question of the SAME call (the bot shows them one
  *    after the other); the outcome logged is the two answers joined by `fakeAskTwoOutcomeSeparator`;
  *  - `ask-long`    — the same question, each option with a `fakeAskLongDescription`: it fits one Telegram message, but not
@@ -1190,6 +1194,21 @@ async function armScheduledPrompt(argv: readonly string[], content: string, issu
   appendJsonLine(fakeClaudeLogFileNames.toolCalls, { issueKey, tool: 'schedule_create', args, outcome: await callBotTool(server, 'schedule_create', args) });
 }
 
+/**
+ * `[fake:narrate]` (`fakeNarrateToken`): the narration before a question as the real CLI streams it under the `updates` thinking
+ * display — an empty reasoning block, then the narration in a thinking block, every frame tagged `thinking_display: "updates"`.
+ */
+function emitNarrationInThinking(content: string): void {
+  if (!content.includes(fakeNarrateToken)) return;
+  const tagged = { parent_tool_use_id: null, thinking_display: 'updates' };
+  writeStdout({ type: 'stream_event', event: { type: 'content_block_start', index: 0, content_block: { type: 'thinking', thinking: '', signature: '' } }, ...tagged });
+  writeStdout({ type: 'stream_event', event: { type: 'content_block_start', index: 1, content_block: { type: 'thinking', thinking: '', signature: '' } }, ...tagged });
+  const half = Math.floor(fakeNarrationText.length / 2);
+  for (const part of [fakeNarrationText.slice(0, half), fakeNarrationText.slice(half), '\n\n']) {
+    writeStdout({ type: 'stream_event', event: { type: 'content_block_delta', index: 1, delta: { type: 'thinking_delta', thinking: part, estimated_tokens: null } }, ...tagged });
+  }
+}
+
 /** The transcript's records as objects, a line that is no JSON skipped. */
 function readTranscriptRecords(sessionId: string): Array<Record<string, unknown>> {
   const transcriptPath = getTranscriptPath(sessionId);
@@ -1401,6 +1420,7 @@ async function runTurn(argv: readonly string[], sessionId: string, content: stri
     const noRequestAskVariant = noRequestMode === undefined ? undefined : fakeAskVariantByMode[noRequestMode as FakeClaudeMode];
     if (noRequestAskVariant) {
       await armScheduledPrompt(argv, content, noRequestIssueKey);
+      emitNarrationInThinking(content);
       const asked = await askUserQuestion(noRequestAskVariant, { isAskedAgainWhenSetAside: noRequestMode === 'ask-again', questionVariant: getFakeQuestionVariant(content) });
       appendJsonLine(fakeClaudeLogFileNames.toolCalls, { issueKey: noRequestIssueKey, tool: fakeAskToolName, args: { question: fakeAskQuestion.question }, outcome: asked.outcome });
       if (asked.isSetAside) {
@@ -1531,6 +1551,7 @@ async function runTurn(argv: readonly string[], sessionId: string, content: stri
   const askVariant = fakeAskVariantByMode[state.mode];
   if (askVariant) {
     await armScheduledPrompt(argv, content, state.issueKey);
+    emitNarrationInThinking(content);
     const asked = await askUserQuestion(askVariant, { isAskedAgainWhenSetAside: state.mode === 'ask-again', questionVariant: getFakeQuestionVariant(content) });
     logToolCall(fakeAskToolName, { question: fakeAskQuestion.question }, asked.outcome);
     if (asked.isSetAside) {
