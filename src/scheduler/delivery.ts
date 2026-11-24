@@ -393,7 +393,11 @@ function createTopicPost(
   };
   const promptText: SessionPromptText = { fullText: buildText(prompt), buildText: () => buildText(prompt) };
   const heldText = heldPrompt === undefined ? undefined : buildText(heldPrompt);
-  const forwardPrompt = (conversationKey: string): Promise<void> => topicRunForwardQueue.run(conversationKey, () => {
+  const forwardPrompt = (conversationKey: string): Promise<void> => topicRunForwardQueue.run(conversationKey, async () => {
+    // Picked once no command ends or replaces the conversation: a move or a /resume pick that runs while this fire waits its turn in the
+    // queue closes the requests it leaves, and a fire that picked before would ride a closed one, unwatched, under a header the next agent
+    // cannot answer (review 28 nit 3). The write waits once more right before it (`deliverPostPrompt`).
+    await deps.waitForConversationChange?.(conversationKey);
     const text = buildText(prompt);
     const picked: TopicRunTarget | null = target;
     if (picked === null) return deps.forwardPrompt(conversationKey, text);

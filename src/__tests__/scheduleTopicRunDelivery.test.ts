@@ -227,3 +227,24 @@ test('a run held over a usage-limit wait keeps the header of the request it ride
   const held = getCall<{ text: string; heldText: string }>('hold');
   assert.ok(held.heldText.startsWith('[Scheduled run "watch worker" · request req_Operator1 is open]'), held.heldText);
 });
+
+test('a fire picks the request it rides only once no command ends or replaces the conversation: a move that closed the request while the fire waited in its forward queue is not ridden — the fire opens the scheduler\'s request in the conversation that follows (review 28 nit 3)', async () => {
+  const operatorRequest = makeRequest('req_Operator1', operatorOrigin, { progressAnswerCount: 1 });
+  const liveOpenRequests: OpenRequestState[] = [operatorRequest];
+  const { deps, getSteps, getCall } = createHarness({ liveOpenRequests });
+  let waitCount = 0;
+  // `postToSession` waits twice, ahead of its ensures; the third wait is the queued forward's own. A move ran in that last one: it closed
+  // the requests of the conversation it left.
+  const postDeps: ScheduleDeliveryDeps = {
+    ...deps,
+    waitForConversationChange: async () => {
+      waitCount += 1;
+      if (waitCount === 3) liveOpenRequests.length = 0;
+    },
+  };
+  assert.deepEqual(await createScheduleDelivery(postDeps)(makeJob({ requestId: operatorRequest.id }), onTime), { status: 'delivered' });
+  assert.equal(waitCount, 3, 'the forward waits in its queue, after the post\'s two waits');
+  assert.ok(!getSteps().includes('forwardRun'), 'the closed request is not ridden');
+  const { text } = getCall<{ text: string }>('forwardOwnRequestRun');
+  assert.ok(!text.includes('req_Operator1'), 'and no header names it');
+});
