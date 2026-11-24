@@ -93,6 +93,18 @@ import {
 export const unboundDeliveryError = 'thread is unbound';
 
 /**
+ * @description A scheduled run's write waited for a command that ended or replaced the conversation, and the command closed the request
+ * the run was to ride (or the scheduler's request it opened for itself): its header names a request the agent that follows cannot answer,
+ * and its turn would go unwatched. Thrown by the write before it routes; a topic's fire picks again ({@link createTopicPost}).
+ */
+export class ScheduledRunTargetClosedError extends Error {
+  constructor(readonly requestId: string) {
+    super(`the request ${requestId} the scheduled run was to ride closed while its write waited for a command`);
+    this.name = 'ScheduledRunTargetClosedError';
+  }
+}
+
+/**
  * @name ScheduleAnnounceOptions
  * @description How a topic message of the scheduler is sent.
  */
@@ -393,15 +405,25 @@ function createTopicPost(
   };
   const promptText: SessionPromptText = { fullText: buildText(prompt), buildText: () => buildText(prompt) };
   const heldText = heldPrompt === undefined ? undefined : buildText(heldPrompt);
-  const forwardPrompt = (conversationKey: string): Promise<void> => topicRunForwardQueue.run(conversationKey, async () => {
-    // Picked once no command ends or replaces the conversation: a move or a /resume pick that runs while this fire waits its turn in the
-    // queue closes the requests it leaves, and a fire that picked before would ride a closed one, unwatched, under a header the next agent
-    // cannot answer (review 28 nit 3). The write waits once more right before it (`deliverPostPrompt`).
-    await deps.waitForConversationChange?.(conversationKey);
+  const forwardPicked = (conversationKey: string): Promise<void> => {
     const text = buildText(prompt);
     const picked: TopicRunTarget | null = target;
     if (picked === null) return deps.forwardPrompt(conversationKey, text);
     return picked.kind === 'request' ? ports.forwardRun(conversationKey, text, getRiddenRequest(job, picked.request)) : ports.forwardOwnRequestRun(conversationKey, text);
+  };
+  const forwardPrompt = (conversationKey: string): Promise<void> => topicRunForwardQueue.run(conversationKey, async () => {
+    // Picked once no command ends or replaces the conversation: a move or a /resume pick that runs while this fire waits its turn in the
+    // queue closes the requests it leaves, and a fire that picked before would ride a closed one, unwatched, under a header the next agent
+    // cannot answer (review 28 nit 3). The write waits once more before each of its routings (`deliverPostPrompt`).
+    await deps.waitForConversationChange?.(conversationKey);
+    try {
+      await forwardPicked(conversationKey);
+    } catch (error) {
+      // A command began after the pick — during a wake the write made — and closed the request picked: picked again from the conversation
+      // that follows, once; a second such command in the same fire fails the post (mini-review of round 28, #3).
+      if (!(error instanceof ScheduledRunTargetClosedError)) throw error;
+      await forwardPicked(conversationKey);
+    }
   });
   return { postDeps: { ...deps, forwardPrompt }, promptText, heldText };
 }

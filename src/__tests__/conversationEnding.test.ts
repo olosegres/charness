@@ -131,9 +131,17 @@ describe('ConversationEndings: a person\'s message is refused while a command en
 });
 
 describe('ConversationEndings: a bot-made post waits while a command refuses messages, and goes to what follows (review 26 #5)', () => {
-  it('resolves at once when nothing refuses messages', async () => {
+  it('resolves at once when nothing refuses messages, and says it did not wait', async () => {
     const { endings } = createEndings();
-    await endings.waitForMessagesAccepted('chat:1');
+    assert.equal(await endings.waitForMessagesAccepted('chat:1'), false);
+  });
+
+  it('says it waited when a command refused messages at its call: a scheduled run then reads its header\'s request again (mini-review of round 28, #3)', async () => {
+    const { endings } = createEndings();
+    const stopRefusing = endings.refuseMessages('chat:1');
+    const waiting = endings.waitForMessagesAccepted('chat:1');
+    stopRefusing();
+    assert.equal(await waiting, true);
   });
 
   it('waits until every refusal of the conversation has ended — a move\'s own and a hold\'s, whichever ends last — and only for its own conversation', async () => {

@@ -52,19 +52,23 @@ export class ConversationEndings<TKey> {
   }
 
   /**
-   * Resolves once nothing refuses messages to the conversation — at once when nothing does. A bot-made post (a fire, a check's wake, a
-   * tracker post) waits here while a command ends or replaces the conversation, and then goes to what follows: in a move, after the
-   * move's bridge, which the post's own ensure would otherwise overtake (review 26 #5). A refusal taken again before the waiter runs keeps
-   * it waiting.
+   * Resolves once nothing refuses messages to the conversation — at once when nothing does —, `true` when it waited. A bot-made post (a
+   * fire, a check's wake, a tracker post) waits here while a command ends or replaces the conversation, and then goes to what follows: in
+   * a move, after the move's bridge, which the post's own ensure would otherwise overtake (review 26 #5). A refusal taken again before the
+   * waiter runs keeps it waiting. A scheduled run that waited reads again whether the request its header names is still open (mini-review
+   * of round 28, #3).
    */
-  async waitForMessagesAccepted(conversationKey: string): Promise<void> {
+  async waitForMessagesAccepted(conversationKey: string): Promise<boolean> {
+    let hasWaited = false;
     while (this.checkIsRefusingMessages(conversationKey)) {
+      hasWaited = true;
       await new Promise<void>((resolve) => {
         const waiters = this.acceptedWaiters.get(conversationKey) ?? [];
         waiters.push(resolve);
         this.acceptedWaiters.set(conversationKey, waiters);
       });
     }
+    return hasWaited;
   }
 
   /** Hold `key`'s conversation as ending from now on, refusing a person's message until the command's transition settled. */

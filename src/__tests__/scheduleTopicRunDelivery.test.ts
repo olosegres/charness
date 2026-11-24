@@ -10,7 +10,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createScheduleDelivery, type ScheduleDeliveryDeps, type TopicRunPorts } from '../scheduler/delivery';
+import { createScheduleDelivery, ScheduledRunTargetClosedError, type ScheduleDeliveryDeps, type TopicRunPorts } from '../scheduler/delivery';
 import type { CheckRunResult } from '../scheduler/checkRun';
 import type { FireContext, ScheduleRecord } from '../scheduler/types';
 import type { OpenRequestState, RequestOrigin } from '../requests/types';
@@ -58,6 +58,11 @@ interface HarnessOptions {
   liveOpenRequests?: OpenRequestState[];
   /** What the engine's settle of the ended watches does before the pick (`settleEndedTurns`). */
   onSettle?: () => void;
+  /**
+   * What `forwardRun` meets on its way to its write, call by call (the last sticks): `closed` — a command ran while the write waited and
+   * closed the ridden request, so the write refuses it (`ScheduledRunTargetClosedError`); `written` — the prompt is written.
+   */
+  forwardRunOutcomes?: Array<'closed' | 'written'>;
 }
 
 function createHarness(options: HarnessOptions = {}) {
@@ -65,6 +70,7 @@ function createHarness(options: HarnessOptions = {}) {
   const reads = options.openRequestReads ?? [[]];
   let readIndex = 0;
   let busyIndex = 0;
+  let forwardRunIndex = 0;
   const busyValues = options.busyValues ?? [false];
   const topicRun: TopicRunPorts = {
     getRequestView: () => (options.requestView === undefined ? { isPlainTextHidden: false } : options.requestView),
@@ -74,7 +80,17 @@ function createHarness(options: HarnessOptions = {}) {
       readIndex += 1;
       return read;
     },
-    forwardRun: async (threadKey, text, ridden) => { calls.push({ step: 'forwardRun', detail: { threadKey, text, requestId: ridden.requestId, isRequestJob: ridden.isRequestJob } }); },
+    forwardRun: async (threadKey, text, ridden) => {
+      calls.push({ step: 'forwardRun', detail: { threadKey, text, requestId: ridden.requestId, isRequestJob: ridden.isRequestJob } });
+      const outcomes = options.forwardRunOutcomes ?? ['written'];
+      const outcome = outcomes[Math.min(forwardRunIndex, outcomes.length - 1)];
+      forwardRunIndex += 1;
+      if (outcome !== 'closed') return;
+      // The command closed the requests of the conversation it ended while the write waited for it.
+      const closedIndex = options.liveOpenRequests?.findIndex((request) => request.id === ridden.requestId) ?? -1;
+      if (closedIndex >= 0) options.liveOpenRequests?.splice(closedIndex, 1);
+      throw new ScheduledRunTargetClosedError(ridden.requestId);
+    },
     forwardOwnRequestRun: async (threadKey, text) => {
       calls.push({ step: 'forwardOwnRequestRun', detail: { threadKey, text } });
       // The ledger's create is flushed to disk before the forward goes on: the request is open a moment later.
@@ -247,4 +263,23 @@ test('a fire picks the request it rides only once no command ends or replaces th
   assert.ok(!getSteps().includes('forwardRun'), 'the closed request is not ridden');
   const { text } = getCall<{ text: string }>('forwardOwnRequestRun');
   assert.ok(!text.includes('req_Operator1'), 'and no header names it');
+});
+
+test('a fire whose write waited for a command that closed the request it rides picks again, once, in the same queue turn: it opens the scheduler\'s request in the conversation that follows, under no header naming the closed one (mini-review of round 28, #3)', async () => {
+  const operatorRequest = makeRequest('req_Operator1', operatorOrigin, { progressAnswerCount: 1 });
+  const { deps, getSteps, getCall } = createHarness({ liveOpenRequests: [operatorRequest], forwardRunOutcomes: ['closed'] });
+  assert.deepEqual(await createScheduleDelivery(deps)(makeJob({ requestId: operatorRequest.id }), onTime), { status: 'delivered' });
+  assert.equal(getSteps().filter((step) => step === 'forwardRun').length, 1, 'the closed request is tried once, as picked before the command');
+  assert.equal(getSteps().filter((step) => step === 'forwardOwnRequestRun').length, 1, 'then the fire picks again and opens its own');
+  const { text } = getCall<{ text: string }>('forwardOwnRequestRun');
+  assert.ok(!text.includes('req_Operator1'), 'and no header names the closed request');
+});
+
+test('a second closed target in the same fire is not picked around again: the post fails as any write that never reached the agent', async () => {
+  const firstRequest = makeRequest('req_Operator1', operatorOrigin, { progressAnswerCount: 1 });
+  const secondRequest = makeRequest('req_Scheduler2', schedulerOrigin);
+  const { deps, getSteps } = createHarness({ liveOpenRequests: [firstRequest, secondRequest], forwardRunOutcomes: ['closed', 'closed'] });
+  const outcome = await createScheduleDelivery(deps)(makeJob({ requestId: firstRequest.id }), onTime);
+  assert.equal(outcome.status, 'failed');
+  assert.equal(getSteps().filter((step) => step === 'forwardRun').length, 2, 'picked once more, never a third time');
 });

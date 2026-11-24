@@ -403,7 +403,7 @@ import {
   readFileByteRange,
 } from './utils/jsonStreamHost';
 import { RunLedger } from './scheduler/runLedger';
-import { createScheduleDelivery, unboundDeliveryError, type ScheduleDeliveryDeps } from './scheduler/delivery';
+import { createScheduleDelivery, ScheduledRunTargetClosedError, unboundDeliveryError, type ScheduleDeliveryDeps } from './scheduler/delivery';
 import type { RiddenRequest } from './scheduler/scheduledRunTarget';
 import { runCheckCommand } from './scheduler/checkRun';
 import { getChildProcessEnvironment } from './utils/agentEnvironment';
@@ -16378,7 +16378,7 @@ function createSessionPostDeps(): PostToSessionDeps {
     notePostInFlight: (conversationKey) => requestWakeUpEngine?.notePostInFlight(keyFromString(conversationKey)) ?? deliverNoSettledWakes,
     // A command that ends or replaces the conversation runs: the post waits for it to be over, then goes to what follows — in a move,
     // after the bridge its own ensure would otherwise overtake (review 26 #5).
-    waitForConversationChange: (conversationKey) => conversationEndings.waitForMessagesAccepted(conversationKey),
+    waitForConversationChange: async (conversationKey) => { await conversationEndings.waitForMessagesAccepted(conversationKey); },
     now: () => Date.now(),
     sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
   };
@@ -16393,8 +16393,25 @@ function createSessionPostDeps(): PostToSessionDeps {
  * the prompt written into the backend it leaves, past the bridge it already built, and the run lost while recorded as delivered (review 27
  * nit 2, review 28 nit 2).
  */
-function deliverPostPrompt(key: SessionKey, text: string, onBufferedSettled: BufferedPromptSettled, options: PromptDeliveryOptions = {}): Promise<PromptDelivery> {
-  return deliverPromptOrBuffer(key, text, onBufferedSettled, { ...options, waitBeforeRoute: () => conversationEndings.waitForMessagesAccepted(keyToString(key)) });
+function deliverPostPrompt(
+  key: SessionKey,
+  text: string,
+  onBufferedSettled: BufferedPromptSettled,
+  options: PromptDeliveryOptions = {},
+  headerRequestId: string | null = null,
+): Promise<PromptDelivery> {
+  const conversationKey = keyToString(key);
+  return deliverPromptOrBuffer(key, text, onBufferedSettled, {
+    ...options,
+    waitBeforeRoute: async () => {
+      const hasWaited = await conversationEndings.waitForMessagesAccepted(conversationKey);
+      // A command that ran meanwhile closed the request this run's header names: written now, the agent that follows would read a request
+      // it cannot answer, in a turn nothing watches. Refused before it routes; the fire picks again (mini-review of round 28, #3).
+      if (hasWaited && headerRequestId !== null && topicRequestLedger?.getOpenRequestById(headerRequestId) === undefined) {
+        throw new ScheduledRunTargetClosedError(headerRequestId);
+      }
+    },
+  });
 }
 
 /**
@@ -16412,7 +16429,7 @@ async function forwardScheduledRun(conversationKey: string, text: string, ridden
   // A tracker fire whose ridden request owes nothing, or with none open: its header says when to answer, so a lost-work note riding it
   // defers to it and claims no watch (a comment notifies the requester and the issue's watchers). A topic keeps its own resume and wording.
   const lostWorkTelling: LostWorkTelling = !checkIsTelegramKey(key) && ridden?.isAnswerOwed !== true ? 'runHeader' : 'plain';
-  const delivery = await deliverPostPrompt(key, text, buffered.settle, { isAccountsNoteCarrier: true, lostWorkTelling });
+  const delivery = await deliverPostPrompt(key, text, buffered.settle, { isAccountsNoteCarrier: true, lostWorkTelling }, ridden?.requestId ?? null);
   // A prompt that waited for the session's start counts only once it reached it: a replay whose write failed is a failed post.
   if (delivery === 'buffered') await buffered.assertReplayed();
   if (delivery === 'noSession') throw new Error(noSessionForPostError);
@@ -16431,7 +16448,7 @@ async function forwardTopicSchedulerRequestRun(conversationKey: string, text: st
   const key = keyFromString(conversationKey);
   const opening = await openTopicRequest(key, text, { source: 'scheduledRun', requesterId: scheduledRunRequester });
   const buffered = createBufferedOutcome();
-  const delivery = await deliverPostPrompt(key, `${opening.header}${text}`, buffered.settle, { isAccountsNoteCarrier: true });
+  const delivery = await deliverPostPrompt(key, `${opening.header}${text}`, buffered.settle, { isAccountsNoteCarrier: true }, opening.requestId);
   // A prompt that waited for the session's start counts only once it reached it, and only then is its turn watched (a watch made in
   // the window would wait for good if the window dropped it). Dropped, the scheduler's request nobody was told about closes like one
   // that found no session, and the post fails.
