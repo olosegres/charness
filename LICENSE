@@ -15,7 +15,8 @@ definitions.
 
 ## Part 1. When Charness is free
 
-You may use Charness without paying in each of these cases (section 2.1 says what you may do with it).
+You may use Charness without paying in each of these cases (section 2.1 says what you may do with it; training or using
+a model trained on Charness: section 2.5).
 
 1.1. **Personal use.** Hobby projects, study and independent projects that are not a business. Any paid work on your own
 account, including freelancing or a one-person company, is business use and follows section 1.2. Work you do for an
@@ -55,7 +56,10 @@ uses its actual figures since it started). No fees are ever due for use that was
 1.8. **Work for clients.** A provider that runs Charness only on its own systems to produce work for a client uses it
 under its own free use or licence, whatever the client's size. When Charness runs on systems the client owns, rents,
 pays for or controls, or when the client's people administer it or make its agents act, it is the client's use, under
-the client's own free use or licence (which the provider may buy for it).
+the client's own free use or licence (which the provider may buy for it). A client's request to the provider is not
+making its agents act unless the client can cause agent work through Charness without the provider deciding to pass that
+request on; reaching client repositories or systems through separately licensed tools or agents does not itself mean
+that Charness runs there.
 
 ## Part 2. Source available
 
@@ -199,8 +203,9 @@ https://olosegres.github.io/charness/commercial/refunds.html. Paid rights end on
 
 3.9. **Not included.** The fee does not include hosting, model or API costs, installation, consulting, training, support
 or any promise of future releases. Third-party services (Anthropic, OpenAI, Telegram, Jira and others) are under their
-own terms; you supply and pay for your own accounts and follow those terms. Anyone may sell services around Charness
-without a royalty on them.
+own terms; you supply and pay for your own accounts and follow those terms. Individual subscriptions may prohibit
+sharing an account or routing other people's requests through it, and this licence does not authorize bypassing usage
+limits. Anyone may sell services around Charness without a royalty on them.
 
 3.10. **Referrals.** A partner with a separate signed partner agreement earns 20 % of the fees actually collected from a
 new customer it referred, for that customer's first 12 months, excluding taxes, refunds and chargebacks.
@@ -225,7 +230,8 @@ licensor.
 4.3. **Violations.** The first time you are told in writing that you broke these terms, your rights continue if you
 comply, and take practical steps to fix past violations, within 32 days. Otherwise your rights end. A verification
 request is not a violation, and the end of a paid term is not a breach. Payment of overdue fees does not create a
-perpetual licence.
+perpetual licence. Accrued payment and refund obligations and the record and verification duties of section 4.2 survive
+the end of your rights.
 
 4.4. **Patent defense.** If you claim in writing that Charness infringes a patent, your patent licence ends at once. If
 an organization you work for, or any member of its group, makes such a claim, your patent licence ends at once for work
@@ -262,15 +268,15 @@ the licensor invoices it, and changes no other term; anything else needs a docum
 - **Organization group (group):** the organization together with every organization that controls it, is controlled by
   it or is under common control with it, worldwide. **Control** is more than 50 % of the votes or the actual power to
   direct management, held directly, indirectly or by persons acting together. Reorganizations, split invoices and new
-  subsidiaries do not reset the figures, and an acquired business's figures for the measurement period count, combined
-  pro forma. Shared sovereignty alone does not combine a whole country: an independently administered public institution
-  and the entities it controls form their own group.
+  subsidiaries do not reset the figures, and an acquired business's figures for the last 12 completed months count,
+  combined pro forma. Shared sovereignty alone does not combine a whole country: an independently administered public
+  institution and the entities it controls form their own group.
 - **R (revenue plus funding):** the group's consolidated gross revenue over the last 12 completed months, plus the
   investment and commercial-grant funding it received in them: equity, capital contributions, convertible notes, SAFEs,
   and loans from owners or investors that are not on ordinary market terms; a loan later converted into equity or
   forgiven counts when converted or forgiven, if not counted before. Ordinary bank loans do not count. Count revenue by
-  consistent accounting, after sales taxes and refunds, before costs; count each receipt once. Convert other currencies
-  at monthly central-bank average rates.
+  consistent accounting, after sales taxes and refunds, before costs; count each amount received once. Convert other
+  currencies at monthly central-bank average rates.
 - **H (group people):** the group's current employees (full- or part-time, including those on leave), working founders,
   owners and directors, and unpaid people working regularly; plus assigned contractors and agency personnel currently
   engaged who worked for the group on more than 30 days in the last 12 months. Count identifiable assigned workers in

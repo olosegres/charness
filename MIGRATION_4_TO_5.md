@@ -1,9 +1,9 @@
 # Migrating from 4.x to 5.0
 
 Charness 5.0 changes the **licence** from the Charness License 1.0.0 to the **Charness License 2.0**, the one
-[LICENSE](https://github.com/olosegres/charness/blob/license-2.0/LICENSE) file. The commands, the settings and the way you run the bot are the same. An install is never moved to
-5.0 by itself: an npm install offers it in General and waits for your tap, and a checkout install holds the update
-because this file is new.
+[LICENSE](https://github.com/olosegres/charness/blob/license-2.0/LICENSE) file. The commands, the settings and the way
+you run the bot are the same. An install is never moved to 5.0 by itself: an npm install offers it in General and waits
+for your tap, and a checkout install holds the update because this file is new.
 
 ## What changed
 
