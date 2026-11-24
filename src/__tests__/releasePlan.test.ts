@@ -192,6 +192,16 @@ describe('the plan of a run', () => {
     assert.deepEqual(plan([fieldOnly], { netDiff: createNetDiff(['package.json'], true) }), { kind: 'release', version: '3.2.1', bump: 'patch' });
   });
 
+  test('a new licence version shipped as a feature, with no breaking marker, is an automatic minor release', () => {
+    const licenceCommit = createCommit('feat(license): the licence is one file, with rules for derived code and AI training', ['LICENSE', 'licensing.json', 'package.json', 'CHANGELOG.md'], {
+      body: 'Nothing changes for people who use Charness to write their code, so installs may move to it by themselves.',
+      changesShippedManifest: true,
+    });
+    const fixes = [createCommit('fix(license): a clause', ['LICENSE']), createCommit('docs(license): a page', ['docs/commercial/index.html'])];
+    const automatic = plan([licenceCommit, ...fixes], { netDiff: createNetDiff(['LICENSE', 'licensing.json', 'package.json', 'CHANGELOG.md', 'docs/commercial/index.html'], true) });
+    assert.deepEqual(automatic, { kind: 'release', version: '3.3.0', bump: 'minor' });
+  });
+
   test('the license switch itself — a commit with a BREAKING CHANGE footer over the license files — is never an automatic release', () => {
     const switchCommit = createCommit('feat(license)!: free for small organizations', ['LICENSE', 'licensing.json', 'package.json'], {
       body: 'The reason.\n\nBREAKING CHANGE: Charness 4.0 and later are released under the Charness License 1.0.0.',

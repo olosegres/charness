@@ -145,7 +145,6 @@ Think **OpenClaw for vibe coding**, driven entirely from Telegram: no complex se
 - **[MIGRATION_1_TO_2.md](MIGRATION_1_TO_2.md)** — upgrading a 1.x install to 2.0.
 - **[MIGRATION_RENAME_TO_CHARNESS.md](MIGRATION_RENAME_TO_CHARNESS.md)** — upgrading an install that still uses the TelegramCode names.
 - **[MIGRATION_3_TO_4.md](MIGRATION_3_TO_4.md)** — moving from 3.x to 4.0: the license change, who pays, how to stay on 3.x.
-- **[MIGRATION_4_TO_5.md](MIGRATION_4_TO_5.md)** — moving from 4.x to 5.0: the Charness License 2.0 and its two new obligations (derived code, AI training).
 - **[LICENSE](LICENSE)** — the whole licence in one file: when Charness is free, what you may do with the code, the prices and how to buy; [`licensing.json`](licensing.json) holds the same figures for programs and agents.
 
 ## The story behind it
@@ -174,5 +173,5 @@ Charness is **source available** under the [Charness License](LICENSE) — not o
 - **Free** for personal use, for small organizations, for education, charities and public bodies' core work, and for an evaluation — [LICENSE](LICENSE), Part 1.
 - **A larger organization pays one yearly licence** for the whole group, by the higher of its revenue band and its people band, with unlimited users, agents and machines — [LICENSE](LICENSE), Part 3, which also covers products that embed Charness, hosting, AI training and discounts.
 - Code derived from Charness is under the licence — [LICENSE](LICENSE) 2.3–2.6 say what is and is not derived.
-- Releases published under MIT (everything before 4.0) stay MIT; a copy keeps the licence file it came with. Moving from 3.x: [MIGRATION_3_TO_4.md](MIGRATION_3_TO_4.md); from 4.x: [MIGRATION_4_TO_5.md](MIGRATION_4_TO_5.md).
+- Releases published under MIT (everything before 4.0) stay MIT; a copy keeps the licence file it came with. Moving from 3.x: [MIGRATION_3_TO_4.md](MIGRATION_3_TO_4.md).
 - Pull requests are welcome: by opening one you agree to the [Contributor License Agreement](CLA.md) — see [CONTRIBUTING.md](CONTRIBUTING.md).
