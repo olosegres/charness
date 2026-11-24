@@ -33,6 +33,7 @@
   "derivedCode": {
     "codeWrittenWithCharnessIsYours": true,
     "generalModelOutputNotDerived": true,
+    "askingForCharnessApproachIsDerived": true,
     "purposeTrainedModelOutputDerivedOnlyAsAPersonsWouldBe": true,
     "terms": "LICENSE 2.3–2.4"
   },
