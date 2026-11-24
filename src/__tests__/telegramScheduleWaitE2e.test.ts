@@ -75,6 +75,7 @@ import {
   fakeClaudeLaunchRefusalDelayFileName,
   fakeClaudeRefuseLaunchFileName,
   fakeOneShotDelaySeconds,
+  fakeScheduleOnceToken,
   getFakeClaudeUnrestorableConversationFileName,
   getLaunchSessionId,
   fakeOneShotNextWatchIssueKey,
@@ -136,6 +137,10 @@ const perTurnStopHoldMs = 8 * msPerSecond;
 const slowLaunchMs = 8 * msPerSecond;
 /** One send pacer interval and a margin: a line already on its way is in the topic after it. */
 const pacerSettleMs = 5 * msPerSecond;
+/** How long after its arming the run of the leave step comes due: after the tap, while the leave is held. */
+const runInLeaveDelaySeconds = 15;
+/** How long past the run's due time the leave's toast is held: the run fires, and its post waits, inside the leave. */
+const leaveHoldPastFireMs = 4 * msPerSecond;
 /** What a person is told when a command that ends or replaces the conversation dropped their message (not «while it was starting»). */
 const endingCommandDropLine = 'this conversation was ended or switched before the agent read it';
 /** A buffered message's way to its answer: the stop, the resume, the held turn, the stop again, the reminder's resume and turn. */
@@ -1006,5 +1011,52 @@ describe('A request waits for its schedule in a Telegram topic end to end: built
     } finally {
       removeRefusalFiles();
     }
+  });
+
+  it('a scheduled run that comes due while «Leave current dir» runs waits for the leave: no agent starts in the folder being left, and the job pauses until the next bind (review 27 nit 4, review 28 #1)', async () => {
+    const runPromptText = 'XR-48 [fake:answer] scheduled';
+    // The ledger appends a run twice: at the fire, and with `deliveredAt` (and a failure's `error`) once its delivery is over.
+    const readJobRun = (jobId: string): ScheduleRunRecord | undefined =>
+      readJsonLines<ScheduleRunRecord>(path.join(getLayout().dataDir, 'scheduler-runs.jsonl')).filter((run) => run.jobId === jobId).at(-1);
+    // An idle agent whose process stays between turns: the one the leave stops. The switch runs as the conversation's transition, so its
+    // reply comes after a start still under way: the step before may end while a retry of its failed post starts on the CLI it made
+    // refuse, and a message sent into that start would be dropped with it. The arming message then wakes the sleeping conversation.
+    await topic.sendAndAwaitReply('/claude_mode json', '⚡ JSON-stream');
+    const createsBefore = getToolCalls('schedule_create').length;
+    fakeTelegram.pushOperatorMessage(topicThreadId, `XQ-47 [fake:answer] ${fakeScheduleOnceToken(runInLeaveDelaySeconds, 'XR-48')} arm a run`);
+    await getCharness().waitFor('the agent to arm the one-shot', agentTimeoutMs, () => getToolCalls('schedule_create').length === createsBefore + 1);
+    const fireAtMs = Date.parse(String(getToolCalls('schedule_create').at(-1)?.args.onceAt));
+    await getCharness().waitFor('the arming turn\'s answer', agentTimeoutMs, () =>
+      readFakeLog<{ issueKey: string; kind: string }>(fakeClaudeLogFileNames.answers).some((answer) => answer.issueKey === 'XQ-47' && answer.kind === 'final'));
+    const jobId = readPersistedSchedules().find((job) => job.name === 'queued XR-48')?.id ?? '';
+    assert.ok(jobId, 'the one-shot is stored');
+    const picker = await topic.sendAndAwaitReply('/bind', `Currently bound: \`${topicFolder}\``);
+    const launchesBefore = getSessionLaunches(getLayout()).length;
+    const unboundBefore = countTopicMessages('Binding cleared');
+    // The tap marks the conversation; its toast is a Bot API round trip, held here past the run's due time, as a slow network would: the
+    // run fires while the leave runs.
+    let toastReleasedAtMs = 0;
+    const toastReleased = sleep(fireAtMs + leaveHoldPastFireMs - Date.now()).then(() => { toastReleasedAtMs = Date.now(); });
+    fakeTelegram.holdNextResponse('answerCallbackQuery', toastReleased);
+    fakeTelegram.pushCallback(picker.message_id, bindLeaveCurrentCallback);
+    assert.ok(Date.now() < fireAtMs, 'precondition: the run comes due after the tap');
+    await getCharness().waitFor('the topic to be unbound', bufferedFlowTimeoutMs, () => countTopicMessages('Binding cleared') > unboundBefore);
+    await getCharness().waitFor('the run to be over, or an agent to start for it', oneShotFireTimeoutMs, () => {
+      const run = readJobRun(jobId);
+      return getSessionLaunches(getLayout()).length > launchesBefore || run?.deliveredAt !== undefined;
+    });
+    // Load-bearing: before, the run's post went on once the leave's stop was over, found the binding still there while the leave paused
+    // the topic's jobs, and started a fresh agent in the folder being left.
+    assert.deepEqual(getSessionLaunches(getLayout()).slice(launchesBefore), [], 'no agent started in the folder being left');
+    const run = readJobRun(jobId);
+    assert.ok(toastReleasedAtMs > 0 && (run?.firedAt ?? Infinity) < toastReleasedAtMs, 'precondition: the run fired inside the leave');
+    assert.deepEqual(getAgentPromptsWith(runPromptText), [], 'no agent read the run');
+    // It met the topic the leave unbound: it starts nothing there and fails — a start refused for no folder, since the ensure's plan reads
+    // every topic as bound (`getBinding` gives `null`, compared with `undefined`; reported, not changed here). The leave paused the job
+    // already, and the engine keeps a job paused during its delivery paused.
+    assert.ok(run?.error !== undefined && run.deliveredAt !== undefined, 'the run is over and reached no agent');
+    const job = readState().schedules?.[jobId];
+    assert.equal(job?.isPaused, true, 'the job waits for the next bind');
+    assert.equal(job?.pauseReason, 'unbound');
   });
 });
