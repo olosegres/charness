@@ -29,6 +29,9 @@ type AiTraining = {
   whoeverTrainedIt: boolean;
   requestsToAnIndependentServiceExempt: boolean;
   runsFromWhenTheGroupKnows: boolean;
+  trainerWhoKnowinglyIncludedCharnessPays: boolean;
+  usersOfGeneralModelsWhoseDataMerelyIncludesCharnessExempt: boolean;
+  ownAgentSessionsExempt: boolean;
   onTopOfOrganizationLicence: boolean;
   discountsApply: boolean;
   proof: string;
@@ -144,9 +147,13 @@ test('the OEM table of LICENSE 3.4 is the one in licensing.json', () => {
 
 test('the AI training terms of LICENSE 3.3 and 3.6 are the ones in licensing.json', () => {
   const { fee, whoeverTrainedIt, requestsToAnIndependentServiceExempt, runsFromWhenTheGroupKnows, onTopOfOrganizationLicence, discountsApply, proof } = licensingData.aiTraining;
+  const { trainerWhoKnowinglyIncludedCharnessPays, usersOfGeneralModelsWhoseDataMerelyIncludesCharnessExempt, ownAgentSessionsExempt } = licensingData.aiTraining;
   assert.match(fee, /LICENSE 3\.3/, 'the fee text points at the clause it summarises');
   assert.equal(whoeverTrainedIt, flatLicenseText.includes('a model trained or fine-tuned on Charness code or commits, whoever trained it, pays'));
-  assert.equal(requestsToAnIndependentServiceExempt, flatLicenseText.includes('another, independent organization runs as a service, and that was not trained for it, does not pay for that use'));
+  assert.equal(requestsToAnIndependentServiceExempt, flatLicenseText.includes('A group that only sends requests to a model trained on Charness that another, independent organization runs as a service, and that was not trained for it, does not pay for that use'));
+  assert.equal(trainerWhoKnowinglyIncludedCharnessPays, flatLicenseText.includes('a training set built from them or known to include them, or a fine-tune on them; whoever trains such a model pays under this section while it uses, sells or offers it'));
+  assert.equal(usersOfGeneralModelsWhoseDataMerelyIncludesCharnessExempt, flatLicenseText.includes('on a general collection of public code that merely includes Charness owes nothing for that use; this exempts the user, not the organization that trained the model'));
+  assert.equal(ownAgentSessionsExempt, flatLicenseText.includes("A model trained on the group's own code, documents or agent sessions is not trained on Charness code or commits merely because Charness ran those agents"));
   assert.equal(runsFromWhenTheGroupKnows, flatLicenseText.includes('The fee runs from when the group knows, or the licensor tells it in writing'));
   assert.equal(onTopOfOrganizationLicence, flatLicenseText.includes('This fee is on top of the organization licence for using Charness.'));
   assert.equal(discountsApply, !flatLicenseText.includes('never to $0 or to the training fee'));

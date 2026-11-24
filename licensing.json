@@ -40,6 +40,9 @@
     "whoeverTrainedIt": true,
     "requestsToAnIndependentServiceExempt": true,
     "runsFromWhenTheGroupKnows": true,
+    "trainerWhoKnowinglyIncludedCharnessPays": true,
+    "usersOfGeneralModelsWhoseDataMerelyIncludesCharnessExempt": true,
+    "ownAgentSessionsExempt": true,
     "onTopOfOrganizationLicence": true,
     "discountsApply": false,
     "proof": "the receipt or the paid invoice"

@@ -131,16 +131,23 @@ already paid credited. A wrong initial figure is corrected to the price that was
 
 3.3. **AI training licence.** An organization group that uses, sells or offers to others a model trained or fine-tuned
 on Charness code or commits, whoever trained it, pays the price of its group's band in section 3.1 for every licence
-year in which it does so, whatever Part 1 would otherwise allow. A group that only sends requests to such a model that
-another, independent organization runs as a service, and that was not trained for it, does not pay for that use. The fee
-runs from when the group knows, or the licensor tells it in writing, that the model was trained on Charness. The first
-licence year begins on the later of that day and the day the model is first used, sold or offered, and the invoice or
-receipt states that date; each next year begins on its anniversary, and each year's band follows the latest month-end
-figures before that year starts. A group in the Free band pays $0 by that table and sends no order. Training done by a
-group's people, its contractors or anyone it engages for it is that group's training. An individual who trains such a
-model on their own account, not for an employer or client, counts, for this section, as an organization group of its
-own, with its own R and H. This fee is on top of the organization licence for using Charness. The receipt (or the paid
-invoice) is the training licence; keep it as proof.
+year in which it does so, whatever Part 1 would otherwise allow. A model is trained on Charness code or commits where
+they were chosen for or knowingly included in its training: a training set built from them or known to include them, or
+a fine-tune on them; whoever trains such a model pays under this section while it uses, sells or offers it. A group that
+only uses — sends requests to, or runs the weights of — a general model that an independent organization trained, not
+for the group, on a general collection of public code that merely includes Charness owes nothing for that use; this
+exempts the user, not the organization that trained the model. A model trained on the group's own code, documents or
+agent sessions is not trained on Charness code or commits merely because Charness ran those agents and the prompts,
+skills and tool descriptions it gave them appear in that data. A group that only sends requests to a model trained on
+Charness that another, independent organization runs as a service, and that was not trained for it, does not pay for
+that use. The fee runs from when the group knows, or the licensor tells it in writing, that the model was trained on
+Charness. The first licence year begins on the later of that day and the day the model is first used, sold or offered,
+and the invoice or receipt states that date; each next year begins on its anniversary, and each year's band follows the
+latest month-end figures before that year starts. A group in the Free band pays $0 by that table and sends no order.
+Training done by a group's people, its contractors or anyone it engages for it is that group's training. An individual
+who trains such a model on their own account, not for an employer or client, counts, for this section, as an
+organization group of its own, with its own R and H. This fee is on top of the organization licence for using Charness.
+The receipt (or the paid invoice) is the training licence; keep it as proof.
 
 3.4. **Embedded products (OEM).** A product that includes or runs Charness, or supplies its agent orchestration as a
 feature, on premises or hosted, needs a signed OEM addendum before it ships, even at $0. An independently written
