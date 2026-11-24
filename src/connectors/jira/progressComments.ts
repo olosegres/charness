@@ -11,11 +11,18 @@ import { RotatingJsonlFile } from '../../utils/rotatingJsonlFile';
  * it is, no more edits), so a restart — a hot reload among them — between two
  * progress answers keeps editing the SAME comment. An entry older than {@link jiraProgressCommentMaxAgeMs} is forgotten: a request
  * quiet for that long gets a new comment.
+ *
+ * A request's progress comment that is let go before its answer (an issue update, a note that is a comment of its own, the
+ * alert) is not edited any more, but it is still KEPT as released (slot `released:<comment id>`): the request's `final` or
+ * `question` answer closes every comment {@link JiraProgressComments.listToClose} names — the progress comment and the released
+ * ones — and then {@link JiraProgressComments.settle}s the request, so none of its notes still reads as work under way.
  */
 
 export const jiraProgressCommentsFileName = 'jira-progress-comments.jsonl';
 /** The slot of a request's own progress note. */
 export const jiraProgressSlot = 'progress';
+/** The slots of a request's progress comments that were let go before its answer (`released:<comment id>`). */
+const releasedSlotPrefix = 'released:';
 /** The slot of a bot notice that repeats for a request (`RequestAnswerDelivery.repeatKey`). */
 export function getJiraNoticeSlot(repeatKey: string): string {
   return `notice:${repeatKey}`;
@@ -89,20 +96,42 @@ export class JiraProgressComments {
     this.write({ requestId, slot, commentId, threadRootId, at: this.now() });
   }
 
-  /** @description Edit no more: the comment stays as it is, the next answer under `slot` posts a new one. */
+  /**
+   * @description Edit no more: the comment stays as it is, the next answer under `slot` posts a new one. A progress comment is kept
+   * as released, for the request's answer to close.
+   */
   forget(requestId: string, slot: string): void {
-    if (!this.entries.has(getIdentity(requestId, slot))) return;
+    const entry = this.entries.get(getIdentity(requestId, slot));
+    if (!entry) return;
+    if (slot === jiraProgressSlot) {
+      this.write({ requestId, slot: `${releasedSlotPrefix}${entry.commentId}`, commentId: entry.commentId, threadRootId: entry.threadRootId, at: this.now() });
+    }
     this.write({ requestId, slot, commentId: null, threadRootId: null, at: this.now() });
   }
 
-  /** @description Let go of every comment request `requestId` keeps up to date, except the ones under `keepSlots`. */
+  /** @description Let go of every comment request `requestId` keeps up to date, except the ones under `keepSlots` (released ones stay). */
   forgetAll(requestId: string, keepSlots: readonly string[] = []): void {
-    const prefix = getIdentity(requestId, '');
-    for (const identity of [...this.entries.keys()]) {
-      if (!identity.startsWith(prefix)) continue;
-      const slot = identity.slice(prefix.length);
-      if (!keepSlots.includes(slot)) this.forget(requestId, slot);
+    for (const slot of this.listSlotsOf(requestId)) {
+      if (!slot.startsWith(releasedSlotPrefix) && !keepSlots.includes(slot)) this.forget(requestId, slot);
     }
+  }
+
+  /** @description The progress comments request `requestId`'s answer closes: the one it keeps up to date, then the released ones. */
+  listToClose(requestId: string): string[] {
+    const commentIds = this.listSlotsOf(requestId)
+      .filter((slot) => slot === jiraProgressSlot || slot.startsWith(releasedSlotPrefix))
+      .flatMap((slot) => this.get(requestId, slot)?.commentId ?? []);
+    return [...new Set(commentIds)];
+  }
+
+  /** @description The request has its answer: drop everything it keeps, the released comments included. */
+  settle(requestId: string): void {
+    for (const slot of this.listSlotsOf(requestId)) this.write({ requestId, slot, commentId: null, threadRootId: null, at: this.now() });
+  }
+
+  private listSlotsOf(requestId: string): string[] {
+    const prefix = getIdentity(requestId, '');
+    return [...this.entries.keys()].filter((identity) => identity.startsWith(prefix)).map((identity) => identity.slice(prefix.length));
   }
 
   private write(line: ProgressCommentLine): void {

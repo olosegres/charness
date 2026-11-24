@@ -194,6 +194,19 @@ describe('answerRequest close rules', () => {
     const lookup = ledger.getRequest(superseded.id);
     assert.equal(lookup?.isOpen === false ? lookup.request.closeReason : null, 'superseded');
   });
+
+  it('the answer to the request that replaced others names them to the sink, so it settles what they keep (a progress comment); a request that replaced none names nothing', async () => {
+    await ledger.load();
+    const first = await ledger.createRequest(topicKey, origin);
+    const replacing = await ledger.createRequest(topicKey, origin);
+    assert.deepEqual(replacing.supersededRequestIds, [first.id], 'the fixture: the newer request replaced the first');
+
+    await answerRequest({ ledger, answerSinks: sinks }, createArgs(replacing.id));
+    await answerRequest({ ledger, answerSinks: sinks }, createArgs(first.id));
+
+    assert.deepEqual(sink.deliveries[0]?.delivery.supersededRequestIds, [first.id]);
+    assert.equal(sink.deliveries[1]?.delivery.supersededRequestIds, undefined, 'the first replaced nothing');
+  });
 });
 
 describe('answerRequest refusals', () => {

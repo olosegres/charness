@@ -15,7 +15,7 @@
  *   → the edit is refused (the comment is gone): the next note is a NEW comment with the newest text, and the one after edits THAT one;
  *     the final answer closes that one, the old one is left as it was
  *   → a person comments between two notes (an issue update reaches the request): the next note is a NEW comment below theirs, never a
- *     silent edit above it, and the note after it edits that one
+ *     silent edit above it, and the note after it edits that one; the final answer closes BOTH progress comments
  *   → charness restarted between two notes: the next note edits the SAME comment
  *   → no Telegram path was reached
  *
@@ -180,7 +180,7 @@ describe('Jira connector end to end — one progress comment per request, edited
     assert.equal(getTurns(issueKey).length, 1);
   });
 
-  it('a person comments between two progress notes: the next note is a NEW comment below theirs — never a silent edit above it — and the note after it edits that one', async () => {
+  it('a person comments between two progress notes: the next note is a NEW comment below theirs — never a silent edit above it — and the note after it edits that one; the final answer closes both', async () => {
     const issueKey = 'PROJ-53';
     createIssue(issueKey, 'progress-after-update');
     handIssueToAi(issueKey, requester);
@@ -203,12 +203,15 @@ describe('Jira connector end to end — one progress comment per request, edited
     // Four comments in the order of the issue: note 1, the person's, the notes after it as ONE comment, the final answer.
     const texts = getCommentTexts(issue);
     assert.equal(issue.comments.length, 4, texts.join(' | '));
-    assert.equal(texts[0], fakeProgressEditsBody(issueKey, 1), 'note 1 was never edited');
-    assert.equal(issue.comments[0].updated, undefined);
+    // Note 1 was never edited while the request ran (no note was written above the person's comment); the final answer closed it.
+    assert.match(texts[0], closedLinePrefix, 'note 1, let go by the person\'s comment, is closed by the final answer too');
+    assert.equal(texts[0].replace(closedLinePrefix, ''), fakeProgressEditsBody(issueKey, 1), 'its note as it was, nothing else');
     assert.equal(texts[1], personsText);
     assertClosedProgressComment(texts[2], fakeProgressEditsBody(issueKey, 3));
     assert.equal(texts[3], `Fake final answer for ${issueKey} (progress-after-update, turn 2).`);
-    assert.deepEqual(fakeJira.editRequests.filter((edit) => edit.issueKey === issueKey).map((edit) => edit.commentId), [issue.comments[2].id, issue.comments[2].id], 'note 3 and the closing line: of the new comment, never of note 1');
+    const editedIds = fakeJira.editRequests.filter((edit) => edit.issueKey === issueKey).map((edit) => edit.commentId);
+    assert.equal(editedIds[0], issue.comments[2].id, 'while the request ran, note 3 edited the new comment, never note 1');
+    assert.deepEqual(editedIds.slice(1).sort(), [issue.comments[0].id, issue.comments[2].id].sort(), 'then the final answer closed both');
     assert.equal(countRequests('POST', issueKey), 3, 'note 1, note 2, the final answer');
     assert.equal(countAssigneeChanges(issueKey), 1);
   });

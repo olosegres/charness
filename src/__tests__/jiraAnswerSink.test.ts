@@ -800,8 +800,8 @@ describe('comment threads: an answer goes where it was asked, or into the thread
     assert.deepEqual(await deliverInThread('final', 'Done.'), { ok: true });
     assert.deepEqual(jira.postedParentIds, ['10200', '10200']);
     assert.deepEqual(jira.calls, [
-      'comment PROJ-12 in thread 10200', 'comment PROJ-12 in thread 10200', 'getComment PROJ-12 c1', 'assignee? PROJ-12', 'assign PROJ-12 requester-account',
-    ], 'the final answer reads the progress comment to close it (gone here: left as it is)');
+      'comment PROJ-12 in thread 10200', 'comment PROJ-12 in thread 10200', 'assignee? PROJ-12', 'assign PROJ-12 requester-account', 'getComment PROJ-12 c1',
+    ], 'after the hand-back the final answer reads the progress comment to close it (gone here: left as it is)');
   });
 
   it('a request opened top-level (a hand-over, a top-level comment) answers top-level; an origin thread that is no comment id is ignored', async () => {
@@ -1097,9 +1097,9 @@ describe('one progress comment per request: the first progress answer posts it, 
     holdEditedBody('c1');
     assert.deepEqual(await deliver('final', 'Done: pipeline 42 is green.'), { ok: true });
     assert.deepEqual(jira.calls, [
-      'comment PROJ-12', 'edit PROJ-12 c1', 'edit PROJ-12 c1', 'comment PROJ-12', 'getComment PROJ-12 c1', 'edit PROJ-12 c1',
-      'assignee? PROJ-12', 'assign PROJ-12 requester-account',
-    ]);
+      'comment PROJ-12', 'edit PROJ-12 c1', 'edit PROJ-12 c1', 'comment PROJ-12', 'assignee? PROJ-12', 'assign PROJ-12 requester-account',
+      'getComment PROJ-12 c1', 'edit PROJ-12 c1',
+    ], 'the closing line comes after the hand-back: it is cosmetic, the hand-back notifies');
     assert.deepEqual(jira.postedTexts, ['Reading the code.', 'Done: pipeline 42 is green.'], 'two comments: the progress one without a line, the final');
     assert.deepEqual(jira.edits.map((edit) => edit.text), [
       `Halfway: tests written.\n${updatedLine}`,
@@ -1137,6 +1137,29 @@ describe('one progress comment per request: the first progress answer posts it, 
     await deliverFor('req_mention', 'progress', 'A late note.');
     assert.deepEqual(jira.postedTexts.at(-1), 'A late note.');
     assert.equal(jira.edits.length, 2);
+  });
+
+  it('a progress comment let go before the answer — a person\'s comment, a note with files, the alert — is closed by the answer too, after a restart as well', async () => {
+    const hold = (commentId: string, text: string): void => {
+      jira.commentsById.set(commentId, { id: commentId, author: { accountId: aiAccountId }, created: '2026-10-03T11:00:00.000+0000', body: getCommentBody(text) });
+    };
+    await deliver('progress', 'Pipeline 42 is running now.');
+    hold('c1', 'Pipeline 42 is running now.');
+    sink().noteIssueUpdate('req_1', null);
+    await deliver('progress', 'About your comment: still running.');
+    hold('c2', 'About your comment: still running.');
+    await sink().deliverAlert(key, { requestId: 'req_1', reason: 'silentTurns', origin });
+    await deliver('progress', 'Back: pipeline 42 is green, merging.');
+    hold('c4', 'Back: pipeline 42 is green, merging.');
+    progressComments = await loadProgressComments();
+    jira.assignee = aiAccountId;
+    assert.deepEqual(await deliver('final', 'Merged.'), { ok: true });
+    assert.deepEqual(jira.edits.map((edit) => edit.commentId).sort(), ['c1', 'c2', 'c4'], 'every interim note of the request, never the alert (c3)');
+    assert.ok(jira.edits.every((edit) => edit.text.startsWith(`${doneLine}\n`)));
+    await deliver('progress', 'A late note.');
+    hold('c6', 'A late note.');
+    await deliver('final', 'Again.');
+    assert.equal(jira.edits.length, 4, 'settled: only the late note is closed by the next answer');
   });
 
   it('closing is cosmetic: a progress comment that cannot be read or edited stays as it is, the answer is delivered; one already closed is not closed twice', async () => {

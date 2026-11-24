@@ -53,7 +53,7 @@ describe('the comments the answer sink edits', () => {
     const restarted = await openStore();
     assert.deepEqual(restarted.get('req_1', 'progress'), { commentId: '10600', threadRootId: '10200' });
     assert.equal(restarted.get('req_3', 'progress'), null);
-    assert.equal(readFileSync(filePath(), 'utf8').trim().split('\n').length, 4, 'one line per change');
+    assert.equal(readFileSync(filePath(), 'utf8').trim().split('\n').length, 5, 'one line per change; letting a progress comment go also keeps it as released');
   });
 
   it('a request\'s slots are apart: its progress note and its repeating notice are two comments; letting one go leaves the other', async () => {
@@ -84,6 +84,24 @@ describe('the comments the answer sink edits', () => {
     restarted.remember('req_4', 'notice:b', '10602', null);
     restarted.forgetAll('req_4', ['progress', 'notice:b']);
     assert.deepEqual(['progress', 'notice:a', 'notice:b'].map((slot) => restarted.get('req_4', slot)?.commentId ?? null), ['10600', null, '10602']);
+  });
+
+  it('a progress comment let go before the answer is kept as released: the answer closes it with the one kept now, then settles the request', async () => {
+    const store = await openStore();
+    store.remember('req_1', 'progress', '10500', null);
+    store.remember('req_1', 'notice:usageLimitWait', '10501', null);
+    store.forgetAll('req_1');
+    assert.equal(store.get('req_1', 'progress'), null, 'let go: the next note is a new comment');
+    store.remember('req_1', 'progress', '10600', '10200');
+    store.forgetAll('req_1', ['progress']);
+    const restarted = await openStore();
+    assert.deepEqual(restarted.listToClose('req_1').sort(), ['10500', '10600'], 'the released one survives a restart; a notice is never closed');
+    restarted.forgetAll('req_1');
+    assert.deepEqual(restarted.listToClose('req_1').sort(), ['10500', '10600'], 'forgetAll keeps what is released');
+    assert.deepEqual(restarted.listToClose('req_2'), []);
+    restarted.settle('req_1');
+    assert.deepEqual(restarted.listToClose('req_1'), []);
+    assert.deepEqual((await openStore()).listToClose('req_1'), [], 'settled for good');
   });
 
   it('letting go what is not remembered writes nothing', async () => {

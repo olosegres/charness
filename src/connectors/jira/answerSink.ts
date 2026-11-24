@@ -55,9 +55,10 @@ import { getJiraNoticeSlot, jiraProgressSlot, type JiraProgressComments } from '
  * One progress comment per request (`progressComments.ts`): the first `progress` answer of a request posts a comment and the sink
  * remembers it (on disk); each next one EDITS it to the newest text, with a line saying when it was last updated, in the thread
  * the first stood in — an edit moves nothing and notifies nobody. A `question` or `final` answer is a new comment as ever, and it
- * closes the progress comment it ends — its request's and those of the requests it replaced: a line on top says the notes were
- * interim and the answer (or the question) is in a newer comment, so no note still reads as work under way ("pipeline 42 is running
- * now, I'll report when it finishes") once the answer stands below it. An edit Jira refuses (the comment is gone, 400, 403), or
+ * closes the progress comments it ends — its request's and those of the requests it replaced, the ones let go earlier (an issue
+ * update, a note that was a comment of its own, the alert) included: a line on top says the notes were interim and the answer (or
+ * the question) is in a newer comment, so no note still reads as work under way ("pipeline 42 is running now, I'll report when it
+ * finishes") once the answer stands below it. The closing comes after the hand-back: it is cosmetic, the hand-back notifies. An edit Jira refuses (the comment is gone, 400, 403), or
  * one of unknown outcome whose read-back shows the old text and whose one repeat does not land, posts the text as a new comment
  * instead (with R18's read-back) and that one is remembered — the text is never lost. An edit of unknown outcome whose comment cannot be read is an error that tells the agent
  * to send it again: nothing is posted, and the resend edits the same comment (a new comment would show the text twice). A progress answer is kept as that one comment only when it is a plain note: it carries no
@@ -211,7 +212,7 @@ export interface JiraAnswerSinkDeps {
   /** The thread an issue update put a request's next answer in; consumed by the answer delivered. */
   answerThreads: Pick<JiraAnswerThreads, 'get' | 'note' | 'consume'>;
   /** The comments kept up to date instead of posting another: a request's progress note, a repeating bot notice. */
-  progressComments: Pick<JiraProgressComments, 'get' | 'remember' | 'forgetAll'>;
+  progressComments: Pick<JiraProgressComments, 'get' | 'remember' | 'forgetAll' | 'listToClose' | 'settle'>;
   /**
    * Attach files of the issue's project folder to the issue and say how a comment shows them (`outgoingFiles.ts`);
    * absent where files cannot be sent — an answer that carries some is then refused, nothing posted.
@@ -674,12 +675,10 @@ export function createJiraAnswerSink(deps: JiraAnswerSinkDeps): JiraAnswerSink {
         console.warn(`[jira] ${issueKey}: comment ${kept.commentId} could not be edited (${edited.detail}); posting the progress as a new comment`);
         threadRootId = kept.threadRootId;
       }
-      // The progress comments this answer ends, read before they are let go: its request's, and those of the requests it replaced.
+      // The progress comments this answer ends: its request's and those of the requests it replaced, kept or released.
       const isEndingAnswer = !delivery.isBotNotice && (delivery.kind === 'final' || delivery.kind === 'question');
-      const endedProgressCommentIds = isEndingAnswer
-        ? [...new Set([delivery.requestId, ...(delivery.supersededRequestIds ?? [])]
-          .flatMap((requestId) => deps.progressComments.get(requestId, jiraProgressSlot)?.commentId ?? []))]
-        : [];
+      const endedRequestIds = isEndingAnswer ? [delivery.requestId, ...(delivery.supersededRequestIds ?? [])] : [];
+      const endedProgressCommentIds = [...new Set(endedRequestIds.flatMap((requestId) => deps.progressComments.listToClose(requestId)))];
       const posted = await postComments(issueKey, bodies, delivery.requestId, threadRootId);
       if (posted.postedCount === 0 && posted.failure) return { ok: false, error: getNothingPostedError(posted.failure) };
       // The agent's answer is there: the thread an update put it in is used up, the next answer goes where they go by default.
@@ -692,10 +691,7 @@ export function createJiraAnswerSink(deps: JiraAnswerSinkDeps): JiraAnswerSink {
       // final answer or a note that is a comment of its own ends its progress comment too); a bot comment that stands on its own
       // (an account moved, no account usable) ends the notices and leaves the agent's note, which it has nothing to do with.
       deps.progressComments.forgetAll(delivery.requestId, [...(slot === null ? [] : [slot]), ...(delivery.isBotNotice ? [jiraProgressSlot] : [])]);
-      if (isEndingAnswer) {
-        for (const requestId of delivery.supersededRequestIds ?? []) deps.progressComments.forgetAll(requestId);
-        await closeProgressComments(issueKey, endedProgressCommentIds.filter((commentId) => !posted.commentIds.includes(commentId)), delivery.kind === 'final' ? 'final' : 'question');
-      }
+      for (const requestId of endedRequestIds) deps.progressComments.settle(requestId);
       const warnings: string[] = [...(files?.notes ?? [])];
       if (leftOutCommentIds.length > 0) warnings.push(buildJiraReplyLeftOutWarning(leftOutCommentIds));
       if (replies.threadRootId !== null && replies.otherThreadCommentIds.length > 0) {
@@ -708,6 +704,10 @@ export function createJiraAnswerSink(deps: JiraAnswerSinkDeps): JiraAnswerSink {
       if (isHandOver && delivery.isRequestOpen && (delivery.kind === 'question' || delivery.kind === 'final')) {
         const handBackWarning = await handBack(issueKey, getRequestRequester(delivery.origin));
         if (handBackWarning) warnings.push(handBackWarning);
+      }
+      // Cosmetic, so after what notifies the requester: a slow Jira delays the closing lines, never the hand-back.
+      if (isEndingAnswer) {
+        await closeProgressComments(issueKey, endedProgressCommentIds.filter((commentId) => !posted.commentIds.includes(commentId)), delivery.kind === 'final' ? 'final' : 'question');
       }
       return warnings.length > 0 ? { ok: true, warning: warnings.join('; ') } : { ok: true };
     },

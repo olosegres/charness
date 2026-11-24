@@ -484,9 +484,11 @@ another platform's state.
     edited once more with a line on top (`buildJiraProgressClosedText`: «✅ Done <time> UTC: these were interim notes, the answer
     is in a newer comment», «⏸ Paused … for a question …»), so a note such as «the pipeline is running now, I'll report when it
     finishes» never stands as the issue's latest word on the work. The same answer closes the progress comments of the requests
-    it superseded (`RequestAnswerDelivery.supersededRequestIds`: a mention the hand-over replaced). Cosmetic: a read or edit
-    that fails is a warning, the answer stands; a comment already carrying the line is left alone. So does any ISSUE UPDATE the request receives
-    (below). A later REQUEST has its own — requests never edit each other's. The give-up alert lets it go too (a later note
+    it superseded (`RequestAnswerDelivery.supersededRequestIds`: a mention the hand-over replaced), and every progress comment
+    of theirs let go before it (an issue update, a note that was a comment of its own, the alert): the store keeps those as
+    `released:<id>` (`listToClose`) until the answer `settle`s the request. Cosmetic, so it runs AFTER the hand-back: a read or
+    edit that fails is a warning, the answer stands; a comment already carrying the line is left alone. Any ISSUE UPDATE the request receives lets the
+    progress comment go too (below; kept as released, closed by the answer). A later REQUEST has its own — requests never edit each other's. The give-up alert lets it go too (a later note
     starts below it).
   - **What is a comment of its own, never an edit.** Only a plain note is kept as the one comment: a progress answer with
     `files` (attached and shown in a NEW comment — an edit would wipe them at the next note —, the progress comment let go so the
