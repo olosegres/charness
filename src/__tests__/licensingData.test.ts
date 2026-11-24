@@ -131,7 +131,10 @@ test('the AI training terms of LICENSE 3.3 and 3.6 are the ones in licensing.jso
   const { onTopOfOrganizationLicence, discountsApply, proof } = licensingData.aiTraining;
   assert.equal(onTopOfOrganizationLicence, flatLicenseText.includes('This fee is on top of the organization licence for using Charness.'));
   assert.equal(discountsApply, !flatLicenseText.includes('never to $0 or to the training fee'));
-  assert.ok(flatLicenseText.toLowerCase().includes(`${proof} are the training licence`), 'LICENSE 3.3 names another proof');
+  const trainingProof = flatLicenseText.match(/The (receipt) \(or the (paid invoice)\) is the training licence/);
+  assert.ok(trainingProof, 'LICENSE 3.3 lost its proof sentence');
+  assert.equal(proof, `the ${trainingProof[1]} or the ${trainingProof[2]}`);
+  assert.ok(flatLicenseText.includes('Keep the paid invoice or its receipt: either is your licence'), 'LICENSE 3.7 asks for more than one proof');
 });
 
 test('the discounts of LICENSE 3.6 are the ones in licensing.json, and every example price follows from them', () => {

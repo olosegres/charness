@@ -13,8 +13,9 @@ Two new obligations (LICENSE sections 2.3 and 3.3):
   under the licence like Charness itself, including such code an AI model wrote with Charness code or commits in its
   context. The prompts, skills and tool descriptions Charness gives your agents do not make your own project's code
   derived (section 2.4).
-- **AI training.** Training or fine-tuning a model on Charness code or commits costs the group's yearly band price, on top
-  of its licence, for every year the model is used, sold or offered.
+- **AI training.** A group that uses, sells or offers a model trained or fine-tuned on Charness code or commits — by its
+  own people, by anyone for it, or by whoever it got the model's weights from — pays its yearly band price for it, on top
+  of its licence (section 3.3).
 
 Everything else keeps its substance: the free tier, the band prices, the OEM table, the discounts and the refund. The
 paid terms that lived in `LICENSE-COMMERCIAL.md` are now Part 3 of `LICENSE`. Code and commits published under MIT stay
