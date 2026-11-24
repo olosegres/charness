@@ -143,9 +143,10 @@ function checkIsPromptConsumedByLiveProcess(turn: WatchedTurn, probe: SessionTur
 
 /**
  * Whether a request prompt is in the conversation the agent had at this moment — what an ending command reads to tell a person whose
- * words nobody will read ({@link RequestWakeUpEngine.readPromptsReachedOrHeld}): taken in by the live process it was written to (R21),
- * or, on a backend that cannot tell unread input (OpenCode, the tmux Claude), written to it — such a backend keeps what was written in
- * its own conversation, where the move's bridge or a later resume reads it, busy or output seen yet or not.
+ * words nobody will read ({@link RequestWakeUpEngine.readPromptsReachedOrHeld}): taken in by the live process it was written to (R21, on
+ * the backend's own unread signal — the json-stream Claude's echo, OpenCode's count of the prompts not yet seen as a user message), or,
+ * on the one backend with no such signal (the tmux Claude), written to it — it keeps what was typed in its own conversation, where a
+ * move's bridge or a later resume reads it, busy or output seen yet or not (review 27 nit 3).
  */
 function checkIsPromptTakenInNow(turn: WatchedTurn, probe: SessionTurnProbe): boolean {
   if (probe.hasUnconsumedInput !== null) return checkIsPromptConsumedByLiveProcess(turn, probe);

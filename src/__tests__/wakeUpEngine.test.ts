@@ -221,10 +221,11 @@ describe('two requesters in one conversation', () => {
       assert.deepEqual(await engine.cancelConversation(topicKey), [requestId]);
     });
 
-    it('a backend that cannot tell unread input holds what was written to it in its own conversation: written is taken in', async () => {
+    it('a backend with no unread signal (the tmux Claude; OpenCode has its own count) holds what was written to it in its own conversation: written is taken in', async () => {
       const ledger = await createLedger();
       const engine = createEngine(ledger);
-      // OpenCode or the tmux Claude: no unread signal, every live session named `unnumberedProcessGeneration`; no busy or output seen yet.
+      // The tmux Claude: no unread signal (`hasUnconsumedInput` null), its live session named `unnumberedProcessGeneration`; no busy or output
+      // seen yet. OpenCode reads its own unread count, as the json-stream Claude reads its echo: the tests above.
       probe = { isActive: true, isBusy: false, hasUnconsumedInput: null, isTurnEndBlocked: false, processGeneration: unnumberedProcessGeneration };
       const request = await ledger.createRequest(topicKey, operatorOrigin, { createPrompt: () => 'fix the build' });
       await engine.trackForwardedTurn(topicKey, request.id, { isRequestPrompt: true });

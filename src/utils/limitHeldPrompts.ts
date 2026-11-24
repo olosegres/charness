@@ -4,8 +4,11 @@
  * delivered once nothing holds them any more. They are never dropped: they ride
  * the first prompt forwarded after the wait — its resume, the operator's next
  * message, a later post — or, when a new session starts with nothing to
- * forward, go to it on their own. The scheduler's fire and a tracker's request
- * share the hold through `postToSession`.
+ * forward, go to it on their own; except a start made while a command ends or
+ * replaces the conversation (`/new`, a move, a start onto another agent or a
+ * shell): they wait for the first prompt that command hands over, or the next
+ * one (`requests/README.md` § Turn starts, review 26 #5). The scheduler's fire
+ * and a tracker's request share the hold through `postToSession`.
  */
 
 import type { PromptsNotTakenIn } from '../requests/requestHeader';
