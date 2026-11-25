@@ -219,6 +219,14 @@ export function getCommentTexts(issue: FakeJiraIssue): string[] {
   return issue.comments.map((comment) => getAdfText(comment.body));
 }
 
+/** The line a progress comment gets on top once its request's final answer stands below it. */
+export const closedProgressLinePrefix = /^✅ Done \d{4}-\d{2}-\d{2} \d{2}:\d{2} UTC: these were interim notes, the answer is in a newer comment\.\n/;
+
+/** A comment's text without the closing line a final answer puts on top of a progress comment. */
+export function getTextWithoutClosedLine(text: string): string {
+  return text.replace(closedProgressLinePrefix, '');
+}
+
 export function readClosedRequests(): ClosedRequestRecord[] {
   return readClosedRequestsOf(getLayout());
 }

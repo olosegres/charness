@@ -33,6 +33,7 @@ import { getPolledDecisions, getPolledRequestIssueKeys } from './jiraE2e/charnes
 import { fakeProgressEditsBody } from './jiraE2e/fakeClaudeContract';
 import { jiraProgressCommentsFileName } from '../connectors/jira/progressComments';
 import {
+  closedProgressLinePrefix,
   aiAccount,
   answerTimeoutMs,
   bootJiraOnly,
@@ -61,13 +62,11 @@ import {
 } from './jiraE2e/jiraFlowKit';
 
 const updatedLineSuffix = /\nLast updated \d{4}-\d{2}-\d{2} \d{2}:\d{2} UTC$/;
-/** The line a progress comment gets on top once its request's final answer stands below it. */
-const closedLinePrefix = /^✅ Done \d{4}-\d{2}-\d{2} \d{2}:\d{2} UTC: these were interim notes, the answer is in a newer comment\.\n/;
 
 /** A progress comment closed by the final answer: the closing line on top, then the newest note as it was. */
 function assertClosedProgressComment(text: string, newestNote: string): void {
-  assert.match(text, closedLinePrefix, 'the closing line on top: the notes were interim, the answer is newer');
-  assert.ok(text.replace(closedLinePrefix, '').startsWith(newestNote), text);
+  assert.match(text, closedProgressLinePrefix, 'the closing line on top: the notes were interim, the answer is newer');
+  assert.ok(text.replace(closedProgressLinePrefix, '').startsWith(newestNote), text);
   assert.match(text, updatedLineSuffix, 'the line saying when the notes were last updated stays');
 }
 
@@ -204,8 +203,8 @@ describe('Jira connector end to end — one progress comment per request, edited
     const texts = getCommentTexts(issue);
     assert.equal(issue.comments.length, 4, texts.join(' | '));
     // Note 1 was never edited while the request ran (no note was written above the person's comment); the final answer closed it.
-    assert.match(texts[0], closedLinePrefix, 'note 1, let go by the person\'s comment, is closed by the final answer too');
-    assert.equal(texts[0].replace(closedLinePrefix, ''), fakeProgressEditsBody(issueKey, 1), 'its note as it was, nothing else');
+    assert.match(texts[0], closedProgressLinePrefix, 'note 1, let go by the person\'s comment, is closed by the final answer too');
+    assert.equal(texts[0].replace(closedProgressLinePrefix, ''), fakeProgressEditsBody(issueKey, 1), 'its note as it was, nothing else');
     assert.equal(texts[1], personsText);
     assertClosedProgressComment(texts[2], fakeProgressEditsBody(issueKey, 3));
     assert.equal(texts[3], `Fake final answer for ${issueKey} (progress-after-update, turn 2).`);

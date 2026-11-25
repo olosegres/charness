@@ -59,6 +59,7 @@ import {
 } from './jiraE2e/fakeClaudeContract';
 import { requestRequesterAttribute } from '../requests/requestGroup';
 import {
+  closedProgressLinePrefix,
   aiAccount,
   answerTimeoutMs,
   bootJiraOnly,
@@ -95,6 +96,7 @@ import {
   waitFor,
   writeJiraConfig,
   type FakeCompaction,
+  getTextWithoutClosedLine,
 } from './jiraE2e/jiraFlowKit';
 
 describe('Jira connector end to end — requests and the session lifecycle: built charness, fake Jira, fake claude (J7)', () => {
@@ -311,11 +313,13 @@ describe('Jira connector end to end — requests and the session lifecycle: buil
 
     // Two answers, two comments; the first closing answer (the requester's, answered first) took the issue back
     // to its sender, and the colleague's found the issue no longer the AI's and left the assignee alone.
-    assert.deepEqual(getCommentTexts(issue), [
+    // The requester's final answer closed its progress comment: a line on top says the notes were interim.
+    assert.deepEqual(getCommentTexts(issue).map(getTextWithoutClosedLine), [
       'Fake progress answer for PROJ-6 (finish-together, turn 1).',
       'Fake final answer for PROJ-6 (finish-together, turn 1).',
       'Fake final answer for PROJ-6 (finish-together, turn 1).',
     ]);
+    assert.match(getCommentTexts(issue)[0], closedProgressLinePrefix);
     assert.deepEqual(getAnswers('PROJ-6').map((answer) => [answer.requestId, answer.kind]), [
       [requesterTurn.requestId, 'progress'],
       [requesterTurn.requestId, 'final'],
@@ -356,11 +360,13 @@ describe('Jira connector end to end — requests and the session lifecycle: buil
     ]);
     assert.match(answers[1].outcome, new RegExp(`^Delivered\\. Request ${firstTurn.requestId} was already closed \\(superseded by request ${secondTurn.requestId} from the same requester; its prompt follows`));
     assert.match(answers[2].outcome, /^Delivered\. Request req_[A-Za-z0-9_-]+ is now closed \(final\)/);
-    assert.deepEqual(getCommentTexts(issue), [
+    // The first request's final answer closed its progress comment: a line on top says the notes were interim.
+    assert.deepEqual(getCommentTexts(issue).map(getTextWithoutClosedLine), [
       'Fake progress answer for PROJ-7 (answer-after-queued, turn 1).',
       'Fake final answer for PROJ-7 (answer-after-queued, turn 1).',
       `Answered above for PROJ-7 (covers ${firstTurn.requestId}).`,
     ]);
+    assert.match(getCommentTexts(issue)[0], closedProgressLinePrefix);
     // The superseded request's answer hands nothing back; the second request's final answer does, once. The
     // count alone cannot tell which answer did it (a hand-back by the first leaves nothing for the second to
     // change), so the order proves it: the sink comments first, then hands back — the one assignee change
