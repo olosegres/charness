@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+**An agent whose call to the bot's tools was under way when the bot restarted no longer hangs on it: before, the call waited until the agent's tool timeout, and the agent's next answer in that conversation came late.**
+A restart (a hot reload, an update) that cut such a call — for example an answer the bot had already posted and was still pinning — left the agent waiting for a reply that could never come; the next message of that topic was answered only once the call gave up. Now a call cut by a restart fails at once, and the agent goes on with the restarted bot.
+
 **You now choose the model and effort of the workers your agents launch: `/workers` sets them per role — builder, reviewer, planner and more — for the whole bot, Claude or OpenCode.**
 Before, the models were written into the bot's own skills (Opus for every worker) and could not be changed without editing them. Now `/workers` (also a row of `/bot_skills`) lists six roles with their values; a tap picks a Claude model and effort, or an OpenCode provider, model and variant. It is the bot's default: a model you name in the conversation, a plan or your own skills still wins. Agents ask for it before every launch, so a change reaches the next worker; a running one keeps its own. The screen warns when an OpenCode role's provider is not connected. The values are kept in `settings.json` `workerRoles`; `charness claude-profiles --role <role>` prints the same.
 

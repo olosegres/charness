@@ -159,6 +159,10 @@ the scheduler's would owe an answer nobody asked for.
   standalone SSE stream that carried nothing and died with every hot reload, and a client that then spent its
   ~15 s reconnect budget latched the whole server `failed`, stranding the bot's tools in a session built to
   survive the restart.
+- **A call is answered with one JSON body, never an SSE stream** (`enableJsonResponse`). A stream's headers went out a moment
+  after the call arrived; a restart that then cut the connection was reported to the client only as a broken stream, never
+  to the call, which hung until the client's request timeout and held the agent's turn (its next prompt was answered that
+  late). Cut before its JSON body, the call fails at once on the client.
 - **Heals** at boot: OpenCode `reconcileSchedulerMcpForActiveSessions` (re-registers a `charness` that is
   missing or not `connected` — OpenCode does not reconnect a remote MCP dropped in the restart gap); json-stream
   `healSchedulerMcpForActiveSessions` → `healMcpServer` (`mcp_status` / `mcp_reconnect` over the control

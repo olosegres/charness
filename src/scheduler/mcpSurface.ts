@@ -78,6 +78,11 @@ import { todoNoteMaxLength, todoPositions, todoRefMaxLength, todoStatuses, todoT
  * while that key is inactive. An active request always takes precedence so its
  * own legitimate cancellation can abort it even after typed JSON-RPC id reuse.
  *
+ * A call is answered with ONE JSON body sent when its result is ready (`enableJsonResponse`), never an SSE stream: the server sends
+ * no notifications, and a stream's headers go out a moment after the call comes in. A restart that then cuts the connection
+ * (every hot reload) was reported to the client only as a broken stream, never to the call itself, which hung until the client's
+ * request timeout — the agent's turn with it. Cut before its body, a JSON call fails at once on the client.
+ *
  * Auth/scoping: a request carries `Authorization: Bearer <token>`. The token is
  * self-describing — `<scopeB64url>.<hmacHex>` — so the bot need not know every
  * valid scope up front (an OpenCode directory scope is any bound folder). The
@@ -2153,7 +2158,7 @@ export function createSchedulerMcpServer(deps: SchedulerMcpDeps): SchedulerMcpHa
     const registeredRequest = request.success
       ? cancellationLifecycle.registerRequest(clientIdentity, request.data.id)
       : undefined;
-    const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
+    const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
     const server = buildRequestServer(deps, scope, registeredRequest?.controller.signal);
     // Stateless: the transport + server live only for this request; close both
     // when the response finishes so no connection state lingers.

@@ -28,6 +28,7 @@ import { splitMessage } from '../connectors/telegram/messageSplit';
 import { buildWorkerRoleReport } from '../utils/workerRoles';
 import { beforeEach, afterEach, describe, it, mock } from 'node:test';
 import assert from 'node:assert/strict';
+import { setTimeout as delay } from 'node:timers/promises';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
@@ -102,6 +103,10 @@ const threadAKey = keyToString(makeTelegramKey(-1001234567890, 11));
 const threadBKey = keyToString(makeTelegramKey(-1001234567890, 22));
 const nowMs = new Date(2026, 5, 6, 10, 0, 0).getTime();
 const schedulerMcpStopTimeoutMs = 1_000;
+/** How long a call cut by a stop may take to fail on the client: far below the SDK's 60 s request timeout. */
+const inFlightCallFailureTimeoutMs = 5_000;
+/** How long a test waits for a running call's response headers — an SSE response sends them within milliseconds of the call. */
+const callHeadersWaitMs = 500;
 const incompleteRequestBody = '{"jsonrpc":"2.0"';
 const linuxIt = process.platform === 'linux' ? it : it.skip;
 
@@ -1258,6 +1263,46 @@ describe('scheduler MCP server end-to-end (real HTTP)', () => {
       activeRequest.request.destroy();
       await client.close();
       await stopPromise;
+    }
+  });
+
+  it('a tool call still running when the server stops fails at once on the client, instead of waiting out the client\'s request timeout', async () => {
+    // The bot restarts (a hot reload, a deploy) while an agent's call is in flight. Answered as an SSE stream, the response's headers
+    // went out a moment after the call came in, and the cut stream was then only reported to the client's `onerror`, never to the
+    // call: it hung until the SDK's 60 s request timeout (a real CLI waits out its own MCP tool timeout), and the agent's turn with
+    // it — the next prompt of that conversation was answered that late.
+    let markCallStarted: () => void = () => {};
+    const callStarted = new Promise<void>((resolve) => { markCallStarted = resolve; });
+    fixture.messageSendHandler.current = () => {
+      markCallStarted();
+      return new Promise(() => {});
+    };
+    // The headers of the call's response, if the server sends them before its result: the state the cut has to meet.
+    let markCallHeadersReceived: () => void = () => {};
+    const callHeadersReceived = new Promise<void>((resolve) => { markCallHeadersReceived = resolve; });
+    const token = buildSchedulerMcpToken(secret, { kind: 'thread', threadKey: threadAKey });
+    const client = new Client({ name: 'test-agent', version: '1.0.0' });
+    await client.connect(new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${fixture.handle.port}/mcp`), {
+      requestInit: { headers: { Authorization: `Bearer ${token}` } },
+      fetch: async (url, init) => {
+        const response = await fetch(url, init);
+        if (typeof init?.body === 'string' && init.body.includes('"tools/call"')) markCallHeadersReceived();
+        return response;
+      },
+    }));
+    try {
+      const outcome = client.callTool({ name: 'send_messages_to_user', arguments: { messages: ['hello'] } })
+        .then(() => 'answered', () => 'failed');
+      await callStarted;
+      await Promise.race([callHeadersReceived, delay(callHeadersWaitMs)]);
+      await fixture.handle.stop();
+      assert.equal(
+        await Promise.race([outcome, delay(inFlightCallFailureTimeoutMs).then(() => 'still waiting')]),
+        'failed',
+        'the cut call fails at once, so the agent goes on',
+      );
+    } finally {
+      await client.close();
     }
   });
 

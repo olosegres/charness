@@ -251,11 +251,11 @@ describe('/workers end to end: built charness, fake Bot API, fake agent, fake Op
 
   it('the provider disconnects: the overview warns and marks the row, and the agent is told to launch the reviewer on its own model', async () => {
     writeFakeOpenCodeBinary(getLayout().binDir, { version: fakeOpenCodeVersion, models: openCodeModelsWithoutOpenAi });
-    // The adapter keeps the catalog it read for a few minutes: a restart reads the new one. The agent then starts afresh — the first request
-    // of a conversation adopted across a restart is posted again only after the retry delay, which this flow has no reason to wait out.
+    // The adapter keeps the catalog it read for a few minutes: a restart reads the new one. The agent keeps running across it and is
+    // asked in its very next turn. The step before ended as soon as its answer was in the topic, while the bot was still pinning it, so
+    // the restart cuts that `answer_request` call: it must fail at once on the agent's side, or the agent stays in it — and this
+    // turn waits — until its request timeout (60 s for the fake's MCP client).
     charness = await restartCharnessWithState(getLayout(), fakeTelegram, getCharness(), () => {});
-    await topic.sendAndAwaitReply('/quit', 'stopped');
-    await topic.sendAndAwaitReply('/claude', 'ready in');
     const screen = await general.sendAndAwaitReply('/workers', 'Worker models — for the whole bot');
     assert.ok(screen.text.endsWith('\n\n⚠️ Reviewer: OpenCode «openai» is not connected — agents launch it on their own model until it is.'), screen.text);
     assert.equal(general.getKeyboardLabels(screen)[3][0], '⚠️ Reviewer: OpenCode · gpt-6-astra · medium');
