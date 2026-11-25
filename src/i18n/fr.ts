@@ -1246,6 +1246,7 @@ export const frDict: Record<string, string> = {
   'workerRoles.providersTitle': '🛠 {role} · OpenCode\n\nChoisissez le fournisseur :',
   'workerRoles.modelsTitle': '🛠 {role} · {provider}',
   'workerRoles.staleScreen': 'Cet écran est périmé — rouvrez /workers',
+  'workerRoles.noOpenCodeProviders': 'Aucun fournisseur OpenCode n’est connecté — connectez-en un avec /accounts',
   'limits.remindersRowLabel': '🔔 Rappels : {value}',
   'limits.autoswitchTitle': '🔁 Bascule automatique en cas de limite d’usage',
   'accounts.openCodeSection': '🔌 Providers OpenCode (connectés) :\n{list}',

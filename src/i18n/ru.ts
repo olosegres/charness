@@ -1250,6 +1250,7 @@ export const ruDict: Record<string, string> = {
   'workerRoles.providersTitle': '🛠 {role} · OpenCode\n\nВыбери провайдера:',
   'workerRoles.modelsTitle': '🛠 {role} · {provider}',
   'workerRoles.staleScreen': 'Этот экран устарел — открой /workers заново',
+  'workerRoles.noOpenCodeProviders': 'Ни один провайдер OpenCode не подключён — подключи его через /accounts',
   'limits.remindersRowLabel': '🔔 Напоминания: {value}',
   'limits.autoswitchTitle': '🔁 Автоматическое переключение при лимите использования',
   'accounts.openCodeSection': '🔌 Провайдеры OpenCode (подключены):\n{list}',

@@ -1246,6 +1246,7 @@ export const deDict: Record<string, string> = {
   'workerRoles.providersTitle': '🛠 {role} · OpenCode\n\nWähle den Anbieter:',
   'workerRoles.modelsTitle': '🛠 {role} · {provider}',
   'workerRoles.staleScreen': 'Diese Ansicht ist veraltet — öffne /workers erneut',
+  'workerRoles.noOpenCodeProviders': 'Kein OpenCode-Anbieter ist verbunden — verbinde einen über /accounts',
   'limits.remindersRowLabel': '🔔 Erinnerungen: {value}',
   'limits.autoswitchTitle': '🔁 Automatischer Wechsel bei Nutzungslimit',
   'accounts.openCodeSection': '🔌 OpenCode-Provider (verbunden):\n{list}',

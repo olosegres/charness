@@ -1246,6 +1246,7 @@ export const uzDict: Record<string, string> = {
   'workerRoles.providersTitle': '🛠 {role} · OpenCode\n\nProvayderni tanlang:',
   'workerRoles.modelsTitle': '🛠 {role} · {provider}',
   'workerRoles.staleScreen': 'Bu ekran eskirgan — /workers ni qayta oching',
+  'workerRoles.noOpenCodeProviders': 'Hech qaysi OpenCode provayderi ulanmagan — /accounts orqali ulang',
   'limits.remindersRowLabel': '🔔 Eslatmalar: {value}',
   'limits.autoswitchTitle': '🔁 Foydalanish limitida avtomatik almashtirish',
   'accounts.openCodeSection': '🔌 OpenCode provayderlari (ulangan):\n{list}',

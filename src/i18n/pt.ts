@@ -1247,6 +1247,7 @@ export const ptDict: Record<string, string> = {
   'workerRoles.providersTitle': '🛠 {role} · OpenCode\n\nEscolhe o fornecedor:',
   'workerRoles.modelsTitle': '🛠 {role} · {provider}',
   'workerRoles.staleScreen': 'Este ecrã está desatualizado — abre /workers de novo',
+  'workerRoles.noOpenCodeProviders': 'Nenhum fornecedor do OpenCode está ligado — liga um com /accounts',
   'limits.remindersRowLabel': '🔔 Lembretes: {value}',
   'limits.autoswitchTitle': '🔁 Troca automática ao atingir um limite de uso',
   'accounts.openCodeSection': '🔌 Providers OpenCode (ligados):\n{list}',

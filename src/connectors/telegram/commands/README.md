@@ -586,8 +586,9 @@ Nothing is told to the notes after a write: they read the interval at the moment
 (admin-only, not gated on an adapter or a binding); `/bot_skills`'s last row opens it too (`openScreen`). The screens and the codec are
 `utils/workerRolesScreenPlan.ts` (pure, in every locale): the overview (a row per role with its value, ⚠️ on an OpenCode role whose provider or
 model the catalog no longer lists, a line when the bot's skills are off, «All to built-in values» only when a role differs), a role (the four
-Claude models, the OpenCode row, the five launch efforts or the OpenCode model's variants, «Built-in» only when the role differs, «Back»), the
-OpenCode providers and the shared model page (`buildModelPageButtons`). A REPEATED-USE screen: every tap writes `settings.json` `workerRoles`
+Claude models, the OpenCode row, the five launch efforts or — for an OpenCode model with variants — «model's default» (`wkr_n<role>`, ✓ while
+no variant is set) and the variants, «Built-in» only when the role differs, «Back»), the OpenCode providers (none connected → a toast that
+names `/accounts`, no empty list) and the shared model page (`buildModelPageButtons`). A REPEATED-USE screen: every tap writes `settings.json` `workerRoles`
 (`saveInstanceSettingsChange`; only the roles that differ from their built-in value; a file that cannot be written is told in the toast and
 the screen keeps its buttons) and EDITS the message in place. A Claude model / effort button carries its value (`wkr_m<role>_<alias>`,
 `wkr_e<role>_<level>`), so a stale keyboard still means what it says; a provider, model or variant button carries an INDEX into the list

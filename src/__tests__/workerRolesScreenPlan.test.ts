@@ -3,9 +3,9 @@
  * «All to built-in values» row, the warnings), a role's screen (Claude models and efforts, the OpenCode row, an OpenCode model's
  * variants, «(built-in)» and «Built-in»), the provider list, the moves a model pick makes — and the same screens in EVERY locale.
  *
- * One check, one level: what the built bot shows an operator (the overview, a Claude pick written to settings.json, the OpenCode
- * path through the providers and the model page, the warnings, «All to built-in values», a Russian chat) is
- * `workerRolesE2e.test.ts`'s. This file keeps the codec's edges, every warning case and the locale sweep.
+ * One check, one level: what the built bot shows an operator (the fresh overview, the built-in Builder screen, a Claude pick written to
+ * settings.json, the OpenCode path through the providers and the model page, the warnings, «All to built-in values», the Russian screens)
+ * is `workerRolesE2e.test.ts`'s. This file keeps the codec's edges, every warning case, the moves and the locale sweep.
  *
  * Test case: N/A — Charness has no Jira tracker.
  */
@@ -13,14 +13,12 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { localeCodes, runWithLocale, t } from '../i18n';
-import { enDict } from '../i18n/en';
 import { workerRoleIds, type WorkerRolesSetting } from '../utils/workerRoles';
 import {
   buildWorkerRoleProvidersScreen,
   buildWorkerRoleScreen,
   buildWorkerRolesCallbackData,
   buildWorkerRolesOverview,
-  formatWorkerRoleValue,
   getValueAfterClaudeModelPick,
   getValueAfterOpenCodeModelPick,
   parseWorkerRolesCallbackData,
@@ -49,8 +47,9 @@ describe('the callback codec', () => {
       { kind: 'openCodeModelPage', role: 'reviewer', page: 11 },
       { kind: 'openCodeModel', role: 'reviewer', index: 117 },
       { kind: 'openCodeVariant', role: 'investigator', index: 0 },
+      { kind: 'openCodeNoVariant', role: 'reviewer' },
     ];
-    assert.deepEqual(taps.map(buildWorkerRolesCallbackData), ['wkr_o', 'wkr_all', 'wkr_r5', 'wkr_x0', 'wkr_m1_sonnet', 'wkr_e3_xhigh', 'wkr_oc4', 'wkr_p3_2', 'wkr_pg3_11', 'wkr_k3_117', 'wkr_v2_0']);
+    assert.deepEqual(taps.map(buildWorkerRolesCallbackData), ['wkr_o', 'wkr_all', 'wkr_r5', 'wkr_x0', 'wkr_m1_sonnet', 'wkr_e3_xhigh', 'wkr_oc4', 'wkr_p3_2', 'wkr_pg3_11', 'wkr_k3_117', 'wkr_v2_0', 'wkr_n3']);
     for (const tap of taps) {
       const data = buildWorkerRolesCallbackData(tap);
       assert.ok(Buffer.byteLength(data) <= 64, data);
@@ -67,21 +66,6 @@ describe('the callback codec', () => {
 });
 
 describe('the overview', () => {
-  it('a fresh instance: the six built-in values, the «your own instructions win» paragraph, no «All to built-in values», no warning', () => {
-    const screen = buildWorkerRolesOverview({ setting: {}, openCodeModels: null, isBotSkillsEnabled: true });
-    assert.equal(screen.text, [enDict['workerRoles.title'], enDict['workerRoles.explanationText'], enDict['workerRoles.runningWorkerNote']].join('\n\n'));
-    assert.match(screen.text, /Your own instructions win: a model you name in the conversation, or a delegate skill of the project or your own that names a role's model\./);
-    assert.deepEqual(labelsOf(screen), [
-      ['Builder: Opus · medium'],
-      ['Builder, data storage: Opus · xhigh'],
-      ['Investigator: Opus · xhigh'],
-      ['Reviewer: Opus · xhigh'],
-      ['Mini-review: Opus · high'],
-      ['Planner: Opus · xhigh'],
-    ]);
-    assert.deepEqual(dataOf(screen), workerRoleIds.map((_, index) => [`wkr_r${index}`]));
-  });
-
   it('a changed role shows its value and brings «All to built-in values»; an OpenCode role whose provider is gone carries ⚠️ and its line; the skills off add theirs', () => {
     const setting: WorkerRolesSetting = { builder: { cli: 'claude', model: 'sonnet', effort: 'high' }, ...openCodeReviewer };
     const screen = buildWorkerRolesOverview({ setting, openCodeModels: ['anthropic/claude-x'], isBotSkillsEnabled: false });
@@ -103,13 +87,6 @@ describe('the overview', () => {
 });
 
 describe('a role\'s screen', () => {
-  it('a built-in Claude role: «(built-in)», the four Claude models, the OpenCode row when a provider is connected, the five efforts, Back only', () => {
-    const screen = buildWorkerRoleScreen({ role: 'builder', setting: {}, openCodeModels: catalog, variants: [] });
-    assert.equal(screen.text, '🛠 Builder\n\nCode, tests, debugging, e2e and live runs, rework.\n\nNow: Opus · medium (built-in)\nYour own instructions may name another — then they win.');
-    assert.deepEqual(labelsOf(screen), [['Fable', 'Opus ✓', 'Sonnet', 'Haiku'], ['🔌 OpenCode model…'], ['low', 'medium ✓', 'high'], ['xhigh', 'max'], ['← Back']]);
-    assert.deepEqual(dataOf(screen), [['wkr_m0_fable', 'wkr_m0_opus', 'wkr_m0_sonnet', 'wkr_m0_haiku'], ['wkr_oc0'], ['wkr_e0_low', 'wkr_e0_medium', 'wkr_e0_high'], ['wkr_e0_xhigh', 'wkr_e0_max'], ['wkr_o']]);
-  });
-
   it('no OpenCode provider connected → no OpenCode row; a changed role loses «(built-in)» and gains «Built-in»', () => {
     const screen = buildWorkerRoleScreen({ role: 'builder', setting: { builder: { cli: 'claude', model: 'sonnet', effort: 'high' } }, openCodeModels: [], variants: [] });
     assert.match(screen.text, /\n\nNow: Sonnet · high\n/);
@@ -117,11 +94,13 @@ describe('a role\'s screen', () => {
     assert.deepEqual(screen.rows.at(-1)?.map((button) => button.data), ['wkr_x0', 'wkr_o']);
   });
 
-  it('an OpenCode role: its model on the OpenCode row with ✓, the model\'s variants as the effort rows (indexes), none when it has none', () => {
+  it('an OpenCode role: its model on the OpenCode row with ✓, «model\'s default» on a row of its own then the model\'s variants (indexes) — ✓ on the one in force — and none of them when it has no variants', () => {
     const screen = buildWorkerRoleScreen({ role: 'reviewer', setting: openCodeReviewer, openCodeModels: catalog, variants: ['none', 'low', 'medium', 'high', 'xhigh'] });
     assert.match(screen.text, /^🛠 Reviewer\n\nThe independent review of a task or commit\.\n\nNow: OpenCode · gpt-6-astra · medium\n/);
-    assert.deepEqual(labelsOf(screen), [['Fable', 'Opus', 'Sonnet', 'Haiku'], ['🔌 OpenCode · gpt-6-astra ✓'], ['none', 'low', 'medium ✓'], ['high', 'xhigh'], ['↩ Built-in', '← Back']]);
-    assert.deepEqual(dataOf(screen)[2], ['wkr_v3_0', 'wkr_v3_1', 'wkr_v3_2']);
+    assert.deepEqual(labelsOf(screen), [['Fable', 'Opus', 'Sonnet', 'Haiku'], ['🔌 OpenCode · gpt-6-astra ✓'], ['model\'s default'], ['none', 'low', 'medium ✓'], ['high', 'xhigh'], ['↩ Built-in', '← Back']]);
+    assert.deepEqual(dataOf(screen).slice(2, 4), [['wkr_n3'], ['wkr_v3_0', 'wkr_v3_1', 'wkr_v3_2']]);
+    const onDefault = buildWorkerRoleScreen({ role: 'reviewer', setting: { reviewer: { cli: 'opencode', model: 'openai/gpt-6-astra', effort: null } }, openCodeModels: catalog, variants: ['low', 'high'] });
+    assert.deepEqual(labelsOf(onDefault).slice(2, 4), [['model\'s default ✓'], ['low', 'high']], 'no variant: the ✓ is on «model\'s default»');
     const noVariants = buildWorkerRoleScreen({ role: 'reviewer', setting: { reviewer: { cli: 'opencode', model: 'openai/gpt-6-astra', effort: null } }, openCodeModels: [], variants: [] });
     assert.match(noVariants.text, /Now: OpenCode · gpt-6-astra · model's default\n/);
     assert.deepEqual(labelsOf(noVariants), [['Fable', 'Opus', 'Sonnet', 'Haiku'], ['🔌 OpenCode · gpt-6-astra ✓'], ['↩ Built-in', '← Back']], 'the OpenCode row stays even with the catalog unread');
@@ -179,14 +158,5 @@ describe('every locale', () => {
       assert.ok(runWithLocale(locale, () => t('help.thread_bound', { subdir: 'x' })).includes('/workers — '), `${locale}: help.thread_bound`);
       assert.match(runWithLocale(locale, () => t('botSkills.workerModelsButton')), /^🛠 /, locale);
     }
-  });
-
-  it('the Russian screens', () => {
-    const overview = runWithLocale('ru', () => buildWorkerRolesOverview({ setting: {}, openCodeModels: null, isBotSkillsEnabled: true }));
-    assert.match(overview.text, /^🛠 Модели воркеров — для всего бота\n\n/);
-    assert.equal(labelsOf(overview)[0][0], 'Разработчик: Opus · medium');
-    const role = runWithLocale('ru', () => buildWorkerRoleScreen({ role: 'builder', setting: {}, openCodeModels: null, variants: [] }));
-    assert.match(role.text, /Сейчас: Opus · medium \(встроенное\)\nТвои инструкции могут назвать другую — тогда важнее они\.$/);
-    assert.equal(runWithLocale('ru', () => formatWorkerRoleValue({ cli: 'opencode', model: 'openai/x', effort: null })), 'OpenCode · x · по умолчанию');
   });
 });

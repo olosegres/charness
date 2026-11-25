@@ -1240,6 +1240,7 @@ export const jaDict: Record<string, string> = {
   'workerRoles.providersTitle': '🛠 {role} · OpenCode\n\nプロバイダーを選んでください:',
   'workerRoles.modelsTitle': '🛠 {role} · {provider}',
   'workerRoles.staleScreen': 'この画面は古くなっています — /workers を開き直してください',
+  'workerRoles.noOpenCodeProviders': 'OpenCode のプロバイダーが接続されていません — /accounts で接続してください',
   'limits.remindersRowLabel': '🔔 リマインダー: {value}',
   'limits.autoswitchTitle': '🔁 使用量上限での自動切り替え',
   'accounts.openCodeSection': '🔌 OpenCode プロバイダー（接続済み）:\n{list}',

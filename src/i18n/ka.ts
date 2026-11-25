@@ -1246,6 +1246,7 @@ export const kaDict: Record<string, string> = {
   'workerRoles.providersTitle': '🛠 {role} · OpenCode\n\nაირჩიეთ პროვაიდერი:',
   'workerRoles.modelsTitle': '🛠 {role} · {provider}',
   'workerRoles.staleScreen': 'ეს ეკრანი მოძველდა — გახსენით /workers ხელახლა',
+  'workerRoles.noOpenCodeProviders': 'OpenCode-ის არცერთი პროვაიდერი არ არის დაკავშირებული — დააკავშირეთ /accounts-ით',
   'limits.remindersRowLabel': '🔔 შეხსენებები: {value}',
   'limits.autoswitchTitle': '🔁 გამოყენების ლიმიტზე ავტომატური გადართვა',
   'accounts.openCodeSection': '🔌 OpenCode პროვაიდერები (დაკავშირებული):\n{list}',

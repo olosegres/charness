@@ -1252,6 +1252,7 @@ export const ukDict: Record<string, string> = {
   'workerRoles.providersTitle': '🛠 {role} · OpenCode\n\nОбери провайдера:',
   'workerRoles.modelsTitle': '🛠 {role} · {provider}',
   'workerRoles.staleScreen': 'Цей екран застарів — відкрий /workers знову',
+  'workerRoles.noOpenCodeProviders': 'Жоден провайдер OpenCode не підключений — підключи його через /accounts',
   'limits.remindersRowLabel': '🔔 Нагадування: {value}',
   'limits.autoswitchTitle': '🔁 Автоматичне перемикання при ліміті використання',
   'accounts.openCodeSection': '🔌 Провайдери OpenCode (підключені):\n{list}',

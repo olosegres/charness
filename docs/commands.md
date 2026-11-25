@@ -887,10 +887,11 @@ reaches every agent at its next launch; a worker already running, or one resumed
 
 The screen lists the roles with their values; a tap opens a role: the four Claude models (Fable, Opus, Sonnet, Haiku), **🔌 OpenCode
 model…** (when an OpenCode provider is connected: the providers, then the provider's models page by page) and the efforts — `low` to
-`max` for Claude, the model's own variants for OpenCode (none when it has none: the model's default). A Claude model keeps the effort
+`max` for Claude; for OpenCode **model's default** (no variant) and the model's own variants (none when it has none). With no OpenCode
+provider connected the OpenCode row says so and where to connect one. A Claude model keeps the effort
 you had; another OpenCode model keeps it when it offers it. **↩ Built-in** takes a role back, **↩ All to built-in values** all of
 them (each shown only when something differs). Every tap writes [`settings.json`](../SETUP.md#instance-settings-settingsjson)
-`workerRoles` at once — only the roles you changed. The screen warns when an OpenCode role's provider is not connected or its model
+`workerRoles` at once — only the roles you changed. Admin-only, like every setting. The screen warns when an OpenCode role's provider is not connected or its model
 is gone (agents then launch that worker on their own model), and when the bot's skills are off ([`/bot_skills`](#bot_skills): the
 agents' own skills may not ask for these values). `/worker_models` is a hidden alias.
 

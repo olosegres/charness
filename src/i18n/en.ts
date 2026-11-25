@@ -1291,6 +1291,7 @@ export const enDict: Record<string, string> = {
   'workerRoles.providersTitle': '🛠 {role} · OpenCode\n\nChoose the provider:',
   'workerRoles.modelsTitle': '🛠 {role} · {provider}',
   'workerRoles.staleScreen': 'This screen is out of date — open /workers again',
+  'workerRoles.noOpenCodeProviders': 'No OpenCode provider is connected — connect one with /accounts',
   'limits.remindersRowLabel': '🔔 Reminders: {value}',
   'limits.autoswitchTitle': '🔁 Automatic switching on a usage limit',
   'accounts.openCodeSection': '🔌 OpenCode providers (connected):\n{list}',

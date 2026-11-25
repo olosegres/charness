@@ -194,6 +194,8 @@ export function createWorkerRoles(ports: WorkerRolesPorts) {
       }
       case 'openCodeProviders': {
         const providers = listOpenCodeProviders(await listOpenCodeModels());
+        // Nothing to pick from: say where a provider is connected instead of an empty list.
+        if (providers.length === 0) { await answerCallbackQuerySafely(ctx, t('workerRoles.noOpenCodeProviders')); return; }
         await answerCallbackQuerySafely(ctx);
         await showScreen(key, messageId, buildWorkerRoleProvidersScreen(tap.role, providers), { kind: 'providers', role: tap.role, providers });
         return;
@@ -221,6 +223,16 @@ export function createWorkerRoles(ports: WorkerRolesPorts) {
         const model = `${snapshot.providerId}/${modelId}`;
         const { value } = resolveWorkerRole(readWorkerRoles(), tap.role);
         if (!(await writeRole(ctx, tap.role, getValueAfterOpenCodeModelPick(value, model, await getOpenCodeModelVariants(model))))) return;
+        await answerCallbackQuerySafely(ctx);
+        await showRole(key, messageId, tap.role);
+        return;
+      }
+      case 'openCodeNoVariant': {
+        const snapshot = getSnapshot(key, messageId);
+        const { value } = resolveWorkerRole(readWorkerRoles(), tap.role);
+        // «Model's default» belongs to the model the message showed, like the variants beside it.
+        if (value.cli !== 'opencode' || snapshot?.kind !== 'role' || snapshot.role !== tap.role || snapshot.model !== value.model) { await answerStale(ctx); return; }
+        if (!(await writeRole(ctx, tap.role, { ...value, effort: null }))) return;
         await answerCallbackQuerySafely(ctx);
         await showRole(key, messageId, tap.role);
         return;

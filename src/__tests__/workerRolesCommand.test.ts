@@ -119,7 +119,13 @@ describe('/workers, through the module', () => {
     await harness.tapButton(screenMessageId, 'wkr_k3_1');
     assert.deepEqual(readSettingsFile(), { workerRoles: { reviewer: { cli: 'opencode', model: 'openai/gpt-6-astra', effort: 'high' } } }, 'high is one of its variants: kept');
     const role = readEditedScreen();
-    assert.deepEqual(role.labels.slice(1, 4), [['🔌 OpenCode · gpt-6-astra ✓'], ['none', 'low', 'medium'], ['high ✓', 'xhigh']]);
+    assert.deepEqual(role.labels.slice(1, 5), [['🔌 OpenCode · gpt-6-astra ✓'], ['model\'s default'], ['none', 'low', 'medium'], ['high ✓', 'xhigh']]);
+    await harness.tapButton(screenMessageId, 'wkr_v3_2');
+    assert.deepEqual(readSettingsFile(), { workerRoles: { reviewer: { cli: 'opencode', model: 'openai/gpt-6-astra', effort: 'medium' } } });
+    // Back to the model's own default without leaving the model — and then a variant again.
+    await harness.tapButton(screenMessageId, 'wkr_n3');
+    assert.deepEqual(readSettingsFile(), { workerRoles: { reviewer: { cli: 'opencode', model: 'openai/gpt-6-astra' } } });
+    assert.deepEqual(readEditedScreen().labels[2], ['model\'s default ✓']);
     await harness.tapButton(screenMessageId, 'wkr_v3_2');
     assert.deepEqual(readSettingsFile(), { workerRoles: { reviewer: { cli: 'opencode', model: 'openai/gpt-6-astra', effort: 'medium' } } });
     // The model page again shows ✓ on the role's model; another model without «medium» drops the variant.
@@ -134,7 +140,7 @@ describe('/workers, through the module', () => {
   it('an OpenCode button whose list this message does not hold is «out of date» and changes nothing; so is an effort button of a role on OpenCode by now', async () => {
     await harness.tapButton(screenMessageId, 'wkr_oc3');
     const editsBefore = harness.edits.length;
-    for (const data of ['wkr_p3_0', 'wkr_k3_0', 'wkr_v3_0', 'wkr_pg3_1']) {
+    for (const data of ['wkr_p3_0', 'wkr_k3_0', 'wkr_v3_0', 'wkr_n3', 'wkr_pg3_1']) {
       await harness.tapButton(otherMessageId, data);
       assert.equal(getLastToast(), 'This screen is out of date — open /workers again', data);
     }
@@ -152,16 +158,28 @@ describe('/workers, through the module', () => {
     saveInstanceSettingsChange(settingsPath, { workerRoles: { reviewer: { cli: 'opencode', model: 'openai/gpt-5.6-sol', effort: null } } });
     await harness.tapButton(screenMessageId, 'wkr_v3_0');
     assert.equal(getLastToast(), 'This screen is out of date — open /workers again', 'the variants were gpt-6-astra\'s');
+    saveInstanceSettingsChange(settingsPath, { workerRoles: { reviewer: { cli: 'opencode', model: 'openai/gpt-5.6-sol', effort: 'high' } } });
+    await harness.tapButton(screenMessageId, 'wkr_n3');
+    assert.equal(getLastToast(), 'This screen is out of date — open /workers again', '«model\'s default» was gpt-6-astra\'s too');
+    saveInstanceSettingsChange(settingsPath, { workerRoles: { reviewer: { cli: 'opencode', model: 'openai/gpt-5.6-sol', effort: null } } });
     assert.deepEqual(readSettingsFile(), { workerRoles: { reviewer: { cli: 'opencode', model: 'openai/gpt-5.6-sol' } } });
   });
 
-  it('«Built-in» on a role and «All to built-in values» take the fields out of settings.json, other settings stay', async () => {
+  it('the OpenCode row with no provider connected answers with where to connect one, instead of an empty provider list', async () => {
+    saveInstanceSettingsChange(settingsPath, { workerRoles: { reviewer: { cli: 'opencode', model: 'openai/gpt-6-astra', effort: null } } });
+    openCodeCatalog = [];
+    await harness.tapButton(screenMessageId, 'wkr_oc3');
+    assert.equal(getLastToast(), 'No OpenCode provider is connected — connect one with /accounts');
+    assert.deepEqual(harness.edits, [], 'no empty list is shown');
+  });
+
+  // That «Built-in» and «All to built-in values» take the roles out of the file is the flow's (`workerRolesE2e.test.ts` step 8).
+  it('«Built-in» and «All to built-in values» leave the other settings of settings.json as they were', async () => {
     saveInstanceSettingsChange(settingsPath, { autoUpdate: 'off', workerRoles: { builder: { cli: 'claude', model: 'sonnet', effort: 'high' }, planner: { cli: 'claude', model: 'haiku', effort: 'low' } } });
     await harness.tapButton(screenMessageId, 'wkr_x0');
-    assert.deepEqual(readSettingsFile(), { autoUpdate: 'off', workerRoles: { planner: { cli: 'claude', model: 'haiku', effort: 'low' } } });
+    assert.equal(readSettingsFile().autoUpdate, 'off');
     await harness.tapButton(screenMessageId, 'wkr_all');
     assert.deepEqual(readSettingsFile(), { autoUpdate: 'off' });
-    assert.doesNotMatch(JSON.stringify(readEditedScreen().labels), /All to built-in values/);
   });
 
   it('a settings file that cannot be written: the toast says so, nothing changes and the screen is left as it was', async () => {

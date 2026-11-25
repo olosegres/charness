@@ -1245,6 +1245,7 @@ export const hiDict: Record<string, string> = {
   'workerRoles.providersTitle': '🛠 {role} · OpenCode\n\nप्रोवाइडर चुनें:',
   'workerRoles.modelsTitle': '🛠 {role} · {provider}',
   'workerRoles.staleScreen': 'यह स्क्रीन पुरानी हो गई है — /workers फिर से खोलें',
+  'workerRoles.noOpenCodeProviders': 'कोई OpenCode प्रोवाइडर जुड़ा नहीं है — /accounts से एक जोड़ें',
   'limits.remindersRowLabel': '🔔 रिमाइंडर: {value}',
   'limits.autoswitchTitle': '🔁 उपयोग-सीमा पर स्वचालित स्विचिंग',
   'accounts.openCodeSection': '🔌 OpenCode प्रदाता (कनेक्टेड):\n{list}',

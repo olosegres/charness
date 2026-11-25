@@ -52,10 +52,11 @@ export type WorkerRolesTap =
   | { kind: 'openCodeProvider'; role: WorkerRoleId; index: number }
   | { kind: 'openCodeModelPage'; role: WorkerRoleId; page: number }
   | { kind: 'openCodeModel'; role: WorkerRoleId; index: number }
-  | { kind: 'openCodeVariant'; role: WorkerRoleId; index: number };
+  | { kind: 'openCodeVariant'; role: WorkerRoleId; index: number }
+  | { kind: 'openCodeNoVariant'; role: WorkerRoleId };
 
 /** Matches every button of the screens (and nothing else). */
-export const workerRolesCallbackRe = /^wkr_(o|all|r\d|x\d|oc\d|m\d_[a-z][a-z0-9._-]{0,31}|e\d_[a-z]+|p\d_\d{1,3}|pg\d_\d{1,3}|k\d_\d{1,3}|v\d_\d{1,3})$/;
+export const workerRolesCallbackRe = /^wkr_(o|all|r\d|x\d|oc\d|n\d|m\d_[a-z][a-z0-9._-]{0,31}|e\d_[a-z]+|p\d_\d{1,3}|pg\d_\d{1,3}|k\d_\d{1,3}|v\d_\d{1,3})$/;
 
 /** @description The data of the button for `tap`. */
 export function buildWorkerRolesCallbackData(tap: WorkerRolesTap): string {
@@ -72,6 +73,7 @@ export function buildWorkerRolesCallbackData(tap: WorkerRolesTap): string {
     case 'openCodeModelPage': return `${callbackPrefix}pg${roleIndex(tap.role)}_${tap.page}`;
     case 'openCodeModel': return `${callbackPrefix}k${roleIndex(tap.role)}_${tap.index}`;
     case 'openCodeVariant': return `${callbackPrefix}v${roleIndex(tap.role)}_${tap.index}`;
+    case 'openCodeNoVariant': return `${callbackPrefix}n${roleIndex(tap.role)}`;
   }
 }
 
@@ -92,6 +94,7 @@ export function parseWorkerRolesCallbackData(data: string): WorkerRolesTap | nul
     case 'r': return { kind: 'role', role };
     case 'x': return { kind: 'roleBuiltIn', role };
     case 'oc': return { kind: 'openCodeProviders', role };
+    case 'n': return { kind: 'openCodeNoVariant', role };
     case 'm': return argument !== undefined && fallbackClaudeModelAliases.includes(argument) ? { kind: 'claudeModel', role, model: argument } : null;
     case 'e': {
       const effort = claudeWorkerEffortLevels.find((level) => level === argument);
@@ -194,8 +197,8 @@ function splitIntoRows<TItem>(items: readonly TItem[], size: number): TItem[][] 
 
 /**
  * @description A role's screen: its name, what it covers, the value now («(built-in)» while nobody changed it) and that the user's
- * own instructions win; the Claude models, the OpenCode row, the efforts (a Claude role) or the model's variants (an OpenCode role,
- * none when it has none), then «Built-in» (only when the role differs) and «Back».
+ * own instructions win; the Claude models, the OpenCode row, the efforts (a Claude role) or «model's default» and the model's variants
+ * (an OpenCode role, none when it has none), then «Built-in» (only when the role differs) and «Back».
  */
 export function buildWorkerRoleScreen(input: WorkerRoleScreenInput): WorkerRolesScreen {
   const { role } = input;
@@ -218,15 +221,32 @@ export function buildWorkerRoleScreen(input: WorkerRoleScreenInput): WorkerRoles
   } else if (hasOpenCodeModels) {
     rows.push([{ label: t('workerRoles.openCodeButton'), data: buildWorkerRolesCallbackData({ kind: 'openCodeProviders', role }) }]);
   }
-  const effortButtons = value.cli === 'claude'
-    ? claudeWorkerEffortLevels.map((effort) => ({ label: `${effort}${mark(value.effort === effort)}`, data: buildWorkerRolesCallbackData({ kind: 'claudeEffort', role, effort }) }))
-    : input.variants.map((variant, index) => ({ label: `${variant}${mark(value.effort === variant)}`, data: buildWorkerRolesCallbackData({ kind: 'openCodeVariant', role, index }) }));
-  rows.push(...splitIntoRows(effortButtons, effortButtonsPerRow));
+  if (value.cli === 'claude') {
+    const effortButtons = claudeWorkerEffortLevels.map((effort) => ({ label: `${effort}${mark(value.effort === effort)}`, data: buildWorkerRolesCallbackData({ kind: 'claudeEffort', role, effort }) }));
+    rows.push(...splitIntoRows(effortButtons, effortButtonsPerRow));
+  } else {
+    rows.push(...buildOpenCodeEffortRows(role, value.effort, input.variants));
+  }
   const backRow: WorkerRolesButton[] = [];
   if (!isBuiltIn) backRow.push({ label: t('workerRoles.roleBuiltInButton'), data: buildWorkerRolesCallbackData({ kind: 'roleBuiltIn', role }) });
   backRow.push({ label: t('workerRoles.backButton'), data: buildWorkerRolesCallbackData({ kind: 'overview' }) });
   rows.push(backRow);
   return { text, rows };
+}
+
+/**
+ * The effort rows of an OpenCode role: «model's default» (no variant: the model's own) on a row of its own — the words do not fit a
+ * third of a phone's width — then the model's variants (indexes into `variants`), the one in force marked ✓. None when the model has no
+ * variants: there is nothing to choose.
+ */
+function buildOpenCodeEffortRows(role: WorkerRoleId, effort: string | null, variants: readonly string[]): WorkerRolesButton[][] {
+  if (variants.length === 0) return [];
+  const mark = (isCurrent: boolean): string => (isCurrent ? currentMark : '');
+  const variantButtons = variants.map((variant, index) => ({ label: `${variant}${mark(effort === variant)}`, data: buildWorkerRolesCallbackData({ kind: 'openCodeVariant', role, index }) }));
+  return [
+    [{ label: `${t('workerRoles.modelDefault')}${mark(effort === null)}`, data: buildWorkerRolesCallbackData({ kind: 'openCodeNoVariant', role }) }],
+    ...splitIntoRows(variantButtons, effortButtonsPerRow),
+  ];
 }
 
 /** @description The OpenCode providers a role may pick from (the catalog's, in its order), each button an index into `providers`, then «Back» to the role. */

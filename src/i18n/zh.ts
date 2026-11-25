@@ -1240,6 +1240,7 @@ export const zhDict: Record<string, string> = {
   'workerRoles.providersTitle': '🛠 {role} · OpenCode\n\n选择提供商：',
   'workerRoles.modelsTitle': '🛠 {role} · {provider}',
   'workerRoles.staleScreen': '此界面已过期 — 请重新打开 /workers',
+  'workerRoles.noOpenCodeProviders': '没有已连接的 OpenCode 提供商 — 请通过 /accounts 连接',
   'limits.remindersRowLabel': '🔔 提醒：{value}',
   'limits.autoswitchTitle': '🔁 达到用量上限时自动切换',
   'accounts.openCodeSection': '🔌 OpenCode provider（已连接）：\n{list}',

@@ -236,7 +236,11 @@ describe('/workers end to end: built charness, fake Bot API, fake agent, fake Op
     screen = await tapScreen(general, opened, 'wkr_p3_0', (text) => text === '🛠 Reviewer · openai');
     assert.deepEqual(general.getKeyboardLabels(screen), [['gpt-5.6-sol'], ['gpt-6-astra'], ['← Back']]);
     screen = await tapScreen(general, opened, general.getButtonData(screen, 'gpt-6-astra'), (text) => text.includes('Now: OpenCode · gpt-6-astra'));
-    assert.deepEqual(general.getKeyboardLabels(screen).slice(1, 3), [['🔌 OpenCode · gpt-6-astra ✓'], ['low', 'medium', 'high']], 'the model\'s variants are the effort rows');
+    assert.deepEqual(
+      general.getKeyboardLabels(screen).slice(1, 4),
+      [['🔌 OpenCode · gpt-6-astra ✓'], ['model\'s default ✓'], ['low', 'medium', 'high']],
+      'the model\'s variants are the effort rows; xhigh is none of them, so the role runs on the model\'s own default',
+    );
     screen = await tapScreen(general, opened, general.getButtonData(screen, 'medium'), (text) => text.includes('Now: OpenCode · gpt-6-astra · medium\n'));
     assert.deepEqual(readSettingsFile().workerRoles, { builder: { cli: 'claude', model: 'sonnet', effort: 'high' }, reviewer: { cli: 'opencode', model: 'openai/gpt-6-astra', effort: 'medium' } });
 
@@ -310,7 +314,7 @@ describe('/workers end to end: built charness, fake Bot API, fake agent, fake Op
     assert.deepEqual(general.getKeyboardLabels(page), [['claude-x'], ['← Назад']]);
     // xhigh is not one of claude-x's variants: the role takes the model's own default, and no variant carries the ✓.
     const role = await tapScreen(general, opened, 'wkr_k1_0', (text) => text.includes('Сейчас: OpenCode · claude-x · по умолчанию\n'));
-    assert.deepEqual(general.getKeyboardLabels(role).slice(1, 3), [['🔌 OpenCode · claude-x ✓'], ['low', 'medium', 'high']]);
+    assert.deepEqual(general.getKeyboardLabels(role).slice(1, 4), [['🔌 OpenCode · claude-x ✓'], ['по умолчанию ✓'], ['low', 'medium', 'high']]);
     const picker = await general.sendAndAwaitReply('/bot_skills', 'Скиллы бота');
     assert.deepEqual(general.getKeyboardLabels(picker).at(-1), ['🛠 Модели воркеров']);
   });

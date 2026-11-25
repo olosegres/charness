@@ -1246,6 +1246,7 @@ export const esDict: Record<string, string> = {
   'workerRoles.providersTitle': '🛠 {role} · OpenCode\n\nElige el proveedor:',
   'workerRoles.modelsTitle': '🛠 {role} · {provider}',
   'workerRoles.staleScreen': 'Esta pantalla está desactualizada — abre /workers de nuevo',
+  'workerRoles.noOpenCodeProviders': 'Ningún proveedor de OpenCode está conectado — conecta uno con /accounts',
   'limits.remindersRowLabel': '🔔 Recordatorios: {value}',
   'limits.autoswitchTitle': '🔁 Cambio automático al alcanzar un límite de uso',
   'accounts.openCodeSection': '🔌 Providers de OpenCode (conectados):\n{list}',
