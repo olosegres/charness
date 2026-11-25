@@ -306,6 +306,9 @@ open request — for the Claude account that comes back FIRST among the same acc
 subscriptions; `pickEarliestResetRung`), not only for its own: the notice names that time, the target rides in the persisted retry record,
 and when the wait ends the retry kick moves the conversation there by itself, as above (`resumeOn`). If that account refuses after all
 (its reset was wrong), the refusal is a new limit, planned afresh: an account with room takes over, else the wait ends at the next reset.
+An account billed to API credits whose credit runs out (`handleBalanceExhausted`) is left the same way: with no account free and «Wait for
+reset» ON the conversation waits for the subscription that comes back first and continues there, instead of stopping with the «stopped»
+answer (which it still gets with auto switch OFF, or with nothing coming back at a known time).
 Everything that is a topic's stays out: the «Switch to …» offer (with auto switch OFF the conversation waits for its OWN account's reset;
 switched OFF while a wait is already aimed at another account, it stays when that wait ends and waits on for its own — `decideAimedWaitEnd`),
 the notices in a topic, a wait aimed at an OpenCode entry — and on OpenCode the conversation waits for the reset exactly as before. The

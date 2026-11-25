@@ -345,7 +345,11 @@ so one account's usage limit does not stop every topic.
   open request — for the Claude account that comes back FIRST of those same accounts,
   not only for its own: the comment names that time, and then the conversation moves
   there by itself; if that account refuses after all, the limit is planned again
-  (another account with room, else the next reset). It has no topic to carry the
+  (another account with room, else the next reset). An account billed to API credits
+  whose credit runs out («Credit balance is too low») is left the same way: with no
+  account free the issue waits for the subscription that comes back first and
+  continues there, rather than stopping (see *When the credits run out* in
+  [`/accounts`](#accounts)). It has no topic to carry the
   buttons or the switch notices, so with switching OFF it waits for its OWN account's
   reset (switched OFF while a wait is already aimed at another account, it stays when
   that wait ends and waits on for its own), and on OpenCode for the reset as before; an OpenCode entry of the chain is
@@ -492,7 +496,11 @@ balance), so the bot never uses it without you choosing it.
   list decides as for a limit: switching on moves the topic at once, otherwise
   the notice carries «🔁 Switch to …» buttons. If nothing can take over now but
   another entry comes back at a known time (a subscription's weekly reset), the
-  topic waits for that and continues there; otherwise the notice is all. The
+  topic waits for that and continues there; otherwise the notice is all. A Jira
+  issue does the same with «Auto switch» ON, among Claude accounts only: it waits
+  for the subscription that comes back first (its requester told when) and
+  continues there; with the switch OFF, or nothing coming back, its requester is
+  told the work stopped. The
   mark lasts until you act: pick the account again (after topping the balance
   up), or sign it in again — or until a request on it goes through again. Your
   pick, sign-in or pasted key ends the mark and lets the account work, but the
