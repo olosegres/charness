@@ -441,13 +441,13 @@ describe('resolveAdoptedTail — where an adopt resumes, and the background task
   it('a trusted record (same session) restores its offset AND its background-task list', () => {
     assert.deepEqual(
       resolveAdoptedTail({ sessionId: 'sess-1', offsetBytes: 120, backgroundTaskIds: ['b1', 'a2'] }, 'sess-1', 500),
-      { startOffset: 120, backgroundTasks: [{ taskId: 'b1', description: '' }, { taskId: 'a2', description: '' }], isTurnInFlight: false, outstandingToolUseIds: [], claudeCodeVersion: null, notificationTurnPendingSinceMs: null, lastTurnEndedAtMs: null, scheduledJobs: [], isConfigDirSwitchPending: false },
+      { startOffset: 120, backgroundTasks: [{ taskId: 'b1', description: '' }, { taskId: 'a2', description: '' }], isTurnInFlight: false, outstandingToolUseIds: [], claudeCodeVersion: null, notificationTurnPendingSinceMs: null, lastTurnEndedAtMs: null, scheduledJobs: [], isConfigDirSwitchPending: false, isAnswerEmittedInTurn: false },
     );
   });
 
   it('a record of another session (or none) seeds to EOF with no tasks — no backlog flood, no inherited list', () => {
-    assert.deepEqual(resolveAdoptedTail({ sessionId: 'other', offsetBytes: 120, backgroundTaskIds: ['b1'] }, 'sess-1', 500), { startOffset: 500, backgroundTasks: [], isTurnInFlight: false, outstandingToolUseIds: [], claudeCodeVersion: null, notificationTurnPendingSinceMs: null, lastTurnEndedAtMs: null, scheduledJobs: [], isConfigDirSwitchPending: false });
-    assert.deepEqual(resolveAdoptedTail(null, 'sess-1', 500), { startOffset: 500, backgroundTasks: [], isTurnInFlight: false, outstandingToolUseIds: [], claudeCodeVersion: null, notificationTurnPendingSinceMs: null, lastTurnEndedAtMs: null, scheduledJobs: [], isConfigDirSwitchPending: false });
+    assert.deepEqual(resolveAdoptedTail({ sessionId: 'other', offsetBytes: 120, backgroundTaskIds: ['b1'] }, 'sess-1', 500), { startOffset: 500, backgroundTasks: [], isTurnInFlight: false, outstandingToolUseIds: [], claudeCodeVersion: null, notificationTurnPendingSinceMs: null, lastTurnEndedAtMs: null, scheduledJobs: [], isConfigDirSwitchPending: false, isAnswerEmittedInTurn: false });
+    assert.deepEqual(resolveAdoptedTail(null, 'sess-1', 500), { startOffset: 500, backgroundTasks: [], isTurnInFlight: false, outstandingToolUseIds: [], claudeCodeVersion: null, notificationTurnPendingSinceMs: null, lastTurnEndedAtMs: null, scheduledJobs: [], isConfigDirSwitchPending: false, isAnswerEmittedInTurn: false });
   });
 
   it('restores the CLI version of a trusted record (the auto-stop gate, L-D10); a foreign or older record has none', () => {
@@ -465,8 +465,17 @@ describe('resolveAdoptedTail — where an adopt resumes, and the background task
     assert.deepEqual(foreign.outstandingToolUseIds, []);
   });
 
+  it('restores whether answer text of the turn in flight was emitted: only for a turn in flight, a record without the flag reads as emitted, a foreign record as not', () => {
+    const resolve = (record: Parameters<typeof resolveAdoptedTail>[0]): boolean => resolveAdoptedTail(record, 'sess-1', 500).isAnswerEmittedInTurn;
+    assert.equal(resolve({ sessionId: 'sess-1', offsetBytes: 1, isTurnInFlight: true, isAnswerEmittedInTurn: true }), true);
+    assert.equal(resolve({ sessionId: 'sess-1', offsetBytes: 1, isTurnInFlight: true, isAnswerEmittedInTurn: false }), false, 'nothing emitted: the replay holds the whole turn');
+    assert.equal(resolve({ sessionId: 'sess-1', offsetBytes: 1, isTurnInFlight: true }), true, 'a record from before the flag: the safe side');
+    assert.equal(resolve({ sessionId: 'sess-1', offsetBytes: 1, isAnswerEmittedInTurn: true }), false, 'no turn in flight: there is no cursor to distrust');
+    assert.equal(resolve({ sessionId: 'other', offsetBytes: 1, isTurnInFlight: true, isAnswerEmittedInTurn: true }), false, 'a foreign record implies nothing');
+  });
+
   it('clamps the offset to the file size; a record written before the list was tracked reads as no tasks', () => {
-    assert.deepEqual(resolveAdoptedTail({ sessionId: 'sess-1', offsetBytes: 900 }, 'sess-1', 500), { startOffset: 500, backgroundTasks: [], isTurnInFlight: false, outstandingToolUseIds: [], claudeCodeVersion: null, notificationTurnPendingSinceMs: null, lastTurnEndedAtMs: null, scheduledJobs: [], isConfigDirSwitchPending: false });
+    assert.deepEqual(resolveAdoptedTail({ sessionId: 'sess-1', offsetBytes: 900 }, 'sess-1', 500), { startOffset: 500, backgroundTasks: [], isTurnInFlight: false, outstandingToolUseIds: [], claudeCodeVersion: null, notificationTurnPendingSinceMs: null, lastTurnEndedAtMs: null, scheduledJobs: [], isConfigDirSwitchPending: false, isAnswerEmittedInTurn: false });
   });
 });
 

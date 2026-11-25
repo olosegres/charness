@@ -19,6 +19,7 @@ import type {
   ResumeSessionOptions,
   SeenWatermark,
   SeenWatermarkWriter,
+  TurnEndedEvent,
 } from '../types';
 import { unnumberedProcessGeneration } from '../types';
 import type { OutboundHints } from '../platform/outbound';
@@ -186,7 +187,7 @@ function noteRespawnInFlight(conversationKey: string, respawn: Promise<unknown>)
  * `output`/`thinking` emit — the CLI streams per-token, so raw per-delta emits
  * would flood Telegram with edits. Mirrors OpenCode's `sseOutputBatchMs` (500).
  */
-const streamOutputBatchMs = 350;
+export const streamOutputBatchMs = 350;
 
 /** Prefix of the per-turn token accounting line (L-D11); the process-level e2e
  *  and the live cache check read it. */
@@ -338,6 +339,16 @@ export interface StreamSession {
   // — answer accumulation —
   currentResponseText: string;
   emittedLength: number;
+  /**
+   * The turn in progress was already under way when this process was adopted (a bot restart): its first part was emitted by the
+   * old process, and the replay starts at the saved offset, so the cursor above says nothing of it. The `result` backstop would
+   * take the whole final message for text the stream under-delivered; it is skipped until the turn's end clears this. Set only for
+   * a turn whose answer text WAS emitted before the adopt (`isAnswerEmittedInTurn` of the persisted record): one that had emitted
+   * nothing is replayed whole, and its cursor is complete.
+   */
+  isAnswerCursorUnknown: boolean;
+  /** Answer text of the turn in progress has been emitted (so far); persisted with the tail offset for an adopt, cleared with the cursor. */
+  isAnswerEmittedInTurn: boolean;
   outputTimer: NodeJS.Timeout | null;
   // — reasoning —
   reasoningText: string;
@@ -800,7 +811,7 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
       lastStdoutActivityAt: Date.now(), outstandingToolUseIds: new Set(),
       model: opts.model, reportedModel: null, effort: opts.effort,
       configDir: opts.configDir, isConfigDirSwitchPending: false, isConfigDirSwitchReleased: false, startCostUsd,
-      currentResponseText: '', emittedLength: 0, outputTimer: null,
+      currentResponseText: '', emittedLength: 0, isAnswerCursorUnknown: false, isAnswerEmittedInTurn: false, outputTimer: null,
       reasoningText: '', reasoningStartedAt: null, reasoningTimer: null, reasoningActive: false,
       toolNamesById: new Map(), questionToolUseIds: new Set(),
       subagentActive: false, childResponseText: '', childEmittedLength: 0, childOutputTimer: null,
@@ -1144,7 +1155,7 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
       // The account the surviving process runs on is in its own wrapper; the bot compares it with the topic's pick.
       // A switch the user picked while the process worked survives the reload: it still applies at the turn's end.
       configDir: readWrapperScriptConfigDir(paths.wrapperFile), isConfigDirSwitchPending: adoptedTail.isConfigDirSwitchPending, isConfigDirSwitchReleased: false, startCostUsd: null,
-      currentResponseText: '', emittedLength: 0, outputTimer: null,
+      currentResponseText: '', emittedLength: 0, isAnswerCursorUnknown: adoptedTail.isAnswerEmittedInTurn, isAnswerEmittedInTurn: adoptedTail.isAnswerEmittedInTurn, outputTimer: null,
       reasoningText: '', reasoningStartedAt: null, reasoningTimer: null, reasoningActive: false,
       toolNamesById: new Map(), questionToolUseIds: new Set(),
       subagentActive: false, childResponseText: '', childEmittedLength: 0, childOutputTimer: null,
@@ -1676,9 +1687,12 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
     }
     const wasBusy = session.isBusy;
     // A fresh user turn begins → reset the answer cursor so its first tail is a
-    // new message (the bot also flips `needsNewMessage` for delta adapters).
-    session.currentResponseText = '';
-    session.emittedLength = 0;
+    // new message (the bot also flips `needsNewMessage` for delta adapters). Only
+    // when no turn is running: the tail is polled, so the `result` of a turn that
+    // has just ended may still be unread, and it settles against THIS cursor —
+    // reset here, its text would be emitted as the start of the new turn's, glued
+    // to it. The running turn's own end resets it (`handleTurnEnd`).
+    if (!wasBusy) this.resetAnswerCursor(session);
     session.apiErrorFired = false;
     session.isBusy = true;
     // A fresh turn resets the idle-watchdog clock: without this a session that
@@ -1695,6 +1709,14 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
       if (session.lastStdoutActivityAt === turnStartedAt) session.isBusy = wasBusy;
       throw error;
     });
+  }
+
+  /** Forget the answer text of the turn in progress: what was streamed so far was emitted (or dropped) and belongs to a turn that is over. */
+  private resetAnswerCursor(session: StreamSession): void {
+    session.currentResponseText = '';
+    session.emittedLength = 0;
+    session.isAnswerCursorUnknown = false;
+    session.isAnswerEmittedInTurn = false;
   }
 
   sendSignal(key: SessionKey, _signal: string): void {
@@ -2166,6 +2188,7 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
     const tail = session.currentResponseText.slice(session.emittedLength);
     if (tail) {
       session.emittedLength = session.currentResponseText.length;
+      session.isAnswerEmittedInTurn = true;
       const meta: OutboundHints = isFinal ? { isFinal: true } : {};
       // NO isContinuation: `outputsDeltas` adapters let the transports synthesise it.
       this.emit('output', session.key, tail, meta);
@@ -2285,11 +2308,16 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
       });
       session.startCostUsd = null;
     }
+    // What was queued behind the turn is the next turn's, an error `result`'s included (`applyTurnEnd` keeps that queue): read as the
+    // turn end leaves it — the entries this turn took in, in a shape nothing matches, dropped.
+    const hasInputOnItsWay = getInputsAfterTurnEnd(session.unconsumedInputs, Date.now()).length > 0;
     this.applyTurnEnd(session, action);
+    // The turn's text has been emitted (or dropped) by now: the next turn starts from an empty cursor, whenever its prompt was written.
+    this.resetAnswerCursor(session);
     // Released before the bot hears of this end, applied after its handlers: its turn probe reads the re-spawn as coming from here.
     this.releasePendingConfigDirSwitch(session);
     // After the handlers above: the bot's per-turn stop (L5) reads the session's state as settled here.
-    this.emit('turnEnded', session.key);
+    this.emit('turnEnded', session.key, { hasInputOnItsWay } satisfies TurnEndedEvent);
     this.applyPendingConfigDirSwitch(session);
   }
 
@@ -2367,8 +2395,10 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
     }
 
     // Reconciliation backstop: if the delta stream under-delivered vs the final
-    // `result` text, append the gap so the answer is never short.
-    if (action.resultText && action.resultText.length > session.currentResponseText.length
+    // `result` text, append the gap so the answer is never short. Not for a turn
+    // adopted in flight: what its old process emitted is not in the cursor, so the
+    // whole final message would read as the gap and go out a second time.
+    if (action.resultText && !session.isAnswerCursorUnknown && action.resultText.length > session.currentResponseText.length
         && action.resultText.startsWith(session.currentResponseText)) {
       session.currentResponseText = action.resultText;
     }
@@ -2959,6 +2989,8 @@ function buildTailRecord(session: StreamSession, offsetBytes: number): JsonStrea
     ...(session.scheduledJobs.size > 0 ? { scheduledJobs: [...session.scheduledJobs.values()] } : {}),
     ...(session.notificationTurnPendingSince !== null ? { notificationTurnPendingSinceMs: session.notificationTurnPendingSince } : {}),
     ...(session.isConfigDirSwitchPending ? { isConfigDirSwitchPending: true } : {}),
+    // Only while a turn is in flight (an idle record stays as it was): written both ways, since an absent flag reads as "emitted".
+    ...(session.isBusy ? { isAnswerEmittedInTurn: session.isAnswerEmittedInTurn } : {}),
   };
 }
 

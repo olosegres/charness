@@ -40,7 +40,7 @@ import {
 import { ClaudeJsonStreamAdapter } from './adapters/claudeJsonStreamAdapter';
 import { claudeJsonStreamAdapterName, claudePerTurnAdapterName, claudeTmuxAdapterName, checkIsJsonStreamBackend, openCodeAdapterName, terminalAdapterName } from './adapters/adapterNames';
 import { checkShouldPostReattachRecap, formatReattachRecap } from './resumeContext';
-import type { AgentAdapter, AgentRuntimeInfo, AgentSession, DisplayVerbosityMode, OutputTransport, PendingQuestionState, AgentApiErrorClass, AgentAuthErrorReason, LimitEpisodeMarker, OpenCodeQuestion, RecentTurn, ResumeSessionOptions, SeenWatermark, SubagentStatusEvent, ThinkingEvent, ToolResultEvent } from './types';
+import type { AgentAdapter, AgentRuntimeInfo, AgentSession, DisplayVerbosityMode, OutputTransport, PendingQuestionState, AgentApiErrorClass, AgentAuthErrorReason, LimitEpisodeMarker, OpenCodeQuestion, RecentTurn, ResumeSessionOptions, SeenWatermark, SubagentStatusEvent, ThinkingEvent, ToolResultEvent, TurnEndedEvent } from './types';
 import type { PlatformId, SessionKey } from './sessionKey';
 import { createOutputTransport } from './connectors/telegram/output/createOutputTransport';
 import { keyToString, keyFromString, tryKeyFromString } from './sessionKey';
@@ -268,7 +268,7 @@ import { renderAgentFrame, renderAgentHtml, type AgentFrame } from './connectors
 import { splitMessage, MAX_MESSAGE_LEN } from './connectors/telegram/messageSplit';
 import { buildFoldedMessage } from './connectors/telegram/foldedMessage';
 import { unpinMessagesReportingRetryable } from './connectors/telegram/unpinMessages';
-import { addPendingOutput, checkHasPendingOutput, getNewestPendingSeq, getOutputFlushPlan } from './connectors/telegram/outputFlushPlan';
+import { addPendingOutput, checkHasPendingOutput, checkShouldMarkNewMessageAfterTurnEnd, getNewestPendingSeq, getOutputFlushPlan } from './connectors/telegram/outputFlushPlan';
 import { getCallerEditResult, sendOutputChunks, type ThreadEditOutcome, type ThreadSendOutcome } from './connectors/telegram/sendOutcome';
 import { getFailedSendOutcome } from './connectors/telegram/telegramFailureRetry';
 import { releasePinnedNoticeSlot, surfacePinnedNotice, type PinnedNoticePorts, type PinnedNoticeSlots } from './connectors/telegram/pinnedNoticeSlot';
@@ -6374,8 +6374,12 @@ const autoStopUnsupportedLoggedKeys = new Set<string>();
  * `postToSession` that polled the session idle and ensures it again (`postToSession.ts`) therefore always finds
  * the stop already on the transition queue and runs after it. Keep it that way — an await ahead of the queueing
  * would let that ensure run beside the stop and forward to the process it ends.
+ *
+ * It is also where the next turn's boundary is marked when a prompt was forwarded before this turn ended
+ * (`checkShouldMarkNewMessageAfterTurnEnd`): the adapter emits the turn's closing text synchronously BEFORE this event,
+ * and the group transport queues it in the same tick, so the mark set here is the one the next turn's first text takes.
  */
-function handleAgentTurnEnded(key: SessionKey): void {
+function handleAgentTurnEnded(key: SessionKey, turnEnd: TurnEndedEvent): void {
   // No tool call of this turn is left to take a mid-turn accounts note: withdrawn unseen, it stays due.
   withdrawAccountsInbox(key);
   getLimitNotes().noteTurnEnd(key);
@@ -6384,6 +6388,10 @@ function handleAgentTurnEnded(key: SessionKey): void {
   noteThreadTurnContext(key);
   topicIndicator.requestRefresh(key);
   const adapter = getThreadAdapter(key);
+  // The boundary of the next turn, reported by the adapter: the turn's closing text was queued before this event (the adapter emits it first,
+  // in the same tick), so a mark the forward of the next prompt set earlier is spent by now. Input still on its way is that turn's — after a
+  // turn that ended in an error too.
+  if (checkIsTelegramKey(key) && checkShouldMarkNewMessageAfterTurnEnd({ outputsDeltas: adapter.outputsDeltas === true, hasInputOnItsWay: turnEnd.hasInputOnItsWay })) markNeedsNewMessage(key);
   if (adapter.name === claudePerTurnAdapterName && !checkIsDeferredCompactionArmed(key) && !adapter.checkIsWorking?.(key)) {
     void suspendThreadSession(key).catch((e) =>
       console.warn(`[lifecycle] the per-turn stop of ${keyToString(key)} failed:`, e instanceof Error ? e.message : e),
@@ -17265,11 +17273,11 @@ export async function startBot(): Promise<void> {
     }),
     onStopped: (key) => dispatchAdapterEvent(key, 'stopped', () => withThreadLocale(key, () => handleAgentStopped(key)), () => clearForeignSessionState(key)),
     onSuspended: (key) => dispatchAdapterEvent(key, 'suspended', () => withThreadLocale(key, () => handleAgentSuspended(key)), () => scheduleLostWorkNote(key, takeLostWorkOf(key), 'holdExpired')),
-    onTurnEnded: (key) => dispatchAdapterEvent(key, 'turnEnded', () => {
+    onTurnEnded: (key, turnEnd) => dispatchAdapterEvent(key, 'turnEnded', () => {
       // Every platform's (the route is `all`): the todo reminder's turn end, which the per-turn stop below would
       // otherwise hide from its poll.
       void todoReminderEngine?.noteAdapterTurnEnd(key).catch((e) => console.warn(`[todos] the turn end of ${keyToString(key)} was not noted:`, e instanceof Error ? e.message : e));
-      handleAgentTurnEnded(key);
+      handleAgentTurnEnded(key, turnEnd);
     }),
     onContextCompacted: (key, trigger) => dispatchAdapterEvent(key, 'contextCompacted', () => {
       noteConversationContextReset(key, `compaction (${trigger ?? 'bot'})`);

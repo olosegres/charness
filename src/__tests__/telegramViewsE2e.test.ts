@@ -54,7 +54,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { FakeTelegram, type FakeTelegramCall, type FakeTelegramMessage } from './telegramE2e/fakeTelegram';
-import { fakeClaudeLogFileNames, getFakeDigestMessageText, getFakeStreamTextEnd, type FakeClaudeAnswer, type FakeClaudeTurn } from './jiraE2e/fakeClaudeContract';
+import { fakeClaudeHoldReleaseFileName, fakeClaudeLogFileNames, getFakeDigestMessageText, getFakeStreamTextEnd, type FakeClaudeAnswer, type FakeClaudePrompt, type FakeClaudeTurn } from './jiraE2e/fakeClaudeContract';
 import type { ClosedRequestRecord, OpenRequestState } from '../requests/types';
 import type { ScheduleRecord } from '../scheduler/types';
 import {
@@ -829,8 +829,9 @@ describe('Telegram views end to end: built charness, fake Bot API, fake claude (
     const toolName = 'StaleFrame';
     const statusText = `🔧 ${toolName}`;
     const isPosted = (text: string): boolean => fakeTelegram.listCalls('sendMessage').some((call) => String(call.payload.text).includes(text));
-    // The status frame is the whole text `🔧 <tool>`; the tool's result message, `🔧 <tool> → …`, is not it.
-    const isStatusFramePosted = (): boolean => fakeTelegram.listCalls('sendMessage').some((call) => call.payload.text === statusText);
+    // The status frame is the whole text `🔧 <tool>`; the tool's result message, `🔧 <tool> → …`, is not it. A frame may also reach the topic by an
+    // edit of a status frame the step before left on screen (the next turn's first frame is an edit of it), so both calls count.
+    const isStatusFramePosted = (): boolean => ['sendMessage', 'editMessageText'].some((method) => fakeTelegram.listCalls(method).some((call) => call.payload.text === statusText));
     const hasReachedBot = (text: string): boolean => getCharness().output.includes(`output ${group.id}:${topicThreadId} (20): ${text}`);
     // The step before leaves its own text in the bot's output buffer for a few seconds; it lands first, so this step starts from an empty buffer.
     await getCharness().waitFor('the step before to have its text posted', answerTimeoutMs, () => listTopicMessages().some((message) => message.text.includes('Working on TOPIC-14')));
@@ -870,6 +871,32 @@ describe('Telegram views end to end: built charness, fake Bot API, fake claude (
     await sendAndAwaitReply('/verbosity stream_answers', 'This topic shows: Stream + answers');
     // The call log, not the topic: the superseded frame, posted late, is deleted again by that flush of output.
     assert.equal(isStatusFramePosted(), false, 'the superseded status frame was not created below the text that replaced it');
+    // The step before ended its turn with its closing text; none of it was carried into this step's turns: no message was ever sent or edited
+    // to hold both that text and turn 1's (they were once glued: «Fake final answer for TOPIC-14 (answer, turn 1).Working on TOPIC-30.»).
+    const gluedTexts = ['sendMessage', 'editMessageText'].flatMap((method) => fakeTelegram.listCalls(method)).map((call) => String(call.payload.text))
+      .filter((text) => text.includes('Fake final answer for TOPIC-14') && text.includes('Working on TOPIC-30.'));
+    assert.deepEqual(gluedTexts, [], 'turn 1\'s text was never glued to the closing text of the turn before');
+  });
+
+  it('the closing text a turn streams after its answer is a message of its own and never carries the next turn\'s text, also when the operator\'s next message was forwarded before that turn ended', async () => {
+    const closingTurnLabel = 'TOPIC-40';
+    const nextTurnLabel = 'TOPIC-41';
+    const closingText = `Fake final answer for ${closingTurnLabel} (answer, turn 1).`;
+    const nextTurnText = `Working on ${nextTurnLabel}.`;
+    // The turn answers, then holds before it streams its closing words, as a real CLI's last message after a tool call comes late.
+    fakeTelegram.pushOperatorMessage(topicThreadId, `${closingTurnLabel} [closing-hold] [fake:answer]`);
+    await waitForFakeAnswer(closingTurnLabel);
+    // The next message is forwarded NOW, while that turn has not ended: the mark that opens a message for it is set before the closing text comes.
+    fakeTelegram.pushOperatorMessage(topicThreadId, `${nextTurnLabel} [fake:answer]`);
+    await getCharness().waitFor('the agent to have read the next message behind the holding turn', answerTimeoutMs, () =>
+      readFakeLog<FakeClaudePrompt>(fakeClaudeLogFileNames.prompts).some((prompt) => prompt.issueKey === nextTurnLabel));
+    fs.writeFileSync(path.join(getLayout().fakeStateDir, fakeClaudeHoldReleaseFileName), '');
+    await waitForFakeAnswer(nextTurnLabel);
+    await waitForTopicMessage('the next turn\'s text in the topic', (message) => message.text.includes(nextTurnText));
+
+    const carriedTexts = ['sendMessage', 'editMessageText'].flatMap((method) => fakeTelegram.listCalls(method)).map((call) => String(call.payload.text));
+    assert.deepEqual(carriedTexts.filter((text) => text.includes(closingText) && text.includes(nextTurnText)), [], 'no message was sent or edited to hold the closing words and the next turn\'s text together');
+    assert.equal(listTopicMessages().find((message) => message.text.includes(nextTurnText))?.text, nextTurnText, 'the next turn\'s text is a message of its own');
   });
 
   it('every tmux call named the private server; nothing of the instance runs on the default tmux server', () => {

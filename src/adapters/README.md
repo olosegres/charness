@@ -371,7 +371,17 @@ restarts — every hot reload — never touch it. Per-thread host dir
   but only once batched answer text has actually been EMITTED — an offset past
   un-emitted text would skip it on replay (live seam-loss 2026-07-05). A turn's end
   emits what its batch holds (an error-ended turn's text too, ahead of its error), so
-  a finished turn leaves the offset at the end of the log. `flushPendingOutput` (optional
+  a finished turn leaves the offset at the end of the log, and the answer cursor empty: the cursor (the text streamed
+  so far, and how much of it was emitted) belongs to the turn that streams it, so a prompt written while a turn
+  runs leaves it alone (that turn's `result` may still be unread, and settles against it) and only a prompt written
+  with no turn running resets it. A turn that was in flight at an adopt, and had EMITTED answer text before it, has an UNKNOWN
+  cursor (`isAnswerCursorUnknown`: its old process emitted what it streamed, the replay starts at the saved offset), so the
+  `result` backstop for text the stream under-delivered does not run for it - the whole final message would read as the gap
+  and go out twice. Whether text was emitted is in the tail record (`isAnswerEmittedInTurn`, written while a turn is in
+  flight; a record without it reads as emitted): a turn that had emitted nothing is replayed whole, its cursor is complete and
+  the backstop stays. The `turnEnded` event carries `hasInputOnItsWay`, read before the turn end is applied (an error `result`
+  forgets the queue), which the bot marks the next turn's boundary from.
+  `flushPendingOutput` (optional
   on `AgentAdapter`, also OpenCode's) does the same mid-turn on demand: it reads the tail
   (the poll lags the process; not from inside the handling of a chunk, as a question event asks,
   nor from an adopted tail the boot still holds — its replay waits for `releaseAdoptedTails`)

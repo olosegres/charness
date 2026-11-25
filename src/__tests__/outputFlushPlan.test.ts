@@ -22,6 +22,7 @@ import assert from 'node:assert/strict';
 import {
   addPendingOutput,
   checkHasPendingOutput,
+  checkShouldMarkNewMessageAfterTurnEnd,
   getNewestPendingSeq,
   getOutputFlushPlan,
   appendPendingOutput,
@@ -325,6 +326,15 @@ describe('addPendingOutput / takePendingOutput (the new-message mark belongs to 
     const plan = planTakenSegment(resumed.segment, { id: thread.lastMessageId, text: thread.lastMessageText });
     assert.equal(plan.isEditInPlace, false, 'a new message, not an edit of the interrupted turn\'s');
     assert.deepEqual(plan.chunks, ['Working on LIM-7.']);
+  });
+
+  // What the mark does to the queue (two marks, two segments) is the tests above's; that `handleAgentTurnEnded` sets it after the ending turn's
+  // closing text was queued is proven by the views flow's step «the closing text a turn streams after its answer is a message of its own»
+  // (`telegramViewsE2e.test.ts`), which fails when the wiring or its order is wrong.
+  it('a turn\'s end marks a boundary only for an adapter whose output is deltas, and only when input is on its way', () => {
+    assert.equal(checkShouldMarkNewMessageAfterTurnEnd({ outputsDeltas: true, hasInputOnItsWay: true }), true);
+    assert.equal(checkShouldMarkNewMessageAfterTurnEnd({ outputsDeltas: true, hasInputOnItsWay: false }), false, 'nothing follows: the next prompt marks its own boundary when it is forwarded');
+    assert.equal(checkShouldMarkNewMessageAfterTurnEnd({ outputsDeltas: false, hasInputOnItsWay: true }), false, 'an adapter that marks its continuations itself needs no guess');
   });
 
   it('empty output queues nothing and spends no mark', () => {

@@ -117,6 +117,25 @@ export interface JsonStreamTailOffset {
   scheduledJobs?: ScheduledJob[];
   /** An account switch the user picked while the process worked, still waiting for its turn to end: a reload keeps it. */
   isConfigDirSwitchPending?: boolean;
+  /**
+   * While a turn is in flight: whether answer text of that turn had been EMITTED as of `offsetBytes`. The offset is held back until
+   * the emitted text has left the adapter, so a replay from it starts after everything emitted: with `false` the replay holds the
+   * turn's whole stream and its answer cursor is complete, with `true` the cursor of the adopted session knows nothing of what the old
+   * process emitted. A record written before this was kept has none while a turn is in flight: read as `true`, the safe side.
+   */
+  isAnswerEmittedInTurn?: boolean;
+}
+
+/**
+ * @description The payload of the `turnEnded` event (json-stream): what the adapter knows at the moment a turn's terminal `result` was
+ * processed and the bot cannot read afterwards.
+ */
+export interface TurnEndedEvent {
+  /**
+   * Input the bot wrote is still on its way to the CLI: the next turn's — also after a turn that failed, whose queue the CLI runs as
+   * its next turn (`getInputsAfterTurnEnd`).
+   */
+  hasInputOnItsWay: boolean;
 }
 
 /**
@@ -788,7 +807,7 @@ export const unnumberedProcessGeneration = 0;
  * - 'started'  (key: SessionKey)                  — session is up and ready
  * - 'stopped'  (key: SessionKey)                  — `stopSession` completed (explicit teardown)
  * - 'suspended' (key: SessionKey)                 — `suspendSession` completed: the process is gone, the session stays resumable (the idle stop; lifecycle plan L3)
- * - 'turnEnded' (key: SessionKey)                 — a turn's terminal `result` was processed (json-stream); the per-turn lifecycle stops the process on it (L5)
+ * - 'turnEnded' (key: SessionKey, event: TurnEndedEvent) — a turn's terminal `result` was processed (json-stream); the per-turn lifecycle stops the process on it (L5); the event says whether input is still on its way (the next turn's)
  * - 'contextCompacted' (key: SessionKey, trigger: string | null) — a compaction COMPLETED (json-stream): one the bot issued, or the CLI's own overflow compaction; the conversation's context was replaced by a summary (Jira prompt context C6)
  * - 'conversationLost' (key: SessionKey)          — a live re-spawn (an account, model or effort change; json-stream) found the conversation's transcript gone and began a NEW conversation under the same id; the bot tells the topic and resets what the conversation was told
  * - 'closed'   (key: SessionKey)                  — session died on its own (process exit, SSE giveup, server crash)

@@ -150,11 +150,25 @@ async function restartWithState(edit: (state: PersistedState) => void): Promise<
 }
 
 /**
+ * Run `read` on something the bot may remove while the scan is under way: a gone file or folder (ENOENT) is `whenGone` - it holds nothing any more - and any other failure is still one. The bot writes `state.json`
+ * through a `.state.json.tmp-*` that it renames at once, so a listing meets that temp file and a read a moment later does not.
+ */
+function readIfPresent<Result>(read: () => Result, whenGone: Result): Result {
+  try {
+    return read();
+  } catch (error) {
+    if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return whenGone;
+    throw error;
+  }
+}
+
+/**
  * Every REGULAR file under `dir`, recursively (the key must be in none of the bot's own files but the account's key
  * file). Links are not followed, and a FIFO (a session's stdin) is never opened — reading one would block.
  */
 function listFilesRecursively(dir: string): string[] {
-  return fs.readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+  const entries = readIfPresent(() => fs.readdirSync(dir, { withFileTypes: true }), []);
+  return entries.flatMap((entry) => {
     const entryPath = path.join(dir, entry.name);
     if (entry.isDirectory()) return listFilesRecursively(entryPath);
     return entry.isFile() ? [entryPath] : [];
@@ -289,7 +303,7 @@ describe('An account billed to API credits end to end: built charness, fake Bot 
     assert.ok(settings.hooks?.PreCompact, 'the PreCompact hook rides the same file');
     assert.equal(settings.hooks?.SessionStart?.[0]?.matcher, 'compact', 'and so does the skills restore');
 
-    const filesWithTheKey = listFilesRecursively(getLayout().dataDir).filter((file) => fs.readFileSync(file, 'utf8').includes(pastedApiKey));
+    const filesWithTheKey = listFilesRecursively(getLayout().dataDir).filter((file) => readIfPresent(() => fs.readFileSync(file, 'utf8'), '').includes(pastedApiKey));
     assert.deepEqual(filesWithTheKey, [path.join(keyDir, 'charness-api-key')], 'the key is in its own file only: not in settings, a wrapper script, state.json or a log');
     assert.ok(!fs.readFileSync(getStatePath(getLayout()), 'utf8').includes(botEnvApiKey));
 

@@ -14,7 +14,7 @@ import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { removeTestRoot } from './remoteRunRunnerScriptKit';
+import { removeTestRoot, waitForDetachedRunToEnd } from './remoteRunRunnerScriptKit';
 
 const scriptPath = path.resolve(__dirname, '..', '..', 'runner-scripts', 'runner.sh');
 const isCi = process.env.CI === 'true' || process.env.CI === '1';
@@ -355,7 +355,9 @@ describe('jobs side by side on one runner, against a real Pueue', { skip: skipRe
       await expectToStayTrue('the second job stays stashed until something looks', () => !hasStarted('pk-p-2'));
       const probed = runScript(['probe', workDir]);
       assert.equal(probed.status, 0, probed.stderr);
-      await waitUntil('the probe to have enqueued the second job and it to start', () => hasStarted('pk-p-2'));
+      // The probe hands the net to a detached run (`settle-queue`): it is waited for by its own end, not by a clock a busy runner would outlast. What stays bounded is Pueue starting the task the net enqueued.
+      await waitForDetachedRunToEnd(workDir, 'settle-queue');
+      await waitUntil('the second job to start after the probe enqueued it', () => hasStarted('pk-p-2'));
       await waitUntil('it to end', () => readExit('pk-p', 'pk-p-2') !== null);
       assert.equal(readExit('pk-p', 'pk-p-2'), '0');
     });
