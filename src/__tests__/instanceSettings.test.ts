@@ -56,6 +56,7 @@ import {
   createTaskAgentsMaxConcurrentReader,
   createTopicStatusSettingsReader,
   createUpdateSettingsReader,
+  createWorkerRolesSettingsReader,
   getInstanceSettingsPath,
   instanceSettingsFileName,
   loadInstanceSettings,
@@ -461,4 +462,61 @@ test('the limit-reminders reader: null with no file or field, the file\'s choice
   read();
   assert.equal(errors.length, 1);
   assert.match(errors[0], /limitReminders/);
+});
+
+test('workerRoles: a Claude role takes an alias and one of the five launch levels, an OpenCode role provider/model with an optional variant; an empty file names none', () => {
+  assert.deepEqual(createEmptyInstanceSettings().workerRoles, {});
+  const valid = validateInstanceSettings({ workerRoles: { builder: { cli: 'claude', model: 'sonnet', effort: 'high' }, reviewer: { cli: 'opencode', model: 'openai/gpt-5.6-sol', effort: 'medium' }, planner: { cli: 'opencode', model: 'anthropic/claude-x' } } });
+  assert.deepEqual(valid, { ok: true, config: createSettings({ workerRoles: {
+    builder: { cli: 'claude', model: 'sonnet', effort: 'high' },
+    reviewer: { cli: 'opencode', model: 'openai/gpt-5.6-sol', effort: 'medium' },
+    planner: { cli: 'opencode', model: 'anthropic/claude-x', effort: null },
+  } }) });
+});
+
+test('workerRoles: an unknown role, an unknown CLI, a Claude level that is no launch value, a model without a provider, a stray field — each an error naming the field', () => {
+  const wrongs: Array<[object, RegExp]> = [
+    [{ coder: { cli: 'claude', model: 'opus', effort: 'high' } }, /^settings\.json workerRoles/],
+    [{ builder: { cli: 'codex', model: 'x', effort: 'high' } }, /^settings\.json workerRoles\.builder/],
+    [{ builder: { cli: 'claude', model: 'opus', effort: 'auto' } }, /^settings\.json workerRoles\.builder\.effort/],
+    [{ builder: { cli: 'claude', model: 'Opus 4!', effort: 'high' } }, /^settings\.json workerRoles\.builder\.model/],
+    [{ builder: { cli: 'claude', model: 'opus' } }, /^settings\.json workerRoles\.builder\.effort/],
+    [{ reviewer: { cli: 'opencode', model: 'gpt-5' } }, /^settings\.json workerRoles\.reviewer\.model/],
+    [{ reviewer: { cli: 'opencode', model: 'openai/' } }, /^settings\.json workerRoles\.reviewer\.model/],
+    [{ reviewer: { cli: 'opencode', model: 'openai/gpt-5', effort: '' } }, /^settings\.json workerRoles\.reviewer\.effort/],
+    [{ reviewer: { cli: 'opencode', model: 'openai/gpt-5', extra: 1 } }, /^settings\.json workerRoles\.reviewer/],
+  ];
+  for (const [workerRoles, field] of wrongs) {
+    const bad = validateInstanceSettings({ workerRoles });
+    assert.equal(bad.ok, false, JSON.stringify(workerRoles));
+    assert.match(bad.ok ? '' : bad.errors.join('\n'), field, JSON.stringify(workerRoles));
+  }
+});
+
+test('workerRoles is written only when it names a role, an OpenCode role without a variant leaves effort out, and a change elsewhere keeps it', () => {
+  saveInstanceSettings(settingsPath, createSettings({ workerRoles: { reviewer: { cli: 'opencode', model: 'openai/gpt-5', effort: null } } }));
+  assert.deepEqual(JSON.parse(fs.readFileSync(settingsPath, 'utf8')), { workerRoles: { reviewer: { cli: 'opencode', model: 'openai/gpt-5' } } });
+  saveInstanceSettings(settingsPath, { ...loadInstanceSettingsForUpdate(settingsPath), defaultEffort: 'high' });
+  assert.deepEqual(JSON.parse(fs.readFileSync(settingsPath, 'utf8')).workerRoles, { reviewer: { cli: 'opencode', model: 'openai/gpt-5' } });
+  assert.deepEqual(loadInstanceSettingsForUpdate(settingsPath).workerRoles, { reviewer: { cli: 'opencode', model: 'openai/gpt-5', effort: null } });
+  saveInstanceSettings(settingsPath, createSettings({ autoUpdate: 'off' }));
+  assert.equal('workerRoles' in JSON.parse(fs.readFileSync(settingsPath, 'utf8')), false, 'no role named leaves no field');
+});
+
+test('the worker-roles reader: {} with no file or field, the file\'s roles, a hand edit with no restart, a broken file as {} with ONE named error', () => {
+  const errors: string[] = [];
+  const read = createWorkerRolesSettingsReader(() => settingsPath, (line) => errors.push(line));
+  assert.deepEqual(read(), {}, 'no file');
+  writeRaw('{"autoUpdate":"off"}');
+  assert.deepEqual(read(), {}, 'the field left out');
+  writeRaw('{"workerRoles":{"builder":{"cli":"claude","model":"sonnet","effort":"high"}}}');
+  assert.deepEqual(read(), { builder: { cli: 'claude', model: 'sonnet', effort: 'high' } });
+  writeRaw('{"workerRoles":{"builder":{"cli":"claude","model":"sonnet","effort":"ultracode"}}}');
+  assert.deepEqual(read(), {}, 'a broken file says nothing: the built-in values apply');
+  read();
+  assert.equal(errors.length, 1);
+  assert.match(errors[0], /workerRoles\.builder\.effort/);
+  // A tap rewrites a valid file over the broken one.
+  saveInstanceSettings(settingsPath, { ...loadInstanceSettingsForUpdate(settingsPath), workerRoles: { planner: { cli: 'claude', model: 'opus', effort: 'max' } } });
+  assert.deepEqual(read(), { planner: { cli: 'claude', model: 'opus', effort: 'max' } });
 });

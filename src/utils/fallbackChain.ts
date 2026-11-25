@@ -40,8 +40,10 @@ export const fallbackSwitchMaxOffers = 3;
 /** Claude's CLI model aliases (`claudeJsonStreamAdapter.getAvailableModels`), the choices a Claude entry offers. */
 export const fallbackClaudeModelAliases: readonly string[] = ['fable', 'opus', 'sonnet', 'haiku'];
 
-const claudeModelAliasRe = /^[a-z0-9][a-z0-9._-]{0,31}$/;
-const openCodeProviderIdRe = /^[a-z0-9][a-z0-9._-]*$/;
+/** A Claude model alias or id a rung (or a worker role, `utils/workerRoles.ts`) may name. */
+export const claudeModelAliasRe = /^[a-z0-9][a-z0-9._-]{0,31}$/;
+/** An OpenCode provider id. */
+export const openCodeProviderIdRe = /^[a-z0-9][a-z0-9._-]*$/;
 
 /**
  * @description What the bot DETECTED as connected, the input of the draft, the picker rows and the ranking:

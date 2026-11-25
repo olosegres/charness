@@ -8,7 +8,9 @@ import {
   type ConfigFileLoad,
   type ConfigValidation,
 } from './configDirFile';
-import { claudeEffortLevels, type ClaudeEffortLevel } from './effortLevels';
+import { claudeEffortLevels, claudeWorkerEffortLevels, type ClaudeEffortLevel } from './effortLevels';
+import { claudeModelAliasRe, openCodeProviderIdRe } from './utils/fallbackChain';
+import { workerRoleIds, type WorkerRoleId, type WorkerRoleValue, type WorkerRolesSetting } from './utils/workerRoles';
 import { botSkillsSettingValues, type BotSkillsSetting } from './utils/botSkillsSetting';
 import { taskAgentsMaxConcurrentUpperBound } from './trackers/taskAgentLimit';
 import { hubHostSchema, hubPortSchema } from './runners/hubIds';
@@ -28,7 +30,8 @@ import type { TopicStatusPrefs } from './utils/topicIndicatorPlan';
  * running at once — the way an instance without General sets it), `questionWait` (how long an unanswered agent question waits before it is set aside — the instance default a topic's own choice overrides), `topicStatus` (which status marks and counts the topic list shows after a topic's name — the instance default a topic's own set overrides), `todo` (the shared todo lists: on / off and the
  * staleness reminder's interval — also the way an instance without General sets them), `limitReminders` (how often an agent
  * that launches workers is told where the account limits stand: General's interval, the one a topic's own choice overrides) and
- * `runnerHost` (the address paired runners dial, chosen once in `/runners`).
+ * `runnerHost` (the address paired runners dial, chosen once in `/runners`) and `workerRoles` (the bot's default CLI, model and
+ * effort per worker role, `/workers` — only the roles the operator changed, `utils/workerRoles.ts`).
  *
  * Validation is strict and all-or-nothing, like `stt.json`: a typo is an error that NAMES the field. Unlike
  * `stt.json`, an invalid file is NOT served from its last good copy — the built-in defaults apply and one error
@@ -63,10 +66,54 @@ export interface InstanceSettings {
   limitReminders: { everyMinutes: LimitReminderChoice | null };
   /** The address paired runners dial to reach this machine's sshd (`/runners` asks once); `null` = not chosen yet. */
   runnerHost: HubAddress | null;
+  /** The worker roles the operator changed (`/workers`, `utils/workerRoles.ts`); a role it does not name holds its built-in value. */
+  workerRoles: WorkerRolesSetting;
 }
 
 /** The longest reminder interval a hand-edited `settings.json` may name: a day. */
 const todoReminderMaxMinutes = 24 * 60;
+
+/** The longest OpenCode model id or variant a hand-edited `workerRoles` may name. */
+const workerRoleOpenCodePartMaxLength = 128;
+
+/** An OpenCode `provider/model` of a worker role: a provider id, a slash, a bounded model id. */
+const workerRoleOpenCodeModelSchema = z.string().max(workerRoleOpenCodePartMaxLength * 2).refine((label) => {
+  const index = label.indexOf('/');
+  return index > 0 && openCodeProviderIdRe.test(label.slice(0, index)) && label.length - index - 1 > 0 && label.length - index - 1 <= workerRoleOpenCodePartMaxLength;
+}, { message: 'must be provider/model (an OpenCode model id)' });
+
+const workerRoleValueSchema = z.discriminatedUnion('cli', [
+  z.strictObject({ cli: z.literal('claude'), model: z.string().regex(claudeModelAliasRe, 'must be a Claude model alias (fable, opus, sonnet, haiku) or id'), effort: z.enum(claudeWorkerEffortLevels) }),
+  z.strictObject({ cli: z.literal('opencode'), model: workerRoleOpenCodeModelSchema, effort: z.string().min(1).max(workerRoleOpenCodePartMaxLength).optional() }),
+]);
+
+/** One optional value per role; `satisfies` keeps the keys in step with `workerRoleIds`. */
+const workerRolesSchema = z.strictObject({
+  builder: workerRoleValueSchema.optional(),
+  storageBuilder: workerRoleValueSchema.optional(),
+  investigator: workerRoleValueSchema.optional(),
+  reviewer: workerRoleValueSchema.optional(),
+  miniReviewer: workerRoleValueSchema.optional(),
+  planner: workerRoleValueSchema.optional(),
+} satisfies Record<WorkerRoleId, z.ZodOptional<typeof workerRoleValueSchema>>);
+
+/** The stored shape of a role's value: an OpenCode role without a variant leaves `effort` out. */
+type StoredWorkerRoleValue = z.infer<typeof workerRoleValueSchema>;
+
+function readStoredWorkerRoles(stored: Partial<Record<WorkerRoleId, StoredWorkerRoleValue | undefined>> | undefined): WorkerRolesSetting {
+  const setting: WorkerRolesSetting = {};
+  for (const role of workerRoleIds) {
+    const value = stored?.[role];
+    if (value === undefined) continue;
+    setting[role] = value.cli === 'claude' ? value : { cli: 'opencode', model: value.model, effort: value.effort ?? null };
+  }
+  return setting;
+}
+
+function writeStoredWorkerRoleValue(value: WorkerRoleValue): StoredWorkerRoleValue {
+  if (value.cli === 'claude') return { cli: 'claude', model: value.model, effort: value.effort };
+  return { cli: 'opencode', model: value.model, ...(value.effort === null ? {} : { effort: value.effort }) };
+}
 
 const rawSettingsSchema = z.strictObject({
   defaultEffort: z.enum(claudeEffortLevels).optional(),
@@ -97,11 +144,12 @@ const rawSettingsSchema = z.strictObject({
     everyMinutes: z.number().refine(checkIsLimitReminderChoice, { message: `must be one of ${limitReminderChoices.join(', ')} (minutes; 0 = off)` }).optional(),
   }).optional(),
   runnerHost: z.strictObject({ host: hubHostSchema, port: hubPortSchema }).optional(),
+  workerRoles: workerRolesSchema.optional(),
 });
 
 /** @description The settings of an instance that has no `settings.json`: nothing set. */
 export function createEmptyInstanceSettings(): InstanceSettings {
-  return { defaultEffort: null, autoUpdate: null, whatsNew: null, botSkills: null, questionWait: null, topicStatus: {}, taskAgents: { maxConcurrent: null }, todo: { isEnabled: null, reminderMinutes: null }, limitReminders: { everyMinutes: null }, runnerHost: null };
+  return { defaultEffort: null, autoUpdate: null, whatsNew: null, botSkills: null, questionWait: null, topicStatus: {}, taskAgents: { maxConcurrent: null }, todo: { isEnabled: null, reminderMinutes: null }, limitReminders: { everyMinutes: null }, runnerHost: null, workerRoles: {} };
 }
 
 /**
@@ -129,6 +177,7 @@ export function validateInstanceSettings(parsedJson: object): ConfigValidation<I
       todo: { isEnabled: parsed.data.todo?.isEnabled ?? null, reminderMinutes: parsed.data.todo?.reminderMinutes ?? null },
       limitReminders: { everyMinutes: parsed.data.limitReminders?.everyMinutes ?? null },
       runnerHost: parsed.data.runnerHost ?? null,
+      workerRoles: readStoredWorkerRoles(parsed.data.workerRoles),
     },
   };
 }
@@ -177,6 +226,12 @@ export function saveInstanceSettings(filePath: string, settings: InstanceSetting
       }),
     ...(settings.limitReminders.everyMinutes === null ? {} : { limitReminders: { everyMinutes: settings.limitReminders.everyMinutes } }),
     ...(settings.runnerHost === null ? {} : { runnerHost: { host: settings.runnerHost.host, port: settings.runnerHost.port } }),
+    ...(Object.keys(settings.workerRoles).length === 0
+      ? {}
+      : { workerRoles: Object.fromEntries(workerRoleIds.flatMap((role) => {
+        const value = settings.workerRoles[role];
+        return value === undefined ? [] : [[role, writeStoredWorkerRoleValue(value)]];
+      })) }),
   };
   const validation = validateInstanceSettings(body);
   if (!validation.ok) throw new Error(`refusing to write an invalid ${instanceSettingsFileName}: ${validation.errors.join('; ')}`);
@@ -325,4 +380,13 @@ export function createLimitRemindersSettingsReader(getFilePath: () => string, lo
  */
 export function createRunnerHostReader(getFilePath: () => string, logError: (line: string) => void): () => HubAddress | null {
   return createSettingsPartReader(getFilePath, logError, (settings) => settings.runnerHost);
+}
+
+/**
+ * @description The reader of the worker roles (`/workers`, `utils/workerRoles.ts`): `workerRoles`, re-read when the file changes — a
+ * hand edit applies at the next `claude_profiles` call. An empty object = the file names none (every built-in value applies). An
+ * invalid file reads as the empty one, and `logError` gets ONE line per distinct broken state (not one per read).
+ */
+export function createWorkerRolesSettingsReader(getFilePath: () => string, logError: (line: string) => void): () => WorkerRolesSetting {
+  return createSettingsPartReader(getFilePath, logError, (settings) => settings.workerRoles);
 }

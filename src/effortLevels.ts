@@ -44,6 +44,14 @@ export const claudeEffortLevels = [
 export type ClaudeEffortLevel = (typeof claudeEffortLevels)[number];
 
 /**
+ * @description The Claude levels a WORKER can be launched with (`claude -p --effort <level>`, `utils/workerRoles.ts`): the real
+ * reasoning levels only — `auto` and `ultracode` are slash-command profiles of the interactive session, not launch values.
+ */
+export const claudeWorkerEffortLevels = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
+
+export type ClaudeWorkerEffortLevel = (typeof claudeWorkerEffortLevels)[number];
+
+/**
  * @description The code fallback for the reasoning effort of a bot-started session — the last link of the chain
  * that decides what a session runs with, first that exists wins:
  *
