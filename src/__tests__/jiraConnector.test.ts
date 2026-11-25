@@ -1081,7 +1081,7 @@ describe('bot.ts wires the Jira connector (J5)', () => {
     assert.ok(!deps.includes('resumeSession:'), 'no Jira-only resume path: the ensure resumes a sleeping conversation for every platform');
     assert.ok(deps.includes('const sessionPostDeps = createSessionPostDeps();'));
     const personActivity = botSource.slice(botSource.indexOf('function notePersonActivity('));
-    assert.match(personActivity, /^function notePersonActivity\(key: SessionKey\): void \{\n {2}noteThreadUserActivity\(key\);/, 'the person\'s activity clears the latch');
+    assert.match(personActivity, /^function notePersonActivity\(key: SessionKey\): void \{\n {2}noteThreadActivity\(key\);/, 'the person\'s activity restarts the idle countdown');
     assert.ok(!botSource.includes('async function ensureSessionByResume('), 'the separate resume helper is gone');
   });
 

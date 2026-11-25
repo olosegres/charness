@@ -107,6 +107,7 @@ describe('the idle mark of a held process: told once, compacted never later', ()
         steps.push('stop');
         if (adapter.isBusy) module.rearmThreadIdleTimer(suspendedKey);
       },
+      readSleepingContext: async () => null,
       resumeSleepingSessionForCompaction: async () => false,
       getThreadAdapter: () => adapter,
       deliverLabel: async () => null,
@@ -133,7 +134,6 @@ describe('the idle mark of a held process: told once, compacted never later', ()
     console.log = originalLog;
     for (const module of modules.splice(0)) module.clearThreadCompaction(key);
     await harness.state.clearCompactIdleTracking(key);
-    await harness.state.setCompactIdleLatched(key, false);
     adapter.signals = [];
     adapter.isBusy = false;
     pendingQuestions.clear();

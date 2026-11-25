@@ -215,6 +215,7 @@ describe('the question the idle compaction asked again, through the compaction m
       checkIsLimitWaitArmed: () => false,
       // The last step of the idle fire (after the compaction and the re-ask): the stop of the conversation.
       suspendThreadSession: async () => { suspendCalls += 1; idleFireFinished.resolve(); },
+      readSleepingContext: async () => null,
       resumeSleepingSessionForCompaction: async () => false,
       getThreadAdapter: () => adapter,
       deliverLabel: (_key, label, messageContext) => new Promise((resolve) => { deliveries.push({ label, messageContext, settle: resolve }); }),
@@ -225,7 +226,7 @@ describe('the question the idle compaction asked again, through the compaction m
         if (throwingOrphanCloses.has(messageId)) throw new Error('the close could not be sent');
         return !refusedOrphanCloses.has(messageId);
       },
-      notePersonActivity: (activeKey) => { compaction.noteThreadUserActivity(activeKey); },
+      notePersonActivity: (activeKey) => { compaction.noteThreadActivity(activeKey); },
     });
     compaction.registerCompactionCallbacks();
   });
@@ -257,7 +258,6 @@ describe('the question the idle compaction asked again, through the compaction m
     pendingQuestions.clear();
     harness.replies.length = 0;
     await harness.state.clearCompactIdleTracking(key);
-    await harness.state.setCompactIdleLatched(key, false);
     await harness.state.setAgent(key, { name: adapter.name, claudeSessionId: 'session-reask' });
   });
 

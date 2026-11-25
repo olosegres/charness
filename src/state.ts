@@ -20,7 +20,14 @@ import { resolveDefaultDataDir } from './legacyNames';
 import { stateFileName } from './stateFile';
 import { defaultDisplayVerbosityMode, normalizeDisplayVerbosityMode } from './utils/displayVerbosity';
 import { defaultTopicView, parseTopicView } from './utils/topicView';
-import { resolveCompactSelfReviewEnabled, resolveCompactOnIdleEnabled, resolveCompactSummaryEnabled } from './utils/compactOnIdle';
+import {
+  defaultCompactGrowthTokens,
+  getContextBaselineAfterReading,
+  resolveCompactGrowthTokens,
+  resolveCompactOnIdleEnabled,
+  resolveCompactSelfReviewEnabled,
+  resolveCompactSummaryEnabled,
+} from './utils/compactOnIdle';
 import { resolveAutoContinueOnLimitEnabled, resolveClaudeAutoSwitchOnLimitEnabled } from './utils/autoContinueOnLimit';
 import { defaultClaudeProfileName, resolveClaudeProfileName as resolveClaudeProfileNameFromSelection, type ClaudeProfileBilling } from './utils/claudeProfiles';
 import type { ClaudeUsageSnapshot } from './utils/claudeUsage';
@@ -407,6 +414,21 @@ export interface CompactIdleTrackingEntry {
   lastTurnEndAt?: number;
   lastCompactionAt?: number;
   lastHeldMarkAt?: number;
+  /**
+   * The context size, in tokens, of the conversation's FIRST model call after its last compaction (input + cache read + cache write
+   * of that call: the compacted summary, every instruction and skill loaded again and the prompt — not the compaction's own `post=`
+   * figure, and not the end of a turn that may have read half a repository) — what the idle compaction measures growth from
+   * ({@link getContextGrowthTokens}). Read from the conversation's history at the first turn's end after a compaction (or at the
+   * first turn the bot reads, from the history: a conversation that already had turns is not measured from now); for a conversation
+   * never compacted, its first call. Dropped by every compaction; replaced when the CLI's or the server's own compaction replaced the epoch
+   * (`AgentAdapter.getOwnCompactionCount`, a per-conversation count within one bot lifetime, differs from the last reading's); replaced
+   * by the first call read AGAIN at the first reading of a bot lifetime and at every read of a sleeping conversation (a compaction around
+   * a restart is not in the count; the re-read keeps the baseline when it gives none); dropped when a later context is smaller than it
+   * (a compaction nothing counted) to be read again from the new epoch.
+   */
+  baselineContextTokens?: number;
+  /** The context size after the newest turn read, in tokens (the last call's input, cache and output): what the growth is measured up to. */
+  lastContextTokens?: number;
 }
 
 /**
@@ -572,17 +594,20 @@ export interface StateV1 {
    */
   taskAgentWaitList?: TaskAgentWaitEntry[];
   /**
-   * Threads whose compact-on-idle user-LATCH is spent (D2). A thread lands here
-   * the instant an idle-compaction FIRES and is removed only by the next genuine
-   * USER message — so idle compaction runs at most once per user-active period,
-   * and (crucially) a bot restart cannot re-enable a second fire: the reattach
-   * re-arms the idle timer ONLY for threads absent from this set. Same
-   * deduped/sorted {@link SessionKey}-string shape as `timestampThreads` (dropped
-   * when empty), and equally lifecycle-independent — only a fire and a user
-   * message mutate it, never session teardown. Optional so older state files stay
-   * valid (a missing value = no thread latched).
+   * Retired: the compact-on-idle user-latch (D2) that let an idle compaction run at most once per user-active period. The growth
+   * threshold ({@link compactGrowthTokens}) took its job, so the field is no longer read or written; it stays in the type only so
+   * a load can drop the dead key from an older state file.
    */
   compactIdleLatchedThreads?: string[];
+  /**
+   * The growth, in context tokens, that makes an idle compaction worth running (`/compact_on_idle`): the conversation must have
+   * grown by at least this much since its first model call after the last compaction. `compactGrowthTokens` is the INSTANCE-WIDE
+   * default, driven from the General topic; absent ⇒ {@link defaultCompactGrowthTokens}. `compactGrowthOverrides` holds the topics'
+   * own values keyed by {@link SessionKey} string; a present entry wins over the default. Both optional so older state files stay
+   * valid; lifecycle-independent (only `/compact_on_idle` mutates them).
+   */
+  compactGrowthTokens?: number;
+  compactGrowthOverrides?: Record<string, number>;
   /**
    * Per-thread compact-on-idle bookkeeping keyed by {@link SessionKey} string —
    * the idle COUNTDOWN's restart guard (see {@link CompactIdleTrackingEntry} for
@@ -1204,6 +1229,8 @@ export class StateStore {
       this.state.bindings ??= {};
       this.state.agents ??= {};
       this.state.messages ??= {};
+      // The idle-compaction user-latch is retired: drop its dead key from an older file.
+      delete this.state.compactIdleLatchedThreads;
     } else if (loaded.reason === 'missing') {
       this.state = emptyState();
       // No save: nothing yet to persist. First setter will trigger a debounce.
@@ -2220,33 +2247,41 @@ export class StateStore {
     });
   }
 
-  /**
-   * @description Whether `key`'s compact-on-idle user-latch is spent (D2): an
-   * idle-compaction already fired this user-active period and no genuine USER
-   * message has re-armed it since. Read by the idle watchdog's fire guard and by
-   * the timer-arming path (a latched thread never re-arms — so a restart can't
-   * re-fire). Default `false` (never latched).
-   */
-  checkIsCompactIdleLatched(key: SessionKey): boolean {
-    return this.state.compactIdleLatchedThreads?.includes(keyToString(key)) ?? false;
-  }
+  // ── idle-compaction growth threshold (`/compact_on_idle`) ──
 
   /**
-   * @description Set/clear `key`'s compact-on-idle user-latch (D2). Set on a
-   * fire, cleared on a genuine USER message / fresh session start. Mirrors
-   * {@link setTimestampsEnabled}'s shape discipline (deduped + sorted, dropped
-   * when empty) and rides the debounced save loop — the persistence is only a
-   * restart guard, so losing the last <=500ms is at worst one extra fire.
+   * @description The instance-wide growth threshold (driven from the General topic), in context tokens:
+   * {@link defaultCompactGrowthTokens} when General never set one.
    */
-  async setCompactIdleLatched(key: SessionKey, isLatched: boolean): Promise<void> {
-    const keyStr = keyToString(key);
-    const current = new Set(this.state.compactIdleLatchedThreads ?? []);
-    if (isLatched) current.add(keyStr);
-    else current.delete(keyStr);
-    const uniqueKeys = [...current].sort();
-    if (uniqueKeys.length > 0) this.state.compactIdleLatchedThreads = uniqueKeys;
-    else delete this.state.compactIdleLatchedThreads;
+  getCompactGrowthGlobalDefault(): number {
+    return this.state.compactGrowthTokens ?? defaultCompactGrowthTokens;
+  }
+
+  /** @description The topic's own growth threshold, or `undefined` when it follows the instance default. */
+  getCompactGrowthOverride(key: SessionKey): number | undefined {
+    return this.state.compactGrowthOverrides?.[keyToString(key)];
+  }
+
+  /** @description The growth threshold in force for `key`: its own value, else the instance default. */
+  getCompactGrowthTokens(key: SessionKey): number {
+    return resolveCompactGrowthTokens(this.state.compactGrowthTokens, this.getCompactGrowthOverride(key));
+  }
+
+  /** @description Set the instance-wide growth threshold (from General). Stored explicitly, so a chosen value is durable whatever the default becomes. Debounced. */
+  async setCompactGrowthGlobalDefault(tokens: number): Promise<void> {
+    if (this.state.compactGrowthTokens === tokens) return;
+    this.state.compactGrowthTokens = tokens;
     this.scheduleSave();
+  }
+
+  /** @description Set the topic's own growth threshold (from a regular topic); a present value wins over the default. Debounced. */
+  async setCompactGrowthOverride(key: SessionKey, tokens: number): Promise<void> {
+    const k = keyToString(key);
+    await this.withLock(key, async () => {
+      if (this.state.compactGrowthOverrides?.[k] === tokens) return;
+      (this.state.compactGrowthOverrides ??= {})[k] = tokens;
+      this.scheduleSave();
+    });
   }
 
   // ── compact-on-idle per-thread bookkeeping (the countdown's restart guard) ──
@@ -2271,18 +2306,23 @@ export class StateStore {
     lastTurnEndAt: number;
     lastCompactionAt: number;
     lastHeldMarkAt: number;
+    /** `null`: no turn since the last compaction has been read yet (the context sizes have no zero: 0 tokens is no reading). */
+    baselineContextTokens: number | null;
+    lastContextTokens: number | null;
   } {
     const k = keyToString(key);
     const entry = this.state.compactIdleTracking?.[k];
     const sessionId = this.getAgentSessionId(k);
     if (!entry || !sessionId || entry.sessionId !== sessionId) {
-      return { lastActivityAt: 0, lastTurnEndAt: 0, lastCompactionAt: 0, lastHeldMarkAt: 0 };
+      return { lastActivityAt: 0, lastTurnEndAt: 0, lastCompactionAt: 0, lastHeldMarkAt: 0, baselineContextTokens: null, lastContextTokens: null };
     }
     return {
       lastActivityAt: entry.lastActivityAt ?? 0,
       lastTurnEndAt: entry.lastTurnEndAt ?? 0,
       lastCompactionAt: entry.lastCompactionAt ?? 0,
       lastHeldMarkAt: entry.lastHeldMarkAt ?? 0,
+      baselineContextTokens: entry.baselineContextTokens ?? null,
+      lastContextTokens: entry.lastContextTokens ?? null,
     };
   }
 
@@ -2327,10 +2367,42 @@ export class StateStore {
       const existing = tracking[k];
       // A stamp under a DIFFERENT session starts the entry fresh: the previous
       // session's instants describe a context this one no longer has.
-      const base = existing?.sessionId === sessionId ? existing : {};
-      tracking[k] = { ...base, sessionId, lastCompactionAt: now };
+      const base: CompactIdleTrackingEntry = existing?.sessionId === sessionId ? existing : {};
+      // The context sizes of before the compaction are no longer the conversation's: the next turn that ends starts the baseline over.
+      const { baselineContextTokens: droppedBaseline, lastContextTokens: droppedLast, ...kept } = base;
+      tracking[k] = { ...kept, sessionId, lastCompactionAt: now };
       this.scheduleSave();
     });
+  }
+
+  /**
+   * @description Record what was read at the end of a turn of `key`: the context size after it (`lastContextTokens`, the growth's
+   * upper end) and, when the conversation had no baseline, the size its epoch's FIRST model call saw (`firstCallContextTokens`, `null`
+   * while it cannot be told). The baseline is then that figure; one that is already there stays, unless a compaction the bot did not
+   * issue replaced the epoch since the last reading (`isNewEpoch`) or the context is now smaller than it — it is replaced or dropped
+   * to be read from the new epoch; a RECHECK (`isBaselineRecheck`, the first call read again beside a baseline) replaces it with a
+   * figure that was read and keeps it when none was ({@link getContextBaselineAfterReading}). Rare — once per turn — so it always
+   * schedules a save: a restart must keep the baseline.
+   */
+  noteCompactIdleContext(key: SessionKey, reading: { lastContextTokens: number; firstCallContextTokens: number | null; isNewEpoch?: boolean; isBaselineRecheck?: boolean }): void {
+    const k = keyToString(key);
+    const sessionId = this.getAgentSessionId(k);
+    if (!sessionId) return; // nothing to bind the figures to — see `getAgentSessionId`
+    const tracking = (this.state.compactIdleTracking ??= {});
+    const existing = tracking[k];
+    const entry: CompactIdleTrackingEntry = existing?.sessionId === sessionId ? existing : { sessionId };
+    const baseline = getContextBaselineAfterReading({
+      baselineContextTokens: entry.baselineContextTokens ?? null,
+      lastContextTokens: reading.lastContextTokens,
+      firstCallContextTokens: reading.firstCallContextTokens,
+      isNewEpoch: reading.isNewEpoch ?? false,
+      isBaselineRecheck: reading.isBaselineRecheck ?? false,
+    });
+    if (baseline === null) delete entry.baselineContextTokens;
+    else entry.baselineContextTokens = baseline;
+    entry.lastContextTokens = reading.lastContextTokens;
+    tracking[k] = entry;
+    this.scheduleSave();
   }
 
   /**

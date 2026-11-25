@@ -193,6 +193,86 @@ export function resolveCompactSelfReviewEnabled(
 }
 
 /**
+ * The growth of a conversation's context, in tokens, that makes an idle compaction worth running (owner, 2026-11-22: «if the
+ * number grows by about 30 000 over what it was after the last compaction, with every instruction and skill loaded, it makes sense
+ * to compact»). The default of `/compact_on_idle`'s threshold, which the General topic and each topic can change.
+ */
+export const defaultCompactGrowthTokens = 30_000;
+
+/** The choices the `/compact_on_idle` picker offers for the threshold, in tokens; a typed value may be any other in range. */
+export const compactGrowthPresetTokens: readonly number[] = [10_000, 20_000, 30_000, 50_000, 100_000];
+
+/** The largest threshold a person may type: a model's context window is the most a conversation can ever grow by. */
+export const maxCompactGrowthTokens = 1_000_000;
+
+/** How long after the last output of a backend with no turn-end signal its context size is read: the turn has most likely settled. */
+export const contextSampleDebounceMs = 5000;
+
+/**
+ * @description The growth threshold in force: the topic's own value, else the instance default (General's), else
+ * {@link defaultCompactGrowthTokens}. A per-thread value always wins.
+ */
+export function resolveCompactGrowthTokens(globalDefault: number | undefined, threadOverride: number | undefined): number {
+  return threadOverride ?? globalDefault ?? defaultCompactGrowthTokens;
+}
+
+/** `50000`, `50 000`, `50,000` or `50k` (the thousands, any case) — what a person types after `/compact_on_idle`. */
+const growthTokensTypedRe = /^(\d+)(k?)$/;
+
+/**
+ * @description The threshold a person typed, in tokens — a whole number, with a `k` for thousands and blanks, commas or
+ * underscores as digit separators ignored — or `null` when it is no number or outside 0…{@link maxCompactGrowthTokens} (0 asks for
+ * a compaction at every idle mark with a new turn, as before the threshold existed).
+ */
+export function parseCompactGrowthTokens(text: string): number | null {
+  const match = growthTokensTypedRe.exec(text.toLowerCase().replace(/[\s,_\u202f\u00a0]/g, ''));
+  if (!match) return null;
+  const tokens = Number(match[1]) * (match[2] === 'k' ? 1000 : 1);
+  return Number.isSafeInteger(tokens) && tokens <= maxCompactGrowthTokens ? tokens : null;
+}
+
+/**
+ * @description How far the context has grown, in tokens, since the conversation's baseline — what its FIRST model call after the last
+ * compaction saw (the summary, every instruction and skill loaded again, the prompt; the compaction's own `post=` figure is not it)
+ * — up to the newest turn read. `null` when either reading is missing: the growth cannot be told ({@link checkIsContextGrownEnough}
+ * says what that means for the compaction). Never negative: a context that shrank has not grown.
+ */
+export function getContextGrowthTokens(input: { baselineContextTokens: number | null; lastContextTokens: number | null }): number | null {
+  if (input.baselineContextTokens === null || input.lastContextTokens === null) return null;
+  return Math.max(0, input.lastContextTokens - input.baselineContextTokens);
+}
+
+/**
+ * @description Whether the context grew enough for an idle compaction to be worth running: the growth reached the threshold. When it
+ * cannot be told (`null`) a conversation never compacted is not held back — there is nothing to measure from yet — but one that WAS
+ * compacted is: nothing is known to have grown, and a backend whose compaction raises no signal of its own (the tmux Claude types
+ * `/compact` into its TUI) would otherwise be compacted at every idle mark, its own output re-arming the next.
+ */
+export function checkIsContextGrownEnough(input: { contextGrowthTokens: number | null; growthThresholdTokens: number; hasEarlierCompaction: boolean }): boolean {
+  if (input.contextGrowthTokens === null) return !input.hasEarlierCompaction;
+  return input.contextGrowthTokens >= input.growthThresholdTokens;
+}
+
+/**
+ * @description The baseline after a context reading. With none yet (the first turn that ends after a compaction, a conversation the
+ * bot has no figures of, a measure at the idle mark) it is the context of the epoch's FIRST model call — the compacted summary, the
+ * instructions, the skills and the prompt, read from the conversation's history — and `null` while that cannot be told (it is read
+ * again at the next reading). A compaction the bot did NOT issue since the last reading (`isNewEpoch`: the CLI's own overflow
+ * compaction, the server's own, counted by the adapter) replaced the epoch, so the baseline it had is the older epoch's: the new
+ * epoch's first call takes its place, `null` while there is none yet. A RECHECK (`isBaselineRecheck`: the first call is read again
+ * although a baseline is there — the first reading of a bot lifetime, a sleeping conversation's every read — because a compaction may
+ * have gone by that no count saw) replaces the baseline with the figure when the read gave one and keeps it when it gave none: the
+ * first call of the epoch the conversation is in IS its baseline, and a failed read says nothing against the old one. Otherwise a
+ * baseline stays — except that a context SMALLER than it is the same sign for a compaction nothing counted (the tmux Claude's own): it
+ * is dropped, to be read again from the new epoch.
+ */
+export function getContextBaselineAfterReading(input: { baselineContextTokens: number | null; lastContextTokens: number; firstCallContextTokens: number | null; isNewEpoch: boolean; isBaselineRecheck?: boolean }): number | null {
+  if (input.isNewEpoch || input.baselineContextTokens === null) return input.firstCallContextTokens;
+  if (input.isBaselineRecheck && input.firstCallContextTokens !== null) return input.firstCallContextTokens;
+  return input.lastContextTokens < input.baselineContextTokens ? null : input.baselineContextTokens;
+}
+
+/**
  * @description Whether the session is busy for a REAL running turn, as opposed
  * to merely idle-WAITING on an unanswered interactive question. Both states make
  * `checkIsBusy` report `true`, but D1 draws them apart: a pending question at idle
@@ -247,7 +327,7 @@ export function checkIsIdleMarkSpent(input: { lastActivityAt: number; lastHeldMa
 
 /** What the idle timer does when it fires: the compaction half and the stop half, each with its reasons. */
 export interface IdleFireDecision {
-  /** Run the idle compaction (D1/D2). */
+  /** Run the idle compaction (D1). */
   shouldCompact: boolean;
   /** Why the compaction is skipped — logged, since a silent skip was the feature's blind spot. */
   compactionSkipReasons: string[];
@@ -272,12 +352,15 @@ export interface IdleFireDecision {
  * {@link checkIsBusyForRealTurn}; D1); the next activity re-arms the timer. The reasons name WHICH signals hold the
  * process (`working (busy turn, unconsumed input 2)`).
  *
- * The compaction runs only when the feature is enabled for the thread, the
- * per-thread user-latch is NOT already spent (D2 — after a fire it stays latched
- * until the next genuine USER message re-arms it, so idle compaction runs at most
- * once per user-active period), at least one agent turn has completed since the
- * last compaction (otherwise there is nothing new to compress), and no
- * usage-limit wait is armed (L-D6: a compaction turn would hit the limit).
+ * The compaction runs only when the feature is enabled for the thread, at least one agent turn has completed since the
+ * last compaction (otherwise there is nothing new to compress), no usage-limit wait is armed (L-D6: a compaction turn would hit
+ * the limit), and the conversation's context GREW enough to be worth compressing (owner, 2026-11-22: «if the context did not
+ * grow much there is no point in compacting»): by `growthThresholdTokens` over what its first model call after the last
+ * compaction saw (see {@link getContextGrowthTokens}). A conversation with no such reading (`contextGrowthTokens: null`) is not
+ * held back by it only while it was never compacted ({@link checkIsContextGrownEnough}). There is no once-per-active-period
+ * latch any more: the growth threshold is what keeps a process that stays alive from being compacted over and over, and the stop
+ * ends the idle period of one that does not — so a topic woken only by its own checks and worker watches is compacted again before
+ * it sleeps once it has grown enough (owner, 2026-11-22: «compaction first, then the topic goes to sleep»).
  *
  * The compaction belongs to the IDLE MARK alone: it exists to read the still-warm prompt cache, which is gone a little after the
  * idle window (`idleCompactMs`), so a compaction later than the mark is only an expensive one. A process held at the mark
@@ -302,16 +385,27 @@ export function getIdleFireDecision(input: {
   /** This fire's countdown was armed (the overdue arm) when the idle mark had already passed: the prompt cache is cold. */
   isIdleMarkMissed: boolean;
   isEnabled: boolean;
-  isLatched: boolean;
   hasCompletedTurnSinceCompaction: boolean;
   isLimitWaitArmed: boolean;
+  /**
+   * How far the context has grown since what the conversation's first model call after its last compaction saw, in tokens
+   * ({@link getContextGrowthTokens}); `null` when that cannot be told.
+   */
+  contextGrowthTokens: number | null;
+  /** The growth that makes the compaction worth it (`/compact_on_idle`, {@link resolveCompactGrowthTokens}). */
+  growthThresholdTokens: number;
+  /** The conversation was compacted before (the saved `lastCompactionAt` is set): an unknown growth then holds the compaction back. */
+  hasEarlierCompaction: boolean;
   canSuspend: boolean;
 }): IdleFireDecision {
   const isWorking = input.workingSignals.length > 0;
   const compactionBlockers = [
     !input.isEnabled && 'disabled',
-    input.isLatched && 'latched (D2)',
     !input.hasCompletedTurnSinceCompaction && 'nothing to compress',
+    !checkIsContextGrownEnough(input)
+      && (input.contextGrowthTokens === null
+        ? 'the context size since the last compaction is not known yet, so nothing is known to have grown'
+        : `the context grew by ${formatTokenCount(input.contextGrowthTokens)} tokens since its first call after the last compaction, ${formatTokenCount(input.growthThresholdTokens)} are needed`),
     input.isLimitWaitArmed && 'a usage-limit wait is armed (L-D6)',
     input.isIdleMarkMissed && 'the idle mark had already passed when the countdown was armed (the prompt cache is cold by now)',
   ].filter((reason): reason is string => typeof reason === 'string');

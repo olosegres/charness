@@ -18,7 +18,7 @@ export type TrackerTurnEngine = Pick<RequestWakeUpEngine, 'trackForwardedTurn' |
 export interface TrackerTurnPosterPorts {
   /** The shared session post (`postToSession`) of this conversation's adapter; `afterForward` watches the turn the write started. */
   post: (key: SessionKey, prompt: SessionPromptText, options: Pick<PostToSessionOptions, 'afterForward'>) => Promise<PostToSessionResult>;
-  /** A person's message clears the spent idle-compaction latch like a topic's message does (and lifts the todo reminder's silence). */
+  /** A person's message restarts the idle countdown like a topic's message does (and lifts the todo reminder's silence). */
   notePersonActivity: (key: SessionKey) => void;
   /** The wake-up engine, read at call time: it is built after the connector's deps. */
   getEngine: () => TrackerTurnEngine | null;

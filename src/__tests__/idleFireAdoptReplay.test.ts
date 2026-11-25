@@ -115,6 +115,7 @@ describe('the idle fire of an adopted session waits for its replay', () => {
       idleWindowMs,
       checkIsLimitWaitArmed: () => false,
       suspendThreadSession: async () => { steps.push('stop'); },
+      readSleepingContext: async () => null,
       resumeSleepingSessionForCompaction: async () => false,
       getThreadAdapter: () => adapter,
       deliverLabel: async () => null,
@@ -134,7 +135,6 @@ describe('the idle fire of an adopted session waits for its replay', () => {
     adapter.finishReplay();
     compaction.clearThreadCompaction(key);
     await harness.state.clearCompactIdleTracking(key);
-    await harness.state.setCompactIdleLatched(key, false);
   });
 
   /**

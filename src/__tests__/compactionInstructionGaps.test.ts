@@ -151,13 +151,14 @@ describe('the self-review section of a compaction summary, through the compactio
       checkIsLimitWaitArmed: () => false,
       // The last step of the idle fire (after the compaction and the posts): the stop of the conversation.
       suspendThreadSession: async () => { idleFireFinished.resolve(); },
+      readSleepingContext: async () => null,
       resumeSleepingSessionForCompaction: async () => false,
       getThreadAdapter: () => adapter,
       deliverLabel: async () => 'forwarded',
       resumeSleepingSessionForPrompt: async () => false,
       checkIsStarting: () => false,
       closeOrphanQuestionMessage: async () => true,
-      notePersonActivity: (activeKey) => { compaction.noteThreadUserActivity(activeKey); },
+      notePersonActivity: (activeKey) => { compaction.noteThreadActivity(activeKey); },
     });
     compaction.registerCompactionCommands();
     compaction.registerCompactionCallbacks();
@@ -180,7 +181,6 @@ describe('the self-review section of a compaction summary, through the compactio
     await harness.state.setCompactSelfReviewOverride(key, true);
     await harness.state.setCompactSelfReviewGlobalDefault(true);
     await harness.state.clearCompactIdleTracking(key);
-    await harness.state.setCompactIdleLatched(key, false);
     await harness.state.setAgent(key, { name: adapter.name, claudeSessionId: 'session-gaps' });
   });
 

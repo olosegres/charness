@@ -6,7 +6,10 @@ import * as path from 'node:path';
 import {
   claudeRuntimeInfoTailBytes,
   getClaudeContextWindowTokens,
+  parseClaudeNewestCallContextUsedTokens,
   parseClaudeRuntimeInfo,
+  readClaudeContextUsedTokens,
+  readClaudeFirstCallContextTokens,
   readClaudeRuntimeInfo,
 } from '../utils/claudeRuntimeInfo';
 
@@ -227,4 +230,130 @@ test('reads runtime metadata from a bounded tail, discards its first line, and c
   } finally {
     fs.rmSync(tempDir, { recursive: true, force: true });
   }
+});
+
+// ── the context of the FIRST model call after the last compaction (the idle compaction's baseline) ──
+
+const boundaryRecord = JSON.stringify({ type: 'system', subtype: 'compact_boundary', content: 'Conversation compacted', compactMetadata: { trigger: 'manual' } });
+const summaryRecord = JSON.stringify({ type: 'user', isCompactSummary: true, message: { role: 'user', content: 'the summary' } });
+
+function createAssistantRecord(usage: { input: number; cacheRead?: number; cacheCreation?: number; output?: number }, extra: Record<string, unknown> = {}): string {
+  return JSON.stringify({
+    type: 'assistant',
+    message: {
+      role: 'assistant',
+      model: 'claude-opus-4-6',
+      content: [{ type: 'text', text: 'ok' }],
+      usage: { input_tokens: usage.input, cache_read_input_tokens: usage.cacheRead ?? 0, cache_creation_input_tokens: usage.cacheCreation ?? 0, output_tokens: usage.output ?? 0 },
+    },
+    ...extra,
+  });
+}
+
+function writeLines(lines: readonly string[]): string {
+  const filePath = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'claude-first-call-')), 'session.jsonl');
+  fs.writeFileSync(filePath, `${lines.join('\n')}\n`);
+  return filePath;
+}
+
+test('readClaudeFirstCallContextTokens: the first model call AFTER the last compaction — input + cache read + cache write, never the older epoch, the turn\'s last call or the output', async () => {
+  const filePath = writeLines([
+    createAssistantRecord({ input: 9, cacheRead: 500_000 }), // an older epoch
+    boundaryRecord,
+    summaryRecord,
+    createAssistantRecord({ input: 3, cacheRead: 21_000, cacheCreation: 1_000, output: 400 }), // the first call of the next turn
+    createAssistantRecord({ input: 5, cacheRead: 90_000, cacheCreation: 2_000, output: 1_200 }), // the same turn's last call, 120k later
+  ]);
+  assert.equal(await readClaudeFirstCallContextTokens(filePath), 22_003);
+  assert.equal(await readClaudeContextUsedTokens(filePath), 5 + 90_000 + 2_000 + 1_200, 'while the context in use now is the last call\'s, output included');
+});
+
+test('readClaudeFirstCallContextTokens: a conversation never compacted gives its first call; a sidechain, a synthetic or error message, a record with no tokens and a line that only mentions an assistant record are no model call of it', async () => {
+  const filePath = writeLines([
+    JSON.stringify({ type: 'user', message: { role: 'user', content: 'the text "type":"assistant" is quoted here' } }),
+    createAssistantRecord({ input: 7, cacheRead: 99_999 }, { isSidechain: true }),
+    createAssistantRecord({ input: 8, cacheRead: 88_888 }, { isApiErrorMessage: true }),
+    JSON.stringify({ type: 'assistant', message: { role: 'assistant', model: '<synthetic>', content: [], usage: { input_tokens: 4, cache_read_input_tokens: 77_777 } } }),
+    JSON.stringify({ type: 'assistant', message: { role: 'assistant', model: 'claude-opus-4-6', content: [] } }),
+    createAssistantRecord({ input: 0 }),
+    createAssistantRecord({ input: 2, cacheRead: 30_000, cacheCreation: 8_000 }),
+    createAssistantRecord({ input: 6, cacheRead: 60_000 }),
+  ]);
+  assert.equal(await readClaudeFirstCallContextTokens(filePath), 38_002);
+});
+
+test('readClaudeFirstCallContextTokens: a long first turn does not push the figure out of reach — the walk goes back to the boundary, past the runtime info\'s 128 KiB tail and one read chunk', async () => {
+  const padding = Array.from({ length: 40 }, () => createClaudeTailPaddingRecord(100_000)); // ~4 MB of tool output inside the epoch
+  const filePath = writeLines([
+    createAssistantRecord({ input: 1, cacheRead: 400_000 }),
+    boundaryRecord,
+    summaryRecord,
+    createAssistantRecord({ input: 3, cacheRead: 24_000, cacheCreation: 500 }),
+    ...padding,
+    createAssistantRecord({ input: 4, cacheRead: 180_000 }),
+  ]);
+  assert.ok(fs.statSync(filePath).size > 3 * claudeRuntimeInfoTailBytes);
+  assert.equal(await readClaudeFirstCallContextTokens(filePath), 24_503);
+});
+
+test('readClaudeFirstCallContextTokens: nothing when the epoch holds no model call yet, the file cannot be read or is empty', async () => {
+  assert.equal(await readClaudeFirstCallContextTokens(writeLines([createAssistantRecord({ input: 1, cacheRead: 1_000 }), boundaryRecord, summaryRecord])), null, 'a compaction just done, no turn yet');
+  assert.equal(await readClaudeFirstCallContextTokens(path.join(os.tmpdir(), 'no-such-dir', 'session.jsonl')), null);
+  assert.equal(await readClaudeFirstCallContextTokens(writeLines([])), null);
+  assert.equal(await readClaudeContextUsedTokens(path.join(os.tmpdir(), 'no-such-dir', 'session.jsonl')), null);
+});
+
+test('readClaudeContextUsedTokens: a turn that ended on a SYNTHETIC record (an API error, an interrupt notice, zero tokens) still reads as its last real model call, never as 0 — the first-call reader skips them too', async () => {
+  const syntheticError = JSON.stringify({ type: 'assistant', isApiErrorMessage: true, error: 'rate_limit', message: { role: 'assistant', model: '<synthetic>', content: [{ type: 'text', text: 'Rate limited' }], usage: { input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 } } });
+  const syntheticNotice = JSON.stringify({ type: 'assistant', message: { role: 'assistant', model: '<synthetic>', content: [{ type: 'text', text: 'Request interrupted' }], usage: { input_tokens: 0, output_tokens: 0 } } });
+  const sidechain = createAssistantRecord({ input: 9, cacheRead: 900_000 }, { isSidechain: true });
+  const filePath = writeLines([
+    boundaryRecord,
+    createAssistantRecord({ input: 3, cacheRead: 40_000, cacheCreation: 9_000, output: 1_500 }), // a real call: 49 003 seen, 1 500 written
+    syntheticError,
+    sidechain,
+    syntheticNotice,
+  ]);
+  assert.equal(await readClaudeContextUsedTokens(filePath), 3 + 40_000 + 9_000 + 1_500, 'the real call before the error records, output included');
+  assert.equal(await readClaudeFirstCallContextTokens(filePath), 49_003, 'and the first call is the same real call');
+  assert.equal(parseClaudeNewestCallContextUsedTokens([syntheticError, syntheticNotice].join('\n')), null, 'a tail of nothing but such records holds no model call');
+  assert.equal(parseClaudeNewestCallContextUsedTokens(''), null);
+  assert.equal(parseClaudeNewestCallContextUsedTokens(`${createAssistantRecord({ input: 1, cacheRead: 5_000 })}\n{"type":"assistant","half`), 5_001, 'a half-written last line is skipped');
+});
+
+test('readClaudeContextUsedTokens: a real call followed by more than the tail\'s 128 KiB of lines that are no call (a huge tool result, then an API-error record) is still found — the walk goes back through the epoch, and not past its boundary', async () => {
+  const syntheticError = JSON.stringify({ type: 'assistant', isApiErrorMessage: true, error: 'invalid_request', message: { role: 'assistant', model: '<synthetic>', content: [{ type: 'text', text: 'Prompt is too long' }], usage: { input_tokens: 0, output_tokens: 0 } } });
+  const toolResult = createClaudeTailPaddingRecord(3 * claudeRuntimeInfoTailBytes);
+  const filePath = writeLines([
+    createAssistantRecord({ input: 9, cacheRead: 700_000 }), // an older epoch
+    boundaryRecord,
+    summaryRecord,
+    createAssistantRecord({ input: 3, cacheRead: 40_000, cacheCreation: 9_000, output: 1_500 }), // the epoch's real calls
+    createAssistantRecord({ input: 4, cacheRead: 120_000, cacheCreation: 2_000, output: 800 }), // the newest real call
+    toolResult,
+    syntheticError,
+  ]);
+  assert.ok(fs.statSync(filePath).size > 3 * claudeRuntimeInfoTailBytes);
+  assert.equal(parseClaudeNewestCallContextUsedTokens(fs.readFileSync(filePath, 'utf8').split('\n').slice(-3).join('\n')), null, 'the tail alone holds no call: that is the case');
+  assert.equal(await readClaudeContextUsedTokens(filePath), 4 + 120_000 + 2_000 + 800, 'the newest real call, found past the long tool result');
+
+  // The walk ends at the epoch's boundary: a call of the OLDER epoch is no figure of the conversation now.
+  const afterCompaction = writeLines([createAssistantRecord({ input: 9, cacheRead: 700_000 }), boundaryRecord, summaryRecord, toolResult, syntheticError]);
+  assert.equal(await readClaudeContextUsedTokens(afterCompaction), null, 'nothing since the compaction is a model call');
+});
+
+test('the newest-call readers stop at the last compaction boundary: a big call, a boundary and no call after it is no figure of the conversation now — the tail path and the walk agree', async () => {
+  const bigCall = createAssistantRecord({ input: 3, cacheRead: 150_000, cacheCreation: 9_000, output: 4_000 });
+  const noCallAfterBoundary = [bigCall, boundaryRecord, summaryRecord];
+  assert.equal(parseClaudeNewestCallContextUsedTokens(noCallAfterBoundary.join('\n')), null, 'the tail: the older epoch\'s call is behind the boundary');
+  assert.equal(await readClaudeContextUsedTokens(writeLines(noCallAfterBoundary)), null, 'the file, whose tail holds the boundary');
+
+  // A call after the boundary is the figure; one before it never is.
+  const callAfterBoundary = [bigCall, boundaryRecord, summaryRecord, createAssistantRecord({ input: 2, cacheRead: 20_000, output: 100 })];
+  assert.equal(parseClaudeNewestCallContextUsedTokens(callAfterBoundary.join('\n')), 20_102);
+  assert.equal(await readClaudeContextUsedTokens(writeLines(callAfterBoundary)), 20_102);
+
+  // The same with the error record the fire meets after an interrupted turn (still behind the boundary's epoch, not before it).
+  const errorAfterBoundary = JSON.stringify({ type: 'assistant', isApiErrorMessage: true, message: { role: 'assistant', model: '<synthetic>', content: [], usage: { input_tokens: 0, output_tokens: 0 } } });
+  assert.equal(await readClaudeContextUsedTokens(writeLines([bigCall, boundaryRecord, summaryRecord, errorAfterBoundary])), null);
 });

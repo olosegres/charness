@@ -38,6 +38,7 @@ import {
   fakeClaudeLoginFileName,
   fakeClaudeLoginUrl,
   fakeClaudeUsageWindowsFileName,
+  fakeClaudeContextTokensFileName,
   fakeDefaultAccountName,
   fakeConsoleLogin,
   fakeClaudePlatformEnvName,
@@ -226,6 +227,9 @@ import { claudeSessionStateEventsVariableName } from '../../utils/jsonStreamHost
  *    `fakeClaudeApiErrorDelayFileName` while that exists);
  *  - while `fakeClaudeUsageWindowsFileName` exists in the state dir, every turn starts with the `rate_limit_event` frame the
  *    real CLI streams: the usage windows the file lists for the account the process runs on;
+ *  - while `fakeClaudeContextTokensFileName` exists in the state dir, every turn ends with two assistant records in the transcript
+ *    — its first model call and its last — whose usage is the numbers the file holds: the context sizes the bot reads for the idle
+ *    compaction's growth gate;
  *  - `arm-watch`   — an orchestrator watching a worker the way `charness-orchestration` says: `touch` the run directory's
  *    `watch-armed` marker, then `schedule_create` with the real worker-watch recipe (`scheduler/workerWatch.ts`) on a worker that
  *    is gone — or, while `fakeStatusWatchTargetFileName` exists in the state dir, on the live worker the TEST names there —
@@ -1113,7 +1117,22 @@ function emitUsageWindows(sessionId: string): void {
   });
 }
 
+/** The turn's assistant records of the real CLI's transcript — its first model call and its last — with the context sizes the test set ({@link fakeClaudeContextTokensFileName}). */
+function recordAssistantContext(sessionId: string, text: string): void {
+  const contextPath = path.join(getStateDir(), fakeClaudeContextTokensFileName);
+  if (!fs.existsSync(contextPath)) return;
+  const [firstCallTokens, lastCallTokens = firstCallTokens] = fs.readFileSync(contextPath, 'utf8').trim().split(/\s+/).map(Number);
+  const transcriptPath = getTranscriptPath(sessionId);
+  fs.mkdirSync(path.dirname(transcriptPath), { recursive: true });
+  const createRecord = (inputTokens: number): string => {
+    const usage = { input_tokens: inputTokens, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 };
+    return `${JSON.stringify({ type: 'assistant', sessionId, isSidechain: false, message: { role: 'assistant', model: 'fake-model', content: [{ type: 'text', text }], usage } })}\n`;
+  };
+  fs.appendFileSync(transcriptPath, createRecord(firstCallTokens) + createRecord(lastCallTokens));
+}
+
 function endTurn(sessionId: string, resultText: string): void {
+  recordAssistantContext(sessionId, resultText);
   writeStdout({ type: 'result', subtype: 'success', is_error: false, result: resultText, session_id: sessionId, usage: fakeTurnUsage, total_cost_usd: addConversationCost(fakeTurnCostUsd) });
 }
 
@@ -1244,7 +1263,8 @@ function endTurnAfterSetAsideQuestion(sessionId: string): void {
 /**
  * `[fake:schedule-once <seconds> <label>]` (see `fakeScheduleOnceToken`): create the one-shot prompt schedule the token names,
  * on the bot's MCP — in a turn that asks, BEFORE its question (the bot then delivers a prompt of its own while the question waits);
- * in a turn of a request in any other mode, at the turn's start.
+ * in a request's turn of any other mode at the turn's start, in a turn without a request after its work — so the bot delivers it
+ * later, whether the turn waits on a question or has long ended.
  */
 const scheduleOnceRe = /\[fake:schedule-once (\d+) ([^\]]+)\]/;
 
@@ -1487,12 +1507,14 @@ async function runTurn(argv: readonly string[], sessionId: string, content: stri
     // to be put to the user), `usage-limit-once` (a limit needs none to stop the turn; the bot's later "continue"
     // nudge carries no token, so it is answered — the "once") and `overflow` (the CLI's own compaction needs none).
     const noRequestMode = modeRe.exec(content)?.[1];
+    const noRequestAskVariant = noRequestMode === undefined ? undefined : fakeAskVariantByMode[noRequestMode as FakeClaudeMode];
+    // A turn that asks arms its schedule right before its question (below).
+    if (!noRequestAskVariant) await armScheduledPrompt(argv, content, noRequestIssueKey);
     if (noRequestMode === 'overflow') await emitOverflowCompaction(argv, sessionId);
     if (noRequestMode === 'usage-limit-once') {
       endTurnOnUsageLimit(sessionId, limitResetsRe.exec(content)?.[1] ?? 'in 1h');
       return;
     }
-    const noRequestAskVariant = noRequestMode === undefined ? undefined : fakeAskVariantByMode[noRequestMode as FakeClaudeMode];
     if (noRequestAskVariant) {
       await armScheduledPrompt(argv, content, noRequestIssueKey);
       emitNarrationInThinking(content);

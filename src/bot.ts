@@ -487,7 +487,8 @@ import { createDisplayModes, formatTopicView } from './connectors/telegram/comma
 import { createReminders, type ReminderWizardSession } from './connectors/telegram/commands/reminders';
 import { createModelProviders, type PendingProviderConnect } from './connectors/telegram/commands/modelProviders';
 import { answerCallbackWithFittedText, answerCallbackWithWholeText } from './connectors/telegram/commands/callbackToast';
-import { createCompaction } from './connectors/telegram/commands/compaction';
+import { createCompaction, type ThreadContextReading } from './connectors/telegram/commands/compaction';
+import { readClaudeContextUsedTokens, readClaudeFirstCallContextTokens } from './utils/claudeRuntimeInfo';
 import { createAutoContinueLimits, appendAutoContinueLimitsHint } from './connectors/telegram/commands/autoContinueLimits';
 import { createBotSkills } from './connectors/telegram/commands/botSkills';
 import { createQuestionWait } from './connectors/telegram/commands/questionWait';
@@ -5935,13 +5936,6 @@ async function startAgentSession(key: SessionKey, args?: string): Promise<string
   // typed right after `/claude` / `/opencode` is buffered, not dropped. A failed resume's window may be open already: this start takes
   // it over, and its replay writes what the resume held.
   startupPromptBuffer.markStarting(kStr);
-  // A fresh session is a new conversation — clear any spent compact-on-idle latch
-  // (D2) so this session can idle-compact even if the PREVIOUS session in this
-  // thread already fired one (its latch persisted). The user starting the agent
-  // is the genuine user action that re-arms it.
-  if (state.checkIsCompactIdleLatched(key)) {
-    void state.setCompactIdleLatched(key, false);
-  }
   markNeedsNewMessage(key);
   // Fresh session — the agent's context is empty, so the next prompt must
   // re-carry the thread-context preamble. Forget the last-injected marker.
@@ -6221,7 +6215,7 @@ function getResumableSessionId(key: SessionKey): string | null {
  * @description Resume a sleeping conversation SILENTLY (L-D4): no "started" notice,
  * no recap — the next prompt simply continues it. Opens the startup window first so
  * a message typed meanwhile is buffered and replayed, like a fresh start. The
- * conversation keeps its compaction latch, its thread-context marker and its
+ * conversation keeps its compaction bookkeeping, its thread-context marker and its
  * start time: nothing about it changed, only the process is back. Resolves
  * `null` once resumed, else how it failed — the backend refused the id or the
  * process did not come up, or the backend's server could not be brought up; the
@@ -6366,7 +6360,7 @@ const autoStopUnsupportedLoggedKeys = new Set<string>();
 /**
  * @description `turnEnded` from a json-stream adapter. The idle countdown runs from
  * the end of the last turn: an idle fire that found the turn still running is not
- * rescheduled (D2), and a turn whose answer went out through `answer_request`
+ * rescheduled (the turn's own end re-arms it), and a turn whose answer went out through `answer_request`
  * produces no later output to re-arm it — the process would never reach its idle
  * compaction and stop, and its pending-work hold would never be enforced. (A
  * bot-issued compaction's own turn end is skipped by the arming's loop guard.)
@@ -6386,6 +6380,8 @@ function handleAgentTurnEnded(key: SessionKey): void {
   withdrawAccountsInbox(key);
   getLimitNotes().noteTurnEnd(key);
   noteThreadActivity(key);
+  // Started here, before the per-turn stop below is queued: the process is read while it is still the session's.
+  noteThreadTurnContext(key);
   topicIndicator.requestRefresh(key);
   const adapter = getThreadAdapter(key);
   if (adapter.name === claudePerTurnAdapterName && !checkIsDeferredCompactionArmed(key) && !adapter.checkIsWorking?.(key)) {
@@ -6995,7 +6991,7 @@ const botCore: BotCore = {
 const {
   checkIsThreadCompacting,
   noteThreadActivity,
-  noteThreadUserActivity,
+  noteThreadTurnContext,
   markThreadTurnProducedOutput,
   postOwnCompactionInstructionGaps,
   routeStreamedCompactionSummaryTail,
@@ -7027,6 +7023,7 @@ const {
   suspendThreadSession,
   // L-D7: a sleeping per-turn session is woken for its idle compaction — a resume only, never a fresh start.
   resumeSleepingSessionForCompaction: async (key) => (await ensureAgentSession(key, { isResumeOnly: true })).ok && getThreadAdapter(key).checkIsActive(key),
+  readSleepingContext: readSleepingConversationContext,
   getThreadAdapter,
   // An answer to the agent's own question is never a request (S7), even delivered as a prompt.
   // The label of a re-asked question reaches the agent as a prompt; a topic member's carries their mark, the operator's stays bare.
@@ -9812,14 +9809,14 @@ function getConversationAccountState(key: SessionKey): { isLimited: boolean; isA
 }
 
 /**
- * @description A person wrote in the conversation (a message, voice, file, album; an issue's request): the
- * compact-on-idle latch clears (D2), the todo reminder's silence after ignored reminders ends (D13), and a question the
+ * @description A person wrote in the conversation (a message, voice, file, album; an issue's request): the idle countdown
+ * restarts, the todo reminder's silence after ignored reminders ends (D13), and a question the
  * idle compaction re-asked is closed as unanswered — they wrote something else instead of tapping it, like a live
  * question a message cancels, and its buttons must not be tapped later onto whatever the agent asks next. A tap on the
  * re-asked question takes its record before it gets here, so it is not closed by its own answer.
  */
 function notePersonActivity(key: SessionKey): void {
-  noteThreadUserActivity(key);
+  noteThreadActivity(key);
   getTodoRegistry().notePersonActivity(key);
   closeReAskedQuestion(key);
   // Their words go to the agent now — on an account that works, or back into the wait if none does — so no later resume adds a nudge.
@@ -12103,7 +12100,7 @@ const albumCollector = createMediaGroupCollector<AlbumCollectorItem>({
       // User took over (album upload) before a pending API-error retry fired →
       // cancel it silently, like the text/voice handlers.
       cancelApiRetry(key);
-      // A user album is genuine user activity → clear the compact-on-idle latch (D2).
+      // A user album is genuine user activity: the idle countdown restarts.
       notePersonActivity(key);
       try {
         await deliverPromptByState(key, promptText, { source: 'album', requesterId: orderedItems[0].requesterId }, undefined, messageContext);
@@ -12202,7 +12199,7 @@ async function handleIncomingFile(
   // User took over (file upload) before a pending API-error retry fired →
   // cancel it silently, like the text/voice handlers.
   cancelApiRetry(key);
-  // A user file is genuine user activity → clear the compact-on-idle latch (D2).
+  // A user file is genuine user activity: the idle countdown restarts.
   notePersonActivity(key);
   // A file sent as a REPLY carries the message it answers, a forwarded one its origin, as a typed or spoken message does.
   const messageContext = getMessageContext(key, ctx.message);
@@ -13011,7 +13008,7 @@ async function deliverPromptDuringStartup(
   // control guard asks `checkIsForeignWords`).
   if (messageContext?.isForwarded !== true && await answerReAskedQuestionByNumber(key, text, messageContext)) return;
   // A person wrote, in a window where the session is starting or being stopped: it counts like a message that reaches
-  // `deliverActivePrompt` — the idle latch clears, and a question the idle compaction re-asked is closed (the idle fire
+  // `deliverActivePrompt` — the idle countdown restarts, and a question the idle compaction re-asked is closed (the idle fire
   // posts it just before the stop, so this window is where a message instead of a tap most often lands).
   notePersonActivity(key);
   await deliverPromptByState(key, text, intake, undefined, messageContext);
@@ -13051,8 +13048,7 @@ async function deliverActivePrompt(
   const isForwarded = messageContext?.isForwarded === true;
   // A bare option number answers the question the idle compaction asked again (a tap's own label comes in with no intake).
   if (intake !== null && !isForwarded && await answerReAskedQuestionByNumber(key, text, messageContext)) return null;
-  // A genuine USER message (text or voice) — clear the compact-on-idle latch so
-  // the next idle period can compact again (D2), whether it answers a pending
+  // A genuine USER message (text or voice) — the idle countdown restarts, whether it answers a pending
   // question or is a fresh prompt.
   notePersonActivity(key);
   const pending = pendingQuestions.get(keyToString(key));
@@ -13270,7 +13266,7 @@ async function deliverLateAnswerPrompt(key: SessionKey, text: string): Promise<L
   // The owner took over, like with any message they type: an armed usage-limit wait is over (the answer is not written INTO it, and its
   // own «continue» nudge would come on top of the answer later).
   cancelApiRetry(key);
-  noteThreadUserActivity(key);
+  noteThreadActivity(key);
   return deliverPromptByState(key, text, null);
 }
 
@@ -15775,6 +15771,23 @@ function markLimitEpisodeSettled(key: SessionKey): void {
 }
 
 /**
+ * @description What a conversation whose process is STOPPED (a sleeping per-turn session) weighs, read from its Claude transcript by the
+ * session id and work folder the bot persisted — a stopped session has no live adapter state to ask. The idle compaction measures it
+ * at its mark, before it decides to resume the session for a compaction. `null` when there is no session id or folder or no transcript.
+ */
+async function readSleepingConversationContext(key: SessionKey, isBaselineNeeded: boolean): Promise<ThreadContextReading | null> {
+  const claudeSessionId = state.getAgent(key)?.claudeSessionId;
+  const workDirDecision = getWorkDirStartDecision(key);
+  if (!claudeSessionId || !workDirDecision.ok) return null;
+  const transcriptPath = getClaudeTranscriptPath(workDirDecision.workDir, claudeSessionId);
+  const [lastContextTokens, firstCallContextTokens] = await Promise.all([
+    readClaudeContextUsedTokens(transcriptPath),
+    isBaselineNeeded ? readClaudeFirstCallContextTokens(transcriptPath) : null,
+  ]);
+  return { lastContextTokens, firstCallContextTokens };
+}
+
+/**
  * @description When the parked `errorText` of a json-stream conversation was written, from its Claude transcript's
  * API-error entry ({@link readTranscriptErrorWrittenAtMs}); `null` when the transcript tail cannot be read or holds no such
  * entry — the recovery then goes by the stdout log's mtime.
@@ -16962,9 +16975,8 @@ function createJiraSessionDeps(requestLedger: RequestLedger, slots: TaskAgentSlo
     },
     createRequest: (key, origin, createPrompt) => requestLedger.createRequest(key, origin, { createPrompt }),
     listOpenRequests: (key) => requestLedger.listOpenRequestsOf(key),
-    // A request is the issue's "user message" (L-D5): posting it clears the spent idle-compaction latch like a topic's message
-    // does, or the issue would never compact again. An issue update (a comment for an open hand-over request) opens no request:
-    // the turn it starts is that request's.
+    // A request is the issue's "user message" (L-D5): posting it restarts the idle countdown, like a topic's message does. An issue
+    // update (a comment for an open hand-over request) opens no request: the turn it starts is that request's.
     ...createTrackerTurnPoster({
       post: (key, prompt, options) => postToSession(sessionPostDeps, keyToString(key), prompt, adapterName, options),
       notePersonActivity,

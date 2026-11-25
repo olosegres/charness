@@ -64,8 +64,7 @@ Jira: the platform-specific parts (the `/todo` view, a topic's name) are injecte
   conversation nothing of that turn reaches the issue: the agent can answer only through `answer_request`, and no
   request is open (a gate), so it is no hand-over and spends no run budget (D58).
 - A delivered reminder (either form) starts the work count afresh and counts as ignored until the next update; after
-  `todoReminderMaxIgnored` (2) the bot is silent until the agent updates or a person writes (`notePersonActivity`,
-  beside the compact-on-idle latch).
+  `todoReminderMaxIgnored` (2) the bot is silent until the agent updates or a person writes (`notePersonActivity`).
 - **Settings:** `settings.json` `todo: { isEnabled, reminderMinutes }` (`instanceSettings.ts`), defaults on / 60 min,
   set from `/todo` in General. Off = the tools are not offered (the MCP `todos` port is read per request), no board,
   no reminder, no final-answer hint.

@@ -15,6 +15,12 @@ import {
   compactIdleOverdueMinDelayMs,
   compactIdleOverdueSpreadMs,
   resolveCompactOnIdleEnabled,
+  defaultCompactGrowthTokens,
+  resolveCompactGrowthTokens,
+  parseCompactGrowthTokens,
+  getContextGrowthTokens,
+  getContextBaselineAfterReading,
+  checkIsContextGrownEnough,
   getAgentIdleMs,
   getIdleFireDecision,
   checkIsBusyForRealTurn,
@@ -59,16 +65,20 @@ import { t } from '../i18n';
 
 type IdleFireInput = Parameters<typeof getIdleFireDecision>[0];
 
-/** The all-conditions-met base for the idle-fire decision (D1/D2, L3): compact AND stop. */
+const growthThreshold = 30_000;
+
+/** The all-conditions-met base for the idle-fire decision (D1, L3): compact AND stop, the context grown past the threshold. */
 const fireBase = {
   isSessionActive: true,
   workingSignals: [],
   isIdleMarkSpent: false,
   isIdleMarkMissed: false,
   isEnabled: true,
-  isLatched: false,
   hasCompletedTurnSinceCompaction: true,
   isLimitWaitArmed: false,
+  contextGrowthTokens: growthThreshold + 5_000,
+  growthThresholdTokens: growthThreshold,
+  hasEarlierCompaction: false,
   canSuspend: true,
 } as const;
 
@@ -290,11 +300,15 @@ test('getIdleFireDecision: the overdue boot fire (the bot was down past the wind
 
 test('getIdleFireDecision: a compaction that was not due anyway is not "held" — no notice for a skip the hold did not cause', () => {
   const working = [{ kind: 'backgroundTasks', count: 1 }] as const;
-  for (const override of [{ isEnabled: false }, { isLatched: true }, { hasCompletedTurnSinceCompaction: false }, { isLimitWaitArmed: true }, { isSessionActive: false }]) {
+  for (const override of [{ isEnabled: false }, { contextGrowthTokens: growthThreshold - 1 }, { hasCompletedTurnSinceCompaction: false }, { isLimitWaitArmed: true }, { isSessionActive: false }]) {
     const decision = getIdleFireDecision({ ...fireBase, ...override, workingSignals: working });
     assert.equal(decision.isIdleMarkHeld, false, JSON.stringify(override));
     assert.equal(decision.heldNoticeReason, null, JSON.stringify(override));
   }
+  // The context grew enough, so the hold at the mark costs a compaction that was due: it is held and told.
+  const grownAndHeld = getIdleFireDecision({ ...fireBase, workingSignals: working });
+  assert.equal(grownAndHeld.isIdleMarkHeld, true);
+  assert.equal(grownAndHeld.heldNoticeReason, 'backgroundWork');
 });
 
 test('getIdleCompactionArmDecision: a shortened window shortens the overdue floor and spread in proportion — a test\'s 12 s window does not wait out a minute', () => {
@@ -331,7 +345,6 @@ test('getIdleFireDecision: a RE-CHECK of a held mark never compacts — a compac
 test('getIdleFireDecision: each compaction guard skips the compaction but the stop still happens (L-D1, L-D6)', () => {
   const cases: Array<[Partial<IdleFireInput>, string]> = [
     [{ isEnabled: false }, 'disabled'],
-    [{ isLatched: true }, 'latched (D2)'],
     [{ hasCompletedTurnSinceCompaction: false }, 'nothing to compress'],
     [{ isLimitWaitArmed: true }, 'a usage-limit wait is armed (L-D6)'],
   ];
@@ -341,6 +354,96 @@ test('getIdleFireDecision: each compaction guard skips the compaction but the st
     assert.deepEqual(decision.compactionSkipReasons, [reason]);
     assert.equal(decision.shouldSuspend, true, `${reason}: the stop happens regardless`);
   }
+});
+
+test('getIdleFireDecision: the context must have GROWN by the threshold over the baseline — less is not worth a compaction, the stop still follows (owner, 2026-11-22)', () => {
+  // Exactly the threshold is enough (the owner's «about 30 000»); one token short is not.
+  assert.equal(getIdleFireDecision({ ...fireBase, contextGrowthTokens: growthThreshold }).shouldCompact, true, 'reaching the threshold compacts');
+  const short = getIdleFireDecision({ ...fireBase, contextGrowthTokens: growthThreshold - 1 });
+  assert.equal(short.shouldCompact, false);
+  assert.equal(short.compactionSkipReasons.length, 1);
+  assert.equal(short.compactionSkipReasons[0], `the context grew by ${formatTokenCount(29_999)} tokens since its first call after the last compaction, ${formatTokenCount(30_000)} are needed`, 'the log says how much it grew and how much is needed');
+  assert.equal(short.shouldSuspend, true, 'a skipped compaction still sleeps');
+  // A conversation that has not grown at all, and one whose threshold is 0 («at every idle mark with a new turn»).
+  assert.equal(getIdleFireDecision({ ...fireBase, contextGrowthTokens: 0 }).shouldCompact, false);
+  assert.equal(getIdleFireDecision({ ...fireBase, contextGrowthTokens: 0, growthThresholdTokens: 0 }).shouldCompact, true);
+  // No reading of a conversation never compacted: nothing to measure from yet, not held back by the gate — but one that was compacted
+  // before is: nothing is known to have grown (a backend that raises no signal of its own for a compaction would otherwise be compacted at every mark).
+  assert.equal(getIdleFireDecision({ ...fireBase, contextGrowthTokens: null }).shouldCompact, true);
+  const unknownAfterCompaction = getIdleFireDecision({ ...fireBase, contextGrowthTokens: null, hasEarlierCompaction: true });
+  assert.equal(unknownAfterCompaction.shouldCompact, false);
+  assert.deepEqual(unknownAfterCompaction.compactionSkipReasons, ['the context size since the last compaction is not known yet, so nothing is known to have grown']);
+  assert.equal(unknownAfterCompaction.shouldSuspend, true, 'the stop still follows');
+  assert.equal(getIdleFireDecision({ ...fireBase, contextGrowthTokens: growthThreshold, hasEarlierCompaction: true }).shouldCompact, true, 'a known growth decides, whatever the history');
+  // The other guards stay: grown enough but nothing new to compress is still no compaction, and the reasons add up.
+  const both = getIdleFireDecision({ ...fireBase, contextGrowthTokens: 100, hasCompletedTurnSinceCompaction: false });
+  assert.equal(both.compactionSkipReasons.length, 2);
+});
+
+test('getIdleFireDecision: no latch of an earlier compaction keeps a grown conversation from its compaction before the sleep — a topic only its own checks wake is compacted again', () => {
+  // The decision has no memory of an earlier compaction beyond the growth since it: a conversation that grew compacts at any mark.
+  const decision = getIdleFireDecision({ ...fireBase, contextGrowthTokens: 2 * growthThreshold });
+  assert.equal(decision.shouldCompact, true);
+  assert.equal(decision.shouldSuspend, true, 'compaction first, then the stop');
+  assert.deepEqual(decision.compactionSkipReasons, []);
+});
+
+test('resolveCompactGrowthTokens: the topic\'s own value wins, then the instance default, then 30 000', () => {
+  assert.equal(defaultCompactGrowthTokens, 30_000);
+  assert.equal(resolveCompactGrowthTokens(undefined, undefined), 30_000);
+  assert.equal(resolveCompactGrowthTokens(50_000, undefined), 50_000, 'General\'s value for a topic with none of its own');
+  assert.equal(resolveCompactGrowthTokens(50_000, 10_000), 10_000, 'the topic\'s own value wins');
+  assert.equal(resolveCompactGrowthTokens(50_000, 0), 0, 'a topic\'s 0 is a value, not «unset»');
+});
+
+test('parseCompactGrowthTokens: a whole number of tokens, `k` for thousands, separators ignored; anything else or out of range is no threshold', () => {
+  for (const [typed, tokens] of [['30000', 30_000], ['50k', 50_000], ['50K', 50_000], ['50 000', 50_000], ['50,000', 50_000], ['50_000', 50_000], ['0', 0], ['1000000', 1_000_000], ['1000k', 1_000_000], ['  20k ', 20_000]] as const) {
+    assert.equal(parseCompactGrowthTokens(typed), tokens, typed);
+  }
+  for (const typed of ['', 'k', 'lots', '-5', '1.5k', '30000x', '1000001', '2000k', '99999999999999999999']) {
+    assert.equal(parseCompactGrowthTokens(typed), null, typed);
+  }
+});
+
+test('getContextGrowthTokens: from the baseline up to the newest reading, never negative, unknown without either', () => {
+  assert.equal(getContextGrowthTokens({ baselineContextTokens: 40_000, lastContextTokens: 73_500 }), 33_500);
+  assert.equal(getContextGrowthTokens({ baselineContextTokens: 40_000, lastContextTokens: 40_000 }), 0);
+  assert.equal(getContextGrowthTokens({ baselineContextTokens: 40_000, lastContextTokens: 38_000 }), 0, 'a smaller context has not grown');
+  assert.equal(getContextGrowthTokens({ baselineContextTokens: null, lastContextTokens: 40_000 }), null);
+  assert.equal(getContextGrowthTokens({ baselineContextTokens: 40_000, lastContextTokens: null }), null);
+});
+
+test('getContextBaselineAfterReading: with none yet it is the epoch\'s FIRST call (not the turn\'s end), unknown while that cannot be told; a compaction the bot did not issue replaces it; a larger context leaves it, a smaller one drops it', () => {
+  const same = { isNewEpoch: false };
+  assert.equal(getContextBaselineAfterReading({ ...same, baselineContextTokens: null, lastContextTokens: 120_000, firstCallContextTokens: 25_000 }), 25_000, 'the first call after the compaction, even though the turn ended at 120 000');
+  assert.equal(getContextBaselineAfterReading({ ...same, baselineContextTokens: null, lastContextTokens: 120_000, firstCallContextTokens: null }), null, 'the history could not be read: no baseline, never the turn\'s end');
+  assert.equal(getContextBaselineAfterReading({ ...same, baselineContextTokens: 25_000, lastContextTokens: 80_000, firstCallContextTokens: null }), 25_000, 'growth never moves the baseline');
+  assert.equal(getContextBaselineAfterReading({ ...same, baselineContextTokens: 25_000, lastContextTokens: 25_000, firstCallContextTokens: null }), 25_000);
+  assert.equal(getContextBaselineAfterReading({ ...same, baselineContextTokens: 200_000, lastContextTokens: 60_000, firstCallContextTokens: null }), null, 'a compaction nothing counted: the baseline is of the older epoch, read again from the new one');
+  // The CLI's own overflow compaction: the new epoch starts about as high as the old first call (a new summary, the same instructions),
+  // so the context is NOT smaller than the old baseline — the count is what tells the epoch was replaced.
+  assert.equal(getContextBaselineAfterReading({ isNewEpoch: true, baselineContextTokens: 20_000, lastContextTokens: 52_000, firstCallContextTokens: 45_000 }), 45_000, 'replaced by the new epoch\'s first call');
+  assert.equal(getContextBaselineAfterReading({ isNewEpoch: true, baselineContextTokens: 20_000, lastContextTokens: 52_000, firstCallContextTokens: null }), null, 'and none until that call exists — never the old epoch\'s');
+});
+
+test('getContextBaselineAfterReading: a RECHECK (the first call read again though a baseline is there) replaces the baseline when the read gave a figure and keeps it when it gave none', () => {
+  const recheck = { isNewEpoch: false, isBaselineRecheck: true };
+  assert.equal(getContextBaselineAfterReading({ ...recheck, baselineContextTokens: 20_000, lastContextTokens: 70_000, firstCallContextTokens: 60_000 }), 60_000, 'the epoch the bot did not see replaced: the first call is the baseline of the epoch now');
+  assert.equal(getContextBaselineAfterReading({ ...recheck, baselineContextTokens: 20_000, lastContextTokens: 70_000, firstCallContextTokens: 20_000 }), 20_000, 'the same epoch: the same figure');
+  assert.equal(getContextBaselineAfterReading({ ...recheck, baselineContextTokens: 20_000, lastContextTokens: 70_000, firstCallContextTokens: null }), 20_000, 'the history could not be read: the baseline stays, it is not dropped');
+  assert.equal(getContextBaselineAfterReading({ ...recheck, baselineContextTokens: 200_000, lastContextTokens: 60_000, firstCallContextTokens: null }), null, 'a context smaller than the baseline still drops it: that is no failed read');
+  assert.equal(getContextBaselineAfterReading({ ...recheck, baselineContextTokens: null, lastContextTokens: 70_000, firstCallContextTokens: null }), null, 'no baseline and none read: still none');
+  assert.equal(getContextBaselineAfterReading({ isNewEpoch: true, isBaselineRecheck: true, baselineContextTokens: 20_000, lastContextTokens: 70_000, firstCallContextTokens: null }), null, 'a counted change of the epoch says the old baseline is wrong: it is dropped, recheck or not');
+  assert.equal(getContextBaselineAfterReading({ isNewEpoch: false, baselineContextTokens: 20_000, lastContextTokens: 70_000, firstCallContextTokens: 60_000 }), 20_000, 'without the flag a baseline that is there stays');
+});
+
+test('checkIsContextGrownEnough: the threshold reached; no reading passes only for a conversation never compacted — the single place both the fire and the per-turn wake-up ask', () => {
+  const base = { growthThresholdTokens: 30_000, hasEarlierCompaction: false };
+  assert.equal(checkIsContextGrownEnough({ ...base, contextGrowthTokens: 30_000 }), true);
+  assert.equal(checkIsContextGrownEnough({ ...base, contextGrowthTokens: 29_999 }), false);
+  assert.equal(checkIsContextGrownEnough({ ...base, contextGrowthTokens: 29_999, hasEarlierCompaction: true }), false);
+  assert.equal(checkIsContextGrownEnough({ ...base, contextGrowthTokens: null }), true, 'never compacted: nothing to measure from yet');
+  assert.equal(checkIsContextGrownEnough({ ...base, contextGrowthTokens: null, hasEarlierCompaction: true }), false, 'compacted before and unknown: nothing is known to have grown');
 });
 
 test('getIdleFireDecision: a backend that cannot be suspended keeps its process (L-D8) — the compaction alone', () => {

@@ -11,18 +11,37 @@ import { checkIsRecord } from './checkIsRecord';
 /** How much of the file one read takes. */
 const readChunkBytes = 1024 * 1024;
 const newlineByte = 0x0a;
-/** The key a line must carry to be a compaction boundary: checked on the raw bytes before anything is decoded. */
-const compactBoundaryKey = Buffer.from('"compact_boundary"');
+/** The key a line must carry to be a compaction boundary: checked on the raw line before anything is decoded. */
+const compactBoundaryKeyText = '"compact_boundary"';
+const compactBoundaryKey = Buffer.from(compactBoundaryKeyText);
 
-/** @description Whether the bytes of a transcript line are a compaction boundary record. */
-function checkIsCompactBoundaryLine(lineBytes: Buffer): boolean {
-  if (lineBytes.indexOf(compactBoundaryKey) < 0) return false;
+/**
+ * @description Whether a transcript line (its bytes, or its text) is a compaction boundary record — the ONE epoch rule of every reader
+ * that walks the transcript backwards, so none of them reaches into the epoch before it.
+ */
+export function checkIsCompactBoundaryLine(line: Buffer | string): boolean {
+  if (typeof line === 'string' ? !line.includes(compactBoundaryKeyText) : line.indexOf(compactBoundaryKey) < 0) return false;
   try {
-    const record: unknown = JSON.parse(lineBytes.toString('utf8'));
+    const record: unknown = JSON.parse(typeof line === 'string' ? line : line.toString('utf8'));
     return checkIsRecord(record) && record.type === 'system' && record.subtype === 'compact_boundary';
   } catch {
     return false;
   }
+}
+
+/**
+ * Feeds `takeLine` the complete lines of `bytes` — a chunk joined to the bytes of the line that began in the chunk after it — newest
+ * first, until it asks to stop (it returns `true`: the boundary was found). Resolves the bytes before the chunk's first newline,
+ * which belong to a line that began in an earlier chunk, or `null` when `takeLine` stopped the walk.
+ */
+function takeLinesBackwards(bytes: Buffer, takeLine: (lineBytes: Buffer) => boolean): Buffer | null {
+  let lineEnd = bytes.length;
+  for (let index = bytes.length - 1; index >= 0; index -= 1) {
+    if (bytes[index] !== newlineByte) continue;
+    if (takeLine(bytes.subarray(index + 1, lineEnd))) return null;
+    lineEnd = index;
+  }
+  return Buffer.from(bytes.subarray(0, lineEnd));
 }
 
 /**
@@ -44,7 +63,7 @@ export function readClaudeTranscriptEpochLines(transcriptPath: string, wantedKey
   try {
     let position = fs.fstatSync(fd).size;
     /** The bytes of a line whose start is in a chunk not read yet. */
-    let carry = Buffer.alloc(0);
+    let carry: Buffer = Buffer.alloc(0);
     const takeLine = (lineBytes: Buffer): boolean => {
       if (checkIsCompactBoundaryLine(lineBytes)) return true;
       if (lineBytes.length > 0 && wantedKeyBytes.some((key) => lineBytes.indexOf(key) >= 0)) newestFirst.push(lineBytes.toString('utf8'));
@@ -55,17 +74,11 @@ export function readClaudeTranscriptEpochLines(transcriptPath: string, wantedKey
       position -= length;
       const chunk = Buffer.alloc(length);
       fs.readSync(fd, chunk, 0, length, position);
-      let bytes = Buffer.concat([chunk, carry]);
-      let lineEnd = bytes.length;
-      for (let index = bytes.length - 1; index >= 0; index -= 1) {
-        if (bytes[index] !== newlineByte) continue;
-        if (takeLine(bytes.subarray(index + 1, lineEnd))) return newestFirst.reverse();
-        lineEnd = index;
-      }
-      bytes = bytes.subarray(0, lineEnd);
-      carry = Buffer.from(bytes);
+      const rest = takeLinesBackwards(Buffer.concat([chunk, carry]), takeLine);
+      if (rest === null) return newestFirst.reverse();
+      carry = rest;
     }
-    if (carry.length > 0 && takeLine(carry)) return newestFirst.reverse();
+    if (carry.length > 0) takeLine(carry);
     return newestFirst.reverse();
   } catch {
     // A read that fails midway (the file truncated under the reader) keeps the newer lines it got: a restore of the skills
@@ -73,5 +86,45 @@ export function readClaudeTranscriptEpochLines(transcriptPath: string, wantedKey
     return newestFirst.reverse();
   } finally {
     fs.closeSync(fd);
+  }
+}
+
+/**
+ * @description Walks the lines of `transcriptPath` after its LAST `compact_boundary` record (the whole file when there is none) from
+ * the NEWEST to the oldest, handing each to `onLine` — the same walk as {@link readClaudeTranscriptEpochLines} (a line is split only
+ * at newline bytes, a last line without a newline is handed as it is), but asynchronous and holding no line beyond the one in hand, so
+ * the bot can look for one record of an epoch of tens of megabytes without blocking its event loop or keeping the epoch in memory.
+ * `onLine` returns `true` to stop the walk (the record it looked for was found), `false` to go on. Resolves `false` for a file that
+ * cannot be read (what was handed before the failure stands).
+ */
+export async function scanClaudeTranscriptEpochBackwards(transcriptPath: string, onLine: (lineBytes: Buffer) => boolean): Promise<boolean> {
+  let file: fs.promises.FileHandle;
+  try {
+    file = await fs.promises.open(transcriptPath, 'r');
+  } catch {
+    return false;
+  }
+  try {
+    let position = (await file.stat()).size;
+    let carry: Buffer = Buffer.alloc(0);
+    const takeLine = (lineBytes: Buffer): boolean => {
+      if (checkIsCompactBoundaryLine(lineBytes)) return true;
+      return lineBytes.length > 0 && onLine(lineBytes);
+    };
+    while (position > 0) {
+      const length = Math.min(readChunkBytes, position);
+      position -= length;
+      const chunk = Buffer.alloc(length);
+      await file.read(chunk, 0, length, position);
+      const rest = takeLinesBackwards(Buffer.concat([chunk, carry]), takeLine);
+      if (rest === null) return true;
+      carry = rest;
+    }
+    if (carry.length > 0) takeLine(carry);
+    return true;
+  } catch {
+    return false;
+  } finally {
+    await file.close();
   }
 }

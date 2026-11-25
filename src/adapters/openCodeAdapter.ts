@@ -1317,16 +1317,11 @@ function checkIsOpenCodeTokenCount(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value) && Number.isInteger(value) && value >= 0;
 }
 
-function getOpenCodeContextUsedTokens(usage: unknown): number | null {
+/** What a message's model call SAW as its context — input and both cache counters, not the output it wrote; `null` for a malformed usage. */
+function getOpenCodeCallInputTokens(usage: unknown): number | null {
   if (!checkIsRecord(usage) || !checkIsOpenCodeTokenCount(usage.input)) return null;
-  const outputTokens = usage.output;
   const cache = usage.cache;
-  if (
-    (outputTokens !== undefined && !checkIsOpenCodeTokenCount(outputTokens)) ||
-    (cache !== undefined && !checkIsRecord(cache))
-  ) {
-    return null;
-  }
+  if (cache !== undefined && !checkIsRecord(cache)) return null;
   const cacheReadTokens = cache?.read;
   const cacheWriteTokens = cache?.write;
   if (
@@ -1335,7 +1330,15 @@ function getOpenCodeContextUsedTokens(usage: unknown): number | null {
   ) {
     return null;
   }
-  return usage.input + (cacheReadTokens ?? 0) + (cacheWriteTokens ?? 0) + (outputTokens ?? 0);
+  return usage.input + (cacheReadTokens ?? 0) + (cacheWriteTokens ?? 0);
+}
+
+function getOpenCodeContextUsedTokens(usage: unknown): number | null {
+  const callInputTokens = getOpenCodeCallInputTokens(usage);
+  if (callInputTokens === null || !checkIsRecord(usage)) return null;
+  const outputTokens = usage.output;
+  if (outputTokens !== undefined && !checkIsOpenCodeTokenCount(outputTokens)) return null;
+  return callInputTokens + (outputTokens ?? 0);
 }
 
 function checkIsOpenCodePendingContextPlaceholder(finish: unknown, contextUsedTokens: number): boolean {
@@ -1383,6 +1386,35 @@ export function getLatestOpenCodeParentAssistantContext(
     };
   }
   return latestContext;
+}
+
+/**
+ * @description The context size, in tokens, the FIRST parent model call after the session's last compaction saw (input + cache), from a
+ * session-history payload: the first complete parent assistant message after the newest `summary` message — the whole history when
+ * there is none. The idle compaction measures its growth from it. `null` when no such message exists yet (a compaction just done, a
+ * message still pending) or the payload is no history; a malformed or foreign record is skipped.
+ */
+export function getFirstOpenCodeParentAssistantCallTokens(records: unknown, sessionId: string): number | null {
+  if (!Array.isArray(records)) return null;
+  let firstCallTokens: number | null = null;
+  for (const record of records) {
+    if (!checkIsRecord(record) || !checkIsRecord(record.info)) continue;
+    const info = record.info;
+    if (info.role !== 'assistant' || typeof info.id !== 'string' || !info.id.trim()) continue;
+    if (info.sessionID !== undefined && info.sessionID !== sessionId) continue;
+    // The summary is the compaction's own call: everything before it, itself included, is the older epoch.
+    if (info.summary === true) {
+      firstCallTokens = null;
+      continue;
+    }
+    if (firstCallTokens !== null) continue;
+    if (info.error !== undefined && checkIsOpenCodeAbortError(getOpenCodeErrorMessage(info.error))) continue;
+    const contextUsedTokens = getOpenCodeContextUsedTokens(info.tokens);
+    if (contextUsedTokens === null || checkIsOpenCodePendingContextPlaceholder(info.finish, contextUsedTokens)) continue;
+    const callInputTokens = getOpenCodeCallInputTokens(info.tokens);
+    if (callInputTokens !== null && callInputTokens > 0) firstCallTokens = callInputTokens;
+  }
+  return firstCallTokens;
 }
 
 function getOpenCodeModelVariants(model: Record<string, unknown>): string[] {
@@ -1763,6 +1795,12 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
    * `Map` compares object identity, not structural equality.
    */
   private sessions: Map<string, OpenCodeSession> = new Map();
+  /**
+   * The compactions the SERVER started that completed in each conversation (`session.compacted` with no bot compaction open), by
+   * conversation key: `AgentAdapter.getOwnCompactionCount`. Kept beside the sessions, not on them — a session object that is re-created
+   * (a server restart that restores it) would start the count over. Dropped with the session ({@link dropSession}).
+   */
+  private ownCompactionCounts = new Map<string, number>();
 
   /**
    * The ONE `/global/event` SSE stream for the whole adapter (plan 2026-06-17).
@@ -2040,7 +2078,7 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
           this.emit('closed', sessionKey);
           // Defensive: stopSessionInner deletes from `this.sessions`, but
           // emit order matters for downstream cleanup races.
-          this.sessions.delete(k);
+          this.dropSession(k);
         }
       }
       return true;
@@ -2060,7 +2098,7 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
           // This teardown bypasses stopSessionInner, so the replacement bound
           // has to be dropped here or it outlives the session it belonged to.
           this.clearProviderRetryReplacementStartTimer(session);
-          this.sessions.delete(k);
+          this.dropSession(k);
           this.emit('stopped', session.key);
         }
       }
@@ -2426,7 +2464,7 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
     this.apiRequest('POST', `/session/${session.sessionId}/abort`)
       .catch(e => console.warn(`[OpenCode] abort on stopSession failed:`, e instanceof Error ? e.message : e));
 
-    this.sessions.delete(k);
+    this.dropSession(k);
     this.emit('stopped', key);
   }
 
@@ -3007,6 +3045,56 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
       contextWindowTokens,
       contextUsedTokens: runtimeContext?.contextUsedTokens ?? null,
     };
+  }
+
+  /**
+   * A compaction completed in the session: counted when the SERVER started it — none of the bot's own is open — so the bot can tell its
+   * context replaced under it. Only `session.compacted` counts (`…compaction.ended` may come with it for the same compaction).
+   * Measured against the fake server (`skillsRestoreOpenCodeE2e`): a bot compaction's `session.compacted` can arrive a few ms AFTER
+   * its `/summarize` call returned — then no bot compaction is open any more and it counts as the server's own. That costs nothing: the
+   * bot's own compaction drops the baseline, so the compaction module reads it from the new epoch anyway.
+   */
+  private noteOwnCompactionCompleted(key: SessionKey, eventType: string): void {
+    const conversationKey = keyToString(key);
+    const session = this.sessions.get(conversationKey);
+    if (session && eventType === 'session.compacted' && !session.isBotCompactionInFlight) {
+      this.ownCompactionCounts.set(conversationKey, (this.ownCompactionCounts.get(conversationKey) ?? 0) + 1);
+    }
+  }
+
+  getOwnCompactionCount(key: SessionKey): number {
+    return this.ownCompactionCounts.get(keyToString(key)) ?? 0;
+  }
+
+  /** Forget a session the adapter lets go of for good: what was counted of its server's own compactions goes with it. */
+  private dropSession(conversationKey: string): void {
+    this.sessions.delete(conversationKey);
+    this.ownCompactionCounts.delete(conversationKey);
+  }
+
+  /**
+   * The context size after the newest completed parent call, from what the session holds in memory (no HTTP): `null` without a live
+   * session or such a call — and while the newest message is a compaction's SUMMARY: its input is the whole pre-compaction context, the
+   * compaction's own call, so until the next model call the conversation has no figure.
+   */
+  async getContextUsedTokens(key: SessionKey): Promise<number | null> {
+    const session = this.sessions.get(keyToString(key));
+    if (!session?.isActive) return null;
+    const latestContext = session.latestParentRuntimeContext;
+    if (latestContext === null || latestContext.messageId === session.compactionSummaryMessageId) return null;
+    return latestContext.contextUsedTokens;
+  }
+
+  /** The context size the first parent call after the last compaction saw, read from the session's history (one request, made only when the bot has no baseline yet). */
+  async getFirstCallContextTokens(key: SessionKey): Promise<number | null> {
+    const session = this.sessions.get(keyToString(key));
+    if (!session?.isActive) return null;
+    try {
+      return getFirstOpenCodeParentAssistantCallTokens(await this.apiRequest<unknown>('GET', `/session/${session.sessionId}/message`), session.sessionId);
+    } catch (error) {
+      console.warn(`[OpenCode] reading the first call's context of ${keyToString(key)} failed:`, error instanceof Error ? error.message : error);
+      return null;
+    }
   }
 
   // ── Reasoning effort (variants) ───────────────────────────────────────────
@@ -4721,6 +4809,7 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
 
       case 'session.next.compaction.ended':
       case 'session.compacted':
+        this.noteOwnCompactionCompleted(key, eventType);
         this.setCompacting(key, false);
         break;
 
@@ -4851,7 +4940,7 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
     this.clearProviderRetryReplacementStartTimer(session);
     // Tear down the directory's SSE stream if this was its last active session.
     this.disconnectSse(key);
-    this.sessions.delete(k);
+    this.dropSession(k);
     this.emit('stopped', key);
   }
 

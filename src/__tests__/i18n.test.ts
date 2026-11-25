@@ -304,6 +304,14 @@ test('compact-self-review setting keys exist in every locale, substitute {state}
   }
 });
 
+test('the idle picker\'s growth line names the typed form `/compact_on_idle 50k` in every locale — a bare number typed in the topic goes to the agent, never to the setting', () => {
+  for (const locale of localeCodes) {
+    const line = runWithLocale(locale, () => t('compactOnIdle.growthLine', { tokens: '30 000' }));
+    assert.ok(line.includes('30 000'), `the threshold in force is named in ${locale}: "${line}"`);
+    assert.ok(line.includes('/compact_on_idle 50k'), `the growth line in ${locale} does not name the command form: "${line}"`);
+  }
+});
+
 test('auto-continue-limits keys exist in every locale', () => {
   for (const code of [
     'autoContinueLimits.on',

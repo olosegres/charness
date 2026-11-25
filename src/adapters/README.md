@@ -244,7 +244,32 @@ excuses the turn (D1: reject, compact, re-ask) but never pending work. An idle
 fire kept ONLY by pending work looks again at the next idle window or when the
 hold runs out (`getPendingWorkRecheckDelayMs`); a turn's end restarts the idle
 countdown. The idle COMPACTION belongs to the idle mark alone (the prompt cache is
-cold later): a process held at the mark forgoes it (`getIdleFireDecision`'s
+cold later) and to a conversation whose context GREW by the threshold (`/compact_on_idle`, 30 000 tokens by default) over what its FIRST model call
+after the last compaction saw (the summary, the instructions, the skills, the prompt): at a json-stream turn's end (`noteThreadTurnContext`) or once a
+backend's output has settled (`markThreadTurnProducedOutput`, debounced) the bot reads `AgentAdapter.getContextUsedTokens` — the transcript's last
+assistant usage, not the `result` frame's `usage`, which sums every API call of the turn; OpenCode's from memory, no request — and, while the
+conversation has no baseline, `getFirstCallContextTokens`: the first main-conversation assistant record after the transcript's last `compact_boundary`
+(`readClaudeFirstCallContextTokens`, a backwards walk of the last epoch only; OpenCode: the first parent message after the newest summary in the
+session history). Read from the history, so a long first turn does not hide its own growth in the baseline and a conversation that already had turns
+when the bot first looks is measured from its real baseline. Kept per conversation (`compactIdleTracking.baselineContextTokens` / `lastContextTokens`),
+dropped by every bot-issued compaction and by a context smaller than the baseline (the CLI compacted by itself), read again at the next turn's end;
+an unreadable history leaves no baseline, never the turn's end in its place. The readers of the context in use now stop at the epoch's boundary too (Claude: the `compact_boundary` rule shared with the first-call walk; OpenCode: the compaction's summary message is no reading), so after a compaction the conversation has no figure until its next model call. The mark itself measures again (`sampleThreadContext`, before it decides: a
+state kept before the figures existed or a reading lost with a restart leave none or a stale one; a turn that ended on an API error still reads as its last real
+call — the newest-call reader skips synthetic and error records, as the first-call reader does); a sleeping per-turn session has no live
+adapter state, so it is read from its transcript by the persisted session id and work folder (`readSleepingContext` port, `bot.ts`), and its countdown is armed
+whenever a turn is pending (`checkIsCompactionPending`), the fire deciding to resume it (`checkIsCompactionDue`). A compaction nobody at the bot issued — the CLI's own overflow
+compaction (json-stream), the server's own (OpenCode `session.compacted` with no bot compaction open) — is counted (`AgentAdapter.getOwnCompactionCount`); a change between two
+readings replaces the baseline with the new epoch's first call (the new epoch starts about as high as the old first call, so a smaller context cannot show it); the tmux Claude counts
+none, and keeps only the smaller-context rule. The count belongs to the CONVERSATION, not to a process (a map in the adapter, kept across spawn, idle stop, resume and adopt, dropped
+by an explicit stop or release): two processes in a row that each compacted by themselves read 1, then 2. The count lives only within a bot lifetime, and it does NOT make a compaction
+around a restart seen: json-stream's downtime replay counts a boundary only when it lies after the persisted tail offset (one consumed just before a hot reload does not), and
+OpenCode never replays `session.compacted` for a compaction made while the bot was down. That case is caught by a RECHECK instead — the first reading of a bot lifetime and every
+read of a sleeping conversation read the epoch's first call again and replace the baseline with it (`getContextBaselineAfterReading`'s `isBaselineRecheck`; a read that gives none
+keeps the baseline). The cost is one history read per conversation per restart (json-stream: the backwards epoch walk; OpenCode: one `GET /session/:id/message`) and one transcript
+walk per sleeping idle mark. An OpenCode bot compaction's own `session.compacted` can reach the bot a few ms after its
+`/summarize` call returned (measured against the fake server) and is then counted too: harmless, the bot's compaction dropped the baseline, which is read again anyway. No reading holds a conversation back only while it was never
+compacted (`checkIsContextGrownEnough`): a compacted one with none is not compacted again, so a backend whose compaction raises no signal (the tmux
+Claude) cannot loop. There is no once-per-active-period latch: the growth is what keeps a compaction from repeating. A process held at the mark forgoes it (`getIdleFireDecision`'s
 `isIdleMarkHeld`; the topic gets ONE silent line, `compactOnIdle.skipped.*Notice`, naming what holds
 it — background work or a message not taken in; a bare running turn holds the mark without a line), the mark is remembered as held (`lastHeldMarkAt`, persisted: a restart repeats nothing and
 compacts nothing late) until the next activity opens a new idle period, and the looks again

@@ -141,7 +141,7 @@ describe('postRequest', () => {
     const engine = createEngine(ledger);
     const request = await ledger.createRequest(issueKey, handOver);
     await createPoster(engine).postRequest(issueKey, request.id, prompt);
-    assert.deepEqual(activity, [`${keyToString(issueKey)} @0 posts`], 'the idle-compaction latch is cleared before the request is posted');
+    assert.deepEqual(activity, [`${keyToString(issueKey)} @0 posts`], 'the idle countdown restarts before the request is posted');
     assert.equal(engine.getWatchedRequestIdsOf(issueKey).includes(request.id), true, 'the turn is watched');
     assert.equal(ledger.getNewestOpenRequest(issueKey)?.isPersonInputUnanswered, true);
     await endTurnSilently(engine);

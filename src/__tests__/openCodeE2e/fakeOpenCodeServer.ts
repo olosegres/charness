@@ -389,7 +389,9 @@ export class FakeOpenCodeServer {
    * message is what `GET /session/:id/message` returns afterwards. `beforeIdle` runs after the summary message is finished and
    * before the idle: the server goes on with the turn after compacting (a flow streams the agent's next words there).
    * `isFinishDropped` loses the finishing `message.updated` of the summary message, as an event stream may (the adapter keeps
-   * a safety net for a dropped `finish`): nothing then ends the summary's text before the next message's.
+   * a safety net for a dropped `finish`): nothing then ends the summary's text before the next message's. The compaction's end is
+   * announced with `session.compacted` (after the "Continue…" message, before the turn goes on); the bot counts it as the server's
+   * own only when it has no compaction of its own open.
    * Resolves when the last piece and the idle are out.
    */
   async emitCompactionSummary(sessionId: string, summary: FakeCompactionSummary, options: { beforeIdle?: () => Promise<void>; isFinishDropped?: boolean; isContinued?: boolean } = {}): Promise<void> {
@@ -415,8 +417,10 @@ export class FakeOpenCodeServer {
     // An overflow compaction goes on by itself: the server's own "Continue…" message and the model request that answers it.
     if (options.isContinued) {
       this.pushStoredMessage(sessionId, { info: { id: `${summary.messageId}_continue`, sessionID: sessionId, role: 'user' }, parts: [{ type: 'text', text: syntheticContinueText, synthetic: true }] });
-      await this.simulateModelRequest(sessionId, 'continuation');
     }
+    // The server announces the finished compaction — a bot-issued one too — before the turn goes on.
+    this.broadcast({ type: 'session.compacted', properties: { sessionID: sessionId } }, session.directory);
+    if (options.isContinued) await this.simulateModelRequest(sessionId, 'continuation');
     await options.beforeIdle?.();
     this.emitSessionIdle(sessionId);
   }

@@ -16,6 +16,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  getFirstOpenCodeParentAssistantCallTokens,
   getLatestOpenCodeParentAssistantContext,
   OpenCodeAdapter,
   mapOpenCodeMessagesToTurns,
@@ -226,5 +227,38 @@ describe('OpenCodeAdapter.getRecentTurns', () => {
     });
     const turns = await adapter.getRecentTurns(key, '/tmp/work', sessionId, limit);
     assert.deepEqual(turns, []);
+  });
+});
+
+describe('getFirstOpenCodeParentAssistantCallTokens', () => {
+  const assistant = (id: string, tokens: object, extra: Record<string, unknown> = {}) => ({ info: { id, sessionID: sessionId, role: 'assistant', finish: 'stop', tokens, ...extra } });
+
+  it('is the first parent call AFTER the newest summary — input + cache, not the output, not the turn\'s later calls, not the older epoch', () => {
+    const records = [
+      assistant('msg_old', { input: 10, cache: { read: 500_000, write: 0 } }),
+      assistant('msg_summary_old', { input: 20, cache: { read: 90_000 } }, { summary: true }),
+      assistant('msg_older_epoch_first', { input: 30, cache: { read: 40_000 } }),
+      assistant('msg_summary', { input: 50, cache: { read: 400_000 }, output: 3_000 }, { summary: true }),
+      assistant('msg_first', { input: 3, cache: { read: 21_000, write: 1_000 }, output: 400 }),
+      assistant('msg_last', { input: 5, cache: { read: 90_000, write: 2_000 }, output: 1_200 }),
+    ];
+    assert.equal(getFirstOpenCodeParentAssistantCallTokens(records, sessionId), 22_003);
+  });
+
+  it('is the first call of the history when it was never compacted; foreign, malformed, aborted and pending records are no call of it', () => {
+    const records = [
+      { info: { id: 'msg_child', sessionID: 'ses_child', role: 'assistant', finish: 'stop', tokens: { input: 7, cache: { read: 99_999 } } } },
+      assistant('msg_malformed', { input: 8, cache: { read: 'wrong' } }),
+      assistant('msg_pending', { input: 0, cache: { read: 0, write: 0 }, output: 0 }, { finish: '' }),
+      assistant('msg_first', { input: 2, cache: { read: 30_000, write: 8_000 } }),
+      assistant('msg_next', { input: 6, cache: { read: 60_000 } }),
+    ];
+    assert.equal(getFirstOpenCodeParentAssistantCallTokens(records, sessionId), 38_002);
+  });
+
+  it('is null right after a compaction (no call yet) and for a payload that is no history', () => {
+    assert.equal(getFirstOpenCodeParentAssistantCallTokens([assistant('msg_a', { input: 1, cache: { read: 1_000 } }), assistant('msg_summary', { input: 5, cache: { read: 9_000 } }, { summary: true })], sessionId), null);
+    assert.equal(getFirstOpenCodeParentAssistantCallTokens({ not: 'an array' }, sessionId), null);
+    assert.equal(getFirstOpenCodeParentAssistantCallTokens([], sessionId), null);
   });
 });

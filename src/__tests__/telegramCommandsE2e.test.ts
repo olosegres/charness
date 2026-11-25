@@ -610,9 +610,11 @@ describe('Telegram commands end to end: built charness, fake Bot API', () => {
     assert.deepEqual(readChain(), []);
   });
 
-  it('/compact and /compact_on_idle say an agent session is needed', async () => {
+  it('/compact says an agent session is needed; /compact_on_idle needs none — its picker and threshold work in a topic whose agent sleeps or was never started (only a plain shell is refused: compaction.test.ts)', async () => {
     await topic.sendAndAwaitReply('/compact', 'No active session. Start an agent first');
-    await topic.sendAndAwaitReply('/compact_on_idle', 'applies to an active agent session');
+    const picker = await topic.sendAndAwaitReply('/compact_on_idle', 'Auto-compact on idle for this topic');
+    assert.deepEqual(topic.getKeyboardData(picker).map((row) => row.length), [2, 5, 2, 2], 'all four rows: the switch, the threshold presets, the summary, the self-review');
+    await topic.sendAndAwaitReply('/compact_on_idle 50k', 'waits for');
   });
 
   // ── /update ──────────────────────────────────────────────────────────

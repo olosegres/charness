@@ -872,6 +872,36 @@ export interface AgentAdapter extends EventEmitter {
   getRuntimeInfo?(key: SessionKey): Promise<AgentRuntimeInfo>;
 
   /**
+   * @description The context size, in tokens, the live conversation holds after its newest completed model call (input + cache +
+   * output): what the idle compaction measures its growth up to. Read from what the adapter already holds or from the on-disk
+   * transcript — never a server round trip. `null` when it cannot be told. The read starts at once, in the call's own tick: a
+   * per-turn process is stopped within moments of its turn's end. Optional: a backend with no such figure omits it.
+   */
+  getContextUsedTokens?(key: SessionKey): Promise<number | null>;
+
+  /**
+   * @description The context size, in tokens, the FIRST model call after the conversation's last compaction saw — the compacted
+   * summary, the system prompt and instructions, the skills restored and the prompt: input + cache read + cache write (the output
+   * is not what a call saw) — or of the conversation's first call when it was never compacted. The idle compaction measures its
+   * growth from it, so it is read from the conversation's history, not from the end of a turn that may have read half a repository
+   * (and, for a conversation that already has turns when the bot learns of the figure, not from whenever the bot first looked).
+   * `null` when it cannot be told. Same «starts at once» rule as {@link getContextUsedTokens}. Optional.
+   */
+  getFirstCallContextTokens?(key: SessionKey): Promise<number | null>;
+
+  /**
+   * @description How many compactions the bot did NOT issue have completed in the conversation — the CLI's own overflow compaction,
+   * the server's own — a count the bot compares between two readings of the context: a change means the epoch was replaced, so the
+   * baseline it measures growth from is the older one's. The count belongs to the CONVERSATION, not to a process: a spawn, an idle
+   * stop and resume, a re-spawn and an adopt keep it, so «any difference» is always a compaction; only the conversation's release
+   * (an explicit stop) and a restart of the bot start it over. The count is NOT what makes a compaction that happened around a
+   * restart seen: json-stream's downtime replay counts a boundary only when it lies after the persisted offset (one consumed just before
+   * a hot reload does not), and the OpenCode server's compaction while the bot was down is never replayed. The reader of the count
+   * covers that by reading the epoch's first call again once per bot lifetime. Optional: a backend that cannot tell omits it.
+   */
+  getOwnCompactionCount?(key: SessionKey): number;
+
+  /**
    * @description Whether the session bound to `key` is mid-turn (an in-progress
    * reply). `false` when there is no session or it is idle. Sync and read from
    * in-memory state only (no tmux/HTTP call) so a caller can poll it cheaply —

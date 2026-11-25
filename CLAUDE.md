@@ -142,7 +142,8 @@ per-backend controls are optional methods the bot checks before calling.
   wake-up engine re-prods silent turns and alerts when it gives up.
 - **Compaction.** `/compact` is bot-owned and per backend (OpenCode: server summarize; json-stream: confirmed
   `/compact` turn; tmux Claude: the literal `/compact`; terminal: unsupported). Compact-on-idle fires after
-  ~55 min idle (inside the prompt-cache window); `compact_conversation` arms a compaction that runs when the
+  ~55 min idle (inside the prompt-cache window) and compacts only a conversation whose context grew by the
+  `/compact_on_idle` threshold (30 000 tokens by default) over what its first model call after the last compaction saw; `compact_conversation` arms a compaction that runs when the
   turn ends, never mid-turn. A bot-issued compaction is NARRATED (start notice → completion report → the full
   summary via `postCompactionSummary`, plain text, never through the agent-output path); `/compact_summary`
   toggles the summary post per topic (General → instance default; OFF by default, also on the `/compact_on_idle`

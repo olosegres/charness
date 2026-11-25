@@ -73,7 +73,7 @@ import {
 } from '../utils/claudeMcpHeal';
 import { execFilePromise, getTmuxSessionTarget, startAgentTmuxSession, tmuxAsync } from '../utils/tmuxExec';
 import { basePollIntervalMs, getNextPollDelay } from '../utils/pollBackoff';
-import { readClaudeRuntimeInfo } from '../utils/claudeRuntimeInfo';
+import { readClaudeContextUsedTokens, readClaudeFirstCallContextTokens, readClaudeRuntimeInfo } from '../utils/claudeRuntimeInfo';
 import { checkIsRecord } from '../utils/checkIsRecord';
 import { prepareClaudeSessionLaunch, readClaudeTranscriptRestoredCostUsd } from '../utils/claudeTranscriptContent';
 import {
@@ -565,6 +565,13 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
   readonly selfGreetsOnStart = false;
 
   private readonly sessions = new Map<string, StreamSession>();
+  /**
+   * The compactions the bot did NOT issue that completed in each conversation (the CLI's own overflow compaction), by conversation key:
+   * `AgentAdapter.getOwnCompactionCount`. Kept here, not on the process's session — every spawn and every adopt would start it at 0, and
+   * two processes in a row that each compacted by themselves would both read 1, no change between them. Dropped when the conversation is
+   * released (`finalizeExternalExit`), never by a suspend or a re-spawn.
+   */
+  private readonly ownCompactionCounts = new Map<string, number>();
   private readonly claudePath = resolveClaudeBinary();
   private readonly writeFifo: typeof writeFifoText;
   /** How long a user turn waits for a CLI that reads nothing, and a write for a reader that takes nothing (tests shorten it). */
@@ -988,6 +995,9 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
     this.clearTimers(session);
     session.isActive = false;
     this.sessions.delete(keyToString(key));
+    // The conversation is released (an explicit stop, or a process that died): what was counted of its compactions goes with it. An idle
+    // stop (suspend) and a re-spawn keep it — the conversation lives on, and the next process counts on from here.
+    if (!session.isSuspending) this.ownCompactionCounts.delete(keyToString(key));
     this.settleAdoptCatchUp(session, true);
     this.closeFifo(session);
     const stderrTail = session.isStopping ? '' : readStderrTail(session.paths.stderrFile);
@@ -1526,6 +1536,26 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
     } catch {
       return { version: null, model: null, contextWindowTokens: null, contextUsedTokens: null };
     }
+  }
+
+  /** The transcript of the live session of `key`, `null` when it has none or is not active — read in the caller's tick (see `AgentAdapter.getContextUsedTokens`). */
+  private getActiveTranscriptPath(key: SessionKey): string | null {
+    const session = this.sessions.get(keyToString(key));
+    return session?.isActive ? getClaudeTranscriptPath(session.workDir, session.sessionId) : null;
+  }
+
+  getOwnCompactionCount(key: SessionKey): number {
+    return this.ownCompactionCounts.get(keyToString(key)) ?? 0;
+  }
+
+  async getContextUsedTokens(key: SessionKey): Promise<number | null> {
+    const filePath = this.getActiveTranscriptPath(key);
+    return filePath === null ? null : readClaudeContextUsedTokens(filePath);
+  }
+
+  async getFirstCallContextTokens(key: SessionKey): Promise<number | null> {
+    const filePath = this.getActiveTranscriptPath(key);
+    return filePath === null ? null : readClaudeFirstCallContextTokens(filePath);
   }
 
   getClaudeSessionId(key: SessionKey): string | null {
@@ -2094,6 +2124,8 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
     if (!session.pendingCompaction) {
       // The CLI's own compaction (a context overflow mid-turn, or one met while replaying the downtime tail):
       // nobody waits for it, but the conversation's context was replaced all the same.
+      const conversationKey = keyToString(session.key);
+      this.ownCompactionCounts.set(conversationKey, (this.ownCompactionCounts.get(conversationKey) ?? 0) + 1);
       this.emit('contextCompacted', session.key, action.trigger);
       return;
     }

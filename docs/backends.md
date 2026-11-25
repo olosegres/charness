@@ -16,7 +16,7 @@ backends:
   output, and it survives bot restarts (the bot re-adopts the process and
   replays what was produced during the downtime). After ~55 min idle
   (`AGENT_IDLE_MINUTES`) the process is stopped — right after the idle
-  compaction when `/compact_on_idle` allows one — but never while the agent's
+  compaction when `/compact_on_idle` allows one (its context grew enough) — but never while the agent's
   own work is pending: a background command, Monitor or sub-agent it started, a
   finished task's result it is about to read, a `CronCreate` job or a `/loop`
   wakeup it scheduled.
