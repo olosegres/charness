@@ -131,8 +131,6 @@ const unansweredNote = enDict['agent.question_unanswered_note'];
 const endingCommandDropLine = enDict['agent.queued_prompt_dropped_by_command'];
 /** One send pacer interval and a margin: a line already on its way is in the topic after it. */
 const pacerSettleMs = 5 * 1000;
-/** Between a fresh session's id landing in `state.json` and its start's end — the command's transition settling, its refusal lifted. */
-const transitionSettleMs = 1000;
 const topicKey = keyToString(makeTelegramKey(group.id, topicThreadId));
 
 let layout: IsolatedInstanceLayout | null = null;
@@ -161,7 +159,6 @@ function getAgentPrompts(label: string): FakeClaudePrompt[] {
   return readJsonLines<FakeClaudePrompt>(path.join(getLayout().fakeLogDir, fakeClaudeLogFileNames.prompts)).filter((prompt) => prompt.text.includes(label));
 }
 
-/** The verdicts the bot wrote on the agent's `can_use_tool` requests that the fake read, in order. */
 /** How many of the topic's messages so far carry `text`. */
 function countTopicMessagesWith(text: string): number {
   return topic.listMessages().filter((message) => message.text.includes(text)).length;
@@ -176,6 +173,7 @@ function readRequestCloseReasons(): Map<string, string | null> {
   return reasons;
 }
 
+/** The verdicts the bot wrote on the agent's `can_use_tool` requests that the fake read, in order. */
 function getControlResponses(): FakeClaudeControlResponse[] {
   return readJsonLines<FakeClaudeControlResponse>(path.join(getLayout().fakeLogDir, fakeClaudeLogFileNames.controlResponses));
 }
@@ -935,7 +933,9 @@ describe('A question nobody answers is set aside, end to end: built charness, fa
       await waitForPinned(question);
       const droppedBefore = countTopicMessagesWith(endingCommandDropLine);
       const requestsBefore = new Set(readRequestCloseReasons().keys());
-      const sessionIdBefore = readPersistedState(getLayout()).agents?.[topicKey]?.claudeSessionId;
+      const agentBefore = readPersistedState(getLayout()).agents?.[topicKey];
+      const sessionIdBefore = agentBefore?.claudeSessionId;
+      const startedAtBefore = agentBefore?.startedAt;
       // The transcript goes to the agent only once the question's «not answered» note is on its message: the answer to that edit is held,
       // so the transcript is on its way, its request open, while /new runs.
       let releaseNoteEdit = (): void => {};
@@ -946,15 +946,21 @@ describe('A question nobody answers is set aside, end to end: built charness, fa
         // Before the question's wait ends: it is pending, not set aside, so the free words cancel it.
         fakeTelegram.pushOperatorVoice(topicThreadId, voiceFileId, voiceDurationSeconds);
         await topic.waitForMessageText('the transcript\'s way to reach the held note', question, (text) => text.endsWith(`\n\n${unansweredNote}`));
-        requestId = [...readRequestCloseReasons().keys()].find((id) => !requestsBefore.has(id)) ?? '';
-        assert.match(requestId, /^req_/, 'the transcript opened its request');
-        // Not /new's reply: it waits behind the held edit on the topic's send chain. The fresh session itself, and its start's end.
-        fakeTelegram.pushOperatorMessage(topicThreadId, '/new');
-        await getCharness().waitFor('the fresh session of /new', setAsideTimeoutMs, () => {
-          const sessionId = readPersistedState(getLayout()).agents?.[topicKey]?.claudeSessionId;
-          return sessionId !== undefined && sessionId !== sessionIdBefore;
+        // The open request reaches `state.json` through the debounced save, and the held edit can go out before it.
+        await getCharness().waitFor('the transcript\'s request in state.json', replyTimeoutMs, () => {
+          requestId = [...readRequestCloseReasons().keys()].find((id) => !requestsBefore.has(id)) ?? '';
+          return requestId !== '';
         });
-        await new Promise((resolve) => setTimeout(resolve, transitionSettleMs));
+        assert.match(requestId, /^req_/, 'the transcript opened its request');
+        // Not /new's reply: it waits behind the held edit on the topic's send chain. The fresh session itself, and its start's end: its
+        // `startedAt` is written by `setAgentStartedAt`, the start's last await — after it only synchronous code and the hold's `finally`
+        // run before /new's refusal lifts, so the transcript released below routes after /new is over, where only fix 4 refuses it.
+        fakeTelegram.pushOperatorMessage(topicThreadId, '/new');
+        await getCharness().waitFor('the fresh session of /new, started', setAsideTimeoutMs, () => {
+          const agent = readPersistedState(getLayout()).agents?.[topicKey];
+          return agent?.claudeSessionId !== undefined && agent.claudeSessionId !== sessionIdBefore
+            && agent.startedAt !== undefined && agent.startedAt !== startedAtBefore;
+        });
       } finally {
         releaseNoteEdit();
       }

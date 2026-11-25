@@ -419,8 +419,10 @@ function createTopicPost(
     try {
       await forwardPicked(conversationKey);
     } catch (error) {
-      // A command began after the pick — during a wake the write made — and closed the request picked: picked again from the conversation
-      // that follows, once; a second such command in the same fire fails the post (mini-review of round 28, #3).
+      // A command ran since the pick and closed the request picked — one that began during a wake the write made, or began and ended
+      // between two routings (an adopt replay's wait, a wake's notice), seen by the conversation's refusal serial read at the pick: picked
+      // again from the conversation that follows, once; a second such command in the same fire fails the post (mini-review of round 28,
+      // #3; of round 29, #2).
       if (!(error instanceof ScheduledRunTargetClosedError)) throw error;
       await forwardPicked(conversationKey);
     }
