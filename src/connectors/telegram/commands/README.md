@@ -167,7 +167,7 @@ A summary that is SHOWN has its scaffolding taken out and the section put under 
 for the one the bot reads, the stream display (a fragment that could still be a marker is held back) for the one OpenCode streams — both over
 the one line parser in `compactOnIdle.ts`. Not covered: the deprecated tmux Claude backend (frozen; its TUI runs the compaction and the bot has
 no completion to read a summary after).
-`bot.ts` calls the returned hooks from the prompt path (`noteThreadActivity`, `noteThreadUserActivity`),
+`bot.ts` calls the returned hooks from the prompt path (`noteThreadActivity`),
 the output path (`markThreadTurnProducedOutput`) and the session lifecycle (`rearmThreadIdleTimer`,
 `clearThreadCompaction`), and reads `threadsCompacting` (the typing loop, the request probe) and
 `reAskedQuestions` (the re-ask button's question, which a tap closes with its answer). The factory must be built BEFORE the module-scope objects that name
