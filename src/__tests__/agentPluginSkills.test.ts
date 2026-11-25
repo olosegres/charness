@@ -114,6 +114,8 @@ describe('agent-plugin', () => {
     assert.match(section, /The same tools and the same watch recipe as in a topic/);
     assert.match(section, /the bot posts NOTHING there for a scheduled run, a check or a status/);
     assert.match(section, /answer `answer_request` kind `progress` .*, then END your turn\. Do not poll the worker\./);
+    assert.match(section, /kind `progress` \(what runs, where — its link — and when it should end, never only «I'll report when it finishes»\)/, 'a progress note says what to expect');
+    assert.match(section, /At a wake read the worker's result first and decide as above; never give a `final` answer with a run you have not read\./);
     assert.match(section, /it resumes you in THIS issue, behind a header that names the request open then/);
     assert.match(section, /A new comment on the issue reaches you at the bot's next poll of the issue, asleep or not; while a turn runs it waits up to 10 minutes for it to end, then joins it\./);
     assert.match(section, /Answer the request the header names \(`answer_request` with that id\) only with a result the requester needs/);

@@ -127,8 +127,8 @@ there for a scheduled run, a check or a status — a comment always notifies the
 of the topic's lines exist (no status line, no «worker finished» sentence, no «working again»), and the check's status
 arguments only mark it as a worker watch.
 
-- After the launch and the armed check, answer `answer_request` kind `progress` — what runs, where (its link) and when it
-  should end, never only «I'll report when it finishes» — then END your turn. Do not poll the worker. The bot stops your idle
+- After the launch and the armed check, answer `answer_request` kind `progress` (what runs, where — its link — and when it
+  should end, never only «I'll report when it finishes»), then END your turn. Do not poll the worker. The bot stops your idle
   process; when the check fails (the worker finished, went silent, or ran 2 h 30 min without a report) it resumes you in THIS
   issue, behind a header that names the request open then. A new comment on the issue reaches you at the bot's next poll of
   the issue, asleep or not; while a turn runs it waits up to 10 minutes for it to end, then joins it.
