@@ -531,11 +531,22 @@ describe('The status mark of topic names end to end: built charness, fake Bot AP
     assert.deepEqual(await watchForRenames(topicThreadId), [], 'the stopped topic stays 🟢: nothing is written while it rests');
 
     // A short reply wakes the stopped process and ends inside the settle time: the topic shows nothing of it.
+    const renamesBeforeWake = listRenames(topicThreadId).length;
+    const outputBeforeWake = getCharness().output.length;
+    const wakeAtMs = Date.now();
     const wakeMessageId = fakeTelegram.pushOperatorMessage(topicThreadId, 'PT-2 another short reply');
     await waitForAgentMessage(topic, 'the reply to the waking prompt (a new process)', (message) => message.message_id > wakeMessageId);
+    const replyAfterMs = Date.now() - wakeAtMs;
     assert.ok(getSessionLaunches(getLayout()).length > launchesBeforeLongTurn, 'the reply was taken by a NEW process: the topic really had stopped');
     const renames = await watchForRenames(topicThreadId);
-    assert.deepEqual(renames, [], `a turn that wakes the stopped topic and ends inside the settle time shows nothing: ${JSON.stringify(renames)}`);
+    // A failure says when each name came, against the wake and the turn: a mark shows only for a state held for the settle time.
+    const wakeTimeline = [
+      ...listRenames(topicThreadId).slice(renamesBeforeWake).map((rename) => `${rename.name} at +${rename.atMs - wakeAtMs} ms`),
+      `the agent read the prompt at +${(getAgentPrompts('PT-2')[0]?.readAt ?? Number.NaN) - wakeAtMs} ms`,
+      `the reply was seen at +${replyAfterMs} ms`,
+      ...getCharness().output.slice(outputBeforeWake).split('\n').filter((line) => line.includes('handshake timed out')),
+    ];
+    assert.deepEqual(renames, [], `a turn that wakes the stopped topic and ends inside the settle time (${settleMs} ms) shows nothing: ${JSON.stringify(wakeTimeline)}`);
     assert.equal(fakeTelegram.getTopicName(topicThreadId), `${deployBase} 🟢`);
   });
 
