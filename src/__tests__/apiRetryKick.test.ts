@@ -779,11 +779,41 @@ describe('a limit wait aimed at another rung (the one that resets first)', () =>
 
   it('a record without a target never asks for a switch, and a transient retry ignores one', async () => {
     saveRetry(topicKey);
-    saveRetry(issueKey, { resumeOn: target });
     saveRetry(otherTopicKey, { kind: 'transient', resumeOn: target });
     boot();
     await runDueTimers();
-    assert.deepEqual(world.resumes, [], 'no target, a tracker issue has no topic to move, and a transient retry never switches');
+    assert.deepEqual(world.resumes, [], 'no target, and a transient retry never switches');
     assert.ok(world.nudges.some((nudge) => nudge.key === keyToString(otherTopicKey)), 'the transient retry still resumed in place');
+  });
+
+  it('a tracker issue is moved onto the Claude account it waited for, silently: the answer is what its requester waits for', async () => {
+    saveRetry(issueKey, { resumeOn: target });
+    boot();
+    await runDueTimers();
+    assert.deepEqual(world.resumes, [{ key: keyToString(issueKey), rung: target }]);
+    assert.deepEqual(world.sessionSteps, [], 'the switch brings its own session up');
+    assert.deepEqual(world.nudges.map((nudge) => nudge.text), ['bridge-or-continue-on-the-new-rung'], 'one prompt only');
+    assert.deepEqual(world.notices, [], 'no topic notice for an issue (R6)');
+    assert.deepEqual(world.saved, {});
+  });
+
+  it('a tracker issue is never moved onto an OpenCode rung (a record of one is resumed in place), and a move that did not take resumes in place', async () => {
+    const openCodeTarget: FallbackChainEntry = { backend: 'opencode', providerId: 'openai', modelId: 'gpt-5' };
+    saveRetry(issueKey, { resumeOn: openCodeTarget });
+    boot();
+    assert.deepEqual(world.entries.get(keyToString(issueKey))?.resumeOn, openCodeTarget, 'the record holds the OpenCode target');
+    await runDueTimers();
+    assert.deepEqual(world.resumes, [], 'a hand-over to another backend has no surface outside Telegram');
+    assert.deepEqual(world.nudges, [{ key: keyToString(issueKey), text: continueNudge }]);
+
+    world.nudges = [];
+    world.resumeResult = false;
+    saveRetry(issueKey, { resumeOn: target });
+    boot();
+    await runDueTimers();
+    assert.equal(world.resumes.length, 1);
+    assert.deepEqual(world.nudges, [{ key: keyToString(issueKey), text: continueNudge }], 'the plain resume on the account it is on');
+    assert.deepEqual(world.notices, [], 'still no topic notice');
+    assert.deepEqual(world.saved, {});
   });
 });

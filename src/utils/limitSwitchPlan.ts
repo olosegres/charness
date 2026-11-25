@@ -5,11 +5,11 @@
  * wait with nothing to switch to may be aimed at.
  *
  * WHO it applies to. A Telegram topic takes all of it. A conversation of another platform (a Jira issue; no `checkIsTelegramKey`)
- * takes the AUTOMATIC move between Claude accounts only: the chain's Claude rungs (an OpenCode rung is a cross-backend hand-over
+ * takes the AUTOMATIC moves between Claude accounts only: the chain's Claude rungs (an OpenCode rung is a cross-backend hand-over
  * that has no surface outside Telegram; a list with no Claude rung restricts no account, as for agents —
- * `getClaudeLaunchChainScope`), never the offer (its «🔁 Switch to …» buttons are a topic's) and never the wait aimed at the rung
- * that resets first (the retry kick moves only a Telegram topic there). With auto-switch OFF, with no account free, or on OpenCode
- * such a conversation waits for the reset as it always did.
+ * `getClaudeLaunchChainScope`), never the offer (its «🔁 Switch to …» buttons are a topic's). With no account free it waits for
+ * the Claude account whose limit resets EARLIEST and the retry kick moves it there — the same automatic move, made later. With
+ * auto-switch OFF it waits for its own account's reset, and on OpenCode it has nothing to decide.
  *
  * No I/O, no `Date.now()`: the caller passes the clock and the detection, so every rule is unit-tested.
  */
@@ -24,20 +24,22 @@ import {
 } from './fallbackChain';
 
 /**
- * @description Whether a usage limit on a conversation that runs on the rung `from` leads to a switch decision at all: in a Telegram
- * topic any rung does, elsewhere only a Claude account (the caller has already dropped a conversation with no rung to leave — a
- * terminal, no agent, an OpenCode server on its default model).
+ * @description Whether the rung `rung` can take part in a usage-limit move at all — as the one a conversation runs on when the limit
+ * hits (does it lead to a switch decision), or as the one it moves onto, now or when a wait aimed at it ends: in a Telegram topic any
+ * rung, elsewhere only a Claude account — a hand-over to OpenCode has no surface outside Telegram. (The caller has already dropped a
+ * conversation with no rung to leave — a terminal, no agent, an OpenCode server on its default model.)
  */
-export function checkIsLimitSwitchPossible(isTelegram: boolean, from: FallbackChainEntry): boolean {
-  return isTelegram || from.backend === 'claude';
+export function checkIsLimitSwitchPossible(isTelegram: boolean, rung: FallbackChainEntry): boolean {
+  return isTelegram || rung.backend === 'claude';
 }
 
 export interface LimitSwitchDecision {
   plan: FallbackSwitchPlan;
   /**
    * When `plan` is `none`: the rungs the armed wait may be re-aimed at — the one whose limit resets EARLIEST (`pickEarliestResetRung`).
-   * The operator's whole chain, else the signed-in SUBSCRIPTIONS (an account billed to API credits never ends a wait by itself).
-   * Empty outside Telegram and whenever the plan is not `none`.
+   * The operator's chain (outside Telegram its Claude rungs), else the signed-in SUBSCRIPTIONS (an account billed to API credits never
+   * ends a wait by itself). Empty whenever the plan is not `none`, and outside Telegram with auto-switch OFF: there the wait's end
+   * moves the conversation by itself, which that switch forbids.
    */
   waitRungs: FallbackChainEntry[];
 }
@@ -55,7 +57,7 @@ export function decideLimitSwitch(input: {
   nowMs: number;
 }): LimitSwitchDecision {
   const { isTelegram, from, detection, nowMs } = input;
-  const explicit = isTelegram ? input.chain : input.chain.filter((entry) => entry.backend === 'claude');
+  const explicit = input.chain.filter((entry) => checkIsLimitSwitchPossible(isTelegram, entry));
   // Without a configured chain a Claude conversation falls back to the within-Claude ranking (the soonest weekly reset first).
   const ranked = explicit.length === 0 && from.backend === 'claude'
     ? pickClaudeLimitSwitchCandidates({ profiles: detection.claudeProfiles, currentName: from.profile, model: from.model, nowMs })
@@ -64,7 +66,7 @@ export function decideLimitSwitch(input: {
   const candidates = pickFallbackCandidates({ chain: ranked, current: from, detection, nowMs });
   const decided = decideFallbackSwitch({ candidates, isAutoSwitchEnabled: input.isAutoSwitchEnabled });
   const plan: FallbackSwitchPlan = !isTelegram && decided.action === 'offer' ? { action: 'none' } : decided;
-  if (plan.action !== 'none' || !isTelegram) return { plan, waitRungs: [] };
+  if (plan.action !== 'none' || (!isTelegram && !input.isAutoSwitchEnabled)) return { plan, waitRungs: [] };
   const implicit = from.backend === 'claude'
     ? detection.claudeProfiles
       .filter((profile) => profile.loggedIn !== false && profile.billing !== 'api')

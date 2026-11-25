@@ -2921,7 +2921,8 @@ interface LimitWaitTexts {
  * @description Both texts of a limit wait, from ONE branch on how it ends, in the
  * thread's locale. A wait ending on another day names the date. The
  * `/limits` + `/limits_autoswitch` pointer names Telegram commands — elsewhere it would
- * be noise; the "auto-resume is off" text carries its own.
+ * be noise; the "auto-resume is off" text carries its own. A wait aimed at another
+ * rung names it in a topic only (`resumeOn`).
  */
 function getLimitWaitTexts(key: SessionKey, wait: UsageLimitWait, attempt: number, resumeOn?: FallbackChainEntry): LimitWaitTexts {
   if (wait.kind === 'autoResumeOff') {
@@ -2934,7 +2935,8 @@ function getLimitWaitTexts(key: SessionKey, wait: UsageLimitWait, attempt: numbe
   const zoneSuffix = checkIsTelegramKey(key) ? '' : ` ${getCurrentTimezone()}`;
   const time = `${formatLocalClockWithDateIfNotToday(wait.kind === 'afterReset' ? wait.resetAt : wait.fireAt, nowMs)}${zoneSuffix}`;
   const model = resumeOn ? formatFallbackEntry(resumeOn) : '';
-  const [noticeText, answerText] = wait.kind === 'afterReset' && resumeOn
+  // A tracker's requester learns when the answer comes, not on which of the operator's accounts.
+  const [noticeText, answerText] = wait.kind === 'afterReset' && resumeOn && checkIsTelegramKey(key)
     ? [t('apiRetry.usageLimitResetOnRungNotice', { time, model }), t('requests.limit.answerAfterResetOnRungNotice', { time, model })]
     : wait.kind === 'afterReset'
     ? [t('apiRetry.usageLimitResetNotice', { time }), t('requests.limit.answerAfterResetNotice', { time })]
@@ -9868,10 +9870,10 @@ function notePersonActivity(key: SessionKey): void {
  * offer is remembered per thread under its episode so only ITS buttons can act on it. `none` for a topic with no account to
  * switch from, or when no rung can take over.
  *
- * A conversation of another platform (a Jira issue) takes the AUTOMATIC move only, and only between Claude accounts: the chain's
- * Claude rungs when it has any (else the ranking), never an OpenCode rung (a cross-backend hand-over has no surface there). The
- * offer's buttons and the wait aimed at the rung that resets first (the retry kick moves a topic there only for Telegram) are
- * Telegram's: with auto-switch OFF, with no account free, or on OpenCode such a conversation waits for the reset as it always did.
+ * A conversation of another platform (a Jira issue) takes the AUTOMATIC moves only, and only between Claude accounts: the chain's
+ * Claude rungs when it has any (else the ranking), never an OpenCode rung (a cross-backend hand-over has no surface there). With no
+ * account free its wait, like a topic's, ends at the EARLIEST reset of those accounts (`earliest`) and the retry kick moves it there;
+ * the offer's buttons are Telegram's. With auto-switch OFF, or on OpenCode, such a conversation waits for its own reset.
  */
 async function planFallbackSwitch(key: SessionKey, cls: AgentApiErrorClass, episodeId: number): Promise<FallbackSwitchPlan & { from: FallbackChainEntry | null; earliest: { entry: FallbackChainEntry; untilMs: number } | null }> {
   const from = getTopicFallbackPosition(key);
@@ -9913,7 +9915,7 @@ async function planFallbackSwitch(key: SessionKey, cls: AgentApiErrorClass, epis
   if (plan.action === 'offer') fallbackSwitchOffers.set(k, { episodeId, from, candidates: plan.candidates });
   else fallbackSwitchOffers.delete(k);
   const detail = plan.action === 'auto' ? ` → ${formatFallbackEntry(plan.to)}` : plan.action === 'offer' ? ` [${plan.candidates.map(formatFallbackEntry).join(', ')}]` : '';
-  // Nothing has room: the wait should end on the rung whose limit resets EARLIEST, not necessarily this one (a topic's wait only).
+  // Nothing has room: the wait should end on the rung whose limit resets EARLIEST, not necessarily this one.
   let earliest: { entry: FallbackChainEntry; untilMs: number } | null = null;
   if (waitRungs.length > 0) {
     const found = pickEarliestResetRung({ chain: waitRungs, current: from, detection, nowMs: Date.now() });

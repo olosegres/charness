@@ -301,10 +301,14 @@ When a Jira conversation's agent hits a usage limit the bot moves it to the next
 resumed (`--resume`) under that account's `CLAUDE_CONFIG_DIR`, answered as before — by the rules a Telegram topic follows: the fallback
 list's Claude entries when it has any (an OpenCode entry is skipped: a hand-over to another backend has no surface here; a list with no
 Claude entry restricts nothing), else the ranking by the soonest weekly reset (`pickClaudeLimitSwitchCandidates`). The requester hears
-nothing — the work simply goes on; the bot's log has the `[fallback]` line. Everything that is a topic's stays out: the «Switch to …»
-offer (with auto switch OFF the conversation waits), the notice, the wait aimed at the account that resets first (the retry kick moves only a
-topic there) — and with no account free, or on OpenCode, the conversation waits for the reset exactly as before, announced to the open
-request. The account-switch settings are ONE set for the whole bot, whatever the connector, and a Jira conversation has no setting of its
+nothing — the work simply goes on; the bot's log has the `[fallback]` line. With NO account free the conversation waits — announced to the
+open request — for the Claude account that comes back FIRST among the same accounts (the list's Claude entries, else the signed-in
+subscriptions; `pickEarliestResetRung`), not only for its own: the notice names that time, the target rides in the persisted retry record,
+and when the wait ends the retry kick moves the conversation there by itself, as above (`resumeOn`). If that account refuses after all
+(its reset was wrong), the refusal is a new limit, planned afresh: an account with room takes over, else the wait ends at the next reset.
+Everything that is a topic's stays out: the «Switch to …» offer (with auto switch OFF the conversation waits for its OWN account's reset),
+the notices in a topic, a wait aimed at an OpenCode entry — and on OpenCode the conversation waits for the reset exactly as before. The
+account-switch settings are ONE set for the whole bot, whatever the connector, and a Jira conversation has no setting of its
 own (an automatic move pins it to the account it moved to, as it does a topic): it starts on the instance's default account (`claudeProfileDefault`, General's `/accounts` pick) and follows the instance's fallback
 list and General's «Auto switch» (`claudeAutoSwitchOnLimitEnabled`, ON unless turned OFF) and «Wait for reset»
 (`autoContinueOnLimitEnabled`, ON unless turned OFF) of `/limits_autoswitch`. Telegram's General topic is where they are set (an instance that serves

@@ -7,6 +7,7 @@ import type { PromptDelivery } from './utils/promptDelivery';
 import type { AgentApiErrorClass, ApiRetryState } from './types';
 import type { RetryAttemptsByKind } from './apiErrorRetry';
 import { normaliseFallbackChain, type FallbackChainEntry } from './utils/fallbackChain';
+import { checkIsLimitSwitchPossible } from './utils/limitSwitchPlan';
 
 /**
  * The retry kick and the boot restore of the API-error auto-retry (plan S4–S6),
@@ -52,7 +53,10 @@ export interface ApiRetryTimerEntry {
   /** How a usage-limit wait ends, for the limit answer of a request opened during it.
    *  Absent for a record re-armed at boot (`state.json` keeps only the instant). */
   limitWait?: UsageLimitWait;
-  /** The chain rung a usage-limit wait ends on (the earliest-resetting one): the kick moves the topic there first. */
+  /**
+   * The chain rung a usage-limit wait ends on (the earliest-resetting one): the kick moves the conversation there first — a topic onto
+   * any rung, a tracker issue onto a Claude account only (`checkIsLimitSwitchPossible`).
+   */
   resumeOn?: FallbackChainEntry;
   /** The short probe retry of an UNCONFIRMED usage limit: the same error right after it confirms the limit. */
   isLimitProbe?: boolean;
@@ -88,9 +92,10 @@ export interface ApiRetryKickDeps {
   /** `carriedRequestIds`: the requests whose prompts the nudge carries, as named when it was built (`getResumeMessage`). */
   trackContinuation: (key: SessionKey, options: { isCountersReset: boolean; carriedRequestIds: readonly string[] }) => Promise<void>;
   /**
-   * Move the topic onto `rung` and continue its work there (`switchTopicToFallbackEntry`: it delivers its own
+   * Move the conversation onto `rung` and continue its work there (`switchTopicToFallbackEntry`: it delivers its own
    * continue prompt and ends the retry). `true` when it did — the kick is then done; `false` (already on that
-   * account, the switch deferred or failed) leaves the plain resume on the topic's current rung.
+   * account, the switch deferred or failed) leaves the plain resume on the conversation's current rung. A rung whose
+   * reset turned out wrong takes the move all the same: its refusal is a new limit, planned afresh.
    */
   resumeOnRung?: (key: SessionKey, rung: FallbackChainEntry) => Promise<boolean>;
   /** Drop the retry's saved twin (`state.json`). */
@@ -148,12 +153,14 @@ export async function runApiRetryKick(deps: ApiRetryKickDeps, key: SessionKey): 
   let isNudgeBuffered = false;
 
   try {
-    // A wait aimed at another rung (the one whose limit reset first): the topic moves there before anything else.
-    // The switch posts its own plain notice and continue prompt; the pinned «resuming» notice still follows, so a
-    // muted topic hears that the work resumed after the wait, as on the plain path.
-    if (entry.resumeOn && entry.kind === 'usageLimit' && deps.resumeOnRung && checkIsTelegramKey(key)) {
+    // A wait aimed at another rung (the one whose limit reset first): the conversation moves there before anything else.
+    // The switch posts its own plain notice and continue prompt; in a topic the pinned «resuming» notice still follows, so
+    // a muted topic hears that the work resumed after the wait, as on the plain path. A tracker issue moves silently
+    // (R6), and only onto a Claude account: the answer itself is what its requester waits for.
+    const isTelegram = checkIsTelegramKey(key);
+    if (entry.resumeOn && entry.kind === 'usageLimit' && deps.resumeOnRung && checkIsLimitSwitchPossible(isTelegram, entry.resumeOn)) {
       if (await deps.resumeOnRung(key, entry.resumeOn)) {
-        deps.postTopicNotice(key, { kind: 'resuming', retryKind: entry.kind });
+        if (isTelegram) deps.postTopicNotice(key, { kind: 'resuming', retryKind: entry.kind });
         return;
       }
     }
@@ -166,7 +173,7 @@ export async function runApiRetryKick(deps: ApiRetryKickDeps, key: SessionKey): 
       // open for the wake-up engine (its backstop / retries); what was held stays held for the next session.
       console.warn(`[apiRetry] not resuming ${k}: no session (${ensured.reason}); an open request is left to the wake-up engine`);
       // A topic is told why nothing resumed — it waits for the operator's next message now (R6: not a tracker issue).
-      if (checkIsTelegramKey(key)) deps.postTopicNotice(key, { kind: 'noSession', message: ensured.message });
+      if (isTelegram) deps.postTopicNotice(key, { kind: 'noSession', message: ensured.message });
       return;
     }
     // The nudge is NOT a request: the open request (if any) continues under it. A
@@ -197,7 +204,7 @@ export async function runApiRetryKick(deps: ApiRetryKickDeps, key: SessionKey): 
     // "resuming" over a start that failed, or over a session that was gone, would read as work under way. The notices are topic
     // messages (a pin among them): a tracker issue hears about the wait from the request's own answer, and has no topic for the
     // rest (R6). A conversation-tail retry follows its "continuing…" notice within seconds: a second line would only repeat it.
-    if (checkIsTelegramKey(key) && entry.kind !== 'conversationTail') deps.postTopicNotice(key, { kind: 'resuming', retryKind: entry.kind });
+    if (isTelegram && entry.kind !== 'conversationTail') deps.postTopicNotice(key, { kind: 'resuming', retryKind: entry.kind });
     isNudgeBuffered = delivery === 'buffered';
     // A buffered nudge is tracked by its settle, at its replay.
     if (!isNudgeBuffered) await trackContinuation();

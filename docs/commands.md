@@ -341,10 +341,15 @@ so one account's usage limit does not stop every topic.
   the next signed-in Claude account by the same rules (the chain's Claude entries
   when there are any, else the soonest weekly reset), the same conversation resumed
   under that account, and the requester hears nothing — the work simply goes on
-  (the bot's log has the line). It has no topic to carry the buttons or the notice,
-  so with switching OFF, with no account free or on OpenCode it waits for the reset
-  as before and says so to the open request; an OpenCode entry of the chain is
-  skipped (a list with no Claude entry restricts no account). Such a conversation
+  (the bot's log has the line). With no account free it waits — and says so to the
+  open request — for the Claude account that comes back FIRST of those same accounts,
+  not only for its own: the comment names that time, and then the conversation moves
+  there by itself; if that account refuses after all, the limit is planned again
+  (another account with room, else the next reset). It has no topic to carry the
+  buttons or the switch notices, so with switching OFF it waits for its OWN account's
+  reset, and on OpenCode for the reset as before; an OpenCode entry of the chain is
+  skipped, also when it comes back first (a list with no Claude entry restricts no
+  account). Such a conversation
   has no settings of its own: the account it starts on (General's `/accounts`
   default), the `/limits_autoswitch` list, «Auto switch» and «Wait for reset» are
   ONE set for the whole bot, whatever the connector, and are set in Telegram's

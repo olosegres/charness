@@ -5,11 +5,15 @@
  * touches nothing that is a topic's:
  *
  *   • it switches to a free account — ranked, or named by the chain; an account that is limited, signed out or has no usage is not one;
- *   • with auto-switch OFF it WAITS (no «switch to …» offer — buttons are a topic's), with no account free it waits, and neither
- *     aims the wait at another rung (the retry kick moves only a Telegram topic there);
- *   • an OpenCode rung of the chain is never its target (a cross-backend hand-over has no surface there), a chain with no Claude
- *     rung restricts no account, and a conversation that runs on OpenCode has nothing to decide;
+ *   • with no account free it waits for the Claude account whose limit resets EARLIEST (the chain's Claude rungs, else the signed-in
+ *     subscriptions) — the retry kick moves it there; a re-plan from that account, when it refused after all, aims at the next one;
+ *   • with auto-switch OFF it WAITS for its own reset: no «switch to …» offer (buttons are a topic's) and no wait aimed elsewhere;
+ *   • an OpenCode rung of the chain is never its target, now or at a wait's end (a cross-backend hand-over has no surface there), a
+ *     chain with no Claude rung restricts no account, and a conversation that runs on OpenCode has nothing to decide;
  *   • the same inputs for a Telegram topic keep the offer, the OpenCode rungs and the aimed wait.
+ *
+ * The process-level twin is `jiraFallbackSwitchE2e.test.ts` (the move by itself, the wait aimed at the account that frees first and its
+ * resume there, auto switch OFF); the kick's own move is in `apiRetryKick.test.ts` («a limit wait aimed at another rung»).
  */
 
 /** Test case: N/A — Charness has no Jira tracker. */
@@ -17,7 +21,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { checkIsLimitSwitchPossible, decideLimitSwitch } from '../utils/limitSwitchPlan';
-import type { FallbackChainEntry, FallbackDetection } from '../utils/fallbackChain';
+import { pickEarliestResetRung, type FallbackChainEntry, type FallbackDetection } from '../utils/fallbackChain';
 import type { ClaudeProfileUsageView, ClaudeUsageSnapshot } from '../utils/claudeUsage';
 
 const nowMs = Date.parse('2026-11-18T10:00:00.000Z');
@@ -48,13 +52,26 @@ function buildProfile(name: string, patch: Partial<ClaudeProfileUsageView> = {})
   };
 }
 
-function buildDetection(profiles: ClaudeProfileUsageView[], openCodeModels: string[] = []): FallbackDetection {
-  return { claudeProfiles: profiles, openCodeModels, recentOpenCodeModels: [], openCodeLimits: {} };
+function buildDetection(profiles: ClaudeProfileUsageView[], openCodeModels: string[] = [], openCodeLimits: Record<string, string> = {}): FallbackDetection {
+  return { claudeProfiles: profiles, openCodeModels, recentOpenCodeModels: [], openCodeLimits };
 }
 
 const onDefault: FallbackChainEntry = { backend: 'claude', profile: 'default', model: null };
 const limitedDefault = buildProfile('default', { limitedUntil: '2026-11-18T13:00:00.000Z', usage: buildUsage({ session: 100, weekly: 40 }) });
 const base = { from: onDefault, chain: [] as FallbackChainEntry[], isAutoSwitchEnabled: true, nowMs };
+const onSecond: FallbackChainEntry = { backend: 'claude', profile: 'second', model: null };
+const openAiRung: FallbackChainEntry = { backend: 'opencode', providerId: 'openai', modelId: 'gpt-5' };
+/** The timeline seen live: the conversation's account comes back in 3 h, the second one in 40 minutes. */
+const secondBackAt = '2026-11-18T10:40:00.000Z';
+const secondLimitedEarlier = buildProfile('second', { limitedUntil: secondBackAt });
+
+/** What `bot.ts` `planFallbackSwitch` makes of a decision: the rung the wait is aimed at, `null` when it stays on its own reset. */
+function pickWaitTarget(input: Parameters<typeof decideLimitSwitch>[0]): { entry: FallbackChainEntry; until: string } | null {
+  const { plan, waitRungs } = decideLimitSwitch(input);
+  assert.deepEqual(plan, { action: 'none' }, 'nothing is free: a wait');
+  const found = waitRungs.length > 0 ? pickEarliestResetRung({ chain: waitRungs, current: input.from, detection: input.detection, nowMs: input.nowMs }) : null;
+  return found && !found.isCurrent ? { entry: found.entry, until: new Date(found.untilMs).toISOString() } : null;
+}
 
 describe('decideLimitSwitch: a Jira conversation (no Telegram)', () => {
   const jira = { ...base, isTelegram: false };
@@ -105,19 +122,56 @@ describe('decideLimitSwitch: a Jira conversation (no Telegram)', () => {
     assert.deepEqual(plan, { action: 'none' }, 'nothing is free: the wait for the reset stands');
   });
 
-  it('waits when no account is free, and aims the wait at no other rung', () => {
-    const { plan, waitRungs } = decideLimitSwitch({
-      ...jira,
-      detection: buildDetection([limitedDefault, buildProfile('second', { limitedUntil: '2026-11-18T12:00:00.000Z' })]),
-    });
-    assert.deepEqual(plan, { action: 'none' });
-    assert.deepEqual(waitRungs, [], 'the retry kick moves only a Telegram topic to the rung that resets first');
+  it('with no account free, waits for the account that resets first — the signed-in subscriptions when no chain is set', () => {
+    const detection = buildDetection([
+      limitedDefault,
+      secondLimitedEarlier,
+      buildProfile('metered', { billing: 'api', limitedUntil: '2026-11-18T10:10:00.000Z' }),
+      buildProfile('out', { loggedIn: false, limitedUntil: '2026-11-18T10:05:00.000Z' }),
+    ]);
+    assert.deepEqual(decideLimitSwitch({ ...jira, detection }).waitRungs, [onDefault, onSecond], 'no API account, no signed-out one');
+    assert.deepEqual(pickWaitTarget({ ...jira, detection }), { entry: onSecond, until: secondBackAt }, 'the wait ends when the second account is back, not in 3 h');
   });
 
-  it('waits with auto-switch OFF: no offer — its buttons are a topic\'s', () => {
-    const { plan, waitRungs } = decideLimitSwitch({ ...jira, isAutoSwitchEnabled: false, detection: buildDetection([limitedDefault, buildProfile('second')]) });
-    assert.deepEqual(plan, { action: 'none' });
-    assert.deepEqual(waitRungs, []);
+  it('with no account free, waits for the chain\'s Claude rung that resets first', () => {
+    const detection = buildDetection([limitedDefault, secondLimitedEarlier, buildProfile('third', { limitedUntil: '2026-11-18T10:20:00.000Z' })]);
+    const chain: FallbackChainEntry[] = [{ backend: 'claude', profile: 'second', model: 'sonnet' }];
+    assert.deepEqual(pickWaitTarget({ ...jira, chain, detection }), { entry: chain[0], until: secondBackAt }, 'the list is the word: the account it leaves out is never waited for');
+  });
+
+  it('stays on its own reset when its own account comes back first, or within a minute of the first', () => {
+    const later = buildDetection([limitedDefault, buildProfile('second', { limitedUntil: '2026-11-18T13:30:00.000Z' })]);
+    assert.equal(pickWaitTarget({ ...jira, detection: later }), null);
+    const nearTie = buildDetection([limitedDefault, buildProfile('second', { limitedUntil: '2026-11-18T12:59:30.000Z' })]);
+    assert.equal(pickWaitTarget({ ...jira, detection: nearTie }), null, 'no needless move for half a minute');
+  });
+
+  it('with auto-switch OFF, waits for its own reset: no offer — its buttons are a topic\'s — and no wait aimed at an account that frees first', () => {
+    const free = decideLimitSwitch({ ...jira, isAutoSwitchEnabled: false, detection: buildDetection([limitedDefault, buildProfile('second')]) });
+    assert.deepEqual(free, { plan: { action: 'none' }, waitRungs: [] });
+    const earlier = decideLimitSwitch({ ...jira, isAutoSwitchEnabled: false, detection: buildDetection([limitedDefault, secondLimitedEarlier]) });
+    assert.deepEqual(earlier, { plan: { action: 'none' }, waitRungs: [] });
+  });
+
+  it('never waits for an OpenCode rung, however early it comes back', () => {
+    const openCodeBackAt = '2026-11-18T10:05:00.000Z';
+    const detection = buildDetection([limitedDefault, secondLimitedEarlier], ['openai/gpt-5'], { 'openai/gpt-5': openCodeBackAt });
+    const chain: FallbackChainEntry[] = [openAiRung, onSecond];
+    assert.deepEqual(decideLimitSwitch({ ...jira, chain, detection }).waitRungs, [onSecond]);
+    assert.deepEqual(pickWaitTarget({ ...jira, chain, detection }), { entry: onSecond, until: secondBackAt }, 'the Claude account, not the OpenCode model back 35 minutes earlier');
+    const onlyOpenCode = buildDetection([limitedDefault], ['openai/gpt-5'], { 'openai/gpt-5': openCodeBackAt });
+    assert.equal(pickWaitTarget({ ...jira, chain: [openAiRung], detection: onlyOpenCode }), null, 'its own reset: the list names no other Claude account');
+    // The same inputs in a topic: the OpenCode model is the rung that comes back first.
+    assert.deepEqual(pickWaitTarget({ ...base, isTelegram: true, chain, detection }), { entry: openAiRung, until: openCodeBackAt });
+  });
+
+  it('an account whose reset turned out wrong (it refused at the resume): the plan from it moves on, or waits for the next to come back', () => {
+    // The wait moved the conversation onto «second», which refused with a new reset (marked by the caller): `default` is back first now.
+    const secondRefused = buildProfile('second', { limitedUntil: '2026-11-18T14:00:00.000Z' });
+    assert.deepEqual(pickWaitTarget({ ...jira, from: onSecond, detection: buildDetection([limitedDefault, secondRefused]) }), { entry: onDefault, until: '2026-11-18T13:00:00.000Z' });
+    // A third account with room by then takes the conversation over at once.
+    const third = buildProfile('third');
+    assert.deepEqual(decideLimitSwitch({ ...jira, from: onSecond, detection: buildDetection([limitedDefault, secondRefused, third]) }).plan, { action: 'auto', to: { backend: 'claude', profile: 'third', model: null } });
   });
 
   it('never moves to an OpenCode rung of the chain; a chain with no Claude rung restricts no account', () => {
@@ -166,11 +220,10 @@ describe('decideLimitSwitch: a Telegram topic keeps everything', () => {
 });
 
 describe('checkIsLimitSwitchPossible', () => {
-  it('a Telegram topic: any rung; another platform: a Claude account only', () => {
-    const openCode: FallbackChainEntry = { backend: 'opencode', providerId: 'openai', modelId: 'gpt-5' };
+  it('a Telegram topic: any rung; another platform: a Claude account only — to leave, and to move onto', () => {
     assert.equal(checkIsLimitSwitchPossible(true, onDefault), true);
-    assert.equal(checkIsLimitSwitchPossible(true, openCode), true);
+    assert.equal(checkIsLimitSwitchPossible(true, openAiRung), true);
     assert.equal(checkIsLimitSwitchPossible(false, onDefault), true);
-    assert.equal(checkIsLimitSwitchPossible(false, openCode), false);
+    assert.equal(checkIsLimitSwitchPossible(false, openAiRung), false);
   });
 });

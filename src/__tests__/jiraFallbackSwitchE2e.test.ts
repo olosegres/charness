@@ -14,13 +14,19 @@
  *   → an issue's agent hits its usage limit: the conversation moves to the adopted account by itself, the SAME conversation resumed
  *     under that account's directory, answered and handed back; no wait is announced to the requester, the exhausted account is
  *     marked limited until the reset the error named, and no Telegram primitive is touched
+ *   → the timeline seen live: the next issue's account hits its limit (back in 2 h) while the adopted one is itself limited, but back
+ *     within a minute: the requester is told the answer comes when the ADOPTED account is back, and at that time the conversation
+ *     resumes there by itself (`--resume` under its directory); that account's reset turns out wrong — it refuses once more with a
+ *     later reset — so the wait is planned again, for that new reset (no retry before it, the requester told the new time), and the
+ *     issue is answered on that account after it and handed back
  *   → with auto switch OFF (as an operator left it) the next issue's agent hits the same limit and WAITS: the requester is told in a
  *     comment, nothing moves, nobody switches
  *   → the launches carried the Jira flags and the allowlist (a launch under an account's directory adds `CLAUDE_CONFIG_DIR` — a path,
  *     the one variable an account adds — and only there), and no Telegram path was reached
  *
  * What the unit tests cover instead: the scan (`claudeProfileSync.test.ts`) and the decision per kind of conversation, with an account
- * free, none free, auto switch OFF, a chain with OpenCode rungs (`limitSwitchPlan.test.ts`).
+ * free, none free (the account the wait ends on), auto switch OFF, a chain with OpenCode rungs (`limitSwitchPlan.test.ts`); the retry
+ * kick's move of an issue, never onto OpenCode (`apiRetryKick.test.ts`).
  *
  * Nothing leaves the machine: Jira and the bot MCP are on loopback, the agent is the fake. Everything the test starts is stopped in
  * `after`.
@@ -35,8 +41,11 @@ import * as path from 'path';
 import { makeJiraKey } from '../connectors/jira/sessionKeyCodec';
 import { keyToString } from '../sessionKey';
 import { createClaudeProfileLayout } from '../utils/claudeProfiles';
+import { resetBufferMs } from '../apiErrorRetry';
+import type { FakeJiraIssue } from './jiraE2e/fakeJira';
 import {
   checkHasFlag,
+  fakeClaudeAlwaysUsageLimitFileName,
   fakeClaudeLoginFileName,
   fakeClaudeLogFileNames,
   fakeConsoleLogin,
@@ -47,6 +56,7 @@ import {
 import {
   checkHasTurnOnLaunch,
   computeResetsAtIso,
+  getAllAgentTurns,
   getAccountConfigDir,
   getLaunchOfTurn,
   getSessionLaunches,
@@ -83,7 +93,17 @@ const blankAccount = 'blank';
 const refusedFolderName = 'Not_A_Profile';
 const limitIssueKey = 'PROJ-50';
 const waitingIssueKey = 'PROJ-51';
+/** The issue of the timeline seen live: its account hits the limit while the other one is limited too, but back sooner. */
+const earliestIssueKey = 'PROJ-52';
 const takeoverDaysAhead = 2;
+/** How far ahead of the restart the adopted account's limit ends: past the boot, the poll and the first turn, which must find it limited. */
+const adoptedBackLeadMs = 60_000;
+/** When the issue's own account comes back: long after the adopted one. */
+const ownResetLeadMs = 2 * 60 * 60 * 1000;
+/** The adopted account's reset turned out wrong: at the resume it refuses again, with a reset this long after the first one. */
+const refusedResetAfterBackMs = 100_000;
+/** How long nothing may run after that refusal: an instant retry would land well inside it. */
+const noRetryQuietMs = 5_000;
 
 /** When the fake says the limit resets: a few days ahead. */
 const resetsAtIso = computeResetsAtIso(takeoverDaysAhead);
@@ -199,6 +219,75 @@ describe('The usage-limit switch of a Jira conversation end to end: built charne
     assert.match(output, new RegExp(`\\[fallback\\] ${keyToString(makeJiraKey(limitIssueKey))}: switched from .* after a usage limit; resuming`));
   });
 
+  it('with no account free the wait ends when the account back FIRST is back, and the conversation resumes there by itself', async () => {
+    const k = keyToString(makeJiraKey(earliestIssueKey));
+    const adoptedBackMs = Date.now() + adoptedBackLeadMs;
+    const adoptedBackIso = new Date(adoptedBackMs).toISOString();
+    const ownResetIso = new Date(Date.now() + ownResetLeadMs).toISOString();
+    await restartWithState((persisted) => {
+      const adopted = persisted.claudeProfiles?.[handSignedAccount];
+      assert.ok(persisted.claudeProfiles && adopted, 'the adopted account is recorded');
+      // The first issue left the account marked for days: this issue's own limit sets its mark.
+      delete persisted.claudeProfiles[exhaustedAccount]?.limitedUntil;
+      persisted.claudeProfiles[handSignedAccount] = { ...adopted, limitedUntil: adoptedBackIso };
+    });
+    createIssue(earliestIssueKey, 'usage-limit-once', ` [limit-resets:${ownResetIso}]`);
+    handIssueToAi(earliestIssueKey, requester);
+    const issue = fakeJira.getIssue(earliestIssueKey);
+
+    await waitFor(`${earliestIssueKey}: the limit planned`, answerTimeoutMs, () => listLimitPlanLines(k).length >= 1);
+    const [firstPlan] = listLimitPlanLines(k);
+    if (!firstPlan.includes('earliest reset') && Date.now() > adoptedBackMs) {
+      throw new Error(`precondition not met: the adopted account was back (${adoptedBackIso}) before the limit was planned — a boot and first turn slower than ${adoptedBackLeadMs / 1000} s: ${firstPlan}`);
+    }
+    assert.ok(firstPlan.includes(`switch plan: none; earliest reset: Claude · ${handSignedAccount} · `) && firstPlan.endsWith(` at ${adoptedBackIso}`), `the wait is aimed at the adopted account: ${firstPlan}`);
+    await waitFor(`${earliestIssueKey}: the wait announced to the requester`, answerTimeoutMs, () => readLimitNotices(issue).length >= 1);
+    const [notice] = readLimitNotices(issue);
+    assert.equal(notice.clock, formatClockIn(notice.zone, adoptedBackMs), `the answer comes when the adopted account is back: ${notice.text}`);
+    assert.notEqual(notice.clock, formatClockIn(notice.zone, Date.parse(ownResetIso)), 'not when the issue\'s own account is');
+    await waitFor('the aimed wait persisted to state.json', answerTimeoutMs, () => readPersistedState(getLayout()).apiRetries?.[k]?.resumeOn !== undefined);
+    const aimed = readPersistedState(getLayout());
+    assert.deepEqual(aimed.apiRetries?.[k]?.resumeOn, { backend: 'claude', profile: handSignedAccount, model: null }, 'the wait ends on the adopted account');
+    assert.equal(aimed.apiRetries?.[k]?.fireAt, adoptedBackMs + resetBufferMs, 'it fires when that account is back, not in 2 h');
+    assert.equal(aimed.claudeProfiles?.[exhaustedAccount]?.limitedUntil, ownResetIso, 'the issue\'s account is marked until the reset its error named');
+
+    // At the resume the adopted account refuses after all, with a later reset: its own reset was wrong.
+    const refusedResetMs = adoptedBackMs + refusedResetAfterBackMs;
+    const refusedResetIso = new Date(refusedResetMs).toISOString();
+    const alwaysLimitPath = path.join(getLayout().fakeStateDir, fakeClaudeAlwaysUsageLimitFileName);
+    fs.writeFileSync(alwaysLimitPath, refusedResetIso);
+    const sessionId = getLaunchSessionId(getLaunchOfTurn(getLayout(), earliestIssueKey, 0).argv) ?? '';
+    assert.ok(sessionId, 'the first launch carries a conversation id');
+    const adoptedDir = getAccountConfigDir(getLayout(), handSignedAccount);
+    try {
+      await waitFor(`${earliestIssueKey}: resumed under ${handSignedAccount} once it was back`, adoptedBackMs + resetBufferMs + answerTimeoutMs - Date.now(), () =>
+        getSessionLaunches(getLayout()).some((launch) => launch.claudeConfigDir === adoptedDir && getLaunchSessionId(launch.argv) === sessionId));
+      await waitFor(`${earliestIssueKey}: the refusal planned`, answerTimeoutMs, () => listLimitPlanLines(k).length >= 2);
+    } catch (e) {
+      throw new Error(`${e instanceof Error ? e.message.split('; charness output tail')[0] : String(e)}\n${listLimitLogLines().join('\n')}`);
+    } finally {
+      fs.rmSync(alwaysLimitPath, { force: true });
+    }
+    const turnsAfterRefusal = getAllAgentTurns(getLayout()).length;
+    if (Date.now() >= refusedResetMs) throw new Error(`precondition not met: the refusal was handled after its own reset (${refusedResetIso}) — a resume slower than ${(refusedResetAfterBackMs - resetBufferMs) / 1000} s`);
+    const resumed = getSessionLaunches(getLayout()).find((launch) => launch.claudeConfigDir === adoptedDir && getLaunchSessionId(launch.argv) === sessionId);
+    assert.ok(resumed?.argv.includes('--resume'), 'the SAME conversation resumed, not started over');
+    assert.match(getCharness().output, new RegExp(`\\[fallback\\] ${k}: switched from .* to Claude · ${handSignedAccount} · .* after a usage limit; resuming`), 'the retry kick moved it');
+    const secondPlan = listLimitPlanLines(k)[1];
+    assert.ok(secondPlan.includes(`usage limit on Claude · ${handSignedAccount} · `) && secondPlan.endsWith('switch plan: none'), `planned again from the adopted account, which is back first again: ${secondPlan}`);
+    await waitFor(`${earliestIssueKey}: the requester told the new time`, answerTimeoutMs, () => readLimitNotices(issue).some((told) => told.clock === formatClockIn(told.zone, refusedResetMs)));
+    await waitFor('the new wait persisted to state.json', answerTimeoutMs, () => readPersistedState(getLayout()).apiRetries?.[k]?.fireAt === refusedResetMs + resetBufferMs);
+    assert.equal(readPersistedState(getLayout()).apiRetries?.[k]?.resumeOn, undefined, 'it stays on the account it is on');
+    await new Promise((resolve) => setTimeout(resolve, noRetryQuietMs));
+    assert.equal(getAllAgentTurns(getLayout()).length, turnsAfterRefusal, 'no retry before the new reset');
+
+    // The resume's «continue» names no request: the answer follows the wake-up engine's reminder, as after the first issue's move.
+    await waitFor(`${earliestIssueKey}: answered on ${handSignedAccount} after the new reset and handed back`, refusedResetMs + resetBufferMs + resumeTimeoutMs - Date.now(), () =>
+      issue.assignee?.accountId === requester.accountId && getCommentTexts(issue).some((text) => text.includes(`Fake final answer for ${earliestIssueKey}`)));
+    const answeringTurn = getTurns(earliestIssueKey).at(-1);
+    assert.equal(getSessionLaunches(getLayout()).filter((launch) => launch.pid === answeringTurn?.pid).at(-1)?.claudeConfigDir, adoptedDir, 'the answer came from the adopted account');
+  });
+
   it('with auto switch OFF the next issue\'s agent hits the same limit and WAITS: the requester is told in a comment, nothing moves', async () => {
     await restartWithState((persisted) => {
       persisted.claudeAutoSwitchOnLimitEnabled = false;
@@ -237,6 +326,24 @@ describe('The usage-limit switch of a Jira conversation end to end: built charne
 function listAuthStatusProbes(): Array<{ argv: string[]; claudeConfigDir: string | null }> {
   return readFakeLog<{ argv: string[]; isSessionLaunch: boolean; claudeConfigDir: string | null }>(fakeClaudeLogFileNames.launches)
     .filter((launch) => !launch.isSessionLaunch && launch.argv.includes('auth') && launch.argv.includes('status'));
+}
+
+/** The `[fallback]` plan lines of the conversation `conversationKey`, one per usage limit it hit, oldest first. */
+function listLimitPlanLines(conversationKey: string): string[] {
+  return getCharness().output.split('\n').filter((line) => line.includes(`[fallback] ${conversationKey}: usage limit on `)).map((line) => line.trimEnd());
+}
+
+/** The limit notices on the issue (an edit of one replaces its text): the clock the answer is promised for and the zone it is in. */
+function readLimitNotices(issue: FakeJiraIssue): Array<{ clock: string; zone: string; text: string }> {
+  return getCommentTexts(issue).flatMap((text) => {
+    const match = /the answer will come after (?:\d{4}-\d{2}-\d{2} )?(\d{2}:\d{2}) ([^\s]+?)\./.exec(text);
+    return match ? [{ clock: match[1], zone: match[2], text }] : [];
+  });
+}
+
+/** `HH:MM` of an instant in the time zone `zone`, as the bot words a reset for a tracker (the zone named after it). */
+function formatClockIn(zone: string, epochMs: number): string {
+  return new Intl.DateTimeFormat('en-GB', { timeZone: zone, hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(epochMs);
 }
 
 /** What the instance logged about limits, switches and the issues of the flow — the evidence a failed step needs. */
