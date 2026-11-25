@@ -434,7 +434,7 @@ describe('the bot buffers a prompt for a starting session through it, in one pla
     // runs); a session post waits for the buffered prompt's replay as well (it must not count a prompt that never arrived): `buffered.settle`.
     assert.match(
       botSource.slice(botSource.indexOf('async function forwardTopicSchedulerRequestRun('), botSource.indexOf('async function forwardTopicSchedulerRequestRun(') + 1500),
-      /const delivery = await deliverPostPrompt\(key, `\$\{opening\.header\}\$\{text\}`, buffered\.settle, \{ isAccountsNoteCarrier: true \}, opening\.requestId\);\n(?:\s*\/\/[^\n]*\n)*\s*if \(delivery === 'buffered' && \(await buffered\.getOutcome\(\)\) === 'dropped'\) \{\n\s*await settleTopicRequestAfterDelivery\(key, opening, 'noSession'\);\n\s*throw new Error\(bufferedPromptDroppedError\);\n\s*\}\n\s*await settleTopicRequestAfterDelivery\(key, \{ \.\.\.opening, isScheduledRun: true \}, delivery\);/,
+      /const delivery = await deliverPostPrompt\(key, `\$\{opening\.header\}\$\{text\}`, buffered\.settle, \{ isAccountsNoteCarrier: true \}, headerRequest\);\n(?:\s*\/\/[^\n]*\n)*\s*if \(delivery === 'buffered' && \(await buffered\.getOutcome\(\)\) === 'dropped'\) \{\n\s*await settleTopicRequestAfterDelivery\(key, opening, 'noSession'\);\n\s*throw new Error\(bufferedPromptDroppedError\);\n\s*\}\n\s*await settleTopicRequestAfterDelivery\(key, \{ \.\.\.opening, isScheduledRun: true \}, delivery\);/,
       'watched only once its prompt reached the session; a dropped one closes the scheduler\'s request (review 20 #1)',
     );
     assert.equal(botSource.match(/await settleTopicRequestAfterDelivery\(key, \{ \.\.\.opening, isScheduledRun: true \}, /g)?.length, 1, 'only the scheduler\'s request');
@@ -690,7 +690,7 @@ describe('a startup window\'s prompts on every way out of it (review 19 #1)', ()
 
   it('a bot-made post waits while a command ends or replaces the conversation, and a replay during one leaves the limit-held prompts for the command\'s first prompt — so nothing reaches the new agent ahead of a move\'s bridge (review 26 #5)', () => {
     const postDeps = getBody('function createSessionPostDeps(', '/**\n * @description Write a scheduled run\'s prompt');
-    assert.match(postDeps, /waitForConversationChange: async \(conversationKey\) => \{ await conversationEndings\.waitForMessagesAccepted\(conversationKey\); \},/, 'every session post — a fire, a check\'s wake, a tracker post, the lost-work post — builds on these deps (`postToSession.test.ts` pins where the post waits)');
+    assert.match(postDeps, /waitForConversationChange: \(conversationKey\) => conversationEndings\.waitForMessagesAccepted\(conversationKey\),/, 'every session post — a fire, a check\'s wake, a tracker post, the lost-work post — builds on these deps (`postToSession.test.ts` pins where the post waits)');
     assert.match(getBody('function createLostWorkPostDeps(', 'function createBufferedOutcome('), /\.\.\.createSessionPostDeps\(\),/);
     const replay = getBody('async function replayBufferedPrompts(', 'async function forwardPromptToLiveAgent(');
     const afterReplay = replay.slice(replay.indexOf('afterReplay: async () => {'));
@@ -712,7 +712,7 @@ describe('a startup window\'s prompts on every way out of it (review 19 #1)', ()
   });
 
   it('a bot-made post waits a last time as the last await before its write — after a topic fire\'s forward queue and the scheduler\'s request it opens — with only synchronous code between the wait and the write (review 27 nit 2)', () => {
-    assert.match(getBody('function deliverPostPrompt(', '/**\n * @description Write a scheduled run\'s prompt'), /\): Promise<PromptDelivery> \{\n\s*const conversationKey = keyToString\(key\);\n\s*return deliverPromptOrBuffer\(key, text, onBufferedSettled, \{\n\s*\.\.\.options,\n\s*waitBeforeRoute: async \(\) => \{\n\s*const hasWaited = await conversationEndings\.waitForMessagesAccepted\(conversationKey\);/, 'handed to the route, which awaits it before each routing (`deliverLatePrompt`, unit-tested above; review 28 nit 2)');
+    assert.match(getBody('function deliverPostPrompt(', '/**\n * @description Write a scheduled run\'s prompt'), /\): Promise<PromptDelivery> \{\n\s*const conversationKey = keyToString\(key\);\n\s*return deliverPromptOrBuffer\(key, text, onBufferedSettled, \{\n\s*\.\.\.options,\n\s*waitBeforeRoute: async \(\) => \{\n\s*await conversationEndings\.waitForMessagesAccepted\(conversationKey\);/, 'handed to the route, which awaits it before each routing (`deliverLatePrompt`, unit-tested above; review 28 nit 2)');
     assert.match(getBody('const promptDeliveryDeps: PromptDeliveryDeps = {', 'function checkIsAcceptingInput('), /forwardPrompt: \(key, text, options\) => forwardPromptToAgent\([^\n]*waitBeforeRoute: options\.waitBeforeRoute \}\),/, 'and on to the forward');
     const adopt = getBody('async function forwardPromptToAgent(', 'interface PromptForwardOptions');
     assert.ok(adopt.indexOf('waitBeforeRoute: options.waitBeforeRoute,') > adopt.indexOf('await waitForAdoptedReplay(adapter, key);'), 'whose routing after an adopt replay waits again');
@@ -720,16 +720,23 @@ describe('a startup window\'s prompts on every way out of it (review 19 #1)', ()
     const postDeps = getBody('function createSessionPostDeps(', 'function deliverPostPrompt(');
     assert.match(postDeps, /const delivery = await deliverPostPrompt\(keyFromString\(conversationKey\), text, buffered\.settle, \{ isAccountsNoteCarrier: true \}\);/, 'a session post: a tracker post, a stream-view topic fire');
     assert.match(getBody('function createLostWorkPostDeps(', 'function createBufferedOutcome('), /const delivery = await deliverPostPrompt\(keyFromString\(conversationKey\), text, buffered\.settle\);/, 'the lost-work post');
-    assert.match(getBody('async function forwardScheduledRun(', 'async function forwardTopicSchedulerRequestRun('), /const delivery = await deliverPostPrompt\(key, text, buffered\.settle, \{ isAccountsNoteCarrier: true, lostWorkTelling \}, ridden\?\.requestId \?\? null\);/, 'a fire riding a request');
+    assert.match(getBody('async function forwardScheduledRun(', 'async function forwardTopicSchedulerRequestRun('), /const delivery = await deliverPostPrompt\(key, text, buffered\.settle, \{ isAccountsNoteCarrier: true, lostWorkTelling \}, headerRequest\);/, 'a fire riding a request');
     const ownRequestRun = getBody('async function forwardTopicSchedulerRequestRun(', 'function wireScheduler(');
     assert.ok(ownRequestRun.indexOf('await openTopicRequest(') < ownRequestRun.indexOf('await deliverPostPrompt('), 'a fire opening the scheduler\'s request: the wait after the request is open');
     for (const body of [postDeps, ownRequestRun]) assert.doesNotMatch(body, /deliverPromptOrBuffer\(/, 'no post writes without the last wait');
   });
 
-  it('a scheduled run whose write waited for a command that closed the request its header names is refused before it routes — the fire picks again (`scheduleTopicRunDelivery.test.ts`) — and both fire writers name the request of their header (mini-review of round 28, #3)', () => {
+  it('a scheduled run whose header names a request a command closed since its pick is refused before it routes — the fire picks again (`scheduleTopicRunDelivery.test.ts`) — and both fire writers name the request of their header (mini-review of round 28, #3; of round 29, #2)', () => {
     const post = getBody('function deliverPostPrompt(', '/**\n * @description Write a scheduled run\'s prompt');
-    assert.match(post, /if \(hasWaited && headerRequestId !== null && topicRequestLedger\?\.getOpenRequestById\(headerRequestId\) === undefined\) \{\n\s*throw new ScheduledRunTargetClosedError\(headerRequestId\);/, 'only after a wait that waited: a request closed with no command between is no command\'s doing');
-    assert.match(getBody('async function forwardTopicSchedulerRequestRun(', 'function wireScheduler('), /const delivery = await deliverPostPrompt\(key, `\$\{opening\.header\}\$\{text\}`, buffered\.settle, \{ isAccountsNoteCarrier: true \}, opening\.requestId\);/, 'the scheduler\'s request it opened');
+    assert.match(post, /if \(headerRequest !== null && checkIsHeaderRequestClosedByCommand\(conversationKey, headerRequest\)\) \{\n\s*throw new ScheduledRunTargetClosedError\(headerRequest\.requestId\);/, 'at every routing, after its wait');
+    // Compared with the pick, not with one wait: a command that began and ended between two routings is seen (mini-review of round 29, #2).
+    assert.match(getBody('function checkIsHeaderRequestClosedByCommand(', '/**\n * @description Write a scheduled run\'s prompt'), /return conversationEndings\.readRefusalSerial\(conversationKey\) !== headerRequest\.refusalSerialAtPick\n\s*&& topicRequestLedger\?\.getOpenRequestById\(headerRequest\.requestId\) === undefined;/);
+    assert.match(getBody('function getScheduledRunHeaderRequest(', 'function checkIsHeaderRequestClosedByCommand('), /if \(requestId === null \|\| !checkIsTelegramKey\(key\)\) return null;/, 'a tracker fire stays out: it never takes a refusal');
+    const ridingRun = getBody('async function forwardScheduledRun(', 'async function forwardTopicSchedulerRequestRun(');
+    assert.match(ridingRun, /\{\n\s*const key = keyFromString\(conversationKey\);\n(?:\s*\/\/[^\n]*\n)*\s*const headerRequest = getScheduledRunHeaderRequest\(key, ridden\?\.requestId \?\? null\);/, 'read in the tick of the pick');
+    const ownRequestRun = getBody('async function forwardTopicSchedulerRequestRun(', 'function wireScheduler(');
+    assert.ok(ownRequestRun.indexOf('const refusalSerialAtPick = conversationEndings.readRefusalSerial(conversationKey);') < ownRequestRun.indexOf('await openTopicRequest('), 'the scheduler\'s request: read ahead of its open');
+    assert.match(ownRequestRun, /const delivery = await deliverPostPrompt\(key, `\$\{opening\.header\}\$\{text\}`, buffered\.settle, \{ isAccountsNoteCarrier: true \}, headerRequest\);/, 'the scheduler\'s request it opened');
   });
 
   it('leaving the folder refuses messages until the binding is gone, so a post that waited meets an unbound topic instead of starting a fresh agent in the folder being left (review 27 nit 4)', () => {

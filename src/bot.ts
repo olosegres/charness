@@ -16378,7 +16378,7 @@ function createSessionPostDeps(): PostToSessionDeps {
     notePostInFlight: (conversationKey) => requestWakeUpEngine?.notePostInFlight(keyFromString(conversationKey)) ?? deliverNoSettledWakes,
     // A command that ends or replaces the conversation runs: the post waits for it to be over, then goes to what follows — in a move,
     // after the bridge its own ensure would otherwise overtake (review 26 #5).
-    waitForConversationChange: async (conversationKey) => { await conversationEndings.waitForMessagesAccepted(conversationKey); },
+    waitForConversationChange: (conversationKey) => conversationEndings.waitForMessagesAccepted(conversationKey),
     now: () => Date.now(),
     sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
   };
@@ -16391,27 +16391,60 @@ function createSessionPostDeps(): PostToSessionDeps {
  * its routing. The post's earlier waits (`postToSession`) come before its ensures; after them a topic fire still queues behind the
  * topic's previous fire, may open the scheduler's request, or wakes the conversation — a move that began meanwhile would otherwise get
  * the prompt written into the backend it leaves, past the bridge it already built, and the run lost while recorded as delivered (review 27
- * nit 2, review 28 nit 2).
+ * nit 2, review 28 nit 2). A scheduled run's `headerRequest` — the request its header names, and the conversation's refusal serial when
+ * that request was picked — is refused at a routing whose serial moved and whose request is closed (mini-review of round 28, #3; of round
+ * 29, #2).
  */
 function deliverPostPrompt(
   key: SessionKey,
   text: string,
   onBufferedSettled: BufferedPromptSettled,
   options: PromptDeliveryOptions = {},
-  headerRequestId: string | null = null,
+  headerRequest: ScheduledRunHeaderRequest | null = null,
 ): Promise<PromptDelivery> {
   const conversationKey = keyToString(key);
   return deliverPromptOrBuffer(key, text, onBufferedSettled, {
     ...options,
     waitBeforeRoute: async () => {
-      const hasWaited = await conversationEndings.waitForMessagesAccepted(conversationKey);
-      // A command that ran meanwhile closed the request this run's header names: written now, the agent that follows would read a request
-      // it cannot answer, in a turn nothing watches. Refused before it routes; the fire picks again (mini-review of round 28, #3).
-      if (hasWaited && headerRequestId !== null && topicRequestLedger?.getOpenRequestById(headerRequestId) === undefined) {
-        throw new ScheduledRunTargetClosedError(headerRequestId);
+      await conversationEndings.waitForMessagesAccepted(conversationKey);
+      // A command ran since the pick — during this wait, or one that began and ended between two routings (an adopt replay's wait, a
+      // wake's notice) — and closed the request this run's header names: written now, the agent that follows would read a request it
+      // cannot answer, in a turn nothing watches. Refused before it routes; the fire picks again.
+      if (headerRequest !== null && checkIsHeaderRequestClosedByCommand(conversationKey, headerRequest)) {
+        throw new ScheduledRunTargetClosedError(headerRequest.requestId);
       }
     },
   });
+}
+
+/**
+ * @name ScheduledRunHeaderRequest
+ * @description The request a scheduled run's header names, and the conversation's refusal serial
+ * (`ConversationEndings.readRefusalSerial`) read when that request was picked.
+ */
+interface ScheduledRunHeaderRequest {
+  requestId: string;
+  refusalSerialAtPick: number;
+}
+
+/**
+ * @description The header's request of a Telegram topic's scheduled run, with the refusal serial read at its pick (by default now: call it
+ * synchronously with the pick). A tracker conversation stays out (`null`): it never takes a refusal, a move across backends being a
+ * topic's only.
+ */
+function getScheduledRunHeaderRequest(
+  key: SessionKey,
+  requestId: string | null,
+  refusalSerialAtPick = conversationEndings.readRefusalSerial(keyToString(key)),
+): ScheduledRunHeaderRequest | null {
+  if (requestId === null || !checkIsTelegramKey(key)) return null;
+  return { requestId, refusalSerialAtPick };
+}
+
+/** @description Whether a command ran since the header's request was picked and that request is closed now. */
+function checkIsHeaderRequestClosedByCommand(conversationKey: string, headerRequest: ScheduledRunHeaderRequest): boolean {
+  return conversationEndings.readRefusalSerial(conversationKey) !== headerRequest.refusalSerialAtPick
+    && topicRequestLedger?.getOpenRequestById(headerRequest.requestId) === undefined;
 }
 
 /**
@@ -16425,11 +16458,13 @@ function deliverPostPrompt(
  */
 async function forwardScheduledRun(conversationKey: string, text: string, ridden: RiddenRequest | null): Promise<void> {
   const key = keyFromString(conversationKey);
+  // Read in the tick of the pick (the caller picked `ridden` and called here with no await between).
+  const headerRequest = getScheduledRunHeaderRequest(key, ridden?.requestId ?? null);
   const buffered = createBufferedOutcome();
   // A tracker fire whose ridden request owes nothing, or with none open: its header says when to answer, so a lost-work note riding it
   // defers to it and claims no watch (a comment notifies the requester and the issue's watchers). A topic keeps its own resume and wording.
   const lostWorkTelling: LostWorkTelling = !checkIsTelegramKey(key) && ridden?.isAnswerOwed !== true ? 'runHeader' : 'plain';
-  const delivery = await deliverPostPrompt(key, text, buffered.settle, { isAccountsNoteCarrier: true, lostWorkTelling }, ridden?.requestId ?? null);
+  const delivery = await deliverPostPrompt(key, text, buffered.settle, { isAccountsNoteCarrier: true, lostWorkTelling }, headerRequest);
   // A prompt that waited for the session's start counts only once it reached it: a replay whose write failed is a failed post.
   if (delivery === 'buffered') await buffered.assertReplayed();
   if (delivery === 'noSession') throw new Error(noSessionForPostError);
@@ -16446,9 +16481,12 @@ async function forwardScheduledRun(conversationKey: string, text: string, ridden
  */
 async function forwardTopicSchedulerRequestRun(conversationKey: string, text: string): Promise<void> {
   const key = keyFromString(conversationKey);
+  // Read at the pick, ahead of the open: a command during the open's flush closes the request it opens, and counts.
+  const refusalSerialAtPick = conversationEndings.readRefusalSerial(conversationKey);
   const opening = await openTopicRequest(key, text, { source: 'scheduledRun', requesterId: scheduledRunRequester });
   const buffered = createBufferedOutcome();
-  const delivery = await deliverPostPrompt(key, `${opening.header}${text}`, buffered.settle, { isAccountsNoteCarrier: true }, opening.requestId);
+  const headerRequest = getScheduledRunHeaderRequest(key, opening.requestId, refusalSerialAtPick);
+  const delivery = await deliverPostPrompt(key, `${opening.header}${text}`, buffered.settle, { isAccountsNoteCarrier: true }, headerRequest);
   // A prompt that waited for the session's start counts only once it reached it, and only then is its turn watched (a watch made in
   // the window would wait for good if the window dropped it). Dropped, the scheduler's request nobody was told about closes like one
   // that found no session, and the post fails.

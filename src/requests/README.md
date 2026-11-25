@@ -96,9 +96,10 @@ A topic in the stream view has no requests: its fires are plain prompts.
 - **A fire never replaces a request: it RIDES one.** At forward time (the post may have waited up to 10 min behind a running turn;
   a topic's forwards run one at a time per conversation, so two fires at once open one request, not two — and inside that queue the fire
   first waits while a command ends or replaces the conversation, so it picks from the conversation that follows, never a request the
-  command is about to close: review 28 nit 3; a command that begins after the pick — during a wake the write makes — and closes the
-  request picked has the write refused before it routes, once its wait waited (`ScheduledRunTargetClosedError`), and the fire picks
-  again, once: mini-review of round 28, #3) its target is the first of:
+  command is about to close: review 28 nit 3; a command that begins after the pick — during a wake the write makes, an adopt replay's
+  wait, a wake's notice — and closes the request picked has the write refused before its next routing
+  (`ScheduledRunTargetClosedError`), seen by the conversation's refusal serial read at the pick, also when that command is already over;
+  the fire picks again, once: mini-review of round 28, #3, of round 29, #2) its target is the first of:
   1. *the job's request*: the one the job was armed under (`ScheduleRecord.requestId`) or the open one that replaced it
      (`supersededRequestIds`), while it is open, whoever raised it;
   2. a topic: *the scheduler's request* (`origin.kind` `scheduledRun`, requester `scheduler`, at most one open); *Jira:* the newest open

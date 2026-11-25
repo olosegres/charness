@@ -32,6 +32,8 @@ export interface ConversationEndingsPorts<TKey> {
 export class ConversationEndings<TKey> {
   private readonly holdCounts = new Map<string, number>();
   private readonly refusalCounts = new Map<string, number>();
+  /** How many refusals each conversation has ever taken ({@link readRefusalSerial}): one number per conversation the bot has refused. */
+  private readonly refusalSerials = new Map<string, number>();
   /** The posts waiting for a conversation to take messages again ({@link waitForMessagesAccepted}), woken when its last refusal ends. */
   private readonly acceptedWaiters = new Map<string, Array<() => void>>();
 
@@ -52,23 +54,28 @@ export class ConversationEndings<TKey> {
   }
 
   /**
-   * Resolves once nothing refuses messages to the conversation — at once when nothing does —, `true` when it waited. A bot-made post (a
-   * fire, a check's wake, a tracker post) waits here while a command ends or replaces the conversation, and then goes to what follows: in
-   * a move, after the move's bridge, which the post's own ensure would otherwise overtake (review 26 #5). A refusal taken again before the
-   * waiter runs keeps it waiting. A scheduled run that waited reads again whether the request its header names is still open (mini-review
-   * of round 28, #3).
+   * How many refusals the conversation has taken so far (a hold, a move's own): a scheduled run reads it when its target is picked, and a
+   * value that moved by a later routing says a command ran since — also one that began AND ended between two routings, which no wait
+   * sees (mini-review of round 29, #2).
    */
-  async waitForMessagesAccepted(conversationKey: string): Promise<boolean> {
-    let hasWaited = false;
+  readRefusalSerial(conversationKey: string): number {
+    return this.refusalSerials.get(conversationKey) ?? 0;
+  }
+
+  /**
+   * Resolves once nothing refuses messages to the conversation — at once when nothing does. A bot-made post (a fire, a check's wake, a
+   * tracker post) waits here while a command ends or replaces the conversation, and then goes to what follows: in a move, after the
+   * move's bridge, which the post's own ensure would otherwise overtake (review 26 #5). A refusal taken again before the waiter runs keeps
+   * it waiting.
+   */
+  async waitForMessagesAccepted(conversationKey: string): Promise<void> {
     while (this.checkIsRefusingMessages(conversationKey)) {
-      hasWaited = true;
       await new Promise<void>((resolve) => {
         const waiters = this.acceptedWaiters.get(conversationKey) ?? [];
         waiters.push(resolve);
         this.acceptedWaiters.set(conversationKey, waiters);
       });
     }
-    return hasWaited;
   }
 
   /** Hold `key`'s conversation as ending from now on, refusing a person's message until the command's transition settled. */
@@ -104,6 +111,7 @@ export class ConversationEndings<TKey> {
 
   /** One more refusal of `conversationKey`'s messages; its end wakes the posts waiting for the conversation once none is left. */
   private takeRefusal(conversationKey: string): () => void {
+    this.refusalSerials.set(conversationKey, this.readRefusalSerial(conversationKey) + 1);
     return this.takeCount(this.refusalCounts, conversationKey, () => {
       const waiters = this.acceptedWaiters.get(conversationKey) ?? [];
       this.acceptedWaiters.delete(conversationKey);

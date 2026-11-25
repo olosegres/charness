@@ -131,17 +131,9 @@ describe('ConversationEndings: a person\'s message is refused while a command en
 });
 
 describe('ConversationEndings: a bot-made post waits while a command refuses messages, and goes to what follows (review 26 #5)', () => {
-  it('resolves at once when nothing refuses messages, and says it did not wait', async () => {
+  it('resolves at once when nothing refuses messages', async () => {
     const { endings } = createEndings();
-    assert.equal(await endings.waitForMessagesAccepted('chat:1'), false);
-  });
-
-  it('says it waited when a command refused messages at its call: a scheduled run then reads its header\'s request again (mini-review of round 28, #3)', async () => {
-    const { endings } = createEndings();
-    const stopRefusing = endings.refuseMessages('chat:1');
-    const waiting = endings.waitForMessagesAccepted('chat:1');
-    stopRefusing();
-    assert.equal(await waiting, true);
+    await endings.waitForMessagesAccepted('chat:1');
   });
 
   it('waits until every refusal of the conversation has ended — a move\'s own and a hold\'s, whichever ends last — and only for its own conversation', async () => {
@@ -170,5 +162,26 @@ describe('ConversationEndings: a bot-made post waits while a command refuses mes
     assert.equal(isDone, false);
     second();
     await waiting;
+  });
+});
+
+describe('ConversationEndings: the refusal serial a scheduled run compares with its pick (mini-review of round 29, #2)', () => {
+  it('stays the same with no refusal between two reads, and only for its own conversation does a refusal move it', () => {
+    const { endings } = createEndings();
+    const atPick = endings.readRefusalSerial('chat:1');
+    assert.equal(endings.readRefusalSerial('chat:1'), atPick);
+    endings.refuseMessages('chat:2')();
+    assert.equal(endings.readRefusalSerial('chat:1'), atPick, 'another conversation\'s command');
+  });
+
+  it('a command that began AND ended between two reads is seen — a move\'s own refusal and a hold alike — though no wait was still refusing at the second read', async () => {
+    const { endings } = createEndings();
+    const atPick = endings.readRefusalSerial('chat:1');
+    endings.refuseMessages('chat:1')();
+    const afterMove = endings.readRefusalSerial('chat:1');
+    assert.notEqual(afterMove, atPick, 'a refusal taken and released');
+    assert.equal(endings.checkIsRefusingMessages('chat:1'), false, 'nothing refuses any more');
+    await endings.hold('chat:1').run(async () => undefined);
+    assert.notEqual(endings.readRefusalSerial('chat:1'), afterMove, 'a hold run to its end');
   });
 });

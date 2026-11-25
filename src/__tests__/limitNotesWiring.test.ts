@@ -91,8 +91,8 @@ describe('L8: which callers of the forward mark their prompt a carrier of the ac
   it('a tracker\'s post shares one session post that marks the carrier, a scheduled run\'s forwards mark it the same way; the lost-work post overrides that forward and does not', () => {
     const postDeps = botSource.slice(botSource.indexOf('function createSessionPostDeps('), botSource.indexOf('function createSessionPostDeps(') + 3000);
     assert.match(postDeps, /, text, buffered\.settle, \{ isAccountsNoteCarrier: true \}\);/);
-    assert.match(getFunctionBody('forwardScheduledRun'), /, text, buffered\.settle, \{ isAccountsNoteCarrier: true, lostWorkTelling \}, ridden\?\.requestId \?\? null\);/);
-    assert.match(getFunctionBody('forwardTopicSchedulerRequestRun'), /\$\{text\}`, buffered\.settle, \{ isAccountsNoteCarrier: true \}, opening\.requestId\);/);
+    assert.match(getFunctionBody('forwardScheduledRun'), /, text, buffered\.settle, \{ isAccountsNoteCarrier: true, lostWorkTelling \}, headerRequest\);/);
+    assert.match(getFunctionBody('forwardTopicSchedulerRequestRun'), /\$\{text\}`, buffered\.settle, \{ isAccountsNoteCarrier: true \}, headerRequest\);/);
     assert.match(getFunctionBody('createLostWorkPostDeps'), /\.\.\.createSessionPostDeps\(\),\n\s*forwardPrompt: async \(conversationKey, text\) => \{/);
   });
 });
