@@ -307,6 +307,7 @@ describe('/workers end to end: built charness, fake Bot API, fake agent, fake Op
     assert.deepEqual(general.getKeyboardData(opened)[0], ['wkr_r0'], 'the data does not depend on the language');
     const screen = await tapScreen(general, opened, 'wkr_r1', (text) => text.startsWith('🛠 Разработчик, хранение данных\n'));
     assert.ok(screen.text.includes('Сейчас: Opus · xhigh (встроенное)'), screen.text);
+    assert.ok(screen.text.includes('Твои инструкции могут назвать другую — тогда важнее они.'), 'the role screen says the user\'s own instructions win');
     assert.deepEqual(general.getKeyboardLabels(screen).at(-1), ['← Назад']);
     // The OpenCode path in the same language (only the anthropic provider is connected by now) and /bot_skills's row.
     await tapScreen(general, opened, 'wkr_oc1', (text) => text.includes('Выбери провайдера:'));
