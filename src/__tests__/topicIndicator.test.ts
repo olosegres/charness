@@ -105,7 +105,10 @@ describe('the status mark of topic names', () => {
     stores = [];
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    // A store's debounced save still pending would write into the folder while it is removed (ENOTEMPTY on a loaded box):
+    // flush cancels it and waits for any write in flight.
+    for (const store of stores) await store.flush();
     fs.rmSync(fakeHome, { recursive: true, force: true });
   });
 
