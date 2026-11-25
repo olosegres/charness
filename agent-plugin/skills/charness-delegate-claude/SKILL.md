@@ -31,7 +31,7 @@ The first of these that names the worker's model decides its CLI, model and effo
 4. `worker.unavailable` set, or the tool refuses `role` → the CLI, model and effort this conversation runs on.
 
 A NEW worker, a hand-over included, takes what this order gives now; a resumed one keeps its first run's model and
-effort (a change empties its prompt cache).
+effort (a change empties its prompt cache) — ask `claude_profiles` with that model, not the role.
 
 ## Launch
 

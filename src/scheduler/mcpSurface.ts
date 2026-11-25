@@ -1980,9 +1980,10 @@ function registerClaudeProfilesTool(server: ToolRegistrar, deps: SchedulerMcpDep
         'Without the variable the child inherits the account of this very session. ' +
         'Pass `role` instead of `model` when nothing you follow names the worker\'s model: `worker` (and the first line) then gives ' +
         'the operator\'s default CLI, model and effort for it (/workers) — the bot\'s DEFAULT: a model the user names, or a general ' +
-        'delegate skill you follow names for the role, wins. `worker.cli: opencode` needs no Claude account; `worker.unavailable` ' +
+        'delegate skill you follow names for the role, wins. `worker.cli: opencode` needs no Claude account (`recommended`, `resume` and ' +
+        '`nextAvailable` do not apply to it); `worker.unavailable` ' +
         'set → launch the worker on the CLI, model and effort this conversation runs on. A worker you resume keeps its first run\'s ' +
-        'model and effort.',
+        'model and effort: pass that `model`, not the role.',
       inputSchema: createStrictToolInput({
         model: z
           .string()

@@ -193,7 +193,10 @@ describe('agent-plugin', () => {
 
   test('charness-orchestration is the ONE home of the account rules: ask before EVERY launch or resume, take the answer without asking, hand an old worker\'s work to a NEW worker instead of dragging it onto another account, the mid-run limit exception, the `[Accounts …]` note', () => {
     const flat = readSkill('charness-orchestration').replace(/\s+/g, ' ');
-    assert.match(flat, /Before EVERY worker launch or resume call `claude_profiles` — with the worker's model, or its `role` when nothing you follow names the model \(the answer then says which CLI too\); on a resume also `currentProfile` \(the profile name recorded at launch\) and `lastRunEndedAt` \(the last write of its log, an ISO instant\)/);
+    assert.match(flat, /Before EVERY Claude worker launch or resume — and before launching any NEW worker by its `role`, whose answer may name OpenCode — call `claude_profiles`: a new worker with its `role` when nothing you follow names its model, else with the model; a resume always with the model it ran on, plus `currentProfile` \(the profile name recorded at launch\) and `lastRunEndedAt` \(the last write of its log, an ISO instant\)/);
+    // An OpenCode worker needs no Claude account: the account verdicts must never hold it back.
+    assert.match(flat, /`worker\.cli: opencode` → no account to take: `recommended`, `resume` and `nextAvailable` do not apply — launch it with `charness-delegate-opencode`\./);
+    assert.doesNotMatch(flat, /Before EVERY worker launch/, 'the account rules are a Claude worker\'s');
     // The account to start under is `resume.profile` on a resume: on a cold hand-over `recommended` is the OLD worker's own account.
     assert.match(flat, /start the worker with `CLAUDE_CONFIG_DIR=<configDir>` of `recommended`, on a resume of `resume\.profile` \(nothing when the `configDir` is null/);
     assert.match(flat, /Take it without asking: it follows the operator's \/limits auto-switch list — an API-credit account first, then the soonest weekly reset, so what expires first is spent first\. Never reuse an earlier answer\./);
@@ -201,7 +204,7 @@ describe('agent-plugin', () => {
     assert.match(flat, /The exception: a worker cut off MID-RUN by a usage limit .* a fresh worker would redo the unfinished run, so call `claude_profiles` with `currentProfile` and `isStoppedByLimit: true` and resume the SAME session at once under `resume\.profile`\./);
     assert.match(flat, /An `\[Accounts …\]` note \(at a wake, in a send tool's result, during a turn\) says where the limits stand: plan your next launch on it and call `claude_profiles` right before it\. No reply is needed; a worker that is running stays where it is\./);
     assert.match(flat, /A role the user allowed on both CLIs: start it where the limit resets sooner and still has room\./);
-    assert.match(flat, /`recommended: null` → nothing is usable: do not launch\./);
+    assert.match(flat, /`recommended: null` → no Claude account is usable: do not launch a Claude worker\./);
     assert.equal(flat.split('## Accounts and usage limits').length - 1, 1);
   });
 
@@ -235,7 +238,7 @@ describe('agent-plugin', () => {
       assert.ok(at > previousAt, `in order: ${step}`);
       previousAt = at;
     }
-    assert.ok(claude.includes('A NEW worker, a hand-over included, takes what this order gives now; a resumed one keeps its first run\'s model and effort'), 'a resume keeps its model');
+    assert.ok(claude.includes('A NEW worker, a hand-over included, takes what this order gives now; a resumed one keeps its first run\'s model and effort (a change empties its prompt cache) — ask `claude_profiles` with that model, not the role.'), 'a resume keeps its model and asks with it');
     assert.ok(claude.indexOf('The first `system`/`init` event must name the requested model') < claude.indexOf('### Model and effort'), 'the model check is about launching, not the order');
     assert.match(
       readSkill('charness-delegate-opencode').replace(/\s+/g, ' '),

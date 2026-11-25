@@ -79,13 +79,16 @@ kill -0 <pid> 2>/dev/null || { echo "worker <pid> exited"; exit 1; }; [ -n "$(fi
 
 ## Accounts and usage limits
 
-- Before EVERY worker launch or resume call `claude_profiles` — with the worker's model, or its `role` when nothing you follow
-  names the model (the answer then says which CLI too); on a resume also `currentProfile` (the
+- Before EVERY Claude worker launch or resume — and before launching any NEW worker by its `role`, whose answer may name OpenCode —
+  call `claude_profiles`: a new worker with its `role` when nothing you follow names its model, else with the model; a resume always
+  with the model it ran on, plus `currentProfile` (the
   profile name recorded at launch) and `lastRunEndedAt` (the last write of its log, an ISO instant) — and start the worker with
   `CLAUDE_CONFIG_DIR=<configDir>` of `recommended`, on a resume of `resume.profile` (nothing when the `configDir` is null; without
   it the worker drains YOUR account). Take it without asking: it follows the operator's /limits auto-switch list — an API-credit account first, then the
   soonest weekly reset, so what expires first is spent first. Never reuse an earlier answer. Record the profile name beside the
   worker's session id.
+- `worker.cli: opencode` → no account to take: `recommended`, `resume` and `nextAvailable` do not apply — launch it with
+  `charness-delegate-opencode`.
 - `resume.verdict: handOver` → do not resume that worker on another account. Give its work to a NEW worker on `resume.profile` (brief:
   the old run's report, the worktree, the findings); a reviewer that already runs on that account may apply its own findings, then a
   fresh reviewer checks the result. `resume.verdict: resume` → resume the session under `resume.profile` (where it ran, unless it
@@ -93,7 +96,7 @@ kill -0 <pid> 2>/dev/null || { echo "worker <pid> exited"; exit 1; }; [ -n "$(fi
 - The exception: a worker cut off MID-RUN by a usage limit («You've hit your session limit», «Credit balance is too low») — a fresh
   worker would redo the unfinished run, so call `claude_profiles` with `currentProfile` and `isStoppedByLimit: true` and resume the
   SAME session at once under `resume.profile`.
-- `recommended: null` → nothing is usable: do not launch. `schedule_create` a one-off resume (`onceAt` = `nextAvailable.at`) whose
+- `recommended: null` → no Claude account is usable: do not launch a Claude worker. `schedule_create` a one-off resume (`onceAt` = `nextAvailable.at`) whose
   prompt stands on its own (the plan path, the scope, what to launch, «call `claude_profiles` again»), then end the turn.
   `nextAvailable` null too → no account names a time it frees up: ask the user a native question (nothing can run) and
   `schedule_create` the same one-off retry about 30 minutes ahead.
