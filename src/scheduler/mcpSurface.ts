@@ -634,10 +634,11 @@ export interface SchedulerMcpStopOptions {
 export interface SchedulerMcpHandle {
   start(): Promise<void>;
   /**
-   * Stop serving: no new connection is taken, idle ones close at once, a connection closes as soon as its running call ends, and a
-   * call that still comes in over a kept-alive connection is refused (503) before any tool runs. The calls already running get
-   * `drainMs` to finish (their agents then get their results); whatever still runs after it is cut — a cut call fails at once on
-   * its client.
+   * Stop serving: no new connection is taken, idle ones close at once and a connection closes as soon as its running call ends.
+   * A call that still comes in is refused (503) before any tool runs — over a kept-alive connection, or over one a client opened
+   * just before the stop and had not sent its request on yet (Node counts such a connection busy, so no close reaches it: the
+   * refusal is its only guard). The calls already running get `drainMs` to finish (their agents then get their results); whatever
+   * still runs after it is cut — a cut call fails at once on its client.
    */
   stop(options?: SchedulerMcpStopOptions): Promise<void>;
   /** The bound port, available after `start` resolves. */
@@ -2109,8 +2110,9 @@ export function createSchedulerMcpServer(deps: SchedulerMcpDeps): SchedulerMcpHa
   /** Told each time a response finishes, while a stop drains. */
   let notifyResponseFinished: (() => void) | null = null;
   /**
-   * Set by {@link stop}: a client keeps its connection alive, so a call can still come in over one opened before the stop. It is
-   * refused before any tool runs — a call STARTED by a stopping bot would be cut when the drain ends, after it may have posted.
+   * Set by {@link stop}: a call can still come in over a connection opened before the stop — a kept-alive one, or one whose client
+   * had not sent its request yet (Node counts it busy, so neither close reaches it). It is refused before any tool runs: a call
+   * STARTED by a stopping bot would be cut when the drain ends, after it may have posted.
    */
   let isStopping = false;
   const cancellationLifecycle = createSchedulerMcpCancellationLifecycle();
@@ -2331,10 +2333,9 @@ export function createSchedulerMcpServer(deps: SchedulerMcpDeps): SchedulerMcpHa
     if (!server) return;
     httpServer = null;
     isStopping = true;
+    // `close()` also closes the idle kept-alive connections (Node >= 19; the package needs >= 22.12); the ones still busy are
+    // destroyed below, once the drain is over.
     const closed = new Promise<void>((resolve) => { server.close(() => resolve()); });
-    // Streamable HTTP clients may retain an idle keep-alive connection after
-    // their request completes; server.close() otherwise waits for it forever.
-    server.closeIdleConnections();
     // A call already running (an answer being posted and pinned) finishes and its agent gets the result; cut, the agent would be
     // told it failed although the requester already sees it.
     await waitForOpenResponses(options.drainMs ?? 0);

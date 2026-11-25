@@ -65,7 +65,8 @@ import {
 import { claudeProfileNameMaxLength } from '../utils/claudeProfiles';
 import { resetLegacyNameState } from '../legacyNames';
 import { Agent, request, type ClientRequest } from 'node:http';
-import { connect, Server } from 'node:net';
+import { connect, Server, Socket } from 'node:net';
+import diagnosticsChannel from 'node:diagnostics_channel';
 import type { ScheduleRecord } from '../scheduler/types';
 import {
   createSendFilesToThread,
@@ -112,6 +113,8 @@ const cutCallDrainMs = 200;
 const heldCallCount = 2;
 /** How soon a call refused by a stopping server fails on its client — far below the drain the test holds open. */
 const lateCallRefusalTimeoutMs = 1_000;
+/** The drain a test's stop gives the calls it holds: long enough that what it checks happens while the drain is still open. */
+const heldCallDrainMs = 5_000;
 const incompleteRequestBody = '{"jsonrpc":"2.0"';
 const linuxIt = process.platform === 'linux' ? it : it.skip;
 
@@ -1017,20 +1020,37 @@ function startRawFileSendCall(
 }
 
 /** A raw `send_messages_to_user` call over `agent` (no MCP client: the test decides which connection carries it). */
-function startRawMessageSendCall(port: number, token: string, requestId: number, agent: Agent): Promise<RawHttpResponse> {
+/**
+ * @name RawMessageSendConnection
+ * @description What carries a raw call: an {@link Agent} (its pool decides the connection), or a socket the test opened itself.
+ * `onSocket` hears the socket the call went out on.
+ */
+interface RawMessageSendConnection {
+  agent?: Agent;
+  socket?: Socket;
+  onSocket?: (socket: Socket) => void;
+}
+
+/** A raw call's response, with its `Connection` header. */
+interface RawMessageSendResponse extends RawHttpResponse {
+  connectionHeader: string | undefined;
+}
+
+function startRawMessageSendCall(port: number, token: string, requestId: number, connection: RawMessageSendConnection): Promise<RawMessageSendResponse> {
   const body = JSON.stringify({
     jsonrpc: '2.0',
     id: requestId,
     method: 'tools/call',
     params: { name: 'send_messages_to_user', arguments: { messages: ['hello'] } },
   });
-  return new Promise<RawHttpResponse>((resolve, reject) => {
+  const { socket, agent, onSocket } = connection;
+  return new Promise<RawMessageSendResponse>((resolve, reject) => {
     const messageSendRequest = request({
       host: '127.0.0.1',
       port,
       path: '/mcp',
       method: 'POST',
-      agent,
+      ...(socket === undefined ? { agent } : { createConnection: () => socket }),
       headers: {
         Authorization: `Bearer ${token}`,
         'Content-Type': 'application/json',
@@ -1041,8 +1061,13 @@ function startRawMessageSendCall(port: number, token: string, requestId: number,
       const chunks: string[] = [];
       incomingResponse.setEncoding('utf8');
       incomingResponse.on('data', (chunk: string) => chunks.push(chunk));
-      incomingResponse.once('end', () => resolve({ statusCode: incomingResponse.statusCode ?? 500, body: chunks.join('') }));
+      incomingResponse.once('end', () => resolve({
+        statusCode: incomingResponse.statusCode ?? 500,
+        body: chunks.join(''),
+        connectionHeader: incomingResponse.headers.connection,
+      }));
     });
+    if (onSocket) messageSendRequest.once('socket', onSocket);
     messageSendRequest.once('error', reject);
     messageSendRequest.end(body);
   });
@@ -1362,7 +1387,7 @@ describe('scheduler MCP server end-to-end (real HTTP)', () => {
     // requester already saw the answer — and would send it again.
     const { client, call, release } = await startHeldMessageCall();
     try {
-      const stopped = fixture.handle.stop({ drainMs: inFlightCallFailureTimeoutMs });
+      const stopped = fixture.handle.stop({ drainMs: heldCallDrainMs });
       release();
       const result = await call;
       assert.equal(result.isError, undefined, firstText(result));
@@ -1373,35 +1398,75 @@ describe('scheduler MCP server end-to-end (real HTTP)', () => {
     }
   });
 
+  /**
+   * @name HeldMessageSends
+   * @description `send_messages_to_user` runs that the test holds: the first `heldCount` wait for `release(index)`, later ones answer
+   * at once. `runCount` counts every run of the handler — a call refused before any tool runs adds none.
+   */
+  interface HeldMessageSends {
+    getRunCount: () => number;
+    waitForRuns: (count: number) => Promise<void>;
+    release: (index: number) => void;
+    releaseAll: () => void;
+  }
+
+  function holdMessageSends(heldCount: number): HeldMessageSends {
+    let runCount = 0;
+    const releases: Array<() => void> = [];
+    const runWaiters: Array<{ count: number; resolve: () => void }> = [];
+    fixture.messageSendHandler.current = async () => {
+      runCount += 1;
+      for (const waiter of runWaiters.filter((candidate) => runCount >= candidate.count)) waiter.resolve();
+      if (runCount <= heldCount) await new Promise<void>((resolve) => { releases.push(resolve); });
+      return { ok: true, summary: 'Delivered 1 message', sentMessageIds: [1], undeliveredCount: 0 };
+    };
+    return {
+      getRunCount: () => runCount,
+      waitForRuns: (count) => (runCount >= count ? Promise.resolve() : new Promise((resolve) => { runWaiters.push({ count, resolve }); })),
+      release: (index) => releases[index]?.(),
+      releaseAll: () => { for (const release of releases) release(); },
+    };
+  }
+
+  /** Resolve once the server has ACCEPTED the connection `client` opened (Node's `net.server.socket` channel). */
+  function waitForServerAccept(client: Socket): Promise<void> {
+    return new Promise((resolve) => {
+      const channel = diagnosticsChannel.channel('net.server.socket');
+      const accepted: Socket[] = [];
+      const check = (): void => {
+        if (client.localPort === undefined || !accepted.some((socket) => socket.remotePort === client.localPort)) return;
+        channel.unsubscribe(onAccept);
+        resolve();
+      };
+      const onAccept = (message: unknown): void => {
+        if (typeof message !== 'object' || message === null || !('socket' in message) || !(message.socket instanceof Socket)) return;
+        accepted.push(message.socket);
+        check();
+      };
+      channel.subscribe(onAccept);
+      client.once('connect', check);
+    });
+  }
+
   it('a call that comes in over a kept-alive connection while a stop drains is refused before any tool runs, and fails at once', async () => {
     // Two agents have calls running when the bot stops; one keeps the drain open. The other's call ends and its connection stays
     // alive (Node's server still serves a kept-alive connection after `close()`), so its next call comes in over it. Taken, that
     // call would run — post an answer — and be cut when the drain ends: its agent told it failed for an answer its requester sees.
-    let handlerRunCount = 0;
-    const releaseHeldCalls: Array<() => void> = [];
-    let notifyHandlerRun: () => void = () => {};
-    fixture.messageSendHandler.current = async () => {
-      handlerRunCount += 1;
-      notifyHandlerRun();
-      if (handlerRunCount <= heldCallCount) await new Promise<void>((resolve) => { releaseHeldCalls.push(resolve); });
-      return { ok: true, summary: 'Delivered 1 message', sentMessageIds: [1], undeliveredCount: 0 };
-    };
-    const waitForHandlerRuns = (count: number): Promise<void> => new Promise((resolve) => {
-      notifyHandlerRun = () => { if (handlerRunCount >= count) resolve(); };
-      notifyHandlerRun();
-    });
+    // Here the connection is closed as soon as the call ends (the close-on-end guard acts first — pinned alone by «…a connection
+    // closes as soon as its running call ends»); the refusal alone is pinned by «…opened just before the stop…».
+    const sends = holdMessageSends(heldCallCount);
     const token = buildSchedulerMcpToken(secret, { kind: 'thread', threadKey: threadAKey });
     // One kept-alive socket: the late call is queued on it and goes out over the SAME connection the moment the ending call ends.
     const keptAliveAgent = new Agent({ keepAlive: true, maxSockets: 1 });
     let stopped: Promise<void> | null = null;
     try {
-      const drainHoldingCall = startRawMessageSendCall(fixture.handle.port, token, 1, new Agent());
-      await waitForHandlerRuns(1);
-      const endingCall = startRawMessageSendCall(fixture.handle.port, token, 2, keptAliveAgent);
-      await waitForHandlerRuns(heldCallCount);
-      stopped = fixture.handle.stop({ drainMs: inFlightCallFailureTimeoutMs });
-      const lateCall = startRawMessageSendCall(fixture.handle.port, token, 3, keptAliveAgent);
-      releaseHeldCalls[1]();
+      const drainHoldingCall = startRawMessageSendCall(fixture.handle.port, token, 1, { agent: new Agent() });
+      await sends.waitForRuns(1);
+      const endingCall = startRawMessageSendCall(fixture.handle.port, token, 2, { agent: keptAliveAgent });
+      await sends.waitForRuns(heldCallCount);
+      stopped = fixture.handle.stop({ drainMs: heldCallDrainMs });
+      const lateCall = startRawMessageSendCall(fixture.handle.port, token, 3, { agent: keptAliveAgent });
+      sends.release(1);
       assert.equal((await endingCall).statusCode, 200, 'the call running at the stop finished within the drain');
 
       const isRefused = await checkPromiseResolvesWithin(
@@ -1412,11 +1477,83 @@ describe('scheduler MCP server end-to-end (real HTTP)', () => {
         lateCallRefusalTimeoutMs,
       );
       assert.equal(isRefused, true, 'the late call fails at once, while the drain is still open');
-      assert.equal(handlerRunCount, heldCallCount, 'no tool ran for the late call');
-      releaseHeldCalls[0]();
+      assert.equal(sends.getRunCount(), heldCallCount, 'no tool ran for the late call');
+      sends.release(0);
       assert.equal((await drainHoldingCall).statusCode, 200);
     } finally {
-      for (const release of releaseHeldCalls) release();
+      sends.releaseAll();
+      await stopped;
+      keptAliveAgent.destroy();
+    }
+  });
+
+  it('a call sent over a connection opened just before the stop is refused with a 503 before any tool runs — no close reaches that connection', async () => {
+    // A client opened its connection a moment before the bot stopped and sends its request just after. Node counts a connection
+    // that has not completed its first request as busy, so neither the stop's idle close nor the close-on-end reaches it: only the
+    // refusal keeps the call from running (and being cut when the drain ends, after it may have posted an answer).
+    const sends = holdMessageSends(1);
+    const token = buildSchedulerMcpToken(secret, { kind: 'thread', threadKey: threadAKey });
+    let stopped: Promise<void> | null = null;
+    const drainHoldingCall = startRawMessageSendCall(fixture.handle.port, token, 1, { agent: new Agent() });
+    await sends.waitForRuns(1);
+    const freshConnection = connect(fixture.handle.port, '127.0.0.1');
+    freshConnection.on('error', () => {});
+    // Listened for from the moment the connection is opened: the accept may come before the test's next step.
+    const freshConnectionAccepted = waitForServerAccept(freshConnection);
+    try {
+      await freshConnectionAccepted;
+      stopped = fixture.handle.stop({ drainMs: heldCallDrainMs });
+      const lateCall = startRawMessageSendCall(fixture.handle.port, token, 2, { socket: freshConnection });
+
+      const isAnswered = await checkPromiseResolvesWithin(lateCall.then(() => undefined), lateCallRefusalTimeoutMs);
+      assert.equal(isAnswered, true, 'the late call is answered at once, while the drain is still open');
+      const { statusCode, connectionHeader, body } = await lateCall;
+      assert.equal(statusCode, 503, body);
+      assert.equal(connectionHeader, 'close');
+      const parsedBody: { error?: { code?: number; message?: string } } = JSON.parse(body);
+      assert.equal(parsedBody.error?.code, -32000);
+      assert.match(parsedBody.error?.message ?? '', /this call was NOT run/);
+      assert.equal(sends.getRunCount(), 1, 'no tool ran for the late call');
+      sends.release(0);
+      assert.equal((await drainHoldingCall).statusCode, 200);
+    } finally {
+      sends.releaseAll();
+      await stopped;
+      freshConnection.destroy();
+    }
+  });
+
+  it('while a stop drains, a connection closes as soon as its running call ends', async () => {
+    // Kept alive, it could carry the agent's next call while the stop goes on; closed, the next call opens a connection the
+    // stopped server refuses at once.
+    const sends = holdMessageSends(heldCallCount);
+    const token = buildSchedulerMcpToken(secret, { kind: 'thread', threadKey: threadAKey });
+    const keptAliveAgent = new Agent({ keepAlive: true });
+    let reportEndingCallSocket: (socket: Socket) => void = () => {};
+    const endingCallSocket = new Promise<Socket>((resolve) => { reportEndingCallSocket = resolve; });
+    let stopped: Promise<void> | null = null;
+    try {
+      const drainHoldingCall = startRawMessageSendCall(fixture.handle.port, token, 1, { agent: new Agent() });
+      await sends.waitForRuns(1);
+      const endingCall = startRawMessageSendCall(fixture.handle.port, token, 2, {
+        agent: keptAliveAgent,
+        onSocket: reportEndingCallSocket,
+      });
+      await sends.waitForRuns(heldCallCount);
+      stopped = fixture.handle.stop({ drainMs: heldCallDrainMs });
+      const socket = await endingCallSocket;
+      const socketClosed = new Promise<void>((resolve) => { socket.once('close', () => resolve()); });
+      sends.release(1);
+      assert.equal((await endingCall).statusCode, 200, 'the call running at the stop finished within the drain');
+      assert.equal(
+        await checkPromiseResolvesWithin(socketClosed, lateCallRefusalTimeoutMs),
+        true,
+        'its connection closed at once, while the drain is still open',
+      );
+      sends.release(0);
+      assert.equal((await drainHoldingCall).statusCode, 200);
+    } finally {
+      sends.releaseAll();
       await stopped;
       keptAliveAgent.destroy();
     }
