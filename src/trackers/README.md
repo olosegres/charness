@@ -13,6 +13,11 @@ next hand-over with no restart.
 
 ## The slots and the wait list (`taskAgentSlots.ts`)
 
+**A scheduled fire holds no slot and is not held by the cap, on purpose.** A job an agent armed (a watch, a one-shot) resumes the
+issue's agent in its conversation whether or not the issue holds a slot — after the hand-over's final answer, or during a request that
+holds none (a mention, one the rules gave up on) — as a Telegram topic's fires have no concurrency cap either. The cap bounds
+hand-overs; the number of scheduler wakes is not limited at all (a separate, later task if it ever must be).
+
 - **A slot is a tracker conversation with an open hand-over request** (origin `trackerEvent`) — or an open mention request that may
   act (`trackerMention` whose origin carries `actingMentionAttribute`, `mayAct: 'true'`: it may start a build like a hand-over;
   `checkIsSlotHoldingOrigin`) — counted off the request ledger on every question — nothing about the running agents is stored, so a

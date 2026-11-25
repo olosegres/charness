@@ -577,6 +577,8 @@ export interface AdapterSweepTarget {
   readonly label: string;
   checkIsActive(key: SessionKey): boolean;
   stopSession(key: SessionKey): void;
+  /** `AgentAdapter.stopSessionAndWait`: the stop that resolves once the process is gone (the waiting sweep uses it where present). */
+  stopSessionAndWait?(key: SessionKey): Promise<void>;
 }
 
 /**
@@ -615,12 +617,8 @@ export function stopAllAdaptersFor(
   adapterNames: string[] = getKnownAdapterNames(),
 ): StopAllAdaptersResult {
   const stopped: string[] = [];
-  let attempted = 0;
-  for (const name of adapterNames) {
-    let adapter: AdapterSweepTarget;
-    try { adapter = resolveAdapter(name); } catch { continue; }
-    if (!adapter.checkIsActive(key)) continue;
-    attempted += 1;
+  const active = listActiveSweepTargets(key, resolveAdapter, adapterNames);
+  for (const { name, adapter } of active) {
     try {
       adapter.stopSession(key);
       stopped.push(adapter.label);
@@ -628,5 +626,42 @@ export function stopAllAdaptersFor(
       console.error(`[stopAllAdaptersFor] ${name} stopSession failed for ${keyToString(key)}:`, e);
     }
   }
-  return { stopped, attempted };
+  return { stopped, attempted: active.length };
+}
+
+/**
+ * @description {@link stopAllAdaptersFor} that resolves once every process it stopped is gone: an adapter with `stopSessionAndWait` is
+ * waited for, one without it is stopped as the plain sweep does. A release that runs as the conversation's transition (`/quitall`) uses
+ * it, so nothing queued behind it reads a process still exiting as live and writes into it (review 23 nit 4).
+ */
+export async function stopAndWaitAllAdaptersFor(
+  key: SessionKey,
+  resolveAdapter: (name: string) => AdapterSweepTarget,
+  adapterNames: string[] = getKnownAdapterNames(),
+): Promise<StopAllAdaptersResult> {
+  const stopped: string[] = [];
+  const active = listActiveSweepTargets(key, resolveAdapter, adapterNames);
+  for (const { name, adapter } of active) {
+    try {
+      if (adapter.stopSessionAndWait) await adapter.stopSessionAndWait(key);
+      else adapter.stopSession(key);
+      stopped.push(adapter.label);
+    } catch (e) {
+      console.error(`[stopAndWaitAllAdaptersFor] ${name} stop failed for ${keyToString(key)}:`, e);
+    }
+  }
+  return { stopped, attempted: active.length };
+}
+
+/** The adapters of `adapterNames` that resolve and have a live session for `key` (a name that no longer resolves has none). */
+function listActiveSweepTargets(
+  key: SessionKey,
+  resolveAdapter: (name: string) => AdapterSweepTarget,
+  adapterNames: readonly string[],
+): Array<{ name: string; adapter: AdapterSweepTarget }> {
+  return adapterNames.flatMap((name) => {
+    let adapter: AdapterSweepTarget;
+    try { adapter = resolveAdapter(name); } catch { return []; }
+    return adapter.checkIsActive(key) ? [{ name, adapter }] : [];
+  });
 }

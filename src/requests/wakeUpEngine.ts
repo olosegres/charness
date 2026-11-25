@@ -1,7 +1,8 @@
 import { keyToString, type SessionKey } from '../sessionKey';
 import type { RequestLedger } from './requestLedger';
-import type { OpenRequestState, RequestAlertReason, RequestAnswerKind } from './types';
-import { getWakeUpMessage, type WakeUpMessage } from './requestHeader';
+import { checkIsHeldBetweenTurns, pickRequestToArmUnder, type RequestScheduleWait } from './scheduleWait';
+import type { OpenRequestState, RequestAlertReason, RequestAnswerKind, RequestWakeUpReason } from './types';
+import { getPromptNotTakenIn, getWakeUpMessage, type WakeUpMessage } from './requestHeader';
 import {
   addAnswerTailOutput,
   answerTailMaxReminders,
@@ -11,6 +12,7 @@ import {
   type AnswerTail,
 } from './answerTail';
 import {
+  checkIsPromptNeverWritten,
   checkIsTurnInputConsumed,
   checkIsWakingStopped,
   checkIsWatchedTurnStale,
@@ -42,6 +44,12 @@ import {
  *
  * A wake-up is a reminder forwarded into the SAME session — never a request.
  * The answer tails are in memory as well: a restart forgets them.
+ *
+ * A request waits for its schedule while a job armed under it counts (`scheduleWait.ts`, read through the optional
+ * `getScheduleWait` port at every decision): the rules then neither prod it nor wake it at a restart, and a turn a scheduler
+ * fire started (`isScheduledRun`) that ends without an answer is not silence. A request that owes a person an answer
+ * (`checkIsAnswerOwed`) is never held: it is read from the persisted request, so a turn whose watch a restart lost still reaches the
+ * backstop. The complete table is `README.md` § Wake-ups.
  */
 
 /** How often a watched turn is polled for its end. */
@@ -70,6 +78,12 @@ export const restartWakeStaggerMs = 30_000;
 export interface RequestWakeUpEngineDeps {
   ledger: Pick<RequestLedger, 'getOpenRequestById' | 'listOpenRequestsOf' | 'listOpenRequests' | 'updateOpenRequest' | 'closeRequest' | 'recordAlert'>;
   probeTurn: (key: SessionKey) => SessionTurnProbe;
+  /**
+   * Bring what the bot knows of the conversation's live process up to what it wrote so far, right before
+   * {@link RequestWakeUpEngine.readPromptsReachedOrHeld} probes it: the json-stream tail is polled with a backoff, so an echo the
+   * process already wrote may not be read yet (review 28, own pass). Absent: the probe is current.
+   */
+  refreshProcessState?: (key: SessionKey) => void;
   prepareWakeUpSession: (key: SessionKey, message: WakeUpMessage) => Promise<boolean>;
   /** Forward the wake-up's message (the request's prompt again, or a reminder) into the session. */
   forwardWakeUp: (key: SessionKey, request: OpenRequestState, message: WakeUpMessage) => Promise<void>;
@@ -81,6 +95,8 @@ export interface RequestWakeUpEngineDeps {
   pollIntervalMs?: number;
   /** The first retry of a prompt that could not be posted; absent: `postRetryDelaysMs[0]` (a test instance shortens it). */
   firstPostRetryDelayMs?: number;
+  /** How long after a progress note the agent is reminded; absent: {@link progressFollowUpDelayMs} (a test instance shortens it). */
+  progressFollowUpMs?: number;
   /** The gap between two `restarted` wakes, and before the first; absent: {@link restartWakeStaggerMs} (a test instance shortens it). */
   restartWakeStaggerMs?: number;
   /** A `restarted` wake reached the conversation's session (the bot keeps the stamp its crash-loop guard reads). */
@@ -89,6 +105,11 @@ export interface RequestWakeUpEngineDeps {
   checkIsAnswerTailWatched?: (key: SessionKey) => boolean;
   /** Bring the session up (resume only) and forward the answer-tail reminder; `false` when it could not be reached. */
   remindAnswerTail?: (key: SessionKey, text: string) => Promise<boolean>;
+  /**
+   * What the request's armed jobs say about it (`scheduleWait.ts`), read when a decision is made — never cached. Absent: a
+   * request never waits for a schedule.
+   */
+  getScheduleWait?: (key: SessionKey, request: OpenRequestState) => RequestScheduleWait;
   now?: () => number;
 }
 
@@ -96,6 +117,20 @@ type WakeUpDeliveryOutcome = 'delivered' | 'failed' | 'requestGone';
 
 interface WatchedRequestTurn extends WatchedTurn {
   key: SessionKey;
+  /**
+   * The forward that started this watch was THIS request's own (a request prompt, an issue update, a fire riding it, a reminder for
+   * it), not one nudge or restart wake that carried several requests at once and watched them all. The request a job is armed under
+   * is picked from the own-forward watches first (`pickRequestToArmUnder`): a conversation-wide forward «watches» every open
+   * request, which says nothing about the one the agent is working on. A merge keeps `true` if either side was.
+   */
+  isOwnForward: boolean;
+  /**
+   * When the own forward that started this watch came (a merge keeps the earlier one; absent without one). The watches present all
+   * belong to the session's current busy period — they end with their turn, and every new prompt first settles the watches whose turn
+   * already ended (`settleEndedTurnsOf`) — so the OLDEST own-forward watch is the request whose forward started the running turn: what
+   * the agent works on, whoever's words or fire joined it later.
+   */
+  ownForwardStartedAt?: number;
 }
 
 interface WatchedAnswerTail {
@@ -103,23 +138,61 @@ interface WatchedAnswerTail {
   tail: AnswerTail;
 }
 
+/**
+ * R21's test: the live process the request prompt was written to has taken it in (a process that replaced it — a re-spawn — lists
+ * nothing unread, and that is not the prompt read; one never written to any process is not taken in).
+ */
+function checkIsPromptConsumedByLiveProcess(turn: WatchedTurn, probe: SessionTurnProbe): boolean {
+  const isAnotherProcess = turn.writtenToProcess !== undefined && probe.processGeneration !== undefined && turn.writtenToProcess !== probe.processGeneration;
+  return turn.isRequestPrompt && probe.isActive && !isAnotherProcess && checkIsTurnInputConsumed(turn, probe);
+}
+
+/**
+ * Whether a request prompt is in the conversation the agent had at this moment — what an ending command reads to tell a person whose
+ * words nobody will read ({@link RequestWakeUpEngine.readPromptsReachedOrHeld}): taken in by the live process it was written to (R21, on
+ * the backend's own unread signal — the json-stream Claude's echo, OpenCode's count of the prompts not yet seen as a user message), or,
+ * on the one backend with no such signal (the tmux Claude), written to it — it keeps what was typed in its own conversation, where a
+ * move's bridge or a later resume reads it, busy or output seen yet or not (review 27 nit 3).
+ */
+function checkIsPromptTakenInNow(turn: WatchedTurn, probe: SessionTurnProbe): boolean {
+  if (probe.hasUnconsumedInput !== null) return checkIsPromptConsumedByLiveProcess(turn, probe);
+  return turn.isRequestPrompt && probe.isActive && turn.writtenToProcess !== undefined && turn.writtenToProcess === probe.processGeneration;
+}
+
+/** Whether a request prompt waits in a start's or a stop's window (no process named yet): that window's end delivers or drops it. */
+function checkIsPromptWaitingInWindow(turn: WatchedTurn, probe: SessionTurnProbe): boolean {
+  return turn.isRequestPrompt && turn.writtenToProcess === undefined && probe.isWindowOpen === true;
+}
+
 export class RequestWakeUpEngine {
   private readonly deps: RequestWakeUpEngineDeps;
   private readonly now: () => number;
   /** The watched turns by REQUEST id (a conversation may hold one per requester). */
   private readonly watched = new Map<string, WatchedRequestTurn>();
+  /**
+   * The process the last prompt written into each conversation went to (serialized key → process), stamped at the write choke point
+   * ({@link noteWrite}): a watch tracked after that process went down — a re-spawn takes it down right after a post's write, and the
+   * post tracks several awaits later — is named from it, never left unnamed (review 22 nit 2).
+   */
+  private readonly writtenProcesses = new Map<string, number>();
   /** Last persisted live-turn activity per request id, for the persist step. */
   private readonly activityPersistedAt = new Map<string, number>();
   /** The tail after the latest final answer, by serialized conversation key. */
   private readonly answerTails = new Map<string, WatchedAnswerTail>();
   /** The request whose tail was last reminded and how often, by serialized conversation key (the reminder cap). */
   private readonly answerTailReminders = new Map<string, { requestId: string; count: number }>();
+  /** How many posts are on their way to their write, by serialized conversation key ({@link notePostInFlight}). */
+  private readonly postsInFlight = new Map<string, number>();
+  /** The wake-up deliveries handed to a post in flight, by serialized conversation key, in the order they were decided. */
+  private readonly wakesHandedToPost = new Map<string, Array<() => Promise<void>>>();
   private pollTimer: NodeJS.Timeout | null = null;
   private sweepTimer: NodeJS.Timeout | null = null;
   private isPolling = false;
   private isSweeping = false;
   /** The `restarted` wakes waiting for their turn, by serialized conversation key (one per conversation). */
   private readonly restartWakeTimers = new Map<string, NodeJS.Timeout>();
+  /** Conversations whose pending restart wake was asked for by a LOST-WORK loss, not by a boot: no watch holds that one. */
+  private readonly lostWorkWakes = new Set<string>();
   /** When the last scheduled `restarted` wake is due: the next one is a stagger after it. */
   private lastRestartWakeDueAt = 0;
 
@@ -152,6 +225,7 @@ export class RequestWakeUpEngine {
     this.sweepTimer = null;
     for (const timer of this.restartWakeTimers.values()) clearTimeout(timer);
     this.restartWakeTimers.clear();
+    this.lostWorkWakes.clear();
   }
 
   /**
@@ -159,17 +233,29 @@ export class RequestWakeUpEngine {
    * process that died with its own work pending): wake them `restarted`, a stagger after the last wake scheduled so,
    * instead of at the backstop. One wake per conversation at a time — a second call while one waits changes nothing.
    * Whether the requests still need it is decided when it is due (`decideRestartWake`). Returns `false` when one
-   * was already waiting. The timer is unref'd: it never keeps the process alive.
+   * was already waiting, or when every open request is held by a watch that is not failing and owes nobody an answer
+   * (`checkIsHeldBetweenTurns`: a BOOT wakes nobody then, as in a topic). `isLostWork` — the process ended with the agent's own work
+   * pending — is the other event: a topic resumes on it whatever is armed, so no watch holds the wake, and a boot wake already
+   * waiting becomes one (the flag is remembered, the call still returns `false`). The timer is unref'd: it never keeps the process alive.
    */
-  scheduleRestartWake(key: SessionKey): boolean {
+  scheduleRestartWake(key: SessionKey, options: { isLostWork?: boolean } = {}): boolean {
     const conversationKey = keyToString(key);
-    if (this.restartWakeTimers.has(conversationKey)) return false;
+    const isLostWork = options.isLostWork === true;
+    if (this.restartWakeTimers.has(conversationKey)) {
+      if (isLostWork) this.lostWorkWakes.add(conversationKey);
+      return false;
+    }
+    // Every open request is held by a watch that is not failing and owes nobody an answer: nobody is woken at a boot, and no stagger slot is spent on it.
+    const openRequests = this.deps.ledger.listOpenRequestsOf(key);
+    if (!isLostWork && openRequests.length > 0 && openRequests.every((request) => checkIsHeldBetweenTurns(request, this.getScheduleWait(key, request)))) return false;
+    if (isLostWork) this.lostWorkWakes.add(conversationKey);
     const staggerMs = this.deps.restartWakeStaggerMs ?? restartWakeStaggerMs;
     const dueAt = Math.max(this.now(), this.lastRestartWakeDueAt) + staggerMs;
     this.lastRestartWakeDueAt = dueAt;
     const timer = setTimeout(() => {
       this.restartWakeTimers.delete(conversationKey);
-      void this.wakeAfterRestart(key).catch((e) => logWakeUpFailure(`the restart wake of ${conversationKey}`, e));
+      const isLostWorkWake = this.lostWorkWakes.delete(conversationKey);
+      void this.wakeAfterRestart(key, { isLostWork: isLostWorkWake }).catch((e) => logWakeUpFailure(`the restart wake of ${conversationKey}`, e));
     }, dueAt - this.now());
     timer.unref?.();
     this.restartWakeTimers.set(conversationKey, timer);
@@ -183,13 +269,13 @@ export class RequestWakeUpEngine {
    * continuation nudge's turn is. A request at the cap gets its alert instead. A delivery that fails is logged and
    * left to the backstop (counted from now): no alert of its own. Exported for tests (the timer calls it).
    */
-  async wakeAfterRestart(key: SessionKey): Promise<void> {
+  async wakeAfterRestart(key: SessionKey, options: { isLostWork?: boolean } = {}): Promise<void> {
     const probe = this.deps.probeTurn(key);
     const nowMs = this.now();
     const woken: OpenRequestState[] = [];
     for (const request of this.deps.ledger.listOpenRequestsOf(key)) {
       if (this.watched.has(request.id)) continue;
-      const decision = decideRestartWake(request, probe, nowMs);
+      const decision = decideRestartWake(request, probe, nowMs, this.getScheduleWait(key, request), options.isLostWork === true);
       if (decision.kind === 'alert') {
         await this.applyDecision(key, request, decision);
         continue;
@@ -202,10 +288,25 @@ export class RequestWakeUpEngine {
       });
       if (updated && !isStoppedMeanwhile) woken.push(updated);
     }
-    if (woken.length === 0) return;
+    if (woken.length === 0) {
+      // The bot already said the conversation is woken for its lost work: when no request could be, say so (each skip is a decision of
+      // `decideRestartWake`: a request given up on, at the cap, with a post retry or a follow-up that can still fire, busy or blocked).
+      if (options.isLostWork === true) console.warn(`[requests] ${keyToString(key)}: the lost-work wake woke no request; the note rides the next prompt`);
+      return;
+    }
+    // A lost-work wake of a request a passing watch holds and that owes nobody: the agent is asked to answer only with what the requester
+    // must know (the fire header's wording). Every other request — a boot's, one that owes an answer — gets the plain «answer it».
+    const isAnswerOptional = (request: OpenRequestState): boolean =>
+      options.isLostWork === true && checkIsHeldBetweenTurns(request, this.getScheduleWait(key, request));
     const buildMessage = (requests: readonly OpenRequestState[]): WakeUpMessage => {
-      const messages = requests.map((request) => getWakeUpMessage(request, 'restarted'));
-      return { reason: 'restarted', text: messages.map((message) => message.text).join('\n\n'), isRequestPrompt: messages.some((message) => message.isRequestPrompt) };
+      const messages = requests.map((request) => getWakeUpMessage(request, 'restarted', { isAnswerOptional: isAnswerOptional(request) }));
+      return {
+        reason: 'restarted',
+        text: messages.map((message) => message.text).join('\n\n'),
+        isRequestPrompt: messages.some((message) => message.isRequestPrompt),
+        // The one lost-work note rides the whole forward: optional only when EVERY request in it is.
+        ...(messages.every((message) => message.isAnswerOptional === true) ? { isAnswerOptional: true } : {}),
+      };
     };
     try {
       if (!(await this.deps.prepareWakeUpSession(key, buildMessage(woken)))) {
@@ -221,7 +322,10 @@ export class RequestWakeUpEngine {
       this.deps.noteRestartWakeDelivered?.(key);
       console.log(`[requests] ${keyToString(key)}: woken after a restart for ${current.map((request) => request.id).join(', ')}`);
       for (const request of current) {
-        await this.trackForwardedTurn(key, request.id, { isRequestPrompt: getWakeUpMessage(request, 'restarted').isRequestPrompt });
+        await this.trackForwardedTurn(key, request.id, {
+          isRequestPrompt: getWakeUpMessage(request, 'restarted').isRequestPrompt,
+          isConversationForward: current.length > 1,
+        });
       }
     } catch (e) {
       logWakeUpFailure(`delivering the restart wake for ${keyToString(key)}`, e);
@@ -234,6 +338,30 @@ export class RequestWakeUpEngine {
     return entry && keyToString(entry.key) === keyToString(key) ? entry.request : undefined;
   }
 
+  /** The ids of the requests whose turns the engine watches in `key`'s conversation: the requests the agent is working on right now. */
+  getWatchedRequestIdsOf(key: SessionKey): string[] {
+    return this.getWatchedTurnsOf(key).map((turn) => turn.requestId);
+  }
+
+  /**
+   * The watched requests of `key`'s conversation whose watch a forward of their OWN started (not a conversation-wide nudge), the
+   * oldest own forward first: the first is the request whose forward started the running turn.
+   */
+  getOwnForwardWatchedRequestIdsOf(key: SessionKey): string[] {
+    return this.getWatchedTurnsOf(key)
+      .filter((turn) => turn.isOwnForward)
+      .sort((first, second) => (first.ownForwardStartedAt ?? 0) - (second.ownForwardStartedAt ?? 0))
+      .map((turn) => turn.requestId);
+  }
+
+  /**
+   * @description The request a job armed NOW in `key`'s conversation is armed under (`pickRequestToArmUnder` over the ledger's open
+   * requests and this engine's watches); `undefined` when no request is open.
+   */
+  getArmingRequestIdOf(key: SessionKey): string | undefined {
+    return pickRequestToArmUnder(this.deps.ledger.listOpenRequestsOf(key), this.getWatchedRequestIdsOf(key), this.getOwnForwardWatchedRequestIdsOf(key));
+  }
+
   /** The watched turns of `key`'s conversation. */
   private getWatchedTurnsOf(key: SessionKey): WatchedRequestTurn[] {
     const conversationKey = keyToString(key);
@@ -243,25 +371,98 @@ export class RequestWakeUpEngine {
   /**
    * @description A request's message (or a reminder for it) was just forwarded to
    * the conversation's session: watch the turn it starts. A watch already there
-   * for the SAME request is replaced — its newest message is the one that counts;
-   * another requester's request in the conversation keeps its own watch. A post
-   * retry still pending is moot from now on (R28): the session has the request.
+   * for the SAME request is MERGED with it (the forward joined a turn that still runs: one that ended was settled before the write,
+   * `settleEndedTurnsOf`): the progress count keeps
+   * its earlier start, and the turn is the alarm's only if both were — except for the bot's own «continue»
+   * (`isContinuation`: the nudge after an API error or a limit wait), which keeps the alarm's kind but
+   * starts the progress count afresh: a note sent before the error is not this turn's — and for a person's
+   * words that join the running turn, which start the count afresh too: a note sent before them is not their answer. Another requester's
+   * request in the conversation keeps its own watch. Whether the turn is a scheduled run's (`isScheduledRun`) is said by the FORWARD
+   * that started it — a fire riding the request, or the fire that opened the scheduler's request — and never read from the request's
+   * state: an answered request's fire turn is a fire's as much as an unanswered one's (`src/requests/README.md` § Scheduled runs).
+   * A fire of ANOTHER job that only rides the request (`isRequestJob` false) is not the request's activity: its forward records none,
+   * and its watch keeps that (a merge is the request's own if either side is; a «continue» keeps what the turn was), so its busy time and
+   * its quiet end leave the request's follow-up and backstop alone (`src/requests/README.md` § Scheduled runs).
+   * A post retry still pending is moot from now on (R28): the session has the request — unless the forward is a fire riding the
+   * request, which carries none of its prompt. A forward that carries a person's words (a request prompt, an issue update) marks the
+   * request as owing an answer (`isPersonInputUnanswered`, persisted): that, not the kind of the turn, is
+   * what stops the turn's end from reading as a quiet one (`decideTurnEnd`).
    */
-  async trackForwardedTurn(key: SessionKey, requestId: string, options: { isRequestPrompt: boolean } = { isRequestPrompt: false }): Promise<void> {
+  async trackForwardedTurn(
+    key: SessionKey,
+    requestId: string,
+    options: { isRequestPrompt: boolean; isScheduledRun?: boolean; isRequestJob?: boolean; isPersonInput?: boolean; isContinuation?: boolean; isConversationForward?: boolean } = { isRequestPrompt: false },
+  ): Promise<void> {
     const request = this.getOpenRequestOf(key, requestId);
     if (!request) return;
     // The agent works on an open request now: what it writes is owed to that one, not a tail.
     this.answerTails.delete(keyToString(key));
+    const previous = this.watched.get(requestId);
+    const isFireForward = options.isScheduledRun === true;
+    // The scheduler's request (a Telegram topic's `scheduledRun`) is no person's: its prompt carries no person's words.
+    const isSchedulerRequest = request.origin.kind === 'scheduledRun';
+    const carriesPersonWords = options.isRequestPrompt || options.isPersonInput === true;
+    // A person's words that reach the agent — not a fire's prompt, not the scheduler's request's.
+    const isPersonWordsForward = carriesPersonWords && !isFireForward && !isSchedulerRequest;
+    const isOwnForward = options.isConversationForward !== true || previous?.isOwnForward === true;
+    const ownForwardStartedAt = previous?.ownForwardStartedAt ?? (isOwnForward ? this.now() : undefined);
+    // A fire's turn stays one through a fire that joins it and through the bot's «continue»; a person's words or a reminder that joined
+    // it make it theirs.
+    const isScheduledRun = previous === undefined
+      ? isFireForward
+      : previous.isScheduledRun === true && (isFireForward || (options.isContinuation === true && !isPersonWordsForward));
+    // Whose turn it is: another job's fire says «not the request's own», a «continue» says nothing (it continues the turn it joins), any
+    // other forward — a person's words, a reminder, the request's own job's fire — is the request's own.
+    const isOtherJobFireForward = isFireForward && options.isRequestJob === false;
+    const isForwardOwn = options.isContinuation === true && !isPersonWordsForward ? undefined : !isOtherJobFireForward;
+    const isRequestJob = previous === undefined ? isForwardOwn !== false : previous.isRequestJob !== false || isForwardOwn === true;
+    // Where the request's prompt now is: a forward that carries it was written to the live process (none named while a window holds it
+    // in the buffer, for its replay to name); one that does not carry it leaves the prompt where it was. A process that went down since
+    // the write — no live one, and no window — is the one the write stamped.
+    const probe = this.deps.probeTurn(key);
+    const writtenNow = probe.processGeneration ?? (probe.isWindowOpen === true ? undefined : this.writtenProcesses.get(keyToString(key)));
+    const writtenToProcess = previous === undefined || options.isRequestPrompt ? writtenNow : previous.writtenToProcess;
     this.watched.set(requestId, {
       key,
       requestId,
-      progressCountAtTurnStart: request.progressAnswerCount,
+      // The progress count starts afresh at a «continue» and at words that join a turn already running: a note sent before them is
+      // not their answer (it would end the turn as a «progress» one — quiet under a watch, and the words left to the 90-minute backstop).
+      progressCountAtTurnStart: options.isContinuation === true || (previous !== undefined && isPersonWordsForward)
+        ? request.progressAnswerCount
+        : (previous?.progressCountAtTurnStart ?? request.progressAnswerCount),
       hasSeenBusy: false,
       hasSeenOutput: false,
-      isRequestPrompt: options.isRequestPrompt,
+      isRequestPrompt: options.isRequestPrompt || previous?.isRequestPrompt === true,
+      isScheduledRun,
+      isRequestJob,
+      isOwnForward,
+      ...(ownForwardStartedAt === undefined ? {} : { ownForwardStartedAt }),
+      ...(writtenToProcess === undefined ? {} : { writtenToProcess }),
     });
-    if (request.nextPostRetryAt !== undefined) await this.deps.ledger.updateOpenRequest(request.id, { nextPostRetryAt: undefined });
-    await this.recordTurnActivity(request, true);
+    // A fire RIDING the request carries none of its prompt; the fire that opened the scheduler's request carries its own.
+    const isMoot = request.nextPostRetryAt !== undefined && (!isFireForward || options.isRequestPrompt);
+    const isPersonWordsOwed = isPersonWordsForward && request.isPersonInputUnanswered !== true;
+    if (isMoot || isPersonWordsOwed) {
+      await this.deps.ledger.updateOpenRequest(request.id, {
+        ...(isMoot ? { nextPostRetryAt: undefined } : {}),
+        ...(isPersonWordsOwed ? { isPersonInputUnanswered: true } : {}),
+      });
+    }
+    // Keyed on the watch just stored, so a fire of another job AND a «continue» of its turn alike write nothing on the request.
+    if (isRequestJob) await this.recordTurnActivity(request, true);
+  }
+
+  /**
+   * @description A person's words for the request were HELD — an armed usage-limit wait keeps them back, and they reach the agent
+   * only inside whatever prompt the wait's end forwards first (a «continue», a scheduled run, the operator's next message). No
+   * turn starts for them now, so nothing is tracked, but the request owes an answer from this moment: persisted, so the turn
+   * that finally carries the words — under any watch, or none after a restart during the wait — is read against it
+   * (`checkIsAnswerOwed`). A request that owes it already, and a scheduler fire's own request, are left as they are.
+   */
+  async notePersonInputHeld(key: SessionKey, requestId: string): Promise<void> {
+    const request = this.getOpenRequestOf(key, requestId);
+    if (!request || request.isPersonInputUnanswered === true || request.origin.kind === 'scheduledRun') return;
+    await this.deps.ledger.updateOpenRequest(request.id, { isPersonInputUnanswered: true });
   }
 
   /**
@@ -321,27 +522,72 @@ export class RequestWakeUpEngine {
   }
 
   /**
+   * @description The requests of `key` whose prompt is NOT lost if the conversation ends now, read off its live process at this moment:
+   * a prompt the process took in — R21's own test ({@link checkIsPromptTakenInNow}) on a probe taken now, once what the process wrote so
+   * far is read (`refreshProcessState`), which the persisted mark lags behind until a settle or the 10-second poll (review 26 #1) — and a
+   * prompt still waiting in a start's or a stop's window, whose window's drop tells its person. Synchronous: a command reads it BEFORE it
+   * stops or replaces the process (the default of {@link cancelConversation}; the `/resume` pick ahead of its resume).
+   */
+  readPromptsReachedOrHeld(key: SessionKey): ReadonlySet<string> {
+    // What the process already wrote counts: a switch moments after a message, before the poll read its echo, told its person the
+    // agent never read it while the bridge carried it.
+    this.deps.refreshProcessState?.(key);
+    const probe = this.deps.probeTurn(key);
+    const requestIds = new Set<string>();
+    for (const turn of this.getWatchedTurnsOf(key)) {
+      if (checkIsPromptTakenInNow(turn, probe) || checkIsPromptWaitingInWindow(turn, probe)) requestIds.add(turn.requestId);
+    }
+    return requestIds;
+  }
+
+  /**
    * @description The person took over (interrupted, quit, restarted, switched or
    * resumed the session, left the folder): every open request of the
-   * conversation closes silently and nothing wakes them.
+   * conversation closes and nothing wakes them. Resolves the ids of the requests
+   * this call closed that carry a person's words the agent never took in (not the
+   * scheduler's request, whose prompt is no person's): a command that ends or replaces the
+   * conversation tells those people, since nobody reads their words (review 25 #3, review 26 #2);
+   * an interrupt closes silently. «Never taken in» reads the persisted mark and `reachedOrHeld`
+   * ({@link readPromptsReachedOrHeld}), read by default when this is called — synchronously, before
+   * the first await, so off the process the command has not stopped yet.
    */
-  async cancelConversation(key: SessionKey): Promise<void> {
+  async cancelConversation(key: SessionKey, reachedOrHeld: ReadonlySet<string> = this.readPromptsReachedOrHeld(key)): Promise<string[]> {
     this.unwatchConversation(key);
-    for (const request of this.deps.ledger.listOpenRequestsOf(key)) await this.deps.ledger.closeRequest(request.id, 'cancelled');
+    // The conversation's writes end with it: its next watch is named from a write of the next conversation (review 23 nit 6).
+    this.writtenProcesses.delete(keyToString(key));
+    const unreadRequestIds: string[] = [];
+    for (const request of this.deps.ledger.listOpenRequestsOf(key)) {
+      const isUnreadPersonWords = request.origin.kind !== 'scheduledRun' && getPromptNotTakenIn(request) !== undefined && !reachedOrHeld.has(request.id);
+      // Named only when THIS close closed it: one another path closed meanwhile is that path's to tell.
+      const closed = await this.deps.ledger.closeRequest(request.id, 'cancelled');
+      if (closed !== null && isUnreadPersonWords) unreadRequestIds.push(request.id);
+    }
+    return unreadRequestIds;
   }
 
   /**
    * @description The bot itself forwarded a "continue" nudge into the session (an
-   * API-error retry fired, or a usage-limit wait ended): watch the turn it starts
-   * as a fresh one, so the idle the error left behind is never read as its end.
+   * API-error retry fired, or a usage-limit wait ended): watch the turn it starts, so the idle the
+   * error left behind is never read as its end. The nudge carries no person's words and is no alarm,
+   * so it KEEPS the alarm's kind of the turn it continues but its progress count starts afresh: a progress
+   * note sent before the error does not make a silent continuation a «progress» turn. What the turn owes a
+   * person is not its kind but the persisted request (`checkIsAnswerOwed`): words answered before the error
+   * are owed no more, words still unanswered stay owed.
    * `isCountersReset` (the end of a limit wait) starts every open request's
    * wake-up bookkeeping from zero — the wait was not the agent's silence — and
    * lifts a limit stop: the work continues, so does the waking. A request the
    * rules already gave up on stays given up. The one session turn the nudge
    * starts is watched for every open request of the conversation.
+   * `carriedRequestIds` — the requests whose prompts the message carries, never taken in (R21: a limit or account resume re-posts
+   * them) — is a fact about EACH request, named when the message was BUILT (`getPromptsNotTakenIn`): only such a request has its words
+   * in the message (they are owed an answer, as any request prompt's), every other open request gets the plain «continue». It is
+   * never read again here: a buffered message is tracked at its replay, and a request opened in between did not ride it (review 21
+   * nit 3). A carried request whose prompt the session took in meanwhile is a plain «continue» too.
    */
-  async trackContinuationTurn(key: SessionKey, options: { isCountersReset: boolean; isRequestPrompt?: boolean }): Promise<void> {
+  async trackContinuationTurn(key: SessionKey, options: { isCountersReset: boolean; carriedRequestIds?: readonly string[] }): Promise<void> {
     for (const request of this.deps.ledger.listOpenRequestsOf(key)) {
+      // Read before the counters update below: it never touches `isPromptTakenIn`, but the request's words are what is asked here.
+      const isOwnPromptCarried = options.carriedRequestIds?.includes(request.id) === true && getPromptNotTakenIn(request) !== undefined;
       if (options.isCountersReset) {
         await this.deps.ledger.updateOpenRequest(request.id, {
           silentTurnCount: 0,
@@ -351,7 +597,7 @@ export class RequestWakeUpEngine {
           limitWaitAnsweredFor: undefined,
         });
       }
-      await this.trackForwardedTurn(key, request.id, { isRequestPrompt: options.isRequestPrompt === true });
+      await this.trackForwardedTurn(key, request.id, { isRequestPrompt: isOwnPromptCarried, isContinuation: true, isConversationForward: true });
     }
   }
 
@@ -389,6 +635,171 @@ export class RequestWakeUpEngine {
     }
   }
 
+  /**
+   * @description A new prompt is about to be written into `key`'s conversation: settle every watch of it whose turn has already
+   * ENDED, on a probe taken now — before the write — exactly as the poll's next tick would have. A prompt that waited behind a running
+   * turn is forwarded within seconds of its end (`postToSession` polls busy every 5 s, this engine every 10 s), usually before the tick
+   * saw the idle; the old watch would then read the NEW turn as its own: arm its jobs under the old request, count its busy time as
+   * the old request's activity, and decide the old request only at the new turn's end. A watch whose turn still runs is left — the
+   * forward joins it (`trackForwardedTurn` merges), its prompt marked taken in if the live process took it (R21, as the poll marks); a
+   * session that is gone is left to the poll.
+   * Synchronous up to the decisions: the ended watches are dropped and decided against the request as it is NOW, so a forward that
+   * does not await (a write must run in its caller's tick) is never read into them. The decisions are persisted after, in order; the
+   * returned promise resolves once they are (a post that picks a request awaits it first, so the pick and the header see the result)
+   * with the delivery of the wake-ups they decided. The CALLER delivers them — after its own write, so the prompt it writes starts the
+   * turn and a reminder joins it, as the tick would have reminded seconds later; a call with no write of its own (the adapter's turn end)
+   * hands them to a post on its way to its write, else delivers them at once ({@link deliverOrHandOverWake}). Never rejects, and neither
+   * does the delivery.
+   */
+  settleEndedTurnsOf(key: SessionKey): Promise<() => Promise<void>> {
+    const probe = this.deps.probeTurn(key);
+    const persisting: Array<Promise<(() => Promise<void>) | null>> = [];
+    for (const turn of this.getWatchedTurnsOf(key)) {
+      const request = this.getOpenRequestOf(key, turn.requestId);
+      if (!request) {
+        this.watched.delete(turn.requestId);
+        continue;
+      }
+      if (probe.isBusy) turn.hasSeenBusy = true;
+      if (getWatchedTurnState(turn, probe) !== 'ended') {
+        // A turn still running, or held, may have taken its prompt in already: marked now (R21), as the poll would. The process that took
+        // it may be gone before the poll's next tick — a deferred account switch re-spawns it one timer tick after the turn's end, the
+        // per-turn stop ends it — and a prompt is read as taken in only off the process it was written to.
+        persisting.push(this.markPromptTakenIn(turn, request, probe).then(() => null, (e) => {
+          logWakeUpFailure(`marking the prompt of ${turn.requestId} taken in`, e);
+          return null;
+        }));
+        continue;
+      }
+      this.watched.delete(turn.requestId);
+      const decision = this.decideWatchedTurnEnd(turn, request);
+      persisting.push(this.persistEndedTurn(turn, request, probe, decision).catch((e) => {
+        logWakeUpFailure(`settling the turn of ${turn.requestId}`, e);
+        return null;
+      }));
+    }
+    return Promise.all(persisting).then((deliveries) => async () => {
+      for (const deliver of deliveries) await deliver?.().catch((e) => logWakeUpFailure(`delivering a settled turn's wake-up in ${keyToString(key)}`, e));
+    });
+  }
+
+  /**
+   * @description A post (`postToSession`) is on its way to write a prompt into `key`'s conversation, waiting for the running turn's
+   * idle maybe. Until the returned release, a wake-up decided for the conversation — at the adapter's turn end, by the poll, by the sweep
+   * ({@link deliverOrHandOverWake}) — is HANDED to the post instead of written at once: the post takes it with its settle
+   * ({@link settleEndedTurnsForPost}) and delivers it after its own write, so the prompt that waited for the turn starts the next one and
+   * the reminder joins it (written first, the reminder would start that turn and the reminded request would read as its starter). The
+   * release delivers what is still handed over once the last post in flight is done: one that never took it (held over a limit wait,
+   * an ensure that failed) or a wake decided after its settle. It never rejects, and a second call does nothing.
+   */
+  notePostInFlight(key: SessionKey): () => Promise<void> {
+    const conversationKey = keyToString(key);
+    this.postsInFlight.set(conversationKey, (this.postsInFlight.get(conversationKey) ?? 0) + 1);
+    let isReleased = false;
+    return async () => {
+      if (isReleased) return;
+      isReleased = true;
+      const count = (this.postsInFlight.get(conversationKey) ?? 1) - 1;
+      if (count > 0) {
+        this.postsInFlight.set(conversationKey, count);
+        return;
+      }
+      this.postsInFlight.delete(conversationKey);
+      await this.takeWakesHandedToPost(conversationKey)();
+    };
+  }
+
+  /** @description Deliver a decided wake-up now, or hand it to a post in flight in `key`'s conversation ({@link notePostInFlight}). Never rejects. */
+  async deliverOrHandOverWake(key: SessionKey, deliver: () => Promise<void>): Promise<void> {
+    const conversationKey = keyToString(key);
+    if (this.postsInFlight.has(conversationKey)) {
+      this.wakesHandedToPost.set(conversationKey, [...(this.wakesHandedToPost.get(conversationKey) ?? []), deliver]);
+      return;
+    }
+    await deliver().catch((e) => logWakeUpFailure(`delivering a wake-up in ${conversationKey}`, e));
+  }
+
+  /**
+   * @description A write into `key`'s live process (the write choke point, synchronously before the adapter write): the process it goes
+   * to is stamped, for a watch that is tracked only after that process went down ({@link writtenProcesses}). Synchronous; a probe that
+   * names no process (a window holds the prompt) stamps nothing.
+   */
+  noteWrite(key: SessionKey): void {
+    const { processGeneration } = this.deps.probeTurn(key);
+    if (processGeneration !== undefined) this.writtenProcesses.set(keyToString(key), processGeneration);
+  }
+
+  /**
+   * @description A write into `key`'s live process during the replay of a start's buffer (the write choke point, right after its settle;
+   * the bot calls it at every write while `StartupPromptBuffer.checkIsReplaying`: a replayed prompt, the held prompts after them, a prompt
+   * written at once while the replay runs — all go to the process the replay writes into). A watch tracked while its prompt waited in that
+   * buffer names no process yet, and the replay took the whole buffer to write it into this process, so its prompt is in this one. Never
+   * called for a write outside a replay: a watch whose buffer was DROPPED stays unnamed — its prompt reached no process
+   * (`checkIsPromptNeverWritten`) — and the request it opened is closed with the person told (`bot.ts`, the person's buffered prompt's
+   * settle). Only a person's prompt is tracked before its replay: every bot-made caller watches its turn once its prompt reached a session
+   * (`src/requests/README.md`, the callers table). Synchronous; a session with no process named does nothing.
+   */
+  noteReplayedWrite(key: SessionKey): void {
+    const { processGeneration } = this.deps.probeTurn(key);
+    if (processGeneration === undefined) return;
+    for (const turn of this.getWatchedTurnsOf(key)) {
+      if (turn.writtenToProcess === undefined) turn.writtenToProcess = processGeneration;
+    }
+  }
+
+  /**
+   * @description The settle of a post about to write ({@link settleEndedTurnsOf}): resolves ONE delivery for the post to run after its
+   * write — the wake-ups handed to it so far, in order, then this settle's own. Never rejects, and neither does the delivery.
+   */
+  settleEndedTurnsForPost(key: SessionKey): Promise<() => Promise<void>> {
+    const deliverHandedOver = this.takeWakesHandedToPost(keyToString(key));
+    return this.settleEndedTurnsOf(key).then((deliverSettled) => async () => {
+      await deliverHandedOver();
+      await deliverSettled();
+    });
+  }
+
+  /** The delivery of the wake-ups handed to a post in `conversationKey`, taken (a later post or release finds none of them). */
+  private takeWakesHandedToPost(conversationKey: string): () => Promise<void> {
+    const handedOver = this.wakesHandedToPost.get(conversationKey) ?? [];
+    this.wakesHandedToPost.delete(conversationKey);
+    return async () => {
+      for (const deliver of handedOver) await deliver().catch((e) => logWakeUpFailure(`delivering a wake-up handed to a post in ${conversationKey}`, e));
+    };
+  }
+
+  /** The decision at the end of `turn`, read against `request` and its jobs as they are now. */
+  private decideWatchedTurnEnd(turn: WatchedRequestTurn, request: OpenRequestState): WakeUpDecision {
+    return decideTurnEnd(request, turn.progressCountAtTurnStart, this.now(), {
+      isScheduledRun: turn.isScheduledRun === true,
+      isRequestJob: turn.isRequestJob !== false,
+      scheduleWait: this.getScheduleWait(turn.key, request),
+      progressFollowUpMs: this.deps.progressFollowUpMs,
+    });
+  }
+
+  /** R21 for a request prompt the ended turn took in (a later wake-up is a reminder), then `decision` persisted; resolves its wake's delivery. */
+  private async persistEndedTurn(turn: WatchedRequestTurn, request: OpenRequestState, probe: SessionTurnProbe, decision: WakeUpDecision): Promise<(() => Promise<void>) | null> {
+    await this.markPromptTakenIn(turn, request, probe);
+    return this.persistDecision(turn.key, request, decision);
+  }
+
+  /**
+   * R21: once the backend took a request prompt in, a wake-up is a reminder — the agent has read the request. A held turn end is read like
+   * any other: what the backend still lists as unread is unread. A prompt queued behind a turn that ended in an error result stays listed
+   * until its own echo (the json-stream adapter keeps it; the CLI runs it as its next turn, measured), and the prompt of the turn that
+   * failed was read by it — a resume that posted it again would repeat words the agent already has.
+   * Read only off the process the prompt was written to (`writtenToProcess`): a re-spawn that replaced it — an account move after a limit,
+   * a model change — kills a message still queued there, and the new process lists nothing unread. Left unmarked, the prompt is posted
+   * again: by the resume's «continue» (`getPromptNotTakenIn`), or as the wake-up of the turn's end. A prompt that names no process while
+   * one is live never reached any (`checkIsTurnInputConsumed`): nothing is marked.
+   */
+  private async markPromptTakenIn(turn: WatchedRequestTurn, request: OpenRequestState, probe: SessionTurnProbe): Promise<void> {
+    if (request.isPromptTakenIn !== true && checkIsPromptConsumedByLiveProcess(turn, probe)) {
+      await this.deps.ledger.updateOpenRequest(request.id, { isPromptTakenIn: true });
+    }
+  }
+
   private async pollWatchedTurn(turn: WatchedRequestTurn): Promise<void> {
     // Replaced or dropped since this poll took its snapshot: the newer watch (if any) decides.
     if (this.watched.get(turn.requestId) !== turn) return;
@@ -400,21 +811,25 @@ export class RequestWakeUpEngine {
     }
     const probe = this.deps.probeTurn(turn.key);
     if (probe.isBusy) turn.hasSeenBusy = true;
-    if (turn.isRequestPrompt && request.isPromptTakenIn !== true && probe.isActive && checkIsTurnInputConsumed(turn, probe)) {
-      // R21: from now on a wake-up is a reminder — the agent has read the request.
-      await this.deps.ledger.updateOpenRequest(request.id, { isPromptTakenIn: true });
-    }
+    await this.markPromptTakenIn(turn, request, probe);
+    // Settled by a forward, or replaced by a new watch, during that write: the watch present now decides, not this one.
+    if (this.watched.get(turn.requestId) !== turn) return;
     const turnState = getWatchedTurnState(turn, probe);
     if (turnState === 'running') {
-      if (probe.isBusy) await this.recordTurnActivity(request, false);
-      // Its end can no longer be seen: the sweep's backstop takes the request over.
-      else if (checkIsWatchedTurnStale(request, probe, this.now(), this.deps.backstopMs)) this.watched.delete(turn.requestId);
+      if (probe.isBusy) {
+        // Another job's fire that only rides the request keeps the session busy for its own work, not for this request's — and so does
+        // any turn while this request's prompt has reached no process (`checkIsPromptNeverWritten`): that busy time is another turn's.
+        if (turn.isRequestJob !== false && !checkIsPromptNeverWritten(turn, probe)) await this.recordTurnActivity(request, false);
+      } else if (checkIsWatchedTurnStale(request, probe, this.now(), this.deps.backstopMs)) {
+        // Its end can no longer be seen: the sweep's backstop takes the request over.
+        this.watched.delete(turn.requestId);
+      }
       return;
     }
     this.watched.delete(turn.requestId);
     // A dead session is not a turn end: the backstop resumes it later.
     if (turnState === 'sessionGone') return;
-    await this.applyDecision(turn.key, request, decideTurnEnd(request, turn.progressCountAtTurnStart, this.now()));
+    await this.applyDecision(turn.key, request, this.decideWatchedTurnEnd(turn, request));
   }
 
   /** @description One sweep over the open requests nobody watches; exported for tests. */
@@ -443,10 +858,22 @@ export class RequestWakeUpEngine {
   private async sweepOpenRequest(key: SessionKey, request: OpenRequestState): Promise<void> {
     const probe = this.deps.probeTurn(key);
     if (probe.isBusy) {
-      await this.recordTurnActivity(request, false);
+      // A busy session is activity of THIS request's own lost turn — so a long-running one is not prodded mid-work — but only while no
+      // turn is watched in the conversation: then the busy time is that turn's, never this request's, whatever it owes. A recurring
+      // job's fires keep the session busy every few minutes, so recorded they would push this request's backstop ahead for good — a
+      // requester's lost message, or a watch that fired and nobody handled (`armed`), would never be taken back. A request a watch
+      // holds ignores the backstop anyway, and a due follow-up is woken by `nextWakeAt`, which activity does not move. The same for a
+      // turn the CLI started by itself (`isCliOwnTurn`: a finished task's, a session `CronCreate` job's): only a turn the bot wrote can
+      // be the request's lost one, and a looping job would otherwise push an owed request's backstop ahead for as long as it loops.
+      if (this.getWatchedTurnsOf(key).length === 0 && probe.isCliOwnTurn !== true) await this.recordTurnActivity(request, false);
       return;
     }
-    await this.applyDecision(key, request, decideUnwatchedRequest(request, probe, this.now(), this.deps.backstopMs));
+    await this.applyDecision(key, request, decideUnwatchedRequest(request, probe, this.now(), this.deps.backstopMs, this.getScheduleWait(key, request)));
+  }
+
+  /** The request's reading of its armed jobs now; `none` when the port is not wired. */
+  private getScheduleWait(key: SessionKey, request: OpenRequestState): RequestScheduleWait {
+    return this.deps.getScheduleWait?.(key, request) ?? 'none';
   }
 
   private async sweepAnswerTail(conversationKey: string, entry: WatchedAnswerTail): Promise<void> {
@@ -477,7 +904,22 @@ export class RequestWakeUpEngine {
   }
 
   private async applyDecision(key: SessionKey, request: OpenRequestState, decision: WakeUpDecision): Promise<void> {
-    if (decision.kind === 'none') return;
+    const deliverWake = await this.persistDecision(key, request, decision);
+    // A post on its way to its write takes it and writes it after its own prompt (`notePostInFlight`).
+    if (deliverWake) await this.deliverOrHandOverWake(key, deliverWake);
+  }
+
+  /**
+   * Persist `decision` (an alert is raised here too) and resolve the delivery of its wake-up, or `null` when it decided none or the
+   * request changed meanwhile. Split from the delivery so a settle before a write can persist at once and deliver after the write.
+   */
+  private async persistDecision(key: SessionKey, request: OpenRequestState, decision: WakeUpDecision): Promise<(() => Promise<void>) | null> {
+    if (decision.kind === 'none') return null;
+    if (decision.kind === 'quiet' && decision.isRequestSettled === true) {
+      // The alarm's own request, left unanswered by an agent with nothing to report: closed without a word, never woken at the backstop.
+      await this.deps.ledger.closeRequest(request.id, 'cancelled');
+      return null;
+    }
     let isStoppedMeanwhile = false;
     const updated = await this.deps.ledger.updateOpenRequest(request.id, (current) => {
       // `request` is a snapshot: a limit wait may have stopped the wake-ups since (no alert either).
@@ -485,20 +927,26 @@ export class RequestWakeUpEngine {
       return isStoppedMeanwhile ? {} : decision.update;
     });
     // Closed or superseded while we decided: the decision belonged to the old one.
-    if (!updated || isStoppedMeanwhile) return;
-    if (decision.kind === 'followUpLater') return;
+    if (!updated || isStoppedMeanwhile) return null;
+    if (decision.kind === 'followUpLater' || decision.kind === 'quiet') return null;
     if (decision.kind === 'alert') {
       await this.raiseAlert(key, updated, decision.reason);
-      return;
+      return null;
     }
-    const message = getWakeUpMessage(updated, decision.reason);
+    const { reason } = decision;
+    return () => this.deliverWake(key, updated, reason);
+  }
+
+  /** Deliver a persisted wake-up: the reminder (or the request's prompt again, R21), then its turn watched, or the failure handled. */
+  private async deliverWake(key: SessionKey, updated: OpenRequestState, reason: RequestWakeUpReason): Promise<void> {
+    const message = getWakeUpMessage(updated, reason);
     const outcome = await this.deliverWakeUpSafely(key, updated, message);
     if (outcome === 'delivered') {
       await this.trackForwardedTurn(key, updated.id, { isRequestPrompt: message.isRequestPrompt });
       return;
     }
     if (outcome === 'requestGone') return;
-    if (decision.reason === 'postRetry') {
+    if (reason === 'postRetry') {
       // R28: a retry that failed again tries later; once spent, the backstop decides — no alert yet.
       const retry = getPostRetryUpdate(updated, this.now(), this.deps.firstPostRetryDelayMs);
       if (retry) await this.deps.ledger.updateOpenRequest(updated.id, retry);

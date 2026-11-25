@@ -54,6 +54,18 @@ export const fakeClaudeIgnoreStopSignalsFileName = 'ignore-stop-signals';
  * reads anything: a CLI that cannot start (broken install, refused account) — the bot's start of the conversation fails.
  */
 export const fakeClaudeRefuseLaunchFileName = 'refuse-launch';
+/**
+ * A file in the fake's state dir whose content (ms) makes a launch the fake REFUSES wait that long first, as a slow CLI does: a `--resume`
+ * of a conversation it cannot restore (`getFakeClaudeUnrestorableConversationFileName`) and any launch while {@link fakeClaudeRefuseLaunchFileName}
+ * exists. A flow lands a message inside the bot's resume or start that is about to fail.
+ */
+export const fakeClaudeLaunchRefusalDelayFileName = 'launch-refusal-delay-ms';
+/**
+ * A file in the fake's state dir whose content (ms) makes every session launch that RUNS wait that long before it reads stdin — a CLI
+ * slow to start: the bot's start or resume of the conversation (its `initialize` handshake) is under way that long. A flow lands a
+ * command inside the wake a message makes.
+ */
+export const fakeClaudeLaunchDelayFileName = 'launch-delay-ms';
 /** The CLI version the fake reports on `system/init` — the first one whose stream carries the background-task list (L-D10). */
 export const fakeClaudeCodeVersion = '2.1.287';
 export const fakeClaudeVersion = `${fakeClaudeCodeVersion} (Claude Code)`;
@@ -192,6 +204,44 @@ export interface FakeStatusWatchTarget {
 }
 
 /**
+ * `watch-progress` (the Jira schedule flow): the orchestrator of an issue — it arms the STATUS watch of the worker the test named
+ * ({@link fakeStatusWatchTargetFileName}) as `arm-status-watch` does, then answers `progress` and ENDS its turn (nothing to poll:
+ * the watch wakes it). The prompt of the watch's wake is `cancel-watch` ({@link fakeCancelWatchToken}: look at the worker, cancel the
+ * watch, answer `final` to the request the header names) — or, when the issue's text carries {@link fakeKeepWatchWakeMarker}, a
+ * wake that only keeps the watch ({@link fakeKeepWatchToken}): the turn ends with no tool call and no answer.
+ */
+export const fakeKeepWatchToken = '[fake:keep-watch]';
+export const fakeKeepWatchWakeMarker = '[wake:keep]';
+/**
+ * The other two wakes a `watch-progress` orchestrator can have, chosen by a marker in the request's text: `rearm-watch` — the
+ * worker finished, so it arms the watch of the NEXT worker (the one the test names in {@link fakeStatusWatchTargetFileName} by then),
+ * cancels the old watch and answers `progress` to the request its header names (an orchestrator moving on to the next worker: the
+ * request still waits, now for the next watch); `drop-watch` — it cancels its watch and ends the turn without any answer.
+ */
+export const fakeRearmWatchToken = '[fake:rearm-watch]';
+export const fakeRearmWatchWakeMarker = '[wake:rearm]';
+export const fakeDropWatchToken = '[fake:drop-watch]';
+export const fakeDropWatchWakeMarker = '[wake:drop]';
+/**
+ * `one-shot-then-final`: the first turn arms a one-shot prompt this many seconds ahead (its prompt is `[fake:answer]`, so the fire
+ * answers `final` to the request id its header names) and answers `final`: the request is finished when the job fires.
+ */
+export const fakeOneShotDelaySeconds = 25;
+/**
+ * Markers in a `one-shot-then-final` request's text that choose its one-shot's prompt instead of `[fake:answer]`:
+ * {@link fakeOneShotSilentMarker} — the fire's turn has nothing to report and ends with no answer ({@link fakeKeepWatchToken});
+ * {@link fakeOneShotWatchMarker} — the fire's turn is a `watch-progress` orchestrator of {@link fakeOneShotWatchIssueKey}: it arms the
+ * status watch of the worker the test named and answers `progress`, and the watch's wake only keeps the watch;
+ * {@link fakeOneShotNextWatchMarker} — the same orchestrator under {@link fakeOneShotNextWatchIssueKey}, for a second such fire in one
+ * flow (`watch-progress` arms only for the first request of its key).
+ */
+export const fakeOneShotSilentMarker = '[one-shot:silent]';
+export const fakeOneShotWatchMarker = '[one-shot:watch]';
+export const fakeOneShotWatchIssueKey = 'WD-4';
+export const fakeOneShotNextWatchMarker = '[one-shot:watch-next]';
+export const fakeOneShotNextWatchIssueKey = 'WI-9';
+
+/**
  * While this file exists, `ask` mode streams its content as one assistant text right after it puts the question, while the
  * turn is still blocked on the answer — as a sub-agent or a parallel branch of the real CLI does. The text lands BELOW
  * the question in the topic, which is what makes the bot bring the question back to the bottom.
@@ -256,10 +306,10 @@ export const fakeAskSetAsideOutcome = 'set aside';
 export const fakeAskSetAsideTurnText = 'Went on without the answer.';
 
 /**
- * `[fake:schedule-once <seconds> <label>]` in a prompt: before it puts its question, the fake creates a one-shot prompt schedule
- * (`schedule_create` on the bot's MCP) that fires after that many seconds with the prompt `<label> [fake:answer] scheduled` — a
- * prompt the BOT delivers to the agent while its question waits, which is not an answer to it and does not cancel it (a message
- * the operator types does).
+ * `[fake:schedule-once <seconds> <label>]` in a prompt: the fake creates a one-shot prompt schedule (`schedule_create` on the bot's
+ * MCP) that fires after that many seconds with the prompt `<label> [fake:answer] scheduled` — in an asking turn before it puts its
+ * question (a prompt the BOT delivers to the agent while its question waits, which is not an answer to it and does not cancel it, as a
+ * message the operator types does), in a request's turn of any other mode at the turn's start.
  */
 export const fakeScheduleOnceToken = (seconds: number, label: string): string => `[fake:schedule-once ${seconds} ${label}]`;
 
@@ -355,6 +405,8 @@ export const fakeClaudeLogFileNames = {
   controlResponses: 'control-responses.jsonl',
   /** One record per `control_request` the bot wrote that the fake READ (an interrupt among them): `{ readAt, pid, subtype }`. */
   controlRequests: 'control-requests.jsonl',
+  /** One record per stop signal a process took, as it took it — its exit may come later (the exit flush): `{ pid, signal }`. */
+  stopSignals: 'stop-signals.jsonl',
 } as const;
 
 /**
@@ -445,7 +497,7 @@ export function fakeProgressEditsBody(issueKey: string, noteNumber: number): str
 export interface FakeClaudeToolCall {
   issueKey: string;
   tool: string;
-  args: Record<string, string>;
+  args: Record<string, string | number | boolean>;
   /** The tool's result text (`error: …` for a refusal), or what the program printed. */
   outcome: string;
 }

@@ -11,6 +11,7 @@ import assert from 'node:assert/strict';
 import { keyToString, type SessionKey } from '../sessionKey';
 import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
 import { createSessionTurnProbe, type SessionTurnProbeDeps } from '../requests/sessionTurnProbe';
+import { unnumberedProcessGeneration } from '../types';
 
 const topicKey: SessionKey = makeTelegramKey(-1001234567890, 42);
 const topicKeyString = keyToString(topicKey);
@@ -20,14 +21,21 @@ interface ProbeScenario {
   isBusy: boolean;
   isTuiQuestionPending: boolean;
   isLoginPastePending: boolean;
+  isRespawnPending: boolean;
+  isTurnOnItsWay: boolean;
+  isCliOwnTurn: boolean;
   pendingQuestionKeys: Set<string>;
   questionPinKeys: Set<string>;
   compactingKeys: Set<string>;
   apiRetryTimers: Map<string, NodeJS.Timeout | null>;
   wedgeRecoveryKeys: Set<string>;
   retryKickKeys: Set<string>;
+  apiErrorKeys: Set<string>;
   startingKeys: Set<string>;
+  replayingKeys: Set<string>;
   hasUnconsumedInput: boolean | undefined;
+  /** What the adapter's `getProcessGeneration` answers; `undefined`: an adapter without it. */
+  processGeneration: number | undefined;
 }
 
 let scenario: ProbeScenario;
@@ -39,7 +47,11 @@ function createProbe(): ReturnType<typeof createSessionTurnProbe> {
       checkIsBusy: () => scenario.isBusy,
       isQuestionPending: () => scenario.isTuiQuestionPending,
       isLoginPastePending: () => scenario.isLoginPastePending,
+      checkIsRespawnPending: () => scenario.isRespawnPending,
+      checkIsTurnOnItsWay: () => scenario.isTurnOnItsWay,
+      checkIsCliOwnTurn: () => scenario.isCliOwnTurn,
       ...(scenario.hasUnconsumedInput === undefined ? {} : { checkHasUnconsumedInput: () => scenario.hasUnconsumedInput === true }),
+      ...(scenario.processGeneration === undefined ? {} : { getProcessGeneration: () => scenario.processGeneration }),
     }),
     checkHasPendingQuestion: (keyString) => scenario.pendingQuestionKeys.has(keyString),
     checkHasQuestionPin: (keyString) => scenario.questionPinKeys.has(keyString),
@@ -47,7 +59,9 @@ function createProbe(): ReturnType<typeof createSessionTurnProbe> {
     getApiRetryTimer: (keyString) => scenario.apiRetryTimers.get(keyString),
     checkIsWedgeRecoveryInFlight: (keyString) => scenario.wedgeRecoveryKeys.has(keyString),
     checkIsRetryKickInFlight: (keyString) => scenario.retryKickKeys.has(keyString),
+    checkIsApiErrorInHandling: (keyString) => scenario.apiErrorKeys.has(keyString),
     checkIsSessionStarting: (keyString) => scenario.startingKeys.has(keyString),
+    checkIsReplayingBufferedPrompts: (keyString) => scenario.replayingKeys.has(keyString),
     serializeKey: keyToString,
   };
   return createSessionTurnProbe(deps);
@@ -59,14 +73,20 @@ beforeEach(() => {
     isBusy: false,
     isTuiQuestionPending: false,
     isLoginPastePending: false,
+    isRespawnPending: false,
+    isTurnOnItsWay: false,
+    isCliOwnTurn: false,
     pendingQuestionKeys: new Set(),
     questionPinKeys: new Set(),
     compactingKeys: new Set(),
     apiRetryTimers: new Map(),
     wedgeRecoveryKeys: new Set(),
     retryKickKeys: new Set(),
+    apiErrorKeys: new Set(),
     startingKeys: new Set(),
+    replayingKeys: new Set(),
     hasUnconsumedInput: undefined,
+    processGeneration: undefined,
   };
 });
 
@@ -75,6 +95,7 @@ describe('createSessionTurnProbe', () => {
     assert.deepEqual(createProbe()(topicKey), {
       isActive: true,
       isBusy: false,
+      processGeneration: unnumberedProcessGeneration,
       hasUnconsumedInput: null,
       isTurnEndBlocked: false,
     });
@@ -142,6 +163,80 @@ describe('createSessionTurnProbe', () => {
 
     scenario.startingKeys.delete(topicKeyString);
     assert.equal(createProbe()(topicKey).isTurnEndBlocked, false, 'started or failed: nothing holds it any more');
+  });
+
+  it('the replay of the prompts buffered during the start is still the start: the turn end is held and the input reads unconsumed, whatever the adapter says (review 15 #1)', () => {
+    // The window is closed before the first replayed write, and a fresh session reports nothing unread: without this every watch made
+    // while the session started read `ended` at the replay's first write, and was decided as a silent turn the agent never had.
+    scenario.hasUnconsumedInput = false;
+    scenario.replayingKeys.add(topicKeyString);
+    const probe = createProbe()(topicKey);
+    assert.equal(probe.isTurnEndBlocked, true);
+    assert.equal(probe.hasUnconsumedInput, true);
+    scenario.replayingKeys.delete(topicKeyString);
+    assert.equal(createProbe()(topicKey).isTurnEndBlocked, false, 'the replay over: the adapter decides again');
+    assert.equal(createProbe()(topicKey).hasUnconsumedInput, false);
+  });
+
+  it('an API error the bot still handles with nothing armed holds the turn — «wait for reset» off, a used-up balance, an account refusal: the turn that ended on it is no silent one until the stop, move or wait has landed (review 16 #1)', () => {
+    // The error result also empties the adapter's queue of inputs: without the hold the turn reads ended with everything taken in.
+    scenario.hasUnconsumedInput = false;
+    scenario.apiErrorKeys.add(topicKeyString);
+    assert.equal(createProbe()(topicKey).isTurnEndBlocked, true);
+    scenario.apiErrorKeys.add(keyToString(makeTelegramKey(-1001234567890, 43)));
+    scenario.apiErrorKeys.delete(topicKeyString);
+    assert.equal(createProbe()(topicKey).isTurnEndBlocked, false, 'handled — and another thread\'s error holds nothing here');
+  });
+
+  it('a re-spawn under way or about to start (a deferred account switch at the turn\'s end) holds the turn — also while the process is down for it, which is not a gone session: no reminder may start a second launch beside it (report 6, not fixed 2)', () => {
+    scenario.isRespawnPending = true;
+    assert.equal(createProbe()(topicKey).isTurnEndBlocked, true);
+    scenario.isActive = false;
+    const respawning = createProbe()(topicKey);
+    assert.equal(respawning.isActive, false);
+    assert.equal(respawning.isTurnEndBlocked, true, 'held, so the watch reads `running`, not `sessionGone`');
+    scenario.isActive = true;
+    scenario.isRespawnPending = false;
+    assert.equal(createProbe()(topicKey).isTurnEndBlocked, false, 're-spawned: the new process decides');
+  });
+
+  it('a finished task\'s own turn on its way reads BUSY — a watched turn runs on into it — and only for a live session (review 17 #2)', () => {
+    scenario.isTurnOnItsWay = true;
+    assert.equal(createProbe()(topicKey).isBusy, true);
+    assert.equal(createProbe()(topicKey).isTurnEndBlocked, false, 'busy, not held: the sweep still sees a busy session');
+    scenario.isActive = false;
+    assert.equal(createProbe()(topicKey).isBusy, false);
+  });
+
+  it('a turn the CLI started by itself is named only while the session is busy — its busy time is no request\'s activity (review 17 #4)', () => {
+    scenario.isCliOwnTurn = true;
+    assert.equal(createProbe()(topicKey).isCliOwnTurn, undefined, 'not busy: nothing runs');
+    scenario.isBusy = true;
+    assert.equal(createProbe()(topicKey).isCliOwnTurn, true);
+    scenario.isCliOwnTurn = false;
+    assert.equal(createProbe()(topicKey).isCliOwnTurn, undefined, 'the bot\'s turn');
+  });
+
+  it('names the live process a prompt written now goes to — during the replay of a start\'s buffer too — and none while a start\'s or a stop\'s window is open or with no live process (review 18 #2); a backend that cannot number its processes is named `unnumberedProcessGeneration`, never nothing (review 21 #1 b)', () => {
+    assert.equal(createProbe()(topicKey).processGeneration, unnumberedProcessGeneration, 'a backend without process numbers: a prompt written there is named');
+    scenario.processGeneration = 7;
+    assert.equal(createProbe()(topicKey).processGeneration, 7);
+    scenario.startingKeys.add(topicKeyString);
+    assert.equal(createProbe()(topicKey).processGeneration, undefined, 'a window is open: a prompt forwarded now waits in the buffer');
+    scenario.startingKeys.delete(topicKeyString);
+    scenario.replayingKeys.add(topicKeyString);
+    assert.equal(createProbe()(topicKey).processGeneration, 7, 'the replay writes into the process the start brought up');
+    scenario.replayingKeys.delete(topicKeyString);
+    scenario.isActive = false;
+    assert.equal(createProbe()(topicKey).processGeneration, undefined, 'no live process');
+    scenario.processGeneration = undefined;
+    assert.equal(createProbe()(topicKey).processGeneration, undefined, 'no live process on a backend without numbers either');
+    scenario.isActive = true;
+    scenario.startingKeys.add(topicKeyString);
+    assert.equal(createProbe()(topicKey).processGeneration, undefined, 'its window open: none');
+    assert.equal(createProbe()(topicKey).isWindowOpen, true, 'and it says a window holds what is forwarded now (review 22 nit 2)');
+    scenario.startingKeys.delete(topicKeyString);
+    assert.equal(createProbe()(topicKey).isWindowOpen, undefined, 'no window: absent');
   });
 
   it('another thread\'s start never holds this one', () => {

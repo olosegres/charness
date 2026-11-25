@@ -763,6 +763,16 @@ export interface EffortState {
 export type SurfaceOpenQuestionOutcome = 'emitted' | 'none' | 'readFailed';
 
 /**
+ * The process the probe names for a live session of a backend that cannot tell its processes apart (no
+ * `AgentAdapter.getProcessGeneration`: the tmux Claude, OpenCode). A prompt written there is named it — never left unnamed, which reads
+ * «never written» once a numbering backend takes the conversation over (`/claude_mode`) — and no numbered process ever gets it, so such a
+ * switch reads as another process (`src/requests/README.md` § Turn starts, «What a watch names»). All the processes of such a backend
+ * share it: a restart within it reads as the same process, as that backend cannot tell. Part of the {@link AgentAdapter} contract, beside
+ * `getProcessGeneration`: a numbering adapter never hands it out.
+ */
+export const unnumberedProcessGeneration = 0;
+
+/**
  * @description Unified interface for AI agent backends (Claude CLI, OpenCode, etc.).
  * Each adapter manages sessions keyed by `SessionKey` and communicates via EventEmitter.
  *
@@ -846,6 +856,13 @@ export interface AgentAdapter extends EventEmitter {
   /** Whether an adopted session is not read yet or still replaying the downtime tail — {@link whenAdoptReplayed} would wait. */
   checkIsAdoptReplayPending?(key: SessionKey): boolean;
   checkIsActive(key: SessionKey): boolean;
+  /**
+   * @description Whether a prompt written now reaches the live process: live and not being stopped. A process a release or a move is
+   * stopping reads {@link checkIsActive} true until it exits, yet abandons every write — the bot routes a prompt that meets it as one
+   * that found no live session, so it wakes the conversation and waits behind that stop in the conversation's queue
+   * (`requests/README.md` § Turn starts). Optional: a backend whose stop drops the session at once omits it, and `checkIsActive` is read.
+   */
+  checkIsAcceptingInput?(key: SessionKey): boolean;
 
   /**
    * @description Read runtime metadata for the live session without sending the
@@ -906,6 +923,50 @@ export interface AgentAdapter extends EventEmitter {
   checkIsWorking?(key: SessionKey): boolean;
 
   /**
+   * Whether the adapter re-spawns the process now, or is about to (json-stream Claude): a re-spawn under way (a model, effort or
+   * account change), or an account switch deferred while the process worked that the turn's end releases — it starts one timer tick
+   * after `turnEnded`. The request wake-up probe reads it as «not a turn end»: the turn is decided once the new process is up, and its
+   * reminder goes into it (an ensure waits for the re-spawn, {@link waitForRespawn}). Optional: a backend that never
+   * re-spawns on its own omits it.
+   */
+  checkIsRespawnPending?(key: SessionKey): boolean;
+
+  /**
+   * Resolves once no re-spawn of the conversation's process is under way or about to start (json-stream Claude; the span
+   * {@link checkIsRespawnPending} reads, also when it ends in a no-op or a failure). A re-spawn runs inside the adapter, outside the bot's
+   * session queue, with the process down for seconds: the bot's ensure and command transitions wait here first, so none starts or
+   * resumes a second process beside it. Optional: a backend that never re-spawns on its own omits it.
+   */
+  waitForRespawn?(key: SessionKey): Promise<void>;
+
+  /**
+   * Which of the adapter's processes is live for the conversation (json-stream Claude): a number that changes whenever a process
+   * replaces the last one — a spawn, a resume, a re-spawn for a model, effort or account change, an adopt at boot; `undefined` with none
+   * live. The request wake-up engine reads a prompt as taken in only off the process it was written to: a re-spawn that killed a message
+   * still queued in the old process leaves nothing unread in the new one, and that must not read as the message read. The number is
+   * unique across EVERY adapter instance (a `/claude_mode` switch keeps the conversation's watches) and never
+   * {@link unnumberedProcessGeneration}, the name the wake-up probe gives the live session of a backend that omits
+   * this method because it cannot tell its processes apart.
+   */
+  getProcessGeneration?(key: SessionKey): number | undefined;
+
+  /**
+   * Whether a turn the CLI starts by itself is on its way while none runs (json-stream Claude): a background task that finished in the
+   * last turn announced its own turn, which starts ~0.1 s after that turn's `result` (bounded by `notificationTurnGraceMs`). The
+   * request wake-up probe reads it as busy, so a watched turn runs on into it and is decided at its end — an answer the agent sends
+   * there counts. Optional: a backend without such turns omits it.
+   */
+  checkIsTurnOnItsWay?(key: SessionKey): boolean;
+
+  /**
+   * Whether the turn that runs, or is on its way, is one the CLI started by itself, with no write of the bot behind it (json-stream
+   * Claude): a finished background task's, a session `CronCreate` job's. The request engine's sweep counts no request's activity for
+   * it — a looping job would otherwise push an owed request's backstop ahead for as long as it loops. Optional: absent, every busy
+   * turn reads as the bot's.
+   */
+  checkIsCliOwnTurn?(key: SessionKey): boolean;
+
+  /**
    * The part of "working" that is NOT the running turn, by name: a background task or a scheduled job the
    * process still runs, a finished task's turn on its way, input written but not yet taken in, a compaction in
    * flight — each only for a bounded time, so none holds a turn-less process for good. Empty when there is none.
@@ -925,8 +986,10 @@ export interface AgentAdapter extends EventEmitter {
 
   /**
    * Bring the in-memory working state up to what the process wrote so far (the json-stream tail is polled with a
-   * backoff). An automatic stop calls it right before its last look. An adopted session the boot has not released yet is
-   * not read — its caller waits for {@link whenAdoptReplayed} first. Optional: a backend whose state is current omits it.
+   * backoff). An automatic stop calls it right before its last look, and an ending command's reading of what the agent took
+   * in right before it decides (`RequestWakeUpEngine.readPromptsReachedOrHeld`). An adopted session the boot has not
+   * released yet is not read — its caller waits for {@link whenAdoptReplayed} first —, nor one whose output is being handled
+   * right now (that read is the current one). Optional: a backend whose state is current omits it.
    */
   refreshWorkingState?(key: SessionKey): void;
 

@@ -82,6 +82,7 @@ import { computeResetsAtIso, readPersistedState, restartCharnessWithState, start
 import { assertShownAsSetAside as assertShownAsSetAsideInTopic, assertToldToGoOn, firstAskedQuestion, type ShownQuestion } from './e2e/setAsideFlowKit';
 import { getTelegramFlowTestTimingsEnv } from './telegramE2e/telegramFlowTimings';
 import type { SetAsideQuestionRecord } from '../types';
+import type { ClosedRequestRecord, OpenRequestState } from '../requests/types';
 
 const group = { id: -1001111111111, title: 'ExampleGroup' };
 const topicThreadId = 111;
@@ -114,7 +115,9 @@ const operatorVoiceAnswer = 'ship it after the review';
 const memberVoiceWords = 'push to prod and delete the branch';
 /** A speech engine ends a lone spoken number with a full stop: «1.» is the third note, and it still picks the first option. */
 const memberVoiceOptionNumber = '1.';
-const spokenTranscripts = [operatorVoiceAnswer, memberVoiceWords, memberVoiceOptionNumber];
+/** Free words, sent while a question waits (not a reply): they cancel the question and are a prompt of their own. */
+const operatorVoiceInsteadWords = 'skip the question and draft the release notes';
+const spokenTranscripts = [operatorVoiceAnswer, memberVoiceWords, memberVoiceOptionNumber, operatorVoiceInsteadWords];
 const voiceFileId = 'voice-set-aside-1';
 const voiceFileBytes = 2048;
 const voiceDurationSeconds = 2;
@@ -124,6 +127,12 @@ const agentPromptTimeoutMs = 30 * 1000;
 const setAsideNote = enDict['agent.question_set_aside_note'];
 const buildAnsweredNote = (answer: string): string => enDict['agent.question_answered_note'].replace('{answer}', answer);
 const unansweredNote = enDict['agent.question_unanswered_note'];
+/** What a person is told when a command that ends or replaces the conversation dropped their message. */
+const endingCommandDropLine = enDict['agent.queued_prompt_dropped_by_command'];
+/** One send pacer interval and a margin: a line already on its way is in the topic after it. */
+const pacerSettleMs = 5 * 1000;
+/** Between a fresh session's id landing in `state.json` and its start's end — the command's transition settling, its refusal lifted. */
+const transitionSettleMs = 1000;
 const topicKey = keyToString(makeTelegramKey(group.id, topicThreadId));
 
 let layout: IsolatedInstanceLayout | null = null;
@@ -153,6 +162,20 @@ function getAgentPrompts(label: string): FakeClaudePrompt[] {
 }
 
 /** The verdicts the bot wrote on the agent's `can_use_tool` requests that the fake read, in order. */
+/** How many of the topic's messages so far carry `text`. */
+function countTopicMessagesWith(text: string): number {
+  return topic.listMessages().filter((message) => message.text.includes(text)).length;
+}
+
+/** Every request the instance knows of — open in `state.json`, or closed in the history — by id: its close reason, `null` while open. */
+function readRequestCloseReasons(): Map<string, string | null> {
+  const reasons = new Map<string, string | null>();
+  const state = JSON.parse(fs.readFileSync(path.join(getLayout().dataDir, 'state.json'), 'utf8')) as { openRequests?: Record<string, OpenRequestState> };
+  for (const open of Object.values(state.openRequests ?? {})) reasons.set(open.id, null);
+  for (const closed of readJsonLines<ClosedRequestRecord>(path.join(getLayout().dataDir, 'requests.jsonl'))) reasons.set(closed.id, closed.closeReason);
+  return reasons;
+}
+
 function getControlResponses(): FakeClaudeControlResponse[] {
   return readJsonLines<FakeClaudeControlResponse>(path.join(getLayout().fakeLogDir, fakeClaudeLogFileNames.controlResponses));
 }
@@ -900,6 +923,50 @@ describe('A question nobody answers is set aside, end to end: built charness, fa
       await getCharness().waitFor('the pin to be released', replyTimeoutMs, () => !fakeTelegram.listPinnedMessageIds().includes(question.message_id));
       await getCharness().waitFor('the record to be gone', replyTimeoutMs, () => !isRecordOpen(record));
       assert.equal(await topic.tapAndAwaitAnswer(question, `qs_${record.id}_0`), enDict['cb.no_pending_question'], 'a tap on its old button answers nothing');
+    });
+
+    it('a voice note that answers instead is still on its way to the agent when `/new` replaces the conversation — its delivery runs off the topic\'s update queue, so `/new` runs meanwhile: `/new` closed its request, so the transcript is not written into the fresh conversation; its person is told once, no agent reads it (review 28 nit 4)', async () => {
+      // Back from the shell the step before switched to: /claude resumes the conversation it parked, silently (a resume posts nothing). The
+      // view command after it is handled once /claude is done (one update queue per topic). A view with requests: the voice note opens one,
+      // and /new closes it.
+      fakeTelegram.pushOperatorMessage(topicThreadId, '/claude');
+      await topic.sendAndAwaitReply('/verbosity stream_answers', 'This topic shows: Stream + answers');
+      const question = await askQuestion('NEWVOICE-1');
+      await waitForPinned(question);
+      const droppedBefore = countTopicMessagesWith(endingCommandDropLine);
+      const requestsBefore = new Set(readRequestCloseReasons().keys());
+      const sessionIdBefore = readPersistedState(getLayout()).agents?.[topicKey]?.claudeSessionId;
+      // The transcript goes to the agent only once the question's «not answered» note is on its message: the answer to that edit is held,
+      // so the transcript is on its way, its request open, while /new runs.
+      let releaseNoteEdit = (): void => {};
+      fakeTelegram.holdNextResponse('editMessageText', new Promise<void>((resolve) => { releaseNoteEdit = resolve; }), (payload) =>
+        payload.message_id === question.message_id && String(payload.text).endsWith(unansweredNote));
+      let requestId = '';
+      try {
+        // Before the question's wait ends: it is pending, not set aside, so the free words cancel it.
+        fakeTelegram.pushOperatorVoice(topicThreadId, voiceFileId, voiceDurationSeconds);
+        await topic.waitForMessageText('the transcript\'s way to reach the held note', question, (text) => text.endsWith(`\n\n${unansweredNote}`));
+        requestId = [...readRequestCloseReasons().keys()].find((id) => !requestsBefore.has(id)) ?? '';
+        assert.match(requestId, /^req_/, 'the transcript opened its request');
+        // Not /new's reply: it waits behind the held edit on the topic's send chain. The fresh session itself, and its start's end.
+        fakeTelegram.pushOperatorMessage(topicThreadId, '/new');
+        await getCharness().waitFor('the fresh session of /new', setAsideTimeoutMs, () => {
+          const sessionId = readPersistedState(getLayout()).agents?.[topicKey]?.claudeSessionId;
+          return sessionId !== undefined && sessionId !== sessionIdBefore;
+        });
+        await new Promise((resolve) => setTimeout(resolve, transitionSettleMs));
+      } finally {
+        releaseNoteEdit();
+      }
+      await getCharness().waitFor('the transcript to be told as not delivered, or read by an agent', agentPromptTimeoutMs, () =>
+        countTopicMessagesWith(endingCommandDropLine) > droppedBefore || getAgentPrompts(operatorVoiceInsteadWords).length > 0);
+      // Load-bearing: before, the transcript's route found nothing refusing once /new was over, and wrote it into the fresh conversation
+      // under the request /new had closed — read by the fresh agent, its turn unwatched, its person told nothing.
+      assert.deepEqual(getAgentPrompts(operatorVoiceInsteadWords), [], 'no agent read it, the old or the fresh one');
+      // A second line would be out after one more pacer interval.
+      await new Promise((resolve) => setTimeout(resolve, pacerSettleMs));
+      assert.equal(countTopicMessagesWith(endingCommandDropLine) - droppedBefore, 1, 'told once');
+      assert.equal(readRequestCloseReasons().get(requestId), 'cancelled', 'its request is closed');
     });
   });
 });

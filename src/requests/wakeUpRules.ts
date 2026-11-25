@@ -1,4 +1,12 @@
 import type { OpenRequestState, OpenRequestUpdate, RequestAlertReason, RequestWakeUpReason } from './types';
+import {
+  checkIsAnswerOwed,
+  checkIsHeldBetweenTurns,
+  checkIsUnansweredFireRequest,
+  checkIsWaitingAtTurnEnd,
+  checkIsWaitingBetweenTurns,
+  type RequestScheduleWait,
+} from './scheduleWait';
 import { getMinutesOverrideMs } from '../utils/minutesOverride';
 
 /**
@@ -22,6 +30,15 @@ import { getMinutesOverrideMs } from '../utils/minutesOverride';
  * blocked on something that is not a turn end (a pending native question, a
  * compaction, an armed API-error retry or usage-limit wait). After the alert or
  * the cap nothing wakes the request again until it closes or is superseded.
+ *
+ * A request WAITS FOR ITS SCHEDULE while a job armed under it counts (`scheduleWait.ts`): the agent that launched a worker,
+ * armed its watch and ended its turn is not prodded — at the end of a watched turn it is not silent while the request owes nobody
+ * an answer (counter 0, no follow-up, no wake), between turns and at a restart nothing wakes the request while a watch that is not
+ * failing holds it and it owes nobody an answer. What a request owes (`checkIsAnswerOwed`) is read from the persisted request,
+ * never from the kind of the turn; the owed reading plus the schedule wait decide, and the one turn input is a SCHEDULED RUN: its
+ * turn that ends without an answer is not silent either, while nothing is owed — a woken agent with nothing to report stays quiet.
+ * A scheduler fire is never a wake-up of these rules, so it never counts against the cap. The complete table is
+ * `src/requests/README.md` § Wake-ups.
  */
 
 /** Silent turns in a row that make the rules give up. */
@@ -83,9 +100,26 @@ export interface SessionTurnProbe {
   /**
    * A pending native question, a compaction, an armed retry / limit wait, a
    * wedged-turn recovery in flight, a retry whose "continue" nudge is on its way,
-   * or a session start under way.
+   * an API error the bot still handles, a re-spawn, or a session start under way.
    */
   isTurnEndBlocked: boolean;
+  /**
+   * The busy session runs, or is about to start, a turn the CLI started by itself — a finished background task's, a session job's —
+   * that no write of the bot started (`AgentAdapter.checkIsCliOwnTurn`): its busy time is no request's activity. Absent: the bot's
+   * own turn, or a backend that cannot tell.
+   */
+  isCliOwnTurn?: boolean;
+  /**
+   * The live process a prompt written now goes to (`AgentAdapter.getProcessGeneration`; `unnumberedProcessGeneration` (`types.ts`) on a backend
+   * that cannot tell its processes apart). Absent while a start's or a stop's window is open (a prompt forwarded then waits in the
+   * buffer, for the process the replay writes it to) or with no live process.
+   */
+  processGeneration?: number;
+  /**
+   * A start's or a stop's window is open: a prompt forwarded now waits in its buffer, for the process its replay writes it to. Absent
+   * without one. It tells a prompt that waits for its replay from one whose process went down after its write (review 22 nit 2).
+   */
+  isWindowOpen?: boolean;
 }
 
 /**
@@ -97,6 +131,14 @@ export type WakeUpDecision =
   | { kind: 'none' }
   | { kind: 'wake'; reason: RequestWakeUpReason; update: OpenRequestUpdate }
   | { kind: 'followUpLater'; update: OpenRequestUpdate }
+  /**
+   * The turn ended without anything to do about the request (it waits for its schedule, or a scheduled run had nothing to report):
+   * bookkeeping only. `isRequestSettled` — the request is the scheduler's (a Telegram topic's `scheduledRun`) and the agent NEVER
+   * answered it (`checkIsUnansweredFireRequest`): nobody was told anything and nothing waits for it, so it closes silently instead of
+   * waiting for the backstop — at the end of ANY turn of it. One the agent answered `progress` is no such request: the operator was told
+   * «working on it».
+   */
+  | { kind: 'quiet'; update: OpenRequestUpdate; isRequestSettled?: boolean }
   | { kind: 'alert'; reason: RequestAlertReason; update: OpenRequestUpdate };
 
 /**
@@ -132,17 +174,89 @@ function getWakeOrCapDecision(
 }
 
 /**
+ * @name TurnEndContext
+ * @description What the end of a watched turn is read against besides the request: whether the turn was a scheduled run's,
+ * and the request's reading of its armed jobs (absent: it waits for nothing). `isRequestJob` — for a scheduled run's turn: the fire's
+ * job is armed under the request (absent: it is). A fire of ANOTHER job only rode the request: it may end quietly, but it did not handle
+ * the request's fired watch (`armed` does not count for it) and is not the request's activity (its quiet end changes nothing).
+ */
+export interface TurnEndContext {
+  isScheduledRun?: boolean;
+  isRequestJob?: boolean;
+  scheduleWait?: RequestScheduleWait;
+  /** The follow-up delay after a progress note, in place of {@link progressFollowUpDelayMs} (a test instance's shorter one). */
+  progressFollowUpMs?: number;
+}
+
+/**
  * @description The decision at the end of a turn the request's message started.
  * `progressCountAtTurnStart` is the request's progress-answer count when the
  * turn began, so an increase means this turn sent a progress note (a `question`
  * or `final` would have closed the request — there is nothing to decide then).
+ * A progress note schedules the follow-up unless a watch holds the request between turns (`watching`; then nothing is scheduled — a
+ * watch that fired and was not re-armed, `armed`, holds nothing, so a note in its own fire's turn is followed up too). A turn
+ * without an answer is not silent when the turn was a scheduled run's, or when the request waits for its schedule, and in both
+ * cases only while the request owes nobody an answer (`checkIsAnswerOwed`, read from the persisted request — never from the kind of
+ * the turn, so a lost and rebuilt watch decides alike): a requester's message is never left unanswered because a watch is armed or
+ * an alarm fired, and the reminder that follows its silent turn keeps counting towards the give-up. A fire's turn on a request that
+ * owes an answer is therefore an ordinary silent turn: the reminder names the request, and a second silence gives up.
+ * A fire of ANOTHER job that only rode the request (`isRequestJob` false) ends quiet the same way, but the request's watch that fired is
+ * not handled by it and its quiet end is no activity of the request: the follow-up and the backstop stand (decision 28's principle).
+ * The scheduler's request (`origin.kind` `scheduledRun`) that its agent NEVER answered (`checkIsUnansweredFireRequest`) ends quiet and
+ * settles (`isRequestSettled`) at the end of ANY of its turns without an answer — its fire's, a reminder's, a «continue»'s: nobody was told
+ * anything, and nobody is owed its answer. Once answered it is read like any request: a fire's turn on it may end quietly, any other
+ * silent turn is a silent turn. The turn's kind comes from the forward (`isScheduledRun`), never from the request.
  */
-export function decideTurnEnd(request: OpenRequestState, progressCountAtTurnStart: number, nowMs: number): WakeUpDecision {
+export function decideTurnEnd(
+  request: OpenRequestState,
+  progressCountAtTurnStart: number,
+  nowMs: number,
+  context: TurnEndContext = {},
+): WakeUpDecision {
   if (checkIsWakingStopped(request)) return { kind: 'none' };
-  if (request.progressAnswerCount > progressCountAtTurnStart) {
+  const isProgressSent = request.progressAnswerCount > progressCountAtTurnStart;
+  const isOtherJobFire = context.isScheduledRun === true && context.isRequestJob === false;
+  const scheduleWait = context.scheduleWait ?? 'none';
+  const isWaitingForSchedule = checkIsWaitingAtTurnEnd(scheduleWait, context.isScheduledRun === true && !isOtherJobFire);
+  // A progress note is followed up unless a watch HOLDS the request between turns (`watching`). `armed` excuses the fire's turn a
+  // no-answer end only: a note leaves no silence to excuse, and a watch that fired and was not re-armed wakes nobody again — without
+  // the follow-up only the 90-minute backstop would be left (as for a person's turn under `armed`, row 1).
+  // A progress note answers the reminders before it: the loop guard's count starts again with the silent-turn count.
+  if (isProgressSent && !checkIsWaitingBetweenTurns(scheduleWait)) {
     const answeredUpdate: OpenRequestUpdate = { silentTurnCount: 0, wakeCount: 0, lastTurnActivityAt: nowMs };
     if (nowMs - request.createdAt >= progressFollowUpMaxAgeMs) return { kind: 'followUpLater', update: { ...answeredUpdate, nextWakeAt: undefined } };
-    return { kind: 'followUpLater', update: { ...answeredUpdate, nextWakeAt: nowMs + progressFollowUpDelayMs } };
+    return {
+      kind: 'followUpLater',
+      update: { ...answeredUpdate, nextWakeAt: nowMs + (context.progressFollowUpMs ?? progressFollowUpDelayMs) },
+    };
+  }
+  // A request that owes a person an answer (a silent turn pending, a person's words not answered yet, a person's request never
+  // answered): its turn ends silent whatever the turn's kind — a person's own, the reminder's that follows, a continuation of either —
+  // or a watch that passes would wipe the count and the rules would never give up on a requester left unanswered. The answer is read
+  // from the persisted request, so the same turn decides alike whether or not the engine's watch survived a restart.
+  const isOwed = checkIsAnswerOwed(request);
+  const isQuietWhileWaiting = isWaitingForSchedule && !isOwed;
+  // The follow-up is cleared only where a schedule holds the request. A fire's quiet end alone leaves it: a fire may ride a request
+  // that waits for nothing (its own job's request is gone), and an unrelated alarm must not wipe that request's due follow-up.
+  const isHeldBySchedule = isProgressSent || isQuietWhileWaiting;
+  // A fire's turn is the alarm's: a woken agent with nothing to report may stay silent — but not about a person's words it still
+  // owes an answer to. Each fire's quiet end would also push the backstop 90 minutes ahead, and a recurring job would leave the
+  // requester unanswered for as long as it lives. The scheduler's request the agent never answered ends quiet whatever the turn.
+  const isUnansweredFireRequest = checkIsUnansweredFireRequest(request);
+  if (isHeldBySchedule || ((context.isScheduledRun === true || isUnansweredFireRequest) && !isOwed)) {
+    // Another job's fire that sent nothing is no activity of this request: its follow-up and backstop stand. Nothing is owed here,
+    // so the silent-turn count is already 0.
+    const isRequestUntouched = isOtherJobFire && !isProgressSent;
+    return {
+      kind: 'quiet',
+      update: isRequestUntouched ? {} : {
+        lastTurnActivityAt: nowMs,
+        silentTurnCount: 0,
+        ...(isProgressSent ? { wakeCount: 0 } : {}),
+        ...(isHeldBySchedule ? { nextWakeAt: undefined } : {}),
+      },
+      ...(isUnansweredFireRequest ? { isRequestSettled: true } : {}),
+    };
   }
   const silentTurnCount = request.silentTurnCount + 1;
   if (silentTurnCount >= maxSilentTurns) {
@@ -155,13 +269,17 @@ export function decideTurnEnd(request: OpenRequestState, progressCountAtTurnStar
  * @description The periodic decision for an open request whose turn is NOT being
  * watched: a due progress follow-up, or the backstop. Never while the session is
  * working or blocked — and a live turn counts as activity, which pushes the
- * backstop back (the caller records it).
+ * backstop back (the caller records it). Nothing either while the request is held
+ * by a watch that is not failing and owes nobody an answer (`checkIsHeldBetweenTurns`): the watch wakes the agent, a
+ * follow-up would only prod it; a post retry still runs (the agent never saw the request); a request that owes a person
+ * an answer — its turn's watch lost to a restart or a dead process — is taken back by the backstop as without a watch.
  */
 export function decideUnwatchedRequest(
   request: OpenRequestState,
   probe: SessionTurnProbe,
   nowMs: number,
   backstopMs: number,
+  scheduleWait: RequestScheduleWait = 'none',
 ): WakeUpDecision {
   if (checkIsWakingStopped(request) || probe.isBusy || probe.isTurnEndBlocked) return { kind: 'none' };
   if (request.nextPostRetryAt !== undefined) {
@@ -170,6 +288,7 @@ export function decideUnwatchedRequest(
       ? { kind: 'wake', reason: 'postRetry', update: { nextPostRetryAt: undefined, lastTurnActivityAt: nowMs } }
       : { kind: 'none' };
   }
+  if (checkIsHeldBetweenTurns(request, scheduleWait)) return { kind: 'none' };
   if (request.nextWakeAt !== undefined) {
     return nowMs >= request.nextWakeAt ? getWakeOrCapDecision(request, 'progressFollowUp', {}) : { kind: 'none' };
   }
@@ -181,13 +300,27 @@ export function decideUnwatchedRequest(
 
 /**
  * @description The wake of an open request whose conversation's process was found gone (`restarted`): at once, not at
- * the backstop. Nothing when the request already has its own next step — a post retry or a progress follow-up — or
- * nothing may wake it, or the session is working or blocked (a pending question, an armed retry or usage-limit wait, a
- * start under way). It counts against the wake-up cap like any wake, and is seen activity: the backstop counts from it.
+ * the backstop. Nothing when the request already has its own next step — a post retry, or a progress follow-up that can fire (one a
+ * passing watch holds never fires, so it is no next step: a lost-work loss still wakes the request) — or nothing may wake it, or the session is working or blocked (a pending question, an armed retry or usage-limit wait, a
+ * start under way), or a watch that is not failing holds it while it owes nobody an answer (`checkIsHeldBetweenTurns`: a BOOT
+ * wakes nobody then, as in a topic). `isLostWork` — the process ended with the agent's OWN work pending (a build, a scheduled job it
+ * had running) — is a different event: a topic resumes on it whatever is armed, so the hold does not apply and the request is woken
+ * once, the lost-work note riding the wake.
+ * It counts against the wake-up cap like any wake, and is seen activity: the backstop counts from it.
  */
-export function decideRestartWake(request: OpenRequestState, probe: SessionTurnProbe, nowMs: number): WakeUpDecision {
+export function decideRestartWake(
+  request: OpenRequestState,
+  probe: SessionTurnProbe,
+  nowMs: number,
+  scheduleWait: RequestScheduleWait = 'none',
+  isLostWork = false,
+): WakeUpDecision {
   if (checkIsWakingStopped(request) || probe.isBusy || probe.isTurnEndBlocked) return { kind: 'none' };
-  if (request.nextPostRetryAt !== undefined || request.nextWakeAt !== undefined) return { kind: 'none' };
+  // The request's own next step: a post retry (it always runs), a follow-up only while it can fire — a passing watch that holds the
+  // request keeps a pending follow-up from ever firing (`decideUnwatchedRequest`), so it must not keep the lost-work wake away either.
+  const isHeld = checkIsHeldBetweenTurns(request, scheduleWait);
+  if (request.nextPostRetryAt !== undefined || (request.nextWakeAt !== undefined && !isHeld)) return { kind: 'none' };
+  if (!isLostWork && isHeld) return { kind: 'none' };
   return getWakeOrCapDecision(request, 'restarted', { lastTurnActivityAt: nowMs });
 }
 
@@ -205,6 +338,22 @@ export interface WatchedTurn {
   hasSeenOutput: boolean;
   /** The turn carries the request's own prompt (not a reminder or a "continue" nudge) — R21. */
   isRequestPrompt: boolean;
+  /** A scheduler fire started the turn: ending it without an answer is not silence (a woken agent with nothing to report) while nothing is owed. */
+  isScheduledRun?: boolean;
+  /**
+   * The turn is the request's OWN (absent: it is): `false` only for a fire of another job that only rides the request — no person's
+   * words, reminder or own job's fire joined it. Such a turn neither handles the request's fired watch nor counts as its activity.
+   */
+  isRequestJob?: boolean;
+  /**
+   * The process the request's prompt was written to (`SessionTurnProbe.processGeneration`), named by the forward that carried it — a
+   * merge that carries it again names the process of that write, one that does not keeps it. Absent while the prompt waits in a start's
+   * or a stop's buffer: the replay's write names it (`RequestWakeUpEngine.noteReplayedWrite`). A request-prompt watch with none named
+   * while the probe names a process has not reached any process (its buffer was dropped): its input reads not taken in
+   * ({@link checkIsTurnInputConsumed}). A prompt written to a backend that cannot number its processes names
+   * `unnumberedProcessGeneration` (`types.ts`), so it never reads as unwritten once a numbering backend takes the conversation over.
+   */
+  writtenToProcess?: number;
 }
 
 /**
@@ -221,11 +370,22 @@ export interface WatchedTurn {
 export type WatchedTurnState = 'running' | 'ended' | 'sessionGone';
 
 /**
+ * @description Whether a watch's request prompt has reached no process: it names none while the backend names its live one — it waits
+ * in a startup window still (its replay names it), or that window dropped it. Nothing the live process lists or does is about it.
+ */
+export function checkIsPromptNeverWritten(turn: WatchedTurn, probe: SessionTurnProbe): boolean {
+  return turn.isRequestPrompt && turn.writtenToProcess === undefined && probe.processGeneration !== undefined;
+}
+
+/**
  * @description Has the backend taken in what was forwarded for this turn? Its own
  * signal when it has one (nothing written is still unread), else busy or output
- * seen since the forward.
+ * seen since the forward. A request prompt that never reached a process
+ * ({@link checkIsPromptNeverWritten}) is not taken in, so the turn is not decided and R21
+ * marks nothing (the stale drop and the backstop re-post it).
  */
 export function checkIsTurnInputConsumed(turn: WatchedTurn, probe: SessionTurnProbe): boolean {
+  if (checkIsPromptNeverWritten(turn, probe)) return false;
   return probe.hasUnconsumedInput === null ? turn.hasSeenBusy || turn.hasSeenOutput : !probe.hasUnconsumedInput;
 }
 

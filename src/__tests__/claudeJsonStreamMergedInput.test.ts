@@ -124,12 +124,15 @@ describe('json-stream adapter — what the CLI took in is no longer "unconsumed"
     assert.deepEqual(session.unconsumedInputs.map((pending) => pending.text), ['QUEUED-A']);
   });
 
-  it('an error result forgets the queue (a limit may never echo it): kept from the earlier reconciliation', async () => {
+  it('an error result keeps the queue — the CLI runs it as its next turn (measured on 2.1.330) — and the grace still bounds a message it never echoes (review 17 #1)', async () => {
     const { adapter, session } = createAdapter();
     await adapter.sendInputAndWait(key, 'QUEUED-A');
     await adapter.sendInputAndWait(key, 'QUEUED-B');
     adapter['onStdout'](session, resultFrame(true));
-    assert.equal(session.unconsumedInputs.length, 0);
+    assert.deepEqual(session.unconsumedInputs.map((input) => input.text), ['QUEUED-A', 'QUEUED-B']);
+    assert.equal(adapter.checkHasUnconsumedInput(key), true);
+    nowMs += unconsumedInputGraceMs;
+    assert.equal(adapter.checkHasUnconsumedInput(key), false, 'never echoed: it holds nothing past the grace');
   });
 });
 

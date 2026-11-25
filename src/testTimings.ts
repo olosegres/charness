@@ -6,7 +6,7 @@ import { jiraPollIntervalMinSeconds } from './connectors/jira/config';
 import { bindPickerClaimLimit } from './connectors/telegram/bindPickerClaims';
 import { globalSendIntervalMs, telegramSendOperationDeadlineMs } from './rateLimiter';
 import { restartWakeStaggerMs, unwatchedSweepMs, watchedTurnPollMs } from './requests/wakeUpEngine';
-import { postRetryDelaysMs } from './requests/wakeUpRules';
+import { postRetryDelaysMs, progressFollowUpDelayMs } from './requests/wakeUpRules';
 import { busyPollIntervalMs, waitIdleTimeoutMs } from './postToSession';
 import { DEFAULT_SAVE_DEBOUNCE_MS } from './state';
 import { pendingWorkHoldDefaultMs } from './utils/jsonStreamPendingWork';
@@ -33,7 +33,7 @@ import { runnerWaitPollMinMs, runnerWaitPollMs } from './remoteRun/runnerWaitTim
  * @description The ONE test-only timing seam: `CHARNESS_TEST_TIMINGS`, a JSON object of named overrides for the
  * production windows the process-level flows would otherwise wait out in real time (the Telegram send pacer's 2 s, a send
  * queue call's 30 s deadline, the
- * Jira poll's 10 s floor, the wake-up engine's 10 s turn poll and its sweep's minute, the first re-post retry's minute, the 30 s stagger of the wakes after a restart, the two-minute probe of an
+ * Jira poll's 10 s floor, the wake-up engine's 10 s turn poll and its sweep's minute, the first re-post retry's minute, the 15 minutes before a progress note is followed up, the 30 s stagger of the wakes after a restart, the two-minute probe of an
  * unconfirmed usage limit, `state.json`'s save debounce, the OpenCode server's 60 s of retries, the 6 h pending-work hold, the 300 ms to the first read of an adopted json-stream session's output, the 15-minute gap of a passing check's status lines, the
  * todo reminder's 10 s poll and its interval, the limit reminder's interval and the quiet period and floor of its change summary, the 24 h between two rechecks of a used-up API credit and the 30 min poll that finds one due, the 45 s heartbeat lease of a foreground `charness remote-run` and its 10 s poll while it waits for a paired runner, and — a count, not a window —
  * the 200 `/bind` picker claims, the question wait — how long an unanswered agent question waits before it is set aside —, the 5 s / 10 min a prompt the bot delivers waits for a busy session, and the four windows of a topic's status mark: the 20 s a name holds before it is written (a turn runs that long before its ⏳ shows), the 60 s between two renames, the 5-minute sweep and the 5 s the boot's wave waits). It is NOT a setting: no
@@ -70,6 +70,8 @@ const testTimingsSchema = z.strictObject({
   requestSweepIntervalMs: createShorterWindowSchema(unwatchedSweepMs).optional(),
   /** The first retry of a request whose prompt could not be posted (production: `postRetryDelaysMs[0]`, 1 min). */
   requestFirstPostRetryDelayMs: createShorterWindowSchema(postRetryDelaysMs[0]).optional(),
+  /** How long after a progress note the wake-up engine reminds the agent (production: `progressFollowUpDelayMs`, 15 min). */
+  progressFollowUpMs: createShorterWindowSchema(progressFollowUpDelayMs).optional(),
   /** The gap between two wakes of tracker requests whose process was found gone, and before the first (production: `restartWakeStaggerMs`, 30 s). */
   requestRestartWakeStaggerMs: createShorterWindowSchema(restartWakeStaggerMs).optional(),
   /** The short retry that probes an unconfirmed usage limit (production: `unconfirmedLimitProbeDelayMs`, 2 min). */

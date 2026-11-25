@@ -342,6 +342,44 @@ that left the handed state — one may date from before `operatorIssue` was set)
 issue gone. A hand-over, a comment or a mention on it reaches no agent. Without `operatorIssue` the alerts reach only the bot's log (`[accounts] …`;
 the boot says so once).
 
+## Scheduled runs and watches in an issue's conversation (`../../scheduler/`, `../../requests/scheduleWait.ts`)
+
+An agent in an issue has the same `schedule_create` / `schedule_list` / `schedule_cancel` as a Telegram topic (the bot MCP offers them
+to a Jira conversation: no `threadKey` — its token names the issue — no `isPinSilent`), including the worker-watch recipe, so after
+launching a worker and arming its watch it answers `progress` and ENDS its turn instead of polling for hours. The bot stops the idle
+process; the watch (bot-side, restart-safe, in `state.json` `schedules` under the issue's key) resumes the issue's own session when the
+worker finishes, goes silent or runs 2 h 30 min without a report. A new comment on the issue still reaches the agent at the connector's next poll of the issue, asleep or not, as an issue
+update into the resumed session; while a turn runs it waits up to 10 minutes for it to end (`postToSession`), then joins it.
+
+- **Nothing of it is shown on the issue.** A Jira comment always notifies the requester and the issue's watchers — there is no silent
+  one — so a fire posts no announcement, a check no alert and no «back to normal» line, a status argument no status line: the
+  scheduler's delivery has no feed for a tracker conversation (`ScheduleDeliveryDeps.trackerRun`). The agent writes in the issue only
+  through `answer_request`, and a woken agent with nothing to report stays silent — the bot never prods it for that, unless the request still owes
+  the requester an answer (a comment left unanswered is reminded and given up on even by a fire's turn: `../../requests/README.md` row 13).
+- **A fire rides the open request, opens none.** Its prompt starts with a header naming the request it rides (the one the job was armed
+  under — `ScheduleRecord.requestId`, recorded by `schedule_create`: the request the agent was working on, not a newer mention of another person — or the open one that replaced it, else the newest open one) or
+  saying «no request is open» and naming the finished request (a request that still owes the requester an answer says so, and asks for it
+  in this turn): an `answer_request` to that one still becomes a comment but hands
+  nothing back, so the agent answers only what the requester must know and cancels a job that served only that request. The issue key
+  and link (`JiraConnector.describeConversation`) are in the header, so a session that started fresh knows where it is. The turn the
+  fire starts is watched as that request's scheduled run. No job is cancelled when its request closes (as in a topic): «check the
+  deploy tomorrow» must survive the final answer.
+- **The request waits for its watch.** An open request with an armed watch that owes nobody an answer is not reminded every 15 minutes,
+  not woken at a bot restart (a process that died with the agent's OWN work pending is woken once, with the lost-work note) and not
+  given up on after ten wake-ups; a requester's comment left unanswered still is — also after a restart,
+  and also when it was held over a usage-limit wait or an alarm fires meanwhile. The task-agent slot stays held, because the issue IS being
+  worked on (`../../requests/README.md` § Wake-ups, the rule table). A passing recurring job armed under a request keeps it waiting for as long as it lives, and the issue's slot held:
+  guidance, not code — an agent that arms a watchdog meant to outlive the work (a health check, a daily job) answers `final` afterwards;
+  the job keeps running and its fires say «no request is open», or ride the request open at the time (a later hand-over, a mention: the
+  header names it, and the agent answers it only with what its requester must know). The tool description and the orchestration skill say so.
+- **Fires and the task-agent cap.** A scheduled fire resumes the issue's agent whether or not the issue holds a slot (after the hand-over's
+  final answer, during a mention-only request) and is never held by `taskAgents.maxConcurrent`: the cap bounds hand-overs, as a Telegram
+  topic's fires have no concurrency cap either (`../../trackers/README.md`). The slot of an issue whose request waits for its watch stays held.
+- **Paused jobs.** A fire that finds no usable folder pauses the job with a log line (nothing is posted); the next request of the issue
+  whose `bindConversation` finds the folder usable resumes it — next run from now, a passed one-shot dropped — as `/bind` does in a topic.
+- `send_messages_to_user` stays Telegram-only: several comments are `answer_request` progress notes, and a second path to the issue would
+  bypass the answer rules (hand-back, reply threads, the accounts note).
+
 ## Possible next steps
 
 **Operator commands on the operator issue** (not implemented — a design note). The operator issue could take a few commands typed as a

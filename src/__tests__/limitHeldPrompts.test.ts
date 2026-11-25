@@ -95,11 +95,11 @@ describe('getTextWithHeldPrompts / getHeldPromptsText', () => {
 
 describe('getLimitResumeMessage', () => {
   it('the "continue" nudge resumes the interrupted turn — held prompts ride it, they never replace it', () => {
-    assert.deepEqual(getLimitResumeMessage({ continueNudge: 'continue', untakenRequestPrompt: undefined }), { text: 'continue', isRequestPrompt: false });
+    assert.deepEqual(getLimitResumeMessage({ continueNudge: 'continue', untakenRequestPrompts: undefined }), { text: 'continue', carriedRequestIds: [] });
   });
 
-  it('a request whose prompt never reached the agent gets that prompt instead (R21)', () => {
-    assert.deepEqual(getLimitResumeMessage({ continueNudge: 'continue', untakenRequestPrompt: 'req' }), { text: 'req', isRequestPrompt: true });
+  it('a request whose prompt never reached the agent gets that prompt instead (R21), naming the requests it carries', () => {
+    assert.deepEqual(getLimitResumeMessage({ continueNudge: 'continue', untakenRequestPrompts: { text: 'req', requestIds: ['req_1'] } }), { text: 'req', carriedRequestIds: ['req_1'] });
   });
 });
 
@@ -256,7 +256,7 @@ describe('the bot holds and releases them (R23)', () => {
     assert.match(texts, /const time = `\$\{formatLocalClockWithDateIfNotToday\([^`]+\)\}\$\{zoneSuffix\}`;/);
   });
 
-  it('a held Jira request is watched when its prompt is posted, not when it was held', () => {
-    assert.match(getFunction('function createJiraSessionDeps('), /if \(!posted\.isHeld\) await requestWakeUpEngine\?\.trackForwardedTurn\(key, requestId, \{ isRequestPrompt: true \}\);/);
+  it('a held Jira request is watched when its prompt is posted, not when it was held — through the tracker turn poster (trackerTurnPoster.test.ts runs it)', () => {
+    assert.match(getFunction('function createJiraSessionDeps('), /\.\.\.createTrackerTurnPoster\(\{\n\s+post: \(key, prompt, options\) => postToSession\(sessionPostDeps, keyToString\(key\), prompt, adapterName, options\),/);
   });
 });

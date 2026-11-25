@@ -87,6 +87,9 @@ export function getTopicRequestOrigin(intake: TopicRequestIntake): RequestOrigin
  * who wrote the message when that is not the operator (`topic member "Alice Smith"
  * (@alice)`, from `MessageContext.nonOperatorSender`), so the request is never
  * read as the operator's own.
+ * A scheduled run's request (the scheduler's own, `src/requests/README.md` § Scheduled runs) asks for an answer only with a result,
+ * as the header of a request a fire rides does, and names nothing it replaced: a woken agent with nothing to report stays silent,
+ * and in a view with answers every answer is pinned, which notifies.
  */
 export function buildTopicRequestHeader(
   requestId: string,
@@ -100,6 +103,7 @@ export function buildTopicRequestHeader(
     originDescription: `${topicRequestOriginDescriptions[source]}${sender ? ` from ${sender}` : ''}`,
     isPlainTextHidden: !checkIsStreamShown(view),
     supersededRequestIds,
+    isAnswerOnlyWithResult: source === 'scheduledRun',
   });
 }
 

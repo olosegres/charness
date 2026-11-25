@@ -27,7 +27,7 @@ import {
   type TopicRequestSource,
 } from '../utils/topicRequest';
 import { requestRequesterAttribute } from '../requests/requestGroup';
-import { getWakeUpMessage, joinPromptsNotTakenIn } from '../requests/requestHeader';
+import { getPromptsNotTakenIn, getWakeUpMessage } from '../requests/requestHeader';
 import type { OpenRequestState } from '../requests/types';
 import { getPromptWithMessageContext } from '../utils/messageContext';
 
@@ -115,6 +115,25 @@ describe('buildTopicRequestHeader', () => {
     assert.doesNotMatch(buildTopicRequestHeader('req_abc', 'text', 'streamAnswers'), / from topic member| from group member/);
   });
 
+  it('a scheduled run\'s request asks for an answer only with a result — never «final … at the end of your turn», never «say briefly that the answer is above»: a woken agent with nothing to report stays silent', () => {
+    for (const view of ['answers', 'streamAnswers'] as const) {
+      const header = buildTopicRequestHeader('req_run', 'scheduledRun', view, ['req_givenUp']);
+      const lines = header.split('\n');
+      assert.equal(lines[0], '[Request req_run · from: a scheduled run in this topic]', view);
+      assert.equal(lines[1], 'Answer it through answer_request (requestId "req_run") only when you have a result the requester needs.', view);
+      assert.equal(lines[2], answerStyleInstruction, view);
+      assert.doesNotMatch(header, /kind "final" with the full result at the end of your turn/, view);
+      assert.doesNotMatch(header, /replaces|answer is above/, `${view}: the only request it replaces is one the bot gave up on — nothing of it is repeated`);
+      assert.ok(header.endsWith('\n\n'), view);
+    }
+    assert.match(buildTopicRequestHeader('req_run', 'scheduledRun', 'answers'), /does not see your plain text output or your thinking/, 'the answers-only sentence stays');
+    // The kept prompt — what an R21 re-post sends again — has the same header.
+    const kept = buildTopicRequestPrompt({ requestId: 'req_run', source: 'scheduledRun', view: 'answers', supersededRequestIds: ['req_givenUp'], promptBody: '[Scheduled run "hourly"]\ncheck' });
+    assert.equal(kept, `${buildTopicRequestHeader('req_run', 'scheduledRun', 'answers')}[Scheduled run "hourly"]\ncheck`);
+    // A person's request keeps the plain «answer it».
+    assert.match(buildTopicRequestHeader('req_abc', 'schedule', 'answers'), /kind "final" with the full result at the end of your turn/);
+  });
+
   it('every entry point has its own description', () => {
     const descriptions = new Set(sources.map((source) => /from: ([^\]]+)\]/.exec(buildTopicRequestHeader('req_abc', source, 'answers'))?.[1]));
     assert.equal(descriptions.size, sources.length);
@@ -158,13 +177,13 @@ describe('the prompt a topic request keeps', () => {
   it('a forwarded message re-posted from the ledger still carries its mark — a replay never turns it into the operator\'s own words', () => {
     const body = getPromptWithMessageContext(forwardedWords, { context: { block: forwardedMark, isForwarded: true }, isShellInput: false });
     const request = createUntakenRequest(body);
-    for (const replayed of [joinPromptsNotTakenIn([request]), getWakeUpMessage(request, 'postRetry').text]) {
+    for (const replayed of [getPromptsNotTakenIn([request])?.text, getWakeUpMessage(request, 'postRetry').text]) {
       assert.ok(replayed?.endsWith(`${forwardedMark}\n\n${forwardedWords}`), `the replayed prompt keeps the mark ahead of the words:\n${replayed}`);
     }
   });
 
   it('a reply re-posted from the ledger keeps its quote too', () => {
     const body = getPromptWithMessageContext('why?', { context: { block: quoteBlock, isForwarded: false }, isShellInput: false });
-    assert.ok(joinPromptsNotTakenIn([createUntakenRequest(body)])?.endsWith(`${quoteBlock}\n\nwhy?`));
+    assert.ok(getPromptsNotTakenIn([createUntakenRequest(body)])?.text.endsWith(`${quoteBlock}\n\nwhy?`));
   });
 });

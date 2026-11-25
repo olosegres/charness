@@ -199,7 +199,11 @@ that names the key, hints at the nearest allowed one (`filePath` → `path`) and
 keys, instead of being dropped unseen. It exposes:
 
 - `schedule_create` / `schedule_list` / `schedule_cancel` — the agent-side
-  scheduling API behind `/schedule`;
+  scheduling API behind `/schedule`, offered in Telegram topics and Jira issues alike. In an issue the tools have no `threadKey`
+  (the session's token names the issue), and the bot posts nothing there for a scheduled run, a check or a status — a Jira
+  comment always notifies the requester and the issue's watchers: a fire resumes the issue's own session behind a header that
+  names the open request it rides, so an agent can launch a worker, arm its watch, answer `progress` and end its turn
+  (see `src/connectors/jira/README.md`, «Scheduled runs and watches in an issue's conversation»);
 - `todo_update` / `todo_read` — the agent's published todo list (see [Shared todo
   lists](commands.md#shared-todo-lists)), offered in Telegram topics and Jira issues alike;
 - `compact_conversation` — lets the agent compact its OWN session when you ask it

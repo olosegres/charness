@@ -589,7 +589,7 @@ Reasoning effort. **In a topic:** shows the level its session runs and where the
 
 ### `/verbosity`
 
-Output-verbosity macro (`minimal|short|full`): sets the thinking, tool-results and sub-agent display prefs at once; `/thinking`, `/tool_results`, `/subagent` point-override afterwards. Mixed prefs show as "custom" in the picker. The picker's second row (or `/verbosity stream|stream_answers|answers`) sets what the topic SHOWS — "Stream only" (default), "Stream + answers" (the stream plus the agent's pinned answers) or "Answers only" (the pinned answers, no stream; an agent that keeps writing after its final answer is reminded once to send what matters); the answers are written like for a manager or QA — brief and to the point; a switch applies from the next message, and `/status` names the view.
+Output-verbosity macro (`minimal|short|full`): sets the thinking, tool-results and sub-agent display prefs at once; `/thinking`, `/tool_results`, `/subagent` point-override afterwards. Mixed prefs show as "custom" in the picker. The picker's second row (or `/verbosity stream|stream_answers|answers`) sets what the topic SHOWS — "Stream only" (default), "Stream + answers" (the stream plus the agent's pinned answers) or "Answers only" (the pinned answers, no stream; an agent that keeps writing after its final answer is reminded once to send what matters); the answers are written like for a manager or QA — brief and to the point; a switch applies from the next message, and `/status` names the view. In a view that shows the answers, an agent that answered `progress` and is waiting on a worker watch of its own (`schedule_create` with a check) is not reminded every 15 minutes while the watch passes — the watch wakes it when there is something to do.
 
 ### `/thinking`
 
@@ -605,7 +605,7 @@ Sub-agent transcript: status-only with a ticking elapsed counter (`minimal`/`sho
 
 ### `/sessions`
 
-List & resume previous sessions in this folder.
+List & resume previous sessions in this folder. Picking one ends the conversation the topic runs: a message the agent had not read yet when you picked it — written behind a turn it was still working on — is said not to have reached the agent, so you can send it again; one it had read is not.
 
 ### `/rename_session`
 
@@ -613,11 +613,11 @@ Rename the current live session (OpenCode; Claude transcripts have no title).
 
 ### `/quit`, `/q`
 
-End the session — Claude: graceful double Ctrl+C; OpenCode/terminal: `stopSession`. Releases the persisted session id, so a bot restart won't auto-reattach it (resume later via `/sessions`). A topic whose agent process is gone but whose session is kept (it "sleeps": the next message, file, voice note, `/compact`, `/model` or `/effort` resumes it by itself) is released the same way.
+End the session — Claude: graceful double Ctrl+C; OpenCode/terminal: `stopSession`. Releases the persisted session id, so a bot restart won't auto-reattach it (resume later via `/sessions`). A topic whose agent process is gone but whose session is kept (it "sleeps": the next message, file, voice note, `/compact`, `/model` or `/effort` resumes it by itself) is released the same way. After it, `/claude` or `/opencode` starts a fresh session. A message sent to the topic while `/quit`, `/quitall`, `/new`, leaving the folder or a switch to the other backend is ending or replacing the conversation is not delivered and starts nothing: the topic says it did not reach the agent, so you can send it again once that is done. A message the agent had not read yet when you quit — written behind a turn it was still working on — is said not to have reached the agent, so you can send it again; one it had read is not.
 
 ### `/new`
 
-End the current session and start a fresh one (same adapter).
+End the current session and start a fresh one (same adapter). A message the agent had not read yet when you ran it — written behind a turn it was still working on — is said not to have reached the agent, so you can send it again; one it had read is not.
 
 ### `/status`
 
@@ -659,11 +659,17 @@ with the thread's last-used backend.
   counted separately, see [`/reminders`](#reminders)).
 - Restart-safe: timers re-arm at boot; a run missed during downtime fires
   one catch-up annotated with the missed time.
+- **When the woken agent has nothing to say** — a scheduled prompt such as «every hour check the deploy, say only if it is broken» — it may simply end its turn: in a topic that shows answers the run closes without a word, with no reminder and no «could not finish» notice (a message of yours that the agent leaves unanswered is still followed up).
+- **In a topic that shows answers, a run belongs to the request it was set up for.** A watch the agent armed while working on your message wakes it as part of that request, so its result arrives as the answer to your message, not under a separate «scheduled run». A run with no such request opens one of its own. Once the agent told you «working on it» there, the next run continues that same request instead of replacing it, and silence after that is followed up as for any request.
+- **In a Jira issue** the agent has the same `schedule_*` tools, but the bot posts NOTHING there — no announcement, no check alert,
+  no status line: a Jira comment always notifies the requester and the issue's watchers. A fire wakes the issue's agent, which
+  answers in comments (`answer_request`) only when it has a result the requester needs. An agent that launched a worker and armed
+  its watch is not reminded or given up on while the watch passes; it is woken in the issue when the worker is done.
 - Leaving a folder pauses the topic's scheduled prompts; `/bind` resumes
   them (an expired one-shot is dropped). Reminders keep running — see
   [`/reminders`](#reminders). Run history: `DATA_DIR/scheduler-runs.jsonl`.
 - **What a topic sees.** A scheduled run is announced by one silent line — «⏰ Scheduled: Nightly build · every day at 02:00» (plus «— missed at 02:00, catching up» for a catch-up run) — with the prompt folded under it in an expandable quotation, so the instruction to the agent is there when you want it and out of the way when you do not. Nothing a schedule or a check posts is pinned (the agent's questions still are); `/reminders` stay pinned on purpose, to pierce a muted topic. The schedule is said in your language and never as a cron expression: «every day at 02:00», «every 5 min», or — for a shape no wording fits, such as twice a day — «next: 2026-06-07 18:00». The agent's confirmation of a new schedule is one line (`Scheduled "Nightly build": daily at 02:00; next: 2026-06-07 02:00`) plus the id it cancels by.
-- **Checks (watchdogs).** `schedule_create` also takes a `checkCommand` (with a cron schedule): the bot runs the command in the topic's bound folder on schedule and stays silent while it exits 0; on the first failure after a pass it says so in one silent line — «🔔 Check "API health" fired — waking the agent.» with the failure and the output tail folded under it, never the command — and wakes the agent with the job's prompt, the command, the exit code and the tail of the output. When the check passes again the topic gets «✅ Check "API health" is back to normal.» (for a worker watch: «✅ Worker "builder S2" is working again.»). A watch on a detached worker (a check with a `statusWorkerRunDir`) reads «✅ Worker "builder S2" finished (2 h 5 min). Reading the result.» when the worker's process is gone, «⚠️ Worker "builder S2" has been silent for 45 min. Checking whether it hung.» when its run directory stopped changing, or «⚠️ Worker "builder S2" has been running 2 h 30 min without a report. Checking on it.» when 2 h 30 min have passed since the agent armed the watch (the agent `touch`es a `watch-armed` file in the run directory right before it arms the watch, and again when it looked and found the worker fine — the same watch then goes on; a run far over its normal time is a problem to look at now). Checks survive bot restarts. A check with a status source (`statusWorkerRunDir` — a detached worker's run directory — or `statusCommand`, plus `statusEveryMinutes`, 5–240, default 15) also keeps the topic alive while it passes: the bot itself posts one short silent line (`⏳ builder S2 · works 30 min · now: <the worker's last action>`) every interval and deletes the previous one, without waking the agent. Only a topic that shows the agent's stream gets it (not the answers-only view, not a Jira issue); the line is deleted when the check fails, is cancelled, or the topic leaves its folder (`/unbind`).
+- **Checks (watchdogs).** `schedule_create` also takes a `checkCommand` (with a cron schedule): the bot runs the command in the topic's bound folder on schedule and stays silent while it exits 0; on the first failure after a pass (or the first one after a wake that never reached the agent — the agent's process was starting or stopping and dropped it, or no session was left) it says so in one silent line — «🔔 Check "API health" fired — waking the agent.» with the failure and the output tail folded under it, never the command — and wakes the agent with the job's prompt, the command, the exit code and the tail of the output. When the check passes again the topic gets «✅ Check "API health" is back to normal.» (for a worker watch: «✅ Worker "builder S2" is working again.»). A watch on a detached worker (a check with a `statusWorkerRunDir`) reads «✅ Worker "builder S2" finished (2 h 5 min). Reading the result.» when the worker's process is gone, «⚠️ Worker "builder S2" has been silent for 45 min. Checking whether it hung.» when its run directory stopped changing, or «⚠️ Worker "builder S2" has been running 2 h 30 min without a report. Checking on it.» when 2 h 30 min have passed since the agent armed the watch (the agent `touch`es a `watch-armed` file in the run directory right before it arms the watch, and again when it looked and found the worker fine — the same watch then goes on; a run far over its normal time is a problem to look at now). Checks survive bot restarts. A check with a status source (`statusWorkerRunDir` — a detached worker's run directory — or `statusCommand`, plus `statusEveryMinutes`, 5–240, default 15) also keeps the topic alive while it passes: the bot itself posts one short silent line (`⏳ builder S2 · works 30 min · now: <the worker's last action>`) every interval and deletes the previous one, without waking the agent. Only a topic that shows the agent's stream gets it (not the answers-only view, not a Jira issue); the line is deleted when the check fails, is cancelled, or the topic leaves its folder (`/unbind`).
 
 ### `/stt`
 
@@ -1009,7 +1015,7 @@ How often an agent that **launches workers** is told where the accounts' limits 
 
 ### `/bind`
 
-Bare: current binding + folder picker, with «leave current dir» (the old `/unbind`) and «create new folder» buttons.
+Bare: current binding + folder picker, with «leave current dir» (the old `/unbind`) and «create new folder» buttons. Leaving the folder ends the conversation: a message sent while it runs is not delivered, and neither is a message the agent had not read yet when you left — written behind a turn it was still working on; each is said not to have reached the agent, so you can send it again. One it had read is not.
 
 ### `/topic`
 
@@ -1152,7 +1158,7 @@ creator is gone, set `OWNER_USER_ID` (or `ALLOWED_GROUP_ID`) and restart.
 
 ### `/quitall`
 
-End every active agent in every bound topic (also releases their session ids).
+End every active agent in every bound topic (also releases their session ids). In each topic, a message sent while it runs is not delivered, and neither is a message the agent had not read yet when you ran it — written behind a turn it was still working on; each is said not to have reached the agent, so you can send it again. One it had read is not.
 
 ### `/runners`
 

@@ -361,6 +361,12 @@ describe('prepareJiraConnector', () => {
     assert.deepEqual(JiraContextLedger.createForDataDir(dataDir).getSnapshot('PROJ-1'), { generation: 1, sent: {} });
   });
 
+  it('a scheduled run\'s header names the issue and its link on the connector\'s site, whatever trailing slashes the config\'s URL has', async () => {
+    writeConfig();
+    connector = await prepare();
+    assert.equal(connector.describeConversation(makeJiraKey('PROJ-1')), `Jira issue PROJ-1 (${baseUrl}/browse/PROJ-1)`);
+  });
+
   it('C10: the attachment tool saves the issue\'s file under the conversation\'s files dir (jira/) and refuses any id the issue does not list', async () => {
     issueAttachments = [{ id: '10', filename: 'screen shot.png', mimeType: 'image/png', size: attachmentBytes.length }];
     writeConfig();
@@ -991,21 +997,14 @@ describe('bot.ts wires the Jira connector (J5)', () => {
     assert.match(startBody.slice(startBody.indexOf('cleanupTimers: () => {')), /jiraConnector\?\.stop\(\);/);
   });
 
-  it('a posted request is watched by the wake-up engine, after the post', () => {
+  it('the connector\'s request and update posts go through the tracker turn poster, over the shared session post and the wake-up engine (its behaviour: trackerTurnPoster.test.ts)', () => {
     const deps = botSource.slice(botSource.indexOf('function createJiraSessionDeps('), botSource.indexOf('export async function startBot('));
-    const post = deps.indexOf('await postToSession(sessionPostDeps, keyToString(key), prompt, adapterName);');
-    const watch = deps.indexOf('if (!posted.isHeld) await requestWakeUpEngine?.trackForwardedTurn(key, requestId, { isRequestPrompt: true });');
-    assert.ok(post > 0 && watch > post);
-  });
-
-  it('an issue update opens no request: it is posted like a request\'s prompt, then the turn it starts is watched for the request its text named', () => {
-    const deps = botSource.slice(botSource.indexOf('function createJiraSessionDeps('), botSource.indexOf('export async function startBot('));
-    const update = deps.slice(deps.indexOf('postUpdate: async (key, prompt, getTargetRequestId) => {'));
-    const post = update.indexOf('const posted = await postToSession(sessionPostDeps, keyToString(key), prompt, adapterName);');
-    const failed = update.indexOf("if (!posted.ok) throw new Error(posted.reason === 'forward-failed' ? posted.error : `session ${posted.reason}`);");
-    const watch = update.indexOf('if (!posted.isHeld) await requestWakeUpEngine?.trackForwardedTurn(key, getTargetRequestId());');
-    assert.ok(post > 0 && failed > post && watch > failed, 'posted, a failure thrown back to the connector (it decides the comment again), then watched');
-    assert.ok(!update.slice(0, watch).includes('createRequest'), 'no request is opened for it');
+    assert.ok(deps.includes('...createTrackerTurnPoster({'));
+    // The poster's `afterForward` (it watches the turn) rides into the post, which runs it right after the write.
+    assert.ok(deps.includes('post: (key, prompt, options) => postToSession(sessionPostDeps, keyToString(key), prompt, adapterName, options),'));
+    assert.ok(deps.includes('notePersonActivity,'));
+    assert.ok(deps.includes('getEngine: () => requestWakeUpEngine,'));
+    assert.ok(!deps.includes('postRequest:') && !deps.includes('postUpdate:'), 'no second, hand-written copy of either post');
   });
 
   it('a mention is judged against the ledger: the connector lists the open requests of an issue\'s conversation from it', () => {
@@ -1068,11 +1067,6 @@ describe('bot.ts wires the Jira connector (J5)', () => {
     assert.match(botSource, /if \(result\.ok\) return \{ ok: true, isFresh: result\.isFresh \};/);
   });
 
-  it('a post that failed is handed to the wake-up engine\'s retries before the failure is reported (R28)', () => {
-    const deps = botSource.slice(botSource.indexOf('function createJiraSessionDeps('), botSource.indexOf('export async function startBot('));
-    assert.match(deps, /if \(!posted\.ok\) \{\s*\/\/[^\n]*\n\s*await requestWakeUpEngine\?\.notePostFailed\(key, requestId\);\s*throw new Error\(/);
-  });
-
   it('a retried post of an issue that never had a session starts one with the Jira adapter; a reminder or a topic only resumes (R28)', () => {
     assert.match(startBody, /prepareWakeUpSession: \(key, message\) =>\s*prepareRequestWakeUpSession\(key, message, key\.platform === 'jira' \? jiraConnector\?\.adapterName : undefined\),/);
     const prepare = botSource.slice(botSource.indexOf('async function prepareRequestWakeUpSession('), botSource.indexOf('async function forwardRequestWakeUp('));
@@ -1086,10 +1080,6 @@ describe('bot.ts wires the Jira connector (J5)', () => {
     const deps = botSource.slice(botSource.indexOf('function createJiraSessionDeps('), botSource.indexOf('export async function startBot('));
     assert.ok(!deps.includes('resumeSession:'), 'no Jira-only resume path: the ensure resumes a sleeping conversation for every platform');
     assert.ok(deps.includes('const sessionPostDeps = createSessionPostDeps();'));
-    const postRequest = deps.slice(deps.indexOf('postRequest: async (key, requestId, prompt) => {'));
-    const latchClear = postRequest.indexOf('notePersonActivity(key);');
-    const post = postRequest.indexOf('await postToSession(sessionPostDeps, keyToString(key), prompt, adapterName);');
-    assert.ok(latchClear > 0 && post > latchClear, 'the idle-compaction latch is cleared (and the todo reminder\'s silence lifted) before the request is posted');
     const personActivity = botSource.slice(botSource.indexOf('function notePersonActivity('));
     assert.match(personActivity, /^function notePersonActivity\(key: SessionKey\): void \{\n {2}noteThreadUserActivity\(key\);/, 'the person\'s activity clears the latch');
     assert.ok(!botSource.includes('async function ensureSessionByResume('), 'the separate resume helper is gone');

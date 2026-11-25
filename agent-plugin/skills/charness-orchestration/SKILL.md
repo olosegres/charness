@@ -64,8 +64,7 @@ kill -0 <pid> 2>/dev/null || { echo "worker <pid> exited"; exit 1; }; [ -n "$(fi
 - Then cancel the check (`schedule_list` → `schedule_cancel`) — unless you kept it for a worker that is fine — which
   also deletes its status line, so a finished worker leaves nothing behind. A new run gets a new check.
 - Never build your own watcher: no sleep loop, `CronCreate`, `ScheduleWakeup`, background job or tmux pane. They
-  live in your process, which the bot stops after an idle stretch. (A tracker conversation has no bot check: see
-  «A tracker conversation (Jira)» below.)
+  live in your process, which the bot stops after an idle stretch.
 
 ## Between wakes
 
@@ -109,7 +108,8 @@ kill -0 <pid> 2>/dev/null || { echo "worker <pid> exited"; exit 1; }; [ -n "$(fi
   question tool); the bot pins it, and the pin notifies. In autonomous mode stop and report instead.
 - A question never stops your work: when the bot sets it aside, go on; the answer comes later as a message.
 - A message headed `[Request <id> · from: …]` is answered through `answer_request` (`progress`, `question`,
-  `final`); do not repeat its text as plain text afterwards.
+  `final`); do not repeat its text as plain text afterwards. A header that says to answer only when you have a result
+  (a scheduled run) may be left unanswered: with nothing to report, end the turn silently.
 - The passing-run video of a new e2e test → `send_file_to_user` (H.264 `.mp4`, sent as a video). Several
   separate items, e.g. one per finished scope → `send_messages_to_user`.
 - Work the user wants later → `schedule_create` with `onceAt` and a prompt that stands on its own.
@@ -122,21 +122,31 @@ kill -0 <pid> 2>/dev/null || { echo "worker <pid> exited"; exit 1; }; [ -n "$(fi
 
 ## A tracker conversation (Jira)
 
-There are no `schedule_*` tools, so no bot check watches a worker for you. Here, and only here, you watch it
-yourself — a worker, a pipeline or a test run alike — in one of two ways:
+The same tools and the same watch recipe as in a topic (the sections above). What differs on an issue: the bot posts NOTHING
+there for a scheduled run, a check or a status — a comment always notifies the requester and the issue's watchers — so none
+of the topic's lines exist (no status line, no «worker finished» sentence, no «working again»), and the check's status
+arguments only mark it as a worker watch.
 
-- in the turn: foreground polls of at most 10 minutes each;
-- or a background command that polls the same signals every 30–60 s (the PID or the run's state, the run directory
-  changing, 2 h 30 min since you started waiting without a report) and EXITS the moment one fires; then you may end
-  your turn. Its end starts your next turn: the bot keeps your process while your own background work runs (up to
-  6 h after your last turn). A wait that ended before the run did → see why and start the next one in that turn.
-
-Never a poll with a fixed count shorter than the run, and no `ScheduleWakeup` or `CronCreate` as a fallback: the bot
-reminds you 15 minutes after each `progress` answer. Read a run's result the moment it ends, never at the next
-reminder, and never give a `final` answer with a run you have not read. Each `progress` answer names what runs, its
-link and when it should end, never only «I'll report when it finishes». End with kind `final`.
-A screenshot or the passing-run video goes into the answer itself: its path in `answer_request`'s `files` (an H.264
-`.mp4` plays in the comment); `send_file_to_user` posts files in a comment of their own.
+- After the launch and the armed check, answer `answer_request` kind `progress` — what runs, where (its link) and when it
+  should end, never only «I'll report when it finishes» — then END your turn. Do not poll the worker. The bot stops your idle
+  process; when the check fails (the worker finished, went silent, or ran 2 h 30 min without a report) it resumes you in THIS
+  issue, behind a header that names the request open then. A new comment on the issue reaches you at the bot's next poll of
+  the issue, asleep or not; while a turn runs it waits up to 10 minutes for it to end, then joins it.
+- At a wake read the worker's result first and decide as above; never give a `final` answer with a run you have not read.
+  Answer the request the header names (`answer_request` with that id) only with a result the requester needs — a
+  milestone, the final answer. A wake you handled with nothing to report ends
+  silently: no comment, no "still waiting". The exception is a header that says the request still owes the requester an answer
+  (a comment the bot lost track of): answer it in this turn.
+- A header that says `no request is open`: the request you armed the job under is finished. An answer to it still becomes a
+  comment but hands nothing back — answer only what the requester must know, and cancel the job (`schedule_cancel`) if it
+  served only that request.
+- A job outlives its request: when the work it served is done, cancel it. A watchdog meant to outlive the work (a health check, a
+  daily job) is armed and then the request is answered `final`: the job keeps running and its fires say `no request is open`, or ride
+  the request open at the time (a later hand-over, a mention: answer that request only with what its requester must know, not about the
+  job). A job left armed under a request you keep open holds that request waiting — not reminded between turns while it owes nobody an
+  answer; a requester's comment you leave unanswered still is — and its task-agent slot taken for as long as the job lives.
+- A screenshot or the passing-run video goes into the answer itself: its path in `answer_request`'s `files` (an H.264
+  `.mp4` plays in the comment); `send_file_to_user` posts files in a comment of their own.
 
 ## Closing a task that ran on a runner
 

@@ -1,3 +1,5 @@
+import type { PromptDeliveryOptions } from './utils/promptDelivery';
+
 /**
  * @name BufferedPromptOutcome
  * @description How a buffered prompt's wait ended. `replayed`: it was handed to the
@@ -13,18 +15,24 @@ export type BufferedPromptSettled = (outcome: BufferedPromptOutcome) => void;
 interface BufferedPrompt {
   text: string;
   onSettled?: BufferedPromptSettled;
-  /** A person typed (or spoke, or sent) it: its replay does not wait for its write (see `PromptForwardOptions.isPersonInput`). */
-  isPersonInput: boolean;
-  /** Its turn may carry the accounts note (`PromptDeliveryOptions.isAccountsNoteCarrier`): decorated at the replay, with the figures of that moment. */
-  isAccountsNoteCarrier: boolean;
+  /**
+   * How it is forwarded at the replay, as it was buffered (`PromptDeliveryOptions`): a person's own does not wait for its write, a
+   * carrier of the accounts note is decorated with the figures of that moment, a lost-work note riding it may be told optional.
+   */
+  options: PromptDeliveryOptions;
 }
 
 /** What {@link StartupPromptBuffer.replayPrompts} replays through. */
 export interface ReplayPromptsOptions {
   /** Whether the session is up now; `false` drops every buffered prompt. */
   isSessionActive: boolean;
-  /** Hand one prompt to the live session; `isPersonInput` and `isAccountsNoteCarrier` as the prompt was buffered with. */
-  forward: (text: string, isPersonInput: boolean, isAccountsNoteCarrier: boolean) => Promise<void>;
+  /** Hand one prompt to the live session, with the options it was buffered with. */
+  forward: (text: string, options: PromptDeliveryOptions) => Promise<void>;
+  /**
+   * Written after the buffered prompts, still inside the replay (only into a live session): what the start carries besides them — the
+   * bot's prompts held over a usage-limit wait. A throw rejects the replay, which still ends.
+   */
+  afterReplay?: () => Promise<void>;
 }
 
 /** A callback that throws must not break the replay or the failed-start path that called it. */
@@ -35,6 +43,9 @@ function settleBufferedPrompt(prompt: BufferedPrompt, outcome: BufferedPromptOut
     console.error('[startupPromptBuffer] a settle callback threw:', err);
   }
 }
+
+/** @description What {@link StartupPromptBuffer.addPrompt} did with a prompt. */
+export type PromptBufferAddResult = 'refused' | 'firstInWindow' | 'added';
 
 /**
  * @description FIFO buffer for prompts typed while an agent session is still
@@ -64,6 +75,8 @@ export class StartupPromptBuffer {
   /** Threads that already received the "queued while starting" ack, so we
    *  ack once per startup window rather than on every buffered prompt. */
   private ackedThreads = new Set<string>();
+  /** Threads whose buffered prompts are being written, by how many replays run (one at a time in practice). */
+  private replayingThreads = new Map<string, number>();
 
   /** Mark a thread as mid-startup; inbound text should now be buffered. */
   markStarting(threadId: string): void {
@@ -73,6 +86,15 @@ export class StartupPromptBuffer {
   /** Whether a thread's session is currently starting. */
   checkIsStarting(threadId: string): boolean {
     return this.startingThreads.has(threadId);
+  }
+
+  /**
+   * Whether a thread's buffered prompts are being replayed into its new session. The window is already closed (a prompt arriving now
+   * is forwarded, not buffered again), but for the wake-up engine's turn probe the replay is still the start: nothing it writes has
+   * started a turn yet, so no watch made during the start may be read as a turn that ended.
+   */
+  checkIsReplaying(threadId: string): boolean {
+    return this.replayingThreads.has(threadId);
   }
 
   /** Whether any thread is mid-startup or holds prompts that wait for a session: they live in memory, a restart would lose them. */
@@ -96,19 +118,24 @@ export class StartupPromptBuffer {
   }
 
   /**
-   * Buffer one prompt for a starting thread.
+   * Buffer one prompt for a starting thread — only while its window is OPEN (a start, or a stop under way). A closed window is
+   * refused: its start or stop has already taken, or looked for, what it holds, so a prompt added now would wait for a replay
+   * nobody starts (a person's message lost until the conversation's next start, and lost for good with a restart). The caller
+   * routes a refused prompt again at that moment (`utils/promptDelivery.ts` `deliverPromptOrBuffer`).
    * @param onSettled Told once how the prompt's wait ended ({@link BufferedPromptOutcome}).
-   * @returns `true` if this is the first buffered prompt for the current
-   * startup window (the caller uses it to send the ack only once).
+   * @param options How it is forwarded at the replay (`PromptDeliveryOptions`), kept with it.
+   * @returns `refused` (no window is open), `firstInWindow` (the first buffered prompt of this window: the caller sends the
+   * ack once) or `added`.
    */
-  addPrompt(threadId: string, text: string, onSettled?: BufferedPromptSettled, isPersonInput = false, isAccountsNoteCarrier = false): boolean {
+  addPrompt(threadId: string, text: string, onSettled?: BufferedPromptSettled, options: PromptDeliveryOptions = {}): PromptBufferAddResult {
+    if (!this.startingThreads.has(threadId)) return 'refused';
     const prompts = this.bufferedPrompts.get(threadId) ?? [];
-    prompts.push({ text, onSettled, isPersonInput, isAccountsNoteCarrier });
+    prompts.push({ text, onSettled, options });
     this.bufferedPrompts.set(threadId, prompts);
 
     const isFirstForWindow = !this.ackedThreads.has(threadId);
     this.ackedThreads.add(threadId);
-    return isFirstForWindow;
+    return isFirstForWindow ? 'firstInWindow' : 'added';
   }
 
   /**
@@ -122,21 +149,31 @@ export class StartupPromptBuffer {
    * forward — or `dropped` when that forward threw (logged; the rest still go).
    */
   async replayPrompts(threadId: string, options: ReplayPromptsOptions): Promise<void> {
-    const prompts = this.takePrompts(threadId);
-    if (!options.isSessionActive) {
-      for (const prompt of prompts) settleBufferedPrompt(prompt, 'dropped');
-      return;
-    }
-    // Sequential await keeps the forwards in arrival order even when each one awaits its own loader send first.
-    for (const prompt of prompts) {
-      try {
-        await options.forward(prompt.text, prompt.isPersonInput, prompt.isAccountsNoteCarrier);
-      } catch (err) {
-        console.error('[replayBufferedPrompts] forward failed:', err);
-        settleBufferedPrompt(prompt, 'dropped');
-        continue;
+    // Marked replaying BEFORE the window closes, and until the last write and the after-step: the turn probe sees no gap between the
+    // start and the replay.
+    this.replayingThreads.set(threadId, (this.replayingThreads.get(threadId) ?? 0) + 1);
+    try {
+      const prompts = this.takePrompts(threadId);
+      if (!options.isSessionActive) {
+        for (const prompt of prompts) settleBufferedPrompt(prompt, 'dropped');
+        return;
       }
-      settleBufferedPrompt(prompt, 'replayed');
+      // Sequential await keeps the forwards in arrival order even when each one awaits its own loader send first.
+      for (const prompt of prompts) {
+        try {
+          await options.forward(prompt.text, prompt.options);
+        } catch (err) {
+          console.error('[replayBufferedPrompts] forward failed:', err);
+          settleBufferedPrompt(prompt, 'dropped');
+          continue;
+        }
+        settleBufferedPrompt(prompt, 'replayed');
+      }
+      await options.afterReplay?.();
+    } finally {
+      const count = (this.replayingThreads.get(threadId) ?? 1) - 1;
+      if (count > 0) this.replayingThreads.set(threadId, count);
+      else this.replayingThreads.delete(threadId);
     }
   }
 
@@ -147,6 +184,24 @@ export class StartupPromptBuffer {
    */
   discardPrompts(threadId: string): void {
     for (const prompt of this.takePrompts(threadId)) settleBufferedPrompt(prompt, 'dropped');
+  }
+
+  /**
+   * Settle `dropped` every buffered prompt the bot made, keeping a person's own (`PromptDeliveryOptions.isPersonInput`) and the window
+   * as it is. Called when a fresh start replaces a resume that failed: a person's words stand on their own in the fresh session, while a
+   * bot-made prompt was built for the conversation that is lost (a tracker post's issue text, a «continue»). Its caller settles the drop
+   * as for any prompt a window dropped, each its own way: a tracker request prompt is retried (R28), an issue update goes back to the
+   * connector, the lost-work note keeps its record, a retry's or a move's «continue» is spent with nothing tracked, a fire is not run
+   * again (`src/requests/README.md`, the callers table).
+   */
+  discardBotPrompts(threadId: string): void {
+    const prompts = this.bufferedPrompts.get(threadId) ?? [];
+    const kept = prompts.filter((prompt) => prompt.options.isPersonInput === true);
+    if (kept.length > 0) this.bufferedPrompts.set(threadId, kept);
+    else this.bufferedPrompts.delete(threadId);
+    for (const prompt of prompts) {
+      if (prompt.options.isPersonInput !== true) settleBufferedPrompt(prompt, 'dropped');
+    }
   }
 
   /** Close the window and take what it held, clearing all per-thread state. */

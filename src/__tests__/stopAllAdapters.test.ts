@@ -14,7 +14,7 @@
 
 import { test } from 'node:test';
 import * as assert from 'node:assert/strict';
-import { stopAllAdaptersFor, type AdapterSweepTarget } from '../adapters/createAdapter';
+import { stopAllAdaptersFor, stopAndWaitAllAdaptersFor, type AdapterSweepTarget } from '../adapters/createAdapter';
 import type { SessionKey } from '../sessionKey';
 import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
 
@@ -137,4 +137,28 @@ test('respects the adapter-name order passed in', () => {
 
   assert.deepEqual(a.stopped, ['OpenCode', 'Claude Code']);
   assert.deepEqual(b.stopped, ['Claude Code', 'OpenCode']);
+});
+
+test('the waiting sweep (`/quitall`, review 23 nit 4) waits for each exit where the adapter can, stops the rest as the plain sweep does, and counts the same', async () => {
+  const exits: string[] = [];
+  let finishExit: () => void = () => {};
+  const waiting: AdapterSweepTarget = {
+    name: 'claude-json-stream',
+    label: 'Claude Code',
+    checkIsActive: () => true,
+    stopSession: () => { throw new Error('the waiting sweep stops through stopSessionAndWait'); },
+    stopSessionAndWait: () => new Promise<void>((resolve) => { finishExit = () => { exits.push('json-stream'); resolve(); }; }),
+  };
+  const plain = createFakeAdapter('terminal', 'Terminal', true);
+  const idle = createFakeAdapter('opencode', 'OpenCode', false);
+  const adapters = new Map<string, AdapterSweepTarget>([[waiting.name, waiting], [plain.name, plain], [idle.name, idle]]);
+  let isSettled = false;
+  const sweep = stopAndWaitAllAdaptersFor(key, (name) => adapters.get(name)!, [...adapters.keys()]).then((result) => { isSettled = true; return result; });
+  for (let tick = 0; tick < 5; tick += 1) await Promise.resolve();
+  assert.equal(isSettled, false, 'not over while a process still exits');
+  finishExit();
+  assert.deepEqual(await sweep, { stopped: ['Claude Code', 'Terminal'], attempted: 2 });
+  assert.deepEqual(exits, ['json-stream']);
+  assert.equal(plain.stopCalls, 1);
+  assert.equal(idle.stopCalls, 0, 'an adapter with nothing running is left alone');
 });

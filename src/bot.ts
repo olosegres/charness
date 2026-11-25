@@ -28,6 +28,7 @@ import {
   registerPendingWorkHoldMs,
   registerThreadLocaleReader,
   stopAllAdaptersFor as sweepAdapters,
+  stopAndWaitAllAdaptersFor as sweepAdaptersAndWait,
   getKnownAdapterNames,
   checkIsClaudeBackend,
   checkIsSameConversationSwitch,
@@ -39,7 +40,7 @@ import {
 import { ClaudeJsonStreamAdapter } from './adapters/claudeJsonStreamAdapter';
 import { claudeJsonStreamAdapterName, claudePerTurnAdapterName, claudeTmuxAdapterName, checkIsJsonStreamBackend, openCodeAdapterName, terminalAdapterName } from './adapters/adapterNames';
 import { checkShouldPostReattachRecap, formatReattachRecap } from './resumeContext';
-import type { AgentAdapter, AgentRuntimeInfo, AgentSession, DisplayVerbosityMode, OutputTransport, PendingQuestionState, AgentApiErrorClass, AgentAuthErrorReason, LimitEpisodeMarker, OpenCodeQuestion, RecentTurn, SeenWatermark, SubagentStatusEvent, ThinkingEvent, ToolResultEvent } from './types';
+import type { AgentAdapter, AgentRuntimeInfo, AgentSession, DisplayVerbosityMode, OutputTransport, PendingQuestionState, AgentApiErrorClass, AgentAuthErrorReason, LimitEpisodeMarker, OpenCodeQuestion, RecentTurn, ResumeSessionOptions, SeenWatermark, SubagentStatusEvent, ThinkingEvent, ToolResultEvent } from './types';
 import type { PlatformId, SessionKey } from './sessionKey';
 import { createOutputTransport } from './connectors/telegram/output/createOutputTransport';
 import { keyToString, keyFromString, tryKeyFromString } from './sessionKey';
@@ -224,9 +225,10 @@ import { createBotApiHttpAgent, createBotApiHttpsAgent, wireBotApiClient } from 
 import { getPersistedConversations, getUnservedStateError } from './platform/unservedStateGuard';
 import { buildJiraContextPreamble } from './connectors/jira/contextPreamble';
 import { postToIdleSession, postToSession, registerPostWaitWindows, type PostToSessionDeps } from './postToSession';
-import { getLimitResumeMessage } from './utils/limitHeldPrompts';
+import { getLimitResumeMessage, type LimitResumeMessage } from './utils/limitHeldPrompts';
 import { waitForAdoptedReplay } from './utils/adoptReplayGate';
 import { createTopicRequestSettler } from './requests/topicRequestSettle';
+import { createTrackerTurnPoster } from './requests/trackerTurnPoster';
 import { deliverLatePrompt, deliverPromptOrBuffer as deliverPromptWithDeps, type LatePromptOutcome, type LateWakeResult, type PromptDelivery, type PromptDeliveryDeps, type PromptDeliveryOptions } from './utils/promptDelivery';
 import { restoreApiRetryTimers, restoreFiredLimitProbes, runApiRetryKick, type ApiRetryKickDeps, type ApiRetryTimerEntry } from './apiRetryKick';
 import { LimitHeldPromptQueue } from './utils/limitHeldPromptQueue';
@@ -261,6 +263,7 @@ import {
 import { formatPinnedStatus } from './pinnedStatus';
 import { checkIsProgressChunk, collapseProgressChunk } from './progressLine';
 import { StartupPromptBuffer, type BufferedPromptOutcome, type BufferedPromptSettled } from './startupPromptBuffer';
+import { ConversationEndings, type ConversationEnding } from './utils/conversationEnding';
 import { renderAgentFrame, renderAgentHtml, type AgentFrame } from './connectors/telegram/renderAgentHtml';
 import { splitMessage, MAX_MESSAGE_LEN } from './connectors/telegram/messageSplit';
 import { buildFoldedMessage } from './connectors/telegram/foldedMessage';
@@ -297,7 +300,7 @@ import { AgentBackendUnavailableError } from './adapters/backendUnavailableError
 import { getPerTurnRefusedVersion, minAutoStopClaudeCodeVersion } from './utils/claudeCodeVersion';
 import { KeyedTransitionQueue } from './utils/keyedTransitionQueue';
 import { checkIsAdoptedToolListStale } from './utils/adoptedToolList';
-import { buildLostWorkNote, checkHasLostBackgroundWork, checkHasLostWork, type LostWorkRecord, formatLostWorkTopicLine, getHeldLostWorkPlan, getLostWorkFromTailRecord, getLostWorkPlan, getTailRecordWithoutPendingWork, lostWorkResumeCooldownMs, mergeLostWorkRecords, type LostWork, type LostWorkReason } from './utils/lostWork';
+import { buildLostWorkNote, checkHasLostBackgroundWork, checkHasLostWork, type LostWorkRecord, type LostWorkTelling, formatLostWorkTopicLine, getHeldLostWorkPlan, getLostWorkFromTailRecord, getLostWorkPlan, getTailRecordWithoutPendingWork, lostWorkResumeCooldownMs, mergeLostWorkRecords, type LostWork, type LostWorkReason } from './utils/lostWork';
 import { pendingWorkHoldDefaultMs } from './utils/jsonStreamPendingWork';
 import { getAgentIdleMs } from './utils/compactOnIdle';
 import { getCompactSelfReviewFlagDirs } from './utils/compactSelfReviewFlags';
@@ -326,7 +329,7 @@ import {
   checkShouldEnqueueSubagentStatus,
   checkShouldExpireSubagentStatus,
 } from './utils/subagentStatusRender';
-import { checkIsAgentEventShown, checkIsStreamShown, type AgentStreamEvent } from './utils/topicView';
+import { checkAreRequestsEnabled, checkIsAgentEventShown, checkIsStreamShown, type AgentStreamEvent } from './utils/topicView';
 import {
   buildTopicRequestHeader,
   buildTopicRequestPrompt,
@@ -400,7 +403,8 @@ import {
   readFileByteRange,
 } from './utils/jsonStreamHost';
 import { RunLedger } from './scheduler/runLedger';
-import { createScheduleDelivery, unboundDeliveryError, type ScheduleDeliveryDeps } from './scheduler/delivery';
+import { createScheduleDelivery, ScheduledRunTargetClosedError, unboundDeliveryError, type ScheduleDeliveryDeps } from './scheduler/delivery';
+import type { RiddenRequest } from './scheduler/scheduledRunTarget';
 import { runCheckCommand } from './scheduler/checkRun';
 import { getChildProcessEnvironment } from './utils/agentEnvironment';
 import { runGitInAgentFolder } from './utils/folderGit';
@@ -444,11 +448,12 @@ import {
 } from './requests/limitWaitAnswer';
 import { formatLocalClockWithDateIfNotToday } from './utils/localClock';
 import { RequestWakeUpEngine } from './requests/wakeUpEngine';
+import { getRequestScheduleWait, pickRequestToArmUnder } from './requests/scheduleWait';
 import { checkIsWakingStopped, getRequestBackstopMs } from './requests/wakeUpRules';
-import { joinPromptsNotTakenIn, type WakeUpMessage } from './requests/requestHeader';
+import { getPromptsNotTakenIn, type WakeUpMessage } from './requests/requestHeader';
 import type { OpenRequestState, RequestAlertReason, RequestPromptOutcome } from './requests/types';
 import { getThreadKeysForDirectory } from './scheduler/directoryThreads';
-import { getRebindResumeAction } from './scheduler/rebindResume';
+import { resumeSchedulesPausedForUnbound, type RebindResumePorts } from './scheduler/rebindResume';
 import { clearCheckAlertPins, recordCheckStatusLine } from './scheduler/store';
 import { pauseSchedulesOnUnbind } from './scheduler/unbindPause';
 import type { DeliveryOutcome, FireContext, ScheduleRecord } from './scheduler/types';
@@ -1311,7 +1316,7 @@ let topicRequestLedger: RequestLedger | null = null;
  * @name TopicRequestOpening
  * @description What {@link openTopicRequest} decided for one prompt: the header
  * to put ahead of the prompt's text (empty when no request was opened) and the
- * request's id for {@link trackTopicRequestTurn} (`null` when none).
+ * request's id for {@link settleTopicRequestAfterDelivery} (`null` when none).
  */
 interface TopicRequestOpening {
   header: string;
@@ -1331,13 +1336,16 @@ const noTopicRequest: TopicRequestOpening = { header: '', requestId: null };
  * `null` intake is a prompt that is not a request by rule — an answer to the
  * agent's own question, delivered as a prompt. The intake's requester decides
  * which open request, if any, the new one supersedes (`requestGroup.ts`); the
- * header then names the replaced ones.
+ * header then names the replaced ones. `onCreated` runs with the new id inside
+ * the create, synchronously with the request appearing open (a person's prompt
+ * marks itself in delivery there: {@link deliverPersonPromptInRequest}).
  */
 async function openTopicRequest(
   key: SessionKey,
   text: string,
   intake: TopicRequestIntake | null,
   messageContext?: MessageContext,
+  onCreated?: (requestId: string) => void,
 ): Promise<TopicRequestOpening> {
   if (intake === null || !topicRequestLedger || !checkIsTelegramKey(key)) return noTopicRequest;
   const view = state.getDisplayPrefs(key).view;
@@ -1346,8 +1354,10 @@ async function openTopicRequest(
   // AGAIN when the session never took it in; the raw text would come back without the forwarded mark or the quote.
   const promptBody = getPromptWithThreadMessageContext(key, text, messageContext);
   const request = await topicRequestLedger.createRequest(key, getTopicRequestOrigin(intake), {
-    createPrompt: (requestId, supersededRequestIds) =>
-      buildTopicRequestPrompt({ requestId, source: intake.source, view, supersededRequestIds, promptBody, sender: messageContext?.nonOperatorSender }),
+    createPrompt: (requestId, supersededRequestIds) => {
+      onCreated?.(requestId);
+      return buildTopicRequestPrompt({ requestId, source: intake.source, view, supersededRequestIds, promptBody, sender: messageContext?.nonOperatorSender });
+    },
   });
   return { header: buildTopicRequestHeader(request.id, intake.source, view, request.supersededRequestIds, messageContext?.nonOperatorSender), requestId: request.id };
 }
@@ -1357,9 +1367,9 @@ async function openTopicRequest(
  * wake-up engine watches the turn of a prompt that reached a session (or waits behind its start), and a prompt that found no
  * session closes the request it opened. Both ports are read at call time: the engine and the ledger are assigned at boot.
  */
-const { trackTurn: trackTopicRequestTurn, settleAfterDelivery: settleTopicRequestAfterDelivery } = createTopicRequestSettler({
-  trackTurn: async (key, requestId) => {
-    await requestWakeUpEngine?.trackForwardedTurn(key, requestId, { isRequestPrompt: true });
+const { settleAfterDelivery: settleTopicRequestAfterDelivery } = createTopicRequestSettler({
+  trackTurn: async (key, requestId, { isScheduledRun }) => {
+    await requestWakeUpEngine?.trackForwardedTurn(key, requestId, { isRequestPrompt: true, isScheduledRun });
   },
   cancelRequest: async (requestId) => {
     await topicRequestLedger?.closeRequest(requestId, 'cancelled');
@@ -2359,6 +2369,25 @@ const wedgeRecoveryTier = new Map<string, number>();
  * like one, and a reminder on top would be a second recovery of the same turn.
  */
 const wedgeRecoveriesInFlight = new Set<string>();
+/**
+ * Threads whose API error the bot is still handling with NOTHING armed — «wait for reset» off, a used-up credit balance, an account
+ * refusal or a logged-out notice ({@link handleApiError}), by how many such errors are in hand: from the error, which the adapter
+ * reports right before the turn's end, until that handling's stop, move or wait has landed. The request wake-up probe reads it as «not
+ * a turn end»: decided at once, the turn that ended on the error would be a silent one, and its reminder written into the limited or
+ * refused session would end on the same error — the second silent turn, the give-up. A branch that arms a retry is held by the timer.
+ */
+const apiErrorsInHandling = new Map<string, number>();
+
+/** Hold `key`'s turn end ({@link apiErrorsInHandling}) until `handling` — an API error's stop, move or wait — has settled. */
+function holdTurnEndWhileHandlingApiError(key: SessionKey, handling: Promise<void>): void {
+  const k = keyToString(key);
+  apiErrorsInHandling.set(k, (apiErrorsInHandling.get(k) ?? 0) + 1);
+  void handling.finally(() => {
+    const count = (apiErrorsInHandling.get(k) ?? 1) - 1;
+    if (count > 0) apiErrorsInHandling.set(k, count);
+    else apiErrorsInHandling.delete(k);
+  });
+}
 
 /** @description Where an {@link handleApiError} call comes from, when it is not a live `apiError`. */
 interface HandleApiErrorOptions {
@@ -2398,7 +2427,7 @@ function handleApiError(key: SessionKey, cls: AgentApiErrorClass, options: Handl
   }
   // A used-up API credit balance: no wait refills it — the account is marked, and the chain or the operator takes over.
   if (cls.kind === 'usageLimit' && cls.isBalanceExhausted === true) {
-    void handleBalanceExhausted(key, cls);
+    holdTurnEndWhileHandlingApiError(key, handleBalanceExhausted(key, cls));
     return;
   }
   // An unconfirmed usage limit is probed first; it reaches the wait below only once confirmed.
@@ -2410,7 +2439,7 @@ function handleApiError(key: SessionKey, cls: AgentApiErrorClass, options: Handl
     // Each repeat is offered to the open request: the dedup is per request, so one
     // opened after the first notice still hears about the limit (and is stopped).
     const wait: UsageLimitWait = { kind: 'autoResumeOff' };
-    void announceUsageLimitOrSwitch(key, cls, Date.now(), wait, 0, isFirstOffNotice);
+    holdTurnEndWhileHandlingApiError(key, announceUsageLimitOrSwitch(key, cls, Date.now(), wait, 0, isFirstOffNotice));
     return;
   }
   const entry = apiRetryTimers.get(k);
@@ -2430,8 +2459,7 @@ function handleApiError(key: SessionKey, cls: AgentApiErrorClass, options: Handl
   // there (`handleClaudeAuthRefusal`; the frozen tmux backend keeps the notice alone); anything else, or nowhere to go,
   // surfaces a pinned notice — deduped to one per episode inside `surfaceLoggedOutNotice`.
   if (action.action === 'surface') {
-    if (getThreadAdapter(key) instanceof ClaudeJsonStreamAdapter) void handleClaudeAuthRefusal(key, cls);
-    else void surfaceLoggedOutNotice(key);
+    holdTurnEndWhileHandlingApiError(key, getThreadAdapter(key) instanceof ClaudeJsonStreamAdapter ? handleClaudeAuthRefusal(key, cls) : surfaceLoggedOutNotice(key));
     return;
   }
 
@@ -2652,14 +2680,14 @@ const apiRetryKickDeps: ApiRetryKickDeps = {
   },
   getResumeMessage: (key, retryKind) => getLimitResumeMessage({
     continueNudge: t('apiRetry.continueNudge'),
-    untakenRequestPrompt: retryKind === 'usageLimit'
-      ? joinPromptsNotTakenIn(requestLimitWaitAnswerDeps?.ledger.listOpenRequestsOf(key) ?? [])
+    untakenRequestPrompts: retryKind === 'usageLimit'
+      ? getPromptsNotTakenIn(requestLimitWaitAnswerDeps?.ledger.listOpenRequestsOf(key) ?? [])
       : undefined,
   }),
   // `ensureAgentSession` is already satisfied by a start ANOTHER caller has under way — the session is
   // not there to take the nudge yet, so it goes through the startup buffer, not straight to the adapter.
   // The buffer is in memory: the kick keeps the saved record until the buffer settles the nudge.
-  deliverNudge: (key, text, onBufferedSettled) => deliverPromptOrBuffer(key, text, startupPromptBuffer.checkIsStarting(keyToString(key)), onBufferedSettled),
+  deliverNudge: (key, text, onBufferedSettled) => deliverPromptOrBuffer(key, text, onBufferedSettled),
   trackContinuation: async (key, options) => {
     await requestWakeUpEngine?.trackContinuationTurn(key, options);
   },
@@ -2798,11 +2826,19 @@ async function handleBalanceExhausted(key: SessionKey, cls: AgentApiErrorClass):
   }
   if (plan.action === 'auto') {
     const to = plan.to;
-    if (checkIsTelegramKey(key)) await replyToThread(key, notice);
-    const outcome = await switchTopicToFallbackEntry(key, plan.from, to, { isAnnounced: true, isAutomatic: true }).catch((e) => {
-      console.warn(`[fallback] ${k}: the auto-switch to ${formatFallbackEntry(to)} failed:`, e instanceof Error ? e.message : e);
-      return { isSwitched: false };
-    });
+    // A move onto the other backend ends the conversation it leaves, known now: held ahead of the paced notice, so a stop under way
+    // drops what it held instead of resuming the backend whose credit is used up (review 24, own pass).
+    const ending = checkIsFallbackMoveAcrossBackends(key, plan.from, to) ? conversationEndings.hold(key) : undefined;
+    let outcome: { isSwitched: boolean };
+    try {
+      if (checkIsTelegramKey(key)) await replyToThread(key, notice);
+      outcome = await switchTopicToFallbackEntry(key, plan.from, to, { isAnnounced: true, isAutomatic: true, ending }).catch((e) => {
+        console.warn(`[fallback] ${k}: the auto-switch to ${formatFallbackEntry(to)} failed:`, e instanceof Error ? e.message : e);
+        return { isSwitched: false };
+      });
+    } finally {
+      ending?.release();
+    }
     // The notice is already in the topic; an open request still hears that the work stopped.
     if (!outcome.isSwitched) await announceLimitWait(key, stopped, texts, false);
     return;
@@ -2995,22 +3031,26 @@ async function handleNoResponseWithLocale(key: SessionKey): Promise<void> {
       // Transient-stall retry: same session, dialog fully intact.
       await replyToThread(key, t('agent.session_recovering'));
     } else if (action === 'fork') {
-      // Restore the last dialog into a fresh, unwedged session.
+      // Restore the last dialog into a fresh, unwedged session — as the conversation's one transition, like every start.
       await replyToThread(key, t('agent.session_recovering'));
-      const forkedId = await adapter.forkSession!(key);
-      if (forkedId) {
-        await persistSessionStart(key, adapter);
-      } else {
+      const startMsg = await runCommandSessionTransition(key, async () => {
+        const forkedId = await adapter.forkSession!(key);
+        if (forkedId) {
+          await persistSessionStart(key, adapter);
+          return '';
+        }
         // Fork failed → fall back immediately to a blank restart this tier.
         await releaseThreadSession(key);
-        const startMsg = await startAgentSession(key);
-        if (startMsg) await replyToThread(key, startMsg);
-      }
+        return startAgentSession(key);
+      });
+      if (startMsg) await replyToThread(key, startMsg);
     } else {
       // action === 'restart': blank fresh session (dialog dropped).
       await replyToThread(key, t('agent.session_restarting'));
-      await releaseThreadSession(key);
-      const startMsg = await startAgentSession(key);
+      const startMsg = await runCommandSessionTransition(key, async () => {
+        await releaseThreadSession(key);
+        return startAgentSession(key);
+      });
       if (startMsg) await replyToThread(key, startMsg);
     }
     // Re-trigger the original prompt into the (same / forked / fresh) session.
@@ -5572,6 +5612,11 @@ function stopAllAdaptersFor(key: SessionKey, adapterNames?: string[]) {
   return sweepAdapters(key, getAdapter, adapterNames);
 }
 
+/** {@link stopAllAdaptersFor} that resolves once every process it stopped is gone (`stopSessionAndWait` where the adapter has it). */
+function stopAndWaitAllAdaptersFor(key: SessionKey, adapterNames?: string[]) {
+  return sweepAdaptersAndWait(key, getAdapter, adapterNames);
+}
+
 /**
  * @description Explicit-stop teardown used by `/new`:
  * sweep every adapter active for the thread, then RELEASE the persisted session
@@ -5638,14 +5683,20 @@ function closeSetAsideQuestionsInBackground(key: SessionKey): void {
  *
  * Resolves the work the stop cut off that the agent's next prompt is told about (`null`: none), so a caller's line to
  * the operator is derived from the very record the note lists.
+ *
+ * Onto another agent or a shell it closes the conversation's requests (`cancelEndingConversationRequests`), telling a person whose words
+ * the agent never took in; `options.promptsReachedOrHeld` is a reading of «taken in» a bridged move took ahead of its bridge (absent: read
+ * here, before the old process is stopped). `options.isConversationKept` keeps the set-aside questions (an automatic move).
  */
-async function switchThreadAdapter(key: SessionKey, newName: string, options: { isConversationKept?: boolean } = {}): Promise<LostWork | null> {
+async function switchThreadAdapter(key: SessionKey, newName: string, options: { isConversationKept?: boolean; promptsReachedOrHeld?: ReadonlySet<string> } = {}): Promise<LostWork | null> {
   const prevName = getThreadAdapterNameRaw(key);
   // Another agent or a shell takes the topic over: the open request belonged to
-  // the old conversation, so it closes silently instead of a later wake-up
-  // reminding (or, in a terminal, TYPING into) a session that never saw it.
+  // the old conversation, so it closes instead of a later wake-up reminding (or,
+  // in a terminal, TYPING into) a session that never saw it — and a person whose
+  // words the agent never read is told (review 25 #3).
   if (prevName && !checkIsSameConversationSwitch(prevName, newName)) {
-    cancelConversationRequest(key);
+    // A bridged move hands in what it read ahead of its bridge, so the reading and the bridge describe the same moment (review 27 nit 5).
+    cancelEndingConversationRequests(key, options.promptsReachedOrHeld);
     // Nor does the conversation left behind get its re-asked question answered: its buttons would send the label into the new one.
     closeReAskedQuestion(key);
     // The same for the questions it had set aside — unless the bot moved the conversation itself (an automatic usage-limit
@@ -5874,10 +5925,15 @@ async function startAgentSession(key: SessionKey, args?: string): Promise<string
   // can vanish (/unbind) between their check and here, so re-check before any
   // side effect (startup window / markers) opens.
   const workDirDecision = getWorkDirStartDecision(key);
-  if (!workDirDecision.ok) return workDirDecision.message;
+  if (!workDirDecision.ok) {
+    // A failed resume's window this start was to take over has nowhere to go either (a start with no window discards nothing).
+    startupPromptBuffer.discardPrompts(kStr);
+    return workDirDecision.message;
+  }
   const workDir = workDirDecision.workDir;
   // Open the startup window synchronously (before the first await) so text
-  // typed right after `/claude` / `/opencode` is buffered, not dropped.
+  // typed right after `/claude` / `/opencode` is buffered, not dropped. A failed resume's window may be open already: this start takes
+  // it over, and its replay writes what the resume held.
   startupPromptBuffer.markStarting(kStr);
   // A fresh session is a new conversation — clear any spent compact-on-idle latch
   // (D2) so this session can idle-compact even if the PREVIOUS session in this
@@ -6038,10 +6094,45 @@ async function ensureAgentSession(
  */
 const sessionTransitions = new KeyedTransitionQueue();
 
+/**
+ * @description Run a start or resume a COMMAND makes — `/new`, a first `/claude` / `/opencode`, `/claude_mode`'s switch, `/resume`'s
+ * pick, the wedge recovery's restart or fork — as the conversation's one transition, like an ensure or an idle stop. No two of them
+ * overlap, so no startup window is opened by one and ended by another, and an ensure that comes meanwhile waits for it instead of
+ * starting or resuming a second session beside it (review 20 nit 3). Never call it from inside a transition: the queue would wait for
+ * itself.
+ */
+function runCommandSessionTransition<TResult>(key: SessionKey, transition: () => Promise<TResult>): Promise<TResult> {
+  return sessionTransitions.run(keyToString(key), async () => {
+    await waitForPendingRespawn(key);
+    return transition();
+  });
+}
+
+/**
+ * Conversations a command is about to END or REPLACE — `/new`, a `/resume` pick, `/quit`, leaving the folder, `/quitall`, a move across
+ * backends, a start onto another agent or a shell —, each held from the moment the bot knows the command ends it (ahead of the toast of
+ * its tap, a paced send, a move's bridge: review 24 #1) until its OWN transition begins (`utils/conversationEnding.ts`): a transition
+ * queued ahead of it — a stop's resume for the prompts it held, a start's or a resume's replay of its window — drops those prompts instead
+ * of writing them into the conversation the command ends, where they would start a turn the command then kills, unread and untold; a
+ * person is told, and nothing is resumed or started for them (review 21 nit 4, review 22 nit 3, review 23 #1). Not `/claude_mode`: it
+ * keeps the conversation, and a prompt written to the old backend's process is posted again by the turn's wake (R21).
+ */
+const conversationEndings = new ConversationEndings<SessionKey>({ toConversationKey: keyToString, runTransition: runCommandSessionTransition });
+
+/**
+ * @description A json-stream re-spawn (a model, effort or account change, a deferred one at a turn's end) replaces the process inside the
+ * adapter, outside this queue, with the process down for seconds: an ensure or a command transition waits for it first, and then reads the
+ * re-spawned process live instead of starting or resuming a second one beside it (review 21 nit 6).
+ */
+async function waitForPendingRespawn(key: SessionKey): Promise<void> {
+  await getThreadAdapter(key).waitForRespawn?.(key);
+}
+
 async function ensureAgentSessionNow(
   key: SessionKey,
   options: EnsureAgentSessionOptions,
 ): Promise<EnsureAgentSessionResult> {
+  await waitForPendingRespawn(key);
   // Resolve which adapter to run. `getThreadAdapterNameRaw` returns the
   // in-memory pick WITHOUT any default fallback, so "no pick yet" stays
   // distinguishable and the chain never silently defaults to a backend. When
@@ -6060,7 +6151,10 @@ async function ensureAgentSessionNow(
     console.log(`[lifecycle] ${keyToString(key)}: the per-turn pick is kept; this session runs without the per-turn stop`);
   }
   const plan = getEnsureSessionPlan({
-    isActive: getThreadAdapter(key).checkIsActive(key),
+    // Whether the process takes input, as a prompt reads it: a process the adapter is stopping by itself (a torn stdin frame's suspend,
+    // outside this queue) is resumed — the resume joins that stop — instead of read `ready` while the prompt meets a dying process (review
+    // 25 nit 4). Every other stop runs in this queue and is over before the plan reads.
+    isActive: checkIsAcceptingInput(key),
     isStarting: startupPromptBuffer.checkIsStarting(keyToString(key)),
     hasBinding: state.getBinding(key) !== undefined,
     adapterName,
@@ -6082,14 +6176,20 @@ async function ensureAgentSessionNow(
       const resumeFailure = await resumeSleepingSession(key, plan.sessionId);
       if (resumeFailure === null) return { ok: true, message: '', isFresh: false };
       const failureAction = getResumeFailureAction(resumeFailure, options.isResumeOnly === true);
+      // The failed resume's window is still open with what it holds (`resumeSleepingSession`): a way that starts nothing ends it here,
+      // its prompts dropped; a fresh start takes it over and its replay writes them into the fresh session.
       if (failureAction === 'reportUnavailable') {
+        startupPromptBuffer.discardPrompts(keyToString(key));
         return { ok: false, reason: 'start-failed', message: t('agent.serverUnavailableNotice', { label: getThreadAdapter(key).label }) };
       }
       if (failureAction === 'fail') {
+        startupPromptBuffer.discardPrompts(keyToString(key));
         return { ok: false, reason: 'resume-failed', message: t('agent.resume_failed_fresh') };
       }
       // The previous conversation is lost to this topic: say so in one line, then start fresh. A fresh start that
-      // fails too says only why: "a fresh session was started" would be false.
+      // fails too says only why: "a fresh session was started" would be false. The fresh start writes the people's prompts the resume
+      // held; what the bot made for the lost conversation is dropped, for its caller to post again its own way.
+      startupPromptBuffer.discardBotPrompts(keyToString(key));
       const startMessage = await startAgentSession(key, options.args);
       if (!getThreadAdapter(key).checkIsActive(key)) return { ok: false, reason: 'start-failed', message: startMessage };
       const message = [t('agent.resume_failed_fresh'), startMessage].filter(Boolean).join('\n');
@@ -6126,8 +6226,16 @@ function getResumableSessionId(key: SessionKey): string | null {
  * `null` once resumed, else how it failed — the backend refused the id or the
  * process did not come up, or the backend's server could not be brought up; the
  * caller decides what follows ({@link getResumeFailureAction}).
+ *
+ * A failed resume leaves its window OPEN, with every prompt it holds: the caller ends it — a fresh start that follows takes it over
+ * (its replay writes them into the fresh session), and a way that starts nothing discards them. Settled `dropped` here, they were lost
+ * although a fresh session came up a moment later (review 19 #1).
  */
-async function resumeSleepingSession(key: SessionKey, sessionId: string): Promise<ResumeFailureKind | null> {
+async function resumeSleepingSession(
+  key: SessionKey,
+  sessionId: string,
+  resumeOptions: Partial<Pick<ResumeSessionOptions, 'isWithRecentContext'>> = {},
+): Promise<ResumeFailureKind | null> {
   const kStr = keyToString(key);
   const workDirDecision = getWorkDirStartDecision(key);
   if (!workDirDecision.ok) return 'refused';
@@ -6137,28 +6245,36 @@ async function resumeSleepingSession(key: SessionKey, sessionId: string): Promis
   try {
     // A conversation the bot saw take a turn whose transcript is now missing is lost, not new: the resume fails.
     const isConversationRecorded = checkIsConversationRecorded(state.getAgent(key)?.seenWatermark, sessionId);
-    await adapter.resumeSession(key, workDirDecision.workDir, sessionId, { isConversationRecorded });
+    await adapter.resumeSession(key, workDirDecision.workDir, sessionId, { ...resumeOptions, isConversationRecorded });
     await persistSessionStart(key, adapter);
+    // A resume that did not come up takes nothing: the window stays for the caller's fresh start, or its discard.
+    if (!adapter.checkIsActive(key)) return 'refused';
     console.log(`[ensure] resumed the sleeping session of ${kStr}`);
     void replayBufferedPrompts(key);
-    return adapter.checkIsActive(key) ? null : 'refused';
+    return null;
   } catch (e) {
     console.warn(`[ensure] could not resume the sleeping session of ${kStr}:`, e instanceof Error ? e.message : e);
-    // A fresh start (if the caller takes one) re-opens its own window; otherwise the held prompts have nowhere to go.
-    startupPromptBuffer.discardPrompts(kStr);
     return e instanceof AgentBackendUnavailableError ? 'backendUnavailable' : 'refused';
   }
 }
 
 /**
  * @description A command that needs a live agent (`/compact`, `/model`, `/effort`)
- * on a topic whose session sleeps: wake it first. Returns the notice to post
- * (only when the resume failed and a fresh session took its place), `''` when
- * nothing was said, `null` when there was nothing to wake.
+ * on a topic whose session sleeps, or is being stopped: wake it first, through the
+ * conversation's queue. Returns the notice to post (only when the resume failed and
+ * a fresh session took its place), `''` when nothing was said (a live session too),
+ * `null` when there is no conversation to wake.
  */
-async function wakeSleepingSession(key: SessionKey): Promise<string | null> {
-  if (getThreadAdapter(key).checkIsActive(key) || getResumableSessionId(key) === null) return null;
-  return (await ensureAgentSession(key)).message;
+function wakeSleepingSession(key: SessionKey): Promise<string | null> {
+  // Through the queue even when the process still looks live: a stop under way (the seconds after every per-turn answer) is waited for
+  // and the conversation resumed after it, so the pick that follows applies to the resumed process; a live one is `ready` at once
+  // (review 23 nit 3). Whether there is a conversation to wake is read INSIDE the queue: a release queued ahead (`/quitall` from General)
+  // leaves none, and a fresh agent is not started for the pick; a move hands the topic over first, and the caller reads the adapter
+  // after this (review 24 nit 2). A resume that fails still starts fresh, as any ensure's does.
+  return sessionTransitions.run(keyToString(key), async () => {
+    if (getResumableSessionId(key) === null) return null;
+    return (await ensureAgentSessionNow(key, {})).message;
+  });
 }
 
 /**
@@ -6167,7 +6283,11 @@ async function wakeSleepingSession(key: SessionKey): Promise<string | null> {
  * The startup window is held open while the process stops, so a prompt arriving
  * meanwhile is buffered instead of written to a dying process; once the process
  * is gone the window closes WITHOUT dropping those prompts, and if any wait the
- * session is resumed for them at once (its own window replays them). The
+ * session is resumed for them at once (its own window replays them) — also when
+ * the stop threw, so a held prompt never waits in a closed buffer. A conversation
+ * a command queued behind it ends or replaces (every release, `/new`, the `/resume` pick,
+ * a move or a start onto another backend: held from the moment the bot knows the command
+ * ends it until its own transition begins) starts nothing for them: they are dropped (a person is told). The
  * "working" check is repeated inside the transition: a turn may have started
  * while the fire waited its turn in the queue.
  */
@@ -6185,22 +6305,59 @@ async function suspendThreadSession(key: SessionKey): Promise<void> {
     return;
   }
   autoStopUnsupportedLoggedKeys.delete(kStr);
-  await sessionTransitions.run(kStr, async () => {
-    // Decide on what the process wrote up to now, not on the last tail poll: a background task's turn may have just begun.
-    adapter.refreshWorkingState?.(key);
-    if (!adapter.checkIsActive(key) || adapter.checkIsWorking?.(key)) return;
-    startupPromptBuffer.markStarting(kStr);
-    console.log(`[compact-on-idle] ${kStr} stopping the idle process; a prompt that comes meanwhile is held`);
-    try {
-      await adapter.suspendSession!(key);
-      console.log(`[compact-on-idle] ${kStr} process stopped; the session sleeps and resumes on the next message`);
-    } finally {
-      startupPromptBuffer.closeWindow(kStr);
-    }
-  });
-  // A sleeping per-turn session with a compaction due gets its idle timer from the persisted stamps (L-D7).
-  rearmThreadIdleTimer(key);
-  if (startupPromptBuffer.checkHasPrompts(kStr)) await ensureAgentSession(key);
+  try {
+    await sessionTransitions.run(kStr, async () => {
+      // A json-stream re-spawn under way or about to start (a model, effort or account change) is over first, as for every transition
+      // in the queue: a stop beside it would terminate the process it replaces, and the prompts it held would be left in a closed
+      // buffer (review 22 #1 b). The stop then reads the re-spawned process.
+      await waitForPendingRespawn(key);
+      // Decide on what the process wrote up to now, not on the last tail poll: a background task's turn may have just begun.
+      adapter.refreshWorkingState?.(key);
+      if (!adapter.checkIsActive(key) || adapter.checkIsWorking?.(key)) return;
+      startupPromptBuffer.markStarting(kStr);
+      console.log(`[compact-on-idle] ${kStr} stopping the idle process; a prompt that comes meanwhile is held`);
+      try {
+        await adapter.suspendSession!(key);
+        console.log(`[compact-on-idle] ${kStr} process stopped; the session sleeps and resumes on the next message`);
+      } finally {
+        startupPromptBuffer.closeWindow(kStr);
+        // Still the stop's transition, also when the stop threw: a start or resume a command makes (`/new`, …) waits for it in the
+        // queue, so the prompts the stop held go to the conversation they were written in (review 20 nit 3).
+        await resumeForHeldPrompts(key);
+      }
+    });
+  } finally {
+    // A sleeping per-turn session with a compaction due gets its idle timer from the persisted stamps (L-D7).
+    rearmThreadIdleTimer(key);
+  }
+}
+
+/**
+ * @description After an idle stop, whatever its end, inside the stop's own transition: the prompts its window held go to the
+ * conversation resumed for them (`ensureAgentSessionNow`: the queued ensure would wait for this very transition). A conversation a
+ * command queued behind the stop ends or replaces — a release, `/new`, a `/resume` pick, a move or a start onto another backend:
+ * {@link conversationEndings} — must not be resumed only to be killed by that command: they are dropped, a person told to send
+ * theirs again, and nothing starts (review 23 #1). A conversation with no id left (its topic deleted) is the same drop, as a guard. A
+ * conversation that is already live when the ensure returns (it found it `ready`) gets them replayed into it; one the ensure could not
+ * bring up without discarding them has them dropped — no way out of a stop leaves them in a closed buffer.
+ */
+async function resumeForHeldPrompts(key: SessionKey): Promise<void> {
+  const kStr = keyToString(key);
+  if (!startupPromptBuffer.checkHasPrompts(kStr)) return;
+  if (conversationEndings.checkIsEnding(kStr) || getResumableSessionId(key) === null) {
+    console.log(`[compact-on-idle] ${kStr}: a command ends the conversation (or it has no id left); the prompts the stop held are dropped`);
+    startupPromptBuffer.discardPrompts(kStr);
+    return;
+  }
+  const ensured = await ensureAgentSessionNow(key, {});
+  // A resume (or the fresh start after a failed one) took them over; nothing is left to do.
+  if (!startupPromptBuffer.checkHasPrompts(kStr) || startupPromptBuffer.checkIsStarting(kStr)) return;
+  // The ensure found the conversation already live (`ready`) and replayed nothing: they are written into it here (review 22 #1 c). Not
+  // awaited, as a resume's replay: a write on the adopted-session path may wake the conversation, and that ensure queues behind this very
+  // transition.
+  if (ensured.ok) void replayBufferedPrompts(key);
+  // The ensure failed without discarding them (an unbound or deleted topic, no adapter): dropped, a person told (review 23 nit 6).
+  else startupPromptBuffer.discardPrompts(kStr);
 }
 
 /** Conversations already told once that their CLI is too old for the auto-stop (L-D10). */
@@ -6231,12 +6388,32 @@ function handleAgentTurnEnded(key: SessionKey): void {
   noteThreadActivity(key);
   topicIndicator.requestRefresh(key);
   const adapter = getThreadAdapter(key);
-  if (adapter.name !== claudePerTurnAdapterName) return;
-  if (checkIsDeferredCompactionArmed(key) || adapter.checkIsWorking?.(key)) return;
-  void suspendThreadSession(key).catch((e) =>
-    console.warn(`[lifecycle] the per-turn stop of ${keyToString(key)} failed:`, e instanceof Error ? e.message : e),
-  );
+  if (adapter.name === claudePerTurnAdapterName && !checkIsDeferredCompactionArmed(key) && !adapter.checkIsWorking?.(key)) {
+    void suspendThreadSession(key).catch((e) =>
+      console.warn(`[lifecycle] the per-turn stop of ${keyToString(key)} failed:`, e instanceof Error ? e.message : e),
+    );
+  }
+  // The turn's end is decided at the adapter's own turn-end event (json-stream Claude, both lifecycles) — after the per-turn stop is
+  // queued: its window opens only in a later tick, and once it is over the session is gone, which a watch reads as «tracking lost», never
+  // as an end. A reminder this decides is handed to a post waiting for this turn, which writes its own prompt first; with none waiting it
+  // resumes the session through the ensure, which queues behind the stop (`requests/README.md` § Turn starts).
+  settleEndedTurnsAndHandOver(key);
 }
+
+/**
+ * @description Settle `key`'s watches whose turn already ended (`RequestWakeUpEngine.settleEndedTurnsOf`, synchronous up to the
+ * decisions) and hand the reminders they decided, once persisted, to a post on its way to its write (`deliverOrHandOverWake`), else
+ * deliver them at once — at the adapter's turn end ({@link handleAgentTurnEnded}) and at the write choke point, whose write runs in
+ * this tick, so a reminder follows that write, and a post that waited writes its prompt first. Never rejects.
+ */
+function settleEndedTurnsAndHandOver(key: SessionKey): void {
+  const engine = requestWakeUpEngine;
+  if (!engine) return;
+  void engine.settleEndedTurnsOf(key).then((deliverSettledWakes) => engine.deliverOrHandOverWake(key, deliverSettledWakes));
+}
+
+/** No reminder to deliver: what a settle resolves, and what a post's release is, while the wake-up engine is not up yet. */
+const deliverNoSettledWakes = async (): Promise<void> => {};
 
 /**
  * @description A prompt (text, voice, file, a re-asked question's answer) arrives
@@ -6253,13 +6430,23 @@ async function resumeSleepingSessionForPrompt(
   return (await wakeSleepingSessionForPrompt(key, sendNotice)).isAwake;
 }
 
-/** @description {@link resumeSleepingSessionForPrompt}, also saying whether it posted a notice (a start that failed says why). */
+/**
+ * @description {@link resumeSleepingSessionForPrompt}, also saying whether it posted a notice (a start that failed says why). Whether there
+ * is a conversation to wake is read again INSIDE the conversation's queue, as the wake of `/model`, `/effort` and `/compact` does: a release
+ * queued ahead (`/quitall` from General, a `/quit` that a voice note's transcript waited behind) clears the ids, and the wake then starts
+ * nothing — `isEnded`, which a person's prompt is told as the release's refusal — instead of a fresh conversation the operator just quit
+ * (review 25 #2). A resume that fails still starts fresh, as any ensure's does.
+ */
 async function wakeSleepingSessionForPrompt(
   key: SessionKey,
   sendNotice: (text: string) => Promise<unknown> = (text) => replyToThread(key, text),
 ): Promise<LateWakeResult> {
   if (checkIsGeneral(key) || !state.getBinding(key) || getResumableSessionId(key) === null) return { isAwake: false, isNoticePosted: false };
-  const ensured = await ensureAgentSession(key);
+  const ensured = await sessionTransitions.run(keyToString(key), async () => {
+    if (!state.getBinding(key) || getResumableSessionId(key) === null) return null;
+    return ensureAgentSessionNow(key, {});
+  });
+  if (ensured === null) return { isAwake: false, isNoticePosted: false, isEnded: true };
   if (ensured.message) await sendNotice(ensured.message);
   return { isAwake: ensured.ok && getThreadAdapter(key).checkIsActive(key), isNoticePosted: Boolean(ensured.message) };
 }
@@ -6270,26 +6457,46 @@ async function wakeSleepingSessionForPrompt(
  * routine as a live message (new-message marker + loader + `sendInput`).
  */
 async function replayBufferedPrompts(key: SessionKey): Promise<void> {
+  // A command that ends or replaces the conversation (a release, `/new`, a `/resume` pick, a move or a start onto another backend) waits
+  // behind the start or resume replaying this window: what the window holds was not sent for the conversation the command ends, so it is
+  // dropped — a person told to send it again — not written there (review 22 nit 3, review 23 #1).
+  if (conversationEndings.checkIsEnding(keyToString(key))) {
+    console.log(`[startup] ${keyToString(key)}: a command ends the conversation; the prompts its window held are dropped`);
+    startupPromptBuffer.discardPrompts(keyToString(key));
+    return;
+  }
   const adapter = getThreadAdapter(key);
   const isSessionActive = adapter.checkIsActive(key);
   // The buffer closes the window synchronously and settles every prompt it held (a sender waiting on one,
   // like the API-error retry's nudge, hears whether it reached the session).
+  // The whole replay — the buffered prompts and the held ones after them — is still the start for the wake-up engine's turn probe
+  // (`StartupPromptBuffer.checkIsReplaying`): no watch made during the start is read as a turn that ended (`requests/README.md` § Turn starts).
   await startupPromptBuffer.replayPrompts(keyToString(key), {
     isSessionActive,
-    forward: async (prompt, isPersonInput, isAccountsNoteCarrier) => { await forwardPromptToAgent(key, adapter, prompt, undefined, { isPersonInput, isAccountsNoteCarrier }); },
+    forward: async (prompt, options) => {
+      const outcome = await forwardPromptToAgent(key, adapter, prompt, undefined, options);
+      // A guard: the replay writes into the process the start brought up, never an adopted one, so no wake can come up empty here. If
+      // one did, the buffer settles the prompt `dropped` — never «replayed» for a prompt no agent got (review 21, own pass).
+      if (outcome === 'noSession') throw new Error(noSessionForPostError);
+    },
+    afterReplay: async () => {
+      // A command that ends or replaces the conversation runs (a move's own start among them): the held prompts wait for the first
+      // prompt it hands over — a replayable one, which carries them after its own text (R23) — instead of reaching the new agent ahead of
+      // the move's bridge; with none, the next prompt carries them (review 26 #5).
+      if (conversationEndings.checkIsRefusingMessages(keyToString(key))) return;
+      // R23: prompts held during a usage-limit wait that ended with the previous
+      // session go to this one — on their own when nothing above carried them. They
+      // are what people asked for meanwhile: a write that fails is told in the topic
+      // like a person's own message, never only logged.
+      const heldText = limitHeldPrompts.releaseAll(key);
+      if (heldText === null) return;
+      try {
+        await forwardPromptToAgent(key, adapter, heldText, undefined, { isPersonInput: true });
+      } catch (err) {
+        console.error('[replayBufferedPrompts] forwarding the held prompts failed:', err);
+      }
+    },
   });
-  if (!isSessionActive) return;
-  // R23: prompts held during a usage-limit wait that ended with the previous
-  // session go to this one — on their own when nothing above carried them. They
-  // are what people asked for meanwhile: a write that fails is told in the topic
-  // like a person's own message, never only logged.
-  const heldText = limitHeldPrompts.releaseAll(key);
-  if (heldText === null) return;
-  try {
-    await forwardPromptToAgent(key, adapter, heldText, undefined, { isPersonInput: true });
-  } catch (err) {
-    console.error('[replayBufferedPrompts] forwarding the held prompts failed:', err);
-  }
 }
 
 /**
@@ -6338,15 +6545,33 @@ async function forwardPromptToAgent(
   // A technical prompt (the standalone todo reminder) goes only into a session that is live and idle now, and is otherwise
   // dropped without a word: never buffered, never a resume, never a "no session" line to the person.
   const isTechnicalPrompt = options.isTechnicalPrompt === true;
+  const isPersonInput = options.isPersonInput === true;
   const outcome = await deliverLatePrompt({
     isTechnical: isTechnicalPrompt,
+    // A post waits again here, after the replay wait: a move may have begun during it (review 28 nit 2).
+    waitBeforeRoute: options.waitBeforeRoute,
     checkIsWindowOpen: () => startupPromptBuffer.checkIsStarting(keyToString(key)),
-    checkIsSessionActive: () => adapter.checkIsActive(key) && !(isTechnicalPrompt && (adapter.checkIsBusy?.(key) ?? false)),
+    // Whether the process takes input, as every routing point reads it: one a release or a move is stopping takes nothing (review 25
+    // nit 7). A technical prompt goes only into an idle one.
+    checkIsSessionActive: () => checkIsAcceptingInput(key) && !(isTechnicalPrompt && (adapter.checkIsBusy?.(key) ?? false)),
+    // A person's prompt is refused while a command ends or replaces the conversation, as at its own write (review 25 #1).
+    ...(isPersonInput ? {
+      checkIsRefused: () => checkIsPersonPromptRefused(key, options.requestId ?? null),
+      reportRefused: () => reportDroppedPersonPrompt(key, options.requestId ?? null, true),
+    } : {}),
     buffer: async () => {
+      const bufferedText = `${options.requestHeader ?? ''}${getPromptWithThreadMessageContext(key, text, options.messageContext)}`;
+      // A post's wait is for this delivery's own routing; the startup buffer keeps none for the replay (`deliverPromptOrBuffer`).
+      const bufferedOptions: PromptDeliveryOptions = { isPersonInput: options.isPersonInput, isAccountsNoteCarrier: options.isAccountsNoteCarrier, lostWorkTelling: options.lostWorkTelling, waitBeforeRoute: options.waitBeforeRoute };
+      // A person's prompt that is dropped there is told about and closes its request, as at the person's own buffer.
+      if (isPersonInput) {
+        await deliverPromptOrBuffer(key, bufferedText, createPersonBufferedSettle(key, options.requestId ?? null), bufferedOptions);
+        return;
+      }
       // A bot-made prompt (a wake-up) that waits here counts only once its replay reached the agent, as at any other buffer.
       const buffered = createBufferedOutcome();
-      await deliverPromptOrBuffer(key, `${options.requestHeader ?? ''}${getPromptWithThreadMessageContext(key, text, options.messageContext)}`, true, buffered.settle, { isPersonInput: options.isPersonInput, isAccountsNoteCarrier: options.isAccountsNoteCarrier });
-      if (options.isPersonInput !== true) await buffered.assertReplayed();
+      await deliverPromptOrBuffer(key, bufferedText, buffered.settle, bufferedOptions);
+      await buffered.assertReplayed();
     },
     wake: () => wakeSleepingSessionForPrompt(key),
     forward: async () => {
@@ -6371,6 +6596,8 @@ interface PromptForwardOptions {
   isPersonInput?: boolean;
   isRecoveryReplay?: boolean;
   isRequestReminder?: boolean;
+  /** How the lost-work note this prompt carries asks to tell about the loss (`LostWorkTelling`; absent: `plain`). */
+  lostWorkTelling?: LostWorkTelling;
   isTechnicalPrompt?: boolean;
   /**
    * The prompt starts a turn the person or the scheduler made, so it may carry the accounts note (`limitNotes/`): a person's
@@ -6381,6 +6608,10 @@ interface PromptForwardOptions {
   isAccountsNoteCarrier?: boolean;
   messageContext?: MessageContext;
   requestHeader?: string;
+  /** The request a person's prompt opened (absent or `null`: none) — closed if the prompt waits in a startup buffer and is dropped there. */
+  requestId?: string | null;
+  /** A bot-made post's wait while a command ends or replaces the conversation, before the routing after an adopt replay (review 28 nit 2). */
+  waitBeforeRoute?: () => Promise<void>;
 }
 
 /** @description The forward itself, for a session that is ready to take the prompt: {@link forwardPromptToAgent} minus the replay wait. */
@@ -6391,6 +6622,17 @@ async function forwardPromptToLiveAgent(
   sentAtMs?: number,
   options: PromptForwardOptions = {},
 ): Promise<void> {
+  // A new prompt starts or joins a turn: the watches whose turn already ENDED are settled first, synchronously and before the write
+  // (no await may precede it), so the new turn never runs under the watch of the turn before it (`requests/README.md` § Turn starts).
+  // Their reminders are delivered once persisted — after this write, which runs in this tick, or, while a post is on its way to its
+  // write, after that post's prompt (the todo reminder written at a turn end is such a write).
+  settleEndedTurnsAndHandOver(key);
+  // Any write during the replay of a start's buffer — a replayed prompt, the held prompts after them, a prompt written at once while it
+  // runs — goes to the process the replay writes the buffer into (`noteReplayedWrite`); no write outside a replay names anything.
+  if (startupPromptBuffer.checkIsReplaying(keyToString(key))) requestWakeUpEngine?.noteReplayedWrite(key);
+  // Every write stamps the process it goes to, so a watch tracked once that process went down (a re-spawn right after a post's write)
+  // is named from the write (review 22 nit 2).
+  requestWakeUpEngine?.noteWrite(key);
   // A forwarded prompt is thread activity — reset the compact-on-idle watchdog (F2).
   noteThreadActivity(key);
   const isTechnicalPrompt = options.isTechnicalPrompt ?? false;
@@ -6431,7 +6673,9 @@ async function forwardPromptToLiveAgent(
   // request's reminder included: the wake of a tracker request whose process a restart left behind is how its agent hears.
   const isLostWorkNoteCarried = (isReplayable || options.isRequestReminder === true) && adapter.name !== 'terminal';
   const lostWorkRecord = isLostWorkNoteCarried ? state.getLostWork(key) : undefined;
-  const body = lostWorkRecord ? `${buildLostWorkNote(lostWorkRecord, getLocaleEndonym(getActiveLang()))}\n\n${messageBody}` : messageBody;
+  const body = lostWorkRecord
+    ? `${buildLostWorkNote(lostWorkRecord, getLocaleEndonym(getActiveLang()), { telling: options.lostWorkTelling ?? 'plain' })}\n\n${messageBody}`
+    : messageBody;
   // Cache the (reply-folded) prompt so a wedged OpenCode session can be recovered
   // by restarting fresh and replaying it — replaying WITH the quote is correct.
   // A genuine new prompt also opens a fresh recovery episode (clears the guard).
@@ -7421,43 +7665,43 @@ async function pauseThreadSchedulesOnUnbind(key: SessionKey): Promise<number> {
 }
 
 /**
- * @description Resume the schedules paused for `'unbound'` on `key` when its
- * topic is rebound (S8): recompute each `nextRunAt` FROM NOW (no catch-up for a
- * deliberate pause), then either un-pause + re-arm, or — for a one-shot whose
- * instant already passed while unbound — drop the record (a past one-shot has no
- * future occurrence, so it cannot be resumed). Posts ONE notice with the resumed
- * count (only when > 0). Jobs paused for other reasons (none exist in v1) are
- * left alone.
+ * @description The scheduler's ports for resuming a conversation's unbound-paused jobs (`scheduler/rebindResume.ts`);
+ * `announceResumed` is the platform's way of saying so.
+ */
+function createRebindResumePorts(announceResumed: (count: number) => Promise<void>): RebindResumePorts {
+  return {
+    listThreadSchedules: (key) => state.getThreadSchedules(key),
+    removeSchedule: (jobId) => state.removeSchedule(jobId),
+    upsertSchedule: (record) => state.upsertSchedule(record),
+    armJob: (record) => schedulerEngine?.armJob(record),
+    disarmJob: (jobId) => schedulerEngine?.disarmJob(jobId),
+    announceResumed,
+    now: () => Date.now(),
+  };
+}
+
+/**
+ * @description Resume the schedules paused for `'unbound'` on `key` when its topic is rebound (S8), with ONE notice in the
+ * topic carrying the resumed count (`scheduler/rebindResume.ts`).
  */
 async function resumeThreadSchedulesOnRebind(key: SessionKey): Promise<void> {
-  const paused = state
-    .getThreadSchedules(key)
-    .filter((record) => record.isPaused && record.pauseReason === 'unbound');
-  if (paused.length === 0) return;
+  await resumeSchedulesPausedForUnbound(
+    createRebindResumePorts((count) => replyToThread(key, t('schedule.resumedRebind', { count })).then(() => undefined)),
+    key,
+  );
+}
 
-  const nowMs = Date.now();
-  let resumed = 0;
-  for (const record of paused) {
-    const action = getRebindResumeAction(record, nowMs);
-    if (action.kind === 'remove') {
-      await state.removeSchedule(record.id);
-      schedulerEngine?.disarmJob(record.id);
-      continue;
-    }
-    const updated: ScheduleRecord = {
-      ...record,
-      nextRunAt: action.nextRunAt,
-      updatedAt: new Date(nowMs).toISOString(),
-    };
-    delete updated.isPaused;
-    delete updated.pauseReason;
-    await state.upsertSchedule(updated);
-    schedulerEngine?.armJob(updated);
-    resumed += 1;
-  }
-  if (resumed > 0) {
-    await replyToThread(key, t('schedule.resumedRebind', { count: resumed }));
-  }
+/**
+ * @description Resume the jobs a tracker conversation's fire paused for a folder it could not use, once a request of the issue
+ * finds the folder usable again — what `/bind` does in a topic. The bot posts nothing on an issue: the resume is one log line.
+ */
+async function resumeTrackerSchedulesOnRebind(key: SessionKey): Promise<void> {
+  await resumeSchedulesPausedForUnbound(
+    createRebindResumePorts(async (count) => {
+      console.log(`[scheduler] ${count} job(s) of ${keyToString(key)} resumed: its folder is usable again`);
+    }),
+    key,
+  );
 }
 
 /**
@@ -7624,16 +7868,21 @@ command('bind', async (_ctx, key, parsed) => {
  * pinned banner, release persisted session ids, pause the thread's schedules,
  * then wipe the binding. Shared by the `/bind` picker's «leave current dir»
  * button (the old `/unbind` command was folded into it). Safe to call only on a
- * BOUND, non-General topic — the leave button only renders there.
+ * BOUND, non-General topic — the leave button only renders there. `ending` is the
+ * tap's hold on the conversation, taken ahead of its toast (review 24 #1).
  */
-async function unbindThread(key: SessionKey): Promise<void> {
+async function unbindThread(key: SessionKey, ending: ConversationEnding): Promise<void> {
   // Mark this thread as in-flight unbinding so the adapter's synchronous
   // `stopped` event doesn't race us and re-pin a stale "idle" banner over
   // the message we're about to delete.
   const kStr = keyToString(key);
   unbindingKeys.add(kStr);
-  // Leaving the folder ends the conversation's work: its open request closes silently.
-  cancelConversationRequest(key);
+  // Leaving the folder ends the conversation's work: its open requests close, a person whose words the agent never read told (review 26
+  // #2) — read now, ahead of the stop.
+  cancelEndingConversationRequests(key);
+  // Refused until the binding is gone, past the hold's transition: a post that waited (`waitForConversationChange`) then meets an unbound
+  // topic and pauses its job, instead of starting a fresh agent in the folder being left (review 27 nit 4).
+  const stopRefusingMessages = conversationEndings.refuseMessages(key);
   try {
     // Order matters: drop the pin FIRST (while binding.pinnedStatusMessageId
     // is still readable), then stop the session, then wipe the binding.
@@ -7645,21 +7894,32 @@ async function unbindThread(key: SessionKey): Promise<void> {
     if (pendingQuestions.has(kStr)) await retirePendingQuestion(key);
 
     // Stop any running session before discarding the binding so we don't leave
-    // an orphan tmux/SSE stream pointing at a directory we no longer track.
-    const adapter = getThreadAdapter(key);
-    if (adapter.checkIsActive(key)) {
-      // Close any still-pending OpenCode question on the server BEFORE stopping
-      // the session — a stopped session can't accept the reject, and an
-      // unrejected question re-surfaces on the next reattach. No-op for Claude /
-      // no pending question.
-      adapter.rejectQuestion?.(key);
-      try { adapter.stopSession(key); } catch (e) {
-        console.warn(`[unbind] stopSession failed for ${kStr}:`, e);
+    // an orphan tmux/SSE stream pointing at a directory we no longer track. As the
+    // conversation's one transition, after a re-spawn: a start, a resume or a
+    // re-spawn in flight is over first, so none brings a process back for the
+    // conversation released here (review 22, own pass). Held as ending it since the
+    // tap, ahead of the toast, the unpin and the question's retirement above: a stop
+    // queued ahead drops what it held (review 23 #1, review 24 #1). The stop is waited
+    // for, so nothing queued behind writes into a process still exiting (review 23 nit 4).
+    await ending.run(async () => {
+      const adapter = getThreadAdapter(key);
+      if (adapter.checkIsActive(key)) {
+        // Close any still-pending OpenCode question on the server BEFORE stopping
+        // the session — a stopped session can't accept the reject, and an
+        // unrejected question re-surfaces on the next reattach. No-op for Claude /
+        // no pending question.
+        adapter.rejectQuestion?.(key);
+        try {
+          if (adapter.stopSessionAndWait) await adapter.stopSessionAndWait(key);
+          else adapter.stopSession(key);
+        } catch (e) {
+          console.warn(`[unbind] stopSession failed for ${kStr}:`, e);
+        }
       }
-    }
-    // Release persisted session ids too — otherwise re-binding this thread
-    // later + a bot restart would resurrect the old session the user unbound.
-    await releaseConversationIds(key);
+      // Release persisted session ids too — otherwise re-binding this thread
+      // later + a bot restart would resurrect the old session the user unbound.
+      await releaseConversationIds(key);
+    });
     // Pause this thread's schedules BEFORE dropping the binding: a fire against
     // an unbound topic can't deliver, so the jobs park (paused + disarmed) and
     // the next /bind resumes them. `removeBinding` only touches bindings/agents/
@@ -7674,6 +7934,7 @@ async function unbindThread(key: SessionKey): Promise<void> {
     clearInMemoryThreadState(key);
     await replyToThread(key, t('thread.unbound'));
   } finally {
+    stopRefusingMessages();
     unbindingKeys.delete(kStr);
   }
 }
@@ -7796,18 +8057,29 @@ command('new', async (_ctx, key) => {
     await replyToThread(key, t('thread.bind_required'));
     return;
   }
-  // A fresh session does not know the old one's request: it closes silently.
-  cancelConversationRequest(key);
+  // A fresh session does not know the old one's requests: they close, a person whose words the agent never read told (review 26 #2).
+  cancelEndingConversationRequests(key);
   // Release the current session (sweep + clear ids) via `releaseThreadSession`.
   // The fresh start below uses the thread's current adapter, so we keep the
-  // adapter selection untouched.
-  await releaseThreadSession(key);
+  // adapter selection untouched. Both as the conversation's one transition: an idle stop under way ends first — dropping what it held,
+  // the person told, since this command holds the conversation as ending (review 25 nit 6) —, and no ensure starts a second session beside
+  // this one.
   // `startAgentSession` handles startup buffering, the typing-loader boot, and
   // the preamble-marker reset. It returns `''` for a self-greeting agent (Claude
   // prints its own banner) — show a notice only for a non-empty ready text.
-  const msg = await startAgentSession(key);
+  // Held as ending the conversation while it waits: a stop under way drops what it held instead of resuming the old conversation (review
+  // 21 nit 4); a person's message is refused until the fresh start is over (review 25 #1).
+  const msg = await startFreshSessionForNew(key);
   if (msg) await replyToThread(key, msg);
 });
+
+/** `/new`'s release and fresh start, as the conversation's one transition, the conversation held as ending until that transition begins. */
+function startFreshSessionForNew(key: SessionKey): Promise<string> {
+  return conversationEndings.hold(key).run(async () => {
+    await releaseThreadSession(key);
+    return startAgentSession(key);
+  });
+}
 
 // ═══════════════════════════════════════════════════════════════════════════════
 //  /whoami /version /help /status (global) — debug & onboarding
@@ -8344,12 +8616,16 @@ command('mcp', async (_ctx, key) => {
  *
  * `adapterName` is typed `string` because the button passes a raw callback match;
  * an unknown name makes `getThreadAdapter` throw, which the caller wrapping this
- * (the `agent_*` action) turns into a "unknown agent" answer.
+ * (the `agent_*` action) turns into a "unknown agent" answer. `ending` is the
+ * caller's hold on the conversation when it already knows the start leaves it
+ * (an agent button onto a shell, held ahead of its toast); without one the start
+ * holds it itself once it knows.
  */
 async function handleAgentStart(
   key: SessionKey,
   adapterName: string,
   args?: string,
+  ending?: ConversationEnding,
 ): Promise<void> {
   if (checkIsGeneral(key)) {
     await replyToThread(key, t('error.start_in_general'));
@@ -8369,17 +8645,48 @@ async function handleAgentStart(
   // The other backend, with a conversation to hand over: ask first; the answer makes the switch.
   const targetFamily = getBackendFamily(adapterName);
   if (targetFamily !== null && await askBeforeCrossBackendSwitch(key, targetFamily, args)) return;
-  await switchThreadAdapter(key, adapterName);
-  const adapter = getThreadAdapter(key);
-  if (adapter.checkIsActive(key)) {
-    await replyToThread(key, t('agent.already_active', { label: adapter.label }));
-    return;
+  // The switch runs as the conversation's one transition, after a re-spawn — a start or resume of the old backend in flight is over first
+  // and none comes back beside the new one — and, when it leaves the conversation (another agent or a shell), held as ending it from here,
+  // as a move is (review 23 nit 2), unless the caller held it already.
+  const switchAdapter = (): Promise<LostWork | null> => switchThreadAdapter(key, adapterName);
+  const isLeavingConversation = checkIsStartLeavingConversation(key, adapterName);
+  // A start that leaves the conversation refuses a person's message until the new agent's start is over, as a move does until its first
+  // prompt reached the other backend: between the switch and that start no agent takes it, and the start's window belongs to an agent that
+  // does not know the conversation (review 25 #1, own pass).
+  const stopRefusingMessages = isLeavingConversation ? conversationEndings.refuseMessages(key) : null;
+  let msg: string;
+  try {
+    if (isLeavingConversation) {
+      await (ending ?? conversationEndings.hold(key)).run(switchAdapter);
+    } else {
+      ending?.release();
+      await runCommandSessionTransition(key, switchAdapter);
+    }
+    const adapter = getThreadAdapter(key);
+    if (adapter.checkIsActive(key)) {
+      await replyToThread(key, t('agent.already_active', { label: adapter.label }));
+      return;
+    }
+    // A sleeping conversation is woken, not replaced (L-D4): `/new` is the fresh start. A first start is the conversation's one
+    // transition too, and finds a session another trigger started meanwhile instead of starting a second one beside it.
+    msg = getResumableSessionId(key) !== null
+      ? (await ensureAgentSession(key, { args })).message
+      : await runCommandSessionTransition(key, async () => (getThreadAdapter(key).checkIsActive(key)
+        ? t('agent.already_active', { label: getThreadAdapter(key).label })
+        : startAgentSession(key, args)));
+  } finally {
+    stopRefusingMessages?.();
   }
-  // A sleeping conversation is woken, not replaced (L-D4): `/new` is the fresh start.
-  const msg = getResumableSessionId(key) !== null
-    ? (await ensureAgentSession(key, { args })).message
-    : await startAgentSession(key, args);
   if (msg) await replyToThread(key, msg);
+}
+
+/**
+ * @description Whether starting `startAdapterName` (already resolved, `resolveStartAdapterName`) leaves the conversation the topic holds:
+ * onto another agent or a shell. A switch within the Claude family keeps it (`checkIsSameConversationSwitch`).
+ */
+function checkIsStartLeavingConversation(key: SessionKey, startAdapterName: string): boolean {
+  const previousName = getThreadAdapterNameRaw(key);
+  return previousName !== undefined && !checkIsSameConversationSwitch(previousName, startAdapterName);
 }
 
 /**
@@ -8472,6 +8779,13 @@ async function applyClaudeBackendSwitch(key: SessionKey, target: string): Promis
     const refusal = getPerTurnRefusal(key);
     if (refusal) return t('claudeMode.perTurn_refused', { version: refusal.version, min: minAutoStopClaudeCodeVersion });
   }
+  // As the conversation's one transition: the stop of the old backend and the resume on the new one never overlap an ensure or an idle
+  // stop (review 20 nit 3).
+  return runCommandSessionTransition(key, () => switchClaudeBackendNow(key, target, label));
+}
+
+/** {@link applyClaudeBackendSwitch}'s switch itself, inside the conversation's transition. */
+async function switchClaudeBackendNow(key: SessionKey, target: string, label: string): Promise<string> {
   const wasActive = getThreadAdapter(key).checkIsActive(key);
   const sessionId = state.getAgent(key)?.claudeSessionId;
 
@@ -8484,18 +8798,16 @@ async function applyClaudeBackendSwitch(key: SessionKey, target: string): Promis
 
   const decision = getWorkDirStartDecision(key);
   if (!decision.ok) return `${decision.message}${backgroundStoppedSuffix}`;
-  const targetAdapter = getThreadAdapter(key);
   sendThreadTypingIndicator(key).catch(() => {});
-  if (sessionId && targetAdapter.resumeSession) {
-    markNeedsNewMessage(key);
+  if (sessionId) {
     clearThreadContextMarker(key);
-    try {
-      await targetAdapter.resumeSession(key, decision.workDir, sessionId, { isWithRecentContext: true });
-      await persistSessionStart(key, targetAdapter);
+    // The resume opens its startup window as a wake's does: a prompt that comes meanwhile waits and is replayed (review 20 nit 3).
+    if ((await resumeSleepingSession(key, sessionId, { isWithRecentContext: true })) === null) {
       return `${t('claudeMode.switched_resumed', { label })}${backgroundStoppedSuffix}`;
-    } catch (e) {
-      console.error('[claude_mode] resume failed, starting fresh:', e instanceof Error ? e.message : e);
     }
+    console.error(`[claude_mode] ${keyToString(key)}: the resume on the new backend failed; starting fresh`);
+    // The fresh start takes the failed resume's window over, as after a failed wake: the people's prompts go to the fresh session.
+    startupPromptBuffer.discardBotPrompts(keyToString(key));
   }
   const msg = await startAgentSession(key);
   return `${msg || t('claudeMode.switched_fresh', { label })}${backgroundStoppedSuffix}`;
@@ -9042,7 +9354,7 @@ async function resumeConversationsWaitingForAccount(): Promise<void> {
           modelToPin: null,
           getFirstPrompt: () => getLimitResumeMessage({
             continueNudge: t('apiRetry.continueNudge'),
-            untakenRequestPrompt: joinPromptsNotTakenIn(requestLimitWaitAnswerDeps?.ledger.listOpenRequestsOf(key) ?? []),
+            untakenRequestPrompts: getPromptsNotTakenIn(requestLimitWaitAnswerDeps?.ledger.listOpenRequestsOf(key) ?? []),
           }),
         });
       } catch (e) {
@@ -9694,19 +10006,37 @@ function formatThreadBackend(key: SessionKey): string {
  * the work continues now and the notice that says so (posted here only when `isAnnounced` — the auto-switch has no
  * other voice, while a tapped button's notice is edited into the same line by its handler). `reason: 'signIn'` is the same
  * move off a Claude account the CLI refused ({@link handleClaudeAuthRefusal}): only its notices and log line differ.
+ *
+ * A move onto the other backend refuses a person's message from here — nothing is awaited before — until it ends: its first prompt has
+ * reached the new backend, or it failed (`ConversationEndings.refuseMessages`, review 25 #1). Written into the backend being left, the
+ * message would be lost with it; written into the new one ahead of the bridge, it would reach an agent that does not know the
+ * conversation yet; and between the two there is no agent to take it.
  */
 async function switchTopicToFallbackEntry(
   key: SessionKey,
   from: FallbackChainEntry | null,
   to: FallbackChainEntry,
-  options: { isAnnounced: boolean; isAutomatic?: boolean; reason?: FallbackSwitchReason },
+  options: { isAnnounced: boolean; isAutomatic?: boolean; reason?: FallbackSwitchReason; ending?: ConversationEnding },
+): Promise<{ isSwitched: boolean; notice: string; isFailed?: boolean }> {
+  const stopRefusingMessages = checkIsFallbackMoveAcrossBackends(key, from, to) ? conversationEndings.refuseMessages(key) : null;
+  try {
+    return await switchTopicToFallbackEntryNow(key, from, to, options);
+  } finally {
+    stopRefusingMessages?.();
+  }
+}
+
+/** @description {@link switchTopicToFallbackEntry} itself, under the refusal its caller took for a move onto the other backend. */
+async function switchTopicToFallbackEntryNow(
+  key: SessionKey,
+  from: FallbackChainEntry | null,
+  to: FallbackChainEntry,
+  options: { isAnnounced: boolean; isAutomatic?: boolean; reason?: FallbackSwitchReason; ending?: ConversationEnding },
 ): Promise<{ isSwitched: boolean; notice: string; isFailed?: boolean }> {
   const reason = options.reason ?? 'limit';
   const k = keyToString(key);
   const fromLabel = from ? formatFallbackEntry(from) : '?';
   const toLabel = formatFallbackEntry(to);
-  // An OpenCode topic on the server's default model has no rung (`from` is null), yet it is on OpenCode all the same.
-  const isSameFamily = (from?.backend ?? getTopicBackendFamily(key)) === to.backend;
   const runningModel = readRunningModelBeforeMove(key, from, to);
   // The notice is a topic message: a conversation of another platform (a Jira issue) hears nothing — the log line below says it — and
   // its work simply continues.
@@ -9718,7 +10048,7 @@ async function switchTopicToFallbackEntry(
     await say(notice);
     return { isSwitched: false, notice, isFailed: true };
   };
-  let firstPrompt: FirstPromptAfterMove | null = null;
+  let firstPrompt: LimitResumeMessage | null = null;
   let isStoppingBackground = false;
   if (from?.backend === 'claude' && to.backend === 'claude') {
     // The same account on another model (a pick beyond the limit's scope) is no account pick: the topic keeps following General.
@@ -9741,23 +10071,34 @@ async function switchTopicToFallbackEntry(
     const cutOffWork = takeLostWorkOf(key);
     isStoppingBackground = checkHasLostBackgroundWork(cutOffWork);
     if (cutOffWork) await foldLostWorkIntoNextPrompt(key, { ...cutOffWork, reason: 'restarted', lostAt: Date.now() });
-  } else if (isSameFamily && to.backend === 'opencode') {
+  } else if (to.backend === 'opencode' && !checkIsFallbackMoveAcrossBackends(key, from, to)) {
     const error = await getThreadAdapter(key).setModel?.(key, buildOpenCodeModelLabel(to));
     if (error) return fail(error);
   } else {
-    const bridge = await buildFallbackBridge(key, {
-      fromLabel: from ? formatFallbackEntry(from) : formatThreadBackend(key),
-      toLabel: toLabel,
-      reason: 'limit',
-      resetsAtText: getFallbackResetTime(from),
-    });
-    // An automatic fallback keeps the conversation (parked, bridged): the questions it had set aside stay open for a late answer.
-    isStoppingBackground = await moveTopicToOtherBackend(key, to.backend, to.backend === 'claude' ? to.profile : null, { isConversationKept: options.isAutomatic === true });
+    // Onto the other backend, which ends the conversation the move leaves: held from here — nothing above awaits —, ahead of the bridge,
+    // unless the caller held it already, so a stop under way drops what it held instead of resuming the backend being left (review 24 #1).
+    const ending = options.ending ?? conversationEndings.hold(key);
+    // What the agent took in, read at the moment the bridge reads its transcript: a message it takes in later is in neither (review 27
+    // nit 5).
+    const promptsReachedOrHeld = requestWakeUpEngine?.readPromptsReachedOrHeld(key);
+    let bridge: string;
+    try {
+      bridge = await buildFallbackBridge(key, {
+        fromLabel: from ? formatFallbackEntry(from) : formatThreadBackend(key),
+        toLabel: toLabel,
+        reason: 'limit',
+        resetsAtText: getFallbackResetTime(from),
+      });
+      // An automatic fallback keeps the conversation (parked, bridged): the questions it had set aside stay open for a late answer.
+      isStoppingBackground = await moveTopicToOtherBackend(key, ending, to.backend, to.backend === 'claude' ? to.profile : null, { isConversationKept: options.isAutomatic === true, promptsReachedOrHeld });
+    } finally {
+      ending.release();
+    }
     if (to.backend === 'opencode') {
       const error = await getThreadAdapter(key).setModel?.(key, buildOpenCodeModelLabel(to));
       if (error) return fail(error);
     }
-    firstPrompt = { text: bridge, isRequestPrompt: false };
+    firstPrompt = { text: bridge, carriedRequestIds: [] };
   }
   // From the end of the wait until the continue prompt is forwarded, the idle the limit left behind is not a turn end (the
   // same hold a retry kick has): the model pin below re-spawns the session for seconds, and a wake-up engine that polled
@@ -9774,7 +10115,7 @@ async function switchTopicToFallbackEntry(
       // Read after the session is up: the open requests may have changed while it started.
       getFirstPrompt: () => firstPrompt ?? getLimitResumeMessage({
         continueNudge: t('apiRetry.continueNudge'),
-        untakenRequestPrompt: joinPromptsNotTakenIn(requestLimitWaitAnswerDeps?.ledger.listOpenRequestsOf(key) ?? []),
+        untakenRequestPrompts: getPromptsNotTakenIn(requestLimitWaitAnswerDeps?.ledger.listOpenRequestsOf(key) ?? []),
       }),
     });
     return { isSwitched: true, notice };
@@ -9783,10 +10124,15 @@ async function switchTopicToFallbackEntry(
   }
 }
 
-/** The message that starts the work on a topic's new session, and whether it is the request's own prompt. */
-interface FirstPromptAfterMove {
-  text: string;
-  isRequestPrompt: boolean;
+/**
+ * @description Whether {@link switchTopicToFallbackEntry} moves `key` from `from` onto `to` ACROSS backends — the move that ends the
+ * conversation it leaves — rather than to another Claude account or another OpenCode model of the same conversation.
+ */
+function checkIsFallbackMoveAcrossBackends(key: SessionKey, from: FallbackChainEntry | null, to: FallbackChainEntry): boolean {
+  if (from?.backend === 'claude' && to.backend === 'claude') return false;
+  // An OpenCode topic on the server's default model has no rung (`from` is null), yet it is on OpenCode all the same.
+  const isSameFamily = (from?.backend ?? getTopicBackendFamily(key)) === to.backend;
+  return !(isSameFamily && to.backend === 'opencode');
 }
 
 /**
@@ -9794,12 +10140,20 @@ interface FirstPromptAfterMove {
  * half: record `account` as the topic's own Claude pick when one is given (the chain's rung, the operator's pick — a
  * switch that only names the account the topic follows passes `null`), then `switchThreadAdapter` stops the old
  * session, parks its id and brings back the target family's parked one. The context bridge is built BEFORE this, while
- * the adapter being left still runs. Resolves whether the stop took background work with it — the caller tells the
- * operator (the agent is told by the next prompt, `switchThreadAdapter`).
+ * the adapter being left still runs, and the caller's `ending` holds the conversation from before the bridge.
+ * `options.promptsReachedOrHeld` is what the agent took in, read when the bridge was built: it is handed to `switchThreadAdapter`'s close
+ * of the requests, so a message is either carried by the bridge or told, never neither (review 27 nit 5). Resolves
+ * whether the stop took background work with it — the caller tells the operator (the agent is told by the next prompt,
+ * `switchThreadAdapter`).
  */
-async function moveTopicToOtherBackend(key: SessionKey, backend: BackendFamily, account: string | null, options: { isConversationKept?: boolean } = {}): Promise<boolean> {
+async function moveTopicToOtherBackend(key: SessionKey, ending: ConversationEnding, backend: BackendFamily, account: string | null, options: { isConversationKept?: boolean; promptsReachedOrHeld?: ReadonlySet<string> } = {}): Promise<boolean> {
   if (account !== null) await state.setClaudeProfileOverride(key, account);
-  return checkHasLostBackgroundWork(await switchThreadAdapter(key, backend === 'claude' ? resolveClaudeBackendName(key) : openCodeAdapterName, options));
+  // The old backend's stop and the id parking run as the conversation's one transition, after a re-spawn: a start or resume of the
+  // old backend in flight is over first, and none comes back beside the new one (review 22, own pass). Held as ending the conversation
+  // it leaves: what a stop queued ahead held is dropped with the line, never resumed into the backend being left — the bridge was built
+  // before the move and never carries it (review 23 #1, review 24 #1).
+  const lostWork = await ending.run(() => switchThreadAdapter(key, backend === 'claude' ? resolveClaudeBackendName(key) : openCodeAdapterName, options));
+  return checkHasLostBackgroundWork(lostWork);
 }
 
 /**
@@ -9810,7 +10164,7 @@ async function moveTopicToOtherBackend(key: SessionKey, backend: BackendFamily, 
  */
 async function resumeTopicOnNewSession(
   key: SessionKey,
-  options: { modelToPin: string | null; getFirstPrompt: () => FirstPromptAfterMove | null; args?: string },
+  options: { modelToPin: string | null; getFirstPrompt: () => LimitResumeMessage | null; args?: string },
 ): Promise<void> {
   const k = keyToString(key);
   const ensured = await ensureAgentSession(key, { args: options.args });
@@ -9822,8 +10176,23 @@ async function resumeTopicOnNewSession(
   }
   const prompt = options.getFirstPrompt();
   if (prompt === null) return;
-  await deliverPromptOrBuffer(key, prompt.text, startupPromptBuffer.checkIsStarting(k));
-  await requestWakeUpEngine?.trackContinuationTurn(key, { isCountersReset: true, isRequestPrompt: prompt.isRequestPrompt });
+  // The move's continuation is tracked — every open request's counters reset, a limit stop lifted — only once its first prompt reached a
+  // session: at once when forwarded, at its replay when it waited in a startup window. One that reached none (no session left, or a
+  // window that dropped it) starts no turn, and a watch tracked for it would wait for good (review 20 #1).
+  // The requests whose prompts it carries are named as it was built, never read again at its replay (review 21 nit 3).
+  const trackContinuation = (): Promise<void> => requestWakeUpEngine?.trackContinuationTurn(key, { isCountersReset: true, carriedRequestIds: prompt.carriedRequestIds }) ?? Promise.resolve();
+  const delivery = await deliverPromptOrBuffer(key, prompt.text, (outcome) => {
+    if (outcome === 'replayed') {
+      trackContinuation().catch((e) => console.error(`[fallback] ${k}: tracking the move's replayed first prompt failed:`, e instanceof Error ? e.message : e));
+      return;
+    }
+    console.warn(`[fallback] ${k}: the first prompt after the move waited for a session start that dropped it; no turn is tracked for it`);
+  });
+  if (delivery === 'noSession') {
+    console.warn(`[fallback] ${k}: the first prompt after the move reached no session; no turn is tracked for it`);
+    return;
+  }
+  if (delivery === 'forwarded') await trackContinuation();
 }
 
 // ── a MANUAL switch between the two backends (`utils/backendSwitchPlan.ts`, `commands/backendSwitch.ts`) ──
@@ -9882,25 +10251,43 @@ async function askBeforeCrossBackendSwitch(key: SessionKey, backend: BackendFami
  * the topic following General. A topic with nothing to hand over (`isBridged: false`) just starts the target the way
  * `/claude` / `/opencode` do. `userMessage` rides inside the bridge.
  */
-async function executeBackendSwitch(key: SessionKey, target: BackendSwitchTarget, options: { isBridged: boolean; userMessage?: string }): Promise<void> {
-  const bridge = options.isBridged
-    ? await buildFallbackBridge(key, {
-      fromLabel: formatThreadBackend(key),
-      toLabel: formatBackendSwitchBridgeLabel(target),
-      reason: 'manual',
-      resetsAtText: null,
-      userMessage: options.userMessage,
-    })
-    : null;
-  const isStoppingBackground = await moveTopicToOtherBackend(key, target.backend, target.backend === 'claude' && target.isProfilePicked ? target.profile : null);
-  // The operator hears that the background work died with the old session; its agent hears it in the first prompt.
-  if (isStoppingBackground) await replyToThread(key, t('fallback.backgroundStopped'));
-  cancelApiRetry(key); // a wait armed for the backend just left is over
-  await resumeTopicOnNewSession(key, {
-    modelToPin: getBackendSwitchModelToPin(target),
-    getFirstPrompt: () => (bridge === null ? null : { text: bridge, isRequestPrompt: false }),
-    args: bridge === null ? options.userMessage : undefined,
-  });
+async function executeBackendSwitch(key: SessionKey, target: BackendSwitchTarget, options: { isBridged: boolean; userMessage?: string; ending?: ConversationEnding }): Promise<void> {
+  // A person's message is refused from here until the new backend took the move's first prompt (the bridge, or the start that carries the
+  // text typed with the command), as in the limit move (review 25 #1) — the tap's hold refuses it until this takes over.
+  const stopRefusingMessages = conversationEndings.refuseMessages(key);
+  try {
+    // The move ends the conversation it leaves: held from here, ahead of the bridge, unless the tap that asked for it holds it already —
+    // a stop under way drops what it held instead of resuming the backend being left (review 24 #1).
+    const ending = options.ending ?? conversationEndings.hold(key);
+    // What the agent took in, read at the moment the bridge reads its transcript (review 27 nit 5).
+    const promptsReachedOrHeld = requestWakeUpEngine?.readPromptsReachedOrHeld(key);
+    let bridge: string | null;
+    let isStoppingBackground: boolean;
+    try {
+      bridge = options.isBridged
+        ? await buildFallbackBridge(key, {
+          fromLabel: formatThreadBackend(key),
+          toLabel: formatBackendSwitchBridgeLabel(target),
+          reason: 'manual',
+          resetsAtText: null,
+          userMessage: options.userMessage,
+        })
+        : null;
+      isStoppingBackground = await moveTopicToOtherBackend(key, ending, target.backend, target.backend === 'claude' && target.isProfilePicked ? target.profile : null, { promptsReachedOrHeld });
+    } finally {
+      ending.release();
+    }
+    // The operator hears that the background work died with the old session; its agent hears it in the first prompt.
+    if (isStoppingBackground) await replyToThread(key, t('fallback.backgroundStopped'));
+    cancelApiRetry(key); // a wait armed for the backend just left is over
+    await resumeTopicOnNewSession(key, {
+      modelToPin: getBackendSwitchModelToPin(target),
+      getFirstPrompt: () => (bridge === null ? null : { text: bridge, carriedRequestIds: [] }),
+      args: bridge === null ? options.userMessage : undefined,
+    });
+  } finally {
+    stopRefusingMessages();
+  }
 }
 
 /**
@@ -9946,7 +10333,9 @@ async function switchTopicByOperator(key: SessionKey, to: FallbackChainEntry): P
     from,
     to,
     currentFamily,
-    hasConversation: currentFamily !== null && currentFamily !== to.backend && await checkHasConversationToHandOver(key),
+    // Read only where it decides: with a wait armed a pick on the other backend is the limit move whatever it finds, so nothing is read
+    // ahead of the move's hold on the conversation (review 24, own pass).
+    hasConversation: !isUsageLimitWaitArmed && currentFamily !== null && currentFamily !== to.backend && await checkHasConversationToHandOver(key),
     isPickBeyondLimit: isUsageLimitWaitArmed && await checkIsPickBeyondLimit(from, to),
   });
   const target = buildBackendSwitchTargetOfRung(to);
@@ -9960,8 +10349,7 @@ async function switchTopicByOperator(key: SessionKey, to: FallbackChainEntry): P
     }
     case 'sameFamily': {
       if (to.backend === 'opencode') {
-        const adapter = getThreadAdapter(key);
-        const { isOk, message, setModelError } = await applyModelSelection(adapter, key, buildOpenCodeModelLabel(to));
+        const { isOk, message, setModelError } = await applyModelSelection(key, buildOpenCodeModelLabel(to));
         return isOk ? { kind: 'switched', text: message, label } : { kind: 'refused', text: t('cb.model_error', { error: setModelError ?? message }) };
       }
       const runningModel = readRunningModelBeforeMove(key, from, to);
@@ -9976,7 +10364,7 @@ async function switchTopicByOperator(key: SessionKey, to: FallbackChainEntry): P
       }
       const modelToPin = getFallbackModelToPin(to, runningModel);
       if (modelToPin === null) return { kind: 'switched', text: switchedText === '' && to.model !== null ? t('cb.model_set', { model: to.model }) : switchedText, label };
-      const { isOk, message, setModelError } = await applyModelSelection(getThreadAdapter(key), key, modelToPin);
+      const { isOk, message, setModelError } = await applyModelSelection(key, modelToPin);
       if (!isOk) return { kind: 'refused', text: t('cb.model_error', { error: setModelError ?? message }) };
       return { kind: 'switched', text: switchedText === '' ? message : `${switchedText}\n${message}`, label };
     }
@@ -9996,7 +10384,8 @@ async function switchTopicByOperator(key: SessionKey, to: FallbackChainEntry): P
 const { askBackendSwitch, registerBackendSwitchCallbacks } = createBackendSwitch({
   ...botCore,
   getCurrentFamily: getTopicBackendFamily,
-  performBackendSwitch: (key, target, options) => executeBackendSwitch(key, target, { isBridged: true, userMessage: options.userMessage }),
+  holdConversationEnding: (key) => conversationEndings.hold(key),
+  performBackendSwitch: (key, target, options) => executeBackendSwitch(key, target, { isBridged: true, userMessage: options.userMessage, ending: options.ending }),
 });
 /**
  * @description A tap on a «switch to …» button of a limit notice: honoured only while the thread's open offer
@@ -10286,19 +10675,35 @@ async function handleSessionsList(key: SessionKey): Promise<void> {
  * Recovers the full session id from `threadSessionLists`; if the cache was
  * lost (bot restarted between showing the list and the pick), reports it
  * via `onExpired`. Returns the user-facing result message to send, or
- * `null` when `onExpired` already handled the stale-cache case.
+ * `null` when `onExpired` already handled the stale-cache case. `ending` is the
+ * button's hold on the conversation, taken ahead of its toast; the digit reply
+ * has none, and the pick holds it here (review 24 #1).
  */
 async function resumeSessionByIndex(
   key: SessionKey,
   idx: number,
   onExpired: () => Promise<void>,
+  ending?: ConversationEnding,
 ): Promise<string | null> {
-  const list = threadSessionLists.get(keyToString(key));
-  if (!list || idx < 0 || idx >= list.length) {
+  const sessionId = getListedSessionId(key, idx);
+  if (sessionId === null) {
+    ending?.release();
     await onExpired();
     return null;
   }
-  const sessionId = list[idx];
+  // As the conversation's one transition: no ensure resumes the old conversation beside the pick, and no idle stop runs under it
+  // (review 20 nit 3). A prompt that comes meanwhile routes to a wake, whose ensure waits for the pick in the same queue.
+  return (ending ?? conversationEndings.hold(key)).run(() => resumePickedSession(key, sessionId));
+}
+
+/** The session id at `idx` in the thread's last shown `/sessions` list; `null` when that list is gone (a restart) or holds no such row. */
+function getListedSessionId(key: SessionKey, idx: number): string | null {
+  const list = threadSessionLists.get(keyToString(key));
+  return list !== undefined && idx >= 0 && idx < list.length ? list[idx] : null;
+}
+
+/** {@link resumeSessionByIndex}'s resume of the picked session, inside the conversation's transition. */
+async function resumePickedSession(key: SessionKey, sessionId: string): Promise<string> {
   // Pick-mode is armed only by `handleSessionsList` (binding-gated), but a
   // binding can vanish (/unbind) between listing and picking — resume must
   // never run against an unbound thread (no WORK_ROOT fallback).
@@ -10307,13 +10712,17 @@ async function resumeSessionByIndex(
   const workDir = workDirDecision.workDir;
   const adapter = getThreadAdapter(key);
   markNeedsNewMessage(key);
+  // What the conversation being left took in, read off its process before the resume replaces it: the requests close only once the pick
+  // came up (a failed pick keeps the conversation it meant to leave), and by then the probe reads the picked one (review 26 #1).
+  const promptsReachedOrHeld = requestWakeUpEngine?.readPromptsReachedOrHeld(key);
   try {
     // The ONLY resume path that posts the "last N messages" context block —
     // silent re-attach (bot restart) and crash recovery must stay quiet.
     await adapter.resumeSession(key, workDir, sessionId, { isWithRecentContext: true });
-    // Another session took over this topic; it does not know the open request, and the question the idle compaction re-asked
-    // for the conversation it replaces would send its label into the picked one.
-    cancelConversationRequest(key);
+    // Another session took over this topic; it does not know the open requests — a person whose words the agent never read is told
+    // (review 26 #2) —, and the question the idle compaction re-asked for the conversation it replaces would send its label into the
+    // picked one.
+    cancelEndingConversationRequests(key, promptsReachedOrHeld);
     closeReAskedQuestion(key);
     closeSetAsideQuestionsInBackground(key);
     // Persist the PICKED id — without this the next restart re-attaches to
@@ -10361,14 +10770,20 @@ command('quitall', async (_ctx, key) => {
   let stopped = 0;
   let active = 0;
   // A Telegram command stops Telegram sessions only: a Jira issue's work is not this topic's to stop (J2b, R3).
-  for (const { key: bKey } of getTelegramConversations(state.listBindings())) {
-    cancelConversationRequest(bKey);
-    const result = stopAllAdaptersFor(bKey);
+  const conversations = getTelegramConversations(state.listBindings());
+  // Each topic as its one transition, after a re-spawn and marked as ended, as `/quit` (review 22 own pass, review 23 #1); the topics side
+  // by side, so one waiting behind a long resume holds no other back, and each waits for its own processes' exits (review 23 nit 4).
+  await Promise.all(conversations.map(async ({ key: bKey }) => {
+    cancelEndingConversationRequests(bKey);
+    const result = await conversationEndings.hold(bKey).run(async () => {
+      const swept = await stopAndWaitAllAdaptersFor(bKey);
+      // Same release-for-good semantics as `/quit`, per swept thread.
+      await releaseConversationIds(bKey);
+      return swept;
+    });
     active += result.attempted;
     stopped += result.stopped.length;
-    // Same release-for-good semantics as `/quit`, per swept thread.
-    await releaseConversationIds(bKey);
-  }
+  }));
 
   if (active === 0) {
     await replyToThread(key, t('quit_all.none_active'));
@@ -10409,57 +10824,61 @@ command(['quit', 'q'], async (_ctx, key) => {
   // does NOT go through releaseThreadSession (it stops adapters + clears ids
   // inline), so the cancel is wired here explicitly.
   cancelApiRetry(key);
-  cancelConversationRequest(key); // /quit ends the work → its open request closes silently
+  // /quit ends the work: its open requests close, a person whose words the agent never read told (review 26 #2) — read now, while the
+  // process is still the one that took them in or not.
+  cancelEndingConversationRequests(key);
   cancelClaudeAuthLogin(key); // /quit teardown → kill any in-flight /login pty
   cancelOpenCodeOAuthLogin(key); // /quit teardown → kill any in-flight /connect oauth pty
   clearAuthNotice(key); // /quit teardown → retire any pinned logged-out notice
-  const adapter = getThreadAdapter(key);
-  const adapterName = getThreadAdapterNameRaw(key);
-  const primaryActive = adapter.checkIsActive(key);
+  // As the conversation's one transition (it waits for a json-stream re-spawn first): a start, a resume or a re-spawn in flight is
+  // over before /quit reads what runs, so none brings a process back for a conversation /quit released (review 22, own pass), and a
+  // start or resume that comes after waits behind it. Marked as ending the conversation: a stop queued ahead drops what it held instead
+  // of resuming the conversation for it (review 23 #1).
+  const reply = await conversationEndings.hold(key).run(async () => {
+    const adapter = getThreadAdapter(key);
+    const adapterName = getThreadAdapterNameRaw(key);
+    const primaryActive = adapter.checkIsActive(key);
 
-  // Defensive: any *other* adapter that's also active for this thread is
-  // a leftover from a previous botched switch. Kill it first so it can't
-  // keep streaming after the user's "quit". Re-using the sweep helper
-  // instead of an open-coded loop avoids drift between the call sites.
-  const otherAdapters = getKnownAdapterNames().filter(n => n !== adapterName);
-  stopAllAdaptersFor(key, otherAdapters);
+    // Defensive: any *other* adapter that's also active for this thread is
+    // a leftover from a previous botched switch. Kill it first so it can't
+    // keep streaming after the user's "quit". Re-using the sweep helper
+    // instead of an open-coded loop avoids drift between the call sites.
+    const otherAdapters = getKnownAdapterNames().filter(n => n !== adapterName);
+    stopAllAdaptersFor(key, otherAdapters);
 
-  if (!primaryActive) {
-    // A sleeping conversation is released for good: the next message starts a fresh one.
-    if (getResumableSessionId(key) !== null) {
-      await releaseConversationIds(key);
-      await replyToThread(key, t('agent.sleeping_released'));
-      return;
+    if (!primaryActive) {
+      // A sleeping conversation is released for good: the next message gets the no-agent hint, /claude or /opencode starts a fresh one.
+      if (getResumableSessionId(key) !== null) {
+        await releaseConversationIds(key);
+        return t('agent.sleeping_released');
+      }
+      return 'No agent running';
     }
-    await replyToThread(key, 'No agent running');
-    return;
-  }
-  markNeedsNewMessage(key);
+    markNeedsNewMessage(key);
 
-  // Close any still-pending OpenCode question on the server BEFORE the teardown
-  // below (a stopped session can't accept the reject; an unrejected question
-  // re-surfaces on the next reattach). No-op for Claude / no pending question.
-  adapter.rejectQuestion?.(key);
+    // Close any still-pending OpenCode question on the server BEFORE the teardown
+    // below (a stopped session can't accept the reject; an unrejected question
+    // re-surfaces on the next reattach). No-op for Claude / no pending question.
+    adapter.rejectQuestion?.(key);
 
-  if (adapterName === 'claude') {
-    adapter.sendSignal(key, 'SIGINT');
-    await new Promise((r) => setTimeout(r, CLAUDE_DOUBLE_SIGINT_GAP_MS));
-    adapter.sendSignal(key, 'SIGINT');
-    // Explicit quit releases the session for good — no auto-reattach later.
-    await state.clearAgentSessionIds(key);
-    await replyToThread(key, t('agent.exit_signal_sent', { label: adapter.label }));
-    return;
-  }
+    if (adapterName === 'claude') {
+      adapter.sendSignal(key, 'SIGINT');
+      await new Promise((r) => setTimeout(r, CLAUDE_DOUBLE_SIGINT_GAP_MS));
+      adapter.sendSignal(key, 'SIGINT');
+      // Explicit quit releases the session for good — no auto-reattach later.
+      await state.clearAgentSessionIds(key);
+      return t('agent.exit_signal_sent', { label: adapter.label });
+    }
 
-  // OpenCode, terminal, any future adapter: tear down via stopSession. «Stopped» is said once it is: a `/claude` sent on the
-  // reply must find the session gone, not «already running» — as one transition, so a start or resume waits behind it.
-  await sessionTransitions.run(keyToString(key), async () => {
+    // OpenCode, terminal, any future adapter: tear down via stopSession. «Stopped» is said once it is: a `/claude` sent on the
+    // reply must find the session gone, not «already running».
     if (adapter.stopSessionAndWait) await adapter.stopSessionAndWait(key);
     else adapter.stopSession(key);
+    // Explicit quit releases the session for good — no auto-reattach later.
+    await state.clearAgentSessionIds(key);
+    return t('agent.stopped', { label: adapter.label });
   });
-  // Explicit quit releases the session for good — no auto-reattach later.
-  await state.clearAgentSessionIds(key);
-  await replyToThread(key, t('agent.stopped', { label: adapter.label }));
+  await replyToThread(key, reply);
 });
 
 // ── tmux-style controls (Claude CLI) ──
@@ -10706,8 +11125,8 @@ command('timestamps', async (_ctx, key, parsed) => {
  * Routing mirrors the plain-text handler via the shared choke points:
  * `ensureAgentSession` does the bind-check + start (returns `unbound` →
  * bind-required reply, same as every agent-facing path), then
- * `deliverPromptOrBuffer` forwards (active) or buffers (mid-startup), reading
- * the startup window AFTER the ensure so a freshly-started session forwards.
+ * `deliverPromptByState` opens the request and routes the prompt at its write:
+ * forwarded (active) or buffered (mid-startup, or behind a stop).
  */
 command('schedule', async (ctx, key, parsed) => {
   const text = parsed.argsText;
@@ -10736,10 +11155,7 @@ command('schedule', async (ctx, key, parsed) => {
   // Fresh-start notice (empty when the session was already active / starting).
   if (result.message) await replyToThread(key, result.message);
 
-  const isStarting = startupPromptBuffer.checkIsStarting(keyToString(key));
-  const opening = await openTopicRequest(key, wrappedPrompt, { source: 'schedule', requesterId: getTopicRequesterId(ctx.from) });
-  const delivery = await deliverPromptOrBuffer(key, `${opening.header}${wrappedPrompt}`, isStarting, undefined, { isPersonInput: true, isAccountsNoteCarrier: true });
-  await settleTopicRequestAfterDelivery(key, opening, delivery);
+  await deliverPromptByState(key, wrappedPrompt, { source: 'schedule', requesterId: getTopicRequesterId(ctx.from) });
 });
 
 const reminderWizards = new Map<string, ReminderWizardSession>();
@@ -10898,8 +11314,8 @@ async function handleTalkerText(ctx: NarrowedContext<Context, Update.MessageUpda
   const messageContext = getMessageContext(key, ctx.message);
   const intake: TopicRequestIntake = { source: 'text', requesterId: getTopicRequesterId(ctx.from) };
   const sentAtMs = ctx.message.date * 1000;
-  if (startupPromptBuffer.checkIsStarting(keyToString(key))) {
-    await bufferPromptDuringStartup(key, text, intake, messageContext);
+  if (checkIsArrivalRoutedAtWrite(key)) {
+    await deliverPromptDuringStartup(key, text, intake, messageContext);
     return;
   }
   if (adapter.checkIsActive(key)) {
@@ -11086,9 +11502,11 @@ bot.on(message('text'), async (ctx) => {
   if (ctx.from !== undefined && (await handleRunnersAddressText(key, text, ctx.from))) return;
 
   // Session is mid-startup → buffer the prompt and replay it once the agent is
-  // ready, instead of dropping it into the "no agent running" guidance below.
-  if (startupPromptBuffer.checkIsStarting(kStr)) {
-    await bufferPromptDuringStartup(key, text, { source: 'text', requesterId: getTopicRequesterId(ctx.from) }, getMessageContext(key, ctx.message));
+  // ready, instead of dropping it into the "no agent running" guidance below. A
+  // command ending or replacing the conversation → refused at the write, never the
+  // guidance nor a write into the agent it ends (review 25 #1).
+  if (checkIsArrivalRoutedAtWrite(key)) {
+    await deliverPromptDuringStartup(key, text, { source: 'text', requesterId: getTopicRequesterId(ctx.from) }, getMessageContext(key, ctx.message));
     return;
   }
 
@@ -11150,7 +11568,7 @@ bot.on(message('text'), async (ctx) => {
   // always replies (even for the unsupported case), so we always return after a
   // numeric pick — the user clearly intended a model pick, not a prompt.
   if (!isForwarded && /^\d+$/.test(text) && awaitingModelSelection.has(kStr)) {
-    await applyNumberedModelPick(adapter, key, parseInt(text, 10));
+    await applyNumberedModelPick(key, parseInt(text, 10));
     return;
   }
 
@@ -11421,9 +11839,10 @@ async function processVoiceJob(
     }
     if (reminderVoiceRoute === 'expired') await expireReminderWizard(key);
 
-    // Session is mid-startup → buffer the transcript and replay it once ready.
-    if (startupPromptBuffer.checkIsStarting(keyToString(key))) {
-      await bufferPromptDuringStartup(key, transcript, { source: 'voice', requesterId }, messageContext);
+    // Session is mid-startup → buffer the transcript and replay it once ready; a command ends or replaces the conversation → refused at
+    // the write (review 25 #1: a transcript is ready seconds after its voice note, often while a move or a release runs).
+    if (checkIsArrivalRoutedAtWrite(key)) {
+      await deliverPromptDuringStartup(key, transcript, { source: 'voice', requesterId }, messageContext);
       return;
     }
 
@@ -11512,12 +11931,15 @@ async function sendNoAgentGuidance(
  */
 async function checkFileIntakeGatePassed(
   key: SessionKey,
-  isStarting: boolean,
   sendHint: (text: string, extra?: SendExtra) => Promise<unknown>,
   isFromTalker: boolean,
 ): Promise<boolean> {
-  const adapter = getThreadAdapter(key);
-  if (isStarting || adapter.checkIsActive(key)) return true;
+  // A command ends or replaces the conversation: the file is not delivered, and nothing is downloaded for it (review 25 #1).
+  if (conversationEndings.checkIsRefusingMessages(keyToString(key))) {
+    await sendHint(t('agent.queued_prompt_dropped_by_command'));
+    return false;
+  }
+  if (startupPromptBuffer.checkIsStarting(keyToString(key)) || getThreadAdapter(key).checkIsActive(key)) return true;
   // A file sent to a sleeping conversation wakes it (L-D4) and is taken in by the resumed session.
   if (await resumeSleepingSessionForPrompt(key, sendHint)) return true;
 
@@ -11581,30 +12003,53 @@ async function downloadIncomingFile(
 }
 
 /**
- * @description Deliver one already-built prompt to the thread's agent,
- * honouring the startup window (`utils/promptDelivery.ts`): mid-startup the
- * prompt is buffered, otherwise it is forwarded immediately through the normal
- * choke point. This is the single "buffer-or-forward" unit shared by the text and
- * voice handlers' mid-startup buffering, file/album intake, the `/schedule` command
- * (S7), the Jira connector's posts and an API-error retry's "continue" nudge, so the
- * startup-window handling never drifts between them.
+ * @description Deliver one already-built prompt to the thread's agent, routed at the moment of the write
+ * (`utils/promptDelivery.ts`): behind an open start or stop window it is buffered, into a live session it is forwarded through the
+ * normal choke point, and a conversation with neither is woken first. The single "buffer-or-forward" unit of every prompt that may
+ * meet a start or a stop — the person's prompts through {@link deliverPromptByState}'s buffer step, a scheduled run, the Jira
+ * connector's posts, the lost-work post, an API-error retry's "continue" nudge and a move's first prompt — so the window handling
+ * never drifts between them, and no caller hands it a state it read before an await.
  */
 const promptDeliveryDeps: PromptDeliveryDeps = {
   startupBuffer: startupPromptBuffer,
-  forwardPrompt: (key, text, options) => forwardPromptToAgent(key, getThreadAdapter(key), text, undefined, { isPersonInput: options.isPersonInput, isAccountsNoteCarrier: options.isAccountsNoteCarrier }),
+  forwardPrompt: (key, text, options) => forwardPromptToAgent(key, getThreadAdapter(key), text, undefined, { isPersonInput: options.isPersonInput, isAccountsNoteCarrier: options.isAccountsNoteCarrier, lostWorkTelling: options.lostWorkTelling, waitBeforeRoute: options.waitBeforeRoute }),
+  checkIsSessionActive: (key) => checkIsAcceptingInput(key),
+  // A tracker conversation has no topic to say a resume's notice in: it is logged.
+  wakeSession: (key) => (checkIsTelegramKey(key)
+    ? wakeSleepingSessionForPrompt(key)
+    : wakeSleepingSessionForPrompt(key, async (notice) => { console.log(`[promptDelivery] ${keyToString(key)}: ${notice}`); })),
+  checkIsRefusingMessages: (key) => conversationEndings.checkIsRefusingMessages(keyToString(key)),
+  reportNoSession: async (key, isAlreadyTold, options) => {
+    console.warn(`[promptDelivery] ${keyToString(key)}: no session is left to take the prompt, and nothing could be woken for it`);
+    // Only a person's own prompt is theirs to be told about; what the bot made says so in its own way (its caller reads `noSession`).
+    if (options.isPersonInput === true && !isAlreadyTold) await replyToThread(key, t('agent.no_session'));
+  },
+  reportRefused: async (key, options) => {
+    console.warn(`[promptDelivery] ${keyToString(key)}: a command ends or replaces the conversation; the prompt is not delivered`);
+    if (options.isPersonInput === true) await replyToThread(key, t('agent.queued_prompt_dropped_by_command'));
+  },
   announceQueued: async (key) => {
     await replyToThread(key, t('agent.queued_starting', { label: getThreadAdapter(key).label }));
   },
 };
 
+/**
+ * @description Whether a prompt written now reaches `key`'s live process (`AgentAdapter.checkIsAcceptingInput`, else `checkIsActive`): a
+ * process a release or a move is stopping opens no window, and a prompt written into it is abandoned while its request reads it as
+ * written — routed as no live session, it wakes the conversation, whose ensure waits behind that stop (review 24 nit 3).
+ */
+function checkIsAcceptingInput(key: SessionKey): boolean {
+  const adapter = getThreadAdapter(key);
+  return adapter.checkIsAcceptingInput?.(key) ?? adapter.checkIsActive(key);
+}
+
 function deliverPromptOrBuffer(
   key: SessionKey,
   promptText: string,
-  isStarting: boolean,
   onBufferedSettled?: BufferedPromptSettled,
   options: PromptDeliveryOptions = {},
 ): Promise<PromptDelivery> {
-  return deliverPromptWithDeps(promptDeliveryDeps, key, promptText, isStarting, onBufferedSettled, options);
+  return deliverPromptWithDeps(promptDeliveryDeps, key, promptText, onBufferedSettled, options);
 }
 
 /**
@@ -11637,9 +12082,10 @@ interface AlbumCollectorItem {
  * @description Per-(thread, media_group) album batcher. Telegram delivers an
  * album as N messages sharing `media_group_id` in a quick burst; this coalesces
  * them so the agent gets ONE combined prompt after the burst settles, and gating
- * / error hints fire once per album. The flush forwards the combined prompt
- * through {@link deliverPromptOrBuffer}, re-reading the startup state AT FLUSH TIME
- * so a session that finished booting mid-burst forwards instead of buffers.
+ * / error hints fire once per album. The flush delivers the combined prompt
+ * through {@link deliverPromptByState}, routed at its write — after the flush's
+ * request is opened — so a session that finished booting (or stopping) mid-burst
+ * takes it the way it stands then.
  */
 const albumCollector = createMediaGroupCollector<AlbumCollectorItem>({
   debounceMs: ALBUM_DEBOUNCE_MS,
@@ -11654,17 +12100,13 @@ const albumCollector = createMediaGroupCollector<AlbumCollectorItem>({
       const caption = orderedItems.find((item) => item.caption && item.caption.trim())?.caption;
       const messageContext = orderedItems.find((item) => item.messageContext)?.messageContext;
       const promptText = buildAlbumPromptText(files, caption);
-      const isStarting = startupPromptBuffer.checkIsStarting(keyToString(key));
       // User took over (album upload) before a pending API-error retry fired →
       // cancel it silently, like the text/voice handlers.
       cancelApiRetry(key);
       // A user album is genuine user activity → clear the compact-on-idle latch (D2).
       notePersonActivity(key);
       try {
-        const opening = await openTopicRequest(key, promptText, { source: 'album', requesterId: orderedItems[0].requesterId }, messageContext);
-        const quotedPrompt = getPromptWithThreadMessageContext(key, promptText, messageContext);
-        const delivery = await deliverPromptOrBuffer(key, `${opening.header}${quotedPrompt}`, isStarting, undefined, { isPersonInput: true, isAccountsNoteCarrier: true });
-        await settleTopicRequestAfterDelivery(key, opening, delivery);
+        await deliverPromptByState(key, promptText, { source: 'album', requesterId: orderedItems[0].requesterId }, undefined, messageContext);
       } catch (err) {
         // The files were downloaded already (each item before the flush): what failed is the album's prompt.
         console.error('[Bot] album flush failed:', err);
@@ -11702,11 +12144,10 @@ async function handleAlbumFile(
   isFromTalker: boolean,
 ): Promise<void> {
   const groupKey = buildAlbumGroupKey(key, mediaGroupId);
-  const isStarting = startupPromptBuffer.checkIsStarting(keyToString(key));
 
   // Gate per item, but reply at most once per album. The guard is claimed
   // lazily so a passing gate never burns the one-shot slot.
-  const gatePassed = await checkFileIntakeGatePassed(key, isStarting, async (text, extra) => {
+  const gatePassed = await checkFileIntakeGatePassed(key, async (text, extra) => {
     if (albumCollector.checkShouldAnnounceOnce(groupKey)) {
       await replyToThread(key, text, extra);
     }
@@ -11748,9 +12189,7 @@ async function handleIncomingFile(
     return;
   }
 
-  const isStarting = startupPromptBuffer.checkIsStarting(keyToString(key));
-
-  const gatePassed = await checkFileIntakeGatePassed(key, isStarting, (text, extra) =>
+  const gatePassed = await checkFileIntakeGatePassed(key, (text, extra) =>
     replyToThread(key, text, extra),
     isFromTalker,
   );
@@ -11767,10 +12206,7 @@ async function handleIncomingFile(
   notePersonActivity(key);
   // A file sent as a REPLY carries the message it answers, a forwarded one its origin, as a typed or spoken message does.
   const messageContext = getMessageContext(key, ctx.message);
-  const opening = await openTopicRequest(key, promptText, { source: 'file', requesterId: getTopicRequesterId(ctx.from) }, messageContext);
-  const quotedPrompt = getPromptWithThreadMessageContext(key, promptText, messageContext);
-  const delivery = await deliverPromptOrBuffer(key, `${opening.header}${quotedPrompt}`, isStarting, undefined, { isPersonInput: true, isAccountsNoteCarrier: true });
-  await settleTopicRequestAfterDelivery(key, opening, delivery);
+  await deliverPromptByState(key, promptText, { source: 'file', requesterId: getTopicRequesterId(ctx.from) }, undefined, messageContext);
 }
 
 bot.on(
@@ -12169,8 +12605,15 @@ bot.action(bindLeaveCurrentCallback, async (ctx) => {
   // Claimed like a bind: two taps in a row unbind once, and a picker a bind holds is no more a place to leave from.
   const pickerMessageId = getCallbackMessageId(ctx);
   const run = await bindPickerClaims.runClaimed(key, pickerMessageId, async () => {
-    await answerCallbackQuerySafely(ctx);
-    await unbindThread(key);
+    // Leaving the folder ends the conversation, known at the tap: held from here, ahead of the toast and the leave's paced sends, so a stop
+    // under way drops what it held instead of resuming the conversation for it in the folder being left (review 24 #1).
+    const ending = conversationEndings.hold(key);
+    try {
+      await answerCallbackQuerySafely(ctx);
+      await unbindThread(key, ending);
+    } finally {
+      ending.release();
+    }
     if (pickerMessageId !== null) await removeBindPicker(key, pickerMessageId);
     await closeOpenBindMessages(key);
     // The welcome's buttons have no folder to act on now.
@@ -12420,12 +12863,20 @@ bot.action(/^agent_(.+)$/, async (ctx) => {
     // Resolve up-front so an unknown name throws into the catch (→ "unknown
     // agent") before any side effect, and so the toast can name the label.
     const adapter = getAdapter(adapterName);
-    await ctx.answerCbQuery(t('cb.agent_switched', { label: adapter.label }));
-    // One-tap start: switch + start the agent (was select-only — the user then
-    // had to type /claude). `handleAgentStart` owns the General / binding /
-    // already-active guards and the self-greeting ready-text suppression, and
-    // `switchThreadAdapter` inside it persists the adapter choice.
-    await handleAgentStart(key, adapterName);
+    // A tap onto a shell from an agent's conversation ends it, known now: held ahead of the toast, so a stop under way drops what it held
+    // instead of resuming the conversation for it (review 24, own pass). Onto the other agent the hand-over read decides first.
+    const startAdapterName = resolveStartAdapterName(key, adapterName);
+    const ending = getBackendFamily(startAdapterName) === null && checkIsStartLeavingConversation(key, startAdapterName) ? conversationEndings.hold(key) : undefined;
+    try {
+      await ctx.answerCbQuery(t('cb.agent_switched', { label: adapter.label }));
+      // One-tap start: switch + start the agent (was select-only — the user then
+      // had to type /claude). `handleAgentStart` owns the General / binding /
+      // already-active guards and the self-greeting ready-text suppression, and
+      // `switchThreadAdapter` inside it persists the adapter choice.
+      await handleAgentStart(key, adapterName, undefined, ending);
+    } finally {
+      ending?.release();
+    }
     if (state.getBinding(key)) {
       await updatePinnedStatus(key).catch(() => {});
     }
@@ -12450,14 +12901,21 @@ bot.action(/^agent_(.+)$/, async (ctx) => {
 bot.action(/^resume_(\d+)$/, async (ctx) => {
   const key = await authoriseContext(ctx);
   if (!key) { await ctx.answerCbQuery(t('cb.access_denied')); return; }
-  await ctx.answerCbQuery();
   const idx = Number(ctx.match[1]);
-  // A pick from the button also closes pick-mode (mirrors a digit reply).
-  awaitingSessionSelection.delete(keyToString(key));
-  const result = await resumeSessionByIndex(key, idx, async () => {
-    await replyToThread(key, t('session.expired'));
-  });
-  if (result !== null) await replyToThread(key, result);
+  // The pick replaces the conversation, known at the tap: held ahead of the toast, so a stop under way drops what it held instead of
+  // resuming the conversation the pick leaves (review 24 #1). A row the list no longer has replaces nothing.
+  const ending = getListedSessionId(key, idx) === null ? undefined : conversationEndings.hold(key);
+  try {
+    await ctx.answerCbQuery();
+    // A pick from the button also closes pick-mode (mirrors a digit reply).
+    awaitingSessionSelection.delete(keyToString(key));
+    const result = await resumeSessionByIndex(key, idx, async () => {
+      await replyToThread(key, t('session.expired'));
+    }, ending);
+    if (result !== null) await replyToThread(key, result);
+  } finally {
+    ending?.release();
+  }
 });
 
 // The agent's own question buttons (`qa_`, and `reask_` in the compaction module) are the taps a talker may make: they answer the
@@ -12521,14 +12979,27 @@ bot.action(/^qa_(\d+)_(\d+)$/, async (ctx) => {
 });
 
 /**
- * @description Buffer a free-form prompt (text OR voice) that arrived while the
- * thread's session is starting — the startup twin of {@link deliverActivePrompt}.
- * The request is opened at capture time (S7), so the buffered text carries its
- * header; the message-context block is folded in here too, since the replay forwards
- * the buffered text as is and a REPLY or a FORWARD made during the boot would
- * otherwise reach the agent without the message it points at, or as the operator's own words.
+ * @description Whether a person's text or voice note that arrives now takes {@link deliverPromptDuringStartup}'s route — routed only at
+ * its write — rather than the live-agent route or the no-agent guidance: the session is starting or being stopped (its window open), or a
+ * command ends or replaces the conversation (`ConversationEndings.checkIsRefusingMessages`: the write refuses it, its request closed and
+ * the person told — never written into the agent the command ends, never «Run /claude or /opencode» while a move starts the next one,
+ * review 25 #1).
  */
-async function bufferPromptDuringStartup(
+function checkIsArrivalRoutedAtWrite(key: SessionKey): boolean {
+  const conversationKey = keyToString(key);
+  return startupPromptBuffer.checkIsStarting(conversationKey) || conversationEndings.checkIsRefusingMessages(conversationKey);
+}
+
+/**
+ * @description Deliver a free-form prompt (text OR voice) that ARRIVED while the thread's session is starting or being stopped, or while a
+ * command ends or replaces the conversation ({@link checkIsArrivalRoutedAtWrite}) — the startup twin of {@link deliverActivePrompt}: no
+ * pending question or wedged turn is looked at (a session in its window has none to answer). The window it arrived in only chose this
+ * route: the prompt itself is routed by {@link deliverPromptByState} when it is written, after its request was opened, so a window that
+ * closed meanwhile never keeps it — it goes to the session that window brought up, or wakes the one its stop left asleep — and a command
+ * still running then refuses it. A buffered prompt carries its request's header and its message-context block
+ * (`deliverPersonPromptAtWrite`), since the replay forwards the buffered text as is.
+ */
+async function deliverPromptDuringStartup(
   key: SessionKey,
   text: string,
   intake: TopicRequestIntake,
@@ -12543,10 +13014,7 @@ async function bufferPromptDuringStartup(
   // `deliverActivePrompt` — the idle latch clears, and a question the idle compaction re-asked is closed (the idle fire
   // posts it just before the stop, so this window is where a message instead of a tap most often lands).
   notePersonActivity(key);
-  const opening = await openTopicRequest(key, text, intake, messageContext);
-  const quotedText = getPromptWithThreadMessageContext(key, text, messageContext);
-  await deliverPromptOrBuffer(key, `${opening.header}${quotedText}`, true, undefined, { isPersonInput: true, isAccountsNoteCarrier: true });
-  trackTopicRequestTurn(key, opening);
+  await deliverPromptByState(key, text, intake, undefined, messageContext);
 }
 
 /**
@@ -12605,9 +13073,7 @@ async function deliverActivePrompt(
       return null;
     }
     // Free-form text cancels the question and is a fresh prompt — a request (S7).
-    const opening = await openTopicRequest(key, text, intake, messageContext);
-    const delivery = await cancelPendingQuestionAndForward(key, adapter, text, sentAtMs, messageContext, opening.header, intake !== null);
-    await settleTopicRequestAfterDelivery(key, opening, delivery);
+    await deliverPersonPromptInRequest(key, text, intake, messageContext, (opening) => cancelPendingQuestionAndForward(key, adapter, text, sentAtMs, messageContext, opening, intake !== null));
     return null;
   }
 
@@ -12635,48 +13101,161 @@ async function deliverActivePrompt(
     adapter.sendSignal(key, 'SIGINT');
     await replyToThread(key, t('agent.question_cancelled_for_prompt'));
   }
-  return deliverPromptByState(key, adapter, text, intake, sentAtMs, messageContext);
+  return deliverPromptByState(key, text, intake, sentAtMs, messageContext);
 }
 
 /**
- * @description The end of {@link deliverActivePrompt}, shared with the delivery of a late answer ({@link deliverLateAnswerPrompt}): open
- * the request the prompt belongs to (none for `intake` null — an answer to the agent's own question is never a request), deliver it by
- * the state of the session NOW — buffered behind a start, waking a sleeping conversation, or forwarded to the live one — and settle
- * the request. It touches no pending question and no wedged turn: that is the caller's.
+ * @description The ONE way a person's prompt is delivered — text, voice, a file, an album, `/schedule`, a re-asked question's label, a
+ * late answer (the end of {@link deliverActivePrompt} and {@link deliverPromptDuringStartup}): open the request the prompt belongs to
+ * (none for `intake` null — an answer to the agent's own question is never a request), deliver it by the state of the session at the
+ * write ({@link deliverPersonPromptAtWrite}), and settle the request. It touches no pending question and no wedged turn: that is the
+ * caller's.
  */
 async function deliverPromptByState(
   key: SessionKey,
-  adapter: AgentAdapter,
   text: string,
   intake: TopicRequestIntake | null,
   sentAtMs?: number,
   messageContext?: MessageContext,
 ): Promise<LatePromptOutcome> {
-  // A person's prompt that opens a request starts a turn that may carry the accounts note; the answer to the agent's own question
-  // (`intake` null) is bookkeeping and never does.
-  const isAccountsNoteCarrier = intake !== null;
   // The request (S7) is opened AFTER the user takeover cancelled an armed limit
   // wait (the handlers' `cancelApiRetry`) and before the forward, so its id is
   // durable by the time the agent reads it.
-  const opening = await openTopicRequest(key, text, intake, messageContext);
-  // Routed now, not when the message arrived: the idle stop may have begun or ended during the awaits since.
-  // The forward can itself end in no session — a prompt that waited for an adopt replay found the session gone and nothing to wake;
-  // it has told the person already (`forwardPromptToAgent`), so what is left here is the request this prompt opened.
-  const outcome = await deliverLatePrompt({
+  // A person's prompt that opens a request starts a turn that may carry the accounts note; the answer to the agent's own question
+  // (`intake` null) is bookkeeping and never does.
+  return deliverPersonPromptInRequest(key, text, intake, messageContext, (opening) => deliverPersonPromptAtWrite(key, text, { opening, sentAtMs, messageContext, isAccountsNoteCarrier: intake !== null }));
+}
+
+/**
+ * The person's prompts on their way to their write, request id → conversation: from the moment the request is created — inside the
+ * create, synchronously with it appearing open — until the prompt's delivery is settled. An ending command's cancel does not tell them:
+ * the prompt's own route tells its person (refused while the command runs, refused once it is over because the command closed its request
+ * — {@link personPromptsEndedInDelivery} —, or with no session), and the command telling it too gave the person the line twice, or a false
+ * one (review 27 #1).
+ */
+const personPromptsInDelivery = new Map<string, string>();
+
+/**
+ * The requests of {@link personPromptsInDelivery} an ending command closed (`cancelEndingConversationRequests`, marked at its call): the
+ * prompt is refused at its write even once the command is over, never written into the conversation that follows under a request that is
+ * closed — unwatched, and naming a request its agent cannot answer (review 28 nit 4).
+ */
+const personPromptsEndedInDelivery = new Set<string>();
+
+/**
+ * @description Open a person's prompt's request (`openTopicRequest`), `deliver` the prompt and settle the request by where it went,
+ * the request marked in delivery ({@link personPromptsInDelivery}) from its creation until the settle is over, on every way out. The one
+ * way a person's prompt that may open a request is delivered: {@link deliverPromptByState} and the free text that cancels a question.
+ */
+async function deliverPersonPromptInRequest(
+  key: SessionKey,
+  text: string,
+  intake: TopicRequestIntake | null,
+  messageContext: MessageContext | undefined,
+  deliver: (opening: TopicRequestOpening) => Promise<LatePromptOutcome>,
+): Promise<LatePromptOutcome> {
+  const marked: { requestId: string | null } = { requestId: null };
+  try {
+    const opening = await openTopicRequest(key, text, intake, messageContext, (requestId) => {
+      marked.requestId = requestId;
+      personPromptsInDelivery.set(requestId, keyToString(key));
+    });
+    const outcome = await deliver(opening);
+    await settleTopicRequestAfterDelivery(key, opening, outcome);
+    return outcome;
+  } finally {
+    if (marked.requestId !== null) {
+      personPromptsInDelivery.delete(marked.requestId);
+      personPromptsEndedInDelivery.delete(marked.requestId);
+    }
+  }
+}
+
+/**
+ * @description Whether a person's prompt is refused at its write: a command ends or replaces the conversation now (review 25 #1), or one
+ * closed the prompt's request while it was in delivery — then it is refused once the command is over as well (review 28 nit 4).
+ */
+function checkIsPersonPromptRefused(key: SessionKey, requestId: string | null): boolean {
+  return conversationEndings.checkIsRefusingMessages(keyToString(key)) || (requestId !== null && personPromptsEndedInDelivery.has(requestId));
+}
+
+/**
+ * @description Write a person's prompt by the state of the session NOW (`deliverLatePrompt`), never by one read before an await: the
+ * idle stop or a start may have begun or ended during the caller's awaits (its request opened, a file downloaded, a question
+ * cancelled). A command that ends or replaces the conversation runs → refused, ahead of any window: its request closed, the person told
+ * (review 25 #1); a start's or a stop's window open → buffered behind it, its header and message-context block folded in (the replay
+ * forwards the text as is); a live session → forwarded; neither → the sleeping conversation is woken, then forwarded. A wake that finds
+ * nothing tells the person, unless it said why itself; one that found the conversation ended by a release while it waited says that
+ * (review 25 #2). The forward can itself end in no session — a prompt that waited for an adopt replay found the session gone and nothing
+ * to wake; it has told the person already (`forwardPromptToAgent`).
+ */
+function deliverPersonPromptAtWrite(
+  key: SessionKey,
+  text: string,
+  options: { opening: TopicRequestOpening; sentAtMs?: number; messageContext?: MessageContext; isAccountsNoteCarrier: boolean },
+): Promise<LatePromptOutcome> {
+  const { opening, sentAtMs, messageContext, isAccountsNoteCarrier } = options;
+  const { header: requestHeader, requestId } = opening;
+  return deliverLatePrompt({
     checkIsWindowOpen: () => startupPromptBuffer.checkIsStarting(keyToString(key)),
-    checkIsSessionActive: () => adapter.checkIsActive(key),
+    checkIsSessionActive: () => checkIsAcceptingInput(key),
+    // A command ends or replaces the conversation, or one closed this prompt's request while it was in delivery: the prompt is not
+    // delivered — read ahead of any window (review 25 #1, review 28 nit 4).
+    checkIsRefused: () => checkIsPersonPromptRefused(key, requestId),
+    // The request closes here, ahead of the line, so a switch closing the conversation's requests meanwhile does not tell it again; the
+    // caller's own close of a `noSession` prompt then finds it closed.
+    reportRefused: () => reportDroppedPersonPrompt(key, requestId, true),
     buffer: async () => {
-      await deliverPromptOrBuffer(key, `${opening.header}${getPromptWithThreadMessageContext(key, text, messageContext)}`, true, undefined, { isPersonInput: true, isAccountsNoteCarrier });
+      const bufferedText = `${requestHeader}${getPromptWithThreadMessageContext(key, text, messageContext)}`;
+      await deliverPromptOrBuffer(key, bufferedText, createPersonBufferedSettle(key, requestId), { isPersonInput: true, isAccountsNoteCarrier });
     },
     wake: () => wakeSleepingSessionForPrompt(key),
-    forward: () => forwardPromptToAgent(key, getThreadAdapter(key), text, sentAtMs, { messageContext, requestHeader: opening.header, isPersonInput: true, isAccountsNoteCarrier }),
+    forward: () => forwardPromptToAgent(key, getThreadAdapter(key), text, sentAtMs, { messageContext, requestHeader, requestId, isPersonInput: true, isAccountsNoteCarrier }),
     reportNoSession: async (isAlreadyTold) => {
       if (!isAlreadyTold) await replyToThread(key, t('agent.no_session'));
     },
   });
-  await settleTopicRequestAfterDelivery(key, opening, outcome);
-  return outcome;
 }
+
+/**
+ * @description The settle of a person's prompt that waits in a startup buffer. One its window's end DROPPED — the start failed, nothing
+ * started after a failed resume, its replay's write threw, a command that ends or replaces the conversation waits behind it — never
+ * reached the agent, and nothing else will post it: the request it opened closes (`cancelled`, like a prompt that found no session; its
+ * watch goes with it) and the person, who was told it is queued, is told why: that the agent was starting, or — read at the drop, while
+ * the command holds the conversation — that the conversation was being ended or switched (review 24 nit 5). Fire and forget: a failure
+ * is logged.
+ */
+function createPersonBufferedSettle(key: SessionKey, requestId: string | null): BufferedPromptSettled {
+  return (outcome) => {
+    if (outcome !== 'dropped') return;
+    const isDroppedForEndingCommand = conversationEndings.checkIsEnding(keyToString(key));
+    void withThreadLocale(key, () => reportDroppedPersonPrompt(key, requestId, isDroppedForEndingCommand)).catch((e) =>
+      console.error(`[startupPromptBuffer] ${keyToString(key)}: reporting a dropped message failed:`, e),
+    );
+  };
+}
+
+/**
+ * @description A person's prompt that never reached the agent — dropped from a window, or refused while a command ends or replaces the
+ * conversation: its request closes and the person is told why. Marked in {@link personDropsBeingTold} from the call (synchronously, in the
+ * drop's own tick) until the request is closed and the line out, so a switch that closes the conversation's requests meanwhile does not
+ * tell the same message again.
+ */
+async function reportDroppedPersonPrompt(key: SessionKey, requestId: string | null, isDroppedForEndingCommand: boolean): Promise<void> {
+  if (requestId !== null) personDropsBeingTold.add(requestId);
+  try {
+    console.warn(`[startupPromptBuffer] ${keyToString(key)}: a message never reached the agent${isDroppedForEndingCommand ? ' (a command ends the conversation)' : ''}; ${requestId ?? 'no request'} is closed`);
+    await settleTopicRequestAfterDelivery(key, { requestId }, 'noSession');
+    await replyToThread(key, isDroppedForEndingCommand
+      ? t('agent.queued_prompt_dropped_by_command')
+      : t('agent.queued_prompt_dropped', { label: getThreadAdapter(key).label }));
+  } finally {
+    if (requestId !== null) personDropsBeingTold.delete(requestId);
+  }
+}
+
+/** The requests whose person's drop is being told right now ({@link reportDroppedPersonPrompt}): a switch's close tells none of them. */
+const personDropsBeingTold = new Set<string>();
 
 /**
  * @description Deliver a LATE ANSWER to the agent — what the owner chose for a question the bot set aside, worded by
@@ -12692,7 +13271,7 @@ async function deliverLateAnswerPrompt(key: SessionKey, text: string): Promise<L
   // own «continue» nudge would come on top of the answer later).
   cancelApiRetry(key);
   noteThreadUserActivity(key);
-  return deliverPromptByState(key, getThreadAdapter(key), text, null);
+  return deliverPromptByState(key, text, null);
 }
 
 /**
@@ -12746,7 +13325,7 @@ async function cancelPendingQuestionAndForward(
   text: string,
   sentAtMs?: number,
   messageContext?: MessageContext,
-  requestHeader?: string,
+  opening: TopicRequestOpening = noTopicRequest,
   /** The prompt opened a request (a person's free text, not the label of a tap): it may carry the accounts note. */
   isAccountsNoteCarrier = false,
 ): Promise<LatePromptOutcome> {
@@ -12769,7 +13348,8 @@ async function cancelPendingQuestionAndForward(
   if (!didLabelQuestionMessage) {
     await replyToThread(key, t('agent.question_cancelled_for_prompt'));
   }
-  return forwardPromptToAgent(key, adapter, text, sentAtMs, { messageContext, requestHeader, isPersonInput: true, isAccountsNoteCarrier });
+  // Routed at the write: the SIGINT ended the turn, and a per-turn topic's stop may have begun (or ended) during the notice.
+  return deliverPersonPromptAtWrite(key, text, { opening, sentAtMs, messageContext, isAccountsNoteCarrier });
 }
 
 /**
@@ -14215,7 +14795,7 @@ async function noteLostWork(key: SessionKey, lostWork: LostWork | null, reason: 
   let planText = plan.isAutoResume ? 'resuming it with a note' : 'the note rides the next prompt';
   if (plan.isRequestWake) planText = 'its open request is woken, and the note rides that wake';
   console.log(`[lost-work] ${kStr}: the process ended (${reason}) with the agent's own work pending (${record.backgroundTasks.length} background task(s), ${record.scheduledJobCount} scheduled job(s)${record.hasUnreadTaskResult ? ', an unread task result' : ''}${record.wasTurnInFlight ? ', a cut-off turn' : ''}); ${planText}`);
-  if (plan.isRequestWake) scheduleTrackerRestartWake(key, `its process ended (${reason}) with its own work pending`);
+  if (plan.isRequestWake) scheduleTrackerRestartWake(key, `its process ended (${reason}) with its own work pending`, { isLostWork: true });
   let linePlan = plan;
   if (plan.isAutoResume) {
     await state.setLostWorkResumedAt(key, now);
@@ -14231,14 +14811,19 @@ async function noteLostWork(key: SessionKey, lostWork: LostWork | null, reason: 
  * lost-work path and is never woken here. The lost-work cooldown guards it as well: a conversation woken
  * automatically within it is left to the backstop, so a crash loop is no wake loop.
  */
-function scheduleTrackerRestartWake(key: SessionKey, why: string): void {
+function scheduleTrackerRestartWake(key: SessionKey, why: string, options: { isLostWork?: boolean } = {}): void {
   if (checkIsTelegramKey(key) || !requestWakeUpEngine) return;
   const lastAutoResumeAt = state.getLostWorkResumedAt(key);
   if (lastAutoResumeAt !== undefined && Date.now() - lastAutoResumeAt < lostWorkResumeCooldownMs) {
     console.log(`[requests] ${keyToString(key)}: ${why}; it was woken automatically less than ${lostWorkResumeCooldownMs / 60_000} min ago, so the backstop takes it`);
     return;
   }
-  if (requestWakeUpEngine.scheduleRestartWake(key)) console.log(`[requests] ${keyToString(key)}: ${why}; its open request is woken shortly`);
+  if (requestWakeUpEngine.scheduleRestartWake(key, options)) {
+    console.log(`[requests] ${keyToString(key)}: ${why}; its open request is woken shortly`);
+    return;
+  }
+  // Said, not silent: the caller's own line may have promised a wake (`noteLostWork`).
+  console.log(`[requests] ${keyToString(key)}: ${why}; no wake was scheduled (one is already waiting, or no open request needs it: each is held by a watch that owes nobody an answer, as at a boot)`);
 }
 
 /**
@@ -14273,35 +14858,44 @@ async function resumeConversationForLostWork(key: SessionKey): Promise<boolean> 
   return false;
 }
 
+/** Why a session post failed when its prompt found no session at the write and nothing to wake (`deliverPromptOrBuffer` → `noSession`). */
+const noSessionForPostError = 'the session went away before the prompt was written, and nothing could be woken for it';
+
 /** The session post of a lost-work note: a bot note to the agent, not a request — no request is opened for it. */
 function createLostWorkPostDeps(): PostToSessionDeps {
   return {
     ...createSessionPostDeps(),
     forwardPrompt: async (conversationKey, text) => {
       const buffered = createBufferedOutcome();
-      const delivery = await deliverPromptOrBuffer(keyFromString(conversationKey), text, startupPromptBuffer.checkIsStarting(conversationKey), buffered.settle);
+      const delivery = await deliverPostPrompt(keyFromString(conversationKey), text, buffered.settle);
       if (delivery === 'buffered') await buffered.assertReplayed();
+      if (delivery === 'noSession') throw new Error(noSessionForPostError);
     },
   };
 }
 
 /**
  * @description How a prompt that waited in the startup buffer ended, for a post that must know it reached the session:
- * `settle` is the buffer's callback, `assertReplayed` resolves once it was replayed into the session and rejects when it
- * was dropped — the start failed, or its write did not reach the agent.
+ * `settle` is the buffer's callback; `getOutcome` resolves with that outcome (`replayed` or `dropped`) for a caller that acts on
+ * either (the scheduler's request a fire opened closes on `dropped`); `assertReplayed` resolves once it was replayed into the session
+ * and rejects when it was dropped — the start failed, or its write did not reach the agent.
  */
-function createBufferedOutcome(): { settle: BufferedPromptSettled; assertReplayed: () => Promise<void> } {
+function createBufferedOutcome(): { settle: BufferedPromptSettled; getOutcome: () => Promise<BufferedPromptOutcome>; assertReplayed: () => Promise<void> } {
   let settle: BufferedPromptSettled = () => {};
   const outcome = new Promise<BufferedPromptOutcome>((resolve) => {
     settle = resolve;
   });
   return {
     settle: (result) => settle(result),
+    getOutcome: () => outcome,
     assertReplayed: async () => {
-      if ((await outcome) !== 'replayed') throw new Error('the prompt waited for the session to start and never reached the agent');
+      if ((await outcome) !== 'replayed') throw new Error(bufferedPromptDroppedError);
     },
   };
 }
+
+/** Why a post whose prompt waited for a session start failed: the window dropped it. */
+const bufferedPromptDroppedError = 'the prompt waited for the session to start and never reached the agent';
 
 function handleAgentError(key: SessionKey, error: Error): void {
   console.error(`[Bot] adapter error ${keyToString(key)}:`, error.message);
@@ -15634,9 +16228,13 @@ async function prepareRequestWakeUpSession(key: SessionKey, message: WakeUpMessa
  */
 async function forwardRequestWakeUp(key: SessionKey, _request: OpenRequestState, message: WakeUpMessage): Promise<void> {
   // The request's own prompt re-posted (R21) counts as that prompt, not a reminder.
-  await forwardPromptToAgent(key, getThreadAdapter(key), message.text, undefined, {
+  const outcome = await forwardPromptToAgent(key, getThreadAdapter(key), message.text, undefined, {
     isRequestReminder: !message.isRequestPrompt,
+    lostWorkTelling: message.isAnswerOptional === true ? 'watchHeld' : 'plain',
   });
+  // A wake that waited for an adopted session's replay and then found no session reached no agent: a failed wake (a post retry later,
+  // the backstop for a restart wake, else `wakeFailed`), never a delivered one whose turn the engine would watch (review 21, own pass).
+  if (outcome === 'noSession') throw new Error(noSessionForPostError);
 }
 
 /**
@@ -15647,8 +16245,8 @@ async function forwardRequestWakeUp(key: SessionKey, _request: OpenRequestState,
 async function remindAnswerTail(key: SessionKey, text: string): Promise<boolean> {
   const ensured = await ensureAgentSession(key, { isResumeOnly: true });
   if (!ensured.ok || !getThreadAdapter(key).checkIsActive(key)) return false;
-  await forwardPromptToAgent(key, getThreadAdapter(key), text, undefined, { isRequestReminder: true });
-  return true;
+  // `false` when it waited for an adopted session's replay and then found no session (review 21, own pass).
+  return (await forwardPromptToAgent(key, getThreadAdapter(key), text, undefined, { isRequestReminder: true })) !== 'noSession';
 }
 
 /**
@@ -15663,7 +16261,9 @@ const probeThreadTurn = createSessionTurnProbe({
   getApiRetryTimer: (keyString) => apiRetryTimers.get(keyString)?.timer,
   checkIsWedgeRecoveryInFlight: (keyString) => wedgeRecoveriesInFlight.has(keyString),
   checkIsRetryKickInFlight: (keyString) => apiRetryKicksInFlight.has(keyString),
+  checkIsApiErrorInHandling: (keyString) => apiErrorsInHandling.has(keyString),
   checkIsSessionStarting: (keyString) => startupPromptBuffer.checkIsStarting(keyString),
+  checkIsReplayingBufferedPrompts: (keyString) => startupPromptBuffer.checkIsReplaying(keyString),
   serializeKey: keyToString,
 });
 
@@ -15684,14 +16284,47 @@ async function postTodoReminder(key: SessionKey, text: string): Promise<boolean>
 }
 
 /**
- * @description The person took over the conversation (interrupt, quit, restart,
- * switch or resume of the session, a switch to another agent or a shell, leaving
- * the folder): its open request closes silently and nothing wakes it. Safe before
- * the engine exists (early boot).
+ * @description The person interrupted the turn (`/esc` and its aliases, `/c`): the conversation goes on, but its open requests close
+ * silently and nothing wakes them. A command that ends or replaces the conversation closes them through
+ * {@link cancelEndingConversationRequests} instead, which tells a person whose words were never read. Safe before the engine exists
+ * (early boot).
  */
 function cancelConversationRequest(key: SessionKey): void {
   void requestWakeUpEngine?.cancelConversation(key).catch((e) =>
     console.warn(`[requests] cancelling the request of ${keyToString(key)} failed:`, e instanceof Error ? e.message : e),
+  );
+}
+
+/**
+ * @description A command that ends or replaces the conversation — `/new`, the `/resume` pick, `/quit`, leaving the folder, each `/quitall`
+ * topic, a move across backends, a start onto another agent or a shell (`switchThreadAdapter`) — closes its open requests, and a person
+ * whose words the agent never took in is told: nobody reads them (review 25 #3; one rule for every such command, review 26 #2). A request
+ * the agent took in closes in silence: its words are in the conversation it had. «Taken in» is the persisted mark or what the live process
+ * says NOW (`readPromptsReachedOrHeld`, read synchronously here — call it before the command stops the process — or handed in by a command
+ * that reads it earlier: the `/resume` pick ahead of the resume that replaces the process, a bridged move ahead of its bridge, so the
+ * reading and the bridge describe the same moment): the mark lags until a settle or the 10-second poll (review 26 #1, review 27 nit 5).
+ * Three prompts are not told here, so each person is told once: one waiting in a window — that window's drop tells it; one on its way to
+ * its write ({@link personPromptsInDelivery}) — its own route refuses it, also once this command is over, since its request is closed here
+ * ({@link personPromptsEndedInDelivery}, marked at this call; review 27 #1, review 28 nit 4); and one whose drop is already being told
+ * (`personDropsBeingTold`). Fire and forget. An interrupt keeps {@link cancelConversationRequest}'s silent close.
+ */
+function cancelEndingConversationRequests(key: SessionKey, reachedOrHeld?: ReadonlySet<string>): void {
+  const engine = requestWakeUpEngine;
+  if (!engine) return;
+  // Not the cancel's to tell: what the live process took in or a window holds, and a person's prompt on its way to its write (review 27 #1)
+  // — which its own route refuses, even once this command is over, since the cancel closes its request (review 28 nit 4).
+  const promptsReachedOrHeld = new Set([...(reachedOrHeld ?? engine.readPromptsReachedOrHeld(key)), ...personPromptsInDelivery.keys()]);
+  for (const [requestId, conversationKey] of personPromptsInDelivery) {
+    if (conversationKey === keyToString(key)) personPromptsEndedInDelivery.add(requestId);
+  }
+  void (async () => {
+    const unreadRequestIds = (await engine.cancelConversation(key, promptsReachedOrHeld)).filter((requestId) => !personDropsBeingTold.has(requestId));
+    // A topic line: a tracker conversation never moves to another agent (its fallback stays within Claude).
+    if (unreadRequestIds.length === 0 || !checkIsTelegramKey(key)) return;
+    console.warn(`[requests] ${keyToString(key)}: the conversation ended before its agent read ${unreadRequestIds.join(', ')}; the requests are closed and the topic told`);
+    await withThreadLocale(key, () => replyToThread(key, t('agent.queued_prompt_dropped_by_command')));
+  })().catch((e) =>
+    console.warn(`[requests] cancelling the requests of ${keyToString(key)} as its conversation ends failed:`, e instanceof Error ? e.message : e),
   );
 }
 
@@ -15712,7 +16345,9 @@ interface SchedulerWiringDeps {
 /**
  * @description How a prompt is posted into a conversation's session — the deps of
  * {@link postToSession}, shared by the scheduler's fire and the Jira connector's
- * requests (Jira plan J5, D21).
+ * requests (Jira plan J5, D21). The forward opens no request: a Jira request arrives with its request open and its header in the
+ * text, and a scheduled run meets a topic's requests through the scheduler's own topic ports ({@link forwardScheduledRun},
+ * {@link forwardTopicSchedulerRequestRun}).
  */
 function createSessionPostDeps(): PostToSessionDeps {
   return {
@@ -15730,19 +16365,138 @@ function createSessionPostDeps(): PostToSessionDeps {
       return { ok: false, reason };
     },
     forwardPrompt: async (conversationKey, text) => {
-      const key = keyFromString(conversationKey);
-      // A scheduled run in a topic with requests on is a request (S7); a tracker's
-      // post arrives with its request already open and its header in the text.
-      const opening = await openTopicRequest(key, text, { source: 'scheduledRun', requesterId: scheduledRunRequester });
       const buffered = createBufferedOutcome();
-      const delivery = await deliverPromptOrBuffer(key, `${opening.header}${text}`, startupPromptBuffer.checkIsStarting(conversationKey), buffered.settle, { isAccountsNoteCarrier: true });
-      await settleTopicRequestAfterDelivery(key, opening, delivery);
+      const delivery = await deliverPostPrompt(keyFromString(conversationKey), text, buffered.settle, { isAccountsNoteCarrier: true });
       // A prompt that waited for the session's start counts only once it reached it: a replay whose write failed is a failed post.
       if (delivery === 'buffered') await buffered.assertReplayed();
+      // The session the post ensured went to sleep before the write, and nothing could be woken for it: no turn will take the prompt.
+      if (delivery === 'noSession') throw new Error(noSessionForPostError);
     },
+    // The watches whose turn ended are settled before the post picks a request and builds its text; the reminders they decided, and the
+    // ones handed to the post while it waited, are delivered after the post's own write (`requests/README.md` § Turn starts).
+    settleEndedTurns: (conversationKey) => requestWakeUpEngine?.settleEndedTurnsForPost(keyFromString(conversationKey)) ?? Promise.resolve(deliverNoSettledWakes),
+    notePostInFlight: (conversationKey) => requestWakeUpEngine?.notePostInFlight(keyFromString(conversationKey)) ?? deliverNoSettledWakes,
+    // A command that ends or replaces the conversation runs: the post waits for it to be over, then goes to what follows — in a move,
+    // after the bridge its own ensure would otherwise overtake (review 26 #5).
+    waitForConversationChange: (conversationKey) => conversationEndings.waitForMessagesAccepted(conversationKey),
     now: () => Date.now(),
     sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
   };
+}
+
+/**
+ * @description A bot-made post's write: the last await before EACH routing of it waits while a command ends or replaces the
+ * conversation (`ConversationEndings.waitForMessagesAccepted`, handed to the route as `waitBeforeRoute`) — before the first routing, and
+ * again after a wake brought the conversation back or an adopt replay was waited out, with only synchronous code between each wait and
+ * its routing. The post's earlier waits (`postToSession`) come before its ensures; after them a topic fire still queues behind the
+ * topic's previous fire, may open the scheduler's request, or wakes the conversation — a move that began meanwhile would otherwise get
+ * the prompt written into the backend it leaves, past the bridge it already built, and the run lost while recorded as delivered (review 27
+ * nit 2, review 28 nit 2). A scheduled run's `headerRequest` — the request its header names, and the conversation's refusal serial when
+ * that request was picked — is refused at a routing whose serial moved and whose request is closed (mini-review of round 28, #3; of round
+ * 29, #2).
+ */
+function deliverPostPrompt(
+  key: SessionKey,
+  text: string,
+  onBufferedSettled: BufferedPromptSettled,
+  options: PromptDeliveryOptions = {},
+  headerRequest: ScheduledRunHeaderRequest | null = null,
+): Promise<PromptDelivery> {
+  const conversationKey = keyToString(key);
+  return deliverPromptOrBuffer(key, text, onBufferedSettled, {
+    ...options,
+    waitBeforeRoute: async () => {
+      await conversationEndings.waitForMessagesAccepted(conversationKey);
+      // A command ran since the pick — during this wait, or one that began and ended between two routings (an adopt replay's wait, a
+      // wake's notice) — and closed the request this run's header names: written now, the agent that follows would read a request it
+      // cannot answer, in a turn nothing watches. Refused before it routes; the fire picks again.
+      if (headerRequest !== null && checkIsHeaderRequestClosedByCommand(conversationKey, headerRequest)) {
+        throw new ScheduledRunTargetClosedError(headerRequest.requestId);
+      }
+    },
+  });
+}
+
+/**
+ * @name ScheduledRunHeaderRequest
+ * @description The request a scheduled run's header names, and the conversation's refusal serial
+ * (`ConversationEndings.readRefusalSerial`) read when that request was picked.
+ */
+interface ScheduledRunHeaderRequest {
+  requestId: string;
+  refusalSerialAtPick: number;
+}
+
+/**
+ * @description The header's request of a Telegram topic's scheduled run, with the refusal serial read at its pick (by default now: call it
+ * synchronously with the pick). A tracker conversation stays out (`null`): it never takes a refusal, a move across backends being a
+ * topic's only.
+ */
+function getScheduledRunHeaderRequest(
+  key: SessionKey,
+  requestId: string | null,
+  refusalSerialAtPick = conversationEndings.readRefusalSerial(keyToString(key)),
+): ScheduledRunHeaderRequest | null {
+  if (requestId === null || !checkIsTelegramKey(key)) return null;
+  return { requestId, refusalSerialAtPick };
+}
+
+/** @description Whether a command ran since the header's request was picked and that request is closed now. */
+function checkIsHeaderRequestClosedByCommand(conversationKey: string, headerRequest: ScheduledRunHeaderRequest): boolean {
+  return conversationEndings.readRefusalSerial(conversationKey) !== headerRequest.refusalSerialAtPick
+    && topicRequestLedger?.getOpenRequestById(headerRequest.requestId) === undefined;
+}
+
+/**
+ * @description Write a scheduled run's prompt into a conversation's session and watch the turn it starts as the scheduled run of
+ * the request it RIDES (`ridden`; `null` when none is open — a tracker's — so no turn is watched): a Jira issue's open request, or a
+ * topic's job request or scheduler's request, told whether the fire's job is one of that request's own (`isRequestJob`). It goes through
+ * the buffer-or-forward unit and opens no request: the request it rides owes the answer (`scheduler/scheduledRunTarget.ts`). A prompt
+ * that never reached the agent — its window dropped it, or it found no session and nothing to wake — fails the post, as every session
+ * post does: its run records the error, and a check's failure wake clears `isCheckFailing` so its next failing run wakes the agent again
+ * (review 21 #2). No turn is watched for it.
+ */
+async function forwardScheduledRun(conversationKey: string, text: string, ridden: RiddenRequest | null): Promise<void> {
+  const key = keyFromString(conversationKey);
+  // Read in the tick of the pick (the caller picked `ridden` and called here with no await between).
+  const headerRequest = getScheduledRunHeaderRequest(key, ridden?.requestId ?? null);
+  const buffered = createBufferedOutcome();
+  // A tracker fire whose ridden request owes nothing, or with none open: its header says when to answer, so a lost-work note riding it
+  // defers to it and claims no watch (a comment notifies the requester and the issue's watchers). A topic keeps its own resume and wording.
+  const lostWorkTelling: LostWorkTelling = !checkIsTelegramKey(key) && ridden?.isAnswerOwed !== true ? 'runHeader' : 'plain';
+  const delivery = await deliverPostPrompt(key, text, buffered.settle, { isAccountsNoteCarrier: true, lostWorkTelling }, headerRequest);
+  // A prompt that waited for the session's start counts only once it reached it: a replay whose write failed is a failed post.
+  if (delivery === 'buffered') await buffered.assertReplayed();
+  if (delivery === 'noSession') throw new Error(noSessionForPostError);
+  if (ridden !== null) {
+    await requestWakeUpEngine?.trackForwardedTurn(key, ridden.requestId, { isRequestPrompt: false, isScheduledRun: true, isRequestJob: ridden.isRequestJob });
+  }
+}
+
+/**
+ * @description A topic's scheduled run with no request to ride (`pickTopicRunTarget` → `ownRequest`): open the scheduler's request
+ * (S7, the scheduler's requester — it replaces only one the bot gave up on), forward the prompt behind its header and settle it as
+ * the request's own scheduled run — the turn is tracked as one. A prompt that never reached the agent (its window dropped it, or it
+ * found no session) closes the request nobody was told about and fails the post, as {@link forwardScheduledRun} does (review 21 #2).
+ */
+async function forwardTopicSchedulerRequestRun(conversationKey: string, text: string): Promise<void> {
+  const key = keyFromString(conversationKey);
+  // Read at the pick, ahead of the open: a command during the open's flush closes the request it opens, and counts.
+  const refusalSerialAtPick = conversationEndings.readRefusalSerial(conversationKey);
+  const opening = await openTopicRequest(key, text, { source: 'scheduledRun', requesterId: scheduledRunRequester });
+  const buffered = createBufferedOutcome();
+  const headerRequest = getScheduledRunHeaderRequest(key, opening.requestId, refusalSerialAtPick);
+  const delivery = await deliverPostPrompt(key, `${opening.header}${text}`, buffered.settle, { isAccountsNoteCarrier: true }, headerRequest);
+  // A prompt that waited for the session's start counts only once it reached it, and only then is its turn watched (a watch made in
+  // the window would wait for good if the window dropped it). Dropped, the scheduler's request nobody was told about closes like one
+  // that found no session, and the post fails.
+  if (delivery === 'buffered' && (await buffered.getOutcome()) === 'dropped') {
+    await settleTopicRequestAfterDelivery(key, opening, 'noSession');
+    throw new Error(bufferedPromptDroppedError);
+  }
+  await settleTopicRequestAfterDelivery(key, { ...opening, isScheduledRun: true }, delivery);
+  // Closed by the settle when no session was left to take the prompt: the post fails, not read as delivered.
+  if (delivery === 'noSession') throw new Error(noSessionForPostError);
 }
 
 /**
@@ -15813,6 +16567,33 @@ function wireScheduler(wiring: SchedulerWiringDeps): SchedulerMcpHandle {
       return decision.kind === 'proceed' ? readWorkerActivity(path.resolve(decision.workDir, runDir)) : null;
     },
     statusIntervalOverrideMs: ENV.testTimings.checkStatusIntervalMs,
+    // A topic whose view has requests: a fire rides the job's request or the scheduler's, and opens the scheduler's only when there is
+    // none to ride (`scheduler/scheduledRunTarget.ts`).
+    topicRun: {
+      getRequestView: (threadKeyStr) => {
+        const key = keyFromString(threadKeyStr);
+        if (!checkIsTelegramKey(key)) return null;
+        const { view } = state.getDisplayPrefs(key);
+        return checkAreRequestsEnabled(view) ? { isPlainTextHidden: !checkIsStreamShown(view) } : null;
+      },
+      listOpenRequests: (threadKeyStr) => wiring.requestLedger.listOpenRequestsOf(keyFromString(threadKeyStr)),
+      forwardRun: forwardScheduledRun,
+      forwardOwnRequestRun: forwardTopicSchedulerRequestRun,
+    },
+    // A Jira issue's fires post nothing there and ride the open request (`scheduler/scheduledRunTarget.ts`).
+    ...(jiraConnector
+      ? {
+        trackerRun: {
+          describeConversation: (threadKeyStr: string) => {
+            const key = keyFromString(threadKeyStr);
+            return key.platform === 'jira' ? jiraConnector.describeConversation(key) : null;
+          },
+          listOpenRequests: (threadKeyStr: string) => wiring.requestLedger.listOpenRequestsOf(keyFromString(threadKeyStr)),
+          forwardRun: forwardScheduledRun,
+          fallbackAdapterName: jiraConnector.adapterName,
+        },
+      }
+      : {}),
   });
 
   /**
@@ -15827,7 +16608,9 @@ function wireScheduler(wiring: SchedulerWiringDeps): SchedulerMcpHandle {
     if (outcome.status === 'failed' && outcome.error === unboundDeliveryError) {
       await state.setSchedulePaused(job.id, true, 'unbound');
       schedulerEngine?.disarmJob(job.id);
-      await withThreadLocale(key, () => replyToThread(key, t('schedule.pausedUnbound', { count: 1 }))).catch(() => {});
+      // The bot posts nothing on an issue: a tracker conversation's pause is a log line, and its jobs resume with its next usable bind.
+      if (checkIsTelegramKey(key)) await withThreadLocale(key, () => replyToThread(key, t('schedule.pausedUnbound', { count: 1 }))).catch(() => {});
+      else console.log(`[scheduler] job ${job.id} of ${job.threadKey} paused: its folder is not usable; it resumes when a request finds the folder usable again`);
     }
     return outcome;
   };
@@ -15884,6 +16667,13 @@ function wireScheduler(wiring: SchedulerWiringDeps): SchedulerMcpHandle {
     noteLimitWorkerWatch: (threadKeyStr) => {
       const key = tryKeyFromString(threadKeyStr);
       if (key !== null) getLimitNotes().noteWorkerWatch(key);
+    },
+    // The request a job is armed under (`ScheduleRecord.requestId`): the one the agent works on — the request whose forward started the
+    // running turn (the scheduler's request too, when its fire did); the scheduler's request is passed over only where no turn tells.
+    getArmingRequestId: (threadKeyStr) => {
+      const key = tryKeyFromString(threadKeyStr);
+      if (key === null) return undefined;
+      return requestWakeUpEngine?.getArmingRequestIdOf(key) ?? pickRequestToArmUnder(wiring.requestLedger.listOpenRequestsOf(key), []);
     },
     getRemoteRunRunnerLines: () => getRunnerSummaryLines(),
     // A refused tool call leaves one line in the bounded diagnostic log (agent-diag.log): the SDK refuses before the bot sees it.
@@ -16165,29 +16955,21 @@ function createJiraSessionDeps(requestLedger: RequestLedger, slots: TaskAgentSlo
     slots,
     bindConversation: async (key, folder) => {
       if (state.getBinding(key)?.subdir !== folder) await state.setBinding(key, folder);
+      // A fire that found no usable folder paused its job; a request that finds it usable resumes it, as `/bind` does in a topic.
+      if (resolveBoundWorkDir(ENV.workRoot, state.getBinding(key)).kind === 'proceed') {
+        await resumeTrackerSchedulesOnRebind(key).catch((e) => console.warn(`[scheduler] resume-on-rebind failed for ${keyToString(key)}:`, e));
+      }
     },
     createRequest: (key, origin, createPrompt) => requestLedger.createRequest(key, origin, { createPrompt }),
     listOpenRequests: (key) => requestLedger.listOpenRequestsOf(key),
-    postRequest: async (key, requestId, prompt) => {
-      // A request is the issue's "user message" (L-D5): it clears the spent idle-compaction
-      // latch like a topic's message does, or the issue would never compact again.
-      notePersonActivity(key);
-      const posted = await postToSession(sessionPostDeps, keyToString(key), prompt, adapterName);
-      if (!posted.ok) {
-        // R28: retried at about 1, 5 and 15 min, outside the wake-up cap.
-        await requestWakeUpEngine?.notePostFailed(key, requestId);
-        throw new Error(posted.reason === 'forward-failed' ? posted.error : `session ${posted.reason}`);
-      }
-      // A held request is tracked when the wait's resume, or else its next wake-up, posts its prompt (R21).
-      if (!posted.isHeld) await requestWakeUpEngine?.trackForwardedTurn(key, requestId, { isRequestPrompt: true });
-    },
-    // An issue update (a comment for an open hand-over request) opens no request: the turn it starts is that request's.
-    postUpdate: async (key, prompt, getTargetRequestId) => {
-      notePersonActivity(key);
-      const posted = await postToSession(sessionPostDeps, keyToString(key), prompt, adapterName);
-      if (!posted.ok) throw new Error(posted.reason === 'forward-failed' ? posted.error : `session ${posted.reason}`);
-      if (!posted.isHeld) await requestWakeUpEngine?.trackForwardedTurn(key, getTargetRequestId());
-    },
+    // A request is the issue's "user message" (L-D5): posting it clears the spent idle-compaction latch like a topic's message
+    // does, or the issue would never compact again. An issue update (a comment for an open hand-over request) opens no request:
+    // the turn it starts is that request's.
+    ...createTrackerTurnPoster({
+      post: (key, prompt, options) => postToSession(sessionPostDeps, keyToString(key), prompt, adapterName, options),
+      notePersonActivity,
+      getEngine: () => requestWakeUpEngine,
+    }),
   };
 }
 
@@ -16295,6 +17077,7 @@ export async function startBot(): Promise<void> {
   requestWakeUpEngine = new RequestWakeUpEngine({
     ledger: requestLedger,
     probeTurn: probeThreadTurn,
+    refreshProcessState: (key) => getThreadAdapter(key).refreshWorkingState?.(key),
     prepareWakeUpSession: (key, message) =>
       prepareRequestWakeUpSession(key, message, key.platform === 'jira' ? jiraConnector?.adapterName : undefined),
     forwardWakeUp: forwardRequestWakeUp,
@@ -16315,6 +17098,9 @@ export async function startBot(): Promise<void> {
     pollIntervalMs: ENV.testTimings.requestTurnPollMs,
     sweepIntervalMs: ENV.testTimings.requestSweepIntervalMs,
     firstPostRetryDelayMs: ENV.testTimings.requestFirstPostRetryDelayMs,
+    progressFollowUpMs: ENV.testTimings.progressFollowUpMs,
+    // A request waits for its schedule while a job armed under it counts (`requests/scheduleWait.ts`): read when a decision is made.
+    getScheduleWait: (key, request) => getRequestScheduleWait(state.getThreadSchedules(key), request),
     // Only a Telegram topic in the answers-only view hides the stream from someone who expects to see the work.
     checkIsAnswerTailWatched: (key) => checkIsTelegramKey(key) && !checkIsStreamShown(state.getDisplayPrefs(key).view),
     remindAnswerTail,

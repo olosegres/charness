@@ -150,6 +150,11 @@ export async function answerRequest(deps: AnswerRequestDeps, args: AnswerRequest
       // and a post retry still pending is moot (R28).
       ...(current.prompt !== undefined && current.isPromptTakenIn !== true ? { isPromptTakenIn: true } : {}),
       ...(current.nextPostRetryAt !== undefined ? { nextPostRetryAt: undefined } : {}),
+      // The agent spoke to the requester: no person's words are left unanswered (`isPersonInputUnanswered`) and no silent turn is
+      // pending — a turn that sent a progress note is never a silent one. Both are cleared HERE, not only at the turn's end
+      // (`decideTurnEnd`): the turn's watch is in memory and a restart may lose it, which must not leave the answered request «owed».
+      ...(current.isPersonInputUnanswered === true ? { isPersonInputUnanswered: undefined } : {}),
+      ...(current.silentTurnCount > 0 ? { silentTurnCount: 0 } : {}),
     }));
   // After the close: whoever hears it sees the request as it now stands.
   deps.onAnswerDelivered?.(key, args.requestId, args.kind);

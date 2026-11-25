@@ -95,6 +95,13 @@ export interface OpenRequestState {
    */
   isLimitStopped?: boolean;
   /**
+   * A person's words reached the agent after the request's last answer (an issue update, a re-posted prompt) and nothing was
+   * answered yet. Persisted, because the engine's watches are in memory: a request that waits for its schedule is held between
+   * turns only while it owes nobody an answer (`checkIsAnswerOwed`), so a turn whose watch was lost (a restart, a dead process)
+   * still reaches the backstop. Cleared when an answer is delivered. Absent = none owed beyond the ones the other fields show.
+   */
+  isPersonInputUnanswered?: boolean;
+  /**
    * Which limit wait the bot already answered this request about (see
    * `getUsageLimitWaitIdentity`), so each request hears about each wait once.
    */
@@ -130,6 +137,7 @@ export type OpenRequestUpdate = Partial<
     | 'lastTurnActivityAt'
     | 'isWakeStopped'
     | 'isLimitStopped'
+    | 'isPersonInputUnanswered'
     | 'limitWaitAnsweredFor'
     | 'alertRef'
     | 'isPromptTakenIn'

@@ -437,7 +437,9 @@ to hand over means an agent with at least one readable turn (`readConversationTu
 so a just-started agent switches at once. The module keeps one snapshot per question MESSAGE (newest 20, one open
 question per topic): a tap with no snapshot, on another topic, or after the topic changed backend only answers «out of
 date»; Continue edits the question into «Switching…» then the outcome (or the failure), Cancel into a line naming where
-the topic stays; both drop the keyboard. Ports: `getCurrentFamily`, `performBackendSwitch`.
+the topic stays; both drop the keyboard. Continue holds the conversation as ending (`holdConversationEnding`) ahead of its toast and
+the «Switching…» edit and hands the hold to the switch, so a stop under way drops what it held instead of resuming the backend being left
+(`requests/README.md` § Turn starts). Ports: `getCurrentFamily`, `holdConversationEnding`, `performBackendSwitch`.
 
 ## `claudeAccounts.ts`
 

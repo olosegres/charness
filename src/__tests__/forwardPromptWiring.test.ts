@@ -50,7 +50,7 @@ test('a technical prompt is routed as one after the wait, and the reminder that 
   const body = getFunctionBody('forwardPromptToAgent');
   const route = body.slice(body.indexOf('await deliverLatePrompt({'));
   assert.match(route, /isTechnical: isTechnicalPrompt,/, 'the routing knows the prompt is technical (no buffer, no wake, no report)');
-  assert.match(route, /checkIsSessionActive: \(\) => adapter\.checkIsActive\(key\) && !\(isTechnicalPrompt && \(adapter\.checkIsBusy\?\.\(key\) \?\? false\)\),/, 'and wants a session that is idle as well as live');
+  assert.match(route, /checkIsSessionActive: \(\) => checkIsAcceptingInput\(key\) && !\(isTechnicalPrompt && \(adapter\.checkIsBusy\?\.\(key\) \?\? false\)\),/, 'and wants a session that takes input and is idle (review 25 nit 7)');
   const reminder = getFunctionBody('postTodoReminder');
   assert.match(reminder, /=== 'dropped'/, 'the reminder reads the outcome');
   assert.match(reminder, /return isPosted && !isDropped;/, 'a dropped reminder is not posted');
@@ -81,25 +81,100 @@ test('the live forward awaits the write\'s outcome — except for a person\'s ow
 });
 
 test('only a person\'s own prompts are marked as such: the text, voice and label path, the buffered startup prompt, a file, an album, /schedule and what a usage-limit wait held — a wake-up, a nudge or a reminder is not', () => {
-  // The state-routed delivery both a person's prompt (`deliverActivePrompt`) and a late answer end in.
-  assert.match(getFunctionBody('deliverPromptByState'), /forward: \(\) => forwardPromptToAgent\(key, getThreadAdapter\(key\), text, sentAtMs, \{ messageContext, requestHeader: opening\.header, isPersonInput: true, isAccountsNoteCarrier \}\),/);
-  assert.match(getFunctionBody('deliverActivePrompt'), /return deliverPromptByState\(key, adapter, text, intake, sentAtMs, messageContext\);/, 'a person\'s prompt ends in it');
-  assert.match(getFunctionBody('deliverPromptByState'), /, true, undefined, \{ isPersonInput: true, isAccountsNoteCarrier \}\);/, 'and its buffered twin');
-  assert.match(getFunctionBody('bufferPromptDuringStartup'), /, true, undefined, \{ isPersonInput: true, isAccountsNoteCarrier: true \}\);/);
-  assert.match(getFunctionBody('cancelPendingQuestionAndForward'), /isPersonInput: true, isAccountsNoteCarrier \}\);/);
+  // The state-routed write every person's prompt ends in (`deliverPromptByState`: text, voice, a file, an album, /schedule, a label, a
+  // late answer), and the question-cancelling free text.
+  const atWrite = getFunctionBody('deliverPersonPromptAtWrite');
+  assert.match(atWrite, /forward: \(\) => forwardPromptToAgent\(key, getThreadAdapter\(key\), text, sentAtMs, \{ messageContext, requestHeader, requestId, isPersonInput: true, isAccountsNoteCarrier \}\),/);
+  assert.match(atWrite, /, createPersonBufferedSettle\(key, requestId\), \{ isPersonInput: true, isAccountsNoteCarrier \}\);/, 'and its buffered twin');
+  assert.match(getFunctionBody('deliverPromptByState'), /\(opening\) => deliverPersonPromptAtWrite\(key, text, /, 'inside its request, marked in delivery (review 27 #1)');
+  assert.match(getFunctionBody('deliverActivePrompt'), /return deliverPromptByState\(key, text, intake, sentAtMs, messageContext\);/, 'a person\'s prompt ends in it');
+  assert.match(getFunctionBody('deliverPromptDuringStartup'), /await deliverPromptByState\(key, text, intake, undefined, messageContext\);/, 'one that arrived in a window too');
+  assert.match(getFunctionBody('cancelPendingQuestionAndForward'), /return deliverPersonPromptAtWrite\(key, text, \{/);
   for (const name of ['forwardRequestWakeUp', 'remindAnswerTail', 'postTodoReminder']) {
     assert.ok(!getFunctionBody(name).includes('isPersonInput'), `${name} awaits its write`);
   }
-  // A buffered prompt replays with the flag it was buffered with.
-  assert.ok(botSource.includes('forward: async (prompt, isPersonInput, isAccountsNoteCarrier) => { await forwardPromptToAgent(key, adapter, prompt, undefined, { isPersonInput, isAccountsNoteCarrier }); },'));
+  // A buffered prompt replays with the options it was buffered with (its person flag among them).
+  assert.ok(botSource.includes('const outcome = await forwardPromptToAgent(key, adapter, prompt, undefined, options);'));
   // R23: what people asked for during a usage-limit wait, released to the next session — a failed write was only logged.
   assert.match(getFunctionBody('replayBufferedPrompts'), /await forwardPromptToAgent\(key, adapter, heldText, undefined, \{ isPersonInput: true \}\);/);
+});
+
+test('the lost-work wake of a request a passing watch holds tells the requester only if they must know: the wake message\'s flag reaches the note the prompt carries', () => {
+  assert.match(getFunctionBody('forwardRequestWakeUp'), /lostWorkTelling: message\.isAnswerOptional === true \? 'watchHeld' : 'plain',/);
+  assert.match(getFunctionBody('forwardPromptToLiveAgent'), /buildLostWorkNote\(lostWorkRecord, getLocaleEndonym\(getActiveLang\(\)\), \{ telling: options\.lostWorkTelling \?\? 'plain' \}\)/);
+});
+
+test('a tracker fire whose ridden request owes nothing, or with no request open, asks for the lost-work note\'s optional wording — the fire\'s header already says to answer only if the requester must know (review 14 #3)', () => {
+  const body = getFunctionBody('forwardScheduledRun');
+  assert.match(body, /const lostWorkTelling: LostWorkTelling = !checkIsTelegramKey\(key\) && ridden\?\.isAnswerOwed !== true \? 'runHeader' : 'plain';/);
+  assert.match(body, /\{ isAccountsNoteCarrier: true, lostWorkTelling \}/);
+});
+
+test('the turn probe reads the startup buffer\'s replay as the start, and the held prompts of a limit wait are forwarded inside the replay (review 15 #1)', () => {
+  assert.ok(botSource.includes('checkIsReplayingBufferedPrompts: (keyString) => startupPromptBuffer.checkIsReplaying(keyString),'));
+  const replay = getFunctionBody('replayBufferedPrompts');
+  assert.match(replay, /afterReplay: async \(\) => \{/);
+  assert.ok(replay.indexOf('afterReplay') < replay.indexOf('limitHeldPrompts.releaseAll(key)'), 'the held prompts are the replay\'s after-step');
+});
+
+test('a turn\'s end is decided at the adapter\'s own turn-end event, after a per-turn stop is queued — the stop would otherwise leave the watch to «session gone» (review 15 P1)', () => {
+  const body = getFunctionBody('handleAgentTurnEnded');
+  assert.match(body, /settleEndedTurnsAndHandOver\(key\);/);
+  assert.ok(body.indexOf('suspendThreadSession(key)') < body.indexOf('settleEndedTurnsAndHandOver(key)'), 'after the stop is queued: its window opens only in a later tick');
+  assert.doesNotMatch(body.slice(0, body.indexOf('settleEndedTurnsAndHandOver(key)')), /return;/, 'no early return skips it for another backend');
+  // The write choke point settles before its write, the same way.
+  assert.match(getFunctionBody('forwardPromptToLiveAgent'), /^[^]*?settleEndedTurnsAndHandOver\(key\);[^]*?noteThreadActivity\(key\);/);
+});
+
+test('the write choke point names the process a buffered prompt\'s replay writes into — at a replayed write only: right after its settle, before the write, in the same tick (review 18 #2, review 19 #1)', () => {
+  const body = getFunctionBody('forwardPromptToLiveAgent');
+  const settle = body.indexOf('settleEndedTurnsAndHandOver(key);');
+  const named = body.indexOf('if (startupPromptBuffer.checkIsReplaying(keyToString(key))) requestWakeUpEngine?.noteReplayedWrite(key);');
+  assert.doesNotMatch(botSource, /noteSessionWrite/, 'no write that is not a replay names anything');
+  assert.ok(settle > 0 && named > settle, 'after the settle, which decides the ended watches by what they had');
+  assert.equal(body.slice(settle, named).includes('await'), false, 'nothing awaited between them');
+  assert.ok(named < body.indexOf('noteThreadActivity(key);'), 'ahead of the write');
+});
+
+test('the write choke point stamps every write with the process it goes to, before the write and in the same tick: a watch tracked after that process went down is named from it (review 22 nit 2)', () => {
+  const body = getFunctionBody('forwardPromptToLiveAgent');
+  const stamped = body.indexOf('requestWakeUpEngine?.noteWrite(key);');
+  const settle = body.indexOf('settleEndedTurnsAndHandOver(key);');
+  assert.ok(settle > 0 && stamped > settle, 'after the settle');
+  assert.equal(body.slice(settle, stamped).includes('await'), false, 'nothing awaited between them');
+  assert.ok(stamped < body.indexOf('noteThreadActivity(key);'), 'ahead of the write');
+});
+
+test('a settle\'s reminders — at a turn end and at the write choke point (a todo reminder written at the turn end included) — are handed to a post waiting for that turn; the post\'s settle takes them, and the post registers itself in flight (review 16 #2, review 17 nit 6)', () => {
+  assert.match(getFunctionBody('settleEndedTurnsAndHandOver'), /engine\.settleEndedTurnsOf\(key\)\.then\(\(deliverSettledWakes\) => engine\.deliverOrHandOverWake\(key, deliverSettledWakes\)\)/);
+  assert.doesNotMatch(botSource, /settleEndedTurnsOf\(key\)\.then\(\(deliverSettledWakes\) => deliverSettledWakes\(\)\)/, 'no settle delivers past a post in flight');
+  const postDeps = getFunctionBody('createSessionPostDeps');
+  assert.match(postDeps, /settleEndedTurns: \(conversationKey\) => requestWakeUpEngine\?\.settleEndedTurnsForPost\(keyFromString\(conversationKey\)\)/);
+  assert.match(postDeps, /notePostInFlight: \(conversationKey\) => requestWakeUpEngine\?\.notePostInFlight\(keyFromString\(conversationKey\)\)/);
+});
+
+test('an API error that arms nothing holds the turn end until its stop, move or wait has landed — «wait for reset» off, a used-up balance, an account refusal or a logged-out notice (review 16 #1)', () => {
+  const handler = getFunctionBody('handleApiError');
+  assert.match(handler, /holdTurnEndWhileHandlingApiError\(key, handleBalanceExhausted\(key, cls\)\);/);
+  assert.match(handler, /holdTurnEndWhileHandlingApiError\(key, announceUsageLimitOrSwitch\(key, cls, Date\.now\(\), wait, 0, isFirstOffNotice\)\);/);
+  assert.match(handler, /holdTurnEndWhileHandlingApiError\(key, getThreadAdapter\(key\) instanceof ClaudeJsonStreamAdapter \? handleClaudeAuthRefusal\(key, cls\) : surfaceLoggedOutNotice\(key\)\);/);
+  assert.doesNotMatch(handler, /void (handleBalanceExhausted|handleClaudeAuthRefusal|surfaceLoggedOutNotice)\(/, 'no branch that arms nothing is left fire-and-forget');
+  assert.match(getFunctionBody('holdTurnEndWhileHandlingApiError'), /apiErrorsInHandling\.set\(k, \(apiErrorsInHandling\.get\(k\) \?\? 0\) \+ 1\);\s*void handling\.finally\(/, 'held from the synchronous branch to the handling\'s end');
+  assert.ok(botSource.includes('checkIsApiErrorInHandling: (keyString) => apiErrorsInHandling.has(keyString),'), 'the probe reads it');
+});
+
+test('a prompt that waits for an adopted replay keeps its lost-work wording when it lands in a start window (review 16 nit 7)', () => {
+  const body = getFunctionBody('forwardPromptToAgent');
+  assert.ok(body.includes('const bufferedOptions: PromptDeliveryOptions = { isPersonInput: options.isPersonInput, isAccountsNoteCarrier: options.isAccountsNoteCarrier, lostWorkTelling: options.lostWorkTelling, waitBeforeRoute: options.waitBeforeRoute };'));
+  assert.equal(body.match(/, bufferedOptions\);/g)?.length, 2, 'a person\'s prompt and a bot-made one alike');
 });
 
 test('a bot-made prompt that waits for an adopt replay behind a start counts only once replayed', () => {
   const body = getFunctionBody('forwardPromptToAgent');
   const buffer = body.slice(body.indexOf('buffer: async () => {'));
-  assert.match(buffer, /const buffered = createBufferedOutcome\(\);\n\s*await deliverPromptOrBuffer\([^\n]*, true, buffered\.settle, \{ isPersonInput: options\.isPersonInput, isAccountsNoteCarrier: options\.isAccountsNoteCarrier \}\);\n\s*if \(options\.isPersonInput !== true\) await buffered\.assertReplayed\(\);/);
+  assert.match(buffer, /const buffered = createBufferedOutcome\(\);\n\s*await deliverPromptOrBuffer\(key, bufferedText, buffered\.settle, bufferedOptions\);\n\s*await buffered\.assertReplayed\(\);/);
+  // A person's prompt there has the person's own settle (review 19 #1): told and its request closed when it is dropped.
+  assert.match(buffer, /if \(isPersonInput\) \{\n\s*await deliverPromptOrBuffer\(key, bufferedText, createPersonBufferedSettle\(key, options\.requestId \?\? null\), bufferedOptions\);\n\s*return;\n\s*\}/);
 });
 
 test('a session post (a tracker\'s request or update, a scheduled run, the lost-work note) whose prompt waited for the session start counts only once it was replayed', () => {

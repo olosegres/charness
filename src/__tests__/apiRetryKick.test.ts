@@ -48,6 +48,8 @@ const topicKey: SessionKey = makeTelegramKey(-1001234567890, 42);
 const issueKey: SessionKey = makeJiraKey('PROJ-7');
 const otherTopicKey: SessionKey = makeTelegramKey(-1001234567890, 43);
 const continueNudge = 'continue';
+/** The request whose prompt a usage-limit resume carries, when the world has one untaken. */
+const untakenRequestId = 'req_1';
 const fireAtInThePast = 1_000;
 const clockMs = 1_000_000;
 
@@ -62,7 +64,7 @@ interface World {
   nudges: Array<{ key: string; text: string }>;
   /** The bot's startup buffer — in memory only, so a "restart" empties it. */
   startupBuffer: StartupPromptBuffer;
-  continuations: Array<{ key: string; isCountersReset: boolean; isRequestPrompt: boolean }>;
+  continuations: Array<{ key: string; isCountersReset: boolean; carriedRequestIds: readonly string[] }>;
   /** The session steps in the order the kick took them. */
   sessionSteps: Array<'ensureSession'>;
   clears: string[];
@@ -94,8 +96,8 @@ function createKickDeps(): ApiRetryKickDeps {
     },
     postTopicNotice: (key, notice) => { world.notices.push({ key: keyToString(key), notice }); },
     getResumeMessage: () => world.untakenRequestPrompt === undefined
-      ? { text: continueNudge, isRequestPrompt: false }
-      : { text: world.untakenRequestPrompt, isRequestPrompt: true },
+      ? { text: continueNudge, carriedRequestIds: [] }
+      : { text: world.untakenRequestPrompt, carriedRequestIds: [untakenRequestId] },
     // The bot's own buffer-or-forward unit over a real startup buffer, so what the kick learns about a
     // buffered nudge is what the bot would tell it.
     deliverNudge: async (key, text, onBufferedSettled) => {
@@ -108,11 +110,17 @@ function createKickDeps(): ApiRetryKickDeps {
             if (world.forwardOutcome !== 'noSession') world.nudges.push({ key: keyToString(target), text: prompt });
             return world.forwardOutcome;
           },
+          // The kick ensured the session before it delivers: a window still open buffers the nudge, else it is forwarded.
+          checkIsSessionActive: () => true,
+          wakeSession: async () => ({ isAwake: false, isNoticePosted: false }),
+          // A bot-made nudge is never refused: only a person's prompt is.
+          checkIsRefusingMessages: () => false,
+          reportNoSession: async () => {},
+          reportRefused: async () => {},
           announceQueued: async () => {},
         },
         key,
         text,
-        world.startupBuffer.checkIsStarting(keyToString(key)),
         onBufferedSettled,
       );
     },
@@ -305,6 +313,35 @@ for (const [label, key] of [['a Telegram topic', topicKey], ['a Jira issue', iss
       assert.equal(boot(), 0);
     });
 
+    it('a buffered nudge\'s continuation is tracked — and a limit\'s counters reset — only at its replay, never before it reached a session (review 20 #1)', async () => {
+      saveRetry(key);
+      boot();
+      world.startupBuffer.markStarting(keyString); // another caller's session start is under way
+      await runDueTimers();
+      assert.deepEqual(world.continuations, [], 'waiting in the buffer: no turn started yet, nothing watched or reset');
+
+      await world.startupBuffer.replayPrompts(keyString, { isSessionActive: true, forward: forwardToSession(key) });
+      await new Promise((resolve) => setImmediate(resolve));
+      assert.equal(world.nudges.length, 1);
+      assert.deepEqual(world.continuations, [{ key: keyString, isCountersReset: true, carriedRequestIds: [] }], 'tracked once the nudge was written');
+    });
+
+    it('a buffered nudge the window drops tracks, resets and lifts nothing: no watch waits for a turn that never comes (review 20 #1)', async () => {
+      saveRetry(key);
+      boot();
+      world.startupBuffer.markStarting(keyString);
+      await runDueTimers();
+      const warned = mock.method(console, 'warn', () => {});
+      try {
+        world.startupBuffer.discardPrompts(keyString);
+      } finally {
+        warned.mock.restore();
+      }
+      await new Promise((resolve) => setImmediate(resolve));
+      assert.deepEqual(world.continuations, []);
+      assert.deepEqual(world.saved, {}, 'the retry is spent');
+    });
+
     it('buffered, then drained into a session that is not active: dropped for good, the record goes', async () => {
       saveRetry(key);
       boot();
@@ -453,14 +490,14 @@ for (const [label, key] of [['a Telegram topic', topicKey], ['a Jira issue', iss
       await runDueTimers();
 
       assert.deepEqual(world.nudges, [{ key: keyString, text: '[Request req_1] the whole task' }]);
-      assert.deepEqual(world.continuations, [{ key: keyString, isCountersReset: true, isRequestPrompt: true }]);
+      assert.deepEqual(world.continuations, [{ key: keyString, isCountersReset: true, carriedRequestIds: [untakenRequestId] }], 'the request it carries, named as it was built');
     });
 
     it('a transient retry does not restart the wake-up counters; a limit wait does', async () => {
       saveRetry(key, { kind: 'transient' });
       boot();
       await runDueTimers();
-      assert.deepEqual(world.continuations, [{ key: keyString, isCountersReset: false, isRequestPrompt: false }]);
+      assert.deepEqual(world.continuations, [{ key: keyString, isCountersReset: false, carriedRequestIds: [] }]);
       assert.deepEqual(
         world.notices.map(({ notice }) => notice),
         isTelegram ? [{ kind: 'resuming', retryKind: 'transient' }] : [],
@@ -626,29 +663,29 @@ describe('the bot wires the kick and the restore, and keeps the saved record mea
   it('a voice prompt wakes a sleeping conversation through the same ensure as a typed one (L-D4): woken, never replaced by a fresh start', () => {
     const voiceJob = getFunction('async function processVoiceJob(');
     assert.ok(voiceJob.includes('!(await resumeSleepingSessionForPrompt(key))'), 'the voice path wakes it through the shared helper');
-    assert.ok(getFunction('async function wakeSleepingSessionForPrompt(').includes('await ensureAgentSession(key)'), 'which asks the ensure');
+    assert.ok(getFunction('async function wakeSleepingSessionForPrompt(').includes('return ensureAgentSessionNow(key, {});'), 'which asks the ensure, inside the conversation\'s queue (review 25 #2)');
     assert.ok(!voiceJob.includes('startAgentSession('), 'no direct fresh start over a sleeping session');
     assert.ok(voiceJob.includes('await deliverActivePrompt(key, getThreadAdapter(key), transcript'), 'the adapter is read after the wake');
   });
 
   it('what it hands over is the nudge, or the open request\'s prompt the agent never took in — only for a limit wait (R21)', () => {
-    assert.match(kickPorts, /getResumeMessage: \(key, retryKind\) => getLimitResumeMessage\(\{\n\s*continueNudge: t\('apiRetry\.continueNudge'\),\n\s*untakenRequestPrompt: retryKind === 'usageLimit'\n\s*\? joinPromptsNotTakenIn\(requestLimitWaitAnswerDeps\?\.ledger\.listOpenRequestsOf\(key\) \?\? \[\]\)\n\s*: undefined,\n\s*\}\),/);
+    assert.match(kickPorts, /getResumeMessage: \(key, retryKind\) => getLimitResumeMessage\(\{\n\s*continueNudge: t\('apiRetry\.continueNudge'\),\n\s*untakenRequestPrompts: retryKind === 'usageLimit'\n\s*\? getPromptsNotTakenIn\(requestLimitWaitAnswerDeps\?\.ledger\.listOpenRequestsOf\(key\) \?\? \[\]\)\n\s*: undefined,\n\s*\}\),/);
     assert.ok(kickPorts.includes('await requestWakeUpEngine?.trackContinuationTurn(key, options);'));
   });
 
   it('it reaches a session another start has under way through the startup buffer, never straight to the adapter', () => {
-    assert.ok(kickPorts.includes('deliverNudge: (key, text, onBufferedSettled) => deliverPromptOrBuffer(key, text, startupPromptBuffer.checkIsStarting(keyToString(key)), onBufferedSettled),'));
+    assert.ok(kickPorts.includes('deliverNudge: (key, text, onBufferedSettled) => deliverPromptOrBuffer(key, text, onBufferedSettled),'), 'routed at its write: no window read before an await');
     assert.doesNotMatch(kickPorts, /forwardPromptToAgent\(/, 'a direct forward hits an adapter that is not there yet');
     // The buffer-or-forward unit the whole bot shares: buffered text replays in order once the start finishes.
-    assert.ok(getFunction('function deliverPromptOrBuffer(').includes('return deliverPromptWithDeps(promptDeliveryDeps, key, promptText, isStarting, onBufferedSettled, options);'));
+    assert.ok(getFunction('function deliverPromptOrBuffer(').includes('return deliverPromptWithDeps(promptDeliveryDeps, key, promptText, onBufferedSettled, options);'));
     // A nudge is no person's message: its forward waits for the write (no `isPersonInput` from the kick's port).
-    assert.match(botSource, /startupBuffer: startupPromptBuffer,\n\s*forwardPrompt: \(key, text, options\) => forwardPromptToAgent\(key, getThreadAdapter\(key\), text, undefined, \{ isPersonInput: options\.isPersonInput, isAccountsNoteCarrier: options\.isAccountsNoteCarrier \}\),/);
+    assert.match(botSource, /startupBuffer: startupPromptBuffer,\n\s*forwardPrompt: \(key, text, options\) => forwardPromptToAgent\(key, getThreadAdapter\(key\), text, undefined, \{ isPersonInput: options\.isPersonInput, isAccountsNoteCarrier: options\.isAccountsNoteCarrier, lostWorkTelling: options\.lostWorkTelling, waitBeforeRoute: options\.waitBeforeRoute \}\),/);
   });
 
   it('both ways out of a startup window settle what it held: the replay on a started session, the discard on a failed start', () => {
     // The kick keeps the saved record while its nudge waits in the buffer; only these two can end that wait.
     const replay = getFunction('async function replayBufferedPrompts(');
-    assert.match(replay, /await startupPromptBuffer\.replayPrompts\(keyToString\(key\), \{\n\s*isSessionActive,\n\s*forward: async \(prompt, isPersonInput, isAccountsNoteCarrier\) => \{ await forwardPromptToAgent\(key, adapter, prompt, undefined, \{ isPersonInput, isAccountsNoteCarrier \}\); \},\n\s*\}\);/);
+    assert.match(replay, /await startupPromptBuffer\.replayPrompts\(keyToString\(key\), \{\n\s*isSessionActive,\n\s*forward: async \(prompt, options\) => \{\n\s*const outcome = await forwardPromptToAgent\(key, adapter, prompt, undefined, options\);\n(?:\s*\/\/[^\n]*\n)*\s*if \(outcome === 'noSession'\) throw new Error\(noSessionForPostError\);\n\s*\},\n\s*afterReplay: async \(\) => \{/);
     assert.match(getFunction('async function startAgentSession('), /startupPromptBuffer\.discardPrompts\(kStr\);/);
     assert.doesNotMatch(botSource, /startupPromptBuffer\s*\.drainPrompts\(/, 'a drain that settles nothing would leave a waiting nudge waiting for good');
   });

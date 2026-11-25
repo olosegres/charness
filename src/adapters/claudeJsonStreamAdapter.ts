@@ -20,6 +20,7 @@ import type {
   SeenWatermark,
   SeenWatermarkWriter,
 } from '../types';
+import { unnumberedProcessGeneration } from '../types';
 import type { OutboundHints } from '../platform/outbound';
 import type { SessionKey } from '../sessionKey';
 import { keyToString } from '../sessionKey';
@@ -152,6 +153,35 @@ export type JsonStreamLifecycle = 'idle' | 'perTurn';
 const stopsInFlightByKey = new Map<string, Promise<void>>();
 
 /**
+ * The number the next spawned, re-spawned or adopted process gets ({@link StreamSession.processGeneration}). MODULE-level for the same
+ * reason as {@link stopsInFlightByKey}: a `/claude_mode` switch between the idle and the per-turn instance keeps the conversation's request
+ * watches, and a number both instances handed out would read the new process as the one a prompt was written to — a message that died
+ * unread with the old process would read as taken in (review 21 #1 a). It starts above `unnumberedProcessGeneration`, the name the
+ * wake-up probe gives a live session of a backend that cannot number its processes.
+ */
+let nextProcessGeneration = unnumberedProcessGeneration + 1;
+
+/**
+ * The re-spawns of each conversation that are under way or about to start ({@link ClaudeJsonStreamAdapter.waitForRespawn}): a model,
+ * effort or account change replaces the process outside the bot's session queue, with the process down for seconds. MODULE-level, like
+ * {@link stopsInFlightByKey}: the bot asks whichever instance the topic runs now. Each entry settles (never rejects) once its re-spawn
+ * is over, whatever its end.
+ */
+const respawnsInFlightByKey = new Map<string, Set<Promise<void>>>();
+
+/** Record `respawn` as under way for `conversationKey` until it settles. */
+function noteRespawnInFlight(conversationKey: string, respawn: Promise<unknown>): void {
+  const settled = respawn.then(() => undefined, () => undefined);
+  const inFlight = respawnsInFlightByKey.get(conversationKey) ?? new Set<Promise<void>>();
+  inFlight.add(settled);
+  respawnsInFlightByKey.set(conversationKey, inFlight);
+  void settled.then(() => {
+    inFlight.delete(settled);
+    if (inFlight.size === 0 && respawnsInFlightByKey.get(conversationKey) === inFlight) respawnsInFlightByKey.delete(conversationKey);
+  });
+}
+
+/**
  * @description Coalesce window for streamed answer/thinking deltas before an
  * `output`/`thinking` emit — the CLI streams per-token, so raw per-delta emits
  * would flood Telegram with edits. Mirrors OpenCode's `sseOutputBatchMs` (500).
@@ -262,6 +292,11 @@ export interface StreamSession {
   isSuspending: boolean;
   /** True while re-spawning for a model/effort change → suppress closed/stopped. */
   isRespawning: boolean;
+  /**
+   * Which process this is (`AgentAdapter.getProcessGeneration`): a new number for every spawn, re-spawn and adopt, unique across both
+   * instances of the adapter, so a prompt written to one process is never read as taken in by the one that replaced it.
+   */
+  processGeneration: number;
   /** True from a user turn sent until its `result` → drives `checkIsBusy`. */
   isBusy: boolean;
   /** `Date.now()` of the last consumed stdout byte / turn-start kick. Feeds the
@@ -294,6 +329,12 @@ export interface StreamSession {
   startCostUsd: number | null;
   /** The topic's profile changed while the process worked: re-spawn under the reader's directory at turn end. */
   isConfigDirSwitchPending: boolean;
+  /**
+   * A turn's end found the deferred account switch due and released it: its re-spawn starts one timer tick later. Set before the bot
+   * hears of that end (`turnEnded`), cleared when the apply is over (a re-spawn, a no-op, deferred again): what `checkIsRespawnPending`
+   * reads as «about to start» — a switch merely pending on an idle process is no re-spawn coming.
+   */
+  isConfigDirSwitchReleased: boolean;
   // — answer accumulation —
   currentResponseText: string;
   emittedLength: number;
@@ -382,6 +423,12 @@ export interface StreamSession {
    * gap between the task's end and its turn's first output read as idle once.
    */
   notificationTurnPendingSince: number | null;
+  /**
+   * The running turn is one the CLI started by itself, with no write of the bot behind it: a finished background task's turn, a session
+   * `CronCreate` job's firing, a turn that opened with nothing of ours listed. An echo of one of our messages makes it ours. Read only
+   * while busy (`checkIsCliOwnTurn`): the bot counts no request's activity for such a turn.
+   */
+  isCliOwnTurn: boolean;
   /** When the agent's last turn ended (the process start before its first turn): the pending-work hold counts from it. */
   lastTurnEndedAt: number;
   /**
@@ -439,6 +486,17 @@ function checkIsSessionReplayPending(session: StreamSession): boolean {
 /** Let go of everyone waiting for an adopted session's replay ({@link ClaudeJsonStreamAdapter.whenAdoptReplayed}). */
 function resolveAdoptReplayWaiters(session: StreamSession): void {
   for (const resolve of session.adoptCatchUpResolvers.splice(0)) resolve();
+}
+
+/**
+ * @name SessionRespawnChange
+ * @description What a re-spawn changes: the model and effort the new process runs with, and the account's config directory
+ * (`undefined`: the one it runs with now, `null`: the default account's).
+ */
+interface SessionRespawnChange {
+  model: string | null;
+  effort: string | null;
+  configDir?: string | null;
 }
 
 /**
@@ -731,10 +789,10 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
       pollTimer: null, pollDelayMs: basePollIntervalMs, unchangedStreak: 0,
       isOversizeWarned: false, lastPersistedTailOffset: 0,
       reader: new ClaudeStreamLineReader(),
-      isActive: true, isStopping: false, isSuspending: false, isRespawning: false, isBusy: false, unconsumedInputs: [],
+      isActive: true, isStopping: false, isSuspending: false, isRespawning: false, processGeneration: this.createProcessGeneration(), isBusy: false, unconsumedInputs: [],
       lastStdoutActivityAt: Date.now(), outstandingToolUseIds: new Set(),
       model: opts.model, reportedModel: null, effort: opts.effort,
-      configDir: opts.configDir, isConfigDirSwitchPending: false, startCostUsd,
+      configDir: opts.configDir, isConfigDirSwitchPending: false, isConfigDirSwitchReleased: false, startCostUsd,
       currentResponseText: '', emittedLength: 0, outputTimer: null,
       reasoningText: '', reasoningStartedAt: null, reasoningTimer: null, reasoningActive: false,
       toolNamesById: new Map(), questionToolUseIds: new Set(),
@@ -743,7 +801,7 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
       compactionInProgress: false, pendingCompaction: null,
       pendingQuestion: null, apiErrorFired: false, rejectedResetAtMs: null, turnApiErrorCode: null, swallowNextAbortError: false,
       lastWatermarkOffset: -1,
-      backgroundTasks: new Map(), notificationTurnPendingSince: null, lastTurnEndedAt: Date.now(), isCompactionResultPending: false, scheduledJobs: new Map(),
+      backgroundTasks: new Map(), notificationTurnPendingSince: null, isCliOwnTurn: false, lastTurnEndedAt: Date.now(), isCompactionResultPending: false, scheduledJobs: new Map(),
       claudeCodeVersion: null, applyingChunk: null,
       adoptCatchUpOffset: null, adoptCatchUpResolvers: [], isTailHeld: false,
     };
@@ -1066,7 +1124,7 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
       // tool call leaves no frame after the tail offset to rebuild it from. The
       // replayed/live events then keep it right (deltas/toolUse set it, `result`
       // clears it) — see `applyAction`.
-      isActive: true, isStopping: false, isSuspending: false, isRespawning: false, isBusy: isTurnInFlight, unconsumedInputs: [],
+      isActive: true, isStopping: false, isSuspending: false, isRespawning: false, processGeneration: this.createProcessGeneration(), isBusy: isTurnInFlight, unconsumedInputs: [],
       // The outstanding tools come from the record too: they veto the busy-idle watchdog, which would
       // otherwise clear the restored turn after its silence window and let the stale-tool stop kill it.
       lastStdoutActivityAt: Date.now(), outstandingToolUseIds: new Set(outstandingToolUseIds),
@@ -1075,7 +1133,7 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
       model: launchFlags.model, reportedModel: null, effort: launchFlags.effort,
       // The account the surviving process runs on is in its own wrapper; the bot compares it with the topic's pick.
       // A switch the user picked while the process worked survives the reload: it still applies at the turn's end.
-      configDir: readWrapperScriptConfigDir(paths.wrapperFile), isConfigDirSwitchPending: adoptedTail.isConfigDirSwitchPending, startCostUsd: null,
+      configDir: readWrapperScriptConfigDir(paths.wrapperFile), isConfigDirSwitchPending: adoptedTail.isConfigDirSwitchPending, isConfigDirSwitchReleased: false, startCostUsd: null,
       currentResponseText: '', emittedLength: 0, outputTimer: null,
       reasoningText: '', reasoningStartedAt: null, reasoningTimer: null, reasoningActive: false,
       toolNamesById: new Map(), questionToolUseIds: new Set(),
@@ -1090,6 +1148,8 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
       // rest of the pending work (a turn announced, the hold's start, scheduled jobs).
       backgroundTasks: new Map(adoptedTail.backgroundTasks.map((task) => [task.taskId, task.description])),
       notificationTurnPendingSince: adoptedTail.notificationTurnPendingSinceMs,
+      // A turn in flight at the adopt is taken for the bot's own: nothing tells otherwise from the record.
+      isCliOwnTurn: false,
       lastTurnEndedAt: adoptedTail.lastTurnEndedAtMs ?? Date.now(),
       isCompactionResultPending: false,
       scheduledJobs: new Map(adoptedTail.scheduledJobs.map((job) => [job.jobId, job])),
@@ -1163,6 +1223,7 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
     session.adoptCatchUpOffset = null;
     resolveAdoptReplayWaiters(session);
     // A switch the user picked before the reload, whose turn ended meanwhile, applies now that the state is current.
+    this.releasePendingConfigDirSwitch(session);
     this.applyPendingConfigDirSwitch(session);
   }
 
@@ -1275,15 +1336,21 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
     return session?.isActive === true;
   }
 
+  /** A process being stopped stays active until its exit, but takes no more input (`writeStdin` abandons a write on `isStopping`). */
+  checkIsAcceptingInput(key: SessionKey): boolean {
+    const session = this.sessions.get(keyToString(key));
+    return session !== undefined && this.checkIsLiveForRespawn(session);
+  }
+
   flushPendingOutput(key: SessionKey): void {
     const session = this.sessions.get(keyToString(key));
     if (!session?.isActive) return;
     // The text the process wrote an instant before its tool call may not have been polled yet (the poll lags by its backoff):
-    // read it first, or the batch flushed below would miss it and the answer would still overtake it. Not from inside the
-    // handling of a chunk (a question event asks for it): that read is going on right now, and a second one would handle the
-    // lines behind the chunk ahead of the rest of it. Nor from an adopted tail the boot still holds: its replay is read only
-    // from the boot's release on (`releaseAdoptedTails`), and what it holds lands after the answer — nothing to warn of.
-    if (!session.applyingChunk && !session.isTailHeld) this.refreshWorkingState(key);
+    // read it first, or the batch flushed below would miss it and the answer would still overtake it. `refreshWorkingState` reads
+    // nothing from inside the handling of a chunk (a question event asks for it here). Not from an adopted tail the boot still holds
+    // either: its replay is read only from the boot's release on (`releaseAdoptedTails`), and what it holds lands after the answer —
+    // nothing to warn of, so it is not asked at all.
+    if (!session.isTailHeld) this.refreshWorkingState(key);
     this.flushAnswer(session, false);
   }
 
@@ -1355,6 +1422,9 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
   refreshWorkingState(key: SessionKey): void {
     const session = this.sessions.get(keyToString(key));
     if (!session?.isActive) return;
+    // Not from inside the handling of a chunk: that read is going on right now, and a second one would handle the lines behind the
+    // chunk ahead of the rest of it.
+    if (session.applyingChunk) return;
     // A held tail is read only from the boot's release on; a caller that decides on the state waits for `whenAdoptReplayed`.
     if (session.isTailHeld) {
       console.warn(`[ClaudeJson] ${keyToString(key)}: the working state was asked for before the boot released the adopted session; its output is not read yet`);
@@ -1895,7 +1965,7 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
       case 'turnStarted':
         // `session_state_changed` `running` also comes back in the MIDDLE of a turn (after a permission or a question: `requires_action` →
         // `running`): it opens a turn only when none was running. A job's firing always opens one.
-        this.markTurnStarted(session, { isNewTurn: action.wakeupSource !== null || !session.isBusy });
+        this.markTurnStarted(session, { isNewTurn: action.wakeupSource !== null || !session.isBusy, isJobFiring: action.wakeupSource !== null });
         if (action.wakeupSource !== null) session.scheduledJobs = getScheduledJobsAfterFiring(session.scheduledJobs, action.wakeupSource);
         return;
       case 'backgroundTasks':
@@ -1954,6 +2024,8 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
         // Claude has read one or SEVERAL of our user messages (those it takes in together are one echo). A message written
         // mid-turn is taken into the RUNNING turn, so the session is busy from here until the turn's `result`, even if an
         // earlier `result` already cleared it.
+        // With anything of ours listed, the echo is one of ours (matched, or tied to the oldest entry below): the turn is the bot's.
+        if (session.unconsumedInputs.length > 0) session.isCliOwnTurn = false;
         const inputsAfterEcho = getInputsAfterEcho(session.unconsumedInputs, action.text);
         // An echo that took nothing off the list is a message the turn took in in a shape nothing here matches: it is tied to the
         // oldest entry not yet marked, which the turn's end drops. With nothing listed it marks nothing — a user line of the CLI's
@@ -1986,11 +2058,17 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
    * `isNewTurn`: a turn really OPENS here, so the marks of the turn before are forgotten — one that never reported a result must not
    * leave marks for a later turn's end to act on. A `running` inside a running turn (after a permission or a question) is no new turn.
    */
-  private markTurnStarted(session: StreamSession, options: { isNewTurn: boolean }): void {
+  private markTurnStarted(session: StreamSession, options: { isNewTurn: boolean; isJobFiring?: boolean }): void {
     // A turn the bot never wrote to (a task's notification, a scheduled job) starting while nothing ran: a running turn counts every
     // listed message as queued behind it, so what went stale before it must not be revived by it.
     if (!session.isBusy) this.getUnconsumedInputsOnTheirWay(session);
-    if (options.isNewTurn) session.unconsumedInputs = getInputsWithoutEchoMarks(session.unconsumedInputs);
+    if (options.isNewTurn) {
+      session.unconsumedInputs = getInputsWithoutEchoMarks(session.unconsumedInputs);
+      // Whose turn opens: the CLI's own when a finished task or a job starts it, or when nothing of ours waits to be taken in; an
+      // echo of ours later in the turn makes it ours (`userEcho`). A bot-issued `/compact` is the bot's.
+      const isStartedByCli = options.isJobFiring === true || session.notificationTurnPendingSince !== null || session.unconsumedInputs.length === 0;
+      session.isCliOwnTurn = !session.compactionInProgress && isStartedByCli;
+    }
     session.isBusy = true;
     session.notificationTurnPendingSince = null;
   }
@@ -2176,6 +2254,8 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
       session.startCostUsd = null;
     }
     this.applyTurnEnd(session, action);
+    // Released before the bot hears of this end, applied after its handlers: its turn probe reads the re-spawn as coming from here.
+    this.releasePendingConfigDirSwitch(session);
     // After the handlers above: the bot's per-turn stop (L5) reads the session's state as settled here.
     this.emit('turnEnded', session.key);
     this.applyPendingConfigDirSwitch(session);
@@ -2196,13 +2276,16 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
     // stop kill the process in that gap.
     if (!session.isCompactionResultPending) session.lastTurnEndedAt = Date.now();
     session.isCompactionResultPending = false;
-    // Self-healing accounting: a FAILED turn (usage limit, API error) may never echo the messages that were
-    // queued behind it, and a list left non-empty would make the session look "working" — a pending account
-    // switch would never fire. A message still genuinely queued is echoed later (an echo of nothing listed takes
-    // nothing off and marks the session busy again), so forgetting them here can only under-count briefly.
-    // Otherwise the queue is taken in by the turn that starts next, its wait starting over from this end — less what this turn
-    // took in in a shape nothing matches (the marked entries).
-    session.unconsumedInputs = action.isError ? [] : getInputsAfterTurnEnd(session.unconsumedInputs, Date.now());
+    // The queue is taken in by the turn that starts next, its wait starting over from this end — less what this turn took in in a shape
+    // nothing matches (the marked entries). A FAILED turn (usage limit, API error) keeps its queue too: measured on 2.1.330 (an unknown
+    // `--model`; an HTTP 400, and an HTTP 429 after its ten retries, from a loopback API — `utils/jsonStreamUnconsumedInput.ts`
+    // `getInputsAfterTurnEnd` has the command), the CLI writes a new `init` 0.02–0.2 s after the error `result` and runs the queued
+    // message as its own turn; in a turn that fails, the echo comes at its end, right before its `result`. Emptied, the list read that message as taken
+    // in before its turn began: the per-turn stop killed the process ahead of it, and the bot decided its request's turn ended. The grace
+    // (`unconsumedInputGraceMs`) still bounds each entry, so one the CLI never echoes holds nothing for good — a deferred account switch
+    // included: it waits for that turn's end like any work (`checkIsConfigDirSwitchDue`), and fires at it.
+    session.unconsumedInputs = getInputsAfterTurnEnd(session.unconsumedInputs, Date.now());
+    session.isCliOwnTurn = false;
     session.outstandingToolUseIds.clear();
     this.finishReasoning(session);
     this.clearSubagent(session);
@@ -2534,7 +2617,7 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
 
   async setModel(key: SessionKey, modelId: string): Promise<string | null> {
     const session = this.sessions.get(keyToString(key));
-    if (!session?.isActive) return t('model.start_agent_first');
+    if (!session || !this.checkIsLiveForRespawn(session)) return t('model.start_agent_first');
     await this.respawnWithChange(session, { model: modelId, effort: session.effort });
     return null;
   }
@@ -2563,7 +2646,7 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
     }
     saveEffortPref(key, level);
     const session = this.sessions.get(keyToString(key));
-    if (!session?.isActive) return { status: 'stored', notice: t('effort.start_agent_first') };
+    if (!session || !this.checkIsLiveForRespawn(session)) return { status: 'stored', notice: t('effort.start_agent_first') };
     await this.respawnWithChange(session, { model: session.model, effort: level });
     return { status: 'applied' };
   }
@@ -2591,7 +2674,7 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
   async clearEffort(key: SessionKey): Promise<void> {
     clearEffortPref(key);
     const session = this.sessions.get(keyToString(key));
-    if (!session?.isActive) return;
+    if (!session || !this.checkIsLiveForRespawn(session)) return;
     const { effort } = this.getLaunchOptions(key);
     if (session.effort !== effort) await this.respawnWithChange(session, { model: session.model, effort });
   }
@@ -2607,13 +2690,32 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
    * intermediate exit is suppressed (`isRespawning`) so the bot sees no
    * closed/stopped churn.
    */
-  private async respawnWithChange(
+  private respawnWithChange(session: StreamSession, change: SessionRespawnChange): Promise<void> {
+    const respawn = this.runRespawnWithChange(session, change);
+    noteRespawnInFlight(keyToString(session.key), respawn);
+    return respawn;
+  }
+
+  /** {@link respawnWithChange}'s work, recorded as under way for {@link waitForRespawn} while it runs. */
+  private async runRespawnWithChange(session: StreamSession, change: SessionRespawnChange): Promise<void> {
+    session.isRespawning = true;
+    try {
+      await this.replaceSessionProcess(session, change);
+    } catch (e) {
+      // The re-spawn is over: the old session stays as a stopped one (the next prompt's ensure starts the conversation again), not
+      // as a re-spawn still under way, which holds every watch of the conversation (`checkIsRespawnPending`).
+      session.isRespawning = false;
+      throw e;
+    }
+  }
+
+  /** {@link respawnWithChange}'s steps: the old process ended, the new one spawned with `--resume` and `change`. */
+  private async replaceSessionProcess(
     session: StreamSession,
-    change: { model: string | null; effort: string | null; configDir?: string | null },
+    change: SessionRespawnChange,
   ): Promise<void> {
     const { key, workDir, sessionId } = session;
     const configDir = change.configDir === undefined ? session.configDir : change.configDir;
-    session.isRespawning = true;
     // The re-spawned process starts with none of the old one's background tasks or jobs, and the turn it cuts off is
     // re-prompted by nothing else.
     this.storeLostWork(key, this.describePendingWork(session, { isTurnCutOff: true }));
@@ -2651,12 +2753,15 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
    */
   async applyClaudeConfigDir(key: SessionKey, options: { isAfterLimit?: boolean } = {}): Promise<ClaudeConfigDirApplyResult> {
     const session = this.sessions.get(keyToString(key));
-    if (!session?.isActive) return 'inactive';
+    // A process being stopped is as good as gone: its next resume reads the account the conversation resolves to then.
+    if (!session || !this.checkIsLiveForRespawn(session)) return 'inactive';
     const wanted = this.resolveConfigDir(key);
     if (checkIsSameClaudeConfigDir(wanted, session.configDir)) {
       session.isConfigDirSwitchPending = false;
       return 'unchanged';
     }
+    // A message queued behind the turn defers it like any work — one behind a turn that ended in an error result too: the CLI runs it as
+    // its next turn within a fraction of a second (measured, `applyTurnEnd`), and a re-spawn now would kill it unread.
     if (!options.isAfterLimit && this.checkIsWorking(key)) {
       session.isConfigDirSwitchPending = true;
       // Recorded now: a reload before the turn ends must not drop the user's pick.
@@ -2669,16 +2774,114 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
     return 'respawned';
   }
 
+  /**
+   * A deferred account switch that the process's idle releases now: pending, on a live process that no longer works — a message queued
+   * behind the turn, one behind a turn that ended in an error result included, holds it until its own turn's end (the grace bounds it).
+   */
+  private checkIsConfigDirSwitchDue(session: StreamSession): boolean {
+    // On the per-turn lifecycle the bot stops this very process at the same turn end (L5): a re-spawn there would race that stop, and
+    // the resume after it spawns on the account the conversation resolves to then anyway (review 22 #1 a). A CLI too old for the
+    // auto-stop is never stopped by the bot, so its switch still re-spawns.
+    if (this.lifecycle === 'perTurn' && this.checkIsAutoStopSupported(session.key)) return false;
+    return session.isConfigDirSwitchPending && session.isActive && !this.checkIsWorking(session.key);
+  }
+
+  /**
+   * @description Whether a change may re-spawn `session`'s process now: it is live and not being stopped. A re-spawn that met a stop
+   * would terminate the same process twice and bring one back the stop's caller believes gone (review 22 #1 a): a process being
+   * stopped takes the change at its next start instead (an effort or account pick is read then; a model pick is refused).
+   */
+  private checkIsLiveForRespawn(session: StreamSession): boolean {
+    return session.isActive && !session.isStopping;
+  }
+
+  /**
+   * @description Which process of this conversation is live (`AgentAdapter.getProcessGeneration`): a new number for each spawn, re-spawn
+   * and adopt; `undefined` with none live (stopped, or down for a re-spawn).
+   */
+  getProcessGeneration(key: SessionKey): number | undefined {
+    const session = this.sessions.get(keyToString(key));
+    return session?.isActive ? session.processGeneration : undefined;
+  }
+
+  /** A number no other process of any instance of this adapter got ({@link nextProcessGeneration}). */
+  private createProcessGeneration(): number {
+    const generation = nextProcessGeneration;
+    nextProcessGeneration += 1;
+    return generation;
+  }
+
+  /**
+   * @description Whether this conversation's process is being re-spawned, or is about to be (`AgentAdapter.checkIsRespawnPending`):
+   * a re-spawn under way (`isRespawning`, also while the process is down for it), or a deferred account switch a turn's end released
+   * (`isConfigDirSwitchReleased`: set before that `turnEnded`, one timer tick ahead of the re-spawn, {@link applyPendingConfigDirSwitch}).
+   */
+  checkIsRespawnPending(key: SessionKey): boolean {
+    const session = this.sessions.get(keyToString(key));
+    if (!session) return false;
+    return session.isRespawning || session.isConfigDirSwitchReleased;
+  }
+
+  /**
+   * @description Resolves once no re-spawn of this conversation's process is under way or about to start
+   * (`AgentAdapter.waitForRespawn`): at once with none; else when the last one is over, whatever its end — re-spawned, a no-op, deferred
+   * again, failed. The bot's ensure and command transitions wait here, so none resumes a second process beside a re-spawn whose process
+   * is down for it (review 21 nit 6).
+   */
+  async waitForRespawn(key: SessionKey): Promise<void> {
+    const conversationKey = keyToString(key);
+    for (let inFlight = respawnsInFlightByKey.get(conversationKey); inFlight !== undefined; inFlight = respawnsInFlightByKey.get(conversationKey)) {
+      await Promise.all(inFlight);
+    }
+  }
+
+  /**
+   * @description Whether a finished background task's own turn is on its way: its `task_notification` came, the turn has not opened
+   * yet, within the grace (`AgentAdapter.checkIsTurnOnItsWay`). The CLI starts it ~0.1 s after the `result` of the turn it ended in.
+   */
+  checkIsTurnOnItsWay(key: SessionKey): boolean {
+    const session = this.sessions.get(keyToString(key));
+    if (session?.isActive !== true || session.isBusy) return false;
+    return checkIsNotificationTurnPending({ now: Date.now(), notificationTurnPendingSince: session.notificationTurnPendingSince });
+  }
+
+  /**
+   * @description Whether the turn that runs, or is on its way, is one the CLI started by itself (`AgentAdapter.checkIsCliOwnTurn`): a
+   * finished task's, a session job's, one with nothing of ours behind it — `isCliOwnTurn` while busy, a task's turn on its way between.
+   */
+  checkIsCliOwnTurn(key: SessionKey): boolean {
+    const session = this.sessions.get(keyToString(key));
+    if (session?.isActive !== true) return false;
+    return session.isBusy ? session.isCliOwnTurn : this.checkIsTurnOnItsWay(key);
+  }
+
+  /** At a turn's end: a deferred switch that is due now is released (`isConfigDirSwitchReleased`), before the bot hears of the end. */
+  private releasePendingConfigDirSwitch(session: StreamSession): void {
+    session.isConfigDirSwitchReleased = this.checkIsConfigDirSwitchDue(session);
+  }
+
   /** A deferred profile switch runs once the turn that held it off has ended (and nothing else works). */
   private applyPendingConfigDirSwitch(session: StreamSession): void {
-    if (!session.isConfigDirSwitchPending || !session.isActive) return;
-    if (this.checkIsWorking(session.key)) return; // a background task still runs: the next turn end looks again
-    // Detached from the tail poll that delivered the `result`: the re-spawn tears this very session down.
-    setTimeout(() => {
-      void this.applyClaudeConfigDir(session.key).catch((e) =>
-        console.warn(`[ClaudeJson] ${keyToString(session.key)}: the deferred profile switch failed:`, e instanceof Error ? e.message : e),
-      );
-    }, 0).unref?.();
+    if (!session.isConfigDirSwitchReleased) return;
+    // A write in the turn end's handlers (the todo reminder) made the process work again: the next turn end looks again.
+    if (!this.checkIsConfigDirSwitchDue(session)) {
+      session.isConfigDirSwitchReleased = false;
+      return;
+    }
+    // Detached from the tail poll that delivered the `result`: the re-spawn tears this very session down. Recorded as under way from
+    // now, the turn end's own tick, so an ensure that comes before the re-spawn starts already waits for it (`waitForRespawn`).
+    const applied = new Promise<void>((resolve) => {
+      setTimeout(() => {
+        void this.applyClaudeConfigDir(session.key)
+          .catch((e) => console.warn(`[ClaudeJson] ${keyToString(session.key)}: the deferred profile switch failed:`, e instanceof Error ? e.message : e))
+          // Over: re-spawned (this session is replaced, `isRespawning` covered the way), a no-op, or deferred again.
+          .finally(() => {
+            session.isConfigDirSwitchReleased = false;
+            resolve();
+          });
+      }, 0).unref?.();
+    });
+    noteRespawnInFlight(keyToString(session.key), applied);
   }
 
   private clearTimers(session: StreamSession): void {

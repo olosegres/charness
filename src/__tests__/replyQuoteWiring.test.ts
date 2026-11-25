@@ -59,10 +59,10 @@ test('a request names who sent the message, and keeps that name in the prompt it
   assert.match(opener, /buildTopicRequestHeader\([^)]*,\s*messageContext\?\.nonOperatorSender\s*\)/);
 });
 
-test('a voice transcript buffered behind a session start keeps its reply quote', () => {
+test('a voice transcript that arrives in a session\'s start window keeps its reply quote', () => {
   assert.match(
     getFunctionBody('processVoiceJob'),
-    /await\s+bufferPromptDuringStartup\(\s*key\s*,\s*transcript\s*,\s*\{\s*source:\s*'voice'\s*,\s*requesterId\s*\}\s*,\s*messageContext\s*\)/,
+    /await\s+deliverPromptDuringStartup\(\s*key\s*,\s*transcript\s*,\s*\{\s*source:\s*'voice'\s*,\s*requesterId\s*\}\s*,\s*messageContext\s*\)/,
   );
 });
 
@@ -73,10 +73,10 @@ test('a voice transcript forwarded to a live session keeps its reply quote', () 
   );
 });
 
-test('a typed text buffered behind a session start keeps its reply quote too', () => {
+test('a typed text that arrives in a session\'s start window keeps its reply quote too', () => {
   assert.match(
     botSource,
-    /await\s+bufferPromptDuringStartup\(\s*key\s*,\s*text\s*,\s*\{\s*source:\s*'text'[^}]*\}\s*,\s*getMessageContext\(\s*key\s*,\s*ctx\.message\s*\)\s*\)/,
+    /await\s+deliverPromptDuringStartup\(\s*key\s*,\s*text\s*,\s*\{\s*source:\s*'text'[^}]*\}\s*,\s*getMessageContext\(\s*key\s*,\s*ctx\.message\s*\)\s*\)/,
   );
 });
 
@@ -88,25 +88,24 @@ test('every route folds the block with the one rule', () => {
     assert.match(getFunctionBody(name), /getPromptWithMessageContext\(/, `${name} must fold through getPromptWithMessageContext`);
     assert.match(getFunctionBody(name), /isShellInput:\s*[^,\n]*\.name\s*===\s*'terminal'/, `${name} must keep the block out of a terminal`);
   }
-  assert.match(
-    getFunctionBody('bufferPromptDuringStartup'),
-    /getPromptWithThreadMessageContext\(\s*key\s*,\s*text\s*,\s*messageContext\s*\)/,
-  );
+  // A person's prompt buffered behind a window carries the block folded in (the replay forwards it as is); one forwarded gets it
+  // from `forwardPromptToLiveAgent`, through the context the helper hands on.
+  const atWrite = getFunctionBody('deliverPersonPromptAtWrite');
+  assert.match(atWrite, /getPromptWithThreadMessageContext\(\s*key\s*,\s*text\s*,\s*messageContext\s*\)/);
+  assert.match(atWrite, /forwardPromptToAgent\([^;]*\{\s*messageContext\s*,\s*requestHeader\s*,/);
 });
 
 test('a single file sent as a reply carries the quote into its announcement', () => {
   const body = getFunctionBody('handleIncomingFile');
   assert.match(body, /const\s+messageContext\s*=\s*getMessageContext\(\s*key\s*,\s*ctx\.message\s*\)/);
-  assert.match(body, /const\s+quotedPrompt\s*=\s*getPromptWithThreadMessageContext\(\s*key\s*,\s*promptText\s*,\s*messageContext\s*\)/);
-  assert.match(body, /deliverPromptOrBuffer\(\s*key\s*,\s*`\$\{opening\.header\}\$\{quotedPrompt\}`/);
+  assert.match(body, /deliverPromptByState\(\s*key\s*,\s*promptText\s*,\s*\{[^}]*\}\s*,\s*undefined\s*,\s*messageContext\s*\)/);
 });
 
 test('an album sent as a reply carries the quote: each member records it, the flush folds the first', () => {
   assert.match(getFunctionBody('handleAlbumFile'), /messageContext:\s*getMessageContext\(\s*key\s*,\s*ctx\.message\s*\)/);
   const flush = getSourceSlice('const albumCollector = ', 'function buildAlbumGroupKey(');
   assert.match(flush, /const\s+messageContext\s*=\s*orderedItems\.find\(\(item\)\s*=>\s*item\.messageContext\)\?\.messageContext/);
-  assert.match(flush, /const\s+quotedPrompt\s*=\s*getPromptWithThreadMessageContext\(\s*key\s*,\s*promptText\s*,\s*messageContext\s*\)/);
-  assert.match(flush, /deliverPromptOrBuffer\(\s*key\s*,\s*`\$\{opening\.header\}\$\{quotedPrompt\}`/);
+  assert.match(flush, /deliverPromptByState\(\s*key\s*,\s*promptText\s*,\s*\{[^}]*\}\s*,\s*undefined\s*,\s*messageContext\s*\)/);
 });
 
 test('the request ledger keeps the prompt WITH its message context, at every entry point that carries one', () => {
@@ -115,14 +114,16 @@ test('the request ledger keeps the prompt WITH its message context, at every ent
   const opener = getFunctionBody('openTopicRequest');
   assert.match(opener, /const\s+promptBody\s*=\s*getPromptWithThreadMessageContext\(\s*key\s*,\s*text\s*,\s*messageContext\s*\)/);
   assert.match(opener, /buildTopicRequestPrompt\(\{[^}]*\bpromptBody\b[^}]*\}\)/);
-  assert.match(getFunctionBody('bufferPromptDuringStartup'), /openTopicRequest\(\s*key\s*,\s*text\s*,\s*intake\s*,\s*messageContext\s*\)/);
+  assert.match(getFunctionBody('deliverPromptDuringStartup'), /deliverPromptByState\(\s*key\s*,\s*text\s*,\s*intake\s*,\s*undefined\s*,\s*messageContext\s*\)/);
   const active = getFunctionBody('deliverActivePrompt');
-  assert.equal(active.match(/openTopicRequest\(\s*key\s*,\s*text\s*,\s*intake\s*,\s*messageContext\s*\)/g)?.length, 1, 'the question-cancel route');
-  assert.match(getFunctionBody('deliverPromptByState'), /openTopicRequest\(\s*key\s*,\s*text\s*,\s*intake\s*,\s*messageContext\s*\)/, 'and the plain route, which a late answer shares');
-  assert.match(active, /return\s+deliverPromptByState\(\s*key\s*,\s*adapter\s*,\s*text\s*,\s*intake\s*,\s*sentAtMs\s*,\s*messageContext\s*\)/, 'that deliverActivePrompt ends in');
-  assert.match(getFunctionBody('handleIncomingFile'), /openTopicRequest\([^;]*,\s*messageContext\s*\)/);
+  assert.equal(active.match(/deliverPersonPromptInRequest\(\s*key\s*,\s*text\s*,\s*intake\s*,\s*messageContext\s*,/g)?.length, 1, 'the question-cancel route');
+  assert.match(getFunctionBody('deliverPromptByState'), /deliverPersonPromptInRequest\(\s*key\s*,\s*text\s*,\s*intake\s*,\s*messageContext\s*,/, 'and the plain route, which a late answer shares');
+  assert.match(getFunctionBody('deliverPersonPromptInRequest'), /openTopicRequest\(\s*key\s*,\s*text\s*,\s*intake\s*,\s*messageContext\s*,/, 'which opens the request with the context');
+  assert.match(active, /return\s+deliverPromptByState\(\s*key\s*,\s*text\s*,\s*intake\s*,\s*sentAtMs\s*,\s*messageContext\s*\)/, 'that deliverActivePrompt ends in');
+  // A file, an album and `/schedule` open theirs in that one helper too, with the context they carry.
+  assert.match(getFunctionBody('handleIncomingFile'), /deliverPromptByState\([^;]*,\s*messageContext\s*\)/);
   const flush = getSourceSlice('const albumCollector = ', 'function buildAlbumGroupKey(');
-  assert.match(flush, /openTopicRequest\([^;]*,\s*messageContext\s*\)/);
+  assert.match(flush, /deliverPromptByState\([^;]*,\s*messageContext\s*\)/);
 });
 
 test('a FORWARDED text is content: the text handler never takes it for a command, a pick or a selector answer', () => {
@@ -141,7 +142,7 @@ test('a FORWARDED message answers no pending question and wipes no context, what
   assert.match(active, /intake\s*!==\s*null\s*&&\s*!isForwarded\s*&&\s*await\s+answerReAskedQuestionByNumber\(key, text, messageContext\)/);
   assert.match(active, /route\.kind\s*===\s*'answer'\s*&&\s*!isForwarded/);
   assert.match(active, /text\s*===\s*forwardedClearCommand\s*&&\s*!checkIsForeignWords\(messageContext\)/, 'foreign words include the forwarded ones');
-  assert.match(getFunctionBody('bufferPromptDuringStartup'), /messageContext\?\.isForwarded\s*!==\s*true\s*&&\s*await\s+answerReAskedQuestionByNumber\(key, text, messageContext\)/);
+  assert.match(getFunctionBody('deliverPromptDuringStartup'), /messageContext\?\.isForwarded\s*!==\s*true\s*&&\s*await\s+answerReAskedQuestionByNumber\(key, text, messageContext\)/);
 });
 
 test('the decoration of a forwarded prompt and the request it opens ask «is it a slash command» with the context, not the bare text', () => {
@@ -171,7 +172,7 @@ test('the one thing a topic member\'s words may do in the shared prompt helpers 
   assert.match(active, /answerReAskedQuestionByNumber\(key,\s*text,\s*messageContext\)/);
   assert.match(active, /route\.kind\s*===\s*'answer'\s*&&\s*!isForwarded/);
   assert.match(active, /members may answer questions, the one thing foreign words may do here/, 'the carve-out says why');
-  const buffer = getFunctionBody('bufferPromptDuringStartup');
+  const buffer = getFunctionBody('deliverPromptDuringStartup');
   assert.match(buffer, /messageContext\?\.isForwarded\s*!==\s*true\s*&&\s*await\s+answerReAskedQuestionByNumber\(key,\s*text,\s*messageContext\)/);
   assert.match(buffer, /the one thing foreign words may do here/, 'the carve-out says why');
   // Every other control guard of the three prompt helpers asks the one predicate (or the slash test built on it): no forward-only

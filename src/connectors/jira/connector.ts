@@ -64,6 +64,11 @@ export interface JiraConnector {
    */
   fetchAttachment(key: SessionKey, attachmentId: string): Promise<JiraAttachmentToolResult>;
   /**
+   * Where the agent of conversation `key` is, for the header of a scheduled run's prompt: `Jira issue PROJ-12 (<link>)` — a
+   * session a failed resume started fresh learns the issue from it.
+   */
+  describeConversation(key: SessionKey): string;
+  /**
    * The shared todo boards (D57): the repository names `jira.json` lists for the project of conversation `key`
    * (`repos`); `null` when it lists none — then its conversations share the instance's one Jira board.
    */
@@ -432,6 +437,8 @@ export async function prepareJiraConnector(context: {
       }
       return fetchIssueAttachment({ client, getDownloadDir: getJiraFilesDir, trust }, key, attachmentId);
     },
+    // A Jira conversation's thread IS its issue key.
+    describeConversation: (key) => `Jira issue ${key.thread} (${config.baseUrl.replace(/\/+$/, '')}/browse/${key.thread})`,
     getConversationRepositoryNames: (key) => config.projects.get(key.space)?.repositoryNames ?? null,
     // A Jira conversation's thread IS its issue key.
     getConversationTitle: (key) => shownSummaries.get(key.thread) ?? null,

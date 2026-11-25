@@ -23,13 +23,29 @@ import type { OpenRequestState, RequestWakeUpReason } from './types';
  * mid-turn and gives one answer, or — Claude Code delivers a message written
  * mid-turn only after that turn ends — it has already answered the replaced
  * request and must not do the work twice.
+ * `isAnswerOnlyWithResult` — a scheduled run's request (the scheduler's own, `src/requests/README.md` § Scheduled runs): a woken agent
+ * with nothing to report stays silent, so the answer line asks for an answer only with a result ({@link buildResultOnlyAnswerLine}),
+ * not a `final` at the end of every turn, and no superseded line is added (the only request it replaces is one the bot gave up on, and
+ * nothing of that one is to be repeated).
  */
 export interface RequestHeaderOptions {
   requestId: string;
   originDescription: string;
   isPlainTextHidden: boolean;
   supersededRequestIds?: readonly string[];
+  isAnswerOnlyWithResult?: boolean;
 }
+
+/**
+ * @description The answer line of every scheduled run's header — the scheduler's own request's and the one of a request a fire rides —
+ * so the two cannot drift: answer only with a result the requester needs, else stay silent (a woken agent with nothing to report).
+ */
+export function buildResultOnlyAnswerLine(requestId: string): string {
+  return `Answer it through answer_request (requestId "${requestId}") only when you have a result the requester needs.`;
+}
+
+/** The line that tells the agent its requester sees only its answers (a Telegram topic's answers-only view). */
+export const plainTextHiddenSentence = 'The requester does not see your plain text output or your thinking — only what you send through answer_request reaches them.';
 
 /** @description The header's line naming the requests this one replaced; empty when it replaced none. */
 export function buildSupersededRequestsLine(supersededRequestIds: readonly string[]): string {
@@ -42,17 +58,18 @@ export function buildSupersededRequestsLine(supersededRequestIds: readonly strin
 
 /** @description The header block, ending with a blank line before the request's own text. */
 export function buildRequestHeader(options: RequestHeaderOptions): string {
+  const isAnswerOnlyWithResult = options.isAnswerOnlyWithResult === true;
   const lines = [
     `[Request ${options.requestId} · from: ${options.originDescription}]`,
-    `Answer it with the answer_request tool (requestId "${options.requestId}"): kind "final" with the full result at the end of your turn, ` +
-      '"question" if you need the requester before you can go on, "progress" for an interim note.',
+    isAnswerOnlyWithResult
+      ? buildResultOnlyAnswerLine(options.requestId)
+      : `Answer it with the answer_request tool (requestId "${options.requestId}"): kind "final" with the full result at the end of your turn, ` +
+        '"question" if you need the requester before you can go on, "progress" for an interim note.',
     answerStyleInstruction,
   ];
-  const supersededLine = buildSupersededRequestsLine(options.supersededRequestIds ?? []);
+  const supersededLine = isAnswerOnlyWithResult ? '' : buildSupersededRequestsLine(options.supersededRequestIds ?? []);
   if (supersededLine !== '') lines.push(supersededLine);
-  if (options.isPlainTextHidden) {
-    lines.push('The requester does not see your plain text output or your thinking — only what you send through answer_request reaches them.');
-  }
+  if (options.isPlainTextHidden) lines.push(plainTextHiddenSentence);
   return `${lines.join('\n')}\n\n`;
 }
 
@@ -74,6 +91,13 @@ export interface WakeUpMessage {
   reason: RequestWakeUpReason;
   text: string;
   isRequestPrompt: boolean;
+  /**
+   * The reminder asks for an answer only with what the requester must know — the request waits for a passing watch and owes nobody an
+   * answer, and the wake is a lost-work one (the agent's own work died with its process): the fire header's wording, so the agent
+   * writes only when it did something. Never for a request's own prompt (R21: the agent never read it). The lost-work note the wake
+   * carries follows it (`buildLostWorkNote`).
+   */
+  isAnswerOptional?: boolean;
 }
 
 /**
@@ -91,37 +115,63 @@ export function getPromptNotTakenIn(request: OpenRequestState | null | undefined
 const joinedPromptsSeparator = '\n\n';
 
 /**
+ * @name PromptsNotTakenIn
+ * @description The prompts a resume re-posts in ONE text, and the requests they are: what the message carries is named when it is
+ * built, and the turn it starts is tracked with those ids — never read again when it is tracked, which for a buffered message is its
+ * replay, after other requests may have opened (review 21 nit 3).
+ */
+export interface PromptsNotTakenIn {
+  text: string;
+  requestIds: string[];
+}
+
+/**
  * @description The prompts of every request in `requests` the session never took
  * in, in the given order, as ONE text to post — a conversation may hold one open
- * request per requester, and a resume must re-post each of them. `undefined` when
- * none is left to post.
+ * request per requester, and a resume must re-post each of them — with the ids of
+ * those requests. `undefined` when none is left to post.
  */
-export function joinPromptsNotTakenIn(requests: readonly OpenRequestState[]): string | undefined {
-  const prompts = requests.map(getPromptNotTakenIn).filter((prompt): prompt is string => prompt !== undefined);
-  return prompts.length === 0 ? undefined : prompts.join(joinedPromptsSeparator);
+export function getPromptsNotTakenIn(requests: readonly OpenRequestState[]): PromptsNotTakenIn | undefined {
+  const untaken = requests.flatMap((request) => {
+    const prompt = getPromptNotTakenIn(request);
+    return prompt === undefined ? [] : [{ requestId: request.id, prompt }];
+  });
+  if (untaken.length === 0) return undefined;
+  return { text: untaken.map((entry) => entry.prompt).join(joinedPromptsSeparator), requestIds: untaken.map((entry) => entry.requestId) };
 }
 
 /**
  * @description R21: a request whose prompt was never taken in by the session gets
  * the prompt itself; a bare reminder would name a request the agent never read.
  */
-export function getWakeUpMessage(request: OpenRequestState, reason: RequestWakeUpReason): WakeUpMessage {
+export function getWakeUpMessage(request: OpenRequestState, reason: RequestWakeUpReason, options: { isAnswerOptional?: boolean } = {}): WakeUpMessage {
   const prompt = getPromptNotTakenIn(request);
   if (prompt !== undefined) return { reason, text: prompt, isRequestPrompt: true };
-  return { reason, text: buildWakeUpReminder({ requestId: request.id, reason }), isRequestPrompt: false };
+  const isAnswerOptional = options.isAnswerOptional === true;
+  return {
+    reason,
+    text: buildWakeUpReminder({ requestId: request.id, reason, isAnswerOptional }),
+    isRequestPrompt: false,
+    ...(isAnswerOptional ? { isAnswerOptional } : {}),
+  };
 }
 
 /**
  * @description The reminder the wake-up engine forwards into the SAME session for
  * an open request. It is not a request itself: it names the open one and asks
- * for the answer through `answer_request`.
+ * for the answer through `answer_request` — or, with `isAnswerOptional`, only for what the requester must know.
  */
-export function buildWakeUpReminder(options: { requestId: string; reason: RequestWakeUpReason }): string {
+export function buildWakeUpReminder(options: { requestId: string; reason: RequestWakeUpReason; isAnswerOptional?: boolean }): string {
+  const answerLine = options.isAnswerOptional === true
+    ? `Your watch for it is still armed and nothing the requester wrote is waiting for your answer, so answer it with answer_request (requestId "${options.requestId}") ` +
+      'only with what the requester must know — a short "progress" note if what was lost changes what they wait for, "final" if the work is ' +
+      'done — otherwise continue without a comment.'
+    : `Answer it with answer_request (requestId "${options.requestId}"): kind "final" if the work is done, ` +
+      '"question" if you need the requester, or a short "progress" note if you are still working — then continue.';
   return [
     `[Reminder · request ${options.requestId} is still open]`,
     wakeUpReasonLines[options.reason],
-    `Answer it with answer_request (requestId "${options.requestId}"): kind "final" if the work is done, ` +
-      '"question" if you need the requester, or a short "progress" note if you are still working — then continue.',
+    answerLine,
     answerStyleInstruction,
   ].join('\n');
 }

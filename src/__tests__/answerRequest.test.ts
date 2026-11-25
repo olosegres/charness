@@ -175,6 +175,37 @@ describe('answerRequest close rules', () => {
     assert.equal(ledger.getNewestOpenRequest(topicKey)?.nextPostRetryAt, undefined);
   });
 
+  it('a progress answer answers the person\'s words: the persisted «owed» flag is cleared; a failed delivery leaves it', async () => {
+    await ledger.load();
+    const request = await ledger.createRequest(topicKey, origin);
+    await ledger.updateOpenRequest(request.id, { isPersonInputUnanswered: true });
+
+    sink.nextResult = { ok: false, error: 'the surface is down' };
+    await answerRequest({ ledger, answerSinks: sinks }, createArgs(request.id, { kind: 'progress' }));
+    assert.equal(ledger.getNewestOpenRequest(topicKey)?.isPersonInputUnanswered, true, 'nothing reached the person: still owed');
+
+    sink.nextResult = { ok: true };
+    await answerRequest({ ledger, answerSinks: sinks }, createArgs(request.id, { kind: 'progress' }));
+    assert.equal(ledger.getNewestOpenRequest(topicKey)?.isPersonInputUnanswered, undefined, 'delivered: the words are answered');
+  });
+
+  it('a progress answer clears a pending silent turn too — the count and the flag together; a failed delivery leaves both', async () => {
+    await ledger.load();
+    const request = await ledger.createRequest(topicKey, origin);
+    await ledger.updateOpenRequest(request.id, { isPersonInputUnanswered: true, silentTurnCount: 1, wakeCount: 1 });
+
+    sink.nextResult = { ok: false, error: 'the surface is down' };
+    await answerRequest({ ledger, answerSinks: sinks }, createArgs(request.id, { kind: 'progress' }));
+    assert.equal(ledger.getNewestOpenRequest(topicKey)?.silentTurnCount, 1, 'nothing reached the person: the silent turn is still pending');
+
+    sink.nextResult = { ok: true };
+    await answerRequest({ ledger, answerSinks: sinks }, createArgs(request.id, { kind: 'progress' }));
+    const answered = ledger.getNewestOpenRequest(topicKey);
+    assert.equal(answered?.silentTurnCount, 0, 'a turn that sent a progress note is never a silent turn');
+    assert.equal(answered?.isPersonInputUnanswered, undefined);
+    assert.equal(answered?.wakeCount, 1, 'the wake count is the loop guard\'s: an answer does not reset it');
+  });
+
   it('a late answer to a superseded request is delivered and changes no request', async () => {
     await ledger.load();
     const superseded = await ledger.createRequest(topicKey, origin);

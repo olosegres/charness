@@ -94,8 +94,8 @@ per-backend controls are optional methods the bot checks before calling.
 - **Bot-injected MCP server `charness`** (HTTP, loopback, per-session HMAC tokens scoped `thread:` /
   `dir:`; the one constant `schedulerMcpServerName`, so the tools read `mcp__charness__<tool>` in Claude Code and `charness_<tool>` in OpenCode;
   the name is the bot's: `mcpConfig.ts` drops an operator's entry of it from the copies it hands Claude, the OpenCode adapter registers its own over a config-defined one) goes into EVERY bot-started session: `schedule_*`, `compact_conversation`, `answer_request`,
-  `send_file_to_user`, `send_messages_to_user` (a non-Telegram session sees only `answer_request` +
-  `compact_conversation`, plus `jira_get_attachment` and its own `send_file_to_user` for a Jira one). It is bot plumbing, separate from the user-editable MCP hierarchy (mostly dormant,
+  `send_file_to_user`, `send_messages_to_user` (a Jira session gets `schedule_*` too, with its own wording and no `threadKey`, `jira_get_attachment` and its own
+  `send_file_to_user`, but not `send_messages_to_user`; any other non-Telegram session sees only `answer_request` + `compact_conversation`). It is bot plumbing, separate from the user-editable MCP hierarchy (mostly dormant,
   undocumented). Clients cache `instructions` and tool descriptions at connect: a running agent sees an edit
   only after reconnecting; tool RESULTS reflect live code.
 - **Bot-shipped skills** (`agent-plugin/`, a Claude Code plugin `charness`; `utils/agentPlugin.ts`): every bot-started
@@ -111,11 +111,19 @@ per-backend controls are optional methods the bot checks before calling.
   a WATCHDOG (`deliveryKind: 'check'`, `scheduler/checkRun.ts`): the bot runs the command in the bound
   folder, stays silent while it exits 0, and only the FIRST failure after a pass says so in one silent sentence (never
   the command; the output folded under it) and wakes the agent (`isCheckFailing` is stored before the wake, so a restart
-  never repeats it); recovery posts one line. Nothing the scheduler posts is pinned except a reminder — the pin is what
+  never repeats it; a wake that never reached the agent — dropped by a session start, a failed write, no session left — clears
+  it again, so the next failing run says so and wakes it once more); recovery posts one line. Nothing the scheduler posts is pinned except a reminder — the pin is what
   pierces a muted topic; a prompt job's fire is one silent line with its prompt folded in an expandable quotation.
   A check with a status source (`statusWorkerRunDir` / `statusCommand`) also posts ONE silent status line per
   `statusEveryMinutes` (15) while it passes, replacing the previous one — the bot's own message, no agent wake,
-  only in a Telegram topic whose view shows the stream (`scheduler/checkStatus.ts`).
+  only in a Telegram topic whose view shows the stream (`scheduler/checkStatus.ts`). In a Jira issue the scheduler posts
+  NOTHING (a comment always notifies the requester and the issue's watchers): a fire wakes the issue's agent behind a header
+  naming the open request it rides, opens no request of its own (`scheduler/scheduledRunTarget.ts`; a topic with requests rides the same
+  way and opens the scheduler's request only with none to ride — `requests/README.md` § Scheduled runs), and an open request waits for
+  its armed watch — it is not prodded between turns (no follow-ups, no boot wake; a process that died with the agent's own work pending is woken once
+  with the lost-work note, as a topic is resumed); a requester's own message left unanswered
+  still is, and still ends in the give-up, after a restart too: what a request owes is persisted (`isPersonInputUnanswered`), so a
+  lost watch never leaves it held (`requests/scheduleWait.ts`, the rule table in `requests/README.md`; in a topic with requests too).
 - **One instance-wide timezone** (`/timezone`) applied through `process.env.TZ`. After a zone change never
   re-arm schedules with the engine's `rearmAll()` (the boot replay would fire bogus catch-ups).
 - **Prompt decoration** happens at ONE choke point, `forwardPromptToAgent`: the `[Telegram thread context]`

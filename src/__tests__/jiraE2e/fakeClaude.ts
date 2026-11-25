@@ -53,6 +53,8 @@ import {
   fakeClaudeExitFlushDelayFileName,
   fakeClaudeIgnoreStopSignalsFileName,
   fakeClaudeRefuseLaunchFileName,
+  fakeClaudeLaunchRefusalDelayFileName,
+  fakeClaudeLaunchDelayFileName,
   getFakeClaudeTranscriptPath,
   getFakeClaudeUnrestorableConversationFileName,
   getFlagValues,
@@ -72,7 +74,19 @@ import {
 import {
   botMcpServerName,
   fakeCancelWatchToken,
+  fakeDropWatchToken,
+  fakeDropWatchWakeMarker,
   fakeGoneWorkerPid,
+  fakeKeepWatchToken,
+  fakeKeepWatchWakeMarker,
+  fakeRearmWatchToken,
+  fakeRearmWatchWakeMarker,
+  fakeOneShotDelaySeconds,
+  fakeOneShotSilentMarker,
+  fakeOneShotWatchIssueKey,
+  fakeOneShotWatchMarker,
+  fakeOneShotNextWatchIssueKey,
+  fakeOneShotNextWatchMarker,
   fakeStatusWatchJobName,
   fakeStatusWatchTargetFileName,
   fakeWatchJobName,
@@ -221,6 +235,20 @@ import { claudeSessionStateEventsVariableName } from '../../utils/jsonStreamHost
  *  - `arm-status-watch` — the same orchestrator on a worker the TEST started (the pid and run directory in
  *    `fakeStatusWatchTargetFileName`), the marker touched first: the real recipe plus its status arguments, so the bot's status line rides the watch;
  *    the wake of the watch's failure is `cancel-watch`, which finds this watch too;
+ *  - `watch-progress` — an orchestrator in an ISSUE (the Jira schedule flow): the issue's FIRST request's first turn `touch`es the marker, arms the status
+ *    watch of the worker the TEST named (`fakeStatusWatchTargetFileName`) like `arm-status-watch`, answers `progress` and ends the
+ *    turn — nothing to poll. The watch's wake prompt carries `cancel-watch` (cancel it, answer `final` to the request its header names)
+ *    or, by a marker in the issue's text, `keep-watch` (`fakeKeepWatchWakeMarker`: the turn ends with no tool call and no answer),
+ *    `rearm-watch` (`fakeRearmWatchWakeMarker`: arms the next worker's watch, cancels the old one, answers `progress` to the request its
+ *    header names) or `drop-watch` (`fakeDropWatchWakeMarker`: cancels the watch and ends the turn with no answer);
+ *  - `hold-silent-once` — the first turn keeps working until the test writes `fakeClaudeHoldReleaseFileName`, then ends with no answer;
+ *    later turns answer `final` (a reminder's turn answers);
+ *  - `hold-silent-then-progress` — the same first turn; the second answers `progress` (the request stays open, its follow-up comes),
+ *    later turns answer `final`;
+ *  - `one-shot-then-final` — the first turn arms a one-shot prompt `fakeOneShotDelaySeconds` ahead (`[fake:answer]`) and answers `final`; the fire
+ *    then answers `final` to the request id its header names — a request that is already finished. A marker in the text chooses another
+ *    prompt for the one-shot (`fakeOneShotSilentMarker`: the fire says nothing; `fakeOneShotWatchMarker`, `fakeOneShotNextWatchMarker`: the
+ *    fire arms a status watch);
  *  - `usage-limit-once` — its first turn ends the way a subscription limit does: an error `result` saying the
  *    session limit is hit and when it resets (the text of a `[limit-resets:<ISO instant or clock>]` token in the
  *    request's text); the next turn — the one the bot sends after it moved the topic to another account —
@@ -271,8 +299,8 @@ import { claudeSessionStateEventsVariableName } from '../../utils/jsonStreamHost
  * `FAKE_CLAUDE_STATE_DIR` (per-request turn counts, the conversations held).
  */
 
-export type FakeClaudeMode = 'answer' | 'silent-once' | 'silent' | 'hang-once' | 'hold-once' | 'hold-progress-once' | 'slow-once' | 'progress' | 'progress-edits' | 'progress-after-update' | 'finish-together' | 'answer-after-queued' | 'background' | 'background-notify' | 'compact' | 'overflow' | 'fetch-attachment' | 'run-tool' | 'reply-to' | 'send-file' | 'usage-limit-once' | 'ask' | 'ask-again' | 'ask-two' | 'ask-long' | 'ask-repeat' | 'send-messages';
-const fakeModes: readonly FakeClaudeMode[] = ['answer', 'silent-once', 'silent', 'hang-once', 'hold-once', 'hold-progress-once', 'slow-once', 'progress', 'progress-edits', 'progress-after-update', 'finish-together', 'answer-after-queued', 'background', 'background-notify', 'compact', 'overflow', 'fetch-attachment', 'run-tool', 'reply-to', 'send-file', 'usage-limit-once', 'ask', 'ask-again', 'ask-two', 'ask-long', 'ask-repeat', 'send-messages'];
+export type FakeClaudeMode = 'answer' | 'silent-once' | 'silent' | 'hang-once' | 'hold-once' | 'hold-progress-once' | 'slow-once' | 'progress' | 'progress-edits' | 'progress-after-update' | 'finish-together' | 'answer-after-queued' | 'background' | 'background-notify' | 'compact' | 'overflow' | 'fetch-attachment' | 'run-tool' | 'reply-to' | 'send-file' | 'usage-limit-once' | 'ask' | 'ask-again' | 'ask-two' | 'ask-long' | 'ask-repeat' | 'send-messages' | 'watch-progress' | 'one-shot-then-final' | 'hold-silent-once' | 'hold-silent-then-progress';
+const fakeModes: readonly FakeClaudeMode[] = ['answer', 'silent-once', 'silent', 'hang-once', 'hold-once', 'hold-progress-once', 'slow-once', 'progress', 'progress-edits', 'progress-after-update', 'finish-together', 'answer-after-queued', 'background', 'background-notify', 'compact', 'overflow', 'fetch-attachment', 'run-tool', 'reply-to', 'send-file', 'usage-limit-once', 'ask', 'ask-again', 'ask-two', 'ask-long', 'ask-repeat', 'send-messages', 'watch-progress', 'one-shot-then-final', 'hold-silent-once', 'hold-silent-then-progress'];
 /**
  * How long an `answer-after-queued` turn waits for the next message before it answers anyway: four polls of the 10 s
  * floor, or what the launcher sets (`fakeClaudeQueuedWaitMaxMsEnvName`) for the instance's own poll.
@@ -718,6 +746,24 @@ function writeExitMetadata(sessionId: string): void {
   fs.appendFileSync(transcriptPath, entries.map((entry) => `${JSON.stringify(entry)}\n`).join(''));
 }
 
+/** How long a launch the fake refuses waits first ({@link fakeClaudeLaunchRefusalDelayFileName}); at once without the file. */
+async function waitBeforeRefusal(): Promise<void> {
+  await waitForDelayFile(fakeClaudeLaunchRefusalDelayFileName);
+}
+
+/** How long a launch that runs waits before it reads stdin ({@link fakeClaudeLaunchDelayFileName}); at once without the file. */
+async function waitBeforeLaunch(): Promise<void> {
+  await waitForDelayFile(fakeClaudeLaunchDelayFileName);
+}
+
+/** Wait the milliseconds the state dir's `fileName` holds; at once without the file. */
+async function waitForDelayFile(fileName: string): Promise<void> {
+  const delayPath = path.join(getStateDir(), fileName);
+  if (!fs.existsSync(delayPath)) return;
+  const delayMs = Number(fs.readFileSync(delayPath, 'utf8').trim());
+  await new Promise<void>((resolve) => setTimeout(resolve, delayMs));
+}
+
 /**
  * How long after a stop signal the exit flush runs: the content of {@link fakeClaudeExitFlushDelayFileName} while a test
  * keeps one, else `null` (no flush: the process dies at once).
@@ -738,6 +784,7 @@ function exitOnStopSignal(sessionId: string): void {
   const onSignal = (signal: NodeJS.Signals): void => {
     if (isExiting || fs.existsSync(path.join(getStateDir(), fakeClaudeIgnoreStopSignalsFileName))) return;
     isExiting = true;
+    appendJsonLine(fakeClaudeLogFileNames.stopSignals, { pid: process.pid, signal });
     const exitCode = 128 + (signal === 'SIGHUP' ? 1 : 15);
     const flushDelayMs = getExitFlushDelayMs();
     if (lastRecordedPrompt === null || flushDelayMs === null) process.exit(exitCode);
@@ -757,6 +804,7 @@ function exitOnStopSignal(sessionId: string): void {
 async function getSessionViolation(argv: readonly string[]): Promise<string | null> {
   const resumeId = getFlagValues(argv, '--resume')[0];
   if (resumeId !== undefined && (!(await checkIsConversationHeld(resumeId)) || fs.existsSync(path.join(getStateDir(), getFakeClaudeUnrestorableConversationFileName(resumeId))))) {
+    await waitBeforeRefusal();
     const reason = `No conversation found with session ID: ${resumeId}`;
     writeStdout({ type: 'result', subtype: 'error_during_execution', is_error: true, num_turns: 0, session_id: resumeId, usage: { input_tokens: 0, output_tokens: 0 }, errors: [reason] });
     return reason;
@@ -842,8 +890,26 @@ function readWatchTarget(): FakeStatusWatchTarget | null {
   return fs.existsSync(targetPath) ? JSON.parse(fs.readFileSync(targetPath, 'utf8')) : null;
 }
 
+/**
+ * @description The arguments of the `schedule_create` call that arms the status watch of the worker the test named, the way the
+ * skill tells an orchestrator to: the marker `touch`ed first, then the real recipe plus its status arguments, with `prompt` as the
+ * wake's text.
+ */
+function buildStatusWatchArguments(prompt: string): Record<string, string | number> {
+  const target = readWatchTarget();
+  if (!target) throw new Error(`a status watch needs ${fakeStatusWatchTargetFileName} in the state dir`);
+  touchWatchArmedMarker(target.runDir);
+  return {
+    name: fakeStatusWatchJobName,
+    cron: '* * * * *',
+    checkCommand: workerWatchCheckCommand.replaceAll('<pid>', target.pid.toString()).replaceAll('<run-dir>', target.runDir),
+    ...parseRecipeArguments(workerWatchStatusArguments.replaceAll('<run-dir>', target.runDir)),
+    prompt,
+  };
+}
+
 /** @description `arm-watch` / `arm-status-watch` / `cancel-watch`: what an orchestrator does about one worker's watch (see the module). */
-async function runWatchMode(server: McpServerConfig, mode: 'arm-watch' | 'arm-status-watch' | 'cancel-watch', issueKey: string): Promise<void> {
+async function runWatchMode(server: McpServerConfig, mode: 'arm-watch' | 'arm-status-watch' | 'cancel-watch' | 'rearm-watch' | 'drop-watch', issueKey: string): Promise<void> {
   const logToolCall = (tool: string, args: Record<string, string | number | boolean>, outcome: string): void => {
     appendJsonLine(fakeClaudeLogFileNames.toolCalls, { issueKey, tool, args, outcome });
   };
@@ -861,22 +927,18 @@ async function runWatchMode(server: McpServerConfig, mode: 'arm-watch' | 'arm-st
     return;
   }
   if (mode === 'arm-status-watch') {
-    const target = readWatchTarget();
-    if (!target) throw new Error(`arm-status-watch needs ${fakeStatusWatchTargetFileName} in the state dir`);
-    touchWatchArmedMarker(target.runDir);
-    const args = {
-      name: fakeStatusWatchJobName,
-      cron: '* * * * *',
-      checkCommand: workerWatchCheckCommand.replaceAll('<pid>', target.pid.toString()).replaceAll('<run-dir>', target.runDir),
-      ...parseRecipeArguments(workerWatchStatusArguments.replaceAll('<run-dir>', target.runDir)),
-      prompt: `${fakeCancelWatchToken} The worker S2 finished or stalled: read its result, then cancel this watch.`,
-    };
+    const args = buildStatusWatchArguments(`${fakeCancelWatchToken} The worker S2 finished or stalled: read its result, then cancel this watch.`);
     logToolCall('schedule_create', args, await callBotTool(server, 'schedule_create', args));
     return;
   }
   const listed = await callBotTool(server, 'schedule_list', {});
   logToolCall('schedule_list', {}, listed);
   const jobId = new RegExp(`(?:${fakeWatchJobName}|${fakeStatusWatchJobName}) \\(id: ([^)]+)\\)`).exec(listed)?.[1];
+  if (mode === 'rearm-watch') {
+    // The worker finished: the NEXT worker's watch is armed before the old one is cancelled, as an orchestrator moving on does.
+    const args = buildStatusWatchArguments(`${fakeCancelWatchToken} The worker S3 finished or stalled: read its result.`);
+    logToolCall('schedule_create', args, await callBotTool(server, 'schedule_create', args));
+  }
   if (jobId) logToolCall('schedule_cancel', { id: jobId }, await callBotTool(server, 'schedule_cancel', { id: jobId }));
 }
 
@@ -1181,7 +1243,8 @@ function endTurnAfterSetAsideQuestion(sessionId: string): void {
 
 /**
  * `[fake:schedule-once <seconds> <label>]` (see `fakeScheduleOnceToken`): create the one-shot prompt schedule the token names,
- * on the bot's MCP, BEFORE the turn asks its question — the bot then delivers a prompt of its own while the question waits.
+ * on the bot's MCP — in a turn that asks, BEFORE its question (the bot then delivers a prompt of its own while the question waits);
+ * in a turn of a request in any other mode, at the turn's start.
  */
 const scheduleOnceRe = /\[fake:schedule-once (\d+) ([^\]]+)\]/;
 
@@ -1390,13 +1453,25 @@ async function runTurn(argv: readonly string[], sessionId: string, content: stri
   }
   const requestId = requestIdRe.exec(answeredContent)?.[0];
   const watchMode = modeRe.exec(content)?.[1];
-  if (watchMode === 'arm-watch' || watchMode === 'arm-status-watch' || watchMode === 'cancel-watch') {
+  if (content.includes(fakeKeepWatchToken)) {
+    // The wake of a watch whose orchestrator only keeps it: a turn with no tool call and no answer.
+    const keepIssueKey = getPromptIssueKey(content) ?? 'unknown';
+    appendJsonLine(fakeClaudeLogFileNames.turns, { requestId: requestId ?? null, issueKey: keepIssueKey, isRequestPrompt: false, isPlainTextHidden: false, supersededRequestIds: [], turnCount: 1, pid: process.pid });
+    emitTurnActivity(sessionId, keepIssueKey, content);
+    endTurn(sessionId, 'The worker is still being watched.');
+    return;
+  }
+  if (watchMode === 'arm-watch' || watchMode === 'arm-status-watch' || watchMode === 'cancel-watch' || watchMode === 'rearm-watch' || watchMode === 'drop-watch') {
     const watchIssueKey = getPromptIssueKey(content) ?? 'unknown';
     appendJsonLine(fakeClaudeLogFileNames.turns, { requestId: requestId ?? null, issueKey: watchIssueKey, isRequestPrompt: false, isPlainTextHidden: false, supersededRequestIds: [], turnCount: 1, pid: process.pid });
     emitTurnActivity(sessionId, watchIssueKey);
     const server = getBotMcpServer(argv);
     if (server) await runWatchMode(server, watchMode, watchIssueKey);
-    if (requestId && server) await callAnswerRequest(server, sessionId, { requestId, kind: 'final', body: `Watch ${watchMode} done.` });
+    // `drop-watch` ends the turn with no answer: a woken agent that drops its watch and says nothing. `rearm-watch` moves on to the next
+    // worker: the request still waits, for the next watch.
+    if (requestId && server && watchMode !== 'drop-watch') {
+      await callAnswerRequest(server, sessionId, { requestId, kind: watchMode === 'rearm-watch' ? 'progress' : 'final', body: `Watch ${watchMode} done.` });
+    }
     endTurn(sessionId, `Watch ${watchMode} done.`);
     return;
   }
@@ -1451,6 +1526,12 @@ async function runTurn(argv: readonly string[], sessionId: string, content: stri
     endTurn(sessionId, 'Thinking about it.');
     return;
   }
+  if ((state.mode === 'hold-silent-once' || state.mode === 'hold-silent-then-progress') && isFirstTurn) {
+    // Busy until the test releases it, then ended with no answer: the test reads the request while the turn runs.
+    await waitForHoldRelease();
+    endTurn(sessionId, 'Thinking about it.');
+    return;
+  }
   if (state.mode === 'usage-limit-once' && isFirstTurn) {
     endTurnOnUsageLimit(sessionId, limitResetsRe.exec(content)?.[1] ?? 'in 1h');
     return;
@@ -1465,6 +1546,8 @@ async function runTurn(argv: readonly string[], sessionId: string, content: stri
     await new Promise<void>((resolve) => setTimeout(resolve, slowTurnMs));
   }
   const server = getBotMcpServer(argv);
+  // A turn that asks arms its schedule right before its question (below); any other turn arms it at its start.
+  if (!fakeAskVariantByMode[state.mode]) await armScheduledPrompt(argv, content, state.issueKey);
   await runTodoTokens(server, content, state.issueKey);
   await waitTurnWork(content);
   await runLateToolCall(argv, sessionId, content, state.issueKey);
@@ -1563,7 +1646,26 @@ async function runTurn(argv: readonly string[], sessionId: string, content: stri
     const ran = spawnSync(probeToolName, [], { encoding: 'utf8' });
     logToolCall(probeToolName, {}, ran.error ? `error: ${ran.error.message}` : ran.stdout.trim());
   }
-  const kind = state.mode === 'progress' || (state.mode === 'hold-progress-once' && isFirstTurn) ? 'progress' : 'final';
+  // Only the issue's FIRST request arms the watch: a later request (a new hand-over of the same issue) just answers.
+  const isArmingWatch = state.mode === 'watch-progress' && isFirstTurn && listKnownRequests(state.issueKey).length === 1;
+  if (isArmingWatch && server) {
+    const wakeToken = content.includes(fakeKeepWatchWakeMarker) ? fakeKeepWatchToken
+      : content.includes(fakeRearmWatchWakeMarker) ? fakeRearmWatchToken
+        : content.includes(fakeDropWatchWakeMarker) ? fakeDropWatchToken
+          : fakeCancelWatchToken;
+    const args = buildStatusWatchArguments(`${wakeToken} The worker S2 finished or stalled: read its result.`);
+    appendJsonLine(fakeClaudeLogFileNames.toolCalls, { issueKey: state.issueKey, tool: 'schedule_create', args, outcome: await callBotTool(server, 'schedule_create', args) });
+  }
+  if (state.mode === 'one-shot-then-final' && isFirstTurn && server) {
+    const oneShotPrompt = content.includes(fakeOneShotSilentMarker) ? `${fakeKeepWatchToken} Check the deploy; nothing to report.`
+      : content.includes(fakeOneShotWatchMarker) ? `${fakeOneShotWatchIssueKey} [fake:watch-progress] ${fakeKeepWatchWakeMarker} The deploy broke: launch the fix and watch it.`
+        : content.includes(fakeOneShotNextWatchMarker) ? `${fakeOneShotNextWatchIssueKey} [fake:watch-progress] ${fakeKeepWatchWakeMarker} The deploy broke again: launch the fix and watch it.`
+          : '[fake:answer] Check the deploy and tell the requester.';
+    const args = { name: 'check the deploy', onceAt: new Date(Date.now() + fakeOneShotDelaySeconds * 1000).toISOString(), prompt: oneShotPrompt };
+    appendJsonLine(fakeClaudeLogFileNames.toolCalls, { issueKey: state.issueKey, tool: 'schedule_create', args, outcome: await callBotTool(server, 'schedule_create', args) });
+  }
+  const isProgressTurn = state.mode === 'progress' || (state.mode === 'hold-progress-once' && isFirstTurn) || (state.mode === 'hold-silent-then-progress' && state.turnCount === 2);
+  const kind = isProgressTurn || isArmingWatch ? 'progress' : 'final';
   endTurn(sessionId, await answer(requestId, kind, state.turnCount));
   if (state.mode === 'background') {
     // Reported AFTER the result, as the CLI does for a task the turn left running.
@@ -1655,6 +1757,7 @@ async function main(): Promise<void> {
     }
   }
   if (fs.existsSync(path.join(getStateDir(), fakeClaudeRefuseLaunchFileName))) {
+    await waitBeforeRefusal();
     process.stderr.write('fake claude: refused to start\n');
     process.exit(1);
   }
@@ -1667,6 +1770,7 @@ async function main(): Promise<void> {
   const sessionId = getLaunchSessionId(argv) ?? randomUUID();
   if (getFlagValues(argv, '--resume')[0] === sessionId) conversationCostUsd = readRestoredConversationCost(sessionId);
   exitOnStopSignal(sessionId);
+  await waitBeforeLaunch();
 
   const lines = readline.createInterface({ input: process.stdin });
   lines.on('line', (line) => {

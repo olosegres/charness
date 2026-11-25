@@ -5,7 +5,7 @@
 import { Markup, type Context } from 'telegraf';
 import { getAdapter, getThreadAdapter } from '../../../adapters/createAdapter';
 import { openCodeAdapterName } from '../../../adapters/adapterNames';
-import type { AgentAdapter } from '../../../types';
+import type { AgentAdapter, EffortSetOutcome } from '../../../types';
 import type { SessionKey } from '../../../sessionKey';
 import { keyToString } from '../../../sessionKey';
 import { checkIsValidProviderId } from '../../../adapters/openCodeAdapter';
@@ -363,6 +363,19 @@ export function createModelProviders(ports: ModelProvidersPorts) {
   const answerWithWholeText = createWholeTextAnswerer(replyToThread);
 
   /**
+   * @description Wake a sleeping conversation first (L-D4), then set `level` on the agent the topic runs once it is up — read after the
+   * wake, which waited in the conversation's queue: a move across backends queued ahead has the topic on the other adapter now (review 24
+   * nit 2). An adapter with no effort contract there refuses it.
+   */
+  async function setEffortOnWokenAgent(key: SessionKey, level: string): Promise<EffortSetOutcome> {
+    const wakeNotice = await wakeSleepingSession(key);
+    if (wakeNotice) await replyToThread(key, wakeNotice);
+    const adapter = getThreadAdapter(key);
+    if (!adapter.setEffort) return { status: 'refused', reason: t('effort.unsupported_backend', { label: adapter.label }) };
+    return adapter.setEffort(key, level);
+  }
+
+  /**
    * @description Single choke point for the four `/model`-set paths (the
    * `/model <num>` and `/model <name>` commands, the text-handler numeric pick,
    * and the `model_<id>` button callback). Drives the thread's adapter and turns
@@ -373,7 +386,6 @@ export function createModelProviders(ports: ModelProvidersPorts) {
    * with a notice). On success the pinned banner is refreshed best-effort.
    */
   async function applyModelSelection(
-    adapter: AgentAdapter,
     key: SessionKey,
     modelId: string,
   ): Promise<{ isOk: boolean; message: string; setModelError: string | null; displayLabel: string }> {
@@ -381,6 +393,9 @@ export function createModelProviders(ports: ModelProvidersPorts) {
     // instead of the "start the agent first" refusal of an idle backend.
     const wakeNotice = await wakeSleepingSession(key);
     if (wakeNotice) await replyToThread(key, wakeNotice);
+    // Read after the wake, which waited in the conversation's queue: a move across backends queued ahead has the topic on the other
+    // adapter now, and the pick goes to the agent the topic runs (review 24 nit 2).
+    const adapter = getThreadAdapter(key);
     const setModelError = adapter.setModel ? await adapter.setModel(key, modelId) : null;
     const displayLabel = adapter.getCurrentModel?.(key) || modelId;
     // Read AFTER the switch: a model that does not offer the level in force
@@ -642,17 +657,13 @@ export function createModelProviders(ports: ModelProvidersPorts) {
    * and the plain "3" reply. Always replies (even for an adapter that cannot set a
    * model), so both call sites can return unconditionally afterwards.
    */
-  async function applyNumberedModelPick(
-    adapter: AgentAdapter,
-    key: SessionKey,
-    num: number,
-  ): Promise<void> {
+  async function applyNumberedModelPick(key: SessionKey, num: number): Promise<void> {
     const selected = getNumberedModelPick(key, num);
     if (selected === null) {
       await replyToThread(key, t('model.invalid_number'));
       return;
     }
-    const { message } = await applyModelSelection(adapter, key, selected);
+    const { message } = await applyModelSelection(key, selected);
     await replyToThread(key, message);
   }
 
@@ -886,7 +897,7 @@ export function createModelProviders(ports: ModelProvidersPorts) {
 
       // numeric selection from the last rendered page
       if (/^\d+$/.test(args)) {
-        await applyNumberedModelPick(adapter, key, parseInt(args, 10));
+        await applyNumberedModelPick(key, parseInt(args, 10));
         return;
       }
 
@@ -894,7 +905,7 @@ export function createModelProviders(ports: ModelProvidersPorts) {
       // filters the picker only and must never break an explicit pick or a saved
       // model pref.
       if (args) {
-        const { message } = await applyModelSelection(adapter, key, args);
+        const { message } = await applyModelSelection(key, args);
         await replyToThread(key, message);
         return;
       }
@@ -927,9 +938,7 @@ export function createModelProviders(ports: ModelProvidersPorts) {
       // canonical set, OpenCode against the model's variants) and returns a
       // user-facing notice string on any non-success.
       if (args) {
-        const wakeNotice = await wakeSleepingSession(key); // L-D4: apply to the woken session
-        if (wakeNotice) await replyToThread(key, wakeNotice);
-        const outcome = await adapter.setEffort(key, args);
+        const outcome = await setEffortOnWokenAgent(key, args);
         await replyToThread(key, outcome.status === 'applied' ? t('effort.set_success', { level: args }) : outcome.status === 'stored' ? outcome.notice : outcome.reason);
         // A pick the adapter stored but could not apply yet (no agent running) is a pick all the same: the banner
         // follows it. Only a refusal leaves the banner as it was.
@@ -995,7 +1004,7 @@ export function createModelProviders(ports: ModelProvidersPorts) {
         : catalog.byProvider.get(provider)?.[modelIndex];
       if (modelId === undefined) { await ctx.answerCbQuery(t('cb.model_provider_gone')); return; }
 
-      const { isOk, message, setModelError, displayLabel } = await applyModelSelection(adapter, key, modelId);
+      const { isOk, message, setModelError, displayLabel } = await applyModelSelection(key, modelId);
       if (!isOk) {
         await answerWithWholeText(ctx, key, t('cb.model_error', { error: setModelError ?? message }));
         return;
@@ -1049,7 +1058,7 @@ export function createModelProviders(ports: ModelProvidersPorts) {
       );
       if (modelId === null) { await ctx.answerCbQuery(t('cb.model_recent_gone')); return; }
 
-      const { isOk, message, setModelError, displayLabel } = await applyModelSelection(adapter, key, modelId);
+      const { isOk, message, setModelError, displayLabel } = await applyModelSelection(key, modelId);
       if (!isOk) {
         await answerWithWholeText(ctx, key, t('cb.model_error', { error: setModelError ?? message }));
         return;
@@ -1128,7 +1137,7 @@ export function createModelProviders(ports: ModelProvidersPorts) {
         await ctx.answerCbQuery(t('cb.not_supported', { label: adapter.label }));
         return;
       }
-      const { isOk, message, setModelError, displayLabel } = await applyModelSelection(adapter, key, modelId);
+      const { isOk, message, setModelError, displayLabel } = await applyModelSelection(key, modelId);
       if (!isOk) {
         await answerWithWholeText(ctx, key, t('cb.model_error', { error: setModelError ?? message }));
         return;
@@ -1173,9 +1182,7 @@ export function createModelProviders(ports: ModelProvidersPorts) {
         await ctx.answerCbQuery(t('cb.not_supported', { label: adapter.label }));
         return;
       }
-      const wakeNotice = await wakeSleepingSession(key); // L-D4: apply to the woken session
-      if (wakeNotice) await replyToThread(key, wakeNotice);
-      const outcome = await adapter.setEffort(key, level);
+      const outcome = await setEffortOnWokenAgent(key, level);
       if (outcome.status === 'refused') {
         await answerWithWholeText(ctx, key, t('cb.effort_error', { error: outcome.reason }));
         return;

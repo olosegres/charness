@@ -28,6 +28,27 @@ function createDeps(calls: string[], overrides: Partial<PostToSessionDeps> = {})
 }
 
 describe('postToSession', () => {
+  it('waits while a command ends or replaces the conversation — before its first ensure, and again before its write — so a post during a move reaches the new agent after the move\'s bridge (review 26 #5)', async () => {
+    const calls: string[] = [];
+    let isMoving = true;
+    let endMove = (): void => {};
+    const moveOver = new Promise<void>((resolve) => { endMove = resolve; });
+    const deps = createDeps(calls, {
+      waitForConversationChange: async (conversationKey) => {
+        calls.push(`wait ${conversationKey}`);
+        if (isMoving) await moveOver;
+      },
+    });
+    const posting = postToSession(deps, 'k', 'p');
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.deepEqual(calls, ['wait k'], 'nothing ensured while the move runs: its own ensure starts the new backend, and the bridge goes first');
+    isMoving = false;
+    calls.push('move over');
+    endMove();
+    assert.deepEqual(await posting, { ok: true, isHeld: false });
+    assert.deepEqual(calls, ['wait k', 'move over', 'ensure k -', 'wait k', 'forward k p']);
+  });
+
   it('ensures a session (with the caller\'s fallback adapter), then forwards — one session step, no separate resume', async () => {
     const calls: string[] = [];
     assert.deepEqual(await postToSession(createDeps(calls), 'jira:PROJ:PROJ-1', 'the prompt', 'claude-json-stream'), { ok: true, isHeld: false });
@@ -35,6 +56,84 @@ describe('postToSession', () => {
     const bare: string[] = [];
     assert.deepEqual(await postToSession(createDeps(bare), 'k', 'p'), { ok: true, isHeld: false });
     assert.deepEqual(bare, ['ensure k -', 'forward k p']);
+  });
+
+  it('the engine settles the watches whose turn ended right before the text is built — after the wait for a busy turn — so the pick and the header see what the settle decided, and the new turn never runs under the old watch (review 14 #1)', async () => {
+    const calls: string[] = [];
+    let isBusy = true;
+    const prompt: SessionPromptText = {
+      fullText: 'full',
+      buildText: () => {
+        calls.push('build');
+        return 'built';
+      },
+    };
+    const deps = createDeps(calls, {
+      checkBusy: () => isBusy,
+      sleep: async () => { isBusy = false; },
+      settleEndedTurns: async (conversationKey) => {
+        calls.push(`settle ${conversationKey}`);
+        return async () => { calls.push('deliver the settled wakes'); };
+      },
+    });
+    assert.deepEqual(await postToSession(deps, 'k', prompt), { ok: true, isHeld: false });
+    // The settle's reminders come AFTER the waited prompt: that prompt starts the turn (review 15 #2).
+    assert.deepEqual(calls, ['ensure k -', 'settle k', 'ensure k -', 'build', 'forward k built', 'deliver the settled wakes']);
+
+    const idle: string[] = [];
+    await postToSession(createDeps(idle, { settleEndedTurns: async () => { idle.push('settle'); return async () => { idle.push('deliver'); }; } }), 'k', 'p');
+    assert.deepEqual(idle, ['ensure k -', 'settle', 'forward k p', 'deliver'], 'an idle session too: a turn may have ended seconds before');
+  });
+
+  it('the settled wakes are delivered on every way out after the settle — a hold, a failed ensure, a forward that throws: a decision already persisted is never left undelivered', async () => {
+    const outcomes: string[] = [];
+    const withSettle = (overrides: Partial<PostToSessionDeps>): PostToSessionDeps => createDeps(outcomes, {
+      settleEndedTurns: async () => async () => { outcomes.push('deliver'); },
+      ...overrides,
+    });
+    let holds = 0;
+    await postToSession(withSettle({ holdForLimitResume: () => { holds += 1; return holds > 1; } }), 'k', 'p');
+    assert.deepEqual(outcomes.at(-1), 'deliver', 'held after the settle');
+    outcomes.length = 0;
+    await postToSession(withSettle({ forwardPrompt: async () => { throw new Error('write failed'); } }), 'k', 'p');
+    assert.deepEqual(outcomes.at(-1), 'deliver', 'a forward that failed');
+  });
+
+  it('the post is IN FLIGHT from its first step to its last: a reminder decided meanwhile waits for its write, the caller\'s `afterForward` (it watches the turn the write started) runs before the settled reminders, and the release comes after everything (review 16 #2)', async () => {
+    const calls: string[] = [];
+    let isBusy = true;
+    const deps = createDeps(calls, {
+      checkBusy: () => isBusy,
+      sleep: async () => { isBusy = false; },
+      notePostInFlight: (conversationKey) => {
+        calls.push(`in flight ${conversationKey}`);
+        return async () => { calls.push('release'); };
+      },
+      settleEndedTurns: async () => {
+        calls.push('settle');
+        return async () => { calls.push('deliver the settled and handed-over wakes'); };
+      },
+    });
+    const afterForward = async (): Promise<void> => { calls.push('watch the post\'s turn'); };
+    assert.deepEqual(await postToSession(deps, 'k', 'p', undefined, { afterForward }), { ok: true, isHeld: false });
+    assert.deepEqual(calls, ['in flight k', 'ensure k -', 'settle', 'ensure k -', 'forward k p', 'watch the post\'s turn', 'deliver the settled and handed-over wakes', 'release']);
+  });
+
+  it('`afterForward` runs only for a prompt that was written — never for a hold or a failed forward — and every way out releases the post (review 16 #2)', async () => {
+    const calls: string[] = [];
+    const withPorts = (overrides: Partial<PostToSessionDeps>): PostToSessionDeps => createDeps(calls, {
+      notePostInFlight: () => async () => { calls.push('release'); },
+      ...overrides,
+    });
+    const afterForward = async (): Promise<void> => { calls.push('afterForward'); };
+    await postToSession(withPorts({ holdForLimitResume: () => true }), 'k', 'p', undefined, { afterForward });
+    await postToSession(withPorts({ ensureSession: async () => ({ ok: false, reason: 'start-failed' }) }), 'k', 'p', undefined, { afterForward });
+    await postToSession(withPorts({ forwardPrompt: async () => { throw new Error('write failed'); } }), 'k', 'p', undefined, { afterForward });
+    assert.deepEqual(calls.filter((call) => call === 'release' || call === 'afterForward'), ['release', 'release', 'release'], 'released three times, never past a write that did not happen');
+    const thrown: string[] = [];
+    const failingWatch = async (): Promise<void> => { throw new Error('the watch could not be stored'); };
+    await assert.rejects(postToSession(createDeps(thrown, { notePostInFlight: () => async () => { thrown.push('release'); } }), 'k', 'p', undefined, { afterForward: failingWatch }), /could not be stored/);
+    assert.deepEqual(thrown.at(-1), 'release', 'a failing `afterForward` is the post\'s error, and the post is still released');
   });
 
   it('a session that cannot be ensured is never forwarded to', async () => {

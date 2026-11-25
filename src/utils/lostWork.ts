@@ -164,10 +164,36 @@ function describeLostWorkForAgent(lostWork: LostWork): string {
 }
 
 /**
- * @description The note the agent gets — as the automatic resume's prompt, or ahead of the next prompt. English with
- * the baked reply-language directive (`replyLanguage` is the topic's language endonym).
+ * @name LostWorkTelling
+ * @description How the lost-work note asks the agent to tell about the loss:
+ *  - `plain` — «tell the user in one or two lines what happened» (a topic, a request that owes an answer);
+ *  - `watchHeld` — the wake of a tracker request a passing watch holds and that owes nobody an answer: the watch is still armed, so
+ *    carry on without a comment and tell the requester only if they must know;
+ *  - `runHeader` — the note rides a tracker fire: the run's header says when to answer, so tell the requester about the loss only if
+ *    it changes what they wait for. No claim about a watch: the fire may be a check that just failed, a one-shot, or have no request open.
+ * A comment on an issue notifies the requester and the issue's watchers, which is why the two tracker wordings exist.
  */
-export function buildLostWorkNote(record: LostWorkRecord, replyLanguage: string): string {
+export type LostWorkTelling = 'plain' | 'watchHeld' | 'runHeader';
+
+/** The note's last line: what to do about the loss and when to tell, per {@link LostWorkTelling}. */
+function buildLostWorkTellingLine(telling: LostWorkTelling, replyLanguage: string): string {
+  const stateReviewSentence = 'Check its state yourself (output files, processes, the repository), start again what is still needed — prefer the bot\'s schedule_* tools for anything that must survive a restart';
+  if (telling === 'watchHeld') {
+    return `${stateReviewSentence}. Your watch is still armed and nothing the requester wrote is waiting for your answer, so carry on without a comment, ` +
+      `and tell the requester about it, IN ${replyLanguage}, only if they must know (it changes what they are waiting for).`;
+  }
+  if (telling === 'runHeader') {
+    return `${stateReviewSentence}. This run's header says when to answer; tell the requester about the loss, IN ${replyLanguage}, only if it changes what they are waiting for.`;
+  }
+  return `${stateReviewSentence} — and tell the user in one or two lines what happened, IN ${replyLanguage}.`;
+}
+
+/**
+ * @description The note the agent gets — as the automatic resume's prompt, or ahead of the next prompt. English with
+ * the baked reply-language directive (`replyLanguage` is the topic's language endonym). `telling` — how it asks to tell about the loss
+ * ({@link LostWorkTelling}; `plain` by default).
+ */
+export function buildLostWorkNote(record: LostWorkRecord, replyLanguage: string, options: { telling?: LostWorkTelling } = {}): string {
   // Only what the other agent could have started again: its tasks and jobs, not a result or a cut-off turn.
   const restartableTold: LostWork | null = record.otherAgentTold
     ? { ...noLostWork, backgroundTasks: record.otherAgentTold.backgroundTasks, scheduledJobCount: record.otherAgentTold.scheduledJobCount }
@@ -178,7 +204,7 @@ export function buildLostWorkNote(record: LostWorkRecord, replyLanguage: string)
     ...(restartableTold && checkHasLostWork(restartableTold)
       ? [`The agent this conversation moved to meanwhile was told first about ${describeLostWorkForAgent(restartableTold)}, and may have started some of it again: look before you start that twice.`]
       : []),
-    `Check its state yourself (output files, processes, the repository), start again what is still needed — prefer the bot's schedule_* tools for anything that must survive a restart — and tell the user in one or two lines what happened, IN ${replyLanguage}.`,
+    buildLostWorkTellingLine(options.telling ?? 'plain', replyLanguage),
   ].join('\n');
 }
 

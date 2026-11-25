@@ -300,8 +300,8 @@ describe('the engine over fakes: which session is offered a due reminder, and wh
 });
 
 describe('L7: every cause that holds a turn open skips the engine and withdraws a waiting section', () => {
-  type Cause = 'pendingQuestion' | 'questionPin' | 'adapterQuestion' | 'loginPaste' | 'compacting' | 'armedRetry' | 'wedgeRecovery' | 'retryKick' | 'sessionStarting';
-  const causes: Cause[] = ['pendingQuestion', 'questionPin', 'adapterQuestion', 'loginPaste', 'compacting', 'armedRetry', 'wedgeRecovery', 'retryKick', 'sessionStarting'];
+  type Cause = 'pendingQuestion' | 'questionPin' | 'adapterQuestion' | 'loginPaste' | 'compacting' | 'armedRetry' | 'wedgeRecovery' | 'retryKick' | 'apiErrorInHandling' | 'sessionStarting';
+  const causes: Cause[] = ['pendingQuestion', 'questionPin', 'adapterQuestion', 'loginPaste', 'compacting', 'armedRetry', 'wedgeRecovery', 'retryKick', 'apiErrorInHandling', 'sessionStarting'];
   let dataDir: string;
   let activeCauses: Set<Cause>;
   let armedTimer: NodeJS.Timeout;
@@ -333,7 +333,9 @@ describe('L7: every cause that holds a turn open skips the engine and withdraws 
       getApiRetryTimer: () => (activeCauses.has('armedRetry') ? armedTimer : undefined),
       checkIsWedgeRecoveryInFlight: () => activeCauses.has('wedgeRecovery'),
       checkIsRetryKickInFlight: () => activeCauses.has('retryKick'),
+      checkIsApiErrorInHandling: () => activeCauses.has('apiErrorInHandling'),
       checkIsSessionStarting: () => activeCauses.has('sessionStarting'),
+      checkIsReplayingBufferedPrompts: () => false,
       serializeKey: keyToString,
     };
     const engine = new LimitNotesEngine({
@@ -418,7 +420,9 @@ describe('on the real json-stream adapter, a real StateStore and the real hook',
       getApiRetryTimer: () => undefined,
       checkIsWedgeRecoveryInFlight: () => false,
       checkIsRetryKickInFlight: () => false,
+      checkIsApiErrorInHandling: () => false,
       checkIsSessionStarting: () => false,
+      checkIsReplayingBufferedPrompts: () => false,
       serializeKey: keyToString,
     };
     return new LimitNotesEngine({

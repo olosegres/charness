@@ -81,11 +81,12 @@ export interface ApiRetryKickDeps {
   ensureSession: (key: SessionKey) => Promise<ApiRetryEnsureOutcome>;
   postTopicNotice: (key: SessionKey, notice: ApiRetryTopicNotice) => void;
   /** The nudge, or the open request's own prompt the agent never took in (R21). */
-  getResumeMessage: (key: SessionKey, retryKind: AgentApiErrorClass['kind']) => { text: string; isRequestPrompt: boolean };
+  getResumeMessage: (key: SessionKey, retryKind: AgentApiErrorClass['kind']) => { text: string; carriedRequestIds: readonly string[] };
   /** Through the startup buffer when another caller's start is still under way; a `buffered` nudge
    *  tells `onBufferedSettled` how its wait ended. */
   deliverNudge: (key: SessionKey, text: string, onBufferedSettled: BufferedPromptSettled) => Promise<PromptDelivery>;
-  trackContinuation: (key: SessionKey, options: { isCountersReset: boolean; isRequestPrompt: boolean }) => Promise<void>;
+  /** `carriedRequestIds`: the requests whose prompts the nudge carries, as named when it was built (`getResumeMessage`). */
+  trackContinuation: (key: SessionKey, options: { isCountersReset: boolean; carriedRequestIds: readonly string[] }) => Promise<void>;
   /**
    * Move the topic onto `rung` and continue its work there (`switchTopicToFallbackEntry`: it delivers its own
    * continue prompt and ends the retry). `true` when it did — the kick is then done; `false` (already on that
@@ -172,8 +173,16 @@ export async function runApiRetryKick(deps: ApiRetryKickDeps, key: SessionKey): 
     // request whose prompt never reached the agent — the wait held it (R23) — gets
     // that prompt instead (R21). Prompts held during the wait ride whichever it is.
     const resume = deps.getResumeMessage(key, entry.kind);
+    // The continuation is tracked — and a limit's counters reset — only once the nudge reached a session: a nudge a startup window drops
+    // starts no turn, and a watch tracked for it would wait for a turn that never comes (review 20 #1).
+    const trackContinuation = (): Promise<void> => deps.trackContinuation(key, {
+      isCountersReset: entry.kind === 'usageLimit',
+      carriedRequestIds: resume.carriedRequestIds,
+    });
     const delivery = await deps.deliverNudge(key, resume.text, (outcome) => {
-      if (outcome === 'dropped') {
+      if (outcome === 'replayed') {
+        trackContinuation().catch((e) => console.error(`[apiRetry] tracking the replayed nudge's turn in ${k} failed:`, e instanceof Error ? e.message : e));
+      } else {
         console.warn(`[apiRetry] nudge for ${k} dropped: the session did not come up; the retry is spent and an open request is left to the wake-up engine`);
       }
       clearSavedRetryIfLive();
@@ -190,10 +199,8 @@ export async function runApiRetryKick(deps: ApiRetryKickDeps, key: SessionKey): 
     // rest (R6). A conversation-tail retry follows its "continuing…" notice within seconds: a second line would only repeat it.
     if (checkIsTelegramKey(key) && entry.kind !== 'conversationTail') deps.postTopicNotice(key, { kind: 'resuming', retryKind: entry.kind });
     isNudgeBuffered = delivery === 'buffered';
-    await deps.trackContinuation(key, {
-      isCountersReset: entry.kind === 'usageLimit',
-      isRequestPrompt: resume.isRequestPrompt,
-    });
+    // A buffered nudge is tracked by its settle, at its replay.
+    if (!isNudgeBuffered) await trackContinuation();
   } catch (e) {
     console.error('[apiRetry] kick failed:', e instanceof Error ? e.message : e);
   } finally {

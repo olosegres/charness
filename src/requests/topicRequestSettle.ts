@@ -8,14 +8,19 @@ import type { LatePromptOutcome } from '../utils/promptDelivery';
  * never started. A module of its own, over ports, so both outcomes are tested for real; `bot.ts` wires the engine and the ledger.
  */
 
-/** The part of a request's opening the settle needs: its id, `null` when no request was opened (a slash command, requests off). */
+/**
+ * The part of a request's opening the settle needs: its id, `null` when no request was opened (a slash command, requests off).
+ * `isScheduledRun` — a scheduler fire opened it (the scheduler's request): its turn is that fire's scheduled run, said by the forward
+ * that started it — the wake-up rules never read a turn's kind from the request (`src/requests/README.md` § Scheduled runs).
+ */
 export interface TopicRequestRef {
   requestId: string | null;
+  isScheduledRun?: boolean;
 }
 
 export interface TopicRequestSettlePorts {
-  /** The wake-up engine starts watching the turn the request's prompt began (`trackForwardedTurn`, as a request prompt). */
-  trackTurn: (key: SessionKey, requestId: string) => Promise<void>;
+  /** The wake-up engine starts watching the turn the request's prompt began (`trackForwardedTurn`, as a request prompt — a scheduled run's too with `isScheduledRun`). */
+  trackTurn: (key: SessionKey, requestId: string, options: { isScheduledRun: boolean }) => Promise<void>;
   /** The ledger closes the request as cancelled (`closeRequest(id, 'cancelled')`). */
   cancelRequest: (requestId: string) => Promise<void>;
   warn: (message: string) => void;
@@ -23,11 +28,10 @@ export interface TopicRequestSettlePorts {
 
 export interface TopicRequestSettler {
   /**
-   * The request's prompt was handed to the prompt path (forwarded, or buffered behind a session start — the turn probe holds a
-   * starting session, so tracking now is right either way). Fire and forget: a failed track is logged, never thrown.
+   * The prompt came back from the prompt path with `delivery`: track its turn, or close the request when no session took it. A prompt
+   * forwarded, or buffered behind a session start (the turn probe holds a starting session, so tracking now is right either way), has its
+   * turn tracked fire and forget: a failed track is logged, never thrown.
    */
-  trackTurn: (key: SessionKey, opening: TopicRequestRef) => void;
-  /** The prompt came back from the prompt path with `delivery`: track its turn, or close the request when no session took it. */
   settleAfterDelivery: (key: SessionKey, opening: TopicRequestRef, delivery: LatePromptOutcome) => Promise<void>;
 }
 
@@ -35,7 +39,7 @@ export function createTopicRequestSettler(ports: TopicRequestSettlePorts): Topic
   const trackTurn = (key: SessionKey, opening: TopicRequestRef): void => {
     const { requestId } = opening;
     if (requestId === null) return;
-    ports.trackTurn(key, requestId).catch((error) =>
+    ports.trackTurn(key, requestId, { isScheduledRun: opening.isScheduledRun === true }).catch((error) =>
       ports.warn(`[requests] tracking the turn of ${requestId} failed: ${error instanceof Error ? error.message : error}`),
     );
   };
@@ -52,5 +56,5 @@ export function createTopicRequestSettler(ports: TopicRequestSettlePorts): Topic
     );
   };
 
-  return { trackTurn, settleAfterDelivery };
+  return { settleAfterDelivery };
 }

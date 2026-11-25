@@ -294,6 +294,8 @@ export class FakeTelegram {
   private readonly callFailures: Array<{ method: string; description: string; errorCode: number; isMatch: (payload: Record<string, unknown>) => boolean }> = [];
   /** The `file_path` of every file the bot downloaded from the file endpoint, in order. */
   readonly downloadedFilePaths: string[] = [];
+  /** While {@link holdFileDownloads} holds them: the downloads asked for meanwhile, each served when the hold is released. */
+  private heldFileDownloads: Array<() => void> | null = null;
   /** The methods of the requests {@link dropNextReusedConnectionRequest} still has to hang up on, in the order asked for. */
   private readonly pendingConnectionDrops: string[] = [];
   /** The method of every request the fake hung up on instead of processing, in order: none of them is in {@link calls}. */
@@ -490,6 +492,25 @@ export class FakeTelegram {
       : { photo: [{ file_id: fileId, file_unique_id: `unique-${fileId}`, width: 90, height: 60, file_size: file.bytes.length }] };
     this.pushUpdate({ message: { ...wireMessage, ...fileFields, ...(options.caption ? { caption: options.caption } : {}), ...(options.mediaGroupId ? { media_group_id: options.mediaGroupId } : {}), ...this.getContext(options, threadId) } });
     return message.message_id;
+  }
+
+  /**
+   * @description Hold every file download from now on: the bot's request to the file endpoint gets no answer until the returned
+   * release runs, which serves the held ones at once. A flow makes the download the long await between a file's arrival and its
+   * prompt (`getHeldFileDownloadCount` says the bot is in it).
+   */
+  holdFileDownloads(): () => void {
+    const held: Array<() => void> = [];
+    this.heldFileDownloads = held;
+    return () => {
+      if (this.heldFileDownloads === held) this.heldFileDownloads = null;
+      for (const serve of held.splice(0)) serve();
+    };
+  }
+
+  /** @description How many file downloads wait for the release of {@link holdFileDownloads}. */
+  getHeldFileDownloadCount(): number {
+    return this.heldFileDownloads?.length ?? 0;
   }
 
   /** @description `from` (the operator by default) taps the button carrying `callbackData` on the bot's message `messageId`. */
@@ -752,9 +773,13 @@ export class FakeTelegram {
       response.end(JSON.stringify({ ok: false, error_code: 404, description: 'Not Found' }));
       return true;
     }
-    this.downloadedFilePaths.push(file.filePath);
-    response.writeHead(200, { 'content-type': 'audio/ogg', 'content-length': file.bytes.length });
-    response.end(file.bytes);
+    const serve = (): void => {
+      this.downloadedFilePaths.push(file.filePath);
+      response.writeHead(200, { 'content-type': 'audio/ogg', 'content-length': file.bytes.length });
+      response.end(file.bytes);
+    };
+    if (this.heldFileDownloads) this.heldFileDownloads.push(serve);
+    else serve();
     return true;
   }
 

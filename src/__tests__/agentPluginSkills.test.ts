@@ -103,9 +103,34 @@ describe('agent-plugin', () => {
     assert.match(flat, /One check may cover several runs of one step .* The `watch-armed` marker of the third test goes in the first of them\./, 'a watch over several runs keeps one marker');
     assert.match(flat, /running 2 h 30 min without a report → look at what it is doing now and step in, or, when it is fine, `touch` the marker and KEEP this check \(do not cancel it\)/);
     assert.match(flat, /Then cancel the check \(`schedule_list` → `schedule_cancel`\) — unless you kept it for a worker that is fine/, 'the cancel step does not contradict keeping the check');
-    assert.match(flat, /checking the same signals \(the PID, the run directory changing, 2 h 30 min since you started waiting without a report\)/, 'a Jira conversation has no bot check behind the third signal: it polls it itself');
     assert.doesNotMatch(flat, /checking the same two signals/);
     assert.doesNotMatch(flat, /etimes/, 'a macOS ps may lack it: the clock is the marker');
+  });
+
+  test('charness-orchestration, in a Jira issue: the same watch tools, nothing posted on the issue, answer progress and END the turn, answer a wake only with a result, a finished request\'s jobs are cancelled — and no polling', () => {
+    const flat = readSkill('charness-orchestration').replace(/\s+/g, ' ');
+    const section = flat.slice(flat.indexOf('## A tracker conversation (Jira)'), flat.indexOf('## Closing a task that ran on a runner'));
+    assert.ok(section.length > 0, 'the section exists');
+    assert.match(section, /The same tools and the same watch recipe as in a topic/);
+    assert.match(section, /the bot posts NOTHING there for a scheduled run, a check or a status/);
+    assert.match(section, /answer `answer_request` kind `progress` .*, then END your turn\. Do not poll the worker\./);
+    assert.match(section, /it resumes you in THIS issue, behind a header that names the request open then/);
+    assert.match(section, /A new comment on the issue reaches you at the bot's next poll of the issue, asleep or not; while a turn runs it waits up to 10 minutes for it to end, then joins it\./);
+    assert.match(section, /Answer the request the header names \(`answer_request` with that id\) only with a result the requester needs/);
+    assert.match(section, /A wake you handled with nothing to report ends silently: no comment, no "still waiting"\./);
+    assert.match(section, /The exception is a header that says the request still owes the requester an answer\s+\(a comment the bot lost track of\): answer it in this turn\./);
+    assert.match(section, /A header that says `no request is open`: the request you armed the job under is finished\. An answer to it still becomes a comment but hands nothing back/);
+    assert.match(section, /cancel the job \(`schedule_cancel`\) if it served only that request/);
+    assert.match(section, /A watchdog meant to outlive the work \(a health check, a daily job\) is armed and then the request is answered `final`: the job keeps running and its fires say `no request is open`, or ride\s+the request open at the time \(a later hand-over, a mention: answer that request only with what its requester must know, not about the\s+job\)\./);
+    assert.match(section, /task-agent slot taken for as long as the job lives/);
+    assert.match(section, /its path in `answer_request`'s `files`/, 'the file note stays');
+    assert.doesNotMatch(flat, /There are no `schedule_\*` tools|nothing will wake you|Do not end your turn while a worker runs|foreground polls/, 'the polling paragraph is gone');
+  });
+
+  test('charness-orchestration lets a scheduled run\'s header that asks for an answer only with a result go unanswered — a woken agent with nothing to report ends silently, in a topic too', () => {
+    const flat = readSkill('charness-orchestration').replace(/\s+/g, ' ');
+    const section = flat.slice(flat.indexOf('## Talking to the user'), flat.indexOf('## ', flat.indexOf('## Talking to the user') + 3));
+    assert.match(section, /A header that says to answer only when you have a result \(a scheduled run\) may be left unanswered: with nothing to report, end the turn silently\./);
   });
 
   test('charness-orchestration cleans the runner copy when the LAST open task of a project folder is done — in that folder, before the folder goes, before the report — and leaves the copies of other tasks alone', () => {

@@ -28,7 +28,7 @@ const closeCall = /closeSetAsideQuestionsInBackground\(\s*key\s*\)/;
 test('the conversations that end or are replaced close their set-aside questions', () => {
   assert.match(getFunctionBody('releaseConversationIds'), closeCall, '/new, /quit, /quitall, leaving the folder');
   assert.match(getFunctionBody('switchThreadAdapter'), closeCall, 'another backend');
-  assert.match(getFunctionBody('resumeSessionByIndex'), closeCall, 'another conversation');
+  assert.match(getFunctionBody('resumePickedSession'), closeCall, 'another conversation');
   assert.match(getFunctionBody('closeSetAsideQuestionsInBackground'), /closeSetAsideQuestions\(\s*key\s*\)\.catch\(/, 'not awaited, a failure is logged');
 });
 
@@ -62,9 +62,10 @@ test('the buttons of a set-aside question are registered once, beside the compac
 
 test('a late answer is delivered without the free-text route of a waiting question: it cancels none and aborts no turn', () => {
   const late = getFunctionBody('deliverLateAnswerPrompt');
-  assert.match(late, /deliverPromptByState\(\s*key\s*,\s*getThreadAdapter\(key\)\s*,\s*text\s*,\s*null\s*\)/, 'no request opened for it, and no message context: a member\'s attribution travels inside the answer');
+  assert.match(late, /deliverPromptByState\(\s*key\s*,\s*text\s*,\s*null\s*\)/, 'no request opened for it, and no message context: a member\'s attribution travels inside the answer');
   assert.doesNotMatch(late, /cancelPendingQuestionAndForward|checkIsWedgedOnQuestion|pendingQuestions/);
   assert.doesNotMatch(getFunctionBody('deliverPromptByState'), /cancelPendingQuestionAndForward|checkIsWedgedOnQuestion/);
+  assert.doesNotMatch(getFunctionBody('deliverPersonPromptAtWrite'), /cancelPendingQuestionAndForward|checkIsWedgedOnQuestion|pendingQuestions/);
 });
 
 test('a late answer cancels an armed usage-limit wait first, like typed text — before anything is written to the session', () => {
@@ -87,10 +88,10 @@ test('a VOICE reply to a set-aside question is a late answer: its transcript goe
 test('a backend switch closes the set-aside questions only when the operator chose it: an AUTOMATIC usage-limit fallback keeps the conversation, parked and bridged', () => {
   assert.match(getFunctionBody('switchThreadAdapter'), /if\s*\(options\.isConversationKept\s*!==\s*true\)\s*closeSetAsideQuestionsInBackground\(key\)/);
   assert.match(getFunctionBody('moveTopicToOtherBackend'), /switchThreadAdapter\([^;]*,\s*options\)/, 'the flag is handed on');
-  assert.match(getFunctionBody('switchTopicToFallbackEntry'), /moveTopicToOtherBackend\([^;]*\{\s*isConversationKept:\s*options\.isAutomatic\s*===\s*true\s*\}\)/);
+  assert.match(getFunctionBody('switchTopicToFallbackEntryNow'), /moveTopicToOtherBackend\([^;]*\{\s*isConversationKept:\s*options\.isAutomatic\s*===\s*true,\s*promptsReachedOrHeld\s*\}\)/);
   // The automatic callers say so …
   assert.match(botSource, /resumeOnRung:[^}]*switchTopicToFallbackEntry\(key,\s*from,\s*rung,\s*\{\s*isAnnounced:\s*true,\s*isAutomatic:\s*true\s*\}\)/s, 'the wait that ends on another rung');
-  assert.equal(botSource.match(/switchTopicToFallbackEntry\(key,\s*plan\.from,\s*to,\s*\{\s*isAnnounced:\s*true,\s*isAutomatic:\s*true\s*\}\)/g)?.length, 2, 'the two auto-switch paths');
+  assert.equal(botSource.match(/switchTopicToFallbackEntry\(key,\s*plan\.from,\s*to,\s*\{\s*isAnnounced:\s*true,\s*isAutomatic:\s*true(?:,\s*ending)?\s*\}\)/g)?.length, 2, 'the two auto-switch paths (a used-up balance\'s hands its hold on the conversation along)');
   assert.match(getFunctionBody('handleClaudeAuthRefusal'), /switchTopicToFallbackEntry\(key,\s*from,\s*to,\s*\{\s*isAnnounced:\s*true,\s*isAutomatic:\s*true,\s*reason:\s*'signIn'\s*\}\)/, 'the move off an account the CLI refused');
   // … and an operator's own move (a pick, a tapped offer, `/claude` · `/opencode`) does not.
   assert.equal(botSource.match(/await switchTopicToFallbackEntry\([^)]*isAutomatic/g)?.length, 4, 'four automatic callers, no more');

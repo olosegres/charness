@@ -45,6 +45,43 @@ constants in the code; this README keeps what the code cannot say.
   the wrong timezone shows at once; a cron nothing phrases shows only the stamp, a one-shot only its own time. The command and
   the status rhythm are in `schedule_list`, for the agent.
 
+## A topic's fires and its requests (`delivery.ts` `topicRun`, `scheduledRunTarget.ts`)
+
+In a topic whose view has requests a fire meets them by the model a Jira issue uses (`../requests/README.md` § Scheduled runs): it
+never replaces a live request, it RIDES one, picked at forward time (`pickTopicRunTarget`). That is the request its job was armed
+under (or the open one that replaced it), else the scheduler's own open request, unless the bot gave up on it. The prompt then starts
+with a header naming it (`buildTopicScheduledRunHeader`: answer it only with a result the requester needs, or in this turn when it owes
+one; in the answers-only view, that only answers are seen), and the turn is watched as that request's scheduled run (`forwardRun`).
+With none to ride, the fire opens the scheduler's request (`forwardOwnRequestRun`, the request's own header, settled as its scheduled
+run). A view without requests forwards the plain prompt. The topic still sees the announcement, the check alert and the status line.
+A run held over a usage-limit wait keeps the header of its build, with the tracker's limitation below.
+
+## A tracker conversation's fires (Jira; `delivery.ts` `trackerRun`, `scheduledRunTarget.ts`)
+
+A Jira comment always notifies the requester and the issue's watchers — there is no silent one — so the scheduler posts NOTHING on
+an issue: no announcement, no «back to normal» line, no status line, no check alert (the delivery reads
+`describeConversation` once per fire; a topic is delivered as before). A fire only wakes the agent, resuming the issue's
+sleeping session by id (a fresh one starts on the connector's own backend, not the job's adapter snapshot), and opens NO request
+of its own: the only party on an issue is the requester whose hand-over request owes the answer and the hand-back, and a request of
+the scheduler's would owe an answer nobody asked for.
+
+- **The request it rides** (`pickTrackerRunTarget`, read at forward time — the post may wait behind a running turn): the one the
+  job was armed under, or the open request that replaced it (`supersededRequestIds`); else the newest open request; else none.
+- **The prompt** starts with a header (`buildTrackerScheduledRunHeader`): the job, the issue and its link, and either the request
+  it rides («answer through `answer_request` only when you have a result the requester needs; nothing of this run is shown on the
+  issue» — or, when the request still owes the requester an answer, «answer it in this turn») or «no request is open», naming the request the job was armed under as finished (an answer to it still becomes a
+  comment and hands nothing back; cancel the job if it served only that request). Then the usual `[Scheduled run]` marker and prompt,
+  or the `[Scheduled check "<name>" failed]` block.
+- **The turn** the fire starts is watched as that request's turn, marked a scheduled run (`trackForwardedTurn`): its silent end is
+  no silence while the request owes nobody an answer, and an ordinary silent turn when it does (`requests/README.md` § Wake-ups, rows 11 and 13). A fire never counts against the wake-up cap.
+- **Known limitation: a run held over a usage-limit wait.** Its header is built when the fire is held (`holdForLimitResume`) and is
+  replayed by the limit-resume path, not by `forwardRun`: after a long wait the header may name a request that has closed since, and the
+  replayed turn is not tracked as that request's scheduled run, so a silent end is judged by the ordinary rules. Rare; rebuilding the
+  header at replay time would need the hold to carry a builder, which is not worth it for this case.
+- **Paused for a folder.** A fire that finds no usable folder pauses the job (`unbound`) with a log line; the next request of the
+  issue whose bind step finds the folder usable resumes it (`resumeSchedulesPausedForUnbound`, the unit `/bind` uses in a topic:
+  next run from now, a passed one-shot dropped), again with a log line.
+
 ## Restart and time
 
 - Timers re-arm from `state.json` at boot; a run missed while the bot was down fires ONE catch-up annotated
@@ -92,9 +129,21 @@ constants in the code; this README keeps what the code cannot say.
   key(s) [...]`) in `agent-diag.log`. A client that fails every call because of a key of its own is then visible. The digest hashes only the shape's keys, so closing the
   objects did not move it. `schedulerMcpStrictInput.test.ts` walks every tool a session gets over the real server.
 - Bearer tokens are HMAC-signed and scoped `thread:` (Claude, one conversation) or `dir:` (OpenCode, every
-  thread bound to the folder). `getSchedulerScopePlatform` reads the scope's platform: only a Telegram session
-  gets `schedule_*`, `send_file_to_user` and `send_messages_to_user`; any other platform sees just
-  `answer_request` + `compact_conversation`, and `buildMcpServerInstructions` names no Telegram tool. A Jira
+  thread bound to the folder). `getSchedulerScopePlatform` reads the scope's platform: a Telegram AND a Jira session get
+  `schedule_*` (`checkIsSchedulingPlatform`), only a Telegram one `send_file_to_user` and `send_messages_to_user` (a Jira one has its
+  own `send_file_to_user`); any other platform (the `test` one, a key no codec reads) sees just
+  `answer_request` + `compact_conversation`, and `buildMcpServerInstructions` names no Telegram tool. The wording and shape of
+  the three `schedule_*` tools are per platform (`scheduleToolWording.ts`): Telegram's is the original and byte-identical to what
+  it was (a moved word moves the tool digest and reconnects every adopted process), a Jira issue's has no `threadKey` (its
+  token names the conversation) and no `isPinSilent`, speaks of «this issue's conversation», says the bot posts NOTHING on the
+  issue and that after arming a watch the agent answers `progress` and ENDS its turn; the status arguments stay accepted (one
+  recipe for both) and say no line is posted there. `schedule_create` records the request the agent is WORKING ON on the
+  job (`ScheduleRecord.requestId`, the `getArmingRequestId` port → the engine's `getArmingRequestIdOf` → `pickRequestToArmUnder`: the request
+  whose watch a forward of its own started — the scheduler's request too, when its fire started the turn — else one a conversation-wide
+  «continue» or restart wake only carried along, else the newest open one: a hand-over before a newer mention, the scheduler's request
+  passed over for any other; `requests/README.md`) in every conversation that has one — so a newer mention request of another person
+  never takes a hand-over's job, a job armed while the agent handles an alarm goes to the request that alarm rides, and a Telegram agent
+  re-arming in the turn of its watch's fire keeps the job under the operator's request (the fire rides it). A Jira
   session also gets `jira_get_attachment` — only when the Jira connector is loaded, through the
   `fetchJiraAttachment` port it supplies (the connector stays lazily loaded); the issue is the session's own
   conversation, taken from its token, never from an argument. The tool changes the Jira digest, so an adopted
@@ -153,6 +202,10 @@ constants in the code; this README keeps what the code cannot say.
   exit codes back, for a check with a `statusWorkerRunDir`), never the command and never
   a pin; a worker watch that passes again says «Worker "builder S2" is working again.», any other check «… is back to normal».
   Any other check says «🔔 Check "<name>" fired — waking the agent.» with the failure and the output tail folded under it;
+  only the FIRST failure after a pass says so and wakes the agent (`deliverCheck`: `isCheckFailing` is stored before the wake, so a
+  restart never repeats it). A wake whose post failed at its forward — a startup window dropped it, its write failed, or no session was
+  left to take it — clears the flag again, so the next failing run says so and wakes the agent once more; a wake that could not start a
+  session keeps it (`requests/README.md`, «Every forward's success value»);
   the command and the full output go to the AGENT's prompt only. The folded message (`connectors/telegram/foldedMessage.ts`)
   carries its plain-text twin: if Telegram refuses the markup, `replyToThread` resends THOSE words (`plainFallbackText`), never
   the tags shown literally — every `parse_mode: 'HTML'` caller of `replyToThread` passes its twin (the rendered agent chunks, the

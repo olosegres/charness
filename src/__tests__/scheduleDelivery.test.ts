@@ -699,6 +699,25 @@ test('check: a failed announce (null id) still wakes the agent', async () => {
   assert.deepEqual(callLog.map((entry) => entry.step), ['runCheck', 'setCheckFailing', 'announce', 'ensureSession', 'forward']);
 });
 
+test('check: a failure wake whose post failed at its forward (a startup window dropped it, its write failed) clears the flag again, so the next failing run wakes the agent (review 20 #1)', async () => {
+  const { deps, callLog } = createHarness({ checkResult: failedRun, forwardThrows: true });
+  const outcome = await createScheduleDelivery(deps)(makeCheck(), onTime);
+
+  assert.equal(outcome.status, 'failed');
+  assert.deepEqual(callLog.filter((entry) => entry.step === 'setCheckFailing').map((entry) => entry.detail), [
+    { jobId: 'api-health-abc123', isFailing: true },
+    { jobId: 'api-health-abc123', isFailing: false },
+  ], 'stored before the wake, cleared once it is known not to have reached the agent');
+});
+
+test('check: a failure wake whose session could not be started keeps the flag: the alert stands, and the next runs would only repeat it', async () => {
+  const { deps, callLog } = createHarness({ checkResult: failedRun, ensureResult: { ok: false, reason: 'start-failed' } });
+  const outcome = await createScheduleDelivery(deps)(makeCheck(), onTime);
+
+  assert.equal(outcome.status, 'failed');
+  assert.deepEqual(callLog.filter((entry) => entry.step === 'setCheckFailing').map((entry) => entry.detail), [{ jobId: 'api-health-abc123', isFailing: true }]);
+});
+
 test('check: a failure while already failing stays silent', async () => {
   const { deps, callLog } = createHarness({ checkResult: failedRun });
   const outcome = await createScheduleDelivery(deps)(makeCheck({ isCheckFailing: true }), onTime);

@@ -38,7 +38,8 @@ test('every spawn reads its account through the launch pick, which records a mov
 });
 
 test('an `auth` error of a json-stream conversation is the move; every other backend keeps the pinned notice', () => {
-  assert.match(getFunctionBody('handleApiError'), /if \(action\.action === 'surface'\) \{\s*if \(getThreadAdapter\(key\) instanceof ClaudeJsonStreamAdapter\) void handleClaudeAuthRefusal\(key, cls\);\s*else void surfaceLoggedOutNotice\(key\);/);
+  // The turn end stays held until the move, the wait or the notice has landed (review 16 #1: `forwardPromptWiring.test.ts`).
+  assert.match(getFunctionBody('handleApiError'), /if \(action\.action === 'surface'\) \{\s*holdTurnEndWhileHandlingApiError\(key, getThreadAdapter\(key\) instanceof ClaudeJsonStreamAdapter \? handleClaudeAuthRefusal\(key, cls\) : surfaceLoggedOutNotice\(key\)\);/);
   const move = getFunctionBody('handleClaudeAuthRefusal');
   assert.match(move, /planClaudeAuthRefusalMove\(/);
   assertOrder(move, 'state.setClaudeProfileAuthRefusal(from.profile, refusal)', 'switchTopicToFallbackEntry(', 'the account is marked before the move reads the accounts');
