@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 4.3.0 — 2026-11-25
+
 **You now choose the model and effort of the workers your agents launch: `/workers` sets them per role — builder, reviewer, planner and more — for the whole bot, Claude or OpenCode.**
 Before, the models were written into the bot's own skills (Opus for every worker) and could not be changed without editing them. Now `/workers` (also a row of `/bot_skills`) lists six roles with their values; a tap picks a Claude model and effort, or an OpenCode provider, model and variant. It is the bot's default: a model you name in the conversation, a plan or your own skills still wins. Agents ask for it before every launch, so a change reaches the next worker; a running one keeps its own. The screen warns when an OpenCode role's provider is not connected. The values are kept in `settings.json` `workerRoles`; `charness claude-profiles --role <role>` prints the same.
 
