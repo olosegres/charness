@@ -1,5 +1,5 @@
 /**
- * @description `charness claude-profiles [--best] [--model <name>] [--current <name> [--stopped-by-limit] [--last-run-ended-at <ISO>]] [--json]` — the
+ * @description `charness claude-profiles [--best] [--model <name> | --role <role>] [--current <name> [--stopped-by-limit] [--last-run-ended-at <ISO>]] [--json]` — the
  * command-line twin of the `claude_profiles` MCP tool, for a worker that has no MCP (a shell script, a child started by
  * hand): which Claude account profile a process should run on — one the `/limits_autoswitch` list holds; a new one goes to
  * an API-credit account of the list first, then to the account whose weekly limit resets soonest. It reads the bot's cache off `DATA_DIR/state.json` (`utils/claudeUsage.ts`; the bot polls every profile's usage
@@ -13,6 +13,10 @@
  *                  the `hand over: …` line — so a script that resumes the old session under that directory (`set -e`, an
  *                  `|| …`, a status check) is stopped instead of dragging the worker onto another account
  *   --model <name> the model the child will run (`fable` → the Fable weekly window counts besides the shared ones)
+ *   --role <role>  the worker's role, when nothing it follows names its model: the answer leads with the operator's default CLI,
+ *                  model and effort for it (`/workers`, `settings.json` `workerRoles`; `worker` in `--json`). It opens no connection,
+ *                  so it never calls an OpenCode role unavailable; `--best` with an OpenCode role exits {@link openCodeRoleBestExitCode}
+ *                  (there is no Claude account to pick). Not with `--model`.
  *   --current <name>  the profile the session being RESUMED last ran on: it stays there while it can run and is warm (see `--last-run-ended-at`)
  *   --stopped-by-limit  that session broke off on a usage limit: leave `--current` out of the answer
  *   --last-run-ended-at <ISO>  when that worker's last run ended (the last write of its log; absent = cold): the answer then says
@@ -41,6 +45,17 @@ import { formatUsd } from '../utils/claudeApiSpend';
 import { readClaudeApiCreditAnchors } from '../utils/claudeApiCredit';
 import { claudeAuthRefusalWords } from '../utils/claudeAuthRefusal';
 import { buildClaudeProfilesCreditReport, buildClaudeProfileUsageViews } from '../utils/claudeProfileUsageViews';
+import { createWorkerRolesSettingsReader, getInstanceSettingsPath } from '../instanceSettings';
+import {
+  buildWorkerRoleReport,
+  checkIsWorkerRoleId,
+  describeWorkerRole,
+  describeWorkerRoleVerdict,
+  getClaudeWorkerUnavailability,
+  resolveWorkerRole,
+  workerRoleIds,
+  type WorkerRoleId,
+} from '../utils/workerRoles';
 import {
   claudeChainExclusionWords,
   describeClaudeChainExclusions,
@@ -56,6 +71,8 @@ export interface ClaudeProfilesCliArgs {
   isBest: boolean;
   isJson: boolean;
   model: string | null;
+  /** The worker's role (`--role`); exclusive with `model`. */
+  role: WorkerRoleId | null;
   currentProfile: string | null;
   isStoppedByLimit: boolean;
   /** When the resumed worker's last run ended (epoch ms); `null` = not given. */
@@ -68,10 +85,13 @@ export interface ClaudeProfilesCliArgs {
  */
 export const handOverExitCode = 3;
 
+/** The exit code of `--best --role <role>` when the role's default is an OpenCode model: there is no Claude account to pick. */
+export const openCodeRoleBestExitCode = 4;
+
 /** The length of `YYYY-MM-DD`, the day part of an ISO instant. */
 const isoDayLength = 10;
 
-const usageLine = 'Usage: charness claude-profiles [--best] [--model <name>] [--current <name> [--stopped-by-limit] [--last-run-ended-at <ISO>]] [--json]\n'
+const usageLine = 'Usage: charness claude-profiles [--best] [--model <name> | --role <role>] [--current <name> [--stopped-by-limit] [--last-run-ended-at <ISO>]] [--json]\n'
   + '       charness claude-profiles credit <profile> <remainingUsd> [--of <grantUsd>] [--expires YYYY-MM-DD] | <profile> --clear';
 
 /** The first argument that turns the command into the one that gives the bot a profile's API credit figure. */
@@ -79,12 +99,13 @@ const creditSubcommand = 'credit';
 
 /** Parse the subcommand's flags; `null` with a message for anything unknown. */
 export function parseClaudeProfilesCliArgs(argv: readonly string[]): { ok: true; args: ClaudeProfilesCliArgs } | { ok: false; error: string } {
-  const args: ClaudeProfilesCliArgs = { isBest: false, isJson: false, model: null, currentProfile: null, isStoppedByLimit: false, lastRunEndedAtMs: null };
+  const args: ClaudeProfilesCliArgs = { isBest: false, isJson: false, model: null, role: null, currentProfile: null, isStoppedByLimit: false, lastRunEndedAtMs: null };
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
     const model = readFlagValue(argv, i, '--model');
     const current = readFlagValue(argv, i, '--current');
     const lastRun = readFlagValue(argv, i, '--last-run-ended-at');
+    const role = readFlagValue(argv, i, '--role');
     if (arg === '--best') args.isBest = true;
     else if (arg === '--json') args.isJson = true;
     else if (arg === '--stopped-by-limit') args.isStoppedByLimit = true;
@@ -92,6 +113,10 @@ export function parseClaudeProfilesCliArgs(argv: readonly string[]): { ok: true;
       if (model.value === undefined || model.value.trim() === '') return { ok: false, error: '--model needs a value' };
       args.model = model.value;
       i += model.consumed;
+    } else if (role !== null) {
+      if (role.value === undefined || !checkIsWorkerRoleId(role.value)) return { ok: false, error: `--role needs one of: ${workerRoleIds.join(', ')}` };
+      args.role = role.value;
+      i += role.consumed;
     } else if (current !== null) {
       if (current.value === undefined || current.value.trim() === '') return { ok: false, error: '--current needs a profile name' };
       args.currentProfile = current.value;
@@ -103,6 +128,7 @@ export function parseClaudeProfilesCliArgs(argv: readonly string[]): { ok: true;
       i += lastRun.consumed;
     } else return { ok: false, error: `unknown option: ${arg}` };
   }
+  if (args.role !== null && args.model !== null) return { ok: false, error: '--model or --role, not both: --model when the user or a general delegate skill names the worker\'s model, --role when nothing does' };
   if (args.isStoppedByLimit && args.currentProfile === null) return { ok: false, error: '--stopped-by-limit needs --current <name>' };
   if (args.lastRunEndedAtMs !== null && args.currentProfile === null) return { ok: false, error: '--last-run-ended-at needs --current <name>' };
   return { ok: true, args };
@@ -176,18 +202,32 @@ export async function runClaudeProfilesCli(
   const nowMs = (io.now ?? Date.now)();
   const stateFile = readStateFileObject(dataDir);
   const records = getClaudeProfileRecordsFromState(stateFile);
-  const report = buildClaudeProfilesCreditReport(buildClaudeProfileUsageViews({ dataDir, records, creditAnchors: readClaudeApiCreditAnchors(dataDir) }), args.model, nowMs, {
+  // A role reads the operator's default from settings.json (beside the env file just loaded); a broken file says so on stderr.
+  const workerRoles = args.role === null ? {} : createWorkerRolesSettingsReader(() => getInstanceSettingsPath(), (line) => stderr(`${line}\n`))();
+  const roleValue = args.role === null ? null : resolveWorkerRole(workerRoles, args.role).value;
+  const pickModel = roleValue === null ? args.model : roleValue.cli === 'claude' ? roleValue.model : null;
+  const accountReport = buildClaudeProfilesCreditReport(buildClaudeProfileUsageViews({ dataDir, records, creditAnchors: readClaudeApiCreditAnchors(dataDir) }), pickModel, nowMs, {
     currentProfile: args.currentProfile,
     isStoppedByLimit: args.isStoppedByLimit,
     lastRunEndedAtMs: args.lastRunEndedAtMs,
     chainScope: getClaudeLaunchChainScope(normaliseFallbackChain(stateFile.fallbackChain)),
   });
+  // No OpenCode catalog here (no connection): an OpenCode role is never called unavailable by the CLI.
+  const worker = args.role === null || roleValue === null
+    ? null
+    : buildWorkerRoleReport(workerRoles, args.role, roleValue.cli === 'claude' ? getClaudeWorkerUnavailability(accountReport.profiles) : null);
+  const report = worker === null ? accountReport : { ...accountReport, worker };
   // A worker is started under whichever folder this names (`CLAUDE_CONFIG_DIR="$(charness claude-profiles --best)"`): every folder it
   // lists is put right first — the layout only, anything moved aside is said on stderr (`utils/claudeProfiles.ts`).
   for (const entry of report.profiles) repairClaudeProfileFolderForLaunch({ dataDir, configDir: entry.configDir, log: (line) => stderr(`${line}\n`) });
   const outcome = describeClaudeLaunchOutcome(report, args.currentProfile);
   const exclusions = describeClaudeChainExclusions(report);
   const handOver = describeClaudeResumeHandOver(report, args.currentProfile);
+  if (args.isBest && worker?.cli === 'opencode') {
+    stderr(`${describeWorkerRole(worker)} — no Claude account to pick\n`);
+    if (args.isJson) stdout(`${JSON.stringify(report, null, 2)}\n`);
+    return openCodeRoleBestExitCode;
+  }
   if (args.isJson) {
     stdout(`${JSON.stringify(report, null, 2)}\n`);
     if (!args.isBest) return 0;
@@ -209,7 +249,7 @@ export async function runClaudeProfilesCli(
   // A hand-over IS the verdict: the `recommended` line would name the old worker's own account (the launch rule's warm pick).
   const pickedName = handOver === null ? undefined : report.resume?.profile;
   stdout(`${report.profiles.map((entry) => formatClaudeProfileCliLine(entry, nowMs, pickedName)).join('\n')}\n`);
-  if (handOver === null) stdout(`recommended for ${args.model ?? 'any model'}: ${report.recommended ?? 'none'} (${outcome})\n`);
-  else stdout(`${handOver}\n`);
+  const accountLine = handOver ?? `recommended for ${pickModel ?? 'any model'}: ${report.recommended ?? 'none'} (${outcome})`;
+  stdout(`${worker === null ? accountLine : describeWorkerRoleVerdict(worker, accountLine)}\n`);
   return 0;
 }

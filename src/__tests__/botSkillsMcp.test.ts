@@ -16,6 +16,7 @@ import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/
 import { keyToString, type SessionKey } from '../sessionKey';
 import {
   buildMcpServerInstructions,
+  claudeCodeInstructionsMaxLength,
   buildSchedulerMcpToken,
   createSchedulerMcpServer,
   getBotMcpToolDigest,
@@ -149,10 +150,14 @@ describe('the instructions built for a platform', () => {
     assert.match(withoutSkills, /claude_profiles/);
   });
 
-  it('the claude_profiles bullet — present with the skills on and off — says what an `[Accounts …]` note means: the limits moved, ask again before the next launch', () => {
+  it('the claude_profiles bullet — present with the skills on and off — names the worker\'s model or its role, says what an `[Accounts …]` note means, and every text stays inside Claude Code\'s cap', () => {
     for (const isBotSkillsEnabled of [true, false]) {
       for (const platform of ['telegram', 'jira', null] as const) {
-        assert.ok(buildMcpServerInstructions(platform, offered, isBotSkillsEnabled).includes('An `[Accounts …]` note means the limits moved: ask again before your next launch. More in the tool description (resuming, `recommended: null`).'), `${platform ?? 'neutral'} ${isBotSkillsEnabled ? 'on' : 'off'}`);
+        const instructions = buildMcpServerInstructions(platform, offered, isBotSkillsEnabled);
+        const label = `${platform ?? 'neutral'} ${isBotSkillsEnabled ? 'on' : 'off'}`;
+        assert.ok(instructions.includes('• Before you start or resume a child worker → claude_profiles with its model, or its role when nothing you follow names one;'), label);
+        assert.ok(instructions.includes('An `[Accounts …]` note means the limits moved: ask again before your next launch. More in the tool description.'), label);
+        assert.ok(instructions.length <= claudeCodeInstructionsMaxLength, `${label}: ${instructions.length}`);
       }
     }
   });

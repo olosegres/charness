@@ -7,7 +7,8 @@ import assert from 'node:assert/strict';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { handOverExitCode, parseClaudeProfilesCliArgs, runClaudeProfilesCli } from '../cli/claudeProfiles';
+import { handOverExitCode, openCodeRoleBestExitCode, parseClaudeProfilesCliArgs, runClaudeProfilesCli } from '../cli/claudeProfiles';
+import { resetInstanceSettingsCache } from '../instanceSettings';
 import { writeClaudeApiCreditAnchor } from '../utils/claudeApiCredit';
 
 const hourMs = 3_600_000;
@@ -123,5 +124,58 @@ describe('runClaudeProfilesCli', () => {
     assert.equal(resumed.stdout, `${path.join(dataDir, 'claude-profiles', 'work')}\n`);
     assert.equal(resumed.code, 0);
     assert.equal(resumed.stderr.split('\n').filter((line) => line.startsWith('hand over')).length, 0);
+  });
+
+  it('--role: the line and `worker` of the operator\'s default from settings.json (a Fable role counts the Fable window), --best on an OpenCode role exits 4, and --role with --model or an unknown role is refused', async () => {
+    assert.deepEqual(parseClaudeProfilesCliArgs(['--role', 'planner']), { ok: true, args: { isBest: false, isJson: false, model: null, role: 'planner', currentProfile: null, isStoppedByLimit: false, lastRunEndedAtMs: null } });
+    assert.deepEqual(parseClaudeProfilesCliArgs(['--role', 'coder']), { ok: false, error: '--role needs one of: builder, storageBuilder, investigator, reviewer, miniReviewer, planner' });
+    assert.deepEqual(parseClaudeProfilesCliArgs(['--role=planner', '--model', 'opus']), { ok: false, error: '--model or --role, not both: --model when the user or a general delegate skill names the worker\'s model, --role when nothing does' });
+    // settings.json lives beside the env file the CLI loads: a throwaway one in the test's own folder.
+    const previousEnvFile = process.env.ENV_FILE;
+    const envFile = path.join(dataDir, '.env');
+    fs.writeFileSync(envFile, '');
+    process.env.ENV_FILE = envFile;
+    resetInstanceSettingsCache();
+    fs.writeFileSync(path.join(dataDir, 'settings.json'), JSON.stringify({ workerRoles: {
+      builder: { cli: 'claude', model: 'fable', effort: 'high' },
+      reviewer: { cli: 'opencode', model: 'openai/gpt-6-astra', effort: 'medium' },
+    } }));
+    const run = async (argv: string[]): Promise<{ stdout: string; stderr: string; code: number }> => {
+      const out: string[] = [];
+      const err: string[] = [];
+      const code = await runClaudeProfilesCli(argv, { stdout: (text) => out.push(text), stderr: (text) => err.push(text) });
+      return { stdout: out.join(''), stderr: err.join(''), code };
+    };
+    try {
+      const planner = await run(['--role', 'planner']);
+      assert.equal(planner.code, 0);
+      assert.match(planner.stdout, /\nplanner: claude -p --model opus --effort xhigh — the bot's default for this role; a model the user or your general delegate skill names wins \| account: recommended for opus: work \(soonest weekly reset\)\n$/);
+      const plannerJson = JSON.parse((await run(['--role', 'planner', '--json'])).stdout) as { worker: unknown; model: string | null };
+      assert.deepEqual(plannerJson.worker, { role: 'planner', cli: 'claude', model: 'opus', effort: 'xhigh', isBuiltIn: true, unavailable: null });
+      const builderJson = JSON.parse((await run(['--role', 'builder', '--json'])).stdout) as { worker: { isBuiltIn: boolean }; model: string | null; relevantBuckets: string[] };
+      assert.equal(builderJson.worker.isBuiltIn, false);
+      assert.equal(builderJson.model, 'fable', 'a Fable role is picked as a Fable process');
+      assert.ok(builderJson.relevantBuckets.includes('weekly_scoped'), 'the Fable weekly window counts');
+      const reviewer = await run(['--role', 'reviewer']);
+      assert.match(reviewer.stdout, /\nreviewer: opencode run --model openai\/gpt-6-astra --variant medium — the bot's default for this role; [^\n]*; no Claude account needed\n$/);
+      const reviewerJson = JSON.parse((await run(['--role', 'reviewer', '--json'])).stdout) as { worker: { unavailable: string | null } };
+      assert.equal(reviewerJson.worker.unavailable, null, 'the CLI reads no catalog, so it never calls an OpenCode role unavailable');
+      const best = await run(['--best', '--role', 'reviewer']);
+      assert.equal(best.code, openCodeRoleBestExitCode);
+      assert.equal(best.stdout, '');
+      assert.match(best.stderr, /^reviewer: opencode run --model openai\/gpt-6-astra --variant medium — .* — no Claude account to pick\n$/);
+      const bestClaude = await run(['--best', '--role', 'planner']);
+      assert.deepEqual([bestClaude.code, bestClaude.stdout], [0, `${path.join(dataDir, 'claude-profiles', 'work')}\n`]);
+      // A broken file: the built-in values apply and stderr says why.
+      fs.writeFileSync(path.join(dataDir, 'settings.json'), JSON.stringify({ workerRoles: { builder: { cli: 'claude', model: 'opus', effort: 'auto' } } }));
+      resetInstanceSettingsCache();
+      const broken = await run(['--role', 'builder', '--json']);
+      assert.equal((JSON.parse(broken.stdout) as { worker: { model: string; effort: string } }).worker.effort, 'medium');
+      assert.match(broken.stderr, /workerRoles\.builder\.effort/);
+    } finally {
+      if (previousEnvFile === undefined) delete process.env.ENV_FILE;
+      else process.env.ENV_FILE = previousEnvFile;
+      resetInstanceSettingsCache();
+    }
   });
 });

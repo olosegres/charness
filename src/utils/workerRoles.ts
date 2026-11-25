@@ -146,3 +146,28 @@ export function describeWorkerRole(worker: WorkerRoleReport): string {
 
 /** The tail of an OpenCode role's line: it runs on no Claude account. */
 export const workerNoClaudeAccountNeededWords = 'no Claude account needed';
+
+/**
+ * @description The first line of a `claude_profiles` answer asked with a `role` (also the CLI's): the role's line, then — for a role
+ * that can run — the account verdict of today (Claude) or «no Claude account needed» (OpenCode). A role that cannot run here ends
+ * at its fallback: the conversation's own CLI and model need no account pick.
+ */
+export function describeWorkerRoleVerdict(worker: WorkerRoleReport, accountVerdict: string): string {
+  const head = describeWorkerRole(worker);
+  if (worker.unavailable !== null) return head;
+  return worker.cli === 'opencode' ? `${head}; ${workerNoClaudeAccountNeededWords}` : `${head} | account: ${accountVerdict}`;
+}
+
+/** @description `noClaudeAccount` when no Claude account on the host is signed in (none listed, or every one probed signed out). */
+export function getClaudeWorkerUnavailability(profiles: readonly { loggedIn: boolean | null }[]): WorkerRoleUnavailability | null {
+  return profiles.every((profile) => profile.loggedIn === false) ? 'noClaudeAccount' : null;
+}
+
+/**
+ * @description `openCodeModelMissing` when the catalog was read and does not list `model`. An unread catalog (`null`, or empty: the
+ * server answered nothing) says nothing — the bot never calls a role unavailable on a guess.
+ */
+export function getOpenCodeWorkerUnavailability(model: string, catalog: readonly string[] | null): WorkerRoleUnavailability | null {
+  if (catalog === null || catalog.length === 0) return null;
+  return catalog.includes(model) ? null : 'openCodeModelMissing';
+}

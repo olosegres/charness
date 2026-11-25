@@ -352,7 +352,7 @@ import {
 } from './utils/claudeLivenessAction';
 import { formatIsoLocalOffset } from './utils/isoTimestamp';
 import { getThreadEffortView, setInstanceDefaultEffortReader, type ThreadEffortView } from './effortLevels';
-import { createBotSkillsSettingsReader, createInstanceDefaultEffortReader, createLimitRemindersSettingsReader, createQuestionWaitSettingsReader, createRunnerHostReader, createTaskAgentsMaxConcurrentReader, createTodoSettingsReader, createTopicStatusSettingsReader, createUpdateSettingsReader, getInstanceSettingsPath, saveInstanceSettingsChange } from './instanceSettings';
+import { createBotSkillsSettingsReader, createInstanceDefaultEffortReader, createLimitRemindersSettingsReader, createQuestionWaitSettingsReader, createRunnerHostReader, createTaskAgentsMaxConcurrentReader, createTodoSettingsReader, createTopicStatusSettingsReader, createUpdateSettingsReader, createWorkerRolesSettingsReader, getInstanceSettingsPath, saveInstanceSettingsChange } from './instanceSettings';
 import { readTaskAgentLimit, type TaskAgentLimitSources } from './trackers/taskAgentLimit';
 import { TaskAgentSlots } from './trackers/taskAgentSlots';
 import { checkIsBotSkillsEnabled, createBotSkillsReader, readBotSkillsInstanceValue, setBotSkillsReader, type BotSkillsSources } from './utils/botSkills';
@@ -507,7 +507,8 @@ import { getRemoteRunCacheDir } from './remoteRun/ssh';
 import { createClaudeAccounts, type ClaudeProfileApplyOutcome } from './connectors/telegram/commands/claudeAccounts';
 import { checkIsSameClaudeConfigDir, createClaudeProfileLayout, defaultClaudeProfileName, getClaudeAuthCommandEnvironment, getProcessFailureReason, parseClaudeAuthStatus, readClaudeProfileApiKey, readDefaultClaudeProfileApiKey, readProcessErrorStdout, repairClaudeProfileFolderForLaunch, resolveClaudeProfileDir, resolveClaudeProfilesRoot, type ClaudeAuthStatus } from './utils/claudeProfiles';
 import { checkIsClaudeModelClearOfLimit, checkIsClaudeUsageExhausted, fetchClaudeUsage, readClaudeOAuthToken, type ClaudeLaunchChainScope, type ClaudeProfilesReport, type ClaudeProfileUsageView } from './utils/claudeUsage';
-import { claudeUsageOnDemandMaxAgeMs, createClaudeUsageRefresher, refreshClaudeUsageForLaunch } from './utils/claudeUsageRefresher';
+import { claudeLaunchRefreshBudgetMs, claudeUsageOnDemandMaxAgeMs, createClaudeUsageRefresher, refreshClaudeUsageForLaunch } from './utils/claudeUsageRefresher';
+import { buildWorkerRoleReport, getClaudeWorkerUnavailability, getOpenCodeWorkerUnavailability, resolveWorkerRole } from './utils/workerRoles';
 import { createClaudeProfileSync, type ClaudeProfileSyncResult } from './utils/claudeProfileSync';
 import {
   formatClaudeAccountRefusal,
@@ -1441,6 +1442,8 @@ function getTodoReminderIntervalMsNow(): number | null {
 
 /** `settings.json`'s `limitReminders` (General's interval for the accounts note), re-read when the file changes. */
 const readLimitRemindersSettings = createLimitRemindersSettingsReader(() => getInstanceSettingsPath(), (line) => console.error(line));
+/** The worker roles the operator changed (`/workers`): read at every `claude_profiles` call, so a change reaches the next launch. */
+const readWorkerRolesSettings = createWorkerRolesSettingsReader(() => getInstanceSettingsPath(), (line) => console.error(line));
 
 /** The accounts note's interval of a conversation in ms (its own choice, else General's, else 1 h; the test window replaces it); `null` = Off. */
 function getConversationLimitReminderIntervalMs(key: SessionKey): number | null {
@@ -10414,13 +10417,19 @@ async function takeFallbackSwitchOffer(key: SessionKey, episodeId: number, index
  * refuses for the balance; otherwise the account is just kept off agents for an hour. The check runs beside the usage refresh
  * with a timeout of its own, so the answer is held for the longer of the two, never their sum. The refresh is waited for only
  * up to `claudeLaunchRefreshBudgetMs`; past it the cached figures are answered (an agent that waits on a silent tool call is
- * dropped by its own client after 300 s).
+ * dropped by its own client after 300 s). A query by worker ROLE (`/workers`, `utils/workerRoles.ts`) reads the role's default first:
+ * a Claude role's model goes into the pick (the Fable window counts for a Fable role); an OpenCode role's model is checked against
+ * the catalog, read beside the refresh within the same budget — an unread catalog never makes the role unavailable.
  */
 async function listClaudeProfilesForAgent(query: ClaudeProfilesQuery): Promise<ClaudeProfilesReport> {
+  const workerRoles = readWorkerRolesSettings();
+  const roleValue = query.role === null ? null : resolveWorkerRole(workerRoles, query.role).value;
+  const pickModel = roleValue === null ? query.model : roleValue.cli === 'claude' ? roleValue.model : null;
   // The agent launches its worker under whichever folder the answer names, so every folder is put right before it is named.
   for (const view of getClaudeProfileUsageViews()) repairClaudeProfileFolder(view.configDir);
   const stoppedApiProfile = getApiProfileStoppedByAgent(getClaudeProfileUsageViews(), query, Date.now());
-  await Promise.all([
+  const [openCodeCatalog] = await Promise.all([
+    roleValue?.cli === 'opencode' ? readOpenCodeCatalogForWorker() : Promise.resolve(null),
     refreshClaudeUsageForLaunch(claudeUsageRefresher, { currentProfile: query.currentProfile, isStoppedByLimit: query.isStoppedByLimit, maxAgeMs: claudeUsageOnDemandMaxAgeMs }),
     stoppedApiProfile === null
       ? Promise.resolve()
@@ -10429,9 +10438,9 @@ async function listClaudeProfilesForAgent(query: ClaudeProfilesQuery): Promise<C
         (e) => console.warn(`[credit] ${stoppedApiProfile}: checking an agent's stop report failed:`, e instanceof Error ? e.message : e),
       ),
   ]);
-  return buildClaudeProfilesCreditReport(
+  const report = buildClaudeProfilesCreditReport(
     getClaudeProfileUsageViews(),
-    query.model,
+    pickModel,
     Date.now(),
     {
       currentProfile: query.currentProfile,
@@ -10440,6 +10449,29 @@ async function listClaudeProfilesForAgent(query: ClaudeProfilesQuery): Promise<C
       chainScope: getClaudeLaunchChainScope(state.getFallbackChain()),
     },
   );
+  if (query.role === null || roleValue === null) return report;
+  const unavailable = roleValue.cli === 'claude' ? getClaudeWorkerUnavailability(report.profiles) : getOpenCodeWorkerUnavailability(roleValue.model, openCodeCatalog);
+  return { ...report, worker: buildWorkerRoleReport(workerRoles, query.role, unavailable) };
+}
+
+/**
+ * The OpenCode catalog for a worker role's check, waited for at most the launch refresh budget; `null` when it could not be read in
+ * time (or failed) — the role is then NOT called unavailable. The adapter caches the list, so a recent read answers at once.
+ */
+async function readOpenCodeCatalogForWorker(): Promise<readonly string[] | null> {
+  let budgetTimer: NodeJS.Timeout | undefined;
+  const budget = new Promise<null>((resolve) => {
+    budgetTimer = setTimeout(() => resolve(null), claudeLaunchRefreshBudgetMs);
+  });
+  const read = (async (): Promise<readonly string[] | null> => (await getAdapter(openCodeAdapterName).getAvailableModels?.()) ?? null)().catch((e: unknown) => {
+    console.warn('[workers] the OpenCode catalog is unavailable:', e instanceof Error ? e.message : e);
+    return null;
+  });
+  try {
+    return await Promise.race([read, budget]);
+  } finally {
+    clearTimeout(budgetTimer);
+  }
 }
 
 const { registerFallbackChainCommands, registerFallbackChainCallbacks, openAutoSwitchView, runAutoSwitchCommand, applyAutoSwitch } = createFallbackChain({

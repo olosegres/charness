@@ -35,6 +35,7 @@ import type { ClaudeAuthRefusal } from './claudeAuthRefusal';
 import type { ClaudeApiCreditAnchor, ClaudeApiCreditSpend } from './claudeApiCredit';
 import { checkIsRecord } from './checkIsRecord';
 import { idleCompactMs } from './compactOnIdle';
+import type { WorkerRoleReport } from './workerRoles';
 
 export const claudeUsageEndpoint = 'https://api.anthropic.com/api/oauth/usage';
 
@@ -467,6 +468,8 @@ export interface ClaudeProfilesReport {
    * nothing to advise — `nextAvailable` says when to try again.
    */
   resume?: ClaudeResumeAdvice | null;
+  /** Only for a query by worker role: the role's default CLI, model and effort, and whether it can run here (`utils/workerRoles.ts`). */
+  worker?: WorkerRoleReport;
   profiles: ClaudeProfileReportEntry[];
 }
 

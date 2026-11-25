@@ -25,6 +25,7 @@
 /** Test case: N/A — Charness has no Jira tracker. */
 
 import { splitMessage } from '../connectors/telegram/messageSplit';
+import { buildWorkerRoleReport } from '../utils/workerRoles';
 import { beforeEach, afterEach, describe, it, mock } from 'node:test';
 import assert from 'node:assert/strict';
 import * as fs from 'fs';
@@ -322,9 +323,9 @@ describe('the bot-MCP tool digest (lifecycle plan L4)', () => {
       listClaudeProfiles: async ({ model }) => ({ model, relevantBuckets: [], recommended: null, pickReason: 'none', nextAvailable: null, launchOrder: [], profiles: [] }),
     };
     const takenInputs = getBotMcpToolDefinitions(deps, 'telegram').find((definition) => definition.name === 'claude_profiles')?.inputKeys ?? [];
-    assert.deepEqual(takenInputs, ['currentProfile', 'isStoppedByLimit', 'lastRunEndedAt', 'model']);
+    assert.deepEqual(takenInputs, ['currentProfile', 'isStoppedByLimit', 'lastRunEndedAt', 'model', 'role']);
     const skillsDir = path.join(__dirname, '..', '..', 'agent-plugin', 'skills');
-    const resumeInputs = takenInputs.filter((input) => input !== 'model');
+    const resumeInputs = takenInputs.filter((input) => input !== 'model' && input !== 'role');
     const namedInputs = new Set<string>();
     for (const folder of fs.readdirSync(skillsDir)) {
       const text = fs.readFileSync(path.join(skillsDir, folder, 'SKILL.md'), 'utf8');
@@ -1144,6 +1145,12 @@ describe('scheduler MCP server end-to-end (real HTTP)', () => {
           nextAvailable: model === 'exhausted' ? { profile: 'work', at: '2026-10-20T10:00:00.000Z' } : null,
           launchOrder: recommended === null ? [] : [recommended],
           ...(isColdHandOver ? { resume: { verdict: 'handOver' as const, profile: 'default', reason: 'cold' as const, pickReason: 'soonestWeeklyReset' as const } } : {}),
+          // A query by role: the operator set the builder to Sonnet, the reviewer to an OpenCode model, the planner's OpenCode model is gone.
+          ...(query.role === null ? {} : { worker: buildWorkerRoleReport({
+            builder: { cli: 'claude', model: 'sonnet', effort: 'high' },
+            reviewer: { cli: 'opencode', model: 'openai/gpt-6-astra', effort: 'medium' },
+            planner: { cli: 'opencode', model: 'gone/model', effort: null },
+          }, query.role, query.role === 'planner' ? 'openCodeModelMissing' : null) }),
           profiles: [
             { name: 'default', configDir: null, email: 'me@example.com', kind: 'personal', subscriptionType: 'max', loggedIn: true, buckets: [], usageFetchedAt: null, isUsageStale: false, limitedUntil: null, authRefusal: null, billing: null, creditExhaustedAt: null, spentUsd: null, remainingEstimateUsd: null, expiresOn: null, probablyUsedUp: false, renewedAt: null, isEligible: true, chainExclusion: null, headroomPercent: 19, isRecommended: recommended === 'default' },
             { name: 'work', configDir: '/data/profiles/work', email: 'w@example.com', kind: 'personal', subscriptionType: 'pro', loggedIn: true, buckets: [], usageFetchedAt: null, isUsageStale: false, limitedUntil: null, authRefusal: null, billing: null, creditExhaustedAt: null, spentUsd: null, remainingEstimateUsd: null, expiresOn: null, probablyUsedUp: false, renewedAt: null, isEligible: !isWorkUnlisted, chainExclusion: isWorkUnlisted ? 'notListed' as const : null, headroomPercent: 90, isRecommended: recommended === 'work' },
@@ -1349,7 +1356,7 @@ describe('scheduler MCP server end-to-end (real HTTP)', () => {
         );
         assert.ok(description.indexOf('/limits auto-switch list') < description.indexOf('A NEW agent'), 'the list is introduced before any "list" wording and before the new-agent rule');
         assert.doesNotMatch(description, /NEVER picked|unless the operator asked|goes to the usable account whose weekly/, 'the old «never an API account unless asked» opening is gone');
-        assert.deepEqual(Object.keys(tool.inputSchema.properties ?? {}).sort(), ['currentProfile', 'isStoppedByLimit', 'lastRunEndedAt', 'model']);
+        assert.deepEqual(Object.keys(tool.inputSchema.properties ?? {}).sort(), ['currentProfile', 'isStoppedByLimit', 'lastRunEndedAt', 'model', 'role']);
         // The resume rules an agent reads: the clock restart of the accounts reminders, the two inputs, the two verdicts, the exception.
         assert.match(description, /Calling it IS looking at the limits: the bot's `\[Accounts …\]` reminders then wait another interval\./);
         assert.match(description, /pass `currentProfile` \(the profile it last ran on\) and `lastRunEndedAt` \(when its last run ended — the last write of its log; omitted = cold\)/);
@@ -1421,17 +1428,53 @@ describe('scheduler MCP server end-to-end (real HTTP)', () => {
       }
     }
     const callsOfOneScope: ClaudeProfilesQuery[] = [
-      { model: 'fable', currentProfile: null, isStoppedByLimit: false, lastRunEndedAtMs: null },
-      { model: null, currentProfile: null, isStoppedByLimit: false, lastRunEndedAtMs: null },
-      { model: null, currentProfile: 'work', isStoppedByLimit: false, lastRunEndedAtMs: null },
-      { model: null, currentProfile: 'work', isStoppedByLimit: true, lastRunEndedAtMs: null },
-      { model: 'cold', currentProfile: 'work', isStoppedByLimit: false, lastRunEndedAtMs: Date.parse('2026-11-21T10:00:00Z') },
-      { model: 'exhausted', currentProfile: null, isStoppedByLimit: false, lastRunEndedAtMs: null },
-      { model: 'gone', currentProfile: 'work', isStoppedByLimit: false, lastRunEndedAtMs: null },
-      { model: 'nowhere', currentProfile: null, isStoppedByLimit: false, lastRunEndedAtMs: null },
-      { model: 'unlisted', currentProfile: null, isStoppedByLimit: false, lastRunEndedAtMs: null },
+      { role: null, model: 'fable', currentProfile: null, isStoppedByLimit: false, lastRunEndedAtMs: null },
+      { role: null, model: null, currentProfile: null, isStoppedByLimit: false, lastRunEndedAtMs: null },
+      { role: null, model: null, currentProfile: 'work', isStoppedByLimit: false, lastRunEndedAtMs: null },
+      { role: null, model: null, currentProfile: 'work', isStoppedByLimit: true, lastRunEndedAtMs: null },
+      { role: null, model: 'cold', currentProfile: 'work', isStoppedByLimit: false, lastRunEndedAtMs: Date.parse('2026-11-21T10:00:00Z') },
+      { role: null, model: 'exhausted', currentProfile: null, isStoppedByLimit: false, lastRunEndedAtMs: null },
+      { role: null, model: 'gone', currentProfile: 'work', isStoppedByLimit: false, lastRunEndedAtMs: null },
+      { role: null, model: 'nowhere', currentProfile: null, isStoppedByLimit: false, lastRunEndedAtMs: null },
+      { role: null, model: 'unlisted', currentProfile: null, isStoppedByLimit: false, lastRunEndedAtMs: null },
     ];
     assert.deepEqual(fixture.claudeProfilesCalls, [...callsOfOneScope, ...callsOfOneScope], 'the refused calls never reached the port');
+  });
+
+  it('claude_profiles by role: the role\'s launch leads the first line with «the bot\'s default — your own instructions win», then the account (Claude), «no Claude account needed» (OpenCode) or the conversation\'s own model (unavailable); role with model is refused', async () => {
+    const client = await buildClient(fixture.handle.port, buildSchedulerMcpToken(secret, { kind: 'thread', threadKey: threadAKey }));
+    const callProfiles = async (args: Record<string, string>): Promise<string> =>
+      ((await client.callTool({ name: 'claude_profiles', arguments: args })).content as Array<{ type: string; text: string }>)[0].text;
+    try {
+      const tool = (await client.listTools()).tools.find((candidate) => candidate.name === 'claude_profiles');
+      const roleProperty = tool?.inputSchema.properties?.role as { enum?: string[]; description?: string } | undefined;
+      assert.deepEqual(roleProperty?.enum, ['builder', 'storageBuilder', 'investigator', 'reviewer', 'miniReviewer', 'planner']);
+      assert.match(roleProperty?.description ?? '', /`storageBuilder` — a builder whose work touches data persistence/, 'the role description is the one home of what each role covers');
+      assert.match(roleProperty?.description ?? '', /neither the user nor a general delegate skill you follow names its model \(they do → pass `model` instead\)/);
+      assert.match(tool?.description ?? '', /the bot's DEFAULT: a model the user names, or a general delegate skill you follow names for the role, wins/);
+      const builder = await callProfiles({ role: 'builder' });
+      assert.equal(
+        builder.split('\n')[0],
+        'builder: claude -p --model sonnet --effort high — the bot\'s default for this role; a model the user or your general delegate skill names wins | account: recommended: default → default profile, set no CLAUDE_CONFIG_DIR (soonest weekly reset)',
+      );
+      assert.deepEqual((JSON.parse(builder.split('\n').slice(1).join('\n')) as { worker: unknown }).worker, { role: 'builder', cli: 'claude', model: 'sonnet', effort: 'high', isBuiltIn: false, unavailable: null });
+      assert.equal(
+        (await callProfiles({ role: 'reviewer' })).split('\n')[0],
+        'reviewer: opencode run --model openai/gpt-6-astra --variant medium — the bot\'s default for this role; a model the user or your general delegate skill names wins; no Claude account needed',
+      );
+      assert.match(
+        (await callProfiles({ role: 'planner' })).split('\n')[0],
+        /^planner: the bot's default is opencode run --model gone\/model, but its OpenCode model is not in the catalog \(provider disconnected or model gone\) → launch it on the CLI, model and effort this conversation runs on$/,
+      );
+      const both = await client.callTool({ name: 'claude_profiles', arguments: { role: 'builder', model: 'opus' } });
+      assert.equal(both.isError, true);
+      assert.match((both.content as Array<{ type: string; text: string }>)[0].text, /Pass `model` OR `role`, not both: `model` when the user or a general delegate skill you follow names the worker's model, `role` when nothing does\./);
+      const unknown = await client.callTool({ name: 'claude_profiles', arguments: { role: 'coder' } }).catch(() => ({ isError: true, content: [] }));
+      assert.equal(unknown.isError, true, 'an unknown role is refused at the boundary');
+    } finally {
+      await client.close();
+    }
+    assert.deepEqual(fixture.claudeProfilesCalls.map((query) => query.role), ['builder', 'reviewer', 'planner'], 'the refused calls never reached the port');
   });
 
   it('send_messages_to_user routes each message to the scope-resolved thread', async () => {

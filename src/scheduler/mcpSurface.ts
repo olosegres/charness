@@ -18,6 +18,7 @@ import { keyFromString, tryKeyFromString, type PlatformId, type SessionKey } fro
 import { checkIsBotSkillsEnabled } from '../utils/botSkills';
 import { claudeProfileNameMaxLength } from '../utils/claudeProfiles';
 import { describeClaudeChainExclusions, describeClaudeLaunchOutcome, describeClaudeProfileLaunch, describeClaudeResumeHandOver, type ClaudeProfilesReport } from '../utils/claudeUsage';
+import { describeWorkerRoleVerdict, workerRoleIds, type WorkerRoleId } from '../utils/workerRoles';
 import type { SendFilesToThread } from '../utils/fileSendService';
 import { telegramPhotoMaxSidePx } from '../utils/fileSendPlan';
 import { formatIsoLocalOffset } from '../utils/isoTimestamp';
@@ -221,7 +222,7 @@ function buildTelegramOrchestrationInstruction(isBotSkillsEnabled: boolean): str
     : `${orchestrationInstructionHead} schedule_create to watch EACH worker — ${workerWatchRecipeText}`;
 }
 const claudeProfilesInstruction =
-  '• Before you start or resume a child `claude` (worker, reviewer, planner) → claude_profiles with its model; start it under the account it names (`CLAUDE_CONFIG_DIR=<configDir>`), else it drains YOUR account. An `[Accounts …]` note means the limits moved: ask again before your next launch. More in the tool description (resuming, `recommended: null`).';
+  '• Before you start or resume a child worker → claude_profiles with its model, or its role when nothing you follow names one; start a `claude` under the account it names (`CLAUDE_CONFIG_DIR=<configDir>`), else it drains YOUR account. An `[Accounts …]` note means the limits moved: ask again before your next launch. More in the tool description.';
 
 /** The longest `lastRunEndedAt` the tool takes: an ISO 8601 instant with fractional seconds and an offset is 35 characters. */
 const claudeResumeInstantMaxLength = 40;
@@ -229,6 +230,8 @@ const claudeResumeInstantMaxLength = 40;
 /** What the `claude_profiles` tool asks the bot: the model, and for a resumed session the account it last ran on. */
 export interface ClaudeProfilesQuery {
   model: string | null;
+  /** The worker's role when nothing the agent follows names its model: the bot answers the role's default (`utils/workerRoles.ts`). Exclusive with `model`. */
+  role: WorkerRoleId | null;
   /** The profile the resumed session last ran on; `null` for a new agent. */
   currentProfile: string | null;
   /** The resumed session broke off on a usage limit of `currentProfile`. */
@@ -1917,8 +1920,14 @@ function registerBotTools(
   if (deps.listClaudeProfiles) registerClaudeProfilesTool(server, deps, deps.listClaudeProfiles, scope);
 }
 
-/** The first line of the `claude_profiles` answer: the pick with how to launch it and why, or that nothing is usable and when something is. */
+/** The first line of the `claude_profiles` answer: with a `role`, the role's launch leads (`describeWorkerRoleVerdict`); then the account verdict. */
 function buildClaudeProfilesVerdict(report: ClaudeProfilesReport, currentProfile: string | null): string {
+  const accountVerdict = buildClaudeAccountVerdict(report, currentProfile);
+  return report.worker === undefined ? accountVerdict : describeWorkerRoleVerdict(report.worker, accountVerdict);
+}
+
+/** The account part of the first line: the pick with how to launch it and why, a hand-over, or that nothing is usable and when something is. */
+function buildClaudeAccountVerdict(report: ClaudeProfilesReport, currentProfile: string | null): string {
   // A worker that must not be resumed on another account: the hand-over leads, the pick is in the JSON.
   const handOver = describeClaudeResumeHandOver(report, currentProfile);
   if (handOver !== null) return handOver;
@@ -1968,13 +1977,30 @@ function registerClaudeProfilesTool(server: ToolRegistrar, deps: SchedulerMcpDep
         '`nextAvailable` names the account and instant that frees up first — schedule ONE resume at that time instead ' +
         'of retrying; when `nextAvailable` is null too, tell the user and retry once in about 30 minutes. Call it BEFORE launching or resuming a child `claude` and start the child with ' +
         'CLAUDE_CONFIG_DIR=<configDir> in its environment — configDir null means the default profile: set nothing. ' +
-        'Without the variable the child inherits the account of this very session.',
+        'Without the variable the child inherits the account of this very session. ' +
+        'Pass `role` instead of `model` when nothing you follow names the worker\'s model: `worker` (and the first line) then gives ' +
+        'the operator\'s default CLI, model and effort for it (/workers) — the bot\'s DEFAULT: a model the user names, or a general ' +
+        'delegate skill you follow names for the role, wins. `worker.cli: opencode` needs no Claude account; `worker.unavailable` ' +
+        'set → launch the worker on the CLI, model and effort this conversation runs on. A worker you resume keeps its first run\'s ' +
+        'model and effort.',
       inputSchema: createStrictToolInput({
         model: z
           .string()
           .max(64)
           .optional()
-          .describe('The model the child will run (e.g. "fable", "opus", "sonnet"); decides whether the Fable weekly window counts besides the shared ones. Omit for the shared windows.'),
+          .describe('The model the child will run (e.g. "fable", "opus", "sonnet"); decides whether the Fable weekly window counts besides the shared ones. Omit for the shared windows. Not with `role`.'),
+        role: z
+          .enum(workerRoleIds)
+          .optional()
+          .describe(
+            'The worker\'s role, when neither the user nor a general delegate skill you follow names its model (they do → pass `model` instead): ' +
+            '`builder` — code, tests, debugging, e2e and live runs, rework, fixes after a full run; ' +
+            '`storageBuilder` — a builder whose work touches data persistence (storage, DB schema and migrations, sync, merge and conflict resolution, backups — anything that can lose or corrupt user data); ' +
+            '`investigator` — a cause still unclear after a builder failed on it twice (also UX or platform behaviour); ' +
+            '`reviewer` — the independent review of a task or commit; ' +
+            '`miniReviewer` — a small diff, a reviewer\'s own fix, applied fixes; ' +
+            '`planner` — a planner, and the research that feeds a plan (a researcher, an analyst).',
+          ),
         currentProfile: z
           .string()
           .max(claudeProfileNameMaxLength)
@@ -1993,6 +2019,10 @@ function registerClaudeProfilesTool(server: ToolRegistrar, deps: SchedulerMcpDep
     },
     async (args) => {
       const currentProfile = args.currentProfile?.trim() || null;
+      const model = args.model?.trim() || null;
+      if (args.role !== undefined && model !== null) {
+        return errorResult('Pass `model` OR `role`, not both: `model` when the user or a general delegate skill you follow names the worker\'s model, `role` when nothing does.');
+      }
       if (args.isStoppedByLimit === true && currentProfile === null) {
         return errorResult('isStoppedByLimit needs currentProfile — the profile the session that hit the limit last ran on.');
       }
@@ -2002,7 +2032,7 @@ function registerClaudeProfilesTool(server: ToolRegistrar, deps: SchedulerMcpDep
         lastRunEndedAtMs = Date.parse(args.lastRunEndedAt);
         if (Number.isNaN(lastRunEndedAtMs)) return errorResult('lastRunEndedAt must be an ISO 8601 instant, e.g. 2026-11-21T12:30:00Z.');
       }
-      const report = await listClaudeProfiles({ model: args.model?.trim() || null, currentProfile, isStoppedByLimit: args.isStoppedByLimit === true, lastRunEndedAtMs });
+      const report = await listClaudeProfiles({ model, role: args.role ?? null, currentProfile, isStoppedByLimit: args.isStoppedByLimit === true, lastRunEndedAtMs });
       // The agent looked at the accounts, and launching workers is what it does: the reminder clock restarts, the conversation
       // orchestrates (`limitNotes/`). Resolved like the send tools; a `dir` scope with several bound topics names none: nothing is recorded.
       const resolved = resolveTargetThreadKey(scope, undefined, deps.getThreadsForDirectory);

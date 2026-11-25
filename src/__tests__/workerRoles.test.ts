@@ -12,6 +12,9 @@ import {
   checkIsWorkerRoleId,
   describeWorkerLaunchFlags,
   describeWorkerRole,
+  describeWorkerRoleVerdict,
+  getClaudeWorkerUnavailability,
+  getOpenCodeWorkerUnavailability,
   resolveWorkerRole,
   updateWorkerRolesSetting,
   workerRoleIds,
@@ -64,4 +67,24 @@ test('the role line: the launch and «the bot\'s default — your own instructio
   const noAccount = buildWorkerRoleReport({}, 'planner', 'noClaudeAccount');
   assert.equal(noAccount.isBuiltIn, true);
   assert.match(describeWorkerRole(noAccount), /but no Claude account is signed in on this host → launch it on the CLI, model and effort this conversation runs on$/);
+});
+
+test('the first line of a role answer: Claude → the account verdict follows; OpenCode → «no Claude account needed»; unavailable → the role line alone', () => {
+  const claude = buildWorkerRoleReport({}, 'reviewer', null);
+  assert.equal(describeWorkerRoleVerdict(claude, 'recommended: work → CLAUDE_CONFIG_DIR=/p/work (soonest weekly reset)'), 'reviewer: claude -p --model opus --effort xhigh — the bot\'s default for this role; a model the user or your general delegate skill names wins | account: recommended: work → CLAUDE_CONFIG_DIR=/p/work (soonest weekly reset)');
+  const openCode = buildWorkerRoleReport({ reviewer: { cli: 'opencode', model: 'openai/gpt-6-astra', effort: null } }, 'reviewer', null);
+  assert.match(describeWorkerRoleVerdict(openCode, 'ignored'), /names wins; no Claude account needed$/);
+  const unavailable = buildWorkerRoleReport({}, 'reviewer', 'noClaudeAccount');
+  assert.equal(describeWorkerRoleVerdict(unavailable, 'none usable'), describeWorkerRole(unavailable));
+});
+
+test('a Claude role cannot run only when no account is signed in; an OpenCode role only when a READ catalog lacks its model', () => {
+  assert.equal(getClaudeWorkerUnavailability([]), 'noClaudeAccount');
+  assert.equal(getClaudeWorkerUnavailability([{ loggedIn: false }, { loggedIn: false }]), 'noClaudeAccount');
+  assert.equal(getClaudeWorkerUnavailability([{ loggedIn: false }, { loggedIn: null }]), null, 'an account not probed yet may be signed in');
+  assert.equal(getClaudeWorkerUnavailability([{ loggedIn: true }]), null);
+  assert.equal(getOpenCodeWorkerUnavailability('openai/gpt-5', null), null, 'an unread catalog says nothing');
+  assert.equal(getOpenCodeWorkerUnavailability('openai/gpt-5', []), null, 'an empty answer says nothing');
+  assert.equal(getOpenCodeWorkerUnavailability('openai/gpt-5', ['openai/gpt-5', 'anthropic/x']), null);
+  assert.equal(getOpenCodeWorkerUnavailability('openai/gpt-5', ['anthropic/x']), 'openCodeModelMissing');
 });
