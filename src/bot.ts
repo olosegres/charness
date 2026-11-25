@@ -416,6 +416,7 @@ import {
   createSchedulerMcpServer,
   getSchedulerMcpPort,
   resolveSchedulerMcpPort,
+  schedulerMcpShutdownDrainMs,
   type ClaudeProfilesQuery,
   type SchedulerMcpHandle,
 } from './scheduler/mcpSurface';
@@ -17711,6 +17712,9 @@ export async function startBot(): Promise<void> {
       exit,
       drainPendingUpdates: () => updateDispatcher.drainIdle(updateDrainTimeoutMs),
       finalizePendingOutput: () => finalizePendingOutputOnShutdown(),
+      // The agents' tool calls already running (an answer being posted and pinned) finish before the server goes: cut, the agent
+      // would be told the call failed although the requester already sees its answer.
+      stopBotMcp: isSchedulerMcpStarted ? () => schedulerMcpHandle.stop({ drainMs: schedulerMcpShutdownDrainMs }) : undefined,
       clearTransientFrames: () => sweepTransientFramesOnShutdown(),
       // A hot worker's reload keeps the sidecar for the next worker to adopt; the supervisor stops it for good.
       stopSidecars: checkIsOpenCodeExternalHost() ? undefined : () => sttOwner.stop(),
@@ -17730,7 +17734,6 @@ export async function startBot(): Promise<void> {
         limitNotesEngine?.stop();
         topicIndicator.stop();
         jiraConnector?.stop();
-        if (isSchedulerMcpStarted) void schedulerMcpHandle.stop().catch(() => {});
         updateEngine?.stop();
       },
     });

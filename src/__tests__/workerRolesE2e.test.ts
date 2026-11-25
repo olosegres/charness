@@ -31,7 +31,7 @@ import * as path from 'path';
 import { FakeTelegram, generalTopicThreadId, type FakeTelegramMessage } from './telegramE2e/fakeTelegram';
 import { TopicDriver } from './telegramE2e/topicDriver';
 import { FakeOpenCodeServer, writeFakeOpenCodeBinary } from './openCodeE2e/fakeOpenCodeServer';
-import { fakeClaudeLogFileNames, type FakeClaudeToolCall } from './jiraE2e/fakeClaudeContract';
+import { fakeClaudeLogFileNames, type FakeClaudeAnswer, type FakeClaudeToolCall } from './jiraE2e/fakeClaudeContract';
 import {
   builtCliPath,
   createIsolatedInstanceLayout,
@@ -252,10 +252,17 @@ describe('/workers end to end: built charness, fake Bot API, fake agent, fake Op
   it('the provider disconnects: the overview warns and marks the row, and the agent is told to launch the reviewer on its own model', async () => {
     writeFakeOpenCodeBinary(getLayout().binDir, { version: fakeOpenCodeVersion, models: openCodeModelsWithoutOpenAi });
     // The adapter keeps the catalog it read for a few minutes: a restart reads the new one. The agent keeps running across it and is
-    // asked in its very next turn. The step before ended as soon as its answer was in the topic, while the bot was still pinning it, so
-    // the restart cuts that `answer_request` call: it must fail at once on the agent's side, or the agent stays in it — and this
-    // turn waits — until its request timeout (60 s for the fake's MCP client).
+    // asked in its very next turn. The step before ends as soon as its answer is in the topic, usually while the bot is still pinning
+    // it (a race: it happened in every run measured), so the restart usually lands inside that `answer_request` call. The shutdown
+    // lets the call finish and the agent gets its result; before, the call was cut and the agent stayed in it — and this turn
+    // waited — until its request timeout (60 s for the fake's MCP client). The deterministic cases (a call finished within the
+    // drain, a call cut after it) are `schedulerMcp.test.ts` › «a stop lets a tool call already running finish within its drain…» and
+    // «a tool call still running when the drain of a stop ends is cut…».
     charness = await restartCharnessWithState(getLayout(), fakeTelegram, getCharness(), () => {});
+    // The fake logs an answer's outcome when its call returns; a cut call throws and logs none.
+    const lastAnswerBeforeRestart = readJsonLines<FakeClaudeAnswer>(path.join(getLayout().fakeLogDir, fakeClaudeLogFileNames.answers))
+      .find((answer) => answer.issueKey === `WR-${turnCounter}`);
+    assert.ok(lastAnswerBeforeRestart?.outcome.startsWith('Delivered'), `the agent got the result of its last answer before the restart: ${JSON.stringify(lastAnswerBeforeRestart)}`);
     const screen = await general.sendAndAwaitReply('/workers', 'Worker models — for the whole bot');
     assert.ok(screen.text.endsWith('\n\n⚠️ Reviewer: OpenCode «openai» is not connected — agents launch it on their own model until it is.'), screen.text);
     assert.equal(general.getKeyboardLabels(screen)[3][0], '⚠️ Reviewer: OpenCode · gpt-6-astra · medium');

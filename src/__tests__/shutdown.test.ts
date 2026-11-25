@@ -350,6 +350,53 @@ test('finalizePendingOutput is optional — orchestrator copes when it is absent
   assert.equal(exitCode(), 0);
 });
 
+test('stopBotMcp starts after cleanupTimers, runs alongside finalizePendingOutput, and is awaited before bot.stop and state.flush', async () => {
+  // The agents' tool calls still running (an answer being posted and pinned) finish while the Telegram client is up, and the
+  // flush saves what they changed. Alongside the output flush, not after it: each has its own budget inside the watchdog.
+  const botMcpDrain = createHeldStep();
+  const { deps, events, exitCode, drained } = makeDeps({
+    stopBotMcp: async () => {
+      events.push('stopBotMcp:start');
+      await botMcpDrain.wait();
+      events.push('stopBotMcp:resolved');
+    },
+    finalizePendingOutput: async () => {
+      events.push('finalizePendingOutput');
+      // The output flush ends while the bot MCP is still draining: the shutdown must go on waiting for the drain.
+      setTimeout(botMcpDrain.release, 20);
+    },
+  });
+
+  await returns(gracefulShutdown(deps), botMcpDrain.release);
+  await drained();
+
+  const startIdx = events.indexOf('stopBotMcp:start');
+  const resolvedIdx = events.indexOf('stopBotMcp:resolved');
+  assert.ok(events.indexOf('cleanupTimers') < startIdx, `starts after cleanupTimers; events=${JSON.stringify(events)}`);
+  assert.ok(startIdx < events.indexOf('finalizePendingOutput'), 'starts before the output flush, so the two run together');
+  assert.ok(events.indexOf('finalizePendingOutput') < resolvedIdx, 'the output flush did not wait for the drain');
+  assert.ok(resolvedIdx < events.indexOf('bot.stop(SIGTERM)'), 'bot.stop waits for the drain');
+  assert.ok(resolvedIdx < events.indexOf('state.flush:start'), 'the state flush waits for the drain');
+  assert.equal(exitCode(), 0);
+});
+
+test('a thrown stopBotMcp does NOT skip bot.stop / state.flush / releaseLock', async () => {
+  const { deps, events, exitCode, drained } = makeDeps({
+    stopBotMcp: async () => {
+      events.push('stopBotMcp:threw');
+      throw new Error('stop failure');
+    },
+  });
+
+  await gracefulShutdown(deps);
+  await drained();
+
+  assert.ok(events.includes('bot.stop(SIGTERM)'), 'bot.stop must still run');
+  assert.ok(events.includes('state.flush:resolved'), 'flush must still resolve');
+  assert.ok(events.includes('releaseLock'), 'lock must still be released');
+  assert.equal(exitCode(), 0);
+});
+
 test('drainPendingUpdates runs AFTER bot.stop and BEFORE state.flush', async () => {
   // The off-loop update queues must drain while polling is already halted
   // (after bot.stop → no new enqueue) but before the flush (so the drained

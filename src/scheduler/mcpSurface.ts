@@ -79,9 +79,11 @@ import { todoNoteMaxLength, todoPositions, todoRefMaxLength, todoStatuses, todoT
  * own legitimate cancellation can abort it even after typed JSON-RPC id reuse.
  *
  * A call is answered with ONE JSON body sent when its result is ready (`enableJsonResponse`), never an SSE stream: the server sends
- * no notifications, and a stream's headers go out a moment after the call comes in. A restart that then cuts the connection
- * (every hot reload) was reported to the client only as a broken stream, never to the call itself, which hung until the client's
- * request timeout — the agent's turn with it. Cut before its body, a JSON call fails at once on the client.
+ * no notifications, and a stream's headers go out a moment after the call comes in. A restart that then cut the connection (every
+ * hot reload) reached the client as a broken stream, not as the call's failure: the call waited out the client's timeout, and the
+ * agent's turn with it (measured: 60 s in the SDK client and in OpenCode, about 2 min in Claude Code 2.1.331). Cut before its body,
+ * a JSON call fails at once on the client — both CLIs told the model the error, neither sent the call again. A shutdown first
+ * lets the calls already running finish ({@link SchedulerMcpHandle.stop}'s drain), so a cut is what only an overlong call meets.
  *
  * Auth/scoping: a request carries `Authorization: Bearer <token>`. The token is
  * self-describing — `<scopeB64url>.<hmacHex>` — so the bot need not know every
@@ -128,6 +130,12 @@ export const legacySchedulerMcpClientIdHeader = 'x-telegramcode-mcp-client-id';
  */
 export const schedulerMcpBindRetryCount = 20;
 export const schedulerMcpBindRetryDelayMs = 500;
+/**
+ * How long a bot shutdown lets the agents' tool calls already running finish before it cuts them. An answer is posted and then
+ * pinned through the paced send gate (one send per 2 s across all chats), so a few seconds; it runs alongside the shutdown's output
+ * flush, well inside its watchdog (`DEFAULT_WATCHDOG_MS`, 10 s).
+ */
+export const schedulerMcpShutdownDrainMs = 5_000;
 
 /** Pending cancellations and recent completions remain correlatable for this window. */
 export const schedulerMcpPendingCancellationTtlMs = 30_000;
@@ -609,13 +617,25 @@ export interface SchedulerMcpDeps {
 }
 
 /**
+ * @name SchedulerMcpStopOptions
+ * @description `drainMs`: how long the stop lets the calls already running finish before it cuts them (absent or 0: cut at once).
+ */
+export interface SchedulerMcpStopOptions {
+  drainMs?: number;
+}
+
+/**
  * @name SchedulerMcpHandle
  * @description The running server's control surface. `port` is the actually-bound
  * port (resolved after `start`, important when the caller passed `0`).
  */
 export interface SchedulerMcpHandle {
   start(): Promise<void>;
-  stop(): Promise<void>;
+  /**
+   * Stop serving: no new connection is taken and idle ones close at once; the calls already running get `drainMs` to finish (their
+   * agents then get their results), and whatever still runs after it is cut — a cut call fails at once on its client.
+   */
+  stop(options?: SchedulerMcpStopOptions): Promise<void>;
   /** The bound port, available after `start` resolves. */
   readonly port: number;
   /** The digest of the tool definitions and instructions a session of `platform` connects to (see {@link getBotMcpToolDigest}). */
@@ -2077,6 +2097,10 @@ export function createSchedulerMcpServer(deps: SchedulerMcpDeps): SchedulerMcpHa
   let boundPort = requestedPort;
   let httpServer: Server | null = null;
   const sockets = new Set<Socket>();
+  /** The responses not finished yet — the calls a draining stop waits for. */
+  const openResponses = new Set<ServerResponse>();
+  /** Told each time a response finishes, while a stop drains. */
+  let notifyResponseFinished: (() => void) | null = null;
   const cancellationLifecycle = createSchedulerMcpCancellationLifecycle();
 
   function getClientIdentity(req: IncomingMessage, verifiedToken: string): string {
@@ -2184,6 +2208,11 @@ export function createSchedulerMcpServer(deps: SchedulerMcpDeps): SchedulerMcpHa
   function start(): Promise<void> {
     return new Promise((resolve, reject) => {
       const server = createServer((req, res) => {
+        openResponses.add(res);
+        res.once('close', () => {
+          openResponses.delete(res);
+          notifyResponseFinished?.();
+        });
         if (req.url && req.url.split('?')[0] === schedulerMcpPath) {
           handleMcpRequest(req, res).catch((error) => {
             console.error('[scheduler-mcp] request handling failed:', error);
@@ -2261,20 +2290,35 @@ export function createSchedulerMcpServer(deps: SchedulerMcpDeps): SchedulerMcpHa
     });
   }
 
-  function stop(): Promise<void> {
+  /** Resolve once no response is open, or after `drainMs` — whichever comes first. */
+  function waitForOpenResponses(drainMs: number): Promise<void> {
+    if (openResponses.size === 0 || drainMs <= 0) return Promise.resolve();
     return new Promise((resolve) => {
-      if (!httpServer) {
+      const finish = (): void => {
+        clearTimeout(drainTimer);
+        notifyResponseFinished = null;
         resolve();
-        return;
-      }
-      httpServer.close(() => {
-        httpServer = null;
-        resolve();
-      });
-      // Streamable HTTP clients may retain an idle keep-alive connection after
-      // their request completes; server.close() otherwise waits for it forever.
-      for (const socket of sockets) socket.destroy();
+      };
+      const drainTimer = setTimeout(finish, drainMs);
+      notifyResponseFinished = () => {
+        if (openResponses.size === 0) finish();
+      };
     });
+  }
+
+  async function stop(options: SchedulerMcpStopOptions = {}): Promise<void> {
+    const server = httpServer;
+    if (!server) return;
+    httpServer = null;
+    const closed = new Promise<void>((resolve) => { server.close(() => resolve()); });
+    // Streamable HTTP clients may retain an idle keep-alive connection after
+    // their request completes; server.close() otherwise waits for it forever.
+    server.closeIdleConnections();
+    // A call already running (an answer being posted and pinned) finishes and its agent gets the result; cut, the agent would be
+    // told it failed although the requester already sees it.
+    await waitForOpenResponses(options.drainMs ?? 0);
+    for (const socket of sockets) socket.destroy();
+    await closed;
   }
 
   return {

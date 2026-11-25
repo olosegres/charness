@@ -28,13 +28,12 @@ import { splitMessage } from '../connectors/telegram/messageSplit';
 import { buildWorkerRoleReport } from '../utils/workerRoles';
 import { beforeEach, afterEach, describe, it, mock } from 'node:test';
 import assert from 'node:assert/strict';
-import { setTimeout as delay } from 'node:timers/promises';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
-import { CallToolResultSchema } from '@modelcontextprotocol/sdk/types.js';
+import { CallToolResultSchema, type CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { StateStore } from '../state';
 import { keyToString } from '../sessionKey';
 import {
@@ -107,6 +106,8 @@ const schedulerMcpStopTimeoutMs = 1_000;
 const inFlightCallFailureTimeoutMs = 5_000;
 /** How long a test waits for a running call's response headers — an SSE response sends them within milliseconds of the call. */
 const callHeadersWaitMs = 500;
+/** The drain a test's stop gives a call that never ends: it is cut when the drain is over. */
+const cutCallDrainMs = 200;
 const incompleteRequestBody = '{"jsonrpc":"2.0"';
 const linuxIt = process.platform === 'linux' ? it : it.skip;
 
@@ -1266,18 +1267,20 @@ describe('scheduler MCP server end-to-end (real HTTP)', () => {
     }
   });
 
-  it('a tool call still running when the server stops fails at once on the client, instead of waiting out the client\'s request timeout', async () => {
-    // The bot restarts (a hot reload, a deploy) while an agent's call is in flight. Answered as an SSE stream, the response's headers
-    // went out a moment after the call came in, and the cut stream was then only reported to the client's `onerror`, never to the
-    // call: it hung until the SDK's 60 s request timeout (a real CLI waits out its own MCP tool timeout), and the agent's turn with
-    // it — the next prompt of that conversation was answered that late.
+  /**
+   * A client whose `send_messages_to_user` call is running in a handler the test controls, and the moment that call's response
+   * headers reached it (if the server sends them before the result — an SSE response did, within milliseconds of the call).
+   */
+  async function startHeldMessageCall(): Promise<{ client: Client; call: Promise<CallToolResult>; release: () => void }> {
     let markCallStarted: () => void = () => {};
     const callStarted = new Promise<void>((resolve) => { markCallStarted = resolve; });
-    fixture.messageSendHandler.current = () => {
+    let release: () => void = () => {};
+    const released = new Promise<void>((resolve) => { release = resolve; });
+    fixture.messageSendHandler.current = async () => {
       markCallStarted();
-      return new Promise(() => {});
+      await released;
+      return { ok: true, summary: 'Delivered 1 message', sentMessageIds: [1], undeliveredCount: 0 };
     };
-    // The headers of the call's response, if the server sends them before its result: the state the cut has to meet.
     let markCallHeadersReceived: () => void = () => {};
     const callHeadersReceived = new Promise<void>((resolve) => { markCallHeadersReceived = resolve; });
     const token = buildSchedulerMcpToken(secret, { kind: 'thread', threadKey: threadAKey });
@@ -1290,17 +1293,45 @@ describe('scheduler MCP server end-to-end (real HTTP)', () => {
         return response;
       },
     }));
+    const call = client.callTool({ name: 'send_messages_to_user', arguments: { messages: ['hello'] } }).then((result) => CallToolResultSchema.parse(result));
+    await callStarted;
+    // The cut has to meet the state a restart meets: the call running, and its response's headers at the client if the server
+    // sends them early. A JSON response sends none, so the wait is bounded.
+    await checkPromiseResolvesWithin(callHeadersReceived, callHeadersWaitMs);
+    return { client, call, release };
+  }
+
+  // The process-level twin: `workerRolesE2e.test.ts` › «the provider disconnects…», whose restart lands inside the agent's
+  // `answer_request` (the step before ended once the answer was in the topic, while the bot was still pinning it).
+  it('a tool call still running when the drain of a stop ends is cut, and fails at once on the client instead of waiting out its request timeout', async () => {
+    // Answered as an SSE stream, the headers went out a moment after the call came in, and a cut stream was then reported only to
+    // the client's `onerror`, never to the call: it waited out its request timeout (measured: 60 s in the SDK client and in
+    // OpenCode, about 2 min in Claude Code 2.1.331), and the agent's turn with it.
+    const { client, call, release } = await startHeldMessageCall();
     try {
-      const outcome = client.callTool({ name: 'send_messages_to_user', arguments: { messages: ['hello'] } })
-        .then(() => 'answered', () => 'failed');
-      await callStarted;
-      await Promise.race([callHeadersReceived, delay(callHeadersWaitMs)]);
-      await fixture.handle.stop();
-      assert.equal(
-        await Promise.race([outcome, delay(inFlightCallFailureTimeoutMs).then(() => 'still waiting')]),
-        'failed',
-        'the cut call fails at once, so the agent goes on',
+      await fixture.handle.stop({ drainMs: cutCallDrainMs });
+      const isFailed = await checkPromiseResolvesWithin(
+        call.then(() => { throw new Error('the cut call was answered'); }, () => undefined),
+        inFlightCallFailureTimeoutMs,
       );
+      assert.equal(isFailed, true, 'the cut call fails at once, so the agent goes on');
+    } finally {
+      release();
+      await client.close();
+    }
+  });
+
+  it('a stop lets a tool call already running finish within its drain: the agent gets the result, not an error', async () => {
+    // A restart that lands while an answer is being posted and pinned: cut, the agent was told the call failed although the
+    // requester already saw the answer — and would send it again.
+    const { client, call, release } = await startHeldMessageCall();
+    try {
+      const stopped = fixture.handle.stop({ drainMs: inFlightCallFailureTimeoutMs });
+      release();
+      const result = await call;
+      assert.equal(result.isError, undefined, firstText(result));
+      assert.match(firstText(result), /Delivered 1 message/);
+      assert.equal(await checkPromiseResolvesWithin(stopped, inFlightCallFailureTimeoutMs), true, 'the stop ends once the call has');
     } finally {
       await client.close();
     }

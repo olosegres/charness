@@ -160,9 +160,14 @@ the scheduler's would owe an answer nobody asked for.
   ~15 s reconnect budget latched the whole server `failed`, stranding the bot's tools in a session built to
   survive the restart.
 - **A call is answered with one JSON body, never an SSE stream** (`enableJsonResponse`). A stream's headers went out a moment
-  after the call arrived; a restart that then cut the connection was reported to the client only as a broken stream, never
-  to the call, which hung until the client's request timeout and held the agent's turn (its next prompt was answered that
-  late). Cut before its JSON body, the call fails at once on the client.
+  after the call arrived; a restart that then cut the connection reached the client as a broken stream, not as the call's
+  failure, so the call waited out the client's timeout and held the agent's turn (measured: 60 s in the SDK client and in
+  OpenCode, about 2 min in Claude Code 2.1.331). Cut before its JSON body, the call fails at once on the client; both CLIs then
+  tell the model the error and do not send the call again.
+- **A shutdown drains the running calls** (`stop({ drainMs })`, the shutdown's `stopBotMcp` step, `schedulerMcpShutdownDrainMs`):
+  no new connection is taken and idle ones close, the calls already running get up to 5 s to finish — an answer being posted
+  and pinned returns its result instead of an error for what the requester already sees — and only then are the rest cut.
+  It runs beside the output flush, before `bot.stop()` and the state flush.
 - **Heals** at boot: OpenCode `reconcileSchedulerMcpForActiveSessions` (re-registers a `charness` that is
   missing or not `connected` — OpenCode does not reconnect a remote MCP dropped in the restart gap); json-stream
   `healSchedulerMcpForActiveSessions` → `healMcpServer` (`mcp_status` / `mcp_reconnect` over the control

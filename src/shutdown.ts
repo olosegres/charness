@@ -74,6 +74,15 @@ export interface ShutdownDeps {
    * eat the whole watchdog budget; the outer watchdog is the backstop.
    */
   finalizePendingOutput?: () => Promise<void>;
+  /**
+   * Optional: stop the bot MCP server, letting the agents' tool calls already running finish first (an answer being posted and
+   * pinned) so their agents get the results instead of an error for something the requester already sees. Starts right after
+   * {@link cleanupTimers}, runs ALONGSIDE {@link finalizePendingOutput} and {@link clearTransientFrames} (each of those budgets is
+   * its own, and the watchdog covers them all), and is awaited before `bot.stop()` — a running call may still post to Telegram —
+   * and before `state.flush()`, which then saves what the calls changed. MUST self-bound (the server's drain is bounded); the
+   * outer watchdog is the backstop.
+   */
+  stopBotMcp?: () => Promise<void>;
   /** Release the single-instance lockfile (idempotent — owner-checked inside). */
   releaseLock: () => void;
   /** Terminate the process. Real prod value: `(code) => process.exit(code)`. */
@@ -108,6 +117,9 @@ export interface ShutdownDeps {
  *
  *   1. `cleanupTimers()` — drop any background `setInterval`s so they
  *      don't fire mid-shutdown and re-dirty state.
+ *   1'. `stopBotMcp()` starts — the bot MCP server takes no new call and lets
+ *      the running ones finish (self-bounded) — alongside 1a and 1b; it is
+ *      awaited before step 2.
  *   1a. `await finalizePendingOutput()` — flush the not-yet-delivered agent
  *      output (coalesce buffers / DM drafts → send FIFOs) while the Telegram
  *      client is still up, so a restart can't swallow it. Self-bounded.
@@ -169,6 +181,13 @@ export async function gracefulShutdown(deps: ShutdownDeps): Promise<void> {
         console.error('[shutdown] cleanupTimers failed:', e);
       }
     }
+    // Started now and awaited before `bot.stop()`; a throw, synchronous or not, is logged like every other step's.
+    const { stopBotMcp } = deps;
+    const botMcpStopped = stopBotMcp
+      ? (async () => stopBotMcp())().catch((e) => {
+        console.error('[shutdown] stopBotMcp failed:', e);
+      })
+      : Promise.resolve();
     if (deps.finalizePendingOutput) {
       try {
         await deps.finalizePendingOutput();
@@ -183,6 +202,7 @@ export async function gracefulShutdown(deps: ShutdownDeps): Promise<void> {
         console.error('[shutdown] clearTransientFrames failed:', e);
       }
     }
+    await botMcpStopped;
     try {
       deps.bot.stop(deps.signal);
     } catch (e) {
