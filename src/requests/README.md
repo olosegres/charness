@@ -544,9 +544,10 @@ match a process the prompt was not written to:
   sweep's rule for the backstop), so a job that renews itself (a recurring `CronCreate`, a `ScheduleWakeup` re-armed at every wake)
   cannot renew the hold; nor does a `progress` note (the owner's call: counted, a loop that posts notes would hold the request for
   good, and a Jira note edits one comment and notifies nobody). The turn end after the agent's own work was seen in the watch
-  (`hasSeenOwnWork`: pending while no turn runs, at a poll or at the adapter's turn-end settle, or a turn the CLI started by itself —
-  so a short command that ends inside one 10-s poll interval counts too; work started and finished inside a turn the bot started
-  does not: it woke nothing, and counted, a nudged agent running such a check every turn would never be given up) says which (`TurnEndContext.ownWork`): work that ENDED by itself starts
+  (`hasSeenOwnWork`: still RUNNING while no turn runs — the probe's `hasOwnLastingWork`, at a poll or at the adapter's turn-end
+  settle, so a short command that outlives the turn counts however soon after it ends; work started and finished inside a turn the
+  bot started does not, nor the notice of its end — pending up to 30 s after it — nor the CLI turn that notice starts: that work woke
+  nothing, and counted, a nudged agent running such a check every turn would never be given up) says which (`TurnEndContext.ownWork`): work that ENDED by itself starts
   `stalledTurnCount` again (the agent arranged what woke it), and its end is the nudge's case with or without a new note — the
   requester was answered before the hold (a restart's re-watch counts notes only from the restart); work still PENDING (the hold
   lapsed) is a stall woken as `ownWorkHoldLapsed` — its own line: the work held it 6 h since the last prompt or reminder, notes do not

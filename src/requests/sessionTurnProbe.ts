@@ -1,7 +1,7 @@
 import type { SessionKey } from '../sessionKey';
 import { unnumberedProcessGeneration, type AgentAdapter } from '../types';
 import type { SessionTurnProbe } from './wakeUpRules';
-import { checkHasOwnPendingWork } from '../utils/workingSignals';
+import { checkHasOwnLastingWork, checkHasOwnPendingWork } from '../utils/workingSignals';
 
 /**
  * @description How the wake-up engine sees a conversation's session right now
@@ -47,7 +47,8 @@ import { checkHasOwnPendingWork } from '../utils/workingSignals';
  *
  * The agent's own pending work (`hasOwnPendingWork`) is what the backend names among its background signals: a background command
  * or sub-agent, a session job, a finished task's turn on its way — never unread input or a compaction, which the fields above cover.
- * Only a tracker's rules read it (`wakeUpRules.ts`).
+ * Its LASTING part (`hasOwnLastingWork`) leaves out the turn on its way: that task already ended. Only a tracker's rules read them
+ * (`wakeUpRules.ts`).
  */
 
 /**
@@ -97,6 +98,7 @@ export function createSessionTurnProbe(deps: SessionTurnProbeDeps): (key: Sessio
       deps.checkIsRetryKickInFlight(keyString) ||
       deps.checkIsApiErrorInHandling(keyString) ||
       isStarting;
+    const backgroundSignals = adapter.getBackgroundWorkSignals?.(key) ?? [];
     // A finished task's own turn on its way is busy already: the watched turn runs on into it (the agent may answer there).
     const isBusy = isActive && ((adapter.checkIsBusy?.(key) ?? false) || (adapter.checkIsTurnOnItsWay?.(key) ?? false));
     // The replay writes into the process the start brought up, so it is named during the replay; an open window names none. A backend
@@ -108,7 +110,8 @@ export function createSessionTurnProbe(deps: SessionTurnProbeDeps): (key: Sessio
       isActive,
       isBusy,
       ...(isBusy && (adapter.checkIsCliOwnTurn?.(key) ?? false) ? { isCliOwnTurn: true } : {}),
-      ...(isActive && checkHasOwnPendingWork(adapter.getBackgroundWorkSignals?.(key) ?? []) ? { hasOwnPendingWork: true } : {}),
+      ...(isActive && checkHasOwnPendingWork(backgroundSignals) ? { hasOwnPendingWork: true } : {}),
+      ...(isActive && checkHasOwnLastingWork(backgroundSignals) ? { hasOwnLastingWork: true } : {}),
       ...(processGeneration === undefined ? {} : { processGeneration }),
       ...(isWindowOpen ? { isWindowOpen: true } : {}),
       hasUnconsumedInput: isStarting

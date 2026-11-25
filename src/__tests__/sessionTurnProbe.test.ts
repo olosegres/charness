@@ -271,6 +271,22 @@ describe('createSessionTurnProbe', () => {
     }
     scenario.backgroundSignals = [{ kind: 'unconsumedInput', count: 1 }, { kind: 'compaction' }];
     assert.equal(createProbe()(topicKey).hasOwnPendingWork, undefined, 'what the turn fields already cover');
+  });
+
+  it('the agent\'s own LASTING work is a background command or sub-agent or a session job still running — never the end notice of a task alone (review 3 recheck 2 R2)', () => {
+    for (const signal of [{ kind: 'backgroundTasks', count: 1 }, { kind: 'scheduledJobs', count: 1 }] as const) {
+      scenario.backgroundSignals = [signal];
+      assert.equal(createProbe()(topicKey).hasOwnLastingWork, true, signal.kind);
+    }
+    scenario.backgroundSignals = [{ kind: 'taskTurnOnItsWay' }];
+    assert.equal(createProbe()(topicKey).hasOwnLastingWork, undefined, 'a finished task\'s notice: its work is over');
+    assert.equal(createProbe()(topicKey).hasOwnPendingWork, true, 'still pending: its turn is on its way');
+    scenario.backgroundSignals = [{ kind: 'backgroundTasks', count: 1 }];
+    scenario.isActive = false;
+    assert.equal(createProbe()(topicKey).hasOwnLastingWork, undefined, 'a gone session runs nothing');
+  });
+
+  it('a gone session waits on no work of its own', () => {
     scenario.backgroundSignals = [{ kind: 'backgroundTasks', count: 1 }];
     scenario.isActive = false;
     assert.equal(createProbe()(topicKey).hasOwnPendingWork, undefined, 'a gone session waits on nothing');

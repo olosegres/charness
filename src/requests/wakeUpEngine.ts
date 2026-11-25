@@ -136,8 +136,8 @@ interface WatchedRequestTurn extends WatchedTurn {
    */
   ownForwardStartedAt?: number;
   /**
-   * A tracker's watch that saw the agent's own work outlive its turn ({@link noteOwnWorkSeen}): pending at a poll or a settle while no
-   * turn runs — a turn end the work held open — or a turn the CLI started by itself (that work woke it). Its end, with nothing of its own
+   * A tracker's watch that saw the agent's own work outlive its turn ({@link noteOwnWorkSeen}): still running at a poll or a settle
+   * while no turn runs — a turn end the work held open. Its end, with nothing of its own
    * pending, is the end of work that ended by itself (`TurnEndContext.ownWork` `ended`), and the CLI's own turns inside it are not the
    * request's activity — however soon the work ended after the turn that started it, before or between the polls. A merge keeps it.
    */
@@ -176,16 +176,15 @@ function checkIsPromptWaitingInWindow(turn: WatchedTurn, probe: SessionTurnProbe
 }
 
 /**
- * Marks a tracker's watch that sees the agent's own work outlive its turn (`WatchedRequestTurn.hasSeenOwnWork`): pending while no turn
- * runs, or a turn the CLI started by itself — that work woke it. Read at every poll AND every settle (the adapter's turn end): a short
- * command that ends, and starts its turn, inside one poll interval is still seen at the turn end it held open, or in the turn it started.
- * Work the agent starts and finishes inside a turn the bot started is not: it woke nothing, and counted, a nudged agent that ran such
- * a check in every turn would restart the stall count for ever and never be given up. Never under a topic's rules.
+ * Marks a tracker's watch that sees the agent's own work outlive its turn (`WatchedRequestTurn.hasSeenOwnWork`): still RUNNING while no
+ * turn runs (`hasOwnLastingWork`). Read at every poll AND every settle (the adapter's turn end): a short command that outlives the turn
+ * is seen at the turn end it held open, however soon after it ends. Work the agent starts and finishes inside a turn the bot started
+ * is not — nor the notice of its end, which reads as pending for up to 30 s after it, nor the turn the CLI starts for that notice: that
+ * work woke nothing, and counted, a nudged agent that ran such a check in every turn would restart the stall count for ever and never
+ * be given up. Never under a topic's rules.
  */
 function noteOwnWorkSeen(turn: WatchedRequestTurn, probe: SessionTurnProbe, rules: WakeUpRuleSet): void {
-  if (rules !== 'tracker') return;
-  const isOutlivingTurn = probe.hasOwnPendingWork === true && !probe.isBusy;
-  if (isOutlivingTurn || (probe.isBusy && probe.isCliOwnTurn === true)) turn.hasSeenOwnWork = true;
+  if (rules === 'tracker' && probe.hasOwnLastingWork === true && !probe.isBusy) turn.hasSeenOwnWork = true;
 }
 
 export class RequestWakeUpEngine {
@@ -808,8 +807,8 @@ export class RequestWakeUpEngine {
       scheduleWait: this.getScheduleWait(turn.key, request),
       progressFollowUpMs: this.deps.progressFollowUpMs,
       rules: this.getRules(turn.key),
-      // Still pending: the hold no longer applies (an owed answer, or it lapsed). Gone after a hold: it ended by itself.
-      ...(probe.hasOwnPendingWork === true ? { ownWork: 'pending' as const } : turn.hasSeenOwnWork === true ? { ownWork: 'ended' as const } : {}),
+      // Still running: the hold no longer applies (an owed answer, or it lapsed). Gone after a hold: it ended by itself.
+      ...(probe.hasOwnLastingWork === true ? { ownWork: 'pending' as const } : turn.hasSeenOwnWork === true ? { ownWork: 'ended' as const } : {}),
     });
   }
 
@@ -857,8 +856,8 @@ export class RequestWakeUpEngine {
       if (probe.isBusy) {
         // Another job's fire that only rides the request keeps the session busy for its own work, not for this request's — and so does
         // any turn while this request's prompt has reached no process (`checkIsPromptNeverWritten`): that busy time is another turn's.
-        // A tracker's turn the CLI started by itself (the agent's own work's, a loop's fire) is no activity either: counted, a
-        // self-renewing job would renew the hold it bounds (`ownWorkHoldMaxMs`).
+        // Once a tracker's watch saw the agent's own work outlive its turn, a turn the CLI starts by itself (that work's, a loop's fire)
+        // is no activity either: counted, a self-renewing job would renew the hold it bounds (`ownWorkHoldMaxMs`).
         const isOwnWorkTurn = turn.hasSeenOwnWork === true && probe.isCliOwnTurn === true;
         if (turn.isRequestJob !== false && !checkIsPromptNeverWritten(turn, probe) && !isOwnWorkTurn) await this.recordTurnActivity(request, false);
       } else if (checkIsWatchedTurnStale(request, probe, this.now(), this.deps.backstopMs, rules)) {
@@ -930,7 +929,7 @@ export class RequestWakeUpEngine {
       hasSeenOutput: false,
       isRequestPrompt: false,
       isOwnForward: false,
-      hasSeenOwnWork: true,
+      ...(probe.hasOwnLastingWork === true ? { hasSeenOwnWork: true } : {}),
     });
     return true;
   }

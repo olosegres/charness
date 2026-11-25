@@ -49,6 +49,17 @@ export function checkHasOwnPendingWork(signals: readonly WorkingSignal[]): boole
   return signals.some((signal) => ownPendingWorkKinds.has(signal.kind));
 }
 
+/** The signals of the agent's own work that is still RUNNING: a finished task's turn on its way is not — that work is over. */
+const ownLastingWorkKinds: ReadonlySet<WorkingSignal['kind']> = new Set(['backgroundTasks', 'scheduledJobs']);
+
+/**
+ * @description Whether the agent's own work still runs — a background command or sub-agent, a session job — not only the notice of
+ * a task that already ended ({@link checkHasOwnPendingWork} counts that too).
+ */
+export function checkHasOwnLastingWork(signals: readonly WorkingSignal[]): boolean {
+  return signals.some((signal) => ownLastingWorkKinds.has(signal.kind));
+}
+
 /** @description The reason the person is told when an idle compaction is skipped because the process was held. */
 export type IdleHeldNoticeReason = 'backgroundWork' | 'unconsumedInput';
 

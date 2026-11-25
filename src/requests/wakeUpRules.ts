@@ -144,6 +144,12 @@ export interface SessionTurnProbe {
    * cannot tell. Only a tracker's rules read it ({@link checkIsHeldByOwnWork}).
    */
   hasOwnPendingWork?: boolean;
+  /**
+   * The part of {@link hasOwnPendingWork} that still RUNS: a background command or sub-agent, a session job — not a finished task's
+   * turn on its way (its notice outlives the task by up to 30 s, and a task the agent ran and read inside its turn leaves one behind).
+   * What a tracker's watch counts as the agent's own work outliving its turn (`WatchedRequestTurn.hasSeenOwnWork`). Absent: none.
+   */
+  hasOwnLastingWork?: boolean;
 }
 
 /**
@@ -238,8 +244,8 @@ export interface TurnEndContext {
   /** The conversation's rule set; absent: a topic's. */
   rules?: WakeUpRuleSet;
   /**
-   * The agent's own pending work at this turn end (a tracker's rules): `ended` — the watch saw it outlive its turn (pending while no
-   * turn ran, or a turn the CLI started by itself) and it ended by itself, so the agent arranged what woke it and a stall here is the first in a row again; `pending` — it still runs, so the hold no longer applies (the
+   * The agent's own pending work at this turn end (a tracker's rules): `ended` — the watch saw it outlive its turn (still running
+   * while no turn ran, `hasOwnLastingWork`) and it ended by itself, so the agent arranged what woke it and a stall here is the first in a row again; `pending` — it still runs, so the hold no longer applies (the
    * request owes an answer, or {@link ownWorkHoldMaxMs} lapsed): the stall count goes on, and a wake for the lapse says the hold ran
    * out (`ownWorkHoldLapsed`), not that nothing is running. Absent: none.
    */
