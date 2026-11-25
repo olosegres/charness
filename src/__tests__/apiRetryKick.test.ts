@@ -39,6 +39,7 @@ import {
   type ApiRetryKickDeps,
   type ApiRetryTimerEntry,
   type ApiRetryTopicNotice,
+  type ResumeOnRungOutcome,
 } from '../apiRetryKick';
 import type { ApiRetryState } from '../types';
 import type { FallbackChainEntry } from '../utils/fallbackChain';
@@ -51,6 +52,8 @@ const continueNudge = 'continue';
 /** The request whose prompt a usage-limit resume carries, when the world has one untaken. */
 const untakenRequestId = 'req_1';
 const fireAtInThePast = 1_000;
+/** When a wait the kick's move re-armed for the conversation's own account fires. */
+const rearmedFireAt = 9_000_000;
 const clockMs = 1_000_000;
 
 /** The bot's side of the story: what is saved, what is armed, what was done. */
@@ -78,7 +81,7 @@ interface World {
   kicks: Array<Promise<void>>;
   /** The rungs the kick moved a topic onto (`resumeOnRung`), and whether that switch took (it ends the retry itself). */
   resumes: Array<{ key: string; rung: FallbackChainEntry }>;
-  resumeResult: boolean;
+  resumeResult: ResumeOnRungOutcome;
   /** The saved fire times of limit probes (`state.json` `limitProbesFired`) — survive a "restart". */
   firedProbes: Record<string, number>;
 }
@@ -127,11 +130,17 @@ function createKickDeps(): ApiRetryKickDeps {
     trackContinuation: async (key, options) => { world.continuations.push({ key: keyToString(key), ...options }); },
     resumeOnRung: async (key, rung) => {
       world.resumes.push({ key: keyToString(key), rung });
-      if (world.resumeResult) {
+      if (world.resumeResult === 'moved') {
         // `switchTopicToFallbackEntry` ends the retry (cancelApiRetry) and delivers its own continue prompt.
         world.entries.delete(keyToString(key));
         delete world.saved[keyToString(key)];
         world.nudges.push({ key: keyToString(key), text: 'bridge-or-continue-on-the-new-rung' });
+      }
+      if (world.resumeResult === 'waitingAgain') {
+        // `rearmLimitWaitForOwnReset` arms a new wait: a new entry and its own saved record replace the fired one.
+        const rearmed = { kind: 'usageLimit' as const, attempt: 1, fireAt: rearmedFireAt };
+        world.entries.set(keyToString(key), { timer: null, attempt: 1, attemptsByKind: { usageLimit: 1 }, kind: 'usageLimit', firedAt: null, fireAt: rearmedFireAt });
+        world.saved[keyToString(key)] = rearmed;
       }
       return world.resumeResult;
     },
@@ -193,7 +202,7 @@ beforeEach(() => {
     untakenRequestPrompt: undefined,
     kicks: [],
     resumes: [],
-    resumeResult: true,
+    resumeResult: 'moved',
     firedProbes: {},
   };
 });
@@ -768,7 +777,7 @@ describe('a limit wait aimed at another rung (the one that resets first)', () =>
   });
 
   it('a switch that did not take (already on that account, deferred, failed) falls back to the plain resume on the current rung', async () => {
-    world.resumeResult = false;
+    world.resumeResult = 'notMoved';
     saveRetry(topicKey, { resumeOn: target });
     boot();
     await runDueTimers();
@@ -807,7 +816,7 @@ describe('a limit wait aimed at another rung (the one that resets first)', () =>
     assert.deepEqual(world.nudges, [{ key: keyToString(issueKey), text: continueNudge }]);
 
     world.nudges = [];
-    world.resumeResult = false;
+    world.resumeResult = 'notMoved';
     saveRetry(issueKey, { resumeOn: target });
     boot();
     await runDueTimers();
@@ -815,5 +824,18 @@ describe('a limit wait aimed at another rung (the one that resets first)', () =>
     assert.deepEqual(world.nudges, [{ key: keyToString(issueKey), text: continueNudge }], 'the plain resume on the account it is on');
     assert.deepEqual(world.notices, [], 'still no topic notice');
     assert.deepEqual(world.saved, {});
+  });
+
+  it('a tracker issue whose automatic switch was turned OFF meanwhile stays and waits again: no resume, and the new wait\'s record is kept', async () => {
+    world.resumeResult = 'waitingAgain';
+    saveRetry(issueKey, { resumeOn: target });
+    boot();
+    await runDueTimers();
+    assert.equal(world.resumes.length, 1);
+    assert.deepEqual(world.sessionSteps, [], 'no session is brought up for a resume into a limit');
+    assert.deepEqual(world.nudges, [], 'no nudge');
+    assert.deepEqual(world.notices, []);
+    assert.deepEqual(world.saved, { [keyToString(issueKey)]: { kind: 'usageLimit', attempt: 1, fireAt: rearmedFireAt } }, 'the kick that ran its course does not clear the newer record');
+    assert.equal(world.kicksInFlight.size, 0);
   });
 });

@@ -347,7 +347,8 @@ so one account's usage limit does not stop every topic.
   there by itself; if that account refuses after all, the limit is planned again
   (another account with room, else the next reset). It has no topic to carry the
   buttons or the switch notices, so with switching OFF it waits for its OWN account's
-  reset, and on OpenCode for the reset as before; an OpenCode entry of the chain is
+  reset (switched OFF while a wait is already aimed at another account, it stays when
+  that wait ends and waits on for its own), and on OpenCode for the reset as before; an OpenCode entry of the chain is
   skipped, also when it comes back first (a list with no Claude entry restricts no
   account). Such a conversation
   has no settings of its own: the account it starts on (General's `/accounts`

@@ -21,6 +21,8 @@
  *     issue is answered on that account after it and handed back
  *   → with auto switch OFF (as an operator left it) the next issue's agent hits the same limit and WAITS: the requester is told in a
  *     comment, nothing moves, nobody switches
+ *   → a wait aimed at the adopted account while the switch was ON ends after the switch was turned OFF: the issue stays, nothing is
+ *     started, and the wait is armed again for its own account's reset
  *   → the launches carried the Jira flags and the allowlist (a launch under an account's directory adds `CLAUDE_CONFIG_DIR` — a path,
  *     the one variable an account adds — and only there), and no Telegram path was reached
  *
@@ -307,6 +309,29 @@ describe('The usage-limit switch of a Jira conversation end to end: built charne
     assert.ok(newLaunches.length >= 1, 'the issue\'s agent was started');
     assert.ok(newLaunches.every((launch) => launch.claudeConfigDir === null), 'nothing was started under the adopted account');
     assert.equal(issue.assignee?.accountId !== requester.accountId, true, 'the issue stays with the AI until the wait is over');
+  });
+
+  it('switched OFF while a wait is aimed at the adopted account, the issue stays when that wait ends and waits again for its own account', async () => {
+    const k = keyToString(makeJiraKey(waitingIssueKey));
+    const launchesBefore = getSessionLaunches(getLayout()).length;
+    // Saved the way a wait aimed at the adopted account is saved while the switch is ON — and already due, so the boot fires it.
+    await restartWithState((persisted) => {
+      const retry = persisted.apiRetries?.[k];
+      assert.ok(retry, `${waitingIssueKey} waits for its limit`);
+      persisted.apiRetries = { ...persisted.apiRetries, [k]: { ...retry, fireAt: Date.now(), resumeOn: { backend: 'claude', profile: handSignedAccount, model: null } } };
+    });
+    const turnsBefore = getAllAgentTurns(getLayout()).length;
+
+    await waitFor(`${waitingIssueKey}: the wait armed again for its own account`, answerTimeoutMs, () => getCharness().output.includes(`[fallback] ${k}: auto switch is off now`));
+    const ownBackIso = readPersistedState(getLayout()).claudeProfiles?.[exhaustedAccount]?.limitedUntil;
+    assert.ok(ownBackIso, 'the issue\'s own account is marked limited');
+    await waitFor('the new wait persisted to state.json', answerTimeoutMs, () => {
+      const retry = readPersistedState(getLayout()).apiRetries?.[k];
+      return retry?.fireAt === Date.parse(ownBackIso) + resetBufferMs && retry.resumeOn === undefined;
+    });
+    await new Promise((resolve) => setTimeout(resolve, noRetryQuietMs));
+    assert.equal(getAllAgentTurns(getLayout()).length, turnsBefore, 'no resume into the limit');
+    assert.equal(getSessionLaunches(getLayout()).length, launchesBefore, 'nothing started: not under the adopted account, not on its own');
   });
 
   it('the launches carried the Jira flags, and an account\'s directory is the only variable a launch adds to the allowlist', () => {

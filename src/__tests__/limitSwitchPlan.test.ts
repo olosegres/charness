@@ -7,7 +7,8 @@
  *   • it switches to a free account — ranked, or named by the chain; an account that is limited, signed out or has no usage is not one;
  *   • with no account free it waits for the Claude account whose limit resets EARLIEST (the chain's Claude rungs, else the signed-in
  *     subscriptions) — the retry kick moves it there; a re-plan from that account, when it refused after all, aims at the next one;
- *   • with auto-switch OFF it WAITS for its own reset: no «switch to …» offer (buttons are a topic's) and no wait aimed elsewhere;
+ *   • with auto-switch OFF it WAITS for its own reset: no «switch to …» offer (buttons are a topic's) and no wait aimed elsewhere —
+ *     and a wait aimed elsewhere while it was ON, when it is turned OFF before the wait ends, waits again for its own account;
  *   • an OpenCode rung of the chain is never its target, now or at a wait's end (a cross-backend hand-over has no surface there), a
  *     chain with no Claude rung restricts no account, and a conversation that runs on OpenCode has nothing to decide;
  *   • the same inputs for a Telegram topic keep the offer, the OpenCode rungs and the aimed wait.
@@ -20,7 +21,7 @@
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { checkIsLimitSwitchPossible, decideLimitSwitch } from '../utils/limitSwitchPlan';
+import { checkIsLimitSwitchPossible, decideAimedWaitEnd, decideLimitSwitch } from '../utils/limitSwitchPlan';
 import type { FallbackChainEntry, FallbackDetection } from '../utils/fallbackChain';
 import type { ClaudeProfileUsageView, ClaudeUsageSnapshot } from '../utils/claudeUsage';
 
@@ -213,6 +214,26 @@ describe('decideLimitSwitch: a Telegram topic keeps everything', () => {
     assert.deepEqual(readWaitTarget({ ...telegram, detection }), { entry: { backend: 'claude', profile: 'third', model: null }, until: '2026-11-18T11:00:00.000Z' }, 'no API account, no signed-out one, though they come back sooner');
     const chain: FallbackChainEntry[] = [{ backend: 'claude', profile: 'second', model: null }];
     assert.deepEqual(readWaitTarget({ ...telegram, chain, detection }), { entry: chain[0], until: '2026-11-18T12:00:00.000Z' }, 'the chain names the accounts');
+  });
+});
+
+describe('decideAimedWaitEnd: the end of a wait aimed at another account', () => {
+  const ownBackMs = Date.parse('2026-11-18T13:00:00.000Z');
+  const atEnd = { ownLimitedUntilMs: ownBackMs, nowMs };
+
+  it('moves the conversation while the automatic switch is ON, and a topic whatever it says', () => {
+    assert.deepEqual(decideAimedWaitEnd({ ...atEnd, isTelegram: false, isAutoSwitchEnabled: true }), { action: 'move' });
+    assert.deepEqual(decideAimedWaitEnd({ ...atEnd, isTelegram: true, isAutoSwitchEnabled: false }), { action: 'move' }, 'a topic\'s aimed wait is armed with the switch OFF too');
+  });
+
+  it('a Jira issue whose switch was turned OFF meanwhile stays: it waits again for its own account, not a resume into its limit', () => {
+    assert.deepEqual(decideAimedWaitEnd({ ...atEnd, isTelegram: false, isAutoSwitchEnabled: false }), { action: 'waitOwnReset', untilMs: ownBackMs });
+  });
+
+  it('…and resumes on its own account at once when that one names no reset ahead', () => {
+    for (const ownLimitedUntilMs of [null, nowMs - 1, Number.NaN]) {
+      assert.deepEqual(decideAimedWaitEnd({ isTelegram: false, isAutoSwitchEnabled: false, ownLimitedUntilMs, nowMs }), { action: 'resumeHere' }, String(ownLimitedUntilMs));
+    }
   });
 });
 

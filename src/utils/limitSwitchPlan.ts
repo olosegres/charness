@@ -9,7 +9,8 @@
  * that has no surface outside Telegram; a list with no Claude rung restricts no account, as for agents —
  * `getClaudeLaunchChainScope`), never the offer (its «🔁 Switch to …» buttons are a topic's). With no account free it waits for
  * the Claude account whose limit resets EARLIEST and the retry kick moves it there — the same automatic move, made later. With
- * auto-switch OFF it waits for its own account's reset, and on OpenCode it has nothing to decide.
+ * auto-switch OFF it waits for its own account's reset — also when the switch is turned OFF during such a wait
+ * (`decideAimedWaitEnd`) — and on OpenCode it has nothing to decide.
  *
  * No I/O, no `Date.now()`: the caller passes the clock and the detection, so every rule is unit-tested.
  */
@@ -83,4 +84,26 @@ export function decideLimitSwitch(input: {
   const waitRungs = explicit.length > 0 ? explicit : implicit;
   const found = waitRungs.length > 0 ? pickEarliestResetRung({ chain: waitRungs, current: from, detection, nowMs }) : null;
   return { plan, waitTarget: found && !found.isCurrent ? { entry: found.entry, untilMs: found.untilMs } : null };
+}
+
+/** What the end of a usage-limit wait aimed at another rung does ({@link decideAimedWaitEnd}). */
+export type AimedWaitEnd =
+  /** Move the conversation onto the rung the wait was aimed at. */
+  | { action: 'move' }
+  /** Stay, and wait again until the conversation's own account is back (`untilMs`). */
+  | { action: 'waitOwnReset'; untilMs: number }
+  /** Stay, and resume here now: its own account names no reset still ahead. */
+  | { action: 'resumeHere' };
+
+/**
+ * @description What the end of a usage-limit wait aimed at another rung (the retry record's `resumeOn`) does. A topic moves there
+ * whatever its switch says: its aimed wait is armed with auto-switch OFF too. Outside Telegram only the automatic switch moves a
+ * conversation, and the wait was aimed only while it was ON: turned OFF since, the conversation stays on its own account — waiting
+ * again until that account is back (`ownLimitedUntilMs`, its limit mark) while that lies ahead, rather than resuming into a limit
+ * it is known to hit; resumed now when its account names no reset ahead.
+ */
+export function decideAimedWaitEnd(input: { isTelegram: boolean; isAutoSwitchEnabled: boolean; ownLimitedUntilMs: number | null; nowMs: number }): AimedWaitEnd {
+  if (input.isTelegram || input.isAutoSwitchEnabled) return { action: 'move' };
+  const untilMs = input.ownLimitedUntilMs;
+  return untilMs !== null && Number.isFinite(untilMs) && untilMs > input.nowMs ? { action: 'waitOwnReset', untilMs } : { action: 'resumeHere' };
 }

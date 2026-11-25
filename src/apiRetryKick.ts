@@ -65,6 +65,13 @@ export interface ApiRetryTimerEntry {
 /** What the kick needs to know of {@link ensureAgentSession}'s answer. */
 export type ApiRetryEnsureOutcome = { ok: true } | { ok: false; reason: string; message: string };
 
+/**
+ * What {@link ApiRetryKickDeps.resumeOnRung} did: `moved` the conversation onto the rung (its own prompt delivered, the retry
+ * ended); stayed and armed a new wait, `waitingAgain` (a tracker issue whose automatic switch was turned OFF meanwhile —
+ * `decideAimedWaitEnd`); or `notMoved` — the plain resume on the conversation's current rung follows.
+ */
+export type ResumeOnRungOutcome = 'moved' | 'waitingAgain' | 'notMoved';
+
 /** A message the kick posts into a topic (Telegram only — a tracker issue has no topic, R6). */
 export type ApiRetryTopicNotice =
   | { kind: 'noSession'; message: string }
@@ -93,11 +100,11 @@ export interface ApiRetryKickDeps {
   trackContinuation: (key: SessionKey, options: { isCountersReset: boolean; carriedRequestIds: readonly string[] }) => Promise<void>;
   /**
    * Move the conversation onto `rung` and continue its work there (`switchTopicToFallbackEntry`: it delivers its own
-   * continue prompt and ends the retry). `true` when it did — the kick is then done; `false` (already on that
-   * account, the switch deferred or failed) leaves the plain resume on the conversation's current rung. A rung whose
-   * reset turned out wrong takes the move all the same: its refusal is a new limit, planned afresh.
+   * continue prompt and ends the retry) — {@link ResumeOnRungOutcome}. `moved` and `waitingAgain` end the kick; `notMoved`
+   * (already on that account, the switch deferred or failed) leaves the plain resume on the conversation's current rung. A
+   * rung whose reset turned out wrong takes the move all the same: its refusal is a new limit, planned afresh.
    */
-  resumeOnRung?: (key: SessionKey, rung: FallbackChainEntry) => Promise<boolean>;
+  resumeOnRung?: (key: SessionKey, rung: FallbackChainEntry) => Promise<ResumeOnRungOutcome>;
   /** Drop the retry's saved twin (`state.json`). */
   clearSavedRetry: (key: SessionKey) => void;
   /** Save when a limit probe ({@link ApiRetryTimerEntry.isLimitProbe}) fired: its saved twin goes, the memory must not. */
@@ -159,10 +166,10 @@ export async function runApiRetryKick(deps: ApiRetryKickDeps, key: SessionKey): 
     // (R6), and only onto a Claude account: the answer itself is what its requester waits for.
     const isTelegram = checkIsTelegramKey(key);
     if (entry.resumeOn && entry.kind === 'usageLimit' && deps.resumeOnRung && checkIsLimitSwitchPossible(isTelegram, entry.resumeOn)) {
-      if (await deps.resumeOnRung(key, entry.resumeOn)) {
-        if (isTelegram) deps.postTopicNotice(key, { kind: 'resuming', retryKind: entry.kind });
-        return;
-      }
+      const outcome = await deps.resumeOnRung(key, entry.resumeOn);
+      if (outcome === 'moved' && isTelegram) deps.postTopicNotice(key, { kind: 'resuming', retryKind: entry.kind });
+      // Waiting again, a new record replaced this one: nothing resumes now, and the `finally` below leaves that record alone.
+      if (outcome !== 'notMoved') return;
     }
     // R26: the conversation the limit interrupted is the one resumed — the ensure brings a sleeping
     // session back by its id, for a topic as for a tracker issue (a fresh session would not know the work).

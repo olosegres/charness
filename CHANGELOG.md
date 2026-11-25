@@ -3,7 +3,7 @@
 ## Unreleased
 
 **A Jira issue whose Claude account hit its usage limit while every other account was limited too now continues as soon as the FIRST of them is free again: before, it waited for its own account's reset, an hour or more after another account had freed up.**
-The issue's comment now says the answer comes when that first account is back, and at that time the issue continues on it by itself, the same conversation — as a Telegram topic already did. If that account still refuses then, the bot plans again: another account with room, else the next reset. With «Auto switch» OFF the issue still waits for its own account, and an OpenCode model is never where an issue continues.
+The issue's comment now says the answer comes when that first account is back, and at that time the issue continues on it by itself, the same conversation — as a Telegram topic already did. If that account still refuses then, the bot plans again: another account with room, else the next reset. With «Auto switch» OFF the issue still waits for its own account — also when it is turned OFF while such a wait runs — and an OpenCode model is never where an issue continues.
 
 **A bot restart no longer leaves an agent stuck on its call to the bot's tools: before, a call under way at the restart (an answer still being pinned, say) waited about 2 minutes in Claude Code and a minute in OpenCode, and the agent's next answer in that topic came that late.**
 Now the bot lets the calls already running finish before it restarts, so the agent gets its result — an answer being posted and pinned is reported as delivered, not as an error the agent might answer by sending it again. A call still running after a few seconds is cut, and the agent is told at once instead of waiting.

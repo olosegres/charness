@@ -539,7 +539,7 @@ import {
 import { createOpenCodeUsagePoller, readOpenCodeCredentials } from './utils/openCodeUsage';
 import { refreshUsageWithinBudget } from './utils/usageRefreshBudget';
 import { resolveClaudeLimitedUntil } from './utils/claudeLimitSwitch';
-import { checkIsLimitSwitchPossible, decideLimitSwitch, type LimitWaitTarget } from './utils/limitSwitchPlan';
+import { checkIsLimitSwitchPossible, decideAimedWaitEnd, decideLimitSwitch, type LimitWaitTarget } from './utils/limitSwitchPlan';
 import { verifyAnthropicApiKey } from './utils/anthropicApiKeyCheck';
 import { buildClaudeAuthProbeSettingsArgs } from './utils/claudeApiKeyHelper';
 import { buildFallbackDeferredNotice, buildFallbackSwitchedNotice, type FallbackSwitchReason } from './utils/fallbackSwitchNotice';
@@ -2698,9 +2698,21 @@ const apiRetryKickDeps: ApiRetryKickDeps = {
   },
   resumeOnRung: async (key, rung) => {
     const from = getTopicFallbackPosition(key);
-    if (from !== null && checkIsSameFallbackAccount(from, rung)) return false; // already there
+    const ownLimitedUntil = from?.backend === 'claude' ? state.getClaudeProfileInfo(from.profile)?.limitedUntil : undefined;
+    const end = decideAimedWaitEnd({
+      isTelegram: checkIsTelegramKey(key),
+      isAutoSwitchEnabled: state.checkIsClaudeAutoSwitchOnLimitEnabled(key),
+      ownLimitedUntilMs: ownLimitedUntil === undefined ? null : Date.parse(ownLimitedUntil),
+      nowMs: Date.now(),
+    });
+    if (end.action === 'waitOwnReset') {
+      await rearmLimitWaitForOwnReset(key, end.untilMs);
+      return 'waitingAgain';
+    }
+    if (end.action === 'resumeHere') return 'notMoved';
+    if (from !== null && checkIsSameFallbackAccount(from, rung)) return 'notMoved'; // already there
     const outcome = await switchTopicToFallbackEntry(key, from, rung, { isAnnounced: true, isAutomatic: true });
-    return outcome.isSwitched;
+    return outcome.isSwitched ? 'moved' : 'notMoved';
   },
   clearSavedRetry: clearSavedApiRetry,
   saveFiredLimitProbe: (key, firedAt) => {
@@ -2888,6 +2900,22 @@ function retargetLimitWait(key: SessionKey, episodeId: number, earliest: LimitWa
     .setApiRetry(key, { kind: 'usageLimit', attempt: entry.attempt, fireAt, resumeOn: earliest.entry })
     .catch((e) => console.error('[apiRetry] persist failed:', e));
   return wait;
+}
+
+/**
+ * @description The end of a wait aimed at another account, for a tracker conversation whose automatic switch was turned OFF
+ * meanwhile (`decideAimedWaitEnd`): it stays where it is, and a new wait is armed for its own account's reset (`untilMs` + the
+ * usual buffer), its record replacing the one that fired, and told to the open request like any limit wait.
+ */
+async function rearmLimitWaitForOwnReset(key: SessionKey, untilMs: number): Promise<void> {
+  const k = keyToString(key);
+  const fired = apiRetryTimers.get(k);
+  const attempt = fired?.attempt ?? 1;
+  const fireAt = untilMs + resetBufferMs;
+  const wait: UsageLimitWait = { kind: 'afterReset', resetAt: untilMs, fireAt };
+  armApiRetryTimer(key, { kind: 'usageLimit', attempt, fireAt, delayMs: Math.max(fireAt - Date.now(), 0), attemptsByKind: fired?.attemptsByKind, limitWait: wait });
+  console.log(`[fallback] ${k}: auto switch is off now — the wait aimed at another account goes on until its own account is back (${new Date(untilMs).toISOString()})`);
+  await announceLimitWait(key, wait, getLimitWaitTexts(key, wait, attempt), false);
 }
 
 /**

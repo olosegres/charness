@@ -306,7 +306,8 @@ open request — for the Claude account that comes back FIRST among the same acc
 subscriptions; `pickEarliestResetRung`), not only for its own: the notice names that time, the target rides in the persisted retry record,
 and when the wait ends the retry kick moves the conversation there by itself, as above (`resumeOn`). If that account refuses after all
 (its reset was wrong), the refusal is a new limit, planned afresh: an account with room takes over, else the wait ends at the next reset.
-Everything that is a topic's stays out: the «Switch to …» offer (with auto switch OFF the conversation waits for its OWN account's reset),
+Everything that is a topic's stays out: the «Switch to …» offer (with auto switch OFF the conversation waits for its OWN account's reset;
+switched OFF while a wait is already aimed at another account, it stays when that wait ends and waits on for its own — `decideAimedWaitEnd`),
 the notices in a topic, a wait aimed at an OpenCode entry — and on OpenCode the conversation waits for the reset exactly as before. The
 account-switch settings are ONE set for the whole bot, whatever the connector, and a Jira conversation has no setting of its
 own (an automatic move pins it to the account it moved to, as it does a topic): it starts on the instance's default account (`claudeProfileDefault`, General's `/accounts` pick) and follows the instance's fallback
