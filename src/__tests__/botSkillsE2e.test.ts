@@ -221,8 +221,8 @@ describe('The bot-skills switch end to end: built charness, fake Bot API', () =>
 
   it('ON is the default: General\'s screen says ON, and a topic\'s session launches with the skills and the hint in its instructions', async () => {
     const screen = await general.sendAndAwaitReply('/bot_skills', '🧰 Bot skills for ALL topics: ON — the built-in default');
-    assert.deepEqual(general.getKeyboardData(screen), [['bsk_on', 'bsk_off']]);
-    assert.deepEqual(general.getKeyboardLabels(screen), [['On ✓', 'Off']]);
+    assert.deepEqual(general.getKeyboardData(screen), [['bsk_on', 'bsk_off'], ['bsk_wkr']]);
+    assert.deepEqual(general.getKeyboardLabels(screen), [['On ✓', 'Off'], ['🛠 Worker models']]);
     assert.deepEqual(JSON.parse(fs.readFileSync(getSettingsFilePath(), 'utf8')), isolatedBaselineSettings, 'looking changes nothing');
 
     await first.sendAndAwaitReply('/claude', 'ready in');
@@ -234,7 +234,7 @@ describe('The bot-skills switch end to end: built charness, fake Bot API', () =>
     await restartSession(first);
     assertSkillsOff(await askAgentAndReadSession(firstThreadId), 'the seed');
     const screen = await general.sendAndAwaitReply('/bot_skills', '🧰 Bot skills for ALL topics: OFF — from settings.json');
-    assert.deepEqual(general.getKeyboardLabels(screen), [['On', 'Off ✓']]);
+    assert.deepEqual(general.getKeyboardLabels(screen), [['On', 'Off ✓'], ['🛠 Worker models']]);
   });
 
   it('General\'s own tap beats the file from then on, answers, and turns the picker into its confirmation', async () => {
@@ -255,8 +255,8 @@ describe('The bot-skills switch end to end: built charness, fake Bot API', () =>
     const firstPidBeforeSecondChoice = (await askAgentAndReadSession(firstThreadId)).pid;
     const launchesBefore = getSessionLaunches().length;
     const screen = await second.sendAndAwaitReply('/bot_skills', '🧰 Bot skills in this topic: ON — as in General');
-    assert.deepEqual(second.getKeyboardData(screen), [['bsk_on', 'bsk_off'], ['bsk_same']]);
-    assert.deepEqual(second.getKeyboardLabels(screen), [['On', 'Off'], ['As in General (ON) ✓']]);
+    assert.deepEqual(second.getKeyboardData(screen), [['bsk_on', 'bsk_off'], ['bsk_same'], ['bsk_wkr']]);
+    assert.deepEqual(second.getKeyboardLabels(screen), [['On', 'Off'], ['As in General (ON) ✓'], ['🛠 Worker models']]);
     await second.tapAndAwaitAnswer(screen, 'bsk_off');
     await second.waitForMessageText('the picker turned into its confirmation', screen, (text) => text === `✅ Bot skills: OFF for this topic. ${runningAgentNote}`);
     assert.deepEqual(second.getKeyboardData(screen), []);
@@ -272,7 +272,7 @@ describe('The bot-skills switch end to end: built charness, fake Bot API', () =>
 
   it('the topic\'s screen now says the choice is its own', async () => {
     const screen = await second.sendAndAwaitReply('/bot_skills', '🧰 Bot skills in this topic: OFF — set for this topic');
-    assert.deepEqual(second.getKeyboardLabels(screen), [['On', 'Off ✓'], ['As in General (ON)']]);
+    assert.deepEqual(second.getKeyboardLabels(screen), [['On', 'Off ✓'], ['As in General (ON)'], ['🛠 Worker models']]);
   });
 
   it('«As in General» hands the topic back to General\'s value — its next start has the skills again', async () => {
