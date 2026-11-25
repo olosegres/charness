@@ -509,7 +509,7 @@ import { createClaudeAccounts, type ClaudeProfileApplyOutcome } from './connecto
 import { checkIsSameClaudeConfigDir, createClaudeProfileLayout, defaultClaudeProfileName, getClaudeAuthCommandEnvironment, getProcessFailureReason, parseClaudeAuthStatus, readClaudeProfileApiKey, readDefaultClaudeProfileApiKey, readProcessErrorStdout, repairClaudeProfileFolderForLaunch, resolveClaudeProfileDir, resolveClaudeProfilesRoot, type ClaudeAuthStatus } from './utils/claudeProfiles';
 import { checkIsClaudeModelClearOfLimit, checkIsClaudeUsageExhausted, fetchClaudeUsage, readClaudeOAuthToken, type ClaudeLaunchChainScope, type ClaudeProfilesReport, type ClaudeProfileUsageView } from './utils/claudeUsage';
 import { claudeLaunchRefreshBudgetMs, claudeUsageOnDemandMaxAgeMs, createClaudeUsageRefresher, refreshClaudeUsageForLaunch } from './utils/claudeUsageRefresher';
-import { buildWorkerRoleReport, getClaudeWorkerUnavailability, getOpenCodeWorkerUnavailability, resolveWorkerRole } from './utils/workerRoles';
+import { buildWorkerRoleReportForQuery, getWorkerRolePickModel, resolveWorkerRole } from './utils/workerRoles';
 import { createClaudeProfileSync, type ClaudeProfileSyncResult } from './utils/claudeProfileSync';
 import {
   formatClaudeAccountRefusal,
@@ -10445,13 +10445,12 @@ async function takeFallbackSwitchOffer(key: SessionKey, episodeId: number, index
  */
 async function listClaudeProfilesForAgent(query: ClaudeProfilesQuery): Promise<ClaudeProfilesReport> {
   const workerRoles = readWorkerRolesSettings();
-  const roleValue = query.role === null ? null : resolveWorkerRole(workerRoles, query.role).value;
-  const pickModel = roleValue === null ? query.model : roleValue.cli === 'claude' ? roleValue.model : null;
+  const isOpenCodeRole = query.role !== null && resolveWorkerRole(workerRoles, query.role).value.cli === 'opencode';
   // The agent launches its worker under whichever folder the answer names, so every folder is put right before it is named.
   for (const view of getClaudeProfileUsageViews()) repairClaudeProfileFolder(view.configDir);
   const stoppedApiProfile = getApiProfileStoppedByAgent(getClaudeProfileUsageViews(), query, Date.now());
   const [openCodeCatalog] = await Promise.all([
-    roleValue?.cli === 'opencode' ? readOpenCodeCatalogForWorker() : Promise.resolve(null),
+    isOpenCodeRole ? readOpenCodeCatalogForWorker() : Promise.resolve(null),
     refreshClaudeUsageForLaunch(claudeUsageRefresher, { currentProfile: query.currentProfile, isStoppedByLimit: query.isStoppedByLimit, maxAgeMs: claudeUsageOnDemandMaxAgeMs }),
     stoppedApiProfile === null
       ? Promise.resolve()
@@ -10462,7 +10461,7 @@ async function listClaudeProfilesForAgent(query: ClaudeProfilesQuery): Promise<C
   ]);
   const report = buildClaudeProfilesCreditReport(
     getClaudeProfileUsageViews(),
-    pickModel,
+    getWorkerRolePickModel(workerRoles, query.role, query.model),
     Date.now(),
     {
       currentProfile: query.currentProfile,
@@ -10471,9 +10470,8 @@ async function listClaudeProfilesForAgent(query: ClaudeProfilesQuery): Promise<C
       chainScope: getClaudeLaunchChainScope(state.getFallbackChain()),
     },
   );
-  if (query.role === null || roleValue === null) return report;
-  const unavailable = roleValue.cli === 'claude' ? getClaudeWorkerUnavailability(report.profiles) : getOpenCodeWorkerUnavailability(roleValue.model, openCodeCatalog);
-  return { ...report, worker: buildWorkerRoleReport(workerRoles, query.role, unavailable) };
+  const worker = buildWorkerRoleReportForQuery(workerRoles, query.role, report.profiles, openCodeCatalog);
+  return worker === null ? report : { ...report, worker };
 }
 
 /**

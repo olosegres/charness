@@ -171,3 +171,32 @@ export function getOpenCodeWorkerUnavailability(model: string, catalog: readonly
   if (catalog === null || catalog.length === 0) return null;
   return catalog.includes(model) ? null : 'openCodeModelMissing';
 }
+
+// ── a `claude_profiles` query by role (the MCP tool in `bot.ts` and `charness claude-profiles --role` share these) ──
+
+/**
+ * @description The model the account pick of a `claude_profiles` query runs with: without a role the model the caller passed; a Claude
+ * role's own model (a Fable role counts the Fable weekly window); an OpenCode role none — it runs on no Claude account.
+ */
+export function getWorkerRolePickModel(setting: WorkerRolesSetting, role: WorkerRoleId | null, model: string | null): string | null {
+  if (role === null) return model;
+  const { value } = resolveWorkerRole(setting, role);
+  return value.cli === 'claude' ? value.model : null;
+}
+
+/**
+ * @description The `worker` of a `claude_profiles` answer: `null` without a role; else the role's value with whether it can run here —
+ * a Claude role by the accounts the answer lists, an OpenCode role by `openCodeCatalog` (`null` when the caller read none, as the CLI:
+ * then it is never called unavailable).
+ */
+export function buildWorkerRoleReportForQuery(
+  setting: WorkerRolesSetting,
+  role: WorkerRoleId | null,
+  profiles: readonly { loggedIn: boolean | null }[],
+  openCodeCatalog: readonly string[] | null,
+): WorkerRoleReport | null {
+  if (role === null) return null;
+  const { value } = resolveWorkerRole(setting, role);
+  const unavailable = value.cli === 'claude' ? getClaudeWorkerUnavailability(profiles) : getOpenCodeWorkerUnavailability(value.model, openCodeCatalog);
+  return buildWorkerRoleReport(setting, role, unavailable);
+}

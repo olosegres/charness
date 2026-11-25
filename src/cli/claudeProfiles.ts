@@ -47,12 +47,11 @@ import { claudeAuthRefusalWords } from '../utils/claudeAuthRefusal';
 import { buildClaudeProfilesCreditReport, buildClaudeProfileUsageViews } from '../utils/claudeProfileUsageViews';
 import { createWorkerRolesSettingsReader, getInstanceSettingsPath } from '../instanceSettings';
 import {
-  buildWorkerRoleReport,
+  buildWorkerRoleReportForQuery,
   checkIsWorkerRoleId,
   describeWorkerRole,
   describeWorkerRoleVerdict,
-  getClaudeWorkerUnavailability,
-  resolveWorkerRole,
+  getWorkerRolePickModel,
   workerRoleIds,
   type WorkerRoleId,
 } from '../utils/workerRoles';
@@ -204,8 +203,7 @@ export async function runClaudeProfilesCli(
   const records = getClaudeProfileRecordsFromState(stateFile);
   // A role reads the operator's default from settings.json (beside the env file just loaded); a broken file says so on stderr.
   const workerRoles = args.role === null ? {} : createWorkerRolesSettingsReader(() => getInstanceSettingsPath(), (line) => stderr(`${line}\n`))();
-  const roleValue = args.role === null ? null : resolveWorkerRole(workerRoles, args.role).value;
-  const pickModel = roleValue === null ? args.model : roleValue.cli === 'claude' ? roleValue.model : null;
+  const pickModel = getWorkerRolePickModel(workerRoles, args.role, args.model);
   const accountReport = buildClaudeProfilesCreditReport(buildClaudeProfileUsageViews({ dataDir, records, creditAnchors: readClaudeApiCreditAnchors(dataDir) }), pickModel, nowMs, {
     currentProfile: args.currentProfile,
     isStoppedByLimit: args.isStoppedByLimit,
@@ -213,9 +211,7 @@ export async function runClaudeProfilesCli(
     chainScope: getClaudeLaunchChainScope(normaliseFallbackChain(stateFile.fallbackChain)),
   });
   // No OpenCode catalog here (no connection): an OpenCode role is never called unavailable by the CLI.
-  const worker = args.role === null || roleValue === null
-    ? null
-    : buildWorkerRoleReport(workerRoles, args.role, roleValue.cli === 'claude' ? getClaudeWorkerUnavailability(accountReport.profiles) : null);
+  const worker = buildWorkerRoleReportForQuery(workerRoles, args.role, accountReport.profiles, null);
   const report = worker === null ? accountReport : { ...accountReport, worker };
   // A worker is started under whichever folder this names (`CLAUDE_CONFIG_DIR="$(charness claude-profiles --best)"`): every folder it
   // lists is put right first — the layout only, anything moved aside is said on stderr (`utils/claudeProfiles.ts`).

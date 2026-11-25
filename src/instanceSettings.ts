@@ -9,7 +9,7 @@ import {
   type ConfigValidation,
 } from './configDirFile';
 import { claudeEffortLevels, claudeWorkerEffortLevels, type ClaudeEffortLevel } from './effortLevels';
-import { claudeModelAliasRe, openCodeProviderIdRe } from './utils/fallbackChain';
+import { claudeModelAliasRe, parseOpenCodeModelLabel } from './utils/fallbackChain';
 import { workerRoleIds, type WorkerRoleId, type WorkerRoleValue, type WorkerRolesSetting } from './utils/workerRoles';
 import { botSkillsSettingValues, type BotSkillsSetting } from './utils/botSkillsSetting';
 import { taskAgentsMaxConcurrentUpperBound } from './trackers/taskAgentLimit';
@@ -78,8 +78,8 @@ const workerRoleOpenCodePartMaxLength = 128;
 
 /** An OpenCode `provider/model` of a worker role: a provider id, a slash, a bounded model id. */
 const workerRoleOpenCodeModelSchema = z.string().max(workerRoleOpenCodePartMaxLength * 2).refine((label) => {
-  const index = label.indexOf('/');
-  return index > 0 && openCodeProviderIdRe.test(label.slice(0, index)) && label.length - index - 1 > 0 && label.length - index - 1 <= workerRoleOpenCodePartMaxLength;
+  const parsed = parseOpenCodeModelLabel(label);
+  return parsed !== null && parsed.modelId.length <= workerRoleOpenCodePartMaxLength;
 }, { message: 'must be provider/model (an OpenCode model id)' });
 
 const workerRoleValueSchema = z.discriminatedUnion('cli', [

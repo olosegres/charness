@@ -8,6 +8,7 @@ import * as assert from 'node:assert/strict';
 import {
   builtInWorkerRoles,
   buildWorkerRoleReport,
+  buildWorkerRoleReportForQuery,
   checkHasChangedWorkerRole,
   checkIsWorkerRoleId,
   describeWorkerLaunchFlags,
@@ -15,6 +16,7 @@ import {
   describeWorkerRoleVerdict,
   getClaudeWorkerUnavailability,
   getOpenCodeWorkerUnavailability,
+  getWorkerRolePickModel,
   resolveWorkerRole,
   updateWorkerRolesSetting,
   workerRoleIds,
@@ -87,4 +89,24 @@ test('a Claude role cannot run only when no account is signed in; an OpenCode ro
   assert.equal(getOpenCodeWorkerUnavailability('openai/gpt-5', []), null, 'an empty answer says nothing');
   assert.equal(getOpenCodeWorkerUnavailability('openai/gpt-5', ['openai/gpt-5', 'anthropic/x']), null);
   assert.equal(getOpenCodeWorkerUnavailability('openai/gpt-5', ['anthropic/x']), 'openCodeModelMissing');
+});
+
+test('a query by role: the account pick runs with a Claude role\'s own model (a Fable role counts the Fable window), with none for an OpenCode role, with the caller\'s model without a role', () => {
+  const setting = { builder: { cli: 'claude', model: 'fable', effort: 'high' }, reviewer: { cli: 'opencode', model: 'openai/gpt-5', effort: null } } as const;
+  assert.equal(getWorkerRolePickModel(setting, 'builder', null), 'fable');
+  assert.equal(getWorkerRolePickModel(setting, 'planner', null), 'opus', 'a built-in role');
+  assert.equal(getWorkerRolePickModel(setting, 'reviewer', null), null, 'an OpenCode role runs on no Claude account');
+  assert.equal(getWorkerRolePickModel(setting, null, 'sonnet'), 'sonnet');
+  assert.equal(getWorkerRolePickModel(setting, null, null), null);
+});
+
+test('a query by role: the worker report judges a Claude role by the accounts, an OpenCode role by a READ catalog (none read → never unavailable); no role → no report', () => {
+  const setting = { reviewer: { cli: 'opencode', model: 'openai/gpt-5', effort: null } } as const;
+  const signedIn = [{ loggedIn: true }];
+  assert.equal(buildWorkerRoleReportForQuery(setting, null, signedIn, null), null);
+  assert.equal(buildWorkerRoleReportForQuery(setting, 'builder', signedIn, null)?.unavailable, null);
+  assert.equal(buildWorkerRoleReportForQuery(setting, 'builder', [{ loggedIn: false }], null)?.unavailable, 'noClaudeAccount');
+  assert.equal(buildWorkerRoleReportForQuery(setting, 'reviewer', [], ['anthropic/x'])?.unavailable, 'openCodeModelMissing', 'no Claude account does not matter to an OpenCode role');
+  assert.equal(buildWorkerRoleReportForQuery(setting, 'reviewer', [], null)?.unavailable, null);
+  assert.deepEqual(buildWorkerRoleReportForQuery(setting, 'reviewer', [], ['openai/gpt-5']), { role: 'reviewer', cli: 'opencode', model: 'openai/gpt-5', effort: null, isBuiltIn: false, unavailable: null });
 });
