@@ -165,9 +165,11 @@ the scheduler's would owe an answer nobody asked for.
   OpenCode, about 2 min in Claude Code 2.1.331). Cut before its JSON body, the call fails at once on the client; both CLIs then
   tell the model the error and do not send the call again.
 - **A shutdown drains the running calls** (`stop({ drainMs })`, the shutdown's `stopBotMcp` step, `schedulerMcpShutdownDrainMs`):
-  no new connection is taken and idle ones close, the calls already running get up to 5 s to finish — an answer being posted
-  and pinned returns its result instead of an error for what the requester already sees — and only then are the rest cut.
-  It runs beside the output flush, before `bot.stop()` and the state flush.
+  no new connection is taken, idle ones close, a connection closes as soon as its running call ends, and a call that still
+  comes in over a kept-alive connection is refused with a 503 before any tool runs (a call started by a stopping bot would be
+  cut after it may have posted). The calls already running get up to 5 s to finish — an answer being posted and pinned returns
+  its result instead of an error for what the requester already sees — and only then are the rest cut. It runs beside the
+  output flush, before `bot.stop()` and the state flush.
 - **Heals** at boot: OpenCode `reconcileSchedulerMcpForActiveSessions` (re-registers a `charness` that is
   missing or not `connected` — OpenCode does not reconnect a remote MCP dropped in the restart gap); json-stream
   `healSchedulerMcpForActiveSessions` → `healMcpServer` (`mcp_status` / `mcp_reconnect` over the control

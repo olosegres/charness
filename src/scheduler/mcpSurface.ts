@@ -131,9 +131,11 @@ export const legacySchedulerMcpClientIdHeader = 'x-telegramcode-mcp-client-id';
 export const schedulerMcpBindRetryCount = 20;
 export const schedulerMcpBindRetryDelayMs = 500;
 /**
- * How long a bot shutdown lets the agents' tool calls already running finish before it cuts them. An answer is posted and then
- * pinned through the paced send gate (one send per 2 s across all chats), so a few seconds; it runs alongside the shutdown's output
- * flush, well inside its watchdog (`DEFAULT_WATCHDOG_MS`, 10 s).
+ * How long a bot shutdown lets the agents' tool calls already running finish before it cuts them. The shutdown's output flush,
+ * which runs alongside, first puts the send gate into its drain mode (`enterShutdownDrain`: every send granted at once), so an
+ * answer's post and pin take about one Bot API round trip each; what can hold a call longer is a 429 with its `retry_after`, a file
+ * upload or a long `send_messages_to_user`. 5 s covers a short wait of that kind and stays well inside the shutdown's watchdog
+ * (`DEFAULT_WATCHDOG_MS`, 10 s); a call still running after it is cut.
  */
 export const schedulerMcpShutdownDrainMs = 5_000;
 
@@ -632,8 +634,10 @@ export interface SchedulerMcpStopOptions {
 export interface SchedulerMcpHandle {
   start(): Promise<void>;
   /**
-   * Stop serving: no new connection is taken and idle ones close at once; the calls already running get `drainMs` to finish (their
-   * agents then get their results), and whatever still runs after it is cut — a cut call fails at once on its client.
+   * Stop serving: no new connection is taken, idle ones close at once, a connection closes as soon as its running call ends, and a
+   * call that still comes in over a kept-alive connection is refused (503) before any tool runs. The calls already running get
+   * `drainMs` to finish (their agents then get their results); whatever still runs after it is cut — a cut call fails at once on
+   * its client.
    */
   stop(options?: SchedulerMcpStopOptions): Promise<void>;
   /** The bound port, available after `start` resolves. */
@@ -2078,6 +2082,9 @@ function readRequestBody(req: IncomingMessage): Promise<string> {
   });
 }
 
+/** The JSON-RPC error of a call that came in while the server stops: it was not run, the restarted bot takes it again. */
+const serverStoppingErrorMessage = 'The bot is restarting: this call was NOT run. Make it again in a moment.';
+
 /** Write a JSON-RPC error response (used for the 401 / not-found paths the SDK doesn't reach). */
 function writeJsonRpcError(res: ServerResponse, httpStatus: number, code: number, message: string): void {
   res.writeHead(httpStatus, { 'Content-Type': 'application/json' });
@@ -2101,6 +2108,11 @@ export function createSchedulerMcpServer(deps: SchedulerMcpDeps): SchedulerMcpHa
   const openResponses = new Set<ServerResponse>();
   /** Told each time a response finishes, while a stop drains. */
   let notifyResponseFinished: (() => void) | null = null;
+  /**
+   * Set by {@link stop}: a client keeps its connection alive, so a call can still come in over one opened before the stop. It is
+   * refused before any tool runs — a call STARTED by a stopping bot would be cut when the drain ends, after it may have posted.
+   */
+  let isStopping = false;
   const cancellationLifecycle = createSchedulerMcpCancellationLifecycle();
 
   function getClientIdentity(req: IncomingMessage, verifiedToken: string): string {
@@ -2206,11 +2218,19 @@ export function createSchedulerMcpServer(deps: SchedulerMcpDeps): SchedulerMcpHa
   }
 
   function start(): Promise<void> {
+    isStopping = false;
     return new Promise((resolve, reject) => {
       const server = createServer((req, res) => {
+        if (isStopping) {
+          res.setHeader('Connection', 'close');
+          writeJsonRpcError(res, 503, -32000, serverStoppingErrorMessage);
+          return;
+        }
         openResponses.add(res);
         res.once('close', () => {
           openResponses.delete(res);
+          // While stopping, a connection whose call has ended goes at once: it would only carry a call the stop must refuse.
+          if (isStopping) server.closeIdleConnections();
           notifyResponseFinished?.();
         });
         if (req.url && req.url.split('?')[0] === schedulerMcpPath) {
@@ -2310,6 +2330,7 @@ export function createSchedulerMcpServer(deps: SchedulerMcpDeps): SchedulerMcpHa
     const server = httpServer;
     if (!server) return;
     httpServer = null;
+    isStopping = true;
     const closed = new Promise<void>((resolve) => { server.close(() => resolve()); });
     // Streamable HTTP clients may retain an idle keep-alive connection after
     // their request completes; server.close() otherwise waits for it forever.
