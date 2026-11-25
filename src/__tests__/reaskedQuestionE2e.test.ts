@@ -39,7 +39,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { FakeTelegram, type FakeTelegramCall, type FakeTelegramMessage } from './telegramE2e/fakeTelegram';
 import { TopicDriver } from './telegramE2e/topicDriver';
-import { fakeAskQuestion, fakeClaudeIgnoreStopSignalsFileName, fakeClaudeLogFileNames, fakeClaudeRefuseLaunchFileName, type FakeClaudePrompt } from './jiraE2e/fakeClaudeContract';
+import { fakeAskQuestion, fakeClaudeIgnoreStopSignalsFileName, fakeClaudeLogFileNames, fakeClaudeRefuseLaunchFileName, writeFakeContextGrowingEveryTurn, type FakeClaudePrompt } from './jiraE2e/fakeClaudeContract';
 import { enDict } from '../i18n/en';
 import {
   builtCliPath,
@@ -172,6 +172,8 @@ describe('A pending question the idle compaction re-asks, end to end: built char
     defaultTmuxSessionsBefore = listTmuxSessions([]);
     // The idle fire asks the question again only for «Wait for my answer»; any other wait sets it aside (`questionSetAsideIdleE2e.test.ts`).
     writeInstanceSettingsFile(layout, { questionWait: 'untilAnswered' });
+    // The idle compaction compacts again only once the context grew: every turn grows it past the threshold.
+    writeFakeContextGrowingEveryTurn(layout.fakeStateDir);
 
     process.on('exit', removeInstanceSync);
     process.once('SIGINT', exitOnSignal);

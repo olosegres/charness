@@ -59,6 +59,7 @@ import {
   getLaunchSessionId,
   type FakeClaudePrompt,
   type FakeClaudeTurn,
+  writeFakeContextGrowingEveryTurn,
 } from './jiraE2e/fakeClaudeContract';
 import {
   builtCliPath,
@@ -222,6 +223,8 @@ describe('The agent\'s own background work is never cut off by an automatic stop
     process.once('SIGTERM', exitOnSignal);
 
     fs.mkdirSync(layout.fakeStateDir, { recursive: true });
+    // The idle compaction compacts again only once the context grew: every turn grows it past the threshold.
+    writeFakeContextGrowingEveryTurn(layout.fakeStateDir);
     fakeTelegram = new FakeTelegram({ botUser, operator, group });
     topic = new TopicDriver(fakeTelegram, getCharness, topicThreadId, replyTimeoutMs);
     const apiRoot = await fakeTelegram.start();

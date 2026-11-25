@@ -25,7 +25,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { FakeTelegram } from './telegramE2e/fakeTelegram';
 import { TopicDriver } from './telegramE2e/topicDriver';
-import { fakeClaudeLogFileNames, fakeClaudeMergeQueuedPromptsFileName, type FakeClaudePrompt } from './jiraE2e/fakeClaudeContract';
+import { fakeClaudeLogFileNames, fakeClaudeMergeQueuedPromptsFileName, writeFakeContextGrowingEveryTurn, type FakeClaudePrompt } from './jiraE2e/fakeClaudeContract';
 import {
   builtCliPath,
   createIsolatedInstanceLayout,
@@ -118,6 +118,8 @@ describe('Messages sent while the agent works do not keep the topic "working" fo
     process.once('SIGTERM', exitOnSignal);
 
     fs.mkdirSync(layout.fakeStateDir, { recursive: true });
+    // The idle compaction compacts again only once the context grew: every turn grows it past the threshold.
+    writeFakeContextGrowingEveryTurn(layout.fakeStateDir);
     fakeTelegram = new FakeTelegram({ botUser, operator, group });
     topic = new TopicDriver(fakeTelegram, getCharness, topicThreadId, replyTimeoutMs);
     const apiRoot = await fakeTelegram.start();

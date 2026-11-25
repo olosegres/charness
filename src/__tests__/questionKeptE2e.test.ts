@@ -83,6 +83,7 @@ import {
   getFakeClaudeTranscriptPath,
   type FakeClaudePrompt,
   type FakeClaudeToolCall,
+  writeFakeContextGrowingEveryTurn,
 } from './jiraE2e/fakeClaudeContract';
 import { enDict } from '../i18n/en';
 import { bindCreateFolderCallback, bindLeaveCurrentCallback } from '../connectors/telegram/bindPicker';
@@ -179,6 +180,8 @@ async function setUpInstance(layoutPrefix: string, waitTimeoutMs: number, extraE
   if (!fs.existsSync(builtCliPath)) throw new Error('Built CLI is missing. Run `yarn build` before `yarn test`.');
   layout = createIsolatedInstanceLayout(layoutPrefix, [projectFolder], getFlowDeadlineMs());
   defaultTmuxSessionsBefore = listTmuxSessions([]);
+  // The idle compaction compacts again only once the context grew: every turn grows it past the threshold.
+  writeFakeContextGrowingEveryTurn(layout.fakeStateDir);
 
   process.on('exit', removeInstanceSync);
   process.once('SIGINT', exitOnSignal);

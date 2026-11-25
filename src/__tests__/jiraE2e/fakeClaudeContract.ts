@@ -10,6 +10,7 @@ import * as path from 'path';
 import { agentEnvironmentNames } from '../../utils/agentEnvironment';
 import { claudeConfigDirVariableName } from '../../utils/claudeProfiles';
 import { claudeSessionStateEventsVariableName } from '../../utils/jsonStreamHost';
+import { defaultCompactGrowthTokens } from '../../utils/compactOnIdle';
 
 export const argvViolationExitCode = 3;
 /**
@@ -126,6 +127,23 @@ export const fakeClaudeUsageWindowsFileName = 'usage-windows.json';
  * the transcript holds no such record, the bot can tell no size, and the gate does not hold a conversation never compacted back.
  */
 export const fakeClaudeContextTokensFileName = 'context-tokens';
+
+/** The first model call of every turn of {@link writeFakeContextGrowingEveryTurn}, in tokens. */
+const fakeGrowingTurnFirstCallTokens = 40_000;
+/** How far past the default growth threshold every turn of {@link writeFakeContextGrowingEveryTurn} grows the context, in tokens. */
+const fakeGrowingTurnMarginTokens = 10_000;
+
+/**
+ * @description Make every turn of the fake grow the context past the idle compaction's default growth threshold
+ * ({@link fakeClaudeContextTokensFileName}: each turn's last call is that much bigger than its first, and the first call after a
+ * compaction is the baseline): for a flow about something else that needs the idle compaction at EVERY idle mark after a turn, a
+ * second and later one included — without figures the gate holds a conversation that was compacted once back for good.
+ */
+export function writeFakeContextGrowingEveryTurn(fakeStateDir: string): void {
+  const lastCallTokens = fakeGrowingTurnFirstCallTokens + defaultCompactGrowthTokens + fakeGrowingTurnMarginTokens;
+  fs.mkdirSync(fakeStateDir, { recursive: true });
+  fs.writeFileSync(path.join(fakeStateDir, fakeClaudeContextTokensFileName), `${fakeGrowingTurnFirstCallTokens} ${lastCallTokens}`);
+}
 
 /** The account name of a process started without `CLAUDE_CONFIG_DIR`. */
 export const fakeDefaultAccountName = 'default';
