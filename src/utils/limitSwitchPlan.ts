@@ -1,8 +1,8 @@
 /**
  * @description The pure decision behind «a conversation hit its usage limit — may it move on, and where to»
  * (`bot.ts` `planFallbackSwitch` wires it): the candidates (the operator's fallback chain, or, with none, the ranking of the
- * signed-in Claude accounts — `utils/claudeLimitSwitch.ts`), then auto / offer / none (`decideFallbackSwitch`), and the rungs a
- * wait with nothing to switch to may be aimed at.
+ * signed-in Claude accounts — `utils/claudeLimitSwitch.ts`), then auto / offer / none (`decideFallbackSwitch`), and the rung a
+ * wait with nothing to switch to is aimed at.
  *
  * WHO it applies to. A Telegram topic takes all of it. A conversation of another platform (a Jira issue; no `checkIsTelegramKey`)
  * takes the AUTOMATIC moves between Claude accounts only: the chain's Claude rungs (an OpenCode rung is a cross-backend hand-over
@@ -17,6 +17,7 @@
 import { pickClaudeLimitSwitchCandidates } from './claudeLimitSwitch';
 import {
   decideFallbackSwitch,
+  pickEarliestResetRung,
   pickFallbackCandidates,
   type FallbackChainEntry,
   type FallbackDetection,
@@ -33,15 +34,22 @@ export function checkIsLimitSwitchPossible(isTelegram: boolean, rung: FallbackCh
   return isTelegram || rung.backend === 'claude';
 }
 
+/** The rung a usage-limit wait is re-aimed at — the one whose limit resets first — and when that limit ends. */
+export interface LimitWaitTarget {
+  entry: FallbackChainEntry;
+  untilMs: number;
+}
+
 export interface LimitSwitchDecision {
   plan: FallbackSwitchPlan;
   /**
-   * When `plan` is `none`: the rungs the armed wait may be re-aimed at — the one whose limit resets EARLIEST (`pickEarliestResetRung`).
-   * The operator's chain (outside Telegram its Claude rungs), else the signed-in SUBSCRIPTIONS (an account billed to API credits never
-   * ends a wait by itself). Empty whenever the plan is not `none`, and outside Telegram with auto-switch OFF: there the wait's end
-   * moves the conversation by itself, which that switch forbids.
+   * When `plan` is `none`: ANOTHER rung whose limit resets EARLIEST (`pickEarliestResetRung`), so the armed wait ends there and the
+   * retry kick moves the conversation onto it; `null` when the conversation's own rung resets first (or within a minute of the first)
+   * or no other one names a reset. Picked from the operator's chain (outside Telegram its Claude rungs), else the signed-in
+   * SUBSCRIPTIONS (an account billed to API credits never ends a wait by itself). Always `null` when the plan is not `none`, and
+   * outside Telegram with auto-switch OFF: there the wait's end moves the conversation by itself, which that switch forbids.
    */
-  waitRungs: FallbackChainEntry[];
+  waitTarget: LimitWaitTarget | null;
 }
 
 /**
@@ -66,11 +74,13 @@ export function decideLimitSwitch(input: {
   const candidates = pickFallbackCandidates({ chain: ranked, current: from, detection, nowMs });
   const decided = decideFallbackSwitch({ candidates, isAutoSwitchEnabled: input.isAutoSwitchEnabled });
   const plan: FallbackSwitchPlan = !isTelegram && decided.action === 'offer' ? { action: 'none' } : decided;
-  if (plan.action !== 'none' || (!isTelegram && !input.isAutoSwitchEnabled)) return { plan, waitRungs: [] };
+  if (plan.action !== 'none' || (!isTelegram && !input.isAutoSwitchEnabled)) return { plan, waitTarget: null };
   const implicit = from.backend === 'claude'
     ? detection.claudeProfiles
       .filter((profile) => profile.loggedIn !== false && profile.billing !== 'api')
       .map((profile): FallbackChainEntry => ({ backend: 'claude', profile: profile.name, model: null }))
     : [];
-  return { plan, waitRungs: explicit.length > 0 ? [...explicit] : implicit };
+  const waitRungs = explicit.length > 0 ? explicit : implicit;
+  const found = waitRungs.length > 0 ? pickEarliestResetRung({ chain: waitRungs, current: from, detection, nowMs }) : null;
+  return { plan, waitTarget: found && !found.isCurrent ? { entry: found.entry, untilMs: found.untilMs } : null };
 }

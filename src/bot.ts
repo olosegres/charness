@@ -539,7 +539,7 @@ import {
 import { createOpenCodeUsagePoller, readOpenCodeCredentials } from './utils/openCodeUsage';
 import { refreshUsageWithinBudget } from './utils/usageRefreshBudget';
 import { resolveClaudeLimitedUntil } from './utils/claudeLimitSwitch';
-import { checkIsLimitSwitchPossible, decideLimitSwitch } from './utils/limitSwitchPlan';
+import { checkIsLimitSwitchPossible, decideLimitSwitch, type LimitWaitTarget } from './utils/limitSwitchPlan';
 import { verifyAnthropicApiKey } from './utils/anthropicApiKeyCheck';
 import { buildClaudeAuthProbeSettingsArgs } from './utils/claudeApiKeyHelper';
 import { buildFallbackDeferredNotice, buildFallbackSwitchedNotice, type FallbackSwitchReason } from './utils/fallbackSwitchNotice';
@@ -554,7 +554,6 @@ import {
   getFallbackSwitchTapDecision,
   parseOpenCodeModelLabel,
   listOpenCodeProviders,
-  pickEarliestResetRung,
   checkIsSameFallbackAccount,
   resolveOpenCodeLimitedUntil,
   type FallbackChainEntry,
@@ -2873,7 +2872,7 @@ async function handleBalanceExhausted(key: SessionKey, cls: AgentApiErrorClass):
  * resume — also after a restart — moves the topic there before the continue nudge. `null` (nothing changed)
  * when the wait the episode armed is gone or was replaced meanwhile.
  */
-function retargetLimitWait(key: SessionKey, episodeId: number, earliest: { entry: FallbackChainEntry; untilMs: number }): UsageLimitWait | null {
+function retargetLimitWait(key: SessionKey, episodeId: number, earliest: LimitWaitTarget): UsageLimitWait | null {
   const k = keyToString(key);
   const entry = apiRetryTimers.get(k);
   if (!entry || entry.timer === null || entry.fireAt !== episodeId || entry.kind !== 'usageLimit') return null;
@@ -9875,7 +9874,7 @@ function notePersonActivity(key: SessionKey): void {
  * account free its wait, like a topic's, ends at the EARLIEST reset of those accounts (`earliest`) and the retry kick moves it there;
  * the offer's buttons are Telegram's. With auto-switch OFF, or on OpenCode, such a conversation waits for its own reset.
  */
-async function planFallbackSwitch(key: SessionKey, cls: AgentApiErrorClass, episodeId: number): Promise<FallbackSwitchPlan & { from: FallbackChainEntry | null; earliest: { entry: FallbackChainEntry; untilMs: number } | null }> {
+async function planFallbackSwitch(key: SessionKey, cls: AgentApiErrorClass, episodeId: number): Promise<FallbackSwitchPlan & { from: FallbackChainEntry | null; earliest: LimitWaitTarget | null }> {
   const from = getTopicFallbackPosition(key);
   const isTelegram = checkIsTelegramKey(key);
   if (from === null || !checkIsLimitSwitchPossible(isTelegram, from)) return { action: 'none', from, earliest: null };
@@ -9904,7 +9903,7 @@ async function planFallbackSwitch(key: SessionKey, cls: AgentApiErrorClass, epis
   // a stuck usage endpoint must never hold the switch or the wait notice of a topic that just hit its limit.
   await refreshUsageWithinBudget((options) => claudeUsageRefresher.refreshAll(options));
   const detection = await detectFallbackOptions();
-  const { plan, waitRungs } = decideLimitSwitch({
+  const { plan, waitTarget } = decideLimitSwitch({
     isTelegram,
     from,
     chain: state.getFallbackChain(),
@@ -9916,13 +9915,8 @@ async function planFallbackSwitch(key: SessionKey, cls: AgentApiErrorClass, epis
   else fallbackSwitchOffers.delete(k);
   const detail = plan.action === 'auto' ? ` → ${formatFallbackEntry(plan.to)}` : plan.action === 'offer' ? ` [${plan.candidates.map(formatFallbackEntry).join(', ')}]` : '';
   // Nothing has room: the wait should end on the rung whose limit resets EARLIEST, not necessarily this one.
-  let earliest: { entry: FallbackChainEntry; untilMs: number } | null = null;
-  if (waitRungs.length > 0) {
-    const found = pickEarliestResetRung({ chain: waitRungs, current: from, detection, nowMs: Date.now() });
-    if (found && !found.isCurrent) earliest = { entry: found.entry, untilMs: found.untilMs };
-  }
-  console.log(`[fallback] ${k}: usage limit on ${formatFallbackEntry(from)}; switch plan: ${plan.action}${detail}${earliest ? `; earliest reset: ${formatFallbackEntry(earliest.entry)} at ${new Date(earliest.untilMs).toISOString()}` : ''}`);
-  return { ...plan, from, earliest };
+  console.log(`[fallback] ${k}: usage limit on ${formatFallbackEntry(from)}; switch plan: ${plan.action}${detail}${waitTarget ? `; earliest reset: ${formatFallbackEntry(waitTarget.entry)} at ${new Date(waitTarget.untilMs).toISOString()}` : ''}`);
+  return { ...plan, from, earliest: waitTarget };
 }
 
 /** When the rung that hit the limit comes back, as a clock in the topic's zone; `null` when unknown or past. */

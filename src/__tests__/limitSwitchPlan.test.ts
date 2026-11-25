@@ -21,7 +21,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { checkIsLimitSwitchPossible, decideLimitSwitch } from '../utils/limitSwitchPlan';
-import { pickEarliestResetRung, type FallbackChainEntry, type FallbackDetection } from '../utils/fallbackChain';
+import type { FallbackChainEntry, FallbackDetection } from '../utils/fallbackChain';
 import type { ClaudeProfileUsageView, ClaudeUsageSnapshot } from '../utils/claudeUsage';
 
 const nowMs = Date.parse('2026-11-18T10:00:00.000Z');
@@ -65,21 +65,20 @@ const openAiRung: FallbackChainEntry = { backend: 'opencode', providerId: 'opena
 const secondBackAt = '2026-11-18T10:40:00.000Z';
 const secondLimitedEarlier = buildProfile('second', { limitedUntil: secondBackAt });
 
-/** What `bot.ts` `planFallbackSwitch` makes of a decision: the rung the wait is aimed at, `null` when it stays on its own reset. */
-function pickWaitTarget(input: Parameters<typeof decideLimitSwitch>[0]): { entry: FallbackChainEntry; until: string } | null {
-  const { plan, waitRungs } = decideLimitSwitch(input);
+/** The rung a decision that is a WAIT aims it at, its instant as ISO for readable assertions; `null` when it stays on its own reset. */
+function readWaitTarget(input: Parameters<typeof decideLimitSwitch>[0]): { entry: FallbackChainEntry; until: string } | null {
+  const { plan, waitTarget } = decideLimitSwitch(input);
   assert.deepEqual(plan, { action: 'none' }, 'nothing is free: a wait');
-  const found = waitRungs.length > 0 ? pickEarliestResetRung({ chain: waitRungs, current: input.from, detection: input.detection, nowMs: input.nowMs }) : null;
-  return found && !found.isCurrent ? { entry: found.entry, until: new Date(found.untilMs).toISOString() } : null;
+  return waitTarget && { entry: waitTarget.entry, until: new Date(waitTarget.untilMs).toISOString() };
 }
 
 describe('decideLimitSwitch: a Jira conversation (no Telegram)', () => {
   const jira = { ...base, isTelegram: false };
 
   it('switches to a free account — the ranking when no chain is set', () => {
-    const { plan, waitRungs } = decideLimitSwitch({ ...jira, detection: buildDetection([limitedDefault, buildProfile('second')]) });
+    const { plan, waitTarget } = decideLimitSwitch({ ...jira, detection: buildDetection([limitedDefault, buildProfile('second')]) });
     assert.deepEqual(plan, { action: 'auto', to: { backend: 'claude', profile: 'second', model: null } });
-    assert.deepEqual(waitRungs, []);
+    assert.equal(waitTarget, null);
   });
 
   it('takes the soonest weekly reset first among several free accounts', () => {
@@ -129,46 +128,45 @@ describe('decideLimitSwitch: a Jira conversation (no Telegram)', () => {
       buildProfile('metered', { billing: 'api', limitedUntil: '2026-11-18T10:10:00.000Z' }),
       buildProfile('out', { loggedIn: false, limitedUntil: '2026-11-18T10:05:00.000Z' }),
     ]);
-    assert.deepEqual(decideLimitSwitch({ ...jira, detection }).waitRungs, [onDefault, onSecond], 'no API account, no signed-out one');
-    assert.deepEqual(pickWaitTarget({ ...jira, detection }), { entry: onSecond, until: secondBackAt }, 'the wait ends when the second account is back, not in 3 h');
+    // The API account and the signed-out one come back sooner still: neither ends a wait.
+    assert.deepEqual(readWaitTarget({ ...jira, detection }), { entry: onSecond, until: secondBackAt }, 'the wait ends when the second account is back, not in 3 h');
   });
 
   it('with no account free, waits for the chain\'s Claude rung that resets first', () => {
     const detection = buildDetection([limitedDefault, secondLimitedEarlier, buildProfile('third', { limitedUntil: '2026-11-18T10:20:00.000Z' })]);
     const chain: FallbackChainEntry[] = [{ backend: 'claude', profile: 'second', model: 'sonnet' }];
-    assert.deepEqual(pickWaitTarget({ ...jira, chain, detection }), { entry: chain[0], until: secondBackAt }, 'the list is the word: the account it leaves out is never waited for');
+    assert.deepEqual(readWaitTarget({ ...jira, chain, detection }), { entry: chain[0], until: secondBackAt }, 'the list is the word: the account it leaves out is never waited for');
   });
 
   it('stays on its own reset when its own account comes back first, or within a minute of the first', () => {
     const later = buildDetection([limitedDefault, buildProfile('second', { limitedUntil: '2026-11-18T13:30:00.000Z' })]);
-    assert.equal(pickWaitTarget({ ...jira, detection: later }), null);
+    assert.equal(readWaitTarget({ ...jira, detection: later }), null);
     const nearTie = buildDetection([limitedDefault, buildProfile('second', { limitedUntil: '2026-11-18T12:59:30.000Z' })]);
-    assert.equal(pickWaitTarget({ ...jira, detection: nearTie }), null, 'no needless move for half a minute');
+    assert.equal(readWaitTarget({ ...jira, detection: nearTie }), null, 'no needless move for half a minute');
   });
 
   it('with auto-switch OFF, waits for its own reset: no offer — its buttons are a topic\'s — and no wait aimed at an account that frees first', () => {
     const free = decideLimitSwitch({ ...jira, isAutoSwitchEnabled: false, detection: buildDetection([limitedDefault, buildProfile('second')]) });
-    assert.deepEqual(free, { plan: { action: 'none' }, waitRungs: [] });
+    assert.deepEqual(free, { plan: { action: 'none' }, waitTarget: null });
     const earlier = decideLimitSwitch({ ...jira, isAutoSwitchEnabled: false, detection: buildDetection([limitedDefault, secondLimitedEarlier]) });
-    assert.deepEqual(earlier, { plan: { action: 'none' }, waitRungs: [] });
+    assert.deepEqual(earlier, { plan: { action: 'none' }, waitTarget: null });
   });
 
   it('never waits for an OpenCode rung, however early it comes back', () => {
     const openCodeBackAt = '2026-11-18T10:05:00.000Z';
     const detection = buildDetection([limitedDefault, secondLimitedEarlier], ['openai/gpt-5'], { 'openai/gpt-5': openCodeBackAt });
     const chain: FallbackChainEntry[] = [openAiRung, onSecond];
-    assert.deepEqual(decideLimitSwitch({ ...jira, chain, detection }).waitRungs, [onSecond]);
-    assert.deepEqual(pickWaitTarget({ ...jira, chain, detection }), { entry: onSecond, until: secondBackAt }, 'the Claude account, not the OpenCode model back 35 minutes earlier');
+    assert.deepEqual(readWaitTarget({ ...jira, chain, detection }), { entry: onSecond, until: secondBackAt }, 'the Claude account, not the OpenCode model back 35 minutes earlier');
     const onlyOpenCode = buildDetection([limitedDefault], ['openai/gpt-5'], { 'openai/gpt-5': openCodeBackAt });
-    assert.equal(pickWaitTarget({ ...jira, chain: [openAiRung], detection: onlyOpenCode }), null, 'its own reset: the list names no other Claude account');
+    assert.equal(readWaitTarget({ ...jira, chain: [openAiRung], detection: onlyOpenCode }), null, 'its own reset: the list names no other Claude account');
     // The same inputs in a topic: the OpenCode model is the rung that comes back first.
-    assert.deepEqual(pickWaitTarget({ ...base, isTelegram: true, chain, detection }), { entry: openAiRung, until: openCodeBackAt });
+    assert.deepEqual(readWaitTarget({ ...base, isTelegram: true, chain, detection }), { entry: openAiRung, until: openCodeBackAt });
   });
 
   it('an account whose reset turned out wrong (it refused at the resume): the plan from it moves on, or waits for the next to come back', () => {
     // The wait moved the conversation onto «second», which refused with a new reset (marked by the caller): `default` is back first now.
     const secondRefused = buildProfile('second', { limitedUntil: '2026-11-18T14:00:00.000Z' });
-    assert.deepEqual(pickWaitTarget({ ...jira, from: onSecond, detection: buildDetection([limitedDefault, secondRefused]) }), { entry: onDefault, until: '2026-11-18T13:00:00.000Z' });
+    assert.deepEqual(readWaitTarget({ ...jira, from: onSecond, detection: buildDetection([limitedDefault, secondRefused]) }), { entry: onDefault, until: '2026-11-18T13:00:00.000Z' });
     // A third account with room by then takes the conversation over at once.
     const third = buildProfile('third');
     assert.deepEqual(decideLimitSwitch({ ...jira, from: onSecond, detection: buildDetection([limitedDefault, secondRefused, third]) }).plan, { action: 'auto', to: { backend: 'claude', profile: 'third', model: null } });
@@ -204,18 +202,17 @@ describe('decideLimitSwitch: a Telegram topic keeps everything', () => {
     assert.deepEqual(decideLimitSwitch({ ...telegram, chain: openCodeFirst, detection }).plan, { action: 'auto', to: openCodeFirst[0] });
   });
 
-  it('with nothing free, the wait may be aimed at the rungs of the chain, else at the signed-in subscriptions', () => {
+  it('with nothing free, the wait is aimed at the rung of the chain back first, else at the signed-in subscription back first', () => {
     const detection = buildDetection([
       limitedDefault,
       buildProfile('second', { limitedUntil: '2026-11-18T12:00:00.000Z' }),
-      buildProfile('metered', { billing: 'api' }),
-      buildProfile('out', { loggedIn: false }),
+      buildProfile('third', { limitedUntil: '2026-11-18T11:00:00.000Z' }),
+      buildProfile('metered', { billing: 'api', limitedUntil: '2026-11-18T10:30:00.000Z' }),
+      buildProfile('out', { loggedIn: false, limitedUntil: '2026-11-18T10:20:00.000Z' }),
     ]);
-    const implicit = decideLimitSwitch({ ...telegram, detection });
-    assert.deepEqual(implicit.plan, { action: 'none' });
-    assert.deepEqual(implicit.waitRungs.map((rung) => (rung.backend === 'claude' ? rung.profile : rung.providerId)), ['default', 'second'], 'no API account, no signed-out one');
+    assert.deepEqual(readWaitTarget({ ...telegram, detection }), { entry: { backend: 'claude', profile: 'third', model: null }, until: '2026-11-18T11:00:00.000Z' }, 'no API account, no signed-out one, though they come back sooner');
     const chain: FallbackChainEntry[] = [{ backend: 'claude', profile: 'second', model: null }];
-    assert.deepEqual(decideLimitSwitch({ ...telegram, chain, detection }).waitRungs, chain);
+    assert.deepEqual(readWaitTarget({ ...telegram, chain, detection }), { entry: chain[0], until: '2026-11-18T12:00:00.000Z' }, 'the chain names the accounts');
   });
 });
 
