@@ -44,6 +44,8 @@ import {
 /** The hint of the manager skill, and the bullet that carries it on a tracker. */
 const managerSkillHint = '`charness-orchestration`';
 const orchestrationBullet = 'You orchestrate detached workers';
+/** What the bullet says with the skills off: a Jira conversation has the `schedule_*` tools, so it keeps the watch recipe itself. */
+const plainWatchBullet = `${orchestrationBullet} (a \`claude -p\` / \`opencode run\` builder, reviewer, researcher) → schedule_create to watch EACH worker`;
 
 function getSettingsFilePath(): string {
   return path.join(path.dirname(getLayout().envFile), isolatedSettingsFileName);
@@ -87,11 +89,11 @@ describe('The bot-skills switch on a Jira-only instance: built charness, fake Ji
     await bootJiraOnly();
   });
 
-  it('a conversation started with the seed off launches without --plugin-dir, and its MCP instructions carry no manager hint nor orchestration bullet', async () => {
+  it('a conversation started with the seed off launches without --plugin-dir, and its MCP instructions carry no manager hint — the orchestration bullet keeps only the watch recipe', async () => {
     const { argv, instructions } = await startConversation('PROJ-31');
     assert.deepEqual(getFlagValues(argv, '--plugin-dir'), [], `no skills folder in ${argv.join(' ')}`);
     assert.ok(!instructions.includes(managerSkillHint), instructions);
-    assert.ok(!instructions.includes(orchestrationBullet), instructions);
+    assert.ok(instructions.includes(plainWatchBullet), instructions);
     assert.match(instructions, /answer_request/, 'the rest of the instructions is there');
   });
 
