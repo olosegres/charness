@@ -827,7 +827,10 @@ describe('The usage-limit switch to and from OpenCode end to end: built charness
     try {
       fakeTelegram.pushOperatorMessage(messageDuringMove.threadId, `LIM-M [fake:usage-limit-once] [limit-resets:${resetsAtIso}] please carry on`);
       await movingTopic.waitForMessage('the switch notice', (message) => message.text.startsWith('🔁'));
-      assert.equal(readAgent(messageDuringMove.threadId)?.name, openCodeAdapterName, 'precondition: the topic runs OpenCode, the move is waiting on its notice');
+      // The switch is saved to `state.json` by a background write that races the notice (one slow fsync on a loaded box puts it
+      // after): waited for, with the notice still held, so the move cannot go on meanwhile.
+      await getCharness().waitFor('precondition: the topic runs OpenCode in state.json, the move is waiting on its notice', replyTimeoutMs, () =>
+        readAgent(messageDuringMove.threadId)?.name === openCodeAdapterName);
       assert.ok(!fakeOpenCode.prompts.some((prompt) => prompt.directory === movingFolderPath), 'precondition: the bridge is not sent yet');
       const requestsBefore = readRequestCloseReasons();
       fakeTelegram.pushOperatorMessage(messageDuringMove.threadId, 'MOV-1 a message sent while the topic moves');
