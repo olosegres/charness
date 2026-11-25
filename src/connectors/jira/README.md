@@ -364,7 +364,7 @@ update into the resumed session; while a turn runs it waits up to 10 minutes for
   and link (`JiraConnector.describeConversation`) are in the header, so a session that started fresh knows where it is. The turn the
   fire starts is watched as that request's scheduled run. No job is cancelled when its request closes (as in a topic): «check the
   deploy tomorrow» must survive the final answer.
-- **The request waits for its watch.** An open request with an armed watch that owes nobody an answer is not reminded every 15 minutes,
+- **The request waits for its watch.** An open request with an armed watch that owes nobody an answer is not prodded between turns,
   not woken at a bot restart (a process that died with the agent's OWN work pending is woken once, with the lost-work note) and not
   given up on after ten wake-ups; a requester's comment left unanswered still is — also after a restart,
   and also when it was held over a usage-limit wait or an alarm fires meanwhile. The task-agent slot stays held, because the issue IS being
@@ -372,8 +372,11 @@ update into the resumed session; while a turn runs it waits up to 10 minutes for
   guidance, not code — an agent that arms a watchdog meant to outlive the work (a health check, a daily job) answers `final` afterwards;
   the job keeps running and its fires say «no request is open», or ride the request open at the time (a later hand-over, a mention: the
   header names it, and the agent answers it only with what its requester must know). The tool description and the orchestration skill say so.
-- **Nothing reminds an issue's agent on a clock** (a tracker's rules, `../../requests/README.md` § Wake-ups). A turn that ends with the
-  request open, a progress note sent and NOTHING armed under it — no watch, no job, or a watch that fired and was not re-armed — gets
+- **Nothing reminds an issue's agent on a clock** (a tracker's rules, `../../requests/README.md` § Wake-ups). The agent's OWN pending
+  work — a background command or sub-agent, a `ScheduleWakeup` / `CronCreate` — holds its turn open (`checkIsWaitingOnOwnWork`, the
+  probe's `hasOwnPendingWork` from the json-stream adapter's background signals): no nudge and no give-up while it runs, and the turn
+  that work's end starts is decided when it ends. A turn that ends with the request open, a progress note sent and NOTHING set to wake
+  the agent — no watch or job under the request (or only a watch that fired and was not re-armed) and none of its own work running — gets
   ONE nudge at once instead of the topic's follow-up 15 minutes later («nothing reminds you on a clock»: finish, ask, or arm a watch for
   what you wait on, `requestHeader.ts` `nothingArmed`); the next such turn end in a row — another note, or silence — is the give-up:
   the alert comment («The AI stopped working on this without a final answer, even after it was reminded.») and the hand-back. A note

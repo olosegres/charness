@@ -531,7 +531,12 @@ match a process the prompt was not written to:
   after a progress note, and nothing else changes: not given up (no alert, `isWakeStopped` stays false — the task-agent slot
   and the issue updates stay), only the backstop wakes it then. Requests nobody watches get a backstop wake (`getRequestBackstopMs`).
 - **A tracker's rules have no clock** (`WakeUpRuleSet` `tracker`, the engine's `getWakeUpRules` port; `bot.ts` gives it every
-  non-Telegram conversation, a Telegram topic keeps `topic`). They differ from the table below in ONE cell: wherever a progress note
+  non-Telegram conversation, a Telegram topic keeps `topic`). The agent's OWN pending work holds a tracker's turn open
+  (`checkIsWaitingOnOwnWork` over the probe's `hasOwnPendingWork`: a background command or sub-agent, a session job, a finished task's
+  turn on its way): the watch stays `running` and never goes stale while it runs, so nothing nudges, gives up or backstops the request,
+  the turn that work's end starts belongs to the watch and its end is decided as below; the poll that sees the agent's turn end with
+  its own work running clears `stalledTurnCount` (the agent arranged what wakes it), and after a restart the sweep watches such a request
+  again (`watchTurnOfOwnWork`). Otherwise the rules differ from the table below in ONE cell: wherever a progress note
   under `none` or `armed` is followed up in 15 min (rows 1, 4, 8, 11), a tracker's is a STALL — nothing armed would ever wake the
   agent — and gets ONE wake at once, the nudge `nothingArmed` (finish, ask, or arm a watch for what it waits on). A silent turn the
   table calls silent is a stall too (its wake stays `silentTurn`). Stalls are counted in `stalledTurnCount`, which no delivered answer
@@ -677,6 +682,7 @@ match a process the prompt was not written to:
   | | `createRequest` (initial 0) | the new request | No |
   | `stalledTurnCount` (a tracker's rules only) | `decideTurnEnd` (`decideTrackerStall` +1; a quiet end the request's schedule holds clears it), applied by `applyDecision` / `persistDecision` | the request whose watched turn ended | No |
   | | `trackForwardedTurn` (cleared by a person's words: a request prompt, an issue update) | the tracked request | No |
+  | | `pollWatchedTurn` (cleared when the watched turn ended leaving the agent's own work running, `checkIsWaitingOnOwnWork`) | the watched request | No |
   | | `trackContinuationTurn` with `isCountersReset` (cleared) | EVERY open request | **Yes, by design**, as for `silentTurnCount`: a limit wait is no stall |
   | `lastTurnActivityAt` | `recordTurnActivity` from `trackForwardedTurn` (forced, keyed on the watch it just stored) | the tracked request; a «continue» and a restart wake that carried several requests track each of them; NOT when the watch is another job's fire (`isRequestJob` false: its own forward or a «continue» of it) | **Yes, by design**: one session turn, every request in it is watched, and its end is decided for each. A ridden request is never written by another job's fire or its «continue» |
   | | `recordTurnActivity` from a busy poll of a watched turn | the watched request itself, unless the watch is another job's fire (`isRequestJob` false: the busy time is that job's) | No — a write first settles the watches whose turn ended (§ Turn starts), so a watch present belongs to the current busy period, a prompt joined into it included; a request-prompt watch whose prompt never reached a process (unnamed while a process is named: only a person's prompt still in a window — a prompt written to a backend that cannot number its processes is named `unnumberedProcessGeneration`, so a switch of backend never makes one look unwritten, review 21 #1 b; one whose process went down before its track is named from the write, review 22 nit 2; and no stop leaves one in a closed buffer, review 22 #1) records none (`checkIsPromptNeverWritten`) (json-stream and OpenCode queue another request's prompt into a running turn, and the earlier watch stays `running` on the unconsumed input through the next CLI turn; the tmux Claude's interrupt keeps it too): the busy time it records is that period's, and its end is decided at the same turn's end |

@@ -12,6 +12,7 @@ import { keyToString, type SessionKey } from '../sessionKey';
 import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
 import { createSessionTurnProbe, type SessionTurnProbeDeps } from '../requests/sessionTurnProbe';
 import { unnumberedProcessGeneration } from '../types';
+import type { BackgroundWorkSignal } from '../utils/workingSignals';
 
 const topicKey: SessionKey = makeTelegramKey(-1001234567890, 42);
 const topicKeyString = keyToString(topicKey);
@@ -36,6 +37,8 @@ interface ProbeScenario {
   hasUnconsumedInput: boolean | undefined;
   /** What the adapter's `getProcessGeneration` answers; `undefined`: an adapter without it. */
   processGeneration: number | undefined;
+  /** What the adapter names beside its running turn; `undefined`: an adapter without the signal. */
+  backgroundSignals: BackgroundWorkSignal[] | undefined;
 }
 
 let scenario: ProbeScenario;
@@ -52,6 +55,7 @@ function createProbe(): ReturnType<typeof createSessionTurnProbe> {
       checkIsCliOwnTurn: () => scenario.isCliOwnTurn,
       ...(scenario.hasUnconsumedInput === undefined ? {} : { checkHasUnconsumedInput: () => scenario.hasUnconsumedInput === true }),
       ...(scenario.processGeneration === undefined ? {} : { getProcessGeneration: () => scenario.processGeneration }),
+      ...(scenario.backgroundSignals === undefined ? {} : { getBackgroundWorkSignals: () => scenario.backgroundSignals ?? [] }),
     }),
     checkHasPendingQuestion: (keyString) => scenario.pendingQuestionKeys.has(keyString),
     checkHasQuestionPin: (keyString) => scenario.questionPinKeys.has(keyString),
@@ -87,6 +91,7 @@ beforeEach(() => {
     replayingKeys: new Set(),
     hasUnconsumedInput: undefined,
     processGeneration: undefined,
+    backgroundSignals: undefined,
   };
 });
 
@@ -257,5 +262,17 @@ describe('createSessionTurnProbe', () => {
     scenario.wedgeRecoveryKeys.add(otherKeyString);
     assert.equal(createProbe()(topicKey).isTurnEndBlocked, false);
   });
-});
 
+  it('the agent\'s own pending work is a background command or sub-agent, a session job or a finished task\'s turn on its way — never unread input or a compaction, and only of a live session', () => {
+    // What a tracker's rules do with it: src/__tests__/wakeUpRules.test.ts › "a tracker\'s rules"; at process level jiraRequestWakeE2e.
+    for (const signal of [{ kind: 'backgroundTasks', count: 1 }, { kind: 'scheduledJobs', count: 1 }, { kind: 'taskTurnOnItsWay' }] as const) {
+      scenario.backgroundSignals = [signal];
+      assert.equal(createProbe()(topicKey).hasOwnPendingWork, true, signal.kind);
+    }
+    scenario.backgroundSignals = [{ kind: 'unconsumedInput', count: 1 }, { kind: 'compaction' }];
+    assert.equal(createProbe()(topicKey).hasOwnPendingWork, undefined, 'what the turn fields already cover');
+    scenario.backgroundSignals = [{ kind: 'backgroundTasks', count: 1 }];
+    scenario.isActive = false;
+    assert.equal(createProbe()(topicKey).hasOwnPendingWork, undefined, 'a gone session waits on nothing');
+  });
+});

@@ -3195,6 +3195,66 @@ describe('a tracker\'s rules: no reminder on a clock — a progress note with no
     assert.deepEqual(alerts, []);
   });
 
+  it('the agent\'s own pending work holds off the nudge and the give-up however long it runs; once it ended, the turn it started ends with a note and nothing pending: the nudge, then the give-up', async () => {
+    const ledger = await createLedger();
+    const engine = createEngine(ledger, trackerRules);
+    const request = await ledger.createRequest(issueKey, handOver);
+    await engine.trackForwardedTurn(issueKey, request.id, { isRequestPrompt: true });
+    // The agent starts a background poll on the pipeline, sends a note and ends its turn: its own work runs on.
+    probe = { isActive: true, isBusy: true, hasUnconsumedInput: false, isTurnEndBlocked: false };
+    await engine.pollWatchedTurns();
+    await deliverProgress(ledger, request.id);
+    probe = { ...probe, isBusy: false, hasOwnPendingWork: true };
+    await engine.pollWatchedTurns();
+    nowMs += 3 * backstopMs;
+    await engine.pollWatchedTurns();
+    await engine.sweepUnwatchedRequests();
+    assert.deepEqual(wakeUps, [], 'no nudge, no backstop: its own work will wake it');
+    assert.deepEqual(alerts, []);
+
+    // The poll ends: the CLI starts the agent's own turn, which sends a note and ends with nothing pending.
+    await runTurn(engine, () => deliverProgress(ledger, request.id));
+    assert.deepEqual(getWakeUpReasons(), ['nothingArmed'], 'the normal nudge');
+    await runTurn(engine, () => deliverProgress(ledger, request.id));
+    assert.deepEqual(alerts, [{ requestId: request.id, reason: 'silentTurns' }], 'then the normal give-up');
+  });
+
+  it('a nudge answered by the agent\'s own background work: the stall count starts again, so the next stall after that work is nudged, not given up', async () => {
+    const ledger = await createLedger();
+    const engine = createEngine(ledger, trackerRules);
+    const request = await ledger.createRequest(issueKey, handOver);
+    await engine.trackForwardedTurn(issueKey, request.id, { isRequestPrompt: true });
+    await runTurn(engine, () => deliverProgress(ledger, request.id));
+    assert.equal(ledger.getOpenRequestById(request.id)?.request.stalledTurnCount, 1);
+
+    // The nudge's turn starts a background poll and ends with a note.
+    probe = { isActive: true, isBusy: true, hasUnconsumedInput: false, isTurnEndBlocked: false };
+    await engine.pollWatchedTurns();
+    await deliverProgress(ledger, request.id);
+    probe = { ...probe, isBusy: false, hasOwnPendingWork: true };
+    await engine.pollWatchedTurns();
+    assert.equal(ledger.getOpenRequestById(request.id)?.request.stalledTurnCount, undefined, 'it arranged what wakes it');
+
+    await runTurn(engine, () => deliverProgress(ledger, request.id));
+    assert.deepEqual(getWakeUpReasons(), ['nothingArmed', 'nothingArmed']);
+    assert.deepEqual(alerts, []);
+  });
+
+  it('after a restart nothing watches the request: the sweep watches it again while the agent waits on its own work, so the turn that work starts is decided at its end, not at the backstop', async () => {
+    const ledger = await createLedger();
+    const request = await ledger.createRequest(issueKey, handOver);
+    await deliverProgress(ledger, request.id);
+    await ledger.updateOpenRequest(request.id, { isPromptTakenIn: true });
+    const engineAfterRestart = createEngine(ledger, trackerRules);
+    probe = { isActive: true, isBusy: false, hasUnconsumedInput: false, isTurnEndBlocked: false, hasOwnPendingWork: true };
+    nowMs += 2 * backstopMs;
+    await engineAfterRestart.sweepUnwatchedRequests();
+    assert.deepEqual(wakeUps, [], 'its own work runs: no backstop');
+
+    await runTurn(engineAfterRestart, () => deliverProgress(ledger, request.id));
+    assert.deepEqual(getWakeUpReasons(), ['nothingArmed']);
+  });
+
   it('a topic keeps its clock: the same progress note is followed up 15 minutes later', async () => {
     const ledger = await createLedger();
     const engine = createEngine(ledger, { getWakeUpRules: (key) => (key.platform === 'jira' ? 'tracker' : 'topic') });

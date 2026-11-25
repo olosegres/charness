@@ -666,7 +666,10 @@ with the thread's last-used backend.
 - **In a Jira issue** the agent has the same `schedule_*` tools, but the bot posts NOTHING there — no announcement, no check alert,
   no status line: a Jira comment always notifies the requester and the issue's watchers. A fire wakes the issue's agent, which
   answers in comments (`answer_request`) only when it has a result the requester needs. An agent that launched a worker and armed
-  its watch is not reminded or given up on while the watch passes; it is woken in the issue when the worker is done.
+  its watch is not reminded or given up on while the watch passes; it is woken in the issue when the worker is done. Nothing reminds
+  an issue's agent on a clock: while its own background command, sub-agent or scheduled wake-up runs it is left alone too, and that
+  work's end wakes it. An agent that ends its turn with a progress note and nothing set to wake it gets one nudge at once; if its next
+  turn ends the same way, the issue gets a comment that the AI stopped without a final answer and goes back to the requester.
 - Leaving a folder pauses the topic's scheduled prompts; `/bind` resumes
   them (an expired one-shot is dropped). Reminders keep running — see
   [`/reminders`](#reminders). Run history: `DATA_DIR/scheduler-runs.jsonl`.

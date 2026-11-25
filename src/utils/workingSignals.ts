@@ -38,6 +38,17 @@ export function describeWorkingSignals(signals: readonly WorkingSignal[]): strin
   return signals.map(describeWorkingSignal).join(', ');
 }
 
+/** The signals of the agent's OWN pending work: each ends by itself and starts the agent's next turn. */
+const ownPendingWorkKinds: ReadonlySet<WorkingSignal['kind']> = new Set(['backgroundTasks', 'scheduledJobs', 'taskTurnOnItsWay']);
+
+/**
+ * @description Whether the agent waits on its own pending work — a background command or sub-agent, a session job (a `ScheduleWakeup`,
+ * a `CronCreate`), a finished task's turn on its way — whose end starts its next turn by itself.
+ */
+export function checkHasOwnPendingWork(signals: readonly WorkingSignal[]): boolean {
+  return signals.some((signal) => ownPendingWorkKinds.has(signal.kind));
+}
+
 /** @description The reason the person is told when an idle compaction is skipped because the process was held. */
 export type IdleHeldNoticeReason = 'backgroundWork' | 'unconsumedInput';
 
@@ -48,8 +59,7 @@ export type IdleHeldNoticeReason = 'backgroundWork' | 'unconsumedInput';
  * compaction is in flight (it is the very thing the idle mark would have done).
  */
 export function getIdleHeldNoticeReason(signals: readonly WorkingSignal[]): IdleHeldNoticeReason | null {
-  const kinds = new Set(signals.map((signal) => signal.kind));
-  if (kinds.has('backgroundTasks') || kinds.has('scheduledJobs') || kinds.has('taskTurnOnItsWay')) return 'backgroundWork';
-  if (kinds.has('unconsumedInput')) return 'unconsumedInput';
+  if (checkHasOwnPendingWork(signals)) return 'backgroundWork';
+  if (signals.some((signal) => signal.kind === 'unconsumedInput')) return 'unconsumedInput';
   return null;
 }

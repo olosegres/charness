@@ -9,6 +9,8 @@
  *     how to wait; the next turn ends the same way (another note): the alert comment, the issue handed back, nothing after it
  *   → a progress note with nothing armed, the nudge answered by arming a job and another note (`progress-then-armed`): the request
  *     waits for its schedule — no alert, the issue stays with the AI, nothing reaches the agent while the follow-up window passes
+ *   → a progress note with a background command of the agent's own running (`progress-wait`): no nudge and no follow-up while it
+ *     runs; its end starts the agent's own turn, which ends with nothing pending: ONE nudge, answered with the final answer
  *   → no Telegram path was reached
  *
  * The rule's branches are `wakeUpRules.test.ts` › "a tracker's rules", the engine's journeys `wakeUpEngine.test.ts` › "a tracker's
@@ -40,9 +42,11 @@ import {
   itHoldsIsolationBeforeBoot,
   itReachedNoTelegramPath,
   registerJiraFlowHooks,
+  releaseBackgroundTask,
   requester,
   waitFor,
 } from './jiraE2e/jiraFlowKit';
+import type { FakeClaudeTurn } from './jiraE2e/fakeClaudeContract';
 
 const msPerSecond = 1000;
 /** The engine's turn poll in this flow: the nudge comes within a second of the turn end. */
@@ -63,6 +67,11 @@ function countSearches(): number {
 async function waitOutReminderWindow(): Promise<void> {
   const searchesBefore = countSearches();
   await waitFor(`${reminderWindowPolls} more polls`, answerTimeoutMs, () => countSearches() >= searchesBefore + reminderWindowPolls);
+}
+
+/** What started each turn of the issue: the request's prompt, the bot's reminder, or the agent's own finished task. */
+function describeTurns(turns: readonly FakeClaudeTurn[]): string[] {
+  return turns.map((turn) => turn.origin ?? (turn.isRequestPrompt ? 'request prompt' : 'reminder'));
 }
 
 /** The request's prompt, then the bot's ONE nudge — which says how to wait, and is no follow-up on a clock. */
@@ -126,6 +135,26 @@ describe('Jira connector end to end — a request is never reminded on a clock: 
     assert.equal(getTurns(issueKey).length, 2, 'the job holds the request: no follow-up, no second nudge');
     assert.equal(issue.assignee?.accountId, aiAccount.accountId, 'not given up');
     assert.equal(getCommentTexts(issue).length, 1, 'the progress comment only: no alert');
+  });
+
+  it('a progress note with a background command of its own running: no nudge however long it runs; its end starts the agent\'s own turn, which ends with nothing pending — ONE nudge, answered with the final answer', async () => {
+    const issueKey = 'PROJ-73';
+    createIssue(issueKey, 'progress-wait');
+    handIssueToAi(issueKey, requester);
+    const issue = fakeJira.getIssue(issueKey);
+    await waitFor(`${issueKey}: the progress note`, answerTimeoutMs, () => getAnswers(issueKey).length === 1);
+    const requestId = getTurns(issueKey)[0].requestId ?? '';
+
+    await waitOutReminderWindow();
+    assert.deepEqual(describeTurns(getTurns(issueKey)), ['request prompt'], 'its own work will wake it: no nudge, no follow-up');
+    assert.equal(issue.assignee?.accountId, aiAccount.accountId, 'not given up');
+    assert.equal(getCommentTexts(issue).length, 1, 'the progress comment only');
+
+    releaseBackgroundTask();
+    await waitFor(`${issueKey}: answered and handed back`, answerTimeoutMs, () => issue.assignee?.accountId === requester.accountId && getAnswers(issueKey).length === 2);
+    assert.deepEqual(describeTurns(getTurns(issueKey)), ['request prompt', 'task-notification', 'reminder'], 'its work woke it; the bot nudged once after');
+    assertOneNudge(requestId);
+    assert.equal(getCommentTexts(issue).at(-1), `Fake final answer for ${issueKey} (progress-wait, turn 2).`);
   });
 
   itReachedNoTelegramPath();

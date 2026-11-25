@@ -1,6 +1,7 @@
 import type { SessionKey } from '../sessionKey';
 import { unnumberedProcessGeneration, type AgentAdapter } from '../types';
 import type { SessionTurnProbe } from './wakeUpRules';
+import { checkHasOwnPendingWork } from '../utils/workingSignals';
 
 /**
  * @description How the wake-up engine sees a conversation's session right now
@@ -43,6 +44,10 @@ import type { SessionTurnProbe } from './wakeUpRules';
  * A session still starting has not taken in what was forwarded to it either: the
  * prompt waits in the startup buffer, while a backend may already report itself
  * active with nothing unread.
+ *
+ * The agent's own pending work (`hasOwnPendingWork`) is what the backend names among its background signals: a background command
+ * or sub-agent, a session job, a finished task's turn on its way — never unread input or a compaction, which the fields above cover.
+ * Only a tracker's rules read it (`wakeUpRules.ts`).
  */
 
 /**
@@ -55,7 +60,7 @@ export interface SessionTurnProbeDeps {
   getAdapter: (key: SessionKey) => Pick<
     AgentAdapter,
     'checkIsActive' | 'checkIsBusy' | 'checkHasUnconsumedInput' | 'isQuestionPending' | 'isLoginPastePending' | 'checkIsRespawnPending'
-    | 'checkIsTurnOnItsWay' | 'checkIsCliOwnTurn' | 'getProcessGeneration'
+    | 'checkIsTurnOnItsWay' | 'checkIsCliOwnTurn' | 'getProcessGeneration' | 'getBackgroundWorkSignals'
   >;
   checkHasPendingQuestion: (keyString: string) => boolean;
   checkHasQuestionPin: (keyString: string) => boolean;
@@ -103,6 +108,7 @@ export function createSessionTurnProbe(deps: SessionTurnProbeDeps): (key: Sessio
       isActive,
       isBusy,
       ...(isBusy && (adapter.checkIsCliOwnTurn?.(key) ?? false) ? { isCliOwnTurn: true } : {}),
+      ...(isActive && checkHasOwnPendingWork(adapter.getBackgroundWorkSignals?.(key) ?? []) ? { hasOwnPendingWork: true } : {}),
       ...(processGeneration === undefined ? {} : { processGeneration }),
       ...(isWindowOpen ? { isWindowOpen: true } : {}),
       hasUnconsumedInput: isStarting

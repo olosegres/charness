@@ -45,6 +45,7 @@ import { getPollJqlProjectKeys } from './charnessLog';
 import {
   checkHasFlag,
   fakeClaudeHoldReleaseFileName,
+  fakeClaudeBackgroundReleaseFileName,
   fakeClaudeLogFileNames,
   getFlagValues,
   getForeignAgentEnvNames,
@@ -253,6 +254,11 @@ export function countClosedRequestsOf(issueKey: string): number {
 /** Let the first turn of a `hold-once` conversation end: the fake answers it. */
 export function releaseHeldTurn(): void {
   fs.writeFileSync(path.join(getLayout().fakeStateDir, fakeClaudeHoldReleaseFileName), '');
+}
+
+/** End the background command a `progress-wait` (or `background-notify`) agent left running: its end starts the agent's own turn. */
+export function releaseBackgroundTask(): void {
+  fs.writeFileSync(path.join(getLayout().fakeStateDir, fakeClaudeBackgroundReleaseFileName), '');
 }
 
 /** How many blocks of the issue the conversation's agent has taken in (the Jira context ledger's sent-set, read from disk): 0 until a prompt is taken in. */

@@ -12,6 +12,7 @@ import assert from 'node:assert/strict';
 import type { OpenRequestState } from '../requests/types';
 import {
   checkIsTurnInputConsumed,
+  checkIsWaitingOnOwnWork,
   checkIsWatchedTurnStale,
   decideRestartWake,
   decideTurnEnd,
@@ -586,6 +587,18 @@ describe('a tracker\'s rules: no reminder on a clock — a progress note with no
     assert.equal(fireHandled.kind === 'quiet' ? fireHandled.update.stalledTurnCount : 'not quiet', undefined, 'the watch\'s fire handled with nothing to report');
     const neverStalled = decideTurnEnd(createRequest({ progressAnswerCount: 2 }), 1, nowMs, { ...tracker, scheduleWait: 'watching' });
     assert.ok(neverStalled.kind === 'quiet' && !('stalledTurnCount' in neverStalled.update), 'a request that never stalled has nothing to reset');
+  });
+
+  it('the agent\'s own pending work holds the turn open — no stall while it runs — and keeps the watch from going stale; a topic\'s turn ends as ever', () => {
+    const waitingOnOwnWork: SessionTurnProbe = { ...idleProbe, hasOwnPendingWork: true };
+    assert.equal(checkIsWaitingOnOwnWork(waitingOnOwnWork, 'tracker'), true);
+    assert.equal(checkIsWaitingOnOwnWork(waitingOnOwnWork, 'topic'), false);
+    assert.equal(getWatchedTurnState(createTurn(), waitingOnOwnWork, 'tracker'), 'running');
+    assert.equal(getWatchedTurnState(createTurn(), idleProbe, 'tracker'), 'ended', 'once nothing of its own is pending, the end is decided');
+    assert.equal(getWatchedTurnState(createTurn(), waitingOnOwnWork, 'topic'), 'ended');
+    const longAgo = createRequest({ lastTurnActivityAt: nowMs - 10 * backstopMs });
+    assert.equal(checkIsWatchedTurnStale(longAgo, waitingOnOwnWork, nowMs, backstopMs, 'tracker'), false);
+    assert.equal(checkIsWatchedTurnStale(longAgo, waitingOnOwnWork, nowMs, backstopMs, 'topic'), true);
   });
 
   it('what a tracker\'s rules leave as in a topic: a fire with nothing to report stays quiet, a request given up or limit-stopped is left alone', () => {

@@ -77,8 +77,8 @@ export function buildRequestHeader(options: RequestHeaderOptions): string {
 const wakeUpReasonLines: Readonly<Record<RequestWakeUpReason, string>> = {
   silentTurn: 'Your last turn ended without answering it.',
   progressFollowUp: 'Some time has passed since your last progress note on it.',
-  nothingArmed: 'Your last turn ended with it still open and nothing armed to wake you again: no job or watch of yours is armed under it. ' +
-    'Nothing reminds you on a clock.',
+  nothingArmed: 'Your last turn ended with it still open and nothing set to wake you again: no job under it (or only a watch that ' +
+    'already fired) and no background work of yours running. Nothing reminds you on a clock.',
   backstop: 'Nothing has been seen working on it for a long time (the session may have restarted).',
   postRetry: 'It could not be delivered to you earlier.',
   restarted: 'Your session ended and was resumed while you were working on it (the bot or your process restarted); carry on.',
@@ -163,8 +163,8 @@ function getWakeUpAnswerLine(options: { requestId: string; reason: RequestWakeUp
   if (options.reason === 'nothingArmed') {
     return `Finish it with answer_request (requestId "${options.requestId}"): kind "final" if the work is done, "question" if you need the requester. ` +
       'If you wait on a worker or a run, arm a watch for it (schedule_create with a checkCommand), say in a "progress" note what you wait for ' +
-      'and when it should end, and end your turn: the watch wakes you. If your next turn also ends with it open and nothing armed, you are ' +
-      'taken to have stopped: the requester is told and it is given up.';
+      'and when it should end, and end your turn: the watch wakes you. If your next turn also ends with it open and nothing set to wake you, ' +
+      'you are taken to have stopped: the requester is told and it is given up.';
   }
   if (options.isAnswerOptional === true) {
     return `Your watch for it is still armed and nothing the requester wrote is waiting for your answer, so answer it with answer_request (requestId "${options.requestId}") ` +

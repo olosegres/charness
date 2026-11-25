@@ -14,6 +14,7 @@ import {
 import {
   checkIsPromptNeverWritten,
   checkIsTurnInputConsumed,
+  checkIsWaitingOnOwnWork,
   checkIsWakingStopped,
   checkIsWatchedTurnStale,
   decideRestartWake,
@@ -668,7 +669,7 @@ export class RequestWakeUpEngine {
         continue;
       }
       if (probe.isBusy) turn.hasSeenBusy = true;
-      if (getWatchedTurnState(turn, probe) !== 'ended') {
+      if (getWatchedTurnState(turn, probe, this.getRules(key)) !== 'ended') {
         // A turn still running, or held, may have taken its prompt in already: marked now (R21), as the poll would. The process that took
         // it may be gone before the poll's next tick — a deferred account switch re-spawns it one timer tick after the turn's end, the
         // per-turn stop ends it — and a prompt is read as taken in only off the process it was written to.
@@ -782,7 +783,7 @@ export class RequestWakeUpEngine {
       isRequestJob: turn.isRequestJob !== false,
       scheduleWait: this.getScheduleWait(turn.key, request),
       progressFollowUpMs: this.deps.progressFollowUpMs,
-      rules: this.deps.getWakeUpRules?.(turn.key) ?? 'topic',
+      rules: this.getRules(turn.key),
     });
   }
 
@@ -822,13 +823,17 @@ export class RequestWakeUpEngine {
     await this.markPromptTakenIn(turn, request, probe);
     // Settled by a forward, or replaced by a new watch, during that write: the watch present now decides, not this one.
     if (this.watched.get(turn.requestId) !== turn) return;
-    const turnState = getWatchedTurnState(turn, probe);
+    const rules = this.getRules(turn.key);
+    const turnState = getWatchedTurnState(turn, probe, rules);
     if (turnState === 'running') {
       if (probe.isBusy) {
         // Another job's fire that only rides the request keeps the session busy for its own work, not for this request's — and so does
         // any turn while this request's prompt has reached no process (`checkIsPromptNeverWritten`): that busy time is another turn's.
         if (turn.isRequestJob !== false && !checkIsPromptNeverWritten(turn, probe)) await this.recordTurnActivity(request, false);
-      } else if (checkIsWatchedTurnStale(request, probe, this.now(), this.deps.backstopMs)) {
+      } else if (checkIsWaitingOnOwnWork(probe, rules)) {
+        // The agent's turn ended leaving its own work running: it arranged what wakes it, so a nudge it had is answered.
+        if ((request.stalledTurnCount ?? 0) > 0) await this.deps.ledger.updateOpenRequest(request.id, { stalledTurnCount: undefined });
+      } else if (checkIsWatchedTurnStale(request, probe, this.now(), this.deps.backstopMs, rules)) {
         // Its end can no longer be seen: the sweep's backstop takes the request over.
         this.watched.delete(turn.requestId);
       }
@@ -876,7 +881,32 @@ export class RequestWakeUpEngine {
       if (this.getWatchedTurnsOf(key).length === 0 && probe.isCliOwnTurn !== true) await this.recordTurnActivity(request, false);
       return;
     }
+    if (checkIsWaitingOnOwnWork(probe, this.getRules(key)) && this.watchTurnOfOwnWork(key, request, probe)) return;
     await this.applyDecision(key, request, decideUnwatchedRequest(request, probe, this.now(), this.deps.backstopMs, this.getScheduleWait(key, request)));
+  }
+
+  /**
+   * A tracker request nobody watches whose agent waits on its own pending work — a restart dropped the watch that held its turn open:
+   * watch it again, so the turn that work starts by itself is decided when it ends, not left to the backstop. Not while its prompt waits
+   * for a post retry (that forward is watched: the sweep's decision runs it), nor once nothing may wake it. `true` — it is watched now.
+   */
+  private watchTurnOfOwnWork(key: SessionKey, request: OpenRequestState, probe: SessionTurnProbe): boolean {
+    if (!probe.isActive || request.nextPostRetryAt !== undefined || checkIsWakingStopped(request)) return false;
+    this.watched.set(request.id, {
+      key,
+      requestId: request.id,
+      progressCountAtTurnStart: request.progressAnswerCount,
+      hasSeenBusy: false,
+      hasSeenOutput: false,
+      isRequestPrompt: false,
+      isOwnForward: false,
+    });
+    return true;
+  }
+
+  /** The rule set `key`'s conversation is woken under; a topic's when the port is not wired. */
+  private getRules(key: SessionKey): WakeUpRuleSet {
+    return this.deps.getWakeUpRules?.(key) ?? 'topic';
   }
 
   /** The request's reading of its armed jobs now; `none` when the port is not wired. */

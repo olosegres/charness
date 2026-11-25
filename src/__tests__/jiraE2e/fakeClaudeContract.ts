@@ -478,6 +478,8 @@ export type FakeClaudePlatform = 'jira';
 export interface FakeClaudeTurn {
   requestId: string | null;
   issueKey: string;
+  /** Set on the turn a finished `background-notify` / `progress-wait` task starts by itself (the CLI's, not one the bot sent). */
+  origin?: 'task-notification';
   isRequestPrompt: boolean;
   isPlainTextHidden: boolean;
   supersededRequestIds: string[];

@@ -71,7 +71,8 @@ export interface OpenRequestState {
    * A tracker's rules only (`wakeUpRules.ts` `WakeUpRuleSet`): the turn ends in a row that left the request open with nothing armed to
    * wake the agent — a progress note with no job armed under it, or a silent turn. The first gets the nudge (`nothingArmed`), the second
    * gives the request up. A delivered answer does not reset it (a note changes nothing about what wakes the agent); a turn end the
-   * request's schedule holds does, and so do a person's words forwarded for the request and the end of a limit wait. Absent = 0.
+   * request's schedule holds does, and so do a person's words forwarded for the request, a turn that ended leaving the agent's own
+   * background work running, and the end of a limit wait. Absent = 0.
    */
   stalledTurnCount?: number;
   /** Epoch ms of the next scheduled wake-up, when one is armed. */
@@ -193,8 +194,9 @@ export type RequestAnswerKind = 'progress' | 'question' | 'final';
  * @description Why the agent is reminded of an open request.
  *  - `silentTurn` — its turn ended without any answer.
  *  - `progressFollowUp` — it sent a progress note and the follow-up delay passed (a topic's rules).
- *  - `nothingArmed` — a tracker's rules: its turn ended with a progress note while nothing is armed to wake it (no job under the
- *    request): the one nudge, sent at once, in place of a follow-up on a clock.
+ *  - `nothingArmed` — a tracker's rules: its turn ended with a progress note while nothing is set to wake it (no job under the
+ *    request, or only a watch that fired; none of its own background work running): the one nudge, sent at once, in place of a
+ *    follow-up on a clock.
  *  - `backstop` — nothing was seen working on it for the backstop window (a dead
  *    process, or tracking lost across a restart).
  *  - `postRetry` — the request's prompt could not be posted; tried again soon

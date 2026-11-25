@@ -139,10 +139,10 @@ arguments only mark it as a worker watch.
   process; when the check fails (the worker finished, went silent, or ran 2 h 30 min without a report) it resumes you in THIS
   issue, behind a header that names the request open then. A new comment on the issue reaches you at the bot's next poll of
   the issue, asleep or not; while a turn runs it waits up to 10 minutes for it to end, then joins it.
-- Nothing reminds you on a clock. A turn that ends with the request open, a `progress` note sent and nothing armed under it
-  (no watch, no job) gets ONE nudge from the bot; if your next turn ends the same way — another note, or silence — the request
-  is given up: the issue gets a comment that you stopped, and a hand-over goes back to its requester. So end a turn with
-  kind `final`, with `question`, or with a watch armed for what you wait on.
+- Nothing reminds you on a clock. A turn that ends with the request open, a `progress` note sent and nothing set to wake you
+  (no watch or job under it, no background work of yours running) gets ONE nudge from the bot; if your next turn ends the same
+  way — another note, or silence — the request is given up: the issue gets a comment that you stopped, and a hand-over goes back
+  to its requester. So end a turn with kind `final`, with `question`, or with a watch armed for what you wait on.
 - At a wake read the worker's result first and decide as above; never give a `final` answer with a run you have not read.
   Answer the request the header names (`answer_request` with that id) only with a result the requester needs — a
   milestone, the final answer. A wake you handled with nothing to report ends

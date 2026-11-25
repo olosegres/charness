@@ -156,6 +156,10 @@ import { claudeSessionStateEventsVariableName } from '../../utils/jsonStreamHost
  *    (`armWaitingJob`, under the request the turn works on), answers `progress` and ends; later turns answer `final`;
  *  - `progress-then-armed` — its first turn answers `progress` with nothing armed; its second (the bot's nudge) arms that job and
  *    answers `progress`; later turns answer `final`;
+ *  - `progress-wait` — waits on a run with a background command of its own: its first turn answers `progress`, starts a
+ *    `background-notify` task (inside the turn, as the real CLI reports a background command the moment it starts; it ends when the
+ *    test writes `fakeClaudeBackgroundReleaseFileName`, and the turn its end starts answers nothing) and ends; later turns of the
+ *    request (the bot's nudge) answer `final`;
  *  - `progress-after-update` — its first turn sends note 1 (`fakeProgressEditsBody(<key>, 1)`) as a `progress` note, arms a job to wait on
  *    (`armWaitingJob`: in an issue a note with nothing armed is nudged at once) and ends the turn;
  *    the next turn of the request — what a person's comment on the handed issue starts (an issue update) — sends notes 2 and 3 and
@@ -313,8 +317,8 @@ import { claudeSessionStateEventsVariableName } from '../../utils/jsonStreamHost
  * `FAKE_CLAUDE_STATE_DIR` (per-request turn counts, the conversations held).
  */
 
-export type FakeClaudeMode = 'answer' | 'silent-once' | 'silent' | 'hang-once' | 'hold-once' | 'hold-progress-once' | 'slow-once' | 'progress' | 'progress-edits' | 'progress-after-update' | 'finish-together' | 'answer-after-queued' | 'background' | 'background-notify' | 'compact' | 'overflow' | 'fetch-attachment' | 'run-tool' | 'reply-to' | 'send-file' | 'usage-limit-once' | 'ask' | 'ask-again' | 'ask-two' | 'ask-long' | 'ask-repeat' | 'send-messages' | 'claude-profiles' | 'watch-progress' | 'one-shot-then-final' | 'hold-silent-once' | 'hold-silent-then-progress' | 'progress-armed' | 'progress-then-armed';
-const fakeModes: readonly FakeClaudeMode[] = ['answer', 'silent-once', 'silent', 'hang-once', 'hold-once', 'hold-progress-once', 'slow-once', 'progress', 'progress-edits', 'progress-after-update', 'finish-together', 'answer-after-queued', 'background', 'background-notify', 'compact', 'overflow', 'fetch-attachment', 'run-tool', 'reply-to', 'send-file', 'usage-limit-once', 'ask', 'ask-again', 'ask-two', 'ask-long', 'ask-repeat', 'send-messages', 'claude-profiles', 'watch-progress', 'one-shot-then-final', 'hold-silent-once', 'hold-silent-then-progress', 'progress-armed', 'progress-then-armed'];
+export type FakeClaudeMode = 'answer' | 'silent-once' | 'silent' | 'hang-once' | 'hold-once' | 'hold-progress-once' | 'slow-once' | 'progress' | 'progress-edits' | 'progress-after-update' | 'finish-together' | 'answer-after-queued' | 'background' | 'background-notify' | 'compact' | 'overflow' | 'fetch-attachment' | 'run-tool' | 'reply-to' | 'send-file' | 'usage-limit-once' | 'ask' | 'ask-again' | 'ask-two' | 'ask-long' | 'ask-repeat' | 'send-messages' | 'claude-profiles' | 'watch-progress' | 'one-shot-then-final' | 'hold-silent-once' | 'hold-silent-then-progress' | 'progress-armed' | 'progress-then-armed' | 'progress-wait';
+const fakeModes: readonly FakeClaudeMode[] = ['answer', 'silent-once', 'silent', 'hang-once', 'hold-once', 'hold-progress-once', 'slow-once', 'progress', 'progress-edits', 'progress-after-update', 'finish-together', 'answer-after-queued', 'background', 'background-notify', 'compact', 'overflow', 'fetch-attachment', 'run-tool', 'reply-to', 'send-file', 'usage-limit-once', 'ask', 'ask-again', 'ask-two', 'ask-long', 'ask-repeat', 'send-messages', 'claude-profiles', 'watch-progress', 'one-shot-then-final', 'hold-silent-once', 'hold-silent-then-progress', 'progress-armed', 'progress-then-armed', 'progress-wait'];
 /**
  * How long an `answer-after-queued` turn waits for the next message before it answers anyway: four polls of the 10 s
  * floor, or what the launcher sets (`fakeClaudeQueuedWaitMaxMsEnvName`) for the instance's own poll.
@@ -1628,6 +1632,16 @@ async function runTurn(argv: readonly string[], sessionId: string, content: stri
     appendJsonLine(fakeClaudeLogFileNames.answers, { requestId: answeredRequestId, issueKey: state.issueKey, kind, outcome });
     return body;
   };
+  if (state.mode === 'progress-wait') {
+    if (!isFirstTurn) {
+      endTurn(sessionId, await answer(requestId, 'final', state.turnCount));
+      return;
+    }
+    const body = await answer(requestId, 'progress', state.turnCount);
+    startNotifyingBackgroundTask(argv, sessionId, state.issueKey);
+    endTurn(sessionId, body);
+    return;
+  }
   if (state.mode === 'progress-armed' || state.mode === 'progress-then-armed') {
     const armingTurnCount = state.mode === 'progress-armed' ? 1 : 2;
     if (state.turnCount > armingTurnCount) {

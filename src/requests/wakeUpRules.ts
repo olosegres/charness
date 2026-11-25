@@ -43,15 +43,17 @@ import { getMinutesOverrideMs } from '../utils/minutesOverride';
  * A TRACKER's rules (a Jira issue, {@link WakeUpRuleSet}) have no clock: where a topic's progress note with nothing armed starts the
  * 15-minute follow-up, a tracker's gets ONE nudge at once (`nothingArmed`: finish, ask, or arm a watch for what it waits on), and the
  * next turn end in a row that leaves the request open with nothing armed — another note, or a silent turn — gives it up
- * (`stalledTurnCount`). A turn end the request's schedule holds starts that count again (the engine clears it too when a person's
- * words reach the agent). Everything else is the same table.
+ * (`stalledTurnCount`). The agent's OWN pending work (a background command or sub-agent, a `ScheduleWakeup`) holds the turn open
+ * ({@link checkIsWaitingOnOwnWork}): no nudge, no give-up while it runs, and the turn end is decided once it ended and nothing of the
+ * agent's own is pending. A turn end the request's schedule holds starts the stall count again (the engine clears it too when a
+ * person's words reach the agent, and when the agent's turn ended leaving its own work running). Everything else is the same table.
  */
 
 /**
  * @name WakeUpRuleSet
  * @description Which rules end a conversation's turns: `topic` (a Telegram topic) follows a progress note with nothing armed up after
  * {@link progressFollowUpDelayMs}; `tracker` (a Jira issue) reminds nobody on a clock — such a note gets one nudge, the next stall the
- * give-up (a silent turn counts as a stall too). The rest of the table is the same.
+ * give-up (a silent turn counts as a stall too), and the agent's own pending work holds its turn open. The rest of the table is the same.
  */
 export type WakeUpRuleSet = 'topic' | 'tracker';
 
@@ -134,6 +136,22 @@ export interface SessionTurnProbe {
    * without one. It tells a prompt that waits for its replay from one whose process went down after its write (review 22 nit 2).
    */
   isWindowOpen?: boolean;
+  /**
+   * The agent's own pending work, whose end starts its next turn by itself: a background command or sub-agent, a session job (a
+   * `ScheduleWakeup`, a `CronCreate`), a finished task's turn on its way (`utils/workingSignals.ts`). Absent: none, or a backend that
+   * cannot tell. Only a tracker's rules read it ({@link checkIsWaitingOnOwnWork}).
+   */
+  hasOwnPendingWork?: boolean;
+}
+
+/**
+ * @description Whether, under a tracker's rules, the agent waits on its own pending work: its turn is NOT over while that work runs —
+ * the work's end starts the agent's next turn by itself, and the turn's end is decided once nothing of its own is pending. So a
+ * background command, sub-agent or `ScheduleWakeup` holds off the nudge and the give-up, and the watch never goes stale meanwhile;
+ * when the work ends and the agent's turn ends again with nothing pending, the turn end is decided as ever.
+ */
+export function checkIsWaitingOnOwnWork(probe: SessionTurnProbe, rules: WakeUpRuleSet): boolean {
+  return rules === 'tracker' && probe.hasOwnPendingWork === true;
 }
 
 /**
@@ -408,6 +426,9 @@ export interface WatchedTurn {
  * session is up, so the watch must survive to see THAT turn end. Dropped, the
  * replayed turn would run unwatched: a silent one would wait for the backstop
  * (90 min) instead of its wake-up, and a backstop wake re-posts the request.
+ * Under a tracker's rules the agent's own pending work keeps the turn `running`
+ * ({@link checkIsWaitingOnOwnWork}): the turn that work starts by itself belongs
+ * to it, and the watch decides only once nothing of the agent's own is pending.
  */
 export type WatchedTurnState = 'running' | 'ended' | 'sessionGone';
 
@@ -438,9 +459,9 @@ export function checkIsTurnInputConsumed(turn: WatchedTurn, probe: SessionTurnPr
  * (`hasUnconsumedInput`), one that does not must have been seen busy or
  * producing output since the forward (the busy-onset race).
  */
-export function getWatchedTurnState(turn: WatchedTurn, probe: SessionTurnProbe): WatchedTurnState {
+export function getWatchedTurnState(turn: WatchedTurn, probe: SessionTurnProbe, rules: WakeUpRuleSet = 'topic'): WatchedTurnState {
   if (!probe.isActive) return probe.isTurnEndBlocked ? 'running' : 'sessionGone';
-  if (!checkIsTurnInputConsumed(turn, probe) || probe.isBusy || probe.isTurnEndBlocked) return 'running';
+  if (!checkIsTurnInputConsumed(turn, probe) || probe.isBusy || probe.isTurnEndBlocked || checkIsWaitingOnOwnWork(probe, rules)) return 'running';
   return 'ended';
 }
 
@@ -457,7 +478,8 @@ export function checkIsWatchedTurnStale(
   probe: SessionTurnProbe,
   nowMs: number,
   backstopMs: number,
+  rules: WakeUpRuleSet = 'topic',
 ): boolean {
-  if (probe.isBusy || probe.isTurnEndBlocked) return false;
+  if (probe.isBusy || probe.isTurnEndBlocked || checkIsWaitingOnOwnWork(probe, rules)) return false;
   return nowMs - (request.lastTurnActivityAt ?? request.createdAt) >= backstopMs;
 }

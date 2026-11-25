@@ -132,7 +132,7 @@ describe('agent-plugin', () => {
   test('charness-orchestration tells a Jira agent that nothing reminds it on a clock: a note with nothing armed gets one nudge, the next such turn end gives the request up', () => {
     const flat = readSkill('charness-orchestration').replace(/\s+/g, ' ');
     const section = flat.slice(flat.indexOf('## A tracker conversation (Jira)'), flat.indexOf('## Closing a task that ran on a runner'));
-    assert.match(section, /Nothing reminds you on a clock\. A turn that ends with the request open, a `progress` note sent and nothing armed under it \(no watch, no job\) gets ONE nudge from the bot;/);
+    assert.match(section, /Nothing reminds you on a clock\. A turn that ends with the request open, a `progress` note sent and nothing set to wake you \(no watch or job under it, no background work of yours running\) gets ONE nudge from the bot;/);
     assert.match(section, /if your next turn ends the same way — another note, or silence — the request is given up: the issue gets a comment that you stopped, and a hand-over goes back to its requester\./);
     assert.match(section, /So end a turn with kind `final`, with `question`, or with a watch armed for what you wait on\./);
   });
