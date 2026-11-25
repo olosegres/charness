@@ -518,7 +518,8 @@ describe('The status mark of topic names end to end: built charness, fake Bot AP
 
   it('the per-turn backend stops its process after every turn by design: the topic shows ⏳ while the turn runs and 🟢 after it — never 💤 — and a short reply that wakes it writes NOTHING', async () => {
     const sentId = fakeTelegram.pushOperatorMessage(topicThreadId, '/claude_mode per-turn');
-    await topic.waitForMessage('the backend switch answer', (message) => message.message_id > sentId);
+    // The answer comes once the conversation is resumed on the new backend: a process start, bounded by its handshake's own 15 s.
+    await waitForAgentMessage(topic, 'the backend switch answer', (message) => message.message_id > sentId);
     const launchesBeforeLongTurn = getSessionLaunches(getLayout()).length;
     const renamesBefore = listRenamedTo(topicThreadId).length;
     fakeTelegram.pushOperatorMessage(topicThreadId, `PT-1 [work-ms:${longTurnMs}] a long turn`);
@@ -531,7 +532,7 @@ describe('The status mark of topic names end to end: built charness, fake Bot AP
 
     // A short reply wakes the stopped process and ends inside the settle time: the topic shows nothing of it.
     const wakeMessageId = fakeTelegram.pushOperatorMessage(topicThreadId, 'PT-2 another short reply');
-    await topic.waitForMessage('the reply to the waking prompt', (message) => message.message_id > wakeMessageId);
+    await waitForAgentMessage(topic, 'the reply to the waking prompt (a new process)', (message) => message.message_id > wakeMessageId);
     assert.ok(getSessionLaunches(getLayout()).length > launchesBeforeLongTurn, 'the reply was taken by a NEW process: the topic really had stopped');
     const renames = await watchForRenames(topicThreadId);
     assert.deepEqual(renames, [], `a turn that wakes the stopped topic and ends inside the settle time shows nothing: ${JSON.stringify(renames)}`);
