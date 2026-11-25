@@ -41,7 +41,8 @@ import {
   writeInstanceEnvFile,
   type IsolatedInstanceLayout,
 } from './e2e/isolatedCharness';
-import { getAgentTurns, getAllAgentTurns, restartCharnessWithState, startCharnessOnInstance } from './e2e/fallbackFlowKit';
+import { getAgentTurns, getAllAgentTurns, readPersistedState, restartCharnessWithState, startCharnessOnInstance } from './e2e/fallbackFlowKit';
+import { defaultCompactGrowthTokens, getContextGrowthTokens } from '../utils/compactOnIdle';
 import { enDict } from '../i18n/en';
 import { claudeJsonStreamUsageLogPrefix } from '../adapters/claudeJsonStreamAdapter';
 import { checkIsPidAlive } from '../utils/jsonStreamHost';
@@ -189,6 +190,13 @@ describe('Messages sent while the agent works do not keep the topic "working" fo
     await topic.waitForMessage('the answer to MR-4', (message) => message.text.includes('Fake final answer for MR-4'));
     // The answer shows a moment before its turn ends: a restart before that would adopt a process that looks mid-turn, and the fire would find it busy.
     await getCharness().waitFor('the end of MR-4\'s turn', replyTimeoutMs, () => countTurnEnds() > turnEndsBefore);
+    // The bot reads the turn's context size a moment after its end: a restart before that leaves the growth unknown, and the fire would
+    // skip the compaction for that too — the flow would not prove it was the missed idle mark alone that held it back.
+    await getCharness().waitFor('the bot to save MR-4\'s grown context', replyTimeoutMs, () => {
+      const tracking = readPersistedState(getLayout()).compactIdleTracking?.[topicKey];
+      const growthTokens = getContextGrowthTokens({ baselineContextTokens: tracking?.baselineContextTokens ?? null, lastContextTokens: tracking?.lastContextTokens ?? null });
+      return growthTokens !== null && growthTokens >= defaultCompactGrowthTokens;
+    });
     const pid = getAgentTurns(getLayout(), 'MR-4')[0]?.pid;
     assert.ok(pid !== undefined && checkIsPidAlive(pid), 'the woken process is up: a compaction is due, and the process idle');
     const compactionsBefore = listCompactions().length;
