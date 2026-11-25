@@ -75,6 +75,7 @@ export const frDict: Record<string, string> = {
     '/bot\\_skills — skills du bot pour les agents : activer / désactiver\n' +
     '/question\\_wait — combien de temps un agent attend une réponse à sa question avant de continuer : valeur par défaut de chaque sujet\n' +
     '/limits\\_reminders — à quelle fréquence les agents qui lancent des workers sont informés de l’état des limites des comptes : la valeur par défaut de tous les sujets\n' +
+    '/workers — le modèle et l’effort des workers que lancent les agents, par rôle : pour tout le bot\n' +
     '/task\\_agents — combien d’agents de tâches du tracker peuvent travailler en même temps\n' +
     '/runners — machines pour les tests et builds des agents\n' +
     '/todo — les listes de tâches des agents de chaque projet ; leurs réglages\n' +
@@ -105,6 +106,7 @@ export const frDict: Record<string, string> = {
     '/limits — usage de chaque compte et fournisseur ; touchez-en un pour y basculer ce sujet\n' +
     '/limits_autoswitch — bascule automatique de modèle en cas de limite d’usage (liste de secours, bascule, attente)\n' +
     '/limits_reminders — à quelle fréquence les agents qui lancent des workers sont informés de l’état des limites des comptes (1 / 2 / 4 h / désactivé)\n' +
+    '/workers — le modèle et l’effort des workers que lancent les agents, par rôle : pour tout le bot\n' +
     '/accounts — comptes Claude et fournisseurs OpenCode (basculer, ajouter, reconnecter, retirer, connecter, déconnecter)\n' +
     '/access — qui, en plus des admins, peut parler à l’agent dans ce sujet\n' +
     '/clear — supprimer les messages du fil\n' +
@@ -553,6 +555,7 @@ export const frDict: Record<string, string> = {
   'botSkills.setGeneralConfirmation': '✅ Skills du bot : {state} pour TOUS les sujets (le choix propre d’un sujet continue de s’appliquer). Un agent en cours garde ses skills jusqu’à son prochain démarrage ; le serveur OpenCode appliquera la valeur au prochain démarrage du bot.',
   'botSkills.setTopicConfirmation': '✅ Skills du bot : {state} pour ce sujet.',
   'botSkills.followGeneralConfirmation': '✅ Les skills du bot suivent de nouveau General dans ce sujet : {state}.',
+  'botSkills.workerModelsButton': '🛠 Modèles des workers',
   'questionWait.titleGeneral': '⏳ Combien de temps un agent attend votre réponse à sa question avant de continuer sans elle — valeur par défaut de TOUS les sujets : {value}',
   'questionWait.titleTopic': '⏳ Combien de temps l’agent attend votre réponse à sa question avant de continuer sans elle — ce sujet : {value}',
   'questionWait.explanationText': 'Quand l’attente prend fin, on dit à l’agent de poursuivre avec un autre travail, et la question reste ici avec ses boutons et son épingle : vous pouvez encore y répondre, même bien plus tard, et la réponse parvient à l’agent comme un nouveau message.',
@@ -1211,6 +1214,38 @@ export const frDict: Record<string, string> = {
   'limitReminders.setGeneralConfirmation': '🔔 Rappels de limites : {value} (tous les sujets sans choix propre).',
   'limitReminders.setTopicConfirmation': '🔔 Rappels de limites : {value} (ce sujet).',
   'limitReminders.followGeneralConfirmation': '🔔 Rappels de limites : comme dans General — {value} (ce sujet).',
+  'workerRoles.title': '🛠 Modèles des workers — pour tout le bot',
+  'workerRoles.explanationText': 'Le modèle et l’effort que le bot donne par défaut à chaque worker qu’un agent lance. Vos propres instructions priment : un modèle que vous nommez dans la conversation, ou un skill de délégation du projet ou le vôtre qui nomme le modèle d’un rôle.',
+  'workerRoles.runningWorkerNote': 'Un nouveau worker prend la valeur en vigueur ; un worker en cours garde la sienne.',
+  'workerRoles.skillsOffWarning': '⚠️ Les skills du bot sont désactivés : les agents suivent leurs propres skills, qui peuvent ne pas demander ces valeurs au bot.',
+  'workerRoles.providerMissingWarning': '⚠️ {role} : OpenCode « {provider} » n’est pas connecté — en attendant, les agents lancent ce rôle sur leur propre modèle.',
+  'workerRoles.modelMissingWarning': '⚠️ {role} : le modèle OpenCode « {model} » a disparu — en attendant son retour, les agents lancent ce rôle sur leur propre modèle.',
+  'workerRoles.roleRow': '{role} : {value}',
+  'workerRoles.allBuiltInButton': '↩ Tout aux valeurs intégrées',
+  'workerRoles.role.builder': 'Développeur',
+  'workerRoles.role.storageBuilder': 'Développeur, stockage des données',
+  'workerRoles.role.investigator': 'Enquêteur',
+  'workerRoles.role.reviewer': 'Relecteur',
+  'workerRoles.role.miniReviewer': 'Mini-relecture',
+  'workerRoles.role.planner': 'Planificateur',
+  'workerRoles.roleDescription.builder': 'Code, tests, débogage, exécutions e2e et réelles, reprises.',
+  'workerRoles.roleDescription.storageBuilder': 'Un développeur dont le travail touche la persistance des données : stockage, schéma de BD et migrations, synchronisation, fusion et résolution de conflits, sauvegardes — tout ce qui peut perdre ou corrompre les données de l’utilisateur.',
+  'workerRoles.roleDescription.investigator': 'Une cause encore floue après deux échecs d’un développeur (aussi le comportement de l’UX ou de la plateforme).',
+  'workerRoles.roleDescription.reviewer': 'La relecture indépendante d’une tâche ou d’un commit.',
+  'workerRoles.roleDescription.miniReviewer': 'Un petit diff, un correctif du relecteur lui-même, des corrections appliquées.',
+  'workerRoles.roleDescription.planner': 'Un planificateur, et la recherche qui nourrit un plan (un chercheur, un analyste).',
+  'workerRoles.roleTitle': '🛠 {role}',
+  'workerRoles.nowLine': 'Maintenant : {value}',
+  'workerRoles.builtInMark': '{value} (intégré)',
+  'workerRoles.ownInstructionsWin': 'Vos propres instructions peuvent en nommer un autre — elles priment alors.',
+  'workerRoles.modelDefault': 'par défaut du modèle',
+  'workerRoles.openCodeButton': '🔌 Modèle OpenCode…',
+  'workerRoles.openCodeCurrentButton': '🔌 OpenCode · {model} ✓',
+  'workerRoles.roleBuiltInButton': '↩ Intégré',
+  'workerRoles.backButton': '← Retour',
+  'workerRoles.providersTitle': '🛠 {role} · OpenCode\n\nChoisissez le fournisseur :',
+  'workerRoles.modelsTitle': '🛠 {role} · {provider}',
+  'workerRoles.staleScreen': 'Cet écran est périmé — rouvrez /workers',
   'limits.remindersRowLabel': '🔔 Rappels : {value}',
   'limits.autoswitchTitle': '🔁 Bascule automatique en cas de limite d’usage',
   'accounts.openCodeSection': '🔌 Providers OpenCode (connectés) :\n{list}',

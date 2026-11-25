@@ -1353,6 +1353,8 @@ export interface AgentAdapter extends EventEmitter {
   getCurrentModel?(key: SessionKey): string | null;
   /** Get available models from backend */
   getAvailableModels?(): Promise<string[]>;
+  /** The variants (effort levels) a catalog model offers — `provider/model` — with no conversation involved (`/workers`); `[]` for none or an unknown model. */
+  getCatalogModelVariants?(model: string): Promise<string[]>;
 
   // — Reasoning-effort selection (per-thread, per-backend) —
 

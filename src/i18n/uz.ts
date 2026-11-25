@@ -75,6 +75,7 @@ export const uzDict: Record<string, string> = {
     '/bot\\_skills — botning agentlar uchun skills’lari: yoqish / o‘chirish\n' +
     '/question\\_wait — agent savoliga javobni qancha kutib, so‘ng davom etadi: barcha mavzular uchun standart\n' +
     '/limits\\_reminders — workers ishga tushiradigan agentlarga akkauntlar limitlari holati qanchalik tez-tez aytilishi: barcha mavzularning standarti\n' +
+    '/workers — agentlar ishga tushiradigan workerlarning modeli va harakat darajasi, rollar bo‘yicha: butun bot uchun\n' +
     '/task\\_agents — tracker vazifalari bo‘yicha nechta agent bir vaqtda ishlashi mumkin\n' +
     '/runners — agentlarning test va buildlari uchun mashinalar\n' +
     '/todo — barcha loyihalar agentlarining vazifa ro\'yxatlari; ularning sozlamalari\n' +
@@ -105,6 +106,7 @@ export const uzDict: Record<string, string> = {
     '/limits — har bir hisob va provayderning sarfi; bu mavzuni almashtirish uchun birini bosing\n' +
     '/limits_autoswitch — foydalanish limitida modelni avtomatik almashtirish (zaxira ro‘yxat, almashtirish, kutish)\n' +
     '/limits_reminders — workers ishga tushiradigan agentlarga akkauntlar limitlari holati qanchalik tez-tez aytilishi (1 / 2 / 4 soat / o‘chirilgan)\n' +
+    '/workers — agentlar ishga tushiradigan workerlarning modeli va harakat darajasi, rollar bo‘yicha: butun bot uchun\n' +
     '/accounts — Claude hisoblari va OpenCode provayderlari (almashtirish, qo‘shish, qayta kirish, olib tashlash, ulash, uzish)\n' +
     '/access — adminlardan tashqari kim shu mavzuda agent bilan gaplasha oladi\n' +
     '/clear — mavzu xabarlarini o‘chirish\n' +
@@ -553,6 +555,7 @@ export const uzDict: Record<string, string> = {
   'botSkills.setGeneralConfirmation': '✅ Botning skills’lari: BARCHA mavzular uchun {state} (mavzuning o‘z tanlovi kuchda qoladi). Ishlayotgan agent o‘z skills’ini keyingi ishga tushishigacha saqlaydi; OpenCode serveri qiymatni botning keyingi ishga tushishida qo‘llaydi.',
   'botSkills.setTopicConfirmation': '✅ Botning skills’lari: bu mavzu uchun {state}.',
   'botSkills.followGeneralConfirmation': '✅ Botning skills’lari bu mavzuda yana General’ga ergashadi: {state}.',
+  'botSkills.workerModelsButton': '🛠 Worker modellari',
   'questionWait.titleGeneral': '⏳ Agent o‘z savoliga javobingizni qancha kutadi, so‘ng usiz davom etadi — BARCHA mavzular uchun standart: {value}',
   'questionWait.titleTopic': '⏳ Agent o‘z savoliga javobingizni qancha kutadi, so‘ng usiz davom etadi — bu mavzu: {value}',
   'questionWait.explanationText': 'Kutish tugagach, agentga boshqa ish bilan davom etish aytiladi, savol esa tugmalari va mahkamlanishi bilan shu yerda qoladi: unga keyinroq, qancha vaqt o‘tmasin, javob berishingiz mumkin va javob agentga yangi xabar sifatida yetib boradi.',
@@ -1211,6 +1214,38 @@ export const uzDict: Record<string, string> = {
   'limitReminders.setGeneralConfirmation': '🔔 Limit eslatmalari: {value} (o‘z tanlovi bo‘lmagan barcha mavzular).',
   'limitReminders.setTopicConfirmation': '🔔 Limit eslatmalari: {value} (bu mavzu).',
   'limitReminders.followGeneralConfirmation': '🔔 Limit eslatmalari: General kabi — {value} (bu mavzu).',
+  'workerRoles.title': '🛠 Worker modellari — butun bot uchun',
+  'workerRoles.explanationText': 'Agent ishga tushiradigan har bir worker uchun botning standart modeli va harakat darajasi. O‘z ko‘rsatmalaringiz ustun: suhbatda aytgan modelingiz yoki loyihaning yoki o‘zingizning rol modelini aytadigan delegate skill’i.',
+  'workerRoles.runningWorkerNote': 'Yangi worker amaldagi qiymatni oladi; ishlayotgani o‘zinikini saqlaydi.',
+  'workerRoles.skillsOffWarning': '⚠️ Bot skill’lari o‘chirilgan: agentlar o‘z skill’lariga amal qiladi, ular botdan bu qiymatlarni so‘ramasligi mumkin.',
+  'workerRoles.providerMissingWarning': '⚠️ {role}: OpenCode «{provider}» ulanmagan — ulanguncha agentlar bu rolni o‘z modelida ishga tushiradi.',
+  'workerRoles.modelMissingWarning': '⚠️ {role}: OpenCode modeli «{model}» endi yo‘q — qaytguncha agentlar bu rolni o‘z modelida ishga tushiradi.',
+  'workerRoles.roleRow': '{role}: {value}',
+  'workerRoles.allBuiltInButton': '↩ Hammasi o‘rnatilgan qiymatlarga',
+  'workerRoles.role.builder': 'Quruvchi',
+  'workerRoles.role.storageBuilder': 'Quruvchi, ma’lumotlarni saqlash',
+  'workerRoles.role.investigator': 'Tadqiqotchi',
+  'workerRoles.role.reviewer': 'Ko‘rib chiquvchi',
+  'workerRoles.role.miniReviewer': 'Mini-ko‘rib chiqish',
+  'workerRoles.role.planner': 'Rejalashtiruvchi',
+  'workerRoles.roleDescription.builder': 'Kod, testlar, nosozliklarni tuzatish, e2e va jonli ishga tushirishlar, qayta ishlash.',
+  'workerRoles.roleDescription.storageBuilder': 'Ishi ma’lumotlarni saqlashga tegadigan quruvchi: saqlash, DB sxemasi va migratsiyalar, sinxronlash, birlashtirish va ziddiyatlarni hal qilish, zaxira nusxalar — foydalanuvchi ma’lumotlarini yo‘qotishi yoki buzishi mumkin bo‘lgan hamma narsa.',
+  'workerRoles.roleDescription.investigator': 'Quruvchi ikki marta muvaffaqiyatsiz bo‘lgandan keyin ham sababi noaniq muammo (UX yoki platforma xatti-harakati ham).',
+  'workerRoles.roleDescription.reviewer': 'Vazifa yoki kommitni mustaqil ko‘rib chiqish.',
+  'workerRoles.roleDescription.miniReviewer': 'Kichik diff, ko‘rib chiquvchining o‘z tuzatishi, qo‘llangan tuzatishlar.',
+  'workerRoles.roleDescription.planner': 'Rejalashtiruvchi va rejaga asos bo‘ladigan tadqiqot (tadqiqotchi, tahlilchi).',
+  'workerRoles.roleTitle': '🛠 {role}',
+  'workerRoles.nowLine': 'Hozir: {value}',
+  'workerRoles.builtInMark': '{value} (o‘rnatilgan)',
+  'workerRoles.ownInstructionsWin': 'O‘z ko‘rsatmalaringiz boshqasini aytishi mumkin — unda ular ustun.',
+  'workerRoles.modelDefault': 'model standarti',
+  'workerRoles.openCodeButton': '🔌 OpenCode modeli…',
+  'workerRoles.openCodeCurrentButton': '🔌 OpenCode · {model} ✓',
+  'workerRoles.roleBuiltInButton': '↩ O‘rnatilgan',
+  'workerRoles.backButton': '← Orqaga',
+  'workerRoles.providersTitle': '🛠 {role} · OpenCode\n\nProvayderni tanlang:',
+  'workerRoles.modelsTitle': '🛠 {role} · {provider}',
+  'workerRoles.staleScreen': 'Bu ekran eskirgan — /workers ni qayta oching',
   'limits.remindersRowLabel': '🔔 Eslatmalar: {value}',
   'limits.autoswitchTitle': '🔁 Foydalanish limitida avtomatik almashtirish',
   'accounts.openCodeSection': '🔌 OpenCode provayderlari (ulangan):\n{list}',

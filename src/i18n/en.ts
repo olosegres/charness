@@ -79,6 +79,7 @@ export const enDict: Record<string, string> = {
     '/bot\\_skills — the bot\'s own skills for agents: on / off\n' +
     '/question\\_wait — how long an agent waits for an answer to its question before going on: the default of every topic\n' +
     '/limits\\_reminders — how often agents that launch workers are told where the accounts\' limits stand: the default of every topic\n' +
+    '/workers — the model and effort of the workers agents launch, per role: for the whole bot\n' +
     '/task\\_agents — how many tracker task agents may work at once\n' +
     '/runners — machines for the agents\' tests and builds\n' +
     '/todo — the agents\' todo lists of every project; their settings\n' +
@@ -109,6 +110,7 @@ export const enDict: Record<string, string> = {
     '/limits — usage of every account and provider; tap one to switch this topic\n' +
     '/limits_autoswitch — automatic model switching on a usage limit (fallback list, switch, wait)\n' +
     '/limits_reminders — how often agents that launch workers are told where the accounts\' limits stand (1 h / 2 h / 4 h / off)\n' +
+    '/workers — the model and effort of the workers agents launch, per role (the whole bot)\n' +
     '/accounts — Claude accounts and OpenCode providers (switch, add, re-login, remove, connect, disconnect)\n' +
     '/access — who besides the admins may talk to the agent in this topic\n' +
     '/clear — delete thread messages\n' +
@@ -564,6 +566,7 @@ export const enDict: Record<string, string> = {
   'botSkills.setGeneralConfirmation': '✅ Bot skills: {state} for ALL topics (a topic\'s own choice still applies). A running agent keeps its skills until its next start; OpenCode\'s server follows at the bot\'s next start.',
   'botSkills.setTopicConfirmation': '✅ Bot skills: {state} for this topic.',
   'botSkills.followGeneralConfirmation': '✅ Bot skills in this topic follow General again: {state}.',
+  'botSkills.workerModelsButton': '🛠 Worker models',
   'questionWait.titleGeneral': '⏳ How long an agent waits for your answer to its question before it goes on without it — the default of ALL topics: {value}',
   'questionWait.titleTopic': '⏳ How long the agent waits for your answer to its question before it goes on without it — this topic: {value}',
   'questionWait.explanationText': 'When the wait ends, the agent is told to go on with other work, and the question stays here with its buttons and its pin: you can still answer it, however much later, and the answer reaches the agent as a new message.',
@@ -1255,6 +1258,39 @@ export const enDict: Record<string, string> = {
   'limitReminders.setGeneralConfirmation': '🔔 Limit reminders: {value} (all topics without their own choice).',
   'limitReminders.setTopicConfirmation': '🔔 Limit reminders: {value} (this topic).',
   'limitReminders.followGeneralConfirmation': '🔔 Limit reminders: as General — {value} (this topic).',
+
+  'workerRoles.title': '🛠 Worker models — for the whole bot',
+  'workerRoles.explanationText': 'The bot\'s default model and effort for each worker an agent launches. Your own instructions win: a model you name in the conversation, or a delegate skill of the project or your own that names a role\'s model.',
+  'workerRoles.runningWorkerNote': 'A new worker takes the value in force; a running one keeps its own.',
+  'workerRoles.skillsOffWarning': '⚠️ The bot\'s skills are off: agents follow their own skills, which may not ask the bot for these values.',
+  'workerRoles.providerMissingWarning': '⚠️ {role}: OpenCode «{provider}» is not connected — agents launch it on their own model until it is.',
+  'workerRoles.modelMissingWarning': '⚠️ {role}: the OpenCode model «{model}» is gone — agents launch it on their own model until it is back.',
+  'workerRoles.roleRow': '{role}: {value}',
+  'workerRoles.allBuiltInButton': '↩ All to built-in values',
+  'workerRoles.role.builder': 'Builder',
+  'workerRoles.role.storageBuilder': 'Builder, data storage',
+  'workerRoles.role.investigator': 'Investigator',
+  'workerRoles.role.reviewer': 'Reviewer',
+  'workerRoles.role.miniReviewer': 'Mini-review',
+  'workerRoles.role.planner': 'Planner',
+  'workerRoles.roleDescription.builder': 'Code, tests, debugging, e2e and live runs, rework.',
+  'workerRoles.roleDescription.storageBuilder': 'A builder whose work touches data persistence: storage, DB schema and migrations, sync, merge and conflict resolution, backups — anything that can lose or corrupt user data.',
+  'workerRoles.roleDescription.investigator': 'A cause still unclear after a builder failed on it twice (also UX or platform behaviour).',
+  'workerRoles.roleDescription.reviewer': 'The independent review of a task or commit.',
+  'workerRoles.roleDescription.miniReviewer': 'A small diff, a reviewer\'s own fix, applied fixes.',
+  'workerRoles.roleDescription.planner': 'A planner, and the research that feeds a plan (a researcher, an analyst).',
+  'workerRoles.roleTitle': '🛠 {role}',
+  'workerRoles.nowLine': 'Now: {value}',
+  'workerRoles.builtInMark': '{value} (built-in)',
+  'workerRoles.ownInstructionsWin': 'Your own instructions may name another — then they win.',
+  'workerRoles.modelDefault': 'model\'s default',
+  'workerRoles.openCodeButton': '🔌 OpenCode model…',
+  'workerRoles.openCodeCurrentButton': '🔌 OpenCode · {model} ✓',
+  'workerRoles.roleBuiltInButton': '↩ Built-in',
+  'workerRoles.backButton': '← Back',
+  'workerRoles.providersTitle': '🛠 {role} · OpenCode\n\nChoose the provider:',
+  'workerRoles.modelsTitle': '🛠 {role} · {provider}',
+  'workerRoles.staleScreen': 'This screen is out of date — open /workers again',
   'limits.remindersRowLabel': '🔔 Reminders: {value}',
   'limits.autoswitchTitle': '🔁 Automatic switching on a usage limit',
   'accounts.openCodeSection': '🔌 OpenCode providers (connected):\n{list}',

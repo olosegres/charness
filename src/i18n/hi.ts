@@ -75,6 +75,7 @@ export const hiDict: Record<string, string> = {
     '/bot\\_skills — एजेंटों के लिए बॉट के skills: चालू / बंद\n' +
     '/question\\_wait — एजेंट अपने प्रश्न के उत्तर का कितना इंतज़ार करता है, फिर आगे बढ़ता है: हर विषय का डिफ़ॉल्ट\n' +
     '/limits\\_reminders — workers चलाने वाले एजेंटों को अकाउंट लिमिट की स्थिति कितनी बार बताई जाए: हर टॉपिक का डिफ़ॉल्ट\n' +
+    '/workers — एजेंटों द्वारा शुरू किए गए वर्कर का मॉडल और एफ़र्ट, भूमिका के अनुसार: पूरे बॉट के लिए\n' +
     '/task\\_agents — ट्रैकर के कितने टास्क एजेंट एक साथ काम कर सकते हैं\n' +
     '/runners — एजेंटों के टेस्ट और बिल्ड की मशीनें\n' +
     '/todo — हर प्रोजेक्ट के एजेंटों की कार्य सूचियाँ; उनकी सेटिंग्स\n' +
@@ -105,6 +106,7 @@ export const hiDict: Record<string, string> = {
     '/limits — हर खाते और प्रदाता का उपयोग; इस टॉपिक को बदलने के लिए किसी पर टैप करें\n' +
     '/limits_autoswitch — उपयोग-सीमा पर मॉडल का स्वचालित स्विच (वैकल्पिक सूची, स्विच, प्रतीक्षा)\n' +
     '/limits_reminders — workers चलाने वाले एजेंटों को अकाउंट लिमिट की स्थिति कितनी बार बताई जाए (1 / 2 / 4 घंटे / बंद)\n' +
+    '/workers — एजेंटों द्वारा शुरू किए गए वर्कर का मॉडल और एफ़र्ट, भूमिका के अनुसार: पूरे बॉट के लिए\n' +
     '/accounts — Claude खाते और OpenCode प्रदाता (स्विच, जोड़ें, फिर साइन इन, हटाएँ, कनेक्ट, डिस्कनेक्ट)\n' +
     '/access — एडमिन के अलावा कौन इस टॉपिक में एजेंट से बात कर सकता है\n' +
     '/clear — थ्रेड संदेश हटाएँ\n' +
@@ -553,6 +555,7 @@ export const hiDict: Record<string, string> = {
   'botSkills.setGeneralConfirmation': '✅ बॉट के skills: सभी विषयों के लिए {state} (विषय की अपनी पसंद फिर भी लागू रहती है)। चल रहा एजेंट अपने अगले आरंभ तक अपने skills रखता है; OpenCode सर्वर बॉट के अगले आरंभ पर यह मान अपनाएगा।',
   'botSkills.setTopicConfirmation': '✅ बॉट के skills: इस विषय के लिए {state}।',
   'botSkills.followGeneralConfirmation': '✅ इस विषय में बॉट के skills फिर से General जैसे हैं: {state}।',
+  'botSkills.workerModelsButton': '🛠 वर्कर मॉडल',
   'questionWait.titleGeneral': '⏳ एजेंट अपने प्रश्न पर आपके उत्तर का कितना इंतज़ार करता है, उसके बाद वह उसके बिना आगे बढ़ जाता है — सभी विषयों का डिफ़ॉल्ट: {value}',
   'questionWait.titleTopic': '⏳ एजेंट अपने प्रश्न पर आपके उत्तर का कितना इंतज़ार करता है, उसके बाद वह उसके बिना आगे बढ़ जाता है — इस विषय के लिए: {value}',
   'questionWait.explanationText': 'प्रतीक्षा समाप्त होने पर एजेंट को दूसरा काम जारी रखने को कहा जाता है, और प्रश्न अपने बटनों और पिन के साथ यहीं रहता है: आप बाद में, चाहे कितनी भी देर से, उसका उत्तर दे सकते हैं, और उत्तर एजेंट तक एक नए संदेश के रूप में पहुँचता है।',
@@ -1210,6 +1213,38 @@ export const hiDict: Record<string, string> = {
   'limitReminders.setGeneralConfirmation': '🔔 लिमिट रिमाइंडर: {value} (वे सभी टॉपिक जिनका अपना चुनाव नहीं)।',
   'limitReminders.setTopicConfirmation': '🔔 लिमिट रिमाइंडर: {value} (यह टॉपिक)।',
   'limitReminders.followGeneralConfirmation': '🔔 लिमिट रिमाइंडर: General जैसा — {value} (यह टॉपिक)।',
+  'workerRoles.title': '🛠 वर्कर मॉडल — पूरे बॉट के लिए',
+  'workerRoles.explanationText': 'एजेंट जो भी वर्कर शुरू करता है, उसके लिए बॉट का डिफ़ॉल्ट मॉडल और एफ़र्ट। आपके अपने निर्देश ऊपर हैं: बातचीत में आपका बताया मॉडल, या प्रोजेक्ट का या आपका अपना delegate skill जो किसी भूमिका का मॉडल बताता है।',
+  'workerRoles.runningWorkerNote': 'नया वर्कर लागू मान लेता है; चल रहा वर्कर अपना मान रखता है।',
+  'workerRoles.skillsOffWarning': '⚠️ बॉट के skills बंद हैं: एजेंट अपने skills मानते हैं, जो शायद बॉट से ये मान न पूछें।',
+  'workerRoles.providerMissingWarning': '⚠️ {role}: OpenCode «{provider}» जुड़ा नहीं है — तब तक एजेंट इस भूमिका को अपने मॉडल पर चलाते हैं।',
+  'workerRoles.modelMissingWarning': '⚠️ {role}: OpenCode मॉडल «{model}» अब नहीं है — लौटने तक एजेंट इस भूमिका को अपने मॉडल पर चलाते हैं।',
+  'workerRoles.roleRow': '{role}: {value}',
+  'workerRoles.allBuiltInButton': '↩ सब बिल्ट-इन मानों पर',
+  'workerRoles.role.builder': 'बिल्डर',
+  'workerRoles.role.storageBuilder': 'बिल्डर, डेटा स्टोरेज',
+  'workerRoles.role.investigator': 'जांचकर्ता',
+  'workerRoles.role.reviewer': 'रिव्यूअर',
+  'workerRoles.role.miniReviewer': 'मिनी-रिव्यू',
+  'workerRoles.role.planner': 'प्लानर',
+  'workerRoles.roleDescription.builder': 'कोड, टेस्ट, डीबगिंग, e2e और लाइव रन, दोबारा काम।',
+  'workerRoles.roleDescription.storageBuilder': 'ऐसा बिल्डर जिसका काम डेटा सहेजने से जुड़ा है: स्टोरेज, DB स्कीमा और माइग्रेशन, सिंक, मर्ज और टकराव सुलझाना, बैकअप — जो भी उपयोगकर्ता का डेटा खो या बिगाड़ सकता है।',
+  'workerRoles.roleDescription.investigator': 'ऐसा कारण जो बिल्डर के दो बार असफल होने के बाद भी साफ़ नहीं (UX या प्लेटफ़ॉर्म का व्यवहार भी)।',
+  'workerRoles.roleDescription.reviewer': 'किसी टास्क या कमिट का स्वतंत्र रिव्यू।',
+  'workerRoles.roleDescription.miniReviewer': 'छोटा diff, रिव्यूअर का अपना सुधार, लागू किए गए सुधार।',
+  'workerRoles.roleDescription.planner': 'प्लानर, और योजना के लिए रिसर्च (रिसर्चर, विश्लेषक)।',
+  'workerRoles.roleTitle': '🛠 {role}',
+  'workerRoles.nowLine': 'अभी: {value}',
+  'workerRoles.builtInMark': '{value} (बिल्ट-इन)',
+  'workerRoles.ownInstructionsWin': 'आपके अपने निर्देश कोई और बता सकते हैं — तब वे ऊपर हैं।',
+  'workerRoles.modelDefault': 'मॉडल का डिफ़ॉल्ट',
+  'workerRoles.openCodeButton': '🔌 OpenCode मॉडल…',
+  'workerRoles.openCodeCurrentButton': '🔌 OpenCode · {model} ✓',
+  'workerRoles.roleBuiltInButton': '↩ बिल्ट-इन',
+  'workerRoles.backButton': '← वापस',
+  'workerRoles.providersTitle': '🛠 {role} · OpenCode\n\nप्रोवाइडर चुनें:',
+  'workerRoles.modelsTitle': '🛠 {role} · {provider}',
+  'workerRoles.staleScreen': 'यह स्क्रीन पुरानी हो गई है — /workers फिर से खोलें',
   'limits.remindersRowLabel': '🔔 रिमाइंडर: {value}',
   'limits.autoswitchTitle': '🔁 उपयोग-सीमा पर स्वचालित स्विचिंग',
   'accounts.openCodeSection': '🔌 OpenCode प्रदाता (कनेक्टेड):\n{list}',

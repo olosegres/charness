@@ -75,6 +75,7 @@ export const zhDict: Record<string, string> = {
     '/bot\\_skills — 机器人提供给智能体的技能：开启 / 关闭\n' +
     '/question\\_wait — 智能体等待其提问的回答多久后继续工作：所有话题的默认值\n' +
     '/limits\\_reminders — 启动 worker 的智能体多久被告知一次账号用量上限的情况：所有话题的默认值\n' +
+    '/workers — 智能体启动的 worker 的模型和推理强度，按角色：适用于整个机器人\n' +
     '/task\\_agents — 可同时工作的跟踪器任务智能体数量\n' +
     '/runners — 智能体测试和构建用的机器\n' +
     '/todo — 所有项目中智能体的任务列表及其设置\n' +
@@ -105,6 +106,7 @@ export const zhDict: Record<string, string> = {
     '/limits — 各账号和提供方的用量；点按其中一个即可切换此话题\n' +
     '/limits_autoswitch — 达到用量上限时自动切换模型（备用列表、切换、等待）\n' +
     '/limits_reminders — 启动 worker 的智能体多久被告知一次账号用量上限的情况（1 / 2 / 4 小时 / 关闭）\n' +
+    '/workers — 智能体启动的 worker 的模型和推理强度，按角色：适用于整个机器人\n' +
     '/accounts — Claude 账号与 OpenCode 提供商（切换、添加、重新登录、移除、连接、断开）\n' +
     '/access — 除管理员外，谁可以在此话题与代理对话\n' +
     '/clear — 删除话题消息\n' +
@@ -553,6 +555,7 @@ export const zhDict: Record<string, string> = {
   'botSkills.setGeneralConfirmation': '✅ 机器人技能：所有话题 {state}（各话题的单独设置仍然有效）。正在运行的智能体会保留其 skills，直到下次启动；OpenCode 服务器会在机器人下次启动时采用该值。',
   'botSkills.setTopicConfirmation': '✅ 机器人技能：本话题 {state}。',
   'botSkills.followGeneralConfirmation': '✅ 本话题的机器人技能再次与 General 一致：{state}。',
+  'botSkills.workerModelsButton': '🛠 worker 模型',
   'questionWait.titleGeneral': '⏳ 智能体等待你回答其提问多久，之后不等答案继续工作——所有话题的默认值：{value}',
   'questionWait.titleTopic': '⏳ 智能体等待你回答其提问多久，之后不等答案继续工作——本话题：{value}',
   'questionWait.explanationText': '等待结束后，智能体会被告知去做别的工作，问题则连同按钮和置顶一起留在这里：你之后随时还能回答，答案会作为新消息送达智能体。',
@@ -1205,6 +1208,38 @@ export const zhDict: Record<string, string> = {
   'limitReminders.setGeneralConfirmation': '🔔 上限提醒：{value}（所有没有自己选择的话题）。',
   'limitReminders.setTopicConfirmation': '🔔 上限提醒：{value}（本话题）。',
   'limitReminders.followGeneralConfirmation': '🔔 上限提醒：同 General — {value}（本话题）。',
+  'workerRoles.title': '🛠 worker 模型 — 适用于整个机器人',
+  'workerRoles.explanationText': '智能体启动的每个 worker 由机器人默认给出的模型和推理强度。你自己的指示优先：你在对话中指定的模型，或项目或你自己的委派 skill 为某个角色指定的模型。',
+  'workerRoles.runningWorkerNote': '新的 worker 使用当前值；正在运行的 worker 保留自己的值。',
+  'workerRoles.skillsOffWarning': '⚠️ 机器人的 skills 已关闭：智能体遵循自己的 skills，它们可能不会向机器人询问这些值。',
+  'workerRoles.providerMissingWarning': '⚠️ {role}：OpenCode「{provider}」未连接 — 在连接之前，智能体以自己的模型启动这个角色。',
+  'workerRoles.modelMissingWarning': '⚠️ {role}：OpenCode 模型「{model}」已不存在 — 在它恢复之前，智能体以自己的模型启动这个角色。',
+  'workerRoles.roleRow': '{role}：{value}',
+  'workerRoles.allBuiltInButton': '↩ 全部恢复内置值',
+  'workerRoles.role.builder': '构建者',
+  'workerRoles.role.storageBuilder': '构建者（数据存储）',
+  'workerRoles.role.investigator': '调查者',
+  'workerRoles.role.reviewer': '评审者',
+  'workerRoles.role.miniReviewer': '小评审',
+  'workerRoles.role.planner': '规划者',
+  'workerRoles.roleDescription.builder': '代码、测试、调试、e2e 和真实环境运行、返工。',
+  'workerRoles.roleDescription.storageBuilder': '工作涉及数据持久化的构建者：存储、数据库结构和迁移、同步、合并与冲突解决、备份 — 一切可能丢失或损坏用户数据的事。',
+  'workerRoles.roleDescription.investigator': '构建者两次失败后原因仍不清楚的问题（也包括 UX 或平台行为）。',
+  'workerRoles.roleDescription.reviewer': '对任务或提交的独立评审。',
+  'workerRoles.roleDescription.miniReviewer': '小的 diff、评审者自己的修复、已应用的修复。',
+  'workerRoles.roleDescription.planner': '规划者，以及为计划提供依据的研究（研究员、分析师）。',
+  'workerRoles.roleTitle': '🛠 {role}',
+  'workerRoles.nowLine': '当前：{value}',
+  'workerRoles.builtInMark': '{value}（内置）',
+  'workerRoles.ownInstructionsWin': '你自己的指示可能指定别的 — 那时以它为准。',
+  'workerRoles.modelDefault': '模型默认',
+  'workerRoles.openCodeButton': '🔌 OpenCode 模型…',
+  'workerRoles.openCodeCurrentButton': '🔌 OpenCode · {model} ✓',
+  'workerRoles.roleBuiltInButton': '↩ 内置',
+  'workerRoles.backButton': '← 返回',
+  'workerRoles.providersTitle': '🛠 {role} · OpenCode\n\n选择提供商：',
+  'workerRoles.modelsTitle': '🛠 {role} · {provider}',
+  'workerRoles.staleScreen': '此界面已过期 — 请重新打开 /workers',
   'limits.remindersRowLabel': '🔔 提醒：{value}',
   'limits.autoswitchTitle': '🔁 达到用量上限时自动切换',
   'accounts.openCodeSection': '🔌 OpenCode provider（已连接）：\n{list}',

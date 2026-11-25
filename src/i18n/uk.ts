@@ -81,6 +81,7 @@ export const ukDict: Record<string, string> = {
     '/bot\\_skills — скіли бота для агентів: увімк / вимк\n' +
     '/question\\_wait — скільки агент чекає відповіді на своє запитання, перш ніж продовжити: значення за замовчуванням для всіх топіків\n' +
     '/limits\\_reminders — як часто агентам, що запускають воркерів, нагадують про ліміти акаунтів: значення за замовчуванням для всіх топіків\n' +
+    '/workers — модель і рівень міркувань воркерів, яких запускають агенти, за ролями: для всього бота\n' +
     '/task\\_agents — скільки агентів за задачами трекера можуть працювати одночасно\n' +
     '/runners — машини для тестів і збірок агентів\n' +
     '/todo — списки завдань агентів усіх проєктів; їхні налаштування\n' +
@@ -111,6 +112,7 @@ export const ukDict: Record<string, string> = {
     '/limits — використання кожного облікового запису та провайдера; натисни на один, щоб перемкнути топік\n' +
     '/limits_autoswitch — автоматичне перемикання моделі при ліміті (запасні моделі, перемикання, очікування)\n' +
     '/limits_reminders — як часто агентам, що запускають воркерів, нагадують про ліміти акаунтів (1 / 2 / 4 год / вимк)\n' +
+    '/workers — модель і рівень міркувань воркерів, яких запускають агенти, за ролями: для всього бота\n' +
     '/accounts — акаунти Claude та провайдери OpenCode (перемкнути, додати, увійти знову, видалити, підключити, відключити)\n' +
     '/access — хто, крім адмінів, може писати агенту в цьому топіку\n' +
     '/clear — видалити повідомлення треда\n' +
@@ -559,6 +561,7 @@ export const ukDict: Record<string, string> = {
   'botSkills.setGeneralConfirmation': '✅ Скіли бота: {state} для ВСІХ топіків (власний вибір топіка й далі діє). Працюючий агент зберігає свої скіли до наступного запуску; сервер OpenCode застосує значення під час наступного запуску бота.',
   'botSkills.setTopicConfirmation': '✅ Скіли бота: {state} для цього топіка.',
   'botSkills.followGeneralConfirmation': '✅ Скіли бота в цьому топіку знову як у General: {state}.',
+  'botSkills.workerModelsButton': '🛠 Моделі воркерів',
   'questionWait.titleGeneral': '⏳ Скільки агент чекає вашої відповіді на своє запитання, перш ніж продовжити без неї — значення за замовчуванням для УСІХ топіків: {value}',
   'questionWait.titleTopic': '⏳ Скільки агент чекає вашої відповіді на своє запитання, перш ніж продовжити без неї — цей топік: {value}',
   'questionWait.explanationText': 'Коли очікування закінчується, агентові кажуть продовжити іншу роботу, а запитання лишається тут із кнопками й закріпленням: на нього все ще можна відповісти, скільки б часу не минуло, і відповідь дійде до агента новим повідомленням.',
@@ -1217,6 +1220,38 @@ export const ukDict: Record<string, string> = {
   'limitReminders.setGeneralConfirmation': '🔔 Нагадування про ліміти: {value} (усі топіки без власного вибору).',
   'limitReminders.setTopicConfirmation': '🔔 Нагадування про ліміти: {value} (цей топік).',
   'limitReminders.followGeneralConfirmation': '🔔 Нагадування про ліміти: як у General — {value} (цей топік).',
+  'workerRoles.title': '🛠 Моделі воркерів — для всього бота',
+  'workerRoles.explanationText': 'Модель і рівень міркувань, які бот за замовчуванням дає кожному воркеру, запущеному агентом. Твої власні інструкції важливіші: модель, яку ти називаєш у розмові, або делегувальний скіл проєкту чи твій власний, що називає модель ролі.',
+  'workerRoles.runningWorkerNote': 'Новий воркер бере поточне значення; той, що вже працює, зберігає своє.',
+  'workerRoles.skillsOffWarning': '⚠️ Скіли бота вимкнено: агенти слідують своїм скілам, які можуть не питати в бота ці значення.',
+  'workerRoles.providerMissingWarning': '⚠️ {role}: OpenCode «{provider}» не підключено — поки його немає, агенти запускають цю роль на своїй моделі.',
+  'workerRoles.modelMissingWarning': '⚠️ {role}: моделі OpenCode «{model}» більше немає — поки вона не повернеться, агенти запускають цю роль на своїй моделі.',
+  'workerRoles.roleRow': '{role}: {value}',
+  'workerRoles.allBuiltInButton': '↩ Усе до вбудованих значень',
+  'workerRoles.role.builder': 'Розробник',
+  'workerRoles.role.storageBuilder': 'Розробник, зберігання даних',
+  'workerRoles.role.investigator': 'Дослідник',
+  'workerRoles.role.reviewer': 'Рев\'юер',
+  'workerRoles.role.miniReviewer': 'Міні-рев\'ю',
+  'workerRoles.role.planner': 'Планувальник',
+  'workerRoles.roleDescription.builder': 'Код, тести, налагодження, e2e та живі прогони, доопрацювання.',
+  'workerRoles.roleDescription.storageBuilder': 'Розробник, чия робота стосується зберігання даних: сховище, схема БД і міграції, синхронізація, злиття й розв\'язання конфліктів, бекапи — усе, що може втратити або зіпсувати дані користувача.',
+  'workerRoles.roleDescription.investigator': 'Причина досі неясна після двох невдалих спроб розробника (також поведінка UX або платформи).',
+  'workerRoles.roleDescription.reviewer': 'Незалежне рев\'ю задачі або коміту.',
+  'workerRoles.roleDescription.miniReviewer': 'Невеликий дифф, власне виправлення рев\'юера, застосовані виправлення.',
+  'workerRoles.roleDescription.planner': 'Планувальник і дослідження, на якому будується план (дослідник, аналітик).',
+  'workerRoles.roleTitle': '🛠 {role}',
+  'workerRoles.nowLine': 'Зараз: {value}',
+  'workerRoles.builtInMark': '{value} (вбудоване)',
+  'workerRoles.ownInstructionsWin': 'Твої інструкції можуть назвати іншу — тоді важливіші вони.',
+  'workerRoles.modelDefault': 'за замовчуванням моделі',
+  'workerRoles.openCodeButton': '🔌 Модель OpenCode…',
+  'workerRoles.openCodeCurrentButton': '🔌 OpenCode · {model} ✓',
+  'workerRoles.roleBuiltInButton': '↩ Вбудоване',
+  'workerRoles.backButton': '← Назад',
+  'workerRoles.providersTitle': '🛠 {role} · OpenCode\n\nОбери провайдера:',
+  'workerRoles.modelsTitle': '🛠 {role} · {provider}',
+  'workerRoles.staleScreen': 'Цей екран застарів — відкрий /workers знову',
   'limits.remindersRowLabel': '🔔 Нагадування: {value}',
   'limits.autoswitchTitle': '🔁 Автоматичне перемикання при ліміті використання',
   'accounts.openCodeSection': '🔌 Провайдери OpenCode (підключені):\n{list}',

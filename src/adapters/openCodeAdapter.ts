@@ -3001,6 +3001,13 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
     return fetchAvailableModels();
   }
 
+  /** @description The variants of a catalog model (`provider/model`) from the providers config (cached like the session's own read); `[]` for none. */
+  async getCatalogModelVariants(model: string): Promise<string[]> {
+    const index = model.indexOf('/');
+    if (index <= 0) return [];
+    return this.getModelVariants({ providerID: model.slice(0, index), modelID: model.slice(index + 1) });
+  }
+
   getCurrentModel(key: SessionKey): string | null {
     const session = this.sessions.get(keyToString(key));
     if (session?.currentModelLabel) return session.currentModelLabel;

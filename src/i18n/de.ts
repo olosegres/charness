@@ -75,6 +75,7 @@ export const deDict: Record<string, string> = {
     '/bot\\_skills — Skills des Bots für Agenten: ein / aus\n' +
     '/question\\_wait — wie lange ein Agent auf eine Antwort auf seine Frage wartet, bevor er weitermacht: Standard jedes Themas\n' +
     '/limits\\_reminders — wie oft Agenten, die Worker starten, über den Stand der Konto-Limits informiert werden: der Standard jedes Themas\n' +
+    '/workers — Modell und Aufwand der Worker, die Agenten starten, je Rolle: für den ganzen Bot\n' +
     '/task\\_agents — wie viele Tracker-Aufgaben-Agenten gleichzeitig arbeiten dürfen\n' +
     '/runners — Maschinen für Tests und Builds der Agenten\n' +
     '/todo — die Aufgabenlisten der Agenten aller Projekte; ihre Einstellungen\n' +
@@ -105,6 +106,7 @@ export const deDict: Record<string, string> = {
     '/limits — Verbrauch aller Konten und Provider; tippe auf eines, um dieses Thema umzustellen\n' +
     '/limits_autoswitch — automatischer Modellwechsel bei Nutzungslimit (Ersatzliste, Wechsel, Warten)\n' +
     '/limits_reminders — wie oft Agenten, die Worker starten, über den Stand der Konto-Limits informiert werden (1 / 2 / 4 Std. / aus)\n' +
+    '/workers — Modell und Aufwand der Worker, die Agenten starten, je Rolle: für den ganzen Bot\n' +
     '/accounts — Claude-Konten und OpenCode-Provider (wechseln, hinzufügen, neu anmelden, entfernen, verbinden, trennen)\n' +
     '/access — wer außer den Admins in diesem Thema mit dem Agenten sprechen darf\n' +
     '/clear — Thread-Nachrichten löschen\n' +
@@ -553,6 +555,7 @@ export const deDict: Record<string, string> = {
   'botSkills.setGeneralConfirmation': '✅ Bot-Skills: {state} für ALLE Themen (die eigene Wahl eines Themas gilt weiter). Ein laufender Agent behält seine Skills bis zu seinem nächsten Start; der OpenCode-Server übernimmt den Wert beim nächsten Start des Bots.',
   'botSkills.setTopicConfirmation': '✅ Bot-Skills: {state} für dieses Thema.',
   'botSkills.followGeneralConfirmation': '✅ Bot-Skills in diesem Thema folgen wieder General: {state}.',
+  'botSkills.workerModelsButton': '🛠 Worker-Modelle',
   'questionWait.titleGeneral': '⏳ Wie lange ein Agent auf deine Antwort auf seine Frage wartet, bevor er ohne sie weitermacht — Standard für ALLE Themen: {value}',
   'questionWait.titleTopic': '⏳ Wie lange der Agent auf deine Antwort auf seine Frage wartet, bevor er ohne sie weitermacht — dieses Thema: {value}',
   'questionWait.explanationText': 'Ist die Wartezeit um, wird der Agent angewiesen, mit anderer Arbeit weiterzumachen, und die Frage bleibt hier mit ihren Buttons und ihrer Anheftung: Du kannst sie noch beantworten, egal wie viel später, und die Antwort erreicht den Agenten als neue Nachricht.',
@@ -1211,6 +1214,38 @@ export const deDict: Record<string, string> = {
   'limitReminders.setGeneralConfirmation': '🔔 Limit-Erinnerungen: {value} (alle Themen ohne eigene Wahl).',
   'limitReminders.setTopicConfirmation': '🔔 Limit-Erinnerungen: {value} (dieses Thema).',
   'limitReminders.followGeneralConfirmation': '🔔 Limit-Erinnerungen: wie in General — {value} (dieses Thema).',
+  'workerRoles.title': '🛠 Worker-Modelle — für den ganzen Bot',
+  'workerRoles.explanationText': 'Das Standardmodell und der Standard-Aufwand des Bots für jeden Worker, den ein Agent startet. Deine eigenen Anweisungen haben Vorrang: ein Modell, das du im Gespräch nennst, oder ein Delegations-Skill des Projekts oder dein eigener, der das Modell einer Rolle nennt.',
+  'workerRoles.runningWorkerNote': 'Ein neuer Worker nimmt den geltenden Wert; ein laufender behält seinen.',
+  'workerRoles.skillsOffWarning': '⚠️ Die Skills des Bots sind aus: Agenten folgen ihren eigenen Skills, die den Bot womöglich nicht nach diesen Werten fragen.',
+  'workerRoles.providerMissingWarning': '⚠️ {role}: OpenCode «{provider}» ist nicht verbunden — bis dahin starten Agenten diese Rolle mit ihrem eigenen Modell.',
+  'workerRoles.modelMissingWarning': '⚠️ {role}: das OpenCode-Modell «{model}» ist weg — bis es zurück ist, starten Agenten diese Rolle mit ihrem eigenen Modell.',
+  'workerRoles.roleRow': '{role}: {value}',
+  'workerRoles.allBuiltInButton': '↩ Alle auf eingebaute Werte',
+  'workerRoles.role.builder': 'Builder',
+  'workerRoles.role.storageBuilder': 'Builder, Datenspeicherung',
+  'workerRoles.role.investigator': 'Ermittler',
+  'workerRoles.role.reviewer': 'Reviewer',
+  'workerRoles.role.miniReviewer': 'Mini-Review',
+  'workerRoles.role.planner': 'Planer',
+  'workerRoles.roleDescription.builder': 'Code, Tests, Debugging, E2E- und Live-Läufe, Nacharbeit.',
+  'workerRoles.roleDescription.storageBuilder': 'Ein Builder, dessen Arbeit die Datenspeicherung berührt: Speicher, DB-Schema und Migrationen, Synchronisierung, Zusammenführen und Konfliktlösung, Backups — alles, was Nutzerdaten verlieren oder beschädigen kann.',
+  'workerRoles.roleDescription.investigator': 'Eine Ursache, die unklar bleibt, nachdem ein Builder zweimal daran gescheitert ist (auch UX- oder Plattformverhalten).',
+  'workerRoles.roleDescription.reviewer': 'Das unabhängige Review einer Aufgabe oder eines Commits.',
+  'workerRoles.roleDescription.miniReviewer': 'Ein kleiner Diff, ein eigener Fix des Reviewers, angewandte Korrekturen.',
+  'workerRoles.roleDescription.planner': 'Ein Planer und die Recherche, die einen Plan speist (ein Rechercheur, ein Analyst).',
+  'workerRoles.roleTitle': '🛠 {role}',
+  'workerRoles.nowLine': 'Jetzt: {value}',
+  'workerRoles.builtInMark': '{value} (eingebaut)',
+  'workerRoles.ownInstructionsWin': 'Deine eigenen Anweisungen können ein anderes nennen — dann haben sie Vorrang.',
+  'workerRoles.modelDefault': 'Standard des Modells',
+  'workerRoles.openCodeButton': '🔌 OpenCode-Modell…',
+  'workerRoles.openCodeCurrentButton': '🔌 OpenCode · {model} ✓',
+  'workerRoles.roleBuiltInButton': '↩ Eingebaut',
+  'workerRoles.backButton': '← Zurück',
+  'workerRoles.providersTitle': '🛠 {role} · OpenCode\n\nWähle den Anbieter:',
+  'workerRoles.modelsTitle': '🛠 {role} · {provider}',
+  'workerRoles.staleScreen': 'Diese Ansicht ist veraltet — öffne /workers erneut',
   'limits.remindersRowLabel': '🔔 Erinnerungen: {value}',
   'limits.autoswitchTitle': '🔁 Automatischer Wechsel bei Nutzungslimit',
   'accounts.openCodeSection': '🔌 OpenCode-Provider (verbunden):\n{list}',

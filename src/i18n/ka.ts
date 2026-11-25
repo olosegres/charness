@@ -75,6 +75,7 @@ export const kaDict: Record<string, string> = {
     '/bot\\_skills — ბოტის skills აგენტებისთვის: ჩართვა / გამორთვა\n' +
     '/question\\_wait — რამდენ ხანს ელოდება აგენტი პასუხს თავის კითხვაზე, სანამ გააგრძელებს: ყველა თემის ნაგულისხმევი\n' +
     '/limits\\_reminders — რამდენად ხშირად ეცნობება workers-ის გამშვებ აგენტებს ანგარიშების ლიმიტების მდგომარეობა: ყველა თემის ნაგულისხმევი\n' +
+    '/workers — აგენტების მიერ გაშვებული worker-ების მოდელი და ძალისხმევა, როლების მიხედვით: მთელი ბოტისთვის\n' +
     '/task\\_agents — რამდენ ტრეკერის ამოცანის აგენტს შეუძლია ერთდროულად მუშაობა\n' +
     '/runners — მანქანები აგენტების ტესტებისა და ბილდებისთვის\n' +
     '/todo — ყველა პროექტის აგენტების ამოცანების სიები; მათი პარამეტრები\n' +
@@ -105,6 +106,7 @@ export const kaDict: Record<string, string> = {
     '/limits — ყველა ანგარიშისა და პროვაიდერის გამოყენება; ამ თემის გადასართავად დააჭირეთ ერთ-ერთს\n' +
     '/limits_autoswitch — მოდელის ავტომატური გადართვა გამოყენების ლიმიტზე (სარეზერვო სია, გადართვა, ლოდინი)\n' +
     '/limits_reminders — რამდენად ხშირად ეცნობება workers-ის გამშვებ აგენტებს ანგარიშების ლიმიტების მდგომარეობა (1 / 2 / 4 სთ / გამორთვა)\n' +
+    '/workers — აგენტების მიერ გაშვებული worker-ების მოდელი და ძალისხმევა, როლების მიხედვით: მთელი ბოტისთვის\n' +
     '/accounts — Claude ანგარიშები და OpenCode პროვაიდერები (გადართვა, დამატება, ხელახლა შესვლა, წაშლა, დაკავშირება, გათიშვა)\n' +
     '/access — ადმინების გარდა ვის შეუძლია აგენტთან საუბარი ამ თემაში\n' +
     '/clear — თემის შეტყობინებების წაშლა\n' +
@@ -553,6 +555,7 @@ export const kaDict: Record<string, string> = {
   'botSkills.setGeneralConfirmation': '✅ ბოტის skills: {state} ყველა თემისთვის (თემის საკუთარი არჩევანი კვლავ მოქმედებს). მომუშავე აგენტი თავის skills-ს შეინარჩუნებს შემდეგ გაშვებამდე; OpenCode-ის სერვერი ამ მნიშვნელობას ბოტის შემდეგ გაშვებაზე გამოიყენებს.',
   'botSkills.setTopicConfirmation': '✅ ბოტის skills: {state} ამ თემისთვის.',
   'botSkills.followGeneralConfirmation': '✅ ბოტის skills ამ თემაში ისევ General-ს მიჰყვება: {state}.',
+  'botSkills.workerModelsButton': '🛠 worker-ების მოდელები',
   'questionWait.titleGeneral': '⏳ რამდენ ხანს ელოდება აგენტი პასუხს თავის კითხვაზე, სანამ მის გარეშე გააგრძელებს — ყველა თემის ნაგულისხმევი: {value}',
   'questionWait.titleTopic': '⏳ რამდენ ხანს ელოდება აგენტი პასუხს თავის კითხვაზე, სანამ მის გარეშე გააგრძელებს — ეს თემა: {value}',
   'questionWait.explanationText': 'მოლოდინის დასრულებისას აგენტს ეუბნებიან, გააგრძელოს სხვა სამუშაო, ხოლო კითხვა ღილაკებითა და მიმაგრებით აქვე რჩება: მაინც შეგიძლიათ უპასუხოთ, რამდენიც არ უნდა გავიდეს, და პასუხი აგენტამდე ახალი შეტყობინებით მივა.',
@@ -1211,6 +1214,38 @@ export const kaDict: Record<string, string> = {
   'limitReminders.setGeneralConfirmation': '🔔 ლიმიტების შეხსენებები: {value} (ყველა თემა საკუთარი არჩევანის გარეშე).',
   'limitReminders.setTopicConfirmation': '🔔 ლიმიტების შეხსენებები: {value} (ეს თემა).',
   'limitReminders.followGeneralConfirmation': '🔔 ლიმიტების შეხსენებები: როგორც General-ში — {value} (ეს თემა).',
+  'workerRoles.title': '🛠 worker-ების მოდელები — მთელი ბოტისთვის',
+  'workerRoles.explanationText': 'ბოტის ნაგულისხმევი მოდელი და ძალისხმევა ყოველი worker-ისთვის, რომელსაც აგენტი უშვებს. თქვენი საკუთარი ინსტრუქციები უპირატესია: მოდელი, რომელსაც საუბარში ასახელებთ, ან პროექტის ან თქვენი საკუთარი delegate skill, რომელიც როლის მოდელს ასახელებს.',
+  'workerRoles.runningWorkerNote': 'ახალი worker იღებს მოქმედ მნიშვნელობას; მომუშავე თავისას ინარჩუნებს.',
+  'workerRoles.skillsOffWarning': '⚠️ ბოტის skills გამორთულია: აგენტები საკუთარ skills-ს მისდევენ, რომლებმაც შეიძლება ბოტს ეს მნიშვნელობები არ ჰკითხონ.',
+  'workerRoles.providerMissingWarning': '⚠️ {role}: OpenCode «{provider}» არ არის დაკავშირებული — მანამდე აგენტები ამ როლს საკუთარ მოდელზე უშვებენ.',
+  'workerRoles.modelMissingWarning': '⚠️ {role}: OpenCode-ის მოდელი «{model}» აღარ არის — დაბრუნებამდე აგენტები ამ როლს საკუთარ მოდელზე უშვებენ.',
+  'workerRoles.roleRow': '{role}: {value}',
+  'workerRoles.allBuiltInButton': '↩ ყველა ჩაშენებულ მნიშვნელობაზე',
+  'workerRoles.role.builder': 'ბილდერი',
+  'workerRoles.role.storageBuilder': 'ბილდერი, მონაცემთა შენახვა',
+  'workerRoles.role.investigator': 'გამომძიებელი',
+  'workerRoles.role.reviewer': 'რევიუერი',
+  'workerRoles.role.miniReviewer': 'მინი-რევიუ',
+  'workerRoles.role.planner': 'დამგეგმავი',
+  'workerRoles.roleDescription.builder': 'კოდი, ტესტები, დებაგი, e2e და ცოცხალი გაშვებები, გადაკეთება.',
+  'workerRoles.roleDescription.storageBuilder': 'ბილდერი, რომლის სამუშაო მონაცემთა შენახვას ეხება: საცავი, DB სქემა და მიგრაციები, სინქრონიზაცია, შერწყმა და კონფლიქტების გადაწყვეტა, ბექაპები — ყველაფერი, რამაც შეიძლება მომხმარებლის მონაცემები დაკარგოს ან დააზიანოს.',
+  'workerRoles.roleDescription.investigator': 'მიზეზი, რომელიც ბილდერის ორი წარუმატებელი ცდის შემდეგაც გაურკვეველია (ასევე UX-ის ან პლატფორმის ქცევა).',
+  'workerRoles.roleDescription.reviewer': 'ამოცანის ან კომიტის დამოუკიდებელი რევიუ.',
+  'workerRoles.roleDescription.miniReviewer': 'პატარა diff, რევიუერის საკუთარი შესწორება, გამოყენებული შესწორებები.',
+  'workerRoles.roleDescription.planner': 'დამგეგმავი და კვლევა, რომელსაც გეგმა ეფუძნება (მკვლევარი, ანალიტიკოსი).',
+  'workerRoles.roleTitle': '🛠 {role}',
+  'workerRoles.nowLine': 'ახლა: {value}',
+  'workerRoles.builtInMark': '{value} (ჩაშენებული)',
+  'workerRoles.ownInstructionsWin': 'თქვენმა ინსტრუქციებმა შეიძლება სხვა დაასახელონ — მაშინ ისინი უპირატესია.',
+  'workerRoles.modelDefault': 'მოდელის ნაგულისხმევი',
+  'workerRoles.openCodeButton': '🔌 OpenCode-ის მოდელი…',
+  'workerRoles.openCodeCurrentButton': '🔌 OpenCode · {model} ✓',
+  'workerRoles.roleBuiltInButton': '↩ ჩაშენებული',
+  'workerRoles.backButton': '← უკან',
+  'workerRoles.providersTitle': '🛠 {role} · OpenCode\n\nაირჩიეთ პროვაიდერი:',
+  'workerRoles.modelsTitle': '🛠 {role} · {provider}',
+  'workerRoles.staleScreen': 'ეს ეკრანი მოძველდა — გახსენით /workers ხელახლა',
   'limits.remindersRowLabel': '🔔 შეხსენებები: {value}',
   'limits.autoswitchTitle': '🔁 გამოყენების ლიმიტზე ავტომატური გადართვა',
   'accounts.openCodeSection': '🔌 OpenCode პროვაიდერები (დაკავშირებული):\n{list}',

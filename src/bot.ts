@@ -491,6 +491,7 @@ import { createCompaction, type ThreadContextReading } from './connectors/telegr
 import { readClaudeContextUsedTokens, readClaudeFirstCallContextTokens } from './utils/claudeRuntimeInfo';
 import { createAutoContinueLimits, appendAutoContinueLimitsHint } from './connectors/telegram/commands/autoContinueLimits';
 import { createBotSkills } from './connectors/telegram/commands/botSkills';
+import { createWorkerRoles } from './connectors/telegram/commands/workerRoles';
 import { createQuestionWait } from './connectors/telegram/commands/questionWait';
 import { createTopicStatus } from './connectors/telegram/commands/topicStatus';
 import { createTopicAccess } from './connectors/telegram/commands/topicAccess';
@@ -8905,9 +8906,30 @@ const {
 
 registerAutoContinueLimitsCommands();
 
+// ── The worker roles (`/workers`): `connectors/telegram/commands/workerRoles.ts`, `utils/workerRolesScreenPlan.ts`, `utils/workerRoles.ts` ──
+const { registerWorkerRolesCommands, registerWorkerRolesCallbacks, openScreen: openWorkerRolesScreen } = createWorkerRoles({
+  ...botCore,
+  readWorkerRoles: readWorkerRolesSettings,
+  saveWorkerRoles: (workerRoles) => saveInstanceSettingsChange(getInstanceSettingsPath(), { workerRoles }),
+  getSettingsPath: () => getInstanceSettingsPath(),
+  listOpenCodeModels: async () => (await readOpenCodeCatalogForWorker()) ?? [],
+  getOpenCodeModelVariants: async (model) => {
+    try {
+      return (await getAdapter(openCodeAdapterName).getCatalogModelVariants?.(model)) ?? [];
+    } catch (e) {
+      console.warn('[workers] reading the variants of an OpenCode model failed:', e instanceof Error ? e.message : e);
+      return [];
+    }
+  },
+  readIsBotSkillsEnabled: () => readBotSkillsInstanceValue(botSkillsSources).isEnabled,
+});
+
+registerWorkerRolesCommands();
+
 // ── «Bot skills» switch (`/bot_skills`): `connectors/telegram/commands/botSkills.ts`, `utils/botSkills.ts` ──
 const { registerBotSkillsCommands, registerBotSkillsCallbacks } = createBotSkills({
   ...botCore,
+  openWorkerRolesScreen,
   readBotSkills: botSkillsReader,
   readBotSkillsInstanceValue: () => readBotSkillsInstanceValue(botSkillsSources),
   checkIsOpenCodeTopic: (key) => (getThreadAdapterNameRaw(key) ?? state.getAgent(key)?.name) === openCodeAdapterName,
@@ -11297,7 +11319,7 @@ const botCommands = new Set([
   'start', 'claude', 'opencode', 'oc', 'terminal', 'agent', 'sessions', 'resume', 'cancel', 'model', 'connect',
   'disconnect', 'stop', 'stopall', 'stop-all', 'quit-all', 'status', 'c', 'y', 'n', 'enter', 'up', 'down', 'tab', 'esc', 'escape', 'interrupt', 'output', 'clear_messages',
   'bind', 'topic', 'unbind', 'where', 'ls', 'list', 'new', 'whoami', 'version', 'help', 'language', 'lang',
-  'doctor', 'mcp', 'rename_session', 'compact', 'compact_on_idle', 'compact_summary', 'compact_self_review', 'bot_skills', 'question_wait', 'topic_status', 'task_agents', 'runners', 'auto_continue_limits', 'limits', 'limits_autoswitch', 'limits_reminders', 'limit_reminders', 'trace', 'timestamps', 'timezone', 'schedule', 'reminders', 'todo', 'thinking', 'tool_results',
+  'doctor', 'mcp', 'rename_session', 'compact', 'compact_on_idle', 'compact_summary', 'compact_self_review', 'bot_skills', 'workers', 'worker_models', 'question_wait', 'topic_status', 'task_agents', 'runners', 'auto_continue_limits', 'limits', 'limits_autoswitch', 'limits_reminders', 'limit_reminders', 'trace', 'timestamps', 'timezone', 'schedule', 'reminders', 'todo', 'thinking', 'tool_results',
   'subagent', 'claude_mode', 'effort', 'verbosity', 'quit', 'q', 'quitall', 'pair', 'account', 'accounts', 'fallback', 'stt', 'voice', 'speech', 'update', 'access',
 ]);
 
@@ -12824,6 +12846,7 @@ registerQuestionSetAsideCallbacks(bot);
 
 registerAutoContinueLimitsCallbacks();
 registerBotSkillsCallbacks();
+registerWorkerRolesCallbacks();
 registerQuestionWaitCallbacks();
 registerTopicStatusCallbacks();
 registerTopicAccessCallbacks();
@@ -15097,6 +15120,7 @@ export const COMMANDS_MENU = [
   { command: 'compact_summary', description: '📄 Post the compaction summary (toggle)' },
   { command: 'compact_self_review', description: '💡 Agent self-review on compaction: its mistakes and what to change in its instructions' },
   { command: 'bot_skills', description: '🧰 The bot\'s own skills for agents (on/off)' },
+  { command: 'workers', description: '🛠 Worker models and effort per role' },
   { command: 'question_wait', description: '⏳ How long the agent waits for your answer to its question' },
   { command: 'topic_status', description: '❓ Marks at the end of topic names: question, working, finished, asleep' },
   { command: 'task_agents', description: '🧵 How many tracker task agents work at once' },

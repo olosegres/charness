@@ -2,7 +2,7 @@
  * @description `/bot_skills` (`connectors/telegram/commands/botSkills.ts`) wired to ports (`commandModuleHarness.ts`: a real
  * telegraf instance against the fake Bot API, the real state store, recording topic sends):
  *
- *   • WIRING — the command and its three buttons;
+ *   • WIRING — the command and its four buttons (the last opens `/workers`);
  *   • General — the instance value and where it comes from (the built-in default, settings.json's seed while General never
  *     chose, General's own choice), On / Off with the current one marked, a tap that writes General's value and edits the
  *     picker into its confirmation (keyboard gone);
@@ -20,11 +20,14 @@ import assert from 'node:assert/strict';
 import { createBotSkills } from '../connectors/telegram/commands/botSkills';
 import { createBotSkillsReader, readBotSkillsInstanceValue, type BotSkillsSetting, type BotSkillsSources } from '../utils/botSkills';
 import { createCommandHarness, type CommandHarness } from './commandModuleHarness';
+import type { SessionKey } from '../sessionKey';
 
 let harness: CommandHarness;
 /** `settings.json`'s `botSkills` as the reader sees it, and whether the topic under test runs OpenCode. */
 let settingsValue: BotSkillsSetting | null = null;
 let isOpenCodeTopic = false;
+/** Every `/workers` screen the «Worker models» row asked for. */
+const workerRolesScreenOpenings: SessionKey[] = [];
 /** The id of the bot message each test's taps sit on. */
 let nextPickerMessageId = 900;
 /** What a Claude topic is told about its running agent. */
@@ -62,6 +65,9 @@ describe('botSkills: /bot_skills over its ports', () => {
       readBotSkills: createBotSkillsReader(sources),
       readBotSkillsInstanceValue: () => readBotSkillsInstanceValue(sources),
       checkIsOpenCodeTopic: () => isOpenCodeTopic,
+      openWorkerRolesScreen: async (key) => {
+        workerRolesScreenOpenings.push(key);
+      },
     });
     botSkills.registerBotSkillsCommands();
     botSkills.registerBotSkillsCallbacks();
@@ -73,7 +79,22 @@ describe('botSkills: /bot_skills over its ports', () => {
 
   it('registers /bot_skills and its three buttons', () => {
     assert.deepEqual(harness.registeredCommandNames, ['bot_skills']);
-    assert.deepEqual(harness.registeredActionPatterns, ['bsk_on', 'bsk_off', 'bsk_same']);
+    assert.deepEqual(harness.registeredActionPatterns, ['bsk_on', 'bsk_off', 'bsk_same', 'bsk_wkr']);
+  });
+
+  it('the «Worker models» row opens /workers as a message of its own and leaves the picker as it is; a refused tap opens nothing', async () => {
+    const picker = pushPicker();
+    const editsBefore = harness.edits.length;
+    await harness.tapButton(picker, 'bsk_wkr');
+    assert.deepEqual(workerRolesScreenOpenings, [harness.key]);
+    assert.equal(harness.edits.length, editsBefore, 'the picker is not touched');
+    harness.isAuthorised = false;
+    try {
+      await harness.tapButton(picker, 'bsk_wkr');
+    } finally {
+      harness.isAuthorised = true;
+    }
+    assert.equal(workerRolesScreenOpenings.length, 1);
   });
 
   describe('in General', () => {
@@ -87,15 +108,15 @@ describe('botSkills: /bot_skills over its ports', () => {
       assert.match(picker.text, /^🧰 Bot skills for ALL topics: ON — the built-in default\n\n/);
       assert.match(picker.text, /A running agent keeps its skills until its next start/);
       assert.match(picker.text, /default of every topic without a choice of its own/);
-      assert.deepEqual(harness.getKeyboardData(picker), [['bsk_on', 'bsk_off']]);
-      assert.deepEqual(harness.getKeyboardLabels(picker), [['On ✓', 'Off']]);
+      assert.deepEqual(harness.getKeyboardData(picker), [['bsk_on', 'bsk_off'], ['bsk_wkr']]);
+      assert.deepEqual(harness.getKeyboardLabels(picker), [['On ✓', 'Off'], ['🛠 Worker models']]);
     });
 
     it('while General never chose, settings.json\'s seed is the value shown', async () => {
       settingsValue = 'off';
       await harness.runCommand('bot_skills');
       assert.match(lastReply().text, /^🧰 Bot skills for ALL topics: OFF — from settings\.json\n/);
-      assert.deepEqual(harness.getKeyboardLabels(lastReply()), [['On', 'Off ✓']]);
+      assert.deepEqual(harness.getKeyboardLabels(lastReply()), [['On', 'Off ✓'], ['🛠 Worker models']]);
       assert.equal(harness.state.getBotSkillsGlobalValue(), undefined, 'looking writes nothing');
     });
 
@@ -128,10 +149,10 @@ describe('botSkills: /bot_skills over its ports', () => {
       await harness.runCommand('bot_skills', 'off');
       assert.equal(harness.state.getBotSkillsGlobalValue(), false);
       await harness.runCommand('bot_skills', 'general');
-      assert.deepEqual(harness.getKeyboardData(lastReply()), [['bsk_on', 'bsk_off']], 'the picker');
+      assert.deepEqual(harness.getKeyboardData(lastReply()), [['bsk_on', 'bsk_off'], ['bsk_wkr']], 'the picker');
       assert.equal(harness.state.getBotSkillsGlobalValue(), false, 'nothing changed');
       await harness.runCommand('bot_skills', 'maybe');
-      assert.deepEqual(harness.getKeyboardData(lastReply()), [['bsk_on', 'bsk_off']]);
+      assert.deepEqual(harness.getKeyboardData(lastReply()), [['bsk_on', 'bsk_off'], ['bsk_wkr']]);
     });
 
     it('a stray «as in General» tap in General changes nothing', async () => {
@@ -152,8 +173,8 @@ describe('botSkills: /bot_skills over its ports', () => {
       const picker = lastReply();
       assert.match(picker.text, /^🧰 Bot skills in this topic: ON — as in General\n\n/);
       assert.ok(!picker.text.includes('OpenCode'), 'a Claude topic has no OpenCode note');
-      assert.deepEqual(harness.getKeyboardData(picker), [['bsk_on', 'bsk_off'], ['bsk_same']]);
-      assert.deepEqual(harness.getKeyboardLabels(picker), [['On', 'Off'], ['As in General (ON) ✓']]);
+      assert.deepEqual(harness.getKeyboardData(picker), [['bsk_on', 'bsk_off'], ['bsk_same'], ['bsk_wkr']]);
+      assert.deepEqual(harness.getKeyboardLabels(picker), [['On', 'Off'], ['As in General (ON) ✓'], ['🛠 Worker models']]);
     });
 
     it('Off: the topic\'s own choice is stored, the picker becomes the confirmation, General\'s value is untouched', async () => {
@@ -168,7 +189,7 @@ describe('botSkills: /bot_skills over its ports', () => {
 
       await harness.runCommand('bot_skills');
       assert.match(lastReply().text, /^🧰 Bot skills in this topic: OFF — set for this topic\n/);
-      assert.deepEqual(harness.getKeyboardLabels(lastReply()), [['On', 'Off ✓'], ['As in General (ON)']]);
+      assert.deepEqual(harness.getKeyboardLabels(lastReply()), [['On', 'Off ✓'], ['As in General (ON)'], ['🛠 Worker models']]);
     });
 
     it('On beats a General OFF, and General\'s change does not reach a topic with a choice of its own', async () => {
@@ -187,7 +208,7 @@ describe('botSkills: /bot_skills over its ports', () => {
       assert.equal(lastEdit().text, `✅ Bot skills in this topic follow General again: OFF. ${runningAgentNote}`);
       await harness.runCommand('bot_skills');
       assert.match(lastReply().text, /^🧰 Bot skills in this topic: OFF — as in General\n/);
-      assert.deepEqual(harness.getKeyboardLabels(lastReply()), [['On', 'Off'], ['As in General (OFF) ✓']]);
+      assert.deepEqual(harness.getKeyboardLabels(lastReply()), [['On', 'Off'], ['As in General (OFF) ✓'], ['🛠 Worker models']]);
     });
 
     it('the typed forms apply at once: on, off, and general (drop the choice)', async () => {

@@ -75,6 +75,7 @@ export const jaDict: Record<string, string> = {
     '/bot\\_skills — エージェント向けボットのスキル：オン / オフ\n' +
     '/question\\_wait — エージェントが質問への回答を待つ時間（すべてのトピックの既定値）\n' +
     '/limits\\_reminders — worker を起動するエージェントにアカウント上限の状況を知らせる間隔：すべてのトピックの既定値\n' +
+    '/workers — エージェントが起動するワーカーのモデルと推論レベル（ロールごと、ボット全体）\n' +
     '/task\\_agents — トラッカーのタスクエージェントを同時に動かせる数\n' +
     '/runners — エージェントのテストとビルド用マシン\n' +
     '/todo — 全プロジェクトのエージェントのタスクリストと設定\n' +
@@ -105,6 +106,7 @@ export const jaDict: Record<string, string> = {
     '/limits — 各アカウントとプロバイダーの使用状況。タップするとこのトピックを切り替えます\n' +
     '/limits_autoswitch — 使用量上限でのモデル自動切り替え（予備リスト、切り替え、待機）\n' +
     '/limits_reminders — worker を起動するエージェントにアカウント上限の状況を知らせる間隔（1 / 2 / 4 時間 / オフ）\n' +
+    '/workers — エージェントが起動するワーカーのモデルと推論レベル（ロールごと、ボット全体）\n' +
     '/accounts — Claude アカウントと OpenCode プロバイダー（切り替え、追加、再ログイン、削除、接続、切断）\n' +
     '/access — 管理者以外で、このトピックでエージェントと話せる人\n' +
     '/clear — スレッドのメッセージを削除\n' +
@@ -553,6 +555,7 @@ export const jaDict: Record<string, string> = {
   'botSkills.setGeneralConfirmation': '✅ ボットのスキル: すべてのトピックで {state}（トピックごとの選択は引き続き有効）。実行中のエージェントは次の起動まで自分のスキルを保ちます。OpenCode のサーバーはボットの次の起動時にこの値に従います。',
   'botSkills.setTopicConfirmation': '✅ ボットのスキル: このトピックで {state}。',
   'botSkills.followGeneralConfirmation': '✅ このトピックのボットのスキルは再び General に従います：{state}。',
+  'botSkills.workerModelsButton': '🛠 ワーカーのモデル',
   'questionWait.titleGeneral': '⏳ エージェントが質問への回答を待ち、回答なしで先へ進むまでの時間 — すべてのトピックの既定値: {value}',
   'questionWait.titleTopic': '⏳ エージェントが質問への回答を待ち、回答なしで先へ進むまでの時間 — このトピック: {value}',
   'questionWait.explanationText': '待ち時間が終わると、エージェントは他の作業を続けるよう伝えられ、質問はボタンとピンのままここに残ります。あとからいつでも回答でき、回答は新しいメッセージとしてエージェントに届きます。',
@@ -1205,6 +1208,38 @@ export const jaDict: Record<string, string> = {
   'limitReminders.setGeneralConfirmation': '🔔 上限リマインダー: {value}（個別に選んでいないすべてのトピック）。',
   'limitReminders.setTopicConfirmation': '🔔 上限リマインダー: {value}（このトピック）。',
   'limitReminders.followGeneralConfirmation': '🔔 上限リマインダー: General と同じ — {value}（このトピック）。',
+  'workerRoles.title': '🛠 ワーカーのモデル — ボット全体',
+  'workerRoles.explanationText': 'エージェントが起動する各ワーカーに、ボットが既定で与えるモデルと推論レベルです。あなた自身の指示が優先されます: 会話で指定したモデル、またはロールのモデルを指定するプロジェクトやあなた自身の委任スキル。',
+  'workerRoles.runningWorkerNote': '新しいワーカーは現在の値を使い、実行中のワーカーは自分の値を保ちます。',
+  'workerRoles.skillsOffWarning': '⚠️ ボットのスキルがオフです: エージェントは自分のスキルに従い、ボットにこれらの値を尋ねないことがあります。',
+  'workerRoles.providerMissingWarning': '⚠️ {role}: OpenCode «{provider}» が接続されていません — 接続されるまで、エージェントはこのロールを自分のモデルで起動します。',
+  'workerRoles.modelMissingWarning': '⚠️ {role}: OpenCode のモデル «{model}» がなくなりました — 戻るまで、エージェントはこのロールを自分のモデルで起動します。',
+  'workerRoles.roleRow': '{role}: {value}',
+  'workerRoles.allBuiltInButton': '↩ すべて組み込みの値に',
+  'workerRoles.role.builder': 'ビルダー',
+  'workerRoles.role.storageBuilder': 'ビルダー（データ保存）',
+  'workerRoles.role.investigator': '調査担当',
+  'workerRoles.role.reviewer': 'レビュアー',
+  'workerRoles.role.miniReviewer': 'ミニレビュー',
+  'workerRoles.role.planner': 'プランナー',
+  'workerRoles.roleDescription.builder': 'コード、テスト、デバッグ、e2e と実環境での実行、手直し。',
+  'workerRoles.roleDescription.storageBuilder': 'データの永続化に関わるビルダー: ストレージ、DB スキーマとマイグレーション、同期、マージと競合解決、バックアップ — ユーザーのデータを失ったり壊したりしうるものすべて。',
+  'workerRoles.roleDescription.investigator': 'ビルダーが 2 回失敗しても原因がまだ不明なもの（UX やプラットフォームの挙動も）。',
+  'workerRoles.roleDescription.reviewer': 'タスクやコミットの独立したレビュー。',
+  'workerRoles.roleDescription.miniReviewer': '小さな差分、レビュアー自身の修正、適用済みの修正。',
+  'workerRoles.roleDescription.planner': 'プランナーと、計画のための調査（リサーチャー、アナリスト）。',
+  'workerRoles.roleTitle': '🛠 {role}',
+  'workerRoles.nowLine': '現在: {value}',
+  'workerRoles.builtInMark': '{value}（組み込み）',
+  'workerRoles.ownInstructionsWin': 'あなた自身の指示が別のものを指定できます — その場合はそちらが優先です。',
+  'workerRoles.modelDefault': 'モデルの既定',
+  'workerRoles.openCodeButton': '🔌 OpenCode のモデル…',
+  'workerRoles.openCodeCurrentButton': '🔌 OpenCode · {model} ✓',
+  'workerRoles.roleBuiltInButton': '↩ 組み込み',
+  'workerRoles.backButton': '← 戻る',
+  'workerRoles.providersTitle': '🛠 {role} · OpenCode\n\nプロバイダーを選んでください:',
+  'workerRoles.modelsTitle': '🛠 {role} · {provider}',
+  'workerRoles.staleScreen': 'この画面は古くなっています — /workers を開き直してください',
   'limits.remindersRowLabel': '🔔 リマインダー: {value}',
   'limits.autoswitchTitle': '🔁 使用量上限での自動切り替え',
   'accounts.openCodeSection': '🔌 OpenCode プロバイダー（接続済み）:\n{list}',

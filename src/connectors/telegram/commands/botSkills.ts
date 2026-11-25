@@ -14,6 +14,8 @@ import { getCallbackMessageId } from './callbackMessage';
 const botSkillsOnCallback = 'bsk_on';
 const botSkillsOffCallback = 'bsk_off';
 const botSkillsSameAsGeneralCallback = 'bsk_same';
+/** The row that opens the `/workers` screen as a message of its own: the settings of the skills' workers. */
+const botSkillsWorkerModelsCallback = 'bsk_wkr';
 
 /** The word of `/bot_skills <word>` that hands a topic back to General's value. */
 const sameAsGeneralArgument = 'general';
@@ -30,6 +32,8 @@ export interface BotSkillsPorts
   readBotSkillsInstanceValue: () => BotSkillsInstanceValue;
   /** Whether the topic's backend is OpenCode, whose one server serves every topic and so cannot hide the skills from one. */
   checkIsOpenCodeTopic: (key: SessionKey) => boolean;
+  /** Open the `/workers` screen (the worker models per role) in the topic as a message of its own. */
+  openWorkerRolesScreen: (key: SessionKey) => Promise<void>;
 }
 
 /**
@@ -37,7 +41,7 @@ export interface BotSkillsPorts
  * and edits the picker into its confirmation (a one-shot picker, like `/language`): the menu is gone once a choice is made.
  */
 export function createBotSkills(ports: BotSkillsPorts) {
-  const { bot, command, getState, replyToThread, editThreadMessage, authoriseContext, withThreadLocale, checkIsGeneral, readBotSkills, readBotSkillsInstanceValue, checkIsOpenCodeTopic } = ports;
+  const { bot, command, getState, replyToThread, editThreadMessage, authoriseContext, withThreadLocale, checkIsGeneral, readBotSkills, readBotSkillsInstanceValue, checkIsOpenCodeTopic, openWorkerRolesScreen } = ports;
 
   const formatState = (isEnabled: boolean): string => (isEnabled ? t('botSkills.on') : t('botSkills.off'));
 
@@ -85,15 +89,17 @@ export function createBotSkills(ports: BotSkillsPorts) {
   /**
    * The screen's buttons, the current choice marked ✓. General: On / Off on the instance value in force. A topic: On / Off
    * and «As in General» (with the value it would give); its mark is the topic's own choice, or «As in General» when it has none.
+   * Last, in both, the row that opens `/workers`.
    */
   function buildKeyboard(key: SessionKey, isGeneral: boolean) {
     const mark = (isCurrent: boolean): string => (isCurrent ? ' ✓' : '');
+    const workerModelsRow = [Markup.button.callback(t('botSkills.workerModelsButton'), botSkillsWorkerModelsCallback)];
     if (isGeneral) {
       const isEnabled = readBotSkills(null);
       return Markup.inlineKeyboard([[
         Markup.button.callback(`${t('botSkills.onButton')}${mark(isEnabled)}`, botSkillsOnCallback),
         Markup.button.callback(`${t('botSkills.offButton')}${mark(!isEnabled)}`, botSkillsOffCallback),
-      ]]);
+      ], workerModelsRow]);
     }
     const own = getState().getBotSkillsOverride(key);
     return Markup.inlineKeyboard([
@@ -102,6 +108,7 @@ export function createBotSkills(ports: BotSkillsPorts) {
         Markup.button.callback(`${t('botSkills.offButton')}${mark(own === false)}`, botSkillsOffCallback),
       ],
       [Markup.button.callback(`${t('botSkills.sameAsGeneralButton', { state: formatState(readBotSkills(null)) })}${mark(own === undefined)}`, botSkillsSameAsGeneralCallback)],
+      workerModelsRow,
     ]);
   }
 
@@ -145,6 +152,13 @@ export function createBotSkills(ports: BotSkillsPorts) {
     bot.action(botSkillsOnCallback, (ctx) => handleBotSkillsCallback(ctx, true));
     bot.action(botSkillsOffCallback, (ctx) => handleBotSkillsCallback(ctx, false));
     bot.action(botSkillsSameAsGeneralCallback, (ctx) => handleBotSkillsCallback(ctx, null));
+    // The worker models row: `/workers` as a new message; this picker stays as it is.
+    bot.action(botSkillsWorkerModelsCallback, async (ctx) => {
+      const key = await authoriseContext(ctx);
+      if (!key) { await ctx.answerCbQuery(t('cb.access_denied')); return; }
+      await ctx.answerCbQuery();
+      await openWorkerRolesScreen(key);
+    });
   }
 
   return { registerBotSkillsCommands, registerBotSkillsCallbacks };
