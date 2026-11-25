@@ -375,6 +375,9 @@ describe('The transcribing note of a voice message, end to end: built charness, 
     const stalledDelete = createDeferred();
     fakeTelegram.holdNextResponse('deleteMessage', stalledDelete.promise, checkIsDeleteOf(note));
 
+    // The bot starts the bound when the text arrives, which is after this instant: the lower bound below is counted from it. The
+    // delete's arrival at the fake is no anchor — the bound already runs while that request is on its way.
+    const transcribeGateOpenedAtMs = Date.now();
     openGate(getEngineGates(getLayout()).transcribe);
     // The delete is released only after the echo was seen: a bot that waited for it without a bound would never send the echo.
     const echo = await topic.waitForMessage('the voice note\'s echo, with the delete still unanswered', checkIsEchoAfter(voice));
@@ -383,7 +386,8 @@ describe('The transcribing note of a voice message, end to end: built charness, 
 
     const [deleteCall] = listDeleteCalls(note);
     assert.ok(deleteCall, 'the bot deleted the note');
-    assert.ok(echo.createdAtMs >= deleteCall.receivedAtMs + voiceProgressNoteCleanupBudgetMs - timerToleranceMs, 'and only after the bot had waited the whole bound for it');
+    const echoAfterGateMs = echo.createdAtMs - transcribeGateOpenedAtMs;
+    assert.ok(echoAfterGateMs >= voiceProgressNoteCleanupBudgetMs - timerToleranceMs, `and only after the bot had waited the whole bound for it: the echo came ${echoAfterGateMs} ms after the text was let through, the delete reached the fake ${deleteCall.receivedAtMs - transcribeGateOpenedAtMs} ms after it`);
     await getCharness().waitFor('the saved set to be emptied', waitTimeoutMs, () => readSavedTransientIds(topicThreadIds.stalledDelete).length === 0);
   });
 
