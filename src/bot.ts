@@ -17176,6 +17176,8 @@ export async function startBot(): Promise<void> {
     progressFollowUpMs: ENV.testTimings.progressFollowUpMs,
     // A request waits for its schedule while a job armed under it counts (`requests/scheduleWait.ts`): read when a decision is made.
     getScheduleWait: (key, request) => getRequestScheduleWait(state.getThreadSchedules(key), request),
+    // A tracker issue is never reminded on a clock: a progress note with nothing armed under it gets one nudge, the next stall the give-up.
+    getWakeUpRules: (key) => (checkIsTelegramKey(key) ? 'topic' : 'tracker'),
     // Only a Telegram topic in the answers-only view hides the stream from someone who expects to see the work.
     checkIsAnswerTailWatched: (key) => checkIsTelegramKey(key) && !checkIsStreamShown(state.getDisplayPrefs(key).view),
     remindAnswerTail,

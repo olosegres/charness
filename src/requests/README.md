@@ -530,6 +530,18 @@ match a process the prompt was not written to:
   is never told off as silent. Once the request is `progressFollowUpMaxAgeMs` (12 h) old no follow-up is armed
   after a progress note, and nothing else changes: not given up (no alert, `isWakeStopped` stays false — the task-agent slot
   and the issue updates stay), only the backstop wakes it then. Requests nobody watches get a backstop wake (`getRequestBackstopMs`).
+- **A tracker's rules have no clock** (`WakeUpRuleSet` `tracker`, the engine's `getWakeUpRules` port; `bot.ts` gives it every
+  non-Telegram conversation, a Telegram topic keeps `topic`). They differ from the table below in ONE cell: wherever a progress note
+  under `none` or `armed` is followed up in 15 min (rows 1, 4, 8, 11), a tracker's is a STALL — nothing armed would ever wake the
+  agent — and gets ONE wake at once, the nudge `nothingArmed` (finish, ask, or arm a watch for what it waits on). A silent turn the
+  table calls silent is a stall too (its wake stays `silentTurn`). Stalls are counted in `stalledTurnCount`, which no delivered answer
+  resets (a progress delivery clears `silentTurnCount`, which would otherwise nudge for ever); the second stall in a row — another
+  note, or silence — is the give-up `silentTurns`. A quiet end the request's schedule holds (`checkIsWaitingAtTurnEnd`: the agent
+  armed what wakes it) starts the count again, and so do a person's words forwarded for the request (`trackForwardedTurn`: their turn
+  is a new chance) and the end of a limit wait (`isCountersReset`). A nudge decided at a post's settle is delivered after the post's
+  write like any reminder (§ Turn starts) — unless that write carried a person's words for the same request: then it is moot and not
+  sent (`deliverWakeUpSafely`), the comment's turn is the request's next. Every other cell — quiet
+  ends, holds, the backstop, the restart wake — is the same. No follow-up is armed, so the 12-hour bound never applies to a tracker.
 - **A tracker conversation whose process is gone is woken at once, not at the backstop** (`restarted`,
   `decideRestartWake`, `scheduleRestartWake`): at a boot that did not find its process (not adopted, the
   conversation sleeps) while it holds an open request that waits for nothing of its own (no post retry, no
@@ -645,7 +657,7 @@ match a process the prompt was not written to:
   scheduler's request (`scheduledRun`) is passed over for any other: they do not know the turn, and a person's work outlives an alarm. Without this the watch armed after an API error would go to another
   person's mention and the hand-over would wait for nothing.
 - **Self-check — every write of the owed fields** (`progressAnswerCount`, `isPersonInputUnanswered`, `silentTurnCount`,
-  `lastTurnActivityAt`), which request it writes and whether it can write a request other than the one whose words, answer or turn
+  `lastTurnActivityAt`) and of a tracker's `stalledTurnCount`, which request it writes and whether it can write a request other than the one whose words, answer or turn
   caused it. Keep it next to the table: a new writer is a new row here and, when it can reach another request, a decision.
   `lastTurnActivityAt` keeps one rule: only the request's OWN turns count as its activity — a turn its own forward started (its prompt,
   an update, a reminder for it, a fire of its own job, the fire that opened it) or a conversation-wide forward that tracks it on purpose
@@ -663,6 +675,9 @@ match a process the prompt was not written to:
   | | `answerRequest` (progress) | the answered request | No |
   | | `trackContinuationTurn` with `isCountersReset` (also zeroes `wakeCount`, the follow-up and `isLimitStopped`) | EVERY open request | **Yes, by design**, for the callers that keep the conversation's requests: the end of a limit wait (`apiRetryKick`), the account-wait resume and a limit fallback switch within its backend (`resumeTopicOnNewSession`). A switch ACROSS backends calls it too — the limit fallback onto the other backend and the operator's bridged manual switch (`executeBackendSwitch`) — but resets nothing: `switchThreadAdapter` has already closed every open request `cancelled` (`cancelConversation`). An unbridged switch has no first prompt and returns before `trackContinuationTurn`. The flag is never touched: what is owed stays owed |
   | | `createRequest` (initial 0) | the new request | No |
+  | `stalledTurnCount` (a tracker's rules only) | `decideTurnEnd` (`decideTrackerStall` +1; a quiet end the request's schedule holds clears it), applied by `applyDecision` / `persistDecision` | the request whose watched turn ended | No |
+  | | `trackForwardedTurn` (cleared by a person's words: a request prompt, an issue update) | the tracked request | No |
+  | | `trackContinuationTurn` with `isCountersReset` (cleared) | EVERY open request | **Yes, by design**, as for `silentTurnCount`: a limit wait is no stall |
   | `lastTurnActivityAt` | `recordTurnActivity` from `trackForwardedTurn` (forced, keyed on the watch it just stored) | the tracked request; a «continue» and a restart wake that carried several requests track each of them; NOT when the watch is another job's fire (`isRequestJob` false: its own forward or a «continue» of it) | **Yes, by design**: one session turn, every request in it is watched, and its end is decided for each. A ridden request is never written by another job's fire or its «continue» |
   | | `recordTurnActivity` from a busy poll of a watched turn | the watched request itself, unless the watch is another job's fire (`isRequestJob` false: the busy time is that job's) | No — a write first settles the watches whose turn ended (§ Turn starts), so a watch present belongs to the current busy period, a prompt joined into it included; a request-prompt watch whose prompt never reached a process (unnamed while a process is named: only a person's prompt still in a window — a prompt written to a backend that cannot number its processes is named `unnumberedProcessGeneration`, so a switch of backend never makes one look unwritten, review 21 #1 b; one whose process went down before its track is named from the write, review 22 nit 2; and no stop leaves one in a closed buffer, review 22 #1) records none (`checkIsPromptNeverWritten`) (json-stream and OpenCode queue another request's prompt into a running turn, and the earlier watch stays `running` on the unconsumed input through the next CLI turn; the tmux Claude's interrupt keeps it too): the busy time it records is that period's, and its end is decided at the same turn's end |
   | | `recordTurnActivity` from the sweep's busy branch | the unwatched request | **Narrowed** (rows 2, 11): recorded only while NO turn is watched in the conversation, whatever the request owes, AND the running turn is one the bot wrote (not `isCliOwnTurn`: a finished task's turn or a session job's, row 18) — then the busy session is the request's own lost turn (or one untracked turn of row 18). With a turn watched the busy time is that turn's: recorded, it would push the backstop of a request whose watch fired and nobody handled (`armed`, or `none` after a dropped watch: no follow-up, the backstop is its only wake). A held request ignores the backstop anyway, and a due follow-up is woken by `nextWakeAt`, which activity does not move |

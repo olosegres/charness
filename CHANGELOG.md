@@ -5,6 +5,9 @@
 **A bot restart no longer leaves an agent stuck on its call to the bot's tools: before, a call under way at the restart (an answer still being pinned, say) waited about 2 minutes in Claude Code and a minute in OpenCode, and the agent's next answer in that topic came that late.**
 Now the bot lets the calls already running finish before it restarts, so the agent gets its result — an answer being posted and pinned is reported as delivered, not as an error the agent might answer by sending it again. A call still running after a few seconds is cut, and the agent is told at once instead of waiting.
 
+**An agent working on a Jira issue is no longer reminded every 15 minutes after a progress note: when nothing is armed to wake it, it gets one nudge at once, and is given up on if it stops the same way again.**
+Before, an agent that answered «still working» without arming a watch got a reminder 15 minutes later, and another after each next note, for up to 12 hours — each one a turn that re-read the whole conversation (hundreds of thousands of cached tokens) only to say «still running». Now nothing reminds an issue's agent on a clock: with a watch or a job armed under the request, it is left alone until that wakes it (as before); with nothing armed, its turn gets ONE nudge right away — finish, ask, or arm a watch for what it waits on — and if its next turn ends the same way, another note or silence, the issue gets the give-up comment («The AI stopped working on this without a final answer, even after it was reminded.») and goes back to the requester. The progress comment's «Last updated» line now moves only when the agent itself writes a note. Telegram topics are unchanged.
+
 ## 4.3.0 — 2026-11-25
 
 **You now choose the model and effort of the workers your agents launch: `/workers` sets them per role — builder, reviewer, planner and more — for the whole bot, Claude or OpenCode.**

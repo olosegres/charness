@@ -129,6 +129,14 @@ describe('agent-plugin', () => {
     assert.doesNotMatch(flat, /There are no `schedule_\*` tools|nothing will wake you|Do not end your turn while a worker runs|foreground polls/, 'the polling paragraph is gone');
   });
 
+  test('charness-orchestration tells a Jira agent that nothing reminds it on a clock: a note with nothing armed gets one nudge, the next such turn end gives the request up', () => {
+    const flat = readSkill('charness-orchestration').replace(/\s+/g, ' ');
+    const section = flat.slice(flat.indexOf('## A tracker conversation (Jira)'), flat.indexOf('## Closing a task that ran on a runner'));
+    assert.match(section, /Nothing reminds you on a clock\. A turn that ends with the request open, a `progress` note sent and nothing armed under it \(no watch, no job\) gets ONE nudge from the bot;/);
+    assert.match(section, /if your next turn ends the same way — another note, or silence — the request is given up: the issue gets a comment that you stopped, and a hand-over goes back to its requester\./);
+    assert.match(section, /So end a turn with kind `final`, with `question`, or with a watch armed for what you wait on\./);
+  });
+
   test('charness-orchestration lets a scheduled run\'s header that asks for an answer only with a result go unanswered — a woken agent with nothing to report ends silently, in a topic too', () => {
     const flat = readSkill('charness-orchestration').replace(/\s+/g, ' ');
     const section = flat.slice(flat.indexOf('## Talking to the user'), flat.indexOf('## ', flat.indexOf('## Talking to the user') + 3));

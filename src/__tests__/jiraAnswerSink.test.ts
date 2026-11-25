@@ -393,7 +393,7 @@ describe('alert and park notice', () => {
       "⚠️ The AI's session could not be reached to remind it, so there is no answer here. It will not go on by itself: a person needs to look at this issue. To try again, hand it to the AI again or mention it in a comment.",
     );
     assert.ok(!jira.postedTexts[0].includes('req_'), 'the request id stays in the log');
-    assert.match(buildJiraAlertText('silentTurns'), /^⚠️ The AI stopped working on this without giving an answer, even after it was reminded\. It will not go on by itself/);
+    assert.match(buildJiraAlertText('silentTurns'), /^⚠️ The AI stopped working on this without a final answer, even after it was reminded\. It will not go on by itself/);
     assert.ok(jira.calls.includes('assign PROJ-12 requester-account'));
     await sink().releaseAlert(key, 'anything');
   });

@@ -39,7 +39,21 @@ import { getMinutesOverrideMs } from '../utils/minutesOverride';
  * turn that ends without an answer is not silent either, while nothing is owed — a woken agent with nothing to report stays quiet.
  * A scheduler fire is never a wake-up of these rules, so it never counts against the cap. The complete table is
  * `src/requests/README.md` § Wake-ups.
+ *
+ * A TRACKER's rules (a Jira issue, {@link WakeUpRuleSet}) have no clock: where a topic's progress note with nothing armed starts the
+ * 15-minute follow-up, a tracker's gets ONE nudge at once (`nothingArmed`: finish, ask, or arm a watch for what it waits on), and the
+ * next turn end in a row that leaves the request open with nothing armed — another note, or a silent turn — gives it up
+ * (`stalledTurnCount`). A turn end the request's schedule holds starts that count again (the engine clears it too when a person's
+ * words reach the agent). Everything else is the same table.
  */
+
+/**
+ * @name WakeUpRuleSet
+ * @description Which rules end a conversation's turns: `topic` (a Telegram topic) follows a progress note with nothing armed up after
+ * {@link progressFollowUpDelayMs}; `tracker` (a Jira issue) reminds nobody on a clock — such a note gets one nudge, the next stall the
+ * give-up (a silent turn counts as a stall too). The rest of the table is the same.
+ */
+export type WakeUpRuleSet = 'topic' | 'tracker';
 
 /** Silent turns in a row that make the rules give up. */
 export const maxSilentTurns = 2;
@@ -186,6 +200,8 @@ export interface TurnEndContext {
   scheduleWait?: RequestScheduleWait;
   /** The follow-up delay after a progress note, in place of {@link progressFollowUpDelayMs} (a test instance's shorter one). */
   progressFollowUpMs?: number;
+  /** The conversation's rule set; absent: a topic's. */
+  rules?: WakeUpRuleSet;
 }
 
 /**
@@ -223,6 +239,8 @@ export function decideTurnEnd(
   // the follow-up only the 90-minute backstop would be left (as for a person's turn under `armed`, row 1).
   // A progress note answers the reminders before it: the loop guard's count starts again with the silent-turn count.
   if (isProgressSent && !checkIsWaitingBetweenTurns(scheduleWait)) {
+    // A tracker reminds nobody on a clock: with nothing armed to wake the agent, nothing ever would — one nudge, then the give-up.
+    if (context.rules === 'tracker') return decideTrackerStall(request, nowMs, true);
     const answeredUpdate: OpenRequestUpdate = { silentTurnCount: 0, wakeCount: 0, lastTurnActivityAt: nowMs };
     if (nowMs - request.createdAt >= progressFollowUpMaxAgeMs) return { kind: 'followUpLater', update: { ...answeredUpdate, nextWakeAt: undefined } };
     return {
@@ -254,15 +272,39 @@ export function decideTurnEnd(
         silentTurnCount: 0,
         ...(isProgressSent ? { wakeCount: 0 } : {}),
         ...(isHeldBySchedule ? { nextWakeAt: undefined } : {}),
+        // A tracker's stall count starts again once the request's schedule holds it: the agent armed what wakes it.
+        ...(isWaitingForSchedule && (request.stalledTurnCount ?? 0) > 0 ? { stalledTurnCount: undefined } : {}),
       },
       ...(isUnansweredFireRequest ? { isRequestSettled: true } : {}),
     };
   }
+  if (context.rules === 'tracker') return decideTrackerStall(request, nowMs, false);
   const silentTurnCount = request.silentTurnCount + 1;
   if (silentTurnCount >= maxSilentTurns) {
     return { kind: 'alert', reason: 'silentTurns', update: { silentTurnCount, ...stopWakingUpdate } };
   }
   return getWakeOrCapDecision(request, 'silentTurn', { silentTurnCount, lastTurnActivityAt: nowMs });
+}
+
+/**
+ * A tracker's turn end where a topic's rules would arm the follow-up or call the turn silent: a progress note with nothing armed to
+ * wake the agent (`isProgressSent`), or a silent turn (nothing armed, or an answer still owed). Both count as a stall
+ * (`stalledTurnCount`, which no answer resets); a silent one counts as a silent turn too, as in a topic. The first stall in a row gets a
+ * wake — the nudge `nothingArmed` after a note, the ordinary `silentTurn` after silence — and the second stall, or the second silent
+ * turn, the give-up. A note answers the wake-ups before it, as in a topic: the loop guard counts the ones in a row no note answered.
+ */
+function decideTrackerStall(request: OpenRequestState, nowMs: number, isProgressSent: boolean): WakeUpDecision {
+  const stalledTurnCount = (request.stalledTurnCount ?? 0) + 1;
+  const silentTurnCount = isProgressSent ? 0 : request.silentTurnCount + 1;
+  if (stalledTurnCount >= maxSilentTurns || silentTurnCount >= maxSilentTurns) {
+    return { kind: 'alert', reason: 'silentTurns', update: { silentTurnCount, stalledTurnCount, ...stopWakingUpdate } };
+  }
+  const wakeCount = isProgressSent ? 0 : request.wakeCount;
+  return getWakeOrCapDecision({ ...request, wakeCount }, isProgressSent ? 'nothingArmed' : 'silentTurn', {
+    silentTurnCount,
+    stalledTurnCount,
+    lastTurnActivityAt: nowMs,
+  });
 }
 
 /**

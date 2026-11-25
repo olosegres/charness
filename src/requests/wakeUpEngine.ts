@@ -23,6 +23,7 @@ import {
   getWatchedTurnState,
   type SessionTurnProbe,
   type WakeUpDecision,
+  type WakeUpRuleSet,
   type WatchedTurn,
 } from './wakeUpRules';
 
@@ -110,6 +111,8 @@ export interface RequestWakeUpEngineDeps {
    * request never waits for a schedule.
    */
   getScheduleWait?: (key: SessionKey, request: OpenRequestState) => RequestScheduleWait;
+  /** The rule set a conversation's turns end under (`WakeUpRuleSet`: a tracker's has no follow-up on a clock). Absent: a topic's for every conversation. */
+  getWakeUpRules?: (key: SessionKey) => WakeUpRuleSet;
   now?: () => number;
 }
 
@@ -442,10 +445,13 @@ export class RequestWakeUpEngine {
     // A fire RIDING the request carries none of its prompt; the fire that opened the scheduler's request carries its own.
     const isMoot = request.nextPostRetryAt !== undefined && (!isFireForward || options.isRequestPrompt);
     const isPersonWordsOwed = isPersonWordsForward && request.isPersonInputUnanswered !== true;
-    if (isMoot || isPersonWordsOwed) {
+    // A person's words start a tracker request's stall count again: the turn they start is a new chance, nudged on its own if it stalls.
+    const isStallCountReset = isPersonWordsForward && (request.stalledTurnCount ?? 0) > 0;
+    if (isMoot || isPersonWordsOwed || isStallCountReset) {
       await this.deps.ledger.updateOpenRequest(request.id, {
         ...(isMoot ? { nextPostRetryAt: undefined } : {}),
         ...(isPersonWordsOwed ? { isPersonInputUnanswered: true } : {}),
+        ...(isStallCountReset ? { stalledTurnCount: undefined } : {}),
       });
     }
     // Keyed on the watch just stored, so a fire of another job AND a «continue» of its turn alike write nothing on the request.
@@ -592,6 +598,7 @@ export class RequestWakeUpEngine {
         await this.deps.ledger.updateOpenRequest(request.id, {
           silentTurnCount: 0,
           wakeCount: 0,
+          stalledTurnCount: undefined,
           nextWakeAt: undefined,
           isLimitStopped: undefined,
           limitWaitAnsweredFor: undefined,
@@ -775,6 +782,7 @@ export class RequestWakeUpEngine {
       isRequestJob: turn.isRequestJob !== false,
       scheduleWait: this.getScheduleWait(turn.key, request),
       progressFollowUpMs: this.deps.progressFollowUpMs,
+      rules: this.deps.getWakeUpRules?.(turn.key) ?? 'topic',
     });
   }
 
@@ -971,6 +979,9 @@ export class RequestWakeUpEngine {
       // or stopped being woken meanwhile is stale.
       const current = this.getOpenRequestOf(key, request.id);
       if (!current || checkIsWakingStopped(current)) return 'requestGone';
+      // A tracker's nudge is moot once a person's words for the request reached the agent after it was decided (a comment that waited
+      // for the stalled turn and was written right before the nudge's delivery): their turn is the request's next, decided on its own.
+      if (message.reason === 'nothingArmed' && current.isPersonInputUnanswered === true) return 'requestGone';
       await this.deps.forwardWakeUp(key, request, message);
       return 'delivered';
     } catch (e) {

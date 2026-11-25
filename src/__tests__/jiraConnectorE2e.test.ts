@@ -11,7 +11,8 @@
  *   → the requester assigns the issues, plus one the AI assigned itself and one of a project outside the allowlist
  *   → answered: a comment by the AI account, the issue handed back
  *   → a silent first turn: woken, then answered
- *   → a progress note: commented, the issue stays with the AI
+ *   → a progress note with a job armed to wait on: commented, the issue stays with the AI and nothing reminds the agent — through
+ *     the restart below too, with the backstop at 6 s (a note with nothing armed would be nudged at once: jiraRequestWakeE2e)
  *   → an answered issue idles: compacted, its process stopped, the next hand-over resumes it (L3)
  *   → the agent process killed mid-turn: resumed in its own session, answered
  *   → the self-assigned and the foreign issue: no request, nothing posted
@@ -108,7 +109,7 @@ describe('Jira connector end to end — requests and the session lifecycle: buil
     createIssue('PROJ-1', 'answer');
     createIssue('PROJ-2', 'silent-once');
     createIssue('PROJ-3', 'hang-once');
-    createIssue('PROJ-4', 'progress');
+    createIssue('PROJ-4', 'progress-armed');
     createIssue('PROJ-5', 'answer');
     createIssue('PROJ-6', 'finish-together');
     createIssue('PROJ-7', 'answer-after-queued');
@@ -152,14 +153,14 @@ describe('Jira connector end to end — requests and the session lifecycle: buil
     assert.deepEqual(getCommentTexts(issue), ['Fake final answer for PROJ-2 (silent-once, turn 2).']);
   });
 
-  it('a progress note is a comment; the issue stays with the AI', async () => {
+  it('a progress note is a comment; the issue stays with the AI while the agent waits on the job it armed', async () => {
     const issue = fakeJira.getIssue('PROJ-4');
     // Until `answer_request` returned, the sink may still be about to hand the issue back.
     await waitFor('PROJ-4 progress answer returned to the agent', answerTimeoutMs, () => getAnswers('PROJ-4').length > 0);
     const [answer] = getAnswers('PROJ-4');
     assert.equal(answer.kind, 'progress');
     assert.ok(!answer.outcome.startsWith('error:'), answer.outcome);
-    assert.deepEqual(getCommentTexts(issue), ['Fake progress answer for PROJ-4 (progress, turn 1).']);
+    assert.deepEqual(getCommentTexts(issue), ['Fake progress answer for PROJ-4 (progress-armed, turn 1).']);
     assert.equal(issue.assignee?.accountId, aiAccount.accountId);
   });
 

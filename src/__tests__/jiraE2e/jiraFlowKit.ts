@@ -201,6 +201,11 @@ export function getPrompts(issueKey: string): FakeClaudePrompt[] {
   return readFakeLog<FakeClaudePrompt>(fakeClaudeLogFileNames.prompts).filter((prompt) => prompt.issueKey === issueKey);
 }
 
+/** Every user message the fake agent read that names the request: its prompt, the bot's reminders of it (which name no issue), its updates. */
+export function getPromptsOfRequest(requestId: string): FakeClaudePrompt[] {
+  return readFakeLog<FakeClaudePrompt>(fakeClaudeLogFileNames.prompts).filter((prompt) => prompt.requestId === requestId);
+}
+
 export function getToolCalls(issueKey: string): FakeClaudeToolCall[] {
   return readFakeLog<FakeClaudeToolCall>(fakeClaudeLogFileNames.toolCalls).filter((call) => call.issueKey === issueKey);
 }

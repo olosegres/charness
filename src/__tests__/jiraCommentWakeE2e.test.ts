@@ -41,6 +41,7 @@ import {
   getCharness,
   getCommentTexts,
   getPrompts,
+  getPromptsOfRequest,
   getTurns,
   handIssueToAi,
   itHoldsIsolationBeforeBoot,
@@ -168,7 +169,7 @@ describe('Jira connector end to end — comments on a handed issue, an acting me
     assert.equal(getCommentTexts(issue)[1], `@${requester.displayName}\nFake final answer for ${issueKey} (answer, turn 1).`);
   });
 
-  it('an automation\'s comment on a handed issue wakes nothing: it rides the next prompt', async () => {
+  it('an automation\'s comment on a handed issue wakes nothing: the only turn after the agent\'s progress note is the bot\'s nudge', async () => {
     const issueKey = 'PROJ-44';
     createIssue(issueKey, 'hold-progress-once');
     handIssueToAi(issueKey, requester);
@@ -179,9 +180,14 @@ describe('Jira connector end to end — comments on a handed issue, an acting me
     await waitFor('two more polls', answerTimeoutMs, () => countSearches() >= searchesBefore + 2);
     assert.deepEqual(listCommentDecisionsOf(issueKey), [], 'no decision: an app\'s comment is no person\'s ask');
     releaseHeldTurn();
-    // Its progress note leaves the request open; nothing else is posted to it — the backstop is an hour away.
-    await waitFor(`${issueKey}: the progress note`, answerTimeoutMs, () => getAnswers(issueKey).length === 1);
-    assert.equal(getTurns(issueKey).length, 1);
+    // Its progress note leaves the request open with nothing armed: the bot's one nudge is the next turn (the backstop is an hour
+    // away), never one the automation's comment started; the agent answers it.
+    await waitFor(`${issueKey}: answered after the nudge`, answerTimeoutMs, () => getAnswers(issueKey).length === 2);
+    const turns = getTurns(issueKey);
+    assert.equal(turns.length, 2);
+    assert.ok(getPromptsOfRequest(turns[0].requestId ?? '')[1]?.text.includes(`[Reminder · request ${turns[0].requestId} is still open]`), 'the second turn is the nudge');
+    assert.deepEqual(getAnswers(issueKey).map((answer) => answer.kind), ['progress', 'final']);
+    assert.deepEqual(listCommentDecisionsOf(issueKey), []);
   });
 
   it('charness and the agent killed mid-turn, charness started again with the backstop an hour away: the open request is woken at once and answered within a minute', async () => {

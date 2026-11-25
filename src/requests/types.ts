@@ -67,6 +67,13 @@ export interface OpenRequestState {
   silentTurnCount: number;
   /** Wake-ups delivered since the agent last answered one with a progress note (the loop-guard cap counts these). */
   wakeCount: number;
+  /**
+   * A tracker's rules only (`wakeUpRules.ts` `WakeUpRuleSet`): the turn ends in a row that left the request open with nothing armed to
+   * wake the agent — a progress note with no job armed under it, or a silent turn. The first gets the nudge (`nothingArmed`), the second
+   * gives the request up. A delivered answer does not reset it (a note changes nothing about what wakes the agent); a turn end the
+   * request's schedule holds does, and so do a person's words forwarded for the request and the end of a limit wait. Absent = 0.
+   */
+  stalledTurnCount?: number;
   /** Epoch ms of the next scheduled wake-up, when one is armed. */
   nextWakeAt?: number;
   /** Epoch ms the agent was last seen working on it (the backstop counts from here). */
@@ -133,6 +140,7 @@ export type OpenRequestUpdate = Partial<
     | 'progressAnswerCount'
     | 'silentTurnCount'
     | 'wakeCount'
+    | 'stalledTurnCount'
     | 'nextWakeAt'
     | 'lastTurnActivityAt'
     | 'isWakeStopped'
@@ -184,7 +192,9 @@ export type RequestAnswerKind = 'progress' | 'question' | 'final';
  * @name RequestWakeUpReason
  * @description Why the agent is reminded of an open request.
  *  - `silentTurn` — its turn ended without any answer.
- *  - `progressFollowUp` — it sent a progress note and the follow-up delay passed.
+ *  - `progressFollowUp` — it sent a progress note and the follow-up delay passed (a topic's rules).
+ *  - `nothingArmed` — a tracker's rules: its turn ended with a progress note while nothing is armed to wake it (no job under the
+ *    request): the one nudge, sent at once, in place of a follow-up on a clock.
  *  - `backstop` — nothing was seen working on it for the backstop window (a dead
  *    process, or tracking lost across a restart).
  *  - `postRetry` — the request's prompt could not be posted; tried again soon
@@ -193,12 +203,13 @@ export type RequestAnswerKind = 'progress' | 'question' | 'final';
  *    back without it, or it died with its own work pending) while the request was
  *    open: woken at once instead of at the backstop.
  */
-export type RequestWakeUpReason = 'silentTurn' | 'progressFollowUp' | 'backstop' | 'postRetry' | 'restarted';
+export type RequestWakeUpReason = 'silentTurn' | 'progressFollowUp' | 'nothingArmed' | 'backstop' | 'postRetry' | 'restarted';
 
 /**
  * @name RequestAlertReason
  * @description Why the wake-up rules gave up and a person is told.
- *  - `silentTurns` — the agent ended turns without answering twice in a row.
+ *  - `silentTurns` — the agent ended turns without answering twice in a row (a tracker's rules: or left the request open with
+ *    nothing armed to wake it twice in a row, the nudge between them, progress notes or not).
  *  - `wakeCap` — the request used up its wake-ups (the loop guard).
  *  - `wakeFailed` — the session could not be reached to deliver a reminder.
  */

@@ -20,7 +20,7 @@ import { answerRequest } from '../requests/answerRequest';
 import type { AnswerSink } from '../platform/answerSink';
 import { RequestWakeUpEngine, restartWakeStaggerMs, unwatchedSweepMs } from '../requests/wakeUpEngine';
 import { createSessionTurnProbe } from '../requests/sessionTurnProbe';
-import { maxWakeUpsPerRequest, progressFollowUpDelayMs, progressFollowUpMaxAgeMs, type SessionTurnProbe } from '../requests/wakeUpRules';
+import { maxWakeUpsPerRequest, progressFollowUpDelayMs, progressFollowUpMaxAgeMs, type SessionTurnProbe, type WakeUpRuleSet } from '../requests/wakeUpRules';
 import type { OpenRequestState, RequestAlertReason, RequestWakeUpReason } from '../requests/types';
 import type { RequestScheduleWait } from '../requests/scheduleWait';
 import { RotatingJsonlFile } from '../utils/rotatingJsonlFile';
@@ -81,6 +81,7 @@ interface EngineOverrides {
   noteRestartWakeDelivered?: (key: SessionKey) => void;
   progressFollowUpMs?: number;
   getScheduleWait?: (key: SessionKey, request: OpenRequestState) => RequestScheduleWait;
+  getWakeUpRules?: (key: SessionKey) => WakeUpRuleSet;
 }
 
 function createEngine(ledger: RequestLedger, overrides: EngineOverrides = {}): RequestWakeUpEngine {
@@ -3105,5 +3106,102 @@ describe('turn boundaries: a forward settles the watches whose turn already ende
     await (await engine.settleEndedTurnsOf(topicKey))();
     assert.deepEqual(getWakeUpReasons(), ['silentTurn'], 'one silent turn, one reminder');
     assert.deepEqual(alerts, [], 'not the give-up');
+  });
+});
+
+describe('a tracker\'s rules: no reminder on a clock — a progress note with nothing armed gets ONE nudge, the next stall the give-up', () => {
+  // The rule\'s branches: src/__tests__/wakeUpRules.test.ts › "a tracker\'s rules"; at process level src/__tests__/jiraRequestWakeE2e.test.ts.
+  const issueKey = makeJiraKey('PROJ-30');
+  const handOver = { kind: 'trackerEvent' as const, attributes: { issueKey: 'PROJ-30', triggerId: '300', requester: 'ann' } };
+  const trackerRules = { getWakeUpRules: (): WakeUpRuleSet => 'tracker' };
+  /** What `answerRequest` writes for a delivered progress note: counted, and no silent turn or person\'s words left owed. */
+  const deliverProgress = (ledger: RequestLedger, requestId: string) =>
+    ledger.updateOpenRequest(requestId, (current) => ({ progressAnswerCount: current.progressAnswerCount + 1, silentTurnCount: 0, isPersonInputUnanswered: undefined }));
+  /** A turn runs, the agent does `duringTurn` in it, and the turn ends idle. */
+  async function runTurn(engine: RequestWakeUpEngine, duringTurn: () => Promise<unknown>): Promise<void> {
+    probe = { isActive: true, isBusy: true, hasUnconsumedInput: false, isTurnEndBlocked: false };
+    await engine.pollWatchedTurns();
+    await duringTurn();
+    probe = { ...probe, isBusy: false };
+    await engine.pollWatchedTurns();
+  }
+
+  it('a progress note with nothing armed: ONE nudge at once, no follow-up on a clock; the nudge\'s turn ends the same way — another note — and the request is given up', async () => {
+    const ledger = await createLedger();
+    const engine = createEngine(ledger, trackerRules);
+    const request = await ledger.createRequest(issueKey, handOver);
+    await engine.trackForwardedTurn(issueKey, request.id, { isRequestPrompt: true });
+
+    await runTurn(engine, () => deliverProgress(ledger, request.id));
+    assert.deepEqual(getWakeUpReasons(), ['nothingArmed'], 'the nudge, at once');
+    assert.ok(wakeUpMessages[0].text.includes('Nothing reminds you on a clock.'), wakeUpMessages[0].text);
+    const nudged = ledger.getOpenRequestById(request.id)?.request;
+    assert.equal(nudged?.nextWakeAt, undefined, 'no follow-up armed');
+    assert.equal(nudged?.stalledTurnCount, 1);
+
+    // The nudge\'s turn: another note — which resets the silent-turn count on delivery, never the stall count — and nothing armed.
+    await runTurn(engine, () => deliverProgress(ledger, request.id));
+    assert.deepEqual(alerts, [{ requestId: request.id, reason: 'silentTurns' }]);
+    assert.deepEqual(getWakeUpReasons(), ['nothingArmed'], 'no second nudge');
+    assert.equal(ledger.getOpenRequestById(request.id)?.request.isWakeStopped, true);
+
+    nowMs += progressFollowUpDelayMs + 2 * backstopMs;
+    await engine.sweepUnwatchedRequests();
+    assert.equal(wakeUps.length, 1, 'given up: nothing wakes it again');
+  });
+
+  it('a nudge answered by a watch: the note under it is quiet, the stall count starts again, and nothing wakes the request between turns while the watch passes', async () => {
+    let wait: RequestScheduleWait = 'none';
+    const ledger = await createLedger();
+    const engine = createEngine(ledger, { ...trackerRules, getScheduleWait: () => wait });
+    const request = await ledger.createRequest(issueKey, handOver);
+    await engine.trackForwardedTurn(issueKey, request.id, { isRequestPrompt: true });
+    await runTurn(engine, () => deliverProgress(ledger, request.id));
+    assert.deepEqual(getWakeUpReasons(), ['nothingArmed']);
+
+    await runTurn(engine, async () => {
+      wait = 'watching';
+      await deliverProgress(ledger, request.id);
+    });
+    assert.deepEqual(alerts, [], 'the agent armed what wakes it');
+    assert.equal(ledger.getOpenRequestById(request.id)?.request.stalledTurnCount, undefined, 'the stall count starts again');
+    nowMs += 3 * backstopMs;
+    await engine.sweepUnwatchedRequests();
+    assert.deepEqual(getWakeUpReasons(), ['nothingArmed'], 'held by its watch: no follow-up, no backstop');
+  });
+
+  it('a requester\'s comment that waited for the stalled turn goes first: the nudge decided at its post is not sent, and the comment\'s turn starts the stall count again', async () => {
+    const ledger = await createLedger();
+    const engine = createEngine(ledger, trackerRules);
+    const request = await ledger.createRequest(issueKey, handOver);
+    await engine.trackForwardedTurn(issueKey, request.id, { isRequestPrompt: true });
+    probe = { isActive: true, isBusy: true, hasUnconsumedInput: false, isTurnEndBlocked: false };
+    await engine.pollWatchedTurns();
+    await deliverProgress(ledger, request.id);
+    // The comment's post waited for the turn; it ends with the note and nothing armed, and the post settles it before its write.
+    const releasePost = engine.notePostInFlight(issueKey);
+    probe = { ...probe, isBusy: false };
+    const deliverAfterWrite = await engine.settleEndedTurnsForPost(issueKey);
+    assert.equal(ledger.getOpenRequestById(request.id)?.request.stalledTurnCount, 1, 'the stall is decided at the settle');
+    await engine.trackForwardedTurn(issueKey, request.id, { isRequestPrompt: false, isPersonInput: true });
+    await deliverAfterWrite();
+    await releasePost();
+    assert.deepEqual(wakeUps, [], 'the comment is the request\'s next turn: no nudge behind it');
+    assert.equal(ledger.getOpenRequestById(request.id)?.request.stalledTurnCount, undefined, 'a person\'s words start the count again');
+
+    // The comment's turn ends with a note and nothing armed: a stall of its own, nudged — not the give-up.
+    await runTurn(engine, () => deliverProgress(ledger, request.id));
+    assert.deepEqual(getWakeUpReasons(), ['nothingArmed']);
+    assert.deepEqual(alerts, []);
+  });
+
+  it('a topic keeps its clock: the same progress note is followed up 15 minutes later', async () => {
+    const ledger = await createLedger();
+    const engine = createEngine(ledger, { getWakeUpRules: (key) => (key.platform === 'jira' ? 'tracker' : 'topic') });
+    const request = await ledger.createRequest(topicKey, { kind: 'message', attributes: {} });
+    await engine.trackForwardedTurn(topicKey, request.id, { isRequestPrompt: true });
+    await runTurn(engine, () => deliverProgress(ledger, request.id));
+    assert.deepEqual(wakeUps, []);
+    assert.equal(ledger.getOpenRequestById(request.id)?.request.nextWakeAt, nowMs + progressFollowUpDelayMs);
   });
 });

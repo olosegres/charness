@@ -372,6 +372,14 @@ update into the resumed session; while a turn runs it waits up to 10 minutes for
   guidance, not code — an agent that arms a watchdog meant to outlive the work (a health check, a daily job) answers `final` afterwards;
   the job keeps running and its fires say «no request is open», or ride the request open at the time (a later hand-over, a mention: the
   header names it, and the agent answers it only with what its requester must know). The tool description and the orchestration skill say so.
+- **Nothing reminds an issue's agent on a clock** (a tracker's rules, `../../requests/README.md` § Wake-ups). A turn that ends with the
+  request open, a progress note sent and NOTHING armed under it — no watch, no job, or a watch that fired and was not re-armed — gets
+  ONE nudge at once instead of the topic's follow-up 15 minutes later («nothing reminds you on a clock»: finish, ask, or arm a watch for
+  what you wait on, `requestHeader.ts` `nothingArmed`); the next such turn end in a row — another note, or silence — is the give-up:
+  the alert comment («The AI stopped working on this without a final answer, even after it was reminded.») and the hand-back. A note
+  that arms what wakes the agent starts the count again, and so does a requester's comment: its turn is a new chance, and a nudge
+  decided for the turn the comment waited behind is not sent after it. So the progress comment's «Last updated» line moves only when the agent
+  itself writes a note, which names what runs and when it should end (the orchestration skill's rule, and the nudge's ask).
 - **Fires and the task-agent cap.** A scheduled fire resumes the issue's agent whether or not the issue holds a slot (after the hand-over's
   final answer, during a mention-only request) and is never held by `taskAgents.maxConcurrent`: the cap bounds hand-overs, as a Telegram
   topic's fires have no concurrency cap either (`../../trackers/README.md`). The slot of an issue whose request waits for its watch stays held.
@@ -806,7 +814,8 @@ app starts the agent, an unlisted one — a group member — is refused and its 
 (with a group, `mentionMode: "act"` and the backstop an hour away: a comment mid-turn reaches the same request, a comment
 after the final answer opens one, an acting mention, a kill-and-restart mid-turn answered within a minute) and
 `jiraFallbackSwitchE2e.test.ts` (an account signed in by hand is adopted with no Telegram; a conversation at its usage limit continues
-on it, and waits when auto switch is OFF), sharing
+on it, and waits when auto switch is OFF) and `jiraRequestWakeE2e.test.ts` (the follow-up shortened to 15 s: a progress note with nothing
+armed nudged once, then the alert and the hand-back; a nudge answered by arming a job left alone), sharing
 `__tests__/jiraE2e/jiraFlowKit.ts`;
 `live/jiraLive.test.ts` runs the loop against a real site and is skipped unless its env variables are set; its
 prompt-context steps (media through the attachment tool, a delta, a requested compaction, the default model and

@@ -90,7 +90,9 @@ export const jiraReadBackDelayMs = 10_000;
 const missingPartPreviewChars = 80;
 
 const alertTexts: Readonly<Record<RequestAlertReason, string>> = {
-  silentTurns: 'The AI stopped working on this without giving an answer, even after it was reminded.',
+  // Also two turn ends in a row that left the request open with nothing armed (the nudge between them): the agent may have sent
+  // progress notes, so «no answer» would be untrue — it left the work without a final answer.
+  silentTurns: 'The AI stopped working on this without a final answer, even after it was reminded.',
   wakeCap: 'The AI was reminded as many times as allowed and still gave no answer here.',
   wakeFailed: "The AI's session could not be reached to remind it, so there is no answer here.",
 };

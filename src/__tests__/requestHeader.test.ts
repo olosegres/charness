@@ -106,8 +106,21 @@ describe('buildWakeUpReminder', () => {
     assert.equal(lines.length, 4);
   });
 
+  it('the nudge of a tracker request nothing is armed to wake: nothing reminds on a clock, arm a watch for what you wait on, and a second such turn end gives it up', () => {
+    const lines = buildWakeUpReminder({ requestId: 'req_AbCd1234', reason: 'nothingArmed' }).split('\n');
+    assert.equal(lines[0], '[Reminder · request req_AbCd1234 is still open]');
+    assert.equal(lines[1], 'Your last turn ended with it still open and nothing armed to wake you again: no job or watch of yours is armed under it. ' +
+      'Nothing reminds you on a clock.');
+    assert.equal(lines[2], 'Finish it with answer_request (requestId "req_AbCd1234"): kind "final" if the work is done, "question" if you need the requester. ' +
+      'If you wait on a worker or a run, arm a watch for it (schedule_create with a checkCommand), say in a "progress" note what you wait for ' +
+      'and when it should end, and end your turn: the watch wakes you. If your next turn also ends with it open and nothing armed, you are ' +
+      'taken to have stopped: the requester is told and it is given up.');
+    assert.equal(lines[3], answerStyleInstruction);
+    assert.equal(lines.length, 4);
+  });
+
   it('every reason\'s reminder carries the style sentence, and a request\'s own prompt (not a reminder) is forwarded untouched', () => {
-    for (const reason of ['silentTurn', 'progressFollowUp', 'backstop', 'postRetry'] as const) {
+    for (const reason of ['silentTurn', 'progressFollowUp', 'nothingArmed', 'backstop', 'postRetry', 'restarted'] as const) {
       assert.ok(buildWakeUpReminder({ requestId: 'req_AbCd1234', reason }).includes(answerStyleInstruction), reason);
     }
     const reminder = getWakeUpMessage(createOpenRequest('req_1', undefined, undefined), 'backstop');

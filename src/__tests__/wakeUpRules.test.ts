@@ -539,3 +539,61 @@ describe('a request that waits for its schedule (scheduleWait) and a scheduled r
   });
 });
 
+
+describe('a tracker\'s rules: no reminder on a clock — a progress note with nothing armed gets ONE nudge, the next stall the give-up', () => {
+  // The engine's journeys over a real ledger: src/__tests__/wakeUpEngine.test.ts › "a tracker's rules"; at process level, with the real
+  // bot and the fake agent: src/__tests__/jiraRequestWakeE2e.test.ts. The topic's row — the 15-minute follow-up — is the first
+  // describe above and the scheduleWait one.
+  const tracker = { rules: 'tracker' } as const;
+
+  it('a progress note with nothing armed — `none`, or a watch that fired and was not re-armed — is a stall: the nudge at once, no follow-up', () => {
+    const request = createRequest({ progressAnswerCount: 1, wakeCount: 4 });
+    const nudge = { kind: 'wake', reason: 'nothingArmed', update: { silentTurnCount: 0, stalledTurnCount: 1, lastTurnActivityAt: nowMs, wakeCount: 1, nextWakeAt: undefined } };
+    assert.deepEqual(decideTurnEnd(request, 0, nowMs, { ...tracker, scheduleWait: 'none' }), nudge, 'the note answered the wake-ups before it; the nudge is the first in a row');
+    assert.deepEqual(decideTurnEnd(request, 0, nowMs, { ...tracker, scheduleWait: 'armed', isScheduledRun: true }), nudge, 'the watch\'s own fire, nothing re-armed');
+    assert.equal(decideTurnEnd(request, 0, nowMs, { scheduleWait: 'none' }).kind, 'followUpLater', 'a topic\'s note is followed up as ever');
+  });
+
+  it('the next stall in a row gives the request up — another note, or a silent turn; no answer resets the count', () => {
+    const nudged = createRequest({ progressAnswerCount: 2, stalledTurnCount: 1, wakeCount: 1 });
+    assert.deepEqual(decideTurnEnd(nudged, 1, nowMs, tracker), {
+      kind: 'alert',
+      reason: 'silentTurns',
+      update: { silentTurnCount: 0, stalledTurnCount: 2, isWakeStopped: true, nextWakeAt: undefined },
+    });
+    const silentAfterNudge = decideTurnEnd(nudged, 2, nowMs, tracker);
+    assert.equal(silentAfterNudge.kind === 'alert' ? silentAfterNudge.reason : null, 'silentTurns', 'silent again after the nudge');
+  });
+
+  it('a silent turn is the ordinary silent-turn wake — and a stall, so a note with nothing armed after it gives up', () => {
+    const answered = createRequest({ progressAnswerCount: 1 });
+    assert.deepEqual(decideTurnEnd(answered, 1, nowMs, tracker), {
+      kind: 'wake',
+      reason: 'silentTurn',
+      update: { silentTurnCount: 1, stalledTurnCount: 1, lastTurnActivityAt: nowMs, wakeCount: 1, nextWakeAt: undefined },
+    });
+    const noteAfterSilence = decideTurnEnd(createRequest({ progressAnswerCount: 2, stalledTurnCount: 1 }), 1, nowMs, tracker);
+    assert.equal(noteAfterSilence.kind === 'alert' ? noteAfterSilence.reason : null, 'silentTurns');
+  });
+
+  it('a turn end the request\'s schedule holds starts the stall count again: the agent armed what wakes it', () => {
+    const nudged = createRequest({ progressAnswerCount: 2, stalledTurnCount: 1 });
+    assert.deepEqual(decideTurnEnd(nudged, 1, nowMs, { ...tracker, scheduleWait: 'watching' }), {
+      kind: 'quiet',
+      update: { lastTurnActivityAt: nowMs, silentTurnCount: 0, wakeCount: 0, nextWakeAt: undefined, stalledTurnCount: undefined },
+    });
+    const fireHandled = decideTurnEnd(createRequest({ progressAnswerCount: 1, stalledTurnCount: 1 }), 1, nowMs, { ...tracker, scheduleWait: 'armed', isScheduledRun: true });
+    assert.equal(fireHandled.kind === 'quiet' ? fireHandled.update.stalledTurnCount : 'not quiet', undefined, 'the watch\'s fire handled with nothing to report');
+    const neverStalled = decideTurnEnd(createRequest({ progressAnswerCount: 2 }), 1, nowMs, { ...tracker, scheduleWait: 'watching' });
+    assert.ok(neverStalled.kind === 'quiet' && !('stalledTurnCount' in neverStalled.update), 'a request that never stalled has nothing to reset');
+  });
+
+  it('what a tracker\'s rules leave as in a topic: a fire with nothing to report stays quiet, a request given up or limit-stopped is left alone', () => {
+    assert.deepEqual(decideTurnEnd(createRequest({ progressAnswerCount: 1 }), 1, nowMs, { ...tracker, isScheduledRun: true }), {
+      kind: 'quiet',
+      update: { silentTurnCount: 0, lastTurnActivityAt: nowMs },
+    });
+    assert.deepEqual(decideTurnEnd(createRequest({ isWakeStopped: true, progressAnswerCount: 1 }), 0, nowMs, tracker), { kind: 'none' });
+    assert.deepEqual(decideTurnEnd(createRequest({ isLimitStopped: true, progressAnswerCount: 1 }), 0, nowMs, tracker), { kind: 'none' });
+  });
+});

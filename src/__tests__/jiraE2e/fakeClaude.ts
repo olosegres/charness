@@ -151,15 +151,20 @@ import { claudeSessionStateEventsVariableName } from '../../utils/jsonStreamHost
  *    after a long build step); the next turn — what was written meanwhile — answers `final`;
  *  - `slow-once`   — its first turn works in SILENCE (a long tool call: no frame)
  *    for 45 s, then answers; later turns answer at once;
- *  - `progress`    — sends a `progress` note and ends the turn;
- *  - `progress-after-update` — its first turn sends note 1 (`fakeProgressEditsBody(<key>, 1)`) as a `progress` note and ends the turn;
+ *  - `progress`    — sends a `progress` note and ends the turn, EVERY turn, nothing armed (in an issue: nudged once, then given up);
+ *  - `progress-armed` — waits on its schedule the way an agent on an issue should: its first turn arms a prompt job an hour ahead
+ *    (`armWaitingJob`, under the request the turn works on), answers `progress` and ends; later turns answer `final`;
+ *  - `progress-then-armed` — its first turn answers `progress` with nothing armed; its second (the bot's nudge) arms that job and
+ *    answers `progress`; later turns answer `final`;
+ *  - `progress-after-update` — its first turn sends note 1 (`fakeProgressEditsBody(<key>, 1)`) as a `progress` note, arms a job to wait on
+ *    (`armWaitingJob`: in an issue a note with nothing armed is nudged at once) and ends the turn;
  *    the next turn of the request — what a person's comment on the handed issue starts (an issue update) — sends notes 2 and 3 and
  *    answers `final`: what the answer sink does with a person's comment between two notes;
  *  - `progress-edits` — sends `fakeProgressEditsBody(<key>, 1)` as a `progress` note, HOLDS until the test writes
  *    `fakeClaudeHoldReleaseFileName`, sends note 2, holds again, sends note 3, then answers `final` — what a long task of
  *    the answer sink's one-comment-per-request rule looks like, with the test's polls and restarts in between;
  *  - `finish-together` — the first request of an issue gets a `progress` note
- *    (it stays open); the turn of a LATER request of the same issue answers
+ *    and a job it waits on (`armWaitingJob`; it stays open); the turn of a LATER request of the same issue answers
  *    `final` for every request of the issue still owed one, oldest first,
  *    itself last — except a request its own header names as replaced, which
  *    the newer one covers (request/answer core S11, Jira plan R34);
@@ -308,8 +313,8 @@ import { claudeSessionStateEventsVariableName } from '../../utils/jsonStreamHost
  * `FAKE_CLAUDE_STATE_DIR` (per-request turn counts, the conversations held).
  */
 
-export type FakeClaudeMode = 'answer' | 'silent-once' | 'silent' | 'hang-once' | 'hold-once' | 'hold-progress-once' | 'slow-once' | 'progress' | 'progress-edits' | 'progress-after-update' | 'finish-together' | 'answer-after-queued' | 'background' | 'background-notify' | 'compact' | 'overflow' | 'fetch-attachment' | 'run-tool' | 'reply-to' | 'send-file' | 'usage-limit-once' | 'ask' | 'ask-again' | 'ask-two' | 'ask-long' | 'ask-repeat' | 'send-messages' | 'claude-profiles' | 'watch-progress' | 'one-shot-then-final' | 'hold-silent-once' | 'hold-silent-then-progress';
-const fakeModes: readonly FakeClaudeMode[] = ['answer', 'silent-once', 'silent', 'hang-once', 'hold-once', 'hold-progress-once', 'slow-once', 'progress', 'progress-edits', 'progress-after-update', 'finish-together', 'answer-after-queued', 'background', 'background-notify', 'compact', 'overflow', 'fetch-attachment', 'run-tool', 'reply-to', 'send-file', 'usage-limit-once', 'ask', 'ask-again', 'ask-two', 'ask-long', 'ask-repeat', 'send-messages', 'claude-profiles', 'watch-progress', 'one-shot-then-final', 'hold-silent-once', 'hold-silent-then-progress'];
+export type FakeClaudeMode = 'answer' | 'silent-once' | 'silent' | 'hang-once' | 'hold-once' | 'hold-progress-once' | 'slow-once' | 'progress' | 'progress-edits' | 'progress-after-update' | 'finish-together' | 'answer-after-queued' | 'background' | 'background-notify' | 'compact' | 'overflow' | 'fetch-attachment' | 'run-tool' | 'reply-to' | 'send-file' | 'usage-limit-once' | 'ask' | 'ask-again' | 'ask-two' | 'ask-long' | 'ask-repeat' | 'send-messages' | 'claude-profiles' | 'watch-progress' | 'one-shot-then-final' | 'hold-silent-once' | 'hold-silent-then-progress' | 'progress-armed' | 'progress-then-armed';
+const fakeModes: readonly FakeClaudeMode[] = ['answer', 'silent-once', 'silent', 'hang-once', 'hold-once', 'hold-progress-once', 'slow-once', 'progress', 'progress-edits', 'progress-after-update', 'finish-together', 'answer-after-queued', 'background', 'background-notify', 'compact', 'overflow', 'fetch-attachment', 'run-tool', 'reply-to', 'send-file', 'usage-limit-once', 'ask', 'ask-again', 'ask-two', 'ask-long', 'ask-repeat', 'send-messages', 'claude-profiles', 'watch-progress', 'one-shot-then-final', 'hold-silent-once', 'hold-silent-then-progress', 'progress-armed', 'progress-then-armed'];
 /**
  * How long an `answer-after-queued` turn waits for the next message before it answers anyway: four polls of the 10 s
  * floor, or what the launcher sets (`fakeClaudeQueuedWaitMaxMsEnvName`) for the instance's own poll.
@@ -858,6 +863,22 @@ function listKnownRequests(issueKey: string): KnownRequest[] {
 function getMode(text: string, issueKey: string): FakeClaudeMode {
   const named = modeRe.exec(text)?.[1];
   return fakeModes.find((mode) => mode === named) ?? listKnownRequests(issueKey)[0]?.mode ?? 'answer';
+}
+
+/** How far ahead `armWaitingJob` arms its prompt job: past the end of every flow, so it never fires in one. */
+const waitingJobDelaySeconds = 60 * 60;
+
+/**
+ * @description What an agent on an issue arms to wait on its run (in a flow a prompt job an hour ahead, armed with `schedule_create` under
+ * the request the turn works on): the request waits for its schedule, so the bot neither nudges nor reminds it.
+ */
+async function armWaitingJob(server: McpServerConfig, issueKey: string): Promise<void> {
+  const args = {
+    name: 'wait for the run',
+    onceAt: new Date(Date.now() + waitingJobDelaySeconds * 1000).toISOString(),
+    prompt: `${issueKey} [fake:answer] The run should be over: read it and answer.`,
+  };
+  appendJsonLine(fakeClaudeLogFileNames.toolCalls, { issueKey, tool: 'schedule_create', args, outcome: await callBotTool(server, 'schedule_create', args) });
 }
 
 async function callBotTool(server: McpServerConfig, toolName: string, args: Record<string, unknown>): Promise<string> {
@@ -1607,8 +1628,19 @@ async function runTurn(argv: readonly string[], sessionId: string, content: stri
     appendJsonLine(fakeClaudeLogFileNames.answers, { requestId: answeredRequestId, issueKey: state.issueKey, kind, outcome });
     return body;
   };
+  if (state.mode === 'progress-armed' || state.mode === 'progress-then-armed') {
+    const armingTurnCount = state.mode === 'progress-armed' ? 1 : 2;
+    if (state.turnCount > armingTurnCount) {
+      endTurn(sessionId, await answer(requestId, 'final', state.turnCount));
+      return;
+    }
+    if (state.turnCount === armingTurnCount && server) await armWaitingJob(server, state.issueKey);
+    endTurn(sessionId, await answer(requestId, 'progress', state.turnCount));
+    return;
+  }
   if (state.mode === 'progress-after-update') {
     if (isFirstTurn) {
+      if (server) await armWaitingJob(server, state.issueKey);
       endTurn(sessionId, await answer(requestId, 'progress', state.turnCount, fakeProgressEditsBody(state.issueKey, 1)));
       return;
     }
@@ -1640,6 +1672,7 @@ async function runTurn(argv: readonly string[], sessionId: string, content: stri
   if (state.mode === 'finish-together') {
     const owedRequests = listKnownRequests(state.issueKey).filter((request) => request.requestId !== requestId && request.isAnswered !== true);
     if (owedRequests.length === 0) {
+      if (server) await armWaitingJob(server, state.issueKey);
       endTurn(sessionId, await answer(requestId, 'progress', state.turnCount));
       return;
     }
