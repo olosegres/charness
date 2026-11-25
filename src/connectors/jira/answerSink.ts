@@ -689,8 +689,11 @@ export function createJiraAnswerSink(deps: JiraAnswerSinkDeps): JiraAnswerSink {
       // A comment was added: every chain of edits that stands above it ends, so the next of each is a new comment below — a notice
       // of the bot's own is one chain, the agent's progress note another. The agent's answer ends the bot's notices (a question, a
       // final answer or a note that is a comment of its own ends its progress comment too); a bot comment that stands on its own
-      // (an account moved, no account usable) ends the notices and leaves the agent's note, which it has nothing to do with.
-      deps.progressComments.forgetAll(delivery.requestId, [...(slot === null ? [] : [slot]), ...(delivery.isBotNotice ? [jiraProgressSlot] : [])]);
+      // (an account moved, no account usable) ends the notices and leaves the agent's note, which it has nothing to do with. A request
+      // this answer ends is settled instead: everything it keeps is dropped at once, with no release line for a comment just closed.
+      if (!endedRequestIds.includes(delivery.requestId)) {
+        deps.progressComments.forgetAll(delivery.requestId, [...(slot === null ? [] : [slot]), ...(delivery.isBotNotice ? [jiraProgressSlot] : [])]);
+      }
       for (const requestId of endedRequestIds) deps.progressComments.settle(requestId);
       const warnings: string[] = [...(files?.notes ?? [])];
       if (leftOutCommentIds.length > 0) warnings.push(buildJiraReplyLeftOutWarning(leftOutCommentIds));
