@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+**You now choose the model and effort of the workers your agents launch: `/workers` sets them per role — builder, reviewer, planner and more — for the whole bot, Claude or OpenCode.**
+Before, the models were written into the bot's own skills (Opus for every worker) and could not be changed without editing them. Now `/workers` (also a row of `/bot_skills`) lists six roles with their values; a tap picks a Claude model and effort, or an OpenCode provider, model and variant. It is the bot's default: a model you name in the conversation, a plan or your own skills still wins. Agents ask for it before every launch, so a change reaches the next worker; a running one keeps its own. The screen warns when an OpenCode role's provider is not connected. The values are kept in `settings.json` `workerRoles`; `charness claude-profiles --role <role>` prints the same.
+
 **An agent on a Jira issue now gets the right instructions for waiting on a worker, a pipeline or a test run: before, the bot's own skill told it that nothing would wake it and that it must never end its turn while a worker ran.**
 That was wrong: an agent on an issue now arms the same bot check as in a topic, ends its turn and is woken in the issue when the worker finishes (see the scheduling entry below). The skill now also asks for a progress note that names the run, its link and when it should end, and never a final answer with a run the agent has not read.
 

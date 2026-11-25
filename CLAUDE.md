@@ -105,6 +105,8 @@ per-backend controls are optional methods the bot checks before calling.
   `name` = `charness-<role>`: OpenCode has no namespaces, an unprefixed name replaces a project's own skill there.
   The «Bot skills» switch (`/bot_skills`; topic → General → `settings.json` `botSkills` → ON, `utils/botSkills.ts`) turns them, and
   the bot MCP's hint to load the orchestration skill, off per Claude conversation; the one OpenCode server follows the instance value only.
+  The skills name no worker model or effort: the bot's default per role is `/workers` (`settings.json` `workerRoles`, `utils/workerRoles.ts`),
+  answered by `claude_profiles` asked with a `role`, below what the user or a general delegate skill names.
 - **Scheduler** (`src/scheduler/`). `/schedule` hands free text to the agent, which calls `schedule_*`;
   `/reminders` is the bot-local twin (buttons only, the bot posts and pins itself, no agent, works in ANY
   topic, unbound/General included). One `schedules` store, split by `deliveryKind`. A `checkCommand` job is

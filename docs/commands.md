@@ -353,7 +353,9 @@ so one account's usage limit does not stop every topic.
   move the conversation stays on the account it moved to, as a topic does.
 - **Which account for a child process.** An agent that launches a detached
   `claude` (a worker, a reviewer) asks the bot's `claude_profiles` MCP tool
-  — optionally with the model it will run — and gets every
+  — optionally with the model it will run, or with the worker's **role** when nothing
+  it follows names the model ([`/workers`](#workers): the answer then leads with the
+  role's CLI, model and effort) — and gets every
   profile with its windows plus `recommended`. **Your `/limits_autoswitch` list says
   which accounts an agent may be pointed at:** once it holds any Claude account, only
   the accounts with an enabled entry there are recommended (to a new worker and to a
@@ -824,7 +826,7 @@ Switch the agent's **self-review** on a compaction — the section of the summar
 
 ### `/bot_skills`
 
-Switch the skills Charness gives its agents on or off. In **General**: On / Off for the whole instance (the screen shows the value in force; `"botSkills"` in `settings.json` is the default while General never chose, ON when nothing says otherwise). In a topic: On / Off / «As in General (value)», the current choice marked ✓. One-shot picker — a tap turns it into the confirmation; typed `on` / `off` (and `general` in a topic) apply at once. A running agent keeps its skills until its next start. On an OpenCode topic the skills stay listed (one server serves every topic); only the hint to load the manager changes.
+Switch the skills Charness gives its agents on or off. In **General**: On / Off for the whole instance (the screen shows the value in force; `"botSkills"` in `settings.json` is the default while General never chose, ON when nothing says otherwise). In a topic: On / Off / «As in General (value)», the current choice marked ✓. One-shot picker — a tap turns it into the confirmation; typed `on` / `off` (and `general` in a topic) apply at once. A running agent keeps its skills until its next start. On an OpenCode topic the skills stay listed (one server serves every topic); only the hint to load the manager changes. The last row, **🛠 Worker models**, opens [`/workers`](#workers) as a message of its own; the picker stays as it is.
 
 #### Skills the bot gives its agents
 
@@ -844,6 +846,13 @@ Jira conversation — also gets four skills that ship with Charness
 - `charness-delegate-claude` / `charness-delegate-opencode` — launching,
   watching and resuming a detached `claude -p` / `opencode run` worker.
 
+The skills name no model or effort for a worker. They follow one order: what you
+named for the worker (in the conversation, a plan, a brief or your own
+instructions), then a delegate skill of yours or of the project that names the
+role's model, then the bot's default for the role — your [`/workers`](#workers)
+setting, which the agent asks `claude_profiles` for — then the CLI and model the
+conversation itself runs on.
+
 Claude Code lists them as `charness:charness-orchestration`, …; OpenCode by their
 names. Your own and your projects' skills stay as they are, and your sessions
 outside the bot do not get these. For Claude Code the bot passes
@@ -860,6 +869,30 @@ next start. OpenCode has ONE server for every topic, so only the instance value 
 start, once nothing works in it, by one started without (or, when turned back on, with) the folder. A topic's own choice changes the
 orchestration hint of its OpenCode folder only when the OpenCode server next restarts, and OpenCode topics sharing a folder share the hint
 (it stays while any of them has the skills on).
+
+### `/workers`
+
+The model and effort of the workers your agents launch, per **role**, for the whole bot — from any topic or General (the same
+values everywhere, Jira issues included). Six roles: **Builder** (code, tests, debugging, e2e and live runs, rework), **Builder, data
+storage** (a builder whose work can lose or corrupt user data: storage, DB schema and migrations, sync, merges, backups),
+**Investigator** (a cause still unclear after a builder failed twice), **Reviewer**, **Mini-review** (a small diff, applied fixes) and
+**Planner** (and the research behind a plan). Built in: Opus for every role — Builder at `medium`, Mini-review at `high`, the rest at
+`xhigh`.
+
+These are the bot's **defaults**: your own instructions win. A model you name in the conversation, a plan or a brief, or a delegate
+skill of yours or of the project that names a role's model, is what the agent uses; the setting decides only what nothing else
+names. An agent learns the value by asking `claude_profiles` with the worker's role (the answer gives the launch flags —
+`claude -p --model opus --effort xhigh`, `opencode run --model openai/… --variant high` — and, for Claude, the account), so a change
+reaches every agent at its next launch; a worker already running, or one resumed, keeps the model and effort of its first run.
+
+The screen lists the roles with their values; a tap opens a role: the four Claude models (Fable, Opus, Sonnet, Haiku), **🔌 OpenCode
+model…** (when an OpenCode provider is connected: the providers, then the provider's models page by page) and the efforts — `low` to
+`max` for Claude, the model's own variants for OpenCode (none when it has none: the model's default). A Claude model keeps the effort
+you had; another OpenCode model keeps it when it offers it. **↩ Built-in** takes a role back, **↩ All to built-in values** all of
+them (each shown only when something differs). Every tap writes [`settings.json`](../SETUP.md#instance-settings-settingsjson)
+`workerRoles` at once — only the roles you changed. The screen warns when an OpenCode role's provider is not connected or its model
+is gone (agents then launch that worker on their own model), and when the bot's skills are off ([`/bot_skills`](#bot_skills): the
+agents' own skills may not ask for these values). `/worker_models` is a hidden alias.
 
 ### `/question_wait`
 

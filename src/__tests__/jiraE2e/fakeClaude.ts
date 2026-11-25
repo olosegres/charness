@@ -212,6 +212,9 @@ import { claudeSessionStateEventsVariableName } from '../../utils/jsonStreamHost
  *  - `send-messages` — calls `send_messages_to_user` with ONE message, `getFakeDigestMessageText(<label>)`, between the
  *    streamed text and its `final` answer (with the `tool_use` / `tool_result` lines around the call, as for every bot tool it
  *    calls for the user), and logs the outcome to `tool-calls.jsonl`;
+ *  - `claude-profiles` — calls `claude_profiles` with the JSON object of `[profiles-args:{…}]` in the prompt (`{}` without one), the way
+ *    an orchestrator asks before it launches a worker, logs the outcome (the verdict line and the report) to `tool-calls.jsonl`, then
+ *    answers `final`;
  *  - an `apiKeyHelper` in the launch's `--settings` (a file path or inline JSON; only the LAST `--settings` counts,
  *    as in the real CLI) is run through `/bin/sh` the way the CLI runs it: a plausible API key out of it makes the
  *    session report `apiKeySource: "apiKeyHelper"` in its init frames (else `"none"`, the subscription login) and a
@@ -305,8 +308,8 @@ import { claudeSessionStateEventsVariableName } from '../../utils/jsonStreamHost
  * `FAKE_CLAUDE_STATE_DIR` (per-request turn counts, the conversations held).
  */
 
-export type FakeClaudeMode = 'answer' | 'silent-once' | 'silent' | 'hang-once' | 'hold-once' | 'hold-progress-once' | 'slow-once' | 'progress' | 'progress-edits' | 'progress-after-update' | 'finish-together' | 'answer-after-queued' | 'background' | 'background-notify' | 'compact' | 'overflow' | 'fetch-attachment' | 'run-tool' | 'reply-to' | 'send-file' | 'usage-limit-once' | 'ask' | 'ask-again' | 'ask-two' | 'ask-long' | 'ask-repeat' | 'send-messages' | 'watch-progress' | 'one-shot-then-final' | 'hold-silent-once' | 'hold-silent-then-progress';
-const fakeModes: readonly FakeClaudeMode[] = ['answer', 'silent-once', 'silent', 'hang-once', 'hold-once', 'hold-progress-once', 'slow-once', 'progress', 'progress-edits', 'progress-after-update', 'finish-together', 'answer-after-queued', 'background', 'background-notify', 'compact', 'overflow', 'fetch-attachment', 'run-tool', 'reply-to', 'send-file', 'usage-limit-once', 'ask', 'ask-again', 'ask-two', 'ask-long', 'ask-repeat', 'send-messages', 'watch-progress', 'one-shot-then-final', 'hold-silent-once', 'hold-silent-then-progress'];
+export type FakeClaudeMode = 'answer' | 'silent-once' | 'silent' | 'hang-once' | 'hold-once' | 'hold-progress-once' | 'slow-once' | 'progress' | 'progress-edits' | 'progress-after-update' | 'finish-together' | 'answer-after-queued' | 'background' | 'background-notify' | 'compact' | 'overflow' | 'fetch-attachment' | 'run-tool' | 'reply-to' | 'send-file' | 'usage-limit-once' | 'ask' | 'ask-again' | 'ask-two' | 'ask-long' | 'ask-repeat' | 'send-messages' | 'claude-profiles' | 'watch-progress' | 'one-shot-then-final' | 'hold-silent-once' | 'hold-silent-then-progress';
+const fakeModes: readonly FakeClaudeMode[] = ['answer', 'silent-once', 'silent', 'hang-once', 'hold-once', 'hold-progress-once', 'slow-once', 'progress', 'progress-edits', 'progress-after-update', 'finish-together', 'answer-after-queued', 'background', 'background-notify', 'compact', 'overflow', 'fetch-attachment', 'run-tool', 'reply-to', 'send-file', 'usage-limit-once', 'ask', 'ask-again', 'ask-two', 'ask-long', 'ask-repeat', 'send-messages', 'claude-profiles', 'watch-progress', 'one-shot-then-final', 'hold-silent-once', 'hold-silent-then-progress'];
 /**
  * How long an `answer-after-queued` turn waits for the next message before it answers anyway: four polls of the 10 s
  * floor, or what the launcher sets (`fakeClaudeQueuedWaitMaxMsEnvName`) for the instance's own poll.
@@ -371,6 +374,9 @@ const streamTextFiller = ' lorem ipsum dolor sit amet consectetur';
  */
 const botToolNamePrefix = `mcp__${botMcpServerName}__`;
 const sendMessagesToolName = 'send_messages_to_user';
+const claudeProfilesToolName = 'claude_profiles';
+/** `[profiles-args:{…}]`: the arguments the `claude-profiles` mode hands `claude_profiles` (a flat JSON object of strings). */
+const profilesArgsRe = /\[profiles-args:(\{[^\]]*\})\]/;
 /** `[skill:<name>]`: the turn loads that project skill with the Skill tool. */
 const skillTokenRe = /\[skill:([A-Za-z0-9:_-]+)\]/g;
 /** `[tool-name:<name>]`: the tool call of the turn's activity carries this name (default `Read`) — the bot's `🔧 <name>` status line shows it. */
@@ -1661,6 +1667,10 @@ async function runTurn(argv: readonly string[], sessionId: string, content: stri
   if (state.mode === 'send-file' && server) {
     const paths = (sendFilePathsRe.exec(content)?.[1] ?? '').split(',').filter(Boolean);
     logToolCall(fileSendToolName, { paths: paths.join(','), caption: fakeSendFileCaption }, await callBotTool(server, fileSendToolName, { paths, caption: fakeSendFileCaption }));
+  }
+  if (state.mode === 'claude-profiles' && server) {
+    const args: Record<string, string> = JSON.parse(profilesArgsRe.exec(content)?.[1] ?? '{}');
+    logToolCall(claudeProfilesToolName, args, await callBotToolAsAgent(server, sessionId, claudeProfilesToolName, args));
   }
   if (state.mode === 'send-messages' && server) {
     const args = { messages: [getFakeDigestMessageText(state.issueKey)] };
