@@ -187,6 +187,6 @@ describe('every locale', () => {
     assert.equal(labelsOf(overview)[0][0], 'Разработчик: Opus · medium');
     const role = runWithLocale('ru', () => buildWorkerRoleScreen({ role: 'builder', setting: {}, openCodeModels: null, variants: [] }));
     assert.match(role.text, /Сейчас: Opus · medium \(встроенное\)\nТвои инструкции могут назвать другую — тогда важнее они\.$/);
-    assert.equal(runWithLocale('ru', () => formatWorkerRoleValue({ cli: 'opencode', model: 'openai/x', effort: null })), 'OpenCode · x · по умолчанию модели');
+    assert.equal(runWithLocale('ru', () => formatWorkerRoleValue({ cli: 'opencode', model: 'openai/x', effort: null })), 'OpenCode · x · по умолчанию');
   });
 });

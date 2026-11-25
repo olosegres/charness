@@ -304,5 +304,14 @@ describe('/workers end to end: built charness, fake Bot API, fake agent, fake Op
     const screen = await tapScreen(general, opened, 'wkr_r1', (text) => text.startsWith('🛠 Разработчик, хранение данных\n'));
     assert.ok(screen.text.includes('Сейчас: Opus · xhigh (встроенное)'), screen.text);
     assert.deepEqual(general.getKeyboardLabels(screen).at(-1), ['← Назад']);
+    // The OpenCode path in the same language (only the anthropic provider is connected by now) and /bot_skills's row.
+    await tapScreen(general, opened, 'wkr_oc1', (text) => text.includes('Выбери провайдера:'));
+    const page = await tapScreen(general, opened, 'wkr_p1_0', (text) => text === '🛠 Разработчик, хранение данных · anthropic');
+    assert.deepEqual(general.getKeyboardLabels(page), [['claude-x'], ['← Назад']]);
+    // xhigh is not one of claude-x's variants: the role takes the model's own default, and no variant carries the ✓.
+    const role = await tapScreen(general, opened, 'wkr_k1_0', (text) => text.includes('Сейчас: OpenCode · claude-x · по умолчанию\n'));
+    assert.deepEqual(general.getKeyboardLabels(role).slice(1, 3), [['🔌 OpenCode · claude-x ✓'], ['low', 'medium', 'high']]);
+    const picker = await general.sendAndAwaitReply('/bot_skills', 'Скиллы бота');
+    assert.deepEqual(general.getKeyboardLabels(picker).at(-1), ['🛠 Модели воркеров']);
   });
 });

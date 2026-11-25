@@ -1242,7 +1242,7 @@ export const ruDict: Record<string, string> = {
   'workerRoles.nowLine': 'Сейчас: {value}',
   'workerRoles.builtInMark': '{value} (встроенное)',
   'workerRoles.ownInstructionsWin': 'Твои инструкции могут назвать другую — тогда важнее они.',
-  'workerRoles.modelDefault': 'по умолчанию модели',
+  'workerRoles.modelDefault': 'по умолчанию',
   'workerRoles.openCodeButton': '🔌 Модель OpenCode…',
   'workerRoles.openCodeCurrentButton': '🔌 OpenCode · {model} ✓',
   'workerRoles.roleBuiltInButton': '↩ Встроенное',
