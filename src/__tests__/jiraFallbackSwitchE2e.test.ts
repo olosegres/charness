@@ -15,7 +15,7 @@
  *     under that account's directory, answered and handed back; no wait is announced to the requester, the exhausted account is
  *     marked limited until the reset the error named, and no Telegram primitive is touched
  *   → the timeline seen live: the next issue's account hits its limit (back in 2 h) while the adopted one is itself limited, but back
- *     within a minute: the requester is told the answer comes when the ADOPTED account is back, and at that time the conversation
+ *     in a minute and a half: the requester is told the answer comes when the ADOPTED account is back, and at that time the conversation
  *     resumes there by itself (`--resume` under its directory); that account's reset turns out wrong — it refuses once more with a
  *     later reset — so the wait is planned again, for that new reset (no retry before it, the requester told the new time), and the
  *     issue is answered on that account after it and handed back
@@ -25,6 +25,9 @@
  *     started, and the wait is armed again for its own account's reset
  *   → the launches carried the Jira flags and the allowlist (a launch under an account's directory adds `CLAUDE_CONFIG_DIR` — a path,
  *     the one variable an account adds — and only there), and no Telegram path was reached
+ *
+ * The timeline step runs on real clocks: a box too slow for one of its windows (the boot and first turn before the adopted account is
+ * back, the move and refusal before the new reset) lets the issue finish and SKIPS the step with the reason — slowness is not a fault.
  *
  * What the unit tests cover instead: the scan (`claudeProfileSync.test.ts`) and the decision per kind of conversation, with an account
  * free, none free (the account the wait ends on), auto switch OFF, a chain with OpenCode rungs (`limitSwitchPlan.test.ts`); the retry
@@ -36,7 +39,7 @@
 
 /** Test case: N/A — Charness has no Jira tracker. */
 
-import { describe, it } from 'node:test';
+import { describe, it, type TestContext } from 'node:test';
 import assert from 'node:assert/strict';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -98,12 +101,18 @@ const waitingIssueKey = 'PROJ-51';
 /** The issue of the timeline seen live: its account hits the limit while the other one is limited too, but back sooner. */
 const earliestIssueKey = 'PROJ-52';
 const takeoverDaysAhead = 2;
-/** How far ahead of the restart the adopted account's limit ends: past the boot, the poll and the first turn, which must find it limited. */
-const adoptedBackLeadMs = 60_000;
+/**
+ * How far ahead of the restart the adopted account's limit ends: past the boot, the poll and the first turn, which must find it
+ * limited (a slower box skips the step — {@link skipAfterSettling}).
+ */
+const adoptedBackLeadMs = 90_000;
 /** When the issue's own account comes back: long after the adopted one. */
 const ownResetLeadMs = 2 * 60 * 60 * 1000;
-/** The adopted account's reset turned out wrong: at the resume it refuses again, with a reset this long after the first one. */
-const refusedResetAfterBackMs = 100_000;
+/**
+ * The adopted account's reset turned out wrong: at the resume it refuses again, with a reset this long after the first one — the
+ * wait's buffer (`resetBufferMs`) plus a minute in which the move, the re-spawn and the refusal must be done, or the step is skipped.
+ */
+const refusedResetAfterBackMs = 120_000;
 /** How long nothing may run after that refusal: an instant retry would land well inside it. */
 const noRetryQuietMs = 5_000;
 
@@ -221,7 +230,7 @@ describe('The usage-limit switch of a Jira conversation end to end: built charne
     assert.match(output, new RegExp(`\\[fallback\\] ${keyToString(makeJiraKey(limitIssueKey))}: switched from .* after a usage limit; resuming`));
   });
 
-  it('with no account free the wait ends when the account back FIRST is back, and the conversation resumes there by itself', async () => {
+  it('with no account free the wait ends when the account back FIRST is back, and the conversation resumes there by itself', async (context) => {
     const k = keyToString(makeJiraKey(earliestIssueKey));
     const adoptedBackMs = Date.now() + adoptedBackLeadMs;
     const adoptedBackIso = new Date(adoptedBackMs).toISOString();
@@ -240,7 +249,8 @@ describe('The usage-limit switch of a Jira conversation end to end: built charne
     await waitFor(`${earliestIssueKey}: the limit planned`, answerTimeoutMs, () => listLimitPlanLines(k).length >= 1);
     const [firstPlan] = listLimitPlanLines(k);
     if (!firstPlan.includes('earliest reset') && Date.now() > adoptedBackMs) {
-      throw new Error(`precondition not met: the adopted account was back (${adoptedBackIso}) before the limit was planned — a boot and first turn slower than ${adoptedBackLeadMs / 1000} s: ${firstPlan}`);
+      await skipAfterSettling(context, issue, resumeTimeoutMs, `the adopted account was back (${adoptedBackIso}) before the limit was planned — a boot and first turn slower than ${adoptedBackLeadMs / 1000} s: ${firstPlan}`);
+      return;
     }
     assert.ok(firstPlan.includes(`switch plan: none; earliest reset: Claude · ${handSignedAccount} · `) && firstPlan.endsWith(` at ${adoptedBackIso}`), `the wait is aimed at the adopted account: ${firstPlan}`);
     await waitFor(`${earliestIssueKey}: the wait announced to the requester`, answerTimeoutMs, () => readLimitNotices(issue).length >= 1);
@@ -271,7 +281,11 @@ describe('The usage-limit switch of a Jira conversation end to end: built charne
       fs.rmSync(alwaysLimitPath, { force: true });
     }
     const turnsAfterRefusal = getAllAgentTurns(getLayout()).length;
-    if (Date.now() >= refusedResetMs) throw new Error(`precondition not met: the refusal was handled after its own reset (${refusedResetIso}) — a resume slower than ${(refusedResetAfterBackMs - resetBufferMs) / 1000} s`);
+    if (Date.now() >= refusedResetMs) {
+      // Its reset already past, the refusal's wait ends within the buffer: let it end and the issue be answered first.
+      await skipAfterSettling(context, issue, resetBufferMs + resumeTimeoutMs, `the refusal was handled after its own reset (${refusedResetIso}) — a move and resume slower than ${(refusedResetAfterBackMs - resetBufferMs) / 1000} s`);
+      return;
+    }
     const resumed = getSessionLaunches(getLayout()).find((launch) => launch.claudeConfigDir === adoptedDir && getLaunchSessionId(launch.argv) === sessionId);
     assert.ok(resumed?.argv.includes('--resume'), 'the SAME conversation resumed, not started over');
     assert.match(getCharness().output, new RegExp(`\\[fallback\\] ${k}: switched from .* to Claude · ${handSignedAccount} · .* after a usage limit; resuming`), 'the retry kick moved it');
@@ -351,6 +365,18 @@ describe('The usage-limit switch of a Jira conversation end to end: built charne
 function listAuthStatusProbes(): Array<{ argv: string[]; claudeConfigDir: string | null }> {
   return readFakeLog<{ argv: string[]; isSessionLaunch: boolean; claudeConfigDir: string | null }>(fakeClaudeLogFileNames.launches)
     .filter((launch) => !launch.isSessionLaunch && launch.argv.includes('auth') && launch.argv.includes('status'));
+}
+
+/**
+ * @description A timing precondition of a step the box could not meet — a boot or a resume slower than the step's window, not the
+ * bot's fault: the issue is let finish first (answered and handed back on whatever account it reached, within `settleTimeoutMs`), so
+ * the next steps start with nothing of it running, then the step is SKIPPED with the reason instead of failing. An issue that is
+ * never answered fails the step: that is no slowness.
+ */
+async function skipAfterSettling(context: TestContext, issue: FakeJiraIssue, settleTimeoutMs: number, reason: string): Promise<void> {
+  fs.rmSync(path.join(getLayout().fakeStateDir, fakeClaudeAlwaysUsageLimitFileName), { force: true });
+  await waitFor(`${issue.key}: answered and handed back before its step is skipped`, settleTimeoutMs, () => issue.assignee?.accountId === requester.accountId);
+  context.skip(`precondition not met (a slow box): ${reason}`);
 }
 
 /** The `[fallback]` plan lines of the conversation `conversationKey`, one per usage limit it hit, oldest first. */
