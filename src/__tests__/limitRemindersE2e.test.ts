@@ -97,6 +97,11 @@ function readSettingsFile(): Record<string, unknown> {
   return JSON.parse(fs.readFileSync(path.join(path.dirname(getLayout().envFile), 'settings.json'), 'utf8'));
 }
 
+/** `state.json` is saved a moment after a pick: wait for the topic's stored choice instead of racing the save. */
+async function waitForPersistedOverride(topicKey: string, expected: number | undefined, message: string): Promise<void> {
+  await getCharness().waitFor(message, replyTimeoutMs, () => readPersistedState(getLayout()).limitRemindersOverrides?.[topicKey] === expected);
+}
+
 function getPromptText(label: string): string {
   return getFakePromptText(getLayout(), label);
 }
@@ -215,7 +220,7 @@ describe('/limits_reminders and the /limits row end to end: built charness, fake
     const confirmation = await tapPicker(first, picker, 'lrm_60');
     assert.equal(confirmation.text, '🔔 Limit reminders: every 1 h (this topic).');
     assert.deepEqual(first.getKeyboardLabels(confirmation), []);
-    assert.equal(readPersistedState(getLayout()).limitRemindersOverrides?.[firstTopicKey], 60);
+    await waitForPersistedOverride(firstTopicKey, 60, 'the topic\'s 1 h is stored');
     assert.equal(readPersistedState(getLayout()).limitRemindersOverrides?.[secondTopicKey], undefined, 'the other topic still follows General');
 
     const firstLabel = await runTurn(first, firstThreadId, 'AA');
@@ -265,7 +270,7 @@ describe('/limits_reminders and the /limits row end to end: built charness, fake
     const picker = await first.sendAndAwaitReply('/limits_reminders', 'Limit reminders to agents — this topic');
     assert.deepEqual(first.getKeyboardLabels(picker), [['As General'], ['1 h ✓', '2 h', '4 h', 'Off']]);
     await tapPicker(first, picker, 'lrm_0');
-    assert.equal(readPersistedState(getLayout()).limitRemindersOverrides?.[firstTopicKey], 0, 'a topic\'s Off is stored as 0');
+    await waitForPersistedOverride(firstTopicKey, 0, 'a topic\'s Off is stored as 0');
 
     const firstLabel = await runTurn(first, firstThreadId, 'AA');
     const secondLabel = await runTurn(second, secondThreadId, 'BB');
@@ -279,7 +284,7 @@ describe('/limits_reminders and the /limits row end to end: built charness, fake
     const confirmation = await tapPicker(first, picker, 'lrm_g');
     assert.equal(confirmation.text, '🔔 Limit reminders: as General — every 4 h (this topic).');
     assert.deepEqual(first.getKeyboardLabels(confirmation), []);
-    assert.equal(readPersistedState(getLayout()).limitRemindersOverrides?.[firstTopicKey], undefined, 'the topic\'s own choice is gone from state.json');
+    await waitForPersistedOverride(firstTopicKey, undefined, 'the topic\'s own choice is gone from state.json');
 
     const firstLabel = await runTurn(first, firstThreadId, 'AA');
     assert.match(getPromptText(firstLabel), reminderNoteRe, 'General\'s 4 h applies again: the reminder is due');
