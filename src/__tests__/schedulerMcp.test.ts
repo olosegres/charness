@@ -325,14 +325,14 @@ describe('the bot-MCP tool digest (lifecycle plan L4)', () => {
     const takenInputs = getBotMcpToolDefinitions(deps, 'telegram').find((definition) => definition.name === 'claude_profiles')?.inputKeys ?? [];
     assert.deepEqual(takenInputs, ['currentProfile', 'isStoppedByLimit', 'lastRunEndedAt', 'model', 'role']);
     const skillsDir = path.join(__dirname, '..', '..', 'agent-plugin', 'skills');
-    const resumeInputs = takenInputs.filter((input) => input !== 'model' && input !== 'role');
+    const namedByTheSkills = takenInputs.filter((input) => input !== 'model');
     const namedInputs = new Set<string>();
     for (const folder of fs.readdirSync(skillsDir)) {
       const text = fs.readFileSync(path.join(skillsDir, folder, 'SKILL.md'), 'utf8');
-      for (const input of resumeInputs) if (text.includes(input)) namedInputs.add(input);
+      for (const input of namedByTheSkills) if (new RegExp(`\`${input}[\`:]`).test(text)) namedInputs.add(input);
       assert.doesNotMatch(text, /isStoppedBy(?!Limit)|currentProfil(?!e)/, `${folder} misspells a claude_profiles input`);
     }
-    assert.deepEqual([...namedInputs].sort(), ['currentProfile', 'isStoppedByLimit', 'lastRunEndedAt'], 'the skills teach the resume inputs');
+    assert.deepEqual([...namedInputs].sort(), ['currentProfile', 'isStoppedByLimit', 'lastRunEndedAt', 'role'], 'the skills teach the resume inputs and the role');
   });
 
   it('the account rules have ONE home: the orchestration add-on says what to do when nothing is usable AND no account names when it frees up; the Claude delegate skill points there and repeats none of it', () => {

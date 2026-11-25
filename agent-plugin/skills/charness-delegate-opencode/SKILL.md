@@ -12,9 +12,11 @@ variant per role); this one wins on the launch, detaching and the watch.
 
 ## Model and variant
 
-- The model and variant the user named; otherwise the role defaults of a general delegate skill, when the session lists
-  one; otherwise the ones this conversation runs on. `opencode models` lists what the configured providers offer — pick
-  a listed model and a variant it supports.
+- The first that names them decides: the model and variant the user named (the conversation, the plan, the brief, their
+  own always-loaded instructions); otherwise a general delegate skill the session lists that names the role's model;
+  otherwise `worker` of `claude_profiles` asked with the worker's `role` when it names OpenCode — the bot's default,
+  your own instructions win; otherwise (`worker.unavailable`, a refused `role`) the ones this conversation runs on.
+  `opencode models` lists what the configured providers offer — pick a listed model and a variant it supports.
 
 ## Launch
 

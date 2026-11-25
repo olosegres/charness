@@ -193,14 +193,14 @@ describe('agent-plugin', () => {
 
   test('charness-orchestration is the ONE home of the account rules: ask before EVERY launch or resume, take the answer without asking, hand an old worker\'s work to a NEW worker instead of dragging it onto another account, the mid-run limit exception, the `[Accounts …]` note', () => {
     const flat = readSkill('charness-orchestration').replace(/\s+/g, ' ');
-    assert.match(flat, /Before EVERY Claude worker launch or resume call `claude_profiles` — the worker's model; on a resume also `currentProfile` \(the profile name recorded at launch\) and `lastRunEndedAt` \(the last write of its log, an ISO instant\)/);
+    assert.match(flat, /Before EVERY worker launch or resume call `claude_profiles` — with the worker's model, or its `role` when nothing you follow names the model \(the answer then says which CLI too\); on a resume also `currentProfile` \(the profile name recorded at launch\) and `lastRunEndedAt` \(the last write of its log, an ISO instant\)/);
     // The account to start under is `resume.profile` on a resume: on a cold hand-over `recommended` is the OLD worker's own account.
     assert.match(flat, /start the worker with `CLAUDE_CONFIG_DIR=<configDir>` of `recommended`, on a resume of `resume\.profile` \(nothing when the `configDir` is null/);
     assert.match(flat, /Take it without asking: it follows the operator's \/limits auto-switch list — an API-credit account first, then the soonest weekly reset, so what expires first is spent first\. Never reuse an earlier answer\./);
     assert.match(flat, /`resume\.verdict: handOver` → do not resume that worker on another account\. Give its work to a NEW worker on `resume\.profile` \(brief: the old run's report, the worktree, the findings\); a reviewer that already runs on that account may apply its own findings, then a fresh reviewer checks the result\. `resume\.verdict: resume` → resume the session under `resume\.profile` \(where it ran, unless it stopped on a limit\)\./);
     assert.match(flat, /The exception: a worker cut off MID-RUN by a usage limit .* a fresh worker would redo the unfinished run, so call `claude_profiles` with `currentProfile` and `isStoppedByLimit: true` and resume the SAME session at once under `resume\.profile`\./);
     assert.match(flat, /An `\[Accounts …\]` note \(at a wake, in a send tool's result, during a turn\) says where the limits stand: plan your next launch on it and call `claude_profiles` right before it\. No reply is needed; a worker that is running stays where it is\./);
-    assert.match(flat, /A role that may run on either CLI \(a reviewer\): start it where the limit resets sooner and still has room\./);
+    assert.match(flat, /A role the user allowed on both CLIs: start it where the limit resets sooner and still has room\./);
     assert.match(flat, /`recommended: null` → nothing is usable: do not launch\./);
     assert.equal(flat.split('## Accounts and usage limits').length - 1, 1);
   });
@@ -215,16 +215,36 @@ describe('agent-plugin', () => {
     assert.doesNotMatch(flat, /nextAvailable|isStoppedByLimit|currentProfile|`recommended`|schedule_create/, 'the account rules live in the orchestration skill');
   });
 
-  test('charness-delegate-claude keeps its role defaults under «only when no general delegate skill is listed»; charness-delegate-opencode picks the user\'s model, else a general delegate skill\'s role defaults, else the conversation\'s own', () => {
-    const claude = readSkill('charness-delegate-claude');
-    const defaultsAt = claude.indexOf('### Role defaults — only when no general delegate skill is listed');
-    assert.ok(defaultsAt > 0, 'the heading');
-    for (const roleDefault of ['builder (code, tests, debugging, live runs): `--model opus --effort medium`', 'investigator (a cause still unclear after a builder failed on it twice): `--model opus --effort xhigh`', 'reviewer: `--model opus --effort xhigh`', '`--model opus --effort high`', 'planner and the research feeding a plan: `--model opus --effort xhigh`', 'user data): a builder at `--model opus --effort xhigh`', 'This beats the builder default above.', 'Never Fable for a worker']) {
-      assert.ok(claude.indexOf(roleDefault) > defaultsAt, `${roleDefault} sits under that heading`);
+  test('no shipped skill names a model or effort value: each states the order — the user → a general delegate skill that names the role → `claude_profiles` asked with the `role` («the bot\'s default — your own instructions win») → the conversation\'s own', () => {
+    for (const folder of expectedSkillNames) {
+      const text = readSkill(folder);
+      assert.doesNotMatch(text, /--model\s+["']?(?:fable|opus|sonnet|haiku)\b|--effort\s+["']?(?:low|medium|high|xhigh|max)\b|--variant\s+["']?(?:none|low|medium|high|xhigh|max)\b/i, `${folder} names a concrete model or effort`);
+      assert.doesNotMatch(text, /Never Fable|Role defaults/, `${folder}: the operator's /workers setting is the rule now`);
     }
-    assert.ok(claude.indexOf('The first `system`/`init` event must name the requested model') < defaultsAt, 'the model check is not a role default');
-    assert.doesNotMatch(claude, /sonnet/i, 'every role runs on Opus: no worker default is Sonnet');
-    assert.match(readSkill('charness-delegate-opencode').replace(/\s+/g, ' '), /The model and variant the user named; otherwise the role defaults of a general delegate skill, when the session lists one; otherwise the ones this conversation runs on\./);
+    const claude = readSkill('charness-delegate-claude').replace(/\s+/g, ' ');
+    const order = [
+      '1. what the user named for this worker — in the conversation, the plan, the brief or their own always-loaded instructions — or an agent `.md` frontmatter;',
+      '2. a general delegate skill the session lists that names this role\'s model or effort',
+      '3. `worker` of `claude_profiles` asked with the worker\'s `role` (the tool says what each role covers): the bot\'s default — your own instructions win; `worker.cli: opencode` → launch it with `charness-delegate-opencode`;',
+      '4. `worker.unavailable` set, or the tool refuses `role` → the CLI, model and effort this conversation runs on.',
+    ];
+    let previousAt = claude.indexOf('### Model and effort');
+    assert.ok(previousAt > 0, 'the heading');
+    for (const step of order) {
+      const at = claude.indexOf(step);
+      assert.ok(at > previousAt, `in order: ${step}`);
+      previousAt = at;
+    }
+    assert.ok(claude.includes('A NEW worker, a hand-over included, takes what this order gives now; a resumed one keeps its first run\'s model and effort'), 'a resume keeps its model');
+    assert.ok(claude.indexOf('The first `system`/`init` event must name the requested model') < claude.indexOf('### Model and effort'), 'the model check is about launching, not the order');
+    assert.match(
+      readSkill('charness-delegate-opencode').replace(/\s+/g, ' '),
+      /The first that names them decides: the model and variant the user named \(the conversation, the plan, the brief, their own always-loaded instructions\); otherwise a general delegate skill the session lists that names the role's model; otherwise `worker` of `claude_profiles` asked with the worker's `role` when it names OpenCode — the bot's default, your own instructions win; otherwise \(`worker\.unavailable`, a refused `role`\) the ones this conversation runs on\./,
+    );
+    assert.match(
+      readSkill('charness-orchestration').replace(/\s+/g, ' '),
+      /the CLI the user named, otherwise the one a general delegate skill names for the role, otherwise `worker\.cli` of `claude_profiles` asked with the worker's `role` \(the bot's default — your own instructions win\), otherwise the CLI you run in\./,
+    );
   });
 
   test('charness-delegate-claude records the session id in <run-dir>/session at launch and resumes only from it or the first run\'s init event — never from memory or a shortened prefix', () => {

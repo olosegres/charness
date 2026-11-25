@@ -13,7 +13,8 @@ mechanics below: launching, detaching, watching, waking, accounts and reaching t
 ## Launching workers
 
 - Load `charness-delegate-claude` or `charness-delegate-opencode` before the first launch and follow it: the CLI the
-  user named, otherwise the CLI you run in.
+  user named, otherwise the one a general delegate skill names for the role, otherwise `worker.cli` of `claude_profiles`
+  asked with the worker's `role` (the bot's default — your own instructions win), otherwise the CLI you run in.
 - A worker that runs tests on a runner shares it with other jobs: its test scripts bind ports from `$REMOTE_RUN_PORT_BASE`, use
   the simulator `$REMOTE_RUN_IOS_SIMULATOR_UDID` and never run `simctl shutdown all` or name `booted`; the tool's `--help` has the rest.
 - Name every resource another live process holds (a checkout, a port, a device) in the brief.
@@ -78,7 +79,8 @@ kill -0 <pid> 2>/dev/null || { echo "worker <pid> exited"; exit 1; }; [ -n "$(fi
 
 ## Accounts and usage limits
 
-- Before EVERY Claude worker launch or resume call `claude_profiles` — the worker's model; on a resume also `currentProfile` (the
+- Before EVERY worker launch or resume call `claude_profiles` — with the worker's model, or its `role` when nothing you follow
+  names the model (the answer then says which CLI too); on a resume also `currentProfile` (the
   profile name recorded at launch) and `lastRunEndedAt` (the last write of its log, an ISO instant) — and start the worker with
   `CLAUDE_CONFIG_DIR=<configDir>` of `recommended`, on a resume of `resume.profile` (nothing when the `configDir` is null; without
   it the worker drains YOUR account). Take it without asking: it follows the operator's /limits auto-switch list — an API-credit account first, then the
@@ -97,7 +99,7 @@ kill -0 <pid> 2>/dev/null || { echo "worker <pid> exited"; exit 1; }; [ -n "$(fi
   `schedule_create` the same one-off retry about 30 minutes ahead.
 - An `[Accounts …]` note (at a wake, in a send tool's result, during a turn) says where the limits stand: plan your next launch on it
   and call `claude_profiles` right before it. No reply is needed; a worker that is running stays where it is.
-- A role that may run on either CLI (a reviewer): start it where the limit resets sooner and still has room.
+- A role the user allowed on both CLIs: start it where the limit resets sooner and still has room.
 - A worker that only waits for a shared lane is not kept running: resume it when the lane frees.
 - Your own usage limit is the bot's business: it waits or switches and then wakes you.
 

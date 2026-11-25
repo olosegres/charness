@@ -32,8 +32,11 @@ conversations, Claude Code and OpenCode. The operator's own sessions outside the
   effort per role); the skills here own only how the bot launches, detaches, watches and wakes, which account to take,
   and how to reach the user. So `charness-orchestration` and the two delegate skills are add-ons — each says it wins only on
   those mechanics — and never tell an agent to use them INSTEAD of another manager. `charness-delivery-loop` is the
-  fallback for a session with no general manager skill and is never loaded beside one; the role defaults of the delegate
-  skills sit under a heading «only when no general delegate skill is listed».
+  fallback for a session with no general manager skill and is never loaded beside one.
+- **No model or effort values here.** The bot's default per worker role is the operator's `/workers` setting
+  (`settings.json` `workerRoles`), answered by `claude_profiles` asked with a `role`; the skills name only the order — the
+  user, then a general delegate skill that names the role, then that answer («the bot's default — your own instructions
+  win»), then the conversation's own CLI and model.
 - **The account rules have ONE home**: `charness-orchestration` § Accounts and usage limits (ask `claude_profiles` before every launch or
   resume, hand an old worker's work to a NEW worker instead of resuming it on another account, the mid-run limit exception, the
   `[Accounts …]` note). `charness-delegate-claude` keeps only what is specific to launching `claude -p` and points there;

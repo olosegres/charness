@@ -18,19 +18,20 @@ effort per role); this one wins on the launch, the account, detaching and the wa
 - Confirm the login under that directory: `env -u ANTHROPIC_API_KEY claude auth status --text`.
 - The first `system`/`init` event must name the requested model; on a mismatch stop the worker and tell the user.
 
-### Role defaults — only when no general delegate skill is listed
+### Model and effort
 
-Unless the user names others:
+The first of these that names the worker's model decides its CLI, model and effort together:
 
-- builder (code, tests, debugging, live runs): `--model opus --effort medium`;
-- investigator (a cause still unclear after a builder failed on it twice): `--model opus --effort xhigh`;
-- reviewer: `--model opus --effort xhigh`; a mini-review (a small or mechanical diff, applied fixes):
-  `--model opus --effort high`;
-- planner and the research feeding a plan: `--model opus --effort xhigh`.
-- Work on data persistence (storage, DB schema and migrations, sync, merge and conflict resolution, backups —
-  anything that can lose or corrupt user data): a builder at `--model opus --effort xhigh` (`max` for a deep
-  investigation). This beats the builder default above.
-- Never Fable for a worker: it drains the shared session and weekly limits fastest.
+1. what the user named for this worker — in the conversation, the plan, the brief or their own always-loaded
+   instructions — or an agent `.md` frontmatter;
+2. a general delegate skill the session lists that names this role's model or effort (what it leaves out is the
+   model's own default);
+3. `worker` of `claude_profiles` asked with the worker's `role` (the tool says what each role covers): the bot's
+   default — your own instructions win; `worker.cli: opencode` → launch it with `charness-delegate-opencode`;
+4. `worker.unavailable` set, or the tool refuses `role` → the CLI, model and effort this conversation runs on.
+
+A NEW worker, a hand-over included, takes what this order gives now; a resumed one keeps its first run's model and
+effort (a change empties its prompt cache).
 
 ## Launch
 
