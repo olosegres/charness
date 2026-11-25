@@ -1465,7 +1465,7 @@ describe('scheduler MCP server end-to-end (real HTTP)', () => {
       );
       assert.match(
         (await callProfiles({ role: 'planner' })).split('\n')[0],
-        /^planner: the bot's default is opencode run --model gone\/model, but its OpenCode model is not in the catalog \(provider disconnected or model gone\) → launch it on the CLI, model and effort this conversation runs on$/,
+        /^planner: the bot's default is opencode run --model gone\/model, but its OpenCode model is not in the catalog \(provider disconnected or model gone\) → launch it on the CLI, model and effort this conversation runs on — on Claude, call claude_profiles again with that model and take the account of that answer, not this one's$/,
       );
       const both = await client.callTool({ name: 'claude_profiles', arguments: { role: 'builder', model: 'opus' } });
       assert.equal(both.isError, true);

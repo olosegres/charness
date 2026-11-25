@@ -60,24 +60,27 @@ test('the launch flags: claude -p --model --effort; opencode run --model provide
   assert.equal(describeWorkerLaunchFlags({ cli: 'opencode', model: 'openai/gpt-6-astra', effort: null }), 'opencode run --model openai/gpt-6-astra');
 });
 
-test('the role line: the launch and «the bot\'s default — your own instructions win»; a role that cannot run here points at the conversation\'s own CLI and model', () => {
+test('the role line: the launch and «the bot\'s default — your own instructions win»; a role that cannot run here points at the conversation\'s own CLI and model and, on Claude, at a second call for its account', () => {
   const builder = buildWorkerRoleReport({ builder: { cli: 'claude', model: 'sonnet', effort: 'high' } }, 'builder', null);
   assert.deepEqual(builder, { role: 'builder', cli: 'claude', model: 'sonnet', effort: 'high', isBuiltIn: false, unavailable: null });
   assert.equal(describeWorkerRole(builder), 'builder: claude -p --model sonnet --effort high — the bot\'s default for this role; a model the user or your general delegate skill names wins');
   const missing = buildWorkerRoleReport({ reviewer: { cli: 'opencode', model: 'openai/gpt-6-astra', effort: 'medium' } }, 'reviewer', 'openCodeModelMissing');
-  assert.match(describeWorkerRole(missing), /^reviewer: the bot's default is opencode run --model openai\/gpt-6-astra --variant medium, but its OpenCode model is not in the catalog .* → launch it on the CLI, model and effort this conversation runs on$/);
+  assert.match(describeWorkerRole(missing), /^reviewer: the bot's default is opencode run --model openai\/gpt-6-astra --variant medium, but its OpenCode model is not in the catalog .* → launch it on the CLI, model and effort this conversation runs on — on Claude, call claude_profiles again with that model and take the account of that answer, not this one's$/);
   const noAccount = buildWorkerRoleReport({}, 'planner', 'noClaudeAccount');
   assert.equal(noAccount.isBuiltIn, true);
-  assert.match(describeWorkerRole(noAccount), /but no Claude account is signed in on this host → launch it on the CLI, model and effort this conversation runs on$/);
+  assert.match(describeWorkerRole(noAccount), /but no Claude account is signed in on this host → launch it on the CLI, model and effort this conversation runs on — on Claude, call claude_profiles again with that model and take the account of that answer, not this one's$/);
 });
 
-test('the first line of a role answer: Claude → the account verdict follows; OpenCode → «no Claude account needed»; unavailable → the role line alone', () => {
+test('the first line of a role answer: Claude → the account verdict follows; OpenCode → «no Claude account needed»; unavailable → the role line with its own account step, never this answer\'s account verdict (picked for another model)', () => {
   const claude = buildWorkerRoleReport({}, 'reviewer', null);
   assert.equal(describeWorkerRoleVerdict(claude, 'recommended: work → CLAUDE_CONFIG_DIR=/p/work (soonest weekly reset)'), 'reviewer: claude -p --model opus --effort xhigh — the bot\'s default for this role; a model the user or your general delegate skill names wins | account: recommended: work → CLAUDE_CONFIG_DIR=/p/work (soonest weekly reset)');
   const openCode = buildWorkerRoleReport({ reviewer: { cli: 'opencode', model: 'openai/gpt-6-astra', effort: null } }, 'reviewer', null);
   assert.match(describeWorkerRoleVerdict(openCode, 'ignored'), /names wins; no Claude account needed$/);
   const unavailable = buildWorkerRoleReport({}, 'reviewer', 'noClaudeAccount');
-  assert.equal(describeWorkerRoleVerdict(unavailable, 'none usable'), describeWorkerRole(unavailable));
+  const unavailableLine = describeWorkerRoleVerdict(unavailable, 'recommended: work → CLAUDE_CONFIG_DIR=/p/work (soonest weekly reset)');
+  assert.equal(unavailableLine, describeWorkerRole(unavailable));
+  assert.match(unavailableLine, /— on Claude, call claude_profiles again with that model and take the account of that answer, not this one's$/);
+  assert.doesNotMatch(unavailableLine, /recommended: work/, 'the account verdict of this answer is not offered for it');
 });
 
 test('a Claude role cannot run only when no account is signed in; an OpenCode role only when a READ catalog lacks its model', () => {

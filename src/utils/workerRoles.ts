@@ -120,8 +120,12 @@ export function describeWorkerLaunchFlags(worker: Pick<WorkerRoleReport, 'cli' |
   return `opencode run --model ${worker.model}${worker.effort === null ? '' : ` --variant ${worker.effort}`}`;
 }
 
-/** The fallback of a role that cannot run here — the last step of the order. */
-const workerOwnModelFallback = 'launch it on the CLI, model and effort this conversation runs on';
+/**
+ * The fallback of a role that cannot run here — the last step of the order. On Claude that worker still takes an account, and the
+ * pick of THIS answer was made for no model (an OpenCode role) or for the role's model: it asks again with the conversation's own.
+ */
+const workerOwnModelFallback =
+  'launch it on the CLI, model and effort this conversation runs on — on Claude, call claude_profiles again with that model and take the account of that answer, not this one\'s';
 
 /** Why a role cannot run here, in words. */
 const workerUnavailabilityWords: Readonly<Record<WorkerRoleUnavailability, string>> = {
@@ -134,8 +138,9 @@ export const workerDefaultWords = 'the bot\'s default for this role; a model the
 
 /**
  * @description The head of the first line of a `claude_profiles` answer asked with a `role` (also the CLI's line): the launch
- * and «the bot's default — your own instructions win», or that the role cannot run here and the agent launches it on its own.
- * The account part (Claude) or «no Claude account needed» (OpenCode) follows it.
+ * and «the bot's default — your own instructions win», or that the role cannot run here: the agent launches it on its own CLI and
+ * model and, on Claude, asks again with that model for its account. The account part (Claude) or «no Claude account needed» (OpenCode)
+ * follows a role that can run.
  */
 export function describeWorkerRole(worker: WorkerRoleReport): string {
   if (worker.unavailable !== null) {
@@ -150,7 +155,8 @@ export const workerNoClaudeAccountNeededWords = 'no Claude account needed';
 /**
  * @description The first line of a `claude_profiles` answer asked with a `role` (also the CLI's): the role's line, then — for a role
  * that can run — the account verdict of today (Claude) or «no Claude account needed» (OpenCode). A role that cannot run here ends
- * at its fallback: the conversation's own CLI and model need no account pick.
+ * at its fallback, whose account step is a SECOND call with the conversation's own model: this answer's account verdict was picked for
+ * another model, so it is left out of the line.
  */
 export function describeWorkerRoleVerdict(worker: WorkerRoleReport, accountVerdict: string): string {
   const head = describeWorkerRole(worker);

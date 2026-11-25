@@ -261,7 +261,7 @@ describe('/workers end to end: built charness, fake Bot API, fake agent, fake Op
     assert.equal(general.getKeyboardLabels(screen)[3][0], '⚠️ Reviewer: OpenCode · gpt-6-astra · medium');
 
     const { verdict, report } = await askProfilesAsAgent({ role: 'reviewer' });
-    assert.match(verdict, /^reviewer: the bot's default is opencode run --model openai\/gpt-6-astra --variant medium, but its OpenCode model is not in the catalog \(provider disconnected or model gone\) → launch it on the CLI, model and effort this conversation runs on$/);
+    assert.match(verdict, /^reviewer: the bot's default is opencode run --model openai\/gpt-6-astra --variant medium, but its OpenCode model is not in the catalog \(provider disconnected or model gone\) → launch it on the CLI, model and effort this conversation runs on — on Claude, call claude_profiles again with that model and take the account of that answer, not this one's$/);
     assert.equal(report.worker?.unavailable, 'openCodeModelMissing');
   });
 
