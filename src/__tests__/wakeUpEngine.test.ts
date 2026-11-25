@@ -3285,6 +3285,25 @@ describe('a tracker\'s rules: no reminder on a clock — a progress note with no
     assert.deepEqual(alerts, []);
   });
 
+  it('background work the nudged agent starts and finishes inside its own turn woke nothing: that turn ending with a note and nothing pending is the give-up, not another nudge (review 3 recheck R1)', async () => {
+    const ledger = await createLedger();
+    const engine = createEngine(ledger, trackerRules);
+    const request = await ledger.createRequest(issueKey, handOver);
+    await engine.trackForwardedTurn(issueKey, request.id, { isRequestPrompt: true });
+    await runTurn(engine, () => deliverProgress(ledger, request.id));
+    assert.deepEqual(getWakeUpReasons(), ['nothingArmed']);
+
+    // The nudge's turn runs a short background check, reads it, sends «still running» and ends with nothing pending.
+    probe = { isActive: true, isBusy: true, hasUnconsumedInput: false, isTurnEndBlocked: false, hasOwnPendingWork: true };
+    await engine.pollWatchedTurns();
+    await engine.deliverOrHandOverWake(issueKey, await engine.settleEndedTurnsOf(issueKey));
+    await deliverProgress(ledger, request.id);
+    probe = { isActive: true, isBusy: false, hasUnconsumedInput: false, isTurnEndBlocked: false };
+    await engine.deliverOrHandOverWake(issueKey, await engine.settleEndedTurnsOf(issueKey));
+    assert.deepEqual(getWakeUpReasons(), ['nothingArmed'], 'no second nudge');
+    assert.deepEqual(alerts, [{ requestId: request.id, reason: 'silentTurns' }], 'the second stall in a row: given up');
+  });
+
   it('a topic\'s watch is never marked by the agent\'s own work: its CLI turn is activity, as before', async () => {
     const ledger = await createLedger();
     const topicEngine = createEngine(ledger, { getWakeUpRules: (): WakeUpRuleSet => 'topic' });

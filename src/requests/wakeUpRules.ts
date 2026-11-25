@@ -238,8 +238,8 @@ export interface TurnEndContext {
   /** The conversation's rule set; absent: a topic's. */
   rules?: WakeUpRuleSet;
   /**
-   * The agent's own pending work at this turn end (a tracker's rules): `ended` — the watch saw it (pending, or a turn the CLI started
-   * by itself) and it ended by itself, so the agent arranged what woke it and a stall here is the first in a row again; `pending` — it still runs, so the hold no longer applies (the
+   * The agent's own pending work at this turn end (a tracker's rules): `ended` — the watch saw it outlive its turn (pending while no
+   * turn ran, or a turn the CLI started by itself) and it ended by itself, so the agent arranged what woke it and a stall here is the first in a row again; `pending` — it still runs, so the hold no longer applies (the
    * request owes an answer, or {@link ownWorkHoldMaxMs} lapsed): the stall count goes on, and a wake for the lapse says the hold ran
    * out (`ownWorkHoldLapsed`), not that nothing is running. Absent: none.
    */
