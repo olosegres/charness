@@ -195,7 +195,10 @@ describe('agent-plugin', () => {
     const flat = readSkill('charness-orchestration').replace(/\s+/g, ' ');
     assert.match(flat, /Before EVERY Claude worker launch or resume — and before launching any NEW worker by its `role`, whose answer may name OpenCode — call `claude_profiles`: a new worker with its `role` when nothing you follow names its model, else with the model; a resume always with the model it ran on, plus `currentProfile` \(the profile name recorded at launch\) and `lastRunEndedAt` \(the last write of its log, an ISO instant\)/);
     // An OpenCode worker needs no Claude account: the account verdicts must never hold it back.
-    assert.match(flat, /`worker\.cli: opencode` → no account to take: `recommended`, `resume` and `nextAvailable` do not apply — launch it with `charness-delegate-opencode`\./);
+    assert.match(flat, /`worker\.cli: opencode` and `worker\.unavailable` null → no account to take: `recommended`, `resume` and `nextAvailable` do not apply — launch it with `charness-delegate-opencode`\./);
+    // A role the bot cannot run here falls back to the conversation's own CLI and model: on Claude that worker takes an account too.
+    assert.match(flat, /`worker\.unavailable` set → the worker runs on this conversation's CLI and model: on Claude, call `claude_profiles` again with that model and take `recommended` as for any Claude worker\./);
+    assert.doesNotMatch(flat, /`worker\.cli: opencode` → no account/, 'the OpenCode exemption is never keyed on the CLI alone');
     assert.doesNotMatch(flat, /Before EVERY worker launch/, 'the account rules are a Claude worker\'s');
     // The account to start under is `resume.profile` on a resume: on a cold hand-over `recommended` is the OLD worker's own account.
     assert.match(flat, /start the worker with `CLAUDE_CONFIG_DIR=<configDir>` of `recommended`, on a resume of `resume\.profile` \(nothing when the `configDir` is null/);

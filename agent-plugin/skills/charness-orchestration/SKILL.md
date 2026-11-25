@@ -87,8 +87,10 @@ kill -0 <pid> 2>/dev/null || { echo "worker <pid> exited"; exit 1; }; [ -n "$(fi
   it the worker drains YOUR account). Take it without asking: it follows the operator's /limits auto-switch list — an API-credit account first, then the
   soonest weekly reset, so what expires first is spent first. Never reuse an earlier answer. Record the profile name beside the
   worker's session id.
-- `worker.cli: opencode` → no account to take: `recommended`, `resume` and `nextAvailable` do not apply — launch it with
-  `charness-delegate-opencode`.
+- `worker.cli: opencode` and `worker.unavailable` null → no account to take: `recommended`, `resume` and `nextAvailable` do not
+  apply — launch it with `charness-delegate-opencode`.
+- `worker.unavailable` set → the worker runs on this conversation's CLI and model: on Claude, call `claude_profiles` again with that
+  model and take `recommended` as for any Claude worker.
 - `resume.verdict: handOver` → do not resume that worker on another account. Give its work to a NEW worker on `resume.profile` (brief:
   the old run's report, the worktree, the findings); a reviewer that already runs on that account may apply its own findings, then a
   fresh reviewer checks the result. `resume.verdict: resume` → resume the session under `resume.profile` (where it ran, unless it

@@ -1452,6 +1452,7 @@ describe('scheduler MCP server end-to-end (real HTTP)', () => {
       assert.match(roleProperty?.description ?? '', /`storageBuilder` — a builder whose work touches data persistence/, 'the role description is the one home of what each role covers');
       assert.match(roleProperty?.description ?? '', /neither the user nor a general delegate skill you follow names its model \(they do → pass `model` instead\)/);
       assert.match(tool?.description ?? '', /the bot's DEFAULT: a model the user names, or a general delegate skill you follow names for the role, wins/);
+      assert.match(tool?.description ?? '', /`worker\.cli: opencode` with `worker\.unavailable` null needs no Claude account[^]*?`worker\.unavailable` set → launch the worker on the CLI, model and effort this conversation runs on — on Claude, call this tool again with that model and take its account\./);
       const builder = await callProfiles({ role: 'builder' });
       assert.equal(
         builder.split('\n')[0],
