@@ -44,7 +44,7 @@
     "MIGRATION_RENAME_TO_CHARNESS.md",
     "MIGRATION_3_TO_4.md",
     "LICENSE",
-    "LICENSE-COMMERCIAL.md",
+    "licensing.json",
     ".env.example",
     "examples/"
   ],

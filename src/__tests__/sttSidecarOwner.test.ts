@@ -346,7 +346,9 @@ test('a live matching sidecar that answers nothing is used anyway twice, and rep
   fakeArgs = [];
   const replacement = await owner.ensure(defaultSettings);
   assert.equal(startCalls.length, 2, 'the third silence replaces it');
-  assert.notEqual(replacement.port, first.port);
+  // A new process, not a new port: the OS may hand the freed port of the stopped process to the next one.
+  assert.notDeepEqual(getRecordedIdentity(), wedged);
+  assert.ok(replacement.port > 0);
   assert.ok(await waitUntilGone(wedged, 4_000), 'the wedged one is stopped, not leaked');
   assert.ok(logLines.some((line) => line.includes('stayed silent 3 times in a row; replacing it')));
   await owner.stop();
@@ -375,7 +377,7 @@ test('status: a live sidecar too busy to answer /health is "running" with no cou
 test('a settings change that the process was started with stops it; the next ensure starts with the new hash', async () => {
   const owner = createSttSidecarOwner(createDeps());
   const config: SttConfigFile = { ...createEmptySttConfig(), engines: [{ id: 'g', kind: 'gigaam' }] };
-  const first = await owner.ensure(defaultSettings);
+  await owner.ensure(defaultSettings);
   const firstIdentity = getRecordedIdentity();
 
   const harmless: SttConfigFile = { ...config, language: 'ru' };
@@ -391,7 +393,9 @@ test('a settings change that the process was started with stops it; the next ens
   const second = await owner.ensure(moreWorkers.gigaam);
   assert.equal(startCalls.length, 2);
   assert.equal(readRecord().configHash, getSttSidecarConfigHash(moreWorkers.gigaam));
-  assert.notEqual(second.port, first.port);
+  // A new process, not a new port: the OS may hand the freed port of the stopped process to the next one.
+  assert.notDeepEqual(getRecordedIdentity(), firstIdentity);
+  assert.ok(second.port > 0);
   await owner.stop();
 });
 

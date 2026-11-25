@@ -6,7 +6,7 @@ Version 1.0.0, effective 2026-11-19.
 
 This agreement follows the structure of the Apache Software Foundation's Individual Contributor License Agreement v2.2, edited so that the licensor may ship contributions under any license terms, free or paid. You keep the copyright in your contributions; this agreement only grants licenses to them.
 
-The licensor is **Sergei Solo** (https://github.com/olosegres/charness), who releases Charness under the [Charness License](LICENSE) and the [Charness Commercial License Terms](LICENSE-COMMERCIAL.md). Contact: charnesshub@gmail.com.
+The licensor is **Sergei Solo** (https://github.com/olosegres/charness), who releases Charness under the [Charness License](LICENSE), which also holds its paid terms. Contact: charnesshub@gmail.com.
 
 **Contributing for a company?** This agreement is for individuals. If your contribution belongs to your employer or another organization, or you make it as part of your job, please write to charnesshub@gmail.com before you submit it; we may ask for a company agreement. Either way, section 5.1 applies to what you submit.
 

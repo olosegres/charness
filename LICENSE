@@ -1,152 +1,332 @@
 Required Notice: Copyright 2026 Sergei Solo (https://github.com/olosegres/charness)
-Required Notice: Commercial licenses for organization groups: https://olosegres.github.io/charness/commercial/
-
-# Charness License 1.0.0
-
-https://olosegres.github.io/charness/license/1.0.0/
-
-## Acceptance
-
-In order to get any license under these terms, you must agree to them as both strict obligations and conditions to all your licenses.
-
-## Copyright License
-
-The licensor grants you a copyright license for the software to do everything you might do with the software that would otherwise infringe the licensor's copyright in it for any permitted purpose.  However, you may only distribute the software according to [Distribution License](#distribution-license) and make changes or new works based on the software according to [Changes and New Works License](#changes-and-new-works-license).
-
-## Distribution License
-
-The licensor grants you an additional copyright license to share copies of the software without charge, including public source mirrors and forks, with the notices required below and without granting recipients broader rights than these terms. This includes changes and new works lawfully made under [Changes and New Works License](#changes-and-new-works-license). You may also supply copies to a client solely to install or maintain its internal instance under that client's own permission or commercial license, and charge for those services, not for the software rights. These permissions do not authorize selling copies, supplying an embedded product, or offering hosted access to the software or its functionality; [Products and Hosted Services](#products-and-hosted-services) governs those activities, even if access is offered without charge. Recipients must independently qualify for their use or hold the required agreement.
-
-## Notices
-
-You must ensure that anyone who gets a copy of any part of the software from you also gets a copy of these terms or the URL for them above, as well as copies of any plain-text lines beginning with `Required Notice:` that the licensor provided with the software.  For example:
-
-> Required Notice: Copyright Yoyodyne, Inc. (http://example.com)
-
-## Changes and New Works License
-
-The licensor grants you an additional copyright license to make changes and new works based on the software for any permitted purpose.
-
-Changes and new works based on the software remain subject to the same eligibility and distribution limits. Output merely created using the software, such as independently written code, documents or other deliverables that do not include the software, is not a work based on the software for these terms. The licensor claims no ownership or royalty in that output. Third-party rights in output are unaffected.
-
-## Patent License
-
-The licensor grants you a patent license for the software that covers patent claims the licensor can license, or becomes able to license, that you would infringe by using the software.
-
-## Fair Use
-
-You may have "fair use" rights for the software under the law. These terms do not limit them.
-
-## Individuals
-
-Personal hobby, study and independent non-business projects are permitted purposes. All paid own-account work, including freelance work and a one-person automated business, is business use and follows [Small Organizations](#small-organizations), not an unlimited individual exemption. A sole proprietorship counts whether registered or not.
-
-Subject to [Work for Clients](#work-for-clients), work for an organization or whose results belong to it is for that organization's benefit, whoever owns the hardware. An employer is not a client, and employment is not own-account work. Mere use of the public results of your independent personal project does not turn it into organizational work.
-
-## Small Organizations
-
-Internal use for an organization group is a permitted purpose if its R is at most USD 500,000 AND its H is at most 20, using the definitions below. Exactly USD 500,000 and 20 people qualify. All actual users, agents, jobs, machines and instances are unlimited; H counts the whole workforce, not software users. Unattended operation, including CI with no direct human users, is still group use. Public-benefit use and evaluation have the separate permissions below.
-
-Assess R and current H at every month end, and at first adoption using the latest completed month-end assessment (or actual figures since formation if no month end exists). If a genuinely eligible free group later exceeds either limit at a month end, its internal use remains permitted during a 90-calendar-day growth transition starting at that month end. By the deadline it must buy the then-applicable annual license or stop covered use, unless it has regained free eligibility. Re-crossing within 12 months of the original crossing does not restart the allowance: the original deadline still applies. No fees are due for genuinely eligible free use or this authorized transition. A group already above the limits when first adopting does not get growth grace merely by adopting.
-
-Paid groups select the higher of the R and H bands in the fixed schedule incorporated in their commercial order. Ordinary organic growth, including new revenue and newly raised funding, is covered through each paid term year with no mid-year surcharge; renewal uses the latest assessment and permits downgrading or returning to free eligibility. A merger or acquisition requires combined-group reassessment within 90 days of completion and only the prorated positive fee difference for the remaining term, with overlapping prepaid group fees credited. A free group that becomes part of a larger group through a merger or acquisition has the same 90-day period from completion to bring the combined group into compliance. Incorrect initial declarations are corrected to the band due then, not protected as growth. Paid rights expire at the term end without renewal; there is no perpetual internal-use fallback.
-
-## Work for Clients
-
-Any service provider whose own group use is permitted under these terms or a commercial license may use its own tools to produce client deliverables. That remains the provider's use, irrespective of client size, as long as:
-
-1. the software itself runs only on systems you control that the client does not own, rent, pay for (including reimbursing their cost), or control; and
-
-2. neither the client nor anyone acting for it, other than the provider's people doing that work, administers the software or directs an agent through it, for example by writing to it or assigning work to it in an issue tracker. This access test applies regardless of how many days the person works for the client.
-
-Accessing client repositories or systems through separately licensed tools or agents does not itself mean that the software runs there.  A client's request to you is not direction of an agent unless the client can cause agent work through the software without your deciding to pass that request on.
-
-Otherwise, client installation or client-directed operation is the client's use under its own eligibility or commercial license, optionally obtained by the provider on its behalf. Authorized contractors may install, administer and use the client's internal instance without a separate fee for that client-only work; their eligibility to act is not conditional on counting in H. The current-engagement and 30-worked-day rules determine H separately. The provider's separate internal use follows its own group band. There is no royalty on installation, configuration, consulting, maintenance or training invoices; that income still enters the provider's R for its own group assessment.
-
-## Products and Hosted Services
-
-An embedded product includes or runs the software as an operational component, or supplies its agent-orchestration functionality as a feature of another product. Supplying such a product, on premises or hosted, requires a separate written OEM addendum identifying the products, architectures and allowed product-specific tasks, even when the OEM schedule amount is zero. A standard internal-use license alone does not grant these rights. Merely using the software to create output, or an independently written connector or input/output integration that does not supply the software or its functionality, does not require OEM rights.
-
-Offering substantially the software itself as a hosted, managed, rebranded or resale service requires a separate written hosting/reseller agreement and each beneficiary client's own free eligibility or normal group license. It is not covered by a blanket OEM fee. These limits apply regardless of price, host size or recipient size, and cannot be avoided through a new UI, API or AI intermediary.
-
-Internal access by people acting for the group and contractors administering its independently controlled internal instance is not onward hosting. That instance may run on contractor infrastructure. Ordinary client administration or separately supplied generic infrastructure is not itself a provider-controlled software-access service. Classroom, learning and genuine research access under [Education and Public Benefit](#education-and-public-benefit) is expressly permitted without an OEM/hosting agreement; it does not authorize a general-purpose public hosting business. Write to charnesshub@gmail.com; information: https://olosegres.github.io/charness/commercial/.
-
-## Education and Public Benefit
-
-Teaching, student learning and genuine academic or noncommercial scientific research by recognized educational or research institutions and individual researchers are permitted purposes. Internal administration and mission delivery by public or nonprofit educational institutions, genuine charities (including nonprofit public-health, safety and environmental bodies) and public authorities are also permitted, irrespective of core budget, donations, genuine grants, other funding or headcount. Ordinary tuition for recognized education, public appropriations, taxes, statutory fees and cost-recovery public services do not end this exception. Saving costs is not commercial revenue. Industry-funded genuine academic research qualifies; a disguised contract to deliver a proprietary commercial product does not.
-
-A recognized private for-profit school qualifies for actual teaching and learning, not commercial administration or non-educational business. A commercial employer's R&D is ordinary group use, not free academic research merely because a department calls itself a lab.
-
-An otherwise exempt institution's commercial operation using the software remains permitted while its external commercial revenue C is at most USD 500,000 over the measurement period, even if its assigned workforce exceeds 20. If C exceeds that amount, the operation follows the ordinary banded license and growth/renewal rules, using its R and assigned H rather than the institution's exempt core budget and workforce. Funding alone does not trigger this C threshold or remove core-purpose permission. Once C triggers licensing, include investment/commercial-grant funding of the commercial operation in its R, but never core-purpose donations or grants. Connected commercial operations under common institutional control are combined; shared staff doing material work count once, not as fractional FTEs. Unrelated exempt teaching or public-service work remains free.
-
-A separate for-profit spin-off or government-owned trading company follows ordinary group rules from the start, including the H limit. Aggregate related commercial entities under the institutional parent's control, but exclude the exempt core budget and workforce. A nonprofit label does not exempt ordinary commercial trading outside the institutional exception.
-
-## Evaluation
-
-Use to evaluate suitability is permitted during one group-wide period of less than 32 consecutive calendar days, starting when anyone in the group first runs the software for that evaluation. Productive work is allowed only as part of evaluation. Pauses, different people, departments or versions do not restart it. Growth grace does not extend an above-threshold adopter's evaluation. This permission grants no OEM, hosting or resale rights.
-
-## Existing MIT Adopters
-
-MIT grants already received remain unchanged, with no retrospective fees. A group already using an MIT-licensed Charness release before the first release under these terms may use newly licensed releases internally for a single 90-calendar-day transition starting on its first use of a release under these terms. At that deadline it must qualify free, buy the applicable annual license, or stop using the newly licensed releases. It may continue its MIT releases under MIT. This transition and evaluation run concurrently, not consecutively; neither restarts the other or creates a fresh growth allowance for an already above-threshold group. No installation or update by itself removes existing MIT rights. This transition grants no onward product or hosting rights.
-
-## Commercial Licenses
-
-Any use not permitted by these terms needs the corresponding commercial license or separate OEM/hosting/reseller agreement. Authorized no-charge distribution does not authorize otherwise unpermitted operation or modification. Ordinary fees are annual per organization group, with unlimited users, agents and instances, never per seat. To buy, write to charnesshub@gmail.com or use a purchase route listed on the commercial page, https://olosegres.github.io/charness/commercial/.
-
-These terms grant no trademark license and no right to use the name Charness or the licensor's other names or marks, beyond the notices required under [Notices](#notices) and uses the law allows without a license. A commercial order may add a limited contractual permission to display a "Powered by Charness" mark; that permission exists only as stated in the order.
-
-## Eligibility Verification
-
-Organizational and commercial users, including groups claiming free eligibility, must self-assess and retain sufficient eligibility records for three years after the relevant assessment: R calculations, funding totals, aggregate workforce/contractor counts, group structure and applicable commercial-operation or OEM totals. Free ordinary use needs no registration or routine submission. Personal hobbyists' private affairs are outside this clause. Institutions may certify their permitted purpose and relevant commercial-operation bands instead of disclosing their whole budget.
-
-On a credible discrepancy, the licensor may first request an officer's or accountant's written certification, allowing 30 days to respond. Only an unresolved, reasonably grounded discrepancy permits verification by an independent professional bound to confidentiality, at most once per 12 months, on at least 30 days' written notice, during ordinary business hours with minimal interference. Only records relevant to eligibility and fees may be inspected; sufficient redacted accountant confirmations must be accepted. There is no access right to repositories, prompts, model credentials, customer data or production systems. Information may be used only to establish compliance and resolve the discrepancy and must be kept confidential, except where disclosure is legally required.
-
-The licensor pays verification costs unless actual underpayment exceeds BOTH 10% of the fees actually due for the reviewed period AND USD 1,000. Only then may reasonable documented audit costs be recovered, capped at the recovered underpayment. Actual overdue fees for unauthorized use may be collected, but never fees for genuinely free use or authorized transitions, and never a penalty multiplier. First-notice cure under [Violations](#violations) remains intact; a verification request alone is not a violation finding or termination. Prompt honest errors may be corrected, including through a written payment plan agreed with the licensor. Fraud remains subject to ordinary legal remedies. There are no license keys, activation, compliance telemetry or remote shutdown under this licensing model.
-
-## No Other Rights
-
-These terms do not allow you to sublicense or transfer any of your licenses to anyone else, or prevent the licensor from granting licenses to anyone else.  These terms do not imply any other licenses.
-
-## Patent Defense
-
-If you make any written claim that the software infringes or contributes to infringement of any patent, your patent license for the software granted under these terms ends immediately. If your organization makes such a claim, your patent license ends immediately for work on behalf of your organization.
-
-## Violations
-
-The first time you are notified in writing that you have violated any of these terms, or done anything with the software not covered by your licenses, your licenses can nonetheless continue if you come into full compliance with these terms, and take practical steps to correct past violations, within 32 days of receiving notice.  Otherwise, all your licenses end immediately.
-
-Authorized transitions are not violations. A verification response deadline does not shorten this first-notice cure. Non-renewal itself is not a breach; continued use after paid rights expire must have independent permission. Payment of overdue fees does not create a perpetual license.
-
-## No Liability
-
-***As far as the law allows, the software comes as is, without any warranty or condition, and the licensor will not be liable to you for any damages arising out of these terms or the use or nature of the software, under any kind of legal claim.***
-
-## Governing Law
-
-These terms are governed by the law of Georgia, subject to mandatory applicable law. The United Nations Convention on Contracts for the International Sale of Goods does not apply.
-
-## Definitions
-
-The **licensor** is the individual or entity offering these terms, and the **software** is the software the licensor makes available under these terms.
-
-**You** refers to the individual or entity agreeing to these terms.
-
-An **organization** includes a legal entity, sole proprietorship, partnership or other group working together, whether or not incorporated.
-
-An **organization group** or **group** is the beneficiary organization together with every organization controlling it, controlled by it or under common control, worldwide. Consolidate 100% of controlled entities' figures, eliminate intra-group sales and funding transfers, and count each person once. Include acquired entities' measurement-period history on a pro-forma combined basis. Reorganizations, split invoices, subsidiaries and new installations do not reset history or thresholds. Unrelated clients or suppliers are not affiliates merely because they trade. Shared passive investment without control is not common control. Shared sovereignty alone does not combine a whole country: an independently administered public institution and its controlled operating subsidiaries form the public-body unit, subject to the commercial-operation separation above.
-
-**Group people (H)** counts current full-time and part-time employees (including leave), working founders/owners, working officers/directors and unpaid people regularly performing business work. Assigned contractors or agency personnel count only while currently engaged and after working on more than 30 calendar days in the preceding 12 months; casual unpaid helpers use the same rule. Any work on a day counts as one day; counting begins on worked day 31 without reclassifying earlier use. A genuinely ended engagement stops counting; re-engagement retains prior days within the rolling period. Count identifiable assigned workers in any business function, not an entire outside supplier's staff merely because its services are bought. Customers, enrolled students, passive investors, bots, AI agents, accounts and machines do not count merely as such. A person **works for** an organization when they meet these workforce rules; that phrase does not limit permission for authorized short-term contractors to act for a client.
-
-**Measurement date** is the relevant calendar month end; the **measurement period** is the 12 completed calendar months ending then. New businesses use actual figures since formation, without annualizing, until 12 months exist; acquisition/reorganization does not erase history. H is current at the measurement date; its contractor test uses the preceding 12 months.
-
-**Revenue and funding (R)** is consolidated gross revenue from all business lines PLUS investment/grant funding raised during the measurement period, including equity investment, capital contributions, convertible notes, SAFEs and other instruments convertible into equity, and commercial grants (grants, subsidies or prizes received for business activity, as distinct from core-purpose grants under Education and Public Benefit). Ordinary bank loans are excluded. Other loans from owners, investors or their affiliates count as funding unless made on ordinary arm's-length commercial terms, and a loan later converted into equity or forgiven counts when converted or forgiven if it was not already counted. Funding counts in the month it is received, not again on conversion of a note or intra-group transfer; never count the same receipt twice as both revenue and funding. Funding valuation and cash balances are not receipts. For revenue, apply consistently recognized local accounting principles or IFRS/GAAP: deduct sales taxes collected for the state and actual refunds/returns, not wages, infrastructure, model costs, commissions or payment fees. Customer advances enter revenue when recognized, not twice on receipt and earning. Consistent principal-versus-agent accounting determines recognized marketplace revenue; neither profit nor gross merchandise value is automatically R. Convert non-USD revenue and funding using monthly average rates from the relevant central bank or another consistently applied public source; retain the source and calculation. Purpose-exempt funding is treated as specified in Education and Public Benefit, not as a reason to revoke that exception.
-
-**Commercial operation** is an institution's economically connected business activity using the software, including paid proprietary development/consulting, product subscriptions, IP licensing and commercial data/services. Its **external commercial revenue (C)** is all recognized revenue of that activity, not merely incremental revenue attributed to the software, using R's revenue accounting and measurement period but excluding investment/funding and exempt core-purpose receipts. Combine connected operations under common institutional control; where honest separation is unavailable assess the combined relevant commercial activity, not an artificially small department. The separate R measure includes that operation's counted funding once the C trigger applies.
-
-**Your organization** is the organization you are, if you are one, and any legal entity, sole proprietorship, partnership, or other kind of organization that you work for, plus all organizations that have control over, are under the control of, or are under common control with any of them.  This definition applies only to [Patent Defense](#patent-defense).
-
-**Control** means more than 50% of voting power or actual power to direct management and policies, by contract or otherwise, directly or indirectly. Voting power and rights held by persons acting together under an agreement or arrangement, including through nominees, are combined. A passive minority holding alone is not control.
-
-**Your licenses** are all the licenses granted to you for the software under these terms.
-
-**Use** means anything you do with the software requiring one of your licenses.
+Required Notice: Licensed under the Charness License 2.0: https://github.com/olosegres/charness/blob/license-2.0/LICENSE
+
+# Charness License 2.0
+
+This file is the whole licence of Charness: when it is free, what you may do with the code, and the paid terms. It
+covers the code of the commit it is in. A copy you received with a different licence file (an earlier release under MIT
+or under the Charness License 1.0.0) keeps the licence that came with it.
+
+The **licensor** is Sergei Solo (Georgian individual entrepreneur; registration details by e-mail on request). **You**
+are the person or organization using these terms. Contact for everything in this licence: charnesshub@gmail.com.
+
+Contents: Part 1, when Charness is free. Part 2, source available. Part 3, commercial terms. Part 4, general terms and
+definitions.
+
+## Part 1. When Charness is free
+
+You may use Charness without paying in each of these cases (section 2.1 says what you may do with it; training or using
+a model trained on Charness: section 2.5).
+
+1.1. **Personal use.** Hobby projects, study and independent projects that are not a business. Any paid work on your own
+account, including freelancing or a one-person company, is business use and follows section 1.2. Work you do for an
+employer is the employer's use, whoever owns the computer.
+
+1.2. **Small organizations.** An organization group (section 4.10) whose **R** (revenue plus funding, section 4.10) is
+at most USD 500,000 **and** whose **H** (group people, section 4.10) is at most 20. Both must hold; exactly USD 500,000
+and 20 people qualify. Users, agents, jobs, machines and instances are unlimited.
+
+1.3. **Education and public benefit.** Teaching, student learning, and genuine academic or noncommercial research by
+recognized educational or research institutions and individual researchers; and the own work of public or nonprofit
+schools and universities, genuine charities and public authorities, whatever their budget, funding or headcount.
+Industry-funded genuine academic research qualifies; a disguised contract to deliver a proprietary commercial product
+does not. A commercial employer's research and development is ordinary group use, not free academic research merely
+because a department calls itself a lab. A commercial operation of such an institution that uses Charness is free while
+its external commercial revenue C (section 4.10) is at most USD 500,000 a year; above that it pays as an organization
+under Part 3, counting that operation's own R and H. A for-profit spin-off or a government-owned trading company is an
+ordinary organization from the start.
+
+1.4. **Evaluation.** One period of less than 32 consecutive days per organization group, from the first time anyone in
+the group runs Charness to evaluate it. Productive work is allowed only as part of evaluating. Pauses, other people or
+other versions do not restart it.
+
+1.5. **Growth.** An organization group that was free and exceeds a limit of section 1.2 at a month end may keep using
+Charness for 90 days from that month end. By then it buys a licence (Part 3), falls back within the limits, or stops. A
+second crossing within 12 months of the first does not restart the 90 days. A group already above the limits when it
+starts gets no growth period. A free group that joins a larger group by a merger or acquisition has 90 days from
+completion.
+
+1.6. **Earlier MIT users.** A group that used an MIT-licensed Charness release before its first use of a release under
+any version of the Charness License may use releases under the Charness License for 90 days from that first use, once;
+it runs at the same time as evaluation, not after it. MIT releases stay MIT.
+
+1.7. **Measuring.** Check R and H at every month end, and at first use with the latest month-end figures (a new business
+uses its actual figures since it started). No fees are ever due for use that was free under this Part.
+
+1.8. **Work for clients.** A provider that runs Charness only on its own systems to produce work for a client uses it
+under its own free use or licence, whatever the client's size. When Charness runs on systems the client owns, rents,
+pays for or controls, or when the client's people administer it or make its agents act, it is the client's use, under
+the client's own free use or licence (which the provider may buy for it). A client's request to the provider is not
+making its agents act unless the client can cause agent work through Charness without the provider deciding to pass that
+request on; reaching client repositories or systems through separately licensed tools or agents does not itself mean
+that Charness runs there.
+
+## Part 2. Source available
+
+Charness is **source available**, not open source: the code is open to read, and you may use it under these terms.
+
+2.1. **Use and change.** For a use that is free under Part 1 or paid under Part 3, the licensor grants you a copyright
+licence to run, copy and modify Charness, and a licence under the licensor's patents that Charness would otherwise
+infringe.
+
+2.2. **Sharing.** You may share copies of Charness and of your changes without charge, including public mirrors and
+forks, if every copy keeps this file and the `Required Notice:` lines. Recipients get no broader rights than these terms
+and must qualify for their own use. You may install or maintain Charness for a client under the client's own free use or
+licence (section 1.8), and charge for that service, but not for the software. Selling copies, embedding Charness in a
+product, or offering it as a hosted service needs section 3.4 or 3.5, even at no charge, except the access section 3.5
+allows for section 1.3.
+
+2.3. **Derived code.** Code, skills or prompts written on the basis of Charness code or commits (section 4.10), taking
+over its approaches and solutions, are works based on Charness and are subject to this licence like Charness itself,
+whoever or whatever wrote them, including such code an AI model wrote with Charness code or commits put in its context
+to build it (what Charness gives an agent while it runs is not that: section 2.4).
+
+2.4. **Your own work.** Using Charness to write code never makes that code derived from Charness. What Charness itself
+gives an agent while it runs — its prompts, skills, tool descriptions, instructions and compaction guidance — and the
+agent's following them never make the agent's work derived, even where that work applies the approaches they describe;
+nor does code, configuration, a skill or a prompt that only uses, calls, configures or connects to Charness. Section 2.3
+reaches only work built on Charness code or commits, and a copy or adaptation of the texts of Charness's own prompts,
+skills or descriptions as such (for example a skill or prompt made from them). The commands, settings and files an agent
+writes while following them, in the work they guide, are following them, not a copy. Your own code, documents and other
+deliverables that you or your agents produce with Charness are yours, and the licensor claims no ownership or royalty in
+them, even though Charness ran the agents and gave them its prompts, skills and tool descriptions while they worked.
+Such work is derived only where section 2.3 reaches it, never because Charness was used to write it. Nor does an AI
+model's having learned from a general collection of public code that merely includes Charness (section 3.3(b)) make what
+it writes derived, unless the work was asked for as Charness's own approach or solution (for example, to build something
+the way Charness does it); then section 2.3 reaches it as if Charness code were in the model's context. A request is
+never such a request merely because it was sent through Charness, nor is what Charness itself gives an agent, or work
+that only uses, calls, configures or connects to Charness. Code written with a model trained on Charness on purpose
+(section 3.3(a)) is derived only where section 2.3 would reach the same work written by a person who had read Charness's
+code; ordinary code written with such a model stays the user's.
+
+2.5. **Models trained on Charness.** Training or fine-tuning a machine-learning model on Charness code or commits is
+allowed. Section 3.3 says when a model counts as trained on Charness, how such a model may be published, and who pays;
+Part 1 does not make free the selling or offering of such a model.
+
+2.6. **Earlier MIT code.** Code and commits published under the MIT licence (every release before 4.0) stay under MIT;
+sections 2.3, 2.5 and 3.3 do not reach code built on them or a model trained on them alone.
+
+2.7. **Names.** These terms grant no right to the name Charness or the licensor's marks beyond the required notices and
+uses the law allows without permission. Section 3.6(a) adds one limited permission.
+
+## Part 3. Commercial terms
+
+Any use that Part 1 does not make free needs a paid licence under this Part. Prices are in US dollars, per organization
+group, excluding taxes.
+
+3.1. **Organization licence.** One yearly price for the whole organization group, by its size: find the band of R and
+the band of H separately and pay the higher of the two. An upper revenue boundary belongs to the lower band. The licence
+covers the group's internal use with unlimited users, agents, jobs, machines and instances, including unattended runs
+and contractors acting for the group; it is never priced per user or per seat.
+
+| Band | R: revenue plus funding, last 12 months | H: group people | Price per year |
+|---|---|---|---:|
+| Free | up to $500,000 | up to 20 | $0 |
+| Small | over $500,000, up to $2,000,000 | 21–50 | $500 |
+| Growing | over $2,000,000, up to $10,000,000 | 51–250 | $2,000 |
+| Established | over $10,000,000, up to $50,000,000 | 251–1,000 | $6,000 |
+| Large | over $50,000,000, up to $250,000,000 | 1,001–5,000 | $15,000 |
+| Very large | over $250,000,000, up to $1,000,000,000 | 5,001–10,000 | $30,000 |
+| Global | over $1,000,000,000 | over 10,000 | $60,000 |
+
+3.2. **Term and growth.** A licence lasts one year, or two or three years when prepaid (section 3.6(b)), from the start
+date on the invoice or receipt. It covers every version released before or during it. It is yearly, not perpetual:
+without renewal, paid use ends (an independent free right under Part 1 or an MIT release still applies; you keep your
+copies and your output). Ordinary growth during a paid year costs nothing extra; the next renewal uses the latest
+figures and may move up or down a band, or back to free. A merger or acquisition needs a reassessment of the combined
+group within 90 days of completion and the positive difference, prorated for the rest of the term, with overlapping fees
+already paid credited. A wrong initial figure is corrected to the price that was due.
+
+3.3. **Models trained on Charness.** One licence covers Charness and the models trained on it.
+
+(a) A model is trained on Charness on purpose where Charness code or commits were chosen for its training: a fine-tune
+on them, or a training set built or picked to include them. Training done by a group's people, its contractors or anyone
+it engages for it is that group's training. A model made from such a model — further trained, merged, quantized or
+distilled from it — is such a model too. Such a model may be published or offered to others, as open weights or as a
+service, only together with this licence: its weights or its service terms carry its `Required Notice:` lines and this
+file and say that the model was trained on Charness. Whoever uses it, by running its weights or by sending it requests,
+follows the same rules as a user of Charness: the use is free where Part 1 makes it free, and otherwise covered by the
+group's organization licence (section 3.1). A group owes nothing for its use of such a model before it knows, or the
+licensor tells it in writing, that the model was trained on Charness.
+
+(b) A general model that an independent organization trained, not for the group, on a broad collection of public code
+that merely includes Charness: the organization that trained it pays as in (d) while it sells or offers the model. The
+groups that only use it, by sending it requests or by running its weights, owe nothing for it. That stays so when they
+further train it on other data — the group's own data of (c) included, but not sessions that (c) counts under (a) — and
+use, sell or offer the result; that does not make them its trainer.
+
+(c) A model trained on the group's own code, documents or agent sessions is not trained on Charness merely because
+Charness ran those agents and the prompts, skills and tool descriptions it gave them appear in that data. Sessions
+picked in order to teach a model what Charness gave its agents (its prompts, skills, tool descriptions and guidance, or
+how its agents follow them) are a training set picked to include Charness: such a model is trained on Charness on
+purpose, under (a).
+
+(d) A group whose use of Charness is free under Part 1, or that holds its organization licence, owes no second fee for
+using a model trained on Charness. A group that sells or offers to others a model it trained on Charness, under (a) or
+(b), holds its organization licence for its band for every year in which it does so, whatever Part 1 would otherwise
+allow ($0 in the Free band, which needs no order), and pays nothing more if it holds that licence already. The first
+such year begins on the later of the first sale or offer and the day the group knows, or the licensor tells it in
+writing, that the model was trained on Charness. An individual who trains such a model on their own account, not for an
+employer or client, counts, for this section, as an organization group of its own, with its own R and H.
+
+3.4. **Embedded products (OEM).** A product that includes or runs Charness, or supplies its agent orchestration as a
+feature, on premises or hosted, needs a signed OEM addendum before it ships, even at $0. An independently written
+connector or input/output integration that does not supply Charness or its functionality needs no OEM addendum, nor does
+merely using Charness to create output. The yearly OEM amount follows P, the yearly revenue of all of the group's
+products that embed Charness:
+
+| Embedded-product revenue P | OEM amount per year |
+|---|---:|
+| up to $500,000 | $0 |
+| over $500,000, up to $2,000,000 | $2,000 |
+| over $2,000,000, up to $10,000,000 | $6,000 |
+| over $10,000,000, up to $50,000,000 | $15,000 |
+| over $50,000,000, up to $250,000,000 | $30,000 |
+| over $250,000,000 | $60,000 |
+
+The supplier pays the **greater** of its organization licence fee (section 3.1) and the OEM amount, never their sum. Its
+customers may run the embedded component inside that product, only for the product-specific tasks the OEM addendum
+names, without a Charness fee of their own; they may never extract it, use it for other automation or offer it as a
+general-purpose platform. That right survives for on-premises versions they lawfully received, but gives no updates;
+hosted customers need a current supplier agreement. A no-fee OEM term also lasts one year and is renewed in writing.
+
+3.5. **Hosting and resale.** Selling or offering substantially Charness itself as a hosted, managed, rebranded or resold
+service, even through a new interface, API or AI intermediary, needs a separate signed agreement. Each client then needs
+its own free use or licence, which the provider may buy for it. Classroom, learning and genuine research access under
+section 1.3 needs no such agreement; it is no licence for a general-purpose public hosting business. Write to
+charnesshub@gmail.com.
+
+3.6. **Discounts.** Only these two, and only when the invoice or receipt states them. They apply to the organization
+licence fee and to OEM amounts, never to $0.
+
+(a) **Mark, 20 %.** Throughout the term the group shows the "Powered by Charness" mark, with the link the licensor
+supplies, in a product's customer-visible interface or on its public website, reachable without login. For that purpose
+and that term the licensor grants a non-exclusive, non-transferable permission to show the mark, and no other use of the
+name: it may not suggest endorsement or partnership, and never replaces the required notices. The licensor may ask the
+group to change or remove the mark at any time; complying keeps the discount. If the mark is gone and not restored
+within 30 days after notice, the discount for the rest of the term becomes payable, prorated by days; with both
+discounts, that is the difference between the prepaid price and the price with both.
+
+(b) **Prepayment, 15 %.** The group pays a two- or three-year term in advance. Prices stay fixed for the term; the band
+is still checked at each anniversary, and a higher one costs the discounted difference for the remaining years. A lower
+one gives no refund.
+
+Both together multiply: the price times 0.80 times 0.85, that is 68 % of the price. Examples: $500 becomes $400 with the
+mark, $425 prepaid, $340 with both; $6,000 becomes $4,800, $5,100 or $4,080 a year ($12,240 for three prepaid years).
+
+3.7. **How to buy.** A person or an AI agent acting for the organization can follow these steps. An agent may buy on its
+own when the organization lets it spend; the organization is then the buyer and is bound. An order is the organization's
+statement that its sender may bind it. It buys for the whole group (section 4.10), whose figures set the price.
+
+Checkout: none yet (step 3 is by e-mail).
+
+1. Check Part 1 and sections 3.3–3.5. You need nothing and send no order when all three hold: your use is free under
+   Part 1; you sell or offer to others no model you trained on Charness, or your group is in the Free band (section 3.3;
+   using such a model is covered like using Charness); and you neither embed Charness in a product nor offer it to
+   others as a hosted, managed or resold service (running Charness on your own computers or servers for your own work is
+   neither). Embedding it in a product, or offering it as a service, needs its signed agreement first (sections
+   3.4–3.5), even at $0.
+2. Work out the price: your band (section 3.1) from the latest month-end figures, and any discount (section 3.6).
+3. Send an order to charnesshub@gmail.com with: the organization's legal name and country, the organization at the top
+   of its group (section 4.10), its R and H bands, the term (1, 2 or 3 years), the discounts wanted, and the e-mail for
+   the invoice. If you sell or offer a model you trained on Charness (section 3.3), say so.
+4. Pay the invoice you get back.
+5. Keep the paid invoice or its receipt: either is your licence and its proof. There is no key and nothing to install.
+
+3.8. **Refunds.** A full refund within 30 days after any payment, without a reason, once per group in any 12 months;
+after 30 days, prepaid years are not refunded pro rata. How to ask:
+https://olosegres.github.io/charness/commercial/refunds.html. Paid rights end on refund.
+
+3.9. **Not included.** The fee does not include hosting, model or API costs, installation, consulting, training, support
+or any promise of future releases. Third-party services (Anthropic, OpenAI, Telegram, Jira and others) are under their
+own terms; you supply and pay for your own accounts and follow those terms. Individual subscriptions may prohibit
+sharing an account or routing other people's requests through it, and this licence does not authorize bypassing usage
+limits. Anyone may sell services around Charness without a royalty on them.
+
+3.10. **Referrals.** A partner with a separate signed partner agreement earns 20 % of the fees actually collected from a
+new customer it referred, for that customer's first 12 months, excluding taxes, refunds and chargebacks.
+
+## Part 4. General terms and definitions
+
+4.1. **Acceptance.** To get any right under these terms you must agree to them, as obligations and as conditions of your
+rights.
+
+4.2. **Verification.** Organizations, including free ones, keep records that support their R, H, C or P figures for
+three years. There are no licence keys, activation, compliance telemetry or remote shutdown. On a credible discrepancy
+the licensor may first ask for a written certification by an officer or accountant, with 30 days to answer. Only a
+discrepancy still unresolved after that allows a confidential check by an independent professional, at most once in 12
+months, on 30 days' notice, limited to the records that decide eligibility and fees; never code, prompts, credentials,
+customer data or production systems. The licensor pays for the check unless the underpayment exceeds both 10 % of the
+fees due for the reviewed period and USD 1,000; then the organization pays the reasonable documented cost of the check,
+capped at the underpayment recovered. Sufficient redacted accountant confirmations must be accepted. Records seen may be
+used only to settle compliance and are kept confidential, unless the law requires disclosure. Only actual unpaid fees
+are due, never a penalty multiple; an honest error may be corrected, also by a written payment plan agreed with the
+licensor.
+
+4.3. **Violations.** The first time you are told in writing that you broke these terms, your rights continue if you
+comply, and take practical steps to fix past violations, within 32 days. Otherwise your rights end. A verification
+request is not a violation, and the end of a paid term is not a breach. Payment of overdue fees does not create a
+perpetual licence. Accrued payment and refund obligations and the record and verification duties of section 4.2 survive
+the end of your rights.
+
+4.4. **Patent defense.** If you claim in writing that Charness infringes a patent, your patent licence ends at once. If
+an organization you work for, or any member of its group, makes such a claim, your patent licence ends at once for work
+on behalf of that organization or group.
+
+4.5. **No other rights.** You may not sublicense or transfer your rights, except that a paid licence moves with the
+business it belongs to, on written notice. The licensor may transfer these terms and paid licences to a successor of its
+Charness business, on notice. These terms imply no other licences. Fair-use rights are not limited.
+
+4.6. **No warranty, limited liability.** AS FAR AS THE LAW ALLOWS, CHARNESS COMES AS IS, WITHOUT ANY WARRANTY OR
+CONDITION, EXPRESS OR IMPLIED, INCLUDING MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NON-INFRINGEMENT. The
+licensor is not liable for indirect or consequential loss, or loss of profit, data or business, including loss caused by
+an agent; its total liability is limited to the fees you paid in the 12 months before the claim. Nothing limits
+liability that the law does not allow to be limited.
+
+4.7. **Law.** Georgian law governs these terms; the UN Convention on Contracts for the International Sale of Goods does
+not apply. The courts of Tbilisi decide disputes, unless mandatory law says otherwise. If a merchant of record sells a
+licence, its buyer terms govern that purchase and these terms the software rights.
+
+4.8. **Changes and versions.** The licensor may publish new terms; they apply to code published with them, never
+silently to a licence already paid. Any change of these terms gets a new version number, and the text of each version
+stays unchanged at https://github.com/olosegres/charness/blob/license-<version>/LICENSE (this one: license-2.0). A
+renewal at a new price needs 30 days' notice.
+
+4.9. **Notices and signed agreements.** E-mail is written notice: to the licensor at charnesshub@gmail.com, to you at
+the address in your order or the one you last wrote from. A signed OEM addendum, hosting or partner agreement prevails
+over these terms for what it expressly covers. An order the licensor invoices records the term, the discounts granted
+and the price charged. It changes no term of this licence: the licence covers the whole group of section 4.10, whatever
+group the order names, and bands and price are corrected or reassessed under sections 3.2, 3.6(b) and 4.2. Anything else
+needs a document the licensor signs.
+
+4.10. **Definitions.**
+
+- **Charness:** the software, documentation and agent skills the licensor publishes under this licence.
+- **Charness code or commits:** the source and the commit history the licensor publishes for Charness.
+- **Organization:** a company, sole proprietorship, partnership or any body of people working together, incorporated or
+  not.
+- **Organization group (group):** the organization together with every organization that controls it, is controlled by
+  it or is under common control with it, worldwide. **Control** is more than 50 % of the votes or the actual power to
+  direct management, held directly, indirectly or by persons acting together. Reorganizations, split invoices and new
+  subsidiaries do not reset the figures, and an acquired business's figures for the last 12 completed months count,
+  combined pro forma. Shared sovereignty alone does not combine a whole country: an independently administered public
+  institution and the entities it controls form their own group.
+- **R (revenue plus funding):** the group's consolidated gross revenue over the last 12 completed months, plus the
+  investment and commercial-grant funding it received in them: equity, capital contributions, convertible notes, SAFEs,
+  and loans from owners or investors that are not on ordinary market terms; a loan later converted into equity or
+  forgiven counts when converted or forgiven, if not counted before. Ordinary bank loans do not count. Count revenue by
+  consistent accounting, after sales taxes and refunds, before costs; count each amount received once. Convert other
+  currencies at monthly central-bank average rates.
+- **H (group people):** the group's current employees (full- or part-time, including those on leave), working founders,
+  owners and directors, and unpaid people working regularly; plus assigned contractors and agency personnel currently
+  engaged who worked for the group on more than 30 days in the last 12 months. Count identifiable assigned workers in
+  any business function, not a supplier's whole staff merely because the group buys its services. Count every person
+  once. Customers, students, passive investors, AI agents, bots and machines are not people for H.
+- **C (external commercial revenue):** all recognized revenue over the last 12 completed months of the commercial
+  operation of an institution of section 1.3 that uses Charness (paid proprietary development or consulting, product
+  subscriptions, IP licensing, commercial data or services), not merely the revenue attributed to Charness, excluding
+  its core-purpose grants and donations. Connected commercial operations under common institutional control are
+  combined; an operation is not split into small departments to stay under the limit.
+- **P (embedded-product revenue):** the revenue of all the group's products that embed Charness, over the last 12
+  completed months, counting the whole product, after sales taxes and refunds. Include mandatory bundled charges, and
+  split a bundle by standalone selling prices, never by a token product price that hides compulsory setup or services.

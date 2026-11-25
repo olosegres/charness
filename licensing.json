@@ -1,0 +1,88 @@
+{
+  "$comment": "Machine-readable summary of the Charness License for people and AI agents deciding whether a licence is needed and what it costs. LICENSE is the binding text; the repository's tests keep the two in agreement.",
+  "license": "Charness License 2.0",
+  "licenseText": "https://github.com/olosegres/charness/blob/license-2.0/LICENSE",
+  "latestLicenseText": "https://github.com/olosegres/charness/blob/main/LICENSE",
+  "sourceAvailable": true,
+  "openSource": false,
+  "currency": "USD",
+  "free": {
+    "personalUse": true,
+    "organizationGroup": {
+      "maxRevenuePlusFundingUsd": 500000,
+      "maxGroupPeople": 20,
+      "bothRequired": true
+    },
+    "educationAndPublicBenefit": true,
+    "evaluationDaysLessThan": 32,
+    "growthTransitionDays": 90,
+    "earlierMitUsersDays": 90
+  },
+  "organizationLicence": {
+    "rule": "Find the band of R and the band of H separately and pay the higher price.",
+    "perUserOrSeatPricing": false,
+    "bands": [
+      { "name": "Small", "revenuePlusFundingUpToUsd": 2000000, "groupPeopleUpTo": 50, "pricePerYearUsd": 500 },
+      { "name": "Growing", "revenuePlusFundingUpToUsd": 10000000, "groupPeopleUpTo": 250, "pricePerYearUsd": 2000 },
+      { "name": "Established", "revenuePlusFundingUpToUsd": 50000000, "groupPeopleUpTo": 1000, "pricePerYearUsd": 6000 },
+      { "name": "Large", "revenuePlusFundingUpToUsd": 250000000, "groupPeopleUpTo": 5000, "pricePerYearUsd": 15000 },
+      { "name": "Very large", "revenuePlusFundingUpToUsd": 1000000000, "groupPeopleUpTo": 10000, "pricePerYearUsd": 30000 },
+      { "name": "Global", "revenuePlusFundingUpToUsd": null, "groupPeopleUpTo": null, "pricePerYearUsd": 60000 }
+    ]
+  },
+  "derivedCode": {
+    "codeWrittenWithCharnessIsYours": true,
+    "generalModelOutputNotDerived": true,
+    "askingForCharnessApproachIsDerived": true,
+    "purposeTrainedModelOutputDerivedOnlyAsAPersonsWouldBe": true,
+    "terms": "LICENSE 2.3–2.4"
+  },
+  "modelsTrainedOnCharness": {
+    "trainingAllowed": true,
+    "summary": "one licence covers Charness and the models trained on it: a model trained on purpose on Charness is published or offered only with this licence and used under Charness's rules; a group that sells or offers a model it trained on Charness, on purpose or as a general model, needs its organization licence for that, whatever Part 1 allows ($0 in the Free band); the exact terms are LICENSE 2.5 and 3.3",
+    "oneLicenceCoversModels": true,
+    "publishOnlyWithThisLicence": true,
+    "usersFollowCharnessRules": true,
+    "modelsMadeFromSuchAModelAreCovered": true,
+    "noSecondFeeForUsers": true,
+    "sellersAndOfferersNeedTheirBandLicence": true,
+    "generalModelTrainerPays": true,
+    "generalModelUsersExempt": true,
+    "furtherTrainingAGeneralModelOnOtherDataExempt": true,
+    "ownAgentSessionsExempt": true,
+    "pickedOwnSessionsAreTrainingOnPurpose": true,
+    "serviceUsersFollowCharnessRules": true,
+    "usersOweNothingBeforeTheyKnow": true,
+    "runsFromWhenTheGroupKnows": true
+  },
+  "oem": {
+    "rule": "The supplier pays the greater of its organization licence fee and the OEM amount, never their sum.",
+    "bands": [
+      { "embeddedProductRevenueUpToUsd": 500000, "pricePerYearUsd": 0 },
+      { "embeddedProductRevenueUpToUsd": 2000000, "pricePerYearUsd": 2000 },
+      { "embeddedProductRevenueUpToUsd": 10000000, "pricePerYearUsd": 6000 },
+      { "embeddedProductRevenueUpToUsd": 50000000, "pricePerYearUsd": 15000 },
+      { "embeddedProductRevenueUpToUsd": 250000000, "pricePerYearUsd": 30000 },
+      { "embeddedProductRevenueUpToUsd": null, "pricePerYearUsd": 60000 }
+    ]
+  },
+  "discounts": {
+    "poweredByCharnessMarkPercent": 20,
+    "prepaidTwoOrThreeYearsPercent": 15,
+    "combined": "multiply: 0.80 × 0.85 = 68 % of the price"
+  },
+  "refundWithinDays": 30,
+  "telemetry": false,
+  "buy": {
+    "contact": "charnesshub@gmail.com",
+    "checkout": null,
+    "agentsMayBuy": true,
+    "steps": [
+      "Check Part 1 and sections 3.3–3.5. You need nothing and send no order when all three hold: your use is free under Part 1; you sell or offer to others no model you trained on Charness, or your group is in the Free band (section 3.3; using such a model is covered like using Charness); and you neither embed Charness in a product nor offer it to others as a hosted, managed or resold service (running Charness on your own computers or servers for your own work is neither). Embedding it in a product, or offering it as a service, needs its signed agreement first (sections 3.4–3.5), even at $0.",
+      "Work out the price: your band (section 3.1) from the latest month-end figures, and any discount (section 3.6).",
+      "Send an order to charnesshub@gmail.com with: the organization's legal name and country, the organization at the top of its group (section 4.10), its R and H bands, the term (1, 2 or 3 years), the discounts wanted, and the e-mail for the invoice. If you sell or offer a model you trained on Charness (section 3.3), say so.",
+      "Pay the invoice you get back.",
+      "Keep the paid invoice or its receipt: either is your licence and its proof. There is no key and nothing to install."
+    ]
+  }
+}

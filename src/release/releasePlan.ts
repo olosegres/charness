@@ -25,8 +25,8 @@ export const requiredPackFiles = [
   'CHANGELOG.md',
   'README.md',
   'LICENSE',
-  // The paid terms the license points to: a package without them would send a buyer to a file that is not there.
-  'LICENSE-COMMERCIAL.md',
+  // The machine-readable twin of LICENSE that people and agents read to decide whether a licence is needed and what it costs.
+  'licensing.json',
 ];
 const forbiddenPackPathPrefixes = ['src/', 'dist/release/'];
 const forbiddenPackPathFragment = '__tests__';
@@ -39,10 +39,10 @@ const shippedSourceExtension = '.ts';
 const unshippedSourcePrefixes = ['src/__tests__/', 'src/release/'];
 /**
  * Files that ship besides the compiled source: the speech sidecar, the shrinkwrap — a change to it changes what an install gets — and the
- * license texts: a change to the terms a copy is under is a change to what an install gets, and without it a license-only commit would
+ * license text with its machine-readable twin: a change to the terms a copy is under is a change to what an install gets, and without it a license-only commit would
  * count as "nothing shipped" and never be released.
  */
-const shippedExtraPaths = ['stt/gigaam_sidecar.py', 'npm-shrinkwrap.json', 'LICENSE', 'LICENSE-COMMERCIAL.md'];
+const shippedExtraPaths = ['stt/gigaam_sidecar.py', 'npm-shrinkwrap.json', 'LICENSE', 'licensing.json'];
 /** Folders shipped as they are: the skills the bot gives its agents. */
 const shippedExtraPrefixes = ['agent-plugin/'];
 const shippedManifestFields = ['dependencies', 'bin', 'engines', 'files', 'main', 'license'] as const;
@@ -515,4 +515,37 @@ export function getPublishDryRunProblems(npmOutput: string): string[] {
     .split('\n')
     .map((line) => line.trim())
     .filter((line) => droppedManifestMarkers.some((marker) => line.includes(marker)));
+}
+
+/** The Required Notice line of `LICENSE` that names the fixed copy of the licence text: `…: https://github.com/<repo>/blob/<tag>/LICENSE`. */
+const licenseTextNoticePattern = /^Required Notice: Licensed under the .+?: https:\/\/github\.com\/[^/\s]+\/[^/\s]+\/blob\/([^/\s]+)\/LICENSE$/m;
+/** The licence's title line, `# Charness License 2.0`: its version names the fixed-text tag. */
+const licenseTitleVersionPattern = /^# .+ License (\d+(?:\.\d+)*)$/m;
+/** The only tag name a fixed licence URL may name (`license-2.0`): never a branch, never a misspelt tag the release would then create for good. */
+const licenseTagPattern = /^license-\d+(?:\.\d+)*$/;
+const licenseTagPrefix = 'license-';
+
+/**
+ * @description The tag of the fixed copy of the licence text that `LICENSE`'s Required Notice names (`license-2.0` in
+ * `…/blob/license-2.0/LICENSE`); null when the notice names no fixed copy at all.
+ */
+export function getLicenseTextTag(licenseText: string): string | null {
+  return licenseText.match(licenseTextNoticePattern)?.[1] ?? null;
+}
+
+/**
+ * @description Why a release must not ship this `LICENSE`: every copy names its licence by the URL in the Required Notice, so that
+ * URL must name a fixed tag, and a tag of that name already on the remote must hold this very text (a changed licence needs a new
+ * version and a new tag). `tagLicenseText` is the tag's `LICENSE`; null when the remote has no such tag yet, which is no problem:
+ * the release creates and pushes it with the release commit.
+ */
+export function getLicenseTagProblems(licenseText: string, tagLicenseText: string | null): string[] {
+  const tag = getLicenseTextTag(licenseText);
+  if (tag === null) return ['LICENSE has no "Required Notice: Licensed under the … : https://github.com/…/blob/<tag>/LICENSE" line naming a fixed copy of its text'];
+  if (!licenseTagPattern.test(tag)) return [`the Required Notice of LICENSE names "${tag}", not a tag of the form license-<version>`];
+  const titleVersion = licenseText.match(licenseTitleVersionPattern)?.[1];
+  if (titleVersion === undefined) return ['LICENSE has no "# … License <version>" title line to check the tag against'];
+  if (tag !== `${licenseTagPrefix}${titleVersion}`) return [`the Required Notice of LICENSE names "${tag}", but its title's version ${titleVersion} gives ${licenseTagPrefix}${titleVersion}`];
+  if (tagLicenseText !== null && tagLicenseText !== licenseText) return [`tag ${tag} holds another LICENSE text than this commit: a changed licence needs a new version and a new tag`];
+  return [];
 }

@@ -8,6 +8,8 @@
 
 import { describe, test } from 'node:test';
 import * as assert from 'node:assert/strict';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
 import {
   ReleaseError,
   checkHasShippedChange,
@@ -21,6 +23,8 @@ import {
   getNextVersion,
   getPackViolations,
   getPublishDryRunProblems,
+  getLicenseTagProblems,
+  getLicenseTextTag,
   getReleaseBump,
   getReleaseDate,
   getReleaseNotes,
@@ -76,7 +80,7 @@ describe('what ships', () => {
     assert.equal(checkIsShippedPath('agent-plugin/skills/charness-orchestration/SKILL.md'), true, 'a skill-only change is a release change');
     assert.equal(checkIsShippedPath('agent-plugin/.claude-plugin/plugin.json'), true);
     assert.equal(checkIsShippedPath('LICENSE'), true, 'a change of the license is a release change');
-    assert.equal(checkIsShippedPath('LICENSE-COMMERCIAL.md'), true);
+    assert.equal(checkIsShippedPath('licensing.json'), true, 'the licence figures agents read ship with the license');
     assert.equal(checkIsShippedPath('docs/commercial/index.html'), false, 'the commercial pages are the site, not the package');
     assert.equal(checkIsShippedPath('docs/license/1.0.0/index.html'), false);
     assert.equal(checkIsShippedPath('src/__tests__/bot.test.ts'), false);
@@ -109,7 +113,7 @@ describe('what ships', () => {
     assert.equal(checkHasShippedChange(createNetDiff(['package.json'], true)), true);
     assert.equal(checkHasShippedChange(createNetDiff(['package.json'], false)), false);
     assert.equal(checkHasShippedChange(createNetDiff(['README.md', 'LICENSE'])), true);
-    assert.equal(checkHasShippedChange(createNetDiff(['LICENSE-COMMERCIAL.md'])), true);
+    assert.equal(checkHasShippedChange(createNetDiff(['licensing.json'])), true);
   });
 });
 
@@ -182,21 +186,31 @@ describe('the plan of a run', () => {
   test('a commit that changes only the license text or the license field is released — it is not "nothing shipped"', () => {
     const textOnly = createCommit('docs(license): reword a clause', ['LICENSE']);
     assert.deepEqual(plan([textOnly]), { kind: 'release', version: '3.2.1', bump: 'patch' });
-    const commercialOnly = createCommit('docs(license): reword the commercial terms', ['LICENSE-COMMERCIAL.md']);
-    assert.deepEqual(plan([commercialOnly]), { kind: 'release', version: '3.2.1', bump: 'patch' });
+    const figuresOnly = createCommit('docs(license): change a price', ['licensing.json']);
+    assert.deepEqual(plan([figuresOnly]), { kind: 'release', version: '3.2.1', bump: 'patch' });
     const fieldOnly = createCommit('chore: the license field', ['package.json'], { changesShippedManifest: true });
     assert.deepEqual(plan([fieldOnly], { netDiff: createNetDiff(['package.json'], true) }), { kind: 'release', version: '3.2.1', bump: 'patch' });
   });
 
+  test('a new licence version shipped as a feature, with no breaking marker, is an automatic minor release', () => {
+    const licenceCommit = createCommit('feat(license): the licence is one file, with rules for derived code and AI training', ['LICENSE', 'licensing.json', 'package.json', 'CHANGELOG.md'], {
+      body: 'Nothing changes for people who use Charness to write their code, so installs may move to it by themselves.',
+      changesShippedManifest: true,
+    });
+    const fixes = [createCommit('fix(license): a clause', ['LICENSE']), createCommit('docs(license): a page', ['docs/commercial/index.html'])];
+    const automatic = plan([licenceCommit, ...fixes], { netDiff: createNetDiff(['LICENSE', 'licensing.json', 'package.json', 'CHANGELOG.md', 'docs/commercial/index.html'], true) });
+    assert.deepEqual(automatic, { kind: 'release', version: '3.3.0', bump: 'minor' });
+  });
+
   test('the license switch itself — a commit with a BREAKING CHANGE footer over the license files — is never an automatic release', () => {
-    const switchCommit = createCommit('feat(license)!: free for small organizations', ['LICENSE', 'LICENSE-COMMERCIAL.md', 'package.json'], {
+    const switchCommit = createCommit('feat(license)!: free for small organizations', ['LICENSE', 'licensing.json', 'package.json'], {
       body: 'The reason.\n\nBREAKING CHANGE: Charness 4.0 and later are released under the Charness License 1.0.0.',
       changesShippedManifest: true,
     });
-    const automatic = plan([switchCommit], { netDiff: createNetDiff(['LICENSE', 'LICENSE-COMMERCIAL.md', 'package.json'], true) });
+    const automatic = plan([switchCommit], { netDiff: createNetDiff(['LICENSE', 'licensing.json', 'package.json'], true) });
     assert.equal(automatic.kind, 'fail');
     assert.ok((automatic.kind === 'fail' ? automatic.message : '').includes('bump=major'));
-    const dispatched = plan([switchCommit], { netDiff: createNetDiff(['LICENSE', 'LICENSE-COMMERCIAL.md', 'package.json'], true), input: { bump: 'major', force: false } });
+    const dispatched = plan([switchCommit], { netDiff: createNetDiff(['LICENSE', 'licensing.json', 'package.json'], true), input: { bump: 'major', force: false } });
     assert.deepEqual(dispatched, { kind: 'release', version: '4.0.0', bump: 'major' });
   });
 
@@ -521,10 +535,10 @@ describe('the pack check', () => {
     assert.deepEqual(getPackViolations(createListing(goodFiles), '3.3.0'), []);
   });
 
-  test('the license files are required: a package without LICENSE or LICENSE-COMMERCIAL.md is refused', () => {
+  test('the license files are required: a package without LICENSE or licensing.json is refused', () => {
     assert.ok(requiredPackFiles.includes('LICENSE'));
-    assert.ok(requiredPackFiles.includes('LICENSE-COMMERCIAL.md'));
-    assert.deepEqual(getPackViolations(createListing(goodFiles.filter((path) => path !== 'LICENSE-COMMERCIAL.md')), '3.3.0'), ['missing from the package: LICENSE-COMMERCIAL.md']);
+    assert.ok(requiredPackFiles.includes('licensing.json'));
+    assert.deepEqual(getPackViolations(createListing(goodFiles.filter((path) => path !== 'licensing.json')), '3.3.0'), ['missing from the package: licensing.json']);
     assert.deepEqual(getPackViolations(createListing(goodFiles.filter((path) => path !== 'LICENSE')), '3.3.0'), ['missing from the package: LICENSE']);
   });
 
@@ -590,5 +604,40 @@ describe('getPublishDryRunProblems', () => {
 
   test('a clean dry run (notices only) has no problems', () => {
     assert.deepEqual(getPublishDryRunProblems(['npm notice', 'npm notice 📦  probe@1.0.0', '+ probe@1.0.0'].join('\n')), []);
+  });
+});
+
+describe('getLicenseTextTag and getLicenseTagProblems', () => {
+  const noticeLine = 'Required Notice: Licensed under the Charness License 2.0: https://github.com/example/charness/blob/license-2.0/LICENSE';
+  const licenseText = `Required Notice: Copyright 2026 Someone (https://github.com/example/charness)\n${noticeLine}\n\n# Charness License 2.0\n`;
+
+  test('the tag is read from the Required Notice line that names the fixed copy of the text', () => {
+    assert.equal(getLicenseTextTag(licenseText), 'license-2.0');
+    assert.equal(getLicenseTextTag('# A licence with no notice\n'), null);
+  });
+
+  test('a tag on the remote that holds this very text passes', () => {
+    assert.deepEqual(getLicenseTagProblems(licenseText, licenseText), []);
+  });
+
+  test('a tag the remote does not have yet is no problem (the release creates it); a tag holding another text is refused', () => {
+    assert.deepEqual(getLicenseTagProblems(licenseText, null), []);
+    assert.match(getLicenseTagProblems(licenseText, `${licenseText}changed\n`)[0], /tag license-2\.0 holds another LICENSE text/);
+  });
+
+  test('a notice naming a branch, a misspelt tag or a tag of another version, or no fixed copy at all, is refused', () => {
+    assert.match(getLicenseTagProblems(licenseText.replace('blob/license-2.0/', 'blob/main/'), null)[0], /names "main", not a tag of the form license-<version>/);
+    assert.match(getLicenseTagProblems(licenseText.replace('blob/license-2.0/', 'blob/develop/'), null)[0], /names "develop", not a tag of the form/);
+    assert.match(getLicenseTagProblems(licenseText.replace('blob/license-2.0/', 'blob/licence-2.0/'), null)[0], /names "licence-2\.0", not a tag of the form/);
+    assert.match(getLicenseTagProblems(licenseText.replace('blob/license-2.0/', 'blob/license-2.1/'), null)[0], /names "license-2\.1", but its title's version 2\.0 gives license-2\.0/);
+    assert.match(getLicenseTagProblems(licenseText.replace('# Charness License 2.0', '# Charness License'), null)[0], /no "# … License <version>" title line/);
+    assert.match(getLicenseTagProblems('# A licence with no notice\n', null)[0], /has no "Required Notice: Licensed under the/);
+  });
+
+  test("the repository's own LICENSE names a fixed tag", () => {
+    const ownLicense = fs.readFileSync(path.resolve(__dirname, '..', '..', 'LICENSE'), 'utf8');
+    const tag = getLicenseTextTag(ownLicense);
+    assert.notEqual(tag, null);
+    assert.deepEqual(getLicenseTagProblems(ownLicense, null), [], 'the notice names license-<the title\'s version>');
   });
 });

@@ -267,8 +267,8 @@ publish, no tag, no push, the run is red; the next day's run tries again by itse
   it checks the tarball's sha256 and publishes THAT file, `npm publish <tarball> --provenance`) → `release` (the only job that can
   write: `commit-release --prepare --tarball` makes the release commit — the tested commit plus `package.json`,
   `npm-shrinkwrap.json` and `CHANGELOG.md` taken out of the very tarball npm has (npm packs them byte for byte) —, the tag and
-  the merge with a moved `main`, locally and without the token; then a plain `git push --atomic` of `main` and the tag, and the
-  GitHub Release. Its checkout keeps no credentials; the token is in the environment of the push step (git only) and the Release
+  the merge with a moved `main`, locally and without the token; then a plain `git push --atomic` of `main`, the tag and,
+  when GitHub has none yet, `license-<version>`, and the GitHub Release. Its checkout keeps no credentials; the token is in the environment of the push step (git only) and the Release
   step (`gh`) alone. A step is not a boundary against code that ran earlier in the same job — such a process runs as the same
   user and could read a later step's environment —, so what runs there is pinned by hash: Yarn by `packageManager`
   (`yarn@4.9.2+sha512.…`, which corepack checks), its packages by `yarn.lock`, the actions by commit). Every job but `test` installs
@@ -297,7 +297,8 @@ publish, no tag, no push, the run is red; the next day's run tries again by itse
        `npm pack charness@X.Y.Z`, then `yarn tsx src/release/cli.ts commit-release X.Y.Z --tarball charness-X.Y.Z.tgz --base <SHA>`
        (`--remote <name>` when GitHub is not your `origin`)
        — it commits that commit plus the tarball's version files and nothing else, merges `main` and pushes; a real conflict
-       with `main` is resolved by hand, then push `main` and the tag —, and `yarn tsx src/release/cli.ts notes X.Y.Z > notes.md`,
+       with `main` is resolved by hand, then push `main`, the tag and the `license-<version>` tag it created
+       (`git tag --list 'license-*'`) —, and `yarn tsx src/release/cli.ts notes X.Y.Z > notes.md`,
        `gh release create vX.Y.Z --verify-tag --title vX.Y.Z --notes-file notes.md`.
   - A version with no release run — published by hand, or its tag only on another remote (a clone whose `origin` is not
     GitHub) — stops the runs the same way: push its `vX.Y.Z` tag to GitHub.
@@ -329,7 +330,7 @@ publish, no tag, no push, the run is red; the next day's run tries again by itse
   major is released only by dispatching the workflow with `bump=major`.
 - **Nothing to release** (green, nothing tagged): no commits since the last tag, `HEAD` already tagged, or no shipped
   path in the net diff from the tag — `src/**/*.ts` outside `src/__tests__` and `src/release`, `stt/gigaam_sidecar.py`,
-  `npm-shrinkwrap.json`, `LICENSE`, `LICENSE-COMMERCIAL.md`, everything under `agent-plugin/`, and `package.json` only when
+  `npm-shrinkwrap.json`, `LICENSE`, `licensing.json`, everything under `agent-plugin/`, and `package.json` only when
   `dependencies`, `bin`, `engines`, `files`, `main` or `license` differ. A docs-only or tests-only day, or a change and its
   revert, publishes nothing; README / SETUP changes reach the npm page with the next code release. A change to the license
   texts or the `license` field does count: it is a release (`releasePlan.ts` is the source of truth for both lists).
@@ -345,9 +346,18 @@ publish, no tag, no push, the run is red; the next day's run tries again by itse
   paragraph or `- ` bullet, in any `###` subsection — starts with a bold first sentence (`**…**`); the run fails,
   quoting the line, otherwise (`changelogFormat.test.ts` fails first on a commit that breaks it). An empty
   `## Unreleased` is filled with the `feat` / `fix` subjects.
+- **The licence's fixed tag.** `LICENSE`'s second Required Notice line names the fixed copy of its text,
+  `https://github.com/olosegres/charness/blob/license-<version>/LICENSE`, and every copy names its licence by it. Nobody
+  tags it by hand: the release creates `license-<version>` on the release commit when GitHub has no such tag yet and
+  pushes it with `main` and the `v*` tag (a hand-pushed `v*` tag's run creates and pushes it too). Before anything is
+  published, `yarn tsx src/release/cli.ts check-license-tag` refuses a notice that names anything but
+  `license-<version>` for the version in the title `# Charness License <version>`, and a `license-<version>` tag already
+  on GitHub that holds another `LICENSE` text than the release: a commit that changes the
+  terms gives the licence a new version (title, notice, `licensing.json`). Run by hand against another remote with
+  `--remote <name>`.
 - **Package check** before anything is published: the tarball holds `package.json`, `dist/cli.js`, `stt/gigaam_sidecar.py`,
   `runner-scripts/runner-package-lock.json`, `runner-scripts/ensureNode.sh`, `npm-shrinkwrap.json`, the agent plugin's manifest and
-  orchestration skill, `CHANGELOG.md`, `README.md`, `LICENSE`, `LICENSE-COMMERCIAL.md` (`requiredPackFiles`) and no `src/` or tests, and installed the way a user installs it — `npm install -g`
+  orchestration skill, `CHANGELOG.md`, `README.md`, `LICENSE`, `licensing.json` (`requiredPackFiles`) and no `src/` or tests, and installed the way a user installs it — `npm install -g`
   from a loopback registry that serves the tarball and marks its shrinkwrap, as the npm registry does (an install of the
   tarball FILE ignores the shrinkwrap), dependencies passed on to the real registry — `charness --version` prints the new
   version and every package sits at the version the shrinkwrap pins (`yarn tsx src/release/cli.ts check-pack`, after

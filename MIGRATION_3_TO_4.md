@@ -1,5 +1,8 @@
 # Migrating from 3.x to 4.0
 
+> This guide describes the change made by 4.0.0 and the Charness License 1.0.0 it introduced. The licence of the current
+> code, with its prices and how to buy, is the repository's [LICENSE](LICENSE); a copy keeps the licence file it came with.
+
 Charness 4.0 changes the **license**. The commands, the settings and the way you run the bot are the same; what changes
 is what you may do with the software and who pays for it.
 
@@ -9,8 +12,8 @@ retroactively, and you may keep running it for as long as you like.
 
 ## What changed
 
-- 4.0 and later are under the [Charness License 1.0.0](LICENSE) — **source-available, not open source**. It is PolyForm
-  Small Business 1.0.0 with its "small business" grant replaced by the terms below.
+- 4.0.0 moved Charness to the [Charness License 1.0.0](https://github.com/olosegres/charness/blob/v4.2.0/LICENSE) — **source-available, not
+  open source**. It is PolyForm Small Business 1.0.0 with its "small business" grant replaced by the terms below.
 - Charness stays **free** for:
   - personal use — hobby projects and study;
   - any organization group whose **revenue plus funding** (R) is at most **$500,000** AND whose **people** (H) are at most
@@ -44,10 +47,10 @@ The fee is the **higher** of the revenue band and the people band:
 - **The group is every company under common control**, worldwide — not a department. One operator in a 300-person group
   pays for the group.
 - Two optional discounts, together 32% off: 20% for showing a "Powered by Charness" mark, 15% for prepaying 2 or 3 years.
-- Buying is by e-mail: charnesshub@gmail.com, see the [commercial page](https://olosegres.github.io/charness/commercial/)
-  and the [commercial terms](LICENSE-COMMERCIAL.md). Full refund within 30 days.
+- Buying is by e-mail: charnesshub@gmail.com; see the [commercial terms 1.0.0](https://github.com/olosegres/charness/blob/v4.2.0/LICENSE-COMMERCIAL.md) and, for the
+  current terms, [LICENSE](LICENSE). Full refund within 30 days.
 
-More cases, and what counts in R and H: the [licensing FAQ](docs/licensing-faq.md).
+More cases, and what counts in R and H, as written for 1.0.0: the [licensing FAQ](https://github.com/olosegres/charness/blob/v4.2.0/docs/licensing-faq.md).
 
 ## What you have to do
 
