@@ -151,8 +151,10 @@ export interface SessionTurnProbe {
  * 6 h the json-stream adapter lets that work hold the process after its last turn (`utils/jsonStreamPendingWork.ts`). The adapter
  * counts from ANY turn end, so work that renews itself — a recurring `CronCreate`, a `ScheduleWakeup` re-armed at every wake — keeps
  * its process for as long as it loops. The request counts from its own activity, which a turn the CLI starts by itself never is
- * (upstream's rule for the backstop): such work cannot renew the hold. Past it the turn is decided like any other — a stall, so the
- * nudge, and the give-up at the next — which bounds a request a loop would keep open for good.
+ * (upstream's rule for the backstop), and neither is a progress note (the owner's decision: a loop that posts notes would hold the
+ * request for good, unseen — a note edits one comment and notifies nobody): such work cannot renew the hold. Past it the turn is
+ * decided like any other — a stall, woken as `ownWorkHoldLapsed`, and the give-up at the next — which bounds a request a loop would
+ * keep open for good.
  */
 export const ownWorkHoldMaxMs = pendingWorkHoldDefaultMs;
 
@@ -236,10 +238,10 @@ export interface TurnEndContext {
   /** The conversation's rule set; absent: a topic's. */
   rules?: WakeUpRuleSet;
   /**
-   * The agent's own pending work at this turn end (a tracker's rules): `ended` — it held the turn open and ended by itself, so the agent
-   * arranged what woke it and a stall here is the first in a row again; `pending` — it still runs, so the hold no longer applies (the
-   * request owes an answer, or {@link ownWorkHoldMaxMs} lapsed): the stall count goes on, and a wake for the lapse says nothing has
-   * been seen working on the request (`backstop`), not that nothing is running. Absent: none.
+   * The agent's own pending work at this turn end (a tracker's rules): `ended` — the watch saw it (pending, or a turn the CLI started
+   * by itself) and it ended by itself, so the agent arranged what woke it and a stall here is the first in a row again; `pending` — it still runs, so the hold no longer applies (the
+   * request owes an answer, or {@link ownWorkHoldMaxMs} lapsed): the stall count goes on, and a wake for the lapse says the hold ran
+   * out (`ownWorkHoldLapsed`), not that nothing is running. Absent: none.
    */
   ownWork?: 'ended' | 'pending';
 }
@@ -335,7 +337,7 @@ export function decideTurnEnd(
  * `ownWork` ({@link TurnEndContext}): `ended` starts the count again, and with nothing owed the end is the nudge's case whether or not
  * the turn the work started sent a note — the agent had answered before it, a note held the turn open (a restart's re-watch counts
  * notes only from the restart: without this its end would read as silence); `pending` with nothing owed is the lapsed hold, woken as
- * `backstop`.
+ * `ownWorkHoldLapsed`.
  */
 function decideTrackerStall(request: OpenRequestState, nowMs: number, isProgressSent: boolean, ownWork: TurnEndContext['ownWork']): WakeUpDecision {
   const isOwed = checkIsAnswerOwed(request);
@@ -348,7 +350,7 @@ function decideTrackerStall(request: OpenRequestState, nowMs: number, isProgress
   }
   const wakeCount = isProgressSent ? 0 : request.wakeCount;
   const isHoldLapsed = ownWork === 'pending' && !isOwed;
-  const reason: RequestWakeUpReason = isHoldLapsed ? 'backstop' : isAnsweredStall ? 'nothingArmed' : 'silentTurn';
+  const reason: RequestWakeUpReason = isHoldLapsed ? 'ownWorkHoldLapsed' : isAnsweredStall ? 'nothingArmed' : 'silentTurn';
   return getWakeOrCapDecision({ ...request, wakeCount }, reason, {
     silentTurnCount,
     stalledTurnCount,

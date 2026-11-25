@@ -197,6 +197,8 @@ export type RequestAnswerKind = 'progress' | 'question' | 'final';
  *  - `nothingArmed` — a tracker's rules: its turn ended with a progress note while nothing is set to wake it (no job under the
  *    request, or only a watch that fired; none of its own background work running): the one nudge, sent at once, in place of a
  *    follow-up on a clock.
+ *  - `ownWorkHoldLapsed` — a tracker's rules: the agent's own background work held the request for the whole bound (6 h) since
+ *    its last prompt or reminder, and still runs: a stall (its notes do not extend the bound).
  *  - `backstop` — nothing was seen working on it for the backstop window (a dead
  *    process, or tracking lost across a restart).
  *  - `postRetry` — the request's prompt could not be posted; tried again soon
@@ -205,7 +207,7 @@ export type RequestAnswerKind = 'progress' | 'question' | 'final';
  *    back without it, or it died with its own work pending) while the request was
  *    open: woken at once instead of at the backstop.
  */
-export type RequestWakeUpReason = 'silentTurn' | 'progressFollowUp' | 'nothingArmed' | 'backstop' | 'postRetry' | 'restarted';
+export type RequestWakeUpReason = 'silentTurn' | 'progressFollowUp' | 'nothingArmed' | 'ownWorkHoldLapsed' | 'backstop' | 'postRetry' | 'restarted';
 
 /**
  * @name RequestAlertReason

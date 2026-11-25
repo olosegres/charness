@@ -135,7 +135,7 @@ describe('agent-plugin', () => {
     assert.match(section, /Nothing reminds you on a clock\. A turn that ends with the request open, a `progress` note sent and nothing set to wake you \(no watch or job under it, no background work of yours running\) gets ONE nudge from the bot;/);
     assert.match(section, /if your next turn ends the same way — another note, or silence — the request is given up: the issue gets a comment that you stopped, and a hand-over goes back to its requester\./);
     assert.match(section, /So end a turn with kind `final`, with `question`, or with a watch armed for what you wait on\./);
-    assert.match(section, /Your own background work holds the request for at most 6 hours, and never while a requester's comment waits for your answer\./);
+    assert.match(section, /Your own background work holds the request for at most 6 hours from your last prompt or reminder \(your own turns and notes do not extend it\), and never while a requester's comment waits for your answer\./);
   });
 
   test('charness-orchestration lets a scheduled run\'s header that asks for an answer only with a result go unanswered — a woken agent with nothing to report ends silently, in a topic too', () => {

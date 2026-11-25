@@ -119,8 +119,20 @@ describe('buildWakeUpReminder', () => {
     assert.equal(lines.length, 4);
   });
 
+  it('the lapse of a tracker request\'s hold by the agent\'s own work: its own line — 6 hours since the last prompt or reminder, notes do not extend it — not the backstop\'s «nothing seen working on it» (review 3 #1)', () => {
+    const lines = buildWakeUpReminder({ requestId: 'req_AbCd1234', reason: 'ownWorkHoldLapsed' }).split('\n');
+    assert.equal(lines[0], '[Reminder · request req_AbCd1234 is still open]');
+    assert.equal(lines[1], 'Your own background work has held it for 6 hours since your last prompt or reminder; your notes do not extend that.');
+    assert.equal(lines[2], 'Answer it with answer_request (requestId "req_AbCd1234"): kind "final" if the work is done, "question" if you need the requester. ' +
+      'If you still wait on a run, arm a watch for it (schedule_create with a checkCommand) — a watch holds the request for as long as ' +
+      'it passes — say in a "progress" note what you wait for and when it should end, and end your turn. If the next ' +
+      '6 hours pass the same way, you are taken to have stopped: the requester is told and it is given up.');
+    assert.equal(lines[3], answerStyleInstruction);
+    assert.equal(lines.length, 4);
+  });
+
   it('every reason\'s reminder carries the style sentence, and a request\'s own prompt (not a reminder) is forwarded untouched', () => {
-    for (const reason of ['silentTurn', 'progressFollowUp', 'nothingArmed', 'backstop', 'postRetry', 'restarted'] as const) {
+    for (const reason of ['silentTurn', 'progressFollowUp', 'nothingArmed', 'ownWorkHoldLapsed', 'backstop', 'postRetry', 'restarted'] as const) {
       assert.ok(buildWakeUpReminder({ requestId: 'req_AbCd1234', reason }).includes(answerStyleInstruction), reason);
     }
     const reminder = getWakeUpMessage(createOpenRequest('req_1', undefined, undefined), 'backstop');

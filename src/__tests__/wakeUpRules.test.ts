@@ -612,13 +612,13 @@ describe('a tracker\'s rules: no reminder on a clock — a progress note with no
     assert.equal(checkIsWatchedTurnStale(longAgo, waitingOnOwnWork, nowMs, backstopMs, 'topic'), true);
   });
 
-  it('the turn end after a hold by the agent\'s own work: work that ended by itself starts the stall count again; a hold that lapsed with it still running is a stall, woken as the backstop; an owed answer is the silent-turn wake', () => {
+  it('the turn end after a hold by the agent\'s own work: work that ended by itself starts the stall count again; a hold that lapsed with it still running is a stall, woken with the lapse\'s own reason; an owed answer is the silent-turn wake', () => {
     const nudged = createRequest({ progressAnswerCount: 2, stalledTurnCount: 1 });
     const fresh = decideTurnEnd(nudged, 1, nowMs, { ...tracker, ownWork: 'ended' });
     assert.equal(fresh.kind === 'wake' ? fresh.reason : null, 'nothingArmed', 'its work ended by itself: nudged again, not given up');
     assert.equal(fresh.kind === 'wake' ? fresh.update.stalledTurnCount : null, 1);
     const lapsed = decideTurnEnd(createRequest({ progressAnswerCount: 2 }), 1, nowMs, { ...tracker, ownWork: 'pending' });
-    assert.equal(lapsed.kind === 'wake' ? lapsed.reason : null, 'backstop', 'its work still runs: «nothing seen working on it», not «nothing running»');
+    assert.equal(lapsed.kind === 'wake' ? lapsed.reason : null, 'ownWorkHoldLapsed', 'its work still runs: the hold lapsed, not «nothing running»');
     assert.equal(lapsed.kind === 'wake' ? lapsed.update.stalledTurnCount : null, 1);
     const lapsedAgain = decideTurnEnd(createRequest({ progressAnswerCount: 2, stalledTurnCount: 1 }), 2, nowMs, { ...tracker, ownWork: 'pending' });
     assert.equal(lapsedAgain.kind === 'alert' ? lapsedAgain.reason : null, 'silentTurns', 'a loop that keeps running is given up at the next lapse');

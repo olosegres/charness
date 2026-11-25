@@ -377,8 +377,8 @@ update into the resumed session; while a turn runs it waits up to 10 minutes for
   probe's `hasOwnPendingWork` from the json-stream adapter's background signals): no nudge and no give-up while it runs, a bot restart
   included (the sweep watches the request again), and the turn that work's end starts is decided when it ends. Never while the
   requester is owed an answer — a first turn that said nothing, a comment left unanswered — which is prodded as with a bot watch; and at
-  most 6 h past the request's last activity (the agent's own turns are none), so a loop of its own is woken then (`backstop`) and given
-  up at the next lapse. A turn that ends with the request open, a progress note sent and NOTHING set to wake
+  most 6 h past the request's last prompt or reminder (the agent's own turns and its notes do not extend it), so a loop of its own is
+  woken then with its own line (`ownWorkHoldLapsed`: arm a watch for a run still awaited) and given up at the next lapse. A turn that ends with the request open, a progress note sent and NOTHING set to wake
   the agent — no watch or job under the request (or only a watch that fired and was not re-armed) and none of its own work running — gets
   ONE nudge at once instead of the topic's follow-up 15 minutes later («nothing reminds you on a clock»: finish, ask, or arm a watch for
   what you wait on, `requestHeader.ts` `nothingArmed`); the next such turn end in a row — another note, or silence — is the give-up:

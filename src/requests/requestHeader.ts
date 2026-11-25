@@ -1,6 +1,7 @@
 import { answerStyleInstruction } from './answerStyle';
 import { refreshStoredPrompt } from './storedPromptRefresh';
 import type { OpenRequestState, RequestWakeUpReason } from './types';
+import { ownWorkHoldMaxMs } from './wakeUpRules';
 
 /**
  * @description The per-request header that rides inside the prompt text of every
@@ -73,12 +74,17 @@ export function buildRequestHeader(options: RequestHeaderOptions): string {
   return `${lines.join('\n')}\n\n`;
 }
 
+/** The bound of the agent's own work's hold is said in hours. */
+const msPerHour = 60 * 60 * 1000;
+
 /** What the reminder tells the agent, per wake-up reason. */
 const wakeUpReasonLines: Readonly<Record<RequestWakeUpReason, string>> = {
   silentTurn: 'Your last turn ended without answering it.',
   progressFollowUp: 'Some time has passed since your last progress note on it.',
   nothingArmed: 'Your last turn ended with it still open and nothing set to wake you again: no job under it (or only a watch that ' +
     'already fired) and no background work of yours running. Nothing reminds you on a clock.',
+  ownWorkHoldLapsed: `Your own background work has held it for ${ownWorkHoldMaxMs / msPerHour} hours since your last prompt or reminder; ` +
+    'your notes do not extend that.',
   backstop: 'Nothing has been seen working on it for a long time (the session may have restarted).',
   postRetry: 'It could not be delivered to you earlier.',
   restarted: 'Your session ended and was resumed while you were working on it (the bot or your process restarted); carry on.',
@@ -160,6 +166,12 @@ export function getWakeUpMessage(request: OpenRequestState, reason: RequestWakeU
 
 /** What the reminder asks for: the nudge of a tracker request nothing is armed to wake says how to wait; a watch still armed asks only for what matters. */
 function getWakeUpAnswerLine(options: { requestId: string; reason: RequestWakeUpReason; isAnswerOptional?: boolean }): string {
+  if (options.reason === 'ownWorkHoldLapsed') {
+    return `Answer it with answer_request (requestId "${options.requestId}"): kind "final" if the work is done, "question" if you need the requester. ` +
+      'If you still wait on a run, arm a watch for it (schedule_create with a checkCommand) — a watch holds the request for as long as ' +
+      'it passes — say in a "progress" note what you wait for and when it should end, and end your turn. If the next ' +
+      `${ownWorkHoldMaxMs / msPerHour} hours pass the same way, you are taken to have stopped: the requester is told and it is given up.`;
+  }
   if (options.reason === 'nothingArmed') {
     return `Finish it with answer_request (requestId "${options.requestId}"): kind "final" if the work is done, "question" if you need the requester. ` +
       'If you wait on a worker or a run, arm a watch for it (schedule_create with a checkCommand), say in a "progress" note what you wait for ' +

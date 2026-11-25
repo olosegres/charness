@@ -136,11 +136,12 @@ interface WatchedRequestTurn extends WatchedTurn {
    */
   ownForwardStartedAt?: number;
   /**
-   * A tracker's turn the agent's own pending work held open (`checkIsHeldByOwnWork`) at some poll: its end, with nothing of its own
+   * A tracker's watch that saw the agent's own work ({@link noteOwnWorkSeen}): pending at a poll or a settle — a turn end the work held
+   * open, or a turn running beside it — or a turn the CLI started by itself (that work woke it). Its end, with nothing of its own
    * pending, is the end of work that ended by itself (`TurnEndContext.ownWork` `ended`), and the CLI's own turns inside it are not the
-   * request's activity. A merge keeps it.
+   * request's activity — however soon the work ended after the turn that started it, before or between the polls. A merge keeps it.
    */
-  hasHeldOnOwnWork?: boolean;
+  hasSeenOwnWork?: boolean;
 }
 
 interface WatchedAnswerTail {
@@ -172,6 +173,16 @@ function checkIsPromptTakenInNow(turn: WatchedTurn, probe: SessionTurnProbe): bo
 /** Whether a request prompt waits in a start's or a stop's window (no process named yet): that window's end delivers or drops it. */
 function checkIsPromptWaitingInWindow(turn: WatchedTurn, probe: SessionTurnProbe): boolean {
   return turn.isRequestPrompt && turn.writtenToProcess === undefined && probe.isWindowOpen === true;
+}
+
+/**
+ * Marks a tracker's watch that sees the agent's own work now (`WatchedRequestTurn.hasSeenOwnWork`): pending, or a turn the CLI started
+ * by itself — that work woke it. Read at every poll AND every settle (the adapter's turn end): a short command that ends, and starts its
+ * turn, inside one poll interval is still seen at the turn end it held open, or in the turn it started. Never under a topic's rules.
+ */
+function noteOwnWorkSeen(turn: WatchedRequestTurn, probe: SessionTurnProbe, rules: WakeUpRuleSet): void {
+  if (rules !== 'tracker') return;
+  if (probe.hasOwnPendingWork === true || (probe.isBusy && probe.isCliOwnTurn === true)) turn.hasSeenOwnWork = true;
 }
 
 export class RequestWakeUpEngine {
@@ -447,7 +458,7 @@ export class RequestWakeUpEngine {
       isRequestJob,
       isOwnForward,
       ...(ownForwardStartedAt === undefined ? {} : { ownForwardStartedAt }),
-      ...(previous?.hasHeldOnOwnWork === true ? { hasHeldOnOwnWork: true } : {}),
+      ...(previous?.hasSeenOwnWork === true ? { hasSeenOwnWork: true } : {}),
       ...(writtenToProcess === undefined ? {} : { writtenToProcess }),
     });
     // A fire RIDING the request carries none of its prompt; the fire that opened the scheduler's request carries its own.
@@ -676,7 +687,9 @@ export class RequestWakeUpEngine {
         continue;
       }
       if (probe.isBusy) turn.hasSeenBusy = true;
-      const isHeldByOwnWork = checkIsHeldByOwnWork(request, probe, this.getRules(key), this.now());
+      const rules = this.getRules(key);
+      noteOwnWorkSeen(turn, probe, rules);
+      const isHeldByOwnWork = checkIsHeldByOwnWork(request, probe, rules, this.now());
       if (getWatchedTurnState(turn, probe, isHeldByOwnWork) !== 'ended') {
         // A turn still running, or held, may have taken its prompt in already: marked now (R21), as the poll would. The process that took
         // it may be gone before the poll's next tick — a deferred account switch re-spawns it one timer tick after the turn's end, the
@@ -793,7 +806,7 @@ export class RequestWakeUpEngine {
       progressFollowUpMs: this.deps.progressFollowUpMs,
       rules: this.getRules(turn.key),
       // Still pending: the hold no longer applies (an owed answer, or it lapsed). Gone after a hold: it ended by itself.
-      ...(probe.hasOwnPendingWork === true ? { ownWork: 'pending' as const } : turn.hasHeldOnOwnWork === true ? { ownWork: 'ended' as const } : {}),
+      ...(probe.hasOwnPendingWork === true ? { ownWork: 'pending' as const } : turn.hasSeenOwnWork === true ? { ownWork: 'ended' as const } : {}),
     });
   }
 
@@ -834,19 +847,17 @@ export class RequestWakeUpEngine {
     // Settled by a forward, or replaced by a new watch, during that write: the watch present now decides, not this one.
     if (this.watched.get(turn.requestId) !== turn) return;
     const rules = this.getRules(turn.key);
+    noteOwnWorkSeen(turn, probe, rules);
     const isHeldByOwnWork = checkIsHeldByOwnWork(request, probe, rules, this.now());
     const turnState = getWatchedTurnState(turn, probe, isHeldByOwnWork);
     if (turnState === 'running') {
       if (probe.isBusy) {
         // Another job's fire that only rides the request keeps the session busy for its own work, not for this request's — and so does
         // any turn while this request's prompt has reached no process (`checkIsPromptNeverWritten`): that busy time is another turn's.
-        // Inside a hold by the agent's own work, a turn the CLI started by itself (that work's, a loop's fire) is no activity either:
-        // counted, a self-renewing job would renew the hold it bounds (`ownWorkHoldMaxMs`).
-        const isOwnWorkTurn = turn.hasHeldOnOwnWork === true && probe.isCliOwnTurn === true;
+        // A tracker's turn the CLI started by itself (the agent's own work's, a loop's fire) is no activity either: counted, a
+        // self-renewing job would renew the hold it bounds (`ownWorkHoldMaxMs`).
+        const isOwnWorkTurn = turn.hasSeenOwnWork === true && probe.isCliOwnTurn === true;
         if (turn.isRequestJob !== false && !checkIsPromptNeverWritten(turn, probe) && !isOwnWorkTurn) await this.recordTurnActivity(request, false);
-      } else if (isHeldByOwnWork) {
-        // The agent's turn ended leaving its own work running: held open until that work's own turn ends (or the hold lapses).
-        turn.hasHeldOnOwnWork = true;
       } else if (checkIsWatchedTurnStale(request, probe, this.now(), this.deps.backstopMs, rules)) {
         // Its end can no longer be seen: the sweep's backstop takes the request over.
         this.watched.delete(turn.requestId);
@@ -900,9 +911,11 @@ export class RequestWakeUpEngine {
   }
 
   /**
-   * A tracker request nobody watches whose turn the agent's own pending work holds open — a restart dropped the watch that held it:
-   * watch it again, so the turn that work starts by itself is decided when it ends, not left to the backstop. Not while its prompt waits
-   * for a post retry (that forward is watched: the sweep's decision runs it), nor once nothing may wake it. `true` — it is watched now.
+   * ANY tracker request of the conversation nobody watches while the agent's own pending work holds it (`checkIsHeldByOwnWork`) — a
+   * restart dropped the watch that held it, or the work is another request's (one request's work holds every open request of the
+   * conversation that owes nobody an answer; the work's end nudges each one left open with nothing armed): watch it, so the turn that
+   * work starts by itself is decided when it ends, not left to the backstop. Not while its prompt waits for a post retry (that forward
+   * is watched: the sweep's decision runs it), nor once nothing may wake it. `true` — it is watched now.
    */
   private watchTurnOfOwnWork(key: SessionKey, request: OpenRequestState, probe: SessionTurnProbe): boolean {
     if (!probe.isActive || request.nextPostRetryAt !== undefined || checkIsWakingStopped(request)) return false;
@@ -914,7 +927,7 @@ export class RequestWakeUpEngine {
       hasSeenOutput: false,
       isRequestPrompt: false,
       isOwnForward: false,
-      hasHeldOnOwnWork: true,
+      hasSeenOwnWork: true,
     });
     return true;
   }

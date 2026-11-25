@@ -143,7 +143,8 @@ arguments only mark it as a worker watch.
   (no watch or job under it, no background work of yours running) gets ONE nudge from the bot; if your next turn ends the same
   way — another note, or silence — the request is given up: the issue gets a comment that you stopped, and a hand-over goes back
   to its requester. So end a turn with kind `final`, with `question`, or with a watch armed for what you wait on. Your own
-  background work holds the request for at most 6 hours, and never while a requester's comment waits for your answer.
+  background work holds the request for at most 6 hours from your last prompt or reminder (your own turns and notes do not
+  extend it), and never while a requester's comment waits for your answer.
 - At a wake read the worker's result first and decide as above; never give a `final` answer with a run you have not read.
   Answer the request the header names (`answer_request` with that id) only with a result the requester needs — a
   milestone, the final answer. A wake you handled with nothing to report ends
