@@ -3233,11 +3233,82 @@ describe('a tracker\'s rules: no reminder on a clock — a progress note with no
     await deliverProgress(ledger, request.id);
     probe = { ...probe, isBusy: false, hasOwnPendingWork: true };
     await engine.pollWatchedTurns();
-    assert.equal(ledger.getOpenRequestById(request.id)?.request.stalledTurnCount, undefined, 'it arranged what wakes it');
+    assert.deepEqual(getWakeUpReasons(), ['nothingArmed'], 'held while its work runs');
 
+    // That work ends by itself; the turn it starts ends with a note and nothing pending: a stall that is the first in a row again.
     await runTurn(engine, () => deliverProgress(ledger, request.id));
     assert.deepEqual(getWakeUpReasons(), ['nothingArmed', 'nothingArmed']);
     assert.deepEqual(alerts, []);
+  });
+
+  it('an answer owed outranks the agent\'s own work: a first turn that ends without a word while its background poll runs is prodded at once', async () => {
+    const ledger = await createLedger();
+    const engine = createEngine(ledger, trackerRules);
+    const request = await ledger.createRequest(issueKey, handOver);
+    await engine.trackForwardedTurn(issueKey, request.id, { isRequestPrompt: true });
+    probe = { isActive: true, isBusy: true, hasUnconsumedInput: false, isTurnEndBlocked: false };
+    await engine.pollWatchedTurns();
+    probe = { ...probe, isBusy: false, hasOwnPendingWork: true };
+    await engine.pollWatchedTurns();
+    assert.deepEqual(getWakeUpReasons(), ['silentTurn'], 'the requester never heard a word: as a bot watch would, the poll does not hide that');
+  });
+
+  it('an answer owed outranks the agent\'s own work: a requester\'s comment that its turn left unanswered while the poll runs is prodded at once', async () => {
+    const ledger = await createLedger();
+    const engine = createEngine(ledger, trackerRules);
+    const request = await ledger.createRequest(issueKey, handOver);
+    await engine.trackForwardedTurn(issueKey, request.id, { isRequestPrompt: true });
+    // A note and a background poll: held.
+    probe = { isActive: true, isBusy: true, hasUnconsumedInput: false, isTurnEndBlocked: false };
+    await engine.pollWatchedTurns();
+    await deliverProgress(ledger, request.id);
+    probe = { ...probe, isBusy: false, hasOwnPendingWork: true };
+    await engine.pollWatchedTurns();
+    assert.deepEqual(wakeUps, []);
+    // The requester comments «also check X»; the agent's turn reads it and ends without an answer, its poll still running.
+    await engine.trackForwardedTurn(issueKey, request.id, { isRequestPrompt: false, isPersonInput: true });
+    probe = { ...probe, isBusy: true };
+    await engine.pollWatchedTurns();
+    probe = { ...probe, isBusy: false };
+    await engine.pollWatchedTurns();
+    assert.deepEqual(getWakeUpReasons(), ['silentTurn']);
+  });
+
+  it('a loop of the agent\'s own (a recurring job) holds the request at most 6 h past its last activity — its own turns are none — then the backstop wake, and the give-up at the next lapse', async () => {
+    const ledger = await createLedger();
+    const engine = createEngine(ledger, trackerRules);
+    const request = await ledger.createRequest(issueKey, handOver);
+    await engine.trackForwardedTurn(issueKey, request.id, { isRequestPrompt: true });
+    const loopingIdle: SessionTurnProbe = { isActive: true, isBusy: false, hasUnconsumedInput: false, isTurnEndBlocked: false, hasOwnPendingWork: true };
+    const loopFire: SessionTurnProbe = { ...loopingIdle, isBusy: true, isCliOwnTurn: true };
+    probe = { ...loopingIdle, isBusy: true, hasOwnPendingWork: false };
+    await engine.pollWatchedTurns();
+    await deliverProgress(ledger, request.id);
+    /** Its job fires every half hour for `hours`: each fire a turn the CLI starts by itself, its job still armed after it. */
+    const loopFor = async (hours: number): Promise<void> => {
+      for (let step = 0; step < hours * 2; step += 1) {
+        nowMs += 30 * 60 * 1000;
+        probe = loopFire;
+        await engine.pollWatchedTurns();
+        probe = loopingIdle;
+        await engine.pollWatchedTurns();
+        await engine.sweepUnwatchedRequests();
+      }
+    };
+    probe = loopingIdle;
+    await engine.pollWatchedTurns();
+    await loopFor(5.5);
+    assert.deepEqual(wakeUps, [], 'held: its own work runs');
+    await loopFor(0.5);
+    assert.deepEqual(getWakeUpReasons(), ['backstop'], '6 h with nothing seen from it: a stall, woken as the backstop');
+    // The backstop's turn: the agent says nothing new and its loop goes on — held again, from that turn.
+    probe = { ...loopingIdle, isBusy: true, hasOwnPendingWork: false };
+    await engine.pollWatchedTurns();
+    probe = loopingIdle;
+    await engine.pollWatchedTurns();
+    await loopFor(6);
+    assert.deepEqual(alerts, [{ requestId: request.id, reason: 'silentTurns' }], 'still looping at the next lapse: given up');
+    assert.equal(ledger.getOpenRequestById(request.id)?.request.isWakeStopped, true);
   });
 
   it('after a restart nothing watches the request: the sweep watches it again while the agent waits on its own work, so the turn that work starts is decided at its end, not at the backstop', async () => {
@@ -3251,8 +3322,9 @@ describe('a tracker\'s rules: no reminder on a clock — a progress note with no
     await engineAfterRestart.sweepUnwatchedRequests();
     assert.deepEqual(wakeUps, [], 'its own work runs: no backstop');
 
-    await runTurn(engineAfterRestart, () => deliverProgress(ledger, request.id));
-    assert.deepEqual(getWakeUpReasons(), ['nothingArmed']);
+    // The work ends; the turn it starts reads the result and ends with nothing new said and nothing pending.
+    await runTurn(engineAfterRestart, async () => {});
+    assert.deepEqual(getWakeUpReasons(), ['nothingArmed'], 'the nudge, as without the restart — not a silent turn');
   });
 
   it('a topic keeps its clock: the same progress note is followed up 15 minutes later', async () => {

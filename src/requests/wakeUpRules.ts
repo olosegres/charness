@@ -8,6 +8,7 @@ import {
   type RequestScheduleWait,
 } from './scheduleWait';
 import { getMinutesOverrideMs } from '../utils/minutesOverride';
+import { pendingWorkHoldDefaultMs } from '../utils/jsonStreamPendingWork';
 
 /**
  * @description The wake-up rules of the request/answer core (S4), as pure
@@ -44,9 +45,10 @@ import { getMinutesOverrideMs } from '../utils/minutesOverride';
  * 15-minute follow-up, a tracker's gets ONE nudge at once (`nothingArmed`: finish, ask, or arm a watch for what it waits on), and the
  * next turn end in a row that leaves the request open with nothing armed — another note, or a silent turn — gives it up
  * (`stalledTurnCount`). The agent's OWN pending work (a background command or sub-agent, a `ScheduleWakeup`) holds the turn open
- * ({@link checkIsWaitingOnOwnWork}): no nudge, no give-up while it runs, and the turn end is decided once it ended and nothing of the
- * agent's own is pending. A turn end the request's schedule holds starts the stall count again (the engine clears it too when a
- * person's words reach the agent, and when the agent's turn ended leaving its own work running). Everything else is the same table.
+ * while the request owes nobody an answer, for at most {@link ownWorkHoldMaxMs} after its last activity ({@link checkIsHeldByOwnWork}):
+ * no nudge, no give-up while it runs, and the turn end is decided once nothing of the agent's own is pending (the stall count then
+ * starts again: the agent's work ended by itself) or once the bound lapsed (it does not). A turn end the request's schedule holds
+ * starts the stall count again (the engine clears it too when a person's words reach the agent). Everything else is the same table.
  */
 
 /**
@@ -139,19 +141,32 @@ export interface SessionTurnProbe {
   /**
    * The agent's own pending work, whose end starts its next turn by itself: a background command or sub-agent, a session job (a
    * `ScheduleWakeup`, a `CronCreate`), a finished task's turn on its way (`utils/workingSignals.ts`). Absent: none, or a backend that
-   * cannot tell. Only a tracker's rules read it ({@link checkIsWaitingOnOwnWork}).
+   * cannot tell. Only a tracker's rules read it ({@link checkIsHeldByOwnWork}).
    */
   hasOwnPendingWork?: boolean;
 }
 
 /**
- * @description Whether, under a tracker's rules, the agent waits on its own pending work: its turn is NOT over while that work runs —
- * the work's end starts the agent's next turn by itself, and the turn's end is decided once nothing of its own is pending. So a
- * background command, sub-agent or `ScheduleWakeup` holds off the nudge and the give-up, and the watch never goes stale meanwhile;
- * when the work ends and the agent's turn ends again with nothing pending, the turn end is decided as ever.
+ * How long the agent's own pending work may hold a tracker request's turn open, counted from the request's last activity: the same
+ * 6 h the json-stream adapter lets that work hold the process after its last turn (`utils/jsonStreamPendingWork.ts`). The adapter
+ * counts from ANY turn end, so work that renews itself — a recurring `CronCreate`, a `ScheduleWakeup` re-armed at every wake — keeps
+ * its process for as long as it loops. The request counts from its own activity, which a turn the CLI starts by itself never is
+ * (upstream's rule for the backstop): such work cannot renew the hold. Past it the turn is decided like any other — a stall, so the
+ * nudge, and the give-up at the next — which bounds a request a loop would keep open for good.
  */
-export function checkIsWaitingOnOwnWork(probe: SessionTurnProbe, rules: WakeUpRuleSet): boolean {
-  return rules === 'tracker' && probe.hasOwnPendingWork === true;
+export const ownWorkHoldMaxMs = pendingWorkHoldDefaultMs;
+
+/**
+ * @description Whether, under a tracker's rules, the agent's own pending work holds the request's turn open: the turn is NOT over
+ * while that work runs — its end starts the agent's next turn by itself, and the turn's end is decided once nothing of its own is
+ * pending. Never while the request owes the requester an answer (`checkIsAnswerOwed`: its first turn ended without a word, a
+ * requester's comment is unanswered, a silent turn is pending): a bot watch never hides that either, and neither does the agent's
+ * own work. And at most {@link ownWorkHoldMaxMs} after the request's last activity. So a background command, sub-agent or
+ * `ScheduleWakeup` holds off the nudge and the give-up, and the watch never goes stale meanwhile.
+ */
+export function checkIsHeldByOwnWork(request: OpenRequestState, probe: SessionTurnProbe, rules: WakeUpRuleSet, nowMs: number): boolean {
+  if (rules !== 'tracker' || probe.hasOwnPendingWork !== true || checkIsAnswerOwed(request)) return false;
+  return nowMs - (request.lastTurnActivityAt ?? request.createdAt) < ownWorkHoldMaxMs;
 }
 
 /**
@@ -220,6 +235,13 @@ export interface TurnEndContext {
   progressFollowUpMs?: number;
   /** The conversation's rule set; absent: a topic's. */
   rules?: WakeUpRuleSet;
+  /**
+   * The agent's own pending work at this turn end (a tracker's rules): `ended` — it held the turn open and ended by itself, so the agent
+   * arranged what woke it and a stall here is the first in a row again; `pending` — it still runs, so the hold no longer applies (the
+   * request owes an answer, or {@link ownWorkHoldMaxMs} lapsed): the stall count goes on, and a wake for the lapse says nothing has
+   * been seen working on the request (`backstop`), not that nothing is running. Absent: none.
+   */
+  ownWork?: 'ended' | 'pending';
 }
 
 /**
@@ -258,7 +280,7 @@ export function decideTurnEnd(
   // A progress note answers the reminders before it: the loop guard's count starts again with the silent-turn count.
   if (isProgressSent && !checkIsWaitingBetweenTurns(scheduleWait)) {
     // A tracker reminds nobody on a clock: with nothing armed to wake the agent, nothing ever would — one nudge, then the give-up.
-    if (context.rules === 'tracker') return decideTrackerStall(request, nowMs, true);
+    if (context.rules === 'tracker') return decideTrackerStall(request, nowMs, true, context.ownWork);
     const answeredUpdate: OpenRequestUpdate = { silentTurnCount: 0, wakeCount: 0, lastTurnActivityAt: nowMs };
     if (nowMs - request.createdAt >= progressFollowUpMaxAgeMs) return { kind: 'followUpLater', update: { ...answeredUpdate, nextWakeAt: undefined } };
     return {
@@ -296,7 +318,7 @@ export function decideTurnEnd(
       ...(isUnansweredFireRequest ? { isRequestSettled: true } : {}),
     };
   }
-  if (context.rules === 'tracker') return decideTrackerStall(request, nowMs, false);
+  if (context.rules === 'tracker') return decideTrackerStall(request, nowMs, false, context.ownWork);
   const silentTurnCount = request.silentTurnCount + 1;
   if (silentTurnCount >= maxSilentTurns) {
     return { kind: 'alert', reason: 'silentTurns', update: { silentTurnCount, ...stopWakingUpdate } };
@@ -310,15 +332,24 @@ export function decideTurnEnd(
  * (`stalledTurnCount`, which no answer resets); a silent one counts as a silent turn too, as in a topic. The first stall in a row gets a
  * wake — the nudge `nothingArmed` after a note, the ordinary `silentTurn` after silence — and the second stall, or the second silent
  * turn, the give-up. A note answers the wake-ups before it, as in a topic: the loop guard counts the ones in a row no note answered.
+ * `ownWork` ({@link TurnEndContext}): `ended` starts the count again, and with nothing owed the end is the nudge's case whether or not
+ * the turn the work started sent a note — the agent had answered before it, a note held the turn open (a restart's re-watch counts
+ * notes only from the restart: without this its end would read as silence); `pending` with nothing owed is the lapsed hold, woken as
+ * `backstop`.
  */
-function decideTrackerStall(request: OpenRequestState, nowMs: number, isProgressSent: boolean): WakeUpDecision {
-  const stalledTurnCount = (request.stalledTurnCount ?? 0) + 1;
-  const silentTurnCount = isProgressSent ? 0 : request.silentTurnCount + 1;
+function decideTrackerStall(request: OpenRequestState, nowMs: number, isProgressSent: boolean, ownWork: TurnEndContext['ownWork']): WakeUpDecision {
+  const isOwed = checkIsAnswerOwed(request);
+  // A stall with the requester answered: a note now, or one before the agent's own work held the turn open and ended by itself.
+  const isAnsweredStall = isProgressSent || (ownWork === 'ended' && !isOwed);
+  const stalledTurnCount = (ownWork === 'ended' ? 0 : request.stalledTurnCount ?? 0) + 1;
+  const silentTurnCount = isAnsweredStall ? 0 : request.silentTurnCount + 1;
   if (stalledTurnCount >= maxSilentTurns || silentTurnCount >= maxSilentTurns) {
     return { kind: 'alert', reason: 'silentTurns', update: { silentTurnCount, stalledTurnCount, ...stopWakingUpdate } };
   }
   const wakeCount = isProgressSent ? 0 : request.wakeCount;
-  return getWakeOrCapDecision({ ...request, wakeCount }, isProgressSent ? 'nothingArmed' : 'silentTurn', {
+  const isHoldLapsed = ownWork === 'pending' && !isOwed;
+  const reason: RequestWakeUpReason = isHoldLapsed ? 'backstop' : isAnsweredStall ? 'nothingArmed' : 'silentTurn';
+  return getWakeOrCapDecision({ ...request, wakeCount }, reason, {
     silentTurnCount,
     stalledTurnCount,
     lastTurnActivityAt: nowMs,
@@ -426,9 +457,10 @@ export interface WatchedTurn {
  * session is up, so the watch must survive to see THAT turn end. Dropped, the
  * replayed turn would run unwatched: a silent one would wait for the backstop
  * (90 min) instead of its wake-up, and a backstop wake re-posts the request.
- * Under a tracker's rules the agent's own pending work keeps the turn `running`
- * ({@link checkIsWaitingOnOwnWork}): the turn that work starts by itself belongs
- * to it, and the watch decides only once nothing of the agent's own is pending.
+ * Under a tracker's rules the agent's own pending work may keep the turn `running`
+ * ({@link checkIsHeldByOwnWork}, read by the caller, which has the request): the
+ * turn that work starts by itself belongs to it, and the watch decides only once
+ * nothing of the agent's own is pending, or the hold no longer applies.
  */
 export type WatchedTurnState = 'running' | 'ended' | 'sessionGone';
 
@@ -459,9 +491,9 @@ export function checkIsTurnInputConsumed(turn: WatchedTurn, probe: SessionTurnPr
  * (`hasUnconsumedInput`), one that does not must have been seen busy or
  * producing output since the forward (the busy-onset race).
  */
-export function getWatchedTurnState(turn: WatchedTurn, probe: SessionTurnProbe, rules: WakeUpRuleSet = 'topic'): WatchedTurnState {
+export function getWatchedTurnState(turn: WatchedTurn, probe: SessionTurnProbe, isHeldByOwnWork = false): WatchedTurnState {
   if (!probe.isActive) return probe.isTurnEndBlocked ? 'running' : 'sessionGone';
-  if (!checkIsTurnInputConsumed(turn, probe) || probe.isBusy || probe.isTurnEndBlocked || checkIsWaitingOnOwnWork(probe, rules)) return 'running';
+  if (!checkIsTurnInputConsumed(turn, probe) || probe.isBusy || probe.isTurnEndBlocked || isHeldByOwnWork) return 'running';
   return 'ended';
 }
 
@@ -480,6 +512,6 @@ export function checkIsWatchedTurnStale(
   backstopMs: number,
   rules: WakeUpRuleSet = 'topic',
 ): boolean {
-  if (probe.isBusy || probe.isTurnEndBlocked || checkIsWaitingOnOwnWork(probe, rules)) return false;
+  if (probe.isBusy || probe.isTurnEndBlocked || checkIsHeldByOwnWork(request, probe, rules, nowMs)) return false;
   return nowMs - (request.lastTurnActivityAt ?? request.createdAt) >= backstopMs;
 }

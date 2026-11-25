@@ -373,9 +373,12 @@ update into the resumed session; while a turn runs it waits up to 10 minutes for
   the job keeps running and its fires say «no request is open», or ride the request open at the time (a later hand-over, a mention: the
   header names it, and the agent answers it only with what its requester must know). The tool description and the orchestration skill say so.
 - **Nothing reminds an issue's agent on a clock** (a tracker's rules, `../../requests/README.md` § Wake-ups). The agent's OWN pending
-  work — a background command or sub-agent, a `ScheduleWakeup` / `CronCreate` — holds its turn open (`checkIsWaitingOnOwnWork`, the
-  probe's `hasOwnPendingWork` from the json-stream adapter's background signals): no nudge and no give-up while it runs, and the turn
-  that work's end starts is decided when it ends. A turn that ends with the request open, a progress note sent and NOTHING set to wake
+  work — a background command or sub-agent, a `ScheduleWakeup` / `CronCreate` — holds its turn open (`checkIsHeldByOwnWork`, the
+  probe's `hasOwnPendingWork` from the json-stream adapter's background signals): no nudge and no give-up while it runs, a bot restart
+  included (the sweep watches the request again), and the turn that work's end starts is decided when it ends. Never while the
+  requester is owed an answer — a first turn that said nothing, a comment left unanswered — which is prodded as with a bot watch; and at
+  most 6 h past the request's last activity (the agent's own turns are none), so a loop of its own is woken then (`backstop`) and given
+  up at the next lapse. A turn that ends with the request open, a progress note sent and NOTHING set to wake
   the agent — no watch or job under the request (or only a watch that fired and was not re-armed) and none of its own work running — gets
   ONE nudge at once instead of the topic's follow-up 15 minutes later («nothing reminds you on a clock»: finish, ask, or arm a watch for
   what you wait on, `requestHeader.ts` `nothingArmed`); the next such turn end in a row — another note, or silence — is the give-up:
@@ -818,7 +821,8 @@ app starts the agent, an unlisted one — a group member — is refused and its 
 after the final answer opens one, an acting mention, a kill-and-restart mid-turn answered within a minute) and
 `jiraFallbackSwitchE2e.test.ts` (an account signed in by hand is adopted with no Telegram; a conversation at its usage limit continues
 on it, and waits when auto switch is OFF) and `jiraRequestWakeE2e.test.ts` (the follow-up shortened to 15 s: a progress note with nothing
-armed nudged once, then the alert and the hand-back; a nudge answered by arming a job left alone), sharing
+armed nudged once, then the alert and the hand-back; a nudge answered by arming a job left alone; a note with a background command of
+the agent's own running left alone across a bot restart, then one nudge as soon as the turn its end starts ends with nothing pending), sharing
 `__tests__/jiraE2e/jiraFlowKit.ts`;
 `live/jiraLive.test.ts` runs the loop against a real site and is skipped unless its env variables are set; its
 prompt-context steps (media through the attachment tool, a delta, a requested compaction, the default model and

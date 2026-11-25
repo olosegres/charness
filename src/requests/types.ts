@@ -71,8 +71,8 @@ export interface OpenRequestState {
    * A tracker's rules only (`wakeUpRules.ts` `WakeUpRuleSet`): the turn ends in a row that left the request open with nothing armed to
    * wake the agent — a progress note with no job armed under it, or a silent turn. The first gets the nudge (`nothingArmed`), the second
    * gives the request up. A delivered answer does not reset it (a note changes nothing about what wakes the agent); a turn end the
-   * request's schedule holds does, and so do a person's words forwarded for the request, a turn that ended leaving the agent's own
-   * background work running, and the end of a limit wait. Absent = 0.
+   * request's schedule holds does, and so do a person's words forwarded for the request, the end of a turn the agent's own work held
+   * open once that work ended by itself, and the end of a limit wait. Absent = 0.
    */
   stalledTurnCount?: number;
   /** Epoch ms of the next scheduled wake-up, when one is armed. */
