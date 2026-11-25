@@ -9,6 +9,8 @@
 
 import { after, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
 import {
   createIsolatedInstanceLayout,
   flowTeardownReserveMs,
@@ -16,7 +18,9 @@ import {
   getTestFileTimeoutMs,
   IsolatedCharness,
   removeIsolatedInstanceSync,
+  writeInstanceEnvFile,
 } from './e2e/isolatedCharness';
+import { checkIsPidAlive } from '../utils/jsonStreamHost';
 
 const fileTimeoutMs = 20 * 60 * 1000;
 const processStartMs = 1_700_000_000_000;
@@ -27,6 +31,10 @@ const shortWaitMs = 300;
 /** Far below the long wait: the failure came from the budget, not from the wait running out. */
 const promptFailureMs = 5 * 1000;
 const outputTail = 'boot line\nthe last line charness printed';
+/** Far longer than the test: only the harness's kill can end it in time. */
+const neverReadySleepSeconds = 600;
+/** Ample for the shell to write its pid first, even on a loaded box. */
+const neverReadyStartTimeoutMs = 3 * 1000;
 
 describe('getTestFileTimeoutMs', () => {
   it('reads the flag in its `=` spelling, among the other arguments of the process', () => {
@@ -115,3 +123,21 @@ describe('IsolatedCharness.waitFor under a flow budget', () => {
     await createCharnessWithOutput().waitFor('the agent\'s answer', longWaitMs, () => true);
   });
 });
+
+describe('IsolatedCharness.start that never becomes ready', () => {
+  const layout = createIsolatedInstanceLayout('charness-starttest-', []);
+  after(() => removeIsolatedInstanceSync(layout, null));
+
+  it('ends the process it started before failing, so the flow\'s next start does not find the instance still running', async () => {
+    writeInstanceEnvFile(layout, {});
+    const pidFile = path.join(layout.testRoot, 'started.pid');
+    // Stands in for a bot that boots too slowly: it writes its pid and never prints a ready line.
+    const charness = new IsolatedCharness(layout, { launch: { file: '/bin/sh', args: ['-c', `echo $$ > '${pidFile}'; exec sleep ${neverReadySleepSeconds}`] } });
+    layout.flowDeadlineMs = null;
+    await assert.rejects(charness.start(neverReadyStartTimeoutMs, () => false), /^Error: timed out waiting for charness to be ready/);
+    const startedPid = Number(fs.readFileSync(pidFile, 'utf8').trim());
+    assert.ok(startedPid > 0, 'precondition: the process wrote its pid');
+    assert.equal(checkIsPidAlive(startedPid), false, 'the process that never became ready is gone, and its exit is reaped');
+  });
+});
+

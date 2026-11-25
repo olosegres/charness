@@ -727,10 +727,21 @@ export class IsolatedCharness {
     this.child = child;
     child.stdout?.on('data', (chunk: Buffer) => { this.output += chunk.toString('utf8'); });
     child.stderr?.on('data', (chunk: Buffer) => { this.output += chunk.toString('utf8'); });
-    await this.waitFor('charness to be ready', timeoutMs, () => {
-      if (child.exitCode !== null) throw new Error(`charness exited with ${child.exitCode}:\n${this.output.slice(outputStart)}`);
-      return checkIsReady(this.output.slice(outputStart));
-    });
+    try {
+      await this.waitFor('charness to be ready', timeoutMs, () => {
+        if (child.exitCode !== null) throw new Error(`charness exited with ${child.exitCode}:\n${this.output.slice(outputStart)}`);
+        return checkIsReady(this.output.slice(outputStart));
+      });
+    } catch (error) {
+      // A start that never became ready ends its process: left running it holds the instance lock, and the flow's next start
+      // fails with «charness is already running» instead of its own result.
+      // Awaited: until the exit is reaped its pid still reads as alive, so the lock would still look held.
+      const exited = new Promise<void>((resolve) => child.once('exit', () => resolve()));
+      const isRunning = child.exitCode === null && child.signalCode === null;
+      this.killSync();
+      if (isRunning) await exited;
+      throw error;
+    }
   }
 
   /** @description A graceful stop (SIGTERM, then SIGKILL after the grace period). */
