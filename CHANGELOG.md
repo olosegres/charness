@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 4.3.1 — 2026-11-26
+
 **A Jira issue whose Claude account hit its usage limit while every other account was limited too now continues as soon as the FIRST of them is free again: before, it waited for its own account's reset, an hour or more after another account had freed up.**
 The issue's comment now says the answer comes when that first account is back, and at that time the issue continues on it by itself, the same conversation — as a Telegram topic already did. If that account still refuses then, the bot plans again: another account with room, else the next reset. The same goes for an issue whose account is billed to API credits and runs out of them («Credit balance is too low»): with no account free it now waits for the subscription that comes back first and continues there, where before it stopped and waited for you. With «Auto switch» OFF the issue still waits for its own account — also when it is turned OFF while such a wait runs — and an OpenCode model is never where an issue continues.
 
