@@ -90,7 +90,11 @@ test('a backend switch closes the set-aside questions only when the operator cho
   assert.match(getFunctionBody('moveTopicToOtherBackend'), /switchThreadAdapter\([^;]*,\s*options\)/, 'the flag is handed on');
   assert.match(getFunctionBody('switchTopicToFallbackEntryNow'), /moveTopicToOtherBackend\([^;]*\{\s*isConversationKept:\s*options\.isAutomatic\s*===\s*true,\s*promptsReachedOrHeld\s*\}\)/);
   // The automatic callers say so …
-  assert.match(botSource, /resumeOnRung:[^}]*switchTopicToFallbackEntry\(key,\s*from,\s*rung,\s*\{\s*isAnnounced:\s*true,\s*isAutomatic:\s*true\s*\}\)/s, 'the wait that ends on another rung');
+  // The retry kick's port, from its key to the next port (it decides first whether the wait's end moves the conversation at all).
+  const resumeOnRungStart = botSource.indexOf('resumeOnRung: async (key, rung) => {');
+  const resumeOnRungEnd = botSource.indexOf('clearSavedRetry: clearSavedApiRetry,', resumeOnRungStart);
+  assert.ok(resumeOnRungStart >= 0 && resumeOnRungEnd > resumeOnRungStart, 'the retry kick\'s resumeOnRung port');
+  assert.match(botSource.slice(resumeOnRungStart, resumeOnRungEnd), /switchTopicToFallbackEntry\(key,\s*from,\s*rung,\s*\{\s*isAnnounced:\s*true,\s*isAutomatic:\s*true\s*\}\)/, 'the wait that ends on another rung');
   assert.equal(botSource.match(/switchTopicToFallbackEntry\(key,\s*plan\.from,\s*to,\s*\{\s*isAnnounced:\s*true,\s*isAutomatic:\s*true(?:,\s*ending)?\s*\}\)/g)?.length, 2, 'the two auto-switch paths (a used-up balance\'s hands its hold on the conversation along)');
   assert.match(getFunctionBody('handleClaudeAuthRefusal'), /switchTopicToFallbackEntry\(key,\s*from,\s*to,\s*\{\s*isAnnounced:\s*true,\s*isAutomatic:\s*true,\s*reason:\s*'signIn'\s*\}\)/, 'the move off an account the CLI refused');
   // … and an operator's own move (a pick, a tapped offer, `/claude` · `/opencode`) does not.
