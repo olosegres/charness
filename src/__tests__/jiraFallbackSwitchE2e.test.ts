@@ -157,10 +157,7 @@ describe('The usage-limit switch of a Jira conversation end to end: built charne
 
     await bootJiraOnly();
 
-    await waitFor('the signed-in folder adopted and probed', answerTimeoutMs, () => {
-      const profiles = fs.existsSync(getStatePath(getLayout())) ? readPersistedState(getLayout()).claudeProfiles : undefined;
-      return profiles?.[handSignedAccount]?.loggedIn === true && profiles[blankAccount]?.loggedIn === false;
-    });
+    await waitForSignedInFolderProbed();
     const { claudeProfiles = {} } = readPersistedState(getLayout());
     assert.equal(claudeProfiles[handSignedAccount].email, fakeConsoleLogin.email);
     assert.equal(claudeProfiles[handSignedAccount].subscriptionType, 'max');
@@ -360,6 +357,27 @@ describe('The usage-limit switch of a Jira conversation end to end: built charne
 
   itReachedNoTelegramPath();
 });
+
+/**
+ * @description Wait until the boot's scan recorded the hand-signed folder as signed in (and the blank one as not). The bot gives
+ * `claude auth status` 5 s and asks a profile that gave no answer again only after 5 minutes; the fake `claude` (node + tsx) can
+ * start slower than that on a box loaded by a full flow run (seen once: both probes of the boot timed out, and every later step
+ * failed with it). Only that proven case — the bot's own «gave no status: timed out» line for the folder — restarts the bot ONCE,
+ * logged: a restart forgets the 5-minute window and its boot scan probes again. Anything else fails the step as before.
+ */
+async function waitForSignedInFolderProbed(): Promise<void> {
+  const checkIsRecorded = (): boolean => {
+    const profiles = fs.existsSync(getStatePath(getLayout())) ? readPersistedState(getLayout()).claudeProfiles : undefined;
+    return profiles?.[handSignedAccount]?.loggedIn === true && profiles[blankAccount]?.loggedIn === false;
+  };
+  const timedOutLine = `[accounts] the auth status probe under ${getAccountConfigDir(getLayout(), handSignedAccount)} gave no status: timed out`;
+  await waitFor('the signed-in folder adopted and probed', answerTimeoutMs, () => checkIsRecorded() || getCharness().output.includes(timedOutLine));
+  if (checkIsRecorded()) return;
+  console.log('[flow] the fake claude answered the boot\'s auth status probe too late (a loaded box): restarting the bot once, its boot scan probes again');
+  await getCharness().stop();
+  await startCharness();
+  await waitFor('the signed-in folder probed after the restart', answerTimeoutMs, checkIsRecorded);
+}
 
 /** The one-shot calls of the fake `claude` (`auth status`, `--version`), with the directory each ran under. */
 function listAuthStatusProbes(): Array<{ argv: string[]; claudeConfigDir: string | null }> {
