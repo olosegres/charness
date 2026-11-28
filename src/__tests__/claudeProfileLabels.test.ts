@@ -22,6 +22,7 @@ import {
   escapeClaudeProfileLabelForMarkdown,
   findClaudeProfileByTypedName,
   getClaudeProfileLabel,
+  listMainClaudeProfileLabels,
   normaliseClaudeProfileLabel,
   resolveClaudeProfileLabel,
   setClaudeProfileLabelReader,
@@ -85,12 +86,19 @@ describe('claudeProfileLabels: checkClaudeProfileLabel', () => {
     assert.equal(checkClaudeProfileLabel({ label: 'work', selfName: 'work', accounts }), null);
   });
 
-  it('refuses the English «Main» while `default` shows a localised one (its entry answers to both)', () => {
-    const russianDefault = runWithLocale('ru', () => buildClaudeProfileNameEntry('default', undefined, 'Main'));
-    assert.deepEqual(russianDefault, { name: 'default', labels: ['Основной', 'Main'] });
+  it('`default` unrenamed answers to «Main» in every locale, the reader\'s first: none of them is free for another account in any topic', () => {
+    const mains = listMainClaudeProfileLabels();
+    assert.deepEqual(mains.slice(0, 3), ['Main', 'Hauptkonto', 'Principal'], 'en, de, fr (es and pt share «Principal»: once)');
+    assert.equal(mains.length, new Set(mains).size);
+    assert.ok(mains.includes('Основной') && mains.includes('Основний') && mains.includes('メイン'));
+    const russianDefault = runWithLocale('ru', () => buildClaudeProfileNameEntry('default', undefined));
+    assert.equal(russianDefault.labels[0], 'Основной', 'the shown one first');
+    assert.deepEqual([...russianDefault.labels].sort(), [...mains].sort());
     assert.deepEqual(checkClaudeProfileLabel({ label: 'main', selfName: null, accounts: [russianDefault, ...accounts.slice(1)] }), { kind: 'taken', label: 'Основной' });
-    assert.deepEqual(buildClaudeProfileNameEntry('default', undefined, 'Main'), { name: 'default', labels: ['Main'] }, 'in English the two are one');
-    assert.deepEqual(buildClaudeProfileNameEntry('default', 'Personal', 'Main'), { name: 'default', labels: ['Personal'] }, 'renamed: «Main» is free again');
+    const englishDefault = buildClaudeProfileNameEntry('default', undefined);
+    assert.deepEqual(checkClaudeProfileLabel({ label: 'основной', selfName: null, accounts: [englishDefault, ...accounts.slice(1)] }), { kind: 'taken', label: 'Main' }, 'an English topic refuses the Russian «Main» too');
+    assert.equal(findClaudeProfileByTypedName('PRINCIPAL', [englishDefault, ...accounts.slice(1)]), 'default');
+    assert.deepEqual(buildClaudeProfileNameEntry('default', 'Personal'), { name: 'default', labels: ['Personal'] }, 'renamed: every «Main» is free again');
   });
 });
 

@@ -1174,6 +1174,15 @@ describe('claudeAccounts: /accounts over its ports', () => {
     assert.equal(harness.replies.at(-1)?.text, '❌ No profile named Nobody Here. Run /accounts to see the list.');
   });
 
+  it('~/.claude\'s «Main» is taken in every language, whatever the topic\'s own: «Основной» or «Principal» in an English topic is refused', async () => {
+    const startedBefore = startedLogins.length;
+    for (const name of ['Основной', 'PRINCIPAL', 'メイン', 'მთავარი']) {
+      await harness.runCommand('accounts', `add ${name}`);
+      assert.match(harness.replies.at(-1)?.text ?? '', /^❌ The account «Main» already has that name\./, `${name}: ${harness.replies.at(-1)?.text}`);
+    }
+    assert.equal(startedLogins.length, startedBefore, 'no account was added');
+  });
+
   it('➕ takes any name: the id is derived from it (a number on a clash), the name is shown and kept, the sign-in runs under the id; `id:<id>` picks the id by hand', async () => {
     await harness.runCommand('accounts');
     await harness.tapButton(harness.replies.at(-1)!.messageId!, 'acct_add');

@@ -16,7 +16,7 @@
  * read carry the name themselves (`utils/claudeProfileUsageViews.ts`). Not loaded by the connector guards: it reads the locale.
  */
 
-import { t } from '../i18n';
+import { localeCodes, runWithLocale, t } from '../i18n';
 import { checkIsValidClaudeProfileName, claudeProfileNameMaxLength, defaultClaudeProfileName } from './claudeProfiles';
 
 /** The longest display name, in characters (code points). */
@@ -197,6 +197,19 @@ export function getMainClaudeProfileLabel(): string {
   return t('account.mainLabel');
 }
 
+/** {@link listMainClaudeProfileLabels}, read once: the locales are fixed for the process. */
+let mainLabelsOfAllLocales: readonly string[] | null = null;
+
+/**
+ * @description «Main» in every locale (`Main`, `Основной`, `Principal`, …), each once. Topics have languages of their own, so what
+ * `default` is called depends on who reads it: every one of them is its name, for a typed command and for the rule that no other account
+ * takes it.
+ */
+export function listMainClaudeProfileLabels(): readonly string[] {
+  mainLabelsOfAllLocales ??= [...new Set(localeCodes.map((locale) => runWithLocale(locale, getMainClaudeProfileLabel)))];
+  return mainLabelsOfAllLocales;
+}
+
 /** A stored display name as it is trusted: a non-empty string (a hand-edited `state.json` may hold anything), else none. */
 export function readStoredClaudeProfileLabel(value: unknown): string | undefined {
   if (typeof value !== 'string') return undefined;
@@ -226,10 +239,11 @@ export function getClaudeProfileLabel(name: string): string {
 
 /**
  * @description The name-rule entry of an account ({@link ClaudeProfileNameEntry}): its shown name, and — for `default` with no name of
- * its own — the English «Main» besides the localised one, so a typed `main` finds it and no other account takes that name in any UI.
+ * its own — «Main» in every locale besides it ({@link listMainClaudeProfileLabels}), so a typed `основной` finds it in any topic and no
+ * other account takes any of them.
  */
-export function buildClaudeProfileNameEntry(name: string, storedLabel: unknown, englishMainLabel: string): ClaudeProfileNameEntry {
+export function buildClaudeProfileNameEntry(name: string, storedLabel: unknown): ClaudeProfileNameEntry {
   const shown = resolveClaudeProfileLabel(name, storedLabel);
   const isMainShown = name === defaultClaudeProfileName && readStoredClaudeProfileLabel(storedLabel) === undefined;
-  return { name, labels: isMainShown && shown !== englishMainLabel ? [shown, englishMainLabel] : [shown] };
+  return { name, labels: isMainShown ? [shown, ...listMainClaudeProfileLabels().filter((main) => main !== shown)] : [shown] };
 }

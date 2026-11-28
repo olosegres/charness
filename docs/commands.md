@@ -141,7 +141,9 @@ so one account's usage limit does not stop every topic.
   (lowercase Latin letters, digits, `-` and `_`, a letter or digit first, at most 32
   characters; capitals become lowercase — a refused id names the character it cannot
   hold). No two accounts share a display name (case ignored), and a display name may not
-  be another account's id, so a typed `/accounts use|login|remove <name>` always finds one
+  be another account's id; while `~/.claude` has no name of its own, «Main» in every one of
+  the bot's languages (`Основной`, `Principal`, …) counts as its name, whatever the topic's
+  language, so a typed `/accounts use|login|remove <name>` always finds one
   account by either. An account added before display names existed, or adopted from a
   folder, shows its id until you rename it; renaming an account back to its id gives it no
   display name of its own («Main» again for `~/.claude`).

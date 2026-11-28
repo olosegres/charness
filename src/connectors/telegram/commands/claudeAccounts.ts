@@ -10,7 +10,7 @@
 import { Markup, type Context } from 'telegraf';
 import type { SessionKey } from '../../../sessionKey';
 import { keyToString } from '../../../sessionKey';
-import { runWithLocale, t } from '../../../i18n';
+import { t } from '../../../i18n';
 import type { InboundCommand } from '../../../platform/inbound';
 import type { ClaudeConfigDirApplyResult } from '../../../adapters/claudeConfigDir';
 import { appendLimitsListNote, type ClaudeLoginProfile } from '../../../agentLogin/agentLogin';
@@ -43,7 +43,6 @@ import {
   deriveClaudeProfileId,
   describeClaudeProfileIdProblem,
   findClaudeProfileByTypedName,
-  getMainClaudeProfileLabel,
   normaliseClaudeProfileLabel,
   resolveClaudeProfileLabel,
   shortenClaudeProfileLabel,
@@ -285,11 +284,10 @@ export function createClaudeAccounts(ports: ClaudeAccountsPorts) {
     return resolveClaudeProfileLabel(name, getState().getClaudeProfileInfo(name)?.label);
   }
 
-  /** Every account the name rules look at — `default` (signed out or not: its id and «Main» stay taken) and the added ones. */
+  /** Every account the name rules look at — `default` (signed out or not: its id and «Main» in every language stay taken) and the added ones. */
   function listNameEntries(): ClaudeProfileNameEntry[] {
-    const englishMainLabel = runWithLocale('en', getMainClaudeProfileLabel);
     const names = [defaultClaudeProfileName, ...Object.keys(getState().getClaudeProfileRecords())];
-    return names.map((name) => buildClaudeProfileNameEntry(name, getState().getClaudeProfileInfo(name)?.label, englishMainLabel));
+    return names.map((name) => buildClaudeProfileNameEntry(name, getState().getClaudeProfileInfo(name)?.label));
   }
 
   /** The account a typed name means — an id or a display name, case ignored — or `null`. */
