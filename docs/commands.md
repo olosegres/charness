@@ -110,7 +110,7 @@ Switch model through a two-level picker: providers, then that provider's models 
 
 ### `/accounts`
 
-Every account the bot works with, on one screen. **Claude accounts** (when you keep several subscriptions signed in): each profile with its email, plan (personal Pro/Max or corporate Team/Enterprise), how many topics use it and its usage windows, ✓ on the active one; tap a profile to switch this topic (a running session is restarted under it, same conversation — at the end of its turn if it is working; on a topic that runs OpenCode the tap switches the topic to Claude on that account, after a confirmation when there is a conversation to hand over); in **General** the pick becomes the default for all topics. The title says where the topic really runs (`Claude «work»`, `OpenCode openai/gpt-5`) and the ✓ sits on that row — on no account while OpenCode runs. Per profile: 🔑 signs it in again, 🗑 removes it (after a confirmation; for `default`, which IS `~/.claude`, «remove» signs it out — see below). The usage lines give each window's percentage USED and when it resets as a time from now (`5h 5% 🔄 in 4h · week 20% 🔄 in 5d 8h · Fable 4% 🔄 in 5d 8h`; «🔄 in 2h», «🔄 in 2d 1h», «🔄 in 30m»; Fable only on a plan that has its own weekly window); when the 5h window's reset is unknown the weekly one is shown in its place, and with no reset at all only the percentage. The hint paragraph under the account list says the percentages are used. «➕ Claude account» asks for a name and runs the sign-in; «➕ Claude API account (Console credits)» adds an account billed to a Claude Console organization's API credits (`💳`, see [An account billed to API credits](#an-account-billed-to-api-credits-claude-console)). **OpenCode providers**: the connected ones are listed with how each is signed in (`ChatGPT subscription` with its ~5 h / ~7 d usage windows like an account's, `API key`). In a topic a provider row is `[provider] [🔑] [🔌]`: a tap switches the topic to the provider through its model page (✓ on the model it runs, ⛔ on a limited one; a provider with one model is picked at once), 🔑 connects it again, 🔌 disconnects it (it asks, then removes the stored credentials; a provider OpenCode enables from an environment variable, e.g. `OPENROUTER_API_KEY`, stays active — the reply says so and points at hiding it in `/model`); in **General** a provider row is «🔌 Disconnect &lt;provider&gt;» and 🔑 only; «➕ OpenCode provider» asks for the provider id and continues with the connect flow (OAuth methods when available, otherwise an API key whose message is deleted from Telegram). What happens when an account hits a usage limit is set in `/limits_autoswitch`. Text forms: `/accounts add <name>`, `/accounts add <name> api`, `/accounts use <name>`, `/accounts use <provider>/<model>` (an OpenCode model, in a topic), `/accounts login <name>`, `/accounts remove <name>`, `/accounts autoswitch on|off`. `/account`, `/connect [provider [key]]` and `/disconnect [provider]` still work as hidden aliases (the menu lists only `/accounts`).
+Every account the bot works with, on one screen. **Claude accounts** (when you keep several subscriptions signed in): each profile with its email, plan (personal Pro/Max or corporate Team/Enterprise), how many topics use it and its usage windows, ✓ on the active one; tap a profile to switch this topic (a running session is restarted under it, same conversation — at the end of its turn if it is working; on a topic that runs OpenCode the tap switches the topic to Claude on that account, after a confirmation when there is a conversation to hand over); in **General** the pick becomes the account for all topics. Every account is shown by its **display name** (see *Names* below; `~/.claude` is «Main» until you rename it). The title says where the topic really runs (`Claude «Work»`, `OpenCode openai/gpt-5`) and the ✓ sits on that row — on no account while OpenCode runs. Per profile: ✏️ renames it (its display name only), 🔑 signs it in again, 🗑 removes it (after a confirmation; for «Main», which IS `~/.claude`, «remove» signs it out — see below). The usage lines give each window's percentage USED and when it resets as a time from now (`5h 5% 🔄 in 4h · week 20% 🔄 in 5d 8h · Fable 4% 🔄 in 5d 8h`; «🔄 in 2h», «🔄 in 2d 1h», «🔄 in 30m»; Fable only on a plan that has its own weekly window); when the 5h window's reset is unknown the weekly one is shown in its place, and with no reset at all only the percentage. The hint paragraph under the account list says the percentages are used. «➕ Claude account» asks for a name (any text up to 40 characters) and runs the sign-in; «➕ Claude API account (Console credits)» adds an account billed to a Claude Console organization's API credits (`💳`, see [An account billed to API credits](#an-account-billed-to-api-credits-claude-console)). **OpenCode providers**: the connected ones are listed with how each is signed in (`ChatGPT subscription` with its ~5 h / ~7 d usage windows like an account's, `API key`). In a topic a provider row is `[provider] [🔑] [🔌]`: a tap switches the topic to the provider through its model page (✓ on the model it runs, ⛔ on a limited one; a provider with one model is picked at once), 🔑 connects it again, 🔌 disconnects it (it asks, then removes the stored credentials; a provider OpenCode enables from an environment variable, e.g. `OPENROUTER_API_KEY`, stays active — the reply says so and points at hiding it in `/model`); in **General** a provider row is «🔌 Disconnect &lt;provider&gt;» and 🔑 only; «➕ OpenCode provider» asks for the provider id and continues with the connect flow (OAuth methods when available, otherwise an API key whose message is deleted from Telegram). What happens when an account hits a usage limit is set in `/limits_autoswitch`. Text forms: `/accounts add <name>`, `/accounts add <name> api`, `/accounts add <name> id:<id>` (choose the internal id yourself), `/accounts use <name>`, `/accounts use <provider>/<model>` (an OpenCode model, in a topic), `/accounts login <name>`, `/accounts remove <name>`, `/accounts autoswitch on|off` — `<name>` is the display name or the id, case ignored. `/account`, `/connect [provider [key]]` and `/disconnect [provider]` still work as hidden aliases (the menu lists only `/accounts`).
 
 #### Several accounts
 
@@ -119,21 +119,37 @@ corporate Team/Enterprise seat, say), the bot keeps each signed in as its own
 **profile** and lets you choose, per topic, which one a Claude session runs on —
 so one account's usage limit does not stop every topic.
 
-- The profile `default` is your existing `~/.claude` login; nothing is migrated.
+- The account in `~/.claude` is your existing login (its fixed id is `default`; it is shown as
+  «Main» — in the chat's language — until you rename it); nothing is migrated.
   An added profile is a Claude config directory of its own under
-  `DATA_DIR/claude-profiles/<name>/` (the CLI gets it through
+  `DATA_DIR/claude-profiles/<id>/` (the CLI gets it through
   `CLAUDE_CONFIG_DIR`): it holds that account's login, while the transcripts,
   settings, skills, plugins and your user memory are symlinks back into
   `~/.claude` — every account sees the same hooks and skills, and a conversation
   started under one account resumes under another.
-- **Adding an account:** `/accounts` → «➕ Claude account» (or `/accounts add work`) — give it
-  a short name, then open the sign-in link the bot posts **in a browser that is
+- **Names:** an account has a **display name** you choose and a fixed internal **id**. The
+  display name is free text up to 40 characters — capitals, dots, spaces, `@`, any language,
+  emoji (`Sergei.Solo@work`, `Работа`) — and is what every screen and notice shows; ✏️ in
+  `/accounts` changes it at any time. The id names the account's folder, its buttons, every
+  topic's pick, the `/limits` list and what agents record, so it never changes: the bot
+  derives it from the first name (`Sergei.Solo@work` → `sergei-solo-work`, `Работа` →
+  `rabota`, a number added on a clash) and does not show it on the screens (`charness
+  claude-profiles` prints both). `/accounts add <name> id:<id>` picks the id by hand
+  (lowercase Latin letters, digits, `-` and `_`, a letter or digit first, at most 32
+  characters; capitals become lowercase — a refused id names the character it cannot
+  hold). No two accounts share a display name (case ignored), and a display name may not
+  be another account's id, so a typed `/accounts use|login|remove <name>` always finds one
+  account by either. An account added before display names existed, or adopted from a
+  folder, shows its id until you rename it; renaming an account back to its id gives it no
+  display name of its own («Main» again for `~/.claude`).
+- **Adding an account:** `/accounts` → «➕ Claude account» (or `/accounts add Work`) — give it
+  a name, then open the sign-in link the bot posts **in a browser that is
   signed in as that other account** (an incognito window or another browser
   profile keeps your current login out of the way), finish the sign-in and paste
   the code back into the topic. The code message is deleted; the bot confirms
   with the account's email and plan.
 - **An account signed in by hand is picked up on its own — no Telegram needed.**
-  A folder under `DATA_DIR/claude-profiles/` whose name is a valid profile name
+  A folder under `DATA_DIR/claude-profiles/` whose name is a valid account id
   (lowercase letters, digits, `-` and `_`, at most 32 characters, not `default`) and
   that the bot holds no record of is adopted at the bot's start and at every usage
   poll (every 10 minutes): make the folder (`/accounts add <name>` makes it; by
@@ -149,15 +165,16 @@ so one account's usage limit does not stop every topic.
   up — at most every five minutes, and a poll that finds nothing due spawns no
   process; `/accounts` re-reads every account whenever it opens. A profile you
   removed is gone with its folder and is not brought back; `default` signed out
-  through `/accounts` stays out until it is signed in again.
+  through `/accounts` stays out until it is signed in again. An adopted account is shown by its
+  folder name until you rename it.
 - **Switching:** tap a profile in `/accounts` or an account on the `/limits`
   board (or `/accounts use <name>`). A
   running session on the default (stream) backend is restarted under the new
   account with the same conversation — right away when idle, at the end of its
   turn when it is working; a sleeping topic simply resumes under it. The
   tmux-scrape backend is reopened the same way when idle and waits for the next
-  start when busy. In the **General** topic the pick is the default for all
-  topics; a topic with its own pick keeps it («↩ Follow the default» drops it).
+  start when busy. In the **General** topic the pick is the account for all
+  topics; a topic with its own pick keeps it («↩ Use the account for all topics» drops it).
   A profile that is not signed in cannot be picked. On a topic that runs OpenCode the
   pick is a switch to Claude on that account (see [*A manual switch between Claude and
   OpenCode asks first*](#limits_autoswitch) under the fallback models). While a usage-limit wait is armed a
@@ -223,16 +240,17 @@ so one account's usage limit does not stop every topic.
   goes. An instance without Telegram posts the same, in English, on its Jira **operator
   issue** (`jira.json` `operatorIssue`, see SETUP.md § Jira setup), mentioning the
   operator's accounts; without one it goes only to the log.
-- **Removing:** «🗑 Remove» deletes the profile's login directory. The profile
-  that is currently the instance default cannot be removed (pick another one in
-  General first); topics that had picked the removed profile return to the
-  default and the confirmation says how many. For `default` (`~/.claude`
+- **Removing:** «🗑 Remove» deletes the profile's login directory. The account
+  for all topics cannot be removed (pick another one in General first); topics
+  that had picked the removed profile go back to the account for all topics and
+  the confirmation says how many. For «Main» (`~/.claude`
   itself) «remove» means **sign out**: after a confirmation that says running
   sessions on it will stop working, only the stored subscription login
   (`claudeAiOauth` in `~/.claude/.credentials.json`; MCP tokens beside it stay)
   is deleted — `projects/`, settings, skills, plugins and memory are never
   touched — and the account is hidden from the list, the recommendation and the
-  fallback ranking until it is signed in again (`/accounts login default`).
+  fallback ranking until it is signed in again (`/accounts login Main` — its
+  display name or `default`).
 - A child `claude` the agent starts inherits the same `CLAUDE_CONFIG_DIR`, so
   it runs on the topic's account too.
 - **A profile folder is put back in line before every launch under it.** The

@@ -2,8 +2,8 @@
 
 ## Unreleased
 
-**`claude_profiles` and `charness claude-profiles` now say what you call each Claude account (`label`) next to its fixed id (`name`), so an agent names the account in your words.**
-`label` is the account's display name; the account in `~/.claude` is «Main» until renamed, and an account without a display name shows its id. Agents keep recording and passing back `name`. The command line prints the display name as `«label»` after the id.
+**You can now name your Claude accounts as you like — `Work`, `me@company`, `Работа` — and rename them at any time with ✏️ in `/accounts`; the account in `~/.claude` is no longer called «default».**
+Before, a name had to be lowercase Latin letters, digits, `-` and `_` (a dot, an `@`, a space or Cyrillic was refused, and the message did not say which character was wrong), `~/.claude` was always «default», and nothing could be renamed. Now ➕ takes any name up to 40 characters and the bot makes the account's internal id from it by itself; ✏️ «Rename» on every row changes only the name shown — topics, the `/limits` list, the account's folder and what agents recorded keep working as before. `~/.claude` shows as «Main» until you rename it, and General's pick is now called «the account for all topics». Typed commands (`/accounts use|login|remove <name>`) take the name or the id, case ignored; two accounts cannot share a name. `/accounts add <name> id:<id>` lets you choose the id yourself, and a refused id names the character it cannot hold. Agents get the name as `label` from `claude_profiles` and `charness claude-profiles`, next to the fixed `name` they record.
 
 ## 4.3.1 — 2026-11-26
 

@@ -450,21 +450,30 @@ the «Switching…» edit and hands the hold to the switch, so a stop under way 
 `/accounts` (hidden alias `/account`; `/connect` and `/disconnect` are hidden aliases of its OpenCode half, still
 registered by `modelProviders.ts`) and the buttons `acct_use_<name>`, `acct_follow`, `acct_add`, `acct_ocadd`,
 `acct_dc_<i>`, `acct_dcok_<i>`, `acct_dcre_<i>`, `acct_login_menu`, `acct_rm_menu`, `acct_back`, `acct_login_<name>`,
-`acct_rm_<name>`, `acct_rmok_<name>`: which Claude account profile (`utils/claudeProfiles.ts`) a topic's Claude
+`acct_ren_<name>`, `acct_rm_<name>`, `acct_rmok_<name>`: which Claude account profile (`utils/claudeProfiles.ts`) a topic's Claude
 sessions run on, and the OpenCode providers the server is authenticated for. One screen: a row per Claude account
-(pick, 🔑 re-login, 🗑 remove — for `default` a sign-out), a 🔌 row per connected provider, «➕ Claude account» and
-«➕ OpenCode provider». The provider rows carry an INDEX into the list snapshotted per screen MESSAGE
+(pick, ✏️ rename, 🔑 re-login, 🗑 remove — for `default` a sign-out), a 🔌 row per connected provider, «➕ Claude account» and
+«➕ OpenCode provider». **Names** (`utils/claudeProfileLabels.ts`): every text and button names an account by its DISPLAY NAME (`formatLabel`:
+the record's `label`, `default`'s localised «Main», else the id — a button cuts it to `claudeProfileButtonLabelMaxLength` with `…`); the id
+(`<name>` above) stays the record's key and the button data. «➕» captures a display name (free text, `checkClaudeProfileLabel`: ≤ 40 characters,
+no other account's name or id, case ignored) and derives the id (`pickNewProfileId` → `deriveClaudeProfileId`; a number on a clash with an id,
+`default`, another account's display name or a folder already on disk) unless `/accounts add <name> id:<id>` (`parseAccountAddWords`) types it
+— a refused id names its bad character (`describeClaudeProfileIdProblem`, `account.invalidName`). ✏️ arms the same per-topic capture with the
+`rename` kind and the screen's message id: the next plain message is the new display name (same rules, its own name and id allowed — its id
+drops the label), stored by `setClaudeProfileLabel`, and the screen is re-rendered in place; `cancelProfileNameCapture` returns the kind it
+disarmed so `/esc` words the cancel (`account.renameCancelled`). Typed `use|login|remove <name>` resolve a display name or an id
+(`findClaudeProfileByTypedName`; an account wins over an OpenCode `provider/model` reading of a `/`). The provider rows carry an INDEX into the list snapshotted per screen MESSAGE
 (`providerSnapshots`, the newest 50): a tap asks for confirmation, the confirmation disconnects through the
 `disconnectOpenCodeProvider` port (`applyProviderDisconnect` of `modelProviders.ts`, flow unchanged), and an
 older screen resolves to «out of date» and a re-render. The providers come from the `detectOpenCodeProviders`
 port (the live OpenCode catalog; `[]` when unreadable). «➕ OpenCode provider» arms the same per-topic capture as
 «➕ Claude account», with the provider kind: the next plain message is the provider id, validated and handed to
 `startOpenCodeConnect` (`showConnectMethodPicker` — the `/connect <provider>` method picker, flow unchanged); a bad id
-keeps the capture armed. The old login / remove sub-pickers and their buttons keep answering. A button BAKES the profile name into its
-data (names are slugs of at most 32 characters, so the data stays under 64 bytes) — an old keyboard can never act
-on another profile. `acct_signin_<name>` is the picker's 🔑 for a message that is NOT the picker — the operator's private sign-out message
+keeps the capture armed. The old login / remove sub-pickers and their buttons keep answering. A button BAKES the profile id into its
+data (ids are slugs of at most 32 characters, so the data stays under 64 bytes) — an old keyboard can never act
+on another profile, and a rename changes no button. `acct_signin_<name>` is the picker's 🔑 for a message that is NOT the picker — the operator's private sign-out message
 (`bot.ts` `sendClaudeAccountSignOutDms`, `utils/claudeAccountAlert.ts`) and a signed-out `/limits` row: it starts the same sign-in (`loginProfile`) in the
-chat it was tapped in and leaves its message as it is, where `acct_login_<name>` re-renders its message as the picker. A regular topic sets its own pick, General the instance default; the picker is meant for
+chat it was tapped in and leaves its message as it is, where `acct_login_<name>` re-renders its message as the picker. A regular topic sets its own pick, General the account for all topics (`claudeProfileDefault`); the picker is meant for
 repeated use and re-renders in place. The module owns no process: it asks the bot through ports to probe
 `claude auth status --json` under a profile's directory (`readClaudeAuthStatus`; every render runs the shared scan
 `syncClaudeProfiles` — `utils/claudeProfileSync.ts`, FORCED: every profile is probed and a profile folder signed in by hand that has

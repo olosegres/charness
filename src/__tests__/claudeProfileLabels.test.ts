@@ -74,6 +74,10 @@ describe('claudeProfileLabels: checkClaudeProfileLabel', () => {
     assert.deepEqual(checkClaudeProfileLabel({ label: 'Default', selfName: 'work', accounts }), { kind: 'isId', label: 'Main' });
   });
 
+  it('an account with no display name of its own shows its id: that id is a name taken, not a hidden id', () => {
+    assert.deepEqual(checkClaudeProfileLabel({ label: 'ADA', selfName: null, accounts }), { kind: 'taken', label: 'ada' });
+  });
+
   it('lets an account keep its own name or go back to its id', () => {
     assert.equal(checkClaudeProfileLabel({ label: 'sergei.solo@work', selfName: 'work', accounts }), null);
     assert.equal(checkClaudeProfileLabel({ label: 'work', selfName: 'work', accounts }), null);

@@ -1,9 +1,10 @@
 /**
  * @description Pure plan of the `/account` picker (`connectors/telegram/commands/claudeAccounts.ts`): the
- * `callback_data` codecs and the per-profile row model. Profile names are slugs of at most 32 characters
- * (`utils/claudeProfiles.ts`), so a button BAKES THE NAME into its data (`acct_use_<name>` is at most 41
+ * `callback_data` codecs and the per-profile row model. A profile's fixed id is a slug of at most 32 characters
+ * (`utils/claudeProfiles.ts`), so a button BAKES THE ID into its data (`acct_use_<id>` is at most 41
  * bytes, under Telegram's 64-byte cap) and an old keyboard can never act on a profile other than the one it
- * named — a removed name simply resolves to "unknown profile".
+ * named — a removed id simply resolves to "unknown profile". What the row SHOWS is the account's display name
+ * (`utils/claudeProfileLabels.ts`), which a rename changes without touching any button.
  */
 
 import type { ClaudeProfileRecord } from '../state';
@@ -33,6 +34,8 @@ export const accountLoginCallbackRe = new RegExp(`^acct_login_${nameGroup}$`);
 export const accountSignInCallbackRe = new RegExp(`^acct_signin_${nameGroup}$`);
 /** Ask to confirm the removal of the named profile, then remove it. */
 export const accountRemoveCallbackRe = new RegExp(`^acct_rm_${nameGroup}$`);
+/** ✏️: ask for the named profile's new display name (the id in the data never changes). */
+export const accountRenameCallbackRe = new RegExp(`^acct_ren_${nameGroup}$`);
 export const accountRemoveConfirmCallbackRe = new RegExp(`^acct_rmok_${nameGroup}$`);
 /** Ask for a new profile's name. */
 export const accountAddCallback = 'acct_add';
@@ -107,6 +110,10 @@ export function buildAccountRemoveConfirmCallback(name: string): string {
   return `acct_rmok_${name}`;
 }
 
+export function buildAccountRenameCallback(name: string): string {
+  return `acct_ren_${name}`;
+}
+
 /**
  * @description The name a callback's data carries, or `null` when the data is not that button's or names an
  * impossible profile (`default` is a valid target for use / login / removal only where `allowDefault`).
@@ -121,7 +128,10 @@ export function parseAccountCallbackName(data: string, re: RegExp, options: { al
 
 /** One line / one button of the picker. */
 export interface AccountPickerRow {
+  /** The fixed id: what the buttons carry. */
   name: string;
+  /** What the row shows: the display name (`default`: «Main» until renamed; else the id). */
+  label: string;
   /** The profile the topic (General: the instance) effectively uses. */
   isActive: boolean;
   /** The CLI's last answer; `undefined` when never read. */
@@ -148,9 +158,13 @@ export function buildAccountPickerRows(input: {
   topicCounts: ReadonlyMap<string, number>;
   /** The operator removed (signed out) `default`: it has no row until it is signed in again. */
   isDefaultRemoved?: boolean;
+  /** What a profile is called (`utils/claudeProfileLabels.ts`); the id when absent. */
+  getLabel?: (name: string) => string;
 }): AccountPickerRow[] {
+  const getLabel = input.getLabel ?? ((name: string) => name);
   const rows: AccountPickerRow[] = input.isDefaultRemoved ? [] : [{
     name: defaultClaudeProfileName,
+    label: getLabel(defaultClaudeProfileName),
     isActive: input.activeName === defaultClaudeProfileName,
     loggedIn: input.defaultStatus.loggedIn,
     email: input.defaultStatus.email,
@@ -164,6 +178,7 @@ export function buildAccountPickerRows(input: {
   for (const [name, record] of added) {
     rows.push({
       name,
+      label: getLabel(name),
       isActive: input.activeName === name,
       loggedIn: getClaudeProfileSignedIn(record),
       email: record.email ?? null,

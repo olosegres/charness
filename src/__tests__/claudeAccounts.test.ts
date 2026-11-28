@@ -170,6 +170,7 @@ describe('claudeAccounts: /accounts over its ports', () => {
       'acct_back',
       String(/^acct_login_([a-z0-9][a-z0-9_-]{0,31})$/),
       String(/^acct_signin_([a-z0-9][a-z0-9_-]{0,31})$/),
+      String(/^acct_ren_([a-z0-9][a-z0-9_-]{0,31})$/),
       String(/^acct_rm_([a-z0-9][a-z0-9_-]{0,31})$/),
       String(/^acct_rmok_([a-z0-9][a-z0-9_-]{0,31})$/),
       'acct_autosw_on',
@@ -177,15 +178,17 @@ describe('claudeAccounts: /accounts over its ports', () => {
     ]);
   });
 
-  it('the bare command renders the picker: default alone, active, with the action row', async () => {
+  it('the bare command renders the picker: ~/.claude alone as «Main», active, with the action row', async () => {
     await harness.runCommand('account');
     const picker = harness.replies.at(-1);
-    assert.match(picker?.text ?? '', /✓ default — me@example\.com, personal max/);
+    assert.match(picker?.text ?? '', /✓ Main — me@example\.com, personal max/);
+    assert.doesNotMatch(picker?.text ?? '', /default/, 'the word «default» names neither ~/.claude nor General\'s pick any more');
     assert.deepEqual(harness.getKeyboardData(picker), [
-      ['acct_use_default', 'acct_login_default', 'acct_rm_default'],
+      ['acct_use_default', 'acct_ren_default', 'acct_login_default', 'acct_rm_default'],
       ['acct_add', 'acct_ocadd'],
       ['acct_addapi'],
-    ], 'one row per account (pick + re-login + remove, `default` included), then the two adders and the API account adder');
+    ], 'one row per account (pick + rename + re-login + remove, `default` included), then the two adders and the API account adder');
+    assert.deepEqual(harness.getKeyboardLabels(picker)[0], ['✓ Main · me@example.com', '✏️', '🔑', '🗑']);
     assert.match(picker?.text ?? '', /OpenCode providers: none connected yet/);
     // The default's probe lands on its hidden record (the usage ranking and the CLI twin read it there), never on the registry.
     assert.equal(harness.state.getClaudeProfileInfo('default')?.email, 'me@example.com');
@@ -211,7 +214,7 @@ describe('claudeAccounts: /accounts over its ports', () => {
       const elapsedMs = Date.now() - startedAt;
       assert.equal(outcome, 'posted', 'a usage refresh that never settles must not hold the account screen');
       assert.equal(harness.replies.length, repliesBefore + 1);
-      assert.match(harness.replies.at(-1)?.text ?? '', /✓ default — me@example\.com/);
+      assert.match(harness.replies.at(-1)?.text ?? '', /✓ Main — me@example\.com/);
       assert.ok(elapsedMs >= limitsUsageRefreshBudgetMs - 50 && elapsedMs < limitsUsageRefreshBudgetMs + 1_500, `held for the budget only (${elapsedMs} ms)`);
     } finally {
       runUsageRefresh = async () => {};
@@ -232,7 +235,7 @@ describe('claudeAccounts: /accounts over its ports', () => {
     harness.state.setClaudeProfileLimitedUntil('default', inHours(2));
     await harness.runCommand('account');
     const text = harness.replies.at(-1)?.text ?? '';
-    assert.match(text, /✓ default — me@example\.com, personal max\n {4}⏱ 5h 5% 🔄 in 4h · week 20% 🔄 in 5d 8h \(stale\)\n {4}⛔ at its limit until /);
+    assert.match(text, /✓ Main — me@example\.com, personal max\n {4}⏱ 5h 5% 🔄 in 4h · week 20% 🔄 in 5d 8h \(stale\)\n {4}⛔ at its limit until /);
     assert.doesNotMatch(text, /Fable \d|Fable —/, 'no Fable window → nothing about Fable on the line');
     assert.ok(text.indexOf('Usage: % of each window used') < text.indexOf('OpenCode providers'), 'the usage hint (the percentages are USED) sits right after the account list');
     harness.state.setClaudeProfileLimitedUntil('default', null);
@@ -240,21 +243,27 @@ describe('claudeAccounts: /accounts over its ports', () => {
   });
 
   it('`add <name>` lays the directory out, records the profile and starts its sign-in under that directory', async () => {
-    await harness.runCommand('account', 'add Work');
+    await harness.runCommand('account', 'add work');
     const dir = path.join(dataDir, 'claude-profiles', 'work');
     assert.equal(fs.statSync(dir).mode & 0o777, 0o700);
     assert.equal(fs.readlinkSync(path.join(dir, 'projects')), path.join(homeClaudeDir, 'projects'));
     assert.equal(harness.state.getClaudeProfileRecord('work')?.loggedIn, false);
     assert.deepEqual(startedLogins.at(-1), { key: harness.key, profile: { name: 'work', configDir: dir } });
+    assert.equal(harness.state.getClaudeProfileRecord('work')?.label, undefined, 'a name that is its own id stores no display name');
     assert.match(harness.replies.at(-1)?.text ?? '', /Profile work created/);
   });
 
-  it('a second `add` of the same name is refused; an invalid name is refused', async () => {
+  it('a second `add` of the same name is refused, case ignored; a name over the cap and a bad typed id are refused, naming why', async () => {
     const before = startedLogins.length;
-    await harness.runCommand('account', 'add work');
-    assert.match(harness.replies.at(-1)?.text ?? '', /already exists/);
-    await harness.runCommand('account', 'add Bad Name');
-    assert.match(harness.replies.at(-1)?.text ?? '', /lowercase letters/);
+    await harness.runCommand('account', 'add WORK');
+    assert.match(harness.replies.at(-1)?.text ?? '', /The account «work» already has that name/);
+    await harness.runCommand('account', `add ${'x'.repeat(41)}`);
+    assert.match(harness.replies.at(-1)?.text ?? '', /longer than 40 characters/);
+    await harness.runCommand('account', 'add Some Name id:Sergei.Solo');
+    assert.match(harness.replies.at(-1)?.text ?? '', /^❌ «\.» cannot be in an account id\. An id is Latin letters a–z, digits, - and _ \(a letter or a digit first\), up to 32 characters; capitals become lowercase\.$/);
+    assert.doesNotMatch(harness.replies.at(-1)?.text ?? '', /lowercase letters/, 'capitals are never called forbidden: a typed id is lowercased');
+    await harness.runCommand('account', 'add Some Name id:work');
+    assert.match(harness.replies.at(-1)?.text ?? '', /A profile named work already exists/);
     assert.equal(startedLogins.length, before);
   });
 
@@ -279,11 +288,12 @@ describe('claudeAccounts: /accounts over its ports', () => {
   it('«Add» without a name arms the name capture; the next plain message is the name; a slash cancels it', async () => {
     await harness.runCommand('account', 'add');
     assert.equal(accounts.checkIsAwaitingProfileName(harness.key), true);
-    assert.equal(accounts.cancelProfileNameCapture(harness.key), true);
+    assert.equal(accounts.cancelProfileNameCapture(harness.key), 'add');
     assert.equal(accounts.checkIsAwaitingProfileName(harness.key), false);
+    assert.equal(accounts.cancelProfileNameCapture(harness.key), null, 'nothing armed: nothing to cancel');
     await harness.runCommand('account', 'add');
-    await accounts.submitProfileName(harness.key, 'Nope Name');
-    assert.equal(accounts.checkIsAwaitingProfileName(harness.key), true, 'a bad name keeps the prompt armed');
+    await accounts.submitProfileName(harness.key, 'Nope'.repeat(11));
+    assert.equal(accounts.checkIsAwaitingProfileName(harness.key), true, 'a refused name keeps the prompt armed');
     await accounts.submitProfileName(harness.key, 'team');
     assert.equal(accounts.checkIsAwaitingProfileName(harness.key), false);
     assert.equal(harness.state.getClaudeProfileRecord('team') !== undefined, true);
@@ -295,9 +305,9 @@ describe('claudeAccounts: /accounts over its ports', () => {
     const picker = harness.replies.at(-1);
     assert.match(picker?.text ?? '', /• work — work@example\.com, corporate team/);
     assert.match(picker?.text ?? '', /• team — not signed in/);
-    assert.deepEqual(harness.getKeyboardData(picker)[0], ['acct_use_default', 'acct_login_default', 'acct_rm_default']);
-    assert.deepEqual(harness.getKeyboardData(picker)[1], ['acct_use_work', 'acct_login_work', 'acct_rm_work']);
-    assert.deepEqual(harness.getKeyboardData(picker)[2], ['acct_use_team', 'acct_login_team', 'acct_rm_team']);
+    assert.deepEqual(harness.getKeyboardData(picker)[0], ['acct_use_default', 'acct_ren_default', 'acct_login_default', 'acct_rm_default']);
+    assert.deepEqual(harness.getKeyboardData(picker)[1], ['acct_use_work', 'acct_ren_work', 'acct_login_work', 'acct_rm_work']);
+    assert.deepEqual(harness.getKeyboardData(picker)[2], ['acct_use_team', 'acct_ren_team', 'acct_login_team', 'acct_rm_team']);
   });
 
   it('the sign-in button of a message that is NOT the picker (`acct_signin_<name>`: the private sign-out message, a signed-out /limits row) starts the very sign-in 🔑 starts and leaves its message as it is; 🔑 of the picker turns its message into the picker', async () => {
@@ -352,7 +362,7 @@ describe('claudeAccounts: /accounts over its ports', () => {
     assert.equal(harness.state.getClaudeProfileOverride(harness.key), 'default');
     const rerender = harness.edits.at(-1);
     assert.equal(rerender?.messageId, picker!.messageId);
-    assert.match(rerender?.text ?? '', /✓ default/);
+    assert.match(rerender?.text ?? '', /✓ Main/);
     await harness.tapButton(picker!.messageId!, 'acct_follow');
     assert.equal(harness.state.getClaudeProfileOverride(harness.key), undefined);
   });
@@ -374,7 +384,7 @@ describe('claudeAccounts: /accounts over its ports', () => {
       await harness.tapButton(picker!.messageId!, 'acct_follow');
       assert.equal(harness.state.getClaudeProfileOverride(harness.key), undefined);
       assert.equal(harness.edits.length, editsBefore + 1, 'the picker was re-rendered');
-      assert.match(harness.replies[repliesBefore]?.text ?? '', /follows the default/);
+      assert.match(harness.replies[repliesBefore]?.text ?? '', /uses the account for all topics/);
 
       // General: the instance default changes, and the picker shows it.
       isGeneralTopic = true;
@@ -385,7 +395,7 @@ describe('claudeAccounts: /accounts over its ports', () => {
         await harness.tapButton(generalPicker!.messageId!, 'acct_use_work');
         assert.equal(harness.state.getClaudeProfileGlobalDefault(), 'work');
         assert.match(harness.edits.at(-1)?.text ?? '', /✓ work/);
-        assert.match(harness.replies[repliesBefore]?.text ?? '', /Default Claude account for ALL topics: work/);
+        assert.match(harness.replies[repliesBefore]?.text ?? '', /Claude account for all topics: work/);
       } finally {
         isGeneralTopic = false;
         await harness.state.setClaudeProfileGlobalDefault('default');
@@ -457,13 +467,13 @@ describe('claudeAccounts: /accounts over its ports', () => {
     await harness.runCommand('account', 'use work');
     assert.equal(harness.state.getClaudeProfileGlobalDefault(), 'work');
     assert.equal(applyEverywhereCalls, callsBefore + 1);
-    assert.match(harness.replies.at(-1)?.text ?? '', /Default Claude account for ALL topics: work/);
+    assert.match(harness.replies.at(-1)?.text ?? '', /Claude account for all topics: work/);
     isGeneralTopic = false;
   });
 
   it('`remove`: the instance default is refused', async () => {
     await harness.runCommand('account', 'remove work');
-    assert.match(harness.replies.at(-1)?.text ?? '', /default for all topics/);
+    assert.match(harness.replies.at(-1)?.text ?? '', /work is the account for all topics/);
     assert.ok(fs.existsSync(path.join(dataDir, 'claude-profiles', 'work')));
   });
 
@@ -556,7 +566,7 @@ describe('claudeAccounts: /accounts over its ports', () => {
       assert.deepEqual(rows.filter((row) => row[0].startsWith('acct_dc_')), [['acct_dc_0', 'acct_dcre_0'], ['acct_dc_1', 'acct_dcre_1']]);
       assert.equal(rows.flat().some((data) => data.startsWith('acct_ocuse_')), false);
       assert.deepEqual(harness.getKeyboardLabels(screen).find((row) => row.some((label) => label.includes('openrouter'))), ['🔌 Disconnect openrouter', '🔑']);
-      assert.match(screen.text ?? '', /Tap an account to make it the default for all topics\. 🔑 signs an account or provider in again, 🗑 removes an account, 🔌 disconnects a provider\./);
+      assert.match(screen.text ?? '', /Tap an account to use it in all topics\. ✏️ renames an account, 🔑 signs an account or provider in again, 🗑 removes an account, 🔌 disconnects a provider\./);
       await harness.tapButton(screen.messageId!, 'acct_ocuse_0'); // an old keyboard from a topic
       assert.equal(harness.fakeTelegram.callbackAnswers.at(-1), 'An OpenCode model is picked inside a topic.');
     } finally {
@@ -572,13 +582,13 @@ describe('claudeAccounts: /accounts over its ports', () => {
       topicRun = { family: 'claude', rung: { backend: 'claude', profile: 'work', model: null } };
       await harness.runCommand('accounts');
       let screen = harness.replies.at(-1)!;
-      assert.match(screen.text ?? '', /^👤 This topic runs on: Claude «work»\n\n• default — .*\n✓ work — /, 'the session runs on «work» although the pick is «default» (a switch is deferred)');
+      assert.match(screen.text ?? '', /^👤 This topic runs on: Claude «work»\n\n• Main — .*\n✓ work — /, 'the session runs on «work» although the pick is «default» (a switch is deferred)');
       assert.deepEqual(harness.getKeyboardLabels(screen).slice(0, 2).map((row) => row[0].startsWith('✓')), [false, true]);
 
       topicRun = { family: 'opencode', rung: { backend: 'opencode', providerId: 'openai', modelId: 'gpt-5' } };
       await harness.runCommand('accounts');
       screen = harness.replies.at(-1)!;
-      assert.match(screen.text ?? '', /^👤 This topic runs on: OpenCode openai\/gpt-5\n\n• default — /);
+      assert.match(screen.text ?? '', /^👤 This topic runs on: OpenCode openai\/gpt-5\n\n• Main — /);
       assert.equal(harness.getKeyboardLabels(screen).flat().some((label) => label.startsWith('✓')), false, 'no Claude account carries the ✓ while OpenCode runs');
 
       topicRun = { family: 'opencode', rung: null };
@@ -587,7 +597,7 @@ describe('claudeAccounts: /accounts over its ports', () => {
 
       topicRun = { family: null, rung: null };
       await harness.runCommand('accounts');
-      assert.match(harness.replies.at(-1)?.text ?? '', /^👤 This topic runs on: Claude «default»\n\n✓ default — /, 'with no agent the next start\'s account (the pick) is where it will run');
+      assert.match(harness.replies.at(-1)?.text ?? '', /^👤 This topic runs on: Claude «Main»\n\n✓ Main — /, 'with no agent the next start\'s account (the pick) is where it will run');
     } finally {
       await harness.state.setClaudeProfileOverride(harness.key, savedOverride ?? null);
       topicRun = { family: null, rung: null };
@@ -796,22 +806,22 @@ describe('claudeAccounts: /accounts over its ports', () => {
     assert.deepEqual(startedConnects, [{ key: harness.key, providerId: 'openrouter' }]);
     assert.equal(accounts.checkIsAwaitingProfileName(harness.key), false);
     await harness.tapButton(screen.messageId!, 'acct_ocadd');
-    assert.equal(accounts.cancelProfileNameCapture(harness.key), true);
+    assert.equal(accounts.cancelProfileNameCapture(harness.key), 'add');
   });
 
   it('«➕ Claude account» still arms the profile-name capture, not the provider one', async () => {
     await harness.runCommand('accounts');
     await harness.tapButton(harness.replies.at(-1)!.messageId!, 'acct_add');
-    assert.match(harness.replies.at(-1)?.text ?? '', /Name for the new profile/);
+    assert.match(harness.replies.at(-1)?.text ?? '', /Name for the new Claude account — anything up to 40 characters/);
     const before = startedConnects.length;
-    await accounts.submitProfileName(harness.key, 'bad name!');
-    assert.match(harness.replies.at(-1)?.text ?? '', /lowercase letters/);
+    await accounts.submitProfileName(harness.key, '   ');
+    assert.match(harness.replies.at(-1)?.text ?? '', /The name is empty/);
     assert.equal(startedConnects.length, before);
     accounts.cancelProfileNameCapture(harness.key);
   });
 
   it('`add <name> api` creates an API account: recorded as billed to the API, its sign-in is the Claude Console one', async () => {
-    await harness.runCommand('accounts', 'add Console api');
+    await harness.runCommand('accounts', 'add console api');
     const dir = path.join(dataDir, 'claude-profiles', 'console');
     assert.equal(fs.statSync(dir).mode & 0o777, 0o700, 'the same layout as any account');
     assert.equal(harness.state.getClaudeProfileRecord('console')?.billing, 'api');
@@ -908,7 +918,7 @@ describe('claudeAccounts: /accounts over its ports', () => {
     isGeneralTopic = true;
     try {
       await harness.runCommand('accounts', 'use console');
-      assert.match(harness.replies.at(-1)?.text ?? '', /ALL topics: console\.[^\n]*\n💳 [^\n]*every topic that follows the default now costs money/);
+      assert.match(harness.replies.at(-1)?.text ?? '', /all topics: console\.[^\n]*\n💳 [^\n]*every topic that uses the account for all topics now costs money/);
       await harness.runCommand('accounts', 'use default');
     } finally {
       isGeneralTopic = false;
@@ -1024,7 +1034,7 @@ describe('claudeAccounts: /accounts over its ports', () => {
     const picker = harness.replies.at(-1)!;
     await harness.tapButton(picker.messageId!, 'acct_rm_default');
     const ask = harness.edits.at(-1);
-    assert.match(ask?.text ?? '', /Remove the default account \(me@example\.com\)\?.*sessions running on it stop working/);
+    assert.match(ask?.text ?? '', /Sign out «Main» \(me@example\.com\)\?.*sessions running on it stop working/);
     assert.deepEqual(harness.getKeyboardData(ask), [['acct_rmok_default'], ['acct_back']]);
     assert.equal(fs.existsSync(credentials), true, 'asking removes nothing');
 
@@ -1039,8 +1049,8 @@ describe('claudeAccounts: /accounts over its ports', () => {
     assert.equal(harness.state.getClaudeProfileInfo('default')?.isRemoved, true);
 
     const rerendered = harness.edits.at(-1);
-    assert.doesNotMatch(rerendered?.text ?? '', /default — /, 'hidden from the list');
-    assert.match(rerendered?.text ?? '', /\/accounts login default/);
+    assert.doesNotMatch(rerendered?.text ?? '', /Main — /, 'hidden from the list');
+    assert.match(rerendered?.text ?? '', /The account «Main» \(~\/\.claude\) is signed out and hidden\. Sign it in again with \/accounts login Main\./);
     assert.equal(harness.getKeyboardData(rerendered).flat().some((data) => data.endsWith('_default')), false);
     const views = buildClaudeProfileUsageViews({ dataDir, records: harness.state.getAllClaudeProfileInfos() });
     assert.equal(views.some((view) => view.name === 'default'), false, 'and from the fallback ranking');
@@ -1048,8 +1058,151 @@ describe('claudeAccounts: /accounts over its ports', () => {
     // Signed in again (here: the status probe says so) — the account is back.
     setStatus(null, { loggedIn: true, email: 'me@example.com', subscriptionType: 'max', orgName: null, authMethod: 'claude.ai', apiKeySource: null, billing: 'subscription' });
     await harness.runCommand('account');
-    assert.match(harness.replies.at(-1)?.text ?? '', /default — me@example\.com/);
+    assert.match(harness.replies.at(-1)?.text ?? '', /Main — me@example\.com/);
     assert.equal(harness.state.getClaudeProfileInfo('default')?.isRemoved, undefined);
+  });
+
+  // ── display names: ✏️ «Rename», ➕ with a free name, typed commands by name (the rules themselves: claudeProfileLabels.test.ts) ──
+
+  it('✏️ asks for the account\'s new name; the next plain message renames it — the id, its buttons and every pick stay — and the screen the ✏️ sat on shows the new name', async () => {
+    await harness.state.setClaudeProfileOverride(harness.key, 'work');
+    await harness.runCommand('accounts');
+    const picker = harness.replies.at(-1)!;
+    await harness.tapButton(picker.messageId!, 'acct_ren_work');
+    assert.match(harness.replies.at(-1)?.text ?? '', /^✏️ New name for «work» — anything up to 40 characters\. Only the name shown changes/);
+    assert.equal(accounts.checkIsAwaitingProfileName(harness.key), true);
+    const editsBefore = harness.edits.length;
+
+    await accounts.submitProfileName(harness.key, '  Sergei.Solo@work  ');
+    assert.equal(harness.state.getClaudeProfileRecord('work')?.label, 'Sergei.Solo@work');
+    assert.equal(harness.state.getClaudeProfileOverride(harness.key), 'work', 'the topic\'s pick still names the id');
+    assert.ok(fs.existsSync(path.join(dataDir, 'claude-profiles', 'work')), 'the folder keeps its name');
+    assert.equal(accounts.checkIsAwaitingProfileName(harness.key), false);
+    assert.match(harness.replies.at(-1)?.text ?? '', /^✅ «work» is now called «Sergei\.Solo@work»\.$/);
+    const rerendered = harness.edits.at(-1)!;
+    assert.equal(harness.edits.length, editsBefore + 1);
+    assert.equal(rerendered.messageId, picker.messageId, 'the screen is re-rendered in place');
+    assert.match(rerendered.text ?? '', /^👤 This topic runs on: Claude «Sergei\.Solo@work»\n/);
+    assert.match(rerendered.text ?? '', /\n✓ Sergei\.Solo@work — work@example\.com/);
+    const workRow = harness.getKeyboardData(rerendered).find((row) => row[0] === 'acct_use_work');
+    assert.deepEqual(workRow, ['acct_use_work', 'acct_ren_work', 'acct_login_work', 'acct_rm_work'], 'the buttons still carry the id');
+    assert.match(harness.getKeyboardLabels(rerendered).find((row) => row[1] === '✏️' && row[0].includes('Sergei'))?.[0] ?? '', /^✓ Sergei\.Solo@work · work@example\.com$/);
+  });
+
+  it('a renamed name follows the same rules as a new one: another account\'s name or id is refused and the prompt stays armed; an account may go back to its id; a pasted key is deleted', async () => {
+    await harness.runCommand('accounts', 'add spare');
+    await harness.runCommand('accounts');
+    const picker = harness.replies.at(-1)!;
+    await harness.tapButton(picker.messageId!, 'acct_ren_spare');
+    await accounts.submitProfileName(harness.key, 'SERGEI.SOLO@WORK');
+    assert.match(harness.replies.at(-1)?.text ?? '', /^❌ The account «Sergei\.Solo@work» already has that name\. Send another one\./);
+    assert.equal(accounts.checkIsAwaitingProfileName(harness.key), true, 'a refused name keeps the prompt armed');
+    await accounts.submitProfileName(harness.key, 'Work');
+    assert.match(harness.replies.at(-1)?.text ?? '', /^❌ That is the internal id of the account «Sergei\.Solo@work», so a typed command could not tell the two apart/);
+    await accounts.submitProfileName(harness.key, 'main');
+    assert.match(harness.replies.at(-1)?.text ?? '', /The account «Main» already has that name/, '~/.claude is «Main» until renamed: the name is taken');
+    const keyMessageId = 9_101;
+    await accounts.submitProfileName(harness.key, `sk-ant-api03-${'r'.repeat(40)}`, keyMessageId);
+    assert.ok(harness.deletedMessageIds.includes(keyMessageId), 'the key message is deleted');
+    assert.match(harness.replies.at(-1)?.text ?? '', /looked like an Anthropic key[^\n]*new name/);
+    assert.equal(harness.state.getClaudeProfileRecord('spare')?.label, undefined);
+
+    await accounts.submitProfileName(harness.key, 'Spare (team seat)');
+    assert.equal(harness.state.getClaudeProfileRecord('spare')?.label, 'Spare (team seat)');
+    await harness.tapButton(picker.messageId!, 'acct_ren_spare');
+    await accounts.submitProfileName(harness.key, 'spare');
+    assert.equal(harness.state.getClaudeProfileRecord('spare')?.label, undefined, 'back to its id: no display name of its own');
+    assert.match(harness.replies.at(-1)?.text ?? '', /^✅ «Spare \(team seat\)» is now called «spare»\.$/);
+    await harness.runCommand('accounts', 'remove spare');
+  });
+
+  it('/esc during ✏️ says the renaming is cancelled; a ✏️ of an account that is gone only answers the tap', async () => {
+    await harness.runCommand('accounts');
+    const picker = harness.replies.at(-1)!;
+    await harness.tapButton(picker.messageId!, 'acct_ren_work');
+    assert.equal(accounts.cancelProfileNameCapture(harness.key), 'rename', 'the bot words the cancel by what was armed (account.renameCancelled)');
+    const repliesBefore = harness.replies.length;
+    await harness.tapButton(picker.messageId!, 'acct_ren_nobody');
+    assert.equal(harness.fakeTelegram.callbackAnswers.at(-1), '❌ No profile named nobody. Run /accounts to see the list.');
+    assert.equal(harness.replies.length, repliesBefore);
+    assert.equal(accounts.checkIsAwaitingProfileName(harness.key), false);
+  });
+
+  it('~/.claude is renamed the same way: «Main» gives way to its own name everywhere on the screen, General\'s title included, and going back to «default» shows «Main» again', async () => {
+    await harness.runCommand('accounts');
+    await harness.tapButton(harness.replies.at(-1)!.messageId!, 'acct_ren_default');
+    assert.match(harness.replies.at(-1)?.text ?? '', /New name for «Main»/);
+    await accounts.submitProfileName(harness.key, 'Личный 🏠');
+    assert.equal(harness.state.getClaudeProfileInfo('default')?.label, 'Личный 🏠');
+    assert.equal(harness.state.getClaudeProfileRecord('default'), undefined, 'still no added profile');
+    isGeneralTopic = true;
+    try {
+      await harness.runCommand('accounts', 'use личный 🏠');
+      assert.match(harness.replies.at(-1)?.text ?? '', /^✅ Claude account for all topics: Личный 🏠\./);
+      await harness.runCommand('accounts');
+      const general = harness.replies.at(-1)?.text ?? '';
+      assert.match(general, /^👤 Claude account for all topics: Личный 🏠\n\n✓ Личный 🏠 — me@example\.com/);
+      assert.doesNotMatch(general, /Main|default/);
+    } finally {
+      isGeneralTopic = false;
+    }
+    await harness.tapButton(harness.replies.at(-1)!.messageId!, 'acct_ren_default');
+    await accounts.submitProfileName(harness.key, 'default');
+    assert.equal(harness.state.getClaudeProfileInfo('default')?.label, undefined);
+    assert.match(harness.replies.at(-1)?.text ?? '', /^✅ «Личный 🏠» is now called «Main»\.$/);
+  });
+
+  it('typed commands take a display name or an id, case ignored; an unknown one says so with the name as typed', async () => {
+    applyOutcome = 'inactive';
+    await harness.runCommand('accounts', 'use SERGEI.SOLO@work');
+    assert.equal(harness.state.getClaudeProfileOverride(harness.key), 'work');
+    assert.match(harness.replies.at(-1)?.text ?? '', /account for this topic: work\./, 'the stand-in switch port words it by id; the bot\'s own words name it: fallback tests');
+    await harness.runCommand('accounts', 'use Main');
+    assert.equal(harness.state.getClaudeProfileOverride(harness.key), 'default');
+    await harness.runCommand('accounts', 'use WORK');
+    assert.equal(harness.state.getClaudeProfileOverride(harness.key), 'work');
+    const startedBefore = startedLogins.length;
+    await harness.runCommand('accounts', 'login sergei.solo@work');
+    assert.equal(startedLogins.at(-1)?.profile.name, 'work');
+    await harness.runCommand('accounts', 'login main');
+    assert.deepEqual(startedLogins.at(-1)?.profile, { name: 'default', configDir: null });
+    assert.equal(startedLogins.length, startedBefore + 2);
+    await harness.runCommand('accounts', 'login Nobody Here');
+    assert.equal(harness.replies.at(-1)?.text, '❌ No profile named Nobody Here. Run /accounts to see the list.');
+    assert.equal(startedLogins.length, startedBefore + 2);
+    await harness.runCommand('accounts', 'remove Nobody Here');
+    assert.equal(harness.replies.at(-1)?.text, '❌ No profile named Nobody Here. Run /accounts to see the list.');
+  });
+
+  it('➕ takes any name: the id is derived from it (a number on a clash), the name is shown and kept, the sign-in runs under the id; `id:<id>` picks the id by hand', async () => {
+    await harness.runCommand('accounts');
+    await harness.tapButton(harness.replies.at(-1)!.messageId!, 'acct_add');
+    await accounts.submitProfileName(harness.key, 'Работа');
+    const rabotaDir = path.join(dataDir, 'claude-profiles', 'rabota');
+    assert.ok(fs.existsSync(rabotaDir));
+    assert.equal(harness.state.getClaudeProfileRecord('rabota')?.label, 'Работа');
+    assert.deepEqual(startedLogins.at(-1), { key: harness.key, profile: { name: 'rabota', configDir: rabotaDir } });
+    assert.match(harness.replies.at(-1)?.text ?? '', /Profile Работа created/);
+
+    // A folder already on disk (left by hand, no record) is never reused for a derived id.
+    fs.mkdirSync(path.join(dataDir, 'claude-profiles', 'sergei-solo-home'), { recursive: true });
+    await harness.runCommand('accounts', 'add Sergei.Solo@home');
+    assert.equal(harness.state.getClaudeProfileRecord('sergei-solo-home-2')?.label, 'Sergei.Solo@home');
+    fs.rmSync(path.join(dataDir, 'claude-profiles', 'sergei-solo-home'), { recursive: true, force: true });
+
+    await harness.runCommand('accounts', 'add Ada (worker) id:ADA');
+    assert.equal(harness.state.getClaudeProfileRecord('ada')?.label, 'Ada (worker)');
+    assert.equal(startedLogins.at(-1)?.profile.name, 'ada', 'a typed id is lowercased');
+
+    const longName = 'Sergei Solomatkin — corporate team seat 2';
+    assert.equal(Array.from(longName).length, 41);
+    await harness.runCommand('accounts', `add ${longName.slice(0, -2)}`);
+    await harness.runCommand('accounts');
+    const screen = harness.replies.at(-1)!;
+    assert.match(screen.text ?? '', /\n• Sergei Solomatkin — corporate team seat — not signed in/, 'the text shows a long name whole');
+    assert.ok(harness.getKeyboardLabels(screen).some((row) => row[0] === 'Sergei Solomatkin — cor… · not signed in'), 'a button cuts it with an ellipsis');
+
+    for (const name of ['rabota', 'sergei-solo-home-2', 'ada', 'sergei-solomatkin-corporate-team']) await harness.state.removeClaudeProfileRecord(name);
   });
 
   it('a credentials file that holds only the login is deleted with it; a missing one is a no-op', () => {

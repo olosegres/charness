@@ -733,12 +733,12 @@ describe('The usage-limit switch to and from OpenCode end to end: built charness
 
   it('the General board: a Claude row sets the instance default and the ✓ follows; an OpenCode row only says a model is picked inside a topic and changes nothing', async () => {
     const board = await openLimitsBoard(fakeTelegram, general, generalTopicThreadId);
-    assert.match(board.message.text, /Defaults for all topics: 🔁 Auto switch: ON · ⏳ Wait for reset: ON — \/limits_autoswitch\n\nChoose the default Claude account:$/);
+    assert.match(board.message.text, /Defaults for all topics: 🔁 Auto switch: ON · ⏳ Wait for reset: ON — \/limits_autoswitch\n\nChoose the Claude account for all topics:$/);
     assert.match(board.rowLabel('Claude · default'), /^✓ Claude · default/, 'the default account carries the ✓ in General');
     assert.equal(readPersistedState(getLayout()).claudeProfileDefault, undefined, 'no default of its own yet');
 
     const setToast = await general.tapAndAwaitAnswer(board.message, board.rowData(`Claude · ${takeoverAccount}`));
-    assert.match(setToast, new RegExp(`Default Claude account for ALL topics: ${takeoverAccount}`));
+    assert.match(setToast, new RegExp(`Claude account for all topics: ${takeoverAccount}`));
     await getCharness().waitFor('the default account in state.json', replyTimeoutMs, () => readPersistedState(getLayout()).claudeProfileDefault === takeoverAccount);
     await getCharness().waitFor('the ✓ to follow the tap', replyTimeoutMs, () => general.getKeyboardLabels(board.message).flat().some((label) => label.startsWith(`✓ Claude · ${takeoverAccount}`)));
     assert.ok(!general.getKeyboardLabels(board.message).flat().some((label) => label.startsWith(`✓ Claude · ${exhaustedAccount}`)), 'the old default lost its ✓');

@@ -414,10 +414,10 @@ describe('limitsBoard: /limits over its ports', () => {
       const [heading, , , , settingsLine, , caption] = board.text.split('\n');
       assert.equal(heading, 'Usage (% used)', 'the usage block is on the General board too');
       assert.equal(settingsLine, 'Defaults for all topics: 🔁 Auto switch: ON · ⏳ Wait for reset: ON — /limits_autoswitch');
-      assert.equal(caption, 'Choose the default Claude account:');
+      assert.equal(caption, 'Choose the Claude account for all topics:');
       assert.deepEqual(board.labels, ['Claude · perf', '✓ Claude · default', 'OpenCode · openai', 'OpenCode · openrouter', 'OpenCode · solo', '🔔 Reminders: every 1 h'], 'General has the row too');
       assert.equal(board.labels[1].startsWith('✓ Claude · default'), true, 'the default account carries the ✓');
-      claudePickLine = '✅ Default Claude account for ALL topics: perf.';
+      claudePickLine = '✅ Claude account for all topics: perf.';
       await harness.tapButton(board.messageId, 'lim_c_0');
       assert.deepEqual(claudePicks, [{ key: harness.key, isGeneral: true, name: 'perf' }]);
       assert.equal(harness.fakeTelegram.callbackAnswers.at(-1), claudePickLine);
@@ -437,7 +437,7 @@ describe('limitsBoard: /limits over its ports', () => {
       // General: the board must show the NEW default, not the one it was drawn with.
       isGeneralTopic = true;
       generalPickSetsDefault = true;
-      claudePickLine = '✅ Default Claude account for ALL topics: perf.';
+      claudePickLine = '✅ Claude account for all topics: perf.';
       const general = await openBoard();
       assert.match(general.labels[1], /^✓ Claude · default/, 'precondition: the board was drawn with the old default');
       let repliesBefore = harness.replies.length;

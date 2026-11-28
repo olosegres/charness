@@ -34,10 +34,12 @@ import {
 import {
   accountLoginCallbackRe,
   accountRemoveCallbackRe,
+  accountRenameCallbackRe,
   accountSignInCallbackRe,
   accountUseCallbackRe,
   buildAccountPickerRows,
   buildAccountRemoveCallback,
+  buildAccountRenameCallback,
   buildAccountSignInCallback,
   buildAccountUseCallback,
   countTopicsPerProfile,
@@ -212,6 +214,16 @@ describe('account picker plan', () => {
     assert.equal(parseAccountCallbackName('acct_signin_work', accountLoginCallbackRe, { allowDefault: true }), null);
   });
 
+  it('✏️ bakes the id, never the display name: within the cap, `default` included, no other button\'s data', () => {
+    const longest = 'a'.repeat(claudeProfileNameMaxLength);
+    assert.ok(Buffer.byteLength(buildAccountRenameCallback(longest)) <= 64);
+    assert.equal(parseAccountCallbackName(buildAccountRenameCallback('work'), accountRenameCallbackRe, { allowDefault: true }), 'work');
+    assert.equal(parseAccountCallbackName('acct_ren_default', accountRenameCallbackRe, { allowDefault: true }), 'default');
+    assert.equal(parseAccountCallbackName('acct_ren_Sergei.Solo', accountRenameCallbackRe, { allowDefault: true }), null, 'a display name is never button data');
+    assert.equal(parseAccountCallbackName('acct_rm_work', accountRenameCallbackRe, { allowDefault: true }), null, '🗑 is another button');
+    assert.equal(parseAccountCallbackName('acct_ren_work', accountRemoveCallbackRe, { allowDefault: true }), null);
+  });
+
   it('rows: default first, then the added profiles in creation order, with the active mark and topic counts', () => {
     const rows = buildAccountPickerRows({
       records: {
@@ -222,11 +234,22 @@ describe('account picker plan', () => {
       activeName: 'team',
       topicCounts: countTopicsPerProfile(['default', 'team', 'team']),
     });
-    assert.deepEqual(rows.map((row) => [row.name, row.isActive, row.kind, row.topicCount, row.loggedIn]), [
-      ['default', false, 'personal', 1, true],
-      ['work', false, 'unknown', 0, false],
-      ['team', true, 'corporate', 2, true],
+    assert.deepEqual(rows.map((row) => [row.name, row.label, row.isActive, row.kind, row.topicCount, row.loggedIn]), [
+      ['default', 'default', false, 'personal', 1, true],
+      ['work', 'work', false, 'unknown', 0, false],
+      ['team', 'team', true, 'corporate', 2, true],
     ]);
+  });
+
+  it('rows show what the caller calls each profile; the ids stay the rows\' keys', () => {
+    const rows = buildAccountPickerRows({
+      records: { work: { createdAt: '2026-10-01T00:00:00Z', label: 'Sergei.Solo@work' } },
+      defaultStatus: { loggedIn: true, email: 'me@example.com', subscriptionType: 'max' },
+      activeName: 'work',
+      topicCounts: new Map(),
+      getLabel: (name) => (name === 'default' ? 'Main' : `«${name}»`),
+    });
+    assert.deepEqual(rows.map((row) => [row.name, row.label, row.isActive]), [['default', 'Main', false], ['work', '«work»', true]]);
   });
 });
 

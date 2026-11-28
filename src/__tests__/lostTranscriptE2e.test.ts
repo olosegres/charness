@@ -241,7 +241,7 @@ describe('A conversation whose transcript was removed, end to end: built charnes
       fakeTelegram.isCallbackAnswerExpired = false;
     }
     assert.ok(
-      general.listMessages().some((message) => message.text.includes(`Default Claude account for ALL topics: ${secondAccount}`)),
+      general.listMessages().some((message) => message.text.includes(`Claude account for all topics: ${secondAccount}`)),
       'the toast was refused: the confirmation is a message',
     );
     await waitForSessionRespawn(getCharness(), getLayout(), 'the topic\'s agent to be re-spawned under the second account', getAccountConfigDir(getLayout(), secondAccount), sessionId, launchesBefore);

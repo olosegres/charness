@@ -105,13 +105,12 @@ export function checkClaudeProfileLabel(input: { label: string; selfName: string
   if (label === '') return { kind: 'empty' };
   if (countCharacters(label) > claudeProfileLabelMaxLength) return { kind: 'tooLong', max: claudeProfileLabelMaxLength };
   const key = getComparisonKey(label);
-  for (const account of input.accounts) {
-    if (account.name === input.selfName) continue;
-    if (getComparisonKey(account.name) === key) return { kind: 'isId', label: account.labels[0] ?? account.name };
-    const taken = account.labels.find((known) => getComparisonKey(known) === key);
-    if (taken !== undefined) return { kind: 'taken', label: account.labels[0] ?? taken };
-  }
-  return null;
+  const others = input.accounts.filter((account) => account.name !== input.selfName);
+  // A name shown first: an account with no display name of its own shows its id, and that is a name taken, not a hidden id.
+  const namesake = others.find((account) => account.labels.some((known) => getComparisonKey(known) === key));
+  if (namesake) return { kind: 'taken', label: namesake.labels[0] };
+  const idOwner = others.find((account) => getComparisonKey(account.name) === key);
+  return idOwner ? { kind: 'isId', label: idOwner.labels[0] ?? idOwner.name } : null;
 }
 
 /** The slug of a display name: Latin letters (Cyrillic transliterated, accents dropped), digits and single `-` between them. */

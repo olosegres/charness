@@ -11023,10 +11023,11 @@ command(escapeCommandNames, async (ctx, key) => {
   // A talker's /esc only interrupts the running turn: the prompts below are an admin's (a sign-in, a name for an account or a
   // topic), and ending one is the admin's own word.
   if ((await authoriseTopicSpeaker(ctx))?.role !== 'talker') {
-    // A pending «Add account» name prompt, a pending sign-in (`/login`, `/connect` OAuth) and a `/topic` wizard take
-    // priority: the first /esc only cancels it, so the topic stops waiting for typed input.
-    if (cancelProfileNameCapture(key)) {
-      await replyToThread(key, t('account.askNameCancelled'));
+    // A pending «Add account» name prompt (or ✏️'s new name), a pending sign-in (`/login`, `/connect` OAuth) and a `/topic` wizard
+    // take priority: the first /esc only cancels it, so the topic stops waiting for typed input.
+    const cancelledCapture = cancelProfileNameCapture(key);
+    if (cancelledCapture !== null) {
+      await replyToThread(key, t(cancelledCapture === 'rename' ? 'account.renameCancelled' : 'account.askNameCancelled'));
       return;
     }
     if (cancelPendingLogin(key)) {

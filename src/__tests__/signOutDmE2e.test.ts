@@ -129,7 +129,7 @@ function listPrivateSignOutMessages(): FakeTelegramMessage[] {
 
 /** The operator's `/accounts` in General: the forced probe of every account runs before the screen is drawn. */
 async function probeAccounts(): Promise<FakeTelegramMessage> {
-  return general.sendAndAwaitReply('/accounts', 'Claude account — default for ALL topics');
+  return general.sendAndAwaitReply('/accounts', 'Claude account for all topics');
 }
 
 /** The usage block and the rows of `/limits` in General, for the account. */
