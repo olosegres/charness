@@ -76,6 +76,7 @@ import {
   accountRemoveConfirmCallbackRe,
   accountRemoveMenuCallback,
   accountRenameCallbackRe,
+  accountRenameMenuCallback,
   accountUseCallbackRe,
   buildAccountLoginCallback,
   buildAccountDisconnectCallback,
@@ -496,14 +497,15 @@ export function createClaudeAccounts(ports: ClaudeAccountsPorts) {
     // The usage hint (which says the percentages are USED) follows the account list it explains.
     const buttonsHint = t(isGeneral ? 'accounts.buttonsHintGeneral' : 'accounts.buttonsHint');
     const text = `${title}${removedNote}\n\n${t('account.usageHint')}\n\n${openCodeSection}\n\n${buttonsHint}\n\n${t('account.autoSwitchHint')}`;
-    // One row per Claude account: pick it (✓ = where the topic runs), rename it (its display name only), sign it in again, remove it
-    // (`default` too: signs it out).
+    // One row per Claude account: pick it (✓ = where the topic runs), sign it in again, remove it (`default` too: signs it out). Three
+    // buttons, no more: a phone splits a row's width evenly, and the pick must keep room for the account's name.
     const keyboardRows = rows.map((row) => [
       Markup.button.callback(formatRowButton(row), buildAccountUseCallback(row.name)),
-      Markup.button.callback('✏️', buildAccountRenameCallback(row.name)),
       Markup.button.callback('🔑', buildAccountLoginCallback(row.name)),
       Markup.button.callback('🗑', buildAccountRemoveCallback(row.name)),
     ]);
+    // ✏️ once under the accounts: it opens the choice of the account to rename (its display name only).
+    if (rows.length > 0) keyboardRows.push([Markup.button.callback(t('account.renameButton'), accountRenameMenuCallback)]);
     // A provider row mirrors it. In a topic its caption is the pick (the model page follows), 🔑 connects it again and
     // 🔌 disconnects it; in General a provider can only be connected or disconnected: «🔌 Disconnect X» and 🔑.
     providers.forEach((provider, index) => {
@@ -1087,11 +1089,19 @@ export function createClaudeAccounts(ports: ClaudeAccountsPorts) {
       if (message) await replyToThread(key, message);
     }));
 
-    // ✏️ → ask for the account's new display name; the screen stays as it is until the name is set, then it is re-rendered.
-    bot.action(accountRenameCallbackRe, (ctx) => handleTap(ctx, async (key, _isGeneral, messageId) => {
+    // «✏️ Rename an account» → the choice of the account, in the screen's own message (Back returns to the screen).
+    bot.action(accountRenameMenuCallback, (ctx) => handleTap(ctx, async (key, _isGeneral, messageId) => {
+      await answerCallbackQuerySafely(ctx);
+      if (messageId !== null) await editThreadMessage(key, messageId, t('account.pickRename'), buildProfileChoiceKeyboard(buildAccountRenameCallback, true));
+    }));
+
+    // An account of the choice (or an older screen's ✏️) → the choice turns back into the screen and the account's new display name is
+    // asked; once it is set the screen is re-rendered with it.
+    bot.action(accountRenameCallbackRe, (ctx) => handleTap(ctx, async (key, isGeneral, messageId) => {
       const name = parseAccountCallbackName(ctx.match[0], accountRenameCallbackRe, { allowDefault: true });
       if (name === null || !checkIsKnownProfile(name)) { await answerCallbackQuerySafely(ctx, t('account.unknown', { name: name ?? '?' })); return; }
       await answerCallbackQuerySafely(ctx);
+      await rerenderPicker(key, messageId, isGeneral);
       await askRename(key, name, messageId);
     }));
 

@@ -170,6 +170,7 @@ describe('claudeAccounts: /accounts over its ports', () => {
       'acct_back',
       String(/^acct_login_([a-z0-9][a-z0-9_-]{0,31})$/),
       String(/^acct_signin_([a-z0-9][a-z0-9_-]{0,31})$/),
+      'acct_renmenu',
       String(/^acct_ren_([a-z0-9][a-z0-9_-]{0,31})$/),
       String(/^acct_rm_([a-z0-9][a-z0-9_-]{0,31})$/),
       String(/^acct_rmok_([a-z0-9][a-z0-9_-]{0,31})$/),
@@ -184,11 +185,12 @@ describe('claudeAccounts: /accounts over its ports', () => {
     assert.match(picker?.text ?? '', /✓ Main — me@example\.com, personal max/);
     assert.doesNotMatch(picker?.text ?? '', /default/, 'the word «default» names neither ~/.claude nor General\'s pick any more');
     assert.deepEqual(harness.getKeyboardData(picker), [
-      ['acct_use_default', 'acct_ren_default', 'acct_login_default', 'acct_rm_default'],
+      ['acct_use_default', 'acct_login_default', 'acct_rm_default'],
+      ['acct_renmenu'],
       ['acct_add', 'acct_ocadd'],
       ['acct_addapi'],
-    ], 'one row per account (pick + rename + re-login + remove, `default` included), then the two adders and the API account adder');
-    assert.deepEqual(harness.getKeyboardLabels(picker)[0], ['✓ Main · me@example.com', '✏️', '🔑', '🗑']);
+    ], 'one row of three per account (pick + re-login + remove, `default` included) — a phone splits a row evenly, so the pick keeps a third —, ✏️ once under them, then the two adders and the API account adder');
+    assert.deepEqual(harness.getKeyboardLabels(picker).slice(0, 2), [['✓ Main · me@example.com', '🔑', '🗑'], ['✏️ Rename an account']]);
     assert.match(picker?.text ?? '', /OpenCode providers: none connected yet/);
     // The default's probe lands on its hidden record (the usage ranking and the CLI twin read it there), never on the registry.
     assert.equal(harness.state.getClaudeProfileInfo('default')?.email, 'me@example.com');
@@ -305,9 +307,10 @@ describe('claudeAccounts: /accounts over its ports', () => {
     const picker = harness.replies.at(-1);
     assert.match(picker?.text ?? '', /• work — work@example\.com, corporate team/);
     assert.match(picker?.text ?? '', /• team — not signed in/);
-    assert.deepEqual(harness.getKeyboardData(picker)[0], ['acct_use_default', 'acct_ren_default', 'acct_login_default', 'acct_rm_default']);
-    assert.deepEqual(harness.getKeyboardData(picker)[1], ['acct_use_work', 'acct_ren_work', 'acct_login_work', 'acct_rm_work']);
-    assert.deepEqual(harness.getKeyboardData(picker)[2], ['acct_use_team', 'acct_ren_team', 'acct_login_team', 'acct_rm_team']);
+    assert.deepEqual(harness.getKeyboardData(picker)[0], ['acct_use_default', 'acct_login_default', 'acct_rm_default']);
+    assert.deepEqual(harness.getKeyboardData(picker)[1], ['acct_use_work', 'acct_login_work', 'acct_rm_work']);
+    assert.deepEqual(harness.getKeyboardData(picker)[2], ['acct_use_team', 'acct_login_team', 'acct_rm_team']);
+    assert.deepEqual(harness.getKeyboardData(picker)[3], ['acct_renmenu'], '✏️ once, under the accounts');
   });
 
   it('the sign-in button of a message that is NOT the picker (`acct_signin_<name>`: the private sign-out message, a signed-out /limits row) starts the very sign-in 🔑 starts and leaves its message as it is; 🔑 of the picker turns its message into the picker', async () => {
@@ -1064,11 +1067,19 @@ describe('claudeAccounts: /accounts over its ports', () => {
 
   // ── display names: ✏️ «Rename», ➕ with a free name, typed commands by name (the rules themselves: claudeProfileLabels.test.ts) ──
 
-  it('✏️ asks for the account\'s new name; the next plain message renames it — the id, its buttons and every pick stay — and the screen the ✏️ sat on shows the new name', async () => {
+  it('✏️ under the accounts opens the account choice; a pick asks for the new name; the next plain message renames it — the id, its buttons and every pick stay — and the screen the ✏️ sat on shows the new name', async () => {
     await harness.state.setClaudeProfileOverride(harness.key, 'work');
     await harness.runCommand('accounts');
     const picker = harness.replies.at(-1)!;
+    await harness.tapButton(picker.messageId!, 'acct_renmenu');
+    const choice = harness.edits.at(-1)!;
+    assert.equal(choice.messageId, picker.messageId, 'the choice opens in the screen\'s own message');
+    assert.equal(choice.text, '✏️ Which account should be renamed?');
+    const choiceData = harness.getKeyboardData(choice);
+    assert.deepEqual([choiceData[0], choiceData[1], choiceData.at(-1)], [['acct_ren_default'], ['acct_ren_work'], ['acct_back']], 'every account, ~/.claude included, then Back');
+    assert.deepEqual(harness.getKeyboardLabels(choice)[0], ['Main']);
     await harness.tapButton(picker.messageId!, 'acct_ren_work');
+    assert.match(harness.edits.at(-1)?.text ?? '', /^👤 This topic runs on:/, 'the choice is consumed back into the screen');
     assert.match(harness.replies.at(-1)?.text ?? '', /^✏️ New name for «work» — anything up to 40 characters\. Only the name shown changes/);
     assert.equal(accounts.checkIsAwaitingProfileName(harness.key), true);
     const editsBefore = harness.edits.length;
@@ -1085,8 +1096,8 @@ describe('claudeAccounts: /accounts over its ports', () => {
     assert.match(rerendered.text ?? '', /^👤 This topic runs on: Claude «Sergei\.Solo@work»\n/);
     assert.match(rerendered.text ?? '', /\n✓ Sergei\.Solo@work — work@example\.com/);
     const workRow = harness.getKeyboardData(rerendered).find((row) => row[0] === 'acct_use_work');
-    assert.deepEqual(workRow, ['acct_use_work', 'acct_ren_work', 'acct_login_work', 'acct_rm_work'], 'the buttons still carry the id');
-    assert.match(harness.getKeyboardLabels(rerendered).find((row) => row[1] === '✏️' && row[0].includes('Sergei'))?.[0] ?? '', /^✓ Sergei\.Solo@work · work@example\.com$/);
+    assert.deepEqual(workRow, ['acct_use_work', 'acct_login_work', 'acct_rm_work'], 'the buttons still carry the id');
+    assert.match(harness.getKeyboardLabels(rerendered).find((row) => row[1] === '🔑' && row[0].includes('Sergei'))?.[0] ?? '', /^✓ Sergei\.Solo@work · work@example\.com$/);
   });
 
   it('a renamed name follows the same rules as a new one: another account\'s name or id is refused and the prompt stays armed; an account may go back to its id; a pasted key is deleted', async () => {

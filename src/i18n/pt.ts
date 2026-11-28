@@ -1072,6 +1072,8 @@ export const ptDict: Record<string, string> = {
   'accounts.alert.openPrivateChat': 'Para ser avisado por mensagem privada da próxima vez, abra uma conversa privada com {bot} e toque em Start.',
   'account.askName': '➕ Nome para a nova conta Claude — o que quiser, até {max} caracteres: maiúsculas, pontos, espaços, @, qualquer língua (ex. Trabalho ou me@company). Envie-o como próxima mensagem, ou execute /accounts add <nome>.',
   'account.invalidName': '❌ {problem}. Um identificador: letras latinas a–z, dígitos, - e _ (primeiro uma letra ou um dígito), até {max} caracteres; as maiúsculas passam a minúsculas.',
+  'account.renameButton': '✏️ Renomear uma conta',
+  'account.pickRename': '✏️ Que conta quer renomear?',
   'account.askRename': '✏️ Novo nome para «{name}» — o que quiser, até {max} caracteres. Só muda o nome mostrado: os tópicos, a lista de /limits e os agentes usam a conta como antes. Envie-o como próxima mensagem.',
   'account.renamed': '✅ «{old}» chama-se agora «{name}».',
   'account.renameCancelled': '✖ Mudança de nome cancelada. As mensagens voltam a ir para o agente.',

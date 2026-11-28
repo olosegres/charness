@@ -1065,6 +1065,8 @@ export const zhDict: Record<string, string> = {
   'accounts.alert.openPrivateChat': '要在下次通过私信收到此类通知，请与 {bot} 打开私聊并点击 Start。',
   'account.askName': '➕ 新 Claude 账号的名称——任意内容，最多 {max} 个字符：大写、点、空格、@、任何语言（例如 工作 或 me@company）。作为下一条消息发送，或运行 /accounts add <名称>。',
   'account.invalidName': '❌ {problem}。内部名称由拉丁字母 a–z、数字、- 和 _ 组成（以字母或数字开头），最多 {max} 个字符；大写会变为小写。',
+  'account.renameButton': '✏️ 重命名账号',
+  'account.pickRename': '✏️ 要重命名哪个账号？',
   'account.askRename': '✏️「{name}」的新名称——任意内容，最多 {max} 个字符。只改变显示的名称：话题、/limits 列表和智能体仍照旧使用该账号。作为下一条消息发送。',
   'account.renamed': '✅「{old}」现在叫「{name}」。',
   'account.renameCancelled': '✖ 已取消重命名。消息重新发送给智能体。',

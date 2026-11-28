@@ -219,7 +219,9 @@ describe('A Claude account whose sign-in expires, end to end: built charness, fa
 
   it('✏️ renames the account: the screen shows the new name at once, the id stays, and /limits names it so', async () => {
     const screen = await probeAccounts();
-    assert.ok(general.getKeyboardData(screen).some((row) => row.includes(`acct_ren_${account}`)), 'every account row has ✏️');
+    await general.tapAndAwaitAnswer(screen, 'acct_renmenu');
+    await general.waitForMessageText('the account choice', screen, (text) => text === '✏️ Which account should be renamed?');
+    assert.ok(general.getKeyboardData(screen).some((row) => row.includes(`acct_ren_${account}`)), 'the account is offered');
     await general.tapAndAwaitAnswer(screen, `acct_ren_${account}`);
     await general.waitForMessage('the rename question', (message) => message.text.startsWith(`✏️ New name for «${account}»`));
     fakeTelegram.pushOperatorMessage(generalTopicThreadId, `  ${accountName}  `);

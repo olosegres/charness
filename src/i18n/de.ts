@@ -1071,6 +1071,8 @@ export const deDict: Record<string, string> = {
   'accounts.alert.openPrivateChat': 'Damit du das nächstes Mal privat erfährst, öffne einen privaten Chat mit {bot} und drücke Start.',
   'account.askName': '➕ Name für das neue Claude-Konto — beliebig, bis zu {max} Zeichen: Großbuchstaben, Punkte, Leerzeichen, @, jede Sprache (z. B. Arbeit oder me@company). Sende ihn als nächste Nachricht oder führe /accounts add <name> aus.',
   'account.invalidName': '❌ {problem}. Eine ID besteht aus lateinischen Buchstaben a–z, Ziffern, - und _ (zuerst ein Buchstabe oder eine Ziffer), höchstens {max} Zeichen; Großbuchstaben werden klein.',
+  'account.renameButton': '✏️ Konto umbenennen',
+  'account.pickRename': '✏️ Welches Konto soll umbenannt werden?',
   'account.askRename': '✏️ Neuer Name für «{name}» — beliebig, bis zu {max} Zeichen. Nur der angezeigte Name ändert sich: Themen, die /limits-Liste und Agenten nutzen das Konto wie bisher. Sende ihn als nächste Nachricht.',
   'account.renamed': '✅ «{old}» heißt jetzt «{name}».',
   'account.renameCancelled': '✖ Umbenennen abgebrochen. Nachrichten gehen wieder an den Agenten.',

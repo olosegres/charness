@@ -36,6 +36,11 @@ export const accountSignInCallbackRe = new RegExp(`^acct_signin_${nameGroup}$`);
 export const accountRemoveCallbackRe = new RegExp(`^acct_rm_${nameGroup}$`);
 /** ✏️: ask for the named profile's new display name (the id in the data never changes). */
 export const accountRenameCallbackRe = new RegExp(`^acct_ren_${nameGroup}$`);
+/**
+ * «✏️ Rename an account» under the account rows: the choice of the account to rename (one button each, `acct_ren_<id>`). Spelled
+ * without the `acct_ren_` prefix, so no account id can be mistaken for it.
+ */
+export const accountRenameMenuCallback = 'acct_renmenu';
 export const accountRemoveConfirmCallbackRe = new RegExp(`^acct_rmok_${nameGroup}$`);
 /** Ask for a new profile's name. */
 export const accountAddCallback = 'acct_add';

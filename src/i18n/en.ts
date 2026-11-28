@@ -1115,6 +1115,8 @@ export const enDict: Record<string, string> = {
   'accounts.alert.openPrivateChat': 'To be told about this in a private message next time, open a private chat with {bot} and press Start.',
   'account.askName': '➕ Name for the new Claude account — anything up to {max} characters: capitals, dots, spaces, @, any language (e.g. Work or me@company). Send it as the next message, or run /accounts add <name>.',
   'account.invalidName': '❌ {problem}. An id is Latin letters a–z, digits, - and _ (a letter or a digit first), up to {max} characters; capitals become lowercase.',
+  'account.renameButton': '✏️ Rename an account',
+  'account.pickRename': '✏️ Which account should be renamed?',
   'account.askRename': '✏️ New name for «{name}» — anything up to {max} characters. Only the name shown changes: topics, the /limits list and agents keep using the account as before. Send it as the next message.',
   'account.renamed': '✅ «{old}» is now called «{name}».',
   'account.renameCancelled': '✖ Renaming cancelled. Messages go to the agent again.',

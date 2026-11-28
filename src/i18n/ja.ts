@@ -1065,6 +1065,8 @@ export const jaDict: Record<string, string> = {
   'accounts.alert.openPrivateChat': '次回からこの通知をプライベートメッセージで受け取るには、{bot} とのプライベートチャットを開いて Start を押してください。',
   'account.askName': '➕ 新しい Claude アカウントの名前 — {max} 文字までなら何でも可: 大文字、ドット、スペース、@、どの言語でも (例: 仕事 や me@company)。次のメッセージで送るか、/accounts add <名前> を実行してください。',
   'account.invalidName': '❌ {problem}。内部名はラテン文字 a–z、数字、- と _ (先頭は文字か数字)、{max} 文字までです。大文字は小文字になります。',
+  'account.renameButton': '✏️ アカウント名を変更',
+  'account.pickRename': '✏️ どのアカウントの名前を変更しますか？',
   'account.askRename': '✏️ «{name}» の新しい名前 — {max} 文字までなら何でも可。変わるのは表示名だけです: トピック、/limits のリスト、エージェントはこれまでどおりこのアカウントを使います。次のメッセージで送ってください。',
   'account.renamed': '✅ «{old}» は «{name}» という名前になりました。',
   'account.renameCancelled': '✖ 名前の変更を取り消しました。メッセージは再びエージェントに送られます。',

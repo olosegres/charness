@@ -1071,6 +1071,8 @@ export const esDict: Record<string, string> = {
   'accounts.alert.openPrivateChat': 'Para que te avise por mensaje privado la próxima vez, abre un chat privado con {bot} y pulsa Start.',
   'account.askName': '➕ Nombre para la nueva cuenta de Claude — lo que quieras, hasta {max} caracteres: mayúsculas, puntos, espacios, @, cualquier idioma (p. ej. Trabajo o me@company). Envíalo como próximo mensaje, o ejecuta /accounts add <nombre>.',
   'account.invalidName': '❌ {problem}. Un identificador: letras latinas a–z, dígitos, - y _ (primero una letra o un dígito), hasta {max} caracteres; las mayúsculas pasan a minúsculas.',
+  'account.renameButton': '✏️ Renombrar una cuenta',
+  'account.pickRename': '✏️ ¿Qué cuenta quieres renombrar?',
   'account.askRename': '✏️ Nuevo nombre para «{name}» — lo que quieras, hasta {max} caracteres. Solo cambia el nombre que se muestra: los temas, la lista de /limits y los agentes usan la cuenta como antes. Envíalo como próximo mensaje.',
   'account.renamed': '✅ «{old}» ahora se llama «{name}».',
   'account.renameCancelled': '✖ Cambio de nombre cancelado. Los mensajes vuelven a ir al agente.',

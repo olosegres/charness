@@ -1071,6 +1071,8 @@ export const frDict: Record<string, string> = {
   'accounts.alert.openPrivateChat': 'Pour être prévenu en message privé la prochaine fois, ouvrez une discussion privée avec {bot} et appuyez sur Start.',
   'account.askName': '➕ Nom du nouveau compte Claude — n\'importe quoi jusqu\'à {max} caractères : majuscules, points, espaces, @, toute langue (ex. Travail ou me@company). Envoyez-le comme prochain message, ou lancez /accounts add <nom>.',
   'account.invalidName': '❌ {problem}. Un identifiant : lettres latines a–z, chiffres, - et _ (d\'abord une lettre ou un chiffre), {max} caractères au plus ; les majuscules deviennent minuscules.',
+  'account.renameButton': '✏️ Renommer un compte',
+  'account.pickRename': '✏️ Quel compte renommer ?',
   'account.askRename': '✏️ Nouveau nom pour «{name}» — n\'importe quoi jusqu\'à {max} caractères. Seul le nom affiché change : les sujets, la liste /limits et les agents utilisent le compte comme avant. Envoyez-le comme prochain message.',
   'account.renamed': '✅ «{old}» s\'appelle désormais «{name}».',
   'account.renameCancelled': '✖ Renommage annulé. Les messages vont de nouveau à l\'agent.',

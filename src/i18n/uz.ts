@@ -1071,6 +1071,8 @@ export const uzDict: Record<string, string> = {
   'accounts.alert.openPrivateChat': 'Keyingi safar bu haqda shaxsiy xabarda bilish uchun {bot} bilan shaxsiy chat oching va Start tugmasini bosing.',
   'account.askName': '➕ Yangi Claude hisobi nomi — {max} ta belgigacha istalgan narsa: bosh harflar, nuqtalar, bo‘shliqlar, @, istalgan til (masalan, Ish yoki me@company). Uni keyingi xabar bilan yuboring yoki /accounts add <nom> ni bajaring.',
   'account.invalidName': '❌ {problem}. Ichki nom — lotin harflari a–z, raqamlar, - va _ (avval harf yoki raqam), ko‘pi bilan {max} ta belgi; bosh harflar kichik harfga aylanadi.',
+  'account.renameButton': '✏️ Hisobni qayta nomlash',
+  'account.pickRename': '✏️ Qaysi hisob qayta nomlansin?',
   'account.askRename': '✏️ «{name}» uchun yangi nom — {max} ta belgigacha istalgan narsa. Faqat ko‘rinadigan nom o‘zgaradi: mavzular, /limits ro‘yxati va agentlar hisobdan avvalgidek foydalanadi. Uni keyingi xabar bilan yuboring.',
   'account.renamed': '✅ «{old}» endi «{name}» deb ataladi.',
   'account.renameCancelled': '✖ Qayta nomlash bekor qilindi. Xabarlar yana agentga boradi.',

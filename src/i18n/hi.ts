@@ -1070,6 +1070,8 @@ export const hiDict: Record<string, string> = {
   'accounts.alert.openPrivateChat': 'अगली बार इसकी सूचना निजी संदेश में पाने के लिए {bot} के साथ निजी चैट खोलें और Start दबाएँ।',
   'account.askName': '➕ नए Claude खाते का नाम — {max} वर्ण तक कुछ भी: बड़े अक्षर, बिंदु, स्पेस, @, कोई भी भाषा (जैसे काम या me@company)। इसे अगले संदेश में भेजें, या /accounts add <नाम> चलाएँ।',
   'account.invalidName': '❌ {problem}। आंतरिक नाम में लैटिन अक्षर a–z, अंक, - और _ हों (पहले अक्षर या अंक), अधिकतम {max} वर्ण; बड़े अक्षर छोटे हो जाते हैं।',
+  'account.renameButton': '✏️ खाते का नाम बदलें',
+  'account.pickRename': '✏️ किस खाते का नाम बदलना है?',
   'account.askRename': '✏️ «{name}» का नया नाम — {max} वर्ण तक कुछ भी। सिर्फ़ दिखने वाला नाम बदलता है: टॉपिक, /limits सूची और एजेंट खाते का पहले की तरह उपयोग करते हैं। इसे अगले संदेश में भेजें।',
   'account.renamed': '✅ «{old}» का नाम अब «{name}» है।',
   'account.renameCancelled': '✖ नाम बदलना रद्द। संदेश फिर से एजेंट को जाते हैं।',
